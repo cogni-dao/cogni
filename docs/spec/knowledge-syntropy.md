@@ -117,21 +117,21 @@ Every node fork inherits these four tables. They are the minimum viable knowledg
 
 The atomic unit of what the node believes. Each row is a single assertion with provenance.
 
-| Column           | Type        | Constraints               | Description                                                                   |
-| ---------------- | ----------- | ------------------------- | ----------------------------------------------------------------------------- |
-| `id`             | text        | PK                        | Human-readable: `{domain}:{slug}` (e.g. `pm:fed-rate-base-rate`)              |
-| `domain`         | text        | NOT NULL, FK→domains      | Registered domain key                                                         |
-| `entity_id`      | text        |                           | Stable subject key (market ID, project slug, etc.)                            |
-| `title`          | text        | NOT NULL                  | One-line claim summary                                                        |
-| `content`        | text        | NOT NULL                  | Full knowledge body — the actual assertion                                    |
+| Column           | Type        | Constraints               | Description                                                                                    |
+| ---------------- | ----------- | ------------------------- | ---------------------------------------------------------------------------------------------- |
+| `id`             | text        | PK                        | Human-readable: `{domain}:{slug}` (e.g. `pm:fed-rate-base-rate`)                               |
+| `domain`         | text        | NOT NULL, FK→domains      | Registered domain key                                                                          |
+| `entity_id`      | text        |                           | Stable subject key (market ID, project slug, etc.)                                             |
+| `title`          | text        | NOT NULL                  | One-line claim summary                                                                         |
+| `content`        | text        | NOT NULL                  | Full knowledge body — the actual assertion                                                     |
 | `entry_type`     | text        | NOT NULL                  | `observation`, `finding`, `conclusion`, `rule`, `scorecard`, `skill`, `guide`, `design-visual` |
-| `status`         | text        | NOT NULL, default `draft` | `draft` → `candidate` → `established` → `canonical` → `deprecated`            |
-| `confidence_pct` | integer     |                           | 0–100, computed from citations (null = not applicable)                        |
-| `source_type`    | text        | NOT NULL                  | `human`, `agent`, `analysis_signal`, `external`, `derived`                    |
-| `source_ref`     | text        |                           | Pointer to origin (URL, signal ID, commit hash)                               |
-| `source_node`    | text        |                           | Which AI node/agent created this                                              |
-| `created_at`     | timestamptz | NOT NULL, default now     |                                                                               |
-| `updated_at`     | timestamptz | NOT NULL, default now     |                                                                               |
+| `status`         | text        | NOT NULL, default `draft` | `draft` → `candidate` → `established` → `canonical` → `deprecated`                             |
+| `confidence_pct` | integer     |                           | 0–100, computed from citations (null = not applicable)                                         |
+| `source_type`    | text        | NOT NULL                  | `human`, `agent`, `analysis_signal`, `external`, `derived`                                     |
+| `source_ref`     | text        |                           | Pointer to origin (URL, signal ID, commit hash)                                                |
+| `source_node`    | text        |                           | Which AI node/agent created this                                                               |
+| `created_at`     | timestamptz | NOT NULL, default now     |                                                                                                |
+| `updated_at`     | timestamptz | NOT NULL, default now     |                                                                                                |
 
 ### `citations` — The DAG that makes knowledge compound
 
