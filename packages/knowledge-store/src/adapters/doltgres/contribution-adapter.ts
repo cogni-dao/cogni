@@ -135,8 +135,9 @@ export class DoltgresKnowledgeContributionAdapter
         const confidencePct =
           input.principal.kind === "agent" ? 30 : (entry.confidencePct ?? 30);
         const entryId = `${contributionId}:${randomBytes(3).toString("hex")}`;
+        const entryType = entry.entryType ?? "finding";
         await conn.unsafe(
-          `INSERT INTO knowledge (id, domain, entity_id, title, content, confidence_pct, source_type, source_ref, tags) VALUES (${escapeValue(entryId)}, ${escapeValue(entry.domain)}, ${escapeValue(entry.entityId ?? null)}, ${escapeValue(entry.title)}, ${escapeValue(entry.content)}, ${escapeValue(confidencePct)}, ${escapeValue("external")}, ${escapeValue(sourceRef)}, ${entry.tags ? escapeValue(entry.tags) : "NULL"})`
+          `INSERT INTO knowledge (id, domain, entity_id, title, content, entry_type, confidence_pct, source_type, source_ref, tags) VALUES (${escapeValue(entryId)}, ${escapeValue(entry.domain)}, ${escapeValue(entry.entityId ?? null)}, ${escapeValue(entry.title)}, ${escapeValue(entry.content)}, ${escapeValue(entryType)}, ${escapeValue(confidencePct)}, ${escapeValue("external")}, ${escapeValue(sourceRef)}, ${entry.tags ? escapeValue(entry.tags) : "NULL"})`
         );
       }
 
