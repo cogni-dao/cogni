@@ -9,6 +9,11 @@
  * Scope: Pure presentation. The iframe `sandbox=""` attribute disables scripts, popups,
  *   form submission, same-origin access — the strongest isolation the platform offers,
  *   so untrusted content cannot reach the parent page or cookies.
+ *
+ *   Content authoring contract: `content` is a self-contained HTML document (or fragment).
+ *   The renderer does NOT inject styles, so the document defines its own theme (mirrors the
+ *   delta-analyzer.html pattern — full <style> block + SVG body). For bare SVG fragments,
+ *   the browser falls back to user-agent defaults.
  * @internal
  */
 
@@ -21,41 +26,6 @@ interface DesignVisualRendererProps {
   readonly title: string;
 }
 
-function wrap(body: string, title: string): string {
-  const escapedTitle = title
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-  return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="UTF-8" />
-<title>${escapedTitle}</title>
-<style>
-  :root {
-    --bg: #0a0e0c;
-    --fg: #d8e0db;
-    --dim: #6b7770;
-    --line: #2a3530;
-  }
-  * { box-sizing: border-box; }
-  html, body {
-    margin: 0;
-    padding: 16px;
-    background: var(--bg);
-    color: var(--fg);
-    font: 13px/1.4 ui-monospace, "SF Mono", Menlo, monospace;
-  }
-  svg { max-width: 100%; height: auto; display: block; }
-</style>
-</head>
-<body>
-${body}
-</body>
-</html>`;
-}
-
 export function DesignVisualRenderer({
   content,
   title,
@@ -63,9 +33,9 @@ export function DesignVisualRenderer({
   return (
     <iframe
       title={title}
-      srcDoc={wrap(content, title)}
+      srcDoc={content}
       sandbox=""
-      className="h-[640px] w-full rounded-md border border-border bg-[#0a0e0c]"
+      className="h-[720px] w-full rounded-md border border-border bg-[#0a0e0c]"
     />
   );
 }
