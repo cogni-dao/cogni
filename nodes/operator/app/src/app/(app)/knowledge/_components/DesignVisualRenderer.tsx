@@ -35,8 +35,7 @@ export function DesignVisualRenderer({
       title={title}
       srcDoc={content}
       sandbox=""
-      style={{ height: "720px", background: "#0a0e0c" }}
-      className="w-full rounded-md border border-border"
+      className="h-[var(--height-design-visual)] w-full rounded-md border border-border bg-[var(--bg-design-visual-canvas)]"
     />
   );
 }

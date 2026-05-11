@@ -83,6 +83,8 @@
   --max-width-model-trigger: 120px;
   --max-height-dialog: 80vh;
   --max-height-dialog-mobile: 70vh;
+  --height-design-visual: 720px;
+  --bg-design-visual-canvas: #0a0e0c;
 
   /* Positioning - centering transforms */
   --center-50: 50%;
