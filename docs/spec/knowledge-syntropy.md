@@ -124,7 +124,7 @@ The atomic unit of what the node believes. Each row is a single assertion with p
 | `entity_id`      | text        |                           | Stable subject key (market ID, project slug, etc.)                                             |
 | `title`          | text        | NOT NULL                  | One-line claim summary                                                                         |
 | `content`        | text        | NOT NULL                  | Full knowledge body — the actual assertion                                                     |
-| `entry_type`     | text        | NOT NULL                  | `observation`, `finding`, `conclusion`, `rule`, `scorecard`, `skill`, `guide`, `design-visual` |
+| `entry_type`     | text        | NOT NULL                  | `observation`, `finding`, `conclusion`, `rule`, `scorecard`, `skill`, `guide`, `html` |
 | `status`         | text        | NOT NULL, default `draft` | `draft` → `candidate` → `established` → `canonical` → `deprecated`                             |
 | `confidence_pct` | integer     |                           | 0–100, computed from citations (null = not applicable)                                         |
 | `source_type`    | text        | NOT NULL                  | `human`, `agent`, `analysis_signal`, `external`, `derived`                                     |

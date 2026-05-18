@@ -208,10 +208,22 @@ export class DoltgresKnowledgeContributionAdapter
       const row = r as Record<string, unknown>;
       const diffType = String(row.diff_type ?? "modified");
       const before: Record<string, unknown> | null = row.from_id
-        ? { id: row.from_id, title: row.from_title ?? null }
+        ? {
+            id: row.from_id,
+            title: row.from_title ?? null,
+            content: row.from_content ?? null,
+            entryType: row.from_entry_type ?? null,
+            domain: row.from_domain ?? null,
+          }
         : null;
       const after: Record<string, unknown> | null = row.to_id
-        ? { id: row.to_id, title: row.to_title ?? null }
+        ? {
+            id: row.to_id,
+            title: row.to_title ?? null,
+            content: row.to_content ?? null,
+            entryType: row.to_entry_type ?? null,
+            domain: row.to_domain ?? null,
+          }
         : null;
       const rowId = String(row.to_id ?? row.from_id ?? "");
       return {

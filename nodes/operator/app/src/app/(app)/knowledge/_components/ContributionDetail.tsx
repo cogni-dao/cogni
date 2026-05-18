@@ -26,6 +26,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components";
+import { HtmlRenderer } from "./HtmlRenderer";
 
 interface ContributionDetailProps {
   readonly item: ContributionRecord | null;
@@ -90,9 +91,19 @@ export function ContributionDetail({
     };
   }, [open, item]);
 
+  const hasHtmlEntry = (diff ?? []).some(
+    (d) => ((d.after ?? d.before) as { entryType?: string } | null)?.entryType === "html"
+  );
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="w-full overflow-y-auto sm:max-w-lg">
+      <SheetContent
+        className={
+          hasHtmlEntry
+            ? "w-full overflow-y-auto sm:max-w-4xl"
+            : "w-full overflow-y-auto sm:max-w-lg"
+        }
+      >
         {item && (
           <>
             <SheetHeader>
@@ -150,7 +161,10 @@ export function ContributionDetail({
                       const row = (d.after ?? d.before) as {
                         id?: string;
                         title?: string;
+                        content?: string;
+                        entryType?: string;
                       } | null;
+                      const isHtml = row?.entryType === "html";
                       return (
                         <div
                           key={d.rowId}
@@ -176,6 +190,14 @@ export function ContributionDetail({
                             <p className="mt-1 line-clamp-2 text-sm">
                               {String(row.title)}
                             </p>
+                          )}
+                          {isHtml && row?.content && (
+                            <div className="mt-2">
+                              <HtmlRenderer
+                                html={row.content}
+                                title={row.title ?? "preview"}
+                              />
+                            </div>
                           )}
                         </div>
                       );
