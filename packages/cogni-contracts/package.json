@@ -23,6 +23,6 @@
   "devDependencies": {
     "tsup": "^8.5.1",
     "typescript": "^5",
-    "viem": "2.39.3"
+    "viem": "2.49.3"
   }
 }

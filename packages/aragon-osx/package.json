@@ -21,11 +21,11 @@
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
-    "viem": "^2.0.0"
+    "viem": "^2.49.3"
   },
   "devDependencies": {
     "tsup": "^8.5.1",
     "typescript": "^5",
-    "viem": "^2.0.0"
+    "viem": "^2.49.3"
   }
 }

@@ -26,7 +26,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "viem": "^2.0.0"
+    "viem": "^2.49.3"
   },
   "peerDependencies": {
     "@0xsplits/splits-sdk": ">=6.0.0",
