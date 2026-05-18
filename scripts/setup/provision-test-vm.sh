@@ -98,6 +98,7 @@ RESY_DOMAIN="${RESY_DOMAIN:-$(cogni_resy_domain_for_env "$DEPLOY_ENV" "$COGNI_DO
 VM_DNS_HOST="${VM_DNS_HOST:-$(cogni_vm_host_for_env "$DEPLOY_ENV" "$COGNI_DOMAIN_ROOT" "$COGNI_DEPLOYMENT_SLUG")}"
 DNS_RECORDS=("$DOMAIN" "$RESY_DOMAIN" "$VM_DNS_HOST")
 CADDYFILE_TEMPLATE="$REPO_ROOT/infra/compose/edge/configs/Caddyfile.cogni.tmpl"
+COGNI_APP_TARGETS=("operator" "resy" "scheduler-worker")
 
 # Allow branch override (e.g., testing a feature branch on preview infra)
 BRANCH="${COGNI_REPO_REF:-$BRANCH}"
@@ -401,25 +402,39 @@ fi
 # issue until the hourly window resets. See .claude/skills/dns-ops/SKILL.md.
 
 # ══════════════════════════════════════════════════════════════
-# Phase 4c: Patch EndpointSlice IPs on deploy branch
+# Phase 4c: Seed per-app deploy branches with fresh VM state
 # ══════════════════════════════════════════════════════════════
-log_step "Phase 4c: Patch EndpointSlice IPs to $VM_IP on $DEPLOY_BRANCH"
+log_step "Phase 4c: Seed per-app deploy branches with $VM_IP"
 
-# deploy/<env> is the sole persistence layer for env-discovered state (VM IPs).
-# promote-and-deploy.yml no longer rsyncs overlays — only updates digests.
-# Provision is the one writer for IP state.
-DEPLOY_TMP=$(mktemp -d)
+# deploy/<env>-<app> branches are Argo's source of truth for rendered app
+# state. Provision is the one writer for env-discovered VM state and must seed
+# these branches before applying the ApplicationSet, otherwise a fresh cluster
+# can sync stale ExternalName targets from pre-split branches.
 REPO_URL="https://${GHCR_USERNAME:-Cogni-1729}:${GHCR_TOKEN}@github.com/Cogni-DAO/cogni.git"
 
-log_info "Cloning $DEPLOY_BRANCH..."
-git clone --depth=1 --branch "$DEPLOY_BRANCH" "$REPO_URL" "$DEPLOY_TMP" 2>/dev/null
+for app in "${COGNI_APP_TARGETS[@]}"; do
+  DEPLOY_BRANCH="deploy/${DEPLOY_ENV}-${app}"
+  DEPLOY_TMP=$(mktemp -d)
 
-# Write VM IP to each overlay's env-state.yaml (bug.0334). This is the ONLY
-# file provision writes under infra/k8s/. The promote workflow rsyncs
-# everything else from main with --exclude='env-state.yaml'.
-for overlay_dir in "$DEPLOY_TMP/infra/k8s/overlays/${OVERLAY_DIR}"/*/; do
-  [[ -d "$overlay_dir" ]] || continue
-  cat > "${overlay_dir}env-state.yaml" <<EOF
+  log_info "Cloning $DEPLOY_BRANCH..."
+  if ! git clone --depth=1 --branch "$DEPLOY_BRANCH" "$REPO_URL" "$DEPLOY_TMP" 2>/dev/null; then
+    log_error "Missing deploy branch: $DEPLOY_BRANCH"
+    log_error "Run the deploy-branch bootstrap for ${DEPLOY_ENV}/${app} before provisioning."
+    exit 1
+  fi
+
+  rm -rf \
+    "$DEPLOY_TMP/infra/k8s/base" \
+    "$DEPLOY_TMP/infra/k8s/overlays/${OVERLAY_DIR}/${app}" \
+    "$DEPLOY_TMP/infra/catalog/${app}.yaml"
+  mkdir -p \
+    "$DEPLOY_TMP/infra/k8s/overlays/${OVERLAY_DIR}" \
+    "$DEPLOY_TMP/infra/catalog"
+  cp -R "$REPO_ROOT/infra/k8s/base" "$DEPLOY_TMP/infra/k8s/base"
+  cp -R "$REPO_ROOT/infra/k8s/overlays/${OVERLAY_DIR}/${app}" "$DEPLOY_TMP/infra/k8s/overlays/${OVERLAY_DIR}/${app}"
+  cp "$REPO_ROOT/infra/catalog/${app}.yaml" "$DEPLOY_TMP/infra/catalog/${app}.yaml"
+
+  cat > "$DEPLOY_TMP/infra/k8s/overlays/${OVERLAY_DIR}/${app}/env-state.yaml" <<EOF
 # SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 # SPDX-FileCopyrightText: 2025 Cogni-DAO
 #
@@ -433,21 +448,21 @@ metadata:
 data:
   VM_IP: "${VM_IP}"
 EOF
-done
 
-cd "$DEPLOY_TMP"
-git config user.name "provision-script"
-git config user.email "provision@cogni.dev"
-git add -A
-if ! git diff --cached --quiet; then
-  git commit -m "chore(infra): write env-state.yaml for ${DEPLOY_ENV} — VM_IP=${VM_IP} [provision]"
-  git push origin "$DEPLOY_BRANCH"
-  log_info "Pushed EndpointSlice IP patches to $DEPLOY_BRANCH"
-else
-  log_info "EndpointSlice IPs already correct on $DEPLOY_BRANCH"
-fi
-rm -rf "$DEPLOY_TMP"
-cd "$REPO_ROOT"
+  cd "$DEPLOY_TMP"
+  git config user.name "provision-script"
+  git config user.email "provision@cogni.dev"
+  git add -A
+  if ! git diff --cached --quiet; then
+    git commit -m "chore(infra): seed ${DEPLOY_ENV}/${app} for VM ${VM_IP} [provision]"
+    git push origin "$DEPLOY_BRANCH"
+    log_info "Seeded $DEPLOY_BRANCH"
+  else
+    log_info "$DEPLOY_BRANCH already seeded"
+  fi
+  rm -rf "$DEPLOY_TMP"
+  cd "$REPO_ROOT"
+done
 
 # ══════════════════════════════════════════════════════════════
 # Phase 5: Deploy Compose infrastructure
