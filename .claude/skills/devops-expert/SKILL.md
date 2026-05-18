@@ -34,6 +34,29 @@ You are a senior DevOps architect. AI agents are the primary committers in this 
 
 6. **Affected-only CI.** Never rebuild/retest the world. Mandatory at scale.
 
+## Current infra reality — 2026-05-18 post-split candidate-a
+
+The old shared candidate-a shape is retired. Do not route Cogni monorepo and
+`cogni-poly` through the same VM alias or the same provision script assumptions.
+
+- `5.199.173.155` is now treated as **cogni-poly candidate-a only**.
+  Cloudflare should keep `poly-test.cognidao.org` and
+  `cogni-poly-candidate-a.vm.cognidao.org` on this IP.
+- `test.cognidao.org`, `resy-test.cognidao.org`,
+  `candidate-a.vm.cognidao.org`, and
+  `cogni-candidate-a.vm.cognidao.org` were deliberately removed from that IP
+  while Cogni monorepo candidate-a is being reprovisioned.
+- The stale legacy VM `852637 / canary-cogni / 84.32.109.160` was destroyed.
+- Cogni monorepo does not currently have a valid candidate-a VM. Do not dispatch
+  monorepo `candidate-flight.yml` until a fresh Cogni-only candidate VM exists
+  and the `candidate-a` GitHub environment `VM_HOST` points at its scoped alias.
+
+`scripts/setup/provision-test-vm.sh` is stale for post-split Cogni: it still
+creates `cogni_poly`, writes `poly-test` DNS, creates `poly-node-app-secrets`,
+and assumes operator/poly/resy. Before using it for Cogni candidate-a, port the
+node-template scoped-alias and fork/provision fixes, then remove poly from the
+Cogni provisioning path.
+
 ## Arsenal — know what exists before writing new code
 
 > **Workflows are thin; logic lives in `scripts/ci/`.** Every non-trivial step in `.github/workflows/*.yml` is `run: bash scripts/ci/<name>.sh`. Start from the workflow to see the _shape_ of the pipeline, then open the scripts to see what actually happens. Never write new inline-YAML logic when a script exists — extend the script.
