@@ -4,21 +4,56 @@
 /**
  * Module: `@app/(app)/knowledge/_components/htmlShell`
  * Purpose: Build the sandboxed iframe `srcDoc` shell for `entryType=html` knowledge entries.
- *   Inlines operator app tokens + the small `.cogni-*` utility class set so authored content
- *   inherits app chrome without per-artifact palettes.
- * Scope: Pure string builders — no I/O, no React. Renderer consumes via `buildHtmlShell()`.
+ *   Ships both `:root` (light) and `.dark` token blocks so authored content matches the
+ *   parent operator app in either mode. Caller passes the parent's resolved theme.
+ * Scope: Pure string builders — no I/O, no React.
  * Invariants:
- *   - TOKEN_BLOCK is a snapshot of `nodes/operator/app/src/styles/tailwind.css .dark { … }`.
- *     Drift = visual regressions. Bump both in the same commit per spec TOKEN_BLOCK_PAIRED.
+ *   - LIGHT_TOKEN_BLOCK / DARK_TOKEN_BLOCK are snapshots of
+ *     `nodes/operator/app/src/styles/tailwind.css :root { … }` / `.dark { … }`.
+ *     Drift = visual regressions. Bump in the same commit per spec TOKEN_BLOCK_PAIRED.
  *   - UTILITY_CSS is ≤15 classes per spec UTILITY_LIB_IS_CAPPED.
  *   - Shell never references external `<link>` or `<script>` per spec SHELL_IS_INLINE.
  * Links: docs/spec/knowledge-html-style.md
  * @internal
  */
 
-// SOURCE: nodes/operator/app/src/styles/tailwind.css `.dark { ... }` block.
-// When tokens change there, mirror here in the same commit.
-const TOKEN_BLOCK = `:root {
+// SOURCE: nodes/operator/app/src/styles/tailwind.css `:root { ... }` (light mode).
+// Mirror here when the source block changes.
+const LIGHT_TOKEN_BLOCK = `:root {
+  --background: 0 0% 100%;
+  --foreground: 222.2 84% 4.9%;
+  --card: 0 0% 100%;
+  --card-foreground: 222.2 84% 4.9%;
+  --popover: 210 40% 96.1%;
+  --popover-foreground: 215.4 16.3% 20%;
+  --primary: 222.2 47.4% 11.2%;
+  --primary-foreground: 210 40% 98%;
+  --secondary: 210 40% 96.1%;
+  --secondary-foreground: 222.2 47.4% 11.2%;
+  --muted: 210 40% 96.1%;
+  --muted-foreground: 215.4 16.3% 20%;
+  --accent: 210 40% 96.1%;
+  --accent-foreground: 222.2 47.4% 11.2%;
+  --destructive: 0 84.2% 60.2%;
+  --border: 214.3 31.8% 91.4%;
+  --input: 214.3 31.8% 91.4%;
+  --ring: 222.2 84% 4.9%;
+  --chart-1: 220 70% 50%;
+  --chart-2: 160 60% 45%;
+  --chart-3: 30 80% 55%;
+  --chart-4: 280 65% 60%;
+  --chart-5: 340 75% 55%;
+  --color-success: 142 71% 45%;
+  --color-warning: 43 74% 66%;
+  --color-danger: 0 84.2% 60.2%;
+  --radius: 0.75rem;
+  --font-sans: "Manrope", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}`;
+
+// SOURCE: nodes/operator/app/src/styles/tailwind.css `.dark { ... }`.
+// Applied when the parent app's resolved theme is "dark".
+const DARK_TOKEN_BLOCK = `.dark {
   --background: 0 0% 0%;
   --foreground: 210 40% 98%;
   --card: 0 0% 0%;
@@ -37,23 +72,12 @@ const TOKEN_BLOCK = `:root {
   --border: 217.2 32.6% 17.5%;
   --input: 217.2 32.6% 17.5%;
   --ring: 217 71% 40%;
-  --chart-1: 220 70% 50%;
-  --chart-2: 160 60% 45%;
-  --chart-3: 30 80% 55%;
-  --chart-4: 280 65% 60%;
-  --chart-5: 340 75% 55%;
-  --color-success: 142 71% 45%;
-  --color-warning: 43 74% 66%;
-  --color-danger: 0 84.2% 60.2%;
-  --radius: 0.75rem;
-  --font-sans: "Manrope", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 }`;
 
 const BASE_CSS = `*, *::before, *::after { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
 body {
-  padding: 24px;
+  padding: 32px;
   background: hsl(var(--background));
   color: hsl(var(--foreground));
   font-family: var(--font-sans);
@@ -61,7 +85,7 @@ body {
   line-height: 1.5;
 }
 h1, h2, h3, h4 { margin: 0 0 12px; font-weight: 600; letter-spacing: -0.01em; }
-h1 { font-size: 20px; }
+h1 { font-size: 22px; }
 h2 { font-size: 16px; }
 h3 { font-size: 14px; }
 p { margin: 0 0 8px; }
@@ -74,7 +98,7 @@ th, td { padding: 6px 10px; text-align: left; border-bottom: 1px solid hsl(var(-
 th { color: hsl(var(--muted-foreground)); font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em; font-size: 11px; }
 code { font-family: var(--font-mono); font-size: 0.9em; padding: 1px 4px; border-radius: 4px; background: hsl(var(--muted)); }`;
 
-// ≤15 utility classes. Adding one = spec amendment per UTILITY_LIB_IS_CAPPED.
+// ≤15 utility classes. New ones require a spec amendment per UTILITY_LIB_IS_CAPPED.
 const UTILITY_CSS = `.cogni-card {
   background: hsl(var(--card));
   color: hsl(var(--card-foreground));
@@ -85,7 +109,7 @@ const UTILITY_CSS = `.cogni-card {
 .cogni-panel-title {
   font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   color: hsl(var(--muted-foreground));
   margin: 0 0 12px;
@@ -105,38 +129,35 @@ const UTILITY_CSS = `.cogni-card {
   align-items: center;
   gap: 8px;
   font-size: 13px;
+  margin-bottom: 4px;
 }
 .cogni-pill {
   display: inline-flex;
   align-items: center;
-  padding: 2px 8px;
-  border-radius: calc(var(--radius) - 4px);
+  padding: 2px 10px;
+  border-radius: 999px;
   font-size: 11px;
   font-weight: 500;
-  background: hsl(var(--secondary));
-  color: hsl(var(--secondary-foreground));
+  background: hsl(var(--muted));
+  color: hsl(var(--muted-foreground));
   white-space: nowrap;
 }
 .cogni-pill-success {
-  background: hsl(var(--color-success) / 0.15);
+  background: hsl(var(--color-success) / 0.18);
   color: hsl(var(--color-success));
 }
 .cogni-pill-warning {
-  background: hsl(var(--color-warning) / 0.15);
+  background: hsl(var(--color-warning) / 0.22);
   color: hsl(var(--color-warning));
 }
 .cogni-pill-destructive {
-  background: hsl(var(--destructive) / 0.7);
-  color: hsl(0 0% 100%);
+  background: hsl(var(--destructive) / 0.18);
+  color: hsl(var(--destructive));
 }
-.cogni-mono {
-  font-family: var(--font-mono);
-}
-.cogni-muted {
-  color: hsl(var(--muted-foreground));
-}`;
+.cogni-mono { font-family: var(--font-mono); }
+.cogni-muted { color: hsl(var(--muted-foreground)); }`;
 
-const SHELL_STYLE = `${TOKEN_BLOCK}\n${BASE_CSS}\n${UTILITY_CSS}`;
+const SHELL_STYLE = `${LIGHT_TOKEN_BLOCK}\n${DARK_TOKEN_BLOCK}\n${BASE_CSS}\n${UTILITY_CSS}`;
 
 function escapeHtml(s: string): string {
   return s
@@ -146,19 +167,26 @@ function escapeHtml(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
+export type RenderTheme = "light" | "dark";
+
 /**
  * Wrap author content in the shell. If the content already declares its own
  * `<!doctype>` or `<html>`, it's treated as a full document and rendered verbatim
- * (backward compat with hand-authored artifacts like delta-analyzer.html that
- * pre-date this spec). Otherwise the content is treated as a body fragment and
- * inserted into the shell.
+ * (backward compat with hand-authored artifacts that pre-date this spec).
+ * Otherwise the content is treated as a body fragment and inserted into the shell;
+ * the chosen theme controls which token block is active via the `<html class>`.
  */
-export function buildHtmlShell(content: string, title: string): string {
+export function buildHtmlShell(
+  content: string,
+  title: string,
+  theme: RenderTheme = "dark"
+): string {
   const looksLikeFullDoc = /^\s*<!doctype|^\s*<html/i.test(content);
   if (looksLikeFullDoc) return content;
 
+  const htmlClass = theme === "dark" ? ' class="dark"' : "";
   return `<!doctype html>
-<html lang="en">
+<html lang="en"${htmlClass}>
 <head>
 <meta charset="UTF-8" />
 <title>${escapeHtml(title)}</title>
