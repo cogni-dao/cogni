@@ -5,9 +5,8 @@
  * Module: `@app/(app)/knowledge/_components/HtmlRenderer`
  * Purpose: Renders a knowledge entry's `content` as a sandboxed HTML document.
  *   Used for `entryType === 'html'` — the canonical agent→human visual output
- *   channel. Detects the parent app's theme by observing `<html class="dark">`
- *   directly (single source of truth, works through Sheet/Dialog portals where
- *   useTheme context can be unreliable) and passes the result into the shell.
+ *   channel. Reads theme via next-themes (the sanctioned ThemeProvider path)
+ *   and passes the result into the shell so the artifact matches the parent.
  * Scope: Pure presentation. `sandbox=""` disables scripts, popups, form submission,
  *   and same-origin access — untrusted content cannot reach parent cookies or DOM.
  * Links: docs/spec/knowledge-html-style.md
@@ -16,6 +15,7 @@
 
 "use client";
 
+import { useTheme } from "next-themes";
 import { type ReactElement, useEffect, useState } from "react";
 import { buildHtmlShell, type RenderTheme } from "./htmlShell";
 
@@ -24,23 +24,20 @@ interface HtmlRendererProps {
   readonly title: string;
 }
 
-function detectTheme(): RenderTheme {
-  if (typeof document === "undefined") return "dark";
-  return document.documentElement.classList.contains("dark") ? "dark" : "light";
-}
-
 export function HtmlRenderer({ html, title }: HtmlRendererProps): ReactElement {
-  const [theme, setTheme] = useState<RenderTheme>("dark");
+  const { resolvedTheme, theme: themePref, systemTheme } = useTheme();
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
 
-  useEffect(() => {
-    setTheme(detectTheme());
-    const obs = new MutationObserver(() => setTheme(detectTheme()));
-    obs.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ["class"],
-    });
-    return () => obs.disconnect();
-  }, []);
+  // next-themes priority: resolvedTheme (final answer) → theme (user choice,
+  // may be "system") → systemTheme (OS preference). Before mount everything is
+  // undefined; default to "dark" to avoid a light-on-dark flash on the operator's
+  // dark canvas page. After mount, anything other than explicit "dark" wins as light.
+  let theme: RenderTheme = "dark";
+  if (mounted) {
+    const effective = resolvedTheme ?? themePref ?? systemTheme;
+    theme = effective === "dark" ? "dark" : "light";
+  }
 
   return (
     <iframe
