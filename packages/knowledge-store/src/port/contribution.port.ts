@@ -6,16 +6,18 @@
  * Purpose: Port interface for external-agent knowledge contributions backed by Dolt branches.
  * Scope: Interface + typed error classes. Does not contain implementation, I/O, or framework dependencies.
  * Invariants: EXTERNAL_CONTRIB_VIA_BRANCH, KNOWLEDGE_MERGE_REQUIRES_ADMIN_SESSION.
+ *   Appending/closing is allowed for the contribution owner; merge requires an admin session.
  * Side-effects: none
  * Links: docs/design/knowledge-contribution-api.md
  * @public
  */
 
 import type {
+  ContributionCommitRecord,
   ContributionDiffEntry,
   ContributionRecord,
   ContributionState,
-  KnowledgeEntryInput,
+  KnowledgeContributionEdit,
   Principal,
 } from "../domain/contribution-schemas.js";
 
@@ -23,9 +25,16 @@ export interface KnowledgeContributionPort {
   create(input: {
     principal: Principal;
     message: string;
-    entries: KnowledgeEntryInput[];
+    edits?: KnowledgeContributionEdit[];
     idempotencyKey?: string;
   }): Promise<ContributionRecord>;
+
+  appendCommit(input: {
+    contributionId: string;
+    principal: Principal;
+    message: string;
+    edits: KnowledgeContributionEdit[];
+  }): Promise<ContributionCommitRecord>;
 
   list(query: {
     state: ContributionState | "all";
@@ -34,6 +43,8 @@ export interface KnowledgeContributionPort {
   }): Promise<ContributionRecord[]>;
 
   getById(contributionId: string): Promise<ContributionRecord | null>;
+
+  listCommits(contributionId: string): Promise<ContributionCommitRecord[]>;
 
   diff(contributionId: string): Promise<ContributionDiffEntry[]>;
 

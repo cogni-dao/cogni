@@ -5,29 +5,37 @@
  * Module: `@cogni/knowledge-store/service/contribution-service`
  * Purpose: Framework-agnostic typed handlers for the knowledge contribution flow.
  * Scope: Pure business logic — quotas, idempotency lookup, role gating, confidence cap. Does not contain HTTP, env, or lifecycle code; per-node `route.ts` files adapt these to Next.
- * Invariants: KNOWLEDGE_MERGE_REQUIRES_ADMIN_SESSION; agent confidence capped at 30.
+ * Invariants: KNOWLEDGE_MERGE_REQUIRES_ADMIN_SESSION; CONTRIBUTION_OWNER_CAN_APPEND; CONTRIBUTION_OWNER_CAN_CLOSE.
  * Side-effects: none (delegates I/O to KnowledgeContributionPort)
  * Links: docs/design/knowledge-contribution-api.md
  * @public
  */
 
 import type {
+  ContributionCommitRecord,
   ContributionDiffEntry,
   ContributionRecord,
   ContributionState,
-  KnowledgeEntryInput,
+  KnowledgeContributionEdit,
   Principal,
 } from "../domain/contribution-schemas.js";
 import {
   ContributionForbiddenError,
+  ContributionNotFoundError,
   ContributionQuotaError,
+  ContributionStateError,
   type KnowledgeContributionPort,
 } from "../port/contribution.port.js";
 
 export interface CreateBody {
   message: string;
-  entries: KnowledgeEntryInput[];
+  edits?: KnowledgeContributionEdit[];
   idempotencyKey?: string;
+}
+
+export interface AppendCommitBody {
+  message: string;
+  edits: KnowledgeContributionEdit[];
 }
 
 export interface ListQuery {
@@ -47,11 +55,17 @@ export interface ContributionService {
     principal: Principal;
     body: CreateBody;
   }): Promise<ContributionRecord>;
+  appendCommit(args: {
+    principal: Principal;
+    contributionId: string;
+    body: AppendCommitBody;
+  }): Promise<ContributionCommitRecord>;
   list(args: {
     principal: Principal;
     query: ListQuery;
   }): Promise<ContributionRecord[]>;
   getById(contributionId: string): Promise<ContributionRecord | null>;
+  listCommits(contributionId: string): Promise<ContributionCommitRecord[]>;
   diff(contributionId: string): Promise<ContributionDiffEntry[]>;
   merge(args: {
     principal: Principal;
@@ -96,8 +110,34 @@ export function createContributionService(
       return deps.port.create({
         principal,
         message: body.message,
-        entries: body.entries,
+        edits: body.edits,
         idempotencyKey: body.idempotencyKey,
+      });
+    },
+
+    async appendCommit({ principal, contributionId, body }) {
+      const record = await deps.port.getById(contributionId);
+      if (!record) {
+        throw new ContributionNotFoundError(contributionId);
+      }
+      if (record.state !== "open") {
+        throw new ContributionStateError(
+          `contribution ${contributionId} is ${record.state}`
+        );
+      }
+      const ownsContribution =
+        record.principalId === principal.id &&
+        record.principalKind === principal.kind;
+      if (!ownsContribution) {
+        throw new ContributionForbiddenError(
+          "append requires contribution owner"
+        );
+      }
+      return deps.port.appendCommit({
+        contributionId,
+        principal,
+        message: body.message,
+        edits: body.edits,
       });
     },
 
@@ -113,6 +153,10 @@ export function createContributionService(
       return deps.port.getById(contributionId);
     },
 
+    async listCommits(contributionId) {
+      return deps.port.listCommits(contributionId);
+    },
+
     async diff(contributionId) {
       return deps.port.diff(contributionId);
     },
@@ -125,7 +169,14 @@ export function createContributionService(
     },
 
     async close({ principal, contributionId, reason }) {
-      if (!deps.canMergeKnowledge(principal)) {
+      const record = await deps.port.getById(contributionId);
+      if (!record) {
+        throw new ContributionNotFoundError(contributionId);
+      }
+      const ownsContribution =
+        record.principalId === principal.id &&
+        record.principalKind === principal.kind;
+      if (!ownsContribution && !deps.canMergeKnowledge(principal)) {
         throw new ContributionForbiddenError("close requires admin session");
       }
       return deps.port.close({ contributionId, principal, reason });

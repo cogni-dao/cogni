@@ -40,8 +40,9 @@ CREATE TABLE "knowledge_contributions" (
 	"principal_id" text NOT NULL,
 	"principal_kind" text NOT NULL,
 	"message" text NOT NULL,
-	"entry_count" integer NOT NULL,
-	"commit_hash" text NOT NULL,
+	"base_commit" text NOT NULL,
+	"head_commit" text,
+	"commit_count" integer DEFAULT 0 NOT NULL,
 	"merged_commit" text,
 	"closed_reason" text,
 	"idempotency_key" text,
@@ -49,6 +50,20 @@ CREATE TABLE "knowledge_contributions" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"resolved_at" timestamp with time zone,
 	"resolved_by" text
+);
+--> statement-breakpoint
+CREATE TABLE "knowledge_contribution_commits" (
+	"contribution_id" text NOT NULL,
+	"seq" integer NOT NULL,
+	"commit_hash" text NOT NULL,
+	"principal_id" text NOT NULL,
+	"principal_kind" text NOT NULL,
+	"auth_source" text NOT NULL,
+	"message" text NOT NULL,
+	"edit_count" integer NOT NULL,
+	"source_ref" text NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "pk_kcc_contribution_seq" PRIMARY KEY("contribution_id","seq")
 );
 --> statement-breakpoint
 CREATE TABLE "sources" (
@@ -69,6 +84,7 @@ CREATE INDEX "idx_knowledge_entity" ON "knowledge" USING btree ("entity_id");-->
 CREATE INDEX "idx_knowledge_source_type" ON "knowledge" USING btree ("source_type");--> statement-breakpoint
 CREATE INDEX "idx_knowledge_status" ON "knowledge" USING btree ("status");--> statement-breakpoint
 CREATE INDEX "idx_knowledge_source_node" ON "knowledge" USING btree ("source_node");--> statement-breakpoint
+CREATE INDEX "idx_kcc_commit_hash" ON "knowledge_contribution_commits" USING btree ("commit_hash");--> statement-breakpoint
 CREATE INDEX "idx_kc_state" ON "knowledge_contributions" USING btree ("state");--> statement-breakpoint
 CREATE INDEX "idx_kc_principal" ON "knowledge_contributions" USING btree ("principal_id","state");--> statement-breakpoint
 CREATE UNIQUE INDEX "uniq_kc_idempotency" ON "knowledge_contributions" USING btree ("principal_id","idempotency_key");

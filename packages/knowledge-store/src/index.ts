@@ -15,12 +15,16 @@
 export { createKnowledgeCapability } from "./capability.js";
 // Contribution domain
 export {
+  type ContributionCommitRecord,
+  ContributionCommitRecordSchema,
   type ContributionDiffEntry,
   ContributionDiffEntrySchema,
   type ContributionRecord,
   ContributionRecordSchema,
   type ContributionState,
   ContributionStateSchema,
+  type KnowledgeContributionEdit,
+  KnowledgeContributionEditSchema,
   type KnowledgeEntryInput,
   KnowledgeEntryInputSchema,
   type Principal,
@@ -61,6 +65,7 @@ export {
 } from "./port/knowledge-store.port.js";
 // Contribution service (framework-agnostic, cross-node shared)
 export {
+  type AppendCommitBody,
   type ContributionService,
   type ContributionServiceDeps,
   type CreateBody,

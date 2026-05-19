@@ -24,6 +24,7 @@ import {
   sessionUserToPrincipal,
 } from "@cogni/knowledge-store";
 import {
+  ContributionAppendCommitRequestSchema,
   ContributionCloseRequestSchema,
   ContributionMergeRequestSchema,
   ContributionsCreateRequestSchema,
@@ -98,7 +99,7 @@ export async function handleCreate(
   const principal = sessionUserToPrincipal(sessionUser, authSource(request));
   const createBody = {
     message: parsed.data.message,
-    entries: parsed.data.entries,
+    ...(parsed.data.edits ? { edits: parsed.data.edits } : {}),
     ...(parsed.data.idempotencyKey
       ? { idempotencyKey: parsed.data.idempotencyKey }
       : {}),
@@ -172,6 +173,69 @@ export async function handleGetById(
       { status: 404 }
     );
   return NextResponse.json(record);
+}
+
+export async function handleAppendCommit(
+  request: Request,
+  contributionId: string,
+  sessionUser: SessionUser | null
+): Promise<NextResponse> {
+  if (!sessionUser)
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  const svc = service();
+  if (!svc)
+    return NextResponse.json(
+      { error: "knowledge contribution service not configured" },
+      { status: 503 }
+    );
+
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "invalid JSON body" }, { status: 400 });
+  }
+  const parsed = ContributionAppendCommitRequestSchema.safeParse(body);
+  if (!parsed.success)
+    return NextResponse.json(
+      { error: "invalid input", issues: parsed.error.issues },
+      { status: 400 }
+    );
+
+  const principal = sessionUserToPrincipal(sessionUser, authSource(request));
+  try {
+    const commit = await svc.appendCommit({
+      principal,
+      contributionId,
+      body: parsed.data,
+    });
+    return NextResponse.json(commit, { status: 201 });
+  } catch (e) {
+    return mapError(e);
+  }
+}
+
+export async function handleListCommits(
+  contributionId: string,
+  sessionUser: SessionUser | null
+): Promise<NextResponse> {
+  if (!sessionUser)
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  const svc = service();
+  if (!svc)
+    return NextResponse.json(
+      { error: "knowledge contribution service not configured" },
+      { status: 503 }
+    );
+
+  const record = await svc.getById(contributionId);
+  if (!record)
+    return NextResponse.json(
+      { error: `contribution not found: ${contributionId}` },
+      { status: 404 }
+    );
+  const commits = await svc.listCommits(contributionId);
+  return NextResponse.json({ contributionId, commits });
 }
 
 export async function handleDiff(

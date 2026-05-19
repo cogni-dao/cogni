@@ -139,9 +139,15 @@ export function ContributionDetail({
                 )}
               </div>
 
-              <Field label="Commit">
+              <Field label="Head Commit">
                 <span className="font-mono text-muted-foreground text-xs">
-                  {item.commitHash}
+                  {item.headCommit ?? item.baseCommit}
+                </span>
+              </Field>
+
+              <Field label="Contribution Commits">
+                <span className="font-mono text-muted-foreground text-xs">
+                  {item.commitCount}
                 </span>
               </Field>
 

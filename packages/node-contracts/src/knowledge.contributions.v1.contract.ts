@@ -9,7 +9,7 @@
  * Invariants:
  *   - Contract remains stable; breaking changes require new version
  *   - All consumers use z.infer types
- *   - Server stamps source_type='external' and source_ref='agent:<id>:<contribId>'
+ *   - Server stamps branch edits with source_ref='contribution:<id>:<seq>'
  *   - confidencePct is capped at 30 server-side for principal.kind==='agent'
  * Side-effects: none
  * Links: docs/design/knowledge-contribution-api.md, docs/spec/knowledge-data-plane.md, work/items/task.0425.knowledge-contribution-api.md
@@ -19,6 +19,7 @@
 import { z } from "zod";
 
 const KnowledgeEntryInputSchema = z.object({
+  id: z.string().min(1).max(256).optional(),
   domain: z.string().min(1).max(64),
   entityId: z.string().max(128).optional(),
   title: z.string().min(1).max(256),
@@ -28,15 +29,37 @@ const KnowledgeEntryInputSchema = z.object({
   confidencePct: z.number().int().min(0).max(100).optional(),
 });
 
+const KnowledgeContributionEditSchema = z.discriminatedUnion("op", [
+  z.object({ op: z.literal("insert"), entry: KnowledgeEntryInputSchema }),
+  z.object({
+    op: z.literal("update"),
+    targetRowId: z.string().min(1).max(256),
+    entry: KnowledgeEntryInputSchema,
+  }),
+  z.object({
+    op: z.literal("deprecate"),
+    targetRowId: z.string().min(1).max(256),
+    reason: z.string().min(1).max(512),
+  }),
+]);
+
 const ContributionStateSchema = z.enum(["open", "merged", "closed"]);
 
 export const ContributionsCreateRequestSchema = z.object({
   message: z.string().min(1).max(512),
-  entries: z.array(KnowledgeEntryInputSchema).min(1).max(50),
+  edits: z.array(KnowledgeContributionEditSchema).min(1).max(50).optional(),
   idempotencyKey: z.string().min(8).max(64).optional(),
 });
 export type ContributionsCreateRequest = z.infer<
   typeof ContributionsCreateRequestSchema
+>;
+
+export const ContributionAppendCommitRequestSchema = z.object({
+  message: z.string().min(1).max(512),
+  edits: z.array(KnowledgeContributionEditSchema).min(1).max(50),
+});
+export type ContributionAppendCommitRequest = z.infer<
+  typeof ContributionAppendCommitRequestSchema
 >;
 
 export const ContributionsListQuerySchema = z.object({
@@ -65,12 +88,13 @@ export type ContributionCloseRequest = z.infer<
 export const ContributionRecordSchema = z.object({
   contributionId: z.string(),
   branch: z.string(),
-  commitHash: z.string(),
+  baseCommit: z.string(),
+  headCommit: z.string().nullable(),
+  commitCount: z.number().int(),
   state: ContributionStateSchema,
   principalKind: z.enum(["agent", "user"]),
   principalId: z.string(),
   message: z.string(),
-  entryCount: z.number().int(),
   mergedCommit: z.string().nullable(),
   closedReason: z.string().nullable(),
   idempotencyKey: z.string().nullable(),
@@ -79,6 +103,22 @@ export const ContributionRecordSchema = z.object({
   resolvedBy: z.string().nullable(),
 });
 export type ContributionRecord = z.infer<typeof ContributionRecordSchema>;
+
+export const ContributionCommitRecordSchema = z.object({
+  contributionId: z.string(),
+  seq: z.number().int(),
+  commitHash: z.string(),
+  principalKind: z.enum(["agent", "user"]),
+  principalId: z.string(),
+  authSource: z.enum(["bearer", "session"]),
+  message: z.string(),
+  editCount: z.number().int(),
+  sourceRef: z.string(),
+  createdAt: z.string(),
+});
+export type ContributionCommitRecord = z.infer<
+  typeof ContributionCommitRecordSchema
+>;
 
 export const ContributionDiffEntrySchema = z.object({
   changeType: z.enum(["added", "modified", "removed"]),
@@ -102,6 +142,14 @@ export const ContributionDiffResponseSchema = z.object({
 });
 export type ContributionDiffResponse = z.infer<
   typeof ContributionDiffResponseSchema
+>;
+
+export const ContributionCommitsResponseSchema = z.object({
+  contributionId: z.string(),
+  commits: z.array(ContributionCommitRecordSchema),
+});
+export type ContributionCommitsResponse = z.infer<
+  typeof ContributionCommitsResponseSchema
 >;
 
 export const ContributionMergeResponseSchema = z.object({
