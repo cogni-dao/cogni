@@ -42,13 +42,10 @@ function hashOfMigration(sqlText) {
   return createHash("sha256").update(sqlText).digest("hex");
 }
 
-function isAlreadyAppliedError(err) {
+function describeMigrateError(err) {
   const msg = err instanceof Error ? err.message : String(err);
   const cause = err?.cause instanceof Error ? err.cause.message : "";
-  const combined = `${msg} ${cause}`;
-  return (
-    /already exists/i.test(combined) || /duplicate key value/i.test(combined)
-  );
+  return `${msg}${cause ? ` (cause: ${cause})` : ""}`.slice(0, 400);
 }
 
 async function reconcileTracking(sql, folder) {
@@ -94,20 +91,24 @@ async function withConnection(fn) {
 
 try {
   const t0 = Date.now();
-  let migrateThrewAlreadyApplied = false;
+  // VERIFIER-AS-GATE. drizzle's migrate() may legitimately throw on Doltgres
+  // for upstream-gap reasons that don't mean "schema is broken" — e.g. the
+  // parameterized INSERT into __drizzle_migrations fails with `unhandled
+  // message "&{}"` on first run because CREATE TABLE auto-commits but the
+  // wire-protocol INSERT is rejected. Rather than enumerate every error class
+  // to swallow, we always run the verifier afterward and trust ITS verdict.
+  // If the live shape matches the snapshot, we move on and reconcile tracking;
+  // if not, the verifier throws SCHEMA_DRIFT and the migrator fails loud.
+  let migrateError = null;
   try {
     await withConnection((sql) => migrate(drizzle(sql), { migrationsFolder }));
   } catch (err) {
-    if (!isAlreadyAppliedError(err)) throw err;
-    migrateThrewAlreadyApplied = true;
+    migrateError = err;
     console.warn(
-      `⚠️  ${NODE} drizzle-migrate hit "already exists" — schema in place; will verify before reconciling`
+      `⚠️  ${NODE} drizzle migrate threw — will verify schema before deciding: ${describeMigrateError(err)}`
     );
   }
 
-  // VERIFICATION GATE — must pass before any tracking-row stamping. If the live
-  // shape doesn't match the latest snapshot, throw; do NOT pretend the schema
-  // is applied just because the SQL files happen to live on disk.
   const verifyResult = await withConnection((sql) =>
     verifyDoltgresSchema(sql, migrationsFolder)
   );
@@ -122,7 +123,7 @@ try {
     (sql) => sql`SELECT dolt_commit('-Am', 'migration: drizzle-orm batch')`
   );
   console.log(
-    `✅ ${NODE} migrations ${migrateThrewAlreadyApplied ? "already-applied" : "applied"} + verified + ${stampedRows} tracking row(s) reconciled + dolt_commit stamped in ${Date.now() - t0}ms`
+    `✅ ${NODE} migrations ${migrateError ? "applied-with-recovery" : "applied"} + verified + ${stampedRows} tracking row(s) reconciled + dolt_commit stamped in ${Date.now() - t0}ms`
   );
 } catch (err) {
   console.error(`FATAL(${NODE}): migrate failed:`, err);
