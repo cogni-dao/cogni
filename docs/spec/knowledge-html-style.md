@@ -43,7 +43,7 @@ Mixing is OK at the entry-set level (a domain has both kinds), never within one 
 - A full design-system port. We borrow shadcn's _visual language_ (HSL token names, radius, spacing) without importing shadcn React components.
 - Theming for light mode. v0 ships dark-mode-only tokens (matches the operator's dark canvas). Light mode lands when a non-dark consumer ships.
 
-## Architecture
+## Design
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
