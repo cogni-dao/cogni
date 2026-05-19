@@ -36,20 +36,28 @@ import {
 } from "testcontainers";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { verifyDoltgresSchema } from "@/adapters/server/db/verify-doltgres-schema.mjs";
-
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Repo-root-relative paths so this test is portable.
 const REPO_ROOT = path.resolve(__dirname, "../../../../../../..");
 const MIGRATE_SCRIPT = path.resolve(
   REPO_ROOT,
-  "nodes/operator/app/src/adapters/server/db/migrate-doltgres.mjs"
+  "scripts/db/migrate-doltgres.mjs"
+);
+const VERIFY_SCRIPT_URL = new URL(
+  `file://${path.resolve(REPO_ROOT, "scripts/db/verify-doltgres-schema.mjs")}`
 );
 const MIGRATIONS_DIR = path.resolve(
   REPO_ROOT,
   "nodes/operator/app/src/adapters/server/db/doltgres-migrations"
 );
+
+const { verifyDoltgresSchema } = (await import(VERIFY_SCRIPT_URL.href)) as {
+  verifyDoltgresSchema: (
+    sql: ReturnType<typeof postgres>,
+    folder: string
+  ) => Promise<{ ok: true; latestTag: string; tablesChecked: number }>;
+};
 
 const DG_USER = "postgres";
 const DG_PASSWORD = "doltgres";
@@ -96,7 +104,7 @@ describe("doltgres migrator + schema verification", () => {
   it("fresh DB: migrator applies all migrations + verifier passes", async () => {
     // Run the ACTUAL migrator script — same code path as the k8s initContainer.
     const result = execSync(`node ${MIGRATE_SCRIPT} ${MIGRATIONS_DIR}`, {
-      env: { ...process.env, DATABASE_URL: dbUrl },
+      env: { ...process.env, DATABASE_URL: dbUrl, NODE_NAME: "operator" },
       encoding: "utf8",
       stdio: "pipe",
     });
