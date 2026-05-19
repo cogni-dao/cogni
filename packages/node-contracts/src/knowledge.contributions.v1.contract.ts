@@ -22,7 +22,8 @@ const KnowledgeEntryInputSchema = z.object({
   domain: z.string().min(1).max(64),
   entityId: z.string().max(128).optional(),
   title: z.string().min(1).max(256),
-  content: z.string().min(1).max(8192),
+  content: z.string().min(1).max(65536),
+  entryType: z.string().min(1).max(64).optional(),
   tags: z.array(z.string().max(64)).max(32).optional(),
   confidencePct: z.number().int().min(0).max(100).optional(),
 });

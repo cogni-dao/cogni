@@ -135,8 +135,9 @@ export class DoltgresKnowledgeContributionAdapter
         const confidencePct =
           input.principal.kind === "agent" ? 30 : (entry.confidencePct ?? 30);
         const entryId = `${contributionId}:${randomBytes(3).toString("hex")}`;
+        const entryType = entry.entryType ?? "finding";
         await conn.unsafe(
-          `INSERT INTO knowledge (id, domain, entity_id, title, content, confidence_pct, source_type, source_ref, tags) VALUES (${escapeValue(entryId)}, ${escapeValue(entry.domain)}, ${escapeValue(entry.entityId ?? null)}, ${escapeValue(entry.title)}, ${escapeValue(entry.content)}, ${escapeValue(confidencePct)}, ${escapeValue("external")}, ${escapeValue(sourceRef)}, ${entry.tags ? escapeValue(entry.tags) : "NULL"})`
+          `INSERT INTO knowledge (id, domain, entity_id, title, content, entry_type, confidence_pct, source_type, source_ref, tags) VALUES (${escapeValue(entryId)}, ${escapeValue(entry.domain)}, ${escapeValue(entry.entityId ?? null)}, ${escapeValue(entry.title)}, ${escapeValue(entry.content)}, ${escapeValue(entryType)}, ${escapeValue(confidencePct)}, ${escapeValue("external")}, ${escapeValue(sourceRef)}, ${entry.tags ? escapeValue(entry.tags) : "NULL"})`
         );
       }
 
@@ -207,10 +208,22 @@ export class DoltgresKnowledgeContributionAdapter
       const row = r as Record<string, unknown>;
       const diffType = String(row.diff_type ?? "modified");
       const before: Record<string, unknown> | null = row.from_id
-        ? { id: row.from_id, title: row.from_title ?? null }
+        ? {
+            id: row.from_id,
+            title: row.from_title ?? null,
+            content: row.from_content ?? null,
+            entryType: row.from_entry_type ?? null,
+            domain: row.from_domain ?? null,
+          }
         : null;
       const after: Record<string, unknown> | null = row.to_id
-        ? { id: row.to_id, title: row.to_title ?? null }
+        ? {
+            id: row.to_id,
+            title: row.to_title ?? null,
+            content: row.to_content ?? null,
+            entryType: row.to_entry_type ?? null,
+            domain: row.to_domain ?? null,
+          }
         : null;
       const rowId = String(row.to_id ?? row.from_id ?? "");
       return {
