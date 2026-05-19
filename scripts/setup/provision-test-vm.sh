@@ -266,10 +266,25 @@ log_info "All secrets loaded from .env.${DEPLOY_ENV}"
 # ══════════════════════════════════════════════════════════════
 log_step "Phase 3: Provision VM"
 
+# Cherry SSH-key labels (and VM hostnames) derive from $GH_REPO so that
+# multiple forks on the same Cherry account don't collide on the fixed
+# `cogni-<env>-deploy` label. Earlier canary (v0 incident, 2026-05-17)
+# deleted what looked like an orphan key but was actually load-bearing
+# for a VM in a sibling project — Cherry SSH keys are ACCOUNT-scoped,
+# not project-scoped. Per-fork namespacing eliminates the collision class.
+# Ported verbatim from node-template PR #19.
+#
+# Cogni-DAO/cogni               → cogni-dao-cogni
+# Cogni-DAO/node-template       → cogni-dao-node-template
+# i-am-coco/cogni-node-20260517 → i-am-coco-cogni-node-20260517
+GH_REPO="${GH_REPO:-$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo "Cogni-DAO/cogni")}"
+VM_NAME_PREFIX=$(echo "${GH_REPO//\//-}" | tr '[:upper:]' '[:lower:]')
+log_info "VM/SSH-key prefix: ${VM_NAME_PREFIX} (from \$GH_REPO=${GH_REPO})"
+
 TFVARS="$PROVISION_DIR/terraform.${WORKSPACE}.tfvars"
 cat > "$TFVARS" << EOF
 environment          = "${DEPLOY_ENV}"
-vm_name_prefix       = "cogni"
+vm_name_prefix       = "${VM_NAME_PREFIX}"
 project_id           = "${CHERRY_PROJECT_ID}"
 plan                 = "B1-6-6gb-100s-shared"
 region               = "LT-Siauliai"
@@ -541,6 +556,7 @@ APP_IMAGE=placeholder:not-started
 APP_BASE_URL=https://${DOMAIN}
 COGNI_REPO_URL=${COGNI_REPO_URL}
 COGNI_REPO_REF=${COGNI_REPO_REF}
+LITELLM_IMAGE=cogni-litellm:latest
 ENVEOF"
 
 # Start services
