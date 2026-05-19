@@ -155,7 +155,34 @@ const UTILITY_CSS = `.cogni-card {
   color: hsl(var(--destructive));
 }
 .cogni-mono { font-family: var(--font-mono); }
-.cogni-muted { color: hsl(var(--muted-foreground)); }`;
+.cogni-muted { color: hsl(var(--muted-foreground)); }
+.cogni-svg-container {
+  fill: hsl(var(--cogni-tone, var(--muted)) / 0.08);
+  stroke: hsl(var(--cogni-tone, var(--muted-foreground)) / 0.55);
+  stroke-width: 2;
+  rx: 24;
+  ry: 24;
+}
+.cogni-svg-node {
+  fill: hsl(var(--cogni-tone, var(--muted)) / 0.18);
+  stroke: hsl(var(--cogni-tone, var(--muted-foreground)) / 0.7);
+  stroke-width: 2;
+  rx: 16;
+  ry: 16;
+}
+.cogni-svg-label {
+  fill: hsl(var(--foreground));
+  font-family: var(--font-sans);
+  font-weight: 500;
+  font-size: 14px;
+  text-anchor: middle;
+  dominant-baseline: middle;
+}
+.cogni-svg-arrow {
+  stroke: hsl(var(--muted-foreground));
+  stroke-width: 2;
+  fill: none;
+}`;
 
 const SHELL_STYLE = `${LIGHT_TOKEN_BLOCK}\n${DARK_TOKEN_BLOCK}\n${BASE_CSS}\n${UTILITY_CSS}`;
 

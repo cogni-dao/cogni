@@ -103,19 +103,25 @@ All tokens follow shadcn convention (HSL components in the variable, `hsl(var(--
 
 The complete set. ≤15 classes is a hard cap — beyond this we're rebuilding shadcn.
 
-| Class                     | Element               | Purpose                                                         |
-| ------------------------- | --------------------- | --------------------------------------------------------------- |
-| `.cogni-card`             | `<div>` / `<section>` | Bordered surface with `--card` bg + `--radius` corners          |
-| `.cogni-panel-title`      | `<h2>` / `<h3>`       | Uppercase, tracked, `--muted-foreground` — section headers      |
-| `.cogni-grid`             | `<div>`               | Auto-fit grid with 16px gap (use child `grid-column` overrides) |
-| `.cogni-divider`          | `<hr>` / `<div>`      | 1px `--border` separator                                        |
-| `.cogni-kv`               | `<div>`               | Key/value pair row (flex, `--muted-foreground` label)           |
-| `.cogni-pill`             | `<span>`              | Inline label, default neutral                                   |
-| `.cogni-pill-success`     | `<span>` (modifier)   | + green tint                                                    |
-| `.cogni-pill-warning`     | `<span>` (modifier)   | + yellow tint                                                   |
-| `.cogni-pill-destructive` | `<span>` (modifier)   | + red tint                                                      |
-| `.cogni-mono`             | any                   | Force `var(--font-mono)`                                        |
-| `.cogni-muted`            | any                   | Text in `--muted-foreground`                                    |
+| Class                     | Element               | Purpose                                                                         |
+| ------------------------- | --------------------- | ------------------------------------------------------------------------------- |
+| `.cogni-card`             | `<div>` / `<section>` | Bordered surface with `--card` bg + `--radius` corners                          |
+| `.cogni-panel-title`      | `<h2>` / `<h3>`       | Uppercase, tracked, `--muted-foreground` — section headers                      |
+| `.cogni-grid`             | `<div>`               | Auto-fit grid with 16px gap (use child `grid-column` overrides)                 |
+| `.cogni-divider`          | `<hr>` / `<div>`      | 1px `--border` separator                                                        |
+| `.cogni-kv`               | `<div>`               | Key/value pair row (flex, `--muted-foreground` label)                           |
+| `.cogni-pill`             | `<span>`              | Inline label, default neutral                                                   |
+| `.cogni-pill-success`     | `<span>` (modifier)   | + green tint                                                                    |
+| `.cogni-pill-warning`     | `<span>` (modifier)   | + yellow tint                                                                   |
+| `.cogni-pill-destructive` | `<span>` (modifier)   | + red tint                                                                      |
+| `.cogni-mono`             | any                   | Force `var(--font-mono)`                                                        |
+| `.cogni-muted`            | any                   | Text in `--muted-foreground`                                                    |
+| `.cogni-svg-container`    | `<rect>`              | Large rounded grouping rect — soft fill (8% alpha), 24px radius                 |
+| `.cogni-svg-node`         | `<rect>`              | Themed rounded node — fill (18% alpha), 16px radius                             |
+| `.cogni-svg-label`        | `<text>`              | Centered Manrope label for nodes/containers                                     |
+| `.cogni-svg-arrow`        | `<line>` / `<path>`   | Connector stroke in `--muted-foreground` (dashed via inline `stroke-dasharray`) |
+
+Both `.cogni-svg-container` and `.cogni-svg-node` read their color from a `--cogni-tone` CSS variable. Set it inline per element: `style="--cogni-tone: var(--chart-2)"`. Unset → falls back to `--muted`. Standard tones: `--chart-1` (blue), `--chart-2` (teal), `--chart-3` (amber), `--chart-4` (violet), `--chart-5` (pink), `--color-success`, `--color-warning`, `--destructive`.
 
 Add a class only when ≥2 existing artifacts would use it. New classes require an amendment to this spec.
 
@@ -125,13 +131,30 @@ v0 ships **no chart library**. Tokens + utility classes only (~5KB shell). Reaso
 
 ## Diagrams (SVG)
 
-Hand-authored SVG is still first-class for freeform flow/pipeline diagrams (see the delta-analyzer entry). Constraints:
+Diagrams compose from the four `.cogni-svg-*` primitives above. Authors set the chosen palette via the `--cogni-tone` inline variable; fills/strokes/labels inherit consistent styling.
 
-- Fills/strokes use `hsl(var(--token))` only — no hardcoded hex.
-- Font-family inherits from the token stack (don't set on `<text>` unless using `.cogni-mono`).
-- Background of the SVG canvas is transparent — the body's `--background` shows through.
+```svg
+<svg viewBox="0 0 800 360" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="render pipeline">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="hsl(var(--muted-foreground))"/>
+    </marker>
+  </defs>
 
-A future helper script may lint authored SVGs for token compliance.
+  <rect class="cogni-svg-container" style="--cogni-tone: var(--chart-4)"
+        x="240" y="40" width="540" height="280"/>
+
+  <rect class="cogni-svg-node" style="--cogni-tone: var(--chart-2)"
+        x="280" y="140" width="160" height="80"/>
+  <text class="cogni-svg-label" x="360" y="180">buildHtmlShell</text>
+
+  <line class="cogni-svg-arrow" x1="200" y1="180" x2="270" y2="180" marker-end="url(#arr)"/>
+</svg>
+```
+
+The `<defs>` arrowhead marker must live inside each SVG (SVG-scoped, not CSS-reachable). Other styling — fill, stroke, label typography — comes from the shipped classes.
+
+For non-tabular freeform shapes (paths, polygons), `hsl(var(--token))` is still the rule. Hardcoded hex remains an anti-pattern.
 
 ## Anti-Patterns
 
