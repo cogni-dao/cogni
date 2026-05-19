@@ -13,10 +13,11 @@
  */
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-const APP_ROOT = process.cwd();
+const APP_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const PUBLIC_API_DIR = join(APP_ROOT, "src/app/api/v1/public");
 const CONTRACT_TEST_DIR = join(APP_ROOT, "tests/contract/app");
 const STACK_TEST_DIR = join(APP_ROOT, "tests/stack/public");
