@@ -75,10 +75,10 @@ const DARK_TOKEN_BLOCK = `.dark {
 }`;
 
 const BASE_CSS = `*, *::before, *::after { box-sizing: border-box; }
-html, body { margin: 0; padding: 0; }
+html, body { margin: 0; padding: 0; min-height: 100%; }
+html, body { background: hsl(var(--background)); }
 body {
   padding: 32px;
-  background: hsl(var(--background));
   color: hsl(var(--foreground));
   font-family: var(--font-sans);
   font-size: 14px;

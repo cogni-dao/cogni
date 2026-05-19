@@ -36,11 +36,12 @@ export function HtmlRenderer({ html, title }: HtmlRendererProps): ReactElement {
 
   return (
     <iframe
+      key={theme}
       title={title}
       srcDoc={buildHtmlShell(html, title, theme)}
       sandbox=""
       referrerPolicy="no-referrer"
-      className="h-[var(--height-artifact-canvas)] w-full rounded-md border border-border bg-[var(--bg-artifact-canvas)]"
+      className="h-[var(--height-artifact-canvas)] w-full rounded-md border border-border bg-background"
     />
   );
 }
