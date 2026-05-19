@@ -15,6 +15,7 @@ Knowledge entries serve two audiences:
 - **Humans** — review, approve, scan → HTML is right. Use `entryType: "html"`. Concise. Visual. Bare-minimum prose.
 
 If you're writing prose for a human to read, stop. Convert to:
+
 - A `<table>` of facts
 - A `.cogni-card` per claim
 - A row of `.cogni-pill` status indicators

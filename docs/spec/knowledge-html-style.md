@@ -28,10 +28,10 @@ This spec defines the authoring contract: what the renderer injects, what author
 
 Knowledge entries serve two audiences with opposing format pressures:
 
-| Audience       | Optimal format                                                                | `entryType`                                                    |
-| -------------- | ----------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| **AI agents**  | Plain text. Searchable, embedding-friendly, parseable. Verbose is fine.       | `observation`, `finding`, `conclusion`, `rule`, `scorecard`, `skill`, `guide` |
-| **Humans**     | Concise visual HTML. Tables, pills, diagrams, charts. Bare-minimum prose.     | `html` (this spec)                                             |
+| Audience      | Optimal format                                                            | `entryType`                                                                   |
+| ------------- | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| **AI agents** | Plain text. Searchable, embedding-friendly, parseable. Verbose is fine.   | `observation`, `finding`, `conclusion`, `rule`, `scorecard`, `skill`, `guide` |
+| **Humans**    | Concise visual HTML. Tables, pills, diagrams, charts. Bare-minimum prose. | `html` (this spec)                                                            |
 
 **Default = text.** Reach for `entryType=html` only when a human is the primary consumer and visual density would beat a paragraph. A design diagram, a status scorecard with N pills, a roadmap with per-quarter chart — those are `html`. A market base rate, a strategy description, a research finding — those stay text.
 
@@ -40,7 +40,7 @@ Mixing is OK at the entry-set level (a domain has both kinds), never within one 
 ## Non-Goals
 
 - Interactivity. Renderer iframe is `sandbox=""` — no JavaScript runs. No clickable tabs, no live data, no DOM events. Use static SVG/CSS only.
-- A full design-system port. We borrow shadcn's *visual language* (HSL token names, radius, spacing) without importing shadcn React components.
+- A full design-system port. We borrow shadcn's _visual language_ (HSL token names, radius, spacing) without importing shadcn React components.
 - Theming for light mode. v0 ships dark-mode-only tokens (matches the operator's dark canvas). Light mode lands when a non-dark consumer ships.
 
 ## Architecture
@@ -79,23 +79,23 @@ Drift discipline:
 
 Authors reference these CSS variables. Hardcoded hex is an anti-pattern.
 
-| Variable                  | Role                                  | Example use                                |
-| ------------------------- | ------------------------------------- | ------------------------------------------ |
-| `--background`            | Page background                       | `body { background: hsl(var(--background)) }` |
-| `--foreground`            | Body text                             | Most text                                  |
-| `--card`                  | Card surface                          | `.cogni-card` background                   |
-| `--card-foreground`       | Text on card                          |                                            |
-| `--muted`                 | Subdued background (cells, dividers)  |                                            |
-| `--muted-foreground`      | Secondary text (labels, captions)     |                                            |
-| `--border`                | Hairlines and outlines                |                                            |
-| `--primary`               | Brand/CTA color                       | Headlines, active states                   |
-| `--success`               | Positive state                        | `place` pills, ok arrows                   |
-| `--warning`               | Caution state                         | `warn`, partial fills                      |
-| `--destructive`           | Negative state                        | `skip`, errors                             |
-| `--chart-1` … `--chart-5` | Categorical chart palette (5 hues)    | Bar/line/area series                       |
-| `--font-sans`             | Body type                             | Default                                    |
-| `--font-mono`             | Code / IDs / tabular data             | `.cogni-mono`                              |
-| `--radius`                | Corner radius (0.75rem)               | Cards, pills                               |
+| Variable                  | Role                                 | Example use                                   |
+| ------------------------- | ------------------------------------ | --------------------------------------------- |
+| `--background`            | Page background                      | `body { background: hsl(var(--background)) }` |
+| `--foreground`            | Body text                            | Most text                                     |
+| `--card`                  | Card surface                         | `.cogni-card` background                      |
+| `--card-foreground`       | Text on card                         |                                               |
+| `--muted`                 | Subdued background (cells, dividers) |                                               |
+| `--muted-foreground`      | Secondary text (labels, captions)    |                                               |
+| `--border`                | Hairlines and outlines               |                                               |
+| `--primary`               | Brand/CTA color                      | Headlines, active states                      |
+| `--success`               | Positive state                       | `place` pills, ok arrows                      |
+| `--warning`               | Caution state                        | `warn`, partial fills                         |
+| `--destructive`           | Negative state                       | `skip`, errors                                |
+| `--chart-1` … `--chart-5` | Categorical chart palette (5 hues)   | Bar/line/area series                          |
+| `--font-sans`             | Body type                            | Default                                       |
+| `--font-mono`             | Code / IDs / tabular data            | `.cogni-mono`                                 |
+| `--radius`                | Corner radius (0.75rem)              | Cards, pills                                  |
 
 All tokens follow shadcn convention (HSL components in the variable, `hsl(var(--x))` at use site). Exact dark-mode HSL values come from `nodes/operator/app/src/styles/tailwind.css` `.dark { ... }` block and are inlined verbatim into the iframe shell.
 
@@ -103,19 +103,19 @@ All tokens follow shadcn convention (HSL components in the variable, `hsl(var(--
 
 The complete set. ≤15 classes is a hard cap — beyond this we're rebuilding shadcn.
 
-| Class                  | Element                  | Purpose                                                        |
-| ---------------------- | ------------------------ | -------------------------------------------------------------- |
-| `.cogni-card`          | `<div>` / `<section>`    | Bordered surface with `--card` bg + `--radius` corners         |
-| `.cogni-panel-title`   | `<h2>` / `<h3>`          | Uppercase, tracked, `--muted-foreground` — section headers     |
-| `.cogni-grid`          | `<div>`                  | Auto-fit grid with 16px gap (use child `grid-column` overrides) |
-| `.cogni-divider`       | `<hr>` / `<div>`         | 1px `--border` separator                                       |
-| `.cogni-kv`            | `<div>`                  | Key/value pair row (flex, `--muted-foreground` label)          |
-| `.cogni-pill`          | `<span>`                 | Inline label, default neutral                                  |
-| `.cogni-pill-success`  | `<span>` (modifier)      | + green tint                                                   |
-| `.cogni-pill-warning`  | `<span>` (modifier)      | + yellow tint                                                  |
-| `.cogni-pill-destructive` | `<span>` (modifier)   | + red tint                                                     |
-| `.cogni-mono`          | any                      | Force `var(--font-mono)`                                       |
-| `.cogni-muted`         | any                      | Text in `--muted-foreground`                                   |
+| Class                     | Element               | Purpose                                                         |
+| ------------------------- | --------------------- | --------------------------------------------------------------- |
+| `.cogni-card`             | `<div>` / `<section>` | Bordered surface with `--card` bg + `--radius` corners          |
+| `.cogni-panel-title`      | `<h2>` / `<h3>`       | Uppercase, tracked, `--muted-foreground` — section headers      |
+| `.cogni-grid`             | `<div>`               | Auto-fit grid with 16px gap (use child `grid-column` overrides) |
+| `.cogni-divider`          | `<hr>` / `<div>`      | 1px `--border` separator                                        |
+| `.cogni-kv`               | `<div>`               | Key/value pair row (flex, `--muted-foreground` label)           |
+| `.cogni-pill`             | `<span>`              | Inline label, default neutral                                   |
+| `.cogni-pill-success`     | `<span>` (modifier)   | + green tint                                                    |
+| `.cogni-pill-warning`     | `<span>` (modifier)   | + yellow tint                                                   |
+| `.cogni-pill-destructive` | `<span>` (modifier)   | + red tint                                                      |
+| `.cogni-mono`             | any                   | Force `var(--font-mono)`                                        |
+| `.cogni-muted`            | any                   | Text in `--muted-foreground`                                    |
 
 Add a class only when ≥2 existing artifacts would use it. New classes require an amendment to this spec.
 
@@ -135,15 +135,15 @@ A future helper script may lint authored SVGs for token compliance.
 
 ## Anti-Patterns
 
-| Pattern                                                | Why it's banned                                                                                                                            |
-| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| Hardcoded hex (`#0a0e0c`, `rgb(…)`)                    | Breaks `TOKENS_ARE_THE_PALETTE`. Artifact looks off-brand on theme changes.                                                                |
-| `style="background: …"` with literal colors            | Same as above. Use `style="background: hsl(var(--card))"` or a `.cogni-*` class.                                                           |
-| Custom `@font-face` declarations                       | Pulls remote fonts (blocked by sandbox or referrer-leaks). Use `var(--font-sans)` / `var(--font-mono)`.                                    |
-| External `<link rel="stylesheet">` or `<script src=>`  | Sandbox blocks scripts, but their presence indicates the author skipped the shell. All styling ships via the renderer.                    |
-| Embedded `<img src="data:…">` larger than 50KB         | Inflates the row beyond practical Dolt-diff and search-index sizes. Use SVG for diagrams, Charts.css for data viz.                         |
-| Inline scripts (`<script>` / `onclick=`)               | Sandbox strips them, but their presence indicates the author thought interactivity was possible. Re-read the spec.                         |
-| Verbose prose paragraphs                               | `entryType=html` is for visual density. Text-heavy content belongs in a text `entryType` (see "When to Author HTML vs Text").              |
+| Pattern                                               | Why it's banned                                                                                                               |
+| ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| Hardcoded hex (`#0a0e0c`, `rgb(…)`)                   | Breaks `TOKENS_ARE_THE_PALETTE`. Artifact looks off-brand on theme changes.                                                   |
+| `style="background: …"` with literal colors           | Same as above. Use `style="background: hsl(var(--card))"` or a `.cogni-*` class.                                              |
+| Custom `@font-face` declarations                      | Pulls remote fonts (blocked by sandbox or referrer-leaks). Use `var(--font-sans)` / `var(--font-mono)`.                       |
+| External `<link rel="stylesheet">` or `<script src=>` | Sandbox blocks scripts, but their presence indicates the author skipped the shell. All styling ships via the renderer.        |
+| Embedded `<img src="data:…">` larger than 50KB        | Inflates the row beyond practical Dolt-diff and search-index sizes. Use SVG for diagrams, Charts.css for data viz.            |
+| Inline scripts (`<script>` / `onclick=`)              | Sandbox strips them, but their presence indicates the author thought interactivity was possible. Re-read the spec.            |
+| Verbose prose paragraphs                              | `entryType=html` is for visual density. Text-heavy content belongs in a text `entryType` (see "When to Author HTML vs Text"). |
 
 ## Authoring Example
 
@@ -176,16 +176,16 @@ The resulting artifact uses the same chrome as the operator's own `Card`, `Badge
 
 ## Invariants
 
-| Rule                            | Constraint                                                                                                                                                                                                                  |
-| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| TOKENS_ARE_THE_PALETTE          | Author content must reference `var(--token)` for colors and `var(--font-*)` for type. Hardcoded hex / named font families are anti-patterns.                                                                                |
-| SANDBOX_IS_THE_BOUNDARY         | Renderer iframe stays `sandbox=""` + `referrerPolicy="no-referrer"`. Adding `allow-scripts` requires a documented threat model and a spec amendment.                                                                        |
-| UTILITY_LIB_IS_CAPPED           | The `.cogni-*` class set is ≤15. New classes require a spec amendment with a concrete second-artifact use case.                                                                                                             |
-| DIAGRAMS_USE_SVG                | Freeform flow/architecture diagrams are SVG, hand-authored, token-only fills.                                                                                                                                                |
-| SHELL_IS_INLINE                 | The CSS shell (tokens + utilities + Charts.css) is inlined into `srcDoc` — no external `<link>` or `<script>`. Keeps artifacts portable + sandbox-safe.                                                                      |
-| ONE_RENDERER_FOR_ALL_NODES      | Operator and future node-template forks all use the same `HtmlRenderer` + shell. Per-node theme overrides happen via the token block, not by forking the renderer.                                                          |
-| HUMAN_HTML_AI_TEXT              | `entryType=html` is reserved for human-review content (concise + visual). AI-consumed knowledge (search recall, embeddings, agent reasoning) stays in text `entryType` rows. Authors choose audience first, format second.   |
-| TOKEN_BLOCK_PAIRED              | Changes to `tailwind.css .dark{}` and the renderer's `TOKEN_BLOCK` constant ship in the same commit until codegen lands.                                                                                                     |
+| Rule                       | Constraint                                                                                                                                                                                                                 |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| TOKENS_ARE_THE_PALETTE     | Author content must reference `var(--token)` for colors and `var(--font-*)` for type. Hardcoded hex / named font families are anti-patterns.                                                                               |
+| SANDBOX_IS_THE_BOUNDARY    | Renderer iframe stays `sandbox=""` + `referrerPolicy="no-referrer"`. Adding `allow-scripts` requires a documented threat model and a spec amendment.                                                                       |
+| UTILITY_LIB_IS_CAPPED      | The `.cogni-*` class set is ≤15. New classes require a spec amendment with a concrete second-artifact use case.                                                                                                            |
+| DIAGRAMS_USE_SVG           | Freeform flow/architecture diagrams are SVG, hand-authored, token-only fills.                                                                                                                                              |
+| SHELL_IS_INLINE            | The CSS shell (tokens + utilities + Charts.css) is inlined into `srcDoc` — no external `<link>` or `<script>`. Keeps artifacts portable + sandbox-safe.                                                                    |
+| ONE_RENDERER_FOR_ALL_NODES | Operator and future node-template forks all use the same `HtmlRenderer` + shell. Per-node theme overrides happen via the token block, not by forking the renderer.                                                         |
+| HUMAN_HTML_AI_TEXT         | `entryType=html` is reserved for human-review content (concise + visual). AI-consumed knowledge (search recall, embeddings, agent reasoning) stays in text `entryType` rows. Authors choose audience first, format second. |
+| TOKEN_BLOCK_PAIRED         | Changes to `tailwind.css .dark{}` and the renderer's `TOKEN_BLOCK` constant ship in the same commit until codegen lands.                                                                                                   |
 
 ## Open Questions
 
