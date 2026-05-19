@@ -5,13 +5,13 @@ title: "Knowledge HTML Style — Authoring Contract for entryType=html Artifacts
 status: draft
 spec_state: draft
 trust: draft
-summary: "Renderer-side design system for entryType=html knowledge entries. The renderer wraps every author payload in a shell that ships (1) the operator app's shadcn-style CSS tokens, (2) a tiny `.cogni-*` utility class set, and (3) vendored Charts.css for pure-CSS data viz. Author content references these primitives instead of inlining its own palette, so artifacts inherit app chrome and stay consistent across nodes."
+summary: "Renderer-side design system for entryType=html knowledge entries. The renderer wraps every author payload in a shell that ships the operator app's shadcn-style CSS tokens and a tiny `.cogni-*` utility class set (~5KB total). Author content references these primitives instead of inlining its own palette, so artifacts inherit app chrome and stay consistent across nodes. Chart library deferred to v0.1."
 read_when: Authoring an `entryType=html` knowledge entry, building or reviewing the html-knowledge-author skill, debugging why an artifact looks off-brand, or adding a new chart/diagram type to the cogni-utility library.
 implements:
 owner: derekg1729
 created: 2026-05-19
 verified:
-tags: [knowledge, html, design-system, sandbox, charts-css, shadcn]
+tags: [knowledge, html, design-system, sandbox, shadcn]
 ---
 
 # Knowledge HTML Style — Authoring Contract
@@ -23,6 +23,19 @@ tags: [knowledge, html, design-system, sandbox, charts-css, shadcn]
 Every `entryType=html` knowledge entry rendered through `HtmlRenderer` (operator `/knowledge`, future poly/node clones) looks like it belongs to the operator app — same palette, same typography, same card/pill conventions — without each author duplicating its own design language. Charts and diagrams use shared primitives, not hand-rolled palettes.
 
 This spec defines the authoring contract: what the renderer injects, what authors are expected to use, and what counts as off-brand.
+
+## When to Author HTML vs Text
+
+Knowledge entries serve two audiences with opposing format pressures:
+
+| Audience       | Optimal format                                                                | `entryType`                                                    |
+| -------------- | ----------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| **AI agents**  | Plain text. Searchable, embedding-friendly, parseable. Verbose is fine.       | `observation`, `finding`, `conclusion`, `rule`, `scorecard`, `skill`, `guide` |
+| **Humans**     | Concise visual HTML. Tables, pills, diagrams, charts. Bare-minimum prose.     | `html` (this spec)                                             |
+
+**Default = text.** Reach for `entryType=html` only when a human is the primary consumer and visual density would beat a paragraph. A design diagram, a status scorecard with N pills, a roadmap with per-quarter chart — those are `html`. A market base rate, a strategy description, a research finding — those stay text.
+
+Mixing is OK at the entry-set level (a domain has both kinds), never within one entry.
 
 ## Non-Goals
 
@@ -41,7 +54,6 @@ This spec defines the authoring contract: what the renderer injects, what author
 │  │     :root { --background, --foreground, --card, ... }   │ │  ← tokens
 │  │     body { font-family: var(--font-sans); ... }         │ │
 │  │     .cogni-card, .cogni-pill, .cogni-kv, ...            │ │  ← utilities
-│  │     /* Charts.css inlined */                            │ │  ← charts
 │  │   </style>                                              │ │
 │  │ </head>                                                  │ │
 │  │ <body>                                                   │ │
@@ -51,7 +63,17 @@ This spec defines the authoring contract: what the renderer injects, what author
 └─────────────────────────────────────────────────────────────┘
 ```
 
-The shell is one inline `<style>` block (~15–20 KB total) generated at render time. No external requests, no script tags, no React. Browser layout engine does everything.
+The shell is one inline `<style>` block (~5KB total) generated at render time. No external requests, no script tags, no React. Browser layout engine does everything.
+
+## Token Drift Management
+
+The iframe's `<style>` block can't `@import` or inherit from the parent — `sandbox=""` enforces an opaque origin. The renderer therefore **inlines a snapshot** of the operator app's `.dark { … }` token block into the shell.
+
+Drift discipline:
+
+- The renderer module exports a single `TOKEN_BLOCK` constant containing the inlined HSL values, with a `// SOURCE: nodes/operator/app/src/styles/tailwind.css .dark { … }` comment pinning the authoritative origin.
+- When a token in `tailwind.css` changes, the matching `TOKEN_BLOCK` entry MUST be updated in the same commit. PR review checks for this pair.
+- A future v0.1 build script may codegen `TOKEN_BLOCK` from `tailwind.css`; until then, the comment + paired-PR convention is the guard.
 
 ## Tokens (Inherited from operator app)
 
@@ -97,29 +119,9 @@ The complete set. ≤15 classes is a hard cap — beyond this we're rebuilding s
 
 Add a class only when ≥2 existing artifacts would use it. New classes require an amendment to this spec.
 
-## Charts via Charts.css
+## Charts — deferred to v0.1
 
-[Charts.css](https://chartscss.org/) (MIT, ~10KB) is vendored and inlined into the iframe shell. It transforms `<table>` markup into bar / column / line / area charts using semantic HTML. **No JavaScript.**
-
-Series colors must come from `--chart-1` … `--chart-5` (override Charts.css defaults via `--color` per-cell).
-
-```html
-<table class="charts-css bar show-labels">
-  <caption>fills per hour (last 24h)</caption>
-  <tbody>
-    <tr>
-      <th scope="row">00:00</th>
-      <td style="--size: 0.3"><span class="data">3</span></td>
-    </tr>
-    <tr>
-      <th scope="row">01:00</th>
-      <td style="--size: 0.7"><span class="data">7</span></td>
-    </tr>
-  </tbody>
-</table>
-```
-
-Supported chart types in v0: `bar`, `column`, `area`, `line`. Pie/doughnut excluded (Charts.css's pie support is limited; revisit if needed).
+v0 ships **no chart library**. Tokens + utility classes only (~5KB shell). Reasoning: the full [Charts.css](https://chartscss.org/) bundle is ~75KB minified — too heavy to inline into every artifact's iframe. When the first artifact genuinely needs a bar/line chart, v0.1 will either (a) ship a curated Charts.css subset (~10KB, bar+column only) or (b) provide a thin SVG bar/column helper. Until then: authors who need a chart hand-author a small SVG with token-only fills.
 
 ## Diagrams (SVG)
 
@@ -130,6 +132,18 @@ Hand-authored SVG is still first-class for freeform flow/pipeline diagrams (see 
 - Background of the SVG canvas is transparent — the body's `--background` shows through.
 
 A future helper script may lint authored SVGs for token compliance.
+
+## Anti-Patterns
+
+| Pattern                                                | Why it's banned                                                                                                                            |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| Hardcoded hex (`#0a0e0c`, `rgb(…)`)                    | Breaks `TOKENS_ARE_THE_PALETTE`. Artifact looks off-brand on theme changes.                                                                |
+| `style="background: …"` with literal colors            | Same as above. Use `style="background: hsl(var(--card))"` or a `.cogni-*` class.                                                           |
+| Custom `@font-face` declarations                       | Pulls remote fonts (blocked by sandbox or referrer-leaks). Use `var(--font-sans)` / `var(--font-mono)`.                                    |
+| External `<link rel="stylesheet">` or `<script src=>`  | Sandbox blocks scripts, but their presence indicates the author skipped the shell. All styling ships via the renderer.                    |
+| Embedded `<img src="data:…">` larger than 50KB         | Inflates the row beyond practical Dolt-diff and search-index sizes. Use SVG for diagrams, Charts.css for data viz.                         |
+| Inline scripts (`<script>` / `onclick=`)               | Sandbox strips them, but their presence indicates the author thought interactivity was possible. Re-read the spec.                         |
+| Verbose prose paragraphs                               | `entryType=html` is for visual density. Text-heavy content belongs in a text `entryType` (see "When to Author HTML vs Text").              |
 
 ## Authoring Example
 
@@ -167,11 +181,11 @@ The resulting artifact uses the same chrome as the operator's own `Card`, `Badge
 | TOKENS_ARE_THE_PALETTE          | Author content must reference `var(--token)` for colors and `var(--font-*)` for type. Hardcoded hex / named font families are anti-patterns.                                                                                |
 | SANDBOX_IS_THE_BOUNDARY         | Renderer iframe stays `sandbox=""` + `referrerPolicy="no-referrer"`. Adding `allow-scripts` requires a documented threat model and a spec amendment.                                                                        |
 | UTILITY_LIB_IS_CAPPED           | The `.cogni-*` class set is ≤15. New classes require a spec amendment with a concrete second-artifact use case.                                                                                                             |
-| CHARTS_USE_CHARTS_CSS           | Tabular data viz (bar / column / line / area) goes through Charts.css `<table>` markup, not bespoke SVG.                                                                                                                    |
-| CHART_PALETTE_IS_TOKENIZED      | Charts.css series colors come from `--chart-1` … `--chart-5`, set via per-cell `--color` overrides.                                                                                                                          |
 | DIAGRAMS_USE_SVG                | Freeform flow/architecture diagrams are SVG, hand-authored, token-only fills.                                                                                                                                                |
 | SHELL_IS_INLINE                 | The CSS shell (tokens + utilities + Charts.css) is inlined into `srcDoc` — no external `<link>` or `<script>`. Keeps artifacts portable + sandbox-safe.                                                                      |
 | ONE_RENDERER_FOR_ALL_NODES      | Operator and future node-template forks all use the same `HtmlRenderer` + shell. Per-node theme overrides happen via the token block, not by forking the renderer.                                                          |
+| HUMAN_HTML_AI_TEXT              | `entryType=html` is reserved for human-review content (concise + visual). AI-consumed knowledge (search recall, embeddings, agent reasoning) stays in text `entryType` rows. Authors choose audience first, format second.   |
+| TOKEN_BLOCK_PAIRED              | Changes to `tailwind.css .dark{}` and the renderer's `TOKEN_BLOCK` constant ship in the same commit until codegen lands.                                                                                                     |
 
 ## Open Questions
 
