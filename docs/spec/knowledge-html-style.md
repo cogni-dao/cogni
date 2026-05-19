@@ -41,7 +41,6 @@ Mixing is OK at the entry-set level (a domain has both kinds), never within one 
 
 - Interactivity. Renderer iframe is `sandbox=""` — no JavaScript runs. No clickable tabs, no live data, no DOM events. Use static SVG/CSS only.
 - A full design-system port. We borrow shadcn's _visual language_ (HSL token names, radius, spacing) without importing shadcn React components.
-- Theming for light mode. v0 ships dark-mode-only tokens (matches the operator's dark canvas). Light mode lands when a non-dark consumer ships.
 
 ## Design
 
@@ -67,13 +66,13 @@ The shell is one inline `<style>` block (~5KB total) generated at render time. N
 
 ## Token Drift Management
 
-The iframe's `<style>` block can't `@import` or inherit from the parent — `sandbox=""` enforces an opaque origin. The renderer therefore **inlines a snapshot** of the operator app's `.dark { … }` token block into the shell.
+The iframe's `<style>` block can't `@import` or inherit from the parent — `sandbox=""` enforces an opaque origin. The renderer therefore **inlines snapshots** of the operator app's `:root { … }` and `.dark { … }` token blocks into the shell.
 
 Drift discipline:
 
-- The renderer module exports a single `TOKEN_BLOCK` constant containing the inlined HSL values, with a `// SOURCE: nodes/operator/app/src/styles/tailwind.css .dark { … }` comment pinning the authoritative origin.
-- When a token in `tailwind.css` changes, the matching `TOKEN_BLOCK` entry MUST be updated in the same commit. PR review checks for this pair.
-- A future v0.1 build script may codegen `TOKEN_BLOCK` from `tailwind.css`; until then, the comment + paired-PR convention is the guard.
+- The renderer module exports `LIGHT_TOKEN_BLOCK` and `DARK_TOKEN_BLOCK` constants containing the inlined HSL values, with `// SOURCE: nodes/operator/app/src/styles/tailwind.css …` comments pinning the authoritative origin.
+- When a token in `tailwind.css` changes, the matching token-block entry MUST be updated in the same commit. PR review checks for this pair.
+- A future v0.1 build script may codegen token blocks from `tailwind.css`; until then, the comment + paired-PR convention is the guard.
 
 ## Tokens (Inherited from operator app)
 
@@ -97,7 +96,7 @@ Authors reference these CSS variables. Hardcoded hex is an anti-pattern.
 | `--font-mono`             | Code / IDs / tabular data            | `.cogni-mono`                                 |
 | `--radius`                | Corner radius (0.75rem)              | Cards, pills                                  |
 
-All tokens follow shadcn convention (HSL components in the variable, `hsl(var(--x))` at use site). Exact dark-mode HSL values come from `nodes/operator/app/src/styles/tailwind.css` `.dark { ... }` block and are inlined verbatim into the iframe shell.
+All tokens follow shadcn convention (HSL components in the variable, `hsl(var(--x))` at use site). Exact light and dark HSL values come from `nodes/operator/app/src/styles/tailwind.css` `:root { ... }` and `.dark { ... }` blocks and are inlined verbatim into the iframe shell.
 
 ## Utility Classes (`.cogni-*`)
 
@@ -121,7 +120,7 @@ The complete set. ≤15 classes is a hard cap — beyond this we're rebuilding s
 | `.cogni-svg-label`        | `<text>`              | Centered Manrope label for nodes/containers                                     |
 | `.cogni-svg-arrow`        | `<line>` / `<path>`   | Connector stroke in `--muted-foreground` (dashed via inline `stroke-dasharray`) |
 
-Both `.cogni-svg-container` and `.cogni-svg-node` read their color from a `--cogni-tone` CSS variable. Set it inline per element: `style="--cogni-tone: var(--chart-2)"`. Unset → falls back to `--muted`. Standard tones: `--chart-1` (blue), `--chart-2` (teal), `--chart-3` (amber), `--chart-4` (violet), `--chart-5` (pink), `--color-success`, `--color-warning`, `--destructive`.
+Both `.cogni-svg-container` and `.cogni-svg-node` read their color from a `--cogni-tone` CSS variable. Set it inline per element: `style="--cogni-tone: var(--chart-2)"`. Unset → the class defaults `--cogni-tone` to `--muted`; do not put a nested fallback inside `hsl()` because browser support is brittle in SVG paint properties. Standard tones: `--chart-1` (blue), `--chart-2` (teal), `--chart-3` (amber), `--chart-4` (violet), `--chart-5` (pink), `--color-success`, `--color-warning`, `--destructive`.
 
 Add a class only when ≥2 existing artifacts would use it. New classes require an amendment to this spec.
 
@@ -208,11 +207,10 @@ The resulting artifact uses the same chrome as the operator's own `Card`, `Badge
 | SHELL_IS_INLINE            | The CSS shell (tokens + utilities + Charts.css) is inlined into `srcDoc` — no external `<link>` or `<script>`. Keeps artifacts portable + sandbox-safe.                                                                    |
 | ONE_RENDERER_FOR_ALL_NODES | Operator and future node-template forks all use the same `HtmlRenderer` + shell. Per-node theme overrides happen via the token block, not by forking the renderer.                                                         |
 | HUMAN_HTML_AI_TEXT         | `entryType=html` is reserved for human-review content (concise + visual). AI-consumed knowledge (search recall, embeddings, agent reasoning) stays in text `entryType` rows. Authors choose audience first, format second. |
-| TOKEN_BLOCK_PAIRED         | Changes to `tailwind.css .dark{}` and the renderer's `TOKEN_BLOCK` constant ship in the same commit until codegen lands.                                                                                                   |
+| TOKEN_BLOCK_PAIRED         | Changes to `tailwind.css :root{}` / `.dark{}` and the renderer's matching token-block constants ship in the same commit until codegen lands.                                                                               |
 
 ## Open Questions
 
-- Light-mode shell — defer until a light-canvas consumer ships.
 - A linter that validates author content against TOKENS_ARE_THE_PALETTE before write (knowledge-write tool side).
 - Authoring skill (`html-knowledge-author`) that internalizes this spec — separate work item, post-implement.
 

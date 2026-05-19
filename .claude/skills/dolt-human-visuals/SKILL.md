@@ -29,6 +29,7 @@ Full rules: [`docs/spec/knowledge-html-style.md`](../../../docs/spec/knowledge-h
 
 - Reference tokens, never hex: `hsl(var(--card))`, `hsl(var(--muted-foreground))`, `hsl(var(--color-success))`
 - Use `.cogni-card`, `.cogni-panel-title`, `.cogni-grid`, `.cogni-kv`, `.cogni-pill[-success/-warning/-destructive]`, `.cogni-mono`, `.cogni-muted`, `.cogni-divider`
+- For SVG diagrams, compose from `.cogni-svg-container`, `.cogni-svg-node`, `.cogni-svg-label`, `.cogni-svg-arrow`; set per-shape tone with `style="--cogni-tone: var(--chart-2)"`
 - Fonts: `var(--font-sans)` or `var(--font-mono)` only
 - SVG diagrams: token-only fills; transparent canvas
 

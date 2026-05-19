@@ -29,23 +29,21 @@ export function HtmlRenderer({ html, title }: HtmlRendererProps): ReactElement {
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
 
-  // next-themes priority: resolvedTheme (final answer) → theme (user choice,
-  // may be "system") → systemTheme (OS preference). Before mount everything is
-  // undefined; default to "dark" to avoid a light-on-dark flash on the operator's
-  // dark canvas page. After mount, anything other than explicit "dark" wins as light.
-  let theme: RenderTheme = "dark";
-  if (mounted) {
-    const effective = resolvedTheme ?? themePref ?? systemTheme;
-    theme = effective === "dark" ? "dark" : "light";
-  }
+  const effective =
+    resolvedTheme ??
+    (themePref === "system" ? systemTheme : themePref) ??
+    systemTheme;
+  const theme: RenderTheme = effective === "dark" ? "dark" : "light";
+  const srcDoc = mounted ? buildHtmlShell(html, title, theme) : "";
 
   return (
     <iframe
-      key={theme}
+      key={mounted ? theme : "pending"}
       title={title}
-      srcDoc={buildHtmlShell(html, title, theme)}
+      srcDoc={srcDoc}
       sandbox=""
       referrerPolicy="no-referrer"
+      aria-busy={!mounted}
       className="h-[var(--height-artifact-canvas)] w-full rounded-md border border-border bg-background"
     />
   );

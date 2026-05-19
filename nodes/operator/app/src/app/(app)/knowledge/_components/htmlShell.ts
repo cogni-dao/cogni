@@ -157,15 +157,17 @@ const UTILITY_CSS = `.cogni-card {
 .cogni-mono { font-family: var(--font-mono); }
 .cogni-muted { color: hsl(var(--muted-foreground)); }
 .cogni-svg-container {
-  fill: hsl(var(--cogni-tone, var(--muted)) / 0.08);
-  stroke: hsl(var(--cogni-tone, var(--muted-foreground)) / 0.55);
+  --cogni-tone: var(--muted);
+  fill: hsl(var(--cogni-tone) / 0.08);
+  stroke: hsl(var(--cogni-tone) / 0.55);
   stroke-width: 2;
   rx: 24;
   ry: 24;
 }
 .cogni-svg-node {
-  fill: hsl(var(--cogni-tone, var(--muted)) / 0.18);
-  stroke: hsl(var(--cogni-tone, var(--muted-foreground)) / 0.7);
+  --cogni-tone: var(--muted);
+  fill: hsl(var(--cogni-tone) / 0.18);
+  stroke: hsl(var(--cogni-tone) / 0.7);
   stroke-width: 2;
   rx: 16;
   ry: 16;
