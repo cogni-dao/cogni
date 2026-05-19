@@ -4,10 +4,10 @@
 /**
  * Module: `@scripts/db/verify-doltgres-schema`
  * Purpose: Shared post-migration schema verifier — compares the latest drizzle-kit snapshot against the live DB via information_schema and throws SCHEMA_DRIFT if anything is missing or shape-mismatched.
- * Scope: Pure verification; no DDL, no tracking-table writes, no dolt_commit. Invoked by `migrate-doltgres.mjs` after `migrate()` and before any tracking-row stamping.
- * Invariants: newest journal entry's snapshot is the authoritative end-state; checks presence + nullability only (drizzle-kit-emitted shape, not arbitrary semantics); throws synchronously on drift.
+ * Scope: Pure verification; does not run DDL, does not write tracking rows, does not call dolt_commit.
+ * Invariants: latest snapshot is authoritative end-state; checks table/column presence + nullability; throws synchronously on drift.
  * Side-effects: IO (Doltgres reads, filesystem reads).
- * Notes: Uses `sql.unsafe` because Doltgres 0.56 extended-protocol rejects parameterized queries — same pattern as the migrator's tracking-row recovery shim.
+ * Notes: Uses `sql.unsafe` due to Doltgres 0.56 extended-protocol gap.
  * Links: docs/spec/databases.md §2.6, scripts/db/migrate-doltgres.mjs
  */
 

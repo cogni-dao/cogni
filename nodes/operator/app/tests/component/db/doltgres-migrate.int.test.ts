@@ -39,7 +39,9 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Repo-root-relative paths so this test is portable.
-const REPO_ROOT = path.resolve(__dirname, "../../../../../../..");
+// Test file lives at `nodes/operator/app/tests/component/db/` — 6 levels deep,
+// so 6 `..` segments reach the repo root.
+const REPO_ROOT = path.resolve(__dirname, "../../../../../..");
 const MIGRATE_SCRIPT = path.resolve(
   REPO_ROOT,
   "scripts/db/migrate-doltgres.mjs"

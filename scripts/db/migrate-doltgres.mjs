@@ -5,7 +5,7 @@
  * Module: `@scripts/db/migrate-doltgres`
  * Purpose: Shared Doltgres migrator runner — Doltgres analogue of `scripts/db/migrate.mjs`. Each node's runtime image COPYs this script alongside its own `doltgres-migrations/` dir.
  * Scope: Per-node Doltgres migrations only — migrate + verify + dolt_commit. Does not seed reference data, does not provision the database.
- * Invariants: NODE_NAME + DATABASE_URL from env. argv[2] = migrations dir. Verifier throws SCHEMA_DRIFT before any tracking-row stamping if the live shape does not match the latest snapshot.
+ * Invariants: NODE_NAME + DATABASE_URL from env; argv[2] = migrations dir; verifier throws SCHEMA_DRIFT before any tracking-row stamping on shape drift.
  * Side-effects: IO (Doltgres connect, DDL, tracking-row writes, dolt_commit).
  * Notes: Three surgical deltas from scripts/db/migrate.mjs are driven by upstream Doltgres 0.56 gaps — see docs/spec/databases.md §5.2 parity matrix.
  * Links: scripts/db/verify-doltgres-schema.mjs (load-bearing post-migrate check), docs/spec/databases.md §5.2
