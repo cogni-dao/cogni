@@ -1,12 +1,8 @@
-ALTER TABLE "knowledge_contributions" ADD COLUMN IF NOT EXISTS "entry_count" integer;
+ALTER TABLE "knowledge_contributions" ADD COLUMN "base_commit" text;
 --> statement-breakpoint
-ALTER TABLE "knowledge_contributions" ADD COLUMN IF NOT EXISTS "commit_hash" text;
+ALTER TABLE "knowledge_contributions" ADD COLUMN "head_commit" text;
 --> statement-breakpoint
-ALTER TABLE "knowledge_contributions" ADD COLUMN IF NOT EXISTS "base_commit" text;
---> statement-breakpoint
-ALTER TABLE "knowledge_contributions" ADD COLUMN IF NOT EXISTS "head_commit" text;
---> statement-breakpoint
-ALTER TABLE "knowledge_contributions" ADD COLUMN IF NOT EXISTS "commit_count" integer DEFAULT 0;
+ALTER TABLE "knowledge_contributions" ADD COLUMN "commit_count" integer DEFAULT 0;
 --> statement-breakpoint
 UPDATE "knowledge_contributions"
 SET "base_commit" = COALESCE(NULLIF("base_commit", ''), NULLIF(NULLIF("commit_hash", ''), 'undefined'), 'main')
@@ -29,7 +25,7 @@ ALTER TABLE "knowledge_contributions" ALTER COLUMN "commit_count" SET DEFAULT 0;
 --> statement-breakpoint
 ALTER TABLE "knowledge_contributions" ALTER COLUMN "commit_count" SET NOT NULL;
 --> statement-breakpoint
-CREATE TABLE IF NOT EXISTS "knowledge_contribution_commits" (
+CREATE TABLE "knowledge_contribution_commits" (
 	"contribution_id" text NOT NULL,
 	"seq" integer NOT NULL,
 	"commit_hash" text NOT NULL,
@@ -70,8 +66,8 @@ FROM "knowledge_contributions"
 WHERE NULLIF(NULLIF("commit_hash", ''), 'undefined') IS NOT NULL
 ON CONFLICT ("contribution_id", "seq") DO NOTHING;
 --> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "idx_kcc_commit_hash" ON "knowledge_contribution_commits" USING btree ("commit_hash");
+CREATE INDEX "idx_kcc_commit_hash" ON "knowledge_contribution_commits" USING btree ("commit_hash");
 --> statement-breakpoint
-ALTER TABLE "knowledge_contributions" DROP COLUMN IF EXISTS "entry_count";
+ALTER TABLE "knowledge_contributions" DROP COLUMN "entry_count";
 --> statement-breakpoint
-ALTER TABLE "knowledge_contributions" DROP COLUMN IF EXISTS "commit_hash";
+ALTER TABLE "knowledge_contributions" DROP COLUMN "commit_hash";
