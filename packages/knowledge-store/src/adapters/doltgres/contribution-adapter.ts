@@ -145,7 +145,13 @@ function parseDoltResult(
   field: "dolt_commit" | "dolt_merge" | "dolt_hashof"
 ): string {
   const value = row[field];
-  return Array.isArray(value) ? String(value[0]) : String(value);
+  return normalizeDoltCommitRef(
+    Array.isArray(value) ? String(value[0]) : String(value)
+  );
+}
+
+function normalizeDoltCommitRef(ref: string): string {
+  return ref.startsWith("{") && ref.endsWith("}") ? ref.slice(1, -1) : ref;
 }
 
 async function withReserved<T>(
@@ -333,7 +339,10 @@ export class DoltgresKnowledgeContributionAdapter
       return await withReserved(this.sql, async (conn) => {
         await conn.unsafe(`SELECT dolt_checkout(${escapeRef(rec.branch)})`);
         const actualHead = await currentHash(conn, rec.branch);
-        if (actualHead !== expectedHead) {
+        if (
+          normalizeDoltCommitRef(actualHead) !==
+          normalizeDoltCommitRef(expectedHead)
+        ) {
           throw new ContributionConflictError(
             `contribution ${input.contributionId} branch head changed while appending`
           );

@@ -44,10 +44,42 @@ const reviewer: Principal = {
 class FakeReservedSql {
   readonly queries: string[] = [];
 
-  async unsafe(query: string): Promise<Record<string, unknown>[]> {
+  async unsafe(
+    query: string
+  ): Promise<Record<string, unknown>[] & { count?: number }> {
     this.queries.push(query);
+    if (query.includes("dolt_hashof")) {
+      return [{ dolt_hashof: "head123" }];
+    }
+    if (query.includes("dolt_commit")) {
+      return [{ dolt_commit: ["{next456}"] }];
+    }
+    if (query.includes("FROM domains")) {
+      return [{ "?column?": 1 }];
+    }
     if (query.includes("dolt_merge")) {
       return [{ dolt_merge: ["merge123"] }];
+    }
+    if (query.includes("UPDATE knowledge_contributions")) {
+      const rows: Record<string, unknown>[] & { count?: number } = [];
+      rows.count = 1;
+      return rows;
+    }
+    if (query.includes("FROM knowledge_contribution_commits")) {
+      return [
+        {
+          contribution_id: "contrib-agent-1-abc123",
+          seq: 4,
+          commit_hash: "next456",
+          principal_kind: "agent",
+          principal_id: "agent-1",
+          auth_source: "bearer",
+          message: "append",
+          edit_count: 1,
+          source_ref: "contribution:contrib-agent-1-abc123:4",
+          created_at: new Date("2026-05-19T00:00:00.000Z"),
+        },
+      ];
     }
     return [];
   }
@@ -153,5 +185,36 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
     expect(updateIndex).toBeGreaterThan(-1);
     expect(commitIndex).toBeGreaterThan(updateIndex);
     expect(deleteIndex).toBeGreaterThan(commitIndex);
+  });
+
+  it("accepts Dolt commit refs returned with and without braces while appending", async () => {
+    const fake = new FakeSql();
+
+    const commit = await adapterFor(fake).appendCommit({
+      contributionId: "contrib-agent-1-abc123",
+      principal: { id: "agent-1", kind: "agent" },
+      message: "append",
+      edits: [
+        {
+          op: "insert",
+          entry: {
+            id: "row-1",
+            domain: "meta",
+            title: "row",
+            content: "content",
+          },
+        },
+      ],
+    });
+
+    expect(commit.commitHash).toBe("next456");
+    expect(fake.conn.queries).toContain(
+      "SELECT dolt_hashof('contrib/agent-1-abc123') AS dolt_hashof"
+    );
+    expect(
+      fake.conn.queries.some((query) =>
+        query.includes("head_commit = 'head123'")
+      )
+    ).toBe(true);
   });
 });
