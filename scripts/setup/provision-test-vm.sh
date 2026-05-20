@@ -496,6 +496,8 @@ scp $SSH_OPTS "$CADDYFILE_TEMPLATE" root@"$VM_IP":/opt/cogni-template-edge/confi
 scp $SSH_OPTS "$REPO_ROOT/infra/compose/runtime/docker-compose.yml" root@"$VM_IP":/opt/cogni-template-runtime/docker-compose.yml
 scp $SSH_OPTS "$REPO_ROOT/infra/compose/runtime/configs/litellm.config.yaml" root@"$VM_IP":/opt/cogni-template-runtime/configs/litellm.config.yaml
 scp $SSH_OPTS "$REPO_ROOT/infra/compose/runtime/configs/temporal-dynamicconfig.yaml" root@"$VM_IP":/opt/cogni-template-runtime/configs/temporal-dynamicconfig.yaml
+scp $SSH_OPTS "$REPO_ROOT/infra/compose/runtime/configs/alloy-config.metrics.alloy" root@"$VM_IP":/opt/cogni-template-runtime/configs/alloy-config.metrics.alloy
+scp $SSH_OPTS "$REPO_ROOT/infra/compose/runtime/configs/alloy-config.k8s-events.alloy" root@"$VM_IP":/opt/cogni-template-runtime/configs/alloy-config.k8s-events.alloy
 scp $SSH_OPTS "$REPO_ROOT/infra/compose/runtime/postgres-init/provision.sh" root@"$VM_IP":/opt/cogni-template-runtime/postgres-init/provision.sh
 
 # LiteLLM custom image
@@ -581,7 +583,7 @@ log_info "Starting edge stack (Caddy)..."
 ssh $SSH_OPTS root@"$VM_IP" 'docker compose --project-name cogni-edge --env-file /opt/cogni-template-edge/.env -f /opt/cogni-template-edge/docker-compose.yml up -d'
 
 log_info "Starting infra services (postgres, temporal, litellm, redis, doltgres)..."
-ssh $SSH_OPTS root@"$VM_IP" 'docker compose --project-name cogni-runtime --env-file /opt/cogni-template-runtime/.env -f /opt/cogni-template-runtime/docker-compose.yml up -d --no-build postgres temporal-postgres temporal redis litellm autoheal doltgres'
+ssh $SSH_OPTS root@"$VM_IP" 'docker compose --project-name cogni-runtime --env-file /opt/cogni-template-runtime/.env -f /opt/cogni-template-runtime/docker-compose.yml up -d --no-build postgres temporal-postgres temporal redis litellm autoheal doltgres alloy alloy-k8s-events'
 
 # Wait for postgres
 log_info "Waiting for postgres to become healthy..."
