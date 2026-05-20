@@ -15,13 +15,12 @@
  *        with the missing-table reason.
  * Scope: Component test — boots `dolthub/doltgresql:latest` via testcontainers.
  *   Runs the actual `migrate-doltgres.mjs` script via `execSync` (not a fake)
- *   so the script's recovery shim + verifier wiring is exercised end-to-end.
+ *   so the script's journal walker + verifier wiring is exercised end-to-end.
  * Side-effects: Docker container, sub-process, process.env (DATABASE_URL).
  * Notes: No fixture migration files — uses the real on-disk migrations so the
  *   test stays in sync with whatever the latest snapshot expects. New
  *   migrations land here automatically as soon as they're added to `doltgres-migrations/`.
- * Links: nodes/operator/app/src/adapters/server/db/migrate-doltgres.mjs,
- *   nodes/operator/app/src/adapters/server/db/verify-doltgres-schema.mjs
+ * Links: scripts/db/migrate-doltgres.mjs, scripts/db/verify-doltgres-schema.mjs
  */
 
 import { execSync } from "node:child_process";
@@ -164,6 +163,9 @@ describe("doltgres migrator + schema verification", () => {
     }
   });
 
+  // Intentionally last: drops `citations` without restoring it. vitest's
+  // `sequence: { concurrent: false }` (vitest.doltgres.config.mts) guarantees
+  // this runs after the drop-column case and the container tears down after.
   it("drift: drop table from live DB → verifier reports missing table", async () => {
     const sql = postgres(dbUrl, { max: 1 });
     try {

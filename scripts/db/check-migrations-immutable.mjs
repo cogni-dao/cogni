@@ -29,6 +29,16 @@ function git(args) {
   return execSync(`git ${args}`, { encoding: "utf8" }).trim();
 }
 
+function safeRead(spec) {
+  try {
+    return execSync(`git show ${spec}`, { encoding: "utf8" });
+  } catch (err) {
+    throw new Error(
+      `Failed to read ${spec} from git: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+}
+
 function tryResolveMergeBase() {
   try {
     return git(`merge-base ${BASE_REF} HEAD`);
@@ -80,7 +90,14 @@ for (const line of lines) {
   const oldPath = rest[0];
   const newPath = rest[1] ?? rest[0];
 
-  if (!MIGRATION_DIR_PATTERN.test(oldPath)) continue;
+  // Match if either path is inside a migrations dir — catches renames OUT of
+  // (deletion-equivalent) and renames INTO (introducing a synthetic "applied"
+  // migration that bypasses drizzle-kit).
+  if (
+    !MIGRATION_DIR_PATTERN.test(oldPath) &&
+    !MIGRATION_DIR_PATTERN.test(newPath)
+  )
+    continue;
   inspected += 1;
 
   if (status === "A") continue; // new files allowed
@@ -182,13 +199,3 @@ if (violations.length > 0) {
 console.log(
   `✓ check-migrations-immutable: ${inspected} migration path(s) inspected against ${BASE_REF} — all immutable files untouched.`
 );
-
-function safeRead(spec) {
-  try {
-    return execSync(`git show ${spec}`, { encoding: "utf8" });
-  } catch (err) {
-    throw new Error(
-      `Failed to read ${spec} from git: ${err instanceof Error ? err.message : String(err)}`
-    );
-  }
-}

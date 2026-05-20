@@ -40,7 +40,12 @@ function sqlEscape(v) {
 function isAlreadyExists(err) {
   const msg = err instanceof Error ? err.message : String(err);
   const cause = err?.cause instanceof Error ? err.cause.message : "";
-  return /already exists/i.test(`${msg} ${cause}`);
+  // Narrow to DDL-collision shapes drizzle-kit emits. "X already exists" alone
+  // would swallow unrelated drift (e.g. function/type/constraint collisions
+  // that may indicate a real bug, not idempotent recovery).
+  return /\b(?:table|index|schema|relation|constraint) [^\s]+ already exists/i.test(
+    `${msg} ${cause}`
+  );
 }
 
 /**
@@ -102,24 +107,17 @@ async function withConnection(fn) {
 
 try {
   const t0 = Date.now();
-
-  const applied = await withConnection((sql) =>
-    applyPending(sql, migrationsFolder)
-  );
-
-  const verifyResult = await withConnection((sql) =>
-    verifyDoltgresSchema(sql, migrationsFolder)
-  );
+  const result = await withConnection(async (sql) => {
+    const applied = await applyPending(sql, migrationsFolder);
+    const verifyResult = await verifyDoltgresSchema(sql, migrationsFolder);
+    console.log(
+      `✓ ${NODE} schema verified against snapshot ${verifyResult.latestTag} (${verifyResult.tablesChecked} table(s))`
+    );
+    await sql`SELECT dolt_commit('-Am', 'migration: drizzle-kit batch')`;
+    return applied;
+  });
   console.log(
-    `✓ ${NODE} schema verified against snapshot ${verifyResult.latestTag} (${verifyResult.tablesChecked} table(s))`
-  );
-
-  await withConnection(
-    (sql) => sql`SELECT dolt_commit('-Am', 'migration: drizzle-kit batch')`
-  );
-
-  console.log(
-    `✅ ${NODE} migrate complete: ${applied} migration(s) applied + verified + dolt_commit stamped in ${Date.now() - t0}ms`
+    `✅ ${NODE} migrate complete: ${result} migration(s) applied + verified + dolt_commit stamped in ${Date.now() - t0}ms`
   );
 } catch (err) {
   console.error(`FATAL(${NODE}): migrate failed:`, err);

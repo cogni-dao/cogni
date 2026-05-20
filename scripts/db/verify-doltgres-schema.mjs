@@ -55,22 +55,22 @@ async function readLatestSnapshot(migrationsFolder) {
 
 function expectedTablesFromSnapshot(snapshot) {
   // snapshot.tables keys are `<schema>.<name>`; values have { name, columns, indexes }.
+  // We only check presence + type + nullability; PK and uniqueness flags are
+  // intentionally not extracted (drizzle-kit reorders/renormalizes them on
+  // every regenerate, so they're noisy false positives).
   const tables = new Map();
   for (const value of Object.values(snapshot.tables ?? {})) {
-    const tableName = value.name;
     const columns = new Map();
     for (const col of Object.values(value.columns ?? {})) {
       columns.set(col.name, {
         type: normalizeType(col.type),
         notNull: !!col.notNull,
-        primaryKey: !!col.primaryKey,
       });
     }
-    const indexes = new Map();
-    for (const idx of Object.values(value.indexes ?? {})) {
-      indexes.set(idx.name, { isUnique: !!idx.isUnique });
-    }
-    tables.set(tableName, { columns, indexes });
+    const indexNames = new Set(
+      Object.values(value.indexes ?? {}).map((idx) => idx.name)
+    );
+    tables.set(value.name, { columns, indexNames });
   }
   return tables;
 }
@@ -140,7 +140,7 @@ export async function verifyDoltgresSchema(sql, migrationsFolder) {
         );
       }
     }
-    for (const [idxName] of expectedTable.indexes) {
+    for (const idxName of expectedTable.indexNames) {
       if (!live.indexes.has(idxName)) {
         missing.push(`index "${tableName}"."${idxName}" missing`);
       }
