@@ -26,12 +26,14 @@ Stop the bug.5001 anti-pattern: same problem solved in two repos with two differ
 
 ## Status
 
-S0 (spec) ships in [PR #1355](https://github.com/Cogni-DAO/cogni/pull/1355). S1 (manifest file) is the next slice; it unblocks both v1 (S2 drift detector) and the multi-node-readiness CONTRACT_TEST (S4).
-
 ```
 S0 spec   ─►  S1 manifest  ─►  S2 detector  ─►  S3 backlog drain  ─►  S4 multi-node  ─►  S5 josh decision
 DONE-ISH        NEXT           PLANNED          PLANNED              PLANNED            CONDITIONAL
 ```
+
+## Current Slice
+
+**S1 — `.cogni/sync-manifest.yaml` lands in all three repos with a CI schema validator.** Unblocks S2 (drift detector consumes the manifest) and S4 (CONTRACT_TEST asserts against `scope:`). Until S1 ships in the hub, the contract is documented but not enforceable.
 
 ## Roadmap
 
@@ -46,13 +48,12 @@ DONE-ISH        NEXT           PLANNED          PLANNED              PLANNED    
 
 ## Active Blockers
 
-| #   | Issue                                                                                         | Status     | Impact                                                     |
-| --- | --------------------------------------------------------------------------------------------- | ---------- | ---------------------------------------------------------- |
-| 1   | spec PR #1355 unmerged                                                                        | 🟡 IN PR   | S1 cannot start until spec is the SSOT for manifest schema |
-| 2   | no manifest schema validator yet                                                              | ❌ PLANNED | S1 deliverable                                             |
-| 3   | 20 cogni-poly PRs unsynced (see Backlog)                                                      | ❌ RED     | exhibit A; resolves in S3                                  |
-| 4   | byte-identical-stale `scripts/ci/wait-for-in-cluster-services.sh` between hub + node-template | ❌ RED     | concrete divergence; folded into S3 cherry-picks           |
-| 5   | Caddyfile.tmpl + `deploy-infra.sh` single-node-hardcoded (bug.5001 lineage)                   | ❌ RED     | S4 fix                                                     |
+| #   | Issue                                                                                         | Status     | Impact                                           |
+| --- | --------------------------------------------------------------------------------------------- | ---------- | ------------------------------------------------ |
+| 1   | no manifest schema validator yet                                                              | ❌ PLANNED | S1 deliverable                                   |
+| 2   | 20 cogni-poly PRs unsynced (see Backlog)                                                      | ❌ RED     | exhibit A; resolves in S3                        |
+| 3   | byte-identical-stale `scripts/ci/wait-for-in-cluster-services.sh` between hub + node-template | ❌ RED     | concrete divergence; folded into S3 cherry-picks |
+| 4   | Caddyfile.tmpl + `deploy-infra.sh` single-node-hardcoded (bug.5001 lineage)                   | ❌ RED     | S4 fix                                           |
 
 ## Backlog — cogni-poly PRs awaiting upstream sync (2026-05-26)
 
