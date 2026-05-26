@@ -338,257 +338,26 @@ If the guard fails, return `409 Conflict`. Do not silently create a second row
 with the same `seq`, and do not claim a commit in metadata unless the guarded
 head update succeeded.
 
-## Contracts
+## Contracts, port, service
 
-`packages/knowledge-store/src/domain/contribution-schemas.ts` is the
-authoritative source for contribution domain schemas:
+Schemas, port interface, and service factory live in source — don't duplicate
+them here.
 
-- `KnowledgeEntryInputSchema`
-- `KnowledgeContributionEditSchema`
-- `ContributionRecordSchema`
-- `ContributionCommitRecordSchema`
-- `ContributionDiffEntrySchema`
+| Concern                          | Authoritative file                                                   |
+| -------------------------------- | -------------------------------------------------------------------- |
+| Domain schemas (edit, record, …) | `packages/knowledge-store/src/domain/contribution-schemas.ts`        |
+| HTTP request/response envelopes  | `packages/node-contracts/src/knowledge.contributions.v1.contract.ts` |
+| Port interface + typed errors    | `packages/knowledge-store/src/port/contribution.port.ts`             |
+| Cross-node service factory       | `packages/knowledge-store/src/service/contribution-service.ts`       |
 
-`packages/node-contracts/src/knowledge.contributions.v1.contract.ts` imports
-those schemas from `@cogni/knowledge-store/contribution-schemas` and only owns
-HTTP request/response envelopes:
+Non-obvious contract invariants the Zod schemas can't express:
 
-```typescript
-import { z } from "zod";
-import {
-  ContributionCommitRecordSchema,
-  ContributionDiffEntrySchema,
-  ContributionRecordSchema,
-  KnowledgeContributionEditSchema,
-} from "@cogni/knowledge-store/contribution-schemas";
+- `targetRowId` lives on `update`/`deprecate` edits, not on `KnowledgeEntryInput`. Insert is unscoped; mutate is target-scoped.
+- `edits` accepts a **mixed-op batch**: one POST can apply `insert + update + deprecate` together atomically in a single Dolt commit (`min:1, max:50`).
+- `update.targetRowId` is resolved against the **contribution branch**, not main. Commit 2 can target a row inserted by commit 1 on the same branch.
+- The contribution service enforces owner-only append, owner-or-admin close, session-only merge. Bearer-token agents are `kind: 'agent'` and cannot merge.
 
-export const ContributionsCreateRequest = z.object({
-  message: z.string().min(1).max(512),
-  edits: z.array(KnowledgeContributionEditSchema).min(1).max(50).optional(),
-  idempotencyKey: z.string().min(8).max(64).optional(),
-});
-
-export const ContributionAppendCommitRequest = z.object({
-  message: z.string().min(1).max(512),
-  edits: z.array(KnowledgeContributionEditSchema).min(1).max(50),
-});
-
-export const ContributionsListQuery = z.object({
-  state: z.enum(["open", "merged", "closed", "all"]).default("open"),
-  principalId: z.string().optional(),
-  limit: z.number().int().min(1).max(100).default(20),
-});
-
-export const ContributionMergeRequest = z.object({
-  confidencePct: z.number().int().min(30).max(95).optional(),
-});
-
-export const ContributionCloseRequest = z.object({
-  reason: z.string().min(1).max(512),
-});
-```
-
-`packages/knowledge-store/src/domain/contribution-schemas.ts`:
-
-```typescript
-export const KnowledgeEntryInput = z.object({
-  id: z.string().min(1).max(256).optional(),
-  domain: z.string().min(1).max(64),
-  entityId: z.string().max(128).optional(),
-  title: z.string().min(1).max(256),
-  content: z.string().min(1).max(65536),
-  entryType: z.string().min(1).max(64).optional(),
-  tags: z.array(z.string().max(64)).max(32).optional(),
-  confidencePct: z.number().int().min(0).max(100).optional(),
-});
-
-export const KnowledgeContributionEdit = z.discriminatedUnion("op", [
-  z.object({ op: z.literal("insert"), entry: KnowledgeEntryInput }),
-  z.object({
-    op: z.literal("update"),
-    targetRowId: z.string().min(1).max(256),
-    entry: KnowledgeEntryInput,
-  }),
-  z.object({
-    op: z.literal("deprecate"),
-    targetRowId: z.string().min(1).max(256),
-    reason: z.string().min(1).max(512),
-  }),
-]);
-
-export const ContributionRecord = z.object({
-  contributionId: z.string(),
-  branch: z.string(),
-  baseCommit: z.string(),
-  headCommit: z.string().nullable(),
-  commitCount: z.number().int(),
-  state: z.enum(["open", "merged", "closed"]),
-  principalKind: z.enum(["agent", "user"]),
-  principalId: z.string(),
-  message: z.string(),
-  createdAt: z.string(),
-  resolvedAt: z.string().nullable(),
-  closedReason: z.string().nullable(),
-});
-
-export const ContributionCommitRecord = z.object({
-  contributionId: z.string(),
-  seq: z.number().int(),
-  commitHash: z.string(),
-  principalKind: z.enum(["agent", "user"]),
-  principalId: z.string(),
-  authSource: z.enum(["bearer", "session"]),
-  message: z.string(),
-  editCount: z.number().int(),
-  sourceRef: z.string(),
-  createdAt: z.string(),
-});
-
-export const ContributionDiffEntry = z.object({
-  changeType: z.enum(["added", "modified", "removed"]),
-  rowId: z.string(),
-  before: z.record(z.unknown()).nullable(),
-  after: z.record(z.unknown()).nullable(),
-});
-```
-
-`targetRowId` belongs to update/deprecate edits, not the base entry shape. That
-keeps insertion simple and makes branch-local update semantics explicit.
-
-## Port
-
-`packages/knowledge-store/src/port/contribution.port.ts`:
-
-```typescript
-export interface KnowledgeContributionPort {
-  create(input: {
-    principal: Principal;
-    message: string;
-    edits?: KnowledgeContributionEdit[];
-    idempotencyKey?: string;
-  }): Promise<ContributionRecord>;
-
-  appendCommit(input: {
-    contributionId: string;
-    principal: Principal;
-    edits: KnowledgeContributionEdit[];
-    message: string;
-  }): Promise<ContributionCommitRecord>;
-
-  list(query: {
-    state: "open" | "merged" | "closed" | "all";
-    principalId?: string;
-    limit: number;
-  }): Promise<ContributionRecord[]>;
-
-  getById(contributionId: string): Promise<ContributionRecord | null>;
-
-  listCommits(contributionId: string): Promise<ContributionCommitRecord[]>;
-
-  diff(contributionId: string): Promise<ContributionDiffEntry[]>;
-
-  merge(input: {
-    contributionId: string;
-    principal: Principal;
-    confidencePct?: number;
-  }): Promise<{ commitHash: string }>;
-
-  close(input: {
-    contributionId: string;
-    principal: Principal;
-    reason: string;
-  }): Promise<void>;
-}
-
-export class ContributionConflictError extends Error {}
-export class ContributionNotFoundError extends Error {}
-export class ContributionStateError extends Error {}
-export class ContributionQuotaError extends Error {}
-export class ContributionForbiddenError extends Error {}
-```
-
-## Service factory (cross-node shared)
-
-`packages/knowledge-store/src/service/contribution-service.ts`:
-
-```typescript
-export interface ContributionServiceDeps {
-  port: KnowledgeContributionPort;
-  canMergeKnowledge: (p: Principal) => boolean;
-  rateLimit: { maxOpenPerPrincipal: number };
-}
-
-export function createContributionService(deps: ContributionServiceDeps) {
-  return {
-    async create({ principal, body }) {
-      if (body.idempotencyKey) {
-        const existing = await deps.port.list({
-          state: "all",
-          principalId: principal.id,
-          limit: 100,
-        });
-        const hit = existing.find(
-          (r) => r.idempotencyKey === body.idempotencyKey
-        );
-        if (hit) return hit;
-      }
-      const open = await deps.port.list({
-        state: "open",
-        principalId: principal.id,
-        limit: 100,
-      });
-      if (open.length >= deps.rateLimit.maxOpenPerPrincipal) {
-        throw new ContributionQuotaError(
-          `max open contributions = ${deps.rateLimit.maxOpenPerPrincipal}`
-        );
-      }
-      return deps.port.create({
-        principal,
-        message: body.message,
-        edits: body.edits,
-        idempotencyKey: body.idempotencyKey,
-      });
-    },
-    async appendCommit({ principal, contributionId, body }) {
-      const record = await deps.port.getById(contributionId);
-      if (!record) throw new ContributionNotFoundError(contributionId);
-      if (record.state !== "open") throw new ContributionStateError();
-      if (
-        record.principalId !== principal.id ||
-        record.principalKind !== principal.kind
-      ) {
-        throw new ContributionForbiddenError();
-      }
-      return deps.port.appendCommit({
-        principal,
-        contributionId,
-        message: body.message,
-        edits: body.edits,
-      });
-    },
-    async merge({ principal, contributionId, confidencePct }) {
-      if (!deps.canMergeKnowledge(principal))
-        throw new ContributionForbiddenError();
-      return deps.port.merge({ contributionId, principal, confidencePct });
-    },
-    async close({ principal, contributionId, reason }) {
-      const record = await deps.port.getById(contributionId);
-      const ownsContribution =
-        record?.principalId === principal.id &&
-        record?.principalKind === principal.kind;
-      if (!ownsContribution && !deps.canMergeKnowledge(principal))
-        throw new ContributionForbiddenError();
-      return deps.port.close({ contributionId, principal, reason });
-    },
-    list: deps.port.list,
-    getById: deps.port.getById,
-    listCommits: deps.port.listCommits,
-    diff: deps.port.diff,
-  };
-}
-```
-
-Per-node `bootstrap/container.ts` constructs the service once with the node's port + the shared `canMergeKnowledge` policy. Per-node `route.ts` files are then ~10-line Next adapters.
+Per-node `bootstrap/container.ts` constructs the service once with the node's port + shared `canMergeKnowledge` policy. Per-node `route.ts` files are ~10-line Next adapters.
 
 ## Auth
 
@@ -607,6 +376,119 @@ Close is less privileged than merge: the principal that opened a contribution ma
 Append is owner-only while the contribution is open. v0 intentionally does not
 support shared branches or reviewer-authored fixup commits; that would require a
 clearer attribution and review policy.
+
+## Examples
+
+Assume `$URL` is the node base (`https://test.cognidao.org`), `$KEY` is a Bearer
+API key from `/api/v1/agent/register`. Response bodies elided for brevity —
+see the schema files for shapes.
+
+### Create + first commit (single insert)
+
+```bash
+curl -X POST "$URL/api/v1/knowledge/contributions" \
+  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{
+    "message": "add scorecard for poly target overlap",
+    "edits": [{
+      "op": "insert",
+      "entry": {
+        "id": "poly:target-overlap-2026-w21",
+        "domain": "poly",
+        "title": "Target overlap scorecard · 2026-w21",
+        "content": "...",
+        "entryType": "scorecard"
+      }
+    }],
+    "idempotencyKey": "poly-target-overlap-2026-w21"
+  }'
+```
+
+Returns `201` with the `ContributionRecord` (`contributionId`, `branch`, `baseCommit`, `headCommit`, `commitCount: 1`, `state: "open"`). Repeating the request with the same `idempotencyKey` returns the same record at `200`, not a duplicate.
+
+### Open empty branch (no first commit)
+
+```bash
+curl -X POST "$URL/api/v1/knowledge/contributions" \
+  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{ "message": "stage iterative edits via /commits" }'
+```
+
+`headCommit: null`, `commitCount: 0`. Append commits via `/commits`.
+
+### Append a commit
+
+```bash
+curl -X POST "$URL/api/v1/knowledge/contributions/$CID/commits" \
+  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{
+    "message": "append: refine scorecard methodology",
+    "edits": [{ "op": "insert", "entry": { ... } }]
+  }'
+```
+
+Returns `201` with the `ContributionCommitRecord` (`seq`, `commitHash`, `sourceRef: "contribution:<id>:<seq>"`). The recorded branch head must still match server-side — stale appends fail `409 Conflict`.
+
+### Mixed-op batch · split a block in one commit
+
+```bash
+curl -X POST "$URL/api/v1/knowledge/contributions" \
+  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{
+    "message": "split block: primitive inventory + merkle DAG",
+    "edits": [
+      {
+        "op": "update",
+        "targetRowId": "contrib-derek-claude-curitiba-7ff9c38d:5c5452",
+        "entry": { "id": "...", "domain": "meta", "title": "...", "content": "...left half...", "entryType": "html" }
+      },
+      {
+        "op": "insert",
+        "entry": { "id": "meta-contribution-branch-flow-merkle-dag-v1", "domain": "meta", "title": "...", "content": "...right half...", "entryType": "html" }
+      }
+    ]
+  }'
+```
+
+One commit, two row changes. Diff returns `modified` + `added` together.
+
+### Deprecate
+
+```bash
+curl -X POST "$URL/api/v1/knowledge/contributions/$CID/commits" \
+  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{
+    "message": "deprecate superseded scorecard",
+    "edits": [{ "op": "deprecate", "targetRowId": "poly:target-overlap-2026-w20", "reason": "superseded by 2026-w21" }]
+  }'
+```
+
+Sets `status='deprecated'` + `source_ref='contribution:<id>:<seq>'` on the row; never deletes (`DEPRECATE_NOT_DELETE`).
+
+### List · get · diff · commits
+
+```bash
+curl "$URL/api/v1/knowledge/contributions?state=open&limit=20" -H "Authorization: Bearer $KEY"
+curl "$URL/api/v1/knowledge/contributions/$CID"                  -H "Authorization: Bearer $KEY"
+curl "$URL/api/v1/knowledge/contributions/$CID/diff"             -H "Authorization: Bearer $KEY"
+curl "$URL/api/v1/knowledge/contributions/$CID/commits"          -H "Authorization: Bearer $KEY"
+```
+
+### Close · merge
+
+```bash
+# Close (owner OR session admin)
+curl -X POST "$URL/api/v1/knowledge/contributions/$CID/close" \
+  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{ "reason": "superseded by $OTHER_CID" }'
+
+# Merge (session cookie only — Bearer agents get 403)
+curl -X POST "$URL/api/v1/knowledge/contributions/$CID/merge" \
+  -H "Cookie: $SESSION_COOKIE" -H "Content-Type: application/json" \
+  -d '{ "confidencePct": 60 }'
+```
+
+`confidencePct` is optional; omitted = pass-through of each row's stamped value. Provided = apply uniformly to every row stamped `source_ref LIKE 'contribution:<id>:%'`.
 
 ## Rate limit / abuse
 
