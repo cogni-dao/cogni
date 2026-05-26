@@ -1567,8 +1567,8 @@ importers:
         specifier: workspace:*
         version: link:../ai-tools
       zod:
-        specifier: ^3.24.0
-        version: 3.25.76
+        specifier: ^4.1.12
+        version: 4.3.6
     devDependencies:
       tsup:
         specifier: ^8.5.1
@@ -1637,6 +1637,9 @@ importers:
       '@cogni/aragon-osx':
         specifier: workspace:*
         version: link:../aragon-osx
+      '@cogni/knowledge-store':
+        specifier: workspace:*
+        version: link:../knowledge-store
       '@cogni/node-core':
         specifier: workspace:*
         version: link:../node-core

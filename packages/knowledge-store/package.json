@@ -10,6 +10,11 @@
       "import": "./dist/index.js",
       "default": "./dist/index.js"
     },
+    "./contribution-schemas": {
+      "types": "./dist/domain/contribution-schemas.d.ts",
+      "import": "./dist/domain/contribution-schemas.js",
+      "default": "./dist/domain/contribution-schemas.js"
+    },
     "./adapters/doltgres": {
       "types": "./dist/adapters/doltgres/index.d.ts",
       "import": "./dist/adapters/doltgres/index.js",
@@ -22,12 +27,12 @@
   ],
   "scripts": {
     "build": "tsup",
-    "postbuild": "node -e \"const fs=require('fs'); if(!fs.existsSync('dist/index.js')){console.error('ERROR: dist/index.js missing'); process.exit(1)}\"",
+    "postbuild": "node -e \"const fs=require('fs'); for(const f of ['dist/index.js','dist/domain/contribution-schemas.js']){if(!fs.existsSync(f)){console.error('ERROR: '+f+' missing'); process.exit(1)}}\"",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@cogni/ai-tools": "workspace:*",
-    "zod": "^3.24.0"
+    "zod": "^4.1.12"
   },
   "devDependencies": {
     "tsup": "^8.5.1",

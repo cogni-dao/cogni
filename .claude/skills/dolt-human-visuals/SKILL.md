@@ -60,17 +60,24 @@ Full rules: [`docs/spec/knowledge-html-style.md`](../../../docs/spec/knowledge-h
 
 ## Posting
 
+The canonical API contract — request/response envelopes, append-commit flow,
+auth, and error mapping — is `docs/design/knowledge-contribution-api.md`. The
+minimal HTML-visual post is:
+
 ```bash
 curl -X POST "$NODE_URL/api/v1/knowledge/contributions" \
   -H "Authorization: Bearer $COGNI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "message": "<one-line intent>",
-    "entries": [{
-      "domain": "<registered-domain>",
-      "title": "<short human title>",
-      "content": "<HTML body fragment using .cogni-* classes>",
-      "entryType": "html"
+    "edits": [{
+      "op": "insert",
+      "entry": {
+        "domain": "<registered-domain>",
+        "title": "<short human title>",
+        "content": "<HTML body fragment using .cogni-* classes>",
+        "entryType": "html"
+      }
     }]
   }'
 ```

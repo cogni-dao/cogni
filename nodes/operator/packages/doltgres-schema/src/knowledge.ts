@@ -4,10 +4,8 @@
 /**
  * Module: `@cogni/operator-doltgres-schema/knowledge`
  * Purpose: Operator's Doltgres knowledge schema. Re-exports the syntropy seed
- *   bundle from @cogni/node-template-knowledge so operator inherits the
- *   identical knowledge shape every other knowledge-capable node uses.
- *   Operator-specific companion tables (e.g. operator-only audit views) land
- *   here when needed.
+ *   bundle from @cogni/node-template-knowledge and owns operator-specific
+ *   contribution metadata tables.
  * Scope: Drizzle table definitions only. Targets Doltgres via pg wire protocol (dialect: postgresql).
  * Invariants:
  *   - DB_PER_NODE: this schema applies to `knowledge_operator` only.
@@ -18,14 +16,77 @@
  * @public
  */
 
-// Syntropy seed bundle — inherited from node-template. Identical across all
-// knowledge-capable nodes until per-node schema divergence is needed.
+import {
+  index,
+  integer,
+  pgTable,
+  primaryKey,
+  text,
+  timestamp,
+  uniqueIndex,
+} from "drizzle-orm/pg-core";
+
+// Syntropy seed bundle — inherited from node-template.
 export {
   citations,
   domains,
   knowledge,
-  knowledgeContributions,
   sources,
 } from "@cogni/node-template-knowledge";
 
-// Operator-specific companion tables go here as they're needed.
+export const knowledgeContributions = pgTable(
+  "knowledge_contributions",
+  {
+    id: text("id").primaryKey(),
+    branch: text("branch").notNull(),
+    state: text("state").notNull(),
+    principalId: text("principal_id").notNull(),
+    principalKind: text("principal_kind").notNull(),
+    message: text("message").notNull(),
+    baseCommit: text("base_commit").notNull(),
+    headCommit: text("head_commit"),
+    commitCount: integer("commit_count").notNull().default(0),
+    mergedCommit: text("merged_commit"),
+    closedReason: text("closed_reason"),
+    idempotencyKey: text("idempotency_key"),
+    confidencePct: integer("confidence_pct").notNull().default(40),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    resolvedBy: text("resolved_by"),
+  },
+  (table) => [
+    index("idx_kc_state").on(table.state),
+    index("idx_kc_principal").on(table.principalId, table.state),
+    uniqueIndex("uniq_kc_idempotency").on(
+      table.principalId,
+      table.idempotencyKey
+    ),
+  ]
+);
+
+export const knowledgeContributionCommits = pgTable(
+  "knowledge_contribution_commits",
+  {
+    contributionId: text("contribution_id").notNull(),
+    seq: integer("seq").notNull(),
+    commitHash: text("commit_hash").notNull(),
+    principalId: text("principal_id").notNull(),
+    principalKind: text("principal_kind").notNull(),
+    authSource: text("auth_source").notNull(),
+    message: text("message").notNull(),
+    editCount: integer("edit_count").notNull(),
+    sourceRef: text("source_ref").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    primaryKey({
+      name: "pk_kcc_contribution_seq",
+      columns: [table.contributionId, table.seq],
+    }),
+    index("idx_kcc_commit_hash").on(table.commitHash),
+  ]
+);
