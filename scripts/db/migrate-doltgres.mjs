@@ -63,7 +63,11 @@ function isHarmlessDropMiss(stmt, err) {
   if (!isDrop) return false;
   const msg = err instanceof Error ? err.message : String(err);
   const cause = err?.cause instanceof Error ? err.cause.message : "";
-  return /(?:does not exist|not found|no such column|unknown column)/i.test(
+  // Doltgres 0.56+ phrases the miss several ways. Empirical: `DROP COLUMN`
+  // on an absent column emits `table "..." does not have column "..."`;
+  // `DROP INDEX` on a missing index emits `index "..." not found`; standard
+  // Postgres `does not exist` covers DROP TABLE / DROP SCHEMA.
+  return /(?:does not (?:exist|have column)|not found|no such column|unknown column)/i.test(
     `${msg} ${cause}`
   );
 }
