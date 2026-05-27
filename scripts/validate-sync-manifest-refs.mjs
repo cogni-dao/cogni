@@ -17,14 +17,41 @@ import { parse as parseYaml } from "yaml";
 
 const MANIFEST = ".cogni/sync-manifest.yaml";
 
+const REGEX_META = new Set([
+  ".",
+  "+",
+  "^",
+  "$",
+  "{",
+  "}",
+  "(",
+  ")",
+  "|",
+  "[",
+  "]",
+  "\\",
+]);
+
 const globToRegex = (glob) => {
-  // ** must be translated before * to avoid double-substitution.
-  const escaped = glob
-    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-    .replace(/\*\*/g, "\x00")
-    .replace(/\*/g, "[^/]*")
-    .replace(/\x00/g, ".*");
-  return new RegExp(`^${escaped}$`);
+  // Single-pass walk so ** and * are translated without a sentinel
+  // (biome lint/suspicious/noControlCharactersInRegex bans \x00 sentinels).
+  let out = "";
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i];
+    if (c === "*") {
+      if (glob[i + 1] === "*") {
+        out += ".*";
+        i++;
+      } else {
+        out += "[^/]*";
+      }
+    } else if (REGEX_META.has(c)) {
+      out += `\\${c}`;
+    } else {
+      out += c;
+    }
+  }
+  return new RegExp(`^${out}$`);
 };
 
 const matchesAnyScope = (path, scopeGlobs) =>
