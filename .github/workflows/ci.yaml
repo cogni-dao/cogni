@@ -207,6 +207,11 @@ jobs:
       - name: Documentation check
         run: pnpm check:docs
 
+      - name: Sync-manifest schema check (CATALOG_IS_SSOT pattern)
+        run: |
+          pipx install 'check-jsonschema==0.37.1'
+          check-jsonschema --schemafile .cogni/sync-manifest.schema.json .cogni/sync-manifest.yaml
+
       - name: Architecture check
         run: pnpm arch:check
 
