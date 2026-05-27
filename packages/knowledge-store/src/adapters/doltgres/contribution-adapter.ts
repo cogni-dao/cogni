@@ -232,8 +232,14 @@ async function applyEdit(input: {
     return;
   }
 
+  // Server-stamped fallback id uses `-` not `:` so the result satisfies the
+  // v0 shape gate (kebab only). The contribution prefix is still long; this
+  // is a transitional concession — clients SHOULD supply `entry.id`
+  // explicitly per the syntropy expert decision tree (write atomic with a
+  // sharp slug). Auto-stamps will be removed once the UI form enforces
+  // explicit ids (P0.6.v0b).
   const entryId =
-    edit.entry.id ?? `${contributionId}:${randomBytes(3).toString("hex")}`;
+    edit.entry.id ?? `${contributionId}-${randomBytes(3).toString("hex")}`;
   const entryType = edit.entry.entryType ?? "finding";
   await conn.unsafe(
     `INSERT INTO knowledge (id, domain, entity_id, title, content, entry_type, confidence_pct, source_type, source_ref, source_node, tags) VALUES (${escapeValue(entryId)}, ${escapeValue(edit.entry.domain)}, ${escapeValue(edit.entry.entityId ?? null)}, ${escapeValue(edit.entry.title)}, ${escapeValue(edit.entry.content)}, ${escapeValue(entryType)}, ${escapeValue(confidencePct)}, ${escapeValue("external")}, ${escapeValue(ref)}, ${escapeValue(sourceNode)}, ${edit.entry.tags ? escapeValue(edit.entry.tags) : "NULL"})`

@@ -20,14 +20,19 @@ import type {
 } from "./types.js";
 
 /**
- * Slug pattern: kebab-case, 3–40 chars, starts + ends with alphanumeric.
- * Forbids leading/trailing dashes, consecutive dashes, uppercase, underscores,
- * colons, dots. Compact + grep-friendly + URL-safe.
+ * Slug pattern: kebab-case, **1–4 dash-separated segments**, ≤40 chars total,
+ * `[a-z0-9]` tokens joined by single `-`. Forbids leading/trailing dashes,
+ * consecutive dashes, uppercase, underscores, colons, dots. Compact +
+ * grep-friendly + URL-safe.
  *
- * The negative lookahead `(?!.*--)` rejects any string containing `--`
- * anywhere; the body `[a-z0-9-]{1,38}` enforces the character class.
+ * Why 4 segments max: long slugs let authors pack multiple concepts into one
+ * id (e.g. `meta-contribution-branch-flow-merkle-dag-v1` smuggles 6 ideas).
+ * Capping segments forces atomic naming; if you need more concepts, you need
+ * a sibling atom + a citation edge, not a longer id.
  */
-const SLUG_RE = /^(?!.*--)[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/;
+const SLUG_RE = /^[a-z0-9]+(-[a-z0-9]+){0,3}$/;
+const SLUG_MIN_LEN = 2;
+const SLUG_MAX_LEN = 40;
 
 const TITLE_MIN = 3;
 const TITLE_MAX = 60;
@@ -42,13 +47,20 @@ export const shapeGate: KnowledgeGate = {
     const errors: GateError[] = [];
 
     if (input.id !== undefined) {
-      if (!SLUG_RE.test(input.id)) {
+      if (input.id.length < SLUG_MIN_LEN || input.id.length > SLUG_MAX_LEN) {
+        errors.push({
+          gate: "shape",
+          field: "id",
+          code: "slug_length",
+          message: `id must be ${SLUG_MIN_LEN}–${SLUG_MAX_LEN} chars (got ${input.id.length})`,
+        });
+      } else if (!SLUG_RE.test(input.id)) {
         errors.push({
           gate: "shape",
           field: "id",
           code: "slug_invalid",
           message:
-            "id must be a kebab-slug: 3–40 chars, [a-z0-9-], starting and ending with alphanumeric",
+            "id must be a kebab-slug with 1–4 dash-segments, lowercase [a-z0-9] only (e.g. `fed-rate-base-rate`). Pack additional concepts into sibling atoms + citations, not into the id.",
         });
       }
     }
@@ -68,6 +80,19 @@ export const shapeGate: KnowledgeGate = {
         code: "title_trailing_punctuation",
         message:
           "title must not end with trailing punctuation — it's an atomic claim, not a sentence",
+      });
+    } else if (/ · | — | -- /.test(title)) {
+      // Reject section separators that smuggle two concepts into one atom.
+      // Examples we've seen: "Contribution Branch Flow · Merkle DAG",
+      // "Knowledge Block Visuals · Rendered Primitive Inventory",
+      // "Open-Source AI Tooling vs Cogni — Multi-Tenant Capability Matrix".
+      // If you need two concepts, write two atoms + a citation edge.
+      errors.push({
+        gate: "shape",
+        field: "title",
+        code: "title_section_separator",
+        message:
+          "title must not contain ` · `, ` — `, or ` -- ` as a section separator. One atomic claim per entry — split into sibling atoms if you have two concepts.",
       });
     }
 

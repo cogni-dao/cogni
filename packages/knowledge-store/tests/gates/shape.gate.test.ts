@@ -52,10 +52,8 @@ describe("shapeGate", () => {
     expect(result.ok).toBe(true);
   });
 
-  describe("slug rejection", () => {
+  describe("slug rejection (shape)", () => {
     const bad = [
-      "ab", // too short
-      "x".repeat(41), // too long
       "-leading-dash",
       "trailing-dash-",
       "UPPERCASE",
@@ -63,6 +61,8 @@ describe("shapeGate", () => {
       "double--dash",
       "colon:in:slug",
       "slug.with.dots",
+      "one-two-three-four-five", // 5 segments — exceeds 4-segment cap
+      "meta-contribution-branch-flow-merkle-dag-v1", // real-world bloat sample (7 seg)
     ];
     for (const id of bad) {
       it(`rejects "${id}"`, async () => {
@@ -73,6 +73,39 @@ describe("shapeGate", () => {
             true
           );
         }
+      });
+    }
+  });
+
+  describe("slug rejection (length)", () => {
+    it("rejects single-char slug", async () => {
+      const result = await shapeGate.check(base({ id: "a" }), {});
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.errors.some((e) => e.code === "slug_length")).toBe(true);
+      }
+    });
+
+    it("rejects too-long slug", async () => {
+      const result = await shapeGate.check(base({ id: "x".repeat(41) }), {});
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.errors.some((e) => e.code === "slug_length")).toBe(true);
+      }
+    });
+  });
+
+  describe("slug acceptance", () => {
+    const good = [
+      "ab", // min length, single token
+      "fed-rate", // 2 segments
+      "fed-rate-base-rate", // 4 segments
+      "validate-candidate-1356-test", // 4 segments, mixed alphanumeric
+    ];
+    for (const id of good) {
+      it(`accepts "${id}"`, async () => {
+        const result = await shapeGate.check(base({ id }), {});
+        expect(result.ok).toBe(true);
       });
     }
   });
@@ -105,6 +138,35 @@ describe("shapeGate", () => {
           result.errors.some((e) => e.code === "title_trailing_punctuation")
         ).toBe(true);
       }
+    });
+
+    describe("title section-separator rejection", () => {
+      // Real-world samples from the v0 candidate-a run that motivated this rule.
+      const bad = [
+        "Contribution Branch Flow · Merkle DAG",
+        "Knowledge Block Visuals · Rendered Primitive Inventory",
+        "Open-Source AI Tooling — Multi-Tenant Capability Matrix",
+        "Foo -- Bar baseline",
+      ];
+      for (const title of bad) {
+        it(`rejects "${title}"`, async () => {
+          const result = await shapeGate.check(base({ title }), {});
+          expect(result.ok).toBe(false);
+          if (!result.ok) {
+            expect(
+              result.errors.some((e) => e.code === "title_section_separator")
+            ).toBe(true);
+          }
+        });
+      }
+
+      it("does not false-positive on internal hyphens (Open-Source, Multi-Tenant)", async () => {
+        const result = await shapeGate.check(
+          base({ title: "Open-Source AI Tooling baseline" }),
+          {}
+        );
+        expect(result.ok).toBe(true);
+      });
     });
   });
 
