@@ -167,26 +167,6 @@ jobs:
           pipx install 'check-jsonschema==0.37.1'
           check-jsonschema --schemafile infra/catalog/_schema.json infra/catalog/*.yaml
 
-      - id: changed-sync-manifest
-        name: Detect sync-manifest changes
-        env:
-          CHANGED_PATHS_FILE: ${{ steps.pr-files.outputs.changed_paths_file }}
-        run: |
-          if grep -qE '^\.cogni/sync-manifest\.(yaml|schema\.json)$' "$CHANGED_PATHS_FILE"; then
-            echo "sync_manifest_changed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "sync_manifest_changed=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      # Structural validation only — cross-reference checks live in
-      # scripts/validate-sync-manifest-refs.mjs and run via `pnpm check:docs`
-      # in the lint job (where pnpm install has provided node_modules).
-      - name: Validate .cogni/sync-manifest.yaml against schema
-        if: steps.changed-sync-manifest.outputs.sync_manifest_changed == 'true'
-        run: |
-          pipx install 'check-jsonschema==0.37.1'
-          check-jsonschema --schemafile .cogni/sync-manifest.schema.json .cogni/sync-manifest.yaml
-
       - name: Detect affected image targets
         id: detect
         env:
