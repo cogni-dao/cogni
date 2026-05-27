@@ -16,15 +16,36 @@ DOMAIN="${DOMAIN:?DOMAIN is required}"
 MAX_ATTEMPTS="${MAX_ATTEMPTS:-30}"
 SLEEP="${SLEEP:-15}"
 
+# bug.5002 — node-app URL list derived from catalog (CATALOG_IS_SSOT,
+# axiom 16). Each NODE_TARGETS entry's `public_url[$DEPLOY_ENV]` is the
+# source of truth; the script polls only nodes that declare a URL for
+# this env. Service-type targets (e.g. scheduler-worker) without
+# public_url are skipped — they have no public Ingress.
+_verify_deployment_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/image-tags.sh
+. "${_verify_deployment_dir}/lib/image-tags.sh"
+
+# Legacy URL builder kept as fallback for laptop CLI runs and pre-migration
+# catalogs that don't declare public_url yet.
 if [[ "$DOMAIN" == *.*.* ]]; then
   NODE_JOIN="-"
 else
   NODE_JOIN="."
 fi
 
-OPERATOR_URL="https://${DOMAIN}"
-POLY_URL="https://poly${NODE_JOIN}${DOMAIN}"
-RESY_URL="https://resy${NODE_JOIN}${DOMAIN}"
+url_for_node() {
+  local node="$1" catalog_url=""
+  if [ -n "$DEPLOY_ENV" ] && declare -f public_url_for_target >/dev/null 2>&1; then
+    catalog_url=$(public_url_for_target "$DEPLOY_ENV" "$node" 2>/dev/null || true)
+  fi
+  if [ -n "$catalog_url" ]; then
+    printf '%s' "$catalog_url"
+  elif [ "$node" = "operator" ]; then
+    printf 'https://%s' "$DOMAIN"
+  else
+    printf 'https://%s%s%s' "$node" "$NODE_JOIN" "$DOMAIN"
+  fi
+}
 
 # ── Health polls ─────────────────────────────────────────────────────────────
 
@@ -48,18 +69,24 @@ poll_health() {
   return 1
 }
 
-# Poll all nodes in parallel
-poll_health "operator" "$OPERATOR_URL" &
-PID_OP=$!
-poll_health "poly" "$POLY_URL" &
-PID_POLY=$!
-poll_health "resy" "$RESY_URL" &
-PID_RESY=$!
+if [ "${#NODE_TARGETS[@]}" -eq 0 ]; then
+  echo "ℹ️  No node-apps in catalog — skipping health polls."
+  exit 0
+fi
+
+declare -a PIDS=()
+declare -a NAMES=()
+for node in "${NODE_TARGETS[@]}"; do
+  url=$(url_for_node "$node")
+  poll_health "$node" "$url" &
+  PIDS+=("$!")
+  NAMES+=("$node")
+done
 
 FAILED=0
-wait $PID_OP || FAILED=1
-wait $PID_POLY || FAILED=1
-wait $PID_RESY || FAILED=1
+for i in "${!PIDS[@]}"; do
+  wait "${PIDS[$i]}" || { echo "❌ ${NAMES[$i]} failed"; FAILED=1; }
+done
 
 if [ $FAILED -ne 0 ]; then
   echo "❌ One or more nodes failed health checks"
@@ -69,7 +96,8 @@ echo "✅ All nodes healthy"
 
 # ── Smoke tests ──────────────────────────────────────────────────────────────
 
-for url in "$OPERATOR_URL" "$POLY_URL" "$RESY_URL"; do
+for node in "${NODE_TARGETS[@]}"; do
+  url=$(url_for_node "$node")
   BODY=$(curl -sk "$url/livez" 2>/dev/null)
   echo "$url/livez → $BODY"
   if ! echo "$BODY" | grep -q '"status"'; then

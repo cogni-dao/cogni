@@ -590,6 +590,10 @@ jobs:
       VM_HOST: ${{ secrets.VM_HOST }}
       DOMAIN: ${{ vars.DOMAIN }}
       K8S_NAMESPACE: cogni-${{ needs.decide.outputs.environment }}
+      # bug.5002 — verify-deployment.sh reads catalog public_url[$DEPLOY_ENVIRONMENT]
+      # for each node's URL; without this var it falls back to the legacy
+      # `${node}-${DOMAIN}` builder.
+      DEPLOY_ENVIRONMENT: ${{ needs.decide.outputs.environment }}
     steps:
       - uses: actions/checkout@v4
         with:

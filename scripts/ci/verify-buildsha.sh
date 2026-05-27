@@ -64,6 +64,17 @@ set -euo pipefail
 
 DOMAIN="${DOMAIN:?DOMAIN required}"
 SOURCE_SHA_MAP="${SOURCE_SHA_MAP:-}"
+# bug.5002 — DEPLOY_ENV selects which catalog public_url entry the verifier
+# uses. Callers (candidate-flight.yml, promote-and-deploy.yml) export
+# OVERLAY_ENV / DEPLOY_ENVIRONMENT; accept either, fall back to the legacy
+# DOMAIN-derivation when neither is set (laptop CLI callers).
+DEPLOY_ENV="${DEPLOY_ENV:-${OVERLAY_ENV:-${DEPLOY_ENVIRONMENT:-}}}"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "${SCRIPT_DIR}/lib/image-tags.sh" ]; then
+  # shellcheck source=lib/image-tags.sh
+  . "${SCRIPT_DIR}/lib/image-tags.sh"
+fi
 # When set, write verified-<node>.txt = "true" for each node whose /version
 # contract holds. The verify-deploy matrix uploads this dir as the
 # cell-verify-<node> artifact; aggregate-decide-outcome.sh asserts every
@@ -232,14 +243,24 @@ FAILED=0
 for node in "${NODE_ARR[@]}"; do
   expected="${EXPECTED_BY_NODE[$node]}"
 
-  if [ "$node" = "operator" ]; then
-    host="${DOMAIN}"
-  elif [[ "$DOMAIN" == *.*.* ]]; then
-    host="${node}-${DOMAIN}"
-  else
-    host="${node}.${DOMAIN}"
+  # bug.5002 — prefer catalog-declared public_url for $DEPLOY_ENV. Falls
+  # back to the legacy URL builder when DEPLOY_ENV is unset (laptop CLI)
+  # or when the catalog has no public_url entry for this env.
+  url=""
+  if [ -n "$DEPLOY_ENV" ] && declare -f public_url_for_target >/dev/null 2>&1; then
+    catalog_url=$(public_url_for_target "$DEPLOY_ENV" "$node" 2>/dev/null || true)
+    [ -n "$catalog_url" ] && url="${catalog_url}/version"
   fi
-  url="https://${host}/version"
+  if [ -z "$url" ]; then
+    if [ "$node" = "operator" ]; then
+      host="${DOMAIN}"
+    elif [[ "$DOMAIN" == *.*.* ]]; then
+      host="${node}-${DOMAIN}"
+    else
+      host="${node}.${DOMAIN}"
+    fi
+    url="https://${host}/version"
+  fi
 
   if check_node "$node" "$expected" "$url"; then
     if [ -n "$MARKER_DIR" ]; then

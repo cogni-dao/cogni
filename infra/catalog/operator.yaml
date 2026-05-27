@@ -24,3 +24,11 @@ candidate_a_branch: deploy/candidate-a-operator
 preview_branch: deploy/preview-operator
 production_branch: deploy/production-operator
 path_prefix: nodes/operator/
+
+# bug.5002 — per-env public URL. Verify scripts read this directly
+# instead of computing "${node}-${DOMAIN}" with an "if node = operator"
+# special-case + 3-dot heuristic. Catalog is SSoT per ci-cd.md axiom 16.
+public_url:
+  candidate-a: https://test.cognidao.org
+  preview: https://preview.cognidao.org
+  production: https://cognidao.org

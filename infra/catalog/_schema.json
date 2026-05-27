@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/Cogni-DAO/cogni/infra/catalog/_schema.json",
   "title": "Cogni node/service catalog entry",
-  "description": "task.0374 — single declaration site for nodes and node-shaped services. Consumed by image-tags.sh, detect-affected.sh, ApplicationSet generators, and per-workflow decide jobs. See docs/spec/ci-cd.md axiom 16 (CATALOG_IS_SSOT).",
+  "description": "task.0374 \u2014 single declaration site for nodes and node-shaped services. Consumed by image-tags.sh, detect-affected.sh, ApplicationSet generators, and per-workflow decide jobs. See docs/spec/ci-cd.md axiom 16 (CATALOG_IS_SSOT).",
   "type": "object",
   "additionalProperties": true,
   "required": [
@@ -20,10 +20,20 @@
   "allOf": [
     {
       "if": {
-        "properties": { "type": { "const": "node" } },
-        "required": ["type"]
+        "properties": {
+          "type": {
+            "const": "node"
+          }
+        },
+        "required": [
+          "type"
+        ]
       },
-      "then": { "required": ["node_id"] }
+      "then": {
+        "required": [
+          "node_id"
+        ]
+      }
     }
   ],
   "properties": {
@@ -34,7 +44,10 @@
     },
     "type": {
       "type": "string",
-      "enum": ["node", "service"],
+      "enum": [
+        "node",
+        "service"
+      ],
       "description": "node = full node app (operator/poly/resy); service = supporting service (scheduler-worker)."
     },
     "port": {
@@ -45,7 +58,7 @@
     "node_id": {
       "type": "string",
       "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
-      "description": "UUID v4 — bound at provision time, persisted in repo-spec lookups."
+      "description": "UUID v4 \u2014 bound at provision time, persisted in repo-spec lookups."
     },
     "dockerfile": {
       "type": "string",
@@ -65,7 +78,7 @@
     "path_prefix": {
       "type": "string",
       "pattern": "^[a-z0-9._/-]+/$",
-      "description": "task.0374 — repo path prefix that maps changed files to this target. detect-affected.sh uses this to compute the matrix shape. Must end with /."
+      "description": "task.0374 \u2014 repo path prefix that maps changed files to this target. detect-affected.sh uses this to compute the matrix shape. Must end with /."
     },
     "candidate_a_branch": {
       "type": "string",
@@ -78,6 +91,28 @@
     "production_branch": {
       "type": "string",
       "pattern": "^deploy/production-[a-z0-9-]+$"
+    },
+    "public_url": {
+      "type": "object",
+      "description": "bug.5002 \u2014 per-env public URL (Ingress / Caddy) for this node. Verify scripts (wait-for-candidate-ready.sh, smoke-candidate.sh, verify-buildsha.sh, verify-deployment.sh) read these directly. Optional for service-type entries that have no public ingress (scheduler-worker, migrators).",
+      "properties": {
+        "candidate-a": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://"
+        },
+        "preview": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://"
+        },
+        "production": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://"
+        }
+      },
+      "additionalProperties": false
     }
   }
 }

@@ -157,6 +157,8 @@ else
           prefix="${target_prefix[$target]}"
           case "$path" in
             "${prefix}"*) add_target "$target" ;;
+            "infra/k8s/overlays/"*"/${target}/"*) add_target "$target" ;;
+            "infra/k8s/base/${target}/"*) add_target "$target" ;;
           esac
         done
         ;;

@@ -11,3 +11,11 @@ candidate_a_branch: deploy/candidate-a-resy
 preview_branch: deploy/preview-resy
 production_branch: deploy/production-resy
 path_prefix: nodes/resy/
+
+# bug.5002 — per-env public URL. Verify scripts read this directly
+# instead of computing "${node}-${DOMAIN}" with an "if node = operator"
+# special-case + 3-dot heuristic. Catalog is SSoT per ci-cd.md axiom 16.
+public_url:
+  candidate-a: https://resy-test.cognidao.org
+  preview: https://resy-preview.cognidao.org
+  production: https://resy.cognidao.org

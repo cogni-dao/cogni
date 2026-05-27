@@ -54,3 +54,20 @@ image_tag_for_target() {
   suffix=$(tag_suffix_for_target "$target") || return 1
   printf '%s:%s%s' "$image_name" "$base_tag" "$suffix"
 }
+
+# bug.5002 — per-env public URL from catalog. Replaces the legacy
+# `if node = operator then DOMAIN else ${node}-${DOMAIN}` URL builder
+# in verify-{candidate-ready,buildsha,deployment} + smoke-candidate.
+# Returns "" if the catalog entry has no public_url for this env
+# (service-type targets, e.g. scheduler-worker, or older catalogs);
+# callers treat "" as a skip (no Ingress to verify).
+public_url_for_target() {
+  local env="$1" target="$2" url
+  if [ -z "${_image_tags_suffix_cache[$target]+x}" ]; then
+    echo "[ERROR] image-tags: unknown target: $target" >&2
+    return 1
+  fi
+  url=$(yq ".public_url.\"${env}\" // \"\"" "${_image_tags_catalog_root}/${target}.yaml")
+  [ "$url" = "null" ] && url=""
+  printf '%s' "$url"
+}

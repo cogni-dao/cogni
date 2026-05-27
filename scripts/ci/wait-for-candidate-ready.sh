@@ -19,14 +19,13 @@ if [ "${ARGOCD_SYNC_VERIFIED:-}" != "true" ] && [ "${ARGOCD_SYNC_VERIFIED:-}" !=
   exit 1
 fi
 
-DOMAIN=${DOMAIN:-}
 MAX_ATTEMPTS=${MAX_ATTEMPTS:-30}
 SLEEP_SECONDS=${SLEEP_SECONDS:-15}
+DEPLOY_ENV=${DEPLOY_ENV:-${OVERLAY_ENV:-${DEPLOY_ENVIRONMENT:-candidate-a}}}
 
-if [ -z "$DOMAIN" ]; then
-  echo "[ERROR] DOMAIN is required" >&2
-  exit 1
-fi
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/image-tags.sh
+. "${SCRIPT_DIR}/lib/image-tags.sh"
 
 poll_ready() {
   local name="$1"
@@ -49,6 +48,18 @@ poll_ready() {
   return 1
 }
 
-poll_ready operator "https://${DOMAIN}"
-poll_ready poly "https://poly-${DOMAIN}"
-poll_ready resy "https://resy-${DOMAIN}"
+# bug.5002 — read per-env public URLs from catalog instead of computing
+# `${node}-${DOMAIN}` with an "operator is special" hardcode. Each
+# node's catalog entry declares its own URL per env; this script just
+# iterates and probes. Catalog drives scope.
+FAILED=0
+for target in "${NODE_TARGETS[@]}"; do
+  url=$(public_url_for_target "$DEPLOY_ENV" "$target")
+  if [ -z "$url" ]; then
+    echo "[skip] ${target}: no public_url.${DEPLOY_ENV} in catalog (no public Ingress)"
+    continue
+  fi
+  poll_ready "$target" "$url" || FAILED=1
+done
+
+exit "$FAILED"

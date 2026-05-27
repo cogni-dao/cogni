@@ -4,15 +4,14 @@
 
 set -euo pipefail
 
-DOMAIN=${DOMAIN:-}
 PROMOTED_APPS=${PROMOTED_APPS:-}
 CURL_TIMEOUT=${CURL_TIMEOUT:-30}
 CHAT_TIMEOUT=${CHAT_TIMEOUT:-90}
+DEPLOY_ENV=${DEPLOY_ENV:-${OVERLAY_ENV:-${DEPLOY_ENVIRONMENT:-candidate-a}}}
 
-if [ -z "$DOMAIN" ]; then
-  echo "[ERROR] DOMAIN is required" >&2
-  exit 1
-fi
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/image-tags.sh
+. "${SCRIPT_DIR}/lib/image-tags.sh"
 
 # When PROMOTED_APPS is set (CI), scope per-node probes to apps that actually
 # received a new digest in this flight. A static-page-only PR shouldn't be
@@ -42,16 +41,20 @@ check_livez() {
   fi
 }
 
-for app in operator poly resy; do
-  if should_check "$app"; then
-    case "$app" in
-      operator) check_livez operator "https://${DOMAIN}" ;;
-      poly)     check_livez poly     "https://poly-${DOMAIN}" ;;
-      resy)     check_livez resy     "https://resy-${DOMAIN}" ;;
-    esac
-  else
+# bug.5002 — read per-node URL from catalog (per env) instead of
+# computing `${node}-${DOMAIN}` with hardcoded operator-is-special.
+# The iteration set is NODE_TARGETS from catalog.
+for app in "${NODE_TARGETS[@]}"; do
+  if ! should_check "$app"; then
     echo "[skip] ${app} livez — not in PROMOTED_APPS=${PROMOTED_APPS}"
+    continue
   fi
+  url=$(public_url_for_target "$DEPLOY_ENV" "$app")
+  if [ -z "$url" ]; then
+    echo "[skip] ${app} livez — no public_url.${DEPLOY_ENV} in catalog (no public Ingress)"
+    continue
+  fi
+  check_livez "$app" "$url"
 done
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -63,14 +66,16 @@ done
 # Also skips when neither poly nor operator was promoted — the check
 # exercises both nodes; a PR that touches neither has nothing to regress.
 # ─────────────────────────────────────────────────────────────────────────────
+POLY_BASE=$(public_url_for_target "$DEPLOY_ENV" poly 2>/dev/null || echo "")
+OP_BASE=$(public_url_for_target "$DEPLOY_ENV" operator 2>/dev/null || echo "")
 if ! command -v jq >/dev/null 2>&1; then
   echo "[skip] bug.0322 regression check — jq not installed"
+elif [ -z "$POLY_BASE" ] || [ -z "$OP_BASE" ]; then
+  echo "[skip] bug.0322 regression check — catalog lacks poly+operator public_url.${DEPLOY_ENV} (single-node fork or missing catalog entries)"
 elif ! should_check poly || ! should_check operator; then
   echo "[skip] bug.0322 regression check — needs poly+operator promoted (PROMOTED_APPS=${PROMOTED_APPS})"
 else
   echo "[bug.0322] cross-node isolation check"
-  POLY_BASE="https://poly-${DOMAIN}"
-  OP_BASE="https://${DOMAIN}"
 
   creds=$(curl -sk --max-time "$CURL_TIMEOUT" -X POST "${POLY_BASE}/api/v1/agent/register" \
     -H 'Content-Type: application/json' \

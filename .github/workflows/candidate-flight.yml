@@ -422,6 +422,7 @@ jobs:
         if: steps.ssh-setup.outputs.has_vm == 'true'
         env:
           DOMAIN: ${{ vars.DOMAIN }}
+          DEPLOY_ENVIRONMENT: candidate-a
         run: bash ci-src/scripts/ci/wait-for-candidate-ready.sh
 
       - name: Wait for in-cluster services (per-node)
@@ -436,6 +437,7 @@ jobs:
         if: steps.ssh-setup.outputs.has_vm == 'true'
         env:
           DOMAIN: ${{ vars.DOMAIN }}
+          DEPLOY_ENVIRONMENT: candidate-a
           PROMOTED_APPS: ${{ matrix.node }}
         run: bash ci-src/scripts/ci/smoke-candidate.sh
 
@@ -443,6 +445,7 @@ jobs:
         if: steps.ssh-setup.outputs.has_vm == 'true'
         env:
           DOMAIN: ${{ vars.DOMAIN }}
+          DEPLOY_ENVIRONMENT: candidate-a
           SOURCE_SHA_MAP: deploy-branch/.promote-state/source-sha-by-app.json
           EXPECTED_BUILDSHA: ${{ needs.decide.outputs.head_sha }}
           NODES: ${{ matrix.node }}
