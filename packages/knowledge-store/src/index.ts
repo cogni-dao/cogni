@@ -32,6 +32,19 @@ export {
   PrincipalKindSchema,
   PrincipalSchema,
 } from "./domain/contribution-schemas.js";
+// Write-pipeline gates (proj.knowledge-write-pipeline)
+export {
+  type GateContext,
+  type GateError,
+  type GateResult,
+  type KnowledgeGate,
+  KnowledgeGateError,
+  type KnowledgeWriteCandidate,
+  provenanceGate,
+  runGateChain,
+  shapeGate,
+  V0_DETERMINISTIC_GATES,
+} from "./domain/gates/index.js";
 // Domain types & schemas
 export {
   type DoltCommit,

@@ -127,6 +127,11 @@ export function createKnowledgeWriteImplementation(
 ): ToolImplementation<KnowledgeWriteInput, KnowledgeWriteOutput> {
   return {
     execute: async (input) => {
+      // v0 write-pipeline gates (shape + provenance) are enforced inside the
+      // capability layer (createKnowledgeCapability), so this tool stays
+      // dependency-thin on @cogni/ai-tools. The capability throws
+      // KnowledgeGateError if a gate rejects, which surfaces to the agent
+      // as a tool error.
       const entry = await deps.knowledgeCapability.write({
         id: input.id,
         domain: input.domain,

@@ -17,6 +17,7 @@ import { DataGridColumnHeader } from "@cogni/node-ui-kit/reui/data-grid/data-gri
 import { createColumnHelper } from "@tanstack/react-table";
 
 import { ConfidenceBar } from "./ConfidenceBar";
+import { RelativeTime } from "./RelativeTime";
 
 const col = createColumnHelper<KnowledgeRow>();
 
@@ -120,13 +121,7 @@ export const knowledgeColumns = [
       <DataGridColumnHeader column={column} title="Created" />
     ),
     size: 110,
-    cell: (info) => {
-      const v = info.getValue();
-      if (!v) return <span className="text-muted-foreground">&mdash;</span>;
-      return (
-        <span className="text-muted-foreground text-xs">{v.slice(0, 10)}</span>
-      );
-    },
+    cell: (info) => <RelativeTime iso={info.getValue()} />,
     sortingFn: (a, b) =>
       (a.original.createdAt ?? "").localeCompare(b.original.createdAt ?? ""),
     meta: { headerTitle: "Created" },

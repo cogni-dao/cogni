@@ -17,8 +17,14 @@ import type {
   ContributionRecord,
   ContributionState,
   KnowledgeContributionEdit,
+  KnowledgeEntryInput,
   Principal,
 } from "../domain/contribution-schemas.js";
+import {
+  type KnowledgeGate,
+  KnowledgeGateError,
+  runGateChain,
+} from "../domain/gates/index.js";
 import {
   ContributionForbiddenError,
   ContributionNotFoundError,
@@ -48,6 +54,18 @@ export interface ContributionServiceDeps {
   port: KnowledgeContributionPort;
   canMergeKnowledge: (p: Principal) => boolean;
   rateLimit: { maxOpenPerPrincipal: number };
+  /**
+   * Write-pipeline gates run against every insert/update edit before it is
+   * forwarded to the port. Throws `KnowledgeGateError` on failure; the HTTP
+   * handler maps that to 400 with structured field-level issues.
+   *
+   * v0: shape gate only (provenance is stamped by the adapter for the
+   * external-contribution path, so cross-field provenance enforcement lives
+   * on the internal-write path instead).
+   *
+   * @default V0_CONTRIBUTION_EDIT_GATES (shape gate only)
+   */
+  gates?: readonly KnowledgeGate[];
 }
 
 export interface ContributionService {
@@ -82,6 +100,42 @@ export interface ContributionService {
 export function createContributionService(
   deps: ContributionServiceDeps
 ): ContributionService {
+  const gates = deps.gates ?? [];
+
+  async function gateEdits(
+    edits: KnowledgeContributionEdit[] | undefined
+  ): Promise<KnowledgeContributionEdit[] | undefined> {
+    if (!edits || edits.length === 0 || gates.length === 0) return edits;
+    const out: KnowledgeContributionEdit[] = [];
+    for (const edit of edits) {
+      if (edit.op === "deprecate") {
+        out.push(edit);
+        continue;
+      }
+      const result = await runGateChain(gates, edit.entry, {});
+      if (!result.ok) {
+        throw new KnowledgeGateError(result.errors);
+      }
+      // runGateChain widens to KnowledgeWriteCandidate (which extends
+      // KnowledgeEntryInput with optional source fields). Strip the
+      // candidate-only fields before re-packing the edit.
+      const sanitized: KnowledgeEntryInput = {
+        ...edit.entry,
+        ...result.candidate,
+      };
+      if (edit.op === "insert") {
+        out.push({ op: "insert", entry: sanitized });
+      } else {
+        out.push({
+          op: "update",
+          targetRowId: edit.targetRowId,
+          entry: sanitized,
+        });
+      }
+    }
+    return out;
+  }
+
   return {
     async create({ principal, body }) {
       // Idempotency replay — return prior record if same (principal, key) exists.
@@ -107,10 +161,12 @@ export function createContributionService(
         );
       }
 
+      const gated = await gateEdits(body.edits);
+
       return deps.port.create({
         principal,
         message: body.message,
-        edits: body.edits,
+        edits: gated,
         idempotencyKey: body.idempotencyKey,
       });
     },
@@ -133,11 +189,14 @@ export function createContributionService(
           "append requires contribution owner"
         );
       }
+      const gated = await gateEdits(body.edits);
+      // gateEdits returns undefined only when input was undefined/empty; for
+      // appendCommit the schema requires at least 1 edit, so non-null assert.
       return deps.port.appendCommit({
         contributionId,
         principal,
         message: body.message,
-        edits: body.edits,
+        edits: gated ?? body.edits,
       });
     },
 

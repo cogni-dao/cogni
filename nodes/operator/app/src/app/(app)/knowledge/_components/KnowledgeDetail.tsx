@@ -16,6 +16,7 @@ import type { ReactElement } from "react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components";
 import { ConfidenceBar } from "./ConfidenceBar";
 import { HtmlRenderer } from "./HtmlRenderer";
+import { RelativeTime } from "./RelativeTime";
 
 interface KnowledgeDetailProps {
   readonly item: KnowledgeRow | null;
@@ -114,9 +115,7 @@ export function KnowledgeDetail({
 
               {item.createdAt && (
                 <Field label="Created">
-                  <span className="font-mono text-muted-foreground text-xs">
-                    {item.createdAt}
-                  </span>
+                  <RelativeTime iso={item.createdAt} />
                 </Field>
               )}
             </div>

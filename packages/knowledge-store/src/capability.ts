@@ -21,6 +21,12 @@ import type {
   KnowledgeWriteParams,
 } from "@cogni/ai-tools";
 
+import {
+  type KnowledgeGate,
+  KnowledgeGateError,
+  runGateChain,
+  V0_DETERMINISTIC_GATES,
+} from "./domain/gates/index.js";
 import type { KnowledgeStorePort } from "./port/knowledge-store.port.js";
 
 const CONFIDENCE_DRAFT = 30;
@@ -49,17 +55,33 @@ function toEntry(k: {
   };
 }
 
+export interface KnowledgeCapabilityOptions {
+  /**
+   * Write-pipeline gates run before every write. v0 = shape + provenance
+   * (see proj.knowledge-write-pipeline). Pass `[]` to disable (don't, except
+   * in unit tests that exercise the port directly).
+   *
+   * @default V0_DETERMINISTIC_GATES
+   */
+  readonly gates?: readonly KnowledgeGate[];
+}
+
 /**
  * Create a KnowledgeCapability backed by a KnowledgeStorePort.
  * Shared across all nodes — lives in packages/knowledge-store, not per-node bootstrap.
  *
  * - Read operations delegate directly to the port.
- * - write() upserts (insert or update) + auto-commits with a descriptive message.
+ * - write() runs the v0 gate chain, then upserts + auto-commits with a
+ *   descriptive message. A failing gate throws `KnowledgeGateError` — the
+ *   write is rejected at the seam, never reaches Doltgres.
  * - Confidence defaults to DRAFT (30%) if not specified.
  */
 export function createKnowledgeCapability(
-  port: KnowledgeStorePort
+  port: KnowledgeStorePort,
+  options: KnowledgeCapabilityOptions = {}
 ): KnowledgeCapability {
+  const gates = options.gates ?? V0_DETERMINISTIC_GATES;
+
   return {
     async search(params: KnowledgeSearchParams): Promise<KnowledgeEntry[]> {
       const results = await port.searchKnowledge(params.domain, params.query, {
@@ -82,20 +104,41 @@ export function createKnowledgeCapability(
     },
 
     async write(params: KnowledgeWriteParams): Promise<KnowledgeEntry> {
+      const gateResult = await runGateChain(
+        gates,
+        {
+          id: params.id,
+          domain: params.domain,
+          title: params.title,
+          content: params.content,
+          sourceType: params.sourceType,
+          sourceRef: params.sourceRef,
+          entityId: params.entityId,
+          tags: params.tags,
+        },
+        {}
+      );
+      if (!gateResult.ok) {
+        throw new KnowledgeGateError(gateResult.errors);
+      }
+      // Gates may sanitize but never widen sourceType beyond what the caller
+      // passed (the shape/provenance v0 gates only touch title/tags/etc), so
+      // the original enum-typed value is the safe carrier.
+      const c = gateResult.candidate;
       const confidence = params.confidencePct ?? CONFIDENCE_DRAFT;
       const entry = await port.upsertKnowledge({
-        id: params.id,
-        domain: params.domain,
-        title: params.title,
-        content: params.content,
+        id: c.id ?? params.id,
+        domain: c.domain,
+        title: c.title,
+        content: c.content,
         sourceType: params.sourceType,
-        entityId: params.entityId ?? null,
+        entityId: c.entityId ?? null,
         confidencePct: confidence,
-        sourceRef: params.sourceRef ?? null,
-        tags: params.tags ?? null,
+        sourceRef: c.sourceRef ?? null,
+        tags: c.tags ?? null,
       });
 
-      await port.commit(`knowledge: ${params.sourceType} — ${params.title}`);
+      await port.commit(`knowledge: ${entry.sourceType} — ${entry.title}`);
       return toEntry(entry);
     },
   };

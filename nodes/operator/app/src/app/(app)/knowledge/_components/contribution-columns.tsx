@@ -19,6 +19,8 @@ import { GitMerge } from "lucide-react";
 import type { ReactElement } from "react";
 import { Button } from "@/components";
 
+import { RelativeTime } from "./RelativeTime";
+
 const col = createColumnHelper<ContributionRecord>();
 
 export interface ContributionColumnsDeps {
@@ -64,15 +66,17 @@ export function buildContributionColumns(deps: ContributionColumnsDeps) {
       ),
       minSize: 280,
       cell: ({ row }) => {
-        const { contributionId, message, branch } = row.original;
+        // Branch ref intentionally suppressed at the row level — it's storage
+        // shape, not human-scan signal. Restore when a merkle/history viewer
+        // makes commits + branches clickable (vNext). The branch + full slug
+        // remain visible in ContributionDetail for audit.
+        const { contributionId, message } = row.original;
         return (
           <div className="flex flex-col gap-0.5 py-0.5">
             <span className="line-clamp-1 text-sm">{message}</span>
-            <div className="flex items-center gap-2 text-muted-foreground text-xs">
-              <span className="font-mono">{contributionId}</span>
-              <span aria-hidden="true">·</span>
-              <span className="font-mono opacity-70">{branch}</span>
-            </div>
+            <span className="line-clamp-1 font-mono text-muted-foreground text-xs">
+              {contributionId}
+            </span>
           </div>
         );
       },
@@ -122,15 +126,7 @@ export function buildContributionColumns(deps: ContributionColumnsDeps) {
         <DataGridColumnHeader column={column} title="Filed" />
       ),
       size: 110,
-      cell: (info) => {
-        const v = info.getValue();
-        if (!v) return <span className="text-muted-foreground">&mdash;</span>;
-        return (
-          <span className="text-muted-foreground text-xs">
-            {v.slice(0, 10)}
-          </span>
-        );
-      },
+      cell: (info) => <RelativeTime iso={info.getValue()} />,
       sortingFn: (a, b) =>
         a.original.createdAt.localeCompare(b.original.createdAt),
       meta: { headerTitle: "Filed" },

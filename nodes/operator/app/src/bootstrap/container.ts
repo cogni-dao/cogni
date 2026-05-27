@@ -33,6 +33,7 @@ import {
   createKnowledgeCapability,
   defaultCanMergeKnowledge,
   type KnowledgeStorePort,
+  shapeGate,
 } from "@cogni/knowledge-store";
 import {
   buildDoltgresClient,
@@ -617,6 +618,12 @@ function createContainer(): Container {
       port: contributionPort,
       canMergeKnowledge: defaultCanMergeKnowledge,
       rateLimit: { maxOpenPerPrincipal: 10 },
+      // v0 write-pipeline: shape gate only on the contribution path.
+      // Provenance is stamped by the adapter (`source_type='external'`,
+      // `source_ref='contribution:<id>:<seq>'`), so the provenance gate is
+      // reserved for internal `core__knowledge_write` where the caller
+      // controls those fields. See work/projects/proj.knowledge-write-pipeline.md.
+      gates: [shapeGate],
     });
     log.info("Knowledge store configured (Doltgres)");
   } else {
