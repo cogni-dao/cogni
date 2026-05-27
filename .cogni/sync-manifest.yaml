@@ -55,3 +55,6 @@ divergences:
   - path: ".github/workflows/release.yml"
     repos: [Cogni-DAO/node-template]
     reason: "node-template has no production environment; release workflow is hub-only."
+  - path: "synthetic/break/path/that/is/not/in/scope.txt"
+    repos: [Cogni-DAO/never-declared-repo]
+    reason: "EXPERIMENT: deliberately broken to prove CI catches undeclared paths + undeclared repos. Will be closed without merge."
