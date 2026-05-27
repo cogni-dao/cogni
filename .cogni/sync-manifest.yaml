@@ -3,7 +3,7 @@
 # and scripts/validate-sync-manifest-refs.mjs (cross-reference checks).
 # Drift across repos is surfaced by the project-S2 drift detector.
 
-schema: 1
+schema: 2
 hub: Cogni-DAO/cogni
 
 artifacts:
