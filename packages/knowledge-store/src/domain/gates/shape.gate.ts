@@ -21,10 +21,13 @@ import type {
 
 /**
  * Slug pattern: kebab-case, 3–40 chars, starts + ends with alphanumeric.
- * Forbids leading/trailing dashes, double-dashes, uppercase, underscores,
+ * Forbids leading/trailing dashes, consecutive dashes, uppercase, underscores,
  * colons, dots. Compact + grep-friendly + URL-safe.
+ *
+ * The negative lookahead `(?!.*--)` rejects any string containing `--`
+ * anywhere; the body `[a-z0-9-]{1,38}` enforces the character class.
  */
-const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/;
+const SLUG_RE = /^(?!.*--)[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/;
 
 const TITLE_MIN = 3;
 const TITLE_MAX = 60;
