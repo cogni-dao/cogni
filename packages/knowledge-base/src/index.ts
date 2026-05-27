@@ -11,14 +11,11 @@
  * @public
  */
 
-// Schema (Drizzle table definitions — drizzle-kit owns migrations)
-export {
-  citations,
-  domains,
-  knowledge,
-  knowledgeContributions,
-  sources,
-} from "./schema.js";
+// Schema (Drizzle table definitions — drizzle-kit owns migrations). The base
+// bundle only carries tables every knowledge-capable node uses unchanged.
+// Per-node contribution metadata (knowledge_contributions etc.) lives in each
+// node's own doltgres-schema package — see operator/packages/doltgres-schema.
+export { citations, domains, knowledge, sources } from "./schema.js";
 
 // Seeds
 export { BASE_KNOWLEDGE_SEEDS } from "./seeds/base.js";

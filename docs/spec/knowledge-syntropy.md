@@ -117,21 +117,21 @@ Every node fork inherits these four tables. They are the minimum viable knowledg
 
 The atomic unit of what the node believes. Each row is a single assertion with provenance.
 
-| Column           | Type        | Constraints               | Description                                                                   |
-| ---------------- | ----------- | ------------------------- | ----------------------------------------------------------------------------- |
-| `id`             | text        | PK                        | Human-readable: `{domain}:{slug}` (e.g. `pm:fed-rate-base-rate`)              |
-| `domain`         | text        | NOT NULL, FK→domains      | Registered domain key                                                         |
-| `entity_id`      | text        |                           | Stable subject key (market ID, project slug, etc.)                            |
-| `title`          | text        | NOT NULL                  | One-line claim summary                                                        |
-| `content`        | text        | NOT NULL                  | Full knowledge body — the actual assertion                                    |
-| `entry_type`     | text        | NOT NULL                  | `observation`, `finding`, `conclusion`, `rule`, `scorecard`, `skill`, `guide` |
-| `status`         | text        | NOT NULL, default `draft` | `draft` → `candidate` → `established` → `canonical` → `deprecated`            |
-| `confidence_pct` | integer     |                           | 0–100, computed from citations (null = not applicable)                        |
-| `source_type`    | text        | NOT NULL                  | `human`, `agent`, `analysis_signal`, `external`, `derived`                    |
-| `source_ref`     | text        |                           | Pointer to origin (URL, signal ID, commit hash)                               |
-| `source_node`    | text        |                           | Which AI node/agent created this                                              |
-| `created_at`     | timestamptz | NOT NULL, default now     |                                                                               |
-| `updated_at`     | timestamptz | NOT NULL, default now     |                                                                               |
+| Column           | Type        | Constraints               | Description                                                                           |
+| ---------------- | ----------- | ------------------------- | ------------------------------------------------------------------------------------- |
+| `id`             | text        | PK                        | Human-readable: `{domain}:{slug}` (e.g. `pm:fed-rate-base-rate`)                      |
+| `domain`         | text        | NOT NULL, FK→domains      | Registered domain key                                                                 |
+| `entity_id`      | text        |                           | Stable subject key (market ID, project slug, etc.)                                    |
+| `title`          | text        | NOT NULL                  | One-line claim summary                                                                |
+| `content`        | text        | NOT NULL                  | Full knowledge body — the actual assertion                                            |
+| `entry_type`     | text        | NOT NULL                  | `observation`, `finding`, `conclusion`, `rule`, `scorecard`, `skill`, `guide`, `html` |
+| `status`         | text        | NOT NULL, default `draft` | `draft` → `candidate` → `established` → `canonical` → `deprecated`                    |
+| `confidence_pct` | integer     |                           | 0–100, computed from citations (null = not applicable)                                |
+| `source_type`    | text        | NOT NULL                  | `human`, `agent`, `analysis_signal`, `external`, `derived`                            |
+| `source_ref`     | text        |                           | Pointer to origin (URL, signal ID, commit hash)                                       |
+| `source_node`    | text        |                           | Which AI node/agent created this                                                      |
+| `created_at`     | timestamptz | NOT NULL, default now     |                                                                                       |
+| `updated_at`     | timestamptz | NOT NULL, default now     |                                                                                       |
 
 ### `citations` — The DAG that makes knowledge compound
 
@@ -553,9 +553,9 @@ The librarian's retrieval contract (same `KnowledgeSearchHit` shape) is the x402
 | SYNC_DIRECTION_DOLT_TO_POSTGRES            | Search index sync is one-way: Dolt → Postgres. Never write to Postgres search index directly.                                                                                                                                                 |
 | TABLES_NEED_JUSTIFICATION                  | New Dolt tables require a fundamentally different data shape, not just different content.                                                                                                                                                     |
 | NODE_KNOWLEDGE_SOVEREIGN                   | Inherited: node knowledge is private by default. Sharing is explicit.                                                                                                                                                                         |
-| KNOWLEDGE_LOOP_CLOSED_VIA_SIGNED_IN_USER   | v0 merge gate: any wallet/cookie-session user can merge a contribution. Bearer-token agents cannot. The session cookie is the trust signal until per-user RBAC lands.                                                                         |
+| KNOWLEDGE_LOOP_CLOSED_VIA_SIGNED_IN_USER   | v0 merge gate: any wallet/cookie-session user can merge a contribution. Bearer-token agents cannot merge, but they can close their own open contribution branch. The session cookie is the trust signal until per-user RBAC lands.            |
 | KNOWLEDGE_BROWSE_VIA_HTTP_REQUIRES_SESSION | The `GET /api/v1/knowledge` browse endpoint is cookie-session only. Bearer / x402 access remains future work (see [x402-e2e](./x402-e2e.md)).                                                                                                 |
-| DOMAIN_FK_ENFORCED_AT_WRITE                | Every write to `knowledge` verifies `domain` exists in `domains` before INSERT. Unregistered → `DomainNotRegisteredError` → HTTP 400. Contract: [knowledge-domain-registry](./knowledge-domain-registry.md).                                  |
+| DOMAIN_FK_ENFORCED_AT_WRITE                | Every write to `knowledge` verifies `domain` exists in `domains` before INSERT or contribution-branch UPDATE. Unregistered → `DomainNotRegisteredError` → HTTP 400. Contract: [knowledge-domain-registry](./knowledge-domain-registry.md).    |
 | DOMAIN_REGISTRY_EXTENDS_VIA_UI             | Base domains are seeded by the schema migrator (reference data); UI extends beyond the base via cookie-session POST. `NODES_BOOT_EMPTY` scopes to content tables only. Contract: [knowledge-domain-registry](./knowledge-domain-registry.md). |
 
 ---

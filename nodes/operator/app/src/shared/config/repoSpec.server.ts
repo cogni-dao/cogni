@@ -193,7 +193,7 @@ export function getDaoTreasuryAddress(): string | undefined {
 // between app credentials and repo identity. Until then, single-tenant hardcode here only.
 const OPERATOR_GITHUB_REPO = {
   owner: "Cogni-DAO",
-  repo: "node-template",
+  repo: "cogni",
 } as const;
 
 /**

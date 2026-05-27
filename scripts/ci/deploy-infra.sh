@@ -599,9 +599,22 @@ docker network create cogni-edge 2>/dev/null || true
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 log_info "Creating environment files..."
 
-# Edge env (minimal - just domain for Caddyfile)
+# Derive per-env subdomains from DEPLOY_ENVIRONMENT for the edge Caddyfile.
+# Convention matches scripts/setup/lib/cogni-deployment-identity.sh
+# (cogni_resy_domain_for_env). Kept inline to avoid a runtime library dep here.
+case "$DEPLOY_ENVIRONMENT" in
+    production)  RESY_DOMAIN_DERIVED="resy.${DOMAIN}" ;;
+    preview)     RESY_DOMAIN_DERIVED="resy-preview.${DOMAIN#preview.}" ;;
+    candidate-a|canary) RESY_DOMAIN_DERIVED="resy-test.${DOMAIN#test.}" ;;
+    *)           RESY_DOMAIN_DERIVED="resy.${DOMAIN}" ;;
+esac
+RESY_DOMAIN="${RESY_DOMAIN:-$RESY_DOMAIN_DERIVED}"
+
+# Edge env — Caddyfile site blocks resolve these. Missing values produce
+# anonymous server blocks and Caddy refuses to start (bug.5070).
 cat > /opt/cogni-template-edge/.env << ENV_EOF
 DOMAIN=${DOMAIN}
+RESY_DOMAIN=${RESY_DOMAIN}
 ENV_EOF
 
 # LiteLLM image is built from infra/images/litellm/ and pushed to GHCR.

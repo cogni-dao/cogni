@@ -170,6 +170,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          # fetch-depth: 0 — scripts/db/check-migrations-immutable.mjs runs
+          # `git merge-base origin/main HEAD`; the default shallow clone (depth=1)
+          # leaves origin/main unreachable and forces a runtime fetch.
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@c5ba7f7862a0f64c1b1a05fbac13e0b8e86ba08c # v4
 
@@ -204,6 +209,15 @@ jobs:
 
       - name: Architecture check
         run: pnpm arch:check
+
+      # Schema-migration guards (task: doltgres-migration-safety):
+      #   1. immutable .sql / *_snapshot.json on origin/main (drizzle-orm runtime
+      #      migrator skips by `folderMillis`, never by hash — modifying an
+      #      applied migration silently no-ops on deployed DBs)
+      #   2. strict-monotonic `when` in _journal.json (silent-skip variant)
+      #   3. drizzle-kit's own snapshot-chain check
+      - name: Database migration guards
+        run: pnpm db:check
 
       # bug.0344 — structural guardrail on image-updater scope. Positive
       # allowlist: only ApplicationSets named in ALLOWLIST inside the
@@ -287,6 +301,14 @@ jobs:
 
       - name: Component tests (testcontainers)
         run: pnpm test:component
+
+      # Doltgres-migrator regression: boots dolthub/doltgresql:latest in its
+      # own container (separate from the Postgres globalSetup the rest of
+      # test:component uses) and exercises migrate-doltgres.mjs + verifier
+      # end-to-end. Proves the silent-skip drift gap is caught at runtime,
+      # complementing the static CI guard in `db:check:immutable`.
+      - name: Doltgres migrator regression (testcontainers)
+        run: pnpm test:doltgres-migrate
 
       - name: CI Telemetry
         if: always()

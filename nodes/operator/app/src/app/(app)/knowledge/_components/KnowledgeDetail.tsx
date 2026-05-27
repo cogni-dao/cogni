@@ -15,6 +15,7 @@ import type { ReactElement } from "react";
 
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components";
 import { ConfidenceBar } from "./ConfidenceBar";
+import { HtmlRenderer } from "./HtmlRenderer";
 
 interface KnowledgeDetailProps {
   readonly item: KnowledgeRow | null;
@@ -45,9 +46,16 @@ export function KnowledgeDetail({
   open,
   onOpenChange,
 }: KnowledgeDetailProps): ReactElement {
+  const isHtml = item?.entryType === "html";
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="w-full overflow-y-auto sm:max-w-lg">
+      <SheetContent
+        className={
+          isHtml
+            ? "w-full overflow-y-auto sm:max-w-4xl"
+            : "w-full overflow-y-auto sm:max-w-lg"
+        }
+      >
         {item && (
           <>
             <SheetHeader>
@@ -69,9 +77,13 @@ export function KnowledgeDetail({
               </Field>
 
               <Field label="Content">
-                <p className="whitespace-pre-wrap leading-relaxed">
-                  {item.content}
-                </p>
+                {isHtml ? (
+                  <HtmlRenderer html={item.content} title={item.title} />
+                ) : (
+                  <p className="whitespace-pre-wrap leading-relaxed">
+                    {item.content}
+                  </p>
+                )}
               </Field>
 
               <Field label="Source">

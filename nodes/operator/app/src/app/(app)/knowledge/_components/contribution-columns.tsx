@@ -26,9 +26,7 @@ export interface ContributionColumnsDeps {
   busyId: string | null;
 }
 
-export function buildContributionColumns(
-  deps: ContributionColumnsDeps
-): Array<ReturnType<typeof col.accessor> | ReturnType<typeof col.display>> {
+export function buildContributionColumns(deps: ContributionColumnsDeps) {
   return [
     col.accessor("state", {
       header: ({ column }) => (
@@ -106,9 +104,9 @@ export function buildContributionColumns(
       meta: { headerTitle: "Principal" },
     }),
 
-    col.accessor("entryCount", {
+    col.accessor("commitCount", {
       header: ({ column }) => (
-        <DataGridColumnHeader column={column} title="Rows" />
+        <DataGridColumnHeader column={column} title="Commits" />
       ),
       size: 60,
       cell: (info) => (
@@ -116,7 +114,7 @@ export function buildContributionColumns(
           {info.getValue()}
         </span>
       ),
-      meta: { headerTitle: "Rows" },
+      meta: { headerTitle: "Commits" },
     }),
 
     col.accessor("createdAt", {

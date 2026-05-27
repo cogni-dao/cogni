@@ -145,46 +145,7 @@ export const citations = pgTable(
   ]
 );
 
-/**
- * knowledge_contributions — metadata for the external-agent contribution flow.
- *
- * Tracks state of `contrib/<agent>-<id>` Dolt branches across their lifecycle
- * (open -> merged | closed) so listing / state / close-reason / idempotency
- * survive branch deletion. Lives on `main`.
- *
- * The (principal_id, idempotency_key) partial unique index is the race-safe
- * replay primitive — same (principal, key) returns the prior record.
- *
- * Internal `core__knowledge_write` calls do NOT use this table — they write
- * straight to `main` per `INTERNAL_WRITES_TO_MAIN`.
- */
-export const knowledgeContributions = pgTable(
-  "knowledge_contributions",
-  {
-    id: text("id").primaryKey(),
-    branch: text("branch").notNull(),
-    state: text("state").notNull(),
-    principalId: text("principal_id").notNull(),
-    principalKind: text("principal_kind").notNull(),
-    message: text("message").notNull(),
-    entryCount: integer("entry_count").notNull(),
-    commitHash: text("commit_hash").notNull(),
-    mergedCommit: text("merged_commit"),
-    closedReason: text("closed_reason"),
-    idempotencyKey: text("idempotency_key"),
-    confidencePct: integer("confidence_pct").notNull().default(40),
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .notNull()
-      .defaultNow(),
-    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
-    resolvedBy: text("resolved_by"),
-  },
-  (table) => [
-    index("idx_kc_state").on(table.state),
-    index("idx_kc_principal").on(table.principalId, table.state),
-    uniqueIndex("uniq_kc_idempotency").on(
-      table.principalId,
-      table.idempotencyKey
-    ),
-  ]
-);
+// knowledge_contributions moved to operator's own doltgres-schema package
+// (see nodes/operator/packages/doltgres-schema/src/knowledge.ts). The
+// contribution flow + its companion knowledge_contribution_commits table
+// is per-node, not shared base.

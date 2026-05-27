@@ -26,6 +26,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components";
+import { HtmlRenderer } from "./HtmlRenderer";
 
 interface ContributionDetailProps {
   readonly item: ContributionRecord | null;
@@ -90,9 +91,21 @@ export function ContributionDetail({
     };
   }, [open, item]);
 
+  const hasHtmlEntry = (diff ?? []).some(
+    (d) =>
+      ((d.after ?? d.before) as { entryType?: string } | null)?.entryType ===
+      "html"
+  );
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="w-full overflow-y-auto sm:max-w-lg">
+      <SheetContent
+        className={
+          hasHtmlEntry
+            ? "w-full overflow-y-auto sm:max-w-4xl"
+            : "w-full overflow-y-auto sm:max-w-lg"
+        }
+      >
         {item && (
           <>
             <SheetHeader>
@@ -126,9 +139,15 @@ export function ContributionDetail({
                 )}
               </div>
 
-              <Field label="Commit">
+              <Field label="Head Commit">
                 <span className="font-mono text-muted-foreground text-xs">
-                  {item.commitHash}
+                  {item.headCommit ?? item.baseCommit}
+                </span>
+              </Field>
+
+              <Field label="Contribution Commits">
+                <span className="font-mono text-muted-foreground text-xs">
+                  {item.commitCount}
                 </span>
               </Field>
 
@@ -150,7 +169,10 @@ export function ContributionDetail({
                       const row = (d.after ?? d.before) as {
                         id?: string;
                         title?: string;
+                        content?: string;
+                        entryType?: string;
                       } | null;
+                      const isHtml = row?.entryType === "html";
                       return (
                         <div
                           key={d.rowId}
@@ -171,11 +193,29 @@ export function ContributionDetail({
                             <span className="font-mono text-muted-foreground">
                               {d.rowId}
                             </span>
+                            {row?.entryType && (
+                              <span className="font-mono text-muted-foreground/70 text-xs">
+                                {row.entryType}
+                              </span>
+                            )}
                           </div>
                           {row?.title && (
-                            <p className="mt-1 line-clamp-2 text-sm">
+                            <p className="mt-1 line-clamp-2 font-medium text-sm">
                               {String(row.title)}
                             </p>
+                          )}
+                          {isHtml && row?.content && (
+                            <div className="mt-2">
+                              <HtmlRenderer
+                                html={row.content}
+                                title={row.title ?? "preview"}
+                              />
+                            </div>
+                          )}
+                          {!isHtml && row?.content && (
+                            <pre className="mt-2 max-h-96 overflow-y-auto whitespace-pre-wrap break-words rounded bg-background/60 px-2 py-1.5 text-xs leading-snug">
+                              {String(row.content)}
+                            </pre>
                           )}
                         </div>
                       );

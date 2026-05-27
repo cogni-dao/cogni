@@ -288,6 +288,9 @@ importers:
       tailwindcss:
         specifier: ^4.1.16
         version: 4.1.16
+      testcontainers:
+        specifier: ^11.8.1
+        version: 11.8.1
       tsup:
         specifier: ^8.5.1
         version: 8.5.1(@swc/core@1.15.10)(jiti@2.6.1)(postcss@8.5.6)(tsx@4.20.6)(typescript@5.9.3)(yaml@2.8.3)
@@ -1580,8 +1583,8 @@ importers:
         specifier: workspace:*
         version: link:../ai-tools
       zod:
-        specifier: ^3.24.0
-        version: 3.25.76
+        specifier: ^4.1.12
+        version: 4.3.6
     devDependencies:
       tsup:
         specifier: ^8.5.1
@@ -1650,6 +1653,9 @@ importers:
       '@cogni/aragon-osx':
         specifier: workspace:*
         version: link:../aragon-osx
+      '@cogni/knowledge-store':
+        specifier: workspace:*
+        version: link:../knowledge-store
       '@cogni/node-core':
         specifier: workspace:*
         version: link:../node-core

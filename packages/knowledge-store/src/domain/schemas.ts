@@ -40,6 +40,7 @@ export const EntryTypeSchema = z.enum([
   "scorecard",
   "skill",
   "guide",
+  "html",
 ]);
 export type EntryType = z.infer<typeof EntryTypeSchema>;
 

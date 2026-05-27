@@ -115,7 +115,13 @@ COPY --from=builder --chown=nextjs:nodejs /app/scripts/db/migrate.mjs /app/nodes
 # migrations against `knowledge_operator`, then stamps a dolt_commit so DDL
 # lands in dolt_log.
 COPY --from=builder --chown=nextjs:nodejs /app/nodes/operator/app/src/adapters/server/db/doltgres-migrations /app/nodes/operator/app/doltgres-migrations
-COPY --from=builder --chown=nextjs:nodejs /app/nodes/operator/app/src/adapters/server/db/migrate-doltgres.mjs /app/nodes/operator/app/migrate-doltgres.mjs
+# Doltgres migrator + verifier — shared scripts (parity with the Postgres
+# migrate.mjs COPY above). Verifier is sibling-imported by migrate-doltgres.mjs
+# and runs the post-migrate schema check before any tracking-row stamping,
+# closing the silent-skip gap from drizzle-orm's folderMillis-only "applied?"
+# check.
+COPY --from=builder --chown=nextjs:nodejs /app/scripts/db/migrate-doltgres.mjs /app/nodes/operator/app/migrate-doltgres.mjs
+COPY --from=builder --chown=nextjs:nodejs /app/scripts/db/verify-doltgres-schema.mjs /app/nodes/operator/app/verify-doltgres-schema.mjs
 
 EXPOSE 3000
 

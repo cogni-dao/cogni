@@ -97,7 +97,7 @@ DOMAIN="${DOMAIN:-$(cogni_operator_domain_for_env "$DEPLOY_ENV" "$COGNI_DOMAIN_R
 RESY_DOMAIN="${RESY_DOMAIN:-$(cogni_resy_domain_for_env "$DEPLOY_ENV" "$COGNI_DOMAIN_ROOT")}"
 VM_DNS_HOST="${VM_DNS_HOST:-$(cogni_vm_host_for_env "$DEPLOY_ENV" "$COGNI_DOMAIN_ROOT" "$COGNI_DEPLOYMENT_SLUG")}"
 DNS_RECORDS=("$DOMAIN" "$RESY_DOMAIN" "$VM_DNS_HOST")
-CADDYFILE_TEMPLATE="$REPO_ROOT/infra/compose/edge/configs/Caddyfile.cogni.tmpl"
+CADDYFILE_TEMPLATE="$REPO_ROOT/infra/compose/edge/configs/Caddyfile.tmpl"
 COGNI_APP_TARGETS=("operator" "resy" "scheduler-worker")
 
 # Allow branch override (e.g., testing a feature branch on preview infra)

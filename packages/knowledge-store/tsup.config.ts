@@ -14,7 +14,11 @@
 import { defineConfig } from "tsup";
 
 export const tsupConfig = defineConfig({
-  entry: ["src/index.ts", "src/adapters/doltgres/index.ts"],
+  entry: [
+    "src/index.ts",
+    "src/domain/contribution-schemas.ts",
+    "src/adapters/doltgres/index.ts",
+  ],
   format: ["esm"],
   dts: false,
   clean: false,
