@@ -19,6 +19,7 @@ import type {
   KnowledgeContributionEdit,
   Principal,
 } from "../src/domain/contribution-schemas.js";
+import { KnowledgeGateError, shapeGate } from "../src/domain/gates/index.js";
 import {
   ContributionForbiddenError,
   type KnowledgeContributionPort,
@@ -136,6 +137,84 @@ class FakeContributionPort implements KnowledgeContributionPort {
 }
 
 describe("createContributionService", () => {
+  it("runs configured gates on create insert/update edits and rejects bad slugs", async () => {
+    const port = new FakeContributionPort();
+    const service = createContributionService({
+      port,
+      canMergeKnowledge: () => false,
+      rateLimit: { maxOpenPerPrincipal: 5 },
+      gates: [shapeGate],
+    });
+    const edit: KnowledgeContributionEdit = {
+      op: "insert",
+      entry: {
+        id: "BAD--double-dash",
+        domain: "meta",
+        title: "Should reject before reaching port",
+        content: "x",
+      },
+    };
+    await expect(
+      service.create({
+        principal: agent,
+        body: { message: "gate test", edits: [edit] },
+      })
+    ).rejects.toBeInstanceOf(KnowledgeGateError);
+    expect(port.lastCreate).toBeNull();
+  });
+
+  it("passes sanitized (trimmed) entries through to the port on append", async () => {
+    const port = new FakeContributionPort();
+    port.records = [contribution()];
+    const service = createContributionService({
+      port,
+      canMergeKnowledge: () => false,
+      rateLimit: { maxOpenPerPrincipal: 5 },
+      gates: [shapeGate],
+    });
+    const edit: KnowledgeContributionEdit = {
+      op: "insert",
+      entry: {
+        id: "valid-slug",
+        domain: "meta",
+        title: "  Whitespace trimmed  ",
+        content: "x",
+      },
+    };
+    await service.appendCommit({
+      principal: agent,
+      contributionId: "contrib-agent-1-abc123",
+      body: { message: "sanitize test", edits: [edit] },
+    });
+    const forwarded = port.lastAppend?.edits[0];
+    expect(forwarded?.op).toBe("insert");
+    if (forwarded?.op === "insert") {
+      expect(forwarded.entry.title).toBe("Whitespace trimmed");
+    }
+  });
+
+  it("forwards deprecate edits without running gates against them", async () => {
+    const port = new FakeContributionPort();
+    port.records = [contribution()];
+    const service = createContributionService({
+      port,
+      canMergeKnowledge: () => false,
+      rateLimit: { maxOpenPerPrincipal: 5 },
+      gates: [shapeGate],
+    });
+    const edit: KnowledgeContributionEdit = {
+      op: "deprecate",
+      targetRowId: "operator:knowledge:stale",
+      reason: "superseded",
+    };
+    await service.appendCommit({
+      principal: agent,
+      contributionId: "contrib-agent-1-abc123",
+      body: { message: "deprecate test", edits: [edit] },
+    });
+    expect(port.lastAppend?.edits).toEqual([edit]);
+  });
+
   it("forwards typed edits on create so adapters can apply branch-local changes", async () => {
     const port = new FakeContributionPort();
     const service = createContributionService({
