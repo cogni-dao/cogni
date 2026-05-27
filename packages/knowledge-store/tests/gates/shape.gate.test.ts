@@ -20,7 +20,7 @@ function base(
   overrides: Partial<KnowledgeWriteCandidate> = {}
 ): KnowledgeWriteCandidate {
   return {
-    id: "fed-rate-cut-base-rate",
+    id: "fed-rate-base-rate",
     domain: "prediction-market",
     title: "Fed rate cut base rate is 35% in election years",
     content: "Historical frequency since 1980 averages 35% per quarter.",
@@ -61,8 +61,7 @@ describe("shapeGate", () => {
       "double--dash",
       "colon:in:slug",
       "slug.with.dots",
-      "one-two-three-four-five", // 5 segments — exceeds 4-segment cap
-      "meta-contribution-branch-flow-merkle-dag-v1", // real-world bloat sample (7 seg)
+      "one-two-three-four-five", // 5 segments, 23 chars — fails regex only
     ];
     for (const id of bad) {
       it(`rejects "${id}"`, async () => {
@@ -75,6 +74,25 @@ describe("shapeGate", () => {
         }
       });
     }
+
+    it("rejects real-world bloat sample (length + segment-count fail)", async () => {
+      // meta-contribution-branch-flow-merkle-dag-v1 is the motivating bloat
+      // case from validate-candidate. Length check fires first; regex
+      // check would also fire. Either error code is acceptable evidence
+      // the gate rejected it.
+      const result = await shapeGate.check(
+        base({ id: "meta-contribution-branch-flow-merkle-dag-v1" }),
+        {}
+      );
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(
+          result.errors.some(
+            (e) => e.code === "slug_invalid" || e.code === "slug_length"
+          )
+        ).toBe(true);
+      }
+    });
   });
 
   describe("slug rejection (length)", () => {

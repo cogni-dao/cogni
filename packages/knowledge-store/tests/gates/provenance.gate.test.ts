@@ -20,7 +20,7 @@ function base(
   overrides: Partial<KnowledgeWriteCandidate> = {}
 ): KnowledgeWriteCandidate {
   return {
-    id: "fed-rate-cut-base-rate",
+    id: "fed-rate-base-rate",
     domain: "prediction-market",
     title: "Fed rate cut base rate is 35% in election years",
     content: "Historical frequency since 1980 averages 35% per quarter.",
