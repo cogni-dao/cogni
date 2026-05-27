@@ -4,14 +4,16 @@
 -- throws, statements 12–14 (CREATE INDEX + DROP COLUMN ×2) never run. The DB
 -- ends up with new + old columns side-by-side and no commit_hash index.
 --
--- This migration carries the same final shape as 0003_snapshot.json on
--- already-fully-applied envs (fully idempotent via IF EXISTS / IF NOT EXISTS).
+-- Same final shape as 0003_snapshot.json. Idempotent on fully-applied envs:
+-- CREATE INDEX IF NOT EXISTS is Doltgres-supported; DROP COLUMN is not (Doltgres
+-- 0.56 rejects `DROP COLUMN IF EXISTS`), so idempotency for the drops is pushed
+-- into scripts/db/migrate-doltgres.mjs via the isHarmlessDropMiss tolerance.
 -- Backfill of knowledge_contribution_commits is intentionally NOT re-attempted
 -- here — the SELECT would reference commit_hash which may already be dropped.
 -- Operational backfill via psql is the path for any env that needs it.
 
 CREATE INDEX IF NOT EXISTS "idx_kcc_commit_hash" ON "knowledge_contribution_commits" USING btree ("commit_hash");
 --> statement-breakpoint
-ALTER TABLE "knowledge_contributions" DROP COLUMN IF EXISTS "entry_count";
+ALTER TABLE "knowledge_contributions" DROP COLUMN "entry_count";
 --> statement-breakpoint
-ALTER TABLE "knowledge_contributions" DROP COLUMN IF EXISTS "commit_hash";
+ALTER TABLE "knowledge_contributions" DROP COLUMN "commit_hash";
