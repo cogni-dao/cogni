@@ -21,6 +21,7 @@ const MANIFEST = ".cogni/sync-manifest.yaml";
 const REGEX_META = new Set([
   ".",
   "+",
+  "?",
   "^",
   "$",
   "{",
@@ -34,8 +35,10 @@ const REGEX_META = new Set([
 ]);
 
 const globToRegex = (glob) => {
-  // Single-pass walk so ** and * are translated without a sentinel
-  // (biome lint/suspicious/noControlCharactersInRegex bans \x00 sentinels).
+  // Minimal glob matcher: handles ** and * only. All other regex metachars
+  // are escaped (including ?) so unsupported glob extensions degrade to
+  // literal matching rather than silently changing semantics. Single-pass
+  // walk avoids the \x00 sentinel pattern banned by biome.
   let out = "";
   for (let i = 0; i < glob.length; i++) {
     const c = glob[i];
@@ -58,11 +61,24 @@ const globToRegex = (glob) => {
 const matchesAnyScope = (path, scopeGlobs) =>
   scopeGlobs.some((g) => globToRegex(g).test(path));
 
+const fail = (msg) => {
+  console.error(`\n✗ ${MANIFEST}: ${msg}`);
+  process.exit(1);
+};
+
 const main = () => {
   const text = readFileSync(MANIFEST, "utf8");
   const manifest = parseYaml(text);
+  if (!Array.isArray(manifest?.artifacts) || manifest.artifacts.length === 0) {
+    fail(
+      "missing or empty `artifacts:` — structural validation (check-jsonschema) should catch this first"
+    );
+  }
+  if (!Array.isArray(manifest.scope)) {
+    fail("missing `scope:` array");
+  }
   const declaredRepos = new Set(manifest.artifacts.map((a) => a.repo));
-  const scope = manifest.scope ?? [];
+  const scope = manifest.scope;
   const errors = [];
 
   for (const [i, d] of (manifest.divergences ?? []).entries()) {
