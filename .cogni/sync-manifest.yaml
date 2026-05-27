@@ -1,0 +1,57 @@
+# spec.repo-sync-contract — SSOT for operator-scope paths across the hub + artifacts.
+# Validated by .cogni/sync-manifest.schema.json (check-jsonschema, pr-build.yml)
+# and scripts/validate-sync-manifest-refs.mjs (cross-reference checks).
+# Drift across repos is surfaced by the project-S2 drift detector.
+
+schema: 1
+hub: Cogni-DAO/cogni
+
+artifacts:
+  - repo: Cogni-DAO/node-template
+    path_map: {} # 1:1 path mapping
+  - repo: Cogni-DAO/cogni-poly
+    path_map: {} # 1:1 path mapping (fork-owned nodes/poly/ is out of scope; see invariant 7)
+
+# Paths that are operator-scope.
+# Globs are intentionally enumerated, not blanket — adding a path is a
+# deliberate manifest PR. Subdirs under infra/k8s/base/ are listed
+# explicitly so that a new base/<thing>/ added by mistake does not
+# silently enter the contract.
+scope:
+  - ".cogni/sync-manifest.yaml" # the manifest propagates itself
+  - ".cogni/sync-manifest.schema.json" # and its contract
+  - "scripts/ci/**"
+  - "scripts/setup/**"
+  - "scripts/validate-sync-manifest-refs.mjs"
+  - "infra/k8s/base/node-app/**"
+  - "infra/k8s/base/scheduler-worker/**"
+  - "infra/k8s/argocd/**"
+  - "infra/k8s/secrets/external-secrets/**"
+  - "infra/compose/edge/**"
+  - "infra/catalog/_schema.json"
+  - "infra/catalog/*.yaml"
+  - ".github/workflows/**"
+  - "docs/spec/ci-cd.md"
+  - "docs/spec/secrets-management.md"
+  - "docs/spec/repo-sync-contract.md"
+  - "nodes/node-template/**" # template node body; mirrors hub → node-template-artifact
+
+# Paths within scope where divergence is intentional.
+# The drift detector ignores these. Adding an entry requires
+# a hub PR with the reason field populated.
+divergences:
+  - path: "infra/catalog/operator.yaml"
+    repos: [Cogni-DAO/node-template, Cogni-DAO/cogni-poly]
+    reason: "Artifacts do not ship the operator node."
+  - path: "infra/catalog/resy.yaml"
+    repos: [Cogni-DAO/node-template, Cogni-DAO/cogni-poly]
+    reason: "Hub-only node; not part of artifact fixtures."
+  - path: "infra/catalog/scheduler-worker.yaml"
+    repos: [Cogni-DAO/node-template, Cogni-DAO/cogni-poly]
+    reason: "Hub-only node-shaped service; not part of artifact fixtures."
+  - path: "nodes/node-template/**"
+    repos: [Cogni-DAO/cogni-poly]
+    reason: "cogni-poly is a per-node fork; it does not mirror the template node."
+  - path: ".github/workflows/release.yml"
+    repos: [Cogni-DAO/node-template]
+    reason: "node-template has no production environment; release workflow is hub-only."

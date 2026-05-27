@@ -104,10 +104,14 @@ Define the contract that:
 
 ## Operator-Scope Manifest
 
-Location: `.cogni/sync-manifest.yaml` at repo root.
+**Location:** `.cogni/sync-manifest.yaml` at repo root.
+**Contract:** `.cogni/sync-manifest.schema.json` (JSON Schema 2020-12, enforced in CI via `check-jsonschema`).
+**Cross-reference checks:** `scripts/validate-sync-manifest-refs.mjs` (wired into `pnpm check:docs`).
+
+The YAML below is **illustrative** — the live manifest is the authoritative instance. The schema is the durable contract; if the two drift the schema wins.
 
 ```yaml
-# .cogni/sync-manifest.yaml
+# .cogni/sync-manifest.yaml (illustrative — see live file)
 schema: 1
 hub: Cogni-DAO/cogni
 artifacts:

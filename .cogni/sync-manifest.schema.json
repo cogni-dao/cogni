@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Cogni-DAO/cogni/.cogni/sync-manifest.schema.json",
+  "title": "Cogni multi-repo sync manifest",
+  "description": "spec.repo-sync-contract — declares operator-scope paths and intentional divergences across the hub + artifact repos. Mirrors the CATALOG_IS_SSOT pattern (infra/catalog/_schema.json). See docs/spec/repo-sync-contract.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "hub", "artifacts", "scope", "divergences"],
+  "properties": {
+    "schema": {
+      "const": 1,
+      "description": "Manifest schema version. Bumps require lock-step PRs across all repos per MANIFEST_BOOTSTRAP."
+    },
+    "hub": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$",
+      "description": "GitHub owner/repo of the canonical hub. Per HUB_IS_COGNI_MONOREPO this is Cogni-DAO/cogni."
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["repo", "path_map"],
+        "properties": {
+          "repo": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$"
+          },
+          "path_map": {
+            "type": "object",
+            "additionalProperties": { "type": "string" },
+            "description": "Optional hub-path → artifact-path overrides. Empty object means 1:1."
+          }
+        }
+      }
+    },
+    "scope": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 },
+      "description": "Glob patterns for operator-scope paths. Enumerated, not blanket — adding a path is a deliberate hub PR per MANIFEST_IS_SSOT."
+    },
+    "divergences": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "repos", "reason"],
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Path or glob within scope[] where divergence is intentional. Cross-ref validated by scripts/validate-sync-manifest-refs.mjs."
+          },
+          "repos": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$"
+            }
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Human-readable justification per DECLARED_DIVERGENCE."
+          }
+        }
+      }
+    }
+  }
+}
