@@ -48,6 +48,30 @@ function isAlreadyExists(err) {
   );
 }
 
+// Idempotency for DROP statements: if a forward migration drops something
+// that's already gone (replayed after a partial apply, or applied twice),
+// Doltgres 0.56 emits "not found" / "does not exist". Doltgres also rejects
+// `DROP COLUMN IF EXISTS` (bug.5074) so we can't push idempotency into the
+// SQL. Tolerate the miss only when the failing statement is itself a DROP —
+// every other "not found" stays a hard error.
+function isHarmlessDropMiss(stmt, err) {
+  const upper = stmt.toUpperCase().replace(/\s+/g, " ").trim();
+  const isDrop =
+    /^ALTER TABLE [^ ]+ DROP COLUMN\b/.test(upper) ||
+    /^DROP (?:TABLE|INDEX|SCHEMA|CONSTRAINT)\b/.test(upper) ||
+    /^ALTER TABLE [^ ]+ DROP CONSTRAINT\b/.test(upper);
+  if (!isDrop) return false;
+  const msg = err instanceof Error ? err.message : String(err);
+  const cause = err?.cause instanceof Error ? err.cause.message : "";
+  // Doltgres 0.56+ phrases the miss several ways. Empirical: `DROP COLUMN`
+  // on an absent column emits `table "..." does not have column "..."`;
+  // `DROP INDEX` on a missing index emits `index "..." not found`; standard
+  // Postgres `does not exist` covers DROP TABLE / DROP SCHEMA.
+  return /(?:does not (?:exist|have column)|not found|no such column|unknown column)/i.test(
+    `${msg} ${cause}`
+  );
+}
+
 /**
  * Apply pending migrations via simple-protocol sql.unsafe — the Doltgres-safe
  * equivalent of `drizzle-orm/postgres-js/migrator`'s `migrate()`. Same journal
@@ -79,10 +103,13 @@ async function applyPending(sql, folder) {
       try {
         await sql.unsafe(trimmed);
       } catch (err) {
-        if (!isAlreadyExists(err)) throw err;
-        // Idempotent recovery: a prior partial run committed this DDL but
-        // failed to record it. Continue; the migration is effectively in
-        // place. Final shape check happens in verifyDoltgresSchema.
+        // Idempotent recovery for CREATE collisions and DROP misses. A prior
+        // partial run committed the DDL but failed to record it; replay must
+        // not fail loud here. Anything outside these two shapes is real
+        // drift and re-thrown. Verifier is the final source of truth.
+        if (isAlreadyExists(err)) continue;
+        if (isHarmlessDropMiss(trimmed, err)) continue;
+        throw err;
       }
     }
     await sql.unsafe(
