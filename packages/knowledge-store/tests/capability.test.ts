@@ -110,7 +110,7 @@ describe("createKnowledgeCapability — write path with v0 gates", () => {
     expect(calls.upsert).toHaveLength(1);
     expect(calls.upsert[0]?.id).toBe("fed-rate-base-rate");
     expect(calls.commits).toHaveLength(1);
-    expect(calls.commits[0]).toContain("fed-rate base rate");
+    expect(calls.commits[0]).toContain("Fed rate base rate");
   });
 
   it("honors the opt-out via empty gate set (test-mode escape hatch)", async () => {
