@@ -529,6 +529,49 @@ const SECRETS: Secret[] = [
     steps: ["OAuth 2.0 Client IDs", "Your client", "Copy Client secret"],
   },
 
+  // ── Optional: OAuth (DoltHub) ──────────────────────────────────────────
+  // Used by the prod-side knowledge push job (one-way: prod -> DoltHub remote).
+  // For app-level push jobs prefer DOLTHUB_API_TOKEN (PAT) below; the OAuth
+  // pair is reserved for per-user identity flows (librarian / x402, v1).
+  {
+    name: "DOLTHUB_OAUTH_CLIENT_ID",
+    required: false,
+    category: "OAuth (DoltHub)",
+    source: "human",
+    description: "DoltHub OAuth App client ID (per-user identity, v1)",
+    url: "https://www.dolthub.com/settings/oauth",
+    steps: [
+      "Sign in to DoltHub",
+      "Settings -> OAuth Applications -> New",
+      "Copy Client ID",
+      "Note: production use requires DoltHub-side approval; dev works immediately",
+    ],
+  },
+  {
+    name: "DOLTHUB_OAUTH_CLIENT_SECRET",
+    required: false,
+    category: "OAuth (DoltHub)",
+    source: "human",
+    description: "DoltHub OAuth App client secret (per-user identity, v1)",
+    url: "https://www.dolthub.com/settings/oauth",
+    steps: ["Same OAuth App", "Generate or copy Client Secret"],
+  },
+  {
+    name: "DOLTHUB_API_TOKEN",
+    required: false,
+    category: "OAuth (DoltHub)",
+    source: "human",
+    description:
+      "DoltHub Personal Access Token for app-level knowledge push job",
+    url: "https://www.dolthub.com/settings/tokens",
+    steps: [
+      "Sign in to DoltHub",
+      "Settings -> API Tokens -> Create",
+      "Scope: write to knowledge-<node> repos owned by the org",
+      "Used by the prod push job (one-way mirror); no user OAuth required",
+    ],
+  },
+
   // ── Optional: Discord Bot ──────────────────────────────────────────────
   {
     name: "DISCORD_BOT_TOKEN",

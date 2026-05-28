@@ -50,7 +50,8 @@ To get the variable from GitHub secrets/vars into the deployed runtime:
 
 - [ ] **`.github/workflows/candidate-flight-infra.yml`**: Map the secret/var into the workflow `env` block for candidate-a infra deploys.
 - [ ] **`.github/workflows/promote-and-deploy.yml`**: Map the secret/var into the `deploy-infra` job `env` block for preview/production deploys.
-- [ ] **GitHub UI**: Ensure the value is actually created in the right GitHub Environment Secrets or Variables scope (`candidate-a`, `preview`, `production`, or repo-level as appropriate).
+- [ ] **`scripts/setup-secrets.ts`**: Add the secret to the `SECRETS` catalog with category + steps + (if agent-generated) a `generate` fn. This is how operators provision GH Environment Secrets — without it the secret silently goes missing on fresh setup. Run `pnpm setup:secrets --only <NAME>` to actually push it.
+- [ ] **GitHub UI** (or `pnpm setup:secrets`): Ensure the value is actually created in the right GitHub Environment Secrets or Variables scope (`candidate-a`, `preview`, `production`, or repo-level as appropriate).
 
 ### B. Deployment Script (`deploy-infra.sh`) — 3 places!
 
