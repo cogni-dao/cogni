@@ -8,9 +8,21 @@ The webapp pushes the canonical knowledge branch to DoltHub after every successf
 
 The end state: the webapp owns 100% of runtime push/pull. This bootstrap is the only manual step, and the agent picking up task.5069 is the one who runs it. Derek doesn't do it.
 
+## What's automated vs. manual (truth, after the 2026-05-28 spike)
+
+| Step | Status | How |
+|---|---|---|
+| Create the DoltHub repo | 🟢 fully automated | `POST /api/v1alpha1/database` with PAT — see Step 1 |
+| Generate Dolt keypair | 🟢 automated | `dolt creds new` on any host with the CLI |
+| Set GitHub Environment Secrets | 🟢 automated | `pnpm setup:secrets --only DOLTHUB_REMOTE_URL,DOLT_CREDS_JWK,DOLT_CREDS_KEYID` |
+| **Register pubkey with DoltHub account** | **🔴 UI-only** | Paste at https://www.dolthub.com/settings/credentials — DoltHub does not expose a REST endpoint for credential registration (verified across `POST /credentials`, `/user/credentials`, `/keys`, `/user/keys`, `/creds`, `/user/creds`, GraphQL, all 404 or 400-only-GET). This is the only remaining manual step. |
+
+`dolt creds check` against an unregistered key confirms the gating mechanism: `rpc error: code = Unauthenticated desc = jwt_token validation failed: key not found`. The keypair exists locally and in the doltgres container; DoltHub's auth subsystem doesn't recognize it until the pubkey is registered.
+
 ## Spike findings underlying this design
 
 - DoltHub docs (`/docs/products/dolthub/api/authentication`): API tokens authenticate the **REST/SQL HTTP API only** ("over Basic Authentication").
+- DoltHub docs (`/docs/products/dolthub/api/database`): `POST /api/v1alpha1/database` accepts PAT and creates a repo — earlier handoff was wrong about "no REST endpoint for repo creation." The endpoint exists, takes `{ownerName, repoName, description, visibility}`, returns `{status:"Success",...}`.
 - Dolt docs (`/docs/cli-reference/cli`): `dolt creds` "Create a new public/private keypair for authenticating with doltremoteapi." Pubkey is registered in DoltHub settings; privkey signs the push handshake.
 - DoltHub's GRPC remote (`doltremoteapi.dolthub.com`) returns the same `PermissionDenied` for "no such repo" AND "wrong auth" — so spike attempts against nonexistent repos cannot distinguish. Full e2e validation requires both the repo and the cred to exist.
 
@@ -20,15 +32,39 @@ The end state: the webapp owns 100% of runtime push/pull. This bootstrap is the 
 - A DoltHub account that owns the `cogni-dao` organization (or has admin rights).
 - `gh` CLI authenticated and able to write GitHub Environment Secrets in `Cogni-DAO/cogni`.
 
-## Step 1 — Create the DoltHub repo (per node hub)
+## Step 1 — Create the DoltHub repo (per node hub) — AUTOMATABLE via REST
+
+DoltHub exposes `POST /api/v1alpha1/database` with PAT auth (confirmed 2026-05-28). Repo creation does NOT require the UI.
 
 For the operator node specifically:
 
-1. https://www.dolthub.com/repositories/new
-2. Owner: `cogni-dao`, name: `knowledge-operator`, **public**, empty.
-3. Repeat for every node hub you intend to mirror (`knowledge-poly`, `knowledge-resy`, ...). v0 only mirrors operator.
+```bash
+# DOLTHUB_API_TOKEN must be exported (it lives in .env.operator locally and
+# in GitHub Environment Secrets for the deployed envs).
+curl -sS -X POST \
+  -H "authorization: token $DOLTHUB_API_TOKEN" \
+  -H "content-type: application/json" \
+  -d '{
+    "ownerName": "cogni-dao",
+    "repoName": "knowledge-operator",
+    "description": "Cogni operator knowledge mirror",
+    "visibility": "public"
+  }' \
+  "https://www.dolthub.com/api/v1alpha1/database"
 
-DoltHub does not auto-create on first push, and there is no REST endpoint for repo creation — this is a UI step.
+# Expected: {"status":"Success","repository_owner":"cogni-dao","repository_name":"knowledge-operator",...}
+# Idempotency: re-running returns "Error: database already exists" — safe to ignore.
+```
+
+Repeat with different `repoName`s for each node hub (`knowledge-poly`, `knowledge-resy`, ...). v0 only mirrors operator.
+
+Verification:
+
+```bash
+curl -sS -H "authorization: token $DOLTHUB_API_TOKEN" \
+  "https://www.dolthub.com/api/v1alpha1/cogni-dao/knowledge-operator/main?q=SELECT+1"
+# Expect: {"query_execution_status":"Success",...} (or a structured Dolt schema response)
+```
 
 ## Step 2 — Generate the Dolt cred
 
@@ -129,4 +165,13 @@ When `DOLTHUB_REMOTE_URL` is unset, the push job is silently disabled — `pushM
 
 ## Why this can't be 100% automated yet
 
-The pubkey registration step (Step 3) is a manual UI paste. DoltHub does not expose a REST endpoint to add a credential to an account. Until they do, the bootstrap is a one-time human action — but that human can be any agent picking up task.5069, not Derek specifically.
+**Only the pubkey registration step (Step 3) is a manual UI paste.** Everything else — repo creation, keypair generation, secret provisioning — can be scripted with the PAT alone. DoltHub does not expose a REST endpoint to add a credential to an account; we verified across `POST /credentials`, `/user/credentials`, `/keys`, `/user/keys`, `/creds`, `/user/creds`, both `www.dolthub.com` and `dolthubapi.dolthub.com`, plus GraphQL — all 404 or 400-only-GET. Until DoltHub ships this, the bootstrap is a single 30-second UI action.
+
+**The 30-second walkthrough** (for the human running this):
+
+1. Open https://www.dolthub.com/settings/credentials (sign in with the `cogni` DoltHub account if not already)
+2. Paste the pubkey printed by `dolt creds new` (or extracted from `.context/dolthub-bootstrap/pubkey.txt` if the agent staged it for you)
+3. Click "Save"
+4. Tell the agent it's done. Next merge fires `dolthub_push_ok` in Loki.
+
+The human can be any agent maintainer (not Derek specifically). The pubkey is a per-environment service identity, not anyone's personal cred.
