@@ -65,6 +65,7 @@ services:
       - DISCORD_OAUTH_CLIENT_SECRET
       - GOOGLE_OAUTH_CLIENT_ID
       - GOOGLE_OAUTH_CLIENT_SECRET
+      - DOLTHUB_REMOTE_URL
       - DOLTHUB_API_TOKEN
       - DOLTHUB_OAUTH_CLIENT_ID
       - DOLTHUB_OAUTH_CLIENT_SECRET
@@ -309,10 +310,16 @@ services:
       - cogni-edge
     environment:
       DOLTGRES_PASSWORD: ${DOLTGRES_PASSWORD:-doltgres}
+      # DoltHub mirror creds — see docs/runbooks/dolthub-remote-bootstrap.md.
+      # Optional; unset = local-only, dolt_push disabled.
+      DOLT_CREDS_JWK: ${DOLT_CREDS_JWK:-}
+      DOLT_CREDS_KEYID: ${DOLT_CREDS_KEYID:-}
+    entrypoint: ["/usr/local/bin/install-creds.sh"]
     ports:
       - "5435:5432"
     volumes:
       - doltgres_data:/var/lib/doltgres
+      - ./doltgres-init/install-creds.sh:/usr/local/bin/install-creds.sh:ro
     healthcheck:
       test:
         [

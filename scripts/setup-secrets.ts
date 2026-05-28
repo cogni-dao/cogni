@@ -529,6 +529,52 @@ const SECRETS: Secret[] = [
     steps: ["OAuth 2.0 Client IDs", "Your client", "Copy Client secret"],
   },
 
+  // ── Optional: DoltHub mirror (push job) ────────────────────────────────
+  // v0 mirror writes the canonical knowledge DB main branch to DoltHub after
+  // every successful contribution merge. Auth uses Dolt creds (keypair) —
+  // the PAT cannot sign the push protocol. See
+  // docs/runbooks/dolthub-remote-bootstrap.md for the one-time bootstrap.
+  {
+    name: "DOLTHUB_REMOTE_URL",
+    required: false,
+    category: "DoltHub Mirror",
+    source: "human",
+    description:
+      "DoltHub remote URL — gates the push job; unset disables mirror",
+    steps: [
+      'Convention: "https://doltremoteapi.dolthub.com/cogni-dao/knowledge-operator"',
+      "Repo must exist on DoltHub first (create empty at https://www.dolthub.com/repositories/new)",
+      "Leave unset on dev/test if you don't want pushes",
+    ],
+  },
+  {
+    name: "DOLT_CREDS_JWK",
+    required: false,
+    category: "DoltHub Mirror",
+    source: "human",
+    description: "Dolt cred private key (JWK file contents) for push auth",
+    steps: [
+      "On a bootstrap host with the `dolt` CLI: `dolt creds new`",
+      "Outputs a keyid + creates ~/.dolt/creds/<keyid>.jwk",
+      "Paste full file contents (a single-line JSON) as the secret value",
+      "Pubkey must be registered at https://www.dolthub.com/settings/credentials",
+      "Same JWK is shared across envs for v0 (one service identity)",
+      "See docs/runbooks/dolthub-remote-bootstrap.md for the full ceremony",
+    ],
+  },
+  {
+    name: "DOLT_CREDS_KEYID",
+    required: false,
+    category: "DoltHub Mirror",
+    source: "human",
+    description:
+      "Dolt cred keyid — matches the .jwk filename DOLT_CREDS_JWK was sourced from",
+    steps: [
+      "Same `dolt creds new` output — the keyid printed above the file path",
+      "Used as the filename when the doltgres entrypoint writes the JWK",
+    ],
+  },
+
   // ── Optional: OAuth (DoltHub) ──────────────────────────────────────────
   // Used by the prod-side knowledge push job (one-way: prod -> DoltHub remote).
   // For app-level push jobs prefer DOLTHUB_API_TOKEN (PAT) below; the OAuth

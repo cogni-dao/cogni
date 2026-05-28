@@ -388,3 +388,8 @@ export {
   DoltgresKnowledgeContributionAdapter,
   type DoltgresKnowledgeContributionAdapterConfig,
 } from "./contribution-adapter.js";
+export {
+  createDoltgresPusher,
+  type DoltgresPushConfig,
+  type DoltgresPusher,
+} from "./dolt-remote.js";

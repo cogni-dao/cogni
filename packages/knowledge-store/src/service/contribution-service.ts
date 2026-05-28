@@ -66,6 +66,14 @@ export interface ContributionServiceDeps {
    * @default V0_CONTRIBUTION_EDIT_GATES (shape gate only)
    */
   gates?: readonly KnowledgeGate[];
+  /**
+   * Optional fire-and-forget hook invoked after a successful merge. Used by
+   * the operator container to mirror the canonical knowledge branch to a
+   * Dolt remote (typically DoltHub). The caller MUST own its own error
+   * handling — this service deliberately does not await and does not catch.
+   * Per task.5069 + docs/runbooks/dolthub-remote-bootstrap.md.
+   */
+  pushMainOnMerge?: () => Promise<void>;
 }
 
 export interface ContributionService {
@@ -224,7 +232,17 @@ export function createContributionService(
       if (!deps.canMergeKnowledge(principal)) {
         throw new ContributionForbiddenError("merge requires admin session");
       }
-      return deps.port.merge({ contributionId, principal, confidencePct });
+      const result = await deps.port.merge({
+        contributionId,
+        principal,
+        confidencePct,
+      });
+      // Best-effort mirror. Caller wraps with its own .catch — service stays
+      // framework-agnostic and never blocks the merge response on the push.
+      if (deps.pushMainOnMerge) {
+        void deps.pushMainOnMerge();
+      }
+      return result;
     },
 
     async close({ principal, contributionId, reason }) {
