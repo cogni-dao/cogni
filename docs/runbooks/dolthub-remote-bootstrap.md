@@ -10,12 +10,12 @@ The end state: the webapp owns 100% of runtime push/pull. This bootstrap is the 
 
 ## What's automated vs. manual (truth, after the 2026-05-28 spike)
 
-| Step | Status | How |
-|---|---|---|
-| Create the DoltHub repo | 🟢 fully automated | `POST /api/v1alpha1/database` with PAT — see Step 1 |
-| Generate Dolt keypair | 🟢 automated | `dolt creds new` on any host with the CLI |
-| Set GitHub Environment Secrets | 🟢 automated | `pnpm setup:secrets --only DOLTHUB_REMOTE_URL,DOLT_CREDS_JWK,DOLT_CREDS_KEYID` |
-| **Register pubkey with DoltHub account** | **🔴 UI-only** | Paste at https://www.dolthub.com/settings/credentials — DoltHub does not expose a REST endpoint for credential registration (verified across `POST /credentials`, `/user/credentials`, `/keys`, `/user/keys`, `/creds`, `/user/creds`, GraphQL, all 404 or 400-only-GET). This is the only remaining manual step. |
+| Step                                     | Status             | How                                                                                                                                                                                                                                                                                                               |
+| ---------------------------------------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Create the DoltHub repo                  | 🟢 fully automated | `POST /api/v1alpha1/database` with PAT — see Step 1                                                                                                                                                                                                                                                               |
+| Generate Dolt keypair                    | 🟢 automated       | `dolt creds new` on any host with the CLI                                                                                                                                                                                                                                                                         |
+| Set GitHub Environment Secrets           | 🟢 automated       | `pnpm setup:secrets --only DOLTHUB_REMOTE_URL,DOLT_CREDS_JWK,DOLT_CREDS_KEYID`                                                                                                                                                                                                                                    |
+| **Register pubkey with DoltHub account** | **🔴 UI-only**     | Paste at https://www.dolthub.com/settings/credentials — DoltHub does not expose a REST endpoint for credential registration (verified across `POST /credentials`, `/user/credentials`, `/keys`, `/user/keys`, `/creds`, `/user/creds`, GraphQL, all 404 or 400-only-GET). This is the only remaining manual step. |
 
 `dolt creds check` against an unregistered key confirms the gating mechanism: `rpc error: code = Unauthenticated desc = jwt_token validation failed: key not found`. The keypair exists locally and in the doltgres container; DoltHub's auth subsystem doesn't recognize it until the pubkey is registered.
 
