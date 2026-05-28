@@ -296,7 +296,8 @@ services:
   # =============================================================================
 
   doltgres:
-    image: dolthub/doltgresql:latest
+    # Pinned — see infra/compose/runtime/docker-compose.yml (bug.5076).
+    image: dolthub/doltgresql:0.56.3
     container_name: doltgres
     restart: unless-stopped
     labels:

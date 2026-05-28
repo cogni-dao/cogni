@@ -326,7 +326,12 @@ services:
   # =============================================================================
 
   doltgres:
-    image: dolthub/doltgresql:latest
+    # Pin deliberately. `:latest` is unsafe for any stateful service: a silent
+    # tag roll on the next deploy can render the persistent volume unreadable
+    # by the new binary (bug.5076 — the 0.56.2 → 0.56.3 roll changed the
+    # auth-file serialization layout, breaking every infra flight on 2026-05-26).
+    # Bump this tag deliberately, never floatingly.
+    image: dolthub/doltgresql:0.56.3
     restart: unless-stopped
     labels:
       - "autoheal=true"
