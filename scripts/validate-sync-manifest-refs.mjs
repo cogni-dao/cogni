@@ -4,9 +4,9 @@
 
 /**
  * Module: `@scripts/validate-sync-manifest-refs`
- * Purpose: Cross-reference validation for .cogni/sync-manifest.yaml — every divergences[].path matches some scope[] glob and every divergences[].repos[] is a declared artifact.
- * Scope: Cross-array references in the manifest; does NOT validate structure or types — those are delegated to check-jsonschema against .cogni/sync-manifest.schema.json (run in ci.yaml's static job).
- * Invariants: spec.repo-sync-contract DECLARED_DIVERGENCE — undeclared paths cannot be marked as divergences.
+ * Purpose: Cross-reference validation for .cogni/sync-manifest.yaml — every divergences[].artifact MUST be declared in artifacts[].
+ * Scope: Cross-array references in the manifest; does NOT validate structure or types — those are delegated to check-jsonschema against .cogni/sync-manifest.schema.json (run in ci.yaml's unit job).
+ * Invariants: spec.repo-sync-contract DECLARED_DIVERGENCE — every divergence entry must point at a declared artifact.
  * Side-effects: IO
  * Notes: Exits with non-zero code on validation failure.
  * Links: docs/spec/repo-sync-contract.md, .cogni/sync-manifest.schema.json, .github/workflows/ci.yaml
@@ -17,49 +17,6 @@ import { readFileSync } from "node:fs";
 import { parse as parseYaml } from "yaml";
 
 const MANIFEST = ".cogni/sync-manifest.yaml";
-
-const REGEX_META = new Set([
-  ".",
-  "+",
-  "?",
-  "^",
-  "$",
-  "{",
-  "}",
-  "(",
-  ")",
-  "|",
-  "[",
-  "]",
-  "\\",
-]);
-
-const globToRegex = (glob) => {
-  // Minimal glob matcher: handles ** and * only. All other regex metachars
-  // are escaped (including ?) so unsupported glob extensions degrade to
-  // literal matching rather than silently changing semantics. Single-pass
-  // walk avoids the \x00 sentinel pattern banned by biome.
-  let out = "";
-  for (let i = 0; i < glob.length; i++) {
-    const c = glob[i];
-    if (c === "*") {
-      if (glob[i + 1] === "*") {
-        out += ".*";
-        i++;
-      } else {
-        out += "[^/]*";
-      }
-    } else if (REGEX_META.has(c)) {
-      out += `\\${c}`;
-    } else {
-      out += c;
-    }
-  }
-  return new RegExp(`^${out}$`);
-};
-
-const matchesAnyScope = (path, scopeGlobs) =>
-  scopeGlobs.some((g) => globToRegex(g).test(path));
 
 const fail = (msg) => {
   console.error(`\n✗ ${MANIFEST}: ${msg}`);
@@ -74,25 +31,34 @@ const main = () => {
       "missing or empty `artifacts:` — structural validation (check-jsonschema in ci.yaml) should catch this first"
     );
   }
-  if (!Array.isArray(manifest.scope)) {
-    fail("missing `scope:` array");
+  if (!Array.isArray(manifest.divergences)) {
+    fail("missing `divergences:` array");
   }
-  const declaredRepos = new Set(manifest.artifacts.map((a) => a.repo));
-  const scope = manifest.scope;
-  const errors = [];
 
-  for (const [i, d] of (manifest.divergences ?? []).entries()) {
-    if (!matchesAnyScope(d.path, scope)) {
+  const declaredArtifacts = new Set(manifest.artifacts.map((a) => a.repo));
+  const errors = [];
+  const seen = new Set();
+
+  for (const [i, d] of manifest.divergences.entries()) {
+    if (!declaredArtifacts.has(d.artifact)) {
       errors.push(
-        `divergences[${i}].path "${d.path}" does not match any scope[] glob — declare it in scope or remove from divergences`
+        `divergences[${i}].artifact "${d.artifact}" is not declared in artifacts[]`
       );
     }
-    for (const repo of d.repos) {
-      if (!declaredRepos.has(repo)) {
-        errors.push(
-          `divergences[${i}].repos contains "${repo}" which is not declared in artifacts[]`
-        );
-      }
+    if (seen.has(d.artifact)) {
+      errors.push(
+        `divergences[${i}].artifact "${d.artifact}" appears more than once — merge entries`
+      );
+    }
+    seen.add(d.artifact);
+    const hasOmit =
+      Array.isArray(d.omit_from_artifact) && d.omit_from_artifact.length > 0;
+    const hasOnly =
+      Array.isArray(d.artifact_only) && d.artifact_only.length > 0;
+    if (!hasOmit && !hasOnly) {
+      errors.push(
+        `divergences[${i}] for "${d.artifact}" must list at least one of omit_from_artifact or artifact_only — empty divergence has no meaning`
+      );
     }
   }
 

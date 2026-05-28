@@ -102,90 +102,58 @@ Define the contract that:
 
 ---
 
-## Operator-Scope Manifest
+## Operator-Scope Manifest (inverse form, schema 2)
 
 **Location:** `.cogni/sync-manifest.yaml` at repo root.
 **Contract:** `.cogni/sync-manifest.schema.json` (JSON Schema 2020-12, enforced in CI via `check-jsonschema`).
 **Cross-reference checks:** `scripts/validate-sync-manifest-refs.mjs` (wired into `pnpm check:docs`).
 
-The YAML below is **illustrative** — the live manifest is the authoritative instance. The schema is the durable contract; if the two drift the schema wins.
+**Shape.** Everything under the hub is shared by default. The manifest enumerates only:
 
-```yaml
-# .cogni/sync-manifest.yaml (illustrative — see live file)
-schema: 1
-hub: Cogni-DAO/cogni
-artifacts:
-  - repo: Cogni-DAO/node-template
-    path_map: {} # 1:1 path mapping
-  - repo: Cogni-DAO/cogni-poly
-    path_map: {} # 1:1 path mapping (fork-owned nodes/poly/ is out of scope; see invariant 7)
+1. `exclude[]` — global caches/junk that nothing cares about (`.git/**`, `node_modules/**`, etc.)
+2. `divergences[]` — one entry per artifact with:
+   - `omit_from_artifact[]` — paths the hub has that THIS artifact intentionally lacks
+   - `artifact_only[]` — paths THIS artifact has that the hub intentionally lacks
 
-# Paths that are operator-scope.
-# Globs are intentionally enumerated, not blanket — adding a path is a
-# deliberate manifest PR. Subdirs under infra/k8s/base/ are listed
-# explicitly so that a new base/<thing>/ added by mistake does not
-# silently enter the contract.
-scope:
-  - ".cogni/sync-manifest.yaml" # the manifest propagates itself
-  - "scripts/ci/**"
-  - "scripts/setup/**"
-  - "infra/k8s/base/node-app/**"
-  - "infra/k8s/base/scheduler-worker/**"
-  - "infra/k8s/argocd/**"
-  - "infra/k8s/secrets/external-secrets/**"
-  - "infra/compose/edge/**"
-  - "infra/catalog/_schema.json"
-  - ".github/workflows/**"
-  - "docs/spec/ci-cd.md"
-  - "docs/spec/secrets-management.md"
-  - "docs/spec/repo-sync-contract.md"
-  - "nodes/node-template/**" # the template node body; mirrors hub → node-template-artifact
+Anything not covered by `exclude` or the artifact's divergence MUST mirror 1:1. The detector treats any file outside those lists with a hash mismatch as **drift**.
 
-# Paths within scope where divergence is intentional.
-# The drift detector ignores these. Adding an entry requires
-# a hub PR with the reason field populated.
-divergences:
-  - path: "infra/catalog/operator.yaml"
-    repos: [Cogni-DAO/node-template, Cogni-DAO/cogni-poly]
-    reason: "Artifacts do not ship the operator node."
-  - path: "infra/catalog/resy.yaml"
-    repos: [Cogni-DAO/node-template, Cogni-DAO/cogni-poly]
-    reason: "Hub-only node; not part of artifact fixtures."
-  - path: "nodes/node-template/**"
-    repos: [Cogni-DAO/cogni-poly]
-    reason: "cogni-poly is a per-node fork; it does not mirror the template node."
-  - path: ".github/workflows/release.yml"
-    repos: [Cogni-DAO/node-template]
-    reason: "node-template has no production environment; release workflow is hub-only."
-```
+This is the inverse of the v1 (schema=1) form, which enumerated `scope[]` of included paths. Inversion makes "I added a new operator-scope dir but forgot to update the manifest" an impossible class of bug.
 
-Schema validation, CI enforcement, and the drift-detector workflow are project-owned (S1–S2).
+See the live file for current content. The schema is the durable contract; if doc and live drift, the schema wins.
 
 ---
 
 ## Sync Mechanism
 
-### v1 — Manifest + Drift-Detector Bot
+### v1 — Manifest + Drift-Detector Workflow (ships in this PR)
 
-**Approach.** A scheduled GitHub Actions workflow in the hub (`drift-detector.yml`) runs daily and on hub merges to `main`. For each artifact repo + each in-scope path, it diffs the hub against the artifact, applies the `path_map` + `divergences` rules, and opens (or updates) an auto-PR on the artifact repo with the proposed change. A second workflow on each artifact repo validates that the local manifest matches the hub's.
+**As-built.** `.github/workflows/sync-drift-detector.yml` runs `scripts/ci/detect-sync-drift.mjs` on a daily schedule, on push:main when the manifest or detector itself changes, and on `workflow_dispatch`. The detector clones each declared `public` artifact at HEAD, walks every hub file not covered by `exclude` or the artifact's `omit_from_artifact`, sha256-diffs each, then classifies drift into:
+
+- 🟡 **different** — same path on both, content mismatch.
+- 🔴 **missing-on-artifact** — hub has it, artifact doesn't, divergence does not declare the omission.
+- 🟣 **only-on-artifact** — artifact has it, hub doesn't, divergence does not declare the addition (backflow candidate).
+
+The workflow upserts a tracking issue on the hub labeled `sync-drift` with the markdown report as the body. Issue title carries the count; body uses collapsible `<details>` per drift class. Existing open issue is updated in place (idempotent). Zero drift + no existing issue = no-op.
+
+**Permissions.** `contents: read` + `issues: write` on the hub. No PAT, no GitHub App — the default `GITHUB_TOKEN` is sufficient for v0.1 because:
+
+- Public artifacts (`Cogni-DAO/node-template`) are cloned anonymously.
+- Private artifacts (`Cogni-DAO/cogni-poly`) are skipped with an explicit `⏭️ skipped — visibility=private` line in the report. v0.2 plumbing for a PAT or GitHub App is a separate slice.
+- The detector does NOT open PRs on artifact repos. It only surfaces drift on the hub as an issue. Auto-PR-on-artifact is v0.2.
 
 **OSS-first survey.** Existing tools considered and rejected:
 
-- `repo-file-sync-action`, Renovate regex managers, `copier` — all do hub → artifact file propagation but none model the divergence-class taxonomy (`Pending` vs `Backflow` vs `Unintentional` vs `Intentional`) the contract requires. The detector is bespoke because the contract is bespoke; off-the-shelf tools would still need a custom rules layer of comparable size.
-- `josh-proxy` is the v2 mechanism, not a v1 replacement (see v2 below).
+- `repo-file-sync-action`, Renovate regex managers, `copier` — all do hub → artifact file propagation but none model `omit_from_artifact` + `artifact_only` together (the two-direction divergence the contract requires).
+- `josh-proxy` is the v2 mechanism (see below).
 
-**Why this first.**
+**Acceptance test.** Running the detector against current main produces a non-empty drift list, and at least one entry is `.github/workflows/ci.yaml` differing between hub and node-template (that is the bug.5001 anti-pattern made visible). PR #1355 includes a recorded run as the closeout evidence.
 
-- Doesn't introduce a hosted daemon.
-- The manifest is the load-bearing artifact; it's the prerequisite for v2 (josh) anyway.
-- Surfaces drift as PRs that reviewers can accept, modify, or document as intentional via a manifest edit.
-- Pareto: covers the bug.5001 + PR-backlog class of incident at ~200 LOC of CI.
+### v0.2 / v1.1 — what's deliberately deferred
 
-**Contract the v1 mechanism MUST satisfy.**
-
-- An edit to an in-scope path on hub `main` produces a corresponding auto-PR on each artifact repo within one cycle (≤24h).
-- A divergence with no `divergences:` entry produces a daily-tracked alert.
-- Manifest schema changes propagate as MANIFEST_BOOTSTRAP requires (lock-step PRs across all repos).
+- **Cogni-poly coverage.** Needs a PAT or GitHub App installation to clone the private repo. Separate slice.
+- **Auto-PR on artifact.** Detector currently surfaces drift as a hub issue only. Auto-PR-against-artifact needs write perms on the artifact repos (App install or PAT).
+- **Backflow auto-PR-on-hub.** Same constraint.
+- **Branch-protection enforcement** on artifact-side `needs-hub-lineage`. v1.1.
 
 ### v2 — Josh-Proxy as Shape A Catalog Service
 

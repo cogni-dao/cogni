@@ -1,57 +1,86 @@
-# spec.repo-sync-contract — SSOT for operator-scope paths across the hub + artifacts.
-# Validated by .cogni/sync-manifest.schema.json (check-jsonschema, pr-build.yml)
-# and scripts/validate-sync-manifest-refs.mjs (cross-reference checks).
-# Drift across repos is surfaced by the project-S2 drift detector.
+# spec.repo-sync-contract — SSOT for what is operator-scope across hub + artifacts.
+#
+# Inverse-manifest form: everything is shared by default; this file enumerates
+# (a) global excludes that NO repo cares about, and (b) per-artifact divergences
+# in two flavors — paths the artifact omits, paths the artifact adds.
+#
+# Validated by .cogni/sync-manifest.schema.json (check-jsonschema in ci.yaml)
+# + scripts/validate-sync-manifest-refs.mjs (cross-reference checks).
+# Drift surfaced by scripts/ci/detect-sync-drift.mjs + sync-drift-detector.yml.
 
-schema: 1
+schema: 2
 hub: Cogni-DAO/cogni
-
 artifacts:
   - repo: Cogni-DAO/node-template
-    path_map: {} # 1:1 path mapping
+    visibility: public
   - repo: Cogni-DAO/cogni-poly
-    path_map: {} # 1:1 path mapping (fork-owned nodes/poly/ is out of scope; see invariant 7)
+    visibility: private # detector skips until v0.2 (needs PAT)
 
-# Paths that are operator-scope.
-# Globs are intentionally enumerated, not blanket — adding a path is a
-# deliberate manifest PR. Subdirs under infra/k8s/base/ are listed
-# explicitly so that a new base/<thing>/ added by mistake does not
-# silently enter the contract.
-scope:
-  - ".cogni/sync-manifest.yaml" # the manifest propagates itself
-  - ".cogni/sync-manifest.schema.json" # and its contract
-  - "scripts/ci/**"
-  - "scripts/setup/**"
-  - "scripts/validate-sync-manifest-refs.mjs"
-  - "infra/k8s/base/node-app/**"
-  - "infra/k8s/base/scheduler-worker/**"
-  - "infra/k8s/argocd/**"
-  - "infra/k8s/secrets/external-secrets/**"
-  - "infra/compose/edge/**"
-  - "infra/catalog/_schema.json"
-  - "infra/catalog/*.yaml"
-  - ".github/workflows/**"
-  - "docs/spec/ci-cd.md"
-  - "docs/spec/secrets-management.md"
-  - "docs/spec/repo-sync-contract.md"
-  - "nodes/node-template/**" # template node body; mirrors hub → node-template-artifact
+# Global excludes — never propagated to or from any artifact. Junk / caches /
+# build outputs / git internals. Default-deny-divergence applies BELOW this set.
+exclude:
+  - ".git/**"
+  - "node_modules/**"
+  - ".next/**"
+  - "dist/**"
+  - "build/**"
+  - ".turbo/**"
+  - "coverage/**"
+  - ".playwright/**"
+  - ".local-auth/**"
+  - "**/*.tsbuildinfo"
 
-# Paths within scope where divergence is intentional.
-# The drift detector ignores these. Adding an entry requires
-# a hub PR with the reason field populated.
+# Per-artifact divergences. Two shapes:
+#   omit_from_artifact: paths the hub has that the artifact intentionally lacks.
+#   artifact_only:      paths the artifact has that the hub intentionally lacks.
+# Anything NOT covered by exclude[] or these lists MUST match across hub + artifact.
 divergences:
-  - path: "infra/catalog/operator.yaml"
-    repos: [Cogni-DAO/node-template, Cogni-DAO/cogni-poly]
-    reason: "Artifacts do not ship the operator node."
-  - path: "infra/catalog/resy.yaml"
-    repos: [Cogni-DAO/node-template, Cogni-DAO/cogni-poly]
-    reason: "Hub-only node; not part of artifact fixtures."
-  - path: "infra/catalog/scheduler-worker.yaml"
-    repos: [Cogni-DAO/node-template, Cogni-DAO/cogni-poly]
-    reason: "Hub-only node-shaped service; not part of artifact fixtures."
-  - path: "nodes/node-template/**"
-    repos: [Cogni-DAO/cogni-poly]
-    reason: "cogni-poly is a per-node fork; it does not mirror the template node."
-  - path: ".github/workflows/release.yml"
-    repos: [Cogni-DAO/node-template]
-    reason: "node-template has no production environment; release workflow is hub-only."
+  - artifact: Cogni-DAO/node-template
+    reason: "OSS public quickstart — sovereign-fork story extends operator-scope with OpenBao/ESO; omits hub-only nodes + canary env."
+    omit_from_artifact:
+      - "nodes/operator/**" # hub-only node
+      - "nodes/resy/**" # hub-only node
+      - "nodes/scheduler-worker/**" # hub-only node (if it exists)
+      - "infra/catalog/operator.yaml"
+      - "infra/catalog/resy.yaml"
+      - "infra/catalog/scheduler-worker.yaml"
+      - ".github/workflows/release.yml" # no production env
+      - "infra/k8s/overlays/canary/**" # no canary env
+      - "tests/ci-invariants/**" # hub-only CI structural tests
+      - "scripts/experiments/**" # hub-only research scripts
+    artifact_only:
+      - "infra/fork.yaml"
+      - "infra/k8s/argocd/openbao-application.yaml"
+      - "infra/k8s/argocd/openbao/**"
+      - "infra/k8s/argocd/external-secrets-application.yaml"
+      - "infra/k8s/argocd/external-secrets/**"
+      - "infra/k8s/secrets/external-secrets/**"
+      - "infra/k8s/overlays/_template/node-template/**"
+      - "infra/k8s/overlays/candidate-a/node-template/**"
+      - "infra/k8s/overlays/preview/node-template/**"
+      - "infra/k8s/overlays/production/node-template/**"
+      - "docs/spec/secrets-management.md"
+      - "docs/guides/secrets-add-new.md"
+      - "docs/guides/secrets-rotate.md"
+      - "docs/runbooks/fork-quickstart.md"
+      - "docs/spec/agentic-fork-bootstrap.md"
+      - "infra/catalog/node-template.yaml"
+      - "scripts/secrets/**"
+      - "scripts/dev/worktree-setup.sh"
+      - "scripts/rename-node.sh"
+      - "scripts/setup/bootstrap.sh"
+      - "scripts/bootstrap/install/install-bash.sh"
+      - ".claude/skills/cicd-secrets-expert/**"
+      - ".env.bootstrap.example"
+
+  - artifact: Cogni-DAO/cogni-poly
+    reason: "Private per-node fork; carries the poly node, omits the template node + other hub nodes."
+    omit_from_artifact:
+      - "nodes/operator/**"
+      - "nodes/resy/**"
+      - "nodes/node-template/**"
+      - "infra/catalog/operator.yaml"
+      - "infra/catalog/resy.yaml"
+      - "infra/catalog/scheduler-worker.yaml"
+    artifact_only:
+      - "nodes/poly/**"

@@ -28,32 +28,34 @@ Stop the bug.5001 anti-pattern: same problem solved in two repos with two differ
 
 ```
 S0 spec   ─►  S1 manifest  ─►  S2 detector  ─►  S3 backlog drain  ─►  S4 multi-node  ─►  S5 josh decision
-DONE-ISH        NEXT           PLANNED          PLANNED              PLANNED            CONDITIONAL
+DONE            DONE           DONE            NEXT                 PLANNED            CONDITIONAL
 ```
+
+S0 + S1 + S2 all shipped in [PR #1355](https://github.com/Cogni-DAO/cogni/pull/1355) (task.5068). First detector run against current `origin/main` (recorded in PR #1355) finds **171 drift items** between hub and `Cogni-DAO/node-template`, including the load-bearing bug.5001 anti-pattern (`.github/workflows/ci.yaml` differs).
 
 ## Current Slice
 
-**S1 — `.cogni/sync-manifest.yaml` lands in all three repos with a CI schema validator.** Unblocks S2 (drift detector consumes the manifest) and S4 (CONTRACT_TEST asserts against `scope:`). Until S1 ships in the hub, the contract is documented but not enforceable.
+**S3 — backlog drain.** Use the now-live drift detector report to drive cherry-picks of the 20 cogni-poly `needs-upstream-sync` PRs into the hub. Each merge re-runs the detector workflow; the hub `sync-drift` tracking issue shrinks as drift is resolved. Cogni-poly coverage itself remains v0.2 (needs a PAT for the private clone).
 
 ## Roadmap
 
-| Slice  | Deliverable                                                                                                                                  | Gate                                                                          |
-| ------ | -------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| **S0** | [spec.repo-sync-contract](../../docs/spec/repo-sync-contract.md) + this project                                                              | Spec reviewed by Derek.                                                       |
-| **S1** | `.cogni/sync-manifest.yaml` lands in all three repos. CI validates schema against `docs/spec/repo-sync-contract.md#operator-scope-manifest`. | All three repos have a manifest; no validator errors.                         |
-| **S2** | `.github/workflows/drift-detector.yml` opens auto-PRs on artifact repos. Hub-side runbook (`docs/runbooks/upstream-sync.md`).                | One synthetic edit on the hub produces auto-PRs on both artifacts within 24h. |
-| **S3** | Cherry-pick the 20 cogni-poly `needs-upstream-sync` PRs (see Backlog) into the hub. Cascade via the detector.                                | Drift detector reports clean on a daily run.                                  |
-| **S4** | Catalog-driven Caddyfile.tmpl + `deploy-infra.sh` per-node env-var block. Promote cogni's multi-node patterns up to node-template.           | CONTRACT_TEST in the spec passes against current main.                        |
-| **S5** | Pressure-test josh-proxy after S1–S4 run for 30 days. Decision: ship josh as a Shape A catalog service, or defer indefinitely.               | Documented ROI judgment, not a default.                                       |
+| Slice  | Deliverable                                                                                                                                          | Gate                                                                                   |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| **S0** | [spec.repo-sync-contract](../../docs/spec/repo-sync-contract.md) + this project                                                                      | Spec reviewed by Derek.                                                                |
+| **S1** | `.cogni/sync-manifest.yaml` (inverse form, schema 2) lands in the hub. check-jsonschema + cross-ref validator in ci.yaml.                            | Both validators fail-closed on broken manifest (proven in CI on scratch PR).           |
+| **S2** | `.github/workflows/sync-drift-detector.yml` runs `scripts/ci/detect-sync-drift.mjs` on schedule + push:main; upserts hub issue labeled `sync-drift`. | First run identifies the bug.5001 anti-pattern (ci.yaml differs hub vs node-template). |
+| **S3** | Cherry-pick the 20 cogni-poly `needs-upstream-sync` PRs (see Backlog) into the hub. Cascade via the detector.                                        | Drift detector reports clean on a daily run.                                           |
+| **S4** | Catalog-driven Caddyfile.tmpl + `deploy-infra.sh` per-node env-var block. Promote cogni's multi-node patterns up to node-template.                   | CONTRACT_TEST in the spec passes against current main.                                 |
+| **S5** | Pressure-test josh-proxy after S1–S4 run for 30 days. Decision: ship josh as a Shape A catalog service, or defer indefinitely.                       | Documented ROI judgment, not a default.                                                |
 
 ## Active Blockers
 
-| #   | Issue                                                                                         | Status     | Impact                                           |
-| --- | --------------------------------------------------------------------------------------------- | ---------- | ------------------------------------------------ |
-| 1   | no manifest schema validator yet                                                              | ❌ PLANNED | S1 deliverable                                   |
-| 2   | 20 cogni-poly PRs unsynced (see Backlog)                                                      | ❌ RED     | exhibit A; resolves in S3                        |
-| 3   | byte-identical-stale `scripts/ci/wait-for-in-cluster-services.sh` between hub + node-template | ❌ RED     | concrete divergence; folded into S3 cherry-picks |
-| 4   | Caddyfile.tmpl + `deploy-infra.sh` single-node-hardcoded (bug.5001 lineage)                   | ❌ RED     | S4 fix                                           |
+| #   | Issue                                                                                         | Status  | Impact                                       |
+| --- | --------------------------------------------------------------------------------------------- | ------- | -------------------------------------------- |
+| 1   | 20 cogni-poly PRs unsynced (see Backlog)                                                      | ❌ RED  | exhibit A; resolves in S3                    |
+| 2   | byte-identical-stale `scripts/ci/wait-for-in-cluster-services.sh` between hub + node-template | ❌ RED  | concrete divergence; surfaced by S2 detector |
+| 3   | Caddyfile.tmpl + `deploy-infra.sh` single-node-hardcoded (bug.5001 lineage)                   | ❌ RED  | S4 fix                                       |
+| 4   | cogni-poly visibility=private — detector skips it in v0.1                                     | 🟡 V0.2 | v0.2 plumbing (PAT or GitHub App install)    |
 
 ## Backlog — cogni-poly PRs awaiting upstream sync (2026-05-26)
 
