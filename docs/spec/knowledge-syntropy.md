@@ -635,6 +635,38 @@ CREATE INDEX idx_ks_canonical_read ON knowledge_search (domain, confidence_pct D
 
 `SCHEMA_REFINED_BY_READ_FILTER` is the load-bearing invariant — without the filter in the default librarian path, hypothesis-shaped noise reaches agents that asked for canonical knowledge, and the design fails the spec's syntropy bar in practice even though it satisfies it in shape.
 
+#### Chain Read API
+
+The `mode=chains` opt-in surface needs a single read path that walks the citation DAG anchored at one entry — the EDO loop is only visible when hypothesis, decision, and outcome rows are stitched back together by their `validates` / `derives_from` / `evidence_for` edges. This is `EdoCapability.getChain(rootId, …)` on the package side and the following HTTP route on the operator node:
+
+```
+GET /api/v1/edo/chain/:id?direction=out|in|both&maxDepth=N
+```
+
+| Query param | Type    | Default | Notes                                                          |
+| ----------- | ------- | ------- | -------------------------------------------------------------- |
+| `direction` | enum    | `both`  | `out` = follow citing→cited; `in` = follow cited→citing.       |
+| `maxDepth`  | integer | `5`     | Clamped to `[1, 10]`. Higher values 400 at the route boundary. |
+
+Response shape (mirrors `EdoCapability.getChain` 1:1):
+
+```jsonc
+{
+  "root": KnowledgeEntry,                       // depth-0 row
+  "chain": [
+    { "entry": KnowledgeEntry,
+      "edgeFromParent": null,                   // null only on the root
+      "depth": 0 },
+    { "entry": KnowledgeEntry,
+      "edgeFromParent": { "citationType": "derives_from", "direction": "out" },
+      "depth": 1 },
+    // …
+  ]
+}
+```
+
+Auth mirrors the rest of the EDO surface — bearer (agent) and session (human) both pass `getSessionUser`. The walk is cycle-safe (first-visit-wins, BFS-ordered) and returns a flat list — clients reconstruct depth groups by bucketing on `node.depth`. `DoltgresEdoResolverAdapter.walkChain` issues one `WITH RECURSIVE` query (no N+1); `FakeEdoResolverAdapter` mirrors with an in-memory BFS for tests.
+
 ### v0 Limitations + Walk-Tier Filters
 
 The Crawl tier ships the **write side** (schema + capability + tools). Two read-side gaps land in Walk:

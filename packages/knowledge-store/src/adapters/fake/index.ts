@@ -22,10 +22,12 @@ import type {
 } from "../../domain/schemas.js";
 import { HYPOTHESIS_TARGETED_EDGES } from "../../domain/schemas.js";
 import type {
+  ChainNode,
   EdoResolverPort,
   PendingResolutionsOptions,
   ResolutionInput,
   ResolutionResult,
+  WalkChainOptions,
 } from "../../port/edo-resolver.port.js";
 import {
   CitationTargetNotFoundError,
@@ -45,6 +47,8 @@ import {
 const SUPPORT_BUMP = 10;
 const SUPPORT_CAP = 50;
 const CONTRADICT_PENALTY = 15;
+const WALK_CHAIN_DEFAULT_DEPTH = 5;
+const WALK_CHAIN_MAX_DEPTH = 10;
 const INITIAL_BY_SOURCE: Record<string, number> = {
   agent: 30,
   analysis_signal: 40,
@@ -454,5 +458,71 @@ export class FakeEdoResolverAdapter implements EdoResolverPort {
     );
     await this.store.updateKnowledge(entryId, { confidencePct: next });
     return next;
+  }
+
+  async walkChain(
+    rootId: string,
+    opts?: WalkChainOptions
+  ): Promise<ChainNode[]> {
+    const direction = opts?.direction ?? "both";
+    const requested = opts?.maxDepth ?? WALK_CHAIN_DEFAULT_DEPTH;
+    const maxDepth = Math.min(Math.max(0, requested), WALK_CHAIN_MAX_DEPTH);
+    const root = await this.store.getKnowledge(rootId);
+    if (!root) return [];
+
+    const visited = new Set<string>([rootId]);
+    const out: ChainNode[] = [{ entry: root, depth: 0, edgeFromParent: null }];
+    let frontier: Array<{ id: string; depth: number }> = [
+      { id: rootId, depth: 0 },
+    ];
+
+    while (frontier.length > 0) {
+      const next: Array<{ id: string; depth: number }> = [];
+      for (const node of frontier) {
+        if (node.depth >= maxDepth) continue;
+        const childDepth = node.depth + 1;
+        if (direction === "out" || direction === "both") {
+          // citing→cited: this node CITES X
+          const outgoing = await this.store.listCitationsByCitingId(node.id);
+          for (const c of outgoing) {
+            if (visited.has(c.citedId)) continue;
+            const child = await this.store.getKnowledge(c.citedId);
+            if (!child) continue;
+            visited.add(c.citedId);
+            out.push({
+              entry: child,
+              depth: childDepth,
+              edgeFromParent: {
+                citationType: c.citationType,
+                direction: "out",
+              },
+            });
+            next.push({ id: c.citedId, depth: childDepth });
+          }
+        }
+        if (direction === "in" || direction === "both") {
+          // cited→citing: X CITES this node
+          const incoming = await this.store.listCitationsByCitedId(node.id);
+          for (const c of incoming) {
+            if (visited.has(c.citingId)) continue;
+            const child = await this.store.getKnowledge(c.citingId);
+            if (!child) continue;
+            visited.add(c.citingId);
+            out.push({
+              entry: child,
+              depth: childDepth,
+              edgeFromParent: {
+                citationType: c.citationType,
+                direction: "in",
+              },
+            });
+            next.push({ id: c.citingId, depth: childDepth });
+          }
+        }
+      }
+      frontier = next;
+    }
+
+    return out;
   }
 }

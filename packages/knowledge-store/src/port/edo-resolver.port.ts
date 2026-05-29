@@ -13,7 +13,7 @@
  * @public
  */
 
-import type { Knowledge } from "../domain/schemas.js";
+import type { CitationType, Knowledge } from "../domain/schemas.js";
 
 /**
  * Pending-resolutions query options.
@@ -85,6 +85,41 @@ export interface ResolutionResult {
 }
 
 /**
+ * Direction for `walkChain`. `out` follows citing→cited edges (what does this
+ * row cite?), `in` follows cited→citing edges (what cites this row?), `both`
+ * follows both.
+ */
+export type ChainDirection = "out" | "in" | "both";
+
+/**
+ * Options for `walkChain`. `maxDepth` is clamped at the adapter level; callers
+ * should treat values above 10 as unsupported (the route layer enforces).
+ */
+export interface WalkChainOptions {
+  /** Default 5. The adapter MUST clamp to a sane upper bound. */
+  maxDepth?: number;
+  /** Default `both`. */
+  direction?: ChainDirection;
+}
+
+/**
+ * A single node in a walked chain. `depth` 0 is the root (with
+ * `edgeFromParent: null`); deeper nodes carry the edge that connected them to
+ * their parent in BFS order. Result lists are flat, ordered by ascending
+ * depth, root first.
+ */
+export interface ChainNode {
+  entry: Knowledge;
+  /** Null only for the root. Otherwise: the edge from the BFS parent to this entry. */
+  edgeFromParent: {
+    citationType: CitationType;
+    /** Direction the BFS step travelled: `out` = parent cites this; `in` = this cites parent. */
+    direction: "out" | "in";
+  } | null;
+  depth: number;
+}
+
+/**
  * EdoResolverPort — closes the hypothesis loop.
  *
  * Implementations sit alongside the storage adapter for the same node's
@@ -125,4 +160,12 @@ export interface EdoResolverPort {
    * (RECOMPUTE_IS_PURE_FROM_CITATIONS). Returns the new confidence.
    */
   recomputeConfidence(entryId: string): Promise<number>;
+
+  /**
+   * Walk the citation DAG starting at `rootId`. Returns a flat list ordered
+   * by depth, root first. Cycle-safe: each entry id appears at most once
+   * (first visit wins). The root row itself is returned with
+   * `edgeFromParent: null`; if `rootId` does not exist, returns `[]`.
+   */
+  walkChain(rootId: string, opts?: WalkChainOptions): Promise<ChainNode[]>;
 }

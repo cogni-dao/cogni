@@ -16,9 +16,13 @@
 
 // Hypothesis-loop capability (per knowledge-syntropy spec § The Hypothesis Loop)
 export type {
+  ChainDirection,
+  ChainNodeEntry,
   DecideParams,
   EdoCapability,
   EdoSourceType,
+  GetChainParams,
+  GetChainResult,
   HypothesizeParams,
   RecordOutcomeParams,
   RecordOutcomeResult,

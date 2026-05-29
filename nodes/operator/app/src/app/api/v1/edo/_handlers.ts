@@ -225,6 +225,79 @@ export async function handleDecide(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Chain-walk read
+// ---------------------------------------------------------------------------
+
+const CHAIN_DIRECTIONS = new Set(["out", "in", "both"] as const);
+type ChainDir = "out" | "in" | "both";
+const CHAIN_MAX_DEPTH = 10;
+const CHAIN_DEFAULT_DEPTH = 5;
+
+export async function handleChainGet(
+  request: Request,
+  sessionUser: SessionUser | null,
+  rootId: string
+): Promise<NextResponse> {
+  if (!sessionUser)
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+
+  if (!rootId || rootId.length > 200) {
+    return NextResponse.json(
+      { error: "invalid root id" },
+      { status: 400 }
+    );
+  }
+
+  const url = new URL(request.url);
+  const directionRaw = url.searchParams.get("direction") ?? "both";
+  if (!CHAIN_DIRECTIONS.has(directionRaw as ChainDir)) {
+    return NextResponse.json(
+      { error: "invalid direction; expected out|in|both" },
+      { status: 400 }
+    );
+  }
+  const direction = directionRaw as ChainDir;
+
+  const maxDepthRaw = url.searchParams.get("maxDepth");
+  let maxDepth = CHAIN_DEFAULT_DEPTH;
+  if (maxDepthRaw !== null) {
+    const parsed = Number(maxDepthRaw);
+    if (!Number.isInteger(parsed) || parsed < 1 || parsed > CHAIN_MAX_DEPTH) {
+      return NextResponse.json(
+        { error: `invalid maxDepth; expected integer 1..${CHAIN_MAX_DEPTH}` },
+        { status: 400 }
+      );
+    }
+    maxDepth = parsed;
+  }
+
+  const edo = getContainer().edoCapability;
+  const log = getContainer().log;
+  try {
+    const result = await edo.getChain({ rootId, direction, maxDepth });
+    log.info(
+      {
+        route: "edo.chain",
+        rootId,
+        direction,
+        maxDepth,
+        chainLength: result.chain.length,
+      },
+      "edo.chain.success"
+    );
+    return NextResponse.json(result, { status: 200 });
+  } catch (e) {
+    if (
+      e instanceof Error &&
+      e.message.startsWith("getChain: root entry ")
+    ) {
+      return NextResponse.json({ error: e.message }, { status: 404 });
+    }
+    return mapError(e);
+  }
+}
+
 export async function handleRecordOutcome(
   request: Request,
   sessionUser: SessionUser | null

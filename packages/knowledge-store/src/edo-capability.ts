@@ -15,8 +15,11 @@
  */
 
 import type {
+  ChainNodeEntry,
   DecideParams,
   EdoCapability,
+  GetChainParams,
+  GetChainResult,
   HypothesizeParams,
   KnowledgeEntry,
   RecordOutcomeParams,
@@ -159,6 +162,30 @@ export function createEdoCapability(
         citationId: result.citationId,
         alreadyResolved: result.alreadyResolved,
       };
+    },
+
+    async getChain(params: GetChainParams): Promise<GetChainResult> {
+      const walkOpts: { direction?: "out" | "in" | "both"; maxDepth?: number } =
+        {};
+      if (params.direction !== undefined) walkOpts.direction = params.direction;
+      if (params.maxDepth !== undefined) walkOpts.maxDepth = params.maxDepth;
+      const nodes = await resolver.walkChain(params.rootId, walkOpts);
+      if (nodes.length === 0) {
+        throw new Error(
+          `getChain: root entry '${params.rootId}' not found`
+        );
+      }
+      const chain: ChainNodeEntry[] = nodes.map((n) => ({
+        entry: toEntry(n.entry),
+        depth: n.depth,
+        edgeFromParent: n.edgeFromParent
+          ? {
+              citationType: n.edgeFromParent.citationType,
+              direction: n.edgeFromParent.direction,
+            }
+          : null,
+      }));
+      return { root: chain[0]!.entry, chain };
     },
   };
 }

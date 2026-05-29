@@ -14,6 +14,7 @@ import type { KnowledgeRow } from "@cogni/node-contracts";
 import type { ReactElement } from "react";
 
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components";
+import { ChainPanel } from "./ChainPanel";
 import { ConfidenceBar } from "./ConfidenceBar";
 import { HtmlRenderer } from "./HtmlRenderer";
 import { RelativeTime } from "./RelativeTime";
@@ -22,6 +23,8 @@ interface KnowledgeDetailProps {
   readonly item: KnowledgeRow | null;
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
+  /** When true, render the EDO chain walk inline below the entry body. */
+  readonly showChain?: boolean;
 }
 
 function Field({
@@ -46,6 +49,7 @@ export function KnowledgeDetail({
   item,
   open,
   onOpenChange,
+  showChain = false,
 }: KnowledgeDetailProps): ReactElement {
   const isHtml = item?.entryType === "html";
   return (
@@ -117,6 +121,12 @@ export function KnowledgeDetail({
                 <Field label="Created">
                   <RelativeTime iso={item.createdAt} />
                 </Field>
+              )}
+
+              {showChain && (
+                <div className="mt-2 border-border/60 border-t pt-4">
+                  <ChainPanel rootId={item.id} />
+                </div>
               )}
             </div>
           </>

@@ -104,6 +104,55 @@ export interface RecordOutcomeResult {
 }
 
 /**
+ * Citation-DAG walk direction. `out` follows citing→cited (what this row
+ * cites), `in` follows cited→citing (what cites this row), `both` follows
+ * both. The default for `getChain` is `both`.
+ */
+export type ChainDirection = "out" | "in" | "both";
+
+/**
+ * Options for `EdoCapability.getChain`.
+ */
+export interface GetChainParams {
+  rootId: string;
+  /** Default `both`. */
+  direction?: ChainDirection;
+  /** Default 5; capped at 10 by the underlying port adapter. */
+  maxDepth?: number;
+}
+
+/**
+ * One node in a walked chain. The root has `edgeFromParent: null` and
+ * `depth: 0`. Deeper nodes carry the edge that connected them to their
+ * BFS parent.
+ */
+export interface ChainNodeEntry {
+  entry: KnowledgeEntry;
+  /**
+   * The citation type that brought this node into the walk. Mirrors the
+   * domain `CitationType` enum (`supports`, `contradicts`, `extends`,
+   * `supersedes`, `evidence_for`, `derives_from`, `validates`, `invalidates`).
+   * `null` only on the root.
+   */
+  edgeFromParent: {
+    citationType: string;
+    /** `out` = parent cites this; `in` = this cites parent. */
+    direction: "out" | "in";
+  } | null;
+  /** BFS depth, 0 at the root. */
+  depth: number;
+}
+
+/**
+ * Output of `getChain`. Flat list, ordered by depth (root first). Cycle-safe:
+ * each entry id appears at most once.
+ */
+export interface GetChainResult {
+  root: KnowledgeEntry;
+  chain: ChainNodeEntry[];
+}
+
+/**
  * EdoCapability — atomic four-beat operations on the hypothesis loop.
  *
  * Backed by `KnowledgeStorePort` + `EdoResolverPort` + auto-commit. Each call
@@ -120,4 +169,11 @@ export interface EdoCapability {
    * commit. Idempotent on already-resolved hypotheses.
    */
   recordOutcome(params: RecordOutcomeParams): Promise<RecordOutcomeResult>;
+  /**
+   * Walk the citation DAG from `rootId`. Read-only; surfaces the EDO chain
+   * (hypothesis → decision → outcome + evidence/validates/invalidates edges)
+   * for human and agent rendering. See `docs/spec/knowledge-syntropy.md` §
+   * Chain Read API.
+   */
+  getChain(params: GetChainParams): Promise<GetChainResult>;
 }

@@ -13,6 +13,8 @@
 
 export type {
   AuthCapability,
+  ChainDirection,
+  ChainNodeEntry,
   CheckInfo,
   CiStatusResult,
   ClockCapability,
@@ -21,6 +23,8 @@ export type {
   DispatchCandidateFlightResult,
   EdoCapability,
   EdoSourceType,
+  GetChainParams,
+  GetChainResult,
   HypothesizeParams,
   KnowledgeCapability,
   KnowledgeEntry,

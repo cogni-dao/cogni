@@ -679,6 +679,7 @@ function createContainer(): Container {
       hypothesize: notConfigured,
       decide: notConfigured,
       recordOutcome: notConfigured,
+      getChain: notConfigured,
     };
     knowledgeContributionService = undefined;
     knowledgeStorePort = undefined;

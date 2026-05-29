@@ -16,15 +16,28 @@
 
 import type { Sql } from "postgres";
 
-import type { Citation, Knowledge } from "../../domain/schemas.js";
 import type {
+  Citation,
+  CitationType,
+  Knowledge,
+} from "../../domain/schemas.js";
+import type {
+  ChainNode,
   EdoResolverPort,
   PendingResolutionsOptions,
   ResolutionInput,
   ResolutionResult,
+  WalkChainOptions,
 } from "../../port/edo-resolver.port.js";
 import type { KnowledgeStorePort } from "../../port/knowledge-store.port.js";
 import { escapeValue } from "./util.js";
+
+// ---------------------------------------------------------------------------
+// Chain-walk constants
+// ---------------------------------------------------------------------------
+
+const WALK_CHAIN_DEFAULT_DEPTH = 5;
+const WALK_CHAIN_MAX_DEPTH = 10;
 
 // ---------------------------------------------------------------------------
 // Confidence formula constants (knowledge-syntropy § Confidence Is Computed)
@@ -214,6 +227,112 @@ export class DoltgresEdoResolverAdapter implements EdoResolverPort {
 
     return next;
   }
+
+  async walkChain(
+    rootId: string,
+    opts?: WalkChainOptions
+  ): Promise<ChainNode[]> {
+    const direction = opts?.direction ?? "both";
+    const requested = opts?.maxDepth ?? WALK_CHAIN_DEFAULT_DEPTH;
+    const maxDepth = Math.min(Math.max(0, requested), WALK_CHAIN_MAX_DEPTH);
+
+    // Bail fast if the root doesn't exist — keeps semantics with the fake.
+    const rootRow = await this.store.getKnowledge(rootId);
+    if (!rootRow) return [];
+
+    // One recursive CTE walks both directions; the seed at depth 0 carries
+    // NULL edge metadata. The recursive step joins through `citations` in
+    // either direction and accumulates a visited-id set so cycles terminate
+    // even if the BFS frontier would revisit. Each child row carries the
+    // edge that brought it in (citation_type + direction).
+    //
+    // Doltgres 0.56 supports WITH RECURSIVE; postgres.js cannot send this
+    // as a prepared statement (Doltgres extended-protocol limitation), so
+    // build the whole text via sql.unsafe() + escapeValue() per the existing
+    // resolver patterns.
+    const rootIdSql = escapeValue(rootId);
+    const includeOut = direction === "out" || direction === "both";
+    const includeIn = direction === "in" || direction === "both";
+
+    const recursiveStepBranches: string[] = [];
+    if (includeOut) {
+      // step out: walk[citing=parent] → cited
+      recursiveStepBranches.push(
+        `SELECT
+           c.cited_id AS id,
+           w.depth + 1 AS depth,
+           c.citation_type AS edge_type,
+           'out'::text AS edge_direction,
+           w.path || c.cited_id AS path
+         FROM citations c
+         JOIN walk w ON w.id = c.citing_id
+         WHERE w.depth + 1 <= ${maxDepth}
+           AND NOT (c.cited_id = ANY(w.path))`
+      );
+    }
+    if (includeIn) {
+      // step in: walk[cited=parent] → citing
+      recursiveStepBranches.push(
+        `SELECT
+           c.citing_id AS id,
+           w.depth + 1 AS depth,
+           c.citation_type AS edge_type,
+           'in'::text AS edge_direction,
+           w.path || c.citing_id AS path
+         FROM citations c
+         JOIN walk w ON w.id = c.cited_id
+         WHERE w.depth + 1 <= ${maxDepth}
+           AND NOT (c.citing_id = ANY(w.path))`
+      );
+    }
+
+    // If both directions disabled (shouldn't happen — ChainDirection enum
+    // covers only out/in/both), only the seed row is returned.
+    const recursiveStep =
+      recursiveStepBranches.length > 0
+        ? recursiveStepBranches.join("\n         UNION ALL\n         ")
+        : "SELECT id, depth, edge_type, edge_direction, path FROM walk WHERE FALSE";
+
+    const sqlText = `WITH RECURSIVE walk(id, depth, edge_type, edge_direction, path) AS (
+        SELECT
+          ${rootIdSql}::text AS id,
+          0 AS depth,
+          NULL::text AS edge_type,
+          NULL::text AS edge_direction,
+          ARRAY[${rootIdSql}::text] AS path
+        UNION ALL
+        ${recursiveStep}
+      ),
+      -- Earliest visit per id (BFS-first / smallest depth wins). We dedupe
+      -- at the post-CTE stage because the recursive UNION ALL keeps all
+      -- discovery paths.
+      first_visit AS (
+        SELECT DISTINCT ON (id) id, depth, edge_type, edge_direction
+        FROM walk
+        ORDER BY id, depth
+      )
+      SELECT k.*, fv.depth, fv.edge_type, fv.edge_direction
+      FROM first_visit fv
+      JOIN knowledge k ON k.id = fv.id
+      ORDER BY fv.depth, k.id`;
+
+    const rows = await this.sql.unsafe(sqlText);
+    return rows.map((r) => walkRowToChainNode(r as Record<string, unknown>));
+  }
+}
+
+function walkRowToChainNode(row: Record<string, unknown>): ChainNode {
+  const depth = Number(row.depth ?? 0);
+  const edgeType = row.edge_type as CitationType | null;
+  const edgeDirection = row.edge_direction as "out" | "in" | null;
+  return {
+    entry: rowToKnowledgeForResolver(row),
+    depth,
+    edgeFromParent:
+      edgeType && edgeDirection
+        ? { citationType: edgeType, direction: edgeDirection }
+        : null,
+  };
 }
 
 function rowToKnowledgeForResolver(row: Record<string, unknown>): Knowledge {

@@ -81,11 +81,14 @@ export {
 } from "./port/contribution.port.js";
 // EDO resolver port (hypothesis loop)
 export type {
+  ChainDirection,
+  ChainNode,
   EdoResolverPort,
   PendingResolutionsOptions,
   ResolutionEdge,
   ResolutionInput,
   ResolutionResult,
+  WalkChainOptions,
 } from "./port/edo-resolver.port.js";
 // Port interfaces + domain-registry types/errors
 export {

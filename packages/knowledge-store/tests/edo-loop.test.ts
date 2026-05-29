@@ -350,3 +350,194 @@ describe("EDO foundation — full hypothesis loop", () => {
     expect(first).toBe(50);
   });
 });
+
+describe("EDO chain walk — walkChain", () => {
+  it("returns root only when isolated (no citations)", async () => {
+    const { store, resolver } = await bootstrap();
+    await store.addKnowledge({
+      id: "iso",
+      domain: DOMAIN,
+      title: "isolated",
+      content: "alone",
+      entryType: "finding",
+      sourceType: "agent",
+    });
+    const chain = await resolver.walkChain("iso");
+    expect(chain).toHaveLength(1);
+    expect(chain[0]!.entry.id).toBe("iso");
+    expect(chain[0]!.depth).toBe(0);
+    expect(chain[0]!.edgeFromParent).toBeNull();
+  });
+
+  it("returns [] when root doesn't exist", async () => {
+    const { resolver } = await bootstrap();
+    const chain = await resolver.walkChain("nonexistent");
+    expect(chain).toEqual([]);
+  });
+
+  it("walks the full hypothesis loop in both directions", async () => {
+    const { store, capability, resolver } = await bootstrap();
+
+    // event ← evidence_for ← hypothesis ← derives_from ← decision
+    //                                 ↖ validates ← outcome
+    await store.addKnowledge({
+      id: "evt",
+      domain: DOMAIN,
+      title: "event",
+      content: "...",
+      entryType: "event",
+      sourceType: "agent",
+    });
+    await capability.hypothesize({
+      id: "h",
+      domain: DOMAIN,
+      title: "h",
+      content: "...",
+      evaluateAt: new Date("2026-01-01"),
+      resolutionStrategy: "agent",
+      evidenceForIds: ["evt"],
+      sourceType: "agent",
+    });
+    await capability.decide({
+      id: "d",
+      domain: DOMAIN,
+      title: "d",
+      content: "...",
+      derivesFromHypothesisId: "h",
+      sourceType: "agent",
+    });
+    await capability.recordOutcome({
+      id: "o",
+      domain: DOMAIN,
+      title: "o",
+      content: "...",
+      hypothesisId: "h",
+      edge: "validates",
+      sourceType: "agent",
+    });
+
+    // From the hypothesis, `both` reveals the event (out) + decision + outcome (in).
+    const both = await resolver.walkChain("h", { direction: "both" });
+    const ids = both.map((n) => n.entry.id).sort();
+    expect(ids).toEqual(["d", "evt", "h", "o"]);
+    expect(both[0]!.entry.id).toBe("h");
+    expect(both[0]!.depth).toBe(0);
+    expect(both[0]!.edgeFromParent).toBeNull();
+
+    // Sanity-check the edges that came back.
+    const byId = new Map(both.map((n) => [n.entry.id, n]));
+    expect(byId.get("evt")!.edgeFromParent).toEqual({
+      citationType: "evidence_for",
+      direction: "out",
+    });
+    expect(byId.get("d")!.edgeFromParent).toEqual({
+      citationType: "derives_from",
+      direction: "in",
+    });
+    expect(byId.get("o")!.edgeFromParent).toEqual({
+      citationType: "validates",
+      direction: "in",
+    });
+  });
+
+  it("direction=out follows only citing→cited (what does this row cite?)", async () => {
+    const { store, capability, resolver } = await bootstrap();
+    await store.addKnowledge({
+      id: "evt",
+      domain: DOMAIN,
+      title: "evt",
+      content: "...",
+      entryType: "event",
+      sourceType: "agent",
+    });
+    await capability.hypothesize({
+      id: "h",
+      domain: DOMAIN,
+      title: "h",
+      content: "...",
+      evaluateAt: new Date("2026-01-01"),
+      evidenceForIds: ["evt"],
+      sourceType: "agent",
+    });
+    // Hypothesis cites the event → out from h reveals evt.
+    const out = await resolver.walkChain("h", { direction: "out" });
+    expect(out.map((n) => n.entry.id).sort()).toEqual(["evt", "h"]);
+    // Nothing cites h yet → in from h reveals only h itself.
+    const inOnly = await resolver.walkChain("h", { direction: "in" });
+    expect(inOnly.map((n) => n.entry.id)).toEqual(["h"]);
+  });
+
+  it("respects maxDepth (truncates the BFS frontier)", async () => {
+    const { store, resolver } = await bootstrap();
+    // Build a 5-deep linear chain via supports edges.
+    for (let i = 0; i < 5; i++) {
+      await store.addKnowledge({
+        id: `n${i}`,
+        domain: DOMAIN,
+        title: `n${i}`,
+        content: "...",
+        entryType: "finding",
+        sourceType: "agent",
+      });
+    }
+    // n0 supports n1 supports n2 supports n3 supports n4
+    for (let i = 0; i < 4; i++) {
+      await store.addCitation({
+        citingId: `n${i}`,
+        citedId: `n${i + 1}`,
+        citationType: "supports",
+      });
+    }
+    // out from n0 with depth 2 → n0, n1, n2 only.
+    const truncated = await resolver.walkChain("n0", {
+      direction: "out",
+      maxDepth: 2,
+    });
+    expect(truncated.map((n) => n.entry.id).sort()).toEqual(["n0", "n1", "n2"]);
+    expect(Math.max(...truncated.map((n) => n.depth))).toBe(2);
+
+    // out from n0 with default depth (5) catches all five.
+    const full = await resolver.walkChain("n0", { direction: "out" });
+    expect(full.map((n) => n.entry.id).sort()).toEqual([
+      "n0",
+      "n1",
+      "n2",
+      "n3",
+      "n4",
+    ]);
+  });
+
+  it("terminates on cycles (A supports B supports A) without infinite-looping", async () => {
+    const { store, resolver } = await bootstrap();
+    await store.addKnowledge({
+      id: "a",
+      domain: DOMAIN,
+      title: "a",
+      content: "...",
+      entryType: "finding",
+      sourceType: "agent",
+    });
+    await store.addKnowledge({
+      id: "b",
+      domain: DOMAIN,
+      title: "b",
+      content: "...",
+      entryType: "finding",
+      sourceType: "agent",
+    });
+    await store.addCitation({
+      citingId: "a",
+      citedId: "b",
+      citationType: "supports",
+    });
+    await store.addCitation({
+      citingId: "b",
+      citedId: "a",
+      citationType: "supports",
+    });
+    const chain = await resolver.walkChain("a", { direction: "both" });
+    // Two nodes, each visited once. The first-visit semantic means we don't
+    // re-emit `a` at depth 2 even though the cycle closes back to it.
+    expect(chain.map((n) => n.entry.id).sort()).toEqual(["a", "b"]);
+  });
+});
