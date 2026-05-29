@@ -7,7 +7,7 @@
  * Scope: Pure tests against runGateChain with hand-rolled fake gates. Does not exercise the production shape/provenance gates (those have their own coverage). Does not call any port.
  * Invariants: GATES_FAIL_CLOSED, SAME_TIER_PARALLEL
  * Side-effects: none
- * Links: packages/knowledge-store/src/domain/gates/chain.ts, work/projects/proj.knowledge-write-pipeline.md
+ * Links: packages/knowledge-store/src/domain/gates/chain.ts, work/projects/proj.knowledge-syntropy.md
  * @internal
  */
 

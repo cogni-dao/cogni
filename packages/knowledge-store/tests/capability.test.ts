@@ -7,7 +7,7 @@
  * Scope: Pure tests with a hand-rolled stub port; only exercises the write seam plus a sanity check on a read passthrough. Does not call Doltgres, HTTP, or any real adapter.
  * Invariants: GATES_FAIL_CLOSED, AUTO_COMMIT_ON_WRITE
  * Side-effects: none
- * Links: packages/knowledge-store/src/capability.ts, work/projects/proj.knowledge-write-pipeline.md
+ * Links: packages/knowledge-store/src/capability.ts, work/projects/proj.knowledge-syntropy.md
  * @internal
  */
 

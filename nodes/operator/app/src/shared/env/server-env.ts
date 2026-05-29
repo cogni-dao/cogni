@@ -152,7 +152,7 @@ export const serverSchema = z.object({
   // attempt a push. DOLTHUB_API_TOKEN (PAT) is for the REST/SQL HTTP API only
   // (future librarian/x402 reads). DoltHub OAuth pair is reserved for v1
   // per-user identity (task.5070, blocked on DoltHub app approval). Per
-  // proj.knowledge-write-pipeline + task.5069.
+  // proj.knowledge-syntropy (W0c tier) + task.5069.
   DOLTHUB_REMOTE_URL: optionalString,
   DOLTHUB_API_TOKEN: optionalString,
   DOLTHUB_OAUTH_CLIENT_ID: optionalString,

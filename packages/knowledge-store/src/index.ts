@@ -32,7 +32,7 @@ export {
   PrincipalKindSchema,
   PrincipalSchema,
 } from "./domain/contribution-schemas.js";
-// Write-pipeline gates (proj.knowledge-write-pipeline)
+// Write-pipeline gates (proj.knowledge-syntropy — W0 Gates tier)
 export {
   type GateContext,
   type GateError,
