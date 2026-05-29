@@ -49,18 +49,13 @@ poll_ready() {
   return 1
 }
 
-# Catalog-driven: iterate NODE_TARGETS from infra/catalog/ so adding a node
-# is one catalog edit, not a script edit. Hostname convention encoded inline
-# until `host_prefix` lands on the catalog schema (task.5079 follow-up):
-# operator → bare ${DOMAIN}; every other node → ${node}-${DOMAIN}.
+# Catalog-driven: iterate NODE_TARGETS from infra/catalog/ and resolve each
+# host via host_for_node() (which honours the `is_primary_host` catalog
+# field). Adding a new node = one catalog edit, no script edit.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./lib/image-tags.sh
 . "$SCRIPT_DIR/lib/image-tags.sh"
 
 for node in "${NODE_TARGETS[@]}"; do
-  if [ "$node" = "operator" ]; then
-    poll_ready "$node" "https://${DOMAIN}"
-  else
-    poll_ready "$node" "https://${node}-${DOMAIN}"
-  fi
+  poll_ready "$node" "https://$(host_for_node "$node" "$DOMAIN")"
 done

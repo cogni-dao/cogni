@@ -24,3 +24,9 @@ candidate_a_branch: deploy/candidate-a-operator
 preview_branch: deploy/preview-operator
 production_branch: deploy/production-operator
 path_prefix: nodes/operator/
+# task.5078 — operator serves the bare base domain (https://${DOMAIN}); every
+# other node uses ${name}-${DOMAIN}. Catalog declares which entry is primary
+# so the convention isn't hardcoded in N scripts. host_for_node() in
+# scripts/ci/lib/image-tags.sh is the single resolver consumed by
+# wait-for-candidate-ready / smoke-candidate / verify-buildsha.
+is_primary_host: true

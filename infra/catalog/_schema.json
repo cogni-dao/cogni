@@ -78,6 +78,10 @@
     "production_branch": {
       "type": "string",
       "pattern": "^deploy/production-[a-z0-9-]+$"
+    },
+    "is_primary_host": {
+      "type": "boolean",
+      "description": "When true, this node serves the bare base domain (e.g. operator → https://${DOMAIN}). Defaults to false: every other node uses the ${name}-${DOMAIN} (multi-level domains) or ${name}.${DOMAIN} (TLD-style) convention. Consumed by host_for_node() in scripts/ci/lib/image-tags.sh. Exactly one catalog entry per repo should set this true."
     }
   }
 }

@@ -29,12 +29,15 @@ mapfile -t ALL_TARGETS  < <(yq -N '.name' "$_image_tags_catalog_root"/*.yaml)
 mapfile -t NODE_TARGETS < <(yq -N 'select(.type == "node") | .name' "$_image_tags_catalog_root"/*.yaml)
 
 declare -A _image_tags_suffix_cache=()
+declare -A _image_tags_primary_cache=()
 for _t in "${ALL_TARGETS[@]}"; do
   _s=$(yq '.image_tag_suffix' "${_image_tags_catalog_root}/${_t}.yaml")
   [ "$_s" = "null" ] && _s=""
   _image_tags_suffix_cache["$_t"]="$_s"
+  _p=$(yq -N '.is_primary_host // false' "${_image_tags_catalog_root}/${_t}.yaml")
+  _image_tags_primary_cache["$_t"]="$_p"
 done
-unset _t _s
+unset _t _s _p
 
 image_name_for_target() {
   printf '%s' "$IMAGE_NAME_APP"
@@ -53,4 +56,23 @@ image_tag_for_target() {
   local image_name="$1" base_tag="$2" target="$3" suffix
   suffix=$(tag_suffix_for_target "$target") || return 1
   printf '%s:%s%s' "$image_name" "$base_tag" "$suffix"
+}
+
+# Resolve the public host for a node, given a base DOMAIN. Catalog drives
+# which entry is the bare-domain primary via `is_primary_host: true`
+# (defaults false). For non-primary nodes: when DOMAIN has 3+ parts (an
+# env-prefixed deep subdomain like `test.cognidao.org`), join with `-` so
+# `resy + test.cognidao.org` → `resy-test.cognidao.org`; for shorter domains
+# (TLD-style forks) join with `.` so `resy + example.org` → `resy.example.org`.
+# Returns the bare host (no scheme).
+host_for_node() {
+  local node="$1" domain="$2" primary
+  primary="${_image_tags_primary_cache[$node]:-false}"
+  if [ "$primary" = "true" ]; then
+    printf '%s' "$domain"
+  elif [[ "$domain" == *.*.* ]]; then
+    printf '%s-%s' "$node" "$domain"
+  else
+    printf '%s.%s' "$node" "$domain"
+  fi
 }

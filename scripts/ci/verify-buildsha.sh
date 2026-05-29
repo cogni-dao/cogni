@@ -62,6 +62,11 @@
 
 set -euo pipefail
 
+# Source catalog helpers (host_for_node + ALL_TARGETS).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./lib/image-tags.sh
+. "$SCRIPT_DIR/lib/image-tags.sh"
+
 DOMAIN="${DOMAIN:?DOMAIN required}"
 SOURCE_SHA_MAP="${SOURCE_SHA_MAP:-}"
 # When set, write verified-<node>.txt = "true" for each node whose /version
@@ -85,7 +90,9 @@ CUTOVER_SLEEP="${CUTOVER_SLEEP:-5}"
 # Only node-apps expose /version via HTTPS Ingress. scheduler-worker and
 # migrator are promoted-apps too but are in-cluster only — they're covered
 # by wait-for-in-cluster-services (kubectl rollout status) upstream.
-NODE_APPS="operator poly resy node-template"
+# Catalog-driven: NODE_TARGETS comes from infra/catalog/. Joined space-separated
+# for compatibility with the existing `for p in $NODE_APPS` consumer below.
+NODE_APPS="${NODE_TARGETS[*]}"
 
 declare -A EXPECTED_BY_NODE=()
 
@@ -231,15 +238,7 @@ FAILED=0
 
 for node in "${NODE_ARR[@]}"; do
   expected="${EXPECTED_BY_NODE[$node]}"
-
-  if [ "$node" = "operator" ]; then
-    host="${DOMAIN}"
-  elif [[ "$DOMAIN" == *.*.* ]]; then
-    host="${node}-${DOMAIN}"
-  else
-    host="${node}.${DOMAIN}"
-  fi
-  url="https://${host}/version"
+  url="https://$(host_for_node "$node" "$DOMAIN")/version"
 
   if check_node "$node" "$expected" "$url"; then
     if [ -n "$MARKER_DIR" ]; then

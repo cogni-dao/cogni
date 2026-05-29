@@ -42,14 +42,16 @@ check_livez() {
   fi
 }
 
-for app in operator poly resy node-template; do
+# Catalog-driven smoke probe: iterate NODE_TARGETS and resolve each host via
+# host_for_node() (honours `is_primary_host`). Adding a new node = one
+# catalog edit, no script edit.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./lib/image-tags.sh
+. "$SCRIPT_DIR/lib/image-tags.sh"
+
+for app in "${NODE_TARGETS[@]}"; do
   if should_check "$app"; then
-    case "$app" in
-      operator)      check_livez operator      "https://${DOMAIN}" ;;
-      poly)          check_livez poly          "https://poly-${DOMAIN}" ;;
-      resy)          check_livez resy          "https://resy-${DOMAIN}" ;;
-      node-template) check_livez node-template "https://node-template-${DOMAIN}" ;;
-    esac
+    check_livez "$app" "https://$(host_for_node "$app" "$DOMAIN")"
   else
     echo "[skip] ${app} livez — not in PROMOTED_APPS=${PROMOTED_APPS}"
   fi
