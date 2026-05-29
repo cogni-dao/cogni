@@ -149,10 +149,13 @@ update_source_sha_map() {
 }
 
 # Pass 1 — promotions. Each appends to PROMOTED and emits $GITHUB_OUTPUT.
+# task.5079: collapse this list into a single `for t in "${ALL_TARGETS[@]}"`
+# loop sourced from the catalog. Until then, mirror catalog membership here.
 promote_target operator
 promote_target poly
 promote_target resy
 promote_target scheduler-worker
+promote_target node-template
 
 # Pass 2 — source-sha-map. Non-fatal on per-app failure.
 for app in "${PROMOTED[@]}"; do
