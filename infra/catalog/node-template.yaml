@@ -1,0 +1,13 @@
+name: node-template
+type: node
+port: 3200
+node_id: "00000000-0000-4000-a000-000000000000"
+dockerfile: nodes/node-template/app/Dockerfile
+# bug.0344 — see infra/catalog/operator.yaml for why these fields exist.
+image_tag_suffix: "-node-template"
+migrator_tag_suffix: "-node-template-migrate"
+# task.0320 — per-env deploy branches (see operator.yaml).
+candidate_a_branch: deploy/candidate-a-node-template
+preview_branch: deploy/preview-node-template
+production_branch: deploy/production-node-template
+path_prefix: nodes/node-template/
