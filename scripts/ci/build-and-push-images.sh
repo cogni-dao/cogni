@@ -133,6 +133,21 @@ build_target() {
         --push \
         .
       ;;
+    node-template)
+      docker buildx build \
+        --platform "$PLATFORM" \
+        --file nodes/node-template/app/Dockerfile \
+        --target runner \
+        --build-arg "BUILD_SHA=${git_sha}" \
+        --label "org.opencontainers.image.source=https://github.com/cogni-dao/cogni" \
+        --label "org.opencontainers.image.revision=${git_sha}" \
+        --label "org.opencontainers.image.created=${build_timestamp}" \
+        --cache-from "type=gha,scope=build-node-template" \
+        --cache-to "type=gha,mode=max,scope=build-node-template" \
+        --tag "$tag" \
+        --push \
+        .
+      ;;
     scheduler-worker)
       docker buildx build \
         --platform "$PLATFORM" \
