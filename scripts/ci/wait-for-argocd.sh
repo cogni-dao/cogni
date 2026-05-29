@@ -356,9 +356,14 @@ wait_for_app() {
         echo "  ✅ ${app_name} at ${REV:0:8} (Healthy + new RS available)"
         return 0
       fi
-      echo "  ❌ ${app_name} new ReplicaSet not yet available (sync.revision=${REV:0:8} Healthy but updated/available replicas below desired)"
-      dump_pod_diagnostics "$app_name" "$deployment"
-      return 1
+      # rollout_check failed: new ReplicaSet exists but updated/available
+      # replicas haven't caught up to desired yet. On a first-deploy or cold
+      # image-cache pull, this window can be 10-60s — keep polling inside the
+      # outer ARGOCD_TIMEOUT window instead of failing immediately. Bare
+      # rollout_check stderr line above is the per-tick status; no extra
+      # message needed here.
+      sleep 10
+      continue
     fi
 
     if [ -n "$deployment" ]; then
