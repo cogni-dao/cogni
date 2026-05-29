@@ -101,7 +101,7 @@ Each node gets its own Doltgres database (`knowledge_operator`, `knowledge_poly`
 
 ### Top three asks (where to push next)
 
-1. **🔴 → 🟡 Knowledge write pipeline (P0.6).** Structured gate chain at every write — Dolt-side CI/CD. v0 = `shape` + `provenance` deterministic gates that fail-closed at the API/tool boundary. v1 layers AI-evaluated quality gates via the existing `.cogni/rules` + `pr-review` graph infra (no parallel engine). Per-node sovereignty via `.cogni/knowledge-rules/*` (v1+). Closes the "garbage in" entropy hole AND sets the architecture for AI-powered review without a second framework. See [proj.knowledge-write-pipeline](../projects/proj.knowledge-write-pipeline.md).
+1. **🟡 Knowledge Syntropy umbrella — drive W1 → W2 → R0.** The compile→Q&A→file-back→lint loop runs end-to-end on Doltgres. W0 gates shipped (PR #1356); W1 EDO Crawl in flight (PR #1327); W2 closes the bearer-EDO split-brain so editorial writes route through `contrib/*`; R0 surfaces chains on `/knowledge?mode=chains` so syntropy is visible. See [proj.knowledge-syntropy](../projects/proj.knowledge-syntropy.md) — the umbrella that subsumes the previously separate write-pipeline + edo-foundation projects.
 2. **🔴 → 🟡 Dolt remotes.** Stand up a self-hosted Dolt remote (or DoltHub repo) so nodes can `dolt_pull` operator base + `dolt_push` validated knowledge. Unblocks operator-curated seed flow + cross-node federation.
 3. **🔴 → 🟡 Postgres derived search index.** Even a manual one-off rebuild script + a `knowledge_search` table unlocks FTS / vector retrieval. Vector model selection is the gating decision.
 

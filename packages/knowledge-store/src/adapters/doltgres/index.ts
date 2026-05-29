@@ -18,14 +18,21 @@
 
 import type { Sql } from "postgres";
 import type {
+  Citation,
+  CitationType,
   DoltCommit,
   DoltDiffEntry,
   Knowledge,
+  NewCitation,
   NewKnowledge,
 } from "../../domain/schemas.js";
+import { HYPOTHESIS_TARGETED_EDGES } from "../../domain/schemas.js";
 import {
+  CitationTargetNotFoundError,
+  CitationTypeMismatchError,
   type Domain,
   DomainAlreadyRegisteredError,
+  HypothesisMissingEvaluateAtError,
   type KnowledgeStorePort,
   type NewDomain,
 } from "../../port/knowledge-store.port.js";
@@ -48,8 +55,52 @@ function rowToKnowledge(row: Record<string, unknown>): Knowledge {
     sourceType: row.source_type as Knowledge["sourceType"],
     sourceRef: (row.source_ref as string) ?? null,
     tags: row.tags as string[] | null,
+    evaluateAt: row.evaluate_at ? new Date(row.evaluate_at as string) : null,
+    resolutionStrategy: (row.resolution_strategy as string) ?? null,
     createdAt: row.created_at ? new Date(row.created_at as string) : undefined,
   };
+}
+
+function rowToCitation(row: Record<string, unknown>): Citation {
+  return {
+    id: row.id as string,
+    citingId: row.citing_id as string,
+    citedId: row.cited_id as string,
+    citationType: row.citation_type as CitationType,
+    context: (row.context as string) ?? null,
+    createdAt: row.created_at ? new Date(row.created_at as string) : undefined,
+  };
+}
+
+/**
+ * Derive a deterministic citation id from the unique edge tuple.
+ * Keeps idempotency stable across retries and matches the unique index.
+ */
+function citationId(
+  citingId: string,
+  citedId: string,
+  type: CitationType
+): string {
+  return `${citingId}->${citedId}:${type}`;
+}
+
+/**
+ * EDGE_TYPE_MATCHES_CITED_ENTRY_TYPE — strict edges that target hypotheses.
+ * Mirrors HYPOTHESIS_TARGETED_EDGES from the domain layer.
+ */
+function expectedEntryTypeForEdge(type: CitationType): string | null {
+  return HYPOTHESIS_TARGETED_EDGES.includes(type) ? "hypothesis" : null;
+}
+
+/**
+ * HYPOTHESIS_HAS_EVALUATE_AT — adapter-level enforcement.
+ * Rejects hypothesis rows that lack evaluate_at. Mirrors
+ * DOMAIN_FK_ENFORCED_AT_WRITE pattern from task.5038.
+ */
+function assertHypothesisEvaluateAt(entry: NewKnowledge): void {
+  if (entry.entryType === "hypothesis" && !entry.evaluateAt) {
+    throw new HypothesisMissingEvaluateAtError(entry.id);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -199,6 +250,7 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
 
   async upsertKnowledge(entry: NewKnowledge): Promise<Knowledge> {
     await assertDomainRegistered(this.sql, entry.domain);
+    assertHypothesisEvaluateAt(entry);
     const cols = [
       "id",
       "domain",
@@ -210,6 +262,8 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
       "source_type",
       "source_ref",
       "tags",
+      "evaluate_at",
+      "resolution_strategy",
     ];
     const vals = [
       escapeValue(entry.id),
@@ -222,6 +276,8 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
       escapeValue(entry.sourceType),
       escapeValue(entry.sourceRef ?? null),
       entry.tags ? escapeValue(entry.tags) : "NULL",
+      escapeValue(entry.evaluateAt ?? null),
+      escapeValue(entry.resolutionStrategy ?? null),
     ];
 
     // Doltgres does not support EXCLUDED or ON CONFLICT DO UPDATE reliably.
@@ -251,6 +307,7 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
 
   async addKnowledge(entry: NewKnowledge): Promise<Knowledge> {
     await assertDomainRegistered(this.sql, entry.domain);
+    assertHypothesisEvaluateAt(entry);
     const cols = [
       "id",
       "domain",
@@ -262,6 +319,8 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
       "source_type",
       "source_ref",
       "tags",
+      "evaluate_at",
+      "resolution_strategy",
     ];
     const vals = [
       escapeValue(entry.id),
@@ -274,6 +333,8 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
       escapeValue(entry.sourceType),
       escapeValue(entry.sourceRef ?? null),
       entry.tags ? escapeValue(entry.tags) : "NULL",
+      escapeValue(entry.evaluateAt ?? null),
+      escapeValue(entry.resolutionStrategy ?? null),
     ];
 
     const rows = await this.sql.unsafe(
@@ -300,6 +361,8 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
       source_type: "sourceType",
       source_ref: "sourceRef",
       tags: "tags",
+      evaluate_at: "evaluateAt",
+      resolution_strategy: "resolutionStrategy",
     };
 
     for (const [col, key] of Object.entries(fieldMap)) {
@@ -325,6 +388,74 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
     await this.sql.unsafe(
       `DELETE FROM knowledge WHERE id = ${escapeValue(id)}`
     );
+  }
+
+  // --- Knowledge identity (collapsed exists + entry_type for CITATION_TARGET_EXISTS_AT_WRITE + EDGE_TYPE_MATCHES_CITED_ENTRY_TYPE) ---
+
+  async getKnowledgeEntryType(id: string): Promise<string | null> {
+    const rows = await this.sql.unsafe(
+      `SELECT entry_type FROM knowledge WHERE id = ${escapeValue(id)} LIMIT 1`
+    );
+    if (rows.length === 0) return null;
+    return (rows[0] as Record<string, unknown>).entry_type as string;
+  }
+
+  async knowledgeExists(id: string): Promise<boolean> {
+    return (await this.getKnowledgeEntryType(id)) !== null;
+  }
+
+  // --- Edges (knowledge-syntropy: hypothesis loop) ---
+
+  async addCitation(edge: NewCitation): Promise<Citation> {
+    // CITATION_TARGET_EXISTS_AT_WRITE + EDGE_TYPE_MATCHES_CITED_ENTRY_TYPE
+    // collapsed into one SELECT (knowledge-syntropy spec).
+    const citedEntryType = await this.getKnowledgeEntryType(edge.citedId);
+    if (citedEntryType === null) {
+      throw new CitationTargetNotFoundError(edge.citedId);
+    }
+    const expected = expectedEntryTypeForEdge(edge.citationType);
+    if (expected !== null && citedEntryType !== expected) {
+      throw new CitationTypeMismatchError(
+        edge.citationType,
+        edge.citedId,
+        citedEntryType,
+        expected
+      );
+    }
+
+    const id =
+      edge.id ?? citationId(edge.citingId, edge.citedId, edge.citationType);
+
+    // Idempotent on the unique (citing_id, cited_id, citation_type) index.
+    try {
+      const rows = await this.sql.unsafe(
+        `INSERT INTO citations (id, citing_id, cited_id, citation_type, context) VALUES (${escapeValue(id)}, ${escapeValue(edge.citingId)}, ${escapeValue(edge.citedId)}, ${escapeValue(edge.citationType)}, ${escapeValue(edge.context ?? null)}) RETURNING *`
+      );
+      return rowToCitation(rows[0] as Record<string, unknown>);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (!msg.toLowerCase().includes("duplicate")) throw e;
+      // Already exists — return the canonical row.
+      const rows = await this.sql.unsafe(
+        `SELECT * FROM citations WHERE citing_id = ${escapeValue(edge.citingId)} AND cited_id = ${escapeValue(edge.citedId)} AND citation_type = ${escapeValue(edge.citationType)} LIMIT 1`
+      );
+      if (rows.length === 0) throw e;
+      return rowToCitation(rows[0] as Record<string, unknown>);
+    }
+  }
+
+  async listCitationsByCitingId(citingId: string): Promise<Citation[]> {
+    const rows = await this.sql.unsafe(
+      `SELECT * FROM citations WHERE citing_id = ${escapeValue(citingId)} ORDER BY created_at`
+    );
+    return rows.map((r) => rowToCitation(r as Record<string, unknown>));
+  }
+
+  async listCitationsByCitedId(citedId: string): Promise<Citation[]> {
+    const rows = await this.sql.unsafe(
+      `SELECT * FROM citations WHERE cited_id = ${escapeValue(citedId)} ORDER BY created_at`
+    );
+    return rows.map((r) => rowToCitation(r as Record<string, unknown>));
   }
 
   // --- Doltgres versioning ---
@@ -395,3 +526,7 @@ export {
   type PushOutcomeListener,
   wrapPushSafe,
 } from "./dolt-remote.js";
+export {
+  DoltgresEdoResolverAdapter,
+  type DoltgresEdoResolverConfig,
+} from "./edo-resolver.js";

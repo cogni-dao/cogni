@@ -14,6 +14,7 @@
 
 import type { ToolSourcePort } from "@cogni/ai-core";
 import type {
+  EdoCapability,
   KnowledgeCapability,
   MetricsCapability,
   RepoCapability,
@@ -30,6 +31,7 @@ import { toUserId, userActor } from "@cogni/ids";
 import {
   type ContributionService,
   createContributionService,
+  createEdoCapability,
   createKnowledgeCapability,
   defaultCanMergeKnowledge,
   type KnowledgeStorePort,
@@ -38,6 +40,7 @@ import {
 import {
   buildDoltgresClient,
   createDoltgresPusher,
+  DoltgresEdoResolverAdapter,
   DoltgresKnowledgeContributionAdapter,
   DoltgresKnowledgeStoreAdapter,
   wrapPushSafe,
@@ -228,6 +231,8 @@ export interface Container {
   knowledgeContributionService: ContributionService | undefined;
   /** Direct knowledge store port — exposed for the cookie-only browse endpoint. Undefined when DOLTGRES_URL is unset. */
   knowledgeStorePort: KnowledgeStorePort | undefined;
+  /** EDO hypothesis-loop capability for the langgraph tool bindings AND the bearer-auth REST routes under /api/v1/edo. Always present (stubs throw when DOLTGRES_URL is unset). */
+  edoCapability: EdoCapability;
   /** Thread persistence scoped to a user (RLS enforced) */
   threadPersistenceForUser(userId: UserId): ThreadPersistencePort;
   /** Governance status queries (system tenant scope) */
@@ -599,8 +604,9 @@ function createContainer(): Container {
   // VcsCapability for AI tools (requires GH_REVIEW_APP_ID)
   const vcsCapability = createVcsCapability(env);
 
-  // KnowledgeCapability for AI tools (optional — requires DOLTGRES_URL)
+  // KnowledgeCapability + EdoCapability for AI tools (require DOLTGRES_URL)
   let knowledgeCapability: KnowledgeCapability;
+  let edoCapability: EdoCapability;
   let knowledgeContributionService: ContributionService | undefined;
   let knowledgeStorePort: KnowledgeStorePort | undefined;
   if (env.DOLTGRES_URL) {
@@ -613,6 +619,11 @@ function createContainer(): Container {
     });
     knowledgeStorePort = knowledgePort;
     knowledgeCapability = createKnowledgeCapability(knowledgePort);
+    const edoResolver = new DoltgresEdoResolverAdapter({
+      sql: doltClient,
+      store: knowledgePort,
+    });
+    edoCapability = createEdoCapability(knowledgePort, edoResolver);
     const contributionPort = new DoltgresKnowledgeContributionAdapter({
       sql: doltClient,
     });
@@ -646,13 +657,13 @@ function createContainer(): Container {
       // Provenance is stamped by the adapter (`source_type='external'`,
       // `source_ref='contribution:<id>:<seq>'`), so the provenance gate is
       // reserved for internal `core__knowledge_write` where the caller
-      // controls those fields. See work/projects/proj.knowledge-write-pipeline.md.
+      // controls those fields. See work/projects/proj.knowledge-syntropy.md.
       gates: [shapeGate],
       ...(pushMainOnMerge ? { pushMainOnMerge } : {}),
     });
     log.info(
       { dolthubMirror: Boolean(env.DOLTHUB_REMOTE_URL) },
-      "Knowledge store configured (Doltgres)"
+      "Knowledge store + EDO capability configured (Doltgres)"
     );
   } else {
     const notConfigured = () => {
@@ -663,6 +674,12 @@ function createContainer(): Container {
       list: notConfigured,
       get: notConfigured,
       write: notConfigured,
+    };
+    edoCapability = {
+      hypothesize: notConfigured,
+      decide: notConfigured,
+      recordOutcome: notConfigured,
+      getChain: notConfigured,
     };
     knowledgeContributionService = undefined;
     knowledgeStorePort = undefined;
@@ -689,6 +706,7 @@ function createContainer(): Container {
   // ToolSource with real implementations (per CAPABILITY_INJECTION)
   const toolBindings = createToolBindings({
     knowledgeCapability,
+    edoCapability,
     metricsCapability,
     webSearchCapability,
     repoCapability,
@@ -860,6 +878,7 @@ function createContainer(): Container {
     toolSource,
     knowledgeContributionService,
     knowledgeStorePort,
+    edoCapability,
     threadPersistenceForUser: (userId: UserId) =>
       new DrizzleThreadPersistenceAdapter(db, userActor(userId)),
     governanceStatus: new DrizzleGovernanceStatusAdapter(

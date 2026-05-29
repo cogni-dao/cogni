@@ -98,6 +98,14 @@ export const knowledge = pgTable(
     sourceRef: text("source_ref"),
     sourceNode: text("source_node"),
     tags: jsonb("tags").$type<string[]>(),
+    // Hypothesis-loop columns (knowledge-syntropy.md § The Hypothesis Loop)
+    // evaluateAt: REQUIRED for entry_type='hypothesis'; null otherwise.
+    // Enforced at the adapter layer (HYPOTHESIS_HAS_EVALUATE_AT).
+    evaluateAt: timestamp("evaluate_at", { withTimezone: true }),
+    // resolutionStrategy: namespaced text on hypothesis rows. NULL = no
+    // automation (cron skips). v0 non-null value: 'agent'. Future kinds
+    // (market:<id>, metric:<query>, http:<url>, deadline) add new values.
+    resolutionStrategy: text("resolution_strategy"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -111,6 +119,13 @@ export const knowledge = pgTable(
     index("idx_knowledge_source_type").on(table.sourceType),
     index("idx_knowledge_status").on(table.status),
     index("idx_knowledge_source_node").on(table.sourceNode),
+    // Partial index for the resolver cron's hot query:
+    //   WHERE resolution_strategy IS NOT NULL AND evaluate_at <= $now
+    //         AND entry_type = 'hypothesis'
+    index("idx_knowledge_resolver_due").on(
+      table.evaluateAt,
+      table.resolutionStrategy
+    ),
   ]
 );
 

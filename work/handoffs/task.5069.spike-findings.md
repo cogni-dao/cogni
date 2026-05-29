@@ -4,7 +4,7 @@ type: handoff
 title: "DoltHub PAT spike — auth path blocker (2026-05-28)"
 related_task: task.5069
 related_pr: 1360
-related_project: proj.knowledge-write-pipeline
+related_project: proj.knowledge-syntropy
 status: blocked
 created: 2026-05-28
 owner: derekg1729

@@ -19,6 +19,11 @@
       "types": "./dist/adapters/doltgres/index.d.ts",
       "import": "./dist/adapters/doltgres/index.js",
       "default": "./dist/adapters/doltgres/index.js"
+    },
+    "./adapters/fake": {
+      "types": "./dist/adapters/fake/index.d.ts",
+      "import": "./dist/adapters/fake/index.js",
+      "default": "./dist/adapters/fake/index.js"
     }
   },
   "types": "./dist/index.d.ts",
@@ -28,7 +33,8 @@
   "scripts": {
     "build": "tsup",
     "postbuild": "node -e \"const fs=require('fs'); for(const f of ['dist/index.js','dist/domain/contribution-schemas.js']){if(!fs.existsSync(f)){console.error('ERROR: '+f+' missing'); process.exit(1)}}\"",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --config vitest.config.ts"
   },
   "dependencies": {
     "@cogni/ai-tools": "workspace:*",

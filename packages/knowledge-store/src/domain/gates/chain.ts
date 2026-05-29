@@ -9,7 +9,7 @@
  *   - GATES_FAIL_CLOSED: first failing tier stops the chain.
  *   - SAME_TIER_PARALLEL: gates within one tier run together so users see all fixable issues at once (don't make them play whack-a-mole).
  * Side-effects: none
- * Links: work/projects/proj.knowledge-write-pipeline.md
+ * Links: work/projects/proj.knowledge-syntropy.md
  * @public
  */
 

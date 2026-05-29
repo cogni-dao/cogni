@@ -8,7 +8,7 @@
  * Invariants:
  *   - V0_DETERMINISTIC_GATES is the canonical baseline; per-node forks may extend but should not regress.
  * Side-effects: none
- * Links: work/projects/proj.knowledge-write-pipeline.md
+ * Links: work/projects/proj.knowledge-syntropy.md
  * @public
  */
 

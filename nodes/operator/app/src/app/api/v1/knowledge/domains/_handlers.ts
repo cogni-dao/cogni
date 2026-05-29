@@ -5,10 +5,14 @@
  * Module: `@app/api/v1/knowledge/domains/_handlers`
  * Purpose: HTTP handlers for the knowledge domain registry — list and register, mapping typed errors to HTTP statuses.
  * Scope: Operator-side wiring only. Does not contain business logic, validation, or storage I/O — those live in the port/adapter.
- * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, DOMAIN_HTTP_COOKIE_ONLY,
- *   DOMAIN_REGISTRY_VIA_UI.
+ * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, DOMAIN_LIST_COOKIE_ONLY
+ *   (browse is a UI concern), DOMAIN_REGISTER_BEARER_OR_SESSION (federation:
+ *   external bearer agents may register a domain on-demand so that downstream
+ *   writes — knowledge contributions, EDO hypothesize/decide/record-outcome —
+ *   can proceed against the DOMAIN_FK_ENFORCED_AT_WRITE adapter invariant
+ *   without requiring a UI roundtrip).
  * Side-effects: IO (HTTP response, Doltgres read/write via container port)
- * Links: docs/spec/knowledge-domain-registry.md
+ * Links: docs/spec/knowledge-domain-registry.md, docs/spec/knowledge-syntropy.md
  * @internal
  */
 
@@ -59,11 +63,11 @@ export async function handleCreate(
 ): Promise<NextResponse> {
   if (!sessionUser)
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  if (isBearer(request))
-    return NextResponse.json(
-      { error: "knowledge domain registration requires a session cookie" },
-      { status: 403 }
-    );
+  // Bearer agents may register a domain on-demand to satisfy
+  // DOMAIN_FK_ENFORCED_AT_WRITE before downstream writes
+  // (knowledge contributions + EDO hypothesize/decide/record-outcome).
+  // Touch via underscore so the linter doesn't warn.
+  void isBearer(request);
   const p = port();
   if (!p)
     return NextResponse.json(

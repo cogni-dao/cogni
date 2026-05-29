@@ -10,9 +10,20 @@ read_when: Building knowledge storage or retrieval agents, designing seed tables
 implements:
 owner: derekg1729
 created: 2026-04-02
-verified:
+verified: 2026-05-11
 tags:
-  [knowledge, dolt, retrieval, citations, syntropy, storage, librarian, x402]
+  [
+    knowledge,
+    dolt,
+    retrieval,
+    citations,
+    syntropy,
+    storage,
+    librarian,
+    x402,
+    edo,
+    hypothesis,
+  ]
 ---
 
 # Knowledge Syntropy — Storage, Retrieval, and Compounding Protocol
@@ -117,34 +128,36 @@ Every node fork inherits these four tables. They are the minimum viable knowledg
 
 The atomic unit of what the node believes. Each row is a single assertion with provenance.
 
-| Column           | Type        | Constraints               | Description                                                                           |
-| ---------------- | ----------- | ------------------------- | ------------------------------------------------------------------------------------- |
-| `id`             | text        | PK                        | Human-readable: `{domain}:{slug}` (e.g. `pm:fed-rate-base-rate`)                      |
-| `domain`         | text        | NOT NULL, FK→domains      | Registered domain key                                                                 |
-| `entity_id`      | text        |                           | Stable subject key (market ID, project slug, etc.)                                    |
-| `title`          | text        | NOT NULL                  | One-line claim summary                                                                |
-| `content`        | text        | NOT NULL                  | Full knowledge body — the actual assertion                                            |
-| `entry_type`     | text        | NOT NULL                  | `observation`, `finding`, `conclusion`, `rule`, `scorecard`, `skill`, `guide`, `html` |
-| `status`         | text        | NOT NULL, default `draft` | `draft` → `candidate` → `established` → `canonical` → `deprecated`                    |
-| `confidence_pct` | integer     |                           | 0–100, computed from citations (null = not applicable)                                |
-| `source_type`    | text        | NOT NULL                  | `human`, `agent`, `analysis_signal`, `external`, `derived`                            |
-| `source_ref`     | text        |                           | Pointer to origin (URL, signal ID, commit hash)                                       |
-| `source_node`    | text        |                           | Which AI node/agent created this                                                      |
-| `created_at`     | timestamptz | NOT NULL, default now     |                                                                                       |
-| `updated_at`     | timestamptz | NOT NULL, default now     |                                                                                       |
+| Column                | Type        | Constraints               | Description                                                                                                                                                                                                                                 |
+| --------------------- | ----------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                  | text        | PK                        | Human-readable: `{domain}:{slug}` (e.g. `pm:fed-rate-base-rate`)                                                                                                                                                                            |
+| `domain`              | text        | NOT NULL, FK→domains      | Registered domain key                                                                                                                                                                                                                       |
+| `entity_id`           | text        |                           | Stable subject key (market ID, project slug, etc.)                                                                                                                                                                                          |
+| `title`               | text        | NOT NULL                  | One-line claim summary                                                                                                                                                                                                                      |
+| `content`             | text        | NOT NULL                  | Full knowledge body — the actual assertion                                                                                                                                                                                                  |
+| `entry_type`          | text        | NOT NULL                  | `event`, `hypothesis`, `decision`, `outcome` (see § The EDO Loop) + `observation`, `finding`, `conclusion`, `rule`, `scorecard`, `skill`, `guide`, `html`                                                                                   |
+| `status`              | text        | NOT NULL, default `draft` | `draft` → `candidate` → `established` → `canonical` → `deprecated`                                                                                                                                                                          |
+| `confidence_pct`      | integer     | NOT NULL, default 40      | 0–100, computed from citations. Default 40 matches `analysis_signal` baseline; agents may write lower (30 for draft) or higher per § Confidence Defaults.                                                                                   |
+| `source_type`         | text        | NOT NULL                  | `human`, `agent`, `analysis_signal`, `external`, `derived`                                                                                                                                                                                  |
+| `source_ref`          | text        |                           | Pointer to origin (URL, signal ID, commit hash)                                                                                                                                                                                             |
+| `source_node`         | text        |                           | Which AI node/agent created this                                                                                                                                                                                                            |
+| `evaluate_at`         | timestamptz |                           | When this row should be resolved. REQUIRED for `entry_type='hypothesis'`; null otherwise. Resolver cron reads pending rows (see § The EDO Loop).                                                                                            |
+| `resolution_strategy` | text        |                           | Namespaced resolver identifier on hypothesis rows. NULL = no automation (cron skips; row is "manual"). v0 non-null value: `agent`. Future kinds (`market:<id>`, `metric:<query>`, `http:<url>`, `deadline`) add new values, not new schema. |
+| `created_at`          | timestamptz | NOT NULL, default now     |                                                                                                                                                                                                                                             |
+| `updated_at`          | timestamptz | NOT NULL, default now     |                                                                                                                                                                                                                                             |
 
 ### `citations` — The DAG that makes knowledge compound
 
 Every edge is a directed relationship between two knowledge entries. The citation DAG is what separates compounding knowledge from a flat document store.
 
-| Column          | Type        | Constraints            | Description                                        |
-| --------------- | ----------- | ---------------------- | -------------------------------------------------- |
-| `id`            | text        | PK                     | `{citing_id}→{cited_id}:{type}`                    |
-| `citing_id`     | text        | NOT NULL, FK→knowledge | The entry making the citation                      |
-| `cited_id`      | text        | NOT NULL, FK→knowledge | The entry being cited                              |
-| `citation_type` | text        | NOT NULL               | `supports`, `contradicts`, `extends`, `supersedes` |
-| `context`       | text        |                        | Why this citation exists (one sentence)            |
-| `created_at`    | timestamptz | NOT NULL, default now  |                                                    |
+| Column          | Type        | Constraints            | Description                                                                                                                         |
+| --------------- | ----------- | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `id`            | text        | PK                     | `{citing_id}→{cited_id}:{type}`                                                                                                     |
+| `citing_id`     | text        | NOT NULL, FK→knowledge | The entry making the citation                                                                                                       |
+| `cited_id`      | text        | NOT NULL, FK→knowledge | The entry being cited                                                                                                               |
+| `citation_type` | text        | NOT NULL               | `supports`, `contradicts`, `extends`, `supersedes`, `evidence_for`, `derives_from`, `validates`, `invalidates` (see § The EDO Loop) |
+| `context`       | text        |                        | Why this citation exists (one sentence)                                                                                             |
+| `created_at`    | timestamptz | NOT NULL, default now  |                                                                                                                                     |
 
 **Unique constraint:** `(citing_id, cited_id, citation_type)` — one edge per type per pair.
 
@@ -223,6 +236,13 @@ SELECT dolt_commit('-Am', 'add: fed rate cut base rate from BLS data (conf: 50%)
 **DEPRECATE_NOT_DELETE** — Never delete knowledge rows. Superseded entries get `status: 'deprecated'` plus a `citations` edge of type `supersedes` from the new entry. The old entry remains in Dolt history for audit.
 
 **SOURCE_REGISTRATION** — External references should be registered in `sources` table on first use. This enables reliability tracking over time.
+
+**EXTERNAL_WRITES_TO_BRANCH** — Bearer-authenticated agents (external principals) MUST land their writes on a `contrib/<id>` branch, never directly on `main`. Session-cookie users (trusted humans, v0) may write direct to main. This rule applies to **all** external write surfaces:
+
+- `POST /api/v1/knowledge/contributions` — single/multi-row edits via the `ContributionService.create` path.
+- `POST /api/v1/edo/{hypothesize,decide,record-outcome}` — atomic EDO multi-row batches via `ContributionService.createEdo{Hypothesis,Decision,Outcome}Contribution`. Bearer → contrib branch (one Dolt commit per atomic batch on the branch); session → direct `EdoCapability.*` against main.
+
+The internal `core__edo_*` langgraph tools are NOT external — they run inside the operator's trust boundary and write direct to main via `EdoCapability`. The rule gates the HTTP perimeter only.
 
 ### When to Create New Tables
 
@@ -455,6 +475,219 @@ At these scales, Dolt direct queries remain fast (< 10ms for indexed lookups). T
 
 ---
 
+## The Hypothesis Loop — Event → Hypothesis → Decision → Outcome
+
+> Knowledge that doesn't predict, decide, and resolve is just a filing cabinet. The hypothesis loop turns the knowledge plane into a self-evaluating reasoning system. It is the foundation for self-improving agentic loops: agents form falsifiable predictions, act, observe, and update.
+>
+> **Codename `EDO`.** The project + tool prefix (`proj.edo-foundation`, `core__edo_*`) is shorthand. The accurate beat count is four — Hypothesis is the falsifiability bridge between Event and Decision and is structurally required, not optional.
+
+### The Four Beats
+
+Every closing-the-loop interaction is a sequence of four `knowledge` rows linked by citations:
+
+| Beat           | `entry_type` | What it captures                                                                            | Required citations                                            |
+| -------------- | ------------ | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| **Event**      | `event`      | A signal-bearing thing that happened — market move, log line, user action, scheduled tick   | none (or `extends` into existing knowledge)                   |
+| **Hypothesis** | `hypothesis` | A falsifiable prediction with a resolution date. MUST set `evaluate_at`.                    | ≥1 `evidence_for` from events                                 |
+| **Decision**   | `decision`   | The action taken (or explicitly not taken) on the basis of the hypothesis                   | ≥1 `derives_from` to a hypothesis                             |
+| **Outcome**    | `outcome`    | What actually happened by `evaluate_at` — fills in the truth value, may also record a delta | ≥1 `validates` OR `invalidates` to the hypothesis it resolved |
+
+These four are `entry_type` values on the existing `knowledge` table. **No new tables.** The structure is the citation DAG.
+
+### Recursion via the Citation DAG
+
+EDO trees are emergent, not materialized. An `outcome` row is just a knowledge entry; the next `hypothesis` cites it via `evidence_for`. Tree depth = causal depth.
+
+```
+Outcome A ───────evidence_for───────▶ Hypothesis B ──derives_from──▶ Decision B
+                                            │                              │
+                                       evaluate_at                          │
+                                            ▼                               ▼
+                                       Outcome B ◀────validates/invalidates─┘
+                                            │
+                                            └──── evidence_for ────▶ Hypothesis C ...
+```
+
+To walk an EDO chain: follow `citations` edges from any node. No `parent_id`, no `chain_id`, no recursive CTE schema. The fractal/recursive nature is the property of the relation table, not a separate structure to maintain.
+
+### Four New Citation Types
+
+| Type           | Direction                        | Use                                        |
+| -------------- | -------------------------------- | ------------------------------------------ |
+| `evidence_for` | event → hypothesis (or decision) | "this event motivates this prediction"     |
+| `derives_from` | decision → hypothesis            | "this action follows from this prediction" |
+| `validates`    | outcome → hypothesis             | "the prediction held"                      |
+| `invalidates`  | outcome → hypothesis             | "the prediction failed"                    |
+
+Existing types (`supports`, `contradicts`, `extends`, `supersedes`) remain for non-temporal knowledge (claims, rules, scorecards). The two groups are orthogonal — a `finding` row uses the original four; a `hypothesis` row uses the EDO four.
+
+### `evaluate_at`: The Loop Closer
+
+`hypothesis` rows MUST set `evaluate_at` (timestamptz). It is the appointment with truth. Orphan hypotheses are surfaced by `pendingResolutions(now)` — they cannot rot silently.
+
+**Resolution strategy in v0: opt-in via `resolution_strategy` column.** Hypothesis writes set this namespaced text column to declare how the row should be resolved:
+
+| `resolution_strategy` | Resolver behavior                                                                                                                                                                                         |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NULL` (default)      | Cron skips the row. No automation policy set. Row is available for explicit `core__edo_record_outcome` calls by operator scripts or, when the manual-inbox surface lands, by humans through `/knowledge`. |
+| `agent`               | Cron hands off to a single resolver graph that gathers evidence and files the outcome via `core__edo_record_outcome`.                                                                                     |
+
+**Why a column, not a `tags` key:** the shipped `tags` field is `jsonb` typed as `string[]` (an array, not an object), and Doltgres 0.56 has known limitations on JSONB `@>` / `->>` operators (see the data-plane spec's "Surface today"). A dedicated text column is indexable (`CREATE INDEX ... WHERE resolution_strategy IS NOT NULL`), queryable with `=` or `LIKE 'agent%'`, and the NULL default is semantically clean — absence of a policy means "no automation".
+
+**Why namespaced text, not an enum:** v0 ships with one allowed value (`agent`). Future resolver kinds (`market:0x123abc`, `metric:rate(...)`, `http://...`, `deadline`) are new values, never new columns. Validation of allowed values lives in the Zod schema of `core__edo_hypothesize`, not in a DB CHECK constraint — so adding a resolver kind is a code-change, not a schema migration.
+
+LLM cost is bounded by default: NULL is free, only `agent` opts into the resolver graph.
+
+Either resolution path lands the outcome row + `validates`/`invalidates` citation on `main` with a Dolt commit, and triggers `recomputeConfidence` on the cited hypothesis.
+
+### Enforcement Points
+
+Invariants live at the adapter layer — the universal choke point — mirroring `DOMAIN_FK_ENFORCED_AT_WRITE` from [knowledge-domain-registry](./knowledge-domain-registry.md). Tools and capabilities are convenience wrappers; the adapter is law.
+
+| Invariant                            | Adapter check                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `HYPOTHESIS_HAS_EVALUATE_AT`         | `addKnowledge` / `upsertKnowledge` rejects rows where `entry_type='hypothesis'` and `evaluate_at` is null                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `CITATION_TARGET_EXISTS_AT_WRITE`    | `addCitation` rejects rows whose `cited_id` is not present in `knowledge` (port adds `knowledgeExists(id)` for the check)                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `EDGE_TYPE_MATCHES_CITED_ENTRY_TYPE` | `addCitation` verifies the cited row's `entry_type` against the citation_type: `derives_from`, `validates`, `invalidates` require `cited.entry_type='hypothesis'`. `evidence_for` accepts any cited entry_type (events, observations, findings can all be evidence). Without this check the falsifiability gates below are bypassable. **Adapter implementation collapses this with `CITATION_TARGET_EXISTS_AT_WRITE` into a single roundtrip: `SELECT entry_type FROM knowledge WHERE id = $1` — `null` ⇒ not exists (404); value ⇒ check against citation_type contract. No double-fetch.** |
+| `OUTCOME_CITES_HYPOTHESIS`           | `addKnowledge` for `entry_type='outcome'` requires the atomic `core__edo_record_outcome` path (raw write rejects)                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `DECISION_CITES_HYPOTHESIS`          | `addKnowledge` for `entry_type='decision'` requires the atomic `core__edo_decide` path (raw write rejects)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+
+**Fail-closed enumeration.** Define `RAW_WRITE_REJECTS_TYPES = {hypothesis, decision, outcome}`. The `core__knowledge_write` tool rejects rows whose `entry_type ∈ RAW_WRITE_REJECTS_TYPES` with a typed error mapped to HTTP 400. `entry_type='event'` is NOT in the set — events flow through `core__knowledge_write` unchanged. Adding a future EDO-like entry_type is a deliberate two-step: define the type AND add it to the set. Categorical wording ("EDO types") is rejected — it fails open on additions.
+
+### Computation Surface
+
+A new port — separate from `KnowledgeStorePort` (CRUD) — owns causal/evaluative logic:
+
+```typescript
+interface EdoResolverPort {
+  scheduleResolution(hypothesisId: string, evaluateAt: Date): Promise<void>;
+  pendingResolutions(now: Date, limit?: number): Promise<Knowledge[]>;
+  resolveHypothesis(
+    hypothesisId: string,
+    outcome: NewKnowledge,
+    edge: "validates" | "invalidates"
+  ): Promise<{ outcome: Knowledge; resolvedConfidence: number }>;
+  recomputeConfidence(entryId: string, depth?: 1): Promise<number>;
+}
+```
+
+`recomputeConfidence` walks `citations` one hop in v1 and applies the formula from § "Confidence Is Computed, Not Assigned". Multi-hop transitive propagation is filed when v1 data shows the need — premature optimization otherwise.
+
+### Port Surface Additions
+
+The canonical `KnowledgeStorePort` shape lives in [knowledge-data-plane.md § Port Interface](./knowledge-data-plane.md#port-interface) — never redefined here. This spec contributes these methods:
+
+| Method on `KnowledgeStorePort`                      | Why                                                                                            |
+| --------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `addCitation(edge: NewCitation): Promise<Citation>` | Citation writes have no existing port surface. Required by `OUTCOME_CITES_HYPOTHESIS` etc.     |
+| `knowledgeExists(id: string): Promise<boolean>`     | Shared check for `CITATION_TARGET_EXISTS_AT_WRITE`. Mirrors `domainExists` from registry spec. |
+
+`EdoResolverPort` (above) lives separately — causal/evaluative concerns are not CRUD.
+
+### Atomic Agent Tools
+
+Three new tools in `@cogni/ai-tools`, each composes a knowledge write + citation write(s) + commit in one capability call. Agents call these instead of `core__knowledge_write` when the entry is part of a loop.
+
+| Tool                       | Effect       | Writes                                                                                                        |
+| -------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------- |
+| `core__edo_hypothesize`    | state_change | `hypothesis` row + N `evidence_for` citations + `evaluate_at` set                                             |
+| `core__edo_decide`         | state_change | `decision` row + 1 `derives_from` citation                                                                    |
+| `core__edo_record_outcome` | state_change | `outcome` row + 1 `validates`/`invalidates` citation + triggers `recomputeConfidence` on the cited hypothesis |
+
+Existing `core__knowledge_write` remains for non-EDO knowledge (rules, guides, scorecards). The two surfaces are deliberately type-narrow — type-narrow tools beat polymorphic ones for model accuracy.
+
+### Why No New Tables
+
+| Tempting alternative                                      | Why rejected                                                                                                                                             |
+| --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `hypotheses`, `decisions`, `outcomes` tables with FK cols | Violates `SCHEMA_GENERIC_CONTENT_SPECIFIC`. The four beats are content roles, not entity types. Locks out future entry_types that don't fit the pattern. |
+| `edo_chains` materialized parent table                    | The chain IS the citation DAG. Materializing is double-bookkeeping that drifts.                                                                          |
+| DB triggers for confidence recompute                      | Doltgres 0.56 has no PL/pgSQL. App-layer only, per `CONFIDENCE_APPLICATION_LEVEL`.                                                                       |
+| Temporal workflow for resolver                            | One cron + idempotent resolver matches the `scheduler-worker` pattern already in use. Temporal is the third tool, not the second.                        |
+
+### Filing Back Through the Loop
+
+The Karpathy insight ("my explorations always add up in the knowledge base") becomes mechanical with EDO:
+
+```
+Agent observes data        → core__edo_record_outcome (if resolving) OR core__knowledge_write (if just an event)
+Agent forms a prediction   → core__edo_hypothesize     (binds to events via evidence_for)
+Agent takes action         → core__edo_decide          (binds to hypothesis via derives_from)
+evaluate_at fires          → resolver cron files outcome → validates/invalidates → confidence updates
+Outcome becomes evidence   → cited by the next hypothesis
+```
+
+Syntropy by construction: agents that follow the loop produce a growing, self-evaluating corpus. Hypotheses that fail get invalidated and their author-strategies lose confidence. Hypotheses that hold compound into established knowledge.
+
+### Read-Path Filters — Why EDO Doesn't Pollute `knowledge`
+
+A reasonable objection to the single-table design: won't `hypothesis` / `decision` / `outcome` rows pollute the table over time, effectively turning `knowledge` into an activity log? The answer is: **filter on read, not split on write.** Splitting transient EDO rows into separate tables would shred the citation DAG (chains would require cross-table UNIONs and a target-table discriminator on `citations`); filtering keeps the DAG intact while presenting a refined surface to the librarian.
+
+The contract for any read path that surfaces "what does this node know" — librarian search, knowledge-hub UI, `core__knowledge_search` — is:
+
+```sql
+WHERE status IN ('established', 'canonical')
+  AND entry_type NOT IN ('hypothesis', 'decision', 'outcome', 'event')
+-- explicit opt-in surfaces (mode=chains, mode=audit, EHDO calibration view)
+-- skip this filter to expose the EDO machinery
+```
+
+The Postgres search index materializes this filter at index time:
+
+```sql
+CREATE INDEX idx_ks_canonical_read ON knowledge_search (domain, confidence_pct DESC)
+  WHERE status IN ('established', 'canonical')
+    AND entry_type NOT IN ('hypothesis', 'decision', 'outcome', 'event');
+```
+
+`SCHEMA_REFINED_BY_READ_FILTER` is the load-bearing invariant — without the filter in the default librarian path, hypothesis-shaped noise reaches agents that asked for canonical knowledge, and the design fails the spec's syntropy bar in practice even though it satisfies it in shape.
+
+#### Chain Read API
+
+The `mode=chains` opt-in surface needs a single read path that walks the citation DAG anchored at one entry — the EDO loop is only visible when hypothesis, decision, and outcome rows are stitched back together by their `validates` / `derives_from` / `evidence_for` edges. This is `EdoCapability.getChain(rootId, …)` on the package side and the following HTTP route on the operator node:
+
+```
+GET /api/v1/edo/chain/:id?direction=out|in|both&maxDepth=N
+```
+
+| Query param | Type    | Default | Notes                                                          |
+| ----------- | ------- | ------- | -------------------------------------------------------------- |
+| `direction` | enum    | `both`  | `out` = follow citing→cited; `in` = follow cited→citing.       |
+| `maxDepth`  | integer | `5`     | Clamped to `[1, 10]`. Higher values 400 at the route boundary. |
+
+Response shape (mirrors `EdoCapability.getChain` 1:1):
+
+```jsonc
+{
+  "root": KnowledgeEntry,                       // depth-0 row
+  "chain": [
+    { "entry": KnowledgeEntry,
+      "edgeFromParent": null,                   // null only on the root
+      "depth": 0 },
+    { "entry": KnowledgeEntry,
+      "edgeFromParent": { "citationType": "derives_from", "direction": "out" },
+      "depth": 1 },
+    // …
+  ]
+}
+```
+
+Auth mirrors the rest of the EDO surface — bearer (agent) and session (human) both pass `getSessionUser`. The walk is cycle-safe (first-visit-wins, BFS-ordered) and returns a flat list — clients reconstruct depth groups by bucketing on `node.depth`. `DoltgresEdoResolverAdapter.walkChain` issues one `WITH RECURSIVE` query (no N+1); `FakeEdoResolverAdapter` mirrors with an in-memory BFS for tests.
+
+### v0 Limitations + Walk-Tier Filters
+
+The Crawl tier ships the **write side** (schema + capability + tools). Two read-side gaps land in Walk:
+
+| v0 (Crawl) state                                           | Walk-tier deliverable                                                                                  |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Default search returns all `entry_type` values             | `LibrarianReadFilter` — applies the WHERE clause above unless the caller opts into `mode=chains/audit` |
+| Hypotheses past `evaluate_at` linger forever if unresolved | `staleHypothesisSweep` — auto-`status: deprecated` past `evaluate_at + grace` (v0 grace: 30d)          |
+| EHDO calibration view (validates/invalidates by source)    | SQL view aggregating hit-rate per `source_node × resolution_strategy` over 30d rolling                 |
+
+Without these, the spec's intent (refined read surface, bounded transient growth, measurable calibration) is satisfied in principle but not in observable behavior. They are not optional polish — they're the bridge between "the design is correct" and "a human looking at `knowledge` row counts next month doesn't see noise."
+
+---
+
 ## Postgres Search Index: Derived and Rebuildable
 
 The Postgres search index is a **read-optimized projection** of Dolt data. It exists solely for retrieval performance. If destroyed, it can be rebuilt from Dolt.
@@ -539,42 +772,60 @@ The librarian's retrieval contract (same `KnowledgeSearchHit` shape) is the x402
 
 ## Invariants
 
-| Rule                                       | Constraint                                                                                                                                                                                                                                    |
-| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| DOLT_IS_SOURCE_OF_TRUTH                    | All knowledge data lives in Doltgres. Postgres search index is derived and rebuildable.                                                                                                                                                       |
-| ENTRY_HAS_PROVENANCE                       | Every knowledge entry must have `source_type` and `source_ref`. No knowledge without traceable origin.                                                                                                                                        |
-| ENTRY_HAS_DOMAIN                           | Every entry belongs to exactly one registered domain (FK to `domains` table).                                                                                                                                                                 |
-| CITATIONS_ON_DERIVED                       | Entries with `source_type: 'derived'` must have at least one citation edge to their source entries.                                                                                                                                           |
-| CONFIDENCE_APPLICATION_LEVEL               | Confidence is computed in the adapter, not via database triggers. Doltgres has no PL/pgSQL.                                                                                                                                                   |
-| DEPRECATE_NOT_DELETE                       | Knowledge is never deleted. Superseded entries get `status: 'deprecated'` + `supersedes` citation edge.                                                                                                                                       |
-| COMMIT_PER_LOGICAL_WRITE                   | Each logical write gets one Dolt commit with descriptive message.                                                                                                                                                                             |
-| SEARCH_BEFORE_INTERNET                     | Agents search node knowledge before falling back to web search.                                                                                                                                                                               |
-| CITATIONS_IN_RESPONSE                      | Agent responses referencing knowledge must include citation tokens. Citation guard validates.                                                                                                                                                 |
-| SYNC_DIRECTION_DOLT_TO_POSTGRES            | Search index sync is one-way: Dolt → Postgres. Never write to Postgres search index directly.                                                                                                                                                 |
-| TABLES_NEED_JUSTIFICATION                  | New Dolt tables require a fundamentally different data shape, not just different content.                                                                                                                                                     |
-| NODE_KNOWLEDGE_SOVEREIGN                   | Inherited: node knowledge is private by default. Sharing is explicit.                                                                                                                                                                         |
-| KNOWLEDGE_LOOP_CLOSED_VIA_SIGNED_IN_USER   | v0 merge gate: any wallet/cookie-session user can merge a contribution. Bearer-token agents cannot merge, but they can close their own open contribution branch. The session cookie is the trust signal until per-user RBAC lands.            |
-| KNOWLEDGE_BROWSE_VIA_HTTP_REQUIRES_SESSION | The `GET /api/v1/knowledge` browse endpoint is cookie-session only. Bearer / x402 access remains future work (see [x402-e2e](./x402-e2e.md)).                                                                                                 |
-| DOMAIN_FK_ENFORCED_AT_WRITE                | Every write to `knowledge` verifies `domain` exists in `domains` before INSERT or contribution-branch UPDATE. Unregistered → `DomainNotRegisteredError` → HTTP 400. Contract: [knowledge-domain-registry](./knowledge-domain-registry.md).    |
-| DOMAIN_REGISTRY_EXTENDS_VIA_UI             | Base domains are seeded by the schema migrator (reference data); UI extends beyond the base via cookie-session POST. `NODES_BOOT_EMPTY` scopes to content tables only. Contract: [knowledge-domain-registry](./knowledge-domain-registry.md). |
+| Rule                                       | Constraint                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| DOLT_IS_SOURCE_OF_TRUTH                    | All knowledge data lives in Doltgres. Postgres search index is derived and rebuildable.                                                                                                                                                                                                                                                                                                                                 |
+| ENTRY_HAS_PROVENANCE                       | Every knowledge entry must have `source_type` and `source_ref`. No knowledge without traceable origin.                                                                                                                                                                                                                                                                                                                  |
+| ENTRY_HAS_DOMAIN                           | Every entry belongs to exactly one registered domain (FK to `domains` table).                                                                                                                                                                                                                                                                                                                                           |
+| CITATIONS_ON_DERIVED                       | Entries with `source_type: 'derived'` must have at least one citation edge to their source entries.                                                                                                                                                                                                                                                                                                                     |
+| CONFIDENCE_APPLICATION_LEVEL               | Confidence is computed in the adapter, not via database triggers. Doltgres has no PL/pgSQL.                                                                                                                                                                                                                                                                                                                             |
+| DEPRECATE_NOT_DELETE                       | Knowledge is never deleted. Superseded entries get `status: 'deprecated'` + `supersedes` citation edge.                                                                                                                                                                                                                                                                                                                 |
+| COMMIT_PER_LOGICAL_WRITE                   | Each logical write gets one Dolt commit with descriptive message.                                                                                                                                                                                                                                                                                                                                                       |
+| SEARCH_BEFORE_INTERNET                     | Agents search node knowledge before falling back to web search.                                                                                                                                                                                                                                                                                                                                                         |
+| CITATIONS_IN_RESPONSE                      | Agent responses referencing knowledge must include citation tokens. Citation guard validates.                                                                                                                                                                                                                                                                                                                           |
+| SYNC_DIRECTION_DOLT_TO_POSTGRES            | Search index sync is one-way: Dolt → Postgres. Never write to Postgres search index directly.                                                                                                                                                                                                                                                                                                                           |
+| TABLES_NEED_JUSTIFICATION                  | New Dolt tables require a fundamentally different data shape, not just different content.                                                                                                                                                                                                                                                                                                                               |
+| NODE_KNOWLEDGE_SOVEREIGN                   | Inherited: node knowledge is private by default. Sharing is explicit.                                                                                                                                                                                                                                                                                                                                                   |
+| KNOWLEDGE_LOOP_CLOSED_VIA_SIGNED_IN_USER   | v0 merge gate: any wallet/cookie-session user can merge a contribution. Bearer-token agents cannot merge, but they can close their own open contribution branch. The session cookie is the trust signal until per-user RBAC lands.                                                                                                                                                                                      |
+| EDO_BEARER_VIA_CONTRIB_BRANCH              | Bearer-authenticated EDO writes (`POST /api/v1/edo/{hypothesize,decide,record-outcome}`) MUST land on a `contrib/<id>` branch via `ContributionService.createEdo*Contribution`. Session-cookie users go direct to main via `EdoCapability.*` (humans are trusted in v0). Internal langgraph tools (`core__edo_*`) keep the direct-to-main path. Same auth-routed rule as `POST /api/v1/knowledge/contributions`.        |
+| KNOWLEDGE_BROWSE_VIA_HTTP_REQUIRES_SESSION | The `GET /api/v1/knowledge` browse endpoint is cookie-session only. Bearer / x402 access remains future work (see [x402-e2e](./x402-e2e.md)).                                                                                                                                                                                                                                                                           |
+| DOMAIN_FK_ENFORCED_AT_WRITE                | Every write to `knowledge` verifies `domain` exists in `domains` before INSERT or contribution-branch UPDATE. Unregistered → `DomainNotRegisteredError` → HTTP 400. Contract: [knowledge-domain-registry](./knowledge-domain-registry.md).                                                                                                                                                                              |
+| DOMAIN_REGISTRY_EXTENDS_VIA_UI             | Base domains are seeded by the schema migrator (reference data); UI extends beyond the base via cookie-session POST. `NODES_BOOT_EMPTY` scopes to content tables only. Contract: [knowledge-domain-registry](./knowledge-domain-registry.md).                                                                                                                                                                           |
+| EDO_FOUR_BEATS_VIA_ENTRY_TYPE              | Event / Hypothesis / Decision / Outcome are `entry_type` values on `knowledge`, not separate tables. The four beats are content roles, structure lives in the citation DAG.                                                                                                                                                                                                                                             |
+| HYPOTHESIS_HAS_EVALUATE_AT                 | Every `entry_type='hypothesis'` row MUST set `evaluate_at` (timestamptz). Enforced at the **adapter layer** (`addKnowledge`/`upsertKnowledge` rejects null `evaluate_at` for hypothesis rows). `evaluate_at` is null for all other entry_types. Resolver cron reads pending rows on `evaluate_at <= now()`.                                                                                                             |
+| CITATION_TARGET_EXISTS_AT_WRITE            | Every `citations.cited_id` MUST reference an existing `knowledge.id` at write time. Enforced at the adapter layer via `port.knowledgeExists(id)` before INSERT. Mirrors `DOMAIN_FK_ENFORCED_AT_WRITE`.                                                                                                                                                                                                                  |
+| OUTCOME_CITES_HYPOTHESIS                   | Every `entry_type='outcome'` row MUST have ≥1 `validates` OR `invalidates` citation edge. Enforced by routing all `outcome` writes through `core__edo_record_outcome` (raw `core__knowledge_write` rejects EDO entry_types).                                                                                                                                                                                            |
+| DECISION_CITES_HYPOTHESIS                  | Every `entry_type='decision'` row MUST have ≥1 `derives_from` citation edge to a hypothesis. Enforced by routing all `decision` writes through `core__edo_decide`. Decisions without a falsifiable prediction get filed as `finding` instead.                                                                                                                                                                           |
+| RESOLUTION_STRATEGY_NULL_MEANS_MANUAL      | `knowledge.resolution_strategy` is NULL by default — cron skips. Non-null is a namespaced resolver identifier; v0 allows `agent`. New kinds (`market:<id>`, `metric:<query>`, `http:<url>`, `deadline`) are new column values, never new columns or new tables. Validation in Zod, not DB CHECK.                                                                                                                        |
+| EDO_RECURSION_VIA_CITATIONS                | EDO chain depth is emergent from the citation DAG. No `parent_id`, no `chain_id`, no chain table. To walk a chain, follow citation edges.                                                                                                                                                                                                                                                                               |
+| CONFIDENCE_RECOMPUTE_ON_RESOLVE            | `validates` / `invalidates` writes trigger a 1-hop `recomputeConfidence` on the cited row. Multi-hop transitive propagation is deferred until v1 data shows the need.                                                                                                                                                                                                                                                   |
+| RESOLVER_IDEMPOTENT                        | `resolveDueHypotheses` MUST be idempotent on hypothesis id. Double-firing a resolution is a no-op (already-resolved hypotheses are skipped).                                                                                                                                                                                                                                                                            |
+| EDO_TOOLS_ATOMIC                           | `core__edo_hypothesize` / `core__edo_decide` / `core__edo_record_outcome` each write entry + edges + commit in one capability call. No partial-loop writes.                                                                                                                                                                                                                                                             |
+| EDGE_TYPE_MATCHES_CITED_ENTRY_TYPE         | `addCitation` verifies the cited row's `entry_type` matches the citation_type's contract: `derives_from`/`validates`/`invalidates` require `cited.entry_type='hypothesis'`; `evidence_for` accepts any. Without this check, falsifiability gates are bypassable.                                                                                                                                                        |
+| RECOMPUTE_IS_PURE_FROM_CITATIONS           | `recomputeConfidence` reads ALL relevant `citations` rows for the target and recomputes from scratch — never increments, never reads prior `confidence_pct`. Concurrent recomputes converge regardless of order; no locks needed.                                                                                                                                                                                       |
+| RESOLVER_MAX_BATCH_PER_TICK                | The resolver cron processes at most N hypotheses per tick (v0: N=10) across all `resolution_strategy` namespaces, with a per-strategy sub-budget. Bounds LLM cost under fan-out spikes (e.g. 100 hypotheses due at the same minute).                                                                                                                                                                                    |
+| RESOLVER_SINGLE_LEADER_PER_NODE            | At most one `resolveDueHypotheses` worker per node runs at a time. **Cost-bounding only, not correctness-load-bearing** — `RESOLVER_IDEMPOTENT` + `RECOMPUTE_IS_PURE_FROM_CITATIONS` already make double-firing safe. v0 mechanism: existing `scheduler-worker` single-replica deploy. If horizontal scaling lands later, a Postgres advisory lock keyed on `cron:resolver:<node>` is sufficient — no consensus needed. |
 
 ---
 
 ## Critical Path After v0
 
-Ordered post-#1307. Each tier = one work item; tier N+1 is filed only when N is in flight or done. **No fan-out.** Every roadmap item that touches contracts/Zod must reference these tiers in its scoping section.
+Ordered as the Karpathy compile → Q&A → file-back → lint loop. Each tier = one work item; tier N+1 is filed only when N is in flight or done. **No fan-out.** Tracked end-to-end on [proj.knowledge-syntropy](../../work/projects/proj.knowledge-syntropy.md) — the umbrella project that subsumes the previously separate `proj.knowledge-write-pipeline` (W0) and `proj.edo-foundation` (W1) projects. Every roadmap item that touches contracts/Zod must reference these tiers in its scoping section.
 
-| Tier                                                                        | Outcome                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Status                                                                                                  |
-| --------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| **P0** — operator-side merging                                              | A signed-in user can list + merge open contributions through `/knowledge` (Inbox mode). Without this, the contribution flow is theatre.                                                                                                                                                                                                                                                                                                                                 | ✅ Done — PR #1308 (task.5037).                                                                         |
-| **P0.5** — domain registry + FK enforcement                                 | `domains` table is enforced at write time. New 3-mode toggle (`Browse · Domains · Inbox`) lets a signed-in user register the 5 starter domains and any new ones via UI; `core__knowledge_write` and HTTP contributions both reject unregistered domains with `DomainNotRegisteredError`. Closes the entropy hole where `ENTRY_HAS_DOMAIN` was a wish.                                                                                                                   | ✅ **Done** — PR #1312 (task.5038), merged 2026-05-11.                                                  |
-| **P0.6** — knowledge write pipeline (Dolt-side CI/CD gates)                 | Structured gate chain runs against every write. v0 = `shape` + `provenance` deterministic gates; gates fail closed at the API/tool boundary, never reach Doltgres. v0b adds the `description` column + slug retrofit; v1 layers AI-evaluated quality gates via the existing `.cogni/rules` + `pr-review` graph infra. See [proj.knowledge-write-pipeline](../../work/projects/proj.knowledge-write-pipeline.md). Must precede P1 (hypothesis rows also need the gates). | **In flight.** Branch `derekg1729/knowledge-syntropy-expert`.                                           |
-| **P1** — EDO-aligned `entry_type` + `citations[]` + `evaluate_at`           | Hypothesis rows can be written + retrieved + cited; outcomes can validate them via `validates` / `invalidates` citation edges. Closes the "confidence drifts over time" mechanic at the column level.                                                                                                                                                                                                                                                                   | Designed. Filed when P0.6 merges.                                                                       |
-| **P1.5** — Poly-side route bindings                                         | Poly mirrors operator's contribution + browse surface (currently 404 on poly).                                                                                                                                                                                                                                                                                                                                                                                          | Trivial follow-up; combine with P1 if natural.                                                          |
-| **P2** — DAG traversal in search                                            | `core__knowledge_search` returns 1-hop neighbors + `cited_by_count` per hit. Read-side optimization on existing `citations` data.                                                                                                                                                                                                                                                                                                                                       | Filed after P1 produces real edges.                                                                     |
-| **P3** — Confidence-recompute walker                                        | The syntropy formula in §"Confidence Is Computed, Not Assigned" actually runs over the citation DAG; supports/contradicts adjust scores.                                                                                                                                                                                                                                                                                                                                | Needs P1+P2 first.                                                                                      |
-| **P3** — `evaluate_at` cron auto-files outcomes                             | Hypotheses become outcomes on schedule; closes EDO end-to-end. Temporal/monitoring-engine wiring.                                                                                                                                                                                                                                                                                                                                                                       | Last piece; depends on P3 walker.                                                                       |
-| **Rd-PORTABLE** — extract `/knowledge` page into `@cogni/knowledge-base-ui` | Operator-side `/knowledge` (task.5037) is the reference implementation; every knowledge-capable node will need its own knowledge hub. Move the page + `_api/*` + `_components/*` into a shared package, mounted from each node's `(app)/knowledge/page.tsx` as a thin re-export. Same pattern as `@cogni/knowledge-base` (schema).                                                                                                                                      | Filed when a second node (poly) needs `/knowledge` — the carve-out cost is amortized across nodes 2..N. |
+| Tier                                                                        | Karpathy beat         | Outcome                                                                                                                                                                                                                                                                                                                                                                                                                | Status                                                                                                  |
+| --------------------------------------------------------------------------- | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| **P0** — operator-side merging                                              | (foundation)          | A signed-in user can list + merge open contributions through `/knowledge` (Inbox mode). Without this, the contribution flow is theatre.                                                                                                                                                                                                                                                                                | ✅ Done — PR #1308 (task.5037).                                                                         |
+| **P0.5** — domain registry + FK enforcement                                 | (foundation)          | `domains` table is enforced at write time. New 3-mode toggle (`Browse · Domains · Inbox`) lets a signed-in user register starter domains via UI; `core__knowledge_write` and HTTP contributions both reject unregistered domains with `DomainNotRegisteredError`. Closes the entropy hole where `ENTRY_HAS_DOMAIN` was a wish.                                                                                         | ✅ Done — PR #1312 (task.5038), merged 2026-05-11.                                                      |
+| **W0** — knowledge write gates                                              | compile               | Structured gate chain runs against every write. v0 = `shape` + `provenance` deterministic gates; gates fail closed at the API/tool boundary, never reach Doltgres. v1 layers AI-evaluated quality gates via the existing `.cogni/rules` + `pr-review` graph infra. See [proj.knowledge-syntropy](../../work/projects/proj.knowledge-syntropy.md). Must precede W1 (hypothesis rows also need the gates).               | ✅ Shipped — PR #1356.                                                                                  |
+| **W1** — EDO Crawl                                                          | compile (falsifiable) | Hypothesis rows can be written + retrieved + cited; outcomes can validate them via `validates` / `invalidates` citation edges. Adds `evaluate_at` + `resolution_strategy` columns, widens `EntryTypeSchema` / `CitationTypeSchema`, ships `EdoCapability` + three atomic tools + bearer REST surface. Closes the "confidence drifts over time" mechanic at the column level.                                           | 🟡 In flight — PR #1327 (task.5040).                                                                    |
+| **W2** — Federation gate                                                    | compile (provenance)  | Bearer-token EDO writes route through `contrib/<id>` branches like other editorial writes. Closes the split-brain finding from #1327 validation (bearer EDO currently bypasses contribution branch and lands directly on main). Trusted internal `core__edo_*` tools keep the direct path.                                                                                                                             | 🟡 In flight — PR #1327 (combined with W1 + R0 for one shippable unit).                                 |
+| **R0** — Chains read                                                        | Q&A                   | `GET /api/v1/edo/chain/:id` walks the citation DAG; `/knowledge?mode=chains` UI renders recent EDO chains. Makes syntropy visible to humans; without this, W1's write side is invisible.                                                                                                                                                                                                                               | 🟡 In flight — PR #1327 (combined with W1 + W2).                                                        |
+| **R1** — LibrarianReadFilter                                                | Q&A                   | `core__knowledge_search` default-excludes EDO machinery (`entry_type ∈ {event, hypothesis, decision, outcome}` filtered by default; opt-in flag to include). Stops EDO chain noise from drowning out canonical claims in unrelated searches.                                                                                                                                                                           | 🔴 After R0.                                                                                            |
+| **R1.5** — Poly-side route bindings                                         | Q&A                   | Poly mirrors operator's contribution + browse surface (currently 404 on poly).                                                                                                                                                                                                                                                                                                                                         | 🔴 Trivial follow-up; combine with R0/R1 if natural.                                                    |
+| **F0** — File-back                                                          | file back             | Brain prompt teaches the Karpathy "explorations always add up" discipline — after a research turn, file the finding as `knowledge` + cite sources. Post-session indexer hook syncs Postgres search index. Closes the compounding flywheel.                                                                                                                                                                             | 🔴 vNext.                                                                                               |
+| **L0** — Curator                                                            | lint                  | `staleHypothesisSweep` cron flags hypotheses past `evaluate_at` without an outcome; dedup pass surfaces near-duplicates; promotion lifecycle runs from confidence + outcome validation; confidence decay applies the formula in § "Confidence Is Computed, Not Assigned". Combines DAG traversal in search (1-hop neighbors + `cited_by_count`), the confidence-recompute walker, and the `evaluate_at` resolver cron. | 🔴 vNext; needs W1 (citation edges) + R0 (chains) first.                                                |
+| **L1** — Auto-summaries                                                     | lint (distinctive)    | Karpathy's distinctive insight: LLM auto-maintains index entries + per-domain summaries. Curator emits `summary` entries that compress recent knowledge into navigable index files.                                                                                                                                                                                                                                    | 🔴 vNext.                                                                                               |
+| **Rd-PORTABLE** — extract `/knowledge` page into `@cogni/knowledge-base-ui` | (infra)               | Operator-side `/knowledge` (task.5037) is the reference implementation; every knowledge-capable node will need its own knowledge hub. Move the page + `_api/*` + `_components/*` into a shared package, mounted from each node's `(app)/knowledge/page.tsx` as a thin re-export. Same pattern as `@cogni/knowledge-base` (schema).                                                                                     | Filed when a second node (poly) needs `/knowledge` — the carve-out cost is amortized across nodes 2..N. |
 
 **Anti-sprawl rule**: If a future agent considers expanding scope beyond their tier, file the next-tier work item and stop. Don't bundle.
 

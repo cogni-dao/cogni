@@ -18,6 +18,7 @@ export const tsupConfig = defineConfig({
     "src/index.ts",
     "src/domain/contribution-schemas.ts",
     "src/adapters/doltgres/index.ts",
+    "src/adapters/fake/index.ts",
   ],
   format: ["esm"],
   dts: false,

@@ -242,9 +242,11 @@ Examples:
 
 ## Port Interface
 
+> **Canonical surface.** This is the source of truth for `KnowledgeStorePort`. Cross-cutting specs ([knowledge-domain-registry](./knowledge-domain-registry.md), [knowledge-syntropy](./knowledge-syntropy.md)) cross-reference this section and contribute methods; they never redefine the interface.
+
 ```typescript
 interface KnowledgeStorePort {
-  // Read
+  // Read — rows
   getKnowledge(id: string): Promise<Knowledge | null>;
   listKnowledge(
     domain: string,
@@ -255,21 +257,39 @@ interface KnowledgeStorePort {
     query: string,
     opts?: { limit?: number }
   ): Promise<Knowledge[]>;
-  listDomains(): Promise<string[]>;
+  knowledgeExists(id: string): Promise<boolean>; // shared FK check (knowledge-syntropy)
 
-  // Write
+  // Read — domains
+  listDomains(): Promise<string[]>; // distinct domain values from knowledge rows
+  listDomainsFull(): Promise<Domain[]>; // domains table + entry_count (knowledge-domain-registry)
+  domainExists(id: string): Promise<boolean>; // FK gate (knowledge-domain-registry)
+
+  // Write — rows
   addKnowledge(entry: NewKnowledge): Promise<Knowledge>; // insert-only
   upsertKnowledge(entry: NewKnowledge): Promise<Knowledge>; // insert-or-update by id
+  updateKnowledge(
+    id: string,
+    update: Partial<NewKnowledge>
+  ): Promise<Knowledge>;
+  deleteKnowledge(id: string): Promise<void>; // admin/cleanup only; agents use DEPRECATE_NOT_DELETE
+
+  // Write — edges (knowledge-syntropy)
+  addCitation(edge: NewCitation): Promise<Citation>;
+
+  // Write — domains (knowledge-domain-registry)
+  registerDomain(input: NewDomain): Promise<Domain>;
 
   // Doltgres versioning
   commit(message: string): Promise<string>; // returns commit hash
   log(limit?: number): Promise<DoltCommit[]>;
-  diff(from: string, to: string, table?: string): Promise<DoltDiffEntry[]>;
+  diff(fromRef: string, toRef: string): Promise<DoltDiffEntry[]>;
   currentCommit(): Promise<string>;
 }
 ```
 
-Adapter: `DoltgresKnowledgeStoreAdapter` (`packages/knowledge-store/src/adapters/doltgres/index.ts`). Scoped to one node's knowledge database.
+Adapter: `DoltgresKnowledgeStoreAdapter` (`packages/knowledge-store/src/adapters/doltgres/index.ts`). Scoped to one node's knowledge database. Adapter-layer invariants — `DOMAIN_FK_ENFORCED_AT_WRITE`, `CITATION_TARGET_EXISTS_AT_WRITE`, `HYPOTHESIS_HAS_EVALUATE_AT`, `RAW_WRITE_REJECTS_TYPES` — fire inside `addKnowledge` / `addCitation` before INSERT.
+
+Causal/evaluative concerns (resolver, confidence recompute) live on a separate `EdoResolverPort` defined in [knowledge-syntropy § Computation Surface](./knowledge-syntropy.md#computation-surface).
 
 ---
 

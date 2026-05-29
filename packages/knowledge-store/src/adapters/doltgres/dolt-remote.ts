@@ -10,7 +10,7 @@
  *   - Auth lives in the doltgres process state (DOLT creds file, see docs/runbooks/dolthub-remote-bootstrap.md). The SQL surface here knows nothing about credentials.
  *   - Errors propagate to the caller; the caller (operator container DI) wraps with `.catch(log)` to keep push best-effort.
  * Side-effects: IO (SQL against the knowledge DB; outbound GRPC to the remote)
- * Links: docs/runbooks/dolthub-remote-bootstrap.md, work/projects/proj.knowledge-write-pipeline.md
+ * Links: docs/runbooks/dolthub-remote-bootstrap.md, work/projects/proj.knowledge-syntropy.md
  * @public
  */
 

@@ -14,6 +14,9 @@
  * @public
  */
 
+import { edoDecideBoundTool } from "./tools/edo-decide";
+import { edoHypothesizeBoundTool } from "./tools/edo-hypothesize";
+import { edoRecordOutcomeBoundTool } from "./tools/edo-record-outcome";
 import { getCurrentTimeBoundTool } from "./tools/get-current-time";
 import { knowledgeReadBoundTool } from "./tools/knowledge-read";
 import { knowledgeSearchBoundTool } from "./tools/knowledge-search";
@@ -103,6 +106,9 @@ export function createToolCatalog(
  * `nodes/<node>/packages/ai-tools/` package instead — never here.
  */
 export const CORE_TOOL_BUNDLE: readonly CatalogBoundTool[] = [
+  edoDecideBoundTool as CatalogBoundTool,
+  edoHypothesizeBoundTool as CatalogBoundTool,
+  edoRecordOutcomeBoundTool as CatalogBoundTool,
   getCurrentTimeBoundTool as CatalogBoundTool,
   knowledgeReadBoundTool as CatalogBoundTool,
   knowledgeSearchBoundTool as CatalogBoundTool,

@@ -58,7 +58,7 @@ function toEntry(k: {
 export interface KnowledgeCapabilityOptions {
   /**
    * Write-pipeline gates run before every write. v0 = shape + provenance
-   * (see proj.knowledge-write-pipeline). Pass `[]` to disable (don't, except
+   * (see proj.knowledge-syntropy W0 tier). Pass `[]` to disable (don't, except
    * in unit tests that exercise the port directly).
    *
    * @default V0_DETERMINISTIC_GATES

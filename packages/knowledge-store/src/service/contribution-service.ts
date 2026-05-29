@@ -30,6 +30,9 @@ import {
   ContributionNotFoundError,
   ContributionQuotaError,
   ContributionStateError,
+  type CreateEdoDecisionInput,
+  type CreateEdoHypothesisInput,
+  type CreateEdoOutcomeInput,
   type KnowledgeContributionPort,
 } from "../port/contribution.port.js";
 
@@ -43,6 +46,19 @@ export interface AppendCommitBody {
   message: string;
   edits: KnowledgeContributionEdit[];
 }
+
+/**
+ * Body shape for the EDO atomic-batch service methods. Mirrors the existing
+ * `CreateBody` shape (message + idempotencyKey) so handlers can use the same
+ * routing/quota pattern; the entry/payload-specific fields come from the
+ * route's Zod-validated request body.
+ */
+export type CreateEdoHypothesisBody = Omit<
+  CreateEdoHypothesisInput,
+  "principal"
+>;
+export type CreateEdoDecisionBody = Omit<CreateEdoDecisionInput, "principal">;
+export type CreateEdoOutcomeBody = Omit<CreateEdoOutcomeInput, "principal">;
 
 export interface ListQuery {
   state?: ContributionState | "all";
@@ -80,6 +96,26 @@ export interface ContributionService {
   create(args: {
     principal: Principal;
     body: CreateBody;
+  }): Promise<ContributionRecord>;
+  /**
+   * Open a contrib branch and apply a hypothesis atomic batch on it.
+   * Mirrors `create()`: idempotency replay + open-quota check, then forwards
+   * to the port's `createEdoHypothesis`. Used by the bearer-auth path of
+   * `POST /api/v1/edo/hypothesize` to satisfy EDO_BEARER_VIA_CONTRIB_BRANCH.
+   */
+  createEdoHypothesisContribution(args: {
+    principal: Principal;
+    body: CreateEdoHypothesisBody;
+  }): Promise<ContributionRecord>;
+  /** Decision atomic batch on a fresh contrib branch. See `createEdoHypothesisContribution`. */
+  createEdoDecisionContribution(args: {
+    principal: Principal;
+    body: CreateEdoDecisionBody;
+  }): Promise<ContributionRecord>;
+  /** Outcome atomic batch (+ hypothesis confidence recompute) on a fresh contrib branch. */
+  createEdoOutcomeContribution(args: {
+    principal: Principal;
+    body: CreateEdoOutcomeBody;
   }): Promise<ContributionRecord>;
   appendCommit(args: {
     principal: Principal;
@@ -144,39 +180,65 @@ export function createContributionService(
     return out;
   }
 
+  async function idempotencyReplay(
+    principal: Principal,
+    idempotencyKey: string | undefined
+  ): Promise<ContributionRecord | null> {
+    if (!idempotencyKey) return null;
+    const prior = await deps.port.list({
+      state: "all",
+      principalId: principal.id,
+      limit: 100,
+    });
+    return prior.find((r) => r.idempotencyKey === idempotencyKey) ?? null;
+  }
+
+  async function enforceOpenQuota(principal: Principal): Promise<void> {
+    const open = await deps.port.list({
+      state: "open",
+      principalId: principal.id,
+      limit: 100,
+    });
+    if (open.length >= deps.rateLimit.maxOpenPerPrincipal) {
+      throw new ContributionQuotaError(
+        `max open contributions per principal = ${deps.rateLimit.maxOpenPerPrincipal}`
+      );
+    }
+  }
+
   return {
     async create({ principal, body }) {
-      // Idempotency replay — return prior record if same (principal, key) exists.
-      if (body.idempotencyKey) {
-        const prior = await deps.port.list({
-          state: "all",
-          principalId: principal.id,
-          limit: 100,
-        });
-        const hit = prior.find((r) => r.idempotencyKey === body.idempotencyKey);
-        if (hit) return hit;
-      }
-
-      // Quota — N open contributions per principal.
-      const open = await deps.port.list({
-        state: "open",
-        principalId: principal.id,
-        limit: 100,
-      });
-      if (open.length >= deps.rateLimit.maxOpenPerPrincipal) {
-        throw new ContributionQuotaError(
-          `max open contributions per principal = ${deps.rateLimit.maxOpenPerPrincipal}`
-        );
-      }
-
+      const replayed = await idempotencyReplay(principal, body.idempotencyKey);
+      if (replayed) return replayed;
+      await enforceOpenQuota(principal);
       const gated = await gateEdits(body.edits);
-
       return deps.port.create({
         principal,
         message: body.message,
         edits: gated,
         idempotencyKey: body.idempotencyKey,
       });
+    },
+
+    async createEdoHypothesisContribution({ principal, body }) {
+      const replayed = await idempotencyReplay(principal, body.idempotencyKey);
+      if (replayed) return replayed;
+      await enforceOpenQuota(principal);
+      return deps.port.createEdoHypothesis({ principal, ...body });
+    },
+
+    async createEdoDecisionContribution({ principal, body }) {
+      const replayed = await idempotencyReplay(principal, body.idempotencyKey);
+      if (replayed) return replayed;
+      await enforceOpenQuota(principal);
+      return deps.port.createEdoDecision({ principal, ...body });
+    },
+
+    async createEdoOutcomeContribution({ principal, body }) {
+      const replayed = await idempotencyReplay(principal, body.idempotencyKey);
+      if (replayed) return replayed;
+      await enforceOpenQuota(principal);
+      return deps.port.createEdoOutcome({ principal, ...body });
     },
 
     async appendCommit({ principal, contributionId, body }) {

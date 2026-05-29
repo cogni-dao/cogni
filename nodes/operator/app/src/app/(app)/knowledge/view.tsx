@@ -44,7 +44,14 @@ import {
   useReactTable,
   type VisibilityState,
 } from "@tanstack/react-table";
-import { GitMerge, Library, Plus, Settings2, Tags } from "lucide-react";
+import {
+  GitBranch,
+  GitMerge,
+  Library,
+  Plus,
+  Settings2,
+  Tags,
+} from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
 
@@ -61,10 +68,17 @@ import { buildContributionColumns } from "./_components/contribution-columns";
 import { domainColumns } from "./_components/domain-columns";
 import { KnowledgeDetail } from "./_components/KnowledgeDetail";
 
-type ViewMode = "browse" | "domains" | "inbox";
+type ViewMode = "browse" | "domains" | "inbox" | "chains";
+
+const EDO_ENTRY_TYPES: ReadonlySet<string> = new Set([
+  "hypothesis",
+  "decision",
+  "outcome",
+  "event",
+]);
 
 function isMode(v: string | null): v is ViewMode {
-  return v === "browse" || v === "domains" || v === "inbox";
+  return v === "browse" || v === "domains" || v === "inbox" || v === "chains";
 }
 
 export function KnowledgeDashboardView() {
@@ -152,6 +166,12 @@ export function KnowledgeDashboardView() {
               icon={<Library className="size-3.5" />}
             />
             <ModeButton
+              active={mode === "chains"}
+              onClick={() => setModeUrl("chains")}
+              label="Chains"
+              icon={<GitBranch className="size-3.5" />}
+            />
+            <ModeButton
               active={mode === "domains"}
               onClick={() => setModeUrl("domains")}
               label="Domains"
@@ -173,6 +193,17 @@ export function KnowledgeDashboardView() {
           rows={knowledgeQuery.data?.items ?? []}
           isLoading={knowledgeQuery.isLoading}
           error={knowledgeQuery.error}
+          mode="browse"
+        />
+      )}
+      {mode === "chains" && (
+        <BrowsePanel
+          rows={(knowledgeQuery.data?.items ?? []).filter((r) =>
+            EDO_ENTRY_TYPES.has(r.entryType)
+          )}
+          isLoading={knowledgeQuery.isLoading}
+          error={knowledgeQuery.error}
+          mode="chains"
         />
       )}
       {mode === "domains" && (
@@ -244,10 +275,12 @@ function BrowsePanel({
   rows,
   isLoading,
   error,
+  mode,
 }: {
   readonly rows: KnowledgeRow[];
   readonly isLoading: boolean;
   readonly error: unknown;
+  readonly mode: "browse" | "chains";
 }) {
   const [sorting, setSorting] = useState<SortingState>([
     { id: "createdAt", desc: true },
@@ -300,7 +333,11 @@ function BrowsePanel({
           Failed to load knowledge.
         </p>
       ) : rows.length === 0 && !isLoading ? (
-        <BrowseEmptyState />
+        mode === "chains" ? (
+          <ChainsEmptyState />
+        ) : (
+          <BrowseEmptyState />
+        )
       ) : (
         <DataGrid
           table={table}
@@ -326,11 +363,28 @@ function BrowsePanel({
       <KnowledgeDetail
         item={selected}
         open={selected !== null}
+        showChain={mode === "chains"}
         onOpenChange={(o) => {
           if (!o) setSelected(null);
         }}
       />
     </>
+  );
+}
+
+function ChainsEmptyState() {
+  return (
+    <div className="flex flex-col items-center gap-2 rounded-lg border border-border/60 bg-muted/20 px-6 py-16 text-center">
+      <GitBranch className="size-8 text-muted-foreground/60" />
+      <p className="font-medium text-sm">No EDO entries yet.</p>
+      <p className="max-w-md text-muted-foreground text-xs leading-relaxed">
+        Chains view shows hypothesis / decision / outcome / event entries — the
+        causal scaffolding of the hypothesis loop. Land an EDO entry through{" "}
+        <code className="font-mono">/api/v1/edo/hypothesize</code> (or the agent
+        tool <code className="font-mono">core__edo_hypothesize</code>) and a
+        card will appear here.
+      </p>
+    </div>
   );
 }
 

@@ -7,7 +7,7 @@
  * Scope: Pure gate tests; exercises every accept + reject branch including the conservative "unset sourceType passes" default that lets the external-contribution adapter stamp provenance after the gate runs. Does not call any port, Doltgres, or HTTP layer.
  * Invariants: ENTRY_HAS_PROVENANCE
  * Side-effects: none
- * Links: packages/knowledge-store/src/domain/gates/provenance.gate.ts, work/projects/proj.knowledge-write-pipeline.md
+ * Links: packages/knowledge-store/src/domain/gates/provenance.gate.ts, work/projects/proj.knowledge-syntropy.md
  * @internal
  */
 

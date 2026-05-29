@@ -5,7 +5,7 @@
  * Module: `@app/(app)/knowledge/_components/RelativeTime`
  * Purpose: Human-friendly timestamp rendering for the knowledge views.
  *   Storage stays ISO; this is the human-view projection layer (per
- *   proj.knowledge-write-pipeline AI_PATH_RETURNS_FULL_ROW invariant —
+ *   proj.knowledge-syntropy AI_PATH_RETURNS_FULL_ROW invariant —
  *   AI consumers fetch raw, humans see this).
  * Scope: Pure presentation. No I/O.
  * @internal

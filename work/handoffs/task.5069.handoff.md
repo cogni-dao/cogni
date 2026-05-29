@@ -4,7 +4,7 @@ type: handoff
 title: "DoltHub push hook handoff (task.5069 + PR #1360)"
 related_task: task.5069
 related_pr: 1360
-related_project: proj.knowledge-write-pipeline
+related_project: proj.knowledge-syntropy
 related_knowledge: dolt-remote-v0
 status: in_progress
 created: 2026-05-28
@@ -27,7 +27,7 @@ Task **task.5069** is the substantive follow-up: build the prod-side push hook k
 Decision context lives in:
 
 - Knowledge entry `dolt-remote-v0` (filed as contribution `contrib-derek-claude-curitiba-81daec98`, awaiting merge on cognidao.org/knowledge?mode=inbox) — convention + topology summary
-- `proj.knowledge-write-pipeline.md` — phased roadmap; the push hook is v0b
+- `proj.knowledge-syntropy.md` — umbrella roadmap; the push hook is the W0c tier
 
 ## Hard constraints you must honor
 
@@ -66,7 +66,7 @@ The OAuth env wiring stays in #1360 as **pre-wiring for v1** — file a separate
 
 ## Files to read first (in order)
 
-1. `work/projects/proj.knowledge-write-pipeline.md` — roadmap context
+1. `work/projects/proj.knowledge-syntropy.md` — umbrella roadmap context
 2. `.claude/skills/knowledge-syntropy-expert/SKILL.md` — action hierarchy + invariants
 3. `docs/spec/knowledge-data-plane.md` — Sharing+Federation section (will be edited in this task)
 4. `packages/knowledge-store/src/adapters/doltgres/contribution-adapter.ts:497-548` — `merge()` method, the seam

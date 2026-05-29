@@ -15,6 +15,7 @@
  */
 
 import type {
+  EdoCapability,
   KnowledgeCapability,
   MetricsCapability,
   RepoCapability,
@@ -25,6 +26,9 @@ import type {
   WorkItemCapability,
 } from "@cogni/ai-tools";
 import {
+  createEdoDecideImplementation,
+  createEdoHypothesizeImplementation,
+  createEdoRecordOutcomeImplementation,
   createKnowledgeReadImplementation,
   createKnowledgeSearchImplementation,
   createKnowledgeWriteImplementation,
@@ -42,6 +46,9 @@ import {
   createWebSearchImplementation,
   createWorkItemQueryImplementation,
   createWorkItemTransitionImplementation,
+  EDO_DECIDE_NAME,
+  EDO_HYPOTHESIZE_NAME,
+  EDO_RECORD_OUTCOME_NAME,
   GET_CURRENT_TIME_NAME,
   getCurrentTimeImplementation,
   KNOWLEDGE_READ_NAME,
@@ -69,6 +76,7 @@ import {
  */
 export interface ToolBindingDeps {
   readonly knowledgeCapability: KnowledgeCapability;
+  readonly edoCapability: EdoCapability;
   readonly metricsCapability: MetricsCapability;
   readonly webSearchCapability: WebSearchCapability;
   readonly repoCapability: RepoCapability;
@@ -115,6 +123,19 @@ export function createToolBindings(deps: ToolBindingDeps): ToolBindings {
     }) as AnyToolImplementation,
     [KNOWLEDGE_WRITE_NAME]: createKnowledgeWriteImplementation({
       knowledgeCapability: deps.knowledgeCapability,
+    }) as AnyToolImplementation,
+
+    // EDO hypothesis-loop tools (knowledge-syntropy.md § The Hypothesis Loop)
+    // Wired to runtime EdoCapability from the container (createEdoCapability
+    // over DoltgresKnowledgeStoreAdapter + DoltgresEdoResolverAdapter).
+    [EDO_HYPOTHESIZE_NAME]: createEdoHypothesizeImplementation({
+      edoCapability: deps.edoCapability,
+    }) as AnyToolImplementation,
+    [EDO_DECIDE_NAME]: createEdoDecideImplementation({
+      edoCapability: deps.edoCapability,
+    }) as AnyToolImplementation,
+    [EDO_RECORD_OUTCOME_NAME]: createEdoRecordOutcomeImplementation({
+      edoCapability: deps.edoCapability,
     }) as AnyToolImplementation,
 
     [METRICS_QUERY_NAME]: createMetricsQueryImplementation({

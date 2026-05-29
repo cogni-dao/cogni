@@ -8,7 +8,7 @@
  * Invariants:
  *   - ENTRY_HAS_PROVENANCE (knowledge-syntropy.md): no knowledge without origin.
  * Side-effects: none
- * Links: work/projects/proj.knowledge-write-pipeline.md, docs/spec/knowledge-syntropy.md
+ * Links: work/projects/proj.knowledge-syntropy.md, docs/spec/knowledge-syntropy.md
  * @public
  */
 

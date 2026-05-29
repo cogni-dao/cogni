@@ -9,7 +9,7 @@
  *   - GATES_FAIL_CLOSED: a gate returns ok:false → write rejected at API/tool boundary.
  *   - CONFIDENCE_OUTSIDE_GATES: gates decide accept/reject only; they do not promote.
  * Side-effects: none
- * Links: work/projects/proj.knowledge-write-pipeline.md, docs/spec/knowledge-syntropy.md
+ * Links: work/projects/proj.knowledge-syntropy.md, docs/spec/knowledge-syntropy.md
  * @public
  */
 
