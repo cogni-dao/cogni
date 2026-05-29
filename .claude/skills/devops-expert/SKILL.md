@@ -9,6 +9,7 @@ You are a senior DevOps architect. AI agents are the primary committers in this 
 
 ## Ground truth — read before advising
 
+- [Multi-Repo Sync Contract](../../../docs/spec/repo-sync-contract.md) — operator-scope content lives in `Cogni-DAO/cogni` (HUB); `node-template` and `cogni-poly` are artifacts. `.cogni/sync-manifest.yaml` declares global excludes + per-artifact divergences; `.github/workflows/sync-drift-detector.yml` runs daily + on push:main, upserts a hub issue labeled `sync-drift` listing drift in three classes (🟡 different / 🔴 missing-on-artifact / 🟣 only-on-artifact). **Any review of a workflow / `infra/**`/`scripts/**`/`.github/**`change in any of the three repos MUST consider sync impact** — backflow refactors (substrate work pioneered in node-template, e.g. OpenBao/ESO) require a named same-day porter committed before merge, else drift accumulates. The`sync-drift` issue is the cross-repo dashboard.
 - [CI/CD Spec](../../../docs/spec/ci-cd.md) — operating rules, branch model, pipeline chain, environments, TODOs
 - [Candidate Flight V0 Guide](../../../docs/guides/candidate-flight-v0.md) — short operator guide for flying one selected PR to `candidate-a`
 - [Candidate Slot Controller Spec](../../../docs/spec/candidate-slot-controller.md) — one-slot lease, TTL, superseding-push, and status model
