@@ -97,6 +97,12 @@ COPY --from=builder --chown=nextjs:nodejs /app/nodes/node-template/app/public ./
 # Repo-spec: DAO config (node_id, chain, governance). Updated every CI build.
 COPY --from=builder --chown=nextjs:nodejs /app/.cogni ./.cogni
 
+# Postgres migrator: base node-app deployment runs `node $NODE_NAME/app/migrate.mjs $NODE_NAME/app/migrations`
+# as an initContainer. The runner needs the shared wrapper + this node's migrations folder
+# colocated at the expected paths. Mirrors operator/Dockerfile (task.0370 step 1).
+COPY --from=builder --chown=nextjs:nodejs /app/nodes/node-template/app/src/adapters/server/db/migrations /app/nodes/node-template/app/migrations
+COPY --from=builder --chown=nextjs:nodejs /app/scripts/db/migrate.mjs /app/nodes/node-template/app/migrate.mjs
+
 # Codex CLI for BYO-AI ChatGPT execution.
 # Standalone output tracing can't detect spawned binaries.
 # Install globally so pnpm resolves platform-specific optional deps (@openai/codex-linux-x64).
