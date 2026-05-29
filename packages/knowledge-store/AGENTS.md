@@ -49,6 +49,14 @@ Shared port + adapter for versioned domain knowledge backed by Doltgres. Generic
 **Subpath** (`@cogni/knowledge-store/adapters/doltgres`):
 
 - `DoltgresKnowledgeStoreAdapter`, `DoltgresAdapterConfig`, `buildDoltgresClient`, `DoltgresClientConfig`
+- `DoltgresKnowledgeContributionAdapter`, `DoltgresKnowledgeContributionAdapterConfig` (contribution-branch lifecycle)
+- `createDoltgresPusher`, `DoltgresPusher`, `DoltgresPushConfig` (post-merge mirror to a Dolt remote; lazy `dolt_remote add` + `dolt_push`)
+- `wrapPushSafe`, `PushOutcomeListener` (fire-and-forget wrapper with injectable success/failure callbacks — keeps logging out of the adapter)
+
+**Service** (`@cogni/knowledge-store/service/contribution-service`):
+
+- `createContributionService`, `ContributionService`, `ContributionServiceDeps`
+- `ContributionServiceDeps.pushMainOnMerge?: () => Promise<void>` — optional post-merge mirror hook; caller owns error handling (service does not await + does not catch)
 
 ## Ports
 

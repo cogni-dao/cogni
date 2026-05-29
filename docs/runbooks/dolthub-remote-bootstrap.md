@@ -124,7 +124,7 @@ for ENV in candidate-a preview production; do
 done
 ```
 
-Defense-in-depth: even if `DOLTHUB_REMOTE_URL` accidentally gets set on candidate-a or preview, the operator code gates push on `DEPLOY_ENVIRONMENT === 'production'` and logs `dolthub_push_disabled_non_prod` instead of pushing. Two layers (secret absence + code gate) protect the public mirror.
+Gate model: **secret-presence only**, matching the rest of the codebase (Langfuse, Privy, PostHog). The operator wires `pushMainOnMerge` if and only if `DOLTHUB_REMOTE_URL` resolves at startup. There is no `DEPLOY_ENVIRONMENT` runtime check — if you fat-finger the URL onto candidate-a/preview, it will push there. The discipline lives at the secret-scope layer; treat the prod environment scope as a privileged surface.
 
 The bootstrap host can now delete its local `~/.dolt/creds/<keyid>.jwk` — the cluster has the only authoritative copy.
 

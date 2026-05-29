@@ -617,39 +617,27 @@ function createContainer(): Container {
       sql: doltClient,
     });
     // Optional post-merge mirror to DoltHub (task.5069). Disabled when
-    // DOLTHUB_REMOTE_URL is unset OR when DEPLOY_ENVIRONMENT is not
-    // "production". Two-layer guard: only prod env has the secret in CI, AND
-    // the code itself refuses to push from any other slot — so an accidental
-    // re-grant of the secret on candidate-a/preview can't pollute the public
-    // mirror with non-canonical writes. v0 invariant: prod is the only writer.
-    // Bootstrap: see docs/runbooks/dolthub-remote-bootstrap.md.
+    // DOLTHUB_REMOTE_URL is unset. Gate-by-secret-presence follows the
+    // established pattern (Langfuse, Privy, PostHog) — DOLTHUB_REMOTE_URL
+    // is only granted to the production GitHub Environment Secret scope, so
+    // candidate-a/preview boot with the hook undefined and never push. v0
+    // invariant: prod is the only writer. Bootstrap: see
+    // docs/runbooks/dolthub-remote-bootstrap.md.
     const remoteUrl = env.DOLTHUB_REMOTE_URL;
-    const isProdDeploy = env.DEPLOY_ENVIRONMENT === "production";
-    const pushMainOnMerge =
-      remoteUrl && isProdDeploy
-        ? wrapPushSafe(
-            createDoltgresPusher({
-              sql: doltClient,
-              remoteName: "origin",
-              remoteUrl,
-            }),
-            {
-              onSuccess: () =>
-                log.info({ remote: remoteUrl }, "dolthub_push_ok"),
-              onFailure: (err) =>
-                log.warn({ err, remote: remoteUrl }, "dolthub_push_failed"),
-            }
-          )
-        : undefined;
-    if (remoteUrl && !isProdDeploy) {
-      log.warn(
-        {
-          remote: remoteUrl,
-          deployEnv: env.DEPLOY_ENVIRONMENT,
-        },
-        "dolthub_push_disabled_non_prod"
-      );
-    }
+    const pushMainOnMerge = remoteUrl
+      ? wrapPushSafe(
+          createDoltgresPusher({
+            sql: doltClient,
+            remoteName: "origin",
+            remoteUrl,
+          }),
+          {
+            onSuccess: () => log.info({ remote: remoteUrl }, "dolthub_push_ok"),
+            onFailure: (err) =>
+              log.warn({ err, remote: remoteUrl }, "dolthub_push_failed"),
+          }
+        )
+      : undefined;
     knowledgeContributionService = createContributionService({
       port: contributionPort,
       canMergeKnowledge: defaultCanMergeKnowledge,
