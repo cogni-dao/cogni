@@ -130,6 +130,12 @@ pnpm setup github --env production
        - `GH_OAUTH_CLIENT_ID` + `GH_OAUTH_CLIENT_SECRET` (from github.com/settings/developers → OAuth Apps)
        - `DISCORD_OAUTH_CLIENT_ID` + `DISCORD_OAUTH_CLIENT_SECRET` (from discord.com/developers/applications → OAuth2)
        - `GOOGLE_OAUTH_CLIENT_ID` + `GOOGLE_OAUTH_CLIENT_SECRET` (from console.cloud.google.com/apis/credentials)
+       - **DoltHub mirror (v0 push job — task.5069):** see [`docs/runbooks/dolthub-remote-bootstrap.md`](../../docs/runbooks/dolthub-remote-bootstrap.md) for the one-time setup. Three secrets needed for push:
+         - `DOLTHUB_REMOTE_URL` — gates the push job (e.g. `https://doltremoteapi.dolthub.com/cogni-dao/knowledge-operator`)
+         - `DOLT_CREDS_JWK` — full contents of the `.jwk` file produced by `dolt creds new`
+         - `DOLT_CREDS_KEYID` — the keyid from `dolt creds new`
+       - `DOLTHUB_API_TOKEN` (from dolthub.com → Settings → API Tokens, scope `api_read_write`; **REST/SQL HTTP API only** — does not authenticate the Dolt push protocol. Used by future librarian / x402 reads. Per task.5069 spike findings.)
+       - `DOLTHUB_OAUTH_CLIENT_ID` + `DOLTHUB_OAUTH_CLIENT_SECRET` (from dolthub.com → Settings → OAuth Apps; **reserved for v1 per-user identity** — librarian / x402 flow, not used by v0 push job. Redirect URIs: `https://cognidao.org/api/v1/dolt/oauth/callback`, `https://test.cognidao.org/api/v1/dolt/oauth/callback`, `http://localhost:3000/api/v1/dolt/oauth/callback`. Scope: `api_read_write`. **Node-fork bootstrap requirement** — flag for `docs/runbooks/fork-quickstart.md` when it lands (node-template PR #46))
        - See [OAuth App Setup Guide](../../docs/guides/oauth-app-setup.md) for step-by-step
      - `SCHEDULER_API_TOKEN` (generated random, ≥32 chars — scheduler-worker → app API bearer auth)
      - `BILLING_INGEST_TOKEN` (generated random, ≥32 chars — LiteLLM callback → billing ingest bearer auth)

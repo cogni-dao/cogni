@@ -37,8 +37,10 @@ import {
 } from "@cogni/knowledge-store";
 import {
   buildDoltgresClient,
+  createDoltgresPusher,
   DoltgresKnowledgeContributionAdapter,
   DoltgresKnowledgeStoreAdapter,
+  wrapPushSafe,
 } from "@cogni/knowledge-store/adapters/doltgres";
 import { parseMcpConfigFromEnv } from "@cogni/langgraph-graphs";
 import {
@@ -614,6 +616,28 @@ function createContainer(): Container {
     const contributionPort = new DoltgresKnowledgeContributionAdapter({
       sql: doltClient,
     });
+    // Optional post-merge mirror to DoltHub (task.5069). Disabled when
+    // DOLTHUB_REMOTE_URL is unset. Gate-by-secret-presence follows the
+    // established pattern (Langfuse, Privy, PostHog) — DOLTHUB_REMOTE_URL
+    // is only granted to the production GitHub Environment Secret scope, so
+    // candidate-a/preview boot with the hook undefined and never push. v0
+    // invariant: prod is the only writer. Bootstrap: see
+    // docs/runbooks/dolthub-remote-bootstrap.md.
+    const remoteUrl = env.DOLTHUB_REMOTE_URL;
+    const pushMainOnMerge = remoteUrl
+      ? wrapPushSafe(
+          createDoltgresPusher({
+            sql: doltClient,
+            remoteName: "origin",
+            remoteUrl,
+          }),
+          {
+            onSuccess: () => log.info({ remote: remoteUrl }, "dolthub_push_ok"),
+            onFailure: (err) =>
+              log.warn({ err, remote: remoteUrl }, "dolthub_push_failed"),
+          }
+        )
+      : undefined;
     knowledgeContributionService = createContributionService({
       port: contributionPort,
       canMergeKnowledge: defaultCanMergeKnowledge,
@@ -624,8 +648,12 @@ function createContainer(): Container {
       // reserved for internal `core__knowledge_write` where the caller
       // controls those fields. See work/projects/proj.knowledge-write-pipeline.md.
       gates: [shapeGate],
+      ...(pushMainOnMerge ? { pushMainOnMerge } : {}),
     });
-    log.info("Knowledge store configured (Doltgres)");
+    log.info(
+      { dolthubMirror: Boolean(env.DOLTHUB_REMOTE_URL) },
+      "Knowledge store configured (Doltgres)"
+    );
   } else {
     const notConfigured = () => {
       throw new Error("KnowledgeCapability not configured. Set DOLTGRES_URL.");

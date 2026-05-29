@@ -64,6 +64,10 @@ services:
       - DISCORD_OAUTH_CLIENT_SECRET
       - GOOGLE_OAUTH_CLIENT_ID
       - GOOGLE_OAUTH_CLIENT_SECRET
+      - DOLTHUB_REMOTE_URL
+      - DOLTHUB_API_TOKEN
+      - DOLTHUB_OAUTH_CLIENT_ID
+      - DOLTHUB_OAUTH_CLIENT_SECRET
       - LANGFUSE_PUBLIC_KEY
       - LANGFUSE_SECRET_KEY
       - LANGFUSE_BASE_URL
@@ -339,11 +343,21 @@ services:
       - internal
     environment:
       DOLTGRES_PASSWORD: ${DOLTGRES_PASSWORD:-doltgres}
+      # DoltHub mirror creds — read by the entrypoint wrapper below. Optional:
+      # when unset, the server starts normally and dolt_push fails with
+      # "no credentials" if attempted. See docs/runbooks/dolthub-remote-bootstrap.md.
+      DOLT_CREDS_JWK: ${DOLT_CREDS_JWK:-}
+      DOLT_CREDS_KEYID: ${DOLT_CREDS_KEYID:-}
+    # Wrap the default entrypoint to install Dolt creds before the server
+    # starts. Script is a no-op when DOLT_CREDS_JWK/KEYID env are unset.
+    # See docs/runbooks/dolthub-remote-bootstrap.md.
+    entrypoint: ["/usr/local/bin/install-creds.sh"]
     # Host port 5435 (5432 is Postgres); k3s pods reach via EndpointSlice → node InternalIP:5435.
     ports:
       - "5435:5432"
     volumes:
       - doltgres_data:/var/lib/doltgres
+      - ./doltgres-init/install-creds.sh:/usr/local/bin/install-creds.sh:ro
     healthcheck:
       test:
         [

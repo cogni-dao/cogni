@@ -72,6 +72,19 @@ Gates implement a uniform interface (`KnowledgeGate`) with a chain runner. Per-n
 | Render description in browse row (line 2, muted) | Filed when v0 ships | Discoverability surface for humans            |
 | `core__knowledge_write` requires description     | Filed when v0 ships | Force the "use when X" framing on every write |
 
+### P0.6.v0c — DoltHub mirror (task.5069, PR #1360)
+
+| Deliverable                                                    | Status                    | Notes                                                                                                                            |
+| -------------------------------------------------------------- | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `createDoltgresPusher` + `wrapPushSafe` in knowledge-store     | In review (PR #1360)      | `packages/knowledge-store/src/adapters/doltgres/dolt-remote.ts`                                                                  |
+| `ContributionServiceDeps.pushMainOnMerge` hook                 | In review (PR #1360)      | Optional, fire-and-forget; caller owns error handling                                                                            |
+| Operator container DI wiring (gate-by-secret-presence)         | In review (PR #1360)      | `nodes/operator/app/src/bootstrap/container.ts` — wires hook iff `DOLTHUB_REMOTE_URL` is set; prod-only secret scope is the gate |
+| `install-creds.sh` doltgres entrypoint wrapper                 | In review (PR #1360)      | Installs Dolt keypair from `DOLT_CREDS_JWK` + `DOLT_CREDS_KEYID` before server start                                             |
+| Env wiring through all 9 surfaces (workflows, compose, deploy) | In review (PR #1360)      | `DOLTHUB_REMOTE_URL`, `DOLT_CREDS_{JWK,KEYID}`                                                                                   |
+| Bootstrap runbook                                              | In review (PR #1360)      | `docs/runbooks/dolthub-remote-bootstrap.md` — REST repo creation, `dolt creds new`, prod-only secret provisioning                |
+| Reconciliation cron for missed pushes                          | task.5073 (filed)         | v1: diff `dolt_log` against `origin/main`, idempotent re-push of any local commits not yet on remote                             |
+| Contributor attribution at Dolt commit-author level            | task.5070 (OAuth-blocked) | v0 all pushes appear as `cogni`/`steward@cognidao.org`; principalId is preserved in row data only                                |
+
 ### P0.6.v1 — YAML rule loader + per-node sovereignty
 
 | Deliverable                                                        | Notes                             |

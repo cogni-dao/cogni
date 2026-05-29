@@ -330,4 +330,57 @@ describe("createContributionService", () => {
     ).rejects.toBeInstanceOf(ContributionForbiddenError);
     expect(port.lastClose).toBeNull();
   });
+
+  it("fires pushMainOnMerge after a successful merge, returning the port's commit hash unchanged", async () => {
+    const port = new FakeContributionPort();
+    let pushCalls = 0;
+    const service = createContributionService({
+      port,
+      canMergeKnowledge: () => true,
+      rateLimit: { maxOpenPerPrincipal: 5 },
+      pushMainOnMerge: async () => {
+        pushCalls++;
+      },
+    });
+
+    const result = await service.merge({
+      principal: { id: "user-1", kind: "user", name: "user-one" },
+      contributionId: "contrib-agent-1-abc123",
+    });
+
+    expect(result.commitHash).toBe("merge123");
+    // Fire-and-forget — yield once so the microtask runs.
+    await Promise.resolve();
+    expect(pushCalls).toBe(1);
+  });
+
+  it("does not block or fail the merge when pushMainOnMerge throws (fire-and-forget contract)", async () => {
+    const port = new FakeContributionPort();
+    // The caller-supplied hook MUST own its own error handling. Production
+    // DI wraps with .catch(log.warn) in container.ts — we mirror that here
+    // so the unhandled-rejection contract is honoured at the test boundary,
+    // not at the service.
+    let pushFailures = 0;
+    const service = createContributionService({
+      port,
+      canMergeKnowledge: () => true,
+      rateLimit: { maxOpenPerPrincipal: 5 },
+      pushMainOnMerge: async () => {
+        try {
+          throw new Error("dolthub unreachable");
+        } catch {
+          pushFailures++;
+        }
+      },
+    });
+
+    const result = await service.merge({
+      principal: { id: "user-1", kind: "user", name: "user-one" },
+      contributionId: "contrib-agent-1-abc123",
+    });
+
+    expect(result.commitHash).toBe("merge123");
+    await Promise.resolve();
+    expect(pushFailures).toBe(1);
+  });
 });

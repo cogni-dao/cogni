@@ -123,9 +123,10 @@ docker compose --project-name cogni-runtime logs -f app
 
 **Doltgres (knowledge plane):**
 
-- `doltgres`: Postgres-wire-compatible Dolt server, host port 5435→5432, volume `doltgres_data`. Public-NIC traffic on 5435 is dropped by `DOCKER-USER` chain (see `infra/provision/cherry/harden-docker-public-ports.sh`); k3s pods on `10.42.0.0/16` reach it via the EndpointSlice node IP.
+- `doltgres`: Postgres-wire-compatible Dolt server, host port 5435→5432, volume `doltgres_data`. Public-NIC traffic on 5435 is dropped by `DOCKER-USER` chain (see `infra/provision/cherry/harden-docker-public-ports.sh`); k3s pods on `10.42.0.0/16` reach it via the EndpointSlice node IP. Image pinned to `dolthub/doltgresql:0.56.3` (bug.5076 — `:latest` rolled an auth-file format change that broke the persistent volume). Entrypoint is wrapped by `doltgres-init/install-creds.sh` — when `DOLT_CREDS_JWK` + `DOLT_CREDS_KEYID` are set, installs the keypair at `/root/.dolt/creds/<keyid>.jwk` and merges `user.creds` into `config_global.json` before exec'ing the upstream entrypoint; no-op when unset.
 - `doltgres-provision` (profile: bootstrap): creates roles + per-node `knowledge_<node>` databases via `doltgres-init/provision.sh`. Schema owned by drizzle-kit (k8s PreSync Job), not this script
 - Doltgres 0.56 RBAC is non-functional — runtime `DOLTGRES_URL_*` in k8s secrets connects as `postgres` superuser. Writer role is provisioned but vestigial until upstream GRANT works
+- Mirror env vars (operator only): `DOLT_CREDS_JWK`, `DOLT_CREDS_KEYID` (in all envs; harmless inert when no remote configured), `DOLTHUB_REMOTE_URL` (production only — the writer-presence gate). See [`docs/runbooks/dolthub-remote-bootstrap.md`](../../../docs/runbooks/dolthub-remote-bootstrap.md).
 - See [knowledge data plane spec](../../../docs/spec/knowledge-data-plane.md)
 
 **Temporal Services:**
