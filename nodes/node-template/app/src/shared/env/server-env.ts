@@ -191,6 +191,19 @@ export const serverSchema = z.object({
   // Writer URL used by knowledge tools (auto-commit on write). Reader URL for read-only agents.
   DOLTGRES_URL: optionalUrl,
 
+  // DoltHub credentials — service-side push of knowledge hubs to DoltHub
+  // remote (cogni-dao/knowledge-<node>). v0 push uses DoltHub Dolt creds
+  // (keypair, see docs/runbooks/dolthub-remote-bootstrap.md). DOLTHUB_REMOTE_URL
+  // gates the push job — when unset, merges still succeed locally and never
+  // attempt a push. DOLTHUB_API_TOKEN (PAT) is for the REST/SQL HTTP API only
+  // (future librarian/x402 reads). DoltHub OAuth pair is reserved for v1
+  // per-user identity (task.5070, blocked on DoltHub app approval). Per
+  // proj.knowledge-write-pipeline + task.5069.
+  DOLTHUB_REMOTE_URL: optionalString,
+  DOLTHUB_API_TOKEN: optionalString,
+  DOLTHUB_OAUTH_CLIENT_ID: optionalString,
+  DOLTHUB_OAUTH_CLIENT_SECRET: optionalString,
+
   // Tavily Web Search - Optional
   // Required for research graph web search capability
   TAVILY_API_KEY: optionalString,

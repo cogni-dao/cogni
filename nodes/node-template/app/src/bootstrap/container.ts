@@ -26,10 +26,20 @@ import type { FinancialLedgerPort } from "@cogni/financial-ledger";
 import { createTigerBeetleAdapter } from "@cogni/financial-ledger/adapters";
 import type { UserId } from "@cogni/ids";
 import { toUserId, userActor } from "@cogni/ids";
-import { createKnowledgeCapability } from "@cogni/knowledge-store";
+import {
+  type ContributionService,
+  createContributionService,
+  createKnowledgeCapability,
+  defaultCanMergeKnowledge,
+  type KnowledgeStorePort,
+  shapeGate,
+} from "@cogni/knowledge-store";
 import {
   buildDoltgresClient,
+  createDoltgresPusher,
+  DoltgresKnowledgeContributionAdapter,
   DoltgresKnowledgeStoreAdapter,
+  wrapPushSafe,
 } from "@cogni/knowledge-store/adapters/doltgres";
 import { parseMcpConfigFromEnv } from "@cogni/langgraph-graphs";
 import {
@@ -204,6 +214,10 @@ export interface Container {
   repoCapability: RepoCapability;
   /** Tool source with real implementations for AI tool execution */
   toolSource: ToolSourcePort;
+  /** External-agent knowledge contribution service — undefined when DOLTGRES_URL is unset */
+  knowledgeContributionService: ContributionService | undefined;
+  /** Direct knowledge store port — exposed for the cookie-only browse endpoint. Undefined when DOLTGRES_URL is unset. */
+  knowledgeStorePort: KnowledgeStorePort | undefined;
   /** Thread persistence scoped to a user (RLS enforced) */
   threadPersistenceForUser(userId: UserId): ThreadPersistencePort;
   /** Governance status queries (system tenant scope) */
@@ -571,6 +585,8 @@ function createContainer(): Container {
   // When configured, wraps KnowledgeStorePort with auto-commit on writes.
   // When not configured, tools throw "not configured" at invocation time.
   let knowledgeCapability: KnowledgeCapability;
+  let knowledgeContributionService: ContributionService | undefined;
+  let knowledgeStorePort: KnowledgeStorePort | undefined;
   if (env.DOLTGRES_URL) {
     const doltClient = buildDoltgresClient({
       connectionString: env.DOLTGRES_URL,
@@ -579,8 +595,49 @@ function createContainer(): Container {
     const knowledgePort = new DoltgresKnowledgeStoreAdapter({
       sql: doltClient,
     });
+    knowledgeStorePort = knowledgePort;
     knowledgeCapability = createKnowledgeCapability(knowledgePort);
-    log.info("Knowledge store configured (Doltgres)");
+    const contributionPort = new DoltgresKnowledgeContributionAdapter({
+      sql: doltClient,
+    });
+    // Optional post-merge mirror to DoltHub (task.5069). Disabled when
+    // DOLTHUB_REMOTE_URL is unset. Gate-by-secret-presence follows the
+    // established pattern (Langfuse, Privy, PostHog) — DOLTHUB_REMOTE_URL
+    // is only granted to the production GitHub Environment Secret scope, so
+    // candidate-a/preview boot with the hook undefined and never push. v0
+    // invariant: prod is the only writer. Bootstrap: see
+    // docs/runbooks/dolthub-remote-bootstrap.md.
+    const remoteUrl = env.DOLTHUB_REMOTE_URL;
+    const pushMainOnMerge = remoteUrl
+      ? wrapPushSafe(
+          createDoltgresPusher({
+            sql: doltClient,
+            remoteName: "origin",
+            remoteUrl,
+          }),
+          {
+            onSuccess: () => log.info({ remote: remoteUrl }, "dolthub_push_ok"),
+            onFailure: (err) =>
+              log.warn({ err, remote: remoteUrl }, "dolthub_push_failed"),
+          }
+        )
+      : undefined;
+    knowledgeContributionService = createContributionService({
+      port: contributionPort,
+      canMergeKnowledge: defaultCanMergeKnowledge,
+      rateLimit: { maxOpenPerPrincipal: 10 },
+      // v0 write-pipeline: shape gate only on the contribution path.
+      // Provenance is stamped by the adapter (`source_type='external'`,
+      // `source_ref='contribution:<id>:<seq>'`), so the provenance gate is
+      // reserved for internal `core__knowledge_write` where the caller
+      // controls those fields. See work/projects/proj.knowledge-write-pipeline.md.
+      gates: [shapeGate],
+      ...(pushMainOnMerge ? { pushMainOnMerge } : {}),
+    });
+    log.info(
+      { dolthubMirror: Boolean(env.DOLTHUB_REMOTE_URL) },
+      "Knowledge store configured (Doltgres)"
+    );
   } else {
     const notConfigured = () => {
       throw new Error("KnowledgeCapability not configured. Set DOLTGRES_URL.");
@@ -591,6 +648,8 @@ function createContainer(): Container {
       get: notConfigured,
       write: notConfigured,
     };
+    knowledgeContributionService = undefined;
+    knowledgeStorePort = undefined;
     log.warn("Knowledge store not configured (DOLTGRES_URL not set)");
   }
 
@@ -773,6 +832,8 @@ function createContainer(): Container {
     ),
     attributionStore: new DrizzleAttributionAdapter(serviceDb, getScopeId()),
     workItemQuery: workItemAdapter,
+    knowledgeContributionService,
+    knowledgeStorePort,
     runStream,
     nodeStream,
     get webhookRegistrations() {
