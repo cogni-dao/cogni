@@ -62,7 +62,7 @@ IFS=',' read -ra _NODES <<< "${PROMOTED_APPS:?PROMOTED_APPS required (CSV of nod
 SERVICES=()
 for node in "${_NODES[@]}"; do
   case "$node" in
-    operator | poly | resy) SERVICES+=("${node}-node-app") ;;
+    operator | poly | resy | node-template) SERVICES+=("${node}-node-app") ;;
     scheduler-worker) SERVICES+=("scheduler-worker") ;;
     *)
       echo "::error::wait-for-in-cluster-services: unknown node '$node' in PROMOTED_APPS"

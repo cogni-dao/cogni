@@ -85,7 +85,7 @@ CUTOVER_SLEEP="${CUTOVER_SLEEP:-5}"
 # Only node-apps expose /version via HTTPS Ingress. scheduler-worker and
 # migrator are promoted-apps too but are in-cluster only — they're covered
 # by wait-for-in-cluster-services (kubectl rollout status) upstream.
-NODE_APPS="operator poly resy"
+NODE_APPS="operator poly resy node-template"
 
 declare -A EXPECTED_BY_NODE=()
 

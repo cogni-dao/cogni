@@ -42,12 +42,13 @@ check_livez() {
   fi
 }
 
-for app in operator poly resy; do
+for app in operator poly resy node-template; do
   if should_check "$app"; then
     case "$app" in
-      operator) check_livez operator "https://${DOMAIN}" ;;
-      poly)     check_livez poly     "https://poly-${DOMAIN}" ;;
-      resy)     check_livez resy     "https://resy-${DOMAIN}" ;;
+      operator)      check_livez operator      "https://${DOMAIN}" ;;
+      poly)          check_livez poly          "https://poly-${DOMAIN}" ;;
+      resy)          check_livez resy          "https://resy-${DOMAIN}" ;;
+      node-template) check_livez node-template "https://node-template-${DOMAIN}" ;;
     esac
   else
     echo "[skip] ${app} livez — not in PROMOTED_APPS=${PROMOTED_APPS}"

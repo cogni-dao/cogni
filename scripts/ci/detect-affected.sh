@@ -149,9 +149,6 @@ else
         selection_reason="shared-package-change:${path}"
         break
         ;;
-      nodes/node-template/*)
-        selection_reason="non-deployable-node-template-change:${path}"
-        ;;
       *)
         for target in "${ALL_TARGETS[@]}"; do
           prefix="${target_prefix[$target]}"

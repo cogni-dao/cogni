@@ -112,7 +112,7 @@ promote_target() {
   [ -z "$digest" ] && return 0
 
   case "$target" in
-    operator | poly | resy | scheduler-worker)
+    operator | poly | resy | scheduler-worker | node-template)
       bash "$PROMOTE_SCRIPT" --no-commit --env "$OVERLAY_ENV" --app "$target" --digest "$digest"
       ;;
     *)

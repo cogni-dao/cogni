@@ -25,6 +25,11 @@ spec:
         revision: deploy/candidate-a-scheduler-worker
         files:
           - path: "infra/catalog/scheduler-worker.yaml"
+    - git:
+        repoURL: https://github.com/cogni-dao/cogni.git
+        revision: deploy/candidate-a-node-template
+        files:
+          - path: "infra/catalog/node-template.yaml"
   template:
     metadata:
       name: "candidate-a-{{.name}}"

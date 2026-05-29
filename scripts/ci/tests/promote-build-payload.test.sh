@@ -69,6 +69,8 @@ FULL_TARGETS='[
   {"target":"poly-migrator","digest":"sha256:bb02"},
   {"target":"resy","digest":"sha256:cc01"},
   {"target":"resy-migrator","digest":"sha256:cc02"},
+  {"target":"node-template","digest":"sha256:ee01"},
+  {"target":"node-template-migrator","digest":"sha256:ee02"},
   {"target":"scheduler-worker","digest":"sha256:dd01"}
 ]'
 EMPTY_TARGETS='[]'
@@ -132,13 +134,13 @@ run_case() {
 }
 
 # Case 1 — happy path. Real update-source-sha-map.sh, full payload.
-run_case "happy" "$UPDATE_MAP" "$FULL_TARGETS" "operator,poly,resy,scheduler-worker" "yes" 0
+run_case "happy" "$UPDATE_MAP" "$FULL_TARGETS" "operator,poly,resy,node-template,scheduler-worker" "yes" 0
 
 # Case 2 — MAP_SCRIPT fails for EVERY app (provenance side-car dead).
 # promoted_apps must still reflect every overlay write (verify-candidate
 # must still run), but the script exits non-zero so the flight job turns
 # red — total provenance loss is a hard break, not silent decay.
-run_case "map-script-failing" "/bin/false" "$FULL_TARGETS" "operator,poly,resy,scheduler-worker" "no" 1
+run_case "map-script-failing" "/bin/false" "$FULL_TARGETS" "operator,poly,resy,node-template,scheduler-worker" "no" 1
 
 # Case 3 — genuine no-op (empty payload). promoted_apps must be empty so
 # verify-candidate's job-level gate skips legitimately and release-slot

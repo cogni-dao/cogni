@@ -160,7 +160,7 @@ resolve_deployment() {
   local app="${app_name#${DEPLOY_ENVIRONMENT}-}"
   case "$app" in
     scheduler-worker) echo "scheduler-worker" ;;
-    operator | poly | resy) echo "${app}-node-app" ;;
+    operator | poly | resy | node-template) echo "${app}-node-app" ;;
     *) echo "" ;;  # unknown app — caller treats empty as "skip digest check"
   esac
 }

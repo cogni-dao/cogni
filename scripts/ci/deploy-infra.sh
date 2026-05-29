@@ -616,11 +616,28 @@ case "$DEPLOY_ENVIRONMENT" in
 esac
 RESY_DOMAIN="${RESY_DOMAIN:-$RESY_DOMAIN_DERIVED}"
 
+case "$DEPLOY_ENVIRONMENT" in
+    production)  NODE_TEMPLATE_DOMAIN_DERIVED="node-template.${DOMAIN}" ;;
+    preview)     NODE_TEMPLATE_DOMAIN_DERIVED="node-template-preview.${DOMAIN#preview.}" ;;
+    candidate-a|canary) NODE_TEMPLATE_DOMAIN_DERIVED="node-template-test.${DOMAIN#test.}" ;;
+    *)           NODE_TEMPLATE_DOMAIN_DERIVED="node-template.${DOMAIN}" ;;
+esac
+NODE_TEMPLATE_DOMAIN="${NODE_TEMPLATE_DOMAIN:-$NODE_TEMPLATE_DOMAIN_DERIVED}"
+
 # Edge env — Caddyfile site blocks resolve these. Missing values produce
 # anonymous server blocks and Caddy refuses to start (bug.5070).
+# UPSTREAMS were previously only written by provision-test-vm.sh at fresh-VM
+# bootstrap; on every deploy-infra run this file was rewritten without them,
+# so a subsequent Caddy restart would have nothing to substitute. The values
+# are stable per-VM (host.docker.internal forwarding to k3s NodePorts on the
+# host), so writing them here is idempotent and removes the bootstrap-coupling.
 cat > /opt/cogni-template-edge/.env << ENV_EOF
 DOMAIN=${DOMAIN}
 RESY_DOMAIN=${RESY_DOMAIN}
+NODE_TEMPLATE_DOMAIN=${NODE_TEMPLATE_DOMAIN}
+OPERATOR_UPSTREAM=host.docker.internal:30000
+RESY_UPSTREAM=host.docker.internal:30300
+NODE_TEMPLATE_UPSTREAM=host.docker.internal:30200
 ENV_EOF
 
 # LiteLLM image is built from infra/images/litellm/ and pushed to GHCR.
@@ -743,7 +760,7 @@ append_env_if_set "$RUNTIME_ENV" GRAFANA_PDC_NETWORK_ID "${GRAFANA_PDC_NETWORK_I
 # NodePorts pinned in infra/k8s/base/node-app/service.yaml; UUIDs in each
 # node's .cogni/repo-spec.yaml. Scheduler-worker uses its own k8s ConfigMap.
 LITELLM_NODE_HOST="${DEPLOY_ENVIRONMENT}.vm.cognidao.org"
-LITELLM_NODE_ENDPOINTS="4ff8eac1-4eba-4ed0-931b-b1fe4f64713d=http://${LITELLM_NODE_HOST}:30000,5ed2d64f-2745-4676-983b-2fb7e05b2eba=http://${LITELLM_NODE_HOST}:30100,f6d2a17d-b7f6-4ad1-a86b-f0ad2380999e=http://${LITELLM_NODE_HOST}:30300"
+LITELLM_NODE_ENDPOINTS="4ff8eac1-4eba-4ed0-931b-b1fe4f64713d=http://${LITELLM_NODE_HOST}:30000,5ed2d64f-2745-4676-983b-2fb7e05b2eba=http://${LITELLM_NODE_HOST}:30100,f6d2a17d-b7f6-4ad1-a86b-f0ad2380999e=http://${LITELLM_NODE_HOST}:30300,b927a9dd-6132-4fc9-a51e-e3cee2568e3c=http://${LITELLM_NODE_HOST}:30200"
 printf '%s=%s\n' COGNI_NODE_ENDPOINTS "$LITELLM_NODE_ENDPOINTS" >> "$RUNTIME_ENV"
 # Multi-node DB provisioning
 append_env_if_set "$RUNTIME_ENV" COGNI_NODE_DBS "${COGNI_NODE_DBS-}"
@@ -1133,25 +1150,34 @@ if command -v kubectl &>/dev/null; then
   HOST_IP=$(hostname -I | awk '{print $1}')
   log_info "  k8s namespace: ${K8S_NS}, host IP: ${HOST_IP}"
 
-  # ── Per-node secrets (operator, poly, resy) ────────────────────────────────
-  for node in operator poly resy; do
+  # ── Per-node secrets (operator, poly, resy, node-template) ────────────────
+  # task.5078 — node-template added as fourth deployable node. Hyphenated node
+  # names map to underscored DB names (postgres identifier rules):
+  #   node="node-template" → DB="cogni_node_template" / "knowledge_node_template".
+  for node in operator poly resy node-template; do
+    db_node="${node//-/_}"
     # Doltgres URL points to this node's own DB (knowledge_<node>).
     # Poly reads DOLTGRES_URL_POLY in its Zod schema; operator/resy read generic DOLTGRES_URL.
+    # node-template's substrate (task.5077) ships in a follow-up — until then,
+    # DOLTGRES_URL is intentionally omitted so the optional KnowledgeCapability
+    # branch (container.ts) stays disabled.
     # Ships as `postgres` (superuser) because Doltgres 0.56 RBAC is non-functional —
     # GRANTs report success but even `SELECT current_user` is denied for the
     # knowledge_writer role, making the drizzle migrator and app unusable as a
     # non-superuser. See task.0311 follow-up — revisit when Doltgres implements
     # GRANT properly (tracking: dolthub/doltgresql#XXXX).
-    DOLTGRES_URL_NODE="postgresql://postgres:${DOLTGRES_PASSWORD}@${HOST_IP}:5435/knowledge_${node}?sslmode=disable"
+    DOLTGRES_URL_NODE="postgresql://postgres:${DOLTGRES_PASSWORD}@${HOST_IP}:5435/knowledge_${db_node}?sslmode=disable"
     if [ "$node" = "poly" ]; then
       DOLTGRES_ENV_LINE="DOLTGRES_URL_POLY=${DOLTGRES_URL_NODE}"
+    elif [ "$node" = "node-template" ]; then
+      DOLTGRES_ENV_LINE=""
     else
       DOLTGRES_ENV_LINE="DOLTGRES_URL=${DOLTGRES_URL_NODE}"
     fi
     SECRET_FILE=$(mktemp)
     cat > "$SECRET_FILE" <<SECEOF
-DATABASE_URL=postgresql://${APP_DB_USER}:${APP_DB_PASSWORD}@${HOST_IP}:5432/cogni_${node}?sslmode=disable
-DATABASE_SERVICE_URL=postgresql://${APP_DB_SERVICE_USER}:${APP_DB_SERVICE_PASSWORD}@${HOST_IP}:5432/cogni_${node}?sslmode=disable
+DATABASE_URL=postgresql://${APP_DB_USER}:${APP_DB_PASSWORD}@${HOST_IP}:5432/cogni_${db_node}?sslmode=disable
+DATABASE_SERVICE_URL=postgresql://${APP_DB_SERVICE_USER}:${APP_DB_SERVICE_PASSWORD}@${HOST_IP}:5432/cogni_${db_node}?sslmode=disable
 ${DOLTGRES_ENV_LINE}
 AUTH_SECRET=${AUTH_SECRET}
 LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
@@ -1244,12 +1270,13 @@ SECEOF
   kubectl -n "${K8S_NS}" rollout restart \
     deployment/operator-node-app \
     deployment/poly-node-app \
-    deployment/resy-node-app 2>/dev/null || true
+    deployment/resy-node-app \
+    deployment/node-template-node-app 2>/dev/null || true
   log_info "[$(date -u +%H:%M:%S)] Node-app pods restarting (scheduler-worker waits)..."
 
   # ── Wait for node-app rollouts first ───────────────────────────────────────
   ROLLOUT_PIDS=""
-  for deploy in operator-node-app poly-node-app resy-node-app; do
+  for deploy in operator-node-app poly-node-app resy-node-app node-template-node-app; do
     kubectl -n "${K8S_NS}" rollout status "deployment/${deploy}" --timeout=300s 2>/dev/null &
     ROLLOUT_PIDS="$ROLLOUT_PIDS $!"
   done

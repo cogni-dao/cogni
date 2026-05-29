@@ -1,7 +1,7 @@
 name: node-template
 type: node
 port: 3200
-node_id: "00000000-0000-4000-a000-000000000000"
+node_id: "b927a9dd-6132-4fc9-a51e-e3cee2568e3c"
 dockerfile: nodes/node-template/app/Dockerfile
 # bug.0344 — see infra/catalog/operator.yaml for why these fields exist.
 image_tag_suffix: "-node-template"

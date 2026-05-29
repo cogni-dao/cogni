@@ -26,11 +26,13 @@ services:
       - DOMAIN=${DOMAIN}
       - POLY_DOMAIN=${POLY_DOMAIN:-}
       - RESY_DOMAIN=${RESY_DOMAIN:-}
+      - NODE_TEMPLATE_DOMAIN=${NODE_TEMPLATE_DOMAIN:-}
       # Per-node upstreams. Default to Docker DNS (CI/dev); override to
       # host.docker.internal:<nodeport> for k3s edge deploys.
       - OPERATOR_UPSTREAM=${OPERATOR_UPSTREAM:-app:3000}
       - POLY_UPSTREAM=${POLY_UPSTREAM:-poly:3100}
       - RESY_UPSTREAM=${RESY_UPSTREAM:-resy:3300}
+      - NODE_TEMPLATE_UPSTREAM=${NODE_TEMPLATE_UPSTREAM:-node-template:3200}
     volumes:
       - ./configs/Caddyfile.tmpl:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
