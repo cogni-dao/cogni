@@ -113,7 +113,7 @@ Stated "git OR dolt" as a binary and rejected dolt as Option B. That was a straw
 
 A skill is a markdown document with frontmatter (`name`, `description`, optional metadata like `user-invocable`), a body, and possibly referenced assets. A `knowledge` row is a markdown body with structured metadata (`title`, `entry_type`, `tags`, `source_ref`, `source_node`, `confidence_pct`). The only missing piece in the `knowledge` schema for skills is **`entry_type: skill`**, which is just a new value in a free-text column.
 
-Once skills are rows in `knowledge`, everything in the knowledge hub applies to them for free: domains, citations DAG, confidence scores, source provenance, branched contributions, principal_id audit, source_node filtering, future vector search. This is what the `knowledge-syntropy-expert` skill describes when it talks about "the codified mind" — skills _are_ knowledge.
+Once skills are rows in `knowledge`, everything in the knowledge hub applies to them for free: domains, citations DAG, confidence scores, source provenance, branched contributions, `principal_id` audit, `source_node` filtering, future vector search. This is what the `knowledge-syntropy-expert` skill describes when it talks about "the codified mind" — skills **are** knowledge.
 
 ### Finding 2 — Git as write substrate, dolt as read substrate, filesystem as render target
 
@@ -249,7 +249,7 @@ Concretely:
 ## Open Questions
 
 - **Sync timing**: on every merge to main (cheap, frequent) vs. on candidate-a deploy (coarser, matches deploy cadence)? Probably both — merge-time updates "main" rows, candidate-a deploy promotes them.
-- **Authoring-via-contribution UX**: how does a human-authored skill PR vs. an agent-authored knowledge_contribution-with-entry_type=skill interact? They write to the same target row keyed by `source_ref`. We probably want agent contributions to _propose a draft SKILL.md as a PR_, not write directly to dolt — the dolt write becomes the post-merge sync. (This keeps git as the canonical authoring path for both humans and agents.)
+- **Authoring-via-contribution UX**: how does a human-authored skill PR vs. an agent-authored `knowledge_contribution` with `entry_type: skill` interact? They write to the same target row keyed by `source_ref`. We probably want agent contributions to **propose a draft SKILL.md as a PR**, not write directly to dolt — the dolt write becomes the post-merge sync. (This keeps git as the canonical authoring path for both humans and agents.)
 - **MCP transport**: streamable-HTTP (correct for our remote use case) — confirm `@modelcontextprotocol/sdk` HTTP transport stability with late-2025 clients. Most current clients still want stdio + `mcp-remote` shim; pin the patched version (CVSS 9.6 RCE fixed in 2025).
 - **`.claude/skills/` rename risk**: zero — we don't rename, we just add depth. Existing `agent.json:70` / `ci.yaml:86,139` references continue to work.
 - **OpenClaw `extraDirs` glob**: does the upstream OpenClaw codebase support globs in `extraDirs`? If not, a small upstream PR vs. listing each node's path explicitly. Listing is fine until we have many nodes.
