@@ -792,6 +792,209 @@ export class DoltgresKnowledgeContributionAdapter
     });
   }
 
+  /**
+   * COMPOUNDING_VIA_ONE_OPEN_CONTRIBUTION_PER_PRINCIPAL.
+   * Return the principal's oldest open contribution, or null. The service
+   * uses this to decide append-vs-create on EDO writes so a multi-step
+   * hypothesis -> decision -> outcome chain compounds onto one branch
+   * instead of sprawling into N parallel contributions.
+   */
+  async findOpenForPrincipal(
+    principalId: string
+  ): Promise<ContributionRecord | null> {
+    const rows = await this.sql.unsafe(
+      `SELECT * FROM knowledge_contributions WHERE state = 'open' AND principal_id = ${escapeValue(principalId)} ORDER BY created_at ASC LIMIT 1`
+    );
+    if (rows.length === 0) return null;
+    return mapRecord(rows[0] as Record<string, unknown>);
+  }
+
+  async appendEdoHypothesis(
+    input: CreateEdoHypothesisInput & { contributionId: string }
+  ): Promise<ContributionRecord> {
+    return this.appendEdoBatch(input, async ({ conn, contributionId }) => {
+      const provenance = edoBatchProvenance(contributionId, input.principal, 1);
+      const confidencePct =
+        input.entry.confidencePct ?? EDO_CONFIDENCE_AGENT_DEFAULT;
+      await insertKnowledgeRow({
+        conn,
+        id: input.entry.id,
+        domain: input.entry.domain,
+        title: input.entry.title,
+        content: input.entry.content,
+        entryType: "hypothesis",
+        confidencePct,
+        evaluateAt: input.entry.evaluateAt,
+        resolutionStrategy: input.entry.resolutionStrategy ?? null,
+        ...(input.entry.tags !== undefined ? { tags: input.entry.tags } : {}),
+        provenance,
+      });
+      for (const evidenceId of input.evidenceForIds ?? []) {
+        await insertCitationRow({
+          conn,
+          citingId: input.entry.id,
+          citedId: evidenceId,
+          citationType: "evidence_for",
+        });
+      }
+      return {
+        editCount: 1 + (input.evidenceForIds?.length ?? 0),
+        message: input.message,
+      };
+    });
+  }
+
+  async appendEdoDecision(
+    input: CreateEdoDecisionInput & { contributionId: string }
+  ): Promise<ContributionRecord> {
+    return this.appendEdoBatch(input, async ({ conn, contributionId }) => {
+      const provenance = edoBatchProvenance(contributionId, input.principal, 1);
+      const confidencePct =
+        input.entry.confidencePct ?? EDO_CONFIDENCE_AGENT_DEFAULT;
+      await insertKnowledgeRow({
+        conn,
+        id: input.entry.id,
+        domain: input.entry.domain,
+        title: input.entry.title,
+        content: input.entry.content,
+        entryType: "decision",
+        confidencePct,
+        ...(input.entry.tags !== undefined ? { tags: input.entry.tags } : {}),
+        provenance,
+      });
+      await insertCitationRow({
+        conn,
+        citingId: input.entry.id,
+        citedId: input.derivesFromHypothesisId,
+        citationType: "derives_from",
+      });
+      return { editCount: 2, message: input.message };
+    });
+  }
+
+  async appendEdoOutcome(
+    input: CreateEdoOutcomeInput & { contributionId: string }
+  ): Promise<ContributionRecord> {
+    return this.appendEdoBatch(input, async ({ conn, contributionId }) => {
+      const provenance = edoBatchProvenance(contributionId, input.principal, 1);
+      const confidencePct =
+        input.entry.confidencePct ??
+        initialConfidenceForSource(provenance.sourceType);
+      await insertKnowledgeRow({
+        conn,
+        id: input.entry.id,
+        domain: input.entry.domain,
+        title: input.entry.title,
+        content: input.entry.content,
+        entryType: "outcome",
+        confidencePct,
+        ...(input.entry.tags !== undefined ? { tags: input.entry.tags } : {}),
+        provenance,
+      });
+      await insertCitationRow({
+        conn,
+        citingId: input.entry.id,
+        citedId: input.hypothesisId,
+        citationType: input.edge,
+        context: `resolved by external contribution`,
+      });
+      await recomputeConfidenceOnConn(conn, input.hypothesisId);
+      return { editCount: 2, message: input.message };
+    });
+  }
+
+  /**
+   * Shared branch-append wrapper for the three EDO append ops. Mirrors
+   * `appendCommit` (concurrency-guarded checkout + commit on branch + UPDATE
+   * contribution row) while applying the EDO atomic batch via callback
+   * (same callback shape as `createEdoBatch` so create + append share row-
+   * writing logic at the call site). Pre-merge invariant unchanged: every
+   * EDO row sits on a contrib branch; only session-cookie merge promotes
+   * to main.
+   */
+  private async appendEdoBatch<
+    T extends {
+      principal: Principal;
+      message: string;
+      contributionId: string;
+    },
+  >(
+    input: T,
+    applyBatch: (ctx: {
+      conn: ReservedSql;
+      contributionId: string;
+    }) => Promise<{ editCount: number; message: string }>
+  ): Promise<ContributionRecord> {
+    return await withContributionAppendLock(input.contributionId, async () => {
+      const rec = await this.getById(input.contributionId);
+      if (!rec) throw new ContributionNotFoundError(input.contributionId);
+      if (rec.state !== "open") {
+        throw new ContributionStateError(
+          `contribution ${input.contributionId} is ${rec.state}`
+        );
+      }
+      const seq = rec.commitCount + 1;
+      const ref = sourceRef(input.contributionId, seq);
+      const expectedHead = rec.headCommit ?? rec.baseCommit;
+      const headPredicate = rec.headCommit
+        ? `head_commit = ${escapeValue(rec.headCommit)}`
+        : "head_commit IS NULL";
+
+      return await withReserved(this.sql, async (conn) => {
+        await conn.unsafe(`SELECT dolt_checkout(${escapeRef(rec.branch)})`);
+        const actualHead = await currentHash(conn, rec.branch);
+        if (
+          normalizeDoltCommitRef(actualHead) !==
+          normalizeDoltCommitRef(expectedHead)
+        ) {
+          throw new ContributionConflictError(
+            `contribution ${input.contributionId} branch head changed while appending`
+          );
+        }
+
+        const { editCount, message } = await applyBatch({
+          conn,
+          contributionId: input.contributionId,
+        });
+        const commitMessage = contributionMessage(
+          principalSlug(input.principal),
+          message
+        );
+        const commitResult = await conn.unsafe(
+          `SELECT dolt_commit('-Am', ${escapeValue(commitMessage)})`
+        );
+        const commitHash = parseDoltResult(
+          commitResult[0] as Record<string, unknown>,
+          "dolt_commit"
+        );
+
+        await conn.unsafe(`SELECT dolt_checkout('main')`);
+        const updateResult = await conn.unsafe(
+          `UPDATE knowledge_contributions SET head_commit = ${escapeValue(commitHash)}, commit_count = ${seq} WHERE id = ${escapeValue(input.contributionId)} AND commit_count = ${rec.commitCount} AND ${headPredicate}`
+        );
+        if (updateResult.count === 0) {
+          throw new ContributionConflictError(
+            `contribution ${input.contributionId} changed while appending`
+          );
+        }
+        const authSource =
+          input.principal.kind === "agent" ? "bearer" : "session";
+        await conn.unsafe(
+          `INSERT INTO knowledge_contribution_commits (contribution_id, seq, commit_hash, principal_id, principal_kind, auth_source, message, edit_count, source_ref) VALUES (${escapeValue(input.contributionId)}, ${seq}, ${escapeValue(commitHash)}, ${escapeValue(input.principal.id)}, ${escapeValue(input.principal.kind)}, ${escapeValue(authSource)}, ${escapeValue(message)}, ${editCount}, ${escapeValue(ref)})`
+        );
+        const metadataMessage = metaMessage(input.contributionId, seq);
+        await conn.unsafe(
+          `SELECT dolt_commit('-Am', ${escapeValue(metadataMessage)})`
+        );
+
+        const rows = await conn.unsafe(
+          `SELECT * FROM knowledge_contributions WHERE id = ${escapeValue(input.contributionId)} LIMIT 1`
+        );
+        return mapRecord(rows[0] as Record<string, unknown>);
+      });
+    });
+  }
+
   async list(query: {
     state: ContributionState | "all";
     principalId?: string;

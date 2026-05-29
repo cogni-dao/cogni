@@ -223,6 +223,20 @@ export function createContributionService(
     async createEdoHypothesisContribution({ principal, body }) {
       const replayed = await idempotencyReplay(principal, body.idempotencyKey);
       if (replayed) return replayed;
+      // COMPOUNDING_VIA_ONE_OPEN_CONTRIBUTION_PER_PRINCIPAL: if this principal
+      // already has an open contribution, append the EDO batch onto its
+      // branch so a hypothesize -> decide -> record-outcome chain compounds
+      // into one reviewable unit instead of sprawling into N contributions.
+      // Only when no open contribution exists do we enforce the open-quota
+      // and create a new branch.
+      const existing = await deps.port.findOpenForPrincipal(principal.id);
+      if (existing) {
+        return deps.port.appendEdoHypothesis({
+          principal,
+          contributionId: existing.contributionId,
+          ...body,
+        });
+      }
       await enforceOpenQuota(principal);
       return deps.port.createEdoHypothesis({ principal, ...body });
     },
@@ -230,6 +244,14 @@ export function createContributionService(
     async createEdoDecisionContribution({ principal, body }) {
       const replayed = await idempotencyReplay(principal, body.idempotencyKey);
       if (replayed) return replayed;
+      const existing = await deps.port.findOpenForPrincipal(principal.id);
+      if (existing) {
+        return deps.port.appendEdoDecision({
+          principal,
+          contributionId: existing.contributionId,
+          ...body,
+        });
+      }
       await enforceOpenQuota(principal);
       return deps.port.createEdoDecision({ principal, ...body });
     },
@@ -237,6 +259,14 @@ export function createContributionService(
     async createEdoOutcomeContribution({ principal, body }) {
       const replayed = await idempotencyReplay(principal, body.idempotencyKey);
       if (replayed) return replayed;
+      const existing = await deps.port.findOpenForPrincipal(principal.id);
+      if (existing) {
+        return deps.port.appendEdoOutcome({
+          principal,
+          contributionId: existing.contributionId,
+          ...body,
+        });
+      }
       await enforceOpenQuota(principal);
       return deps.port.createEdoOutcome({ principal, ...body });
     },

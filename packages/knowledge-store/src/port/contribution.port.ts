@@ -130,6 +130,37 @@ export interface KnowledgeContributionPort {
    */
   createEdoOutcome(input: CreateEdoOutcomeInput): Promise<ContributionRecord>;
 
+  /**
+   * COMPOUNDING_VIA_ONE_OPEN_CONTRIBUTION_PER_PRINCIPAL.
+   * Returns the principal's single open contribution, or null. Used by the
+   * service to decide append-to-existing vs open-new on EDO writes. The
+   * invariant: one bearer principal has at most one open contribution at a
+   * time, so a hypothesize -> decide -> record-outcome chain by the same
+   * agent compounds onto one branch (one human merge gates the whole loop)
+   * instead of sprawling into N parallel branches.
+   */
+  findOpenForPrincipal(
+    principalId: string
+  ): Promise<ContributionRecord | null>;
+
+  /**
+   * Append a hypothesis + N evidence_for citations + single Dolt commit to
+   * an existing open contribution's branch. Same invariants as
+   * createEdoHypothesis. Bumps commitCount + headCommit; the reviewer sees
+   * the whole chain on one branch.
+   */
+  appendEdoHypothesis(
+    input: CreateEdoHypothesisInput & { contributionId: string }
+  ): Promise<ContributionRecord>;
+
+  appendEdoDecision(
+    input: CreateEdoDecisionInput & { contributionId: string }
+  ): Promise<ContributionRecord>;
+
+  appendEdoOutcome(
+    input: CreateEdoOutcomeInput & { contributionId: string }
+  ): Promise<ContributionRecord>;
+
   list(query: {
     state: ContributionState | "all";
     principalId?: string;
