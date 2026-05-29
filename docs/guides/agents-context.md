@@ -30,7 +30,7 @@ You are configuring a coding agent or IDE to work with this repo. The goal is to
 - **Codex**: native AGENTS.md hierarchy (gold standard), dynamically loading subdirs.
 - **Gemini CLI + Antigravity**: default to `GEMINI.md`, configurable to use `AGENTS.md`, but only bulk loads ALL files at boot.
 - **Claude Code**: only uses `CLAUDE.md`, dynamically loading subdirs.
-- **Cursor**: reads `AGENTS.md` natively and `.cursor/commands`.
+- **Cursor**: reads `AGENTS.md` natively.
 
 ## OpenAI Codex (CLI + IDE)
 
@@ -48,7 +48,6 @@ You are configuring a coding agent or IDE to work with this repo. The goal is to
   - `"contextFileName": "AGENTS.md"`.
   - Optional: `"context": { "discoveryMaxDirs": N }` to cap scans.
 - Memory hierarchy: `~/.gemini/AGENTS.md` + project root + ancestor + selected subdirs.
-- Slash commands: `.gemini/commands/*.toml` → `/command-name`.
 
 ## Antigravity IDE
 
@@ -68,7 +67,6 @@ You are configuring a coding agent or IDE to work with this repo. The goal is to
 ## Cursor
 
 - Context: AGENTS.md is supported directly; keep `AGENTS.md` per directory as the source of truth.
-- Commands: `.cursor/commands/*.md` → `/command-name`.
 - Keep any Cursor-specific rules minimal and point back to AGENTS.md instead of duplicating policy.
 
 ### Usage Policy
