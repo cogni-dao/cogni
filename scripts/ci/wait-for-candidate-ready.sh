@@ -49,7 +49,18 @@ poll_ready() {
   return 1
 }
 
-poll_ready operator "https://${DOMAIN}"
-poll_ready poly "https://poly-${DOMAIN}"
-poll_ready resy "https://resy-${DOMAIN}"
-poll_ready node-template "https://node-template-${DOMAIN}"
+# Catalog-driven: iterate NODE_TARGETS from infra/catalog/ so adding a node
+# is one catalog edit, not a script edit. Hostname convention encoded inline
+# until `host_prefix` lands on the catalog schema (task.5079 follow-up):
+# operator → bare ${DOMAIN}; every other node → ${node}-${DOMAIN}.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./lib/image-tags.sh
+. "$SCRIPT_DIR/lib/image-tags.sh"
+
+for node in "${NODE_TARGETS[@]}"; do
+  if [ "$node" = "operator" ]; then
+    poll_ready "$node" "https://${DOMAIN}"
+  else
+    poll_ready "$node" "https://${node}-${DOMAIN}"
+  fi
+done

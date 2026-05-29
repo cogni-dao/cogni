@@ -32,6 +32,13 @@
 
 set -euo pipefail
 
+# Source catalog (ALL_TARGETS / NODE_TARGETS) so additions to infra/catalog/*
+# flow through here without script edits. CATALOG_IS_SSOT (docs/spec/ci-cd.md
+# axiom 16). task.5079 follow-up.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./lib/image-tags.sh
+. "$SCRIPT_DIR/lib/image-tags.sh"
+
 PAYLOAD_FILE=${PAYLOAD_FILE:-}
 OVERLAY_ENV=${OVERLAY_ENV:-}
 PROMOTE_SCRIPT=${PROMOTE_SCRIPT:-../app-src/scripts/ci/promote-k8s-image.sh}
@@ -111,14 +118,7 @@ promote_target() {
   digest=$(extract_digest "$target")
   [ -z "$digest" ] && return 0
 
-  case "$target" in
-    operator | poly | resy | scheduler-worker | node-template)
-      bash "$PROMOTE_SCRIPT" --no-commit --env "$OVERLAY_ENV" --app "$target" --digest "$digest"
-      ;;
-    *)
-      return 0
-      ;;
-  esac
+  bash "$PROMOTE_SCRIPT" --no-commit --env "$OVERLAY_ENV" --app "$target" --digest "$digest"
 
   PROMOTED+=("$target")
   # Re-emit after every success so a later abort still leaves an accurate
@@ -149,13 +149,19 @@ update_source_sha_map() {
 }
 
 # Pass 1 — promotions. Each appends to PROMOTED and emits $GITHUB_OUTPUT.
-# task.5079: collapse this list into a single `for t in "${ALL_TARGETS[@]}"`
-# loop sourced from the catalog. Until then, mirror catalog membership here.
-promote_target operator
-promote_target poly
-promote_target resy
-promote_target scheduler-worker
-promote_target node-template
+# Catalog-driven: iterate ALL_TARGETS sourced from infra/catalog/. NODES env
+# var (CSV) scopes a single-cell flight to its own matrix entry; unset =
+# every catalog target. `promote_target` is a no-op for any target whose
+# digest isn't in the payload (extract_digest returns empty), so iterating
+# all targets is safe even on affected-only PR builds.
+if [ -n "${NODES:-}" ]; then
+  IFS=',' read -r -a _to_promote <<<"$NODES"
+else
+  _to_promote=("${ALL_TARGETS[@]}")
+fi
+for target in "${_to_promote[@]}"; do
+  promote_target "$target"
+done
 
 # Pass 2 — source-sha-map. Non-fatal on per-app failure.
 for app in "${PROMOTED[@]}"; do
