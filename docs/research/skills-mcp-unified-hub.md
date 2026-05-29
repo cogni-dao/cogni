@@ -4,8 +4,8 @@ type: research
 title: "Unifying agent skills + dolt knowledge behind a 1-URL MCP server"
 status: draft
 trust: draft
-summary: "How to converge Cogni's two filesystem skill trees (.claude/skills, .openclaw/skills, .agents/skills) into one co-located-with-code layout, synced into the per-node dolt knowledge hub, and served to any external agent (Claude Code, OpenClaw, Codex, Cursor) over a single MCP URL. Models the pattern Anthropic itself uses for hosted Skills: filesystem-authored, registry-stored, filesystem-rendered at runtime."
-read_when: Designing how external agents discover Cogni skills/knowledge, planning the operator MCP server, deciding how skills relate to the dolt knowledge hub, deduplicating the three skill trees, or evaluating Anthropic Skills API adoption.
+summary: "Cogni maintains 7 parallel agent-harness skill trees (.claude/{skills,commands}, .openclaw/skills, .agents/skills, .clinerules, .cursor, .gemini, .github/prompts) — ~177 files of drifting copies of the same lifecycle commands. Per /knowledge-syntropy-expert review, skills ARE knowledge and belong in dolt (entry_type:skill) with confidence + citations + deprecation lifecycle. Recommendation: purge the 6 non-canonical trees, ingest .claude/skills into dolt as source_type:human, build MVP MCP server so external agents reach skills without monorepo clones, render dolt→.claude/skills via a sync CLI for local Claude Code."
+read_when: Designing how external agents discover Cogni skills/knowledge, planning the operator MCP server, deciding whether skills belong in dolt or git, executing the multi-harness purge, or evaluating the Anthropic Skills API pattern adapted to a Dolt-backed substrate.
 owner: derekg1729
 created: 2026-05-29
 verified:
@@ -26,7 +26,13 @@ external_refs:
 
 # Research: Unifying agent skills + dolt knowledge behind a 1-URL MCP server
 
-> spike: spike.5003 | date: 2026-05-29 (rev 2 — after pushback that v1 false-dichotomized "git OR dolt")
+> spike: spike.5003 | date: 2026-05-29
+
+## Revision history (most recent first — older positions superseded, kept for syntropy doctrine: DEPRECATE_NOT_DELETE)
+
+- **rev 3 (current, syntropy-aligned)** — drove by `/knowledge-syntropy-expert` review. Skills ARE knowledge; they belong in dolt with `confidence_pct` + `citations` + `status` lifecycle + `principal_id` audit. Git becomes a generated cache. MCP server is required, not deferred, because external agents shouldn't need to clone the monorepo. Scope expanded from "3 trees" to **7 harness trees** after inventory: `.claude/{skills,commands}`, `.openclaw/skills`, `.agents/skills`, `.clinerules`, `.cursor`, `.gemini`, `.github/prompts` — ~177 files of drifted parallel copies of the same lifecycle commands. Purge the 6 non-canonical trees.
+- **rev 2** (superseded on substrate, partially superseded on scope) — proposed git-canonical + co-located + dolt-indexed + MCP-served. Substrate was wrong: per syntropy doctrine `RECALL_BEFORE_WRITE`, `DEPRECATE_NOT_DELETE`, `ATTRIBUTION_TRACEABLE`, skills can't compound from a git substrate. Scope undercounted drift (treated `.openclaw` as a legitimate category instead of drift artifact; missed 5 other harness trees entirely).
+- **rev 1** (superseded) — false-dichotomized "git OR dolt." Recommended git-only.
 
 ## Question
 
@@ -40,23 +46,29 @@ Three sub-questions:
 
 ## Context
 
-### What exists today (verified)
+### What exists today (verified — full 7-tree inventory)
 
-**Three skill trees, two functional categories, almost zero real duplication.**
+**The drift surface is much larger than rev 2 surveyed.** Seven parallel harness trees, ~177 skill-like files, all maintaining their own copy of the same lifecycle commands. Drift confirmed by byte counts on `commit`/`research`:
 
-| Tree | Count | Frontmatter | Purpose | Loaded by |
+| Tree | File count | Format | Status | Notes |
 |---|---|---|---|---|
-| `.claude/skills/` | 29 | `name`, `description` | Situational expertise — auto-loaded when relevant | Claude Code relevance judge |
-| `.openclaw/skills/` | 37 | `description`, `user-invocable: true` | Lifecycle commands (`/research`, `/commit`, `/task`, `/triage`, …) | OpenClaw runtime + Claude Code slash-commands |
-| `.agents/skills/` | 1 (`skill-creator`) | `name`, `description` | Shared bootstrap | symlinked from `.claude/skills/skill-creator` |
+| `.claude/skills/` | 29 (SKILL.md) | Anthropic SKILL.md + YAML frontmatter | **CANONICAL — keep** | Auto-loaded by Claude Code relevance |
+| `.claude/commands/` | 28 (`.md`) | Plain markdown | **KEEP** (Claude Code slash-commands; native, different mechanism than skills) | Drifts internally vs `.claude/skills/research`, etc. (separate cleanup) |
+| `.openclaw/skills/` | 37 (SKILL.md) | SKILL.md + `user-invocable: true` | **PURGE** | OpenClaw deprecated (per user); ui-ux-pro-max bytewise dup of `.claude/skills/` |
+| `.agents/skills/` | 1 (skill-creator) | SKILL.md | **KEEP** | Vendored from `anthropics/skills` via `npx skills add`; tracked in `skills-lock.json`; symlinked from `.claude/skills/skill-creator` |
+| `.clinerules/workflows/` | 24 (`.md`) | Cline workflow format | **PURGE** | Cline not used |
+| `.cursor/commands/` | 25 (`.md`) | Cursor command format | **PURGE** | Cursor not used |
+| `.gemini/commands/` | 26 (`.toml`) | Gemini TOML format | **PURGE** | Gemini not used |
+| `.github/prompts/` | 23 (`*.prompt.md`) | Copilot prompts | **PURGE** | Copilot prompt commands not used (the 3-line `.github/copilot-instructions.md` stays) |
 
-The two big trees are **disjoint, not redundant.** The only byte-identical duplicate across trees is `ui-ux-pro-max` (16,221 bytes both copies, not symlinked). The first-pass framing of "deduplicate the three trees" was wrong — the real work is **classification + co-location**, not deletion.
+**Drift evidence (file sizes for `commit` across trees):**
+- 2138 bytes × 4 (identical): `.claude/commands/`, `.clinerules/workflows/`, `.cursor/commands/`, `.github/prompts/`
+- 2231 bytes: `.openclaw/skills/commit/SKILL.md` (drift)
+- 2239 bytes: `.gemini/commands/commit.toml` (TOML-conversion drift)
 
-**OpenClaw skill discovery** (`services/sandbox-openclaw/openclaw-gateway.json:268`):
-```json
-"skills": { "load": { "extraDirs": ["/repo/current/.openclaw/skills"] } }
-```
-`extraDirs` is already an array — multiple roots are supported, just unused.
+**Drift for `research`:** 3506 bytes (×3 identical) / 3837 (.claude/commands drift) / 3936 (openclaw drift) / 3597 (gemini toml). **No single canonical version anywhere.** This is exactly the syntropy doctrine's anti-pattern: "three competing entries on the same topic = no entry."
+
+These trees were authored once and never re-synced. Every commit-flow improvement landed in only one place. Agents now load whichever copy their harness was configured for, which is functionally non-deterministic from a quality standpoint.
 
 **Claude Code skill discovery** walks *into* subdirectories — `packages/frontend/.claude/skills/` is auto-discovered when editing files under `packages/frontend/`. Has a 15k-char description budget (visible via `/context`). **Co-location is a Claude-Code-native pattern**, not something we have to invent.
 
@@ -92,6 +104,8 @@ The two big trees are **disjoint, not redundant.** The only byte-identical dupli
 Stated "git OR dolt" as a binary and rejected dolt as Option B. That was a strawman: I framed Option B as "skills MIGRATE INTO dolt, git copies deleted." The actual interesting design — and the one Anthropic itself ships — is **dual: git is the authoring substrate, dolt is the served/indexed substrate, filesystem is rendered at runtime**. With that frame, Option B and Option A converge.
 
 ## Findings
+
+> Findings 2–4 below capture rev-2 reasoning that argued for the git-canonical position. The rev-3 syntropy synthesis (see Recommendation) inverts the substrate conclusion: dolt is canonical, git is the cache. Finding 1 (skills *are* knowledge) and Finding 5 (1-URL MCP UX with bearer) are reinforced, not superseded. Finding 3 (co-location) is deferred indefinitely — irrelevant once `.claude/skills/` is a generated cache.
 
 ### Finding 1 — Skills and knowledge are the same data shape; today they live apart for accidental reasons
 
@@ -168,37 +182,57 @@ Auth = existing `cogni_ag_sk_v1_*` bearer. Same audit trail, same per-principal 
 
 OAuth 2.1 + PKCE + CIMD becomes mandatory for *public* remote servers per the late-2025 spec direction; ours is *bearer-protected per-tenant*, which the spec accommodates today via `Authorization` header. If we ever go public-multi-tenant, that's the migration trigger.
 
-## Recommendation
+## Recommendation (rev 3 — syntropy-aligned)
 
-**Adopt the Anthropic pattern (git authored, registry stored, runtime rendered), with dolt as the registry and `.claude/skills/` co-located under nodes.**
+**Dolt is the canonical substrate. Git becomes a generated cache. MCP is the remote serving surface — required, not deferred, because external agents must not need to clone the monorepo.**
+
+Why this inversion: skills are knowledge. The `/knowledge-syntropy-expert` skill's own decision tree (step 8) classifies "new `.md` file under `docs/`" as the *almost-never* path, because git-as-substrate fails every knowledge invariant — no `confidence_pct`, no `DEPRECATE_NOT_DELETE` (git rm = history-only), no `principal_id` audit (git author ≠ principal), no `RECALL_BEFORE_WRITE` enforcement, no `REFINE_OVER_EXTEND` enforcement, no cross-node access without monorepo clone. The 7-harness drift today is what happens when knowledge-shaped artifacts live in git: every harness fork drifts, no agent can search across them, no row can be deprecated cleanly, no contributor chain survives.
+
+Skills also evolve independently of code — they get refined as agents and humans learn from running them. Tying skill versioning to git PR ceremony adds an irrelevant tax to knowledge work that the dolt `knowledge_contributions` flow already handles natively (branch → review → merge → principal_id audit preserved).
 
 Concretely:
 
-1. **Adopt one skill format.** Anthropic SKILL.md frontmatter + two optional Cogni fields (`user_invocable`, `node` path-inferred).
-2. **Co-locate under `.claude/skills/` at multiple depths.** Cross-cutting at `./.claude/skills/`, node-scoped at `nodes/<node>/.claude/skills/`. Keep the directory name `.claude/skills/` everywhere to avoid touching the three hardcoded references. Claude Code natively discovers nested roots.
-3. **One canonical tree, two harness configs.**
-   - `.openclaw/skills/` content collapses into `.claude/skills/` (preserving `user_invocable: true` for lifecycle commands). `.openclaw/skills/` becomes either a symlink to `.claude/skills/` or, cleaner, OpenClaw's `extraDirs` config (`services/sandbox-openclaw/openclaw-gateway.json:268`) gets updated to point at all `.claude/skills/` roots: `["/repo/current/.claude/skills", "/repo/current/nodes/operator/.claude/skills", "/repo/current/nodes/poly/.claude/skills", ...]`. Glob support in `extraDirs` would be even cleaner — worth a small OpenClaw PR.
-   - `.agents/skills/skill-creator` collapses to `.claude/skills/skill-creator` (it's already symlinked the other way; just flip the symlink direction).
-4. **Sync skills to dolt as `entry_type: skill` rows.** CI step on merge to main (and on candidate-a deploy) walks `**/.claude/skills/*/SKILL.md`, upserts to `knowledge` table. `source_node` inferred from path. `source_ref` = repo path. Body in `content`. Frontmatter into `tags` JSONB. Idempotent by `source_ref`.
-5. **Build operator MCP server at `https://cognidao.org/mcp`.** Next.js route handler in `nodes/operator/app/src/app/mcp/route.ts` using `@modelcontextprotocol/sdk` + `mcp-handler` (Vercel adapter, fits Next App Router). Tools enumerated in Finding 5. Auth reuses `cogni_ag_sk_v1_*` bearer.
-6. **Filesystem stays the local-dev fast path.** Claude Code on a laptop reads `.claude/skills/` directly — no MCP round-trip needed. Remote agents (Codex, Cursor, sandbox OpenClaw, hosted agents) connect via MCP URL. Same SKILL.md content either way.
-7. **Agent-authored skills via existing contribution flow.** `POST /api/v1/knowledge/contributions { entry_type: "skill", ... }` → branched contribution → human reviews + merges → CI sync re-runs → live. Reuses existing infra (branched dolt + provenance + principal_id). Authoring path for *humans* stays git+PR.
+1. **Purge the 6 non-canonical harness trees.** Delete `.openclaw/`, `.clinerules/`, `.cursor/`, `.gemini/`, `.github/prompts/`. Keep `.claude/skills/` (canonical for now), `.claude/commands/` (Claude Code slash commands — different mechanism, native), `.agents/skills/skill-creator/` (vendored from `anthropics/skills`, npm-managed via `skills-lock.json`), `.github/copilot-instructions.md` (3 lines, points to root AGENTS.md). This is the syntropy doctrine's anti-sprawl rule: "three competing entries on the same topic = no entry."
 
-### Why this addresses the v1 pushback explicitly
+2. **Add `entry_type: skill` semantics to the existing `knowledge` schema.** Already free-text — no DDL needed. Document the value + the convention.
 
-- **"What's the point of dolt"** → dolt is the indexed, queryable, MCP-served substrate. Skills get domains, tags, confidence, citations, source_node filtering, cross-node search, contribution flow, principal_id audit for free. Filesystem-only would be a thin git proxy — *that* would have no point.
-- **"You positive these should live in git"** → authored in git (PR review, blame, history are non-negotiable for code-adjacent docs), served from dolt (the runtime substrate every external agent talks to). Both. Like Anthropic's own Skills API.
-- **"Not just `.claude/skills/` at root"** → co-located under `nodes/<node>/.claude/skills/`, supported natively by Claude Code's subdir walker, expanded in OpenClaw via `extraDirs`. ~15 of the 29 root skills move under a node.
-- **"Clean up duplication"** → the real duplication is small (`ui-ux-pro-max` only). The bigger work is the three trees collapsing to one canonical (`.claude/skills/` everywhere) with OpenClaw reconfigured rather than maintaining its own tree.
-- **"Reference companies"** → Anthropic Skills API (registry + VM filesystem), PromptLayer Skill Collections (DB + SDK pull), skillsmp.com (catalog + MCP), Continue Hub (registry), mcp.run (Wasm registry), Mintlify/Inkeep/Cloudflare AutoRAG (docs-as-MCP UX). Recommendation lines up with what the platforms — not the aggregators — actually ship.
+3. **One-time git → dolt ingest of `.claude/skills/`.** No new `source_type` value needed — use the schema as-is (`packages/knowledge-base/src/schema.ts:79-84`):
+   - `source_type: "human"` (these are human-curated knowledge artifacts; using "agent" would understate them; we've been running them in production)
+   - `source_ref: ".claude/skills/<name>/SKILL.md"` (the repo path of origin, preserved for traceability + the optional cache-render path)
+   - `confidence_pct: 70` (matches schema default for `human` per the comment on line 80)
+   - `content: <SKILL.md body>`, `tags: <frontmatter as JSONB>`, `entry_type: "skill"`, `domain` = inferred from skill (e.g. `dev-lifecycle`, `polymarket`, `deployment`)
+   - `status: "established"` for currently-active skills
+
+4. **MVP MCP server at `https://cognidao.org/mcp`.** Two tools v0: `get_skill(name)` + `list_skills()`. Bearer auth (`cogni_ag_sk_v1_*`). Single config line for any external agent:
+   ```json
+   { "mcpServers": { "cogni": {
+       "url": "https://cognidao.org/mcp",
+       "headers": { "Authorization": "Bearer ${COGNI_API_KEY}" }
+   }}}
+   ```
+   This is the minimum to prove the loop. Tools 3–5 (`search_skills`, `search_knowledge`, `read_knowledge`, Prompts) get layered after the v0 loop is real.
+
+5. **`cogni skills sync` CLI for local Claude Code.** Pulls from dolt → writes `.claude/skills/<name>/SKILL.md`. Run via shell init (or on `pnpm install`). The git tree under `.claude/skills/` becomes a generated cache, refreshed from dolt. Initially: optionally checked into git as convenience for newcomers (zero-config); eventually: gitignored once `cogni skills sync` is reliable in onboarding.
+
+6. **(Later) Refinement & atomic decomposition.** Once dolt is the substrate, apply `REFINE_OVER_EXTEND` to skills themselves: a monolithic skill like `poly-market-data` decomposes into a composite entry citing atomic facts (each atomic fact = its own knowledge row with confidence). New facts get added as siblings + citation edges, not by lengthening the skill. Skills compound the same way knowledge does. This is the deep syntropy win; defer until the substrate is in place.
+
+7. **(Later) Agent-authored skill drafts via existing `knowledge_contributions` flow.** `POST /api/v1/knowledge/contributions { entry_type: "skill" }` → branched contribution → human review → merge. Already-existing infra carries the authoring path; no special-casing for skills.
+
+### Why this addresses every previous pushback
+
+- **"What's the point of dolt"** — dolt is the substrate; skills get confidence + citations + deprecation + audit + cross-node search + remote access for free.
+- **"External agents shouldn't need to clone the monorepo"** (your stated requirement) — MCP server delivers skills via 1-URL bearer-protected access. No git clone needed.
+- **"Skills are AI-generated text that ships refinements independent of code"** — dolt `knowledge_contributions` flow handles this natively; git PR ceremony was the wrong fit.
+- **"7-harness drift"** — purge to one canonical (dolt), render to one cache (`.claude/skills/`).
+- **"git-import without hacks"** — no new `source_type` needed; use existing `human` + `source_ref` per the schema's existing semantics.
+- **"Reference companies"** — Anthropic Skills API (DB-backed registry, VM-rendered), PromptLayer Skill Collections (DB-backed, SDK-pull), mcp.run (Wasm registry), skillsmp.com (catalog + MCP), Continue Hub. The platforms — not the aggregators — chose DB-backed. Cogni follows the platforms.
 
 ### Trade-offs accepted
 
-- Dual-write/sync (git → dolt) adds a CI step and a small data invariant ("dolt skill rows are downstream of git, not the source of truth for authoring"). Worth it for the unified read surface.
-- Co-location reshuffles ~15 skill paths. Touches the 3 hardcoded `.claude/skills/`-prefix references → all 3 can stay as-is (cross-cutting skills don't move; only node-scoped ones do, and the affected references all point at cross-cutting skills like `validate-candidate`).
-- OpenClaw needs `extraDirs` updated (or a glob feature added) — small config or small upstream PR.
-- Per-node MCP endpoints deferred to v1. Operator-central with `node` parameter is good enough until per-node sovereignty becomes a real constraint.
-- Skill versioning (Anthropic Skills API takes `version`) deferred. Git SHA can serve as implicit version on the sync row.
+- Dolt becomes runtime-critical for skills, not just knowledge — uptime contract tightens. Mitigation: `cogni skills sync` writes a local cache, so Claude Code on a laptop keeps working through transient dolt outages.
+- Bidirectional sync (dolt → git cache; git → dolt on initial ingest only) requires discipline about which side is canonical. Mitigation: dolt is canonical, the git cache is read-only post-ingest, ingest runs once.
+- MCP server is unbuilt — this isn't deferrable any more (was deferred in rev 2 / `/review-design`). Acceptable cost given it satisfies the user's stated external-agent requirement and is the syntropy-correct serving surface.
+- `.claude/commands/` vs `.claude/skills/` internal drift (overlapping `commit`/`research`/etc. in both) is a separate cleanup — not in scope for this work.
 
 ## Open Questions
 
@@ -219,48 +253,44 @@ Concretely:
 
 ### Project
 
-`proj.*` — call it **"Cogni MCP Surface + skill consolidation v0"**. Phases:
+`proj.*` — **"Cogni skills-as-knowledge + MCP serving v0"**. Phases:
 
-1. **Phase 0 — Spec + classification.** One spec under `docs/spec/mcp-surface.md` covering: tree convention (`.claude/skills/` at multiple depths), frontmatter contract (Anthropic + Cogni extensions), sync invariants, MCP tool list + schemas, auth, progressive disclosure. Plus a classification pass on the existing 29 + 37 skills → which stay cross-cutting vs. move under `nodes/<node>/`.
+1. **Phase 1 — Purge.** Delete `.openclaw/`, `.clinerules/`, `.cursor/`, `.gemini/`, `.github/prompts/`. Keep `.claude/skills/`, `.claude/commands/`, `.agents/skills/skill-creator/`, `.github/copilot-instructions.md`. **Ships with this research PR.** Atomic. Validates the cleanup hypothesis (laptop Claude Code + flow still works) without committing to the new substrate.
 
-2. **Phase 1 — Skill tree consolidation (no MCP yet).** Move ~15 node-scoped skills from `.claude/skills/` to `nodes/<node>/.claude/skills/`. Add `extraDirs` entries to OpenClaw config for each new root. Resolve the `ui-ux-pro-max` duplicate (symlink). Flip `.agents/skills/skill-creator` symlink direction. Frontmatter normalize (`user-invocable` → `user_invocable`). Verify Claude Code + OpenClaw both still discover everything. This phase alone delivers value (cleaner repo, co-located skills) without touching MCP or dolt.
+2. **Phase 2 — `entry_type: skill` in the knowledge schema.** Free-text column; this is a documentation update + sync convention, not DDL. One PR documents the convention + adds it to `docs/spec/knowledge-syntropy.md`. Domain registry entries for skill-relevant domains (`dev-lifecycle`, `polymarket`, `deployment`, …) if missing.
 
-3. **Phase 2 — Dolt sync.** Add `entry_type: skill` as a recognized value in the knowledge schema (free-text column, so this is a documentation + sync update, not a migration). Build a CI step / deploy hook that walks `**/.claude/skills/*/SKILL.md`, upserts to `knowledge` keyed by `source_ref`. Idempotent. Run on merge-to-main + candidate-a deploy. Verify rows appear in operator's dolt with correct `source_node`.
+3. **Phase 3 — One-time git → dolt ingest.** Script walks `.claude/skills/*/SKILL.md` (post-Phase-1 cleanup), upserts to `knowledge` table with `source_type: "human"`, `source_ref: ".claude/skills/<name>/SKILL.md"`, `confidence_pct: 70`, `status: "established"`. Idempotent by `source_ref`. Run once on prod dolt. Verify rows appear.
 
-4. **Phase 3 — Operator MCP server v0 (knowledge tools only).** Next.js route at `nodes/operator/app/src/app/mcp/route.ts`. `search_knowledge` + `read_knowledge` tools. Bearer auth. Smoke-test with a real `cogni_ag_sk_v1_*` from `mcp-remote`. Validates the auth + transport before adding the skill loader.
+4. **Phase 4 — MVP MCP server.** Next.js route at `nodes/operator/app/src/app/mcp/route.ts` using `@modelcontextprotocol/sdk` + `mcp-handler` (Vercel adapter). Two tools: `list_skills()`, `get_skill(name)`. Bearer auth via existing `cogni_ag_sk_v1_*`. Smoke-test via `mcp-remote` from a non-monorepo machine — that's the loop-closure proof. No co-location, no Prompts, no `search_skills` in v0.
 
-5. **Phase 4 — Skill tools + Prompts.** `list_skills`, `get_skill`, `search_skills` reading from dolt (synced in Phase 2). Each `user_invocable: true` skill registered as MCP Prompt. Now a single config line gives any external agent the full skill surface.
+5. **Phase 5 — `cogni skills sync` CLI.** Pulls from dolt → renders to `.claude/skills/<name>/SKILL.md`. Run on shell init or as a `pnpm install` postscript. Once reliable, gitignore `.claude/skills/` (it becomes a generated cache). Defer the gitignore step until newcomer onboarding is proven.
 
-6. **Phase 5 — Discovery + onboarding.** `.well-known/agent.json` advertises `mcpUrl`. `/contribute-to-cogni` skill updated to instruct: "first onboarding step = add this MCP URL to your client config." Deprecate the older filesystem-instructions in favor of the MCP path for non-Claude-Code harnesses.
+6. **Phase 6 (deferred) — Search + atomic decomposition.** `search_skills` (Postgres FTS, then pgvector). `REFINE_OVER_EXTEND` applied to skills themselves: monolithic skills decompose into composite + atomic-citation graph. Skills compound like knowledge. Only build when authoring at scale demands it.
 
-7. **Phase 6 (deferred) — Search quality + vector.** Postgres FTS on `knowledge.content` + `knowledge.title`. pgvector after.
-
-8. **Phase 7 (deferred) — Agent-authored skill drafts via contribution flow.** Wire `POST /knowledge/contributions { entry_type: "skill" }` to produce a PR (or human-reviewable draft) rather than writing directly to dolt. Only build when there's a real use case.
+7. **Phase 7 (deferred) — Agent-authored skill drafts.** `POST /api/v1/knowledge/contributions { entry_type: "skill" }` already works via the existing branched contribution flow once Phase 2 lands. No special-casing needed; this is just a documentation update of the contribute-to-cogni flow.
 
 ### Specs needed
 
-- **New**: `docs/spec/mcp-surface.md` — MCP contract (tools, auth, scoping, progressive disclosure invariants, tree convention, sync invariants).
-- **New**: `docs/spec/skill-format.md` — Anthropic SKILL.md + Cogni extensions (`user_invocable`, `node`, sync rules). Or fold into the above.
-- **Updated**: `docs/spec/architecture.md` — MCP as a first-class boundary alongside REST.
-- **Updated**: `nodes/operator/app/src/app/.well-known/agent.json/route.ts` — add `mcpUrl` field.
-- **Cite from**: `docs/research/mcp-production-deployment-patterns.md` (auth direction already settled).
+- **Updated**: `docs/spec/knowledge-syntropy.md` — document `entry_type: skill` as a first-class value; clarify that skills compound the same way other knowledge entries do.
+- **New (Phase 4)**: `docs/spec/mcp-surface.md` — MCP contract (tools, auth, transport, progressive disclosure invariants).
+- **Updated (Phase 5)**: `docs/guides/contribute-to-cogni` (skill) — onboarding rewrite once MCP is live.
+- **Cite from**: `docs/research/mcp-production-deployment-patterns.md` (auth direction settled).
 
 ### Likely PR-sized tasks (rough sequence, not yet filed)
 
-1. Spec the MCP surface + skill format + tree convention (Phase 0). One PR, one or two specs.
-2. Classify the 29 + 37 skills + move node-scoped ones; update OpenClaw `extraDirs`; resolve `ui-ux-pro-max` dup; flip `.agents/skill-creator` symlink (Phase 1).
-3. Dolt sync job + `entry_type: skill` documentation (Phase 2).
-4. Operator MCP route + `search_knowledge` + `read_knowledge` + bearer (Phase 3).
-5. `list_skills` / `get_skill` / `search_skills` + Prompt registration (Phase 4).
-6. `.well-known/agent.json` advertises `mcpUrl`; `/contribute-to-cogni` onboarding rewrite (Phase 5).
+1. **This PR**: purge 6 non-canonical harness trees + this research doc rev 3. Cleanup hypothesis validated by surviving laptop Claude Code use.
+2. Document `entry_type: skill` in `knowledge-syntropy.md` + register relevant domains.
+3. One-time ingest script: `.claude/skills/` → dolt `knowledge` rows.
+4. Operator MCP route + bearer + `list_skills` + `get_skill`. Smoke-test from non-monorepo machine.
+5. `cogni skills sync` CLI + onboarding rewrite.
 
-Tasks 1–5 are critical-path to a working 1-URL UX. Task 2 is the highest-leverage standalone improvement (cleaner repo) — could ship before Phase 2/3 if MCP is delayed.
+Tasks 1–4 are critical-path to "external agent reaches skills without monorepo clone." Task 5 closes the local-laptop loop and lets us deprecate filesystem-as-authoring.
 
 ### How this fits the existing architecture
 
-- **Hexagonal layering preserved.** MCP server is a new inbound port alongside REST. Tools call existing `KnowledgeStorePort` adapters. Skill sync is a new outbound job (filesystem → KnowledgeStorePort write).
-- **No new auth substrate.** Reuses `cogni_ag_sk_v1_*` bearer — same principal_id, same audit trail.
-- **Knowledge hub becomes the canonical read substrate for skills + knowledge unified.** Filesystem stays canonical for *authoring*; dolt is canonical for *serving*. Sync is downstream-only (one-way: git → dolt).
-- **Skills become first-class knowledge entries.** Inherit domains, citations, tags, confidence, source_node, contribution-flow. Future cross-node skill discovery is one SQL query.
-- **Per-node sovereignty respected** via the `source_node` column and the `node` query parameter. Per-node MCP endpoints remain a v1 option without breaking v0 clients.
-- **Co-location respects how Claude Code already works** — subdir-aware skill discovery — and brings OpenClaw into alignment via its existing `extraDirs` mechanism.
+- **Hexagonal layering preserved.** MCP server is a new inbound port alongside REST, in the operator app. Tools call existing `KnowledgeStorePort` adapters. Sync is a one-time outbound script (ingest), not an ongoing CI job.
+- **No new auth substrate.** Reuses `cogni_ag_sk_v1_*` bearer — same principal_id, same audit trail, same per-env keys.
+- **Dolt is the canonical substrate for skills + knowledge.** Git's `.claude/skills/` becomes a generated cache, refreshed from dolt by `cogni skills sync`. Inverts rev 2's "git canonical, dolt indexed" framing — required by the syntropy doctrine.
+- **Skills inherit every knowledge-hub property.** `confidence_pct`, `status` (draft → established → deprecated), `citations` DAG, `source_type`/`source_ref`/`source_node`, `tags`, branched contribution flow, principal_id audit. No special-casing.
+- **Per-node sovereignty respected** via the `source_node` column. Per-node MCP endpoints remain a v1 option.
+- **Drift surface eliminated, not redistributed.** Six harness trees deleted outright. Only `.claude/skills/` (cache) + `.claude/commands/` (Claude Code slash) + `.agents/skills/skill-creator/` (vendored) + `.github/copilot-instructions.md` (single file) remain.
