@@ -483,8 +483,8 @@ Given same observations + same knowledge commit → same analysis outputs.
 | AUTO_COMMIT_ON_WRITE            | Every `core__knowledge_write` call commits via the capability layer (`SELECT dolt_commit('-Am', ...)`). The schema migrator also commits post-migration via `stamp-commit.mjs`.                                                                                                                                                                                                                          |
 | RUNTIME_URL_IS_SUPERUSER        | `DOLTGRES_URL_<NODE>` runtime secret connects as the `postgres` superuser. Doltgres 0.56 RBAC is non-functional (GRANT silently no-ops); revisit when upstream lands working role access.                                                                                                                                                                                                                |
 | NODES_BOOT_EMPTY                | New nodes boot with **empty content** — `knowledge`, `citations`, and `sources` rows are zero. Nodes do not inherit operator-curated knowledge claims. Reference data — the `domains` registry — IS migrator-seeded with the base set per [knowledge-domain-registry](./knowledge-domain-registry.md) § Seeding. The dev-only `scripts/db/seed-doltgres.mts` populates local dev only, never production. |
-| MIRROR_PROD_ONLY_WRITER         | DoltHub remote mirror (`cogni-dao/knowledge-<node>`) is written by the production operator only. Test/preview have no `DOLTHUB_REMOTE_URL` configured, so `pushMainOnMerge` is wired to `undefined` and merges only land in local Doltgres. No `DEPLOY_ENVIRONMENT` runtime check — gate-by-secret-presence per the established repo pattern (Langfuse, Privy, PostHog).                                  |
-| MIRROR_BEST_EFFORT_NO_RETRY     | The post-merge push is fire-and-forget. A failed push is logged (`dolthub_push_failed`) but never retried, never blocks the merge response, and never re-runs on next merge. Recovery for v0 is a manual `dolt_push` from the operator pod. v1+: reconciliation cron diffs `dolt_log` against `origin/main`.                                                                                              |
+| MIRROR_PROD_ONLY_WRITER         | DoltHub remote mirror (`cogni-dao/knowledge-<node>`) is written by the production operator only. Test/preview have no `DOLTHUB_REMOTE_URL` configured, so `pushMainOnMerge` is wired to `undefined` and merges only land in local Doltgres. No `DEPLOY_ENVIRONMENT` runtime check — gate-by-secret-presence per the established repo pattern (Langfuse, Privy, PostHog).                                 |
+| MIRROR_BEST_EFFORT_NO_RETRY     | The post-merge push is fire-and-forget. A failed push is logged (`dolthub_push_failed`) but never retried, never blocks the merge response, and never re-runs on next merge. Recovery for v0 is a manual `dolt_push` from the operator pod. v1+: reconciliation cron diffs `dolt_log` against `origin/main`.                                                                                             |
 
 ---
 
@@ -499,23 +499,23 @@ Given same observations + same knowledge commit → same analysis outputs.
 
 ### File Pointers
 
-| File                                                           | Purpose                                                                                           |
-| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `packages/knowledge-store/src/port/knowledge-store.port.ts`    | `KnowledgeStorePort` interface                                                                    |
-| `packages/knowledge-store/src/adapters/doltgres/`              | `DoltgresKnowledgeStoreAdapter` + `buildDoltgresClient()`                                         |
-| `packages/knowledge-store/src/capability.ts`                   | `createKnowledgeCapability()` — wraps port with auto-commit on writes                             |
-| `packages/ai-tools/src/tools/knowledge-{read,search,write}.ts` | Tool contracts + impls (registered in `TOOL_CATALOG`)                                             |
-| `nodes/poly/packages/doltgres-schema/`                         | Per-node Doltgres drizzle schema (re-exports base `knowledge`; companion tables here)             |
-| `nodes/poly/drizzle.doltgres.config.ts`                        | drizzle-kit config for poly's Doltgres plane (dialect-separated from Postgres)                    |
-| `nodes/poly/app/src/adapters/server/db/doltgres-migrations/`   | Checked-in drizzle-kit output                                                                     |
-| `nodes/poly/packages/doltgres-schema/stamp-commit.mjs`         | Post-migrate `dolt_commit` hook (per dolthub/dolt#4843 — DDL doesn't auto-commit)                 |
-| `infra/k8s/base/poly-doltgres/`                                | PreSync Job manifest (`migrate-poly-doltgres`)                                                    |
-| `infra/compose/runtime/doltgres-init/provision.sh`             | Idempotent database + role provisioning (no DDL)                                                  |
-| `infra/compose/runtime/doltgres-init/install-creds.sh`         | Entrypoint wrapper — installs DoltHub keypair at `/root/.dolt/creds/<keyid>.jwk` from env         |
-| `packages/knowledge-store/src/adapters/doltgres/dolt-remote.ts`| `createDoltgresPusher` (lazy `dolt_remote add` + `dolt_push`), `wrapPushSafe` (fire-and-forget)   |
-| `packages/knowledge-store/src/service/contribution-service.ts` | `ContributionServiceDeps.pushMainOnMerge` — optional post-merge mirror hook                       |
-| `docs/runbooks/dolthub-remote-bootstrap.md`                    | One-time setup: API repo create, `dolt creds new`, pubkey paste, prod-only secret provisioning    |
-| `scripts/ci/deploy-infra.sh`                                   | Derives `DOLTGRES_*` from `POSTGRES_ROOT_PASSWORD`, writes `DOLTGRES_URL_<NODE>` into k8s secrets |
+| File                                                            | Purpose                                                                                           |
+| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `packages/knowledge-store/src/port/knowledge-store.port.ts`     | `KnowledgeStorePort` interface                                                                    |
+| `packages/knowledge-store/src/adapters/doltgres/`               | `DoltgresKnowledgeStoreAdapter` + `buildDoltgresClient()`                                         |
+| `packages/knowledge-store/src/capability.ts`                    | `createKnowledgeCapability()` — wraps port with auto-commit on writes                             |
+| `packages/ai-tools/src/tools/knowledge-{read,search,write}.ts`  | Tool contracts + impls (registered in `TOOL_CATALOG`)                                             |
+| `nodes/poly/packages/doltgres-schema/`                          | Per-node Doltgres drizzle schema (re-exports base `knowledge`; companion tables here)             |
+| `nodes/poly/drizzle.doltgres.config.ts`                         | drizzle-kit config for poly's Doltgres plane (dialect-separated from Postgres)                    |
+| `nodes/poly/app/src/adapters/server/db/doltgres-migrations/`    | Checked-in drizzle-kit output                                                                     |
+| `nodes/poly/packages/doltgres-schema/stamp-commit.mjs`          | Post-migrate `dolt_commit` hook (per dolthub/dolt#4843 — DDL doesn't auto-commit)                 |
+| `infra/k8s/base/poly-doltgres/`                                 | PreSync Job manifest (`migrate-poly-doltgres`)                                                    |
+| `infra/compose/runtime/doltgres-init/provision.sh`              | Idempotent database + role provisioning (no DDL)                                                  |
+| `infra/compose/runtime/doltgres-init/install-creds.sh`          | Entrypoint wrapper — installs DoltHub keypair at `/root/.dolt/creds/<keyid>.jwk` from env         |
+| `packages/knowledge-store/src/adapters/doltgres/dolt-remote.ts` | `createDoltgresPusher` (lazy `dolt_remote add` + `dolt_push`), `wrapPushSafe` (fire-and-forget)   |
+| `packages/knowledge-store/src/service/contribution-service.ts`  | `ContributionServiceDeps.pushMainOnMerge` — optional post-merge mirror hook                       |
+| `docs/runbooks/dolthub-remote-bootstrap.md`                     | One-time setup: API repo create, `dolt creds new`, pubkey paste, prod-only secret provisioning    |
+| `scripts/ci/deploy-infra.sh`                                    | Derives `DOLTGRES_*` from `POSTGRES_ROOT_PASSWORD`, writes `DOLTGRES_URL_<NODE>` into k8s secrets |
 
 ## Open Questions
 
