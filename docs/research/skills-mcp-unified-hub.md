@@ -50,18 +50,19 @@ Three sub-questions:
 
 **The drift surface is much larger than rev 2 surveyed.** Seven parallel harness trees, ~177 skill-like files, all maintaining their own copy of the same lifecycle commands. Drift confirmed by byte counts on `commit`/`research`:
 
-| Tree | File count | Format | Status | Notes |
-|---|---|---|---|---|
-| `.claude/skills/` | 29 (SKILL.md) | Anthropic SKILL.md + YAML frontmatter | **CANONICAL — keep** | Auto-loaded by Claude Code relevance |
-| `.claude/commands/` | 28 (`.md`) | Plain markdown | **KEEP** (Claude Code slash-commands; native, different mechanism than skills) | Drifts internally vs `.claude/skills/research`, etc. (separate cleanup) |
-| `.openclaw/skills/` | 37 (SKILL.md) | SKILL.md + `user-invocable: true` | **PURGE** | OpenClaw deprecated (per user); ui-ux-pro-max bytewise dup of `.claude/skills/` |
-| `.agents/skills/` | 1 (skill-creator) | SKILL.md | **KEEP** | Vendored from `anthropics/skills` via `npx skills add`; tracked in `skills-lock.json`; symlinked from `.claude/skills/skill-creator` |
-| `.clinerules/workflows/` | 24 (`.md`) | Cline workflow format | **PURGE** | Cline not used |
-| `.cursor/commands/` | 25 (`.md`) | Cursor command format | **PURGE** | Cursor not used |
-| `.gemini/commands/` | 26 (`.toml`) | Gemini TOML format | **PURGE** | Gemini not used |
-| `.github/prompts/` | 23 (`*.prompt.md`) | Copilot prompts | **PURGE** | Copilot prompt commands not used (the 3-line `.github/copilot-instructions.md` stays) |
+| Tree                     | File count         | Format                                | Status                                                                         | Notes                                                                                                                                |
+| ------------------------ | ------------------ | ------------------------------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `.claude/skills/`        | 29 (SKILL.md)      | Anthropic SKILL.md + YAML frontmatter | **CANONICAL — keep**                                                           | Auto-loaded by Claude Code relevance                                                                                                 |
+| `.claude/commands/`      | 28 (`.md`)         | Plain markdown                        | **KEEP** (Claude Code slash-commands; native, different mechanism than skills) | Drifts internally vs `.claude/skills/research`, etc. (separate cleanup)                                                              |
+| `.openclaw/skills/`      | 37 (SKILL.md)      | SKILL.md + `user-invocable: true`     | **PURGE**                                                                      | OpenClaw deprecated (per user); ui-ux-pro-max bytewise dup of `.claude/skills/`                                                      |
+| `.agents/skills/`        | 1 (skill-creator)  | SKILL.md                              | **KEEP**                                                                       | Vendored from `anthropics/skills` via `npx skills add`; tracked in `skills-lock.json`; symlinked from `.claude/skills/skill-creator` |
+| `.clinerules/workflows/` | 24 (`.md`)         | Cline workflow format                 | **PURGE**                                                                      | Cline not used                                                                                                                       |
+| `.cursor/commands/`      | 25 (`.md`)         | Cursor command format                 | **PURGE**                                                                      | Cursor not used                                                                                                                      |
+| `.gemini/commands/`      | 26 (`.toml`)       | Gemini TOML format                    | **PURGE**                                                                      | Gemini not used                                                                                                                      |
+| `.github/prompts/`       | 23 (`*.prompt.md`) | Copilot prompts                       | **PURGE**                                                                      | Copilot prompt commands not used (the 3-line `.github/copilot-instructions.md` stays)                                                |
 
 **Drift evidence (file sizes for `commit` across trees):**
+
 - 2138 bytes × 4 (identical): `.claude/commands/`, `.clinerules/workflows/`, `.cursor/commands/`, `.github/prompts/`
 - 2231 bytes: `.openclaw/skills/commit/SKILL.md` (drift)
 - 2239 bytes: `.gemini/commands/commit.toml` (TOML-conversion drift)
@@ -70,9 +71,10 @@ Three sub-questions:
 
 These trees were authored once and never re-synced. Every commit-flow improvement landed in only one place. Agents now load whichever copy their harness was configured for, which is functionally non-deterministic from a quality standpoint.
 
-**Claude Code skill discovery** walks *into* subdirectories — `packages/frontend/.claude/skills/` is auto-discovered when editing files under `packages/frontend/`. Has a 15k-char description budget (visible via `/context`). **Co-location is a Claude-Code-native pattern**, not something we have to invent.
+**Claude Code skill discovery** walks _into_ subdirectories — `packages/frontend/.claude/skills/` is auto-discovered when editing files under `packages/frontend/`. Has a 15k-char description budget (visible via `/context`). **Co-location is a Claude-Code-native pattern**, not something we have to invent.
 
 **`.claude/skills/` is baked into 3 architectural touchpoints** — renaming has blast radius:
+
 - `nodes/operator/app/src/app/.well-known/agent.json/route.ts:70` — `validationSkill: ".claude/skills/validate-candidate"`
 - `.github/workflows/ci.yaml:86,139` — single-node-scope policy whitelist
 - `packages/repo-spec/src/accessors.ts` — classifier `startsWith(".claude/skills/")`
@@ -83,17 +85,17 @@ These trees were authored once and never re-synced. Every commit-flow improvemen
 
 ### What's actually being built in the market (commercial, not strawmen)
 
-| Product | Storage model | How agents connect | Notes |
-|---|---|---|---|
-| **Anthropic Skills API** (`/v1/skills`) | **Workspace-scoped registry, materialized to VM filesystem at runtime.** Pre-built skills bundled; custom skills uploaded. | `container: { skills: [{ skill_id, version }] }` in Messages API | **This is the pattern Anthropic itself ships.** DB-backed + filesystem-rendered. claude.ai / API / Claude Code don't sync — three separate stores. Beta headers: `code-execution-2025-08-25`, `skills-2025-10-02`, `files-api-2025-04-14`. |
-| **PromptLayer Skill Collections** | DB-backed, versioned, SDK pulls into `.claude/`/`.agents/` | SDK call | Closest commercial fit to "dolt source of truth, filesystem at runtime". |
-| **skillsmp.com** | Catalog of 1.2M+ SKILL.md, security-scanned | MCP server (`skillsmp-mcp-server`) — semantic search + install | Real and significant. |
-| **skillhub.club** | 7K+ skills mirrored from GitHub (≥2 stars) | Desktop manager | Git pull-through, not DB. |
-| **mcp.run** | Wasm artifacts in managed registry | Session URL via `MCP_RUN_SESSION_ID` | Registry-backed (artifact, not git pull). |
-| **Continue Hub** (`hub.continue.dev`) | Service-backed registry of assistants/rules/prompts | Continue client install | Registry pattern. |
-| **skillsovermcp.com** | **Stateless proxy** — GitHub fetch per request | `https://mcp.skillsovermcp.com/mcp/<owner>/<repo>` | <40ms median fetch; public repos only. |
-| **bobmatnyc/mcp-skillset** (OSS) | Vector + knowledge-graph hybrid | MCP server | Only true RAG-over-skills hit in survey. |
-| **Mintlify / Cloudflare AutoRAG / Inkeep** | Their own KB | One MCP URL → `search_*` + `read_*` tools | Docs-as-MCP precedent for the 1-URL UX. |
+| Product                                    | Storage model                                                                                                              | How agents connect                                               | Notes                                                                                                                                                                                                                                      |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Anthropic Skills API** (`/v1/skills`)    | **Workspace-scoped registry, materialized to VM filesystem at runtime.** Pre-built skills bundled; custom skills uploaded. | `container: { skills: [{ skill_id, version }] }` in Messages API | **This is the pattern Anthropic itself ships.** DB-backed + filesystem-rendered. claude.ai / API / Claude Code don't sync — three separate stores. Beta headers: `code-execution-2025-08-25`, `skills-2025-10-02`, `files-api-2025-04-14`. |
+| **PromptLayer Skill Collections**          | DB-backed, versioned, SDK pulls into `.claude/`/`.agents/`                                                                 | SDK call                                                         | Closest commercial fit to "dolt source of truth, filesystem at runtime".                                                                                                                                                                   |
+| **skillsmp.com**                           | Catalog of 1.2M+ SKILL.md, security-scanned                                                                                | MCP server (`skillsmp-mcp-server`) — semantic search + install   | Real and significant.                                                                                                                                                                                                                      |
+| **skillhub.club**                          | 7K+ skills mirrored from GitHub (≥2 stars)                                                                                 | Desktop manager                                                  | Git pull-through, not DB.                                                                                                                                                                                                                  |
+| **mcp.run**                                | Wasm artifacts in managed registry                                                                                         | Session URL via `MCP_RUN_SESSION_ID`                             | Registry-backed (artifact, not git pull).                                                                                                                                                                                                  |
+| **Continue Hub** (`hub.continue.dev`)      | Service-backed registry of assistants/rules/prompts                                                                        | Continue client install                                          | Registry pattern.                                                                                                                                                                                                                          |
+| **skillsovermcp.com**                      | **Stateless proxy** — GitHub fetch per request                                                                             | `https://mcp.skillsovermcp.com/mcp/<owner>/<repo>`               | <40ms median fetch; public repos only.                                                                                                                                                                                                     |
+| **bobmatnyc/mcp-skillset** (OSS)           | Vector + knowledge-graph hybrid                                                                                            | MCP server                                                       | Only true RAG-over-skills hit in survey.                                                                                                                                                                                                   |
+| **Mintlify / Cloudflare AutoRAG / Inkeep** | Their own KB                                                                                                               | One MCP URL → `search_*` + `read_*` tools                        | Docs-as-MCP precedent for the 1-URL UX.                                                                                                                                                                                                    |
 
 **Two storage patterns dominate among the products that actually scaled**: (a) **DB-backed registry + filesystem-rendered at runtime** (Anthropic, PromptLayer, mcp.run), and (b) **stateless git pull-through** (skillsovermcp). The aggregators (skillhub, claudeskills, agentskills.io) are git pull-through. The proxies-as-product (skillsovermcp) are git pull-through. The platforms that authored the category (Anthropic, PromptLayer) chose DB-backed + filesystem render. **Cogni should follow the platforms, not the aggregators.**
 
@@ -105,13 +107,13 @@ Stated "git OR dolt" as a binary and rejected dolt as Option B. That was a straw
 
 ## Findings
 
-> Findings 2–4 below capture rev-2 reasoning that argued for the git-canonical position. The rev-3 syntropy synthesis (see Recommendation) inverts the substrate conclusion: dolt is canonical, git is the cache. Finding 1 (skills *are* knowledge) and Finding 5 (1-URL MCP UX with bearer) are reinforced, not superseded. Finding 3 (co-location) is deferred indefinitely — irrelevant once `.claude/skills/` is a generated cache.
+> Findings 2–4 below capture rev-2 reasoning that argued for the git-canonical position. The rev-3 syntropy synthesis (see Recommendation) inverts the substrate conclusion: dolt is canonical, git is the cache. Finding 1 (skills _are_ knowledge) and Finding 5 (1-URL MCP UX with bearer) are reinforced, not superseded. Finding 3 (co-location) is deferred indefinitely — irrelevant once `.claude/skills/` is a generated cache.
 
 ### Finding 1 — Skills and knowledge are the same data shape; today they live apart for accidental reasons
 
 A skill is a markdown document with frontmatter (`name`, `description`, optional metadata like `user-invocable`), a body, and possibly referenced assets. A `knowledge` row is a markdown body with structured metadata (`title`, `entry_type`, `tags`, `source_ref`, `source_node`, `confidence_pct`). The only missing piece in the `knowledge` schema for skills is **`entry_type: skill`**, which is just a new value in a free-text column.
 
-Once skills are rows in `knowledge`, everything in the knowledge hub applies to them for free: domains, citations DAG, confidence scores, source provenance, branched contributions, principal_id audit, source_node filtering, future vector search. This is what the `knowledge-syntropy-expert` skill describes when it talks about "the codified mind" — skills *are* knowledge.
+Once skills are rows in `knowledge`, everything in the knowledge hub applies to them for free: domains, citations DAG, confidence scores, source provenance, branched contributions, principal_id audit, source_node filtering, future vector search. This is what the `knowledge-syntropy-expert` skill describes when it talks about "the codified mind" — skills _are_ knowledge.
 
 ### Finding 2 — Git as write substrate, dolt as read substrate, filesystem as render target
 
@@ -127,7 +129,7 @@ This is **structurally what Anthropic's Skills API does**: skill files exist as 
 
 ### Finding 3 — Co-location is a Claude-Code-native pattern, supported today
 
-Claude Code's filesystem walker descends into subdirectories — `nodes/poly/.claude/skills/poly-market-data/SKILL.md` auto-loads when editing under `nodes/poly/`. Cursor uses proximity-resolved `.cursor/rules/*.mdc` similarly. No invention needed; we just have to *use* this. The right convention:
+Claude Code's filesystem walker descends into subdirectories — `nodes/poly/.claude/skills/poly-market-data/SKILL.md` auto-loads when editing under `nodes/poly/`. Cursor uses proximity-resolved `.cursor/rules/*.mdc` similarly. No invention needed; we just have to _use_ this. The right convention:
 
 ```
 .claude/skills/                       # cross-cutting (lifecycle + universal)
@@ -148,10 +150,10 @@ Today `.claude/skills/` uses `name`/`description`; `.openclaw/skills/` adds `use
 
 ```yaml
 ---
-name: research                       # required (Anthropic)
-description: Use when …              # required (Anthropic)
-user_invocable: true                 # optional Cogni extension — exposes as MCP Prompt + /command
-node: operator                       # optional Cogni extension — set by sync if path-inferred
+name: research # required (Anthropic)
+description: Use when … # required (Anthropic)
+user_invocable: true # optional Cogni extension — exposes as MCP Prompt + /command
+node: operator # optional Cogni extension — set by sync if path-inferred
 scope: cross-cutting | node | package # optional Cogni extension
 ---
 ```
@@ -163,10 +165,14 @@ scope: cross-cutting | node | package # optional Cogni extension
 Single config line for any external agent (Claude Code, OpenClaw, Codex, Cursor, future):
 
 ```json
-{ "mcpServers": { "cogni": {
-    "url": "https://cognidao.org/mcp",
-    "headers": { "Authorization": "Bearer ${COGNI_API_KEY}" }
-}}}
+{
+  "mcpServers": {
+    "cogni": {
+      "url": "https://cognidao.org/mcp",
+      "headers": { "Authorization": "Bearer ${COGNI_API_KEY}" }
+    }
+  }
+}
 ```
 
 Tools exposed:
@@ -180,13 +186,13 @@ Tools exposed:
 
 Auth = existing `cogni_ag_sk_v1_*` bearer. Same audit trail, same per-principal logging. Plan CIMD migration when the MCP client ecosystem catches up; the bearer-only deployment isn't a dead end (Smithery, Composio, Cloudflare AutoRAG all support bearer-in-header alongside their OAuth proxy options).
 
-OAuth 2.1 + PKCE + CIMD becomes mandatory for *public* remote servers per the late-2025 spec direction; ours is *bearer-protected per-tenant*, which the spec accommodates today via `Authorization` header. If we ever go public-multi-tenant, that's the migration trigger.
+OAuth 2.1 + PKCE + CIMD becomes mandatory for _public_ remote servers per the late-2025 spec direction; ours is _bearer-protected per-tenant_, which the spec accommodates today via `Authorization` header. If we ever go public-multi-tenant, that's the migration trigger.
 
 ## Recommendation (rev 3 — syntropy-aligned)
 
 **Dolt is the canonical substrate. Git becomes a generated cache. MCP is the remote serving surface — required, not deferred, because external agents must not need to clone the monorepo.**
 
-Why this inversion: skills are knowledge. The `/knowledge-syntropy-expert` skill's own decision tree (step 8) classifies "new `.md` file under `docs/`" as the *almost-never* path, because git-as-substrate fails every knowledge invariant — no `confidence_pct`, no `DEPRECATE_NOT_DELETE` (git rm = history-only), no `principal_id` audit (git author ≠ principal), no `RECALL_BEFORE_WRITE` enforcement, no `REFINE_OVER_EXTEND` enforcement, no cross-node access without monorepo clone. The 7-harness drift today is what happens when knowledge-shaped artifacts live in git: every harness fork drifts, no agent can search across them, no row can be deprecated cleanly, no contributor chain survives.
+Why this inversion: skills are knowledge. The `/knowledge-syntropy-expert` skill's own decision tree (step 8) classifies "new `.md` file under `docs/`" as the _almost-never_ path, because git-as-substrate fails every knowledge invariant — no `confidence_pct`, no `DEPRECATE_NOT_DELETE` (git rm = history-only), no `principal_id` audit (git author ≠ principal), no `RECALL_BEFORE_WRITE` enforcement, no `REFINE_OVER_EXTEND` enforcement, no cross-node access without monorepo clone. The 7-harness drift today is what happens when knowledge-shaped artifacts live in git: every harness fork drifts, no agent can search across them, no row can be deprecated cleanly, no contributor chain survives.
 
 Skills also evolve independently of code — they get refined as agents and humans learn from running them. Tying skill versioning to git PR ceremony adds an irrelevant tax to knowledge work that the dolt `knowledge_contributions` flow already handles natively (branch → review → merge → principal_id audit preserved).
 
@@ -204,12 +210,18 @@ Concretely:
    - `status: "established"` for currently-active skills
 
 4. **MVP MCP server at `https://cognidao.org/mcp`.** Two tools v0: `get_skill(name)` + `list_skills()`. Bearer auth (`cogni_ag_sk_v1_*`). Single config line for any external agent:
+
    ```json
-   { "mcpServers": { "cogni": {
-       "url": "https://cognidao.org/mcp",
-       "headers": { "Authorization": "Bearer ${COGNI_API_KEY}" }
-   }}}
+   {
+     "mcpServers": {
+       "cogni": {
+         "url": "https://cognidao.org/mcp",
+         "headers": { "Authorization": "Bearer ${COGNI_API_KEY}" }
+       }
+     }
+   }
    ```
+
    This is the minimum to prove the loop. Tools 3–5 (`search_skills`, `search_knowledge`, `read_knowledge`, Prompts) get layered after the v0 loop is real.
 
 5. **`cogni skills sync` CLI for local Claude Code.** Pulls from dolt → writes `.claude/skills/<name>/SKILL.md`. Run via shell init (or on `pnpm install`). The git tree under `.claude/skills/` becomes a generated cache, refreshed from dolt. Initially: optionally checked into git as convenience for newcomers (zero-config); eventually: gitignored once `cogni skills sync` is reliable in onboarding.
@@ -237,15 +249,15 @@ Concretely:
 ## Open Questions
 
 - **Sync timing**: on every merge to main (cheap, frequent) vs. on candidate-a deploy (coarser, matches deploy cadence)? Probably both — merge-time updates "main" rows, candidate-a deploy promotes them.
-- **Authoring-via-contribution UX**: how does a human-authored skill PR vs. an agent-authored knowledge_contribution-with-entry_type=skill interact? They write to the same target row keyed by `source_ref`. We probably want agent contributions to *propose a draft SKILL.md as a PR*, not write directly to dolt — the dolt write becomes the post-merge sync. (This keeps git as the canonical authoring path for both humans and agents.)
+- **Authoring-via-contribution UX**: how does a human-authored skill PR vs. an agent-authored knowledge_contribution-with-entry_type=skill interact? They write to the same target row keyed by `source_ref`. We probably want agent contributions to _propose a draft SKILL.md as a PR_, not write directly to dolt — the dolt write becomes the post-merge sync. (This keeps git as the canonical authoring path for both humans and agents.)
 - **MCP transport**: streamable-HTTP (correct for our remote use case) — confirm `@modelcontextprotocol/sdk` HTTP transport stability with late-2025 clients. Most current clients still want stdio + `mcp-remote` shim; pin the patched version (CVSS 9.6 RCE fixed in 2025).
 - **`.claude/skills/` rename risk**: zero — we don't rename, we just add depth. Existing `agent.json:70` / `ci.yaml:86,139` references continue to work.
 - **OpenClaw `extraDirs` glob**: does the upstream OpenClaw codebase support globs in `extraDirs`? If not, a small upstream PR vs. listing each node's path explicitly. Listing is fine until we have many nodes.
 - **Skill index storage**: in-memory at MCP server boot (rebuild from dolt query) vs. dolt-indexed (Postgres FTS / pgvector)? Start with in-memory + dolt query; add FTS/pgvector when search quality demands it.
 - **Frontmatter migration**: `.openclaw/skills/*` use `user-invocable: true`. New convention is `user_invocable: true` (snake_case to match the rest of our schemas). One-shot rename script.
 - **Cross-surface drift**: Anthropic's own warning ("claude.ai / API / Claude Code do NOT sync") is a sharper version of our problem. Our solution = single substrate (dolt) means every surface reads the same data — the failure mode Anthropic warns about doesn't apply.
-- **`.well-known/agent.json` advertises `mcpUrl`**: yes, natural fit. Should it advertise a *list* of MCP URLs (operator-central + per-node)? Defer until per-node MCP exists.
-- **Public-vs-private MCP**: today the MCP server is bearer-protected and effectively per-tenant. If we want a *public* read-only MCP surface (skills are open-source, knowledge is public for certain nodes), that's a separate endpoint and triggers CIMD migration.
+- **`.well-known/agent.json` advertises `mcpUrl`**: yes, natural fit. Should it advertise a _list_ of MCP URLs (operator-central + per-node)? Defer until per-node MCP exists.
+- **Public-vs-private MCP**: today the MCP server is bearer-protected and effectively per-tenant. If we want a _public_ read-only MCP surface (skills are open-source, knowledge is public for certain nodes), that's a separate endpoint and triggers CIMD migration.
 
 ## Proposed Layout
 
