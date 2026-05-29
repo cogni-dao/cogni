@@ -964,21 +964,29 @@ const SECRETS: Secret[] = [
     category: "Infrastructure (derived)",
     source: "agent",
     description:
-      "Comma-separated per-node database names (derived from nodes/*/)",
-    steps: ["Auto-derived from nodes/*/ directories (excludes node-template)"],
+      "Comma-separated per-node database names (derived from infra/catalog/*.yaml)",
+    steps: [
+      "Auto-derived from infra/catalog/*.yaml — nodes with type=node and a per-env deploy branch are included. Hyphenated node names map to underscored DB names (cogni_${node//-/_}) so they're valid Postgres identifiers.",
+    ],
     generate: () => {
-      const { readdirSync, existsSync } = require("node:fs");
+      const { readdirSync, readFileSync } = require("node:fs");
       const { join } = require("node:path");
       const root = execSync("git rev-parse --show-toplevel", {
         encoding: "utf-8",
       }).trim();
-      return readdirSync(join(root, "nodes"))
-        .filter(
-          (d: string) =>
-            d !== "node-template" &&
-            existsSync(join(root, "nodes", d, ".cogni", "repo-spec.yaml"))
-        )
-        .map((d: string) => `cogni_${d}`)
+      const catalogDir = join(root, "infra", "catalog");
+      return readdirSync(catalogDir)
+        .filter((f: string) => f.endsWith(".yaml") && !f.startsWith("_"))
+        .map((f: string) => {
+          const raw = readFileSync(join(catalogDir, f), "utf-8");
+          const nameMatch = raw.match(/^name:\s*(\S+)/m);
+          const typeMatch = raw.match(/^type:\s*(\S+)/m);
+          const hasDeployBranch = /^candidate_a_branch:/m.test(raw);
+          return nameMatch && typeMatch?.[1] === "node" && hasDeployBranch
+            ? `cogni_${nameMatch[1].replace(/-/g, "_")}`
+            : null;
+        })
+        .filter((x: string | null): x is string => x !== null)
         .join(",");
     },
   },
