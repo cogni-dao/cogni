@@ -1,6 +1,6 @@
 {
-  "id": "35d45756-6cb1-4097-810b-8d9bdbcaeb07",
-  "prevId": "5e35b5e2-ea8f-4185-802c-e8b9930ea436",
+  "id": "6209a4ea-7e19-427a-af27-1cfbb32ac46e",
+  "prevId": "35d45756-6cb1-4097-810b-8d9bdbcaeb07",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -4733,11 +4733,6 @@
           "name": "nodes_slug_unique",
           "nullsNotDistinct": false,
           "columns": ["slug"]
-        },
-        "nodes_repo_url_unique": {
-          "name": "nodes_repo_url_unique",
-          "nullsNotDistinct": false,
-          "columns": ["repo_url"]
         }
       },
       "policies": {
