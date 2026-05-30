@@ -47,14 +47,19 @@ export default async function SetupNodesPage(): Promise<ReactElement> {
 
   return (
     <PageContainer>
-      <SectionCard
-        title="Register a node"
-        description="Spawn a Cogni-governed node into an external GitHub repository. v0 supports public repos with the cogni-node-template GitHub App installed."
-      >
+      <SectionCard title="Register a node">
+        <p className="mb-3 text-muted-foreground text-sm">
+          Spawn a Cogni-governed node into an external GitHub repository. v0
+          supports public repos with the cogni-node-template GitHub App
+          installed.
+        </p>
         <NewNodeForm />
       </SectionCard>
 
-      <SectionCard title="Your nodes" description={`${rows.length} registered`}>
+      <SectionCard title="Your nodes">
+        <p className="mb-3 text-muted-foreground text-sm">
+          {rows.length} registered
+        </p>
         {rows.length === 0 ? (
           <p className="text-muted-foreground text-sm">
             No nodes yet — register one above to start the bootstrap wizard.

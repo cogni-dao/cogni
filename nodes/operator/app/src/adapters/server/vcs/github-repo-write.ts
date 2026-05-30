@@ -115,7 +115,7 @@ export class GitHubRepoWriter {
         message: input.commitMessage,
         content: Buffer.from(input.content, "utf-8").toString("base64"),
         branch: input.headBranch,
-        sha: existingSha,
+        ...(existingSha ? { sha: existingSha } : {}),
       }
     );
 

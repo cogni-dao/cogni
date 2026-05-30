@@ -69,10 +69,10 @@ export default async function NodeDashboardPage({
 
   return (
     <PageContainer>
-      <SectionCard
-        title={node.repoUrl}
-        description={STATUS_DESCRIPTION[status]}
-      >
+      <SectionCard title={node.repoUrl}>
+        <p className="mb-3 text-muted-foreground text-sm">
+          {STATUS_DESCRIPTION[status]}
+        </p>
         <div className="space-y-3 text-sm">
           <div className="grid grid-cols-2 gap-2">
             <span className="text-muted-foreground">Status</span>
