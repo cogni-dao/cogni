@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2025 Cogni-DAO
+#
+# Dedicated namespace for External Secrets Operator (ESO) controller +
+# its supporting RBAC + CRDs.
+# ESO authenticates into OpenBao via the Kubernetes auth method; its
+# ServiceAccount JWT is validated against the cluster's TokenReview API
+# by OpenBao. The role binding is applied automatically by
+# `scripts/setup/provision-env-vm.sh` Phase 5b.3 — no manual setup.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: external-secrets
+  labels:
+    app.kubernetes.io/name: external-secrets
+    app.kubernetes.io/part-of: cogni-secrets-substrate

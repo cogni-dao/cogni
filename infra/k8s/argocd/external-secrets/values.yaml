@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2025 Cogni-DAO
+#
+# External Secrets Operator Helm values for single-node k3s (task.0284).
+# Documented intent for every non-default key. Defaults that match our needs
+# are NOT restated here — read the chart's values.yaml at the pinned version.
+
+# Bundled CRDs install with the chart. ESO splits its controller (this), a
+# webhook (validating CRDs at apply time), and a cert-controller (rotates
+# the webhook's self-signed cert). All three install by default.
+
+installCRDs: true
+
+replicaCount: 1
+
+# In single-node k3s the cert-controller's self-signed CA rotation is a
+# 24h-cadence background process; default settings are fine.
+certController:
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      memory: 64Mi
+
+webhook:
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      memory: 64Mi
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 64Mi
+  limits:
+    memory: 128Mi
+
+# Service account is auto-created by the chart. We do NOT bind it to any
+# OpenBao policy here; the Kubernetes auth method binding lives inside
+# OpenBao and is applied automatically by `scripts/setup/provision-env-vm.sh`
+# Phase 5b.3 (the eso-reader role + cogni/* read policy). The binding
+# references the cluster-resolved JWT issuer, not a static token.
+
+# Metrics endpoint exposed on :8080/metrics. Prometheus scrape config is a
+# follow-up (task.0316 monitoring scope).
+serviceMonitor:
+  enabled: false

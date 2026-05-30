@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2025 Cogni-DAO
+#
+# Argo CD Application — OpenBao substrate (Tier-1 secrets backend).
+#
+# Wraps infra/k8s/argocd/openbao/ (kustomize-with-helm) so Argo CD reconciles
+# drift on the substrate itself, not just on the apps that depend on it. Closes
+# the remaining piece of task.0284: Phase 5b.1 of provision-env-vm.sh used to
+# imperatively `kubectl kustomize | kubectl apply` this layer; that left Argo
+# unaware of substrate drift (chart bumps, hand-edits, partial syncs).
+#
+# Substitution at apply time (provision-env-vm.sh Phase 5b.1):
+#   ${FORK_REPO}     → https://github.com/${GH_REPO}.git
+#   ${DEPLOY_BRANCH} → deploy/${DEPLOY_ENV} (same branch Phase 4c writes to)
+#
+# SyncPolicy invariants:
+#   - prune: false. OpenBao Raft data is stateful; removing the kustomize from
+#     the deploy branch MUST NOT trigger Argo to delete the StatefulSet + PVC.
+#     Decommissioning is a deliberate operator action (Spec Invariant 6).
+#   - selfHeal: true. The whole point of the refactor — hand-edits or chart
+#     drift get reconciled back to git.
+#   - CreateNamespace=true. First-sync convenience; subsequent syncs no-op.
+#   - ServerSideApply=true. ESO/OpenBao chart CRDs exceed the client-side
+#     last-applied-configuration annotation size (proven in the prior Phase
+#     5b.1 `kubectl apply --server-side --force-conflicts` invocation).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: openbao
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: ${FORK_REPO}
+    targetRevision: ${DEPLOY_BRANCH}
+    path: infra/k8s/argocd/openbao
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: openbao
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

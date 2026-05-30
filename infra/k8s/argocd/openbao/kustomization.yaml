@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2025 Cogni-DAO
+#
+# OpenBao server — Tier-1 secrets substrate backend (task.0284).
+# Apache 2.0 fork of HashiCorp Vault; same secret engines (KV, PKI, SSH CA,
+# DB dynamic credentials), same Kubernetes/OIDC/AppRole auth methods, same
+# External Secrets Operator provider plugin as Vault. OSS-sovereign per
+# project constraint (rejected: HashiCorp Vault Community due to BSL drift).
+#
+# This kustomization IS the source for the `openbao` Argo Application
+# (infra/k8s/argocd/openbao-application.yaml). Argo's repo-server renders it
+# via `kustomize build --enable-helm` (enabled by the argocd-cm patch in
+# infra/provision/cherry/base/bootstrap.yaml) and reconciles drift on every
+# sync. Provision-env-vm.sh Phase 5b.1 only registers the Application CR;
+# the chart inflation runs inside Argo.
+#
+# Pin: chart 0.28.2 / app v2.5.3 — last upstream release as of 2026-05.
+# Bumping is tied to ESO's vault provider compatibility (chart 2.5.0 / app
+# v2.5.0). Upgrade discipline: bump both pins together; re-run the live-VM
+# rotation drill (docs/guides/secrets-rotate.md §Upgrade discipline).
+#
+# Storage: integrated Raft. Single-node k3s = single replica; HA is a P2
+# concern when we add multi-node clusters (Crawl row 4+).
+# TLS: disabled in v0 (in-cluster traffic only). cert-manager + ClusterIssuer
+# integration is a follow-up (task.5054 in proj.security-hardening).
+# Validation: `kustomize build --enable-helm infra/k8s/argocd/openbao/`
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: openbao
+
+resources:
+  - namespace.yaml
+
+helmCharts:
+  - name: openbao
+    repo: https://openbao.github.io/openbao-helm
+    version: 0.28.2
+    releaseName: openbao
+    namespace: openbao
+    includeCRDs: true
+    valuesFile: values.yaml

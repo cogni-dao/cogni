@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2025 Cogni-DAO
+#
+# Dedicated namespace for OpenBao server + its supporting RBAC.
+# ESO authenticates into OpenBao via the Kubernetes auth method; ESO's
+# ServiceAccount lives in the external-secrets namespace and is authorized
+# by an OpenBao policy referencing its serviceaccount JWT issuer.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: openbao
+  labels:
+    app.kubernetes.io/name: openbao
+    app.kubernetes.io/part-of: cogni-secrets-substrate

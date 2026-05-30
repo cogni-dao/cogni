@@ -36,7 +36,7 @@ exclude:
 # Anything NOT covered by exclude[] or these lists MUST match across hub + artifact.
 divergences:
   - artifact: Cogni-DAO/node-template
-    reason: "OSS public quickstart — sovereign-fork story extends operator-scope with OpenBao/ESO; omits hub-only nodes + canary env."
+    reason: "OSS public quickstart — omits hub-only nodes + canary env. Secrets substrate (OpenBao/ESO + catalog loader + tier spec) graduated to shared via task.5081."
     omit_from_artifact:
       - "nodes/operator/**" # hub-only node
       - "nodes/resy/**" # hub-only node
@@ -44,34 +44,21 @@ divergences:
       - "infra/catalog/operator.yaml"
       - "infra/catalog/resy.yaml"
       - "infra/catalog/scheduler-worker.yaml"
+      - "infra/k8s/secrets/external-secrets/candidate-a/scheduler-worker/**" # hub-only node's ExternalSecret
       - ".github/workflows/release.yml" # no production env
       - "infra/k8s/overlays/canary/**" # no canary env
       - "tests/ci-invariants/**" # hub-only CI structural tests
       - "scripts/experiments/**" # hub-only research scripts
     artifact_only:
       - "infra/fork.yaml"
-      - "infra/k8s/argocd/openbao-application.yaml"
-      - "infra/k8s/argocd/openbao/**"
-      - "infra/k8s/argocd/external-secrets-application.yaml"
-      - "infra/k8s/argocd/external-secrets/**"
-      - "infra/k8s/secrets/external-secrets/**"
       - "infra/k8s/overlays/_template/node-template/**"
-      - "infra/k8s/overlays/candidate-a/node-template/**"
+      - "infra/k8s/overlays/candidate-a/node-template/**" # hub + artifact diverge; hub overlay activates ExternalSecret via task.5081 CP2
       - "infra/k8s/overlays/preview/node-template/**"
       - "infra/k8s/overlays/production/node-template/**"
-      - "docs/spec/secrets-management.md"
-      - "docs/guides/secrets-add-new.md"
-      - "docs/guides/secrets-rotate.md"
-      - "docs/runbooks/fork-quickstart.md"
-      - "docs/spec/agentic-fork-bootstrap.md"
-      - "infra/catalog/node-template.yaml"
-      - "scripts/secrets/**"
       - "scripts/dev/worktree-setup.sh"
       - "scripts/rename-node.sh"
-      - "scripts/setup/bootstrap.sh"
+      - "scripts/setup/bootstrap.sh" # sources lib/fork-identity.sh; hub uses lib/cogni-deployment-identity.sh — reconcile separately
       - "scripts/bootstrap/install/install-bash.sh"
-      - ".claude/skills/cicd-secrets-expert/**"
-      - ".env.bootstrap.example"
 
   - artifact: Cogni-DAO/cogni-poly
     reason: "Private per-node fork; carries the poly node, omits the template node + other hub nodes."

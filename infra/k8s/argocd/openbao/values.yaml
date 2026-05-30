@@ -1,0 +1,68 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2025 Cogni-DAO
+#
+# OpenBao Helm values for single-node k3s Tier-1 substrate (task.0284).
+# Documented intent for every non-default key. Defaults that match our needs
+# are NOT restated here — read the chart's values.yaml at the pinned version
+# for the full surface.
+
+global:
+  enabled: true
+
+# Disabled — we use the external-secrets ESO controller (separate Argo App)
+# for secret syncing. The OpenBao chart's built-in CSI driver is a different
+# pattern we explicitly reject (per-pod volume vs. native k8s Secret consumption).
+csi:
+  enabled: false
+
+# Disabled — agent injector is the alternative to ESO's pull model; we picked
+# ESO. Two patterns are confusing; keep one. Per task.0284 design rejection.
+injector:
+  enabled: false
+
+server:
+  # Single-node k3s. HA is a P2 concern (Crawl row 4+ multi-node clusters).
+  ha:
+    enabled: false
+  standalone:
+    enabled: true
+    # Storage: integrated Raft. Persistent volume below.
+    # Listener: plain TCP on 8200; in-cluster only (no Ingress in v0).
+    # cert-manager integration is task.5054.
+    config: |
+      ui = true
+      listener "tcp" {
+        tls_disable     = 1
+        address         = "[::]:8200"
+        cluster_address = "[::]:8201"
+      }
+      storage "raft" {
+        path    = "/openbao/data"
+        node_id = "openbao-0"
+      }
+      service_registration "kubernetes" {}
+
+  dataStorage:
+    enabled: true
+    size: 10Gi
+    # storageClass: omitted — defaults to cluster default (local-path on k3s).
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+
+  # Readiness/liveness use OpenBao's /v1/sys/health endpoint. Sealed pods
+  # return 503 by default; the chart's standby/sealed code mappings already
+  # treat sealed-but-running as "alive" so it doesn't crash-loop pre-unseal.
+
+  # Kubernetes auth method config is applied by `provision-env-vm.sh`
+  # Phase 5b.3 (auto-init + auto-bind eso-reader) after init/unseal. It is
+  # NOT configured here because it depends on cluster-issued ServiceAccount
+  # tokens that don't exist at chart-render time.
+
+ui:
+  enabled: true
+  serviceType: ClusterIP
