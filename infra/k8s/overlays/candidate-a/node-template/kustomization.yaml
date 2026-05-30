@@ -70,6 +70,40 @@ patches:
       - op: add
         path: /spec/template/metadata/labels/app.kubernetes.io~1instance
         value: "node-template"
+
+  # task.5077: Doltgres knowledge-plane migrator runs as a second initContainer
+  # on the node-template Deployment. DATABASE_URL maps to DOLTGRES_URL (separate
+  # from the Postgres DATABASE_URL the main container + first initContainer use).
+  # Mirrors operator's pattern verbatim.
+  - target:
+      kind: Deployment
+      name: node-app
+    patch: |
+      - op: add
+        path: /spec/template/spec/initContainers/-
+        value:
+          name: migrate-doltgres
+          image: ghcr.io/cogni-dao/cogni-template:placeholder
+          command:
+            - /bin/sh
+            - -c
+            - exec node /app/nodes/$(NODE_NAME)/app/migrate-doltgres.mjs /app/nodes/$(NODE_NAME)/app/doltgres-migrations
+          envFrom:
+            - configMapRef:
+                name: node-template-node-app-config
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: node-template-node-app-secrets
+                  key: DOLTGRES_URL
+          resources:
+            requests:
+              memory: "384Mi"
+              cpu: "200m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
   # bug.0295: VM discovery via DNS (cogni-candidate-a.vm.cognidao.org).
   # Convert base headless Services → ExternalName; delete EndpointSlices.
   - target: { kind: Service, name: postgres-external }
@@ -112,9 +146,6 @@ patches:
         type: ExternalName
         externalName: cogni-candidate-a.vm.cognidao.org
         clusterIP: null
-  # task.5077 — node-template doltgres substrate. Until that lands, the base
-  # `doltgres-external` Service patch is still emitted for symmetry, but the
-  # initContainer that needs it does NOT exist yet (only operator overlay adds it).
   - target: { kind: Service, name: doltgres-external }
     patch: |
       apiVersion: v1

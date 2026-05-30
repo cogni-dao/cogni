@@ -14,6 +14,7 @@
 "use client";
 
 import {
+  BookOpen,
   Briefcase,
   CreditCard,
   Github,
@@ -44,6 +45,7 @@ import { ChatThreadsSidebarGroup } from "@/features/ai/chat/components/ChatThrea
 const NAV_ITEMS = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/work", label: "Work", icon: Briefcase },
+  { href: "/knowledge", label: "Knowledge", icon: BookOpen },
   { href: "/gov", label: "Gov", icon: Vote },
   { href: "/credits", label: "Credits", icon: CreditCard },
   { href: "/admin", label: "Admin", icon: Shield },

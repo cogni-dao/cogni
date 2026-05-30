@@ -36,7 +36,7 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 grafana_base="${GRAFANA_URL%/}"
-dbs="${COGNI_NODE_DBS:-cogni_operator,cogni_poly,cogni_resy}"
+dbs="${COGNI_NODE_DBS:-cogni_operator,cogni_poly,cogni_resy,cogni_node_template}"
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
 

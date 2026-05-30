@@ -103,6 +103,17 @@ COPY --from=builder --chown=nextjs:nodejs /app/nodes/node-template/.cogni ./.cog
 # colocated at the expected paths. Mirrors operator/Dockerfile (task.0370 step 1).
 COPY --from=builder --chown=nextjs:nodejs /app/nodes/node-template/app/src/adapters/server/db/migrations /app/nodes/node-template/app/migrations
 COPY --from=builder --chown=nextjs:nodejs /app/scripts/db/migrate.mjs /app/nodes/node-template/app/migrate.mjs
+# Doltgres migrate runner — task.5077: applies @cogni/node-template-doltgres-schema
+# migrations against `knowledge_node_template`, then stamps a dolt_commit so DDL
+# lands in dolt_log.
+COPY --from=builder --chown=nextjs:nodejs /app/nodes/node-template/app/src/adapters/server/db/doltgres-migrations /app/nodes/node-template/app/doltgres-migrations
+# Doltgres migrator + verifier — shared scripts (parity with the Postgres
+# migrate.mjs COPY above). Verifier is sibling-imported by migrate-doltgres.mjs
+# and runs the post-migrate schema check before any tracking-row stamping,
+# closing the silent-skip gap from drizzle-orm's folderMillis-only "applied?"
+# check.
+COPY --from=builder --chown=nextjs:nodejs /app/scripts/db/migrate-doltgres.mjs /app/nodes/node-template/app/migrate-doltgres.mjs
+COPY --from=builder --chown=nextjs:nodejs /app/scripts/db/verify-doltgres-schema.mjs /app/nodes/node-template/app/verify-doltgres-schema.mjs
 
 # Codex CLI for BYO-AI ChatGPT execution.
 # Standalone output tracing can't detect spawned binaries.

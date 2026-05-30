@@ -98,7 +98,7 @@ grafana_base="${GRAFANA_URL%/}"
 datasource_host="${GRAFANA_POSTGRES_HOST:-postgres:5432}"
 readonly_user="${APP_DB_READONLY_USER:-app_readonly}"
 readonly_password="${APP_DB_READONLY_PASSWORD:-$(derive_secret postgres-readonly)}"
-dbs="${COGNI_NODE_DBS:-cogni_operator,cogni_poly,cogni_resy}"
+dbs="${COGNI_NODE_DBS:-cogni_operator,cogni_poly,cogni_resy,cogni_node_template}"
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
 
