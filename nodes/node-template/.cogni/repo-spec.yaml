@@ -17,5 +17,18 @@ intent:
 cogni_dao:
   chain_id: "8453" # Base mainnet
 
+# Activity ledger ingestion + approver allowlist.
+# `approvers` gates the `(admin)/` route group and write routes under
+# `/api/v1/attribution/*`. Replace with the fork's DAO-owner wallet(s) when
+# spinning up a new node from this template.
+activity_ledger:
+  epoch_length_days: 7
+  approvers:
+    - "0x070075F1389Ae1182aBac722B36CA12285d0c949" # derekg1729.eth (template default)
+  activity_sources:
+    github:
+      attribution_pipeline: cogni-v0.0
+      source_refs: ["Cogni-DAO/node-template"]
+
 payments:
   status: pending_activation

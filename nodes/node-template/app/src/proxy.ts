@@ -30,6 +30,7 @@ const APP_ROUTES = [
   "/setup",
   "/work",
   "/activity",
+  "/admin",
 ];
 
 function isAppRoute(pathname: string): boolean {
@@ -135,6 +136,7 @@ export const config = {
     "/setup/:path*",
     "/work/:path*",
     "/activity/:path*",
+    "/admin/:path*",
     "/api/v1/:path*",
   ],
 };

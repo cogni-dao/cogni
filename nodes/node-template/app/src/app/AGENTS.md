@@ -43,6 +43,7 @@ Next.js App Router delivery layer. UI pages and API routes that expose features 
 - **Route Groups:**
   - `(public)`: Unauthenticated pages (landing, marketing, docs)
   - `(app)`: Protected pages requiring authentication (chat, billing, etc.)
+  - `(admin)`: DAO-admin pages gated by `activity_ledger.approvers` (server-side wallet check)
   - `(infra)`: Infrastructure endpoints (health, meta, openapi)
   - `api`: Versioned JSON APIs (v1, v2, etc.)
 - **Routes (if any):**
@@ -87,6 +88,7 @@ pnpm build   # build for production
 
 - **`(public)/*`**: Unauthenticated UI pages. No auth guard. Landing page, marketing, docs.
 - **`(app)/*`**: Protected UI pages. Auth enforced by `(app)/layout.tsx` using client-side `useSession()` redirect. All pages under `(app)` automatically require authentication. Do NOT add per-page auth checks.
+- **`(admin)/*`**: DAO-admin pages. Login gate via `proxy.ts` matcher; role gate via server-side `(admin)/layout.tsx` checking the SIWE wallet against `getLedgerApprovers()` (repo-spec `activity_ledger.approvers`). Non-approvers redirect to `/dashboard`. See `(admin)/AGENTS.md`.
 - **`(infra)/*`**: Infrastructure endpoints. Explicitly unauthenticated. Health checks, meta, OpenAPI specs.
 - **`api/*`**: JSON APIs. Keep under `api/v1/**` for versioned endpoints. Auth enforced per-route using `auth()` calls in route handlers (not via layout).
 
