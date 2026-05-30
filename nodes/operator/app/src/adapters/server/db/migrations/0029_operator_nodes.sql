@@ -24,7 +24,6 @@ CREATE TABLE "nodes" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "nodes_slug_unique" UNIQUE("slug"),
-	CONSTRAINT "nodes_repo_url_unique" UNIQUE("repo_url"),
 	CONSTRAINT "nodes_status_check" CHECK ("nodes"."status" IN ('dao_pending','dao_formed','wallet_ready','payments_ready','active','failed')),
 	CONSTRAINT "nodes_repo_visibility_check" CHECK ("nodes"."repo_visibility" IN ('public','private'))
 );

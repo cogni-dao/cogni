@@ -4733,11 +4733,6 @@
           "name": "nodes_slug_unique",
           "nullsNotDistinct": false,
           "columns": ["slug"]
-        },
-        "nodes_repo_url_unique": {
-          "name": "nodes_repo_url_unique",
-          "nullsNotDistinct": false,
-          "columns": ["repo_url"]
         }
       },
       "policies": {
