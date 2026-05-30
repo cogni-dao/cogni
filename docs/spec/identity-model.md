@@ -191,6 +191,30 @@ In V0 (single-project nodes), most keys resolve to a single value:
 
 `scope_id` is a deterministic UUID derived from `uuidv5(node_id, scope_key)`. The UUID is declared in `repo-spec.yaml` (V0) or `.cogni/projects/*.yaml` (multi-scope). `scope_key` is the human-readable slug used for display, logging, and as the derivation input.
 
+**Inline-until-second-scope:** V0 inlines the default scope's governance fields (`cogni_dao`, `operator_wallet`, `payments`, `activity_ledger.approvers`, weight policy) directly in the node-spec. A `.cogni/projects/<scope_key>.yaml` file materializes only when a second scope is declared — until then it would merely duplicate the inline default. Adding the first non-default scope moves **all** scopes, including `default`, into per-scope manifests.
+
+## Spec File Layering
+
+Three altitudes, one file per altitude. Closest file wins; a higher tier never restates a lower tier's fields.
+
+| Tier              | File                                          | Cardinality  | Owns                                                                                                                                                                                  |
+| ----------------- | --------------------------------------------- | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Repo manifest** | `.cogni/repo-spec.yaml` (repo root)           | 1 per repo   | Monorepo-wide concerns only: review `gates`, `fail_on_error`. Node registry SSOT is `infra/catalog/*.yaml` (`CATALOG_IS_SSOT`); any `nodes:[]` here is a derived convenience carrying runtime endpoints, never a second authority. |
+| **Node-spec**     | `nodes/<node>/.cogni/repo-spec.yaml`          | 1 per node   | Deployment identity: `node_id`, `providers`, `llm_proxy`, `secrets`. Loaded at runtime via `COGNI_REPO_PATH`.                                                                        |
+| **Scope-spec**    | `nodes/<node>/.cogni/projects/<scope_key>.yaml` | 1:N per node | Governance + money + permissions: `scope_id`, `cogni_dao`, `operator_wallet`, `payments`, `activity_ledger.approvers`, weight policy. Inlined into the node-spec while a node has only the `default` scope. |
+
+**SINGLE_HOME:** a node's identity and governance fields live in exactly one tier. The operator is both the hub (repo manifest) and a node (node-spec); its `node_id` and governance fields belong to its node-spec — never duplicated at the repo root.
+
+## Lineage & Cross-Layer Proof
+
+Specs are **git-authoritative**. The system spans four hash-linked stores — **git** (merkle DAG: code + `.cogni/` specs), **Dolt** (prolly tree: knowledge + work items), **Postgres append-only ledgers** (`ingestion_receipts`, `epoch_pool_components`), and the **chain** (EIP-712 → DAO signal). Lineage across them is preserved by **pinning hashes, never by copying data**.
+
+| Rule                    | Constraint                                                                                                                                                                                                                                                  |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| SPECS_GIT_AUTHORITATIVE | `.cogni/*.yaml` live only in git. They are never synced into Dolt or Postgres as a second source of truth. An operator needing queryable spec history derives a rebuildable Postgres projection — never authoritative (same relationship as `DOLT_IS_SOURCE_OF_TRUTH` → derived search index). |
+| LINEAGE_PINS_HASHES     | When a Dolt / Postgres / on-chain artifact depends on a spec or evidence, it records the upstream **content hash + ref** (git SHA + path; Dolt commit), not a copy. Mirrors `ENRICHER_SNAPSHOT_RULE`: if it isn't pinned, it doesn't exist for proof.        |
+| SIGNATURE_BINDS_SOURCES | At a signing inflection point, the EIP-712 typed data binds the source hashes of every layer that defined the outcome — extending `SIGNATURE_SCOPE_BOUND` to `node_id + scope_id + scope_spec_git_sha + evidence_dolt_commit + final_allocation_set_hash`. One signature is the merkle-join anchor: git ↔ dolt ↔ chain. |
+
 ## Goal
 
 Provide a single, unambiguous reference for every identity primitive in the system. Eliminate confusion between deployment identity, governance domain, person identity, and payment tenancy. Prevent key overloading that leads to painful retrofits.
@@ -211,3 +235,4 @@ Provide a single, unambiguous reference for every identity primitive in the syst
 - [DAO Enforcement](./dao-enforcement.md) — dao_address, repo-spec authority, payment rails
 - [RBAC](./rbac.md) — Actor/subject model references user_id and tenantId
 - [ROADMAP.md §Tenant Scoping](../../ROADMAP.md#terminology--id-mapping) — Terminology table
+- [proj.spec-layering](../../work/projects/proj.spec-layering.md) — Tier layering rollout + cross-layer lineage roadmap
