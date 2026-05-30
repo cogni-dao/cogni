@@ -806,7 +806,18 @@ if ! $EDGE_COMPOSE ps -q caddy 2>/dev/null | grep -q .; then
   $EDGE_COMPOSE up -d
 else
   log_info "Edge stack already running"
-  # Check for Caddyfile changes and restart if needed
+  # Check for Caddyfile changes and recreate the container if needed.
+  #
+  # task.5078: previously this did `caddy reload || restart`. Reload re-reads
+  # the Caddyfile but Caddy's runtime env stays whatever was set at the
+  # original `docker compose up -d`. When deploy-infra adds a new site env
+  # var to /opt/cogni-template-edge/.env (e.g., NODE_TEMPLATE_DOMAIN), reload
+  # substitutes `{$NODE_TEMPLATE_DOMAIN}` to empty, the new server block is
+  # silently absent, no cert gets provisioned, and TLS handshake errors out
+  # for the new hostname. `docker compose up -d` (without --force-recreate)
+  # detects the env_file delta and recreates the container with the new env
+  # — fully covers the new-domain case without disturbing Caddy when only
+  # existing-site Caddyfile lines changed.
   HASH_DIR="/var/lib/cogni"
   CADDYFILE="/opt/cogni-template-edge/configs/Caddyfile.tmpl"
   CADDY_HASH_FILE="$HASH_DIR/caddyfile.sha256"
@@ -817,10 +828,10 @@ else
     OLD_HASH=$(cat "$CADDY_HASH_FILE" 2>/dev/null || echo "none")
 
     if [[ "$NEW_HASH" != "$OLD_HASH" && "$NEW_HASH" != "no-hash-tool" ]]; then
-      log_info "Caddyfile changed (hash: ${NEW_HASH:0:12}...), reloading Caddy..."
-      $EDGE_COMPOSE exec -T caddy caddy reload --config /etc/caddy/Caddyfile || $EDGE_COMPOSE restart caddy
+      log_info "Caddyfile changed (hash: ${NEW_HASH:0:12}...), recreating Caddy via compose up -d..."
+      $EDGE_COMPOSE up -d caddy
       echo "$NEW_HASH" > "$CADDY_HASH_FILE"
-      log_info "Caddy reloaded with new config"
+      log_info "Caddy recreated; new env_file values + Caddyfile in effect"
     fi
   fi
 fi
