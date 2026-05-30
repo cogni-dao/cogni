@@ -79,7 +79,7 @@ export default async function SetupNodesPage(): Promise<ReactElement> {
                     </span>
                   </div>
                   {n.failureReason ? (
-                    <p className="mt-1 text-red-500 text-xs">
+                    <p className="mt-1 text-destructive text-xs">
                       {n.failureReason}
                     </p>
                   ) : null}

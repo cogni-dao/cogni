@@ -21,19 +21,20 @@ import { resolveAppDb } from "@/bootstrap/container";
 import { parseRepoUrl } from "@/features/nodes/repo-url";
 import { getServerSessionUser } from "@/lib/auth/server";
 import { nodes } from "@/shared/db/nodes";
+import { SUPPORTED_CHAIN_IDS } from "@/shared/web3";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const SUPPORTED_CHAIN_IDS = [8453, 11155111] as const;
+const SUPPORTED_CHAIN_ID_LIST: readonly number[] = SUPPORTED_CHAIN_IDS;
 
 const CreateNodeInput = z.object({
   repoUrl: z.string().min(1),
   chainId: z
     .number()
     .int()
-    .refine((n) => (SUPPORTED_CHAIN_IDS as readonly number[]).includes(n), {
-      message: `chainId must be one of: ${SUPPORTED_CHAIN_IDS.join(", ")}`,
+    .refine((n) => SUPPORTED_CHAIN_ID_LIST.includes(n), {
+      message: `chainId must be one of: ${SUPPORTED_CHAIN_ID_LIST.join(", ")}`,
     }),
 });
 

@@ -17,7 +17,7 @@ import { type UserId, userActor } from "@cogni/ids";
 import { and, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
-import { GitHubRepoWriter } from "@/adapters/server/vcs/github-repo-write";
+import { createNodeRepoWriter } from "@/bootstrap/capabilities/node-repo-write";
 import { resolveAppDb } from "@/bootstrap/container";
 import { buildCompleteRepoSpecYaml } from "@/features/nodes/repo-spec-builder";
 import { transition } from "@/features/nodes/state-machine";
@@ -108,15 +108,7 @@ export async function POST(_request: Request, ctx: RouteParams) {
     splitAddress: node.splitAddress,
   });
 
-  const privateKey = Buffer.from(
-    env.GH_REVIEW_APP_PRIVATE_KEY_BASE64,
-    "base64"
-  ).toString("utf-8");
-
-  const writer = new GitHubRepoWriter({
-    appId: env.GH_REVIEW_APP_ID,
-    privateKey,
-  });
+  const writer = createNodeRepoWriter(env);
 
   const headBranch = `cogni-operator/node-bootstrap-${node.id.slice(0, 8)}`;
 

@@ -17,17 +17,24 @@ import { useRouter } from "next/navigation";
 import { type ReactElement, useState } from "react";
 
 import { Button, Input } from "@/components";
+import { CHAINS as CHAIN_CONFIG_MAP } from "@/shared/web3";
 
-const CHAINS: ReadonlyArray<{ id: number; label: string }> = [
-  { id: 8453, label: "Base mainnet (8453)" },
-  { id: 11155111, label: "Sepolia (11155111)" },
+const CHAIN_OPTIONS: ReadonlyArray<{ id: number; label: string }> = [
+  {
+    id: CHAIN_CONFIG_MAP.BASE.chainId,
+    label: `Base mainnet (${CHAIN_CONFIG_MAP.BASE.chainId})`,
+  },
+  {
+    id: CHAIN_CONFIG_MAP.SEPOLIA.chainId,
+    label: `Sepolia (${CHAIN_CONFIG_MAP.SEPOLIA.chainId})`,
+  },
 ];
 
 export function NewNodeForm(): ReactElement {
   const router = useRouter();
   const [target, setTarget] = useState<"external" | "monorepo">("external");
   const [repoUrl, setRepoUrl] = useState("https://github.com/Cogni-DAO/poly");
-  const [chainId, setChainId] = useState<number>(8453);
+  const [chainId, setChainId] = useState<number>(CHAIN_CONFIG_MAP.BASE.chainId);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -103,7 +110,7 @@ export function NewNodeForm(): ReactElement {
           value={chainId}
           onChange={(e) => setChainId(Number(e.target.value))}
         >
-          {CHAINS.map((c) => (
+          {CHAIN_OPTIONS.map((c) => (
             <option key={c.id} value={c.id}>
               {c.label}
             </option>
@@ -111,7 +118,7 @@ export function NewNodeForm(): ReactElement {
         </select>
       </div>
 
-      {error ? <p className="text-red-500 text-sm">{error}</p> : null}
+      {error ? <p className="text-destructive text-sm">{error}</p> : null}
 
       <Button
         onClick={handleSubmit}

@@ -95,7 +95,7 @@ export default async function NodeDashboardPage({
               <>
                 <span className="text-muted-foreground">repo-spec PR</span>
                 <a
-                  className="break-all font-mono text-blue-500 underline"
+                  className="break-all font-mono text-primary underline"
                   href={node.publishPrUrl}
                   target="_blank"
                   rel="noopener noreferrer"
@@ -107,7 +107,7 @@ export default async function NodeDashboardPage({
             {node.failureReason ? (
               <>
                 <span className="text-muted-foreground">Failure reason</span>
-                <span className="text-red-500">{node.failureReason}</span>
+                <span className="text-destructive">{node.failureReason}</span>
               </>
             ) : null}
           </div>

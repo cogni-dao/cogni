@@ -14,6 +14,8 @@
 
 import { v5 as uuidv5 } from "uuid";
 
+import { CHAINS } from "@/shared/web3";
+
 export interface NodeRepoSpecInput {
   nodeId: string;
   chainId: number;
@@ -25,8 +27,8 @@ export interface NodeRepoSpecInput {
 }
 
 const CHAIN_KEY_BY_ID: Record<number, "Base" | "Sepolia"> = {
-  8453: "Base",
-  11155111: "Sepolia",
+  [CHAINS.BASE.chainId]: "Base",
+  [CHAINS.SEPOLIA.chainId]: "Sepolia",
 };
 
 export function buildCompleteRepoSpecYaml(input: NodeRepoSpecInput): string {

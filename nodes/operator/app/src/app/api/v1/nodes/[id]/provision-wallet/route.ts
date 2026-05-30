@@ -16,7 +16,7 @@ import { type UserId, userActor } from "@cogni/ids";
 import { and, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
-import { provisionOperatorWallet } from "@/adapters/server/privy/operator-wallet-provisioner";
+import { provisionNodeWallet } from "@/bootstrap/capabilities/node-wallet";
 import { resolveAppDb } from "@/bootstrap/container";
 import { transition } from "@/features/nodes/state-machine";
 import { getServerSessionUser } from "@/lib/auth/server";
@@ -87,10 +87,7 @@ export async function POST(_request: Request, ctx: RouteParams) {
     );
   }
 
-  const wallet = await provisionOperatorWallet({
-    appId: env.PRIVY_APP_ID,
-    appSecret: env.PRIVY_APP_SECRET,
-  });
+  const wallet = await provisionNodeWallet(env);
 
   const [updated] = await withTenantScope(
     db,

@@ -95,7 +95,7 @@ export function NodeActionPanel({ nodeId, status }: Props): ReactElement {
       break;
     case "failed":
       action = (
-        <p className="text-red-500 text-sm">
+        <p className="text-destructive text-sm">
           Bootstrap failed. Re-register the node to start over.
         </p>
       );
@@ -105,7 +105,7 @@ export function NodeActionPanel({ nodeId, status }: Props): ReactElement {
   return (
     <div className="space-y-2">
       {action}
-      {error ? <p className="text-red-500 text-sm">{error}</p> : null}
+      {error ? <p className="text-destructive text-sm">{error}</p> : null}
     </div>
   );
 }
