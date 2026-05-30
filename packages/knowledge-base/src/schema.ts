@@ -289,18 +289,10 @@ export const workItems = pgTable(
     lastCommand: text("last_command"),
 
     // Structured arrays (jsonb for v0)
-    assignees: jsonb("assignees")
-      .notNull()
-      .default(sql`'[]'::jsonb`),
-    externalRefs: jsonb("external_refs")
-      .notNull()
-      .default(sql`'[]'::jsonb`),
-    labels: jsonb("labels")
-      .notNull()
-      .default(sql`'[]'::jsonb`),
-    specRefs: jsonb("spec_refs")
-      .notNull()
-      .default(sql`'[]'::jsonb`),
+    assignees: jsonb("assignees").notNull().default(sql`'[]'::jsonb`),
+    externalRefs: jsonb("external_refs").notNull().default(sql`'[]'::jsonb`),
+    labels: jsonb("labels").notNull().default(sql`'[]'::jsonb`),
+    specRefs: jsonb("spec_refs").notNull().default(sql`'[]'::jsonb`),
 
     // Audit
     createdAt: timestamp("created_at", { withTimezone: true })
