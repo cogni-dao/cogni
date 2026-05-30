@@ -50,6 +50,7 @@ divergences:
       - "tests/ci-invariants/**" # hub-only CI structural tests
       - "scripts/experiments/**" # hub-only research scripts
     artifact_only:
+      - "AGENTS.md" # artifact carries a divergent front-door doc — the dev-freeze banner (node-template#66); content intentionally differs from hub, do not flag
       - "infra/fork.yaml"
       - "infra/k8s/overlays/_template/node-template/**"
       - "infra/k8s/overlays/candidate-a/node-template/**" # hub + artifact diverge; hub overlay activates ExternalSecret via task.5081 CP2
