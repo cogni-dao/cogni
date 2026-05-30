@@ -39,6 +39,10 @@ import {
   logEvent,
   makeLogger,
 } from "@/shared/observability";
+import {
+  type UnknownBlockRetryInfo,
+  withUnknownBlockRetry,
+} from "./with-unknown-block-retry";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -249,15 +253,40 @@ export async function POST(request: Request): Promise<NextResponse> {
         }
 
         // 5. Verify CogniSignal.DAO() == daoAddress
-        // Query at signalBlockNumber to avoid cross-RPC race condition
+        // Query at signalBlockNumber to avoid cross-RPC race condition.
+        // Block-pinned reads are wrapped in `withUnknownBlockRetry` because Alchemy
+        // is load-balanced across backends with eventual consistency: one HTTP call
+        // sees the block, the next can land on a backend that has not yet indexed it
+        // and returns HTTP 400 `{code:3, "Unknown block"}`. See bug.5082.
         if (signalAddress && daoAddress) {
           try {
             const blockNumber = BigInt(signalBlockNumber);
+            const onRetry = ({
+              attempt,
+              delayMs,
+              err,
+            }: UnknownBlockRetryInfo) => {
+              ctx.log.warn(
+                {
+                  signalAddress,
+                  signalBlockNumber,
+                  attempt,
+                  delayMs,
+                  err: err.message,
+                },
+                "setup.verify: Alchemy Unknown-block lag, retrying"
+              );
+            };
+
             // Verify contract exists at the specific block (avoids "latest" race)
-            const bytecode = await client.getBytecode({
-              address: signalAddress,
-              blockNumber,
-            });
+            const bytecode = await withUnknownBlockRetry(
+              () =>
+                client.getBytecode({
+                  address: signalAddress,
+                  blockNumber,
+                }),
+              { onRetry }
+            );
             ctx.log.info(
               {
                 signalAddress,
@@ -274,12 +303,16 @@ export async function POST(request: Request): Promise<NextResponse> {
                 `CogniSignal contract not found at ${signalAddress} at block ${signalBlockNumber}`
               );
             } else {
-              const signalDao = await client.readContract({
-                address: signalAddress,
-                abi: COGNI_SIGNAL_ABI,
-                functionName: "DAO",
-                blockNumber,
-              });
+              const signalDao = await withUnknownBlockRetry(
+                () =>
+                  client.readContract({
+                    address: signalAddress,
+                    abi: COGNI_SIGNAL_ABI,
+                    functionName: "DAO",
+                    blockNumber,
+                  }),
+                { onRetry }
+              );
 
               if (signalDao.toLowerCase() !== daoAddress.toLowerCase()) {
                 errors.push(
