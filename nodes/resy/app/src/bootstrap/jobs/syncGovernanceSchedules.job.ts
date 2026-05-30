@@ -30,6 +30,9 @@ import { serverEnv } from "@/shared/env/server-env";
 
 const GOVERNANCE_GRANT_SCOPES = ["graph:execute:sandbox:openclaw"] as const;
 
+/** Temporal schedule ID for the ledger-ingest (epoch) schedule. */
+const LEDGER_INGEST_SCHEDULE_ID = "governance:ledger_ingest";
+
 function computeNextRun(cron: string, timezone: string): Date {
   const interval = cronParser.parseExpression(cron, {
     currentDate: new Date(),
@@ -175,6 +178,27 @@ export async function runGovernanceSchedulesSyncJob(): Promise<GovernanceSchedul
       },
       "Governance schedule sync complete"
     );
+
+    // Eager first epoch: when the ledger schedule is newly created, trigger one collection
+    // run now so epoch 1 opens immediately instead of waiting for the first cron fire.
+    // Idempotent: only fires on `created` (steady-state reboots see it skipped); the epoch
+    // window-unique constraint also prevents duplicates. Failure is non-fatal — cron backstops.
+    if (result.created.includes(LEDGER_INGEST_SCHEDULE_ID)) {
+      try {
+        await container.scheduleControl.triggerSchedule(
+          LEDGER_INGEST_SCHEDULE_ID
+        );
+        log.info(
+          { scheduleId: LEDGER_INGEST_SCHEDULE_ID },
+          "Eager-triggered first epoch collection"
+        );
+      } catch (err) {
+        log.warn(
+          { scheduleId: LEDGER_INGEST_SCHEDULE_ID, err },
+          "Eager epoch trigger failed — cron will open the first epoch"
+        );
+      }
+    }
 
     return {
       created: result.created.length,
