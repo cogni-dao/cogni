@@ -10,9 +10,9 @@
 
 ## Purpose
 
-Drizzle ORM table definitions for **operator-local Doltgres** tables (`knowledge_operator` database). Owned by and namespaced to the operator node. Mirrors `@cogni/poly-doltgres-schema` shape.
+Drizzle ORM **re-exports** for operator's Doltgres knowledge plane (`knowledge_operator` database). As of spike.5004 (2026-05-30), the 7 base tables — `knowledge`, `domains`, `sources`, `citations`, `knowledgeContributions`, `knowledgeContributionCommits`, `workItems` — all live in `@cogni/knowledge-base` and are surfaced through this package's subpath exports. Drizzle-kit walks these re-exports to generate operator-local migrations against `knowledge_operator`.
 
-Today's contents: the `work_items` table that backs operator's API for newly-created work items (task.0423 v0 — Doltgres replaces markdown for new items). Future tables: `work_relations` + `work_external_refs` (deferred to v1), agent-knowledge claims, etc.
+This package owns **operator-specific** table definitions only. None exist today; all 7 baseline tables are shared. New operator-only tables (e.g., agent-knowledge claims, work_relations / work_external_refs in v1) would be defined here, alongside the re-exports.
 
 ## Pointers
 
@@ -44,9 +44,10 @@ Today's contents: the `work_items` table that backs operator's API for newly-cre
 
 ## Public Surface
 
-- **Subpath exports:**
+- **Subpath exports** (all re-exports from `@cogni/knowledge-base` post-spike.5004):
   - `@cogni/operator-doltgres-schema` — root barrel re-exports every slice
-  - `@cogni/operator-doltgres-schema/work-items` — `work_items` table + `WorkItemRow` / `NewWorkItemRow` inferred types
+  - `@cogni/operator-doltgres-schema/knowledge` — `knowledge`, `domains`, `sources`, `citations`, `knowledgeContributions`, `knowledgeContributionCommits`
+  - `@cogni/operator-doltgres-schema/work-items` — `workItems` + `WorkItemRow` / `NewWorkItemRow` inferred types
 
 ## Responsibilities
 
@@ -68,6 +69,6 @@ That script runs `drizzle-kit migrate` natively against `DATABASE_URL` pointing 
 
 ## Notes
 
-- Mirrors poly's pattern (`@cogni/poly-doltgres-schema`) verbatim. Keep the two packages structurally aligned for cross-node syntropy.
+- Mirrors poly's pattern (`@cogni/poly-doltgres-schema`) verbatim. Poly should adopt the shared base re-export pattern when next touched — out of scope for spike.5004.
 - Sibling: `@cogni/db-schema` (Postgres tables, shared core).
-- v0 holds work items as a single table with jsonb arrays for assignees/external_refs/labels/spec_refs. v1 breaks out `work_relations` + `work_external_refs` into separate tables.
+- v0 holds work items as a single shared-base table with jsonb arrays for assignees/external_refs/labels/spec_refs. v1 will break out `work_relations` + `work_external_refs` into separate tables (those will also land in `@cogni/knowledge-base` per the shared-base pattern).
