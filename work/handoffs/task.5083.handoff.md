@@ -6,60 +6,55 @@ status: active
 created: 2026-05-30
 updated: 2026-05-30
 branch: derekg1729/operator-node-registry-v0
-last_commit: d8a1284e7
+last_commit: 1205e59bd
 ---
 
-# Handoff: Operator node-registry v0 — setup wizard
+# Handoff: Operator node-registry v0 — wizard is GOVERNANCE-ONLY (spec realignment)
 
 ## Context
 
-- Goal: an operator setup wizard that takes a founder from "I want a node" → bootstrapped node (repo + DAO + payments) with no CLI, no manual YAML paste. Work item `task.5083`, PR **#1381**.
-- v0 is **monorepo-internal**: a node is a new `nodes/<slug>/` directory in `Cogni-DAO/cogni` (how operator/poly/resy already live). NOT a forked standalone repo (that's vNext). See PRD knowledge entry `node-registry-v0-prd` (operator `/knowledge`, contribution `contrib-derek-claude-curitiba-85a9d305`).
-- Postgres `nodes` table = live wizard state; `.cogni/repo-spec.yaml` = its git manifestation on publish. 6-state machine: `draft → dao_pending → dao_formed → wallet_ready → payments_ready → published`(=`active`).
-- **HARD RULE from Derek (governs the open work):** do **not** build new chain-interaction code. Anything touching chain ops (DAO, Privy wallet, 0xSplits) must be **1-1 ported from existing workflows**. The one sanctioned exception: there is no existing *server-side* "create a Privy wallet" path (only the CLI), so porting that CLI's exact call server-side is allowed — be super sharp-eyed, change nothing else.
+- Goal: operator setup wizard that takes a founder from "I want a node" → a Cogni node, no CLI / no manual YAML paste. Work item `task.5083`, PR **#1381**, branch `derekg1729/operator-node-registry-v0`.
+- v0 is **monorepo-internal**: a node = a new `nodes/<slug>/` dir in `Cogni-DAO/cogni`. Postgres `nodes` row = live wizard state; `.cogni/repo-spec.yaml` = git manifestation on publish.
+- **A design review (read it: `docs/research/` is NOT where it lives — it's pasted into this work item's history / ask Derek) found the wizard violates two named `docs/spec/node-formation.md` invariants.** That review is the reason this handoff exists. The fix is an architecture realignment, mostly **deletion**.
 
 ## Current State
 
-- ✅ DAO formation works E2E on candidate-a (Derek drove it; `DAO_FORMED`, address populated, status bar advanced).
-- ✅ Block-not-ready retry fixed (was the formation blocker): `isBlockNotReadyError` now matches Alchemy `Unknown block` + public `mainnet.base.org` `block not found` / `Requested resource not found` + geth `header not found`. Unit-tested.
-- ✅ Register form: slug input (Base-only, chain locked). `users`-upsert before the FK insert (fixed an earlier 500).
-- ✅ Migration hygiene clean: single `0029` (no `repo_url` UNIQUE — all monorepo nodes share one repo_url, slug is the unique key). No `0030` mush. candidate-a's stale constraint was dropped live to reconcile it to git. preview/prod clean by construction (never ran 0029).
-- ✅ CI: 14/14 required green on `d8a1284e7`; flighted; serving on `https://test.cognidao.org`.
-- 🔴 **BLOCKED at "Provision operator wallet":** the `provision-wallet` route 503s with `PRIVY_APP_ID and PRIVY_APP_SECRET must be set on the operator` — **even though all three `PRIVY_APP_ID/SECRET/SIGNING_KEY` are set on the operator pod** (verified via `kubectl exec env`). Wizard cannot advance past `dao_formed`.
-- 🟡 UI: status bar segments not fixed-width (drift); the `?nodeId` DAO path skips the in-wizard repo-spec preview Derek wanted to see.
+- ✅ DAO formation works E2E on candidate-a (block-not-ready retry fixed; status bar, slug form, Base-only, users-upsert all shipped). CI 14/14 green on `d8a1284e`; flighted.
+- 🔴 **BLOCKED + ARCHITECTURALLY WRONG: the "Provision operator wallet" step.** It 503s, but the real problem is it should not exist. `provision-wallet/route.ts` uses the **shared operator's** `PRIVY_APP_ID` to mint a child node's wallet — directly reversing spec invariants #7 + #8 (below). The 503 is the architecture refusing the custodial inversion, not a config bug.
+- 🟡 Review also flags: B2 PATCH accepts client-supplied addresses unverified; B3 `payments.status: active` written with no on-chain proof; C1 duplicated GitHub-App auth; C2 no tests on write-adapter/routes; C3 slug global-unique 409 cross-tenant oracle; C5 fat PATCH handler.
 
-## Decisions Made
+## Decisions Made (architect verdict — this is the realignment)
 
-- 6 v0 decisions locked in PRD entry `node-registry-v0-prd` (template/monorepo, slug not URL, one publish PR, stops at `published`, operator-custodial Privy, users-upsert). Read it; do not relitigate.
-- Migration trap + fix documented: editing an applied migration is a no-op on existing DBs (drizzle tracks by `folderMillis`, not hash). Memory: `feedback_edited_migration_noop_on_applied_dbs`.
-- candidate-a manual DB ops are reconcile-to-git, allowed per `devops-expert` (only env where write-SSH is sanctioned). VM key: `/Users/derek/dev/cogni-template/.local/candidate-a-vm-key`, IP `84.32.9.111`.
+- **Honor the spec. The wizard is GOVERNANCE-ONLY.** Per `node-formation.md` #7 `FORMATION_IS_GOVERNANCE_ONLY` + #8 `CHILD_OWNS_OPERATOR_WALLET`: formation outputs `cogni_dao` + `payments.status: pending_activation`, and NEVER provisions/stores/administers operator wallets — the child node's own Privy app does that, later, in its own trust domain.
+- **Retire PRD decision D5** ("operator-custodial for everyone"). It was a conscious-but-wrong call; the spec wins. New flow: `dao_pending → dao_formed → active(=published)`. No `wallet_ready`/`payments_ready` in the wizard path.
+- **Publish the repo-spec that `/api/setup/verify` already returns** — it is server-derived (fixes B2) and already `pending_activation` (fixes B3). Do not build a new YAML; commit the one verify produced.
+- **No new chain code (Derek hard rule).** This realignment DELETES chain code; payment activation stays in the existing `pnpm node:activate-payments` + `/setup/dao/payments` path, untouched.
 
 ## Next Actions
 
-- [ ] **Root-cause the 503**: route reads `serverEnv().PRIVY_APP_ID` (same memoized `serverEnv()` the container uses to build `operatorWallet`). Add a temp presence-log in `nodes/operator/app/src/app/api/v1/nodes/[id]/provision-wallet/route.ts`, redeploy, confirm whether `serverEnv()` returns the var in *that* route context. Env is proven present on the pod — the gap is the read, not the secret.
-- [ ] **1-1 port the wallet-create**: replace the bespoke `provisionOperatorWallet` thin adapter with the exact `PrivyClient({appId,appSecret}).wallets().create({chain_type:"ethereum"})` call from `scripts/provision-operator-wallet.ts` (create needs appId+appSecret only — NO signing key). Confirm it reads env the same way the container does.
-- [ ] Verify the Split-deploy step (`/setup/dao/payments?nodeId=`) is a true 1-1 reuse of the existing payments-activation flow — chicken-egg order is create-wallet → address → deploy Split → runtime adopts wallet to sign (correct as designed).
-- [ ] UI: make status-bar segments fixed-width/aligned (only the fill color moves) — `NodeStatusBar.tsx`. Pure CSS, no chain code.
-- [ ] UI: surface the generated repo-spec to the user (dashboard or publish-review) — the `?nodeId` redirect currently skips the `FormationFlowDialog` YAML preview.
-- [ ] Then: publish step (one monorepo PR writing `nodes/<slug>/.cogni/repo-spec.yaml`), re-flight, `/validate-candidate`.
+- [ ] **Delete** `app/api/v1/nodes/[id]/provision-wallet/route.ts`, `bootstrap/capabilities/node-wallet.ts`, `adapters/server/privy/operator-wallet-provisioner.ts` (+ its `adapters/server/index.ts` barrel export).
+- [ ] **Collapse state machine** (`features/nodes/state-machine.ts`): `dao_formed --spec_published--> active`; drop `wallet_provisioned`/`split_deployed` events; `NODE_PROGRESS_STEPS` = Register → DAO → Published. Keep the DB enum unchanged (no migration — dead states are harmless). Update `state-machine.test.ts`.
+- [ ] **Publish route** (`app/api/v1/nodes/[id]/publish/route.ts`): allow `dao_formed → active`; drop `operator_wallet`/`split` preconditions; commit the verify-returned `pending_activation` repo-spec (cogni_dao only). Replace `repo-spec-builder.ts buildCompleteRepoSpecYaml` with a pending_activation emitter or reuse `/api/setup/verify`'s `buildRepoSpecYaml`. Update `repo-spec-builder.test.ts`.
+- [ ] **Dashboard** (`setup/nodes/[id]/NodeActionPanel.client.tsx`): `dao_formed` → single "Open repo-spec PR" button. Remove wallet + payments buttons.
+- [ ] Reconcile the `nodes` row on candidate-a if a stale `wallet_ready`-expecting row blocks testing (VM access below).
+- [ ] Push → CI green → flight → re-test wizard register → DAO → publish PR.
+- [ ] Follow-ups (not blockers, file/scope as you go): B2 tighten PATCH to receipt-derived only; C1 extract shared `github-app-auth.ts`; C2 tests on publish route + GitHubRepoWriter (fake Octokit: 422 branch-exists, file-update, PR-exists, 404 install); C3 scope slug unique to `(ownerUserId, slug)` + opaque 409; C5 move PATCH body into a `features/nodes/update-node.ts` service.
 
 ## Risks / Gotchas
 
-- **HARD STOP on new chain code** — port, don't invent. This is the reason the wallet step is blocked, not a quick patch.
-- candidate-a is the only env with hand-touched DB state; it's reconciled to git now — don't add forward migrations to "fix" candidate-a.
-- Routes are session-auth: agent probes cap at 401. Authed E2E needs Derek's browser (no operator candidate-a storageState captured) OR capture one per `docs/guides/candidate-auth-bootstrap.md`.
-- `serverEnv()` is memoized (singleton, parses `process.env` once) — relevant to the 503 investigation.
+- **Do not re-add operator-custodial wallet provisioning.** If a future need arises, it requires a conscious `node-formation.md` amendment retiring #7/#8 with the custody/blast-radius/fork-away trade-offs argued — not a code change.
+- Editing an applied migration is a no-op on existing DBs (drizzle tracks by `folderMillis`). Memory: `feedback_edited_migration_noop_on_applied_dbs`. 0029 is clean+single now; don't add 0030.
+- Routes are session-auth → agent probes cap at 401. Authed UI E2E needs Derek's browser OR capture operator storageState (`docs/guides/candidate-auth-bootstrap.md`).
+- candidate-a manual DB/VM ops are reconcile-to-git only (allowed per `devops-expert`). Key `/Users/derek/dev/cogni-template/.local/candidate-a-vm-key`, IP `84.32.9.111`.
 
 ## Pointers
 
 | File / Resource | Why it matters |
 | --------------- | -------------- |
-| `docs/guides/operator-wallet-setup.md` + `docs/spec/operator-wallet.md` | Canonical operator-wallet chain flow to port from |
-| `scripts/provision-operator-wallet.ts` | The ONLY existing wallet-create code (CLI) — port this verbatim |
-| `packages/operator-wallet/` (+ `AGENTS.md`, `adapters/privy`) | `PrivyOperatorWalletAdapter` — the runtime adopt-and-sign path |
-| `.claude/skills/poly-auth-wallets` | Per-tenant Privy wallet provisioning expertise (AEAD, CustodialConsent, signing) |
-| `nodes/operator/app/src/bootstrap/container.ts` L734-775 | How the working operator wallet reads env + builds Privy adapter |
-| `nodes/operator/app/src/shared/web3/node-formation/AGENTS.md` + `docs/spec/node-formation.md` | DAO formation web3 primitives + verify flow |
-| `docs/spec/payments-design.md` + `nodes/operator/app/src/features/payments/AGENTS.md` | 0xSplits + payments activation to reuse |
-| `nodes/operator/app/src/app/api/v1/nodes/**` + `features/nodes/**` | The v0 wizard backend (state machine, routes, repo-spec builder) |
-| PRD `node-registry-v0-prd` (operator `/knowledge`) | Locked design + 6 decisions + node-lifespan-tooling sibling |
+| `docs/spec/node-formation.md` (invariants #4,#7,#8; "Payment Activation") | The contract the wizard MUST honor — governance-only, child-owns-wallet, server-verified addresses |
+| `nodes/operator/app/src/app/api/setup/verify/route.ts` (`buildRepoSpecYaml`) | Already emits server-derived `pending_activation` repo-spec — publish should commit THIS |
+| `nodes/operator/app/src/app/api/v1/nodes/**` + `features/nodes/**` | The v0 wizard backend to simplify |
+| `docs/guides/operator-wallet-setup.md` + `scripts/provision-operator-wallet.ts` | The child-node activation path that stays OUTSIDE the wizard |
+| `.claude/skills/poly-auth-wallets` + `packages/operator-wallet/AGENTS.md` | Privy/custody expertise if activation work is later in scope |
+| PRD `node-registry-v0-prd` (operator `/knowledge`, contrib `...85a9d305`) | v0 design — note D5 (operator-custodial) is now RETIRED by this handoff |
+| Design review (pasted in Derek's 2026-05-30 message) | Full B1-B3 + C1-C7 list; B1/B2/B3 drive this realignment |
