@@ -48,11 +48,8 @@ divergences:
       - "AGENTS.md" # dev-freeze banner; both-list entry (see comment above)
       - "nodes/operator/**" # hub-only node
       - "nodes/resy/**" # hub-only node
-      - "nodes/scheduler-worker/**" # hub-only node (if it exists)
       - "infra/catalog/operator.yaml"
       - "infra/catalog/resy.yaml"
-      - "infra/catalog/scheduler-worker.yaml"
-      - ".github/workflows/release.yml" # no production env
       - "infra/k8s/overlays/canary/**" # no canary env
       - "tests/ci-invariants/**" # hub-only CI structural tests
       - "scripts/experiments/**" # hub-only research scripts
@@ -90,6 +87,5 @@ divergences:
       - "nodes/node-template/**"
       - "infra/catalog/operator.yaml"
       - "infra/catalog/resy.yaml"
-      - "infra/catalog/scheduler-worker.yaml"
     artifact_only:
       - "nodes/poly/**"
