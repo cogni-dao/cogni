@@ -158,6 +158,17 @@ export function getLedgerApprovers(): string[] {
   return cachedLedgerApprovers;
 }
 
+/**
+ * Whether a wallet is in the ledger approver allowlist.
+ * Case-insensitive; returns false for null/empty wallets (fail-closed).
+ * Single source of truth for the `(admin)/` gate, the session `isApprover`
+ * hint, and write-route enforcement.
+ */
+export function isLedgerApprover(wallet: string | null | undefined): boolean {
+  if (!wallet) return false;
+  return getLedgerApprovers().includes(wallet.toLowerCase());
+}
+
 let cachedOperatorWalletConfig: OperatorWalletSpec | undefined | null = null;
 
 /**

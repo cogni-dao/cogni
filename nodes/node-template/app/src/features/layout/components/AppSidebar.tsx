@@ -5,8 +5,8 @@
  * Module: `@features/layout/components/AppSidebar`
  * Purpose: Cogni-specific sidebar composition with nav items, collapsible chat threads, and external links.
  * Scope: Composes vendor Sidebar primitives into the app sidebar. Does not handle authentication or data fetching.
- * Invariants: Nav items are static; chat threads always visible as collapsible menu item.
- * Side-effects: none
+ * Invariants: Admin nav item is shown only when the session wallet is a repo-spec approver (`session.user.isApprover`); the `(admin)/` layout still enforces server-side. Chat threads always visible as collapsible menu item.
+ * Side-effects: reads NextAuth session (`useSession`)
  * Links: src/components/vendor/shadcn/sidebar.tsx, src/features/ai/chat/components/ChatThreadsSidebarGroup.tsx
  * @public
  */
@@ -24,6 +24,7 @@ import {
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useSession } from "next-auth/react";
 import type { ReactElement } from "react";
 
 import {
@@ -76,6 +77,11 @@ function DiscordIcon({ className }: { className?: string }): ReactElement {
 
 export function AppSidebar(): ReactElement {
   const pathname = usePathname();
+  const { data: session } = useSession();
+  const isApprover = session?.user?.isApprover ?? false;
+  const navItems = NAV_ITEMS.filter(
+    (item) => item.href !== "/admin" || isApprover
+  );
 
   return (
     <Sidebar collapsible="icon">
@@ -104,7 +110,7 @@ export function AppSidebar(): ReactElement {
       <SidebarContent>
         <SidebarGroup>
           <SidebarMenu>
-            {NAV_ITEMS.map((item) => {
+            {navItems.map((item) => {
               const isActive =
                 pathname === item.href ||
                 pathname.startsWith(`${item.href.replace(/\/$/, "")}/`);

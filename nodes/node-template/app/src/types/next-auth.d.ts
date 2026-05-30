@@ -11,6 +11,8 @@ declare module "next-auth" {
       walletAddress?: string | null;
       displayName?: string | null;
       avatarColor?: string | null;
+      /** Derived in the session callback: wallet ∈ repo-spec approver allowlist. UX hint only. */
+      isApprover?: boolean;
       name?: string | null;
       email?: string | null;
       image?: string | null;

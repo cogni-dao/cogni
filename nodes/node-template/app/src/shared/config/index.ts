@@ -24,4 +24,5 @@ export {
   getPaymentConfig,
   getScopeId,
   type InboundPaymentConfig,
+  isLedgerApprover,
 } from "./repoSpec.server";
