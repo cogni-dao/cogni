@@ -204,6 +204,13 @@
       "when": 1777766477660,
       "tag": "0028_operator_work_item_sessions",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1778448306963,
+      "tag": "0029_operator_session_repo_full_name",
+      "breakpoints": true
     }
   ]
 }

@@ -152,6 +152,9 @@ export async function linkWorkItemSessionPr(input: {
     claimedByUserId: sessionUser.id,
     ...(input.body.branch !== undefined && { branch: input.body.branch }),
     ...(input.body.prNumber !== undefined && { prNumber: input.body.prNumber }),
+    ...(input.body.repoFullName !== undefined && {
+      repoFullName: input.body.repoFullName,
+    }),
   });
 
   if (!session) {

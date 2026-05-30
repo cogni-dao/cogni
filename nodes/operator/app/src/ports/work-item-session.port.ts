@@ -32,6 +32,7 @@ export type WorkItemSessionRecord = {
   readonly lastCommand: string | null;
   readonly branch: string | null;
   readonly prNumber: number | null;
+  readonly repoFullName: string | null;
 };
 
 export type ClaimWorkItemSessionResult =
@@ -59,7 +60,18 @@ export interface WorkItemSessionPort {
     readonly claimedByUserId: string;
     readonly branch?: string;
     readonly prNumber?: number;
+    readonly repoFullName?: string;
   }): Promise<WorkItemSessionRecord | null>;
 
   getCurrent(workItemId: string): Promise<WorkItemSessionRecord | null>;
+
+  /**
+   * Look up the single open (`active` or `idle`) session bound to a given
+   * `(repoFullName, prNumber)`. Returns null when no open session matches.
+   * Backed by the partial unique index `work_item_sessions_one_session_per_pr_idx`.
+   */
+  lookupActiveByPr(input: {
+    readonly repoFullName: string;
+    readonly prNumber: number;
+  }): Promise<WorkItemSessionRecord | null>;
 }

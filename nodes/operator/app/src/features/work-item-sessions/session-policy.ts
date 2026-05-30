@@ -49,6 +49,7 @@ export function toWorkItemSessionDto(
     lastCommand: session.lastCommand,
     branch: session.branch,
     prNumber: session.prNumber,
+    repoFullName: session.repoFullName,
   };
 }
 

@@ -55,6 +55,7 @@ function session(overrides: Partial<WorkItemSessionRecord> = {}) {
     lastCommand: "/implement",
     branch: null,
     prNumber: null,
+    repoFullName: null,
     ...overrides,
   } satisfies WorkItemSessionRecord;
 }

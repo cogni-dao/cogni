@@ -23,6 +23,12 @@ export const WorkItemSessionStatusSchema = z.enum([
   "superseded",
 ]);
 
+export const RepoFullNameSchema = z
+  .string()
+  .regex(/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/, {
+    message: "repoFullName must be 'owner/repo'",
+  });
+
 export const WorkItemSessionDtoSchema = z.object({
   coordinationId: z.string().uuid(),
   workItemId: z.string().min(1),
@@ -36,6 +42,7 @@ export const WorkItemSessionDtoSchema = z.object({
   lastCommand: z.string().nullable(),
   branch: z.string().nullable(),
   prNumber: z.number().int().positive().nullable(),
+  repoFullName: z.string().nullable(),
 });
 
 const ttlSecondsSchema = z
@@ -78,11 +85,19 @@ export const workItemSessionPrOperation = {
     .object({
       branch: z.string().min(1).max(240).optional(),
       prNumber: z.number().int().positive().optional(),
+      repoFullName: RepoFullNameSchema.optional(),
     })
     .refine(
       (value) => value.branch !== undefined || value.prNumber !== undefined,
       {
         message: "branch or prNumber is required",
+      }
+    )
+    .refine(
+      (value) =>
+        value.prNumber === undefined || value.repoFullName !== undefined,
+      {
+        message: "repoFullName is required when prNumber is provided",
       }
     ),
   output: z.object({

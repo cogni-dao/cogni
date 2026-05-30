@@ -54,6 +54,7 @@ export const workItemSessions = pgTable(
     lastCommand: text("last_command"),
     branch: text("branch"),
     prNumber: integer("pr_number"),
+    repoFullName: text("repo_full_name"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -71,5 +72,10 @@ export const workItemSessions = pgTable(
     uniqueIndex("work_item_sessions_one_open_claim_idx")
       .on(table.workItemId)
       .where(sql`${table.status} IN ('active','idle')`),
+    uniqueIndex("work_item_sessions_one_session_per_pr_idx")
+      .on(table.repoFullName, table.prNumber)
+      .where(
+        sql`${table.status} IN ('active','idle') AND ${table.repoFullName} IS NOT NULL AND ${table.prNumber} IS NOT NULL`
+      ),
   ]
 ).enableRLS();

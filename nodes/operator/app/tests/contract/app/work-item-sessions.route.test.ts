@@ -65,6 +65,7 @@ const SESSION_DTO = {
   lastCommand: "/implement",
   branch: null,
   prNumber: null,
+  repoFullName: null,
 } as const;
 
 describe("operator work-item session routes", () => {

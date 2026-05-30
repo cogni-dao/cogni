@@ -40,6 +40,7 @@ function toRecord(
     lastCommand: row.lastCommand,
     branch: row.branch,
     prNumber: row.prNumber,
+    repoFullName: row.repoFullName,
   };
 }
 
@@ -136,12 +137,16 @@ export class DrizzleWorkItemSessionAdapter implements WorkItemSessionPort {
     readonly claimedByUserId: string;
     readonly branch?: string;
     readonly prNumber?: number;
+    readonly repoFullName?: string;
   }): Promise<WorkItemSessionRecord | null> {
     const [updated] = await this.db
       .update(workItemSessions)
       .set({
         ...(input.branch !== undefined && { branch: input.branch }),
         ...(input.prNumber !== undefined && { prNumber: input.prNumber }),
+        ...(input.repoFullName !== undefined && {
+          repoFullName: input.repoFullName,
+        }),
         updatedAt: new Date(),
       })
       .where(
@@ -154,6 +159,25 @@ export class DrizzleWorkItemSessionAdapter implements WorkItemSessionPort {
       .returning();
 
     return updated ? toRecord(updated) : null;
+  }
+
+  async lookupActiveByPr(input: {
+    readonly repoFullName: string;
+    readonly prNumber: number;
+  }): Promise<WorkItemSessionRecord | null> {
+    const [row] = await this.db
+      .select()
+      .from(workItemSessions)
+      .where(
+        and(
+          eq(workItemSessions.repoFullName, input.repoFullName),
+          eq(workItemSessions.prNumber, input.prNumber),
+          inArray(workItemSessions.status, [...OPEN_SESSION_STATUSES])
+        )
+      )
+      .limit(1);
+
+    return row ? toRecord(row) : null;
   }
 
   async getCurrent(workItemId: string): Promise<WorkItemSessionRecord | null> {

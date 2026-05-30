@@ -71,6 +71,7 @@ function session(overrides: Partial<WorkItemSessionRecord> = {}) {
     lastCommand: "/implement",
     branch: null,
     prNumber: null,
+    repoFullName: null,
     ...overrides,
   } satisfies WorkItemSessionRecord;
 }
@@ -81,6 +82,7 @@ function mockPort(): WorkItemSessionPort {
     heartbeat: vi.fn(),
     linkPr: vi.fn(),
     getCurrent: vi.fn(),
+    lookupActiveByPr: vi.fn(),
   };
 }
 
