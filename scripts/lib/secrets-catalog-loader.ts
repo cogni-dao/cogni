@@ -89,6 +89,16 @@ const GenerateSchema = z.discriminatedUnion("kind", [
     kind: z.literal("derived"),
     source: z.enum(["node-dbs", "node-endpoints"]),
   }),
+  // Derived at call-time from a process.env interpolation template — e.g.,
+  // `https://${DOMAIN}` resolves to `https://test.opencompany.cc` once the
+  // operator's DOMAIN reaches the provision shell. Used for values that are
+  // a pure function of another (already-set) env var; not for secrets that
+  // need randomness. Phase 5c's seed loop reads the generator at the same
+  // shell scope that just sourced `.env.${DEPLOY_ENV}`, so DOMAIN is set.
+  z.object({
+    kind: z.literal("derive-env"),
+    template: z.string().min(1),
+  }),
 ]);
 
 const TransformSchema = z.discriminatedUnion("kind", [
@@ -319,6 +329,27 @@ function generatorFor(g: z.infer<typeof GenerateSchema>): () => string {
     case "derived":
       if (g.source === "node-dbs") return deriveCogniNodeDbs;
       return deriveCogniNodeEndpoints;
+    case "derive-env":
+      return () =>
+        // Match any `${...}` substitution token so typos surface loud (a
+        // lowercase `${domain}` would otherwise pass through into the URL
+        // literally — Node's URL parser would percent-encode the braces and
+        // accept the malformed host, recreating the same silent-CSRF class
+        // of bug this generator exists to prevent).
+        g.template.replace(/\$\{([^}]+)\}/g, (_, name) => {
+          if (!/^[A-Z_][A-Z0-9_]*$/.test(name)) {
+            throw new Error(
+              `derive-env: template "${g.template}" contains \${${name}} which is not a valid env var name (must match [A-Z_][A-Z0-9_]*).`
+            );
+          }
+          const v = process.env[name];
+          if (v === undefined || v === "") {
+            throw new Error(
+              `derive-env: template "${g.template}" references env var ${name} which is not set. Source .env.<env> before invoking the generator.`
+            );
+          }
+          return v;
+        });
   }
 }
 
