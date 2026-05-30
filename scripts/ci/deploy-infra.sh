@@ -1188,10 +1188,8 @@ if command -v kubectl &>/dev/null; then
   for node in operator poly resy node-template; do
     db_node="${node//-/_}"
     # Doltgres URL points to this node's own DB (knowledge_<node>).
-    # Poly reads DOLTGRES_URL_POLY in its Zod schema; operator/resy read generic DOLTGRES_URL.
-    # node-template's substrate (task.5077) ships in a follow-up — until then,
-    # DOLTGRES_URL is intentionally omitted so the optional KnowledgeCapability
-    # branch (container.ts) stays disabled.
+    # Poly reads DOLTGRES_URL_POLY in its Zod schema; operator / resy /
+    # node-template read generic DOLTGRES_URL.
     # Ships as `postgres` (superuser) because Doltgres 0.56 RBAC is non-functional —
     # GRANTs report success but even `SELECT current_user` is denied for the
     # knowledge_writer role, making the drizzle migrator and app unusable as a
@@ -1200,8 +1198,6 @@ if command -v kubectl &>/dev/null; then
     DOLTGRES_URL_NODE="postgresql://postgres:${DOLTGRES_PASSWORD}@${HOST_IP}:5435/knowledge_${db_node}?sslmode=disable"
     if [ "$node" = "poly" ]; then
       DOLTGRES_ENV_LINE="DOLTGRES_URL_POLY=${DOLTGRES_URL_NODE}"
-    elif [ "$node" = "node-template" ]; then
-      DOLTGRES_ENV_LINE=""
     else
       DOLTGRES_ENV_LINE="DOLTGRES_URL=${DOLTGRES_URL_NODE}"
     fi
