@@ -51,8 +51,9 @@ export default async function SetupNodesPage(): Promise<ReactElement> {
         <p className="mb-3 text-muted-foreground text-sm">
           Bootstrap a Cogni-governed node. v0 nodes live at{" "}
           <code>nodes/&lt;slug&gt;/</code> in the Cogni-DAO/cogni monorepo — the
-          operator opens one PR adding the node once you have formed its DAO and
-          activated payments.
+          operator opens one PR adding the governance repo-spec once you have
+          formed its DAO. Payment activation happens from the child node after
+          bootstrap.
         </p>
         <NewNodeForm />
       </SectionCard>

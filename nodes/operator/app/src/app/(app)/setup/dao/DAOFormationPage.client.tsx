@@ -29,8 +29,19 @@ import {
 } from "@/components";
 import { FormationFlowDialog } from "@/features/setup/components/FormationFlowDialog";
 import { useDAOFormation } from "@/features/setup/hooks/useDAOFormation";
+import type { NodeStatus } from "@/shared/db/nodes";
 
-export function DAOFormationPageClient(): ReactElement {
+import { NodeStatusBar } from "../nodes/[id]/NodeStatusBar";
+
+interface Props {
+  readonly nodeStatus?: NodeStatus;
+  readonly nodeRepoUrl?: string;
+}
+
+export function DAOFormationPageClient({
+  nodeStatus,
+  nodeRepoUrl,
+}: Props): ReactElement {
   const { address: walletAddress } = useAccount();
   const formation = useDAOFormation();
   const searchParams = useSearchParams();
@@ -130,8 +141,16 @@ export function DAOFormationPageClient(): ReactElement {
     })();
   }, [nodeId, formation.state, router]);
 
+  const isNodeWizard = nodeId != null;
+
   return (
     <PageContainer maxWidth="lg">
+      {nodeStatus ? (
+        <SectionCard title={nodeRepoUrl ?? "Node setup"}>
+          <NodeStatusBar status={nodeStatus} />
+        </SectionCard>
+      ) : null}
+
       <SectionCard title="Create DAO">
         {/* Token Name */}
         <div className="space-y-2">
@@ -224,7 +243,7 @@ export function DAOFormationPageClient(): ReactElement {
         daoTxHash={formation.state.daoTxHash}
         signalTxHash={formation.state.signalTxHash}
         errorMessage={formation.state.errorMessage}
-        repoSpecYaml={formation.state.repoSpecYaml}
+        repoSpecYaml={isNodeWizard ? null : formation.state.repoSpecYaml}
         addresses={formation.state.addresses}
         tokenName={formation.state.config?.tokenName ?? null}
         isInFlight={isInFlight}

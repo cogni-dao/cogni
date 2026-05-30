@@ -4,7 +4,7 @@
 /**
  * Module: `@app/(app)/setup/nodes/[id]/NodeStatusBar`
  * Purpose: Horizontal dot-line-dot progress header for the node setup wizard.
- * Scope: Pure presentational. Maps a NodeStatus to a 5-milestone bar; `failed` renders an error tint.
+ * Scope: Pure presentational. Maps a NodeStatus to the governance-only milestones; `failed` renders an error tint.
  *   Token-only styling (no raw colors) per ui-governance.
  * Side-effects: none
  * Links: src/features/nodes/state-machine.ts, task.5083
