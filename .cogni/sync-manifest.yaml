@@ -44,7 +44,6 @@ divergences:
       - "infra/catalog/operator.yaml"
       - "infra/catalog/resy.yaml"
       - "infra/catalog/scheduler-worker.yaml"
-      - "infra/k8s/secrets/external-secrets/candidate-a/scheduler-worker/**" # hub-only node's ExternalSecret
       - ".github/workflows/release.yml" # no production env
       - "infra/k8s/overlays/canary/**" # no canary env
       - "tests/ci-invariants/**" # hub-only CI structural tests
