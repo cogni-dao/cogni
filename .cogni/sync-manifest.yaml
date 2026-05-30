@@ -44,6 +44,7 @@ divergences:
       - "infra/catalog/operator.yaml"
       - "infra/catalog/resy.yaml"
       - "infra/catalog/scheduler-worker.yaml"
+      - "infra/catalog/node-template.yaml" # hub-style; artifact carries standalone-style (task.5078) — both-sides intentional divergence
       - ".github/workflows/release.yml" # no production env
       - "infra/k8s/overlays/canary/**" # no canary env
       - "tests/ci-invariants/**" # hub-only CI structural tests
@@ -52,6 +53,7 @@ divergences:
       - "AGENTS.md" # artifact carries a divergent front-door doc — the dev-freeze banner (node-template#66); content intentionally differs from hub, do not flag
       - "infra/fork.yaml"
       - "infra/k8s/overlays/_template/node-template/**"
+      - "infra/catalog/node-template.yaml" # standalone-style fork catalog — see omit_from_artifact twin (both-sides divergence)
       - "infra/k8s/overlays/candidate-a/node-template/**" # hub + artifact diverge; hub overlay activates ExternalSecret via task.5081 CP2
       - "infra/k8s/overlays/preview/node-template/**"
       - "infra/k8s/overlays/production/node-template/**"
