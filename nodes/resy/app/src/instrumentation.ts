@@ -19,6 +19,10 @@
 
 import { NodeSDK } from "@opentelemetry/sdk-node";
 import pino from "pino";
+import {
+  resolveBootSyncConfig,
+  runGovernanceBootSync,
+} from "@/lib/governance-boot-sync";
 
 let sdk: NodeSDK | null = null;
 
@@ -126,6 +130,16 @@ export async function register(): Promise<void> {
 
   await initOtelSdk();
   logAppStarted();
+
+  // Self-register governance + ledger(epoch) Temporal schedules at boot, so a node (incl. a
+  // forked node-template) goes live without an operator/deploy-pipeline step. Replaces the
+  // removed `scripts/ci/deploy.sh` Step 10.1. Fire-and-forget + fail-soft; the helper retries
+  // while the HTTP server binds. Skipped in test.
+  // biome-ignore lint/style/noProcessEnv: startup check before the config framework
+  const bootEnv = process.env;
+  if (bootEnv.APP_ENV !== "test") {
+    void runGovernanceBootSync(resolveBootSyncConfig(bootEnv)).catch(() => {});
+  }
 
   // Dev mode (not test): warn if LiteLLM has stale test config from a previous session.
   // Inlined here (not in bootstrap/) because dep-cruiser forbids instrumentation→bootstrap imports.
