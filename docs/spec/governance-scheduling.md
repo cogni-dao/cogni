@@ -5,7 +5,7 @@ title: Governance Schedule Sync
 status: active
 spec_state: active
 trust: draft
-summary: Declarative governance schedules in repo-spec.yaml synced to Temporal at deploy time via internal ops endpoint.
+summary: Declarative governance schedules in repo-spec.yaml synced to Temporal at every node boot (self-fetch) via the internal ops endpoint.
 read_when: Understanding how governance runs are scheduled, how repo-spec declares charters, or how the sync function works.
 implements: proj.system-tenant-governance
 owner: derekg1729
@@ -16,7 +16,7 @@ tags: [governance, scheduling, temporal]
 
 # Governance Schedule Sync
 
-> Repo-spec declares charter schedules. Deploy syncs them to Temporal. Temporal fires cron. Worker executes governance run via OpenClaw.
+> Repo-spec declares charter + ledger schedules. Each node self-syncs them to Temporal at boot. Temporal fires cron. Worker executes governance run via OpenClaw.
 
 ### Key References
 
@@ -31,8 +31,9 @@ tags: [governance, scheduling, temporal]
 flowchart TD
     RS[".cogni/repo-spec.yaml<br/><i>governance.schedules[]</i>"] -->|getGovernanceConfig| SYNC
 
-    subgraph "deploy.sh Step 10.1"
-        OPS["POST /api/internal/ops/governance/schedules/sync<br/><i>Bearer INTERNAL_OPS_TOKEN</i>"] --> JOB["Job module<br/><i>pg_advisory_lock</i>"]
+    subgraph "App boot (instrumentation.ts self-fetch) — also manual ops trigger"
+        BOOT["instrumentation register()<br/><i>runGovernanceBootSync (retry+fail-soft)</i>"] --> OPS["POST /api/internal/ops/governance/schedules/sync<br/><i>Bearer INTERNAL_OPS_TOKEN</i>"]
+        OPS --> JOB["Job module<br/><i>pg_advisory_lock</i>"]
         JOB --> SYNC["syncGovernanceSchedules()"]
     end
 
@@ -44,9 +45,7 @@ flowchart TD
 
 > **💡 Preview Environments**
 >
-> Set `GOVERNANCE_SCHEDULES_ENABLED=false` to skip schedule sync in preview deployments (prevents duplicate governance operations). Defaults to `true` in production/staging.
->
-> See: `.github/workflows/staging-preview.yml`
+> Set `GOVERNANCE_SCHEDULES_ENABLED=false` to skip schedule sync in preview deployments (prevents duplicate governance operations). Defaults to `true`. The boot-sync helper honors this flag (skips before calling the endpoint); the endpoint also returns 204 when disabled.
 
 ### Runtime Identity Model
 
@@ -88,16 +87,17 @@ governance:
 
 ### Execution Layers
 
-| Layer     | File                                                              | Responsibility                   |
-| --------- | ----------------------------------------------------------------- | -------------------------------- |
-| Endpoint  | `src/app/api/internal/ops/governance/schedules/sync/route.ts`     | Internal auth + deploy trigger   |
-| Job       | `src/bootstrap/jobs/syncGovernanceSchedules.job.ts`               | Advisory lock + container wiring |
-| Service   | `packages/scheduler-core/src/services/syncGovernanceSchedules.ts` | Pure orchestration via ports     |
-| Re-export | `src/features/governance/services/syncGovernanceSchedules.ts`     | Feature-layer convenience        |
+| Layer     | File                                                              | Responsibility                                    |
+| --------- | ----------------------------------------------------------------- | ------------------------------------------------- |
+| Boot      | `src/lib/governance-boot-sync.ts`                                 | Self-fetch trigger at startup (retry + fail-soft) |
+| Endpoint  | `src/app/api/internal/ops/governance/schedules/sync/route.ts`     | Internal auth + trigger                           |
+| Job       | `src/bootstrap/jobs/syncGovernanceSchedules.job.ts`               | Advisory lock + container wiring                  |
+| Service   | `packages/scheduler-core/src/services/syncGovernanceSchedules.ts` | Pure orchestration via ports                      |
+| Re-export | `src/features/governance/services/syncGovernanceSchedules.ts`     | Feature-layer convenience                         |
 
 ## Goal
 
-Repo-spec is source of truth for governance schedules. Temporal is derived state, synced idempotently at deploy time.
+Repo-spec is source of truth for governance schedules. Temporal is derived state, synced idempotently at every node boot (and on-demand via the ops endpoint).
 
 ## Non-Goals
 
@@ -112,7 +112,7 @@ Repo-spec is source of truth for governance schedules. Temporal is derived state
 | REPO_SPEC_IS_SOURCE_OF_TRUTH | `.cogni/repo-spec.yaml` declares schedules; Temporal is derived                                                                       |
 | PRUNE_IS_PAUSE               | Removed schedules are paused, never deleted (reversible)                                                                              |
 | SYSTEM_TENANT_IS_TENANT      | Governance schedules are first-class DB rows owned by system principal; Temporal schedule IDs stored in `temporal_schedule_id` column |
-| SYSTEM_OPS_ONLY              | Sync runs at deploy time via internal ops endpoint, never callable by tenants                                                         |
+| SYSTEM_OPS_ONLY              | Sync runs at node boot (self-fetch) or via the internal ops endpoint; never callable by tenants                                       |
 | GRANT_ON_DEMAND              | Governance grant created idempotently by sync, not by migration                                                                       |
 | OVERLAP_SKIP_ALWAYS          | All governance schedules use `overlap=SKIP` (one run at a time)                                                                       |
 | SINGLE_WRITER                | `pg_advisory_lock(hashtext('governance_sync'))` prevents concurrent sync                                                              |
@@ -129,8 +129,9 @@ Repo-spec is source of truth for governance schedules. Temporal is derived state
 | `packages/scheduler-core/src/services/syncGovernanceSchedules.ts` | Canonical sync logic             |
 | `src/app/api/internal/ops/governance/schedules/sync/route.ts`     | Internal trigger endpoint        |
 | `src/bootstrap/jobs/syncGovernanceSchedules.job.ts`               | Job module (lock + wiring)       |
+| `src/lib/governance-boot-sync.ts`                                 | Boot-time self-sync trigger      |
+| `src/instrumentation.ts`                                          | Calls boot-sync in `register()`  |
 | `src/app/api/internal/graphs/[graphId]/runs/route.ts`             | Input normalization + state key  |
-| `scripts/ci/deploy.sh`                                            | Deploy integration (Step 10.1)   |
 | `packages/scheduler-core/src/ports/schedule-control.port.ts`      | `listScheduleIds`                |
 | `packages/scheduler-core/src/ports/execution-grant.port.ts`       | `ensureGrant`                    |
 
