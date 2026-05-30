@@ -49,12 +49,12 @@ last_commit: 1205e59bd
 
 ## Pointers
 
-| File / Resource | Why it matters |
-| --------------- | -------------- |
-| `docs/spec/node-formation.md` (invariants #4,#7,#8; "Payment Activation") | The contract the wizard MUST honor — governance-only, child-owns-wallet, server-verified addresses |
-| `nodes/operator/app/src/app/api/setup/verify/route.ts` (`buildRepoSpecYaml`) | Already emits server-derived `pending_activation` repo-spec — publish should commit THIS |
-| `nodes/operator/app/src/app/api/v1/nodes/**` + `features/nodes/**` | The v0 wizard backend to simplify |
-| `docs/guides/operator-wallet-setup.md` + `scripts/provision-operator-wallet.ts` | The child-node activation path that stays OUTSIDE the wizard |
-| `.claude/skills/poly-auth-wallets` + `packages/operator-wallet/AGENTS.md` | Privy/custody expertise if activation work is later in scope |
-| PRD `node-registry-v0-prd` (operator `/knowledge`, contrib `...85a9d305`) | v0 design — note D5 (operator-custodial) is now RETIRED by this handoff |
-| Design review (pasted in Derek's 2026-05-30 message) | Full B1-B3 + C1-C7 list; B1/B2/B3 drive this realignment |
+| File / Resource                                                                 | Why it matters                                                                                     |
+| ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `docs/spec/node-formation.md` (invariants #4,#7,#8; "Payment Activation")       | The contract the wizard MUST honor — governance-only, child-owns-wallet, server-verified addresses |
+| `nodes/operator/app/src/app/api/setup/verify/route.ts` (`buildRepoSpecYaml`)    | Already emits server-derived `pending_activation` repo-spec — publish should commit THIS           |
+| `nodes/operator/app/src/app/api/v1/nodes/**` + `features/nodes/**`              | The v0 wizard backend to simplify                                                                  |
+| `docs/guides/operator-wallet-setup.md` + `scripts/provision-operator-wallet.ts` | The child-node activation path that stays OUTSIDE the wizard                                       |
+| `.claude/skills/poly-auth-wallets` + `packages/operator-wallet/AGENTS.md`       | Privy/custody expertise if activation work is later in scope                                       |
+| PRD `node-registry-v0-prd` (operator `/knowledge`, contrib `...85a9d305`)       | v0 design — note D5 (operator-custodial) is now RETIRED by this handoff                            |
+| Design review (pasted in Derek's 2026-05-30 message)                            | Full B1-B3 + C1-C7 list; B1/B2/B3 drive this realignment                                           |
