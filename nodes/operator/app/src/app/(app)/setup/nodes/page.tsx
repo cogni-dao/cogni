@@ -3,8 +3,8 @@
 
 /**
  * Module: `@app/(app)/setup/nodes/page`
- * Purpose: Landing page for the external-node setup wizard. Lists the user's in-flight + active node
- *   rows and offers a form to register a new external repo target.
+ * Purpose: Landing page for the node setup wizard. Lists the user's in-flight + active node
+ *   rows and offers a form to register a new monorepo-internal node.
  * Scope: Server component. Owner-scoped DB read; delegates create UX to client component.
  * Links: task.5083
  * @public
@@ -49,9 +49,10 @@ export default async function SetupNodesPage(): Promise<ReactElement> {
     <PageContainer>
       <SectionCard title="Register a node">
         <p className="mb-3 text-muted-foreground text-sm">
-          Spawn a Cogni-governed node into an external GitHub repository. v0
-          supports public repos with the cogni-node-template GitHub App
-          installed.
+          Bootstrap a Cogni-governed node. v0 nodes live at{" "}
+          <code>nodes/&lt;slug&gt;/</code> in the Cogni-DAO/cogni monorepo —
+          the operator opens one PR adding the node once you have formed its DAO
+          and activated payments.
         </p>
         <NewNodeForm />
       </SectionCard>

@@ -3,23 +3,26 @@
 
 /**
  * Module: `@app/api/v1/nodes`
- * Purpose: List + create rows in the operator's externally-registered node registry.
- * Scope: Owner-scoped reads via RLS; writes use a session-derived owner_user_id.
- * Invariants: OWNER_GATING, NODES_TABLE_SCOPE (external only — enforced via repo-url parser).
+ * Purpose: List + create rows in the operator's node registry.
+ * Scope: Owner-scoped reads via RLS; writes use a session-derived owner_user_id. v0 nodes are
+ *   monorepo-internal — a node lives at `nodes/<slug>/` in the operator's own repo (Cogni-DAO/cogni).
+ * Invariants: OWNER_GATING, NODES_TABLE_SCOPE (monorepo-internal — slug, not external URL), USER_ROW_ENSURED.
  * Side-effects: IO (Postgres)
  * Links: task.5083
  * @public
  */
 
 import { withTenantScope } from "@cogni/db-client";
+import { users } from "@cogni/db-schema/refs";
 import { type UserId, userActor } from "@cogni/ids";
 import { desc, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { resolveAppDb } from "@/bootstrap/container";
-import { parseRepoUrl } from "@/features/nodes/repo-url";
+import { parseNodeSlug } from "@/features/nodes/node-slug";
 import { getServerSessionUser } from "@/lib/auth/server";
+import { getGithubRepo } from "@/shared/config";
 import { nodes } from "@/shared/db/nodes";
 import { SUPPORTED_CHAIN_IDS } from "@/shared/web3";
 
@@ -29,7 +32,7 @@ export const dynamic = "force-dynamic";
 const SUPPORTED_CHAIN_ID_LIST: readonly number[] = SUPPORTED_CHAIN_IDS;
 
 const CreateNodeInput = z.object({
-  repoUrl: z.string().min(1),
+  slug: z.string().min(1),
   chainId: z
     .number()
     .int()
@@ -80,15 +83,33 @@ export async function POST(request: Request) {
     );
   }
 
-  const repo = parseRepoUrl(parsed.data.repoUrl);
-  if (!repo.ok) {
+  const parsedSlug = parseNodeSlug(parsed.data.slug);
+  if (!parsedSlug.ok) {
     return NextResponse.json(
-      { error: "invalid repoUrl", reason: repo.reason },
+      { error: "invalid slug", reason: parsedSlug.reason },
       { status: 400 }
     );
   }
 
   const db = resolveAppDb();
+
+  // USER_ROW_ENSURED: the nodes FK references users.id. A freshly-authenticated
+  // session may not yet have a users row materialized (the cause of the
+  // candidate-a 500). Ensure it exists before the FK insert. Idempotent.
+  await withTenantScope(db, userActor(session.id as UserId), async (tx) =>
+    tx
+      .insert(users)
+      .values({
+        id: session.id,
+        walletAddress: session.walletAddress ?? null,
+        name: session.displayName ?? null,
+      })
+      .onConflictDoNothing({ target: users.id })
+  );
+
+  const monorepo = getGithubRepo();
+  const repoUrl = `https://github.com/${monorepo.owner}/${monorepo.repo}`;
+
   const inserted = await withTenantScope(
     db,
     userActor(session.id as UserId),
@@ -96,21 +117,21 @@ export async function POST(request: Request) {
       tx
         .insert(nodes)
         .values({
-          slug: repo.value.slug,
-          repoUrl: repo.value.canonicalUrl,
-          repoOwner: repo.value.owner,
-          repoName: repo.value.repo,
+          slug: parsedSlug.value.slug,
+          repoUrl,
+          repoOwner: monorepo.owner,
+          repoName: monorepo.repo,
           repoVisibility: "public",
           ownerUserId: session.id,
           chainId: parsed.data.chainId,
           status: "dao_pending",
         })
-        .onConflictDoNothing({ target: nodes.repoUrl })
+        .onConflictDoNothing({ target: nodes.slug })
         .returning()
   );
 
   if (inserted.length === 0) {
-    // Row already exists — return the existing one for idempotency.
+    // Slug already taken — return the existing row if this user owns it.
     const existing = await withTenantScope(
       db,
       userActor(session.id as UserId),
@@ -118,12 +139,12 @@ export async function POST(request: Request) {
         tx
           .select()
           .from(nodes)
-          .where(eq(nodes.repoUrl, repo.value.canonicalUrl))
+          .where(eq(nodes.slug, parsedSlug.value.slug))
           .limit(1)
     );
     if (existing.length === 0) {
       return NextResponse.json(
-        { error: "node already exists but is owned by another user" },
+        { error: "slug already taken by another user" },
         { status: 409 }
       );
     }

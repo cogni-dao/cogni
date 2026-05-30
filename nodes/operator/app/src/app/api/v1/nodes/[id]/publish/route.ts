@@ -110,7 +110,9 @@ export async function POST(_request: Request, ctx: RouteParams) {
 
   const writer = createNodeRepoWriter(env);
 
-  const headBranch = `cogni-operator/node-bootstrap-${node.id.slice(0, 8)}`;
+  const headBranch = `cogni-operator/node-bootstrap-${node.slug}`;
+  // v0 monorepo-internal: the node lives at nodes/<slug>/ in Cogni-DAO/cogni.
+  const specPath = `nodes/${node.slug}/.cogni/repo-spec.yaml`;
 
   let result: Awaited<ReturnType<typeof writer.commitFileAndOpenPr>>;
   try {
@@ -119,20 +121,19 @@ export async function POST(_request: Request, ctx: RouteParams) {
       repo: node.repoName,
       baseRef: "main",
       headBranch,
-      path: ".cogni/repo-spec.yaml",
+      path: specPath,
       content: yamlContent,
-      commitMessage:
-        "chore(cogni): bootstrap .cogni/repo-spec.yaml via operator",
-      prTitle: "cogni-operator: bootstrap repo-spec.yaml",
+      commitMessage: `chore(cogni): bootstrap ${specPath} via operator`,
+      prTitle: `cogni-operator: bootstrap node '${node.slug}'`,
       prBody:
         "This PR was opened by the Cogni operator setup wizard.\n\n" +
-        "It writes `.cogni/repo-spec.yaml` containing the DAO, operator wallet, " +
+        `It writes \`${specPath}\` containing the DAO, operator wallet, ` +
         "and payments-Split addresses provisioned for this node.\n\n" +
         `- DAO: \`${node.daoAddress}\`\n` +
         `- Operator wallet: \`${node.operatorWalletAddress}\`\n` +
         `- Payment Split: \`${node.splitAddress}\`\n` +
         `- Chain: \`${node.chainId}\`\n\n` +
-        "Review and merge to complete node bootstrap.",
+        "Review and merge to register this node in the monorepo.",
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "unknown";

@@ -3,10 +3,10 @@
 
 /**
  * Module: `@app/(app)/setup/nodes/NewNodeForm.client`
- * Purpose: Form to register a new external-repo node. Calls POST /api/v1/nodes and routes the user
- *   to the dashboard for the freshly-created row.
- * Scope: Pure client form. Only v0 target choice is exposed; the "node-template fork in this monorepo"
- *   radio is rendered disabled with a vNext label to signal upcoming work.
+ * Purpose: Form to register a new monorepo-internal node. Calls POST /api/v1/nodes with a slug + chain
+ *   and routes the user to the dashboard for the freshly-created row.
+ * Scope: Pure client form. v0 nodes live at `nodes/<slug>/` in the Cogni-DAO/cogni monorepo. The
+ *   "standalone external repo" option is rendered disabled with a vNext label.
  * Links: task.5083
  * @public
  */
@@ -30,13 +30,17 @@ const CHAIN_OPTIONS: ReadonlyArray<{ id: number; label: string }> = [
   },
 ];
 
+const SLUG_RE = /^[a-z][a-z0-9-]{1,31}$/;
+
 export function NewNodeForm(): ReactElement {
   const router = useRouter();
-  const [target, setTarget] = useState<"external" | "monorepo">("external");
-  const [repoUrl, setRepoUrl] = useState("https://github.com/Cogni-DAO/poly");
+  const [target, setTarget] = useState<"monorepo" | "external">("monorepo");
+  const [slug, setSlug] = useState("");
   const [chainId, setChainId] = useState<number>(CHAIN_CONFIG_MAP.BASE.chainId);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const slugValid = SLUG_RE.test(slug);
 
   const handleSubmit = async () => {
     setError(null);
@@ -45,7 +49,7 @@ export function NewNodeForm(): ReactElement {
       const res = await fetch("/api/v1/nodes", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ repoUrl, chainId }),
+        body: JSON.stringify({ slug, chainId }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -69,35 +73,40 @@ export function NewNodeForm(): ReactElement {
           <input
             type="radio"
             name="target"
-            value="external"
-            checked={target === "external"}
-            onChange={() => setTarget("external")}
+            value="monorepo"
+            checked={target === "monorepo"}
+            onChange={() => setTarget("monorepo")}
           />
-          External repo (public; cogni-node-template GitHub App must be
-          installed)
+          Monorepo node — lives at <code>nodes/&lt;slug&gt;/</code> in
+          Cogni-DAO/cogni
         </label>
         <label className="flex items-center gap-2 text-muted-foreground text-sm">
           <input
             type="radio"
             name="target"
-            value="monorepo"
+            value="external"
             disabled
-            checked={target === "monorepo"}
+            checked={target === "external"}
           />
-          node-template fork in this monorepo — vNext
+          Standalone external repo — vNext
         </label>
       </fieldset>
 
       <div className="space-y-2">
-        <label className="font-medium text-sm" htmlFor="repoUrl">
-          Repository URL
+        <label className="font-medium text-sm" htmlFor="slug">
+          Node slug
         </label>
         <Input
-          id="repoUrl"
-          value={repoUrl}
-          onChange={(e) => setRepoUrl(e.target.value)}
-          placeholder="https://github.com/<owner>/<repo>"
+          id="slug"
+          value={slug}
+          onChange={(e) => setSlug(e.target.value.toLowerCase())}
+          placeholder="my-node"
         />
+        {slug && !slugValid ? (
+          <p className="text-destructive text-sm">
+            2-32 chars, lowercase letters/numbers/dashes, starts with a letter
+          </p>
+        ) : null}
       </div>
 
       <div className="space-y-2">
@@ -122,7 +131,7 @@ export function NewNodeForm(): ReactElement {
 
       <Button
         onClick={handleSubmit}
-        disabled={submitting || target !== "external" || !repoUrl}
+        disabled={submitting || target !== "monorepo" || !slugValid}
       >
         {submitting ? "Registering…" : "Register node"}
       </Button>

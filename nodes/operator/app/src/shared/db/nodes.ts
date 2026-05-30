@@ -45,7 +45,8 @@ export const nodes = pgTable(
   {
     id: uuid("id").defaultRandom().primaryKey(),
     slug: text("slug").notNull().unique(),
-    repoUrl: text("repo_url").notNull().unique(),
+    // Not unique: v0 monorepo-internal nodes all share Cogni-DAO/cogni. Slug is the unique key.
+    repoUrl: text("repo_url").notNull(),
     repoOwner: text("repo_owner").notNull(),
     repoName: text("repo_name").notNull(),
     repoVisibility: text("repo_visibility").notNull().default("public"),
