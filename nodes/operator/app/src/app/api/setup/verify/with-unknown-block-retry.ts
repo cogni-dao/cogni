@@ -12,13 +12,19 @@
  * @public
  */
 
+export interface UnknownBlockRetryInfo {
+  attempt: number;
+  delayMs: number;
+  err: Error;
+}
+
 export interface UnknownBlockRetryOptions {
   /** Total attempts including the first try. Default: 4. */
   maxAttempts?: number;
   /** Base delay for exponential backoff in ms. Default: 250. */
   baseDelayMs?: number;
   /** Called once per retry (not on the initial attempt). */
-  onRetry?: (info: { attempt: number; delayMs: number; err: Error }) => void;
+  onRetry?: (info: UnknownBlockRetryInfo) => void;
 }
 
 /**
@@ -27,9 +33,8 @@ export interface UnknownBlockRetryOptions {
  * inlines the body in the error message, so a substring match is reliable across
  * `HttpRequestError` and any `RpcRequestError` wrapping.
  */
-export function isUnknownBlockError(err: unknown): boolean {
-  if (!(err instanceof Error)) return false;
-  return err.message.includes("Unknown block");
+export function isUnknownBlockError(err: unknown): err is Error {
+  return err instanceof Error && err.message.includes("Unknown block");
 }
 
 /**
@@ -52,7 +57,7 @@ export async function withUnknownBlockRetry<T>(
       lastErr = err;
       if (!isUnknownBlockError(err) || attempt === maxAttempts) throw err;
       const delayMs = baseDelayMs * 2 ** (attempt - 1);
-      opts.onRetry?.({ attempt, delayMs, err: err as Error });
+      opts.onRetry?.({ attempt, delayMs, err });
       await new Promise((r) => setTimeout(r, delayMs));
     }
   }

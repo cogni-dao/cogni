@@ -39,7 +39,10 @@ import {
   logEvent,
   makeLogger,
 } from "@/shared/observability";
-import { withUnknownBlockRetry } from "./with-unknown-block-retry";
+import {
+  type UnknownBlockRetryInfo,
+  withUnknownBlockRetry,
+} from "./with-unknown-block-retry";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -262,11 +265,7 @@ export async function POST(request: Request): Promise<NextResponse> {
               attempt,
               delayMs,
               err,
-            }: {
-              attempt: number;
-              delayMs: number;
-              err: Error;
-            }) => {
+            }: UnknownBlockRetryInfo) => {
               ctx.log.warn(
                 {
                   signalAddress,
