@@ -22,11 +22,14 @@
  * @public
  */
 
+import { sql } from "drizzle-orm";
 import {
+  boolean,
   index,
   integer,
   jsonb,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   uniqueIndex,
@@ -160,7 +163,152 @@ export const citations = pgTable(
   ]
 );
 
-// knowledge_contributions moved to operator's own doltgres-schema package
-// (see nodes/operator/packages/doltgres-schema/src/knowledge.ts). The
-// contribution flow + its companion knowledge_contribution_commits table
-// is per-node, not shared base.
+/**
+ * knowledge_contributions — per-proposal app state for the branched contribution flow.
+ *
+ * Carries lifecycle + auth-context that Dolt can't hold natively (proposal state machine,
+ * principal_id from bearer auth, idempotency keys, commit pointers). Dolt owns the commit
+ * graph; this table owns the app-level facts Dolt doesn't know. Promoted to shared base
+ * 2026-05-30 (spike.5004) — every knowledge-capable node uses the same contribution shape.
+ *
+ * Shape source: operator's task.0425 design (base_commit + head_commit + commit_count).
+ */
+export const knowledgeContributions = pgTable(
+  "knowledge_contributions",
+  {
+    id: text("id").primaryKey(),
+    branch: text("branch").notNull(),
+    state: text("state").notNull(),
+    principalId: text("principal_id").notNull(),
+    principalKind: text("principal_kind").notNull(),
+    message: text("message").notNull(),
+    baseCommit: text("base_commit").notNull(),
+    headCommit: text("head_commit"),
+    commitCount: integer("commit_count").notNull().default(0),
+    mergedCommit: text("merged_commit"),
+    closedReason: text("closed_reason"),
+    idempotencyKey: text("idempotency_key"),
+    confidencePct: integer("confidence_pct").notNull().default(40),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    resolvedBy: text("resolved_by"),
+  },
+  (table) => [
+    index("idx_kc_state").on(table.state),
+    index("idx_kc_principal").on(table.principalId, table.state),
+    uniqueIndex("uniq_kc_idempotency").on(
+      table.principalId,
+      table.idempotencyKey
+    ),
+  ]
+);
+
+/**
+ * knowledge_contribution_commits — per-dolt-commit principal attribution.
+ *
+ * Bridges Dolt's commit graph (commit_hash) to Cogni's auth context (principal_id,
+ * auth_source). Without this, a Dolt commit's author field carries only the db-user
+ * identity, not which bearer-authenticated principal made the change. Composite PK on
+ * (contribution_id, seq) preserves the order of HTTP-append events within a contribution.
+ */
+export const knowledgeContributionCommits = pgTable(
+  "knowledge_contribution_commits",
+  {
+    contributionId: text("contribution_id").notNull(),
+    seq: integer("seq").notNull(),
+    commitHash: text("commit_hash").notNull(),
+    principalId: text("principal_id").notNull(),
+    principalKind: text("principal_kind").notNull(),
+    authSource: text("auth_source").notNull(),
+    message: text("message").notNull(),
+    editCount: integer("edit_count").notNull(),
+    sourceRef: text("source_ref").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    primaryKey({
+      name: "pk_kcc_contribution_seq",
+      columns: [table.contributionId, table.seq],
+    }),
+    index("idx_kcc_commit_hash").on(table.commitHash),
+  ]
+);
+
+/**
+ * work_items — node-local lifecycle store for tasks / bugs / spikes / stories.
+ *
+ * Replaces markdown-on-disk as the canonical store for newly-created work items
+ * (task.0423). Promoted to shared base 2026-05-30 (spike.5004) so every knowledge-
+ * capable node owns its own work_items without re-defining the schema. The
+ * `node` column routes items to the responsible node; the lifecycle bag
+ * (branch, pr, reviewer, revision, blockedBy, deployVerified) lets agents
+ * coordinate without external tooling.
+ *
+ * Shape source: operator's task.0423 v0. May dissolve into `knowledge` rows with
+ * `entry_type: task` / `bug` / `spike` if PR #1175 (corpus-as-knowledge) lands;
+ * removal at that point is trivial.
+ */
+export const workItems = pgTable(
+  "work_items",
+  {
+    // Identity
+    id: text("id").primaryKey(),
+    type: text("type").notNull(),
+    title: text("title").notNull(),
+    status: text("status").notNull(),
+
+    // Routing / classification
+    node: text("node").notNull().default("shared"),
+    projectId: text("project_id"),
+    parentId: text("parent_id"),
+
+    // Optional ranking
+    priority: integer("priority"),
+    rank: integer("rank"),
+    estimate: integer("estimate"),
+
+    // Free-text
+    summary: text("summary"),
+    outcome: text("outcome"),
+
+    // Lifecycle bag
+    branch: text("branch"),
+    pr: text("pr"),
+    reviewer: text("reviewer"),
+    revision: integer("revision").notNull().default(0),
+    blockedBy: text("blocked_by"),
+    deployVerified: boolean("deploy_verified").notNull().default(false),
+
+    // Governance runner locking (vestigial in v0)
+    claimedByRun: text("claimed_by_run"),
+    claimedAt: timestamp("claimed_at", { withTimezone: true }),
+    lastCommand: text("last_command"),
+
+    // Structured arrays (jsonb for v0)
+    assignees: jsonb("assignees").notNull().default(sql`'[]'::jsonb`),
+    externalRefs: jsonb("external_refs").notNull().default(sql`'[]'::jsonb`),
+    labels: jsonb("labels").notNull().default(sql`'[]'::jsonb`),
+    specRefs: jsonb("spec_refs").notNull().default(sql`'[]'::jsonb`),
+
+    // Audit
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    index("idx_work_items_type").on(t.type),
+    index("idx_work_items_status").on(t.status),
+    index("idx_work_items_node").on(t.node),
+    index("idx_work_items_project_id").on(t.projectId),
+  ]
+);
+
+export type WorkItemRow = typeof workItems.$inferSelect;
+export type NewWorkItemRow = typeof workItems.$inferInsert;

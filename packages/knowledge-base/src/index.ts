@@ -11,11 +11,21 @@
  * @public
  */
 
+export type { NewWorkItemRow, WorkItemRow } from "./schema.js";
 // Schema (Drizzle table definitions — drizzle-kit owns migrations). The base
-// bundle only carries tables every knowledge-capable node uses unchanged.
-// Per-node contribution metadata (knowledge_contributions etc.) lives in each
-// node's own doltgres-schema package — see operator/packages/doltgres-schema.
-export { citations, domains, knowledge, sources } from "./schema.js";
+// bundle carries every table that every knowledge-capable node uses unchanged:
+// the 4 core knowledge tables + the contribution-flow metadata tables + the
+// work_items lifecycle store. Per-node packages re-export from here so the
+// schema cannot drift across nodes (spike.5004).
+export {
+  citations,
+  domains,
+  knowledge,
+  knowledgeContributionCommits,
+  knowledgeContributions,
+  sources,
+  workItems,
+} from "./schema.js";
 
 // Seeds
 export { BASE_KNOWLEDGE_SEEDS } from "./seeds/base.js";
