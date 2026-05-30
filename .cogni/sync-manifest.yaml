@@ -38,6 +38,14 @@ divergences:
   - artifact: Cogni-DAO/node-template
     reason: "OSS public quickstart — sovereign-fork story extends operator-scope with OpenBao/ESO; omits hub-only nodes + canary env."
     omit_from_artifact:
+      # AGENTS.md exists on BOTH repos but intentionally diverges — the
+      # artifact prepends a development-freeze banner (Cogni-DAO/node-template#66)
+      # that must NOT appear in the hub (the hub IS the dev repo). The schema has
+      # no "expected-different" category, so a both-sides intentional divergence
+      # must be listed in BOTH omit_from_artifact (suppresses the hub-side 🟡
+      # "different") AND artifact_only below (suppresses the resulting 🟣
+      # "only-on-artifact"). See the artifact_only twin entry.
+      - "AGENTS.md" # dev-freeze banner; both-list entry (see comment above)
       - "nodes/operator/**" # hub-only node
       - "nodes/resy/**" # hub-only node
       - "nodes/scheduler-worker/**" # hub-only node (if it exists)
@@ -49,6 +57,7 @@ divergences:
       - "tests/ci-invariants/**" # hub-only CI structural tests
       - "scripts/experiments/**" # hub-only research scripts
     artifact_only:
+      - "AGENTS.md" # dev-freeze banner twin (see omit_from_artifact comment) — both lists required to zero the bidirectional drift flag
       - "infra/fork.yaml"
       - "infra/k8s/argocd/openbao-application.yaml"
       - "infra/k8s/argocd/openbao/**"
