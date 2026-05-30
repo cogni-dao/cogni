@@ -94,8 +94,9 @@ COPY --from=builder --chown=nextjs:nodejs /app/nodes/node-template/app/.next/sta
 COPY --from=builder --chown=nextjs:nodejs /app/nodes/node-template/app/.next/static ./nodes/node-template/app/.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/nodes/node-template/app/public ./nodes/node-template/app/public
 
-# Repo-spec: DAO config (node_id, chain, governance). Updated every CI build.
-COPY --from=builder --chown=nextjs:nodejs /app/.cogni ./.cogni
+# Repo-spec: DAO config (node_id, chain, governance). Per-node, NOT repo-root —
+# copying /app/.cogni would land operator's identity in this node's runtime.
+COPY --from=builder --chown=nextjs:nodejs /app/nodes/node-template/.cogni ./.cogni
 
 # Postgres migrator: base node-app deployment runs `node $NODE_NAME/app/migrate.mjs $NODE_NAME/app/migrations`
 # as an initContainer. The runner needs the shared wrapper + this node's migrations folder

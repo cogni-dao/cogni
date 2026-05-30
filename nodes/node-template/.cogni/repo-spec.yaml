@@ -1,14 +1,16 @@
 # Node Template — repo-spec
-# Replace these placeholder UUIDs when forking this template for a new node.
-# Generate node_id: openssl rand -hex 16 | sed 's/\(.\{8\}\)\(.\{4\}\)\(.\{4\}\)\(.\{4\}\)\(.\{12\}\)/\1-\2-\3-\4-\5/'
-# Derive scope_id: uuidv5(node_id, "default")
-# See: docs/spec/identity-model.md, docs/spec/multi-node-tenancy.md
+#
+# Identity for the hub's node-template deployment; node_id MUST match
+# infra/catalog/node-template.yaml. Forks renaming this scaffold MUST
+# regenerate both UUIDs:
+#   node_id:  openssl rand -hex 16 | sed 's/\(.\{8\}\)\(.\{4\}\)\(.\{4\}\)\(.\{4\}\)\(.\{12\}\)/\1-\2-\3-\4-\5/'
+#   scope_id: uuidv5(node_id, "default")
+# See docs/spec/identity-model.md, docs/spec/multi-node-tenancy.md.
 
 schema_version: "0.1.4"
 
-# REPLACE THESE — placeholder UUIDs for template only
-node_id: "00000000-0000-4000-a000-000000000000"
-scope_id: "00000000-0000-5000-a000-000000000000"
+node_id: "b927a9dd-6132-4fc9-a51e-e3cee2568e3c"
+scope_id: "b44d4394-3147-5787-acab-51546be6a3da"
 scope_key: "default"
 
 intent:
