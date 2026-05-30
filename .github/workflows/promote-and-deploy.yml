@@ -245,14 +245,25 @@ jobs:
           echo "source_sha=$APP_SOURCE_SHA" >> "$GITHUB_OUTPUT"
           echo "promoted=true" >> "$GITHUB_OUTPUT"
 
-      - name: Checkout per-node deploy branch
+      - name: Prepare per-node deploy branch (bootstrap from umbrella if missing)
         if: steps.digest.outputs.promoted == 'true'
-        uses: actions/checkout@v4
-        with:
-          ref: deploy/${{ needs.decide.outputs.environment }}-${{ matrix.node }}
-          fetch-depth: 1
-          token: ${{ secrets.ACTIONS_AUTOMATION_BOT_PAT }}
-          path: deploy-branch
+        env:
+          GH_TOKEN: ${{ secrets.ACTIONS_AUTOMATION_BOT_PAT }}
+          PER_NODE_BRANCH: deploy/${{ needs.decide.outputs.environment }}-${{ matrix.node }}
+          UMBRELLA_BRANCH: deploy/${{ needs.decide.outputs.environment }}
+        run: |
+          set -euo pipefail
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" deploy-branch
+          cd deploy-branch
+          git fetch origin "+refs/heads/deploy/*:refs/remotes/origin/deploy/*"
+          if git rev-parse --verify --quiet "refs/remotes/origin/${PER_NODE_BRANCH}" >/dev/null; then
+            git checkout -B "${PER_NODE_BRANCH}" "origin/${PER_NODE_BRANCH}"
+          else
+            echo "::warning::Per-node branch ${PER_NODE_BRANCH} missing — bootstrapping from ${UMBRELLA_BRANCH}"
+            git checkout -B "${PER_NODE_BRANCH}" "origin/${UMBRELLA_BRANCH}"
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Sync infra/k8s + per-node catalog from app-src
         if: steps.digest.outputs.promoted == 'true'
