@@ -14,8 +14,9 @@
 "use client";
 
 import { Info } from "lucide-react";
+import { useRouter, useSearchParams } from "next/navigation";
 import type { ReactElement } from "react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { isAddress } from "viem";
 import { useAccount } from "wagmi";
 
@@ -32,6 +33,10 @@ import { useDAOFormation } from "@/features/setup/hooks/useDAOFormation";
 export function DAOFormationPageClient(): ReactElement {
   const { address: walletAddress } = useAccount();
   const formation = useDAOFormation();
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const nodeId = searchParams?.get("nodeId") ?? null;
+  const patchedRef = useRef(false);
 
   // Form state
   const [tokenName, setTokenName] = useState("");
@@ -87,6 +92,43 @@ export function DAOFormationPageClient(): ReactElement {
     formation.reset();
     setIsDialogOpen(false);
   };
+
+  // When invoked from the external-node wizard (`?nodeId=...`), persist the
+  // formation result to the operator's node-registry row and redirect back to
+  // the dashboard. No-op when nodeId is absent (legacy YAML-paste flow).
+  useEffect(() => {
+    if (!nodeId) return;
+    if (formation.state.phase !== "SUCCESS") return;
+    if (!formation.state.addresses) return;
+    if (patchedRef.current) return;
+    patchedRef.current = true;
+
+    const addresses = formation.state.addresses;
+    const daoTxHash = formation.state.daoTxHash;
+    const signalTxHash = formation.state.signalTxHash;
+    const signalBlockNumber = formation.state.signalBlockNumber;
+
+    void (async () => {
+      try {
+        await fetch(`/api/v1/nodes/${nodeId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            event: { type: "dao_verified" },
+            daoAddress: addresses.dao,
+            pluginAddress: addresses.plugin,
+            signalAddress: addresses.signal,
+            tokenAddress: addresses.token,
+            daoTxHash,
+            signalTxHash,
+            signalBlockNumber,
+          }),
+        });
+      } finally {
+        router.push(`/setup/nodes/${nodeId}`);
+      }
+    })();
+  }, [nodeId, formation.state, router]);
 
   return (
     <PageContainer maxWidth="lg">
