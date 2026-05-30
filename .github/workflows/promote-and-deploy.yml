@@ -89,17 +89,35 @@ jobs:
         id: targets
         env:
           NODES_INPUT: ${{ inputs.nodes }}
+          OVERLAY_ENV: ${{ steps.env.outputs.environment }}
         run: |
           set -euo pipefail
           # shellcheck source=scripts/ci/lib/image-tags.sh
           . scripts/ci/lib/image-tags.sh
           if [ -n "$NODES_INPUT" ]; then
-            IFS=',' read -r -a list <<<"${NODES_INPUT// /}"
+            IFS=',' read -r -a raw <<<"${NODES_INPUT// /}"
           else
-            list=("${ALL_TARGETS[@]}")
+            raw=("${ALL_TARGETS[@]}")
+          fi
+          # Filter to targets that have a per-env overlay in app-src. ApplicationSets
+          # are env-hardcoded; a target with no overlay (e.g. node-template in
+          # preview/production) has no Argo destination and would fail the rsync at
+          # the promote-k8s `Sync infra/k8s` step. The overlay directory is the SSoT
+          # for "this target deploys to this env".
+          list=()
+          skipped=()
+          for t in "${raw[@]}"; do
+            if [ -d "infra/k8s/overlays/${OVERLAY_ENV}/${t}" ]; then
+              list+=("$t")
+            else
+              skipped+=("$t")
+            fi
+          done
+          if [ "${#skipped[@]}" -gt 0 ]; then
+            echo "::warning::Skipping targets without ${OVERLAY_ENV} overlay: ${skipped[*]}"
           fi
           if [ "${#list[@]}" -eq 0 ]; then
-            echo "::error::Empty target list"
+            echo "::error::Empty target list (no overlays under infra/k8s/overlays/${OVERLAY_ENV}/)"
             exit 1
           fi
           targets_json=$(printf '%s\n' "${list[@]}" \
