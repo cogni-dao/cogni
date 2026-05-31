@@ -13,17 +13,14 @@
 import { withTenantScope } from "@cogni/db-client";
 import { type UserId, userActor } from "@cogni/ids";
 import { desc, eq } from "drizzle-orm";
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { ReactElement } from "react";
 import { resolveAppDb } from "@/bootstrap/container";
 import {
-  Badge,
   PageContainer,
   SectionCard,
   Table,
   TableBody,
-  TableCell,
   TableHead,
   TableHeader,
   TableRow,
@@ -32,7 +29,7 @@ import { getServerSessionUser } from "@/lib/auth/server";
 import { type NodeStatus, nodes } from "@/shared/db/nodes";
 
 import { NewNodeForm } from "./NewNodeForm.client";
-import { NODE_STATUS_DISPLAY } from "./node-display";
+import { NodeRow } from "./NodeRow.client";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -80,26 +77,14 @@ export default async function SetupNodesPage(): Promise<ReactElement> {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {rows.map((n) => {
-                const display = NODE_STATUS_DISPLAY[n.status as NodeStatus];
-                return (
-                  <TableRow key={n.id} className="relative cursor-pointer">
-                    <TableCell>
-                      <Link
-                        href={`/setup/nodes/${n.id}`}
-                        className="font-medium after:absolute after:inset-0 hover:underline"
-                      >
-                        {n.slug}
-                      </Link>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Badge intent={display.intent} size="sm">
-                        {display.label}
-                      </Badge>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
+              {rows.map((n) => (
+                <NodeRow
+                  key={n.id}
+                  id={n.id}
+                  slug={n.slug}
+                  status={n.status as NodeStatus}
+                />
+              ))}
             </TableBody>
           </Table>
         )}
