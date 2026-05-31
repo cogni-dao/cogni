@@ -114,14 +114,14 @@ export default async function NodeDashboardPage({
         <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
           Technical details
         </summary>
-        <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5">
+        <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1.5">
           {technical.map((row) => (
             <Fragment key={row.label}>
-              <dt className="text-muted-foreground">{row.label}</dt>
-              <dd className="break-all font-mono text-xs">{row.value}</dd>
+              <span className="text-muted-foreground">{row.label}</span>
+              <span className="break-all font-mono text-xs">{row.value}</span>
             </Fragment>
           ))}
-        </dl>
+        </div>
       </details>
     </PageContainer>
   );
