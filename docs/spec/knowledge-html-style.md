@@ -26,14 +26,14 @@ This spec defines the authoring contract: what the renderer injects, what author
 
 ## When to Author HTML vs Text
 
-Knowledge entries serve two audiences with opposing format pressures:
+Text `content` now renders as **GFM markdown** in the human UI (headings, tables, lists, `code`, links) while staying plain-text for AI search. Markdown is the shared lane — it serves both audiences from one source. `html` is the narrower escape hatch for visuals markdown can't express.
 
-| Audience      | Optimal format                                                            | `entryType`                                                                   |
-| ------------- | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| **AI agents** | Plain text. Searchable, embedding-friendly, parseable. Verbose is fine.   | `observation`, `finding`, `conclusion`, `rule`, `scorecard`, `skill`, `guide` |
-| **Humans**    | Concise visual HTML. Tables, pills, diagrams, charts. Bare-minimum prose. | `html` (this spec)                                                            |
+| Format               | Serves          | Use for                                                                   | `entryType`                                                                   |
+| -------------------- | --------------- | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| **Markdown text**    | AI **+ humans** | Headings, tables, lists, code, prose. The default for nearly everything.  | `observation`, `finding`, `conclusion`, `rule`, `scorecard`, `skill`, `guide` |
+| **HTML** (this spec) | humans          | SVG diagrams, charts, pill grids, freeform layout markdown can't express. | `html`                                                                        |
 
-**Default = text.** Reach for `entryType=html` only when a human is the primary consumer and visual density would beat a paragraph. A design diagram, a status scorecard with N pills, a roadmap with per-quarter chart — those are `html`. A market base rate, a strategy description, a research finding — those stay text.
+**Default = markdown text.** Reach for `entryType=html` only when the artifact is genuinely visual — an SVG architecture diagram, a chart, a pill/status grid that a markdown table can't carry. A scorecard, roadmap, or comparison that fits a **markdown table** stays text (and renders cleanly). A market base rate, a strategy description, a research finding — text.
 
 Mixing is OK at the entry-set level (a domain has both kinds), never within one entry.
 
@@ -198,16 +198,16 @@ The resulting artifact uses the same chrome as the operator's own `Card`, `Badge
 
 ## Invariants
 
-| Rule                       | Constraint                                                                                                                                                                                                                 |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| TOKENS_ARE_THE_PALETTE     | Author content must reference `var(--token)` for colors and `var(--font-*)` for type. Hardcoded hex / named font families are anti-patterns.                                                                               |
-| SANDBOX_IS_THE_BOUNDARY    | Renderer iframe stays `sandbox=""` + `referrerPolicy="no-referrer"`. Adding `allow-scripts` requires a documented threat model and a spec amendment.                                                                       |
-| UTILITY_LIB_IS_CAPPED      | The `.cogni-*` class set is ≤15. New classes require a spec amendment with a concrete second-artifact use case.                                                                                                            |
-| DIAGRAMS_USE_SVG           | Freeform flow/architecture diagrams are SVG, hand-authored, token-only fills.                                                                                                                                              |
-| SHELL_IS_INLINE            | The CSS shell (tokens + utilities + Charts.css) is inlined into `srcDoc` — no external `<link>` or `<script>`. Keeps artifacts portable + sandbox-safe.                                                                    |
-| ONE_RENDERER_FOR_ALL_NODES | Operator and future node-template forks all use the same `HtmlRenderer` + shell. Per-node theme overrides happen via the token block, not by forking the renderer.                                                         |
-| HUMAN_HTML_AI_TEXT         | `entryType=html` is reserved for human-review content (concise + visual). AI-consumed knowledge (search recall, embeddings, agent reasoning) stays in text `entryType` rows. Authors choose audience first, format second. |
-| TOKEN_BLOCK_PAIRED         | Changes to `tailwind.css :root{}` / `.dark{}` and the renderer's matching token-block constants ship in the same commit until codegen lands.                                                                               |
+| Rule                       | Constraint                                                                                                                                                                                                                                                                                                                                   |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| TOKENS_ARE_THE_PALETTE     | Author content must reference `var(--token)` for colors and `var(--font-*)` for type. Hardcoded hex / named font families are anti-patterns.                                                                                                                                                                                                 |
+| SANDBOX_IS_THE_BOUNDARY    | Renderer iframe stays `sandbox=""` + `referrerPolicy="no-referrer"`. Adding `allow-scripts` requires a documented threat model and a spec amendment.                                                                                                                                                                                         |
+| UTILITY_LIB_IS_CAPPED      | The `.cogni-*` class set is ≤15. New classes require a spec amendment with a concrete second-artifact use case.                                                                                                                                                                                                                              |
+| DIAGRAMS_USE_SVG           | Freeform flow/architecture diagrams are SVG, hand-authored, token-only fills.                                                                                                                                                                                                                                                                |
+| SHELL_IS_INLINE            | The CSS shell (tokens + utilities + Charts.css) is inlined into `srcDoc` — no external `<link>` or `<script>`. Keeps artifacts portable + sandbox-safe.                                                                                                                                                                                      |
+| ONE_RENDERER_FOR_ALL_NODES | Operator and future node-template forks all use the same `HtmlRenderer` + shell. Per-node theme overrides happen via the token block, not by forking the renderer.                                                                                                                                                                           |
+| HTML_IS_FOR_VISUALS        | `entryType=html` is reserved for genuinely visual artifacts (SVG diagrams, charts, pill grids) markdown can't express. Ordinary human + AI content — including tables, lists, scorecards — lives in markdown text rows, which render for humans and stay searchable for AI. Authors choose format by what the content _is_, not by audience. |
+| TOKEN_BLOCK_PAIRED         | Changes to `tailwind.css :root{}` / `.dark{}` and the renderer's matching token-block constants ship in the same commit until codegen lands.                                                                                                                                                                                                 |
 
 ## Open Questions
 
