@@ -2,8 +2,8 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `@app/(app)/setup/dao/DAOFormationPage.client`
- * Purpose: Client-side DAO formation page with form input and wallet-signed transaction flow.
+ * Module: `@app/(app)/setup/nodes/[id]/NodeDaoFormationPanel.client`
+ * Purpose: Node-registry DAO formation panel with form input and wallet-signed transaction flow.
  * Scope: Renders form for DAO config, triggers formation via useDAOFormation hook, shows dialog for progress. Does not contain transaction logic or state machine implementation.
  * Invariants: Form validation inline; initialHolder defaults to connected wallet address.
  * Side-effects: IO (useDAOFormation hook performs wallet transactions).
@@ -14,28 +14,24 @@
 "use client";
 
 import { Info } from "lucide-react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import type { ReactElement } from "react";
 import { useEffect, useRef, useState } from "react";
 import { isAddress } from "viem";
 import { useAccount } from "wagmi";
 
-import {
-  Button,
-  HintText,
-  Input,
-  PageContainer,
-  SectionCard,
-} from "@/components";
+import { Button, HintText, Input, SectionCard } from "@/components";
 import { FormationFlowDialog } from "@/features/setup/components/FormationFlowDialog";
 import { useDAOFormation } from "@/features/setup/hooks/useDAOFormation";
 
-export function DAOFormationPageClient(): ReactElement {
+interface Props {
+  readonly nodeId?: string;
+}
+
+export function NodeDaoFormationPanel({ nodeId }: Props): ReactElement {
   const { address: walletAddress } = useAccount();
   const formation = useDAOFormation();
-  const searchParams = useSearchParams();
   const router = useRouter();
-  const nodeId = searchParams?.get("nodeId") ?? null;
   const patchedRef = useRef(false);
 
   // Form state
@@ -45,6 +41,7 @@ export function DAOFormationPageClient(): ReactElement {
 
   // Dialog state
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [patchError, setPatchError] = useState<string | null>(null);
 
   // Derived validation
   const effectiveHolder = initialHolder || walletAddress || "";
@@ -93,9 +90,9 @@ export function DAOFormationPageClient(): ReactElement {
     setIsDialogOpen(false);
   };
 
-  // When invoked from the external-node wizard (`?nodeId=...`), persist the
+  // When invoked from the node-registry wizard, persist the
   // formation result to the operator's node-registry row and redirect back to
-  // the dashboard. No-op when nodeId is absent (legacy YAML-paste flow).
+  // the same canonical node page. No-op when nodeId is absent.
   useEffect(() => {
     if (!nodeId) return;
     if (formation.state.phase !== "SUCCESS") return;
@@ -110,7 +107,7 @@ export function DAOFormationPageClient(): ReactElement {
 
     void (async () => {
       try {
-        await fetch(`/api/v1/nodes/${nodeId}`, {
+        const res = await fetch(`/api/v1/nodes/${nodeId}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -124,14 +121,23 @@ export function DAOFormationPageClient(): ReactElement {
             signalBlockNumber,
           }),
         });
-      } finally {
-        router.push(`/setup/nodes/${nodeId}`);
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          setPatchError(body?.reason ?? body?.error ?? `HTTP ${res.status}`);
+          return;
+        }
+        router.replace(`/setup/nodes/${nodeId}`);
+        router.refresh();
+      } catch (e) {
+        setPatchError(e instanceof Error ? e.message : "request failed");
       }
     })();
   }, [nodeId, formation.state, router]);
 
+  const isNodeWizard = nodeId !== undefined;
+
   return (
-    <PageContainer maxWidth="lg">
+    <>
       <SectionCard title="Create DAO">
         {/* Token Name */}
         <div className="space-y-2">
@@ -215,6 +221,9 @@ export function DAOFormationPageClient(): ReactElement {
             Please connect to Base or Sepolia to create a DAO
           </HintText>
         )}
+        {patchError ? (
+          <p className="text-destructive text-sm">{patchError}</p>
+        ) : null}
       </SectionCard>
 
       {/* Formation Flow Dialog */}
@@ -224,7 +233,7 @@ export function DAOFormationPageClient(): ReactElement {
         daoTxHash={formation.state.daoTxHash}
         signalTxHash={formation.state.signalTxHash}
         errorMessage={formation.state.errorMessage}
-        repoSpecYaml={formation.state.repoSpecYaml}
+        repoSpecYaml={isNodeWizard ? null : formation.state.repoSpecYaml}
         addresses={formation.state.addresses}
         tokenName={formation.state.config?.tokenName ?? null}
         isInFlight={isInFlight}
@@ -232,6 +241,6 @@ export function DAOFormationPageClient(): ReactElement {
         onClose={handleDialogClose}
         onReset={handleReset}
       />
-    </PageContainer>
+    </>
   );
 }

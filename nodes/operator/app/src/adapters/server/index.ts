@@ -122,6 +122,13 @@ export {
   type TemporalScheduleControlConfig,
 } from "./temporal";
 export { SystemClock } from "./time/system.adapter";
+// Single-file commit + open-PR helper (task.5083) — operator-only.
+export {
+  type CommitFileAndOpenPrInput,
+  type CommitFileAndOpenPrResult,
+  GitHubRepoWriter,
+  type GitHubRepoWriterConfig,
+} from "./vcs/github-repo-write";
 // VCS capability (GitHub App adapter)
 export {
   GitHubVcsAdapter,

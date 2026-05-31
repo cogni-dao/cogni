@@ -14,7 +14,7 @@
 
 import { cn } from "@cogni/node-ui-kit/util/cn";
 
-type MaxWidth = "sm" | "md" | "lg" | "xl" | "2xl" | "full";
+type MaxWidth = "sm" | "md" | "lg" | "xl" | "2xl" | "3xl" | "4xl" | "full";
 
 const maxWidthClasses: Record<MaxWidth, string> = {
   sm: "max-w-sm", // 384px
@@ -22,6 +22,8 @@ const maxWidthClasses: Record<MaxWidth, string> = {
   lg: "max-w-lg", // 512px
   xl: "max-w-xl", // 576px
   "2xl": "max-w-2xl", // 672px
+  "3xl": "max-w-3xl", // 768px
+  "4xl": "max-w-4xl", // 896px
   full: "max-w-full",
 };
 

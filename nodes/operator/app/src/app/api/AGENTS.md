@@ -40,6 +40,9 @@ HTTP API endpoints using Next.js App Router. Contract-validated entry points tha
 - **Routes (if any):**
   - `/api/auth/[...nextauth]` [GET, POST]
   - `/api/setup/verify` [POST] - DAO formation verification
+  - `/api/v1/nodes` [GET, POST] - external-node registry: list owner's nodes + create a new registration
+  - `/api/v1/nodes/[id]` [GET, PATCH] - read + state-machine-aware update of a registered node row
+  - `/api/v1/nodes/[id]/publish` [POST] - opens a PR with governance-only `.cogni/repo-spec.yaml`, advances dao_formed → active
   - `/api/internal/billing/ingest` [POST] - LiteLLM generic_api callback receiver (bearer auth, Docker-internal only)
   - `/api/internal/ops/governance/schedules/sync` [POST] - deploy-time governance sync trigger (bearer auth)
   - `/api/v1/chat/completions` [POST] - OpenAI-compatible chat completions (streaming + non-streaming, `cogni_status` extension); see [completions spec](../../../docs/spec/completions-api.md)

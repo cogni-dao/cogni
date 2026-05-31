@@ -17,6 +17,7 @@ export {
   type GovernanceSchedule,
   getDaoConfig,
   getDaoTreasuryAddress,
+  getGithubRepo,
   getGovernanceConfig,
   getLedgerApprovers,
   getNodeId,

@@ -204,6 +204,20 @@
       "when": 1777766477660,
       "tag": "0028_operator_work_item_sessions",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1780115700000,
+      "tag": "0029_operator_nodes",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1780183500000,
+      "tag": "0030_nodes_published_status",
+      "breakpoints": true
     }
   ]
 }

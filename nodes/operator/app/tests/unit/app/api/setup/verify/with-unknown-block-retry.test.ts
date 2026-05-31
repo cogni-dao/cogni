@@ -3,9 +3,9 @@
 
 /**
  * Module: `@tests/unit/app/api/setup/with-unknown-block-retry`
- * Purpose: Unit tests for the Alchemy Unknown-block retry helper.
- * Scope: Tests retry behavior contracts (transient success, non-matching error passthrough, exhaustion, bounded backoff).
- * Invariants: Retries ONLY on Unknown-block; bounded attempts; exponential backoff.
+ * Purpose: Unit tests for the block-not-ready retry helper.
+ * Scope: Tests the matcher (cross-provider block-not-ready strings) + retry behavior contracts.
+ * Invariants: Retries ONLY on block-not-ready errors; bounded attempts; exponential backoff.
  * Side-effects: none (fake timers).
  * Links: src/app/api/setup/verify/with-unknown-block-retry.ts
  * @public
@@ -14,23 +14,40 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
-  isUnknownBlockError,
+  isBlockNotReadyError,
   withUnknownBlockRetry,
 } from "@/app/api/setup/verify/with-unknown-block-retry";
 
-describe("isUnknownBlockError", () => {
-  it("matches the Alchemy Unknown-block error message verbatim", () => {
+describe("isBlockNotReadyError", () => {
+  it("matches the Alchemy Unknown-block error", () => {
     const err = new Error(
       'HTTP request failed.\n\nStatus: 400\nDetails: {"code":3,"message":"Unknown block"}'
     );
-    expect(isUnknownBlockError(err)).toBe(true);
+    expect(isBlockNotReadyError(err)).toBe(true);
+  });
+
+  it("matches the public mainnet.base.org block-not-found error (bug.5082 variant)", () => {
+    const err = new Error(
+      "Failed to verify CogniSignal.DAO(): Requested resource not found.\n\nURL: https://mainnet.base.org\nDetails: block not found: 0x2c87340\nVersion: viem@2.39.3"
+    );
+    expect(isBlockNotReadyError(err)).toBe(true);
+  });
+
+  it("matches geth/reth header-not-found", () => {
+    expect(isBlockNotReadyError(new Error("header not found"))).toBe(true);
+  });
+
+  it("is case-insensitive", () => {
+    expect(isBlockNotReadyError(new Error("BLOCK NOT FOUND"))).toBe(true);
   });
 
   it("does not match other errors", () => {
-    expect(isUnknownBlockError(new Error("Transaction not found"))).toBe(false);
-    expect(isUnknownBlockError(new Error("nonce too low"))).toBe(false);
-    expect(isUnknownBlockError("string error")).toBe(false);
-    expect(isUnknownBlockError(undefined)).toBe(false);
+    expect(isBlockNotReadyError(new Error("Transaction not found"))).toBe(
+      false
+    );
+    expect(isBlockNotReadyError(new Error("nonce too low"))).toBe(false);
+    expect(isBlockNotReadyError("string error")).toBe(false);
+    expect(isBlockNotReadyError(undefined)).toBe(false);
   });
 });
 
