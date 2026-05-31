@@ -102,66 +102,39 @@ build_target() {
   local target="$1"
   local tag="$2"
 
-  case "$target" in
-    operator)
-      docker buildx build \
-        --platform "$PLATFORM" \
-        --file nodes/operator/app/Dockerfile \
-        --target runner \
-        --build-arg "BUILD_SHA=${git_sha}" \
-        --label "org.opencontainers.image.source=https://github.com/cogni-dao/cogni" \
-        --label "org.opencontainers.image.revision=${git_sha}" \
-        --label "org.opencontainers.image.created=${build_timestamp}" \
-        --cache-from "type=gha,scope=build-operator" \
-        --cache-to "type=gha,mode=max,scope=build-operator" \
-        --tag "$tag" \
-        --push \
-        .
-      ;;
-    resy)
-      docker buildx build \
-        --platform "$PLATFORM" \
-        --file nodes/resy/app/Dockerfile \
-        --target runner \
-        --build-arg "BUILD_SHA=${git_sha}" \
-        --label "org.opencontainers.image.source=https://github.com/cogni-dao/cogni" \
-        --label "org.opencontainers.image.revision=${git_sha}" \
-        --label "org.opencontainers.image.created=${build_timestamp}" \
-        --cache-from "type=gha,scope=build-resy" \
-        --cache-to "type=gha,mode=max,scope=build-resy" \
-        --tag "$tag" \
-        --push \
-        .
-      ;;
-    node-template)
-      docker buildx build \
-        --platform "$PLATFORM" \
-        --file nodes/node-template/app/Dockerfile \
-        --target runner \
-        --build-arg "BUILD_SHA=${git_sha}" \
-        --label "org.opencontainers.image.source=https://github.com/cogni-dao/cogni" \
-        --label "org.opencontainers.image.revision=${git_sha}" \
-        --label "org.opencontainers.image.created=${build_timestamp}" \
-        --cache-from "type=gha,scope=build-node-template" \
-        --cache-to "type=gha,mode=max,scope=build-node-template" \
-        --tag "$tag" \
-        --push \
-        .
-      ;;
-    scheduler-worker)
-      docker buildx build \
-        --platform "$PLATFORM" \
-        --file services/scheduler-worker/Dockerfile \
-        --label "org.opencontainers.image.source=https://github.com/cogni-dao/cogni" \
-        --label "org.opencontainers.image.revision=${git_sha}" \
-        --label "org.opencontainers.image.created=${build_timestamp}" \
-        --cache-from "type=gha,scope=build-scheduler-worker" \
-        --cache-to "type=gha,mode=max,scope=build-scheduler-worker" \
-        --tag "$tag" \
-        --push \
-        .
-      ;;
-  esac
+  # CATALOG_IS_SSOT (task.5079): derive the build from infra/catalog/<target>.yaml
+  # instead of a hardcoded per-node case. The same function now builds any catalog
+  # target, so this script is byte-identical across hub + artifacts (kills the
+  # bug.5001 CI fork). Node apps build the multi-stage `runner` target and bake
+  # BUILD_SHA; services build their default stage.
+  local catalog="${COGNI_CATALOG_ROOT:-infra/catalog}/${target}.yaml"
+  if [ ! -f "$catalog" ]; then
+    log_error "build_target: no catalog entry for '${target}' (${catalog})"
+    exit 1
+  fi
+  local dockerfile type
+  dockerfile=$(yq '.dockerfile' "$catalog")
+  type=$(yq '.type' "$catalog")
+  if [ -z "$dockerfile" ] || [ "$dockerfile" = "null" ]; then
+    log_error "build_target: ${catalog} has no .dockerfile"
+    exit 1
+  fi
+
+  local args=(--platform "$PLATFORM" --file "$dockerfile")
+  if [ "$type" = "node" ]; then
+    args+=(--target runner --build-arg "BUILD_SHA=${git_sha}")
+  fi
+  args+=(
+    --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY:-cogni-dao/cogni}"
+    --label "org.opencontainers.image.revision=${git_sha}"
+    --label "org.opencontainers.image.created=${build_timestamp}"
+    --cache-from "type=gha,scope=build-${target}"
+    --cache-to "type=gha,mode=max,scope=build-${target}"
+    --tag "$tag"
+    --push
+    .
+  )
+  docker buildx build "${args[@]}"
 }
 
 resolve_digest_ref() {
