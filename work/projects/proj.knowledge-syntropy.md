@@ -84,7 +84,7 @@ W → R → F → L. Each tier closes one gap before the next is filed.
 
 **Anti-sprawl rule:** if a future agent considers expanding scope beyond their tier, file the next-tier work item and stop. Don't bundle.
 
-> **The `/librarian` skill** (`docs/research/missing-skill-knowledge-librarian.md`) is the retrieval+curation *persona* that runs the read/curator tiers (R1 filter, L0 curator, L1 auto-summaries) against the node's own Doltgres knowledge — **a skill, not a separate node or project.** No standalone `proj.librarian`; it lives here.
+> **The `/librarian` skill** (`docs/research/missing-skill-knowledge-librarian.md`) is the retrieval+curation _persona_ that runs the read/curator tiers (R1 filter, L0 curator, L1 auto-summaries) against the node's own Doltgres knowledge — **a skill, not a separate node or project.** No standalone `proj.librarian`; it lives here.
 
 ---
 

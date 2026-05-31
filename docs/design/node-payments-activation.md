@@ -34,7 +34,7 @@ Success is when a founder forms a DAO through the operator-hosted wizard, runs *
 
 - **Wizard UI** (`setup/dao/*` pages): **operator only** — verified, no UI in node-template/resy.
 - **`/api/setup/verify` endpoint**: **every node ships it** (`nodes/{operator,resy,node-template}/app/src/app/api/setup/verify/route.ts`).
-- **Why this is fine:** the founder signs every formation tx; the operator never touches keys or treasury (`WALLET_CUSTODY`). The operator-hosted wizard is a **stateless tool**, not custody. A node launched in the monorepo forms its DAO via the operator UI, then activates its *own* wallet/Split.
+- **Why this is fine:** the founder signs every formation tx; the operator never touches keys or treasury (`WALLET_CUSTODY`). The operator-hosted wizard is a **stateless tool**, not custody. A node launched in the monorepo forms its DAO via the operator UI, then activates its _own_ wallet/Split.
 - **The one gap (graduation, not v0):** the formation feature (`txBuilders` + reducer + verify) is app-local in operator, so a node that **splits into its own repo** cannot self-host the wizard without copying code (divergence risk per `repo-sync-contract`). Graduation = extract `@cogni/dao-formation` so any sovereign node can mount the wizard. Deferred until a node actually needs self-serve formation.
 
 ## 2. Seamless activation — `activate(nodeId)`
