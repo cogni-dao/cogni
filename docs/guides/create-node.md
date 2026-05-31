@@ -31,7 +31,7 @@ You have a node app under `nodes/<node>/app` (a Next.js node) and you want it to
 - the Argo `ApplicationSet` generators (one per node per env),
 - `promote-preview-seed-main.sh`, which `sha256sum`s `infra/k8s/overlays/preview/<node>/kustomization.yaml` **for every `NODE_TARGET`**.
 
-> ⚠️ **The candidate-a-only trap (learned from #1369 / node-template).** Declaring a node in the catalog but only authoring the **candidate-a** overlay leaves the preview + production machinery expecting overlays that don't exist. Result: `Promote Preview Digest Seed` fails on `main` (`sha256sum: …/overlays/preview/<node>/kustomization.yaml: No such file or directory`) for *everyone*, and the node never reaches preview/prod.
+> ⚠️ **The candidate-a-only trap (learned from #1369 / node-template).** Declaring a node in the catalog but only authoring the **candidate-a** overlay leaves the preview + production machinery expecting overlays that don't exist. Result: `Promote Preview Digest Seed` fails on `main` (`sha256sum: …/overlays/preview/<node>/kustomization.yaml: No such file or directory`) for _everyone_, and the node never reaches preview/prod.
 >
 > **A node is `type: node` in all three envs or none.** Enable the full matrix in one PR. The provisioning (secrets/DB/DNS, Step 6) can land after — but the overlays + AppSet entries must be complete and consistent.
 
@@ -49,10 +49,10 @@ The one declaration that makes the node a build target **and** a `NODE_TARGET`. 
 
 ```yaml
 name: <node>
-type: node                                   # MUST be "node" (drives NODE_TARGETS)
+type: node # MUST be "node" (drives NODE_TARGETS)
 port: 3200
 dockerfile: nodes/<node>/app/Dockerfile
-node_id: "<uuidv4>"                           # real UUID, not the 000…0 placeholder
+node_id: "<uuidv4>" # real UUID, not the 000…0 placeholder
 image_tag_suffix: "-<node>"
 migrator_tag_suffix: "-<node>-migrate"
 candidate_a_branch: deploy/candidate-a-<node>
@@ -75,15 +75,15 @@ path_prefix: nodes/<node>/
 
 Create `infra/k8s/overlays/{candidate-a,preview,production}/<node>/kustomization.yaml`. Derive all three from an existing node (`operator` is the reference). There are exactly **two axes** — get them right and the overlays are mechanical:
 
-| Axis | Same across all 3 envs | Differs per env |
-|---|---|---|
-| **Node identity** | `namePrefix: <node>-`, `NODE_NAME`, `app.kubernetes.io/instance: <node>` labels/selectors, `secretRef: <node>-node-app-secrets`, `nodePort`, `containerPort`/`targetPort`, the **doltgres `migrate-doltgres` initContainer** | — |
-| **Environment** | — | `namespace: cogni-<env>`, `TEMPORAL_NAMESPACE`, ExternalName host (`<env>.vm.cognidao.org`; candidate-a uses `cogni-candidate-a.vm…`), `NEXTAUTH_URL`, image `digest` |
+| Axis              | Same across all 3 envs                                                                                                                                                                                                       | Differs per env                                                                                                                                                       |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Node identity** | `namePrefix: <node>-`, `NODE_NAME`, `app.kubernetes.io/instance: <node>` labels/selectors, `secretRef: <node>-node-app-secrets`, `nodePort`, `containerPort`/`targetPort`, the **doltgres `migrate-doltgres` initContainer** | —                                                                                                                                                                     |
+| **Environment**   | —                                                                                                                                                                                                                            | `namespace: cogni-<env>`, `TEMPORAL_NAMESPACE`, ExternalName host (`<env>.vm.cognidao.org`; candidate-a uses `cogni-candidate-a.vm…`), `NEXTAUTH_URL`, image `digest` |
 
 Each overlay must include:
 
 - **ConfigMap `node-app-config` patch:** `NODE_NAME`, `TEMPORAL_NAMESPACE`, `LITELLM_BASE_URL` (`http://<node>-litellm-external:4000`), `TEMPORAL_ADDRESS` (`<node>-temporal-external:7233`), `REDIS_URL` (`redis://<node>-redis-external:6379`), `NEXTAUTH_URL`.
-- **Service `node-app` patch:** `nodePort` + `app.kubernetes.io/instance: <node>` on the selector (without the instance label, `namePrefix` does *not* rename selectors and every Service round-robins across all node pods).
+- **Service `node-app` patch:** `nodePort` + `app.kubernetes.io/instance: <node>` on the selector (without the instance label, `namePrefix` does _not_ rename selectors and every Service round-robins across all node pods).
 - **Deployment `node-app` patch:** `<node>-node-app-secrets` secret refs + instance labels on `matchLabels` and pod template.
 - **`migrate-doltgres` initContainer** appended to the Deployment (knowledge-plane migrator; `DATABASE_URL` ← `DOLTGRES_URL` secret).
 - **bug.0295 VM-DNS:** convert base headless `*-external` Services → `ExternalName` (`<env>.vm.cognidao.org`) and `$patch: delete` the matching `EndpointSlice`s.
@@ -96,11 +96,11 @@ Each overlay must include:
 Add a `git` generator for the node to each of `infra/k8s/argocd/{candidate-a,preview,production}-applicationset.yaml` (mirror the existing `operator`/`resy`/`scheduler-worker` blocks):
 
 ```yaml
-    - git:
-        repoURL: https://github.com/cogni-dao/cogni.git
-        revision: deploy/<env>-<node>
-        files:
-          - path: "infra/catalog/<node>.yaml"
+- git:
+    repoURL: https://github.com/cogni-dao/cogni.git
+    revision: deploy/<env>-<node>
+    files:
+      - path: "infra/catalog/<node>.yaml"
 ```
 
 The AppSet template renders `path: infra/k8s/overlays/<env>/{{.name}}`. **This is inert until the deploy branch exists** — the git generator finds no files on a non-existent `revision`, so no Application is generated (and nothing crashloops).
