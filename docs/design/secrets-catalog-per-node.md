@@ -215,9 +215,50 @@ The OpenBao path convention does not change. ESO continues to reconcile from the
 - [ ] Where does `_system` tier (G-derived secrets like `COGNI_NODE_DBS`) live? Recommend `infra/catalog/_system-secrets.yaml` alongside `_shared` — operator-domain because it walks the nodes list.
 - [ ] Should the loader emit a printed routing table (`pnpm setup:secrets --list`) for auditor evidence? Cheap to add; useful for SOC2 documentation.
 
+## Amendment 2026-05-31 — A1-baseline fan-out (the multi-node hole)
+
+### The hole this design left
+
+This doc solved **A2 node-specific** secrets (poly's `POLYGON_RPC_URL`) cleanly: distinct names, per-node catalog, `service: <node>` path. It never solved the **A1 baseline** — the ~36 secrets _every_ `type:node` runs because they all ship the same node-app image (`AUTH_SECRET`, `APP_DB_*`, `OPENCLAW_GATEWAY_TOKEN`, `NEXTAUTH_URL`, …).
+
+Those secrets have a property A2 doesn't: **same name across every node, distinct value per node** (isolation — node A's `AUTH_SECRET` must never equal node B's). That collides head-on with [`secrets-classification.md`](../spec/secrets-classification.md) Invariant 2 `NO_NAME_COLLISIONS` the moment a _second_ node gets a catalog. Today only `node-template` has an A1 catalog, so it's latent. **#1406 added `canary` as a byte-identical copy of node-template's 36-entry catalog → loader throws `AUTH_SECRET declared in both`.** That's the bug blocking multi-node `setup:secrets` — not a canary quirk, a model gap.
+
+### The reconciliation: define-once, fan-out
+
+The tier system already names the split — A1 = "baseline, every node" vs A2 = "node-specific". The fix makes the loader _honor_ it:
+
+- **A1 baseline = defined ONCE** (operator-domain substrate, not a per-node copy), tagged to fan out to **every `type:node`** from `infra/catalog/*.yaml`. The loader expands `baseline × {operator, resy, node-template, canary, …}` → one routing entry per (node, name) at path `cogni/<env>/<node>/<KEY>`. `setup-secrets` generates a **distinct value per node**. Names overlap by design; values + paths are isolated → zero cross-contamination.
+- **A2 node-specific = per-node catalog** (unchanged — this doc's original design).
+- `NO_NAME_COLLISIONS` is **preserved at the definition layer**: each name is _defined_ once (baseline once, or a distinct A2 name). Internal routing keys by `(service, name)`. Flipping the loader's uniqueness check to `(service,name)` is necessary but **not sufficient** — `routing[name]` (`loader:266`) and the `Secret[]` shape are name-keyed and would silently last-writer-win; the fan-out must thread `(service,name)` through `routing`, `Secret`, the `.env`/OpenBao write loop, and ExternalSecret generation.
+- **canary/operator/resy carry NO A1 catalog.** They're enrolled by being `type:node`. Adding a node = 0 baseline lines (vs #1406's 36-line copy). The copy _was_ the bug.
+
+### ExternalSecret / pod side — already the right shape
+
+[`secrets-management.md`](../spec/secrets-management.md) Invariants 2–3 already say **one ExternalSecret per (service, env)** → `<service>-env-secrets` → pod `envFrom`. The fan-out just needs that wired **once per node** (operator/resy/canary/node-template each get their own ExternalSecret pulling `cogni/<env>/<node>/*`). No new wire shape.
+
+### Where A1 baseline lives
+
+Operator-domain — substrate that applies to all nodes, like `_shared`, but **per-node-instantiated** (distinct values), NOT `_shared` (single value). Proposed: a `infra/secrets-catalog.yaml` block with an explicit fan-out marker (`appliesTo: all-nodes`, or `service: _node_baseline`) so it reads differently from a single-value `_shared` entry. node-template's current A1 entries migrate here; its per-node catalog keeps only genuinely node-template-specific entries (likely none → file removed).
+
+### Staged plan (refines this doc / task.5071; unblocks task.5081 multi-node OpenBao)
+
+1. **This design amendment** → review. (`needs_review`.)
+2. **Loader**: A1-baseline fan-out over `type:node` + `(service,name)` routing internally + unit tests. Operator-domain.
+3. **Catalog migration**: node-template A1 → baseline block; **delete canary's dup catalog**; per-node A2 catalogs (mostly empty). Operator-domain.
+4. **`setup-secrets`**: per-node value generation + per-node OpenBao writes. (Open Q: flat `.env.<env>` can't represent per-node A1 — write per-node straight to OpenBao; `.env` carries only what provision Phase 2 reads.)
+5. **ExternalSecrets**: one per (node, env); overlay `resources:` wiring.
+6. **`reconcile-secrets.sh`**: fan out to **all `type:node`** (today: only `node-template` + `scheduler-worker`, `:125`).
+7. **E2E proof on candidate-b**: every node's pod `envFrom <node>-env-secrets` from its own `cogni/<env>/<node>/*`, 0 restarts, 0 cross-node value reuse.
+
+### Coordination — converge with bug.5086, don't race it
+
+`bug.5086` PR-A is catalog-driving **`deploy-infra.sh`**'s legacy imperative `<node>-node-app-secrets` loop to `type:node`. That's the **same generalization** as this fan-out, on the Compose-legacy path. Both must drive off the **same `type:node` set + same baseline schema** or the legacy and substrate paths diverge. Steps 2–3 are the substrate half; bug.5086 is the legacy half — they share the catalog as the single source. The secrets-subsystem owner (bug.5086) should own or co-review steps 2–6.
+
 ## Related
 
 - `task.5071` — this design's parent work item
+- `task.5081` — OpenBao landing on the hub; this amendment unblocks its multi-node step
+- `bug.5086` — legacy-path twin (deploy-infra `type:node` catalog-drive); must converge on the same baseline
 - `task.5052` / `task.5053` — downstream ports that inherit this shape
 - [`docs/spec/secrets-classification.md`](../spec/secrets-classification.md) — current tier definitions + naming conventions
 - [`docs/spec/secrets-management.md`](../spec/secrets-management.md) — invariants this refactor preserves
