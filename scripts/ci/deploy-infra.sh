@@ -399,6 +399,16 @@ log_info "Artifact directory: $ARTIFACT_DIR"
 
 emit_deployment_event "infra_deployment.started" "in_progress" "Deploying infrastructure to $ENVIRONMENT"
 
+# bug.5086 — catalog-driven node-app list (CATALOG_IS_SSOT). Computed locally
+# (the runner has the repo + yq) and threaded into the remote heredoc via the
+# env block so the per-node secret + rollout loops below stop hardcoding nodes —
+# a new type:node (e.g. canary) auto-provisions. Fail loud, never empty.
+# shellcheck source=scripts/ci/lib/image-tags.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib/image-tags.sh"
+NODE_APP_TARGETS="${NODE_TARGETS[*]}"
+[ -n "$NODE_APP_TARGETS" ] || log_fatal "deploy-infra: no type:node targets from infra/catalog — refusing to deploy with an empty node list"
+log_info "Node-app targets (catalog-driven): ${NODE_APP_TARGETS}"
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Create remote deployment script (heredoc — no variable expansion)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1181,11 +1191,13 @@ if command -v kubectl &>/dev/null; then
   HOST_IP=$(hostname -I | awk '{print $1}')
   log_info "  k8s namespace: ${K8S_NS}, host IP: ${HOST_IP}"
 
-  # ── Per-node secrets (operator, poly, resy, node-template) ────────────────
-  # task.5078 — node-template added as fourth deployable node. Hyphenated node
-  # names map to underscored DB names (postgres identifier rules):
+  # ── Per-node secrets (catalog-driven: every type:node in NODE_APP_TARGETS) ──
+  # bug.5086 — node list comes from infra/catalog (CATALOG_IS_SSOT), threaded in
+  # from the local context, so a new node (e.g. canary) auto-provisions its
+  # secret. poly is absent (own VM, not in catalog); scheduler-worker is a
+  # service (own secret below). Hyphenated names map to underscored DB names.
   #   node="node-template" → DB="cogni_node_template" / "knowledge_node_template".
-  for node in operator poly resy node-template; do
+  for node in ${NODE_APP_TARGETS}; do
     db_node="${node//-/_}"
     # Doltgres URL points to this node's own DB (knowledge_<node>).
     # Poly reads DOLTGRES_URL_POLY in its Zod schema; operator / resy /
@@ -1254,10 +1266,15 @@ LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY:-}
 LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY:-}
 LANGFUSE_BASE_URL=${LANGFUSE_BASE_URL:-}
 SECEOF
-    kubectl -n "${K8S_NS}" create secret generic "${node}-node-app-secrets" \
-      --from-env-file="$SECRET_FILE" --dry-run=client -o yaml | kubectl apply -f -
+    # bug.5086 — fail-soft per node: a broken/new node can't abort the run and
+    # leave operator/resy/node-template without their secrets.
+    if kubectl -n "${K8S_NS}" create secret generic "${node}-node-app-secrets" \
+      --from-env-file="$SECRET_FILE" --dry-run=client -o yaml | kubectl apply -f -; then
+      log_info "  Applied ${node}-node-app-secrets"
+    else
+      log_warn "  Skipped ${node}-node-app-secrets (apply failed; deploy continues)"
+    fi
     rm -f "$SECRET_FILE"
-    log_info "  Applied ${node}-node-app-secrets"
   done
 
   # ── Scheduler-worker secret ────────────────────────────────────────────────
@@ -1294,17 +1311,20 @@ SECEOF
   # /api/internal/graph-runs and /api/internal/grants/*/validate routes.
   # Rolling the node-apps first, waiting, then rolling the worker guarantees
   # the new endpoints exist before the worker can call them.
-  kubectl -n "${K8S_NS}" rollout restart \
-    deployment/operator-node-app \
-    deployment/poly-node-app \
-    deployment/resy-node-app \
-    deployment/node-template-node-app 2>/dev/null || true
+  # bug.5086 — catalog-driven node-app set (CATALOG_IS_SSOT); restart args built
+  # from NODE_APP_TARGETS so a new node rolls without editing this list.
+  NODE_APP_DEPLOYMENTS=""
+  for node in ${NODE_APP_TARGETS}; do
+    NODE_APP_DEPLOYMENTS="${NODE_APP_DEPLOYMENTS} deployment/${node}-node-app"
+  done
+  # shellcheck disable=SC2086
+  kubectl -n "${K8S_NS}" rollout restart ${NODE_APP_DEPLOYMENTS} 2>/dev/null || true
   log_info "[$(date -u +%H:%M:%S)] Node-app pods restarting (scheduler-worker waits)..."
 
   # ── Wait for node-app rollouts first ───────────────────────────────────────
   ROLLOUT_PIDS=""
-  for deploy in operator-node-app poly-node-app resy-node-app node-template-node-app; do
-    kubectl -n "${K8S_NS}" rollout status "deployment/${deploy}" --timeout=300s 2>/dev/null &
+  for node in ${NODE_APP_TARGETS}; do
+    kubectl -n "${K8S_NS}" rollout status "deployment/${node}-node-app" --timeout=300s 2>/dev/null &
     ROLLOUT_PIDS="$ROLLOUT_PIDS $!"
   done
   ROLLOUT_FAILED=0
@@ -1510,7 +1530,7 @@ log_info "deploy-infra-remote.sh verified on VM (sha256 match)"
 # Execute remote script with env vars
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ssh $SSH_OPTS root@"$VM_HOST" \
-    "DOMAIN='$DOMAIN' APP_ENV='$APP_ENV' DEPLOY_ENVIRONMENT='$DEPLOY_ENVIRONMENT' DATABASE_URL='$DATABASE_URL' DATABASE_SERVICE_URL='$DATABASE_SERVICE_URL' LITELLM_MASTER_KEY='$LITELLM_MASTER_KEY' OPENROUTER_API_KEY='$OPENROUTER_API_KEY' AUTH_SECRET='$AUTH_SECRET' POSTGRES_ROOT_USER='$POSTGRES_ROOT_USER' POSTGRES_ROOT_PASSWORD='$POSTGRES_ROOT_PASSWORD' APP_DB_USER='$APP_DB_USER' APP_DB_PASSWORD='$APP_DB_PASSWORD' APP_DB_SERVICE_USER='$APP_DB_SERVICE_USER' APP_DB_SERVICE_PASSWORD='$APP_DB_SERVICE_PASSWORD' APP_DB_READONLY_USER='${APP_DB_READONLY_USER:-}' APP_DB_READONLY_PASSWORD='${APP_DB_READONLY_PASSWORD:-}' APP_DB_NAME='$APP_DB_NAME' EVM_RPC_URL='$EVM_RPC_URL' POLYGON_RPC_URL='$POLYGON_RPC_URL' TEMPORAL_DB_USER='$TEMPORAL_DB_USER' TEMPORAL_DB_PASSWORD='$TEMPORAL_DB_PASSWORD' GHCR_DEPLOY_TOKEN='$GHCR_DEPLOY_TOKEN' GHCR_USERNAME='$GHCR_USERNAME' GRAFANA_CLOUD_LOKI_URL='${GRAFANA_CLOUD_LOKI_URL:-}' GRAFANA_CLOUD_LOKI_USER='${GRAFANA_CLOUD_LOKI_USER:-}' GRAFANA_CLOUD_LOKI_API_KEY='${GRAFANA_CLOUD_LOKI_API_KEY:-}' METRICS_TOKEN='${METRICS_TOKEN:-}' SCHEDULER_API_TOKEN='${SCHEDULER_API_TOKEN:-}' BILLING_INGEST_TOKEN='${BILLING_INGEST_TOKEN:-}' INTERNAL_OPS_TOKEN='${INTERNAL_OPS_TOKEN:-}' WORK_ITEMS_NOTION_TOKEN='${WORK_ITEMS_NOTION_TOKEN:-}' WORK_ITEMS_NOTION_DATA_SOURCE_ID='${WORK_ITEMS_NOTION_DATA_SOURCE_ID:-}' WORK_ITEMS_NOTION_VERSION='${WORK_ITEMS_NOTION_VERSION:-}' PROMETHEUS_REMOTE_WRITE_URL='${PROMETHEUS_REMOTE_WRITE_URL:-}' PROMETHEUS_USERNAME='${PROMETHEUS_USERNAME:-}' PROMETHEUS_PASSWORD='${PROMETHEUS_PASSWORD:-}' PROMETHEUS_QUERY_URL='${PROMETHEUS_QUERY_URL:-}' PROMETHEUS_READ_USERNAME='${PROMETHEUS_READ_USERNAME:-}' PROMETHEUS_READ_PASSWORD='${PROMETHEUS_READ_PASSWORD:-}' LANGFUSE_PUBLIC_KEY='${LANGFUSE_PUBLIC_KEY:-}' LANGFUSE_SECRET_KEY='${LANGFUSE_SECRET_KEY:-}' LANGFUSE_BASE_URL='${LANGFUSE_BASE_URL:-}' COGNI_REPO_URL='$COGNI_REPO_URL' COGNI_REPO_REF='$COGNI_REPO_REF' GIT_READ_USERNAME='$GIT_READ_USERNAME' GIT_READ_TOKEN='$GIT_READ_TOKEN' OPENCLAW_GATEWAY_TOKEN='$OPENCLAW_GATEWAY_TOKEN' OPENCLAW_GITHUB_RW_TOKEN='${OPENCLAW_GITHUB_RW_TOKEN:-}' GRAFANA_URL='${GRAFANA_URL:-}' GRAFANA_SERVICE_ACCOUNT_TOKEN='${GRAFANA_SERVICE_ACCOUNT_TOKEN:-}' GRAFANA_PDC_SIGNING_TOKEN='${GRAFANA_PDC_SIGNING_TOKEN:-}' GRAFANA_PDC_HOSTED_GRAFANA_ID='${GRAFANA_PDC_HOSTED_GRAFANA_ID:-}' GRAFANA_PDC_CLUSTER='${GRAFANA_PDC_CLUSTER:-}' GRAFANA_PDC_NETWORK_ID='${GRAFANA_PDC_NETWORK_ID:-}' GRAFANA_PDC_NETWORK_UUID='${GRAFANA_PDC_NETWORK_UUID:-}' POSTHOG_API_KEY='$POSTHOG_API_KEY' POSTHOG_HOST='$POSTHOG_HOST' TAVILY_API_KEY='${TAVILY_API_KEY:-}' DISCORD_BOT_TOKEN='${DISCORD_BOT_TOKEN:-}' GH_OAUTH_CLIENT_ID='${GH_OAUTH_CLIENT_ID:-}' GH_OAUTH_CLIENT_SECRET='${GH_OAUTH_CLIENT_SECRET:-}' DISCORD_OAUTH_CLIENT_ID='${DISCORD_OAUTH_CLIENT_ID:-}' DISCORD_OAUTH_CLIENT_SECRET='${DISCORD_OAUTH_CLIENT_SECRET:-}' GOOGLE_OAUTH_CLIENT_ID='${GOOGLE_OAUTH_CLIENT_ID:-}' GOOGLE_OAUTH_CLIENT_SECRET='${GOOGLE_OAUTH_CLIENT_SECRET:-}' DOLTHUB_REMOTE_URL='${DOLTHUB_REMOTE_URL:-}' DOLT_CREDS_JWK='${DOLT_CREDS_JWK:-}' DOLT_CREDS_KEYID='${DOLT_CREDS_KEYID:-}' DOLTHUB_API_TOKEN='${DOLTHUB_API_TOKEN:-}' DOLTHUB_OAUTH_CLIENT_ID='${DOLTHUB_OAUTH_CLIENT_ID:-}' DOLTHUB_OAUTH_CLIENT_SECRET='${DOLTHUB_OAUTH_CLIENT_SECRET:-}' GH_REVIEW_APP_ID='${GH_REVIEW_APP_ID:-}' GH_REVIEW_APP_PRIVATE_KEY_BASE64='${GH_REVIEW_APP_PRIVATE_KEY_BASE64:-}' GH_REPOS='${GH_REPOS:-}' GH_WEBHOOK_SECRET='${GH_WEBHOOK_SECRET:-}' PRIVY_APP_ID='${PRIVY_APP_ID:-}' PRIVY_APP_SECRET='${PRIVY_APP_SECRET:-}' PRIVY_SIGNING_KEY='${PRIVY_SIGNING_KEY:-}' PRIVY_USER_WALLETS_APP_ID='${PRIVY_USER_WALLETS_APP_ID:-}' PRIVY_USER_WALLETS_APP_SECRET='${PRIVY_USER_WALLETS_APP_SECRET:-}' PRIVY_USER_WALLETS_SIGNING_KEY='${PRIVY_USER_WALLETS_SIGNING_KEY:-}' POLY_WALLET_AEAD_KEY_HEX='${POLY_WALLET_AEAD_KEY_HEX:-}' POLY_WALLET_AEAD_KEY_ID='${POLY_WALLET_AEAD_KEY_ID:-}' POLY_CLOB_GEO_BLOCK_TOKEN='${POLY_CLOB_GEO_BLOCK_TOKEN:-}' CONNECTIONS_ENCRYPTION_KEY='${CONNECTIONS_ENCRYPTION_KEY:-}' COGNI_NODE_DBS='${COGNI_NODE_DBS:-}' ACTIONS_AUTOMATION_BOT_PAT='${ACTIONS_AUTOMATION_BOT_PAT:-}' LITELLM_IMAGE='${LITELLM_IMAGE:-ghcr.io/cogni-dao/cogni-template:litellm-b6e4e942cb23}' COMMIT_SHA='${GITHUB_SHA:-$(git rev-parse HEAD 2>/dev/null || echo unknown)}' DEPLOY_ACTOR='${GITHUB_ACTOR:-$(whoami)}' bash /tmp/deploy-infra-remote.sh"
+    "DOMAIN='$DOMAIN' APP_ENV='$APP_ENV' DEPLOY_ENVIRONMENT='$DEPLOY_ENVIRONMENT' DATABASE_URL='$DATABASE_URL' DATABASE_SERVICE_URL='$DATABASE_SERVICE_URL' LITELLM_MASTER_KEY='$LITELLM_MASTER_KEY' OPENROUTER_API_KEY='$OPENROUTER_API_KEY' AUTH_SECRET='$AUTH_SECRET' POSTGRES_ROOT_USER='$POSTGRES_ROOT_USER' POSTGRES_ROOT_PASSWORD='$POSTGRES_ROOT_PASSWORD' APP_DB_USER='$APP_DB_USER' APP_DB_PASSWORD='$APP_DB_PASSWORD' APP_DB_SERVICE_USER='$APP_DB_SERVICE_USER' APP_DB_SERVICE_PASSWORD='$APP_DB_SERVICE_PASSWORD' APP_DB_READONLY_USER='${APP_DB_READONLY_USER:-}' APP_DB_READONLY_PASSWORD='${APP_DB_READONLY_PASSWORD:-}' APP_DB_NAME='$APP_DB_NAME' EVM_RPC_URL='$EVM_RPC_URL' POLYGON_RPC_URL='$POLYGON_RPC_URL' TEMPORAL_DB_USER='$TEMPORAL_DB_USER' TEMPORAL_DB_PASSWORD='$TEMPORAL_DB_PASSWORD' GHCR_DEPLOY_TOKEN='$GHCR_DEPLOY_TOKEN' GHCR_USERNAME='$GHCR_USERNAME' GRAFANA_CLOUD_LOKI_URL='${GRAFANA_CLOUD_LOKI_URL:-}' GRAFANA_CLOUD_LOKI_USER='${GRAFANA_CLOUD_LOKI_USER:-}' GRAFANA_CLOUD_LOKI_API_KEY='${GRAFANA_CLOUD_LOKI_API_KEY:-}' METRICS_TOKEN='${METRICS_TOKEN:-}' SCHEDULER_API_TOKEN='${SCHEDULER_API_TOKEN:-}' BILLING_INGEST_TOKEN='${BILLING_INGEST_TOKEN:-}' INTERNAL_OPS_TOKEN='${INTERNAL_OPS_TOKEN:-}' WORK_ITEMS_NOTION_TOKEN='${WORK_ITEMS_NOTION_TOKEN:-}' WORK_ITEMS_NOTION_DATA_SOURCE_ID='${WORK_ITEMS_NOTION_DATA_SOURCE_ID:-}' WORK_ITEMS_NOTION_VERSION='${WORK_ITEMS_NOTION_VERSION:-}' PROMETHEUS_REMOTE_WRITE_URL='${PROMETHEUS_REMOTE_WRITE_URL:-}' PROMETHEUS_USERNAME='${PROMETHEUS_USERNAME:-}' PROMETHEUS_PASSWORD='${PROMETHEUS_PASSWORD:-}' PROMETHEUS_QUERY_URL='${PROMETHEUS_QUERY_URL:-}' PROMETHEUS_READ_USERNAME='${PROMETHEUS_READ_USERNAME:-}' PROMETHEUS_READ_PASSWORD='${PROMETHEUS_READ_PASSWORD:-}' LANGFUSE_PUBLIC_KEY='${LANGFUSE_PUBLIC_KEY:-}' LANGFUSE_SECRET_KEY='${LANGFUSE_SECRET_KEY:-}' LANGFUSE_BASE_URL='${LANGFUSE_BASE_URL:-}' COGNI_REPO_URL='$COGNI_REPO_URL' COGNI_REPO_REF='$COGNI_REPO_REF' GIT_READ_USERNAME='$GIT_READ_USERNAME' GIT_READ_TOKEN='$GIT_READ_TOKEN' OPENCLAW_GATEWAY_TOKEN='$OPENCLAW_GATEWAY_TOKEN' OPENCLAW_GITHUB_RW_TOKEN='${OPENCLAW_GITHUB_RW_TOKEN:-}' GRAFANA_URL='${GRAFANA_URL:-}' GRAFANA_SERVICE_ACCOUNT_TOKEN='${GRAFANA_SERVICE_ACCOUNT_TOKEN:-}' GRAFANA_PDC_SIGNING_TOKEN='${GRAFANA_PDC_SIGNING_TOKEN:-}' GRAFANA_PDC_HOSTED_GRAFANA_ID='${GRAFANA_PDC_HOSTED_GRAFANA_ID:-}' GRAFANA_PDC_CLUSTER='${GRAFANA_PDC_CLUSTER:-}' GRAFANA_PDC_NETWORK_ID='${GRAFANA_PDC_NETWORK_ID:-}' GRAFANA_PDC_NETWORK_UUID='${GRAFANA_PDC_NETWORK_UUID:-}' POSTHOG_API_KEY='$POSTHOG_API_KEY' POSTHOG_HOST='$POSTHOG_HOST' TAVILY_API_KEY='${TAVILY_API_KEY:-}' DISCORD_BOT_TOKEN='${DISCORD_BOT_TOKEN:-}' GH_OAUTH_CLIENT_ID='${GH_OAUTH_CLIENT_ID:-}' GH_OAUTH_CLIENT_SECRET='${GH_OAUTH_CLIENT_SECRET:-}' DISCORD_OAUTH_CLIENT_ID='${DISCORD_OAUTH_CLIENT_ID:-}' DISCORD_OAUTH_CLIENT_SECRET='${DISCORD_OAUTH_CLIENT_SECRET:-}' GOOGLE_OAUTH_CLIENT_ID='${GOOGLE_OAUTH_CLIENT_ID:-}' GOOGLE_OAUTH_CLIENT_SECRET='${GOOGLE_OAUTH_CLIENT_SECRET:-}' DOLTHUB_REMOTE_URL='${DOLTHUB_REMOTE_URL:-}' DOLT_CREDS_JWK='${DOLT_CREDS_JWK:-}' DOLT_CREDS_KEYID='${DOLT_CREDS_KEYID:-}' DOLTHUB_API_TOKEN='${DOLTHUB_API_TOKEN:-}' DOLTHUB_OAUTH_CLIENT_ID='${DOLTHUB_OAUTH_CLIENT_ID:-}' DOLTHUB_OAUTH_CLIENT_SECRET='${DOLTHUB_OAUTH_CLIENT_SECRET:-}' GH_REVIEW_APP_ID='${GH_REVIEW_APP_ID:-}' GH_REVIEW_APP_PRIVATE_KEY_BASE64='${GH_REVIEW_APP_PRIVATE_KEY_BASE64:-}' GH_REPOS='${GH_REPOS:-}' GH_WEBHOOK_SECRET='${GH_WEBHOOK_SECRET:-}' PRIVY_APP_ID='${PRIVY_APP_ID:-}' PRIVY_APP_SECRET='${PRIVY_APP_SECRET:-}' PRIVY_SIGNING_KEY='${PRIVY_SIGNING_KEY:-}' PRIVY_USER_WALLETS_APP_ID='${PRIVY_USER_WALLETS_APP_ID:-}' PRIVY_USER_WALLETS_APP_SECRET='${PRIVY_USER_WALLETS_APP_SECRET:-}' PRIVY_USER_WALLETS_SIGNING_KEY='${PRIVY_USER_WALLETS_SIGNING_KEY:-}' POLY_WALLET_AEAD_KEY_HEX='${POLY_WALLET_AEAD_KEY_HEX:-}' POLY_WALLET_AEAD_KEY_ID='${POLY_WALLET_AEAD_KEY_ID:-}' POLY_CLOB_GEO_BLOCK_TOKEN='${POLY_CLOB_GEO_BLOCK_TOKEN:-}' CONNECTIONS_ENCRYPTION_KEY='${CONNECTIONS_ENCRYPTION_KEY:-}' COGNI_NODE_DBS='${COGNI_NODE_DBS:-}' NODE_APP_TARGETS='${NODE_APP_TARGETS}' ACTIONS_AUTOMATION_BOT_PAT='${ACTIONS_AUTOMATION_BOT_PAT:-}' LITELLM_IMAGE='${LITELLM_IMAGE:-ghcr.io/cogni-dao/cogni-template:litellm-b6e4e942cb23}' COMMIT_SHA='${GITHUB_SHA:-$(git rev-parse HEAD 2>/dev/null || echo unknown)}' DEPLOY_ACTOR='${GITHUB_ACTOR:-$(whoami)}' bash /tmp/deploy-infra-remote.sh"
 
 emit_deployment_event "infra_deployment.complete" "success" "Infrastructure deployment completed"
 log_info "Infrastructure deployment complete!"
