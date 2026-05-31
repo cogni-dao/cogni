@@ -150,10 +150,16 @@ async function pollUntilTerminal(
 // ── Test ─────────────────────────────────────────────────────────────
 
 describe("OpenRouter top-up e2e (live money)", () => {
-  // Deep-assertion clients are wired only when their endpoints are reachable.
-  const db = DATABASE_SERVICE_URL
-    ? createServiceDbClient(DATABASE_SERVICE_URL)
-    : null;
+  // Deep PG/TigerBeetle assertions are valid ONLY when the target IS the local
+  // stack — a remote deployment's DB/TB are not the ones reachable here. Against
+  // any non-local TEST_BASE_URL, force deployment-portable mode regardless of the
+  // auto-loaded .env.local values (which point at localhost).
+  const isLocalTarget =
+    TEST_BASE_URL.includes("localhost") || TEST_BASE_URL.includes("127.0.0.1");
+  const db =
+    isLocalTarget && DATABASE_SERVICE_URL
+      ? createServiceDbClient(DATABASE_SERVICE_URL)
+      : null;
   const deep = Boolean(db && TIGERBEETLE_ADDRESS);
   const testWallet = privateKeyToAccount(TEST_WALLET_PRIVATE_KEY);
   let testUserId: string = randomUUID();

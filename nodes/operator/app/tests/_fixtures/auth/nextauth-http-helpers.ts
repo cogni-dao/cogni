@@ -58,13 +58,17 @@ export async function getCsrfToken(baseUrl: string): Promise<CsrfTokenResult> {
     throw new Error("No Set-Cookie header in CSRF response");
   }
 
-  const csrfCookieRegex = /next-auth\.csrf-token=([^;]+)/;
+  // NextAuth cookie name differs by scheme: dev (http) uses `next-auth.csrf-token`;
+  // prod (https) uses the `__Host-` secure prefix. Capture the actual name so the
+  // cookie we send back matches what the server set (CSRF validation is name-sensitive).
+  const csrfCookieRegex =
+    /(__Host-next-auth\.csrf-token|next-auth\.csrf-token)=([^;]+)/;
   const csrfCookieMatch = csrfCookieRegex.exec(setCookieHeader);
   if (!csrfCookieMatch) {
     throw new Error("CSRF cookie not found in Set-Cookie header");
   }
 
-  const csrfCookie = `next-auth.csrf-token=${csrfCookieMatch[1]}`;
+  const csrfCookie = `${csrfCookieMatch[1]}=${csrfCookieMatch[2]}`;
 
   return {
     csrfToken: data.csrfToken,
