@@ -61,7 +61,7 @@ export function NodeActionPanel({ nodeId, status }: Props): ReactElement {
           disabled={submitting}
           onClick={() => postAction(`/api/v1/nodes/${nodeId}/publish`)}
         >
-          {submitting ? "Opening PR…" : "Open node repo-spec PR"}
+          {submitting ? "Publishing…" : "Publish governance PR"}
         </Button>
       );
       break;
@@ -69,13 +69,7 @@ export function NodeActionPanel({ nodeId, status }: Props): ReactElement {
       action = (
         <div className="space-y-2 text-sm">
           <p className="text-muted-foreground">
-            Governance repo-spec PR opened. The next step is operator wallet
-            provisioning.
-          </p>
-          <p className="text-muted-foreground">
-            Blocked for design: v0 monorepo nodes may allow operator-custodial
-            wallet provisioning, but that exception needs an explicit custody
-            decision before this button can mint or store a wallet.
+            Operator wallet provisioning is coming soon.
           </p>
           <Button disabled>Provision operator wallet</Button>
         </div>

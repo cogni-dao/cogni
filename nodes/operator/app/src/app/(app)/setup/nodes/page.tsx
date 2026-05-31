@@ -17,18 +17,25 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { ReactElement } from "react";
 import { resolveAppDb } from "@/bootstrap/container";
-import { PageContainer, SectionCard } from "@/components";
+import {
+  Badge,
+  PageContainer,
+  SectionCard,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components";
 import { getServerSessionUser } from "@/lib/auth/server";
-import { nodes } from "@/shared/db/nodes";
+import { type NodeStatus, nodes } from "@/shared/db/nodes";
 
 import { NewNodeForm } from "./NewNodeForm.client";
+import { NODE_STATUS_DISPLAY } from "./node-display";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-
-function shortNodeId(id: string): string {
-  return id.slice(0, 8);
-}
 
 export default async function SetupNodesPage(): Promise<ReactElement> {
   const session = await getServerSessionUser();
@@ -50,56 +57,51 @@ export default async function SetupNodesPage(): Promise<ReactElement> {
   );
 
   return (
-    <PageContainer>
+    <PageContainer maxWidth="3xl">
       <SectionCard title="Register a node">
         <p className="mb-3 text-muted-foreground text-sm">
-          Bootstrap a Cogni-governed node. v0 nodes live at{" "}
-          <code>nodes/&lt;slug&gt;/</code> in the Cogni-DAO/cogni monorepo — the
-          operator opens one PR adding the governance repo-spec once you have
-          formed its DAO. Payment activation happens from the child node after
-          bootstrap.
+          Register a node and form its DAO. v0 nodes live in the Cogni-DAO/cogni
+          monorepo.
         </p>
         <NewNodeForm />
       </SectionCard>
 
       <SectionCard title="Your nodes">
-        <p className="mb-3 text-muted-foreground text-sm">
-          {rows.length} registered
-        </p>
         {rows.length === 0 ? (
           <p className="text-muted-foreground text-sm">
-            No nodes yet — register one above to start the bootstrap wizard.
+            No nodes yet — register one above to get started.
           </p>
         ) : (
-          <ul className="space-y-2">
-            {rows.map((n) => (
-              <li key={n.id}>
-                <Link
-                  href={`/setup/nodes/${n.id}`}
-                  className="block rounded border border-border p-3 hover:bg-muted"
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="min-w-0">
-                      <span className="block truncate font-semibold text-sm">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Node</TableHead>
+                <TableHead className="text-right">Status</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((n) => {
+                const display = NODE_STATUS_DISPLAY[n.status as NodeStatus];
+                return (
+                  <TableRow key={n.id}>
+                    <TableCell>
+                      <Link
+                        href={`/setup/nodes/${n.id}`}
+                        className="font-medium hover:underline"
+                      >
                         {n.slug}
-                      </span>
-                      <span className="block truncate text-muted-foreground text-xs">
-                        node_id {shortNodeId(n.id)} · scope default
-                      </span>
-                    </div>
-                    <span className="text-muted-foreground text-xs uppercase">
-                      {n.status}
-                    </span>
-                  </div>
-                  {n.failureReason ? (
-                    <p className="mt-1 text-destructive text-xs">
-                      {n.failureReason}
-                    </p>
-                  ) : null}
-                </Link>
-              </li>
-            ))}
-          </ul>
+                      </Link>
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Badge intent={display.intent} size="sm">
+                        {display.label}
+                      </Badge>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
         )}
       </SectionCard>
     </PageContainer>

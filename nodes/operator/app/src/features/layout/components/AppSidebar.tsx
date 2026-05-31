@@ -15,6 +15,7 @@
 
 import {
   BookOpen,
+  Boxes,
   Briefcase,
   CreditCard,
   Github,
@@ -44,6 +45,7 @@ const NAV_ITEMS = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/work", label: "Work", icon: Briefcase },
   { href: "/knowledge", label: "Knowledge", icon: BookOpen },
+  { href: "/setup/nodes", label: "Nodes", icon: Boxes },
   { href: "/gov", label: "Gov", icon: Vote },
   { href: "/credits", label: "Credits", icon: CreditCard },
 ] as const;
