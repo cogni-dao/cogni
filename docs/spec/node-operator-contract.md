@@ -77,6 +77,26 @@ The system uses several orthogonal identity keys. Each has a single, non-overlap
 
 **`scope_id` = governance domain.** Identifies which project an epoch, its activity, and its payouts belong to. V0 default: `scope_id = 'default'` (single-project nodes). Multi-scope activates when `.cogni/projects/*.yaml` manifests are added. All epoch-level invariants (`ONE_OPEN_EPOCH`, `EPOCH_WINDOW_UNIQUE`) are composite on `(node_id, scope_id)`. See [Attribution Ledger spec](./attribution-ledger.md#project-scoping).
 
+### Node Topology — The Bundle Unit & Deployment Shapes
+
+> Colloquially "a node" means a **unique DAO + product + payment bundle**. That bundle is a **scope** (`scope_id`), *not* necessarily a deployment. Whether it earns its own deployment is an orthogonal choice.
+
+Two orthogonal axes — keep them separate to avoid the recurring "is X a node?" confusion:
+
+1. **Governance unit = scope.** The DAO + product + payment-rails bundle is a `scope_id` (a Project, per the Definitions table above). One node can host many. Declared in `.cogni/projects/<scope_key>.yaml`; see [identity-model § Spec File Layering](./identity-model.md#spec-file-layering).
+2. **Deployment shape = how that scope runs.** Independent of the bundle:
+
+| Shape                | Runs as                                                        | Own `node_id`/DB? | git-app / UI? | Example                          |
+| -------------------- | -------------------------------------------------------------- | ----------------- | ------------- | -------------------------------- |
+| **Full-app node**    | own `docker compose up`                                        | yes               | yes (Next.js) | poly, resy                       |
+| **Agent bundle**     | LangGraph graphs + Dolt knowledge inside an existing node      | no (shares host)  | no            | librarian, oss-advisor          |
+| **Service in node**  | a `services/*` process within a node                           | no                | no            | scheduler-worker                 |
+| **Skill**            | a graph/command any node's agent can run                       | no                | no            | `/librarian`                     |
+
+**NEW_CAPABILITY_IS_A_SCOPE:** a new DAO+product+payment bundle starts as a **scope inside an existing node** (default: operator), running as an agent bundle/service against that node's Dolt knowledge plane. It graduates to a **full-app node** (own `node_id`, DB, infra) only when it requires `DATA_SOVEREIGNTY`, `DEPLOY_INDEPENDENCE`, or `FORK_FREEDOM` the host cannot provide. Per-scope DAO billing (attribution-ledger `APPROVERS_PER_SCOPE`; dao-enforcement `FALLBACK_SCOPE_RAILS`) lets a scope bill independently **without** a separate deployment — so "langgraph agent bundle + its own DAO + Dolt repo" is a *scope*, not a new node, until it earns sovereignty.
+
+**Planes (do not conflate — there is no single "three-plane" model):** the Operator splits into a **Control Plane** (`apps/operator/`) and **Data Plane** (`services/*`). Orthogonally, every node's *data* splits into an **Awareness Plane** (hot Postgres) and a **Knowledge Plane** (cold Doltgres `knowledge_<node>`, one DB per node) — see [knowledge-data-plane](./knowledge-data-plane.md). These are two independent two-plane vocabularies, not three planes.
+
 ### Operator Architecture
 
 | Layer             | Component        | Purpose                                                                       |
