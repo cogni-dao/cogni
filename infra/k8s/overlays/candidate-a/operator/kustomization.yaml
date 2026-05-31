@@ -100,7 +100,7 @@ patches:
             limits:
               memory: "1Gi"
               cpu: "1000m"
-  # bug.0295: VM discovery via DNS (cogni-candidate-a.vm.cognidao.org).
+  # bug.0295: VM discovery via DNS (vm.cognidao.org).
   # Convert base headless Services → ExternalName; delete EndpointSlices.
   - target: { kind: Service, name: postgres-external }
     patch: |
@@ -110,7 +110,7 @@ patches:
         name: postgres-external
       spec:
         type: ExternalName
-        externalName: cogni-candidate-a.vm.cognidao.org
+        externalName: vm.cognidao.org
         clusterIP: null
   - target: { kind: Service, name: temporal-external }
     patch: |
@@ -120,7 +120,7 @@ patches:
         name: temporal-external
       spec:
         type: ExternalName
-        externalName: cogni-candidate-a.vm.cognidao.org
+        externalName: vm.cognidao.org
         clusterIP: null
   - target: { kind: Service, name: litellm-external }
     patch: |
@@ -130,7 +130,7 @@ patches:
         name: litellm-external
       spec:
         type: ExternalName
-        externalName: cogni-candidate-a.vm.cognidao.org
+        externalName: vm.cognidao.org
         clusterIP: null
   - target: { kind: Service, name: redis-external }
     patch: |
@@ -140,7 +140,7 @@ patches:
         name: redis-external
       spec:
         type: ExternalName
-        externalName: cogni-candidate-a.vm.cognidao.org
+        externalName: vm.cognidao.org
         clusterIP: null
   - target: { kind: Service, name: doltgres-external }
     patch: |
@@ -150,7 +150,7 @@ patches:
         name: doltgres-external
       spec:
         type: ExternalName
-        externalName: cogni-candidate-a.vm.cognidao.org
+        externalName: vm.cognidao.org
         clusterIP: null
   - target: { kind: EndpointSlice, name: postgres-external-1 }
     patch: |
