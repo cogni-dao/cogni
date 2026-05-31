@@ -1,11 +1,11 @@
 ---
 name: oss-research-loop
-description: One iteration of the OSS-AI research loop — grow the operator hub's `oss-ai` domain by ONE high-quality move per run. Default move is REFINE the capability matrix (`oss-ai-vs-cogni`) and its leaf per-repo finding entries; opening a new repo entry is rare. Pareto bias: focus on infra we actually depend on (litellm, grafana, posthog, langgraph, doltgres) and the most leveraged OSS for AI apps + personal AI assistants. Invoked from a Claude Code `/loop` schedule on Derek's machine in stage 0 (cheap smart models). Triggers: "research OSS for AI", "refresh the capability matrix", "grow oss-ai knowledge", "/loop oss-research-loop". DO NOT use for cataloging arbitrary OSS — that's sprawl. Only for repos that move the AI-app or personal-AI-assistant pareto.
+description: One iteration of the OSS-AI research loop — grow the operator hub's `oss-ai` domain by ONE high-quality move per run. By default the agent REFINES an existing entry backed by a cited source — it does not create new entries; opening a new repo entry is the rare, justified exception. Pareto bias: focus on infra we actually depend on (litellm, grafana, posthog, langgraph, doltgres) and the most leveraged OSS for AI apps + personal AI assistants. Invoked from a Claude Code `/loop` schedule on Derek's machine in stage 0 (cheap smart models). Triggers: "research OSS for AI", "refresh the capability matrix", "grow oss-ai knowledge", "/loop oss-research-loop". DO NOT use for cataloging arbitrary OSS — that's sprawl. Only for repos that move the AI-app or personal-AI-assistant pareto.
 ---
 
 # oss-research-loop — one careful iteration per run
 
-> The point is the COMPOUNDING matrix, not the volume of entries. Most loop iterations should sharpen one row of `oss-ai-vs-cogni` and/or refine one leaf. Adding a new repo is the exception, not the default.
+> The point is the COMPOUNDING matrix, not the volume of entries. **By default an agent REFINES an existing entry and proves the change with a cited source — it does not create new entries.** Adding is the rare exception. A run that sharpens one entry with evidence is worth more than a run that adds three shallow drafts. If you finish an iteration having only created new rows, you have produced sprawl, not syntropy.
 
 ## Pareto bar — only repos that pass
 
@@ -21,7 +21,7 @@ Per `knowledge-syntropy-expert`:
 
 - **One composite entry**: `oss-ai-vs-cogni` (`entryType: html`, domain `oss-ai`). A capability matrix where rows are capabilities (LLM gateway, observability, vector store, agent orchestration, ...) and columns are OSS options + a Cogni column. Each cell is a chip linking to a leaf.
 - **Many leaf entries**: one `finding` per repo (`entryType: finding`, domain `oss-ai`, id like `oss-litellm` / `oss-langgraph`). Atomic deep-dive: what it does, license (SPDX), maturity signals, when to use, why we use it (or don't).
-- **Composite cites leaves** via `supports` citations. Composite confidence inherits from the leaves; a row with 4 high-confidence leaves becomes a strong matrix row.
+- **Reality check on confidence:** the contribution edit API exposes only `insert` / `update` / `deprecate` — there is **no agent-facing `supports`/citation op**. Agents cannot create citation edges, so confidence does NOT compound by adding leaves; new entries sit at draft (~30) until a human/resolver acts. The only lever an agent has on quality is **proven, verifiable content inside the entry itself.** That is why refine-with-proof is the default, not add.
 
 ```
 oss-ai-vs-cogni (html composite)
@@ -34,16 +34,27 @@ oss-ai-vs-cogni (html composite)
 
 ## Action hierarchy — per loop iteration
 
-Walk top-to-bottom. **Stop at the first action that produces real value. Do NOT do more than one major action per iteration.**
+**Default: REFINE an existing entry, backed by proof. Creating a new entry is the rare exception.** Do at most ONE move per iteration; stop at the first that produces real, *proven* value.
 
-1. **RECALL** — `GET /api/v1/knowledge/contributions?state=merged&limit=50` or browse `/knowledge?domain=oss-ai`. Read the current state of the matrix + at least 5 leaves.
-2. **REFINE A LEAF** — pick a per-repo `finding` that is stale (info changed), incomplete (missing license / maturity / use-when), or muddy. `op: update` via the contribution API. **This is the most valuable move.**
-3. **REFINE THE MATRIX** — if a leaf's state changed (e.g., maturity went from beta to v1.0, or you discovered we use it more centrally than the row showed), `op: update` the matrix row.
-4. **ADD A LEAF** — only if RECALL confirmed a high-pareto repo is missing AND it passes the Pareto bar above. `op: insert` a new `finding`. Same iteration: `op: update` the matrix to reference it.
-5. **STOP** when the open branch is a coherent, reviewable unit — one theme a human can merge in one pass. Prefer REFINE over ADD; a sharper existing leaf compounds more than a new shallow one. Quality of the matrix, not commit count, is the bar.
+1. **RECALL (mandatory first step)** — read the current matrix + every existing `oss-ai` leaf (via the contribution diff or `/knowledge`). You cannot refine or add without knowing what already exists. In your commit message, name the exact entry you are improving and why.
+2. **REFINE — the default move, ~every iteration.** Pick the entry whose improvement most increases the matrix's value: a stale fact, a missing license/maturity/gotcha, a muddy cell, an unproven claim. `op: update`. **Every refine must carry proof (see Proof bar) and state the before→after delta.** A refine with no delta and no new evidence is churn — don't do it.
+3. **ADD — exceptional, justify it.** Permitted ONLY when all three hold: (a) RECALL proved no existing entry can absorb the knowledge, (b) the repo clears the Pareto bar, (c) you can cite proof for every field. Prefer folding new infra into an existing block (e.g. one "infra we run" leaf) over spawning one entry per repo. If you add, the commit message must say why refinement was impossible.
+4. **STOP** when the open branch is one coherent, reviewable, *proven* theme a human merges in a single pass. Fewer, sharper, cited entries compound; piles of fresh draft entries devolve. Proof and quality — never entry count — is the bar.
+
+## Proof bar — no write without evidence
+
+Every `insert` or `update` must be backed by a verifiable source, cited inline in the entry **and** named in the commit message:
+
+- Facts (license, stars, version, maturity, last commit) → cite source + retrieval date, e.g. `stars: ~48.8k (github.com/BerriAI/litellm, 2026-05-30)`. Mark approximate figures as approximate; never present a summarizer's star count as exact.
+- "Why we use it" / integration claims → cite the repo path, spec, or prior knowledge entry that proves it, e.g. `adapter: packages/.../contribution-adapter.ts`.
+- If you cannot prove a claim, **soften it or cut it** — do not ship it at draft confidence and move on.
+
+Confidence compounds when claims become more verifiable, not when entry count goes up. An iteration with no new evidence produced nothing — end it without a write rather than churning wording to look busy.
 
 ## Forbidden in this loop
 
+- **Creating a new entry when an existing one could absorb the knowledge.** Refine first; add only after proving you can't.
+- **Shipping an unproven claim**, or churning wording with no new evidence and no before→after delta.
 - **Cataloging obscure repos** (Pareto fail).
 - **Opening a new matrix entry** when `oss-ai-vs-cogni` already exists. Refine it.
 - **Filing predictions** via `edo-loop` from this skill. EDO is a separate beat; this loop is for refining a knowledge index, not making contestable predictions. If a genuine contestable forecast surfaces, file it via `/edo-loop` separately.
