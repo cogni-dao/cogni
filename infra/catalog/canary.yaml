@@ -1,0 +1,13 @@
+name: canary
+type: node
+port: 3400
+node_id: "89612f02-114d-460d-87a5-c2ab212ccf6f"
+dockerfile: nodes/canary/app/Dockerfile
+# bug.0344 — see infra/catalog/operator.yaml for why these fields exist.
+image_tag_suffix: "-canary"
+migrator_tag_suffix: "-canary-migrate"
+# task.0320 — per-env deploy branches (see operator.yaml).
+candidate_a_branch: deploy/candidate-a-canary
+preview_branch: deploy/preview-canary
+production_branch: deploy/production-canary
+path_prefix: nodes/canary/

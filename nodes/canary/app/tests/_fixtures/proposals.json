@@ -1,0 +1,25 @@
+{
+  "validProposal": {
+    "id": "prop-001",
+    "title": "Test Proposal",
+    "description": "A test proposal for unit testing",
+    "status": "draft",
+    "createdBy": "0x1234567890123456789012345678901234567890",
+    "createdAt": "2024-01-01T00:00:00.000Z"
+  },
+  "approvedProposal": {
+    "id": "prop-002",
+    "title": "Approved Proposal",
+    "description": "An approved proposal for testing",
+    "status": "approved",
+    "createdBy": "0x1234567890123456789012345678901234567890",
+    "createdAt": "2024-01-01T00:00:00.000Z",
+    "approvedAt": "2024-01-02T00:00:00.000Z"
+  },
+  "invalidProposal": {
+    "id": "",
+    "title": "",
+    "description": "",
+    "status": "invalid"
+  }
+}

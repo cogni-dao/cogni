@@ -30,6 +30,11 @@ spec:
         revision: deploy/candidate-a-node-template
         files:
           - path: "infra/catalog/node-template.yaml"
+    - git:
+        repoURL: https://github.com/cogni-dao/cogni.git
+        revision: deploy/candidate-a-canary
+        files:
+          - path: "infra/catalog/canary.yaml"
   template:
     metadata:
       name: "candidate-a-{{.name}}"

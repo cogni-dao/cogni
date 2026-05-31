@@ -1,0 +1,2 @@
+ALTER TABLE "schedules" ADD COLUMN "temporal_schedule_id" text;--> statement-breakpoint
+CREATE UNIQUE INDEX "schedules_temporal_id_unique" ON "schedules" USING btree ("owner_user_id","temporal_schedule_id") WHERE temporal_schedule_id IS NOT NULL;

@@ -1,0 +1,41 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "entry": [
+    "src/app/**/*.{ts,tsx}",
+    "src/features/**/*.{ts,tsx}!",
+    "src/components/**/*.{ts,tsx}!",
+    "src/styles/**/*.ts!",
+    "next.config.mjs"
+  ],
+  "project": [
+    "src/app/**/*.{ts,tsx}",
+    "src/features/**/*.{ts,tsx}",
+    "src/components/**/*.{ts,tsx}",
+    "src/styles/**/*.ts"
+  ],
+  "ignore": [
+    "**/*.d.ts",
+    "**/__tests__/**",
+    "**/__arch_probes__/**",
+    "tests/**",
+    "e2e/**",
+    "scripts/**",
+    "../../infra/**",
+    "../../scripts/**",
+    "src/core/**",
+    "src/ports/**",
+    "src/adapters/**",
+    "src/bootstrap/**",
+    "src/contracts/**",
+    "src/mcp/**",
+    "src/shared/**",
+    "../drizzle.config.ts"
+  ],
+  "ignoreDependencies": [
+    "@types/*",
+    "@auth/drizzle-adapter",
+    "@radix-ui/react-dialog",
+    "@radix-ui/react-separator",
+    "tw-animate-css"
+  ]
+}
