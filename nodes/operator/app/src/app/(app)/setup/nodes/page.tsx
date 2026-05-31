@@ -83,11 +83,11 @@ export default async function SetupNodesPage(): Promise<ReactElement> {
               {rows.map((n) => {
                 const display = NODE_STATUS_DISPLAY[n.status as NodeStatus];
                 return (
-                  <TableRow key={n.id}>
+                  <TableRow key={n.id} className="relative cursor-pointer">
                     <TableCell>
                       <Link
                         href={`/setup/nodes/${n.id}`}
-                        className="font-medium hover:underline"
+                        className="font-medium after:absolute after:inset-0 hover:underline"
                       >
                         {n.slug}
                       </Link>

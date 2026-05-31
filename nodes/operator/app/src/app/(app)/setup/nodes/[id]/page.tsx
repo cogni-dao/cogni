@@ -62,8 +62,17 @@ export default async function NodeDashboardPage({
   const status = node.status as NodeStatus;
   const display = NODE_STATUS_DISPLAY[status];
 
-  const technical: ReadonlyArray<{ label: string; value: string }> = [
-    { label: "Target path", value: `nodes/${node.slug}` },
+  const repoPath = `Cogni-DAO/cogni/nodes/${node.slug}`;
+  const technical: ReadonlyArray<{
+    label: string;
+    value: string;
+    href?: string;
+  }> = [
+    {
+      label: "Repo path",
+      value: repoPath,
+      href: `https://github.com/Cogni-DAO/cogni/tree/main/nodes/${node.slug}`,
+    },
     { label: "Chain", value: String(node.chainId ?? "—") },
     ...(node.daoAddress ? [{ label: "DAO", value: node.daoAddress }] : []),
     ...(node.operatorWalletAddress
@@ -71,6 +80,15 @@ export default async function NodeDashboardPage({
       : []),
     ...(node.splitAddress
       ? [{ label: "Payment split", value: node.splitAddress }]
+      : []),
+    ...(node.publishPrUrl
+      ? [
+          {
+            label: "Governance PR",
+            value: node.publishPrUrl,
+            href: node.publishPrUrl,
+          },
+        ]
       : []),
   ];
 
@@ -118,7 +136,18 @@ export default async function NodeDashboardPage({
           {technical.map((row) => (
             <Fragment key={row.label}>
               <span className="text-muted-foreground">{row.label}</span>
-              <span className="break-all font-mono text-xs">{row.value}</span>
+              {row.href ? (
+                <a
+                  className="break-all font-mono text-primary text-xs underline"
+                  href={row.href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  {row.value}
+                </a>
+              ) : (
+                <span className="break-all font-mono text-xs">{row.value}</span>
+              )}
             </Fragment>
           ))}
         </div>
