@@ -227,10 +227,22 @@ Those secrets have a property A2 doesn't: **same name across every node, distinc
 
 The tier system already names the split — A1 = "baseline, every node" vs A2 = "node-specific". The fix makes the loader _honor_ it:
 
-- **A1 baseline = defined ONCE** (operator-domain substrate, not a per-node copy), tagged to fan out to **every `type:node`** from `infra/catalog/*.yaml`. The loader expands `baseline × {operator, resy, node-template, canary, …}` → one routing entry per (node, name) at path `cogni/<env>/<node>/<KEY>`. `setup-secrets` generates a **distinct value per node**. Names overlap by design; values + paths are isolated → zero cross-contamination.
+- **A1 baseline = declared ONCE** under a new pseudo-service `_node_baseline` (sibling to `_shared`/`_system`) in `infra/secrets-catalog.yaml` — not a per-node copy. The **write side** (seed/`setup-secrets`) iterates `NODE_TARGETS` and instantiates each `_node_baseline` secret per `type:node` with a **distinct generated value** at `cogni/<env>/<node>/<KEY>`. Names overlap by design; values + paths isolated → zero cross-contamination.
 - **A2 node-specific = per-node catalog** (unchanged — this doc's original design).
-- `NO_NAME_COLLISIONS` is **preserved at the definition layer**: each name is _defined_ once (baseline once, or a distinct A2 name). Internal routing keys by `(service, name)`. Flipping the loader's uniqueness check to `(service,name)` is necessary but **not sufficient** — `routing[name]` (`loader:266`) and the `Secret[]` shape are name-keyed and would silently last-writer-win; the fan-out must thread `(service,name)` through `routing`, `Secret`, the `.env`/OpenBao write loop, and ExternalSecret generation.
+- `NO_NAME_COLLISIONS` is **preserved unchanged**: each name is declared once (`_node_baseline` once, `_shared` once, or a distinct A2 name). The loader's name-keyed `routing`/`Secret[]` shapes **do not change** — no `(service,name)` rework. (An earlier draft threaded `(service,name)` through the loader output — rejected: breaks every `routing[name]` consumer for no gain, since the baseline is one declaration, not N. The fan-out is write-time, over `NODE_TARGETS`.)
 - **canary/operator/resy carry NO A1 catalog.** They're enrolled by being `type:node`. Adding a node = 0 baseline lines (vs #1406's 36-line copy). The copy _was_ the bug.
+
+### Two fan-out tiers, distinguished by value-distinctness
+
+The flat `.env.<env>` holds **one value per name** and the OpenBao seed reads from it — so per-node-_distinct_ values cannot live in `.env`; they're **generated per node at seed time**. Today's "baseline" splits in two:
+
+| marker                 | who               | value                                                                | example                                                                          |
+| ---------------------- | ----------------- | -------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `_shared`              | every node        | **same** value, `cogni/<env>/_shared/<KEY>`                          | `OPENROUTER_API_KEY`, `EVM_RPC_URL`, `GRAFANA_URL` (genuinely shared)            |
+| `_node_baseline`       | every `type:node` | **distinct** per node, generated at seed, `cogni/<env>/<node>/<KEY>` | `AUTH_SECRET`, `APP_DB_PASSWORD`, `*_TOKEN` (`source: agent`, security-isolated) |
+| `service: <node>` (A2) | one node          | distinct, node-owned                                                 | poly CLOB creds                                                                  |
+
+node-template's 36 A1 entries split: `source: agent` security secrets → `_node_baseline`; genuinely-shared human values → `_shared`. Pod side: each node's ExternalSecret does **two `dataFrom: extract`** — `cogni/<env>/<node>/*` + `cogni/<env>/_shared/*` → one `<node>-env-secrets`.
 
 ### ExternalSecret / pod side — already the right shape
 
@@ -243,7 +255,7 @@ Operator-domain — substrate that applies to all nodes, like `_shared`, but **p
 ### Staged plan (refines this doc / task.5071; unblocks task.5081 multi-node OpenBao)
 
 1. **This design amendment** → review. (`needs_review`.)
-2. **Loader**: A1-baseline fan-out over `type:node` + `(service,name)` routing internally + unit tests. Operator-domain.
+2. **Loader**: accept `_node_baseline` pseudo-service (allowlist) + expose `nodeTargets` (`type:node` from `infra/catalog`) in `LoadResult`; `isNodeSecret` treats `_node_baseline` as "every node". No `routing` shape change. + unit tests. Operator-domain.
 3. **Catalog migration**: node-template A1 → baseline block; **delete canary's dup catalog**; per-node A2 catalogs (mostly empty). Operator-domain.
 4. **`setup-secrets`**: per-node value generation + per-node OpenBao writes. (Open Q: flat `.env.<env>` can't represent per-node A1 — write per-node straight to OpenBao; `.env` carries only what provision Phase 2 reads.)
 5. **ExternalSecrets**: one per (node, env); overlay `resources:` wiring.
