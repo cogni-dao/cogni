@@ -52,6 +52,10 @@ divergences:
       - "infra/catalog/resy.yaml"
       - "infra/k8s/overlays/canary/**" # no canary env
       - "tests/ci-invariants/**" # hub-only CI structural tests
+      - "infra/k8s/secrets/production/**" # hub production secrets — never ship to public template
+      - "infra/k8s/secrets/staging/**" # hub staging secrets
+      - "infra/k8s/secrets/.sops.yaml" # hub sops key config
+      - "infra/k8s/secrets/README.md" # hub secrets-layout doc
       - "scripts/experiments/**" # hub-only research scripts
     artifact_only:
       - "AGENTS.md" # dev-freeze banner twin (see omit_from_artifact comment) — both lists required to zero the bidirectional drift flag
