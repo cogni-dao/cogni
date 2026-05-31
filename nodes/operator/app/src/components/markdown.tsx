@@ -86,26 +86,23 @@ const components: Components = {
   ),
   table: ({ node, className, ...rest }) => (
     <div className="my-3 overflow-x-auto">
-      <table
-        className={cn("w-full border-collapse text-sm", className)}
-        {...rest}
-      />
+      <table className={cn("w-full text-sm", className)} {...rest} />
     </div>
   ),
-  th: ({ node, className, ...rest }) => (
-    <th
-      className={cn(
-        "border border-border bg-muted px-3 py-1.5 text-left font-semibold",
-        className
-      )}
+  thead: ({ node, className, ...rest }) => (
+    <thead
+      className={cn("border-border border-b text-left", className)}
       {...rest}
     />
   ),
+  tbody: ({ node, className, ...rest }) => (
+    <tbody className={cn("divide-y divide-border", className)} {...rest} />
+  ),
+  th: ({ node, className, ...rest }) => (
+    <th className={cn("px-3 py-1.5 font-semibold", className)} {...rest} />
+  ),
   td: ({ node, className, ...rest }) => (
-    <td
-      className={cn("border border-border px-3 py-1.5", className)}
-      {...rest}
-    />
+    <td className={cn("px-3 py-1.5", className)} {...rest} />
   ),
   pre: ({ node, className, ...rest }) => (
     <pre
@@ -122,9 +119,7 @@ const components: Components = {
     return (
       <code
         className={
-          isBlock
-            ? className
-            : "rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]"
+          isBlock ? className : "rounded bg-muted px-1 py-0.5 font-mono text-sm"
         }
         {...rest}
       />
