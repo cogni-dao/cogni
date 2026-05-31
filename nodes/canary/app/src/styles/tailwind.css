@@ -149,9 +149,9 @@
     --syntax-keyword: 10 50% 50%; /* red/brown - keywords */
 
     /* Accent gradient stops (aligned with brand hue 217) */
-    --accent-from: 217 85% 50%;
-    --accent-to: 217 100% 70%;
-    --accent-glow: 217 95% 60%;
+    --accent-from: 43 96% 48%;
+    --accent-to: 48 100% 64%;
+    --accent-glow: 45 98% 56%;
 
     /* Status colors */
     --color-danger: 0 84.2% 60.2%;
@@ -222,9 +222,9 @@
     --syntax-keyword: 220 100% 65%; /* blue - keywords */
 
     /* Accent gradient stops (aligned with brand hue 217, darker for dark mode) */
-    --accent-from: 217 80% 45%;
-    --accent-to: 217 100% 60%;
-    --accent-glow: 217 90% 52%;
+    --accent-from: 43 96% 46%;
+    --accent-to: 48 100% 60%;
+    --accent-glow: 45 98% 54%;
 
     /* Sidebar */
     --sidebar: 0 0% 3%;
