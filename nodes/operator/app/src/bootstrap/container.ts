@@ -112,6 +112,7 @@ import {
   getDoltgresWorkItemsAdapter,
 } from "@/adapters/server/db/doltgres/client";
 import { getServiceDb } from "@/adapters/server/db/drizzle.service-client";
+import { DrizzleTranscriptIngestAdapter } from "@/adapters/server/db/transcript-ingest.adapter";
 import { DrizzleWorkItemSessionAdapter } from "@/adapters/server/db/work-item-session.adapter";
 import { ServiceDrizzlePaymentAttemptRepository } from "@/adapters/server/payments/drizzle-payment-attempt.adapter";
 import { OpenRouterFundingAdapter } from "@/adapters/server/treasury/openrouter-funding.adapter";
@@ -155,6 +156,7 @@ import type {
   RunStreamPort,
   ServiceAccountService,
   ThreadPersistencePort,
+  TranscriptIngestPort,
   TreasuryReadPort,
   TreasurySettlementPort,
   WorkItemSessionPort,
@@ -245,6 +247,8 @@ export interface Container {
   doltgresWorkItems: WorkItemsDoltgresPort;
   /** Operator-local active work-item coordination sessions. */
   workItemSessions: WorkItemSessionPort;
+  /** Raw AI-developer transcript firehose (append-only operational plane). */
+  transcriptIngest: TranscriptIngestPort;
   /** Run event streaming — publish/subscribe via Redis Streams */
   runStream: RunStreamPort;
   /** Node-level event streaming — undefined when REDIS_URL not set */
@@ -542,6 +546,7 @@ function createContainer(): Container {
   const paymentAttemptServiceRepository =
     new ServiceDrizzlePaymentAttemptRepository(serviceDb);
   const workItemSessions = new DrizzleWorkItemSessionAdapter(serviceDb);
+  const transcriptIngest = new DrizzleTranscriptIngestAdapter(serviceDb);
 
   // User-facing scheduling (appDb, RLS enforced)
   const executionGrantPort = new DrizzleExecutionGrantUserAdapter(
@@ -893,6 +898,7 @@ function createContainer(): Container {
     workItemQuery: workItemAdapter,
     doltgresWorkItems,
     workItemSessions,
+    transcriptIngest,
     runStream,
     nodeStream,
     get webhookRegistrations() {

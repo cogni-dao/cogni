@@ -24,6 +24,17 @@
           }
         ]
       }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/ship-transcript.mjs"
+          }
+        ]
+      }
     ]
   }
 }

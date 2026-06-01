@@ -204,6 +204,11 @@ export type {
   TreasurySettlementPort,
 } from "./treasury-settlement.port";
 export type {
+  TranscriptAppendResult,
+  TranscriptChunkInput,
+  TranscriptIngestPort,
+} from "./transcript-ingest.port";
+export type {
   ClaimWorkItemSessionResult,
   WorkItemSessionPort,
   WorkItemSessionRecord,

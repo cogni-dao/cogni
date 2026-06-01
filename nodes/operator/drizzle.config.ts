@@ -29,6 +29,7 @@ export default defineConfig({
   schema: [
     "./packages/db-schema/src/**/*.ts",
     "./nodes/operator/app/src/shared/db/work-item-sessions.ts",
+    "./nodes/operator/app/src/shared/db/agent-transcripts.ts",
   ],
   out: "./nodes/operator/app/src/adapters/server/db/migrations",
   dialect: "postgresql",
