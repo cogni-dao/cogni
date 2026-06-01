@@ -50,21 +50,22 @@ You have a node app under `nodes/<node>/app` (a Next.js node) and you want it to
 
 Track these rows for every generated node PR. The wizard should emit the pure-git rows in one PR and open/follow side-effect work for provisioning before flight validation.
 
-| Row                   | Owner surface               | Required proof                                                                                                        | Blocks flight? |
-| --------------------- | --------------------------- | --------------------------------------------------------------------------------------------------------------------- | -------------- |
-| App scaffold          | `nodes/<node>/app`          | `pnpm --dir nodes/<node>/app build` or CI node image build succeeds                                                   | Yes            |
-| Catalog declaration   | `infra/catalog/<node>.yaml` | `scripts/ci/detect-affected.sh` selects `<node>` for `infra/catalog/<node>.yaml` and `nodes/<node>/` changes          | Yes            |
-| Environment overlays  | `infra/k8s/overlays/*`      | `kustomize build infra/k8s/overlays/{candidate-a,preview,production}/<node>` succeeds                                 | Yes            |
-| ApplicationSet wiring | `infra/k8s/argocd/*`        | all three AppSets include `deploy/{candidate-a,preview,production}-<node>` generators                                 | Yes            |
-| Edge routing          | catalog + Caddy template    | generated Caddyfile has `<node>-test`, `<node>-preview`, and production host routes with the catalog `node_port`      | Yes            |
-| Scheduler routing     | catalog + worker ConfigMap  | `scripts/ci/render-scheduler-worker-endpoints.sh --check` includes `<node>` slug + `node_id` aliases                  | Yes            |
-| LiteLLM callbacks     | deploy-infra catalog render | `deploy-infra.sh --dry-run` derives `COGNI_NODE_ENDPOINTS` from all catalog nodes for node-local metering callbacks   | Yes            |
-| Secrets               | deploy-infra / OpenBao path | target cluster has the pod-consumed secret (`<node>-node-app-secrets` today; ESO migration uses `<node>-env-secrets`) | Yes            |
-| Databases             | deploy-infra                | Postgres `cogni_<node>` and Doltgres `knowledge_<node>` exist and app migrations complete                             | Yes            |
-| DNS                   | DNS ops                     | `<node>-test`, `<node>-preview`, and production hostnames resolve to the correct env VM                               | Yes            |
-| Candidate flight      | operator API / GitHub       | candidate-flight promotes only `<node>`, Argo syncs the deploy branch, and `/version.buildSha` equals PR head         | Yes            |
-| Agent API validation  | `/validate-candidate`       | discover → register → chat/completions → runs list → SSE stream scorecard posted with Loki evidence                   | Yes            |
-| Wizard repeatability  | node wizard                 | a second generated node (for example `<node>-2`) produces the same rows without manual script edits                   | vNext gate     |
+| Row                   | Owner surface               | Required proof                                                                                                                     | Blocks flight? |
+| --------------------- | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | -------------- |
+| App scaffold          | `nodes/<node>/app`          | `pnpm --dir nodes/<node>/app build` or CI node image build succeeds                                                                | Yes            |
+| Catalog declaration   | `infra/catalog/<node>.yaml` | `scripts/ci/detect-affected.sh` selects `<node>` for `infra/catalog/<node>.yaml` and `nodes/<node>/` changes                       | Yes            |
+| Environment overlays  | `infra/k8s/overlays/*`      | `kustomize build infra/k8s/overlays/{candidate-a,preview,production}/<node>` succeeds                                              | Yes            |
+| ApplicationSet wiring | `infra/k8s/argocd/*`        | all three AppSets include `deploy/{candidate-a,preview,production}-<node>` generators                                              | Yes            |
+| Edge routing          | catalog + Caddy template    | generated Caddyfile has `<node>-test`, `<node>-preview`, and production host routes with the catalog `node_port`                   | Yes            |
+| Scheduler routing     | catalog + worker ConfigMap  | `scripts/ci/render-scheduler-worker-endpoints.sh --check` includes `<node>` slug + `node_id` aliases                               | Yes            |
+| Scheduler runtime DNS | worker overlay              | `scripts/ci/tests/scheduler-runtime-routing.test.sh` verifies scheduler-worker Temporal/Postgres/App Services use the env VM alias | Yes            |
+| LiteLLM callbacks     | deploy-infra catalog render | `deploy-infra.sh --dry-run` derives `COGNI_NODE_ENDPOINTS` from all catalog nodes for node-local metering callbacks                | Yes            |
+| Secrets               | deploy-infra / OpenBao path | target cluster has the pod-consumed secret (`<node>-node-app-secrets` today; ESO migration uses `<node>-env-secrets`)              | Yes            |
+| Databases             | deploy-infra                | Postgres `cogni_<node>` and Doltgres `knowledge_<node>` exist and app migrations complete                                          | Yes            |
+| DNS                   | DNS ops                     | `<node>-test`, `<node>-preview`, and production hostnames resolve to the correct env VM                                            | Yes            |
+| Candidate flight      | operator API / GitHub       | candidate-flight promotes only `<node>`, Argo syncs the deploy branch, and `/version.buildSha` equals PR head                      | Yes            |
+| Agent API validation  | `/validate-candidate`       | discover → register → chat/completions → runs list → SSE stream scorecard posted with Loki evidence                                | Yes            |
+| Wizard repeatability  | node wizard                 | a second generated node (for example `<node>-2`) produces the same rows without manual script edits                                | vNext gate     |
 
 ## Steps
 

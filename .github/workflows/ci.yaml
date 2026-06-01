@@ -271,6 +271,9 @@ jobs:
       - name: scheduler node routing tests
         run: bash scripts/ci/render-scheduler-worker-endpoints.sh --check
 
+      - name: scheduler runtime routing tests
+        run: bash scripts/ci/tests/scheduler-runtime-routing.test.sh
+
       - name: Unit + contract coverage tests
         run: pnpm test:ci
 
