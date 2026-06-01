@@ -401,13 +401,17 @@ function createContainer(): Container {
   );
 
   // Initialize PostHog product analytics (required — env validated at boot)
-  initAnalytics({
-    apiKey: env.POSTHOG_API_KEY,
-    host: env.POSTHOG_HOST,
-    appVersion: env.COGNI_REPO_SHA ?? "unknown",
-    environment: env.DEPLOY_ENVIRONMENT ?? "local",
-  });
-  log.info("PostHog analytics initialized");
+  if (env.POSTHOG_API_KEY && env.POSTHOG_HOST) {
+    initAnalytics({
+      apiKey: env.POSTHOG_API_KEY,
+      host: env.POSTHOG_HOST,
+      appVersion: env.COGNI_REPO_SHA ?? "unknown",
+      environment: env.DEPLOY_ENVIRONMENT ?? "local",
+    });
+    log.info("PostHog analytics initialized");
+  } else {
+    log.info("PostHog not configured — analytics disabled");
+  }
 
   // Flush analytics events on graceful shutdown
   const flushOnExit = () => {
