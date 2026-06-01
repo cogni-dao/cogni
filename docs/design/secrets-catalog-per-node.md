@@ -215,9 +215,102 @@ The OpenBao path convention does not change. ESO continues to reconcile from the
 - [ ] Where does `_system` tier (G-derived secrets like `COGNI_NODE_DBS`) live? Recommend `infra/catalog/_system-secrets.yaml` alongside `_shared` — operator-domain because it walks the nodes list.
 - [ ] Should the loader emit a printed routing table (`pnpm setup:secrets --list`) for auditor evidence? Cheap to add; useful for SOC2 documentation.
 
+## Amendment 2026-05-31 (v2, post-review) — capability-gated secret fan-out
+
+> Supersedes the v1 `_node_baseline` sketch below the fold. Two independent co-reviews + the repo-spec→node-spec work converged here. The bug that surfaced it (#1406 added `canary` as a byte-identical copy of node-template's 36-entry catalog → loader `AUTH_SECRET declared in both`) is a symptom; the model is the fix.
+
+### The reframe: a "node" is a capability set, not an app
+
+The repo-spec→node-spec work makes nodes **heterogeneous**: some are full Next.js apps (operator), some are langgraph agent packages, some are dolt memory stores — and several may run as packages **inside one shared operator/registry app** rather than as standalone deployables. So "same image ⇒ same 36 secrets" is wrong: a langgraph+dolt node must never be fanned `OPENCLAW_GATEWAY_TOKEN`, and **never** a payment key.
+
+Two identities, kept distinct:
+
+- **Logical node** = a `node_id` (from `nodes/<x>/.cogni/repo-spec.yaml`) + a set of **capabilities**. Owns a secret namespace `cogni/<env>/<node>/*`.
+- **Physical deployable** = a pod. Standalone: 1 node → 1 pod. Shared operator app: N nodes → 1 pod that mounts each hosted node's `<node>-env-secrets`.
+
+### The model: `appliesTo:` capability marker (NOT a pseudo-service)
+
+A secret declares **which capability it serves**; a node declares **which capabilities it has** (node-spec); the loader fans each secret to the matching nodes. A marker expresses **subsets**; a pseudo-service (`_node_baseline`) can only express "all" — which is why both reviewers rejected it.
+
+```yaml
+# infra/secrets-catalog.yaml (operator-domain) — declared ONCE
+- name: AUTH_SECRET
+  appliesTo: web # only nodes with a web/auth surface
+  source: agent
+  generate: { kind: base64, bytes: 32 } # distinct value per node
+- name: APP_DB_PASSWORD
+  appliesTo: database
+  source: agent
+  generate: { kind: hex, bytes: 24 }
+- name: PRIVY_SIGNING_KEY
+  appliesTo: payments # NEVER baseline — custody isolation (see below)
+  source: human
+- name: OPENROUTER_API_KEY
+  appliesTo: all-nodes
+  shared: true # SAME value all nodes → cogni/<env>/_shared/<KEY>
+```
+
+`appliesTo` resolves: `all-nodes` → every `type:node`; `<capability>` → nodes whose node-spec lists that capability. The **boot-floor** (`appliesTo: all-nodes`, `shared: false`) shrinks to the genuine minimum (identity + the node's own DB creds); everything else is capability-gated. Capability classes (initial): `web`, `database`, `llm`, `openclaw`, `payments`.
+
+### Distinct-value vs shared-value (the custody line)
+
+`shared:` on the entry decides the path + isolation, orthogonal to `appliesTo`:
+
+| `shared`          | path                        | value                                    | example                                               |
+| ----------------- | --------------------------- | ---------------------------------------- | ----------------------------------------------------- |
+| `false` (default) | `cogni/<env>/<node>/<KEY>`  | **distinct per node**, generated at seed | `AUTH_SECRET`, `APP_DB_PASSWORD`, `PRIVY_SIGNING_KEY` |
+| `true`            | `cogni/<env>/_shared/<KEY>` | **same** for all in-scope nodes          | `OPENROUTER_API_KEY`, `EVM_RPC_URL`, `GRAFANA_URL`    |
+
+**The real security fix is custody, not just forgery.** Today every node shares one value. Shared `AUTH_SECRET` → cross-node session **forgery**. Worse: shared `PRIVY_SIGNING_KEY` → **one secret moves every node's money**. So payment/wallet owner-keys are `appliesTo: payments`, `shared: false`, **never** baseline. OpenBao isolates **read** (per-node path + per-node reader role); the per-wallet **owner-keys from #1411** isolate **signing**. This is why `task.5081` no longer needs deferring — with this substrate, per-node isolation is real.
+
+### Atomic / idempotent / nondestructive — the delivery contract
+
+- **Atomic per (node, env), all-or-nothing.** A node must never boot with a Split address but no signing key. The write to OpenBao for a node's set is transactional; ExternalSecret-per-(node,env) gives atomic **delivery** (k8s Secret materializes whole or not at all).
+- **Fail-fast on incomplete required set** — provision aborts if a node's `required` capability secrets aren't all present, rather than booting a half-custodied node.
+- **Idempotent + repeatable** — re-running seed converges (existing `reconcile-secrets` read-back). Gaining a capability is **additive**; losing one is **explicit**, never a silent drop.
+- **Identical env-var-name contract monorepo ↔ standalone.** Pods see the same env var names regardless of where the node runs; the `node_id`→path resolution and `(service,name)` routing stay **internal** to the loader. `node-template`-as-its-own-repo is just `node = itself`.
+
+### `.env` vs OpenBao boundary (reviewer ask)
+
+| value class                                        | lives in `.env.<env>`? | written to OpenBao                                             | why                                                       |
+| -------------------------------------------------- | ---------------------- | -------------------------------------------------------------- | --------------------------------------------------------- |
+| per-node distinct (`shared:false`, `source:agent`) | **no**                 | generated per node at seed, straight to `cogni/<env>/<node>/*` | a flat `.env` holds one value per name; can't represent N |
+| shared (`shared:true`)                             | yes                    | seeded once to `cogni/<env>/_shared/*`                         | single value; `.env` is fine                              |
+| human-provided                                     | yes (entry point)      | seeded to the in-scope path                                    | human types once; fan/seed distributes                    |
+| Compose-infra (B-tier)                             | yes                    | never                                                          | postgres/temporal read `.env` directly                    |
+
+### Naming
+
+`node_id` (from node-spec) is the identity; the path component is its catalog slug. `cogni/<env>/<node>/<KEY>` + `<node>-env-secrets`. Resolved from node-spec, **not** the directory/catalog label — so the same code works in the monorepo and in a standalone node repo.
+
+### Staged plan (refines task.5071; unblocks task.5081 multi-node OpenBao)
+
+1. **This design v2** → co-review. ✅ approved by 2 reviewers.
+2. **Schema + loader**: add `appliesTo` + `shared` to the catalog schema; loader expands `appliesTo` × in-scope `type:node` → routing; expose `nodeTargets`. Capability source = node-spec (until node-spec lands, derive `web|database|llm|openclaw` from node presence; `payments` is opt-in). + unit tests. Operator-domain.
+3. **Catalog migration**: node-template's A1 → capability-gated entries in `infra/secrets-catalog.yaml`; **delete canary's dup catalog** (resolves the collision); per-node catalogs keep only A2. Operator-domain.
+4. **`setup-secrets` / seed**: per-node distinct-value generation + **atomic** per-(node,env) OpenBao write; fail-fast on incomplete required set.
+5. **ExternalSecrets**: one per (node, env), dual `dataFrom: extract` (`<node>/*` + `_shared/*`); overlay wiring.
+6. **`reconcile-secrets.sh`**: fan out to all in-scope `type:node` (today only `node-template` + `scheduler-worker`, `:125`).
+7. **Legacy-retire**: once substrate delivery is proven, retire the imperative `<node>-node-app-secrets` path (bug.5086's `deploy-infra.sh` loop) — explicit step, not drift.
+8. **E2E proof on candidate-b**: every node's pod `envFrom <node>-env-secrets` from its own `cogni/<env>/<node>/*`; 0 restarts; **0 cross-node value reuse** (assert distinct `AUTH_SECRET` per node).
+
+### OSS / platform conventions this follows
+
+- **HashiCorp Vault identity-templated paths** (`{{identity.entity.name}}`) + per-entity policy — our `cogni/<env>/<node>/*` + per-node reader role is the canonical multi-tenant Vault pattern, not a bespoke invention.
+- **External Secrets Operator** `dataFrom` multi-source extract = the dual `<node>/*` + `_shared/*` pull; `PushSecret` is the atomic-write primitive.
+- **Backstage software catalog** — entities declare `spec.type` + capabilities; the catalog resolves what applies. The node registry IS this; `appliesTo: <capability>` ≈ catalog-resolved relations.
+- **Kubernetes `nodeSelector` / label affinity** — workloads target nodes by label; `appliesTo` is a label-selector over node capabilities.
+- **SaaS per-tenant secret isolation** — namespace per tenant, **never** share signing keys across tenants. The custody line above is the standard control.
+
+### Coordination — converge with bug.5086, don't race it
+
+`bug.5086` catalog-drives `deploy-infra.sh`'s legacy imperative `<node>-node-app-secrets` loop to `type:node` — the **same generalization on the Compose-legacy path** (different k8s Secret names → no race with the substrate's `<node>-env-secrets`). Both drive off the **same node-spec + capability catalog**; that shared source is the seam. Step 7 retires the legacy path once the substrate proves out.
+
 ## Related
 
 - `task.5071` — this design's parent work item
+- `task.5081` — OpenBao landing on the hub; this amendment unblocks its multi-node step
+- `bug.5086` — legacy-path twin (deploy-infra `type:node` catalog-drive); must converge on the same baseline
 - `task.5052` / `task.5053` — downstream ports that inherit this shape
 - [`docs/spec/secrets-classification.md`](../spec/secrets-classification.md) — current tier definitions + naming conventions
 - [`docs/spec/secrets-management.md`](../spec/secrets-management.md) — invariants this refactor preserves
