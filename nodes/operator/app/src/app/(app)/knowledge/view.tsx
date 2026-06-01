@@ -12,7 +12,7 @@
  *   - SINGLE_COLUMNS_TOGGLE (toolbar, not per-column).
  *   - URL_DRIVEN_STATE (mode + filters persist in URL).
  *   - Cookie-session merges only — no Bearer header is ever sent from this page.
- * Side-effects: IO (GET /knowledge, GET /knowledge/contributions, POST .../merge).
+ * Side-effects: IO (GET /knowledge, GET /knowledge/contributions, POST .../merge, POST .../close).
  * Links: docs/spec/knowledge-syntropy.md, [/work view](../work/view.tsx)
  * @public
  */
@@ -57,6 +57,7 @@ import { useCallback, useMemo, useState } from "react";
 
 import { Button, Input } from "@/components";
 
+import { closeContribution } from "./_api/closeContribution";
 import { fetchContributions } from "./_api/fetchContributions";
 import { fetchDomains } from "./_api/fetchDomains";
 import { fetchKnowledge } from "./_api/fetchKnowledge";
@@ -125,6 +126,14 @@ export function KnowledgeDashboardView() {
 
   const mergeMutation = useMutation({
     mutationFn: (id: string) => mergeContribution(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["knowledge"] });
+    },
+  });
+
+  const closeMutation = useMutation({
+    mutationFn: (vars: { id: string; reason: string }) =>
+      closeContribution(vars.id, vars.reason),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["knowledge"] });
     },
@@ -222,7 +231,13 @@ export function KnowledgeDashboardView() {
           busyId={
             mergeMutation.isPending ? (mergeMutation.variables ?? null) : null
           }
+          rejectBusyId={
+            closeMutation.isPending
+              ? (closeMutation.variables?.id ?? null)
+              : null
+          }
           onMerge={(r) => mergeMutation.mutate(r.contributionId)}
+          onReject={(id, reason) => closeMutation.mutate({ id, reason })}
         />
       )}
 
@@ -393,13 +408,17 @@ function InboxPanel({
   isLoading,
   error,
   busyId,
+  rejectBusyId,
   onMerge,
+  onReject,
 }: {
   readonly rows: ContributionRecord[];
   readonly isLoading: boolean;
   readonly error: unknown;
   readonly busyId: string | null;
+  readonly rejectBusyId: string | null;
   readonly onMerge: (row: ContributionRecord) => void;
+  readonly onReject: (id: string, reason: string) => void;
 }) {
   const [sorting, setSorting] = useState<SortingState>([
     { id: "createdAt", desc: true },
@@ -410,7 +429,12 @@ function InboxPanel({
   const [selected, setSelected] = useState<ContributionRecord | null>(null);
 
   const columns = useMemo(
-    () => buildContributionColumns({ onMerge, busyId }),
+    () =>
+      buildContributionColumns({
+        onMerge,
+        onReject: (r) => setSelected(r),
+        busyId,
+      }),
     [onMerge, busyId]
   );
 
@@ -482,11 +506,18 @@ function InboxPanel({
         item={selected}
         open={selected !== null}
         busy={busyId !== null && selected?.contributionId === busyId}
+        rejectBusy={
+          rejectBusyId !== null && selected?.contributionId === rejectBusyId
+        }
         onOpenChange={(o) => {
           if (!o) setSelected(null);
         }}
         onMerge={(r) => {
           onMerge(r);
+          setSelected(null);
+        }}
+        onReject={(r, reason) => {
+          onReject(r.contributionId, reason);
           setSelected(null);
         }}
       />

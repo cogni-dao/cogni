@@ -15,7 +15,7 @@ import type { ContributionRecord } from "@cogni/node-contracts";
 import { HeaderFilter } from "@cogni/node-ui-kit/header-filter";
 import { DataGridColumnHeader } from "@cogni/node-ui-kit/reui/data-grid/data-grid-column-header";
 import { createColumnHelper } from "@tanstack/react-table";
-import { GitMerge } from "lucide-react";
+import { GitMerge, X } from "lucide-react";
 import type { ReactElement } from "react";
 import { Button } from "@/components";
 
@@ -25,6 +25,7 @@ const col = createColumnHelper<ContributionRecord>();
 
 export interface ContributionColumnsDeps {
   onMerge: (row: ContributionRecord) => void;
+  onReject: (row: ContributionRecord) => void;
   busyId: string | null;
 }
 
@@ -135,12 +136,13 @@ export function buildContributionColumns(deps: ContributionColumnsDeps) {
     col.display({
       id: "action",
       header: () => null,
-      size: 120,
+      size: 170,
       cell: ({ row }): ReactElement => {
         const r = row.original;
-        const disabled = r.state !== "open" || deps.busyId === r.contributionId;
+        const busy = deps.busyId === r.contributionId;
+        const disabled = r.state !== "open" || busy;
         return (
-          <div className="flex justify-end">
+          <div className="flex justify-end gap-1.5">
             <Button
               type="button"
               size="sm"
@@ -153,7 +155,21 @@ export function buildContributionColumns(deps: ContributionColumnsDeps) {
               }}
             >
               <GitMerge className="size-3" />
-              {deps.busyId === r.contributionId ? "Merging…" : "Merge"}
+              {busy ? "Merging…" : "Merge"}
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="h-7 gap-1.5 text-destructive text-xs hover:bg-destructive/10 hover:text-destructive"
+              disabled={disabled}
+              onClick={(e) => {
+                e.stopPropagation();
+                deps.onReject(r);
+              }}
+            >
+              <X className="size-3" />
+              Reject
             </Button>
           </div>
         );

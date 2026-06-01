@@ -4,8 +4,9 @@
 /**
  * Module: `@app/(app)/knowledge/_components/ContributionDetail`
  * Purpose: Slide-over Sheet for a single contribution. Renders metadata + the
- *   dolt_diff fetched lazily on open + a Merge action for open contributions.
- * Scope: Local fetch for the diff (lazy); merge mutation handed up via callback.
+ *   dolt_diff fetched lazily on open + Merge / Reject actions for open
+ *   contributions (Reject captures a required reason).
+ * Scope: Local fetch for the diff (lazy); merge/close mutations handed up via callback.
  * Side-effects: IO (GET .../diff on open).
  * @internal
  */
@@ -16,11 +17,12 @@ import type {
   ContributionDiffEntry,
   ContributionRecord,
 } from "@cogni/node-contracts";
-import { GitMerge } from "lucide-react";
+import { GitMerge, X } from "lucide-react";
 import { type ReactElement, useEffect, useState } from "react";
 
 import {
   Button,
+  Input,
   Sheet,
   SheetContent,
   SheetHeader,
@@ -33,8 +35,10 @@ interface ContributionDetailProps {
   readonly item: ContributionRecord | null;
   readonly open: boolean;
   readonly busy: boolean;
+  readonly rejectBusy: boolean;
   readonly onOpenChange: (open: boolean) => void;
   readonly onMerge: (item: ContributionRecord) => void;
+  readonly onReject: (item: ContributionRecord, reason: string) => void;
 }
 
 function Field({
@@ -55,20 +59,26 @@ function Field({
   );
 }
 
+const REASON_MAX = 512;
+
 export function ContributionDetail({
   item,
   open,
   busy,
+  rejectBusy,
   onOpenChange,
   onMerge,
+  onReject,
 }: ContributionDetailProps): ReactElement {
   const [diff, setDiff] = useState<ContributionDiffEntry[] | null>(null);
   const [diffError, setDiffError] = useState<string | null>(null);
+  const [rejectReason, setRejectReason] = useState("");
 
   useEffect(() => {
     if (!open || !item) {
       setDiff(null);
       setDiffError(null);
+      setRejectReason("");
       return;
     }
     let cancelled = false;
@@ -137,17 +147,49 @@ export function ContributionDetail({
 
             <div className="mt-6 flex flex-col gap-5 px-1">
               {item.state === "open" && (
-                <div className="flex justify-end">
-                  <Button
-                    type="button"
-                    size="sm"
-                    className="h-8 gap-1.5"
-                    disabled={busy}
-                    onClick={() => onMerge(item)}
-                  >
-                    <GitMerge className="size-3.5" />
-                    {busy ? "Merging…" : "Merge to main"}
-                  </Button>
+                <div className="flex flex-col gap-3 rounded-md border border-border/50 bg-muted/20 px-3 py-3">
+                  <div className="flex flex-col gap-1.5">
+                    <label
+                      htmlFor="reject-reason"
+                      className="font-medium text-muted-foreground text-xs uppercase tracking-wider"
+                    >
+                      Reject reason
+                    </label>
+                    <Input
+                      id="reject-reason"
+                      className="h-8 text-sm"
+                      placeholder="Why is this contribution rejected?"
+                      maxLength={REASON_MAX}
+                      value={rejectReason}
+                      disabled={busy || rejectBusy}
+                      onChange={(e) => setRejectReason(e.target.value)}
+                    />
+                  </div>
+                  <div className="flex justify-end gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      className="h-8 gap-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                      disabled={
+                        busy || rejectBusy || rejectReason.trim() === ""
+                      }
+                      onClick={() => onReject(item, rejectReason.trim())}
+                    >
+                      <X className="size-3.5" />
+                      {rejectBusy ? "Rejecting…" : "Reject"}
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="h-8 gap-1.5"
+                      disabled={busy || rejectBusy}
+                      onClick={() => onMerge(item)}
+                    >
+                      <GitMerge className="size-3.5" />
+                      {busy ? "Merging…" : "Merge to main"}
+                    </Button>
+                  </div>
                 </div>
               )}
 
