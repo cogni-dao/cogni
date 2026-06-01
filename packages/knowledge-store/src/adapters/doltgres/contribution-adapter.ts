@@ -1036,20 +1036,9 @@ export class DoltgresKnowledgeContributionAdapter
   async diff(contributionId: string): Promise<ContributionDiffEntry[]> {
     const rec = await this.getById(contributionId);
     if (!rec) throw new ContributionNotFoundError(contributionId);
-    // Legacy contributions migrated by 0002 collapsed base_commit/head_commit
-    // to the same commit hash, so dolt_diff(base, head) is empty and the
-    // review surface goes blank. For open legacy branches, fall back to the
-    // pre-PR behavior of diffing main against the live branch ref.
-    const legacyCollapsed =
-      rec.headCommit !== null && rec.baseCommit === rec.headCommit;
-    const fromRef =
-      legacyCollapsed && rec.state === "open" ? "main" : rec.baseCommit;
-    const toRef =
-      legacyCollapsed && rec.state === "open"
-        ? rec.branch
-        : (rec.headCommit ?? rec.baseCommit);
+    const toRef = rec.headCommit ?? rec.baseCommit;
     const rows = await this.sql.unsafe(
-      `SELECT * FROM dolt_diff(${escapeRef(fromRef)}, ${escapeRef(toRef)}, 'knowledge')`
+      `SELECT * FROM dolt_diff(${escapeRef(rec.baseCommit)}, ${escapeRef(toRef)}, 'knowledge')`
     );
     return rows.map((r) => {
       const row = r as Record<string, unknown>;
