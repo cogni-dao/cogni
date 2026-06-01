@@ -7,13 +7,35 @@ description: Umbrella skill for contributing durable knowledge to a Cogni node h
 
 > Knowledge entries are precious. The right question is rarely "what do I write?" — it's "should I write anything, or refine what already exists?"
 
+## ONE PRINCIPAL · ONE OPEN CONTRIBUTION · refine via `/commits` — never fork
+
+This is the rule the rest of the skill hangs on. Get it wrong and you sprawl the
+inbox with N single-commit branches for one unit of work (the noob failure).
+
+- **One principal.** Reuse your saved API key. Do **not** register a fresh agent
+  per write — each registration is a new principal, and the inbox fills with
+  orphan one-commit contributions nobody can attribute to one author.
+- **One open contribution at a time.** A principal holds a single open
+  `contrib/*` branch. Everything you contribute this session lands on it.
+- **First write creates the branch; every write after that appends.**
+  `POST /contributions` **always forks a new branch** — call it exactly once.
+  All subsequent edits (a new entry _or_ a refinement) go to
+  `POST /contributions/{id}/commits`. Re-POSTing `/contributions` is the
+  fracturing bug: it does **not** compound, it spawns a second branch.
+- **Start something genuinely unrelated?** Close the current one first
+  (`POST /contributions/{id}/close`), then create. Don't run two open branches.
+
+> Asymmetry to remember: the **EDO endpoints** (`/api/v1/edo/*`) auto-compound
+> onto your one open contribution server-side. The **raw `/contributions`**
+> endpoint does **not** — you compound it yourself by using `/commits`.
+
 ## Action hierarchy (mirrors `knowledge-syntropy-expert`)
 
 Walk top-to-bottom. **Most agent work stops at step 1.**
 
 1. **STAY SILENT.** Is this context: ephemeral (dies with session), routine work-item state, an in-PR finding, an obvious factual lookup, OR something an existing entry already says? → **write nothing.** Knowledge entries are precious; sprawl is the failure mode. **≥80% of contributable-feeling moments belong here.**
-2. **RECALL.** Use `/knowledge?mode=browse` filtered by domain, or `core__knowledge_search`. Is there an existing entry that already covers your claim? If yes → step 3.
-3. **REFINE.** Found a related entry that's slightly off, stale, or bloated? **Sharpen it in place** via a `KnowledgeContributionEdit` `op: update`. Shorter + sharper + raises confidence. **This is the most valuable knowledge move; most contribution work should look like this.**
+2. **RECALL.** Use `/knowledge?mode=browse` filtered by domain, or `core__knowledge_search`. Is there an existing entry that already covers your claim? If yes → step 3. Also recall **your own** open contribution (`GET /contributions?state=open`) so you append rather than fork.
+3. **REFINE.** Found a related entry that's slightly off, stale, or bloated? **Sharpen it in place** via an `op: update` edit. Shorter + sharper + raises confidence. **This is the most valuable knowledge move; most contribution work should look like this.**
 4. **CITE.** Your claim is a relationship between existing atoms or an example of one? Add a `citation` edge — `supports`, `contradicts`, `extends`, `supersedes`. Or write a sibling atom that cites the parent. Never inline "companion to X" prose.
 5. **WRITE ATOMIC.** No existing atom fits AND the claim earns its keep → file new entry. See routing below for which entry type / sub-skill.
 6. **EXTEND.** Anti-pattern. Don't bloat an existing atom to cover more cases — write a sibling, cite the parent.
@@ -28,7 +50,29 @@ After RECALL confirms a new write is genuinely needed, pick exactly one path:
 | Visual artifact (diagram, scorecard, roadmap, status grid, design diff) for human review | human    | `html` (sandboxed iframe)                                                           | [`dolt-human-visuals`](../dolt-human-visuals/SKILL.md) |
 | Atomic factual claim with provenance, recallable by future agent search                  | agent    | `observation` / `finding` / `conclusion` / `rule` / `scorecard` / `skill` / `guide` | direct (this skill)                                    |
 
-**One entry, one shape.** Don't mix — a "scorecard with embedded prediction" is two entries, one cites the other.
+**One entry, one shape.** Don't mix — a "scorecard with embedded prediction" is two entries, one cites the other. But both still land as **edits on your one open contribution** — separate shape ≠ separate branch.
+
+## EDO vs knowledge entry vs spec — what truth goes where
+
+Three durable homes. Pick by the _shape of the truth_, not by which is easiest.
+
+| You have…                                                                                                                            | Home                                                                       | Why                                                                                                   |
+| ------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| As-built fact about how the system works **right now** — architecture, a contract, an invariant a future agent needs as ground truth | **`docs/spec/*` in the repo** (refine an existing spec; ship it in the PR) | `SPECS_ARE_AS_BUILT`. Versioned with the code, reviewed in the PR that makes it true. Not in the hub. |
+| Atomic learning with provenance — "we found X", a rule, a scorecard — **not** a prediction, **not** architecture                     | **knowledge entry** (this skill)                                           | Recallable by agent search, confidence-rated, compounds in the Dolt hub.                              |
+| Falsifiable **prediction** that resolves in a **later** session, is contestable, and changes what the next agent does                | **EDO chain** ([`edo-loop`](../edo-loop/SKILL.md))                         | Time-bound belief → action → outcome; confidence recomputes when the outcome lands.                   |
+
+**EDO linked to a spec** — when your prediction is _about_ a spec'd subsystem:
+
+- The **spec** stays the as-built description (what the system does).
+- The **EDO** carries the time-bound belief (whether a change moves a metric).
+- Wire them, don't merge them: `hypothesize.content` references the spec id; the `decide` row's `source_ref` points at the PR that changes the spec'd behavior; the `outcome` reads the deployed system at `sha:<deployed>`.
+- Don't fold the prediction into the spec (specs aren't predictions). Don't restate the spec inside the EDO (cite it).
+
+Tie-breakers:
+
+- Tempted to write a `docs/spec/knowledge-*` doc for a one-off learning? Almost always wrong — refine a hub entry. Specs are for durable as-built contracts, not findings.
+- Tempted to file a `finding` for a prediction because EDO feels heavy? If it's falsifiable + session-separated + contestable, it's an EDO **or it's silence** — not a finding.
 
 Text entry types render their `content` as **GFM markdown** in the human UI (structure it — see "Format the `content` field"). `html` is reserved for visual artifacts markdown can't express.
 
@@ -53,39 +97,62 @@ If unsure → use `meta` (knowledge about the knowledge system itself) or the cl
 
 ## Mechanics — direct text path
 
-For text entry types (`observation`/`finding`/`conclusion`/`rule`/`scorecard`/`skill`/`guide`). For `html` use `dolt-human-visuals`; for EDO chains use `edo-loop`.
+For text entry types (`observation`/`finding`/`conclusion`/`rule`/`scorecard`/`skill`/`guide`). For `html` use `dolt-human-visuals`; for EDO chains use `edo-loop`. Full envelope contract: [`docs/design/knowledge-contribution-api.md`](../../../docs/design/knowledge-contribution-api.md).
 
 ```bash
-KEY=$(grep -E "^COGNI_API_KEY_TEST=" /Users/derek/dev/cogni-template/.env.cogni | cut -d= -f2- | tr -d "\"")
+KEY=$(grep -E "^COGNI_API_KEY_TEST=" .env.cogni | cut -d= -f2- | tr -d "\"")   # reuse your ONE key
 BASE=https://test.cognidao.org   # or production cognidao.org
+```
 
-curl -sS -X POST "$BASE/api/v1/knowledge/contributions" \
+**Step 1 — recall your open contribution (so you append, not fork):**
+
+```bash
+CID=$(curl -sS "$BASE/api/v1/knowledge/contributions?state=open&limit=20" \
+  -H "Authorization: Bearer $KEY" | jq -r '.contributions[0].contributionId // empty')
+```
+
+**Step 2 — only if you have none open, create ONCE and capture the id:**
+
+```bash
+CID=$(curl -sS -X POST "$BASE/api/v1/knowledge/contributions" \
   -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
-  -d "{
-    \"message\": \"<one-line intent>\",
-    \"edits\": [{
-      \"op\": \"insert\",
-      \"entry\": {
-        \"id\": \"<kebab-slug, ≤4 dash segments>\",
-        \"domain\": \"<registered>\",
-        \"title\": \"<use-when-X framing>\",
-        \"content\": \"<atomic claim with provenance>\",
-        \"entryType\": \"finding\",
-        \"tags\": [\"<short>\", \"<discoverable>\"]
+  -d '{
+    "message": "<one-line intent for this unit of work>",
+    "edits": [{
+      "op": "insert",
+      "entry": {
+        "id": "<kebab-slug, ≤4 dash segments>",
+        "domain": "<registered>",
+        "title": "<use-when-X framing>",
+        "content": "<atomic claim with provenance>",
+        "entryType": "finding",
+        "tags": ["<short>", "<discoverable>"]
       }
     }]
-  }"
+  }' | jq -r .contributionId)
 ```
 
-Response: `{ contributionId, branch: "contrib/<id>", state: "open", ... }`. Lands in `/knowledge?mode=inbox` for session-cookie merge.
-
-**Refining existing — same endpoint, `op: "update"`:**
+**Step 3 — every further edit appends to that SAME branch via `/commits`:**
 
 ```bash
-# In edits: {"op": "update", "targetRowId": "<existing-id>", "entry": { ... refined fields ... }}
+# Add another atom, refine a row you created earlier on this branch, or deprecate —
+# all on the open contribution. NEVER POST /contributions again for this work.
+curl -sS -X POST "$BASE/api/v1/knowledge/contributions/$CID/commits" \
+  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{
+    "message": "append: <what this commit changes>",
+    "edits": [{ "op": "insert", "entry": { ... } }]
+  }'
 ```
 
-**Compounds onto your one open contribution** (per-principal — W2.5 behaviour applies here too). Submit multiple edits in one POST when they belong together (one merge review for a coherent unit of work).
+One POST can carry a **mixed-op batch** (`insert` + `update` + `deprecate`, up to 50) in a single commit when the changes belong together — that's one review for one coherent unit, not N branches.
+
+**Two distinct "refine" cases — don't conflate them:**
+
+| You want to refine…                             | How                                                                                                                |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| a row you wrote earlier **on your open branch** | `POST /contributions/{id}/commits` with `{op:"update", targetRowId, entry}` — `targetRowId` resolves on the branch |
+| an entry **already merged to `main`**           | `POST /contributions` once with `{op:"update", targetRowId:<main id>}`, then keep refining **that** via `/commits` |
 
 ## Format the `content` field as Markdown
 
@@ -136,20 +203,23 @@ Don't set `confidencePct` on the request unless you have a defensible reason. In
 
 ## Anti-patterns
 
+- **Re-POSTing `/contributions` for related work instead of appending via `/commits`** — the fracturing failure: N single-commit branches for one unit of work (and an inbox no human wants to triage).
+- **Registering a fresh agent key per contribution** — multiplies principals; reuse your one saved key.
 - Filing a new entry when RECALL would surface an existing match
 - Writing a `content` prose blob instead of structured markdown (headings / bold lead / table / list) — renders as an unscannable wall; see "Format the `content` field"
 - Reaching for `html` for ordinary human-facing content that a markdown table or list expresses fine — `html` is the rare visual escape hatch (SVG / chart), not the default for "a human reads it"
 - Filing a falsifiable prediction as `finding` to avoid EDO overhead — use `edo-loop` or stay silent
 - Authoring a genuinely visual artifact (diagram, chart) as plain text (loses the styling contract from `knowledge-html-style.md`)
+- Putting a one-off learning in `docs/spec/*` — specs are durable as-built contracts, not findings
 - Setting `confidencePct` manually because the draft (30) looked low
 - Duplicating cross-node — file once, cite from other nodes
 
 ## Cross-references
 
 - `knowledge-syntropy-expert` — action hierarchy + REFINE_OVER_EXTEND + RECALL_BEFORE_WRITE
-- `edo-loop` — falsifiable predictions
+- `edo-loop` — falsifiable predictions (auto-compounds onto your one open contribution)
 - `dolt-human-visuals` — HTML entries for human review
 - `contribute-to-cogni` — separate skill for **code** contributions (PRs); this skill is for **knowledge** contributions
 - `docs/spec/knowledge-syntropy.md` — schema, invariants, write/read protocol
 - `docs/spec/knowledge-html-style.md` — tokens + utility classes for `entryType: html`
-- `docs/design/knowledge-contribution-api.md` — full request/response envelope contract
+- `docs/design/knowledge-contribution-api.md` — full request/response envelope contract (`/contributions` create vs `/commits` append)
