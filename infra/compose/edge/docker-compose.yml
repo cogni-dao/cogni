@@ -26,15 +26,14 @@ services:
     # provision-env-vm.sh write one `<SLUG>_DOMAIN` per type:node into this .env
     # (looping NODE_TARGETS); env_file passes them all into Caddy so adding a node
     # needs no edit here. Upstream ports are baked into the generated Caddyfile
-    # from catalog node_port, so only DOMAIN + the operator-primary upstream stay
-    # explicit (with docker-DNS defaults for the local `docker:edge:up` path).
+    # from catalog node_port; the operator-primary upstream comes from the .env
+    # file in deploys and falls back inside the Caddyfile for local dev.
     # required:false keeps `docker:edge:up` working before any .env exists.
     env_file:
       - path: .env
         required: false
     environment:
       - DOMAIN=${DOMAIN}
-      - OPERATOR_UPSTREAM=${OPERATOR_UPSTREAM:-app:3000}
     volumes:
       - ./configs/Caddyfile.tmpl:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
