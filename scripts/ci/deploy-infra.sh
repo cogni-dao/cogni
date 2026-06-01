@@ -226,11 +226,15 @@ fi
 
 ENVIRONMENT="$DEPLOY_ENVIRONMENT"
 # 'canary' retained as a legacy alias during bug.0312 rename. Drop once no caller sends it.
-if [[ "$ENVIRONMENT" != "candidate-a" && "$ENVIRONMENT" != "canary" && "$ENVIRONMENT" != "preview" && "$ENVIRONMENT" != "production" ]]; then
-    log_error "DEPLOY_ENVIRONMENT must be 'candidate-a', 'preview', or 'production'"
-    log_error "Current value: $ENVIRONMENT"
-    exit 1
-fi
+# candidate-* covers every pre-merge slot (candidate-a, candidate-b, ...) — same shape.
+case "$ENVIRONMENT" in
+    candidate-*|canary|preview|production) : ;;
+    *)
+        log_error "DEPLOY_ENVIRONMENT must be candidate-*, preview, or production"
+        log_error "Current value: $ENVIRONMENT"
+        exit 1
+        ;;
+esac
 
 # Validate required secrets
 REQUIRED_SECRETS=(
@@ -611,7 +615,7 @@ log_info "Creating environment files..."
 case "$DEPLOY_ENVIRONMENT" in
     production)  RESY_DOMAIN_DERIVED="resy.${DOMAIN}" ;;
     preview)     RESY_DOMAIN_DERIVED="resy-preview.${DOMAIN#preview.}" ;;
-    candidate-a|canary) RESY_DOMAIN_DERIVED="resy-test.${DOMAIN#test.}" ;;
+    candidate-*|canary) RESY_DOMAIN_DERIVED="resy-${DOMAIN}" ;;  # host_for_node deep-subdomain: resy-<env-domain>
     *)           RESY_DOMAIN_DERIVED="resy.${DOMAIN}" ;;
 esac
 RESY_DOMAIN="${RESY_DOMAIN:-$RESY_DOMAIN_DERIVED}"
@@ -619,7 +623,7 @@ RESY_DOMAIN="${RESY_DOMAIN:-$RESY_DOMAIN_DERIVED}"
 case "$DEPLOY_ENVIRONMENT" in
     production)  NODE_TEMPLATE_DOMAIN_DERIVED="node-template.${DOMAIN}" ;;
     preview)     NODE_TEMPLATE_DOMAIN_DERIVED="node-template-preview.${DOMAIN#preview.}" ;;
-    candidate-a|canary) NODE_TEMPLATE_DOMAIN_DERIVED="node-template-test.${DOMAIN#test.}" ;;
+    candidate-*|canary) NODE_TEMPLATE_DOMAIN_DERIVED="node-template-${DOMAIN}" ;;  # host_for_node deep-subdomain
     *)           NODE_TEMPLATE_DOMAIN_DERIVED="node-template.${DOMAIN}" ;;
 esac
 NODE_TEMPLATE_DOMAIN="${NODE_TEMPLATE_DOMAIN:-$NODE_TEMPLATE_DOMAIN_DERIVED}"
