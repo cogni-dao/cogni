@@ -4,7 +4,7 @@
 /**
  * Module: `@tests/unit/secrets-catalog-loader`
  * Purpose: Asserts the capability-gated fan-out schema (appliesTo/shared) added in design.secrets-catalog-per-node §Amendment v2 loads into the routing record and rejects conflicting routing.
- * Scope: Drives `loadSecretsCatalog` against in-tmpdir fixture catalogs. Does NOT exercise the real repo catalog, the write side, or `setup-secrets` resolution.
+ * Scope: Drives `loadSecretsCatalog` against fixtures + the real repo catalog (load + path resolution). Does NOT exercise the write side or `setup-secrets` per-node value generation.
  * Invariants:
  *   - appliesTo + shared survive into the routing record
  *   - an entry declaring both service: and appliesTo: is rejected at load
