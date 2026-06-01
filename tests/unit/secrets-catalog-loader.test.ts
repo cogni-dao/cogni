@@ -59,10 +59,9 @@ describe("secrets-catalog-loader · capability fan-out (v2)", () => {
     steps: ["paste"]
 `);
     const { routing } = loadSecretsCatalog({ repoRoot });
-    expect(routing.AUTH_SECRET).toMatchObject({
-      appliesTo: "web",
-      shared: undefined,
-    });
+    expect(routing.AUTH_SECRET.appliesTo).toBe("web");
+    // distinct-per-node (default) → `shared` key omitted, not `false`.
+    expect(routing.AUTH_SECRET.shared).toBeUndefined();
     expect(routing.OPENROUTER_API_KEY).toMatchObject({
       appliesTo: "all-nodes",
       shared: true,
