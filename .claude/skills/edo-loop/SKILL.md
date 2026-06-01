@@ -93,7 +93,8 @@ Promotion thresholds (mirror the spec § Confidence Is Computed):
 ## Mechanics
 
 ```bash
-KEY=$(grep -E "^COGNI_API_KEY_TEST=" /Users/derek/dev/cogni-template/.env.cogni | cut -d= -f2- | tr -d "\"")
+# key from environment or the workspace .env.cogni — never a device-specific path
+KEY="${COGNI_API_KEY_TEST:?set COGNI_API_KEY_TEST (env or workspace .env.cogni)}"
 BASE=https://test.cognidao.org
 
 # 1) Hypothesize — kebab-slug id, ≤4 dash segments, lowercase a-z0-9.
