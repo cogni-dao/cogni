@@ -52,6 +52,7 @@ HTTP API endpoints using Next.js App Router. Contract-validated entry points tha
   - `/api/v1/public/attribution/epochs/[id]/user-projections` [GET] - closed epoch user projections (public)
   - `/api/v1/public/attribution/epochs/[id]/claimants` [GET] - closed epoch claimant attribution (public)
   - `/api/v1/public/attribution/epochs/[id]/statement` [GET] - epoch statement (public)
+  - `/api/v1/public/internship-subsidy/prototype` [GET] - public OSS rail prototype for intern AI subscription subsidy distributions
   - `/api/v1/attribution/epochs` [GET] - all epochs (SIWE auth)
   - `/api/v1/attribution/epochs/[id]/activity` [GET] - epoch activity events (SIWE auth)
   - `/api/v1/attribution/epochs/[id]/claimants` [GET] - claimant-aware finalized attribution (SIWE auth)

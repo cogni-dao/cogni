@@ -55,6 +55,7 @@ Does NOT re-export packages with `node:` transitive dependencies.
 - OperatorWalletPort, TransferIntent
 - ProviderFundingPort, ProviderFundingContext, ProviderFundingOutcome
 - TreasurySettlementPort, TreasurySettlementOutcome
+- SubsidyDistributionRailPort, SubsidyRailDraft, SubsidyRailAction
 - Types (ChargeReceiptParams, LlmCaller, BillingAccount, CreditLedgerEntry, etc.)
 
 ### `server.ts` — Server-only barrel

@@ -28,7 +28,7 @@ Infrastructure implementations of ports including server/, worker/, cli/, and te
 
 ## Public Surface
 
-- **Exports:** Port implementations for bootstrap injection (UserDrizzleAccountService via barrel; ServiceDrizzleAccountService via direct import), database client (db, Database), MimirMetricsAdapter, ViemEvmOnchainClient, EvmRpcOnChainVerifierAdapter, EvmOnchainClient (type), GitHubWebhookNormalizer (ingestion), scheduling adapters (re-exported from @cogni/db-client)
+- **Exports:** Port implementations for bootstrap injection (UserDrizzleAccountService via barrel; ServiceDrizzleAccountService via direct import), database client (db, Database), MimirMetricsAdapter, ViemEvmOnchainClient, EvmRpcOnChainVerifierAdapter, EvmOnchainClient (type), GitHubWebhookNormalizer (ingestion), scheduling adapters (re-exported from @cogni/db-client), prototype subsidy rail adapters
 - **CLI (if any):** cli/ adapter implementations
 - **Env/Config keys:** DATABASE_URL, LITELLM_BASE_URL, LITELLM_MASTER_KEY, PROMETHEUS_QUERY_URL, PROMETHEUS_READ_USERNAME, PROMETHEUS_READ_PASSWORD, ANALYTICS_QUERY_TIMEOUT_MS, EVM_RPC_URL
 - **Files considered API:** Port implementation exports, database client, onchain client interfaces

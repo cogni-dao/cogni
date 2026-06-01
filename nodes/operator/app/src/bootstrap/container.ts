@@ -70,6 +70,7 @@ import type { Logger } from "pino";
 import {
   ALCHEMY_ADAPTER_VERSION,
   AlchemyWebhookNormalizer,
+  AlloPrototypeSubsidyRailAdapter,
   type Database,
   DrizzleAiTelemetryAdapter,
   DrizzleConnectionBrokerAdapter,
@@ -89,6 +90,7 @@ import {
   type MimirAdapterConfig,
   MimirMetricsAdapter,
   RedisRunStreamAdapter,
+  SablierFlowPrototypeSubsidyRailAdapter,
   SystemClock,
   TemporalScheduleControlAdapter,
   UserDrizzleAccountService,
@@ -154,6 +156,7 @@ import type {
   ProviderFundingPort,
   RunStreamPort,
   ServiceAccountService,
+  SubsidyDistributionRailPort,
   ThreadPersistencePort,
   TreasuryReadPort,
   TreasurySettlementPort,
@@ -259,6 +262,11 @@ export interface Container {
   treasurySettlement: TreasurySettlementPort | undefined;
   /** Provider funding — undefined when OPENROUTER_API_KEY not set */
   providerFunding: ProviderFundingPort | undefined;
+  /** OSS subsidy distribution rails — prototype-only, no chain IO */
+  subsidyDistributionRails: {
+    readonly allo: SubsidyDistributionRailPort;
+    readonly "sablier-flow": SubsidyDistributionRailPort;
+  };
   /** Connection broker — undefined when CONNECTIONS_ENCRYPTION_KEY not set */
   connectionBroker: ConnectionBrokerPort | undefined;
   /** Model catalog — aggregates all providers for model listing */
@@ -900,6 +908,10 @@ function createContainer(): Container {
       ? new SplitTreasurySettlementAdapter(operatorWallet, USDC_TOKEN_ADDRESS)
       : undefined,
     providerFunding,
+    subsidyDistributionRails: {
+      allo: new AlloPrototypeSubsidyRailAdapter(),
+      "sablier-flow": new SablierFlowPrototypeSubsidyRailAdapter(),
+    },
     connectionBroker,
     // Multi-provider model ports
     ...(() => {
