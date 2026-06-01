@@ -39,7 +39,9 @@ function listCatalogEntries(): { file: string; entry: CatalogEntry }[] {
     .sort()
     .map((file) => ({
       file,
-      entry: yaml.parse(readFileSync(path.join(CATALOG_DIR, file), "utf8")) as CatalogEntry,
+      entry: yaml.parse(
+        readFileSync(path.join(CATALOG_DIR, file), "utf8")
+      ) as CatalogEntry,
     }));
 }
 
@@ -53,7 +55,7 @@ describe("catalog identity SSOT (REPO_SPEC_IS_IDENTITY_SSOT)", () => {
     expect(
       offenders,
       `infra/catalog/${offenders.join(", ")} must NOT declare node_id — it is sourced ` +
-        "from nodes/<name>/.cogni/repo-spec.yaml. Remove the catalog node_id.",
+        "from nodes/<name>/.cogni/repo-spec.yaml. Remove the catalog node_id."
     ).toEqual([]);
   });
 
@@ -62,15 +64,14 @@ describe("catalog identity SSOT (REPO_SPEC_IS_IDENTITY_SSOT)", () => {
       if (entry.type !== "node") continue;
       const prefix = entry.path_prefix ?? `nodes/${entry.name}/`;
       const specPath = path.join(REPO_ROOT, prefix, ".cogni/repo-spec.yaml");
-      const spec = yaml.parse(readFileSync(specPath, "utf8")) as { node_id?: string };
+      const spec = yaml.parse(readFileSync(specPath, "utf8")) as {
+        node_id?: string;
+      };
       expect(
         spec.node_id,
-        `${specPath} (declared by catalog ${file}) must define a node_id`,
+        `${specPath} (declared by catalog ${file}) must define a node_id`
       ).toBeDefined();
-      expect(
-        spec.node_id,
-        `${specPath} node_id must be a UUID`,
-      ).toMatch(UUID);
+      expect(spec.node_id, `${specPath} node_id must be a UUID`).toMatch(UUID);
     }
   });
 });
