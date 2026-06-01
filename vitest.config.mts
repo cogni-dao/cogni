@@ -76,8 +76,19 @@ export default defineConfig({
   },
   plugins: [tsconfigPaths({ projects: ["./tsconfig.base.json"] })],
   resolve: {
-    alias: {
-      "@tests": path.resolve(__dirname, "./tests"),
-    },
+    alias: [
+      {
+        find: /^@cogni\/repo-spec$/,
+        replacement: path.resolve(__dirname, "./packages/repo-spec/src/index.ts"),
+      },
+      {
+        find: /^@cogni\/repo-spec\/testing$/,
+        replacement: path.resolve(
+          __dirname,
+          "./packages/repo-spec/src/testing.ts",
+        ),
+      },
+      { find: "@tests", replacement: path.resolve(__dirname, "./tests") },
+    ],
   },
 });
