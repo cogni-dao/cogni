@@ -79,13 +79,16 @@ export default defineConfig({
     alias: [
       {
         find: /^@cogni\/repo-spec$/,
-        replacement: path.resolve(__dirname, "./packages/repo-spec/src/index.ts"),
+        replacement: path.resolve(
+          __dirname,
+          "./packages/repo-spec/src/index.ts"
+        ),
       },
       {
         find: /^@cogni\/repo-spec\/testing$/,
         replacement: path.resolve(
           __dirname,
-          "./packages/repo-spec/src/testing.ts",
+          "./packages/repo-spec/src/testing.ts"
         ),
       },
       { find: "@tests", replacement: path.resolve(__dirname, "./tests") },
