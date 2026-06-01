@@ -205,8 +205,11 @@ if [[ -z "${CHERRY_PROJECT_ID:-}" ]]; then
   echo ""
 fi
 
-# OpenRouter key — optional (LiteLLM starts but can't proxy)
-if [[ -z "${OPENROUTER_API_KEY:-}" ]]; then
+# OpenRouter key — optional (LiteLLM starts but can't proxy). Only prompt
+# interactively; under CI / non-TTY (e.g. the provision-env.yml runner) an
+# unset key falls through to the placeholder below instead of blocking on a
+# read that EOFs and aborts under `set -e`.
+if [[ -z "${OPENROUTER_API_KEY:-}" && "${CI:-}" != "true" && -t 0 ]]; then
   echo -n "OpenRouter API key (Enter to skip): "
   read -rs OPENROUTER_API_KEY
   echo ""
