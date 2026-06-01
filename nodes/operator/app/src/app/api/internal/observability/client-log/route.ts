@@ -41,7 +41,10 @@ export const POST = wrapRouteHandlerWithLogging(
 
     const parsed = ClientLogSchema.safeParse(body);
     if (!parsed.success) {
-      return NextResponse.json({ error: "Invalid client log" }, { status: 400 });
+      return NextResponse.json(
+        { error: "Invalid client log" },
+        { status: 400 }
+      );
     }
 
     const { level, event, meta } = parsed.data;

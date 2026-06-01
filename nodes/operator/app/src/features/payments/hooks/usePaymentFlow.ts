@@ -645,7 +645,13 @@ export function usePaymentFlow(
       functionName: "transfer",
       args: [to as `0x${string}`, BigInt(amountRaw)],
     });
-  }, [internalState.phase, amountUsdCents, writeContract, publicClient, address]);
+  }, [
+    internalState.phase,
+    amountUsdCents,
+    writeContract,
+    publicClient,
+    address,
+  ]);
 
   const reset = useCallback(() => {
     // Invalidate any in-flight async operations from prior attempt
