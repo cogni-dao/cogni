@@ -173,15 +173,22 @@ fi
 # namespace the overlay actually creates. candidate-a / preview / production
 # all use namePrefix=<app>- on namespace cogni-<env>; node-apps have resource
 # name `node-app` (→ <app>-node-app), scheduler-worker keeps its own name.
-# Any new app added to the catalog must be added here (bug.0326).
 resolve_deployment() {
   local app_name="$1"  # {env}-{app}
-  local app="${app_name#${DEPLOY_ENVIRONMENT}-}"
+  local app="${app_name#${DEPLOY_ENVIRONMENT}-}" node
   case "$app" in
-    scheduler-worker) echo "scheduler-worker" ;;
-    operator | poly | resy | node-template) echo "${app}-node-app" ;;
-    *) echo "" ;;  # unknown app — caller treats empty as "skip digest check"
+    scheduler-worker)
+      echo "scheduler-worker"
+      return 0
+      ;;
   esac
+  for node in "${NODE_TARGETS[@]}"; do
+    if [ "$app" = "$node" ]; then
+      echo "${app}-node-app"
+      return 0
+    fi
+  done
+  echo ""  # unknown app — caller treats empty as "skip digest check"
 }
 
 get_deployment_resource_sync_status() {

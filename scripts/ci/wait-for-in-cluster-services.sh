@@ -59,14 +59,31 @@ SSH_OPTS=(
 )
 
 IFS=',' read -ra _NODES <<< "${PROMOTED_APPS:?PROMOTED_APPS required (CSV of node names)}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./lib/image-tags.sh
+. "$SCRIPT_DIR/lib/image-tags.sh"
+
+is_node_target() {
+  local candidate="$1" node
+  for node in "${NODE_TARGETS[@]}"; do
+    if [ "$candidate" = "$node" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 SERVICES=()
 for node in "${_NODES[@]}"; do
   case "$node" in
-    operator | poly | resy | node-template) SERVICES+=("${node}-node-app") ;;
     scheduler-worker) SERVICES+=("scheduler-worker") ;;
     *)
-      echo "::error::wait-for-in-cluster-services: unknown node '$node' in PROMOTED_APPS"
-      exit 1
+      if is_node_target "$node"; then
+        SERVICES+=("${node}-node-app")
+      else
+        echo "::error::wait-for-in-cluster-services: unknown node '$node' in PROMOTED_APPS"
+        exit 1
+      fi
       ;;
   esac
 done

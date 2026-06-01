@@ -675,6 +675,7 @@ describe("extractOwningNode", () => {
     const result = extractOwningNode(spec, [
       "nodes/canary/app/src/app/(public)/page.tsx",
       "infra/catalog/canary.yaml",
+      "infra/compose/edge/configs/Caddyfile.tmpl",
       "infra/k8s/overlays/candidate-a/canary/kustomization.yaml",
       "infra/k8s/overlays/preview/canary/kustomization.yaml",
       "infra/k8s/argocd/candidate-a-applicationset.yaml",
