@@ -104,7 +104,9 @@ should not require a per-target case in these scripts.
 
 ### 3. Per-env overlays × 3 — the core
 
-Create `infra/k8s/overlays/{candidate-a,preview,production}/<node>/kustomization.yaml`. Derive all three from an existing node (`operator` is the reference). There are exactly **two axes** — get them right and the overlays are mechanical:
+**Generated, not hand-authored.** Run `pnpm gen:overlays` (`scripts/ci/render-node-overlays.sh`). The three overlays are a pure function of the catalog entry (`name`, `node_port`, `port`); the renderer emits them and `scripts/ci/tests/render-node-overlays.test.sh` drift-gates them in CI (byte-exact against the `canary` reference, modulo the flight-owned `digest`). A newly-declared catalog node is auto-managed: its overlays must exist and match or the gate fails — which is what makes the candidate-a-only trap structurally impossible. `resy` is the one hand-owned exception (pre-migrator overlay shape + a catalog/overlay port mismatch); see `UNMANAGED_NODES` in the renderer.
+
+For reference, the renderer encodes exactly **two axes** — the same ones you'd reason about by hand:
 
 | Axis              | Same across all 3 envs                                                                                                                                                                                                       | Differs per env                                                                                                                                                       |
 | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -124,7 +126,7 @@ Each overlay must include:
 
 ### 4. ApplicationSet generators × 3
 
-Add a `git` generator for the node to each of `infra/k8s/argocd/{candidate-a,preview,production}-applicationset.yaml` (mirror the existing `operator`/`resy`/`scheduler-worker` blocks):
+Add a `git` generator for the node to each of `infra/k8s/argocd/{candidate-a,preview,production}-applicationset.yaml`. Emit the exact stanza with `scripts/ci/render-node-overlays.sh --appset-stanza <node> <env>` (mirrors the existing `operator`/`resy`/`scheduler-worker` blocks):
 
 ```yaml
 - git:

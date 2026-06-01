@@ -274,6 +274,14 @@ jobs:
       - name: scheduler runtime routing tests
         run: bash scripts/ci/tests/scheduler-runtime-routing.test.sh
 
+      # Node-overlay renderer drift gate (the deploy-footprint sibling of the
+      # edge routing test). Asserts every managed type:node overlay is the
+      # catalog-derived output byte-for-byte (modulo the flight-owned digest) and
+      # that no node is half-enabled (missing a preview/production overlay breaks
+      # the promote seed for everyone — the candidate-a-only trap).
+      - name: node overlay renderer tests
+        run: bash scripts/ci/tests/render-node-overlays.test.sh
+
       - name: Unit + contract coverage tests
         run: pnpm test:ci
 
