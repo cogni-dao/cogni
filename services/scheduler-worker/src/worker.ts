@@ -110,22 +110,29 @@ export async function startSchedulerWorker(
         })
       : {};
 
-  // Sweep activities need the operator URL; same as before.
+  // Sweep activities poll the operator's work-items API, so they only apply
+  // when the formation includes an operator node. Catalog/formation-driven:
+  // if COGNI_NODE_ENDPOINTS has no "operator" entry (e.g. a candidate slot
+  // scoped to a node subset like canary + node-template), skip sweep and boot
+  // with graph + review activities only — do NOT hard-fail. A fatal throw here
+  // made any operator-less formation impossible, contra the catalog model.
   const operatorBaseUrl = container.config.nodeEndpoints.get("operator");
+  const sweepActivities = operatorBaseUrl
+    ? createSweepActivities({
+        config: {
+          operatorBaseUrl,
+          schedulerApiToken: container.config.schedulerApiToken,
+        },
+        logger:
+          container.logger.child?.({ component: "sweep-activities" }) ??
+          container.logger,
+      })
+    : {};
   if (!operatorBaseUrl) {
-    throw new Error(
-      'COGNI_NODE_ENDPOINTS must include "operator" entry for sweep activities'
+    container.logger.warn?.(
+      'COGNI_NODE_ENDPOINTS has no "operator" entry — sweep activities disabled (formation without operator)'
     );
   }
-  const sweepActivities = createSweepActivities({
-    config: {
-      operatorBaseUrl,
-      schedulerApiToken: container.config.schedulerApiToken,
-    },
-    logger:
-      container.logger.child?.({ component: "sweep-activities" }) ??
-      container.logger,
-  });
 
   const allActivities = {
     ...graphActivities,
