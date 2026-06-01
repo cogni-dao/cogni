@@ -65,6 +65,7 @@ elif [ "$use_affected" = true ]; then
 fi
 
 selected_targets=()
+deferred_global_input=""
 
 has_target() {
   local needle="$1"
@@ -125,7 +126,6 @@ is_global_build_input() {
   case "$path" in
     .dockerignore | \
     package.json | \
-    pnpm-lock.yaml | \
     pnpm-workspace.yaml | \
     turbo.json | \
     tsconfig.json | \
@@ -154,6 +154,15 @@ else
 
   while IFS= read -r path; do
     [ -z "$path" ] && continue
+
+    # New node workspaces legitimately update the monorepo lockfile. Defer
+    # deciding whether that is global until node-owned paths have had a chance
+    # to select their target. Lockfile-only/dependency-update PRs still build
+    # all targets below.
+    if [ "$path" = "pnpm-lock.yaml" ]; then
+      deferred_global_input="$path"
+      continue
+    fi
 
     if catalog_target=$(catalog_target_from_path "$path"); then
       add_target "$catalog_target"
@@ -190,6 +199,11 @@ else
         ;;
     esac
   done <<< "$changed_paths"
+
+  if [ -n "$deferred_global_input" ] && [ ${#selected_targets[@]} -eq 0 ]; then
+    add_all_targets
+    selection_reason="global-build-input:${deferred_global_input}"
+  fi
 fi
 
 ordered_targets=()
