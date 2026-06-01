@@ -30,14 +30,17 @@ mapfile -t NODE_TARGETS < <(yq -N 'select(.type == "node") | .name' "$_image_tag
 
 declare -A _image_tags_suffix_cache=()
 declare -A _image_tags_primary_cache=()
+declare -A _image_tags_node_port_cache=()
 for _t in "${ALL_TARGETS[@]}"; do
   _s=$(yq '.image_tag_suffix' "${_image_tags_catalog_root}/${_t}.yaml")
   [ "$_s" = "null" ] && _s=""
   _image_tags_suffix_cache["$_t"]="$_s"
   _p=$(yq -N '.is_primary_host // false' "${_image_tags_catalog_root}/${_t}.yaml")
   _image_tags_primary_cache["$_t"]="$_p"
+  _np=$(yq -N '.node_port // ""' "${_image_tags_catalog_root}/${_t}.yaml")
+  _image_tags_node_port_cache["$_t"]="$_np"
 done
-unset _t _s _p
+unset _t _s _p _np
 
 image_name_for_target() {
   printf '%s' "$IMAGE_NAME_APP"
@@ -75,4 +78,22 @@ host_for_node() {
   else
     printf '%s.%s' "$node" "$domain"
   fi
+}
+
+# Resolve the k3s Service NodePort for a node from the catalog (task.5078).
+# The edge Caddy reverse-proxies to host.docker.internal:<node_port>. Errors
+# loud on an unknown target or a type:node missing node_port — never silently
+# emits an empty upstream (which would make Caddy round-robin / 502).
+is_primary_host() {
+  [ "${_image_tags_primary_cache[$1]:-false}" = "true" ]
+}
+
+node_port_for_target() {
+  local node="$1" port
+  port="${_image_tags_node_port_cache[$node]:-}"
+  if [ -z "$port" ]; then
+    echo "[ERROR] image-tags: node_port missing for '$node' (CATALOG_IS_SSOT: add node_port to infra/catalog/${node}.yaml)" >&2
+    return 1
+  fi
+  printf '%s' "$port"
 }

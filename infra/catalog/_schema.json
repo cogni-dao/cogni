@@ -23,7 +23,7 @@
         "properties": { "type": { "const": "node" } },
         "required": ["type"]
       },
-      "then": { "required": ["node_id"] }
+      "then": { "required": ["node_id", "node_port"] }
     }
   ],
   "properties": {
@@ -46,6 +46,12 @@
       "type": "string",
       "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
       "description": "UUID v4 — bound at provision time, persisted in repo-spec lookups."
+    },
+    "node_port": {
+      "type": "integer",
+      "minimum": 30000,
+      "maximum": 32767,
+      "description": "task.5078 — k3s Service NodePort the edge Caddy reverse-proxies to (host.docker.internal:<node_port>). Required for type:node. CATALOG_IS_SSOT: render-caddyfile.sh bakes it into the generated Caddyfile and deploy-infra.sh / provision-env-vm.sh skip per-node edits. Must equal the per-env overlay Service nodePort."
     },
     "dockerfile": {
       "type": "string",

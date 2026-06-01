@@ -249,6 +249,13 @@ jobs:
       - name: secrets fan-out tests (task.5094)
         run: bash scripts/ci/tests/secrets-fanout.test.sh
 
+      # task.5078 — catalog-driven edge routing. Asserts the committed Caddyfile
+      # is in sync with the catalog (drift gate that makes "add a node = 1
+      # catalog PR" enforceable), every type:node has an edge block (canary
+      # included), and catalog node_port == per-env overlay Service nodePort.
+      - name: edge routing tests (task.5078)
+        run: bash scripts/ci/tests/render-caddyfile.test.sh
+
       - name: Unit + contract coverage tests
         run: pnpm test:ci
 

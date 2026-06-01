@@ -996,19 +996,27 @@ scp $SSH_OPTS "$REPO_ROOT/infra/images/litellm/cogni_callbacks.py" root@"$VM_IP"
 # Write .env files
 log_info "Writing .env files..."
 
-# NODE_UPSTREAM points Caddy at the k3s NodePort on the host. Single-node
-# fork: one site block, one upstream (bug.5001). Multi-node forks add
-# additional NODE_UPSTREAM_<slug> blocks rather than reintroducing the
-# multi-key pattern. Port is catalog-driven (catalog::node_port is the
-# canonical source — node-template ships 30000).
-NODE_PORT_FROM_CATALOG=$(yq -N '.node_port // 30000' "$REPO_ROOT/infra/catalog/node-template.yaml")
-# Caddy serves a self-signed origin cert via `tls internal`; Cloudflare's
-# Full SSL mode trusts any origin cert. No ACME, no LE rate limit, no
-# cert-loss-on-reprovision. See infra/compose/edge/configs/Caddyfile.tmpl.
+# task.5078 — edge routing is catalog-driven (CATALOG_IS_SSOT), unified with
+# deploy-infra.sh. The generated Caddyfile (scripts/ci/render-caddyfile.sh)
+# resolves {$<SLUG>_DOMAIN} per non-primary node and bakes upstream ports from
+# catalog node_port. We write only the env-variant overrides — each non-primary
+# node's per-env host and the primary's k3s NodePort upstream — via the same
+# NODE_TARGETS loop. A new type:node auto-routes with no edit here (replaces the
+# single-node NODE_UPSTREAM, bug.5001). node_port_for_target / host_for_node /
+# is_primary_host come from the already-sourced image-tags.sh.
+EDGE_ENV_LINES=""
+for _edge_node in "${NODE_TARGETS[@]}"; do
+  _edge_slug=$(printf '%s' "$_edge_node" | tr '[:lower:]-' '[:upper:]_')
+  if is_primary_host "$_edge_node"; then
+    EDGE_ENV_LINES+="${_edge_slug}_UPSTREAM=host.docker.internal:$(node_port_for_target "$_edge_node")"$'\n'
+  else
+    EDGE_ENV_LINES+="${_edge_slug}_DOMAIN=$(host_for_node "$_edge_node" "$DOMAIN")"$'\n'
+  fi
+done
+unset _edge_node _edge_slug
 ssh $SSH_OPTS root@"$VM_IP" "cat > /opt/cogni-template-edge/.env << 'ENVEOF'
 DOMAIN=${DOMAIN}
-NODE_UPSTREAM=host.docker.internal:${NODE_PORT_FROM_CATALOG}
-ENVEOF"
+${EDGE_ENV_LINES}ENVEOF"
 
 # runtime/.env is written AFTER Phase 5c's OpenBao-SSoT reconcile (bug.5081)
 # so re-runs don't ship Phase-2's freshly-regenerated random values that would

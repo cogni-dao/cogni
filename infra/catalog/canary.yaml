@@ -1,6 +1,8 @@
 name: canary
 type: node
 port: 3400
+# task.5078 — edge NodePort (see operator.yaml). Must match overlay nodePort.
+node_port: 30400
 node_id: "89612f02-114d-460d-87a5-c2ab212ccf6f"
 dockerfile: nodes/canary/app/Dockerfile
 # bug.0344 — see infra/catalog/operator.yaml for why these fields exist.

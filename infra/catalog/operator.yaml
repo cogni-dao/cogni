@@ -1,6 +1,11 @@
 name: operator
 type: node
 port: 3000
+# task.5078 — k3s Service NodePort the edge Caddy reverse-proxies to
+# (host.docker.internal:<node_port>). CATALOG_IS_SSOT: render-caddyfile.sh +
+# deploy-infra.sh + provision-env-vm.sh consume it so adding a node needs no
+# edge-script edit. Must match the per-env overlay Service nodePort.
+node_port: 30000
 node_id: "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d"
 dockerfile: nodes/operator/app/Dockerfile
 # bug.0344 — tag suffix pushed to GHCR for this target's image, used by

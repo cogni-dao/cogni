@@ -1,6 +1,8 @@
 name: resy
 type: node
 port: 3000
+# task.5078 — edge NodePort (see operator.yaml). Must match overlay nodePort.
+node_port: 30300
 node_id: "f6d2a17d-b7f6-4ad1-a86b-f0ad2380999e"
 dockerfile: nodes/resy/app/Dockerfile
 # bug.0344 — see infra/catalog/operator.yaml for why these fields exist.

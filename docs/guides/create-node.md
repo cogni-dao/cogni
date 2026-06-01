@@ -29,7 +29,9 @@ You have a node app under `nodes/<node>/app` (a Next.js node) and you want it to
 
 - the PR build matrix (`detect-affected.sh`, `build-and-push-images.sh`),
 - the Argo `ApplicationSet` generators (one per node per env),
-- `promote-preview-seed-main.sh`, which `sha256sum`s `infra/k8s/overlays/preview/<node>/kustomization.yaml` **for every `NODE_TARGET`**.
+- `promote-preview-seed-main.sh`, which `sha256sum`s `infra/k8s/overlays/preview/<node>/kustomization.yaml` **for every `NODE_TARGET`**,
+- the per-node k8s secret + rollout loops in `deploy-infra.sh` (bug.5086),
+- the **edge Caddy reverse-proxy roster** — `scripts/ci/render-caddyfile.sh` generates the Caddyfile and `deploy-infra.sh` / `provision-env-vm.sh` write each node's per-env host, all from `node_port` + `is_primary_host` (task.5078). A new `type: node` auto-routes; no Caddyfile or deploy-script edit.
 
 > ⚠️ **The candidate-a-only trap (learned from #1369 / node-template).** Declaring a node in the catalog but only authoring the **candidate-a** overlay leaves the preview + production machinery expecting overlays that don't exist. Result: `Promote Preview Digest Seed` fails on `main` (`sha256sum: …/overlays/preview/<node>/kustomization.yaml: No such file or directory`) for _everyone_, and the node never reaches preview/prod.
 >
@@ -39,7 +41,7 @@ You have a node app under `nodes/<node>/app` (a Next.js node) and you want it to
 
 - [ ] `nodes/<node>/app` exists and builds (its own `Dockerfile`, Next.js app).
 - [ ] DAO formed + `.cogni/repo-spec.yaml` written (`node_id`, `scope_id`) per [`node-formation-guide.md`](./node-formation-guide.md).
-- [ ] A **unique `nodePort`** allocated. Current map: `operator 30000`, `node-template 30200`, `resy 30300`. Pick the next free `302xx`/`303xx` and keep it identical across all three env overlays.
+- [ ] A **unique `nodePort`** allocated. Current map: `operator 30000`, `node-template 30200`, `resy 30300`, `canary 30400`. Pick the next free `30x00`, record it as `node_port:` in the catalog entry (Step 1), and keep it identical across all three env overlays. CI (`scripts/ci/tests/render-caddyfile.test.sh`) asserts `catalog node_port == overlay Service nodePort` so the two can't drift.
 
 ## Steps
 
@@ -51,6 +53,7 @@ The one declaration that makes the node a build target **and** a `NODE_TARGET`. 
 name: <node>
 type: node # MUST be "node" (drives NODE_TARGETS)
 port: 3200
+node_port: 30x00 # k3s Service NodePort; edge Caddy proxies host.docker.internal:<node_port>
 dockerfile: nodes/<node>/app/Dockerfile
 node_id: "<uuidv4>" # real UUID, not the 000…0 placeholder
 image_tag_suffix: "-<node>"

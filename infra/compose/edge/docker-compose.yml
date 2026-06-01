@@ -22,17 +22,19 @@ services:
     # Allow Caddy to reach k3s NodePorts on the host
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # task.5078 — per-node edge routing is catalog-driven. deploy-infra.sh /
+    # provision-env-vm.sh write one `<SLUG>_DOMAIN` per type:node into this .env
+    # (looping NODE_TARGETS); env_file passes them all into Caddy so adding a node
+    # needs no edit here. Upstream ports are baked into the generated Caddyfile
+    # from catalog node_port, so only DOMAIN + the operator-primary upstream stay
+    # explicit (with docker-DNS defaults for the local `docker:edge:up` path).
+    # required:false keeps `docker:edge:up` working before any .env exists.
+    env_file:
+      - path: .env
+        required: false
     environment:
       - DOMAIN=${DOMAIN}
-      - POLY_DOMAIN=${POLY_DOMAIN:-}
-      - RESY_DOMAIN=${RESY_DOMAIN:-}
-      - NODE_TEMPLATE_DOMAIN=${NODE_TEMPLATE_DOMAIN:-}
-      # Per-node upstreams. Default to Docker DNS (CI/dev); override to
-      # host.docker.internal:<nodeport> for k3s edge deploys.
       - OPERATOR_UPSTREAM=${OPERATOR_UPSTREAM:-app:3000}
-      - POLY_UPSTREAM=${POLY_UPSTREAM:-poly:3100}
-      - RESY_UPSTREAM=${RESY_UPSTREAM:-resy:3300}
-      - NODE_TEMPLATE_UPSTREAM=${NODE_TEMPLATE_UPSTREAM:-node-template:3200}
     volumes:
       - ./configs/Caddyfile.tmpl:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

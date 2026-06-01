@@ -25,6 +25,7 @@
     "check:docs:metadata": "node scripts/validate-docs-metadata.mjs",
     "check:docs:sync-manifest": "node scripts/validate-sync-manifest-refs.mjs",
     "check:root-layout": "pnpm tsx scripts/check-root-layout.ts",
+    "gen:caddyfile": "bash scripts/ci/render-caddyfile.sh > infra/compose/edge/configs/Caddyfile.tmpl",
     "workflow:check": "node scripts/ci/workflow-check.mjs",
     "worktree:check": "bash scripts/worktree-check.sh",
     "work:next-id": "node scripts/next-work-id.mjs",
