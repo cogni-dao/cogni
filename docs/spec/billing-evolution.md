@@ -55,6 +55,8 @@ Single-path billing where LiteLLM provides provider cost, our system applies mar
 
 8. **REPO_SPEC_IS_IDENTITY_SSOT**: The `node_id` used for metering routing is the in-repo projection of the node's on-chain DAO and is declared exactly once, in `nodes/<node>/.cogni/repo-spec.yaml` (ROADMAP "Repo-Spec Authority"). It is never re-declared in `infra/catalog/*.yaml` (schema-forbidden) nor hardcoded in the proxy image. The routing CSV (`COGNI_NODE_ENDPOINTS`) and the default-node (`COGNI_DEFAULT_NODE_ID` = the `is_primary_host` node's `node_id`) are derived from repo-spec by `scripts/ci/lib/image-tags.sh` + `deploy-infra.sh`. **NO_SILENT_MISATTRIBUTION**: a missing/unknown `node_id` falls back to the configured default only if one is set; otherwise the event is logged + skipped — never billed to a fabricated identity.
 
+   > **`DEFAULT_NODE_IS_V0_TOLERANCE` (transitional).** A "default node" for unattributed spend is **not** first-class — it is a v0 crutch. Under `NODE_LOCAL_METERING` every metered call must carry its `node_id` (set by the node's LLM adapter), so a missing `node_id` is a **bug at the caller**, not a routing case. Defaulting it to the primary-host node means operator silently absorbs untagged spend. The accepted tolerance for v0: `COGNI_DEFAULT_NODE_ID` set → bill primary-host; unset → skip + log. **Exit:** make `node_id` mandatory on every metered call (assert at the adapter boundary), and on missing/unknown route to a **dead-letter + alert**, not a default — then delete `COGNI_DEFAULT_NODE_ID` entirely. Tracked toward the operator-controlled, typed metering contract (see ci-cd.md axiom 16 corollaries; the same elevation that makes deploy levers first-class operator workflows).
+
 ## Schema
 
 **Table:** `charge_receipts`
