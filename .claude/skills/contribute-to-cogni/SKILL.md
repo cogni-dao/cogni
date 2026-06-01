@@ -96,6 +96,12 @@ At each phase: search the resource roots below for the relevant guides, specs, a
 
 ---
 
-## Orthogonal: filing predictions as EDO chains
+## Orthogonal: capturing what the work taught
 
-`/contribute-to-cogni` owns _intent + execution state_ (work-items + PR lifecycle). For predictions about how a shipped change will behave over time — falsifiable, session-separated, compounding — see the [`edo-loop`](../edo-loop/SKILL.md) skill. EDO is rare (≤20% of agent work); the PR description is the right home for everything else.
+`/contribute-to-cogni` owns _intent + execution state_ — work-items (dolt-backed; your PATCHes show up in `dolt_log`) and the PR lifecycle. It does **not** own what your work _taught_. Durable learning lives in the node's Dolt knowledge hub, not the PR description:
+
+- **Reusable learning** — a finding, rule, scorecard, or a refinement of an existing entry → [`contribute-knowledge-to-cogni`](../contribute-knowledge-to-cogni/SKILL.md). Refine-first and rare; most work teaches nothing reusable → stay silent.
+- **Falsifiable prediction** about how a shipped change behaves over later sessions → [`edo-loop`](../edo-loop/SKILL.md) (≤20% of work).
+- **Everything else** — ephemeral implementation detail — dies with the session or lives in the PR description. Don't file it as knowledge.
+
+Both knowledge paths compound onto your **one open contribution** — never fork a new branch per finding.
