@@ -5,7 +5,13 @@
 
 import type { WorkItemDto } from "@cogni/node-contracts";
 import type { ReactElement } from "react";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components";
+import {
+  Markdown,
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "@/components";
 
 import { StatusPill, TypeIcon } from "./work-item-icons";
 
@@ -85,10 +91,18 @@ export function WorkItemDetail({
               </div>
 
               {/* Summary */}
-              {item.summary && <Field label="Summary">{item.summary}</Field>}
+              {item.summary && (
+                <Field label="Summary">
+                  <Markdown content={item.summary} />
+                </Field>
+              )}
 
               {/* Outcome */}
-              {item.outcome && <Field label="Outcome">{item.outcome}</Field>}
+              {item.outcome && (
+                <Field label="Outcome">
+                  <Markdown content={item.outcome} />
+                </Field>
+              )}
 
               {/* Project */}
               {item.projectId && (

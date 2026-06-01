@@ -164,3 +164,4 @@ export {
 } from "./kit/typography/CodeHero";
 export { HeroActionWords } from "./kit/typography/HeroActionWords";
 export { Prompt } from "./kit/typography/Prompt";
+export { Markdown } from "./markdown";

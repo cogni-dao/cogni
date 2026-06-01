@@ -23,6 +23,7 @@ import { type ReactElement, useEffect, useState } from "react";
 import {
   Button,
   Input,
+  Markdown,
   Sheet,
   SheetContent,
   SheetHeader,
@@ -255,9 +256,9 @@ export function ContributionDetail({
                             </div>
                           )}
                           {!isHtml && row?.content && (
-                            <pre className="mt-2 max-h-96 overflow-y-auto whitespace-pre-wrap break-words rounded bg-background/60 px-2 py-1.5 text-xs leading-snug">
-                              {String(row.content)}
-                            </pre>
+                            <div className="mt-2 max-h-96 overflow-y-auto rounded bg-background/60 px-2 py-1.5">
+                              <Markdown content={String(row.content)} />
+                            </div>
                           )}
                         </div>
                       );

@@ -26,16 +26,28 @@ This spec defines the authoring contract: what the renderer injects, what author
 
 ## When to Author HTML vs Text
 
-Knowledge entries serve two audiences with opposing format pressures:
+Text `content` now renders as **GFM markdown** in the human UI (headings, tables, lists, `code`, links) while staying plain-text for AI search. Markdown is the shared lane — it serves both audiences from one source. `html` is the narrower escape hatch for visuals markdown can't express.
 
-| Audience      | Optimal format                                                            | `entryType`                                                                   |
-| ------------- | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| **AI agents** | Plain text. Searchable, embedding-friendly, parseable. Verbose is fine.   | `observation`, `finding`, `conclusion`, `rule`, `scorecard`, `skill`, `guide` |
-| **Humans**    | Concise visual HTML. Tables, pills, diagrams, charts. Bare-minimum prose. | `html` (this spec)                                                            |
+| Format               | Serves          | Use for                                                                   | `entryType`                                                                   |
+| -------------------- | --------------- | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| **Markdown text**    | AI **+ humans** | Headings, tables, lists, code, prose. The default for nearly everything.  | `observation`, `finding`, `conclusion`, `rule`, `scorecard`, `skill`, `guide` |
+| **HTML** (this spec) | humans          | SVG diagrams, charts, pill grids, freeform layout markdown can't express. | `html`                                                                        |
 
-**Default = text.** Reach for `entryType=html` only when a human is the primary consumer and visual density would beat a paragraph. A design diagram, a status scorecard with N pills, a roadmap with per-quarter chart — those are `html`. A market base rate, a strategy description, a research finding — those stay text.
+**Default = markdown text.** Reach for `entryType=html` only when the artifact is genuinely visual — an SVG architecture diagram, a chart, a pill/status grid that a markdown table can't carry. A scorecard, roadmap, or comparison that fits a **markdown table** stays text (and renders cleanly). A market base rate, a strategy description, a research finding — text.
 
 Mixing is OK at the entry-set level (a domain has both kinds), never within one entry.
+
+## Pairing a visual with its AI-readable source
+
+An `entryType=html` block renders **human-only** — it shows in the sandboxed iframe, and an AI consumer can only read its raw markup bytes (markup is poor for search + embeddings). **There is no AI-optimized rendering of an html block.** So an html artifact must never be the _only_ home of a claim an agent needs to recall.
+
+When a concept genuinely needs both a **simple human visual** and **detailed machine-readable text** (e.g. a spec for how something works):
+
+- The **text/markdown atom is canonical** — full detail, pointers, source-of-truth. AI recalls this; humans read it rendered too.
+- The **html atom is a derived visual face** — catchy, simplified, scannable. It carries a `citations` edge to the canonical text (`extends` / `supports` today; a dedicated `summarizes` edge is a proposed addition once ≥2 such pairs exist — don't add the type before the second use).
+- **Default is still one markdown atom.** Pair only when a visual genuinely out-scans the prose _and_ the detail is worth a separate canonical row. Two atoms is a cost; pay it deliberately.
+
+**Alignment is the citation, kept honest by review.** Because the html cites its source, drift is detectable: a periodic review walks the edge, confirms the visual still faithfully summarizes the canonical text, and raises both rows' confidence together. The html's confidence is **capped by its source** — a simplified view can't be more trustworthy than the detail it summarizes. A visual that has drifted from its source is `supersedes`-replaced, not silently edited.
 
 ## Non-Goals
 
@@ -155,6 +167,52 @@ The `<defs>` arrowhead marker must live inside each SVG (SVG-scoped, not CSS-rea
 
 For non-tabular freeform shapes (paths, polygons), `hsl(var(--token))` is still the rule. Hardcoded hex remains an anti-pattern.
 
+## Expressive diagrams — the human-catchy standard
+
+The four `.cogni-svg-*` primitives keep a diagram _correct and on-brand_; they render flat. For hero / explainer artifacts — the ones a human should land on, follow, and remember — layer in these five **token-only** patterns. Every one works in the `sandbox=""` iframe today (no new classes, no JS); they only compose raw SVG with the shipped tokens. **Canonical exemplar:** the merged `knowledge-block-two-eyes` entry (domain `meta`) — study it before authoring a new hero diagram.
+
+| Pattern                 | What it buys                       | How (token-only)                                                                                           |
+| ----------------------- | ---------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| **Hero gradient node**  | One focal node that _glows_        | `<linearGradient>` with two token stops at `0.30–0.55` opacity, used as the node `fill`                    |
+| **Tone-coded concepts** | Each idea owns one color           | one `--chart-N` per concept — reused for its node **and** its outgoing flow, so color = meaning            |
+| **Colored flow curves** | Energy + direction in the path     | bezier `<path>` stroked in the **source concept's tone** (not flat gray), `stroke-width="3"`, `marker-end` |
+| **Lane washes**         | Group zones at a glance            | a large diagonal `<path>` filled with a low-opacity (`0.05→0.22`) token gradient behind each zone          |
+| **Texture motifs**      | Expressive density, not decoration | faint rotated `--font-mono` glyphs + low-opacity rendered-pixel `<rect>` bars as a **background** layer    |
+
+```svg
+<defs>
+  <!-- hero glow: two token stops, low opacity -->
+  <linearGradient id="core" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="hsl(var(--chart-4))" stop-opacity="0.55"/>
+    <stop offset="1" stop-color="hsl(var(--chart-1))" stop-opacity="0.30"/>
+  </linearGradient>
+  <!-- lane wash: same hue, fades across the zone -->
+  <linearGradient id="wash" x1="0" y1="1" x2="0" y2="0">
+    <stop offset="0" stop-color="hsl(var(--chart-2))" stop-opacity="0.05"/>
+    <stop offset="1" stop-color="hsl(var(--chart-2))" stop-opacity="0.22"/>
+  </linearGradient>
+  <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+    <path d="M0,0 L10,5 L0,10 z" fill="hsl(var(--muted-foreground))"/>
+  </marker>
+</defs>
+
+<path d="M300,250 L900,40 L900,250 Z" fill="url(#wash)"/>                 <!-- lane wash -->
+<rect x="120" y="232" width="200" height="80" rx="18" fill="url(#core)"   <!-- hero node -->
+      stroke="hsl(var(--chart-4))" stroke-opacity="0.6" stroke-width="2"/>
+<path d="M320,250 C400,210 410,150 432,118" fill="none"                   <!-- colored flow -->
+      stroke="hsl(var(--chart-2))" stroke-width="3" marker-end="url(#ah)"/>
+<text x="60" y="120" font-family="var(--font-mono)" font-size="22"        <!-- motif glyph -->
+      fill="hsl(var(--muted-foreground))" opacity="0.45"
+      transform="rotate(-12 60 120)">##</text>
+```
+
+**Type hierarchy** (the "simple clarity" half — restraint is the standard, not an afterthought):
+
+- **Node title** — `var(--font-sans)`, weight `700`, ~16px, `hsl(var(--foreground))`.
+- **Caption under title** — `var(--font-mono)`, ~11px, `hsl(var(--muted-foreground))`.
+- **Zone banner** — `var(--font-sans)`, weight `700`, `letter-spacing: 3`, in the **zone's tone**.
+- Whitespace beats density: **one** focal node, **≤3** flows per zone, **≤2** zones. If it needs a legend to parse, simplify until it doesn't.
+
 ## Anti-Patterns
 
 | Pattern                                               | Why it's banned                                                                                                               |
@@ -198,16 +256,18 @@ The resulting artifact uses the same chrome as the operator's own `Card`, `Badge
 
 ## Invariants
 
-| Rule                       | Constraint                                                                                                                                                                                                                 |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| TOKENS_ARE_THE_PALETTE     | Author content must reference `var(--token)` for colors and `var(--font-*)` for type. Hardcoded hex / named font families are anti-patterns.                                                                               |
-| SANDBOX_IS_THE_BOUNDARY    | Renderer iframe stays `sandbox=""` + `referrerPolicy="no-referrer"`. Adding `allow-scripts` requires a documented threat model and a spec amendment.                                                                       |
-| UTILITY_LIB_IS_CAPPED      | The `.cogni-*` class set is ≤15. New classes require a spec amendment with a concrete second-artifact use case.                                                                                                            |
-| DIAGRAMS_USE_SVG           | Freeform flow/architecture diagrams are SVG, hand-authored, token-only fills.                                                                                                                                              |
-| SHELL_IS_INLINE            | The CSS shell (tokens + utilities + Charts.css) is inlined into `srcDoc` — no external `<link>` or `<script>`. Keeps artifacts portable + sandbox-safe.                                                                    |
-| ONE_RENDERER_FOR_ALL_NODES | Operator and future node-template forks all use the same `HtmlRenderer` + shell. Per-node theme overrides happen via the token block, not by forking the renderer.                                                         |
-| HUMAN_HTML_AI_TEXT         | `entryType=html` is reserved for human-review content (concise + visual). AI-consumed knowledge (search recall, embeddings, agent reasoning) stays in text `entryType` rows. Authors choose audience first, format second. |
-| TOKEN_BLOCK_PAIRED         | Changes to `tailwind.css :root{}` / `.dark{}` and the renderer's matching token-block constants ship in the same commit until codegen lands.                                                                               |
+| Rule                       | Constraint                                                                                                                                                                                                                                                                                                                                   |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| TOKENS_ARE_THE_PALETTE     | Author content must reference `var(--token)` for colors and `var(--font-*)` for type. Hardcoded hex / named font families are anti-patterns.                                                                                                                                                                                                 |
+| SANDBOX_IS_THE_BOUNDARY    | Renderer iframe stays `sandbox=""` + `referrerPolicy="no-referrer"`. Adding `allow-scripts` requires a documented threat model and a spec amendment.                                                                                                                                                                                         |
+| UTILITY_LIB_IS_CAPPED      | The `.cogni-*` class set is ≤15. New classes require a spec amendment with a concrete second-artifact use case.                                                                                                                                                                                                                              |
+| DIAGRAMS_USE_SVG           | Freeform flow/architecture diagrams are SVG, hand-authored, token-only fills.                                                                                                                                                                                                                                                                |
+| SHELL_IS_INLINE            | The CSS shell (tokens + utilities + Charts.css) is inlined into `srcDoc` — no external `<link>` or `<script>`. Keeps artifacts portable + sandbox-safe.                                                                                                                                                                                      |
+| ONE_RENDERER_FOR_ALL_NODES | Operator and future node-template forks all use the same `HtmlRenderer` + shell. Per-node theme overrides happen via the token block, not by forking the renderer.                                                                                                                                                                           |
+| HTML_IS_FOR_VISUALS        | `entryType=html` is reserved for genuinely visual artifacts (SVG diagrams, charts, pill grids) markdown can't express. Ordinary human + AI content — including tables, lists, scorecards — lives in markdown text rows, which render for humans and stay searchable for AI. Authors choose format by what the content _is_, not by audience. |
+| TOKEN_BLOCK_PAIRED         | Changes to `tailwind.css :root{}` / `.dark{}` and the renderer's matching token-block constants ship in the same commit until codegen lands.                                                                                                                                                                                                 |
+| CATCH_THEN_CLARITY         | Hero diagrams may use gradient focal nodes, tone-coded colored flow curves, lane washes, and faint motif texture — all token-only (see "Expressive diagrams"). But one focal node, ≤2 zones, motifs stay a faint background layer. If it needs a legend to parse, simplify. Catch serves clarity; it never competes with it.                 |
+| VISUAL_CITES_ITS_SOURCE    | An `entryType=html` block is human-only (AI can't read markup well), so it is never a claim's sole home. When a concept needs both a visual and machine detail, the markdown text atom is canonical and the html cites it; the html's confidence is capped by its source and re-aligned by periodic review.                                  |
 
 ## Open Questions
 
@@ -219,4 +279,6 @@ The resulting artifact uses the same chrome as the operator's own `Card`, `Badge
 - [knowledge-syntropy](./knowledge-syntropy.md) — `entryType=html` defined here
 - [knowledge-data-plane](./knowledge-data-plane.md) — storage layer that holds the artifact content
 - [Charts.css docs](https://chartscss.org/) — vendored library
+- `knowledge-block-two-eyes` (domain `meta`) — canonical exemplar of the expressive-diagram standard
+- [`contribute-to-cogni`](../../.claude/skills/contribute-to-cogni/SKILL.md) — knowledge-as-documentation-layer contract (AI-text canonical + human-html visual)
 - task.5054 — agent edit-flow (separate; unrelated to styling)

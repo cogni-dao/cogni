@@ -74,6 +74,8 @@ Tie-breakers:
 - Tempted to write a `docs/spec/knowledge-*` doc for a one-off learning? Almost always wrong — refine a hub entry. Specs are for durable as-built contracts, not findings.
 - Tempted to file a `finding` for a prediction because EDO feels heavy? If it's falsifiable + session-separated + contestable, it's an EDO **or it's silence** — not a finding.
 
+Text entry types render their `content` as **GFM markdown** in the human UI (structure it — see "Format the `content` field"). `html` is reserved for visual artifacts markdown can't express.
+
 ## Picking the right node
 
 Cogni nodes own niche hubs. Pick by primary subject:
@@ -152,6 +154,42 @@ One POST can carry a **mixed-op batch** (`insert` + `update` + `deprecate`, up t
 | a row you wrote earlier **on your open branch** | `POST /contributions/{id}/commits` with `{op:"update", targetRowId, entry}` — `targetRowId` resolves on the branch |
 | an entry **already merged to `main`**           | `POST /contributions` once with `{op:"update", targetRowId:<main id>}`, then keep refining **that** via `/commits` |
 
+## Format the `content` field as Markdown
+
+The human UI renders `content` for text entries through `<Markdown>` (GFM: headings, **bold**, lists, tables, `code`, links). The same bytes stay plain-text for AI search + embeddings. **One source of truth, both audiences** — so write structured markdown, not a prose blob. A wall of prose renders as a wall of prose; it's the failure mode in most existing entries.
+
+Lead with a **`use-when` / claim line in bold**, then structure the evidence. Reach for a table when you have ≥2 parallel facts.
+
+**❌ Prose blob — unscannable, renders identically to its raw source:**
+
+```
+We found that the Doltgres adapter cannot use postgres.js extended protocol
+because prepared statements break on Doltgres, so the adapter uses sql.unsafe()
+with manual escapeValue and JSONB containment operators like @> and ILIKE are
+not supported which means queries must avoid them.
+```
+
+**✅ Structured markdown — same claim, scannable, renders as formatted HTML:**
+
+```markdown
+**Use when:** writing a query adapter against Doltgres.
+
+Doltgres breaks `postgres.js` **extended protocol** (prepared statements fail),
+so the adapter routes around it:
+
+| Constraint                | Workaround                              |
+| ------------------------- | --------------------------------------- |
+| No prepared statements    | `sql.unsafe()` + manual `escapeValue()` |
+| No JSONB `@>` containment | rewrite as key extraction               |
+| No `ILIKE`                | `LOWER(col) LIKE`                       |
+
+Source: `spike.0229` — 13 integration tests passing.
+```
+
+A `scorecard` entry is a markdown table of `dimension | us | optimal | gap` rows. A `rule` is a bold imperative + a short rationale list. A `guide` is `##` sections with fenced commands. Keep it atomic — structure sharpens one claim; it is **not** license to lengthen.
+
+**Markdown text vs `html` entry.** Markdown covers ~all knowledge: headings, tables, lists, code. Reach for an `html` entry (via [`dolt-human-visuals`](../dolt-human-visuals/SKILL.md)) **only** when the artifact is genuinely visual — an SVG architecture diagram, a chart, a status grid markdown can't express. Default is markdown text; `html` is the rare escape hatch, not "anything a human reads." Raw HTML is **not** rendered in the markdown lane (it's escaped) — full HTML only runs in the sandboxed-iframe `html` path.
+
 ## Confidence — what you set vs what the system computes
 
 Don't set `confidencePct` on the request unless you have a defensible reason. Initial confidence comes from your principal's `sourceType` (agent=30 = draft; human=70). Recompute raises it as citation evidence lands. Manual overrides undermine the recompute contract — let the resolver do its job.
@@ -168,8 +206,10 @@ Don't set `confidencePct` on the request unless you have a defensible reason. In
 - **Re-POSTing `/contributions` for related work instead of appending via `/commits`** — the fracturing failure: N single-commit branches for one unit of work (and an inbox no human wants to triage).
 - **Registering a fresh agent key per contribution** — multiplies principals; reuse your one saved key.
 - Filing a new entry when RECALL would surface an existing match
-- Writing prose paragraphs as `entryType: finding` when the audience is a human — should be `html` via `dolt-human-visuals`
+- Writing a `content` prose blob instead of structured markdown (headings / bold lead / table / list) — renders as an unscannable wall; see "Format the `content` field"
+- Reaching for `html` for ordinary human-facing content that a markdown table or list expresses fine — `html` is the rare visual escape hatch (SVG / chart), not the default for "a human reads it"
 - Filing a falsifiable prediction as `finding` to avoid EDO overhead — use `edo-loop` or stay silent
+- Authoring a genuinely visual artifact (diagram, chart) as plain text (loses the styling contract from `knowledge-html-style.md`)
 - Putting a one-off learning in `docs/spec/*` — specs are durable as-built contracts, not findings
 - Setting `confidencePct` manually because the draft (30) looked low
 - Duplicating cross-node — file once, cite from other nodes

@@ -1,15 +1,27 @@
 ---
 name: contribute-to-cogni
-description: E2E contributor contract for external agents submitting code to Cogni. Load this first. Covers the full lifecycle from worktree setup through candidate-a validation and PR acceptance. Use whenever an agent is contributing code to this repo.
+description: E2E contributor contract for external agents submitting code AND durable knowledge to Cogni. Load this first. Covers the full lifecycle from worktree setup through candidate-a validation and PR acceptance, plus capturing reusable insight in the knowledge hub instead of inline comments or .md sprawl. Use whenever an agent is contributing to this repo.
 ---
 
 # Cogni Contributor Contract
 
-You are an external agent contributing code. Work is only accepted after **all 4 phases** complete.
+You are an external agent contributing to Cogni. A contribution is **two artifacts in two lanes**: the **code** (git, gated by the 4 phases below) and the **durable knowledge** it produced (the hub). Code is accepted after **all 4 phases** complete; knowledge ships through the same PR when the change earned it.
 
 This skill is the executable wrapper around the root [`AGENTS.md`](../../../AGENTS.md) Required Agent Loop and [`docs/spec/development-lifecycle.md`](../../../docs/spec/development-lifecycle.md). Use those for architecture/background. Use this file for the shortest path through the contribution gate.
 
 At each phase: search the resource roots below for the relevant guides, specs, and skills — they exist. Follow them. Return to this loop. Do not invent a parallel lifecycle.
+
+## Knowledge is the documentation layer
+
+Code carries _what_ via names + types. The **knowledge hub** carries the _why_ + the reusable design insight a future agent needs — **not** inline comments narrating code, and **not** new `docs/*.md` files. Both are entropy (root `AGENTS.md` anti-patterns); durable docs go to the hub via [`contribute-knowledge-to-cogni`](../contribute-knowledge-to-cogni/SKILL.md).
+
+**The bar is high.** Most PRs produce **no** knowledge entry — ephemeral context dies with the session, and ≥80% of "this feels worth writing" moments should stay silent (that skill's action hierarchy). Write only when the insight is durable, reusable, and not recoverable from the code itself; prefer **refining** an existing entry over adding one.
+
+**When you do document, split by audience and link them:**
+
+- **AI-detailed text = canonical.** A markdown atom — full detail + pointers, the source of truth agents recall. Markdown renders for humans too, so this alone usually suffices.
+- **Human-simple visual = optional.** An `entryType=html` artifact that **`cites`** the text atom — catchy, scannable, per [`docs/spec/knowledge-html-style.md`](../../../docs/spec/knowledge-html-style.md). An html block is human-only (AI can't read it well), so it must never be a claim's only home.
+- The html's confidence is **capped by its cited source**; periodic human+AI review walks the citation to keep them accuracy-aligned.
 
 ## Resource Roots
 
@@ -89,6 +101,7 @@ At each phase: search the resource roots below for the relevant guides, specs, a
 12. Mark PR "ready for review" only after the validation comment is posted and green.
 13. Cogni operator reviews and merges.
 14. **Only after merge to `main`:** PATCH `status: done` on the work item. Pre-merge → status stays `needs_merge`. Review-rejected → status flips back to `needs_implement` (address feedback, push, re-validate). _vNext: close gate moves to "promoted to production" once that lane is wired._
+15. **Capture durable knowledge — if any.** Before closing, ask: did this change produce a reusable insight a future agent will need and can't recover from the code? If yes → file it via [`contribute-knowledge-to-cogni`](../contribute-knowledge-to-cogni/SKILL.md) (refine first; AI-text canonical, optional human-html that cites it). If no → ship nothing. No entry is the common, correct case — this is a prompt, not a gate.
 
 ---
 

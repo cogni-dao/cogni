@@ -13,7 +13,13 @@
 import type { KnowledgeRow } from "@cogni/node-contracts";
 import type { ReactElement } from "react";
 
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components";
+import {
+  Markdown,
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "@/components";
 import { ChainPanel } from "./ChainPanel";
 import { ConfidenceBar } from "./ConfidenceBar";
 import { HtmlRenderer } from "./HtmlRenderer";
@@ -85,9 +91,10 @@ export function KnowledgeDetail({
                 {isHtml ? (
                   <HtmlRenderer html={item.content} title={item.title} />
                 ) : (
-                  <p className="whitespace-pre-wrap leading-relaxed">
-                    {item.content}
-                  </p>
+                  <Markdown
+                    content={item.content}
+                    className="leading-relaxed"
+                  />
                 )}
               </Field>
 
