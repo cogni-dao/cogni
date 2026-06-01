@@ -20,7 +20,7 @@ You have a node app under `nodes/<node>/app` (a Next.js node) and you want it to
 
 **Do NOT use this guide for:**
 
-- **Standing up a whole new ENVIRONMENT** (candidate-*, preview, production, or a fork — the VM + substrate, not a node) → [`create-env.md`](./create-env.md). That's the env axis; this is the node axis.
+- **Standing up a whole new ENVIRONMENT** (candidate-\*, preview, production, or a fork — the VM + substrate, not a node) → [`create-env.md`](./create-env.md). That's the env axis; this is the node axis.
 - **Services** (`services/` — Temporal workers, queue consumers, utility HTTP) → [`create-service.md`](./create-service.md).
 - **On-chain DAO formation** (the wizard that deploys the DAO + token + repo-spec) → [`node-formation-guide.md`](./node-formation-guide.md). This guide is the infra-deploy slice that follows its **§8 "Deploy Infrastructure (Post-Formation)"**.
 

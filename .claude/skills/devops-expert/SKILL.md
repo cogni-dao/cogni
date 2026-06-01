@@ -127,13 +127,13 @@ Support:
 
 ### Provision (`scripts/setup/`, `infra/provision/`)
 
-| Resource                      | Purpose                                                  |
-| ----------------------------- | -------------------------------------------------------- |
+| Resource                              | Purpose                                                                                                                                                                                                          |
+| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `.github/workflows/provision-env.yml` | **Canonical new-env entry** — runner-owned bootstrap.sh → provision-env-vm.sh (VM + DNS + OpenBao/ESO + deploy). Guide: [`docs/guides/create-env.md`](../../../docs/guides/create-env.md) (incl. known e2e gaps) |
-| `provision-env-vm.sh`         | Current env provisioner (catalog-driven; candidate-*/preview/production) |
-| `provision-test-vm.sh`        | Legacy one-command VM setup (candidate-a only)            |
-| `infra/provision/cherry/`     | OpenTofu modules for Cherry Servers VMs                  |
-| `infra/provision/cherry/k3s/` | k3s bootstrap (cloud-init, Argo CD, ksops)               |
+| `provision-env-vm.sh`                 | Current env provisioner (catalog-driven; candidate-\*/preview/production)                                                                                                                                        |
+| `provision-test-vm.sh`                | Legacy one-command VM setup (candidate-a only)                                                                                                                                                                   |
+| `infra/provision/cherry/`             | OpenTofu modules for Cherry Servers VMs                                                                                                                                                                          |
+| `infra/provision/cherry/k3s/`         | k3s bootstrap (cloud-init, Argo CD, ksops)                                                                                                                                                                       |
 
 ### VM SSH access — policy first, path second
 

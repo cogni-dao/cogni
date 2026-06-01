@@ -202,6 +202,6 @@ Content aggregated from original CI/CD roadmap docs during 2026-04-05 stabilizat
 
 ## Operator Guides
 
-- [create-env.md](../../docs/guides/create-env.md) — stand up a whole env (candidate-*/preview/production/fork) via `provision-env.yml`; includes the known perfectionist gaps in the e2e provisioning path
+- [create-env.md](../../docs/guides/create-env.md) — stand up a whole env (candidate-\*/preview/production/fork) via `provision-env.yml`; includes the known perfectionist gaps in the e2e provisioning path
 - [create-node.md](../../docs/guides/create-node.md) — take a node live across the env matrix
 - [fork-quickstart.md](../../docs/runbooks/fork-quickstart.md) — per-secret bring-up walkthrough (§6) + init-artifact custody

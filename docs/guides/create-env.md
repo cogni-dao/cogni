@@ -36,8 +36,8 @@ provision-env.yml  (workflow_dispatch: env, encryption_passphrase)
 ## Preconditions (the per-env setup that the workflow does NOT create for you)
 
 1. **GH environment + minting secrets.** Create the `<env>` GitHub environment and set the minting tokens. `CHERRY_AUTH_TOKEN` is repo-level (shared); the rest are per-env:
-   - `CHERRY_PROJECT_ID`, `CLOUDFLARE_API_TOKEN` (scopes: **DNS:Edit + Zone Settings:Edit**), `CLOUDFLARE_ZONE_ID`, `GH_ADMIN_PAT` (a **literal** token — fine-grained or `gho_`; *not* a `$(gh auth token)` expression), `GH_ADMIN_USERNAME`.
-   - Full per-secret instructions: fork-quickstart §6.2. The *generated* app secrets (DB passwords, `AUTH_SECRET`, tokens…) are auto-created by `bootstrap.sh` Phase 3 — don't set those by hand.
+   - `CHERRY_PROJECT_ID`, `CLOUDFLARE_API_TOKEN` (scopes: **DNS:Edit + Zone Settings:Edit**), `CLOUDFLARE_ZONE_ID`, `GH_ADMIN_PAT` (a **literal** token — fine-grained or `gho_`; _not_ a `$(gh auth token)` expression), `GH_ADMIN_USERNAME`.
+   - Full per-secret instructions: fork-quickstart §6.2. The _generated_ app secrets (DB passwords, `AUTH_SECRET`, tokens…) are auto-created by `bootstrap.sh` Phase 3 — don't set those by hand.
 2. **`FORK_DOMAIN_ROOT`** repo variable (defaults `cognidao.org` for the hub).
 3. **Cherry Servers account balance.** The VM costs money; provisioning fails mid-`tofu apply` with `Insufficient balance!` if the account is empty. Fund it first.
 4. **The node formation must exist in git** for the env: AppSet generator(s) + `infra/k8s/overlays/<env>/<node>/` + per-node/service ExternalSecrets. For an existing slot these are present; for a brand-new slot author them (see [`create-node.md`](./create-node.md) and the candidate-b formation pilot in `infra/k8s/argocd/candidate-b-applicationset.yaml`). A genuinely new slot name (e.g. `candidate-c`) also needs adding to the `env` choice list in `provision-env.yml`.
@@ -73,20 +73,23 @@ curl https://node-template-candidate-b.cognidao.org/readyz                      
 The `provision-env.yml` path (ported in #1426) was first exercised end-to-end on 2026-06-01 (candidate-b from zero). Doing so surfaced a stack of gaps — fixed in #1430 unless noted. They are catalogued here so the next env-bring-up is not a discovery exercise:
 
 **Fixed (#1430):**
+
 - `scripts/bootstrap/install/install-age.sh` was missing entirely (workflow called it → exit 127).
 - `install-tofu.sh` only installed on macOS; its non-mac path warned-and-continued and checked the wrong binary name (`opentofu` vs `tofu`) → `missing prereq: tofu`. (Audit the other `install/*.sh` for the same laptop-only assumption.)
 - `bootstrap.sh` **hard-aborted** on a missing Cloudflare `Zone Settings:Edit` scope while `provision-env-vm.sh` soft-failed the same check — unified to soft-fail (the zone SSL mode is a one-per-zone setting, already `Full` on an established zone).
 - `provision-env-vm.sh` blocked on an interactive `read` for the optional OpenRouter key → EOF aborted the non-TTY runner. Now skipped under `CI`/non-TTY. (Audit remaining interactive `read`s for the same.)
 
 **Open debt (not blocking, worth closing):**
+
 - **Per-env minting secrets are manual.** Hub-wide creds (`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ZONE_ID`, `GH_ADMIN_*`, `CHERRY_PROJECT_ID`) are identical across `candidate-*` yet set per-env; only `CHERRY_AUTH_TOKEN` is repo-level. Promoting the constant ones to repo-level would eliminate the per-env re-entry step for future slots.
 - **`GH_ADMIN_PAT` laptop placeholder.** The committed `.env.bootstrap` template uses `$(gh auth token)` — a local convenience that cannot be stored in a GH secret. Fork/env operators must supply a literal token; the trap is silent (it stores the literal string and breaks `.env.bootstrap` sourcing on the runner).
 - **Ephemeral runner tofu state.** No remote backend (`infra/provision/cherry/base/main.tf` has the backend commented out) → each run starts with empty state; a failed `tofu apply` after the SSH-key resource is created leaves an **orphaned Cherry SSH key** per failed run. Wants a remote backend (or a pre-apply orphan sweep).
-- **No Cherry balance pre-flight.** Balance is only discovered *during* `tofu apply`, after side effects (SSH key created). A pre-flight balance probe (like the Cloudflare/Cherry-token probes) would fail fast at zero side-effect.
+- **No Cherry balance pre-flight.** Balance is only discovered _during_ `tofu apply`, after side effects (SSH key created). A pre-flight balance probe (like the Cloudflare/Cherry-token probes) would fail fast at zero side-effect.
 - **Manual passphrase.** v-next (per `proj.agentic-fork-bootstrap`): once a **parent OpenBao** exists, replace encrypt+upload-with-passphrase with `vault-action` pushes — no operator passphrase.
 - **New slot ≠ one-line.** A brand-new env name still requires editing the `provision-env.yml` `env` choice + authoring AppSet/overlays/ExternalSecrets per node. Formation-driven generation is tracked in `task.5097` (env-as-formation list generator) + `task.5098` (generate overlays/ExternalSecrets).
 
 ## See also
+
 - [`docs/runbooks/fork-quickstart.md`](../runbooks/fork-quickstart.md) — the per-secret walkthrough (§6) + init-artifact custody (§6.3, §6.5).
 - [`create-node.md`](./create-node.md) — the node axis (one node across the env matrix).
 - [`.claude/skills/cicd-secrets-expert/SKILL.md`](../../.claude/skills/cicd-secrets-expert/SKILL.md) — where each secret value lives (tier system + OpenBao paths).
