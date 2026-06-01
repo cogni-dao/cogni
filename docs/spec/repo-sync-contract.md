@@ -189,7 +189,7 @@ A path is **never** in two classes. If it would be, the manifest is wrong and mu
 
 The contract's correctness is asserted by a single property: **node-template, with zero edits to operator-scope paths, must be able to host a fork that adds a second node.**
 
-This property is currently red — the Caddyfile template and `deploy-infra.sh` per-node env-var block both hardcode single-node assumptions (bug.5001 lineage). Driving it green is a slice of [proj.repo-sync](../../work/projects/proj.repo-sync.md) and is a precondition for declaring the contract live.
+The Caddyfile and `deploy-infra.sh` / `provision-env-vm.sh` per-node env-var blocks are catalog-driven (task.5078): `scripts/ci/render-caddyfile.sh` generates the Caddyfile from `NODE_TARGETS` (upstream port from catalog `node_port`) and the deploy/provision scripts write each node's per-env host from one `host_for_node` loop, so a fork adding a second node touches no operator-scope edge path — only its catalog entry. `scripts/ci/tests/render-caddyfile.test.sh` guards the drift. The remaining single-node assumption is the runtime compose per-service blocks + `infra/k8s/overlays/<env>/<node>` generation (ci-cd.md axiom 16 out-of-scope follow-ups).
 
 The property is asserted by the CONTRACT_TEST below.
 

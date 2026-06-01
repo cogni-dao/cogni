@@ -14,7 +14,7 @@ Always-on TLS termination layer (Caddy). Isolated from app deployments to preven
 ## Pointers
 
 - [docker-compose.yml](docker-compose.yml): Edge stack (Caddy only)
-- [configs/Caddyfile.tmpl](configs/Caddyfile.tmpl): Caddy configuration template
+- [configs/Caddyfile.tmpl](configs/Caddyfile.tmpl): **generated** by `scripts/ci/render-caddyfile.sh` from `infra/catalog/*.yaml` (task.5078) — edit the catalog + `pnpm gen:caddyfile`, never by hand; CI `render-caddyfile.test.sh` gates drift
 - [Runtime stack](../runtime/): App + postgres + litellm + alloy (mutable, updated each deploy)
 
 ## Boundaries
@@ -32,8 +32,8 @@ Always-on TLS termination layer (Caddy). Isolated from app deployments to preven
 - **Exports:** none
 - **Routes (if any):** `/api/v1/public/*` (rate limited, X-Real-IP header)
 - **CLI (if any):** `docker compose --project-name cogni-edge -f docker-compose.yml`
-- **Env/Config keys:** `DOMAIN`
-- **Files considered API:** `docker-compose.yml`, `configs/Caddyfile.tmpl`
+- **Env/Config keys:** `DOMAIN`, `OPERATOR_UPSTREAM`, and one `<SLUG>_DOMAIN` per non-primary `type: node` (written to `.env` by `deploy-infra.sh` / `provision-env-vm.sh`; Caddy reads them via `env_file`)
+- **Files considered API:** `docker-compose.yml`, `configs/Caddyfile.tmpl` (generated — see Pointers)
 
 ## Ports (optional)
 
