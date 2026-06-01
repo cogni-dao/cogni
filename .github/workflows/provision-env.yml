@@ -108,6 +108,13 @@ jobs:
       POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
       POSTHOG_HOST: ${{ secrets.POSTHOG_HOST }}
       OPENCLAW_GITHUB_RW_TOKEN: ${{ secrets.OPENCLAW_GITHUB_RW_TOKEN }}
+      # Git read creds for deploy-infra.sh's private-repo clone (bare-referenced,
+      # set -u → unbound abort if absent). Match candidate-flight-infra.yml:
+      # literal username + repo-level GIT_READ_TOKEN. Everything else
+      # deploy-infra needs is bootstrap-generated or computed internally
+      # (NODE_APP_TARGETS/EDGE_ENV_LINES are set in deploy-infra.sh:411,430).
+      GIT_READ_USERNAME: Cogni-1729
+      GIT_READ_TOKEN: ${{ secrets.GIT_READ_TOKEN }}
       # `bootstrap.sh` and `provision-env-vm.sh` both run non-interactively
       # on the runner; the editor-open branch in bootstrap.sh already
       # detects non-TTY and skips (scripts/setup/bootstrap.sh line 61).
