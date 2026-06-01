@@ -169,7 +169,7 @@ export const serverSchema = z.object({
 
   // EVM RPC - On-chain verification (Phase 3)
   // Required for production/preview/dev; not used in test mode (FakeEvmOnchainClient)
-  EVM_RPC_URL: z.string().url().optional(),
+  EVM_RPC_URL: optionalUrl,
 
   // Langfuse (AI observability) - Optional
   // Only required when Langfuse tracing is enabled
@@ -271,8 +271,8 @@ export const serverSchema = z.object({
   // PostHog product analytics — required
   // See docs/guides/posthog-setup.md for setup
   // PostHog Cloud free tier: 1M events/month at https://us.i.posthog.com
-  POSTHOG_API_KEY: z.string().min(1),
-  POSTHOG_HOST: z.string().url(),
+  POSTHOG_API_KEY: optionalString,
+  POSTHOG_HOST: optionalUrl,
   POSTHOG_PROJECT_ID: optionalString,
 });
 
