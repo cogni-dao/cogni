@@ -3,7 +3,9 @@
 
 /**
  * Module: `@app/(app)/knowledge/_components/KnowledgeDetail`
- * Purpose: Slide-over Sheet that renders a single knowledge entry's full content.
+ * Purpose: Slide-over Sheet that renders a single knowledge entry's full content,
+ *   with a copy-link affordance to the entry's permalink. Body shared with the
+ *   routable `/knowledge/[id]` page via `KnowledgeEntryFields`.
  * Scope: Pure presentation; no fetching.
  * @internal
  */
@@ -13,17 +15,9 @@
 import type { KnowledgeRow } from "@cogni/node-contracts";
 import type { ReactElement } from "react";
 
-import {
-  Markdown,
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-} from "@/components";
-import { ChainPanel } from "./ChainPanel";
-import { ConfidenceBar } from "./ConfidenceBar";
-import { HtmlRenderer } from "./HtmlRenderer";
-import { RelativeTime } from "./RelativeTime";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components";
+import { CopyLinkButton } from "./CopyLinkButton";
+import { KnowledgeEntryFields } from "./KnowledgeEntryFields";
 
 interface KnowledgeDetailProps {
   readonly item: KnowledgeRow | null;
@@ -31,24 +25,6 @@ interface KnowledgeDetailProps {
   readonly onOpenChange: (open: boolean) => void;
   /** When true, render the EDO chain walk inline below the entry body. */
   readonly showChain?: boolean;
-}
-
-function Field({
-  label,
-  children,
-}: {
-  readonly label: string;
-  readonly children: React.ReactNode;
-}): ReactElement | null {
-  if (!children) return null;
-  return (
-    <div className="flex flex-col gap-1">
-      <span className="font-medium text-muted-foreground text-xs uppercase tracking-wider">
-        {label}
-      </span>
-      <div className="text-sm">{children}</div>
-    </div>
-  );
 }
 
 export function KnowledgeDetail({
@@ -77,64 +53,16 @@ export function KnowledgeDetail({
               <SheetTitle className="text-lg leading-snug">
                 {item.title}
               </SheetTitle>
-              <span className="font-mono text-muted-foreground text-xs">
-                {item.id}
-              </span>
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-mono text-muted-foreground text-xs">
+                  {item.id}
+                </span>
+                <CopyLinkButton path={`/knowledge/${item.id}`} />
+              </div>
             </SheetHeader>
 
-            <div className="mt-6 flex flex-col gap-5 px-1">
-              <Field label="Confidence">
-                <ConfidenceBar value={item.confidencePct} width={120} />
-              </Field>
-
-              <Field label="Content">
-                {isHtml ? (
-                  <HtmlRenderer html={item.content} title={item.title} />
-                ) : (
-                  <Markdown
-                    content={item.content}
-                    className="leading-relaxed"
-                  />
-                )}
-              </Field>
-
-              <Field label="Source">
-                <div className="flex flex-col gap-1 font-mono text-xs">
-                  <span>{item.sourceType}</span>
-                  {item.sourceRef && (
-                    <span className="text-muted-foreground">
-                      {item.sourceRef}
-                    </span>
-                  )}
-                </div>
-              </Field>
-
-              {item.tags && item.tags.length > 0 && (
-                <Field label="Tags">
-                  <div className="flex flex-wrap gap-1.5">
-                    {item.tags.map((t) => (
-                      <span
-                        key={t}
-                        className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-muted-foreground text-xs"
-                      >
-                        {t}
-                      </span>
-                    ))}
-                  </div>
-                </Field>
-              )}
-
-              {item.createdAt && (
-                <Field label="Created">
-                  <RelativeTime iso={item.createdAt} />
-                </Field>
-              )}
-
-              {showChain && (
-                <div className="mt-2 border-border/60 border-t pt-4">
-                  <ChainPanel rootId={item.id} />
-                </div>
-              )}
+            <div className="mt-6">
+              <KnowledgeEntryFields item={item} showChain={showChain} />
             </div>
           </>
         )}
