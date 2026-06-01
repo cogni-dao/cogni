@@ -67,6 +67,8 @@
 
 set -euo pipefail
 
+LOCAL_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 VM_HOST="${VM_HOST:?VM_HOST is required}"
 DEPLOY_ENVIRONMENT="${DEPLOY_ENVIRONMENT:?DEPLOY_ENVIRONMENT is required}"
 EXPECTED_SHA="${EXPECTED_SHA:?EXPECTED_SHA is required (deploy-branch tip SHA)}"
@@ -417,12 +419,21 @@ REMOTESCRIPT
 # Per-invocation unique remote paths so concurrent matrix cells (task.0372)
 # don't race each other's /tmp files.
 REMOTE_SUFFIX="$$.${RANDOM}.${RANDOM}"
-REMOTE_SCRIPT_PATH="/tmp/wait-for-argocd-remote.${REMOTE_SUFFIX}.sh"
-REMOTE_TOKEN_PATH="/tmp/wait-for-argocd-token.${REMOTE_SUFFIX}"
+REMOTE_DIR="/tmp/wait-for-argocd.${REMOTE_SUFFIX}"
+REMOTE_SCRIPT_PATH="${REMOTE_DIR}/wait-for-argocd-remote.sh"
+REMOTE_TOKEN_PATH="${REMOTE_DIR}/gh-token"
+REMOTE_LIB_DIR="${REMOTE_DIR}/lib"
+REMOTE_IMAGE_TAGS_PATH="${REMOTE_LIB_DIR}/image-tags.sh"
+
+# shellcheck disable=SC2086
+ssh $SSH_OPTS root@"$VM_HOST" "mkdir -p '$REMOTE_LIB_DIR'"
 
 # shellcheck disable=SC2086
 scp $SSH_OPTS "$REMOTE_SCRIPT" root@"$VM_HOST":"$REMOTE_SCRIPT_PATH"
 rm -f "$REMOTE_SCRIPT"
+
+# shellcheck disable=SC2086
+scp $SSH_OPTS "$LOCAL_SCRIPT_DIR/lib/image-tags.sh" root@"$VM_HOST":"$REMOTE_IMAGE_TAGS_PATH"
 
 TOKEN_FILE=$(mktemp)
 chmod 600 "$TOKEN_FILE"
@@ -433,7 +444,7 @@ rm -f "$TOKEN_FILE"
 
 # shellcheck disable=SC2086
 ssh $SSH_OPTS root@"$VM_HOST" \
-  "GH_TOKEN=\$(cat $REMOTE_TOKEN_PATH) GH_REPO='$GH_REPO_FOR_COMPARE' bash $REMOTE_SCRIPT_PATH '$DEPLOY_ENVIRONMENT' '$EXPECTED_SHA' '$ARGOCD_TIMEOUT' '$ACTIVE_SYNC_AFTER' '$SYNC_KICK_INTERVAL' ${APPS[*]}; RC=\$?; rm -f $REMOTE_SCRIPT_PATH $REMOTE_TOKEN_PATH; exit \$RC"
+  "GH_TOKEN=\$(cat '$REMOTE_TOKEN_PATH') GH_REPO='$GH_REPO_FOR_COMPARE' bash '$REMOTE_SCRIPT_PATH' '$DEPLOY_ENVIRONMENT' '$EXPECTED_SHA' '$ARGOCD_TIMEOUT' '$ACTIVE_SYNC_AFTER' '$SYNC_KICK_INTERVAL' ${APPS[*]}; RC=\$?; rm -rf '$REMOTE_DIR'; exit \$RC"
 
 # Gate-ordering invariant (bug.0321 Fix 4): signal downstream steps in the
 # same job that Argo sync was verified at EXPECTED_SHA. wait-for-candidate-ready.sh
