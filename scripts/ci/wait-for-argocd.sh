@@ -89,6 +89,16 @@ fi
 IFS=',' read -r -a APPS <<< "$PROMOTED_APPS"
 echo "⏳ Waiting for promoted apps (${PROMOTED_APPS}) to reconcile to ${EXPECTED_SHA:0:8} (${DEPLOY_ENVIRONMENT}, timeout ${ARGOCD_TIMEOUT}s)..."
 
+# Catalog parsing stays on the caller/runner side. The candidate VM is only
+# expected to provide kubectl access to the cluster, not CI parser tools.
+# shellcheck source=./lib/image-tags.sh
+. "$LOCAL_SCRIPT_DIR/lib/image-tags.sh"
+NODE_TARGETS_CSV=$(IFS=','; printf '%s' "${NODE_TARGETS[*]}")
+if [ -z "$NODE_TARGETS_CSV" ]; then
+  echo "[ERROR] wait-for-argocd: no type:node targets from catalog — refusing to resolve deployments with an empty node list" >&2
+  exit 1
+fi
+
 # SCP a remote script to the VM and execute it. Avoids heredoc quoting issues
 # and ensures all shell variables resolve on the remote.
 REMOTE_SCRIPT=$(mktemp)
@@ -110,6 +120,13 @@ APPS=("$@")
 EXPECTED_SHA=$(printf '%s' "$EXPECTED_SHA" | tr '[:upper:]' '[:lower:]')
 GH_TOKEN="${GH_TOKEN:-}"
 GH_REPO="${GH_REPO:-}"
+NODE_TARGETS_CSV="${NODE_TARGETS_CSV:-}"
+
+if [ -z "$NODE_TARGETS_CSV" ]; then
+  echo "[ERROR] wait-for-argocd remote: NODE_TARGETS_CSV is required" >&2
+  exit 1
+fi
+IFS=',' read -r -a NODE_TARGETS <<< "$NODE_TARGETS_CSV"
 
 ANCESTRY_CACHE_REV=""
 ANCESTRY_CACHE_RESULT=1
@@ -422,18 +439,13 @@ REMOTE_SUFFIX="$$.${RANDOM}.${RANDOM}"
 REMOTE_DIR="/tmp/wait-for-argocd.${REMOTE_SUFFIX}"
 REMOTE_SCRIPT_PATH="${REMOTE_DIR}/wait-for-argocd-remote.sh"
 REMOTE_TOKEN_PATH="${REMOTE_DIR}/gh-token"
-REMOTE_LIB_DIR="${REMOTE_DIR}/lib"
-REMOTE_IMAGE_TAGS_PATH="${REMOTE_LIB_DIR}/image-tags.sh"
 
 # shellcheck disable=SC2086
-ssh $SSH_OPTS root@"$VM_HOST" "mkdir -p '$REMOTE_LIB_DIR'"
+ssh $SSH_OPTS root@"$VM_HOST" "mkdir -p '$REMOTE_DIR'"
 
 # shellcheck disable=SC2086
 scp $SSH_OPTS "$REMOTE_SCRIPT" root@"$VM_HOST":"$REMOTE_SCRIPT_PATH"
 rm -f "$REMOTE_SCRIPT"
-
-# shellcheck disable=SC2086
-scp $SSH_OPTS "$LOCAL_SCRIPT_DIR/lib/image-tags.sh" root@"$VM_HOST":"$REMOTE_IMAGE_TAGS_PATH"
 
 TOKEN_FILE=$(mktemp)
 chmod 600 "$TOKEN_FILE"
@@ -444,7 +456,7 @@ rm -f "$TOKEN_FILE"
 
 # shellcheck disable=SC2086
 ssh $SSH_OPTS root@"$VM_HOST" \
-  "GH_TOKEN=\$(cat '$REMOTE_TOKEN_PATH') GH_REPO='$GH_REPO_FOR_COMPARE' bash '$REMOTE_SCRIPT_PATH' '$DEPLOY_ENVIRONMENT' '$EXPECTED_SHA' '$ARGOCD_TIMEOUT' '$ACTIVE_SYNC_AFTER' '$SYNC_KICK_INTERVAL' ${APPS[*]}; RC=\$?; rm -rf '$REMOTE_DIR'; exit \$RC"
+  "NODE_TARGETS_CSV='$NODE_TARGETS_CSV' GH_TOKEN=\$(cat '$REMOTE_TOKEN_PATH') GH_REPO='$GH_REPO_FOR_COMPARE' bash '$REMOTE_SCRIPT_PATH' '$DEPLOY_ENVIRONMENT' '$EXPECTED_SHA' '$ARGOCD_TIMEOUT' '$ACTIVE_SYNC_AFTER' '$SYNC_KICK_INTERVAL' ${APPS[*]}; RC=\$?; rm -rf '$REMOTE_DIR'; exit \$RC"
 
 # Gate-ordering invariant (bug.0321 Fix 4): signal downstream steps in the
 # same job that Argo sync was verified at EXPECTED_SHA. wait-for-candidate-ready.sh
