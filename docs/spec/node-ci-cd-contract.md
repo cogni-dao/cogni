@@ -212,16 +212,18 @@ This standard does not split `.dependency-cruiser.cjs` per node. That's a separa
 | `pnpm test:ci` (unit/contract/meta)    | yes              | unit job              |
 | `pnpm arch:check`                      | yes              | unit job              |
 | `pnpm test:component`                  | yes              | component job         |
-| `pnpm test:stack:docker`               | no (needs infra) | stack-test job        |
 | **SINGLE_DOMAIN_HARD_FAIL** (PR scope) | no               | single-node-scope job |
 
 **Optional** (not blocking): coverage upload, SonarCloud scan.
+
+**Not a PR gate:** `pnpm test:stack:docker` (full-stack vitest) is **not** in `ci.yaml` and does **not** block PR merge. It lives in `stack-test.yml`, which is `workflow_dispatch`-only — too slow/flaky for per-PR runs. Run it ad-hoc per node: `gh workflow run stack-test.yml -f node=<node>` (empty `node` = every node with a `vitest.stack.config.mts`). Per-node integration coverage otherwise comes from candidate-a validation. (Note: `auto-merge-release-prs.yml` still lists `stack-test` as a required check for `release/*` PRs — a known stale gate, since the workflow never auto-fires.)
 
 ### Workflow Entrypoints
 
 | File                     | Type | Secrets            | Trigger                                  | Concern                                           |
 | ------------------------ | ---- | ------------------ | ---------------------------------------- | ------------------------------------------------- |
-| `ci.yaml`                | CI   | No                 | PR; push canary/staging/main             | typecheck, lint, unit, component, stack-test      |
+| `ci.yaml`                | CI   | No                 | PR; push main                            | typecheck, lint, unit, component (no stack-test)  |
+| `stack-test.yml`         | CI   | No                 | workflow_dispatch                        | Per-node full-stack vitest (matrix over nodes)    |
 | `build-multi-node.yml`   | CD   | Yes (GHCR)         | push canary                              | Build + push images                               |
 | `promote-and-deploy.yml` | CD   | Yes (SSH, secrets) | workflow_run on build; workflow_dispatch | Promote overlays + deploy infra + verify          |
 | `e2e.yml`                | CD   | Yes (PAT)          | workflow_run on promote-and-deploy       | E2E smoke + canary→staging promotion + release PR |

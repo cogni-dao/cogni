@@ -174,7 +174,7 @@
     "test:packages": "pnpm -s test:packages:local && pnpm -s test:packages:integration",
     "test:services:local": "if ls services/*/tests >/dev/null 2>&1; then vitest run services/*/tests; else echo 'No service tests found (skipped)'; fi",
     "test:stack:dev": "TEST_BASE_URL=http://localhost:3000/ dotenv -e .env.test -- vitest run --config nodes/operator/app/vitest.stack.config.mts",
-    "test:stack:docker": "DB_HOST=localhost DB_PORT=55432 TEST_BASE_URL=https://localhost/ dotenv -e .env.test -- vitest run --config nodes/operator/app/vitest.stack.config.mts",
+    "test:stack:docker": "DB_HOST=localhost DB_PORT=55432 TEST_BASE_URL=https://localhost/ dotenv -e .env.test -- vitest run --config nodes/${STACK_NODE:-operator}/app/vitest.stack.config.mts",
     "test:stack:multi": "dotenv -e .env.test -- vitest run --config nodes/operator/app/vitest.stack-multi.config.mts",
     "test:lint": "vitest run tests/lint",
     "test:arch": "vitest run tests/arch",

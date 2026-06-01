@@ -1,14 +1,21 @@
 name: Stack Test
 
-# Operator stack-test (testcontainers-driven full-stack vitest run).
+# Per-node stack-test (full-stack vitest run against a Compose stack).
 # Originally a job in ci.yaml fired on every PR + merge_group; relocated here
 # to workflow_dispatch-only because:
 #   - Slow (~10 min) and flaky → noisy on every PR.
-#   - Coverage is operator-only (poly/resy/node-template not exercised).
-#   - Real per-node integration validation lives at candidate-a + the planned
+#   - Real per-node integration validation also lives at candidate-a + the planned
 #     post-merge per-node preview-build tests (see task.0413 + roadmap).
-# Run ad-hoc against any ref when needed:
-#   gh workflow run stack-test.yml --ref <branch> -f ref=<sha>
+#
+# Parametrized over nodes: the `discover` job globs nodes/*/app/vitest.stack.config.mts
+# and the `stack-test` job runs once per node (matrix). The only per-node knobs are the
+# Dockerfile that builds APP_IMAGE and the vitest config (selected via STACK_NODE →
+# pnpm test:stack:docker). db-migrate reuses APP_IMAGE, so each node's bundled
+# migrations apply automatically. Adding a node with a stack config auto-enrolls it.
+#
+# Run ad-hoc:
+#   gh workflow run stack-test.yml --ref <branch>                 # all nodes
+#   gh workflow run stack-test.yml --ref <branch> -f node=node-template   # one node
 # Or trigger from the Actions UI.
 #
 # Spec: docs/spec/merge-queue-config.md § Excluded from required.
@@ -16,6 +23,10 @@ name: Stack Test
 on:
   workflow_dispatch:
     inputs:
+      node:
+        description: "Node to run stack tests for (e.g. operator, node-template). Empty = every node with a vitest.stack.config.mts."
+        required: false
+        type: string
       ref:
         description: "Git ref (branch or SHA) to checkout. Defaults to the workflow's calling ref."
         required: false
@@ -27,7 +38,7 @@ permissions:
   packages: read
 
 concurrency:
-  group: stack-test-${{ inputs.ref || github.ref }}
+  group: stack-test-${{ inputs.ref || github.ref }}-${{ inputs.node }}
   cancel-in-progress: true
 
 env:
@@ -38,9 +49,41 @@ env:
   TEMPORAL_TASK_QUEUE: scheduler-tasks
 
 jobs:
+  # Discover which nodes have a stack suite. Empty `node` input → every node with a
+  # vitest.stack.config.mts; a specific input → just that one. Adding a node with a
+  # stack config auto-enrolls it — no workflow edit needed (SCRIPTS_ARE_THE_API).
+  discover:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - id: set
+        env:
+          NODE_INPUT: ${{ inputs.node }}
+        run: |
+          if [ -n "$NODE_INPUT" ]; then
+            test -f "nodes/$NODE_INPUT/app/vitest.stack.config.mts" \
+              || { echo "::error::no nodes/$NODE_INPUT/app/vitest.stack.config.mts"; exit 1; }
+            nodes=$(printf '%s' "$NODE_INPUT" | jq -R . | jq -cs .)
+          else
+            nodes=$(ls -d nodes/*/app/vitest.stack.config.mts \
+              | sed -E 's#nodes/([^/]+)/app/.*#\1#' | jq -R . | jq -cs .)
+          fi
+          echo "matrix={\"node\":$nodes}" >> "$GITHUB_OUTPUT"
+          echo "Discovered nodes: $nodes"
+
   stack-test:
+    needs: discover
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.discover.outputs.matrix) }}
+    name: stack-test (${{ matrix.node }})
     runs-on: ubuntu-latest
     env:
+      STACK_NODE: ${{ matrix.node }}
       NODE_ENV: test
       APP_ENV: test
       # Database provisioning (provision.sh creates roles + databases)
@@ -57,12 +100,15 @@ jobs:
       POSTGRES_DB: cogni_template_test
       COGNI_NODE_DBS: cogni_template_test
       # Image naming base (APP_IMAGE derived in step below)
-      IMAGE_NAME: cogni-template-ci
+      IMAGE_NAME: cogni-${{ matrix.node }}-ci
       IMAGE_TAG: ${{ github.sha }}
       DOMAIN: localhost
       LITELLM_MASTER_KEY: test-key
       LITELLM_BASE_URL: http://localhost:4000
-      COGNI_NODE_ENDPOINTS: operator=http://app:3000,4ff8eac1-4eba-4ed0-931b-b1fe4f64713d=http://app:3000
+      # The node under test serves on app:3000 — compose's PORT=${PORT:-3000} overrides
+      # the image's ENV PORT (e.g. node-template's 3200), so caddy/healthcheck on :3000
+      # stay node-agnostic. operator alias retained for cross-node lookups.
+      COGNI_NODE_ENDPOINTS: ${{ matrix.node }}=http://app:3000,operator=http://app:3000,4ff8eac1-4eba-4ed0-931b-b1fe4f64713d=http://app:3000
       OPENROUTER_API_KEY: test-key
       EVM_RPC_URL: https://base-mainnet.g.alchemy.com/v2/fake-test-key
       POLYGON_RPC_URL: https://polygon-mainnet.g.alchemy.com/v2/fake-test-key
@@ -146,12 +192,12 @@ jobs:
         uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
         with:
           context: .
-          file: ./nodes/operator/app/Dockerfile
+          file: ./nodes/${{ matrix.node }}/app/Dockerfile
           target: runner
           tags: ${{ env.APP_IMAGE }}
           load: true
-          cache-from: type=gha,scope=stack-test
-          cache-to: type=gha,mode=max,scope=stack-test
+          cache-from: type=gha,scope=stack-test-${{ matrix.node }}
+          cache-to: type=gha,mode=max,scope=stack-test-${{ matrix.node }}
 
       - name: Build scheduler-worker image
         uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
