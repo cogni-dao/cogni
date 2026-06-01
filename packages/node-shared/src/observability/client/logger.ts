@@ -4,7 +4,7 @@
 /**
  * Module: `@shared/observability/client/logger`
  * Purpose: Client-side structured logging with event name registry enforcement.
- * Scope: Browser-safe logging with scrubbing and truncation. Ships warn/error to the server so client failures are observable in Loki.
+ * Scope: Browser-safe logging with scrubbing and truncation. Ships warn/error to the server so client failures are observable in Loki. Does not ship debug/info, await the POST, or run outside the browser.
  * Invariants: Drops forbidden keys; truncates large values; uses EVENT_NAMES registry. Shipping is best-effort and never throws.
  * Side-effects: IO (console + fire-and-forget POST to /api/internal/observability/client-log for warn/error).
  * Notes: warn/error are shipped (browser-only); debug/info stay console-only. Enforces same EventName registry as server.
