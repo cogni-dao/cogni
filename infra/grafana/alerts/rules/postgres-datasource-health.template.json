@@ -1,0 +1,58 @@
+{
+  "title": "Postgres datasource health: ${env} / ${node}",
+  "ruleGroup": "cogni-postgres-datasource-health",
+  "folderUID": "${ALERTS_FOLDER_UID}",
+  "for": "10m",
+  "condition": "B",
+  "execErrState": "Alerting",
+  "noDataState": "Alerting",
+  "data": [
+    {
+      "refId": "A",
+      "datasourceUid": "cogni-${env}-${node}-postgres",
+      "relativeTimeRange": { "from": 600, "to": 0 },
+      "model": {
+        "refId": "A",
+        "format": "table",
+        "rawSql": "select 1 as up",
+        "datasource": {
+          "uid": "cogni-${env}-${node}-postgres",
+          "type": "grafana-postgresql-datasource"
+        },
+        "intervalMs": 1000,
+        "maxDataPoints": 1
+      }
+    },
+    {
+      "refId": "B",
+      "datasourceUid": "__expr__",
+      "relativeTimeRange": { "from": 0, "to": 0 },
+      "model": {
+        "refId": "B",
+        "type": "threshold",
+        "expression": "A",
+        "datasource": { "uid": "__expr__", "type": "__expr__" },
+        "conditions": [
+          {
+            "type": "query",
+            "evaluator": { "type": "lt", "params": [1] },
+            "operator": { "type": "and" },
+            "query": { "params": ["B"] },
+            "reducer": { "type": "last", "params": [] }
+          }
+        ]
+      }
+    }
+  ],
+  "labels": {
+    "service": "postgres",
+    "env": "${env}",
+    "node": "${node}",
+    "severity": "warning"
+  },
+  "annotations": {
+    "summary": "Postgres datasource cogni-${env}-${node}-postgres unreachable for >10m",
+    "description": "Grafana could not run `select 1` against datasource UID cogni-${env}-${node}-postgres for 10 consecutive minutes. Likely SQLSTATE 28P01 (per-UID password cache, bug.5031), PDC tunnel down, or Postgres restart.",
+    "runbook_url": "https://github.com/Cogni-DAO/node-template/blob/main/docs/runbooks/grafana-postgres-readonly.md"
+  }
+}

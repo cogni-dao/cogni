@@ -1,0 +1,53 @@
+name: Grafana Alerts — Apply
+
+# Layer 3 of the three-layer Grafana Postgres datasource-health contract
+# (infra/grafana/AGENTS.md). Applies committed alert rules + contact points +
+# notification policy in infra/grafana/alerts/ to Grafana Cloud via the HTTP
+# provisioning API. Idempotent — every run ends with PUT-by-UID.
+#
+# Decoupled from per-env deploys because alert rules are org-global on the
+# Grafana stack; reapplying them on every node deploy would add noise.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "infra/grafana/alerts/**"
+      - "scripts/grafana-apply-alert-rules.sh"
+      - ".github/workflows/grafana-alerts.yml"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "GitHub environment whose GRAFANA_* secrets to use (alerts are org-global; pick any)"
+        required: false
+        default: candidate-a
+        type: choice
+        options: [candidate-a, preview, production]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: grafana-alerts-apply
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment || 'candidate-a' }}
+    env:
+      GRAFANA_URL: ${{ secrets.GRAFANA_URL }}
+      GRAFANA_SERVICE_ACCOUNT_TOKEN: ${{ secrets.GRAFANA_SERVICE_ACCOUNT_TOKEN }}
+      GRAFANA_ALERTS_EMAIL: ${{ secrets.GRAFANA_ALERTS_EMAIL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Skip if Grafana not configured
+        if: env.GRAFANA_URL == '' || env.GRAFANA_SERVICE_ACCOUNT_TOKEN == ''
+        run: |
+          echo "::warning::GRAFANA_URL or GRAFANA_SERVICE_ACCOUNT_TOKEN missing for environment '${{ inputs.environment || 'candidate-a' }}'; skipping alert apply."
+          exit 0
+
+      - name: Apply Grafana alert rules
+        if: env.GRAFANA_URL != '' && env.GRAFANA_SERVICE_ACCOUNT_TOKEN != ''
+        run: bash scripts/grafana-apply-alert-rules.sh

@@ -1,0 +1,9 @@
+{
+  "name": "derek-email",
+  "type": "email",
+  "settings": {
+    "addresses": "${GRAFANA_ALERTS_EMAIL}",
+    "singleEmail": false
+  },
+  "disableResolveMessage": false
+}

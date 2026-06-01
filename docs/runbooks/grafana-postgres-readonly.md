@@ -280,6 +280,45 @@ The same `glsa_…` token is used by CI to provision datasources and by agents t
 
 The PDC signing token (`glc_…`) is not used at agent-read time. It only authenticates the runtime `pdc-agent` container at deploy time.
 
+## Layer 3: Steady-state alerting
+
+`scripts/grafana-apply-alert-rules.sh` applies a Grafana-managed alert rule per `(env, node)` UID. Each rule runs `select 1` every 1 min against the corresponding `cogni-{env}-{node}-postgres` datasource; sustained failure for 10 min routes to the `derek-email` contact point via the default notification policy.
+
+Source files:
+
+- `infra/grafana/alerts/rules/postgres-datasource-health.template.json` — single rule template, rendered per `(env, node)` by the apply script
+- `infra/grafana/alerts/contact-points/derek-email.json` — recipient address comes from `$GRAFANA_ALERTS_EMAIL` at apply time (not committed)
+- `infra/grafana/alerts/notification-policies/root.json` — default route → `derek-email`
+
+Triggered by `.github/workflows/grafana-alerts.yml` on `push` to `main` under `infra/grafana/alerts/**` plus `workflow_dispatch`.
+
+### Manual end-to-end probe
+
+Bust one candidate-a datasource on the Grafana side without touching Postgres, then watch for the email:
+
+```bash
+# 1. Snapshot the current datasource so you can restore it
+curl -sS -H "Authorization: Bearer $GRAFANA_SERVICE_ACCOUNT_TOKEN" \
+  "${GRAFANA_URL%/}/api/datasources/uid/cogni-candidate-a-poly-postgres" \
+  | jq . > /tmp/cogni-candidate-a-poly-postgres.json
+
+# 2. PUT a deliberately-wrong password
+jq '.secureJsonData = {password: "definitely-not-the-readonly-password"}' \
+  /tmp/cogni-candidate-a-poly-postgres.json > /tmp/cogni-busted.json
+curl -fsS -X PUT "${GRAFANA_URL%/}/api/datasources/uid/cogni-candidate-a-poly-postgres" \
+  -H "Authorization: Bearer $GRAFANA_SERVICE_ACCOUNT_TOKEN" \
+  -H "content-type: application/json" \
+  --data @/tmp/cogni-busted.json >/dev/null
+
+# 3. Wait > 10 min, observe the alert email at $GRAFANA_ALERTS_EMAIL.
+
+# 4. Restore by re-running provisioning (idempotent PUT-by-UID).
+DEPLOY_ENVIRONMENT=candidate-a \
+POSTGRES_ROOT_PASSWORD=<root-secret> \
+GRAFANA_PDC_NETWORK_UUID=<uuid> \
+bash scripts/ci/provision-grafana-postgres-datasources.sh
+```
+
 ## SOC 2 Notes
 
 This is a v0 operational support role. Keep the compensating controls explicit:

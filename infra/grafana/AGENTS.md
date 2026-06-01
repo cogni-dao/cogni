@@ -56,7 +56,7 @@ Grafana Cloud observability resources managed from git. This directory owns dash
 ## Notes
 
 - Scaffolding only at present — `dashboards/{operator,nodes}/` are placeholder dirs. The first real dashboards land in a follow-up.
-- Grafana Git Sync does not yet support alerting resources; `alerts/README.md` documents the manual provisioning path until upstream support exists.
+- Grafana Git Sync does not yet support alerting resources. `alerts/` is therefore applied via `scripts/grafana-apply-alert-rules.sh` driving the `/api/v1/provisioning/*` endpoints. Triggered by `.github/workflows/grafana-alerts.yml` on `push` to `main` under `infra/grafana/alerts/**` plus `workflow_dispatch`.
 
 ## Datasource provisioning vs. verification (do not re-couple)
 
@@ -64,10 +64,10 @@ Grafana Cloud observability resources managed from git. This directory owns dash
 
 The contract:
 
-| Layer                                               | Script / surface                            | Blocking?                                                                  |
-| --------------------------------------------------- | ------------------------------------------- | -------------------------------------------------------------------------- |
-| Provision (declarative state)                       | `provision-grafana-postgres-datasources.sh` | Yes — fails the deploy if the API write fails                              |
-| Verify (post-deploy connectivity smoke, with retry) | `verify-grafana-postgres-datasources.sh`    | No — `continue-on-error: true`; failures emit `::warning::` + step summary |
-| Liveness (steady-state runtime health)              | Grafana alert rules under `alerts/` (TODO)  | Pages on sustained failure                                                 |
+| Layer                                               | Script / surface                                                                            | Blocking?                                                                  |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| Provision (declarative state)                       | `provision-grafana-postgres-datasources.sh`                                                 | Yes — fails the deploy if the API write fails                              |
+| Verify (post-deploy connectivity smoke, with retry) | `verify-grafana-postgres-datasources.sh`                                                    | No — `continue-on-error: true`; failures emit `::warning::` + step summary |
+| Liveness (steady-state runtime health)              | `alerts/` + `scripts/grafana-apply-alert-rules.sh` (`.github/workflows/grafana-alerts.yml`) | Pages contact `derek-email` on sustained failure (`for: 10m`)              |
 
 If you ever want to add "validate" back into the provision script, don't. Extend the verify layer instead.
