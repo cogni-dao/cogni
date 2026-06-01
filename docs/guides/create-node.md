@@ -27,7 +27,8 @@ You have a node app under `nodes/<node>/app` (a Next.js node) and you want it to
 
 `infra/catalog/<node>.yaml` with `type: node` is the **single declaration site** ([ci-cd.md](../spec/ci-cd.md) axiom 16). `scripts/ci/lib/image-tags.sh` derives `NODE_TARGETS` from **every** `type: node` catalog entry, and every environment's machinery follows from it:
 
-- the PR build matrix (`detect-affected.sh`, `build-and-push-images.sh`),
+- the PR build matrix (`detect-affected.sh`, `build-and-push-images.sh`,
+  `resolve-pr-build-images.sh`),
 - the Argo `ApplicationSet` generators (one per node per env),
 - `promote-preview-seed-main.sh`, which `sha256sum`s `infra/k8s/overlays/preview/<node>/kustomization.yaml` **for every `NODE_TARGET`**,
 - the per-node database inventory, k8s secret, and rollout loops in `deploy-infra.sh` (bug.5086 / task.5078 follow-up),
@@ -64,13 +65,17 @@ production_branch: deploy/production-<node>
 path_prefix: nodes/<node>/
 ```
 
-### 2. Wire the build matrix
+### 2. Verify the build matrix
 
-`image-tags.sh` is catalog-driven (no edit), but the build/affected scripts still carry per-target cases (until task.5079 makes `build_target()` catalog-driven):
+The build path is catalog-driven: `detect-affected.sh` reads `path_prefix`,
+`build-and-push-images.sh` reads `dockerfile` + `type`, and
+`resolve-pr-build-images.sh` uses the catalog tag suffix. A normal node add
+should not require a per-target case in these scripts.
 
-- [ ] `scripts/ci/detect-affected.sh` — add to `ALL_TARGETS` + a `nodes/<node>/*)` path case.
-- [ ] `scripts/ci/build-and-push-images.sh` — `resolve_tag()` + `build_target()` cases.
-- [ ] `scripts/ci/resolve-pr-build-images.sh` — mirror the `resolve_tag` case.
+- [ ] Confirm `infra/catalog/<node>.yaml` has `dockerfile`,
+      `image_tag_suffix`, `migrator_tag_suffix`, and `path_prefix`.
+- [ ] Do not add hand-maintained target lists. If a new node needs a script
+      edit here, treat that as a regression in `CATALOG_IS_SSOT`.
 
 **Verify:** touch a file under `nodes/<node>/` → `TURBO_SCM_BASE=origin/main TURBO_SCM_HEAD=HEAD scripts/ci/detect-affected.sh` lists `<node>`.
 
@@ -135,7 +140,7 @@ Steps 1–5 land the rails; the node only becomes Healthy once each target env h
 
 **Today (#1381):** the wizard deploys the web3 contracts (DAO + GovernanceERC20 + CogniSignal) and then auto-drafts a **repo-spec-only PR** — just `.cogni/repo-spec.yaml` (node identity). It stops at identity; the node is not yet a build target and has no deploy footprint.
 
-**vNext:** the wizard spawns a full **node-app PR** that scaffolds `nodes/<node>/app` plus Steps **1, 3, 4, 5** of this guide — catalog entry, overlays × 3, AppSet generators × 3, deploy branches — so a newly-formed node starts life already wired for **test → preview → prod**. Those four steps are pure functions of the `type: node` catalog declaration, which is what makes the candidate-a-only trap structurally impossible to repeat. Step **6** (secrets/DB/DNS) stays imperative — the side-effecting half the wizard's "Deploy Infrastructure" stage drives after the PR merges. Steps **2, 7** shrink to nothing once `build_target()` and `APPS` become catalog-driven (task.5079).
+**vNext:** the wizard spawns a full **node-app PR** that scaffolds `nodes/<node>/app` plus Steps **1, 3, 4, 5** of this guide — catalog entry, overlays × 3, AppSet generators × 3, deploy branches — so a newly-formed node starts life already wired for **test → preview → prod**. Those four steps are pure functions of the `type: node` catalog declaration, which is what makes the candidate-a-only trap structurally impossible to repeat. Step **6** (secrets/DB/DNS) stays imperative — the side-effecting half the wizard's "Deploy Infrastructure" stage drives after the PR merges. Step **2** is now verification only; Step **7** shrinks away once `wait-for-argocd.sh` is fully catalog-driven for required apps.
 
 > **Contract for the vNext wizard:** `formation(web3 + repo-spec)` → `node-app PR { nodes/<node>/app, catalog(type:node), overlays × 3, AppSet generators × 3, deploy branches × 3 }` → provision `{ secrets, DB, DNS } × 3`. Either the full matrix is generated or the node is not deployable — no partial (candidate-a-only) enablement.
 

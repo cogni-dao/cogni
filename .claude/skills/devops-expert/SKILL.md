@@ -35,28 +35,30 @@ You are a senior DevOps architect. AI agents are the primary committers in this 
 
 6. **Affected-only CI.** Never rebuild/retest the world. Mandatory at scale.
 
-## Current infra reality — 2026-05-18 post-split candidate-a
+## Current infra reality — 2026-06-01 post-split candidate-a
 
-The old shared candidate-a shape is retired. Do not route Cogni monorepo and
-`cogni-poly` through the same VM alias or the same provision script assumptions.
+The old shared candidate-a shape is retired. Cogni monorepo and `cogni-poly`
+are separate candidate-a targets and must not share VM aliases, DNS records, or
+provisioning assumptions.
 
-- `5.199.173.155` is now treated as **cogni-poly candidate-a only**.
-  Cloudflare should keep `poly-test.cognidao.org` and
-  `cogni-poly-candidate-a.vm.cognidao.org` on this IP.
-- `test.cognidao.org`, `resy-test.cognidao.org`,
-  `candidate-a.vm.cognidao.org`, and
-  `cogni-candidate-a.vm.cognidao.org` were deliberately removed from that IP
-  while Cogni monorepo candidate-a is being reprovisioned.
+- `84.32.9.111` is **Cogni monorepo candidate-a**. Cloudflare records observed
+  on 2026-06-01: `cogni-candidate-a.vm.cognidao.org`,
+  `test.cognidao.org`, `resy-test.cognidao.org`,
+  `node-template-test.cognidao.org`, and `canary-test.cognidao.org`.
+- `5.199.173.155` is **cogni-poly candidate-a only**. Cloudflare records
+  observed on 2026-06-01: `candidate-a.vm.cognidao.org` and
+  `poly-test.cognidao.org`.
+- Use `candidate-flight.yml` for app digest promotion/Argo rollout and
+  `candidate-flight-infra.yml` for Compose/edge/runtime infra. If a PR changes
+  only edge/runtime infra, flight infra first; do not run the app lever unless
+  validation shows the app digest or deploy branch is stale.
 - The stale legacy VM `852637 / canary-cogni / 84.32.109.160` was destroyed.
-- Cogni monorepo does not currently have a valid candidate-a VM. Do not dispatch
-  monorepo `candidate-flight.yml` until a fresh Cogni-only candidate VM exists
-  and the `candidate-a` GitHub environment `VM_HOST` points at its scoped alias.
 
-`scripts/setup/provision-test-vm.sh` is stale for post-split Cogni: it still
-creates `cogni_poly`, writes `poly-test` DNS, creates `poly-node-app-secrets`,
-and assumes operator/poly/resy. Before using it for Cogni candidate-a, port the
-node-template scoped-alias and fork/provision fixes, then remove poly from the
-Cogni provisioning path.
+`scripts/setup/provision-test-vm.sh` is legacy for post-split Cogni. Prefer
+`scripts/setup/provision-env-vm.sh` for current env provisioning: it derives
+node DBs, edge routes, and per-node env from the catalog. If you must touch the
+legacy script, audit for poly-era assumptions before using it against Cogni
+monorepo candidate-a.
 
 ## Arsenal — know what exists before writing new code
 
@@ -157,7 +159,11 @@ Usage (candidate-a only; read-only): `ssh -i .local/candidate-a-vm-key root@$(ca
 
 **`.local/` lives on the provisioner device, not in worktrees.** It's gitignored, so a freshly cloned worktree (anything under a conductor / agent workspace path) will not have it. The canonical copy lives in the dev's primary cogni-template clone — reach for keys there, not in the active worktree. If you don't know your own primary-clone path, ask the human running the device; never hard-code home-directory paths into committed files (this skill is in a public repo).
 
-**Legacy `canary` naming.** Keys provisioned before the canary→candidate-a rename are still on disk under `.local/canary-vm-*` and are what the live VM accepts today. A re-provision under `DEPLOY_ENV=candidate-a` would write `candidate-a-vm-*` and rotate the authorized key. Until that re-provision lands, treat `canary-vm-key` / `canary-vm-ip` as the authoritative candidate-a coordinates.
+**Legacy `canary` naming.** Some provisioner machines still have old
+`.local/canary-vm-*` files, but current Cogni monorepo candidate-a should prefer
+`.local/candidate-a-vm-key` and `.local/candidate-a-vm-ip` when present. Fall
+back to `canary-vm-*` only if the current files are absent and you have verified
+the IP matches `cogni-candidate-a.vm.cognidao.org`.
 
 If `.local/{env}-vm-key` isn't present for the env you need, this device isn't the provisioner for that env. Do not improvise — don't source shell aliases from personal dotfiles, don't paste IPs from Slack, don't copy keys from a teammate. Either re-run `provision-test-vm.sh` (candidate-a only) or drive the change through the pipeline.
 

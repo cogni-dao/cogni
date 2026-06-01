@@ -66,7 +66,7 @@ Should return a number (your existing record count).
 
 ## Operations
 
-### Create a node subdomain
+### Create a node subdomain for node formation
 
 ```bash
 source .env.local && export CLOUDFLARE_API_TOKEN CLOUDFLARE_ZONE_ID
@@ -76,6 +76,41 @@ npx tsx packages/dns-ops/scripts/create-node.ts <slug>
 Example: `npx tsx packages/dns-ops/scripts/create-node.ts resy-helper`
 
 Creates: `resy-helper.nodes.cognidao.org` → cluster IP. Outputs node-spec JSON.
+
+This is the formation/node-spec helper. It is not the same as the per-env app
+hosts used by candidate/preview/prod (`<node>-test.cognidao.org`,
+`<node>-preview.cognidao.org`, `<node>.cognidao.org`).
+
+### Create or update a candidate/preview node host
+
+List existing records first and copy the current environment VM IP from the
+matching `*.vm.cognidao.org` record:
+
+```bash
+source .env.local && export CLOUDFLARE_API_TOKEN CLOUDFLARE_ZONE_ID
+curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+  "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records?type=A&per_page=100" \
+  | jq -r '.result[] | [.id,.type,.name,.content,(.proxied|tostring),(.ttl|tostring)] | @tsv'
+```
+
+Then upsert the exact host. Example for a candidate-a node on the Cogni
+monorepo VM:
+
+```bash
+name="canary-test.cognidao.org"
+ip="84.32.9.111"
+payload="$(jq -n --arg type A --arg name "$name" --arg content "$ip" \
+  '{type:$type,name:$name,content:$content,ttl:300,proxied:false}')"
+curl -fsS -X POST \
+  -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data "$payload" \
+  "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records"
+```
+
+If the record already exists, use `PUT /dns_records/<id>` with the same payload.
+Keep candidate/preview records unproxied unless the environment explicitly
+requires Cloudflare proxying.
 
 ### Programmatic usage (from TypeScript)
 
@@ -122,13 +157,17 @@ dig <subdomain>.cognidao.org +short @1.1.1.1
 
 On 2026-04-05 the domain expired and all DNS stopped resolving for ~6 hours. Set a calendar reminder 30 days before expiry. See `work/charters/DOMAINS.md` for full domain inventory.
 
-### Canonical DNS mapping (keep these in sync):
+### Current DNS mapping (verify before changing)
 
-| Domain                                | IP            | Environment |
-| ------------------------------------- | ------------- | ----------- |
-| cognidao.org / www                    | 84.32.109.162 | Production  |
-| test / poly-test / resy-test          | 84.32.109.222 | Canary      |
-| preview / poly-preview / resy-preview | 84.32.110.92  | Preview     |
+Observed on 2026-06-01. Do not treat old "canary" docs as authoritative; list
+Cloudflare records before every mutation.
+
+| Domain                                                                 | IP            | Environment                |
+| ---------------------------------------------------------------------- | ------------- | -------------------------- |
+| cognidao.org / www                                                     | 84.32.109.162 | Production                 |
+| cogni-candidate-a.vm, test, resy-test, node-template-test, canary-test | 84.32.9.111   | Cogni monorepo candidate-a |
+| candidate-a.vm, poly-test                                              | 5.199.173.155 | cogni-poly candidate-a     |
+| preview / node preview hosts                                           | verify live   | Preview                    |
 
 ## Safety Rules
 
@@ -142,9 +181,11 @@ The `upsertDnsRecord` and `removeDnsRecord` helpers **enforce this automatically
 
 ### Safe patterns:
 
-- `*.nodes.cognidao.org` — node subdomains (create freely)
-- `*.preview.cognidao.org` — preview deploy subdomains (create/delete freely)
-- Any subdomain that isn't `@`, `www`, or existing production records
+- `*.nodes.cognidao.org` — formation/node-spec subdomains
+- `*-test.cognidao.org` — candidate node app hosts
+- `*-preview.cognidao.org` — preview node app hosts
+- Node production subdomains only after explicit prod routing confirmation
+- Any subdomain that isn't `@`, `www`, MX, or an existing production record
 
 ### Before modifying DNS:
 
