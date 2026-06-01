@@ -207,6 +207,16 @@ jobs:
           PREVIEW_TAG="preview-${HEAD_SHA}"
 
           for target in "${ALL_TARGETS[@]}"; do
+            # type:infra (e.g. litellm) deploys via Compose-on-VM, not k8s/Argo,
+            # so there is no preview-{sha} tag to mint — deploy-infra resolves the
+            # content-hash tag directly. resolve-pr-build-images.sh DOES resolve
+            # infra (via infra_image_tag), so it lands in RESOLVED_TARGETS; the
+            # naive mq-{N}-{sha}{suffix} src below never exists for it. Skip here,
+            # mirroring promote-build-payload.sh's is_infra_target guard.
+            if is_infra_target "$target"; then
+              echo "Skipping ${target} — infra image (Compose-deployed, no k8s preview tag)"
+              continue
+            fi
             if ! echo "$RESOLVED_TARGETS" | grep -qw "$target"; then
               echo "Skipping ${target} — not in PR build (not affected or not built)"
               continue
