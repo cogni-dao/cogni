@@ -82,7 +82,10 @@ export const POST = wrapRouteHandlerWithLogging(
 
     const chunk = form.get("chunk");
     if (!(chunk instanceof Blob))
-      return NextResponse.json({ error: "missing chunk file" }, { status: 400 });
+      return NextResponse.json(
+        { error: "missing chunk file" },
+        { status: 400 }
+      );
     if (chunk.size > MAX_CHUNK_BYTES)
       return NextResponse.json({ error: "chunk too large" }, { status: 413 });
 
