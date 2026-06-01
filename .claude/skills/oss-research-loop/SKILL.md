@@ -1,6 +1,6 @@
 ---
 name: oss-research-loop
-description: One iteration of the OSS-AI research loop on the operator knowledge hub (domain oss-ai). The job is to DISCOVER the frontier — OSS for AI apps + personal AI assistants that Cogni does NOT already run — and deepen open research questions with cited, real repos. NOT to document our own stack (that already exists: the oss-ai-vs-cogni matrix + the oss-infra-cogni block). RECALL is mandatory and first. Most iterations REFINE an existing entry; new entries are rare and must pass the frontier bar. Triggers: "research OSS for AI", "deepen the oss-ai questions", "/loop oss-research-loop". Invoked from a Claude Code /loop on Derek's machine (has the prod key) or a remote routine with COGNI_API_KEY_PROD set.
+description: One iteration of the OSS-AI research loop on the operator knowledge hub (domain oss-ai). The job is to DISCOVER the frontier — OSS for AI apps + personal AI assistants that Cogni does NOT already run — and deepen open research questions with cited, real repos. NOT to document our own stack (that already exists: the oss-ai-vs-cogni matrix + the oss-infra-cogni block). RECALL is mandatory and first. Most iterations REFINE an existing entry; new entries are rare and must pass the frontier bar. Triggers: "research OSS for AI", "deepen the oss-ai questions", "/loop oss-research-loop". Invoked from a local Claude Code /loop (with the prod key available) or a remote routine with COGNI_API_KEY_PROD set. Prove the prompt with a few manual iterations before automating it.
 ---
 
 # oss-research-loop — discover the frontier, do not inventory the stack
@@ -12,19 +12,18 @@ description: One iteration of the OSS-AI research loop on the operator knowledge
 Before composing ANY write, run these reads and actually digest them:
 
 ```bash
-KEY=$(grep -E "^COGNI_API_KEY_PROD=" /Users/derek/dev/cogni-template/.env.cogni | cut -d= -f2- | tr -d "\"")   # or $COGNI_API_KEY_PROD env in a remote routine
+# COGNI_API_KEY_PROD comes from the environment (remote routine secret) or the
+# workspace .env.cogni (local). Never hardcode an absolute path or the key itself.
+KEY="${COGNI_API_KEY_PROD:?set COGNI_API_KEY_PROD (env or workspace .env.cogni)}"
 BASE=https://cognidao.org
 
 # (a) what is ALREADY on main / merged — do not recreate any of it
 curl -sS "$BASE/api/v1/knowledge/contributions?state=merged&limit=40" -H "Authorization: Bearer $KEY"
 # (b) what was ALREADY REJECTED — read every closedReason; do not reintroduce killed sprawl
 curl -sS "$BASE/api/v1/knowledge/contributions?state=closed&limit=40" -H "Authorization: Bearer $KEY"
-# (c) the canonical entries you must NOT duplicate:
-#     - oss-ai-vs-cogni      (the 44KB capability matrix; already carries SPDX licenses + every infra repo we run)
-#     - oss-infra-cogni      (the consolidated "infra we use" block)
-#     - oss-cicd-agents      (OPEN research question — CI/CD-rail agents)
-#     - oss-multitenant-agents (OPEN research question — multi-tenant agents)
 ```
+
+The live reads above are the source of truth — re-derive current state from them every run. As of this writing the canonical entries you must NOT duplicate are: `oss-ai-vs-cogni` (the capability matrix — large, already carries SPDX licenses + every infra repo we run), `oss-infra-cogni` (consolidated "infra we use" block), and two OPEN research questions `oss-cicd-agents` + `oss-multitenant-agents`. Trust the reads over this list; the hub grows.
 
 If what you were about to write is already covered by the matrix or oss-infra-cogni → **STOP, write nothing, report "already on main".** That is a successful iteration, not a failure.
 
