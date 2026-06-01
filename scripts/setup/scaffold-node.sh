@@ -27,10 +27,18 @@ ENVS=(candidate-a preview production)
 cd "$ROOT"
 [ -d "nodes/$SLUG" ] && { echo "nodes/$SLUG already exists"; exit 1; }
 
-echo "==> 1. clone nodes/$TPL -> nodes/$SLUG (excluding build artifacts)"
+echo "==> 1. clone nodes/$TPL -> nodes/$SLUG (excluding build artifacts + secrets)"
+# bug.5086 Part D — NEVER clone the per-node secrets catalog or ExternalSecrets.
+# node-template's .cogni/secrets-catalog.yaml is the TEMPLATE (loader excludes it,
+# secrets-catalog-loader.ts `d !== "node-template"`). A real node that copies it
+# re-declares the ~57 shared baseline names -> NO_NAME_COLLISIONS throw -> kills
+# setup:secrets for EVERY env. A new node inherits shared/baseline secrets via the
+# substrate (per-node OpenBao path); it gets a per-node secrets-catalog ONLY when
+# it declares its OWN unique secrets — which a fresh clone never does.
 rsync -a \
   --exclude node_modules --exclude .next --exclude dist --exclude .turbo \
   --exclude coverage --exclude '*.tsbuildinfo' \
+  --exclude '.cogni/secrets-catalog.yaml' --exclude 'k8s/external-secrets' \
   "nodes/$TPL/" "nodes/$SLUG/"
 
 echo "==> 2. rename node-template -> $SLUG across the node tree (text files)"
