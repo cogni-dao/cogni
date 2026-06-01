@@ -663,6 +663,53 @@ describe("extractOwningNode", () => {
     ]);
   });
 
+  it("NODE_BIRTH ride-along: canary + its own catalog/overlay/AppSet → single { canary, rideAlongApplied: true }", () => {
+    const canary = {
+      node_id: "00000000-0000-4000-8000-0000000000ca",
+      node_name: "Canary",
+      path: "nodes/canary",
+    };
+    const spec = buildTestRepoSpec({
+      nodes: [TEST_NODE_ENTRIES.operator, canary, TEST_NODE_ENTRIES.resy],
+    });
+    const result = extractOwningNode(spec, [
+      "nodes/canary/app/src/app/(public)/page.tsx",
+      "infra/catalog/canary.yaml",
+      "infra/k8s/overlays/candidate-a/canary/kustomization.yaml",
+      "infra/k8s/overlays/preview/canary/kustomization.yaml",
+      "infra/k8s/argocd/candidate-a-applicationset.yaml",
+    ]);
+    expect(result).toEqual({
+      kind: "single",
+      nodeId: canary.node_id,
+      path: "nodes/canary",
+      rideAlongApplied: true,
+    });
+  });
+
+  it("NODE_BIRTH bounded: canary cannot ride another node's catalog", () => {
+    const canary = {
+      node_id: "00000000-0000-4000-8000-0000000000ca",
+      node_name: "Canary",
+      path: "nodes/canary",
+    };
+    const spec = buildTestRepoSpec({
+      nodes: [TEST_NODE_ENTRIES.operator, canary, TEST_NODE_ENTRIES.resy],
+    });
+    const result = extractOwningNode(spec, [
+      "nodes/canary/app/src/foo.ts",
+      "infra/catalog/resy.yaml",
+    ]);
+    expect(result.kind).toBe("conflict");
+    if (result.kind !== "conflict") return;
+    expect(result.nodes).toEqual([
+      { nodeId: TEST_NODE_IDS.operator, path: "nodes/operator" },
+      { nodeId: canary.node_id, path: "nodes/canary" },
+    ]);
+    expect(result.operatorPaths).toEqual(["infra/catalog/resy.yaml"]);
+    expect(result.operatorNodeId).toBe(TEST_NODE_IDS.operator);
+  });
+
   it("operator-only with mixed operator paths (nodes/operator/** + packages/ + docs/)", () => {
     const result = extractOwningNode(standardSpec(), [
       "nodes/operator/app/src/foo.ts",

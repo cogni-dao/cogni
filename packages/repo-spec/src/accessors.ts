@@ -411,6 +411,21 @@ function isRideAlong(p: string): boolean {
   return RIDE_ALONG_PATTERNS.some((m) => m(p));
 }
 
+/**
+ * NODE_BIRTH ride-along: a node may carry its OWN deploy wiring — the
+ * operator-owned files that exist only to make `nodes/<node>/` deployable.
+ * Keep this in parity with `tests/ci-invariants/classify.ts` and the
+ * `single-node-scope` bash gate.
+ */
+function isNodeWiring(path: string, node: string): boolean {
+  if (node === "") return false;
+  return (
+    path === `infra/catalog/${node}.yaml` ||
+    new RegExp(`^infra/k8s/overlays/[^/]+/${node}/`).test(path) ||
+    /^infra\/k8s\/argocd\/[^/]*applicationset[^/]*\.ya?ml$/.test(path)
+  );
+}
+
 /** Top-level segment under `nodes/`, or null if the path is not under `nodes/<x>/`. */
 function topUnderNodes(p: string): string | null {
   if (!p.startsWith(NODES_PREFIX)) return null;
@@ -478,13 +493,18 @@ export function extractOwningNode(
   }
 
   // Ride-along exception: drop operator from a 2-domain {operator, X} diff
-  // when EVERY operator-domain path matches the ride-along whitelist.
+  // when EVERY operator-domain path matches the ride-along whitelist or X's
+  // own deploy wiring.
   let rideAlongApplied = false;
   let operatorTouched = operatorPaths.length > 0;
+  const [onlySovereign] = sovereigns.values();
+  const sovereignTop =
+    onlySovereign != null ? topUnderNodes(`${onlySovereign.path}/`) : null;
   if (
     sovereigns.size === 1 &&
     operatorPaths.length > 0 &&
-    operatorPaths.every(isRideAlong)
+    sovereignTop != null &&
+    operatorPaths.every((p) => isRideAlong(p) || isNodeWiring(p, sovereignTop))
   ) {
     operatorTouched = false;
     rideAlongApplied = true;
