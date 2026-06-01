@@ -32,6 +32,7 @@ You have a node app under `nodes/<node>/app` (a Next.js node) and you want it to
 - the Argo `ApplicationSet` generators (one per node per env),
 - `promote-preview-seed-main.sh`, which `sha256sum`s `infra/k8s/overlays/preview/<node>/kustomization.yaml` **for every `NODE_TARGET`**,
 - the per-node database inventory, k8s secret, and rollout loops in `deploy-infra.sh` (bug.5086 / task.5078 follow-up),
+- the scheduler-worker `COGNI_NODE_ENDPOINTS` map and LiteLLM node-local metering callback map (slug + `node_id` aliases for every catalog node),
 - the **edge Caddy reverse-proxy roster** — `scripts/ci/render-caddyfile.sh` generates the Caddyfile and `deploy-infra.sh` / `provision-env-vm.sh` write each node's per-env host, all from `node_port` + `is_primary_host` (task.5078). A new `type: node` auto-routes; no Caddyfile or deploy-script edit.
 
 > ⚠️ **The candidate-a-only trap (learned from #1369 / node-template).** Declaring a node in the catalog but only authoring the **candidate-a** overlay leaves the preview + production machinery expecting overlays that don't exist. Result: `Promote Preview Digest Seed` fails on `main` (`sha256sum: …/overlays/preview/<node>/kustomization.yaml: No such file or directory`) for _everyone_, and the node never reaches preview/prod.
@@ -43,6 +44,26 @@ You have a node app under `nodes/<node>/app` (a Next.js node) and you want it to
 - [ ] `nodes/<node>/app` exists and builds (its own `Dockerfile`, Next.js app).
 - [ ] DAO formed + `.cogni/repo-spec.yaml` written (`node_id`, `scope_id`) per [`node-formation-guide.md`](./node-formation-guide.md).
 - [ ] A **unique `nodePort`** allocated. Current map: `operator 30000`, `node-template 30200`, `resy 30300`, `canary 30400`. Pick the next free `30x00`, record it as `node_port:` in the catalog entry (Step 1), and keep it identical across all three env overlays. CI (`scripts/ci/tests/render-caddyfile.test.sh`) asserts `catalog node_port == overlay Service nodePort` so the two can't drift.
+
+## Critical TODO Matrix
+
+Track these rows for every generated node PR. The wizard should emit the pure-git rows in one PR and open/follow side-effect work for provisioning before flight validation.
+
+| Row                   | Owner surface               | Required proof                                                                                                        | Blocks flight? |
+| --------------------- | --------------------------- | --------------------------------------------------------------------------------------------------------------------- | -------------- |
+| App scaffold          | `nodes/<node>/app`          | `pnpm --dir nodes/<node>/app build` or CI node image build succeeds                                                   | Yes            |
+| Catalog declaration   | `infra/catalog/<node>.yaml` | `scripts/ci/detect-affected.sh` selects `<node>` for `infra/catalog/<node>.yaml` and `nodes/<node>/` changes          | Yes            |
+| Environment overlays  | `infra/k8s/overlays/*`      | `kustomize build infra/k8s/overlays/{candidate-a,preview,production}/<node>` succeeds                                 | Yes            |
+| ApplicationSet wiring | `infra/k8s/argocd/*`        | all three AppSets include `deploy/{candidate-a,preview,production}-<node>` generators                                 | Yes            |
+| Edge routing          | catalog + Caddy template    | generated Caddyfile has `<node>-test`, `<node>-preview`, and production host routes with the catalog `node_port`      | Yes            |
+| Scheduler routing     | catalog + worker ConfigMap  | `scripts/ci/render-scheduler-worker-endpoints.sh --check` includes `<node>` slug + `node_id` aliases                  | Yes            |
+| LiteLLM callbacks     | deploy-infra catalog render | `deploy-infra.sh --dry-run` derives `COGNI_NODE_ENDPOINTS` from all catalog nodes for node-local metering callbacks   | Yes            |
+| Secrets               | deploy-infra / OpenBao path | target cluster has the pod-consumed secret (`<node>-node-app-secrets` today; ESO migration uses `<node>-env-secrets`) | Yes            |
+| Databases             | deploy-infra                | Postgres `cogni_<node>` and Doltgres `knowledge_<node>` exist and app migrations complete                             | Yes            |
+| DNS                   | DNS ops                     | `<node>-test`, `<node>-preview`, and production hostnames resolve to the correct env VM                               | Yes            |
+| Candidate flight      | operator API / GitHub       | candidate-flight promotes only `<node>`, Argo syncs the deploy branch, and `/version.buildSha` equals PR head         | Yes            |
+| Agent API validation  | `/validate-candidate`       | discover → register → chat/completions → runs list → SSE stream scorecard posted with Loki evidence                   | Yes            |
+| Wizard repeatability  | node wizard                 | a second generated node (for example `<node>-2`) produces the same rows without manual script edits                   | vNext gate     |
 
 ## Steps
 

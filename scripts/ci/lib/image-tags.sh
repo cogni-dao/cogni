@@ -31,6 +31,7 @@ mapfile -t NODE_TARGETS < <(yq -N 'select(.type == "node") | .name' "$_image_tag
 declare -A _image_tags_suffix_cache=()
 declare -A _image_tags_primary_cache=()
 declare -A _image_tags_node_port_cache=()
+declare -A _image_tags_node_id_cache=()
 for _t in "${ALL_TARGETS[@]}"; do
   _s=$(yq '.image_tag_suffix' "${_image_tags_catalog_root}/${_t}.yaml")
   [ "$_s" = "null" ] && _s=""
@@ -39,8 +40,10 @@ for _t in "${ALL_TARGETS[@]}"; do
   _image_tags_primary_cache["$_t"]="$_p"
   _np=$(yq -N '.node_port // ""' "${_image_tags_catalog_root}/${_t}.yaml")
   _image_tags_node_port_cache["$_t"]="$_np"
+  _nid=$(yq -N '.node_id // ""' "${_image_tags_catalog_root}/${_t}.yaml")
+  _image_tags_node_id_cache["$_t"]="$_nid"
 done
-unset _t _s _p _np
+unset _t _s _p _np _nid
 
 image_name_for_target() {
   printf '%s' "$IMAGE_NAME_APP"
@@ -98,6 +101,16 @@ node_port_for_target() {
   printf '%s' "$port"
 }
 
+node_id_for_target() {
+  local node="$1" node_id
+  node_id="${_image_tags_node_id_cache[$node]:-}"
+  if [ -z "$node_id" ]; then
+    echo "[ERROR] image-tags: node_id missing for '$node' (CATALOG_IS_SSOT: add node_id to infra/catalog/${node}.yaml)" >&2
+    return 1
+  fi
+  printf '%s' "$node_id"
+}
+
 node_database_for_target() {
   local node="$1"
   if [ -z "${_image_tags_primary_cache[$node]+x}" ]; then
@@ -111,6 +124,27 @@ node_database_csv() {
   local sep="" node
   for node in "${NODE_TARGETS[@]}"; do
     printf '%s%s' "$sep" "$(node_database_for_target "$node")"
+    sep=","
+  done
+}
+
+node_internal_service_endpoint_csv() {
+  local sep="" node node_id url
+  for node in "${NODE_TARGETS[@]}"; do
+    node_id="$(node_id_for_target "$node")" || return 1
+    url="http://${node}-node-app:3000"
+    printf '%s%s=%s,%s=%s' "$sep" "$node" "$url" "$node_id" "$url"
+    sep=","
+  done
+}
+
+node_billing_endpoint_csv() {
+  local host="$1" sep="" node node_id port url
+  for node in "${NODE_TARGETS[@]}"; do
+    node_id="$(node_id_for_target "$node")" || return 1
+    port="$(node_port_for_target "$node")" || return 1
+    url="http://${host}:${port}"
+    printf '%s%s=%s,%s=%s' "$sep" "$node" "$url" "$node_id" "$url"
     sep=","
   done
 }

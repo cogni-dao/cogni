@@ -407,7 +407,7 @@ emit_deployment_event "infra_deployment.started" "in_progress" "Deploying infras
 # env block so the per-node secret + rollout loops below stop hardcoding nodes —
 # a new type:node (e.g. canary) auto-provisions. Fail loud, never empty.
 # shellcheck source=scripts/ci/lib/image-tags.sh
-source "$(dirname "${BASH_SOURCE[0]}")/lib/image-tags.sh"
+source "$REPO_ROOT/scripts/ci/lib/image-tags.sh"
 NODE_APP_TARGETS="${NODE_TARGETS[*]}"
 [ -n "$NODE_APP_TARGETS" ] || log_fatal "deploy-infra: no type:node targets from infra/catalog — refusing to deploy with an empty node list"
 log_info "Node-app targets (catalog-driven): ${NODE_APP_TARGETS}"
@@ -777,10 +777,10 @@ append_env_if_set "$RUNTIME_ENV" GRAFANA_PDC_HOSTED_GRAFANA_ID "${GRAFANA_PDC_HO
 append_env_if_set "$RUNTIME_ENV" GRAFANA_PDC_CLUSTER "${GRAFANA_PDC_CLUSTER-}"
 append_env_if_set "$RUNTIME_ENV" GRAFANA_PDC_NETWORK_ID "${GRAFANA_PDC_NETWORK_ID-}"
 # LiteLLM (Compose) → node apps (k3s NodePorts) via bug.0295 VM DNS.
-# NodePorts pinned in infra/k8s/base/node-app/service.yaml; UUIDs in each
-# node's .cogni/repo-spec.yaml. Scheduler-worker uses its own k8s ConfigMap.
+# Derived from NODE_TARGETS so node-local metering gets slug + UUID aliases
+# for every catalog node without a deploy-script edit.
 LITELLM_NODE_HOST="${DEPLOY_ENVIRONMENT}.vm.cognidao.org"
-LITELLM_NODE_ENDPOINTS="4ff8eac1-4eba-4ed0-931b-b1fe4f64713d=http://${LITELLM_NODE_HOST}:30000,5ed2d64f-2745-4676-983b-2fb7e05b2eba=http://${LITELLM_NODE_HOST}:30100,f6d2a17d-b7f6-4ad1-a86b-f0ad2380999e=http://${LITELLM_NODE_HOST}:30300,b927a9dd-6132-4fc9-a51e-e3cee2568e3c=http://${LITELLM_NODE_HOST}:30200"
+LITELLM_NODE_ENDPOINTS="$(node_billing_endpoint_csv "$LITELLM_NODE_HOST")"
 printf '%s=%s\n' COGNI_NODE_ENDPOINTS "$LITELLM_NODE_ENDPOINTS" >> "$RUNTIME_ENV"
 # Multi-node DB provisioning
 append_env_if_set "$RUNTIME_ENV" COGNI_NODE_DBS "${COGNI_NODE_DBS-}"

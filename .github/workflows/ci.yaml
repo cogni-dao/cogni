@@ -267,6 +267,9 @@ jobs:
       - name: edge routing tests (task.5078)
         run: bash scripts/ci/tests/render-caddyfile.test.sh
 
+      - name: scheduler node routing tests
+        run: bash scripts/ci/render-scheduler-worker-endpoints.sh --check
+
       - name: Unit + contract coverage tests
         run: pnpm test:ci
 
