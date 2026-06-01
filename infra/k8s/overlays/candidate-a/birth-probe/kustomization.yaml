@@ -7,7 +7,6 @@ namespace: cogni-candidate-a
 
 resources:
   - ../../../base/node-app
-  - ../../../../../nodes/birth-probe/k8s/external-secrets/candidate-a
 
 namePrefix: birth-probe-
 
@@ -58,10 +57,10 @@ patches:
     patch: |
       - op: replace
         path: /spec/template/spec/containers/0/envFrom/1/secretRef/name
-        value: "birth-probe-env-secrets"
+        value: "birth-probe-node-app-secrets"
       - op: replace
         path: /spec/template/spec/initContainers/0/envFrom/1/secretRef/name
-        value: "birth-probe-env-secrets"
+        value: "birth-probe-node-app-secrets"
       - op: replace
         path: /spec/template/spec/containers/0/ports/0/containerPort
         value: 3500
@@ -96,7 +95,7 @@ patches:
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
-                  name: birth-probe-env-secrets
+                  name: birth-probe-node-app-secrets
                   key: DOLTGRES_URL
           resources:
             requests:

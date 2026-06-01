@@ -48,7 +48,7 @@ You have a node app under `nodes/<node>/app` (a Next.js node) and you want it to
 
 ## Critical TODO Matrix
 
-Track these rows for every generated node PR. The wizard should emit the pure-git rows in one PR and open/follow side-effect work for provisioning before flight validation.
+Track these rows for every generated node PR. The wizard should emit the pure-git rows in one PR and open/follow side-effect work for the provisioning rows before flight validation.
 
 | Row                   | Owner surface               | Required proof                                                                                                                     | Blocks flight? |
 | --------------------- | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | -------------- |
