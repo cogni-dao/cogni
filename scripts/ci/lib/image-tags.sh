@@ -27,12 +27,6 @@ _image_tags_catalog_root="${COGNI_CATALOG_ROOT:-${_image_tags_repo_root}/infra/c
 mapfile -t ALL_TARGETS  < <(yq -N '.name' "$_image_tags_catalog_root"/*.yaml)
 # shellcheck disable=SC2034
 mapfile -t NODE_TARGETS < <(yq -N 'select(.type == "node") | .name' "$_image_tags_catalog_root"/*.yaml)
-# K8S_TARGETS: targets deployed via k8s/Argo (overlays, ApplicationSets,
-# digest promotion, gitops coverage). type:infra (e.g. litellm) builds in CI
-# but deploys via Compose-on-VM, so it is excluded here — the k8s plane never
-# iterates it. ALL_TARGETS = K8S_TARGETS ∪ infra targets.
-# shellcheck disable=SC2034
-mapfile -t K8S_TARGETS < <(yq -N 'select(.type == "node" or .type == "service") | .name' "$_image_tags_catalog_root"/*.yaml)
 
 declare -A _image_tags_suffix_cache=()
 declare -A _image_tags_primary_cache=()
@@ -87,12 +81,22 @@ image_tag_for_target() {
 # bytecode never perturb the image identity. LC_ALL=C sort keeps it stable
 # across macOS (dev) and Linux (CI).
 infra_content_hash() {
-  local target="$1" dockerfile dir
+  local target="$1" dockerfile dir base
   dockerfile=$(yq -N '.dockerfile' "${_image_tags_catalog_root}/${target}.yaml")
   dir=$(dirname "$dockerfile")
-  ( cd "$_image_tags_repo_root" && \
-    find "$dir" -type f ! -name 'AGENTS.md' -not -path '*/__pycache__/*' \
-      | LC_ALL=C sort | xargs cat | shasum -a 256 | cut -c1-12 )
+  # Resolve relative to the catalog's own tree so an override
+  # (COGNI_CATALOG_ROOT=app-src/infra/catalog, the #1427 pre-merge birth flow)
+  # hashes the PR's files; fall back to the script's repo root.
+  base="$(cd "${_image_tags_catalog_root}/../.." 2>/dev/null && pwd || echo "$_image_tags_repo_root")"
+  # git ls-files → tracked files only (untracked/gitignored, incl. __pycache__,
+  # can't perturb identity); AGENTS.md excluded (docs ≠ image). `read -r` per line
+  # keeps it space-safe and portable across BSD (dev) + GNU (CI) — no sort -z.
+  ( cd "$base" && \
+    git ls-files -- "$dir" \
+      | grep -vE '(^|/)AGENTS\.md$' \
+      | LC_ALL=C sort \
+      | while IFS= read -r _f; do cat "$_f"; done \
+      | shasum -a 256 | cut -c1-12 )
 }
 
 # Full GHCR tag for a type:infra image: <image>:<target>-<contenthash>

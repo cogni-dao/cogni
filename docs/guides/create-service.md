@@ -441,7 +441,7 @@ Some shared infra is a **third-party base + a thin customization** rather than a
 - **Catalog:** `infra/catalog/<name>.yaml` with `type: infra` (no `node_port`/`node_id`/deploy-branches — k8s/Argo concepts the schema makes conditional). Set `build_context:` if the Dockerfile is context-relative (litellm builds from its own dir so its content-hash stays stable).
 - **Build:** automatic. `detect-affected.sh` (via `path_prefix`) + `build-and-push-images.sh` are catalog-generic. `type: infra` is **content-hash tagged** (`<name>-<hash>` via `image-tags.sh:infra_image_tag`) so the affected build rebuilds it only on change.
 - **Deploy:** `deploy-infra.sh` resolves the identical content-hash tag into the Compose env — **no manual `docker build` + hand-pin**. `build-once-promote` holds: the content-hash tag is stable across candidate-a/preview/prod.
-- **k8s plane skips it:** `image-tags.sh` exposes `K8S_TARGETS` (node+service) for overlays/promotion/Argo/coverage; `infra` is in `ALL_TARGETS` (build) but never `K8S_TARGETS`. No overlay, ApplicationSet, or `wait-for-argocd` entry.
+- **k8s plane skips it:** `infra` is in `ALL_TARGETS` (build) but not `NODE_TARGETS`; overlay/promotion/Argo/gitops-coverage loops skip `type:infra` via `image-tags.sh:is_infra_target`. No overlay, ApplicationSet, or `wait-for-argocd` entry.
 
 A new infra image is then a **one-file catalog drop** — same plug-n-play path as a service.
 
