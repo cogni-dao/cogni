@@ -5,8 +5,14 @@
 # scripts/ci/lib/image-tags.sh — thin catalog-reader shim.
 #
 # CATALOG_IS_SSOT (docs/spec/ci-cd.md axiom 16): infra/catalog/*.yaml is the
-# single declaration site. This file populates ALL_TARGETS / NODE_TARGETS and
-# resolves tag_suffix_for_target by reading catalog at source time.
+# single declaration site for deploy-shape (ports, tag suffixes, branches,
+# path_prefix). This file populates ALL_TARGETS / NODE_TARGETS and resolves
+# them by reading catalog at source time.
+#
+# REPO_SPEC_IS_IDENTITY_SSOT: node identity (node_id) is NOT declared in the
+# catalog — it is sourced from each node's nodes/<name>/.cogni/repo-spec.yaml,
+# the in-repo projection of the on-chain DAO and the sole identity authority
+# (ROADMAP "Repo-Spec Authority"). Deploy-shape and identity stay disjoint.
 #
 # Intentionally no `set -euo pipefail` — meant to be sourced; caller owns
 # error handling.
@@ -22,6 +28,11 @@ fi
 _image_tags_lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _image_tags_repo_root="$(cd "${_image_tags_lib_dir}/../../.." && pwd)"
 _image_tags_catalog_root="${COGNI_CATALOG_ROOT:-${_image_tags_repo_root}/infra/catalog}"
+# Root of the source tree holding nodes/<name>/.cogni/repo-spec.yaml. Derived
+# from the catalog root (catalog lives at <tree>/infra/catalog) so the pre-merge
+# birth flow — which points COGNI_CATALOG_ROOT at the PR checkout
+# (app-src/infra/catalog) — reads the PR's repo-specs, not the workflow tree.
+_image_tags_spec_root="$(cd "${_image_tags_catalog_root}/../.." 2>/dev/null && pwd || echo "${_image_tags_repo_root}")"
 
 # shellcheck disable=SC2034
 mapfile -t ALL_TARGETS  < <(yq -N '.name' "$_image_tags_catalog_root"/*.yaml)
@@ -40,10 +51,18 @@ for _t in "${ALL_TARGETS[@]}"; do
   _image_tags_primary_cache["$_t"]="$_p"
   _np=$(yq -N '.node_port // ""' "${_image_tags_catalog_root}/${_t}.yaml")
   _image_tags_node_port_cache["$_t"]="$_np"
-  _nid=$(yq -N '.node_id // ""' "${_image_tags_catalog_root}/${_t}.yaml")
+  # node_id from repo-spec (REPO_SPEC_IS_IDENTITY_SSOT), located via the
+  # catalog path_prefix. Services (no path_prefix / no repo-spec) → empty.
+  _pp=$(yq -N '.path_prefix // ""' "${_image_tags_catalog_root}/${_t}.yaml")
+  _rs="${_image_tags_spec_root}/${_pp}.cogni/repo-spec.yaml"
+  if [ -n "$_pp" ] && [ -f "$_rs" ]; then
+    _nid=$(yq -N '.node_id // ""' "$_rs")
+  else
+    _nid=""
+  fi
   _image_tags_node_id_cache["$_t"]="$_nid"
 done
-unset _t _s _p _np _nid
+unset _t _s _p _np _pp _rs _nid
 
 image_name_for_target() {
   printf '%s' "$IMAGE_NAME_APP"
@@ -105,10 +124,25 @@ node_id_for_target() {
   local node="$1" node_id
   node_id="${_image_tags_node_id_cache[$node]:-}"
   if [ -z "$node_id" ]; then
-    echo "[ERROR] image-tags: node_id missing for '$node' (CATALOG_IS_SSOT: add node_id to infra/catalog/${node}.yaml)" >&2
+    echo "[ERROR] image-tags: node_id missing for '$node' (REPO_SPEC_IS_IDENTITY_SSOT: set node_id in nodes/${node}/.cogni/repo-spec.yaml)" >&2
     return 1
   fi
   printf '%s' "$node_id"
+}
+
+# Default node_id for billing-callback attribution — the is_primary_host node
+# (operator). Lets COGNI_DEFAULT_NODE_ID be injected from repo-spec so the
+# LiteLLM callback carries no hardcoded identity. REPO_SPEC_IS_IDENTITY_SSOT.
+default_node_id() {
+  local node
+  for node in "${NODE_TARGETS[@]}"; do
+    if is_primary_host "$node"; then
+      node_id_for_target "$node"
+      return $?
+    fi
+  done
+  echo "[ERROR] image-tags: no is_primary_host node found for default node_id" >&2
+  return 1
 }
 
 node_database_for_target() {

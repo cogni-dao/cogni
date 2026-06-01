@@ -170,6 +170,9 @@ services:
       - LANGFUSE_TRACING_ENVIRONMENT=${DEPLOY_ENVIRONMENT}
       # Per-node billing callback routing (custom callback class — cogni_callbacks.CogniNodeRouter)
       - COGNI_NODE_ENDPOINTS=${COGNI_NODE_ENDPOINTS}
+      # Default node for unattributed spend — primary-host node_id from repo-spec
+      # (REPO_SPEC_IS_IDENTITY_SSOT). Empty → callback skips rather than mis-attributes.
+      - COGNI_DEFAULT_NODE_ID=${COGNI_DEFAULT_NODE_ID:-}
       - BILLING_INGEST_TOKEN=${BILLING_INGEST_TOKEN}
     volumes:
       - ./configs/litellm.config.yaml:/app/config.yaml:ro

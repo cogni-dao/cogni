@@ -446,6 +446,10 @@ log_info "Edge routing (catalog-driven): ${EDGE_ENV_LINES}"
 LITELLM_NODE_HOST="${DEPLOY_ENVIRONMENT}.vm.cognidao.org"
 LITELLM_NODE_ENDPOINTS="$(node_billing_endpoint_csv "$LITELLM_NODE_HOST")"
 log_info "LiteLLM callback routing (catalog-driven): ${LITELLM_NODE_ENDPOINTS}"
+# Default node for unattributed spend — primary-host node_id from repo-spec
+# (REPO_SPEC_IS_IDENTITY_SSOT). The LiteLLM callback carries no hardcoded UUID.
+COGNI_DEFAULT_NODE_ID="$(default_node_id)"
+log_info "LiteLLM default node (repo-spec primary-host): ${COGNI_DEFAULT_NODE_ID}"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Create remote deployment script (heredoc — no variable expansion)
@@ -788,6 +792,7 @@ append_env_if_set "$RUNTIME_ENV" GRAFANA_PDC_NETWORK_ID "${GRAFANA_PDC_NETWORK_I
 # Derived from NODE_TARGETS so node-local metering gets slug + UUID aliases
 # for every catalog node without a deploy-script edit.
 printf '%s=%s\n' COGNI_NODE_ENDPOINTS "${LITELLM_NODE_ENDPOINTS:?LITELLM_NODE_ENDPOINTS required}" >> "$RUNTIME_ENV"
+printf '%s=%s\n' COGNI_DEFAULT_NODE_ID "${COGNI_DEFAULT_NODE_ID:?COGNI_DEFAULT_NODE_ID required}" >> "$RUNTIME_ENV"
 # Multi-node DB provisioning
 append_env_if_set "$RUNTIME_ENV" COGNI_NODE_DBS "${COGNI_NODE_DBS-}"
 # Database backup cadence. A systemd timer runs the Compose db-backup profile as

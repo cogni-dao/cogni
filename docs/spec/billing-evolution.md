@@ -5,11 +5,11 @@ title: "Billing Evolution: Dual-Cost Accounting"
 status: active
 spec_state: draft
 trust: draft
-summary: Profit-enforcing billing with LiteLLM-sourced provider costs, credit unit standard, and idempotent charge receipts.
-read_when: Working on billing, credit charges, pricing policy, or the charge_receipts table.
+summary: Profit-enforcing billing with LiteLLM-sourced provider costs, credit unit standard, idempotent charge receipts, and per-node metering routed by repo-spec identity.
+read_when: Working on billing, credit charges, pricing policy, the charge_receipts table, or the shared LiteLLM proxy's per-node callback routing.
 owner: derekg1729
 created: 2026-02-06
-verified: 2026-02-06
+verified: 2026-06-01
 tags: [billing]
 ---
 
@@ -50,6 +50,10 @@ Single-path billing where LiteLLM provides provider cost, our system applies mar
 5. **USER_COST_NOT_PROVIDER_COST**: `response_cost_usd` stores USER cost (with markup), not provider cost.
 
 6. **POST_CALL_NEVER_BLOCKS**: Post-call billing NEVER throws `InsufficientCreditsPortError`. If balance goes negative, log critical but complete the write. Overage handled in reconciliation.
+
+7. **NODE_LOCAL_METERING**: One shared LiteLLM proxy meters all co-deployed nodes. A custom callback (`cogni_callbacks.CogniNodeRouter`) routes each spend event to the **owning node's** `/api/internal/billing/ingest` by `node_id`, so each node's `charge_receipts` live in its own DB. The callback is adapter glue only — no pricing/policy/reconciliation (`CALLBACK_IS_ADAPTER_GLUE`).
+
+8. **REPO_SPEC_IS_IDENTITY_SSOT**: The `node_id` used for metering routing is the in-repo projection of the node's on-chain DAO and is declared exactly once, in `nodes/<node>/.cogni/repo-spec.yaml` (ROADMAP "Repo-Spec Authority"). It is never re-declared in `infra/catalog/*.yaml` (schema-forbidden) nor hardcoded in the proxy image. The routing CSV (`COGNI_NODE_ENDPOINTS`) and the default-node (`COGNI_DEFAULT_NODE_ID` = the `is_primary_host` node's `node_id`) are derived from repo-spec by `scripts/ci/lib/image-tags.sh` + `deploy-infra.sh`. **NO_SILENT_MISATTRIBUTION**: a missing/unknown `node_id` falls back to the configured default only if one is set; otherwise the event is logged + skipped — never billed to a fabricated identity.
 
 ## Schema
 
@@ -100,11 +104,27 @@ Per [Activity Metrics](./activity-metrics.md), post-call billing NEVER throws `I
 
 If balance goes negative, log critical but complete the write. Overage handled in reconciliation.
 
+### Multi-Node Cost Routing (shared LiteLLM proxy)
+
+One LiteLLM proxy serves every co-deployed node. After each successful completion it fires `cogni_callbacks.CogniNodeRouter.async_log_success_event`, which:
+
+1. Reads `node_id` from `spend_logs_metadata` (set by the node's LLM adapter via the `x-litellm-spend-logs-metadata` header — see `nodes/<node>/app/src/adapters/server/ai/litellm.adapter.ts`).
+2. Resolves the owning node's ingest URL from `COGNI_NODE_ENDPOINTS` (a `slug=url,node_id=url` map) and POSTs the `standard_logging_object` to `<node>/api/internal/billing/ingest` with the `BILLING_INGEST_TOKEN` bearer.
+3. On missing/unknown `node_id`: uses `COGNI_DEFAULT_NODE_ID` if set, else logs an error and skips (`NO_SILENT_MISATTRIBUTION`).
+
+**Identity lineage (one source of truth: web3 → repo-spec → routing).** `node_id` is minted at DAO formation and written to `nodes/<node>/.cogni/repo-spec.yaml`. Everything downstream derives from it — the catalog declares only deploy-shape (ports/branches), and the routing maps + default node are rendered from repo-spec at deploy time. Adding a node never requires hand-editing a billing route or a UUID. See [ci-cd.md](./ci-cd.md) axiom 16 (`REPO_SPEC_IS_IDENTITY_SSOT`).
+
+```
+on-chain DAO ──formation──▶ repo-spec.yaml (node_id) ──image-tags.sh──▶ COGNI_NODE_ENDPOINTS + COGNI_DEFAULT_NODE_ID ──▶ CogniNodeRouter ──▶ <node>/api/internal/billing/ingest ──▶ charge_receipts
+```
+
 ### Environment Configuration
 
-| Variable                   | Purpose                  | Example |
-| -------------------------- | ------------------------ | ------- |
-| `USER_PRICE_MARKUP_FACTOR` | Profit markup multiplier | `2.0`   |
+| Variable                   | Purpose                                                                | Example                       |
+| -------------------------- | ---------------------------------------------------------------------- | ----------------------------- |
+| `USER_PRICE_MARKUP_FACTOR` | Profit markup multiplier                                               | `2.0`                         |
+| `COGNI_NODE_ENDPOINTS`     | Per-node ingest routing map (`slug=url,node_id=url`); repo-spec-derived | `operator=…,4ff8eac1…=…`       |
+| `COGNI_DEFAULT_NODE_ID`    | Default node for unattributed spend (`is_primary_host` `node_id`)       | `4ff8eac1-…` (from repo-spec) |
 
 Protocol constant `CREDITS_PER_USD = 10_000_000` is NOT configurable (hardcoded).
 
@@ -114,14 +134,20 @@ Protocol constant `CREDITS_PER_USD = 10_000_000` is NOT configurable (hardcoded)
 
 ### File Pointers
 
-| File                                              | Purpose                                              |
-| ------------------------------------------------- | ---------------------------------------------------- |
-| `src/core/billing/pricing.ts`                     | Protocol constants, conversion helpers               |
-| `src/features/ai/services/llmPricingPolicy.ts`    | Markup policy layer (reads USER_PRICE_MARKUP_FACTOR) |
-| `src/shared/db/schema.billing.ts`                 | `charge_receipts` table                              |
-| `src/ports/accounts.port.ts`                      | `recordChargeReceipt` interface                      |
-| `src/adapters/server/accounts/drizzle.adapter.ts` | Atomic charge receipt + ledger debit                 |
-| `src/features/ai/services/completion.ts`          | Preflight gating + non-blocking post-call billing    |
+Per-node app code lives under `nodes/<node>/app/src/` (hex layering; `<node>` ∈ operator/resy/node-template/canary). The shared proxy + catalog live at repo root.
+
+| File                                                              | Purpose                                                       |
+| ----------------------------------------------------------------- | ------------------------------------------------------------- |
+| `nodes/<node>/app/src/core/billing/pricing.ts`                    | Protocol constants, conversion helpers                        |
+| `nodes/<node>/app/src/features/ai/services/llmPricingPolicy.ts`   | Markup policy layer (reads USER_PRICE_MARKUP_FACTOR)          |
+| `nodes/<node>/app/src/shared/db/schema.billing.ts`                | `charge_receipts` table                                       |
+| `nodes/<node>/app/src/ports/accounts.port.ts`                     | `recordChargeReceipt` interface                               |
+| `nodes/<node>/app/src/adapters/server/accounts/drizzle.adapter.ts`| Atomic charge receipt + ledger debit                          |
+| `nodes/<node>/app/src/features/ai/services/completion.ts`         | Preflight gating + non-blocking post-call billing             |
+| `nodes/<node>/app/src/app/api/internal/billing/ingest/route.ts`   | Per-node ingest endpoint the proxy callback POSTs to          |
+| `infra/images/litellm/cogni_callbacks.py`                         | Shared-proxy callback that routes spend by `node_id`          |
+| `scripts/ci/lib/image-tags.sh`                                    | Renders `COGNI_NODE_ENDPOINTS` + `COGNI_DEFAULT_NODE_ID` from repo-spec |
+| `nodes/<node>/.cogni/repo-spec.yaml`                              | `node_id` identity authority (`REPO_SPEC_IS_IDENTITY_SSOT`)    |
 
 ## Acceptance Checks
 

@@ -23,7 +23,11 @@
         "properties": { "type": { "const": "node" } },
         "required": ["type"]
       },
-      "then": { "required": ["node_id", "node_port"] }
+      "then": { "required": ["node_port"] }
+    },
+    {
+      "$comment": "REPO_SPEC_IS_IDENTITY_SSOT — node_id is declared in nodes/<name>/.cogni/repo-spec.yaml (the web3-anchored authority), never in the catalog. Forbid it here so the duplicate cannot be reintroduced.",
+      "not": { "required": ["node_id"] }
     }
   ],
   "properties": {
@@ -41,11 +45,6 @@
       "type": "integer",
       "minimum": 1,
       "maximum": 65535
-    },
-    "node_id": {
-      "type": "string",
-      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
-      "description": "UUID v4 — bound at provision time, persisted in repo-spec lookups."
     },
     "node_port": {
       "type": "integer",

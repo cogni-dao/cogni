@@ -6,7 +6,6 @@ port: 3000
 # deploy-infra.sh + provision-env-vm.sh consume it so adding a node needs no
 # edge-script edit. Must match the per-env overlay Service nodePort.
 node_port: 30000
-node_id: "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d"
 dockerfile: nodes/operator/app/Dockerfile
 # bug.0344 — tag suffix pushed to GHCR for this target's image, used by
 # argocd-image-updater to distinguish this app's tags from siblings' in the

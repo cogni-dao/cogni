@@ -8,7 +8,12 @@ Purpose: Custom LiteLLM callback that routes billing callbacks to the correct
 Scope: Adapter glue only — runs inside LiteLLM process. No pricing logic,
   no policy logic, no reconciliation logic (CALLBACK_IS_ADAPTER_GLUE).
 Invariants:
-  MISSING_NODE_ID_DEFAULTS_OPERATOR: missing node_id → operator + warning
+  REPO_SPEC_IS_IDENTITY_SSOT: no hardcoded node_id. The default node is injected
+    via COGNI_DEFAULT_NODE_ID, sourced from the primary-host node's
+    .cogni/repo-spec.yaml by deploy-infra.sh (image-tags.sh:default_node_id).
+  NO_SILENT_MISATTRIBUTION: missing/unknown node_id falls back to the configured
+    default only if one is set; otherwise the event is logged + skipped — never
+    silently billed to a fabricated identity.
   CALLBACK_AUTHENTICATED: forwards BILLING_INGEST_TOKEN as Bearer header
   NODE_LOCAL_METERING_PRIMARY: routes to node-local endpoint
 Side-effects: IO (HTTP POST to node ingest endpoints)
@@ -24,9 +29,10 @@ from litellm.integrations.custom_logger import CustomLogger
 
 logger = logging.getLogger("cogni.callbacks")
 
-# Operator node_id UUID — fallback when node_id missing from metadata.
-# Must match node_id in .cogni/repo-spec.yaml (REPO_SPEC_AUTHORITY).
-DEFAULT_NODE = os.environ.get("COGNI_DEFAULT_NODE_ID", "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d")
+# Default node for unattributed spend. Injected from the primary-host node's
+# .cogni/repo-spec.yaml (REPO_SPEC_IS_IDENTITY_SSOT) — no hardcoded identity.
+# When unset, missing/unknown node_id is logged + skipped (NO_SILENT_MISATTRIBUTION).
+DEFAULT_NODE = os.environ.get("COGNI_DEFAULT_NODE_ID")
 
 
 def _parse_node_endpoints() -> dict[str, str]:
@@ -94,6 +100,15 @@ class CogniNodeRouter(CustomLogger):
             node_id = spend_logs.get("node_id") if isinstance(spend_logs, dict) else None
 
             if not node_id:
+                if not DEFAULT_NODE:
+                    logger.error(
+                        "No node_id in spend_logs_metadata and COGNI_DEFAULT_NODE_ID "
+                        "unset — skipping callback (NO_SILENT_MISATTRIBUTION). "
+                        "call_id=%s model=%s",
+                        kwargs.get("litellm_call_id", "unknown"),
+                        kwargs.get("model", "unknown"),
+                    )
+                    return
                 node_id = DEFAULT_NODE
                 logger.warning(
                     "No node_id in spend_logs_metadata — defaulting to '%s'. "
@@ -106,15 +121,22 @@ class CogniNodeRouter(CustomLogger):
             # Resolve endpoint
             endpoint = self.node_endpoints.get(node_id)
             if not endpoint:
-                logger.warning(
-                    "Unknown node_id '%s' — falling back to '%s'. call_id=%s",
-                    node_id,
-                    DEFAULT_NODE,
-                    kwargs.get("litellm_call_id", "unknown"),
-                )
-                endpoint = self.node_endpoints.get(DEFAULT_NODE)
+                if DEFAULT_NODE:
+                    logger.warning(
+                        "Unknown node_id '%s' — falling back to '%s'. call_id=%s",
+                        node_id,
+                        DEFAULT_NODE,
+                        kwargs.get("litellm_call_id", "unknown"),
+                    )
+                    endpoint = self.node_endpoints.get(DEFAULT_NODE)
                 if not endpoint:
-                    logger.error("No endpoint for default node '%s' — skipping callback", DEFAULT_NODE)
+                    logger.error(
+                        "No endpoint for node_id '%s' (default '%s') — skipping "
+                        "callback (NO_SILENT_MISATTRIBUTION). call_id=%s",
+                        node_id,
+                        DEFAULT_NODE,
+                        kwargs.get("litellm_call_id", "unknown"),
+                    )
                     return
 
             # Build the StandardLoggingPayload-shaped object
