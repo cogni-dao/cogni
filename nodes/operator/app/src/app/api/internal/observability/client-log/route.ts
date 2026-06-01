@@ -26,7 +26,7 @@ export const runtime = "nodejs";
 const ClientLogSchema = z.object({
   level: z.enum(["warn", "error"]),
   event: z.string().min(1).max(200),
-  meta: z.record(z.unknown()).optional(),
+  meta: z.record(z.string(), z.unknown()).optional(),
 });
 
 export const POST = wrapRouteHandlerWithLogging(
