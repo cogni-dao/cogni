@@ -35,8 +35,13 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 1
 fi
 
+# COGNI_NODE_DBS is derived from infra/catalog, not a durable manual roster.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/ci/lib/image-tags.sh
+source "$SCRIPT_DIR/lib/image-tags.sh"
+
 grafana_base="${GRAFANA_URL%/}"
-dbs="${COGNI_NODE_DBS:-cogni_operator,cogni_poly,cogni_resy,cogni_node_template}"
+dbs="$(node_database_csv)"
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
 

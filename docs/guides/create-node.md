@@ -30,7 +30,7 @@ You have a node app under `nodes/<node>/app` (a Next.js node) and you want it to
 - the PR build matrix (`detect-affected.sh`, `build-and-push-images.sh`),
 - the Argo `ApplicationSet` generators (one per node per env),
 - `promote-preview-seed-main.sh`, which `sha256sum`s `infra/k8s/overlays/preview/<node>/kustomization.yaml` **for every `NODE_TARGET`**,
-- the per-node k8s secret + rollout loops in `deploy-infra.sh` (bug.5086),
+- the per-node database inventory, k8s secret, and rollout loops in `deploy-infra.sh` (bug.5086 / task.5078 follow-up),
 - the **edge Caddy reverse-proxy roster** — `scripts/ci/render-caddyfile.sh` generates the Caddyfile and `deploy-infra.sh` / `provision-env-vm.sh` write each node's per-env host, all from `node_port` + `is_primary_host` (task.5078). A new `type: node` auto-routes; no Caddyfile or deploy-script edit.
 
 > ⚠️ **The candidate-a-only trap (learned from #1369 / node-template).** Declaring a node in the catalog but only authoring the **candidate-a** overlay leaves the preview + production machinery expecting overlays that don't exist. Result: `Promote Preview Digest Seed` fails on `main` (`sha256sum: …/overlays/preview/<node>/kustomization.yaml: No such file or directory`) for _everyone_, and the node never reaches preview/prod.
@@ -116,9 +116,9 @@ The AppSet template renders `path: infra/k8s/overlays/<env>/{{.name}}`. **This i
 
 Steps 1–5 land the rails; the node only becomes Healthy once each target env has:
 
-- [ ] **Secrets** — `<node>-node-app-secrets` in `cogni-<env>` (`scripts/ci/deploy-infra.sh` seeds from GitHub environment secrets; a new node needs its own DB creds + `DOLTGRES_URL`). Ties into the OpenBao/ESO secrets substrate.
-- [ ] **Databases** — per-namespace Postgres + Doltgres for the node.
-- [ ] **DNS** — `<node>-test` / `<node>-preview` / `<node>` `.cognidao.org` → the env VM IP, via the [`/dns-ops`](../../.claude/skills/dns-ops/SKILL.md) skill. Must match the overlay `NEXTAUTH_URL`.
+- [ ] **Secrets** — `<node>-node-app-secrets` in `cogni-<env>` (`scripts/ci/deploy-infra.sh` fans the baseline secrets to every catalog node). Ties into the OpenBao/ESO secrets substrate.
+- [ ] **Databases** — per-node Postgres + Doltgres for the node. `COGNI_NODE_DBS` is derived from `NODE_TARGETS` at deploy time (`<node>` -> `cogni_<node>`), so a new catalog node cannot be skipped by a stale GitHub env secret.
+- [ ] **DNS** — `<node>-test` / `<node>-preview` / `<node>` `.cognidao.org` -> the env VM IP, via the [`/dns-ops`](../../.claude/skills/dns-ops/SKILL.md) skill. Must match the overlay `NEXTAUTH_URL`. For candidate-a, use the monorepo VM alias/IP (`cogni-candidate-a.vm.cognidao.org`), not the legacy poly candidate alias.
 - [ ] **Externals** — LiteLLM / Temporal / Redis reachable at the VM host (the ExternalName targets from Step 3).
 
 ### 7. Flight gating — `wait-for-argocd.sh`

@@ -97,3 +97,20 @@ node_port_for_target() {
   fi
   printf '%s' "$port"
 }
+
+node_database_for_target() {
+  local node="$1"
+  if [ -z "${_image_tags_primary_cache[$node]+x}" ]; then
+    echo "[ERROR] image-tags: unknown target: $node" >&2
+    return 1
+  fi
+  printf 'cogni_%s' "${node//-/_}"
+}
+
+node_database_csv() {
+  local sep="" node
+  for node in "${NODE_TARGETS[@]}"; do
+    printf '%s%s' "$sep" "$(node_database_for_target "$node")"
+    sep=","
+  done
+}

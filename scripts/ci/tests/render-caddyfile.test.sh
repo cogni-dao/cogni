@@ -9,6 +9,7 @@
 #      hand-maintained roster shipped: a catalog node with no edge route).
 #   3. catalog node_port == per-env overlay Service nodePort (the one coupling
 #      this design introduces; assert it can't drift into split-brain).
+#   4. The derived node DB inventory includes every catalog node.
 #
 # Run: bash scripts/ci/tests/render-caddyfile.test.sh
 set -euo pipefail
@@ -23,12 +24,12 @@ source "$REPO_ROOT/scripts/ci/lib/image-tags.sh"
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "  ok — $*"; }
 
-echo "[1/3] Caddyfile.tmpl ↔ catalog drift gate"
+echo "[1/4] Caddyfile.tmpl ↔ catalog drift gate"
 bash scripts/ci/render-caddyfile.sh --check >/dev/null \
   || fail "render-caddyfile.sh --check: committed Caddyfile.tmpl is stale (run: pnpm gen:caddyfile)"
 pass "committed Caddyfile.tmpl matches the catalog"
 
-echo "[2/3] every type:node has an edge block (canary regression guard)"
+echo "[2/4] every type:node has an edge block (canary regression guard)"
 RENDERED="$(bash scripts/ci/render-caddyfile.sh)"
 for node in "${NODE_TARGETS[@]}"; do
   slug="$(printf '%s' "$node" | tr '[:lower:]-' '[:upper:]_')"
@@ -46,7 +47,7 @@ for node in "${NODE_TARGETS[@]}"; do
 done
 grep -q '{$CANARY_DOMAIN' <<<"$RENDERED" || fail "canary block absent — the exact gap this task closes"
 
-echo "[3/3] catalog node_port == overlay Service nodePort (no split-brain)"
+echo "[3/4] catalog node_port == overlay Service nodePort (no split-brain)"
 for node in "${NODE_TARGETS[@]}"; do
   cat_port="$(node_port_for_target "$node")"
   for env in candidate-a preview production; do
@@ -59,6 +60,16 @@ for node in "${NODE_TARGETS[@]}"; do
       || fail "$node: catalog node_port=$cat_port != $env overlay nodePort=$ov_port (CATALOG_IS_SSOT — make them match)"
     pass "$node/$env nodePort=$ov_port matches catalog"
   done
+done
+
+echo "[4/4] catalog node DB inventory includes every type:node"
+dbs="$(node_database_csv)"
+for node in "${NODE_TARGETS[@]}"; do
+  expected_db="$(node_database_for_target "$node")"
+  case ",$dbs," in
+    *",$expected_db,"*) pass "$node -> $expected_db" ;;
+    *) fail "derived DB inventory '$dbs' missing $expected_db for node '$node'" ;;
+  esac
 done
 
 echo "PASS: render-caddyfile.test.sh"

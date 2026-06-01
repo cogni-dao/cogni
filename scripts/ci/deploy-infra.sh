@@ -409,6 +409,13 @@ NODE_APP_TARGETS="${NODE_TARGETS[*]}"
 [ -n "$NODE_APP_TARGETS" ] || log_fatal "deploy-infra: no type:node targets from infra/catalog — refusing to deploy with an empty node list"
 log_info "Node-app targets (catalog-driven): ${NODE_APP_TARGETS}"
 
+# G-tier derived inventory: database names are a pure function of the catalog
+# node list. Do not trust the GitHub env secret here; it can lag a new node and
+# leave the pod with a DATABASE_URL for a DB that db-provision never created.
+COGNI_NODE_DBS="$(node_database_csv)"
+export COGNI_NODE_DBS
+log_info "Node databases (catalog-driven): ${COGNI_NODE_DBS}"
+
 # task.5078 — catalog-driven edge routing. The generated Caddyfile
 # (scripts/ci/render-caddyfile.sh) resolves {$<SLUG>_DOMAIN} per non-primary
 # node and bakes upstream ports from catalog node_port. Here we compute only the

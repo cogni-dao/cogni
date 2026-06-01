@@ -94,11 +94,18 @@ derive_pdc_defaults_from_token
 # Store it as the env-level GitHub secret GRAFANA_PDC_NETWORK_UUID.
 : "${GRAFANA_PDC_NETWORK_UUID:?GRAFANA_PDC_NETWORK_UUID not set; copy from the secureSocksProxyUsername field of an existing UI-bound Postgres datasource and store as the GRAFANA_PDC_NETWORK_UUID env secret. See runbook.}"
 
+# COGNI_NODE_DBS is a derived G-tier value and may lag in GitHub Environment
+# secrets. Grafana datasources should follow the same catalog inventory that
+# deploy-infra uses to provision Postgres.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/ci/lib/image-tags.sh
+source "$SCRIPT_DIR/lib/image-tags.sh"
+
 grafana_base="${GRAFANA_URL%/}"
 datasource_host="${GRAFANA_POSTGRES_HOST:-postgres:5432}"
 readonly_user="${APP_DB_READONLY_USER:-app_readonly}"
 readonly_password="${APP_DB_READONLY_PASSWORD:-$(derive_secret postgres-readonly)}"
-dbs="${COGNI_NODE_DBS:-cogni_operator,cogni_poly,cogni_resy,cogni_node_template}"
+dbs="$(node_database_csv)"
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
 
