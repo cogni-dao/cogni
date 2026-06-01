@@ -455,6 +455,17 @@ set_repo_secret GHCR_DEPLOY_TOKEN          "$GITHUB_ADMIN_PAT"
 set_repo_secret ACTIONS_AUTOMATION_BOT_PAT "$GITHUB_ADMIN_PAT"
 set_repo_secret GIT_READ_TOKEN             "$GITHUB_ADMIN_PAT"
 
+# Provisioning floor consumed by provision-env.yml's env: block (Cloudflare,
+# Cherry project, GH-admin). Previously these had to be hand-set with
+# `gh secret set` per env — the seam. Push them from .env.bootstrap so it is
+# the single source for the whole minting floor (no manual gh).
+log "Env-level provisioning floor (provision-env.yml-consumed):"
+set_env_secret CLOUDFLARE_API_TOKEN "$CLOUDFLARE_API_TOKEN"
+set_env_secret CLOUDFLARE_ZONE_ID   "$CLOUDFLARE_ZONE_ID"
+set_env_secret CHERRY_PROJECT_ID    "$CHERRY_PROJECT_ID"
+set_env_secret GH_ADMIN_PAT         "$GITHUB_ADMIN_PAT"
+set_env_secret GH_ADMIN_USERNAME    "$GITHUB_ADMIN_USERNAME"
+
 log "Env-level agent-generated secrets:"
 for k in AUTH_SECRET LITELLM_MASTER_KEY OPENCLAW_GATEWAY_TOKEN OPENCLAW_GITHUB_RW_TOKEN \
          SCHEDULER_API_TOKEN BILLING_INGEST_TOKEN INTERNAL_OPS_TOKEN METRICS_TOKEN \
