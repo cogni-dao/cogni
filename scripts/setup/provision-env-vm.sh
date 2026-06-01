@@ -1451,8 +1451,15 @@ else
   source "$REPO_ROOT/scripts/setup/lib/reconcile-secrets.sh"
   reconcile_secrets_on_rerun
 
-  log_info "Seeding cogni/${DEPLOY_ENV}/node-template/*..."
-  for k in "${NODE_TEMPLATE_KEYS[@]}"; do seed_kv node-template "$k" "${!k:-}"; done
+  # Fan baseline app secrets to EVERY type:node (task.5094). Each node's path
+  # cogni/<env>/<node>/* gets capability-gated keys with per-node-DISTINCT
+  # values (AUTH_SECRET, CONNECTIONS_ENCRYPTION_KEY, …) — its ExternalSecret
+  # <node>-env-secrets extracts them into the pod. node-template remains the
+  # runtime/.env (Compose) primary above.
+  for node in "${NODE_TARGETS[@]}"; do
+    log_info "Seeding cogni/${DEPLOY_ENV}/${node}/*..."
+    seed_node_app_secrets "$node"
+  done
   log_info "Seeding cogni/${DEPLOY_ENV}/scheduler-worker/*..."
   for k in "${SCHEDULER_WORKER_KEYS[@]}"; do seed_kv scheduler-worker "$k" "${!k:-}"; done
   log_info "OpenBao paths seeded for ${DEPLOY_ENV}"

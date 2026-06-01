@@ -243,6 +243,12 @@ jobs:
       - name: secrets:set CLI tests (task.0284)
         run: bash scripts/ci/tests/set-secret.test.sh
 
+      # task.5094 — per-node secret fan-out (seed_node_app_secrets). Drives the
+      # catalog-gated fan-out against the real infra/secrets-catalog.yaml with
+      # stubbed runtime deps; proves distinct-value-per-node + custody gating.
+      - name: secrets fan-out tests (task.5094)
+        run: bash scripts/ci/tests/secrets-fanout.test.sh
+
       - name: Unit + contract coverage tests
         run: pnpm test:ci
 
