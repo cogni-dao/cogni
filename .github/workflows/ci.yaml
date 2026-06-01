@@ -107,6 +107,8 @@ jobs:
           # have a single rule each, so the quantifier is a no-op for them.
           predicate-quantifier: "every"
           filters: |
+            birth-probe:
+              - 'nodes/birth-probe/**'
             canary:
               - 'nodes/canary/**'
             resy:
@@ -115,6 +117,7 @@ jobs:
               - 'nodes/node-template/**'
             operator:
               - '**'
+              - '!nodes/birth-probe/**'
               - '!nodes/canary/**'
               - '!nodes/resy/**'
               - '!nodes/node-template/**'
@@ -155,6 +158,7 @@ jobs:
                or . == "tests/unit/packages/repo-spec/accessors.test.ts"
                or ($node != "" and (
                     . == ("infra/catalog/" + $node + ".yaml")
+                    or . == "infra/compose/edge/configs/Caddyfile.tmpl"
                     or . == "infra/k8s/base/scheduler-worker/configmap.yaml"
                     or test("^infra/k8s/overlays/[^/]+/" + $node + "/")
                     or test("^infra/k8s/argocd/[^/]*applicationset[^/]*\\.ya?ml$")

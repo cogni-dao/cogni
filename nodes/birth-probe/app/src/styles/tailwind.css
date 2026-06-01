@@ -1,0 +1,301 @@
+@import "tailwindcss";
+@custom-variant dark (&:is(.dark *));
+@import "tw-animate-css";
+@import "@cogni/node-ui-kit/tailwind-source.css";
+
+@theme inline {
+  /* Colors - map CSS vars to Tailwind color namespace */
+  --color-transparent: transparent;
+  --color-current: currentColor;
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  --color-danger: hsl(var(--color-danger));
+  --color-warning: hsl(var(--color-warning));
+  --color-success: hsl(var(--color-success));
+  --color-syntax-property: hsl(var(--syntax-property));
+  --color-syntax-operator: hsl(var(--syntax-operator));
+  --color-syntax-punctuation: hsl(var(--syntax-punctuation));
+  --color-syntax-delimiter: hsl(var(--syntax-delimiter));
+  --color-syntax-string: hsl(var(--syntax-string));
+  --color-syntax-keyword: hsl(var(--syntax-keyword));
+
+  /* Sidebar colors */
+  --color-sidebar: hsl(var(--sidebar));
+  --color-sidebar-foreground: hsl(var(--sidebar-foreground));
+  --color-sidebar-primary: hsl(var(--sidebar-primary));
+  --color-sidebar-primary-foreground: hsl(var(--sidebar-primary-foreground));
+  --color-sidebar-accent: hsl(var(--sidebar-accent));
+  --color-sidebar-accent-foreground: hsl(var(--sidebar-accent-foreground));
+  --color-sidebar-border: hsl(var(--sidebar-border));
+  --color-sidebar-ring: hsl(var(--sidebar-ring));
+
+  /* Font families */
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+  --font-display: var(--font-display);
+
+  /* Spacing - icon sizes */
+  --spacing-icon-sm: 1rem;
+  --spacing-icon-md: 1.25rem;
+  --spacing-icon-lg: 1.5rem;
+  --spacing-icon-xl: 2rem;
+  --spacing-icon-2xl: 3rem;
+  --spacing-icon-3xl: 4rem;
+  --spacing-icon-4xl: 5rem;
+
+  /* Container max-widths (generates max-w-container-* utilities) */
+  --max-width-container-sm: 42rem;
+  --max-width-container-md: 48rem;
+  --max-width-container-lg: 56rem;
+  --max-width-container-xl: 64rem;
+  --max-width-container-2xl: 72rem;
+  --max-width-container-3xl: 80rem;
+  --max-width-container-screen: 1280px;
+  --min-width-table-scroll: 800px;
+
+  /* Flex proportions (extends Tailwind's built-in flex-1) */
+  --flex-2: 2 1 0%;
+
+  /* Z-index layers */
+  --z-index-overlay: 50;
+  --z-index-modal: 100;
+
+  /* Composer-specific sizing */
+  --size-composer-icon-btn: 34px;
+  --size-composer-spacer: 42px;
+  --max-width-model-trigger: 120px;
+  --max-height-dialog: 80vh;
+  --max-height-dialog-mobile: 70vh;
+
+  /* Positioning - centering transforms */
+  --center-50: 50%;
+  --center-neg-50: -50%;
+}
+
+@utility min-w-measure {
+  min-width: min(100%, var(--measure));
+}
+
+@utility max-w-measure {
+  max-width: min(100%, var(--measure));
+}
+
+@layer base {
+  :root {
+    /* Single source of truth for font stacks */
+    --font-sans:
+      "Manrope", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+      Arial, sans-serif;
+    --font-mono:
+      ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+      "Courier New", monospace;
+    /* For now reuse sans; you can swap to a display font later */
+    --font-display: var(--font-sans);
+
+    /* Dropdown widths - used with w-(--dropdown-sm) syntax */
+    --dropdown-sm: 8rem;
+    --dropdown-md: 9rem;
+    --dropdown-lg: 10rem;
+    --dropdown-xl: 12rem;
+
+    --background: 0 0% 100%;
+    --foreground: 222.2 84% 4.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+    --popover: 210 40% 96.1%;
+    --popover-foreground: 215.4 16.3% 20%;
+    --primary: 222.2 47.4% 11.2%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 210 40% 96.1%;
+    --secondary-foreground: 222.2 47.4% 11.2%;
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 20%;
+    --accent: 210 40% 96.1%;
+    --accent-foreground: 222.2 47.4% 11.2%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: var(--color-red-800);
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: 222.2 84% 4.9%;
+    --chart-1: 220 70% 50%;
+    --chart-2: 160 60% 45%;
+    --chart-3: 30 80% 55%;
+    --chart-4: 280 65% 60%;
+    --chart-5: 340 75% 55%;
+
+    /* Code syntax highlighting palette (light mode) */
+    --syntax-property: 12 76% 61%; /* teal - object properties */
+    --syntax-operator: 173 58% 39%; /* blue - operators like + = */
+    --syntax-punctuation: 197 37% 24%; /* dark teal - (), [], {} */
+    --syntax-delimiter: 43 74% 66%; /* yellow - delimiters */
+    --syntax-string: 27 87% 67%; /* orange/peach - strings & variables */
+    --syntax-keyword: 10 50% 50%; /* red/brown - keywords */
+
+    /* Accent gradient stops (aligned with brand hue 217) */
+    --accent-from: 217 85% 50%;
+    --accent-to: 217 100% 70%;
+    --accent-glow: 217 95% 60%;
+
+    /* Status colors */
+    --color-danger: 0 84.2% 60.2%;
+    --color-warning: 43 74% 66%;
+    --color-success: 142 71% 45%;
+
+    /* Sidebar */
+    --sidebar: 0 0% 98%;
+    --sidebar-foreground: 222.2 84% 4.9%;
+    --sidebar-primary: 222.2 47.4% 11.2%;
+    --sidebar-primary-foreground: 210 40% 98%;
+    --sidebar-accent: 210 40% 96.1%;
+    --sidebar-accent-foreground: 222.2 47.4% 11.2%;
+    --sidebar-border: 214.3 31.8% 91.4%;
+    --sidebar-ring: 222.2 84% 4.9%;
+
+    --radius: 0.5rem;
+
+    --success: var(--color-emerald-500);
+
+    --success-foreground: var(--color-emerald-900);
+
+    --info: var(--color-violet-500);
+
+    --info-foreground: var(--color-violet-900);
+
+    --warning: var(--color-yellow-500);
+
+    --warning-foreground: var(--color-yellow-900);
+
+    --invert: var(--color-zinc-900);
+
+    --invert-foreground: var(--color-zinc-50);
+  }
+
+  .dark {
+    --background: 0 0% 0%;
+    --foreground: 210 40% 98%;
+    --card: 0 0% 0%;
+    --card-foreground: 210 40% 98%;
+    --popover: 217.2 32.6% 9%;
+    --popover-foreground: 215 20.2% 76.1%;
+    --primary: 217 71% 40%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 217.2 32.6% 9%;
+    --muted-foreground: 215 20.2% 76.1%;
+    --accent: 217.2 32.6% 17.5%;
+    --accent-foreground: 210 40% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: var(--color-red-600);
+    --border: 217.2 32.6% 17.5%;
+    --input: 217.2 32.6% 17.5%;
+    --ring: 217 71% 40%;
+    --chart-1: 220 70% 50%;
+    --chart-2: 160 60% 45%;
+    --chart-3: 30 80% 55%;
+    --chart-4: 280 65% 60%;
+    --chart-5: 340 75% 55%;
+
+    /* Code syntax highlighting palette (dark mode) */
+    --syntax-property: 276 100% 70%; /* teal - object properties */
+    --syntax-operator: 160 40% 60%; /* cyan - operators like + = */
+    --syntax-punctuation: 32 100% 95%; /* light orange - (), [], {} */
+    --syntax-delimiter: 280 80% 70%; /* purple - delimiters */
+    --syntax-string: 20 90% 80%; /* peach/orange - strings & variables */
+    --syntax-keyword: 220 100% 65%; /* blue - keywords */
+
+    /* Accent gradient stops (aligned with brand hue 217, darker for dark mode) */
+    --accent-from: 217 80% 45%;
+    --accent-to: 217 100% 60%;
+    --accent-glow: 217 90% 52%;
+
+    /* Sidebar */
+    --sidebar: 0 0% 3%;
+    --sidebar-foreground: 210 40% 98%;
+    --sidebar-primary: 217 71% 40%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 217.2 32.6% 17.5%;
+    --sidebar-accent-foreground: 210 40% 98%;
+    --sidebar-border: 217.2 32.6% 17.5%;
+    --sidebar-ring: 217 71% 40%;
+    --success: var(--color-emerald-500);
+    --success-foreground: var(--color-emerald-600);
+    --info: var(--color-violet-500);
+    --info-foreground: var(--color-violet-600);
+    --warning: var(--color-yellow-500);
+    --warning-foreground: var(--color-yellow-600);
+    --invert: var(--color-zinc-700);
+    --invert-foreground: var(--color-zinc-50);
+  }
+
+  /* Hero animation tokens (isolated, code.ts only) */
+  :root {
+    --hero-spacing-xs: 0.3125rem;
+    --hero-spacing-xl: 1.25rem;
+    --hero-spacing-rainbow: 8.4375rem;
+    --width-action-words: 11.6875rem;
+
+    /* App layout dimensions - used by route-specific layouts for viewport height calculations */
+    --app-header-h: 4rem; /* Header.tsx py-3 + border = ~4rem total height */
+  }
+
+  /* Apply base styles using CSS variables directly (Tailwind v4 compatibility) */
+  body {
+    font-family: var(--font-sans);
+    background: hsl(var(--background));
+    color: hsl(var(--foreground));
+  }
+
+  * {
+    border-color: hsl(var(--border));
+  }
+}
+
+/* @theme inline block deleted - tokens migrated to tailwind.config.ts */
+/* Keep hero animation vars above (isolated to code.ts) */
+
+@layer utilities {
+  /* Desktop-only wallet button fill - scoped to data-wallet-slot to avoid affecting mobile */
+  [data-wallet-slot="desktop"] button {
+    width: 100%;
+    height: 100%;
+  }
+
+  /* Accent gradient text utility - uses same tokens as button variant */
+  .text-gradient-accent {
+    background-image: linear-gradient(
+      135deg,
+      hsl(var(--accent-from)),
+      hsl(var(--accent-to))
+    );
+    background-clip: text;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    text-shadow: 0 0 20px hsl(var(--accent-glow) / 0.15);
+  }
+
+  /* Chat-specific viewport height (full viewport minus header) */
+  /* Used by src/app/(app)/chat/layout.tsx to create fixed-height container for pinned composer */
+  .chat-viewport {
+    height: calc(
+      100dvh - var(--app-header-h)
+    ); /* Full viewport minus header = available chat area */
+  }
+}

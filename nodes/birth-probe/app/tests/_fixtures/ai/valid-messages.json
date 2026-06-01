@@ -1,0 +1,22 @@
+{
+  "simple": [{ "role": "user", "content": "Hello" }],
+  "conversation": [
+    { "role": "user", "content": "Hello" },
+    { "role": "assistant", "content": "Hi there!" },
+    { "role": "user", "content": "How are you?" }
+  ],
+  "mixed_roles": [
+    { "role": "user", "content": "Hello" },
+    { "role": "system", "content": "You are helpful" },
+    { "role": "assistant", "content": "Hi there!" }
+  ],
+  "long_content": [
+    {
+      "role": "user",
+      "content": "This is a very long message that might need to be trimmed based on the conversation history limits. It contains enough characters to test our trimming logic properly and ensure multi-byte character handling works correctly."
+    }
+  ],
+  "multi_byte": [
+    { "role": "user", "content": "Hello 👋 World 🌍 with emojis ✨" }
+  ]
+}

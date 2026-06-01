@@ -35,6 +35,11 @@ spec:
         revision: deploy/production-canary
         files:
           - path: "infra/catalog/canary.yaml"
+    - git:
+        repoURL: https://github.com/cogni-dao/cogni.git
+        revision: deploy/production-birth-probe
+        files:
+          - path: "infra/catalog/birth-probe.yaml"
   template:
     metadata:
       name: "production-{{.name}}"

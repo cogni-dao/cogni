@@ -1,0 +1,25 @@
+{
+  "_comment": "Example successful OpenClaw --json output. Use for contract validation in tests. Actual values will differ per run.",
+  "payloads": [
+    {
+      "text": "hello from sandbox",
+      "mediaUrl": null
+    }
+  ],
+  "meta": {
+    "durationMs": 21944,
+    "agentMeta": {
+      "sessionId": "55a75000-4a18-4a3c-a44a-353d6003014c",
+      "provider": "cogni",
+      "model": "nemotron-nano-30b",
+      "usage": {
+        "input": 1940,
+        "output": 188,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "total": 2128
+      }
+    },
+    "aborted": false
+  }
+}

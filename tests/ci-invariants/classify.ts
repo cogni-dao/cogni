@@ -95,6 +95,7 @@ function isNodeWiring(path: string, node: string): boolean {
   }
   return (
     path === `infra/catalog/${node}.yaml` ||
+    path === "infra/compose/edge/configs/Caddyfile.tmpl" ||
     path === "infra/k8s/base/scheduler-worker/configmap.yaml"
   );
 }

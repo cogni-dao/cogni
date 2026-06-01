@@ -1,0 +1,15 @@
+name: birth-probe
+type: node
+port: 3500
+# task.5078 — edge NodePort (see operator.yaml). Must match overlay nodePort.
+node_port: 30500
+node_id: "a473f206-eb84-4ddc-8e0e-1cfe660d7b07"
+dockerfile: nodes/birth-probe/app/Dockerfile
+# bug.0344 — see infra/catalog/operator.yaml for why these fields exist.
+image_tag_suffix: "-birth-probe"
+migrator_tag_suffix: "-birth-probe-migrate"
+# task.0320 — per-env deploy branches (see operator.yaml).
+candidate_a_branch: deploy/candidate-a-birth-probe
+preview_branch: deploy/preview-birth-probe
+production_branch: deploy/production-birth-probe
+path_prefix: nodes/birth-probe/
