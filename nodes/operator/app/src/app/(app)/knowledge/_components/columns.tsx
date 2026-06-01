@@ -17,6 +17,7 @@ import { DataGridColumnHeader } from "@cogni/node-ui-kit/reui/data-grid/data-gri
 import { createColumnHelper } from "@tanstack/react-table";
 
 import { ConfidenceBar } from "./ConfidenceBar";
+import { CopyLinkButton } from "./CopyLinkButton";
 import { RelativeTime } from "./RelativeTime";
 
 const col = createColumnHelper<KnowledgeRow>();
@@ -49,16 +50,19 @@ export const knowledgeColumns = [
     cell: ({ row }) => {
       const { id, title, entityId } = row.original;
       return (
-        <div className="flex flex-col gap-0.5 py-0.5">
-          <span className="line-clamp-1 text-sm">{title}</span>
-          <div className="flex items-center gap-2 text-muted-foreground text-xs">
-            <span className="font-mono">{id}</span>
-            {entityId && (
-              <>
-                <span aria-hidden="true">·</span>
-                <span className="font-mono opacity-70">{entityId}</span>
-              </>
-            )}
+        <div className="flex items-center gap-2 py-0.5">
+          <CopyLinkButton path={`/knowledge/${id}`} label="Copy block link" />
+          <div className="flex min-w-0 flex-col gap-0.5">
+            <span className="line-clamp-1 text-sm">{title}</span>
+            <div className="flex items-center gap-2 text-muted-foreground text-xs">
+              <span className="font-mono">{id}</span>
+              {entityId && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span className="font-mono opacity-70">{entityId}</span>
+                </>
+              )}
+            </div>
           </div>
         </div>
       );

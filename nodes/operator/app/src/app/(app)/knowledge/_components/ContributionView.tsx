@@ -76,12 +76,13 @@ export function ContributionView({ id }: { readonly id: string }) {
             <h1 className="font-semibold text-xl leading-snug tracking-tight md:text-2xl">
               {query.data.message}
             </h1>
-            <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5">
               <span className="font-mono text-muted-foreground text-xs">
                 {query.data.contributionId}
               </span>
               <CopyLinkButton
                 path={`/knowledge/inbox/${query.data.contributionId}`}
+                label="Copy contribution link"
               />
             </div>
           </div>

@@ -53,11 +53,14 @@ export function KnowledgeDetail({
               <SheetTitle className="text-lg leading-snug">
                 {item.title}
               </SheetTitle>
-              <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5">
                 <span className="font-mono text-muted-foreground text-xs">
                   {item.id}
                 </span>
-                <CopyLinkButton path={`/knowledge/${item.id}`} />
+                <CopyLinkButton
+                  path={`/knowledge/${item.id}`}
+                  label="Copy block link"
+                />
               </div>
             </SheetHeader>
 

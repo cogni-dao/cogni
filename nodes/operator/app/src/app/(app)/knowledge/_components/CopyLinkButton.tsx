@@ -3,9 +3,11 @@
 
 /**
  * Module: `@app/(app)/knowledge/_components/CopyLinkButton`
- * Purpose: One-click copy of a knowledge block's absolute permalink — the single
- *   artifact humans hand to the AI and the AI hands back. Resolves the given path
- *   against the live origin so the copied URL is clickable anywhere.
+ * Purpose: Tiny icon-only affordance that copies a knowledge block's absolute
+ *   permalink — the single artifact humans hand to the AI and the AI hands back.
+ *   Resolves the given path against the live origin so the copied URL is clickable
+ *   anywhere. Hover tooltip via `title`; stops propagation so it can live inside a
+ *   clickable list row without triggering row navigation.
  * Scope: Pure presentation + clipboard write.
  * @internal
  */
@@ -13,9 +15,7 @@
 "use client";
 
 import { Check, Link2 } from "lucide-react";
-import { useState } from "react";
-
-import { Button } from "@/components";
+import { type MouseEvent, useState } from "react";
 
 export function CopyLinkButton({
   path,
@@ -27,7 +27,9 @@ export function CopyLinkButton({
 }) {
   const [copied, setCopied] = useState(false);
 
-  const onCopy = async () => {
+  const onCopy = async (e: MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
     const url =
       typeof window !== "undefined"
         ? new URL(path, window.location.origin).toString()
@@ -42,20 +44,18 @@ export function CopyLinkButton({
   };
 
   return (
-    <Button
+    <button
       type="button"
-      variant="outline"
-      size="sm"
-      className="h-8 shrink-0 gap-1.5"
       onClick={onCopy}
+      title={copied ? "Copied!" : label}
       aria-label={label}
+      className="inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
     >
       {copied ? (
         <Check className="size-3.5 text-success" />
       ) : (
         <Link2 className="size-3.5" />
       )}
-      {copied ? "Copied" : label}
-    </Button>
+    </button>
   );
 }

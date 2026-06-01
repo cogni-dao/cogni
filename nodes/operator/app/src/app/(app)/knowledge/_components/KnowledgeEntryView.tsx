@@ -65,11 +65,14 @@ export function KnowledgeEntryView({ id }: { readonly id: string }) {
             <h1 className="font-semibold text-xl leading-snug tracking-tight md:text-2xl">
               {query.data.title}
             </h1>
-            <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5">
               <span className="font-mono text-muted-foreground text-xs">
                 {query.data.id}
               </span>
-              <CopyLinkButton path={`/knowledge/${query.data.id}`} />
+              <CopyLinkButton
+                path={`/knowledge/${query.data.id}`}
+                label="Copy block link"
+              />
             </div>
           </div>
 

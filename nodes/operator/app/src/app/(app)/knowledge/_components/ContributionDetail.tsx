@@ -112,12 +112,13 @@ export function ContributionDetail({
               <SheetTitle className="text-lg leading-snug">
                 {item.message}
               </SheetTitle>
-              <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5">
                 <span className="font-mono text-muted-foreground text-xs">
                   {item.contributionId}
                 </span>
                 <CopyLinkButton
                   path={`/knowledge/inbox/${item.contributionId}`}
+                  label="Copy contribution link"
                 />
               </div>
             </SheetHeader>
