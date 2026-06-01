@@ -155,6 +155,7 @@ jobs:
                or . == "tests/unit/packages/repo-spec/accessors.test.ts"
                or ($node != "" and (
                     . == ("infra/catalog/" + $node + ".yaml")
+                    or . == "infra/k8s/base/scheduler-worker/configmap.yaml"
                     or test("^infra/k8s/overlays/[^/]+/" + $node + "/")
                     or test("^infra/k8s/argocd/[^/]*applicationset[^/]*\\.ya?ml$")
                   ))
@@ -266,6 +267,9 @@ jobs:
       # included), and catalog node_port == per-env overlay Service nodePort.
       - name: edge routing tests (task.5078)
         run: bash scripts/ci/tests/render-caddyfile.test.sh
+
+      - name: scheduler node routing tests
+        run: bash scripts/ci/render-scheduler-worker-endpoints.sh --check
 
       - name: Unit + contract coverage tests
         run: pnpm test:ci

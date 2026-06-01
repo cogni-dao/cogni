@@ -24,9 +24,6 @@ patches:
       - op: replace
         path: /data/IMAGE_DIGEST
         value: "candidate-b-placeholder-scheduler-worker"
-      - op: replace
-        path: /data/COGNI_NODE_ENDPOINTS
-        value: "canary=http://canary-node-app:3000,node-template=http://node-template-node-app:3000,89612f02-114d-460d-87a5-c2ab212ccf6f=http://canary-node-app:3000,b927a9dd-6132-4fc9-a51e-e3cee2568e3c=http://node-template-node-app:3000"
 
   # bug.0295: VM discovery via DNS (vm.cognidao.org → $VM_DNS_HOST by provision).
   # Convert base headless Services → ExternalName; delete EndpointSlices.

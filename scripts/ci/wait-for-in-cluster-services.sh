@@ -9,24 +9,27 @@
 # endpoints (old or new) and so do not verify a rollout actually completed.
 # See docs/spec/ci-cd.md → "Minimum Authoritative Validation".
 #
-# Two gates per service (bug.0331):
-#   1. kubectl rollout status — new ReplicaSet reached desired Available
-#   2. endpoint cutover wait  — Service's .subsets.addresses count
-#                                matches deployment desired replicas
-#                                (terminating-but-still-routable old pod
-#                                has been removed from EndpointSlice)
+# Two gates per routed node-app service (bug.0331):
+#   1. new-RS availability — updatedReplicas + availableReplicas reached desired
+#   2. endpoint cutover    — Service's .subsets.addresses count matches
+#                             deployment desired replicas (terminating-but-still-
+#                             routable old pod has left EndpointSlice)
 #
-# Without gate 2, downstream HTTPS probes can land on a Terminating pod
+# Without gate 2 for node-apps, downstream HTTPS probes can land on a Terminating pod
 # during the up-to-terminationGracePeriodSeconds window, causing
 # verify-buildsha to read the previous deploy's /version.buildSha and fail
 # the flight even though the deploy is correct.
+#
+# Worker-only services such as scheduler-worker still need gate 1, but do not
+# need endpoint cutover: their ClusterIP service exposes health only, not user
+# traffic, and old Temporal workers can take longer than 5m to drain cleanly.
 #
 # Env:
 #   VM_HOST                  (required) SSH target for the candidate VM
 #   DEPLOY_ENVIRONMENT       (required) candidate-a | preview | production
 #   SSH_KEY                  (optional, default ~/.ssh/deploy_key) SSH identity
 #   ROLLOUT_TIMEOUT          (optional, default 300) seconds per deployment
-#                             for kubectl rollout status
+#                             for new-RS availability
 #   ENDPOINT_CUTOVER_TIMEOUT (optional, default 60) seconds per service
 #                             for the post-rollout endpoint cutover wait.
 #                             60s comfortably covers the default 30s
@@ -59,14 +62,31 @@ SSH_OPTS=(
 )
 
 IFS=',' read -ra _NODES <<< "${PROMOTED_APPS:?PROMOTED_APPS required (CSV of node names)}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./lib/image-tags.sh
+. "$SCRIPT_DIR/lib/image-tags.sh"
+
+is_node_target() {
+  local candidate="$1" node
+  for node in "${NODE_TARGETS[@]}"; do
+    if [ "$candidate" = "$node" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 SERVICES=()
 for node in "${_NODES[@]}"; do
   case "$node" in
-    operator | poly | resy | node-template) SERVICES+=("${node}-node-app") ;;
     scheduler-worker) SERVICES+=("scheduler-worker") ;;
     *)
-      echo "::error::wait-for-in-cluster-services: unknown node '$node' in PROMOTED_APPS"
-      exit 1
+      if is_node_target "$node"; then
+        SERVICES+=("${node}-node-app")
+      else
+        echo "::error::wait-for-in-cluster-services: unknown node '$node' in PROMOTED_APPS"
+        exit 1
+      fi
       ;;
   esac
 done
@@ -123,11 +143,52 @@ wait_for_endpoint_cutover() {
   return 1
 }
 
+wait_for_new_rs_available() {
+  local svc="$1"
+  local deadline=$((SECONDS + ROLLOUT_TIMEOUT))
+  local observed generation desired updated available
+
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    read -r observed generation desired updated available < <(
+      ssh "${SSH_OPTS[@]}" "root@${VM_HOST}" \
+        "kubectl -n ${NS} get deploy ${svc} -o jsonpath='{.status.observedGeneration} {.metadata.generation} {.spec.replicas} {.status.updatedReplicas} {.status.availableReplicas}'" \
+        2>/dev/null || true
+    )
+
+    observed="${observed:-0}"
+    generation="${generation:-0}"
+    desired="${desired:-0}"
+    updated="${updated:-0}"
+    available="${available:-0}"
+
+    if [ "$desired" -le 0 ]; then
+      echo "  ⚠ ${svc}: desired replicas unset or zero — skipping new-RS availability wait"
+      return 0
+    fi
+
+    if [ "$observed" -ge "$generation" ] && [ "$updated" -ge "$desired" ] && [ "$available" -ge "$desired" ]; then
+      echo "  ✓ ${svc}: new ReplicaSet available (updated=${updated}, available=${available}, desired=${desired})"
+      return 0
+    fi
+
+    sleep 2
+  done
+
+  echo "  ✗ ${svc}: new ReplicaSet availability timed out after ${ROLLOUT_TIMEOUT}s — observed=${observed:-?}, generation=${generation:-?}, updated=${updated:-?}, available=${available:-?}, desired=${desired:-?}"
+  return 1
+}
+
 FAILED=0
 for svc in "${SERVICES[@]}"; do
-  echo "⏳ kubectl rollout status deployment/${svc} -n ${NS} (timeout ${ROLLOUT_TIMEOUT}s)"
-  ssh "${SSH_OPTS[@]}" "root@${VM_HOST}" \
-    "kubectl -n ${NS} rollout status deployment/${svc} --timeout=${ROLLOUT_TIMEOUT}s"
+  echo "⏳ wait for deployment/${svc} new ReplicaSet availability -n ${NS} (timeout ${ROLLOUT_TIMEOUT}s)"
+  if ! wait_for_new_rs_available "$svc"; then
+    FAILED=1
+    continue
+  fi
+  if [ "$svc" = "scheduler-worker" ]; then
+    echo "  ✓ ${svc}: skipping endpoint cutover wait (health-only worker Service)"
+    continue
+  fi
   if ! wait_for_endpoint_cutover "$svc"; then
     FAILED=1
   fi

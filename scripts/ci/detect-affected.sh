@@ -65,6 +65,7 @@ elif [ "$use_affected" = true ]; then
 fi
 
 selected_targets=()
+deferred_global_input=""
 
 has_target() {
   local needle="$1"
@@ -95,13 +96,36 @@ add_all_targets() {
   done
 }
 
+catalog_target_from_path() {
+  local path="$1"
+  local file target existing
+
+  case "$path" in
+    infra/catalog/*.yaml | infra/catalog/*.yml)
+      file="${path##*/}"
+      target="${file%.*}"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+
+  for existing in "${ALL_TARGETS[@]}"; do
+    if [ "$existing" = "$target" ]; then
+      printf '%s\n' "$target"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 is_global_build_input() {
   local path="$1"
 
   case "$path" in
     .dockerignore | \
     package.json | \
-    pnpm-lock.yaml | \
     pnpm-workspace.yaml | \
     turbo.json | \
     tsconfig.json | \
@@ -109,7 +133,6 @@ is_global_build_input() {
     tsconfig.app.json | \
     tsconfig.scripts.json | \
     config/* | \
-    infra/catalog/* | \
     scripts/ci/build-and-push-images.sh | \
     scripts/ci/detect-affected.sh | \
     scripts/ci/lib/image-tags.sh | \
@@ -131,6 +154,21 @@ else
 
   while IFS= read -r path; do
     [ -z "$path" ] && continue
+
+    # New node workspaces legitimately update the monorepo lockfile. Defer
+    # deciding whether that is global until node-owned paths have had a chance
+    # to select their target. Lockfile-only/dependency-update PRs still build
+    # all targets below.
+    if [ "$path" = "pnpm-lock.yaml" ]; then
+      deferred_global_input="$path"
+      continue
+    fi
+
+    if catalog_target=$(catalog_target_from_path "$path"); then
+      add_target "$catalog_target"
+      selection_reason="catalog-target:${path}"
+      continue
+    fi
 
     if is_global_build_input "$path"; then
       add_all_targets
@@ -161,6 +199,11 @@ else
         ;;
     esac
   done <<< "$changed_paths"
+
+  if [ -n "$deferred_global_input" ] && [ ${#selected_targets[@]} -eq 0 ]; then
+    add_all_targets
+    selection_reason="global-build-input:${deferred_global_input}"
+  fi
 fi
 
 ordered_targets=()

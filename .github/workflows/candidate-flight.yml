@@ -63,6 +63,13 @@ jobs:
           echo "image_tag=pr-${{ inputs.pr_number }}-${HEAD_SHA}" >> "$GITHUB_OUTPUT"
           echo "status_url=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> "$GITHUB_OUTPUT"
 
+      - name: Checkout app source
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          ref: ${{ steps.meta.outputs.head_sha }}
+          fetch-depth: 0
+          path: app-src
+
       - name: Report pending candidate-flight status
         env:
           GH_TOKEN: ${{ github.token }}
@@ -98,6 +105,7 @@ jobs:
 
       - name: Detect affected nodes
         id: detect
+        working-directory: app-src
         env:
           CHANGED_PATHS_FILE: ${{ steps.pr-files.outputs.changed_paths_file }}
         run: bash scripts/ci/detect-affected.sh
@@ -117,8 +125,10 @@ jobs:
       - name: Resolve PR image digests
         id: images
         if: steps.detect.outputs.has_targets == 'true'
+        working-directory: app-src
         env:
           IMAGE_TAG: ${{ steps.meta.outputs.image_tag }}
+          SOURCE_SHA: ${{ steps.meta.outputs.head_sha }}
           OUTPUT_FILE: ${{ runner.temp }}/resolved-pr-images.json
         run: bash scripts/ci/resolve-pr-build-images.sh
 
@@ -151,6 +161,12 @@ jobs:
       - name: Checkout workflow source (for AppSet YAML)
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
 
+      - name: Checkout app source (for AppSet YAML)
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          ref: ${{ needs.decide.outputs.head_sha }}
+          path: app-src
+
       - name: Setup SSH to candidate-a VM
         id: ssh-setup
         env:
@@ -175,7 +191,7 @@ jobs:
           SSH_OPTS: "-i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6"
         run: |
           set -euo pipefail
-          APPSET_FILE="infra/k8s/argocd/candidate-a-applicationset.yaml"
+          APPSET_FILE="app-src/infra/k8s/argocd/candidate-a-applicationset.yaml"
           # shellcheck disable=SC2086
           scp $SSH_OPTS "$APPSET_FILE" root@"$VM_HOST":/tmp/appset.yaml
           # shellcheck disable=SC2086
@@ -257,6 +273,12 @@ jobs:
             "deploy-branch/infra/k8s/overlays/candidate-a/${NODE}/"
           mkdir -p deploy-branch/infra/catalog
           cp "app-src/infra/catalog/${NODE}.yaml" "deploy-branch/infra/catalog/${NODE}.yaml"
+          if [ -d "app-src/nodes/${NODE}/k8s/external-secrets/candidate-a" ]; then
+            mkdir -p "deploy-branch/nodes/${NODE}/k8s/external-secrets/candidate-a"
+            rsync -a --delete \
+              "app-src/nodes/${NODE}/k8s/external-secrets/candidate-a/" \
+              "deploy-branch/nodes/${NODE}/k8s/external-secrets/candidate-a/"
+          fi
 
       - name: Promote this node's digest
         id: promote
@@ -266,6 +288,7 @@ jobs:
           OVERLAY_ENV: candidate-a
           NODE: ${{ matrix.node }}
           HEAD_SHA: ${{ needs.decide.outputs.head_sha }}
+          COGNI_CATALOG_ROOT: ../app-src/infra/catalog
         run: NODES="$NODE" bash ../ci-src/scripts/ci/promote-build-payload.sh
 
       - name: Restore non-promoted overlay digests (post-rsync self-heal)
@@ -416,12 +439,15 @@ jobs:
           PROMOTED_APPS: ${{ matrix.node }}
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          COGNI_CATALOG_ROOT: app-src/infra/catalog
         run: bash ci-src/scripts/ci/wait-for-argocd.sh
 
       - name: Wait for candidate readiness
         if: steps.ssh-setup.outputs.has_vm == 'true'
         env:
           DOMAIN: ${{ vars.DOMAIN }}
+          PROMOTED_APPS: ${{ matrix.node }}
+          COGNI_CATALOG_ROOT: app-src/infra/catalog
         run: bash ci-src/scripts/ci/wait-for-candidate-ready.sh
 
       - name: Wait for in-cluster services (per-node)
@@ -430,6 +456,7 @@ jobs:
           VM_HOST: ${{ secrets.VM_HOST }}
           DEPLOY_ENVIRONMENT: candidate-a
           PROMOTED_APPS: ${{ matrix.node }}
+          COGNI_CATALOG_ROOT: app-src/infra/catalog
         run: bash ci-src/scripts/ci/wait-for-in-cluster-services.sh
 
       - name: Run candidate smoke checks (per-node)
@@ -437,6 +464,7 @@ jobs:
         env:
           DOMAIN: ${{ vars.DOMAIN }}
           PROMOTED_APPS: ${{ matrix.node }}
+          COGNI_CATALOG_ROOT: app-src/infra/catalog
         run: bash ci-src/scripts/ci/smoke-candidate.sh
 
       - name: Verify buildSha on endpoint (per-node)
@@ -446,6 +474,7 @@ jobs:
           SOURCE_SHA_MAP: deploy-branch/.promote-state/source-sha-by-app.json
           EXPECTED_BUILDSHA: ${{ needs.decide.outputs.head_sha }}
           NODES: ${{ matrix.node }}
+          COGNI_CATALOG_ROOT: app-src/infra/catalog
         run: bash ci-src/scripts/ci/verify-buildsha.sh
 
   report-status:

@@ -434,7 +434,10 @@ function isNodeWiring(path: string, node: string): boolean {
       (file.endsWith(".yaml") || file.endsWith(".yml"))
     );
   }
-  return path === `infra/catalog/${node}.yaml`;
+  return (
+    path === `infra/catalog/${node}.yaml` ||
+    path === "infra/compose/edge/configs/Caddyfile.tmpl"
+  );
 }
 
 /** Top-level segment under `nodes/`, or null if the path is not under `nodes/<x>/`. */

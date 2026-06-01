@@ -20,6 +20,7 @@ if [ "${ARGOCD_SYNC_VERIFIED:-}" != "true" ] && [ "${ARGOCD_SYNC_VERIFIED:-}" !=
 fi
 
 DOMAIN=${DOMAIN:-}
+PROMOTED_APPS=${PROMOTED_APPS:-}
 MAX_ATTEMPTS=${MAX_ATTEMPTS:-30}
 SLEEP_SECONDS=${SLEEP_SECONDS:-15}
 
@@ -49,6 +50,17 @@ poll_ready() {
   return 1
 }
 
+should_check() {
+  local app="$1"
+  if [ -z "$PROMOTED_APPS" ]; then
+    return 0
+  fi
+  case ",${PROMOTED_APPS}," in
+    *",${app},"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # Catalog-driven: iterate NODE_TARGETS from infra/catalog/ and resolve each
 # host via host_for_node() (which honours the `is_primary_host` catalog
 # field). Adding a new node = one catalog edit, no script edit.
@@ -57,5 +69,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/lib/image-tags.sh"
 
 for node in "${NODE_TARGETS[@]}"; do
-  poll_ready "$node" "https://$(host_for_node "$node" "$DOMAIN")"
+  if should_check "$node"; then
+    poll_ready "$node" "https://$(host_for_node "$node" "$DOMAIN")"
+  else
+    echo "[skip] ${node} readyz — not in PROMOTED_APPS=${PROMOTED_APPS}"
+  fi
 done
