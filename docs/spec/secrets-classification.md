@@ -82,6 +82,55 @@ Path resolution lives in `openBaoPathFor()` in `scripts/lib/secrets-catalog-load
 
 **Custody (firm, not best-effort):** a shared `AUTH_SECRET` enables cross-node session forgery; a shared `PRIVY_SIGNING_KEY` **moves every node's money**. Payment/wallet/signing keys MUST be `appliesTo: payments`, `shared: false`, **never baseline** — OpenBao isolates read (per-node path + reader role); per-wallet owner-keys (#1411) isolate signing.
 
+### `authRole` — value-distinctness is NOT the security axis (DECIDED, migration in `proj.secrets-substrate`)
+
+> Decided direction from two independent security reviews (task.5094, 2026-05-31). The `shared:` flag and the `_shared` pseudo-service below are the **current** model; this section is the **target**. The `PRIVY_SIGNING_KEY` custody carve-out above is the first instance of this rule — `authRole` generalizes it instead of special-casing each secret.
+
+`shared:` welds **two orthogonal axes** into one flag, and the weld is a bug class:
+
+- **Value-distinctness** (what `shared:` _means_): do all nodes get the same bytes? Harmless on its own.
+- **Identity boundary** (what actually owns blast radius): is the token presented to a service as **proof of who is calling**, or does it merely **unlock a resource** the caller could already reach?
+
+A shared value is fine for the second axis (one upstream account) but a **lateral-movement multiplier** for the first: if `LITELLM_MASTER_KEY` is the proxy admin key in every pod, one compromised pod controls the proxy for every node. So add one dimension + one CI gate, mirroring `custody:signing`:
+
+```
+authRole: caller-identity   # token IS the caller's identity to an internal service  → shared: true FORBIDDEN (CI gate)
+authRole: resource-unlock   # token only unlocks a shared upstream resource           → shared: true ALLOWED
+```
+
+- **caller-identity** (`LITELLM_MASTER_KEY`, `SCHEDULER_API_TOKEN`, `BILLING_INGEST_TOKEN`, `GH_REVIEW_APP_PRIVATE_KEY_BASE64`): sharing is forbidden. Replace with a **per-node identity** — LiteLLM per-node virtual key, k8s projected-ServiceAccount JWT (`aud=scheduler|billing-ingest`, node derived from `sub`), or a per-node minted token + server-side `token→node` map. The master/signing key lives **only in the provisioner**, never the data plane.
+- **resource-unlock** (`OPENROUTER_API_KEY`, `TAVILY_API_KEY`, `POSTHOG_*`, `LANGFUSE_*`, `EVM_RPC_URL`, `PROMETHEUS_READ_*`): sharing legal. Prefer **egress-proxy injection** (pods never hold the value — route node→LiteLLM→OpenRouter) and **scoped per-node sub-keys** for attribution + per-node revoke on one account.
+
+### Owner-scoped paths, not a `_shared` bucket
+
+`_shared` has **no owner** — no service mints/rotates it, so the seed can only pass it through from `.env` and **silently drops** a missing one (the task.5094 bug). The target: every secret lives at **`cogni/<env>/<owner>/<KEY>`** where the owner is the service that mints + rotates it (`litellm/`, `scheduler-worker/`, `grafana/`); the **owner's provision step generates-once**; consumers receive an **explicit OpenBao read grant** on that path (policy templating). "Shared" becomes a **derived property** (N consumers granted read), not a storage location. This (a) eliminates the pass-through-from-`.env` silent-skip class, and (b) replaces today's over-broad dual-extract (every node reads **all** of `_shared/*`) with least-privilege per-path grants + a single rotation owner + scoped revocation.
+
+`NEXT_PUBLIC_*` (e.g. `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID`) ships to the browser — it is **public config, not a secret**. Keep it (per-node is fine); route it as config rather than guarding it in the secret substrate as if it were sensitive.
+
+### Migration tracker (task.5094, 2026-05-31)
+
+**What actually carries migration cost.** Only the **live `preview` + `production` GitHub Environment secrets** matter. Everything in candidate-a/-b (OpenBao + their GH secrets) is **agent-generated → disposable** — a re-provision regenerates it. And the owner+grant move re-homes values _inside_ OpenBao via provision; it **does not rename GH env keys** — so the structural migration forces **zero human re-entry**. A human only pastes a new value when we _deliberately_ split a shared upstream into per-node accounts (Phase 4/6, opt-in).
+
+**Source split of the live envs** (preview 77 / production 81 GH-env secrets):
+
+| Class                                                                                                                      | ~count | Migration cost                                                   |
+| -------------------------------------------------------------------------------------------------------------------------- | ------ | ---------------------------------------------------------------- |
+| Agent-generated (passwords, DSNs, `AUTH_SECRET`, `LITELLM_MASTER_KEY`, internal tokens, AEAD, SSH key)                     | ~25    | none — regenerate on provision                                   |
+| Human-pasted (OpenRouter, RPC URLs, Grafana/Prometheus/Langfuse/PostHog, GH App, OAuth, Privy, Dolt creds, PATs, `DOMAIN`) | ~48    | preserved in place — names stable; re-entry only on opt-in split |
+
+**Phases** (ranked risk-reduction-per-effort; MVP-gated):
+
+| Phase | Work                                                                                                      | Human touch            |
+| ----- | --------------------------------------------------------------------------------------------------------- | ---------------------- |
+| 1     | `authRole` field + Zod loader + CI gate forbidding `shared`/`_shared` on caller-identity                  | no                     |
+| 2     | Purge `_shared/` → owner paths + per-consumer read grants (provision generates-once)                      | no                     |
+| 3a    | `LITELLM_MASTER_KEY` → per-node LiteLLM virtual keys (minted at provision; master stays in provisioner)   | no                     |
+| 3b    | `SCHEDULER_API_TOKEN` / `BILLING_INGEST_TOKEN` → per-node token + `token→node` map, then projected-SA JWT | no                     |
+| 4/6   | Per-node GitHub App / PostHog project / OpenRouter sub-keys for true per-node attribution                 | yes — opt-in, deferred |
+| H     | Orphan cleanup — **DONE 2026-05-31** (below)                                                              | —                      |
+
+**Phase H (done).** 8 purged-prototype secrets — `POLY_PROTO_PRIVY_{APP_ID,APP_SECRET,SIGNING_KEY}`, `POLY_PROTO_WALLET_ADDRESS`, `POLY_CLOB_{API_KEY,API_SECRET,PASSPHRASE}`, `COPY_TRADE_TARGET_WALLETS` — deleted from the `candidate-a`, `preview`, and `production` GitHub environments. Confirmed no runtime consumer (`.env.local.example`, [`poly-tenant-and-collateral.md`](./poly-tenant-and-collateral.md), and `work/handoffs/task.0318.phase-{a,b3}` all mark them orphaned post-Stage-4). Removed a stale Privy _signing_ key from production.
+
 ### Co-consumed annotation (NOT a separate tier)
 
 When the same value is required by both a k8s app (A-tier) AND a Compose-infra container (B-tier) — e.g., `LITELLM_MASTER_KEY`, `BILLING_INGEST_TOKEN`, `APP_DB_*`, `METRICS_TOKEN`, `DOMAIN` — the script flags it with `coConsumed: true` on its routing entry. This is an **annotation, not a tier**: the primary tier remains whichever determines where the value originates from (usually A1 for application credentials, B for Compose-only).
