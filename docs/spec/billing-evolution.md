@@ -120,10 +120,10 @@ on-chain DAO ──formation──▶ repo-spec.yaml (node_id) ──image-tags.
 
 ### Environment Configuration
 
-| Variable                   | Purpose                                                                | Example                       |
-| -------------------------- | ---------------------------------------------------------------------- | ----------------------------- |
-| `USER_PRICE_MARKUP_FACTOR` | Profit markup multiplier                                               | `2.0`                         |
-| `COGNI_NODE_ENDPOINTS`     | Per-node ingest routing map (`slug=url,node_id=url`); repo-spec-derived | `operator=…,4ff8eac1…=…`       |
+| Variable                   | Purpose                                                                 | Example                       |
+| -------------------------- | ----------------------------------------------------------------------- | ----------------------------- |
+| `USER_PRICE_MARKUP_FACTOR` | Profit markup multiplier                                                | `2.0`                         |
+| `COGNI_NODE_ENDPOINTS`     | Per-node ingest routing map (`slug=url,node_id=url`); repo-spec-derived | `operator=…,4ff8eac1…=…`      |
 | `COGNI_DEFAULT_NODE_ID`    | Default node for unattributed spend (`is_primary_host` `node_id`)       | `4ff8eac1-…` (from repo-spec) |
 
 Protocol constant `CREDITS_PER_USD = 10_000_000` is NOT configurable (hardcoded).
@@ -136,18 +136,18 @@ Protocol constant `CREDITS_PER_USD = 10_000_000` is NOT configurable (hardcoded)
 
 Per-node app code lives under `nodes/<node>/app/src/` (hex layering; `<node>` ∈ operator/resy/node-template/canary). The shared proxy + catalog live at repo root.
 
-| File                                                              | Purpose                                                       |
-| ----------------------------------------------------------------- | ------------------------------------------------------------- |
-| `nodes/<node>/app/src/core/billing/pricing.ts`                    | Protocol constants, conversion helpers                        |
-| `nodes/<node>/app/src/features/ai/services/llmPricingPolicy.ts`   | Markup policy layer (reads USER_PRICE_MARKUP_FACTOR)          |
-| `nodes/<node>/app/src/shared/db/schema.billing.ts`                | `charge_receipts` table                                       |
-| `nodes/<node>/app/src/ports/accounts.port.ts`                     | `recordChargeReceipt` interface                               |
-| `nodes/<node>/app/src/adapters/server/accounts/drizzle.adapter.ts`| Atomic charge receipt + ledger debit                          |
-| `nodes/<node>/app/src/features/ai/services/completion.ts`         | Preflight gating + non-blocking post-call billing             |
-| `nodes/<node>/app/src/app/api/internal/billing/ingest/route.ts`   | Per-node ingest endpoint the proxy callback POSTs to          |
-| `infra/images/litellm/cogni_callbacks.py`                         | Shared-proxy callback that routes spend by `node_id`          |
-| `scripts/ci/lib/image-tags.sh`                                    | Renders `COGNI_NODE_ENDPOINTS` + `COGNI_DEFAULT_NODE_ID` from repo-spec |
-| `nodes/<node>/.cogni/repo-spec.yaml`                              | `node_id` identity authority (`REPO_SPEC_IS_IDENTITY_SSOT`)    |
+| File                                                               | Purpose                                                                 |
+| ------------------------------------------------------------------ | ----------------------------------------------------------------------- |
+| `nodes/<node>/app/src/core/billing/pricing.ts`                     | Protocol constants, conversion helpers                                  |
+| `nodes/<node>/app/src/features/ai/services/llmPricingPolicy.ts`    | Markup policy layer (reads USER_PRICE_MARKUP_FACTOR)                    |
+| `nodes/<node>/app/src/shared/db/schema.billing.ts`                 | `charge_receipts` table                                                 |
+| `nodes/<node>/app/src/ports/accounts.port.ts`                      | `recordChargeReceipt` interface                                         |
+| `nodes/<node>/app/src/adapters/server/accounts/drizzle.adapter.ts` | Atomic charge receipt + ledger debit                                    |
+| `nodes/<node>/app/src/features/ai/services/completion.ts`          | Preflight gating + non-blocking post-call billing                       |
+| `nodes/<node>/app/src/app/api/internal/billing/ingest/route.ts`    | Per-node ingest endpoint the proxy callback POSTs to                    |
+| `infra/images/litellm/cogni_callbacks.py`                          | Shared-proxy callback that routes spend by `node_id`                    |
+| `scripts/ci/lib/image-tags.sh`                                     | Renders `COGNI_NODE_ENDPOINTS` + `COGNI_DEFAULT_NODE_ID` from repo-spec |
+| `nodes/<node>/.cogni/repo-spec.yaml`                               | `node_id` identity authority (`REPO_SPEC_IS_IDENTITY_SSOT`)             |
 
 ## Acceptance Checks
 
