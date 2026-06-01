@@ -18,7 +18,12 @@ import type { PaymentFlowState } from "@cogni/node-core";
 import { usdCentsToCredits } from "@cogni/node-core";
 import { clientLogger, EVENT_NAMES } from "@cogni/node-shared";
 import { useCallback, useEffect, useReducer, useRef } from "react";
-import { useWaitForTransactionReceipt, useWriteContract } from "wagmi";
+import {
+  useAccount,
+  usePublicClient,
+  useWaitForTransactionReceipt,
+  useWriteContract,
+} from "wagmi";
 import { ERC20_ABI, getTransactionExplorerUrl } from "@/shared/web3";
 import { paymentsClient } from "../api/paymentsClient";
 import { formatPaymentError } from "../utils/formatPaymentError";
@@ -352,6 +357,8 @@ export function usePaymentFlow(
   const { data: receipt, error: receiptError } = useWaitForTransactionReceipt({
     hash: txHash,
   });
+  const { address } = useAccount();
+  const publicClient = usePublicClient();
 
   // Track callback invocation to avoid double-calls
   const successCalledRef = useRef(false);
@@ -599,6 +606,37 @@ export function usePaymentFlow(
       amountRaw,
     });
 
+    // Pre-simulate the transfer so a revert surfaces a precise reason. Smart
+    // wallets often abort with only "likely to fail"/"rejected", hiding the cause;
+    // simulateContract from the payer address yields the real revert (insufficient
+    // balance / gas / allowance / contract revert). On failure: log (ships to Loki
+    // via clientLogger) + fail the attempt — never trigger a doomed wallet write.
+    if (publicClient && address) {
+      try {
+        await publicClient.simulateContract({
+          account: address,
+          address: token as `0x${string}`,
+          abi: ERC20_ABI,
+          functionName: "transfer",
+          args: [to as `0x${string}`, BigInt(amountRaw)],
+        });
+      } catch (simError) {
+        if (attemptIdRef.current !== currentAttemptId) return;
+        const formatted = formatPaymentError(simError);
+        clientLogger.error(EVENT_NAMES.CLIENT_PAYMENTS_FLOW_SIMULATION_FAILED, {
+          attemptId,
+          chainId,
+          token,
+          to,
+          amountRaw,
+          payer: address,
+          reason: formatted.debug,
+        });
+        dispatch({ type: "INTENT_FAILED", error: formatted.userMessage });
+        return;
+      }
+    }
+
     // Trigger wallet write
     writeContract({
       chainId,
@@ -607,7 +645,7 @@ export function usePaymentFlow(
       functionName: "transfer",
       args: [to as `0x${string}`, BigInt(amountRaw)],
     });
-  }, [internalState.phase, amountUsdCents, writeContract]);
+  }, [internalState.phase, amountUsdCents, writeContract, publicClient, address]);
 
   const reset = useCallback(() => {
     // Invalidate any in-flight async operations from prior attempt

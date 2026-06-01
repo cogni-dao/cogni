@@ -56,6 +56,8 @@ export const EVENT_NAMES = {
   CLIENT_PAYMENTS_HTTP_ERROR: "client.payments.http_error",
   CLIENT_PAYMENTS_FLOW_WALLET_WRITE_ERROR:
     "client.payments.flow_wallet_write_error",
+  CLIENT_PAYMENTS_FLOW_SIMULATION_FAILED:
+    "client.payments.flow_simulation_failed",
   CLIENT_PAYMENTS_FLOW_RECEIPT_ERROR: "client.payments.flow_receipt_error",
 
   // Setup Domain - Server

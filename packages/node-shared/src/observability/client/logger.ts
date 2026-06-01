@@ -4,10 +4,10 @@
 /**
  * Module: `@shared/observability/client/logger`
  * Purpose: Client-side structured logging with event name registry enforcement.
- * Scope: Browser-safe logging with scrubbing and truncation. Does not send logs to backend.
- * Invariants: Drops forbidden keys; truncates large values; uses EVENT_NAMES registry.
- * Side-effects: IO (console)
- * Notes: MVP - no network shipping. Enforces same EventName registry as server.
+ * Scope: Browser-safe logging with scrubbing and truncation. Ships warn/error to the server so client failures are observable in Loki.
+ * Invariants: Drops forbidden keys; truncates large values; uses EVENT_NAMES registry. Shipping is best-effort and never throws.
+ * Side-effects: IO (console + fire-and-forget POST to /api/internal/observability/client-log for warn/error).
+ * Notes: warn/error are shipped (browser-only); debug/info stay console-only. Enforces same EventName registry as server.
  * Links: Uses ../events.ts registry; called by client components.
  * @public
  */
@@ -69,6 +69,32 @@ function safeJson(meta: Record<string, unknown> | undefined): string {
 }
 
 /**
+ * Best-effort ship of warn/error logs to the server so client-side failures
+ * (e.g. wallet tx reverts) land in Loki instead of dying in the browser console.
+ * Browser-only, fire-and-forget, never throws or recurses into the logger.
+ * @param metaStr - already-scrubbed JSON string from safeJson()
+ */
+function shipToServer(
+  level: "warn" | "error",
+  event: EventName,
+  metaStr: string
+): void {
+  if (typeof window === "undefined") return; // SSR / non-browser: no-op
+  try {
+    void fetch("/api/internal/observability/client-log", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: `{"level":"${level}","event":${JSON.stringify(event)},"meta":${metaStr}}`,
+      keepalive: true,
+    }).catch(() => {
+      // swallow — a failed log ship must never surface as an error
+    });
+  } catch {
+    // swallow — logging must never break the app
+  }
+}
+
+/**
  * Check if in development mode (runtime check for tests, build-time inline for production)
  */
 function isDev(): boolean {
@@ -114,6 +140,7 @@ export function warn(event: EventName, meta?: Record<string, unknown>): void {
   const metaStr = safeJson(meta);
   // biome-ignore lint/suspicious/noConsole: Client logger intentionally uses console
   console.warn(`[CLIENT] WARN ${event}`, metaStr);
+  shipToServer("warn", event, metaStr);
 }
 
 /**
@@ -126,4 +153,5 @@ export function error(event: EventName, meta?: Record<string, unknown>): void {
   const metaStr = safeJson(meta);
   // biome-ignore lint/suspicious/noConsole: Client logger intentionally uses console
   console.error(`[CLIENT] ERROR ${event}`, metaStr);
+  shipToServer("error", event, metaStr);
 }
