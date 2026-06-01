@@ -78,11 +78,22 @@ function isRideAlong(path: string): boolean {
  */
 function isNodeWiring(path: string, node: string): boolean {
   if (node === "") return false;
-  return (
-    path === `infra/catalog/${node}.yaml` ||
-    new RegExp(`^infra/k8s/overlays/[^/]+/${node}/`).test(path) ||
-    /^infra\/k8s\/argocd\/[^/]*applicationset[^/]*\.ya?ml$/.test(path)
-  );
+  const overlayPrefix = "infra/k8s/overlays/";
+  const argocdPrefix = "infra/k8s/argocd/";
+  if (path.startsWith(overlayPrefix)) {
+    const rest = path.slice(overlayPrefix.length);
+    const slash = rest.indexOf("/");
+    return slash > 0 && rest.slice(slash + 1).startsWith(`${node}/`);
+  }
+  if (path.startsWith(argocdPrefix)) {
+    const file = path.slice(argocdPrefix.length);
+    return (
+      !file.includes("/") &&
+      file.includes("applicationset") &&
+      (file.endsWith(".yaml") || file.endsWith(".yml"))
+    );
+  }
+  return path === `infra/catalog/${node}.yaml`;
 }
 
 /**
