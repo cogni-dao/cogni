@@ -105,7 +105,31 @@ authRole: resource-unlock   # token only unlocks a shared upstream resource     
 
 `_shared` has **no owner** — no service mints/rotates it, so the seed can only pass it through from `.env` and **silently drops** a missing one (the task.5094 bug). The target: every secret lives at **`cogni/<env>/<owner>/<KEY>`** where the owner is the service that mints + rotates it (`litellm/`, `scheduler-worker/`, `grafana/`); the **owner's provision step generates-once**; consumers receive an **explicit OpenBao read grant** on that path (policy templating). "Shared" becomes a **derived property** (N consumers granted read), not a storage location. This (a) eliminates the pass-through-from-`.env` silent-skip class, and (b) replaces today's over-broad dual-extract (every node reads **all** of `_shared/*`) with least-privilege per-path grants + a single rotation owner + scoped revocation.
 
-`NEXT_PUBLIC_*` (e.g. `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID`) ships to the browser — **not a secret**; remove from the substrate entirely.
+`NEXT_PUBLIC_*` (e.g. `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID`) ships to the browser — it is **public config, not a secret**. Keep it (per-node is fine); route it as config rather than guarding it in the secret substrate as if it were sensitive.
+
+### Migration tracker (task.5094, 2026-05-31)
+
+**What actually carries migration cost.** Only the **live `preview` + `production` GitHub Environment secrets** matter. Everything in candidate-a/-b (OpenBao + their GH secrets) is **agent-generated → disposable** — a re-provision regenerates it. And the owner+grant move re-homes values _inside_ OpenBao via provision; it **does not rename GH env keys** — so the structural migration forces **zero human re-entry**. A human only pastes a new value when we _deliberately_ split a shared upstream into per-node accounts (Phase 4/6, opt-in).
+
+**Source split of the live envs** (preview 77 / production 81 GH-env secrets):
+
+| Class                                                                                                                      | ~count | Migration cost                                                   |
+| -------------------------------------------------------------------------------------------------------------------------- | ------ | ---------------------------------------------------------------- |
+| Agent-generated (passwords, DSNs, `AUTH_SECRET`, `LITELLM_MASTER_KEY`, internal tokens, AEAD, SSH key)                     | ~25    | none — regenerate on provision                                   |
+| Human-pasted (OpenRouter, RPC URLs, Grafana/Prometheus/Langfuse/PostHog, GH App, OAuth, Privy, Dolt creds, PATs, `DOMAIN`) | ~48    | preserved in place — names stable; re-entry only on opt-in split |
+
+**Phases** (ranked risk-reduction-per-effort; MVP-gated):
+
+| Phase | Work                                                                                                      | Human touch            |
+| ----- | --------------------------------------------------------------------------------------------------------- | ---------------------- |
+| 1     | `authRole` field + Zod loader + CI gate forbidding `shared`/`_shared` on caller-identity                  | no                     |
+| 2     | Purge `_shared/` → owner paths + per-consumer read grants (provision generates-once)                      | no                     |
+| 3a    | `LITELLM_MASTER_KEY` → per-node LiteLLM virtual keys (minted at provision; master stays in provisioner)   | no                     |
+| 3b    | `SCHEDULER_API_TOKEN` / `BILLING_INGEST_TOKEN` → per-node token + `token→node` map, then projected-SA JWT | no                     |
+| 4/6   | Per-node GitHub App / PostHog project / OpenRouter sub-keys for true per-node attribution                 | yes — opt-in, deferred |
+| H     | Orphan cleanup — **DONE 2026-05-31** (below)                                                              | —                      |
+
+**Phase H (done).** 8 purged-prototype secrets — `POLY_PROTO_PRIVY_{APP_ID,APP_SECRET,SIGNING_KEY}`, `POLY_PROTO_WALLET_ADDRESS`, `POLY_CLOB_{API_KEY,API_SECRET,PASSPHRASE}`, `COPY_TRADE_TARGET_WALLETS` — deleted from the `candidate-a`, `preview`, and `production` GitHub environments. Confirmed no runtime consumer (`.env.local.example`, [`poly-tenant-and-collateral.md`](./poly-tenant-and-collateral.md), and `work/handoffs/task.0318.phase-{a,b3}` all mark them orphaned post-Stage-4). Removed a stale Privy _signing_ key from production.
 
 ### Co-consumed annotation (NOT a separate tier)
 
