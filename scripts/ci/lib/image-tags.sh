@@ -119,7 +119,7 @@ infra_content_hash() {
 }
 
 # Full GHCR tag for a type:infra image: <image>:<target>-<contenthash>
-# (e.g. ghcr.io/cogni-dao/cogni-template:litellm-b6e4e942cb23). Single source of
+# (e.g. ghcr.io/cogni-dao/cogni-template:litellm-<hash>). Single source of
 # truth for both the CI build (build-and-push) and the deploy (deploy-infra).
 infra_image_tag() {
   local target="$1"

@@ -676,12 +676,10 @@ for _edge_kv in ${EDGE_ENV_LINES}; do
 done
 unset _edge_kv
 
-# LiteLLM image is built from infra/images/litellm/ and pushed to GHCR.
-# Content-hash tag so it only changes when Dockerfile or callbacks change.
-# To rebuild: docker buildx build --platform linux/amd64 --push \
-#   --tag ghcr.io/cogni-dao/cogni-template:litellm-$(find infra/images/litellm -type f ! -name 'AGENTS.md' | sort | xargs cat | shasum -a 256 | cut -c1-12) \
-#   infra/images/litellm/
-LITELLM_IMAGE=${LITELLM_IMAGE:-ghcr.io/cogni-dao/cogni-template:litellm-b6e4e942cb23}
+# LiteLLM is a type:infra catalog target — built + pushed by CI like every other
+# image (content-hash tagged: litellm-<hash>). The runner resolves the tag via
+# image-tags.sh:infra_image_tag and passes it in; no manual docker build, no pin.
+LITELLM_IMAGE=${LITELLM_IMAGE:?LITELLM_IMAGE required (resolved on the runner from infra/catalog/litellm.yaml content-hash)}
 
 # Runtime env (full config — compose validates all vars even for services we don't start)
 RUNTIME_ENV=/opt/cogni-template-runtime/.env

@@ -149,6 +149,11 @@ services:
       - "autoheal=false"
 
   litellm:
+    # candidate-a/preview/prod: deploy-infra.sh resolves LITELLM_IMAGE from the
+    # catalog content-hash (image-tags.sh:infra_image_tag) and writes it to the
+    # runtime env, so this fallback is dead there. Local dev (no deploy-infra)
+    # can't compute the hash — this pin is the dev convenience default only.
+    # TODO(dev): a pnpm preflight could export LITELLM_IMAGE=$(infra_image_tag litellm).
     image: ${LITELLM_IMAGE:-ghcr.io/cogni-dao/cogni-template:litellm-b6e4e942cb23}
     restart: unless-stopped
     labels:
