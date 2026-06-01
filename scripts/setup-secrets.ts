@@ -80,7 +80,7 @@ function generateSSHKey(env: string): string {
 
 const REPO = "Cogni-DAO/cogni";
 /** Deploy environments. Secrets are set per-env, not repo-level. */
-const ENVIRONMENTS = ["candidate-a", "preview", "production"] as const;
+const ENVIRONMENTS = ["candidate-a", "candidate-b", "preview", "production"] as const;
 const LEGACY_ENV_ALIASES: Record<string, (typeof ENVIRONMENTS)[number]> = {
   canary: "candidate-a",
 };

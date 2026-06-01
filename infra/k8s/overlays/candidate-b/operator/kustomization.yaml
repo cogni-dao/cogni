@@ -1,0 +1,189 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2025 Cogni-DAO
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: cogni-candidate-b
+
+resources:
+  - ../../../base/node-app
+
+namePrefix: operator-
+
+images:
+  - name: ghcr.io/cogni-dao/cogni-template
+    newName: ghcr.io/cogni-dao/cogni-template
+    digest: "sha256:0250cc2e6c01a80172d19b00583b65c50990b27849ca16815e75d2d899511b53"
+
+patches:
+  - target:
+      kind: ConfigMap
+      name: node-app-config
+    patch: |
+      - op: replace
+        path: /data/NODE_NAME
+        value: "operator"
+      - op: replace
+        path: /data/TEMPORAL_NAMESPACE
+        value: "cogni-candidate-b"
+      - op: replace
+        path: /data/LITELLM_BASE_URL
+        value: "http://operator-litellm-external:4000"
+      - op: replace
+        path: /data/TEMPORAL_ADDRESS
+        value: "operator-temporal-external:7233"
+      - op: replace
+        path: /data/REDIS_URL
+        value: "redis://operator-redis-external:6379"
+      - op: add
+        path: /data/NEXTAUTH_URL
+        value: "https://candidate-b.cognidao.org"
+  - target:
+      kind: Service
+      name: node-app
+    patch: |
+      - op: add
+        path: /spec/ports/0/nodePort
+        value: 30000
+      - op: add
+        path: /spec/selector/app.kubernetes.io~1instance
+        value: "operator"
+  - target:
+      kind: Deployment
+      name: node-app
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/envFrom/1/secretRef/name
+        value: "operator-node-app-secrets"
+      - op: replace
+        path: /spec/template/spec/initContainers/0/envFrom/1/secretRef/name
+        value: "operator-node-app-secrets"
+      - op: replace
+        path: /spec/template/spec/initContainers/0/envFrom/1/secretRef/name
+        value: "operator-node-app-secrets"
+      - op: add
+        path: /spec/selector/matchLabels/app.kubernetes.io~1instance
+        value: "operator"
+      - op: add
+        path: /spec/template/metadata/labels/app.kubernetes.io~1instance
+        value: "operator"
+
+  # task.0423: Doltgres knowledge-plane migrator runs as a second initContainer
+  # on the operator Deployment. DATABASE_URL maps to DOLTGRES_URL (separate from
+  # the Postgres DATABASE_URL the main container + first initContainer use).
+  - target:
+      kind: Deployment
+      name: node-app
+    patch: |
+      - op: add
+        path: /spec/template/spec/initContainers/-
+        value:
+          name: migrate-doltgres
+          image: ghcr.io/cogni-dao/cogni-template:placeholder
+          command:
+            - /bin/sh
+            - -c
+            - exec node /app/nodes/$(NODE_NAME)/app/migrate-doltgres.mjs /app/nodes/$(NODE_NAME)/app/doltgres-migrations
+          envFrom:
+            - configMapRef:
+                name: operator-node-app-config
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: operator-node-app-secrets
+                  key: DOLTGRES_URL
+          resources:
+            requests:
+              memory: "384Mi"
+              cpu: "200m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+  # bug.0295: VM discovery via DNS (vm.cognidao.org).
+  # Convert base headless Services → ExternalName; delete EndpointSlices.
+  - target: { kind: Service, name: postgres-external }
+    patch: |
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: postgres-external
+      spec:
+        type: ExternalName
+        externalName: vm.cognidao.org
+        clusterIP: null
+  - target: { kind: Service, name: temporal-external }
+    patch: |
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: temporal-external
+      spec:
+        type: ExternalName
+        externalName: vm.cognidao.org
+        clusterIP: null
+  - target: { kind: Service, name: litellm-external }
+    patch: |
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: litellm-external
+      spec:
+        type: ExternalName
+        externalName: vm.cognidao.org
+        clusterIP: null
+  - target: { kind: Service, name: redis-external }
+    patch: |
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: redis-external
+      spec:
+        type: ExternalName
+        externalName: vm.cognidao.org
+        clusterIP: null
+  - target: { kind: Service, name: doltgres-external }
+    patch: |
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: doltgres-external
+      spec:
+        type: ExternalName
+        externalName: vm.cognidao.org
+        clusterIP: null
+  - target: { kind: EndpointSlice, name: postgres-external-1 }
+    patch: |
+      $patch: delete
+      apiVersion: discovery.k8s.io/v1
+      kind: EndpointSlice
+      metadata:
+        name: postgres-external-1
+  - target: { kind: EndpointSlice, name: temporal-external-1 }
+    patch: |
+      $patch: delete
+      apiVersion: discovery.k8s.io/v1
+      kind: EndpointSlice
+      metadata:
+        name: temporal-external-1
+  - target: { kind: EndpointSlice, name: litellm-external-1 }
+    patch: |
+      $patch: delete
+      apiVersion: discovery.k8s.io/v1
+      kind: EndpointSlice
+      metadata:
+        name: litellm-external-1
+  - target: { kind: EndpointSlice, name: redis-external-1 }
+    patch: |
+      $patch: delete
+      apiVersion: discovery.k8s.io/v1
+      kind: EndpointSlice
+      metadata:
+        name: redis-external-1
+  - target: { kind: EndpointSlice, name: doltgres-external-1 }
+    patch: |
+      $patch: delete
+      apiVersion: discovery.k8s.io/v1
+      kind: EndpointSlice
+      metadata:
+        name: doltgres-external-1

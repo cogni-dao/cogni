@@ -1,0 +1,58 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2025 Cogni-DAO
+#
+# Spec: work/items/task.0372 (per-node lane isolation, GR-1 four-generator shape).
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: cogni-candidate-b
+  namespace: argocd
+spec:
+  goTemplate: true
+  generators:
+    - git:
+        repoURL: https://github.com/cogni-dao/cogni.git
+        revision: deploy/candidate-b-operator
+        files:
+          - path: "infra/catalog/operator.yaml"
+    - git:
+        repoURL: https://github.com/cogni-dao/cogni.git
+        revision: deploy/candidate-b-resy
+        files:
+          - path: "infra/catalog/resy.yaml"
+    - git:
+        repoURL: https://github.com/cogni-dao/cogni.git
+        revision: deploy/candidate-b-scheduler-worker
+        files:
+          - path: "infra/catalog/scheduler-worker.yaml"
+    - git:
+        repoURL: https://github.com/cogni-dao/cogni.git
+        revision: deploy/candidate-b-node-template
+        files:
+          - path: "infra/catalog/node-template.yaml"
+    - git:
+        repoURL: https://github.com/cogni-dao/cogni.git
+        revision: deploy/candidate-b-canary
+        files:
+          - path: "infra/catalog/canary.yaml"
+  template:
+    metadata:
+      name: "candidate-b-{{.name}}"
+      namespace: argocd
+      finalizers:
+        - resources-finalizer.argocd.argoproj.io
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/cogni-dao/cogni.git
+        targetRevision: "deploy/candidate-b-{{.name}}"
+        path: "infra/k8s/overlays/candidate-b/{{.name}}"
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: cogni-candidate-b
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true
