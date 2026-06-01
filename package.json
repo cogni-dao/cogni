@@ -91,6 +91,7 @@
     "db:setup:nodes": "pnpm db:provision:nodes && pnpm db:migrate:nodes && pnpm db:seed && pnpm db:seed-money:nodes && pnpm db:seed:doltgres:nodes",
     "db:setup": "pnpm db:provision && pnpm db:migrate && pnpm db:seed && pnpm db:seed:doltgres",
     "dev:setup": "pnpm db:setup && pnpm db:setup:test && pnpm governance:schedules:sync",
+    "bootstrap": "bash scripts/setup/bootstrap.sh",
     "setup:secrets": "tsx scripts/setup-secrets.ts",
     "secrets:set": "bash scripts/secrets/set-secret.sh",
     "db:migrate:test:resy": "dotenv -e .env.test -- bash -c 'DATABASE_URL=$DATABASE_URL_RESY tsx node_modules/drizzle-kit/bin.cjs migrate --config=nodes/resy/drizzle.config.ts'",

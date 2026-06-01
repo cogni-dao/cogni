@@ -1,0 +1,515 @@
+name: Provision Env (substrate + VM)
+
+# Crawl row 1 of proj.agentic-fork-bootstrap — eliminates the laptop-shell
+# anti-pattern from the cold-start path. Replaces `pnpm bootstrap` for
+# fresh-fork provisioning: the GHA runner now owns the tofu+kubectl+bao
+# session that previously lived on the operator's laptop.
+#
+# Trust boundary: runner is ephemeral + audit-logged + scoped to env secrets.
+# The operator's laptop never holds CHERRY_AUTH_TOKEN, root-token, or k3s
+# kubeconfig past the artifact-download window.
+#
+# Custody contract (init artifacts):
+#   1. encryption_passphrase is an operator-typed workflow input — never
+#      stored in env secrets, never echoed (::add-mask:: applied).
+#   2. After bootstrap, `.local/<env>-openbao-init.json`, `<env>-vm-key`,
+#      and `<env>-kubeconfig.yaml` are openssl-AES-256-CBC encrypted with
+#      the passphrase and uploaded as a 1-day-retention GHA artifact.
+#   3. always() cleanup shreds plaintext + ciphertext from the runner FS.
+#   4. Operator downloads the artifact, decrypts, moves to a password
+#      manager, deletes the artifact from the run page.
+#
+# v-next swap point: when a parent OpenBao exists (the operator's `cogni`
+# deployment, or env N>1 within a multi-env fork), replace the encrypt+
+# upload steps with `hashicorp/vault-action` pushes. Same workflow shape,
+# different sink. Tracked as a Walk-tier row in proj.agentic-fork-bootstrap.
+
+on:
+  workflow_dispatch:
+    inputs:
+      env:
+        description: "Target environment"
+        required: true
+        type: choice
+        options:
+          - candidate-a
+          - candidate-b
+          - preview
+          - production
+      encryption_passphrase:
+        description: "Operator-typed passphrase for the init artifact (NEVER stored)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+  actions: read
+
+concurrency:
+  # One provision at a time per env. Re-runs of an in-progress provision
+  # would race tofu-state + Cloudflare DNS edits. cancel-in-progress: false
+  # because a half-applied tofu state should NOT be killed mid-flight.
+  group: provision-env-${{ inputs.env }}
+  cancel-in-progress: false
+
+jobs:
+  provision:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.env }}
+    timeout-minutes: 60
+    env:
+      DEPLOY_ENV: ${{ inputs.env }}
+      # Non-secret fork config — GH repo variable, plaintext, fork-owned.
+      # The hub defaults to cognidao.org; forks should set FORK_DOMAIN_ROOT.
+      FORK_DOMAIN_ROOT: ${{ vars.FORK_DOMAIN_ROOT || 'cognidao.org' }}
+      # Operator minting authority — surfaced from GH env secrets. Loaded
+      # into bootstrap.sh via the .env.bootstrap file the next step writes.
+      CHERRY_AUTH_TOKEN: ${{ secrets.CHERRY_AUTH_TOKEN }}
+      CHERRY_PROJECT_ID: ${{ secrets.CHERRY_PROJECT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+      # GitHub reserves the GITHUB_* secret-name prefix (HTTP 422 on set). The
+      # operator-facing secret names are GH_ADMIN_*; we re-export here as the
+      # GITHUB_ADMIN_* env vars bootstrap.sh consumes internally. See
+      # docs/runbooks/fork-quickstart.md §6.2.
+      GITHUB_ADMIN_PAT: ${{ secrets.GH_ADMIN_PAT }}
+      GITHUB_ADMIN_USERNAME: ${{ secrets.GH_ADMIN_USERNAME }}
+      # Optional observability auto-mint — ONE Cloud admin token in, derives
+      # BOTH read (glsa_ child SA) AND write (glc_ Loki/Prom push) tokens.
+      # Phase 5e:
+      #   1. Cloud API → lookup org + stack + region + push endpoints
+      #   2. Cloud API → mint a transient stack SA (Editor) for Step 3 auth
+      #   3. Stack instance API → find-or-create Viewer child SA + glsa_ read
+      #   4. Cloud access-policy API → find-or-create push policy (4 scopes)
+      #   5. Cloud token API → mint glc_ push token (Loki + Prom remote write)
+      # All 8 derived fields land at cogni/<env>/_shared (Invariant 1) +
+      # encrypted artifact bundle. The glc_ admin root lives ONLY in the
+      # runner env: never written to OpenBao, never reaches the VM.
+      # Skip = scorecard row 5 stays 🟡; bootstrap still completes.
+      GRAFANA_CLOUD_ADMIN_TOKEN: ${{ secrets.GH_GRAFANA_CLOUD_ADMIN_TOKEN }}
+      GRAFANA_URL: ${{ secrets.GH_GRAFANA_URL }}
+      # Org slug for the Cloud API (the segment in https://grafana.com/orgs/<slug>).
+      # Required when the admin token is set — needed for org-scoped endpoints
+      # (/api/orgs/<slug>, /api/orgs/<slug>/instances). The list endpoint
+      # /api/orgs requires `orgs:read` which is NOT in the recommended scope
+      # set; using the org-specific path works with the 4 documented scopes.
+      GRAFANA_CLOUD_ORG_SLUG: ${{ secrets.GH_GRAFANA_ORG_SLUG }}
+      # `bootstrap.sh` and `provision-env-vm.sh` both run non-interactively
+      # on the runner; the editor-open branch in bootstrap.sh already
+      # detects non-TTY and skips (scripts/setup/bootstrap.sh line 61).
+      CI: "true"
+    steps:
+      # ─────────────────────────────────────────────────────────────
+      # Pre-flight — abort BEFORE any side effect if inputs are wrong.
+      # No half-provisioned VMs, no orphaned artifacts.
+      # ─────────────────────────────────────────────────────────────
+      - name: Mask passphrase in logs
+        run: |
+          # ::add-mask:: prevents any subsequent echo of the passphrase from
+          # appearing in run logs. Must happen before checkout / any step that
+          # might surface ${{ inputs.* }} into command output.
+          echo "::add-mask::${{ inputs.encryption_passphrase }}"
+
+      - name: Pre-flight — passphrase non-empty
+        env:
+          ENCRYPTION_PASSPHRASE: ${{ inputs.encryption_passphrase }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${ENCRYPTION_PASSPHRASE}" ]]; then
+            echo "::error::encryption_passphrase input is empty. Aborting BEFORE any provisioning."
+            echo "::error::No unencrypted credentials will ever leave this runner — re-trigger with a passphrase."
+            exit 2
+          fi
+          # Minimum-strength sanity (not cryptographic — just rejects empties + typos).
+          if [[ ${#ENCRYPTION_PASSPHRASE} -lt 12 ]]; then
+            echo "::error::encryption_passphrase shorter than 12 chars. Use at least 16 random chars."
+            exit 2
+          fi
+          echo "passphrase pre-flight ok"
+
+      - name: Checkout
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+
+      - name: Pre-flight — Grafana Cloud admin token (optional)
+        env:
+          GRAFANA_CLOUD_ADMIN_TOKEN: ${{ secrets.GH_GRAFANA_CLOUD_ADMIN_TOKEN }}
+          GRAFANA_URL: ${{ secrets.GH_GRAFANA_URL }}
+          GRAFANA_CLOUD_ORG_SLUG: ${{ secrets.GH_GRAFANA_ORG_SLUG }}
+        run: |
+          set -euo pipefail
+          # Fail BEFORE Cherry VM spend if the operator pasted the wrong token
+          # type (glsa_* / glb_* vs glc_*) or a token Grafana rejects.
+          # Probes grafana.com/api/orgs/<slug> (the ORG-SPECIFIC endpoint, not
+          # the list endpoint /api/orgs — the latter requires `orgs:read` which
+          # is NOT in the recommended 4-scope set, so a correctly-configured
+          # access-policy token 403s on it). Verified against access-policy
+          # token with scopes [stacks:read, stack-service-accounts:write,
+          # accesspolicies:read, accesspolicies:write]:
+          #   GET /api/orgs                       → 403 (needs orgs:read)
+          #   GET /api/orgs/<slug>                → 200 ✓
+          #   GET /api/orgs/<slug>/instances      → 200 ✓
+          # The stack-level /api/serviceaccounts endpoint is glsa_-only; not
+          # used here.
+          # Optional path: all unset → log + continue (Phase 5e graceful skip).
+          if [[ -z "${GRAFANA_CLOUD_ADMIN_TOKEN}" && -z "${GRAFANA_URL}" ]]; then
+            echo "::notice::Grafana auto-mint disabled — GH_GRAFANA_CLOUD_ADMIN_TOKEN/GH_GRAFANA_URL unset. Scorecard row 5 will stay 🟡."
+            exit 0
+          fi
+          if [[ -z "${GRAFANA_CLOUD_ADMIN_TOKEN}" || -z "${GRAFANA_URL}" ]]; then
+            echo "::error::Set BOTH GH_GRAFANA_CLOUD_ADMIN_TOKEN and GH_GRAFANA_URL, or neither. See Step 6.2 of docs/runbooks/fork-quickstart.md."
+            exit 2
+          fi
+          # Auto-derive org slug from URL host when GH_GRAFANA_ORG_SLUG unset.
+          # Grafana Cloud stack URLs are typically https://<slug>.grafana.net
+          # where <slug> matches the org slug for single-stack orgs (common
+          # case). Multi-stack orgs or custom domains: set GH_GRAFANA_ORG_SLUG
+          # explicitly to disambiguate.
+          if [[ -z "${GRAFANA_CLOUD_ORG_SLUG}" ]]; then
+            HOST="${GRAFANA_URL#https://}"; HOST="${HOST%%/*}"
+            GRAFANA_CLOUD_ORG_SLUG="${HOST%.grafana.net}"
+            echo "::notice::GH_GRAFANA_ORG_SLUG unset — derived '${GRAFANA_CLOUD_ORG_SLUG}' from GRAFANA_URL host. Set GH_GRAFANA_ORG_SLUG explicitly if your org slug differs from your stack subdomain."
+          fi
+          MINT_URL="https://grafana.com/orgs/${GRAFANA_CLOUD_ORG_SLUG}/access-policies"
+          SCOPES="stacks:read, stack-service-accounts:write, accesspolicies:read, accesspolicies:write (use 'Add scope' dropdown — these are NOT the default data-plane checkboxes)"
+          WALKTHROUGH="Full walkthrough: docs/runbooks/fork-quickstart.md §6.2 rows 8-10."
+          case "$GRAFANA_CLOUD_ADMIN_TOKEN" in
+            glsa_*)
+              echo "::error::GH_GRAFANA_CLOUD_ADMIN_TOKEN is a glsa_* stack service-account token."
+              echo "::error::Phase 5e now derives BOTH read + write paths from ONE Cloud admin token (glc_*) — glsa_ cannot mint Cloud access-policies."
+              echo "::error::Mint a glc_ token at $MINT_URL with scopes: $SCOPES"
+              echo "::error::$WALKTHROUGH"
+              exit 2
+              ;;
+            glb_*)
+              echo "::error::GH_GRAFANA_CLOUD_ADMIN_TOKEN is a glb_* bearer token — not supported."
+              echo "::error::Mint a glc_ token at $MINT_URL with scopes: $SCOPES"
+              echo "::error::$WALKTHROUGH"
+              exit 2
+              ;;
+            glc_*) : ;;
+            *)
+              echo "::error::GH_GRAFANA_CLOUD_ADMIN_TOKEN does not start with glc_ — refusing."
+              echo "::error::Mint at $MINT_URL with scopes: $SCOPES"
+              echo "::error::$WALKTHROUGH"
+              exit 2
+              ;;
+          esac
+          PROBE_URL="https://grafana.com/api/orgs/${GRAFANA_CLOUD_ORG_SLUG}"
+          CODE=$(curl -sS -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer $GRAFANA_CLOUD_ADMIN_TOKEN" \
+            "$PROBE_URL" || echo "000")
+          case "$CODE" in
+            200) echo "Grafana Cloud preflight ok — $PROBE_URL responded 200" ;;
+            401)
+              echo "::error::Grafana Cloud rejected the admin token (HTTP 401 from $PROBE_URL)."
+              echo "::error::The token was revoked. Re-mint at $MINT_URL and re-set GH_GRAFANA_CLOUD_ADMIN_TOKEN."
+              exit 2
+              ;;
+            403)
+              echo "::error::Cloud admin token missing scopes (HTTP 403 from $PROBE_URL)."
+              echo "::error::Recreate the access-policy at $MINT_URL with scopes: $SCOPES"
+              echo "::error::$WALKTHROUGH"
+              exit 2
+              ;;
+            404)
+              echo "::error::Org slug \"${GRAFANA_CLOUD_ORG_SLUG}\" not found (HTTP 404 from $PROBE_URL)."
+              echo "::error::Check the slug in your Grafana Cloud URL: https://grafana.com/orgs/<slug>. Update GH_GRAFANA_ORG_SLUG."
+              exit 2
+              ;;
+            000)
+              echo "::error::Could not reach grafana.com — runner network issue."
+              exit 2
+              ;;
+            *)
+              echo "::error::Grafana Cloud preflight got HTTP $CODE from $PROBE_URL. Bootstrap aborted before VM spend."
+              exit 2
+              ;;
+          esac
+
+      - name: Pre-flight — FORK_DOMAIN_ROOT resolved
+        # FORK_DOMAIN_ROOT is the Cloudflare-zone declaration. The hub uses
+        # cognidao.org by default; forks should set a repo variable.
+        run: |
+          set -euo pipefail
+          if [[ -z "${FORK_DOMAIN_ROOT:-}" ]]; then
+            echo "::error::FORK_DOMAIN_ROOT is not set."
+            echo "::error::Set it with your Cloudflare zone name:"
+            echo "::error::  gh variable set FORK_DOMAIN_ROOT --repo <owner>/<repo> --body example.com"
+            echo "::error::Then re-run this workflow."
+            exit 2
+          fi
+          echo "FORK_DOMAIN_ROOT = $FORK_DOMAIN_ROOT"
+
+      - uses: pnpm/action-setup@c5ba7f7862a0f64c1b1a05fbac13e0b8e86ba08c # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - name: Install runner prereqs (tofu, age, yq)
+        run: |
+          set -euo pipefail
+          # Tools NOT shipped with ubuntu-latest by default: tofu, age, yq.
+          # Each has a canonical installer wrapper in scripts/bootstrap/install/
+          # that's idempotent (no-op if already present) and platform-aware.
+          # ssh-keygen + openssl + jq + gh ARE pre-installed on ubuntu-latest.
+          bash scripts/bootstrap/install/install-tofu.sh
+          bash scripts/bootstrap/install/install-age.sh
+          bash scripts/bootstrap/install/install-yq.sh
+          # Fail fast if anything is still missing (runner-image regression
+          # or installer bug).
+          for t in tofu age age-keygen ssh-keygen openssl jq yq gh; do
+            command -v "$t" >/dev/null || { echo "::error::missing prereq: $t"; exit 2; }
+          done
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Write .env.bootstrap from GH env secrets
+        # bootstrap.sh sources .env.bootstrap and chains into provision-env-vm.sh.
+        # Writing the file (vs setting bare env vars) keeps the existing
+        # gitignore + chmod 600 + .env.bootstrap-exists semantics intact, so
+        # bootstrap.sh's two-phase template-or-execute gate behaves identically
+        # to the laptop path.
+        run: |
+          set -euo pipefail
+          umask 077
+          cat > .env.bootstrap <<EOF
+          CHERRY_AUTH_TOKEN=${CHERRY_AUTH_TOKEN}
+          CHERRY_PROJECT_ID=${CHERRY_PROJECT_ID}
+          CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN}
+          CLOUDFLARE_ZONE_ID=${CLOUDFLARE_ZONE_ID}
+          GITHUB_ADMIN_PAT=${GITHUB_ADMIN_PAT}
+          GITHUB_ADMIN_USERNAME=${GITHUB_ADMIN_USERNAME}
+          DEPLOY_ENV=${DEPLOY_ENV}
+          EOF
+          chmod 600 .env.bootstrap
+          # Validate non-empty (don't echo values).
+          for k in CHERRY_AUTH_TOKEN CHERRY_PROJECT_ID CLOUDFLARE_API_TOKEN \
+                   CLOUDFLARE_ZONE_ID GITHUB_ADMIN_PAT GITHUB_ADMIN_USERNAME; do
+            grep -qE "^${k}=." .env.bootstrap || {
+              echo "::error::secret ${k} is not set on env '${DEPLOY_ENV}'. Set it under repo Settings → Environments → ${DEPLOY_ENV} → Add secret."
+              exit 2
+            }
+          done
+          echo ".env.bootstrap written (${DEPLOY_ENV}, 6 keys populated)"
+
+      - name: Restore prior init-artifact keys (re-run path)
+        # Pre-condition for Phase 2's reuse-check + the tofu import in
+        # provision-env-vm.sh — restoring the prior keys keeps both no-diff.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ENCRYPTION_PASSPHRASE: ${{ inputs.encryption_passphrase }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p .local
+          artifact_name="${DEPLOY_ENV}-init-artifacts"
+          artifact_json=$(gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=${artifact_name}&per_page=1" \
+            -q '.artifacts[0] | select(.expired == false) // empty') || {
+            echo "::error::gh api failed listing artifacts (network, auth, or missing actions:read)"
+            exit 1
+          }
+          if [[ -z "$artifact_json" ]]; then
+            echo "::notice::no usable prior ${artifact_name} (missing or expired) — fresh-key path"
+            exit 0
+          fi
+          run_id=$(jq -r '.workflow_run.id' <<<"$artifact_json")
+          download_dir=$(mktemp -d)
+          if ! gh run download "$run_id" --repo "${GITHUB_REPOSITORY}" \
+              --name "$artifact_name" --dir "$download_dir"; then
+            echo "::error::gh run download failed for run ${run_id} (artifact ${artifact_name})"
+            exit 1
+          fi
+          restored=0
+          for base in ${DEPLOY_ENV}-vm-key ${DEPLOY_ENV}-vm-age-key ${DEPLOY_ENV}-openbao-init.json; do
+            enc="${download_dir}/${base}.enc"
+            [[ -r "$enc" ]] || { echo "::notice::no ${base}.enc in prior artifact (pre-fix run?)"; continue; }
+            # stderr left attached so disk-full / corrupted-ciphertext failures
+            # surface as themselves rather than masquerading as a passphrase mismatch.
+            if ! openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 \
+                -in "$enc" -out ".local/${base}" \
+                -pass env:ENCRYPTION_PASSPHRASE; then
+              echo "::error::decrypt failed for ${base} — most commonly an encryption_passphrase mismatch with the prior run."
+              echo "::error::Re-run with the original passphrase, OR destroy the existing Cherry SSH key + VM for env '${DEPLOY_ENV}' in the portal and re-run with a new passphrase."
+              exit 2
+            fi
+            chmod 600 ".local/${base}"
+            restored=$((restored + 1))
+            echo "restored .local/${base}"
+          done
+          rm -rf "$download_dir"
+          echo "restored ${restored} prior key(s) from run ${run_id}; Phase 2 will reuse them"
+
+      - name: Configure git identity (for any internal commits)
+        # bootstrap.sh's downstream phases (e.g. seed deploy/* branches in
+        # the fork) make commits via gh api. Some git subcommands need a
+        # local identity. Set a bot identity so any such path doesn't
+        # crash on a runner.
+        run: |
+          git config user.name  "cogni-provision-bot"
+          git config user.email "ops+provision@cognidao.org"
+
+      - name: Run bootstrap.sh (substrate + VM + DNS + deploy dispatch)
+        # bootstrap.sh delegates to provision-env-vm.sh after validation.
+        # The complete chain: validate inputs → generate agent secrets →
+        # write .env.<env> → GitHub env secrets → tofu apply (Cherry VM) →
+        # Cloudflare DNS → Phase 5b (OpenBao + ESO + auto-init + auto-unseal
+        # + role bind) → Phase 5c (seed cogni/<env>/* paths) → Phase 6
+        # (ExternalSecret manifests) → Phase 7 (ApplicationSets) → smoke /readyz.
+        # Init artifacts land at .local/<env>-{openbao-init.json,vm-key,kubeconfig.yaml}.
+        run: |
+          set -euo pipefail
+          bash scripts/setup/bootstrap.sh
+          echo "bootstrap.sh exited 0"
+
+      # ─────────────────────────────────────────────────────────────
+      # Init-artifact custody — encrypt at the boundary, upload, summary.
+      # GHA storage encryption is defense-in-depth, NOT the primary control.
+      # ─────────────────────────────────────────────────────────────
+      - name: Encrypt init artifacts (openssl AES-256-CBC + PBKDF2)
+        env:
+          ENCRYPTION_PASSPHRASE: ${{ inputs.encryption_passphrase }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p .local/encrypted
+          encrypted_count=0
+          for src in .local/${DEPLOY_ENV}-openbao-init.json \
+                     .local/${DEPLOY_ENV}-vm-key \
+                     .local/${DEPLOY_ENV}-vm-age-key \
+                     .local/${DEPLOY_ENV}-kubeconfig.yaml \
+                     .local/${DEPLOY_ENV}-grafana-sa-token.json; do
+            [[ -r "$src" ]] || { echo "::warning::missing source: $src (provision may not have produced it)"; continue; }
+            base=$(basename "$src")
+            out=".local/encrypted/${base}.enc"
+            openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt \
+              -in "$src" -out "$out" \
+              -pass env:ENCRYPTION_PASSPHRASE
+            chmod 600 "$out"
+            encrypted_count=$((encrypted_count + 1))
+            # Shred plaintext immediately — narrower than always() cleanup.
+            shred -uz "$src" 2>/dev/null || rm -f "$src"
+          done
+          if [[ $encrypted_count -eq 0 ]]; then
+            echo "::error::no init artifacts encrypted — provision likely failed before producing them"
+            exit 1
+          fi
+          ls -la .local/encrypted/
+          echo "encrypted ${encrypted_count} artifact(s)"
+
+      - name: Upload encrypted init artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ inputs.env }}-init-artifacts
+          path: .local/encrypted/*.enc
+          # retention-days: 1 is the GHA documented minimum. The contract is
+          # "operator downloads immediately and deletes from the run page";
+          # retention is the safety net.
+          retention-days: 1
+          if-no-files-found: error
+
+      # ─────────────────────────────────────────────────────────────
+      # Scorecard — substrate state captured as the workflow's last act.
+      # Eliminates manual validator typing per the handoff.
+      # ─────────────────────────────────────────────────────────────
+      - name: Emit substrate scorecard
+        if: always()
+        env:
+          # bootstrap.sh fetches the kubeconfig to .local/<env>-kubeconfig.yaml
+          # in Phase 4a. The encrypt step above shreds the plaintext, so the
+          # scorecard runs BEFORE encrypt in a follow-up — for now, decrypt
+          # locally via the same passphrase and `kubectl` against it. Keeping
+          # this step at the tail-end as a best-effort surface; if encryption
+          # already shredded the kubeconfig the step is a no-op + logs why.
+          ENCRYPTION_PASSPHRASE: ${{ inputs.encryption_passphrase }}
+        run: |
+          set -uo pipefail
+          KCFG_ENC=".local/encrypted/${DEPLOY_ENV}-kubeconfig.yaml.enc"
+          if [[ ! -r "$KCFG_ENC" ]]; then
+            echo "::warning::no encrypted kubeconfig found — skipping scorecard"
+            exit 0
+          fi
+          KCFG_TMP=$(mktemp)
+          trap 'shred -uz "$KCFG_TMP" 2>/dev/null || rm -f "$KCFG_TMP"' EXIT
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 \
+            -in "$KCFG_ENC" -out "$KCFG_TMP" \
+            -pass env:ENCRYPTION_PASSPHRASE
+          export KUBECONFIG="$KCFG_TMP"
+          {
+            echo "## Substrate scorecard — ${DEPLOY_ENV}"
+            echo ""
+            echo "### Argo Applications"
+            echo '```'
+            kubectl -n argocd get application openbao external-secrets \
+              -o 'custom-columns=NAME:.metadata.name,SYNC:.status.sync.status,HEALTH:.status.health.status' \
+              2>&1 || echo "(query failed)"
+            echo '```'
+            echo ""
+            echo "### ClusterSecretStore"
+            echo '```'
+            # JSONPath uses ?(@.type=="Ready") — single-quote the whole
+            # `custom-columns` value so bash doesn't try to parse the `()` as
+            # a subshell. Validator run 26545120228 syntax-erred without this.
+            kubectl get clustersecretstore openbao-backend \
+              -o 'custom-columns=NAME:.metadata.name,READY:.status.conditions[?(@.type=="Ready")].status' \
+              2>&1 || echo "(query failed)"
+            echo '```'
+            echo ""
+            echo "### ExternalSecrets (cogni-${DEPLOY_ENV} namespace)"
+            echo '```'
+            kubectl -n "cogni-${DEPLOY_ENV}" get externalsecrets \
+              -o 'custom-columns=NAME:.metadata.name,READY:.status.conditions[?(@.type=="Ready")].status,STORE:.spec.secretStoreRef.name' \
+              2>&1 || echo "(query failed)"
+            echo '```'
+            echo ""
+            echo "### Init artifacts"
+            echo ""
+            echo 'Download from this run page (above), then:'
+            echo '```'
+            echo "openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 \\"
+            echo "  -in ${DEPLOY_ENV}-openbao-init.json.enc \\"
+            echo "  -out ${DEPLOY_ENV}-openbao-init.json \\"
+            echo "  -pass pass:'<the passphrase you typed at dispatch>'"
+            echo '```'
+            echo ""
+            echo 'Move the decrypted files to your password manager + DELETE the artifact from the run page (retention is a safety net, not the contract).'
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      # The scorecard lives in the workflow run summary (GITHUB_STEP_SUMMARY
+      # above). No PR-comment side-channel: forkers' first run has no PR;
+      # validators dispatch cold against their own forks; auto-posting to a
+      # hardcoded PR number is future-fragile (one fork's PR #46 is another
+      # fork's PR #1, or no PR at all). If you want the scorecard on a PR,
+      # `gh pr comment <N> --body-file <(gh run view <RUN_ID> --log)` from
+      # any laptop after the fact.
+
+      # ─────────────────────────────────────────────────────────────
+      # Cleanup — always() runs regardless of upstream success/fail.
+      # Don't rely on runner ephemerality alone (Derek's refinement).
+      # ─────────────────────────────────────────────────────────────
+      - name: Cleanup runner FS (shred plaintext + ciphertext)
+        if: always()
+        run: |
+          set +e
+          # Plaintext (should already be shredded by encrypt step)
+          for f in .local/${DEPLOY_ENV}-openbao-init.json \
+                   .local/${DEPLOY_ENV}-vm-key \
+                   .local/${DEPLOY_ENV}-vm-age-key \
+                   .local/${DEPLOY_ENV}-kubeconfig.yaml \
+                   .env.bootstrap .env.${DEPLOY_ENV} .env.operator; do
+            [[ -e "$f" ]] && shred -uz "$f" 2>/dev/null
+          done
+          # Ciphertext (uploaded; safe to remove from runner FS)
+          shred -uz .local/encrypted/*.enc 2>/dev/null
+          rm -rf .local/encrypted
+          # tofu state is the only thing left in the workspace that touches
+          # Cherry credentials — it stays in tfstate on the runner, which is
+          # ephemeral. Future PR moves tfstate to a remote backend (S3-equiv).
+          echo "cleanup complete"

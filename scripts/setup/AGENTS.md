@@ -9,8 +9,7 @@
 
 ## Purpose
 
-**Current:** Design docs and planning for future setup automation.  
-**Future:** Will contain TypeScript scripts to automate repository setup for contributors and fork owners.
+Setup automation for contributor, fork, and deployment bootstrap paths.
 
 ## Pointers
 
@@ -22,29 +21,37 @@
 ```json
 {
   "layer": "scripts",
-  "may_import": [],
-  "must_not_import": ["*"]
+  "may_import": ["scripts"],
+  "must_not_import": [
+    "app",
+    "features",
+    "core",
+    "adapters/server",
+    "adapters/worker",
+    "adapters/cli"
+  ]
 }
 ```
 
 ## Public Surface
 
-- **Exports:** none (no implementation yet)
-- **CLI (if any):** Planned: `pnpm setup local|infra|github|dao`
-- **Env/Config keys:** none currently
-- **Files considered API:** none (planning phase)
+- **Exports:** none
+- **CLI (if any):** `pnpm bootstrap`, `bash scripts/setup/provision-env-vm.sh <preview|production|candidate-*> [--yes]`
+- **Env/Config keys:** `DEPLOY_ENV`, `FORK_DOMAIN_ROOT`, `CHERRY_AUTH_TOKEN`, `CHERRY_PROJECT_ID`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ZONE_ID`, `GITHUB_ADMIN_PAT`, `GITHUB_ADMIN_USERNAME`
+- **Files considered API:** `bootstrap.sh`, `provision-env-vm.sh`, `lib/fork-identity.sh`, `lib/cogni-deployment-identity.sh`, `lib/reconcile-secrets.sh`
 
 ## Responsibilities
 
-- This directory **does**: Contains design docs for future setup automation
-- This directory **does not**: Contain any working automation scripts yet
+- This directory **does**: Automate bootstrap/provisioning, derive deployment identity, reconcile bootstrap secrets
+- This directory **does not**: Contain runtime app code or business logic
 
 ## Usage
 
 **Current:**
 
 ```bash
-# See README.md for current manual setup steps
+pnpm bootstrap
+bash scripts/setup/provision-env-vm.sh candidate-b --yes
 ```
 
 **Planned:**
@@ -59,23 +66,21 @@ pnpm setup dao       # DAO contract deployment
 ## Standards
 
 - Follow existing script conventions in `scripts/bootstrap/install/*`
-- Use TypeScript for complex logic, bash for simple wrappers
+- Use bash for provisioning wrappers that need direct CLI orchestration
 - All operations must be idempotent (safe to re-run)
 - Clear error messages with actionable next steps
 
 ## Dependencies
 
-- **Current:** None
-- **Future:** Will use existing `infra/provision/cherry/base/` Terraform configs
+- **Internal:** `infra/provision/cherry/base/`, `infra/k8s/`, `scripts/ci/lib/image-tags.sh`
+- **External:** GitHub CLI, OpenTofu, Cloudflare API, Cherry Servers API, OpenBao/ESO CLIs through cluster bootstrap
 
 ## Change Protocol
 
 - Update this file when actual implementation begins
-- Move status from "planning" to "draft" when first scripts are created
-- Bump **Last reviewed** date when implementation starts
+- Keep workflow wrappers and local bootstrap paths behaviorally aligned
+- Bump **Last reviewed** date when implementation changes
 
 ## Notes
 
-- Currently contains only design documentation
-- Implementation help wanted - see README.md for contribution info
-- Priority: `pnpm setup local` command for contributors first
+- `bootstrap.sh` is the human/runner entry point; `provision-env-vm.sh` owns VM, DNS, OpenBao/ESO, Argo, and readyz proof.
