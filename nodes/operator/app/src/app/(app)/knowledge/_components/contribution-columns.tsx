@@ -19,6 +19,7 @@ import { GitMerge, X } from "lucide-react";
 import type { ReactElement } from "react";
 import { Button } from "@/components";
 
+import { CopyLinkButton } from "./CopyLinkButton";
 import { RelativeTime } from "./RelativeTime";
 
 const col = createColumnHelper<ContributionRecord>();
@@ -73,11 +74,17 @@ export function buildContributionColumns(deps: ContributionColumnsDeps) {
         // remain visible in ContributionDetail for audit.
         const { contributionId, message } = row.original;
         return (
-          <div className="flex flex-col gap-0.5 py-0.5">
-            <span className="line-clamp-1 text-sm">{message}</span>
-            <span className="line-clamp-1 font-mono text-muted-foreground text-xs">
-              {contributionId}
-            </span>
+          <div className="flex items-center gap-2 py-0.5">
+            <CopyLinkButton
+              path={`/knowledge/inbox/${contributionId}`}
+              label="Copy contribution link"
+            />
+            <div className="flex min-w-0 flex-col gap-0.5">
+              <span className="line-clamp-1 text-sm">{message}</span>
+              <span className="line-clamp-1 font-mono text-muted-foreground text-xs">
+                {contributionId}
+              </span>
+            </div>
           </div>
         );
       },
