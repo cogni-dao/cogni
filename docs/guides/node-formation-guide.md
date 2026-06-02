@@ -119,6 +119,16 @@ After formation completes successfully:
 
 **Solution:** The server uses strict receipt decoders — missing events cause errors. Ensure both transactions confirmed successfully on-chain before the verify call.
 
+## Known Limitation — Payment Activation Is Per-(Node × Env)
+
+Formation (above) is a one-time on-chain act. **Payment _activation_ — the operator wallet (Privy custody) + Split contract + OpenRouter top-up config — is a separate step that must be repeated for every `(node × environment)`.** A node's `candidate`, `preview`, and `production` deployments each need their own wallet / Split / credentials, because a test environment must not hold production custody keys.
+
+Today only **production** is typically activated. Consequence (`bug.5087`): in `candidate`/`preview`, the operator wallet is `undefined` (`nodes/operator/app/src/bootstrap/container.ts` requires `PRIVY_APP_*` + `operator_wallet` + `payments_in` + `EVM_RPC_URL`), so the **outbound** half of a payment — Split distribute + OpenRouter top-up — **silently skips**. Inbound (USDC received → credits minted) still works; the received USDC stays in the Split and OpenRouter is never funded. The skip now emits `payments.settlement_skipped` so it is observable.
+
+**Implication for testing:** the full payment loop **cannot be validated end-to-end on candidate-a** as configured — there is no wallet there to perform the outbound. Validating the money loop requires either (a) a per-env test payment stack (test Privy app + test Split + test OpenRouter key), or (b) validation on production.
+
+**Status: deferred.** Aligning payment activation with the per-env deploy path (env-aware, driven from the node-spec + wizard) is future work; for now, the outbound is validated on production. See `bug.5087`.
+
 ## Related
 
 - [Node Formation Spec](../spec/node-formation.md)
