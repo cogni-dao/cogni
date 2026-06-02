@@ -36,8 +36,12 @@ export function renderRepoSpec(input: RenderRepoSpecInput): string {
   const scopeId = deriveScopeId(input.nodeId);
   const daoLines = [
     input.daoContract ? `  dao_contract: "${input.daoContract}"` : undefined,
-    input.pluginContract ? `  plugin_contract: "${input.pluginContract}"` : undefined,
-    input.signalContract ? `  signal_contract: "${input.signalContract}"` : undefined,
+    input.pluginContract
+      ? `  plugin_contract: "${input.pluginContract}"`
+      : undefined,
+    input.signalContract
+      ? `  signal_contract: "${input.signalContract}"`
+      : undefined,
     `  chain_id: "${input.chainId}"`,
   ]
     .filter((l): l is string => l !== undefined)

@@ -28,7 +28,8 @@ export function nextFreeNodePort(catalogNodePorts: readonly number[]): number {
     (acc, port) => (port > acc ? port : acc),
     Number.NEGATIVE_INFINITY
   );
-  const next = max === Number.NEGATIVE_INFINITY ? NODE_PORT_MIN : max + NODE_PORT_STRIDE;
+  const next =
+    max === Number.NEGATIVE_INFINITY ? NODE_PORT_MIN : max + NODE_PORT_STRIDE;
   if (next > NODE_PORT_MAX) {
     throw new Error(
       `nextFreeNodePort: next port ${next} exceeds the NodePort ceiling ${NODE_PORT_MAX}; ` +

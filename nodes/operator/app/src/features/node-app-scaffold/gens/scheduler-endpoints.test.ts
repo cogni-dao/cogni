@@ -48,7 +48,11 @@ describe("insertSchedulerEndpoint", () => {
   });
 
   it("splices a node into its slug-sorted position (before resy)", () => {
-    const out = insertSchedulerEndpoint(BEFORE, "operator-mid", "11111111-2222-3333-4444-555555555555");
+    const out = insertSchedulerEndpoint(
+      BEFORE,
+      "operator-mid",
+      "11111111-2222-3333-4444-555555555555"
+    );
     // `operator-mid` sorts between `operator` and `resy`.
     expect(out).toContain(
       "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d=http://operator-node-app:3000,operator-mid=http://operator-mid-node-app:3000,11111111-2222-3333-4444-555555555555=http://operator-mid-node-app:3000,resy=http://resy-node-app:3000"
@@ -56,12 +60,14 @@ describe("insertSchedulerEndpoint", () => {
   });
 
   it("rejects a node already present", () => {
-    expect(() => insertSchedulerEndpoint(BEFORE, "canary", NODE_ID)).toThrow(/already contains/);
+    expect(() => insertSchedulerEndpoint(BEFORE, "canary", NODE_ID)).toThrow(
+      /already contains/
+    );
   });
 
   it("throws when the configmap has no endpoints line", () => {
-    expect(() => insertSchedulerEndpoint("data:\n  LOG_LEVEL: \"info\"\n", "ztest", NODE_ID)).toThrow(
-      /missing a quoted/
-    );
+    expect(() =>
+      insertSchedulerEndpoint('data:\n  LOG_LEVEL: "info"\n', "ztest", NODE_ID)
+    ).toThrow(/missing a quoted/);
   });
 });

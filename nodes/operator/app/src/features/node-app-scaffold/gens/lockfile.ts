@@ -56,7 +56,11 @@ function extractImporterBlock(lines: string[], key: string): string[] {
 }
 
 /** Rewrite a node-template importer block's key to target `slug`; body lines are untouched. */
-function retargetBlock(block: string[], slug: string, subpath: string): string[] {
+function retargetBlock(
+  block: string[],
+  slug: string,
+  subpath: string
+): string[] {
   const [, ...body] = block;
   return [importerKey(slug, subpath), ...body];
 }
@@ -70,14 +74,20 @@ function retargetBlock(block: string[], slug: string, subpath: string): string[]
  * @returns the spliced lockfile contents
  * @public
  */
-export function insertLockfileImporters(currentLockfile: string, slug: string): string {
+export function insertLockfileImporters(
+  currentLockfile: string,
+  slug: string
+): string {
   const lines = currentLockfile.split("\n");
 
   // Build the renamed blocks from node-template's, each followed by one blank separator —
   // mirroring how pnpm emits consecutive importer blocks.
   const newSection: string[] = [];
   for (const subpath of NODE_SUBPATHS) {
-    const source = extractImporterBlock(lines, importerKey(TEMPLATE_SLUG, subpath));
+    const source = extractImporterBlock(
+      lines,
+      importerKey(TEMPLATE_SLUG, subpath)
+    );
     newSection.push(...retargetBlock(source, slug, subpath), "");
   }
 
@@ -106,8 +116,14 @@ export function insertLockfileImporters(currentLockfile: string, slug: string): 
     }
   }
   if (insertAt === -1) {
-    throw new Error("pnpm-lock.yaml: could not locate importer insertion point");
+    throw new Error(
+      "pnpm-lock.yaml: could not locate importer insertion point"
+    );
   }
 
-  return [...lines.slice(0, insertAt), ...newSection, ...lines.slice(insertAt)].join("\n");
+  return [
+    ...lines.slice(0, insertAt),
+    ...newSection,
+    ...lines.slice(insertAt),
+  ].join("\n");
 }

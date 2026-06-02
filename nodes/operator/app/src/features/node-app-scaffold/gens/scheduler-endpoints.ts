@@ -51,13 +51,13 @@ export function insertSchedulerEndpoint(
 ): string {
   const match = LINE_RE.exec(currentConfigmap);
   if (!match) {
-    throw new Error(
-      `configmap is missing a quoted ${ENDPOINTS_KEY} line`
-    );
+    throw new Error(`configmap is missing a quoted ${ENDPOINTS_KEY} line`);
   }
   const [line, indent, csv] = match;
   if (line === undefined || indent === undefined || csv === undefined) {
-    throw new Error(`configmap ${ENDPOINTS_KEY} line did not capture its parts`);
+    throw new Error(
+      `configmap ${ENDPOINTS_KEY} line did not capture its parts`
+    );
   }
 
   // Split into per-node pairs: each pair is `<slug>=<url>,<node_id>=<url>` (two CSV cells).
@@ -73,7 +73,10 @@ export function insertSchedulerEndpoint(
       throw new Error(`${ENDPOINTS_KEY} CSV has an unpaired cell count`);
     }
     const eq = slugCell.indexOf("=");
-    pairs.push({ slug: slugCell.slice(0, eq), text: `${slugCell},${aliasCell}` });
+    pairs.push({
+      slug: slugCell.slice(0, eq),
+      text: `${slugCell},${aliasCell}`,
+    });
   }
 
   if (pairs.some((p) => p.slug === slug)) {

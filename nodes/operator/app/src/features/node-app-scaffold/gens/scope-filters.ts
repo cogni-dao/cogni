@@ -76,7 +76,9 @@ export function insertScopeFilter(currentCiYaml: string, slug: string): string {
   const sorted = [...slugs].sort(asciiCompare);
   const block = renderBlock(sorted).split("\n");
 
-  return [...lines.slice(0, beginIdx), ...block, ...lines.slice(endIdx + 1)].join(
-    "\n"
-  );
+  return [
+    ...lines.slice(0, beginIdx),
+    ...block,
+    ...lines.slice(endIdx + 1),
+  ].join("\n");
 }

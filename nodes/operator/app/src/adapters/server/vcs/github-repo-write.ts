@@ -281,7 +281,12 @@ export class GitHubRepoWriter {
     const baseTreeSha = baseCommit.tree.sha;
 
     // b. Allocate the next free k3s NodePort from the catalog's existing node_port values.
-    const nodePort = await this.allocateNodePort(octokit, owner, repo, baseTreeSha);
+    const nodePort = await this.allocateNodePort(
+      octokit,
+      owner,
+      repo,
+      baseTreeSha
+    );
     const port = CONTAINER_PORT;
 
     // c. New node subtree — reference node-template's tree, override only what changes.
@@ -394,7 +399,9 @@ export class GitHubRepoWriter {
       `nodes/${TEMPLATE_SLUG}`
     );
     if (!templateTreeSha) {
-      throw new Error(`openNodeAppPr: nodes/${TEMPLATE_SLUG} tree not found on main`);
+      throw new Error(
+        `openNodeAppPr: nodes/${TEMPLATE_SLUG} tree not found on main`
+      );
     }
 
     // Recursive listing of the template node tree → which delete-paths actually exist.
@@ -408,7 +415,9 @@ export class GitHubRepoWriter {
 
     // Renamed text files → new blobs (global node-template → slug, matching scaffold-node.sh).
     for (const path of NODE_RENAME_PATHS) {
-      const entry = recursive.tree.find((e) => e.path === path && e.type === "blob");
+      const entry = recursive.tree.find(
+        (e) => e.path === path && e.type === "blob"
+      );
       if (!entry?.sha) continue;
       const original = await this.readBlob(octokit, owner, repo, entry.sha);
       const rewritten = original.split(TEMPLATE_SLUG).join(slug);
@@ -476,7 +485,10 @@ export class GitHubRepoWriter {
     };
 
     // catalog/<slug>.yaml — brand-new file (no current content to thread).
-    await addBlob(`infra/catalog/${slug}.yaml`, renderCatalog(slug, port, nodePort));
+    await addBlob(
+      `infra/catalog/${slug}.yaml`,
+      renderCatalog(slug, port, nodePort)
+    );
 
     // overlays×3 + appsets×3 — per birth env.
     for (const env of NODE_BIRTH_ENVS) {
@@ -493,7 +505,12 @@ export class GitHubRepoWriter {
       );
 
       const appsetPath = `infra/k8s/argocd/${env}-applicationset.yaml`;
-      const appset = await this.readFileOnMain(octokit, owner, repo, appsetPath);
+      const appset = await this.readFileOnMain(
+        octokit,
+        owner,
+        repo,
+        appsetPath
+      );
       await addBlob(appsetPath, insertAppsetStanza(appset, slug, env));
     }
 
@@ -509,7 +526,12 @@ export class GitHubRepoWriter {
       insertCaddyBlock(caddyfile, slug, nodePort)
     );
 
-    const ciYaml = await this.readFileOnMain(octokit, owner, repo, FOOTPRINT.ciYaml);
+    const ciYaml = await this.readFileOnMain(
+      octokit,
+      owner,
+      repo,
+      FOOTPRINT.ciYaml
+    );
     await addBlob(FOOTPRINT.ciYaml, insertScopeFilter(ciYaml, slug));
 
     const configmap = await this.readFileOnMain(

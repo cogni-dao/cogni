@@ -42,7 +42,7 @@ export function insertAppsetStanza(
   }
 
   const lines = currentAppset.split("\n");
-  const templateIdx = lines.findIndex((l) => l === "  template:");
+  const templateIdx = lines.indexOf("  template:");
   if (templateIdx === -1) {
     throw new Error(
       `ApplicationSet for env '${env}' is missing a top-level 'template:' line; cannot splice.`

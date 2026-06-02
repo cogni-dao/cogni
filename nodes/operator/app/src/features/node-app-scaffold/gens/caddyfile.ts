@@ -62,7 +62,8 @@ interface BlockMatch {
   readonly index: number;
 }
 
-const COMMENT_RE = /^# ── (?<node>\S+) (?<kind>node|\(primary domain\)) → k3s NodePort /;
+const COMMENT_RE =
+  /^# ── (?<node>\S+) (?<kind>node|\(primary domain\)) → k3s NodePort /;
 
 /** Locate every `# ── … →` site-block comment, in file order, with its owning node + primacy. */
 function findBlocks(lines: readonly string[]): BlockMatch[] {
