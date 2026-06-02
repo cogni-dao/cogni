@@ -305,6 +305,7 @@ UI page exercise runs are cheap (headless Chromium, single pageview). API route 
 - Playwright doesn't find the expected element → capture the page's visible text + button list, include in notes, mark the row 🟡.
 - API returns 5xx → that's a 🔴 fail for the row; include the response body (truncated) in the exercise cell.
 - Captured storageState rejected (redirects to signin) → cookie expired. Halt the UI exercises for that node, note the refresh need, continue with API-only rows if feasible.
+- Node's app/pod is missing on candidate-a, or you want to know if Argo generated/synced it → **do not reach for `kubectl`.** The applicationset/application controllers ship every generate/prune/sync event to Loki; query the Argo control-plane recipe in [`promote`](../promote/SKILL.md) (§"When `/version.buildSha` doesn't advance — Loki, not SSH", stream #4). No kubeconfig, no SSH.
 
 ## Key repo pointers
 

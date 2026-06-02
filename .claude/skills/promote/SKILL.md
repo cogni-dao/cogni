@@ -207,11 +207,30 @@ same Loki:
 # Use this when a node restarted but app stderr is empty — kubelet's reason
 # (OOMKilled, ImagePullBackOff, Liveness probe failed) only lives in events,
 # not in container logs.
+
+# 4. Argo control-plane — "a node's app never appeared" / "stuck OutOfSync"
+{namespace="argocd",source="k8s-events",kind="ApplicationSet"} | json
+# msg: created/Deleted Application "<env>-<node>" — proves the AppSet IS
+# generating (a `created`+`Deleted` pair on the same app = it generated then
+# pruned: a catalog/overlay condition, NOT a stuck controller).
+{namespace="argocd",source="k8s-events",kind="Application",reason=~"OperationStarted|OperationCompleted|Failed"} | json
+# msg: "Initiated automated sync to <sha>" → "sync operation to <sha> succeeded"
+# — Argo's reconcile state for that one app, by sha.
 ```
 
 `source="k8s-events"` requires the `alloy-k8s-events` compose service from
 PR #1233 to be deployed in the env you're querying. If empty: check
 `{service="alloy-k8s-events", env="<env>"}` for crash logs first.
+
+**Reaching for `kubectl get applications` / `kubectl describe applicationset`
+is the anti-pattern.** The `applicationset-controller` and
+`application-controller` emit every generate / create / prune / sync
+transition as a k8s Event — already in Loki via stream #4 above. `kind=ApplicationSet`
+answers "is the AppSet generating this node's app at all"; `kind=Application`
+answers "is Argo syncing it to the expected sha." No SSH, no kubeconfig — which
+is also the SOC2 posture (read-only, audited, zero standing cluster credential).
+Verified 2026-06-02: the `candidate-a-wisp` "AppSet won't generate" report was
+false — Loki showed the controller had `created` then `Deleted` the Application.
 
 New compose services don't ship logs until added to the host-alloy allowlist
 regex in `infra/compose/runtime/configs/alloy-config.{,metrics.}alloy`. If
