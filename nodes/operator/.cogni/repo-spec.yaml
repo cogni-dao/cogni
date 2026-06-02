@@ -11,6 +11,13 @@ scope_key: "default"
 intent:
   name: operator
 
+# Privy-managed operator wallet — the runtime container reads THIS file as
+# /app/.cogni/repo-spec.yaml (Dockerfile copies nodes/operator/.cogni, not root),
+# so operator_wallet must live here too or post-credit outbound funding silently
+# skips (operatorWallet === undefined). Mirrors /.cogni/repo-spec.yaml. (bug.5087)
+operator_wallet:
+  address: "0xdCCa8D85603C2CC47dc6974a790dF846f8695056"
+
 cogni_dao:
   dao_contract: "0xF61c3fafD4D34b4568e7a500d92b28Ac175e83C6"
   plugin_contract: "0x609B427f04C1C42De3e28898cb7b9Bad329e6b77"
