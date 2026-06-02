@@ -17,12 +17,6 @@ export {
   LlmProxyManager,
   type ProxyStopResult,
 } from "./llm-proxy-manager";
-export {
-  type GatewayAgentEvent,
-  OpenClawGatewayClient,
-  type RunAgentOptions,
-} from "./openclaw-gateway-client";
-
 export { SandboxAgentCatalogProvider } from "./sandbox-agent-catalog.provider";
 export {
   SANDBOX_PROVIDER_ID,

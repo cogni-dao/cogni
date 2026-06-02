@@ -42,10 +42,9 @@ Scripts run automatically via `vitest.stack.config.mts` globalSetup in this orde
 
 1. `preflight-binaries.ts` — asserts rg, git in PATH
 2. `wait-for-probes.ts` — polls /livez then /readyz
-3. `preflight-openclaw-gateway.ts` — polls TCP 3333 for OpenClaw gateway readiness (90s budget)
-4. `preflight-mock-llm.ts` — verifies LiteLLM routes to mock-openai-api
-5. `preflight-db-roles.ts` — asserts Postgres roles exist
-6. `reset-db.ts` — truncates all tables for clean state
+3. `preflight-mock-llm.ts` — verifies LiteLLM routes to mock-openai-api
+4. `preflight-db-roles.ts` — asserts Postgres roles exist
+5. `reset-db.ts` — truncates all tables for clean state
 
 ## Standards
 
@@ -56,7 +55,7 @@ Scripts run automatically via `vitest.stack.config.mts` globalSetup in this orde
 ## Dependencies
 
 - **Internal:** none
-- **External:** Running Docker Compose stack (postgres, litellm, mock-llm, app, openclaw-gateway)
+- **External:** Running Docker Compose stack (postgres, litellm, mock-llm, app)
 
 ## Change Protocol
 
