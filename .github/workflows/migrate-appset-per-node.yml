@@ -101,21 +101,29 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          # Give the AppSet controller a moment to adopt + reconcile ownerRefs.
-          sleep 20
+          # Poll each Application until its ownerRef flips to the per-node AppSet.
+          # The AppSet controller's resync can exceed a fixed sleep, so poll
+          # (~6x10s) rather than check once — a slow-but-successful adoption must
+          # not false-fail this one-time live cutover into a confused manual re-run.
           fail=0
           for f in infra/k8s/argocd/"${ENV}"-*-applicationset.yaml; do
             node="$(basename "$f" -applicationset.yaml)"; node="${node#"${ENV}"-}"
             app="${ENV}-${node}"
             want="cogni-${ENV}-${node}"
-            # shellcheck disable=SC2086
-            owner="$(ssh $SSH_OPTS root@"$VM_HOST" "kubectl get application ${app} -n argocd -o jsonpath='{.metadata.ownerReferences[0].name}' 2>/dev/null" || true)"
-            if [ "$owner" != "$want" ]; then
-              echo "::error::Application ${app} owner='${owner}' (expected '${want}') — not adopted"
+            adopted=0
+            for attempt in $(seq 1 6); do
+              # shellcheck disable=SC2086
+              owner="$(ssh $SSH_OPTS root@"$VM_HOST" "kubectl get application ${app} -n argocd -o jsonpath='{.metadata.ownerReferences[0].name}' 2>/dev/null" || true)"
+              if [ "$owner" = "$want" ]; then adopted=1; break; fi
+              echo "  ${app} owner='${owner}' (want '${want}') — attempt ${attempt}/6, retrying in 10s"
+              sleep 10
+            done
+            if [ "$adopted" -eq 1 ]; then
+              echo "✅ ${app} adopted by ${want}"
+            else
+              echo "::error::Application ${app} not adopted by ${want} after 60s (last owner='${owner}')"
               fail=1
-              continue
             fi
-            echo "✅ ${app} adopted by ${want}"
           done
           # Confirm the shared AppSet is gone.
           # shellcheck disable=SC2086
