@@ -19,7 +19,8 @@
 #
 # Caller contract (globals expected at invocation time):
 #   DEPLOY_ENV, ROOT_TOKEN, VM_IP, SSH_OPTS, REPO_ROOT,
-#   PRIMARY_NODE_DB, APP_DB_USER, APP_DB_SERVICE_USER, DOMAIN
+#   PRIMARY_NODE_DB, APP_DB_USER, APP_DB_SERVICE_USER, DOMAIN,
+#   POSTGRES_ROOT_PASSWORD, optional DOLTGRES_PASSWORD
 # Caller's seed loop iterates the arrays exported here:
 #   NODE_TEMPLATE_KEYS, SCHEDULER_WORKER_KEYS
 
@@ -43,6 +44,7 @@ declare -ga NODE_BASELINE_KEYS=(
   INTERNAL_OPS_TOKEN METRICS_TOKEN GH_WEBHOOK_SECRET
   CONNECTIONS_ENCRYPTION_KEY POLY_WALLET_AEAD_KEY_HEX
   POLY_WALLET_AEAD_KEY_ID DATABASE_URL DATABASE_SERVICE_URL
+  DOLTGRES_URL
   POSTHOG_API_KEY POSTHOG_HOST OPENROUTER_API_KEY
   EVM_RPC_URL POLYGON_RPC_URL
   APP_BASE_URL NEXTAUTH_URL
@@ -60,7 +62,7 @@ declare -ga SCHEDULER_WORKER_KEYS=(
 declare -ga COMPOSE_ONLY_KEYS=(
   POSTGRES_ROOT_PASSWORD
   APP_DB_PASSWORD APP_DB_SERVICE_PASSWORD APP_DB_READONLY_PASSWORD
-  TEMPORAL_DB_PASSWORD
+  TEMPORAL_DB_PASSWORD DOLTGRES_PASSWORD
 )
 
 # ── Catalog-gated per-node fan-out (task.5094) ────────────────────────────────
@@ -77,6 +79,16 @@ PAYMENT_NODES="${PAYMENT_NODES:-poly}"
 
 rand64() { openssl rand -base64 "${1:-32}"; }
 randHex() { openssl rand -hex "${1:-32}"; }
+derive_secret() {
+  local salt="$1"
+  if command -v openssl >/dev/null 2>&1; then
+    printf '%s:%s' "$salt" "${POSTGRES_ROOT_PASSWORD:-doltgres}" | openssl dgst -sha256 -hex | awk '{print $NF}' | cut -c1-32
+  elif command -v sha256sum >/dev/null 2>&1; then
+    printf '%s:%s' "$salt" "${POSTGRES_ROOT_PASSWORD:-doltgres}" | sha256sum | cut -c1-32
+  else
+    echo "dev-${salt}"
+  fi
+}
 
 # Read one catalog field for a secret name. Empty string if name or field absent.
 _cat_field() {
@@ -104,9 +116,10 @@ _node_gets_key() {
 
 # Resolve the value to seed for (node, key). Idempotent: an existing OpenBao
 # value at cogni/<env>/<node>/<key> is preserved (no churn on re-runs → 0 pod
-# restarts). Otherwise: DB DSN binds cogni_<node>; derive-env binds the node's
-# FQDN; agent-random distinct keys mint a FRESH value per node (isolation);
-# _shared / shared:true / human keys pass through the .env value (same all nodes).
+# restarts). Otherwise: Postgres DSNs bind cogni_<node>; the Doltgres DSN binds
+# knowledge_<node> using the Compose-infra root password source; derive-env
+# binds the node's FQDN; agent-random distinct keys mint a FRESH value per node
+# (isolation); _shared / shared:true / human keys pass through the .env value.
 _resolve_node_value() {
   local node="$1" k="$2" existing kind source shared service db
   existing=$(bao_get_field "$node" "$k")
@@ -119,6 +132,9 @@ _resolve_node_value() {
     DATABASE_SERVICE_URL)
       printf 'postgresql://%s:%s@%s:5432/%s?sslmode=disable' \
         "${APP_DB_SERVICE_USER}" "${APP_DB_SERVICE_PASSWORD}" "${VM_IP}" "${db}"; return 0 ;;
+    DOLTGRES_URL)
+      printf 'postgresql://postgres:%s@%s:5435/knowledge_%s?sslmode=disable' \
+        "${DOLTGRES_PASSWORD:-$(derive_secret doltgres-root)}" "${VM_IP}" "${node//-/_}"; return 0 ;;
   esac
   kind=$(_cat_field "$k" '.generate.kind')
   source=$(_cat_field "$k" '.source')
@@ -207,13 +223,13 @@ _reconcile_from_compose_vm() {
     if _apply_reconciled "$k" "$v"; then n=$((n + 1)); fi
   done
   [[ $n -gt 0 ]] && log_info "  reconciled ${n} Compose-only key(s) from VM runtime/.env"
-  # DATABASE_URL / _SERVICE_URL are constructed in provision-env-vm.sh
-  # line ~335 from APP_DB_*_PASSWORD; if the reconcile changed those,
-  # re-derive so the OpenBao seed below writes a consistent value.
+  # DSN keys are constructed in provision-env-vm.sh from component secrets;
+  # if reconcile changed those components, re-derive so the OpenBao seed below
+  # writes values consistent with the VM runtime.
   if [[ $n -gt 0 ]]; then
     DATABASE_URL="postgresql://${APP_DB_USER}:${APP_DB_PASSWORD}@${VM_IP}:5432/${PRIMARY_NODE_DB}?sslmode=disable"
     DATABASE_SERVICE_URL="postgresql://${APP_DB_SERVICE_USER}:${APP_DB_SERVICE_PASSWORD}@${VM_IP}:5432/${PRIMARY_NODE_DB}?sslmode=disable"
-    export DATABASE_URL DATABASE_SERVICE_URL
+    export DATABASE_URL DATABASE_SERVICE_URL DOLTGRES_PASSWORD
   fi
   return 0
 }

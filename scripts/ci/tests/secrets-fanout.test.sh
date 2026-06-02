@@ -25,13 +25,14 @@ SEED_LOG="$TMPROOT/seed.log"
 DEPLOY_ENV="candidate-a"
 DOMAIN="test.cognidao.org"
 VM_IP="10.0.0.1"
+POSTGRES_ROOT_PASSWORD="postgres-root"
 APP_DB_USER="app_user"; APP_DB_PASSWORD="pw_app"
 APP_DB_SERVICE_USER="app_service"; APP_DB_SERVICE_PASSWORD="pw_svc"
 CATALOG_FILE="$REPO_ROOT/infra/secrets-catalog.yaml"
 # Passthrough (.env) values — same across nodes by contract.
 LITELLM_MASTER_KEY="sk-cogni-shared-master"
 OPENROUTER_API_KEY="sk-or-shared"
-export DEPLOY_ENV DOMAIN VM_IP APP_DB_USER APP_DB_PASSWORD \
+export DEPLOY_ENV DOMAIN VM_IP POSTGRES_ROOT_PASSWORD APP_DB_USER APP_DB_PASSWORD \
   APP_DB_SERVICE_USER APP_DB_SERVICE_PASSWORD CATALOG_FILE \
   LITELLM_MASTER_KEY OPENROUTER_API_KEY
 
@@ -81,6 +82,10 @@ r=0; [[ "$(val_for node-template DATABASE_URL)" == *"/cogni_node_template?"* \
    && "$(val_for canary DATABASE_URL)" == *"/cogni_canary?"* ]] || r=1
 assert "$r" "DATABASE_URL binds cogni_<node>"
 
+r=0; [[ "$(val_for node-template DOLTGRES_URL)" == postgresql://postgres:*"@10.0.0.1:5435/knowledge_node_template?sslmode=disable" \
+   && "$(val_for canary DOLTGRES_URL)" == postgresql://postgres:*"@10.0.0.1:5435/knowledge_canary?sslmode=disable" ]] || r=1
+assert "$r" "DOLTGRES_URL binds knowledge_<node>"
+
 # 5. Custody: poly-pinned (service:poly) keys NEVER fan to a non-poly node.
 r=0; { seeded node-template POLY_WALLET_AEAD_KEY_HEX || seeded canary POLY_WALLET_AEAD_KEY_HEX; } && r=1
 assert "$r" "POLY_WALLET_AEAD_KEY_HEX excluded from non-poly nodes"
@@ -108,7 +113,7 @@ assert "$r" "existing OpenBao value preserved on re-run"
 #    entry (would silently passthrough → shared secret leak).
 drift=0
 for k in "${NODE_BASELINE_KEYS[@]}"; do
-  case "$k" in DATABASE_URL|DATABASE_SERVICE_URL) continue ;; esac
+  case "$k" in DATABASE_URL|DATABASE_SERVICE_URL|DOLTGRES_URL) continue ;; esac
   if [[ -z "$(yq -N "(.secrets[] | select(.name == \"$k\") | .name) // \"\"" "$CATALOG_FILE")" ]]; then
     printf '  drift: %s not in catalog\n' "$k"; drift=1
   fi
