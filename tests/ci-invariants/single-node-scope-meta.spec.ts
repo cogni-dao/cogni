@@ -87,9 +87,10 @@ describe("single-node-scope workflow gate · structural pins", () => {
     ).toContain(
       "# >>> GENERATED scope-filters (scripts/ci/render-scope-filters.sh) — DO NOT EDIT BY HAND"
     );
-    expect(raw, "filter block must close with the GENERATED end sentinel").toContain(
-      "# <<< GENERATED scope-filters"
-    );
+    expect(
+      raw,
+      "filter block must close with the GENERATED end sentinel"
+    ).toContain("# <<< GENERATED scope-filters");
   });
 
   it("operator filter is `**` plus negations of every other filter (no positive infra paths)", () => {
