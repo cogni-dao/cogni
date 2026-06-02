@@ -25,6 +25,8 @@
     "check:docs:metadata": "node scripts/validate-docs-metadata.mjs",
     "check:docs:sync-manifest": "node scripts/validate-sync-manifest-refs.mjs",
     "check:root-layout": "pnpm tsx scripts/check-root-layout.ts",
+    "check:node-port-unique": "bash scripts/ci/next-free-node-port.sh --check",
+    "node-port:next": "bash scripts/ci/next-free-node-port.sh",
     "gen:caddyfile": "bash scripts/ci/render-caddyfile.sh > infra/compose/edge/configs/Caddyfile.tmpl",
     "gen:scheduler-worker-endpoints": "ENDPOINTS=$(bash scripts/ci/render-scheduler-worker-endpoints.sh) yq -i '.data.COGNI_NODE_ENDPOINTS = strenv(ENDPOINTS)' infra/k8s/base/scheduler-worker/configmap.yaml",
     "workflow:check": "node scripts/ci/workflow-check.mjs",

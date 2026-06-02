@@ -166,6 +166,10 @@ jobs:
         run: |
           pipx install 'check-jsonschema==0.37.1'
           check-jsonschema --schemafile infra/catalog/_schema.json infra/catalog/*.yaml
+          # Cross-file node_port uniqueness — inexpressible in pure JSON-schema.
+          # node_port is the per-VM k8s NodePort; a clash silently blackholes a
+          # node (CATALOG_IS_SSOT, docs/spec/ci-cd.md axiom 16).
+          bash scripts/ci/next-free-node-port.sh --check
 
       - name: Detect affected image targets
         id: detect

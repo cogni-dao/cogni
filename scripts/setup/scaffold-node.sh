@@ -18,13 +18,18 @@ set -euo pipefail
 
 SLUG="${1:?slug required}"
 PORT="${2:?port required}"
-NODEPORT="${3:?nodeport required}"
 NODE_ID="${4:-}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 TPL=node-template
 ENVS=(candidate-a preview production)
 
 cd "$ROOT"
+# node_port is the scarce per-VM k8s NodePort (must be unique). Default to the
+# auto-allocated next-free port (max(node_port)+100, ~x00 stride) so adding a
+# node needs no hand-picked value; an explicit $3 still overrides. CATALOG_IS_SSOT
+# — the uniqueness gate (next-free-node-port.sh --check, run in pr-build.yml)
+# rejects any clash this could still produce on a stale checkout.
+NODEPORT="${3:-$(bash "$ROOT/scripts/ci/next-free-node-port.sh")}"
 [ -d "nodes/$SLUG" ] && { echo "nodes/$SLUG already exists"; exit 1; }
 
 echo "==> 1. clone nodes/$TPL -> nodes/$SLUG (excluding build artifacts + secrets)"
@@ -61,6 +66,7 @@ sed -E \
   -e "s/^name: .*/name: $SLUG/" \
   -e "s#^dockerfile: .*#dockerfile: nodes/$SLUG/app/Dockerfile#" \
   -e "s/^port: .*/port: $PORT/" \
+  -e "s/^node_port: .*/node_port: $NODEPORT/" \
   -e "s/^image_tag_suffix: .*/image_tag_suffix: \"-$SLUG\"/" \
   -e "s/^migrator_tag_suffix: .*/migrator_tag_suffix: \"-$SLUG-migrate\"/" \
   -e "s#deploy/candidate-a-$TPL#deploy/candidate-a-$SLUG#" \
