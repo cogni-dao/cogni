@@ -255,8 +255,6 @@ REQUIRED_SECRETS=(
     "POLYGON_RPC_URL"
     "TEMPORAL_DB_USER"
     "TEMPORAL_DB_PASSWORD"
-    "OPENCLAW_GATEWAY_TOKEN"
-    "OPENCLAW_GITHUB_RW_TOKEN"
     "INTERNAL_OPS_TOKEN"
     "POSTHOG_API_KEY"
     "POSTHOG_HOST"
@@ -710,8 +708,6 @@ COGNI_REPO_URL=${COGNI_REPO_URL}
 COGNI_REPO_REF=${COGNI_REPO_REF}
 GIT_READ_USERNAME=${GIT_READ_USERNAME}
 GIT_READ_TOKEN=${GIT_READ_TOKEN}
-OPENCLAW_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN}
-OPENCLAW_GITHUB_RW_TOKEN=${OPENCLAW_GITHUB_RW_TOKEN}
 POSTHOG_API_KEY=${POSTHOG_API_KEY}
 POSTHOG_HOST=${POSTHOG_HOST}
 # App/worker images — not started by infra deploy, but compose validates all vars.
@@ -918,12 +914,8 @@ log_info "Logging into GHCR for private image pulls..."
 echo "${GHCR_DEPLOY_TOKEN}" | docker login ghcr.io -u "${GHCR_USERNAME}" --password-stdin
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# Step 3.5: Pull sandbox images (may update on :latest)
+# Step 3.5: Pull images (may update on :latest)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-log_info "Pulling sandbox images..."
-PNPM_STORE_IMAGE="ghcr.io/cogni-dao/node-template:pnpm-store-latest"
-docker pull "$PNPM_STORE_IMAGE" || log_warn "pnpm-store image not found, skipping"
-
 # Pull LiteLLM from GHCR (built in CI — bug.0298 / G12).
 # LITELLM_IMAGE was self-resolved above from COGNI_REPO_REF to a GHCR tag,
 # or remains "cogni-litellm:latest" for local dev/provision (no pull needed).
@@ -933,11 +925,6 @@ if [[ "$LITELLM_IMAGE" == ghcr.io/* ]]; then
 else
   log_info "LiteLLM image is local ($LITELLM_IMAGE) — skipping pull"
 fi
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# Step 3.6: Seed pnpm_store volume (idempotent, skip if hash matches)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-source /tmp/seed-pnpm-store.sh
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Step 4: Assert profile services exist (guard against silent compose drift)
@@ -1256,8 +1243,6 @@ POLYGON_RPC_URL=${POLYGON_RPC_URL}
 POSTHOG_API_KEY=${POSTHOG_API_KEY:-}
 POSTHOG_HOST=${POSTHOG_HOST:-}
 TAVILY_API_KEY=${TAVILY_API_KEY:-}
-OPENCLAW_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN}
-OPENCLAW_GITHUB_RW_TOKEN=${OPENCLAW_GITHUB_RW_TOKEN:-}
 SCHEDULER_API_TOKEN=${SCHEDULER_API_TOKEN:-}
 BILLING_INGEST_TOKEN=${BILLING_INGEST_TOKEN:-}
 INTERNAL_OPS_TOKEN=${INTERNAL_OPS_TOKEN:-}
@@ -1535,13 +1520,9 @@ scp $SSH_OPTS "$ARTIFACT_DIR/deploy-infra-remote.sh" root@"$VM_HOST":/tmp/deploy
 
 # Upload healthcheck and bootstrap scripts (called from deploy-infra-remote.sh)
 scp $SSH_OPTS \
-  "$REPO_ROOT/scripts/ci/seed-pnpm-store.sh" \
   "$REPO_ROOT/scripts/ci/ensure-temporal-namespace.sh" \
   "$REPO_ROOT/infra/provision/cherry/harden-docker-public-ports.sh" \
   root@"$VM_HOST":/tmp/
-scp $SSH_OPTS \
-  "$REPO_ROOT/services/sandbox-openclaw/seed-pnpm-store.sh" \
-  root@"$VM_HOST":/tmp/seed-pnpm-store-core.sh
 
 # Verify SCP landed correctly
 REMOTE_CHECK=$(ssh $SSH_OPTS root@"$VM_HOST" "echo host=\$(hostname) date=\$(date -u +%Y-%m-%dT%H:%M:%SZ) && sha256sum /tmp/deploy-infra-remote.sh | awk '{print \$1}'" 2>&1) || {
@@ -1587,7 +1568,7 @@ REMOTE_ENV_VARS=(
   PROMETHEUS_QUERY_URL PROMETHEUS_READ_USERNAME PROMETHEUS_READ_PASSWORD
   LANGFUSE_PUBLIC_KEY LANGFUSE_SECRET_KEY LANGFUSE_BASE_URL
   COGNI_REPO_URL COGNI_REPO_REF GIT_READ_USERNAME GIT_READ_TOKEN
-  OPENCLAW_GATEWAY_TOKEN OPENCLAW_GITHUB_RW_TOKEN GRAFANA_URL
+  GRAFANA_URL
   GRAFANA_SERVICE_ACCOUNT_TOKEN GRAFANA_PDC_SIGNING_TOKEN
   GRAFANA_PDC_HOSTED_GRAFANA_ID GRAFANA_PDC_CLUSTER GRAFANA_PDC_NETWORK_ID
   GRAFANA_PDC_NETWORK_UUID POSTHOG_API_KEY POSTHOG_HOST TAVILY_API_KEY

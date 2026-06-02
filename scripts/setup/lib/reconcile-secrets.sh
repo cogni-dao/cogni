@@ -25,7 +25,7 @@
 
 # ── Per-service key arrays — single source for both reconcile + seed ──────────
 # Note: operator-passthrough keys (OPENROUTER_API_KEY, POSTHOG_*, EVM_RPC_URL,
-# POLYGON_RPC_URL, OPENCLAW_GITHUB_RW_TOKEN) ARE reconciled from OpenBao on
+# POLYGON_RPC_URL) ARE reconciled from OpenBao on
 # re-runs. This matches the SSoT contract: day-2 rotations use
 # `pnpm secrets:set` (which writes OpenBao directly); `gh secret set` +
 # re-dispatch is bootstrap-only and will NOT propagate a value change for
@@ -38,8 +38,8 @@
 # nodes that don't own it. Drift between this list and the catalog's
 # node-baseline set is guarded by scripts/ci/tests/secrets-fanout.test.sh.
 declare -ga NODE_BASELINE_KEYS=(
-  AUTH_SECRET LITELLM_MASTER_KEY OPENCLAW_GATEWAY_TOKEN
-  OPENCLAW_GITHUB_RW_TOKEN SCHEDULER_API_TOKEN BILLING_INGEST_TOKEN
+  AUTH_SECRET LITELLM_MASTER_KEY
+  SCHEDULER_API_TOKEN BILLING_INGEST_TOKEN
   INTERNAL_OPS_TOKEN METRICS_TOKEN GH_WEBHOOK_SECRET
   CONNECTIONS_ENCRYPTION_KEY POLY_WALLET_AEAD_KEY_HEX
   POLY_WALLET_AEAD_KEY_ID DATABASE_URL DATABASE_SERVICE_URL

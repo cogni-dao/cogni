@@ -38,8 +38,6 @@ jobs:
       SCHEDULER_API_TOKEN: test-scheduler-api-token-for-ci-min32chars
       BILLING_INGEST_TOKEN: test-billing-ingest-token-for-ci-min32ch
       INTERNAL_OPS_TOKEN: test-internal-ops-token-for-ci-min32
-      OPENCLAW_GATEWAY_TOKEN: test-openclaw-gateway-token-for-ci-32ch
-      OPENCLAW_GITHUB_RW_TOKEN: test-github-rw-token
       DISCORD_BOT_TOKEN: test-discord-bot-token-for-ci
       POSTHOG_API_KEY: phc_test_key_for_ci
       POSTHOG_HOST: http://localhost:18000
@@ -184,8 +182,6 @@ jobs:
       SCHEDULER_API_TOKEN: test-scheduler-api-token-for-ci-min32chars
       BILLING_INGEST_TOKEN: test-billing-ingest-token-for-ci-min32ch
       INTERNAL_OPS_TOKEN: test-internal-ops-token-for-ci-min32
-      OPENCLAW_GATEWAY_TOKEN: test-openclaw-gateway-token-for-ci-32ch
-      OPENCLAW_GITHUB_RW_TOKEN: test-github-rw-token
       DISCORD_BOT_TOKEN: test-discord-bot-token-for-ci
       POSTHOG_API_KEY: phc_test_key_for_ci
       POSTHOG_HOST: http://localhost:18000
@@ -331,8 +327,6 @@ jobs:
       SCHEDULER_API_TOKEN: test-scheduler-api-token-for-ci-min32chars
       BILLING_INGEST_TOKEN: test-billing-ingest-token-for-ci-min32ch
       INTERNAL_OPS_TOKEN: test-internal-ops-token-for-ci-min32
-      OPENCLAW_GATEWAY_TOKEN: test-openclaw-gateway-token-for-ci-32ch
-      OPENCLAW_GITHUB_RW_TOKEN: test-github-rw-token
       DISCORD_BOT_TOKEN: test-discord-bot-token-for-ci
       POSTHOG_API_KEY: phc_test_key_for_ci
       POSTHOG_HOST: http://localhost:18000

@@ -78,7 +78,6 @@ const CapabilitySchema = z.enum([
   "web",
   "database",
   "llm",
-  "openclaw",
   "payments",
 ]);
 export type Capability = z.infer<typeof CapabilitySchema>;

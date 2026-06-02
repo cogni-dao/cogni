@@ -16,7 +16,7 @@ import type { Message } from "../chat/model";
 // Conservative estimate for completion tokens (most responses are 200-400 tokens)
 export const DEFAULT_MAX_COMPLETION_TOKENS = 512;
 export const CHARS_PER_TOKEN_ESTIMATE = 4;
-export const ESTIMATED_USD_PER_1K_TOKENS = 0.02; // $0.02 per 1k tokens (OpenClaw actual consumption)
+export const ESTIMATED_USD_PER_1K_TOKENS = 0.02; // $0.02 per 1k tokens (measured agent consumption)
 
 /**
  * Estimate total tokens for a conversation (prompt + completion).

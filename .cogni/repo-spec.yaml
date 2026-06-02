@@ -130,7 +130,7 @@ gates:
   #     rule_file: ai-rule-template.yaml
 
 # Governance schedule definitions (charter-scoped per governance-council.md)
-# Each schedule triggers an OpenClaw gateway run with a 1-word entrypoint.
+# Each schedule triggers a sandbox agent run with a 1-word entrypoint.
 # Cron Format syntax: https://crontab.guru/
 governance:
   schedules:

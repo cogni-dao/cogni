@@ -9,11 +9,9 @@
  *   - Per SANDBOXED_AGENTS.md P0.75: Agent runs in sandbox via graph execution pipeline
  *   - Per UNIFIED_GRAPH_EXECUTOR: Registered in NamespaceGraphRouter like any provider
  *   - Per SECRETS_HOST_ONLY: Only messages + model passed to sandbox, never credentials
- *   - Per BILLING_INDEPENDENT_OF_CLIENT: ephemeral emits usage_report for RunEventRelay billing; gateway relies on LiteLLM callback (COST_AUTHORITY_IS_LITELLM)
- *   - Per SESSION_MODEL_OVERRIDE: Gateway mode calls configureSession() before runAgent() so GraphRunRequest.model reaches LiteLLM via OpenClaw sessions.patch
- *   - Per STATUS_BEST_EFFORT: StatusEvent pass-through from gateway — never blocks stream or billing
- * Side-effects: IO (creates tmp workspace, runs Docker containers via SandboxRunnerPort, HTTP to gateway)
- * Links: docs/spec/sandboxed-agents.md, sandbox-runner.adapter.ts, openclaw-gateway-client.ts
+ *   - Per BILLING_INDEPENDENT_OF_CLIENT: ephemeral emits usage_report for RunEventRelay billing
+ * Side-effects: IO (creates tmp workspace, runs Docker containers via SandboxRunnerPort)
+ * Links: docs/spec/sandboxed-agents.md, sandbox-runner.adapter.ts
  * @internal
  */
 
@@ -42,8 +40,6 @@ import type {
   SandboxRunResult,
 } from "@/ports";
 import { EVENT_NAMES, makeLogger } from "@/shared/observability";
-
-import type { OpenClawGatewayClient } from "./openclaw-gateway-client";
 
 /** Provider ID for sandbox agent execution */
 export const SANDBOX_PROVIDER_ID = "sandbox" as const;
@@ -80,17 +76,8 @@ interface SandboxAgentEntry {
   readonly setupWorkspace?: (ctx: WorkspaceSetupContext) => void;
   /**
    * Additional env vars to pass via llmProxy.env (merged with COGNI_MODEL).
-   * Used by OpenClaw for HOME, OPENCLAW_CONFIG_PATH, etc.
    */
   readonly extraEnv?: (ctx: WorkspaceSetupContext) => Record<string, string>;
-  /**
-   * Execution mode:
-   * - "ephemeral" (default): one-shot container per run (existing path)
-   * - "gateway": long-running shared service via HTTP/WS
-   */
-  readonly executionMode?: "ephemeral" | "gateway";
-  /** Proxy container name for billing reader (gateway mode only) */
-  readonly gatewayProxyContainer?: string;
 }
 
 /**
@@ -105,15 +92,6 @@ const SANDBOX_AGENTS: Record<string, SandboxAgentEntry> = {
     image: "cogni-sandbox-runtime:latest",
     argv: ["node", "/agent/run.mjs"],
     limits: { maxRuntimeSec: 120, maxMemoryMb: 512 },
-  },
-  openclaw: {
-    name: "OpenClaw",
-    description: "Community-accessible OpenClaw container agent",
-    image: "cogni-sandbox-openclaw:latest",
-    argv: [],
-    limits: { maxRuntimeSec: 600, maxMemoryMb: 1024 },
-    executionMode: "gateway",
-    gatewayProxyContainer: "llm-proxy-openclaw",
   },
 };
 
@@ -135,10 +113,7 @@ export class SandboxGraphProvider implements GraphExecutorPort {
   readonly providerId = SANDBOX_PROVIDER_ID;
   private readonly log: Logger;
 
-  constructor(
-    private readonly runner: SandboxRunnerPort,
-    private readonly gatewayClient?: OpenClawGatewayClient
-  ) {
+  constructor(private readonly runner: SandboxRunnerPort) {
     this.log = makeLogger({ component: "SandboxGraphProvider" });
     this.log.debug(
       { agents: Object.keys(SANDBOX_AGENTS) },
@@ -163,16 +138,13 @@ export class SandboxGraphProvider implements GraphExecutorPort {
         runId,
         requestId,
         agentName,
-        executionMode: agent.executionMode ?? "ephemeral",
+        executionMode: "ephemeral",
         model: req.modelRef.modelId,
         messageCount: req.messages.length,
       },
       EVENT_NAMES.SANDBOX_EXECUTION_STARTED
     );
 
-    if (agent.executionMode === "gateway") {
-      return this.createGatewayExecution(req, agent, requestId);
-    }
     return this.createContainerExecution(req, agent, requestId);
   }
 
@@ -270,7 +242,6 @@ export class SandboxGraphProvider implements GraphExecutorPort {
         });
 
         // Parse SandboxProgramContract envelope from stdout.
-        // Same shape for run.mjs and OpenClaw --json — provider logic is agent-agnostic.
         const envelope = self.parseEnvelope(runId, result);
 
         if (!result.ok || envelope.meta.error) {
@@ -396,186 +367,6 @@ export class SandboxGraphProvider implements GraphExecutorPort {
           rmSync(realWorkspace, { recursive: true, force: true });
         } catch {
           // Best-effort cleanup
-        }
-      }
-    })();
-
-    return { stream, final };
-  }
-
-  /**
-   * Create the async stream + final promise for a gateway execution.
-   * Uses OpenClawGatewayClient for HTTP chat. Billing via LiteLLM callback.
-   */
-  private createGatewayExecution(
-    req: GraphRunRequest,
-    agent: SandboxAgentEntry,
-    requestId: string
-  ): GraphRunResult {
-    // eslint-disable-next-line @typescript-eslint/no-this-alias
-    const self = this;
-    const state = {
-      resolve: null as null | ((value: GraphFinal) => void),
-    };
-    const final = new Promise<GraphFinal>((resolve) => {
-      state.resolve = resolve;
-    });
-
-    // Capture ALS scope synchronously — same pattern as ephemeral path above.
-    const scope = getExecutionScope();
-    const stream = (async function* (): AsyncIterable<AiEvent> {
-      const { runId, messages, modelRef, graphId, stateKey } = req;
-      const model = modelRef.modelId;
-      const execStartTime = Date.now();
-      const callLog = self.log.child({
-        runId,
-        agentName: agent.name,
-        requestId,
-      });
-
-      if (!self.gatewayClient) {
-        callLog.error(
-          {
-            event: EVENT_NAMES.SANDBOX_EXECUTION_COMPLETE,
-            executionMode: "gateway",
-            outcome: "error",
-            durationMs: 0,
-            errorCode: "gateway_client_missing",
-            model,
-          },
-          EVENT_NAMES.SANDBOX_EXECUTION_COMPLETE
-        );
-        yield { type: "error", error: "internal" as AiExecutionErrorCode };
-        yield { type: "done" };
-        if (state.resolve) {
-          state.resolve({
-            ok: false,
-            runId,
-            requestId,
-            error: "internal",
-          });
-        }
-        return;
-      }
-
-      // Gateway sessions are keyed by stateKey (stable per conversation) so the
-      // same OpenClaw session persists across Cogni requests for multi-turn.
-      // Route always generates stateKey — missing here means a caller bug.
-      if (!stateKey) {
-        throw new Error(
-          "stateKey is required for gateway execution (route must always provide one)"
-        );
-      }
-      const sessionKey = `agent:main:${scope.billing.billingAccountId}:${stateKey}`;
-
-      try {
-        // Build outbound headers for billing (OpenClaw includes these on LLM calls)
-        const outboundHeaders: Record<string, string> = {
-          "x-litellm-end-user-id": scope.billing.billingAccountId,
-          "x-litellm-spend-logs-metadata": JSON.stringify({
-            run_id: runId,
-            graph_id: graphId,
-          }),
-          "x-cogni-run-id": runId,
-        };
-
-        // Extract last user message
-        const lastUserMsg = [...messages]
-          .reverse()
-          .find((m) => m.role === "user");
-
-        // Configure session with model override BEFORE agent call.
-        // Per OpenClaw sessions.patch: sets modelOverride on the session entry
-        // so the agent call uses the requested model, not the config default.
-        await self.gatewayClient.configureSession(
-          sessionKey,
-          outboundHeaders,
-          model
-        );
-
-        callLog.debug(
-          { sessionKey, model },
-          "Sending agent call via gateway WS"
-        );
-
-        // Run agent via gateway WS — yields typed events (per OpenClaw gateway protocol)
-        let content = "";
-        for await (const event of self.gatewayClient.runAgent({
-          message: lastUserMsg?.content ?? "",
-          sessionKey,
-          outboundHeaders,
-          timeoutMs: (agent.limits.maxRuntimeSec ?? 600) * 1000,
-          log: callLog,
-        })) {
-          switch (event.type) {
-            case "text_delta":
-              yield { type: "text_delta", delta: event.text };
-              break;
-            case "chat_final":
-              content = event.text;
-              break;
-            case "chat_error":
-              throw new Error(`Gateway agent error: ${event.message}`);
-            case "status":
-              // STATUS_BEST_EFFORT: pass through as AiEvent, never blocks stream
-              yield {
-                type: "status",
-                phase: event.phase,
-                ...(event.label ? { label: event.label } : {}),
-              };
-              break;
-          }
-        }
-
-        // Billing: handled by LiteLLM generic_api callback → /api/internal/billing/ingest.
-        // Per RECEIPT_WRITES_REQUIRE_CALL_ID_AND_COST: no synchronous receipt written here.
-
-        // Emit assistant_final for history persistence
-        yield { type: "assistant_final", content: content || "" };
-
-        callLog.info(
-          {
-            event: EVENT_NAMES.SANDBOX_EXECUTION_COMPLETE,
-            executionMode: "gateway",
-            outcome: "success",
-            durationMs: Date.now() - execStartTime,
-            model,
-          },
-          EVENT_NAMES.SANDBOX_EXECUTION_COMPLETE
-        );
-
-        yield { type: "done" };
-
-        if (state.resolve) {
-          state.resolve({
-            ok: true,
-            runId,
-            requestId,
-            finishReason: "stop",
-            ...(content ? { content } : {}),
-          });
-        }
-      } catch (err) {
-        callLog.error(
-          {
-            event: EVENT_NAMES.SANDBOX_EXECUTION_COMPLETE,
-            executionMode: "gateway",
-            outcome: "error",
-            durationMs: Date.now() - execStartTime,
-            model,
-            errorMessage: err instanceof Error ? err.message : String(err),
-          },
-          EVENT_NAMES.SANDBOX_EXECUTION_COMPLETE
-        );
-        yield { type: "error", error: "internal" as AiExecutionErrorCode };
-        yield { type: "done" };
-        if (state.resolve) {
-          state.resolve({
-            ok: false,
-            runId,
-            requestId,
-            error: "internal",
-          });
         }
       }
     })();

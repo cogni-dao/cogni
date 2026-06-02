@@ -212,7 +212,7 @@ function applyTransform(secret: Secret, value: string): string {
  */
 const PAYMENT_NODES = new Set<string>(["poly"]);
 function capabilitiesForNode(nodeName: string): Set<string> {
-  const caps = new Set(["all-nodes", "web", "database", "llm", "openclaw"]);
+  const caps = new Set(["all-nodes", "web", "database", "llm"]);
   if (PAYMENT_NODES.has(nodeName)) caps.add("payments");
   return caps;
 }

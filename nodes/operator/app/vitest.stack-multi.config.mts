@@ -5,7 +5,7 @@
  * Module: `vitest.stack-multi.config.mts`
  * Purpose: Vitest configuration for multi-node stack tests requiring dev:stack:full.
  * Scope: Runs multi-node billing isolation tests against 3 live nodes (operator, poly, resy).
- *   No mock-llm or openclaw preflights — tests POST directly to billing ingest endpoints.
+ *   No mock-llm preflights — tests POST directly to billing ingest endpoints.
  * Invariants: Requires dev:stack:full running; expects per-node DATABASE_SERVICE_URL env vars.
  * Side-effects: HTTP requests to running nodes, database connections to per-node DBs
  * Notes: Separate from vitest.stack.config.mts (single-node tests). No DB reset — tests

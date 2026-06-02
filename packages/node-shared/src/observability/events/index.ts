@@ -73,6 +73,7 @@ export const EVENT_NAMES = {
   ADAPTER_RIPGREP_ERROR: "adapter.ripgrep.error",
   ADAPTER_RIPGREP_SEARCH: "adapter.ripgrep.search",
   ADAPTER_RIPGREP_OPEN: "adapter.ripgrep.open",
+  // TODO: remove once all node openclaw-gateway-clients are deleted (per-node PRs)
   ADAPTER_OPENCLAW_GATEWAY_ERROR: "adapter.openclaw_gateway.error",
   ADAPTER_TIGERBEETLE_ERROR: "adapter.tigerbeetle.error",
 

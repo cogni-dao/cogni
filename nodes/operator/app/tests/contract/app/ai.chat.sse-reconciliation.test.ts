@@ -4,7 +4,7 @@
 /**
  * Module: `@tests/contract/app/ai.chat.sse-reconciliation`
  * Purpose: Verify that assistant_final reconciles truncated text_delta events in the SSE route.
- * Scope: Tests the for-await loop + reconciliation logic in route.ts with a synthetic AiEvent stream. Does NOT test real OpenClaw, LiteLLM, or model responses — purely tests the SSE boundary.
+ * Scope: Tests the for-await loop + reconciliation logic in route.ts with a synthetic AiEvent stream. Does NOT test real graph execution, LiteLLM, or model responses — purely tests the SSE boundary.
  * Invariants:
  *   - When deltas are truncated, assistant_final fills the gap → client receives full text
  *   - When deltas are complete, assistant_final is a no-op → no duplicate text
@@ -164,7 +164,7 @@ function buildChatRequest(): NextRequest {
     body: JSON.stringify({
       message: "Hello",
       modelRef: { providerKey: "platform", modelId: "test-model" },
-      graphName: "sandbox:openclaw",
+      graphName: "sandbox:agent",
     }),
   });
 }

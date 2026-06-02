@@ -119,13 +119,10 @@ jobs:
       SCHEDULER_API_TOKEN: test-scheduler-api-token-for-ci-min32chars
       BILLING_INGEST_TOKEN: test-billing-ingest-token-for-ci-min32ch
       INTERNAL_OPS_TOKEN: test-internal-ops-token-for-ci-min32
-      OPENCLAW_GATEWAY_TOKEN: test-openclaw-gateway-token-for-ci-32ch
-      OPENCLAW_GITHUB_RW_TOKEN: test-github-rw-token
       DISCORD_BOT_TOKEN: test-discord-bot-token-for-ci
       POSTHOG_API_KEY: phc_test_key_for_ci
       POSTHOG_HOST: http://localhost:18000
       LITELLM_CONFIG: litellm.test.config.yaml
-      OPENCLAW_CONFIG: openclaw-gateway.test.json
       DATABASE_URL: postgresql://user:password@postgres:5432/cogni_template_test?sslmode=disable
       DATABASE_SERVICE_URL: postgresql://user_service:service_password@postgres:5432/cogni_template_test?sslmode=disable
       COGNI_REPO_URL: https://github.com/${{ github.repository }}.git
@@ -179,16 +176,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Pull cogni-sandbox-openclaw from GHCR
-        run: |
-          docker pull ghcr.io/cogni-dao/cogni-sandbox-openclaw:latest
-          docker tag ghcr.io/cogni-dao/cogni-sandbox-openclaw:latest cogni-sandbox-openclaw:latest
-
-      - name: Seed pnpm store volume from GHCR
-        run: |
-          docker pull ghcr.io/cogni-dao/node-template:pnpm-store-latest
-          bash services/sandbox-openclaw/seed-pnpm-store.sh --image ghcr.io/cogni-dao/node-template:pnpm-store-latest --volume pnpm_store
-
       - name: Build app image (with GHA cache)
         uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
         with:
@@ -224,9 +211,8 @@ jobs:
         run: |
           docker network create cogni-edge || true
           docker compose -f infra/compose/runtime/docker-compose.dev.yml \
-            --profile sandbox-openclaw \
             --profile tigerbeetle \
-            up -d app postgres litellm mock-llm caddy temporal-postgres temporal temporal-ui scheduler-worker git-sync llm-proxy-openclaw openclaw-gateway tigerbeetle
+            up -d app postgres litellm mock-llm caddy temporal-postgres temporal temporal-ui scheduler-worker git-sync tigerbeetle
 
       - name: Probe container-boundary (git-sync volume)
         run: scripts/ci/probe-repo-volume.sh
@@ -263,7 +249,6 @@ jobs:
         if: failure()
         run: |
           docker compose -f infra/compose/runtime/docker-compose.dev.yml \
-            --profile sandbox-openclaw \
             logs --tail=300 2>&1 | tee ${{ runner.temp }}/ci-job.log
 
       - name: Upload failure context artifact

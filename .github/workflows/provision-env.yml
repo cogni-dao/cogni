@@ -107,7 +107,6 @@ jobs:
       POLYGON_RPC_URL: ${{ secrets.POLYGON_RPC_URL }}
       POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
       POSTHOG_HOST: ${{ secrets.POSTHOG_HOST }}
-      OPENCLAW_GITHUB_RW_TOKEN: ${{ secrets.OPENCLAW_GITHUB_RW_TOKEN }}
       # Git read creds for deploy-infra.sh's private-repo clone (bare-referenced,
       # set -u → unbound abort if absent). Match candidate-flight-infra.yml:
       # literal username + repo-level GIT_READ_TOKEN. Everything else

@@ -105,9 +105,6 @@ services:
       - TEMPORAL_ADDRESS=temporal:7233
       - TEMPORAL_NAMESPACE=cogni-${APP_ENV}
       - TEMPORAL_TASK_QUEUE=scheduler-tasks
-      - OPENCLAW_GATEWAY_URL=http://openclaw-gateway:18789
-      - OPENCLAW_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN?OPENCLAW_GATEWAY_TOKEN is required}
-      - OPENCLAW_GITHUB_RW_TOKEN=${OPENCLAW_GITHUB_RW_TOKEN?OPENCLAW_GITHUB_RW_TOKEN is required}
       # Redis (stream plane — ephemeral only)
       - REDIS_URL=redis://redis:6379
     volumes:
@@ -660,108 +657,6 @@ services:
       start_period: 30s
 
   # =============================================================================
-  # OpenClaw Gateway Services (profile: sandbox-openclaw)
-  # Long-running OpenClaw in gateway mode + auth-injecting nginx proxy
-  # Per openclaw-sandbox-spec.md: shared internal service, concurrent sessions
-  # =============================================================================
-
-  llm-proxy-openclaw:
-    image: nginx:alpine@sha256:5878d06ae4c83d73285438255f705bb3f9a736f41cd24876ed25bb33faf76c7d
-    container_name: llm-proxy-openclaw
-    profiles: [sandbox-openclaw]
-    restart: unless-stopped
-    labels:
-      - "autoheal=true"
-    networks:
-      - sandbox-internal
-    environment:
-      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
-    volumes:
-      - ./configs/nginx-gateway.conf.template:/etc/nginx/nginx.conf.template:ro
-    command: >
-      sh -c "envsubst '$$LITELLM_MASTER_KEY' < /etc/nginx/nginx.conf.template
-      > /etc/nginx/nginx.conf && nginx -g 'daemon off;'"
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/health || exit 1"]
-      interval: 5s
-      timeout: 2s
-      retries: 5
-    depends_on:
-      litellm:
-        condition: service_healthy
-
-  openclaw-gateway:
-    image: ghcr.io/cogni-dao/cogni-sandbox-openclaw:latest
-    container_name: openclaw-gateway
-    profiles: [sandbox-openclaw]
-    restart: unless-stopped
-    labels:
-      - "autoheal=true"
-    networks:
-      - sandbox-internal
-      - cogni-edge # internet egress for curl, gh, web search
-      - internal
-    ports:
-      - "127.0.0.1:3333:18789"
-    entrypoint:
-      [
-        "sh",
-        "-c",
-        "mkdir -p /workspace/.openclaw-config && cp /opt/openclaw-config-source.json /workspace/.openclaw-config/openclaw.json && exec node /app/dist/index.js gateway",
-      ]
-    environment:
-      - HOME=/workspace
-      - npm_config_store_dir=/pnpm-store
-      - OPENCLAW_CONFIG_PATH=/workspace/.openclaw-config/openclaw.json
-      - OPENCLAW_STATE_DIR=/workspace/.openclaw-state
-      - OPENCLAW_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN?OPENCLAW_GATEWAY_TOKEN is required}
-      - OPENCLAW_LOAD_SHELL_ENV=0
-      - GITHUB_TOKEN=${OPENCLAW_GITHUB_RW_TOKEN?OPENCLAW_GITHUB_RW_TOKEN is required}
-      - COGNI_REPO_URL=${COGNI_REPO_URL}
-      - GIT_AUTHOR_NAME=Cogni Agent
-      - GIT_COMMITTER_NAME=Cogni Agent
-      - GIT_AUTHOR_EMAIL=agent@cogni.dev
-      - GIT_COMMITTER_EMAIL=agent@cogni.dev
-      - OPENCLAW_RAW_STREAM=1
-      - OPENCLAW_RAW_STREAM_PATH=/tmp/openclaw-raw-stream.jsonl
-      - PI_RAW_STREAM=1
-      - PI_RAW_STREAM_PATH=/tmp/pi-raw-stream.jsonl
-      # Grafana observability (for grafana-health skill)
-      - GRAFANA_URL=${GRAFANA_URL}
-      - GRAFANA_SERVICE_ACCOUNT_TOKEN=${GRAFANA_SERVICE_ACCOUNT_TOKEN}
-      # Discord bot (OpenClaw channel plugin)
-      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN:-}
-    read_only: true
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,size=128m
-    volumes:
-      - ./openclaw/openclaw-gateway.json:/opt/openclaw-config-source.json:ro # seed config — copied to writable path on startup
-      - ./openclaw/gateway-workspace:/workspace/gateway
-      - repo_data:/repo:ro
-      - pnpm_store:/pnpm-store
-      - cogni_workspace:/workspace # RW volume — pnpm hardlinks require same fs as pnpm_store
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    pids_limit: 256
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          'node -e "const s=require(''net'').connect(18789,''127.0.0.1'',()=>{s.end();process.exit(0)});s.setTimeout(2000,()=>{s.destroy();process.exit(1)});s.on(''error'',()=>process.exit(1))"',
-        ]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-      start_period: 90s
-    depends_on:
-      llm-proxy-openclaw:
-        condition: service_healthy
-      git-sync:
-        condition: service_completed_successfully
-
-  # =============================================================================
   # TigerBeetle (Financial Ledger)
   # Per financial-ledger-spec: double-entry ledger engine
   # Self-initializing: formats data file on first boot, then starts.
@@ -833,9 +728,5 @@ volumes:
     name: db_backups
   repo_data:
     name: repo_data
-  pnpm_store:
-    name: pnpm_store
   tigerbeetle_data:
     name: tigerbeetle_data
-  cogni_workspace:
-    name: cogni_workspace

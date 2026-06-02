@@ -40,7 +40,7 @@ export type CreditsTopupSpec = z.infer<typeof creditsTopupSpecSchema>;
 
 /**
  * Schema for a single governance schedule entry.
- * Each schedule triggers an OpenClaw gateway run with a 1-word entrypoint.
+ * Each schedule triggers a sandbox agent run with a 1-word entrypoint.
  * Invariants: Charter must be unique per config; cron must be 5 fields; entrypoint must be 1 token (no spaces).
  */
 export const governanceScheduleSchema = z.object({
@@ -55,7 +55,7 @@ export const governanceScheduleSchema = z.object({
     ),
   /** IANA timezone (defaults to UTC) */
   timezone: z.string().default("UTC"),
-  /** Trigger word sent to OpenClaw gateway (single token, no spaces) */
+  /** Trigger word sent to the sandbox agent (single token, no spaces) */
   entrypoint: z
     .string()
     .regex(/^\S+$/, "Entrypoint must be a single token (no spaces)"),
