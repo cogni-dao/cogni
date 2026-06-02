@@ -100,12 +100,13 @@ export async function POST(_request: Request, ctx: RouteParams) {
     );
   }
 
-  // A node is ~1100 files (un-Octokit-able), so the operator dispatches the
-  // node-scaffold workflow (as the App) rather than committing here; it runs the
-  // reproducible bash scaffold + opens the App-authored node-app PR.
+  // App-direct: the operator authors the node-app PR itself via the GitHub Git Data API —
+  // referencing node-template's tree + applying the pure footprint gens in one commit. No
+  // workflow dispatch; the PR URL is available synchronously.
   const writer = createNodeRepoWriter(env);
+  let pr: { prNumber: number; prUrl: string };
   try {
-    await writer.dispatchNodeScaffold({
+    pr = await writer.openNodeAppPr({
       owner: node.repoOwner,
       repo: node.repoName,
       slug: node.slug,
@@ -118,14 +119,11 @@ export async function POST(_request: Request, ctx: RouteParams) {
   } catch (err) {
     const message = err instanceof Error ? err.message : "unknown";
     return NextResponse.json(
-      { error: "scaffold dispatch failed", reason: message },
+      { error: "node-app PR authoring failed", reason: message },
       { status: 502 }
     );
   }
 
-  // Dispatch returns 204 (no PR id). Surface the workflow page; the wizard polls
-  // the opened PR (head cogni-operator/node-bootstrap-<slug>) for its URL.
-  const workflowUrl = `https://github.com/${node.repoOwner}/${node.repoName}/actions/workflows/node-scaffold.yml`;
   const [updated] = await withTenantScope(
     db,
     userActor(session.id as UserId),
@@ -134,12 +132,12 @@ export async function POST(_request: Request, ctx: RouteParams) {
         .update(nodes)
         .set({
           status: t.nextStatus,
-          publishPrUrl: workflowUrl,
+          publishPrUrl: pr.prUrl,
           updatedAt: new Date(),
         })
         .where(and(eq(nodes.id, id), eq(nodes.ownerUserId, session.id)))
         .returning()
   );
 
-  return NextResponse.json({ node: updated, dispatched: true, workflowUrl });
+  return NextResponse.json({ node: updated, pr });
 }

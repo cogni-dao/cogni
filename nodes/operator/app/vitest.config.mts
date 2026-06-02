@@ -34,6 +34,7 @@ export default defineConfig({
       "tests/contract/**/*.{test,spec}.{ts,tsx}",
       "tests/ports/**/*.{test,spec}.{ts,tsx}",
       "tests/security/**/*.{test,spec}.{ts,tsx}",
+      "src/**/*.{test,spec}.{ts,tsx}",
     ],
     exclude: ["node_modules", "dist", ".next"],
     testTimeout: 30_000,
