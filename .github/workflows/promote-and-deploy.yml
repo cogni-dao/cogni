@@ -171,6 +171,44 @@ jobs:
           # shellcheck disable=SC2086
           ssh $SSH_OPTS root@"$VM_HOST" "kubectl apply -f /tmp/appset.yaml -n argocd && rm -f /tmp/appset.yaml"
 
+  # Per-node public DNS for preview + production — mirrors candidate-flight.yml's
+  # reconcile-dns. DNS is env-level + idempotent (no-op for existing nodes); a node
+  # newly added to the catalog gets its `<node>-<env host>` A record on its FIRST
+  # promote, so verify-deploy can probe its public /version. Without this, per-node
+  # DNS only existed on candidate-a and node formation dead-ended one env up.
+  # Provision happens inside the promote lane (idempotent), not a full deploy-infra
+  # env reprovision. Serialize Cloudflare writes per env (mirrors reconcile-appset).
+  reconcile-dns:
+    needs: decide
+    if: needs.decide.outputs.has_targets == 'true'
+    concurrency:
+      group: reconcile-dns-${{ needs.decide.outputs.environment }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    environment: ${{ needs.decide.outputs.environment }}
+    steps:
+      # Promote head, so a node ADDED in this promote carries its catalog entry +
+      # the reconcile script (CATALOG_IS_SSOT).
+      - name: Checkout app source (catalog + scripts)
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          ref: ${{ needs.decide.outputs.head_sha }}
+
+      - name: Reconcile node DNS (per-node A records → VM IP)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          FORK_DOMAIN_ROOT: ${{ vars.FORK_DOMAIN_ROOT || 'cognidao.org' }}
+          DOMAIN: ${{ vars.DOMAIN }}
+          DEPLOY_ENVIRONMENT: ${{ needs.decide.outputs.environment }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ] || [ -z "${CLOUDFLARE_ZONE_ID:-}" ]; then
+            echo "::warning::Cloudflare secrets unset on ${DEPLOY_ENVIRONMENT} — skipping node DNS reconcile (newly-created nodes won't resolve)"
+            exit 0
+          fi
+          bash scripts/ci/reconcile-node-dns.sh "${DEPLOY_ENVIRONMENT}"
+
   promote-k8s:
     needs: [decide, reconcile-appset]
     if: needs.decide.outputs.has_targets == 'true'
@@ -516,7 +554,9 @@ jobs:
           job_status: ${{ job.status }}
 
   verify-deploy:
-    needs: [decide, promote-k8s, deploy-infra]
+    # reconcile-dns ordered before the public /version probe so a newly-added node's
+    # host resolves; its failure surfaces on reconcile-dns, the probe stays the gate.
+    needs: [decide, promote-k8s, deploy-infra, reconcile-dns]
     if: |
       always() &&
       needs.promote-k8s.result == 'success' &&
