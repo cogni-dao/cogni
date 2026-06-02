@@ -13,7 +13,7 @@ namePrefix: mochi-
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/cogni-template
-    digest: "sha256:775ec87e264c389bcc2908cc82bb48ec559e913150ccc34af76dfc89e8dd9acd"
+    digest: "sha256:f7cf185f0f2c7ecac1368da62d97f85f3c9f06775eecea3c50bd6899551af50a"
 
 patches:
   - target:

@@ -1,10 +1,13 @@
 name: mochi
 type: node
 port: 3200
+# task.5078 — edge NodePort (see operator.yaml). Must match overlay nodePort.
 node_port: 30500
 dockerfile: nodes/mochi/app/Dockerfile
+# bug.0344 — see infra/catalog/operator.yaml for why these fields exist.
 image_tag_suffix: "-mochi"
 migrator_tag_suffix: "-mochi-migrate"
+# task.0320 — per-env deploy branches (see operator.yaml).
 candidate_a_branch: deploy/candidate-a-mochi
 preview_branch: deploy/preview-mochi
 production_branch: deploy/production-mochi
