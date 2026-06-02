@@ -32,7 +32,7 @@ describe("ai.chat.v1 contract validation", () => {
       const payload = {
         message: "What time is it?",
         modelRef: { providerKey: "platform", modelId: "gpt-4" },
-        graphName: "sandbox:openclaw",
+        graphName: "sandbox:agent",
         stateKey: "abc123_XYZ-456",
       };
 

@@ -164,8 +164,8 @@ export interface SandboxRunResult {
  * JSON object to stdout conforming to this shape. The host-side
  * SandboxGraphProvider parses this envelope — it never inspects raw text.
  *
- * Matches OpenClaw `--json` output so the provider is agent-agnostic:
- * swapping run.mjs for OpenClaw requires zero provider changes.
+ * Stable JSON envelope so the provider is agent-agnostic: swapping the
+ * in-container program requires zero provider changes.
  */
 export interface SandboxProgramContract {
   /** Response payloads. Typically one entry with the LLM response text. */

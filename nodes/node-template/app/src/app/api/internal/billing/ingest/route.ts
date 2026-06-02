@@ -279,7 +279,7 @@ export const POST = wrapRouteHandlerWithLogging(
       }
 
       // Resolve billing account; fall back to system account for unattributed calls
-      // (e.g. Discord → OpenClaw gateway → LiteLLM with no end-user header)
+      // (e.g. an upstream LiteLLM call with no end-user header)
       const resolvedBillingAccountId = resolveBillingAccountId(entry);
       const billingAccountId =
         resolvedBillingAccountId ?? COGNI_SYSTEM_BILLING_ACCOUNT_ID;

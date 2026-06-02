@@ -104,14 +104,7 @@ export function createGraphExecutor(
   const providerId = (langGraphProvider as LangGraphInProcProvider).providerId;
   const providers = new Map<string, GraphExecutorPort>([
     [providerId, langGraphProvider],
-    [
-      "sandbox",
-      new LazySandboxGraphProvider(
-        env.LITELLM_MASTER_KEY,
-        env.OPENCLAW_GATEWAY_URL,
-        env.OPENCLAW_GATEWAY_TOKEN
-      ),
-    ],
+    ["sandbox", new LazySandboxGraphProvider(env.LITELLM_MASTER_KEY)],
   ]);
 
   // Create namespace router with all configured providers
@@ -561,30 +554,13 @@ function createDevProvider(apiUrl: string): LangGraphDevProvider {
 let _sandboxProvider: Promise<GraphExecutorPort> | null = null;
 
 function loadSandboxProvider(
-  litellmMasterKey: string,
-  gatewayUrl: string,
-  gatewayToken: string
+  litellmMasterKey: string
 ): Promise<GraphExecutorPort> {
   if (!_sandboxProvider) {
     _sandboxProvider = import("@/adapters/server/sandbox").then(
-      ({
-        SandboxRunnerAdapter,
-        SandboxGraphProvider,
-        OpenClawGatewayClient,
-      }) => {
+      ({ SandboxRunnerAdapter, SandboxGraphProvider }) => {
         const runner = new SandboxRunnerAdapter({ litellmMasterKey });
-
-        // Gateway client for OpenClaw gateway mode
-        // Billing: handled by LiteLLM generic_api callback (NO_ZERO_RECEIPTS_FOR_PAID_MODELS)
-        const gatewayClient = new OpenClawGatewayClient(
-          gatewayUrl,
-          gatewayToken
-        );
-
-        return new SandboxGraphProvider(
-          runner,
-          gatewayClient
-        ) as GraphExecutorPort;
+        return new SandboxGraphProvider(runner) as GraphExecutorPort;
       }
     );
   }
@@ -603,16 +579,8 @@ function loadSandboxProvider(
 class LazySandboxGraphProvider implements GraphExecutorPort {
   private readonly delegate: Promise<GraphExecutorPort>;
 
-  constructor(
-    litellmMasterKey: string,
-    gatewayUrl: string,
-    gatewayToken: string
-  ) {
-    this.delegate = loadSandboxProvider(
-      litellmMasterKey,
-      gatewayUrl,
-      gatewayToken
-    );
+  constructor(litellmMasterKey: string) {
+    this.delegate = loadSandboxProvider(litellmMasterKey);
   }
 
   runGraph(req: GraphRunRequest, ctx?: ExecutionContext): GraphRunResult {
