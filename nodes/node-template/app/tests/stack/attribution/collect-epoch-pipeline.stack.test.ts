@@ -34,8 +34,8 @@ import {
 } from "@tests/_fixtures/attribution/seed-attribution";
 import { getSeedDb } from "@tests/_fixtures/db/seed-client";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createEnrichmentActivities } from "../../../../../services/scheduler-worker/src/activities/enrichment";
-import { createAttributionActivities } from "../../../../../services/scheduler-worker/src/activities/ledger";
+import { createEnrichmentActivities } from "../../../../../../services/scheduler-worker/src/activities/enrichment";
+import { createAttributionActivities } from "../../../../../../services/scheduler-worker/src/activities/ledger";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -118,7 +118,7 @@ describe("[attribution] CollectEpochWorkflow pipeline (stack)", () => {
     // 4. Bundle workflow code (compiles TS → deterministic JS bundle)
     const workflowBundle = await bundleWorkflowCode({
       workflowsPath: new URL(
-        "../../../../../packages/temporal-workflows/src/ledger.ts",
+        "../../../../../../packages/temporal-workflows/src/ledger.ts",
         import.meta.url
       ).pathname,
     });
