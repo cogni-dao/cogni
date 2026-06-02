@@ -121,17 +121,16 @@ export const POST = wrapRouteHandlerWithLogging(
       );
 
       // Additive analytical view: derive a scrubbed/capped Langfuse session from
-      // the same body. Default-ON in non-production (operator's own dogfood —
-      // same Langfuse instance already receiving graph traces); in production it
-      // stays consent-gated behind TRANSCRIPT_LANGFUSE_EXPORT_ENABLED (external
-      // dev sessions → third-party Cloud). The corpus row above is the source of
-      // truth; this never blocks the ack.
+      // the same body. ON by default (operator dogfood — same Langfuse instance
+      // already receiving graph traces); TRANSCRIPT_LANGFUSE_EXPORT_ENABLED=false
+      // opts out. The corpus row above is the source of truth; never blocks the ack.
       const env = serverEnv();
       const langfuse = c.langfuse;
-      const exportEnabled =
-        env.TRANSCRIPT_LANGFUSE_EXPORT_ENABLED ||
-        env.DEPLOY_ENVIRONMENT !== "production";
-      if (!result.deduped && langfuse && exportEnabled) {
+      if (
+        !result.deduped &&
+        langfuse &&
+        env.TRANSCRIPT_LANGFUSE_EXPORT_ENABLED
+      ) {
         try {
           const draft = mapTranscriptToDevSession(body, {
             sessionId: parsed.data.sessionId,

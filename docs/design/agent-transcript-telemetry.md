@@ -92,16 +92,15 @@ fire-and-forget — never blocking the ingest ack, never touching the corpus row
   `sessionId`, a generation per assistant turn, a span per tool, all tagged
   `source=claude-code-dev-session` so dev sessions never pollute operator-graph
   traces. Reuses the shared Langfuse keys held operator-side; devs never see them.
-- **Env-aware enablement.** Langfuse is **Cloud** (`us.cloud.langfuse.com`).
-  Non-production (candidate-a/preview) **exports by default** — operator dogfood,
-  the same Langfuse instance already receiving graph traces, so the view is
-  exercisable + `deploy_verified`-able. **Production** stays **consent-gated**:
-  exports only when `TRANSCRIPT_LANGFUSE_EXPORT_ENABLED=true` (external dev sessions
-  → third-party SaaS is an explicit operator decision). Content is scrubbed + capped
-  either way; the corpus pipeline runs unchanged. The route emits a
-  `telemetry.transcripts.langfuse_export` log marker so the emit is Loki-provable
-  without the destination project's read keys. Per-dev opt-in and a separate
-  Langfuse project (quota isolation) are the next refinements.
+- **On by default, opt-out.** Langfuse is **Cloud** (`us.cloud.langfuse.com`).
+  `TRANSCRIPT_LANGFUSE_EXPORT_ENABLED` defaults **true** — at MVP this is the
+  operator's own dogfood, the same Langfuse instance already receiving graph traces,
+  so the view is exercisable + `deploy_verified`-able. Set it `false` to opt out
+  (a future production posture before external-dev egress consent is formalized).
+  Content is always scrubbed + capped; the corpus pipeline runs unchanged. The route
+  emits a `telemetry.transcripts.langfuse_export` log marker so the emit is
+  Loki-provable without the destination project's read keys. Per-dev opt-in and a
+  separate Langfuse project (quota isolation) are the next refinements.
 
 ## Invariants
 
@@ -111,6 +110,6 @@ fire-and-forget — never blocking the ingest ack, never touching the corpus row
 - [ ] ATTRIBUTION_TRACEABLE — every chunk + derived atom traces to its contributor.
 - [ ] CORPUS_IS_SOURCE_OF_TRUTH — Langfuse is a derived, lossy view; the verbatim
       corpus (Postgres) is canonical and is never replaced by the analytics backend.
-- [ ] VIEW_EGRESS_IS_CONSENT_GATED — in **production**, third-party (Langfuse Cloud)
-      egress requires explicit opt-in; non-prod dogfoods by default. Always scrubbed + capped.
+- [ ] VIEW_EGRESS_IS_OPT_OUT — Langfuse Cloud export is on by default (MVP dogfood),
+      `TRANSCRIPT_LANGFUSE_EXPORT_ENABLED=false` opts out. Always scrubbed + capped.
 - [ ] SOURCE_TAGGED — dev sessions tagged `source=claude-code-dev-session`.
