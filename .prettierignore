@@ -17,3 +17,6 @@ docs/research/fixtures/*.json
 # (promote-preview-digest-seed.yml). Their YAML style disagrees with Prettier;
 # gating format:check on these paths creates churn. Humans may run Prettier by hand.
 infra/k8s/overlays/**/kustomization.yaml
+
+# Byte-exact pnpm-lock test fixtures (node-app-scaffold gens) — must stay raw
+nodes/operator/app/src/features/node-app-scaffold/gens/__fixtures__/
