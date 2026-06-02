@@ -142,15 +142,16 @@ Full node lifecycle: DAO formation (done) -> zero-touch provisioning (this proje
 
 ### TS-Native Node-Birth Rails (direction, Run)
 
-**Today (deliberate, not just debt):** node birth runs Next.js app → GitHub Actions (YAML) → `scripts/ci/*.sh` (bash + `yq` + inline `python3`). This is a real **portability sweet spot**: a fork clones the node-template GitHub repo and runs the *entire* birth flow with `gh` + `bash` + `yq` + `curl` — **no hard-required Cogni platform/operator backend**. Forks are self-sufficient. That property is load-bearing and must survive any migration.
+**Today (deliberate, not just debt):** node birth runs Next.js app → GitHub Actions (YAML) → `scripts/ci/*.sh` (bash + `yq` + inline `python3`). This is a real **portability sweet spot**: a fork clones the node-template GitHub repo and runs the _entire_ birth flow with `gh` + `bash` + `yq` + `curl` — **no hard-required Cogni platform/operator backend**. Forks are self-sufficient. That property is load-bearing and must survive any migration.
 
-**The cost we're paying:** bash boundaries are untyped (stringly-typed, `python3 -c` to parse JSON), and the bash operators are a *parallel* implementation that drifts from the typed layer. Concrete: `@cogni/dns-ops` (`task.0232`) already ships a typed, tested CloudflareAdapter with `PROTECTED` (@/www) enforcement — and the bash reconcile (`#1445`) reimplemented the upsert **without** those guards, forcing them to be hand-written back in bash (`#1447`: apex guard + in-place update). One safety invariant, now in two places.
+**The cost we're paying:** bash boundaries are untyped (stringly-typed, `python3 -c` to parse JSON), and the bash operators are a _parallel_ implementation that drifts from the typed layer. Concrete: `@cogni/dns-ops` (`task.0232`) already ships a typed, tested CloudflareAdapter with `PROTECTED` (@/www) enforcement — and the bash reconcile (`#1445`) reimplemented the upsert **without** those guards, forcing them to be hand-written back in bash (`#1447`: apex guard + in-place update). One safety invariant, now in two places.
 
 **Top-0.1% target:**
+
 - One Zod `NodeSpec`/`EnvSpec` as identity+shape SSOT; YAML catalogs are generated-from or validated-against it.
 - DB types derived from the same schema (drizzle-zod): the operator `node_registry_nodes` row and the git `repo-spec.yaml` manifest validate against **one** type — no live-vs-declared drift.
 - Operators (DNS, secrets, overlays, scheduler-routing) as hexagonal TS ports/adapters (`DnsPort` = the existing CloudflareAdapter), unit-tested in vitest.
-- **One `cogni` CLI** is the shared entrypoint for the operator wizard (in-process) *and* the GH workflow (`- run: pnpm cogni env reconcile <env>` — zero logic in YAML, zero bash).
+- **One `cogni` CLI** is the shared entrypoint for the operator wizard (in-process) _and_ the GH workflow (`- run: pnpm cogni env reconcile <env>` — zero logic in YAML, zero bash).
 - Bash remains only at the irreducible bootstrap floor (the VM step that installs node/pnpm).
 
 **Hard constraint on the migration:** the `cogni` CLI must stay **fork-runnable standalone** (`npx`/`pnpm`, no operator backend dependency) — otherwise we trade away the portability the bash form gives forks today. Preserving fork self-sufficiency is the bar, not just "rewrite in TS."
