@@ -144,6 +144,9 @@ done
 # Cogni-DAO/cogni + operator|poly|resy hardcodes the canary tripped on.
 # shellcheck source=../ci/lib/image-tags.sh
 . "$REPO_ROOT/scripts/ci/lib/image-tags.sh"
+# Idempotent Cloudflare A-record upsert — shared with scripts/ci/reconcile-node-dns.sh.
+# shellcheck source=../ci/lib/cloudflare-dns.sh
+. "$REPO_ROOT/scripts/ci/lib/cloudflare-dns.sh"
 
 # Runs on any repo that owns its deploy state on origin: the hub
 # (Cogni-DAO/cogni — multi-node) and downstream forks (single- or multi-node)
@@ -679,33 +682,23 @@ if [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]] && [[ -n "${CLOUDFLARE_ZONE_ID:-}" ]]; t
   fi
   log_info "Cloudflare SSL mode → full (zone $CLOUDFLARE_ZONE_ID)"
 
-  # FQDNs come from two sources (B2):
-  #   1. DOMAIN — the apex/operator-host (Caddy listens here for TLS)
-  #   2. public_url_for_target $DEPLOY_ENV $node — one per NODE_TARGETS entry
-  # No more hardcoded poly-*/resy-* (those squatted on upstream's zone last canary).
-  # The VM alias is repo-scoped because several forks may share a Cloudflare
-  # zone; generic candidate-a.vm.<root> collides across repos.
+  # FQDNs (B2): apex/operator host + the repo-scoped VM alias + one per
+  # non-primary type:node, via host_for_node() — the SAME host SSOT the edge
+  # Caddyfile and smoke/buildSha checks use, so DNS can't drift from what they
+  # expect. (host_for_node replaces an undefined `public_url_for_target` shim
+  # that silently no-op'd every per-node record — see scripts/ci/reconcile-node-dns.sh,
+  # which reconciles these same records on every candidate-a flight.) The VM
+  # alias is repo-scoped because several forks may share a Cloudflare zone;
+  # generic candidate-a.vm.<root> collides across repos.
   DNS_RECORDS=("$DOMAIN" "$VM_DNS_HOST")
   for node in "${NODE_TARGETS[@]}"; do
-    node_url=$(public_url_for_target "$DEPLOY_ENV" "$node" 2>/dev/null || true)
-    [[ -z "$node_url" ]] && continue
-    fqdn="${node_url#https://}"
-    [[ "$fqdn" == "$DOMAIN" ]] && continue  # dedupe apex
-    DNS_RECORDS+=("$fqdn")
+    is_primary_host "$node" && continue  # apex already in DNS_RECORDS
+    DNS_RECORDS+=("$(host_for_node "$node" "$DOMAIN")")
   done
 
   for fqdn in "${DNS_RECORDS[@]}"; do
-    # Subdomain = FQDN minus the zone root. Use FORK_DOMAIN_ROOT if available;
-    # else fall back to the legacy cognidao.org suffix strip.
-    sub="$fqdn"
-    if [[ -n "$FORK_ROOT" && "$FORK_ROOT" != "null" ]]; then
-      sub="${fqdn%.${FORK_ROOT}}"
-      [[ "$sub" == "$fqdn" ]] && sub="@"  # apex record
-    else
-      sub="${fqdn%.cognidao.org}"
-    fi
     # Proxy state per record:
-    #   • Browser-facing (DOMAIN apex + per-node public URLs) → proxied=true
+    #   • Browser-facing (DOMAIN apex + per-node public hosts) → proxied=true
     #     so Cloudflare terminates TLS at the edge with Universal SSL
     #     (browser-trusted always; no LE involvement).
     #   • VM_DNS_HOST → proxied=false so SSH (port 22) + diagnostic NodePort
@@ -717,18 +710,9 @@ if [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]] && [[ -n "${CLOUDFLARE_ZONE_ID:-}" ]]; t
     else
       proxied="true"
     fi
-    EXISTING=$(curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-      "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records?name=${fqdn}&type=A" \
-      | python3 -c "import json,sys; [print(x['id']) for x in json.load(sys.stdin).get('result',[])]" 2>/dev/null)
-    for id in $EXISTING; do
-      curl -s -X DELETE -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-        "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records/$id" >/dev/null
-    done
-    RESULT=$(curl -s -X POST -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H "Content-Type: application/json" \
-      "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records" \
-      -d "{\"type\":\"A\",\"name\":\"${sub}\",\"content\":\"${VM_IP}\",\"ttl\":300,\"proxied\":${proxied}}")
-    OK=$(echo "$RESULT" | python3 -c 'import json,sys; print("OK" if json.load(sys.stdin).get("success") else "FAIL")' 2>/dev/null)
-    log_info "  ${fqdn} → ${VM_IP} (proxied=${proxied}): $OK"
+    state=$(cf_upsert_a_record "$CLOUDFLARE_API_TOKEN" "$CLOUDFLARE_ZONE_ID" "$fqdn" "$VM_IP" "$proxied") \
+      && log_info "  ${fqdn} → ${VM_IP} (proxied=${proxied}): ${state}" \
+      || log_error "  ${fqdn} → ${VM_IP} (proxied=${proxied}): upsert FAILED"
   done
 else
   log_warn "Skipping DNS — CLOUDFLARE_API_TOKEN or CLOUDFLARE_ZONE_ID not set"

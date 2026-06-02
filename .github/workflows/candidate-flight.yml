@@ -359,11 +359,55 @@ jobs:
           path: deploy-sha-out/deploy-sha-${{ matrix.node }}.txt
           retention-days: 1
 
+  # Per-node public DNS. The node's overlay/secrets/DB all auto-fan on flight,
+  # but `<node>-test.<root>` only resolved if someone hand-made a Cloudflare A
+  # record (no `*-test` wildcard) — so a freshly-created node deployed but its
+  # public URL failed at DNS. This reconciles one A record per non-primary
+  # catalog node → the env VM IP (idempotent), so verify-candidate's smoke +
+  # buildSha checks (which curl host_for_node(node, DOMAIN)) resolve.
+  #
+  # Depends only on `decide` (DNS is env-level, independent of the image build):
+  # it runs on EVERY flight dispatch — including no-target ones — so it both
+  # self-heals every node's record and is independently exercisable/validatable
+  # without a node change. Idempotent + mirrors the apex proxy state, so a
+  # no-op run is the proof the live write path is green.
+  reconcile-dns:
+    needs: [decide]
+    if: needs.decide.result == 'success'
+    # Serialize Cloudflare writes across concurrent flights (mirrors reconcile-appset).
+    concurrency:
+      group: reconcile-dns-candidate-a
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    environment: candidate-a
+    steps:
+      # PR head, not the workflow default branch: a PR that ADDS a node carries
+      # the new catalog entry + the reconcile script here, so DNS covers it.
+      - name: Checkout app source (PR catalog + scripts)
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          ref: ${{ needs.decide.outputs.head_sha }}
+
+      - name: Reconcile node DNS (per-node A records → VM IP)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          FORK_DOMAIN_ROOT: ${{ vars.FORK_DOMAIN_ROOT || 'cognidao.org' }}
+          DOMAIN: ${{ vars.DOMAIN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ] || [ -z "${CLOUDFLARE_ZONE_ID:-}" ]; then
+            echo "::warning::Cloudflare secrets unset on candidate-a — skipping node DNS reconcile (newly-created nodes won't resolve)"
+            exit 0
+          fi
+          bash scripts/ci/reconcile-node-dns.sh candidate-a
+
   verify-candidate:
-    needs: [decide, flight]
+    needs: [decide, flight, reconcile-dns]
     if: |
       needs.decide.outputs.has_targets == 'true' &&
-      needs.flight.result == 'success'
+      needs.flight.result == 'success' &&
+      needs.reconcile-dns.result == 'success'
     strategy:
       fail-fast: false
       matrix:
