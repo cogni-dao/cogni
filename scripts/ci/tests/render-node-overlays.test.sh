@@ -25,8 +25,8 @@ ENVS=(candidate-a preview production)
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "  ok — $*"; }
 
-mapfile -t MANAGED < <(bash "$RENDER" --help >/dev/null 2>&1; source scripts/ci/lib/image-tags.sh; \
-  for n in "${NODE_TARGETS[@]}"; do is_primary_host "$n" && continue; [ "$n" = resy ] && continue; echo "$n"; done)
+# Single source of truth for the managed set: the renderer itself (no re-derivation).
+mapfile -t MANAGED < <(bash "$RENDER" --list-managed)
 
 echo "[1/3] managed-overlay ↔ catalog drift gate"
 bash "$RENDER" --check >/dev/null \

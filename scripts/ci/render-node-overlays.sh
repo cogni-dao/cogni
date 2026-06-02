@@ -345,7 +345,9 @@ do_write() {
 }
 
 do_check() {
-  local node env path rc=0
+  local node env path rc=0 difftmp
+  difftmp="$(mktemp)"
+  trap 'rm -f "$difftmp"' RETURN
   while read -r node; do
     for env in "${ENVS[@]}"; do
       path="$(overlay_path "$node" "$env")"
@@ -354,9 +356,9 @@ do_check() {
         rc=1
         continue
       fi
-      if ! diff -u <(normalize_digest <"$path") <(render_overlay "$node" "$env" | normalize_digest) >/tmp/render-node-overlays.diff 2>&1; then
+      if ! diff -u <(normalize_digest <"$path") <(render_overlay "$node" "$env" | normalize_digest) >"$difftmp" 2>&1; then
         echo "[ERROR] ${path#"${REPO_ROOT}/"} is out of sync with the catalog." >&2
-        cat /tmp/render-node-overlays.diff >&2
+        cat "$difftmp" >&2
         rc=1
       fi
     done
@@ -372,6 +374,7 @@ do_check() {
 case "${1:-}" in
   --write) do_write ;;
   --check) do_check ;;
+  --list-managed) managed_nodes ;;
   --appset-stanza) render_appset_stanza "${2:?node}" "${3:?env}" ;;
   "" | -h | --help)
     grep '^# ' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
