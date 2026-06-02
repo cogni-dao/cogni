@@ -28,7 +28,7 @@ import { getGovernanceConfig, getNodeId } from "@/shared/config";
 import { schedules } from "@/shared/db/schema";
 import { serverEnv } from "@/shared/env/server-env";
 
-const GOVERNANCE_GRANT_SCOPES = ["graph:execute:sandbox:agent"] as const;
+const GOVERNANCE_GRANT_SCOPES = ["graph:execute:sandbox:openclaw"] as const;
 
 function computeNextRun(cron: string, timezone: string): Date {
   const interval = cronParser.parseExpression(cron, {

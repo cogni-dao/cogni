@@ -146,7 +146,7 @@ describe("syncGovernanceSchedules", () => {
       expect.objectContaining({
         temporalScheduleId: "governance:community",
         ownerUserId: SYSTEM_USER_ID,
-        graphId: "sandbox:agent",
+        graphId: "sandbox:openclaw",
       })
     );
     expect(deps.scheduleControl.createSchedule).toHaveBeenCalledTimes(2);
@@ -156,7 +156,7 @@ describe("syncGovernanceSchedules", () => {
         dbScheduleId: `${MOCK_DB_SCHEDULE_ID}-1`,
         cron: "0 */6 * * *",
         timezone: "UTC",
-        graphId: "sandbox:agent",
+        graphId: "sandbox:openclaw",
         executionGrantId: GRANT_ID,
         input: { message: "COMMUNITY", model: "kimi-k2.5" },
         overlapPolicy: "skip",

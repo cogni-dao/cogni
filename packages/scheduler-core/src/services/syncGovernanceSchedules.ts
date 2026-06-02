@@ -30,8 +30,8 @@ import {
   type ScheduleDescription,
 } from "../ports/schedule-control.port";
 
-/** Graph ID for sandbox agent execution */
-const GOVERNANCE_GRAPH_ID = "sandbox:agent";
+/** Graph ID for OpenClaw sandbox execution */
+const GOVERNANCE_GRAPH_ID = "sandbox:openclaw";
 
 /** Default model for governance agent runs */
 // TODO(task.0068): Use default_flash from LiteLLM config metadata instead of hardcoded model
@@ -94,7 +94,7 @@ export interface UpsertGovernanceScheduleRowParams {
   ownerUserId: string;
   /** Execution grant ID for authorization */
   executionGrantId: string;
-  /** Graph ID (e.g., "sandbox:agent") */
+  /** Graph ID (e.g., "sandbox:openclaw") */
   graphId: string;
   /** Graph input payload */
   input: JsonValue;
