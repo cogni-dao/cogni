@@ -43,6 +43,19 @@ export interface CommitFileAndOpenPrResult {
   readonly headSha: string;
 }
 
+export interface DispatchNodeScaffoldInput {
+  readonly owner: string;
+  readonly repo: string;
+  readonly slug: string;
+  readonly nodeId: string;
+  readonly chainId: number;
+  readonly daoContract?: string;
+  readonly pluginContract?: string;
+  readonly signalContract?: string;
+  /** Ref carrying node-scaffold.yml; defaults to "main". */
+  readonly workflowRef?: string;
+}
+
 export class GitHubRepoWriter {
   private readonly config: GitHubRepoWriterConfig;
   private readonly appAuth: ReturnType<typeof createAppAuth>;
@@ -165,6 +178,36 @@ export class GitHubRepoWriter {
         headSha,
       };
     }
+  }
+
+  /**
+   * Dispatch the node-scaffold workflow as the App. The wizard's emit path:
+   * a node is ~1100 files (un-Octokit-able), so we trigger node-scaffold.yml
+   * (which runs the bash scaffold + opens the App-authored PR) rather than
+   * committing files here. Returns 204 with no body — the caller surfaces the
+   * resulting PR (head `cogni-operator/node-bootstrap-<slug>`) separately.
+   */
+  async dispatchNodeScaffold(input: DispatchNodeScaffoldInput): Promise<void> {
+    const octokit = await this.getOctokit(input.owner, input.repo);
+    const inputs: Record<string, string> = {
+      slug: input.slug,
+      node_id: input.nodeId,
+      chain_id: String(input.chainId),
+    };
+    if (input.daoContract) inputs.dao_contract = input.daoContract;
+    if (input.pluginContract) inputs.plugin_contract = input.pluginContract;
+    if (input.signalContract) inputs.signal_contract = input.signalContract;
+
+    await octokit.request(
+      "POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches",
+      {
+        owner: input.owner,
+        repo: input.repo,
+        workflow_id: "node-scaffold.yml",
+        ref: input.workflowRef ?? "main",
+        inputs,
+      }
+    );
   }
 
   private async getOctokit(owner: string, repo: string): Promise<Octokit> {

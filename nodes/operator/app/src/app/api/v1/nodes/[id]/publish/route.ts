@@ -19,7 +19,6 @@ import { NextResponse } from "next/server";
 
 import { createNodeRepoWriter } from "@/bootstrap/capabilities/node-repo-write";
 import { resolveAppDb } from "@/bootstrap/container";
-import { buildPendingActivationRepoSpecYaml } from "@/features/nodes/repo-spec-builder";
 import { transition } from "@/features/nodes/state-machine";
 import { getServerSessionUser } from "@/lib/auth/server";
 import { type NodeStatus, nodes } from "@/shared/db/nodes";
@@ -101,50 +100,32 @@ export async function POST(_request: Request, ctx: RouteParams) {
     );
   }
 
-  const yamlContent = buildPendingActivationRepoSpecYaml({
-    nodeId: node.id,
-    chainId: node.chainId,
-    daoAddress: node.daoAddress,
-    pluginAddress: node.pluginAddress,
-    signalAddress: node.signalAddress,
-  });
-
+  // A node is ~1100 files (un-Octokit-able), so the operator dispatches the
+  // node-scaffold workflow (as the App) rather than committing here; it runs the
+  // reproducible bash scaffold + opens the App-authored node-app PR.
   const writer = createNodeRepoWriter(env);
-
-  const headBranch = `cogni-operator/node-bootstrap-${node.slug}`;
-  // v0 monorepo-internal: the node lives at nodes/<slug>/ in Cogni-DAO/cogni.
-  const specPath = `nodes/${node.slug}/.cogni/repo-spec.yaml`;
-
-  let result: Awaited<ReturnType<typeof writer.commitFileAndOpenPr>>;
   try {
-    result = await writer.commitFileAndOpenPr({
+    await writer.dispatchNodeScaffold({
       owner: node.repoOwner,
       repo: node.repoName,
-      baseRef: "main",
-      headBranch,
-      path: specPath,
-      content: yamlContent,
-      commitMessage: `chore(cogni): bootstrap ${specPath} via operator`,
-      prTitle: `cogni-operator: bootstrap node '${node.slug}'`,
-      prBody:
-        "This PR was opened by the Cogni operator setup wizard.\n\n" +
-        `It writes \`${specPath}\` containing the verified DAO formation ` +
-        "addresses for this node. Payment activation remains pending and must " +
-        "run from the child node's own trust domain.\n\n" +
-        `- DAO: \`${node.daoAddress}\`\n` +
-        `- TokenVoting plugin: \`${node.pluginAddress}\`\n` +
-        `- CogniSignal: \`${node.signalAddress}\`\n` +
-        `- Chain: \`${node.chainId}\`\n\n` +
-        "Review and merge to register this node in the monorepo.",
+      slug: node.slug,
+      nodeId: node.id,
+      chainId: node.chainId,
+      daoContract: node.daoAddress,
+      pluginContract: node.pluginAddress,
+      signalContract: node.signalAddress,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "unknown";
     return NextResponse.json(
-      { error: "publish failed", reason: message },
+      { error: "scaffold dispatch failed", reason: message },
       { status: 502 }
     );
   }
 
+  // Dispatch returns 204 (no PR id). Surface the workflow page; the wizard polls
+  // the opened PR (head cogni-operator/node-bootstrap-<slug>) for its URL.
+  const workflowUrl = `https://github.com/${node.repoOwner}/${node.repoName}/actions/workflows/node-scaffold.yml`;
   const [updated] = await withTenantScope(
     db,
     userActor(session.id as UserId),
@@ -153,12 +134,12 @@ export async function POST(_request: Request, ctx: RouteParams) {
         .update(nodes)
         .set({
           status: t.nextStatus,
-          publishPrUrl: result.prUrl,
+          publishPrUrl: workflowUrl,
           updatedAt: new Date(),
         })
         .where(and(eq(nodes.id, id), eq(nodes.ownerUserId, session.id)))
         .returning()
   );
 
-  return NextResponse.json({ node: updated, pr: result });
+  return NextResponse.json({ node: updated, dispatched: true, workflowUrl });
 }
