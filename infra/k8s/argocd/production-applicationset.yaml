@@ -35,6 +35,11 @@ spec:
         revision: deploy/production-canary
         files:
           - path: "infra/catalog/canary.yaml"
+    - git:
+        repoURL: https://github.com/cogni-dao/cogni.git
+        revision: deploy/production-mochi
+        files:
+          - path: "infra/catalog/mochi.yaml"
   template:
     metadata:
       name: "production-{{.name}}"

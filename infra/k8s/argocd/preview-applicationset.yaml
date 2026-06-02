@@ -35,6 +35,11 @@ spec:
         revision: deploy/preview-canary
         files:
           - path: "infra/catalog/canary.yaml"
+    - git:
+        repoURL: https://github.com/cogni-dao/cogni.git
+        revision: deploy/preview-mochi
+        files:
+          - path: "infra/catalog/mochi.yaml"
   template:
     metadata:
       name: "preview-{{.name}}"

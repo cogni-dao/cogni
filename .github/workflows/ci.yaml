@@ -111,9 +111,13 @@ jobs:
           # needs a hand-edited `<slug>:` filter + `!nodes/<slug>/**` negation;
           # run `pnpm gen:scope-filters`. CI (`--check`, unit job) fails on drift.
           filters: |
+            mochi:
+              - 'nodes/mochi/**'
             # >>> GENERATED scope-filters (scripts/ci/render-scope-filters.sh) — DO NOT EDIT BY HAND
             canary:
               - 'nodes/canary/**'
+            mochi:
+              - 'nodes/mochi/**'
             node-template:
               - 'nodes/node-template/**'
             resy:
@@ -121,6 +125,7 @@ jobs:
             operator:
               - '**'
               - '!nodes/canary/**'
+              - '!nodes/mochi/**'
               - '!nodes/node-template/**'
               - '!nodes/resy/**'
             # <<< GENERATED scope-filters

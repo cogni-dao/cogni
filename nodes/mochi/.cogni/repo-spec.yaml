@@ -1,0 +1,36 @@
+# Node Template — repo-spec
+#
+# Identity for the hub's mochi deployment; node_id MUST match
+# infra/catalog/mochi.yaml. Forks renaming this scaffold MUST
+# regenerate both UUIDs:
+#   node_id:  openssl rand -hex 16 | sed 's/\(.\{8\}\)\(.\{4\}\)\(.\{4\}\)\(.\{4\}\)\(.\{12\}\)/\1-\2-\3-\4-\5/'
+#   scope_id: uuidv5(node_id, "default")
+# See docs/spec/identity-model.md, docs/spec/multi-node-tenancy.md.
+
+schema_version: "0.1.4"
+
+node_id: "8138ed59-d955-4b30-9bae-7d754bac6e4e"
+scope_id: "54634f58-e7b0-53e6-a987-c54bfada6902"
+scope_key: "default"
+
+intent:
+  name: mochi
+
+cogni_dao:
+  chain_id: "8453" # Base mainnet
+
+# Activity ledger ingestion + approver allowlist.
+# `approvers` gates the `(admin)/` route group and write routes under
+# `/api/v1/attribution/*`. Replace with the fork's DAO-owner wallet(s) when
+# spinning up a new node from this template.
+activity_ledger:
+  epoch_length_days: 7
+  approvers:
+    - "0x070075F1389Ae1182aBac722B36CA12285d0c949" # derekg1729.eth (template default)
+  activity_sources:
+    github:
+      attribution_pipeline: cogni-v0.0
+      source_refs: ["Cogni-DAO/mochi"]
+
+payments:
+  status: pending_activation
