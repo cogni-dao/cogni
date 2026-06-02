@@ -88,7 +88,7 @@ describe("Governance Schedule Sync Job (Stack)", () => {
 
     expect(grants).toHaveLength(1);
     expect(grants[0]?.billingAccountId).toBe(COGNI_SYSTEM_BILLING_ACCOUNT_ID);
-    expect(grants[0]?.scopes).toContain("graph:execute:sandbox:openclaw");
+    expect(grants[0]?.scopes).toContain("graph:execute:sandbox:agent");
     expect(grants[0]?.revokedAt).toBeNull();
 
     // Verify schedule was created in Temporal (use getHandle directly —
@@ -242,7 +242,7 @@ describe("Governance Schedule Sync Job (Stack)", () => {
     const expectedRequestHash = createHash("sha256")
       .update(
         JSON.stringify({
-          graphId: "sandbox:openclaw",
+          graphId: "sandbox:agent",
           input: { message: "HEARTBEAT", model: "kimi-k2.5" },
         }),
         "utf8"

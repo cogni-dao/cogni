@@ -9,7 +9,7 @@
 
 ## Purpose
 
-Shared test fixtures for sandbox container tests (P0, P0.5, P0.5a) and gateway acceptance tests. Provides runner helpers, container exec helpers, context setup, prerequisite assertions, and common test defaults.
+Shared test fixtures for sandbox container tests (P0, P0.5, P0.5a). Provides runner helpers, container exec helpers, context setup, prerequisite assertions, and common test defaults.
 
 ## Pointers
 

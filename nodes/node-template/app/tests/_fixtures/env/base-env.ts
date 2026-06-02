@@ -44,10 +44,6 @@ export const CORE_TEST_ENV = {
   // Temporal (required infrastructure)
   TEMPORAL_ADDRESS: "localhost:7233",
   TEMPORAL_NAMESPACE: "test-namespace",
-  // OpenClaw gateway auth (min 32 chars)
-  OPENCLAW_GATEWAY_TOKEN: "x".repeat(32),
-  // OpenClaw git relay token (host-side push)
-  OPENCLAW_GITHUB_RW_TOKEN: "ghp_test_token",
   // Repo access (required in all envs — no cwd fallback)
   COGNI_REPO_PATH: DEFAULT_COGNI_REPO_PATH,
   // PostHog product analytics (required — test values, events silently dropped)

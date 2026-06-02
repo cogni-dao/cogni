@@ -21,20 +21,14 @@ import {
   LlmProxyManager,
   type SandboxRunnerAdapter,
 } from "@/adapters/server/sandbox";
-import type {
-  GraphRunRequest,
-  SandboxProgramContract,
-  SandboxRunResult,
-} from "@/ports";
+import type { SandboxProgramContract, SandboxRunResult } from "@/ports";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const SANDBOX_IMAGE = "cogni-sandbox-runtime:latest";
-export const SANDBOX_OPENCLAW_IMAGE = "cogni-sandbox-openclaw:latest";
 export const SANDBOX_INTERNAL_NETWORK = "sandbox-internal";
-export const GATEWAY_CONTAINER = "openclaw-gateway";
 
 /** Default limits for sandbox tests - tight timeouts to fail fast.
  *  Full proxy+sandbox flow completes in <1s; 3s is generous headroom. */
@@ -182,51 +176,6 @@ export async function execInContainer(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Gateway Workspace Helpers
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * Ensure /workspace/current exists inside the gateway container.
- * Idempotent: clones from the read-only git-sync mirror only if .git is absent.
- * Uses git rev-parse (not test -d) because git-sync uses worktrees where .git is a file.
- * Call in beforeAll for any test suite that needs the writable workspace.
- */
-export async function ensureGatewayWorkspace(docker: Docker): Promise<void> {
-  await execInContainer(
-    docker,
-    GATEWAY_CONTAINER,
-    "git -C /workspace/current rev-parse --git-dir >/dev/null 2>&1 || git clone /repo/current /workspace/current",
-    60_000
-  );
-}
-
-/**
- * Create a throwaway git clone inside the gateway container for isolated test work.
- * Returns the path. Caller is responsible for cleanup via `cleanupGatewayDir()`.
- */
-export async function createGatewayTestClone(
-  docker: Docker,
-  name: string
-): Promise<string> {
-  const dir = `/workspace/_test_${name}`;
-  await execInContainer(
-    docker,
-    GATEWAY_CONTAINER,
-    `rm -rf ${dir} && git clone /repo/current ${dir}`,
-    30_000
-  );
-  return dir;
-}
-
-/** Remove a directory inside the gateway container. Best-effort. */
-export async function cleanupGatewayDir(
-  docker: Docker,
-  dir: string
-): Promise<void> {
-  await execInContainer(docker, GATEWAY_CONTAINER, `rm -rf ${dir}`, 10_000);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Runner Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -237,39 +186,6 @@ export interface RunOptions {
 
 /** Test billing account ID for sandbox tests */
 export const TEST_BILLING_ACCOUNT_ID = "test-billing-account";
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Gateway GraphRunRequest Fixture
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** Deterministic stateKey for gateway stack tests (not a real UUID — easy to spot in logs). */
-export const TEST_GATEWAY_STATE_KEY = "00000000-0000-0000-0000-stack-test-gw";
-
-/**
- * Build a GraphRunRequest for gateway (SandboxGraphProvider) stack tests.
- * Uses deterministic defaults; override any field via `overrides`.
- */
-export function makeGatewayRunRequest(
-  overrides: Partial<GraphRunRequest> = {}
-): GraphRunRequest {
-  const runId = overrides.runId ?? uniqueRunId("gw");
-  return {
-    runId,
-    ingressRequestId: runId,
-    graphId: "sandbox:openclaw" as GraphRunRequest["graphId"],
-    stateKey: TEST_GATEWAY_STATE_KEY,
-    modelRef: { providerKey: "platform", modelId: "cogni/test-model" },
-    messages: [{ role: "user", content: "Hello" }],
-    caller: {
-      billingAccountId: TEST_BILLING_ACCOUNT_ID,
-      virtualKeyId: "test-vk",
-      requestId: runId,
-      traceId: runId,
-      userId: "test-user",
-    },
-    ...overrides,
-  } as GraphRunRequest;
-}
 
 /** Run command in sandbox with network=none and llmProxy enabled */
 export async function runWithProxy(

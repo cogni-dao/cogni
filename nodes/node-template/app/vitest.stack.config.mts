@@ -39,11 +39,10 @@ export default defineConfig({
     include: ["tests/stack/**/*.stack.test.ts"],
     environment: "node",
     setupFiles: ["./tests/setup.ts"],
-    // Global setup: preflight binaries → wait for probes → openclaw gateway → litellm config → mock-llm → preflight DB roles → reset DB (order matters)
+    // Global setup: preflight binaries → wait for probes → litellm config → mock-llm → preflight DB roles → reset DB (order matters)
     globalSetup: [
       "./tests/stack/setup/preflight-binaries.ts",
       "./tests/stack/setup/wait-for-probes.ts",
-      "./tests/stack/setup/preflight-openclaw-gateway.ts",
       "./tests/stack/setup/preflight-litellm-config.ts",
       "./tests/stack/setup/preflight-mock-llm.ts",
       "./tests/stack/setup/preflight-db-roles.ts",

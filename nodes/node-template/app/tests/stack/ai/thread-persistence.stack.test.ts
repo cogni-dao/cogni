@@ -205,7 +205,7 @@ describe("Thread Persistence", () => {
     //   { type: "dynamic-tool", toolCallId, toolName, state: "output-available", input, output }
     //
     // Unblock: mock-llm needs a mode that returns tool_use content blocks,
-    // or use a real tool-calling graph (sandbox:openclaw) in test mode.
+    // or use a real tool-calling graph (sandbox:agent) in test mode.
   });
 
   // ──────────────────────────────────────────────────────
