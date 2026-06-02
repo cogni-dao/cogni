@@ -139,8 +139,11 @@ export const POST = wrapRouteHandlerWithLogging(
             headSha: parsed.data.headSha ?? null,
             branch: parsed.data.branch ?? null,
           });
+          // Mapping + buffering are in-memory + cheap; flush is the network call
+          // and must NOT block the ingest ack (nodejs runtime drains it after the
+          // response). Fire-and-forget; the adapter's flush is internally graceful.
           langfuse.recordDevSession(draft);
-          await langfuse.flush();
+          void langfuse.flush().catch(() => {});
         } catch (e) {
           c.log.warn(
             { route: "telemetry.transcripts.append", err: String(e) },
