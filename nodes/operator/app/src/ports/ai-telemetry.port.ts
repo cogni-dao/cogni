@@ -14,6 +14,7 @@
  * @public
  */
 
+import type { DevSessionDraft } from "@/types/dev-session";
 import type { LlmErrorKind } from "./llm.port";
 
 /**
@@ -193,4 +194,14 @@ export interface LangfusePort {
     input?: unknown;
     metadata?: Record<string, unknown>;
   }): LangfuseSpanHandle;
+
+  /**
+   * Emit an external Claude Code dev session as a Langfuse session: one trace
+   * per turn grouped by `sessionId`, a generation per assistant turn (tokens),
+   * a span per tool call, all tagged `source=claude-code-dev-session` so they do
+   * not pollute operator-graph traces. Additive analytical VIEW of the raw
+   * transcript corpus — the corpus (Postgres) stays the source of truth.
+   * Caller must `flush()`; never blocks the request path.
+   */
+  recordDevSession(draft: DevSessionDraft): void;
 }

@@ -24,6 +24,7 @@ import type {
   LangfuseSpanHandle,
   LlmErrorKind,
 } from "@/ports";
+import type { DevSessionDraft } from "@/types/dev-session";
 
 export interface LangfuseAdapterConfig {
   publicKey: string;
@@ -271,6 +272,65 @@ export class LangfuseAdapter implements LangfusePort {
         spanId,
         end: () => {},
       };
+    }
+  }
+
+  /**
+   * Emit a Claude Code dev session: one trace per turn (grouped by sessionId),
+   * a generation per assistant turn, a span per tool call. Tagged so external
+   * dev sessions stay distinct from operator-graph traces. Graceful — a single
+   * turn's failure never aborts the rest; caller flushes.
+   */
+  recordDevSession(draft: DevSessionDraft): void {
+    for (const turn of draft.turns) {
+      const traceId = `${draft.sessionId}:${turn.index}`;
+      try {
+        this.langfuse.trace({
+          id: traceId,
+          name: "dev-session-turn",
+          sessionId: draft.sessionId,
+          userId: String(draft.metadata.principalId ?? ""),
+          tags: [...draft.tags],
+          input: turn.text,
+          metadata: {
+            ...draft.metadata,
+            role: turn.role,
+            turnIndex: turn.index,
+          },
+        });
+        this.activeTraces.add(traceId);
+
+        if (turn.role === "assistant" && turn.model) {
+          const generationParams: Parameters<
+            typeof this.langfuse.generation
+          >[0] = {
+            traceId,
+            name: "completion",
+            model: turn.model,
+            output: turn.text,
+          };
+          if (turn.tokensIn != null || turn.tokensOut != null) {
+            generationParams.usage = {
+              promptTokens: turn.tokensIn ?? null,
+              completionTokens: turn.tokensOut ?? null,
+            };
+          }
+          this.langfuse.generation(generationParams);
+        }
+
+        for (const tool of turn.tools) {
+          const span = this.langfuse.span({
+            traceId,
+            name: `tool:${tool.name}`,
+            input: tool.input,
+            metadata: tool.toolUseId ? { toolUseId: tool.toolUseId } : {},
+          });
+          span.end();
+        }
+      } catch (error) {
+        // biome-ignore lint/suspicious/noConsole: Langfuse errors should be visible
+        console.error("[LangfuseAdapter] recordDevSession turn failed:", error);
+      }
     }
   }
 }

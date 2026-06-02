@@ -1,7 +1,7 @@
 ---
 id: agent-transcript-telemetry
 type: design
-title: "Agent Transcript Telemetry — capture AI-developer sessions to Postgres, distill to the Dolt hub"
+title: "Agent Transcript Telemetry — capture AI-developer sessions to Postgres, distill to the Dolt hub, view in Langfuse"
 status: draft
 spec_refs:
   - knowledge-syntropy
@@ -22,20 +22,33 @@ its transcript in operator Postgres keyed to the registered principal + head SHA
 and a harvester turns those transcripts into `contrib/*` knowledge contributions**
 — the automated equivalent of a hand-written dev handoff.
 
-## Two planes (the load-bearing decision)
+## Three planes (the load-bearing decision)
+
+The raw corpus is the **source of truth**; the other two planes are derived views,
+each serving a different consumer. Corpus + view is **both-and, not either-or** — a
+prior design proposed replacing Postgres with Langfuse, which would have silently
+dropped the verbatim corpus (a 2–11 MB transcript, capped to ~10 KB/turn in any
+analytics backend can never re-derive a future-unknown metric). Resolved: keep the
+corpus, add the view.
 
 ```
-RAW PLANE — Postgres (operational)         REFINED PLANE — Dolt hub (knowledge)
-─────────────────────────────────         ────────────────────────────────────
-agent_transcript_chunks               ──►   atomic takeaways / handoffs
-• append-only firehose              harvester  • "use when X", cited, attributed
-• secrets redacted client-side      (the ONLY  • RECALL → REFINE → CITE → WRITE
-• RLS + TTL (disposable feedstock)   bridge)   • contrib/* branch, human-merge to main
+RAW PLANE — Postgres (corpus, SoT)     REFINED PLANE — Dolt hub (knowledge)
+──────────────────────────────────    ─────────────────────────────────────
+agent_transcript_chunks            ─►   atomic takeaways / handoffs (harvester)
+• append-only firehose, verbatim        • "use when X", cited, attributed
+• secrets redacted client-side          • RECALL → REFINE → CITE → WRITE
+• RLS + FORCE + TTL (feedstock)         • contrib/* branch, human-merge to main
+        │
+        └─► ANALYTICAL PLANE — Langfuse (per-session view)
+            • mapper: JSONL → session (trace/turn, generation, tool spans)
+            • scrubbed + capped + source-tagged; live analytics + EVALS
+            • CONSENT-GATED + OFF by default; never the store
 ```
 
 `RAW_NEVER_ENTERS_HUB`: raw transcripts are never written to the Dolt hub. Only
 synthesized, attributed, recallable atoms cross. The transcript is the entry's
-`source_ref` provenance, not the entry.
+`source_ref` provenance, not the entry. The Langfuse plane is likewise a derived
+view — the corpus is canonical; Langfuse is lossy by design.
 
 ## Why not the heartbeat handshake
 
@@ -64,9 +77,36 @@ reads un-harvested transcripts, synthesizes a handoff-shaped entry, and writes i
 the existing DoltHub mirror publishes it. Marks rows `harvested_at`; raw rows TTL out —
 the durable record lives as a recallable Dolt atom, the automated dev handoff.
 
+## Phase 2b — Analytical view (Langfuse, additive)
+
+A derived **view**, not a replacement for the corpus. On a fresh (non-deduped)
+append, the route maps the same body into a Langfuse session and emits it
+fire-and-forget — never blocking the ingest ack, never touching the corpus row.
+
+- `@/shared/transcript/dev-session-map` — pure mapper: Claude Code JSONL → a
+  backend-agnostic `DevSessionDraft` (one turn per user/assistant message, model +
+  token usage, tool calls). Scrubs secrets and caps every author string before it
+  enters the draft; tolerates the evolving JSONL shape (malformed lines dropped,
+  never thrown). The mapper is the real, brittle work — covered by unit tests.
+- `LangfusePort.recordDevSession` — emits one trace per turn grouped by
+  `sessionId`, a generation per assistant turn, a span per tool, all tagged
+  `source=claude-code-dev-session` so dev sessions never pollute operator-graph
+  traces. Reuses the shared Langfuse keys held operator-side; devs never see them.
+- **`TRANSCRIPT_LANGFUSE_EXPORT_ENABLED` — OFF by default.** Langfuse is **Cloud**
+  (`us.cloud.langfuse.com`). Flipping this flag true is the explicit operator-level
+  **consent decision** to egress (scrubbed, capped) dev-session content to a
+  third-party SaaS. Until then nothing leaves; the corpus pipeline runs unchanged.
+  Per-dev opt-in and a separate Langfuse project (to isolate quota) are the next
+  refinements once the flag is exercised.
+
 ## Invariants
 
 - [ ] RAW_NEVER_ENTERS_HUB — only synthesized atoms reach Dolt; transcript = provenance.
 - [ ] PRINCIPAL_DERIVES_SOURCE — `principal_id` bound from the token, never the request body.
 - [ ] IDEMPOTENT_BY_SESSION_CURSOR — re-uploading the same chunk de-dups, never duplicates.
 - [ ] ATTRIBUTION_TRACEABLE — every chunk + derived atom traces to its contributor.
+- [ ] CORPUS_IS_SOURCE_OF_TRUTH — Langfuse is a derived, lossy view; the verbatim
+      corpus (Postgres) is canonical and is never replaced by the analytics backend.
+- [ ] VIEW_EGRESS_IS_CONSENT_GATED — third-party (Langfuse Cloud) egress is OFF by
+      default; enabling it is an explicit operator decision, content scrubbed + capped.
+- [ ] SOURCE_TAGGED — dev sessions tagged `source=claude-code-dev-session`.

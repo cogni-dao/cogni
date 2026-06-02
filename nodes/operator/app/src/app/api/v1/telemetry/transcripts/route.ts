@@ -23,6 +23,8 @@ import { z } from "zod";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
+import { serverEnv } from "@/shared/env/server";
+import { mapTranscriptToDevSession } from "@/shared/transcript/dev-session-map";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -117,6 +119,36 @@ export const POST = wrapRouteHandlerWithLogging(
         },
         "telemetry.transcripts.append"
       );
+
+      // Additive analytical view: when explicitly enabled (consent-gated, OFF by
+      // default), derive a scrubbed/capped Langfuse session from the same body.
+      // The corpus row above is the source of truth; this never blocks the ack.
+      if (
+        !result.deduped &&
+        serverEnv().TRANSCRIPT_LANGFUSE_EXPORT_ENABLED &&
+        c.langfuse
+      ) {
+        const langfuse = c.langfuse;
+        try {
+          const draft = mapTranscriptToDevSession(body, {
+            sessionId: parsed.data.sessionId,
+            principalId: sessionUser.id,
+            principalName: sessionUser.displayName,
+            node: parsed.data.node ?? null,
+            repo: parsed.data.repo ?? null,
+            headSha: parsed.data.headSha ?? null,
+            branch: parsed.data.branch ?? null,
+          });
+          langfuse.recordDevSession(draft);
+          await langfuse.flush();
+        } catch (e) {
+          c.log.warn(
+            { route: "telemetry.transcripts.append", err: String(e) },
+            "telemetry.transcripts.langfuse_export_failed"
+          );
+        }
+      }
+
       return NextResponse.json(
         {
           id: result.id,
