@@ -39,6 +39,8 @@ jobs:
       digests_json: ${{ steps.images.outputs.digests_json }}
       targets_json: ${{ steps.detect.outputs.targets_json }}
       has_targets: ${{ steps.detect.outputs.has_targets }}
+      flight_targets_json: ${{ steps.detect.outputs.flight_targets_json }}
+      has_flight_targets: ${{ steps.detect.outputs.has_flight_targets }}
       needs_infra: ${{ steps.birth.outputs.needs_infra }}
     steps:
       - name: Checkout workflow source
@@ -178,7 +180,7 @@ jobs:
 
   reconcile-appset:
     needs: decide
-    if: needs.decide.outputs.has_targets == 'true'
+    if: needs.decide.outputs.has_flight_targets == 'true'
     # Single shared write to the candidate-a VM (kubectl apply on the AppSet).
     # Without this guard, two concurrent flights from different PRs race the
     # apply. See work/items/bug.0378.reconcile-appset-shared-write-race.md.
@@ -229,12 +231,12 @@ jobs:
 
   flight:
     needs: [decide, reconcile-appset]
-    if: needs.decide.outputs.has_targets == 'true'
+    if: needs.decide.outputs.has_flight_targets == 'true'
     strategy:
       fail-fast: false
       matrix:
         env: [candidate-a]
-        node: ${{ fromJson(needs.decide.outputs.targets_json) }}
+        node: ${{ fromJson(needs.decide.outputs.flight_targets_json) }}
     concurrency:
       group: candidate-flight-pipeline-${{ matrix.env }}-${{ matrix.node }}
       cancel-in-progress: false
@@ -578,7 +580,7 @@ jobs:
     # `(deploy-infra.result == 'success' || 'skipped')` gate.
     if: |
       always() &&
-      needs.decide.outputs.has_targets == 'true' &&
+      needs.decide.outputs.has_flight_targets == 'true' &&
       needs.flight.result == 'success' &&
       needs.reconcile-dns.result == 'success' &&
       (needs.deploy-infra.result == 'success' || needs.deploy-infra.result == 'skipped')
@@ -586,7 +588,7 @@ jobs:
       fail-fast: false
       matrix:
         env: [candidate-a]
-        node: ${{ fromJson(needs.decide.outputs.targets_json) }}
+        node: ${{ fromJson(needs.decide.outputs.flight_targets_json) }}
     concurrency:
       group: candidate-flight-pipeline-${{ matrix.env }}-${{ matrix.node }}
       cancel-in-progress: false
@@ -707,15 +709,23 @@ jobs:
         id: decide
         env:
           HAS_TARGETS: ${{ needs.decide.outputs.has_targets }}
+          HAS_FLIGHT_TARGETS: ${{ needs.decide.outputs.has_flight_targets }}
           FLIGHT_RESULT: ${{ needs.flight.result }}
           VERIFY_RESULT: ${{ needs.verify-candidate.result }}
-          TARGETS_JSON: ${{ needs.decide.outputs.targets_json }}
+          TARGETS_JSON: ${{ needs.decide.outputs.flight_targets_json }}
         run: |
           set -euo pipefail
-          echo "has_targets=${HAS_TARGETS} flight=${FLIGHT_RESULT} verify=${VERIFY_RESULT} targets=${TARGETS_JSON}"
-          if [ "$HAS_TARGETS" != "true" ]; then
+          echo "has_targets=${HAS_TARGETS} has_flight_targets=${HAS_FLIGHT_TARGETS} flight=${FLIGHT_RESULT} verify=${VERIFY_RESULT} flight_targets=${TARGETS_JSON}"
+          if [ "$HAS_FLIGHT_TARGETS" != "true" ]; then
+            # No k8s app-lever targets. Either nothing affected, or the affected
+            # set is type:infra only (e.g. litellm) — which deploys via Compose
+            # (deploy-infra.sh / candidate-flight-infra.yml), not this app lever.
             STATE=success
-            DESC="Candidate flight no-op (no affected nodes)"
+            if [ "$HAS_TARGETS" = "true" ]; then
+              DESC="Candidate flight no-op (infra-only affected set; deploys via Compose lever)"
+            else
+              DESC="Candidate flight no-op (no affected nodes)"
+            fi
           elif [ "$FLIGHT_RESULT" = "success" ] && [ "$VERIFY_RESULT" = "success" ]; then
             STATE=success
             DESC="Candidate flight passed (matrix: ${TARGETS_JSON})"

@@ -222,6 +222,29 @@ if [ ${#ordered_targets[@]} -gt 0 ]; then
     | python3 -c 'import json,sys; print(json.dumps([line.strip() for line in sys.stdin if line.strip()]))')
 fi
 
+# Flight targets: the subset of affected targets that deploy through the k8s
+# app-lever (candidate-flight / preview per-node overlays). type:infra targets
+# (e.g. litellm) build in CI but deploy via Compose-on-VM (deploy-infra.sh) and
+# have NO per-node overlay, so a flight matrix that fans out over them rsyncs a
+# nonexistent overlays/<env>/<infra> dir and fails the aggregate. Excluding them
+# here mirrors flight-preview.yml + promote-build-payload.sh's is_infra_target
+# guard; the full targets_json above still feeds the build/resolve legs.
+flight_targets=()
+for target in "${ordered_targets[@]}"; do
+  if is_infra_target "$target"; then
+    continue
+  fi
+  flight_targets+=("$target")
+done
+
+flight_targets_csv=""
+flight_targets_json="[]"
+if [ ${#flight_targets[@]} -gt 0 ]; then
+  flight_targets_csv=$(IFS=,; echo "${flight_targets[*]}")
+  flight_targets_json=$(printf '%s\n' "${flight_targets[@]}" \
+    | python3 -c 'import json,sys; print(json.dumps([line.strip() for line in sys.stdin if line.strip()]))')
+fi
+
 changed_paths_count=0
 if [ -n "$changed_paths" ]; then
   changed_paths_count=$(printf "%s\n" "$changed_paths" | sed '/^$/d' | wc -l | tr -d ' ')
@@ -230,6 +253,11 @@ fi
 has_targets=false
 if [ ${#ordered_targets[@]} -gt 0 ]; then
   has_targets=true
+fi
+
+has_flight_targets=false
+if [ ${#flight_targets[@]} -gt 0 ]; then
+  has_flight_targets=true
 fi
 
 if [ -n "${GITHUB_OUTPUT:-}" ]; then
@@ -242,6 +270,9 @@ if [ -n "${GITHUB_OUTPUT:-}" ]; then
     echo "has_targets=$has_targets"
     echo "targets=$targets_csv"
     echo "targets_json=$targets_json"
+    echo "has_flight_targets=$has_flight_targets"
+    echo "flight_targets=$flight_targets_csv"
+    echo "flight_targets_json=$flight_targets_json"
   } >> "$GITHUB_OUTPUT"
 fi
 
@@ -260,6 +291,11 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     else
       echo "- Targets: none"
     fi
+    if [ "$has_flight_targets" = true ]; then
+      echo "- Flight targets (k8s app-lever): \`$flight_targets_csv\`"
+    else
+      echo "- Flight targets (k8s app-lever): none (infra-only or no targets)"
+    fi
   } >> "$GITHUB_STEP_SUMMARY"
 fi
 
@@ -273,4 +309,9 @@ if [ "$has_targets" = true ]; then
   echo "Targets: ${targets_csv}"
 else
   echo "Targets: none"
+fi
+if [ "$has_flight_targets" = true ]; then
+  echo "Flight targets: ${flight_targets_csv}"
+else
+  echo "Flight targets: none"
 fi
