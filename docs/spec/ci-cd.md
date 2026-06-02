@@ -225,6 +225,8 @@ Candidate-a deploy has two orthogonal levers; either can be dispatched independe
 - **Infra lever** rsyncs `infra/compose/**` from a named git ref (default `main`) to the candidate-a VM and runs `compose up`. It never writes to a `deploy/*` branch.
 - `scripts/ci/deploy-infra.sh` accepts `--ref <git-ref>` (default `main`) and `--dry-run`. The rsync source is a detached `git worktree add` of the ref, NOT the caller workflow's checkout — app PRs branched before an infra change can be flown without rebasing.
 
+**Birth exception (one-flight node birth).** Independence holds for ordinary app flights, but a flight that **births a node** is the sole coupling case. `candidate-flight.yml`'s `decide` job sets `needs_infra=true` when the PR diff ADDS an `infra/catalog/<slug>.yaml` (a birth; `status == "added"` from the PR files API, CATALOG_IS_SSOT). A birth-gated `deploy-infra` job (`if: needs_infra == 'true'`, mirroring `promote-and-deploy.yml`'s `deploy-infra` env block + idempotent `deploy-infra.sh --ref <head_sha>`) then runs in-graph after `flight`, so the new node's edge route + DB + secret land in the SAME flight as its pod + DNS. This closes the "mochi gap" (a birth flight got pod + DNS but the edge returned TLS-internal-error and the pod had no DB/secret, requiring a separate manual `candidate-flight-infra.yml` dispatch). `verify-candidate` `needs:` `deploy-infra` and gates `(success || skipped)`, so a **non-birth** (no added catalog file) flight skips `deploy-infra` entirely and stays app-only — independence preserved; the coupling fires ONLY on birth. The standalone `candidate-flight-infra.yml` lever remains for infra-only / manual Compose changes.
+
 For `promote-and-deploy.yml` (preview/prod merge path), the job graph is:
 
 ```text
