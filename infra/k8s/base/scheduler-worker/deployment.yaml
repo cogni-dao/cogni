@@ -50,10 +50,10 @@ spec:
             timeoutSeconds: 2
             failureThreshold: 3
           envFrom:
-            - configMapRef:
-                name: scheduler-worker-config
             - secretRef:
                 name: scheduler-worker-secrets
+            - configMapRef:
+                name: scheduler-worker-config
           resources:
             requests:
               memory: "128Mi"

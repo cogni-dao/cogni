@@ -29,6 +29,29 @@ spec:
         app.kubernetes.io/component: node
     spec:
       terminationGracePeriodSeconds: 30
+      initContainers:
+        # Postgres migrations. Same image as `app` — runtime image bundles
+        # migrate.mjs + migrations under /app/nodes/$NODE_NAME/app/. Overlay's
+        # `images:` block patches both this and the main container image to the
+        # same per-PR digest. task.0370 step 1.
+        - name: migrate
+          image: ghcr.io/cogni-dao/cogni-template:placeholder
+          command:
+            - /bin/sh
+            - -c
+            - exec node /app/nodes/$(NODE_NAME)/app/migrate.mjs /app/nodes/$(NODE_NAME)/app/migrations
+          envFrom:
+            - configMapRef:
+                name: node-app-config
+            - secretRef:
+                name: node-app-secrets
+          resources:
+            requests:
+              memory: "384Mi"
+              cpu: "200m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
       containers:
         - name: app
           image: ghcr.io/cogni-dao/cogni-template:placeholder
@@ -52,6 +75,13 @@ spec:
             periodSeconds: 5
             timeoutSeconds: 3
             failureThreshold: 3
+          # Tier 0 sizing: 512Mi container, 384MB V8 heap. See
+          # docs/research/nextjs-node-memory-sizing.md for the full tier table.
+          # Overlays bumping memory MUST also patch NODE_OPTIONS to the matching
+          # tier; otherwise V8 auto-sizes to ~50% of cgroup, ignoring the bump.
+          env:
+            - name: NODE_OPTIONS
+              value: "--max-old-space-size=384"
           envFrom:
             - configMapRef:
                 name: node-app-config

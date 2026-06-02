@@ -1,0 +1,11 @@
+name: mochi
+type: node
+port: 3200
+node_port: 30500
+dockerfile: nodes/mochi/app/Dockerfile
+image_tag_suffix: "-mochi"
+migrator_tag_suffix: "-mochi-migrate"
+candidate_a_branch: deploy/candidate-a-mochi
+preview_branch: deploy/preview-mochi
+production_branch: deploy/production-mochi
+path_prefix: nodes/mochi/
