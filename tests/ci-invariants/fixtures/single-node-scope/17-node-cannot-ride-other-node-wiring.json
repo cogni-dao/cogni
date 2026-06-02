@@ -1,11 +1,11 @@
 {
-  "name": "node-birth bound: a node may NOT ride another node's wiring (canary + resy catalog → fail)",
+  "name": "node-birth bound: a node may NOT ride another node's wiring (node-template + resy catalog → fail)",
   "paths": [
-    "nodes/canary/app/src/foo.ts",
+    "nodes/node-template/app/src/foo.ts",
     "infra/catalog/resy.yaml"
   ],
   "expected": {
-    "domains": ["canary", "operator"],
+    "domains": ["node-template", "operator"],
     "pass": false,
     "rideAlongApplied": false
   }

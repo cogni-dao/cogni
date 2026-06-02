@@ -110,15 +110,12 @@ jobs:
           # run `pnpm gen:scope-filters`. CI (`--check`, unit job) fails on drift.
           filters: |
             # >>> GENERATED scope-filters (scripts/ci/render-scope-filters.sh) — DO NOT EDIT BY HAND
-            canary:
-              - 'nodes/canary/**'
             node-template:
               - 'nodes/node-template/**'
             resy:
               - 'nodes/resy/**'
             operator:
               - '**'
-              - '!nodes/canary/**'
               - '!nodes/node-template/**'
               - '!nodes/resy/**'
             # <<< GENERATED scope-filters
