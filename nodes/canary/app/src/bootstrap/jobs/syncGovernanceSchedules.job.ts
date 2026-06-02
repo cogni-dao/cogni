@@ -28,7 +28,7 @@ import { getGovernanceConfig, getNodeId } from "@/shared/config";
 import { schedules } from "@/shared/db/schema";
 import { serverEnv } from "@/shared/env/server-env";
 
-const GOVERNANCE_GRANT_SCOPES = ["graph:execute:sandbox:agent"] as const;
+const GOVERNANCE_GRANT_SCOPES = ["graph:execute:sandbox:openclaw"] as const;
 
 /** Temporal schedule ID for the ledger-ingest (epoch) schedule. */
 const LEDGER_INGEST_SCHEDULE_ID = "governance:ledger_ingest";

@@ -115,7 +115,7 @@ describe("[internal] POST /api/internal/ops/governance/schedules/sync", () => {
 
     expect(grants).toHaveLength(1);
     expect(grants[0]?.billingAccountId).toBe(COGNI_SYSTEM_BILLING_ACCOUNT_ID);
-    expect(grants[0]?.scopes).toContain("graph:execute:sandbox:agent");
+    expect(grants[0]?.scopes).toContain("graph:execute:sandbox:openclaw");
 
     // Use getHandle directly — schedule.list() has eventual consistency
     // and may not reflect a just-created schedule immediately
