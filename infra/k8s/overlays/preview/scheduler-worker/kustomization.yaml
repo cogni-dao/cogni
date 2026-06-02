@@ -13,7 +13,7 @@ resources:
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/cogni-template
-    digest: "sha256:d161a8499e66c69f5fdd52196b03719eb8900d8697b80d8911c910435c99ef79"
+    digest: "sha256:43f6576391827f128a3458633a081e68b11b7dc4ed04161d22e7874f9e86ad83"
 
 patches:
   # Patch ConfigMap with staging-specific values
