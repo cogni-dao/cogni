@@ -126,6 +126,19 @@ export const POST = wrapRouteHandlerWithLogging(
       // opts out. The corpus row above is the source of truth; never blocks the ack.
       const env = serverEnv();
       const langfuse = c.langfuse;
+      // Unconditional gate diagnostic: reveals exactly which term decides the
+      // export branch on the deployed build (and proves the bundle is fresh).
+      c.log.info(
+        {
+          route: "telemetry.transcripts.append",
+          sessionId: parsed.data.sessionId,
+          exportFlag: env.TRANSCRIPT_LANGFUSE_EXPORT_ENABLED,
+          langfuseWired: Boolean(langfuse),
+          deduped: result.deduped,
+          deployEnv: env.DEPLOY_ENVIRONMENT ?? null,
+        },
+        "telemetry.transcripts.export_gate"
+      );
       if (
         !result.deduped &&
         langfuse &&
