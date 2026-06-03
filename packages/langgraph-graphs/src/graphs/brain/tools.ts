@@ -22,11 +22,19 @@ import {
   REPO_SEARCH_NAME,
   SCHEDULE_LIST_NAME,
   SCHEDULE_MANAGE_NAME,
+  VCS_GET_CI_STATUS_NAME,
+  VCS_LIST_PRS_NAME,
 } from "@cogni/ai-tools";
 
 /**
  * Tool IDs for brain graph.
  * Single source of truth - imported by server.ts, cogni-exec.ts, and catalog.ts.
+ *
+ * VCS tools are READ-ONLY here: brain can see open PRs + CI status so it answers
+ * "what were the most recent PRs?" with real GitHub state instead of falling back
+ * to knowledge_search. Mutating VCS tools (merge / create-branch / flight) stay
+ * exclusive to the operator `pr_manager` graph — a user-facing assistant must not
+ * perform destructive GitHub operations.
  */
 export const BRAIN_TOOL_IDS = [
   KNOWLEDGE_SEARCH_NAME,
@@ -35,6 +43,8 @@ export const BRAIN_TOOL_IDS = [
   REPO_LIST_NAME,
   REPO_SEARCH_NAME,
   REPO_OPEN_NAME,
+  VCS_LIST_PRS_NAME,
+  VCS_GET_CI_STATUS_NAME,
   SCHEDULE_LIST_NAME,
   SCHEDULE_MANAGE_NAME,
 ] as const;
