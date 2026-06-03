@@ -640,7 +640,9 @@ function createContainer(): Container {
         remoteUrl: doltRemoteUrl,
       })
         .seedFromRemote()
-        .then(() => log.info({ remote: doltRemoteUrl }, "dolthub_seed_ok"))
+        .then((action) =>
+          log.info({ remote: doltRemoteUrl, action }, "dolthub_seed_ok")
+        )
         .catch((err) =>
           log.warn({ err, remote: doltRemoteUrl }, "dolthub_seed_failed")
         );

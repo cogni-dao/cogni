@@ -177,8 +177,9 @@ describe("createDoltgresPuller", () => {
         "https://doltremoteapi.dolthub.com/cogni-dao/knowledge-operator",
     });
 
-    await puller.seedFromRemote();
+    const action = await puller.seedFromRemote();
 
+    expect(action).toBe("reset");
     expect(sql.calls).toHaveLength(4);
     expect(sql.calls[0]).toContain("dolt_remote");
     expect(sql.calls[0]).toContain("add");
@@ -199,9 +200,10 @@ describe("createDoltgresPuller", () => {
       remoteUrl: "https://example.invalid/x/y",
     });
 
-    await puller.seedFromRemote();
+    const action = await puller.seedFromRemote();
 
     // add + fetch + merge_base, but NO reset — local already descends.
+    expect(action).toBe("noop");
     expect(sql.calls).toHaveLength(3);
     expect(sql.calls.some((c) => c.includes("dolt_reset"))).toBe(false);
   });

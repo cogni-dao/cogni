@@ -90,13 +90,20 @@ export interface DoltgresPullConfig {
   branch?: string;
 }
 
+/**
+ * What `seedFromRemote` did. Returned (rather than logged in the adapter) so
+ * the caller can surface it structurally — e.g. distinguishing a fresh-node
+ * reset from a steady-state no-op in Loki without the adapter importing a logger.
+ */
+export type SeedAction = "reset" | "noop";
+
 export interface DoltgresPuller {
   /**
    * Make local `branch` descend from `remoteName/branch`. Idempotent:
-   * a no-op when the local branch already shares history with the remote,
-   * an adopt-remote-history reset when it does not (the fresh-node case).
+   * `"noop"` when the local branch already shares history with the remote,
+   * `"reset"` when it does not (the fresh-node case) — adopts remote history.
    */
-  seedFromRemote(): Promise<void>;
+  seedFromRemote(): Promise<SeedAction>;
 }
 
 /**
@@ -128,6 +135,9 @@ export function createDoltgresPuller(
     // dolt_merge_base returns the common-ancestor commit hash, or an empty
     // value when the two refs have unrelated histories. Some Doltgres versions
     // error on fully-unrelated refs — treat any error as "no shared history".
+    // When a base DOES exist (incl. local-ahead-of-remote), the call returns it
+    // and never errors, so the destructive reset below cannot fire on a node
+    // that merely has unpushed commits — only on genuinely unrelated histories.
     try {
       const rows = await sql.unsafe(
         `SELECT dolt_merge_base(${escapeValue(branch)}, ${escapeValue(remoteRef)}) AS base`
@@ -140,12 +150,14 @@ export function createDoltgresPuller(
   }
 
   return {
-    async seedFromRemote(): Promise<void> {
+    async seedFromRemote(): Promise<SeedAction> {
       await ensureRemoteRegistered(sql, remoteName, remoteUrl);
       await sql.unsafe(`SELECT dolt_fetch(${escapeRef(remoteName)})`);
-      if (!(await sharesHistory())) {
-        await sql.unsafe(`SELECT dolt_reset('--hard', ${escapeRef(remoteRef)})`);
+      if (await sharesHistory()) {
+        return "noop";
       }
+      await sql.unsafe(`SELECT dolt_reset('--hard', ${escapeRef(remoteRef)})`);
+      return "reset";
     },
   };
 }

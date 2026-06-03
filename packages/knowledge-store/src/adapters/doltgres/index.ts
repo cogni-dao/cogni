@@ -527,6 +527,7 @@ export {
   type DoltgresPushConfig,
   type DoltgresPusher,
   type PushOutcomeListener,
+  type SeedAction,
   wrapPushSafe,
 } from "./dolt-remote.js";
 export {
