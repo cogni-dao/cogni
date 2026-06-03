@@ -8,7 +8,7 @@ External agents (e.g. the `i-am-coco` AI canary node) contribute via **fork PRs*
 GitHub holds every `pull_request` workflow run from a first-time / outside fork
 contributor in an `action_required` state — "**N workflows awaiting approval —
 This workflow requires approval from a maintainer.**" Until a human clicks
-*Approve workflows to run*, CI never starts, so the agent's contract
+_Approve workflows to run_, CI never starts, so the agent's contract
 (`/contribute-to-cogni`) stalls at Phase 1: CI can't go green, so it can't flight,
 so it can't `/validate-candidate`. A human is in the critical path of every
 external agent's first PR.
@@ -40,7 +40,7 @@ Flow:
 
 1. **Auth** — Bearer (machine agent) or SIWE session. No open access.
 2. **Work-item gate** (`assertPrLinkedBySession`) — the named work item must have a
-   current session whose `prNumber` matches *and* whose `claimedByUserId` is the
+   current session whose `prNumber` matches _and_ whose `claimedByUserId` is the
    calling principal. This reuses the auth chain the agent already built: it linked
    the PR via `POST /work/items/{id}/pr` under its own token. Forge-resistant —
    you can't approve a PR you didn't link, and you can't link one you don't own.
@@ -76,14 +76,14 @@ nodes/operator/app/src/app/api/v1/vcs/approve-checks/route.ts   HTTP route
 ## Alternatives considered
 
 - **Make the canary a collaborator / org member.** Zero code: an org member's fork
-  PRs (or branches pushed to the main repo) never hit the gate. Cleanest *for the
-  canary alone*, but doesn't generalise to arbitrary external agents and grants
+  PRs (or branches pushed to the main repo) never hit the gate. Cleanest _for the
+  canary alone_, but doesn't generalise to arbitrary external agents and grants
   standing write. Kept as the human-config fallback if App-approval ever regresses.
 - **Webhook-driven auto-approve** on `pull_request.opened`. No explicit agent call,
   but push-model and harder to reason about/test. `approve-checks` is the pull-model
   v0; a webhook trigger can call the same facade later.
 - **Loosen repo policy** to `first_time_contributors_who_are_new_to_github`. Weakens
-  the gate for *everyone*, including genuine outside humans. Rejected.
+  the gate for _everyone_, including genuine outside humans. Rejected.
 
 ## Not in v0
 
@@ -101,4 +101,4 @@ nodes/operator/app/src/app/api/v1/vcs/approve-checks/route.ts   HTTP route
    want a knowledge-link requirement, say so and it's a one-line addition.
 3. **Optional canary shortcut** — if you'd rather the `i-am-coco` identity skip the
    gate entirely, add it as an org member/collaborator; this endpoint then only
-   matters for *other* external agents.
+   matters for _other_ external agents.
