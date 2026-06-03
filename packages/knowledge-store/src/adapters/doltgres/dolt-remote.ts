@@ -15,7 +15,7 @@
  * @public
  */
 
-import type { Sql } from "postgres";
+import type { ReservedSql, Sql } from "postgres";
 import { escapeRef, escapeValue } from "./util.js";
 
 /**
@@ -25,7 +25,7 @@ import { escapeRef, escapeValue } from "./util.js";
  * error during add is fatal.
  */
 async function ensureRemoteRegistered(
-  sql: Sql,
+  sql: Sql | ReservedSql,
   remoteName: string,
   remoteUrl: string
 ): Promise<void> {
@@ -108,21 +108,33 @@ export interface DoltgresPuller {
 
 /**
  * Build a seeder. A freshly-provisioned node's migrator initializes an empty
- * knowledge DB whose commit graph has no common ancestor with the remote — so
- * the post-merge pusher can never push ("no common ancestor"), and the node
- * starts with zero knowledge. `seedFromRemote()` closes that gap on boot:
+ * Dolt DB whose commit graph has no common ancestor with the remote — so the
+ * post-merge pusher can never push ("no common ancestor"), and the node starts
+ * with no data. `seedFromRemote()` closes that gap on boot:
  *
  *   1. lazy `dolt_remote add` (idempotent)
- *   2. `dolt_fetch` to populate the `origin/<branch>` tracking ref
+ *   2. `dolt_fetch(remote, branch)` — explicit branch refspec, so ALL of the
+ *      branch's data chunks come down, not just the commit graph. (A bare
+ *      `dolt_fetch(remote)` can leave the working tree referencing chunks that
+ *      were never transferred, which then panics on read — "empty chunk
+ *      returned from ChunkStore" — after the reset below.)
  *   3. if local `<branch>` shares no history with `origin/<branch>`,
  *      `dolt_reset --hard origin/<branch>` — adopt the remote's history,
  *      pulling its schema + data and establishing shared ancestry.
  *
+ * The whole sequence runs on ONE reserved connection so the fetch's chunks and
+ * the reset's branch move are pinned to a single Dolt session (the same pattern
+ * the contribution adapter uses for its `dolt_checkout`-stateful branch ops).
+ *
  * On a node that already descends from the remote, step 3 is skipped (the
  * merge-base check is non-empty) so re-running on every boot is harmless.
- * `dolt_reset --hard` discards the migrator's throwaway init commits in favor
- * of the canonical remote history; the remote carries the same migrator schema
- * plus the accumulated knowledge, so nothing is lost.
+ *
+ * NOTE — this DB is shared: on the operator it holds `work_items` alongside
+ * `knowledge`/`citations`/contributions, and `dolt_reset --hard` adopts the
+ * remote's version of EVERY table. The remote (the node's knowledge mirror) is
+ * the source of truth for the whole DB, so this is correct for a genuinely
+ * fresh node. A node that already pushed (e.g. prod) shares history → no-op, so
+ * its local work items are never clobbered.
  */
 export function createDoltgresPuller(
   config: DoltgresPullConfig
@@ -131,7 +143,7 @@ export function createDoltgresPuller(
   const branch = config.branch ?? "main";
   const remoteRef = `${remoteName}/${branch}`;
 
-  async function sharesHistory(): Promise<boolean> {
+  async function sharesHistory(conn: ReservedSql): Promise<boolean> {
     // dolt_merge_base returns the common-ancestor commit hash, or an empty
     // value when the two refs have unrelated histories. Some Doltgres versions
     // error on fully-unrelated refs — treat any error as "no shared history".
@@ -139,7 +151,7 @@ export function createDoltgresPuller(
     // and never errors, so the destructive reset below cannot fire on a node
     // that merely has unpushed commits — only on genuinely unrelated histories.
     try {
-      const rows = await sql.unsafe(
+      const rows = await conn.unsafe(
         `SELECT dolt_merge_base(${escapeValue(branch)}, ${escapeValue(remoteRef)}) AS base`
       );
       const base = (rows[0] as Record<string, unknown> | undefined)?.base;
@@ -151,13 +163,22 @@ export function createDoltgresPuller(
 
   return {
     async seedFromRemote(): Promise<SeedAction> {
-      await ensureRemoteRegistered(sql, remoteName, remoteUrl);
-      await sql.unsafe(`SELECT dolt_fetch(${escapeRef(remoteName)})`);
-      if (await sharesHistory()) {
-        return "noop";
+      const conn = await sql.reserve();
+      try {
+        await ensureRemoteRegistered(conn, remoteName, remoteUrl);
+        await conn.unsafe(
+          `SELECT dolt_fetch(${escapeRef(remoteName)}, ${escapeRef(branch)})`
+        );
+        if (await sharesHistory(conn)) {
+          return "noop";
+        }
+        await conn.unsafe(
+          `SELECT dolt_reset('--hard', ${escapeRef(remoteRef)})`
+        );
+        return "reset";
+      } finally {
+        conn.release();
       }
-      await sql.unsafe(`SELECT dolt_reset('--hard', ${escapeRef(remoteRef)})`);
-      return "reset";
     },
   };
 }

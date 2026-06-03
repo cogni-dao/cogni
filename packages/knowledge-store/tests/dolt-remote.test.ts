@@ -134,12 +134,19 @@ describe("createDoltgresPusher", () => {
 });
 
 type FakePullSql = {
-  unsafe: (query: string) => Promise<unknown>;
+  reserve: () => Promise<{
+    unsafe: (query: string) => Promise<unknown>;
+    release: () => void;
+  }>;
   calls: string[];
+  released: number;
 };
 
 /**
- * Fake Sql for the puller. `mergeBase` controls the shared-history check:
+ * Fake Sql for the puller. The seed runs on a reserved connection, so the fake
+ * hands out a reserved handle whose `unsafe` records into the shared `calls`
+ * array and whose `release` bumps `released`. `mergeBase` controls the
+ * shared-history check:
  *   - a non-empty string → local already descends → reset is skipped
  *   - "" → no common ancestor (fresh node) → reset fires
  *   - throwMergeBase → query errors → treated as no shared history → reset fires
@@ -150,19 +157,29 @@ function fakePullSql(opts?: {
   failAddWith?: string;
 }): FakePullSql {
   const calls: string[] = [];
+  const state = { released: 0 };
+  const unsafe = async (query: string) => {
+    calls.push(query);
+    if (opts?.failAddWith && query.includes("dolt_remote")) {
+      throw new Error(opts.failAddWith);
+    }
+    if (query.includes("dolt_merge_base")) {
+      if (opts?.throwMergeBase) throw new Error("unrelated histories");
+      return [{ base: opts?.mergeBase ?? "" }];
+    }
+    return [{}];
+  };
   return {
     calls,
-    unsafe: async (query: string) => {
-      calls.push(query);
-      if (opts?.failAddWith && query.includes("dolt_remote")) {
-        throw new Error(opts.failAddWith);
-      }
-      if (query.includes("dolt_merge_base")) {
-        if (opts?.throwMergeBase) throw new Error("unrelated histories");
-        return [{ base: opts?.mergeBase ?? "" }];
-      }
-      return [{}];
+    get released() {
+      return state.released;
     },
+    reserve: async () => ({
+      unsafe,
+      release: () => {
+        state.released++;
+      },
+    }),
   };
 }
 
@@ -185,10 +202,14 @@ describe("createDoltgresPuller", () => {
     expect(sql.calls[0]).toContain("add");
     expect(sql.calls[1]).toContain("dolt_fetch");
     expect(sql.calls[1]).toContain("'origin'");
+    // explicit branch refspec — pulls all data chunks, not just the commit graph
+    expect(sql.calls[1]).toContain("'main'");
     expect(sql.calls[2]).toContain("dolt_merge_base");
     expect(sql.calls[3]).toContain("dolt_reset");
     expect(sql.calls[3]).toContain("'--hard'");
     expect(sql.calls[3]).toContain("'origin/main'");
+    // reserved connection is always released
+    expect(sql.released).toBe(1);
   });
 
   it("is a no-op reset when local already shares history with the remote (idempotent re-boot)", async () => {
