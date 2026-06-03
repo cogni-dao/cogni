@@ -1,32 +1,30 @@
 import type { NodeAppConfig } from "@cogni/node-app/extensions";
 import {
-  Briefcase,
+  BookOpen,
   CreditCard,
   Github,
   LayoutDashboard,
+  Shield,
+  Briefcase,
   Vote,
 } from "lucide-react";
-import { DiscordIcon } from "@/components";
 
 export const nodeConfig: NodeAppConfig = {
-  name: "Cogni",
-  logo: { src: "/TransparentBrainOnly.png", alt: "Cogni", href: "/chat" },
+  name: "Canary",
+  logo: { src: "/TransparentBrainOnly.png", alt: "Canary", href: "/chat" },
   navItems: [
     { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
     { href: "/work", label: "Work", icon: Briefcase },
+    { href: "/knowledge", label: "Knowledge", icon: BookOpen },
     { href: "/gov", label: "Gov", icon: Vote },
     { href: "/credits", label: "Credits", icon: CreditCard },
+    { href: "/admin", label: "Admin", icon: Shield },
   ],
   externalLinks: [
     {
-      href: "https://github.com/cogni-DAO/cogni-template",
-      label: "GitHub",
+      href: "https://github.com/openclaw/openclaw",
+      label: "OpenClaw",
       icon: Github,
-    },
-    {
-      href: "https://discord.gg/3b9sSyhZ4z",
-      label: "Discord",
-      icon: DiscordIcon,
     },
   ],
 };

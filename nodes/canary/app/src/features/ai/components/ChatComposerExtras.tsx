@@ -37,45 +37,35 @@ import {
  */
 const AVAILABLE_GRAPHS: readonly GraphOption[] = [
   {
-    graphId: "langgraph:poly-brain" satisfies GraphId,
-    name: "Poly Brain",
-    description: "Prediction market analyst with live market data",
-  },
-  {
     graphId: "langgraph:brain" satisfies GraphId,
     name: "Brain",
-    description: "Code-aware assistant with repo access",
-  },
-  {
-    graphId: "langgraph:poet" satisfies GraphId,
-    name: "Poet",
-    description: "Poetic AI assistant with structured verse",
-  },
-  {
-    graphId: "langgraph:ponderer" satisfies GraphId,
-    name: "Ponderer",
-    description: "Philosophical thinker",
+    description: "General canary operator with repo awareness and shipping bias",
   },
   {
     graphId: "langgraph:research" satisfies GraphId,
     name: "Research",
-    description: "Deep research with web search",
+    description: "Deep research across docs, repos, and the live web",
   },
   {
     graphId: "langgraph:browser" satisfies GraphId,
     name: "Browser",
-    description: "Web browsing agent with Playwright MCP",
+    description: "Live-surface inspector for websites, flows, and runtime checks",
   },
   {
     graphId: "langgraph:frontend-tester" satisfies GraphId,
     name: "Frontend Tester",
-    description: "QA agent — tests web UIs via Playwright",
+    description: "QA pass for homepage, interaction, and visual regressions",
   },
   {
     graphId: "langgraph:operating-review" satisfies GraphId,
     name: "Operating Review",
     description:
-      "Periodic review — triages backlog, flags risks, produces structured briefs",
+      "Operator loop for backlog triage, bottleneck detection, and next-step pressure",
+  },
+  {
+    graphId: "langgraph:ponderer" satisfies GraphId,
+    name: "Ponderer",
+    description: "Slow-thinking mode for synthesis, naming, and sharper judgment",
   },
 ];
 
