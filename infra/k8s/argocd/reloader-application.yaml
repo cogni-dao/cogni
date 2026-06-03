@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2025 Cogni-DAO
+#
+# Argo CD Application — Stakater Reloader.
+#
+# Wraps infra/k8s/argocd/reloader/ (kustomize-with-helm) so Argo CD reconciles
+# drift on the controller that rolling-restarts a Deployment when a Secret or
+# ConfigMap it references changes. Closes the secrets-rotation loop
+# (secrets-management.md Invariant 11): ESO syncs OpenBao → k8s Secret, then
+# Reloader restarts the annotated pod so the new value is actually consumed.
+# Together with openbao + external-secrets this is the third substrate pillar.
+#
+# Substitution at apply time (provision-env-vm.sh Phase 5b.1):
+#   ${FORK_REPO}     → https://github.com/${GH_REPO}.git
+#   ${DEPLOY_BRANCH} → deploy/${DEPLOY_ENV}
+#
+# SyncPolicy mirrors external-secrets-application.yaml.
+#   - prune: false. Removing Reloader must be operator-driven, never a
+#     cascade-delete from a manifest move.
+#   - selfHeal: true. Drift correction is the point.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: reloader
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: ${FORK_REPO}
+    targetRevision: ${DEPLOY_BRANCH}
+    path: infra/k8s/argocd/reloader
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: reloader
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

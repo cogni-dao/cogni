@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2025 Cogni-DAO
+#
+# Stakater Reloader — closes the secrets-rotation loop (spec
+# secrets-management.md Invariant 11 ROTATION_DOES_NOT_EDIT_GIT). When ESO
+# writes a changed key into a `<service>-env-secrets` k8s Secret, Reloader
+# performs a controlled rolling restart of the annotated Deployment so the new
+# value reaches the pod (pods read `envFrom: secretRef` once, at container
+# start). Without it, a day-2 secret write via OpenBao never reaches a running
+# pod — the gap that blocks the OIDC secret-set workflow (task.5104).
+#
+# Picked over a per-write `kubectl rollout restart` because that requires a
+# kubeconfig in CI; Reloader keeps the write path credential-free.
+#
+# This kustomization IS the source for the `reloader` Argo Application
+# (infra/k8s/argocd/reloader-application.yaml). Argo's repo-server renders it
+# via `kustomize build --enable-helm`. Provision-env-vm.sh Phase 5b.1 registers
+# the Application CR alongside openbao + external-secrets.
+#
+# Pin: chart 2.2.12 / app v1.4.17 — current series.
+# Validation: `kustomize build --enable-helm infra/k8s/argocd/reloader/`
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: reloader
+
+resources:
+  - namespace.yaml
+
+helmCharts:
+  - name: reloader
+    repo: https://stakater.github.io/stakater-charts
+    version: 2.2.12
+    releaseName: reloader
+    namespace: reloader
+    includeCRDs: true
+    valuesFile: values.yaml
