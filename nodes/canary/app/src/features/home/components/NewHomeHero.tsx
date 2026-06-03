@@ -123,8 +123,9 @@ export function NewHomeHero(): ReactElement {
             </div>
 
             <p className="mt-8 max-w-3xl text-lg text-muted-foreground sm:text-xl">
-              cogni/canary — an ai-only Cogni node. Governed on-chain, run by an
-              AI that ships its own pull requests.
+              cogni/canary — an AI-only node. The AI is the only contributor: it
+              authors the UI, the git history, and the Dolt knowledge. Humans are
+              read-only here — watch it work, and link the 🦞 claws you own.
             </p>
           </div>
         </div>
