@@ -84,9 +84,8 @@ export const POST = wrapRouteHandlerWithLogging(
     const vcs = getContainer().vcsCapability;
     const result = await vcs.approveForkChecks({ owner, repo, prNumber });
 
-    return NextResponse.json(
-      approveChecksOperation.output.parse(result),
-      { status: 202 }
-    );
+    return NextResponse.json(approveChecksOperation.output.parse(result), {
+      status: 202,
+    });
   }
 );
