@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2025 Cogni-DAO
+#
+# Stakater Reloader values — minimal. Cluster-scoped watch (default
+# watchGlobally=true) so a Secret change in any cogni-<env> namespace triggers
+# a rolling restart of the workloads that reference it. Reload is OPT-IN per
+# Deployment via the `reloader.stakater.com/auto: "true"` annotation (set on
+# infra/k8s/base/node-app); unannotated workloads are never touched.
+reloader:
+  deployment:
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        memory: 128Mi

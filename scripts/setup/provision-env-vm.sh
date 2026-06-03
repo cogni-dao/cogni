@@ -1231,7 +1231,7 @@ ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 root@"$VM_IP"
 ' || phase_5b_timeout "argocd-cm --enable-helm patch failed"
 
 SUBSTRATE_FORK_REPO="https://github.com/${GH_REPO}.git"
-for substrate in openbao external-secrets; do
+for substrate in openbao external-secrets reloader; do
   rendered=$(mktemp)
   sed -e "s#\${FORK_REPO}#${SUBSTRATE_FORK_REPO}#g" \
       -e "s#\${DEPLOY_BRANCH}#${DEPLOY_BRANCH}#g" \
@@ -1256,10 +1256,11 @@ done
 # 5min budget); OpenBao is a StatefulSet + PVC bind + image pull
 # (~3-5min real, 10min budget — validator's previous 120s pod-Running
 # wait was the actual root failure of this signal).
-for substrate in external-secrets openbao; do
+for substrate in external-secrets openbao reloader; do
   case "$substrate" in
     external-secrets) wait_timeout=300s ;;
     openbao)          wait_timeout=600s ;;
+    reloader)         wait_timeout=300s ;;
   esac
   log_info "Waiting for application/${substrate} operationState.phase=Succeeded (up to ${wait_timeout})..."
   ssh $SSH_OPTS root@"$VM_IP" \
@@ -1429,6 +1430,40 @@ HCL
     policies=${DEPLOY_ENV}-writer \
     ttl=1h" >/dev/null
   log_info "  ${DEPLOY_ENV}-writer role bound — operator: kubectl create token openbao-operator -n default | bao login -method=kubernetes role=${DEPLOY_ENV}-writer"
+
+  # ── 5b.4b GitHub Actions OIDC writer role (day-2, zero-laptop-cred path) ───
+  # Ships spec secrets-management.md Invariant 9 Entry 2 (previously DEFERRED):
+  # the `.github/workflows/secret-set.yml` workflow_dispatch federates a
+  # short-lived GitHub Actions OIDC token into a job-scoped OpenBao token via
+  # this `jwt` auth method — no kubeconfig, no PAT, no root token on a laptop
+  # (Invariant 13). It reuses the SAME `${DEPLOY_ENV}-writer` POLICY as the
+  # kubernetes-auth path above — a second authn method onto identical authz,
+  # not a new permission surface.
+  #
+  # Trust is pinned to one exact OIDC subject: this repo + this GitHub
+  # Environment. GitHub only emits `sub=repo:<owner>/<repo>:environment:<env>`
+  # when the job declares `environment:`, so production's GH-environment
+  # protection rule (required reviewer) gates the token mint itself.
+  # Audience `cogni-openbao` is requested explicitly by the workflow.
+  if ! bao_exec "auth list -format=json" 2>/dev/null | jq -e '."github-actions/"' >/dev/null 2>&1; then
+    log_info "Enabling github-actions (jwt) auth method..."
+    bao_exec "auth enable -path=github-actions jwt" >/dev/null
+  else
+    log_info "github-actions (jwt) auth method already enabled"
+  fi
+  bao_exec "write auth/github-actions/config \
+    oidc_discovery_url=https://token.actions.githubusercontent.com \
+    bound_issuer=https://token.actions.githubusercontent.com" >/dev/null
+  bao_exec "write auth/github-actions/role/gha-${DEPLOY_ENV}-writer \
+    role_type=jwt \
+    user_claim=sub \
+    bound_subject=repo:${GH_REPO}:environment:${DEPLOY_ENV} \
+    bound_audiences=cogni-openbao \
+    policies=${DEPLOY_ENV}-writer \
+    token_ttl=10m \
+    token_max_ttl=10m \
+    token_num_uses=3" >/dev/null
+  log_info "  gha-${DEPLOY_ENV}-writer (jwt) role bound — sub=repo:${GH_REPO}:environment:${DEPLOY_ENV} → ${DEPLOY_ENV}-writer policy"
 else
   log_warn "No root token at $OPENBAO_ROOT_TOKEN_LOCAL — skipping KV mount + auth setup. Re-run provision after recovering init artifacts."
 fi

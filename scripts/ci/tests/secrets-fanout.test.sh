@@ -147,5 +147,47 @@ for k in "${NODE_BASELINE_KEYS[@]}"; do
 done
 assert "$drift" "every NODE_BASELINE_KEY is catalog-classified (no silent passthrough)"
 
+# ── 10. Catalog-derived pod-key universe (scripts/lib/print-pod-keys.ts) ──────
+#    Invariant 14 CATALOG_IS_THE_ONE_READER. Anchors to REAL pod consumers
+#    (server-env.ts reads + the dual-consumed OPENROUTER_API_KEY), NOT the legacy
+#    hand-list — which is itself buggy (it omits GH_REVIEW_APP_*, the live prod
+#    governance-publish miss a correct emitter auto-heals). This is the green-gate
+#    for retiring NODE_BASELINE_KEYS in reconcile-secrets.sh (its own PR).
+TSX="$REPO_ROOT/node_modules/.bin/tsx"
+mapfile -t DERIVED < <(cd "$REPO_ROOT" && "$TSX" scripts/lib/print-pod-keys.ts 2>/dev/null)
+in_derived() { local d; for d in "${DERIVED[@]}"; do [[ "$d" == "$1" ]] && return 0; done; return 1; }
+
+assert "$([[ ${#DERIVED[@]} -gt 0 ]] && echo 0 || echo 1)" "print-pod-keys emits a non-empty universe"
+
+# 10a. Authoritative: pod-consumed keys MUST be in the derived set (the five
+#      dual-consumed keys + GH_REVIEW_APP_*, silently absent from the hand-list).
+for k in OPENROUTER_API_KEY POSTHOG_API_KEY POSTHOG_HOST EVM_RPC_URL POLYGON_RPC_URL \
+  GH_REVIEW_APP_ID GH_REVIEW_APP_PRIVATE_KEY_BASE64; do
+  r=0; in_derived "$k" || r=1
+  assert "$r" "pod key $k ∈ derived universe"
+done
+
+# 10b. Cross-check four app duals against ACTUAL server-env.ts reads, not the
+#      bash array. (POLYGON_RPC_URL is read in poly adapters, not server-env.)
+for k in OPENROUTER_API_KEY POSTHOG_API_KEY POSTHOG_HOST EVM_RPC_URL; do
+  r=0; grep -rqw "$k" "$REPO_ROOT"/nodes/*/app/src/shared/env/server-env.ts 2>/dev/null || r=1
+  assert "$r" "$k is a real server-env.ts pod read (cross-check)"
+done
+
+# 10c. Compose-only credentials MUST NOT leak into the pod universe.
+for k in APP_DB_PASSWORD APP_DB_SERVICE_PASSWORD COGNI_NODE_ENDPOINTS; do
+  r=0; in_derived "$k" && r=1
+  assert "$r" "compose-only $k is NOT pod-derived"
+done
+
+# 10d. No regression vs today's hand-list (minus composed DSNs the catalog cannot
+#      value). After the swap, NODE_BASELINE_KEYS == DERIVED ∪ DSNs by construction.
+miss=0
+for k in "${NODE_BASELINE_KEYS[@]}"; do
+  case "$k" in DATABASE_URL | DATABASE_SERVICE_URL | DOLTGRES_URL) continue ;; esac
+  in_derived "$k" || { printf '  regression: baseline %s not derived\n' "$k"; miss=1; }
+done
+assert "$miss" "derived ⊇ current NODE_BASELINE_KEYS (minus composed DSNs)"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]

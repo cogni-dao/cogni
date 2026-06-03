@@ -129,7 +129,12 @@ const CatalogEntrySchema = z
     // `_shared` path; default (false) → distinct value per node at the node path.
     appliesTo: CapabilitySchema.optional(),
     shared: z.boolean().optional(),
-    coConsumed: z.boolean().optional(),
+    // Explicit fan-out destinations (supersedes the old `coConsumed` boolean).
+    // The pod emitter (print-pod-keys.ts) includes a key iff `pod` ∈ consumedBy.
+    // `tier` stays the source/authority; `consumedBy` is where it's consumed.
+    // Set it on B-tier keys the pod also reads (OPENROUTER_API_KEY) and on
+    // compose+pod duals (DB creds, LiteLLM). Absent → defaults from tier+path.
+    consumedBy: z.array(z.enum(["pod", "compose", "worker"])).optional(),
     required: z.boolean(),
     category: z.string(),
     source: z.enum(["agent", "human"]),
@@ -183,7 +188,10 @@ export interface SecretRouting {
   /** `true` → one value at `cogni/<env>/_shared/<KEY>` for all in-scope nodes;
    *  default → distinct value per node at `cogni/<env>/<node>/<KEY>`. */
   shared?: boolean;
-  coConsumed?: boolean;
+  /** Explicit consumption destinations. `pod` ∈ consumedBy ⟹ the key fans out
+   *  to node-app pods (the print-pod-keys universe). Absent ⟹ defaulted from
+   *  tier+path by the emitter. */
+  consumedBy?: ("pod" | "compose" | "worker")[];
 }
 
 // ── Loader ──────────────────────────────────────────────────────────────────
@@ -296,7 +304,7 @@ export function loadSecretsCatalog(opts: LoadOptions): LoadResult {
     if (entry.service !== undefined) r.service = entry.service;
     if (entry.appliesTo !== undefined) r.appliesTo = entry.appliesTo;
     if (entry.shared !== undefined) r.shared = entry.shared;
-    if (entry.coConsumed !== undefined) r.coConsumed = entry.coConsumed;
+    if (entry.consumedBy !== undefined) r.consumedBy = entry.consumedBy;
     routing[entry.name] = r;
   }
 
