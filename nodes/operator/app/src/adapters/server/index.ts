@@ -111,6 +111,10 @@ export {
   RipgrepAdapter,
   type RipgrepAdapterConfig,
 } from "./repo";
+export {
+  AlloPrototypeSubsidyRailAdapter,
+  SablierFlowPrototypeSubsidyRailAdapter,
+} from "./subsidies";
 // NOTE: Sandbox adapters (SandboxRunnerAdapter, SandboxGraphProvider) are NOT
 // re-exported here. They pull in dockerode → ssh2 → cpu-features (native addon)
 // which breaks Turbopack bundling. Import directly from subpath when needed:

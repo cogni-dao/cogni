@@ -183,6 +183,16 @@ export type {
   StreamDefinition,
   WebhookNormalizer,
 } from "./source-adapter.port";
+export type {
+  SubsidyAsset,
+  SubsidyDistributionRailKind,
+  SubsidyDistributionRailPort,
+  SubsidyEligibilityGate,
+  SubsidyMilestone,
+  SubsidyProgram,
+  SubsidyRailAction,
+  SubsidyRailDraft,
+} from "./subsidy-distribution-rail.port";
 export {
   ThreadConflictError,
   type ThreadPersistencePort,
