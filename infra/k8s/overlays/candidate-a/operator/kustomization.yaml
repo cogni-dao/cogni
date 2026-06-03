@@ -54,13 +54,10 @@ patches:
     patch: |
       - op: replace
         path: /spec/template/spec/containers/0/envFrom/1/secretRef/name
-        value: "operator-node-app-secrets"
+        value: "operator-env-secrets"
       - op: replace
         path: /spec/template/spec/initContainers/0/envFrom/1/secretRef/name
-        value: "operator-node-app-secrets"
-      - op: replace
-        path: /spec/template/spec/initContainers/0/envFrom/1/secretRef/name
-        value: "operator-node-app-secrets"
+        value: "operator-env-secrets"
       - op: add
         path: /spec/selector/matchLabels/app.kubernetes.io~1instance
         value: "operator"
@@ -91,7 +88,7 @@ patches:
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
-                  name: operator-node-app-secrets
+                  name: operator-env-secrets
                   key: DOLTGRES_URL
           resources:
             requests:
