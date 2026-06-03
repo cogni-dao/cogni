@@ -14,6 +14,18 @@
  * @public
  */
 
+import {
+  AUTORESEARCH_REGISTRY_SWARM_GRAPH_NAME,
+  AUTORESEARCH_SINGLE_LANE_GRAPH_NAME,
+  AUTORESEARCH_SYNTROPY_LOOP_GRAPH_NAME,
+  createAutoresearchGraph,
+} from "./graphs/autoresearch/graph";
+import {
+  AUTORESEARCH_REGISTRY_SWARM_PROMPT,
+  AUTORESEARCH_SINGLE_LANE_PROMPT,
+  AUTORESEARCH_SYNTROPY_LOOP_PROMPT,
+} from "./graphs/autoresearch/prompts";
+import { AUTORESEARCH_TOOL_IDS } from "./graphs/autoresearch/tools";
 import { BRAIN_GRAPH_NAME, createBrainGraph } from "./graphs/brain/graph";
 import { BRAIN_TOOL_IDS } from "./graphs/brain/tools";
 import { BROWSER_GRAPH_NAME, createBrowserGraph } from "./graphs/browser/graph";
@@ -75,6 +87,18 @@ interface CatalogEntry {
   readonly systemPrompt?: string;
 }
 
+const createAutoresearchCatalogEntry = (
+  displayName: string,
+  description: string,
+  systemPrompt: string
+): CatalogEntry => ({
+  displayName,
+  description,
+  toolIds: AUTORESEARCH_TOOL_IDS as readonly string[],
+  graphFactory: createAutoresearchGraph,
+  systemPrompt,
+});
+
 /**
  * LangGraph catalog - single source of truth for graph definitions.
  *
@@ -86,6 +110,24 @@ interface CatalogEntry {
  * Per CATALOG_SINGLE_SOURCE_OF_TRUTH: graphs are defined here, not in bootstrap.
  */
 export const LANGGRAPH_CATALOG: Readonly<Record<string, CatalogEntry>> = {
+  [AUTORESEARCH_SINGLE_LANE_GRAPH_NAME]: createAutoresearchCatalogEntry(
+    "Autoresearch Single Lane",
+    "Karpathy-style single-lane experiment loop with Thinker, Flasher, Eval, and Judge",
+    AUTORESEARCH_SINGLE_LANE_PROMPT
+  ),
+
+  [AUTORESEARCH_SYNTROPY_LOOP_GRAPH_NAME]: createAutoresearchCatalogEntry(
+    "Autoresearch Syntropy Loop",
+    "Knowledge-syntropy autoresearch loop with Librarian, Archivist, Curator, Thinker, Flasher, and Judge",
+    AUTORESEARCH_SYNTROPY_LOOP_PROMPT
+  ),
+
+  [AUTORESEARCH_REGISTRY_SWARM_GRAPH_NAME]: createAutoresearchCatalogEntry(
+    "Autoresearch Registry Swarm",
+    "Registry-aware autoresearch tournament across conservative, retrieval, and topology lanes",
+    AUTORESEARCH_REGISTRY_SWARM_PROMPT
+  ),
+
   /**
    * Brain graph - code-aware assistant with repository access.
    * Uses createReactAgent with repo search and file open tools.
@@ -223,6 +265,9 @@ export const LANGGRAPH_PROVIDER_ID = "langgraph" as const;
  * Per GRAPH_ID_NAMESPACED: format is ${providerId}:${graphName}
  */
 export const LANGGRAPH_GRAPH_IDS = {
+  "autoresearch-single-lane": `${LANGGRAPH_PROVIDER_ID}:${AUTORESEARCH_SINGLE_LANE_GRAPH_NAME}`,
+  "autoresearch-syntropy-loop": `${LANGGRAPH_PROVIDER_ID}:${AUTORESEARCH_SYNTROPY_LOOP_GRAPH_NAME}`,
+  "autoresearch-registry-swarm": `${LANGGRAPH_PROVIDER_ID}:${AUTORESEARCH_REGISTRY_SWARM_GRAPH_NAME}`,
   brain: `${LANGGRAPH_PROVIDER_ID}:${BRAIN_GRAPH_NAME}`,
   poet: `${LANGGRAPH_PROVIDER_ID}:${POET_GRAPH_NAME}`,
   ponderer: `${LANGGRAPH_PROVIDER_ID}:${PONDERER_GRAPH_NAME}`,

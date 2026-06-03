@@ -35,6 +35,12 @@ import {
  * Per CATALOG_STATIC_IN_P0: graphs are static, no runtime discovery yet.
  * See AGENT_DISCOVERY.md Phase 2 checklist.
  */
+const createGraphOption = (
+  graphId: GraphId,
+  name: string,
+  description: string
+): GraphOption => ({ graphId, name, description });
+
 const AVAILABLE_GRAPHS: readonly GraphOption[] = [
   {
     graphId: "langgraph:poly-brain" satisfies GraphId,
@@ -61,6 +67,21 @@ const AVAILABLE_GRAPHS: readonly GraphOption[] = [
     name: "Research",
     description: "Deep research with web search",
   },
+  createGraphOption(
+    "langgraph:autoresearch-single-lane" satisfies GraphId,
+    "Autoresearch Single Lane",
+    "Thinker-Flasher loop for one graph experiment"
+  ),
+  createGraphOption(
+    "langgraph:autoresearch-syntropy-loop" satisfies GraphId,
+    "Autoresearch Syntropy Loop",
+    "Knowledge recall, eval, judge, and file-back loop"
+  ),
+  createGraphOption(
+    "langgraph:autoresearch-registry-swarm" satisfies GraphId,
+    "Autoresearch Registry Swarm",
+    "Tournament lanes for registry-ready agent updates"
+  ),
   {
     graphId: "langgraph:browser" satisfies GraphId,
     name: "Browser",

@@ -14,6 +14,13 @@
  * @public
  */
 
+// Autoresearch graphs (Karpathy-style experiment loops)
+export {
+  AUTORESEARCH_REGISTRY_SWARM_GRAPH_NAME,
+  AUTORESEARCH_SINGLE_LANE_GRAPH_NAME,
+  AUTORESEARCH_SYNTROPY_LOOP_GRAPH_NAME,
+  createAutoresearchGraph,
+} from "./autoresearch/graph";
 // Brain graph (code-aware assistant with repo access)
 export { BRAIN_GRAPH_NAME, createBrainGraph } from "./brain/graph";
 // Browser graph (web browsing via Playwright MCP)

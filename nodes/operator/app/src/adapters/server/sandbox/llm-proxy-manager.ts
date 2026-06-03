@@ -11,7 +11,7 @@
  *   - Per APPEND_ONLY_AUDIT: Access logs written by proxy container, collected on stop
  *   - No host-installed nginx required (hermetic)
  * Side-effects: IO (Docker containers, writes config files to tmpdir)
- * Links: docs/spec/sandboxed-agents.md, infra/compose/sandbox-proxy/nginx.conf.template
+ * Links: docs/spec/sandboxed-agents.md, infra/images/sandbox-proxy/nginx.conf.template
  * @internal
  */
 
@@ -87,7 +87,7 @@ export interface ProxyStopResult {
 function getTemplatePath(): string {
   return join(
     serverEnv().COGNI_REPO_ROOT ?? "/nonexistent",
-    "infra/compose/sandbox-proxy/nginx.conf.template"
+    "infra/images/sandbox-proxy/nginx.conf.template"
   );
 }
 
