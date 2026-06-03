@@ -132,7 +132,11 @@ const CatalogEntrySchema = z
     coConsumed: z.boolean().optional(),
     required: z.boolean(),
     category: z.string(),
-    source: z.enum(["agent", "human"]),
+    // agent = self-generated; human = vendor-minted, human supplies once;
+    // external = agent-generated AND synced to an external system's API so both
+    // copies match (e.g. GitHub App webhook secret →
+    // scripts/secrets/sync-app-webhook-secret.sh). See docs/spec/secrets-management.md.
+    source: z.enum(["agent", "human", "external"]),
     description: z.string(),
     steps: z.array(z.string()),
     url: z.string().url().optional(),
@@ -141,9 +145,10 @@ const CatalogEntrySchema = z
     generate: GenerateSchema.optional(),
     transform: TransformSchema.optional(),
   })
-  .refine((e) => e.source !== "agent" || e.generate !== undefined, {
-    message: "source: agent requires generate field",
-  })
+  .refine(
+    (e) => (e.source !== "agent" && e.source !== "external") || e.generate !== undefined,
+    { message: "source: agent|external requires generate field (the value is self-generated)" },
+  )
   .refine((e) => !(e.service !== undefined && e.appliesTo !== undefined), {
     message:
       "entry declares both service: and appliesTo: — they are mutually exclusive (service = one node; appliesTo = capability fan-out)",
@@ -164,7 +169,7 @@ export interface Secret {
   required: boolean;
   category: string;
   description: string;
-  source: "agent" | "human";
+  source: "agent" | "human" | "external";
   url?: string;
   steps: string[];
   generate?: () => string;
