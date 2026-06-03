@@ -650,7 +650,9 @@ function createContainer(): Container {
             const rows = await conn.unsafe(
               "SELECT COUNT(*)::int AS c FROM work_items"
             );
-            return Number((rows[0] as { c?: number } | undefined)?.c ?? 0) === 0;
+            return (
+              Number((rows[0] as { c?: number } | undefined)?.c ?? 0) === 0
+            );
           } catch {
             // work_items table absent ⇒ nothing to protect ⇒ pristine.
             return true;
@@ -693,19 +695,19 @@ function createContainer(): Container {
     const pushMainOnMerge =
       doltRemoteUrl && env.DOLTHUB_MIRROR_PUSH
         ? wrapPushSafe(
-          createDoltgresPusher({
-            sql: doltClient,
-            remoteName: "origin",
-            remoteUrl: doltRemoteUrl,
-          }),
-          {
-            onSuccess: () =>
-              log.info({ remote: doltRemoteUrl }, "dolthub_push_ok"),
-            onFailure: (err) =>
-              log.warn({ err, remote: doltRemoteUrl }, "dolthub_push_failed"),
-          }
-        )
-      : undefined;
+            createDoltgresPusher({
+              sql: doltClient,
+              remoteName: "origin",
+              remoteUrl: doltRemoteUrl,
+            }),
+            {
+              onSuccess: () =>
+                log.info({ remote: doltRemoteUrl }, "dolthub_push_ok"),
+              onFailure: (err) =>
+                log.warn({ err, remote: doltRemoteUrl }, "dolthub_push_failed"),
+            }
+          )
+        : undefined;
     knowledgeContributionService = createContributionService({
       port: contributionPort,
       canMergeKnowledge: defaultCanMergeKnowledge,
