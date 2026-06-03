@@ -232,7 +232,8 @@ describe("createDoltgresPuller", () => {
       remoteUrl: "https://example.invalid/x/y",
     });
 
-    await expect(puller.seedFromRemote()).resolves.toBeUndefined();
+    // add error is swallowed, so the seed proceeds to its reset path.
+    await expect(puller.seedFromRemote()).resolves.toBe("reset");
     // add (swallowed) + fetch + merge_base + reset
     expect(sql.calls).toHaveLength(4);
     expect(sql.calls[1]).toContain("dolt_fetch");
