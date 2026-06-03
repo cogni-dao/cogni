@@ -48,6 +48,21 @@ declare -ga NODE_BASELINE_KEYS=(
   POSTHOG_API_KEY POSTHOG_HOST OPENROUTER_API_KEY
   EVM_RPC_URL POLYGON_RPC_URL
   APP_BASE_URL NEXTAUTH_URL
+  # External integrations (source: human, gate-by-presence). _node_gets_key
+  # gates each against the catalog: _shared/llm/web reach every node; PRIVY_*
+  # (appliesTo: payments) + PRIVY_USER_WALLETS_* (service: poly) drop from
+  # non-poly nodes. GH_REVIEW_APP_* lives here AND in SCHEDULER_WORKER_KEYS so
+  # both the node-app pod and the worker receive it.
+  DOLTHUB_REMOTE_URL DOLT_CREDS_JWK DOLT_CREDS_KEYID DOLTHUB_API_TOKEN
+  TAVILY_API_KEY
+  LANGFUSE_PUBLIC_KEY LANGFUSE_SECRET_KEY LANGFUSE_BASE_URL
+  GH_OAUTH_CLIENT_ID GH_OAUTH_CLIENT_SECRET
+  DISCORD_OAUTH_CLIENT_ID DISCORD_OAUTH_CLIENT_SECRET
+  GOOGLE_OAUTH_CLIENT_ID GOOGLE_OAUTH_CLIENT_SECRET
+  DISCORD_BOT_TOKEN
+  GH_REVIEW_APP_ID GH_REVIEW_APP_PRIVATE_KEY_BASE64
+  PRIVY_APP_ID PRIVY_APP_SECRET PRIVY_SIGNING_KEY
+  PRIVY_USER_WALLETS_APP_ID PRIVY_USER_WALLETS_APP_SECRET PRIVY_USER_WALLETS_SIGNING_KEY
 )
 # Back-compat alias — reconcile_secrets_on_rerun reconciles the primary node's
 # OpenBao SSoT into .env for the runtime/.env (Compose) write.
