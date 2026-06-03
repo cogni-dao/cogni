@@ -1316,6 +1316,23 @@ SECEOF
   log_info "[$(date -u +%H:%M:%S)] k8s secrets applied"
   emit_deployment_event "infra_deployment.k8s_secrets_complete" "success" "k8s secrets applied"
 
+  # ── Sync GitHub App webhook secret (source: external) ───────────────────────
+  # GH_WEBHOOK_SECRET is agent-generated but must byte-match the GitHub App's
+  # webhook secret (the value lives on GitHub's side too). Push the provisioned
+  # value to the App via the App's own key so BOTH copies converge — otherwise
+  # every inbound webhook fails HMAC verification silently and this very step
+  # (re-writing the pod Secret each deploy) is the BREAKING path, not the
+  # healing one. Fail-soft: a sync failure warns but never aborts the deploy.
+  # See docs/spec/secrets-management.md (source: external).
+  if GH_REVIEW_APP_ID="${GH_REVIEW_APP_ID:-}" \
+     GH_REVIEW_APP_PRIVATE_KEY_BASE64="${GH_REVIEW_APP_PRIVATE_KEY_BASE64:-}" \
+     GH_WEBHOOK_SECRET="${GH_WEBHOOK_SECRET:-}" \
+     bash "$REPO_ROOT/scripts/secrets/sync-app-webhook-secret.sh"; then
+    log_info "  GitHub App webhook secret synced (pod ↔ App)"
+  else
+    log_warn "  GitHub App webhook secret sync FAILED — webhooks will fail verification until resolved"
+  fi
+
   # ── Rolling restart — pods must restart to pick up changed secrets ──────────
   # This happens AFTER compose infra is up (Step 6.6) and dependency reachability
   # is confirmed (Step 6.8), so pods boot into a healthy environment.

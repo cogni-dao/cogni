@@ -55,9 +55,36 @@ Routing checklist (file-by-file propagation): [`.claude/commands/env-update.md`]
 
 The killer rule: **no human types a secret VALUE into a UI in production.** Auto-generated, vendor-minted via operator-app, or dynamic. Form-input is the anti-pattern.
 
+## Dual-plane secrets — the silent-webhook-fail class (READ THIS)
+
+Some secrets must **byte-equal a value held by an external system**, not merely exist. The operator's `GH_WEBHOOK_SECRET` must equal the **GitHub App's webhook secret**; an OAuth `*_CLIENT_SECRET` must equal the provider's app config. These are **dual-plane**: one copy in our pod, one on the external plane — they only work if identical.
+
+**The trap (live bug, preview 2026-06-03):** `GH_WEBHOOK_SECRET` was `source: agent` with **no `syncTo`**, generated `randHex 32` **every provision** → it could never match the App's webhook secret → **every webhook failed HMAC verification**, silently (a `level:40` warn `component:webhook-route msg:"webhook verification failed"`, no alert, no 5xx). The App just looks dead — no PR reviews, no node-wizard. `deploy-infra` re-applying the Secret was the **breaking** path, not the healing one — a generated value never equals an externally-held one **unless something pushes it there**. That push is what `syncTo` declares.
+
+**The classification has TWO orthogonal axes — don't conflate them.** `source:` = origin; `syncTo:` = external mirror.
+
+| axis              | values                                                                                                                                              | answers                                                              |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| `source:`         | `agent` (we generate, `generate:` required) · `human` (un-generatable; vendor-minted, human supplies once, e.g. `GH_REVIEW_APP_PRIVATE_KEY_BASE64`) | where the value **originates**                                       |
+| `syncTo:` _(opt)_ | `github-app-webhook` · _(unset)_                                                                                                                    | does it **also** live in an external system we must keep in lockstep |
+
+`GH_WEBHOOK_SECRET` is `source: agent` + `syncTo: github-app-webhook` — **we generate it** (origin is internal; calling it `source: external` lied about that), and it ALSO must byte-match the App. `bootstrap.sh::declare_or_gen` generates it; `deploy-infra` then pushes it (`scripts/secrets/sync-app-webhook-secret.sh`: App JWT → `PATCH /app/hook/config`):
+
+```
+APPID + GH_REVIEW_APP_PRIVATE_KEY_BASE64 → RS256 JWT (iss=APPID, exp≤10m)
+PATCH /app/hook/config  -d '{"secret":"<generated GH_WEBHOOK_SECRET>"}'   # endpoint EXISTS
+```
+
+No-human-secret done right: agent generates, agent pushes, **zero human, self-healing** (provisioning owns both copies → every infra-lever deploy re-converges). Do NOT make it `source: human`/carry — that drags a human into the App's "Change secret" field for a value that's ours to generate.
+
+⚠️ **Sync only fires on the infra lever** (`deploy-infra` via `candidate-flight-infra` / `provision-env`), NOT on app-lever promotes (`candidate-flight`/`flight-preview`/`promote-and-deploy` = Argo image bump, never touches the Secret). And the push uses deploy-infra's env value — correct for the plain-Secret model (preview/prod) but on the **ESO model (candidate-a)** the pod serves OpenBao's value; if those differ the sync must read the live Secret. (candidate-a live-read = tracked follow-up.)
+
+**Heal-proof test** = redeploy twice; a PR on the test repo must still post a `cogni-git-review` review.
+
 ## Anti-patterns — instant reject
 
 - Human typing a secret VALUE into a UI (GitHub form, web form, shell prompt). See killer rule.
+- A **dual-plane** secret (must byte-match an external system — GitHub App webhook secret, OAuth client secret) declared with **no `syncTo:`** — it silently fails verification forever and `deploy-infra` re-breaks it every run. Add `syncTo:` (keep `source: agent` if we generate the value). See "Dual-plane secrets" above.
 - Generic catch-all workflow (`secrets-manage.yml`-shaped). Per-operation only.
 - `ssh root@vm kubectl ...` or `ssh root@vm bao ...`. Use local kubectl + port-forward + writer-role JWT.
 - Re-exporting `.local/<env>-openbao-root-token` after Phase 5b — violates Invariant 13.

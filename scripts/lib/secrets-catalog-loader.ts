@@ -137,7 +137,14 @@ const CatalogEntrySchema = z
     consumedBy: z.array(z.enum(["pod", "compose", "worker"])).optional(),
     required: z.boolean(),
     category: z.string(),
+    // ORIGIN of the value: agent = we generate it (`generate:` required);
+    // human = vendor-minted, a human supplies it once (un-generatable by us).
     source: z.enum(["agent", "human"]),
+    // Orthogonal axis — does the value ALSO live in an external system that we
+    // must keep in lockstep? A generated value can still need mirroring outward
+    // (e.g. the GitHub App webhook secret: source: agent + syncTo: the App).
+    // deploy-infra runs the matching push (scripts/secrets/sync-app-webhook-secret.sh).
+    syncTo: z.enum(["github-app-webhook"]).optional(),
     description: z.string(),
     steps: z.array(z.string()),
     url: z.string().url().optional(),
@@ -170,6 +177,7 @@ export interface Secret {
   category: string;
   description: string;
   source: "agent" | "human";
+  syncTo?: "github-app-webhook";
   url?: string;
   steps: string[];
   generate?: () => string;
