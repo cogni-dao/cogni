@@ -20,6 +20,11 @@ import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const walletMocks = vi.hoisted(() => ({
+  address: "0x1111111111111111111111111111111111111111" as
+    | `0x${string}`
+    | undefined,
+  isConnected: true,
+  isSigning: false,
   openConnectModal: vi.fn(),
   signMessageAsync: vi.fn(async () => `0x${"a".repeat(130)}` as `0x${string}`),
 }));
@@ -95,9 +100,9 @@ vi.mock("@/components", () => ({
 
 vi.mock("@/features/home/components/useInternshipWalletSignature", () => ({
   useInternshipWalletSignature: () => ({
-    address: "0x1111111111111111111111111111111111111111",
-    isConnected: true,
-    isSigning: false,
+    address: walletMocks.address,
+    isConnected: walletMocks.isConnected,
+    isSigning: walletMocks.isSigning,
     openConnectModal: walletMocks.openConnectModal,
     signMessage: walletMocks.signMessageAsync,
   }),
@@ -110,12 +115,22 @@ vi.mock("@/features/home/components/InternshipNetworkBackground", () => ({
 
 describe("InternshipHome", () => {
   afterEach(() => {
+    walletMocks.address = "0x1111111111111111111111111111111111111111";
+    walletMocks.isConnected = true;
+    walletMocks.isSigning = false;
     walletMocks.openConnectModal.mockClear();
     walletMocks.signMessageAsync.mockClear();
+    walletMocks.signMessageAsync.mockImplementation(
+      async () => `0x${"a".repeat(130)}` as `0x${string}`
+    );
     vi.unstubAllGlobals();
   });
 
-  it("signs and submits streamlined intake fields with Derek interview handoff", async () => {
+  async function renderForm(): Promise<{
+    scoped: ReturnType<typeof within>;
+    submitButton: HTMLElement;
+    user: ReturnType<typeof userEvent.setup>;
+  }> {
     class TestIntersectionObserver implements IntersectionObserver {
       readonly root = null;
       readonly rootMargin = "";
@@ -128,32 +143,31 @@ describe("InternshipHome", () => {
       unobserve(): void {}
     }
 
-    const fetchMock = vi.fn(async () =>
-      Response.json(
-        {
-          ok: true,
-          referenceId: "candidate-demo-001",
-          derekInterviewUrl: "https://calendly.com/derekg1729",
-        },
-        { status: 201 }
-      )
-    );
     vi.stubGlobal("IntersectionObserver", TestIntersectionObserver);
-    vi.stubGlobal("fetch", fetchMock);
-
     const { InternshipHome } = await import(
       "@/features/home/components/InternshipHome"
     );
     render(React.createElement(InternshipHome));
 
     const submitButton = screen.getByRole("button", {
-      name: /submit signed interest/i,
+      name: walletMocks.isConnected
+        ? /submit signed interest/i
+        : /connect wallet to submit/i,
     });
     const form = submitButton.closest("form");
     expect(form).not.toBeNull();
-    const scoped = within(form as HTMLFormElement);
-    const user = userEvent.setup();
 
+    return {
+      scoped: within(form as HTMLFormElement),
+      submitButton,
+      user: userEvent.setup(),
+    };
+  }
+
+  async function fillShortForm(
+    scoped: ReturnType<typeof within>,
+    user: ReturnType<typeof userEvent.setup>
+  ): Promise<void> {
     await user.type(
       scoped.getByLabelText("Interested?"),
       "Yes. I want to build applied AI products."
@@ -167,6 +181,23 @@ describe("InternshipHome", () => {
       "applied-ai-products"
     );
     await user.type(scoped.getByLabelText("Email"), "ada@example.com");
+  }
+
+  it("signs and submits streamlined intake fields with Derek interview handoff", async () => {
+    const fetchMock = vi.fn(async () =>
+      Response.json(
+        {
+          ok: true,
+          referenceId: "candidate-demo-001",
+          derekInterviewUrl: "https://calendly.com/derekg1729",
+        },
+        { status: 201 }
+      )
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { scoped, submitButton, user } = await renderForm();
+    await fillShortForm(scoped, user);
 
     await user.click(submitButton);
 
@@ -196,5 +227,52 @@ describe("InternshipHome", () => {
     expect(
       screen.getByRole("link", { name: /book derek interview/i })
     ).toHaveAttribute("href", "https://calendly.com/derekg1729");
+  });
+
+  it("opens wallet connection instead of submitting when disconnected", async () => {
+    walletMocks.address = undefined;
+    walletMocks.isConnected = false;
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { scoped, submitButton, user } = await renderForm();
+    await fillShortForm(scoped, user);
+    await user.click(submitButton);
+
+    expect(walletMocks.openConnectModal).toHaveBeenCalledTimes(1);
+    expect(walletMocks.signMessageAsync).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("shows a wallet signature error when signing fails", async () => {
+    walletMocks.signMessageAsync.mockRejectedValueOnce(new Error("rejected"));
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { scoped, submitButton, user } = await renderForm();
+    await fillShortForm(scoped, user);
+    await user.click(submitButton);
+
+    expect(
+      await screen.findByText("Wallet signature was cancelled or failed.")
+    ).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("shows a submission error when the endpoint rejects the signed interest", async () => {
+    const fetchMock = vi.fn(async () =>
+      Response.json({ error: "invalid input" }, { status: 400 })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { scoped, submitButton, user } = await renderForm();
+    await fillShortForm(scoped, user);
+    await user.click(submitButton);
+
+    expect(
+      await screen.findByText(
+        "Submission failed. Check the fields and try again."
+      )
+    ).toBeInTheDocument();
   });
 });

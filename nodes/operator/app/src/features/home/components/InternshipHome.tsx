@@ -50,6 +50,8 @@ type FormState = UnsignedInternshipInterestInput & {
   portfolioUrl: string;
 };
 
+type SubmissionStatus = "idle" | "submitting" | "success" | "error";
+
 const focusOptions: {
   value: InternshipInterestInput["focus"];
   label: string;
@@ -125,6 +127,67 @@ const internshipLightThemeStyle = {
   "--input": "42 18% 75%",
   "--ring": "161 38% 31%",
 } as CSSProperties;
+
+function walletStatusLabel(
+  hasFreshSignature: boolean,
+  isConnected: boolean
+): string {
+  if (hasFreshSignature) return "Interest signed";
+  if (isConnected) return "Wallet connected";
+  return "Wallet signature required";
+}
+
+function submitButtonLabel(
+  status: SubmissionStatus,
+  isSigning: boolean,
+  isConnected: boolean
+): string {
+  if (status === "submitting") return "Submitting";
+  if (isSigning) return "Waiting for signature";
+  if (isConnected) return "Submit signed interest";
+  return "Connect wallet to submit";
+}
+
+function FormFeedback({
+  status,
+  referenceId,
+  derekInterviewUrl,
+  signatureError,
+}: {
+  readonly status: SubmissionStatus;
+  readonly referenceId: string | null;
+  readonly derekInterviewUrl: string | null;
+  readonly signatureError: string | null;
+}): ReactElement {
+  if (status === "success" && referenceId) {
+    return (
+      <div className="rounded-md border border-primary/30 bg-primary/10 p-3 text-foreground">
+        <p>Interest received. Reference {referenceId}.</p>
+        {derekInterviewUrl && (
+          <p className="mt-1 text-muted-foreground">
+            Next step: book Derek with the link above.
+          </p>
+        )}
+      </div>
+    );
+  }
+
+  if (status === "error") {
+    return (
+      <p className="text-destructive">
+        Submission failed. Check the fields and try again.
+      </p>
+    );
+  }
+
+  if (signatureError) {
+    return <p className="text-destructive">{signatureError}</p>;
+  }
+
+  return (
+    <p className="text-muted-foreground">Sign once. No gas. Then book Derek.</p>
+  );
+}
 
 function fadeProps(index = 0) {
   return {
@@ -353,9 +416,7 @@ function SignupForm(): ReactElement {
   const { address, isConnected, isSigning, openConnectModal, signMessage } =
     useInternshipWalletSignature();
   const [form, setForm] = useState<FormState>(initialForm);
-  const [status, setStatus] = useState<
-    "idle" | "submitting" | "success" | "error"
-  >("idle");
+  const [status, setStatus] = useState<SubmissionStatus>("idle");
   const [referenceId, setReferenceId] = useState<string | null>(null);
   const [derekInterviewUrl, setDerekInterviewUrl] = useState<string | null>(
     null
@@ -541,11 +602,7 @@ function SignupForm(): ReactElement {
             </div>
             <div>
               <p className="font-medium text-foreground text-sm">
-                {hasFreshSignature
-                  ? "Interest signed"
-                  : isConnected
-                    ? "Wallet connected"
-                    : "Wallet signature required"}
+                {walletStatusLabel(hasFreshSignature, isConnected)}
               </p>
               <p className="text-muted-foreground text-xs">
                 {address
@@ -573,13 +630,7 @@ function SignupForm(): ReactElement {
           disabled={status === "submitting" || isSigning}
           size="lg"
         >
-          {status === "submitting"
-            ? "Submitting"
-            : isSigning
-              ? "Waiting for signature"
-              : isConnected
-                ? "Submit signed interest"
-                : "Connect wallet to submit"}
+          {submitButtonLabel(status, isSigning, isConnected)}
           <ArrowRight className="ml-2 size-4" />
         </Button>
         {status === "success" && derekInterviewUrl && (
@@ -603,26 +654,12 @@ function SignupForm(): ReactElement {
       </div>
 
       <div aria-live="polite" className="min-h-6 text-sm">
-        {status === "success" && referenceId ? (
-          <div className="rounded-md border border-primary/30 bg-primary/10 p-3 text-foreground">
-            <p>Interest received. Reference {referenceId}.</p>
-            {derekInterviewUrl && (
-              <p className="mt-1 text-muted-foreground">
-                Next step: book Derek with the link above.
-              </p>
-            )}
-          </div>
-        ) : status === "error" ? (
-          <p className="text-destructive">
-            Submission failed. Check the fields and try again.
-          </p>
-        ) : signatureError ? (
-          <p className="text-destructive">{signatureError}</p>
-        ) : (
-          <p className="text-muted-foreground">
-            Sign once. No gas. Then book Derek.
-          </p>
-        )}
+        <FormFeedback
+          status={status}
+          referenceId={referenceId}
+          derekInterviewUrl={derekInterviewUrl}
+          signatureError={signatureError}
+        />
       </div>
     </form>
   );
