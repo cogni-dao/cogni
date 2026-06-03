@@ -85,10 +85,7 @@ function NodeTile({ node }: { node: ResolvedShowcaseNode }): ReactElement {
 
 function LaunchTile(): ReactElement {
   return (
-    <Link
-      href="/setup/dao"
-      className="group block"
-    >
+    <Link href="/setup/dao" className="group block">
       <Card className="flex h-full items-center justify-center border-2 border-border bg-transparent transition-colors hover:border-primary">
         <CardContent className="flex flex-col items-center gap-3 p-6 text-center">
           <span className="flex size-12 items-center justify-center rounded-full bg-primary/10 text-primary transition-colors group-hover:bg-primary/20">
