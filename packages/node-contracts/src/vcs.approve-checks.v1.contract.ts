@@ -3,8 +3,7 @@
 
 /**
  * Module: `@cogni/node-contracts/vcs.approve-checks.v1`
- * Purpose: Zod contract for POST /api/v1/vcs/approve-checks — operator-as-maintainer
- *   auto-approval of fork-PR workflow runs awaiting maintainer approval.
+ * Purpose: Zod contract for POST /api/v1/vcs/approve-checks (operator-as-maintainer auto-approval of fork-PR workflow runs).
  * Scope: Input/output shapes only. Does not make network calls or import GitHub API.
  * Invariants:
  *   - CONTRACTS_ARE_TRUTH: wire shape is owned by vcs.approve-checks.v1.contract
