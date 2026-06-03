@@ -188,6 +188,40 @@ export async function linkWorkItemSessionPr(input: {
   };
 }
 
+export class WorkItemSessionPrMismatchError extends Error {
+  constructor(id: string, prNumber: number) {
+    super(`PR #${prNumber} is not linked to work item ${id}`);
+    this.name = "WorkItemSessionPrMismatchError";
+  }
+}
+
+/**
+ * Assert that `prNumber` is the PR currently linked to `workItemId`'s session,
+ * and that the caller owns that session. Forge-resistant gate for privileged
+ * VCS actions (e.g. fork-check approval): the agent proved ownership when it
+ * linked the PR via /pr under its own Bearer principal — we re-check both here.
+ */
+export async function assertPrLinkedBySession(input: {
+  readonly workItemId: string;
+  readonly prNumber: number;
+  readonly sessionUser: SessionUser | null;
+}): Promise<void> {
+  const sessionUser = requireSessionUser(input.sessionUser);
+  await requireWorkItem(input.workItemId);
+  const session = await getContainer().workItemSessions.getCurrent(
+    input.workItemId
+  );
+  if (!session) {
+    throw new WorkItemSessionNotFoundError(input.workItemId);
+  }
+  if (session.claimedByUserId !== sessionUser.id) {
+    throw new WorkItemSessionForbiddenError(input.workItemId);
+  }
+  if (session.prNumber !== input.prNumber) {
+    throw new WorkItemSessionPrMismatchError(input.workItemId, input.prNumber);
+  }
+}
+
 export async function getWorkItemCoordination(input: {
   readonly workItemId: string;
   readonly statusUrl: string;

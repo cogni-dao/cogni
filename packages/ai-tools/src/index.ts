@@ -12,6 +12,7 @@
  */
 
 export type {
+  ApproveForkChecksResult,
   AuthCapability,
   ChainDirection,
   ChainNodeEntry,

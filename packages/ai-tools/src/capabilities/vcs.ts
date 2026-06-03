@@ -85,6 +85,21 @@ export interface DispatchCandidateFlightResult {
   readonly message: string;
 }
 
+/**
+ * Result of approving fork-PR workflow runs that are awaiting maintainer approval.
+ *
+ * GitHub holds `pull_request` workflow runs from first-time / outside fork
+ * contributors in an `action_required` state until a maintainer approves them.
+ * This releases all such runs for a PR head SHA in one call.
+ */
+export interface ApproveForkChecksResult {
+  readonly approved: number;
+  readonly prNumber: number;
+  readonly headSha: string | null;
+  readonly runIds: readonly number[];
+  readonly message: string;
+}
+
 // ---------------------------------------------------------------------------
 // Capability interface
 // ---------------------------------------------------------------------------
@@ -146,4 +161,21 @@ export interface VcsCapability {
     headSha?: string;
     workflowRef?: string;
   }): Promise<DispatchCandidateFlightResult>;
+
+  /**
+   * Approve all `action_required` (fork-PR) workflow runs for a PR head SHA.
+   *
+   * Releases the "N workflows awaiting approval" gate GitHub applies to
+   * `pull_request` runs from first-time / outside fork contributors. Requires
+   * the GitHub App installation to hold `actions: write`.
+   *
+   * Authorization to approve is the CALLER's concern — this method is a thin
+   * GitHub wrapper and does NOT check work-item linkage or principal identity.
+   * The operator route gates it (work-item + principal match) before calling.
+   */
+  approveForkChecks(params: {
+    owner: string;
+    repo: string;
+    prNumber: number;
+  }): Promise<ApproveForkChecksResult>;
 }

@@ -18,6 +18,7 @@
  */
 
 import type {
+  ApproveForkChecksResult,
   CheckInfo,
   CiStatusResult,
   CreateBranchResult,
@@ -299,6 +300,67 @@ export class GitHubVcsAdapter implements VcsCapability {
       headSha: params.headSha ?? null,
       workflowUrl,
       message: `Flight dispatched for PR #${params.prNumber} @ ${shortSha}. Observe via core__vcs_get_ci_status (look for 'candidate-flight' check).`,
+    };
+  }
+
+  async approveForkChecks(params: {
+    owner: string;
+    repo: string;
+    prNumber: number;
+  }): Promise<ApproveForkChecksResult> {
+    const octokit = await this.getOctokit(params.owner, params.repo);
+
+    // Resolve the PR head SHA — workflow runs are keyed by head_sha.
+    const { data: pr } = await octokit.request(
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}",
+      {
+        owner: params.owner,
+        repo: params.repo,
+        pull_number: params.prNumber,
+      }
+    );
+    const headSha = pr.head.sha;
+
+    // List the workflow runs GitHub is holding behind the fork-PR approval gate.
+    const { data: runsData } = await octokit.request(
+      "GET /repos/{owner}/{repo}/actions/runs",
+      {
+        owner: params.owner,
+        repo: params.repo,
+        head_sha: headSha,
+        status: "action_required",
+        event: "pull_request",
+        per_page: 100,
+      }
+    );
+
+    const pending = runsData.workflow_runs as Array<{ id: number }>;
+
+    // Approve each held run. `POST .../actions/runs/{run_id}/approve` requires
+    // the installation to hold `actions: write` (cogni-node-template does).
+    const runIds: number[] = [];
+    for (const run of pending) {
+      await octokit.request(
+        "POST /repos/{owner}/{repo}/actions/runs/{run_id}/approve",
+        {
+          owner: params.owner,
+          repo: params.repo,
+          run_id: run.id,
+        }
+      );
+      runIds.push(run.id);
+    }
+
+    const shortSha = headSha.slice(0, 8);
+    return {
+      approved: runIds.length,
+      prNumber: params.prNumber,
+      headSha,
+      runIds,
+      message:
+        runIds.length > 0
+          ? `Approved ${runIds.length} workflow run(s) for PR #${params.prNumber} @ ${shortSha}.`
+          : `No workflow runs awaiting approval for PR #${params.prNumber} @ ${shortSha}.`,
     };
   }
 

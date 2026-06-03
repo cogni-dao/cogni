@@ -47,6 +47,11 @@ export const stubVcsCapability: VcsCapability = {
       "VcsCapability not configured. Set GH_REVIEW_APP_ID and GH_REVIEW_APP_PRIVATE_KEY_BASE64."
     );
   },
+  approveForkChecks: async () => {
+    throw new Error(
+      "VcsCapability not configured. Set GH_REVIEW_APP_ID and GH_REVIEW_APP_PRIVATE_KEY_BASE64."
+    );
+  },
 };
 
 /**
