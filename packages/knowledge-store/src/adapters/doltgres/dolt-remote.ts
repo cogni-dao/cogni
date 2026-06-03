@@ -88,6 +88,19 @@ export interface DoltgresPullConfig {
   remoteUrl: string;
   /** Branch to seed. Defaults to "main". */
   branch?: string;
+  /**
+   * Safety gate for the destructive `reset --hard`. Called on the reserved
+   * connection ONLY when local has no shared history with the remote, i.e.
+   * right before the adopt-remote reset would fire. Return `false` to refuse
+   * the reset (seed becomes a no-op, "skipped_unsafe").
+   *
+   * This DB is shared — `reset --hard` would adopt the remote's version of
+   * EVERY table, including the operator's `work_items`. The caller injects a
+   * pristine check here (e.g. "work_items is empty") so the seed only adopts
+   * remote history into a genuinely fresh node and can never clobber a node
+   * that has accumulated local operational data. Omitted ⇒ always adopt.
+   */
+  canAdoptRemoteHistory?: (conn: ReservedSql) => Promise<boolean>;
 }
 
 /**
@@ -95,13 +108,15 @@ export interface DoltgresPullConfig {
  * the caller can surface it structurally — e.g. distinguishing a fresh-node
  * reset from a steady-state no-op in Loki without the adapter importing a logger.
  */
-export type SeedAction = "reset" | "noop";
+export type SeedAction = "reset" | "noop" | "skipped_unsafe";
 
 export interface DoltgresPuller {
   /**
    * Make local `branch` descend from `remoteName/branch`. Idempotent:
-   * `"noop"` when the local branch already shares history with the remote,
-   * `"reset"` when it does not (the fresh-node case) — adopts remote history.
+   * `"noop"` when the local branch already shares history with the remote;
+   * `"reset"` when it does not and `canAdoptRemoteHistory` allows (the
+   * fresh-node case) — adopts remote history; `"skipped_unsafe"` when there
+   * is no shared history but the guard refused (local has data to protect).
    */
   seedFromRemote(): Promise<SeedAction>;
 }
@@ -131,15 +146,19 @@ export interface DoltgresPuller {
  *
  * NOTE — this DB is shared: on the operator it holds `work_items` alongside
  * `knowledge`/`citations`/contributions, and `dolt_reset --hard` adopts the
- * remote's version of EVERY table. The remote (the node's knowledge mirror) is
- * the source of truth for the whole DB, so this is correct for a genuinely
- * fresh node. A node that already pushed (e.g. prod) shares history → no-op, so
- * its local work items are never clobbered.
+ * remote's version of EVERY table. Two independent guards keep that safe:
+ *   - prod (the pusher) shares history → step 3 is skipped (no-op), so a
+ *     populated node is never reset.
+ *   - `canAdoptRemoteHistory` gates step 3 for the no-shared-history case, so
+ *     the reset only fires into a pristine DB (caller checks `work_items` is
+ *     empty). A node that accumulated operational data without ever sharing
+ *     history — exactly the "no common ancestor" target — is left untouched
+ *     ("skipped_unsafe") rather than having its work items clobbered.
  */
 export function createDoltgresPuller(
   config: DoltgresPullConfig
 ): DoltgresPuller {
-  const { sql, remoteName, remoteUrl } = config;
+  const { sql, remoteName, remoteUrl, canAdoptRemoteHistory } = config;
   const branch = config.branch ?? "main";
   const remoteRef = `${remoteName}/${branch}`;
 
@@ -171,6 +190,9 @@ export function createDoltgresPuller(
         );
         if (await sharesHistory(conn)) {
           return "noop";
+        }
+        if (canAdoptRemoteHistory && !(await canAdoptRemoteHistory(conn))) {
+          return "skipped_unsafe";
         }
         await conn.unsafe(
           `SELECT dolt_reset('--hard', ${escapeRef(remoteRef)})`

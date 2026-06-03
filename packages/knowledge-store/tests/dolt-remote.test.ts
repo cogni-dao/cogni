@@ -275,6 +275,62 @@ describe("createDoltgresPuller", () => {
     expect(sql.calls[2]).toContain("'origin/release'");
     expect(sql.calls[3]).toContain("'origin/release'");
   });
+
+  it("refuses the reset when canAdoptRemoteHistory returns false (non-pristine node)", async () => {
+    const sql = fakePullSql({ mergeBase: "" });
+    const puller = createDoltgresPuller({
+      // biome-ignore lint/suspicious/noExplicitAny: test fake
+      sql: sql as any,
+      remoteName: "origin",
+      remoteUrl: "https://example.invalid/x/y",
+      canAdoptRemoteHistory: async () => false,
+    });
+
+    const action = await puller.seedFromRemote();
+
+    expect(action).toBe("skipped_unsafe");
+    // add + fetch + merge_base, but NO reset — local data is protected.
+    expect(sql.calls).toHaveLength(3);
+    expect(sql.calls.some((c) => c.includes("dolt_reset"))).toBe(false);
+    expect(sql.released).toBe(1);
+  });
+
+  it("adopts remote history when canAdoptRemoteHistory returns true (pristine node)", async () => {
+    const sql = fakePullSql({ mergeBase: "" });
+    const puller = createDoltgresPuller({
+      // biome-ignore lint/suspicious/noExplicitAny: test fake
+      sql: sql as any,
+      remoteName: "origin",
+      remoteUrl: "https://example.invalid/x/y",
+      canAdoptRemoteHistory: async () => true,
+    });
+
+    const action = await puller.seedFromRemote();
+
+    expect(action).toBe("reset");
+    expect(sql.calls[3]).toContain("dolt_reset");
+  });
+
+  it("never consults the guard when local already shares history (no-op wins)", async () => {
+    const sql = fakePullSql({ mergeBase: "abc1234deadbeef" });
+    let guardCalls = 0;
+    const puller = createDoltgresPuller({
+      // biome-ignore lint/suspicious/noExplicitAny: test fake
+      sql: sql as any,
+      remoteName: "origin",
+      remoteUrl: "https://example.invalid/x/y",
+      canAdoptRemoteHistory: async () => {
+        guardCalls++;
+        return true;
+      },
+    });
+
+    const action = await puller.seedFromRemote();
+
+    expect(action).toBe("noop");
+    expect(guardCalls).toBe(0);
+    expect(sql.calls.some((c) => c.includes("dolt_reset"))).toBe(false);
+  });
 });
 
 describe("wrapPushSafe", () => {

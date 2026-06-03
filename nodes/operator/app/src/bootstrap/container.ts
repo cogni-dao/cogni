@@ -638,10 +638,33 @@ function createContainer(): Container {
         sql: doltClient,
         remoteName: "origin",
         remoteUrl: doltRemoteUrl,
+        // PRISTINE GUARD: the knowledge DB also holds `work_items`, and the seed's
+        // `reset --hard` adopts the remote's version of the WHOLE DB. Only adopt
+        // when this node has no local operational data to lose — i.e. `work_items`
+        // is empty (a genuinely fresh boot). A node that already accumulated work
+        // items but never shared history with the remote (the exact "no common
+        // ancestor" target) is left untouched ("skipped_unsafe") instead of having
+        // its work items clobbered. work_items lives in the same Doltgres DB.
+        canAdoptRemoteHistory: async (conn) => {
+          try {
+            const rows = await conn.unsafe(
+              "SELECT COUNT(*)::int AS c FROM work_items"
+            );
+            return Number((rows[0] as { c?: number } | undefined)?.c ?? 0) === 0;
+          } catch {
+            // work_items table absent ⇒ nothing to protect ⇒ pristine.
+            return true;
+          }
+        },
       })
         .seedFromRemote()
         .then((action) =>
-          log.info({ remote: doltRemoteUrl, action }, "dolthub_seed_ok")
+          action === "skipped_unsafe"
+            ? log.warn(
+                { remote: doltRemoteUrl, action },
+                "dolthub_seed_skipped_nonpristine"
+              )
+            : log.info({ remote: doltRemoteUrl, action }, "dolthub_seed_ok")
         )
         .catch((err) =>
           log.warn({ err, remote: doltRemoteUrl }, "dolthub_seed_failed")
