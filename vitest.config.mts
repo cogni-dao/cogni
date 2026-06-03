@@ -120,6 +120,27 @@ export default defineConfig({
           "./nodes/operator/app/node_modules/react/jsx-runtime.js"
         ),
       },
+      {
+        find: "next/server",
+        replacement: path.resolve(
+          __dirname,
+          "./nodes/operator/app/node_modules/next/server.js"
+        ),
+      },
+      {
+        find: /^viem$/,
+        replacement: path.resolve(
+          __dirname,
+          "./nodes/operator/app/node_modules/viem"
+        ),
+      },
+      {
+        find: /^viem\/(.*)$/,
+        replacement: path.resolve(
+          __dirname,
+          "./nodes/operator/app/node_modules/viem/$1"
+        ),
+      },
     ],
   },
 });
