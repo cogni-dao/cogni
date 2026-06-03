@@ -132,7 +132,16 @@ jobs:
           OPERATOR_FILES: ${{ steps.domains.outputs.operator_files }}
         run: |
           count=$(jq 'length' <<<"$MATCHED")
-          if [ "$count" -le 1 ]; then exit 0; fi
+          SCOPE=$(jq -r 'if length == 0 then "none" else join(" + ") end' <<<"$MATCHED")
+
+          # Report which domain(s) this PR was classified into so a human reading
+          # the Actions run sees the answer without decoding dorny outputs.
+          report() { echo "$1"; echo "**single-node-scope:** $1" >> "$GITHUB_STEP_SUMMARY"; }
+
+          if [ "$count" -le 1 ]; then
+            report "✅ scope: ${SCOPE}"
+            exit 0
+          fi
 
           # The single non-operator node (if exactly one), for the NODE_BIRTH
           # wiring carve-out below.
@@ -165,11 +174,12 @@ jobs:
                     or test("^infra/k8s/argocd/[^/]*applicationset[^/]*\\.ya?ml$")
                   ))
              )' <<<"$OPERATOR_FILES" >/dev/null; then
-            echo "single-domain scope OK (ride-along applied)"
+            report "✅ scope: ${NODE} (+ operator ride-along)"
             exit 0
           fi
 
-          echo "::error::PR spans $count node domains: $(jq -r 'join(", ")' <<<"$MATCHED"). Each node owns its directory; operator owns nodes/operator + repo infra. Split into $count PRs, one per domain."
+          report "❌ spans ${count} domains: ${SCOPE}"
+          echo "::error::PR spans $count node domains: ${SCOPE}. Each node owns its directory; operator owns nodes/operator + repo infra. Split into $count PRs, one per domain."
           exit 1
 
   unit:
