@@ -59,15 +59,15 @@ The killer rule: **no human types a secret VALUE into a UI in production.** Auto
 
 Some secrets must **byte-equal a value held by an external system**, not merely exist. The operator's `GH_WEBHOOK_SECRET` must equal the **GitHub App's webhook secret**; an OAuth `*_CLIENT_SECRET` must equal the provider's app config. These are **dual-plane**: one copy in our pod, one on the external plane — they only work if identical.
 
-**The trap (live bug, preview 2026-06-03):** `GH_WEBHOOK_SECRET` was `source: agent`, generated `randHex 32` **every provision** → it could never match the App's fixed webhook secret → **every webhook failed HMAC verification**, silently (a `level:40` warn `component:webhook-route msg:"webhook verification failed"`, no alert, no 5xx). The App just looks dead — no PR reviews, no node-wizard. `deploy-infra` re-applying the Secret was the **breaking** path, not the healing one — an auto-generated value *structurally cannot* equal an externally-fixed one.
+**The trap (live bug, preview 2026-06-03):** `GH_WEBHOOK_SECRET` was `source: agent`, generated `randHex 32` **every provision** → it could never match the App's fixed webhook secret → **every webhook failed HMAC verification**, silently (a `level:40` warn `component:webhook-route msg:"webhook verification failed"`, no alert, no 5xx). The App just looks dead — no PR reviews, no node-wizard. `deploy-infra` re-applying the Secret was the **breaking** path, not the healing one — an auto-generated value _structurally cannot_ equal an externally-fixed one.
 
-**Rule: a secret that must match an external counterpart is NEVER `source: agent`.** Classify by *who can produce the value*:
+**Rule: a secret that must match an external counterpart is NEVER `source: agent`.** Classify by _who can produce the value_:
 
-| `source:` | Meaning | Example | Provisioning does |
-| --- | --- | --- | --- |
-| `agent` | self-contained, auto-generated | `AUTH_SECRET` | generate, store |
-| `human` | **un-generatable** by us; vendor-minted, human supplies once | `GH_REVIEW_APP_PRIVATE_KEY_BASE64` (App private key) | carry from GH env |
-| `external` | **agent-generatable**, but must **sync to an external system's API** | `GH_WEBHOOK_SECRET` (GitHub App webhook secret) | generate **and push** |
+| `source:`  | Meaning                                                              | Example                                              | Provisioning does     |
+| ---------- | -------------------------------------------------------------------- | ---------------------------------------------------- | --------------------- |
+| `agent`    | self-contained, auto-generated                                       | `AUTH_SECRET`                                        | generate, store       |
+| `human`    | **un-generatable** by us; vendor-minted, human supplies once         | `GH_REVIEW_APP_PRIVATE_KEY_BASE64` (App private key) | carry from GH env     |
+| `external` | **agent-generatable**, but must **sync to an external system's API** | `GH_WEBHOOK_SECRET` (GitHub App webhook secret)      | generate **and push** |
 
 `GH_WEBHOOK_SECRET` is now `source: external` — `bootstrap.sh::declare_or_gen` still generates it, then `deploy-infra` **pushes** it to the App (`scripts/secrets/sync-app-webhook-secret.sh`: App JWT → `PATCH /app/hook/config`) so both copies match:
 
