@@ -49,6 +49,52 @@ A human or AI agent can declare a new secret, rotate an existing secret, or revo
 
 ---
 
+## Self-Serve Model (read this first)
+
+The whole point: **any node developer adds a secret to their own running node — in one PR, with no
+kubectl, no PAT, no laptop root token, and without waiting on the operator.** The platform spawns N
+node forks; secret provisioning cannot be a bottleneck that routes through one person.
+
+Adding a secret is **two atoms**, each self-serve:
+
+```
+┌── ① DECLARE (one PR, your node domain) ─────────────────────────────────────┐
+│  Edit nodes/<node>/.cogni/secrets-catalog.yaml — one entry: name, tier,     │
+│  appliesTo, shared, source.  The Zod loader validates it at load time.      │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                   │  the catalog is the ONE list the provisioner reads
+                                   ▼
+┌── ② WRITE THE VALUE (no laptop) ────────────────────────────────────────────┐
+│  source: agent  → generated at seed, distinct per node. Nothing to do.      │
+│  source: human  → secret-set workflow_dispatch (GH-OIDC → OpenBao; value    │
+│                   staged as a sealed GH Environment Secret) OR, for         │
+│                   candidate experimentation, `pnpm secrets:set`.            │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                   ▼
+   OpenBao  cogni/<env>/<service>/<KEY>   ← single source of truth
+                                   ▼  ESO dataFrom: extract (one ExternalSecret per service-env)
+   k8s Secret  <service>-env-secrets
+                                   ▼  Stakater Reloader (envFrom is read once, at start)
+   Pod rolling-restarts → process.env.<KEY> is live.   Zero pod-spec edits.
+```
+
+**Why this is the design (and what it replaces).** Atom ① only works if the provisioner derives its
+fan-out **from the catalog**. Historically three hand-maintained lists decided which keys reached a
+pod — `reconcile-secrets.sh::NODE_BASELINE_KEYS`, `provision-env.yml`'s per-secret `env:` block, and
+the `bootstrap.sh` `.env` heredoc — and they drifted from the catalog. `DOLTHUB_*`/`DOLT_CREDS_*`
+were declared catalog **A1** yet absent from all three lists, so the DoltHub mirror sat dormant: the
+living proof that a catalog entry is inert until a human hand-propagates it. The
+[`CATALOG_IS_THE_ONE_READER`](#core-invariants) invariant retires those lists — the catalog is the
+only declaration surface, read by one loader (`scripts/lib/secrets-catalog-loader.ts`), so a node
+dev's one-PR catalog edit actually fans out.
+
+**Per-node _gating_ is already catalog-driven** (`_node_gets_key` resolves `appliesTo`/`service`); the
+remaining work is making the key **universe** catalog-derived too, so declaration is genuinely
+self-serve. The catalog model (capability-gated, distinct-vs-shared custody line) is specified in
+[`docs/design/secrets-catalog-per-node.md`](../design/secrets-catalog-per-node.md).
+
+---
+
 ## Core Invariants
 
 1. **PATH_CONVENTION_PER_SERVICE_PER_ENV.** Every secret lives at `cogni/<env>/<service>` in OpenBao KV v2, with the secret name as a key at that path. `<env>` ∈ {`candidate-a`, `preview`, `production`}; `<service>` is the catalog name (`node-template`, `scheduler-worker`, …). One path per (service, env). Multiple keys per path.
@@ -68,25 +114,29 @@ A human or AI agent can declare a new secret, rotate an existing secret, or revo
 8. **EVERY_ACCESS_AUDITED.** OpenBao audit device enabled; logs shipped to Loki via Alloy. Every read, write, rotate, delete is captured with actor identity (Kubernetes ServiceAccount, OIDC subject, or operator-MCP token), timestamp, path, and outcome. SOC 2 CC7.2 anomaly detection layers on top of this stream.
 
 9. **TOOLING_IS_THE_INTERFACE.** Humans/agents NEVER call `bao kv put` directly in production paths. Three standardized entry points (all calling the same primitive):
-   - **CLI:** `pnpm secrets:set <env> <service> <KEY>` (developer; interactive; never echoes values; requires caller-provided `BAO_ADDR` + short-lived `BAO_TOKEN` — see Invariant 13)
-   - **GitHub workflow:** `.github/workflows/secrets-manage.yml` (ops; workflow_dispatch; uses `hashicorp/vault-action` for GH-OIDC→OpenBao token exchange — **deferred; canonical operator path for preview/production once it ships**)
+   - **CLI:** `pnpm secrets:set <env> <service> <KEY>` (developer; interactive; never echoes values; requires caller-provided `BAO_ADDR` + short-lived `BAO_TOKEN` — see Invariant 13). For candidate experimentation.
+   - **GitHub workflow:** `.github/workflows/secret-set.yml` — **per-operation** (never a generic `secrets-manage.yml` catch-all), `workflow_dispatch` with non-secret inputs `{env, service, key}`. Authenticates GH Actions OIDC → OpenBao `jwt` auth (`gha-<env>-writer` role, bound to `sub=repo:<owner>/<repo>:environment:<env>` → existing `<env>-writer` policy), then `bao kv patch`. **The value is NOT a dispatch input** (dispatch inputs are visible in run metadata → would violate Invariant 4); it is read from a sealed GH Environment Secret the dev stages via `gh secret set` (libsodium, write-only, masked in logs). `environment:<env>` makes production's GH-environment protection rule gate the token mint. This is the day-2 self-serve path; in the fork model each node owns its own OpenBao, so reachability is per-fork, not a shared-exposure decision.
    - **Operator API:** `POST /api/v1/secrets/declare` (AI agents via operator MCP; out of scope for node-template — operator monorepo construct)
-     The CLI is the only currently-implemented path. Until the workflow_dispatch entry ships, preview/production writes use the CLI with short-lived `BAO_TOKEN`s (port-forward + `bao login`).
+     Substrate shipped: the `<env>-writer` policy + `gha-<env>-writer` JWT role are provisioned in `provision-env-vm.sh` Phase 5b. The killer rule — **no human ever types a secret VALUE into a plaintext form/UI** — is upheld: values arrive only via the sealed GH secret store, `gh secret set` stdin, or agent generation.
 
 10. **SEED_TOKEN_IS_NEVER_TOUCHED_MANUALLY.** The `OPENBAO_SEED_TOKEN` (the one secret in GH env secrets per env) is written ONCE by `bootstrap.sh` and rotated only by automated mechanisms (operator-app rotation cron or Kubernetes auth method renewal). No human or agent ever runs `gh secret set OPENBAO_SEED_TOKEN` manually post-bootstrap.
 
-11. **ROTATION_DOES_NOT_EDIT_GIT.** Routine rotation is a control-plane operation (`bao kv patch`). The k8s Secret is synced by ESO automatically; the pod is restarted by Stakater Reloader when it detects the Secret change. Zero PRs for rotation.
+11. **ROTATION_DOES_NOT_EDIT_GIT.** Routine rotation is a control-plane operation (`bao kv patch`). The k8s Secret is synced by ESO automatically; the pod is restarted by Stakater Reloader when it detects the Secret change. Zero PRs for rotation. Reloader is installed as the third substrate Argo app (`infra/k8s/argocd/reloader/`); the shared node-app Deployment carries `reloader.stakater.com/auto: "true"`. **This is load-bearing, not cosmetic:** `envFrom` is read once at container start, so without Reloader an ESO-synced value change never reaches a running pod — a day-2 write or rotation would be silently inert until the next unrelated rollout.
 
 12. **TRANSITION_SAFE.** When ESO is wired but a specific path is empty (cold-start), the pod fails to start (loud, not silent). When a path exists but a specific key is missing, that env var is unset (Go/Node default semantics). Code that requires a secret MUST fail fast at startup with a clear error referencing the missing key NAME (not VALUE).
 
 13. **NO_OPERATOR_ROOT_TOKEN_ON_LAPTOP.** The bootstrap root token captured by `provision-env-vm.sh` Phase 5b exists during the ~30 min provisioning window only — Phases 5b.3 (eso-reader policy + role), 5b.4 (`<env>-writer` policy + role binding to `default/openbao-operator`), and 5c (initial path seeding) use it imperatively; nothing reads `.local/<env>-openbao-root-token` after Phase 5b exits. Day-2 secret writes mint a short-lived bao token via the writer role:
+
     ```
     export BAO_TOKEN=$(bao write -field=token auth/kubernetes/login \
       role=<env>-writer \
       jwt=$(kubectl create token openbao-operator -n default))
     ```
+
     (The `bao login -method=kubernetes` client helper is not in OpenBao CLI 2.5.x; the raw API path above is portable across CLI versions.)
     No script reads the bootstrap root token from disk post-bootstrap; no SSH-to-VM-then-kubectl-exec-as-root path exists. The bootstrap window itself is tolerated as the bounded "trust the operator's laptop" moment — v2 closes even this gap by moving provisioning to a GitHub workflow (operator triggers `gh workflow run provision-env.yml`; root token never touches a laptop). Tracked in the follow-up bug. Violation today = re-exporting the root token from `.local/` for day-2 writes, which would re-create the long-lived-superuser-credential-on-a-laptop pattern that `proj.security-hardening`'s motivating incident exists to eliminate.
+
+14. **CATALOG_IS_THE_ONE_READER.** The set of keys that fan out to a pod is derived **only** from the secrets catalog (`infra/secrets-catalog.yaml` + `nodes/<node>/.cogni/secrets-catalog.yaml`), read through the single Zod loader (`scripts/lib/secrets-catalog-loader.ts`). No hand-maintained parallel list may decide pod fan-out — specifically `reconcile-secrets.sh::NODE_BASELINE_KEYS`, the per-secret `env:` map in `provision-env.yml`, and the `bootstrap.sh` `.env` heredoc are derived from the loader (e.g. a `--print-pod-keys <node>` emitter the bash side consumes), never independently authored. A catalog entry is the **declaration**; declaration must imply fan-out. Drift guard: `secrets-fanout.test.sh` fails closed if a catalog pod-key is not in the derived set. This is what makes Atom ① of the self-serve model real — a node dev's one-PR catalog edit reaches the pod without any operator-domain hand-edit. (Per-node _membership_ is already catalog-gated via `_node_gets_key`/`appliesTo`; this invariant extends the same SSOT to the key **universe**.)
 
 ---
 
@@ -289,7 +339,9 @@ Bound via OpenBao role definitions to Kubernetes ServiceAccounts (per-service-pe
 | `infra/k8s/secrets/external-secrets/<env>/<service>/` | Per-service-per-env ExternalSecret YAML                                |
 | `scripts/secrets/set-secret.sh`                       | CLI implementation (`pnpm secrets:set`)                                |
 | `scripts/secrets/rotate-secret.sh`                    | CLI implementation (`pnpm secrets:rotate`)                             |
-| `.github/workflows/secrets-manage.yml`                | GitHub workflow entry point                                            |
+| `.github/workflows/secret-set.yml`                    | Day-2 self-serve write (GH-OIDC → OpenBao; per-operation)              |
+| `scripts/lib/secrets-catalog-loader.ts`               | The one catalog reader (Zod); emits the pod-key universe               |
+| `nodes/<node>/.cogni/secrets-catalog.yaml`            | Per-node declaration surface (one-PR self-serve)                       |
 | `docs/runbooks/fork-quickstart.md`                    | Bootstrap flow (substrate install + unseal + role bind, Steps 6 / 6.5) |
 | `docs/guides/secrets-add-new.md`                      | Practical guide — adding a new secret                                  |
 | `docs/guides/secrets-rotate.md`                       | Practical guide — rotation playbook + substrate-token rotation         |
@@ -306,9 +358,81 @@ Bound via OpenBao role definitions to Kubernetes ServiceAccounts (per-service-pe
 - [`task.5057`](https://cognidao.org/work/items/task.5057) — `fork-quickstart.md` update for ESO
 - [`ci-cd.md`](./ci-cd.md) — Axiom 17 amendment lands with `task.0284`
 
+## E2E Validation — the self-serve proof
+
+The model is proven, end to end, by a node dev adding **one throwaway secret to the `node-template`
+node** and watching it reach the running pod with zero operator-domain edits. Today `node-template`
+has **no** per-node catalog (all its keys live `_shared` in `infra/secrets-catalog.yaml`), so the
+probe also exercises the per-node declaration seam for the first time.
+
+**Throwaway probe:** `NODE_TEMPLATE_SELFSERVE_PROBE` — `tier: A1`, `appliesTo: all-nodes`,
+`shared: false`, `source: human`, value = a harmless UUID/timestamp. No app code consumes it; the
+proof is that it materializes in the pod's environment.
+
+**The falsifying "before" (proves the gap is real):**
+
+- [ ] On `main` (pre-`CATALOG_IS_THE_ONE_READER`), add the probe to a new
+      `nodes/node-template/.cogni/secrets-catalog.yaml`. The loader sees it
+      (`pnpm secrets:set --list` / `print-pod-keys node-template` includes it) but a fresh provision
+      does **not** seed it — `bao kv get cogni/<env>/node-template` lacks the key. ⟹ catalog entry is
+      inert. This is the bug.
+
+**CI (unit, no infra) — must be green to merge:**
+
+- [ ] `secrets-fanout.test.sh` rewritten: `NODE_BASELINE_KEYS` (and the provision-env / bootstrap key
+      sets) **equal** the loader-derived pod-key set per node. RED if a catalog pod-key is dropped.
+- [ ] `print-pod-keys` unit: a catalog with `appliesTo: all-nodes` key → present for every node; an
+      `appliesTo: payments`/`service: poly` key → present only for poly.
+- [ ] Loader/Zod unit: the probe entry parses; `service:` matches parent dir; name unique across catalogs.
+- [ ] `shellcheck` on the three de-listed scripts; `pnpm check:docs` for the doc edits.
+
+**Candidate-a (the wire — `deploy_verified`):**
+
+- [ ] Flight this branch → candidate-a; confirm build SHA == head.
+- [ ] **Declare** (Atom ①): the probe in `nodes/node-template/.cogni/secrets-catalog.yaml` is in the PR.
+      Provision (or Phase-5c reconcile) seeds `cogni/candidate-a/node-template/NODE_TEMPLATE_SELFSERVE_PROBE`
+      — verify via `bao kv get` (port-forward) **without any `pnpm secrets:set` for it** (agent-generated
+      proof) OR via the `secret-set.yml` workflow for a `source: human` value (Atom ② proof).
+- [ ] ESO: the node-template `*-env-secrets` ExternalSecret reports `SecretSynced`; the synced k8s
+      Secret contains the probe key.
+- [ ] **Reloader closes the loop:** the pod rolling-restarts on the Secret change; `kubectl exec … printenv`
+      shows `NODE_TEMPLATE_SELFSERVE_PROBE` in the running container — **no manual rollout**.
+- [ ] **Self-serve assertion:** the entire flow touched only `nodes/node-template/.cogni/secrets-catalog.yaml`
+      (+ a value via sealed channel) — zero edits to `reconcile-secrets.sh`, `provision-env.yml`,
+      `bootstrap.sh`, pod specs, or ExternalSecret YAML.
+- [ ] `secret-set.yml` audit: the OpenBao write appears in the audit device → Loki with the OIDC subject.
+
+**Regression / negative:**
+
+- [ ] Re-run provision (idempotency): no pod churn for unchanged values.
+- [ ] A node that does NOT own a `service`-pinned A2 key still does not receive it (operator vs a poly key).
+- [ ] `dolthub_push_ok`: with the same machinery, `DOLTHUB_*`/`DOLT_CREDS_*` now fan out — a knowledge
+      contribution merge fires `dolthub_push_ok` in Loki (the original task.5104 goal, now reproducible).
+
+> The actionable, checkable step list lives in the work item (`task.5104`); this section is the
+> acceptance contract those steps must satisfy.
+
+## Docs Consolidation (executed with the implementing PR)
+
+The self-serve model makes several pre-OpenBao docs actively wrong (they assert GH-env as SSOT).
+Pruned/refined atomically with the code so no doc outlives the model it describes:
+
+| Doc                                                                                  | Action                                                                                             | Reason                                                                                                              |
+| ------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `.claude/commands/env-update.md`                                                     | **REWRITTEN** (this PR)                                                                            | Was a 15-surface manual-propagation checklist (the drift anti-pattern). Now the catalog-SSOT self-serve path.       |
+| `docs/runbooks/SECRET_ROTATION.md`                                                   | **DELETE** + retarget inbound links → `docs/guides/secrets-rotate.md`                              | Pre-`task.0284`; asserts "all secrets in GitHub Actions Secrets" — contradicts `OPENBAO_IS_SINGLE_SOURCE_OF_TRUTH`. |
+| `docs/runbooks/INFRASTRUCTURE_SETUP.md`                                              | **DELETE** + retarget ~10 inbound links → `docs/runbooks/fork-quickstart.md` + `provision-env.yml` | Pre-OpenBao manual Terraform + GH-secret setup; superseded. Cascading link-fix done atomically in the implement PR. |
+| `docs/spec/secrets-management.md`                                                    | **REFINED** (this PR)                                                                              | Self-serve model section + `CATALOG_IS_THE_ONE_READER` + corrected Entry 2 + Reloader + this validation.            |
+| `docs/design/secrets-catalog-per-node.md`                                            | KEEP                                                                                               | The catalog model; this spec references it, no duplication.                                                         |
+| `docs/guides/secrets-add-new.md` · `secrets-rotate.md` · `cicd-secrets-expert` SKILL | KEEP (light touch: `secret-set.yml` name + Entry-2 status)                                         | Canonical recipes; no stale-SSOT claims.                                                                            |
+
+Killer-rule check: every deleted doc asserts the OLD (GH-env-SSOT) model; no deleted doc is the sole
+copy of a still-valid recipe (the port-forward CLI recipe stays in `secrets-add-new.md`).
+
 ## Acceptance
 
 - ✅ Every invariant cited in this spec has a corresponding enforcement point (test, CI check, OpenBao policy, or operator-app check) once `task.0284` ships
 - ✅ Adding a new secret to an existing service-env path requires zero git changes
 - ✅ Rotating a secret requires zero git changes
 - ✅ Secret values never appear in any committed file, PR diff, GitHub Actions log line, chat transcript, or AI agent context window
+- ✅ A node dev adds a secret to their node end-to-end (`NODE_TEMPLATE_SELFSERVE_PROBE` proof) touching only their per-node catalog + a sealed value channel — no operator-domain edit, no kubectl, no laptop root token
