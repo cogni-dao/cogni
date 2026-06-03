@@ -365,9 +365,19 @@ node** and watching it reach the running pod with zero operator-domain edits. To
 has **no** per-node catalog (all its keys live `_shared` in `infra/secrets-catalog.yaml`), so the
 probe also exercises the per-node declaration seam for the first time.
 
-**Throwaway probe:** `NODE_TEMPLATE_SELFSERVE_PROBE` — `tier: A1`, `appliesTo: all-nodes`,
-`shared: false`, `source: human`, value = a harmless UUID/timestamp. No app code consumes it; the
-proof is that it materializes in the pod's environment.
+**Throwaway probe:** `NODE_TEMPLATE_SELFSERVE_PROBE` — declared in
+`nodes/node-template/.cogni/secrets-catalog.yaml`, so `service:` auto-resolves to `node-template`
+and it fans out to **only** the node-template pod (not every node). `tier: A2`, `shared: false`,
+**`source: agent`** (`generate: { kind: hex, bytes: 16 }`). No app code consumes it; the proof is
+that it materializes in the node-template pod's environment.
+
+> **Why `source: agent`, not `human`:** the candidate-a proof must validate Atom ① + the
+> catalog→ESO→Reloader wire **without** depending on the Atom ② value-write path, which on
+> candidate-a still hits the OpenBao-reachability question (plaintext, ClusterIP, no Ingress — the
+> `secret-set.yml` runner can't reach it yet; that resolves per-fork, see Invariant 9). An
+> agent-generated value is seeded by provisioning itself, so it exercises the full declare→pod loop
+> standalone. The `secret-set.yml` value-write (Atom ② for `source: human`) is proven separately once
+> per-fork OpenBao exposure lands — do not block Atom ① on it.
 
 **The falsifying "before" (proves the gap is real):**
 
@@ -390,9 +400,9 @@ proof is that it materializes in the pod's environment.
 
 - [ ] Flight this branch → candidate-a; confirm build SHA == head.
 - [ ] **Declare** (Atom ①): the probe in `nodes/node-template/.cogni/secrets-catalog.yaml` is in the PR.
-      Provision (or Phase-5c reconcile) seeds `cogni/candidate-a/node-template/NODE_TEMPLATE_SELFSERVE_PROBE`
-      — verify via `bao kv get` (port-forward) **without any `pnpm secrets:set` for it** (agent-generated
-      proof) OR via the `secret-set.yml` workflow for a `source: human` value (Atom ② proof).
+      Provision (or Phase-5c reconcile) auto-seeds `cogni/candidate-a/node-template/NODE_TEMPLATE_SELFSERVE_PROBE`
+      from the catalog (`source: agent`) — verify via `bao kv get` (port-forward) **with zero per-secret
+      hand-edits and zero `pnpm secrets:set`**. This is the catalog-SSOT proof.
 - [ ] ESO: the node-template `*-env-secrets` ExternalSecret reports `SecretSynced`; the synced k8s
       Secret contains the probe key.
 - [ ] **Reloader closes the loop:** the pod rolling-restarts on the Secret change; `kubectl exec … printenv`
@@ -417,14 +427,14 @@ proof is that it materializes in the pod's environment.
 The self-serve model makes several pre-OpenBao docs actively wrong (they assert GH-env as SSOT).
 Pruned/refined atomically with the code so no doc outlives the model it describes:
 
-| Doc                                                                                  | Action                                                                                             | Reason                                                                                                              |
-| ------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `.claude/commands/env-update.md`                                                     | **REWRITTEN** (this PR)                                                                            | Was a 15-surface manual-propagation checklist (the drift anti-pattern). Now the catalog-SSOT self-serve path.       |
-| `docs/runbooks/SECRET_ROTATION.md`                                                   | **DELETE** + retarget inbound links → `docs/guides/secrets-rotate.md`                              | Pre-`task.0284`; asserts "all secrets in GitHub Actions Secrets" — contradicts `OPENBAO_IS_SINGLE_SOURCE_OF_TRUTH`. |
-| `docs/runbooks/INFRASTRUCTURE_SETUP.md`                                              | **DELETE** + retarget ~10 inbound links → `docs/runbooks/fork-quickstart.md` + `provision-env.yml` | Pre-OpenBao manual Terraform + GH-secret setup; superseded. Cascading link-fix done atomically in the implement PR. |
-| `docs/spec/secrets-management.md`                                                    | **REFINED** (this PR)                                                                              | Self-serve model section + `CATALOG_IS_THE_ONE_READER` + corrected Entry 2 + Reloader + this validation.            |
-| `docs/design/secrets-catalog-per-node.md`                                            | KEEP                                                                                               | The catalog model; this spec references it, no duplication.                                                         |
-| `docs/guides/secrets-add-new.md` · `secrets-rotate.md` · `cicd-secrets-expert` SKILL | KEEP (light touch: `secret-set.yml` name + Entry-2 status)                                         | Canonical recipes; no stale-SSOT claims.                                                                            |
+| Doc                                                                                  | Action                                                                | Reason                                                                                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------ | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `.claude/commands/env-update.md`                                                     | **REWRITTEN** (this PR)                                               | Was a 15-surface manual-propagation checklist (the drift anti-pattern). Now the catalog-SSOT self-serve path.                                                                                                                             |
+| `docs/runbooks/SECRET_ROTATION.md`                                                   | **DELETE** + retarget inbound links → `docs/guides/secrets-rotate.md` | Pre-`task.0284`; asserts "all secrets in GitHub Actions Secrets" — contradicts `OPENBAO_IS_SINGLE_SOURCE_OF_TRUTH`.                                                                                                                       |
+| `docs/runbooks/INFRASTRUCTURE_SETUP.md`                                              | **OUT OF SCOPE** — flag, don't delete here                            | Stale (pre-OpenBao Terraform + GH-secret VM setup) but it's a _VM-provisioning_ doc with ~10 inbound links across deploy skills/specs. Its deletion is a separate docs-hygiene PR, not the secret self-serve model. Tracked, not bundled. |
+| `docs/spec/secrets-management.md`                                                    | **REFINED** (this PR)                                                 | Self-serve model section + `CATALOG_IS_THE_ONE_READER` + corrected Entry 2 + Reloader + this validation.                                                                                                                                  |
+| `docs/design/secrets-catalog-per-node.md`                                            | KEEP                                                                  | The catalog model; this spec references it, no duplication.                                                                                                                                                                               |
+| `docs/guides/secrets-add-new.md` · `secrets-rotate.md` · `cicd-secrets-expert` SKILL | KEEP (light touch: `secret-set.yml` name + Entry-2 status)            | Canonical recipes; no stale-SSOT claims.                                                                                                                                                                                                  |
 
 Killer-rule check: every deleted doc asserts the OLD (GH-env-SSOT) model; no deleted doc is the sole
 copy of a still-valid recipe (the port-forward CLI recipe stays in `secrets-add-new.md`).
