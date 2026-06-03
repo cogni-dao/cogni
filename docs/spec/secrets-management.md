@@ -209,17 +209,27 @@ Response: 201 with a one-time-use submission URL the human visits to provide the
 
 AI agents CANNOT pass the value. They declare the SHAPE (env, service, key). The human (or operator-app UI) fills the value through a separate authenticated channel. The MCP tool `secret.declare` exposes this to agents; `secret.get_value` does NOT exist.
 
-### Value source classification (catalog `source:`)
+### Value classification — two orthogonal axes
 
-Every catalog entry declares **who can produce the value**. This is load-bearing: it decides whether provisioning generates, carries, or generates-AND-syncs.
+A catalog entry answers two independent questions. Do not conflate them.
 
-| `source:`  | Who produces it                                                                                                                                                               | Provisioning behavior                                                         |
-| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `agent`    | self-contained, machine-generated (`generate:` field required)                                                                                                                | generate once, store (`bootstrap.sh::declare_or_gen`)                         |
-| `human`    | **un-generatable by us** — vendor-minted; a human supplies it once (e.g. a GitHub App **private key**, an OpenAI key)                                                         | carry the supplied value from GH env; never regenerate                        |
-| `external` | **agent-generatable**, but the value must byte-match a copy held by an **external system** and is kept in sync via that system's API (e.g. the GitHub App **webhook secret**) | generate (`generate:` required) **and push** the value to the external system |
+**1. `source:` — where the value ORIGINATES (who can produce it):**
 
-**`external` is not optional sugar — misclassifying it as `agent` is a silent-failure bug.** An `agent` secret is regenerated every provision; if it must equal an externally-held counterpart, the two can never converge, so `deploy-infra` re-writing the pod Secret becomes the _breaking_ path (every webhook fails HMAC verification, logged only as a `level:40` warn). The fix is the push: provisioning owns BOTH copies. For the GitHub App webhook secret, `scripts/secrets/sync-app-webhook-secret.sh` mints an App JWT from the app's own key and `PATCH`es `/app/hook/config`; `deploy-infra` invokes it after writing the k8s Secret. No human, self-healing — every redeploy re-converges.
+| `source:` | Origin                                                                                                                                    | Provisioning behavior                                  |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| `agent`   | we generate it (`generate:` field required)                                                                                               | generate once, store (`bootstrap.sh::declare_or_gen`)  |
+| `human`   | **un-generatable by us** — vendor-minted; a human supplies it once via the vendor's UI (e.g. a GitHub App **private key**, an OpenAI key) | carry the supplied value from GH env; never regenerate |
+
+**2. `syncTo:` (optional) — does the value ALSO live in an external system we must keep in lockstep:**
+
+A value's origin is independent of whether it must be mirrored outward. The GitHub App **webhook secret** is `source: agent` (we generate it) **and** `syncTo: github-app-webhook` (GitHub holds a copy that must byte-match). `syncTo` names the external mirror; provisioning runs the matching push after writing the pod Secret.
+
+| `syncTo:`            | Mirror target                            | Push mechanism                                                                                                                      |
+| -------------------- | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| _(unset)_            | none — value lives only in our substrate | —                                                                                                                                   |
+| `github-app-webhook` | the GitHub App's webhook secret          | `scripts/secrets/sync-app-webhook-secret.sh` (App JWT → `PATCH /app/hook/config`), invoked by `deploy-infra` after the Secret write |
+
+**Why the second axis is load-bearing — misclassifying a mirrored secret is a silent-failure bug.** A `source: agent` value with no `syncTo` is regenerated every provision; if it actually must equal an externally-held counterpart, the two never converge, so `deploy-infra` re-writing the pod Secret becomes the _breaking_ path (every webhook fails HMAC verification, logged only as a `level:40` warn). `syncTo` closes the loop: provisioning owns BOTH copies. No human, self-healing — every infra-lever deploy re-converges.
 
 ### Rotation lifecycle (per NIST SP 800-57 §8 Key States)
 

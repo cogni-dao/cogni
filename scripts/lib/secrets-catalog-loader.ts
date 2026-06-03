@@ -132,11 +132,14 @@ const CatalogEntrySchema = z
     coConsumed: z.boolean().optional(),
     required: z.boolean(),
     category: z.string(),
-    // agent = self-generated; human = vendor-minted, human supplies once;
-    // external = agent-generated AND synced to an external system's API so both
-    // copies match (e.g. GitHub App webhook secret →
-    // scripts/secrets/sync-app-webhook-secret.sh). See docs/spec/secrets-management.md.
-    source: z.enum(["agent", "human", "external"]),
+    // ORIGIN of the value: agent = we generate it (`generate:` required);
+    // human = vendor-minted, a human supplies it once (un-generatable by us).
+    source: z.enum(["agent", "human"]),
+    // Orthogonal axis — does the value ALSO live in an external system that we
+    // must keep in lockstep? A generated value can still need mirroring outward
+    // (e.g. the GitHub App webhook secret: source: agent + syncTo: the App).
+    // deploy-infra runs the matching push (scripts/secrets/sync-app-webhook-secret.sh).
+    syncTo: z.enum(["github-app-webhook"]).optional(),
     description: z.string(),
     steps: z.array(z.string()),
     url: z.string().url().optional(),
@@ -145,15 +148,9 @@ const CatalogEntrySchema = z
     generate: GenerateSchema.optional(),
     transform: TransformSchema.optional(),
   })
-  .refine(
-    (e) =>
-      (e.source !== "agent" && e.source !== "external") ||
-      e.generate !== undefined,
-    {
-      message:
-        "source: agent|external requires generate field (the value is self-generated)",
-    }
-  )
+  .refine((e) => e.source !== "agent" || e.generate !== undefined, {
+    message: "source: agent requires generate field",
+  })
   .refine((e) => !(e.service !== undefined && e.appliesTo !== undefined), {
     message:
       "entry declares both service: and appliesTo: — they are mutually exclusive (service = one node; appliesTo = capability fan-out)",
@@ -174,7 +171,8 @@ export interface Secret {
   required: boolean;
   category: string;
   description: string;
-  source: "agent" | "human" | "external";
+  source: "agent" | "human";
+  syncTo?: "github-app-webhook";
   url?: string;
   steps: string[];
   generate?: () => string;
