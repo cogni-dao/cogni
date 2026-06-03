@@ -13,18 +13,22 @@
  * @public
  */
 
-import { ArrowUpRight, BookOpen, Boxes, Plus, Sparkles } from "lucide-react";
+import {
+  ArrowUpRight,
+  BookOpen,
+  Boxes,
+  type LucideIcon,
+  Plus,
+  Sparkles,
+} from "lucide-react";
 import Link from "next/link";
 import type { ReactElement } from "react";
 
 import { Badge, Card, CardContent } from "@/components";
 import { container, section } from "@/styles/ui";
 
-import type {
-  ResolvedShowcaseNode,
-  ShowcaseAccent,
-  ShowcaseCategory,
-} from "../showcase/getShowcaseNodes.server";
+import type { ResolvedShowcaseNode } from "../showcase/getShowcaseNodes.server";
+import type { ShowcaseAccent, ShowcaseCategory } from "../showcase/nodes.data";
 
 const ACCENT_BANNER: Record<ShowcaseAccent, string> = {
   blue: "bg-gradient-to-br from-primary/30 via-primary/10 to-transparent",
@@ -33,10 +37,7 @@ const ACCENT_BANNER: Record<ShowcaseAccent, string> = {
   rose: "bg-gradient-to-br from-danger/30 via-danger/10 to-transparent",
 };
 
-const CATEGORY_ICON: Record<
-  ShowcaseCategory,
-  typeof Sparkles
-> = {
+const CATEGORY_ICON: Record<ShowcaseCategory, LucideIcon> = {
   platform: Boxes,
   app: Sparkles,
   hub: BookOpen,
