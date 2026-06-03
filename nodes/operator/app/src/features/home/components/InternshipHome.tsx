@@ -24,7 +24,6 @@ import {
   GitPullRequest,
   Network,
   PenLine,
-  ShieldCheck,
   UsersRound,
   Wallet,
 } from "lucide-react";
@@ -48,41 +47,18 @@ import { InternshipNetworkBackground } from "./InternshipNetworkBackground";
 import { useInternshipWalletSignature } from "./useInternshipWalletSignature";
 
 type FormState = UnsignedInternshipInterestInput & {
-  github: string;
-  artifactUrl: string;
-  note: string;
+  portfolioUrl: string;
 };
 
 const focusOptions: {
   value: InternshipInterestInput["focus"];
   label: string;
 }[] = [
-  { value: "x402-apps", label: "Specialized x402 agent" },
-  { value: "attribution-scoring", label: "Attribution + DAO distributions" },
-  { value: "node-infrastructure", label: "Node infrastructure" },
-  { value: "dao-operations", label: "DAO operations" },
-  { value: "research-product", label: "Research + product" },
-  { value: "undecided", label: "Undecided" },
-];
-
-const squadOptions: {
-  value: InternshipInterestInput["squadStatus"];
-  label: string;
-}[] = [
-  { value: "solo", label: "Solo for now" },
-  { value: "forming", label: "Forming a squad" },
-  { value: "squad-ready", label: "Squad ready" },
-];
-
-const firstProjectOptions: {
-  value: InternshipInterestInput["firstProjectChoice"];
-  label: string;
-}[] = [
-  { value: "agent-workflows", label: "Improve agent workflows" },
-  { value: "knowledge-capture", label: "Improve knowledge capture" },
-  { value: "dao-incentives", label: "Improve DAO incentives" },
-  { value: "infrastructure", label: "Improve infra" },
-  { value: "unsure", label: "Not sure yet" },
+  { value: "x402-apps", label: "x402 agent" },
+  { value: "applied-ai-products", label: "Applied AI product" },
+  { value: "infrastructure", label: "Infrastructure" },
+  { value: "growth-ops", label: "Growth / ops" },
+  { value: "not-sure", label: "Not sure yet" },
 ];
 
 const tracks = [
@@ -118,25 +94,16 @@ const roadmap = [
 ];
 
 const signupPromises = [
-  { icon: UsersRound, text: "Start solo or join a focused squad" },
-  { icon: ShieldCheck, text: "Build for multi-tenant access from day one" },
-  { icon: GitPullRequest, text: "Ship through PR, flight, and candidate-a" },
+  { icon: UsersRound, text: "Drop a link" },
+  { icon: Wallet, text: "Sign once" },
+  { icon: GitPullRequest, text: "Book Derek" },
 ];
 
 const initialForm: FormState = {
-  name: "",
   email: "",
-  github: "",
-  artifactUrl: "",
+  portfolioUrl: "",
   focus: "x402-apps",
-  squadStatus: "solo",
-  timezone: "",
-  weeklyAvailability: "",
-  artifactNotes: "",
-  whyCogni: "",
-  firstProjectChoice: "knowledge-capture",
-  recordingConsent: true,
-  note: "",
+  interest: "",
 };
 
 const internshipLightThemeStyle = {
@@ -419,17 +386,6 @@ function SignupForm(): ReactElement {
       setWalletProof(null);
       setSignatureError(null);
     };
-  const updateRecordingConsent = (
-    event: React.ChangeEvent<HTMLInputElement>
-  ): void => {
-    setForm((current) => ({
-      ...current,
-      recordingConsent: event.target.checked,
-    }));
-    setWalletProof(null);
-    setSignatureError(null);
-  };
-
   useEffect(() => {
     if (walletProof && signedAddress !== connectedAddress) {
       setWalletProof(null);
@@ -438,19 +394,10 @@ function SignupForm(): ReactElement {
 
   function buildUnsignedPayload(): UnsignedInternshipInterestInput {
     return {
-      name: form.name,
       email: form.email,
+      portfolioUrl: form.portfolioUrl,
       focus: form.focus,
-      squadStatus: form.squadStatus,
-      timezone: form.timezone,
-      weeklyAvailability: form.weeklyAvailability,
-      artifactNotes: form.artifactNotes,
-      whyCogni: form.whyCogni,
-      firstProjectChoice: form.firstProjectChoice,
-      recordingConsent: form.recordingConsent,
-      ...(form.github.trim() && { github: form.github.trim() }),
-      ...(form.artifactUrl.trim() && { artifactUrl: form.artifactUrl.trim() }),
-      ...(form.note.trim() && { note: form.note.trim() }),
+      interest: form.interest,
     };
   }
 
@@ -522,164 +469,45 @@ function SignupForm(): ReactElement {
 
   return (
     <form ref={formRef} onSubmit={onSubmit} className="space-y-4">
-      <div className="grid gap-4 sm:grid-cols-2">
-        <label className="space-y-2" htmlFor="intern-name">
-          <span className="font-medium text-foreground text-sm">Name</span>
-          <Input
-            id="intern-name"
-            required
-            value={form.name}
-            onChange={update("name")}
-            autoComplete="name"
-            className="border-input bg-background text-foreground"
-          />
-        </label>
-        <label className="space-y-2" htmlFor="intern-email">
-          <span className="font-medium text-foreground text-sm">Email</span>
-          <Input
-            id="intern-email"
-            type="email"
-            required
-            value={form.email}
-            onChange={update("email")}
-            autoComplete="email"
-            className="border-input bg-background text-foreground"
-          />
-        </label>
-      </div>
-
-      <label className="space-y-2" htmlFor="intern-github">
-        <span className="font-medium text-foreground text-sm">
-          GitHub / portfolio
-        </span>
+      <label className="space-y-2" htmlFor="intern-interest">
+        <span className="font-medium text-foreground text-sm">Interested?</span>
         <Input
-          id="intern-github"
-          value={form.github}
-          onChange={update("github")}
-          autoComplete="url"
+          id="intern-interest"
+          required
+          value={form.interest}
+          onChange={update("interest")}
           className="border-input bg-background text-foreground"
+          placeholder="Yes. I want to build / design / operate..."
         />
       </label>
 
-      <label className="space-y-2" htmlFor="intern-artifact-url">
+      <label className="space-y-2" htmlFor="intern-portfolio-url">
         <span className="font-medium text-foreground text-sm">
-          Best proof link
+          Portfolio link
         </span>
         <Input
-          id="intern-artifact-url"
+          id="intern-portfolio-url"
           type="url"
-          value={form.artifactUrl}
-          onChange={update("artifactUrl")}
+          required
+          value={form.portfolioUrl}
+          onChange={update("portfolioUrl")}
           autoComplete="url"
           className="border-input bg-background text-foreground"
-          placeholder="Repo, demo, writing, or project"
+          placeholder="GitHub, demo, writing, LinkedIn"
         />
       </label>
 
-      <div className="grid gap-4 sm:grid-cols-2">
-        <label className="space-y-2" htmlFor="intern-focus">
-          <span className="font-medium text-foreground text-sm">Focus</span>
-          <select
-            id="intern-focus"
-            value={form.focus}
-            onChange={update("focus")}
-            className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-foreground text-sm focus-visible:outline-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {focusOptions.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label className="space-y-2" htmlFor="intern-squad">
-          <span className="font-medium text-foreground text-sm">
-            Squad status
-          </span>
-          <select
-            id="intern-squad"
-            value={form.squadStatus}
-            onChange={update("squadStatus")}
-            className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-foreground text-sm focus-visible:outline-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {squadOptions.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
-
-      <div className="grid gap-4 sm:grid-cols-2">
-        <label className="space-y-2" htmlFor="intern-timezone">
-          <span className="font-medium text-foreground text-sm">Timezone</span>
-          <Input
-            id="intern-timezone"
-            required
-            value={form.timezone}
-            onChange={update("timezone")}
-            autoComplete="off"
-            className="border-input bg-background text-foreground"
-            placeholder="America/New_York"
-          />
-        </label>
-
-        <label className="space-y-2" htmlFor="intern-availability">
-          <span className="font-medium text-foreground text-sm">
-            Weekly availability
-          </span>
-          <Input
-            id="intern-availability"
-            required
-            value={form.weeklyAvailability}
-            onChange={update("weeklyAvailability")}
-            className="border-input bg-background text-foreground"
-            placeholder="Hours/week + best interview windows"
-          />
-        </label>
-      </div>
-
-      <label className="space-y-2" htmlFor="intern-artifact-notes">
+      <label className="space-y-2" htmlFor="intern-focus">
         <span className="font-medium text-foreground text-sm">
-          What should Derek inspect in your artifact?
-        </span>
-        <textarea
-          id="intern-artifact-notes"
-          required
-          value={form.artifactNotes}
-          onChange={update("artifactNotes")}
-          rows={2}
-          className="flex min-h-24 w-full rounded-md border border-input bg-background px-3 py-2 text-foreground text-sm placeholder:text-muted-foreground focus-visible:outline-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-50"
-          placeholder="Point to the part that proves taste, speed, or technical judgment."
-        />
-      </label>
-
-      <label className="space-y-2" htmlFor="intern-why-cogni">
-        <span className="font-medium text-foreground text-sm">Why Cogni?</span>
-        <textarea
-          id="intern-why-cogni"
-          required
-          value={form.whyCogni}
-          onChange={update("whyCogni")}
-          rows={2}
-          className="flex min-h-24 w-full rounded-md border border-input bg-background px-3 py-2 text-foreground text-sm placeholder:text-muted-foreground focus-visible:outline-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-50"
-          placeholder="One concrete reason you want this instead of a normal internship."
-        />
-      </label>
-
-      <label className="space-y-2" htmlFor="intern-first-project">
-        <span className="font-medium text-foreground text-sm">
-          First project direction
+          Niche direction
         </span>
         <select
-          id="intern-first-project"
-          value={form.firstProjectChoice}
-          onChange={update("firstProjectChoice")}
+          id="intern-focus"
+          value={form.focus}
+          onChange={update("focus")}
           className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-foreground text-sm focus-visible:outline-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {firstProjectOptions.map((option) => (
+          {focusOptions.map((option) => (
             <option key={option.value} value={option.value}>
               {option.label}
             </option>
@@ -687,32 +515,17 @@ function SignupForm(): ReactElement {
         </select>
       </label>
 
-      <label
-        className="flex items-start gap-3 rounded-md border border-border/70 bg-background/60 p-3 text-sm"
-        htmlFor="intern-recording-consent"
-      >
-        <input
-          id="intern-recording-consent"
-          type="checkbox"
-          checked={form.recordingConsent}
-          onChange={updateRecordingConsent}
-          className="mt-1"
-        />
-        <span className="text-muted-foreground">
-          Derek may use an AI note taker for the interview.
-        </span>
-      </label>
-
-      <label className="space-y-2" htmlFor="intern-note">
-        <span className="font-medium text-foreground text-sm">
-          Anything else Derek should know?
-        </span>
-        <textarea
-          id="intern-note"
-          value={form.note}
-          onChange={update("note")}
-          rows={3}
-          className="flex min-h-28 w-full rounded-md border border-input bg-background px-3 py-2 text-foreground text-sm placeholder:text-muted-foreground focus-visible:outline-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-50"
+      <label className="space-y-2" htmlFor="intern-email">
+        <span className="font-medium text-foreground text-sm">Email</span>
+        <Input
+          id="intern-email"
+          type="email"
+          required
+          value={form.email}
+          onChange={update("email")}
+          autoComplete="email"
+          className="border-input bg-background text-foreground"
+          placeholder="Derek needs one reply path"
         />
       </label>
 
@@ -729,7 +542,7 @@ function SignupForm(): ReactElement {
             <div>
               <p className="font-medium text-foreground text-sm">
                 {hasFreshSignature
-                  ? "Application signed"
+                  ? "Interest signed"
                   : isConnected
                     ? "Wallet connected"
                     : "Wallet signature required"}
@@ -748,7 +561,7 @@ function SignupForm(): ReactElement {
               onClick={signApplication}
               disabled={isSigning || status === "submitting"}
             >
-              {isSigning ? "Signing" : "Sign application"}
+              {isSigning ? "Signing" : "Sign interest"}
             </Button>
           )}
         </div>
@@ -765,7 +578,7 @@ function SignupForm(): ReactElement {
             : isSigning
               ? "Waiting for signature"
               : isConnected
-                ? "Submit signed application"
+                ? "Submit signed interest"
                 : "Connect wallet to submit"}
           <ArrowRight className="ml-2 size-4" />
         </Button>
@@ -795,7 +608,7 @@ function SignupForm(): ReactElement {
             <p>Interest received. Reference {referenceId}.</p>
             {derekInterviewUrl && (
               <p className="mt-1 text-muted-foreground">
-                Next step: book a 30-minute Derek interview with the link above.
+                Next step: book Derek with the link above.
               </p>
             )}
           </div>
@@ -807,8 +620,7 @@ function SignupForm(): ReactElement {
           <p className="text-destructive">{signatureError}</p>
         ) : (
           <p className="text-muted-foreground">
-            Sign once with your wallet. Real applicants go straight to Derek's
-            calendar.
+            Sign once. No gas. Then book Derek.
           </p>
         )}
       </div>
@@ -828,12 +640,11 @@ function SignupSection(): ReactElement {
             Interest signup
           </span>
           <h2 className="mt-3 font-bold text-3xl text-foreground tracking-tight sm:text-4xl">
-            Bring a squad, or find one here.
+            Want in?
           </h2>
-          <p className="mt-5 text-muted-foreground leading-relaxed">
-            This is intentionally early. The legal wrapper is still being
-            formed, but the build path is concrete enough: start from an idea,
-            form a node squad, grow the knowledge base, and ship the agent.
+          <p className="mt-5 max-w-md text-muted-foreground leading-relaxed">
+            Drop the smallest proof Derek should inspect. Sign the interest with
+            a wallet, then grab a calendar slot.
           </p>
           <div className="mt-8 grid gap-3">
             {signupPromises.map(({ icon: Icon, text }) => (

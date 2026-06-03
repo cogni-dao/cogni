@@ -49,19 +49,10 @@ export const POST = wrapPublicRoute(
 
     const input = parseResult.data;
     const expectedWalletMessage = buildInternshipApplicationMessage({
-      name: input.name,
       email: input.email,
-      github: input.github,
-      artifactUrl: input.artifactUrl,
+      portfolioUrl: input.portfolioUrl,
       focus: input.focus,
-      squadStatus: input.squadStatus,
-      timezone: input.timezone,
-      weeklyAvailability: input.weeklyAvailability,
-      artifactNotes: input.artifactNotes,
-      whyCogni: input.whyCogni,
-      firstProjectChoice: input.firstProjectChoice,
-      recordingConsent: input.recordingConsent,
-      note: input.note,
+      interest: input.interest,
       walletSignedAt: input.walletSignedAt,
     });
     if (input.walletMessage !== expectedWalletMessage) {
@@ -103,17 +94,11 @@ export const POST = wrapPublicRoute(
         event: "internship.interest_submitted",
         referenceId,
         focus: input.focus,
-        squadStatus: input.squadStatus,
-        firstProjectChoice: input.firstProjectChoice,
-        hasGithub: Boolean(input.github),
-        hasArtifact: Boolean(input.artifactUrl),
-        recordingConsent: input.recordingConsent,
+        portfolioHost: new URL(input.portfolioUrl).host.toLowerCase(),
         walletAddress: input.walletAddress.toLowerCase(),
         walletSignedAt: input.walletSignedAt,
         emailDomain,
-        noteLength: input.note?.length ?? 0,
-        artifactNotesLength: input.artifactNotes.length,
-        whyCogniLength: input.whyCogni.length,
+        interestLength: input.interest.length,
       },
       "internship interest submitted"
     );

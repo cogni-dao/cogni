@@ -78,19 +78,10 @@ describe("/api/v1/public/internship-interest signed route", () => {
   );
 
   const unsignedPayload = {
-    name: "Ada Lovelace",
     email: "ada@example.com",
-    github: "ada-lovelace",
-    artifactUrl: "https://github.com/ada-lovelace/cogni-agent",
-    focus: "x402-apps",
-    squadStatus: "forming",
-    timezone: "Europe/London",
-    weeklyAvailability: "8-10 hours per week",
-    artifactNotes: "Start with the README and agent evals.",
-    whyCogni: "I want to build durable agent businesses.",
-    firstProjectChoice: "knowledge-capture",
-    recordingConsent: true,
-    note: "I want to build agent-native payment flows.",
+    portfolioUrl: "https://github.com/ada-lovelace/cogni-agent",
+    focus: "applied-ai-products",
+    interest: "Yes. I want to build applied AI products.",
   } satisfies UnsignedInternshipInterestInput;
 
   beforeEach(() => {
@@ -151,7 +142,7 @@ describe("/api/v1/public/internship-interest signed route", () => {
     );
 
     const response = await POST(
-      request(await signedPayload({ whyCogni: "Changed after signing." }))
+      request(await signedPayload({ interest: "Changed after signing." }))
     );
 
     expect(response.status).toBe(400);

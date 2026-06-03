@@ -25,35 +25,17 @@ const WalletSignatureSchema = z
 
 const InternshipFocusSchema = z.enum([
   "x402-apps",
-  "attribution-scoring",
-  "node-infrastructure",
-  "dao-operations",
-  "research-product",
-  "undecided",
-]);
-
-const FirstProjectChoiceSchema = z.enum([
-  "agent-workflows",
-  "knowledge-capture",
-  "dao-incentives",
+  "applied-ai-products",
   "infrastructure",
-  "unsure",
+  "growth-ops",
+  "not-sure",
 ]);
 
 const UnsignedInternshipInterestInputSchema = z.object({
-  name: z.string().trim().min(1).max(120),
   email: z.string().trim().email().max(240),
-  github: z.string().trim().max(120).optional(),
-  artifactUrl: z.string().trim().url().max(500).optional(),
+  portfolioUrl: z.string().trim().url().max(500),
   focus: InternshipFocusSchema,
-  squadStatus: z.enum(["solo", "forming", "squad-ready"]),
-  timezone: z.string().trim().min(1).max(80),
-  weeklyAvailability: z.string().trim().min(1).max(240),
-  artifactNotes: z.string().trim().min(1).max(700),
-  whyCogni: z.string().trim().min(1).max(700),
-  firstProjectChoice: FirstProjectChoiceSchema,
-  recordingConsent: z.boolean(),
-  note: z.string().trim().max(700).optional(),
+  interest: z.string().trim().min(1).max(240),
 });
 
 const InternshipWalletSignatureSchema = z.object({
@@ -89,31 +71,16 @@ export type InternshipInterestOutput = z.infer<
 export function buildInternshipApplicationMessage(
   input: UnsignedInternshipInterestInput & { walletSignedAt: string }
 ): string {
-  const artifact = input.artifactUrl?.trim() || "not provided";
-  const github = input.github?.trim() || "not provided";
-  const note = input.note?.trim() || "not provided";
-
   return [
-    "Cogni internship application",
+    "Cogni internship interest",
     "",
-    "I am submitting this application to Cogni and confirming that Derek may use this wallet signature as proof that I sent it.",
+    "I am submitting internship interest to Cogni and confirming that Derek may use this wallet signature as proof that I sent it.",
     "",
-    `Name: ${input.name.trim()}`,
     `Email: ${input.email.trim()}`,
     `Wallet signed at: ${input.walletSignedAt}`,
-    `GitHub or portfolio: ${github}`,
-    `Best artifact: ${artifact}`,
-    `Focus: ${input.focus}`,
-    `Squad status: ${input.squadStatus}`,
-    `Timezone: ${input.timezone.trim()}`,
-    `Weekly availability: ${input.weeklyAvailability.trim()}`,
-    `First project direction: ${input.firstProjectChoice}`,
-    `AI note taker consent: ${input.recordingConsent ? "yes" : "no"}`,
+    `Portfolio: ${input.portfolioUrl.trim()}`,
+    `Niche direction: ${input.focus}`,
     "",
-    `Artifact notes: ${input.artifactNotes.trim()}`,
-    "",
-    `Why Cogni: ${input.whyCogni.trim()}`,
-    "",
-    `Extra note: ${note}`,
+    `Interested in: ${input.interest.trim()}`,
   ].join("\n");
 }

@@ -71,19 +71,10 @@ import { POST } from "@/app/api/v1/public/internship-interest/route";
 describe("/api/v1/public/internship-interest contract tests", () => {
   const wallet = generateTestWallet("internship-interest-contract");
   const unsignedPayload = {
-    name: "Ada Lovelace",
     email: "ada@example.com",
-    github: "ada-lovelace",
-    artifactUrl: "https://github.com/ada-lovelace/cogni-agent",
+    portfolioUrl: "https://github.com/ada-lovelace/cogni-agent",
     focus: "x402-apps",
-    squadStatus: "forming",
-    timezone: "Europe/London",
-    weeklyAvailability: "8-10 hours per week",
-    artifactNotes: "Start with the README and the agent evals.",
-    whyCogni: "I want to build durable agent businesses with clear ownership.",
-    firstProjectChoice: "knowledge-capture",
-    recordingConsent: true,
-    note: "I want to build agent-native payment flows.",
+    interest: "Yes. I want to build agent-native payment flows.",
   } satisfies UnsignedInternshipInterestInput;
 
   async function validPayload(
@@ -169,13 +160,9 @@ describe("/api/v1/public/internship-interest contract tests", () => {
     const responseText = await response.text();
 
     expect(response.status).toBe(201);
-    expect(responseText).not.toContain(payload.name);
     expect(responseText).not.toContain(payload.email);
-    expect(responseText).not.toContain(payload.github);
-    expect(responseText).not.toContain(payload.artifactUrl);
-    expect(responseText).not.toContain(payload.artifactNotes);
-    expect(responseText).not.toContain(payload.whyCogni);
-    expect(responseText).not.toContain(payload.note);
+    expect(responseText).not.toContain(payload.portfolioUrl);
+    expect(responseText).not.toContain(payload.interest);
     expect(responseText).not.toContain(payload.walletAddress);
     expect(responseText).not.toContain(payload.walletSignature);
   });
@@ -196,7 +183,7 @@ describe("/api/v1/public/internship-interest contract tests", () => {
       makePostRequest(
         JSON.stringify(
           await validPayload({
-            whyCogni: "Tampered after signing.",
+            interest: "Tampered after signing.",
           })
         )
       )

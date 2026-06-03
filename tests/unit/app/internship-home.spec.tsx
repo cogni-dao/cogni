@@ -6,7 +6,7 @@
  *
  * Module: `@tests/unit/app/internship-home`
  * Purpose: Unit coverage for the public internship intake form.
- * Scope: Renders the client page, submits the expanded form, and verifies the Calendly handoff contract. Does not perform real network, calendar, or auth I/O.
+ * Scope: Renders the client page, submits the short form, and verifies the Calendly handoff contract. Does not perform real network, calendar, or auth I/O.
  * Invariants: Form payload matches internship.interest.v1; success state exposes Derek interview booking URL.
  * Side-effects: none
  * Links: src/features/home/components/InternshipHome.tsx, src/contracts/internship.interest.v1.contract.ts
@@ -147,47 +147,26 @@ describe("InternshipHome", () => {
     render(React.createElement(InternshipHome));
 
     const submitButton = screen.getByRole("button", {
-      name: /submit signed application/i,
+      name: /submit signed interest/i,
     });
     const form = submitButton.closest("form");
     expect(form).not.toBeNull();
     const scoped = within(form as HTMLFormElement);
     const user = userEvent.setup();
 
-    await user.type(scoped.getByLabelText("Name"), "Ada Lovelace");
-    await user.type(scoped.getByLabelText("Email"), "ada@example.com");
-    await user.type(scoped.getByLabelText("GitHub / portfolio"), "ada");
     await user.type(
-      scoped.getByLabelText("Best proof link"),
+      scoped.getByLabelText("Interested?"),
+      "Yes. I want to build applied AI products."
+    );
+    await user.type(
+      scoped.getByLabelText("Portfolio link"),
       "https://github.com/ada/cogni-agent"
     );
     await user.selectOptions(
-      scoped.getByLabelText("Focus"),
-      "research-product"
+      scoped.getByLabelText("Niche direction"),
+      "applied-ai-products"
     );
-    await user.selectOptions(scoped.getByLabelText("Squad status"), "forming");
-    await user.type(scoped.getByLabelText("Timezone"), "Europe/London");
-    await user.type(
-      scoped.getByLabelText("Weekly availability"),
-      "8-10 hours per week"
-    );
-    await user.type(
-      scoped.getByLabelText("What should Derek inspect in your artifact?"),
-      "Start with the state machine and duplicate-event tests."
-    );
-    await user.type(
-      scoped.getByLabelText("Why Cogni?"),
-      "I want to build durable AI businesses with clear contribution proof."
-    );
-    await user.selectOptions(
-      scoped.getByLabelText("First project direction"),
-      "agent-workflows"
-    );
-    await user.click(scoped.getByLabelText(/Derek may use an AI note taker/));
-    await user.type(
-      scoped.getByLabelText("Anything else Derek should know?"),
-      "I learn fastest through shipped feedback."
-    );
+    await user.type(scoped.getByLabelText("Email"), "ada@example.com");
 
     await user.click(submitButton);
 
@@ -201,27 +180,17 @@ describe("InternshipHome", () => {
     expect(init.method).toBe("POST");
     expect(init.headers).toEqual({ "Content-Type": "application/json" });
     expect(payload).toMatchObject({
-      name: "Ada Lovelace",
       email: "ada@example.com",
-      github: "ada",
-      artifactUrl: "https://github.com/ada/cogni-agent",
-      focus: "research-product",
-      squadStatus: "forming",
-      timezone: "Europe/London",
-      weeklyAvailability: "8-10 hours per week",
-      artifactNotes: "Start with the state machine and duplicate-event tests.",
-      whyCogni:
-        "I want to build durable AI businesses with clear contribution proof.",
-      firstProjectChoice: "agent-workflows",
-      recordingConsent: false,
-      note: "I learn fastest through shipped feedback.",
+      portfolioUrl: "https://github.com/ada/cogni-agent",
+      focus: "applied-ai-products",
+      interest: "Yes. I want to build applied AI products.",
       walletAddress: "0x1111111111111111111111111111111111111111",
       walletSignature: `0x${"a".repeat(130)}`,
     });
     expect(payload.walletSignedAt).toEqual(expect.any(String));
-    expect(payload.walletMessage).toContain("Cogni internship application");
-    expect(payload.walletMessage).toContain("Name: Ada Lovelace");
-    expect(payload.walletMessage).toContain("Best artifact:");
+    expect(payload.walletMessage).toContain("Cogni internship interest");
+    expect(payload.walletMessage).toContain("Portfolio:");
+    expect(payload.walletMessage).toContain("Interested in:");
 
     expect(await screen.findByText(/candidate-demo-001/)).toBeInTheDocument();
     expect(
