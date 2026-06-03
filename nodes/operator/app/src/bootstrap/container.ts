@@ -39,6 +39,7 @@ import {
 } from "@cogni/knowledge-store";
 import {
   buildDoltgresClient,
+  createDoltgresPuller,
   createDoltgresPusher,
   DoltgresEdoResolverAdapter,
   DoltgresKnowledgeContributionAdapter,
@@ -618,6 +619,27 @@ function createContainer(): Container {
       connectionString: env.DOLTGRES_URL,
       applicationName: `cogni_knowledge_${env.SERVICE_NAME ?? "app"}`,
     });
+    // Gate-by-secret-presence (same as the push mirror below): DOLTHUB_REMOTE_URL
+    // is the single signal that a remote is wired. See dolthub-remote-bootstrap.md.
+    const doltRemoteUrl = env.DOLTHUB_REMOTE_URL;
+    // Seed-on-boot (task.5104): a freshly-provisioned node inits an empty
+    // knowledge DB with no common ancestor to the remote, so the push mirror
+    // can never push and the node has no knowledge. Make local main descend
+    // from origin/main before the store serves traffic. Idempotent — a no-op
+    // once the node already shares history. Degrades like the push: a failed
+    // seed logs and continues; boot never hard-fails on it.
+    if (doltRemoteUrl) {
+      try {
+        await createDoltgresPuller({
+          sql: doltClient,
+          remoteName: "origin",
+          remoteUrl: doltRemoteUrl,
+        }).seedFromRemote();
+        log.info({ remote: doltRemoteUrl }, "dolthub_seed_ok");
+      } catch (err) {
+        log.warn({ err, remote: doltRemoteUrl }, "dolthub_seed_failed");
+      }
+    }
     const knowledgePort = new DoltgresKnowledgeStoreAdapter({
       sql: doltClient,
     });
@@ -638,18 +660,18 @@ function createContainer(): Container {
     // candidate-a/preview boot with the hook undefined and never push. v0
     // invariant: prod is the only writer. Bootstrap: see
     // docs/runbooks/dolthub-remote-bootstrap.md.
-    const remoteUrl = env.DOLTHUB_REMOTE_URL;
-    const pushMainOnMerge = remoteUrl
+    const pushMainOnMerge = doltRemoteUrl
       ? wrapPushSafe(
           createDoltgresPusher({
             sql: doltClient,
             remoteName: "origin",
-            remoteUrl,
+            remoteUrl: doltRemoteUrl,
           }),
           {
-            onSuccess: () => log.info({ remote: remoteUrl }, "dolthub_push_ok"),
+            onSuccess: () =>
+              log.info({ remote: doltRemoteUrl }, "dolthub_push_ok"),
             onFailure: (err) =>
-              log.warn({ err, remote: remoteUrl }, "dolthub_push_failed"),
+              log.warn({ err, remote: doltRemoteUrl }, "dolthub_push_failed"),
           }
         )
       : undefined;

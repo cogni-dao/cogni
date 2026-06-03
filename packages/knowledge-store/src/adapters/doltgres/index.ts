@@ -520,7 +520,10 @@ export {
   type DoltgresKnowledgeContributionAdapterConfig,
 } from "./contribution-adapter.js";
 export {
+  createDoltgresPuller,
   createDoltgresPusher,
+  type DoltgresPullConfig,
+  type DoltgresPuller,
   type DoltgresPushConfig,
   type DoltgresPusher,
   type PushOutcomeListener,

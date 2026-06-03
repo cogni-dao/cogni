@@ -51,6 +51,7 @@ Shared port + adapter for versioned domain knowledge backed by Doltgres. Generic
 - `DoltgresKnowledgeStoreAdapter`, `DoltgresAdapterConfig`, `buildDoltgresClient`, `DoltgresClientConfig`
 - `DoltgresKnowledgeContributionAdapter`, `DoltgresKnowledgeContributionAdapterConfig` (contribution-branch lifecycle)
 - `createDoltgresPusher`, `DoltgresPusher`, `DoltgresPushConfig` (post-merge mirror to a Dolt remote; lazy `dolt_remote add` + `dolt_push`)
+- `createDoltgresPuller`, `DoltgresPuller`, `DoltgresPullConfig` (seed-on-boot: lazy `dolt_remote add` + `dolt_fetch` + conditional `dolt_reset --hard origin/main` so a fresh DB shares ancestry with the remote; idempotent)
 - `wrapPushSafe`, `PushOutcomeListener` (fire-and-forget wrapper with injectable success/failure callbacks — keeps logging out of the adapter)
 
 **Service** (`@cogni/knowledge-store/service/contribution-service`):

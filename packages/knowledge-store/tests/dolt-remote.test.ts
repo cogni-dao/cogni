@@ -14,6 +14,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  createDoltgresPuller,
   createDoltgresPusher,
   type DoltgresPusher,
   wrapPushSafe,
@@ -129,6 +130,126 @@ describe("createDoltgresPusher", () => {
     await pusher.pushBranch();
     expect(sql.calls[1]).toContain("'release'");
     expect(sql.calls[1]).not.toContain("'main'");
+  });
+});
+
+type FakePullSql = {
+  unsafe: (query: string) => Promise<unknown>;
+  calls: string[];
+};
+
+/**
+ * Fake Sql for the puller. `mergeBase` controls the shared-history check:
+ *   - a non-empty string → local already descends → reset is skipped
+ *   - "" → no common ancestor (fresh node) → reset fires
+ *   - throwMergeBase → query errors → treated as no shared history → reset fires
+ */
+function fakePullSql(opts?: {
+  mergeBase?: string;
+  throwMergeBase?: boolean;
+  failAddWith?: string;
+}): FakePullSql {
+  const calls: string[] = [];
+  return {
+    calls,
+    unsafe: async (query: string) => {
+      calls.push(query);
+      if (opts?.failAddWith && query.includes("dolt_remote")) {
+        throw new Error(opts.failAddWith);
+      }
+      if (query.includes("dolt_merge_base")) {
+        if (opts?.throwMergeBase) throw new Error("unrelated histories");
+        return [{ base: opts?.mergeBase ?? "" }];
+      }
+      return [{}];
+    },
+  };
+}
+
+describe("createDoltgresPuller", () => {
+  it("resets local main to origin/main when there is no common ancestor (fresh node)", async () => {
+    const sql = fakePullSql({ mergeBase: "" });
+    const puller = createDoltgresPuller({
+      // biome-ignore lint/suspicious/noExplicitAny: test fake satisfies the narrow surface used by the adapter
+      sql: sql as any,
+      remoteName: "origin",
+      remoteUrl:
+        "https://doltremoteapi.dolthub.com/cogni-dao/knowledge-operator",
+    });
+
+    await puller.seedFromRemote();
+
+    expect(sql.calls).toHaveLength(4);
+    expect(sql.calls[0]).toContain("dolt_remote");
+    expect(sql.calls[0]).toContain("add");
+    expect(sql.calls[1]).toContain("dolt_fetch");
+    expect(sql.calls[1]).toContain("'origin'");
+    expect(sql.calls[2]).toContain("dolt_merge_base");
+    expect(sql.calls[3]).toContain("dolt_reset");
+    expect(sql.calls[3]).toContain("'--hard'");
+    expect(sql.calls[3]).toContain("'origin/main'");
+  });
+
+  it("is a no-op reset when local already shares history with the remote (idempotent re-boot)", async () => {
+    const sql = fakePullSql({ mergeBase: "abc1234deadbeef" });
+    const puller = createDoltgresPuller({
+      // biome-ignore lint/suspicious/noExplicitAny: test fake
+      sql: sql as any,
+      remoteName: "origin",
+      remoteUrl: "https://example.invalid/x/y",
+    });
+
+    await puller.seedFromRemote();
+
+    // add + fetch + merge_base, but NO reset — local already descends.
+    expect(sql.calls).toHaveLength(3);
+    expect(sql.calls.some((c) => c.includes("dolt_reset"))).toBe(false);
+  });
+
+  it("treats a merge-base error as no shared history and resets", async () => {
+    const sql = fakePullSql({ throwMergeBase: true });
+    const puller = createDoltgresPuller({
+      // biome-ignore lint/suspicious/noExplicitAny: test fake
+      sql: sql as any,
+      remoteName: "origin",
+      remoteUrl: "https://example.invalid/x/y",
+    });
+
+    await puller.seedFromRemote();
+
+    expect(sql.calls).toHaveLength(4);
+    expect(sql.calls[3]).toContain("dolt_reset");
+  });
+
+  it("swallows 'already exists' during remote add before fetching", async () => {
+    const sql = fakePullSql({ failAddWith: "remote already exists" });
+    const puller = createDoltgresPuller({
+      // biome-ignore lint/suspicious/noExplicitAny: test fake
+      sql: sql as any,
+      remoteName: "origin",
+      remoteUrl: "https://example.invalid/x/y",
+    });
+
+    await expect(puller.seedFromRemote()).resolves.toBeUndefined();
+    // add (swallowed) + fetch + merge_base + reset
+    expect(sql.calls).toHaveLength(4);
+    expect(sql.calls[1]).toContain("dolt_fetch");
+  });
+
+  it("respects the custom branch param when provided", async () => {
+    const sql = fakePullSql({ mergeBase: "" });
+    const puller = createDoltgresPuller({
+      // biome-ignore lint/suspicious/noExplicitAny: test fake
+      sql: sql as any,
+      remoteName: "origin",
+      remoteUrl: "https://example.invalid/x/y",
+      branch: "release",
+    });
+
+    await puller.seedFromRemote();
+    expect(sql.calls[2]).toContain("'release'");
+    expect(sql.calls[2]).toContain("'origin/release'");
+    expect(sql.calls[3]).toContain("'origin/release'");
   });
 });
 
