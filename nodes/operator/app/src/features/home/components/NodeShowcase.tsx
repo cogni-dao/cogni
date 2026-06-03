@@ -76,7 +76,7 @@ function NodeTile({ node }: { node: ResolvedShowcaseNode }): ReactElement {
           <p className="text-muted-foreground text-sm">{node.tagline}</p>
           <span className="inline-flex items-center font-medium text-primary text-sm">
             Visit
-            <ArrowUpRight className="ml-1 size-4 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+            <ArrowUpRight className="group-hover:-translate-y-0.5 ml-1 size-4 transition-transform group-hover:translate-x-0.5" />
           </span>
         </CardContent>
       </Card>
