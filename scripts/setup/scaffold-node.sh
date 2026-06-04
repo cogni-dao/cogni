@@ -49,7 +49,7 @@ rsync -a \
 echo "==> 2. rename node-template -> $SLUG across the node tree (text files)"
 # @cogni/node-template-app -> @cogni/canary-app falls out of this rewrite too.
 grep -rIl --exclude-dir=node_modules --exclude-dir=.next "$TPL" "nodes/$SLUG" \
-  | while IFS= read -r f; do sed -i '' "s/$TPL/$SLUG/g" "$f"; done
+  | while IFS= read -r f; do perl -i -pe "s/$TPL/$SLUG/g" "$f"; done
 
 echo "==> 3. container port 3200 -> $PORT (Dockerfile + next config + package scripts)"
 for f in "nodes/$SLUG/app/Dockerfile" "nodes/$SLUG/app/next.config.ts" "nodes/$SLUG/app/package.json"; do
@@ -58,7 +58,7 @@ done
 
 if [ -n "$NODE_ID" ]; then
   echo "==> 3b. preserve node identity node_id=$NODE_ID"
-  sed -i '' -E "s/^node_id: .*/node_id: \"$NODE_ID\"/" "nodes/$SLUG/.cogni/repo-spec.yaml"
+  perl -i -pe "s/^node_id: .*/node_id: \"$NODE_ID\"/" "nodes/$SLUG/.cogni/repo-spec.yaml"
 fi
 
 echo "==> 4. catalog/$SLUG.yaml"
@@ -75,7 +75,7 @@ sed -E \
   -e "s#^path_prefix: .*#path_prefix: nodes/$SLUG/#" \
   "infra/catalog/$TPL.yaml" > "infra/catalog/$SLUG.yaml"
 if [ -n "$NODE_ID" ]; then
-  sed -i '' -E "s/^node_id: .*/node_id: \"$NODE_ID\"/" "infra/catalog/$SLUG.yaml"
+  perl -i -pe "s/^node_id: .*/node_id: \"$NODE_ID\"/" "infra/catalog/$SLUG.yaml"
 fi
 
 echo "==> 5. overlays x3 (ALL_THREE_ENVS_OR_NONE)"
@@ -85,7 +85,7 @@ for env in "${ENVS[@]}"; do
   [ -d "$src" ] || { echo "missing template overlay $src"; exit 1; }
   cp -R "$src" "$dst"
   f="$dst/kustomization.yaml"
-  sed -i '' "s/$TPL/$SLUG/g" "$f"
+  perl -i -pe "s/$TPL/$SLUG/g" "$f"
   perl -pi -e "s/\\b30200\\b/$NODEPORT/g; s/\\b3200\\b/$PORT/g" "$f"
 done
 

@@ -128,6 +128,8 @@ export {
   type CommitFileAndOpenPrResult,
   GitHubRepoWriter,
   type GitHubRepoWriterConfig,
+  type OpenNodeAppPrInput,
+  type OpenNodeAppPrResult,
 } from "./vcs/github-repo-write";
 // VCS capability (GitHub App adapter)
 export {

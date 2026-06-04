@@ -19,7 +19,6 @@ import { NextResponse } from "next/server";
 
 import { createNodeRepoWriter } from "@/bootstrap/capabilities/node-repo-write";
 import { resolveAppDb } from "@/bootstrap/container";
-import { buildPendingActivationRepoSpecYaml } from "@/features/nodes/repo-spec-builder";
 import { transition } from "@/features/nodes/state-machine";
 import { getServerSessionUser } from "@/lib/auth/server";
 import { type NodeStatus, nodes } from "@/shared/db/nodes";
@@ -101,46 +100,26 @@ export async function POST(_request: Request, ctx: RouteParams) {
     );
   }
 
-  const yamlContent = buildPendingActivationRepoSpecYaml({
-    nodeId: node.id,
-    chainId: node.chainId,
-    daoAddress: node.daoAddress,
-    pluginAddress: node.pluginAddress,
-    signalAddress: node.signalAddress,
-  });
-
+  // App-direct: the operator authors the node-app PR itself via the GitHub Git Data API —
+  // referencing node-template's tree + applying the pure footprint gens in one commit. No
+  // workflow dispatch; the PR URL is available synchronously.
   const writer = createNodeRepoWriter(env);
-
-  const headBranch = `cogni-operator/node-bootstrap-${node.slug}`;
-  // v0 monorepo-internal: the node lives at nodes/<slug>/ in Cogni-DAO/cogni.
-  const specPath = `nodes/${node.slug}/.cogni/repo-spec.yaml`;
-
-  let result: Awaited<ReturnType<typeof writer.commitFileAndOpenPr>>;
+  let pr: { prNumber: number; prUrl: string };
   try {
-    result = await writer.commitFileAndOpenPr({
+    pr = await writer.openNodeAppPr({
       owner: node.repoOwner,
       repo: node.repoName,
-      baseRef: "main",
-      headBranch,
-      path: specPath,
-      content: yamlContent,
-      commitMessage: `chore(cogni): bootstrap ${specPath} via operator`,
-      prTitle: `cogni-operator: bootstrap node '${node.slug}'`,
-      prBody:
-        "This PR was opened by the Cogni operator setup wizard.\n\n" +
-        `It writes \`${specPath}\` containing the verified DAO formation ` +
-        "addresses for this node. Payment activation remains pending and must " +
-        "run from the child node's own trust domain.\n\n" +
-        `- DAO: \`${node.daoAddress}\`\n` +
-        `- TokenVoting plugin: \`${node.pluginAddress}\`\n` +
-        `- CogniSignal: \`${node.signalAddress}\`\n` +
-        `- Chain: \`${node.chainId}\`\n\n` +
-        "Review and merge to register this node in the monorepo.",
+      slug: node.slug,
+      nodeId: node.id,
+      chainId: node.chainId,
+      daoContract: node.daoAddress,
+      pluginContract: node.pluginAddress,
+      signalContract: node.signalAddress,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "unknown";
     return NextResponse.json(
-      { error: "publish failed", reason: message },
+      { error: "node-app PR authoring failed", reason: message },
       { status: 502 }
     );
   }
@@ -153,12 +132,12 @@ export async function POST(_request: Request, ctx: RouteParams) {
         .update(nodes)
         .set({
           status: t.nextStatus,
-          publishPrUrl: result.prUrl,
+          publishPrUrl: pr.prUrl,
           updatedAt: new Date(),
         })
         .where(and(eq(nodes.id, id), eq(nodes.ownerUserId, session.id)))
         .returning()
   );
 
-  return NextResponse.json({ node: updated, pr: result });
+  return NextResponse.json({ node: updated, pr });
 }

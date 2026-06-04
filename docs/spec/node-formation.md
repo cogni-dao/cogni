@@ -18,12 +18,13 @@ tags: [web3, setup, dao]
 
 ## Context
 
-A Cogni DAO node has two lifecycle phases with distinct trust domains:
+A Cogni DAO node has three lifecycle phases with distinct trust domains:
 
 1. **Formation** — governance identity (DAO + Signal). Runs in the shared operator repo's web UI. No secrets, no operator wallet, no payment rails.
-2. **Payment Activation** — operator wallet + revenue split. Runs in the child node's own repo via CLI. The child node owns its Privy credentials and operator wallet.
+2. **Publish** — the operator authors the node's monorepo footprint (`nodes/<slug>/**` + catalog row + per-env overlays + per-node AppSets) as a single GitHub App–authored PR, directly via the GitHub Git Data API. No GitHub Action, no human PAT. See [Node Publish](#node-publish-operator-authored-pr).
+3. **Payment Activation** — operator wallet + revenue split. Runs in the child node's own trust domain via CLI. The child node owns its Privy credentials and operator wallet.
 
-Formation outputs a repo-spec fragment with `payments.status: pending_activation`. The child node activates payments after forking the template and configuring its own infrastructure.
+Formation outputs a repo-spec fragment with `payments.status: pending_activation`. Publish lands that fragment into the monorepo as a reviewable PR; once merged + flighted, the node deploys per-node (see [ci-cd.md](ci-cd.md) Axiom 18). The child node then activates payments.
 
 > Formation is Node-owned tooling. No Operator dependencies. Wallet signs in browser; server verifies before persisting.
 > Payment activation belongs to the child node's trust domain. The shared operator repo never creates or controls child wallets.
@@ -34,18 +35,18 @@ Enable any founder to create a fully-verified Cogni DAO node via a 3-field web f
 
 ## Non-Goals
 
-| Item                                | Reason                                                        |
-| ----------------------------------- | ------------------------------------------------------------- |
-| Multiple initial holders            | P1 scope (reduces P0 to 2 wallet txs)                         |
-| Custom NonTransferableVotes token   | Aragon GovernanceERC20 sufficient for P0                      |
-| Anti-vote-buying (non-transferable) | Not a P0 invariant; revisit if needed                         |
-| Terraform provisioning              | CLI scope (P1)                                                |
-| GitHub secrets automation           | CLI scope (P1)                                                |
-| Repo clone/patch/write              | CLI scope (P1)                                                |
-| CLI wallet signing                  | Web is simpler; add if proven needed                          |
-| Contract verification (Etherscan)   | Nice-to-have, not blocking                                    |
-| Payment activation in formation     | Wrong trust domain — child node owns its Privy wallet         |
-| Split deployment in formation       | Requires operator wallet that doesn't exist at formation time |
+| Item                                | Reason                                                          |
+| ----------------------------------- | --------------------------------------------------------------- |
+| Multiple initial holders            | P1 scope (reduces P0 to 2 wallet txs)                           |
+| Custom NonTransferableVotes token   | Aragon GovernanceERC20 sufficient for P0                        |
+| Anti-vote-buying (non-transferable) | Not a P0 invariant; revisit if needed                           |
+| Terraform provisioning              | CLI scope (P1)                                                  |
+| GitHub secrets automation           | CLI scope (P1)                                                  |
+| Repo clone/patch/write              | Now the **Publish** phase — operator App authors it (task.5092) |
+| CLI wallet signing                  | Web is simpler; add if proven needed                            |
+| Contract verification (Etherscan)   | Nice-to-have, not blocking                                      |
+| Payment activation in formation     | Wrong trust domain — child node owns its Privy wallet           |
+| Split deployment in formation       | Requires operator wallet that doesn't exist at formation time   |
 
 ## Core Invariants
 
@@ -307,6 +308,28 @@ Populated later by `pnpm node:activate-payments` (child node CLI):
 - `payments.status` is explicit — never inferred from field presence
 
 > Current schema: [.cogni/repo-spec.yaml](../../.cogni/repo-spec.yaml)
+
+### Node Publish (Operator-Authored PR)
+
+After Formation returns a verified repo-spec fragment, the **operator** authors the node's monorepo footprint as a single GitHub App–authored pull request — the **Publish** phase (task.5092). There is no GitHub Action and no human PAT: the operator already holds GitHub App installation auth, so it writes the PR directly via the GitHub **Git Data API**.
+
+**Why direct-authoring, not an Action:** a new node is a clone of `nodes/node-template/**` (~1100 files) whose blobs already exist in the repo. A `POST /git/trees` with `base_tree` referencing node-template's tree reuses every unchanged blob by SHA (zero upload); only the renamed files + repo-spec + footprint gens need new blobs — one tree, one commit, one ref, one PR (~40 API calls). Dispatching an Action to re-mint the App token the operator already holds was pure indirection (and broke on `workflow_dispatch`-resolves-on-default-branch, untestable pre-merge).
+
+**Mechanism** (`adapters/server/vcs/github-repo-write.ts` + `shared/node-app-scaffold/`):
+
+1. **Clone tree** — read node-template's tree, build a `POST /git/trees` payload with `base_tree = main`; unchanged paths inherit their existing blob SHA.
+2. **Override** — the node-template-referencing files (workspace package names + repo-spec carrying the formed `node_id` / `scope_id` / DAO addresses) get new blobs.
+3. **Exclude** (`sha: null` deletes the path from `base_tree`) — the per-node `secrets-catalog.yaml` + `k8s/external-secrets/**` are NEVER cloned (`bug.5086`: a real node copying node-template's catalog re-declares the shared baseline names → `NO_NAME_COLLISIONS` throw, killing `setup:secrets` for every env). A node inherits shared secrets via ESO; no secret value is ever written to the PR.
+4. **Footprint gens** — pure-TS ports of the catalog-derived renderers (`caddyfile`, `scope-filters`, `scheduler-endpoints`, the `pnpm-lock.yaml` importer splice, and the per-node AppSet from `scripts/ci/node-applicationset.yaml.tmpl`) regenerate the repo-wide aggregates. Each shares its template with the `scripts/ci/render-*.sh` source of truth, so output is byte-exact and CI's drift gates stay green. The lockfile is read via the uncapped `git/blobs` endpoint (it exceeds the Contents-API 1 MB cap).
+5. **Author** — `POST /git/refs` creates the branch; the PR opens under the operator App installation (author = the App, auditable — not `github-actions[bot]`, not a human PAT).
+
+**Invariants:**
+
+- `NO_ACTION_INDIRECTION` — the operator authors the PR itself; it never dispatches a workflow to act on its own behalf.
+- `NO_SECRETS_IN_PR` — secrets-catalog + external-secrets are excluded from the cloned tree; values live in OpenBao, inherited via ESO ([secrets-management.md](secrets-management.md)).
+- `GENS_ARE_BYTE_EXACT` — every footprint gen shares one template with its `scripts/ci/render-*.sh` source of truth, enforced by the per-gen CI drift gate.
+
+> Verification: the Git Data API tree-assembly is proven by flighting the operator and authoring one throwaway node PR end-to-end (`<node>-test/version == build_sha`).
 
 ### Payment Activation (Child Node)
 

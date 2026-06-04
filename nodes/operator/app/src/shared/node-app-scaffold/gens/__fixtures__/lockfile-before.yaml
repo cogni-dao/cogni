@@ -1,0 +1,2363 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+overrides:
+  ethers: 5.7.2
+
+importers:
+
+  .:
+    dependencies:
+      '@cogni/ai-core':
+        specifier: workspace:*
+        version: link:packages/ai-core
+      '@cogni/ai-tools':
+        specifier: workspace:*
+        version: link:packages/ai-tools
+      '@cogni/aragon-osx':
+        specifier: workspace:*
+        version: link:packages/aragon-osx
+      '@cogni/attribution-ledger':
+        specifier: workspace:*
+        version: link:packages/attribution-ledger
+      '@cogni/attribution-pipeline-plugins':
+        specifier: workspace:*
+        version: link:packages/attribution-pipeline-plugins
+      '@cogni/cogni-contracts':
+        specifier: workspace:*
+        version: link:packages/cogni-contracts
+      '@cogni/db-client':
+        specifier: workspace:*
+        version: link:packages/db-client
+      '@cogni/db-schema':
+        specifier: workspace:*
+        version: link:packages/db-schema
+      '@cogni/financial-ledger':
+        specifier: workspace:*
+        version: link:packages/financial-ledger
+      '@cogni/graph-execution-core':
+        specifier: workspace:*
+        version: link:packages/graph-execution-core
+      '@cogni/graph-execution-host':
+        specifier: workspace:*
+        version: link:packages/graph-execution-host
+      '@cogni/ids':
+        specifier: workspace:*
+        version: link:packages/ids
+      '@cogni/ingestion-core':
+        specifier: workspace:*
+        version: link:packages/ingestion-core
+      '@cogni/knowledge-base':
+        specifier: workspace:*
+        version: link:packages/knowledge-base
+      '@cogni/knowledge-store':
+        specifier: workspace:^
+        version: link:packages/knowledge-store
+      '@cogni/langgraph-graphs':
+        specifier: workspace:*
+        version: link:packages/langgraph-graphs
+      '@cogni/node-core':
+        specifier: workspace:*
+        version: link:packages/node-core
+      '@cogni/operator-wallet':
+        specifier: workspace:*
+        version: link:packages/operator-wallet
+      '@cogni/repo-spec':
+        specifier: workspace:*
+        version: link:packages/repo-spec
+      '@cogni/scheduler-core':
+        specifier: workspace:*
+        version: link:packages/scheduler-core
+      '@cogni/temporal-workflows':
+        specifier: workspace:*
+        version: link:packages/temporal-workflows
+      '@cogni/work-items':
+        specifier: workspace:*
+        version: link:packages/work-items
+      '@privy-io/node':
+        specifier: ^0.10.1
+        version: 0.10.1(viem@2.48.1(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.1.12))
+      cron-parser:
+        specifier: ^4.9.0
+        version: 4.9.0
+      drizzle-orm:
+        specifier: ^0.44.7
+        version: 0.44.7(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.17.1)(postgres@3.4.7)
+      pino:
+        specifier: ^10.1.0
+        version: 10.1.0
+      postgres:
+        specifier: ^3.4.5
+        version: 3.4.7
+      prom-client:
+        specifier: ^15.1.3
+        version: 15.1.3
+      zod:
+        specifier: ^4.1.12
+        version: 4.1.12
+    devDependencies:
+      '@0xsplits/splits-sdk':
+        specifier: 6.4.1
+        version: 6.4.1(viem@2.48.1(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.1.12))
+      '@axe-core/playwright':
+        specifier: ^4.11.0
+        version: 4.11.0(playwright-core@1.56.1)
+      '@biomejs/biome':
+        specifier: ^2.3.7
+        version: 2.3.7
+      '@commitlint/cli':
+        specifier: ^19.8.1
+        version: 19.8.1(@types/node@22.19.7)(typescript@5.9.3)
+      '@commitlint/config-conventional':
+        specifier: ^19.8.1
+        version: 19.8.1
+      '@eslint/js':
+        specifier: ^9.39.1
+        version: 9.39.1
+      '@next/eslint-plugin-next':
+        specifier: ^16.0.1
+        version: 16.0.1
+      '@openai/codex':
+        specifier: ^0.116.0
+        version: 0.116.0
+      '@openai/codex-sdk':
+        specifier: ^0.116.0
+        version: 0.116.0
+      '@playwright/test':
+        specifier: ^1.56.1
+        version: 1.56.1
+      '@poupe/eslint-plugin-tailwindcss':
+        specifier: ^0.2.4
+        version: 0.2.4(@eslint/css@0.9.0)(eslint@9.39.1(jiti@2.6.1))
+      '@tailwindcss/postcss':
+        specifier: ^4.1.16
+        version: 4.1.16
+      '@temporalio/worker':
+        specifier: ^1.11.7
+        version: 1.14.1(esbuild@0.27.1)(tslib@2.8.1)
+      '@testcontainers/postgresql':
+        specifier: ^11.8.1
+        version: 11.8.1
+      '@testing-library/jest-dom':
+        specifier: ^6.9.1
+        version: 6.9.1
+      '@testing-library/react':
+        specifier: ^16.3.0
+        version: 16.3.0(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@testing-library/user-event':
+        specifier: ^14.6.1
+        version: 14.6.1(@testing-library/dom@10.4.1)
+      '@types/dockerode':
+        specifier: ^4.0.1
+        version: 4.0.1
+      '@types/node':
+        specifier: ^22
+        version: 22.19.7
+      '@types/react':
+        specifier: ^19
+        version: 19.2.7
+      '@types/react-dom':
+        specifier: ^19
+        version: 19.2.3(@types/react@19.2.7)
+      '@types/ws':
+        specifier: ^8.18.1
+        version: 8.18.1
+      '@typescript-eslint/eslint-plugin':
+        specifier: ^8.46.3
+        version: 8.46.3(@typescript-eslint/parser@8.46.3(eslint@9.39.1(jiti@2.6.1))(typescript@5.9.3))(eslint@9.39.1(jiti@2.6.1))(typescript@5.9.3)
+      '@typescript-eslint/parser':
+        specifier: ^8.46.3
+        version: 8.46.3(eslint@9.39.1(jiti@2.6.1))(typescript@5.9.3)
+      '@vitest/coverage-v8':
+        specifier: ^4.0.9
+        version: 4.0.9(vitest@4.0.7(@types/debug@4.1.12)(@types/node@22.19.7)(happy-dom@20.9.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(jiti@2.6.1)(jsdom@16.7.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(lightningcss@1.30.2)(msw@2.12.1(@types/node@22.19.7)(typescript@5.9.3))(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.3))
+      conventional-changelog-conventionalcommits:
+        specifier: '7'
+        version: 7.0.2
+      dependency-cruiser:
+        specifier: ^16.8.1
+        version: 16.10.4
+      dockerode:
+        specifier: ^4.0.9
+        version: 4.0.9
+      dotenv:
+        specifier: ^17.2.3
+        version: 17.2.3
+      dotenv-cli:
+        specifier: ^11.0.0
+        version: 11.0.0
+      dotenv-expand:
+        specifier: ^12.0.3
+        version: 12.0.3
+      drizzle-kit:
+        specifier: ^0.31.7
+        version: 0.31.7
+      eslint:
+        specifier: ^9.39.1
+        version: 9.39.1(jiti@2.6.1)
+      eslint-config-prettier:
+        specifier: ^10.1.8
+        version: 10.1.8(eslint@9.39.1(jiti@2.6.1))
+      eslint-import-resolver-typescript:
+        specifier: ^4.4.4
+        version: 4.4.4(eslint-plugin-import@2.32.0)(eslint@9.39.1(jiti@2.6.1))
+      eslint-plugin-boundaries:
+        specifier: 5.1.0
+        version: 5.1.0(@typescript-eslint/parser@8.46.3(eslint@9.39.1(jiti@2.6.1))(typescript@5.9.3))(eslint-import-resolver-typescript@4.4.4)(eslint@9.39.1(jiti@2.6.1))
+      eslint-plugin-check-file:
+        specifier: ^3.3.1
+        version: 3.3.1(eslint@9.39.1(jiti@2.6.1))
+      eslint-plugin-import:
+        specifier: ^2.32.0
+        version: 2.32.0(@typescript-eslint/parser@8.46.3(eslint@9.39.1(jiti@2.6.1))(typescript@5.9.3))(eslint-import-resolver-typescript@4.4.4)(eslint@9.39.1(jiti@2.6.1))
+      eslint-plugin-jsx-a11y:
+        specifier: ^6.10.2
+        version: 6.10.2(eslint@9.39.1(jiti@2.6.1))
+      eslint-plugin-n:
+        specifier: ^17.23.1
+        version: 17.23.1(eslint@9.39.1(jiti@2.6.1))(typescript@5.9.3)
+      eslint-plugin-no-inline-styles:
+        specifier: ^1.0.5
+        version: 1.0.5
+      eslint-plugin-no-literal-classnames:
+        specifier: ^1.2.0
+        version: 1.2.0(eslint@9.39.1(jiti@2.6.1))
+      eslint-plugin-react:
+        specifier: ^7.37.5
+        version: 7.37.5(eslint@9.39.1(jiti@2.6.1))
+      eslint-plugin-react-hooks:
+        specifier: ^5.1.0
+        version: 5.2.0(eslint@9.39.1(jiti@2.6.1))
+      eslint-plugin-simple-import-sort:
+        specifier: ^12.1.1
+        version: 12.1.1(eslint@9.39.1(jiti@2.6.1))
+      eslint-plugin-tailwindcss:
+        specifier: ^3.18.2
+        version: 3.18.2(tailwindcss@4.1.16)
+      eslint-plugin-tsdoc:
+        specifier: ^0.4.0
+        version: 0.4.0
+      eslint-plugin-unicorn:
+        specifier: ^62.0.0
+        version: 62.0.0(eslint@9.39.1(jiti@2.6.1))
+      eslint-plugin-unused-imports:
+        specifier: ^4.3.0
+        version: 4.3.0(@typescript-eslint/eslint-plugin@8.46.3(@typescript-eslint/parser@8.46.3(eslint@9.39.1(jiti@2.6.1))(typescript@5.9.3))(eslint@9.39.1(jiti@2.6.1))(typescript@5.9.3))(eslint@9.39.1(jiti@2.6.1))
+      fast-glob:
+        specifier: ^3.3.3
+        version: 3.3.3
+      globals:
+        specifier: ^16.5.0
+        version: 16.5.0
+      happy-dom:
+        specifier: ^20.8.9
+        version: 20.9.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
+      husky:
+        specifier: ^9.1.7
+        version: 9.1.7
+      knip:
+        specifier: ^5.70.2
+        version: 5.70.2(@types/node@22.19.7)(typescript@5.9.3)
+      lint-staged:
+        specifier: ^16.2.6
+        version: 16.2.6
+      next-test-api-route-handler:
+        specifier: ^5.0.3
+        version: 5.0.3(next@16.2.3(@babel/core@7.28.5)(@opentelemetry/api@1.9.0)(@playwright/test@1.56.1)(babel-plugin-macros@3.1.0)(react-dom@19.0.0(react@19.0.0))(react@19.0.0))
+      pino-pretty:
+        specifier: ^13.1.2
+        version: 13.1.2
+      postcss:
+        specifier: ^8.5.6
+        version: 8.5.6
+      prettier:
+        specifier: ^3.6.2
+        version: 3.6.2
+      prettier-plugin-tailwindcss:
+        specifier: ^0.7.1
+        version: 0.7.1(prettier@3.6.2)
+      shadcn:
+        specifier: ^3.5.0
+        version: 3.5.0(@cfworker/json-schema@4.1.1)(@types/node@22.19.7)(babel-plugin-macros@3.1.0)(typescript@5.9.3)
+      smee-client:
+        specifier: ^5.0.0
+        version: 5.0.0
+      tailwindcss:
+        specifier: ^4.1.16
+        version: 4.1.16
+      testcontainers:
+        specifier: ^11.8.1
+        version: 11.8.1
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(@swc/core@1.15.10)(jiti@2.6.1)(postcss@8.5.6)(tsx@4.20.6)(typescript@5.9.3)(yaml@2.8.3)
+      tsx:
+        specifier: ^4.20.6
+        version: 4.20.6
+      turbo:
+        specifier: ^2.9.4
+        version: 2.9.4
+      typescript:
+        specifier: ^5
+        version: 5.9.3
+      typescript-language-server:
+        specifier: ^5.1.3
+        version: 5.1.3
+      undici:
+        specifier: ^7.24.0
+        version: 7.24.5
+      vite-tsconfig-paths:
+        specifier: ^5.1.4
+        version: 5.1.4(typescript@5.9.3)(vite@7.2.1(@types/node@22.19.7)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.3))
+      vitest:
+        specifier: ^4.0.7
+        version: 4.0.7(@types/debug@4.1.12)(@types/node@22.19.7)(happy-dom@20.9.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(jiti@2.6.1)(jsdom@16.7.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(lightningcss@1.30.2)(msw@2.12.1(@types/node@22.19.7)(typescript@5.9.3))(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.3)
+      ws:
+        specifier: ^8.19.0
+        version: 8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
+      yaml:
+        specifier: ^2.8.3
+        version: 2.8.3
+
+  nodes/canary/app:
+    dependencies:
+      '@assistant-ui/react':
+        specifier: ^0.12.10
+        version: 0.12.10(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(immer@11.0.1)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)(use-sync-external-store@1.4.0(react@19.0.0))
+      '@assistant-ui/react-ai-sdk':
+        specifier: ^1.3.7
+        version: 1.3.7(@assistant-ui/react@0.12.10(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(immer@11.0.1)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)(use-sync-external-store@1.4.0(react@19.0.0)))(@types/react@19.2.7)(assistant-cloud@0.1.17)(react@19.0.0)
+      '@assistant-ui/react-data-stream':
+        specifier: ^0.12.4
+        version: 0.12.4(@assistant-ui/react@0.12.10(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(immer@11.0.1)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)(use-sync-external-store@1.4.0(react@19.0.0)))(@types/react@19.2.7)(react@19.0.0)
+      '@assistant-ui/react-markdown':
+        specifier: ^0.12.3
+        version: 0.12.3(@assistant-ui/react@0.12.10(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(immer@11.0.1)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)(use-sync-external-store@1.4.0(react@19.0.0)))(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@auth/drizzle-adapter':
+        specifier: ^1.7.0
+        version: 1.11.1
+      '@cogni/ai-core':
+        specifier: workspace:*
+        version: link:../../../packages/ai-core
+      '@cogni/ai-tools':
+        specifier: workspace:*
+        version: link:../../../packages/ai-tools
+      '@cogni/aragon-osx':
+        specifier: workspace:*
+        version: link:../../../packages/aragon-osx
+      '@cogni/attribution-ledger':
+        specifier: workspace:*
+        version: link:../../../packages/attribution-ledger
+      '@cogni/cogni-contracts':
+        specifier: workspace:*
+        version: link:../../../packages/cogni-contracts
+      '@cogni/db-client':
+        specifier: workspace:*
+        version: link:../../../packages/db-client
+      '@cogni/db-schema':
+        specifier: workspace:*
+        version: link:../../../packages/db-schema
+      '@cogni/financial-ledger':
+        specifier: workspace:*
+        version: link:../../../packages/financial-ledger
+      '@cogni/ids':
+        specifier: workspace:*
+        version: link:../../../packages/ids
+      '@cogni/ingestion-core':
+        specifier: workspace:*
+        version: link:../../../packages/ingestion-core
+      '@cogni/knowledge-store':
+        specifier: workspace:*
+        version: link:../../../packages/knowledge-store
+      '@cogni/langgraph-graphs':
+        specifier: workspace:*
+        version: link:../../../packages/langgraph-graphs
+      '@cogni/node-app':
+        specifier: workspace:*
+        version: link:../../../packages/node-app
+      '@cogni/node-contracts':
+        specifier: workspace:*
+        version: link:../../../packages/node-contracts
+      '@cogni/node-core':
+        specifier: workspace:*
+        version: link:../../../packages/node-core
+      '@cogni/node-shared':
+        specifier: workspace:*
+        version: link:../../../packages/node-shared
+      '@cogni/node-streams':
+        specifier: workspace:*
+        version: link:../../../packages/node-streams
+      '@cogni/node-ui-kit':
+        specifier: workspace:*
+        version: link:../../../packages/node-ui-kit
+      '@cogni/repo-spec':
+        specifier: workspace:*
+        version: link:../../../packages/repo-spec
+      '@cogni/scheduler-core':
+        specifier: workspace:*
+        version: link:../../../packages/scheduler-core
+      '@cogni/work-items':
+        specifier: workspace:*
+        version: link:../../../packages/work-items
+      '@dnd-kit/core':
+        specifier: ^6.3.1
+        version: 6.3.1(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@dnd-kit/modifiers':
+        specifier: ^9.0.0
+        version: 9.0.0(@dnd-kit/core@6.3.1(react-dom@19.0.0(react@19.0.0))(react@19.0.0))(react@19.0.0)
+      '@dnd-kit/sortable':
+        specifier: ^10.0.0
+        version: 10.0.0(@dnd-kit/core@6.3.1(react-dom@19.0.0(react@19.0.0))(react@19.0.0))(react@19.0.0)
+      '@dnd-kit/utilities':
+        specifier: ^3.2.2
+        version: 3.2.2(react@19.0.0)
+      '@langchain/langgraph-sdk':
+        specifier: ^0.0.32
+        version: 0.0.32
+      '@octokit/auth-app':
+        specifier: ^7.1.4
+        version: 7.2.2
+      '@octokit/core':
+        specifier: ^6.1.4
+        version: 6.1.6
+      '@octokit/webhooks-methods':
+        specifier: ^6.0.0
+        version: 6.0.0
+      '@openai/codex':
+        specifier: ^0.116.0
+        version: 0.116.0
+      '@openai/codex-sdk':
+        specifier: ^0.116.0
+        version: 0.116.0
+      '@opentelemetry/api':
+        specifier: ^1.9.0
+        version: 1.9.0
+      '@opentelemetry/sdk-node':
+        specifier: ^0.208.0
+        version: 0.208.0(@opentelemetry/api@1.9.0)
+      '@radix-ui/react-avatar':
+        specifier: ^1.1.11
+        version: 1.1.11(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-checkbox':
+        specifier: ^1.3.3
+        version: 1.3.3(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-dialog':
+        specifier: ^1.1.15
+        version: 1.1.15(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-dropdown-menu':
+        specifier: ^2.1.16
+        version: 2.1.16(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-popover':
+        specifier: ^1.1.15
+        version: 1.1.15(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-progress':
+        specifier: ^1.1.8
+        version: 1.1.8(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-scroll-area':
+        specifier: ^1.2.10
+        version: 1.2.10(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-select':
+        specifier: ^2.2.6
+        version: 2.2.6(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-separator':
+        specifier: ^1.1.8
+        version: 1.1.8(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-slot':
+        specifier: ^1.2.4
+        version: 1.2.4(@types/react@19.2.7)(react@19.0.0)
+      '@radix-ui/react-toggle':
+        specifier: ^1.1.10
+        version: 1.1.10(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-toggle-group':
+        specifier: ^1.1.11
+        version: 1.1.11(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-tooltip':
+        specifier: ^1.2.8
+        version: 1.2.8(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@rainbow-me/rainbowkit':
+        specifier: 2.2.9
+        version: 2.2.9(@tanstack/react-query@5.90.10(react@19.0.0))(@types/react@19.2.7)(babel-plugin-macros@3.1.0)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)(typescript@5.9.3)(viem@2.39.3(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6))(wagmi@2.19.5(@tanstack/query-core@5.90.10)(@tanstack/react-query@5.90.10(react@19.0.0))(@types/react@19.2.7)(bufferutil@4.0.9)(fastestsmallesttextencoderdecoder@1.0.22)(immer@11.0.1)(ioredis@5.10.0)(react@19.0.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(viem@2.39.3(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6))(ws@8.18.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.3.6))
+      '@rainbow-me/rainbowkit-siwe-next-auth':
+        specifier: ^0.5.0
+        version: 0.5.0(@rainbow-me/rainbowkit@2.2.9(@tanstack/react-query@5.90.10(react@19.0.0))(@types/react@19.2.7)(babel-plugin-macros@3.1.0)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)(typescript@5.9.3)(viem@2.39.3(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6))(wagmi@2.19.5(@tanstack/query-core@5.90.10)(@tanstack/react-query@5.90.10(react@19.0.0))(@types/react@19.2.7)(bufferutil@4.0.9)(fastestsmallesttextencoderdecoder@1.0.22)(immer@11.0.1)(ioredis@5.10.0)(react@19.0.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(viem@2.39.3(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6))(ws@8.18.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.3.6)))(next-auth@4.24.13(next@16.2.3(@babel/core@7.28.5)(@opentelemetry/api@1.9.0)(@playwright/test@1.56.1)(babel-plugin-macros@3.1.0)(react-dom@19.0.0(react@19.0.0))(react@19.0.0))(react-dom@19.0.0(react@19.0.0))(react@19.0.0))(react@19.0.0)
+      '@tanstack/react-query':
+        specifier: 5.90.10
+        version: 5.90.10(react@19.0.0)
+      '@tanstack/react-table':
+        specifier: ^8.21.3
+        version: 8.21.3(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@tanstack/react-virtual':
+        specifier: ^3.13.23
+        version: 3.13.23(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@temporalio/client':
+        specifier: ^1.14.1
+        version: 1.14.1
+      '@ts-rest/core':
+        specifier: ^3.52.1
+        version: 3.52.1(@types/node@25.2.3)(zod@4.3.6)
+      '@ts-rest/open-api':
+        specifier: ^3.52.1
+        version: 3.52.1(@ts-rest/core@3.52.1(@types/node@25.2.3)(zod@4.3.6))(zod@4.3.6)
+      '@tsparticles/engine':
+        specifier: ^3.9.1
+        version: 3.9.1
+      '@tsparticles/react':
+        specifier: ^3.0.0
+        version: 3.0.0(@tsparticles/engine@3.9.1)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@tsparticles/slim':
+        specifier: ^3.9.1
+        version: 3.9.1
+      ai:
+        specifier: ^6.0.79
+        version: 6.0.85(zod@4.3.6)
+      class-variance-authority:
+        specifier: ^0.7.1
+        version: 0.7.1
+      clsx:
+        specifier: ^2.1.1
+        version: 2.1.1
+      cmdk:
+        specifier: ^1.1.1
+        version: 1.1.1(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      drizzle-orm:
+        specifier: ^0.44.7
+        version: 0.44.7(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.17.1)(postgres@3.4.7)
+      ethers:
+        specifier: 5.7.2
+        version: 5.7.2(bufferutil@4.0.9)(utf-8-validate@5.0.10)
+      eventsource-parser:
+        specifier: ^3.0.6
+        version: 3.0.6
+      fast-safe-stringify:
+        specifier: ^2.1.1
+        version: 2.1.1
+      framer-motion:
+        specifier: ^12.23.25
+        version: 12.23.25(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      ioredis:
+        specifier: ^5.6.1
+        version: 5.10.0
+      langfuse:
+        specifier: ^3.38.6
+        version: 3.38.6
+      lucide-react:
+        specifier: ^0.552.0
+        version: 0.552.0(react@19.0.0)
+      motion:
+        specifier: ^12.23.24
+        version: 12.23.24(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      nanoid:
+        specifier: ^5.1.6
+        version: 5.1.6
+      next:
+        specifier: 16.2.3
+        version: 16.2.3(@babel/core@7.28.5)(@opentelemetry/api@1.9.0)(@playwright/test@1.56.1)(babel-plugin-macros@3.1.0)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      next-auth:
+        specifier: ^4.24.10
+        version: 4.24.13(next@16.2.3(@babel/core@7.28.5)(@opentelemetry/api@1.9.0)(@playwright/test@1.56.1)(babel-plugin-macros@3.1.0)(react-dom@19.0.0(react@19.0.0))(react@19.0.0))(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      next-themes:
+        specifier: ^0.4.6
+        version: 0.4.6(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      p-limit:
+        specifier: ^7.3.0
+        version: 7.3.0
+      pino:
+        specifier: ^10.1.0
+        version: 10.1.0
+      postgres:
+        specifier: ^3.4.5
+        version: 3.4.7
+      prom-client:
+        specifier: ^15.1.3
+        version: 15.1.3
+      radix-ui:
+        specifier: ^1.4.3
+        version: 1.4.3(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      react:
+        specifier: 19.0.0
+        version: 19.0.0
+      react-dom:
+        specifier: 19.0.0
+        version: 19.0.0(react@19.0.0)
+      recharts:
+        specifier: ^2.15.4
+        version: 2.15.4(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      rehype-raw:
+        specifier: ^7.0.0
+        version: 7.0.0
+      remark-gfm:
+        specifier: ^4.0.1
+        version: 4.0.1
+      server-only:
+        specifier: ^0.0.1
+        version: 0.0.1
+      siwe:
+        specifier: ^3.0.0
+        version: 3.0.0(ethers@5.7.2(bufferutil@4.0.9)(utf-8-validate@5.0.10))
+      tailwind-merge:
+        specifier: ^3.3.1
+        version: 3.3.1
+      tigerbeetle-node:
+        specifier: 0.16.76
+        version: 0.16.76
+      tw-animate-css:
+        specifier: ^1.4.0
+        version: 1.4.0
+      uuid:
+        specifier: ^13.0.0
+        version: 13.0.0
+      vaul:
+        specifier: ^1.1.2
+        version: 1.1.2(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      viem:
+        specifier: 2.39.3
+        version: 2.39.3(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6)
+      wagmi:
+        specifier: 2.19.5
+        version: 2.19.5(@tanstack/query-core@5.90.10)(@tanstack/react-query@5.90.10(react@19.0.0))(@types/react@19.2.7)(bufferutil@4.0.9)(fastestsmallesttextencoderdecoder@1.0.22)(immer@11.0.1)(ioredis@5.10.0)(react@19.0.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(viem@2.39.3(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6))(ws@8.18.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.3.6)
+      zod:
+        specifier: ^4.1.12
+        version: 4.3.6
+      zustand:
+        specifier: ^5.0.9
+        version: 5.0.11(@types/react@19.2.7)(immer@11.0.1)(react@19.0.0)(use-sync-external-store@1.4.0(react@19.0.0))
+    devDependencies:
+      '@types/uuid':
+        specifier: ^11.0.0
+        version: 11.0.0
+
+  nodes/canary/graphs:
+    dependencies:
+      '@cogni/langgraph-graphs':
+        specifier: workspace:*
+        version: link:../../../packages/langgraph-graphs
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(@swc/core@1.15.10)(jiti@2.6.1)(postcss@8.5.6)(tsx@4.20.6)(typescript@5.9.3)(yaml@2.8.3)
+      typescript:
+        specifier: ^5
+        version: 5.9.3
+      vitest:
+        specifier: ^4.0.9
+        version: 4.1.2(@opentelemetry/api@1.9.0)(@types/node@25.2.3)(happy-dom@20.9.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(jsdom@16.7.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(msw@2.12.1(@types/node@25.2.3)(typescript@5.9.3))(vite@7.2.1(@types/node@25.2.3)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.3))
+
+  nodes/canary/packages/doltgres-schema:
+    dependencies:
+      '@cogni/knowledge-base':
+        specifier: workspace:*
+        version: link:../../../../packages/knowledge-base
+      drizzle-orm:
+        specifier: ^0.44.7
+        version: 0.44.7(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.17.1)(postgres@3.4.7)
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(@swc/core@1.15.10)(jiti@2.6.1)(postcss@8.5.6)(tsx@4.20.6)(typescript@5.9.3)(yaml@2.8.3)
+      typescript:
+        specifier: ^5
+        version: 5.9.3
+
+  nodes/node-template/app:
+    dependencies:
+      '@assistant-ui/react':
+        specifier: ^0.12.10
+        version: 0.12.10(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(immer@11.0.1)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)(use-sync-external-store@1.6.0(react@19.0.0))
+      '@assistant-ui/react-ai-sdk':
+        specifier: ^1.3.7
+        version: 1.3.7(@assistant-ui/react@0.12.10(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(immer@11.0.1)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)(use-sync-external-store@1.6.0(react@19.0.0)))(@types/react@19.2.7)(assistant-cloud@0.1.17)(react@19.0.0)
+      '@assistant-ui/react-data-stream':
+        specifier: ^0.12.4
+        version: 0.12.4(@assistant-ui/react@0.12.10(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(immer@11.0.1)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)(use-sync-external-store@1.6.0(react@19.0.0)))(@types/react@19.2.7)(react@19.0.0)
+      '@assistant-ui/react-markdown':
+        specifier: ^0.12.3
+        version: 0.12.3(@assistant-ui/react@0.12.10(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(immer@11.0.1)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)(use-sync-external-store@1.6.0(react@19.0.0)))(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@auth/drizzle-adapter':
+        specifier: ^1.7.0
+        version: 1.11.1
+      '@cogni/ai-core':
+        specifier: workspace:*
+        version: link:../../../packages/ai-core
+      '@cogni/ai-tools':
+        specifier: workspace:*
+        version: link:../../../packages/ai-tools
+      '@cogni/aragon-osx':
+        specifier: workspace:*
+        version: link:../../../packages/aragon-osx
+      '@cogni/attribution-ledger':
+        specifier: workspace:*
+        version: link:../../../packages/attribution-ledger
+      '@cogni/cogni-contracts':
+        specifier: workspace:*
+        version: link:../../../packages/cogni-contracts
+      '@cogni/db-client':
+        specifier: workspace:*
+        version: link:../../../packages/db-client
+      '@cogni/db-schema':
+        specifier: workspace:*
+        version: link:../../../packages/db-schema
+      '@cogni/financial-ledger':
+        specifier: workspace:*
+        version: link:../../../packages/financial-ledger
+      '@cogni/ids':
+        specifier: workspace:*
+        version: link:../../../packages/ids
+      '@cogni/ingestion-core':
+        specifier: workspace:*
+        version: link:../../../packages/ingestion-core
+      '@cogni/knowledge-store':
+        specifier: workspace:*
+        version: link:../../../packages/knowledge-store
+      '@cogni/langgraph-graphs':
+        specifier: workspace:*
+        version: link:../../../packages/langgraph-graphs
+      '@cogni/node-app':
+        specifier: workspace:*
+        version: link:../../../packages/node-app
+      '@cogni/node-contracts':
+        specifier: workspace:*
+        version: link:../../../packages/node-contracts
+      '@cogni/node-core':
+        specifier: workspace:*
+        version: link:../../../packages/node-core
+      '@cogni/node-shared':
+        specifier: workspace:*
+        version: link:../../../packages/node-shared
+      '@cogni/node-streams':
+        specifier: workspace:*
+        version: link:../../../packages/node-streams
+      '@cogni/node-ui-kit':
+        specifier: workspace:*
+        version: link:../../../packages/node-ui-kit
+      '@cogni/repo-spec':
+        specifier: workspace:*
+        version: link:../../../packages/repo-spec
+      '@cogni/scheduler-core':
+        specifier: workspace:*
+        version: link:../../../packages/scheduler-core
+      '@cogni/work-items':
+        specifier: workspace:*
+        version: link:../../../packages/work-items
+      '@dnd-kit/core':
+        specifier: ^6.3.1
+        version: 6.3.1(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@dnd-kit/modifiers':
+        specifier: ^9.0.0
+        version: 9.0.0(@dnd-kit/core@6.3.1(react-dom@19.0.0(react@19.0.0))(react@19.0.0))(react@19.0.0)
+      '@dnd-kit/sortable':
+        specifier: ^10.0.0
+        version: 10.0.0(@dnd-kit/core@6.3.1(react-dom@19.0.0(react@19.0.0))(react@19.0.0))(react@19.0.0)
+      '@dnd-kit/utilities':
+        specifier: ^3.2.2
+        version: 3.2.2(react@19.0.0)
+      '@langchain/langgraph-sdk':
+        specifier: ^0.0.32
+        version: 0.0.32
+      '@octokit/auth-app':
+        specifier: ^7.1.4
+        version: 7.2.2
+      '@octokit/core':
+        specifier: ^6.1.4
+        version: 6.1.6
+      '@octokit/webhooks-methods':
+        specifier: ^6.0.0
+        version: 6.0.0
+      '@openai/codex':
+        specifier: ^0.116.0
+        version: 0.116.0
+      '@openai/codex-sdk':
+        specifier: ^0.116.0
+        version: 0.116.0
+      '@opentelemetry/api':
+        specifier: ^1.9.0
+        version: 1.9.0
+      '@opentelemetry/sdk-node':
+        specifier: ^0.208.0
+        version: 0.208.0(@opentelemetry/api@1.9.0)
+      '@radix-ui/react-avatar':
+        specifier: ^1.1.11
+        version: 1.1.11(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-checkbox':
+        specifier: ^1.3.3
+        version: 1.3.3(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-dialog':
+        specifier: ^1.1.15
+        version: 1.1.15(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-dropdown-menu':
+        specifier: ^2.1.16
+        version: 2.1.16(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-popover':
+        specifier: ^1.1.15
+        version: 1.1.15(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-progress':
+        specifier: ^1.1.8
+        version: 1.1.8(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-scroll-area':
+        specifier: ^1.2.10
+        version: 1.2.10(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-select':
+        specifier: ^2.2.6
+        version: 2.2.6(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-separator':
+        specifier: ^1.1.8
+        version: 1.1.8(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-slot':
+        specifier: ^1.2.4
+        version: 1.2.4(@types/react@19.2.7)(react@19.0.0)
+      '@radix-ui/react-toggle':
+        specifier: ^1.1.10
+        version: 1.1.10(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-toggle-group':
+        specifier: ^1.1.11
+        version: 1.1.11(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-tooltip':
+        specifier: ^1.2.8
+        version: 1.2.8(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@rainbow-me/rainbowkit':
+        specifier: 2.2.9
+        version: 2.2.9(@tanstack/react-query@5.90.10(react@19.0.0))(@types/react@19.2.7)(babel-plugin-macros@3.1.0)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)(typescript@5.9.3)(viem@2.39.3(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6))(wagmi@2.19.5(@tanstack/query-core@5.90.10)(@tanstack/react-query@5.90.10(react@19.0.0))(@types/react@19.2.7)(bufferutil@4.0.9)(fastestsmallesttextencoderdecoder@1.0.22)(immer@11.0.1)(ioredis@5.10.0)(react@19.0.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(viem@2.39.3(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.3.6))
+      '@rainbow-me/rainbowkit-siwe-next-auth':
+        specifier: ^0.5.0
+        version: 0.5.0(@rainbow-me/rainbowkit@2.2.9(@tanstack/react-query@5.90.10(react@19.0.0))(@types/react@19.2.7)(babel-plugin-macros@3.1.0)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)(typescript@5.9.3)(viem@2.39.3(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6))(wagmi@2.19.5(@tanstack/query-core@5.90.10)(@tanstack/react-query@5.90.10(react@19.0.0))(@types/react@19.2.7)(bufferutil@4.0.9)(fastestsmallesttextencoderdecoder@1.0.22)(immer@11.0.1)(ioredis@5.10.0)(react@19.0.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(viem@2.39.3(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.3.6)))(next-auth@4.24.13(next@16.2.3(@babel/core@7.28.5)(@opentelemetry/api@1.9.0)(@playwright/test@1.56.1)(babel-plugin-macros@3.1.0)(react-dom@19.0.0(react@19.0.0))(react@19.0.0))(react-dom@19.0.0(react@19.0.0))(react@19.0.0))(react@19.0.0)
+      '@tanstack/react-query':
+        specifier: 5.90.10
+        version: 5.90.10(react@19.0.0)
+      '@tanstack/react-table':
+        specifier: ^8.21.3
+        version: 8.21.3(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@tanstack/react-virtual':
+        specifier: ^3.13.23
+        version: 3.13.23(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@temporalio/client':
+        specifier: ^1.14.1
+        version: 1.14.1
+      '@ts-rest/core':
+        specifier: ^3.52.1
+        version: 3.52.1(@types/node@25.2.3)(zod@4.3.6)
+      '@ts-rest/open-api':
+        specifier: ^3.52.1
+        version: 3.52.1(@ts-rest/core@3.52.1(@types/node@25.2.3)(zod@4.3.6))(zod@4.3.6)
+      '@tsparticles/engine':
+        specifier: ^3.9.1
+        version: 3.9.1
+      '@tsparticles/react':
+        specifier: ^3.0.0
+        version: 3.0.0(@tsparticles/engine@3.9.1)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@tsparticles/slim':
+        specifier: ^3.9.1
+        version: 3.9.1
+      ai:
+        specifier: ^6.0.79
+        version: 6.0.85(zod@4.3.6)
+      class-variance-authority:
+        specifier: ^0.7.1
+        version: 0.7.1
+      clsx:
+        specifier: ^2.1.1
+        version: 2.1.1
+      cmdk:
+        specifier: ^1.1.1
+        version: 1.1.1(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      drizzle-orm:
+        specifier: ^0.44.7
+        version: 0.44.7(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.17.1)(postgres@3.4.7)
+      ethers:
+        specifier: 5.7.2
+        version: 5.7.2(bufferutil@4.0.9)(utf-8-validate@5.0.10)
+      eventsource-parser:
+        specifier: ^3.0.6
+        version: 3.0.6
+      fast-safe-stringify:
+        specifier: ^2.1.1
+        version: 2.1.1
+      framer-motion:
+        specifier: ^12.23.25
+        version: 12.23.25(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      ioredis:
+        specifier: ^5.6.1
+        version: 5.10.0
+      langfuse:
+        specifier: ^3.38.6
+        version: 3.38.6
+      lucide-react:
+        specifier: ^0.552.0
+        version: 0.552.0(react@19.0.0)
+      motion:
+        specifier: ^12.23.24
+        version: 12.23.24(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      nanoid:
+        specifier: ^5.1.6
+        version: 5.1.6
+      next:
+        specifier: 16.2.3
+        version: 16.2.3(@babel/core@7.28.5)(@opentelemetry/api@1.9.0)(@playwright/test@1.56.1)(babel-plugin-macros@3.1.0)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      next-auth:
+        specifier: ^4.24.10
+        version: 4.24.13(next@16.2.3(@babel/core@7.28.5)(@opentelemetry/api@1.9.0)(@playwright/test@1.56.1)(babel-plugin-macros@3.1.0)(react-dom@19.0.0(react@19.0.0))(react@19.0.0))(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      next-themes:
+        specifier: ^0.4.6
+        version: 0.4.6(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      p-limit:
+        specifier: ^7.3.0
+        version: 7.3.0
+      pino:
+        specifier: ^10.1.0
+        version: 10.1.0
+      postgres:
+        specifier: ^3.4.5
+        version: 3.4.7
+      prom-client:
+        specifier: ^15.1.3
+        version: 15.1.3
+      radix-ui:
+        specifier: ^1.4.3
+        version: 1.4.3(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      react:
+        specifier: 19.0.0
+        version: 19.0.0
+      react-dom:
+        specifier: 19.0.0
+        version: 19.0.0(react@19.0.0)
+      recharts:
+        specifier: ^2.15.4
+        version: 2.15.4(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      rehype-raw:
+        specifier: ^7.0.0
+        version: 7.0.0
+      remark-gfm:
+        specifier: ^4.0.1
+        version: 4.0.1
+      server-only:
+        specifier: ^0.0.1
+        version: 0.0.1
+      siwe:
+        specifier: ^3.0.0
+        version: 3.0.0(ethers@5.7.2(bufferutil@4.0.9)(utf-8-validate@5.0.10))
+      tailwind-merge:
+        specifier: ^3.3.1
+        version: 3.3.1
+      tigerbeetle-node:
+        specifier: 0.16.76
+        version: 0.16.76
+      tw-animate-css:
+        specifier: ^1.4.0
+        version: 1.4.0
+      uuid:
+        specifier: ^13.0.0
+        version: 13.0.0
+      vaul:
+        specifier: ^1.1.2
+        version: 1.1.2(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      viem:
+        specifier: 2.39.3
+        version: 2.39.3(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6)
+      wagmi:
+        specifier: 2.19.5
+        version: 2.19.5(@tanstack/query-core@5.90.10)(@tanstack/react-query@5.90.10(react@19.0.0))(@types/react@19.2.7)(bufferutil@4.0.9)(fastestsmallesttextencoderdecoder@1.0.22)(immer@11.0.1)(ioredis@5.10.0)(react@19.0.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(viem@2.39.3(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.3.6)
+      zod:
+        specifier: ^4.1.12
+        version: 4.3.6
+      zustand:
+        specifier: ^5.0.9
+        version: 5.0.11(@types/react@19.2.7)(immer@11.0.1)(react@19.0.0)(use-sync-external-store@1.6.0(react@19.0.0))
+    devDependencies:
+      '@types/uuid':
+        specifier: ^11.0.0
+        version: 11.0.0
+
+  nodes/node-template/graphs:
+    dependencies:
+      '@cogni/langgraph-graphs':
+        specifier: workspace:*
+        version: link:../../../packages/langgraph-graphs
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(@swc/core@1.15.10)(jiti@2.6.1)(postcss@8.5.6)(tsx@4.20.6)(typescript@5.9.3)(yaml@2.8.3)
+      typescript:
+        specifier: ^5
+        version: 5.9.3
+      vitest:
+        specifier: ^4.0.9
+        version: 4.1.2(@opentelemetry/api@1.9.0)(@types/node@25.2.3)(happy-dom@20.9.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(jsdom@16.7.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(msw@2.12.1(@types/node@25.2.3)(typescript@5.9.3))(vite@7.2.1(@types/node@25.2.3)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.3))
+
+  nodes/node-template/packages/doltgres-schema:
+    dependencies:
+      '@cogni/knowledge-base':
+        specifier: workspace:*
+        version: link:../../../../packages/knowledge-base
+      drizzle-orm:
+        specifier: ^0.44.7
+        version: 0.44.7(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.17.1)(postgres@3.4.7)
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(@swc/core@1.15.10)(jiti@2.6.1)(postcss@8.5.6)(tsx@4.20.6)(typescript@5.9.3)(yaml@2.8.3)
+      typescript:
+        specifier: ^5
+        version: 5.9.3
+
+  nodes/operator/app:
+    dependencies:
+      '@assistant-ui/react':
+        specifier: ^0.12.10
+        version: 0.12.10(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(immer@11.0.1)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)(use-sync-external-store@1.6.0(react@19.0.0))
+      '@assistant-ui/react-ai-sdk':
+        specifier: ^1.3.7
+        version: 1.3.7(@assistant-ui/react@0.12.10(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(immer@11.0.1)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)(use-sync-external-store@1.6.0(react@19.0.0)))(@types/react@19.2.7)(assistant-cloud@0.1.17)(react@19.0.0)
+      '@assistant-ui/react-data-stream':
+        specifier: ^0.12.4
+        version: 0.12.4(@assistant-ui/react@0.12.10(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(immer@11.0.1)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)(use-sync-external-store@1.6.0(react@19.0.0)))(@types/react@19.2.7)(react@19.0.0)
+      '@assistant-ui/react-markdown':
+        specifier: ^0.12.3
+        version: 0.12.3(@assistant-ui/react@0.12.10(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(immer@11.0.1)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)(use-sync-external-store@1.6.0(react@19.0.0)))(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@auth/drizzle-adapter':
+        specifier: ^1.7.0
+        version: 1.11.1
+      '@cogni/ai-core':
+        specifier: workspace:*
+        version: link:../../../packages/ai-core
+      '@cogni/ai-tools':
+        specifier: workspace:*
+        version: link:../../../packages/ai-tools
+      '@cogni/aragon-osx':
+        specifier: workspace:*
+        version: link:../../../packages/aragon-osx
+      '@cogni/attribution-ledger':
+        specifier: workspace:*
+        version: link:../../../packages/attribution-ledger
+      '@cogni/cogni-contracts':
+        specifier: workspace:*
+        version: link:../../../packages/cogni-contracts
+      '@cogni/db-client':
+        specifier: workspace:*
+        version: link:../../../packages/db-client
+      '@cogni/db-schema':
+        specifier: workspace:*
+        version: link:../../../packages/db-schema
+      '@cogni/financial-ledger':
+        specifier: workspace:*
+        version: link:../../../packages/financial-ledger
+      '@cogni/ids':
+        specifier: workspace:*
+        version: link:../../../packages/ids
+      '@cogni/ingestion-core':
+        specifier: workspace:*
+        version: link:../../../packages/ingestion-core
+      '@cogni/knowledge-store':
+        specifier: workspace:*
+        version: link:../../../packages/knowledge-store
+      '@cogni/langgraph-graphs':
+        specifier: workspace:*
+        version: link:../../../packages/langgraph-graphs
+      '@cogni/node-app':
+        specifier: workspace:*
+        version: link:../../../packages/node-app
+      '@cogni/node-contracts':
+        specifier: workspace:*
+        version: link:../../../packages/node-contracts
+      '@cogni/node-core':
+        specifier: workspace:*
+        version: link:../../../packages/node-core
+      '@cogni/node-shared':
+        specifier: workspace:*
+        version: link:../../../packages/node-shared
+      '@cogni/node-streams':
+        specifier: workspace:*
+        version: link:../../../packages/node-streams
+      '@cogni/node-ui-kit':
+        specifier: workspace:*
+        version: link:../../../packages/node-ui-kit
+      '@cogni/operator-doltgres-schema':
+        specifier: workspace:*
+        version: link:../packages/doltgres-schema
+      '@cogni/repo-spec':
+        specifier: workspace:*
+        version: link:../../../packages/repo-spec
+      '@cogni/scheduler-core':
+        specifier: workspace:*
+        version: link:../../../packages/scheduler-core
+      '@cogni/work-items':
+        specifier: workspace:*
+        version: link:../../../packages/work-items
+      '@dnd-kit/core':
+        specifier: ^6.3.1
+        version: 6.3.1(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@dnd-kit/modifiers':
+        specifier: ^9.0.0
+        version: 9.0.0(@dnd-kit/core@6.3.1(react-dom@19.0.0(react@19.0.0))(react@19.0.0))(react@19.0.0)
+      '@dnd-kit/sortable':
+        specifier: ^10.0.0
+        version: 10.0.0(@dnd-kit/core@6.3.1(react-dom@19.0.0(react@19.0.0))(react@19.0.0))(react@19.0.0)
+      '@dnd-kit/utilities':
+        specifier: ^3.2.2
+        version: 3.2.2(react@19.0.0)
+      '@langchain/langgraph-sdk':
+        specifier: ^0.0.32
+        version: 0.0.32
+      '@octokit/auth-app':
+        specifier: ^7.1.4
+        version: 7.2.2
+      '@octokit/core':
+        specifier: ^6.1.4
+        version: 6.1.6
+      '@octokit/webhooks-methods':
+        specifier: ^6.0.0
+        version: 6.0.0
+      '@openai/codex':
+        specifier: ^0.116.0
+        version: 0.116.0
+      '@openai/codex-sdk':
+        specifier: ^0.116.0
+        version: 0.116.0
+      '@opentelemetry/api':
+        specifier: ^1.9.0
+        version: 1.9.0
+      '@opentelemetry/sdk-node':
+        specifier: ^0.208.0
+        version: 0.208.0(@opentelemetry/api@1.9.0)
+      '@radix-ui/react-avatar':
+        specifier: ^1.1.11
+        version: 1.1.11(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-checkbox':
+        specifier: ^1.3.3
+        version: 1.3.3(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-dialog':
+        specifier: ^1.1.15
+        version: 1.1.15(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-dropdown-menu':
+        specifier: ^2.1.16
+        version: 2.1.16(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-popover':
+        specifier: ^1.1.15
+        version: 1.1.15(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-progress':
+        specifier: ^1.1.8
+        version: 1.1.8(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-scroll-area':
+        specifier: ^1.2.10
+        version: 1.2.10(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-select':
+        specifier: ^2.2.6
+        version: 2.2.6(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-separator':
+        specifier: ^1.1.8
+        version: 1.1.8(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-slot':
+        specifier: ^1.2.4
+        version: 1.2.4(@types/react@19.2.7)(react@19.0.0)
+      '@radix-ui/react-toggle':
+        specifier: ^1.1.10
+        version: 1.1.10(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-toggle-group':
+        specifier: ^1.1.11
+        version: 1.1.11(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-tooltip':
+        specifier: ^1.2.8
+        version: 1.2.8(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@rainbow-me/rainbowkit':
+        specifier: 2.2.9
+        version: 2.2.9(@tanstack/react-query@5.90.10(react@19.0.0))(@types/react@19.2.7)(babel-plugin-macros@3.1.0)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)(typescript@5.9.3)(viem@2.39.3(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6))(wagmi@2.19.5(@tanstack/query-core@5.90.10)(@tanstack/react-query@5.90.10(react@19.0.0))(@types/react@19.2.7)(bufferutil@4.0.9)(fastestsmallesttextencoderdecoder@1.0.22)(immer@11.0.1)(ioredis@5.10.0)(react@19.0.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(viem@2.39.3(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.3.6))
+      '@rainbow-me/rainbowkit-siwe-next-auth':
+        specifier: ^0.5.0
+        version: 0.5.0(@rainbow-me/rainbowkit@2.2.9(@tanstack/react-query@5.90.10(react@19.0.0))(@types/react@19.2.7)(babel-plugin-macros@3.1.0)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)(typescript@5.9.3)(viem@2.39.3(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6))(wagmi@2.19.5(@tanstack/query-core@5.90.10)(@tanstack/react-query@5.90.10(react@19.0.0))(@types/react@19.2.7)(bufferutil@4.0.9)(fastestsmallesttextencoderdecoder@1.0.22)(immer@11.0.1)(ioredis@5.10.0)(react@19.0.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(viem@2.39.3(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.3.6)))(next-auth@4.24.13(next@16.2.3(@babel/core@7.28.5)(@opentelemetry/api@1.9.0)(@playwright/test@1.56.1)(babel-plugin-macros@3.1.0)(react-dom@19.0.0(react@19.0.0))(react@19.0.0))(react-dom@19.0.0(react@19.0.0))(react@19.0.0))(react@19.0.0)
+      '@react-three/fiber':
+        specifier: ^9.5.0
+        version: 9.5.0(@types/react@19.2.7)(immer@11.0.1)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)(three@0.183.2)
+      '@tanstack/react-query':
+        specifier: 5.90.10
+        version: 5.90.10(react@19.0.0)
+      '@tanstack/react-table':
+        specifier: ^8.21.3
+        version: 8.21.3(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@tanstack/react-virtual':
+        specifier: ^3.13.23
+        version: 3.13.23(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@temporalio/client':
+        specifier: ^1.14.1
+        version: 1.14.1
+      '@ts-rest/core':
+        specifier: ^3.52.1
+        version: 3.52.1(@types/node@25.2.3)(zod@4.3.6)
+      '@ts-rest/open-api':
+        specifier: ^3.52.1
+        version: 3.52.1(@ts-rest/core@3.52.1(@types/node@25.2.3)(zod@4.3.6))(zod@4.3.6)
+      '@tsparticles/engine':
+        specifier: ^3.9.1
+        version: 3.9.1
+      '@tsparticles/react':
+        specifier: ^3.0.0
+        version: 3.0.0(@tsparticles/engine@3.9.1)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@tsparticles/slim':
+        specifier: ^3.9.1
+        version: 3.9.1
+      ai:
+        specifier: ^6.0.79
+        version: 6.0.85(zod@4.3.6)
+      class-variance-authority:
+        specifier: ^0.7.1
+        version: 0.7.1
+      clsx:
+        specifier: ^2.1.1
+        version: 2.1.1
+      cmdk:
+        specifier: ^1.1.1
+        version: 1.1.1(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      drizzle-orm:
+        specifier: ^0.44.7
+        version: 0.44.7(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.17.1)(postgres@3.4.7)
+      ethers:
+        specifier: 5.7.2
+        version: 5.7.2(bufferutil@4.0.9)(utf-8-validate@5.0.10)
+      eventsource-parser:
+        specifier: ^3.0.6
+        version: 3.0.6
+      fast-safe-stringify:
+        specifier: ^2.1.1
+        version: 2.1.1
+      framer-motion:
+        specifier: ^12.23.25
+        version: 12.23.25(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      ioredis:
+        specifier: ^5.6.1
+        version: 5.10.0
+      langfuse:
+        specifier: ^3.38.6
+        version: 3.38.6
+      lucide-react:
+        specifier: ^0.552.0
+        version: 0.552.0(react@19.0.0)
+      motion:
+        specifier: ^12.23.24
+        version: 12.23.24(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      nanoid:
+        specifier: ^5.1.6
+        version: 5.1.6
+      next:
+        specifier: 16.2.3
+        version: 16.2.3(@babel/core@7.28.5)(@opentelemetry/api@1.9.0)(@playwright/test@1.56.1)(babel-plugin-macros@3.1.0)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      next-auth:
+        specifier: ^4.24.10
+        version: 4.24.13(next@16.2.3(@babel/core@7.28.5)(@opentelemetry/api@1.9.0)(@playwright/test@1.56.1)(babel-plugin-macros@3.1.0)(react-dom@19.0.0(react@19.0.0))(react@19.0.0))(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      next-themes:
+        specifier: ^0.4.6
+        version: 0.4.6(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      p-limit:
+        specifier: ^7.3.0
+        version: 7.3.0
+      pino:
+        specifier: ^10.1.0
+        version: 10.1.0
+      postgres:
+        specifier: ^3.4.5
+        version: 3.4.7
+      prom-client:
+        specifier: ^15.1.3
+        version: 15.1.3
+      radix-ui:
+        specifier: ^1.4.3
+        version: 1.4.3(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      react:
+        specifier: 19.0.0
+        version: 19.0.0
+      react-dom:
+        specifier: 19.0.0
+        version: 19.0.0(react@19.0.0)
+      react-markdown:
+        specifier: ^10.1.0
+        version: 10.1.0(@types/react@19.2.7)(react@19.0.0)
+      recharts:
+        specifier: ^2.15.4
+        version: 2.15.4(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      rehype-raw:
+        specifier: ^7.0.0
+        version: 7.0.0
+      remark-gfm:
+        specifier: ^4.0.1
+        version: 4.0.1
+      server-only:
+        specifier: ^0.0.1
+        version: 0.0.1
+      siwe:
+        specifier: ^3.0.0
+        version: 3.0.0(ethers@5.7.2(bufferutil@4.0.9)(utf-8-validate@5.0.10))
+      tailwind-merge:
+        specifier: ^3.3.1
+        version: 3.3.1
+      three:
+        specifier: ^0.183.2
+        version: 0.183.2
+      tigerbeetle-node:
+        specifier: 0.16.76
+        version: 0.16.76
+      tw-animate-css:
+        specifier: ^1.4.0
+        version: 1.4.0
+      uuid:
+        specifier: ^13.0.0
+        version: 13.0.0
+      vaul:
+        specifier: ^1.1.2
+        version: 1.1.2(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      viem:
+        specifier: 2.39.3
+        version: 2.39.3(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6)
+      wagmi:
+        specifier: 2.19.5
+        version: 2.19.5(@tanstack/query-core@5.90.10)(@tanstack/react-query@5.90.10(react@19.0.0))(@types/react@19.2.7)(bufferutil@4.0.9)(fastestsmallesttextencoderdecoder@1.0.22)(immer@11.0.1)(ioredis@5.10.0)(react@19.0.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(viem@2.39.3(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.3.6)
+      zod:
+        specifier: ^4.1.12
+        version: 4.3.6
+      zustand:
+        specifier: ^5.0.9
+        version: 5.0.11(@types/react@19.2.7)(immer@11.0.1)(react@19.0.0)(use-sync-external-store@1.6.0(react@19.0.0))
+    devDependencies:
+      '@types/three':
+        specifier: ^0.183.1
+        version: 0.183.1
+      '@types/uuid':
+        specifier: ^11.0.0
+        version: 11.0.0
+
+  nodes/operator/packages/doltgres-schema:
+    dependencies:
+      '@cogni/knowledge-base':
+        specifier: workspace:*
+        version: link:../../../../packages/knowledge-base
+      drizzle-orm:
+        specifier: ^0.44.7
+        version: 0.44.7(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.17.1)(postgres@3.4.7)
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(@swc/core@1.15.10)(jiti@2.6.1)(postcss@8.5.6)(tsx@4.20.6)(typescript@5.9.3)(yaml@2.8.3)
+      typescript:
+        specifier: ^5
+        version: 5.9.3
+
+  nodes/resy/app:
+    dependencies:
+      '@assistant-ui/react':
+        specifier: ^0.12.10
+        version: 0.12.10(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(immer@11.0.1)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)(use-sync-external-store@1.6.0(react@19.0.0))
+      '@assistant-ui/react-ai-sdk':
+        specifier: ^1.3.7
+        version: 1.3.7(@assistant-ui/react@0.12.10(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(immer@11.0.1)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)(use-sync-external-store@1.6.0(react@19.0.0)))(@types/react@19.2.7)(assistant-cloud@0.1.17)(react@19.0.0)
+      '@assistant-ui/react-data-stream':
+        specifier: ^0.12.4
+        version: 0.12.4(@assistant-ui/react@0.12.10(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(immer@11.0.1)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)(use-sync-external-store@1.6.0(react@19.0.0)))(@types/react@19.2.7)(react@19.0.0)
+      '@assistant-ui/react-markdown':
+        specifier: ^0.12.3
+        version: 0.12.3(@assistant-ui/react@0.12.10(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(immer@11.0.1)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)(use-sync-external-store@1.6.0(react@19.0.0)))(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@auth/drizzle-adapter':
+        specifier: ^1.7.0
+        version: 1.11.1
+      '@cogni/ai-core':
+        specifier: workspace:*
+        version: link:../../../packages/ai-core
+      '@cogni/ai-tools':
+        specifier: workspace:*
+        version: link:../../../packages/ai-tools
+      '@cogni/aragon-osx':
+        specifier: workspace:*
+        version: link:../../../packages/aragon-osx
+      '@cogni/attribution-ledger':
+        specifier: workspace:*
+        version: link:../../../packages/attribution-ledger
+      '@cogni/cogni-contracts':
+        specifier: workspace:*
+        version: link:../../../packages/cogni-contracts
+      '@cogni/db-client':
+        specifier: workspace:*
+        version: link:../../../packages/db-client
+      '@cogni/db-schema':
+        specifier: workspace:*
+        version: link:../../../packages/db-schema
+      '@cogni/financial-ledger':
+        specifier: workspace:*
+        version: link:../../../packages/financial-ledger
+      '@cogni/ids':
+        specifier: workspace:*
+        version: link:../../../packages/ids
+      '@cogni/ingestion-core':
+        specifier: workspace:*
+        version: link:../../../packages/ingestion-core
+      '@cogni/knowledge-store':
+        specifier: workspace:*
+        version: link:../../../packages/knowledge-store
+      '@cogni/langgraph-graphs':
+        specifier: workspace:*
+        version: link:../../../packages/langgraph-graphs
+      '@cogni/node-app':
+        specifier: workspace:*
+        version: link:../../../packages/node-app
+      '@cogni/node-contracts':
+        specifier: workspace:*
+        version: link:../../../packages/node-contracts
+      '@cogni/node-core':
+        specifier: workspace:*
+        version: link:../../../packages/node-core
+      '@cogni/node-shared':
+        specifier: workspace:*
+        version: link:../../../packages/node-shared
+      '@cogni/node-streams':
+        specifier: workspace:*
+        version: link:../../../packages/node-streams
+      '@cogni/node-ui-kit':
+        specifier: workspace:*
+        version: link:../../../packages/node-ui-kit
+      '@cogni/repo-spec':
+        specifier: workspace:*
+        version: link:../../../packages/repo-spec
+      '@cogni/scheduler-core':
+        specifier: workspace:*
+        version: link:../../../packages/scheduler-core
+      '@cogni/work-items':
+        specifier: workspace:*
+        version: link:../../../packages/work-items
+      '@dnd-kit/core':
+        specifier: ^6.3.1
+        version: 6.3.1(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@dnd-kit/modifiers':
+        specifier: ^9.0.0
+        version: 9.0.0(@dnd-kit/core@6.3.1(react-dom@19.0.0(react@19.0.0))(react@19.0.0))(react@19.0.0)
+      '@dnd-kit/sortable':
+        specifier: ^10.0.0
+        version: 10.0.0(@dnd-kit/core@6.3.1(react-dom@19.0.0(react@19.0.0))(react@19.0.0))(react@19.0.0)
+      '@dnd-kit/utilities':
+        specifier: ^3.2.2
+        version: 3.2.2(react@19.0.0)
+      '@langchain/langgraph-sdk':
+        specifier: ^0.0.32
+        version: 0.0.32
+      '@octokit/auth-app':
+        specifier: ^7.1.4
+        version: 7.2.2
+      '@octokit/core':
+        specifier: ^6.1.4
+        version: 6.1.6
+      '@octokit/webhooks-methods':
+        specifier: ^6.0.0
+        version: 6.0.0
+      '@openai/codex':
+        specifier: ^0.116.0
+        version: 0.116.0
+      '@openai/codex-sdk':
+        specifier: ^0.116.0
+        version: 0.116.0
+      '@opentelemetry/api':
+        specifier: ^1.9.0
+        version: 1.9.0
+      '@opentelemetry/sdk-node':
+        specifier: ^0.208.0
+        version: 0.208.0(@opentelemetry/api@1.9.0)
+      '@radix-ui/react-avatar':
+        specifier: ^1.1.11
+        version: 1.1.11(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-checkbox':
+        specifier: ^1.3.3
+        version: 1.3.3(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-dialog':
+        specifier: ^1.1.15
+        version: 1.1.15(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-dropdown-menu':
+        specifier: ^2.1.16
+        version: 2.1.16(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-popover':
+        specifier: ^1.1.15
+        version: 1.1.15(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-progress':
+        specifier: ^1.1.8
+        version: 1.1.8(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-scroll-area':
+        specifier: ^1.2.10
+        version: 1.2.10(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-select':
+        specifier: ^2.2.6
+        version: 2.2.6(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-separator':
+        specifier: ^1.1.8
+        version: 1.1.8(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-slot':
+        specifier: ^1.2.4
+        version: 1.2.4(@types/react@19.2.7)(react@19.0.0)
+      '@radix-ui/react-toggle':
+        specifier: ^1.1.10
+        version: 1.1.10(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-toggle-group':
+        specifier: ^1.1.11
+        version: 1.1.11(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-tooltip':
+        specifier: ^1.2.8
+        version: 1.2.8(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@rainbow-me/rainbowkit':
+        specifier: 2.2.9
+        version: 2.2.9(@tanstack/react-query@5.90.10(react@19.0.0))(@types/react@19.2.7)(babel-plugin-macros@3.1.0)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)(typescript@5.9.3)(viem@2.39.3(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6))(wagmi@2.19.5(@tanstack/query-core@5.90.10)(@tanstack/react-query@5.90.10(react@19.0.0))(@types/react@19.2.7)(bufferutil@4.0.9)(fastestsmallesttextencoderdecoder@1.0.22)(immer@11.0.1)(ioredis@5.10.0)(react@19.0.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(viem@2.39.3(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.3.6))
+      '@rainbow-me/rainbowkit-siwe-next-auth':
+        specifier: ^0.5.0
+        version: 0.5.0(@rainbow-me/rainbowkit@2.2.9(@tanstack/react-query@5.90.10(react@19.0.0))(@types/react@19.2.7)(babel-plugin-macros@3.1.0)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)(typescript@5.9.3)(viem@2.39.3(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6))(wagmi@2.19.5(@tanstack/query-core@5.90.10)(@tanstack/react-query@5.90.10(react@19.0.0))(@types/react@19.2.7)(bufferutil@4.0.9)(fastestsmallesttextencoderdecoder@1.0.22)(immer@11.0.1)(ioredis@5.10.0)(react@19.0.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(viem@2.39.3(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.3.6)))(next-auth@4.24.13(next@16.2.3(@babel/core@7.28.5)(@opentelemetry/api@1.9.0)(@playwright/test@1.56.1)(babel-plugin-macros@3.1.0)(react-dom@19.0.0(react@19.0.0))(react@19.0.0))(react-dom@19.0.0(react@19.0.0))(react@19.0.0))(react@19.0.0)
+      '@tanstack/react-query':
+        specifier: 5.90.10
+        version: 5.90.10(react@19.0.0)
+      '@tanstack/react-table':
+        specifier: ^8.21.3
+        version: 8.21.3(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@tanstack/react-virtual':
+        specifier: ^3.13.23
+        version: 3.13.23(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@temporalio/client':
+        specifier: ^1.14.1
+        version: 1.14.1
+      '@ts-rest/core':
+        specifier: ^3.52.1
+        version: 3.52.1(@types/node@25.2.3)(zod@4.3.6)
+      '@ts-rest/open-api':
+        specifier: ^3.52.1
+        version: 3.52.1(@ts-rest/core@3.52.1(@types/node@25.2.3)(zod@4.3.6))(zod@4.3.6)
+      '@tsparticles/engine':
+        specifier: ^3.9.1
+        version: 3.9.1
+      '@tsparticles/react':
+        specifier: ^3.0.0
+        version: 3.0.0(@tsparticles/engine@3.9.1)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@tsparticles/slim':
+        specifier: ^3.9.1
+        version: 3.9.1
+      ai:
+        specifier: ^6.0.79
+        version: 6.0.85(zod@4.3.6)
+      class-variance-authority:
+        specifier: ^0.7.1
+        version: 0.7.1
+      clsx:
+        specifier: ^2.1.1
+        version: 2.1.1
+      cmdk:
+        specifier: ^1.1.1
+        version: 1.1.1(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      drizzle-orm:
+        specifier: ^0.44.7
+        version: 0.44.7(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.17.1)(postgres@3.4.7)
+      ethers:
+        specifier: 5.7.2
+        version: 5.7.2(bufferutil@4.0.9)(utf-8-validate@5.0.10)
+      eventsource-parser:
+        specifier: ^3.0.6
+        version: 3.0.6
+      fast-safe-stringify:
+        specifier: ^2.1.1
+        version: 2.1.1
+      framer-motion:
+        specifier: ^12.23.25
+        version: 12.23.25(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      ioredis:
+        specifier: ^5.6.1
+        version: 5.10.0
+      langfuse:
+        specifier: ^3.38.6
+        version: 3.38.6
+      lucide-react:
+        specifier: ^0.552.0
+        version: 0.552.0(react@19.0.0)
+      motion:
+        specifier: ^12.23.24
+        version: 12.23.24(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      nanoid:
+        specifier: ^5.1.6
+        version: 5.1.6
+      next:
+        specifier: 16.2.3
+        version: 16.2.3(@babel/core@7.28.5)(@opentelemetry/api@1.9.0)(@playwright/test@1.56.1)(babel-plugin-macros@3.1.0)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      next-auth:
+        specifier: ^4.24.10
+        version: 4.24.13(next@16.2.3(@babel/core@7.28.5)(@opentelemetry/api@1.9.0)(@playwright/test@1.56.1)(babel-plugin-macros@3.1.0)(react-dom@19.0.0(react@19.0.0))(react@19.0.0))(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      next-themes:
+        specifier: ^0.4.6
+        version: 0.4.6(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      p-limit:
+        specifier: ^7.3.0
+        version: 7.3.0
+      pino:
+        specifier: ^10.1.0
+        version: 10.1.0
+      postgres:
+        specifier: ^3.4.5
+        version: 3.4.7
+      prom-client:
+        specifier: ^15.1.3
+        version: 15.1.3
+      radix-ui:
+        specifier: ^1.4.3
+        version: 1.4.3(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      react:
+        specifier: 19.0.0
+        version: 19.0.0
+      react-dom:
+        specifier: 19.0.0
+        version: 19.0.0(react@19.0.0)
+      recharts:
+        specifier: ^2.15.4
+        version: 2.15.4(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      rehype-raw:
+        specifier: ^7.0.0
+        version: 7.0.0
+      remark-gfm:
+        specifier: ^4.0.1
+        version: 4.0.1
+      server-only:
+        specifier: ^0.0.1
+        version: 0.0.1
+      siwe:
+        specifier: ^3.0.0
+        version: 3.0.0(ethers@5.7.2(bufferutil@4.0.9)(utf-8-validate@5.0.10))
+      tailwind-merge:
+        specifier: ^3.3.1
+        version: 3.3.1
+      tigerbeetle-node:
+        specifier: 0.16.76
+        version: 0.16.76
+      tw-animate-css:
+        specifier: ^1.4.0
+        version: 1.4.0
+      uuid:
+        specifier: ^13.0.0
+        version: 13.0.0
+      vaul:
+        specifier: ^1.1.2
+        version: 1.1.2(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      viem:
+        specifier: 2.39.3
+        version: 2.39.3(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6)
+      wagmi:
+        specifier: 2.19.5
+        version: 2.19.5(@tanstack/query-core@5.90.10)(@tanstack/react-query@5.90.10(react@19.0.0))(@types/react@19.2.7)(bufferutil@4.0.9)(fastestsmallesttextencoderdecoder@1.0.22)(immer@11.0.1)(ioredis@5.10.0)(react@19.0.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(viem@2.39.3(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.3.6)
+      zod:
+        specifier: ^4.1.12
+        version: 4.3.6
+      zustand:
+        specifier: ^5.0.9
+        version: 5.0.11(@types/react@19.2.7)(immer@11.0.1)(react@19.0.0)(use-sync-external-store@1.6.0(react@19.0.0))
+    devDependencies:
+      '@types/uuid':
+        specifier: ^11.0.0
+        version: 11.0.0
+
+  nodes/resy/graphs:
+    dependencies:
+      '@cogni/langgraph-graphs':
+        specifier: workspace:*
+        version: link:../../../packages/langgraph-graphs
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(@swc/core@1.15.10)(jiti@2.6.1)(postcss@8.5.6)(tsx@4.20.6)(typescript@5.9.3)(yaml@2.8.3)
+      typescript:
+        specifier: ^5
+        version: 5.9.3
+      vitest:
+        specifier: ^4.0.9
+        version: 4.1.2(@opentelemetry/api@1.9.0)(@types/node@25.2.3)(happy-dom@20.9.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(jsdom@16.7.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(msw@2.12.1(@types/node@25.2.3)(typescript@5.9.3))(vite@7.2.1(@types/node@25.2.3)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.3))
+
+  packages/ai-core:
+    dependencies:
+      '@types/json-schema':
+        specifier: ^7.0.15
+        version: 7.0.15
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(@swc/core@1.15.10)(jiti@2.6.1)(postcss@8.5.6)(tsx@4.20.6)(typescript@5.9.3)(yaml@2.8.3)
+      typescript:
+        specifier: ^5
+        version: 5.9.3
+
+  packages/ai-tools:
+    dependencies:
+      '@cogni/ai-core':
+        specifier: workspace:*
+        version: link:../ai-core
+      '@types/json-schema':
+        specifier: ^7.0.15
+        version: 7.0.15
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
+      zod-to-json-schema:
+        specifier: ^3.24.1
+        version: 3.24.6(zod@3.25.76)
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(@swc/core@1.15.10)(jiti@2.6.1)(postcss@8.5.6)(tsx@4.20.6)(typescript@5.9.3)(yaml@2.8.3)
+      typescript:
+        specifier: ^5
+        version: 5.9.3
+
+  packages/aragon-osx:
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(@swc/core@1.15.10)(jiti@2.6.1)(postcss@8.5.6)(tsx@4.20.6)(typescript@5.9.3)(yaml@2.8.3)
+      typescript:
+        specifier: ^5
+        version: 5.9.3
+      viem:
+        specifier: ^2.0.0
+        version: 2.39.3(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6)
+
+  packages/attribution-ledger:
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(@swc/core@1.15.10)(jiti@2.6.1)(postcss@8.5.6)(tsx@4.20.6)(typescript@5.9.3)(yaml@2.8.3)
+      typescript:
+        specifier: ^5
+        version: 5.9.3
+
+  packages/attribution-pipeline-contracts:
+    dependencies:
+      '@cogni/attribution-ledger':
+        specifier: workspace:*
+        version: link:../attribution-ledger
+      zod:
+        specifier: ^4.1.12
+        version: 4.3.6
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(@swc/core@1.15.10)(jiti@2.6.1)(postcss@8.5.6)(tsx@4.20.6)(typescript@5.9.3)(yaml@2.8.3)
+      typescript:
+        specifier: ^5
+        version: 5.9.3
+      vite-tsconfig-paths:
+        specifier: ^4.3.1
+        version: 4.3.2(typescript@5.9.3)(vite@7.2.1(@types/node@25.2.3)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.3))
+      vitest:
+        specifier: ^3.0.5
+        version: 3.2.4(@types/debug@4.1.12)(@types/node@25.2.3)(happy-dom@20.9.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(jiti@2.6.1)(jsdom@16.7.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(lightningcss@1.30.2)(msw@2.12.1(@types/node@25.2.3)(typescript@5.9.3))(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.3)
+
+  packages/attribution-pipeline-plugins:
+    dependencies:
+      '@cogni/attribution-ledger':
+        specifier: workspace:*
+        version: link:../attribution-ledger
+      '@cogni/attribution-pipeline-contracts':
+        specifier: workspace:*
+        version: link:../attribution-pipeline-contracts
+      zod:
+        specifier: ^4.1.12
+        version: 4.3.6
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(@swc/core@1.15.10)(jiti@2.6.1)(postcss@8.5.6)(tsx@4.20.6)(typescript@5.9.3)(yaml@2.8.3)
+      typescript:
+        specifier: ^5
+        version: 5.9.3
+      vite-tsconfig-paths:
+        specifier: ^4.3.1
+        version: 4.3.2(typescript@5.9.3)(vite@7.2.1(@types/node@25.2.3)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.3))
+      vitest:
+        specifier: ^3.0.5
+        version: 3.2.4(@types/debug@4.1.12)(@types/node@25.2.3)(happy-dom@20.9.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(jiti@2.6.1)(jsdom@16.7.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(lightningcss@1.30.2)(msw@2.12.1(@types/node@25.2.3)(typescript@5.9.3))(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.3)
+
+  packages/cogni-contracts:
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(@swc/core@1.15.10)(jiti@2.6.1)(postcss@8.5.6)(tsx@4.20.6)(typescript@5.9.3)(yaml@2.8.3)
+      typescript:
+        specifier: ^5
+        version: 5.9.3
+      viem:
+        specifier: 2.39.3
+        version: 2.39.3(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6)
+
+  packages/db-client:
+    dependencies:
+      '@cogni/ai-core':
+        specifier: workspace:*
+        version: link:../ai-core
+      '@cogni/attribution-ledger':
+        specifier: workspace:*
+        version: link:../attribution-ledger
+      '@cogni/db-schema':
+        specifier: workspace:*
+        version: link:../db-schema
+      '@cogni/ids':
+        specifier: workspace:*
+        version: link:../ids
+      '@cogni/scheduler-core':
+        specifier: workspace:*
+        version: link:../scheduler-core
+      drizzle-orm:
+        specifier: ^0.44.7
+        version: 0.44.7(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.17.1)(postgres@3.4.7)
+      postgres:
+        specifier: ^3.4.5
+        version: 3.4.7
+      type-fest:
+        specifier: ^5.4.1
+        version: 5.4.1
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(@swc/core@1.15.10)(jiti@2.6.1)(postcss@8.5.6)(tsx@4.20.6)(typescript@5.9.3)(yaml@2.8.3)
+      typescript:
+        specifier: ^5
+        version: 5.9.3
+
+  packages/db-schema:
+    dependencies:
+      drizzle-orm:
+        specifier: ^0.44.7
+        version: 0.44.7(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.17.1)(postgres@3.4.7)
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(@swc/core@1.15.10)(jiti@2.6.1)(postcss@8.5.6)(tsx@4.20.6)(typescript@5.9.3)(yaml@2.8.3)
+      typescript:
+        specifier: ^5
+        version: 5.9.3
+
+  packages/dns-ops:
+    dependencies:
+      fast-xml-parser:
+        specifier: ^5.2.0
+        version: 5.5.9
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(@swc/core@1.15.10)(jiti@2.6.1)(postcss@8.5.6)(tsx@4.20.6)(typescript@5.9.3)(yaml@2.8.3)
+      typescript:
+        specifier: ^5
+        version: 5.9.3
+
+  packages/financial-ledger:
+    dependencies:
+      tigerbeetle-node:
+        specifier: 0.16.76
+        version: 0.16.76
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(@swc/core@1.15.10)(jiti@2.6.1)(postcss@8.5.6)(tsx@4.20.6)(typescript@5.9.3)(yaml@2.8.3)
+      typescript:
+        specifier: ^5
+        version: 5.9.3
+
+  packages/graph-execution-core:
+    dependencies:
+      '@cogni/ai-core':
+        specifier: workspace:*
+        version: link:../ai-core
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(@swc/core@1.15.10)(jiti@2.6.1)(postcss@8.5.6)(tsx@4.20.6)(typescript@5.9.3)(yaml@2.8.3)
+      typescript:
+        specifier: ^5
+        version: 5.9.3
+
+  packages/graph-execution-host:
+    dependencies:
+      '@cogni/ai-core':
+        specifier: workspace:*
+        version: link:../ai-core
+      '@cogni/graph-execution-core':
+        specifier: workspace:*
+        version: link:../graph-execution-core
+      '@cogni/node-shared':
+        specifier: workspace:*
+        version: link:../node-shared
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(@swc/core@1.15.10)(jiti@2.6.1)(postcss@8.5.6)(tsx@4.20.6)(typescript@5.9.3)(yaml@2.8.3)
+      typescript:
+        specifier: ^5
+        version: 5.9.3
+
+  packages/ids:
+    dependencies:
+      type-fest:
+        specifier: ^5.4.1
+        version: 5.4.1
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(@swc/core@1.15.10)(jiti@2.6.1)(postcss@8.5.6)(tsx@4.20.6)(typescript@5.9.3)(yaml@2.8.3)
+      typescript:
+        specifier: ^5
+        version: 5.9.3
+
+  packages/ingestion-core:
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(@swc/core@1.15.10)(jiti@2.6.1)(postcss@8.5.6)(tsx@4.20.6)(typescript@5.9.3)(yaml@2.8.3)
+      typescript:
+        specifier: ^5
+        version: 5.9.3
+
+  packages/knowledge-base:
+    dependencies:
+      '@cogni/knowledge-store':
+        specifier: workspace:*
+        version: link:../knowledge-store
+      drizzle-orm:
+        specifier: ^0.44.7
+        version: 0.44.7(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.17.1)(postgres@3.4.7)
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(@swc/core@1.15.10)(jiti@2.6.1)(postcss@8.5.6)(tsx@4.20.6)(typescript@5.9.3)(yaml@2.8.3)
+      typescript:
+        specifier: ^5
+        version: 5.9.3
+
+  packages/knowledge-store:
+    dependencies:
+      '@cogni/ai-tools':
+        specifier: workspace:*
+        version: link:../ai-tools
+      zod:
+        specifier: ^4.1.12
+        version: 4.3.6
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(@swc/core@1.15.10)(jiti@2.6.1)(postcss@8.5.6)(tsx@4.20.6)(typescript@5.9.3)(yaml@2.8.3)
+      typescript:
+        specifier: ^5
+        version: 5.9.3
+
+  packages/langgraph-graphs:
+    dependencies:
+      '@cogni/ai-core':
+        specifier: workspace:*
+        version: link:../ai-core
+      '@cogni/ai-tools':
+        specifier: workspace:*
+        version: link:../ai-tools
+      '@langchain/core':
+        specifier: ^1.1.17
+        version: 1.1.17(@opentelemetry/api@1.9.0)(@opentelemetry/exporter-trace-otlp-proto@0.208.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.2.0(@opentelemetry/api@1.9.0))(openai@6.26.0(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@3.25.76))
+      '@langchain/langgraph':
+        specifier: ^1.0.7
+        version: 1.0.7(@langchain/core@1.1.17(@opentelemetry/api@1.9.0)(@opentelemetry/exporter-trace-otlp-proto@0.208.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.2.0(@opentelemetry/api@1.9.0))(openai@6.26.0(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@3.25.76)))(react-dom@19.0.0(react@19.0.0))(react@19.0.0)(zod-to-json-schema@3.25.2(zod@3.25.76))(zod@3.25.76)
+      '@langchain/mcp-adapters':
+        specifier: ^1.1.3
+        version: 1.1.3(@cfworker/json-schema@4.1.1)(@langchain/core@1.1.17(@opentelemetry/api@1.9.0)(@opentelemetry/exporter-trace-otlp-proto@0.208.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.2.0(@opentelemetry/api@1.9.0))(openai@6.26.0(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@3.25.76)))(@langchain/langgraph@1.0.7(@langchain/core@1.1.17(@opentelemetry/api@1.9.0)(@opentelemetry/exporter-trace-otlp-proto@0.208.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.2.0(@opentelemetry/api@1.9.0))(openai@6.26.0(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@3.25.76)))(react-dom@19.0.0(react@19.0.0))(react@19.0.0)(zod-to-json-schema@3.25.2(zod@3.25.76))(zod@3.25.76))
+      '@langchain/openai':
+        specifier: ^1.2.2
+        version: 1.2.2(@langchain/core@1.1.17(@opentelemetry/api@1.9.0)(@opentelemetry/exporter-trace-otlp-proto@0.208.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.2.0(@opentelemetry/api@1.9.0))(openai@6.26.0(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@3.25.76)))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))
+      langchain:
+        specifier: ^1.2.0
+        version: 1.2.13(@langchain/core@1.1.17(@opentelemetry/api@1.9.0)(@opentelemetry/exporter-trace-otlp-proto@0.208.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.2.0(@opentelemetry/api@1.9.0))(openai@6.26.0(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@3.25.76)))(@opentelemetry/api@1.9.0)(@opentelemetry/exporter-trace-otlp-proto@0.208.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.2.0(@opentelemetry/api@1.9.0))(openai@6.26.0(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@3.25.76))(react-dom@19.0.0(react@19.0.0))(react@19.0.0)(zod-to-json-schema@3.25.2(zod@3.25.76))
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
+    devDependencies:
+      '@langchain/langgraph-cli':
+        specifier: ^1.1.11
+        version: 1.1.11(dmnqtlu3mmyt7vssew2zqrkxwe)
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(@swc/core@1.15.10)(jiti@2.6.1)(postcss@8.5.6)(tsx@4.20.6)(typescript@5.9.3)(yaml@2.8.3)
+      typescript:
+        specifier: ^5
+        version: 5.9.3
+
+  packages/node-app:
+    dependencies:
+      '@rainbow-me/rainbowkit':
+        specifier: '>=2'
+        version: 2.2.9(@tanstack/react-query@5.90.10(react@19.0.0))(@types/react@19.2.7)(babel-plugin-macros@3.1.0)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)(typescript@5.9.3)(viem@2.48.1(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6))(wagmi@2.19.5(@tanstack/query-core@5.90.10)(@tanstack/react-query@5.90.10(react@19.0.0))(@types/react@19.2.7)(bufferutil@4.0.9)(fastestsmallesttextencoderdecoder@1.0.22)(immer@11.0.1)(react@19.0.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(viem@2.48.1(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6))(ws@8.18.3(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.3.6))
+      '@tanstack/react-query':
+        specifier: '>=5'
+        version: 5.90.10(react@19.0.0)
+      next-auth:
+        specifier: '>=4'
+        version: 4.24.13(next@16.2.3(@babel/core@7.28.5)(@opentelemetry/api@1.9.0)(@playwright/test@1.56.1)(babel-plugin-macros@3.1.0)(react-dom@19.0.0(react@19.0.0))(react@19.0.0))(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      react:
+        specifier: '>=19'
+        version: 19.0.0
+
+  packages/node-contracts:
+    dependencies:
+      '@cogni/ai-core':
+        specifier: workspace:*
+        version: link:../ai-core
+      '@cogni/aragon-osx':
+        specifier: workspace:*
+        version: link:../aragon-osx
+      '@cogni/knowledge-store':
+        specifier: workspace:*
+        version: link:../knowledge-store
+      '@cogni/node-core':
+        specifier: workspace:*
+        version: link:../node-core
+      '@ts-rest/core':
+        specifier: ^3.52.1
+        version: 3.52.1(@types/node@25.2.3)(zod@4.3.6)
+      '@ts-rest/open-api':
+        specifier: ^3.52.1
+        version: 3.52.1(@ts-rest/core@3.52.1(@types/node@25.2.3)(zod@4.3.6))(zod@4.3.6)
+      zod:
+        specifier: ^4.1.12
+        version: 4.3.6
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(@swc/core@1.15.10)(jiti@2.6.1)(postcss@8.5.6)(tsx@4.20.6)(typescript@5.9.3)(yaml@2.8.3)
+      typescript:
+        specifier: ^5
+        version: 5.9.3
+
+  packages/node-core:
+    dependencies:
+      '@cogni/ai-core':
+        specifier: workspace:*
+        version: link:../ai-core
+      '@cogni/attribution-ledger':
+        specifier: workspace:*
+        version: link:../attribution-ledger
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(@swc/core@1.15.10)(jiti@2.6.1)(postcss@8.5.6)(tsx@4.20.6)(typescript@5.9.3)(yaml@2.8.3)
+      typescript:
+        specifier: ^5
+        version: 5.9.3
+
+  packages/node-shared:
+    dependencies:
+      '@cogni/node-core':
+        specifier: workspace:*
+        version: link:../node-core
+      '@cogni/repo-spec':
+        specifier: workspace:*
+        version: link:../repo-spec
+      fast-safe-stringify:
+        specifier: ^2.1.1
+        version: 2.1.1
+      uuid:
+        specifier: ^11.1.0
+        version: 11.1.0
+      zod:
+        specifier: ^4.1.12
+        version: 4.3.6
+    devDependencies:
+      pino:
+        specifier: ^9.6.0
+        version: 9.14.0
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(@swc/core@1.15.10)(jiti@2.6.1)(postcss@8.5.6)(tsx@4.20.6)(typescript@5.9.3)(yaml@2.8.3)
+      typescript:
+        specifier: ^5
+        version: 5.9.3
+
+  packages/node-streams:
+    dependencies:
+      ioredis:
+        specifier: ^5.6.1
+        version: 5.10.0
+    devDependencies:
+      tsup:
+        specifier: ^8.4.0
+        version: 8.5.1(@swc/core@1.15.10)(jiti@2.6.1)(postcss@8.5.6)(tsx@4.20.6)(typescript@5.9.3)(yaml@2.8.3)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
+  packages/node-ui-kit:
+    dependencies:
+      '@assistant-ui/react':
+        specifier: '>=0.12'
+        version: 0.12.10(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(immer@11.0.1)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)(use-sync-external-store@1.6.0(react@19.0.0))
+      '@dnd-kit/core':
+        specifier: '>=6'
+        version: 6.3.1(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@dnd-kit/modifiers':
+        specifier: '>=7'
+        version: 9.0.0(@dnd-kit/core@6.3.1(react-dom@19.0.0(react@19.0.0))(react@19.0.0))(react@19.0.0)
+      '@dnd-kit/sortable':
+        specifier: '>=7'
+        version: 10.0.0(@dnd-kit/core@6.3.1(react-dom@19.0.0(react@19.0.0))(react@19.0.0))(react@19.0.0)
+      '@dnd-kit/utilities':
+        specifier: '>=3'
+        version: 3.2.2(react@19.0.0)
+      '@radix-ui/react-avatar':
+        specifier: '*'
+        version: 1.1.11(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-checkbox':
+        specifier: '*'
+        version: 1.3.3(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-dialog':
+        specifier: '*'
+        version: 1.1.15(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-dropdown-menu':
+        specifier: '*'
+        version: 2.1.16(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-popover':
+        specifier: '*'
+        version: 1.1.15(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-progress':
+        specifier: '*'
+        version: 1.1.8(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-scroll-area':
+        specifier: '*'
+        version: 1.2.10(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-select':
+        specifier: '*'
+        version: 2.2.6(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-separator':
+        specifier: '*'
+        version: 1.1.8(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-slot':
+        specifier: '*'
+        version: 1.2.4(@types/react@19.2.7)(react@19.0.0)
+      '@radix-ui/react-toggle':
+        specifier: '*'
+        version: 1.1.10(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-toggle-group':
+        specifier: '*'
+        version: 1.1.11(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@radix-ui/react-tooltip':
+        specifier: '*'
+        version: 1.2.8(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@tanstack/react-table':
+        specifier: '>=8'
+        version: 8.21.3(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@tanstack/react-virtual':
+        specifier: '>=3'
+        version: 3.13.23(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      class-variance-authority:
+        specifier: '*'
+        version: 0.7.1
+      clsx:
+        specifier: '*'
+        version: 2.1.1
+      lucide-react:
+        specifier: '*'
+        version: 0.552.0(react@19.0.0)
+      radix-ui:
+        specifier: '*'
+        version: 1.4.3(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      react:
+        specifier: '>=19'
+        version: 19.0.0
+      react-dom:
+        specifier: '>=19'
+        version: 19.0.0(react@19.0.0)
+      recharts:
+        specifier: '>=2'
+        version: 2.15.4(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      tailwind-merge:
+        specifier: '*'
+        version: 3.3.1
+      vaul:
+        specifier: '*'
+        version: 1.1.2(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+
+  packages/operator-wallet:
+    dependencies:
+      viem:
+        specifier: ^2.0.0
+        version: 2.39.3(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6)
+    devDependencies:
+      '@0xsplits/splits-sdk':
+        specifier: 6.4.1
+        version: 6.4.1(viem@2.39.3(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6))
+      '@privy-io/node':
+        specifier: ^0.10.1
+        version: 0.10.1(viem@2.39.3(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6))
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(@swc/core@1.15.10)(jiti@2.6.1)(postcss@8.5.6)(tsx@4.20.6)(typescript@5.9.3)(yaml@2.8.3)
+      typescript:
+        specifier: ^5
+        version: 5.9.3
+
+  packages/repo-spec:
+    dependencies:
+      yaml:
+        specifier: ^2.8.3
+        version: 2.8.3
+      zod:
+        specifier: ^3.24.0
+        version: 3.25.76
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(@swc/core@1.15.10)(jiti@2.6.1)(postcss@8.5.6)(tsx@4.20.6)(typescript@5.9.3)(yaml@2.8.3)
+      typescript:
+        specifier: ^5
+        version: 5.9.3
+
+  packages/scheduler-core:
+    dependencies:
+      '@cogni/ai-core':
+        specifier: workspace:*
+        version: link:../ai-core
+      '@cogni/db-schema':
+        specifier: workspace:*
+        version: link:../db-schema
+      '@cogni/ids':
+        specifier: workspace:*
+        version: link:../ids
+      type-fest:
+        specifier: ^5.4.1
+        version: 5.4.1
+      zod:
+        specifier: ^3.23.8
+        version: 3.25.76
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(@swc/core@1.15.10)(jiti@2.6.1)(postcss@8.5.6)(tsx@4.20.6)(typescript@5.9.3)(yaml@2.8.3)
+      typescript:
+        specifier: ^5
+        version: 5.9.3
+
+  packages/temporal-workflows:
+    dependencies:
+      '@cogni/attribution-ledger':
+        specifier: workspace:*
+        version: link:../attribution-ledger
+      '@cogni/ingestion-core':
+        specifier: workspace:*
+        version: link:../ingestion-core
+      '@cogni/repo-spec':
+        specifier: workspace:*
+        version: link:../repo-spec
+      '@temporalio/workflow':
+        specifier: ^1.11.7
+        version: 1.14.1
+      zod:
+        specifier: ^4.1.12
+        version: 4.3.6
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(@swc/core@1.15.10)(jiti@2.6.1)(postcss@8.5.6)(tsx@4.20.6)(typescript@5.9.3)(yaml@2.8.3)
+      typescript:
+        specifier: ^5
+        version: 5.9.3
+
+  packages/work-items:
+    dependencies:
+      type-fest:
+        specifier: ^5.4.1
+        version: 5.4.1
+      yaml:
+        specifier: ^2.8.3
+        version: 2.8.3
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(@swc/core@1.15.10)(jiti@2.6.1)(postcss@8.5.6)(tsx@4.20.6)(typescript@5.9.3)(yaml@2.8.3)
+      typescript:
+        specifier: ^5
+        version: 5.9.3
+      vitest:
+        specifier: ^3.1.4
+        version: 3.2.4(@types/debug@4.1.12)(@types/node@25.2.3)(happy-dom@20.9.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(jiti@2.6.1)(jsdom@16.7.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(lightningcss@1.30.2)(msw@2.12.1(@types/node@25.2.3)(typescript@5.9.3))(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.3)
+
+  services/scheduler-worker:
+    dependencies:
+      '@cogni/attribution-ledger':
+        specifier: workspace:*
+        version: link:../../packages/attribution-ledger
+      '@cogni/attribution-pipeline-contracts':
+        specifier: workspace:*
+        version: link:../../packages/attribution-pipeline-contracts
+      '@cogni/attribution-pipeline-plugins':
+        specifier: workspace:*
+        version: link:../../packages/attribution-pipeline-plugins
+      '@cogni/db-client':
+        specifier: workspace:*
+        version: link:../../packages/db-client
+      '@cogni/graph-execution-core':
+        specifier: workspace:*
+        version: link:../../packages/graph-execution-core
+      '@cogni/ids':
+        specifier: workspace:*
+        version: link:../../packages/ids
+      '@cogni/ingestion-core':
+        specifier: workspace:*
+        version: link:../../packages/ingestion-core
+      '@cogni/node-contracts':
+        specifier: workspace:*
+        version: link:../../packages/node-contracts
+      '@cogni/repo-spec':
+        specifier: workspace:*
+        version: link:../../packages/repo-spec
+      '@cogni/scheduler-core':
+        specifier: workspace:*
+        version: link:../../packages/scheduler-core
+      '@cogni/temporal-workflows':
+        specifier: workspace:*
+        version: link:../../packages/temporal-workflows
+      '@octokit/auth-app':
+        specifier: ^7.1.4
+        version: 7.2.2
+      '@octokit/core':
+        specifier: ^6.1.4
+        version: 6.1.6
+      '@octokit/plugin-retry':
+        specifier: ^7.1.3
+        version: 7.2.1(@octokit/core@6.1.6)
+      '@octokit/plugin-throttling':
+        specifier: ^9.4.0
+        version: 9.6.1(@octokit/core@6.1.6)
+      '@octokit/webhooks-methods':
+        specifier: ^6.0.0
+        version: 6.0.0
+      '@temporalio/activity':
+        specifier: ^1.11.7
+        version: 1.14.1
+      '@temporalio/client':
+        specifier: ^1.11.7
+        version: 1.14.1
+      '@temporalio/worker':
+        specifier: ^1.11.7
+        version: 1.14.1(esbuild@0.27.1)(tslib@2.8.1)
+      '@temporalio/workflow':
+        specifier: ^1.11.7
+        version: 1.14.1
+      pino:
+        specifier: ^9.6.0
+        version: 9.14.0
+      prom-client:
+        specifier: ^15.1.0
+        version: 15.1.3
+      viem:
+        specifier: ^2.21.0
+        version: 2.39.3(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@3.25.76)
+      yaml:
+        specifier: ^2.8.3
+        version: 2.8.3
+      zod:
+        specifier: ^3.24.0
+        version: 3.25.76
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(@swc/core@1.15.10)(jiti@2.6.1)(postcss@8.5.6)(tsx@4.20.6)(typescript@5.9.3)(yaml@2.8.3)
+      tsx:
+        specifier: ^4.19.0
+        version: 4.20.6
+      typescript:
+        specifier: ^5
+        version: 5.9.3
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.4(@types/debug@4.1.12)(@types/node@25.2.3)(happy-dom@20.9.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(jiti@2.6.1)(jsdom@16.7.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(lightningcss@1.30.2)(msw@2.12.1(@types/node@25.2.3)(typescript@5.9.3))(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.3)
+
+packages:
