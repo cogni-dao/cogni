@@ -55,7 +55,7 @@ patches:
         value: "cogni-test-org"
       - op: add
         path: /data/NODE_SUBMODULE_PARENT_REPO
-        value: "cogni"
+        value: "cogni-monorepo"
   - target:
       kind: Service
       name: node-app
