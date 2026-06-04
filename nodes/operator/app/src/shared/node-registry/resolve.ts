@@ -14,8 +14,6 @@
  * @public
  */
 
-import type { NodeSummary } from "@/ports";
-
 /** Minimal shape needed to resolve a node's href (structurally satisfied by ShowcaseNode + DB rows). */
 export interface NodeHrefInput {
   readonly name: string;
@@ -60,11 +58,11 @@ export function resolveHref(
   return `https://${hostForNode(node.name, node.primary ?? false, domain)}`;
 }
 
-/** Merge node lists, keeping the first occurrence per slug (curated/bundled entries win). */
-export function mergeBySlug(
-  ...lists: readonly (readonly NodeSummary[])[]
-): readonly NodeSummary[] {
-  const bySlug = new Map<string, NodeSummary>();
+/** Merge slug-keyed lists, keeping the first occurrence per slug (curated/bundled entries win). */
+export function mergeBySlug<T extends { readonly slug: string }>(
+  ...lists: readonly (readonly T[])[]
+): readonly T[] {
+  const bySlug = new Map<string, T>();
   for (const list of lists) {
     for (const node of list) {
       if (!bySlug.has(node.slug)) bySlug.set(node.slug, node);
