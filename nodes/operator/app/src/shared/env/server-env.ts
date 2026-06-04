@@ -156,9 +156,10 @@ export const serverSchema = z.object({
   GH_REVIEW_APP_PRIVATE_KEY_BASE64: optionalString,
 
   // Node-formation Publish: where new node repos are minted + where the node-template lives.
-  // Decoupled from the operator's own monorepo org (the submodule-PR target) so a dedicated
-  // nodes org (e.g. `cogni-nodes` — isolates the all-repos App install) is a config flip, not a
-  // code change. Both default to the operator monorepo's owner when unset.
+  // Env-scoped, NOT derived from the operator's own monorepo org (the submodule-PR target) — a
+  // test/candidate operator must have zero access to Cogni-DAO, so mint-owner is set explicitly
+  // per env (prod → Cogni-DAO; candidate/preview → a throwaway org like `cogni-nodes-test`). The
+  // publish route fails closed (503) when unset, so no env can accidentally mint into its monorepo.
   NODE_MINT_OWNER: optionalString,
   NODE_TEMPLATE_OWNER: optionalString,
 

@@ -47,6 +47,21 @@ export async function POST(_request: Request, ctx: RouteParams) {
       { status: 503 }
     );
   }
+  // Mint owner + template home are env-scoped and FAIL CLOSED — never derived from the operator's
+  // own monorepo org. A test/candidate operator must have zero access to Cogni-DAO; deriving the
+  // mint target from repoOwner would let it mint into the real org. So both are required explicitly.
+  const mintOwner = env.NODE_MINT_OWNER;
+  const templateOwner = env.NODE_TEMPLATE_OWNER;
+  if (!mintOwner || !templateOwner) {
+    return NextResponse.json(
+      {
+        error: "operator not configured for node minting",
+        reason:
+          "NODE_MINT_OWNER + NODE_TEMPLATE_OWNER required (env-scoped; must not derive from the operator's own monorepo org)",
+      },
+      { status: 503 }
+    );
+  }
 
   const { id } = await ctx.params;
   const db = resolveAppDb();
@@ -113,12 +128,9 @@ export async function POST(_request: Request, ctx: RouteParams) {
   };
   let pr: { prNumber: number; prUrl: string };
   try {
-    // Mint target + template home are decoupled from the operator's own monorepo org (the
-    // submodule-PR target below). Default to repoOwner; set NODE_MINT_OWNER/NODE_TEMPLATE_OWNER
-    // to a dedicated nodes org (e.g. cogni-nodes) to isolate the all-repos App install.
     const minted = await writer.generateFromTemplate({
-      templateOwner: env.NODE_TEMPLATE_OWNER ?? node.repoOwner,
-      owner: env.NODE_MINT_OWNER ?? node.repoOwner,
+      templateOwner,
+      owner: mintOwner,
       slug: node.slug,
       ...identity,
     });
