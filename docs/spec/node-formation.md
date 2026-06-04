@@ -39,10 +39,10 @@ Formation (wizard) → Publish (operator PR) → Flight (candidate-a) → Ongoin
 
 This is distinct from a **standalone fork** — a solo operator who wants their own full instance on their own VM forks `Cogni-DAO/standalone-node` and follows [`fork-quickstart.md`](../runbooks/fork-quickstart.md). Two repos, two intents:
 
-| Repo                        | Role                                                                                  |
-| --------------------------- | ------------------------------------------------------------------------------------- |
-| `Cogni-DAO/standalone-node` | Fork-whole quickstart — your own instance, your own substrate (`fork-quickstart.md`). |
-| `nodes/node-template/`      | Clone source for a monorepo node — Publish clones this subtree, regenerates identity. |
+| Repo                        | Role                                                                                                                                                                     |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `Cogni-DAO/standalone-node` | Fork-whole quickstart — your own instance, your own substrate (`fork-quickstart.md`).                                                                                    |
+| `Cogni-DAO/node-template`   | Template repo — Publish `generate`s a node's own repo from it, then submodule-pins it at `nodes/<slug>`. Maintained node-at-root from the `nodes/node-template/` subdir. |
 
 `CATALOG_IS_SSOT` ([ci-cd.md](ci-cd.md) Axiom 16) is what makes Publish a single reviewable PR rather than a manual checklist: the catalog entry is the only declaration site, and overlays, per-node AppSets (Axiom 18), Caddy routing, scheduler endpoints, DNS (Axiom 21), and the build matrix all derive from it. The deploy-row contract lives in [create-node.md](../guides/create-node.md); secrets are stripped from the Publish PR and inherited via ESO (`NO_SECRETS_IN_PR`, `bug.5086`).
 
@@ -326,27 +326,27 @@ Populated later by `pnpm node:activate-payments` (child node CLI):
 
 > Current schema: [.cogni/repo-spec.yaml](../../.cogni/repo-spec.yaml)
 
-### Node Publish (Operator-Authored PR)
+### Node Publish (Operator-Authored Submodule PR)
 
-After Formation returns a verified repo-spec fragment, the **operator** authors the node's monorepo footprint as a single GitHub App–authored pull request — the **Publish** phase (task.5092). There is no GitHub Action and no human PAT: the operator already holds GitHub App installation auth, so it writes the PR directly via the GitHub **Git Data API**.
+After Formation returns a verified repo-spec fragment, the **operator** mints the node's own repo and pins it into the monorepo as a git **submodule** — the **Publish** phase (task.5092). No GitHub Action and no human PAT: the operator holds GitHub App installation auth and drives the GitHub REST + Git Data API directly.
 
-**Why direct-authoring, not an Action:** a new node is a clone of `nodes/node-template/**` (~1100 files) whose blobs already exist in the repo. A `POST /git/trees` with `base_tree` referencing node-template's tree reuses every unchanged blob by SHA (zero upload); only the renamed files + repo-spec + footprint gens need new blobs — one tree, one commit, one ref, one PR (~40 API calls). Dispatching an Action to re-mint the App token the operator already holds was pure indirection (and broke on `workflow_dispatch`-resolves-on-default-branch, untestable pre-merge).
+**Why a submodule, not an inline clone:** a node is ~1100 files. Inlining them into the operator tree (the prior model) bloated the monorepo by a full app fork per node. Instead the node lives in **its own repo** (`Cogni-DAO/<slug>`), pinned at `nodes/<slug>` by a `160000` gitlink — the operator PR is a pointer + the catalog/overlay footprint, not 1100 lines. (`SUBMODULE_GITLINK_IS_OPERATOR_PIN` — see [node-ci-cd-contract.md](node-ci-cd-contract.md) § Submodule-pinned nodes.)
 
 **Mechanism** (`adapters/server/vcs/github-repo-write.ts` + `shared/node-app-scaffold/`):
 
-1. **Clone tree** — read node-template's tree, build a `POST /git/trees` payload with `base_tree = main`; unchanged paths inherit their existing blob SHA.
-2. **Override** — the node-template-referencing files (workspace package names + repo-spec carrying the formed `node_id` / `scope_id` / DAO addresses) get new blobs.
-3. **Exclude** (`sha: null` deletes the path from `base_tree`) — the per-node `secrets-catalog.yaml` + `k8s/external-secrets/**` are NEVER cloned (`bug.5086`: a real node copying node-template's catalog re-declares the shared baseline names → `NO_NAME_COLLISIONS` throw, killing `setup:secrets` for every env). A node inherits shared secrets via ESO; no secret value is ever written to the PR.
-4. **Footprint gens** — pure-TS ports of the catalog-derived renderers (`caddyfile`, `scope-filters`, `scheduler-endpoints`, the `pnpm-lock.yaml` importer splice, and the per-node AppSet from `scripts/ci/node-applicationset.yaml.tmpl`) regenerate the repo-wide aggregates. Each shares its template with the `scripts/ci/render-*.sh` source of truth, so output is byte-exact and CI's drift gates stay green. The lockfile is read via the uncapped `git/blobs` endpoint (it exceeds the Contents-API 1 MB cap).
-5. **Author** — `POST /git/refs` creates the branch; the PR opens under the operator App installation (author = the App, auditable — not `github-actions[bot]`, not a human PAT).
+1. **Mint** — `POST /repos/Cogni-DAO/node-template/generate` creates `Cogni-DAO/<slug>` from the `node-template` template repo (server-side copy; the template seed already strips `.cogni/secrets-catalog.yaml` + `k8s/external-secrets/**` per `bug.5086` — see `NO_SECRETS_IN_PR`).
+2. **Identity** — commit the regenerated `.cogni/repo-spec.yaml` (formed `node_id` / `scope_id` + DAO addresses) to the new repo's `main`; generate copies node-template's identity verbatim, so this overrides it. The new HEAD SHA is the gitlink pin.
+3. **Pin** — the operator authors a PR on the monorepo: a `160000` gitlink at `nodes/<slug>` + a `.gitmodules` stanza, plus the footprint gens (catalog, overlays×3, per-node AppSets×3, Caddyfile route, `ci.yaml` scope filter, scheduler-worker endpoints) — **no `pnpm-lock.yaml`** (a submodule node is not a workspace member). One tree, one commit, one ref, one PR.
+4. **Author** — the PR opens under the operator App installation (author = the App, auditable — not `github-actions[bot]`, not a human PAT).
 
 **Invariants:**
 
 - `NO_ACTION_INDIRECTION` — the operator authors the PR itself; it never dispatches a workflow to act on its own behalf.
-- `NO_SECRETS_IN_PR` — secrets-catalog + external-secrets are excluded from the cloned tree; values live in OpenBao, inherited via ESO ([secrets-management.md](secrets-management.md)).
+- `SUBMODULE_NOT_INLINE` — node content lives in its own repo + a gitlink, never inlined into the operator tree.
+- `NO_SECRETS_IN_PR` — secrets-catalog + external-secrets are absent from the template seed; values live in OpenBao, inherited via ESO ([secrets-management.md](secrets-management.md)).
 - `GENS_ARE_BYTE_EXACT` — every footprint gen shares one template with its `scripts/ci/render-*.sh` source of truth, enforced by the per-gen CI drift gate.
 
-> Verification: the Git Data API tree-assembly is proven by flighting the operator and authoring one throwaway node PR end-to-end (`<node>-test/version == build_sha`).
+> Verification: flight the operator + Publish one throwaway node → it mints `Cogni-DAO/<slug>` and opens the submodule PR; the gitlink PR passes `single-node-scope`, and the node flights (`<node>-test/version == build_sha`). Requires the env's operator App to hold org `administration: write` + an "all repositories" install (it must create AND commit to the new repo — see node-ci-cd-contract.md).
 
 ### Payment Activation (Child Node)
 
