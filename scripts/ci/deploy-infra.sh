@@ -1040,7 +1040,17 @@ if $RUNTIME_COMPOSE config --services 2>/dev/null | grep -q '^doltgres$'; then
     fi
     sleep 2
   done
-  if [[ -n "$dg_ready" ]] && ! dg_auth_ok; then
+  # Retry auth a few times so a transient just-started-not-yet-serving state can't
+  # trigger a false-positive reset on a healthy volume — only reset on PERSISTENT failure.
+  dg_drifted=""
+  if [[ -n "$dg_ready" ]]; then
+    dg_drifted=1
+    for _ in $(seq 1 5); do
+      if dg_auth_ok; then dg_drifted=""; break; fi
+      sleep 2
+    done
+  fi
+  if [[ -n "$dg_drifted" ]]; then
     log_warn "Doltgres superuser auth failed with rendered .env password — resetting auth-file (non-destructive; knowledge_<node> DBs preserved)..."
     $RUNTIME_COMPOSE exec -T doltgres rm -f /var/lib/doltgres/auth.db /var/lib/doltgres/.init_completed >/dev/null 2>&1 || true
     $RUNTIME_COMPOSE up -d --force-recreate doltgres >/dev/null 2>&1 || true
