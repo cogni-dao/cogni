@@ -21,16 +21,32 @@ installation level down to the tool schema and CI scripts.
 
 ## GitHub Apps on Cogni-DAO Org
 
-Two apps matter for VCS operations:
+**One App per environment** — each App has exactly one webhook URL, so prod/preview/candidate-a
+cannot share one. Create + wire per the canonical guide:
+[`docs/guides/github-app-webhook-setup.md`](../../../docs/guides/github-app-webhook-setup.md).
 
-| App                   | ID      | Install ID | `actions` permission          |
-| --------------------- | ------- | ---------- | ----------------------------- |
-| `cogni-node-template` | 3062001 | 115515535  | `write` (approved 2026-04-23) |
-| `cogni-git-review`    | 1761205 | 80293097   | `write`                       |
+| App                   | ID      | Install ID | env         | webhooks → / installed on                            |
+| --------------------- | ------- | ---------- | ----------- | ---------------------------------------------------- |
+| `cogni-node-template` | 3062001 | 115515535  | (vcs/flight)| org-wide; `actions:write` for `workflow_dispatch`    |
+| `cogni-git-review`    | 1761205 | 80293097   | production  | `cognidao.org/...webhooks/github` · `Cogni-DAO/cogni`|
+| `cogni-operator-test` | (per-env)| —         | candidate-a | `test.cognidao.org/...webhooks/github` · `Cogni-DAO/test-repo` |
 
-**Active app**: `cogni-node-template` is the current app. `GH_REVIEW_APP_ID` in the
-`candidate-a` and `production` GitHub environments points to one of these IDs. The private
-key is in `GH_REVIEW_APP_PRIVATE_KEY_BASE64` (base64-encoded PEM).
+**Where the App creds live (post-ESO migration, #1460/#1476):** the running operator pod reads
+`GH_REVIEW_APP_ID` / `GH_REVIEW_APP_PRIVATE_KEY_BASE64` / `GH_WEBHOOK_SECRET` from **OpenBao**
+`cogni/<env>/operator/*` (ESO → `operator-env-secrets` → `envFrom`) — **NOT** the GitHub env secret
+directly. The GitHub env secret is only a provision-time seed; for a **live** env, write to OpenBao
+via `pnpm secrets:set <env> operator GH_REVIEW_APP_*` + bounce the pod (Reloader isn't cluster-wide
+yet). See the webhook-setup guide §"Deployed envs".
+
+**Split-brain auth (`bug.5000`, open):** App auth is duplicated across **three** adapters —
+`adapters/server/review/github-auth.ts` (webhook plane, payload-driven per-repo),
+`adapters/server/vcs/github-vcs.adapter.ts` (flight + approve-checks, historically hardcoded to
+`Cogni-DAO/cogni` via `getGithubRepo()`), and `scheduler-worker/.../ingestion/github-auth.ts`. They
+diverge: review works repo-agnostically (why `preview-test-repo` PRs review) while VCS tools stub on
+candidate-a if `GH_REVIEW_APP_ID` is empty or the repo is hardcoded. Desired end state = one shared
+`github-core` primitive + capability-scoped per-repo token provider. Until then, configuring a new
+env means setting all three planes' creds + matching the webhook secret on both the App and the pod
+(the dual-plane class — see also dev2's webhook-secret-sync work).
 
 **Permission audit**: to check live installation permissions:
 
@@ -264,10 +280,10 @@ When a flight fails or dispatch errors, work through this in order:
 
 | Var                                | Where set                                   | Purpose                         |
 | ---------------------------------- | ------------------------------------------- | ------------------------------- |
-| `GH_REVIEW_APP_ID`                 | candidate-a + production GitHub env secrets | GitHub App ID for VcsCapability |
-| `GH_REVIEW_APP_PRIVATE_KEY_BASE64` | candidate-a + production GitHub env secrets | Base64-encoded PEM private key  |
-| `GH_WEBHOOK_SECRET`                | candidate-a + production GitHub env secrets | Webhook signature verification  |
-| `GH_REPOS`                         | candidate-a + production GitHub env vars    | `Cogni-DAO/node-template`       |
+| `GH_REVIEW_APP_ID`                 | **OpenBao** `cogni/<env>/operator/*` (ESO); GH env secret is provision seed only | GitHub App ID for VcsCapability |
+| `GH_REVIEW_APP_PRIVATE_KEY_BASE64` | **OpenBao** `cogni/<env>/operator/*` (ESO); GH env secret is provision seed only | Base64-encoded PEM private key  |
+| `GH_WEBHOOK_SECRET`                | **OpenBao** `cogni/<env>/operator/*` (ESO); must MATCH the App's webhook-secret field | Webhook signature verification  |
+| `GH_REPOS`                         | candidate-a + production GitHub env **vars** (config, not secret) | pr-manager repo scope (review is payload-driven) |
 | `DOMAIN`                           | candidate-a env var: `test.cognidao.org`    | Used in smoke + buildSha verify |
 | `VM_HOST`                          | candidate-a GitHub env secret               | SSH target for Argo reconcile   |
 | `SSH_DEPLOY_KEY`                   | candidate-a GitHub env secret               | SSH key for VM access           |

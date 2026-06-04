@@ -19,8 +19,11 @@ tags: [github, webhooks, ingestion, review, setup]
 | Environment | App name convention           | Webhook URL                                                 | Install on                    |
 | ----------- | ----------------------------- | ----------------------------------------------------------- | ----------------------------- |
 | Local dev   | `cogni-review-dev-<yourname>` | smee.io proxy (see below)                                   | your personal test repo       |
+| candidate-a | `cogni-operator-test`         | `https://test.cognidao.org/api/internal/webhooks/github`    | `Cogni-DAO/test-repo`         |
 | Preview     | `cogni-review-preview`        | `https://preview.cognidao.org/api/internal/webhooks/github` | `Cogni-DAO/preview-test-repo` |
 | Production  | `cogni-review-production`     | `https://cognidao.org/api/internal/webhooks/github`         | `Cogni-DAO/cogni`             |
+
+> The webhook source path is `github` (`api/internal/webhooks/[source]/route.ts` → `source === "github"` reads `GH_WEBHOOK_SECRET`). Review is **payload-driven** — the operator reviews whatever installed repo sends a verified webhook; `GH_REPOS` scopes only the proactive pr-manager, not the review webhook.
 
 ## Create a GitHub App
 
@@ -79,7 +82,27 @@ GH_WEBHOOK_SECRET=<webhook-secret>
 GH_WEBHOOK_PROXY_URL=https://smee.io/<your-channel>  # see below
 ```
 
-### Preview / Production — GitHub Actions secrets
+### Deployed envs — the pod reads OpenBao (ESO), not GitHub env secrets
+
+Post-ESO migration (`task.5094`/#1460), the running operator pod consumes
+`GH_REVIEW_APP_ID` / `GH_REVIEW_APP_PRIVATE_KEY_BASE64` / `GH_WEBHOOK_SECRET` from OpenBao at
+`cogni/<env>/operator/*` (ESO → `operator-env-secrets` → `envFrom`). A `gh secret set --env <env>`
+only reaches the pod on the **next provision** (it seeds the GitHub env that provisioning fans into
+OpenBao). To configure a **live, already-provisioned env** (e.g. candidate-a) **now**, write straight
+to OpenBao and bounce the pod — see [`secrets-add-new.md`](./secrets-add-new.md):
+
+```bash
+# Live env (no reprovision). Path = the operator pod's extract: cogni/<env>/operator/*.
+pnpm secrets:set candidate-a operator GH_REVIEW_APP_ID                 # paste App ID
+pnpm secrets:set candidate-a operator GH_REVIEW_APP_PRIVATE_KEY_BASE64 # paste base64 PEM
+pnpm secrets:set candidate-a operator GH_WEBHOOK_SECRET                # paste the App's webhook secret
+kubectl rollout restart deploy/operator-node-app -n cogni-candidate-a  # until Reloader is cluster-wide
+```
+
+Set both copies of the webhook secret to the **same** value — the App's webhook-secret field and
+`GH_WEBHOOK_SECRET` in OpenBao — or signature verification 401s (the dual-plane class, `bug.5000`).
+
+### Preview / Production — GitHub env secrets (seed for the NEXT provision)
 
 ```bash
 # Preview
