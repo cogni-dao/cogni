@@ -131,6 +131,39 @@ Each gate firing is a feedback loop, not a barrier. Future: rejections logged st
 
 ---
 
+## Submodule-pinned nodes (new-node births)
+
+New nodes are born as **git submodules** at `nodes/<slug>` — a node-template fork the operator pins by SHA — not inline-copied into the monorepo. **New nodes only**: `operator`, `resy`, `poly`, `node-template` stay inline. At scale (50+ nodes) inline-copy is ~1100 files/node of clone bloat; the submodule boundary lets a node dev clone only their node repo as its own Conductor Project while the operator clones the thin parent and selectively inits the one node it operates on. Full rationale + the keeper-vs-tax decomposition of the inline wizard (#1462) live in knowledge conclusion `submodule-node-birth-design` — not restated here.
+
+### SUBMODULE_GITLINK_IS_OPERATOR_PIN
+
+A change to a `nodes/<slug>` **submodule gitlink** (the pinned-commit pointer) classifies as **operator-domain**, not node-domain. The pointer is the control plane's _pin_; the node's _code_ was reviewed in the node repo's own PR queue. So the deploy PR — gitlink bump + the node's catalog/overlay/appset rows — is **one operator-domain change**, not a cross-domain rejection. Without this rule the bump touches `nodes/<slug>` (node) + `infra/` (operator) → `|S| = 2` → rejected by the gate. The operator filter's `!nodes/<slug>/**` negation must **not** subtract a submodule gitlink — only a real in-tree node directory is node-domain.
+
+This holds **structurally** in `classify.ts`: a bare `nodes/<slug>` gitlink has no trailing path segment (`slash > 0` is false), so it falls through to operator-domain — and so do its catalog/overlay/appset rows, because a submodule slug is a gitlink, not an inline `nodes/*` directory, hence absent from the non-operator-node set. Pinned by the `single-node-scope` parity fixture `19-submodule-gitlink-operator-pin.json` (gitlink + `.gitmodules` + catalog + overlays×3 + appset → one operator domain, `pass: true`). The regression guard is a comment on the `slash > 0` branch in `classify.ts`.
+
+### Two CI models — do not conflate
+
+| Concern                            | Inline node                                  | Submodule node                                                                                         |
+| ---------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Merge gate (unit/component/static) | operator monorepo CI, shared root configs    | the node repo's **own** `ci.yaml` (node-template fork — `FORK_FREEDOM` + `setup-main-branch.sh` apply) |
+| `POLICY_STAYS_LOCAL`               | shared root policy                           | own policy copies — drift is by-design sovereignty                                                     |
+| operator's job                     | full gate + `single-node-scope` split        | pointer-validate + provision + flight + promote                                                        |
+| `ci.yaml` scope filter             | `nodes/<X>/**` entry + operator `!` negation | none — operator does not run the node's tests                                                          |
+
+### Discovery is metadata-driven, not filesystem-driven
+
+A submodule node's app tree is absent from the operator build/runtime image (the runtime ships only the operator's own `.cogni`; no `infra/catalog`), so it can never be discovered by walking `nodes/*`. It registers exactly like an inline node: its **catalog row** — committed in the operator pin PR, present even when the submodule is not checked out — projects to the operator `nodes` table and renders via **`NodeRegistryPort`** ([proj.agent-registry](../../work/projects/proj.agent-registry.md), #1492). **Submodule-ness is a catalog/CI concern** (a `repo` + `ref` pin on the catalog row), invisible to `NodeRegistryPort` consumers; a submodule node is still `NodeSummary.kind: full-app`. The #1492 v0 static `nodes.data.ts` adapter is itself a per-node manual-step tax and does not scale — submodule births at scale depend on the v0.1 DB-projection adapter landing behind the same port.
+
+### Downstream blockers (tracked separately from the gitlink rule)
+
+1. **Selective init before any `nodes/*` walk.** Provisioning, the secrets-catalog loader (`scripts/lib/secrets-catalog-loader.ts`), and the review router walk `nodes/*/.cogni/`; each must `git submodule update --init nodes/<slug>` first — **never** blanket `--recursive` (that rebuilds the giant clone).
+2. **secrets-catalog exclusion relocation (bug.5086 Part D).** `scaffold-node.sh` excludes node-template's `.cogni/secrets-catalog.yaml` at rsync-time to dodge the ~57-name `NO_NAME_COLLISIONS` throw. A submodule node is a _real_ template fork that carries that catalog, so the exclusion must move into the template-repo-generation step (strip the baseline catalog when minting the node repo).
+3. **`.gitmodules` subtraction when the first real submodule node lands on disk.** A checked-out submodule appears as a `nodes/<slug>` directory, so the three derivations of the non-operator-node set — `render-scope-filters.sh#non_operator_nodes`, `single-node-scope-meta.spec.ts#listNonOperatorNodes`, `single-node-scope-parity.spec.ts#nonOperatorNodes` — plus the `extractOwningNode` resolver must subtract submodule paths read from `.gitmodules`. A submodule node gets **no** dorny filter entry (operator doesn't run its tests), and a bare gitlink resolves operator on both the classifier and resolver sides. No-op until the wizard adds a submodule node, so it lands with that work — not pre-built here.
+
+The wizard fork (reuse `node-scaffold.yml` dispatch + `gens/`; swap `scaffold-node.sh` rsync → `POST /repos/{tpl}/generate` + `git submodule add`; drop `lockfile.ts` + fixtures + the `ci.yaml` scope-filter rewrite) is downstream of this rule.
+
+---
+
 ## Node-owned packages
 
 The single-node-scope rule classifies any path outside `nodes/<X>/**` as `operator`. So a "shared" package at root that is in fact only consumed by one node turns every change to it into an `operator` PR — even though no operator code is touched. Carving such packages under `nodes/<X>/packages/` makes their domain match their actual ownership.

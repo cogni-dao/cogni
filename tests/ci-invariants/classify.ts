@@ -126,6 +126,14 @@ export function classify(
     if (p.startsWith(NODES_PREFIX)) {
       const rest = p.slice(NODES_PREFIX.length);
       const slash = rest.indexOf("/");
+      // SUBMODULE_GITLINK_IS_OPERATOR_PIN (spec: node-ci-cd-contract): a bare
+      // `nodes/<slug>` with NO trailing segment is a submodule gitlink — the
+      // control plane's *pin*, not the node's code intent (the code was reviewed
+      // in the node repo's own PR). `slash > 0` is false here, so it falls through
+      // to operator-domain. Do NOT "fix" this to treat a bare path as node-domain:
+      // a submodule birth PR (gitlink + its catalog/overlays/appset) must classify
+      // as ONE operator domain, not be rejected as cross-domain. Only a real
+      // in-tree node directory (`nodes/<slug>/...`) is node-domain.
       if (slash > 0) {
         const candidate = rest.slice(0, slash);
         if (nodes.has(candidate)) {

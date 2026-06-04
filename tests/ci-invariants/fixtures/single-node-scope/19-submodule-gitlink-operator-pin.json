@@ -1,0 +1,17 @@
+{
+  "name": "submodule-gitlink pin: a submodule node-birth PR (bare nodes/<slug> gitlink + its catalog/overlays/appset + .gitmodules) is ONE operator domain (SUBMODULE_GITLINK_IS_OPERATOR_PIN)",
+  "paths": [
+    "nodes/acme",
+    ".gitmodules",
+    "infra/catalog/acme.yaml",
+    "infra/k8s/overlays/candidate-a/acme/kustomization.yaml",
+    "infra/k8s/overlays/preview/acme/kustomization.yaml",
+    "infra/k8s/overlays/production/acme/kustomization.yaml",
+    "infra/k8s/argocd/candidate-a-acme-applicationset.yaml"
+  ],
+  "expected": {
+    "domains": ["operator"],
+    "pass": true,
+    "rideAlongApplied": false
+  }
+}
