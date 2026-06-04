@@ -1212,21 +1212,25 @@ if command -v kubectl &>/dev/null; then
   # logs a warning and never aborts the deploy. No secret VALUE is ever printed.
   verify_openbao_db_read_path() {
     local jwt tok
-    if ! kubectl get sa db-provisioner -n default >/dev/null 2>&1; then
+    # Every cluster call is `timeout 10`-bounded: a non-zero exit is already
+    # caught (|| return 0), but a true network hang (OpenBao sealed/unreachable)
+    # would stall — not abort — the deploy. The timeout converts a hang into the
+    # same non-fatal skip.
+    if ! timeout 10 kubectl get sa db-provisioner -n default >/dev/null 2>&1; then
       log_warn "  [openbao-read-path] db-provisioner SA absent — VM predates Phase 1; reprovision to land the db-reader role. Skipping proof (non-fatal)."
       return 0
     fi
-    jwt=$(kubectl create token db-provisioner -n default 2>/dev/null) || {
+    jwt=$(timeout 10 kubectl create token db-provisioner -n default 2>/dev/null) || {
       log_warn "  [openbao-read-path] could not mint db-provisioner token; skipping proof (non-fatal)."
       return 0
     }
-    tok=$(kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
+    tok=$(timeout 10 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
       bao write -field=token auth/kubernetes/login \
       "role=${DEPLOY_ENVIRONMENT}-db-reader" "jwt=${jwt}" 2>/dev/null) || {
       log_warn "  [openbao-read-path] db-reader login failed (role absent / OpenBao sealed); skipping proof (non-fatal)."
       return 0
     }
-    if kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="${tok}" \
+    if timeout 10 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="${tok}" \
         bao kv list "cogni/${DEPLOY_ENVIRONMENT}" >/dev/null 2>&1; then
       log_info "  [openbao-read-path] OK — db-reader listed cogni/${DEPLOY_ENVIRONMENT}/* (Phase 1 proven; no value echoed)."
     else
