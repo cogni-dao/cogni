@@ -13,6 +13,8 @@ tags: [onboarding, agent, bootstrap]
 
 # Fork Quickstart
 
+> **Scope:** this runbook provisions a **standalone fork** (`Cogni-DAO/standalone-node`) — its own VM + substrate (the env axis). To instead create a node **inside the Cogni monorepo** (DAO formation → operator-authored PR → flight on shared infra), see [node-formation-guide.md](../guides/node-formation-guide.md).
+
 ## The one sentence
 
 Paste this into a fresh Claude Code (or equivalent) session, in whatever parent directory you want the fork to land in:
