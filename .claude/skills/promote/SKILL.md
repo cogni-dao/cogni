@@ -41,18 +41,33 @@ Do NOT use for code review, test fixes, or routine PR work.
 ## Preflight — every promotion, no exceptions
 
 ```bash
-# 1. SHA exists on main (must be the merge-commit, not the PR head)
-SHA=<merge-commit-sha-from-main>
+# 1. SHA exists on main — use the FULL 40-char merge commit, NOT a short sha and
+#    NOT the PR head. resolve-pr-build-images.sh parses the trailing sha out of
+#    IMAGE_TAG; a short sha silently resolves to "none" (this bit a 2026-06-04 heal).
+SHA=$(git rev-parse origin/main)             # full 40-char; never --short
 git fetch origin main && git merge-base --is-ancestor "$SHA" origin/main || echo "❌ not on main"
 
 # 2. mq-{N}-{SHA} images exist for ALL nodes you need.
 #    Reuse the workflow's own resolver — same logic flight-preview.yml runs.
-PR_N=$(gh api "repos/Cogni-DAO/node-template/commits/$SHA/pulls" --jq '.[0].number')
+PR_N=$(gh api "repos/Cogni-DAO/cogni/commits/$SHA/pulls" --jq '.[0].number')
 IMAGE_TAG="mq-${PR_N}-${SHA}" OUTPUT_FILE=/tmp/resolved.json \
   bash scripts/ci/resolve-pr-build-images.sh
 jq '.resolved_targets, .has_images' /tmp/resolved.json
-# resolved_targets list MUST include every node you intend to heal.
+# resolved_targets MUST include every node you intend to heal.
 # Empty / missing nodes = admin-merge bypass (bug.0443) OR affected-only didn't rebuild that node.
+#
+# GROUND-TRUTH CROSS-CHECK — more reliable from a laptop than the resolver, which
+# can false-negative on local package-read auth scope. These tags MUST exist:
+gh api "/orgs/cogni-dao/packages/container/cogni-template/versions?per_page=40" \
+  | python3 -c "import json,sys; tags={t for v in json.load(sys.stdin) for t in v.get('metadata',{}).get('container',{}).get('tags',[])}; print('\n'.join(sorted(t for t in tags if '${SHA:0:12}' in t)))"
+# operator = base tag (no suffix); node-template/canary/resy/scheduler-worker/poly = -<node> suffix.
+#
+# AFFECTED-ONLY IS USUALLY A NON-ISSUE FOR merge_group: the merge-queue rebuilds
+# the FULL node matrix and main HEAD's image already contains every earlier merged
+# PR. To ship feature PR #X (merged before HEAD), flight **main HEAD**, not #X's
+# own squash commit (which may be overlays/test-only with zero node images). The
+# 2026-06-04 heal flighted HEAD (#1488) to ship #1479's homepage — HEAD's operator
+# image already had it.
 
 # 3. Preview lease state (preview only)
 git fetch origin deploy/preview && git show origin/deploy/preview:.promote-state/review-state
@@ -248,12 +263,46 @@ Never re-flight a sha while `.promote-state/review-state` on `deploy/preview` is
 If a previous flight died and the lease is genuinely orphaned (rare — `aggregate-decide-outcome.sh`'s `if: always() &&` unlock should release it):
 
 ```bash
-GH_TOKEN=$(gh auth token) GITHUB_REPOSITORY=Cogni-DAO/node-template \
+GH_TOKEN=$(gh auth token) GITHUB_REPOSITORY=Cogni-DAO/cogni \
   DEPLOY_BRANCH=deploy/preview \
   bash scripts/ci/set-preview-review-state.sh unlocked
 ```
 
 Only do this when you've verified the prior run reached a terminal state. Bypassing while a flight is genuinely live causes overlay corruption.
+
+### Proven orphaned-lease heal (2026-06-04, end-to-end verified)
+
+Symptom: `flight-preview` reports `completed/success` on every `push:main` but
+preview `/version.buildSha` never advances; `deploy-preview` job shows **skipped**.
+Cause: `review-state` stuck at `dispatching` from a prior failed run → every
+auto-flight QUEUES behind the dead lease (writes `candidate-sha`, skips deploy).
+The exact recovery that worked:
+
+```bash
+SHA=$(git rev-parse origin/main)             # FULL sha — flight main HEAD, not the feature PR
+
+# 1. PROVE no flight is genuinely in-flight (else you corrupt a live overlay)
+gh run list --repo Cogni-DAO/cogni --workflow promote-and-deploy.yml --status in_progress -L3 --json databaseId
+gh run list --repo Cogni-DAO/cogni --workflow flight-preview.yml      --status in_progress -L3 --json databaseId
+# both [] → lease is orphaned, not busy.
+
+# 2. PROVE every node's image exists at SHA (GHCR ground truth — see Preflight #2)
+
+# 3. release the lease
+GH_TOKEN=$(gh auth token) GITHUB_REPOSITORY=Cogni-DAO/cogni DEPLOY_BRANCH=deploy/preview \
+  bash scripts/ci/set-preview-review-state.sh unlocked
+git show origin/deploy/preview:.promote-state/review-state   # → unlocked
+
+# 4. recovery flight of main HEAD (retag is idempotent; dispatches promote-and-deploy)
+gh workflow run flight-preview.yml --repo Cogni-DAO/cogni --ref main -f sha=$SHA
+
+# 5. ARM THE MONITOR (see Monitoring) → preview /version.buildSha must reach ${SHA:0:12}
+```
+
+Result that run: preview `2a5504de → b377fbc5` (apex 200), shipping 4 stacked PRs
+in one flight. Gotchas that wasted cycles: short-sha "none" from the resolver;
+the slug is `Cogni-DAO/cogni`; and "the queued sha is overlays-only so it has no
+operator image" was FALSE — merge_group rebuilt operator at HEAD with the feature.
 
 ## Failure modes — first-step diagnosis
 
@@ -264,7 +313,7 @@ Only do this when you've verified the prior run reached a terminal state. Bypass
 | aggregate-production red, "Axiom 19 contradiction: scheduler-worker"                                                                             | bug.0443 fix in `verify-buildsha.sh` is missing/reverted. The `NON_INGRESS_NODES` marker-emission block must be present.                                                                                                                                                                                                          |
 | verify-buildsha timeout 90s                                                                                                                      | Pod cutover incomplete; usually transient. Re-check `/version` directly in 60s. If still wrong, check Argo app revision matches deploy-branch tip.                                                                                                                                                                                |
 | `verify-deploy` green but `/version.buildSha` still old                                                                                          | CDN/edge cache, OR you hit `/readyz` (which the old pod still answers) instead of `/version`. Always use `/version.buildSha` for verification, never `/readyz`.                                                                                                                                                                   |
-| Lease stuck `dispatching`                                                                                                                        | The exit-1 + `if: always() &&` unlock should have fired. If not, manually unlock as above (cautiously).                                                                                                                                                                                                                           |
+| Lease stuck `dispatching` — flights green but preview buildSha frozen, `deploy-preview` skipped | Orphaned lease; auto-flights queue behind it. Follow **Proven orphaned-lease heal** above: prove no flight in-flight → verify images → unlock → flight main HEAD → monitor.                                                                                                                                                       |
 | Production "succeeded" but only some nodes advanced                                                                                              | Affected-only — `nodes` input was scoped, or the source sha's image set didn't cover all targets. Verify per-node `current-sha` on each `deploy/production-*`.                                                                                                                                                                    |
 | prod-pd: every `verify-deploy (<node>)` red at `Resolve cell state` with `bash: app-src/scripts/ci/<script>: No such file or directory` exit 127 | `source_sha` predates the verify-deploy script tree. Don't use `deploy/preview:.promote-state/current-sha` — `aggregate-rollup.sh` writes the merge-base of per-node tips, which under affected-only divergence regresses behind script additions. Re-dispatch using preflight #4's picker (newest preview-{node} promotion sha). |
 
