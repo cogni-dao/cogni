@@ -1099,23 +1099,35 @@ log_info "Running db-backup validation backup..."
 # container name; the systemd unit's ExecStartPost mirrors this for the timer.
 # A pre-cleanup at line ~888 + the existing top-level [FATAL] ERR trap handle
 # the case where validation aborts mid-flight and leaves a leftover. (bug.5169)
-$RUNTIME_COMPOSE --profile backup up --force-recreate --no-deps --abort-on-container-exit --exit-code-from db-backup db-backup
-$RUNTIME_COMPOSE --profile backup logs --tail 80 db-backup | grep 'db_backup.completed' || {
-  $RUNTIME_COMPOSE --profile backup rm -f db-backup 2>/dev/null || true
-  log_error "db-backup completed logs missing after validation backup"
-  exit 1
-}
-$RUNTIME_COMPOSE --profile backup run --rm --no-deps --entrypoint bash db-backup -lc '
-  set -euo pipefail
-  for cluster in app temporal; do
-    latest=$(find "/backups/${cluster}" -mindepth 1 -maxdepth 1 -type d | sort | tail -1)
-    test -n "$latest"
-    test -s "${latest}/MANIFEST.sha256"
-    echo "db-backup manifest verified: ${latest}/MANIFEST.sha256"
-  done
-'
+# NON-FATAL: the inline validation backup is a smoke test, NOT a serving
+# prerequisite. The scheduled systemd timer (above) is the real backup. A flaky
+# / SIGKILLed (exit 137) validation MUST NOT abort deploy-infra and starve the
+# app layer (Step 7 creates the namespace + node-app Secrets + triggers Argo) —
+# that turns one backup hiccup into a cluster-wide outage (provision-env skill
+# Gotcha 13, candidate-a 2026-06-04). Warn + continue; the timer retries.
+backup_validated=1
+if $RUNTIME_COMPOSE --profile backup up --force-recreate --no-deps --abort-on-container-exit --exit-code-from db-backup db-backup; then
+  $RUNTIME_COMPOSE --profile backup logs --tail 80 db-backup | grep -q 'db_backup.completed' \
+    || { log_warn "db-backup completed-marker missing after validation backup (non-fatal)"; backup_validated=0; }
+  $RUNTIME_COMPOSE --profile backup run --rm --no-deps --entrypoint bash db-backup -lc '
+    set -euo pipefail
+    for cluster in app temporal; do
+      latest=$(find "/backups/${cluster}" -mindepth 1 -maxdepth 1 -type d | sort | tail -1)
+      test -n "$latest"
+      test -s "${latest}/MANIFEST.sha256"
+      echo "db-backup manifest verified: ${latest}/MANIFEST.sha256"
+    done
+  ' || { log_warn "db-backup manifest verification failed (non-fatal)"; backup_validated=0; }
+else
+  log_warn "db-backup validation backup did not exit clean (e.g. exit 137 on a loaded VM) — NON-FATAL; the scheduled timer will retry. Continuing so the app layer deploys."
+  backup_validated=0
+fi
 $RUNTIME_COMPOSE --profile backup rm -f db-backup 2>/dev/null || true
-emit_deployment_event "infra_deployment.db_backup_scheduled" "success" "db-backup timer installed and validation backup completed"
+if [[ "$backup_validated" == 1 ]]; then
+  emit_deployment_event "infra_deployment.db_backup_scheduled" "success" "db-backup timer installed and validation backup completed"
+else
+  emit_deployment_event "infra_deployment.db_backup_scheduled" "warning" "db-backup timer installed; inline validation backup did not fully verify (non-fatal — timer retries)"
+fi
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Step 6.6a: Checksum-gated restart for LiteLLM config changes
