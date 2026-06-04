@@ -18,7 +18,7 @@ import Link from "next/link";
 import type { ReactElement } from "react";
 
 import { Card } from "@/components";
-import type { NodeSummary } from "@/ports/node-registry";
+import type { NodeSummary } from "@/ports/node-registry.port";
 
 function NodeTile({ node }: { node: NodeSummary }): ReactElement {
   return (

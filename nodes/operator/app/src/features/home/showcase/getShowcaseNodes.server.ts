@@ -12,7 +12,7 @@
  * @public
  */
 
-import type { NodeRegistryPort, NodeSummary } from "@/ports/node-registry";
+import type { NodeRegistryPort, NodeSummary } from "@/ports/node-registry.port";
 import { serverEnv } from "@/shared/env";
 
 import { SHOWCASE_NODES } from "./nodes.data";

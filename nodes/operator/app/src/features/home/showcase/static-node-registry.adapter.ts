@@ -14,7 +14,7 @@
  * @public
  */
 
-import type { NodeRegistryPort, NodeSummary } from "@/ports/node-registry";
+import type { NodeRegistryPort, NodeSummary } from "@/ports/node-registry.port";
 
 import { SHOWCASE_NODES, type ShowcaseNode } from "./nodes.data";
 import { resolveHref } from "./nodes.resolve";

@@ -23,8 +23,8 @@ export interface ResolvedShowcaseNode extends ShowcaseNode {
 
 /** Resolve a base domain from env-shaped input: explicit DOMAIN wins, else APP_BASE_URL's host. */
 export function baseDomain(env: {
-  DOMAIN?: string;
-  APP_BASE_URL?: string;
+  DOMAIN?: string | undefined;
+  APP_BASE_URL?: string | undefined;
 }): string | undefined {
   if (env.DOMAIN) return env.DOMAIN;
   if (env.APP_BASE_URL) {
