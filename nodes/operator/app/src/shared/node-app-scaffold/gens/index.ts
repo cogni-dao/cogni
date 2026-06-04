@@ -16,7 +16,6 @@ export { insertAppsetKustomization, renderNodeAppset } from "./appset";
 export { insertCaddyBlock } from "./caddyfile";
 export { renderCatalog } from "./catalog";
 export { renderGitmodules } from "./gitmodules";
-export { insertLockfileImporters } from "./lockfile";
 export { nextFreeNodePort } from "./node-port";
 export { renderOverlay } from "./overlay";
 export { type RenderRepoSpecInput, renderRepoSpec } from "./repo-spec";

@@ -100,21 +100,32 @@ export async function POST(_request: Request, ctx: RouteParams) {
     );
   }
 
-  // App-direct: the operator authors the node-app PR itself via the GitHub Git Data API —
-  // referencing node-template's tree + applying the pure footprint gens in one commit. No
-  // workflow dispatch; the PR URL is available synchronously.
+  // Submodule birth: mint the node's own repo from the node-template template (its ~1100 files live
+  // there, not inlined into the operator), then the operator authors a PR pinning it as a git
+  // submodule at `nodes/<slug>` + the footprint gens — one App-authored commit, PR URL synchronous.
   const writer = createNodeRepoWriter(env);
+  const identity = {
+    nodeId: node.id,
+    chainId: node.chainId,
+    daoContract: node.daoAddress,
+    pluginContract: node.pluginAddress,
+    signalContract: node.signalAddress,
+  };
   let pr: { prNumber: number; prUrl: string };
   try {
-    pr = await writer.openNodeAppPr({
+    const minted = await writer.generateFromTemplate({
+      templateOwner: node.repoOwner,
+      owner: node.repoOwner,
+      slug: node.slug,
+      ...identity,
+    });
+    pr = await writer.openNodeSubmodulePr({
       owner: node.repoOwner,
       repo: node.repoName,
       slug: node.slug,
-      nodeId: node.id,
-      chainId: node.chainId,
-      daoContract: node.daoAddress,
-      pluginContract: node.pluginAddress,
-      signalContract: node.signalAddress,
+      ...identity,
+      nodeRepoUrl: minted.cloneUrl,
+      nodeRepoHeadSha: minted.headSha,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "unknown";

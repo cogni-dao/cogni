@@ -23,7 +23,6 @@ import { Octokit } from "@octokit/core";
 import {
   insertAppsetKustomization,
   insertCaddyBlock,
-  insertLockfileImporters,
   insertSchedulerEndpoint,
   insertScopeFilter,
   nextFreeNodePort,
@@ -87,6 +86,21 @@ export interface OpenNodeSubmodulePrInput extends OpenNodeAppPrInput {
   readonly nodeRepoHeadSha: string;
 }
 
+/** Input to {@link GitHubRepoWriter.generateFromTemplate}: mint a node repo from `node-template`. */
+export interface GenerateFromTemplateInput {
+  /** Org/user owning BOTH the `node-template` template and the new repo (e.g. `Cogni-DAO`). */
+  readonly templateOwner: string;
+  /** Owner the new node repo is created under (same org). */
+  readonly owner: string;
+  /** New repo name = node slug. */
+  readonly slug: string;
+  readonly nodeId: string;
+  readonly chainId: number;
+  readonly daoContract?: string;
+  readonly pluginContract?: string;
+  readonly signalContract?: string;
+}
+
 /** One entry in a `POST /git/trees` payload; `sha: null` deletes the path from `base_tree`. */
 interface GitTreeEntry {
   readonly path: string;
@@ -108,7 +122,6 @@ const FOOTPRINT = {
   caddyfile: "infra/compose/edge/configs/Caddyfile.tmpl",
   ciYaml: ".github/workflows/ci.yaml",
   schedulerConfigmap: "infra/k8s/base/scheduler-worker/configmap.yaml",
-  lockfile: "pnpm-lock.yaml",
   argocdKustomization: "infra/k8s/argocd/kustomization.yaml",
 } as const;
 
@@ -118,42 +131,10 @@ const FOOTPRINT = {
  */
 const APPSET_TEMPLATE_PATH = "scripts/ci/node-applicationset.yaml.tmpl";
 
-/**
- * Text files inside `nodes/node-template/` that name `node-template` and must be rewritten to the
- * new slug to match `scaffold-node.sh`'s global `s/node-template/<slug>/g`. Paths are relative to
- * the node root. Derived from `git grep -Il node-template -- 'nodes/node-template/**'`, minus the
- * two paths handled specially below (`.cogni/repo-spec.yaml` is regenerated; `k8s/external-secrets`
- * is deleted). A blob present in the template but absent here would simply not be renamed — the only
- * cost is a stale `node-template` literal, caught by the single-node-scope + drift gates in CI.
- */
-const NODE_RENAME_PATHS: readonly string[] = [
-  "app/Dockerfile",
-  "app/package.json",
-  "app/src/app/layout.tsx",
-  "app/src/components/vendor/assistant-ui/tool-ui-registry.tsx",
-  "app/src/instrumentation.ts",
-  "drizzle.config.ts",
-  "drizzle.doltgres.config.ts",
-  "graphs/package.json",
-  "packages/doltgres-schema/AGENTS.md",
-  "packages/doltgres-schema/package.json",
-  "packages/doltgres-schema/src/index.ts",
-  "packages/doltgres-schema/src/knowledge.ts",
-  "packages/doltgres-schema/src/work-items.ts",
-  "packages/doltgres-schema/stamp-commit.mjs",
-  "packages/doltgres-schema/tsup.config.ts",
-];
-
-/**
- * Subtrees cloned with the node but DELETED in the new node's tree (sha:null).
- * bug.5086 Part D — cloning `.cogni/secrets-catalog.yaml` re-declares the ~57 shared baseline names
- * → NO_NAME_COLLISIONS throw → kills setup:secrets for every env. `k8s/external-secrets` is per-node
- * ExternalSecret manifests that a fresh clone must not carry. Both are deleted only when present.
- */
-const NODE_DELETE_PATHS = [
-  ".cogni/secrets-catalog.yaml",
-  "k8s/external-secrets",
-] as const;
+// Node-content rename/delete (NODE_RENAME_PATHS / NODE_DELETE_PATHS) is gone with the inline
+// `buildNodeSubtree`: a submodule node's files live in its own repo (minted via
+// `generateFromTemplate`), and the seed already strips `.cogni/secrets-catalog.yaml` +
+// `k8s/external-secrets` (bug.5086 Part D) — the operator never rewrites node-content blobs.
 
 export class GitHubRepoWriter {
   private readonly config: GitHubRepoWriterConfig;
@@ -280,65 +261,83 @@ export class GitHubRepoWriter {
   }
 
   /**
-   * Author a node-birth ("node-app") PR directly, as the App, via the Git Data API. Builds the new
-   * `nodes/<slug>` subtree by referencing node-template's existing tree (overriding only the renamed
-   * files + the regenerated repo-spec, deleting secrets-catalog + external-secrets), then applies the
-   * single-file footprint gens (catalog, overlays×3, appsets×3, Caddyfile, ci.yaml, scheduler
-   * configmap, lockfile) atop main's tree in one commit + branch + PR. No checkout, no bash, no
-   * per-file upload of the ~1075 unchanged node blobs.
+   * Mint a new node repo from the `node-template` template (generate-from-template) and set its
+   * identity — commit the regenerated `.cogni/repo-spec.yaml` to the new repo's `main`. Returns the
+   * clone URL + new HEAD SHA: the gitlink pin {@link openNodeSubmodulePr} consumes.
+   *
+   * Replaces the inline `openNodeAppPr` subtree-build: the node's ~1100 files now live in their own
+   * repo, not inlined into the operator tree. Requires `node-template` marked a GitHub template repo
+   * + the App installed org-wide (it must create the repo AND commit to it).
    */
-  async openNodeAppPr(input: OpenNodeAppPrInput): Promise<OpenNodeAppPrResult> {
-    const { owner, repo, slug } = input;
-    const octokit = await this.getOctokit(owner, repo);
+  async generateFromTemplate(
+    input: GenerateFromTemplateInput
+  ): Promise<{ cloneUrl: string; headSha: string }> {
+    const { templateOwner, owner, slug } = input;
+    const tplOctokit = await this.getOctokit(templateOwner, TEMPLATE_SLUG);
+    const { data: created } = await tplOctokit.request(
+      "POST /repos/{template_owner}/{template_repo}/generate",
+      {
+        template_owner: templateOwner,
+        template_repo: TEMPLATE_SLUG,
+        owner,
+        name: slug,
+        private: false,
+        description: `Cogni node ${slug} — submodule of the operator monorepo`,
+      }
+    );
+
+    // generate-from-template copies node-template's `.cogni/repo-spec.yaml` verbatim (its identity);
+    // override it on the minted repo's main with this node's identity.
+    const octokit = await this.getOctokit(owner, slug);
     const { baseCommitSha, baseTreeSha } = await this.resolveMainBase(
       octokit,
       owner,
-      repo
+      slug
     );
-
-    // Inline node subtree (reference node-template's tree, override only what changes) + footprint
-    // blobs threaded through the single-file gens.
-    const nodePort = await this.allocateNodePort(
+    const repoSpecSha = await this.createBlob(
       octokit,
       owner,
-      repo,
-      baseTreeSha
+      slug,
+      renderRepoSpec({
+        nodeId: input.nodeId,
+        chainId: input.chainId,
+        daoContract: input.daoContract,
+        pluginContract: input.pluginContract,
+        signalContract: input.signalContract,
+      })
     );
-    const nodeTreeSha = await this.buildNodeSubtree(
-      octokit,
-      owner,
-      repo,
-      baseTreeSha,
-      input
+    const { data: tree } = await octokit.request(
+      "POST /repos/{owner}/{repo}/git/trees",
+      {
+        owner,
+        repo: slug,
+        base_tree: baseTreeSha,
+        tree: [
+          {
+            path: ".cogni/repo-spec.yaml",
+            mode: "100644",
+            type: "blob",
+            sha: repoSpecSha,
+          },
+        ],
+      }
     );
-    const footprintEntries = await this.buildFootprintEntries(
-      octokit,
-      owner,
-      repo,
-      input,
-      CONTAINER_PORT,
-      nodePort
+    const { data: commit } = await octokit.request(
+      "POST /repos/{owner}/{repo}/git/commits",
+      {
+        owner,
+        repo: slug,
+        message: `chore(node): set ${slug} identity`,
+        tree: tree.sha,
+        parents: [baseCommitSha],
+      }
     );
-
-    return this.commitTreeAndOpenPr(octokit, owner, repo, slug, {
-      baseCommitSha,
-      baseTreeSha,
-      entries: [
-        {
-          path: `nodes/${slug}`,
-          mode: "040000",
-          type: "tree",
-          sha: nodeTreeSha,
-        },
-        ...footprintEntries,
-      ],
-      message: `feat(node): bootstrap node-app for ${slug}`,
-      branch: `cogni-operator/node-bootstrap-${slug}`,
-    });
+    await this.upsertRef(octokit, owner, slug, "main", commit.sha);
+    return { cloneUrl: created.clone_url, headSha: commit.sha };
   }
 
   /**
-   * Submodule-birth sibling of {@link openNodeAppPr}: instead of inlining the node's ~1100 files into
+   * Submodule-birth consumer of {@link generateFromTemplate}: instead of inlining the node's files into
    * the operator tree, pin an already-minted node repo as a git submodule at `nodes/<slug>` (a
    * `160000` gitlink) + register it in `.gitmodules`, alongside the same catalog/overlays/appsets/
    * Caddyfile/scheduler/scope-filter footprint MINUS the lockfile (a submodule node is not a workspace
@@ -366,7 +365,12 @@ export class GitHubRepoWriter {
       owner,
       repo,
       ".gitmodules"
-    ).catch(() => null);
+    ).catch((err: unknown) => {
+      // Only a missing .gitmodules is expected (first submodule). Never swallow real errors — a
+      // transient read failure would otherwise overwrite an existing file, dropping its submodules.
+      if ((err as { status?: number })?.status === 404) return null;
+      throw err;
+    });
     const gitmodulesSha = await this.createBlob(
       octokit,
       owner,
@@ -374,7 +378,7 @@ export class GitHubRepoWriter {
       renderGitmodules(currentGitmodules, slug, nodeRepoUrl)
     );
 
-    // Same control-plane gens as the inline path, MINUS the lockfile (not a workspace member).
+    // Control-plane footprint gens (catalog, overlays, appsets, Caddyfile, scope-filter, scheduler).
     const nodePort = await this.allocateNodePort(
       octokit,
       owner,
@@ -387,8 +391,7 @@ export class GitHubRepoWriter {
       repo,
       input,
       CONTAINER_PORT,
-      nodePort,
-      { includeLockfile: false }
+      nodePort
     );
 
     // The node is a 160000 GITLINK (the pin), not an inline subtree.
@@ -480,7 +483,7 @@ export class GitHubRepoWriter {
       "infra/catalog"
     );
     if (!catalogTreeSha) {
-      throw new Error("openNodeAppPr: infra/catalog tree not found on main");
+      throw new Error("allocateNodePort: infra/catalog tree not found on main");
     }
     const { data: catalogTree } = await octokit.request(
       "GET /repos/{owner}/{repo}/git/trees/{tree_sha}",
@@ -499,96 +502,6 @@ export class GitHubRepoWriter {
     return nextFreeNodePort(ports);
   }
 
-  /**
-   * Build the `nodes/<slug>` subtree by basing on node-template's tree and overriding only:
-   *   - the renamed text files (node-template → slug), as new blobs;
-   *   - `.cogni/repo-spec.yaml` = renderRepoSpec(...);
-   *   - DELETE `.cogni/secrets-catalog.yaml` + `k8s/external-secrets` (sha:null, when present).
-   */
-  private async buildNodeSubtree(
-    octokit: Octokit,
-    owner: string,
-    repo: string,
-    baseTreeSha: string,
-    input: OpenNodeAppPrInput
-  ): Promise<string> {
-    const { slug } = input;
-    const templateTreeSha = await this.findTreeEntrySha(
-      octokit,
-      owner,
-      repo,
-      baseTreeSha,
-      `nodes/${TEMPLATE_SLUG}`
-    );
-    if (!templateTreeSha) {
-      throw new Error(
-        `openNodeAppPr: nodes/${TEMPLATE_SLUG} tree not found on main`
-      );
-    }
-
-    // Recursive listing of the template node tree → which delete-paths actually exist.
-    const { data: recursive } = await octokit.request(
-      "GET /repos/{owner}/{repo}/git/trees/{tree_sha}",
-      { owner, repo, tree_sha: templateTreeSha, recursive: "1" }
-    );
-    const presentPaths = new Set(recursive.tree.map((e) => e.path ?? ""));
-
-    const overrides: GitTreeEntry[] = [];
-
-    // Renamed text files → new blobs (global node-template → slug, matching scaffold-node.sh).
-    for (const path of NODE_RENAME_PATHS) {
-      const entry = recursive.tree.find(
-        (e) => e.path === path && e.type === "blob"
-      );
-      if (!entry?.sha) continue;
-      const original = await this.readBlob(octokit, owner, repo, entry.sha);
-      const rewritten = original.split(TEMPLATE_SLUG).join(slug);
-      const blobSha = await this.createBlob(octokit, owner, repo, rewritten);
-      overrides.push({ path, mode: "100644", type: "blob", sha: blobSha });
-    }
-
-    // Regenerated identity doc.
-    const repoSpecSha = await this.createBlob(
-      octokit,
-      owner,
-      repo,
-      renderRepoSpec({
-        nodeId: input.nodeId,
-        chainId: input.chainId,
-        daoContract: input.daoContract,
-        pluginContract: input.pluginContract,
-        signalContract: input.signalContract,
-      })
-    );
-    overrides.push({
-      path: ".cogni/repo-spec.yaml",
-      mode: "100644",
-      type: "blob",
-      sha: repoSpecSha,
-    });
-
-    // Deletions (only emit sha:null for paths the template actually carries).
-    for (const path of NODE_DELETE_PATHS) {
-      const isDir = !presentPaths.has(path);
-      const present = isDir
-        ? [...presentPaths].some((p) => p.startsWith(`${path}/`))
-        : true;
-      if (!present) continue;
-      overrides.push({
-        path,
-        mode: isDir ? "040000" : "100644",
-        type: isDir ? "tree" : "blob",
-        sha: null,
-      });
-    }
-
-    const { data: nodeTree } = await octokit.request(
-      "POST /repos/{owner}/{repo}/git/trees",
-      { owner, repo, base_tree: templateTreeSha, tree: overrides }
-    );
-    return nodeTree.sha;
-  }
-
   /** Footprint single-file gens: fetch current main blob, apply the gen, create the new blob. */
   private async buildFootprintEntries(
     octokit: Octokit,
@@ -596,8 +509,7 @@ export class GitHubRepoWriter {
     repo: string,
     input: OpenNodeAppPrInput,
     port: number,
-    nodePort: number,
-    opts: { readonly includeLockfile?: boolean } = {}
+    nodePort: number
   ): Promise<GitTreeEntry[]> {
     const { slug, nodeId } = input;
     const entries: GitTreeEntry[] = [];
@@ -685,21 +597,8 @@ export class GitHubRepoWriter {
       insertSchedulerEndpoint(configmap, slug, nodeId)
     );
 
-    // pnpm-lock.yaml — INLINE nodes only. A submodule node is not a workspace member of the operator
-    // monorepo (its packages resolve in its own repo + lockfile), so the submodule-birth path skips
-    // this — the single biggest chunk of inline-only tax (knowledge: submodule-node-birth-design).
-    if (opts.includeLockfile !== false) {
-      const lockfile = await this.readFileOnMain(
-        octokit,
-        owner,
-        repo,
-        FOOTPRINT.lockfile
-      );
-      await addBlob(
-        FOOTPRINT.lockfile,
-        insertLockfileImporters(lockfile, slug)
-      );
-    }
+    // No pnpm-lock.yaml: a submodule node is not a workspace member of the operator monorepo — its
+    // packages resolve in its own repo + lockfile. (The single biggest chunk of inline-only tax.)
 
     return entries;
   }
@@ -761,7 +660,7 @@ export class GitHubRepoWriter {
       { owner, repo, path, ref: "main" }
     );
     if (Array.isArray(data) || data.type !== "file") {
-      throw new Error(`openNodeAppPr: expected a file at ${path} on main`);
+      throw new Error(`readFileOnMain: expected a file at ${path} on main`);
     }
     if (data.encoding === "base64" && data.content) {
       return Buffer.from(data.content, "base64").toString("utf-8");
