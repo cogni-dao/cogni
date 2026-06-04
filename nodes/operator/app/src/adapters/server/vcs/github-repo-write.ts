@@ -28,6 +28,7 @@ import {
   insertScopeFilter,
   nextFreeNodePort,
   renderCatalog,
+  renderGitmodules,
   renderNodeAppset,
   renderOverlay,
   renderRepoSpec,
@@ -70,6 +71,20 @@ export interface OpenNodeAppPrInput {
 export interface OpenNodeAppPrResult {
   readonly prNumber: number;
   readonly prUrl: string;
+}
+
+/**
+ * Submodule-birth variant of {@link OpenNodeAppPrInput}: the node's ~1100 files live in an
+ * already-minted standalone repo (the submodule target), not inline in the operator tree. The
+ * operator PR pins that repo as a gitlink at `nodes/<slug>` + registers it in `.gitmodules`.
+ * Minting the repo (GitHub generate-from-template) is the caller's responsibility — it requires a
+ * standalone `node-template` template repo and is injected here as `nodeRepoUrl` + `nodeRepoHeadSha`.
+ */
+export interface OpenNodeSubmodulePrInput extends OpenNodeAppPrInput {
+  /** Clone URL of the minted node repo, written into `.gitmodules`. */
+  readonly nodeRepoUrl: string;
+  /** Default-branch HEAD commit SHA of the minted node repo — the gitlink pin. */
+  readonly nodeRepoHeadSha: string;
 }
 
 /** One entry in a `POST /git/trees` payload; `sha: null` deletes the path from `base_tree`. */
@@ -275,8 +290,137 @@ export class GitHubRepoWriter {
   async openNodeAppPr(input: OpenNodeAppPrInput): Promise<OpenNodeAppPrResult> {
     const { owner, repo, slug } = input;
     const octokit = await this.getOctokit(owner, repo);
+    const { baseCommitSha, baseTreeSha } = await this.resolveMainBase(
+      octokit,
+      owner,
+      repo
+    );
 
-    // a. Base commit → its root tree.
+    // Inline node subtree (reference node-template's tree, override only what changes) + footprint
+    // blobs threaded through the single-file gens.
+    const nodePort = await this.allocateNodePort(
+      octokit,
+      owner,
+      repo,
+      baseTreeSha
+    );
+    const nodeTreeSha = await this.buildNodeSubtree(
+      octokit,
+      owner,
+      repo,
+      baseTreeSha,
+      input
+    );
+    const footprintEntries = await this.buildFootprintEntries(
+      octokit,
+      owner,
+      repo,
+      input,
+      CONTAINER_PORT,
+      nodePort
+    );
+
+    return this.commitTreeAndOpenPr(octokit, owner, repo, slug, {
+      baseCommitSha,
+      baseTreeSha,
+      entries: [
+        {
+          path: `nodes/${slug}`,
+          mode: "040000",
+          type: "tree",
+          sha: nodeTreeSha,
+        },
+        ...footprintEntries,
+      ],
+      message: `feat(node): bootstrap node-app for ${slug}`,
+      branch: `cogni-operator/node-bootstrap-${slug}`,
+    });
+  }
+
+  /**
+   * Submodule-birth sibling of {@link openNodeAppPr}: instead of inlining the node's ~1100 files into
+   * the operator tree, pin an already-minted node repo as a git submodule at `nodes/<slug>` (a
+   * `160000` gitlink) + register it in `.gitmodules`, alongside the same catalog/overlays/appsets/
+   * Caddyfile/scheduler/scope-filter footprint MINUS the lockfile (a submodule node is not a workspace
+   * member). The PR touches only operator-domain paths (bare gitlink + operator infra), so it passes
+   * single-node-scope as ONE domain — SUBMODULE_GITLINK_IS_OPERATOR_PIN (spec: node-ci-cd-contract,
+   * proven by single-node-scope fixture 19).
+   *
+   * Minting the node repo (GitHub generate-from-template — needs a standalone `node-template` template
+   * repo) is the caller's job; its result is injected as `nodeRepoUrl` + `nodeRepoHeadSha`.
+   */
+  async openNodeSubmodulePr(
+    input: OpenNodeSubmodulePrInput
+  ): Promise<OpenNodeAppPrResult> {
+    const { owner, repo, slug, nodeRepoUrl, nodeRepoHeadSha } = input;
+    const octokit = await this.getOctokit(owner, repo);
+    const { baseCommitSha, baseTreeSha } = await this.resolveMainBase(
+      octokit,
+      owner,
+      repo
+    );
+
+    // .gitmodules — append the submodule stanza over current main (create if absent).
+    const currentGitmodules = await this.readFileOnMain(
+      octokit,
+      owner,
+      repo,
+      ".gitmodules"
+    ).catch(() => null);
+    const gitmodulesSha = await this.createBlob(
+      octokit,
+      owner,
+      repo,
+      renderGitmodules(currentGitmodules, slug, nodeRepoUrl)
+    );
+
+    // Same control-plane gens as the inline path, MINUS the lockfile (not a workspace member).
+    const nodePort = await this.allocateNodePort(
+      octokit,
+      owner,
+      repo,
+      baseTreeSha
+    );
+    const footprintEntries = await this.buildFootprintEntries(
+      octokit,
+      owner,
+      repo,
+      input,
+      CONTAINER_PORT,
+      nodePort,
+      { includeLockfile: false }
+    );
+
+    // The node is a 160000 GITLINK (the pin), not an inline subtree.
+    return this.commitTreeAndOpenPr(octokit, owner, repo, slug, {
+      baseCommitSha,
+      baseTreeSha,
+      entries: [
+        {
+          path: `nodes/${slug}`,
+          mode: "160000",
+          type: "commit",
+          sha: nodeRepoHeadSha,
+        },
+        {
+          path: ".gitmodules",
+          mode: "100644",
+          type: "blob",
+          sha: gitmodulesSha,
+        },
+        ...footprintEntries,
+      ],
+      message: `feat(node): pin ${slug} as a submodule`,
+      branch: `cogni-operator/node-submodule-${slug}`,
+    });
+  }
+
+  /** Resolve `heads/main` → its commit + root-tree SHAs (the parent for a node-birth commit). */
+  private async resolveMainBase(
+    octokit: Octokit,
+    owner: string,
+    repo: string
+  ): Promise<{ baseCommitSha: string; baseTreeSha: string }> {
     const { data: ref } = await octokit.request(
       "GET /repos/{owner}/{repo}/git/ref/{ref}",
       { owner, repo, ref: "heads/main" }
@@ -286,69 +430,39 @@ export class GitHubRepoWriter {
       "GET /repos/{owner}/{repo}/git/commits/{commit_sha}",
       { owner, repo, commit_sha: baseCommitSha }
     );
-    const baseTreeSha = baseCommit.tree.sha;
+    return { baseCommitSha, baseTreeSha: baseCommit.tree.sha };
+  }
 
-    // b. Allocate the next free k3s NodePort from the catalog's existing node_port values.
-    const nodePort = await this.allocateNodePort(
-      octokit,
-      owner,
-      repo,
-      baseTreeSha
-    );
-    const port = CONTAINER_PORT;
-
-    // c. New node subtree — reference node-template's tree, override only what changes.
-    const nodeTreeSha = await this.buildNodeSubtree(
-      octokit,
-      owner,
-      repo,
-      baseTreeSha,
-      input
-    );
-
-    // d. Footprint blobs — current-main content threaded through the single-file gens.
-    const footprintEntries = await this.buildFootprintEntries(
-      octokit,
-      owner,
-      repo,
-      input,
-      port,
-      nodePort
-    );
-
-    // e. Final tree = main's tree + the node subtree + the footprint blobs.
+  /** Build the final tree atop `base_tree`, commit it, upsert the branch (idempotent), open/find the PR. */
+  private async commitTreeAndOpenPr(
+    octokit: Octokit,
+    owner: string,
+    repo: string,
+    slug: string,
+    args: {
+      baseCommitSha: string;
+      baseTreeSha: string;
+      entries: GitTreeEntry[];
+      message: string;
+      branch: string;
+    }
+  ): Promise<OpenNodeAppPrResult> {
     const { data: finalTree } = await octokit.request(
       "POST /repos/{owner}/{repo}/git/trees",
-      {
-        owner,
-        repo,
-        base_tree: baseTreeSha,
-        tree: [
-          {
-            path: `nodes/${slug}`,
-            mode: "040000",
-            type: "tree",
-            sha: nodeTreeSha,
-          },
-          ...footprintEntries,
-        ],
-      }
+      { owner, repo, base_tree: args.baseTreeSha, tree: args.entries }
     );
-
-    // f. Commit → branch (idempotent) → PR.
-    const branch = `cogni-operator/node-bootstrap-${slug}`;
     const { data: commit } = await octokit.request(
       "POST /repos/{owner}/{repo}/git/commits",
       {
         owner,
         repo,
-        message: `feat(node): bootstrap node-app for ${slug}`,
+        message: args.message,
         tree: finalTree.sha,
-        parents: [baseCommitSha],
+        parents: [args.baseCommitSha],
       }
     );
-    await this.upsertRef(octokit, owner, repo, branch, commit.sha);
-    return this.openOrFindPr(octokit, owner, repo, slug, branch);
+    await this.upsertRef(octokit, owner, repo, args.branch, commit.sha);
+    return this.openOrFindPr(octokit, owner, repo, slug, args.branch);
   }
 
   /** Resolve the next free NodePort: read each `infra/catalog/*.yaml` `node_port`, then `+100`. */
@@ -482,7 +596,8 @@ export class GitHubRepoWriter {
     repo: string,
     input: OpenNodeAppPrInput,
     port: number,
-    nodePort: number
+    nodePort: number,
+    opts: { readonly includeLockfile?: boolean } = {}
   ): Promise<GitTreeEntry[]> {
     const { slug, nodeId } = input;
     const entries: GitTreeEntry[] = [];
@@ -570,13 +685,21 @@ export class GitHubRepoWriter {
       insertSchedulerEndpoint(configmap, slug, nodeId)
     );
 
-    const lockfile = await this.readFileOnMain(
-      octokit,
-      owner,
-      repo,
-      FOOTPRINT.lockfile
-    );
-    await addBlob(FOOTPRINT.lockfile, insertLockfileImporters(lockfile, slug));
+    // pnpm-lock.yaml — INLINE nodes only. A submodule node is not a workspace member of the operator
+    // monorepo (its packages resolve in its own repo + lockfile), so the submodule-birth path skips
+    // this — the single biggest chunk of inline-only tax (knowledge: submodule-node-birth-design).
+    if (opts.includeLockfile !== false) {
+      const lockfile = await this.readFileOnMain(
+        octokit,
+        owner,
+        repo,
+        FOOTPRINT.lockfile
+      );
+      await addBlob(
+        FOOTPRINT.lockfile,
+        insertLockfileImporters(lockfile, slug)
+      );
+    }
 
     return entries;
   }
