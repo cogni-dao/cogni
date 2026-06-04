@@ -31,7 +31,7 @@ S0 spec   ─►  S1 manifest  ─►  S2 detector  ─►  S3 backlog drain  �
 DONE            DONE           DONE            NEXT                 PLANNED            CONDITIONAL
 ```
 
-S0 + S1 + S2 all shipped in [PR #1355](https://github.com/Cogni-DAO/cogni/pull/1355) (task.5068). First detector run against current `origin/main` (recorded in PR #1355) finds **171 drift items** between hub and `Cogni-DAO/node-template`, including the load-bearing bug.5001 anti-pattern (`.github/workflows/ci.yaml` differs).
+S0 + S1 + S2 all shipped in [PR #1355](https://github.com/Cogni-DAO/cogni/pull/1355) (task.5068). First detector run against current `origin/main` (recorded in PR #1355) finds **171 drift items** between hub and `Cogni-DAO/standalone-node`, including the load-bearing bug.5001 anti-pattern (`.github/workflows/ci.yaml` differs).
 
 ## Current Slice
 

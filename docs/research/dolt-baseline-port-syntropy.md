@@ -116,7 +116,7 @@ I flagged this last turn. The contribution-api design doc explicitly chose the m
 
 8. **work_items → knowledge entries** — wait for PR #1175 to either land or formally close. If it lands, the work_items table retires across all nodes. If it closes-as-rejected, promote work_items to shared base then.
 
-9. **External `Cogni-DAO/node-template` repo** — once #1377 merges with the shared-base promotion, sync-drift detector auto-propagates the new shared package + the re-export site. No manual action needed; the drift report (issue #1366) surfaces any artifact-side gap.
+9. **External `Cogni-DAO/standalone-node` repo** — once #1377 merges with the shared-base promotion, sync-drift detector auto-propagates the new shared package + the re-export site. No manual action needed; the drift report (issue #1366) surfaces any artifact-side gap.
 
 ## Open Questions
 

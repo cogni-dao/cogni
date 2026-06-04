@@ -75,7 +75,7 @@ Bound every Loki query with `startRfc3339` = flight dispatch time. Nice-to-have,
 ## Dependencies
 
 - **grafana MCP is optional, not blocking.** If loaded, use it for richer observability via the `grafana-watcher` sub-agent. If not loaded, proceed — `/version` buildSha match is a sufficient rollout gate. Never halt the loop on a missing grafana MCP.
-- **gh CLI** authenticated for `Cogni-DAO/node-template` (workflow_dispatch + PR write).
+- **gh CLI** authenticated for `Cogni-DAO/standalone-node` (workflow_dispatch + PR write).
 - **Local git worktree** with read access to `origin/deploy/candidate-a`, `origin/deploy/preview`, `origin/deploy/production`.
 
 ## Hot State — `dashboard.md`
@@ -94,7 +94,7 @@ Authoritative source for candidate-a: `origin/deploy/candidate-a` HEAD commit me
 
 ### 1. Triage
 
-Scan open PRs in `Cogni-DAO/node-template`. Filter **ready to flight**:
+Scan open PRs in `Cogni-DAO/standalone-node`. Filter **ready to flight**:
 
 - All required CI checks green. Expected-failing non-blocking: `require-pinned-release-branch` fails by design on every non-release PR to main; mention it in the scorecard, don't halt on it. `stack-test` is flaky — a single failure does NOT block candidate-a flight. It only blocks merge-to-main. Note it in the scorecard and flight anyway; re-run stack-test post-QA.
 - `PR Build` workflow succeeded AND images exist in GHCR as `pr-<N>-<SHA>-*`. If the image list is empty, the PR is infra-only — route it to the infra lever (`candidate-flight-infra.yml`) instead of the app lever.
@@ -121,11 +121,11 @@ If `state == busy`, abort and report the owner PR. If `free`, proceed.
 
 Two dispatchable workflows (see "Two Independent Levers" below). Route by what the PR changes:
 
-| PR changes                                    | Command                                                                                |
-| --------------------------------------------- | -------------------------------------------------------------------------------------- |
-| App code (`nodes/`, `packages/`, `services/`) | `gh workflow run candidate-flight.yml --repo Cogni-DAO/node-template -f pr_number=<N>` |
-| Infra only (`infra/compose/**`)               | merge PR → `gh workflow run candidate-flight-infra.yml --repo Cogni-DAO/node-template` |
-| Both                                          | App lever; infra lever follows after merge                                             |
+| PR changes                                    | Command                                                                                  |
+| --------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| App code (`nodes/`, `packages/`, `services/`) | `gh workflow run candidate-flight.yml --repo Cogni-DAO/standalone-node -f pr_number=<N>` |
+| Infra only (`infra/compose/**`)               | merge PR → `gh workflow run candidate-flight-infra.yml --repo Cogni-DAO/standalone-node` |
+| Both                                          | App lever; infra lever follows after merge                                               |
 
 `gh run watch` the dispatched run. On success, post a sticky PR comment:
 
@@ -204,14 +204,14 @@ Show the scorecard verbatim before routing.
 **PASS** → squash-merge, loop:
 
 ```bash
-gh pr merge <N> --repo Cogni-DAO/node-template --squash \
+gh pr merge <N> --repo Cogni-DAO/standalone-node --squash \
   --subject "<conventional commit subject> (#<N>)"
 ```
 
 **FAIL** → post scorecard as request-changes review, loop:
 
 ```bash
-gh pr review <N> --repo Cogni-DAO/node-template \
+gh pr review <N> --repo Cogni-DAO/standalone-node \
   --request-changes --body-file scorecard.md
 ```
 
@@ -230,13 +230,13 @@ Dispatch:
 
 ```bash
 # App lever — always flights the PR's head SHA, no ref needed
-gh workflow run candidate-flight.yml --repo Cogni-DAO/node-template -f pr_number=<N>
+gh workflow run candidate-flight.yml --repo Cogni-DAO/standalone-node -f pr_number=<N>
 
 # Infra lever — default dispatch sources scripts + infra/compose from main
-gh workflow run candidate-flight-infra.yml --repo Cogni-DAO/node-template
+gh workflow run candidate-flight-infra.yml --repo Cogni-DAO/standalone-node
 
 # Infra lever — pre-merge validation of a PR branch's deploy-infra.sh / infra/compose changes
-gh workflow run candidate-flight-infra.yml --repo Cogni-DAO/node-template --ref <branch>
+gh workflow run candidate-flight-infra.yml --repo Cogni-DAO/standalone-node --ref <branch>
 ```
 
 **Infra PRs can flight pre-merge via `--ref` (task.0345).** Both the workflow's scripts checkout and `inputs.ref` default to the dispatch ref, so `gh workflow run candidate-flight-infra.yml --ref <branch>` runs that branch's `scripts/ci/deploy-infra.sh` and rsyncs that branch's `infra/compose/**`. Use this when the PR touches the infra lever's reconciliation logic itself. Compose-config-only changes can still merge-first-then-dispatch — smaller blast radius, same outcome.

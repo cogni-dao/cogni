@@ -17,13 +17,13 @@ tags: [onboarding, agent, bootstrap]
 
 Paste this into a fresh Claude Code (or equivalent) session, in whatever parent directory you want the fork to land in:
 
-> Follow `docs/runbooks/fork-quickstart.md` in github.com/Cogni-DAO/node-template end-to-end.
+> Follow `docs/runbooks/fork-quickstart.md` in github.com/Cogni-DAO/standalone-node end-to-end.
 
 The agent reads this file and drives. You touch the keyboard for: a bot PAT, `infra/fork.yaml::domain.root`, and 6 env secrets via `gh secret set` prompts.
 
 ## Agent guide
 
-You are an autonomous fork-provisioning agent. Take `github.com/Cogni-DAO/node-template` from zero to `/readyz=200`. Pick defaults, install missing tools, retry transient failures. Report only when (a) `/readyz` returns 200, or (b) you hit a genuinely unrecoverable blocker.
+You are an autonomous fork-provisioning agent. Take `github.com/Cogni-DAO/standalone-node` from zero to `/readyz=200`. Pick defaults, install missing tools, retry transient failures. Report only when (a) `/readyz` returns 200, or (b) you hit a genuinely unrecoverable blocker.
 
 ### Communication contract (binding)
 
@@ -80,9 +80,9 @@ For tools without a wrapper (gh, age, jq, openssl, curl): brew or apt.
 USER=$(gh api user --jq .login)
 ```
 
-- If `gh api repos/$USER/node-template` returns 200 AND `.parent.full_name == "Cogni-DAO/node-template"` → reuse: `gh repo clone $USER/node-template`.
-- If it exists but isn't a fork of the template → defaulted name: `cogni-node-$(date +%Y%m%d)` and `gh repo fork Cogni-DAO/node-template --clone --remote --fork-name <name>`.
-- Otherwise: `gh repo fork Cogni-DAO/node-template --clone --remote`.
+- If `gh api repos/$USER/standalone-node` returns 200 AND `.parent.full_name == "Cogni-DAO/standalone-node"` → reuse: `gh repo clone $USER/standalone-node`.
+- If it exists but isn't a fork of the template → defaulted name: `cogni-node-$(date +%Y%m%d)` and `gh repo fork Cogni-DAO/standalone-node --clone --remote --fork-name <name>`.
+- Otherwise: `gh repo fork Cogni-DAO/standalone-node --clone --remote`.
 
 **Never accept gh's silent `-1`, `-2` suffix** — it produces slugs that drift from anything registered ahead of time. Use `--fork-name` explicitly if you'd get one.
 
@@ -283,7 +283,7 @@ Then commit + push `hardships.md` if you haven't already.
 - Don't escalate transient failures (rate-limit, network blip) without at least one retry.
 - Don't delete account-scoped infra (Cherry SSH keys, Cloudflare zones, GitHub org secrets) without enumerating EVERY reference across EVERY project on the account. A v0 canary did exactly this and took down production CI/CD.
 - Don't resolve "tofu apply: resource already exists" by deleting the conflicting resource. The script's idempotency is for resources it owns; cross-system collisions are out-of-contract. STOP and surface.
-- Don't run `bootstrap.sh` while `origin` points at `Cogni-DAO/node-template` or `Cogni-DAO/cogni`. The script self-aborts (running it inside the upstream template would corrupt shared state), but trust the gate — don't test it.
+- Don't run `bootstrap.sh` while `origin` points at `Cogni-DAO/standalone-node` or `Cogni-DAO/cogni`. The script self-aborts (running it inside the upstream template would corrupt shared state), but trust the gate — don't test it.
 
 ### Legacy fallback (do not use for fork bootstrap)
 

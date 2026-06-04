@@ -47,7 +47,7 @@ git fetch origin main && git merge-base --is-ancestor "$SHA" origin/main || echo
 
 # 2. mq-{N}-{SHA} images exist for ALL nodes you need.
 #    Reuse the workflow's own resolver — same logic flight-preview.yml runs.
-PR_N=$(gh api "repos/Cogni-DAO/node-template/commits/$SHA/pulls" --jq '.[0].number')
+PR_N=$(gh api "repos/Cogni-DAO/standalone-node/commits/$SHA/pulls" --jq '.[0].number')
 IMAGE_TAG="mq-${PR_N}-${SHA}" OUTPUT_FILE=/tmp/resolved.json \
   bash scripts/ci/resolve-pr-build-images.sh
 jq '.resolved_targets, .has_images' /tmp/resolved.json
@@ -248,7 +248,7 @@ Never re-flight a sha while `.promote-state/review-state` on `deploy/preview` is
 If a previous flight died and the lease is genuinely orphaned (rare — `aggregate-decide-outcome.sh`'s `if: always() &&` unlock should release it):
 
 ```bash
-GH_TOKEN=$(gh auth token) GITHUB_REPOSITORY=Cogni-DAO/node-template \
+GH_TOKEN=$(gh auth token) GITHUB_REPOSITORY=Cogni-DAO/standalone-node \
   DEPLOY_BRANCH=deploy/preview \
   bash scripts/ci/set-preview-review-state.sh unlocked
 ```

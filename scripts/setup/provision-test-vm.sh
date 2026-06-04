@@ -272,7 +272,7 @@ log_step "Phase 3: Provision VM"
 # Ported verbatim from node-template PR #19.
 #
 # Cogni-DAO/cogni               → cogni-dao-cogni
-# Cogni-DAO/node-template       → cogni-dao-node-template
+# Cogni-DAO/standalone-node       → cogni-dao-node-template
 # i-am-coco/cogni-node-20260517 → i-am-coco-cogni-node-20260517
 GH_REPO="${GH_REPO:-$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo "Cogni-DAO/cogni")}"
 VM_NAME_PREFIX=$(echo "${GH_REPO//\//-}" | tr '[:upper:]' '[:lower:]')

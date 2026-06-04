@@ -24,7 +24,7 @@ tags:
 Cogni's deployment artifacts span three git repos today:
 
 - `Cogni-DAO/cogni` — the **monorepo hub**. Holds `nodes/operator/`, `nodes/node-template/`, `nodes/resy/`, plus the canonical `scripts/ci/`, `infra/k8s/base/`, `.github/workflows/`, `infra/compose/`, `infra/catalog/`.
-- `Cogni-DAO/node-template` — the **OSS template artifact**. Public surface for forks. Mirrors the hub's `nodes/node-template/` 1:1 and inherits operator-scope infrastructure.
+- `Cogni-DAO/standalone-node` — the **OSS template artifact**. Public surface for forks. Mirrors the hub's `nodes/node-template/` 1:1 and inherits operator-scope infrastructure.
 - `Cogni-DAO/cogni-poly` — a **per-node fork artifact**. Polymarket-specific node that historically branched off node-template; continues to land operator-scope CI/infra fixes that the hub needs.
 
 Operator-scope fixes have been diverging across these three repos with no shared lineage. Empirical evidence and the backlog of unsynced PRs are tracked in [proj.repo-sync](../../work/projects/proj.repo-sync.md). The canonical example: `scripts/ci/wait-for-in-cluster-services.sh` is byte-identical-stale between hub and node-template, while cogni-poly already eliminated the divergence in [#127](https://github.com/Cogni-DAO/cogni-poly/pull/127). bug.5001 is the same anti-pattern repeated.
@@ -87,7 +87,7 @@ Define the contract that:
                                        │
                           ┌────────────┴────────────┐
                           ▼                          ▼
-                Cogni-DAO/node-template       Cogni-DAO/cogni-poly
+                Cogni-DAO/standalone-node       Cogni-DAO/cogni-poly
                 (OSS template artifact)       (per-node fork artifact)
                 ├── nodes/node-template/      ├── nodes/poly/         (fork-owned, not hub-mirrored)
                 │   (mirrors hub 1:1)         └── operator-scope paths (hub-mirrored)
@@ -137,7 +137,7 @@ The workflow upserts a tracking issue on the hub labeled `sync-drift` with the m
 
 **Permissions.** `contents: read` + `issues: write` on the hub. No PAT, no GitHub App — the default `GITHUB_TOKEN` is sufficient for v0.1 because:
 
-- Public artifacts (`Cogni-DAO/node-template`) are cloned anonymously.
+- Public artifacts (`Cogni-DAO/standalone-node`) are cloned anonymously.
 - Private artifacts (`Cogni-DAO/cogni-poly`) are skipped with an explicit `⏭️ skipped — visibility=private` line in the report. v0.2 plumbing for a PAT or GitHub App is a separate slice.
 - The detector does NOT open PRs on artifact repos. It only surfaces drift on the hub as an issue. Auto-PR-on-artifact is v0.2.
 
@@ -199,7 +199,7 @@ The property is asserted by the CONTRACT_TEST below.
 
 A repeatable validation that the contract holds end-to-end. **This test becomes load-bearing only after MULTI_NODE_OUT_OF_BOX is green** ([proj.repo-sync](../../work/projects/proj.repo-sync.md) slice S4). Before that, it documents the target state, not current state.
 
-1. Fork `Cogni-DAO/node-template` to a fresh GitHub account.
+1. Fork `Cogni-DAO/standalone-node` to a fresh GitHub account.
 2. Add a second node entry to `infra/catalog/` (per `infra/catalog/_schema.json`).
 3. Add `nodes/<name>/` with the minimal Shape A service skeleton (reference: [cogni-poly#128](https://github.com/Cogni-DAO/cogni-poly/pull/128)).
 4. Run the standard CI gates for the fork (catalog schema + workflow checks).

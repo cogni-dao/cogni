@@ -159,7 +159,7 @@ done
 # tenant isolation.
 GH_REPO=$(git -C "$REPO_ROOT" remote get-url origin \
   | sed -E 's#.*github.com[:/]([^/]+/[^/.]+).*#\1#')
-if [[ -z "$GH_REPO" || "$GH_REPO" =~ ^Cogni-DAO/node-template$ ]]; then
+if [[ -z "$GH_REPO" || "$GH_REPO" =~ ^Cogni-DAO/standalone-node$ ]]; then
   log_error "origin is the bare upstream template ($GH_REPO) or is undetectable."
   log_error "Provision from the hub (Cogni-DAO/cogni) or a configured fork — the"
   log_error "bootstrap pushes deploy state to origin, which the template cannot own."
@@ -343,7 +343,7 @@ COGNI_REPO_REF="$BRANCH"
 # included as keys to match the scheduler-worker ConfigMap convention
 # (services/scheduler-worker resolves either form).
 PLACEHOLDER_NODE_ID="00000000-0000-4000-a000-000000000000"
-# Upstream Cogni-DAO/node-template's committed node_id. Forks that haven't
+# Upstream Cogni-DAO/standalone-node's committed node_id. Forks that haven't
 # minted their own inherit this. Bumped here in lockstep when upstream rotates.
 UPSTREAM_NODE_ID="4ff8eac1-4eba-4ed0-931b-b1fe4f64713d"
 COGNI_NODE_ENDPOINTS_PARTS=()
@@ -377,11 +377,11 @@ for node in "${NODE_TARGETS[@]}"; do
   # running with upstream's DAO/wallet/payments — cross-tenant leak, not a
   # usable deployment. Legitimate owners of this UUID are the hub
   # (Cogni-DAO/cogni — operator's node_id IS the canonical identity, not an
-  # inheritance) and the upstream template's own canary (Cogni-DAO/node-template).
+  # inheritance) and the upstream template's own canary (Cogni-DAO/standalone-node).
   # Only true downstream forks must mint their own via the DAO setup wizard.
   if [[ "$nid" == "$UPSTREAM_NODE_ID" ]]; then
     origin_url=$(git -C "$REPO_ROOT" remote get-url origin 2>/dev/null || echo "")
-    if [[ "$origin_url" != *"Cogni-DAO/node-template"* && "$origin_url" != *"Cogni-DAO/cogni"* ]]; then
+    if [[ "$origin_url" != *"Cogni-DAO/standalone-node"* && "$origin_url" != *"Cogni-DAO/cogni"* ]]; then
       log_error "node_id for '${node}' equals upstream's UUID — your fork inherited"
       log_error "upstream's IDENTITY (DAO contracts, operator wallet, approvers, payments_in)."
       log_error "Deploying as-is would route real value through upstream's contracts."
@@ -430,7 +430,7 @@ log_step "Phase 3: Provision VM"
 # for a VM in a sibling project — Cherry SSH keys are ACCOUNT-scoped,
 # not project-scoped. Per-fork namespacing eliminates the collision class.
 #
-# Cogni-DAO/node-template       → cogni-dao-node-template
+# Cogni-DAO/standalone-node       → cogni-dao-node-template
 # i-am-coco/cogni-node-20260517 → i-am-coco-cogni-node-20260517
 VM_NAME_PREFIX=$(echo "${GH_REPO//\//-}" | tr '[:upper:]' '[:lower:]')
 log_info "VM/SSH-key prefix: ${VM_NAME_PREFIX} (from \$GH_REPO=${GH_REPO})"
@@ -1879,7 +1879,7 @@ fi
 log_info "Applying ${#APPSET_LOCALS[@]} ApplicationSet(s) for ${DEPLOY_ENV}: $(printf '%s ' "${APPSET_LOCALS[@]##*/}")"
 
 # B1 (deploy machinery) — substitute repoURL to point at the FORK, not the
-# upstream. AppSet files commit with the canonical Cogni-DAO/node-template
+# upstream. AppSet files commit with the canonical Cogni-DAO/standalone-node
 # URL; provision rewrites at apply time so Argo CD syncs from the fork's
 # own deploy/* branches. Idempotent for the canonical operator (no-op).
 for APPSET_LOCAL in "${APPSET_LOCALS[@]}"; do
