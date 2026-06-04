@@ -20,6 +20,29 @@ tags: [web3, setup, dao]
 
 You want to create a new Cogni DAO node. The formation wizard walks you through deploying a DAO + GovernanceERC20 token + CogniSignal contract on-chain, then verifying the deployment server-side.
 
+## Where This Fits — The Blessed Path
+
+There are two ways to run a Cogni node. Pick the one that matches your intent:
+
+| Path                        | You get                                        | Driven by                                                                                          |
+| --------------------------- | ---------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| **Node in the monorepo** ⭐ | A node deployed on shared Cogni infrastructure | This guide (wizard) → operator-authored PR → flight                                                |
+| **Standalone fork**         | Your own full instance on your own VM          | [`docs/runbooks/fork-quickstart.md`](../runbooks/fork-quickstart.md) (`Cogni-DAO/standalone-node`) |
+
+This guide is the **blessed path** — a node born into the Cogni monorepo, riding shared CI/CD:
+
+```
+1. Formation   wizard at /setup/dao → DAO + token + CogniSignal on-chain, server-verified (Steps 1-7)
+       ↓
+2. Publish     operator authors ONE GitHub App PR with the node's full monorepo footprint (Step 8)
+       ↓
+3. Flight      POST /api/v1/vcs/flight {prNumber} → build lands at <node>-test.cognidao.org
+       ↓
+4. Ongoing     per-node deploy branch + Argo Application; subsequent merges auto-deploy (CATALOG_IS_SSOT)
+```
+
+Formation (Steps 1-7) is **node-owned tooling with no operator dependency** — wallet signs in the browser, server verifies before persisting. Publish + Flight (Step 8 onward) are operator-driven.
+
 ## Preconditions
 
 - [ ] Wallet connected via RainbowKit (configured in `src/shared/web3/wagmi.config.ts`)
@@ -76,26 +99,25 @@ The wizard submits `{ chainId, daoTxHash, signalTxHash, initialHolder }` to the 
 
 The returned `repoSpecYaml` should be saved to `.cogni/repo-spec.yaml` in your repository.
 
-### 8. Deploy Infrastructure (Post-Formation)
+### 8. Publish — Operator Authors the Node PR (Automated)
 
-After on-chain formation, the new node needs infrastructure to run. These steps are **not automated yet** — each is a manual TODO:
+> **This is no longer a manual checklist.** The operator authors the node's entire monorepo footprint as a **single GitHub App–authored PR** (the **Publish** phase, `task.5092`) directly via the GitHub Git Data API — no GitHub Action, no human PAT, no hand-copied files. See [Node Formation Spec § Node Publish](../spec/node-formation.md#node-publish-operator-authored-pr) for the mechanism.
 
-- [ ] **Scaffold node code from `nodes/node-template/`**: copy to `nodes/{node}/`, update package names + ports + drizzle config.
-- [ ] **Set up the node's DB schema layer.** Cogni nodes share the **core schema** (`@cogni/db-schema` — auth, billing, ledger, identity) and extend it with a **node-local schema** (`@cogni/{node}-db-schema`) for tables only that node owns. The new node has its own database, drizzle config, and migration history — independent of other nodes.
-  1. Create `nodes/{node}/packages/db-schema/` for node-local tables; point `nodes/{node}/drizzle.config.ts` at it.
-  2. Add `db:generate:{node}`, `db:migrate:{node}`, `db:check:{node}` in `package.json`, mirroring an existing node.
-  3. Extend the `pnpm db:check` umbrella so the new chain is gated by pre-commit + pre-push.
+What the Publish PR contains (proven shape — see PR #1503 `chaos`):
 
-  Why the gate matters: drizzle-kit can't model RLS policies, triggers, or other Postgres-specific DDL, so those migrations get hand-authored. The matching snapshot has to be hand-authored too, or `db:generate:{node}` silently rots for the next contributor. `pnpm db:check` catches this. See [databases.md §2.6](../spec/databases.md).
+- **Node subtree** — `nodes/<slug>/**`, cloned from `nodes/node-template/` with identity regenerated (`node_id` / `scope_id` + DAO addresses in `.cogni/repo-spec.yaml`). Unchanged blobs are reused by SHA (zero re-upload).
+- **Catalog entry** — `infra/catalog/<slug>.yaml`. This is the keystone: `CATALOG_IS_SSOT` ([ci-cd.md](../spec/ci-cd.md) Axiom 16) means overlays, AppSets, Caddy routing, scheduler endpoints, and the build matrix all derive from it.
+- **Generated footprint** (byte-exact, drift-gated against `scripts/ci/render-*.sh`): overlays ×3 (`infra/k8s/overlays/{candidate-a,preview,production}/<slug>/`), per-node AppSets ×3 (`infra/k8s/argocd/<env>-<slug>-applicationset.yaml`, Axiom 18), Caddyfile route, `ci.yaml` scope filter, scheduler-worker endpoints, and the `pnpm-lock.yaml` importer splice.
 
-- [ ] **Add node overlay on the app branch**: Create `infra/k8s/overlays/{env}/{node}/kustomization.yaml` on `main` (via PR). `promote-and-deploy.yml` rsyncs `infra/k8s/` from main to each `deploy/*` branch except `env-state.yaml`, so overlays propagate automatically. Copy an existing node's overlay and update `namePrefix`, `NodePort`, secret refs, and the kustomize `replacements:` block. Do NOT hand-edit overlays on deploy branches — invariant `INFRA_K8S_MAIN_DERIVED` (bug.0334) requires they track main. Seed `env-state.yaml` via `provision-test-vm.sh`.
-- [ ] **Add catalog entry**: Create `infra/catalog/{node}.yaml` on the app branch. Argo ApplicationSets discover nodes via catalog files — without this, Argo won't create an Application for the new node.
-- [ ] **Create k8s secrets**: `{node}-node-app-secrets` in each target namespace. `deploy-infra.sh` creates these from GitHub environment secrets, but a new node needs its own DB and credentials.
-- [ ] **Create node database**: Add the node's DB name to `COGNI_NODE_DBS` and run `db-provision`.
-- [ ] **Update Caddy routing**: Add subdomain → NodePort mapping in `infra/compose/edge/configs/Caddyfile.tmpl`.
-- [ ] **Update DNS**: Add A record for `{node}-{domain}` → VM IP.
+**Secrets are NOT in the PR.** The per-node `secrets-catalog.yaml` + `k8s/external-secrets/**` are deliberately stripped from the cloned tree (`bug.5086`, `NO_SECRETS_IN_PR`): cloning node-template's catalog would re-declare the shared baseline names and break `setup:secrets` for every env. A node inherits the shared secret baseline via ESO — no secret value ever lands in git. To add a node-specific secret later, edit `nodes/<slug>/.cogni/secrets-catalog.yaml` (one PR, node domain) — see the [cicd-secrets-expert skill](../../.claude/skills/cicd-secrets-expert/SKILL.md).
 
-See [Multi-Node Deploy Guide](./multi-node-deploy.md) for the full deployment workflow.
+**Your job after Publish:**
+
+1. **Review + merge** the operator PR (CI green). Note: a node-birth PR legitimately spans `<node> + operator` domains — the `single-node-scope` gate carves this out for the node's own deploy wiring (catalog/overlays/AppSets/Caddy/scheduler).
+2. **Flight**: `POST /api/v1/vcs/flight { prNumber }` → build lands at `https://<slug>-test.cognidao.org`.
+3. **Validate**: run [`/validate-candidate`](../../.claude/skills/validate-candidate/SKILL.md) against the deployed build.
+
+Per-node DNS, DB, and secrets reconcile **inside the flight/promote lane** (idempotent, catalog-driven — `DNS_IS_RECONCILED_PER_ENV`, Axiom 21), not via a full env reprovision. For the row-by-row deploy contract (nodePort allocation, overlay/AppSet proof, DB schema layer, the candidate-a-only trap) see [Create a New Node (Deploy)](./create-node.md).
 
 ## Verification
 
@@ -131,7 +153,10 @@ Today only **production** is typically activated. Consequence (`bug.5087`): in `
 
 ## Related
 
-- [Node Formation Spec](../spec/node-formation.md)
+- [Node Formation Spec](../spec/node-formation.md) — formation + Publish + payment-activation design
+- [Create a New Node (Deploy)](./create-node.md) — the deploy-row contract Step 8 hands off to
+- [Fork Quickstart](../runbooks/fork-quickstart.md) — the standalone-fork alternative (`Cogni-DAO/standalone-node`)
+- [cicd-secrets-expert skill](../../.claude/skills/cicd-secrets-expert/SKILL.md) — why secrets are stripped from the Publish PR (ESO-inherited)
 - [Node Formation Project](../../work/projects/proj.node-formation-ui.md)
 - [Node vs Operator Contract](../spec/node-operator-contract.md)
 - [Cred Licensing Policy](../spec/cred-licensing-policy.md)
