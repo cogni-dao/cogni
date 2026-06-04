@@ -1,0 +1,11 @@
+name: chaos
+type: node
+port: 3200
+node_port: 30500
+dockerfile: nodes/chaos/app/Dockerfile
+image_tag_suffix: "-chaos"
+migrator_tag_suffix: "-chaos-migrate"
+candidate_a_branch: deploy/candidate-a-chaos
+preview_branch: deploy/preview-chaos
+production_branch: deploy/production-chaos
+path_prefix: nodes/chaos/

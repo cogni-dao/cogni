@@ -1,0 +1,2 @@
+ALTER TABLE "user_bindings" DROP CONSTRAINT "user_bindings_provider_check";--> statement-breakpoint
+ALTER TABLE "user_bindings" ADD CONSTRAINT "user_bindings_provider_check" CHECK ("user_bindings"."provider" IN ('wallet', 'discord', 'github', 'google'));

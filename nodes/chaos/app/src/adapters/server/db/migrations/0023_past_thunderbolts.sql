@@ -1,0 +1,1 @@
+CREATE INDEX "graph_runs_requested_by_started_at_idx" ON "graph_runs" USING btree ("requested_by","started_at");
