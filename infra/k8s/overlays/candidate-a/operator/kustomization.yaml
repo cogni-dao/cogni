@@ -38,6 +38,15 @@ patches:
       - op: add
         path: /data/NEXTAUTH_URL
         value: "https://test.cognidao.org"
+      # Node-formation mint target — candidate-a mints node repos into the disposable
+      # cogni-test-org (zero Cogni-DAO access); cogni-operator-test holds admin there.
+      # Fail-closed: the publish route 503s if these are unset.
+      - op: add
+        path: /data/NODE_MINT_OWNER
+        value: "cogni-test-org"
+      - op: add
+        path: /data/NODE_TEMPLATE_OWNER
+        value: "cogni-test-org"
   - target:
       kind: Service
       name: node-app
