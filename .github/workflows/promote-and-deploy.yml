@@ -117,8 +117,17 @@ jobs:
             echo "::warning::Skipping targets without ${OVERLAY_ENV} overlay: ${skipped[*]}"
           fi
           if [ "${#list[@]}" -eq 0 ]; then
-            echo "::error::Empty target list (no overlays under infra/k8s/overlays/${OVERLAY_ENV}/)"
-            exit 1
+            # Legit no-op (e.g. an infra-only target like litellm has no k8s
+            # overlay): emit has_targets=false so every deploy job step-skips,
+            # rather than exit 1 (which hard-failed the whole promote + cascaded
+            # the aggregate-preview loud-fail backstop). Visible, not silent:
+            # ::warning:: + step summary; downstream jobs surface as skipped.
+            echo "::warning::No k8s targets to promote for ${OVERLAY_ENV} (all inputs lack an overlay under infra/k8s/overlays/${OVERLAY_ENV}/) — no-op."
+            echo "### Promote no-op — no k8s targets for \`${OVERLAY_ENV}\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "All requested targets lack a per-env overlay; nothing to deploy." >> "$GITHUB_STEP_SUMMARY"
+            echo "targets_json=[]" >> "$GITHUB_OUTPUT"
+            echo "has_targets=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
           targets_json=$(printf '%s\n' "${list[@]}" \
             | python3 -c 'import json,sys; print(json.dumps([line.strip() for line in sys.stdin if line.strip()]))')
@@ -808,7 +817,10 @@ jobs:
 
   aggregate-preview:
     needs: [decide, promote-k8s, deploy-infra, verify, verify-deploy, e2e]
-    if: always() && needs.decide.outputs.environment == 'preview'
+    # has_targets guard: skip the bug.0443 loud-fail backstop on a legit no-op
+    # (no k8s targets). It still fires when has_targets==true but nothing
+    # promoted (admin-merge silent-skip) — that's the case it must catch.
+    if: always() && needs.decide.outputs.environment == 'preview' && needs.decide.outputs.has_targets == 'true'
     runs-on: ubuntu-latest
     concurrency:
       group: aggregate-preview
