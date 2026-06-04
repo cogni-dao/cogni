@@ -13,7 +13,7 @@ namePrefix: operator-
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/cogni-template
-    digest: "sha256:9db373fa5015def4b6b724d91da0616137dcfd5c1aee7399d5b4081396e65490"
+    digest: "sha256:96c792bf0bc0a9ca24239a59586e2e614e4bbdd04826ab87f6d502a1a8c5ab6c"
 
 patches:
   - target:
@@ -38,6 +38,15 @@ patches:
       - op: add
         path: /data/NEXTAUTH_URL
         value: "https://test.cognidao.org"
+      # Node-formation mint target — candidate-a mints node repos into the disposable
+      # cogni-test-org (zero Cogni-DAO access); cogni-operator-test holds admin there.
+      # Fail-closed: the publish route 503s if these are unset.
+      - op: add
+        path: /data/NODE_MINT_OWNER
+        value: "cogni-test-org"
+      - op: add
+        path: /data/NODE_TEMPLATE_OWNER
+        value: "cogni-test-org"
   - target:
       kind: Service
       name: node-app
