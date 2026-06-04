@@ -5,9 +5,9 @@
  * Module: `@app/api/v1/knowledge/[id]/route`
  * Purpose: GET /api/v1/knowledge/[id] — fetch a single knowledge entry for the routable
  *   full-page view (the permalink target humans click and AI emits).
- * Scope: Cookie-session only (Bearer agents rejected with 403, mirroring the list route).
+ * Scope: Any authenticated principal (cookie-session human OR bearer agent), mirroring the list route.
  *   Reads via container.knowledgeStorePort.getKnowledge.
- * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, KNOWLEDGE_BROWSE_VIA_HTTP_REQUIRES_SESSION.
+ * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, KNOWLEDGE_READ_REQUIRES_PRINCIPAL.
  * Side-effects: IO (HTTP response, Doltgres read via container port)
  * Links: docs/spec/knowledge-syntropy.md
  * @public
@@ -33,15 +33,9 @@ export const GET = wrapRouteHandlerWithLogging<{
     if (!sessionUser) {
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     }
-    // Bearer-token agents must not browse the knowledge plane in v0
-    // (KNOWLEDGE_BROWSE_VIA_HTTP_REQUIRES_SESSION). Cookie-session users only.
-    const authz = request.headers.get("authorization") ?? "";
-    if (authz.toLowerCase().startsWith("bearer ")) {
-      return NextResponse.json(
-        { error: "knowledge browse requires a session cookie (v0)" },
-        { status: 403 }
-      );
-    }
+    // Any authenticated principal may read (KNOWLEDGE_READ_REQUIRES_PRINCIPAL).
+    // Bearer agents recall merged entries just like the human browse UI;
+    // per-principal x402 metering for external readers remains future work.
 
     const port = getContainer().knowledgeStorePort;
     if (!port) {

@@ -5,7 +5,7 @@
  * Module: `@app/(app)/knowledge/_api/fetchKnowledge`
  * Purpose: Client-side fetch wrapper for the knowledge browse list.
  * Scope: Calls GET /api/v1/knowledge with same-origin credentials. Returns typed response or throws.
- * Invariants: Cookie-session only — never sends a Bearer header (per KNOWLEDGE_BROWSE_VIA_HTTP_REQUIRES_SESSION).
+ * Invariants: Browser client — same-origin cookie credentials, never a Bearer header. The endpoint itself accepts any principal (KNOWLEDGE_READ_REQUIRES_PRINCIPAL); this UI path is cookie-only by construction.
  * Side-effects: IO
  * @internal
  */

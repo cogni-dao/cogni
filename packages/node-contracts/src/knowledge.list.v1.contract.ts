@@ -7,7 +7,7 @@
  *   Mounted per-node at GET /api/v1/knowledge on every knowledge-capable node.
  * Scope: Zod schemas and types for the wire format. Does not contain business logic, I/O, or auth policy.
  * Invariants:
- *   - KNOWLEDGE_BROWSE_VIA_HTTP_REQUIRES_SESSION (session cookie only — Bearer/x402 stays future).
+ *   - KNOWLEDGE_READ_REQUIRES_PRINCIPAL (any authenticated principal — session human or bearer agent).
  *   - Response shape mirrors `Knowledge` domain type from `@cogni/knowledge-store`.
  * Side-effects: none
  * Links: docs/spec/knowledge-syntropy.md
