@@ -45,32 +45,6 @@ www.{$DOMAIN} {
   }
 }
 
-# ── canary node → k3s NodePort 30400 ──────────────────────────────────
-{$CANARY_DOMAIN:canary.localhost} {
-  encode zstd gzip
-
-  @public path /api/v1/public/*
-  handle @public {
-    reverse_proxy {$CANARY_UPSTREAM:host.docker.internal:30400} {
-      header_up X-Real-IP {remote_host}
-      transport http {
-        response_header_timeout 10s
-      }
-    }
-  }
-
-  reverse_proxy {$CANARY_UPSTREAM:host.docker.internal:30400}
-
-  log {
-    format json
-    output file /data/logs/caddy/access-canary.log {
-      roll_size 10MB
-      roll_keep 7
-      roll_keep_for 168h
-    }
-  }
-}
-
 # ── node-template node → k3s NodePort 30200 ──────────────────────────────────
 {$NODE_TEMPLATE_DOMAIN:node-template.localhost} {
   encode zstd gzip
