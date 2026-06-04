@@ -251,7 +251,7 @@ log "GitHub repo: ${BOLD}${GH_REPO}${NC}"
 # Refuse to run inside the upstream node template. Bootstrap mutates secrets,
 # environments, and deploy branches — it must target a repo that owns its
 # deploy state. The hub (Cogni-DAO/cogni) is valid; the bare template is not.
-if [[ "$GH_REPO" == "Cogni-DAO/node-template" ]]; then
+if [[ "$GH_REPO" == "Cogni-DAO/standalone-node" ]]; then
   err "origin points at the upstream node template (${GH_REPO}). Bootstrap must run inside the hub or a fork."
   err "Fork first for node-template: see docs/runbooks/fork-quickstart.md"
   exit 2

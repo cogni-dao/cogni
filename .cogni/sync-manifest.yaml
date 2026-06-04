@@ -11,7 +11,7 @@
 schema: 2
 hub: Cogni-DAO/cogni
 artifacts:
-  - repo: Cogni-DAO/node-template
+  - repo: Cogni-DAO/standalone-node
     visibility: public
   - repo: Cogni-DAO/cogni-poly
     visibility: private # detector skips until v0.2 (needs PAT)
@@ -35,11 +35,11 @@ exclude:
 #   artifact_only:      paths the artifact has that the hub intentionally lacks.
 # Anything NOT covered by exclude[] or these lists MUST match across hub + artifact.
 divergences:
-  - artifact: Cogni-DAO/node-template
+  - artifact: Cogni-DAO/standalone-node
     reason: "OSS public quickstart — omits hub-only nodes + canary env. Secrets substrate (OpenBao/ESO + catalog loader + tier spec) graduated to shared via task.5081."
     omit_from_artifact:
       # AGENTS.md exists on BOTH repos but intentionally diverges — the
-      # artifact prepends a development-freeze banner (Cogni-DAO/node-template#66)
+      # artifact prepends a development-freeze banner (Cogni-DAO/standalone-node#66)
       # that must NOT appear in the hub (the hub IS the dev repo). The schema has
       # no "expected-different" category, so a both-sides intentional divergence
       # must be listed in BOTH omit_from_artifact (suppresses the hub-side 🟡

@@ -218,7 +218,7 @@ Released state:
 Check live lease:
 
 ```bash
-gh api "repos/Cogni-DAO/node-template/contents/infra/control/candidate-lease.json?ref=deploy%2Fcandidate-a" \
+gh api "repos/Cogni-DAO/standalone-node/contents/infra/control/candidate-lease.json?ref=deploy%2Fcandidate-a" \
   | jq -r '.content' | base64 -d | jq .
 ```
 
