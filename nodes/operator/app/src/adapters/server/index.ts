@@ -111,6 +111,11 @@ export {
   RipgrepAdapter,
   type RipgrepAdapterConfig,
 } from "./repo";
+// Review GitHub plane (worker-delegated PR review — bug.5000)
+export {
+  createGithubReviewAdapter,
+  type GithubReviewAdapter,
+} from "./review/github-review.adapter";
 // NOTE: Sandbox adapters (SandboxRunnerAdapter, SandboxGraphProvider) are NOT
 // re-exported here. They pull in dockerode → ssh2 → cpu-features (native addon)
 // which breaks Turbopack bundling. Import directly from subpath when needed:

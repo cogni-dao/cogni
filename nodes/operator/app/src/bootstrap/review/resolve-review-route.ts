@@ -23,7 +23,7 @@ import type { Logger } from "pino";
 import {
   createGithubReviewAdapter,
   type GithubReviewAdapter,
-} from "@/adapters/server/review/github-review.adapter";
+} from "@/adapters/server";
 import { serverEnv } from "@/shared/env";
 
 type Resolved =
