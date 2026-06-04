@@ -45,7 +45,7 @@ import {
  * (the grant state won't change on retry). 5xx & network errors bubble as-is
  * so Temporal applies its retry policy.
  */
-function translateHttpError(err: unknown, where: string): never {
+export function translateHttpError(err: unknown, where: string): never {
   if (
     err instanceof GrantNotFoundError ||
     err instanceof GrantExpiredError ||

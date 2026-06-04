@@ -53,6 +53,7 @@ import {
 } from "@cogni/temporal-workflows";
 import type { Logger } from "../observability/logger.js";
 import type { ReviewHttpClient } from "../ports/index.js";
+import { translateHttpError } from "./index.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -120,24 +121,34 @@ export function createReviewActivities(deps: ReviewActivityDeps) {
   async function createCheckRunActivity(
     input: CreateCheckRunInput
   ): Promise<number> {
-    return reviewClient.createCheckRun({
-      owner: input.owner,
-      repo: input.repo,
-      headSha: input.headSha,
-      installationId: input.installationId,
-    });
+    try {
+      return await reviewClient.createCheckRun({
+        owner: input.owner,
+        repo: input.repo,
+        headSha: input.headSha,
+        installationId: input.installationId,
+      });
+    } catch (err) {
+      // Mirror run-http: permanent 4xx → nonRetryable; transient/5xx bubble.
+      translateHttpError(err, "createCheckRunActivity");
+    }
   }
 
   /** Fetch PR evidence, repo-spec, and rules from the operator review plane. */
   async function fetchPrContextActivity(
     input: FetchPrContextInput
   ): Promise<InternalReviewPrContextOutput> {
-    const context = await reviewClient.fetchPrContext({
-      owner: input.owner,
-      repo: input.repo,
-      prNumber: input.prNumber,
-      installationId: input.installationId,
-    });
+    let context: InternalReviewPrContextOutput;
+    try {
+      context = await reviewClient.fetchPrContext({
+        owner: input.owner,
+        repo: input.repo,
+        prNumber: input.prNumber,
+        installationId: input.installationId,
+      });
+    } catch (err) {
+      translateHttpError(err, "fetchPrContextActivity");
+    }
 
     const { owningNode } = context;
     logger.info(
@@ -246,14 +257,19 @@ export function createReviewActivities(deps: ReviewActivityDeps) {
     }
 
     // Post PR comment — operator applies the head-SHA staleness guard.
-    const result = await reviewClient.postPrComment({
-      owner: input.owner,
-      repo: input.repo,
-      installationId: input.installationId,
-      prNumber: input.prNumber,
-      body: prCommentBody,
-      expectedHeadSha: input.headSha,
-    });
+    let result: Awaited<ReturnType<ReviewHttpClient["postPrComment"]>>;
+    try {
+      result = await reviewClient.postPrComment({
+        owner: input.owner,
+        repo: input.repo,
+        installationId: input.installationId,
+        prNumber: input.prNumber,
+        body: prCommentBody,
+        expectedHeadSha: input.headSha,
+      });
+    } catch (err) {
+      translateHttpError(err, "postReviewResultActivity");
+    }
     if (!result.posted) {
       logger.info(
         {

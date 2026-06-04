@@ -10,7 +10,8 @@
  * Scope: Thin — parse contract, delegate to the review adapter, return.
  * Invariants:
  *   - INTERNAL_API_SHARED_SECRET: Bearer SCHEDULER_API_TOKEN.
- *   - Emits the `review.routed` structured log (in the adapter) for observability.
+ *   - Returns the resolved owningNode; the worker activity emits the
+ *     `review.routed` structured log for the deploy_verified loop.
  * Side-effects: IO (GitHub REST via adapter).
  * Links: review.pr-context.internal.v1 contract, docs/spec/node-ci-cd-contract.md
  * @internal
