@@ -27,7 +27,7 @@ function NodeTile({ node }: { node: ResolvedShowcaseNode }): ReactElement {
       href={node.href}
       target="_blank"
       rel="noopener noreferrer"
-      className="group block focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+      className="group block rounded-lg"
     >
       <Card className="h-full overflow-hidden transition-colors group-hover:border-primary">
         <div className="relative aspect-video w-full overflow-hidden border-border border-b bg-muted">
