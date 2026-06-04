@@ -55,7 +55,7 @@ gh workflow run provision-env.yml --repo <owner>/<repo> \
 | 3 · Provision VM (tofu)      | Cherry VM + DNS                                    | adopt-vs-create; ephemeral tofu state on runner                                                                |
 | **4b · DNS**                 | **cuts over apex + node subdomains to the new VM** | **production = LIVE cutover before apps exist (Gotcha 1)**                                                     |
 | 4b.5 · Seed deploy branches  | seeds digests                                      | **placeholder digests (Gotcha 2)**; **H7 divergence (Gotcha 4)**                                               |
-| 5 · Compose                  | infra + Caddy                                      | db-backup exit-137 — **can be FATAL: aborts the whole deploy → no app layer (Gotcha 13)**                       |
+| 5 · Compose                  | infra + Caddy                                      | db-backup exit-137 — **can be FATAL: aborts the whole deploy → no app layer (Gotcha 13)**                      |
 | 5b/5c · OpenBao + ESO + seed | secrets substrate                                  | quoted secret values (Gotcha 6)                                                                                |
 | 5f · deploy-infra            | Compose runtime                                    | required-secret gaps (e.g. `POSTHOG_*`/`POLYGON_RPC_URL` if unset)                                             |
 | 7 · ApplicationSets          | Argo deploys apps                                  | placeholder digest → ImagePullBackOff                                                                          |
