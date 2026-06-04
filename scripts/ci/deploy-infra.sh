@@ -974,7 +974,7 @@ for _ in $(seq 1 30); do
 done
 if [[ -n "$pg_socket_ready" ]]; then
   if $RUNTIME_COMPOSE exec -T postgres bash -c \
-      'psql -U "$POSTGRES_USER" -d postgres -v ON_ERROR_STOP=1 -c "ALTER USER \"$POSTGRES_USER\" WITH PASSWORD '\''$POSTGRES_PASSWORD'\'';"' \
+      'psql -U "$POSTGRES_USER" -d postgres -v ON_ERROR_STOP=1 -v pw="$POSTGRES_PASSWORD" -c "ALTER USER \"$POSTGRES_USER\" WITH PASSWORD :'\''pw'\'';"' \
       >/dev/null 2>&1; then
     log_info "Postgres superuser password reconciled to rendered .env."
   else
