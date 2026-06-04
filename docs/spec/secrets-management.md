@@ -45,7 +45,7 @@ A human or AI agent can declare a new secret, rotate an existing secret, or revo
 
 - Encrypted-secrets-in-git patterns (Sealed Secrets, SOPS+ksops). Rejected — see `proj.security-hardening` Design Notes.
 - Multi-tenant SaaS KMS (Tier-2). See `task.5051` under `proj.operator-plane`.
-- Compose-runtime secret migration. Separate follow-up; Compose services keep `.env` until they migrate to k3s.
+- Compose-runtime secret migration **for non-DB service config** (LiteLLM, Temporal, Caddy). Compose services keep `.env` for these until they migrate to k3s. **Now in scope (the exception):** the pod-consumed **DB role passwords** — OpenBao-owned per Invariant 15 — whose Compose-side provisioner is being migrated to read from OpenBao instead of a GitHub-secret `.env` (see [DB-credential provisioning](#db-credential-provisioning--the-composek8s-boundary-bug5002-invariant-15)).
 
 ---
 
@@ -218,22 +218,42 @@ This is set ONCE at service creation. **Adding a new env var that the code reads
 
 ### DB-credential provisioning — the Compose↔k8s boundary (bug.5002, Invariant 15)
 
-Postgres and Doltgres run as **Compose-on-VM** services (the Non-Goal keeps them on `.env`), while the node-apps that consume them run as **k8s pods** (ESO-fed). The DB **role** passwords straddle that boundary, and that seam is where a split-brain festers:
+Postgres and Doltgres run as **Compose-on-VM** services, while the node-apps that consume them run as **k8s pods** (ESO-fed). The DB **role** passwords straddle that boundary, and that seam is where a split-brain festers:
 
-- The **pod** reads its `DATABASE_URL` / `DOLTGRES_URL` (role name + password) from `cogni/<env>/<service>` in OpenBao via ESO. **OpenBao is the SSOT.**
-- **`db-provision` / `doltgres-provision`** create the matching DB roles. They MUST set each role's password from the **same OpenBao value** — not from a separately-rendered GitHub-secret `.env`. If the two sources diverge and provisioning ALTERs the DB to the `.env` value, the role stops matching the pod's Secret → 28P01.
+- The **pod** reads its `DATABASE_URL` / `DOLTGRES_URL` (role name + password) from `cogni/<env>/<service>` in OpenBao via ESO. **OpenBao is the pod's SSOT.**
+- **`deploy-infra.sh` / `db-provision` / `doltgres-provision`** create the matching DB roles **set-once** and never `ALTER … PASSWORD` on a later run (the #1500/#1502 fix).
 
-**North-star flow — one writer, one source:**
+**Current state (as-built) — the split-brain is dormant, not gone.** `db-provision` set each role's create-time password from `deploy-infra`'s rendered `.env`, and that `.env` is rendered from **GitHub env secrets** (`APP_DB_PASSWORD`, `APP_DB_SERVICE_PASSWORD`; the readonly + Doltgres roles are `derive_secret(POSTGRES_ROOT_PASSWORD)`). It equals the OpenBao value **only by construction** — both were seeded from the same GH secret at provision time. Nothing enforces lockstep: rotate the GH secret (or `bao kv patch` OpenBao) independently and the two diverge silently. Set-once removed the _landmine_ (the per-deploy `ALTER` that turned dormant drift into an active 502) but **the two sources still both exist.** The flow below is the **target**, not yet the as-built — today `db-provision` reads `.env`, not OpenBao.
+
+**Target — one source by construction (not by coincidence):**
 
 ```
-OpenBao  cogni/<env>/<service>   (app_user / doltgres role passwords — written once by the secrets tooling, rotated by it)
-   ├─ ESO ──▶ <service>-env-secrets ──▶ pod   (DATABASE_URL / DOLTGRES_URL)
-   └─ db-provision READS the same value ──▶ CREATE ROLE …   (set-once; NEVER re-ALTER from .env)
+OpenBao  cogni/<env>/<service>   (app_user / app_service / readonly / doltgres role passwords)
+   ├─ ESO ─────────────────────────▶ <service>-env-secrets ──▶ pod   (DATABASE_URL / DOLTGRES_URL)
+   └─ deploy-infra READS the same value (reader JWT) ──▶ CREATE ROLE …   (set-once)
 ```
 
-Because `db-provision` reads the role password from the value ESO will sync, the DB role and the pod cannot disagree, and **no "reconcile" is ever needed** — there is no second source to drift from. The eventual hardening is the **OpenBao DB secrets engine** (dynamic per-session creds, `refreshInterval: 15m` — see the Rotation table), which removes static role passwords entirely.
+When `deploy-infra` reads each role password from the **same OpenBao value ESO syncs**, the DB role and the pod cannot disagree, no reconcile is ever needed, and the GH-secret DB passwords are retired (Invariant 5: GH env then holds only the seed token + CI-pinned allowlist).
+
+#### Migration — phased, each phase independently shippable
+
+| Phase | Change                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | State    |
+| ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| **0** | **Set-once stabilization** — remove every `.env`→pod-role `ALTER` (#1500/#1502). The precondition: the _source_ of a one-time create can only be swapped cleanly once no per-deploy writer exists.                                                                                                                                                                                                                                                                                                                                                                                                                                                          | **DONE** |
+| **1** | **OpenBao read path on the deploy host** — `deploy-infra.sh` runs on the VM, which runs k3s; OpenBao is a reachable **ClusterIP** there. Mint a short-lived **reader**-role JWT via the _same_ k8s-auth pattern Invariant 13 uses for the writer role (`bao write auth/kubernetes/login role=<env>-db-reader jwt=$(kubectl create token …)`), scoped read-only to the DB keys at `cogni/<env>/<service>`. `provision-env-vm.sh` Phase 5b adds the `<env>-db-reader` policy+role beside `eso-reader`/`<env>-writer`. **No Ingress, no public exposure** — OpenBao stays ClusterIP; reuses the sanctioned k8s-auth seam, not a new entry point (Invariant 9). | TODO     |
+| **2** | **Swap the source + retire the GH-secret DB passwords** — `deploy-infra`'s `.env` render fetches `APP_DB_PASSWORD` / `APP_DB_SERVICE_PASSWORD` / readonly / `DOLTGRES_*` from OpenBao via the Phase-1 reader token instead of GH env secrets. `db-provision` stays set-once, but the create-time value now provably equals the OpenBao value. Drop `APP_DB_*_PASSWORD` from the deploy workflow's required GH secrets. The **Grafana datasource** (the readonly role's second consumer, bug.5031 drift class) reads the same OpenBao value → that drift class closes too.                                                                                   | TODO     |
+| **3** | **Dynamic-creds endgame** — OpenBao DB secrets engine (per-session creds, `refreshInterval: 15m`); no static role password exists, so there is nothing to drift _or_ rotate. `proj.security-hardening` Crawl row 3; see [`secrets-rotate.md`](../guides/secrets-rotate.md) "Dynamic database credentials".                                                                                                                                                                                                                                                                                                                                                  | FUTURE   |
+
+**Sequencing wrinkle (genesis vs steady-state).** OpenBao is itself a k3s/Argo app stood up _during_ a cold provision, so `db-provision` cannot read from it at genesis (chicken-and-egg). Resolution: **genesis still seeds OpenBao once from the GH secret** (the origin), and **every deploy thereafter reads FROM OpenBao** (the source). After genesis the GH DB-password secrets are deletable. The new coupling — a deploy now hard-depends on OpenBao being unsealed + reachable — is **not a new SPOF**: OpenBao-down already takes the pods down (ESO is their only DB-cred source), so the deploy path merely shares a dependency the runtime already carries. On an OpenBao read failure `deploy-infra` **fails loud and skips the role create** (db-provision surfaces the real error); it MUST NOT fall back to a divergent GH `.env` value — that is exactly the bug.5002 anti-fix.
 
 **The bug.5002 anti-fix (do NOT do this):** "self-heal drift" by ALTERing a pod-consumed DB role password to deploy-infra's rendered `.env` on every deploy. That makes deploy-infra a **second writer**, guarantees divergence whenever `.env` ≠ OpenBao, and converts a silent inconsistency into an active 502 outage. When `db-provision` can't authenticate, fix the **source** (point it at OpenBao), never overwrite the DB from `.env`.
+
+#### E2E validation contract (Phases 1–2, on candidate-a)
+
+- [ ] **Phase 1 — read path:** `deploy-infra` mints the `<env>-db-reader` JWT and a `bao kv get cogni/candidate-a/<service>` succeeds from the deploy context (logged; value never echoed). Negative: the reader token cannot write (`bao kv patch` is denied).
+- [ ] **Phase 2 — sole-source proof (falsifying):** rotate `APP_DB_PASSWORD` in **OpenBao only** (`bao kv patch`, no GH-secret edit), run a deploy. The Postgres role, the pod's `DATABASE_URL`, and the Grafana datasource all converge on the new value with **zero 28P01** and zero GH-secret change.
+- [ ] **Phase 2 — dependency-removed proof (negative):** delete the `APP_DB_*_PASSWORD` GH env secrets; a subsequent deploy still succeeds. Proves no GH-secret DB-password dependency remains.
+- [ ] **`deploy_verified`:** flight to candidate-a; the deploy's OpenBao reads appear in the audit device → Loki with the `<env>-db-reader` subject.
 
 ### Standardized tooling — three entry points, one primitive
 
