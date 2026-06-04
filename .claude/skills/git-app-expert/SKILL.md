@@ -25,11 +25,11 @@ installation level down to the tool schema and CI scripts.
 cannot share one. Create + wire per the canonical guide:
 [`docs/guides/github-app-webhook-setup.md`](../../../docs/guides/github-app-webhook-setup.md).
 
-| App                   | ID      | Install ID | env         | webhooks → / installed on                            |
-| --------------------- | ------- | ---------- | ----------- | ---------------------------------------------------- |
-| `cogni-node-template` | 3062001 | 115515535  | (vcs/flight)| org-wide; `actions:write` for `workflow_dispatch`    |
-| `cogni-git-review`    | 1761205 | 80293097   | production  | `cognidao.org/...webhooks/github` · `Cogni-DAO/cogni`|
-| `cogni-operator-test` | (per-env)| —         | candidate-a | `test.cognidao.org/...webhooks/github` · `Cogni-DAO/test-repo` |
+| App                   | ID        | Install ID | env          | webhooks → / installed on                                      |
+| --------------------- | --------- | ---------- | ------------ | -------------------------------------------------------------- |
+| `cogni-node-template` | 3062001   | 115515535  | (vcs/flight) | org-wide; `actions:write` for `workflow_dispatch`              |
+| `cogni-git-review`    | 1761205   | 80293097   | production   | `cognidao.org/...webhooks/github` · `Cogni-DAO/cogni`          |
+| `cogni-operator-test` | (per-env) | —          | candidate-a  | `test.cognidao.org/...webhooks/github` · `Cogni-DAO/test-repo` |
 
 **Where the App creds live (post-ESO migration, #1460/#1476):** the running operator pod reads
 `GH_REVIEW_APP_ID` / `GH_REVIEW_APP_PRIVATE_KEY_BASE64` / `GH_WEBHOOK_SECRET` from **OpenBao**
@@ -278,12 +278,12 @@ When a flight fails or dispatch errors, work through this in order:
 
 ## Environment Variables Reference
 
-| Var                                | Where set                                   | Purpose                         |
-| ---------------------------------- | ------------------------------------------- | ------------------------------- |
-| `GH_REVIEW_APP_ID`                 | **OpenBao** `cogni/<env>/operator/*` (ESO); GH env secret is provision seed only | GitHub App ID for VcsCapability |
-| `GH_REVIEW_APP_PRIVATE_KEY_BASE64` | **OpenBao** `cogni/<env>/operator/*` (ESO); GH env secret is provision seed only | Base64-encoded PEM private key  |
-| `GH_WEBHOOK_SECRET`                | **OpenBao** `cogni/<env>/operator/*` (ESO); must MATCH the App's webhook-secret field | Webhook signature verification  |
-| `GH_REPOS`                         | candidate-a + production GitHub env **vars** (config, not secret) | pr-manager repo scope (review is payload-driven) |
-| `DOMAIN`                           | candidate-a env var: `test.cognidao.org`    | Used in smoke + buildSha verify |
-| `VM_HOST`                          | candidate-a GitHub env secret               | SSH target for Argo reconcile   |
-| `SSH_DEPLOY_KEY`                   | candidate-a GitHub env secret               | SSH key for VM access           |
+| Var                                | Where set                                                                             | Purpose                                          |
+| ---------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| `GH_REVIEW_APP_ID`                 | **OpenBao** `cogni/<env>/operator/*` (ESO); GH env secret is provision seed only      | GitHub App ID for VcsCapability                  |
+| `GH_REVIEW_APP_PRIVATE_KEY_BASE64` | **OpenBao** `cogni/<env>/operator/*` (ESO); GH env secret is provision seed only      | Base64-encoded PEM private key                   |
+| `GH_WEBHOOK_SECRET`                | **OpenBao** `cogni/<env>/operator/*` (ESO); must MATCH the App's webhook-secret field | Webhook signature verification                   |
+| `GH_REPOS`                         | candidate-a + production GitHub env **vars** (config, not secret)                     | pr-manager repo scope (review is payload-driven) |
+| `DOMAIN`                           | candidate-a env var: `test.cognidao.org`                                              | Used in smoke + buildSha verify                  |
+| `VM_HOST`                          | candidate-a GitHub env secret                                                         | SSH target for Argo reconcile                    |
+| `SSH_DEPLOY_KEY`                   | candidate-a GitHub env secret                                                         | SSH key for VM access                            |
