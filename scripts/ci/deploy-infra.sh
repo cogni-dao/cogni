@@ -950,49 +950,6 @@ else
 fi
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# Step 5a: Reconcile Postgres superuser password to the rendered .env.
-# POSTGRES_PASSWORD is applied ONLY at first-init of an EMPTY data volume. On a
-# persisted volume (re-provision, or a POSTGRES_ROOT_PASSWORD rotation) the stored
-# password diverges from .env, so db-provision's TCP+scram auth below fails, spins
-# for its whole timeout, and aborts the ENTIRE infra deploy before any k8s Secret
-# is written. The postgres image keeps `local all all trust` in pg_hba, so a
-# unix-socket connection authenticates without a password regardless of drift —
-# use it to force the stored superuser password to match .env on every deploy.
-# Idempotent + self-healing; .env (rendered from the GH-secret SSOT) is canonical,
-# the volume follows it. Without this, a rotated/divergent root secret wedges the
-# deploy indefinitely (see the empty-externals chain: db-provision abort blocks the
-# Step-7 Secret write, so every catalogued external key stays empty in the pod).
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-log_info "Reconciling Postgres superuser password (trust-socket; self-heals drifted volume)..."
-pg_socket_ready=""
-for _ in $(seq 1 30); do
-  if $RUNTIME_COMPOSE exec -T postgres pg_isready -q 2>/dev/null; then
-    pg_socket_ready=1
-    break
-  fi
-  sleep 2
-done
-if [[ -n "$pg_socket_ready" ]]; then
-  # Connect over the postgres image's in-container unix socket (`local all all
-  # trust` → no password, so it works regardless of the volume-vs-.env drift).
-  # Drive the superuser name + target password from deploy-infra's OWN env (the
-  # rendered .env / GH-secret SSOT) — NOT the container's POSTGRES_* env (the
-  # prior bash -c form depended on those + fragile nested quoting). SQL via stdin
-  # avoids the -c quoting entirely; stderr is captured so a failure is VISIBLE
-  # (the prior `>/dev/null 2>&1` hid the cause and left prod wedged silently).
-  if recon_out=$(printf '%s\n' "ALTER USER \"${POSTGRES_ROOT_USER}\" WITH PASSWORD :'pw';" \
-      | $RUNTIME_COMPOSE exec -T postgres \
-          psql -v ON_ERROR_STOP=1 -U "${POSTGRES_ROOT_USER}" -d postgres \
-               -v pw="${POSTGRES_ROOT_PASSWORD}" 2>&1); then
-    log_info "Postgres superuser password reconciled to rendered .env."
-  else
-    log_warn "Postgres superuser reconcile FAILED (db-provision will surface the real error). psql said: ${recon_out}"
-  fi
-else
-  log_warn "Postgres socket not ready after 60s; skipping reconcile (db-provision will surface the real error)."
-fi
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Step 6: Run DB provisioning (idempotent — creates users/DBs if missing)
 # Note: DB migrations are NOT run here — k8s PreSync hook handles those.
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1012,58 +969,6 @@ $RUNTIME_COMPOSE --profile bootstrap run --rm db-provision
 if $RUNTIME_COMPOSE config --services 2>/dev/null | grep -q '^doltgres$'; then
   log_info "[$(date -u +%H:%M:%S)] Bringing up doltgres..."
   $RUNTIME_COMPOSE up -d doltgres
-
-  # Step 6a.1: Reconcile the Doltgres superuser password (auth-file reset; self-heals drift).
-  # Doltgres bakes DOLTGRES_PASSWORD into /var/lib/doltgres/auth.db at first init (gated by
-  # .init_completed) and ignores env changes on a persisted volume. DOLTGRES_PASSWORD (+ the
-  # knowledge_reader/writer role passwords) derive from POSTGRES_ROOT_PASSWORD, so a root
-  # rotation leaves the stored superuser + role passwords stale → doltgres-provision below
-  # fails scram auth and aborts the whole infra deploy. Doltgres has NO trust socket (unlike
-  # Postgres, Step 5a), so we can't ALTER over a privileged local connection. Instead, if auth
-  # with the rendered DOLTGRES_PASSWORD fails, drop auth.db + .init_completed and FORCE-RECREATE:
-  # doltgres re-bakes the superuser password from the DOLTGRES_PASSWORD env and clears all
-  # roles; doltgres-provision then re-creates knowledge_reader/writer with the rendered
-  # passwords. --force-recreate (not restart) is required: a restart reuses the container's
-  # stale baked-in env, so doltgres would re-bake the OLD password; recreate refreshes the env
-  # from the rendered .env. The per-node knowledge_<node> databases live in separate volume dirs
-  # and are PRESERVED (verified). Idempotent + fail-soft: only resets on auth failure, no-op on a
-  # healthy/fresh volume.
-  dg_auth_ok() {
-    $RUNTIME_COMPOSE exec -T -e PGPASSWORD="$DOLTGRES_PASSWORD" doltgres \
-      psql -h 127.0.0.1 -U postgres -d postgres -c 'SELECT 1' >/dev/null 2>&1
-  }
-  dg_ready=""
-  for _ in $(seq 1 30); do
-    if $RUNTIME_COMPOSE exec -T doltgres pg_isready -h 127.0.0.1 -p 5432 -q >/dev/null 2>&1; then
-      dg_ready=1
-      break
-    fi
-    sleep 2
-  done
-  # Retry auth a few times so a transient just-started-not-yet-serving state can't
-  # trigger a false-positive reset on a healthy volume — only reset on PERSISTENT failure.
-  dg_drifted=""
-  if [[ -n "$dg_ready" ]]; then
-    dg_drifted=1
-    for _ in $(seq 1 5); do
-      if dg_auth_ok; then dg_drifted=""; break; fi
-      sleep 2
-    done
-  fi
-  if [[ -n "$dg_drifted" ]]; then
-    log_warn "Doltgres superuser auth failed with rendered .env password — resetting auth-file (non-destructive; knowledge_<node> DBs preserved)..."
-    $RUNTIME_COMPOSE exec -T doltgres rm -f /var/lib/doltgres/auth.db /var/lib/doltgres/.init_completed >/dev/null 2>&1 || true
-    $RUNTIME_COMPOSE up -d --force-recreate doltgres >/dev/null 2>&1 || true
-    for _ in $(seq 1 30); do
-      $RUNTIME_COMPOSE exec -T doltgres pg_isready -h 127.0.0.1 -p 5432 -q >/dev/null 2>&1 && break
-      sleep 2
-    done
-    if dg_auth_ok; then
-      log_info "Doltgres superuser password reconciled to rendered .env (roles re-created by doltgres-provision below)."
-    else
-      log_warn "Doltgres auth still failing after auth-file reset; doltgres-provision will surface the real error."
-    fi
-  fi
 
   log_info "[$(date -u +%H:%M:%S)] Provisioning Doltgres DBs + roles..."
   $RUNTIME_COMPOSE --profile bootstrap run --rm doltgres-provision

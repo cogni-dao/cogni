@@ -136,14 +136,10 @@ if [ "$role_exists" -eq 0 ]; then
 CREATE ROLE "$APP_USER" WITH LOGIN PASSWORD :'app_pass';
 SQL
 else
-  echo "   -> Role '$APP_USER' already exists. Ensuring password matches .env..."
-  # Re-assert the password: a persisted volume keeps the password from first-init,
-  # so a rotated/divergent APP_DB_PASSWORD must be reconciled or the app pod's
-  # TCP auth fails. Idempotent (no-op when already in sync). Mirrors readonly below.
-  PGPASSWORD="$PG_PASS" psql -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d "postgres" -v ON_ERROR_STOP=1 \
-    -v app_pass="$APP_PASS" <<SQL
-ALTER ROLE "$APP_USER" WITH LOGIN PASSWORD :'app_pass';
-SQL
+  # Do NOT re-ALTER the password here. DB creds are owned by OpenBao/ESO (the SSOT the
+  # app pod reads via its synced Secret). Forcing the role to deploy-infra's .env diverges
+  # from ESO → 28P01 → 502 (bug.5002). Set-once at create; never reconciled from .env.
+  echo "   -> Role '$APP_USER' already exists (password owned by ESO; not reconciled)."
 fi
 
 # Service Role (BYPASSRLS for scheduler, internal workers)
@@ -156,11 +152,8 @@ if [ "$service_role_exists" -eq 0 ]; then
 CREATE ROLE "$APP_SERVICE_USER" WITH LOGIN PASSWORD :'svc_pass' BYPASSRLS;
 SQL
 else
-  echo "   -> Service role '$APP_SERVICE_USER' already exists. Ensuring password matches .env..."
-  PGPASSWORD="$PG_PASS" psql -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d "postgres" -v ON_ERROR_STOP=1 \
-    -v svc_pass="$APP_SERVICE_PASS" <<SQL
-ALTER ROLE "$APP_SERVICE_USER" WITH LOGIN PASSWORD :'svc_pass' BYPASSRLS;
-SQL
+  # See app-role note: password owned by ESO; do not reconcile to .env (bug.5002).
+  echo "   -> Service role '$APP_SERVICE_USER' already exists (password owned by ESO; not reconciled)."
 fi
 
 # Read-only role (BYPASSRLS for cross-tenant support/debugging reads, no write grants)
