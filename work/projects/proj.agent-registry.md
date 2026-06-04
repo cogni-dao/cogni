@@ -143,6 +143,23 @@ Creating a node via the wizard writes a `nodes` row + opens a repo-spec PR, but 
 
 Matches the product vision: operator = git-manager indexing N node repos → the `nodes` table _is_ that index/projection.
 
+### Node kinds & scopes (the v0 → v0.1 axis)
+
+The registry models two node **kinds**, which is just the existing `node-operator-contract.md` topology surfaced in a read model. `node_id` = deployment identity; `scope_id` = governance/payout domain; **one node hosts many scopes** (`NEW_CAPABILITY_IS_A_SCOPE`).
+
+| Kind                     | What it is                                                          | Identity                                | UX surface                             | Examples (target)                     |
+| ------------------------ | ------------------------------------------------------------------- | --------------------------------------- | -------------------------------------- | ------------------------------------- |
+| **`full-app`** (v0)      | Full Next.js app + Dolt hub + DAO, own deploy                       | own `node_id` + DB                      | own homepage (`<name>-<domain>`)       | operator, resy, canary, node-template |
+| **`agent-scope`** (v0.1) | Agent bundle + Dolt + DAO running **as a scope inside a host node** | host `node_id` + `scope_id`/`scope_key` | a route **within the host node's app** | registry, librarian, oss-advisor      |
+
+- **v0** lists `full-app` nodes (what PR #1479 shows). `NodeSummary` carries `kind`, identity (`node_id`/`slug`), `homepage_url`, `thumbnail_url`, `status`, `source`.
+- **v0.1** lists `agent-scope` nodes — these resolve to a **scope route within a host node**, not a subdomain. The host is the operator node, which itself splits into scopes:
+  - **operator scope** — git/deployment management (the current operator app concern).
+  - **registry scope** — node knowledge + billing coordination (the niche the "registry node" owns as a Dolt knowledge hub; the syntropy home for cross-node knowledge + billing).
+- A scope graduates from `agent-scope` → `full-app` only when it needs `DATA_SOVEREIGNTY` / `DEPLOY_INDEPENDENCE` / `FORK_FREEDOM`. The `NodeRegistryPort` is the seam that makes that graduation invisible to consumers (the homepage tile's `href` flips from a scope-route to a subdomain; nothing else changes).
+
+> Reconcile the **three** existing fragmented sources behind the one port: `infra/catalog/*.yaml` (monorepo full-app deploy targets) · operator `nodes` table (wizard formation state machine) · `operator_node_*` registration cache (`docs/spec/vcs-integration.md`, derived from registered repo-specs). The port is the single read model; these are its writers/feeders.
+
 ### Crawl (P0) — visual prototype (Done, PR #1479)
 
 | Deliverable                                                        | Status | Est | Work Item |
@@ -150,16 +167,26 @@ Matches the product vision: operator = git-manager indexing N node repos → the
 | Static typed-module showcase + committed homepage screenshots      | Done   | 1   | PR #1479  |
 | Server-side href resolution via `host_for_node` catalog convention | Done   | 1   | PR #1479  |
 
-### Walk (P1) — NodeRegistryPort + projection (the alignment)
+### Walk v0 (P1a) — the port seam (this PR: `derekg1729/node-registry-port`)
 
-| Deliverable                                                                                                                                       | Status      | Est | Work Item            |
-| ------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- | --- | -------------------- |
-| Generalize `nodes` table: `source` + curation columns (`listed`, `featured`, `display_order`, `tagline`, `homepage_url`, `thumbnail_url`, `tags`) | Not Started | 2   | (create at P1 start) |
-| Build/migrate-time reconciler: catalog/repo-spec snapshot → idempotent upsert of `source=monorepo` rows                                           | Not Started | 2   | (create at P1 start) |
-| `NodeRegistryPort` (shared package): `listPublic({ sort, filter, page })` + `getBySlug`                                                           | Not Started | 2   | (create at P1 start) |
-| Public, non-RLS read adapter over `nodes` (`listed=true`)                                                                                         | Not Started | 1   | (create at P1 start) |
-| Point homepage `NodeShowcase` at the port; drop the typed module                                                                                  | Not Started | 1   | (create at P1 start) |
-| Map node-spec/scope-spec fields → `NodeSummary` (carry `scope_id`/`scope_key`)                                                                    | Not Started | 1   | (create at P1 start) |
+Establish the keystone seam with the simplest adapter; no DB migration yet. App-local (one runtime today: operator); graduates to `packages/node-registry` when the registry scope / billing coordinator becomes a 2nd consumer.
+
+| Deliverable                                                                                                                       | Status      | Est | Work Item |
+| --------------------------------------------------------------------------------------------------------------------------------- | ----------- | --- | --------- |
+| `NodeRegistryPort` + `NodeSummary` domain (carries `kind`, `node_id`/`slug`, `homepage_url`, `thumbnail_url`, `status`, `source`) | In Progress | 2   | this PR   |
+| `StaticNodeRegistryAdapter` — serves v0 `full-app` nodes (the typed module, moved behind the port)                                | In Progress | 1   | this PR   |
+| Point homepage `NodeShowcase` at the port (consumes `NodeSummary`, not the raw module)                                            | In Progress | 1   | this PR   |
+| Port + resolution unit tests                                                                                                      | In Progress | 1   | this PR   |
+
+### Walk v0.1 (P1b) — DB projection + reconciler + scopes
+
+| Deliverable                                                                                                                                                | Status      | Est | Work Item             |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- | --- | --------------------- |
+| Generalize `nodes` table: `source` + `kind` + curation columns (`listed`, `featured`, `display_order`, `tagline`, `homepage_url`, `thumbnail_url`, `tags`) | Not Started | 2   | (create at P1b start) |
+| Build/migrate-time reconciler: catalog/repo-spec snapshot → idempotent upsert of `source=monorepo` rows                                                    | Not Started | 2   | (create at P1b start) |
+| `DbNodeRegistryAdapter` — public, non-RLS read over `nodes` (`listed=true`); swap behind the port                                                          | Not Started | 2   | (create at P1b start) |
+| Scopes: list `agent-scope` nodes from `operator_node_scopes`; `href` resolves to a scope-route within the host node                                        | Not Started | 2   | (create at P1b start) |
+| Wizard upserts the projection on publish; flip `listed` at `published`/`active`                                                                            | Not Started | 1   | (create at P1b start) |
 
 ### Run (P2+) — browse/sort + dynamic thumbnails
 
@@ -174,7 +201,8 @@ Matches the product vision: operator = git-manager indexing N node repos → the
 - `PROJECTION_NOT_SSOT`: the `nodes` table is a read model; git specs are authoritative. The reconciler is idempotent and never mints identity.
 - `REPO_SPEC_IS_IDENTITY_SSOT`: `node_id`/`scope_id`/`scope_key` come from repo-spec (→ node/scope-spec), never the DB.
 - `PUBLIC_READ_IS_SEPARATE`: the public `listPublic` path must not reuse the owner-RLS wizard reads.
-- Boundary (Phase 3a): `NodeRegistryPort` is a shared-package port (operator + future runtimes), pure domain, deps via constructor.
+- Boundary (Phase 3a): app-local for Walk v0 (one runtime); graduates to `packages/node-registry` (pure domain, deps via constructor) when a 2nd consumer/runtime lands.
+- `KIND_MIRRORS_TOPOLOGY`: `NodeSummary.kind` reflects `node-operator-contract` topology (`full-app` vs `agent-scope`), never a new taxonomy. An `agent-scope` resolves to a scope-route within its host node; a `full-app` to a subdomain. Graduation full-app←agent-scope is invisible to port consumers.
 
 ## Constraints
 
