@@ -29,6 +29,23 @@ Formation outputs a repo-spec fragment with `payments.status: pending_activation
 > Formation is Node-owned tooling. No Operator dependencies. Wallet signs in browser; server verifies before persisting.
 > Payment activation belongs to the child node's trust domain. The shared operator repo never creates or controls child wallets.
 
+### The Blessed Path (wizard → monorepo → flight → ongoing CI/CD)
+
+The phases above are the blessed path for a node born **into the Cogni monorepo**, riding shared CI/CD:
+
+```
+Formation (wizard) → Publish (operator PR) → Flight (candidate-a) → Ongoing (per-node deploy branch + Argo)
+```
+
+This is distinct from a **standalone fork** — a solo operator who wants their own full instance on their own VM forks `Cogni-DAO/standalone-node` and follows [`fork-quickstart.md`](../runbooks/fork-quickstart.md). Two repos, two intents:
+
+| Repo                        | Role                                                                                  |
+| --------------------------- | ------------------------------------------------------------------------------------- |
+| `Cogni-DAO/standalone-node` | Fork-whole quickstart — your own instance, your own substrate (`fork-quickstart.md`). |
+| `nodes/node-template/`      | Clone source for a monorepo node — Publish clones this subtree, regenerates identity. |
+
+`CATALOG_IS_SSOT` ([ci-cd.md](ci-cd.md) Axiom 16) is what makes Publish a single reviewable PR rather than a manual checklist: the catalog entry is the only declaration site, and overlays, per-node AppSets (Axiom 18), Caddy routing, scheduler endpoints, DNS (Axiom 21), and the build matrix all derive from it. The deploy-row contract lives in [create-node.md](../guides/create-node.md); secrets are stripped from the Publish PR and inherited via ESO (`NO_SECRETS_IN_PR`, `bug.5086`).
+
 ## Goal
 
 Enable any founder to create a fully-verified Cogni DAO node via a 3-field web form and 2 wallet transactions, then activate payment rails via a single CLI command in their own fork.
