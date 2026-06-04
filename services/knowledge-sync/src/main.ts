@@ -16,15 +16,19 @@
 
 import { loadConfig } from "./config.js";
 import { type HealthState, startHealthServer } from "./health.js";
-import { buildRemoteAdapter, startReconciler } from "./reconcile.js";
 import { EVENT, flushLogger, makeLogger } from "./observability/index.js";
+import { buildRemoteAdapter, startReconciler } from "./reconcile.js";
 
 async function main(): Promise<void> {
   const config = loadConfig();
   const logger = makeLogger();
 
   logger.info(
-    { event: EVENT.LIFECYCLE_STARTING, logLevel: config.LOG_LEVEL, node: config.SYNC_NODE },
+    {
+      event: EVENT.LIFECYCLE_STARTING,
+      logLevel: config.LOG_LEVEL,
+      node: config.SYNC_NODE,
+    },
     "knowledge-sync starting"
   );
 
@@ -52,7 +56,10 @@ async function main(): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
     healthState.ready = false;
-    logger.info({ event: EVENT.LIFECYCLE_SHUTDOWN, signal, node: config.SYNC_NODE }, "shutting down");
+    logger.info(
+      { event: EVENT.LIFECYCLE_SHUTDOWN, signal, node: config.SYNC_NODE },
+      "shutting down"
+    );
     try {
       await reconciler.stop();
       flushLogger();

@@ -2,16 +2,16 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 import { describe, expect, it } from "vitest";
-
-import type { KnowledgeSyncConfig } from "../src/config.js";
 import { FakeDoltRemoteAdapter } from "../src/adapters/fake-dolt-remote.js";
+import type { KnowledgeSyncConfig } from "../src/config.js";
+import { makeLogger } from "../src/observability/index.js";
 import { DoltRemotePortError } from "../src/ports/dolt-remote.port.js";
 import { startReconciler } from "../src/reconcile.js";
-import { makeLogger } from "../src/observability/index.js";
 
 const baseConfig: KnowledgeSyncConfig = {
   DOLTGRES_URL: "postgresql://x/knowledge_operator",
-  DOLTHUB_REMOTE_URL: "https://doltremoteapi.dolthub.com/cogni-dao/knowledge-operator",
+  DOLTHUB_REMOTE_URL:
+    "https://doltremoteapi.dolthub.com/cogni-dao/knowledge-operator",
   SYNC_REMOTE_NAME: "origin",
   SYNC_BRANCH: "main",
   SYNC_NODE: "operator",
@@ -57,7 +57,9 @@ describe("reconciler", () => {
   });
 
   it("swallows push failures (best-effort, never throws out)", async () => {
-    const fake = new FakeDoltRemoteAdapter({ failWith: new Error("remote down") });
+    const fake = new FakeDoltRemoteAdapter({
+      failWith: new Error("remote down"),
+    });
     const r = startReconciler({ config: baseConfig, remote: fake, logger });
     await expect(r.runOnce()).resolves.toBeUndefined();
     expect(fake.pushCount).toBe(1);

@@ -36,7 +36,9 @@ export class FakeDoltRemoteAdapter implements DoltRemotePort {
   constructor(options: FakeDoltRemoteOptions = {}) {
     this.opts = {
       node: options.node ?? "operator",
-      remote: options.remote ?? "https://doltremoteapi.dolthub.com/cogni-dao/knowledge-operator",
+      remote:
+        options.remote ??
+        "https://doltremoteapi.dolthub.com/cogni-dao/knowledge-operator",
       branch: options.branch ?? "main",
       failWith: options.failWith,
     };
@@ -46,9 +48,17 @@ export class FakeDoltRemoteAdapter implements DoltRemotePort {
     this.pushCount += 1;
     this.signals.push(signal);
     if (this.opts.failWith !== undefined) {
-      throw new DoltRemotePortError("fake push failure", this.opts.node, this.opts.failWith);
+      throw new DoltRemotePortError(
+        "fake push failure",
+        this.opts.node,
+        this.opts.failWith
+      );
     }
-    return { node: this.opts.node, remote: this.opts.remote, branch: this.opts.branch };
+    return {
+      node: this.opts.node,
+      remote: this.opts.remote,
+      branch: this.opts.branch,
+    };
   }
 
   async close(): Promise<void> {

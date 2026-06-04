@@ -14,7 +14,9 @@ describe("escape + additive guard", () => {
   it("escapeRef accepts safe Dolt refs, rejects injection", () => {
     expect(escapeRef("origin")).toBe("'origin'");
     expect(escapeRef("main")).toBe("'main'");
-    expect(() => escapeRef("main'; DROP TABLE x; --")).toThrow(/Invalid Dolt ref/);
+    expect(() => escapeRef("main'; DROP TABLE x; --")).toThrow(
+      /Invalid Dolt ref/
+    );
     expect(() => escapeRef("a b")).toThrow(/Invalid Dolt ref/);
   });
 
@@ -22,7 +24,9 @@ describe("escape + additive guard", () => {
     expect(() =>
       assertAdditive("SELECT dolt_remote('add', 'origin', 'https://x/y')")
     ).not.toThrow();
-    expect(() => assertAdditive("SELECT dolt_push('origin', 'main')")).not.toThrow();
+    expect(() =>
+      assertAdditive("SELECT dolt_push('origin', 'main')")
+    ).not.toThrow();
   });
 
   it("assertAdditive refuses every destructive op (HARD SAFETY)", () => {

@@ -53,7 +53,8 @@ describe("config gating", () => {
     expect(
       isMirrorEnabled({
         DOLTGRES_URL: undefined,
-        DOLTHUB_REMOTE_URL: "https://doltremoteapi.dolthub.com/cogni-dao/knowledge-operator",
+        DOLTHUB_REMOTE_URL:
+          "https://doltremoteapi.dolthub.com/cogni-dao/knowledge-operator",
         SYNC_REMOTE_NAME: "origin",
         SYNC_BRANCH: "main",
         SYNC_NODE: "operator",

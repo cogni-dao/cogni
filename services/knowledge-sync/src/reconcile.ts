@@ -18,18 +18,17 @@
  */
 
 import postgres from "postgres";
-
-import { isMirrorEnabled, type KnowledgeSyncConfig } from "./config.js";
 import { createDoltGrpcRemoteAdapter } from "./adapters/dolt-grpc-remote.js";
-import type { DoltRemotePort } from "./ports/dolt-remote.port.js";
+import { isMirrorEnabled, type KnowledgeSyncConfig } from "./config.js";
 import {
   EVENT,
-  lastPushSuccessTimestamp,
   type Logger,
+  lastPushSuccessTimestamp,
   mirrorEnabled,
   pushDurationMs,
   pushTotal,
 } from "./observability/index.js";
+import type { DoltRemotePort } from "./ports/dolt-remote.port.js";
 
 /**
  * Build the live remote adapter when the mirror is configured, else null
@@ -92,11 +91,17 @@ export function startReconciler(args: {
 
   async function pushOnce(): Promise<void> {
     if (!remote) {
-      logger.debug({ event: EVENT.TICK, node, enabled: false }, "tick (mirror disabled)");
+      logger.debug(
+        { event: EVENT.TICK, node, enabled: false },
+        "tick (mirror disabled)"
+      );
       return;
     }
     const startedAt = Date.now();
-    logger.info({ event: EVENT.PUSH_START, node, remoteKind: remote.kind }, "push start");
+    logger.info(
+      { event: EVENT.PUSH_START, node, remoteKind: remote.kind },
+      "push start"
+    );
     const signal = AbortSignal.timeout(config.SYNC_PUSH_TIMEOUT_MS);
     try {
       const result = await remote.push(signal);
@@ -122,7 +127,10 @@ export function startReconciler(args: {
   function runOnce(): Promise<void> {
     if (stopped) return Promise.resolve();
     if (inFlight) {
-      logger.debug({ event: EVENT.TICK, node, skipped: "in-flight" }, "tick skipped");
+      logger.debug(
+        { event: EVENT.TICK, node, skipped: "in-flight" },
+        "tick skipped"
+      );
       return inFlight;
     }
     inFlight = pushOnce().finally(() => {
@@ -134,7 +142,10 @@ export function startReconciler(args: {
   if (config.SYNC_RUN_ON_START) {
     void runOnce();
   }
-  timer = setInterval(() => void runOnce(), config.SYNC_INTERVAL_SECONDS * 1000);
+  timer = setInterval(
+    () => void runOnce(),
+    config.SYNC_INTERVAL_SECONDS * 1000
+  );
   // Don't keep the event loop alive solely for the timer during shutdown.
   if (typeof timer.unref === "function") timer.unref();
 

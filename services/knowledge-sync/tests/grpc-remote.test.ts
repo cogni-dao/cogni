@@ -14,8 +14,10 @@ function fakeSql(opts: { addError?: Error; pushError?: Error } = {}): {
   const statements: string[] = [];
   const unsafe = (s: string) => {
     statements.push(s);
-    if (/dolt_remote/.test(s) && opts.addError) return Promise.reject(opts.addError);
-    if (/dolt_push/.test(s) && opts.pushError) return Promise.reject(opts.pushError);
+    if (/dolt_remote/.test(s) && opts.addError)
+      return Promise.reject(opts.addError);
+    if (/dolt_push/.test(s) && opts.pushError)
+      return Promise.reject(opts.pushError);
     return Promise.resolve([]);
   };
   const sql = { unsafe, end: () => Promise.resolve() } as unknown as Sql;
@@ -37,12 +39,18 @@ describe("DoltGrpcRemoteAdapter", () => {
     expect(statements[0]).toContain("dolt_remote('add', 'origin'");
     expect(statements[0]).toContain(cfg.remoteUrl);
     expect(statements[1]).toBe("SELECT dolt_push('origin', 'main')");
-    expect(result).toEqual({ node: "operator", remote: cfg.remoteUrl, branch: "main" });
+    expect(result).toEqual({
+      node: "operator",
+      remote: cfg.remoteUrl,
+      branch: "main",
+    });
     expect(adapter.kind).toBe("grpc");
   });
 
   it("swallows 'remote already exists' on add, still pushes", async () => {
-    const { sql, statements } = fakeSql({ addError: new Error("error: remote already exists") });
+    const { sql, statements } = fakeSql({
+      addError: new Error("error: remote already exists"),
+    });
     const adapter = createDoltGrpcRemoteAdapter({ sql, ...cfg });
     await adapter.push();
     expect(statements.some((s) => /dolt_push/.test(s))).toBe(true);

@@ -46,7 +46,10 @@ export function createDoltGrpcRemoteAdapter(
   const { sql, node, remoteName, remoteUrl, branch } = config;
   let remoteReady = false;
 
-  async function run(statement: string, signal?: AbortSignal): Promise<unknown> {
+  async function run(
+    statement: string,
+    signal?: AbortSignal
+  ): Promise<unknown> {
     assertAdditive(statement);
     const query = sql.unsafe(statement);
     if (!signal) return query;
@@ -92,11 +95,7 @@ export function createDoltGrpcRemoteAdapter(
         );
         return { node, remote: remoteUrl, branch };
       } catch (err) {
-        throw new DoltRemotePortError(
-          "dolt_push failed",
-          node,
-          err
-        );
+        throw new DoltRemotePortError("dolt_push failed", node, err);
       }
     },
     async close(): Promise<void> {

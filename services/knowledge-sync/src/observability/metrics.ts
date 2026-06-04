@@ -10,7 +10,7 @@
  * @internal
  */
 
-import { Counter, Gauge, Registry, collectDefaultMetrics } from "prom-client";
+import { Counter, collectDefaultMetrics, Gauge, Registry } from "prom-client";
 
 export const metricsRegistry = new Registry();
 collectDefaultMetrics({ register: metricsRegistry });
