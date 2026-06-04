@@ -4,50 +4,18 @@
 /**
  * Module: `@features/home/components/NodeShowcase`
  * Purpose: Homepage section showcasing live nodes as clickable homepage-thumbnail tiles.
- * Scope: Presentational. Renders resolved showcase nodes passed from the server page. Does not fetch
- *   data or resolve hrefs.
- * Invariants: Inherits the homepage background (no surface tint); the entire tile is one link to the
- *   node's live homepage. Token-only styling. Responsive grid.
+ * Scope: Presentational. Maps resolved NodeSummary → the shared NodeTile. Does not fetch data.
+ * Invariants: Inherits the homepage background (no surface tint); each tile links to the node's live
+ *   homepage in a new tab. Token-only styling. Responsive grid.
  * Side-effects: none
- * Links: src/features/home/showcase/getShowcaseNodes.server.ts, src/app/(public)/page.tsx
+ * Links: src/features/nodes/components/NodeTile.tsx, src/app/(public)/page.tsx
  * @public
  */
 
-import Image from "next/image";
-import Link from "next/link";
 import type { ReactElement } from "react";
 
-import { Card } from "@/components";
+import { NodeTile } from "@/features/nodes/components/NodeTile";
 import type { NodeSummary } from "@/ports";
-
-function NodeTile({ node }: { node: NodeSummary }): ReactElement {
-  return (
-    <Link
-      href={node.href}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="group block rounded-lg"
-    >
-      <Card className="h-full overflow-hidden transition-colors group-hover:border-primary">
-        <div className="relative aspect-video w-full overflow-hidden border-border border-b bg-muted">
-          <Image
-            src={node.thumbnailUrl}
-            alt={`${node.title} homepage`}
-            fill
-            sizes="(min-width: 1024px) 33vw, (min-width: 640px) 50vw, 100vw"
-            className="object-cover object-top transition-transform group-hover:scale-105"
-          />
-        </div>
-        <div className="space-y-2 p-6">
-          <h3 className="font-semibold text-foreground text-lg">
-            {node.title}
-          </h3>
-          <p className="text-muted-foreground text-sm">{node.tagline}</p>
-        </div>
-      </Card>
-    </Link>
-  );
-}
 
 export function NodeShowcase({
   nodes,
@@ -70,7 +38,16 @@ export function NodeShowcase({
         </div>
         <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
           {nodes.map((node) => (
-            <NodeTile key={node.slug} node={node} />
+            <NodeTile
+              key={node.slug}
+              node={{
+                title: node.title,
+                tagline: node.tagline,
+                thumbnailUrl: node.thumbnailUrl,
+                href: node.href,
+                external: true,
+              }}
+            />
           ))}
         </div>
       </div>

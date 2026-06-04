@@ -16,20 +16,13 @@ import { desc, eq } from "drizzle-orm";
 import { redirect } from "next/navigation";
 import type { ReactElement } from "react";
 import { resolveAppDb } from "@/bootstrap/container";
-import {
-  PageContainer,
-  SectionCard,
-  Table,
-  TableBody,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components";
+import { PageContainer, SectionCard } from "@/components";
+import { NodeTile } from "@/features/nodes/components/NodeTile";
 import { getServerSessionUser } from "@/lib/auth/server";
 import { type NodeStatus, nodes } from "@/shared/db/nodes";
 
 import { NewNodeForm } from "./NewNodeForm.client";
-import { NodeRow } from "./NodeRow.client";
+import { NODE_STATUS_DISPLAY } from "./node-display";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -69,24 +62,22 @@ export default async function SetupNodesPage(): Promise<ReactElement> {
             No nodes yet — register one above to get started.
           </p>
         ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Node</TableHead>
-                <TableHead className="text-right">Status</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.map((n) => (
-                <NodeRow
+          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+            {rows.map((n) => {
+              const display = NODE_STATUS_DISPLAY[n.status as NodeStatus];
+              return (
+                <NodeTile
                   key={n.id}
-                  id={n.id}
-                  slug={n.slug}
-                  status={n.status as NodeStatus}
+                  node={{
+                    title: n.slug,
+                    tagline: display.description,
+                    href: `/setup/nodes/${n.id}`,
+                    status: { label: display.label, intent: display.intent },
+                  }}
                 />
-              ))}
-            </TableBody>
-          </Table>
+              );
+            })}
+          </div>
         )}
       </SectionCard>
     </PageContainer>
