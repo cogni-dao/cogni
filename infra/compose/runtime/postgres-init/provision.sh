@@ -136,7 +136,14 @@ if [ "$role_exists" -eq 0 ]; then
 CREATE ROLE "$APP_USER" WITH LOGIN PASSWORD :'app_pass';
 SQL
 else
-  echo "   -> Role '$APP_USER' already exists."
+  echo "   -> Role '$APP_USER' already exists. Ensuring password matches .env..."
+  # Re-assert the password: a persisted volume keeps the password from first-init,
+  # so a rotated/divergent APP_DB_PASSWORD must be reconciled or the app pod's
+  # TCP auth fails. Idempotent (no-op when already in sync). Mirrors readonly below.
+  PGPASSWORD="$PG_PASS" psql -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d "postgres" -v ON_ERROR_STOP=1 \
+    -v app_pass="$APP_PASS" <<SQL
+ALTER ROLE "$APP_USER" WITH LOGIN PASSWORD :'app_pass';
+SQL
 fi
 
 # Service Role (BYPASSRLS for scheduler, internal workers)
@@ -149,7 +156,11 @@ if [ "$service_role_exists" -eq 0 ]; then
 CREATE ROLE "$APP_SERVICE_USER" WITH LOGIN PASSWORD :'svc_pass' BYPASSRLS;
 SQL
 else
-  echo "   -> Service role '$APP_SERVICE_USER' already exists."
+  echo "   -> Service role '$APP_SERVICE_USER' already exists. Ensuring password matches .env..."
+  PGPASSWORD="$PG_PASS" psql -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d "postgres" -v ON_ERROR_STOP=1 \
+    -v svc_pass="$APP_SERVICE_PASS" <<SQL
+ALTER ROLE "$APP_SERVICE_USER" WITH LOGIN PASSWORD :'svc_pass' BYPASSRLS;
+SQL
 fi
 
 # Read-only role (BYPASSRLS for cross-tenant support/debugging reads, no write grants)
