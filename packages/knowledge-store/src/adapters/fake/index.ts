@@ -307,10 +307,6 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
     return Array.from(this.edges.values()).filter((c) => c.citedId === citedId);
   }
 
-  async listAllCitations(): Promise<Citation[]> {
-    return Array.from(this.edges.values());
-  }
-
   // --- Doltgres versioning (stubbed) ---
 
   async commit(message: string): Promise<string> {

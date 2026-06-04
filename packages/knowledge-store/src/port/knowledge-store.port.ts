@@ -206,8 +206,6 @@ export interface KnowledgeStorePort {
   listCitationsByCitingId(citingId: string): Promise<Citation[]>;
   /** List edges where cited_id = id (incoming). Used by recomputeConfidence. */
   listCitationsByCitedId(citedId: string): Promise<Citation[]>;
-  /** List every edge in `citations` — full-graph read for the graph view. */
-  listAllCitations(): Promise<Citation[]>;
 
   // --- Doltgres versioning ---
   commit(message: string): Promise<string>;

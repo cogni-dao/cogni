@@ -4,29 +4,48 @@
 /**
  * Module: `@app/api/v1/knowledge/graph/route`
  * Purpose: GET /api/v1/knowledge/graph — full node (entry) + edge (citation) set
- *   for the 3D knowledge graph view. Reads every domain's entries plus the
- *   complete citations table via container.knowledgeStorePort.
- * Scope: Cookie-session only (Bearer agents rejected 403, like /knowledge). One
- *   listAllCitations() read, not an N+1 per-node citation scan.
+ *   for the 3D knowledge graph view. Reads every domain's entries plus each
+ *   entry's outgoing citations via container.knowledgeStorePort.
+ * Scope: Cookie-session only (Bearer agents rejected 403, like /knowledge).
+ *   Edges gathered from per-node outgoing citations — every citation has exactly
+ *   one citing node in the set, so this yields the complete edge list.
  * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, KNOWLEDGE_BROWSE_VIA_HTTP_REQUIRES_SESSION,
- *   EDGE_ENDPOINTS_EXIST (edges whose endpoints aren't in the node set are dropped).
+ *   EDGE_ENDPOINTS_EXIST (edges whose cited target isn't in the node set are dropped).
  * Side-effects: IO (HTTP response, Doltgres reads via container port)
  * Links: docs/spec/knowledge-syntropy.md
  * @public
  */
 
-import {
-  type KnowledgeGraphEdge,
-  type KnowledgeGraphNode,
-  KnowledgeGraphResponseSchema,
-} from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+
+// Graph contract lives in-node (not @cogni/node-contracts) to keep this PR
+// single-node-scoped. The client mirrors this shape in `_api/fetchGraph.ts`.
+const GraphNodeSchema = z.object({
+  id: z.string(),
+  domain: z.string(),
+  title: z.string(),
+  entryType: z.string(),
+  confidencePct: z.number().int().nullable(),
+  sourceType: z.string(),
+});
+const GraphEdgeSchema = z.object({
+  id: z.string(),
+  source: z.string(),
+  target: z.string(),
+  citationType: z.string(),
+});
+const GraphResponseSchema = z.object({
+  nodes: z.array(GraphNodeSchema),
+  edges: z.array(GraphEdgeSchema),
+  domains: z.array(z.string()),
+});
 
 export const GET = wrapRouteHandlerWithLogging(
   {
@@ -56,12 +75,14 @@ export const GET = wrapRouteHandlerWithLogging(
     }
 
     const domains = await port.listDomains();
-    const nodes: KnowledgeGraphNode[] = [];
+    const nodes: z.infer<typeof GraphNodeSchema>[] = [];
     const nodeIds = new Set<string>();
+    const entryIds: string[] = [];
     for (const domain of domains) {
       const rows = await port.listKnowledge(domain, { limit: 10_000 });
       for (const r of rows) {
         nodeIds.add(r.id);
+        entryIds.push(r.id);
         nodes.push({
           id: r.id,
           domain: r.domain,
@@ -73,19 +94,24 @@ export const GET = wrapRouteHandlerWithLogging(
       }
     }
 
-    // Single full-table read; drop edges whose endpoints aren't in the node set
-    // (deprecated/cross-domain dangling refs) so the client never renders a
-    // floating edge.
-    const allCitations = await port.listAllCitations();
-    const edges: KnowledgeGraphEdge[] = [];
-    for (const c of allCitations) {
-      if (!nodeIds.has(c.citingId) || !nodeIds.has(c.citedId)) continue;
-      edges.push({
-        id: c.id,
-        source: c.citingId,
-        target: c.citedId,
-        citationType: c.citationType,
-      });
+    // Every citation has exactly one citing node (which is in our set), so
+    // gathering each node's outgoing edges yields the full edge list. Drop
+    // edges whose cited target isn't a node (deprecated/cross-domain dangling
+    // refs) so the client never renders a floating edge.
+    const edgeLists = await Promise.all(
+      entryIds.map((id) => port.listCitationsByCitingId(id))
+    );
+    const edges: z.infer<typeof GraphEdgeSchema>[] = [];
+    for (const list of edgeLists) {
+      for (const c of list) {
+        if (!nodeIds.has(c.citedId)) continue;
+        edges.push({
+          id: c.id,
+          source: c.citingId,
+          target: c.citedId,
+          citationType: c.citationType,
+        });
+      }
     }
 
     ctx.log.info(
@@ -94,7 +120,7 @@ export const GET = wrapRouteHandlerWithLogging(
     );
 
     return NextResponse.json(
-      KnowledgeGraphResponseSchema.parse({ nodes, edges, domains })
+      GraphResponseSchema.parse({ nodes, edges, domains })
     );
   }
 );

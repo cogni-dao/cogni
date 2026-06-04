@@ -12,7 +12,7 @@
  *   - SSR_DISABLED (react-force-graph-3d touches window; dynamic import ssr:false).
  *   - SIDE_SHEET_REUSE (node click → KnowledgeDetail, not a bespoke panel).
  * Side-effects: IO (graph fetch), WebGL render.
- * Links: docs/spec/knowledge-syntropy.md, prototypes/knowledge-graph-3d/
+ * Links: docs/spec/knowledge-syntropy.md, nodes/canary/prototypes/knowledge-graph-3d/
  * @internal
  */
 
@@ -104,11 +104,13 @@ const EXTENSION_PALETTE = [
   "#e879f9",
 ];
 function domainColor(domain: string): string {
-  if (BASE_DOMAIN_COLOR[domain]) return BASE_DOMAIN_COLOR[domain];
+  const base = BASE_DOMAIN_COLOR[domain];
+  if (base) return base;
   let h = 0;
-  for (let i = 0; i < domain.length; i++)
+  for (let i = 0; i < domain.length; i++) {
     h = (h * 31 + domain.charCodeAt(i)) | 0;
-  return EXTENSION_PALETTE[Math.abs(h) % EXTENSION_PALETTE.length];
+  }
+  return EXTENSION_PALETTE[Math.abs(h) % EXTENSION_PALETTE.length] ?? "#6ea8fe";
 }
 
 const TYPE_COLOR: Record<string, string> = {

@@ -458,13 +458,6 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
     return rows.map((r) => rowToCitation(r as Record<string, unknown>));
   }
 
-  async listAllCitations(): Promise<Citation[]> {
-    const rows = await this.sql.unsafe(
-      `SELECT * FROM citations ORDER BY created_at`
-    );
-    return rows.map((r) => rowToCitation(r as Record<string, unknown>));
-  }
-
   // --- Doltgres versioning ---
 
   async commit(message: string): Promise<string> {
