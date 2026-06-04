@@ -966,19 +966,27 @@ fi
 log_info "Reconciling Postgres superuser password (trust-socket; self-heals drifted volume)..."
 pg_socket_ready=""
 for _ in $(seq 1 30); do
-  if $RUNTIME_COMPOSE exec -T postgres bash -c 'pg_isready -U "$POSTGRES_USER" -q' 2>/dev/null; then
+  if $RUNTIME_COMPOSE exec -T postgres pg_isready -q 2>/dev/null; then
     pg_socket_ready=1
     break
   fi
   sleep 2
 done
 if [[ -n "$pg_socket_ready" ]]; then
-  if $RUNTIME_COMPOSE exec -T postgres bash -c \
-      'psql -U "$POSTGRES_USER" -d postgres -v ON_ERROR_STOP=1 -v pw="$POSTGRES_PASSWORD" -c "ALTER USER \"$POSTGRES_USER\" WITH PASSWORD :'\''pw'\'';"' \
-      >/dev/null 2>&1; then
+  # Connect over the postgres image's in-container unix socket (`local all all
+  # trust` → no password, so it works regardless of the volume-vs-.env drift).
+  # Drive the superuser name + target password from deploy-infra's OWN env (the
+  # rendered .env / GH-secret SSOT) — NOT the container's POSTGRES_* env (the
+  # prior bash -c form depended on those + fragile nested quoting). SQL via stdin
+  # avoids the -c quoting entirely; stderr is captured so a failure is VISIBLE
+  # (the prior `>/dev/null 2>&1` hid the cause and left prod wedged silently).
+  if recon_out=$(printf '%s\n' "ALTER USER \"${POSTGRES_ROOT_USER}\" WITH PASSWORD :'pw';" \
+      | $RUNTIME_COMPOSE exec -T postgres \
+          psql -v ON_ERROR_STOP=1 -U "${POSTGRES_ROOT_USER}" -d postgres \
+               -v pw="${POSTGRES_ROOT_PASSWORD}" 2>&1); then
     log_info "Postgres superuser password reconciled to rendered .env."
   else
-    log_warn "Postgres superuser reconcile failed; db-provision will surface the real error."
+    log_warn "Postgres superuser reconcile FAILED (db-provision will surface the real error). psql said: ${recon_out}"
   fi
 else
   log_warn "Postgres socket not ready after 60s; skipping reconcile (db-provision will surface the real error)."
