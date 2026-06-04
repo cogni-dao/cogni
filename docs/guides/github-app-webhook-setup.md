@@ -49,6 +49,14 @@ tags: [github, webhooks, ingestion, review, setup]
 | Issues        | Read-only    | Attribution ingestion                       |
 | Pull requests | Read & write | PR review posts comments, PR Manager merges |
 
+**Permissions (Organization)** — required only for the operator App that **mints node repos** (node-formation Publish → `generateFromTemplate`):
+
+| Permission     | Access       | Why                                                                                                                                    |
+| -------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| Administration | Read & write | `POST /repos/{tpl}/generate` creates the node's repo (`Cogni-DAO/<slug>`) from the `node-template` template. Without it, Publish 403s. |
+
+> **Install scope for the minting App.** Step 7's single-repo install is enough for _review_ (payload-driven), but an App that **creates + commits to** new node repos must reach repos that don't exist yet. A `selected`-repos install means a freshly-minted `Cogni-DAO/<slug>` is **invisible to the App** → the identity-commit 404s even with `administration: write`. So the minting App needs **"All repositories"** — preferably scoped to a **dedicated nodes org** (e.g. `cogni-nodes`) so it isn't org-wide over the operator's own infra repos (which would cross-wire env webhooks). See [node-formation.md § Node Publish](../spec/node-formation.md) + [node-ci-cd-contract.md § Submodule-pinned nodes](../spec/node-ci-cd-contract.md).
+
 4. **Subscribe to events:** Issues, Issue comment, Pull request, Pull request review, Push
 
 5. Click **Create GitHub App**. Note the **App ID**.
