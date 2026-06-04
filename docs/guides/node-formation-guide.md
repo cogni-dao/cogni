@@ -20,16 +20,11 @@ tags: [web3, setup, dao]
 
 You want to create a new Cogni DAO node. The formation wizard walks you through deploying a DAO + GovernanceERC20 token + CogniSignal contract on-chain, then verifying the deployment server-side.
 
-## Where This Fits — The Blessed Path
+## Where This Fits
 
-There are two ways to run a Cogni node. Pick the one that matches your intent:
+This guide covers the **monorepo node** path — a node born into the Cogni monorepo, riding shared CI/CD. Want your **own standalone instance** instead? That's a different axis (substrate provisioning, not DAO formation) — follow [`fork-quickstart.md`](../runbooks/fork-quickstart.md) (`Cogni-DAO/standalone-node`). The architecture and the two-repo split live in the [Node Formation Spec](../spec/node-formation.md) § The Blessed Path.
 
-| Path                        | You get                                        | Driven by                                                                                          |
-| --------------------------- | ---------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| **Node in the monorepo** ⭐ | A node deployed on shared Cogni infrastructure | This guide (wizard) → operator-authored PR → flight                                                |
-| **Standalone fork**         | Your own full instance on your own VM          | [`docs/runbooks/fork-quickstart.md`](../runbooks/fork-quickstart.md) (`Cogni-DAO/standalone-node`) |
-
-This guide is the **blessed path** — a node born into the Cogni monorepo, riding shared CI/CD:
+The arc this guide drives:
 
 ```
 1. Formation   wizard at /setup/dao → DAO + token + CogniSignal on-chain, server-verified (Steps 1-7)
@@ -109,7 +104,7 @@ What the Publish PR contains (proven shape — see PR #1503 `chaos`):
 - **Catalog entry** — `infra/catalog/<slug>.yaml`. This is the keystone: `CATALOG_IS_SSOT` ([ci-cd.md](../spec/ci-cd.md) Axiom 16) means overlays, AppSets, Caddy routing, scheduler endpoints, and the build matrix all derive from it.
 - **Generated footprint** (byte-exact, drift-gated against `scripts/ci/render-*.sh`): overlays ×3 (`infra/k8s/overlays/{candidate-a,preview,production}/<slug>/`), per-node AppSets ×3 (`infra/k8s/argocd/<env>-<slug>-applicationset.yaml`, Axiom 18), Caddyfile route, `ci.yaml` scope filter, scheduler-worker endpoints, and the `pnpm-lock.yaml` importer splice.
 
-**Secrets are NOT in the PR.** The per-node `secrets-catalog.yaml` + `k8s/external-secrets/**` are deliberately stripped from the cloned tree (`bug.5086`, `NO_SECRETS_IN_PR`): cloning node-template's catalog would re-declare the shared baseline names and break `setup:secrets` for every env. A node inherits the shared secret baseline via ESO — no secret value ever lands in git. To add a node-specific secret later, edit `nodes/<slug>/.cogni/secrets-catalog.yaml` (one PR, node domain) — see the [cicd-secrets-expert skill](../../.claude/skills/cicd-secrets-expert/SKILL.md).
+**Secrets are NOT in the PR.** The per-node `secrets-catalog.yaml` + `k8s/external-secrets/**` are stripped from the cloned tree (`NO_SECRETS_IN_PR`, `bug.5086` — see spec for why); a node inherits the shared secret baseline via ESO, so no secret value ever lands in git. To add a node-specific secret later, edit `nodes/<slug>/.cogni/secrets-catalog.yaml` (one PR, node domain) — see the [cicd-secrets-expert skill](../../.claude/skills/cicd-secrets-expert/SKILL.md).
 
 **Your job after Publish:**
 
