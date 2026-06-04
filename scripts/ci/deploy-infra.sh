@@ -1375,10 +1375,15 @@ SECEOF
   # (re-writing the pod Secret each deploy) is the BREAKING path, not the
   # healing one. Fail-soft: a sync failure warns but never aborts the deploy.
   # See docs/spec/secrets-management.md (source: external).
+  # Runs ON THE VM (inside the remote heredoc) — REPO_ROOT is a runner-only var
+  # and is UNBOUND here under `set -u`; the script is scp'd to /tmp alongside
+  # ensure-temporal-namespace.sh (see upload block). A bare $REPO_ROOT ref aborts
+  # the whole deploy before Phase 7 → zero app layer (regression #1482, candidate-a
+  # 2026-06-04). Invoke the uploaded /tmp copy instead.
   if GH_REVIEW_APP_ID="${GH_REVIEW_APP_ID:-}" \
      GH_REVIEW_APP_PRIVATE_KEY_BASE64="${GH_REVIEW_APP_PRIVATE_KEY_BASE64:-}" \
      GH_WEBHOOK_SECRET="${GH_WEBHOOK_SECRET:-}" \
-     bash "$REPO_ROOT/scripts/secrets/sync-app-webhook-secret.sh"; then
+     bash /tmp/sync-app-webhook-secret.sh; then
     log_info "  GitHub App webhook secret synced (pod ↔ App)"
   else
     log_warn "  GitHub App webhook secret sync FAILED — webhooks will fail verification until resolved"
@@ -1590,6 +1595,7 @@ scp $SSH_OPTS "$ARTIFACT_DIR/deploy-infra-remote.sh" root@"$VM_HOST":/tmp/deploy
 scp $SSH_OPTS \
   "$REPO_ROOT/scripts/ci/ensure-temporal-namespace.sh" \
   "$REPO_ROOT/infra/provision/cherry/harden-docker-public-ports.sh" \
+  "$REPO_ROOT/scripts/secrets/sync-app-webhook-secret.sh" \
   root@"$VM_HOST":/tmp/
 
 # Verify SCP landed correctly

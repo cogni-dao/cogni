@@ -86,6 +86,8 @@ gh workflow run provision-env.yml --repo <owner>/<repo> \
 
 16. **Phase 1 of the DB-cred OpenBao port (`<env>-db-reader`) validates via k8s-auth — NO root token needed.** Even on a provision that died at 5f, if Phase 5b completed, the `<env>-db-reader` policy/role + `db-provisioner` SA are live. Prove the OpenBao read path with the kubeconfig alone: `JWT=$(kubectl create token db-provisioner -n default); TOK=$(kubectl -n openbao exec openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 bao write -field=token auth/kubernetes/login role=<env>-db-reader jwt=$JWT)` → `bao kv list cogni/<env>` succeeds (least-priv read). This is how Invariant-15 Phase 1 was deploy-verified on candidate-a despite the dead app layer.
 
+17. **`$REPO_ROOT` (or any runner-only var) referenced INSIDE the remote heredoc is unbound on the VM → `set -u` aborts the whole deploy before Phase 7 → zero app layer.** `deploy-infra.sh` ships a quoted-heredoc remote script (`cat > … << 'EOF'`, runs on the VM via SSH); `REPO_ROOT` is assigned on the **runner** and never crosses. A bare `bash "$REPO_ROOT/scripts/…"` in that block dies `REPO_ROOT: unbound variable` AFTER Step-7 secrets but BEFORE the ApplicationSets apply — looks identical to Gotchas 12/13 (substrate green, no app pods) but the tell is `deploy-infra-remote.sh: line NNN: <VAR>: unbound variable` in the run log. **Rule: any helper a remote-block needs must be `scp`'d to `/tmp/` (alongside `ensure-temporal-namespace.sh`) and invoked as `/tmp/<name>.sh`, never via a runner path.** Seen 2026-06-04: `sync-app-webhook-secret.sh` added in #1482 with `$REPO_ROOT` silently broke EVERY clean provision for a day (fixed: upload to `/tmp` + call `/tmp/sync-app-webhook-secret.sh`).
+
 ## AFTER — verify + custody
 
 ```bash
