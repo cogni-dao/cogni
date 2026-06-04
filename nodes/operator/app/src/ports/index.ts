@@ -131,6 +131,11 @@ export type {
 } from "./model-provider.port";
 export type { ModelProviderResolverPort } from "./model-provider-resolver.port";
 export type {
+  NodeKind,
+  NodeRegistryPort,
+  NodeSummary,
+} from "./node-registry.port";
+export type {
   OnChainVerifier,
   VerificationResult,
   VerificationStatus,
