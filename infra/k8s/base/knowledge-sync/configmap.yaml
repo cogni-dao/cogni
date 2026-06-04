@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2025 Cogni-DAO
+#
+# Non-secret configuration for knowledge-sync.
+# Secrets (DOLTGRES_URL, DOLTHUB_REMOTE_URL) come from knowledge-sync-secrets.
+# IMAGE_DIGEST is patched by overlays on promotion.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: knowledge-sync-config
+  labels:
+    app.kubernetes.io/name: knowledge-sync
+    app.kubernetes.io/part-of: cogni
+data:
+  # v0 mirrors only the operator node.
+  SYNC_NODE: "operator"
+  SYNC_REMOTE_NAME: "origin"
+  SYNC_BRANCH: "main"
+  SYNC_INTERVAL_SECONDS: "900"
+  SYNC_RUN_ON_START: "true"
+  # Observability
+  LOG_LEVEL: "info"
+  SERVICE_NAME: "knowledge-sync"
+  HEALTH_PORT: "9000"
+  # Image digest — set by overlay on promotion
+  IMAGE_DIGEST: "placeholder"

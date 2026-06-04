@@ -1,0 +1,14 @@
+name: knowledge-sync
+type: service
+port: 9000
+dockerfile: services/knowledge-sync/Dockerfile
+# bug.0344 — see infra/catalog/operator.yaml / scheduler-worker.yaml for why the
+# migrator alias exists. knowledge-sync has no per-node migrator (NODE_TARGETS
+# excludes type:service in scripts/ci/lib/image-tags.sh), so the alias is a no-op.
+image_tag_suffix: "-knowledge-sync"
+migrator_tag_suffix: "-knowledge-sync-migrate"
+# task.0320 — per-env deploy branches (see operator.yaml).
+candidate_a_branch: deploy/candidate-a-knowledge-sync
+preview_branch: deploy/preview-knowledge-sync
+production_branch: deploy/production-knowledge-sync
+path_prefix: services/knowledge-sync/

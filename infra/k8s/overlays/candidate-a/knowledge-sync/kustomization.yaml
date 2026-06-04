@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2025 Cogni-DAO
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: cogni-candidate-a
+
+resources:
+  - ../../../base/knowledge-sync
+
+images:
+  - name: ghcr.io/cogni-dao/cogni-template
+    newName: ghcr.io/cogni-dao/cogni-template
+    digest: "sha256:f7f75a866f8b5c5ae8fe5f467c5dc84a1f114fdcbc1db8cfb49cf685a89f8168"
+
+patches:
+  - target:
+      kind: ConfigMap
+      name: knowledge-sync-config
+    patch: |
+      - op: replace
+        path: /data/IMAGE_DIGEST
+        value: "candidate-a-placeholder-knowledge-sync"

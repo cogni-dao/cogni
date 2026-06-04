@@ -11,6 +11,13 @@ metadata:
     app.kubernetes.io/name: node-app
     app.kubernetes.io/part-of: cogni
     app.kubernetes.io/component: node
+  annotations:
+    # Stakater Reloader: rolling-restart this Deployment when any ConfigMap or
+    # Secret it references (envFrom: node-app-config / node-app-secrets) changes.
+    # This is what carries a day-2 OpenBao secret write through ESO into a
+    # running pod — pods read `envFrom: secretRef` once, at container start.
+    # See infra/k8s/argocd/reloader/ + secrets-management.md Invariant 11.
+    reloader.stakater.com/auto: "true"
 spec:
   replicas: 1
   strategy:
