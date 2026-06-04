@@ -37,9 +37,9 @@ export interface NodeSummary {
   /** Homepage screenshot/preview served from public/ or a screenshot source. */
   readonly thumbnailUrl: string;
   /** True for the node that serves the bare base domain (operator). */
-  readonly primary?: boolean;
+  readonly primary?: boolean | undefined;
   /** Governance/deployment identity, when known (sourced from repo-spec, never minted here). */
-  readonly nodeId?: string;
+  readonly nodeId?: string | undefined;
 }
 
 /** Read-model registry of discoverable nodes. */
