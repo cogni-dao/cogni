@@ -3,25 +3,28 @@
 
 /**
  * Module: `@features/home/showcase/getShowcaseNodes.server`
- * Purpose: Server entry that reads the base domain from env and resolves the curated showcase nodes.
- * Scope: Server-only env wiring. All host-mapping logic lives in (pure) nodes.resolve.ts.
+ * Purpose: Server accessor that wires the NodeRegistryPort (v0: static adapter + env base domain) and
+ *   returns nodes for the homepage. The page depends on this accessor + the port's NodeSummary, not
+ *   the underlying data source.
+ * Scope: Server-only env wiring. Host-mapping logic lives in (pure) nodes.resolve.ts.
  * Side-effects: reads env (serverEnv) only.
- * Links: src/features/home/showcase/nodes.resolve.ts, src/features/home/showcase/nodes.data.ts
+ * Links: src/ports/node-registry.port.ts, src/features/home/showcase/static-node-registry.adapter.ts
  * @public
  */
 
+import type { NodeRegistryPort, NodeSummary } from "@/ports/node-registry";
 import { serverEnv } from "@/shared/env";
 
 import { SHOWCASE_NODES } from "./nodes.data";
-import {
-  baseDomain,
-  type ResolvedShowcaseNode,
-  resolveShowcaseNodes,
-} from "./nodes.resolve";
+import { baseDomain } from "./nodes.resolve";
+import { StaticNodeRegistryAdapter } from "./static-node-registry.adapter";
 
-export type { ResolvedShowcaseNode };
+/** Build the v0 node registry (static adapter bound to the env base domain). */
+export function nodeRegistry(): NodeRegistryPort {
+  return new StaticNodeRegistryAdapter(SHOWCASE_NODES, baseDomain(serverEnv()));
+}
 
-/** Curated showcase nodes resolved to live hrefs for rendering. */
-export function getShowcaseNodes(): readonly ResolvedShowcaseNode[] {
-  return resolveShowcaseNodes(SHOWCASE_NODES, baseDomain(serverEnv()));
+/** Public showcase nodes for the homepage. */
+export function listShowcaseNodes(): Promise<readonly NodeSummary[]> {
+  return nodeRegistry().listPublic();
 }

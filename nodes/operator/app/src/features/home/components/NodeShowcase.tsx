@@ -18,10 +18,9 @@ import Link from "next/link";
 import type { ReactElement } from "react";
 
 import { Card } from "@/components";
+import type { NodeSummary } from "@/ports/node-registry";
 
-import type { ResolvedShowcaseNode } from "../showcase/getShowcaseNodes.server";
-
-function NodeTile({ node }: { node: ResolvedShowcaseNode }): ReactElement {
+function NodeTile({ node }: { node: NodeSummary }): ReactElement {
   return (
     <Link
       href={node.href}
@@ -32,7 +31,7 @@ function NodeTile({ node }: { node: ResolvedShowcaseNode }): ReactElement {
       <Card className="h-full overflow-hidden transition-colors group-hover:border-primary">
         <div className="relative aspect-video w-full overflow-hidden border-border border-b bg-muted">
           <Image
-            src={node.thumbnail}
+            src={node.thumbnailUrl}
             alt={`${node.title} homepage`}
             fill
             sizes="(min-width: 1024px) 33vw, (min-width: 640px) 50vw, 100vw"
@@ -53,7 +52,7 @@ function NodeTile({ node }: { node: ResolvedShowcaseNode }): ReactElement {
 export function NodeShowcase({
   nodes,
 }: {
-  nodes: readonly ResolvedShowcaseNode[];
+  nodes: readonly NodeSummary[];
 }): ReactElement {
   return (
     <section
@@ -71,7 +70,7 @@ export function NodeShowcase({
         </div>
         <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
           {nodes.map((node) => (
-            <NodeTile key={node.name} node={node} />
+            <NodeTile key={node.slug} node={node} />
           ))}
         </div>
       </div>
