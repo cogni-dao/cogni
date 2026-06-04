@@ -10,7 +10,7 @@ implements:
   - task.0284
 owner: derekg1729
 created: 2026-05-19
-verified: 2026-05-19
+verified: 2026-06-04
 tags:
   - secrets
   - security
@@ -138,6 +138,8 @@ self-serve. The catalog model (capability-gated, distinct-vs-shared custody line
 
 14. **CATALOG_IS_THE_ONE_READER.** The set of keys that fan out to a pod is derived **only** from the secrets catalog (`infra/secrets-catalog.yaml` + `nodes/<node>/.cogni/secrets-catalog.yaml`), read through the single Zod loader (`scripts/lib/secrets-catalog-loader.ts`). No hand-maintained parallel list may decide pod fan-out — specifically `reconcile-secrets.sh::NODE_BASELINE_KEYS`, the per-secret `env:` map in `provision-env.yml`, and the `bootstrap.sh` `.env` heredoc are derived from the loader (e.g. a `--print-pod-keys <node>` emitter the bash side consumes), never independently authored. A catalog entry is the **declaration**; declaration must imply fan-out. Drift guard: `secrets-fanout.test.sh` fails closed if a catalog pod-key is not in the derived set. This is what makes Atom ① of the self-serve model real — a node dev's one-PR catalog edit reaches the pod without any operator-domain hand-edit. (Per-node _membership_ is already catalog-gated via `_node_gets_key`/`appliesTo`; this invariant extends the same SSOT to the key **universe**.)
 
+15. **DB_ROLE_CREDS_ARE_OPENBAO_OWNED** (bug.5002 — the corollary of `OPENBAO_IS_SINGLE_SOURCE_OF_TRUTH` at the Compose↔k8s boundary). The DB role passwords a k8s pod authenticates with — Postgres `app_user`, `app_service`, the read-only role, and the Doltgres `knowledge_reader`/`knowledge_writer` roles — are **owned by OpenBao** and reach the pod inside the ESO-synced `DATABASE_URL` / `DOLTGRES_URL` at `cogni/<env>/<service>`. `deploy-infra.sh` / `db-provision` / `doltgres-provision` MUST NOT be a **second writer** of these passwords: they create each role **once** from the OpenBao-sourced value and **never `ALTER … PASSWORD` from a rendered `.env`** on a later run. A `.env` rendered from GitHub env secrets is a parallel store (Invariant 5 violation); ALTERing the DB to it diverges from the value ESO syncs to the pod → `28P01 password authentication failed` → `/readyz` "infrastructure unreachable" → 502 (the candidate-a 2026-06-04 cluster-wide outage). The Compose **superuser** (`POSTGRES_ROOT_PASSWORD`) is exempt — it is a Compose-runtime credential per the Non-Goal, consumed by no k8s pod — but it too is set-once at init, never "reconciled" to a divergent source. **The fix for a provisioning auth failure is to align the source (point `db-provision` at OpenBao), never to overwrite the DB from `.env`.**
+
 ---
 
 ## Design
@@ -213,6 +215,25 @@ spec:
 ```
 
 This is set ONCE at service creation. **Adding a new env var that the code reads = NO POD SPEC EDIT. Just write the secret to OpenBao + push the code that consumes `process.env.NEW_KEY`.**
+
+### DB-credential provisioning — the Compose↔k8s boundary (bug.5002, Invariant 15)
+
+Postgres and Doltgres run as **Compose-on-VM** services (the Non-Goal keeps them on `.env`), while the node-apps that consume them run as **k8s pods** (ESO-fed). The DB **role** passwords straddle that boundary, and that seam is where a split-brain festers:
+
+- The **pod** reads its `DATABASE_URL` / `DOLTGRES_URL` (role name + password) from `cogni/<env>/<service>` in OpenBao via ESO. **OpenBao is the SSOT.**
+- **`db-provision` / `doltgres-provision`** create the matching DB roles. They MUST set each role's password from the **same OpenBao value** — not from a separately-rendered GitHub-secret `.env`. If the two sources diverge and provisioning ALTERs the DB to the `.env` value, the role stops matching the pod's Secret → 28P01.
+
+**North-star flow — one writer, one source:**
+
+```
+OpenBao  cogni/<env>/<service>   (app_user / doltgres role passwords — written once by the secrets tooling, rotated by it)
+   ├─ ESO ──▶ <service>-env-secrets ──▶ pod   (DATABASE_URL / DOLTGRES_URL)
+   └─ db-provision READS the same value ──▶ CREATE ROLE …   (set-once; NEVER re-ALTER from .env)
+```
+
+Because `db-provision` reads the role password from the value ESO will sync, the DB role and the pod cannot disagree, and **no "reconcile" is ever needed** — there is no second source to drift from. The eventual hardening is the **OpenBao DB secrets engine** (dynamic per-session creds, `refreshInterval: 15m` — see the Rotation table), which removes static role passwords entirely.
+
+**The bug.5002 anti-fix (do NOT do this):** "self-heal drift" by ALTERing a pod-consumed DB role password to deploy-infra's rendered `.env` on every deploy. That makes deploy-infra a **second writer**, guarantees divergence whenever `.env` ≠ OpenBao, and converts a silent inconsistency into an active 502 outage. When `db-provision` can't authenticate, fix the **source** (point it at OpenBao), never overwrite the DB from `.env`.
 
 ### Standardized tooling — three entry points, one primitive
 
@@ -343,6 +364,7 @@ Bound via OpenBao role definitions to Kubernetes ServiceAccounts (per-service-pe
 - `valueFrom: secretKeyRef` per env var in pod spec (forces pod spec edit per secret) — use `envFrom: secretRef`
 - Secret values in committed YAML, even base64-encoded — base64 ≠ encryption
 - Bypassing the standardized tooling for production-env writes
+- `deploy-infra.sh` / `db-provision` / `doltgres-provision` ALTERing a **pod-consumed** DB role password from a rendered `.env` (a second writer to the OpenBao-owned credential — Invariant 15; caused the candidate-a bug.5002 cluster outage). Roles are created set-once from the OpenBao value, never reconciled to `.env`.
 - `bao kv put` (replaces all keys at path) instead of `bao kv patch` (additive)
 - `bao kv destroy` to clean up — use `bao kv delete` (soft delete; restorable); only destroy with explicit incident-response justification
 - Sealed Secrets (cluster-bound keys; rejected per `proj.security-hardening` Design Notes)
