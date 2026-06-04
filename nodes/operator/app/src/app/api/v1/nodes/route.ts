@@ -20,14 +20,24 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { resolveAppDb } from "@/bootstrap/container";
+import { getCurrentTraceId } from "@/bootstrap/otel";
 import { parseNodeSlug } from "@/features/nodes/node-slug";
 import { getServerSessionUser } from "@/lib/auth/server";
 import { getGithubRepo } from "@/shared/config";
 import { nodes } from "@/shared/db/nodes";
+import {
+  createRequestContext,
+  EVENT_NAMES,
+  logEvent,
+  makeLogger,
+} from "@/shared/observability";
 import { SUPPORTED_CHAIN_IDS } from "@/shared/web3";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+const baseLog = makeLogger();
+const clock = { now: () => new Date().toISOString() };
 
 const SUPPORTED_CHAIN_ID_LIST: readonly number[] = SUPPORTED_CHAIN_IDS;
 
@@ -64,10 +74,16 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const startTime = performance.now();
   const session = await getServerSessionUser();
   if (!session) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  const ctx = createRequestContext({ baseLog, clock }, request, {
+    routeId: "nodes.create",
+    traceId: getCurrentTraceId(),
+    session,
+  });
 
   let body: unknown;
   try {
@@ -145,11 +161,27 @@ export async function POST(request: Request) {
       existing.length > 0
         ? "A node with this slug already exists. Open it from Your nodes or choose another slug."
         : "Slug already taken by another user.";
+    logEvent(ctx.log, EVENT_NAMES.NODE_FORMATION_CREATE_COMPLETE, {
+      reqId: ctx.reqId,
+      routeId: ctx.routeId,
+      outcome: "error",
+      errorCode: "slug_taken",
+      chainId: parsed.data.chainId,
+      durationMs: Math.round(performance.now() - startTime),
+    });
     return NextResponse.json(
       { error: "slug already taken", reason },
       { status: 409 }
     );
   }
 
+  logEvent(ctx.log, EVENT_NAMES.NODE_FORMATION_CREATE_COMPLETE, {
+    reqId: ctx.reqId,
+    routeId: ctx.routeId,
+    outcome: "success",
+    slug: parsedSlug.value.slug,
+    chainId: parsed.data.chainId,
+    durationMs: Math.round(performance.now() - startTime),
+  });
   return NextResponse.json({ node: inserted[0] }, { status: 201 });
 }

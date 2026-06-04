@@ -63,6 +63,10 @@ export const EVENT_NAMES = {
   // Setup Domain - Server
   SETUP_DAO_VERIFY_COMPLETE: "setup.dao_verify_complete",
 
+  // Node Formation Domain - Server (wizard)
+  NODE_FORMATION_CREATE_COMPLETE: "feature.node_formation.create_complete",
+  NODE_PUBLISH_COMPLETE: "feature.node_publish.complete",
+
   // Adapter Events
   ADAPTER_LITELLM_COMPLETION_RESULT: "adapter.litellm.completion_result",
   ADAPTER_LITELLM_STREAM_RESULT: "adapter.litellm.stream_result",
