@@ -950,6 +950,41 @@ else
 fi
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Step 5a: Reconcile Postgres superuser password to the rendered .env.
+# POSTGRES_PASSWORD is applied ONLY at first-init of an EMPTY data volume. On a
+# persisted volume (re-provision, or a POSTGRES_ROOT_PASSWORD rotation) the stored
+# password diverges from .env, so db-provision's TCP+scram auth below fails, spins
+# for its whole timeout, and aborts the ENTIRE infra deploy before any k8s Secret
+# is written. The postgres image keeps `local all all trust` in pg_hba, so a
+# unix-socket connection authenticates without a password regardless of drift —
+# use it to force the stored superuser password to match .env on every deploy.
+# Idempotent + self-healing; .env (rendered from the GH-secret SSOT) is canonical,
+# the volume follows it. Without this, a rotated/divergent root secret wedges the
+# deploy indefinitely (see the empty-externals chain: db-provision abort blocks the
+# Step-7 Secret write, so every catalogued external key stays empty in the pod).
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+log_info "Reconciling Postgres superuser password (trust-socket; self-heals drifted volume)..."
+pg_socket_ready=""
+for _ in $(seq 1 30); do
+  if $RUNTIME_COMPOSE exec -T postgres bash -c 'pg_isready -U "$POSTGRES_USER" -q' 2>/dev/null; then
+    pg_socket_ready=1
+    break
+  fi
+  sleep 2
+done
+if [[ -n "$pg_socket_ready" ]]; then
+  if $RUNTIME_COMPOSE exec -T postgres bash -c \
+      'psql -U "$POSTGRES_USER" -d postgres -v ON_ERROR_STOP=1 -v pw="$POSTGRES_PASSWORD" -c "ALTER USER \"$POSTGRES_USER\" WITH PASSWORD :'\''pw'\'';"' \
+      >/dev/null 2>&1; then
+    log_info "Postgres superuser password reconciled to rendered .env."
+  else
+    log_warn "Postgres superuser reconcile failed; db-provision will surface the real error."
+  fi
+else
+  log_warn "Postgres socket not ready after 60s; skipping reconcile (db-provision will surface the real error)."
+fi
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Step 6: Run DB provisioning (idempotent — creates users/DBs if missing)
 # Note: DB migrations are NOT run here — k8s PreSync hook handles those.
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
