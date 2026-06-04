@@ -1006,15 +1006,22 @@ export function resolveServiceDb(): Database {
  */
 export function resolveNodeRegistry(): NodeRegistryPort {
   const domain = baseDomain(serverEnv());
+  const log = makeLogger({ service: "cogni-template", nodeId: getNodeId() });
   return new CompositeNodeRegistryAdapter([
     new StaticNodeRegistryAdapter(SHOWCASE_NODES, domain),
     new DbNodeRegistryAdapter({
       listListedSlugs: async () => {
-        const rows = await resolveServiceDb()
-          .select({ slug: nodes.slug })
-          .from(nodes)
-          .where(eq(nodes.status, "active"));
-        return rows.map((r) => r.slug);
+        try {
+          const rows = await resolveServiceDb()
+            .select({ slug: nodes.slug })
+            .from(nodes)
+            .where(eq(nodes.status, "active"));
+          return rows.map((r) => r.slug);
+        } catch (err) {
+          // Don't let a projection-read failure blank the homepage silently.
+          log.warn({ err }, "node_registry_projection_read_failed");
+          return [];
+        }
       },
       domain,
     }),
