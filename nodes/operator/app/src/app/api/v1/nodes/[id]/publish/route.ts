@@ -113,12 +113,16 @@ export async function POST(_request: Request, ctx: RouteParams) {
   };
   let pr: { prNumber: number; prUrl: string };
   try {
+    // Mint target + template home are decoupled from the operator's own monorepo org (the
+    // submodule-PR target below). Default to repoOwner; set NODE_MINT_OWNER/NODE_TEMPLATE_OWNER
+    // to a dedicated nodes org (e.g. cogni-nodes) to isolate the all-repos App install.
     const minted = await writer.generateFromTemplate({
-      templateOwner: node.repoOwner,
-      owner: node.repoOwner,
+      templateOwner: env.NODE_TEMPLATE_OWNER ?? node.repoOwner,
+      owner: env.NODE_MINT_OWNER ?? node.repoOwner,
       slug: node.slug,
       ...identity,
     });
+    // Submodule-PR target = the operator monorepo (nodes live at nodes/<slug> there). Non-negotiable.
     pr = await writer.openNodeSubmodulePr({
       owner: node.repoOwner,
       repo: node.repoName,

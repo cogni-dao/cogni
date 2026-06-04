@@ -155,6 +155,13 @@ export const serverSchema = z.object({
   GH_REVIEW_APP_ID: optionalString,
   GH_REVIEW_APP_PRIVATE_KEY_BASE64: optionalString,
 
+  // Node-formation Publish: where new node repos are minted + where the node-template lives.
+  // Decoupled from the operator's own monorepo org (the submodule-PR target) so a dedicated
+  // nodes org (e.g. `cogni-nodes` — isolates the all-repos App install) is a config flip, not a
+  // code change. Both default to the operator monorepo's owner when unset.
+  NODE_MINT_OWNER: optionalString,
+  NODE_TEMPLATE_OWNER: optionalString,
+
   // Billing ingest token - Bearer auth for LiteLLM generic_api callback → billing ingest endpoint
   // Per billing-ingest-spec: CALLBACK_AUTHENTICATED invariant. Min 32 chars to reduce weak-token risk.
   // Required: Billing ingest endpoint will reject all callbacks without this token.
