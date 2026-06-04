@@ -168,10 +168,15 @@ ALTER ROLE "$APP_READONLY_USER" SET default_transaction_read_only = on;
 ALTER ROLE "$APP_READONLY_USER" SET statement_timeout = '30s';
 SQL
 else
-  echo "   -> Read-only role '$APP_READONLY_USER' already exists. Ensuring password/settings..."
-  PGPASSWORD="$PG_PASS" psql -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d "postgres" -v ON_ERROR_STOP=1 \
-    -v readonly_pass="$APP_READONLY_PASS" <<SQL
-ALTER ROLE "$APP_READONLY_USER" WITH LOGIN PASSWORD :'readonly_pass' BYPASSRLS;
+  # Do NOT re-ALTER the password here (bug.5002 / Invariant 15). The read-only
+  # credential is owned out-of-band by its consumers — the Grafana Cloud Postgres
+  # datasource (provision-grafana-postgres-datasources.sh) derives the SAME value
+  # from POSTGRES_ROOT_PASSWORD. Re-ALTERing from this .env on every deploy makes
+  # db-provision a second writer; any divergence knocks the datasource off its
+  # value → 28P01 (the same class as bug.5031). Set-once at create; never
+  # reconciled from .env. Only re-apply the non-secret read-only SET settings.
+  echo "   -> Read-only role '$APP_READONLY_USER' already exists (password owned by consumers; not reconciled). Re-applying SET settings..."
+  PGPASSWORD="$PG_PASS" psql -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d "postgres" -v ON_ERROR_STOP=1 <<SQL
 ALTER ROLE "$APP_READONLY_USER" SET default_transaction_read_only = on;
 ALTER ROLE "$APP_READONLY_USER" SET statement_timeout = '30s';
 SQL
