@@ -316,26 +316,42 @@ export function createGithubReviewAdapter(deps: GithubReviewAdapterDeps) {
     // the worker activity (the orchestrator's observability for the
     // deploy_verified loop), not here — see services/scheduler-worker review.ts.
     //
-    // `extractOwningNode` enforces the monorepo meta-test invariant (operator MUST be
-    // registered in `spec.nodes`) and throws otherwise. The review app also runs against
-    // foreign single-node forks whose repo-spec has no `nodes:` registry — there the throw
-    // fires even though the correct answer is "no sovereign sub-node matched → repo-root
-    // rules". Degrade that throw to a miss so the review proceeds on `.cogni/rules`
-    // instead of 500ing the whole review path.
+    // `extractOwningNode` is monorepo-shaped: it routes changed files across the root
+    // `nodes:` registry and enforces the meta-test invariant that operator is registered.
+    // The review app also runs against FOREIGN repos:
+    //   - Single-node fork (no `nodes:` registry): the whole repo IS one node. Resolve to
+    //     `single { node_id, "." }` so the review runs against the fork's own gates +
+    //     repo-root `.cogni/rules`, instead of throwing the monorepo invariant (→ 500).
+    //   - Populated registry missing operator: can't route a foreign multi-node repo →
+    //     degrade to `miss` (skip) rather than 500. The operator's OWN monorepo always
+    //     carries the operator entry (meta-test invariant); CI hard-fails real drift.
+    const ROOT_NODE_PATH = ".";
     let owningNode: OwningNode = { kind: "miss" };
     if (parsedSpec) {
-      try {
-        owningNode = extractOwningNode(parsedSpec, changedFiles);
-      } catch (error) {
-        logger.warn(
-          { owner, repo, error: String(error) },
-          "review.owning-node unresolved (no operator registry entry); using repo-root rules"
-        );
+      const registry = parsedSpec.nodes ?? [];
+      if (registry.length === 0) {
+        owningNode = {
+          kind: "single",
+          nodeId: parsedSpec.node_id,
+          path: ROOT_NODE_PATH,
+        };
+      } else {
+        try {
+          owningNode = extractOwningNode(parsedSpec, changedFiles);
+        } catch (error) {
+          logger.warn(
+            { owner, repo, error: String(error) },
+            "review.owning-node unresolved (registry lacks operator entry); skipping scope"
+          );
+        }
       }
     }
 
+    // Single-node forks review against repo-root `.cogni/rules`; monorepo nodes use
+    // their per-node rule dir. `resolveRulePath` would emit `./.cogni/rules` for the
+    // root sentinel, so resolve the constant directly for that case.
     const ruleBasePath =
-      owningNode.kind === "single"
+      owningNode.kind === "single" && owningNode.path !== ROOT_NODE_PATH
         ? resolveRulePath(owningNode)
         : ".cogni/rules";
 
