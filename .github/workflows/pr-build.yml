@@ -32,7 +32,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  IMAGE_NAME: ghcr.io/cogni-dao/cogni-template
+  # FORK_FREEDOM: owner-derived so a fork pushes to its OWN GHCR namespace (image-tags.sh
+  # lowercases). Canonical Cogni-DAO → cogni-dao (unchanged); cogni-test-org → its own ns.
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/cogni-template
 
 jobs:
   # task.0391: single source of truth for event-derived metadata.

@@ -18,7 +18,11 @@
 # error handling.
 
 # shellcheck disable=SC2034
-IMAGE_NAME_APP=${IMAGE_NAME_APP:-ghcr.io/cogni-dao/cogni-template}
+# FORK_FREEDOM: derive the GHCR namespace from the CI repo owner so a fork pushes to
+# its OWN namespace — a fork's GITHUB_TOKEN can't write cogni-dao's packages (→ 403).
+# Explicit IMAGE_NAME_APP / IMAGE_NAME override still wins; always lowercased (GHCR requires it).
+IMAGE_NAME_APP=${IMAGE_NAME_APP:-${IMAGE_NAME:-ghcr.io/${GITHUB_REPOSITORY_OWNER:-cogni-dao}/cogni-template}}
+IMAGE_NAME_APP=$(printf '%s' "$IMAGE_NAME_APP" | tr '[:upper:]' '[:lower:]')
 
 if ! command -v yq >/dev/null 2>&1; then
   echo "[ERROR] image-tags: yq is required (CATALOG_IS_SSOT). Install: bash scripts/bootstrap/install/install-yq.sh" >&2
