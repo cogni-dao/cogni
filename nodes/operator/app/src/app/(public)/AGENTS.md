@@ -29,7 +29,7 @@ Public (unauthenticated) pages wrapped in `AppHeader` + `AppFooter` shell. Serve
 ## Public Surface
 
 - **Exports:** none
-- **Routes:** `/` (homepage — redirects signed-in users to `/chat`)
+- **Routes:** `/` (homepage — redirects signed-in users to `/chat`), `/nodes`, `/nodes/[slug]`
 - **Files considered API:** `layout.tsx`, `page.tsx`
 - **Deleted:** `AuthRedirect.tsx` — replaced by server-side proxy routing
 

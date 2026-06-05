@@ -17,6 +17,8 @@
 export interface ShowcaseNode {
   /** Catalog name (infra/catalog/<name>.yaml). Used to derive the node host. */
   name: string;
+  /** Deployment UUID from the operator repo-spec nodes[] registry, when shipped. */
+  nodeId?: string;
   /** Display title for the tile. */
   title: string;
   /** One-line pitch, drawn from the node's own homepage. */
@@ -33,6 +35,7 @@ export interface ShowcaseNode {
 export const SHOWCASE_NODES: readonly ShowcaseNode[] = [
   {
     name: "operator",
+    nodeId: "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d",
     title: "Cogni Operator",
     tagline: "The AI git-manager that launches and runs community-owned nodes.",
     thumbnail: "/showcase/operator.png",
@@ -40,6 +43,7 @@ export const SHOWCASE_NODES: readonly ShowcaseNode[] = [
   },
   {
     name: "resy",
+    nodeId: "f6d2a17d-b7f6-4ad1-a86b-f0ad2380999e",
     title: "Resy Helper",
     tagline: "Claims restaurant reservations in seconds, beating scalper bots.",
     thumbnail: "/showcase/resy.png",

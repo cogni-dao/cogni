@@ -7,7 +7,7 @@
  *   This is what makes wizard- and submodule-born nodes discoverable: their app tree is absent from
  *   the operator image (never fs-discoverable), but their row is always in the DB — so the table is
  *   the only viable projection.
- * Scope: Reads the live registry via an injected `listListedSlugs` reader (service-role, non-RLS) and
+ * Scope: Reads the live registry via an injected `listListedNodes` reader (service-role, non-RLS) and
  *   maps slug → NodeSummary by the catalog host convention. Degrades to [] on read failure so the
  *   homepage never breaks.
  * Invariants: PUBLIC_READ_IS_SEPARATE — the reader is service-role, never owner-scoped. `kind` is
@@ -30,8 +30,16 @@ function titleFromSlug(slug: string): string {
 }
 
 export interface DbNodeRegistryDeps {
-  /** Service-role read of publicly-listed node slugs (status='active'). Throwing is tolerated → []. */
-  readonly listListedSlugs: () => Promise<readonly string[]>;
+  /** Service-role read of publicly-listed node rows (status='active'). Throwing is tolerated → []. */
+  readonly listListedNodes: () => Promise<
+    readonly {
+      readonly id: string;
+      readonly slug: string;
+      readonly repoOwner: string;
+      readonly repoName: string;
+      readonly repoUrl: string;
+    }[]
+  >;
   readonly domain: string | undefined;
 }
 
@@ -40,19 +48,25 @@ export class DbNodeRegistryAdapter implements NodeRegistryPort {
   constructor(private readonly deps: DbNodeRegistryDeps) {}
 
   async listPublic(): Promise<readonly NodeSummary[]> {
-    let slugs: readonly string[];
+    let rows: Awaited<ReturnType<DbNodeRegistryDeps["listListedNodes"]>>;
     try {
-      slugs = await this.deps.listListedSlugs();
+      rows = await this.deps.listListedNodes();
     } catch {
       return [];
     }
-    return slugs.map(
-      (slug): NodeSummary => ({
-        slug,
-        title: titleFromSlug(slug),
+    return rows.map(
+      (row): NodeSummary => ({
+        slug: row.slug,
+        nodeId: row.id,
+        title: titleFromSlug(row.slug),
         tagline: "",
         kind: "full-app",
-        href: resolveHref({ name: slug }, this.deps.domain),
+        repo: {
+          owner: row.repoOwner,
+          name: row.repoName,
+          url: row.repoUrl,
+        },
+        href: resolveHref({ name: row.slug }, this.deps.domain),
       })
     );
   }

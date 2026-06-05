@@ -1010,13 +1010,19 @@ export function resolveNodeRegistry(): NodeRegistryPort {
   return new CompositeNodeRegistryAdapter([
     new StaticNodeRegistryAdapter(SHOWCASE_NODES, domain),
     new DbNodeRegistryAdapter({
-      listListedSlugs: async () => {
+      listListedNodes: async () => {
         try {
           const rows = await resolveServiceDb()
-            .select({ slug: nodes.slug })
+            .select({
+              id: nodes.id,
+              slug: nodes.slug,
+              repoOwner: nodes.repoOwner,
+              repoName: nodes.repoName,
+              repoUrl: nodes.repoUrl,
+            })
             .from(nodes)
             .where(eq(nodes.status, "active"));
-          return rows.map((r) => r.slug);
+          return rows;
         } catch (err) {
           // Don't let a projection-read failure blank the homepage silently.
           log.warn({ err }, "node_registry_projection_read_failed");

@@ -29,9 +29,17 @@ export type NodeKind = "full-app" | "agent-scope";
 export interface NodeSummary {
   /** Stable display key (catalog name for monorepo nodes, slug for wizard nodes). */
   readonly slug: string;
+  /** Deployment identity when known. Used to join derived ledger metrics. */
+  readonly nodeId?: string | undefined;
   readonly title: string;
   readonly tagline: string;
   readonly kind: NodeKind;
+  /** Source repository identity when known. */
+  readonly repo?: {
+    readonly owner: string;
+    readonly name: string;
+    readonly url: string;
+  };
   /** Resolved homepage URL (subdomain for full-app; scope-route for agent-scope), or "#". */
   readonly href: string;
   /** Homepage screenshot/preview; absent for nodes without a shipped thumbnail (tile shows a placeholder). */

@@ -18,6 +18,7 @@ import { StaticNodeRegistryAdapter } from "@/adapters/server/node-registry/stati
 const NODES: ShowcaseNode[] = [
   {
     name: "operator",
+    nodeId: "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d",
     title: "Cogni Operator",
     tagline: "t",
     thumbnail: "/showcase/operator.png",
@@ -39,9 +40,15 @@ describe("features/home/static-node-registry.adapter", () => {
     expect(summaries).toEqual([
       {
         slug: "operator",
+        nodeId: "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d",
         title: "Cogni Operator",
         tagline: "t",
         kind: "full-app",
+        repo: {
+          owner: "Cogni-DAO",
+          name: "cogni",
+          url: "https://github.com/Cogni-DAO/cogni",
+        },
         href: "https://test.cognidao.org",
         thumbnailUrl: "/showcase/operator.png",
         primary: true,
@@ -51,6 +58,11 @@ describe("features/home/static-node-registry.adapter", () => {
         title: "Resy",
         tagline: "t",
         kind: "full-app",
+        repo: {
+          owner: "Cogni-DAO",
+          name: "resy",
+          url: "https://github.com/Cogni-DAO/resy",
+        },
         href: "https://resy-test.cognidao.org",
         thumbnailUrl: "/showcase/resy.png",
         primary: undefined,

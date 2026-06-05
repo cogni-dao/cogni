@@ -29,7 +29,7 @@ export const GET = wrapRouteHandlerWithLogging<{
     routeId: "knowledge.get",
     auth: { mode: "required", getSessionUser },
   },
-  async (ctx, request, sessionUser, context) => {
+  async (ctx, _request, sessionUser, context) => {
     if (!sessionUser) {
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     }
