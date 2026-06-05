@@ -16,6 +16,9 @@
 #                      config to the VM.
 #     --dry-run        Validate config + worktree resolution, print planned
 #                      actions, exit 0 without any SSH.
+#     --k8s-secrets-only
+#                      Update k8s app secrets + roll pods without touching
+#                      Compose infra. Bridge mode until pods consume ESO.
 # Invariants:
 #   - DEPLOY_ENVIRONMENT must be set to 'candidate-a', 'preview', or 'production'
 #     (legacy 'canary' value is still accepted for backward compatibility during
@@ -40,10 +43,13 @@ set -euo pipefail
 #                  This is the INFRA_REF_IS_EXPLICIT invariant (task.0314).
 # --dry-run        Resolve the source worktree and print planned actions
 #                  (rsync source, VM target, services) without any SSH.
+# --k8s-secrets-only
+#                  Update k8s app secrets + roll pods without touching Compose.
 REF="main"
 DRY_RUN=false
+K8S_SECRETS_ONLY=false
 usage() {
-  echo "Usage: $0 [--ref <git-ref>] [--dry-run]" >&2
+  echo "Usage: $0 [--ref <git-ref>] [--dry-run] [--k8s-secrets-only]" >&2
   exit 2
 }
 while [[ $# -gt 0 ]]; do
@@ -66,6 +72,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --dry-run)
       DRY_RUN=true
+      shift
+      ;;
+    --k8s-secrets-only)
+      K8S_SECRETS_ONLY=true
       shift
       ;;
     *)
@@ -328,6 +338,8 @@ OPTIONAL_SECRETS=(
     "DOLTHUB_OAUTH_CLIENT_SECRET"
     "GH_REVIEW_APP_ID"
     "GH_REVIEW_APP_PRIVATE_KEY_BASE64"
+    "NODE_MINT_OWNER"
+    "NODE_TEMPLATE_OWNER"
     "GH_REPOS"
     "GH_WEBHOOK_SECRET"
     "TAVILY_API_KEY"
@@ -826,6 +838,8 @@ printf '%s=%s\n' DOLTGRES_PASSWORD "$DOLTGRES_PASSWORD" >> "$RUNTIME_ENV"
 printf '%s=%s\n' DOLTGRES_READER_PASSWORD "$DOLTGRES_READER_PASSWORD" >> "$RUNTIME_ENV"
 printf '%s=%s\n' DOLTGRES_WRITER_PASSWORD "$DOLTGRES_WRITER_PASSWORD" >> "$RUNTIME_ENV"
 
+if [[ "${K8S_SECRETS_ONLY:-false}" != "true" ]]; then
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Step 2: Start edge stack (idempotent - only starts if not running)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1011,8 +1025,34 @@ else
   log_warn "Grafana PDC agent not started: GRAFANA_PDC_SIGNING_TOKEN, GRAFANA_PDC_HOSTED_GRAFANA_ID, or GRAFANA_PDC_CLUSTER is unset"
 fi
 
+runtime_compose_up_with_retry() {
+  local profile="$1"
+  shift
+  local max_attempts=3
+  local attempt output
+  for attempt in $(seq 1 "$max_attempts"); do
+    if [[ -n "$profile" ]]; then
+      if output="$(COMPOSE_PROFILES="$profile" $RUNTIME_COMPOSE up -d --remove-orphans "$@" 2>&1)"; then
+        printf '%s\n' "$output"
+        return 0
+      fi
+    elif output="$($RUNTIME_COMPOSE up -d --remove-orphans "$@" 2>&1)"; then
+      printf '%s\n' "$output"
+      return 0
+    fi
+
+    printf '%s\n' "$output" >&2
+    if [[ "$attempt" == "$max_attempts" ]]; then
+      return 1
+    fi
+    log_warn "Runtime compose up failed on attempt ${attempt}/${max_attempts}; waiting for health state to settle before retry"
+    $RUNTIME_COMPOSE ps 2>&1 || true
+    sleep 20
+  done
+}
+
 if $pdc_enabled; then
-  COMPOSE_PROFILES=pdc $RUNTIME_COMPOSE up -d --remove-orphans $INFRA_SERVICES
+  runtime_compose_up_with_retry pdc $INFRA_SERVICES
   sleep 5
   if ! $RUNTIME_COMPOSE ps --status running pdc-agent 2>/dev/null | grep -q 'pdc-agent'; then
     log_warn "Grafana PDC agent is not running after compose up; recent logs follow"
@@ -1026,7 +1066,7 @@ if $pdc_enabled; then
   log_info "Grafana pdc-agent recent logs:"
   $RUNTIME_COMPOSE logs --tail=40 pdc-agent || true
 else
-  $RUNTIME_COMPOSE up -d --remove-orphans $INFRA_SERVICES
+  runtime_compose_up_with_retry "" $INFRA_SERVICES
 fi
 
 # Sandbox-openclaw disabled — removed from k8s catalog and compose deploy path.
@@ -1196,6 +1236,10 @@ if command -v kubectl &>/dev/null; then
   probe_dependency "redis" "$(hostname -I | awk '{print $1}')" "6379"
 fi
 
+else
+  log_info "K8s-secrets-only mode: skipping Compose infra reconcile"
+fi
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Step 7: Create/update k8s secrets + rolling restart (bridge — task.0284 replaces)
 # k3s is on the same VM; kubectl is available. deploy-infra has ALL secrets
@@ -1327,6 +1371,8 @@ POLY_CLOB_GEO_BLOCK_TOKEN=${POLY_CLOB_GEO_BLOCK_TOKEN:-}
 GH_WEBHOOK_SECRET=${GH_WEBHOOK_SECRET:-}
 GH_REVIEW_APP_ID=${GH_REVIEW_APP_ID:-}
 GH_REVIEW_APP_PRIVATE_KEY_BASE64=${GH_REVIEW_APP_PRIVATE_KEY_BASE64:-}
+NODE_MINT_OWNER=${NODE_MINT_OWNER:-}
+NODE_TEMPLATE_OWNER=${NODE_TEMPLATE_OWNER:-}
 GH_REPOS=${GH_REPOS:-}
 LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY:-}
 LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY:-}
@@ -1436,6 +1482,11 @@ SECEOF
   emit_deployment_event "infra_deployment.rollouts_complete" "success" "All k8s deployments rolled out"
 else
   log_warn "kubectl not found — skipping k8s secret creation (k3s may not be installed)"
+fi
+
+if [[ "${K8S_SECRETS_ONLY:-false}" == "true" ]]; then
+  log_info "K8s-secrets-only mode complete"
+  exit 0
 fi
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1651,12 +1702,13 @@ REMOTE_ENV_VARS=(
   GOOGLE_OAUTH_CLIENT_SECRET DOLTHUB_REMOTE_URL DOLT_CREDS_JWK DOLT_CREDS_KEYID
   DOLTHUB_API_TOKEN DOLTHUB_OAUTH_CLIENT_ID DOLTHUB_OAUTH_CLIENT_SECRET
   GH_REVIEW_APP_ID GH_REVIEW_APP_PRIVATE_KEY_BASE64 GH_REPOS GH_WEBHOOK_SECRET
+  NODE_MINT_OWNER NODE_TEMPLATE_OWNER
   PRIVY_APP_ID PRIVY_APP_SECRET PRIVY_SIGNING_KEY PRIVY_USER_WALLETS_APP_ID
   PRIVY_USER_WALLETS_APP_SECRET PRIVY_USER_WALLETS_SIGNING_KEY
   POLY_WALLET_AEAD_KEY_HEX POLY_WALLET_AEAD_KEY_ID POLY_CLOB_GEO_BLOCK_TOKEN
   CONNECTIONS_ENCRYPTION_KEY COGNI_NODE_DBS NODE_APP_TARGETS EDGE_ENV_LINES
   LITELLM_NODE_ENDPOINTS COGNI_DEFAULT_NODE_ID ACTIONS_AUTOMATION_BOT_PAT
-  LITELLM_IMAGE COMMIT_SHA DEPLOY_ACTOR
+  LITELLM_IMAGE COMMIT_SHA DEPLOY_ACTOR K8S_SECRETS_ONLY
 )
 REMOTE_ENV_FILE="$ARTIFACT_DIR/deploy-infra-env.sh"
 : > "$REMOTE_ENV_FILE"

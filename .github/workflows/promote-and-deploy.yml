@@ -30,6 +30,12 @@ on:
         default: "false"
         type: choice
         options: ["true", "false"]
+      deploy_infra_mode:
+        description: "deploy-infra mode. full reconciles Compose + k8s bridge secrets; k8s-secrets-only syncs pod secrets without Compose."
+        required: false
+        default: full
+        type: choice
+        options: [full, k8s-secrets-only]
 
 permissions:
   contents: write
@@ -512,6 +518,8 @@ jobs:
       GRAFANA_PDC_NETWORK_UUID: ${{ secrets.GRAFANA_PDC_NETWORK_UUID }}
       GH_REVIEW_APP_ID: ${{ secrets.GH_REVIEW_APP_ID }}
       GH_REVIEW_APP_PRIVATE_KEY_BASE64: ${{ secrets.GH_REVIEW_APP_PRIVATE_KEY_BASE64 }}
+      NODE_MINT_OWNER: ${{ secrets.NODE_MINT_OWNER }}
+      NODE_TEMPLATE_OWNER: ${{ secrets.NODE_TEMPLATE_OWNER }}
       GH_REPOS: ${{ vars.GH_REPOS }}
       GH_WEBHOOK_SECRET: ${{ secrets.GH_WEBHOOK_SECRET }}
       PRIVY_APP_ID: ${{ secrets.PRIVY_APP_ID }}
@@ -560,14 +568,19 @@ jobs:
 
       - name: Deploy infrastructure
         if: env.VM_HOST != ''
-        run: scripts/ci/deploy-infra.sh --ref main
+        run: |
+          args=(--ref main)
+          if [ "${{ inputs.deploy_infra_mode || 'full' }}" = "k8s-secrets-only" ]; then
+            args+=(--k8s-secrets-only)
+          fi
+          scripts/ci/deploy-infra.sh "${args[@]}"
 
       - name: Provision Grafana Postgres datasources
-        if: env.VM_HOST != ''
+        if: env.VM_HOST != '' && (inputs.deploy_infra_mode || 'full') != 'k8s-secrets-only'
         run: bash scripts/ci/provision-grafana-postgres-datasources.sh
 
       - name: Verify Grafana Postgres datasources
-        if: env.VM_HOST != ''
+        if: env.VM_HOST != '' && (inputs.deploy_infra_mode || 'full') != 'k8s-secrets-only'
         continue-on-error: true
         run: bash scripts/ci/verify-grafana-postgres-datasources.sh
 

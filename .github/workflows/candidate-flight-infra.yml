@@ -114,6 +114,8 @@ jobs:
       GRAFANA_PDC_NETWORK_UUID: ${{ secrets.GRAFANA_PDC_NETWORK_UUID }}
       GH_REVIEW_APP_ID: ${{ secrets.GH_REVIEW_APP_ID }}
       GH_REVIEW_APP_PRIVATE_KEY_BASE64: ${{ secrets.GH_REVIEW_APP_PRIVATE_KEY_BASE64 }}
+      NODE_MINT_OWNER: ${{ secrets.NODE_MINT_OWNER }}
+      NODE_TEMPLATE_OWNER: ${{ secrets.NODE_TEMPLATE_OWNER }}
       GH_REPOS: ${{ vars.GH_REPOS }}
       GH_WEBHOOK_SECRET: ${{ secrets.GH_WEBHOOK_SECRET }}
       PRIVY_APP_ID: ${{ secrets.PRIVY_APP_ID }}

@@ -130,6 +130,8 @@ jobs:
       DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
       GH_REVIEW_APP_ID: ${{ secrets.GH_REVIEW_APP_ID }}
       GH_REVIEW_APP_PRIVATE_KEY_BASE64: ${{ secrets.GH_REVIEW_APP_PRIVATE_KEY_BASE64 }}
+      NODE_MINT_OWNER: ${{ secrets.NODE_MINT_OWNER }}
+      NODE_TEMPLATE_OWNER: ${{ secrets.NODE_TEMPLATE_OWNER }}
       PRIVY_APP_ID: ${{ secrets.PRIVY_APP_ID }}
       PRIVY_APP_SECRET: ${{ secrets.PRIVY_APP_SECRET }}
       PRIVY_SIGNING_KEY: ${{ secrets.PRIVY_SIGNING_KEY }}
