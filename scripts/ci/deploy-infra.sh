@@ -1013,8 +1013,34 @@ else
   log_warn "Grafana PDC agent not started: GRAFANA_PDC_SIGNING_TOKEN, GRAFANA_PDC_HOSTED_GRAFANA_ID, or GRAFANA_PDC_CLUSTER is unset"
 fi
 
+runtime_compose_up_with_retry() {
+  local profile="$1"
+  shift
+  local max_attempts=3
+  local attempt output
+  for attempt in $(seq 1 "$max_attempts"); do
+    if [[ -n "$profile" ]]; then
+      if output="$(COMPOSE_PROFILES="$profile" $RUNTIME_COMPOSE up -d --remove-orphans "$@" 2>&1)"; then
+        printf '%s\n' "$output"
+        return 0
+      fi
+    elif output="$($RUNTIME_COMPOSE up -d --remove-orphans "$@" 2>&1)"; then
+      printf '%s\n' "$output"
+      return 0
+    fi
+
+    printf '%s\n' "$output" >&2
+    if [[ "$attempt" == "$max_attempts" ]]; then
+      return 1
+    fi
+    log_warn "Runtime compose up failed on attempt ${attempt}/${max_attempts}; waiting for health state to settle before retry"
+    $RUNTIME_COMPOSE ps 2>&1 || true
+    sleep 20
+  done
+}
+
 if $pdc_enabled; then
-  COMPOSE_PROFILES=pdc $RUNTIME_COMPOSE up -d --remove-orphans $INFRA_SERVICES
+  runtime_compose_up_with_retry pdc $INFRA_SERVICES
   sleep 5
   if ! $RUNTIME_COMPOSE ps --status running pdc-agent 2>/dev/null | grep -q 'pdc-agent'; then
     log_warn "Grafana PDC agent is not running after compose up; recent logs follow"
@@ -1028,7 +1054,7 @@ if $pdc_enabled; then
   log_info "Grafana pdc-agent recent logs:"
   $RUNTIME_COMPOSE logs --tail=40 pdc-agent || true
 else
-  $RUNTIME_COMPOSE up -d --remove-orphans $INFRA_SERVICES
+  runtime_compose_up_with_retry "" $INFRA_SERVICES
 fi
 
 # Sandbox-openclaw disabled — removed from k8s catalog and compose deploy path.
