@@ -315,12 +315,43 @@ export function createGithubReviewAdapter(deps: GithubReviewAdapterDeps) {
     // Owning-domain resolution. The structured `review.routed` log is emitted by
     // the worker activity (the orchestrator's observability for the
     // deploy_verified loop), not here — see services/scheduler-worker review.ts.
-    const owningNode: OwningNode = parsedSpec
-      ? extractOwningNode(parsedSpec, changedFiles)
-      : { kind: "miss" };
+    //
+    // `extractOwningNode` is monorepo-shaped: it routes changed files across the root
+    // `nodes:` registry and enforces the meta-test invariant that operator is registered.
+    // The review app also runs against FOREIGN repos:
+    //   - Single-node fork (no `nodes:` registry): the whole repo IS one node. Resolve to
+    //     `single { node_id, "." }` so the review runs against the fork's own gates +
+    //     repo-root `.cogni/rules`, instead of throwing the monorepo invariant (→ 500).
+    //   - Populated registry missing operator: can't route a foreign multi-node repo →
+    //     degrade to `miss` (skip) rather than 500. The operator's OWN monorepo always
+    //     carries the operator entry (meta-test invariant); CI hard-fails real drift.
+    const ROOT_NODE_PATH = ".";
+    let owningNode: OwningNode = { kind: "miss" };
+    if (parsedSpec) {
+      const registry = parsedSpec.nodes ?? [];
+      if (registry.length === 0) {
+        owningNode = {
+          kind: "single",
+          nodeId: parsedSpec.node_id,
+          path: ROOT_NODE_PATH,
+        };
+      } else {
+        try {
+          owningNode = extractOwningNode(parsedSpec, changedFiles);
+        } catch (error) {
+          logger.warn(
+            { owner, repo, error: String(error) },
+            "review.owning-node unresolved (registry lacks operator entry); skipping scope"
+          );
+        }
+      }
+    }
 
+    // Single-node forks review against repo-root `.cogni/rules`; monorepo nodes use
+    // their per-node rule dir. `resolveRulePath` would emit `./.cogni/rules` for the
+    // root sentinel, so resolve the constant directly for that case.
     const ruleBasePath =
-      owningNode.kind === "single"
+      owningNode.kind === "single" && owningNode.path !== ROOT_NODE_PATH
         ? resolveRulePath(owningNode)
         : ".cogni/rules";
 
