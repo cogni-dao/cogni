@@ -30,6 +30,12 @@ on:
         default: "false"
         type: choice
         options: ["true", "false"]
+      eso_operator_proof:
+        description: "Preview/operator only: write ESO_PREVIEW_PROOF through OpenBao and verify the running pod sees it"
+        required: false
+        default: "false"
+        type: choice
+        options: ["true", "false"]
 
 permissions:
   contents: write
@@ -269,6 +275,85 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+
+      - name: Prep preview operator ESO proof
+        if: inputs.eso_operator_proof == 'true' && needs.decide.outputs.environment == 'preview' && matrix.node == 'operator'
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          SSH_DEPLOY_KEY: ${{ secrets.SSH_DEPLOY_KEY }}
+          PROOF_VALUE: eso-preview-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          if [ -z "$VM_HOST" ]; then
+            echo "::error::VM_HOST is required for preview ESO proof"
+            exit 1
+          fi
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          echo "$SSH_DEPLOY_KEY" | tr -d '\r' > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -T 10 -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+          SSH_OPTS="-i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6"
+          REMOTE_DIR="/tmp/eso-preview-operator-proof-${GITHUB_RUN_ID}"
+          tar -czf /tmp/eso-preview-operator-proof.tgz \
+            -C app-src \
+            infra/k8s/secrets/external-secrets/preview/operator \
+            scripts/secrets/set-secret.sh \
+            infra/catalog/operator.yaml
+          # shellcheck disable=SC2086
+          ssh $SSH_OPTS root@"$VM_HOST" "rm -rf '$REMOTE_DIR' && mkdir -p '$REMOTE_DIR'"
+          # shellcheck disable=SC2086
+          scp $SSH_OPTS /tmp/eso-preview-operator-proof.tgz root@"$VM_HOST":"$REMOTE_DIR/payload.tgz"
+
+          PROOF_SHA=$(printf '%s' "$PROOF_VALUE" | sha256sum | awk '{print $1}')
+          echo "Prepared ESO preview proof value sha256=${PROOF_SHA}"
+          # shellcheck disable=SC2086
+          ssh $SSH_OPTS root@"$VM_HOST" \
+            "REMOTE_DIR='$REMOTE_DIR' PROOF_VALUE='$PROOF_VALUE' bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd "$REMOTE_DIR"
+          tar -xzf payload.tgz
+
+          kubectl get crd externalsecrets.external-secrets.io clustersecretstores.external-secrets.io >/dev/null
+          kubectl get clustersecretstore openbao-backend >/dev/null
+          kubectl -n argocd get application openbao external-secrets reloader >/dev/null
+          kubectl -n cogni-preview create namespace cogni-preview --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+          kubectl apply -k infra/k8s/secrets/external-secrets/preview/operator
+
+          jwt=$(kubectl create token openbao-operator -n default)
+          bao_token=$(kubectl exec -n openbao openbao-0 -- \
+            env BAO_ADDR=http://127.0.0.1:8200 \
+            bao write -field=token auth/kubernetes/login role=preview-writer "jwt=${jwt}")
+
+          wrapper_dir=$(mktemp -d)
+          cat >"${wrapper_dir}/bao" <<'WRAPPER'
+          #!/usr/bin/env bash
+          exec kubectl exec -i -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="${BAO_TOKEN}" bao "$@"
+          WRAPPER
+          chmod +x "${wrapper_dir}/bao"
+
+          printf '%s' "$PROOF_VALUE" | \
+            PATH="${wrapper_dir}:$PATH" \
+            REPO_ROOT="$REMOTE_DIR" \
+            BAO_ADDR=http://127.0.0.1:8200 \
+            BAO_TOKEN="$bao_token" \
+            bash scripts/secrets/set-secret.sh preview operator ESO_PREVIEW_PROOF >/dev/null
+
+          kubectl -n cogni-preview annotate externalsecret operator-env-secrets \
+            "force-sync=$(date +%s)" --overwrite >/dev/null
+          kubectl -n cogni-preview wait --for=condition=Ready externalsecret/operator-env-secrets --timeout=120s
+
+          for _ in $(seq 1 24); do
+            encoded=$(kubectl -n cogni-preview get secret operator-env-secrets -o jsonpath='{.data.ESO_PREVIEW_PROOF}' 2>/dev/null || true)
+            if [ -n "$encoded" ] && [ "$(printf '%s' "$encoded" | base64 -d)" = "$PROOF_VALUE" ]; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "operator-env-secrets did not contain ESO_PREVIEW_PROOF after force-sync" >&2
+          kubectl -n cogni-preview describe externalsecret operator-env-secrets >&2 || true
+          exit 1
+          REMOTE
 
       - name: Checkout per-node preview branch (preview-forward mode)
         if: needs.decide.outputs.preview_forward == 'true'
@@ -689,6 +774,46 @@ jobs:
           NODES: ${{ matrix.node }}
           MARKER_DIR: out
         run: bash app-src/scripts/ci/verify-buildsha.sh
+
+      - name: Verify preview operator ESO proof env
+        if: inputs.eso_operator_proof == 'true' && needs.decide.outputs.environment == 'preview' && matrix.node == 'operator' && steps.cell.outputs.promoted == 'true'
+        env:
+          SSH_OPTS: "-i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6"
+          PROOF_VALUE: eso-preview-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          PROOF_SHA=$(printf '%s' "$PROOF_VALUE" | sha256sum | awk '{print $1}')
+          echo "Verifying ESO_PREVIEW_PROOF in running operator pod, expected sha256=${PROOF_SHA}"
+          # shellcheck disable=SC2086
+          ssh $SSH_OPTS root@"$VM_HOST" \
+            "PROOF_VALUE='$PROOF_VALUE' bash -s" <<'REMOTE'
+          set -euo pipefail
+          selector='app.kubernetes.io/name=node-app,app.kubernetes.io/instance=operator'
+          secret_ref=$(kubectl -n cogni-preview get deploy operator-node-app \
+            -o jsonpath='{.spec.template.spec.containers[?(@.name=="app")].envFrom[1].secretRef.name}')
+          if [ "$secret_ref" != "operator-env-secrets" ]; then
+            echo "operator-node-app app container still references $secret_ref, expected operator-env-secrets" >&2
+            exit 1
+          fi
+
+          for attempt in $(seq 1 36); do
+            pod=$(kubectl -n cogni-preview get pod -l "$selector" \
+              -o jsonpath='{.items[?(@.status.phase=="Running")].metadata.name}' 2>/dev/null | awk '{print $1}')
+            if [ -n "$pod" ]; then
+              value=$(kubectl -n cogni-preview exec "$pod" -c app -- printenv ESO_PREVIEW_PROOF 2>/dev/null || true)
+              if [ "$value" = "$PROOF_VALUE" ]; then
+                echo "ESO_PREVIEW_PROOF present in pod ${pod}"
+                exit 0
+              fi
+            fi
+            sleep 5
+          done
+
+          echo "ESO_PREVIEW_PROOF did not reach the running operator pod before timeout" >&2
+          kubectl -n cogni-preview get deploy operator-node-app -o wide >&2 || true
+          kubectl -n cogni-preview get pods -l "$selector" -o wide >&2 || true
+          exit 1
+          REMOTE
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: steps.cell.outputs.promoted == 'true'
