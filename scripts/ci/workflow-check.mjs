@@ -116,7 +116,7 @@ const workflowFiles = readdirSync(WORKFLOW_DIR)
 const candidateFlightText = readWorkflowText("candidate-flight.yml");
 if (
   candidateFlightText.includes(
-    "SUBMODULE_BIRTHS_FILE: ${{ steps.submodule-births.outputs.births_file }}",
+    "SUBMODULE_BIRTHS_FILE: ${{ steps.submodule-births.outputs.births_file }}"
   )
 ) {
   pass(
@@ -130,10 +130,10 @@ if (
 
 if (
   candidateFlightText.includes(
-    "username: ${{ secrets.GHCR_DEPLOY_USERNAME || github.actor }}",
+    "username: ${{ secrets.GHCR_DEPLOY_USERNAME || github.actor }}"
   ) &&
   candidateFlightText.includes(
-    "password: ${{ secrets.GHCR_DEPLOY_TOKEN || github.token }}",
+    "password: ${{ secrets.GHCR_DEPLOY_TOKEN || github.token }}"
   )
 ) {
   pass("candidate-flight prefers deploy-token GHCR credentials");
