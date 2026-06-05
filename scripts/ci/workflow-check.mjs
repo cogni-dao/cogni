@@ -49,6 +49,14 @@ function readWorkflow(file) {
   return parseYaml(readFileSync(path, "utf8"));
 }
 
+function readWorkflowText(file) {
+  const path = join(WORKFLOW_DIR, file);
+  if (!existsSync(path)) {
+    return "";
+  }
+  return readFileSync(path, "utf8");
+}
+
 function triggersFor(file) {
   const workflow = readWorkflow(file);
   const on = workflow?.on;
@@ -104,6 +112,37 @@ for (const file of nonDispatchWorkflows) {
 const workflowFiles = readdirSync(WORKFLOW_DIR)
   .filter((file) => /\.ya?ml$/.test(file))
   .sort();
+
+const candidateFlightText = readWorkflowText("candidate-flight.yml");
+if (
+  candidateFlightText.includes(
+    "SUBMODULE_BIRTHS_FILE: ${{ steps.submodule-births.outputs.births_file }}"
+  )
+) {
+  pass(
+    "candidate-flight wires submodule birth manifest output into image resolution"
+  );
+} else {
+  fail(
+    "candidate-flight must pass steps.submodule-births.outputs.births_file to SUBMODULE_BIRTHS_FILE"
+  );
+}
+
+if (
+  candidateFlightText.includes(
+    "username: ${{ secrets.GHCR_DEPLOY_USERNAME || github.actor }}"
+  ) &&
+  candidateFlightText.includes(
+    "password: ${{ secrets.GHCR_DEPLOY_TOKEN || github.token }}"
+  )
+) {
+  pass("candidate-flight prefers deploy-token GHCR credentials");
+} else {
+  fail(
+    "candidate-flight GHCR login must prefer GHCR_DEPLOY_* secrets with GitHub token fallback"
+  );
+}
+
 console.log(`workflows: ${workflowFiles.join(", ")}`);
 
 if (failures > 0) {

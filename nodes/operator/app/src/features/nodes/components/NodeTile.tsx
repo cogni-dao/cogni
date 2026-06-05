@@ -22,9 +22,9 @@ import { Badge, Card } from "@/components";
 
 export interface NodeTileView {
   readonly title: string;
-  readonly tagline?: string | null;
+  readonly tagline?: string | null | undefined;
   /** Homepage screenshot; when absent a gradient placeholder is shown. */
-  readonly thumbnailUrl?: string | null;
+  readonly thumbnailUrl?: string | null | undefined;
   readonly href: string;
   /** External homepage (new tab) vs internal route (same tab). */
   readonly external?: boolean;

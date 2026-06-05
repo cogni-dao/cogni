@@ -2,18 +2,18 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `@features/home/showcase/static-node-registry.adapter`
- * Purpose: Unit tests for the v0 static NodeRegistryPort adapter.
+ * Module: `@adapters/server/node-registry/static-node-registry.adapter`
+ * Purpose: Unit tests for the bundled static NodeRegistryPort adapter.
  * Scope: Verifies ShowcaseNode → NodeSummary mapping + href resolution. No IO/env.
- * Invariants: every v0 node is kind "full-app"; slug=name, thumbnailUrl=thumbnail; href via convention.
+ * Invariants: every bundled node is kind "full-app"; slug=name, thumbnailUrl=thumbnail; href via convention.
  * Side-effects: none
- * Links: src/features/home/showcase/static-node-registry.adapter.ts
+ * Links: src/adapters/server/node-registry/static-node-registry.adapter.ts
  * @public
  */
 
 import { describe, expect, it } from "vitest";
-import type { ShowcaseNode } from "@/features/home/showcase/nodes.data";
-import { StaticNodeRegistryAdapter } from "@/features/home/showcase/static-node-registry.adapter";
+import type { ShowcaseNode } from "@/adapters/server/node-registry/bundled-nodes.data";
+import { StaticNodeRegistryAdapter } from "@/adapters/server/node-registry/static-node-registry.adapter";
 
 const NODES: ShowcaseNode[] = [
   {

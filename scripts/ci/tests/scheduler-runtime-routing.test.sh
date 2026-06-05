@@ -4,7 +4,8 @@
 #
 # Runtime routing guardrails for scheduler-worker:
 #   1. COGNI_NODE_ENDPOINTS stays catalog-derived with slug + UUID aliases.
-#   2. Scheduler-worker's off-cluster Temporal/Postgres/App Services point at
+#   2. Submodule node pins do not require repo-spec identity during parent rendering.
+#   3. Scheduler-worker's off-cluster Temporal/Postgres/App Services point at
 #      the expected VM alias for each env, so workers can actually poll Temporal.
 #
 # Run: bash scripts/ci/tests/scheduler-runtime-routing.test.sh
@@ -20,12 +21,19 @@ source "$REPO_ROOT/scripts/ci/lib/image-tags.sh"
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "  ok - $*"; }
 
-echo "[1/2] scheduler endpoint map has slug + UUID aliases"
+echo "[1/3] scheduler endpoint map has slug + UUID aliases"
 bash scripts/ci/render-scheduler-worker-endpoints.sh --check >/dev/null \
   || fail "render-scheduler-worker-endpoints.sh --check failed"
 
 endpoints="$(yq -r '.data.COGNI_NODE_ENDPOINTS // ""' infra/k8s/base/scheduler-worker/configmap.yaml)"
 for node in "${NODE_TARGETS[@]}"; do
+  if is_submodule_node "$node"; then
+    case ",$endpoints," in
+      *",$node="*) fail "COGNI_NODE_ENDPOINTS includes submodule node $node before metadata projection exists" ;;
+      *) pass "$node submodule endpoint skipped" ;;
+    esac
+    continue
+  fi
   node_id="$(node_id_for_target "$node")"
   case ",$endpoints," in
     *",$node=http://$node-node-app:3000,"*) pass "$node slug endpoint" ;;
@@ -37,7 +45,40 @@ for node in "${NODE_TARGETS[@]}"; do
   esac
 done
 
-echo "[2/2] scheduler off-cluster Services use env VM aliases"
+echo "[2/3] submodule catalog nodes are skipped during parent endpoint rendering"
+TMP_TREE="$(mktemp -d)"
+trap 'rm -rf "$TMP_TREE"' EXIT
+TMP_CATALOG="$TMP_TREE/infra/catalog"
+mkdir -p "$TMP_CATALOG" "$TMP_TREE/nodes/operator/.cogni"
+cp infra/catalog/operator.yaml "$TMP_CATALOG/operator.yaml"
+cp nodes/operator/.cogni/repo-spec.yaml "$TMP_TREE/nodes/operator/.cogni/repo-spec.yaml"
+yq '.name = "ay" | .path_prefix = "nodes/ay/" | .node_port = 30400 | .image_tag_suffix = "-ay" | .migrator_tag_suffix = "-ay-migrate"' \
+  infra/catalog/node-template.yaml > "$TMP_CATALOG/ay.yaml"
+printf '[submodule "nodes/ay"]\n\tpath = nodes/ay\n\turl = https://github.com/cogni-test-org/ay\n' > "$TMP_TREE/.gitmodules"
+
+fixture_endpoints="$(COGNI_CATALOG_ROOT="$TMP_CATALOG" bash scripts/ci/render-scheduler-worker-endpoints.sh)" \
+  || fail "render failed for a submodule catalog node without nodes/ay/.cogni/repo-spec.yaml"
+case ",$fixture_endpoints," in
+  *,ay=*) fail "fixture endpoints include submodule slug ay" ;;
+  *) pass "submodule slug ay omitted" ;;
+esac
+case "$fixture_endpoints" in
+  *"4ff8eac1-4eba-4ed0-931b-b1fe4f64713d=http://operator-node-app:3000"*) pass "inline operator UUID alias preserved" ;;
+  *) fail "fixture endpoints lost inline operator UUID alias: $fixture_endpoints" ;;
+esac
+
+fixture_billing_endpoints="$(COGNI_CATALOG_ROOT="$TMP_CATALOG" bash -c 'source scripts/ci/lib/image-tags.sh && node_billing_endpoint_csv host.docker.internal')" \
+  || fail "billing endpoint render failed for a submodule catalog node without nodes/ay/.cogni/repo-spec.yaml"
+case ",$fixture_billing_endpoints," in
+  *,ay=*) fail "billing endpoints include submodule slug ay before metadata projection exists" ;;
+  *) pass "billing endpoint skips submodule slug ay" ;;
+esac
+case "$fixture_billing_endpoints" in
+  *"4ff8eac1-4eba-4ed0-931b-b1fe4f64713d=http://host.docker.internal:30000"*) pass "inline operator billing UUID alias preserved" ;;
+  *) fail "fixture billing endpoints lost inline operator UUID alias: $fixture_billing_endpoints" ;;
+esac
+
+echo "[3/3] scheduler off-cluster Services use env VM aliases"
 check_scheduler_vm_alias() {
   local env="$1" expected="$2"
   local file="infra/k8s/overlays/$env/scheduler-worker/kustomization.yaml"
