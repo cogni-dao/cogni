@@ -342,14 +342,35 @@ jobs:
           if kubectl -n cogni-preview get secret operator-node-app-secrets >/dev/null 2>&1; then
             echo "Backfilling preview/operator OpenBao leaf from current legacy Kubernetes secret keys"
             count=0
+            selector='app.kubernetes.io/name=node-app,app.kubernetes.io/instance=operator'
+            legacy_pod=""
+            for pod in $(kubectl -n cogni-preview get pod -l "$selector" \
+              -o jsonpath='{.items[?(@.status.phase=="Running")].metadata.name}' 2>/dev/null); do
+              secret_refs=$(kubectl -n cogni-preview get pod "$pod" \
+                -o jsonpath='{.spec.containers[?(@.name=="app")].envFrom[*].secretRef.name}' 2>/dev/null || true)
+              if printf '%s\n' "$secret_refs" | grep -qw operator-node-app-secrets; then
+                legacy_pod="$pod"
+                break
+              fi
+            done
+            if [ -n "$legacy_pod" ]; then
+              echo "Using healthy legacy pod ${legacy_pod} as preferred backfill source"
+            else
+              echo "::warning::No healthy legacy pod found; using Kubernetes Secret object as backfill source"
+            fi
             keys=$(kubectl -n cogni-preview get secret operator-node-app-secrets \
               -o go-template='{{range $k, $_ := .data}}{{printf "%s\n" $k}}{{end}}')
             for key in $keys; do
               [ -n "$key" ] || continue
               tmp_value=$(mktemp)
-              kubectl -n cogni-preview get secret operator-node-app-secrets \
-                -o "jsonpath={.data.${key}}" \
-                | base64 -d >"$tmp_value"
+              if [ -n "$legacy_pod" ]; then
+                kubectl -n cogni-preview exec "$legacy_pod" -c app -- printenv "$key" >"$tmp_value" 2>/dev/null || true
+              fi
+              if [ ! -s "$tmp_value" ]; then
+                kubectl -n cogni-preview get secret operator-node-app-secrets \
+                  -o "jsonpath={.data.${key}}" \
+                  | base64 -d >"$tmp_value"
+              fi
               if [ ! -s "$tmp_value" ]; then
                 echo "Skipping empty legacy key ${key}"
                 rm -f "$tmp_value"
