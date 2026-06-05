@@ -19,10 +19,12 @@ export {
   getDaoTreasuryAddress,
   getGithubRepo,
   getGovernanceConfig,
+  getKnowledgeConfig,
   getLedgerApprovers,
   getNodeId,
   getOperatorWalletConfig,
   getPaymentConfig,
   getScopeId,
   type InboundPaymentConfig,
+  type KnowledgeConfig,
 } from "./repoSpec.server";

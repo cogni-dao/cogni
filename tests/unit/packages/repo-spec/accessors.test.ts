@@ -14,6 +14,7 @@
 import {
   extractChainId,
   extractGovernanceConfig,
+  extractKnowledgeConfig,
   extractLedgerApprovers,
   extractLedgerConfig,
   extractNodeId,
@@ -170,6 +171,38 @@ describe("extractPaymentConfig", () => {
     });
     const config = extractPaymentConfig(spec, TEST_CHAIN_ID);
     expect(config.provider).toBe("cogni-usdc-backend-v1");
+  });
+});
+
+describe("extractKnowledgeConfig", () => {
+  it("returns undefined when knowledge is absent", () => {
+    expect(extractKnowledgeConfig(buildSpec())).toBeUndefined();
+  });
+
+  it("returns the node knowledge database and Cogni-owned DoltHub remote", () => {
+    const spec = buildSpec({
+      knowledge: {
+        database: "knowledge_my_node",
+        remote: {
+          provider: "dolthub",
+          owner: "cogni-dao-test",
+          repo: "knowledge-my-node",
+          url: "https://doltremoteapi.dolthub.com/cogni-dao-test/knowledge-my-node",
+          custody: "cogni-owned",
+        },
+      },
+    });
+
+    expect(extractKnowledgeConfig(spec)).toEqual({
+      database: "knowledge_my_node",
+      remote: {
+        provider: "dolthub",
+        owner: "cogni-dao-test",
+        repo: "knowledge-my-node",
+        url: "https://doltremoteapi.dolthub.com/cogni-dao-test/knowledge-my-node",
+        custody: "cogni-owned",
+      },
+    });
   });
 });
 

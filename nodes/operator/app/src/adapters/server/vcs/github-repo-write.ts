@@ -30,6 +30,7 @@ import {
   renderOverlay,
   renderRepoSpec,
 } from "@/shared/node-app-scaffold/gens";
+import type { NodeKnowledgeRemote } from "@/shared/node-app-scaffold/knowledge-remote";
 
 export interface GitHubRepoWriterConfig {
   readonly appId: string;
@@ -63,6 +64,7 @@ export interface OpenNodeAppPrInput {
   readonly daoContract?: string;
   readonly pluginContract?: string;
   readonly signalContract?: string;
+  readonly knowledgeRemote?: NodeKnowledgeRemote;
 }
 
 export interface OpenNodeAppPrResult {
@@ -97,6 +99,7 @@ export interface ForkFromTemplateInput {
   readonly daoContract?: string;
   readonly pluginContract?: string;
   readonly signalContract?: string;
+  readonly knowledgeRemote?: NodeKnowledgeRemote;
 }
 
 /** One entry in a `POST /git/trees` payload; `sha: null` deletes the path from `base_tree`. */
@@ -331,6 +334,7 @@ export class GitHubRepoWriter {
         daoContract: input.daoContract,
         pluginContract: input.pluginContract,
         signalContract: input.signalContract,
+        knowledgeRemote: input.knowledgeRemote,
       })
     );
     const { data: tree } = await octokit.request(

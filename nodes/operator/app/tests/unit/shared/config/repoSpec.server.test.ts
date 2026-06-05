@@ -17,12 +17,17 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { GovernanceConfig, InboundPaymentConfig } from "@/shared/config";
+import type {
+  GovernanceConfig,
+  InboundPaymentConfig,
+  KnowledgeConfig,
+} from "@/shared/config";
 import { CHAIN_ID } from "@/shared/web3";
 
 interface RepoSpecModule {
   getPaymentConfig: () => InboundPaymentConfig;
   getGovernanceConfig: () => GovernanceConfig;
+  getKnowledgeConfig: () => KnowledgeConfig | undefined;
 }
 
 const TEST_NODE_ID = "00000000-0000-4000-8000-000000000001";
@@ -256,6 +261,41 @@ describe("getPaymentConfig (repo-spec)", () => {
     try {
       const { getPaymentConfig } = await loadPaymentConfig();
       expect(() => getPaymentConfig()).toThrow(/Invalid repo-spec structure/i);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns node knowledge config from repo-spec", async () => {
+    const tmpDir = writeRepoSpec(
+      [
+        `node_id: "${TEST_NODE_ID}"`,
+        "cogni_dao:",
+        `  chain_id: "${CHAIN_ID}"`,
+        "knowledge:",
+        '  database: "knowledge_my_node"',
+        "  remote:",
+        "    provider: dolthub",
+        '    owner: "cogni-dao-test"',
+        '    repo: "knowledge-my-node"',
+        '    url: "https://doltremoteapi.dolthub.com/cogni-dao-test/knowledge-my-node"',
+        "    custody: cogni-owned",
+      ].join("\n")
+    );
+    useTmpRoot(tmpDir);
+
+    try {
+      const { getKnowledgeConfig } = await loadPaymentConfig();
+      expect(getKnowledgeConfig()).toEqual({
+        database: "knowledge_my_node",
+        remote: {
+          provider: "dolthub",
+          owner: "cogni-dao-test",
+          repo: "knowledge-my-node",
+          url: "https://doltremoteapi.dolthub.com/cogni-dao-test/knowledge-my-node",
+          custody: "cogni-owned",
+        },
+      });
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }

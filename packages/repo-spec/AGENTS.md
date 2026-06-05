@@ -44,6 +44,7 @@ Pure parsing and typed extraction for `.cogni/repo-spec.yaml` — the governance
   - `extractGovernanceConfig(spec)` — Maps governance schedules + ledger config
   - `extractLedgerConfig(spec)` — Extracts ledger config (requires scope identity)
   - `extractLedgerApprovers(spec)` — Lowercased EVM approver addresses
+  - `extractKnowledgeConfig(spec)` — Node-local knowledge DB + Cogni-owned DoltHub mirror declaration
   - `extractNodeId(spec)` — Node identity UUID
   - `extractNodes(spec)` — Node registry entries (operator-only, returns `[]` for non-operator specs)
   - `extractNodePath(spec, nodeId)` — Resolve a node UUID to its registered relative path; returns `null` on miss (caller decides fallback)

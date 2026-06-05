@@ -13,6 +13,7 @@
 
 import type {
   GateConfig,
+  KnowledgeSpec,
   NodeRegistryEntry,
   OperatorWalletSpec,
   RepoSpec,
@@ -62,6 +63,8 @@ export interface InboundPaymentConfig {
   receivingAddress: string;
   provider: string;
 }
+
+export type KnowledgeConfig = KnowledgeSpec;
 
 // ---------------------------------------------------------------------------
 // Identity accessors
@@ -298,6 +301,16 @@ export function extractOperatorWalletConfig(
  */
 export function extractDaoTreasuryAddress(spec: RepoSpec): string | undefined {
   return spec.cogni_dao.dao_contract;
+}
+
+/**
+ * Extract node-local knowledge plane config from repo-spec.
+ * Returns undefined for pre-knowledge nodes.
+ */
+export function extractKnowledgeConfig(
+  spec: RepoSpec
+): KnowledgeConfig | undefined {
+  return spec.knowledge;
 }
 
 // ---------------------------------------------------------------------------

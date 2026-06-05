@@ -22,6 +22,13 @@ const FIXTURE = {
   signalAddress: "0xsignal000000000000000000000000000signal0",
 };
 
+const KNOWLEDGE_REMOTE = {
+  database: "knowledge_my_node",
+  owner: "cogni-dao-test",
+  repo: "knowledge-my-node",
+  url: "https://doltremoteapi.dolthub.com/cogni-dao-test/knowledge-my-node",
+};
+
 describe("buildPendingActivationRepoSpecYaml", () => {
   it("emits all required top-level identity fields", () => {
     const yaml = buildPendingActivationRepoSpecYaml(FIXTURE);
@@ -42,6 +49,19 @@ describe("buildPendingActivationRepoSpecYaml", () => {
   it("emits payments.status: pending_activation", () => {
     const yaml = buildPendingActivationRepoSpecYaml(FIXTURE);
     expect(yaml).toMatch(/payments:\s*\n\s*status: pending_activation/);
+  });
+
+  it("emits the Cogni-owned DoltHub knowledge remote when provided", () => {
+    const yaml = buildPendingActivationRepoSpecYaml({
+      ...FIXTURE,
+      knowledgeRemote: KNOWLEDGE_REMOTE,
+    });
+    expect(yaml).toContain(`database: "${KNOWLEDGE_REMOTE.database}"`);
+    expect(yaml).toContain("provider: dolthub");
+    expect(yaml).toContain(`owner: "${KNOWLEDGE_REMOTE.owner}"`);
+    expect(yaml).toContain(`repo: "${KNOWLEDGE_REMOTE.repo}"`);
+    expect(yaml).toContain(`url: "${KNOWLEDGE_REMOTE.url}"`);
+    expect(yaml).toContain("custody: cogni-owned");
   });
 
   it("does not emit wallet or payment rail addresses", () => {

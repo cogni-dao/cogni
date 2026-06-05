@@ -20,11 +20,13 @@ import {
   extractDaoConfig,
   extractDaoTreasuryAddress,
   extractGovernanceConfig,
+  extractKnowledgeConfig,
   extractLedgerApprovers,
   extractOperatorWalletConfig,
   extractPaymentConfig,
   type GovernanceConfig,
   type InboundPaymentConfig,
+  type KnowledgeConfig,
   type OperatorWalletSpec,
   parseRepoSpec,
   type RepoSpec,
@@ -36,6 +38,7 @@ export type {
   GovernanceConfig,
   GovernanceSchedule,
   InboundPaymentConfig,
+  KnowledgeConfig,
   LedgerConfig,
   LedgerPoolConfig,
 } from "@cogni/repo-spec";
@@ -185,6 +188,20 @@ export function getDaoTreasuryAddress(): string | undefined {
   const spec = loadRepoSpec();
   cachedDaoTreasuryAddress = extractDaoTreasuryAddress(spec);
   return cachedDaoTreasuryAddress;
+}
+
+let cachedKnowledgeConfig: KnowledgeConfig | undefined | null = null;
+
+/**
+ * Node-local knowledge plane config from repo-spec.
+ * Returns undefined for pre-knowledge nodes.
+ */
+export function getKnowledgeConfig(): KnowledgeConfig | undefined {
+  if (cachedKnowledgeConfig !== null) return cachedKnowledgeConfig;
+
+  const spec = loadRepoSpec();
+  cachedKnowledgeConfig = extractKnowledgeConfig(spec);
+  return cachedKnowledgeConfig;
 }
 
 // v0: operator manages exactly one repo — its own.

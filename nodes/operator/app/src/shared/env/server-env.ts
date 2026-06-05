@@ -145,6 +145,7 @@ export const serverSchema = z.object({
   // per-user identity (task.5070, blocked on DoltHub app approval). Per
   // proj.knowledge-syntropy (W0c tier) + task.5069.
   DOLTHUB_REMOTE_URL: optionalString,
+  DOLTHUB_OWNER: z.string().min(1).default("cogni-dao"),
   DOLTHUB_API_TOKEN: optionalString,
   DOLTHUB_OAUTH_CLIENT_ID: optionalString,
   DOLTHUB_OAUTH_CLIENT_SECRET: optionalString,

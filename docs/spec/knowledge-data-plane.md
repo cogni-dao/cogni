@@ -503,7 +503,7 @@ Given same observations + same knowledge commit → same analysis outputs.
 | AUTO_COMMIT_ON_WRITE            | Every `core__knowledge_write` call commits via the capability layer (`SELECT dolt_commit('-Am', ...)`). The schema migrator also commits post-migration via `stamp-commit.mjs`.                                                                                                                                                                                                                          |
 | RUNTIME_URL_IS_SUPERUSER        | `DOLTGRES_URL_<NODE>` runtime secret connects as the `postgres` superuser. Doltgres 0.56 RBAC is non-functional (GRANT silently no-ops); revisit when upstream lands working role access.                                                                                                                                                                                                                |
 | NODES_BOOT_EMPTY                | New nodes boot with **empty content** — `knowledge`, `citations`, and `sources` rows are zero. Nodes do not inherit operator-curated knowledge claims. Reference data — the `domains` registry — IS migrator-seeded with the base set per [knowledge-domain-registry](./knowledge-domain-registry.md) § Seeding. The dev-only `scripts/db/seed-doltgres.mts` populates local dev only, never production. |
-| MIRROR_PROD_ONLY_WRITER         | DoltHub remote mirror (`cogni-dao/knowledge-<node>`) is written by the production operator only. Test/preview have no `DOLTHUB_REMOTE_URL` configured, so `pushMainOnMerge` is wired to `undefined` and merges only land in local Doltgres. No `DEPLOY_ENVIRONMENT` runtime check — gate-by-secret-presence per the established repo pattern (Langfuse, Privy, PostHog).                                 |
+| MIRROR_REPO_SPEC_OR_ENV_REMOTE  | DoltHub remote mirror (`<owner>/knowledge-<node>`) is Cogni-owned in v0 and declared in the node repo-spec at `knowledge.remote`. Runtime uses `DOLTHUB_REMOTE_URL` as an explicit override, otherwise the repo-spec remote. Candidate/test may set `DOLTHUB_OWNER` to a throwaway DoltHub org; production defaults to `cogni-dao`. Push still gates on Dolt creds installed in the Doltgres container.  |
 | MIRROR_BEST_EFFORT_NO_RETRY     | The post-merge push is fire-and-forget. A failed push is logged (`dolthub_push_failed`) but never retried, never blocks the merge response, and never re-runs on next merge. Recovery for v0 is a manual `dolt_push` from the operator pod. v1+: reconciliation cron diffs `dolt_log` against `origin/main`.                                                                                             |
 
 ---
@@ -511,7 +511,7 @@ Given same observations + same knowledge commit → same analysis outputs.
 ## Non-Goals
 
 - Replacing Postgres for hot operational data (awareness plane stays where it is)
-- Cross-node sharing or branching — single branch (`main`) only. The DoltHub mirror (v0, prod → `cogni-dao/knowledge-<node>`) is a one-way publication of `main`, not a federation primitive.
+- Cross-node sharing or branching — single branch (`main`) only. The DoltHub mirror (v0 → `<owner>/knowledge-<node>`) is a one-way publication of `main`, not a federation primitive.
 - Operator → node seed on provision — nodes boot empty
 - Real-time knowledge updates during analysis (read at start, not mid-flight)
 - Automatic promotion without any validation gate (human or statistical)

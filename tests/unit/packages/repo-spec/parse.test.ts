@@ -121,6 +121,79 @@ describe("parseRepoSpec", () => {
       expect(result.cogni_dao.chain_id).toBe("8453");
     });
 
+    it("accepts Cogni-owned DoltHub knowledge remote config", () => {
+      const result = parseRepoSpec({
+        ...VALID_OBJECT,
+        knowledge: {
+          database: "knowledge_my_node",
+          remote: {
+            provider: "dolthub",
+            owner: "cogni-dao-test",
+            repo: "knowledge-my-node",
+            url: "https://doltremoteapi.dolthub.com/cogni-dao-test/knowledge-my-node",
+            custody: "cogni-owned",
+          },
+        },
+      });
+
+      expect(result.knowledge?.database).toBe("knowledge_my_node");
+      expect(result.knowledge?.remote.owner).toBe("cogni-dao-test");
+    });
+
+    it("rejects DoltHub remote URLs outside doltremoteapi.dolthub.com", () => {
+      expect(() =>
+        parseRepoSpec({
+          ...VALID_OBJECT,
+          knowledge: {
+            database: "knowledge_my_node",
+            remote: {
+              provider: "dolthub",
+              owner: "cogni-dao-test",
+              repo: "knowledge-my-node",
+              url: "https://www.dolthub.com/cogni-dao-test/knowledge-my-node",
+              custody: "cogni-owned",
+            },
+          },
+        })
+      ).toThrow(/Invalid repo-spec structure/);
+    });
+
+    it("rejects DoltHub remote URLs with embedded credentials", () => {
+      expect(() =>
+        parseRepoSpec({
+          ...VALID_OBJECT,
+          knowledge: {
+            database: "knowledge_my_node",
+            remote: {
+              provider: "dolthub",
+              owner: "cogni-dao-test",
+              repo: "knowledge-my-node",
+              url: "https://token@doltremoteapi.dolthub.com/cogni-dao-test/knowledge-my-node",
+              custody: "cogni-owned",
+            },
+          },
+        })
+      ).toThrow(/Invalid repo-spec structure/);
+    });
+
+    it("rejects DoltHub remote URLs whose path does not match owner and repo", () => {
+      expect(() =>
+        parseRepoSpec({
+          ...VALID_OBJECT,
+          knowledge: {
+            database: "knowledge_my_node",
+            remote: {
+              provider: "dolthub",
+              owner: "cogni-dao-test",
+              repo: "knowledge-my-node",
+              url: "https://doltremoteapi.dolthub.com/cogni-dao-test/knowledge-other",
+              custody: "cogni-owned",
+            },
+          },
+        })
+      ).toThrow(/Invalid repo-spec structure/);
+    });
+
     it("strips extra fields (Zod strict passthrough)", () => {
       const result = parseRepoSpec({
         ...VALID_OBJECT,

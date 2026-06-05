@@ -56,7 +56,25 @@ curl -sS -X POST \
 # Idempotency: re-running returns "Error: database already exists" — safe to ignore.
 ```
 
-Repeat with different `repoName`s for each node hub (`knowledge-poly`, `knowledge-resy`, ...). v0 only mirrors operator.
+The node wizard now performs this repo-creation call automatically during node
+publish for every spawned node. It uses Cogni's `DOLTHUB_API_TOKEN`, derives
+`repoName = knowledge-<node>`, and writes the resulting Cogni-owned mirror into
+the node's repo-spec:
+
+```yaml
+knowledge:
+  database: "knowledge_<node>"
+  remote:
+    provider: dolthub
+    owner: "cogni-dao"
+    repo: "knowledge-<node>"
+    url: "https://doltremoteapi.dolthub.com/cogni-dao/knowledge-<node>"
+    custody: cogni-owned
+```
+
+Candidate/test environments can set the non-secret GitHub Environment variable
+`DOLTHUB_OWNER` to a throwaway DoltHub org. Production defaults to `cogni-dao`.
+Users never create their own DoltHub repos in v0.
 
 Verification:
 
@@ -160,7 +178,7 @@ When `DOLTHUB_REMOTE_URL` is unset, the push job is silently disabled — `pushM
 
 - **Service-account cred provisioning via OAuth client_credentials** — currently blocked on DoltHub OAuth app approval (task.5070). When approved, OAuth still won't sign push directly; it would need to mint a Dolt cred on behalf of the service. DoltHub does not expose this today.
 - **Per-env separate creds** — for blast-radius isolation if any env's cred is compromised.
-- **Automated repo creation** — DoltHub doesn't expose `POST /repos`; would require either DoltHub adding the API or a UI-scraping workaround. Out of scope.
+- **Repo reconciliation cron** — repo creation is now automated by `POST /api/v1alpha1/database`; a later reconciler can periodically verify every registered node still has its declared remote repo.
 
 ## Why this can't be 100% automated yet
 

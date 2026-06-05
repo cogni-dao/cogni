@@ -18,6 +18,7 @@
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseRepoSpec } from "@cogni/repo-spec";
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 
@@ -38,9 +39,15 @@ const RULES_DIR = join(repoRoot(), "nodes/node-template/.cogni/rules");
 const rendered = renderRepoSpec({
   nodeId: "11111111-2222-4333-8444-555555555555",
   chainId: 8453,
-  daoContract: "0xDAO",
-  pluginContract: "0xPLUGIN",
-  signalContract: "0xSIGNAL",
+  daoContract: "0x1111111111111111111111111111111111111111",
+  pluginContract: "0x2222222222222222222222222222222222222222",
+  signalContract: "0x3333333333333333333333333333333333333333",
+  knowledgeRemote: {
+    database: "knowledge_my_node",
+    owner: "cogni-dao-test",
+    repo: "knowledge-my-node",
+    url: "https://doltremoteapi.dolthub.com/cogni-dao-test/knowledge-my-node",
+  },
 });
 
 interface ParsedGate {
@@ -49,6 +56,16 @@ interface ParsedGate {
 }
 interface ParsedSpec {
   node_id: string;
+  knowledge?: {
+    database: string;
+    remote: {
+      provider: string;
+      owner: string;
+      repo: string;
+      url: string;
+      custody: string;
+    };
+  };
   payments: { status: string };
   gates?: ParsedGate[];
   nodes?: unknown;
@@ -69,6 +86,20 @@ describe("renderRepoSpec — BORN_REVIEWABLE", () => {
     expect(types.filter((t) => t === "ai-rule").length).toBeGreaterThanOrEqual(
       1
     );
+  });
+
+  it("emits a parseable Cogni-owned DoltHub knowledge remote", () => {
+    expect(() => parseRepoSpec(rendered)).not.toThrow();
+    expect(spec.knowledge).toEqual({
+      database: "knowledge_my_node",
+      remote: {
+        provider: "dolthub",
+        owner: "cogni-dao-test",
+        repo: "knowledge-my-node",
+        url: "https://doltremoteapi.dolthub.com/cogni-dao-test/knowledge-my-node",
+        custody: "cogni-owned",
+      },
+    });
   });
 
   it("has NO `nodes:` registry — resolves as a single-node fork", () => {

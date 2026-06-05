@@ -23,12 +23,15 @@
 
 import { v5 as uuidv5 } from "uuid";
 
+import type { NodeKnowledgeRemote } from "../knowledge-remote";
+
 export interface RenderRepoSpecInput {
   readonly nodeId: string;
   readonly chainId: number;
   readonly daoContract?: string | undefined;
   readonly pluginContract?: string | undefined;
   readonly signalContract?: string | undefined;
+  readonly knowledgeRemote?: NodeKnowledgeRemote | undefined;
 }
 
 /** uuidv5 of the scope key under the node_id namespace — matches `repo-spec-builder`'s derivation. */
@@ -66,6 +69,8 @@ scope_key: "default"
 cogni_dao:
 ${daoLines}
 
+${input.knowledgeRemote ? renderKnowledgeBlock(input.knowledgeRemote) : ""}
+
 # Payment rails — activate with: pnpm node:activate-payments
 payments:
   status: pending_activation
@@ -89,4 +94,15 @@ gates:
     with:
       rule_file: repo-goal-alignment.yaml
 `;
+}
+
+function renderKnowledgeBlock(remote: NodeKnowledgeRemote): string {
+  return `knowledge:
+  database: "${remote.database}"
+  remote:
+    provider: dolthub
+    owner: "${remote.owner}"
+    repo: "${remote.repo}"
+    url: "${remote.url}"
+    custody: cogni-owned`;
 }

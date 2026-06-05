@@ -17,6 +17,7 @@ import { type UserId, userActor } from "@cogni/ids";
 import { and, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
+import { createDoltHubDatabaseEnsurer } from "@/bootstrap/capabilities/dolthub-database";
 import { createNodeRepoWriter } from "@/bootstrap/capabilities/node-repo-write";
 import { resolveAppDb } from "@/bootstrap/container";
 import { withRootSpan } from "@/bootstrap/otel";
@@ -24,6 +25,7 @@ import { transition } from "@/features/nodes/state-machine";
 import { getServerSessionUser } from "@/lib/auth/server";
 import { type NodeStatus, nodes } from "@/shared/db/nodes";
 import { serverEnv } from "@/shared/env";
+import { buildNodeKnowledgeRemote } from "@/shared/node-app-scaffold/knowledge-remote";
 import {
   createRequestContext,
   EVENT_NAMES,
@@ -141,6 +143,7 @@ type PublishStep =
   | "load_node"
   | "validate_state"
   | "validate_addresses"
+  | "bootstrap_dolthub"
   | "fork_from_template"
   | "open_submodule_pr"
   | "update_node";
@@ -266,6 +269,22 @@ export async function POST(request: Request, routeArgs: RouteParams) {
             { status: 503 }
           );
         }
+        if (!env.DOLTHUB_API_TOKEN) {
+          logTerminal("error", {
+            outcome: "error",
+            errorCode: "dolthub_config_missing",
+            status: 503,
+          });
+          logRequestEnd(ctx.log, { status: 503, durationMs: durationMs() });
+          return NextResponse.json(
+            {
+              error: "operator not configured for DoltHub bootstrap",
+              reason:
+                "DOLTHUB_API_TOKEN required to create Cogni-owned node knowledge repos",
+            },
+            { status: 503 }
+          );
+        }
 
         currentStep = "load_node";
         const db = resolveAppDb();
@@ -364,6 +383,51 @@ export async function POST(request: Request, routeArgs: RouteParams) {
           );
         }
 
+        const knowledgeRemote = buildNodeKnowledgeRemote(
+          node.slug,
+          env.DOLTHUB_OWNER
+        );
+        let doltHub: { owner: string; repo: string; created: boolean };
+        try {
+          currentStep = "bootstrap_dolthub";
+          logStep("bootstrap_dolthub", "started", {
+            slug: node.slug,
+            owner: knowledgeRemote.owner,
+            repo: knowledgeRemote.repo,
+          });
+          doltHub = await createDoltHubDatabaseEnsurer(env).ensureDatabase({
+            owner: knowledgeRemote.owner,
+            repo: knowledgeRemote.repo,
+            description: `Cogni node ${node.slug} knowledge mirror`,
+          });
+          logStep("bootstrap_dolthub", "success", {
+            slug: node.slug,
+            owner: doltHub.owner,
+            repo: doltHub.repo,
+            created: doltHub.created,
+          });
+        } catch (err) {
+          logStep("bootstrap_dolthub", "error", {
+            slug: node.slug,
+            owner: knowledgeRemote.owner,
+            repo: knowledgeRemote.repo,
+            errorCode: "dolthub_bootstrap_failed",
+          });
+          logTerminal("error", {
+            outcome: "error",
+            errorCode: "dolthub_bootstrap_failed",
+            status: 502,
+            slug: node.slug,
+            nodeStatus: node.status,
+          });
+          logRequestEnd(ctx.log, { status: 502, durationMs: durationMs() });
+          const message = err instanceof Error ? err.message : "unknown";
+          return NextResponse.json(
+            { error: "dolthub bootstrap failed", reason: message },
+            { status: 502 }
+          );
+        }
+
         // Submodule birth: mint the node's own repo as a named fork of node-template (its ~1100 files
         // live there, not inlined into the operator), then the operator authors a PR pinning it as a git
         // submodule at `nodes/<slug>` + the footprint gens — one App-authored commit, PR URL synchronous.
@@ -374,6 +438,7 @@ export async function POST(request: Request, routeArgs: RouteParams) {
           daoContract: node.daoAddress,
           pluginContract: node.pluginAddress,
           signalContract: node.signalAddress,
+          knowledgeRemote,
         };
         let pr: { prNumber: number; prUrl: string };
         try {
@@ -503,10 +568,13 @@ export async function POST(request: Request, routeArgs: RouteParams) {
           nextStatus: t.nextStatus,
           prNumber: pr.prNumber,
           prUrl: pr.prUrl,
+          dolthubOwner: doltHub.owner,
+          dolthubRepo: doltHub.repo,
+          dolthubCreated: doltHub.created,
           durationMs: durationMs(),
         });
         logRequestEnd(ctx.log, { status: 200, durationMs: durationMs() });
-        return NextResponse.json({ node: updated, pr });
+        return NextResponse.json({ node: updated, pr, doltHub });
       } catch (_err) {
         logTerminal("error", {
           outcome: "error",

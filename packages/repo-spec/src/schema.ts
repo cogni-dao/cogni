@@ -146,6 +146,60 @@ export const operatorWalletSpecSchema = z.object({
 
 export type OperatorWalletSpec = z.infer<typeof operatorWalletSpecSchema>;
 
+function isDoltHubRemoteUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === "https:" &&
+      url.hostname === "doltremoteapi.dolthub.com" &&
+      url.username === "" &&
+      url.password === "" &&
+      url.search === "" &&
+      url.hash === "" &&
+      /^\/[^/]+\/[^/]+$/.test(url.pathname)
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Schema for the node-local knowledge plane declaration.
+ * Credentials are never stored here; the repo-spec only pins the Cogni-owned
+ * DoltHub repository identity that this node mirrors to.
+ */
+export const knowledgeRemoteSpecSchema = z
+  .object({
+    provider: z.literal("dolthub"),
+    owner: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/),
+    repo: z.string().regex(/^knowledge-[a-z][a-z0-9-]{0,63}$/),
+    url: z.string().refine(isDoltHubRemoteUrl, {
+      message:
+        "DoltHub remote URL must be https://doltremoteapi.dolthub.com/<owner>/<repo> with no credentials",
+    }),
+    custody: z.literal("cogni-owned"),
+  })
+  .superRefine((remote, ctx) => {
+    const url = new URL(remote.url);
+    const expected = `/${remote.owner}/${remote.repo}`;
+    if (url.pathname !== expected) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["url"],
+        message:
+          "DoltHub remote URL path must match knowledge.remote owner/repo",
+      });
+    }
+  });
+
+export const knowledgeSpecSchema = z.object({
+  database: z.string().regex(/^knowledge_[a-z][a-z0-9_]{0,63}$/),
+  remote: knowledgeRemoteSpecSchema,
+});
+
+export type KnowledgeRemoteSpec = z.infer<typeof knowledgeRemoteSpecSchema>;
+export type KnowledgeSpec = z.infer<typeof knowledgeSpecSchema>;
+
 // ---------------------------------------------------------------------------
 // Gate + rule schemas (PR review)
 // ---------------------------------------------------------------------------
@@ -291,6 +345,9 @@ export const repoSpecSchema = z
 
     /** Operator wallet configuration (optional — needed only when operator wallet is enabled) */
     operator_wallet: operatorWalletSpecSchema.optional(),
+
+    /** Node-local knowledge plane declaration (optional for pre-knowledge nodes) */
+    knowledge: knowledgeSpecSchema.optional(),
 
     /** DAO governance configuration */
     cogni_dao: z.object({

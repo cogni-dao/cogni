@@ -175,6 +175,7 @@ import type {
 } from "@/ports/server";
 import {
   getDaoTreasuryAddress,
+  getKnowledgeConfig,
   getNodeId,
   getOperatorWalletConfig,
   getPaymentConfig,
@@ -639,14 +640,11 @@ function createContainer(): Container {
     const contributionPort = new DoltgresKnowledgeContributionAdapter({
       sql: doltClient,
     });
-    // Optional post-merge mirror to DoltHub (task.5069). Disabled when
-    // DOLTHUB_REMOTE_URL is unset. Gate-by-secret-presence follows the
-    // established pattern (Langfuse, Privy, PostHog) — DOLTHUB_REMOTE_URL
-    // is only granted to the production GitHub Environment Secret scope, so
-    // candidate-a/preview boot with the hook undefined and never push. v0
-    // invariant: prod is the only writer. Bootstrap: see
-    // docs/runbooks/dolthub-remote-bootstrap.md.
-    const remoteUrl = env.DOLTHUB_REMOTE_URL;
+    // Optional post-merge mirror to DoltHub (task.5069). A node born through
+    // the wizard carries its Cogni-owned remote in repo-spec; DOLTHUB_REMOTE_URL
+    // remains an explicit env override for legacy/operator deployments.
+    const remoteUrl =
+      env.DOLTHUB_REMOTE_URL ?? getKnowledgeConfig()?.remote.url;
     const pushMainOnMerge = remoteUrl
       ? wrapPushSafe(
           createDoltgresPusher({
@@ -674,7 +672,7 @@ function createContainer(): Container {
       ...(pushMainOnMerge ? { pushMainOnMerge } : {}),
     });
     log.info(
-      { dolthubMirror: Boolean(env.DOLTHUB_REMOTE_URL) },
+      { dolthubMirror: Boolean(remoteUrl) },
       "Knowledge store + EDO capability configured (Doltgres)"
     );
   } else {
