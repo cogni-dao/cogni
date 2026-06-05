@@ -150,6 +150,28 @@ This holds **structurally** in `classify.ts`: a bare `nodes/<slug>` gitlink has 
 | operator's job                     | full gate + `single-node-scope` split        | pointer-validate + provision + flight + promote                                                                                                                                                                                    |
 | `ci.yaml` scope filter             | `nodes/<X>/**` entry + operator `!` negation | a **dead-but-harmless** `nodes/<slug>/**` filter — a bare gitlink never matches it, always falls to operator's `**`. Kept so the `nodes/*` ↔ filter-list mirror meta-test stays green; cleanup is future tidiness, not a blocker. |
 
+### The node is a sovereign repo, not operator-built content (two views)
+
+The node has **its own `.github/workflows/` and runs its own CI** — _and_ it is **`nodes/<slug>` only** from the operator. Both are true; they are two views of one object, not a contradiction:
+
+- **Node-repo view (the node-dev's clone).** A submodule node is a _full standalone repo_ with the node **at its root**: `app/`, `graphs/`, `k8s/`, `packages/`, plus its **own** `.github/workflows/ci.yaml`, biome/tsconfig/Dockerfile, and the `setup-main-branch.sh` gate. The node-dev clones _only_ this repo, runs the full merge gate there, and **builds + pushes its own image** to GHCR (`FORK_FREEDOM`). This sovereignty is the entire reason the submodule model exists.
+- **Operator view (the monorepo).** The operator sees a `nodes/<slug>` **gitlink — a pointer**, not content. Even after `git submodule update --init nodes/<slug>`, the node's root `.github/workflows/` lands at `nodes/<slug>/.github/workflows/`, which **GitHub never executes** (only _repo-root_ `.github/workflows/` run). So the operator monorepo **never runs the node's workflows and never builds the node** — its job is exactly the table above: pointer-validate + provision + flight + promote the node's _pre-built_ image.
+
+**Corollary that breaks today's pin-PR (P0).** Because the node builds itself, the operator's `detect-affected.sh` must **exclude the gitlink from build targets** — a `build (<slug>)` leg on the parent is always wrong. The operator consumes the node's image by **digest** (catalog `repo`+`ref` pin), never by rebuilding source.
+
+> **Rejected — "content-only nodes built by the operator" (`nodes/<slug>/*` with no workflows).** That collapses sovereignty: the operator would have to check out + build every node, re-coupling to node code and forfeiting independent per-node CI — exactly the inline tax (#1462) the submodule model removes. The node's code lives _and is built_ in its own git boundary; the operator carries a pointer + a catalog row, nothing more.
+
+### Public + private node repos
+
+The model works for both; only the **clone/pull credentials** differ — never the topology.
+
+- **Public node repo.** Submodule init + image pull need no auth.
+- **Private node repo.** Two credentialed paths, both already satisfied because the operator App **minted** the repo (and is installed all-repositories on the mint org):
+  1. **Selective submodule init** (the `nodes/<slug>/.cogni/` walks: provisioning, `secrets-catalog-loader.ts`, the review router) authenticates with the operator App's installation token (`contents:read` on the node repo) over the HTTPS `.gitmodules` URL — never an anonymous clone.
+  2. **Image pull** for deploy uses GHCR pull creds for the node's package, independent of git. Deploy needs the _image_, not the source, so a private node never requires the operator to check out its tree at deploy time (discovery stays metadata-driven via the catalog row).
+
+The node's **own** CI (private repo) builds + pushes with its repo-scoped `GITHUB_TOKEN` → its private GHCR package; no cross-repo secret sharing. The single invariant: whatever org holds private node repos, the operator App is installed there with `contents:read` — which the mint flow already guarantees.
+
 ### Discovery is metadata-driven, not filesystem-driven
 
 A submodule node's app tree is absent from the operator build/runtime image (the runtime ships only the operator's own `.cogni`; no `infra/catalog`), so it can never be discovered by walking `nodes/*`. It registers exactly like an inline node: its **catalog row** — committed in the operator pin PR, present even when the submodule is not checked out — projects to the operator `nodes` table and renders via **`NodeRegistryPort`** ([proj.agent-registry](../../work/projects/proj.agent-registry.md), #1492). **Submodule-ness is a catalog/CI concern** (a `repo` + `ref` pin on the catalog row), invisible to `NodeRegistryPort` consumers; a submodule node is still `NodeSummary.kind: full-app`. The #1492 v0 static `nodes.data.ts` adapter is itself a per-node manual-step tax and does not scale — submodule births at scale depend on the v0.1 DB-projection adapter landing behind the same port.
