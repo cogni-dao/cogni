@@ -13,7 +13,7 @@ namePrefix: canary-
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/cogni-template
-    digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    digest: "sha256:9b09cb332c574f66e61321fbcd2cf34194649222a4f02bdf43277218690753ff"
 
 patches:
   - target:
@@ -78,7 +78,7 @@ patches:
         name: postgres-external
       spec:
         type: ExternalName
-        externalName: vm.cognidao.org
+        externalName: cogni-candidate-b.vm.cognidao.org
         clusterIP: null
   - target: { kind: Service, name: temporal-external }
     patch: |
@@ -88,7 +88,7 @@ patches:
         name: temporal-external
       spec:
         type: ExternalName
-        externalName: vm.cognidao.org
+        externalName: cogni-candidate-b.vm.cognidao.org
         clusterIP: null
   - target: { kind: Service, name: litellm-external }
     patch: |
@@ -98,7 +98,7 @@ patches:
         name: litellm-external
       spec:
         type: ExternalName
-        externalName: vm.cognidao.org
+        externalName: cogni-candidate-b.vm.cognidao.org
         clusterIP: null
   - target: { kind: Service, name: redis-external }
     patch: |
@@ -108,7 +108,7 @@ patches:
         name: redis-external
       spec:
         type: ExternalName
-        externalName: vm.cognidao.org
+        externalName: cogni-candidate-b.vm.cognidao.org
         clusterIP: null
   - target: { kind: Service, name: doltgres-external }
     patch: |
@@ -118,7 +118,7 @@ patches:
         name: doltgres-external
       spec:
         type: ExternalName
-        externalName: vm.cognidao.org
+        externalName: cogni-candidate-b.vm.cognidao.org
         clusterIP: null
   - target: { kind: EndpointSlice, name: postgres-external-1 }
     patch: |

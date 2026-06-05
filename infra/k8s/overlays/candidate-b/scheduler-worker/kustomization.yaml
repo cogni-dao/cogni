@@ -11,7 +11,7 @@ resources:
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/cogni-template
-    digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    digest: "sha256:7c4170927e7916262a6e0a9fa7fdb8946da48184e2d7353e13d2494c45d79072"
 
 patches:
   - target:
@@ -25,7 +25,7 @@ patches:
         path: /data/IMAGE_DIGEST
         value: "candidate-b-placeholder-scheduler-worker"
 
-  # bug.0295: VM discovery via DNS (vm.cognidao.org → $VM_DNS_HOST by provision).
+  # bug.0295: VM discovery via DNS (cogni-candidate-b.vm.cognidao.org → $VM_DNS_HOST by provision).
   # Convert base headless Services → ExternalName; delete EndpointSlices.
   - target: { kind: Service, name: temporal }
     patch: |
@@ -35,7 +35,7 @@ patches:
         name: temporal
       spec:
         type: ExternalName
-        externalName: vm.cognidao.org
+        externalName: cogni-candidate-b.vm.cognidao.org
         clusterIP: null
   - target: { kind: Service, name: postgres }
     patch: |
@@ -45,7 +45,7 @@ patches:
         name: postgres
       spec:
         type: ExternalName
-        externalName: vm.cognidao.org
+        externalName: cogni-candidate-b.vm.cognidao.org
         clusterIP: null
   - target: { kind: Service, name: app }
     patch: |
@@ -55,7 +55,7 @@ patches:
         name: app
       spec:
         type: ExternalName
-        externalName: vm.cognidao.org
+        externalName: cogni-candidate-b.vm.cognidao.org
         clusterIP: null
   - target: { kind: Service, name: poly-app }
     patch: |
