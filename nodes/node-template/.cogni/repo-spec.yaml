@@ -34,3 +34,24 @@ activity_ledger:
 
 payments:
   status: pending_activation
+
+# Born-reviewable default gates. When this node is minted as a single-node fork
+# (node-at-root, no `nodes:` registry) the operator's review path runs these gates
+# against the repo-root `.cogni/rules/` below. The mint (`renderRepoSpec`) re-emits
+# this same block onto the minted repo's identity spec — keep the two in lockstep.
+# Gate set coordinated with the operator review path (Lane A). Tune per node.
+gates:
+  - type: review-limits
+    id: review_limits
+    with:
+      max_changed_files: 50
+      max_total_diff_kb: 1500
+  - type: ai-rule
+    with:
+      rule_file: pr-syntropy-coherence.yaml
+  - type: ai-rule
+    with:
+      rule_file: patterns-and-docs.yaml
+  - type: ai-rule
+    with:
+      rule_file: repo-goal-alignment.yaml
