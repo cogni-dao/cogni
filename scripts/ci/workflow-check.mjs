@@ -119,9 +119,13 @@ if (
     "SUBMODULE_BIRTHS_FILE: ${{ steps.submodule-births.outputs.births_file }}",
   )
 ) {
-  pass("candidate-flight wires submodule birth manifest output into image resolution");
+  pass(
+    "candidate-flight wires submodule birth manifest output into image resolution",
+  );
 } else {
-  fail("candidate-flight must pass steps.submodule-births.outputs.births_file to SUBMODULE_BIRTHS_FILE");
+  fail(
+    "candidate-flight must pass steps.submodule-births.outputs.births_file to SUBMODULE_BIRTHS_FILE",
+  );
 }
 
 if (
@@ -134,7 +138,9 @@ if (
 ) {
   pass("candidate-flight prefers deploy-token GHCR credentials");
 } else {
-  fail("candidate-flight GHCR login must prefer GHCR_DEPLOY_* secrets with GitHub token fallback");
+  fail(
+    "candidate-flight GHCR login must prefer GHCR_DEPLOY_* secrets with GitHub token fallback",
+  );
 }
 
 console.log(`workflows: ${workflowFiles.join(", ")}`);
