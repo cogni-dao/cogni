@@ -2,16 +2,15 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `@features/home/showcase/nodes.data`
- * Purpose: Curated source of truth for the homepage node showcase. Each entry becomes a tile.
- * Scope: Static data only — no IO, no env. Adding a node to the monorepo = add an entry here
- *   (+ a thumbnail under public/showcase/). href resolution lives in getShowcaseNodes.server.ts.
- * Invariants: `name` matches the node's infra/catalog/<name>.yaml entry; `primary` true means the
- *   node serves the bare base domain (operator). `thumbnail` is a screenshot of the node's homepage.
+ * Module: `@adapters/server/node-registry/bundled-nodes.data`
+ * Purpose: Operator's curated, shipped showcase nodes (those with committed homepage screenshots).
+ *   The StaticNodeRegistryAdapter source; composed with the DB projection for dynamic nodes.
+ * Scope: Static data only — no IO, no env. `name` matches infra/catalog/<name>.yaml.
+ * Invariants: `primary` true means the node serves the bare base domain (operator). `thumbnail` is a
+ *   committed screenshot under public/showcase/.
  * Side-effects: none
- * Notes: Thumbnails are committed screenshots of each live homepage. Refine path: per-node
- *   `opengraph-image` routes or a build-time screenshot job so thumbnails self-update.
- * Links: public/showcase/*.png, src/features/home/showcase/getShowcaseNodes.server.ts
+ * Notes: Dynamic/new nodes flow via the DB projection, not here — this stays a small curated bundle.
+ * Links: public/showcase/*.png, src/adapters/server/node-registry/static-node-registry.adapter.ts
  * @public
  */
 

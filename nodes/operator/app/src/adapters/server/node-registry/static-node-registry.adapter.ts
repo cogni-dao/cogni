@@ -2,22 +2,21 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `@features/home/showcase/static-node-registry.adapter`
- * Purpose: v0 NodeRegistryPort adapter backed by the curated static showcase list. The port seam so
- *   the homepage depends on a contract, not the raw data — the DB-projection adapter (v0.1) drops in
- *   behind the same interface.
- * Scope: Maps curated full-app nodes → NodeSummary, resolving hrefs from a base domain. Pure: the
+ * Module: `@adapters/server/node-registry/static-node-registry.adapter`
+ * Purpose: NodeRegistryPort adapter for operator's curated, shipped showcase nodes (the ones with
+ *   committed homepage screenshots). Composed with the DB-projection adapter for dynamic nodes.
+ * Scope: Maps bundled full-app nodes → NodeSummary, resolving hrefs from a base domain. Pure: the
  *   domain is injected (no env access here); the server factory supplies it.
- * Invariants: every showcased v0 node is `kind: "full-app"`; href via the catalog host convention.
+ * Invariants: every bundled node is `kind: "full-app"`; href via the catalog host convention.
  * Side-effects: none
- * Links: src/ports/node-registry.port.ts, src/features/home/showcase/nodes.resolve.ts
+ * Links: src/ports/node-registry.port.ts, src/shared/node-registry/resolve.ts
  * @public
  */
 
 import type { NodeRegistryPort, NodeSummary } from "@/ports";
+import { resolveHref } from "@/shared/node-registry/resolve";
 
-import { SHOWCASE_NODES, type ShowcaseNode } from "./nodes.data";
-import { resolveHref } from "./nodes.resolve";
+import { SHOWCASE_NODES, type ShowcaseNode } from "./bundled-nodes.data";
 
 function toSummary(
   node: ShowcaseNode,

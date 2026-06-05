@@ -34,8 +34,8 @@ export interface NodeSummary {
   readonly kind: NodeKind;
   /** Resolved homepage URL (subdomain for full-app; scope-route for agent-scope), or "#". */
   readonly href: string;
-  /** Homepage screenshot/preview served from public/ or a screenshot source. */
-  readonly thumbnailUrl: string;
+  /** Homepage screenshot/preview; absent for nodes without a shipped thumbnail (tile shows a placeholder). */
+  readonly thumbnailUrl?: string | undefined;
   /** True for the node that serves the bare base domain (operator). */
   readonly primary?: boolean | undefined;
 }

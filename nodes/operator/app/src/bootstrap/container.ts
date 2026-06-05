@@ -65,6 +65,7 @@ import {
   Connection as TemporalConnection,
   type WorkflowClient,
 } from "@temporalio/client";
+import { eq } from "drizzle-orm";
 import Redis from "ioredis";
 import type { Logger } from "pino";
 import {
@@ -113,6 +114,10 @@ import {
 } from "@/adapters/server/db/doltgres/client";
 import { getServiceDb } from "@/adapters/server/db/drizzle.service-client";
 import { DrizzleWorkItemSessionAdapter } from "@/adapters/server/db/work-item-session.adapter";
+import { SHOWCASE_NODES } from "@/adapters/server/node-registry/bundled-nodes.data";
+import { CompositeNodeRegistryAdapter } from "@/adapters/server/node-registry/composite-node-registry.adapter";
+import { DbNodeRegistryAdapter } from "@/adapters/server/node-registry/db-node-registry.adapter";
+import { StaticNodeRegistryAdapter } from "@/adapters/server/node-registry/static-node-registry.adapter";
 import { ServiceDrizzlePaymentAttemptRepository } from "@/adapters/server/payments/drizzle-payment-attempt.adapter";
 import { OpenRouterFundingAdapter } from "@/adapters/server/treasury/openrouter-funding.adapter";
 import { SplitTreasurySettlementAdapter } from "@/adapters/server/treasury/split-treasury-settlement.adapter";
@@ -147,6 +152,7 @@ import type {
   MetricsQueryPort,
   ModelCatalogPort,
   ModelProviderResolverPort,
+  NodeRegistryPort,
   OnChainVerifier,
   OperatorWalletPort,
   PaymentAttemptServiceRepository,
@@ -174,7 +180,9 @@ import {
   getPaymentConfig,
   getScopeId,
 } from "@/shared/config";
+import { nodes } from "@/shared/db/nodes";
 import { serverEnv } from "@/shared/env/server-env";
+import { baseDomain } from "@/shared/node-registry/resolve";
 import { makeLogger } from "@/shared/observability";
 import { USDC_TOKEN_ADDRESS } from "@/shared/web3";
 import type { EvmOnchainClient } from "@/shared/web3/onchain/evm-onchain-client.interface";
@@ -989,4 +997,33 @@ export function resolveAppDb(): Database {
  */
 export function resolveServiceDb(): Database {
   return getServiceDb();
+}
+
+/**
+ * Resolve the public node registry: operator's bundled curated nodes + the live DB projection
+ * (`status='active'`), composed behind NodeRegistryPort. Service-role (non-RLS) read; the DB
+ * adapter degrades to [] on failure so the homepage never breaks.
+ */
+export function resolveNodeRegistry(): NodeRegistryPort {
+  const domain = baseDomain(serverEnv());
+  const log = makeLogger({ service: "cogni-template", nodeId: getNodeId() });
+  return new CompositeNodeRegistryAdapter([
+    new StaticNodeRegistryAdapter(SHOWCASE_NODES, domain),
+    new DbNodeRegistryAdapter({
+      listListedSlugs: async () => {
+        try {
+          const rows = await resolveServiceDb()
+            .select({ slug: nodes.slug })
+            .from(nodes)
+            .where(eq(nodes.status, "active"));
+          return rows.map((r) => r.slug);
+        } catch (err) {
+          // Don't let a projection-read failure blank the homepage silently.
+          log.warn({ err }, "node_registry_projection_read_failed");
+          return [];
+        }
+      },
+      domain,
+    }),
+  ]);
 }

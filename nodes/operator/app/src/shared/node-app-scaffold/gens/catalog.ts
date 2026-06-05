@@ -18,11 +18,28 @@
  * Render `infra/catalog/<slug>.yaml` for a new `type:node` entry. `port` is the container port (3200
  * on the template); `nodePort` is the scarce k3s Service NodePort. No `node_id` (schema-forbidden).
  */
+export interface RenderCatalogInput {
+  readonly sourceRepo?: string;
+  readonly imageRepository?: string;
+}
+
+function defaultImageRepository(sourceRepo: string): string {
+  const match = sourceRepo.match(/^https:\/\/github\.com\/([^/]+)\//);
+  const owner = match?.[1]?.toLowerCase() ?? "cogni-dao";
+  return `ghcr.io/${owner}/cogni-node-template`;
+}
+
 export function renderCatalog(
   slug: string,
   port: number,
-  nodePort: number
+  nodePort: number,
+  input: RenderCatalogInput = {}
 ): string {
+  const sourceLines = input.sourceRepo
+    ? `source_repo: ${input.sourceRepo}
+image_repository: ${input.imageRepository ?? defaultImageRepository(input.sourceRepo)}
+`
+    : "";
   return `name: ${slug}
 type: node
 port: ${port}
@@ -30,7 +47,7 @@ node_port: ${nodePort}
 dockerfile: nodes/${slug}/app/Dockerfile
 image_tag_suffix: "-${slug}"
 migrator_tag_suffix: "-${slug}-migrate"
-candidate_a_branch: deploy/candidate-a-${slug}
+${sourceLines}candidate_a_branch: deploy/candidate-a-${slug}
 preview_branch: deploy/preview-${slug}
 production_branch: deploy/production-${slug}
 path_prefix: nodes/${slug}/

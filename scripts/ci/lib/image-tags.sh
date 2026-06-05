@@ -232,6 +232,9 @@ node_database_csv() {
 node_internal_service_endpoint_csv() {
   local sep="" node node_id url
   for node in "${NODE_TARGETS[@]}"; do
+    if is_submodule_node "$node"; then
+      continue
+    fi
     node_id="$(node_id_for_target "$node")" || return 1
     url="http://${node}-node-app:3000"
     printf '%s%s=%s,%s=%s' "$sep" "$node" "$url" "$node_id" "$url"
@@ -242,6 +245,9 @@ node_internal_service_endpoint_csv() {
 node_billing_endpoint_csv() {
   local host="$1" sep="" node node_id port url
   for node in "${NODE_TARGETS[@]}"; do
+    if is_submodule_node "$node"; then
+      continue
+    fi
     node_id="$(node_id_for_target "$node")" || return 1
     port="$(node_port_for_target "$node")" || return 1
     url="http://${host}:${port}"

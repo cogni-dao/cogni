@@ -14,10 +14,10 @@
 import { redirect } from "next/navigation";
 import type { ReactElement } from "react";
 
+import { resolveNodeRegistry } from "@/bootstrap/container";
 import { HomeStats } from "@/features/home/components/HomeStats";
 import { NewHomeHero } from "@/features/home/components/NewHomeHero";
 import { NodeShowcase } from "@/features/home/components/NodeShowcase";
-import { listShowcaseNodes } from "@/features/home/showcase/getShowcaseNodes.server";
 import { getServerSessionUser } from "@/lib/auth/server";
 
 import { AuthRedirect } from "./AuthRedirect";
@@ -28,7 +28,7 @@ export default async function HomePage(): Promise<ReactElement> {
     redirect("/chat");
   }
 
-  const nodes = await listShowcaseNodes();
+  const nodes = await resolveNodeRegistry().listPublic();
 
   return (
     <div className="flex min-h-screen flex-col">

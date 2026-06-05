@@ -33,7 +33,11 @@
         "required": ["type"]
       },
       "then": {
-        "required": ["candidate_a_branch", "preview_branch", "production_branch"]
+        "required": [
+          "candidate_a_branch",
+          "preview_branch",
+          "production_branch"
+        ]
       }
     }
   ],
@@ -82,6 +86,16 @@
       "type": "string",
       "pattern": "^[a-z0-9._/-]+/$",
       "description": "task.0374 — repo path prefix that maps changed files to this target. detect-affected.sh uses this to compute the matrix shape. Must end with /."
+    },
+    "source_repo": {
+      "type": "string",
+      "pattern": "^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(\\.git)?$",
+      "description": "Optional submodule node source repository clone URL. Inline nodes omit it; submodule births use it with the gitlink SHA to resolve the child repo image."
+    },
+    "image_repository": {
+      "type": "string",
+      "pattern": "^ghcr\\.io/[a-z0-9][a-z0-9_.-]*/[a-z0-9][a-z0-9_.-]*$",
+      "description": "Optional GHCR repository for externally-built submodule nodes. Inline nodes use IMAGE_NAME_APP; submodule nodes usually use ghcr.io/<node-owner>/cogni-node-template."
     },
     "candidate_a_branch": {
       "type": "string",
