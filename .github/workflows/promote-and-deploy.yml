@@ -56,6 +56,7 @@ jobs:
       deploy_branch: ${{ steps.env.outputs.deploy_branch }}
       preview_forward: ${{ steps.env.outputs.preview_forward }}
       targets_json: ${{ steps.targets.outputs.targets_json }}
+      target_names: ${{ steps.targets.outputs.target_names }}
       has_targets: ${{ steps.targets.outputs.has_targets }}
     steps:
       - name: Determine environment
@@ -132,12 +133,14 @@ jobs:
             echo "### Promote no-op — no k8s targets for \`${OVERLAY_ENV}\`" >> "$GITHUB_STEP_SUMMARY"
             echo "All requested targets lack a per-env overlay; nothing to deploy." >> "$GITHUB_STEP_SUMMARY"
             echo "targets_json=[]" >> "$GITHUB_OUTPUT"
+            echo "target_names=" >> "$GITHUB_OUTPUT"
             echo "has_targets=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           targets_json=$(printf '%s\n' "${list[@]}" \
             | python3 -c 'import json,sys; print(json.dumps([line.strip() for line in sys.stdin if line.strip()]))')
           echo "targets_json=$targets_json" >> "$GITHUB_OUTPUT"
+          echo "target_names=${list[*]}" >> "$GITHUB_OUTPUT"
           echo "has_targets=true" >> "$GITHUB_OUTPUT"
           echo "Targets: ${list[*]}"
 
@@ -538,6 +541,7 @@ jobs:
       POSTHOG_HOST: ${{ secrets.POSTHOG_HOST }}
       TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
       COGNI_NODE_DBS: ${{ secrets.COGNI_NODE_DBS }}
+      K8S_SECRET_NODE_APP_TARGETS: ${{ needs.decide.outputs.target_names }}
     steps:
       # Deploy tooling (scripts/ci/deploy-infra.sh + scripts/ci/lib/**) runs at the
       # WORKFLOW ref, not the promoted app sha. The app stays pinned via COGNI_REPO_REF

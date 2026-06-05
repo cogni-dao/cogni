@@ -419,8 +419,23 @@ emit_deployment_event "infra_deployment.started" "in_progress" "Deploying infras
 # shellcheck source=scripts/ci/lib/image-tags.sh
 source "$REPO_ROOT/scripts/ci/lib/image-tags.sh"
 NODE_APP_TARGETS="${NODE_TARGETS[*]}"
+if [[ "$K8S_SECRETS_ONLY" == true && -n "${K8S_SECRET_NODE_APP_TARGETS:-}" ]]; then
+  _scoped_node_targets=()
+  for _requested_target in ${K8S_SECRET_NODE_APP_TARGETS}; do
+    for _catalog_node in "${NODE_TARGETS[@]}"; do
+      if [[ "$_requested_target" == "$_catalog_node" ]]; then
+        _scoped_node_targets+=("$_requested_target")
+        break
+      fi
+    done
+  done
+  if [[ "${#_scoped_node_targets[@]}" -eq 0 ]]; then
+    log_fatal "deploy-infra: k8s-secrets-only target override contained no type:node targets: ${K8S_SECRET_NODE_APP_TARGETS}"
+  fi
+  NODE_APP_TARGETS="${_scoped_node_targets[*]}"
+fi
 [ -n "$NODE_APP_TARGETS" ] || log_fatal "deploy-infra: no type:node targets from infra/catalog — refusing to deploy with an empty node list"
-log_info "Node-app targets (catalog-driven): ${NODE_APP_TARGETS}"
+log_info "Node-app targets: ${NODE_APP_TARGETS}"
 
 # G-tier derived inventory: database names are a pure function of the catalog
 # node list. Do not trust the GitHub env secret here; it can lag a new node and
@@ -1469,14 +1484,34 @@ SECEOF
   done
   if [ $ROLLOUT_FAILED -ne 0 ]; then
     log_warn "One or more node-app rollouts did not complete within 300s"
+    if [[ "$K8S_SECRETS_ONLY" == true ]]; then
+      log_fatal "k8s-secrets-only rollout did not complete; refusing to report secret propagation success"
+    fi
   fi
-  log_info "[$(date -u +%H:%M:%S)] Node-apps ready — rolling scheduler-worker"
+  log_info "[$(date -u +%H:%M:%S)] Node-apps ready"
 
-  # ── Roll scheduler-worker only after node-apps are ready ───────────────────
-  kubectl -n "${K8S_NS}" rollout restart deployment/scheduler-worker 2>/dev/null || true
-  if ! kubectl -n "${K8S_NS}" rollout status deployment/scheduler-worker --timeout=300s 2>/dev/null; then
-    log_warn "scheduler-worker rollout did not complete within 300s"
-    ROLLOUT_FAILED=1
+  for node in ${NODE_APP_TARGETS}; do
+    if [[ "$node" == "operator" ]]; then
+      if kubectl -n "${K8S_NS}" exec "deployment/${node}-node-app" -c app -- \
+        /bin/sh -lc 'test -n "${NODE_MINT_OWNER:-}" && test -n "${NODE_TEMPLATE_OWNER:-}"' >/dev/null 2>&1; then
+        log_info "  operator runtime has required node mint env keys (values redacted)"
+      else
+        log_fatal "operator runtime is missing NODE_MINT_OWNER or NODE_TEMPLATE_OWNER after rollout"
+      fi
+    fi
+  done
+
+  if [[ "$K8S_SECRETS_ONLY" == true ]]; then
+    log_info "K8s-secrets-only mode: skipping scheduler-worker rollout"
+  else
+    log_info "[$(date -u +%H:%M:%S)] Rolling scheduler-worker"
+
+    # ── Roll scheduler-worker only after node-apps are ready ─────────────────
+    kubectl -n "${K8S_NS}" rollout restart deployment/scheduler-worker 2>/dev/null || true
+    if ! kubectl -n "${K8S_NS}" rollout status deployment/scheduler-worker --timeout=300s 2>/dev/null; then
+      log_warn "scheduler-worker rollout did not complete within 300s"
+      ROLLOUT_FAILED=1
+    fi
   fi
   log_info "[$(date -u +%H:%M:%S)] All rollouts complete"
   emit_deployment_event "infra_deployment.rollouts_complete" "success" "All k8s deployments rolled out"
