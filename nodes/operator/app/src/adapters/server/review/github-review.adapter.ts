@@ -315,9 +315,24 @@ export function createGithubReviewAdapter(deps: GithubReviewAdapterDeps) {
     // Owning-domain resolution. The structured `review.routed` log is emitted by
     // the worker activity (the orchestrator's observability for the
     // deploy_verified loop), not here — see services/scheduler-worker review.ts.
-    const owningNode: OwningNode = parsedSpec
-      ? extractOwningNode(parsedSpec, changedFiles)
-      : { kind: "miss" };
+    //
+    // `extractOwningNode` enforces the monorepo meta-test invariant (operator MUST be
+    // registered in `spec.nodes`) and throws otherwise. The review app also runs against
+    // foreign single-node forks whose repo-spec has no `nodes:` registry — there the throw
+    // fires even though the correct answer is "no sovereign sub-node matched → repo-root
+    // rules". Degrade that throw to a miss so the review proceeds on `.cogni/rules`
+    // instead of 500ing the whole review path.
+    let owningNode: OwningNode = { kind: "miss" };
+    if (parsedSpec) {
+      try {
+        owningNode = extractOwningNode(parsedSpec, changedFiles);
+      } catch (error) {
+        logger.warn(
+          { owner, repo, error: String(error) },
+          "review.owning-node unresolved (no operator registry entry); using repo-root rules"
+        );
+      }
+    }
 
     const ruleBasePath =
       owningNode.kind === "single"
