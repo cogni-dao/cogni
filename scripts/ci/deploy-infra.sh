@@ -1497,9 +1497,6 @@ SECEOF
 
   for node in ${NODE_APP_TARGETS}; do
     if [[ "$node" == "operator" ]]; then
-      if ! kubectl -n "${K8S_NS}" wait --for=condition=Available "deployment/${node}-node-app" --timeout=180s >/dev/null 2>&1; then
-        log_fatal "operator deployment is not Available after secret sync"
-      fi
       OPERATOR_POD="$(
         kubectl -n "${K8S_NS}" get pods \
           -l app.kubernetes.io/name=node-app,app.kubernetes.io/instance=operator \
@@ -1508,8 +1505,10 @@ SECEOF
         | awk -F '\t' '$2 == "" && $3 == "true" { pod = $1 } END { print pod }'
       )"
       if [[ -z "$OPERATOR_POD" ]]; then
+        kubectl -n "${K8S_NS}" get pods -l app.kubernetes.io/name=node-app,app.kubernetes.io/instance=operator -o wide || true
         log_fatal "no ready non-terminating operator pod found after secret sync"
       fi
+      log_info "  proving operator runtime env on pod ${OPERATOR_POD}"
       if kubectl -n "${K8S_NS}" exec "$OPERATOR_POD" -c app -- \
         /bin/sh -lc 'test -n "${NODE_MINT_OWNER:-}" && test -n "${NODE_TEMPLATE_OWNER:-}"' >/dev/null 2>&1; then
         log_info "  operator runtime has required node mint env keys (values redacted)"
