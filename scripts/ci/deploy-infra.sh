@@ -826,6 +826,90 @@ printf '%s=%s\n' DOLTGRES_PASSWORD "$DOLTGRES_PASSWORD" >> "$RUNTIME_ENV"
 printf '%s=%s\n' DOLTGRES_READER_PASSWORD "$DOLTGRES_READER_PASSWORD" >> "$RUNTIME_ENV"
 printf '%s=%s\n' DOLTGRES_WRITER_PASSWORD "$DOLTGRES_WRITER_PASSWORD" >> "$RUNTIME_ENV"
 
+sync_eso_doltgres_url() {
+  local node="$1" value="$2"
+  local external_secret="${node}-env-secrets"
+  local sync_root="/tmp/cogni-secret-sync"
+  local wrapper_dir jwt bao_token hash out
+
+  if ! kubectl -n "${K8S_NS}" get externalsecret "${external_secret}" >/dev/null 2>&1; then
+    return 0
+  fi
+  if [[ ! -x "${sync_root}/scripts/secrets/set-secret.sh" ]]; then
+    log_warn "  [eso-sync] ${sync_root}/scripts/secrets/set-secret.sh missing - cannot sync ${node}/DOLTGRES_URL to OpenBao"
+    return 1
+  fi
+  if ! kubectl get sa openbao-operator -n default >/dev/null 2>&1; then
+    log_warn "  [eso-sync] openbao-operator service account missing - cannot sync ${node}/DOLTGRES_URL to OpenBao"
+    return 1
+  fi
+
+  jwt=$(kubectl create token openbao-operator -n default 2>/dev/null) || {
+    log_warn "  [eso-sync] failed to mint openbao-operator token"
+    return 1
+  }
+  bao_token=$(kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
+    bao write -field=token auth/kubernetes/login \
+    "role=${DEPLOY_ENVIRONMENT}-writer" "jwt=${jwt}" 2>/dev/null) || {
+    log_warn "  [eso-sync] failed to authenticate to OpenBao writer role ${DEPLOY_ENVIRONMENT}-writer"
+    return 1
+  }
+
+  wrapper_dir=$(mktemp -d)
+  cat >"${wrapper_dir}/bao" <<'WRAPEOF'
+#!/usr/bin/env bash
+set -euo pipefail
+exec kubectl exec -i -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="${BAO_TOKEN:?}" bao "$@"
+WRAPEOF
+  chmod +x "${wrapper_dir}/bao"
+
+  out=$(mktemp)
+  if printf '%s' "${value}" | \
+    REPO_ROOT="${sync_root}" \
+    BAO_ADDR=http://127.0.0.1:8200 \
+    BAO_TOKEN="${bao_token}" \
+    PATH="${wrapper_dir}:$PATH" \
+    bash "${sync_root}/scripts/secrets/set-secret.sh" "${DEPLOY_ENVIRONMENT}" "${node}" DOLTGRES_URL >"${out}" 2>&1; then
+    hash=$(printf '%s' "${value}" | sha256sum | awk '{print $1}')
+    log_info "  [eso-sync] synced ${node}/DOLTGRES_URL to OpenBao (sha256=${hash})"
+  else
+    sed 's/^/[eso-sync] /' "${out}" >&2 || true
+    rm -rf "${wrapper_dir}" "${out}"
+    return 1
+  fi
+  rm -rf "${wrapper_dir}" "${out}"
+
+  kubectl -n "${K8S_NS}" annotate externalsecret "${external_secret}" "force-sync=$(date +%s)" --overwrite >/dev/null
+  kubectl -n "${K8S_NS}" wait --for=condition=Ready "externalsecret/${external_secret}" --timeout=120s >/dev/null
+  log_info "  [eso-sync] ${external_secret} Ready=True after forced sync"
+}
+
+sync_eso_doltgres_urls() {
+  local node db_node doltgres_url
+
+  if ! command -v kubectl >/dev/null 2>&1; then
+    return 0
+  fi
+  if [ -z "${NODE_APP_TARGETS}" ]; then
+    echo "[FATAL] NODE_APP_TARGETS empty - refusing to sync ESO Doltgres URLs" >&2
+    exit 1
+  fi
+
+  K8S_NS="cogni-${DEPLOY_ENVIRONMENT}"
+  HOST_IP=$(hostname -I | awk '{print $1}')
+  log_info "[$(date -u +%H:%M:%S)] Syncing ESO Doltgres URLs from deploy-derived runtime credentials..."
+  for node in ${NODE_APP_TARGETS}; do
+    if [ "$node" = "poly" ]; then
+      continue
+    fi
+    db_node="${node//-/_}"
+    doltgres_url="postgresql://postgres:${DOLTGRES_PASSWORD}@${HOST_IP}:5435/knowledge_${db_node}?sslmode=disable"
+    sync_eso_doltgres_url "$node" "$doltgres_url"
+  done
+}
+
+sync_eso_doltgres_urls
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Step 2: Start edge stack (idempotent - only starts if not running)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1212,64 +1296,6 @@ if command -v kubectl &>/dev/null; then
   kubectl create namespace "${K8S_NS}" 2>/dev/null || true
   HOST_IP=$(hostname -I | awk '{print $1}')
   log_info "  k8s namespace: ${K8S_NS}, host IP: ${HOST_IP}"
-
-  sync_eso_doltgres_url() {
-    local node="$1" value="$2"
-    local external_secret="${node}-env-secrets"
-    local sync_root="/tmp/cogni-secret-sync"
-    local wrapper_dir jwt bao_token hash out
-
-    if ! kubectl -n "${K8S_NS}" get externalsecret "${external_secret}" >/dev/null 2>&1; then
-      return 0
-    fi
-    if [[ ! -x "${sync_root}/scripts/secrets/set-secret.sh" ]]; then
-      log_warn "  [eso-sync] ${sync_root}/scripts/secrets/set-secret.sh missing - cannot sync ${node}/DOLTGRES_URL to OpenBao"
-      return 1
-    fi
-    if ! kubectl get sa openbao-operator -n default >/dev/null 2>&1; then
-      log_warn "  [eso-sync] openbao-operator service account missing - cannot sync ${node}/DOLTGRES_URL to OpenBao"
-      return 1
-    fi
-
-    jwt=$(kubectl create token openbao-operator -n default 2>/dev/null) || {
-      log_warn "  [eso-sync] failed to mint openbao-operator token"
-      return 1
-    }
-    bao_token=$(kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
-      bao write -field=token auth/kubernetes/login \
-      "role=${DEPLOY_ENVIRONMENT}-writer" "jwt=${jwt}" 2>/dev/null) || {
-      log_warn "  [eso-sync] failed to authenticate to OpenBao writer role ${DEPLOY_ENVIRONMENT}-writer"
-      return 1
-    }
-
-    wrapper_dir=$(mktemp -d)
-    cat >"${wrapper_dir}/bao" <<'WRAPEOF'
-#!/usr/bin/env bash
-set -euo pipefail
-exec kubectl exec -i -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="${BAO_TOKEN:?}" bao "$@"
-WRAPEOF
-    chmod +x "${wrapper_dir}/bao"
-
-    out=$(mktemp)
-    if printf '%s' "${value}" | \
-      REPO_ROOT="${sync_root}" \
-      BAO_ADDR=http://127.0.0.1:8200 \
-      BAO_TOKEN="${bao_token}" \
-      PATH="${wrapper_dir}:$PATH" \
-      bash "${sync_root}/scripts/secrets/set-secret.sh" "${DEPLOY_ENVIRONMENT}" "${node}" DOLTGRES_URL >"${out}" 2>&1; then
-      hash=$(printf '%s' "${value}" | sha256sum | awk '{print $1}')
-      log_info "  [eso-sync] synced ${node}/DOLTGRES_URL to OpenBao (sha256=${hash})"
-    else
-      sed 's/^/[eso-sync] /' "${out}" >&2 || true
-      rm -rf "${wrapper_dir}" "${out}"
-      return 1
-    fi
-    rm -rf "${wrapper_dir}" "${out}"
-
-    kubectl -n "${K8S_NS}" annotate externalsecret "${external_secret}" "force-sync=$(date +%s)" --overwrite >/dev/null
-    kubectl -n "${K8S_NS}" wait --for=condition=Ready "externalsecret/${external_secret}" --timeout=120s >/dev/null
-    log_info "  [eso-sync] ${external_secret} Ready=True after forced sync"
-  }
 
   # ── Phase-1 read-path proof: OpenBao db-reader (Invariant 15 DB-cred migration) ─
   # secrets-management.md "DB-credential provisioning" Phase 1. deploy-infra holds
