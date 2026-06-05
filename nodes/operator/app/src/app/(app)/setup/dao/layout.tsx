@@ -20,10 +20,10 @@ import { NavigationLink } from "@/components";
 
 const SETUP_TABS = [
   {
-    href: "/setup/dao",
-    label: "Formation",
+    href: "/setup/nodes",
+    label: "Nodes",
     icon: Shield,
-    match: "exact" as const,
+    match: "prefix" as const,
   },
   {
     href: "/setup/dao/payments",

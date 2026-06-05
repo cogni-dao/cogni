@@ -4,7 +4,7 @@
 /**
  * Module: `@app/(app)/setup/nodes/page`
  * Purpose: Landing page for the node setup wizard. Lists the user's in-flight + active node
- *   rows and offers a form to register a new monorepo-internal node.
+ *   rows and offers a form to register a new managed node.
  * Scope: Server component. Owner-scoped DB read; delegates create UX to client component.
  * Links: task.5083
  * @public
@@ -50,8 +50,8 @@ export default async function SetupNodesPage(): Promise<ReactElement> {
     <PageContainer maxWidth="3xl">
       <SectionCard title="Register a node">
         <p className="mb-3 text-muted-foreground text-sm">
-          Register a node and form its DAO. v0 nodes live in the Cogni-DAO/cogni
-          monorepo.
+          Register a node, form its DAO, then create its repo and deployment
+          pin.
         </p>
         <NewNodeForm />
       </SectionCard>

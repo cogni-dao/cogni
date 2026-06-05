@@ -4,8 +4,8 @@
 /**
  * Module: `@shared/db/nodes`
  * Purpose: Operator-local Drizzle schema for the externally-registered node registry.
- * Scope: Wizard working state for forks that target an external repo (cogni-poly first; private repos vNext).
- *   Monorepo nodes (operator/poly-in-monorepo/resy/node-template) are NOT registered here — they live in `infra/catalog/*.yaml`.
+ * Scope: Wizard working state for operator-managed nodes. Existing inline nodes
+ *   (operator/resy/canary/node-template) are NOT registered here — they live in `infra/catalog/*.yaml`.
  * Invariants: NODES_TABLE_SCOPE (external only), STATE_MACHINE_TOTAL, OWNER_GATING, NO_PRIVATE_KEYS.
  * Side-effects: none
  * Links: docs/spec/node-formation.md, work/projects/proj.node-formation-ui.md, task.5083
@@ -46,7 +46,7 @@ export const nodes = pgTable(
   {
     id: uuid("id").defaultRandom().primaryKey(),
     slug: text("slug").notNull().unique(),
-    // Not unique: v0 monorepo-internal nodes all share Cogni-DAO/cogni. Slug is the unique key.
+    // Parent deployment repo for the submodule pin PR. Slug is the unique node key.
     repoUrl: text("repo_url").notNull(),
     repoOwner: text("repo_owner").notNull(),
     repoName: text("repo_name").notNull(),

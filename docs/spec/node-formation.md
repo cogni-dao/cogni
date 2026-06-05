@@ -20,13 +20,13 @@ tags: [web3, setup, dao]
 
 A Cogni DAO node has three lifecycle phases with distinct trust domains:
 
-1. **Formation** — governance identity (DAO + Signal). Runs in the shared operator repo's web UI. No secrets, no operator wallet, no payment rails.
-2. **Publish** — the operator authors the node's monorepo footprint (`nodes/<slug>/**` + catalog row + per-env overlays + per-node AppSets) as a single GitHub App–authored PR, directly via the GitHub Git Data API. No GitHub Action, no human PAT. See [Node Publish](#node-publish-operator-authored-pr).
+1. **Formation** — governance identity (DAO + Signal). Starts from a DB-backed node registration row, then runs wallet-signed transactions in the shared operator repo's web UI. No secrets, no operator wallet, no payment rails.
+2. **Publish** — the operator mints the node repo and authors the submodule pin + catalog row + per-env overlays + per-node AppSets as a single GitHub App–authored PR, directly via the GitHub Git Data API. No GitHub Action, no human PAT. See [Node Publish](#node-publish-operator-authored-pr).
 3. **Payment Activation** — operator wallet + revenue split. Runs in the child node's own trust domain via CLI. The child node owns its Privy credentials and operator wallet.
 
-Formation outputs a repo-spec fragment with `payments.status: pending_activation`. Publish lands that fragment into the monorepo as a reviewable PR; once merged + flighted, the node deploys per-node (see [ci-cd.md](ci-cd.md) Axiom 18). The child node then activates payments.
+Formation persists verified on-chain addresses to the node registry row. Publish writes those addresses into the minted node repo's `.cogni/repo-spec.yaml` with `payments.status: pending_activation`, then lands the submodule deployment pin as a reviewable PR; once merged + flighted, the node deploys per-node (see [ci-cd.md](ci-cd.md) Axiom 18). The child node then activates payments.
 
-> Formation is Node-owned tooling. No Operator dependencies. Wallet signs in browser; server verifies before persisting.
+> Contract deployment is wallet-owned tooling. The operator registry must exist before transaction signing; server verification persists the formed addresses before Publish.
 > Payment activation belongs to the child node's trust domain. The shared operator repo never creates or controls child wallets.
 
 ### The Blessed Path (wizard → monorepo → flight → ongoing CI/CD)
@@ -34,7 +34,7 @@ Formation outputs a repo-spec fragment with `payments.status: pending_activation
 The phases above are the blessed path for a node born **into the Cogni monorepo**, riding shared CI/CD:
 
 ```
-Formation (wizard) → Publish (operator PR) → Flight (candidate-a) → Ongoing (per-node deploy branch + Argo)
+Register (DB row) → Formation (wallet txs) → Publish (repo + operator PR) → Flight (candidate-a) → Ongoing (per-node deploy branch + Argo)
 ```
 
 This is distinct from a **standalone fork** — a solo operator who wants their own full instance on their own VM forks `Cogni-DAO/standalone-node` and follows [`fork-quickstart.md`](../runbooks/fork-quickstart.md). Two repos, two intents:
@@ -48,7 +48,7 @@ This is distinct from a **standalone fork** — a solo operator who wants their 
 
 ## Goal
 
-Enable any founder to create a fully-verified Cogni DAO node via a 3-field web form and 2 wallet transactions, then activate payment rails via a single CLI command in their own fork.
+Enable any founder to register a node, form a fully-verified Cogni DAO via wallet transactions, publish the node repo/deployment pin, then activate payment rails in the child node's own trust domain.
 
 ## Non-Goals
 
@@ -386,29 +386,31 @@ Payment activation runs in the child node's own repo after formation + infra set
 
 ### File Pointers
 
-| File                                                    | Purpose                                                |
-| ------------------------------------------------------- | ------------------------------------------------------ |
-| `packages/aragon-osx/src/aragon.ts`                     | OSx address constants (BASE + SEPOLIA only)            |
-| `packages/aragon-osx/src/encoding.ts`                   | TokenVoting struct encoding (viem, v1.3/v1.4 support)  |
-| `packages/aragon-osx/src/osx/events.ts`                 | OSx event ABIs + topic constants                       |
-| `packages/aragon-osx/src/osx/receipt.ts`                | Strict receipt decoders (throws if events not found)   |
-| `packages/aragon-osx/src/osx/version.ts`                | Pinned OSx version constants                           |
-| `src/shared/web3/node-formation/aragon-abi.ts`          | Minimal ABIs: DAOFactory, TokenVoting, GovernanceERC20 |
-| `src/shared/web3/node-formation/bytecode.ts`            | CogniSignal bytecode + ABI                             |
-| `src/features/setup/daoFormation/formation.reducer.ts`  | Pure reducer + types (state machine)                   |
-| `src/features/setup/daoFormation/txBuilders.ts`         | Pure tx argument builders                              |
-| `src/features/setup/daoFormation/api.ts`                | Server verification API client                         |
-| `src/features/setup/hooks/useAragonPreflight.ts`        | Preflight validation hook                              |
-| `src/features/setup/hooks/useDAOFormation.ts`           | Thin wiring layer (wagmi → reducer)                    |
-| `src/app/api/setup/verify/route.ts`                     | Server derives addresses from receipts, verifies state |
-| `src/contracts/setup.verify.v1.contract.ts`             | Zod schemas for verify request/response                |
-| `src/app/(app)/setup/dao/page.tsx`                      | Wizard entry point                                     |
-| `src/app/(app)/setup/dao/DAOFormationPage.client.tsx`   | Client component with form + flow orchestration        |
-| `src/features/setup/components/FormationFlowDialog.tsx` | Modal dialog for progress/success/error states         |
-| `scripts/node-activate-payments.ts`                     | Payment activation CLI (child node)                    |
-| `scripts/provision-operator-wallet.ts`                  | Standalone Privy wallet provisioning                   |
-| `scripts/deploy-split.ts`                               | Standalone Split deployment                            |
-| `docs/guides/operator-wallet-setup.md`                  | Operator wallet + payment activation guide             |
+| File                                                              | Purpose                                                |
+| ----------------------------------------------------------------- | ------------------------------------------------------ |
+| `packages/aragon-osx/src/aragon.ts`                               | OSx address constants (BASE + SEPOLIA only)            |
+| `packages/aragon-osx/src/encoding.ts`                             | TokenVoting struct encoding (viem, v1.3/v1.4 support)  |
+| `packages/aragon-osx/src/osx/events.ts`                           | OSx event ABIs + topic constants                       |
+| `packages/aragon-osx/src/osx/receipt.ts`                          | Strict receipt decoders (throws if events not found)   |
+| `packages/aragon-osx/src/osx/version.ts`                          | Pinned OSx version constants                           |
+| `src/shared/web3/node-formation/aragon-abi.ts`                    | Minimal ABIs: DAOFactory, TokenVoting, GovernanceERC20 |
+| `src/shared/web3/node-formation/bytecode.ts`                      | CogniSignal bytecode + ABI                             |
+| `src/features/setup/daoFormation/formation.reducer.ts`            | Pure reducer + types (state machine)                   |
+| `src/features/setup/daoFormation/txBuilders.ts`                   | Pure tx argument builders                              |
+| `src/features/setup/daoFormation/api.ts`                          | Server verification API client                         |
+| `src/features/setup/hooks/useAragonPreflight.ts`                  | Preflight validation hook                              |
+| `src/features/setup/hooks/useDAOFormation.ts`                     | Thin wiring layer (wagmi → reducer)                    |
+| `src/app/api/setup/verify/route.ts`                               | Server derives addresses from receipts, verifies state |
+| `src/contracts/setup.verify.v1.contract.ts`                       | Zod schemas for verify request/response                |
+| `src/app/(app)/setup/nodes/page.tsx`                              | DB-backed wizard entry point                           |
+| `src/app/(app)/setup/nodes/[id]/page.tsx`                         | Canonical per-node setup page                          |
+| `src/app/(app)/setup/nodes/[id]/NodeDaoFormationPanel.client.tsx` | Client component with form + flow orchestration        |
+| `src/app/(app)/setup/dao/page.tsx`                                | Legacy redirect to `/setup/nodes`                      |
+| `src/features/setup/components/FormationFlowDialog.tsx`           | Modal dialog for progress/success/error states         |
+| `scripts/node-activate-payments.ts`                               | Payment activation CLI (child node)                    |
+| `scripts/provision-operator-wallet.ts`                            | Standalone Privy wallet provisioning                   |
+| `scripts/deploy-split.ts`                                         | Standalone Split deployment                            |
+| `docs/guides/operator-wallet-setup.md`                            | Operator wallet + payment activation guide             |
 
 ### Appendix: Aragon OSx Addresses
 

@@ -84,7 +84,7 @@ export default async function NodeDashboardPage({
     ...(node.publishPrUrl
       ? [
           {
-            label: "Governance PR",
+            label: "Deployment PR",
             value: node.publishPrUrl,
             href: node.publishPrUrl,
           },
@@ -112,7 +112,7 @@ export default async function NodeDashboardPage({
             target="_blank"
             rel="noopener noreferrer"
           >
-            View governance PR →
+            View deployment PR →
           </a>
         ) : null}
         {node.failureReason ? (

@@ -3,10 +3,10 @@
 
 /**
  * Module: `@app/(app)/setup/nodes/NewNodeForm.client`
- * Purpose: Form to register a new monorepo-internal node. Calls POST /api/v1/nodes with a slug + chain
+ * Purpose: Form to register a new managed node. Calls POST /api/v1/nodes with a slug + chain
  *   and routes the user to the dashboard for the freshly-created row.
- * Scope: Pure client form. v0 nodes live at `nodes/<slug>/` in the Cogni-DAO/cogni monorepo. The
- *   "standalone external repo" option is rendered disabled with a vNext label.
+ * Scope: Pure client form. Managed nodes get their own repo, pinned into the operator at
+ *   `nodes/<slug>/`. The "standalone external operator" option is rendered disabled with a vNext label.
  * Links: task.5083
  * @public
  */
@@ -68,8 +68,7 @@ export function NewNodeForm(): ReactElement {
             checked={target === "monorepo"}
             onChange={() => setTarget("monorepo")}
           />
-          Monorepo node — lives at <code>nodes/&lt;slug&gt;/</code> in
-          Cogni-DAO/cogni
+          Managed node — own repo pinned at <code>nodes/&lt;slug&gt;/</code>
         </label>
         <label className="flex items-center gap-2 text-muted-foreground text-sm">
           <input
@@ -79,7 +78,7 @@ export function NewNodeForm(): ReactElement {
             disabled
             checked={target === "external"}
           />
-          Standalone external repo — vNext
+          Standalone external operator — vNext
         </label>
       </fieldset>
 

@@ -61,7 +61,7 @@ export function NodeActionPanel({ nodeId, status }: Props): ReactElement {
           disabled={submitting}
           onClick={() => postAction(`/api/v1/nodes/${nodeId}/publish`)}
         >
-          {submitting ? "Scaffolding…" : "Open node-app PR"}
+          {submitting ? "Creating repo…" : "Create node repo PR"}
         </Button>
       );
       break;

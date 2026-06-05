@@ -29,7 +29,9 @@ Web pages for DAO formation and node configuration workflows. Protected route gr
 ## Public Surface
 
 - **Routes:**
-  - `/setup/dao` [GET] - DAO formation wizard (wallet-signed transactions)
+  - `/setup/nodes` [GET] - DB-backed node registration + formation wizard
+  - `/setup/nodes/[id]` [GET] - canonical per-node setup wizard
+  - `/setup/dao` [GET] - legacy redirect to `/setup/nodes`
 - **Exports:** none (page components only)
 
 ## Responsibilities
@@ -41,7 +43,7 @@ Web pages for DAO formation and node configuration workflows. Protected route gr
 
 ```bash
 # Access page (requires running dev server + wallet connection)
-open http://localhost:3000/setup/dao
+open http://localhost:3000/setup/nodes
 ```
 
 ## Standards
