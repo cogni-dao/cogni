@@ -33,8 +33,6 @@ import {
 import { fetchGraph } from "../_api/fetchGraph";
 import { KnowledgeDetail } from "./KnowledgeDetail";
 
-type ColorMode = "domain" | "type" | "confidence";
-
 interface GraphNodeObject {
   id: string;
   isHub: boolean;
@@ -88,46 +86,6 @@ const ForceGraph3D = dynamic(() => import("react-force-graph-3d"), {
   ),
 }) as unknown as ComponentType<ForceGraph3DProps>;
 
-// Fixed colors for the operator base domains; extension domains hash into a ramp.
-const BASE_DOMAIN_COLOR: Record<string, string> = {
-  meta: "#a78bfa",
-  nodes: "#34d399",
-  infrastructure: "#fbbf24",
-  governance: "#f472b6",
-};
-const EXTENSION_PALETTE = [
-  "#6ea8fe",
-  "#2dd4bf",
-  "#c084fc",
-  "#f97316",
-  "#22d3ee",
-  "#e879f9",
-];
-function domainColor(domain: string): string {
-  const base = BASE_DOMAIN_COLOR[domain];
-  if (base) return base;
-  let h = 0;
-  for (let i = 0; i < domain.length; i++) {
-    h = (h * 31 + domain.charCodeAt(i)) | 0;
-  }
-  return EXTENSION_PALETTE[Math.abs(h) % EXTENSION_PALETTE.length] ?? "#6ea8fe";
-}
-
-const TYPE_COLOR: Record<string, string> = {
-  finding: "#6ea8fe",
-  observation: "#7dd3fc",
-  conclusion: "#a78bfa",
-  rule: "#c084fc",
-  scorecard: "#fbbf24",
-  skill: "#34d399",
-  guide: "#2dd4bf",
-  html: "#f472b6",
-  hypothesis: "#fbbf24",
-  decision: "#6ea8fe",
-  outcome: "#34d399",
-  event: "#9aa0aa",
-};
-
 // Mirrors ChainPanel.tsx chipFor() edge semantics.
 const CITE_COLOR: Record<string, string> = {
   supports: "#34d399",
@@ -140,16 +98,16 @@ const CITE_COLOR: Record<string, string> = {
   invalidates: "#f87171",
 };
 
+// Confidence → hue ramp across the red→green arc of the HSL wheel:
+// hue = pct * 1.2, so 0 = red, ~30 = orange, ~50 = yellow, 100 = green.
 function confidenceColor(pct: number): string {
-  const t = Math.max(0, Math.min(100, pct)) / 100;
-  const r = t < 0.5 ? 248 : Math.round(248 - (248 - 52) * (t - 0.5) * 2);
-  const g =
-    t < 0.5
-      ? Math.round(113 + (191 - 113) * t * 2)
-      : Math.round(191 + (211 - 191) * (t - 0.5) * 2);
-  const b = t < 0.5 ? 113 : Math.round(113 + (153 - 113) * (t - 0.5) * 2);
-  return `rgb(${r},${g},${b})`;
+  const p = Math.max(0, Math.min(100, pct));
+  return `hsl(${Math.round(p * 1.2)}, 80%, 55%)`;
 }
+
+// Domain hubs are structural anchors, not a classifier — render them neutral so
+// the entries' confidence hue is the only color signal.
+const HUB_COLOR = "#94a3b8";
 
 export function GraphView({ rows }: { readonly rows: KnowledgeRow[] }) {
   const graphQuery = useQuery({
@@ -158,7 +116,6 @@ export function GraphView({ rows }: { readonly rows: KnowledgeRow[] }) {
     staleTime: 30_000,
   });
 
-  const [colorMode, setColorMode] = useState<ColorMode>("domain");
   const [showHubs, setShowHubs] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
@@ -214,16 +171,10 @@ export function GraphView({ rows }: { readonly rows: KnowledgeRow[] }) {
     return { nodes: [...hubs, ...entries], links };
   }, [graphQuery.data, showHubs]);
 
-  const nodeColor = useCallback(
-    (node: GraphNodeObject) => {
-      if (node.isHub) return domainColor(node.domain);
-      if (colorMode === "domain") return domainColor(node.domain);
-      if (colorMode === "type")
-        return TYPE_COLOR[node.entryType ?? ""] ?? "#888";
-      return confidenceColor(node.confidencePct ?? 0);
-    },
-    [colorMode]
-  );
+  const nodeColor = useCallback((node: GraphNodeObject) => {
+    if (node.isHub) return HUB_COLOR;
+    return confidenceColor(node.confidencePct ?? 40);
+  }, []);
 
   const nodeVal = useCallback((node: GraphNodeObject) => {
     if (node.isHub) return 22;
@@ -274,22 +225,9 @@ export function GraphView({ rows }: { readonly rows: KnowledgeRow[] }) {
   return (
     <>
       <div className="flex flex-wrap items-center gap-3">
-        <div className="inline-flex items-center rounded-lg border border-border/60 bg-muted/40 p-0.5">
-          {(["domain", "type", "confidence"] as const).map((m) => (
-            <button
-              key={m}
-              type="button"
-              onClick={() => setColorMode(m)}
-              className={`rounded-md px-3 py-1 text-xs capitalize transition-colors ${
-                colorMode === m
-                  ? "bg-background font-medium text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              {m}
-            </button>
-          ))}
-        </div>
+        <span className="text-muted-foreground text-xs">
+          Node color = confidence (red → green)
+        </span>
         <label className="flex cursor-pointer items-center gap-2 text-muted-foreground text-xs">
           <input
             type="checkbox"
@@ -335,10 +273,7 @@ export function GraphView({ rows }: { readonly rows: KnowledgeRow[] }) {
             onNodeClick={onNodeClick}
           />
         )}
-        <GraphLegend
-          colorMode={colorMode}
-          edges={graphQuery.data?.edges ?? []}
-        />
+        <GraphLegend edges={graphQuery.data?.edges ?? []} />
       </div>
 
       <KnowledgeDetail
@@ -354,50 +289,30 @@ export function GraphView({ rows }: { readonly rows: KnowledgeRow[] }) {
 }
 
 function GraphLegend({
-  colorMode,
   edges,
 }: {
-  readonly colorMode: ColorMode;
   readonly edges: ReadonlyArray<{ citationType: string }>;
 }) {
-  const nodeMap =
-    colorMode === "domain"
-      ? BASE_DOMAIN_COLOR
-      : colorMode === "type"
-        ? TYPE_COLOR
-        : null;
   const citeTypes = [...new Set(edges.map((e) => e.citationType))];
+  const ramp = [0, 25, 50, 75, 100];
   return (
     <div className="absolute bottom-3 left-3 max-w-[220px] rounded-lg border border-border/60 bg-background/80 p-3 backdrop-blur">
       <p className="mb-1.5 font-medium text-[10px] text-muted-foreground uppercase tracking-wider">
-        Nodes — {colorMode}
+        Confidence
       </p>
-      {nodeMap ? (
-        Object.entries(nodeMap)
-          .slice(0, 8)
-          .map(([k, v]) => (
-            <div key={k} className="flex items-center gap-2 text-xs">
-              <span
-                className="size-2.5 rounded-full"
-                style={{ backgroundColor: v }}
-              />
-              {k}
-            </div>
-          ))
-      ) : (
-        <div className="flex items-center gap-1.5 text-xs">
-          <span
-            className="size-2.5 rounded-full"
-            style={{ backgroundColor: confidenceColor(20) }}
-          />
-          low →
-          <span
-            className="size-2.5 rounded-full"
-            style={{ backgroundColor: confidenceColor(90) }}
-          />
-          high
-        </div>
-      )}
+      <div className="flex items-center gap-2 text-xs">
+        <span className="text-muted-foreground">0</span>
+        <span className="flex">
+          {ramp.map((p) => (
+            <span
+              key={p}
+              className="size-2.5"
+              style={{ backgroundColor: confidenceColor(p) }}
+            />
+          ))}
+        </span>
+        <span className="text-muted-foreground">100</span>
+      </div>
       {citeTypes.length > 0 && (
         <>
           <p className="mt-2 mb-1.5 font-medium text-[10px] text-muted-foreground uppercase tracking-wider">
