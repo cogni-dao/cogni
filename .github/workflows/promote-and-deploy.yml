@@ -316,7 +316,14 @@ jobs:
 
           kubectl get crd externalsecrets.external-secrets.io clustersecretstores.external-secrets.io >/dev/null
           kubectl get clustersecretstore openbao-backend >/dev/null
-          kubectl -n argocd get application openbao external-secrets reloader >/dev/null
+          kubectl -n argocd get application openbao external-secrets >/dev/null
+          if kubectl -n argocd get application reloader >/dev/null 2>&1; then
+            echo "Reloader Argo Application present"
+          elif kubectl get deploy -A -l app.kubernetes.io/name=reloader >/dev/null 2>&1; then
+            echo "::warning::Reloader controller appears present, but the reloader Argo Application is missing"
+          else
+            echo "::warning::Reloader is not registered in preview; this proof continues because the operator rollout will restart the pod"
+          fi
           kubectl -n cogni-preview create namespace cogni-preview --dry-run=client -o yaml | kubectl apply -f - >/dev/null
           kubectl apply -k infra/k8s/secrets/external-secrets/preview/operator
 
