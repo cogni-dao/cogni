@@ -17,6 +17,7 @@
 import type {
   AiEvent,
   AiExecutionErrorCode,
+  AutoresearchRunSpec,
   ToolExecFn,
   ToolSpec,
 } from "@cogni/ai-core";
@@ -90,6 +91,7 @@ export interface InProcGraphRequest {
   readonly configurable: {
     readonly model: string;
     readonly toolIds?: readonly string[];
+    readonly autoresearch?: AutoresearchRunSpec;
   };
 }
 

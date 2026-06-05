@@ -15,6 +15,16 @@
 export { SOURCE_SYSTEMS, type SourceSystem } from "./billing/source-system";
 // Configurable types
 export {
+  AUTORESEARCH_RUN_SPEC_VERSION,
+  AutoresearchMemoryLayerSchema,
+  AutoresearchMutableSurfaceSchema,
+  AutoresearchRewardSourceSchema,
+  type AutoresearchRunSpec,
+  AutoresearchRunSpecSchema,
+  AutoresearchSelectionPolicySchema,
+  AutoresearchStopCriterionSchema,
+} from "./configurable/autoresearch-run-spec";
+export {
   type GraphRunConfig,
   GraphRunConfigSchema,
   type PartialGraphRunConfig,
