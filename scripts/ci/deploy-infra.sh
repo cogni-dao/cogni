@@ -16,6 +16,9 @@
 #                      config to the VM.
 #     --dry-run        Validate config + worktree resolution, print planned
 #                      actions, exit 0 without any SSH.
+#     --k8s-secrets-only
+#                      Update k8s app secrets + roll pods without touching
+#                      Compose infra. Bridge mode until pods consume ESO.
 # Invariants:
 #   - DEPLOY_ENVIRONMENT must be set to 'candidate-a', 'preview', or 'production'
 #     (legacy 'canary' value is still accepted for backward compatibility during
@@ -40,10 +43,13 @@ set -euo pipefail
 #                  This is the INFRA_REF_IS_EXPLICIT invariant (task.0314).
 # --dry-run        Resolve the source worktree and print planned actions
 #                  (rsync source, VM target, services) without any SSH.
+# --k8s-secrets-only
+#                  Update k8s app secrets + roll pods without touching Compose.
 REF="main"
 DRY_RUN=false
+K8S_SECRETS_ONLY=false
 usage() {
-  echo "Usage: $0 [--ref <git-ref>] [--dry-run]" >&2
+  echo "Usage: $0 [--ref <git-ref>] [--dry-run] [--k8s-secrets-only]" >&2
   exit 2
 }
 while [[ $# -gt 0 ]]; do
@@ -66,6 +72,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --dry-run)
       DRY_RUN=true
+      shift
+      ;;
+    --k8s-secrets-only)
+      K8S_SECRETS_ONLY=true
       shift
       ;;
     *)
@@ -828,6 +838,8 @@ printf '%s=%s\n' DOLTGRES_PASSWORD "$DOLTGRES_PASSWORD" >> "$RUNTIME_ENV"
 printf '%s=%s\n' DOLTGRES_READER_PASSWORD "$DOLTGRES_READER_PASSWORD" >> "$RUNTIME_ENV"
 printf '%s=%s\n' DOLTGRES_WRITER_PASSWORD "$DOLTGRES_WRITER_PASSWORD" >> "$RUNTIME_ENV"
 
+if [[ "${K8S_SECRETS_ONLY:-false}" != "true" ]]; then
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Step 2: Start edge stack (idempotent - only starts if not running)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1224,6 +1236,10 @@ if command -v kubectl &>/dev/null; then
   probe_dependency "redis" "$(hostname -I | awk '{print $1}')" "6379"
 fi
 
+else
+  log_info "K8s-secrets-only mode: skipping Compose infra reconcile"
+fi
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Step 7: Create/update k8s secrets + rolling restart (bridge — task.0284 replaces)
 # k3s is on the same VM; kubectl is available. deploy-infra has ALL secrets
@@ -1468,6 +1484,11 @@ else
   log_warn "kubectl not found — skipping k8s secret creation (k3s may not be installed)"
 fi
 
+if [[ "${K8S_SECRETS_ONLY:-false}" == "true" ]]; then
+  log_info "K8s-secrets-only mode complete"
+  exit 0
+fi
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Step 7b: Argo CD Image Updater — secrets + controller reconcile (bug.0344)
 #
@@ -1687,7 +1708,7 @@ REMOTE_ENV_VARS=(
   POLY_WALLET_AEAD_KEY_HEX POLY_WALLET_AEAD_KEY_ID POLY_CLOB_GEO_BLOCK_TOKEN
   CONNECTIONS_ENCRYPTION_KEY COGNI_NODE_DBS NODE_APP_TARGETS EDGE_ENV_LINES
   LITELLM_NODE_ENDPOINTS COGNI_DEFAULT_NODE_ID ACTIONS_AUTOMATION_BOT_PAT
-  LITELLM_IMAGE COMMIT_SHA DEPLOY_ACTOR
+  LITELLM_IMAGE COMMIT_SHA DEPLOY_ACTOR K8S_SECRETS_ONLY
 )
 REMOTE_ENV_FILE="$ARTIFACT_DIR/deploy-infra-env.sh"
 : > "$REMOTE_ENV_FILE"
