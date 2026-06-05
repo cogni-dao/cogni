@@ -23,7 +23,6 @@ import { Octokit } from "@octokit/core";
 import {
   insertAppsetKustomization,
   insertCaddyBlock,
-  insertSchedulerEndpoint,
   nextFreeNodePort,
   renderCatalog,
   renderGitmodules,
@@ -120,7 +119,6 @@ const CONTAINER_PORT = 3200;
 const FOOTPRINT = {
   caddyfile: "infra/compose/edge/configs/Caddyfile.tmpl",
   ciYaml: ".github/workflows/ci.yaml",
-  schedulerConfigmap: "infra/k8s/base/scheduler-worker/configmap.yaml",
   argocdKustomization: "infra/k8s/argocd/kustomization.yaml",
 } as const;
 
@@ -533,11 +531,11 @@ export class GitHubRepoWriter {
     octokit: Octokit,
     owner: string,
     repo: string,
-    input: OpenNodeAppPrInput,
+    input: OpenNodeAppPrInput | OpenNodeSubmodulePrInput,
     port: number,
     nodePort: number
   ): Promise<GitTreeEntry[]> {
-    const { slug, nodeId } = input;
+    const { slug } = input;
     const entries: GitTreeEntry[] = [];
 
     const addBlob = async (path: string, content: string): Promise<void> => {
@@ -546,9 +544,11 @@ export class GitHubRepoWriter {
     };
 
     // catalog/<slug>.yaml — brand-new file (no current content to thread).
+    const catalogInput =
+      "nodeRepoUrl" in input ? { sourceRepo: input.nodeRepoUrl } : {};
     await addBlob(
       `infra/catalog/${slug}.yaml`,
-      renderCatalog(slug, port, nodePort)
+      renderCatalog(slug, port, nodePort, catalogInput)
     );
 
     // overlays×3 — per birth env.
@@ -592,7 +592,7 @@ export class GitHubRepoWriter {
       insertAppsetKustomization(argocdKustomization, slug, NODE_BIRTH_ENVS)
     );
 
-    // Caddyfile / ci.yaml / scheduler configmap / lockfile — single-file splices over main.
+    // Caddyfile / ci.yaml / lockfile — single-file splices over main.
     const caddyfile = await this.readFileOnMain(
       octokit,
       owner,
@@ -610,16 +610,11 @@ export class GitHubRepoWriter {
     // misclassifies as node-domain and single-node-scope false-fails. With no filter the
     // gitlink falls to operator's `**`. Mirrors render-scope-filters.sh's submodule skip.
 
-    const configmap = await this.readFileOnMain(
-      octokit,
-      owner,
-      repo,
-      FOOTPRINT.schedulerConfigmap
-    );
-    await addBlob(
-      FOOTPRINT.schedulerConfigmap,
-      insertSchedulerEndpoint(configmap, slug, nodeId)
-    );
+    // No scheduler-worker endpoint splice yet: a submodule node's identity lives in the
+    // minted repo's `.cogni/repo-spec.yaml`, not in the parent checkout. The parent
+    // renderer skips `.gitmodules` nodes until the catalog -> NodeRegistry metadata
+    // projection lands, so inserting this endpoint here would make the generated PR fail
+    // the scheduler endpoint drift check.
 
     // No pnpm-lock.yaml: a submodule node is not a workspace member of the operator monorepo — its
     // packages resolve in its own repo + lockfile. (The single biggest chunk of inline-only tax.)
@@ -751,9 +746,9 @@ export class GitHubRepoWriter {
     const title = `feat(node): bootstrap node-app for ${slug}`;
     const body =
       `Operator-authored node-birth PR for \`${slug}\` (App-direct via Git Data API).\n\n` +
-      "Adds the node subtree (cloned from node-template, identity regenerated, secrets-catalog + " +
-      "external-secrets stripped) plus the catalog entry, overlays×3, AppSet stanzas×3, Caddyfile, " +
-      "ci.yaml scope filter, scheduler endpoints, and pnpm-lock importers.";
+      "Pins the minted node repo as a submodule and adds the operator-owned deployment footprint: " +
+      "catalog entry, overlays×3, AppSet stanzas×3, and edge route. The node source, CI, review " +
+      "rules, and image build live in the minted node repo.";
     try {
       const { data: pr } = await octokit.request(
         "POST /repos/{owner}/{repo}/pulls",

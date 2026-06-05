@@ -73,6 +73,10 @@ FULL_TARGETS='[
   {"target":"node-template-migrator","digest":"sha256:ee02"},
   {"target":"scheduler-worker","digest":"sha256:dd01"}
 ]'
+MIXED_SOURCE_TARGETS='[
+  {"target":"operator","digest":"sha256:aa01","source_sha":"1111111111111111111111111111111111111111"},
+  {"target":"resy","digest":"sha256:cc01","source_sha":"2222222222222222222222222222222222222222"}
+]'
 EMPTY_TARGETS='[]'
 
 run_case() {
@@ -121,6 +125,17 @@ run_case() {
     ok=0
   fi
 
+  if [ "$name" = "mixed-source-sha" ]; then
+    python3 - "$case_dir/.promote-state/source-sha-by-app.json" <<'PY'
+import json
+import sys
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    data = json.load(handle)
+assert data["operator"] == "1111111111111111111111111111111111111111", data
+assert data["resy"] == "2222222222222222222222222222222222222222", data
+PY
+  fi
+
   if [ "$rc" != "$expect_rc" ]; then
     echo "[FAIL] case=$name expected rc=$expect_rc got=$rc"
     ok=0
@@ -146,6 +161,10 @@ run_case "map-script-failing" "/bin/false" "$FULL_TARGETS" "node-template,operat
 # verify-candidate's job-level gate skips legitimately and release-slot
 # treats it as a green no-op.
 run_case "empty-payload" "$UPDATE_MAP" "$EMPTY_TARGETS" "" "no" 0
+
+# Case 4 — payload item source_sha overrides the envelope source_sha, so a
+# mixed parent/child flight writes per-artifact provenance.
+run_case "mixed-source-sha" "$UPDATE_MAP" "$MIXED_SOURCE_TARGETS" "operator,resy" "yes" 0
 
 cd "$REPO_ROOT"
 if [ "$FAILED" -gt 0 ]; then

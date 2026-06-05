@@ -25,7 +25,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  IMAGE_NAME: ghcr.io/cogni-dao/cogni-template
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/cogni-template
   SLOT: candidate-a
   OVERLAY_ENV: candidate-a
 
@@ -39,8 +39,9 @@ jobs:
       digests_json: ${{ steps.images.outputs.digests_json }}
       targets_json: ${{ steps.detect.outputs.targets_json }}
       has_targets: ${{ steps.detect.outputs.has_targets }}
-      flight_targets_json: ${{ steps.detect.outputs.flight_targets_json }}
-      has_flight_targets: ${{ steps.detect.outputs.has_flight_targets }}
+      flight_targets_json: ${{ steps.flight-targets.outputs.flight_targets_json }}
+      has_flight_targets: ${{ steps.flight-targets.outputs.has_flight_targets }}
+      has_image_inputs: ${{ steps.flight-targets.outputs.has_image_inputs }}
       needs_infra: ${{ steps.birth.outputs.needs_infra }}
     steps:
       - name: Checkout workflow source
@@ -102,9 +103,12 @@ jobs:
           # renaming nodes/A/x.ts → nodes/B/x.ts only rebuilds B).
           gh api --paginate "repos/${{ github.repository }}/pulls/${PR_NUMBER}/files" \
             --jq '.[] | (.filename, .previous_filename) | select(. != null)' > "$OUT"
+          gh api --paginate "repos/${{ github.repository }}/pulls/${PR_NUMBER}/files" \
+            --jq '.[] | select(.status == "added") | .filename' > "${OUT%.txt}-added.txt"
           COUNT=$(wc -l < "$OUT" | tr -d ' ')
           echo "ℹ️  PR #${PR_NUMBER} changed ${COUNT} path(s) (per GitHub API)"
           echo "changed_paths_file=$OUT" >> "$GITHUB_OUTPUT"
+          echo "added_paths_file=${OUT%.txt}-added.txt" >> "$GITHUB_OUTPUT"
 
       - name: Detect affected nodes
         id: detect
@@ -112,6 +116,36 @@ jobs:
         env:
           CHANGED_PATHS_FILE: ${{ steps.pr-files.outputs.changed_paths_file }}
         run: bash scripts/ci/detect-affected.sh
+
+      - name: Detect submodule births
+        id: submodule-births
+        working-directory: app-src
+        env:
+          ADDED_PATHS_FILE: ${{ steps.pr-files.outputs.added_paths_file }}
+          OUTPUT_FILE: ${{ runner.temp }}/submodule-births.json
+        run: bash scripts/ci/detect-submodule-births.sh
+
+      - name: Combine flight targets
+        id: flight-targets
+        env:
+          NORMAL_FLIGHT_TARGETS_JSON: ${{ steps.detect.outputs.flight_targets_json }}
+          SUBMODULE_BIRTH_TARGETS_JSON: ${{ steps.submodule-births.outputs.submodule_birth_targets_json }}
+          HAS_PARENT_TARGETS: ${{ steps.detect.outputs.has_targets }}
+          HAS_SUBMODULE_BIRTHS: ${{ steps.submodule-births.outputs.has_submodule_births }}
+        run: |
+          set -euo pipefail
+          combined=$(python3 -c 'import json, os; items = json.loads(os.environ["NORMAL_FLIGHT_TARGETS_JSON"] or "[]") + json.loads(os.environ["SUBMODULE_BIRTH_TARGETS_JSON"] or "[]"); out = []; seen = set(); [out.append(item) or seen.add(item) for item in items if item not in seen]; print(json.dumps(out))')
+          csv=$(python3 -c 'import json, sys; print(",".join(json.loads(sys.argv[1])))' "$combined")
+          has_flight_targets=false
+          [ "$combined" != "[]" ] && has_flight_targets=true
+          has_image_inputs=false
+          if [ "$HAS_PARENT_TARGETS" = "true" ] || [ "$HAS_SUBMODULE_BIRTHS" = "true" ]; then
+            has_image_inputs=true
+          fi
+          echo "flight_targets_json=$combined" >> "$GITHUB_OUTPUT"
+          echo "flight_targets=$csv" >> "$GITHUB_OUTPUT"
+          echo "has_flight_targets=$has_flight_targets" >> "$GITHUB_OUTPUT"
+          echo "has_image_inputs=$has_image_inputs" >> "$GITHUB_OUTPUT"
 
       # Node BIRTH detection (mochi gap): a flight that ADDS a new
       # infra/catalog/<slug>.yaml is bringing a brand-new node online, so its
@@ -143,11 +177,11 @@ jobs:
           fi
 
       - name: Set up Docker Buildx
-        if: steps.detect.outputs.has_targets == 'true'
+        if: steps.flight-targets.outputs.has_image_inputs == 'true'
         uses: docker/setup-buildx-action@v3
 
       - name: Login to GHCR
-        if: steps.detect.outputs.has_targets == 'true'
+        if: steps.flight-targets.outputs.has_image_inputs == 'true'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -156,22 +190,23 @@ jobs:
 
       - name: Resolve PR image digests
         id: images
-        if: steps.detect.outputs.has_targets == 'true'
+        if: steps.flight-targets.outputs.has_image_inputs == 'true'
         working-directory: app-src
         env:
           IMAGE_TAG: ${{ steps.meta.outputs.image_tag }}
           SOURCE_SHA: ${{ steps.meta.outputs.head_sha }}
+          SUBMODULE_BIRTHS_FILE: ${{ runner.temp }}/submodule-births.json
           OUTPUT_FILE: ${{ runner.temp }}/resolved-pr-images.json
         run: bash scripts/ci/resolve-pr-build-images.sh
 
       - name: Require at least one built image
-        if: steps.detect.outputs.has_targets == 'true' && steps.images.outputs.has_images != 'true'
+        if: steps.flight-targets.outputs.has_image_inputs == 'true' && steps.images.outputs.has_images != 'true'
         run: |
           echo "::error::No pushed PR images found for ${{ steps.meta.outputs.image_tag }}"
           exit 1
 
       - name: Upload resolved-pr-images artifact
-        if: steps.detect.outputs.has_targets == 'true'
+        if: steps.flight-targets.outputs.has_image_inputs == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: resolved-pr-images

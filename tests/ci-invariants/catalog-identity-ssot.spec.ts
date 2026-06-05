@@ -7,20 +7,22 @@
  * Scope: Static structural test that reads catalog + repo-spec files; does not shell out, build, or hit the network.
  * Invariants:
  *   NO_CATALOG_NODE_ID: no catalog entry may carry a `node_id` key (deploy-shape ≠ identity).
- *   EVERY_NODE_HAS_REPO_SPEC_ID: every `type: node` catalog entry has a repo-spec with a UUID `node_id`.
+ *   EVERY_INLINE_NODE_HAS_REPO_SPEC_ID: every inline `type: node` catalog entry has a repo-spec
+ *     with a UUID `node_id`; submodule pins are external identities.
  * Side-effects: IO (reads infra/catalog/*.yaml and nodes/<name>/.cogni/repo-spec.yaml)
  * Links: scripts/ci/lib/image-tags.sh, infra/catalog/_schema.json, docs/spec/ci-cd.md (axiom 16),
  *        docs/spec/billing-evolution.md, ROADMAP.md ("Repo-Spec Authority")
  * @public
  */
 
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import yaml from "yaml";
 
 const REPO_ROOT = path.resolve(__dirname, "../..");
 const CATALOG_DIR = path.join(REPO_ROOT, "infra/catalog");
+const GITMODULES_PATH = path.join(REPO_ROOT, ".gitmodules");
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 interface CatalogEntry {
@@ -42,8 +44,19 @@ function listCatalogEntries(): { file: string; entry: CatalogEntry }[] {
     }));
 }
 
+function listSubmodulePrefixes(): Set<string> {
+  if (!existsSync(GITMODULES_PATH)) return new Set();
+  const prefixes = new Set<string>();
+  for (const line of readFileSync(GITMODULES_PATH, "utf8").split("\n")) {
+    const match = line.match(/^\s*path\s*=\s*(nodes\/[^/\s]+)\s*$/);
+    if (match?.[1]) prefixes.add(`${match[1]}/`);
+  }
+  return prefixes;
+}
+
 describe("catalog identity SSOT (REPO_SPEC_IS_IDENTITY_SSOT)", () => {
   const entries = listCatalogEntries();
+  const submodulePrefixes = listSubmodulePrefixes();
 
   it("no catalog entry declares node_id (identity lives in repo-spec, not the catalog)", () => {
     const offenders = entries
@@ -56,10 +69,11 @@ describe("catalog identity SSOT (REPO_SPEC_IS_IDENTITY_SSOT)", () => {
     ).toEqual([]);
   });
 
-  it("every type:node entry has a repo-spec with a UUID node_id", () => {
+  it("every inline type:node entry has a repo-spec with a UUID node_id", () => {
     for (const { file, entry } of entries) {
       if (entry.type !== "node") continue;
       const prefix = entry.path_prefix ?? `nodes/${entry.name}/`;
+      if (submodulePrefixes.has(prefix)) continue;
       const specPath = path.join(REPO_ROOT, prefix, ".cogni/repo-spec.yaml");
       const spec = yaml.parse(readFileSync(specPath, "utf8")) as {
         node_id?: string;

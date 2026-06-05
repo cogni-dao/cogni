@@ -23,6 +23,7 @@
 #   IMAGE_NAME_APP       (default = IMAGE_NAME) APP-repo override.
 #   IMAGE_TAG            (required) the pr-{N}-{sha} tag
 #   SOURCE_SHA           (optional) the 40-char PR head SHA — overrides IMAGE_TAG parse
+#   SUBMODULE_BIRTHS_FILE (optional) detect-submodule-births.sh payload
 #   OUTPUT_FILE          (default $RUNNER_TEMP/resolved-pr-images.json)
 
 set -euo pipefail
@@ -41,6 +42,7 @@ export IMAGE_NAME_MIGRATOR=${IMAGE_NAME_MIGRATOR:-${IMAGE_NAME_APP}-migrate}
 IMAGE_TAG=${IMAGE_TAG:-}
 SOURCE_SHA=${SOURCE_SHA:-}
 OUTPUT_FILE=${OUTPUT_FILE:-${RUNNER_TEMP:-/tmp}/resolved-pr-images.json}
+SUBMODULE_BIRTHS_FILE=${SUBMODULE_BIRTHS_FILE:-}
 
 if [ -z "$IMAGE_TAG" ]; then
   echo "[ERROR] IMAGE_TAG is required" >&2
@@ -99,10 +101,28 @@ resolved_targets=()
 for target in "${ALL_TARGETS[@]}"; do
   full_tag=$(resolve_tag "$target")
   if digest_ref=$(resolve_digest_ref "$full_tag"); then
-    json_items+=("    {\n      \"target\": \"${target}\",\n      \"tag\": \"${full_tag}\",\n      \"digest\": \"${digest_ref}\"\n    }")
+    json_items+=("    {\n      \"target\": \"${target}\",\n      \"tag\": \"${full_tag}\",\n      \"digest\": \"${digest_ref}\",\n      \"source_sha\": \"${SOURCE_SHA}\"\n    }")
     resolved_targets+=("$target")
   fi
 done
+
+if [ -n "$SUBMODULE_BIRTHS_FILE" ] && [ -f "$SUBMODULE_BIRTHS_FILE" ]; then
+  while IFS=$'\t' read -r target full_tag item_source_sha; do
+    [ -n "$target" ] || continue
+    if digest_ref=$(resolve_digest_ref "$full_tag"); then
+      json_items+=("    {\n      \"target\": \"${target}\",\n      \"tag\": \"${full_tag}\",\n      \"digest\": \"${digest_ref}\",\n      \"source_sha\": \"${item_source_sha}\"\n    }")
+      resolved_targets+=("$target")
+    fi
+  done < <(python3 - "$SUBMODULE_BIRTHS_FILE" <<'PY'
+import json
+import sys
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    payload = json.load(handle)
+for item in payload.get("targets", []):
+    print(f"{item['target']}\t{item['tag']}\t{item['source_sha']}")
+PY
+  )
+fi
 
 json_body=""
 if [ ${#json_items[@]} -gt 0 ]; then

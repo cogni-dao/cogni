@@ -14,7 +14,7 @@
 
 export { insertAppsetKustomization, renderNodeAppset } from "./appset";
 export { insertCaddyBlock } from "./caddyfile";
-export { renderCatalog } from "./catalog";
+export { type RenderCatalogInput, renderCatalog } from "./catalog";
 export { renderGitmodules } from "./gitmodules";
 export { nextFreeNodePort } from "./node-port";
 export { renderOverlay } from "./overlay";

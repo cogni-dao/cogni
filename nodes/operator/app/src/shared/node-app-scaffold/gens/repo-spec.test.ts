@@ -36,7 +36,7 @@ function repoRoot(): string {
 const RULES_DIR = join(repoRoot(), "nodes/node-template/.cogni/rules");
 
 const rendered = renderRepoSpec({
-  nodeId: "11111111-2222-3333-4444-555555555555",
+  nodeId: "11111111-2222-4333-8444-555555555555",
   chainId: 8453,
   daoContract: "0xDAO",
   pluginContract: "0xPLUGIN",
@@ -59,7 +59,7 @@ describe("renderRepoSpec — BORN_REVIEWABLE", () => {
   const gates = spec.gates ?? [];
 
   it("is parseable identity + governance YAML", () => {
-    expect(spec.node_id).toBe("11111111-2222-3333-4444-555555555555");
+    expect(spec.node_id).toBe("11111111-2222-4333-8444-555555555555");
     expect(spec.payments.status).toBe("pending_activation");
   });
 

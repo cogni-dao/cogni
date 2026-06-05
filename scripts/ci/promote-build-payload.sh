@@ -58,25 +58,13 @@ if [ -z "$OVERLAY_ENV" ]; then
   exit 1
 fi
 
-# Top-level source_sha from the payload envelope (written by
-# resolve-pr-build-images.sh). Used for the source-sha-by-app map
-# (bug.0321 Fix 4). Its absence is a warning, never fatal — overlay
-# promotion is the primary artifact; the map is a provenance side-car.
-source_sha=$(python3 - "$PAYLOAD_FILE" <<'PY'
-import json
-import sys
-with open(sys.argv[1], "r", encoding="utf-8") as handle:
-    payload = json.load(handle)
-print(payload.get("source_sha", ""))
-PY
-)
-
 # Track which apps actually had a non-empty digest and got written to the
 # overlay. Emitted as $GITHUB_OUTPUT.promoted_apps so downstream
 # verification jobs can (a) scope wait-for-argocd to only the apps that
 # changed and (b) gate at the job level — an empty promoted_apps surfaces
 # as a visibly skipped verify job instead of a silent-green skipped step.
 PROMOTED=()
+declare -A PROMOTED_SOURCE_SHA=()
 
 emit_promoted_apps() {
   local csv=""
@@ -111,9 +99,24 @@ for item in payload["targets"]:
 PY
 }
 
+extract_source_sha() {
+  local target="$1"
+  python3 - "$PAYLOAD_FILE" "$target" <<'PY'
+import json
+import sys
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    payload = json.load(handle)
+fallback = payload.get("source_sha", "")
+for item in payload["targets"]:
+    if item["target"] == sys.argv[2]:
+        print(item.get("source_sha") or fallback)
+        break
+PY
+}
+
 promote_target() {
   local target="$1"
-  local digest
+  local digest item_source_sha
 
   # type:infra (e.g. litellm) deploys via Compose-on-VM, not k8s overlays —
   # there is no overlay digest to promote. deploy-infra resolves its content-
@@ -126,6 +129,8 @@ promote_target() {
   bash "$PROMOTE_SCRIPT" --no-commit --env "$OVERLAY_ENV" --app "$target" --digest "$digest"
 
   PROMOTED+=("$target")
+  item_source_sha="$(extract_source_sha "$target")"
+  PROMOTED_SOURCE_SHA["$target"]="$item_source_sha"
   # Re-emit after every success so a later abort still leaves an accurate
   # promoted_apps in $GITHUB_OUTPUT (last-write-wins).
   emit_promoted_apps
@@ -141,6 +146,7 @@ promote_target() {
 MAP_FAILURES=0
 update_source_sha_map() {
   local app="$1"
+  local source_sha="${PROMOTED_SOURCE_SHA[$app]:-}"
   if [ -z "$source_sha" ]; then
     echo "::warning::source_sha missing from payload — skipping map update for ${app}"
     MAP_FAILURES=$((MAP_FAILURES + 1))

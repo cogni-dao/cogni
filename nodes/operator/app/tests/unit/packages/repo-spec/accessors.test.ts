@@ -169,8 +169,9 @@ describe("extractPaymentConfig", () => {
 describe("extractGovernanceConfig", () => {
   it("returns schedules and ledger config when fully specified", () => {
     const config = extractGovernanceConfig(buildFullSpec());
-    expect(config.schedules).toHaveLength(1);
+    expect(config.schedules).toHaveLength(2);
     expect(config.schedules[0]?.charter).toBe("HEARTBEAT");
+    expect(config.schedules[1]?.charter).toBe("LEDGER_INGEST");
     expect(config.ledger).toBeDefined();
     expect(config.ledger?.scopeId).toBe(TEST_SCOPE_ID);
   });
