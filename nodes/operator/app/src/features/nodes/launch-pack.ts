@@ -11,6 +11,7 @@
  * @public
  */
 
+import type { NodeLaunchPackOutput } from "@/contracts/nodes.launch-pack.v1.contract";
 import type { NodeStatus } from "@/shared/db/nodes";
 
 export const NODE_LAUNCH_PACK_KNOWLEDGE_ID = "node-launch-handoff";
@@ -26,23 +27,6 @@ export interface NodeLaunchPackInput {
   readonly publishPrUrl: string | null;
 }
 
-export interface NodeLaunchPack {
-  readonly kind: "cogni.node.launch_pack.v0";
-  readonly nodeId: string;
-  readonly slug: string;
-  readonly status: NodeStatus;
-  readonly operatorBaseUrl: string;
-  readonly launchPackUrl: string;
-  readonly parentDeploymentPrUrl: string | null;
-  readonly candidateUrl: string;
-  readonly knowledgeBlock: {
-    readonly id: typeof NODE_LAUNCH_PACK_KNOWLEDGE_ID;
-    readonly title: typeof KNOWLEDGE_TITLE;
-    readonly url: string;
-  };
-  readonly prompt: string;
-}
-
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, "");
 }
@@ -53,7 +37,7 @@ export function candidateUrlForSlug(slug: string): string {
 
 export function buildNodeLaunchPack(
   input: NodeLaunchPackInput
-): NodeLaunchPack {
+): NodeLaunchPackOutput {
   const operatorBaseUrl = trimTrailingSlash(input.operatorOrigin);
   const launchPackUrl = `${operatorBaseUrl}/api/v1/nodes/${input.nodeId}/launch-pack`;
   const knowledgeUrl = `${KNOWLEDGE_BASE_URL}/knowledge/${NODE_LAUNCH_PACK_KNOWLEDGE_ID}`;

@@ -17,6 +17,7 @@ import { and, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
 import { resolveAppDb } from "@/bootstrap/container";
+import { nodeLaunchPackOperation } from "@/contracts/nodes.launch-pack.v1.contract";
 import { buildNodeLaunchPack } from "@/features/nodes/launch-pack";
 import { getServerSessionUser } from "@/lib/auth/server";
 import { type NodeStatus, nodes } from "@/shared/db/nodes";
@@ -35,6 +36,14 @@ export async function GET(request: Request, ctx: RouteParams) {
   }
 
   const { id } = await ctx.params;
+  const parsed = nodeLaunchPackOperation.input.safeParse({ nodeId: id });
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: "invalid input", issues: parsed.error.issues },
+      { status: 400 }
+    );
+  }
+
   const db = resolveAppDb();
 
   const rows = await withTenantScope(
@@ -44,7 +53,12 @@ export async function GET(request: Request, ctx: RouteParams) {
       tx
         .select()
         .from(nodes)
-        .where(and(eq(nodes.id, id), eq(nodes.ownerUserId, session.id)))
+        .where(
+          and(
+            eq(nodes.id, parsed.data.nodeId),
+            eq(nodes.ownerUserId, session.id)
+          )
+        )
         .limit(1)
   );
 
@@ -54,12 +68,14 @@ export async function GET(request: Request, ctx: RouteParams) {
   }
 
   return NextResponse.json(
-    buildNodeLaunchPack({
-      nodeId: node.id,
-      slug: node.slug,
-      status: node.status as NodeStatus,
-      publishPrUrl: node.publishPrUrl,
-      operatorOrigin: new URL(request.url).origin,
-    })
+    nodeLaunchPackOperation.output.parse(
+      buildNodeLaunchPack({
+        nodeId: node.id,
+        slug: node.slug,
+        status: node.status as NodeStatus,
+        publishPrUrl: node.publishPrUrl,
+        operatorOrigin: new URL(request.url).origin,
+      })
+    )
   );
 }

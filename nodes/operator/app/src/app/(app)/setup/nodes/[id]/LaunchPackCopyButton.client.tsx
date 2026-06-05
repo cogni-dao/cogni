@@ -16,10 +16,7 @@ import { Check, Copy } from "lucide-react";
 import { type ReactElement, useState } from "react";
 
 import { Button } from "@/components";
-
-interface LaunchPackResponse {
-  readonly prompt: string;
-}
+import type { NodeLaunchPackOutput } from "@/contracts/nodes.launch-pack.v1.contract";
 
 interface Props {
   readonly nodeId: string;
@@ -34,7 +31,7 @@ export function LaunchPackCopyButton({ nodeId }: Props): ReactElement {
     try {
       const res = await fetch(`/api/v1/nodes/${nodeId}/launch-pack`);
       if (!res.ok) return;
-      const pack = (await res.json()) as LaunchPackResponse;
+      const pack = (await res.json()) as NodeLaunchPackOutput;
       await navigator.clipboard.writeText(pack.prompt);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1800);

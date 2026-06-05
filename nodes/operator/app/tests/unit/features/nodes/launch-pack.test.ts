@@ -11,6 +11,8 @@
  */
 
 import { describe, expect, it } from "vitest";
+
+import { nodeLaunchPackOperation } from "@/contracts/nodes.launch-pack.v1.contract";
 import {
   buildNodeLaunchPack,
   candidateUrlForSlug,
@@ -28,7 +30,7 @@ describe("candidateUrlForSlug", () => {
 describe("buildNodeLaunchPack", () => {
   it("returns prompt + JSON pointers for a published node", () => {
     const pack = buildNodeLaunchPack({
-      nodeId: "abc-123",
+      nodeId: "11111111-1111-4111-8111-111111111111",
       slug: "atlas",
       status: "published",
       operatorOrigin: "https://test.cognidao.org/",
@@ -37,8 +39,9 @@ describe("buildNodeLaunchPack", () => {
 
     expect(pack.kind).toBe("cogni.node.launch_pack.v0");
     expect(pack.launchPackUrl).toBe(
-      "https://test.cognidao.org/api/v1/nodes/abc-123/launch-pack"
+      "https://test.cognidao.org/api/v1/nodes/11111111-1111-4111-8111-111111111111/launch-pack"
     );
+    expect(() => nodeLaunchPackOperation.output.parse(pack)).not.toThrow();
     expect(pack.knowledgeBlock.id).toBe(NODE_LAUNCH_PACK_KNOWLEDGE_ID);
     expect(pack.knowledgeBlock.url).toBe(
       `https://cognidao.org/knowledge/${NODE_LAUNCH_PACK_KNOWLEDGE_ID}`
