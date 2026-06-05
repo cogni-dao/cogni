@@ -282,8 +282,20 @@ dump_pod_diagnostics() {
   echo ""
   echo "  ── pod diagnostics for ${app_name} (${deployment}/${namespace}) ──"
 
+  local selector
+  selector=$(kubectl -n "$namespace" get deployment "$deployment" \
+    -o jsonpath='{range $k,$v := .spec.selector.matchLabels}{printf "%s=%s," $k $v}{end}' 2>/dev/null \
+    | sed 's/,$//')
+  if [ -z "$selector" ]; then
+    echo "  ▸ deployment selector unavailable"
+    echo "  ── end diagnostics ──"
+    echo ""
+    return 0
+  fi
+  echo "  ▸ selector: ${selector}"
+
   echo "  ▸ pods + container statuses:"
-  kubectl -n "$namespace" get pods -l "app=${deployment}" -o custom-columns=\
+  kubectl -n "$namespace" get pods -l "$selector" -o custom-columns=\
 'NAME:.metadata.name,READY:.status.containerStatuses[*].ready,STATE:.status.containerStatuses[*].state,RESTARTS:.status.containerStatuses[*].restartCount,REASON:.status.containerStatuses[*].state.waiting.reason,LAST-TERM-REASON:.status.containerStatuses[*].lastState.terminated.reason' 2>&1 | sed 's/^/    /' || true
 
   echo "  ▸ recent namespace events (last 20):"
@@ -291,16 +303,30 @@ dump_pod_diagnostics() {
 
   # Tail stderr from the newest non-Ready pod (where the new image is failing).
   local newest
-  newest=$(kubectl -n "$namespace" get pods -l "app=${deployment}" \
+  newest=$(kubectl -n "$namespace" get pods -l "$selector" \
     --field-selector=status.phase!=Succeeded \
     -o jsonpath='{range .items[*]}{.metadata.creationTimestamp} {.metadata.name} {.status.containerStatuses[*].ready}{"\n"}{end}' 2>/dev/null \
     | grep -v 'true true' | sort | tail -1 | awk '{print $2}')
   if [ -n "$newest" ]; then
     echo "  ▸ newest non-Ready pod: ${newest}"
-    echo "  ▸ migrate init container (last 30 lines):"
-    kubectl -n "$namespace" logs "$newest" -c migrate --tail=30 2>&1 | sed 's/^/    /' || true
-    echo "  ▸ app container (last 30 lines, stderr-biased):"
-    kubectl -n "$namespace" logs "$newest" -c app --tail=30 2>&1 | sed 's/^/    /' || true
+    echo "  ▸ pod describe:"
+    kubectl -n "$namespace" describe pod "$newest" 2>&1 | sed 's/^/    /' || true
+    echo "  ▸ init containers (last 30 lines each):"
+    kubectl -n "$namespace" get pod "$newest" \
+      -o jsonpath='{range .spec.initContainers[*]}{.name}{"\n"}{end}' 2>/dev/null \
+      | while read -r init_container; do
+          [ -n "$init_container" ] || continue
+          echo "    == ${init_container} =="
+          kubectl -n "$namespace" logs "$newest" -c "$init_container" --tail=30 2>&1 | sed 's/^/    /' || true
+        done
+    echo "  ▸ app containers (last 30 lines each):"
+    kubectl -n "$namespace" get pod "$newest" \
+      -o jsonpath='{range .spec.containers[*]}{.name}{"\n"}{end}' 2>/dev/null \
+      | while read -r app_container; do
+          [ -n "$app_container" ] || continue
+          echo "    == ${app_container} =="
+          kubectl -n "$namespace" logs "$newest" -c "$app_container" --tail=30 2>&1 | sed 's/^/    /' || true
+        done
   fi
   echo "  ── end diagnostics ──"
   echo ""
