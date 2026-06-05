@@ -346,14 +346,21 @@ jobs:
               -o go-template='{{range $k, $_ := .data}}{{printf "%s\n" $k}}{{end}}')
             for key in $keys; do
               [ -n "$key" ] || continue
+              tmp_value=$(mktemp)
               kubectl -n cogni-preview get secret operator-node-app-secrets \
                 -o "jsonpath={.data.${key}}" \
-                | base64 -d \
-                | PATH="${wrapper_dir}:$PATH" \
-                  REPO_ROOT="$REMOTE_DIR" \
-                  BAO_ADDR=http://127.0.0.1:8200 \
-                  BAO_TOKEN="$bao_token" \
-                  bash scripts/secrets/set-secret.sh preview operator "$key" >/dev/null
+                | base64 -d >"$tmp_value"
+              if [ ! -s "$tmp_value" ]; then
+                echo "Skipping empty legacy key ${key}"
+                rm -f "$tmp_value"
+                continue
+              fi
+              PATH="${wrapper_dir}:$PATH" \
+                REPO_ROOT="$REMOTE_DIR" \
+                BAO_ADDR=http://127.0.0.1:8200 \
+                BAO_TOKEN="$bao_token" \
+                bash scripts/secrets/set-secret.sh preview operator "$key" <"$tmp_value" >/dev/null
+              rm -f "$tmp_value"
               count=$((count + 1))
             done
             echo "Backfilled ${count} preview/operator keys into OpenBao"
