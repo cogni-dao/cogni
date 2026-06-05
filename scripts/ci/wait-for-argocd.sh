@@ -284,7 +284,7 @@ dump_pod_diagnostics() {
 
   local selector
   selector=$(kubectl -n "$namespace" get deployment "$deployment" \
-    -o jsonpath='{range $k,$v := .spec.selector.matchLabels}{printf "%s=%s," $k $v}{end}' 2>/dev/null \
+    -o go-template='{{range $k, $v := .spec.selector.matchLabels}}{{printf "%s=%s," $k $v}}{{","}}{{end}}' 2>/dev/null \
     | sed 's/,$//')
   if [ -z "$selector" ]; then
     echo "  ▸ deployment selector unavailable"
