@@ -92,6 +92,55 @@ export default defineConfig({
         ),
       },
       { find: "@tests", replacement: path.resolve(__dirname, "./tests") },
+      {
+        find: "react",
+        replacement: path.resolve(
+          __dirname,
+          "./nodes/operator/app/node_modules/react"
+        ),
+      },
+      {
+        find: "react-dom",
+        replacement: path.resolve(
+          __dirname,
+          "./nodes/operator/app/node_modules/react-dom"
+        ),
+      },
+      {
+        find: "react/jsx-dev-runtime",
+        replacement: path.resolve(
+          __dirname,
+          "./nodes/operator/app/node_modules/react/jsx-dev-runtime.js"
+        ),
+      },
+      {
+        find: "react/jsx-runtime",
+        replacement: path.resolve(
+          __dirname,
+          "./nodes/operator/app/node_modules/react/jsx-runtime.js"
+        ),
+      },
+      {
+        find: "next/server",
+        replacement: path.resolve(
+          __dirname,
+          "./nodes/operator/app/node_modules/next/server.js"
+        ),
+      },
+      {
+        find: /^viem$/,
+        replacement: path.resolve(
+          __dirname,
+          "./nodes/operator/app/node_modules/viem"
+        ),
+      },
+      {
+        find: /^viem\/(.*)$/,
+        replacement: path.resolve(
+          __dirname,
+          "./nodes/operator/app/node_modules/viem/$1"
+        ),
+      },
     ],
   },
 });

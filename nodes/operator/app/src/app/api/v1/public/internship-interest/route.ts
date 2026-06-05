@@ -12,8 +12,13 @@
  */
 
 import { NextResponse } from "next/server";
+import { verifyMessage } from "viem";
 import { wrapPublicRoute } from "@/bootstrap/http";
-import { internshipInterestOperation } from "@/contracts/internship.interest.v1.contract";
+import {
+  buildInternshipApplicationMessage,
+  internshipInterestOperation,
+} from "@/contracts/internship.interest.v1.contract";
+import { serverEnv } from "@/shared/env/server-env";
 import { logRequestWarn } from "@/shared/observability";
 
 export const dynamic = "force-dynamic";
@@ -43,7 +48,44 @@ export const POST = wrapPublicRoute(
     }
 
     const input = parseResult.data;
+    const expectedWalletMessage = buildInternshipApplicationMessage({
+      email: input.email,
+      portfolioUrl: input.portfolioUrl,
+      focus: input.focus,
+      interest: input.interest,
+      walletSignedAt: input.walletSignedAt,
+    });
+    if (input.walletMessage !== expectedWalletMessage) {
+      logRequestWarn(
+        ctx.log,
+        { walletAddress: input.walletAddress.toLowerCase() },
+        "WALLET_MESSAGE_MISMATCH"
+      );
+      return NextResponse.json(
+        { error: "wallet signature does not match application" },
+        { status: 400 }
+      );
+    }
+
+    const walletVerified = await verifyMessage({
+      address: input.walletAddress as `0x${string}`,
+      message: input.walletMessage,
+      signature: input.walletSignature as `0x${string}`,
+    });
+    if (!walletVerified) {
+      logRequestWarn(
+        ctx.log,
+        { walletAddress: input.walletAddress.toLowerCase() },
+        "WALLET_SIGNATURE_INVALID"
+      );
+      return NextResponse.json(
+        { error: "wallet signature does not match application" },
+        { status: 400 }
+      );
+    }
+
     const referenceId = crypto.randomUUID();
+    const derekInterviewUrl = serverEnv().DEREK_INTERVIEW_URL;
     const emailDomain =
       input.email.split("@").at(1)?.toLowerCase() ?? "unknown";
 
@@ -52,16 +94,21 @@ export const POST = wrapPublicRoute(
         event: "internship.interest_submitted",
         referenceId,
         focus: input.focus,
-        squadStatus: input.squadStatus,
-        github: input.github || null,
+        portfolioHost: new URL(input.portfolioUrl).host.toLowerCase(),
+        walletAddress: input.walletAddress.toLowerCase(),
+        walletSignedAt: input.walletSignedAt,
         emailDomain,
-        noteLength: input.note?.length ?? 0,
+        interestLength: input.interest.length,
       },
       "internship interest submitted"
     );
 
     return NextResponse.json(
-      internshipInterestOperation.output.parse({ ok: true, referenceId }),
+      internshipInterestOperation.output.parse({
+        ok: true,
+        referenceId,
+        derekInterviewUrl,
+      }),
       { status: 201 }
     );
   }

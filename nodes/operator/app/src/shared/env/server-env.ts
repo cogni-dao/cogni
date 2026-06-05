@@ -58,6 +58,10 @@ export const serverSchema = z.object({
   APP_ENV: z.enum(["test", "production"]),
   APP_BASE_URL: z.string().url().optional(),
   DOMAIN: z.string().optional(),
+  DEREK_INTERVIEW_URL: z
+    .string()
+    .url()
+    .default("https://calendly.com/derekg1729"),
 
   // Deployment environment (for observability labels and analytics filtering)
   DEPLOY_ENVIRONMENT: z.string().optional(),

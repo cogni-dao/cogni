@@ -105,4 +105,5 @@ export const MOCK_SERVER_ENV = {
   isTest: true,
   isProd: false,
   isTestMode: true, // Controls fake adapter wiring in container.ts
+  DEREK_INTERVIEW_URL: "https://calendly.com/derekg1729",
 } as const;

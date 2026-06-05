@@ -13,7 +13,6 @@
 
 "use client";
 
-import { cn } from "@cogni/node-ui-kit/util/cn";
 import { motion, useReducedMotion } from "framer-motion";
 import {
   ArrowRight,
@@ -24,40 +23,44 @@ import {
   Github,
   GitPullRequest,
   Network,
-  ShieldCheck,
+  PenLine,
   UsersRound,
+  Wallet,
 } from "lucide-react";
 import Link from "next/link";
 import { useTheme } from "next-themes";
-import { type CSSProperties, type ReactElement, useState } from "react";
+import {
+  type CSSProperties,
+  type ReactElement,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { Button, Input } from "@/components";
-import type { InternshipInterestInput } from "@/contracts/internship.interest.v1.contract";
+import {
+  buildInternshipApplicationMessage,
+  type InternshipInterestInput,
+  type InternshipInterestOutput,
+  type UnsignedInternshipInterestInput,
+} from "@/contracts/internship.interest.v1.contract";
 import { InternshipNetworkBackground } from "./InternshipNetworkBackground";
+import { useInternshipWalletSignature } from "./useInternshipWalletSignature";
 
-type FormState = InternshipInterestInput & {
-  github: string;
-  note: string;
+type FormState = UnsignedInternshipInterestInput & {
+  portfolioUrl: string;
 };
+
+type SubmissionStatus = "idle" | "submitting" | "success" | "error";
 
 const focusOptions: {
   value: InternshipInterestInput["focus"];
   label: string;
 }[] = [
-  { value: "x402-apps", label: "Specialized x402 agent" },
-  { value: "attribution-scoring", label: "Attribution + DAO distributions" },
-  { value: "node-infrastructure", label: "Node infrastructure" },
-  { value: "dao-operations", label: "DAO operations" },
-  { value: "research-product", label: "Research + product" },
-  { value: "undecided", label: "Undecided" },
-];
-
-const squadOptions: {
-  value: InternshipInterestInput["squadStatus"];
-  label: string;
-}[] = [
-  { value: "solo", label: "Solo for now" },
-  { value: "forming", label: "Forming a squad" },
-  { value: "squad-ready", label: "Squad ready" },
+  { value: "x402-apps", label: "x402 agent" },
+  { value: "applied-ai-products", label: "Applied AI product" },
+  { value: "infrastructure", label: "Infrastructure" },
+  { value: "growth-ops", label: "Growth / ops" },
+  { value: "not-sure", label: "Not sure yet" },
 ];
 
 const tracks = [
@@ -93,18 +96,16 @@ const roadmap = [
 ];
 
 const signupPromises = [
-  { icon: UsersRound, text: "Start solo or join a focused squad" },
-  { icon: ShieldCheck, text: "Build for multi-tenant access from day one" },
-  { icon: GitPullRequest, text: "Ship through PR, flight, and candidate-a" },
+  { icon: UsersRound, text: "Drop a link" },
+  { icon: Wallet, text: "Sign once" },
+  { icon: GitPullRequest, text: "Book Derek" },
 ];
 
 const initialForm: FormState = {
-  name: "",
   email: "",
-  github: "",
+  portfolioUrl: "",
   focus: "x402-apps",
-  squadStatus: "solo",
-  note: "",
+  interest: "",
 };
 
 const internshipLightThemeStyle = {
@@ -126,6 +127,67 @@ const internshipLightThemeStyle = {
   "--input": "42 18% 75%",
   "--ring": "161 38% 31%",
 } as CSSProperties;
+
+function walletStatusLabel(
+  hasFreshSignature: boolean,
+  isConnected: boolean
+): string {
+  if (hasFreshSignature) return "Interest signed";
+  if (isConnected) return "Wallet connected";
+  return "Wallet signature required";
+}
+
+function submitButtonLabel(
+  status: SubmissionStatus,
+  isSigning: boolean,
+  isConnected: boolean
+): string {
+  if (status === "submitting") return "Submitting";
+  if (isSigning) return "Waiting for signature";
+  if (isConnected) return "Submit signed interest";
+  return "Connect wallet to submit";
+}
+
+function FormFeedback({
+  status,
+  referenceId,
+  derekInterviewUrl,
+  signatureError,
+}: {
+  readonly status: SubmissionStatus;
+  readonly referenceId: string | null;
+  readonly derekInterviewUrl: string | null;
+  readonly signatureError: string | null;
+}): ReactElement {
+  if (status === "success" && referenceId) {
+    return (
+      <div className="rounded-md border border-primary/30 bg-primary/10 p-3 text-foreground">
+        <p>Interest received. Reference {referenceId}.</p>
+        {derekInterviewUrl && (
+          <p className="mt-1 text-muted-foreground">
+            Next step: book Derek with the link above.
+          </p>
+        )}
+      </div>
+    );
+  }
+
+  if (status === "error") {
+    return (
+      <p className="text-destructive">
+        Submission failed. Check the fields and try again.
+      </p>
+    );
+  }
+
+  if (signatureError) {
+    return <p className="text-destructive">{signatureError}</p>;
+  }
+
+  return (
+    <p className="text-muted-foreground">Sign once. No gas. Then book Derek.</p>
+  );
+}
 
 function fadeProps(index = 0) {
   return {
@@ -350,11 +412,28 @@ function RoadmapSection(): ReactElement {
 }
 
 function SignupForm(): ReactElement {
+  const formRef = useRef<HTMLFormElement>(null);
+  const { address, isConnected, isSigning, openConnectModal, signMessage } =
+    useInternshipWalletSignature();
   const [form, setForm] = useState<FormState>(initialForm);
-  const [status, setStatus] = useState<
-    "idle" | "submitting" | "success" | "error"
-  >("idle");
+  const [status, setStatus] = useState<SubmissionStatus>("idle");
   const [referenceId, setReferenceId] = useState<string | null>(null);
+  const [derekInterviewUrl, setDerekInterviewUrl] = useState<string | null>(
+    null
+  );
+  const [walletProof, setWalletProof] = useState<{
+    walletAddress: `0x${string}`;
+    walletSignature: `0x${string}`;
+    walletMessage: string;
+    walletSignedAt: string;
+  } | null>(null);
+  const [signatureError, setSignatureError] = useState<string | null>(null);
+
+  const signedAddress = walletProof?.walletAddress.toLowerCase();
+  const connectedAddress = address?.toLowerCase();
+  const hasFreshSignature = Boolean(
+    walletProof && signedAddress === connectedAddress
+  );
 
   const update =
     (key: keyof FormState) =>
@@ -365,20 +444,69 @@ function SignupForm(): ReactElement {
         | React.ChangeEvent<HTMLTextAreaElement>
     ): void => {
       setForm((current) => ({ ...current, [key]: event.target.value }));
+      setWalletProof(null);
+      setSignatureError(null);
     };
+  useEffect(() => {
+    if (walletProof && signedAddress !== connectedAddress) {
+      setWalletProof(null);
+    }
+  }, [connectedAddress, signedAddress, walletProof]);
+
+  function buildUnsignedPayload(): UnsignedInternshipInterestInput {
+    return {
+      email: form.email,
+      portfolioUrl: form.portfolioUrl,
+      focus: form.focus,
+      interest: form.interest,
+    };
+  }
+
+  async function signApplication() {
+    setSignatureError(null);
+    if (!formRef.current?.reportValidity()) return null;
+
+    if (!isConnected || !address) {
+      openConnectModal?.();
+      return null;
+    }
+
+    const walletSignedAt = new Date().toISOString();
+    const walletMessage = buildInternshipApplicationMessage({
+      ...buildUnsignedPayload(),
+      walletSignedAt,
+    });
+
+    try {
+      const walletSignature = await signMessage(walletMessage);
+      const proof = {
+        walletAddress: address,
+        walletSignature,
+        walletMessage,
+        walletSignedAt,
+      };
+      setWalletProof(proof);
+      return proof;
+    } catch {
+      setSignatureError("Wallet signature was cancelled or failed.");
+      return null;
+    }
+  }
 
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setStatus("submitting");
+    setStatus("idle");
     setReferenceId(null);
+    setDerekInterviewUrl(null);
+
+    const proof = hasFreshSignature ? walletProof : await signApplication();
+    if (!proof) return;
+
+    setStatus("submitting");
 
     const payload: InternshipInterestInput = {
-      name: form.name,
-      email: form.email,
-      focus: form.focus,
-      squadStatus: form.squadStatus,
-      ...(form.github.trim() && { github: form.github.trim() }),
-      ...(form.note.trim() && { note: form.note.trim() }),
+      ...buildUnsignedPayload(),
+      ...proof,
     };
 
     const response = await fetch("/api/v1/public/internship-interest", {
@@ -392,129 +520,147 @@ function SignupForm(): ReactElement {
       return;
     }
 
-    const data = (await response.json()) as { referenceId: string };
+    const data = (await response.json()) as InternshipInterestOutput;
     setReferenceId(data.referenceId);
+    setDerekInterviewUrl(data.derekInterviewUrl);
     setStatus("success");
     setForm(initialForm);
+    setWalletProof(null);
   }
 
   return (
-    <form onSubmit={onSubmit} className="space-y-4">
-      <div className="grid gap-4 sm:grid-cols-2">
-        <label className="space-y-2" htmlFor="intern-name">
-          <span className="font-medium text-foreground text-sm">Name</span>
-          <Input
-            id="intern-name"
-            required
-            value={form.name}
-            onChange={update("name")}
-            autoComplete="name"
-            className="border-input bg-background text-foreground"
-          />
-        </label>
-        <label className="space-y-2" htmlFor="intern-email">
-          <span className="font-medium text-foreground text-sm">Email</span>
-          <Input
-            id="intern-email"
-            type="email"
-            required
-            value={form.email}
-            onChange={update("email")}
-            autoComplete="email"
-            className="border-input bg-background text-foreground"
-          />
-        </label>
-      </div>
+    <form ref={formRef} onSubmit={onSubmit} className="space-y-4">
+      <label className="space-y-2" htmlFor="intern-interest">
+        <span className="font-medium text-foreground text-sm">Interested?</span>
+        <Input
+          id="intern-interest"
+          required
+          value={form.interest}
+          onChange={update("interest")}
+          className="border-input bg-background text-foreground"
+          placeholder="Yes. I want to build / design / operate..."
+        />
+      </label>
 
-      <label className="space-y-2" htmlFor="intern-github">
+      <label className="space-y-2" htmlFor="intern-portfolio-url">
         <span className="font-medium text-foreground text-sm">
-          GitHub or portfolio
+          Portfolio link
         </span>
         <Input
-          id="intern-github"
-          value={form.github}
-          onChange={update("github")}
+          id="intern-portfolio-url"
+          type="url"
+          required
+          value={form.portfolioUrl}
+          onChange={update("portfolioUrl")}
           autoComplete="url"
           className="border-input bg-background text-foreground"
+          placeholder="GitHub, demo, writing, LinkedIn"
         />
       </label>
 
-      <div className="grid gap-4 sm:grid-cols-2">
-        <label className="space-y-2" htmlFor="intern-focus">
-          <span className="font-medium text-foreground text-sm">Focus</span>
-          <select
-            id="intern-focus"
-            value={form.focus}
-            onChange={update("focus")}
-            className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-foreground text-sm focus-visible:outline-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {focusOptions.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label className="space-y-2" htmlFor="intern-squad">
-          <span className="font-medium text-foreground text-sm">
-            Squad status
-          </span>
-          <select
-            id="intern-squad"
-            value={form.squadStatus}
-            onChange={update("squadStatus")}
-            className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-foreground text-sm focus-visible:outline-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {squadOptions.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
-
-      <label className="space-y-2" htmlFor="intern-note">
+      <label className="space-y-2" htmlFor="intern-focus">
         <span className="font-medium text-foreground text-sm">
-          What would you build?
+          Niche direction
         </span>
-        <textarea
-          id="intern-note"
-          value={form.note}
-          onChange={update("note")}
-          rows={5}
-          className="flex min-h-28 w-full rounded-md border border-input bg-background px-3 py-2 text-foreground text-sm placeholder:text-muted-foreground focus-visible:outline-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-50"
+        <select
+          id="intern-focus"
+          value={form.focus}
+          onChange={update("focus")}
+          className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-foreground text-sm focus-visible:outline-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {focusOptions.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <label className="space-y-2" htmlFor="intern-email">
+        <span className="font-medium text-foreground text-sm">Email</span>
+        <Input
+          id="intern-email"
+          type="email"
+          required
+          value={form.email}
+          onChange={update("email")}
+          autoComplete="email"
+          className="border-input bg-background text-foreground"
+          placeholder="Derek needs one reply path"
         />
       </label>
+
+      <div className="rounded-md border border-border/70 bg-background/70 p-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-3">
+            <div className="flex size-10 items-center justify-center rounded-md border border-border bg-secondary/60">
+              {hasFreshSignature ? (
+                <PenLine className="size-4 text-foreground" />
+              ) : (
+                <Wallet className="size-4 text-foreground" />
+              )}
+            </div>
+            <div>
+              <p className="font-medium text-foreground text-sm">
+                {walletStatusLabel(hasFreshSignature, isConnected)}
+              </p>
+              <p className="text-muted-foreground text-xs">
+                {address
+                  ? `${address.slice(0, 6)}...${address.slice(-4)}`
+                  : "No account. No gas."}
+              </p>
+            </div>
+          </div>
+          {isConnected && (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={signApplication}
+              disabled={isSigning || status === "submitting"}
+            >
+              {isSigning ? "Signing" : "Sign interest"}
+            </Button>
+          )}
+        </div>
+      </div>
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-        <Button type="submit" disabled={status === "submitting"} size="lg">
-          {status === "submitting" ? "Submitting" : "Submit interest"}
+        <Button
+          type="submit"
+          disabled={status === "submitting" || isSigning}
+          size="lg"
+        >
+          {submitButtonLabel(status, isSigning, isConnected)}
           <ArrowRight className="ml-2 size-4" />
         </Button>
-        <Link
-          href="https://discord.gg/3b9sSyhZ4z"
+        {status === "success" && derekInterviewUrl && (
+          <Link
+            href={derekInterviewUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-2 text-foreground text-sm transition-colors hover:text-primary"
+          >
+            Book Derek interview
+            <ArrowRight className="size-4" />
+          </Link>
+        )}
+        <a
+          href="#interest"
           className="inline-flex items-center gap-2 text-muted-foreground text-sm transition-colors hover:text-foreground"
         >
-          Join Discord
+          Reference appears after submit
           <ArrowRight className="size-4" />
-        </Link>
+        </a>
       </div>
 
-      <p
-        aria-live="polite"
-        className={cn(
-          "min-h-6 text-sm",
-          status === "error" ? "text-destructive" : "text-muted-foreground"
-        )}
-      >
-        {status === "success" && referenceId
-          ? `Interest received. Reference ${referenceId}.`
-          : status === "error"
-            ? "Submission failed. Check the fields and try again."
-            : "Submitting records an operator event; Discord is the fastest follow-up path."}
-      </p>
+      <div aria-live="polite" className="min-h-6 text-sm">
+        <FormFeedback
+          status={status}
+          referenceId={referenceId}
+          derekInterviewUrl={derekInterviewUrl}
+          signatureError={signatureError}
+        />
+      </div>
     </form>
   );
 }
@@ -531,12 +677,11 @@ function SignupSection(): ReactElement {
             Interest signup
           </span>
           <h2 className="mt-3 font-bold text-3xl text-foreground tracking-tight sm:text-4xl">
-            Bring a squad, or find one here.
+            Want in?
           </h2>
-          <p className="mt-5 text-muted-foreground leading-relaxed">
-            This is intentionally early. The legal wrapper is still being
-            formed, but the build path is concrete enough: start from an idea,
-            form a node squad, grow the knowledge base, and ship the agent.
+          <p className="mt-5 max-w-md text-muted-foreground leading-relaxed">
+            Drop the smallest proof Derek should inspect. Sign the interest with
+            a wallet, then grab a calendar slot.
           </p>
           <div className="mt-8 grid gap-3">
             {signupPromises.map(({ icon: Icon, text }) => (
