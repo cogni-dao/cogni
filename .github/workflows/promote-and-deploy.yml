@@ -576,11 +576,11 @@ jobs:
           scripts/ci/deploy-infra.sh "${args[@]}"
 
       - name: Provision Grafana Postgres datasources
-        if: env.VM_HOST != ''
+        if: env.VM_HOST != '' && (inputs.deploy_infra_mode || 'full') != 'k8s-secrets-only'
         run: bash scripts/ci/provision-grafana-postgres-datasources.sh
 
       - name: Verify Grafana Postgres datasources
-        if: env.VM_HOST != ''
+        if: env.VM_HOST != '' && (inputs.deploy_infra_mode || 'full') != 'k8s-secrets-only'
         continue-on-error: true
         run: bash scripts/ci/verify-grafana-postgres-datasources.sh
 
