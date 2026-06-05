@@ -188,6 +188,30 @@ A node's **integration model** (how it attaches to the operator) picks its templ
 
 Two `full-app` templates differ **only by integration** (fork-whole vs submodule); `agent-scope` is a third, minimal template (no Next.js app, just agent packages + Dolt migrations). Submodule-ness stays invisible to `NodeRegistryPort` consumers (a catalog `repo` + `ref` pin) — discovery is metadata-driven (above). The renamed `standalone-node` is **not** the submodule template: a fork-whole repo nests the node at `nodes/node-template/`, but a submodule must expose the node **at its root** so it lands at `nodes/<slug>/app`. That layout difference is why the submodule template is a distinct repo, not a reuse.
 
+### Where the line is between the three repos — the deploy/infra plane
+
+All three repos carry the node **app + its merge-gate CI + image build**. They differ on **one axis: how much of the deploy/infra plane they carry.**
+
+| Repo                          | Node app                                 | Node CI (merge-gate + build→GHCR) | Deploy/infra plane¹      | Who deploys it                              |
+| ----------------------------- | ---------------------------------------- | --------------------------------- | ------------------------ | ------------------------------------------- |
+| **cogni monorepo**            | operator + inline nodes (`nodes/poly`, …) | yes (shared root configs)         | **owns it — every node** | itself                                      |
+| **standalone-node** (fork-whole) | node nested at `nodes/node-template/`    | yes                               | **yes — you self-host**  | itself (you _are_ an operator)              |
+| **node-template** (submodule, node-at-root) | node at repo root              | **yes — own `ci.yaml` + build→GHCR** | **no**                | the shared operator (pin → provision → flight → promote) |
+
+¹ Deploy/infra plane = `provision-env`, Argo AppSets + k8s overlays, `deploy-infra`, `candidate-flight`, OpenBao/ESO substrate, the operator app, `infra/catalog`, root monorepo tooling.
+
+**The line is the deploy/infra plane.** `standalone-node` has it (it runs its own Cogni); `node-template` does **not** (the shared operator runs its node). Both keep node-level CI — non-negotiable: a submodule node **builds its own image in its own repo** (`FORK_FREEDOM` / P2 above). A `node-template` with _no_ CI would force the operator to build node code — the rejected content-only model. So `node-template` is **standalone-node minus the deploy/infra plane**, re-rooted so the node sits at repo root.
+
+**What `node-template` carries vs. omits:**
+
+| Carries (node-level, sovereign)                                                                        | Omits (the operator owns these)                                                                          |
+| ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `app/ graphs/ packages/` + `k8s/` **base** manifests (the node's own Deployment/Service)              | per-env **overlays + AppSets + catalog row** — generated into the operator monorepo by the pin-PR        |
+| `.github/workflows/ci.yaml` (merge gate) + the build→GHCR workflow                                    | `provision-env`, `deploy-infra`, `candidate-flight`, Argo, OpenBao/ESO substrate                        |
+| `biome/ tsconfig/ Dockerfile / .dependency-cruiser.cjs` + `setup-main-branch.sh` (`POLICY_STAYS_LOCAL`) | the operator app, `infra/catalog`, root monorepo tooling                                                |
+
+**Derivation (this is P1).** `node-template` = the canonical node source in the cogni monorepo (`nodes/node-template/{app,graphs,k8s,packages}`) **projected to repo root**, plus the node-level CI/policy, **minus the deploy/infra plane**. The projection is path-identical (the sync feature `detect-sync-drift.mjs` lacks; #1366); the omit-column above _is_ the projection's exclusion list. This keeps `node-template` in lockstep with the canonical node without ever shipping it the operator's plane.
+
 ### Forward path to deployment (Pareto-ordered)
 
 The submodule **birth** is as-built (#1506): the wizard mints the node repo from the node-template (`GitHubRepoWriter.generateFromTemplate` → direct commit to the new repo's `main`, no PR there) and the operator authors **one** pin-PR (`openNodeSubmodulePr` — a `160000` gitlink at `nodes/<slug>` + `.gitmodules` + the `gens/` footprint **minus the lockfile importer**, the only inline-only tax a submodule node sheds). Proven E2E on candidate-a (2026-06-04): wizard Publish → minted node repo + pin-PR into the operator monorepo + review-bot trigger. What remains to carry a born node through **deploy → preview/prod** is the ordered list below. **P0 + P1 are the critical ~20%** — without them nothing merges or builds; **P2–P4 ride the existing inline-node rails** and only need recognition of the submodule seam, not new pipelines.
