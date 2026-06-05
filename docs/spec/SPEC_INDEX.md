@@ -53,6 +53,7 @@ This is a master index of all specs, updated as specs are migrated.
 | langgraph-server-spec            | LangGraph Server Integration                 | draft    | ai-graphs  | [langgraph-server.md](./langgraph-server.md)                       |
 | model-selection-spec             | Model Selection                              | draft    | ai-graphs  | [model-selection.md](./model-selection.md)                         |
 | n8n-adapter-spec                 | n8n Workflow Execution Adapter               | draft    | ai-graphs  | [n8n-adapter.md](./n8n-adapter.md)                                 |
+| spec.node-baas-architecture      | Node Backend-as-a-Service Architecture       | draft    | infra      | [node-baas-architecture.md](./node-baas-architecture.md)           |
 | node-formation-spec              | Node Formation Design                        | draft    | web3       | [node-formation.md](./node-formation.md)                           |
 | spec.node-ci-cd-contract         | Node CI/CD Contract                          | draft    | deployment | [node-ci-cd-contract.md](./node-ci-cd-contract.md)                 |
 | spec.repo-sync-contract          | Multi-Repo Sync Contract                     | draft    | deployment | [repo-sync-contract.md](./repo-sync-contract.md)                   |
