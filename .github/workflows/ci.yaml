@@ -171,6 +171,7 @@ jobs:
                     or . == "infra/k8s/base/scheduler-worker/configmap.yaml"
                     or . == "infra/compose/edge/configs/Caddyfile.tmpl"
                     or test("^infra/k8s/overlays/[^/]+/" + $node + "/")
+                    or test("^infra/k8s/secrets/external-secrets/[^/]+/" + $node + "/(external-secret|kustomization)\\.ya?ml$")
                     or test("^infra/k8s/argocd/[^/]*applicationset[^/]*\\.ya?ml$")
                   ))
              )' <<<"$OPERATOR_FILES" >/dev/null; then
@@ -273,6 +274,9 @@ jobs:
       # stubbed runtime deps; proves distinct-value-per-node + custody gating.
       - name: secrets fan-out tests (task.5094)
         run: bash scripts/ci/tests/secrets-fanout.test.sh
+
+      - name: ESO adoption manifest tests
+        run: bash scripts/ci/tests/eso-adoption.test.sh
 
       # task.5078 — catalog-driven edge routing. Asserts the committed Caddyfile
       # is in sync with the catalog (drift gate that makes "add a node = 1

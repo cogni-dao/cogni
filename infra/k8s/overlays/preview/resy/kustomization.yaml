@@ -61,13 +61,13 @@ patches:
     patch: |
       - op: replace
         path: /spec/template/spec/containers/0/envFrom/1/secretRef/name
-        value: "resy-node-app-secrets"
+        value: "resy-env-secrets"
       - op: replace
         path: /spec/template/spec/initContainers/0/envFrom/1/secretRef/name
-        value: "resy-node-app-secrets"
+        value: "resy-env-secrets"
       - op: replace
         path: /spec/template/spec/initContainers/0/envFrom/1/secretRef/name
-        value: "resy-node-app-secrets"
+        value: "resy-env-secrets"
       - op: replace
         path: /spec/template/spec/containers/0/ports/0/containerPort
         value: 3300

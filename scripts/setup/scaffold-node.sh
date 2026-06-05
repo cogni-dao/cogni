@@ -89,13 +89,55 @@ for env in "${ENVS[@]}"; do
   perl -pi -e "s/\\b30200\\b/$NODEPORT/g; s/\\b3200\\b/$PORT/g" "$f"
 done
 
-echo "==> 6. per-node AppSets + bootstrap kustomization (catalog-derived, LANE_ISOLATION)"
+echo "==> 6. ExternalSecret leaves x3 (OpenBao -> ESO -> <node>-env-secrets)"
+for env in "${ENVS[@]}"; do
+  dst="infra/k8s/secrets/external-secrets/$env/$SLUG"
+  mkdir -p "$dst"
+  cat > "$dst/external-secret.yaml" <<EOF
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2025 Cogni-DAO
+#
+# ExternalSecret for $SLUG. One service/env path is extracted from OpenBao into the
+# single k8s Secret consumed by the workload.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: $SLUG-env-secrets
+  namespace: cogni-$env
+  labels:
+    app.kubernetes.io/part-of: cogni-secrets-substrate
+    app.kubernetes.io/component: $SLUG
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: openbao-backend
+    kind: ClusterSecretStore
+  target:
+    name: $SLUG-env-secrets
+    creationPolicy: Owner
+    deletionPolicy: Retain
+  dataFrom:
+    - extract:
+        key: $env/$SLUG
+EOF
+  cat > "$dst/kustomization.yaml" <<'EOF'
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2025 Cogni-DAO
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - external-secret.yaml
+EOF
+done
+
+echo "==> 7. per-node AppSets + bootstrap kustomization (catalog-derived, LANE_ISOLATION)"
 # The shared `<env>-applicationset.yaml` files were retired for one AppSet object
 # per (env, node). The new catalog entry above makes the new node a deployable
 # target, so a full re-render emits its 3 AppSet files + kustomization entries.
 bash "$ROOT/scripts/ci/render-node-appset.sh" --write
 
-echo "==> 7. ci.yaml single-node-scope filters (enforced by single-node-scope-meta.spec)"
+echo "==> 8. ci.yaml single-node-scope filters (enforced by single-node-scope-meta.spec)"
 SLUG="$SLUG" perl -0pi -e '
   my $s=$ENV{SLUG};
   s/(          filters: \|\n)/$1            $s:\n              - '"'"'nodes\/$s\/**'"'"'\n/;

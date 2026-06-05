@@ -25,6 +25,8 @@ import {
   insertCaddyBlock,
   nextFreeNodePort,
   renderCatalog,
+  renderExternalSecret,
+  renderExternalSecretKustomization,
   renderGitmodules,
   renderNodeAppset,
   renderOverlay,
@@ -131,7 +133,8 @@ const APPSET_TEMPLATE_PATH = "scripts/ci/node-applicationset.yaml.tmpl";
 // Node-content rename/delete (NODE_RENAME_PATHS / NODE_DELETE_PATHS) is gone with the inline
 // `buildNodeSubtree`: a submodule node's files live in its own repo (minted via
 // `generateFromTemplate`), and the seed already strips `.cogni/secrets-catalog.yaml` +
-// `k8s/external-secrets` (bug.5086 Part D) — the operator never rewrites node-content blobs.
+// `k8s/external-secrets` (bug.5086 Part D). The operator PR emits operator-owned
+// ExternalSecret leaves under `infra/k8s/secrets/external-secrets/<env>/<slug>/` instead.
 
 export class GitHubRepoWriter {
   private readonly config: GitHubRepoWriterConfig;
@@ -563,6 +566,14 @@ export class GitHubRepoWriter {
       await addBlob(
         overlayPath,
         renderOverlay(templateOverlay, slug, nodePort, port)
+      );
+      await addBlob(
+        `infra/k8s/secrets/external-secrets/${env}/${slug}/external-secret.yaml`,
+        renderExternalSecret(slug, env)
+      );
+      await addBlob(
+        `infra/k8s/secrets/external-secrets/${env}/${slug}/kustomization.yaml`,
+        renderExternalSecretKustomization()
       );
     }
 

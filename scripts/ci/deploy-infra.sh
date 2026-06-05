@@ -1257,6 +1257,64 @@ if command -v kubectl &>/dev/null; then
   HOST_IP=$(hostname -I | awk '{print $1}')
   log_info "  k8s namespace: ${K8S_NS}, host IP: ${HOST_IP}"
 
+  sync_eso_doltgres_url() {
+    local node="$1" value="$2"
+    local external_secret="${node}-env-secrets"
+    local sync_root="/tmp/cogni-secret-sync"
+    local wrapper_dir jwt bao_token hash out
+
+    if ! kubectl -n "${K8S_NS}" get externalsecret "${external_secret}" >/dev/null 2>&1; then
+      return 0
+    fi
+    if [[ ! -x "${sync_root}/scripts/secrets/set-secret.sh" ]]; then
+      log_warn "  [eso-sync] ${sync_root}/scripts/secrets/set-secret.sh missing - cannot sync ${node}/DOLTGRES_URL to OpenBao"
+      return 1
+    fi
+    if ! kubectl get sa openbao-operator -n default >/dev/null 2>&1; then
+      log_warn "  [eso-sync] openbao-operator service account missing - cannot sync ${node}/DOLTGRES_URL to OpenBao"
+      return 1
+    fi
+
+    jwt=$(kubectl create token openbao-operator -n default 2>/dev/null) || {
+      log_warn "  [eso-sync] failed to mint openbao-operator token"
+      return 1
+    }
+    bao_token=$(kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
+      bao write -field=token auth/kubernetes/login \
+      "role=${DEPLOY_ENVIRONMENT}-writer" "jwt=${jwt}" 2>/dev/null) || {
+      log_warn "  [eso-sync] failed to authenticate to OpenBao writer role ${DEPLOY_ENVIRONMENT}-writer"
+      return 1
+    }
+
+    wrapper_dir=$(mktemp -d)
+    cat >"${wrapper_dir}/bao" <<'WRAPEOF'
+#!/usr/bin/env bash
+set -euo pipefail
+exec kubectl exec -i -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="${BAO_TOKEN:?}" bao "$@"
+WRAPEOF
+    chmod +x "${wrapper_dir}/bao"
+
+    out=$(mktemp)
+    if printf '%s' "${value}" | \
+      REPO_ROOT="${sync_root}" \
+      BAO_ADDR=http://127.0.0.1:8200 \
+      BAO_TOKEN="${bao_token}" \
+      PATH="${wrapper_dir}:$PATH" \
+      bash "${sync_root}/scripts/secrets/set-secret.sh" "${DEPLOY_ENVIRONMENT}" "${node}" DOLTGRES_URL >"${out}" 2>&1; then
+      hash=$(printf '%s' "${value}" | sha256sum | awk '{print $1}')
+      log_info "  [eso-sync] synced ${node}/DOLTGRES_URL to OpenBao (sha256=${hash})"
+    else
+      sed 's/^/[eso-sync] /' "${out}" >&2 || true
+      rm -rf "${wrapper_dir}" "${out}"
+      return 1
+    fi
+    rm -rf "${wrapper_dir}" "${out}"
+
+    kubectl -n "${K8S_NS}" annotate externalsecret "${external_secret}" "force-sync=$(date +%s)" --overwrite >/dev/null
+    kubectl -n "${K8S_NS}" wait --for=condition=Ready "externalsecret/${external_secret}" --timeout=120s >/dev/null
+    log_info "  [eso-sync] ${external_secret} Ready=True after forced sync"
+  }
+
   # ── Phase-1 read-path proof: OpenBao db-reader (Invariant 15 DB-cred migration) ─
   # secrets-management.md "DB-credential provisioning" Phase 1. deploy-infra holds
   # NO root token (Invariant 13); here it proves it can mint a least-privilege,
@@ -1324,6 +1382,7 @@ if command -v kubectl &>/dev/null; then
       DOLTGRES_ENV_LINE="DOLTGRES_URL_POLY=${DOLTGRES_URL_NODE}"
     else
       DOLTGRES_ENV_LINE="DOLTGRES_URL=${DOLTGRES_URL_NODE}"
+      sync_eso_doltgres_url "$node" "$DOLTGRES_URL_NODE"
     fi
     SECRET_FILE=$(mktemp)
     cat > "$SECRET_FILE" <<SECEOF
@@ -1615,7 +1674,7 @@ fi
 # Deploy bundles to VM via rsync
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 log_info "Deploying edge and runtime bundles to VM..."
-ssh $SSH_OPTS root@"$VM_HOST" "mkdir -p /opt/cogni-template-edge /opt/cogni-template-runtime /opt/cogni-template-argocd-updater"
+ssh $SSH_OPTS root@"$VM_HOST" "mkdir -p /opt/cogni-template-edge /opt/cogni-template-runtime /opt/cogni-template-argocd-updater /tmp/cogni-secret-sync/scripts/secrets /tmp/cogni-secret-sync/infra/catalog"
 
 # Upload edge bundle (rarely changes - Caddy config only)
 rsync -av -e "ssh $SSH_OPTS" \
@@ -1638,6 +1697,16 @@ if [[ -d "$REPO_ROOT/infra/k8s/argocd/image-updater" ]]; then
 fi
 
 # OpenClaw config/workspace uploads removed — sandbox-openclaw disabled.
+
+# Canonical OpenBao writer used by the remote ESO DB-secret sync path. The
+# script validates services against infra/catalog, so upload that read-only
+# context with it.
+scp $SSH_OPTS "$REPO_ROOT/scripts/secrets/set-secret.sh" \
+  root@"$VM_HOST":/tmp/cogni-secret-sync/scripts/secrets/set-secret.sh
+rsync -av --delete -e "ssh $SSH_OPTS" \
+  "$REPO_ROOT/infra/catalog/" \
+  root@"$VM_HOST":/tmp/cogni-secret-sync/infra/catalog/
+ssh $SSH_OPTS root@"$VM_HOST" "chmod +x /tmp/cogni-secret-sync/scripts/secrets/set-secret.sh"
 
 # Upload deployment script
 scp $SSH_OPTS "$ARTIFACT_DIR/deploy-infra-remote.sh" root@"$VM_HOST":/tmp/deploy-infra-remote.sh

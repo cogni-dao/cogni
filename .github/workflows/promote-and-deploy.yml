@@ -377,6 +377,18 @@ jobs:
             "deploy-branch/infra/k8s/overlays/${OVERLAY_ENV}/${NODE}/"
           mkdir -p deploy-branch/infra/catalog
           cp "app-src/infra/catalog/${NODE}.yaml" "deploy-branch/infra/catalog/${NODE}.yaml"
+          if [ -d "app-src/infra/k8s/secrets/external-secrets/${OVERLAY_ENV}/${NODE}" ]; then
+            mkdir -p "deploy-branch/infra/k8s/secrets/external-secrets/${OVERLAY_ENV}/${NODE}"
+            rsync -a --delete \
+              "app-src/infra/k8s/secrets/external-secrets/${OVERLAY_ENV}/${NODE}/" \
+              "deploy-branch/infra/k8s/secrets/external-secrets/${OVERLAY_ENV}/${NODE}/"
+          fi
+          if [ -d "app-src/nodes/${NODE}/k8s/external-secrets/${OVERLAY_ENV}" ]; then
+            mkdir -p "deploy-branch/nodes/${NODE}/k8s/external-secrets/${OVERLAY_ENV}"
+            rsync -a --delete \
+              "app-src/nodes/${NODE}/k8s/external-secrets/${OVERLAY_ENV}/" \
+              "deploy-branch/nodes/${NODE}/k8s/external-secrets/${OVERLAY_ENV}/"
+          fi
 
       - name: Promote digest + record source-sha
         if: steps.digest.outputs.promoted == 'true'

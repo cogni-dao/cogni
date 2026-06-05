@@ -92,6 +92,18 @@ function isNodeWiring(path: string, node: string): boolean {
         file.endsWith(`-${node}-applicationset.yml`))
     );
   }
+  if (
+    path.startsWith(`infra/k8s/secrets/external-secrets/`) &&
+    path.endsWith(`/${node}/external-secret.yaml`)
+  ) {
+    return true;
+  }
+  if (
+    path.startsWith(`infra/k8s/secrets/external-secrets/`) &&
+    path.endsWith(`/${node}/kustomization.yaml`)
+  ) {
+    return true;
+  }
   // scheduler-worker configmap + edge Caddyfile.tmpl are both catalog-derived
   // regen artifacts (gen:scheduler-worker-endpoints / gen:caddyfile): a node
   // birth that adds a `type: node` catalog entry regenerates both, so they must

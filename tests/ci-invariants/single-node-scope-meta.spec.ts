@@ -240,5 +240,10 @@ describe("single-node-scope workflow gate · structural pins", () => {
         "(catalog-derived regen artifact; bug.5086 parity — must mirror isNodeWiring " +
         "in classify.ts so a catalog-driven Caddyfile regen rides a node birth)"
     ).toContain('"infra/compose/edge/configs/Caddyfile.tmpl"');
+    expect(
+      enforce.run,
+      "node-birth wiring whitelist must include operator-owned ExternalSecret leaves " +
+        "(must mirror isNodeWiring in classify.ts)"
+    ).toContain("infra/k8s/secrets/external-secrets/");
   });
 });
