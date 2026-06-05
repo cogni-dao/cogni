@@ -180,7 +180,12 @@ export const knowledgeRemoteSpecSchema = z
     custody: z.literal("cogni-owned"),
   })
   .superRefine((remote, ctx) => {
-    const url = new URL(remote.url);
+    let url: URL;
+    try {
+      url = new URL(remote.url);
+    } catch {
+      return;
+    }
     const expected = `/${remote.owner}/${remote.repo}`;
     if (url.pathname !== expected) {
       ctx.addIssue({

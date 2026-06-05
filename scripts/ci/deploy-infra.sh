@@ -308,8 +308,10 @@ fi
 
 log_info "All required secrets provided"
 
-# Check optional secrets (warn if missing)
-OPTIONAL_SECRETS=(
+# Check optional runtime inputs (warn if missing). Some entries are GitHub
+# Environment variables rather than secrets; deploy-infra only needs them in
+# the runner environment.
+OPTIONAL_RUNTIME_ENV_VARS=(
     "GRAFANA_CLOUD_LOKI_URL"
     "GRAFANA_CLOUD_LOKI_USER"
     "GRAFANA_CLOUD_LOKI_API_KEY"
@@ -362,9 +364,9 @@ OPTIONAL_SECRETS=(
     "ACTIONS_AUTOMATION_BOT_PAT"
 )
 
-for secret in "${OPTIONAL_SECRETS[@]}"; do
-    if [[ -z "${!secret:-}" ]]; then
-        log_warn "Optional secret not set: $secret"
+for env_var in "${OPTIONAL_RUNTIME_ENV_VARS[@]}"; do
+    if [[ -z "${!env_var:-}" ]]; then
+        log_warn "Optional runtime env var not set: $env_var"
     fi
 done
 

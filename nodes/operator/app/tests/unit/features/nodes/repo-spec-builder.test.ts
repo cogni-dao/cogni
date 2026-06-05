@@ -11,6 +11,7 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { parse as parseYaml } from "yaml";
 
 import { buildPendingActivationRepoSpecYaml } from "@/features/nodes/repo-spec-builder";
 
@@ -44,6 +45,12 @@ describe("buildPendingActivationRepoSpecYaml", () => {
     expect(yaml).toContain(`plugin_contract: "${FIXTURE.pluginAddress}"`);
     expect(yaml).toContain(`signal_contract: "${FIXTURE.signalAddress}"`);
     expect(yaml).toContain(`chain_id: "8453"`);
+    expect(parseYaml(yaml).cogni_dao).toMatchObject({
+      dao_contract: FIXTURE.daoAddress,
+      plugin_contract: FIXTURE.pluginAddress,
+      signal_contract: FIXTURE.signalAddress,
+      chain_id: "8453",
+    });
   });
 
   it("emits payments.status: pending_activation", () => {

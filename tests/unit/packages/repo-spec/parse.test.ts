@@ -158,6 +158,24 @@ describe("parseRepoSpec", () => {
       ).toThrow(/Invalid repo-spec structure/);
     });
 
+    it("rejects malformed DoltHub remote URLs through repo-spec validation", () => {
+      expect(() =>
+        parseRepoSpec({
+          ...VALID_OBJECT,
+          knowledge: {
+            database: "knowledge_my_node",
+            remote: {
+              provider: "dolthub",
+              owner: "cogni-dao-test",
+              repo: "knowledge-my-node",
+              url: "not-a-url",
+              custody: "cogni-owned",
+            },
+          },
+        })
+      ).toThrow(/Invalid repo-spec structure/);
+    });
+
     it("rejects DoltHub remote URLs with embedded credentials", () => {
       expect(() =>
         parseRepoSpec({
