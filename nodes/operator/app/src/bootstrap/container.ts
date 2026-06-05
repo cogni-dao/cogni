@@ -39,6 +39,7 @@ import {
 } from "@cogni/knowledge-store";
 import {
   buildDoltgresClient,
+  createDoltgresPuller,
   createDoltgresPusher,
   DoltgresEdoResolverAdapter,
   DoltgresKnowledgeContributionAdapter,
@@ -626,6 +627,59 @@ function createContainer(): Container {
       connectionString: env.DOLTGRES_URL,
       applicationName: `cogni_knowledge_${env.SERVICE_NAME ?? "app"}`,
     });
+    // Gate-by-secret-presence (same as the push mirror below): DOLTHUB_REMOTE_URL
+    // is the single signal that a remote is wired. See dolthub-remote-bootstrap.md.
+    const doltRemoteUrl = env.DOLTHUB_REMOTE_URL;
+    // Seed-on-boot (task.5104): a freshly-provisioned node inits an empty
+    // knowledge DB with no common ancestor to the remote, so the push mirror
+    // can never push and the node has no knowledge. Make local main descend
+    // from origin/main so the mirror works and reads return data. Idempotent —
+    // a no-op once the node already shares history. `createContainer` is a
+    // synchronous singleton (and instrumentation.ts can't import bootstrap),
+    // so the seed runs as a floating boot task — same fire-and-forget shape as
+    // the LiteLLM preflight in instrumentation.ts and the lazily-invoked push
+    // mirror. It races nothing in practice: knowledge reads arrive at HTTP
+    // request time, well after the fetch+reset completes. Degrades like the
+    // push — a failed seed logs and boot continues; never hard-fails.
+    if (doltRemoteUrl) {
+      void createDoltgresPuller({
+        sql: doltClient,
+        remoteName: "origin",
+        remoteUrl: doltRemoteUrl,
+        // PRISTINE GUARD: the knowledge DB also holds `work_items`, and the seed's
+        // `reset --hard` adopts the remote's version of the WHOLE DB. Only adopt
+        // when this node has no local operational data to lose — i.e. `work_items`
+        // is empty (a genuinely fresh boot). A node that already accumulated work
+        // items but never shared history with the remote (the exact "no common
+        // ancestor" target) is left untouched ("skipped_unsafe") instead of having
+        // its work items clobbered. work_items lives in the same Doltgres DB.
+        canAdoptRemoteHistory: async (conn) => {
+          try {
+            const rows = await conn.unsafe(
+              "SELECT COUNT(*)::int AS c FROM work_items"
+            );
+            return (
+              Number((rows[0] as { c?: number } | undefined)?.c ?? 0) === 0
+            );
+          } catch {
+            // work_items table absent ⇒ nothing to protect ⇒ pristine.
+            return true;
+          }
+        },
+      })
+        .seedFromRemote()
+        .then((action) =>
+          action === "skipped_unsafe"
+            ? log.warn(
+                { remote: doltRemoteUrl, action },
+                "dolthub_seed_skipped_nonpristine"
+              )
+            : log.info({ remote: doltRemoteUrl, action }, "dolthub_seed_ok")
+        )
+        .catch((err) =>
+          log.warn({ err, remote: doltRemoteUrl }, "dolthub_seed_failed")
+        );
+    }
     const knowledgePort = new DoltgresKnowledgeStoreAdapter({
       sql: doltClient,
     });
@@ -639,28 +693,29 @@ function createContainer(): Container {
     const contributionPort = new DoltgresKnowledgeContributionAdapter({
       sql: doltClient,
     });
-    // Optional post-merge mirror to DoltHub (task.5069). Disabled when
-    // DOLTHUB_REMOTE_URL is unset. Gate-by-secret-presence follows the
-    // established pattern (Langfuse, Privy, PostHog) — DOLTHUB_REMOTE_URL
-    // is only granted to the production GitHub Environment Secret scope, so
-    // candidate-a/preview boot with the hook undefined and never push. v0
-    // invariant: prod is the only writer. Bootstrap: see
-    // docs/runbooks/dolthub-remote-bootstrap.md.
-    const remoteUrl = env.DOLTHUB_REMOTE_URL;
-    const pushMainOnMerge = remoteUrl
-      ? wrapPushSafe(
-          createDoltgresPusher({
-            sql: doltClient,
-            remoteName: "origin",
-            remoteUrl,
-          }),
-          {
-            onSuccess: () => log.info({ remote: remoteUrl }, "dolthub_push_ok"),
-            onFailure: (err) =>
-              log.warn({ err, remote: remoteUrl }, "dolthub_push_failed"),
-          }
-        )
-      : undefined;
+    // Optional post-merge mirror to DoltHub (task.5069). Fail-closed: the push
+    // is wired only when DOLTHUB_REMOTE_URL is set AND DOLTHUB_MIRROR_PUSH is
+    // true. The URL alone enables the read-only seed/pull above; PUSHING the
+    // canonical history additionally requires the prod-only flag, so a URL
+    // fat-fingered onto test/preview (as on candidate-a) can pull-seed but can
+    // never write to the prod mirror. v0 invariant: prod is the only writer.
+    // Bootstrap: see docs/runbooks/dolthub-remote-bootstrap.md.
+    const pushMainOnMerge =
+      doltRemoteUrl && env.DOLTHUB_MIRROR_PUSH
+        ? wrapPushSafe(
+            createDoltgresPusher({
+              sql: doltClient,
+              remoteName: "origin",
+              remoteUrl: doltRemoteUrl,
+            }),
+            {
+              onSuccess: () =>
+                log.info({ remote: doltRemoteUrl }, "dolthub_push_ok"),
+              onFailure: (err) =>
+                log.warn({ err, remote: doltRemoteUrl }, "dolthub_push_failed"),
+            }
+          )
+        : undefined;
     knowledgeContributionService = createContributionService({
       port: contributionPort,
       canMergeKnowledge: defaultCanMergeKnowledge,

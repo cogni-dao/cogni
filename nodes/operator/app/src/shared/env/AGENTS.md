@@ -109,7 +109,8 @@ Optional:
 - PROMETHEUS_READ_PASSWORD - Basic auth password for Prometheus queries (read-only token)
 - ANALYTICS_K_THRESHOLD (int, default 50) - K-anonymity threshold for public analytics
 - ANALYTICS_QUERY_TIMEOUT_MS (int, default 5000) - Prometheus query timeout
-- DOLTHUB_REMOTE_URL (url) - Dolt remote for the knowledge mirror. When set, container DI wires post-merge `pushMainOnMerge`. Production-only by convention; see docs/runbooks/dolthub-remote-bootstrap.md
+- DOLTHUB_REMOTE_URL (url) - Dolt remote for the knowledge mirror. When set, container DI wires the seed-on-boot PULL (read-only — safe on any env). Push is additionally gated by DOLTHUB_MIRROR_PUSH; see docs/runbooks/dolthub-remote-bootstrap.md
+- DOLTHUB_MIRROR_PUSH ("true"|"false", default "false") - fail-closed push permission. `pushMainOnMerge` is wired only when DOLTHUB_REMOTE_URL is set AND this is "true". Set "true" ONLY in the production secret scope so test/preview can pull-seed but never write the prod mirror
 - DOLTHUB_API_TOKEN - DoltHub PAT for REST/SQL API (read path); does NOT authenticate the Dolt push protocol
 - DOLTHUB_OAUTH_CLIENT_ID / DOLTHUB_OAUTH_CLIENT_SECRET - reserved for v1 per-user identity (task.5070); not read by v0 push job
 

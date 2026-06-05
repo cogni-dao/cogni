@@ -145,6 +145,16 @@ export const serverSchema = z.object({
   // per-user identity (task.5070, blocked on DoltHub app approval). Per
   // proj.knowledge-syntropy (W0c tier) + task.5069.
   DOLTHUB_REMOTE_URL: optionalString,
+  // Push permission for the DoltHub mirror. DOLTHUB_REMOTE_URL alone enables
+  // the seed-on-boot PULL (read-only — safe on any env). PUSHING the canonical
+  // history is fail-closed behind this flag, set "true" ONLY in the production
+  // secret scope, so a fat-fingered URL on test/preview can pull-seed but can
+  // never write to the prod mirror. Default "false". See task.5104 +
+  // docs/runbooks/dolthub-remote-bootstrap.md.
+  DOLTHUB_MIRROR_PUSH: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
   DOLTHUB_API_TOKEN: optionalString,
   DOLTHUB_OAUTH_CLIENT_ID: optionalString,
   DOLTHUB_OAUTH_CLIENT_SECRET: optionalString,
