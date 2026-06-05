@@ -18,6 +18,8 @@ import { type ReactElement, useState } from "react";
 import { Button } from "@/components";
 import type { NodeStatus } from "@/shared/db/nodes";
 
+import { LaunchPackCopyButton } from "./LaunchPackCopyButton.client";
+
 interface Props {
   readonly nodeId: string;
   readonly status: NodeStatus;
@@ -71,7 +73,10 @@ export function NodeActionPanel({ nodeId, status }: Props): ReactElement {
           <p className="text-muted-foreground">
             Operator wallet provisioning is coming soon.
           </p>
-          <Button disabled>Provision operator wallet</Button>
+          <div className="flex items-center gap-2">
+            <Button disabled>Provision operator wallet</Button>
+            <LaunchPackCopyButton nodeId={nodeId} />
+          </div>
         </div>
       );
       break;
@@ -81,7 +86,10 @@ export function NodeActionPanel({ nodeId, status }: Props): ReactElement {
           <p className="text-muted-foreground">
             Operator wallet is ready. Activate payment rails next.
           </p>
-          <Button disabled>Activate payments</Button>
+          <div className="flex items-center gap-2">
+            <Button disabled>Activate payments</Button>
+            <LaunchPackCopyButton nodeId={nodeId} />
+          </div>
         </div>
       );
       break;
