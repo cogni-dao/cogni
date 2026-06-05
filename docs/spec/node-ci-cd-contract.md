@@ -192,11 +192,11 @@ Two `full-app` templates differ **only by integration** (fork-whole vs submodule
 
 All three repos carry the node **app + its merge-gate CI + image build**. They differ on **one axis: how much of the deploy/infra plane they carry.**
 
-| Repo                          | Node app                                 | Node CI (merge-gate + build→GHCR) | Deploy/infra plane¹      | Who deploys it                              |
-| ----------------------------- | ---------------------------------------- | --------------------------------- | ------------------------ | ------------------------------------------- |
-| **cogni monorepo**            | operator + inline nodes (`nodes/poly`, …) | yes (shared root configs)         | **owns it — every node** | itself                                      |
-| **standalone-node** (fork-whole) | node nested at `nodes/node-template/`    | yes                               | **yes — you self-host**  | itself (you _are_ an operator)              |
-| **node-template** (submodule, node-at-root) | node at repo root              | **yes — own `ci.yaml` + build→GHCR** | **no**                | the shared operator (pin → provision → flight → promote) |
+| Repo                                        | Node app                                  | Node CI (merge-gate + build→GHCR)    | Deploy/infra plane¹      | Who deploys it                                           |
+| ------------------------------------------- | ----------------------------------------- | ------------------------------------ | ------------------------ | -------------------------------------------------------- |
+| **cogni monorepo**                          | operator + inline nodes (`nodes/poly`, …) | yes (shared root configs)            | **owns it — every node** | itself                                                   |
+| **standalone-node** (fork-whole)            | node nested at `nodes/node-template/`     | yes                                  | **yes — you self-host**  | itself (you _are_ an operator)                           |
+| **node-template** (submodule, node-at-root) | node at repo root                         | **yes — own `ci.yaml` + build→GHCR** | **no**                   | the shared operator (pin → provision → flight → promote) |
 
 ¹ Deploy/infra plane = `provision-env`, Argo AppSets + k8s overlays, `deploy-infra`, `candidate-flight`, OpenBao/ESO substrate, the operator app, `infra/catalog`, root monorepo tooling.
 
@@ -204,14 +204,14 @@ All three repos carry the node **app + its merge-gate CI + image build**. They d
 
 **What `node-template` carries vs. omits:**
 
-| Carries (node-level, sovereign)                                                                        | Omits (the operator owns these)                                                                          |
-| ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `app/ graphs/ packages/` + `k8s/` **base** manifests (the node's own Deployment/Service)              | per-env **overlays + AppSets + catalog row** — generated into the operator monorepo by the pin-PR        |
-| `.github/workflows/ci.yaml` (merge gate) + the build→GHCR workflow                                    | `provision-env`, `deploy-infra`, `candidate-flight`, Argo, OpenBao/ESO substrate                        |
-| **`.cogni/rules/` + the review gate** (so a PR in the node repo routes + reviews via the node's own rules — **born-reviewable**) | the operator app, `infra/catalog`, root monorepo tooling                                                |
-| `biome/ tsconfig/ Dockerfile / .dependency-cruiser.cjs` + `setup-main-branch.sh` (`POLICY_STAYS_LOCAL`) | —                                                                                                       |
+| Carries (node-level, sovereign)                                                                                                  | Omits (the operator owns these)                                                                   |
+| -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `app/ graphs/ packages/` + `k8s/` **base** manifests (the node's own Deployment/Service)                                         | per-env **overlays + AppSets + catalog row** — generated into the operator monorepo by the pin-PR |
+| `.github/workflows/ci.yaml` (merge gate) + the build→GHCR workflow                                                               | `provision-env`, `deploy-infra`, `candidate-flight`, Argo, OpenBao/ESO substrate                  |
+| **`.cogni/rules/` + the review gate** (so a PR in the node repo routes + reviews via the node's own rules — **born-reviewable**) | the operator app, `infra/catalog`, root monorepo tooling                                          |
+| `biome/ tsconfig/ Dockerfile / .dependency-cruiser.cjs` + `setup-main-branch.sh` (`POLICY_STAYS_LOCAL`)                          | —                                                                                                 |
 
-> **Born-reviewable (the `ay` gap).** A minted node must ship its own `.cogni/rules/` + review gate, or a PR in it routes to *nothing* — the failure observed on the first mint (`cogni-test-org/ay`), where the review bot triggered but had no node-local rules to apply. The P1 projection must carry these from the canonical node, not just `app/`.
+> **Born-reviewable (the `ay` gap).** A minted node must ship its own `.cogni/rules/` + review gate, or a PR in it routes to _nothing_ — the failure observed on the first mint (`cogni-test-org/ay`), where the review bot triggered but had no node-local rules to apply. The P1 projection must carry these from the canonical node, not just `app/`.
 
 **Derivation (this is P1).** `node-template` = the canonical node source in the cogni monorepo (`nodes/node-template/{app,graphs,k8s,packages}`) **projected to repo root**, plus the node-level CI/policy, **minus the deploy/infra plane**. The projection is path-identical (the sync feature `detect-sync-drift.mjs` lacks; #1366); the omit-column above _is_ the projection's exclusion list. This keeps `node-template` in lockstep with the canonical node without ever shipping it the operator's plane.
 
@@ -219,10 +219,10 @@ All three repos carry the node **app + its merge-gate CI + image build**. They d
 
 A submodule node-dev carries CI but **not** the deploy/infra plane, so the monorepo guides ([create-service](../guides/create-service.md), [secrets-add-new](../guides/secrets-add-new.md)) split into a **node-dev half (declare _shape_ in your repo)** and an **operator half (the plane _provisions_ it)**. The node-dev never edits `infra/catalog`, runs `provision-env`, or touches Argo — those are the operator's. `node-template` ships a node-scoped `AGENTS.md` pointing at exactly the node-dev half below; the full guides stay the operator's reference.
 
-| Task | Node-dev does (in their repo, their CI) | Operator's plane does |
-| --- | --- | --- |
-| **Add a secret** | Declare the key's _shape_ in `.cogni/secrets-catalog.yaml` (node-domain). Consume it via typed env in app code (fail-fast if missing). | Selective-init reads the catalog → generates the ExternalSecret + OpenBao path. **Value** is set with `pnpm secrets:set <env> <slug> <KEY>` by whoever holds that env's OpenBao writer role — the env owner (a self-host node-dev on their own env; the operator on an operator-hosted env, or a node-dev granted the env-writer role). |
-| **Add a service** | App code + `Dockerfile` + k8s **base** manifest (Deployment/Service) + a catalog entry + the **build→GHCR** workflow leg, all in the node repo. Node CI builds + pushes the image. | The pin-PR / provision generates the per-env **overlay + AppSet + catalog row** referencing the pushed digest; Argo deploys it. |
+| Task              | Node-dev does (in their repo, their CI)                                                                                                                                            | Operator's plane does                                                                                                                                                                                                                                                                                                                   |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Add a secret**  | Declare the key's _shape_ in `.cogni/secrets-catalog.yaml` (node-domain). Consume it via typed env in app code (fail-fast if missing).                                             | Selective-init reads the catalog → generates the ExternalSecret + OpenBao path. **Value** is set with `pnpm secrets:set <env> <slug> <KEY>` by whoever holds that env's OpenBao writer role — the env owner (a self-host node-dev on their own env; the operator on an operator-hosted env, or a node-dev granted the env-writer role). |
+| **Add a service** | App code + `Dockerfile` + k8s **base** manifest (Deployment/Service) + a catalog entry + the **build→GHCR** workflow leg, all in the node repo. Node CI builds + pushes the image. | The pin-PR / provision generates the per-env **overlay + AppSet + catalog row** referencing the pushed digest; Argo deploys it.                                                                                                                                                                                                         |
 
 **Invariant: the node-dev declares shape in-repo; the operator's plane consumes it.** A new secret or service is **one edit in the node's own repo + its own CI** — never a monorepo PR. The value-set + deploy wiring belong to whoever owns the env. This keeps `secrets-add-new` / `create-service` correct verbatim for a **self-host** node (it owns its plane) and cleanly halved for a **submodule** node (operator owns the plane half).
 
