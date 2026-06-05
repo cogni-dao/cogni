@@ -566,6 +566,11 @@ log_error() {
     echo -e "\033[0;31m[ERROR]\033[0m $1"
 }
 
+log_fatal() {
+    echo -e "\033[0;31m[FATAL]\033[0m $1" >&2
+    exit 1
+}
+
 # Emit deployment event to Grafana Cloud Loki (remote script)
 emit_deployment_event() {
   local event="$1"
@@ -1485,14 +1490,27 @@ SECEOF
   if [ $ROLLOUT_FAILED -ne 0 ]; then
     log_warn "One or more node-app rollouts did not complete within 300s"
     if [[ "$K8S_SECRETS_ONLY" == true ]]; then
-      log_fatal "k8s-secrets-only rollout did not complete; refusing to report secret propagation success"
+      log_warn "k8s-secrets-only will continue to runtime env proof; rollout may be waiting on old pod termination"
     fi
   fi
   log_info "[$(date -u +%H:%M:%S)] Node-apps ready"
 
   for node in ${NODE_APP_TARGETS}; do
     if [[ "$node" == "operator" ]]; then
-      if kubectl -n "${K8S_NS}" exec "deployment/${node}-node-app" -c app -- \
+      if ! kubectl -n "${K8S_NS}" wait --for=condition=Available "deployment/${node}-node-app" --timeout=180s >/dev/null 2>&1; then
+        log_fatal "operator deployment is not Available after secret sync"
+      fi
+      OPERATOR_POD="$(
+        kubectl -n "${K8S_NS}" get pods \
+          -l app.kubernetes.io/name=node-app,app.kubernetes.io/instance=operator \
+          --sort-by=.metadata.creationTimestamp \
+          -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.metadata.deletionTimestamp}{"\t"}{range .status.containerStatuses[?(@.name=="app")]}{.ready}{end}{"\n"}{end}' \
+        | awk -F '\t' '$2 == "" && $3 == "true" { pod = $1 } END { print pod }'
+      )"
+      if [[ -z "$OPERATOR_POD" ]]; then
+        log_fatal "no ready non-terminating operator pod found after secret sync"
+      fi
+      if kubectl -n "${K8S_NS}" exec "$OPERATOR_POD" -c app -- \
         /bin/sh -lc 'test -n "${NODE_MINT_OWNER:-}" && test -n "${NODE_TEMPLATE_OWNER:-}"' >/dev/null 2>&1; then
         log_info "  operator runtime has required node mint env keys (values redacted)"
       else
