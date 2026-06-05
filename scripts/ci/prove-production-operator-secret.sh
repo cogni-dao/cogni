@@ -5,12 +5,13 @@ set -euo pipefail
 : "${VM_HOST:?VM_HOST required}"
 : "${K8S_NS:=cogni-production}"
 : "${SSH_KEY_PATH:=$HOME/.ssh/deploy_key}"
+: "${PROOF_RESTART:=true}"
 
 ssh -i "$SSH_KEY_PATH" \
   -o StrictHostKeyChecking=yes \
   -o ServerAliveInterval=15 \
   -o ServerAliveCountMax=8 \
-  root@"$VM_HOST" "K8S_NS='$K8S_NS' bash -s" <<'REMOTE'
+  root@"$VM_HOST" "K8S_NS='$K8S_NS' PROOF_RESTART='$PROOF_RESTART' bash -s" <<'REMOTE'
 set -euo pipefail
 
 require() {
@@ -26,7 +27,9 @@ test -n "$(kubectl -n "$K8S_NS" get secret operator-node-app-secrets -o jsonpath
 test -n "$(kubectl -n "$K8S_NS" get secret operator-node-app-secrets -o jsonpath='{.data.NODE_TEMPLATE_OWNER}')"
 echo "operator-node-app-secrets has required mint keys (values redacted)"
 
-kubectl -n "$K8S_NS" rollout restart deployment/operator-node-app
+if [ "$PROOF_RESTART" = "true" ]; then
+  kubectl -n "$K8S_NS" rollout restart deployment/operator-node-app
+fi
 
 pod=""
 deadline="$(($(date -u +%s) + 420))"

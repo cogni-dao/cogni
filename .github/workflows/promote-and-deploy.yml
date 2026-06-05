@@ -31,11 +31,12 @@ on:
         type: choice
         options: ["true", "false"]
       deploy_infra_mode:
-        description: "deploy-infra mode. full reconciles Compose + k8s bridge secrets; k8s-secrets-only syncs pod secrets without Compose; operator-secret-proof verifies prod operator runtime env only."
+        description: "deploy-infra mode. full reconciles Compose + k8s bridge secrets; k8s-secrets-only syncs pod secrets without Compose; operator-secret-proof restarts/checks prod operator runtime env; operator-secret-check checks without restart."
         required: false
         default: full
         type: choice
-        options: [full, k8s-secrets-only, operator-secret-proof]
+        options:
+          [full, k8s-secrets-only, operator-secret-proof, operator-secret-check]
 
 permissions:
   contents: write
@@ -578,6 +579,10 @@ jobs:
             K8S_NS="cogni-${{ needs.decide.outputs.environment }}" bash scripts/ci/prove-production-operator-secret.sh
             exit 0
           fi
+          if [ "$mode" = "operator-secret-check" ]; then
+            PROOF_RESTART=false K8S_NS="cogni-${{ needs.decide.outputs.environment }}" bash scripts/ci/prove-production-operator-secret.sh
+            exit 0
+          fi
 
           args=(--ref main)
           if [ "$mode" = "k8s-secrets-only" ]; then
@@ -619,6 +624,7 @@ jobs:
     if: |
       always() &&
       (inputs.deploy_infra_mode || 'full') != 'operator-secret-proof' &&
+      (inputs.deploy_infra_mode || 'full') != 'operator-secret-check' &&
       needs.promote-k8s.result == 'success' &&
       (needs.deploy-infra.result == 'success' || needs.deploy-infra.result == 'skipped')
     strategy:
@@ -724,6 +730,7 @@ jobs:
     if: |
       always() &&
       (inputs.deploy_infra_mode || 'full') != 'operator-secret-proof' &&
+      (inputs.deploy_infra_mode || 'full') != 'operator-secret-check' &&
       needs.promote-k8s.result == 'success' &&
       (needs.deploy-infra.result == 'success' || needs.deploy-infra.result == 'skipped')
     environment: ${{ needs.decide.outputs.environment }}
