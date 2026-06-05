@@ -3,18 +3,16 @@
 
 /**
  * Module: `@app/(app)/setup/dao/page`
- * Purpose: Server entrypoint for DAO formation page; delegates to client component for wallet-signed formation flow.
- * Scope: Server component only; delegates all client-side behavior to DAOFormationPageClient. Does not perform data fetching or transaction logic.
+ * Purpose: Legacy DAO formation URL. Redirects to the registry-aware node wizard.
+ * Scope: Server redirect only; node birth must start from a DB-backed node row.
  * Invariants: Requires authenticated session (wallet connected) via (app) route group.
- * Side-effects: none (server render only)
+ * Side-effects: redirect
  * Links: docs/spec/node-formation.md
  * @public
  */
 
-import type { ReactElement } from "react";
+import { redirect } from "next/navigation";
 
-import { DAOFormationPageClient } from "./DAOFormationPage.client";
-
-export default function DAOFormationPage(): ReactElement {
-  return <DAOFormationPageClient />;
+export default function DAOFormationPage(): never {
+  redirect("/setup/nodes");
 }

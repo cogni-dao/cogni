@@ -3,9 +3,9 @@
 
 /**
  * Module: `@features/nodes/node-slug`
- * Purpose: Pure validator for a v0 monorepo-internal node slug.
- * Scope: A node lives at `nodes/<slug>/` in the Cogni-DAO/cogni monorepo. Validates the slug shape
- *   and rejects slugs that collide with the existing monorepo nodes.
+ * Purpose: Pure validator for a managed node slug.
+ * Scope: A node gets its own repo and a deployment pin at `nodes/<slug>/`. Validates the slug shape
+ *   and rejects slugs that collide with the existing inline nodes.
  * Invariants: SLUG_KEBAB (lowercase a-z 0-9 dash, 2-32 chars); RESERVED_SLUGS rejected.
  * Side-effects: none
  * @public
@@ -33,7 +33,7 @@ export function parseNodeSlug(
     };
   }
   if (RESERVED_SLUGS.has(slug)) {
-    return { ok: false, reason: `'${slug}' is a reserved monorepo node slug` };
+    return { ok: false, reason: `'${slug}' is a reserved node slug` };
   }
   return { ok: true, value: { slug, path: `nodes/${slug}` } };
 }

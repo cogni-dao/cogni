@@ -61,7 +61,7 @@ export const NODE_PROGRESS_STEPS: ReadonlyArray<{
 }> = [
   { label: "Register" },
   { label: "DAO" },
-  { label: "Publish" },
+  { label: "Repo" },
   { label: "Wallet" },
   { label: "Payments" },
 ];

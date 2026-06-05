@@ -27,16 +27,18 @@ This guide covers the **monorepo node** path — a node born into the Cogni mono
 The arc this guide drives:
 
 ```
-1. Formation   wizard at /setup/dao → DAO + token + CogniSignal on-chain, server-verified (Steps 1-7)
+1. Register    wizard at /setup/nodes → DB-backed node row (Step 1)
        ↓
-2. Publish     operator authors ONE GitHub App PR with the node's full monorepo footprint (Step 8)
+2. Formation   per-node wizard page → DAO + token + CogniSignal on-chain, server-verified (Steps 2-7)
        ↓
-3. Flight      POST /api/v1/vcs/flight {prNumber} → build lands at <node>-test.cognidao.org
+3. Publish     operator mints the node repo and authors ONE submodule deployment PR (Step 8)
        ↓
-4. Ongoing     per-node deploy branch + Argo Application; subsequent merges auto-deploy (CATALOG_IS_SSOT)
+4. Flight      POST /api/v1/vcs/flight {prNumber} → build lands at <node>-test.cognidao.org
+       ↓
+5. Ongoing     per-node deploy branch + Argo Application; subsequent merges auto-deploy (CATALOG_IS_SSOT)
 ```
 
-Formation (Steps 1-7) is **node-owned tooling with no operator dependency** — wallet signs in the browser, server verifies before persisting. Publish + Flight (Step 8 onward) are operator-driven.
+Registration makes the operator DB-aware before any wallet transaction. Formation (Steps 2-7) is **node-owned tooling** — wallet signs in the browser, server verifies and persists the verified addresses to the node row. Publish + Flight (Step 8 onward) are operator-driven.
 
 ## Preconditions
 
@@ -47,9 +49,9 @@ Formation (Steps 1-7) is **node-owned tooling with no operator dependency** — 
 
 ## Steps
 
-### 1. Navigate to the Formation Wizard
+### 1. Register a Node
 
-Open `/setup/dao` in the application. The wizard page is at `src/app/(app)/setup/dao/page.tsx`.
+Open `/setup/nodes` in the application, choose a slug, and create the node row. The canonical per-node wizard page is `src/app/(app)/setup/nodes/[id]/page.tsx`.
 
 ### 2. Fill in Token Details (3 fields)
 
@@ -88,11 +90,11 @@ The wizard submits `{ chainId, daoTxHash, signalTxHash, initialHolder }` to the 
 1. Derives ALL addresses from transaction receipts (never trusts client)
 2. Verifies `balanceOf(initialHolder) == 1e18`
 3. Verifies `CogniSignal.DAO() == daoAddress`
-4. Returns verified addresses + repo-spec YAML
+4. Returns verified addresses
 
-### 7. Save Repo Spec
+### 7. Persist Verified Addresses
 
-The returned `repoSpecYaml` should be saved to `.cogni/repo-spec.yaml` in your repository.
+The per-node wizard patches the `nodes` registry row with the verified DAO, plugin, token, and CogniSignal addresses. This is the DB-aware boundary before the operator mints the repo or opens a deployment PR.
 
 ### 8. Publish — Operator Authors the Node PR (Automated)
 
@@ -118,7 +120,7 @@ Per-node DNS, DB, and secrets reconcile **inside the flight/promote lane** (idem
 
 After formation completes successfully:
 
-1. Check that `.cogni/repo-spec.yaml` contains `dao_contract`, `plugin_contract`, `signal_contract`, and `chain_id` (as string)
+1. Check that the node row has `dao_address`, `plugin_address`, `signal_address`, `token_address`, `dao_tx_hash`, and `signal_tx_hash`
 2. Verify the DAO exists on the Aragon app for your chain
 3. Confirm token balance: `balanceOf(initialHolder)` should return `1000000000000000000` (1e18)
 

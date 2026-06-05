@@ -62,7 +62,7 @@ Next.js App Router delivery layer. UI pages and API routes that expose features 
   skeleton (Hero + cards + feed) used by `/`; `propose/merge`
   overrides with a form skeleton. Reusable primitives
   (`PageHeaderSkeleton`, `TableSkeleton`, `CardGridSkeleton`) live
-  under `kit/layout/`. `/setup/dao*` is left on the generic fallback
+  under `kit/layout/`. `/setup/nodes*` and `/setup/dao*` are left on the generic fallback
   for v0 — wizard-flow shape isn't worth a bespoke skeleton yet.
 
 ## Responsibilities

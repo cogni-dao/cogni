@@ -63,7 +63,7 @@ function getPhaseMessage(phase: FormationPhase): string {
     case "VERIFYING":
       return "Verifying on-chain results...";
     case "SUCCESS":
-      return "DAO published successfully";
+      return "DAO verified successfully";
     case "ERROR":
       return "Formation failed";
   }
@@ -216,7 +216,7 @@ export function FormationFlowDialog({
                 <CheckCircle2 className="h-16 w-16 text-success" />
                 <div className="text-center">
                   <p className="font-semibold text-foreground text-xl">
-                    DAO Published
+                    DAO Verified
                   </p>
                   {tokenName && (
                     <p className="mt-1 text-muted-foreground">{tokenName}</p>

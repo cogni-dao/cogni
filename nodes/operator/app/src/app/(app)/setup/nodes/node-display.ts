@@ -30,12 +30,13 @@ export const NODE_STATUS_DISPLAY: Record<NodeStatus, StatusDisplay> = {
   dao_formed: {
     label: "DAO formed",
     intent: "secondary",
-    description: "Publish the governance PR to register this node.",
+    description: "Create the node repo and open the operator deployment PR.",
   },
   published: {
-    label: "Published",
+    label: "Repo PR opened",
     intent: "default",
-    description: "Governance PR opened. Wallet provisioning is next.",
+    description:
+      "Node repo is pinned for deployment. Wallet provisioning is next.",
   },
   wallet_ready: {
     label: "Wallet ready",
@@ -45,7 +46,7 @@ export const NODE_STATUS_DISPLAY: Record<NodeStatus, StatusDisplay> = {
   payments_ready: {
     label: "Payments ready",
     intent: "secondary",
-    description: "Payments configured. Publish activation to go live.",
+    description: "Payments configured. Open the activation PR to go live.",
   },
   active: {
     label: "Active",
