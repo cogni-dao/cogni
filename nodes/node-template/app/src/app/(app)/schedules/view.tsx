@@ -15,7 +15,7 @@
 
 import type { ModelRef } from "@cogni/ai-core";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronUp, Plus, Trash2 } from "lucide-react";
+import { ChevronUp, Plus, Rocket, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import {
@@ -36,6 +36,10 @@ import {
 } from "@/components";
 import { ModelPicker } from "@/features/ai/components/ModelPicker";
 import { useModels } from "@/features/ai/hooks/useModels";
+import {
+  AUTORESEARCH_PARETO_SCHEDULE_COUNT,
+  buildAutoresearchParetoSchedules,
+} from "./_api/autoresearchPareto";
 import { createSchedule } from "./_api/createSchedule";
 import { deleteSchedule } from "./_api/deleteSchedule";
 import { fetchAgents } from "./_api/fetchAgents";
@@ -135,6 +139,20 @@ export function SchedulesView() {
     },
   });
 
+  const paretoMutation = useMutation({
+    mutationFn: async (params: { modelRef: ModelRef; timezone: string }) => {
+      const inputs = buildAutoresearchParetoSchedules(params);
+      return Promise.all(inputs.map((input) => createSchedule(input)));
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["schedules"] });
+      setMutationError(null);
+    },
+    onError: (error: Error) => {
+      setMutationError(error.message);
+    },
+  });
+
   const updateMutation = useMutation({
     mutationFn: updateSchedule,
     onSuccess: () => {
@@ -171,6 +189,14 @@ export function SchedulesView() {
     });
   };
 
+  const handleLaunchPareto = () => {
+    if (!selectedModelRef) return;
+    paretoMutation.mutate({
+      modelRef: selectedModelRef,
+      timezone: selectedTimezone,
+    });
+  };
+
   const handleToggle = (id: string, currentEnabled: boolean) => {
     updateMutation.mutate({ id, data: { enabled: !currentEnabled } });
   };
@@ -192,6 +218,7 @@ export function SchedulesView() {
     selectedModelRef &&
     hasAgents &&
     hasModels;
+  const isParetoLaunchEnabled = selectedModelRef && hasModels;
 
   if (schedulesError || agentsError || modelsError) {
     const error = schedulesError ?? agentsError ?? modelsError;
@@ -223,20 +250,33 @@ export function SchedulesView() {
   return (
     <div className="mx-auto flex max-w-[var(--max-width-container-screen)] flex-col gap-8 p-4 md:p-8 lg:px-16">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="font-bold text-3xl tracking-tight">Schedules</h1>
-        <Button
-          variant="default"
-          size="sm"
-          onClick={() => setIsFormOpen(!isFormOpen)}
-        >
-          {isFormOpen ? (
-            <ChevronUp className="mr-2 h-4 w-4" />
-          ) : (
-            <Plus className="mr-2 h-4 w-4" />
-          )}
-          {isFormOpen ? "Close" : "Create Schedule"}
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={handleLaunchPareto}
+            disabled={!isParetoLaunchEnabled || paretoMutation.isPending}
+          >
+            <Rocket className="mr-2 h-4 w-4" />
+            {paretoMutation.isPending
+              ? "Launching..."
+              : `Launch ${AUTORESEARCH_PARETO_SCHEDULE_COUNT} Pareto`}
+          </Button>
+          <Button
+            variant="default"
+            size="sm"
+            onClick={() => setIsFormOpen(!isFormOpen)}
+          >
+            {isFormOpen ? (
+              <ChevronUp className="mr-2 h-4 w-4" />
+            ) : (
+              <Plus className="mr-2 h-4 w-4" />
+            )}
+            {isFormOpen ? "Close" : "Create Schedule"}
+          </Button>
+        </div>
       </div>
 
       {/* Mutation Error */}
