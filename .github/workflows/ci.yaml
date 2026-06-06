@@ -288,6 +288,9 @@ jobs:
       - name: node DNS reconcile tests
         run: bash scripts/ci/tests/reconcile-node-dns.test.sh
 
+      - name: aggregate deploy outcome tests
+        run: bash scripts/ci/tests/aggregate-decide-outcome.test.sh
+
       - name: scheduler node routing tests
         run: bash scripts/ci/render-scheduler-worker-endpoints.sh --check
 
