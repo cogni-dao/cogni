@@ -48,6 +48,9 @@ patches:
         path: /data/NODE_TEMPLATE_OWNER
         value: "cogni-test-org"
       - op: add
+        path: /data/DOLTHUB_OWNER
+        value: "cogni-test-nodes"
+      - op: add
         path: /data/NODE_SUBMODULE_PARENT_OWNER
         value: "cogni-test-org"
       - op: add

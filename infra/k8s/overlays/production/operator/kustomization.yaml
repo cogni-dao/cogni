@@ -47,6 +47,9 @@ patches:
       - op: add
         path: /data/NODE_TEMPLATE_OWNER
         value: "Cogni-DAO"
+      - op: add
+        path: /data/DOLTHUB_OWNER
+        value: "cogni-dao"
   # NodePort assignment (operator = 30000) + instance label on selector.
   # Instance label prevents cross-node service routing: namePrefix only renames
   # resource names, not labels/selectors, so without this every Service
