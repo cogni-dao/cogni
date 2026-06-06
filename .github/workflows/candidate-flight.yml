@@ -768,8 +768,14 @@ jobs:
         env:
           VM_HOST: ${{ secrets.VM_HOST }}
           SSH_DEPLOY_KEY: ${{ secrets.SSH_DEPLOY_KEY }}
+          NODE_SOURCE_SHA: ${{ needs.decide.outputs.node_source_sha }}
         run: |
+          set -euo pipefail
           if [ -z "$VM_HOST" ]; then
+            if [ -n "$NODE_SOURCE_SHA" ]; then
+              echo "::error::Node-ref candidate flight requires VM_HOST so /version.buildSha can be observed"
+              exit 1
+            fi
             echo "⚠️ No VM_HOST secret set on candidate-a — skipping verification"
             echo "has_vm=false" >> "$GITHUB_OUTPUT"
             exit 0
@@ -823,7 +829,7 @@ jobs:
         env:
           DOMAIN: ${{ vars.DOMAIN }}
           SOURCE_SHA_MAP: deploy-branch/.promote-state/source-sha-by-app.json
-          EXPECTED_BUILDSHA: ${{ needs.decide.outputs.head_sha }}
+          EXPECTED_BUILDSHA: ${{ needs.decide.outputs.node_source_sha || needs.decide.outputs.head_sha }}
           NODES: ${{ matrix.node }}
           COGNI_CATALOG_ROOT: app-src/infra/catalog
         run: bash ci-src/scripts/ci/verify-buildsha.sh

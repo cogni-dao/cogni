@@ -292,6 +292,7 @@ jobs:
           HEAD_SHA: ${{ needs.decide.outputs.head_sha }}
           BUILD_SHA: ${{ needs.decide.outputs.build_sha }}
           PREVIEW_FORWARD: ${{ needs.decide.outputs.preview_forward }}
+          REQUESTED_BUILD_SHA: ${{ inputs.build_sha }}
         run: |
           set -euo pipefail
           # shellcheck source=scripts/ci/lib/image-tags.sh
@@ -315,6 +316,10 @@ jobs:
             APP_SOURCE_SHA=$(jq -r --arg k "$NODE" '.[$k] // ""' "${{ github.workspace }}/preview-src/.promote-state/source-sha-by-app.json")
             if [ -z "$APP_SOURCE_SHA" ]; then
               echo "::error::preview-forward: no source_sha for $NODE in preview map"
+              exit 1
+            fi
+            if [ -n "$REQUESTED_BUILD_SHA" ] && [ "$REQUESTED_BUILD_SHA" != "$APP_SOURCE_SHA" ]; then
+              echo "::error::preview-forward source_sha mismatch for $NODE: requested $REQUESTED_BUILD_SHA but preview has $APP_SOURCE_SHA"
               exit 1
             fi
           elif is_submodule_node "$NODE"; then
