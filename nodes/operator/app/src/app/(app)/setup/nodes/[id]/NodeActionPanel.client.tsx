@@ -103,11 +103,12 @@ export function NodeActionPanel({
         <div className="space-y-5 text-sm">
           <div className="space-y-2">
             <p className="font-medium text-base text-foreground">
-              You did it. You are about 70% of the way there.
+              The node birth handoff is ready.
             </p>
             <p className="text-muted-foreground">
-              The formation work is recorded. Your AI agent can now customize
-              and deploy this node from the launch handoff.
+              The formation work is recorded. Your AI agent can now drive the
+              node customization PR, normal node CI, operator flight request,
+              and candidate verification from this launch prompt.
             </p>
           </div>
 
@@ -159,8 +160,7 @@ export function NodeActionPanel({
                     target="_blank"
                     rel="noopener noreferrer"
                   >
-                    PR that empowers this node repo to be deployed in the Cogni
-                    network
+                    Parent PR that pins this node for operator deployment
                     <ExternalLink className="size-3.5" />
                   </a>
                 </dd>
@@ -177,8 +177,8 @@ export function NodeActionPanel({
           </div>
 
           <p className="text-muted-foreground">
-            Wallet provisioning and payments are deferred. This handoff does not
-            complete those steps.
+            Wallet provisioning and payments stay deferred; they are not part of
+            this launch handoff.
           </p>
         </div>
       );

@@ -58,11 +58,14 @@ export function buildNodeLaunchPack(
     parentPrLine,
     `Candidate URL: ${candidateUrl}`,
     "",
-    "Clone or fetch the node repo in this workspace.",
-    `Recover the NODE git ref from the nodes/${input.slug} submodule gitlink in the parent PR, then check out that ref.`,
-    "Use @node-formation-styling-guide.",
-    "Make a node-formation styling PR for this node's niche.",
-    "Follow /contribute-to-cogni: get CI green, flight candidate-a, and verify the deployed /version at the candidate URL.",
+    "Required path:",
+    "1. Ensure the parent deployment PR is merged before treating this node as deployable.",
+    "2. Create a node customization PR in the node repo. Do not push directly to main or hand-edit the operator gitlink.",
+    "3. Let the node repo CI build normally after that PR merges.",
+    "4. Request candidate-a flight through the operator API only when the operator reports the launch is eligible.",
+    "5. Verify the deployed /version at the candidate URL and report the URL only after it matches the launched node SHA.",
+    "",
+    "Use @node-formation-styling-guide for the customization PR and /contribute-to-cogni for the agent lifecycle. If image or pin propagation blocks flight eligibility, report that blocker instead of inventing privileged manual steps.",
   ].join("\n");
 
   return {
@@ -72,6 +75,7 @@ export function buildNodeLaunchPack(
     status: input.status,
     operatorBaseUrl,
     launchPackUrl,
+    nodeRepoUrl: input.nodeRepoUrl,
     parentDeploymentPrUrl: input.publishPrUrl,
     candidateUrl,
     knowledgeBlock: {
