@@ -1,0 +1,3 @@
+[submodule "nodes/pandora"]
+	path = nodes/pandora
+	url = https://github.com/Cogni-DAO/pandora.git

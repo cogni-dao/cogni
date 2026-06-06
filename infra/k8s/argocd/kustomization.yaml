@@ -26,16 +26,19 @@ resources:
   - candidate-a-canary-applicationset.yaml
   - candidate-a-node-template-applicationset.yaml
   - candidate-a-operator-applicationset.yaml
+  - candidate-a-pandora-applicationset.yaml
   - candidate-a-resy-applicationset.yaml
   - candidate-a-scheduler-worker-applicationset.yaml
   - preview-canary-applicationset.yaml
   - preview-node-template-applicationset.yaml
   - preview-operator-applicationset.yaml
+  - preview-pandora-applicationset.yaml
   - preview-resy-applicationset.yaml
   - preview-scheduler-worker-applicationset.yaml
   - production-canary-applicationset.yaml
   - production-node-template-applicationset.yaml
   - production-operator-applicationset.yaml
+  - production-pandora-applicationset.yaml
   - production-resy-applicationset.yaml
   - production-scheduler-worker-applicationset.yaml
   # <<< GENERATED node-appsets
