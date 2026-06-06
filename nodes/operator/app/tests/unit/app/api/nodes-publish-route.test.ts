@@ -26,10 +26,42 @@ const dbState = vi.hoisted(() => ({
     pluginAddress: "0x2222222222222222222222222222222222222222",
     signalAddress: "0x3333333333333333333333333333333333333333",
     publishPrUrl: null,
-  },
+  } as {
+    id: string;
+    slug: string;
+    ownerUserId: string;
+    status: string;
+    repoOwner: string;
+    repoName: string;
+    chainId: number | null;
+    daoAddress: string | null;
+    pluginAddress: string | null;
+    signalAddress: string | null;
+    publishPrUrl: string | null;
+  } | null,
   patch: undefined as
     | { status?: string; publishPrUrl?: string; updatedAt?: Date }
     | undefined,
+  throwOnUpdate: false,
+}));
+
+const envState = vi.hoisted(() => ({
+  current: {
+    GH_REVIEW_APP_ID: "1",
+    GH_REVIEW_APP_PRIVATE_KEY_BASE64:
+      Buffer.from("private-key").toString("base64"),
+    NODE_MINT_OWNER: "cogni-test-org",
+    NODE_TEMPLATE_OWNER: "cogni-test-org",
+    NODE_SUBMODULE_PARENT_OWNER: "cogni-test-org",
+    NODE_SUBMODULE_PARENT_REPO: "cogni-monorepo",
+  } as {
+    GH_REVIEW_APP_ID?: string;
+    GH_REVIEW_APP_PRIVATE_KEY_BASE64?: string;
+    NODE_MINT_OWNER?: string;
+    NODE_TEMPLATE_OWNER?: string;
+    NODE_SUBMODULE_PARENT_OWNER?: string;
+    NODE_SUBMODULE_PARENT_REPO?: string;
+  },
 }));
 
 const mockGetServerSessionUser = vi.hoisted(() => vi.fn());
@@ -50,15 +82,7 @@ vi.mock("@/lib/auth/server", () => ({
 }));
 
 vi.mock("@/shared/env", () => ({
-  serverEnv: () => ({
-    GH_REVIEW_APP_ID: "1",
-    GH_REVIEW_APP_PRIVATE_KEY_BASE64:
-      Buffer.from("private-key").toString("base64"),
-    NODE_MINT_OWNER: "cogni-test-org",
-    NODE_TEMPLATE_OWNER: "cogni-test-org",
-    NODE_SUBMODULE_PARENT_OWNER: "cogni-test-org",
-    NODE_SUBMODULE_PARENT_REPO: "cogni-monorepo",
-  }),
+  serverEnv: () => envState.current,
 }));
 
 vi.mock("@/bootstrap/capabilities/node-repo-write", () => ({
@@ -109,12 +133,15 @@ const mockTx = {
   select: () => ({
     from: () => ({
       where: () => ({
-        limit: () => [dbState.current],
+        limit: () => (dbState.current ? [dbState.current] : []),
       }),
     }),
   }),
   update: () => ({
     set: (patch: typeof dbState.patch) => {
+      if (dbState.throwOnUpdate) {
+        throw new Error("database unavailable");
+      }
       dbState.patch = patch;
       return {
         where: () => ({
@@ -127,9 +154,48 @@ const mockTx = {
 
 import { POST } from "@/app/api/v1/nodes/[id]/publish/route";
 
+const defaultNode = {
+  id: "11111111-1111-4111-8111-111111111111",
+  slug: "atlas",
+  ownerUserId: "user-1",
+  status: "dao_formed",
+  repoOwner: "Cogni-DAO",
+  repoName: "cogni",
+  chainId: 8453,
+  daoAddress: "0x1111111111111111111111111111111111111111",
+  pluginAddress: "0x2222222222222222222222222222222222222222",
+  signalAddress: "0x3333333333333333333333333333333333333333",
+  publishPrUrl: null,
+};
+
+async function publishNode() {
+  return POST(
+    new Request(
+      "https://operator.test.cognidao.org/api/v1/nodes/11111111-1111-4111-8111-111111111111/publish",
+      { method: "POST" }
+    ),
+    {
+      params: Promise.resolve({
+        id: "11111111-1111-4111-8111-111111111111",
+      }),
+    }
+  );
+}
+
 describe("POST /api/v1/nodes/[id]/publish", () => {
   beforeEach(() => {
+    dbState.current = { ...defaultNode };
     dbState.patch = undefined;
+    dbState.throwOnUpdate = false;
+    envState.current = {
+      GH_REVIEW_APP_ID: "1",
+      GH_REVIEW_APP_PRIVATE_KEY_BASE64:
+        Buffer.from("private-key").toString("base64"),
+      NODE_MINT_OWNER: "cogni-test-org",
+      NODE_TEMPLATE_OWNER: "cogni-test-org",
+      NODE_SUBMODULE_PARENT_OWNER: "cogni-test-org",
+      NODE_SUBMODULE_PARENT_REPO: "cogni-monorepo",
+    };
     mockGetServerSessionUser.mockReset();
     mockGetServerSessionUser.mockResolvedValue({ id: "user-1" });
     mockForkFromTemplate.mockReset();
@@ -151,17 +217,7 @@ describe("POST /api/v1/nodes/[id]/publish", () => {
   });
 
   it("mints the node repo as a template fork before opening the submodule pin PR", async () => {
-    const response = await POST(
-      new Request(
-        "https://operator.test.cognidao.org/api/v1/nodes/11111111-1111-4111-8111-111111111111/publish",
-        { method: "POST" }
-      ),
-      {
-        params: Promise.resolve({
-          id: "11111111-1111-4111-8111-111111111111",
-        }),
-      }
-    );
+    const response = await publishNode();
     const body = await response.json();
 
     expect(response.status).toBe(200);
@@ -239,17 +295,7 @@ describe("POST /api/v1/nodes/[id]/publish", () => {
     Object.assign(err, { status: 404 });
     mockOpenNodeSubmodulePr.mockRejectedValue(err);
 
-    const response = await POST(
-      new Request(
-        "https://operator.test.cognidao.org/api/v1/nodes/11111111-1111-4111-8111-111111111111/publish",
-        { method: "POST" }
-      ),
-      {
-        params: Promise.resolve({
-          id: "11111111-1111-4111-8111-111111111111",
-        }),
-      }
-    );
+    const response = await publishNode();
     const body = await response.json();
 
     expect(response.status).toBe(502);
@@ -275,6 +321,202 @@ describe("POST /api/v1/nodes/[id]/publish", () => {
         githubStatus: 404,
         status: 502,
         slug: "atlas",
+      }),
+      "feature.node_publish.complete"
+    );
+  });
+
+  it("logs unauthenticated requests before leaving the auth stage", async () => {
+    mockGetServerSessionUser.mockResolvedValue(null);
+
+    const response = await publishNode();
+    const body = await response.json();
+
+    expect(response.status).toBe(401);
+    expect(body.error).toBe("unauthorized");
+    expect(mockLog.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "feature.node_publish.complete",
+        step: "auth",
+        outcome: "error",
+        errorCode: "unauthorized",
+        status: 401,
+      }),
+      "feature.node_publish.complete"
+    );
+  });
+
+  it("logs missing GitHub App config as a terminal config error", async () => {
+    envState.current.GH_REVIEW_APP_ID = undefined;
+
+    const response = await publishNode();
+    const body = await response.json();
+
+    expect(response.status).toBe(503);
+    expect(body.error).toBe("operator not configured for repo write");
+    expect(mockLog.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "feature.node_publish.complete",
+        step: "config",
+        outcome: "error",
+        errorCode: "repo_write_config_missing",
+        status: 503,
+      }),
+      "feature.node_publish.complete"
+    );
+  });
+
+  it("logs missing mint config as a terminal config error", async () => {
+    envState.current.NODE_TEMPLATE_OWNER = undefined;
+
+    const response = await publishNode();
+    const body = await response.json();
+
+    expect(response.status).toBe(503);
+    expect(body.error).toBe("operator not configured for node minting");
+    expect(mockLog.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "feature.node_publish.complete",
+        step: "config",
+        outcome: "error",
+        errorCode: "node_mint_config_missing",
+        status: 503,
+      }),
+      "feature.node_publish.complete"
+    );
+  });
+
+  it("logs a missing node at the load step", async () => {
+    dbState.current = null;
+
+    const response = await publishNode();
+    const body = await response.json();
+
+    expect(response.status).toBe(404);
+    expect(body.error).toBe("not found");
+    expect(mockLog.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "feature.node_publish.complete",
+        phase: "step",
+        step: "load_node",
+        outcome: "error",
+        errorCode: "node_not_found",
+      }),
+      "feature.node_publish.complete"
+    );
+  });
+
+  it("logs idempotent already-published requests", async () => {
+    dbState.current = {
+      ...defaultNode,
+      status: "published",
+      publishPrUrl: "https://github.com/Cogni-DAO/cogni/pull/1",
+    };
+
+    const response = await publishNode();
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.alreadyPublished).toBe(true);
+    expect(mockLog.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "feature.node_publish.complete",
+        step: "load_node",
+        outcome: "already_published",
+        status: 200,
+        slug: "atlas",
+        nodeStatus: "published",
+      }),
+      "feature.node_publish.complete"
+    );
+  });
+
+  it("logs invalid state before attempting repo authoring", async () => {
+    dbState.current = { ...defaultNode, status: "dao_pending" };
+
+    const response = await publishNode();
+    const body = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(body.error).toBe("invalid state for publish");
+    expect(mockForkFromTemplate).not.toHaveBeenCalled();
+    expect(mockLog.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "feature.node_publish.complete",
+        step: "validate_state",
+        outcome: "error",
+        errorCode: "invalid_state",
+        status: 409,
+        nodeStatus: "dao_pending",
+      }),
+      "feature.node_publish.complete"
+    );
+  });
+
+  it("logs missing onchain addresses before attempting repo authoring", async () => {
+    dbState.current = { ...defaultNode, pluginAddress: null };
+
+    const response = await publishNode();
+    const body = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(body.error).toBe(
+      "node row missing required addresses for repo-spec emission"
+    );
+    expect(mockForkFromTemplate).not.toHaveBeenCalled();
+    expect(mockLog.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "feature.node_publish.complete",
+        step: "validate_addresses",
+        outcome: "error",
+        errorCode: "node_addresses_missing",
+        status: 409,
+        hasChainId: true,
+        hasPluginAddress: false,
+      }),
+      "feature.node_publish.complete"
+    );
+  });
+
+  it("logs the failing template fork stage with a classified GitHub status", async () => {
+    const err = new Error("node-template was not found");
+    Object.assign(err, { status: 404 });
+    mockForkFromTemplate.mockRejectedValue(err);
+
+    const response = await publishNode();
+    const body = await response.json();
+
+    expect(response.status).toBe(502);
+    expect(body.reason).toBe("node-template was not found");
+    expect(mockOpenNodeSubmodulePr).not.toHaveBeenCalled();
+    expect(mockLog.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "feature.node_publish.complete",
+        phase: "step",
+        step: "fork_from_template",
+        outcome: "error",
+        errorCode: "template_not_found",
+        githubStatus: 404,
+      }),
+      "feature.node_publish.complete"
+    );
+  });
+
+  it("logs unexpected persistence failures at the update step", async () => {
+    dbState.throwOnUpdate = true;
+
+    const response = await publishNode();
+    const body = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(body.error).toBe("node publish failed");
+    expect(mockLog.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "feature.node_publish.complete",
+        step: "update_node",
+        outcome: "error",
+        errorCode: "unhandled",
+        status: 500,
       }),
       "feature.node_publish.complete"
     );
