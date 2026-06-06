@@ -4,13 +4,13 @@
 /**
  * Module: `@app/api/v1/nodes/[id]/flight`
  * Purpose: Node-ref flight request for externally-built submodule nodes.
- * Scope: Owner-scoped node row -> repo-spec/catalog validation -> child image check -> workflow dispatch.
+ * Scope: Owner-scoped node row -> repo-spec/catalog validation -> child image + parent pin checks -> workflow dispatch.
  * Invariants:
  *   - REPO_SPEC_IS_IDENTITY_SSOT: child `.cogni/repo-spec.yaml` at sourceSha must parse.
  *   - OWNER_GATED_NODE_ID: `[id]` is the node registry UUID, never a slug.
  *   - CATALOG_IS_DEPLOY_SHAPE: catalog supplies source repo + image repository only.
  *   - NO_TENANT_INFERENCE: slug/sourceSha are deploy inputs derived after owner gating.
- * Side-effects: IO (GitHub via VcsCapability, GHCR registry probe, workflow dispatch).
+ * Side-effects: IO (GitHub via VcsCapability/GitHubRepoWriter, workflow dispatch).
  * Links: docs/spec/node-ci-cd-contract.md, docs/spec/identity-model.md
  * @public
  */
@@ -24,11 +24,13 @@ import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 
 import { getSessionUser } from "@/app/_lib/auth/session";
+import { createNodeRepoWriter } from "@/bootstrap/capabilities/node-repo-write";
 import { getContainer, resolveAppDb } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { nodeFlightOperation } from "@/contracts/nodes.flight.v1.contract";
 import { getGithubRepo } from "@/shared/config/repoSpec.server";
 import { nodes } from "@/shared/db/nodes";
+import { serverEnv } from "@/shared/env";
 import { logRequestWarn } from "@/shared/observability";
 
 export const runtime = "nodejs";
@@ -62,29 +64,6 @@ function parseGithubRepoUrl(value: string): { owner: string; repo: string } {
     throw new Error(`source_repo must be https://github.com/<owner>/<repo>`);
   }
   return { owner, repo };
-}
-
-function ghcrManifestUrl(imageRepository: string, sourceSha: string): string {
-  const imagePath = imageRepository.replace(/^ghcr\.io\//, "");
-  return `https://ghcr.io/v2/${imagePath}/manifests/sha-${sourceSha}`;
-}
-
-async function ghcrImageExists(
-  imageRepository: string,
-  sourceSha: string
-): Promise<boolean> {
-  const url = ghcrManifestUrl(imageRepository, sourceSha);
-  const headers = {
-    Accept:
-      "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.v2+json",
-  };
-  const response = await fetch(url, { method: "HEAD", headers });
-  if (response.ok) return true;
-  if (response.status === 405) {
-    const getResponse = await fetch(url, { method: "GET", headers });
-    return getResponse.ok;
-  }
-  return false;
 }
 
 export const POST = wrapRouteHandlerWithLogging<RouteParams>(
@@ -236,14 +215,40 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
     }
 
     const image = `${catalog.data.image_repository}:sha-${sourceSha}`;
-    const imageExists = await ghcrImageExists(
-      catalog.data.image_repository,
-      sourceSha
-    );
+    const writer = createNodeRepoWriter(serverEnv());
+    const imageExists = await writer.packageImageTagExists({
+      owner,
+      repo,
+      imageRepository: catalog.data.image_repository,
+      tag: `sha-${sourceSha}`,
+    });
     if (!imageExists) {
       return NextResponse.json(
         { error: "node image not found", image },
         { status: 422 }
+      );
+    }
+
+    const pin = await writer.ensureNodeSubmodulePin({
+      owner,
+      repo,
+      slug,
+      nodeRepoUrl: catalog.data.source_repo,
+      nodeRepoHeadSha: sourceSha,
+    });
+    if (pin.status === "pin_pr_opened") {
+      return NextResponse.json(
+        {
+          error: "operator parent pin required before node-ref flight",
+          slug,
+          sourceSha,
+          currentSha: pin.currentSha,
+          pinPr: {
+            number: pin.prNumber,
+            url: pin.prUrl,
+          },
+        },
+        { status: 409 }
       );
     }
 

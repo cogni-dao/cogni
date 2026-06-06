@@ -139,12 +139,12 @@ New nodes are born as **git submodules** at `nodes/<slug>` — a node-template f
 
 The model is good only if the boundary stays this simple:
 
-| Plane                    | Owner                                                                                                   | Must not do                                                                                           |
-| ------------------------ | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| **Node repo**            | Node developer / node agents                                                                            | Own shared-operator VM state, Argo, DNS, preview/prod promotion, or operator deploy branches          |
-| **Operator monorepo**    | Operator                                                                                                | Rebuild submodule-node source, invent node policy, or use GitHub repo permissions as product auth     |
-| **GitHub App identity**  | Environment-scoped automation credential                                                                | Decide who is allowed to flight; it only proves the operator has the mechanical ability to act        |
-| **Operator API / DB**    | Authorization boundary for flight/publish/promote requests                                              | Delegate authorization to "who can push to a GitHub repo"                                             |
+| Plane                   | Owner                                                      | Must not do                                                                                       |
+| ----------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| **Node repo**           | Node developer / node agents                               | Own shared-operator VM state, Argo, DNS, preview/prod promotion, or operator deploy branches      |
+| **Operator monorepo**   | Operator                                                   | Rebuild submodule-node source, invent node policy, or use GitHub repo permissions as product auth |
+| **GitHub App identity** | Environment-scoped automation credential                   | Decide who is allowed to flight; it only proves the operator has the mechanical ability to act    |
+| **Operator API / DB**   | Authorization boundary for flight/publish/promote requests | Delegate authorization to "who can push to a GitHub repo"                                         |
 
 So: node-template repos carry **CI + image build**, not hosted flight/deploy
 workflows. Hosted flight is an operator action because it mutates operator-owned

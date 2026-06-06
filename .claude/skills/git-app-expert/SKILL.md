@@ -25,10 +25,10 @@ installation level down to the tool schema and CI scripts.
 cannot share one. Create + wire per the canonical guide:
 [`docs/guides/github-app-webhook-setup.md`](../../../docs/guides/github-app-webhook-setup.md).
 
-| App                   | ID        | Install ID | env          | webhooks → / installed on                                      |
-| --------------------- | --------- | ---------- | ------------ | -------------------------------------------------------------- |
-| `cogni-node-template` | 3062001   | 115515535  | (vcs/flight) | org-wide; `actions:write` for `workflow_dispatch`              |
-| `cogni-git-review`    | 1761205   | 80293097   | production   | `cognidao.org/...webhooks/github` · `Cogni-DAO/cogni`          |
+| App                   | ID        | Install ID | env              | webhooks → / installed on                                              |
+| --------------------- | --------- | ---------- | ---------------- | ---------------------------------------------------------------------- |
+| `cogni-node-template` | 3062001   | 115515535  | (vcs/flight)     | org-wide; `actions:write` for `workflow_dispatch`                      |
+| `cogni-git-review`    | 1761205   | 80293097   | production       | `cognidao.org/...webhooks/github` · `Cogni-DAO/cogni`                  |
 | `cogni-operator-test` | (per-env) | —          | candidate-a/test | `test.cognidao.org/...webhooks/github` · all repos on `cogni-test-org` |
 
 `Cogni-DAO/test-repo` is only a legacy review-webhook fixture. It is not

@@ -30,6 +30,8 @@ const mockGetSessionUser = vi.hoisted(() => vi.fn());
 const mockCommitExists = vi.hoisted(() => vi.fn());
 const mockFetchFileText = vi.hoisted(() => vi.fn());
 const mockDispatchNodeFlight = vi.hoisted(() => vi.fn());
+const mockPackageImageTagExists = vi.hoisted(() => vi.fn());
+const mockEnsureNodeSubmodulePin = vi.hoisted(() => vi.fn());
 const mockLog = vi.hoisted(() => ({
   child: vi.fn().mockReturnThis(),
   debug: vi.fn(),
@@ -44,6 +46,21 @@ vi.mock("@/app/_lib/auth/session", () => ({
 
 vi.mock("@/shared/config/repoSpec.server", () => ({
   getGithubRepo: () => ({ owner: "Cogni-DAO", repo: "cogni" }),
+}));
+
+vi.mock("@/shared/env", () => ({
+  serverEnv: () => ({
+    GH_REVIEW_APP_ID: "1",
+    GH_REVIEW_APP_PRIVATE_KEY_BASE64:
+      Buffer.from("private-key").toString("base64"),
+  }),
+}));
+
+vi.mock("@/bootstrap/capabilities/node-repo-write", () => ({
+  createNodeRepoWriter: () => ({
+    packageImageTagExists: mockPackageImageTagExists,
+    ensureNodeSubmodulePin: mockEnsureNodeSubmodulePin,
+  }),
 }));
 
 vi.mock("@/bootstrap/container", () => ({
@@ -148,10 +165,13 @@ describe("POST /api/v1/nodes/[id]/flight", () => {
         "https://github.com/Cogni-DAO/cogni/actions/workflows/candidate-flight.yml",
       message: "ok",
     });
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response(null, { status: 200 }))
-    );
+    mockPackageImageTagExists.mockReset();
+    mockPackageImageTagExists.mockResolvedValue(true);
+    mockEnsureNodeSubmodulePin.mockReset();
+    mockEnsureNodeSubmodulePin.mockResolvedValue({
+      status: "already_pinned",
+      currentSha: SOURCE_SHA,
+    });
   });
 
   it("derives slug from the owner-scoped node row and dispatches node-ref flight", async () => {
@@ -175,6 +195,55 @@ describe("POST /api/v1/nodes/[id]/flight", () => {
       sourceSha: SOURCE_SHA,
       environment: "candidate-a",
     });
+    expect(mockPackageImageTagExists).toHaveBeenCalledWith({
+      owner: "Cogni-DAO",
+      repo: "cogni",
+      imageRepository: "ghcr.io/cogni-dao/atlas-node",
+      tag: `sha-${SOURCE_SHA}`,
+    });
+    expect(mockEnsureNodeSubmodulePin).toHaveBeenCalledWith({
+      owner: "Cogni-DAO",
+      repo: "cogni",
+      slug: "atlas",
+      nodeRepoUrl: "https://github.com/Cogni-DAO/atlas.git",
+      nodeRepoHeadSha: SOURCE_SHA,
+    });
+  });
+
+  it("opens a parent pin PR and refuses to dispatch when main is not pinned", async () => {
+    mockEnsureNodeSubmodulePin.mockResolvedValue({
+      status: "pin_pr_opened",
+      currentSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      prNumber: 1550,
+      prUrl: "https://github.com/Cogni-DAO/cogni/pull/1550",
+    });
+
+    const response = await postFlight();
+    const body = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(body.error).toBe(
+      "operator parent pin required before node-ref flight"
+    );
+    expect(body.currentSha).toBe("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    expect(body.pinPr).toEqual({
+      number: 1550,
+      url: "https://github.com/Cogni-DAO/cogni/pull/1550",
+    });
+    expect(mockDispatchNodeFlight).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the child image tag is missing", async () => {
+    mockPackageImageTagExists.mockResolvedValue(false);
+
+    const response = await postFlight();
+    const body = await response.json();
+
+    expect(response.status).toBe(422);
+    expect(body.error).toBe("node image not found");
+    expect(body.image).toBe(`ghcr.io/cogni-dao/atlas-node:sha-${SOURCE_SHA}`);
+    expect(mockEnsureNodeSubmodulePin).not.toHaveBeenCalled();
+    expect(mockDispatchNodeFlight).not.toHaveBeenCalled();
   });
 
   it("fails closed when child repo-spec node_id does not match the owner-scoped row", async () => {

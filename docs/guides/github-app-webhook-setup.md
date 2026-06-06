@@ -16,12 +16,12 @@ tags: [github, webhooks, ingestion, review, setup]
 
 > One GitHub App per environment. Each app has one webhook URL — you cannot share an app across local/preview/production.
 
-| Environment | App name convention           | Webhook URL                                                 | Install on                    |
-| ----------- | ----------------------------- | ----------------------------------------------------------- | ----------------------------- |
-| Local dev   | `cogni-review-dev-<yourname>` | smee.io proxy (see below)                                   | your personal test repo       |
-| candidate/test | `cogni-operator-test`      | `https://test.cognidao.org/api/internal/webhooks/github`    | all repos on `cogni-test-org` |
-| Preview     | `cogni-review-preview`        | `https://preview.cognidao.org/api/internal/webhooks/github` | `Cogni-DAO/preview-test-repo` |
-| Production  | `cogni-review-production`     | `https://cognidao.org/api/internal/webhooks/github`         | `Cogni-DAO/cogni`             |
+| Environment    | App name convention           | Webhook URL                                                 | Install on                    |
+| -------------- | ----------------------------- | ----------------------------------------------------------- | ----------------------------- |
+| Local dev      | `cogni-review-dev-<yourname>` | smee.io proxy (see below)                                   | your personal test repo       |
+| candidate/test | `cogni-operator-test`         | `https://test.cognidao.org/api/internal/webhooks/github`    | all repos on `cogni-test-org` |
+| Preview        | `cogni-review-preview`        | `https://preview.cognidao.org/api/internal/webhooks/github` | `Cogni-DAO/preview-test-repo` |
+| Production     | `cogni-review-production`     | `https://cognidao.org/api/internal/webhooks/github`         | `Cogni-DAO/cogni`             |
 
 > The webhook source path is `github` (`api/internal/webhooks/[source]/route.ts` → `source === "github"` reads `GH_WEBHOOK_SECRET`). Review is **payload-driven** — the operator reviews whatever installed repo sends a verified webhook; `GH_REPOS` scopes only the proactive pr-manager, not the review webhook.
 >
@@ -58,8 +58,8 @@ tags: [github, webhooks, ingestion, review, setup]
 
 **Permissions (Organization)** — required only for the operator App that **mints node repos** (node-formation Publish → `forkFromTemplate`):
 
-| Permission     | Access       | Why                                                                                                                                                  |
-| -------------- | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Permission     | Access       | Why                                                                                                                                                    |
+| -------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Administration | Read & write | `POST /repos/{templateOwner}/node-template/forks` creates the node's named fork (`<mintOwner>/<slug>`) from `node-template`. Without it, Publish 403s. |
 
 > **Install scope for the minting App.** Step 7's single-repo install is enough for _review_ (payload-driven), but an App that **creates + commits to** new node repos must reach repos that don't exist yet. A `selected`-repos install means a freshly-minted `<owner>/<slug>` is **invisible to the App** → the identity-commit 404s even with `administration: write`. So the minting App needs **"All repositories"** on a dedicated nodes/test org (`cogni-test-org` for candidate/test; a production nodes org for live node birth) so it is not org-wide over unrelated operator infra repos. See [node-formation.md § Node Publish](../spec/node-formation.md) + [node-ci-cd-contract.md § Submodule-pinned nodes](../spec/node-ci-cd-contract.md).

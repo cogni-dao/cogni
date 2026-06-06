@@ -293,6 +293,7 @@ jobs:
           BUILD_SHA: ${{ needs.decide.outputs.build_sha }}
           PREVIEW_FORWARD: ${{ needs.decide.outputs.preview_forward }}
           REQUESTED_BUILD_SHA: ${{ inputs.build_sha }}
+          EXPLICIT_NODE_REF: ${{ inputs.nodes != '' && inputs.build_sha != '' }}
         run: |
           set -euo pipefail
           # shellcheck source=scripts/ci/lib/image-tags.sh
@@ -341,6 +342,10 @@ jobs:
                 | grep -oP 'Digest:\s+\Ksha256:[a-f0-9]+' | head -1 || true)
             fi
             if [ -z "$digest_only" ]; then
+              if [ "$EXPLICIT_NODE_REF" = "true" ]; then
+                echo "::error::Explicit node-ref promote requested $NODE@$BUILD_SHA but image was not found: $full_tag"
+                exit 1
+              fi
               echo "::warning::Image not found: $full_tag (not built — skipping $NODE)"
               echo "digest=" >> "$GITHUB_OUTPUT"
               echo "promoted=false" >> "$GITHUB_OUTPUT"
