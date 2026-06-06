@@ -472,13 +472,24 @@ export class GitHubRepoWriter {
       readonly full_name?: string;
       readonly fork?: boolean;
       readonly parent?: { readonly full_name?: string };
+      readonly source?: { readonly full_name?: string };
     },
     templateOwner: string,
     templateRepo: string,
     slug: string
   ): void {
     const expectedParent = `${templateOwner}/${templateRepo}`;
-    if (repo.fork && repo.parent?.full_name === expectedParent) return;
+    const actualParents = [repo.parent?.full_name, repo.source?.full_name];
+    if (
+      repo.fork &&
+      actualParents.some(
+        (fullName) =>
+          typeof fullName === "string" &&
+          fullName.toLowerCase() === expectedParent.toLowerCase()
+      )
+    ) {
+      return;
+    }
     throw new Error(
       `forkFromTemplate: ${repo.full_name ?? slug} already exists but is not a fork of ${expectedParent}`
     );

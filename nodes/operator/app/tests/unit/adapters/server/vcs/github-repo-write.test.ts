@@ -248,4 +248,54 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
       "PATCH /repos/{owner}/{repo}/git/refs/{ref}",
     ]);
   });
+
+  it("reuses an existing fork when GitHub reports template ancestry through source", async () => {
+    setHappyForkHandlers();
+    routeHandlers["POST /repos/{owner}/{repo}/forks"] = () =>
+      Promise.reject(statusError(422, "Repository creation failed"));
+    routeHandlers["GET /repos/{owner}/{repo}"] = () => ({
+      full_name: "Cogni-DAO/atlas",
+      fork: true,
+      source: { full_name: "Cogni-DAO/node-template" },
+      clone_url: "https://github.com/Cogni-DAO/atlas.git",
+    });
+
+    const result = await makeWriter().forkFromTemplate({
+      templateOwner: "Cogni-DAO",
+      owner: "Cogni-DAO",
+      slug: "atlas",
+      nodeId: "11111111-1111-4111-8111-111111111111",
+      chainId: 8453,
+    });
+
+    expect(result).toEqual({
+      cloneUrl: "https://github.com/Cogni-DAO/atlas.git",
+      headSha: "identity-commit",
+    });
+  });
+
+  it("reuses an existing fork when GitHub returns owner casing that differs from config", async () => {
+    setHappyForkHandlers();
+    routeHandlers["POST /repos/{owner}/{repo}/forks"] = () =>
+      Promise.reject(statusError(422, "Repository creation failed"));
+    routeHandlers["GET /repos/{owner}/{repo}"] = () => ({
+      full_name: "Cogni-DAO/atlas",
+      fork: true,
+      parent: { full_name: "Cogni-DAO/node-template" },
+      clone_url: "https://github.com/Cogni-DAO/atlas.git",
+    });
+
+    const result = await makeWriter().forkFromTemplate({
+      templateOwner: "cogni-dao",
+      owner: "Cogni-DAO",
+      slug: "atlas",
+      nodeId: "11111111-1111-4111-8111-111111111111",
+      chainId: 8453,
+    });
+
+    expect(result).toEqual({
+      cloneUrl: "https://github.com/Cogni-DAO/atlas.git",
+      headSha: "identity-commit",
+    });
+  });
 });
