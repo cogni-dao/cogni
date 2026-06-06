@@ -4,26 +4,31 @@
 /**
  * Module: `@app/api/v1/nodes/[id]/flight`
  * Purpose: Node-ref flight request for externally-built submodule nodes.
- * Scope: Auth -> repo-spec/catalog validation -> child image check -> workflow dispatch.
+ * Scope: Owner-scoped node row -> repo-spec/catalog validation -> child image check -> workflow dispatch.
  * Invariants:
  *   - REPO_SPEC_IS_IDENTITY_SSOT: child `.cogni/repo-spec.yaml` at sourceSha must parse.
+ *   - OWNER_GATED_NODE_ID: `[id]` is the node registry UUID, never a slug.
  *   - CATALOG_IS_DEPLOY_SHAPE: catalog supplies source repo + image repository only.
- *   - NO_TENANT_INFERENCE: slug/sourceSha are deploy inputs, not owner identity.
+ *   - NO_TENANT_INFERENCE: slug/sourceSha are deploy inputs derived after owner gating.
  * Side-effects: IO (GitHub via VcsCapability, GHCR registry probe, workflow dispatch).
  * Links: docs/spec/node-ci-cd-contract.md, docs/spec/identity-model.md
  * @public
  */
 
+import { withTenantScope } from "@cogni/db-client";
+import { type UserId, userActor } from "@cogni/ids";
 import { extractNodeId, parseRepoSpec } from "@cogni/repo-spec";
+import { and, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 
 import { getSessionUser } from "@/app/_lib/auth/session";
-import { getContainer } from "@/bootstrap/container";
+import { getContainer, resolveAppDb } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { nodeFlightOperation } from "@/contracts/nodes.flight.v1.contract";
 import { getGithubRepo } from "@/shared/config/repoSpec.server";
+import { nodes } from "@/shared/db/nodes";
 import { logRequestWarn } from "@/shared/observability";
 
 export const runtime = "nodejs";
@@ -32,7 +37,7 @@ interface RouteParams {
   params: Promise<{ id: string }>;
 }
 
-const SlugSchema = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/);
+const NodeIdParamSchema = z.string().uuid();
 
 const CatalogEntrySchema = z.object({
   name: z.string(),
@@ -84,7 +89,7 @@ async function ghcrImageExists(
 
 export const POST = wrapRouteHandlerWithLogging<RouteParams>(
   { routeId: "nodes.flight", auth: { mode: "required", getSessionUser } },
-  async (ctx, request, _sessionUser, routeContext) => {
+  async (ctx, request, sessionUser, routeContext) => {
     if (!routeContext) {
       return NextResponse.json(
         { error: "missing route context" },
@@ -92,9 +97,12 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       );
     }
     const { id } = await routeContext.params;
-    const slug = SlugSchema.safeParse(id);
-    if (!slug.success) {
-      return NextResponse.json({ error: "invalid slug" }, { status: 400 });
+    const nodeIdParam = NodeIdParamSchema.safeParse(id);
+    if (!nodeIdParam.success) {
+      return NextResponse.json(
+        { error: "invalid node id", issues: nodeIdParam.error.issues },
+        { status: 400 }
+      );
     }
 
     const parsed = nodeFlightOperation.input.safeParse(await request.json());
@@ -107,38 +115,59 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
     }
 
     const { sourceSha, environment } = parsed.data;
+    const db = resolveAppDb();
+    const rows = await withTenantScope(
+      db,
+      userActor(sessionUser.id as UserId),
+      async (tx) =>
+        tx
+          .select()
+          .from(nodes)
+          .where(
+            and(
+              eq(nodes.id, nodeIdParam.data),
+              eq(nodes.ownerUserId, sessionUser.id)
+            )
+          )
+          .limit(1)
+    );
+    const node = rows[0];
+    if (!node) {
+      return NextResponse.json({ error: "not found" }, { status: 404 });
+    }
+    const slug = node.slug;
     const { owner, repo } = getGithubRepo();
     const vcs = getContainer().vcsCapability;
 
     const catalogText = await vcs.fetchFileText({
       owner,
       repo,
-      path: `infra/catalog/${slug.data}.yaml`,
+      path: `infra/catalog/${slug}.yaml`,
       ref: "main",
     });
     if (!catalogText) {
       return NextResponse.json(
-        { error: "node catalog entry not found", slug: slug.data },
+        { error: "node catalog entry not found", slug },
         { status: 404 }
       );
     }
 
     const catalog = CatalogEntrySchema.safeParse(parseYaml(catalogText));
-    if (!catalog.success || catalog.data.name !== slug.data) {
+    if (!catalog.success || catalog.data.name !== slug) {
       return NextResponse.json(
         {
           error: "invalid submodule node catalog entry",
-          slug: slug.data,
+          slug,
           issues: catalog.success ? [] : catalog.error.issues,
         },
         { status: 409 }
       );
     }
-    if (catalog.data.path_prefix !== `nodes/${slug.data}/`) {
+    if (catalog.data.path_prefix !== `nodes/${slug}/`) {
       return NextResponse.json(
         {
           error: "catalog path_prefix does not match requested slug",
-          expected: `nodes/${slug.data}/`,
+          expected: `nodes/${slug}/`,
           actual: catalog.data.path_prefix,
         },
         { status: 409 }
@@ -193,6 +222,18 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         { status: 422 }
       );
     }
+    if (nodeId !== node.id) {
+      return NextResponse.json(
+        {
+          error: "node repo-spec identity mismatch",
+          expectedNodeId: node.id,
+          actualNodeId: nodeId,
+          sourceRepo: catalog.data.source_repo,
+          sourceSha,
+        },
+        { status: 422 }
+      );
+    }
 
     const image = `${catalog.data.image_repository}:sha-${sourceSha}`;
     const imageExists = await ghcrImageExists(
@@ -209,7 +250,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
     const dispatch = await vcs.dispatchNodeFlight({
       owner,
       repo,
-      slug: slug.data,
+      slug,
       sourceSha,
       environment,
     });
@@ -217,8 +258,8 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
     return NextResponse.json(
       nodeFlightOperation.output.parse({
         dispatched: dispatch.dispatched,
-        nodeRef: `${slug.data}@${sourceSha}`,
-        slug: slug.data,
+        nodeRef: `${slug}@${sourceSha}`,
+        slug,
         nodeId,
         sourceSha,
         environment,
