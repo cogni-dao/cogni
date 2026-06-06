@@ -15,7 +15,7 @@ tags: [meta, deployment, sovereignty]
 
 > **Status (2026-05-11):** Phase 0 substantially landed in a single day — see [As-Built §](#as-built-2026-05-11) below. The original spec was written when the operator monorepo was still named `Cogni-DAO/node-template`; that repo was renamed to `Cogni-DAO/cogni`, and a new public `Cogni-DAO/node-template` was created as the minimal quickstart fork. Where the prose below refers to "Cogni-DAO/cogni" you should read it as "the operator monorepo (post-rename)"; where it refers to the future minimal quickstart, that's now `Cogni-DAO/standalone-node`.
 >
-> **Update (2026-06-04):** the standalone quickstart was renamed `Cogni-DAO/node-template` → `Cogni-DAO/standalone-node`, freeing the `node-template` slug for a new **node-at-root submodule template** (a node minted via generate-from-template + added as a submodule into the operator). The Phase-0 history below still names the quickstart `node-template` — read those as `standalone-node`. See [node-ci-cd-contract](./node-ci-cd-contract.md) §Submodule-pinned nodes.
+> **Update (2026-06-04):** the standalone quickstart was renamed `Cogni-DAO/node-template` → `Cogni-DAO/standalone-node`, freeing the `node-template` slug for a new **node-at-root submodule template** (a node minted as a named fork + added as a submodule into the operator). The Phase-0 history below still names the quickstart `node-template` — read those as `standalone-node`. See [node-ci-cd-contract](./node-ci-cd-contract.md) §Submodule-pinned nodes.
 
 # Private Node Repos & Sovereign node-template Contract
 

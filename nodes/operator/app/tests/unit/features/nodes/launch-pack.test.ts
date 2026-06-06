@@ -50,6 +50,7 @@ describe("buildNodeLaunchPack", () => {
       "https://github.com/Cogni-DAO/cogni/pull/42"
     );
     expect(pack.prompt).toContain("Please launch Cogni node atlas end-to-end.");
+    expect(pack.prompt).toContain("scripts/conductor-worktree-setup.sh");
     expect(pack.prompt).toContain("Parent deployment PR:");
     expect(pack.prompt).toContain("/version.buildSha matches the child SHA");
   });

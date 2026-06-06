@@ -54,6 +54,8 @@ export function buildNodeLaunchPack(
     parentPrLine,
     `Candidate URL: ${candidateUrl}`,
     "",
+    "If you are running locally, use Conductor from a fresh main-based worktree. The repo-standard bootstrap is `scripts/conductor-worktree-setup.sh`, wired by `conductor.json`; keep `.env.cogni` and `.local-auth` symlinked from the primary checkout.",
+    "",
     "Drive the launch from live systems: inspect the parent birth PR, recover the child repo/SHA/image from its gitlink and catalog row, wait for child image CI, request candidate flight through the operator when the parent PR is green, and report the live URL only after /version.buildSha matches the child SHA. Ask me only for auth or product-decision blockers.",
   ].join("\n");
 

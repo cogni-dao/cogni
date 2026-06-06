@@ -38,7 +38,7 @@ Build-time scripts for migrations, seeds, type generation, development utilities
 - **Exports:** none
 - **CLI (if any):** Migration, seed, database drop, validation, worktree readiness, and workspace-check/package-build orchestration commands
 - **Env/Config keys:** Database connection, development flags, `TURBO_SCM_BASE`/`TURBO_SCM_HEAD` scope overrides, CI-style test env fallbacks for `run-turbo-checks.sh`
-- **Files considered API:** setup/bootstrap.sh and setup/provision-env-vm.sh (bootstrap/provisioning), validate-agents-md.mjs (validation script), db/drop-test-db.ts (test database utility), diag-openclaw-sandbox.mjs (OpenClaw-in-sandbox diagnostic), grafana-pdc-token-preflight.sh / grafana-postgres-datasource.sh / grafana-postgres-query.sh (Grafana Cloud Postgres support helpers), worktree-check.sh (fresh-worktree readiness check), run-turbo-checks.sh (workspace-scoped local check helper), run-scoped-package-build.mjs (affected package prebuild helper)
+- **Files considered API:** setup/bootstrap.sh and setup/provision-env-vm.sh (bootstrap/provisioning), conductor-worktree-setup.sh (Conductor workspace bootstrap), validate-agents-md.mjs (validation script), db/drop-test-db.ts (test database utility), diag-openclaw-sandbox.mjs (OpenClaw-in-sandbox diagnostic), grafana-pdc-token-preflight.sh / grafana-postgres-datasource.sh / grafana-postgres-query.sh (Grafana Cloud Postgres support helpers), worktree-check.sh (fresh-worktree readiness check), run-turbo-checks.sh (workspace-scoped local check helper), run-scoped-package-build.mjs (affected package prebuild helper)
 
 ## Ports (optional)
 
@@ -83,6 +83,7 @@ pnpm check:agentsmd             # Validate all AGENTS.md files
 
 - Scripts must be idempotent and safe to re-run
 - AGENTS.md validator enforces hexagonal import standards for AGENTS.md
+- `conductor-worktree-setup.sh` is the Conductor setup entrypoint. It symlinks `.env.cogni` and `.local-auth` from the primary checkout so secrets and captured auth do not drift across worktrees.
 - `run-scoped-package-build.mjs` scopes local package builds against `origin/main` by default, falls back to a full `pnpm packages:build` when global build inputs change, and emits a warning so developers notice the scope expansion.
 - `worktree-check.sh` is non-mutating and checks whether a fresh worktree has the minimum local state needed before an agent runs expensive gates.
 - `check-fast.sh` and `check-all.sh` run `workspace:lint` via `run-turbo-checks.sh` so local checks catch the same per-workspace Biome/ESLint failures that CI's workspace runs would catch.

@@ -18,6 +18,28 @@ When working on isolated branches (e.g., bug fixes, experiments) without disturb
 
 ## Setup
 
+### Conductor
+
+The repo ships a shared Conductor setup entrypoint:
+
+- `conductor.json`
+- `scripts/conductor-worktree-setup.sh`
+- `.claude/skills/conductor-worktree-setup/SKILL.md`
+
+Before creating a Conductor workspace, update the primary checkout that Conductor will branch from:
+
+```bash
+export COGNI_TEMPLATE_ROOT="${COGNI_TEMPLATE_ROOT:-$HOME/dev/cogni-template}"
+git -C "$COGNI_TEMPLATE_ROOT" checkout main
+git -C "$COGNI_TEMPLATE_ROOT" pull --ff-only origin main
+```
+
+Then create the workspace in Conductor and let setup run. The setup script fetches `origin/main`, symlinks `.env.cogni` and `.local-auth` from the primary checkout, installs dependencies, builds package declarations, and runs `pnpm worktree:check`.
+
+Secrets and captured auth are symlinked, not copied, so rotations and refreshed storage states propagate to active worktrees.
+
+### Manual Git Worktree
+
 ```bash
 # 1. Create worktree with new branch off current HEAD
 git worktree add ../cogni-template-worktrees/<branch-name> -b <branch-name> HEAD

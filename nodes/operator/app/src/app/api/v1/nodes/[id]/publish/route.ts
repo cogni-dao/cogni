@@ -184,8 +184,8 @@ export async function POST(request: Request, routeArgs: RouteParams) {
         );
       }
 
-      // Submodule birth: mint the node's own repo from the node-template template (its ~1100 files live
-      // there, not inlined into the operator), then the operator authors a PR pinning it as a git
+      // Submodule birth: mint the node's own repo as a named fork of node-template (its ~1100 files
+      // live there, not inlined into the operator), then the operator authors a PR pinning it as a git
       // submodule at `nodes/<slug>` + the footprint gens — one App-authored commit, PR URL synchronous.
       const writer = createNodeRepoWriter(env);
       const identity = {
@@ -197,7 +197,7 @@ export async function POST(request: Request, routeArgs: RouteParams) {
       };
       let pr: { prNumber: number; prUrl: string };
       try {
-        const minted = await writer.generateFromTemplate({
+        const minted = await writer.forkFromTemplate({
           templateOwner,
           owner: mintOwner,
           slug: node.slug,

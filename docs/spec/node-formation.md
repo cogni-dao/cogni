@@ -39,10 +39,10 @@ Register (DB row) → Formation (wallet txs) → Publish (repo + operator PR) �
 
 This is distinct from a **standalone fork** — a solo operator who wants their own full instance on their own VM forks `Cogni-DAO/standalone-node` and follows [`fork-quickstart.md`](../runbooks/fork-quickstart.md). Two repos, two intents:
 
-| Repo                        | Role                                                                                                                                                                     |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `Cogni-DAO/standalone-node` | Fork-whole quickstart — your own instance, your own substrate (`fork-quickstart.md`).                                                                                    |
-| `Cogni-DAO/node-template`   | Template repo — Publish `generate`s a node's own repo from it, then submodule-pins it at `nodes/<slug>`. Maintained node-at-root from the `nodes/node-template/` subdir. |
+| Repo                        | Role                                                                                                                                                                                                    |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Cogni-DAO/standalone-node` | Fork-whole quickstart — your own instance, your own substrate (`fork-quickstart.md`).                                                                                                                   |
+| `Cogni-DAO/node-template`   | Template repo — Publish creates a named fork for the node repo, commits node identity on top, then submodule-pins it at `nodes/<slug>`. Maintained node-at-root from the `nodes/node-template/` subdir. |
 
 `CATALOG_IS_SSOT` ([ci-cd.md](ci-cd.md) Axiom 16) is what makes Publish a single reviewable PR rather than a manual checklist: the catalog entry is the only declaration site, and overlays, per-node AppSets (Axiom 18), Caddy routing, scheduler endpoints, DNS (Axiom 21), and the build matrix all derive from it. The deploy-row contract lives in [create-node.md](../guides/create-node.md); secrets are stripped from the Publish PR and inherited via ESO (`NO_SECRETS_IN_PR`, `bug.5086`).
 
@@ -334,8 +334,8 @@ After Formation returns a verified repo-spec fragment, the **operator** mints th
 
 **Mechanism** (`adapters/server/vcs/github-repo-write.ts` + `shared/node-app-scaffold/`):
 
-1. **Mint** — `POST /repos/Cogni-DAO/node-template/generate` creates `Cogni-DAO/<slug>` from the `node-template` template repo (server-side copy; the template seed already strips `.cogni/secrets-catalog.yaml` + `k8s/external-secrets/**` per `bug.5086` — see `NO_SECRETS_IN_PR`).
-2. **Identity** — commit the regenerated `.cogni/repo-spec.yaml` (formed `node_id` / `scope_id` + DAO addresses) to the new repo's `main`; generate copies node-template's identity verbatim, so this overrides it. The new HEAD SHA is the gitlink pin.
+1. **Mint** — `POST /repos/Cogni-DAO/node-template/forks` creates `Cogni-DAO/<slug>` as a named fork of `node-template` (`default_branch_only: true`). This preserves a shared merge base so node developers can fetch and merge upstream template updates.
+2. **Identity** — commit the regenerated `.cogni/repo-spec.yaml` (formed `node_id` / `scope_id` + DAO addresses) to the fork's `main`. The new HEAD SHA is the gitlink pin.
 3. **Pin** — the operator authors a PR on the monorepo: a `160000` gitlink at `nodes/<slug>` + a `.gitmodules` stanza, plus the footprint gens (catalog, overlays×3, per-node AppSets×3, Caddyfile route, `ci.yaml` scope filter, scheduler-worker endpoints) — **no `pnpm-lock.yaml`** (a submodule node is not a workspace member). One tree, one commit, one ref, one PR.
 4. **Author** — the PR opens under the operator App installation (author = the App, auditable — not `github-actions[bot]`, not a human PAT).
 

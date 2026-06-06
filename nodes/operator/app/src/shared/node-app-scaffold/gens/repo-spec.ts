@@ -14,7 +14,7 @@
  *   BORN_REVIEWABLE — the mint overwrites the template's `.cogni/repo-spec.yaml` wholesale, so the
  *   default review `gates:` MUST be emitted here or every minted node is born with zero gates
  *   ("no gates, pass" — the `cogni-test-org/ay` gap). The rule files the gates reference ship in the
- *   node-template repo (`.cogni/rules/`, copied verbatim by generate-from-template) and stay in
+ *   node-template repo (`.cogni/rules/`, inherited by the template fork) and stay in
  *   lockstep with `nodes/node-template/.cogni/rules/`. Gate set coordinated with Lane A (review path).
  * Side-effects: none — pure function, no IO, no env.
  * Links: nodes/node-template/.cogni/repo-spec.yaml, nodes/node-template/.cogni/rules/, src/features/nodes/repo-spec-builder.ts, docs/spec/node-ci-cd-contract.md, task.5092

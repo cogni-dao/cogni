@@ -5,7 +5,7 @@
  * Module: `@shared/node-app-scaffold/gens/repo-spec`
  * Purpose: Pin BORN_REVIEWABLE — the minted `.cogni/repo-spec.yaml` must carry the default review
  *   gates, and every ai-rule it references must exist as a canonical rule file in
- *   `nodes/node-template/.cogni/rules/` (lockstep with the files generate-from-template ships).
+ *   `nodes/node-template/.cogni/rules/` (lockstep with the files inherited by the template fork).
  * Scope: Pure unit test over `renderRepoSpec` output + the canonical rules dir on disk; does not
  *   exercise the mint network path.
  * Invariants: minted spec has gates, has no `nodes:` registry (single-node-fork signal), and its

@@ -3,8 +3,8 @@
 
 /**
  * Module: `@adapters/server/vcs/github-repo-write`
- * Purpose: Operator-only helper that commits a single file and opens a pull request via the GitHub App.
- * Scope: Two thin Octokit calls behind one entry point; reuses GitHub App installation auth (cogni-node-template).
+ * Purpose: Operator-only helper that mints node repos, commits files, and opens pull requests via the GitHub App.
+ * Scope: Thin Octokit calls behind one entry point; reuses GitHub App installation auth (cogni-node-template).
  *   Does not belong in `VcsCapability` because that capability is shared with poly/resy/node-template stubs
  *   and these write ops are operator-only.
  * Invariants:
@@ -74,7 +74,7 @@ export interface OpenNodeAppPrResult {
  * Submodule-birth variant of {@link OpenNodeAppPrInput}: the node's ~1100 files live in an
  * already-minted standalone repo (the submodule target), not inline in the operator tree. The
  * operator PR pins that repo as a gitlink at `nodes/<slug>` + registers it in `.gitmodules`.
- * Minting the repo (GitHub generate-from-template) is the caller's responsibility — it requires a
+ * Minting the repo (GitHub fork of node-template) is the caller's responsibility — it requires a
  * standalone `node-template` template repo and is injected here as `nodeRepoUrl` + `nodeRepoHeadSha`.
  */
 export interface OpenNodeSubmodulePrInput extends OpenNodeAppPrInput {
@@ -84,11 +84,11 @@ export interface OpenNodeSubmodulePrInput extends OpenNodeAppPrInput {
   readonly nodeRepoHeadSha: string;
 }
 
-/** Input to {@link GitHubRepoWriter.generateFromTemplate}: mint a node repo from `node-template`. */
-export interface GenerateFromTemplateInput {
-  /** Org/user owning BOTH the `node-template` template and the new repo (e.g. `Cogni-DAO`). */
+/** Input to {@link GitHubRepoWriter.forkFromTemplate}: mint a node repo from `node-template`. */
+export interface ForkFromTemplateInput {
+  /** Org/user owning the `node-template` source repo (e.g. `Cogni-DAO`). */
   readonly templateOwner: string;
-  /** Owner the new node repo is created under (same org). */
+  /** Owner the new node fork is created under. */
   readonly owner: string;
   /** New repo name = node slug. */
   readonly slug: string;
@@ -130,7 +130,7 @@ const APPSET_TEMPLATE_PATH = "scripts/ci/node-applicationset.yaml.tmpl";
 
 // Node-content rename/delete (NODE_RENAME_PATHS / NODE_DELETE_PATHS) is gone with the inline
 // `buildNodeSubtree`: a submodule node's files live in its own repo (minted via
-// `generateFromTemplate`), and the seed already strips `.cogni/secrets-catalog.yaml` +
+// `forkFromTemplate`), and the seed already strips `.cogni/secrets-catalog.yaml` +
 // `k8s/external-secrets` (bug.5086 Part D) — the operator never rewrites node-content blobs.
 
 export class GitHubRepoWriter {
@@ -258,48 +258,51 @@ export class GitHubRepoWriter {
   }
 
   /**
-   * Mint a new node repo from the `node-template` template (generate-from-template) and set its
+   * Mint a new node repo as a named fork of `node-template` and set its
    * identity — commit the regenerated `.cogni/repo-spec.yaml` to the new repo's `main`. Returns the
    * clone URL + new HEAD SHA: the gitlink pin {@link openNodeSubmodulePr} consumes.
    *
    * Replaces the inline `openNodeAppPr` subtree-build: the node's ~1100 files now live in their own
-   * repo, not inlined into the operator tree. Requires `node-template` marked a GitHub template repo
-   * + the App installed org-wide (it must create the repo AND commit to it).
+   * repo, not inlined into the operator tree. Uses GitHub forks instead of template generation so
+   * spawned nodes share git history with `node-template` and can merge upstream changes normally.
    */
-  async generateFromTemplate(
-    input: GenerateFromTemplateInput
+  async forkFromTemplate(
+    input: ForkFromTemplateInput
   ): Promise<{ cloneUrl: string; headSha: string }> {
     const { templateOwner, owner, slug } = input;
     const tplOctokit = await this.getOctokit(templateOwner, TEMPLATE_SLUG);
 
-    // Mint the repo — idempotent: a prior partial run (repo created, pin PR failed) re-runs cleanly
-    // by reusing the existing repo instead of 422-ing on the duplicate name.
+    // Mint the repo as a named fork — idempotent: a prior partial run (fork created, pin PR failed)
+    // re-runs cleanly by reusing the existing matching fork instead of 422-ing on the duplicate name.
     let cloneUrl: string;
     try {
       const { data: created } = await tplOctokit.request(
-        "POST /repos/{template_owner}/{template_repo}/generate",
+        "POST /repos/{owner}/{repo}/forks",
         {
-          template_owner: templateOwner,
-          template_repo: TEMPLATE_SLUG,
-          owner,
+          owner: templateOwner,
+          repo: TEMPLATE_SLUG,
+          organization: owner,
           name: slug,
-          private: false,
-          description: `Cogni node ${slug} — submodule of the operator monorepo`,
+          default_branch_only: true,
         }
       );
       cloneUrl = created.clone_url;
     } catch (err) {
       if ((err as { status?: number })?.status !== 422) throw err;
-      const { data: existing } = await tplOctokit.request(
+      const existingRepo = await tplOctokit.request(
         "GET /repos/{owner}/{repo}",
         { owner, repo: slug }
       );
-      cloneUrl = existing.clone_url;
+      this.assertExistingTemplateFork(
+        existingRepo.data,
+        templateOwner,
+        TEMPLATE_SLUG,
+        slug
+      );
+      cloneUrl = existingRepo.data.clone_url;
     }
 
-    // generate-from-template copies node-template's `.cogni/repo-spec.yaml` verbatim (its identity);
-    // override it on the minted repo's main. The initial commit can lag the generate response, so
-    // resolve main with a short retry before committing identity.
+    // Forking is async. Resolve main with a short retry before committing identity.
     const octokit = await this.getOctokit(owner, slug);
     let base: { baseCommitSha: string; baseTreeSha: string } | undefined;
     for (let attempt = 0; attempt < 6; attempt++) {
@@ -314,7 +317,7 @@ export class GitHubRepoWriter {
     }
     if (!base) {
       throw new Error(
-        `generateFromTemplate: ${owner}/${slug} main not ready after generate`
+        `forkFromTemplate: ${owner}/${slug} main not ready after fork`
       );
     }
     const { baseCommitSha, baseTreeSha } = base;
@@ -361,7 +364,7 @@ export class GitHubRepoWriter {
   }
 
   /**
-   * Submodule-birth consumer of {@link generateFromTemplate}: instead of inlining the node's files into
+   * Submodule-birth consumer of {@link forkFromTemplate}: instead of inlining the node's files into
    * the operator tree, pin an already-minted node repo as a git submodule at `nodes/<slug>` (a
    * `160000` gitlink) + register it in `.gitmodules`, alongside the same catalog/overlays/appsets/
    * Caddyfile/scheduler/scope-filter footprint MINUS the lockfile (a submodule node is not a workspace
@@ -369,8 +372,8 @@ export class GitHubRepoWriter {
    * single-node-scope as ONE domain — SUBMODULE_GITLINK_IS_OPERATOR_PIN (spec: node-ci-cd-contract,
    * proven by single-node-scope fixture 19).
    *
-   * Minting the node repo (GitHub generate-from-template — needs a standalone `node-template` template
-   * repo) is the caller's job; its result is injected as `nodeRepoUrl` + `nodeRepoHeadSha`.
+   * Minting the node repo (GitHub fork of the standalone `node-template` repo) is the caller's job;
+   * its result is injected as `nodeRepoUrl` + `nodeRepoHeadSha`.
    */
   async openNodeSubmodulePr(
     input: OpenNodeSubmodulePrInput
@@ -458,6 +461,23 @@ export class GitHubRepoWriter {
       { owner, repo, commit_sha: baseCommitSha }
     );
     return { baseCommitSha, baseTreeSha: baseCommit.tree.sha };
+  }
+
+  private assertExistingTemplateFork(
+    repo: {
+      readonly full_name?: string;
+      readonly fork?: boolean;
+      readonly parent?: { readonly full_name?: string };
+    },
+    templateOwner: string,
+    templateRepo: string,
+    slug: string
+  ): void {
+    const expectedParent = `${templateOwner}/${templateRepo}`;
+    if (repo.fork && repo.parent?.full_name === expectedParent) return;
+    throw new Error(
+      `forkFromTemplate: ${repo.full_name ?? slug} already exists but is not a fork of ${expectedParent}`
+    );
   }
 
   /** Build the final tree atop `base_tree`, commit it, upsert the branch (idempotent), open/find the PR. */

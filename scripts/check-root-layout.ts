@@ -110,6 +110,7 @@ const ALLOWED_ROOT_ENTRIES = new Set<string>([
   "biome.json",
   "commitlint.config.cjs",
   "config",
+  "conductor.json",
   "docs",
   "e2e",
   "eslint",

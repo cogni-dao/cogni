@@ -131,6 +131,7 @@ export { SystemClock } from "./time/system.adapter";
 export {
   type CommitFileAndOpenPrInput,
   type CommitFileAndOpenPrResult,
+  type ForkFromTemplateInput,
   GitHubRepoWriter,
   type GitHubRepoWriterConfig,
   type OpenNodeAppPrInput,
