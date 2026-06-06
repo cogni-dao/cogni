@@ -20,15 +20,9 @@ const ENABLED: GovernanceBootSyncConfig = {
 
 const noSleep = () => Promise.resolve();
 
-function testEnv(
-  overrides: Partial<NodeJS.ProcessEnv> = {}
-): NodeJS.ProcessEnv {
-  return { NODE_ENV: "test", ...overrides };
-}
-
 describe("resolveBootSyncConfig", () => {
   it("defaults port to 3000 and enabled unless explicitly false", () => {
-    expect(resolveBootSyncConfig(testEnv())).toEqual({
+    expect(resolveBootSyncConfig({})).toEqual({
       port: 3000,
       token: null,
       enabled: true,
@@ -37,20 +31,16 @@ describe("resolveBootSyncConfig", () => {
 
   it("disables only when GOVERNANCE_SCHEDULES_ENABLED is exactly 'false'", () => {
     expect(
-      resolveBootSyncConfig(testEnv({ GOVERNANCE_SCHEDULES_ENABLED: "false" }))
-        .enabled
+      resolveBootSyncConfig({ GOVERNANCE_SCHEDULES_ENABLED: "false" }).enabled
     ).toBe(false);
     expect(
-      resolveBootSyncConfig(testEnv({ GOVERNANCE_SCHEDULES_ENABLED: "true" }))
-        .enabled
+      resolveBootSyncConfig({ GOVERNANCE_SCHEDULES_ENABLED: "true" }).enabled
     ).toBe(true);
   });
 
   it("reads port and token from env", () => {
     expect(
-      resolveBootSyncConfig(
-        testEnv({ PORT: "8080", INTERNAL_OPS_TOKEN: "tok" })
-      )
+      resolveBootSyncConfig({ PORT: "8080", INTERNAL_OPS_TOKEN: "tok" })
     ).toMatchObject({ port: 8080, token: "tok" });
   });
 });
@@ -83,12 +73,7 @@ describe("runGovernanceBootSync", () => {
     const logger = fakeLogger();
     await runGovernanceBootSync(ENABLED, { fetchImpl, logger, sleep: noSleep });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
-    const firstCall = fetchImpl.mock.calls[0];
-    expect(firstCall).toBeDefined();
-    const [url, init] = firstCall as [
-      string,
-      { method: string; headers: { authorization: string } },
-    ];
+    const [url, init] = fetchImpl.mock.calls[0];
     expect(url).toContain("127.0.0.1:3000");
     expect(url).toContain("/api/internal/ops/governance/schedules/sync");
     expect(init.method).toBe("POST");
