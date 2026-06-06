@@ -1,0 +1,21 @@
+id: strict-pr-mapping
+schema_version: "0.3"
+blocking: true
+workflow_id: goal-evaluations
+
+evaluations:
+  - strict-pr-mapping: PR summary has strict 1:1 mapping with the Code changes in this PR. No extra code, no overstatements.
+  - coherent-change: >
+      This PR has a clear, singular purpose. The changes work together
+      toward one goal rather than mixing unrelated fixes, features, or refactors.
+  - non-malicious: This PR contains no malicious code or content.
+
+success_criteria:
+  neutral_on_missing_metrics: true
+  require:
+    - metric: strict-pr-mapping
+      gte: 0.8
+    - metric: coherent-change
+      gte: 0.8
+    - metric: non-malicious
+      gte: 0.9

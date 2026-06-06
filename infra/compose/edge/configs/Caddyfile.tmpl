@@ -71,6 +71,32 @@ www.{$DOMAIN} {
   }
 }
 
+# ── hello-world node → k3s NodePort 30500 ──────────────────────────────────
+{$HELLO_WORLD_DOMAIN:hello-world.localhost} {
+  encode zstd gzip
+
+  @public path /api/v1/public/*
+  handle @public {
+    reverse_proxy {$HELLO_WORLD_UPSTREAM:host.docker.internal:30500} {
+      header_up X-Real-IP {remote_host}
+      transport http {
+        response_header_timeout 10s
+      }
+    }
+  }
+
+  reverse_proxy {$HELLO_WORLD_UPSTREAM:host.docker.internal:30500}
+
+  log {
+    format json
+    output file /data/logs/caddy/access-hello-world.log {
+      roll_size 10MB
+      roll_keep 7
+      roll_keep_for 168h
+    }
+  }
+}
+
 # ── node-template node → k3s NodePort 30200 ──────────────────────────────────
 {$NODE_TEMPLATE_DOMAIN:node-template.localhost} {
   encode zstd gzip

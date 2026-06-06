@@ -1,0 +1,22 @@
+id: node-goal-alignment
+schema_version: "0.3"
+blocking: true
+workflow_id: goal-evaluations
+
+# Default goal-alignment for a freshly-minted Cogni node. Retune the evaluations
+# to your node's actual mission once it has one — this template asks only that a
+# change builds a sound, tested TypeScript AI node.
+evaluations:
+  - well-built-node: This PR contributes to a sound, well-structured TypeScript AI node built on the Cogni template (clean architecture, typed boundaries).
+  - test-coverage: This PR improves or maintains test coverage / reliability of the node's features.
+  - clear-purpose: This PR advances the node toward a clear, stated purpose rather than adding unscoped surface area.
+
+success_criteria:
+  neutral_on_missing_metrics: true
+  any_of:
+    - metric: well-built-node
+      gte: 0.8
+    - metric: test-coverage
+      gte: 0.8
+    - metric: clear-purpose
+      gte: 0.8
