@@ -64,22 +64,15 @@ source_repo_for_target() {
   ' "${_image_tags_spec_root}/.gitmodules"
 }
 
-default_image_repository_for_repo() {
-  local repo="$1" owner
-  owner="$(printf '%s' "$repo" | sed -E 's#^https://github\.com/([^/]+)/.*#\1#' | tr '[:upper:]' '[:lower:]')"
-  [ -n "$owner" ] && [ "$owner" != "$repo" ] || owner="cogni-dao"
-  printf 'ghcr.io/%s/cogni-node-template' "$owner"
-}
-
 image_repository_for_target() {
-  local target="$1" source_repo="$2" catalog image
+  local target="$1" catalog image
   catalog="${_image_tags_catalog_root}/${target}.yaml"
   image="$(yq -N '.image_repository // ""' "$catalog")"
-  if [ -n "$image" ]; then
-    printf '%s' "$image"
-  else
-    default_image_repository_for_repo "$source_repo"
+  if [ -z "$image" ]; then
+    echo "[ERROR] image_repository missing for submodule birth ${target}" >&2
+    exit 1
   fi
+  printf '%s' "$image"
 }
 
 json_items=()
@@ -106,7 +99,7 @@ while IFS= read -r path; do
     echo "[ERROR] source_repo missing for submodule birth ${target}" >&2
     exit 1
   fi
-  image_repository="$(image_repository_for_target "$target" "$source_repo")"
+  image_repository="$(image_repository_for_target "$target")"
   tag="sha-${source_sha}"
   json_items+=("    {\n      \"target\": \"${target}\",\n      \"source_repo\": \"${source_repo}\",\n      \"source_sha\": \"${source_sha}\",\n      \"image_repository\": \"${image_repository}\",\n      \"tag\": \"${image_repository}:${tag}\"\n    }")
   targets+=("$target")
