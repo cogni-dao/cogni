@@ -60,13 +60,15 @@ export function buildNodeLaunchPack(
     "",
     "Start with @node-wizard-scorecard. Post its matrix before editing code.",
     "Required path:",
-    "1. Ensure the parent deployment PR is merged before treating this node as deployable.",
-    "2. Create a node customization PR in the node repo. Do not push directly to main or hand-edit the operator gitlink.",
-    "3. Let the node repo CI build normally after that PR merges.",
-    "4. Request candidate-a flight through the operator API only when the operator reports the launch is eligible.",
-    "5. Verify the deployed /version at the candidate URL and report the URL only after it matches the launched node SHA.",
+    "1. Monitor the parent deployment PR. If it is still checking, queued, or waiting for human merge, mark that scorecard row in_progress and keep working.",
+    "2. Create a node customization PR in the node repo immediately when the node repo is available. Do not push directly to main or hand-edit the operator gitlink.",
+    "3. Drive the child PR and parent PR in parallel: child CI/code review can proceed while the parent PR waits in CI or merge queue.",
+    "4. Confirm child CI readiness from GitHub: Node CI workflow active, a PR or push run visible, and GHCR auth available for the push-to-main image build.",
+    "5. After the child PR merges, let the node repo CI build normally and confirm the child main image tag exists.",
+    "6. Request candidate-a flight through the operator API only when the parent PR is merged, the parent pin matches the image-producing child SHA, and the operator reports the launch is eligible.",
+    "7. Verify the deployed /version at the candidate URL and report the URL only after it matches the launched node SHA.",
     "",
-    "Use @node-formation-styling-guide for the customization PR and /contribute-to-cogni for the agent lifecycle. If parent merge, child image, parent pin, or flight eligibility is blocked, report the exact blocked scorecard row instead of inventing privileged manual steps.",
+    "Use @node-formation-styling-guide for the customization PR and /contribute-to-cogni for the agent lifecycle. Localhost may help implementation, but it is never launch evidence: use GitHub CI, GHCR, operator flight, and the candidate URL. If parent merge, child CI readiness, child image, parent pin, or flight eligibility is blocked, report the exact blocked scorecard row instead of inventing privileged manual steps.",
   ].join("\n");
 
   return {

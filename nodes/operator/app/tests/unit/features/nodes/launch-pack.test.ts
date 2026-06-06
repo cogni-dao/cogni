@@ -63,10 +63,19 @@ describe("buildNodeLaunchPack", () => {
     expect(pack.prompt).toContain("Parent deployment PR:");
     expect(pack.prompt).toContain("Candidate URL:");
     expect(pack.prompt).toContain("@node-wizard-scorecard");
-    expect(pack.prompt).toContain("Ensure the parent deployment PR is merged");
-    expect(pack.prompt).toContain("Create a node customization PR");
+    expect(pack.prompt).toContain("mark that scorecard row in_progress");
+    expect(pack.prompt).toContain(
+      "Create a node customization PR in the node repo immediately"
+    );
+    expect(pack.prompt).toContain("while the parent PR waits in CI or merge queue");
     expect(pack.prompt).toContain("Do not push directly to main");
+    expect(pack.prompt).toContain("Confirm child CI readiness from GitHub");
+    expect(pack.prompt).toContain("a PR or push run visible");
+    expect(pack.prompt).toContain("GHCR auth available");
     expect(pack.prompt).toContain("Let the node repo CI build normally");
+    expect(pack.prompt).toContain("Localhost may help implementation");
+    expect(pack.prompt).toContain("it is never launch evidence");
+    expect(pack.prompt).toContain("use GitHub CI, GHCR, operator flight");
     expect(pack.prompt).toContain("operator reports the launch is eligible");
     expect(pack.prompt).toContain("@node-formation-styling-guide");
     expect(pack.prompt).toContain("/contribute-to-cogni");
