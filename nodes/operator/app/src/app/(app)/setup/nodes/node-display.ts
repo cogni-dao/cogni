@@ -36,7 +36,7 @@ export const NODE_STATUS_DISPLAY: Record<NodeStatus, StatusDisplay> = {
     label: "Repo PR opened",
     intent: "default",
     description:
-      "Node repo is pinned for deployment. Wallet provisioning is next.",
+      "Node repo is pinned for deployment. Hand the launch pack to your AI agent next.",
   },
   wallet_ready: {
     label: "Wallet ready",

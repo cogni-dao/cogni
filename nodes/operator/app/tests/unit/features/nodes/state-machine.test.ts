@@ -12,7 +12,9 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  NODE_PROGRESS_STEPS,
   type NodeEvent,
+  progressIndexForStatus,
   transition,
   wizardUrlForStatus,
 } from "@/features/nodes/state-machine";
@@ -91,6 +93,21 @@ describe("transition — totality", () => {
         expect(typeof r.ok).toBe("boolean");
       }
     }
+  });
+});
+
+describe("progress display", () => {
+  it("shows published as the handoff step", () => {
+    expect(NODE_PROGRESS_STEPS.map((step) => step.label)).toEqual([
+      "Register",
+      "DAO",
+      "Repo",
+      "Handoff",
+      "Payments",
+    ]);
+    expect(
+      NODE_PROGRESS_STEPS[progressIndexForStatus("published")]?.label
+    ).toBe("Handoff");
   });
 });
 

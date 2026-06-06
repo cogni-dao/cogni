@@ -34,6 +34,7 @@ describe("buildNodeLaunchPack", () => {
       slug: "atlas",
       status: "published",
       operatorOrigin: "https://test.cognidao.org/",
+      nodeRepoUrl: "https://github.com/Cogni-DAO/atlas",
       publishPrUrl: "https://github.com/Cogni-DAO/cogni/pull/42",
     });
 
@@ -49,9 +50,25 @@ describe("buildNodeLaunchPack", () => {
     expect(pack.parentDeploymentPrUrl).toBe(
       "https://github.com/Cogni-DAO/cogni/pull/42"
     );
-    expect(pack.prompt).toContain("Please launch Cogni node atlas end-to-end.");
-    expect(pack.prompt).toContain("scripts/conductor-worktree-setup.sh");
+    expect(pack.prompt).toContain("Launch Cogni node atlas.");
+    expect(pack.prompt).toContain(
+      "Node repo URL: https://github.com/Cogni-DAO/atlas"
+    );
+    expect(pack.prompt).not.toContain("Launch pack URL:");
+    expect(pack.prompt).not.toContain(pack.launchPackUrl);
+    expect(pack.prompt).toContain(
+      "Cogni knowledge block: https://cognidao.org/knowledge/node-launch-handoff"
+    );
     expect(pack.prompt).toContain("Parent deployment PR:");
-    expect(pack.prompt).toContain("/version.buildSha matches the child SHA");
+    expect(pack.prompt).toContain("Candidate URL:");
+    expect(pack.prompt).toContain("Clone or fetch the node repo");
+    expect(pack.prompt).toContain(
+      "Recover the NODE git ref from the nodes/atlas submodule gitlink"
+    );
+    expect(pack.prompt).toContain("@node-formation-styling-guide");
+    expect(pack.prompt).toContain("node-formation styling PR");
+    expect(pack.prompt).toContain("/contribute-to-cogni");
+    expect(pack.prompt).toContain("flight candidate-a");
+    expect(pack.prompt).toContain("verify the deployed /version");
   });
 });

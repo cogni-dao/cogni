@@ -12,6 +12,7 @@
 
 "use client";
 
+import { ExternalLink } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { type ReactElement, useState } from "react";
 
@@ -23,6 +24,12 @@ import { LaunchPackCopyButton } from "./LaunchPackCopyButton.client";
 interface Props {
   readonly nodeId: string;
   readonly status: NodeStatus;
+  readonly publishedHandoff?: {
+    readonly daoAddress: string | null;
+    readonly nodeSlug: string;
+    readonly parentRepoUrl: string;
+    readonly publishPrUrl: string | null;
+  };
 }
 
 interface NodeActionErrorBody {
@@ -45,7 +52,11 @@ function formatActionError(body: NodeActionErrorBody, status: number): string {
   return fields ? `${prefix} (${fields})` : prefix;
 }
 
-export function NodeActionPanel({ nodeId, status }: Props): ReactElement {
+export function NodeActionPanel({
+  nodeId,
+  status,
+  publishedHandoff,
+}: Props): ReactElement {
   const router = useRouter();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -89,14 +100,86 @@ export function NodeActionPanel({ nodeId, status }: Props): ReactElement {
       break;
     case "published":
       action = (
-        <div className="space-y-2 text-sm">
-          <p className="text-muted-foreground">
-            Operator wallet provisioning is coming soon.
-          </p>
-          <div className="flex items-center gap-2">
-            <Button disabled>Provision operator wallet</Button>
+        <div className="space-y-5 text-sm">
+          <div className="space-y-2">
+            <p className="font-medium text-base text-foreground">
+              You did it. You are about 70% of the way there.
+            </p>
+            <p className="text-muted-foreground">
+              The formation work is recorded. Your AI agent can now customize
+              and deploy this node from the launch handoff.
+            </p>
+          </div>
+
+          <dl className="grid gap-3">
+            {publishedHandoff?.daoAddress ? (
+              <div className="grid gap-1">
+                <dt className="text-muted-foreground">On-chain DAO</dt>
+                <dd className="break-all font-mono text-xs">
+                  {publishedHandoff.daoAddress}
+                </dd>
+              </div>
+            ) : null}
+            {publishedHandoff ? (
+              <div className="grid gap-1">
+                <dt className="text-muted-foreground">Node repo</dt>
+                <dd>
+                  {publishedHandoff.publishPrUrl ? (
+                    <a
+                      className="inline-flex items-center gap-1 text-primary underline"
+                      href={publishedHandoff.publishPrUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      Recover from nodes/{publishedHandoff.nodeSlug} in the
+                      deployment PR
+                      <ExternalLink className="size-3.5" />
+                    </a>
+                  ) : (
+                    <a
+                      className="inline-flex items-center gap-1 text-primary underline"
+                      href={`${publishedHandoff.parentRepoUrl}/tree/main/nodes/${publishedHandoff.nodeSlug}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      nodes/{publishedHandoff.nodeSlug} in the deployment repo
+                      <ExternalLink className="size-3.5" />
+                    </a>
+                  )}
+                </dd>
+              </div>
+            ) : null}
+            {publishedHandoff?.publishPrUrl ? (
+              <div className="grid gap-1">
+                <dt className="text-muted-foreground">Deployment PR</dt>
+                <dd>
+                  <a
+                    className="inline-flex items-center gap-1 text-primary underline"
+                    href={publishedHandoff.publishPrUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    PR that empowers this node repo to be deployed in the Cogni
+                    network
+                    <ExternalLink className="size-3.5" />
+                  </a>
+                </dd>
+              </div>
+            ) : null}
+          </dl>
+
+          <div className="space-y-2">
+            <p className="text-muted-foreground">
+              Copy this prompt for your AI agent to take the node the rest of
+              the way.
+            </p>
             <LaunchPackCopyButton nodeId={nodeId} />
           </div>
+
+          <p className="text-muted-foreground">
+            Wallet provisioning and payments are deferred. This handoff does not
+            complete those steps.
+          </p>
         </div>
       );
       break;

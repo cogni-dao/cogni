@@ -124,7 +124,16 @@ export default async function NodeDashboardPage({
         <NodeDaoFormationPanel nodeId={node.id} />
       ) : (
         <SectionCard title="Next step">
-          <NodeActionPanel nodeId={node.id} status={status} />
+          <NodeActionPanel
+            nodeId={node.id}
+            status={status}
+            publishedHandoff={{
+              daoAddress: node.daoAddress,
+              nodeSlug: node.slug,
+              parentRepoUrl: node.repoUrl,
+              publishPrUrl: node.publishPrUrl,
+            }}
+          />
         </SectionCard>
       )}
 

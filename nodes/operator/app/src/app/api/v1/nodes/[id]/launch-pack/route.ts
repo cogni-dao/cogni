@@ -21,12 +21,28 @@ import { nodeLaunchPackOperation } from "@/contracts/nodes.launch-pack.v1.contra
 import { buildNodeLaunchPack } from "@/features/nodes/launch-pack";
 import { getServerSessionUser } from "@/lib/auth/server";
 import { type NodeStatus, nodes } from "@/shared/db/nodes";
+import { serverEnv } from "@/shared/env";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 interface RouteParams {
   params: Promise<{ id: string }>;
+}
+
+function ownerFromGithubPrUrl(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+  try {
+    const url = new URL(value);
+    if (url.hostname !== "github.com") {
+      return null;
+    }
+    return url.pathname.split("/").filter(Boolean)[0] ?? null;
+  } catch {
+    return null;
+  }
 }
 
 export async function GET(request: Request, ctx: RouteParams) {
@@ -67,12 +83,19 @@ export async function GET(request: Request, ctx: RouteParams) {
     return NextResponse.json({ error: "not found" }, { status: 404 });
   }
 
+  const env = serverEnv();
+  const nodeRepoOwner =
+    env.NODE_MINT_OWNER ?? ownerFromGithubPrUrl(node.publishPrUrl);
+
   return NextResponse.json(
     nodeLaunchPackOperation.output.parse(
       buildNodeLaunchPack({
         nodeId: node.id,
         slug: node.slug,
         status: node.status as NodeStatus,
+        nodeRepoUrl: nodeRepoOwner
+          ? `https://github.com/${nodeRepoOwner}/${node.slug}`
+          : null,
         publishPrUrl: node.publishPrUrl,
         operatorOrigin: new URL(request.url).origin,
       })
