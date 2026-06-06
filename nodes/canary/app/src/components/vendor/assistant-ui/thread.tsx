@@ -102,11 +102,11 @@ const ThreadWelcome: FC = () => {
       <div className="aui-thread-welcome-center flex w-full grow flex-col items-center justify-center">
         <div className="aui-thread-welcome-message flex size-full flex-col justify-center px-8">
           <div className="aui-thread-welcome-message-inner fade-in slide-in-from-bottom-2 animate-in font-semibold text-2xl duration-300 ease-out">
-            What do you want to build together?
+            What should canary work on?
           </div>
           <div className="aui-thread-welcome-message-inner fade-in slide-in-from-bottom-2 animate-in text-2xl text-muted-foreground/65 delay-100 duration-300 ease-out">
-            Start a project, join one, or ship a change—Cogni helps with the
-            next step.
+            Inspect the live surface, trace the claw lineage, or ship the next
+            grounded improvement.
           </div>
         </div>
       </div>
@@ -119,15 +119,28 @@ const ThreadSuggestions: FC = () => {
     <div className="aui-thread-welcome-suggestions grid w-full grid-cols-1 gap-2 pb-2 sm:grid-cols-2">
       {[
         {
-          title: "Dream of",
-          label: "a community-owned project",
+          title: "Inspect",
+          label: "the live node first",
           action:
-            "Dream of a community-owned AI, serving one random niche of your choice",
+            "Inspect the live canary surface and tell me the three biggest UX or identity problems you see.",
         },
         {
-          title: "Tell me about",
-          label: "the builders behind cogni",
-          action: "Tell me about the builders behind Cogni",
+          title: "Trace",
+          label: "the claw lineage",
+          action:
+            "Compare OpenClaw, ClawHub, and Moltbook, then propose a coherent canary identity.",
+        },
+        {
+          title: "Ship",
+          label: "the next grounded change",
+          action:
+            "Pick the highest-leverage canary improvement we can actually ship next and explain why.",
+        },
+        {
+          title: "Audit",
+          label: "repo + runtime together",
+          action:
+            "Review the repo and the live surface together, then show me the most important mismatch.",
         },
       ].map((suggestedAction, index) => (
         <div
@@ -165,7 +178,7 @@ const Composer: FC = () => {
       <ComposerPrimitive.AttachmentDropzone className="aui-composer-attachment-dropzone flex w-full flex-col rounded-3xl border border-input bg-background px-1 pt-2 shadow-xs outline-none transition-[color,box-shadow] has-[textarea:focus-visible]:border-ring has-[textarea:focus-visible]:ring-[3px] has-[textarea:focus-visible]:ring-ring/50 data-[dragging=true]:border-ring data-[dragging=true]:border-dashed data-[dragging=true]:bg-accent/50 dark:bg-background">
         <ComposerAttachments />
         <ComposerPrimitive.Input
-          placeholder="Send a message..."
+          placeholder="Ask canary to inspect, research, or ship..."
           className="aui-composer-input mb-1 max-h-32 min-h-16 w-full resize-none bg-transparent px-3.5 pt-1.5 pb-3 text-base outline-none placeholder:text-muted-foreground focus-visible:ring-0"
           rows={1}
           autoFocus

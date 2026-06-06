@@ -116,24 +116,24 @@
     --dropdown-xl: 12rem;
 
     --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
+    --foreground: 224 44% 8%;
     --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
-    --popover: 210 40% 96.1%;
-    --popover-foreground: 215.4 16.3% 20%;
-    --primary: 222.2 47.4% 11.2%;
+    --card-foreground: 224 44% 8%;
+    --popover: 180 38% 97%;
+    --popover-foreground: 224 26% 18%;
+    --primary: 174 100% 33%;
     --primary-foreground: 210 40% 98%;
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 20%;
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
+    --secondary: 180 34% 96%;
+    --secondary-foreground: 224 44% 8%;
+    --muted: 180 26% 95%;
+    --muted-foreground: 220 18% 34%;
+    --accent: 181 32% 94%;
+    --accent-foreground: 224 44% 8%;
     --destructive: 0 84.2% 60.2%;
     --destructive-foreground: var(--color-red-800);
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 222.2 84% 4.9%;
+    --border: 188 24% 88%;
+    --input: 188 24% 88%;
+    --ring: 174 100% 33%;
     --chart-1: 220 70% 50%;
     --chart-2: 160 60% 45%;
     --chart-3: 30 80% 55%;
@@ -148,10 +148,11 @@
     --syntax-string: 27 87% 67%; /* orange/peach - strings & variables */
     --syntax-keyword: 10 50% 50%; /* red/brown - keywords */
 
-    /* Accent gradient stops (aligned with brand hue 217) */
-    --accent-from: 217 85% 50%;
-    --accent-to: 217 100% 70%;
-    --accent-glow: 217 95% 60%;
+    /* Accent gradient stops — OpenClaw cyan core with a lighter signal tail */
+    --accent-from: 174 100% 38%;
+    --accent-to: 188 100% 58%;
+    --accent-glow: 180 100% 52%;
+    --canary-ember: 17 96% 56%;
 
     /* Status colors */
     --color-danger: 0 84.2% 60.2%;
@@ -159,14 +160,14 @@
     --color-success: 142 71% 45%;
 
     /* Sidebar */
-    --sidebar: 0 0% 98%;
-    --sidebar-foreground: 222.2 84% 4.9%;
-    --sidebar-primary: 222.2 47.4% 11.2%;
+    --sidebar: 180 29% 98%;
+    --sidebar-foreground: 224 44% 8%;
+    --sidebar-primary: 174 100% 33%;
     --sidebar-primary-foreground: 210 40% 98%;
-    --sidebar-accent: 210 40% 96.1%;
-    --sidebar-accent-foreground: 222.2 47.4% 11.2%;
-    --sidebar-border: 214.3 31.8% 91.4%;
-    --sidebar-ring: 222.2 84% 4.9%;
+    --sidebar-accent: 181 32% 94%;
+    --sidebar-accent-foreground: 224 44% 8%;
+    --sidebar-border: 188 24% 88%;
+    --sidebar-ring: 174 100% 33%;
 
     --radius: 0.5rem;
 
@@ -188,25 +189,25 @@
   }
 
   .dark {
-    --background: 0 0% 0%;
+    --background: 224 45% 5%;
     --foreground: 210 40% 98%;
-    --card: 0 0% 0%;
+    --card: 224 43% 7%;
     --card-foreground: 210 40% 98%;
-    --popover: 217.2 32.6% 9%;
-    --popover-foreground: 215 20.2% 76.1%;
-    --primary: 217 71% 40%;
-    --primary-foreground: 0 0% 100%;
-    --secondary: 217.2 32.6% 17.5%;
+    --popover: 224 35% 10%;
+    --popover-foreground: 198 18% 78%;
+    --primary: 174 92% 47%;
+    --primary-foreground: 224 45% 5%;
+    --secondary: 221 28% 13%;
     --secondary-foreground: 210 40% 98%;
-    --muted: 217.2 32.6% 9%;
-    --muted-foreground: 215 20.2% 76.1%;
-    --accent: 217.2 32.6% 17.5%;
+    --muted: 223 26% 10%;
+    --muted-foreground: 205 18% 74%;
+    --accent: 221 28% 13%;
     --accent-foreground: 210 40% 98%;
     --destructive: 0 62.8% 30.6%;
     --destructive-foreground: var(--color-red-600);
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 217 71% 40%;
+    --border: 217 23% 18%;
+    --input: 217 23% 18%;
+    --ring: 174 92% 47%;
     --chart-1: 220 70% 50%;
     --chart-2: 160 60% 45%;
     --chart-3: 30 80% 55%;
@@ -221,20 +222,21 @@
     --syntax-string: 20 90% 80%; /* peach/orange - strings & variables */
     --syntax-keyword: 220 100% 65%; /* blue - keywords */
 
-    /* Accent gradient stops (aligned with brand hue 217, darker for dark mode) */
-    --accent-from: 217 80% 45%;
-    --accent-to: 217 100% 60%;
-    --accent-glow: 217 90% 52%;
+    /* Accent gradient stops — electric cyan against a shell-dark backdrop */
+    --accent-from: 174 92% 44%;
+    --accent-to: 188 96% 58%;
+    --accent-glow: 180 100% 60%;
+    --canary-ember: 17 100% 61%;
 
     /* Sidebar */
-    --sidebar: 0 0% 3%;
+    --sidebar: 224 41% 6%;
     --sidebar-foreground: 210 40% 98%;
-    --sidebar-primary: 217 71% 40%;
-    --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 217.2 32.6% 17.5%;
+    --sidebar-primary: 174 92% 47%;
+    --sidebar-primary-foreground: 224 45% 5%;
+    --sidebar-accent: 221 28% 13%;
     --sidebar-accent-foreground: 210 40% 98%;
-    --sidebar-border: 217.2 32.6% 17.5%;
-    --sidebar-ring: 217 71% 40%;
+    --sidebar-border: 217 23% 18%;
+    --sidebar-ring: 174 92% 47%;
     --success: var(--color-emerald-500);
     --success-foreground: var(--color-emerald-600);
     --info: var(--color-violet-500);
@@ -289,6 +291,27 @@
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     text-shadow: 0 0 20px hsl(var(--accent-glow) / 0.15);
+  }
+
+  .canary-grid {
+    background-image:
+      radial-gradient(
+        circle at top,
+        hsl(var(--accent-glow) / 0.2),
+        transparent 38%
+      ),
+      linear-gradient(hsl(var(--border) / 0.35) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(var(--border) / 0.35) 1px, transparent 1px);
+    background-size: auto, 2.75rem 2.75rem, 2.75rem 2.75rem;
+    background-position: center top, center, center;
+    mask-image: linear-gradient(to bottom, black, transparent 92%);
+  }
+
+  .canary-panel {
+    background:
+      linear-gradient(180deg, hsl(var(--card) / 0.92), hsl(var(--card) / 0.72)),
+      radial-gradient(circle at top right, hsl(var(--canary-ember) / 0.12), transparent 28%);
+    box-shadow: 0 24px 80px hsl(var(--accent-glow) / 0.08);
   }
 
   /* Chat-specific viewport height (full viewport minus header) */

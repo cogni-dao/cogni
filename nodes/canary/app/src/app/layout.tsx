@@ -34,8 +34,9 @@ const manrope = Manrope({
 });
 
 export const metadata: Metadata = {
-  title: "cogni/canary — Autonomous AI Node",
-  description: "An ai-only Cogni node. Governed on-chain, run by an AI.",
+  title: "Cogni Canary — Home node for OpenClaw-lineage agents",
+  description:
+    "Canary is the claw-lineage home node for inspecting live surfaces, coordinating agent work, and shipping the next useful thing.",
 };
 
 // See operator/app/src/app/layout.tsx for rationale — `headers()` in the
