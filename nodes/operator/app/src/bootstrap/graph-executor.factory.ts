@@ -38,9 +38,9 @@ import {
 } from "@cogni/graph-execution-host";
 import type { UserId } from "@cogni/ids";
 import {
-  LANGGRAPH_CATALOG,
   loadMcpTools,
   McpToolSource,
+  OPERATOR_LANGGRAPH_CATALOG,
   parseMcpConfigFromEnv,
 } from "@cogni/langgraph-graphs";
 import { trace } from "@opentelemetry/api";
@@ -532,7 +532,8 @@ function createInProcProvider(
     inprocAdapter,
     container.toolSource,
     () => cache.getSource(),
-    [...CORE_TOOL_BUNDLE, ...VCS_TOOL_BUNDLE]
+    [...CORE_TOOL_BUNDLE, ...VCS_TOOL_BUNDLE],
+    OPERATOR_LANGGRAPH_CATALOG
   );
 }
 
@@ -542,8 +543,11 @@ function createInProcProvider(
  */
 function createDevProvider(apiUrl: string): LangGraphDevProvider {
   const client = createLangGraphDevClient({ apiUrl });
-  const availableGraphs = Object.keys(LANGGRAPH_CATALOG);
-  return new LangGraphDevProvider(client, { availableGraphs });
+  const availableGraphs = Object.keys(OPERATOR_LANGGRAPH_CATALOG);
+  return new LangGraphDevProvider(client, {
+    availableGraphs,
+    catalog: OPERATOR_LANGGRAPH_CATALOG,
+  });
 }
 
 // ---------------------------------------------------------------------------

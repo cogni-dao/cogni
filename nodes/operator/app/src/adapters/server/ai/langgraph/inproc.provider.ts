@@ -105,13 +105,13 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
     private readonly toolSource: ToolSourcePort,
     private readonly getMcpToolSource: () => Promise<ToolSourcePort | null> = () =>
       Promise.resolve(null),
-    nodeBundle: readonly CatalogBoundTool[] = []
+    nodeBundle: readonly CatalogBoundTool[] = [],
+    catalog: LangGraphCatalog<CreateGraphFn> = LANGGRAPH_CATALOG as LangGraphCatalog<CreateGraphFn>
   ) {
     this.log = makeLogger({ component: "LangGraphInProcProvider" });
     this.boundToolMap = new Map(nodeBundle.map((bt) => [bt.contract.name, bt]));
 
-    // Use catalog from package (single source of truth)
-    this.catalog = LANGGRAPH_CATALOG as LangGraphCatalog<CreateGraphFn>;
+    this.catalog = catalog;
 
     this.log.debug(
       {
