@@ -13,7 +13,7 @@ namePrefix: operator-
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/cogni-template
-    digest: "sha256:60046bd98400d8e07a6843d76bb5aad652b37093c8b54bf2ec6b7926242f5e69"
+    digest: "sha256:c8d5547303eb998d445fb38b403ea4a96ceadfbc49d47efb1bfea1adda73c19b"
 
 patches:
   - target:
@@ -47,11 +47,6 @@ patches:
       - op: add
         path: /data/NODE_TEMPLATE_OWNER
         value: "cogni-test-org"
-      # DoltHub node knowledge repo owner — non-secret environment config.
-      # PAT stays in operator-env-secrets via OpenBao/ESO.
-      - op: add
-        path: /data/DOLTHUB_OWNER
-        value: "cogni-test-nodes"
       # Submodule pin-PR target — a cogni-shaped mirror in the throwaway org so the test app
       # (cogni-operator-test, zero Cogni-DAO access) can open the pin-PR. Wizard-scoped override;
       # prod leaves these unset → pin-PR falls back to Cogni-DAO/cogni.
