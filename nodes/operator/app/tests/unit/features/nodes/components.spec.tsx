@@ -106,12 +106,14 @@ describe("nodes feature components", () => {
       screen.getByRole("img", { name: "Alpha Node homepage" })
     ).toHaveAttribute("src", "/showcase/alpha.png");
     expect(screen.getByRole("heading", { name: "Alpha Node" })).toBeVisible();
-    expect(screen.getByText("finalized #7")).toBeVisible();
-    expect(screen.getByRole("link", { name: "Details" })).toHaveAttribute(
+    expect(screen.getByText("12 / 30d")).toBeVisible();
+    expect(screen.getByText("3 epochs")).toBeVisible();
+    expect(screen.getByText("44 / 30d")).toBeVisible();
+    expect(screen.getByRole("link", { name: "View details" })).toHaveAttribute(
       "href",
       "/nodes/alpha"
     );
-    expect(screen.getByRole("link", { name: /Visit/ })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: /Visit app/ })).toHaveAttribute(
       "href",
       "https://alpha-test.cognidao.org"
     );
@@ -121,12 +123,12 @@ describe("nodes feature components", () => {
     render(<NodeNetworkCard node={beta} metrics={betaMetrics} />);
 
     expect(screen.getByText("B")).toBeVisible();
-    expect(screen.getByText("Scope")).toBeVisible();
-    expect(screen.getByText("Unavailable")).toBeVisible();
-    expect(screen.queryByRole("link", { name: /Visit/ })).toBeNull();
+    expect(screen.getAllByText("Not connected")).toHaveLength(2);
+    expect(screen.getByText("Pending")).toBeVisible();
+    expect(screen.queryByRole("link", { name: /Visit app/ })).toBeNull();
   });
 
-  it("renders gallery totals, leaderboards, cards, and registration slot", () => {
+  it("renders gallery summary, cards, and registration slot", () => {
     render(
       <NodesGallery
         items={[
@@ -137,14 +139,13 @@ describe("nodes feature components", () => {
       />
     );
 
-    expect(screen.getByRole("heading", { name: "Cogni Nodes" })).toBeVisible();
-    expect(screen.getByText("Listed nodes")).toBeVisible();
-    expect(screen.getByText("30d dev activity")).toBeVisible();
-    expect(screen.getByText("AI usage feeds")).toBeVisible();
-    expect(screen.getByText("1/2")).toBeVisible();
-    expect(screen.getByText("Dev Activity")).toBeVisible();
-    expect(screen.getByText("Epochs Completed")).toBeVisible();
-    fireEvent.click(screen.getByText("Launch or Register Node"));
+    expect(
+      screen.getByRole("heading", { name: "Explore the network" })
+    ).toBeVisible();
+    expect(screen.getByText(/2 listed/)).toBeVisible();
+    expect(screen.getByText(/12 tracked activity events in 30d/)).toBeVisible();
+    expect(screen.getByText(/3 finalized epochs/)).toBeVisible();
+    fireEvent.click(screen.getByText("Start a node"));
     expect(screen.getByText("Registration Form Slot")).toBeVisible();
   });
 

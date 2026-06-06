@@ -11,12 +11,12 @@
  * @public
  */
 
-import { Activity, ArrowUpRight, Brain, GitBranch, Timer } from "lucide-react";
+import { ArrowUpRight } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import type { ReactElement } from "react";
 
-import { Badge, Button, Card, CardContent } from "@/components";
+import { Button, Card } from "@/components";
 import type { NodeSummary } from "@/ports";
 
 interface NodeCardMetrics {
@@ -43,22 +43,19 @@ function formatNumber(value: number): string {
   );
 }
 
-function Metric({
-  icon,
+function TileSignal({
   label,
   value,
 }: {
-  icon: ReactElement;
   label: string;
   value: string;
 }): ReactElement {
   return (
-    <div className="min-w-0 rounded-md border bg-background p-3">
-      <div className="mb-2 flex items-center gap-2 text-muted-foreground text-xs">
-        {icon}
-        <span className="truncate">{label}</span>
+    <div className="min-w-0">
+      <div className="truncate text-muted-foreground text-xs">{label}</div>
+      <div className="mt-1 truncate font-medium text-foreground text-sm">
+        {value}
       </div>
-      <div className="truncate font-semibold text-sm">{value}</div>
     </div>
   );
 }
@@ -67,12 +64,22 @@ export function NodeNetworkCard({
   node,
   metrics,
 }: NodeNetworkCardProps): ReactElement {
+  const hasNodeMetrics = Boolean(node.nodeId);
+  const activity = hasNodeMetrics
+    ? `${formatNumber(metrics.devActivity30d)} / 30d`
+    : "Not connected";
+  const ownership = hasNodeMetrics
+    ? metrics.finalizedEpochCount > 0
+      ? `${formatNumber(metrics.finalizedEpochCount)} epochs`
+      : "No epochs yet"
+    : "Not connected";
   const aiUsage =
     metrics.aiUsage.state === "available"
-      ? formatNumber(metrics.aiUsage.requests30d)
-      : "Unavailable";
+      ? `${formatNumber(metrics.aiUsage.requests30d)} / 30d`
+      : "Pending";
+
   return (
-    <Card className="h-full overflow-hidden">
+    <Card className="h-full overflow-hidden transition-colors hover:border-primary">
       <div className="relative aspect-video border-border border-b bg-muted">
         {node.thumbnailUrl ? (
           <Image
@@ -80,72 +87,48 @@ export function NodeNetworkCard({
             alt={`${node.title} homepage`}
             fill
             sizes="(min-width: 1024px) 33vw, (min-width: 640px) 50vw, 100vw"
-            className="object-cover object-top"
+            className="object-cover object-top transition-transform hover:scale-105"
           />
         ) : (
-          <div className="flex h-full w-full items-center justify-center bg-muted">
-            <span className="font-semibold text-5xl text-muted-foreground uppercase">
+          <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-primary/25 via-primary/10 to-transparent">
+            <span className="font-bold text-4xl text-foreground/70 uppercase">
               {node.title.charAt(0)}
             </span>
           </div>
         )}
       </div>
-      <CardContent className="flex flex-col gap-4 p-5">
-        <div className="min-w-0">
-          <div className="mb-2 flex items-center justify-between gap-2">
-            <h2 className="truncate font-semibold text-xl">{node.title}</h2>
-            <Badge intent={node.kind === "full-app" ? "default" : "secondary"}>
-              {node.kind === "full-app" ? "Node" : "Scope"}
-            </Badge>
-          </div>
+      <div className="flex min-h-48 flex-col gap-5 p-6">
+        <div className="min-w-0 space-y-2">
+          <h2 className="truncate font-semibold text-foreground text-lg">
+            {node.title}
+          </h2>
           {node.tagline ? (
-            <p className="line-clamp-2 min-h-10 text-muted-foreground text-sm">
+            <p className="line-clamp-2 text-muted-foreground text-sm">
               {node.tagline}
             </p>
           ) : null}
         </div>
 
-        <div className="grid grid-cols-2 gap-2">
-          <Metric
-            icon={<Activity className="size-3.5" />}
-            label="30d dev"
-            value={formatNumber(metrics.devActivity30d)}
-          />
-          <Metric
-            icon={<GitBranch className="size-3.5" />}
-            label="All dev"
-            value={formatNumber(metrics.devActivityTotal)}
-          />
-          <Metric
-            icon={<Brain className="size-3.5" />}
-            label="30d AI"
-            value={aiUsage}
-          />
-          <Metric
-            icon={<Timer className="size-3.5" />}
-            label="Epochs"
-            value={
-              metrics.latestEpoch
-                ? `${metrics.latestEpoch.status} #${metrics.latestEpoch.id}`
-                : formatNumber(metrics.finalizedEpochCount)
-            }
-          />
+        <div className="grid grid-cols-3 gap-4 border-border border-t pt-4">
+          <TileSignal label="Activity" value={activity} />
+          <TileSignal label="Ownership" value={ownership} />
+          <TileSignal label="AI data" value={aiUsage} />
         </div>
 
         <div className="mt-auto flex flex-wrap gap-2">
           <Button asChild size="sm">
-            <Link href={`/nodes/${node.slug}`}>Details</Link>
+            <Link href={`/nodes/${node.slug}`}>View details</Link>
           </Button>
           {node.href !== "#" ? (
             <Button asChild variant="secondary" size="sm">
               <a href={node.href} target="_blank" rel="noopener noreferrer">
-                Visit
+                Visit app
                 <ArrowUpRight className="size-3.5" />
               </a>
             </Button>
           ) : null}
         </div>
-      </CardContent>
+      </div>
     </Card>
   );
 }
