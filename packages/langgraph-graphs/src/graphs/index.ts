@@ -14,11 +14,13 @@
  * @public
  */
 
+export type { AutoresearchRunSpec } from "@cogni/ai-core";
 // Autoresearch graphs (Karpathy-style experiment loops)
 export {
   AUTORESEARCH_REGISTRY_SWARM_GRAPH_NAME,
   AUTORESEARCH_SINGLE_LANE_GRAPH_NAME,
   AUTORESEARCH_SYNTROPY_LOOP_GRAPH_NAME,
+  buildAutoresearchSystemPrompt,
   createAutoresearchGraph,
 } from "./autoresearch/graph";
 // Brain graph (code-aware assistant with repo access)

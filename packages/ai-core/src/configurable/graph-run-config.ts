@@ -15,6 +15,7 @@
  */
 
 import { z } from "zod";
+import { AutoresearchRunSpecSchema } from "./autoresearch-run-spec";
 
 /**
  * GraphRunConfig schema.
@@ -51,6 +52,12 @@ export const GraphRunConfigSchema = z.object({
    * If undefined/empty, ALL tools are denied (DENY_BY_DEFAULT).
    */
   toolIds: z.array(z.string()).optional(),
+
+  /**
+   * Optional autoresearch run contract.
+   * Required by drift-resistant autoresearch launchers; ignored by generic graphs.
+   */
+  autoresearch: AutoresearchRunSpecSchema.optional(),
 });
 
 /**

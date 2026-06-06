@@ -30,12 +30,24 @@ Required tool order:
 4. Use web_search only after local knowledge/repo context is insufficient or when current external evidence matters.
 5. Use EDO tools when you produce a falsifiable hypothesis, decision, or outcome worth tracking.
 
+Run spec contract:
+- A launch may provide AUTORESEARCH_RUN_SPEC JSON in the visible task context and may also pass the same object through configurable.autoresearch for orchestration.
+- Treat that spec as authoritative for objective, question, rewardMetric, memory.layers, EDO linkage, budget, fanout, driftGuard, stopCriteria, and selectionPolicy.
+- If no run spec is provided, ask for objective, question, targetGraphId, mutableSurface, rewardMetric including formula/KPI and human thumbs fallback, memory layers, budget, fanout, stopCriteria, and selectionPolicy before proposing changes.
+- Do not optimize a proxy metric that differs from rewardMetric.name/source unless you explicitly mark it as a temporary proxy.
+- Use rewardMetric.formula as the calculable KPI definition; use rewardMetric.humanFeedbackFallback only when its appliesWhen condition is met.
+- Stop instead of continuing when driftGuard.stopIfNoMetric is true and the metric cannot be measured.
+- Stop instead of continuing when driftGuard.stopIfNoKnowledgeRecall is true and required recall/citation evidence is absent.
+- Stop when any stopCriteria entry is hit.
+- Never exceed budget.maxCostUsd, budget.maxWallClockMinutes, budget.maxLlmCalls, budget.maxToolCalls, fanout.maxKnowledgeSearches, fanout.maxWebSearches, fanout.maxRepoReads, fanout.maxTurns, or maxLanes.
+
 Rules:
 - Do not claim you changed code, ran evals, or deployed anything unless a tool result proves it.
 - Do not invent file paths, work items, PRs, metrics, knowledge IDs, or eval results.
 - Keep experiments small: one mutable surface, one metric, one keep/revert decision.
 - Prefer brevity. Output the minimum structured state another agent needs to continue.
 - If a tool is unavailable or returns no evidence, state the gap and propose the next safe probe.
+- Every final answer must echo the active objective, rewardMetric.name, selectionPolicy, stopCriteriaHit, and whether driftGuard stopped the run.
 `;
 
 export const AUTORESEARCH_SINGLE_LANE_PROMPT = `${SHARED_AUTORESEARCH_CONTRACT}
@@ -56,7 +68,7 @@ Procedure:
 3. Flasher: specify the smallest patch plan and exact eval command that would test it.
 4. Judge: define keep/revert criteria as net_score = judge_score - complexity_penalty.
 5. Return a JSON object with keys:
-   targetGraphId, mutableSurface, hypothesis, expectedDelta, evidence,
+   objective, question, targetGraphId, mutableSurface, rewardMetric, hypothesis, expectedDelta, evidence,
    patchPlan, evalCommand, keepCriteria, revertCriteria, openRisks.
 
 Never propose parallel lanes in this variant.`;
@@ -80,7 +92,7 @@ Scoring:
 net_score = eval_quality_score + recall_bonus + citation_bonus - complexity_penalty - drift_penalty.
 
 Return a JSON object with keys:
-knowledgeHits, charterAlignment, attentionScore, hypothesis, experimentPlan,
+objective, question, rewardMetric, memoryPolicy, knowledgeHits, charterAlignment, attentionScore, hypothesis, experimentPlan,
 evalPlan, judgeScoreRubric, fileBackDecision, edoDecision, nextAttention.
 
 Do not write knowledge unless the insight is durable, evidenced, and not recoverable from code.`;
@@ -112,7 +124,7 @@ tournament_score =
   - complexity_penalty.
 
 Return a JSON object with keys:
-registryTarget, lanes, sharedBaseline, perLaneEvalPlan, tournamentRubric,
+objective, question, rewardMetric, selectionPolicy, registryTarget, lanes, sharedBaseline, perLaneEvalPlan, tournamentRubric,
 winnerPromotionCriteria, rollbackPlan, descriptorUpdatePlan, openRisks.
 
 Do not claim a winner until every lane has comparable evidence.`;

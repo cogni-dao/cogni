@@ -232,6 +232,32 @@ func: async (args, runManager?, config?) => {
 | `@cogni/ai-tools`         | `TOOL_CATALOG`, contracts, schemas    | `zod` only                           |
 | `@cogni/langgraph-graphs` | `toLangChainTool` (wraps + allowlist) | `@cogni/ai-tools`, `@langchain/core` |
 
+### Autoresearch Run Specs
+
+Autoresearch graphs require a comparable run envelope when launched as an
+experiment family. The envelope is `AutoresearchRunSpec` from `@cogni/ai-core`
+and may travel on `GraphRunRequest.autoresearch`, then through
+`RunnableConfig.configurable.autoresearch`.
+
+The spec is JSON-serializable and carries:
+
+| Field             | Purpose                                                                                                                   |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `mission`         | objective, question, target graph, mutable surface, and non-goals                                                         |
+| `rewardMetric`    | one calculable KPI, formula, direction, baseline, target delta, source, keep/revert thresholds, and human thumbs fallback |
+| `memory`          | ordered retrieval layers plus domains, recall queries, confidence floor, citation minimum, and time-priority policy       |
+| `budget`          | cost, wall-clock, LLM-call, and tool-call caps                                                                            |
+| `edo`             | optional hypothesis/evidence links and later resolution strategy                                                          |
+| `fanout`          | bounded variant, lane, recall, web, repo, and turn budgets                                                                |
+| `driftGuard`      | stop conditions and path boundaries                                                                                       |
+| `stopCriteria`    | explicit metric, budget, recall, and human stop conditions                                                                |
+| `selectionPolicy` | `best_reward`, `pareto`, or `judge_then_reward`                                                                           |
+
+This keeps the graph variants prompt-driven while preventing 10 spawned runs
+from silently optimizing different goals. Scheduled launchers should also render
+the same spec into visible task context as `AUTORESEARCH_RUN_SPEC` until every
+execution backend can inject configurable values into the system prompt.
+
 ### langgraph.json Configuration
 
 For Server path, graphs are registered in `packages/langgraph-server/langgraph.json`:

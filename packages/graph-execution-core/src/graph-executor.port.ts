@@ -19,6 +19,7 @@
 import type {
   AiEvent,
   AiExecutionErrorCode,
+  AutoresearchRunSpec,
   GraphId,
   Message,
   ModelRef,
@@ -63,6 +64,12 @@ export interface GraphRunRequest {
     readonly prompt?: string;
     readonly schema: unknown;
   };
+  /**
+   * Drift-resistant autoresearch contract.
+   * Pure business input: objective, memory policy, reward metric, fanout budget,
+   * and selection policy. Billing/tracing remain outside this request.
+   */
+  readonly autoresearch?: AutoresearchRunSpec;
 }
 
 /**
