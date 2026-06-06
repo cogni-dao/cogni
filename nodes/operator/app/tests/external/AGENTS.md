@@ -38,7 +38,7 @@ Tests that hit real internet services or 3rd-party APIs. These require secrets a
 
 - **Exports:** none
 - **CLI:** `pnpm test:external`
-- **Env/Config keys:** `GITHUB_TOKEN` or `GH_TOKEN` (GitHub API access)
+- **Env/Config keys:** `GITHUB_TOKEN` or `GH_TOKEN` (GitHub API access), `DOLTHUB_API_TOKEN` + `DOLTHUB_EXTERNAL_TEST_OWNER` (DoltHub formation tests)
 
 ## Responsibilities
 
@@ -48,7 +48,8 @@ Tests that hit real internet services or 3rd-party APIs. These require secrets a
 ## Usage
 
 ```bash
-# Requires GITHUB_TOKEN or GH_TOKEN in environment
+# Requires GITHUB_TOKEN or GH_TOKEN in environment for GitHub suites
+# Requires DOLTHUB_API_TOKEN + DOLTHUB_EXTERNAL_TEST_OWNER for DoltHub suites
 # Also spins up testcontainers PostgreSQL for ledger round-trip tests
 pnpm test:external
 
