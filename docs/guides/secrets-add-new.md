@@ -1,174 +1,275 @@
 ---
-id: secrets-add-new-guide
+id: secrets-update-guide
 type: guide
-title: Add a New Secret to a Service
+title: Add or Update a Service Secret
 status: draft
 trust: draft
-summary: How to add a new secret to a Cogni service-env path. Spoiler — it's one CLI command. No pod spec edit, no kustomize edit, no YAML PR.
-read_when: A developer or agent needs to add a new secret (e.g., a new API key for a service to consume).
-owner: derekg1729
+summary: How to add or update one service secret in OpenBao, force ESO sync, and prove the running pod actually sees it.
+read_when: Adding, updating, or rotating one pod-consumed service secret.
+owner: cogni-dev
 created: 2026-05-19
-verified: 2026-05-19
+verified: 2026-06-06
 tags:
   - secrets
   - guides
 ---
 
-# Add a New Secret to a Service
+# Add or Update a Service Secret
 
-> Adding a secret is a control-plane operation, not a YAML rewrite. If you find yourself editing a pod spec or an ExternalSecret YAML, you're doing it wrong — come back here.
+Updating a pod-consumed secret is a control-plane operation: OpenBao write, ESO sync, pod restart proof. Do not edit pod specs, create per-secret ExternalSecrets, or hand-edit k8s Secret YAML.
 
-## Prereq — get a short-lived OpenBao token
+## Read First
 
-The CLI talks to OpenBao via `BAO_ADDR` + `BAO_TOKEN`. Three copy-paste lines (substitute `<env>`):
+- [`cicd-secrets-expert`](../../.claude/skills/cicd-secrets-expert/SKILL.md) - OpenBao vs GitHub Environment secrets, tier routing, entry points, and anti-patterns.
+- [`docs/spec/secrets-management.md`](../spec/secrets-management.md) - canonical OpenBao + ESO contract.
+- [`docs/runbooks/production-operator-eso-cutover.md`](../runbooks/production-operator-eso-cutover.md) - production operator preflight, seed, force-sync, and rollback gates.
+- [`devops-expert`](../../.claude/skills/devops-expert/SKILL.md) - required before using deploy branches, production rollout mechanics, or CI/CD state.
+
+## Runtime Path
+
+Pod-consumed secrets flow one way:
+
+```text
+OpenBao cogni/<env>/<service>/<KEY>
+  -> External Secrets Operator
+  -> k8s Secret <service>-env-secrets
+  -> Deployment envFrom
+  -> process.env.<KEY> after the pod starts
+```
+
+GitHub Environment secrets are not the live source for ESO-backed pods. They are seed material for provisioning or CI-only consumers unless a specific workflow reads them and writes OpenBao.
+
+## 1. Confirm The Destination
+
+Identify:
+
+- `<env>`: `candidate-a`, `preview`, or `production`
+- `<service>`: catalog service name, such as `operator`, `node-template`, `resy`, or `_shared`
+- `<KEY>`: uppercase env var name
+- `<namespace>`: the k8s namespace, such as `cogni-production`
+- `<externalsecret>` and `<secret>`: usually `<service>-env-secrets`; production operator uses `operator-env-secrets`
+- `<deployment>`: the Deployment that consumes the Secret
+
+For non-secret config such as an owner/org slug, prefer ConfigMap/GitHub variable routing. Do not put non-secret config into OpenBao unless the catalog and runtime actually consume it as a secret.
+
+## 2. Recover Kube Custody
+
+Agent worktrees usually do not contain `.local/`. Use the operator's primary clone or the downloaded/decrypted provision artifact. Do not rely on stale VM IP/key files when a provision artifact contains the current kubeconfig.
 
 ```bash
-# 1. Open a tunnel to the OpenBao service.
-kubectl port-forward -n openbao svc/openbao 8200:8200 &
+PRIMARY_CLONE="<primary-clone>"
+
+# Preferred if present.
+export KUBECONFIG="$PRIMARY_CLONE/.local/<env>-kubeconfig.yaml"
+
+# If the direct file is absent, use the downloaded provision artifact directory.
+export KUBECONFIG="$PRIMARY_CLONE/.local/<provision-artifact-dir>/<env>-kubeconfig.yaml"
+
+chmod 600 "$KUBECONFIG"
+kubectl get ns openbao external-secrets
+```
+
+If you do not know where the provision artifact was stored, search the primary clone's `.local/` directory for `<env>-kubeconfig.yaml` and `<env>-openbao-init.json`. The kubeconfig is the day-2 access file. The OpenBao init JSON/root token is bootstrap custody and must not be used as the day-2 write token.
+
+## 3. Prove The Substrate
+
+Before writing a value, prove the target cluster has ESO and can read OpenBao:
+
+```bash
+kubectl get crd externalsecrets.external-secrets.io
+kubectl get crd clustersecretstores.external-secrets.io
+kubectl get clustersecretstore openbao-backend
+kubectl -n external-secrets get deploy external-secrets external-secrets-webhook
+```
+
+For a concrete service, also prove it already consumes the ESO-backed Secret:
+
+```bash
+kubectl -n <namespace> get externalsecret <externalsecret>
+kubectl -n <namespace> get deploy <deployment> -o jsonpath='{range .spec.template.spec.containers[0].envFrom[*]}{.configMapRef.name}{.secretRef.name}{"\n"}{end}'
+```
+
+If the service still consumes a legacy Secret, stop and use the service-specific cutover runbook. Do not claim an OpenBao write is live in a pod that is not wired to `operator-env-secrets` / `<service>-env-secrets`.
+
+## 4. Mint A Short-Lived Writer Token
+
+Open a local tunnel to OpenBao and exchange a Kubernetes ServiceAccount token for the env writer role:
+
+```bash
+kubectl -n openbao port-forward svc/openbao 8200:8200 &
 export BAO_ADDR=http://127.0.0.1:8200
 
-# 2. Authenticate as the openbao-operator SA. provision-env-vm.sh Phase 5b.4
-#    bound a `<env>-writer` role to this SA; the JWT below is exchanged for a
-#    1h bao token scoped to cogni/<env>/* writes only.
-#    NOTE: `bao login -method=kubernetes` is NOT in OpenBao CLI 2.5.x. The raw
-#    API path below works across all CLI versions.
 export BAO_TOKEN=$(bao write -field=token auth/kubernetes/login \
   role=<env>-writer \
   jwt=$(kubectl create token openbao-operator -n default))
 ```
 
-**Never `cat .local/<env>-openbao-root-token`** into `BAO_TOKEN`. The bootstrap root token is captured during the ~30 min provisioning window only — Phase 5b.4 binds the writer role specifically so day-2 writes never need that token. Reading it from disk would re-create the long-lived-superuser-credential-on-a-laptop pattern that [`proj.security-hardening`](../../work/projects/proj.security-hardening.md) exists to eliminate. Spec: [Invariant 13 NO_OPERATOR_ROOT_TOKEN_ON_LAPTOP](../spec/secrets-management.md).
+Do not export `.local/<env>-openbao-root-token` as `BAO_TOKEN`. The bootstrap root token is not a day-2 write credential.
 
-## The write
+## 5. Write The Secret
 
-```bash
-pnpm secrets:set candidate-a node-template OPENAI_API_KEY
-# Prompts for value via secure stdin (never echoes, never enters shell history)
-```
-
-Done. The CLI writes to OpenBao at `cogni/candidate-a/node-template`, key `OPENAI_API_KEY`. ESO pulls on the next refresh (default 1h; can be forced — see below). Stakater Reloader detects the k8s Secret change and triggers a rolling pod restart. The new env var `OPENAI_API_KEY` is available to the pod after restart.
-
-**If your CODE needs to read the new value:** that's still a normal PR — your code change (`process.env.OPENAI_API_KEY`, or your typed-config schema) goes through CI like any other code. But the SECRET itself does not require a PR.
-
-## What you didn't have to do
-
-- Edit `infra/k8s/secrets/external-secrets/candidate-a/node-template/external-secret.yaml` (the ExternalSecret already pulls every key at the path)
-- Edit `infra/k8s/base/node-app/deployment.yaml` (the pod's `envFrom: secretRef` already pulls every key from the synced k8s Secret)
-- Run `kubectl` anything (Argo reconciles + ESO syncs + Reloader restarts)
-- Touch the `OPENBAO_SEED_TOKEN` in GitHub env secrets (that's an automated path; you never touch it)
-
-This is the contract from [`docs/spec/secrets-management.md`](../spec/secrets-management.md), enforced by ESO's `dataFrom: extract` pattern (one ExternalSecret per service-env, pulls all keys; published canonical pattern: [ESO docs](https://external-secrets.io/latest/api/externalsecret/#external-secrets.io/v1.ExternalSecretDataFromRemoteRef)).
-
-## Entry points
-
-| Context                          | Entry                                                                                                                                                                                         | Status                                                                                                                                                                |
-| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Developer / operator at terminal | `pnpm secrets:set <env> <service> <KEY>` (this guide)                                                                                                                                         | **Shipped.** Requires caller-provided `BAO_ADDR` + short-lived `BAO_TOKEN` (see Prereq).                                                                              |
-| Operator / on-call ops           | `.github/workflows/secrets-manage.yml` → workflow_dispatch (GH OIDC → OpenBao via [`hashicorp/vault-action`](https://github.com/hashicorp/vault-action); env-protection-gated for production) | **Deferred** — canonical operator path once it ships. Tracked in the follow-up bug under [`proj.security-hardening`](../../work/projects/proj.security-hardening.md). |
-| AI agent (via operator MCP)      | `secret.declare` tool → human fills value via one-time URL                                                                                                                                    | Out of scope for node-template (operator monorepo construct).                                                                                                         |
-
-All paths call the same OpenBao primitive (`bao kv put`/`patch`). You don't choose which OpenBao call happens; you choose which interface fits your context. **Today there is one shipped path: the CLI with a caller-provided short-lived token.**
-
-## Per-env behavior
-
-| Env           | Approval gate                                                                                                                                                             | Notes                                                         |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| `candidate-a` | None (forker self-approves; experiment slot)                                                                                                                              | Use the CLI with a token bound to a `candidate-a-writer` role |
-| `preview`     | OpenBao policy rejects writes from any role except `preview-writer`                                                                                                       | Same CLI; the token's policy is the gate                      |
-| `production`  | OpenBao policy rejects writes from any role except `production-writer`; once `secrets-manage.yml` ships, GitHub environment-protection adds a per-write reviewer approval | Same CLI today; switch to workflow_dispatch when it lands     |
-
-The candidate-a slack is intentional — it's the experiment slot. The preview/production lockdown is the SOC 2 CC6.1 / CC8.1 boundary.
-
-## Operator role binding
-
-The Kubernetes auth role `<env>-writer` is bound by `provision-env-vm.sh` Phase 5b.4 during bootstrap, alongside the read-only `eso-reader` role (Phase 5b.3). Both bindings:
-
-| Role           | Bound SA                                               | Policy paths                                                                                     | TTL |
-| -------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------ | --- |
-| `eso-reader`   | `external-secrets/external-secrets` (ESO controller)   | `cogni/data/*`, `cogni/metadata/*` — read across all envs                                        | 1h  |
-| `<env>-writer` | `default/openbao-operator` (operator's ServiceAccount) | `cogni/data/<env>/*`, `cogni/metadata/<env>/*` — read + create + update + patch on THIS env only | 1h  |
-
-No `delete` capability on writer; destroy requires admin escalation per spec Invariant 6 / CC6.1.
-
-If the role binding is missing (re-provision skipped a phase, or you're on a pre-task.0284 cluster), the cluster admin re-runs the Phase 5b.4 stanza manually using the captured init artifact (`.local/<env>-openbao-init.json`). After Phase 5b completes, the root token is never needed again.
-
-## Cross-service or system secrets
-
-If a secret needs to be shared across services (e.g., `OPENROUTER_API_KEY` consumed by multiple services), put it at `cogni/<env>/_shared`. Each consuming service explicitly references the shared path in its ExternalSecret via a SECOND `dataFrom: extract` entry — this is the one case where the per-service ExternalSecret has more than one extract line. Document the shared-key dependency in the service's `AGENTS.md`.
-
-System-level bootstrap secrets (Cherry token, Cloudflare token, GH PAT, OpenBao root + unseal keys) live in GitHub Environment secrets + `.local/<env>-openbao-init.json` — written ONCE during `pnpm bootstrap` (see [`docs/runbooks/fork-quickstart.md`](../runbooks/fork-quickstart.md) Step 6 + 6.5). **Never set them via this guide.** Substrate-token rotation is documented in [`secrets-rotate.md`](./secrets-rotate.md#substrate-token-rotation-root-token--unseal-keys).
-
-## Forcing immediate sync (for impatient developers)
+Interactive:
 
 ```bash
-kubectl annotate externalsecret <service>-env-secrets \
-  force-sync=$(date +%s) --overwrite -n <namespace>
-# ESO syncs on next reconcile (seconds, not the configured 1h)
-# Reloader picks up the Secret change and restarts the pod
+pnpm secrets:set <env> <service> <KEY>
 ```
 
-Don't make this a habit. The 1h refresh interval is a feature — it bounds OpenBao read pressure. Use force-sync for the immediate post-`set` validation, then leave the interval alone.
-
-## What if the secret is `OPENAI_API_KEY` and the code is `const apiKey = process.env.OPENAI_API_KEY`?
-
-Both halves happen, in either order:
-
-1. **Code PR**: add `process.env.OPENAI_API_KEY` to your typed config / Zod schema; consume it where needed. Goes through CI like any feature.
-2. **Secret write**: `pnpm secrets:set candidate-a node-template OPENAI_API_KEY` (interactive).
-
-Order doesn't matter:
-
-- Write secret first → pod restart picks up env var → your code starts consuming on next deploy
-- Deploy code first → env var is `undefined` until secret is written → write secret → next pod restart has it
-
-The code MUST fail fast at startup if a required secret is missing (don't return `undefined` from `process.env.X` and silently malfunction). Reference: `docs/spec/secrets-management.md § TRANSITION_SAFE`.
-
-## Live preview operator example — node wizard GitHub App
-
-The deployed preview operator reads pod secrets from OpenBao at `cogni/preview/operator` through `operator-env-secrets`. GitHub environment secrets are only seed material for a future provision run; they do not update a live ESO-backed pod.
-
-For the node wizard GitHub App credentials, write the live values directly:
+Non-interactive, when the value is already in an environment variable:
 
 ```bash
-pnpm secrets:set preview operator GH_REVIEW_APP_ID
-pnpm secrets:set preview operator GH_REVIEW_APP_PRIVATE_KEY_BASE64
-pnpm secrets:set preview operator GH_WEBHOOK_SECRET
-kubectl annotate externalsecret -n cogni-preview operator-env-secrets \
-  force-sync=$(date +%s) --overwrite
+printf '%s' "$VALUE" | pnpm secrets:set <env> <service> <KEY>
 ```
 
-Non-secret wizard routing, such as `NODE_MINT_OWNER=cogni-test-org`, belongs in the preview operator ConfigMap, not OpenBao.
+Do not print the value, put it in argv, or paste it into a PR, workflow input, or chat.
 
-## Anti-patterns this guide assumes you won't do
+Confirm key presence only:
 
-- Hardcode the value in a Kubernetes Secret YAML and commit it
-- Add a `valueFrom: secretKeyRef` line to the pod spec per new secret (forces a pod spec edit per secret; wrong shape — see `spec.secrets-management § POD_CONSUMES_VIA_ENVFROM`)
-- Create a per-secret ExternalSecret YAML (forces a YAML edit per secret; wrong shape — see `spec.secrets-management § ONE_EXTERNAL_SECRET_PER_SERVICE_ENV`)
-- Use `bao kv put` (replaces ALL keys at the path; use `bao kv patch` instead — but the CLI handles this for you)
-- Paste the secret value into a chat / commit message / PR description
-- Skip the tooling for production-env writes "just this once"
+```bash
+bao kv get -format=json "cogni/<env>/<service>" \
+  | jq -e '.data.data | has("<KEY>")' >/dev/null
+```
 
-## What the CLI does under the hood
+## 6. Force ESO Sync
+
+```bash
+kubectl -n <namespace> annotate externalsecret <externalsecret> \
+  force-sync="$(date +%s)" --overwrite
+
+kubectl -n <namespace> wait externalsecret/<externalsecret> \
+  --for=condition=Ready=True --timeout=120s
+
+kubectl -n <namespace> get secret <secret> -o json \
+  | jq -e '.data | has("<KEY>")' >/dev/null
+```
+
+This proves the k8s Secret has the key. It does not prove the running process has it.
+
+## 7. Prove The Running Process
+
+Pods read `envFrom` only at startup. After ESO sync, the Deployment must roll before `process.env.<KEY>` is live.
+
+Check whether Reloader exists:
+
+```bash
+kubectl get deploy,pods -A | rg -i reloader
+```
+
+If Reloader is installed and the Deployment has `reloader.stakater.com/auto: "true"`, wait for rollout:
+
+```bash
+kubectl -n <namespace> rollout status deployment/<deployment> --timeout=240s
+```
+
+Then prove process presence without printing the value:
+
+```bash
+# Replace OPENAI_API_KEY with the key you wrote.
+POD=$(kubectl -n <namespace> get pod \
+  -l app.kubernetes.io/name=node-app,app.kubernetes.io/instance=<service> \
+  -o jsonpath='{.items[0].metadata.name}')
+
+kubectl -n <namespace> exec "$POD" -- /bin/sh -c 'test -n "$OPENAI_API_KEY"'
+```
+
+If Reloader is absent or does not roll the pod, do not use `kubectl rollout restart` as an invisible production mutation. Use the deploy branch/GitOps path: commit a one-time pod-template restart annotation to the relevant `deploy/<env>-<service>` branch, let Argo roll it, then repeat the process-level proof. Read `devops-expert` first.
+
+## 8. Public Health
+
+For public web services, finish with external health/version checks:
+
+```bash
+curl -fsS https://<service-domain>/readyz
+curl -fsS https://<service-domain>/version
+```
+
+Use `/version.buildSha` to verify the expected application build when a deploy changed the app image. For secret-only pod restarts, the build SHA should stay the same.
+
+## Production Operator DoltHub Example
+
+Node birth in production requires:
+
+- `DOLTHUB_OWNER=cogni-dao` as non-secret config in the production operator ConfigMap / GitHub environment variable.
+- `DOLTHUB_API_TOKEN` in OpenBao at `cogni/production/operator`.
+
+Write and prove it:
+
+```bash
+export KUBECONFIG="<primary-clone>/.local/<production-provision-artifact-dir>/production-kubeconfig.yaml"
+chmod 600 "$KUBECONFIG"
+
+kubectl get ns openbao external-secrets cogni-production
+kubectl get clustersecretstore openbao-backend
+kubectl -n cogni-production get deploy operator-node-app -o jsonpath='{range .spec.template.spec.containers[0].envFrom[*]}{.configMapRef.name}{.secretRef.name}{"\n"}{end}'
+
+kubectl -n openbao port-forward svc/openbao 8200:8200 &
+export BAO_ADDR=http://127.0.0.1:8200
+export BAO_TOKEN=$(bao write -field=token auth/kubernetes/login \
+  role=production-writer \
+  jwt=$(kubectl create token openbao-operator -n default))
+
+printf '%s' "$DOLTHUB_API_TOKEN" \
+  | pnpm secrets:set production operator DOLTHUB_API_TOKEN
+
+bao kv get -format=json cogni/production/operator \
+  | jq -e '.data.data | has("DOLTHUB_API_TOKEN")' >/dev/null
+
+kubectl -n cogni-production annotate externalsecret operator-env-secrets \
+  force-sync="$(date +%s)" --overwrite
+kubectl -n cogni-production wait externalsecret/operator-env-secrets \
+  --for=condition=Ready=True --timeout=120s
+kubectl -n cogni-production get secret operator-env-secrets -o json \
+  | jq -e '.data | has("DOLTHUB_API_TOKEN")' >/dev/null
+```
+
+Final proof:
+
+```bash
+POD=$(kubectl -n cogni-production get pod \
+  -l app.kubernetes.io/name=node-app,app.kubernetes.io/instance=operator \
+  -o jsonpath='{.items[0].metadata.name}')
+kubectl -n cogni-production exec "$POD" -- /bin/sh -c 'test -n "$DOLTHUB_API_TOKEN"'
+
+curl -fsS https://cognidao.org/readyz
+curl -fsS https://cognidao.org/version
+```
+
+## What You Did Not Have To Do
+
+- Edit a pod spec for a new env var.
+- Create or edit a per-secret ExternalSecret.
+- Hand-edit a live k8s Secret.
+- Touch `OPENBAO_SEED_TOKEN`.
+- Use the OpenBao root token.
+- Treat a GitHub Environment secret timestamp as live pod proof.
+
+## Anti-Patterns
+
+- Pasting secret values into chat, PRs, workflow inputs, shell history, or committed files.
+- Using GitHub Environment secrets as proof that an ESO-backed pod has the value.
+- Treating k8s Secret presence as proof that a running process has the value.
+- Using stale `.local/<env>-vm-ip` or SSH keys when a provision artifact contains the current kubeconfig.
+- SSHing into production to run OpenBao or Kubernetes mutations instead of using the provisioned kubeconfig, Kubernetes auth, and deploy branch.
+- Using `kubectl rollout restart` in production instead of a visible deploy-branch/GitOps rollout.
+- Using `bao kv put` manually and replacing sibling keys. Let `pnpm secrets:set` choose `put` vs `patch`.
+
+## CLI Behavior
 
 `scripts/secrets/set-secret.sh`:
 
-1. Validates `<env>` ∈ {candidate-a, preview, production}.
-2. Validates `<service>` matches a `infra/catalog/<service>.yaml` entry (or `_shared`; refuses `_system`).
+1. Validates `<env>` is `candidate-a`, `preview`, or `production`.
+2. Validates `<service>` matches `infra/catalog/<service>.yaml` or `_shared`; refuses `_system`.
 3. Validates `<KEY>` matches `^[A-Z][A-Z0-9_]*$`.
-4. Reads value from stdin (interactive `read -s` if a TTY; pipe otherwise). Never echoes.
-5. Requires `BAO_ADDR` + `BAO_TOKEN` from the environment. Dies with a port-forward + `bao login` recipe if either is missing.
-6. Checks if the path already exists via `bao kv metadata get`. If not → `bao kv put` (creates the path). If yes → `bao kv patch` (preserves sibling keys, adds a new version).
-7. Passes the value via `KEY=-` stdin so it never enters argv (`ps` is clean).
-
-No `--immediate` flag yet — force-sync is a separate `kubectl annotate` step (see below).
-
-Tests at [`scripts/ci/tests/set-secret.test.sh`](../../scripts/ci/tests/set-secret.test.sh) (12 fixture cases via the `$SET_SECRET_BAO` test shim).
+4. Reads value from stdin; never echoes.
+5. Requires `BAO_ADDR` and `BAO_TOKEN`.
+6. Uses `bao kv put` only for a missing path; otherwise uses `bao kv patch`.
+7. Passes the value via stdin (`KEY=-`) so it never enters argv.
 
 ## Related
 
-- [`docs/spec/secrets-management.md`](../spec/secrets-management.md) — the canonical contract
-- [`docs/guides/secrets-rotate.md`](./secrets-rotate.md) — rotation playbook
-- [`docs/runbooks/fork-quickstart.md`](../runbooks/fork-quickstart.md) — bootstrap flow (substrate install + unseal + role bind happen here)
+- [`docs/spec/secrets-management.md`](../spec/secrets-management.md)
+- [`docs/guides/secrets-rotate.md`](./secrets-rotate.md)
+- [`docs/runbooks/fork-quickstart.md`](../runbooks/fork-quickstart.md)
+- [`docs/runbooks/production-operator-eso-cutover.md`](../runbooks/production-operator-eso-cutover.md)
 - [External Secrets Operator `dataFrom` docs](https://external-secrets.io/latest/api/externalsecret/#external-secrets.io/v1.ExternalSecretDataFromRemoteRef)
 - [OpenBao KV v2 docs](https://openbao.org/docs/secrets/kv/kv-v2/)
 - [Stakater Reloader](https://github.com/stakater/Reloader)
