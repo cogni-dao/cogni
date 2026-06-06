@@ -86,6 +86,7 @@ export {
   hasToolId,
   TOOL_CATALOG,
   type ToolCatalog,
+  VCS_TOOL_BUNDLE,
 } from "./catalog";
 // Runtime adapter
 export { contractToRuntime, toBoundToolRuntime } from "./runtime-adapter";

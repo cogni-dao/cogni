@@ -23,8 +23,6 @@ import {
   KNOWLEDGE_WRITE_NAME,
   REPO_OPEN_NAME,
   REPO_SEARCH_NAME,
-  VCS_GET_CI_STATUS_NAME,
-  VCS_LIST_PRS_NAME,
   WEB_SEARCH_NAME,
 } from "@cogni/ai-tools";
 import { describe, expect, it } from "vitest";
@@ -83,8 +81,6 @@ describe("operator catalog entries", () => {
           KNOWLEDGE_WRITE_NAME,
           REPO_SEARCH_NAME,
           REPO_OPEN_NAME,
-          VCS_LIST_PRS_NAME,
-          VCS_GET_CI_STATUS_NAME,
           WEB_SEARCH_NAME,
           EDO_HYPOTHESIZE_NAME,
           EDO_DECIDE_NAME,
