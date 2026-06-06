@@ -1,3 +1,6 @@
 [submodule "nodes/pandora"]
 	path = nodes/pandora
 	url = https://github.com/Cogni-DAO/pandora.git
+[submodule "nodes/creative"]
+	path = nodes/creative
+	url = https://github.com/Cogni-DAO/creative.git

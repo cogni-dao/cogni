@@ -1,0 +1,13 @@
+name: creative
+type: node
+port: 3200
+node_port: 30600
+dockerfile: nodes/creative/app/Dockerfile
+image_tag_suffix: "-creative"
+migrator_tag_suffix: "-creative-migrate"
+source_repo: https://github.com/Cogni-DAO/creative.git
+image_repository: ghcr.io/cogni-dao/creative-node
+candidate_a_branch: deploy/candidate-a-creative
+preview_branch: deploy/preview-creative
+production_branch: deploy/production-creative
+path_prefix: nodes/creative/
