@@ -17,13 +17,35 @@ import {
   AutoresearchRunSpecSchema,
   GraphRunConfigSchema,
 } from "@cogni/ai-core";
-import { describe, expect, it } from "vitest";
-import { buildAutoresearchSystemPrompt } from "../../../src/graphs/autoresearch/graph";
+import type { BaseMessage } from "@langchain/core/messages";
+import { HumanMessage } from "@langchain/core/messages";
+import type { RunnableConfig } from "@langchain/core/runnables";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  buildAutoresearchSystemPrompt,
+  createAutoresearchGraph,
+} from "../../../src/graphs/autoresearch/graph";
 import {
   AUTORESEARCH_REGISTRY_SWARM_PROMPT,
   AUTORESEARCH_SINGLE_LANE_PROMPT,
   AUTORESEARCH_SYNTROPY_LOOP_PROMPT,
 } from "../../../src/graphs/autoresearch/prompts";
+import type { CreateReactAgentGraphOptions } from "../../../src/graphs/types";
+
+const createReactAgentMock = vi.hoisted(() =>
+  vi.fn(
+    (opts: {
+      readonly prompt: (
+        state: { readonly messages?: BaseMessage[] },
+        config?: RunnableConfig
+      ) => BaseMessage[];
+    }) => ({ opts })
+  )
+);
+
+vi.mock("@langchain/langgraph/prebuilt", () => ({
+  createReactAgent: createReactAgentMock,
+}));
 
 const VALID_SPEC = {
   version: 1,
@@ -116,6 +138,18 @@ const VALID_SPEC = {
   selectionPolicy: "pareto",
 };
 
+beforeEach(() => {
+  createReactAgentMock.mockClear();
+});
+
+function lastPromptFactory() {
+  const result = createReactAgentMock.mock.results[0];
+  if (result?.type !== "return") {
+    throw new Error("createReactAgent was not called");
+  }
+  return result.value.opts.prompt;
+}
+
 describe("AutoresearchRunSpecSchema", () => {
   it("accepts a bounded mission, reward metric, memory policy, and fanout budget", () => {
     const parsed = AutoresearchRunSpecSchema.parse(VALID_SPEC);
@@ -203,5 +237,66 @@ describe("autoresearch prompts", () => {
   it("does not add a user mission when no run spec is provided", () => {
     const prompt = buildAutoresearchSystemPrompt("base prompt");
     expect(prompt).toBe("base prompt");
+  });
+});
+
+describe("createAutoresearchGraph", () => {
+  it("requires a catalog system prompt", () => {
+    expect(() =>
+      createAutoresearchGraph({
+        llm: {},
+        tools: [],
+      } as unknown as CreateReactAgentGraphOptions)
+    ).toThrow("requires systemPrompt");
+  });
+
+  it("passes configured autoresearch specs into the LangGraph prompt", () => {
+    createAutoresearchGraph({
+      llm: {},
+      tools: [],
+      systemPrompt: "base prompt",
+    } as unknown as CreateReactAgentGraphOptions);
+
+    expect(createReactAgentMock).toHaveBeenCalledTimes(1);
+
+    const messages = lastPromptFactory()(
+      { messages: [new HumanMessage("continue")] },
+      { configurable: { autoresearchRunSpec: VALID_SPEC } }
+    );
+
+    expect(String(messages[0]?.content)).toContain("AUTORESEARCH_RUN_SPEC");
+    expect(String(messages[0]?.content)).toContain(
+      "accepted_inbox_contribution_rate"
+    );
+    expect(messages[1]?.content).toBe("continue");
+  });
+
+  it("prefers configurable.autoresearch over the legacy runSpec alias", () => {
+    createAutoresearchGraph({
+      llm: {},
+      tools: [],
+      systemPrompt: "base prompt",
+    } as unknown as CreateReactAgentGraphOptions);
+
+    const messages = lastPromptFactory()(
+      {},
+      {
+        configurable: {
+          autoresearch: VALID_SPEC,
+          autoresearchRunSpec: {
+            ...VALID_SPEC,
+            rewardMetric: {
+              ...VALID_SPEC.rewardMetric,
+              name: "legacy_metric",
+            },
+          },
+        },
+      }
+    );
+
+    expect(String(messages[0]?.content)).toContain(
+      "accepted_inbox_contribution_rate"
+    );
+    expect(String(messages[0]?.content)).not.toContain("legacy_metric");
   });
 });
