@@ -200,6 +200,30 @@ Everything schema-time (drizzle-kit migrate, `CREATE SCHEMA`, `__drizzle_migrati
 - **Per-node DB name convention**: `cogni_<node>` (Postgres) → `knowledge_<node>` (Doltgres). `provision.sh` derives one from the other.
 - **Port 5435** on the host (not 5432 — Postgres owns that). k8s pods reach via `{node}-doltgres-external` EndpointSlice → node InternalIP:5435.
 
+### DoltHub repo formation gotchas (verified in PR #1527)
+
+- **Repeated same-owner forks from one template do not work.** Live test:
+  `cogni-dao/knowledge-node-template` → `cogni-dao/knowledge-<node>` failed
+  once the owner already had a fork in that network with `owner already owns a
+repository in the same network`. For v0 node birth, create a fresh DoltHub
+  database with `POST /api/v1alpha1/database` instead of forking a template.
+- **Empty DoltHub repos cannot be useful fork templates.** The initial
+  `knowledge-node-template` had no contents; initializing it with a SQL write
+  fixed the empty-template problem but not the same-owner fork-network limit.
+  vNext fork alignment needs a one-fork-per-owner topology or a non-fork clone
+  path, not repeated forks under one owner.
+- **PAT creates REST/SQL databases; Dolt push uses Dolt creds.**
+  `DOLTHUB_API_TOKEN` with API read/write rights successfully created
+  `cogni-test-nodes/knowledge-e2e-*`, wrote
+  `cogni_external_probe`, polled the write op to `Success`, and read back
+  `[{ label: "ok" }]`. That PAT does not authenticate `dolt push`; push still
+  requires `DOLT_CREDS_JWK` + `DOLT_CREDS_KEYID` with the pubkey registered in
+  DoltHub settings.
+- **Environment owner must be explicit.** Do not default test/preview/candidate
+  to `cogni-dao`. `DOLTHUB_OWNER` is the boundary: production uses `cogni-dao`,
+  non-prod uses a Dolt test org such as `cogni-test-nodes`, and publish should
+  fail closed when `DOLTHUB_API_TOKEN` is present without `DOLTHUB_OWNER`.
+
 ## When to promote a node-local slice to core
 
 Trigger: a second node genuinely needs the same table (import would cross node boundaries). **One-way move** — flipping back and forth causes migration file churn. Rule of thumb: core = strict intersection. When in doubt, keep node-local.
