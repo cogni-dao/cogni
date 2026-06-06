@@ -1,6 +1,6 @@
 ---
 name: test-expert
-description: Authoritative 1-page reference for the cogni-template test pyramid — enforcement vs test layers, vitest configs, infra prereqs, what agents can/can't run locally, coverage tracking, and the non-obvious gotchas that bite every time. Use this skill whenever the user is writing a new test, asking "which layer does this belong in", debugging a flaky test, hitting CWD/env-loading issues, deciding between unit/component/stack/external, running any `pnpm test:*` or `pnpm arch:check` / `pnpm lint` command, working with testcontainers, touching fake adapters or `APP_ENV=test`, troubleshooting skip-gates, seeing errors from `.env.test` not loading, wondering about coverage or whether a test will run in CI, or trying to decide whether to run stack/e2e locally vs defer to CI. Also trigger when the user mentions mocking the database, Privy/GitHub App construction errors in tests, the smee proxy, `pnpm test:smee`, validating the agent API, or anything that smells like test-environment setup. Short-circuits the usual "spelunk through docs + configs" lookup.
+description: Authoritative reference for the cogni-template test pyramid and production-like e2e test topology — enforcement vs test layers, vitest configs, infra prereqs, GitHub/DoltHub test org boundaries, the cogni-operator-test app, what agents can/can't run locally, coverage tracking, and the non-obvious gotchas that bite every time. Use this skill whenever the user is writing a new test, asking "which layer does this belong in", debugging a flaky test, hitting CWD/env-loading issues, deciding between unit/component/stack/external, running any `pnpm test:*` or `pnpm arch:check` / `pnpm lint` command, working with testcontainers, touching fake adapters or `APP_ENV=test`, troubleshooting skip-gates, seeing errors from `.env.test` not loading, wondering about coverage or whether a test will run in CI, or trying to decide whether to run stack/e2e locally vs defer to CI. Also trigger when the user mentions mocking the database, Privy/GitHub App construction errors in tests, the smee proxy, `pnpm test:smee`, validating the agent API, the candidate/test GitHub App, `cogni-test-org`, `cogni-test-nodes`, node-birth flight testing, or anything that smells like test-environment setup. Short-circuits the usual "spelunk through docs + configs" lookup.
 ---
 
 # test-expert
@@ -43,7 +43,8 @@ All of the above run in `ci.yaml`. Local bundle: `pnpm check:fast:fix` (iterate 
 | **Stack (multi)**  | `vitest.stack-multi.config.mts`    | `tests/stack/`                  | Cross-node isolation / routing                                                                                                                             | `dev:stack:full:test`                              | `pnpm test:stack:multi`    | ✅                                                                                                                                                                                                               |
 | **External**       | `vitest.external.config.mts`       | `tests/external/` (non-money)   | Real 3rd-party APIs                                                                                                                                        | GH App creds, Ollama, optional `pnpm test:smee`    | `pnpm test:external`       | ❌                                                                                                                                                                                                               |
 | **External money** | `vitest.external-money.config.mts` | `tests/external/money/`         | Real on-chain + real OpenRouter spend                                                                                                                      | Funded wallet, `dev:stack` running, OpenRouter key | `pnpm test:external:money` | ❌                                                                                                                                                                                                               |
-| **E2E**            | Playwright                         | `nodes/operator/app/e2e/`       | Production-like black box                                                                                                                                  | `docker:stack`                                     | `pnpm e2e`                 | ❌ — **currently not triggered anywhere** (known gap; the old `staging-preview.yml` runner was deleted during the flighting/CI-CD refactor). Tests exist and are runnable locally; automated invocation is TODO. |
+| **E2E**            | Playwright                         | `nodes/operator/app/e2e/`       | Browser black box against a running stack                                                                                                                   | `docker:stack`                                     | `pnpm e2e`                 | ❌ — **currently not triggered anywhere** (known gap; the old `staging-preview.yml` runner was deleted during the flighting/CI-CD refactor). Tests exist and are runnable locally; automated invocation is TODO. |
+| **Env e2e**        | GitHub App + GH Actions + Argo     | deployed candidate/test env     | Production-like pipeline: node publish → child repo image → parent pin/flight → `/version`                                                                  | `cogni-operator-test`, test GH/DoltHub orgs, VM    | operator API + GH checks   | 🟡 Partially wired. This is the missing repeatable flight lane, not a vitest suite. See "Environment e2e test lane" below.                                                                                       |
 
 ### Meta note on `tests/arch/` + `tests/lint/`
 
@@ -96,6 +97,35 @@ If the user is about to mock the database, push back — use **Component** with 
 
 When the user's question is "does the machine-agent API actually work end-to-end against canary or a local stack?" — that's **validation**, not testing. See `docs/guides/agent-api-validation.md`: a curl-based checklist for discover → register → execute graph → list runs → stream events. It's a human/agent-driven probe, not a CI suite. Point at that guide when the user is validating the agent API surface rather than writing a unit/component/stack test.
 
+## Environment e2e test lane — GitHub App + DoltHub + flight
+
+This is the production-like lane for questions such as "can the operator really birth a node and flight it?" It is not covered by local vitest, stack tests, or Playwright. Treat it as a disposable mini-prod environment driven by the same deploy code.
+
+Current test topology:
+
+| Boundary                  | Value / rule                                                                                                                                              | Source |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
+| GitHub App                | `cogni-operator-test` for candidate/test. It must be an env-scoped App, installed on the disposable mint org as **all repositories**, with `workflows:write`. | `.claude/skills/git-app-expert/SKILL.md`, `docs/guides/github-app-webhook-setup.md`, `docs/spec/node-ci-cd-contract.md` |
+| GitHub mint org           | `cogni-test-org` via `NODE_MINT_OWNER` and `NODE_TEMPLATE_OWNER`. Candidate/preview operators must not mint into `Cogni-DAO`.                              | `infra/k8s/overlays/{candidate-a,preview}/operator/kustomization.yaml` |
+| Parent pin repo           | `cogni-test-org/cogni-monorepo` via `NODE_SUBMODULE_PARENT_OWNER` / `NODE_SUBMODULE_PARENT_REPO` for test runs.                                            | `infra/k8s/overlays/candidate-a/operator/kustomization.yaml` |
+| DoltHub knowledge org     | `cogni-test-nodes` via explicit `DOLTHUB_OWNER`. Production uses `cogni-dao`; non-prod must fail closed rather than silently creating prod knowledge repos. | `.claude/skills/database-expert/SKILL.md`, `docs/runbooks/dolthub-remote-bootstrap.md` |
+| Flight target             | Candidate/test DNS is `<node>-test.cognidao.org`; the operator flight path must verify `/version.buildSha` for the deployed node.                          | `docs/guides/node-formation-guide.md`, `scripts/ci/verify-buildsha.sh` |
+
+Recent PR context to know before changing this lane:
+
+- #1521 taught candidate flight to detect added submodule catalog rows, resolve child images by `sha-<gitlinkSha>`, and promote per-target source SHAs.
+- #1527 added DoltHub knowledge remote bootstrapping and proved `cogni-test-nodes/knowledge-e2e-*` creation through the DoltHub REST/SQL API.
+- #1542 made the catalog's `image_repository` authoritative for externally built child node images (`ghcr.io/<owner>/<repo>-node`), removing GHCR inference.
+- #1544 hardened publish retries when a child repo already exists from a partial wizard run.
+- #1546 is the current prototype for a node-ref flight endpoint: `POST /api/v1/nodes/[id]/flight { sourceSha, environment }`. Review concerns are real; do not treat it as landed architecture until merged.
+
+Pareto path for repeatable env e2e:
+
+1. Make the **test org/app contract** explicit and audited first: `cogni-operator-test` installed all-repositories on `cogni-test-org`, `workflows:write`, `administration:write`, webhook to `https://test.cognidao.org/api/internal/webhooks/github`, creds in OpenBao for candidate/test.
+2. Keep candidate/test disposable but production-shaped: provision with `provision-env.yml` / `scripts/setup/provision-env-vm.sh`, not hand SSH. The env must source `NODE_MINT_OWNER`, `NODE_TEMPLATE_OWNER`, `NODE_SUBMODULE_PARENT_*`, `DOLTHUB_OWNER`, `DOLTHUB_API_TOKEN`, and Dolt push creds from the same paths as preview/prod.
+3. Add one automated smoke script for a synthetic node slug: publish via the operator API, wait for the child repo `sha-<childSha>` GHCR image, wait for the parent pin PR, merge/flight through the operator route, then assert `https://<slug>-test.cognidao.org/version` reports the child source SHA.
+4. Only after candidate/test is repeatable should preview/prod use this path for formed nodes. Preview/prod promotion should consume the candidate-proven digest/ref; do not make preview the first place where node-ref flight is exercised.
+
 ## Gotchas — these bite repeatedly
 
 1. **`APP_ENV=test` swaps fakes via the DI container.** Fake adapters live in `src/adapters/test/*/fake-*.adapter.ts` and are wired in `src/bootstrap/container.ts` via `serverEnv.isTestMode`. LLM is the exception — it's always real LiteLLM, routed to `mock-openai-api` via `litellm.test.config.yaml`. If a stack/component test is calling a real external service, it's almost always a missing fake wiring in the DI container, not a test bug.
@@ -134,6 +164,9 @@ Triage in this order:
 - `docs/guides/testing.md` — APP_ENV=test pattern + fake adapter conventions
 - `docs/guides/full-stack-testing.md` — stack-test specifics
 - `docs/guides/agent-api-validation.md` — machine-agent API validation checklist (validation, not testing)
+- `docs/guides/github-app-webhook-setup.md` — per-env GitHub App setup; `cogni-operator-test` is the candidate/test app
+- `docs/spec/node-ci-cd-contract.md` — submodule-pinned node CI/CD, test org identity, node-ref flight constraints
+- `docs/runbooks/dolthub-remote-bootstrap.md` — `DOLTHUB_OWNER`, DoltHub PAT, and Dolt push credential split
 - `work/items/bug.0314.external-tests-require-more-than-env-test.md` — latest skip-gate + RPC/webhook setup bug
 - `work/projects/proj.system-test-architecture.md` — mock-LLM + FakeLlmAdapter strategy
 - `nodes/operator/app/tests/external/AGENTS.md` — per-lane invariants for external tests

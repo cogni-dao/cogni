@@ -135,6 +135,58 @@ Each gate firing is a feedback loop, not a barrier. Future: rejections logged st
 
 New nodes are born as **git submodules** at `nodes/<slug>` — a node-template fork the operator pins by SHA — not inline-copied into the monorepo. **New nodes only**: `operator`, `resy`, `poly`, `node-template` stay inline. At scale (50+ nodes) inline-copy is ~1100 files/node of clone bloat; the submodule boundary lets a node dev clone only their node repo as its own Conductor Project while the operator clones the thin parent and selectively inits the one node it operates on. Full rationale + the keeper-vs-tax decomposition of the inline wizard (#1462) live in knowledge conclusion `submodule-node-birth-design` — not restated here.
 
+### Plain-English authority model
+
+The model is good only if the boundary stays this simple:
+
+| Plane                    | Owner                                                                                                   | Must not do                                                                                           |
+| ------------------------ | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| **Node repo**            | Node developer / node agents                                                                            | Own shared-operator VM state, Argo, DNS, preview/prod promotion, or operator deploy branches          |
+| **Operator monorepo**    | Operator                                                                                                | Rebuild submodule-node source, invent node policy, or use GitHub repo permissions as product auth     |
+| **GitHub App identity**  | Environment-scoped automation credential                                                                | Decide who is allowed to flight; it only proves the operator has the mechanical ability to act        |
+| **Operator API / DB**    | Authorization boundary for flight/publish/promote requests                                              | Delegate authorization to "who can push to a GitHub repo"                                             |
+
+So: node-template repos carry **CI + image build**, not hosted flight/deploy
+workflows. Hosted flight is an operator action because it mutates operator-owned
+environment state: deploy branches, Argo applications, DNS, OpenBao/ESO, and
+candidate/preview/production provenance. A node repo may include a small
+"request flight" client or documentation, but not the workflow that performs
+the flight against a shared operator environment.
+
+This keeps Cogni an OSS foundation instead of a platform trap: node repos remain
+portable and self-verifying; the shared operator is just one deploy host. A node
+that wants to own its deploy plane uses `standalone-node`, not the submodule
+template.
+
+### Flight permission model
+
+Do **not** use GitHub repository permission as the product authorization model.
+GitHub permissions answer "can this App/API token do the mechanical GitHub
+operation?" They do not answer "should this agent be allowed to mutate this
+Cogni environment?"
+
+Flight authorization is operator-local:
+
+1. Caller authenticates to the operator API as a human/session or bearer agent.
+2. Operator checks a Cogni capability, not GitHub membership. v0 can be a narrow
+   allowlist/capability row: `principal -> node_slug -> environment -> action`
+   with TTL. v1 can become org membership/RBAC.
+3. Operator verifies objective gates before dispatch:
+   - node exists in the operator registry/catalog;
+   - requested `sourceSha` exists in the registered node repo;
+   - child `.cogni/repo-spec.yaml` at that SHA matches the node identity;
+   - GHCR has `image_repository:sha-<sourceSha>`;
+   - requested env is allowed for that principal (`candidate-a` first;
+     preview/prod require stronger gates).
+4. Operator dispatches with its environment GitHub App. The App is a capability
+   executor, not an authorization oracle.
+
+Until real RBAC lands, the safe Pareto default is: any registered agent may
+request **candidate/test** flight for the node/work item it owns; preview/prod
+remain human-approved operator actions. This avoids relying on GitHub repo
+permissions while still stopping arbitrary agents from mutating arbitrary
+environments.
+
 ### SUBMODULE_GITLINK_IS_OPERATOR_PIN
 
 A change to a `nodes/<slug>` **submodule gitlink** (the pinned-commit pointer) classifies as **operator-domain**, not node-domain. The pointer is the control plane's _pin_; the node's _code_ was reviewed in the node repo's own PR queue. So the deploy PR — gitlink bump + the node's catalog/overlay/appset rows — is **one operator-domain change**, not a cross-domain rejection. Without this rule the bump touches `nodes/<slug>` (node) + `infra/` (operator) → `|S| = 2` → rejected by the gate. The operator filter's `!nodes/<slug>/**` negation must **not** subtract a submodule gitlink — only a real in-tree node directory is node-domain.
