@@ -143,7 +143,7 @@ describe("nodes feature components", () => {
       screen.getByRole("heading", { name: "Explore the network" })
     ).toBeVisible();
     expect(screen.getByText(/2 listed/)).toBeVisible();
-    expect(screen.getByText(/12 tracked activity events in 30d/)).toBeVisible();
+    expect(screen.getByText(/12 tracked events in 30d/)).toBeVisible();
     expect(screen.getByText(/3 finalized epochs/)).toBeVisible();
     fireEvent.click(screen.getByText("Start a node"));
     expect(screen.getByText("Registration Form Slot")).toBeVisible();

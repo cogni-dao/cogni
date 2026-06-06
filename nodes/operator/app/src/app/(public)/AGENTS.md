@@ -9,7 +9,7 @@
 
 ## Purpose
 
-Public (unauthenticated) pages wrapped in `AppHeader` + `AppFooter` shell. Server-side session check redirects signed-in users to `/chat`. Primary auth routing enforced at proxy level (`src/proxy.ts`).
+Public pages wrapped in `AppHeader` + `AppFooter` shell. `/` redirects signed-in users to `/chat`; `/nodes` remains public but renders auth-aware account chrome.
 
 ## Pointers
 
@@ -35,7 +35,7 @@ Public (unauthenticated) pages wrapped in `AppHeader` + `AppFooter` shell. Serve
 
 ## Responsibilities
 
-- This directory **does**: Render the public page shell (header + footer), redirect authenticated users to `/chat` via server-side session check (defense-in-depth; proxy.ts is the primary authority).
+- This directory **does**: Render the public page shell (header + footer), expose public discovery pages, and keep account chrome session-aware.
 - This directory **does not**: Handle authentication, render protected content, manage session state, perform client-side redirects.
 
 ## Usage
@@ -47,7 +47,7 @@ pnpm build   # build for production
 
 ## Standards
 
-- Server-side redirect (`getServerSessionUser` + `redirect()`) is defense-in-depth; `proxy.ts` handles primary auth routing.
+- Server-side redirect (`getServerSessionUser` + `redirect()`) is defense-in-depth for `/`; `proxy.ts` handles primary auth routing.
 - No client-side auth redirects — proxy.ts is the single authority for auth routing.
 - No auth guard — pages render for unauthenticated visitors.
 

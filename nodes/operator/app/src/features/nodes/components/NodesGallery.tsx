@@ -70,8 +70,8 @@ export function NodesGallery({
         </p>
         <p className="mt-5 text-muted-foreground text-sm">
           {formatNumber(nodeCount)} listed · {formatNumber(devActivity30d)}{" "}
-          tracked activity events in 30d · {formatNumber(finalizedEpochs)}{" "}
-          finalized epochs
+          tracked events in 30d · {formatNumber(finalizedEpochs)} finalized
+          epochs
         </p>
       </header>
 

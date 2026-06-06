@@ -30,12 +30,12 @@ App-shell layout components: header, footer, sidebar, and top bar. Composes kit/
 
 ## Public Surface
 
-- **Exports:** `AppHeader`, `AppFooter`, `AppSidebar`, `AppTopBar` via `index.ts`
+- **Exports:** `AccountSlot`, `AppHeader`, `AppFooter`, `AppSidebar`, `AppTopBar` via `index.ts`
 - **Files considered API:** `index.ts`
 
 ## Responsibilities
 
-- This directory **does**: Compose layout shells from kit components, provide sidebar navigation, render top bar with wallet/treasury/theme controls.
+- This directory **does**: Compose layout shells from kit components, provide sidebar navigation, render session-aware account/treasury/theme controls.
 - This directory **does not**: Handle authentication, fetch data, contain business logic, define design tokens.
 
 ## Usage

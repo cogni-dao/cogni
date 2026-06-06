@@ -110,9 +110,9 @@ export function NodeNetworkCard({
         </div>
 
         <div className="grid grid-cols-3 gap-4 border-border border-t pt-4">
-          <TileSignal label="Activity" value={activity} />
+          <TileSignal label="Tracked" value={activity} />
           <TileSignal label="Ownership" value={ownership} />
-          <TileSignal label="AI data" value={aiUsage} />
+          <TileSignal label="AI usage" value={aiUsage} />
         </div>
 
         <div className="mt-auto flex flex-wrap gap-2">

@@ -89,6 +89,18 @@ describe("proxy — page-level routing", () => {
     expectRedirectTo(res, "/");
   });
 
+  it.each([
+    "/dashboard",
+    "/knowledge",
+    "/knowledge/entry-1",
+  ])("redirects unauthenticated user on %s to /", async (path) => {
+    mockGetToken.mockResolvedValue(null);
+
+    const res = await proxy(makeRequest(path));
+
+    expectRedirectTo(res, "/");
+  });
+
   it("redirects unauthenticated user on /chat/some-id to /", async () => {
     mockGetToken.mockResolvedValue(null);
 
@@ -109,6 +121,18 @@ describe("proxy — page-level routing", () => {
     mockGetToken.mockResolvedValue({ id: "user-1" });
 
     const res = await proxy(makeRequest("/profile"));
+
+    expect(res.status).toBe(200);
+  });
+
+  it.each([
+    "/dashboard",
+    "/knowledge",
+    "/knowledge/entry-1",
+  ])("passes through authenticated user on %s", async (path) => {
+    mockGetToken.mockResolvedValue({ id: "user-1" });
+
+    const res = await proxy(makeRequest(path));
 
     expect(res.status).toBe(200);
   });

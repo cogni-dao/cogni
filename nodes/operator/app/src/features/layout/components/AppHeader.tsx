@@ -4,12 +4,11 @@
 /**
  * Module: `@features/layout/components/AppHeader`
  * Purpose: Application header composing kit components and feature-specific widgets.
- * Scope: Public-page header. Renders logo, treasury, socials, wallet, theme toggle. Nav links removed — signed-in users use the sidebar. Does not handle routing or analytics.
+ * Scope: Public-page header. Renders logo, treasury, socials, session-aware account slot, theme toggle. Does not handle routing or analytics.
  * Invariants: No horizontal overflow; min-w-0/truncate/shrink-0 guards; GitHub hidden <lg; theme hidden <md; treasury always visible.
  * Side-effects: none
- * Notes: Desktop wallet in [data-wallet-slot="desktop"] for CSS (see tailwind.css).
- *        Lives in features/layout as app-shell composition that knows about treasury, wallet, etc.
- * Links: src/components/kit/auth/WalletConnectButton.tsx, src/styles/tailwind.css, docs/spec/onchain-readers.md
+ * Notes: Lives in features/layout as app-shell composition that knows about treasury, account chrome, etc.
+ * Links: src/features/layout/components/AccountSlot.tsx, src/styles/tailwind.css, docs/spec/onchain-readers.md
  * @public
  */
 
@@ -21,8 +20,9 @@ import Link from "next/link";
 import type { ReactElement } from "react";
 
 import { ModeToggle } from "@/components";
-import { WalletConnectButton } from "@/components/kit/auth/WalletConnectButton";
 import { TreasuryBadge } from "@/features/treasury/components/TreasuryBadge";
+
+import { AccountSlot } from "./AccountSlot";
 
 export function AppHeader(): ReactElement {
   return (
@@ -74,10 +74,7 @@ export function AppHeader(): ReactElement {
               <Github className="size-4" strokeWidth={1.5} aria-hidden="true" />
             </a>
 
-            <WalletConnectButton variant="compact" className="sm:hidden" />
-            <div data-wallet-slot="desktop" className="hidden sm:flex">
-              <WalletConnectButton variant="default" />
-            </div>
+            <AccountSlot showAppLink />
 
             <ModeToggle className="hidden md:flex" />
           </div>

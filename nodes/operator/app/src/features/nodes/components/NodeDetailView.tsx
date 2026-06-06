@@ -157,12 +157,12 @@ export function NodeDetailView({
       <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard
           icon={<Activity className="size-5" />}
-          title="30d dev activity"
+          title="30d tracked events"
           value={formatNumber(metrics.devActivity30d)}
         />
         <StatCard
           icon={<Activity className="size-5" />}
-          title="All dev activity"
+          title="All tracked events"
           value={formatNumber(metrics.devActivityTotal)}
         />
         <StatCard
