@@ -123,6 +123,22 @@ Order doesn't matter:
 
 The code MUST fail fast at startup if a required secret is missing (don't return `undefined` from `process.env.X` and silently malfunction). Reference: `docs/spec/secrets-management.md § TRANSITION_SAFE`.
 
+## Live preview operator example — node wizard GitHub App
+
+The deployed preview operator reads pod secrets from OpenBao at `cogni/preview/operator` through `operator-env-secrets`. GitHub environment secrets are only seed material for a future provision run; they do not update a live ESO-backed pod.
+
+For the node wizard GitHub App credentials, write the live values directly:
+
+```bash
+pnpm secrets:set preview operator GH_REVIEW_APP_ID
+pnpm secrets:set preview operator GH_REVIEW_APP_PRIVATE_KEY_BASE64
+pnpm secrets:set preview operator GH_WEBHOOK_SECRET
+kubectl annotate externalsecret -n cogni-preview operator-env-secrets \
+  force-sync=$(date +%s) --overwrite
+```
+
+Non-secret wizard routing, such as `NODE_MINT_OWNER=cogni-test-org`, belongs in the preview operator ConfigMap, not OpenBao.
+
 ## Anti-patterns this guide assumes you won't do
 
 - Hardcode the value in a Kubernetes Secret YAML and commit it
