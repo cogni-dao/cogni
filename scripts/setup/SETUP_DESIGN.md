@@ -131,7 +131,7 @@ pnpm setup github --env production
        - `DISCORD_OAUTH_CLIENT_ID` + `DISCORD_OAUTH_CLIENT_SECRET` (from discord.com/developers/applications → OAuth2)
        - `GOOGLE_OAUTH_CLIENT_ID` + `GOOGLE_OAUTH_CLIENT_SECRET` (from console.cloud.google.com/apis/credentials)
        - **DoltHub mirror (v0 push job — task.5069):** see [`docs/runbooks/dolthub-remote-bootstrap.md`](../../docs/runbooks/dolthub-remote-bootstrap.md) for the one-time setup. Three secrets needed for push:
-         - `DOLTHUB_REMOTE_URL` — gates the push job (e.g. `https://doltremoteapi.dolthub.com/cogni-dao/knowledge-operator`)
+         - `DOLT_CREDS_*` — authenticate push to the repo-spec `knowledge.remote`
          - `DOLTHUB_OWNER` — env-scoped owner for node knowledge repos; production uses `cogni-dao`, test/preview must use a non-production DoltHub org
          - `DOLT_CREDS_JWK` — full contents of the `.jwk` file produced by `dolt creds new`
          - `DOLT_CREDS_KEYID` — the keyid from `dolt creds new`

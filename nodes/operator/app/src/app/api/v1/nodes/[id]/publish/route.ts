@@ -17,10 +17,10 @@ import { type UserId, userActor } from "@cogni/ids";
 import { and, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
-import { createDoltHubDatabaseEnsurer } from "@/bootstrap/capabilities/dolthub-database";
 import { createNodeRepoWriter } from "@/bootstrap/capabilities/node-repo-write";
 import { resolveAppDb } from "@/bootstrap/container";
 import { withRootSpan } from "@/bootstrap/otel";
+import { createDoltHubDatabaseEnsurer } from "@/features/nodes/dolthub-database";
 import { transition } from "@/features/nodes/state-machine";
 import { getServerSessionUser } from "@/lib/auth/server";
 import { type NodeStatus, nodes } from "@/shared/db/nodes";
@@ -395,7 +395,9 @@ export async function POST(request: Request, routeArgs: RouteParams) {
             owner: knowledgeRemote.owner,
             repo: knowledgeRemote.repo,
           });
-          doltHub = await createDoltHubDatabaseEnsurer(env).ensureDatabase({
+          doltHub = await createDoltHubDatabaseEnsurer({
+            DOLTHUB_API_TOKEN: env.DOLTHUB_API_TOKEN,
+          }).ensureDatabase({
             owner: knowledgeRemote.owner,
             repo: knowledgeRemote.repo,
             description: `Cogni node ${node.slug} knowledge mirror`,

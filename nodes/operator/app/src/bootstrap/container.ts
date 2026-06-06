@@ -139,6 +139,7 @@ import { createVcsCapability } from "@/bootstrap/capabilities/vcs";
 import { createWebSearchCapability } from "@/bootstrap/capabilities/web-search";
 import { createWorkItemCapability } from "@/bootstrap/capabilities/work-item";
 import type { RateLimitBypassConfig } from "@/bootstrap/http/wrapPublicRoute";
+import { resolveKnowledgeMirrorRemoteUrl } from "@/bootstrap/knowledge-mirror";
 import { startProcessHealthPublisher } from "@/bootstrap/publishers";
 import type {
   AccountService,
@@ -640,11 +641,7 @@ function createContainer(): Container {
     const contributionPort = new DoltgresKnowledgeContributionAdapter({
       sql: doltClient,
     });
-    // Optional post-merge mirror to DoltHub (task.5069). A node born through
-    // the wizard carries its Cogni-owned remote in repo-spec; DOLTHUB_REMOTE_URL
-    // remains an explicit env override for legacy/operator deployments.
-    const remoteUrl =
-      env.DOLTHUB_REMOTE_URL ?? getKnowledgeConfig()?.remote.url;
+    const remoteUrl = resolveKnowledgeMirrorRemoteUrl(getKnowledgeConfig());
     const pushMainOnMerge = remoteUrl
       ? wrapPushSafe(
           createDoltgresPusher({

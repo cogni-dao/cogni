@@ -18,6 +18,7 @@ export {
   getDaoConfig,
   getDaoTreasuryAddress,
   getGovernanceConfig,
+  getKnowledgeConfig,
   getLedgerApprovers,
   getNodeId,
   getOperatorWalletConfig,
@@ -25,4 +26,5 @@ export {
   getScopeId,
   type InboundPaymentConfig,
   isLedgerApprover,
+  type KnowledgeConfig,
 } from "./repoSpec.server";

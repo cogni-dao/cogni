@@ -88,7 +88,7 @@ vi.mock("@/shared/env", () => ({
   serverEnv: () => envState.current,
 }));
 
-vi.mock("@/bootstrap/capabilities/dolthub-database", () => ({
+vi.mock("@/features/nodes/dolthub-database", () => ({
   createDoltHubDatabaseEnsurer: () => ({
     ensureDatabase: mockEnsureDatabase,
   }),

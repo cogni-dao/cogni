@@ -182,15 +182,9 @@ export const serverSchema = z.object({
   // Writer URL used by knowledge tools (auto-commit on write). Reader URL for read-only agents.
   DOLTGRES_URL: optionalUrl,
 
-  // DoltHub credentials — service-side push of knowledge hubs to DoltHub
-  // remote (cogni-dao/knowledge-<node>). v0 push uses DoltHub Dolt creds
-  // (keypair, see docs/runbooks/dolthub-remote-bootstrap.md). DOLTHUB_REMOTE_URL
-  // gates the push job — when unset, merges still succeed locally and never
-  // attempt a push. DOLTHUB_API_TOKEN (PAT) is for the REST/SQL HTTP API only
-  // (future librarian/x402 reads). DoltHub OAuth pair is reserved for v1
-  // per-user identity (task.5070, blocked on DoltHub app approval). Per
-  // proj.knowledge-syntropy (W0c tier) + task.5069.
-  DOLTHUB_REMOTE_URL: optionalString,
+  // DoltHub credentials — runtime mirror remote URLs come only from repo-spec
+  // `knowledge.remote`; DOLT_CREDS_* authenticate the Dolt push protocol in
+  // Doltgres. The PAT is for REST/SQL API use.
   DOLTHUB_API_TOKEN: optionalString,
   DOLTHUB_OAUTH_CLIENT_ID: optionalString,
   DOLTHUB_OAUTH_CLIENT_SECRET: optionalString,

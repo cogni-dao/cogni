@@ -2,17 +2,17 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `@tests/unit/bootstrap/dolthub-database`
+ * Module: `@tests/unit/features/nodes/dolthub-database`
  * Purpose: Unit tests for the Cogni-owned DoltHub database bootstrap client.
  * Scope: Mocked fetch only; no live DoltHub calls.
  * Side-effects: process global fetch stub.
- * Links: src/bootstrap/capabilities/dolthub-database.ts
+ * Links: src/features/nodes/dolthub-database.ts
  * @internal
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createDoltHubDatabaseEnsurer } from "@/bootstrap/capabilities/dolthub-database";
+import { createDoltHubDatabaseEnsurer } from "@/features/nodes/dolthub-database";
 
 const INPUT = {
   owner: "cogni-dao-test",

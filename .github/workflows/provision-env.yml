@@ -113,7 +113,6 @@ jobs:
       # gating drops what a node didn't ask for (PRIVY_* → payments/poly only).
       # Unset on a given env = empty = skipped (gate-by-presence; the feature
       # stays disabled). Names mirror the GH Environment Secret names 1:1.
-      DOLTHUB_REMOTE_URL: ${{ secrets.DOLTHUB_REMOTE_URL }}
       DOLTHUB_OWNER: ${{ vars.DOLTHUB_OWNER }}
       DOLT_CREDS_JWK: ${{ secrets.DOLT_CREDS_JWK }}
       DOLT_CREDS_KEYID: ${{ secrets.DOLT_CREDS_KEYID }}

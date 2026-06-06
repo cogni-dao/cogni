@@ -136,15 +136,9 @@ export const serverSchema = z.object({
   // Required when on-chain governance signal execution is enabled.
   ALCHEMY_WEBHOOK_SECRET: optionalString,
 
-  // DoltHub credentials — service-side push of knowledge hubs to DoltHub
-  // remote (<DOLTHUB_OWNER>/knowledge-<node>). v0 push uses DoltHub Dolt creds
-  // (keypair, see docs/runbooks/dolthub-remote-bootstrap.md). DOLTHUB_REMOTE_URL
-  // gates the push job — when unset, merges still succeed locally and never
-  // attempt a push. DOLTHUB_API_TOKEN (PAT) is for the REST/SQL HTTP API only
-  // (future librarian/x402 reads). DoltHub OAuth pair is reserved for v1
-  // per-user identity (task.5070, blocked on DoltHub app approval). Per
-  // proj.knowledge-syntropy (W0c tier) + task.5069.
-  DOLTHUB_REMOTE_URL: optionalString,
+  // DoltHub credentials — node publish creates env-owned knowledge repos via
+  // REST. Runtime mirror remote URLs come only from repo-spec `knowledge.remote`;
+  // DOLT_CREDS_* authenticate the Dolt push protocol in Doltgres.
   DOLTHUB_OWNER: optionalString,
   DOLTHUB_API_TOKEN: optionalString,
   DOLTHUB_OAUTH_CLIENT_ID: optionalString,

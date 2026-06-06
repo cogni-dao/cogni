@@ -128,6 +128,7 @@ import { stubVcsCapability } from "@/bootstrap/capabilities/vcs";
 import { createWebSearchCapability } from "@/bootstrap/capabilities/web-search";
 import { createWorkItemCapability } from "@/bootstrap/capabilities/work-item";
 import type { RateLimitBypassConfig } from "@/bootstrap/http/wrapPublicRoute";
+import { resolveKnowledgeMirrorRemoteUrl } from "@/bootstrap/knowledge-mirror";
 import { startProcessHealthPublisher } from "@/bootstrap/publishers";
 import type {
   AccountService,
@@ -161,6 +162,7 @@ import type {
 } from "@/ports/server";
 import {
   getDaoTreasuryAddress,
+  getKnowledgeConfig,
   getNodeId,
   getOperatorWalletConfig,
   getPaymentConfig,
@@ -613,14 +615,7 @@ function createContainer(): Container {
     const contributionPort = new DoltgresKnowledgeContributionAdapter({
       sql: doltClient,
     });
-    // Optional post-merge mirror to DoltHub (task.5069). Disabled when
-    // DOLTHUB_REMOTE_URL is unset. Gate-by-secret-presence follows the
-    // established pattern (Langfuse, Privy, PostHog) — DOLTHUB_REMOTE_URL
-    // is only granted to the production GitHub Environment Secret scope, so
-    // candidate-a/preview boot with the hook undefined and never push. v0
-    // invariant: prod is the only writer. Bootstrap: see
-    // docs/runbooks/dolthub-remote-bootstrap.md.
-    const remoteUrl = env.DOLTHUB_REMOTE_URL;
+    const remoteUrl = resolveKnowledgeMirrorRemoteUrl(getKnowledgeConfig());
     const pushMainOnMerge = remoteUrl
       ? wrapPushSafe(
           createDoltgresPusher({
@@ -648,7 +643,7 @@ function createContainer(): Container {
       ...(pushMainOnMerge ? { pushMainOnMerge } : {}),
     });
     log.info(
-      { dolthubMirror: Boolean(env.DOLTHUB_REMOTE_URL) },
+      { dolthubMirror: Boolean(remoteUrl) },
       "Knowledge store + EDO capability configured (Doltgres)"
     );
   } else {
