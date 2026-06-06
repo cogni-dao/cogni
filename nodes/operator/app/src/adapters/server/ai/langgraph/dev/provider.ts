@@ -17,11 +17,8 @@
  * @internal
  */
 
-import {
-  LANGGRAPH_CATALOG,
-  type LangGraphCatalog,
-} from "@cogni/langgraph-graphs";
 import type { AiEvent } from "@cogni/node-core";
+import { LANGGRAPH_CATALOG } from "@cogni/operator-graphs";
 // biome-ignore lint/style/noRestrictedImports: SDK allowed in langgraph dev adapter per OFFICIAL_SDK_ONLY invariant
 import type { Client } from "@langchain/langgraph-sdk";
 import type { Logger } from "pino";
@@ -53,8 +50,6 @@ export const LANGGRAPH_PROVIDER_ID = "langgraph" as const;
 export interface LangGraphDevProviderConfig {
   /** Graph names available (keys from langgraph.json) */
   readonly availableGraphs: readonly string[];
-  /** Catalog used for default tool policy. */
-  readonly catalog?: LangGraphCatalog;
 }
 
 /**
@@ -70,13 +65,11 @@ export class LangGraphDevProvider implements GraphExecutorPort {
   readonly providerId = LANGGRAPH_PROVIDER_ID;
   private readonly log: Logger;
   private readonly availableGraphs: Set<string>;
-  private readonly catalog: LangGraphCatalog;
 
   constructor(
     private readonly client: Client,
     config: LangGraphDevProviderConfig
   ) {
-    this.catalog = config.catalog ?? LANGGRAPH_CATALOG;
     this.log = makeLogger({ component: "LangGraphDevProvider" });
     this.availableGraphs = new Set(config.availableGraphs);
 
@@ -164,7 +157,7 @@ export class LangGraphDevProvider implements GraphExecutorPort {
     const attempt = 0; // P0_ATTEMPT_FREEZE
 
     // P0 Contract: undefined => catalog default, [] => deny-all, [...] => exact
-    const entry = this.catalog[graphName];
+    const entry = LANGGRAPH_CATALOG[graphName];
     let resolvedToolIds: readonly string[];
 
     if (!entry) {

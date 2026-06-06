@@ -35,6 +35,7 @@
     "@cogni/knowledge-store": "workspace:*",
     "@cogni/node-core": "workspace:*",
     "@cogni/operator-doltgres-schema": "workspace:*",
+    "@cogni/operator-graphs": "workspace:*",
     "@cogni/node-contracts": "workspace:*",
     "@cogni/node-shared": "workspace:*",
     "@cogni/node-streams": "workspace:*",

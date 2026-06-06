@@ -12,9 +12,9 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { LANGGRAPH_GRAPH_IDS } from "@cogni/langgraph-graphs";
 import { buildReviewUserMessage } from "@cogni/langgraph-graphs/graphs";
 import type { Rule } from "@cogni/repo-spec";
+import { LANGGRAPH_GRAPH_IDS } from "@cogni/resy-graphs";
 import { z } from "zod";
 
 import type { GraphExecutorPort } from "@/ports";

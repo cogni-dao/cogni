@@ -12,8 +12,8 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { LANGGRAPH_GRAPH_IDS } from "@cogni/langgraph-graphs";
 import { buildReviewUserMessage } from "@cogni/langgraph-graphs/graphs";
+import { LANGGRAPH_GRAPH_IDS } from "@cogni/node-template-graphs";
 import type { Rule } from "@cogni/repo-spec";
 import { z } from "zod";
 

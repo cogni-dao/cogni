@@ -15,7 +15,6 @@
  * @public
  */
 
-import { OPERATOR_LANGGRAPH_CATALOG } from "@cogni/langgraph-graphs";
 import {
   type AgentCatalogProvider,
   AggregatingAgentCatalog,
@@ -44,8 +43,8 @@ export function createAgentCatalog(): {
   // Per MUTUAL_EXCLUSION: choose provider based on LANGGRAPH_DEV_URL env
   const env = serverEnv();
   const providers: AgentCatalogProvider[] = env.LANGGRAPH_DEV_URL
-    ? [new LangGraphDevAgentCatalogProvider(OPERATOR_LANGGRAPH_CATALOG)]
-    : [new LangGraphInProcAgentCatalogProvider(OPERATOR_LANGGRAPH_CATALOG)];
+    ? [new LangGraphDevAgentCatalogProvider()]
+    : [new LangGraphInProcAgentCatalogProvider()];
 
   // Sandbox agents always registered — LITELLM_MASTER_KEY enforced by assertRuntimeSecrets()
   providers.push(new SandboxAgentCatalogProvider());

@@ -12,7 +12,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { LANGGRAPH_GRAPH_IDS } from "@cogni/langgraph-graphs";
+import { LANGGRAPH_GRAPH_IDS } from "@cogni/canary-graphs";
 import { buildReviewUserMessage } from "@cogni/langgraph-graphs/graphs";
 import type { Rule } from "@cogni/repo-spec";
 import { z } from "zod";

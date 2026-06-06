@@ -16,7 +16,7 @@
  */
 
 // P0: Default comes from package; P1: app-configurable via env
-import { DEFAULT_LANGGRAPH_GRAPH_ID } from "@cogni/langgraph-graphs";
+import { DEFAULT_LANGGRAPH_GRAPH_ID } from "@cogni/canary-graphs";
 import { aiAgentsOperation } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/app/_lib/auth/session";
