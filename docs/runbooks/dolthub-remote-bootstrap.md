@@ -57,9 +57,9 @@ curl -sS -X POST \
 ```
 
 The node wizard now performs this repo-creation call automatically during node
-publish for every spawned node. It uses Cogni's `DOLTHUB_API_TOKEN`, derives
-`repoName = knowledge-<node>`, and writes the resulting Cogni-owned mirror into
-the node's repo-spec:
+publish for every spawned node. It uses the environment's `DOLTHUB_API_TOKEN`
+and explicit `DOLTHUB_OWNER`, derives `repoName = knowledge-<node>`, and writes
+the resulting environment-owned mirror into the node's repo-spec:
 
 ```yaml
 knowledge:
@@ -72,8 +72,10 @@ knowledge:
     custody: cogni-owned
 ```
 
-Candidate/test environments can set the non-secret GitHub Environment variable
-`DOLTHUB_OWNER` to a throwaway DoltHub org. Production defaults to `cogni-dao`.
+Each GitHub Environment must set the non-secret variable `DOLTHUB_OWNER`.
+Production uses `cogni-dao`; candidate/test/preview must use a non-production
+DoltHub org. The app fails closed when `DOLTHUB_API_TOKEN` is present without
+`DOLTHUB_OWNER` so test traffic cannot silently create repos under production.
 Users never create their own DoltHub repos in v0.
 
 Verification:

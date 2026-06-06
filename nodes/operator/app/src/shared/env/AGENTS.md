@@ -110,6 +110,7 @@ Optional:
 - ANALYTICS_K_THRESHOLD (int, default 50) - K-anonymity threshold for public analytics
 - ANALYTICS_QUERY_TIMEOUT_MS (int, default 5000) - Prometheus query timeout
 - DOLTHUB_REMOTE_URL (url) - Dolt remote for the knowledge mirror. When set, container DI wires post-merge `pushMainOnMerge`. Production-only by convention; see docs/runbooks/dolthub-remote-bootstrap.md
+- DOLTHUB_OWNER - Env-scoped DoltHub owner for node knowledge repos. Required with DOLTHUB_API_TOKEN; test/preview must use a non-production owner.
 - DOLTHUB_API_TOKEN - DoltHub PAT for REST/SQL API (read path); does NOT authenticate the Dolt push protocol
 - DOLTHUB_OAUTH_CLIENT_ID / DOLTHUB_OAUTH_CLIENT_SECRET - reserved for v1 per-user identity (task.5070); not read by v0 push job
 

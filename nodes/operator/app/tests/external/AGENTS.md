@@ -53,6 +53,9 @@ Tests that hit real internet services or 3rd-party APIs. These require secrets a
 # Also spins up testcontainers PostgreSQL for ledger round-trip tests
 pnpm test:external
 
+# DoltHub-only formation proof; no Docker/testcontainers required
+pnpm test:external:dolthub
+
 # Skips gracefully if no token is set
 ```
 

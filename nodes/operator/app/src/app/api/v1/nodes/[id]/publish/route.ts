@@ -269,7 +269,7 @@ export async function POST(request: Request, routeArgs: RouteParams) {
             { status: 503 }
           );
         }
-        if (!env.DOLTHUB_API_TOKEN) {
+        if (!env.DOLTHUB_API_TOKEN || !env.DOLTHUB_OWNER) {
           logTerminal("error", {
             outcome: "error",
             errorCode: "dolthub_config_missing",
@@ -280,7 +280,7 @@ export async function POST(request: Request, routeArgs: RouteParams) {
             {
               error: "operator not configured for DoltHub bootstrap",
               reason:
-                "DOLTHUB_API_TOKEN required to create Cogni-owned node knowledge repos",
+                "DOLTHUB_API_TOKEN + DOLTHUB_OWNER required to create environment-scoped node knowledge repos",
             },
             { status: 503 }
           );

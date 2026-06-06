@@ -473,6 +473,27 @@ describe("POST /api/v1/nodes/[id]/publish", () => {
     );
   });
 
+  it("fails closed when DoltHub owner is missing", async () => {
+    envState.current.DOLTHUB_OWNER = undefined;
+
+    const response = await publishNode();
+    const body = await response.json();
+
+    expect(response.status).toBe(503);
+    expect(body.error).toBe("operator not configured for DoltHub bootstrap");
+    expect(mockEnsureDatabase).not.toHaveBeenCalled();
+    expect(mockLog.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "feature.node_publish.complete",
+        step: "config",
+        outcome: "error",
+        errorCode: "dolthub_config_missing",
+        status: 503,
+      }),
+      "feature.node_publish.complete"
+    );
+  });
+
   it("logs a missing node at the load step", async () => {
     dbState.current = null;
 
