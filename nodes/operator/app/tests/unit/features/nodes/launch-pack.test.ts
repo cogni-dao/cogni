@@ -62,6 +62,7 @@ describe("buildNodeLaunchPack", () => {
     );
     expect(pack.prompt).toContain("Parent deployment PR:");
     expect(pack.prompt).toContain("Candidate URL:");
+    expect(pack.prompt).toContain("@node-wizard-scorecard");
     expect(pack.prompt).toContain("Ensure the parent deployment PR is merged");
     expect(pack.prompt).toContain("Create a node customization PR");
     expect(pack.prompt).toContain("Do not push directly to main");
@@ -69,7 +70,7 @@ describe("buildNodeLaunchPack", () => {
     expect(pack.prompt).toContain("operator reports the launch is eligible");
     expect(pack.prompt).toContain("@node-formation-styling-guide");
     expect(pack.prompt).toContain("/contribute-to-cogni");
-    expect(pack.prompt).toContain("image or pin propagation blocks");
+    expect(pack.prompt).toContain("blocked scorecard row");
     expect(pack.prompt).toContain("Verify the deployed /version");
   });
 });

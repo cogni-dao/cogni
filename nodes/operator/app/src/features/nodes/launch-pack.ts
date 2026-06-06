@@ -58,6 +58,7 @@ export function buildNodeLaunchPack(
     parentPrLine,
     `Candidate URL: ${candidateUrl}`,
     "",
+    "Start with @node-wizard-scorecard. Post its matrix before editing code.",
     "Required path:",
     "1. Ensure the parent deployment PR is merged before treating this node as deployable.",
     "2. Create a node customization PR in the node repo. Do not push directly to main or hand-edit the operator gitlink.",
@@ -65,7 +66,7 @@ export function buildNodeLaunchPack(
     "4. Request candidate-a flight through the operator API only when the operator reports the launch is eligible.",
     "5. Verify the deployed /version at the candidate URL and report the URL only after it matches the launched node SHA.",
     "",
-    "Use @node-formation-styling-guide for the customization PR and /contribute-to-cogni for the agent lifecycle. If image or pin propagation blocks flight eligibility, report that blocker instead of inventing privileged manual steps.",
+    "Use @node-formation-styling-guide for the customization PR and /contribute-to-cogni for the agent lifecycle. If parent merge, child image, parent pin, or flight eligibility is blocked, report the exact blocked scorecard row instead of inventing privileged manual steps.",
   ].join("\n");
 
   return {
