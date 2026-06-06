@@ -21,7 +21,7 @@
  */
 
 import type { SourceSystem, ToolSourcePort } from "@cogni/ai-core";
-import { CORE_TOOL_BUNDLE } from "@cogni/ai-tools";
+import { CORE_TOOL_BUNDLE, VCS_TOOL_BUNDLE } from "@cogni/ai-tools";
 import type {
   ExecutionContext,
   GraphFinal,
@@ -532,7 +532,7 @@ function createInProcProvider(
     inprocAdapter,
     container.toolSource,
     () => cache.getSource(),
-    [...CORE_TOOL_BUNDLE]
+    [...CORE_TOOL_BUNDLE, ...VCS_TOOL_BUNDLE]
   );
 }
 

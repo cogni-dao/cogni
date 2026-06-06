@@ -15,13 +15,16 @@ import { describe, expect, it } from "vitest";
 
 import {
   type CatalogBoundTool,
+  CORE_TOOL_BUNDLE,
   createToolCatalog,
   getToolById,
   getToolIds,
   hasToolId,
   TOOL_CATALOG,
+  VCS_TOOL_BUNDLE,
 } from "../src/catalog";
 import { getCurrentTimeBoundTool } from "../src/tools/get-current-time";
+import { VCS_LIST_PRS_NAME } from "../src/tools/vcs-list-prs";
 
 describe("TOOL_CATALOG", () => {
   it("contains core__get_current_time", () => {
@@ -45,6 +48,15 @@ describe("TOOL_CATALOG", () => {
 
   it("catalog is frozen (immutable)", () => {
     expect(Object.isFrozen(TOOL_CATALOG)).toBe(true);
+  });
+
+  it("keeps VCS tools out of the shared core bundle", () => {
+    const coreIds = CORE_TOOL_BUNDLE.map((tool) => tool.contract.name);
+    const vcsIds = VCS_TOOL_BUNDLE.map((tool) => tool.contract.name);
+
+    expect(coreIds).not.toContain(VCS_LIST_PRS_NAME);
+    expect(vcsIds).toContain(VCS_LIST_PRS_NAME);
+    expect(hasToolId(VCS_LIST_PRS_NAME)).toBe(true);
   });
 });
 
