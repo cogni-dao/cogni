@@ -38,6 +38,22 @@ not progress by themselves. Progress is a scorecard row moving from blocked to
 pass without privileged manual bridge work. A child commit without a child
 `sha-<child-sha>` GHCR image is a blocker, not a deployable pin.
 
+Merge-queue finding: an open parent birth PR is not a reason for the node agent
+to idle. If the parent PR is still checking, queued, or waiting for a human
+merge, the agent should monitor it in parallel and immediately open the child
+node customization PR when the node repo is available. Parent merge gates
+candidate flight, not child customization.
+
+Localhost finding: starting the child app locally is not launch validation. It
+can support implementation, but scorecard proof must come from the child repo
+CI/image, the operator pin/flight path, and the real candidate URL.
+
+Child-CI readiness finding: a minted node repo can have an active workflow file
+and still produce zero runs if Actions were not enabled/primed before the first
+PR or push events. It also needs a GHCR auth path for the push-to-main image
+build. The operator Publish flow should own that readiness before handing the
+launch pack to an external agent.
+
 ## Repo Ancestry Rule
 
 Wizard-minted nodes must be named forks of `node-template`, not GitHub template-generated repos. Template generation copies a snapshot without shared git history, so agents cannot fetch `node-template` and merge future template updates. The publish path should call `GitHubRepoWriter.forkFromTemplate`, wait for the forked `main`, commit only the regenerated `.cogni/repo-spec.yaml` identity on top, and pin that identity commit as the operator submodule gitlink.

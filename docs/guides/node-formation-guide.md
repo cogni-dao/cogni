@@ -110,7 +110,7 @@ What the Publish PR contains:
 
 **Your job after Publish:**
 
-1. **Review + merge** the operator PR (CI green). Note: a node-birth PR legitimately spans `<node> + operator` domains — the `single-node-scope` gate carves this out for the node's own deploy wiring (catalog/overlays/AppSets/Caddy/scheduler).
+1. **Review + merge** the operator PR (CI green). Note: a node-birth PR legitimately spans `<node> + operator` domains — the `single-node-scope` gate carves this out for the node's own deploy wiring (catalog/overlays/AppSets/Caddy/scheduler). Merge queue latency is normal; it gates deployability and candidate flight, not node-local customization work in the minted node repo.
 2. **Flight**: `POST /api/v1/vcs/flight { prNumber }` → build lands at `https://<slug>-test.cognidao.org`.
 3. **Validate**: run [`/validate-candidate`](../../.claude/skills/validate-candidate/SKILL.md) against the deployed build.
 

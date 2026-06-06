@@ -768,7 +768,11 @@ export class GitHubRepoWriter {
       `Operator-authored node-birth PR for \`${slug}\` (App-direct via Git Data API).\n\n` +
       "Pins the minted node repo as a submodule and adds the operator-owned deployment footprint: " +
       "catalog entry, overlays×3, AppSet stanzas×3, and edge route. The node source, CI, review " +
-      "rules, and image build live in the minted node repo.";
+      "rules, and image build live in the minted node repo.\n\n" +
+      "External node customization can proceed in the node repo while this PR runs CI or waits in " +
+      "the merge queue. This PR gates deployability and candidate flight; it does not gate opening " +
+      "the child customization PR. Localhost is not launch validation; deploy proof comes from " +
+      "the child repo image, operator flight, and the candidate URL.";
     try {
       const { data: pr } = await octokit.request(
         "POST /repos/{owner}/{repo}/pulls",
