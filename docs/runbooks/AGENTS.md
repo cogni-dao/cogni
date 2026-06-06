@@ -16,6 +16,7 @@ Operational procedures and documentation for deployment, rollback, and incident 
 - [INFRASTRUCTURE_SETUP.md](INFRASTRUCTURE_SETUP.md): VM provisioning, DNS, GitHub secrets (disaster recovery)
 - [DEPLOYMENT_ARCHITECTURE.md](DEPLOYMENT_ARCHITECTURE.md): Architecture overview
 - [grafana-postgres-readonly.md](grafana-postgres-readonly.md): Grafana Cloud Postgres datasource + read-only role procedure
+- [production-operator-eso-cutover.md](production-operator-eso-cutover.md): Production operator OpenBao/ESO cutover and custody checks
 - [CI/CD](../../docs/spec/ci-cd.md): Branch model, workflows, deployment automation
 
 ## Boundaries
