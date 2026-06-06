@@ -89,7 +89,7 @@ export default async function AdminIndexPage(): Promise<ReactElement> {
       </header>
 
       <Link href={PRIMARY_ACTION.href} className="group block">
-        <Card className="overflow-hidden ring-1 ring-primary/20 transition hover:shadow-lg hover:ring-primary/50">
+        <Card className="overflow-hidden border-primary/20 transition hover:border-primary/50 hover:shadow-lg">
           <CardContent className="flex items-center gap-5 p-6">
             <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-primary/15">
               <PRIMARY_ACTION.icon className="h-7 w-7 text-primary" />
