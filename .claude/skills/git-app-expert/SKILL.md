@@ -29,7 +29,13 @@ cannot share one. Create + wire per the canonical guide:
 | --------------------- | --------- | ---------- | ------------ | -------------------------------------------------------------- |
 | `cogni-node-template` | 3062001   | 115515535  | (vcs/flight) | org-wide; `actions:write` for `workflow_dispatch`              |
 | `cogni-git-review`    | 1761205   | 80293097   | production   | `cognidao.org/...webhooks/github` · `Cogni-DAO/cogni`          |
-| `cogni-operator-test` | (per-env) | —          | candidate-a  | `test.cognidao.org/...webhooks/github` · `Cogni-DAO/test-repo` |
+| `cogni-operator-test` | (per-env) | —          | candidate-a/test | `test.cognidao.org/...webhooks/github` · all repos on `cogni-test-org` |
+
+`Cogni-DAO/test-repo` is only a legacy review-webhook fixture. It is not
+sufficient for node publish/flight testing: the candidate/test App must see the
+template repo, parent pin repo, and freshly minted node repos in the disposable
+GitHub org (`cogni-test-org`) without gaining access to production `Cogni-DAO`
+repos. Pair this with `DOLTHUB_OWNER=cogni-test-nodes` for node knowledge repos.
 
 **Where the App creds live (post-ESO migration, #1460/#1476):** the running operator pod reads
 `GH_REVIEW_APP_ID` / `GH_REVIEW_APP_PRIVATE_KEY_BASE64` / `GH_WEBHOOK_SECRET` from **OpenBao**
