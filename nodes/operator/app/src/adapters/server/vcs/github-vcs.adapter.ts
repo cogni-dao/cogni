@@ -22,6 +22,7 @@ import type {
   CiStatusResult,
   CreateBranchResult,
   DispatchCandidateFlightResult,
+  DispatchNodeFlightResult,
   MergeResult,
   PrSummary,
   VcsCapability,
@@ -299,6 +300,131 @@ export class GitHubVcsAdapter implements VcsCapability {
       headSha: params.headSha ?? null,
       workflowUrl,
       message: `Flight dispatched for PR #${params.prNumber} @ ${shortSha}. Observe via core__vcs_get_ci_status (look for 'candidate-flight' check).`,
+    };
+  }
+
+  async commitExists(params: {
+    owner: string;
+    repo: string;
+    ref: string;
+  }): Promise<boolean> {
+    const octokit = await this.getOctokit(params.owner, params.repo);
+
+    try {
+      await octokit.request("GET /repos/{owner}/{repo}/commits/{ref}", {
+        owner: params.owner,
+        repo: params.repo,
+        ref: params.ref,
+      });
+      return true;
+    } catch (error) {
+      if (
+        error &&
+        typeof error === "object" &&
+        "status" in error &&
+        (error as { status: number }).status === 404
+      ) {
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  async fetchFileText(params: {
+    owner: string;
+    repo: string;
+    path: string;
+    ref?: string;
+  }): Promise<string | null> {
+    const octokit = await this.getOctokit(params.owner, params.repo);
+
+    try {
+      const { data } = await octokit.request(
+        "GET /repos/{owner}/{repo}/contents/{path}",
+        {
+          owner: params.owner,
+          repo: params.repo,
+          path: params.path,
+          ref: params.ref ?? "main",
+        }
+      );
+      if (Array.isArray(data) || data.type !== "file" || !("content" in data)) {
+        return null;
+      }
+      return Buffer.from(data.content, "base64").toString("utf8");
+    } catch (error) {
+      if (
+        error &&
+        typeof error === "object" &&
+        "status" in error &&
+        (error as { status: number }).status === 404
+      ) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  async dispatchNodeFlight(params: {
+    owner: string;
+    repo: string;
+    slug: string;
+    sourceSha: string;
+    environment: "candidate-a" | "preview" | "production";
+    workflowRef?: string;
+  }): Promise<DispatchNodeFlightResult> {
+    const octokit = await this.getOctokit(params.owner, params.repo);
+    const ref = params.workflowRef ?? "main";
+
+    if (params.environment === "candidate-a") {
+      await octokit.request(
+        "POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches",
+        {
+          owner: params.owner,
+          repo: params.repo,
+          workflow_id: "candidate-flight.yml",
+          ref,
+          inputs: {
+            node_slug: params.slug,
+            source_sha: params.sourceSha,
+          },
+        }
+      );
+
+      return {
+        dispatched: true,
+        slug: params.slug,
+        sourceSha: params.sourceSha,
+        environment: params.environment,
+        workflowUrl: `https://github.com/${params.owner}/${params.repo}/actions/workflows/candidate-flight.yml`,
+        message: `Candidate flight dispatched for ${params.slug}@${params.sourceSha.slice(0, 8)}.`,
+      };
+    }
+
+    await octokit.request(
+      "POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches",
+      {
+        owner: params.owner,
+        repo: params.repo,
+        workflow_id: "promote-and-deploy.yml",
+        ref,
+        inputs: {
+          environment: params.environment,
+          nodes: params.slug,
+          build_sha: params.sourceSha,
+          skip_infra: "false",
+          deploy_infra_mode: "full",
+        },
+      }
+    );
+
+    return {
+      dispatched: true,
+      slug: params.slug,
+      sourceSha: params.sourceSha,
+      environment: params.environment,
+      workflowUrl: `https://github.com/${params.owner}/${params.repo}/actions/workflows/promote-and-deploy.yml`,
+      message: `${params.environment} promote dispatched for ${params.slug}@${params.sourceSha.slice(0, 8)}.`,
     };
   }
 

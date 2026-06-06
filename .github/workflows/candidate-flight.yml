@@ -7,10 +7,18 @@ on:
     inputs:
       pr_number:
         description: "PR number to flight"
-        required: true
+        required: false
         type: string
       head_sha:
         description: "Optional PR head SHA override"
+        required: false
+        type: string
+      node_slug:
+        description: "Submodule node slug for node-ref flight"
+        required: false
+        type: string
+      source_sha:
+        description: "Child node repo source SHA for node-ref flight"
         required: false
         type: string
 
@@ -21,7 +29,7 @@ permissions:
   statuses: write
 
 concurrency:
-  group: candidate-flight-${{ inputs.pr_number }}
+  group: candidate-flight-${{ inputs.pr_number || format('{0}-{1}', inputs.node_slug, inputs.source_sha) }}
   cancel-in-progress: true
 
 env:
@@ -34,6 +42,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       head_sha: ${{ steps.meta.outputs.head_sha }}
+      node_slug: ${{ steps.meta.outputs.node_slug }}
+      node_source_sha: ${{ steps.meta.outputs.node_source_sha }}
       image_tag: ${{ steps.meta.outputs.image_tag }}
       status_url: ${{ steps.meta.outputs.status_url }}
       digests_json: ${{ steps.images.outputs.digests_json }}
@@ -55,16 +65,44 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          BASE_REF=$(gh api "repos/${{ github.repository }}/pulls/${{ inputs.pr_number }}" --jq '.base.ref')
-          HEAD_SHA_INPUT="${{ inputs.head_sha }}"
-          if [ -n "$HEAD_SHA_INPUT" ]; then
-            HEAD_SHA="$HEAD_SHA_INPUT"
+          PR_NUMBER="${{ inputs.pr_number }}"
+          NODE_SLUG="${{ inputs.node_slug }}"
+          NODE_SOURCE_SHA="${{ inputs.source_sha }}"
+          if [ -n "$NODE_SLUG" ] || [ -n "$NODE_SOURCE_SHA" ]; then
+            if [ -n "$PR_NUMBER" ]; then
+              echo "::error::candidate-flight accepts either pr_number or node_slug/source_sha, not both"
+              exit 1
+            fi
+            if [ -z "$NODE_SLUG" ] || [ -z "$NODE_SOURCE_SHA" ]; then
+              echo "::error::node-ref flight requires both node_slug and source_sha"
+              exit 1
+            fi
+            if ! [[ "$NODE_SOURCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+              echo "::error::source_sha must be a 40-char hex SHA"
+              exit 1
+            fi
+            BASE_REF=main
+            HEAD_SHA="${{ github.sha }}"
+            IMAGE_TAG="sha-${NODE_SOURCE_SHA}"
           else
-            HEAD_SHA=$(gh api "repos/${{ github.repository }}/pulls/${{ inputs.pr_number }}" --jq '.head.sha')
+            if [ -z "$PR_NUMBER" ]; then
+              echo "::error::candidate-flight requires pr_number or node_slug/source_sha"
+              exit 1
+            fi
+            BASE_REF=$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.base.ref')
+            HEAD_SHA_INPUT="${{ inputs.head_sha }}"
+            if [ -n "$HEAD_SHA_INPUT" ]; then
+              HEAD_SHA="$HEAD_SHA_INPUT"
+            else
+              HEAD_SHA=$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.head.sha')
+            fi
+            IMAGE_TAG="pr-${PR_NUMBER}-${HEAD_SHA}"
           fi
           echo "base_ref=$BASE_REF" >> "$GITHUB_OUTPUT"
           echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
-          echo "image_tag=pr-${{ inputs.pr_number }}-${HEAD_SHA}" >> "$GITHUB_OUTPUT"
+          echo "node_slug=$NODE_SLUG" >> "$GITHUB_OUTPUT"
+          echo "node_source_sha=$NODE_SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
           echo "status_url=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> "$GITHUB_OUTPUT"
 
       - name: Checkout app source
@@ -75,6 +113,7 @@ jobs:
           path: app-src
 
       - name: Report pending candidate-flight status
+        if: inputs.pr_number != ''
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
@@ -96,8 +135,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ inputs.pr_number }}
           OUT: ${{ runner.temp }}/pr-changed-paths.txt
+          NODE_SLUG: ${{ steps.meta.outputs.node_slug }}
         run: |
           set -euo pipefail
+          if [ -n "$NODE_SLUG" ]; then
+            : > "$OUT"
+            : > "${OUT%.txt}-added.txt"
+            echo "ℹ️  Node-ref flight for ${NODE_SLUG}; PR changed-paths are not used"
+            echo "changed_paths_file=$OUT" >> "$GITHUB_OUTPUT"
+            echo "added_paths_file=${OUT%.txt}-added.txt" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           # Emit both filename and previous_filename so cross-directory
           # renames trigger rebuilds for the source side too (otherwise
           # renaming nodes/A/x.ts → nodes/B/x.ts only rebuilds B).
@@ -132,14 +180,19 @@ jobs:
           SUBMODULE_BIRTH_TARGETS_JSON: ${{ steps.submodule-births.outputs.submodule_birth_targets_json }}
           HAS_PARENT_TARGETS: ${{ steps.detect.outputs.has_targets }}
           HAS_SUBMODULE_BIRTHS: ${{ steps.submodule-births.outputs.has_submodule_births }}
+          NODE_SLUG: ${{ steps.meta.outputs.node_slug }}
         run: |
           set -euo pipefail
-          combined=$(python3 -c 'import json, os; items = json.loads(os.environ["NORMAL_FLIGHT_TARGETS_JSON"] or "[]") + json.loads(os.environ["SUBMODULE_BIRTH_TARGETS_JSON"] or "[]"); out = []; seen = set(); [out.append(item) or seen.add(item) for item in items if item not in seen]; print(json.dumps(out))')
+          if [ -n "$NODE_SLUG" ]; then
+            combined=$(python3 -c 'import json, os; print(json.dumps([os.environ["NODE_SLUG"]]))')
+          else
+            combined=$(python3 -c 'import json, os; items = json.loads(os.environ["NORMAL_FLIGHT_TARGETS_JSON"] or "[]") + json.loads(os.environ["SUBMODULE_BIRTH_TARGETS_JSON"] or "[]"); out = []; seen = set(); [out.append(item) or seen.add(item) for item in items if item not in seen]; print(json.dumps(out))')
+          fi
           csv=$(python3 -c 'import json, sys; print(",".join(json.loads(sys.argv[1])))' "$combined")
           has_flight_targets=false
           [ "$combined" != "[]" ] && has_flight_targets=true
           has_image_inputs=false
-          if [ "$HAS_PARENT_TARGETS" = "true" ] || [ "$HAS_SUBMODULE_BIRTHS" = "true" ]; then
+          if [ -n "$NODE_SLUG" ] || [ "$HAS_PARENT_TARGETS" = "true" ] || [ "$HAS_SUBMODULE_BIRTHS" = "true" ]; then
             has_image_inputs=true
           fi
           echo "flight_targets_json=$combined" >> "$GITHUB_OUTPUT"
@@ -162,8 +215,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ inputs.pr_number }}
+          NODE_SLUG: ${{ steps.meta.outputs.node_slug }}
         run: |
           set -euo pipefail
+          if [ -n "$NODE_SLUG" ]; then
+            echo "::notice::Node-ref flight for ${NODE_SLUG} — provisioning infra idempotently"
+            echo "needs_infra=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           ADDED_CATALOG=$(gh api --paginate \
             "repos/${{ github.repository }}/pulls/${PR_NUMBER}/files" \
             --jq '.[] | select(.status == "added") | .filename
@@ -195,9 +254,17 @@ jobs:
         env:
           IMAGE_TAG: ${{ steps.meta.outputs.image_tag }}
           SOURCE_SHA: ${{ steps.meta.outputs.head_sha }}
+          NODE: ${{ steps.meta.outputs.node_slug }}
+          NODE_SOURCE_SHA: ${{ steps.meta.outputs.node_source_sha }}
           SUBMODULE_BIRTHS_FILE: ${{ steps.submodule-births.outputs.births_file }}
           OUTPUT_FILE: ${{ runner.temp }}/resolved-pr-images.json
-        run: bash scripts/ci/resolve-pr-build-images.sh
+        run: |
+          set -euo pipefail
+          if [ -n "$NODE" ]; then
+            SOURCE_SHA="$NODE_SOURCE_SHA" bash scripts/ci/resolve-node-ref-image.sh
+          else
+            bash scripts/ci/resolve-pr-build-images.sh
+          fi
 
       - name: Require at least one built image
         if: steps.flight-targets.outputs.has_image_inputs == 'true' && steps.images.outputs.has_images != 'true'
@@ -422,7 +489,11 @@ jobs:
             echo "deploy_branch_sha=$DEPLOY_SHA" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          git commit -m "candidate-flight ${NODE}: pr-${{ inputs.pr_number }} ${HEAD_SHA}"
+          if [ -n "${{ needs.decide.outputs.node_source_sha }}" ]; then
+            git commit -m "candidate-flight ${NODE}: node-ref ${{ needs.decide.outputs.node_source_sha }}"
+          else
+            git commit -m "candidate-flight ${NODE}: pr-${{ inputs.pr_number }} ${HEAD_SHA}"
+          fi
           git push origin "HEAD:${PER_NODE_BRANCH}"
           DEPLOY_SHA=$(git rev-parse HEAD)
           echo "deploy_branch_sha=$DEPLOY_SHA" >> "$GITHUB_OUTPUT"
@@ -803,6 +874,7 @@ jobs:
           echo "description=${DESC}" >> "$GITHUB_OUTPUT"
 
       - name: Report terminal candidate-flight status
+        if: inputs.pr_number != ''
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}

@@ -44,6 +44,7 @@ HTTP API endpoints using Next.js App Router. Contract-validated entry points tha
   - `/api/v1/nodes/[id]` [GET, PATCH] - read + state-machine-aware update of a registered node row
   - `/api/v1/nodes/[id]/launch-pack` [GET] - owner-gated AI-assistant handoff for post-publish node launch
   - `/api/v1/nodes/[id]/publish` [POST] - mints the node repo, opens the submodule deployment PR, advances dao_formed → published
+  - `/api/v1/nodes/[id]/flight` [POST] - machine-authenticated node-ref flight for submodule nodes by `sourceSha`
   - `/api/internal/billing/ingest` [POST] - LiteLLM generic_api callback receiver (bearer auth, Docker-internal only)
   - `/api/internal/ops/governance/schedules/sync` [POST] - deploy-time governance sync trigger (bearer auth)
   - `/api/v1/chat/completions` [POST] - OpenAI-compatible chat completions (streaming + non-streaming, `cogni_status` extension); see [completions spec](../../../docs/spec/completions-api.md)

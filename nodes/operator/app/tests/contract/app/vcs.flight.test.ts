@@ -57,6 +57,9 @@ vi.mock("@/bootstrap/container", () => ({
       listPrs: vi.fn(),
       mergePr: vi.fn(),
       createBranch: vi.fn(),
+      commitExists: vi.fn(),
+      fetchFileText: vi.fn(),
+      dispatchNodeFlight: vi.fn(),
     },
   })),
 }));

@@ -31,7 +31,16 @@ export const stubVcsCapability: VcsCapability = {
   createBranch: async () => {
     throw new Error("VcsCapability not configured on this node.");
   },
+  commitExists: async () => {
+    throw new Error("VcsCapability not configured on this node.");
+  },
+  fetchFileText: async () => {
+    throw new Error("VcsCapability not configured on this node.");
+  },
   dispatchCandidateFlight: async () => {
+    throw new Error("VcsCapability not configured on this node.");
+  },
+  dispatchNodeFlight: async () => {
     throw new Error("VcsCapability not configured on this node.");
   },
 };
