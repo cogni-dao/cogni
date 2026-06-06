@@ -3,8 +3,8 @@
 
 /**
  * Module: `@app/(app)/setup/nodes/[id]/LaunchPackCopyButton.client`
- * Purpose: Icon-only launch prompt copy affordance for the node wizard after
- *   publish. Fetches the canonical launch pack at click time.
+ * Purpose: Launch prompt copy affordance for the node wizard after publish.
+ *   Fetches the canonical launch pack at click time.
  * Scope: Client clipboard action only.
  * Links: src/features/nodes/launch-pack.ts
  * @public
@@ -45,13 +45,14 @@ export function LaunchPackCopyButton({ nodeId }: Props): ReactElement {
       type="button"
       variant="outline"
       size="sm"
-      className="h-9 w-9 px-0"
+      className="gap-2"
       disabled={busy}
       aria-label="Copy launch prompt"
       title="Copy launch prompt"
       onClick={copyLaunchPrompt}
     >
       {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
+      {copied ? "Copied" : "Copy agent prompt"}
     </Button>
   );
 }
