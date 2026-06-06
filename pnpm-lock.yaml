@@ -1308,6 +1308,9 @@ importers:
       wagmi:
         specifier: 2.19.5
         version: 2.19.5(@tanstack/query-core@5.90.10)(@tanstack/react-query@5.90.10(react@19.0.0))(@types/react@19.2.7)(bufferutil@4.0.9)(fastestsmallesttextencoderdecoder@1.0.22)(immer@11.0.1)(ioredis@5.10.0)(react@19.0.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(viem@2.39.3(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.3.6)
+      yaml:
+        specifier: ^2.8.3
+        version: 2.8.3
       zod:
         specifier: ^4.1.12
         version: 4.3.6
@@ -6258,7 +6261,7 @@ packages:
 
   '@tsparticles/engine@3.9.1':
     resolution: {integrity: sha512-DpdgAhWMZ3Eh2gyxik8FXS6BKZ8vyea+Eu5BC4epsahqTGY9V3JGGJcXC6lRJx6cPMAx1A0FaQAojPF3v6rkmQ==}
-    deprecated: tsParticles v4 is out, please upgrade for better performances and more features
+    deprecated: Please update to version 4.1.1
 
   '@tsparticles/interaction-external-attract@3.9.1':
     resolution: {integrity: sha512-5AJGmhzM9o4AVFV24WH5vSqMBzOXEOzIdGLIr+QJf4fRh9ZK62snsusv/ozKgs2KteRYQx+L7c5V3TqcDy2upg==}
@@ -6319,7 +6322,7 @@ packages:
 
   '@tsparticles/react@3.0.0':
     resolution: {integrity: sha512-hjGEtTT1cwv6BcjL+GcVgH++KYs52bIuQGW3PWv7z3tMa8g0bd6RI/vWSLj7p//NZ3uTjEIeilYIUPBh7Jfq/Q==}
-    deprecated: tsParticles v4 is out, please upgrade for better performances and more features
+    deprecated: Please update to version 4.1.1
     peerDependencies:
       '@tsparticles/engine': ^3.0.2
       react: '>=16.8.0'
@@ -6348,7 +6351,7 @@ packages:
 
   '@tsparticles/slim@3.9.1':
     resolution: {integrity: sha512-CL5cDmADU7sDjRli0So+hY61VMbdroqbArmR9Av+c1Fisa5ytr6QD7Jv62iwU2S6rvgicEe9OyRmSy5GIefwZw==}
-    deprecated: tsParticles v4 is out, please upgrade for better performances and more features
+    deprecated: Please update to version 4.1.1
 
   '@tsparticles/updater-color@3.9.1':
     resolution: {integrity: sha512-XGWdscrgEMA8L5E7exsE0f8/2zHKIqnTrZymcyuFBw2DCB6BIV+5z6qaNStpxrhq3DbIxxhqqcybqeOo7+Alpg==}

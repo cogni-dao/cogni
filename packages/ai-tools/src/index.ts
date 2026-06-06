@@ -21,6 +21,7 @@ export type {
   CreateBranchResult,
   DecideParams,
   DispatchCandidateFlightResult,
+  DispatchNodeFlightResult,
   EdoCapability,
   EdoSourceType,
   GetChainParams,

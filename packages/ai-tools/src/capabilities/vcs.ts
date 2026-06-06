@@ -85,6 +85,16 @@ export interface DispatchCandidateFlightResult {
   readonly message: string;
 }
 
+/** Result of dispatching a node-ref flight. */
+export interface DispatchNodeFlightResult {
+  readonly dispatched: boolean;
+  readonly slug: string;
+  readonly sourceSha: string;
+  readonly environment: "candidate-a" | "preview" | "production";
+  readonly workflowUrl: string;
+  readonly message: string;
+}
+
 // ---------------------------------------------------------------------------
 // Capability interface
 // ---------------------------------------------------------------------------
@@ -129,6 +139,21 @@ export interface VcsCapability {
     fromRef: string;
   }): Promise<CreateBranchResult>;
 
+  /** Return true when a commit/ref exists in the target repository. */
+  commitExists(params: {
+    owner: string;
+    repo: string;
+    ref: string;
+  }): Promise<boolean>;
+
+  /** Fetch a UTF-8 text file from a repository ref. */
+  fetchFileText(params: {
+    owner: string;
+    repo: string;
+    path: string;
+    ref?: string;
+  }): Promise<string | null>;
+
   /**
    * Dispatch the `candidate-flight.yml` workflow for a pull request.
    *
@@ -146,4 +171,20 @@ export interface VcsCapability {
     headSha?: string;
     workflowRef?: string;
   }): Promise<DispatchCandidateFlightResult>;
+
+  /**
+   * Dispatch deployment for an externally-built submodule node image.
+   *
+   * The source SHA is the child repo commit baked into the node image, not an
+   * operator monorepo commit. The workflow loads deploy tooling from
+   * `workflowRef ?? "main"` and promotes exactly `slug@sourceSha`.
+   */
+  dispatchNodeFlight(params: {
+    owner: string;
+    repo: string;
+    slug: string;
+    sourceSha: string;
+    environment: "candidate-a" | "preview" | "production";
+    workflowRef?: string;
+  }): Promise<DispatchNodeFlightResult>;
 }

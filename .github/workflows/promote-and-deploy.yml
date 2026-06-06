@@ -290,6 +290,7 @@ jobs:
         env:
           NODE: ${{ matrix.node }}
           HEAD_SHA: ${{ needs.decide.outputs.head_sha }}
+          BUILD_SHA: ${{ needs.decide.outputs.build_sha }}
           PREVIEW_FORWARD: ${{ needs.decide.outputs.preview_forward }}
         run: |
           set -euo pipefail
@@ -316,6 +317,32 @@ jobs:
               echo "::error::preview-forward: no source_sha for $NODE in preview map"
               exit 1
             fi
+          elif is_submodule_node "$NODE"; then
+            if ! [[ "$BUILD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+              echo "::error::submodule node promote requires build_sha=<child source SHA>"
+              exit 1
+            fi
+            catalog="app-src/infra/catalog/${NODE}.yaml"
+            image_repository="$(yq -N '.image_repository // ""' "$catalog")"
+            if [ -z "$image_repository" ]; then
+              echo "::error::image_repository missing for submodule node $NODE"
+              exit 1
+            fi
+            full_tag="${image_repository}:sha-${BUILD_SHA}"
+            digest_only=$(docker buildx imagetools inspect "$full_tag" --raw 2>/dev/null \
+              | python3 -c "import json,sys; print(json.load(sys.stdin).get('digest',''))" 2>/dev/null || true)
+            if [ -z "$digest_only" ]; then
+              digest_only=$(docker buildx imagetools inspect "$full_tag" 2>/dev/null \
+                | grep -oP 'Digest:\s+\Ksha256:[a-f0-9]+' | head -1 || true)
+            fi
+            if [ -z "$digest_only" ]; then
+              echo "::warning::Image not found: $full_tag (not built — skipping $NODE)"
+              echo "digest=" >> "$GITHUB_OUTPUT"
+              echo "promoted=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            DIGEST="${full_tag%%:*}@${digest_only}"
+            APP_SOURCE_SHA="$BUILD_SHA"
           else
             full_tag=$(image_tag_for_target "$(image_name_for_target "$NODE")" "preview-${HEAD_SHA}" "$NODE")
             digest_only=$(docker buildx imagetools inspect "$full_tag" --raw 2>/dev/null \
