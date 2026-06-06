@@ -24,7 +24,19 @@ import {
   VCS_TOOL_BUNDLE,
 } from "../src/catalog";
 import { getCurrentTimeBoundTool } from "../src/tools/get-current-time";
+import { VCS_CREATE_BRANCH_NAME } from "../src/tools/vcs-create-branch";
+import { VCS_FLIGHT_CANDIDATE_NAME } from "../src/tools/vcs-flight-candidate";
+import { VCS_GET_CI_STATUS_NAME } from "../src/tools/vcs-get-ci-status";
 import { VCS_LIST_PRS_NAME } from "../src/tools/vcs-list-prs";
+import { VCS_MERGE_PR_NAME } from "../src/tools/vcs-merge-pr";
+
+const VCS_TOOL_IDS = [
+  VCS_CREATE_BRANCH_NAME,
+  VCS_FLIGHT_CANDIDATE_NAME,
+  VCS_GET_CI_STATUS_NAME,
+  VCS_LIST_PRS_NAME,
+  VCS_MERGE_PR_NAME,
+] as const;
 
 describe("TOOL_CATALOG", () => {
   it("contains core__get_current_time", () => {
@@ -54,9 +66,11 @@ describe("TOOL_CATALOG", () => {
     const coreIds = CORE_TOOL_BUNDLE.map((tool) => tool.contract.name);
     const vcsIds = VCS_TOOL_BUNDLE.map((tool) => tool.contract.name);
 
-    expect(coreIds).not.toContain(VCS_LIST_PRS_NAME);
-    expect(vcsIds).toContain(VCS_LIST_PRS_NAME);
-    expect(hasToolId(VCS_LIST_PRS_NAME)).toBe(true);
+    for (const toolId of VCS_TOOL_IDS) {
+      expect(coreIds).not.toContain(toolId);
+      expect(vcsIds).toContain(toolId);
+      expect(hasToolId(toolId)).toBe(true);
+    }
   });
 });
 
