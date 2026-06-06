@@ -61,10 +61,13 @@ const envState = vi.hoisted(() => ({
     NODE_TEMPLATE_OWNER?: string;
     NODE_SUBMODULE_PARENT_OWNER?: string;
     NODE_SUBMODULE_PARENT_REPO?: string;
+    DOLTHUB_OWNER?: string;
+    DOLTHUB_API_TOKEN?: string;
   },
 }));
 
 const mockGetServerSessionUser = vi.hoisted(() => vi.fn());
+const mockEnsureDatabase = vi.hoisted(() => vi.fn());
 const mockForkFromTemplate = vi.hoisted(() => vi.fn());
 const mockOpenNodeSubmodulePr = vi.hoisted(() => vi.fn());
 const mockLogEvent = vi.hoisted(() => vi.fn());
@@ -83,6 +86,12 @@ vi.mock("@/lib/auth/server", () => ({
 
 vi.mock("@/shared/env", () => ({
   serverEnv: () => envState.current,
+}));
+
+vi.mock("@/bootstrap/capabilities/dolthub-database", () => ({
+  createDoltHubDatabaseEnsurer: () => ({
+    ensureDatabase: mockEnsureDatabase,
+  }),
 }));
 
 vi.mock("@/bootstrap/capabilities/node-repo-write", () => ({
@@ -196,9 +205,17 @@ describe("POST /api/v1/nodes/[id]/publish", () => {
       NODE_TEMPLATE_OWNER: "cogni-test-org",
       NODE_SUBMODULE_PARENT_OWNER: "cogni-test-org",
       NODE_SUBMODULE_PARENT_REPO: "cogni-monorepo",
+      DOLTHUB_OWNER: "cogni-dao",
+      DOLTHUB_API_TOKEN: "test-dolthub-token",
     };
     mockGetServerSessionUser.mockReset();
     mockGetServerSessionUser.mockResolvedValue({ id: "user-1" });
+    mockEnsureDatabase.mockReset();
+    mockEnsureDatabase.mockResolvedValue({
+      owner: "cogni-dao",
+      repo: "knowledge-atlas",
+      created: true,
+    });
     mockForkFromTemplate.mockReset();
     mockForkFromTemplate.mockResolvedValue({
       cloneUrl: "https://github.com/cogni-test-org/atlas.git",
@@ -222,6 +239,11 @@ describe("POST /api/v1/nodes/[id]/publish", () => {
     const body = await response.json();
 
     expect(response.status).toBe(200);
+    expect(mockEnsureDatabase).toHaveBeenCalledWith({
+      owner: "cogni-dao",
+      repo: "knowledge-atlas",
+      description: "Cogni node atlas knowledge mirror",
+    });
     expect(mockForkFromTemplate).toHaveBeenCalledWith({
       templateOwner: "cogni-test-org",
       owner: "cogni-test-org",
@@ -231,6 +253,12 @@ describe("POST /api/v1/nodes/[id]/publish", () => {
       daoContract: "0x1111111111111111111111111111111111111111",
       pluginContract: "0x2222222222222222222222222222222222222222",
       signalContract: "0x3333333333333333333333333333333333333333",
+      knowledgeRemote: {
+        database: "knowledge_atlas",
+        owner: "cogni-dao",
+        repo: "knowledge-atlas",
+        url: "https://doltremoteapi.dolthub.com/cogni-dao/knowledge-atlas",
+      },
     });
     expect(mockOpenNodeSubmodulePr).toHaveBeenCalledWith({
       owner: "cogni-test-org",
@@ -241,6 +269,12 @@ describe("POST /api/v1/nodes/[id]/publish", () => {
       daoContract: "0x1111111111111111111111111111111111111111",
       pluginContract: "0x2222222222222222222222222222222222222222",
       signalContract: "0x3333333333333333333333333333333333333333",
+      knowledgeRemote: {
+        database: "knowledge_atlas",
+        owner: "cogni-dao",
+        repo: "knowledge-atlas",
+        url: "https://doltremoteapi.dolthub.com/cogni-dao/knowledge-atlas",
+      },
       nodeRepoUrl: "https://github.com/cogni-test-org/atlas.git",
       nodeRepoHeadSha: "identity-commit",
     });
@@ -249,11 +283,26 @@ describe("POST /api/v1/nodes/[id]/publish", () => {
       "https://github.com/cogni-test-org/cogni-monorepo/pull/1532"
     );
     expect(body.pr.prNumber).toBe(1532);
+    expect(body.doltHub).toEqual({
+      owner: "cogni-dao",
+      repo: "knowledge-atlas",
+      created: true,
+    });
     expect(mockLog.info).toHaveBeenCalledWith(
       expect.objectContaining({
         event: "feature.node_publish.complete",
         phase: "started",
         nodeId: "11111111-1111-4111-8111-111111111111",
+      }),
+      "feature.node_publish.complete"
+    );
+    expect(mockLog.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "feature.node_publish.complete",
+        phase: "step",
+        step: "bootstrap_dolthub",
+        outcome: "success",
+        created: true,
       }),
       "feature.node_publish.complete"
     );
@@ -404,6 +453,26 @@ describe("POST /api/v1/nodes/[id]/publish", () => {
     );
   });
 
+  it("logs missing DoltHub config as a terminal config error", async () => {
+    envState.current.DOLTHUB_API_TOKEN = undefined;
+
+    const response = await publishNode();
+    const body = await response.json();
+
+    expect(response.status).toBe(503);
+    expect(body.error).toBe("operator not configured for DoltHub bootstrap");
+    expect(mockLog.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "feature.node_publish.complete",
+        step: "config",
+        outcome: "error",
+        errorCode: "dolthub_config_missing",
+        status: 503,
+      }),
+      "feature.node_publish.complete"
+    );
+  });
+
   it("logs a missing node at the load step", async () => {
     dbState.current = null;
 
@@ -457,6 +526,7 @@ describe("POST /api/v1/nodes/[id]/publish", () => {
 
     expect(response.status).toBe(409);
     expect(body.error).toBe("invalid state for publish");
+    expect(mockEnsureDatabase).not.toHaveBeenCalled();
     expect(mockForkFromTemplate).not.toHaveBeenCalled();
     expect(mockLog.warn).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -481,6 +551,7 @@ describe("POST /api/v1/nodes/[id]/publish", () => {
     expect(body.error).toBe(
       "node row missing required addresses for repo-spec emission"
     );
+    expect(mockEnsureDatabase).not.toHaveBeenCalled();
     expect(mockForkFromTemplate).not.toHaveBeenCalled();
     expect(mockLog.warn).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -491,6 +562,37 @@ describe("POST /api/v1/nodes/[id]/publish", () => {
         status: 409,
         hasChainId: true,
         hasPluginAddress: false,
+      }),
+      "feature.node_publish.complete"
+    );
+  });
+
+  it("logs DoltHub bootstrap failures before attempting repo authoring", async () => {
+    mockEnsureDatabase.mockRejectedValue(new Error("database already wedged"));
+
+    const response = await publishNode();
+    const body = await response.json();
+
+    expect(response.status).toBe(502);
+    expect(body.error).toBe("dolthub bootstrap failed");
+    expect(mockForkFromTemplate).not.toHaveBeenCalled();
+    expect(mockLog.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "feature.node_publish.complete",
+        phase: "step",
+        step: "bootstrap_dolthub",
+        outcome: "error",
+        errorCode: "dolthub_bootstrap_failed",
+      }),
+      "feature.node_publish.complete"
+    );
+    expect(mockLog.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "feature.node_publish.complete",
+        step: "bootstrap_dolthub",
+        outcome: "error",
+        errorCode: "dolthub_bootstrap_failed",
+        status: 502,
       }),
       "feature.node_publish.complete"
     );
