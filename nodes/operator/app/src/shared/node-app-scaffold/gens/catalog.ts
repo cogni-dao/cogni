@@ -23,10 +23,25 @@ export interface RenderCatalogInput {
   readonly imageRepository?: string;
 }
 
-function defaultImageRepository(sourceRepo: string): string {
-  const match = sourceRepo.match(/^https:\/\/github\.com\/([^/]+)\//);
-  const owner = match?.[1]?.toLowerCase() ?? "cogni-dao";
-  return `ghcr.io/${owner}/cogni-node-template`;
+function imageRepositoryFromSourceRepo(sourceRepo: string): string {
+  const url = new URL(sourceRepo);
+  if (url.protocol !== "https:" || url.hostname !== "github.com") {
+    throw new Error(`sourceRepo must be a GitHub HTTPS URL: ${sourceRepo}`);
+  }
+
+  const [ownerPart, repoPart, ...extraParts] = url.pathname
+    .split("/")
+    .filter(Boolean);
+  const repoName = repoPart?.replace(/\.git$/, "");
+  if (!ownerPart || !repoName || extraParts.length > 0) {
+    throw new Error(
+      `sourceRepo must be https://github.com/<owner>/<repo>: ${sourceRepo}`
+    );
+  }
+
+  const owner = ownerPart.toLowerCase();
+  const repo = repoName.toLowerCase();
+  return `ghcr.io/${owner}/${repo}-node`;
 }
 
 export function renderCatalog(
@@ -37,7 +52,7 @@ export function renderCatalog(
 ): string {
   const sourceLines = input.sourceRepo
     ? `source_repo: ${input.sourceRepo}
-image_repository: ${input.imageRepository ?? defaultImageRepository(input.sourceRepo)}
+image_repository: ${input.imageRepository ?? imageRepositoryFromSourceRepo(input.sourceRepo)}
 `
     : "";
   return `name: ${slug}

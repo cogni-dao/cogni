@@ -39,6 +39,15 @@
           "production_branch"
         ]
       }
+    },
+    {
+      "$comment": "Submodule nodes are built by their child repo CI. source_repo names the repo; image_repository is the catalog-owned GHCR package candidate-flight consumes for the pinned gitlink SHA.",
+      "if": {
+        "required": ["source_repo"]
+      },
+      "then": {
+        "required": ["image_repository"]
+      }
     }
   ],
   "properties": {
@@ -95,7 +104,7 @@
     "image_repository": {
       "type": "string",
       "pattern": "^ghcr\\.io/[a-z0-9][a-z0-9_.-]*/[a-z0-9][a-z0-9_.-]*$",
-      "description": "Optional GHCR repository for externally-built submodule nodes. Inline nodes use IMAGE_NAME_APP; submodule nodes usually use ghcr.io/<node-owner>/cogni-node-template."
+      "description": "Required with source_repo. GHCR repository for externally-built submodule nodes, usually ghcr.io/<node-owner>/<node-repo>-node. Inline nodes omit it and use IMAGE_NAME_APP."
     },
     "candidate_a_branch": {
       "type": "string",

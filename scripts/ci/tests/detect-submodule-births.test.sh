@@ -27,7 +27,7 @@ dockerfile: nodes/ay/app/Dockerfile
 image_tag_suffix: "-ay"
 migrator_tag_suffix: "-ay-migrate"
 source_repo: https://github.com/cogni-test-org/ay.git
-image_repository: ghcr.io/cogni-test-org/cogni-node-template
+image_repository: ghcr.io/cogni-test-org/ay-node
 candidate_a_branch: deploy/candidate-a-ay
 preview_branch: deploy/preview-ay
 production_branch: deploy/production-ay
@@ -63,11 +63,35 @@ assert len(items) == 1, items
 item = items[0]
 assert item["target"] == "ay", item
 assert item["source_sha"] == "0123456789012345678901234567890123456789", item
-assert item["tag"] == "ghcr.io/cogni-test-org/cogni-node-template:sha-0123456789012345678901234567890123456789", item
+assert item["tag"] == "ghcr.io/cogni-test-org/ay-node:sha-0123456789012345678901234567890123456789", item
 PY
 
 grep -q '^has_submodule_births=true$' "$github_out"
 grep -q '^submodule_birth_targets=ay$' "$github_out"
+
+python3 - <<'PY'
+from pathlib import Path
+
+catalog = Path("infra/catalog/ay.yaml")
+catalog.write_text(
+    "\n".join(
+        line
+        for line in catalog.read_text(encoding="utf-8").splitlines()
+        if not line.startswith("image_repository:")
+    )
+    + "\n",
+    encoding="utf-8",
+)
+PY
+
+if COGNI_CATALOG_ROOT="$WORKDIR/infra/catalog" \
+  ADDED_PATHS_FILE="$WORKDIR/added.txt" \
+  OUTPUT_FILE="$WORKDIR/missing-image-repository.json" \
+  bash "$SCRIPT" 2>"$WORKDIR/missing-image-repository.err"; then
+  echo "expected missing image_repository to fail" >&2
+  exit 1
+fi
+grep -q "image_repository missing for submodule birth ay" "$WORKDIR/missing-image-repository.err"
 
 cd "$REPO_ROOT"
 echo "all cases passed"
