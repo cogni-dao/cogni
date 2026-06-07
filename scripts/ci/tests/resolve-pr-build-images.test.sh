@@ -39,6 +39,9 @@ cat > "$WORKDIR/external-artifact-targets.json" <<'JSON'
   "targets": [
     {
       "target": "ay",
+      "source_repo": "https://github.com/cogni-test-org/ay.git",
+      "image_repository": "ghcr.io/cogni-test-org/ay",
+      "sourceSha": "0123456789012345678901234567890123456789",
       "source_sha": "0123456789012345678901234567890123456789",
       "tag": "ghcr.io/cogni-test-org/ay:sha-0123456789012345678901234567890123456789"
     }
@@ -65,6 +68,9 @@ items = payload["targets"]
 assert len(items) == 1, items
 item = items[0]
 assert item["target"] == "ay", item
+assert item["source_repo"] == "https://github.com/cogni-test-org/ay.git", item
+assert item["image_repository"] == "ghcr.io/cogni-test-org/ay", item
+assert item["sourceSha"] == "0123456789012345678901234567890123456789", item
 assert item["source_sha"] == "0123456789012345678901234567890123456789", item
 assert item["digest"] == "ghcr.io/cogni-test-org/ay@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", item
 PY

@@ -7,7 +7,7 @@
 #   by node ref `<slug>@<source_sha>`.
 #
 # Emits the same payload shape as resolve-pr-build-images.sh:
-#   { image_name, image_tag, source_sha, targets: [{target, tag, digest, source_sha}] }
+#   { image_name, image_tag, source_sha, targets: [{target, source_repo, sourceSha, image_repository, tag, digest, source_sha}] }
 
 set -euo pipefail
 
@@ -33,6 +33,11 @@ if ! is_external_artifact_target "$NODE"; then
 fi
 
 catalog="${_image_tags_catalog_root}/${NODE}.yaml"
+source_repo="$(yq -N '.source_repo // ""' "$catalog")"
+if [ -z "$source_repo" ]; then
+  echo "[ERROR] source_repo missing for external artifact ${NODE}" >&2
+  exit 1
+fi
 image_repository="$(yq -N '.image_repository // ""' "$catalog")"
 if [ -z "$image_repository" ]; then
   echo "[ERROR] image_repository missing for external artifact ${NODE}" >&2
@@ -65,6 +70,9 @@ cat > "$OUTPUT_FILE" <<EOF
   "targets": [
     {
       "target": "${NODE}",
+      "source_repo": "${source_repo}",
+      "sourceSha": "${SOURCE_SHA}",
+      "image_repository": "${image_repository}",
       "tag": "${tag}",
       "digest": "${digest_ref}",
       "source_sha": "${SOURCE_SHA}"

@@ -108,7 +108,7 @@ while IFS= read -r path; do
     fi
     image_repository="$(image_repository_for_target "$target")"
     tag="sha-${source_sha}"
-    json_items+=("    {\n      \"target\": \"${target}\",\n      \"source_repo\": \"${source_repo}\",\n      \"source_sha\": \"${source_sha}\",\n      \"image_repository\": \"${image_repository}\",\n      \"tag\": \"${image_repository}:${tag}\"\n    }")
+    json_items+=("    {\n      \"target\": \"${target}\",\n      \"source_repo\": \"${source_repo}\",\n      \"sourceSha\": \"${source_sha}\",\n      \"source_sha\": \"${source_sha}\",\n      \"image_repository\": \"${image_repository}\",\n      \"tag\": \"${image_repository}:${tag}\"\n    }")
     targets+=("$target")
   done
 done < "$CHANGED_PATHS_FILE"

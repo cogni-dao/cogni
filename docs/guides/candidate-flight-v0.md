@@ -2,7 +2,7 @@
 id: guide.candidate-flight-v0
 type: guide
 title: Candidate Flight V0 — Agent Guide
-status: legacy
+status: deprecated
 trust: draft
 summary: Legacy guide for the retired PR-number candidate-flight shape; current node flights use nodeRef sourceSha.
 read_when: Auditing legacy PR-number candidate-flight mechanics or removing transitional in-repo CI/CD paths.

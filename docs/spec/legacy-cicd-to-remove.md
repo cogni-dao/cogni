@@ -23,7 +23,7 @@ Deployable artifacts are promoted by artifact identity:
 ```text
 source_repo + sourceSha + image_repository
   -> image_repository:sha-<sourceSha>
-  -> image_repository@sha256:<digest>
+  -> { target, source_repo, sourceSha, image_repository, digest }
   -> deploy/<env>-<target>
   -> /version.buildSha == sourceSha
 ```
@@ -71,6 +71,16 @@ Anything that uses a pull request number, merge-queue tag, or preview tag as art
 **Why not removed here:** Parent-built in-repo artifacts still need a lookup path for `promote-and-deploy.yml`. External artifact rows now bypass this and resolve `image_repository:sha-<sourceSha>` directly.
 
 **Removal condition:** `promote-and-deploy.yml` consumes a resolved digest payload or resolves every target from `image_repository:sha-<sourceSha>`; the `Re-tag merge_group images as preview-{sha}` step is deleted.
+
+### Digest re-resolution instead of carry-forward
+
+**Mechanic:** External artifact preview promotion can re-resolve `image_repository:sha-<sourceSha>` after merge rather than consuming the exact artifact record resolved during candidate flight.
+
+**Why it is legacy:** A serious deploy plane resolves once, stores `{ target, source_repo, sourceSha, image_repository, digest }`, and carries that exact digest through candidate, preview, and production. Re-resolution is only equivalent if the source-SHA tag is immutable and never repointed.
+
+**Why not removed here:** This PR is the first vertical slice for external artifact rows. Adding a durable artifact-record store plus cross-workflow carry-forward would widen it into the platform rewrite.
+
+**Removal condition:** Candidate flight writes a durable artifact record for each promoted target; preview and production read that record or a promoted successor record and never re-resolve source-SHA tags after the first accepted resolution.
 
 ### Gitlink as source-SHA pin
 
