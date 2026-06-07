@@ -21,7 +21,7 @@ fi
 if [ "${1:-}" = "buildx" ] && [ "${2:-}" = "imagetools" ] && [ "${3:-}" = "inspect" ]; then
   tag="$4"
   case "$tag" in
-    ghcr.io/cogni-test-org/ay-node:sha-0123456789012345678901234567890123456789)
+    ghcr.io/cogni-test-org/ay:sha-0123456789012345678901234567890123456789)
       printf '"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"\n'
       exit 0
       ;;
@@ -40,7 +40,7 @@ cat > "$WORKDIR/births.json" <<'JSON'
     {
       "target": "ay",
       "source_sha": "0123456789012345678901234567890123456789",
-      "tag": "ghcr.io/cogni-test-org/ay-node:sha-0123456789012345678901234567890123456789"
+      "tag": "ghcr.io/cogni-test-org/ay:sha-0123456789012345678901234567890123456789"
     }
   ]
 }
@@ -66,7 +66,7 @@ assert len(items) == 1, items
 item = items[0]
 assert item["target"] == "ay", item
 assert item["source_sha"] == "0123456789012345678901234567890123456789", item
-assert item["digest"] == "ghcr.io/cogni-test-org/ay-node@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", item
+assert item["digest"] == "ghcr.io/cogni-test-org/ay@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", item
 PY
 
 grep -q '^resolved_targets=ay$' "$github_out"

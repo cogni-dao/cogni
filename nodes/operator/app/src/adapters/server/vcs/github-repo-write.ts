@@ -460,7 +460,7 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
     if (!imageExists) {
       throw deployPlaneError(
         "image_missing",
-        `node image not found: ${catalog.data.image_repository}:${tag}`,
+        `external artifact image not found: ${catalog.data.image_repository}:${tag}`,
         422
       );
     }

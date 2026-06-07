@@ -27,7 +27,7 @@ dockerfile: nodes/ay/app/Dockerfile
 image_tag_suffix: "-ay"
 migrator_tag_suffix: "-ay-migrate"
 source_repo: https://github.com/cogni-test-org/ay.git
-image_repository: ghcr.io/cogni-test-org/ay-node
+image_repository: ghcr.io/cogni-test-org/ay
 candidate_a_branch: deploy/candidate-a-ay
 preview_branch: deploy/preview-ay
 production_branch: deploy/production-ay
@@ -63,7 +63,7 @@ assert len(items) == 1, items
 item = items[0]
 assert item["target"] == "ay", item
 assert item["source_sha"] == "0123456789012345678901234567890123456789", item
-assert item["tag"] == "ghcr.io/cogni-test-org/ay-node:sha-0123456789012345678901234567890123456789", item
+assert item["tag"] == "ghcr.io/cogni-test-org/ay:sha-0123456789012345678901234567890123456789", item
 PY
 
 grep -q '^has_submodule_births=true$' "$github_out"

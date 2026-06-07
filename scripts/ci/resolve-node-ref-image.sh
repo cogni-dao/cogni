@@ -3,7 +3,7 @@
 # SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 # Script: scripts/ci/resolve-node-ref-image.sh
-# Purpose: Resolve the digest for an externally-built submodule node image
+# Purpose: Resolve the digest for an externally-built submodule artifact image
 #   addressed by node ref `<slug>@<source_sha>`.
 #
 # Emits the same payload shape as resolve-pr-build-images.sh:
@@ -51,7 +51,7 @@ fi
 tag="${image_repository}:sha-${SOURCE_SHA}"
 digest="$(docker buildx imagetools inspect "$tag" --format '{{json .Manifest.Digest}}' 2>/dev/null | tr -d '"' || true)"
 if [ -z "$digest" ] || [ "$digest" = "null" ]; then
-  echo "[ERROR] node image not found: ${tag}" >&2
+  echo "[ERROR] external artifact image not found: ${tag}" >&2
   exit 1
 fi
 digest_ref="${tag%%:*}@${digest}"

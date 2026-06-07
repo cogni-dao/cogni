@@ -41,7 +41,7 @@
       }
     },
     {
-      "$comment": "Submodule nodes are built by their child repo CI. source_repo names the repo; image_repository is the catalog-owned GHCR package candidate-flight consumes for the pinned gitlink SHA.",
+      "$comment": "Submodule nodes are built by their child repo CI. source_repo names the repo; image_repository is the GHCR package candidate-flight resolves at sha-<sourceSha> for the pinned gitlink SHA.",
       "if": {
         "required": ["source_repo"]
       },
@@ -104,7 +104,7 @@
     "image_repository": {
       "type": "string",
       "pattern": "^ghcr\\.io/[a-z0-9][a-z0-9_.-]*/[a-z0-9][a-z0-9_.-]*$",
-      "description": "Required with source_repo. GHCR repository for externally-built submodule nodes, usually ghcr.io/<node-owner>/<node-repo>-node. Inline nodes omit it and use IMAGE_NAME_APP."
+      "description": "Required with source_repo. GHCR repository for an externally-built deployable artifact, resolved at sha-<sourceSha>. Prefer ghcr.io/<owner>/<repo> for a single primary artifact or deployable-shaped suffixes such as -app/-worker when the repo publishes multiple artifacts. Inline nodes omit it and use IMAGE_NAME_APP."
     },
     "candidate_a_branch": {
       "type": "string",

@@ -41,7 +41,7 @@ function imageRepositoryFromSourceRepo(sourceRepo: string): string {
 
   const owner = ownerPart.toLowerCase();
   const repo = repoName.toLowerCase();
-  return `ghcr.io/${owner}/${repo}-node`;
+  return `ghcr.io/${owner}/${repo}`;
 }
 
 export function renderCatalog(
