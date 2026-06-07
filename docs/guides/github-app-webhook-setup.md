@@ -68,24 +68,31 @@ node repos and they do not validate node GHCR packages.
 
 Use these for `cogni-operator-test` and `cogni-operator`. This is the App that backs
 `GH_REVIEW_APP_ID` in the operator pod and is allowed to mint node repos, write node identity,
-open parent pin PRs, dispatch candidate-flight, and preflight node-ref GHCR artifacts.
+open parent pin PRs, and dispatch candidate-flight.
 
-| Permission     | Access       | Why                                                                                               |
-| -------------- | ------------ | ------------------------------------------------------------------------------------------------- |
-| Actions        | Read & write | Dispatches `candidate-flight.yml` with `workflow_dispatch`.                                       |
-| Administration | Read & write | Creates named forks from `node-template` and changes repo settings needed by node birth.          |
-| Checks         | Read & write | Writes review/check status where the operator acts as the App.                                    |
-| Contents       | Read & write | Writes `.cogni/repo-spec.yaml`, `.github/workflows/*`, `.gitmodules`, catalog, and pin branches.  |
-| Issues         | Read & write | Work-item/issue coordination where GitHub issues are used.                                        |
-| Packages       | Read & write | Reads GHCR package metadata for node-ref preflight; reserved to manage node package policy later. |
-| Pull requests  | Read & write | Opens and updates node birth/pin PRs.                                                             |
-| Workflows      | Read & write | Writes workflow files; GitHub rejects workflow-file edits without this.                           |
+| Permission     | Access       | Why                                                                                              |
+| -------------- | ------------ | ------------------------------------------------------------------------------------------------ |
+| Actions        | Read & write | Dispatches `candidate-flight.yml` with `workflow_dispatch`.                                      |
+| Administration | Read & write | Creates named forks from `node-template` and changes repo settings needed by node birth.         |
+| Checks         | Read & write | Writes review/check status where the operator acts as the App.                                   |
+| Contents       | Read & write | Writes `.cogni/repo-spec.yaml`, `.github/workflows/*`, `.gitmodules`, catalog, and pin branches. |
+| Issues         | Read & write | Work-item/issue coordination where GitHub issues are used.                                       |
+| Packages       | Read & write | Reserved for operator-owned package policy/visibility management; not a node-ref flight gate.    |
+| Pull requests  | Read & write | Opens and updates node birth/pin PRs.                                                            |
+| Workflows      | Read & write | Writes workflow files; GitHub rejects workflow-file edits without this.                          |
 
-Do **not** add a PAT, `GHCR_DEPLOY_TOKEN`, or any human-managed registry credential for this
-path. Node repo Actions publish with repo-local `GITHUB_TOKEN` and `permissions.packages: write`.
-The current operator only reads GitHub Packages metadata with the App installation token, but the
-operator App should hold package write authority so package policy/visibility management can move
-into the operator instead of human console steps.
+Do **not** add a PAT, `GHCR_DEPLOY_TOKEN`, or any human-managed registry credential to child node
+repos for publishing. Node repo Actions publish with repo-local `GITHUB_TOKEN` and
+`permissions.packages: write`. The operator App should hold package write authority so package
+policy/visibility management can move into the operator instead of human console steps. Node-ref
+flight dispatch does not rely on GitHub Packages metadata; private GHCR package metadata can be
+unreadable to the App even when the node's own publish workflow succeeded.
+
+Parent candidate-flight and k3s pulls are separate cross-repo read paths. They require one of:
+
+- public child packages;
+- package-level Actions access granted to the parent repo;
+- the existing parent/cluster `GHCR_DEPLOY_TOKEN` registry credential with `read:packages`.
 
 `Administration` above is a **Repository permission** in the GitHub App UI. No separate
 organization permission is currently required for node birth beyond installing the operator App on
@@ -119,9 +126,11 @@ labels: |
   org.opencontainers.image.source=https://github.com/${{ github.repository }}
 ```
 
-The operator rejects node-ref images only when the GitHub App installation for the source repo
-cannot read the package/tag. Package visibility is not a flight preflight gate; deploy-time image
-pull credentials are a separate substrate concern.
+The operator API does not reject node-ref images based on GitHub Packages metadata reads. The hard
+image gate is the parent `candidate-flight.yml` digest resolution step, which runs
+`scripts/ci/resolve-node-ref-image.sh` against `image_repository:sha-<sourceSha>`. Package
+visibility is not an API preflight gate; parent workflow and deploy-time image-pull credentials are
+separate substrate concerns.
 
 4. **Subscribe to events:** Issues, Issue comment, Pull request, Pull request review, Push
 
@@ -263,8 +272,8 @@ gh api "orgs/Cogni-DAO/installations?per_page=100" \
 
 Fail conditions:
 
-- `permissions.packages` is absent or not `"write"` → node-ref GHCR preflight cannot read package
-  metadata, and future operator-owned package policy writes will fail.
+- `permissions.packages` is absent or not `"write"` → future operator-owned package policy writes
+  will fail.
 - `repository_selection` is not `"all"` for `cogni-operator-test` → newly spawned repos may be
   invisible to the App.
 - `permissions.workflows` is not `"write"` → node birth cannot write `.github/workflows/*`.
@@ -272,7 +281,10 @@ Fail conditions:
 
 ### Verify GHCR package state
 
-After a fresh wizard spawn, the child repo package must be linked to the child repo:
+After a fresh wizard spawn, the child repo PR Build must publish its source-addressed package/tag.
+The flight endpoint does not use these GitHub Packages API reads as a hard gate, because private
+package metadata can be unreadable to a repo-level App installation. Use this only as an operator
+debug check when package permissions allow it.
 
 ```bash
 repo=<spawned-repo-name>
@@ -301,11 +313,11 @@ Expected: a non-empty array containing `sha-<sourceSha>`.
 
 ## Troubleshooting
 
-| Symptom                                 | Fix                                                                                                                   |
-| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| 404 from webhook route                  | `GH_WEBHOOK_SECRET` not set — add it and restart                                                                      |
-| 401 from webhook route                  | Secret mismatch — compare app config vs env var                                                                       |
-| Check Run never appears                 | App missing `checks:write` permission                                                                                 |
-| Review silently skipped                 | `GH_REVIEW_APP_ID` or private key not configured                                                                      |
-| No smee forwarding                      | `pnpm dev:smee` not running                                                                                           |
-| Node-ref flight returns `image_missing` | App is not installed on the child source repo, lacks package read access, or the `sha-<sourceSha>` tag does not exist |
+| Symptom                                                         | Fix                                                                                          |
+| --------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| 404 from webhook route                                          | `GH_WEBHOOK_SECRET` not set — add it and restart                                             |
+| 401 from webhook route                                          | Secret mismatch — compare app config vs env var                                              |
+| Check Run never appears                                         | App missing `checks:write` permission                                                        |
+| Review silently skipped                                         | `GH_REVIEW_APP_ID` or private key not configured                                             |
+| No smee forwarding                                              | `pnpm dev:smee` not running                                                                  |
+| Node-ref flight returns `source_missing` or `repo_spec_missing` | Confirm the requested child SHA exists and contains `.cogni/repo-spec.yaml` with the node id |

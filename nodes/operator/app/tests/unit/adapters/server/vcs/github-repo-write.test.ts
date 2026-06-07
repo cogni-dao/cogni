@@ -488,7 +488,7 @@ describe("GitHubRepoWriter.ensureNodeSubmodulePin", () => {
 });
 
 describe("GitHubRepoWriter.prepareNodeRefCandidateFlight", () => {
-  it("probes source repo GHCR packages with the source repo installation", async () => {
+  it("prepares node-ref flights from source repo identity without GHCR metadata", async () => {
     const sourceSha = "0123456789012345678901234567890123456789";
     const nodeId = "11111111-1111-4111-8111-111111111111";
     const encode = (value: string) =>
@@ -539,24 +539,6 @@ payments_in:
           ref: sourceSha,
         });
         return { sha: sourceSha };
-      },
-      "GET /orgs/{org}/packages/{package_type}/{package_name}/versions": (
-        params
-      ) => {
-        expect(params).toMatchObject({
-          org: "cogni-test-org",
-          package_type: "container",
-          package_name: "ghcr",
-        });
-        return [{ metadata: { container: { tags: [`sha-${sourceSha}`] } } }];
-      },
-      "GET /orgs/{org}/packages/{package_type}/{package_name}": (params) => {
-        expect(params).toMatchObject({
-          org: "cogni-test-org",
-          package_type: "container",
-          package_name: "ghcr",
-        });
-        return { visibility: "public" };
       },
       "GET /repos/{owner}/{repo}/git/ref/{ref}": (params) => {
         expect(params).toMatchObject({
@@ -622,7 +604,7 @@ payments_in:
           url ===
           "https://api.github.com/repos/cogni-test-org/ghcr/installation"
       )
-    ).toHaveLength(3);
+    ).toHaveLength(2);
     expect(
       installUrls.filter(
         (url) =>
@@ -632,7 +614,7 @@ payments_in:
     ).toHaveLength(2);
   });
 
-  it("accepts readable private source repo GHCR packages before flight", async () => {
+  it("does not require source repo GHCR package metadata before flight", async () => {
     const sourceSha = "0123456789012345678901234567890123456789";
     const nodeId = "11111111-1111-4111-8111-111111111111";
     const encode = (value: string) =>
@@ -668,18 +650,6 @@ payments_in:
         throw statusError(404, `not found: ${String(params.path)}`);
       },
       "GET /repos/{owner}/{repo}/commits/{ref}": () => ({ sha: sourceSha }),
-      "GET /orgs/{org}/packages/{package_type}/{package_name}": () => ({
-        visibility: "private",
-      }),
-      "GET /orgs/{org}/packages/{package_type}/{package_name}/versions": () => [
-        {
-          metadata: {
-            container: {
-              tags: [`sha-${sourceSha}`],
-            },
-          },
-        },
-      ],
       "GET /repos/{owner}/{repo}/git/ref/{ref}": () => ({
         ref: "refs/heads/main",
         object: { type: "commit", sha: "parent-main" },
@@ -727,6 +697,12 @@ payments_in:
     });
 
     expect(requests.map((request) => request.route)).toContain(
+      "POST /repos/{owner}/{repo}/pulls"
+    );
+    expect(requests.map((request) => request.route)).not.toContain(
+      "GET /orgs/{org}/packages/{package_type}/{package_name}"
+    );
+    expect(requests.map((request) => request.route)).not.toContain(
       "GET /orgs/{org}/packages/{package_type}/{package_name}/versions"
     );
   });

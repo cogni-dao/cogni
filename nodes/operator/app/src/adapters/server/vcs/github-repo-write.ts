@@ -444,21 +444,6 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       );
     }
 
-    const tag = `sha-${sourceSha}`;
-    const imageStatus = await this.packageImageTagStatus({
-      owner: sourceRepo.owner,
-      repo: sourceRepo.repo,
-      imageRepository: catalog.data.image_repository,
-      tag,
-    });
-    if (imageStatus.status !== "ready") {
-      throw deployPlaneError(
-        "image_missing",
-        `external artifact image not found: ${catalog.data.image_repository}:${tag}`,
-        422
-      );
-    }
-
     const parentPin = await this.ensureNodeSubmodulePin({
       owner: parentOwner,
       repo: parentRepo,
@@ -472,7 +457,7 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       slug,
       sourceSha,
       sourceRepo: catalog.data.source_repo,
-      image: `${catalog.data.image_repository}:${tag}`,
+      image: `${catalog.data.image_repository}:sha-${sourceSha}`,
       parentPin,
     };
   }

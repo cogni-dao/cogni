@@ -67,11 +67,15 @@ gh api "orgs/cogni-test-org/installations?per_page=20" | \
 ```
 
 Operator mint/flight Apps require `actions:write`, `administration:write`, `contents:write`,
-`workflows:write`, and `packages:write`. Package write includes the metadata access needed for
-node-ref GHCR package preflight and reserves operator authority for future package policy/visibility
-management; do not add `GHCR_DEPLOY_TOKEN` or a PAT fallback. If the installation lacks a
-newly requested permission, the org admin must approve the pending permission upgrade at the
-installation URL:
+`workflows:write`, and `packages:write`. Package write reserves operator authority for future
+package policy/visibility management; node-ref flight must not treat GitHub Packages metadata reads
+as the deploy gate because private package metadata can false-negative even when the child image
+exists. Do not add a PAT to child node repos for publishing: child workflows publish with their
+repo-local `GITHUB_TOKEN` and `permissions.packages: write`. Parent candidate-flight and k3s image
+pulls are separate cross-repo read paths and still need either public packages, package Actions
+access grants, or the existing `GHCR_DEPLOY_TOKEN`/registry credential path with `read:packages`.
+If the installation lacks a newly requested permission, the org admin must approve the pending
+permission upgrade at the installation URL:
 
 ```text
 https://github.com/organizations/cogni-test-org/settings/installations/138046799
