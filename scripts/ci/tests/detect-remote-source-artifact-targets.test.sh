@@ -7,7 +7,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CI_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REPO_ROOT="$(cd "${CI_DIR}/../.." && pwd)"
-SCRIPT="${CI_DIR}/detect-external-artifact-targets.sh"
+SCRIPT="${CI_DIR}/detect-remote-source-artifact-targets.sh"
 
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "$WORKDIR"' EXIT
@@ -69,8 +69,8 @@ assert item["source_sha"] == "0123456789012345678901234567890123456789", item
 assert item["tag"] == "ghcr.io/cogni-test-org/ay:sha-0123456789012345678901234567890123456789", item
 PY
 
-grep -q '^has_external_artifact_targets=true$' "$github_out"
-grep -q '^external_artifact_targets=ay$' "$github_out"
+grep -q '^has_remote_source_artifact_targets=true$' "$github_out"
+grep -q '^remote_source_artifact_targets=ay$' "$github_out"
 
 python3 - <<'PY'
 from pathlib import Path
@@ -94,7 +94,7 @@ if COGNI_CATALOG_ROOT="$WORKDIR/infra/catalog" \
   echo "expected missing image_repository to fail" >&2
   exit 1
 fi
-grep -q "image_repository missing for external artifact ay" "$WORKDIR/missing-image-repository.err"
+grep -q "image_repository missing for remote-source artifact ay" "$WORKDIR/missing-image-repository.err"
 
 cd "$REPO_ROOT"
 echo "all cases passed"

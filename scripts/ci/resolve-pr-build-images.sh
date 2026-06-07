@@ -8,7 +8,7 @@
 #
 # Envelope shape (written to $OUTPUT_FILE):
 #   { image_name, image_tag, source_sha, targets: [{target, tag, digest, source_sha}, ...] }
-# External artifact target items additionally carry the forward artifact record
+# Remote-source artifact target items additionally carry the forward artifact record
 # fields: source_repo, sourceSha, and image_repository.
 #
 # `source_sha` is the PR head SHA (BUILD_SHA label baked into every image by
@@ -25,7 +25,7 @@
 #   IMAGE_NAME_APP       (default = IMAGE_NAME) APP-repo override.
 #   IMAGE_TAG            (required) the pr-{N}-{sha} tag
 #   SOURCE_SHA           (optional) the 40-char PR head SHA — overrides IMAGE_TAG parse
-#   EXTERNAL_ARTIFACT_TARGETS_FILE (optional) detect-external-artifact-targets.sh payload
+#   REMOTE_SOURCE_ARTIFACT_TARGETS_FILE (optional) detect-remote-source-artifact-targets.sh payload
 #   OUTPUT_FILE          (default $RUNNER_TEMP/resolved-pr-images.json)
 
 set -euo pipefail
@@ -44,7 +44,7 @@ export IMAGE_NAME_MIGRATOR=${IMAGE_NAME_MIGRATOR:-${IMAGE_NAME_APP}-migrate}
 IMAGE_TAG=${IMAGE_TAG:-}
 SOURCE_SHA=${SOURCE_SHA:-}
 OUTPUT_FILE=${OUTPUT_FILE:-${RUNNER_TEMP:-/tmp}/resolved-pr-images.json}
-EXTERNAL_ARTIFACT_TARGETS_FILE=${EXTERNAL_ARTIFACT_TARGETS_FILE:-}
+REMOTE_SOURCE_ARTIFACT_TARGETS_FILE=${REMOTE_SOURCE_ARTIFACT_TARGETS_FILE:-}
 
 if [ -z "$IMAGE_TAG" ]; then
   echo "[ERROR] IMAGE_TAG is required" >&2
@@ -101,6 +101,9 @@ json_items=()
 resolved_targets=()
 
 for target in "${ALL_TARGETS[@]}"; do
+  if ! is_built_by_this_repo "$target"; then
+    continue
+  fi
   full_tag=$(resolve_tag "$target")
   if digest_ref=$(resolve_digest_ref "$full_tag"); then
     json_items+=("    {\n      \"target\": \"${target}\",\n      \"tag\": \"${full_tag}\",\n      \"digest\": \"${digest_ref}\",\n      \"source_sha\": \"${SOURCE_SHA}\"\n    }")
@@ -108,14 +111,14 @@ for target in "${ALL_TARGETS[@]}"; do
   fi
 done
 
-if [ -n "$EXTERNAL_ARTIFACT_TARGETS_FILE" ] && [ -f "$EXTERNAL_ARTIFACT_TARGETS_FILE" ]; then
+if [ -n "$REMOTE_SOURCE_ARTIFACT_TARGETS_FILE" ] && [ -f "$REMOTE_SOURCE_ARTIFACT_TARGETS_FILE" ]; then
   while IFS=$'\t' read -r target source_repo item_source_sha image_repository full_tag; do
     [ -n "$target" ] || continue
     if digest_ref=$(resolve_digest_ref "$full_tag"); then
       json_items+=("    {\n      \"target\": \"${target}\",\n      \"source_repo\": \"${source_repo}\",\n      \"sourceSha\": \"${item_source_sha}\",\n      \"image_repository\": \"${image_repository}\",\n      \"tag\": \"${full_tag}\",\n      \"digest\": \"${digest_ref}\",\n      \"source_sha\": \"${item_source_sha}\"\n    }")
       resolved_targets+=("$target")
     fi
-  done < <(python3 - "$EXTERNAL_ARTIFACT_TARGETS_FILE" <<'PY'
+  done < <(python3 - "$REMOTE_SOURCE_ARTIFACT_TARGETS_FILE" <<'PY'
 import json
 import sys
 with open(sys.argv[1], "r", encoding="utf-8") as handle:

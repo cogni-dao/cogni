@@ -3,7 +3,7 @@
 # SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 # Script: scripts/ci/resolve-node-ref-image.sh
-# Purpose: Resolve the digest for an externally-built artifact image addressed
+# Purpose: Resolve the digest for a remote-source artifact image addressed
 #   by node ref `<slug>@<source_sha>`.
 #
 # Emits the same payload shape as resolve-pr-build-images.sh:
@@ -27,20 +27,20 @@ if ! [[ "$SOURCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
   echo "[ERROR] SOURCE_SHA must be a 40-char hex SHA" >&2
   exit 1
 fi
-if ! is_external_artifact_target "$NODE"; then
-  echo "[ERROR] ${NODE} is not an external artifact in this checkout" >&2
+if ! is_remote_source_artifact_target "$NODE"; then
+  echo "[ERROR] ${NODE} is not a remote-source artifact in this checkout" >&2
   exit 1
 fi
 
 catalog="${_image_tags_catalog_root}/${NODE}.yaml"
 source_repo="$(yq -N '.source_repo // ""' "$catalog")"
 if [ -z "$source_repo" ]; then
-  echo "[ERROR] source_repo missing for external artifact ${NODE}" >&2
+  echo "[ERROR] source_repo missing for remote-source artifact ${NODE}" >&2
   exit 1
 fi
 image_repository="$(yq -N '.image_repository // ""' "$catalog")"
 if [ -z "$image_repository" ]; then
-  echo "[ERROR] image_repository missing for external artifact ${NODE}" >&2
+  echo "[ERROR] image_repository missing for remote-source artifact ${NODE}" >&2
   exit 1
 fi
 
@@ -56,7 +56,7 @@ fi
 tag="${image_repository}:sha-${SOURCE_SHA}"
 digest="$(docker buildx imagetools inspect "$tag" --format '{{json .Manifest.Digest}}' 2>/dev/null | tr -d '"' || true)"
 if [ -z "$digest" ] || [ "$digest" = "null" ]; then
-  echo "[ERROR] external artifact image not found: ${tag}" >&2
+  echo "[ERROR] remote-source artifact image not found: ${tag}" >&2
   exit 1
 fi
 digest_ref="${tag%%:*}@${digest}"

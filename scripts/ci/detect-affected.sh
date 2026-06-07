@@ -314,10 +314,10 @@ fi
 ordered_targets=()
 for target in "${ALL_TARGETS[@]}"; do
   if has_target "$target"; then
-    # EXTERNAL_ARTIFACT_IS_CHILD_BUILT: a catalog row with source_repo is built
-    # by that repo's CI and consumed here by image_repository:sha-<sourceSha> ->
-    # digest. The parent repo may pin it, but never builds it.
-    if is_external_artifact_target "$target"; then
+    # BUILD_PLANE_OWNS_ARTIFACT: this selector returns targets this repo must
+    # build. Remote-source artifact rows are deploy inputs, not parent build
+    # legs. Legacy rows with no source_repo remain parent-built until migrated.
+    if ! is_built_by_this_repo "$target"; then
       continue
     fi
     ordered_targets+=("$target")

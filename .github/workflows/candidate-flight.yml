@@ -165,34 +165,34 @@ jobs:
           CHANGED_PATHS_FILE: ${{ steps.pr-files.outputs.changed_paths_file }}
         run: bash scripts/ci/detect-affected.sh
 
-      - name: Detect external artifact targets
-        id: external-artifact-targets
+      - name: Detect remote-source artifact targets
+        id: remote-source-artifact-targets
         working-directory: app-src
         env:
           CHANGED_PATHS_FILE: ${{ steps.pr-files.outputs.changed_paths_file }}
-          OUTPUT_FILE: ${{ runner.temp }}/external-artifact-targets.json
-        run: bash scripts/ci/detect-external-artifact-targets.sh
+          OUTPUT_FILE: ${{ runner.temp }}/remote-source-artifact-targets.json
+        run: bash scripts/ci/detect-remote-source-artifact-targets.sh
 
       - name: Combine flight targets
         id: flight-targets
         env:
           NORMAL_FLIGHT_TARGETS_JSON: ${{ steps.detect.outputs.flight_targets_json }}
-          EXTERNAL_ARTIFACT_TARGETS_JSON: ${{ steps.external-artifact-targets.outputs.external_artifact_targets_json }}
+          REMOTE_SOURCE_ARTIFACT_TARGETS_JSON: ${{ steps.remote-source-artifact-targets.outputs.remote_source_artifact_targets_json }}
           HAS_PARENT_TARGETS: ${{ steps.detect.outputs.has_targets }}
-          HAS_EXTERNAL_ARTIFACT_TARGETS: ${{ steps.external-artifact-targets.outputs.has_external_artifact_targets }}
+          HAS_REMOTE_SOURCE_ARTIFACT_TARGETS: ${{ steps.remote-source-artifact-targets.outputs.has_remote_source_artifact_targets }}
           NODE_SLUG: ${{ steps.meta.outputs.node_slug }}
         run: |
           set -euo pipefail
           if [ -n "$NODE_SLUG" ]; then
             combined=$(python3 -c 'import json, os; print(json.dumps([os.environ["NODE_SLUG"]]))')
           else
-            combined=$(python3 -c 'import json, os; items = json.loads(os.environ["NORMAL_FLIGHT_TARGETS_JSON"] or "[]") + json.loads(os.environ["EXTERNAL_ARTIFACT_TARGETS_JSON"] or "[]"); out = []; seen = set(); [out.append(item) or seen.add(item) for item in items if item not in seen]; print(json.dumps(out))')
+            combined=$(python3 -c 'import json, os; items = json.loads(os.environ["NORMAL_FLIGHT_TARGETS_JSON"] or "[]") + json.loads(os.environ["REMOTE_SOURCE_ARTIFACT_TARGETS_JSON"] or "[]"); out = []; seen = set(); [out.append(item) or seen.add(item) for item in items if item not in seen]; print(json.dumps(out))')
           fi
           csv=$(python3 -c 'import json, sys; print(",".join(json.loads(sys.argv[1])))' "$combined")
           has_flight_targets=false
           [ "$combined" != "[]" ] && has_flight_targets=true
           has_image_inputs=false
-          if [ -n "$NODE_SLUG" ] || [ "$HAS_PARENT_TARGETS" = "true" ] || [ "$HAS_EXTERNAL_ARTIFACT_TARGETS" = "true" ]; then
+          if [ -n "$NODE_SLUG" ] || [ "$HAS_PARENT_TARGETS" = "true" ] || [ "$HAS_REMOTE_SOURCE_ARTIFACT_TARGETS" = "true" ]; then
             has_image_inputs=true
           fi
           echo "flight_targets_json=$combined" >> "$GITHUB_OUTPUT"
@@ -256,7 +256,7 @@ jobs:
           SOURCE_SHA: ${{ steps.meta.outputs.head_sha }}
           NODE: ${{ steps.meta.outputs.node_slug }}
           NODE_SOURCE_SHA: ${{ steps.meta.outputs.node_source_sha }}
-          EXTERNAL_ARTIFACT_TARGETS_FILE: ${{ steps.external-artifact-targets.outputs.targets_file }}
+          REMOTE_SOURCE_ARTIFACT_TARGETS_FILE: ${{ steps.remote-source-artifact-targets.outputs.targets_file }}
           OUTPUT_FILE: ${{ runner.temp }}/resolved-pr-images.json
         run: |
           set -euo pipefail

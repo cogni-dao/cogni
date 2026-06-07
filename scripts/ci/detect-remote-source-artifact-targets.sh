@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 # SPDX-FileCopyrightText: 2025 Cogni-DAO
 
-# Script: scripts/ci/detect-external-artifact-targets.sh
+# Script: scripts/ci/detect-remote-source-artifact-targets.sh
 # Purpose: Detect changed catalog rows whose source is built outside this repo,
 # then emit the source-SHA tag the deploy lane should consume by digest.
 
@@ -13,7 +13,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/lib/image-tags.sh"
 
 CHANGED_PATHS_FILE=${CHANGED_PATHS_FILE:-}
-OUTPUT_FILE=${OUTPUT_FILE:-${RUNNER_TEMP:-/tmp}/external-artifact-targets.json}
+OUTPUT_FILE=${OUTPUT_FILE:-${RUNNER_TEMP:-/tmp}/remote-source-artifact-targets.json}
 
 if [ -z "$CHANGED_PATHS_FILE" ] || [ ! -f "$CHANGED_PATHS_FILE" ]; then
   echo "[ERROR] CHANGED_PATHS_FILE is required and must exist" >&2
@@ -58,7 +58,7 @@ image_repository_for_target() {
   catalog="${_image_tags_catalog_root}/${target}.yaml"
   image="$(yq -N '.image_repository // ""' "$catalog")"
   if [ -z "$image" ]; then
-    echo "[ERROR] image_repository missing for external artifact ${target}" >&2
+    echo "[ERROR] image_repository missing for remote-source artifact ${target}" >&2
     exit 1
   fi
   printf '%s' "$image"
@@ -89,7 +89,7 @@ while IFS= read -r path; do
   [ -n "$path" ] || continue
 
   for target in "${ALL_TARGETS[@]}"; do
-    is_external_artifact_target "$target" || continue
+    is_remote_source_artifact_target "$target" || continue
     path_selects_target "$path" "$target" || continue
     has_target "$target" || continue
 
@@ -98,12 +98,12 @@ while IFS= read -r path; do
     fi
 
     source_sha="$(gitlink_sha_for_target "$target")" || {
-      echo "[ERROR] source SHA for external artifact ${target} cannot be inferred; expected ${_image_tags_pathprefix_cache[$target]:-nodes/${target}/} to be a gitlink at HEAD" >&2
+      echo "[ERROR] source SHA for remote-source artifact ${target} cannot be inferred; expected ${_image_tags_pathprefix_cache[$target]:-nodes/${target}/} to be a gitlink at HEAD" >&2
       exit 1
     }
     source_repo="$(source_repo_for_target "$target")"
     if [ -z "$source_repo" ]; then
-      echo "[ERROR] source_repo missing for external artifact ${target}" >&2
+      echo "[ERROR] source_repo missing for remote-source artifact ${target}" >&2
       exit 1
     fi
     image_repository="$(image_repository_for_target "$target")"
@@ -128,18 +128,18 @@ if [ ${#targets[@]} -gt 0 ]; then
     | python3 -c 'import json,sys; print(json.dumps([line.strip() for line in sys.stdin if line.strip()]))')
 fi
 
-has_external_artifact_targets=false
+has_remote_source_artifact_targets=false
 if [ ${#targets[@]} -gt 0 ]; then
-  has_external_artifact_targets=true
+  has_remote_source_artifact_targets=true
 fi
 
 if [ -n "${GITHUB_OUTPUT:-}" ]; then
   {
     echo "targets_file=$OUTPUT_FILE"
-    echo "has_external_artifact_targets=$has_external_artifact_targets"
-    echo "external_artifact_targets=$targets_csv"
-    echo "external_artifact_targets_json=$targets_json"
+    echo "has_remote_source_artifact_targets=$has_remote_source_artifact_targets"
+    echo "remote_source_artifact_targets=$targets_csv"
+    echo "remote_source_artifact_targets_json=$targets_json"
   } >> "$GITHUB_OUTPUT"
 fi
 
-echo "External artifact targets: ${targets_csv:-none}"
+echo "Remote-source artifact targets: ${targets_csv:-none}"

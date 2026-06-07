@@ -167,13 +167,13 @@ jobs:
             --jq '.[] | (.filename, .previous_filename) | select(. != null)' > "$OUT"
           echo "changed_paths_file=$OUT" >> "$GITHUB_OUTPUT"
 
-      - name: Detect external artifact targets
-        id: external-artifact-targets
+      - name: Detect remote-source artifact targets
+        id: remote-source-artifact-targets
         if: steps.pr.outputs.skip != 'true'
         env:
           CHANGED_PATHS_FILE: ${{ steps.pr-files.outputs.changed_paths_file }}
-          OUTPUT_FILE: ${{ runner.temp }}/external-artifact-targets.json
-        run: bash scripts/ci/detect-external-artifact-targets.sh
+          OUTPUT_FILE: ${{ runner.temp }}/remote-source-artifact-targets.json
+        run: bash scripts/ci/detect-remote-source-artifact-targets.sh
 
       - name: Set up Docker Buildx
         if: steps.pr.outputs.skip != 'true'
@@ -192,7 +192,7 @@ jobs:
         if: steps.pr.outputs.skip != 'true'
         env:
           IMAGE_TAG: ${{ steps.pr.outputs.image_tag }}
-          EXTERNAL_ARTIFACT_TARGETS_FILE: ${{ steps.external-artifact-targets.outputs.targets_file }}
+          REMOTE_SOURCE_ARTIFACT_TARGETS_FILE: ${{ steps.remote-source-artifact-targets.outputs.targets_file }}
           OUTPUT_FILE: ${{ runner.temp }}/resolved-pr-images.json
         run: bash scripts/ci/resolve-pr-build-images.sh
 
@@ -202,7 +202,7 @@ jobs:
           PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
         run: |
-          echo "::error::flight-preview resolved PR #${PR_NUMBER} (sha ${HEAD_SHA:0:8}) but no deployable artifact images exist in GHCR. For parent-built artifacts, ensure merge_queue produced mq-${PR_NUMBER}-${HEAD_SHA}. For external artifacts, ensure image_repository:sha-<sourceSha> exists for the accepted gitlink pin."
+          echo "::error::flight-preview resolved PR #${PR_NUMBER} (sha ${HEAD_SHA:0:8}) but no deployable artifact images exist in GHCR. For parent-built artifacts, ensure merge_queue produced mq-${PR_NUMBER}-${HEAD_SHA}. For remote-source artifacts, ensure image_repository:sha-<sourceSha> exists for the accepted gitlink pin."
           exit 1
 
       # Re-tag only the images that were actually built (affected-only CI may skip services).
@@ -229,8 +229,8 @@ jobs:
           PREVIEW_TAG="preview-${HEAD_SHA}"
 
           for target in "${ALL_TARGETS[@]}"; do
-            if is_external_artifact_target "$target"; then
-              echo "Skipping ${target} — external artifact resolves by image_repository:sha-<sourceSha>"
+            if is_remote_source_artifact_target "$target"; then
+              echo "Skipping ${target} — remote-source artifact resolves by image_repository:sha-<sourceSha>"
               continue
             fi
             # type:infra (e.g. litellm) deploys via Compose-on-VM, not k8s/Argo,

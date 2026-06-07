@@ -82,13 +82,51 @@ is_infra_target() {
   [ "${_image_tags_type_cache[$1]:-}" = "infra" ]
 }
 
-# EXTERNAL_ARTIFACT_IS_CHILD_BUILT: a catalog row with source_repo is owned by
-# that repo's CI and consumed here by image_repository:sha-<sourceSha> -> digest.
-# The parent monorepo may carry a gitlink pin, but .gitmodules is not the build
-# plane contract. Key build exclusion off source_repo so the rule is artifact-
-# shaped and works for any deploy type.
-is_external_artifact_target() {
-  [ -n "${_image_tags_source_repo_cache[$1]:-}" ]
+canonical_github_repo_key() {
+  local value="$1"
+
+  value="${value#https://github.com/}"
+  value="${value#http://github.com/}"
+  value="${value#git@github.com:}"
+  value="${value%.git}"
+  printf '%s' "$value" | tr '[:upper:]' '[:lower:]'
+}
+
+current_repo_key() {
+  local value="${GITHUB_REPOSITORY:-}"
+
+  if [ -z "$value" ]; then
+    value="$(git -C "$_image_tags_repo_root" config --get remote.origin.url 2>/dev/null || true)"
+  fi
+
+  canonical_github_repo_key "$value"
+}
+
+source_repo_for_target() {
+  printf '%s' "${_image_tags_source_repo_cache[$1]:-}"
+}
+
+# BUILD_PLANE_OWNS_ARTIFACT: the artifact source repo owns its build. Missing
+# source_repo is legacy parent-built. When source_repo is present and points at
+# this repo, this repo is still the build plane; otherwise the parent only
+# consumes image_repository:sha-<sourceSha> by digest.
+is_built_by_this_repo() {
+  local target="$1" source_repo this_repo
+
+  source_repo="$(source_repo_for_target "$target")"
+  if [ -z "$source_repo" ]; then
+    return 0
+  fi
+
+  this_repo="$(current_repo_key)"
+  [ -n "$this_repo" ] && [ "$(canonical_github_repo_key "$source_repo")" = "$this_repo" ]
+}
+
+is_remote_source_artifact_target() {
+  local source_repo
+
+  source_repo="$(source_repo_for_target "$1")"
+  [ -n "$source_repo" ] && ! is_built_by_this_repo "$1"
 }
 
 image_name_for_target() {
@@ -226,7 +264,7 @@ node_database_csv() {
 node_internal_service_endpoint_csv() {
   local sep="" node node_id url
   for node in "${NODE_TARGETS[@]}"; do
-    if is_external_artifact_target "$node"; then
+    if ! is_built_by_this_repo "$node"; then
       continue
     fi
     node_id="$(node_id_for_target "$node")" || return 1
@@ -239,7 +277,7 @@ node_internal_service_endpoint_csv() {
 node_billing_endpoint_csv() {
   local host="$1" sep="" node node_id port url
   for node in "${NODE_TARGETS[@]}"; do
-    if is_external_artifact_target "$node"; then
+    if ! is_built_by_this_repo "$node"; then
       continue
     fi
     node_id="$(node_id_for_target "$node")" || return 1

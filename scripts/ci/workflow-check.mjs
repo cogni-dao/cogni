@@ -116,15 +116,15 @@ const workflowFiles = readdirSync(WORKFLOW_DIR)
 const candidateFlightText = readWorkflowText("candidate-flight.yml");
 if (
   candidateFlightText.includes(
-    "EXTERNAL_ARTIFACT_TARGETS_FILE: ${{ steps.external-artifact-targets.outputs.targets_file }}"
+    "REMOTE_SOURCE_ARTIFACT_TARGETS_FILE: ${{ steps.remote-source-artifact-targets.outputs.targets_file }}"
   )
 ) {
   pass(
-    "candidate-flight wires external artifact target manifest output into image resolution"
+    "candidate-flight wires remote-source artifact target manifest output into image resolution"
   );
 } else {
   fail(
-    "candidate-flight must pass steps.external-artifact-targets.outputs.targets_file to EXTERNAL_ARTIFACT_TARGETS_FILE"
+    "candidate-flight must pass steps.remote-source-artifact-targets.outputs.targets_file to REMOTE_SOURCE_ARTIFACT_TARGETS_FILE"
   );
 }
 

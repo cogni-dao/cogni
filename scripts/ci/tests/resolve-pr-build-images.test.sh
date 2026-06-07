@@ -34,7 +34,7 @@ exit 1
 STUB
 chmod +x "$WORKDIR/bin/docker"
 
-cat > "$WORKDIR/external-artifact-targets.json" <<'JSON'
+cat > "$WORKDIR/remote-source-artifact-targets.json" <<'JSON'
 {
   "targets": [
     {
@@ -54,7 +54,7 @@ github_out="$WORKDIR/github-output.txt"
 PATH="$WORKDIR/bin:$PATH" \
   IMAGE_TAG=pr-7-ffffffffffffffffffffffffffffffffffffffff \
   SOURCE_SHA=ffffffffffffffffffffffffffffffffffffffff \
-  EXTERNAL_ARTIFACT_TARGETS_FILE="$WORKDIR/external-artifact-targets.json" \
+  REMOTE_SOURCE_ARTIFACT_TARGETS_FILE="$WORKDIR/remote-source-artifact-targets.json" \
   OUTPUT_FILE="$out" \
   GITHUB_OUTPUT="$github_out" \
   bash "$SCRIPT" >/dev/null
