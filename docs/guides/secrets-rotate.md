@@ -20,6 +20,9 @@ tags:
 
 > Like `secrets-add-new.md`, this is mostly one command. The complexity isn't in the mechanics — it's in choosing the right cadence per secret class and knowing the rollback path.
 
+Use this only for secrets. Plain runtime config changes through GitOps
+ConfigMaps or repo config; it does not rotate.
+
 ## Rotation cadence by class
 
 Per [NIST SP 800-57 §8 Key States](https://csrc.nist.gov/publications/detail/sp/800-57-part-1/rev-5/final), every key has a lifecycle. Cogni's cadence table:

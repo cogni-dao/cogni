@@ -43,6 +43,21 @@ Full tier definitions + invariants: [`docs/spec/secrets-classification.md`](../.
 Layer-cake framing (Identity → AuthN → AuthZ → Secrets → DAO → Operator): [`docs/spec/access-control-charter.md`](../../../docs/spec/access-control-charter.md).
 Routing checklist (file-by-file propagation): [`.claude/commands/env-update.md`](../../commands/env-update.md) §0.5.
 
+## Runtime env triage
+
+`serverEnv()` validates process env; it does not decide the source of truth.
+Classify first:
+
+- **Secret:** leaking it requires rotation or incident response. Route through
+  OpenBao/ESO or the proper GH secret tier.
+- **Plain config:** owner slugs, repo names, public URLs, feature modes, and
+  routing values. Route through GitOps ConfigMaps or repo config.
+
+For either path, k8s object presence is not process proof. Pods read env only at
+startup, so prove: source object -> Deployment `envFrom` -> restarted pod env ->
+public health. Treat old Argo/workflow failures as leads until live cluster
+checks agree.
+
 ## Decision tree — how do I write / rotate the value?
 
 | Operation                                             | Right pattern                                                                                                      | Today's reality                                                                                                            |
@@ -87,6 +102,7 @@ No-human-secret done right: agent generates, agent pushes, **zero human, self-he
 - A **dual-plane** secret (must byte-match an external system — GitHub App webhook secret, OAuth client secret) declared with **no `syncTo:`** — it silently fails verification forever and `deploy-infra` re-breaks it every run. Add `syncTo:` (keep `source: agent` if we generate the value). See "Dual-plane secrets" above.
 - Generic catch-all workflow (`secrets-manage.yml`-shaped). Per-operation only.
 - `ssh root@vm kubectl ...` or `ssh root@vm bao ...`. Use local kubectl + port-forward + writer-role JWT.
+- Treating k8s Secret or ConfigMap presence as proof that a running pod has the value. Prove the process after rollout.
 - Re-exporting `.local/<env>-openbao-root-token` after Phase 5b — violates Invariant 13.
 - `bao kv put` instead of `bao kv patch` (replaces sibling keys).
 - `bao login -method=kubernetes` in OpenBao CLI 2.5.x — that subcommand doesn't exist; use raw API: `bao write auth/kubernetes/login role=X jwt=Y`.

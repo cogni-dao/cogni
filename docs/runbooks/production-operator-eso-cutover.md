@@ -8,7 +8,7 @@ summary: Operator runbook for cutting production operator runtime secrets from t
 read_when: A PR changes production operator ExternalSecret wiring, `operator-env-secrets`, production OpenBao seeding, or the production operator promote boundary.
 owner: cogni-dev
 created: 2026-06-05
-verified: 2026-06-06
+verified: 2026-06-07
 tags: [production, operator, openbao, external-secrets, cutover]
 ---
 
@@ -24,30 +24,25 @@ writer-role auth, entry points, and the anti-patterns this runbook avoids.
 
 ## Current Cutover State
 
-As of 2026-06-06:
+As of 2026-06-07, production has the OpenBao/ESO substrate. Live checks against
+the provision artifact kubeconfig showed the ESO CRDs, `ClusterSecretStore
+openbao-backend Ready=True`, and `ExternalSecret/operator-env-secrets
+Ready=True`.
 
-- PR #1529 merged the production operator manifest wiring:
-  `operator-env-secrets`, the `cogni/production/operator` ExternalSecret, and
-  production wizard config values for `NODE_MINT_OWNER` /
-  `NODE_TEMPLATE_OWNER`.
-- A later legacy bridge refresh proved the GitHub-environment values can still
-  reach the old `operator-node-app-secrets` path, but that is not the target
-  runtime source of truth.
-- A production operator app-only promote failed when Argo tried to apply
-  `ExternalSecret/cogni-production/operator-env-secrets` and the destination
-  cluster did not have the `external-secrets.io/ExternalSecret` CRD available.
-- A later preview operator app-only promote succeeded with `deploy-infra`
-  skipped. Do not infer production ESO readiness from preview.
+An older promote reported `ExternalSecret` CRD missing. Treat that class of
+message as an ambiguous Argo/workflow signal until live cluster checks confirm
+current CRDs, store readiness, and ExternalSecret readiness. The 2026-06-07
+operator incident was a config-vs-secret mistake plus stale pod env:
+env-scoped deployment-parent config belongs in `operator-node-app-config`, not
+OpenBao, and the pod must roll before `process.env` sees a ConfigMap change.
 
-The production gate is therefore still: production ESO substrate installed,
-`ClusterSecretStore` valid, `operator-env-secrets Ready=True`, then app-only
-operator promote with `skip_infra=true`.
+The production gate is now: substrate ready, `operator-env-secrets Ready=True`,
+deployment consumes `operator-node-app-config` + `operator-env-secrets`, the
+running process has required keys, then public `/readyz` and `/version`.
 
 ## CI/CD Reliability Gate
 
-This runbook is a deployment control, not background documentation. It improves
-the production operator release path by turning the ESO cutover into explicit
-pass/fail gates that CI/CD operators can execute before a promote:
+This runbook is a deployment control. The cutover has four gates:
 
 - production app changes use `promote-and-deploy.yml` with `nodes=operator` and
   `skip_infra=true` unless the PR changes Compose/runtime infra;
@@ -58,11 +53,9 @@ Ready=True`, then public `/readyz` and `/version.buildSha`;
 - legacy bridge cleanup is delayed until production serves the expected build
   SHA and rollback custody is closed.
 
-The concrete reliability improvement is eliminating the ambiguous state where
-GitHub environment secrets, Compose deploy-infra, and OpenBao/ESO all appear to
-manage the same operator runtime values. The gate makes OpenBao +
-`operator-env-secrets` the only target runtime source of truth while keeping the
-legacy bridge available only as rollback custody until the final cleanup step.
+These gates remove the ambiguous state where GitHub environment secrets,
+Compose deploy-infra, and OpenBao/ESO all appear to manage the same operator
+runtime values.
 
 ## Rules
 
@@ -199,6 +192,10 @@ If any of these are absent, do not rerun `deploy-infra` as a substitute. Reconci
 the OpenBao/ESO substrate first using the provisioned Argo Applications or the
 environment bootstrap path, then continue with seeding and force-sync.
 
+If a workflow failed with a missing-CRD message, run this gate before acting on
+the failure. Argo status can preserve an earlier sync failure; live CRD/store
+checks decide whether substrate is currently absent.
+
 ## Seed
 
 Seed `cogni/production/operator` with the operator runtime values already
@@ -234,6 +231,30 @@ kubectl -n cogni-production get secret operator-env-secrets
 ```
 
 The wait must report `Ready=True`. Do not inspect or print Secret values.
+
+## Config And Process Proof
+
+Non-secret env-scoped values live in `operator-node-app-config`, not OpenBao.
+Do not use the secret guide or `pnpm secrets:set` for these keys. Prove the
+ConfigMap, deployment wiring, and live process separately:
+
+```bash
+kubectl -n cogni-production get configmap operator-node-app-config \
+  -o jsonpath='{.data.NODE_SUBMODULE_PARENT_OWNER}{"\n"}{.data.NODE_SUBMODULE_PARENT_REPO}{"\n"}'
+
+kubectl -n cogni-production get deploy operator-node-app \
+  -o jsonpath='{.spec.template.spec.containers[0].envFrom}{"\n"}'
+
+POD=$(kubectl -n cogni-production get pod \
+  -l app.kubernetes.io/name=node-app,app.kubernetes.io/instance=operator \
+  -o jsonpath='{.items[0].metadata.name}')
+kubectl -n cogni-production exec "$POD" -- sh -c \
+  'test -n "$NODE_SUBMODULE_PARENT_OWNER" && test -n "$NODE_SUBMODULE_PARENT_REPO"'
+```
+
+ConfigMap and Secret env vars are read at pod start. If the process is stale,
+roll through GitOps when time allows; in an incident, record any direct
+`rollout restart` and verify Argo returns `Synced` / `Healthy`.
 
 ## Promote
 
