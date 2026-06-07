@@ -301,7 +301,7 @@ export function GraphView({ rows }: { readonly rows: KnowledgeRow[] }) {
 
       <div
         ref={wrapRef}
-        className="relative h-[70vh] w-full overflow-hidden rounded-lg border border-border/60 bg-background"
+        className="relative h-[var(--height-knowledge-graph)] w-full overflow-hidden rounded-lg border border-border/60 bg-background"
       >
         {graphQuery.data && (
           <ForceGraph3D
@@ -348,7 +348,7 @@ export function GraphView({ rows }: { readonly rows: KnowledgeRow[] }) {
 }
 
 const SECTION_CLASS =
-  "mb-1.5 font-medium text-[10px] text-muted-foreground uppercase tracking-wider";
+  "mb-1.5 font-medium text-[var(--text-knowledge-graph-section)] text-muted-foreground uppercase tracking-wider";
 
 function GraphLegend({
   colorMode,
@@ -362,8 +362,8 @@ function GraphLegend({
   const citeTypes = [...new Set(edges.map((e) => e.citationType))];
   const ramp = [0, 25, 50, 75, 100];
   return (
-    <div className="absolute bottom-3 left-3 w-[208px] rounded-lg border border-border/60 bg-background/80 p-3 backdrop-blur">
-      <p className="mb-2.5 font-medium text-[11px] text-foreground tabular-nums">
+    <div className="absolute bottom-3 left-3 w-[var(--width-knowledge-graph-legend)] rounded-lg border border-border/60 bg-background/80 p-3 backdrop-blur">
+      <p className="mb-2.5 font-medium text-[var(--text-knowledge-graph-stat)] text-foreground tabular-nums">
         {edges.length} citation{edges.length === 1 ? "" : "s"} ·{" "}
         {domains.length} domain{domains.length === 1 ? "" : "s"}
       </p>
