@@ -108,16 +108,34 @@ describe("buildNodeLaunchPack", () => {
     expect(pack.prompt).not.toContain("Launch pack URL:");
     expect(pack.prompt).not.toContain(pack.launchPackUrl);
     expect(pack.prompt).toContain(
+      "Cogni operator endpoint root: https://cognidao.org"
+    );
+    expect(pack.prompt).toContain(
       "Cogni knowledge block: https://cognidao.org/knowledge/node-launch-handoff"
     );
     expect(pack.prompt).toContain("Parent deployment PR:");
     expect(pack.prompt).toContain("Candidate URL:");
-    expect(pack.prompt).toContain("@node-wizard-scorecard");
-    expect(pack.prompt).toContain("not a full matrix");
-    expect(pack.prompt).toContain("child customization PR exists");
+    expect(pack.prompt).toContain(
+      "You are the AI developer taking this node from spawned scaffold to first deployed customization."
+    );
+    expect(pack.prompt).toContain("make a simple node style-kit customization");
+    expect(pack.prompt).toContain(
+      "get that PR deployed to Cogni operator candidate-a via a flight"
+    );
+    expect(pack.prompt).toContain(
+      "report the node spawn scorecard/status and any useful URLs"
+    );
+    expect(pack.prompt).toContain(
+      "The Cogni operator is the coordination service"
+    );
+    expect(pack.prompt).toContain(
+      ".claude/skills/node-wizard-scorecard/SKILL.md"
+    );
+    expect(pack.prompt).not.toContain("@node-wizard-scorecard");
+    expect(pack.prompt).not.toContain("Its first response");
     expect(pack.prompt).toContain(".env.cogni");
     expect(pack.prompt).toContain("/contribute-to-cogni");
-    expect(pack.prompt).toContain("recall the Cogni knowledge block");
+    expect(pack.prompt).toContain("recall the Cogni knowledge block above");
     expect(pack.prompt).toContain("Create a node customization PR");
     expect(pack.prompt).toContain("Do not push directly to main");
     expect(pack.prompt).toContain("merge your own PR");
@@ -135,7 +153,9 @@ describe("buildNodeLaunchPack", () => {
     expect(pack.prompt).toContain("operator API");
     expect(pack.prompt).toContain("child image tag exists");
     expect(pack.prompt).toContain("parent pin agrees");
-    expect(pack.prompt).toContain("@node-formation-styling-guide");
+    expect(pack.prompt).toContain(
+      ".claude/skills/node-formation-styling-guide/SKILL.md"
+    );
     expect(pack.prompt).toContain("agent-first API validation");
     expect(pack.prompt).toContain("human scorecard");
     expect(pack.prompt).toContain("blocked scorecard row");

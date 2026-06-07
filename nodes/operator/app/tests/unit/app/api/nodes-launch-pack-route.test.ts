@@ -87,7 +87,12 @@ describe("GET /api/v1/nodes/[id]/launch-pack", () => {
       "https://github.com/Cogni-DAO/cogni/pull/42"
     );
     expect(body.candidateUrl).toBe("https://atlas-test.cognidao.org");
-    expect(body.prompt).toContain("@node-wizard-scorecard");
+    expect(body.prompt).toContain(
+      "Cogni operator endpoint root: https://cognidao.org"
+    );
+    expect(body.prompt).toContain(
+      ".claude/skills/node-wizard-scorecard/SKILL.md"
+    );
     expect(body.prompt).toContain("blocked scorecard row");
   });
 

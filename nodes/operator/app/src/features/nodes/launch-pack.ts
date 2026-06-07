@@ -18,6 +18,7 @@ export const NODE_LAUNCH_PACK_KNOWLEDGE_ID = "node-launch-handoff";
 
 const KNOWLEDGE_TITLE = "AI assistant launch pack for node birth";
 const KNOWLEDGE_BASE_URL = "https://cognidao.org";
+const OPERATOR_API_ROOT = "https://cognidao.org";
 
 export interface NodeLaunchPackInput {
   readonly nodeId: string;
@@ -78,12 +79,18 @@ export function buildNodeLaunchPack(
     `Launch Cogni node ${input.slug}.`,
     "",
     nodeRepoLine,
+    `Cogni operator endpoint root: ${OPERATOR_API_ROOT}`,
     `Cogni knowledge block: ${knowledgeUrl}`,
     parentPrLine,
     `Candidate URL: ${candidateUrl}`,
     "",
-    "Start with @node-wizard-scorecard. Its first response is not a full matrix until the child customization PR exists.",
-    "If this workspace lacks `.env.cogni`, run /contribute-to-cogni against the production operator first and save the file at the repo root. Then recall the Cogni knowledge block before editing.",
+    "You are the AI developer taking this node from spawned scaffold to first deployed customization.",
+    "Your goal is to make a simple node style-kit customization, open a PR in the node repo, get that PR deployed to Cogni operator candidate-a via a flight, then report the node spawn scorecard/status and any useful URLs to the human.",
+    "",
+    "The Cogni operator is the coordination service at the endpoint root above. Use it for contributor registration and candidate-a flight requests.",
+    "Before editing, recall the Cogni knowledge block above and use `.claude/skills/node-wizard-scorecard/SKILL.md` when that skill exists in your workspace.",
+    "If this workspace lacks `.env.cogni`, run /contribute-to-cogni against the production operator endpoint root first and save the file at the repo root.",
+    "",
     "Required path:",
     "1. Create a node customization PR in the node repo. Do not push directly to main, merge your own PR, or hand-edit the operator gitlink.",
     "2. Verify the node repo-spec contains `knowledge.remote` for the Cogni-owned DoltHub mirror; do not add a DOLTHUB_REMOTE_URL env override.",
@@ -94,7 +101,7 @@ export function buildNodeLaunchPack(
     "7. Run agent-first API validation against that candidate.",
     "8. Present the human scorecard only after flight, /version, and agent-first validation are green.",
     "",
-    "Use @node-formation-styling-guide for the customization PR. If parent merge, child image, parent pin, or flight eligibility is blocked, report the exact blocked scorecard row instead of inventing privileged manual steps.",
+    "Use `.claude/skills/node-formation-styling-guide/SKILL.md` when present for the customization PR. If parent merge, child image, parent pin, or flight eligibility is blocked, report the exact blocked scorecard row instead of inventing privileged manual steps.",
   ].join("\n");
 
   return {
