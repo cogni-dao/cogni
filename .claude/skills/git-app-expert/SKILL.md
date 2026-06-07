@@ -25,11 +25,13 @@ installation level down to the tool schema and CI scripts.
 cannot share one. Create + wire per the canonical guide:
 [`docs/guides/github-app-webhook-setup.md`](../../../docs/guides/github-app-webhook-setup.md).
 
-| App                   | ID        | Install ID | env              | webhooks → / installed on                                              |
-| --------------------- | --------- | ---------- | ---------------- | ---------------------------------------------------------------------- |
-| `cogni-node-template` | 3062001   | 115515535  | (vcs/flight)     | org-wide; `actions:write` for `workflow_dispatch`                      |
-| `cogni-git-review`    | 1761205   | 80293097   | production       | `cognidao.org/...webhooks/github` · `Cogni-DAO/cogni`                  |
-| `cogni-operator-test` | (per-env) | —          | candidate-a/test | `test.cognidao.org/...webhooks/github` · all repos on `cogni-test-org` |
+| App                        | ID      | Install ID | env              | webhooks → / installed on                                              |
+| -------------------------- | ------- | ---------- | ---------------- | ---------------------------------------------------------------------- |
+| `cogni-operator-test`      | 3956976 | 138046799  | candidate-a/test | `test.cognidao.org/...webhooks/github` · all repos on `cogni-test-org` |
+| `cogni-operator`           | 2994706 | 113665458  | production ops   | `cognidao.org/...webhooks/github` · all repos on `Cogni-DAO`           |
+| `cogni-node-template`      | 3062001 | 115515535  | legacy/vcs       | selected repos; use only if the env's `GH_REVIEW_APP_ID` is `3062001`  |
+| `cogni-git-review`         | 1761205 | 80293097   | production       | `cognidao.org/...webhooks/github` · `Cogni-DAO/cogni`                  |
+| `cogni-git-review-preview` | 2011345 | 87655574   | preview          | `preview.cognidao.org/...webhooks/github` · selected preview repos     |
 
 `Cogni-DAO/test-repo` is only a legacy review-webhook fixture. It is not
 sufficient for node publish/flight testing: the candidate/test App must see the
@@ -58,12 +60,25 @@ env means setting all three planes' creds + matching the webhook secret on both 
 
 ```bash
 gh api "orgs/Cogni-DAO/installations?per_page=20" | \
-  jq '.installations[] | select(.app_id == 3062001) | {app_slug, permissions}'
+  jq '.installations[] | select(.app_id == 2994706) | {app_slug, id, repository_selection, permissions}'
+
+gh api "orgs/cogni-test-org/installations?per_page=20" | \
+  jq '.installations[] | select(.app_id == 3956976) | {app_slug, id, repository_selection, permissions}'
 ```
 
-`actions:write` is required for `workflow_dispatch`. If the installation shows `actions:read`,
-the org admin must approve the pending permission upgrade at:
-`github.com/organizations/Cogni-DAO/settings/installations/115515535`
+Operator mint/flight Apps require `actions:write`, `administration:write`, `contents:write`,
+`workflows:write`, and `packages:read`. `packages:read` is required for node-ref GHCR package
+metadata preflight; do not add `GHCR_DEPLOY_TOKEN` or a PAT fallback. If the installation lacks a
+newly requested permission, the org admin must approve the pending permission upgrade at the
+installation URL:
+
+```text
+https://github.com/organizations/cogni-test-org/settings/installations/138046799
+https://github.com/organizations/Cogni-DAO/settings/installations/113665458
+```
+
+The legacy `cogni-node-template` installation approval URL is
+`https://github.com/organizations/Cogni-DAO/settings/installations/115515535`.
 
 **Common gotcha**: the GitHub App _definition_ can request `actions:write` while the org
 _installation_ still shows `read` — they diverge when the org hasn't accepted the expanded
