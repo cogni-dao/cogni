@@ -89,6 +89,38 @@ function setHappyForkHandlers(): void {
       });
       return { tree: { sha: "template-tree" } };
     },
+    "PUT /repos/{owner}/{repo}/actions/permissions": (params) => {
+      expect(params).toMatchObject({
+        owner: "Cogni-DAO",
+        repo: "atlas",
+        enabled: true,
+        allowed_actions: "all",
+      });
+      return {};
+    },
+    "PUT /repos/{owner}/{repo}/actions/permissions/workflow": (params) => {
+      expect(params).toMatchObject({
+        owner: "Cogni-DAO",
+        repo: "atlas",
+        default_workflow_permissions: "write",
+        can_approve_pull_request_reviews: false,
+      });
+      return {};
+    },
+    "GET /repos/{owner}/{repo}/actions/workflows": (params) => {
+      expect(params).toMatchObject({
+        owner: "Cogni-DAO",
+        repo: "atlas",
+        per_page: 100,
+      });
+      return {
+        workflows: [
+          { path: ".github/workflows/ci.yaml", state: "active" },
+          { path: ".github/workflows/pr-build.yml", state: "active" },
+          { path: ".github/workflows/pr-lint.yaml", state: "active" },
+        ],
+      };
+    },
     "POST /repos/{owner}/{repo}/git/blobs": (params) => {
       expect(params).toMatchObject({
         owner: "Cogni-DAO",
@@ -181,6 +213,9 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
       "POST /repos/{owner}/{repo}/forks",
       "GET /repos/{owner}/{repo}/git/ref/{ref}",
       "GET /repos/{owner}/{repo}/git/commits/{commit_sha}",
+      "PUT /repos/{owner}/{repo}/actions/permissions",
+      "PUT /repos/{owner}/{repo}/actions/permissions/workflow",
+      "GET /repos/{owner}/{repo}/actions/workflows",
       "POST /repos/{owner}/{repo}/git/blobs",
       "POST /repos/{owner}/{repo}/git/trees",
       "POST /repos/{owner}/{repo}/git/commits",
@@ -241,12 +276,51 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
       "GET /repos/{owner}/{repo}",
       "GET /repos/{owner}/{repo}/git/ref/{ref}",
       "GET /repos/{owner}/{repo}/git/commits/{commit_sha}",
+      "PUT /repos/{owner}/{repo}/actions/permissions",
+      "PUT /repos/{owner}/{repo}/actions/permissions/workflow",
+      "GET /repos/{owner}/{repo}/actions/workflows",
       "POST /repos/{owner}/{repo}/git/blobs",
       "POST /repos/{owner}/{repo}/git/trees",
       "POST /repos/{owner}/{repo}/git/commits",
       "POST /repos/{owner}/{repo}/git/refs",
       "PATCH /repos/{owner}/{repo}/git/refs/{ref}",
     ]);
+  });
+
+  it("continues when org policy rejects default workflow write permissions", async () => {
+    setHappyForkHandlers();
+    routeHandlers["PUT /repos/{owner}/{repo}/actions/permissions/workflow"] = (
+      params
+    ) => {
+      expect(params).toMatchObject({
+        owner: "Cogni-DAO",
+        repo: "atlas",
+        default_workflow_permissions: "write",
+        can_approve_pull_request_reviews: false,
+      });
+      return Promise.reject(
+        statusError(409, "Write permissions for workflows are disabled")
+      );
+    };
+
+    const result = await makeWriter().forkFromTemplate({
+      templateOwner: "Cogni-DAO",
+      owner: "Cogni-DAO",
+      slug: "atlas",
+      nodeId: "11111111-1111-4111-8111-111111111111",
+      chainId: 8453,
+    });
+
+    expect(result).toEqual({
+      cloneUrl: "https://github.com/Cogni-DAO/atlas.git",
+      headSha: "identity-commit",
+    });
+    expect(requests.map((request) => request.route)).toContain(
+      "POST /repos/{owner}/{repo}/git/commits"
+    );
+    expect(requests.map((request) => request.route)).toContain(
+      "PATCH /repos/{owner}/{repo}/git/refs/{ref}"
+    );
   });
 
   it("reuses an existing fork when GitHub reports template ancestry through source", async () => {
