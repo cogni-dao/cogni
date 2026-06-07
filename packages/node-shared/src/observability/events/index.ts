@@ -66,6 +66,7 @@ export const EVENT_NAMES = {
   // Node Formation Domain - Server (wizard)
   NODE_FORMATION_CREATE_COMPLETE: "feature.node_formation.create_complete",
   NODE_PUBLISH_COMPLETE: "feature.node_publish.complete",
+  VCS_FLIGHT_REQUEST_COMPLETE: "feature.vcs_flight.request_complete",
 
   // Adapter Events
   ADAPTER_LITELLM_COMPLETION_RESULT: "adapter.litellm.completion_result",

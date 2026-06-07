@@ -52,9 +52,7 @@ patches:
       - op: add
         path: /data/DOLTHUB_OWNER
         value: "cogni-test-nodes"
-      # Submodule pin-PR target — a cogni-shaped mirror in the throwaway org so the test app
-      # (cogni-operator-test, zero Cogni-DAO access) can open the pin-PR. Wizard-scoped override;
-      # prod leaves these unset → pin-PR falls back to Cogni-DAO/cogni.
+      # Submodule pin-PR target: candidate-a uses the throwaway org mirror.
       - op: add
         path: /data/NODE_SUBMODULE_PARENT_OWNER
         value: "cogni-test-org"

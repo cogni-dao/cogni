@@ -66,6 +66,8 @@ fi
 
 selected_targets=()
 deferred_global_input=""
+turbo_affected_packages_loaded=false
+turbo_affected_packages=()
 
 has_target() {
   local needle="$1"
@@ -94,6 +96,78 @@ add_all_targets() {
   for target in "${ALL_TARGETS[@]}"; do
     add_target "$target"
   done
+}
+
+turbo_version_spec() {
+  python3 - <<'PY'
+import json
+
+with open("package.json", "r", encoding="utf-8") as handle:
+    package = json.load(handle)
+
+version = (
+    package.get("devDependencies", {}).get("turbo")
+    or package.get("dependencies", {}).get("turbo")
+    or "latest"
+)
+print(version)
+PY
+}
+
+run_turbo_affected_json() {
+  if [ -n "${TURBO_BIN:-}" ]; then
+    "$TURBO_BIN" run build --affected --dry=json
+    return
+  fi
+
+  if [ -x "node_modules/.bin/turbo" ]; then
+    node_modules/.bin/turbo run build --affected --dry=json
+    return
+  fi
+
+  npx --yes "turbo@$(turbo_version_spec)" run build --affected --dry=json
+}
+
+load_turbo_affected_packages() {
+  local output packages_output
+
+  if [ "$turbo_affected_packages_loaded" = true ]; then
+    return 0
+  fi
+
+  turbo_affected_packages_loaded=true
+
+  if ! output=$(TURBO_SCM_BASE="$UPSTREAM_REF" TURBO_SCM_HEAD="$HEAD_REF" run_turbo_affected_json); then
+    echo "::warning::detect-affected: turbo affected failed; falling back to all image targets for shared package change" >&2
+    return 1
+  fi
+
+  if ! packages_output=$(printf '%s' "$output" | python3 -c 'import json,sys;
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+print("\n".join(data.get("packages", [])))'); then
+    echo "::warning::detect-affected: turbo affected returned invalid JSON; falling back to all image targets for shared package change" >&2
+    return 1
+  fi
+
+  turbo_affected_packages=()
+  if [ -n "$packages_output" ]; then
+    mapfile -t turbo_affected_packages <<< "$packages_output"
+  fi
+}
+
+package_name_from_manifest() {
+  local manifest="$1"
+
+  python3 - "$manifest" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    print(json.load(handle).get("name", ""))
+PY
 }
 
 catalog_target_from_path() {
@@ -148,8 +222,17 @@ if [ "$scope_mode" = "full" ]; then
   add_all_targets
 else
   declare -A target_prefix=()
+  declare -A target_package_name=()
   for target in "${ALL_TARGETS[@]}"; do
     target_prefix["$target"]=$(yq '.path_prefix' "${_image_tags_catalog_root}/${target}.yaml")
+    prefix="${target_prefix[$target]%/}"
+    target_package_name["$target"]=""
+    for manifest in "${_image_tags_spec_root}/${prefix}/package.json" "${_image_tags_spec_root}/${prefix}/app/package.json"; do
+      if [ -f "$manifest" ]; then
+        target_package_name["$target"]=$(package_name_from_manifest "$manifest")
+        break
+      fi
+    done
   done
 
   while IFS= read -r path; do
@@ -183,9 +266,31 @@ else
         break
         ;;
       packages/*)
-        add_all_targets
-        selection_reason="shared-package-change:${path}"
-        break
+        if ! load_turbo_affected_packages; then
+          add_all_targets
+          selection_reason="shared-package-change:${path}:turbo-fallback"
+          break
+        fi
+
+        declare -A affected_package=()
+        for package in "${turbo_affected_packages[@]}"; do
+          affected_package["$package"]=1
+        done
+
+        before_count=${#selected_targets[@]}
+        for target in "${ALL_TARGETS[@]}"; do
+          package="${target_package_name[$target]:-}"
+          if [ -n "$package" ] && [ -n "${affected_package[$package]:-}" ]; then
+            add_target "$target"
+          fi
+        done
+
+        if [ ${#selected_targets[@]} -gt "$before_count" ]; then
+          selection_reason="turbo-affected-package-change:${path}"
+        else
+          selection_reason="turbo-no-image-targets:${path}"
+        fi
+        continue
         ;;
       *)
         for target in "${ALL_TARGETS[@]}"; do
@@ -209,12 +314,10 @@ fi
 ordered_targets=()
 for target in "${ALL_TARGETS[@]}"; do
   if has_target "$target"; then
-    # SUBMODULE_GITLINK_IS_OPERATOR_PIN: a submodule-pinned node is built (and
-    # flighted) by its OWN repo's CI, never the parent. The parent's gitlink has
-    # no app tree, so fanning a build over it fails (`lstat nodes/<slug>/app`).
-    # Drop it from both the build matrix and the flight set (it deploys via its
-    # own repo's image). No-op for in-tree-only forks (no .gitmodules).
-    if is_submodule_node "$target"; then
+    # BUILD_PLANE_OWNS_ARTIFACT: this selector returns targets this repo must
+    # build. Remote-source artifact rows are deploy inputs, not parent build
+    # legs. Legacy rows with no source_repo remain parent-built until migrated.
+    if ! is_built_by_this_repo "$target"; then
       continue
     fi
     ordered_targets+=("$target")

@@ -31,32 +31,32 @@ REST API routes for VCS operations — CI-gated candidate-a flight dispatch for 
 
 - **Exports:** none (route handlers only)
 - **Routes:**
-  - `POST /api/v1/vcs/flight` — CI-gated candidate-a flight request; requires Bearer or session auth; 202 on dispatch, 422 if CI not green
+  - `POST /api/v1/vcs/flight` — CI-gated candidate-a flight request for either `prNumber` or `nodeRef`; requires Bearer or session auth; 202 on dispatch, 422 if CI is not green
 
 ## Ports
 
-- **Uses ports:** `VcsCapability` (via container)
+- **Uses ports:** `OperatorDeployPlanePort` (via operator-local factory)
 - **Implements ports:** none
 
 ## Responsibilities
 
-- This directory **does:** verify CI green for PR head SHA, dispatch `candidate-flight.yml` via `VcsCapability`, return dispatch metadata.
+- This directory **does:** verify PR or parent-pin CI gates, dispatch `candidate-flight.yml` via `OperatorDeployPlanePort`, return dispatch metadata.
 - This directory **does not:** own the slot lease (workflow owns it), poll for run ID, write any DB state.
 
 ## Standards
 
 - All routes auth-protected (Bearer token or SIWE session required)
 - Input/output validated via `flightOperation` Zod contract
-- No direct Octokit — all GitHub calls go through `VcsCapability`
+- No direct Octokit — hosted deploy-plane calls go through `OperatorDeployPlanePort`
 
 ## Dependencies
 
-- **Internal:** `@cogni/node-contracts` (flightOperation), `@/bootstrap/container`, `@/shared/config/repoSpec.server`, `@/app/_lib/auth/session`
+- **Internal:** `@cogni/node-contracts` (flightOperation), `@/bootstrap/capabilities/operator-deploy-plane`, `@/shared/config/repoSpec.server`, `@/app/_lib/auth/session`
 - **External:** next/server
 
 ## Change Protocol
 
-- Update this file when **Routes** or **VcsCapability** interface changes
+- Update this file when **Routes** or deploy-plane port usage changes
 - Update `vcs.flight.v1.contract.ts` first if request/response shape changes
 
 ## Notes

@@ -158,11 +158,7 @@ export const serverSchema = z.object({
   NODE_MINT_OWNER: optionalString,
   NODE_TEMPLATE_OWNER: optionalString,
 
-  // Node-formation Publish: the submodule-PIN-PR target (the operator's deployment monorepo).
-  // Wizard-scoped override ONLY — does NOT touch getGithubRepo()/operator identity. Fail-open: when
-  // unset, the pin-PR targets `node.repoOwner/repoName` (= Cogni-DAO/cogni in prod, unchanged). Set
-  // on candidate-a to a cogni-shaped mirror in the throwaway org so the test app can open the pin-PR
-  // without any Cogni-DAO access.
+  // Required env-scoped deployment parent for submodule pin PRs and node-ref flights.
   NODE_SUBMODULE_PARENT_OWNER: optionalString,
   NODE_SUBMODULE_PARENT_REPO: optionalString,
 

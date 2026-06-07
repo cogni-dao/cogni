@@ -43,6 +43,12 @@ This spec is the **rules** layer between them: the tier definitions, the decisio
 > Per-secret data → YAML catalogs (node-domain or operator-domain).
 > No table of "all 60+ secrets" lives in markdown anywhere — it would rot.
 
+`serverEnv()` schemas are runtime validation, not source-of-truth
+classification. A value can be required by `serverEnv()` and still be plain
+config. Classify by disclosure impact first: if leaking it requires rotation or
+incident response, it is a secret; otherwise route it as config through GitOps
+ConfigMaps or repo config.
+
 ## Invariants
 
 1. **EVERY_SECRET_HAS_EXACTLY_ONE_TIER.** Each YAML catalog entry has a required `tier:` field. The loader's Zod schema rejects entries without it.

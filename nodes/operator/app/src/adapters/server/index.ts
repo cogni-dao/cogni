@@ -131,11 +131,14 @@ export { SystemClock } from "./time/system.adapter";
 export {
   type CommitFileAndOpenPrInput,
   type CommitFileAndOpenPrResult,
+  type EnsureNodeSubmodulePinInput,
+  type EnsureNodeSubmodulePinResult,
   type ForkFromTemplateInput,
   GitHubRepoWriter,
   type GitHubRepoWriterConfig,
   type OpenNodeAppPrInput,
   type OpenNodeAppPrResult,
+  type PackageImageTagExistsInput,
 } from "./vcs/github-repo-write";
 // VCS capability (GitHub App adapter)
 export {

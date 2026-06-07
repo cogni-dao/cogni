@@ -49,6 +49,7 @@ declare -A _image_tags_node_port_cache=()
 declare -A _image_tags_node_id_cache=()
 declare -A _image_tags_type_cache=()
 declare -A _image_tags_pathprefix_cache=()
+declare -A _image_tags_source_repo_cache=()
 for _t in "${ALL_TARGETS[@]}"; do
   _ty=$(yq -N '.type' "${_image_tags_catalog_root}/${_t}.yaml")
   _image_tags_type_cache["$_t"]="$_ty"
@@ -63,6 +64,8 @@ for _t in "${ALL_TARGETS[@]}"; do
   # catalog path_prefix. Services (no path_prefix / no repo-spec) → empty.
   _pp=$(yq -N '.path_prefix // ""' "${_image_tags_catalog_root}/${_t}.yaml")
   _image_tags_pathprefix_cache["$_t"]="$_pp"
+  _sr=$(yq -N '.source_repo // ""' "${_image_tags_catalog_root}/${_t}.yaml")
+  _image_tags_source_repo_cache["$_t"]="$_sr"
   _rs="${_image_tags_spec_root}/${_pp}.cogni/repo-spec.yaml"
   if [ -n "$_pp" ] && [ -f "$_rs" ]; then
     _nid=$(yq -N '.node_id // ""' "$_rs")
@@ -71,7 +74,7 @@ for _t in "${ALL_TARGETS[@]}"; do
   fi
   _image_tags_node_id_cache["$_t"]="$_nid"
 done
-unset _t _ty _s _p _np _pp _rs _nid
+unset _t _ty _s _p _np _pp _sr _rs _nid
 
 # True for type:infra targets — built in CI but deployed via Compose-on-VM,
 # not k8s/Argo. Overlay / promotion / gitops-coverage loops skip these.
@@ -79,22 +82,51 @@ is_infra_target() {
   [ "${_image_tags_type_cache[$1]:-}" = "infra" ]
 }
 
-# SUBMODULE_GITLINK_IS_OPERATOR_PIN (docs/spec/node-ci-cd-contract.md): a node
-# whose `nodes/<slug>` is a git submodule gitlink (recorded in `.gitmodules`).
-# Its app tree lives in its OWN repo and is built by its OWN CI — the parent
-# monorepo only holds the pin. Such a node still has a catalog entry (deploy
-# shape) + appears in ALL_TARGETS/NODE_TARGETS, but MUST be excluded from parent
-# BUILD/flight: the gitlink has no app tree (`lstat nodes/<slug>/app: no such
-# file`). Keyed off `.gitmodules` (the gitlink is the SSOT, never a catalog flag
-# that could drift). No-op when `.gitmodules` is absent (in-tree-only forks).
-_image_tags_gitmodules="${_image_tags_spec_root}/.gitmodules"
-is_submodule_node() {
-  local target="$1" pp gl
-  pp="${_image_tags_pathprefix_cache[$target]:-}"
-  [ -n "$pp" ] || return 1
-  gl="${pp%/}"
-  [ -f "$_image_tags_gitmodules" ] || return 1
-  grep -qE "^[[:space:]]*path[[:space:]]*=[[:space:]]*${gl}[[:space:]]*\$" "$_image_tags_gitmodules"
+canonical_github_repo_key() {
+  local value="$1"
+
+  value="${value#https://github.com/}"
+  value="${value#http://github.com/}"
+  value="${value#git@github.com:}"
+  value="${value%.git}"
+  printf '%s' "$value" | tr '[:upper:]' '[:lower:]'
+}
+
+current_repo_key() {
+  local value="${GITHUB_REPOSITORY:-}"
+
+  if [ -z "$value" ]; then
+    value="$(git -C "$_image_tags_repo_root" config --get remote.origin.url 2>/dev/null || true)"
+  fi
+
+  canonical_github_repo_key "$value"
+}
+
+source_repo_for_target() {
+  printf '%s' "${_image_tags_source_repo_cache[$1]:-}"
+}
+
+# BUILD_PLANE_OWNS_ARTIFACT: the artifact source repo owns its build. Missing
+# source_repo is legacy parent-built. When source_repo is present and points at
+# this repo, this repo is still the build plane; otherwise the parent only
+# consumes image_repository:sha-<sourceSha> by digest.
+is_built_by_this_repo() {
+  local target="$1" source_repo this_repo
+
+  source_repo="$(source_repo_for_target "$target")"
+  if [ -z "$source_repo" ]; then
+    return 0
+  fi
+
+  this_repo="$(current_repo_key)"
+  [ -n "$this_repo" ] && [ "$(canonical_github_repo_key "$source_repo")" = "$this_repo" ]
+}
+
+is_remote_source_artifact_target() {
+  local source_repo
+
+  source_repo="$(source_repo_for_target "$1")"
+  [ -n "$source_repo" ] && ! is_built_by_this_repo "$1"
 }
 
 image_name_for_target() {
@@ -232,7 +264,7 @@ node_database_csv() {
 node_internal_service_endpoint_csv() {
   local sep="" node node_id url
   for node in "${NODE_TARGETS[@]}"; do
-    if is_submodule_node "$node"; then
+    if ! is_built_by_this_repo "$node"; then
       continue
     fi
     node_id="$(node_id_for_target "$node")" || return 1
@@ -245,7 +277,7 @@ node_internal_service_endpoint_csv() {
 node_billing_endpoint_csv() {
   local host="$1" sep="" node node_id port url
   for node in "${NODE_TARGETS[@]}"; do
-    if is_submodule_node "$node"; then
+    if ! is_built_by_this_repo "$node"; then
       continue
     fi
     node_id="$(node_id_for_target "$node")" || return 1

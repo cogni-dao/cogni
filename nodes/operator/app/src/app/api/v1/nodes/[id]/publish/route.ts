@@ -269,6 +269,24 @@ export async function POST(request: Request, routeArgs: RouteParams) {
             { status: 503 }
           );
         }
+        const parentOwner = env.NODE_SUBMODULE_PARENT_OWNER;
+        const parentRepo = env.NODE_SUBMODULE_PARENT_REPO;
+        if (!parentOwner || !parentRepo) {
+          logTerminal("error", {
+            outcome: "error",
+            errorCode: "node_parent_config_missing",
+            status: 503,
+          });
+          logRequestEnd(ctx.log, { status: 503, durationMs: durationMs() });
+          return NextResponse.json(
+            {
+              error: "operator not configured for node deployment parent",
+              reason:
+                "NODE_SUBMODULE_PARENT_OWNER + NODE_SUBMODULE_PARENT_REPO required (env-scoped deployment parent)",
+            },
+            { status: 503 }
+          );
+        }
         if (!env.DOLTHUB_API_TOKEN || !env.DOLTHUB_OWNER) {
           logTerminal("error", {
             outcome: "error",
@@ -462,13 +480,8 @@ export async function POST(request: Request, routeArgs: RouteParams) {
             headSha: minted.headSha,
           });
           currentStep = "open_submodule_pr";
-          // Submodule-PR target = the operator's deployment monorepo (nodes live at nodes/<slug> there).
-          // Wizard-scoped, fail-open override: defaults to node.repoOwner/repoName (= getGithubRepo() =
-          // Cogni-DAO/cogni in prod, unchanged). candidate-a points it at a cogni-shaped mirror in the
-          // throwaway org so the test app can open the pin-PR without any Cogni-DAO access. Does NOT
-          // touch getGithubRepo()/operator identity.
-          const parentOwner = env.NODE_SUBMODULE_PARENT_OWNER ?? node.repoOwner;
-          const parentRepo = env.NODE_SUBMODULE_PARENT_REPO ?? node.repoName;
+          // Submodule-PR target = the configured deployment monorepo. It is never derived
+          // from the operator app repo or persisted node rows.
           logStep("open_submodule_pr", "started", {
             slug: node.slug,
             owner: parentOwner,

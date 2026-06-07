@@ -7,7 +7,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CI_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REPO_ROOT="$(cd "${CI_DIR}/../.." && pwd)"
-SCRIPT="${CI_DIR}/detect-submodule-births.sh"
+SCRIPT="${CI_DIR}/detect-remote-source-artifact-targets.sh"
 
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "$WORKDIR"' EXIT
@@ -27,7 +27,7 @@ dockerfile: nodes/ay/app/Dockerfile
 image_tag_suffix: "-ay"
 migrator_tag_suffix: "-ay-migrate"
 source_repo: https://github.com/cogni-test-org/ay.git
-image_repository: ghcr.io/cogni-test-org/ay-node
+image_repository: ghcr.io/cogni-test-org/ay
 candidate_a_branch: deploy/candidate-a-ay
 preview_branch: deploy/preview-ay
 production_branch: deploy/production-ay
@@ -44,11 +44,11 @@ git add infra/catalog/ay.yaml .gitmodules
 git commit -q -m fixture
 
 printf 'infra/catalog/ay.yaml\n' > added.txt
-out="$WORKDIR/births.json"
+out="$WORKDIR/targets.json"
 github_out="$WORKDIR/github-output.txt"
 
 COGNI_CATALOG_ROOT="$WORKDIR/infra/catalog" \
-  ADDED_PATHS_FILE="$WORKDIR/added.txt" \
+  CHANGED_PATHS_FILE="$WORKDIR/added.txt" \
   OUTPUT_FILE="$out" \
   GITHUB_OUTPUT="$github_out" \
   bash "$SCRIPT" >/dev/null
@@ -62,12 +62,15 @@ items = payload["targets"]
 assert len(items) == 1, items
 item = items[0]
 assert item["target"] == "ay", item
+assert item["source_repo"] == "https://github.com/cogni-test-org/ay.git", item
+assert item["image_repository"] == "ghcr.io/cogni-test-org/ay", item
+assert item["sourceSha"] == "0123456789012345678901234567890123456789", item
 assert item["source_sha"] == "0123456789012345678901234567890123456789", item
-assert item["tag"] == "ghcr.io/cogni-test-org/ay-node:sha-0123456789012345678901234567890123456789", item
+assert item["tag"] == "ghcr.io/cogni-test-org/ay:sha-0123456789012345678901234567890123456789", item
 PY
 
-grep -q '^has_submodule_births=true$' "$github_out"
-grep -q '^submodule_birth_targets=ay$' "$github_out"
+grep -q '^has_remote_source_artifact_targets=true$' "$github_out"
+grep -q '^remote_source_artifact_targets=ay$' "$github_out"
 
 python3 - <<'PY'
 from pathlib import Path
@@ -85,13 +88,13 @@ catalog.write_text(
 PY
 
 if COGNI_CATALOG_ROOT="$WORKDIR/infra/catalog" \
-  ADDED_PATHS_FILE="$WORKDIR/added.txt" \
+  CHANGED_PATHS_FILE="$WORKDIR/added.txt" \
   OUTPUT_FILE="$WORKDIR/missing-image-repository.json" \
   bash "$SCRIPT" 2>"$WORKDIR/missing-image-repository.err"; then
   echo "expected missing image_repository to fail" >&2
   exit 1
 fi
-grep -q "image_repository missing for submodule birth ay" "$WORKDIR/missing-image-repository.err"
+grep -q "image_repository missing for remote-source artifact ay" "$WORKDIR/missing-image-repository.err"
 
 cd "$REPO_ROOT"
 echo "all cases passed"

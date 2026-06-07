@@ -84,6 +84,12 @@
   --max-height-dialog: 80vh;
   --max-height-dialog-mobile: 70vh;
 
+  /* Knowledge graph sizing */
+  --height-knowledge-graph: 70vh;
+  --width-knowledge-graph-legend: 13rem;
+  --text-knowledge-graph-section: 0.625rem;
+  --text-knowledge-graph-stat: 0.6875rem;
+
   /* Positioning - centering transforms */
   --center-50: 50%;
   --center-neg-50: -50%;

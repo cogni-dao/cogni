@@ -453,6 +453,31 @@ describe("POST /api/v1/nodes/[id]/publish", () => {
     );
   });
 
+  it("fails closed when parent deployment repo config is missing", async () => {
+    envState.current.NODE_SUBMODULE_PARENT_REPO = undefined;
+
+    const response = await publishNode();
+    const body = await response.json();
+
+    expect(response.status).toBe(503);
+    expect(body.error).toBe(
+      "operator not configured for node deployment parent"
+    );
+    expect(mockEnsureDatabase).not.toHaveBeenCalled();
+    expect(mockForkFromTemplate).not.toHaveBeenCalled();
+    expect(mockOpenNodeSubmodulePr).not.toHaveBeenCalled();
+    expect(mockLog.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "feature.node_publish.complete",
+        step: "config",
+        outcome: "error",
+        errorCode: "node_parent_config_missing",
+        status: 503,
+      }),
+      "feature.node_publish.complete"
+    );
+  });
+
   it("logs missing DoltHub config as a terminal config error", async () => {
     envState.current.DOLTHUB_API_TOKEN = undefined;
 

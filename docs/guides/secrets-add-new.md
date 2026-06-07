@@ -18,6 +18,24 @@ tags:
 
 Updating a pod-consumed secret is a control-plane operation: OpenBao write, ESO sync, pod restart proof. Do not edit pod specs, create per-secret ExternalSecrets, or hand-edit k8s Secret YAML.
 
+## First Gate
+
+Use this guide only when leaking the value requires rotation or incident
+response: tokens, private keys, passwords, webhook secrets, signing material, or
+DSNs that embed passwords.
+
+Plain runtime config does not belong in OpenBao. Owner slugs, repo names,
+public URLs, feature modes, and routing values belong in repo/GitOps config,
+usually a k8s ConfigMap consumed through `envFrom`.
+
+Both paths end at `process.env` and `serverEnv()`. The split is only the source
+of truth before the pod starts:
+
+```text
+Secret: OpenBao -> ESO -> k8s Secret -> process.env -> serverEnv()
+Config: Git overlay -> ConfigMap -> process.env -> serverEnv()
+```
+
 ## Read First
 
 - [`cicd-secrets-expert`](../../.claude/skills/cicd-secrets-expert/SKILL.md) - OpenBao vs GitHub Environment secrets, tier routing, entry points, and anti-patterns.
@@ -49,8 +67,6 @@ Identify:
 - `<namespace>`: the k8s namespace, such as `cogni-production`
 - `<externalsecret>` and `<secret>`: usually `<service>-env-secrets`; production operator uses `operator-env-secrets`
 - `<deployment>`: the Deployment that consumes the Secret
-
-For non-secret config such as an owner/org slug, prefer ConfigMap/GitHub variable routing. Do not put non-secret config into OpenBao unless the catalog and runtime actually consume it as a secret.
 
 ## 2. Recover Kube Custody
 
@@ -184,55 +200,6 @@ curl -fsS https://<service-domain>/version
 
 Use `/version.buildSha` to verify the expected application build when a deploy changed the app image. For secret-only pod restarts, the build SHA should stay the same.
 
-## Production Operator DoltHub Example
-
-Node birth in production requires:
-
-- `DOLTHUB_OWNER=cogni-dao` as non-secret config in the production operator ConfigMap / GitHub environment variable.
-- `DOLTHUB_API_TOKEN` in OpenBao at `cogni/production/operator`.
-
-Write and prove it:
-
-```bash
-export KUBECONFIG="<primary-clone>/.local/<production-provision-artifact-dir>/production-kubeconfig.yaml"
-chmod 600 "$KUBECONFIG"
-
-kubectl get ns openbao external-secrets cogni-production
-kubectl get clustersecretstore openbao-backend
-kubectl -n cogni-production get deploy operator-node-app -o jsonpath='{range .spec.template.spec.containers[0].envFrom[*]}{.configMapRef.name}{.secretRef.name}{"\n"}{end}'
-
-kubectl -n openbao port-forward svc/openbao 8200:8200 &
-export BAO_ADDR=http://127.0.0.1:8200
-export BAO_TOKEN=$(bao write -field=token auth/kubernetes/login \
-  role=production-writer \
-  jwt=$(kubectl create token openbao-operator -n default))
-
-printf '%s' "$DOLTHUB_API_TOKEN" \
-  | pnpm secrets:set production operator DOLTHUB_API_TOKEN
-
-bao kv get -format=json cogni/production/operator \
-  | jq -e '.data.data | has("DOLTHUB_API_TOKEN")' >/dev/null
-
-kubectl -n cogni-production annotate externalsecret operator-env-secrets \
-  force-sync="$(date +%s)" --overwrite
-kubectl -n cogni-production wait externalsecret/operator-env-secrets \
-  --for=condition=Ready=True --timeout=120s
-kubectl -n cogni-production get secret operator-env-secrets -o json \
-  | jq -e '.data | has("DOLTHUB_API_TOKEN")' >/dev/null
-```
-
-Final proof:
-
-```bash
-POD=$(kubectl -n cogni-production get pod \
-  -l app.kubernetes.io/name=node-app,app.kubernetes.io/instance=operator \
-  -o jsonpath='{.items[0].metadata.name}')
-kubectl -n cogni-production exec "$POD" -- /bin/sh -c 'test -n "$DOLTHUB_API_TOKEN"'
-
-curl -fsS https://cognidao.org/readyz
-curl -fsS https://cognidao.org/version
-```
-
 ## What You Did Not Have To Do
 
 - Edit a pod spec for a new env var.
@@ -245,6 +212,7 @@ curl -fsS https://cognidao.org/version
 ## Anti-Patterns
 
 - Pasting secret values into chat, PRs, workflow inputs, shell history, or committed files.
+- Using this guide for plain runtime config.
 - Using GitHub Environment secrets as proof that an ESO-backed pod has the value.
 - Treating k8s Secret presence as proof that a running process has the value.
 - Using stale `.local/<env>-vm-ip` or SSH keys when a provision artifact contains the current kubeconfig.

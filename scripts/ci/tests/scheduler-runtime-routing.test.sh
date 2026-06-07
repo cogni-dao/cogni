@@ -4,7 +4,7 @@
 #
 # Runtime routing guardrails for scheduler-worker:
 #   1. COGNI_NODE_ENDPOINTS stays catalog-derived with slug + UUID aliases.
-#   2. Submodule node pins do not require repo-spec identity during parent rendering.
+#   2. Remote-source artifact rows do not require repo-spec identity during parent rendering.
 #   3. Scheduler-worker's off-cluster Temporal/Postgres/App Services point at
 #      the expected VM alias for each env, so workers can actually poll Temporal.
 #
@@ -27,10 +27,10 @@ bash scripts/ci/render-scheduler-worker-endpoints.sh --check >/dev/null \
 
 endpoints="$(yq -r '.data.COGNI_NODE_ENDPOINTS // ""' infra/k8s/base/scheduler-worker/configmap.yaml)"
 for node in "${NODE_TARGETS[@]}"; do
-  if is_submodule_node "$node"; then
+  if is_remote_source_artifact_target "$node"; then
     case ",$endpoints," in
-      *",$node="*) fail "COGNI_NODE_ENDPOINTS includes submodule node $node before metadata projection exists" ;;
-      *) pass "$node submodule endpoint skipped" ;;
+      *",$node="*) fail "COGNI_NODE_ENDPOINTS includes remote-source artifact node $node before metadata projection exists" ;;
+      *) pass "$node remote-source artifact endpoint skipped" ;;
     esac
     continue
   fi
@@ -45,22 +45,21 @@ for node in "${NODE_TARGETS[@]}"; do
   esac
 done
 
-echo "[2/3] submodule catalog nodes are skipped during parent endpoint rendering"
+echo "[2/3] remote-source artifact catalog nodes are skipped during parent endpoint rendering"
 TMP_TREE="$(mktemp -d)"
 trap 'rm -rf "$TMP_TREE"' EXIT
 TMP_CATALOG="$TMP_TREE/infra/catalog"
 mkdir -p "$TMP_CATALOG" "$TMP_TREE/nodes/operator/.cogni"
 cp infra/catalog/operator.yaml "$TMP_CATALOG/operator.yaml"
 cp nodes/operator/.cogni/repo-spec.yaml "$TMP_TREE/nodes/operator/.cogni/repo-spec.yaml"
-yq '.name = "ay" | .path_prefix = "nodes/ay/" | .node_port = 30400 | .image_tag_suffix = "-ay" | .migrator_tag_suffix = "-ay-migrate"' \
+yq '.name = "ay" | .path_prefix = "nodes/ay/" | .node_port = 30400 | .image_tag_suffix = "-ay" | .migrator_tag_suffix = "-ay-migrate" | .source_repo = "https://github.com/cogni-test-org/ay.git" | .image_repository = "ghcr.io/cogni-test-org/ay"' \
   infra/catalog/node-template.yaml > "$TMP_CATALOG/ay.yaml"
-printf '[submodule "nodes/ay"]\n\tpath = nodes/ay\n\turl = https://github.com/cogni-test-org/ay\n' > "$TMP_TREE/.gitmodules"
 
 fixture_endpoints="$(COGNI_CATALOG_ROOT="$TMP_CATALOG" bash scripts/ci/render-scheduler-worker-endpoints.sh)" \
-  || fail "render failed for a submodule catalog node without nodes/ay/.cogni/repo-spec.yaml"
+  || fail "render failed for a remote-source artifact catalog node without nodes/ay/.cogni/repo-spec.yaml"
 case ",$fixture_endpoints," in
-  *,ay=*) fail "fixture endpoints include submodule slug ay" ;;
-  *) pass "submodule slug ay omitted" ;;
+  *,ay=*) fail "fixture endpoints include remote-source artifact slug ay" ;;
+  *) pass "remote-source artifact slug ay omitted" ;;
 esac
 case "$fixture_endpoints" in
   *"4ff8eac1-4eba-4ed0-931b-b1fe4f64713d=http://operator-node-app:3000"*) pass "inline operator UUID alias preserved" ;;
@@ -68,10 +67,10 @@ case "$fixture_endpoints" in
 esac
 
 fixture_billing_endpoints="$(COGNI_CATALOG_ROOT="$TMP_CATALOG" bash -c 'source scripts/ci/lib/image-tags.sh && node_billing_endpoint_csv host.docker.internal')" \
-  || fail "billing endpoint render failed for a submodule catalog node without nodes/ay/.cogni/repo-spec.yaml"
+  || fail "billing endpoint render failed for a remote-source artifact catalog node without nodes/ay/.cogni/repo-spec.yaml"
 case ",$fixture_billing_endpoints," in
-  *,ay=*) fail "billing endpoints include submodule slug ay before metadata projection exists" ;;
-  *) pass "billing endpoint skips submodule slug ay" ;;
+  *,ay=*) fail "billing endpoints include remote-source artifact slug ay before metadata projection exists" ;;
+  *) pass "billing endpoint skips remote-source artifact slug ay" ;;
 esac
 case "$fixture_billing_endpoints" in
   *"4ff8eac1-4eba-4ed0-931b-b1fe4f64713d=http://host.docker.internal:30000"*) pass "inline operator billing UUID alias preserved" ;;

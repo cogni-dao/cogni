@@ -48,6 +48,12 @@ patches:
         path: /data/NODE_TEMPLATE_OWNER
         value: "Cogni-DAO"
       - op: add
+        path: /data/NODE_SUBMODULE_PARENT_OWNER
+        value: "Cogni-DAO"
+      - op: add
+        path: /data/NODE_SUBMODULE_PARENT_REPO
+        value: "cogni"
+      - op: add
         path: /data/DOLTHUB_OWNER
         value: "cogni-dao"
   # NodePort assignment (operator = 30000) + instance label on selector.

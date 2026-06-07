@@ -3,7 +3,7 @@
 
 /**
  * Module: `@components/vendor/assistant-ui/tool-ui-vcs-flight-candidate`
- * Purpose: Per-tool renderer for `core__vcs_flight_candidate` — narrates dispatch as a 1-liner with linked PR / sha / candidate-a chips, with workflow-run + observability links in the collapsible body.
+ * Purpose: Per-tool renderer for `core__vcs_flight_candidate` — narrates nodeRef dispatch with node/sourceSha/candidate-a chips.
  * Scope: Mounted by `ToolUIRegistry` inside the AssistantRuntime context. Pure presentation over the typed tool args/result.
  * Side-effects: none
  * Links: packages/ai-tools/src/tools/vcs-flight-candidate.ts (input/output schema)
@@ -34,15 +34,15 @@ const CANDIDATE_A_VERSION_URL = "https://test.cognidao.org/version";
 interface FlightArgs {
   readonly owner?: string;
   readonly repo?: string;
-  readonly prNumber?: number;
-  readonly headSha?: string;
+  readonly nodeSlug?: string;
+  readonly sourceSha?: string;
   readonly workflowRef?: string;
 }
 
 interface FlightResult {
   readonly dispatched?: boolean;
-  readonly prNumber?: number;
-  readonly headSha?: string | null;
+  readonly nodeSlug?: string;
+  readonly sourceSha?: string;
   readonly workflowUrl?: string;
   readonly message?: string;
 }
@@ -53,9 +53,9 @@ const FlightView: ToolCallMessagePartComponent<FlightArgs, FlightResult> = ({
   status,
 }) => {
   const owner = args?.owner ?? "Cogni-DAO";
-  const repo = args?.repo ?? "node-template";
-  const prNumber = args?.prNumber ?? result?.prNumber;
-  const sha = result?.headSha ?? args?.headSha ?? null;
+  const repo = args?.repo ?? "cogni";
+  const nodeSlug = result?.nodeSlug ?? args?.nodeSlug ?? null;
+  const sha = result?.sourceSha ?? args?.sourceSha ?? null;
   const workflowRef = args?.workflowRef;
 
   const isCancelled =
@@ -93,9 +93,6 @@ const FlightView: ToolCallMessagePartComponent<FlightArgs, FlightResult> = ({
           ? "Flighting"
           : "Flighted";
 
-  const prHref = prNumber
-    ? `https://github.com/${owner}/${repo}/pull/${prNumber}`
-    : undefined;
   const shaHref =
     sha != null
       ? `https://github.com/${owner}/${repo}/commit/${sha}`
@@ -104,12 +101,7 @@ const FlightView: ToolCallMessagePartComponent<FlightArgs, FlightResult> = ({
   const title = (
     <span className="inline-flex flex-wrap items-center gap-x-1.5 gap-y-1">
       <span className="font-medium">{verb}</span>
-      {prNumber != null &&
-        (prHref ? (
-          <ToolChip href={prHref}>PR #{prNumber}</ToolChip>
-        ) : (
-          <ToolChip>PR #{prNumber}</ToolChip>
-        ))}
+      {nodeSlug != null && <ToolChip>{nodeSlug}</ToolChip>}
       <span className="text-muted-foreground">to</span>
       <ToolChip mono href={CANDIDATE_A_VERSION_URL}>
         candidate-a
@@ -141,15 +133,15 @@ const FlightView: ToolCallMessagePartComponent<FlightArgs, FlightResult> = ({
         <dd className="font-mono">
           {owner}/{repo}
         </dd>
-        {prNumber != null && (
+        {nodeSlug != null && (
           <>
-            <dt className="text-muted-foreground">PR</dt>
-            <dd>#{prNumber}</dd>
+            <dt className="text-muted-foreground">Node</dt>
+            <dd>{nodeSlug}</dd>
           </>
         )}
         {sha && (
           <>
-            <dt className="text-muted-foreground">Head SHA</dt>
+            <dt className="text-muted-foreground">Source SHA</dt>
             <dd className="break-all font-mono">{sha}</dd>
           </>
         )}
@@ -196,9 +188,7 @@ const FlightView: ToolCallMessagePartComponent<FlightArgs, FlightResult> = ({
         >
           candidate-a /version ↗
         </a>
-        <span>
-          Observe via <code className="font-mono">core__vcs_get_ci_status</code>
-        </span>
+        <span>Verify candidate-a before promotion</span>
       </div>
     </div>
   );
