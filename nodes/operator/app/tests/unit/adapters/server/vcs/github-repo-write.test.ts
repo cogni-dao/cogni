@@ -13,10 +13,16 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { renderRepoSpec } from "@/shared/node-app-scaffold/gens";
+
 interface RequestCall {
   readonly route: string;
   readonly params: Record<string, unknown>;
 }
+
+const NODE_ID = "11111111-1111-4111-8111-111111111111";
+const SOURCE_SHA = "0123456789012345678901234567890123456789";
+const OLD_SOURCE_SHA = "0000000000000000000000000000000000000000";
 
 type RouteHandler = (
   params: Record<string, unknown>
@@ -59,6 +65,35 @@ function installFetchMock(): void {
       json: async () => ({ id: 123 }),
     }))
   );
+}
+
+function fileResponse(content: string): {
+  readonly type: "file";
+  readonly content: string;
+  readonly encoding: "base64";
+  readonly sha: string;
+} {
+  return {
+    type: "file",
+    content: Buffer.from(content, "utf-8").toString("base64"),
+    encoding: "base64",
+    sha: "file-sha",
+  };
+}
+
+function catalogYaml(): string {
+  return [
+    "name: creative",
+    "type: node",
+    "path_prefix: nodes/creative/",
+    "source_repo: https://github.com/Cogni-DAO/creative.git",
+    "image_repository: ghcr.io/cogni-dao/creative-node",
+    "",
+  ].join("\n");
+}
+
+function repoSpecYaml(): string {
+  return renderRepoSpec({ nodeId: NODE_ID, chainId: 8453 });
 }
 
 function setHappyForkHandlers(): void {
@@ -144,6 +179,85 @@ function setHappyForkHandlers(): void {
   };
 }
 
+function installNodeRefPreflightHandlers(options: {
+  readonly currentPinSha: string | null;
+  readonly existingPinBranchSha?: string | undefined;
+}): void {
+  const pinBranch = "heads/cogni-operator/node-submodule-creative-pin-01234567";
+  routeHandlers = {
+    "GET /repos/{owner}/{repo}/contents/{path}": (params) => {
+      if (params.path === "infra/catalog/creative.yaml") {
+        expect(params).toMatchObject({
+          owner: "Cogni-DAO",
+          repo: "cogni",
+          ref: "main",
+        });
+        return fileResponse(catalogYaml());
+      }
+      expect(params).toMatchObject({
+        owner: "Cogni-DAO",
+        repo: "creative",
+        path: ".cogni/repo-spec.yaml",
+        ref: SOURCE_SHA,
+      });
+      return fileResponse(repoSpecYaml());
+    },
+    "GET /repos/{owner}/{repo}/commits/{ref}": (params) => {
+      expect(params).toMatchObject({
+        owner: "Cogni-DAO",
+        repo: "creative",
+        ref: SOURCE_SHA,
+      });
+      return { sha: SOURCE_SHA };
+    },
+    "GET /orgs/{org}/packages/{package_type}/{package_name}/versions": () => [
+      {
+        metadata: {
+          container: {
+            tags: [`sha-${SOURCE_SHA}`],
+          },
+        },
+      },
+    ],
+    "GET /repos/{owner}/{repo}/git/ref/{ref}": (params) => {
+      if (params.ref === "heads/main") {
+        return { object: { sha: "parent-main" } };
+      }
+      expect(params.ref).toBe(pinBranch);
+      if (!options.existingPinBranchSha) {
+        throw statusError(404, "Not Found");
+      }
+      return { object: { sha: options.existingPinBranchSha } };
+    },
+    "GET /repos/{owner}/{repo}/git/commits/{commit_sha}": (params) => {
+      expect(params.commit_sha).toBe("parent-main");
+      return { tree: { sha: "main-tree" } };
+    },
+    "GET /repos/{owner}/{repo}/git/trees/{tree_sha}": (params) => {
+      if (params.tree_sha === "main-tree") {
+        return {
+          tree: [
+            { path: "nodes", type: "tree", mode: "040000", sha: "nodes-tree" },
+          ],
+        };
+      }
+      expect(params.tree_sha).toBe("nodes-tree");
+      return {
+        tree: options.currentPinSha
+          ? [
+              {
+                path: "creative",
+                type: "commit",
+                mode: "160000",
+                sha: options.currentPinSha,
+              },
+            ]
+          : [],
+      };
+    },
+  };
+}
+
 function makeWriter(): GitHubRepoWriter {
   return new GitHubRepoWriter({
     appId: "1",
@@ -156,6 +270,234 @@ beforeEach(() => {
   requests.length = 0;
   routeHandlers = {};
   installFetchMock();
+});
+
+describe("GitHubRepoWriter deployment helpers", () => {
+  it("combines GitHub Actions check runs and commit statuses into a CI gate", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}": (params) => {
+        expect(params).toMatchObject({
+          owner: "Cogni-DAO",
+          repo: "cogni",
+          pull_number: 42,
+        });
+        return {
+          number: 42,
+          head: { sha: "abc123def456abc123def456abc123def456abc1" },
+        };
+      },
+      "GET /repos/{owner}/{repo}/commits/{ref}/check-runs": (params) => {
+        expect(params.ref).toBe("abc123def456abc123def456abc123def456abc1");
+        return {
+          check_runs: [
+            {
+              name: "unit",
+              status: "completed",
+              conclusion: "success",
+              app: { slug: "github-actions" },
+            },
+            {
+              name: "SonarCloud Code Analysis",
+              status: "completed",
+              conclusion: "failure",
+              app: { slug: "sonarcloud" },
+            },
+          ],
+        };
+      },
+      "GET /repos/{owner}/{repo}/commits/{ref}/status": () => ({
+        statuses: [{ context: "external/status", state: "success" }],
+      }),
+    };
+
+    await expect(
+      makeWriter().getCiStatus({
+        owner: "Cogni-DAO",
+        repo: "cogni",
+        prNumber: 42,
+      })
+    ).resolves.toEqual({
+      prNumber: 42,
+      headSha: "abc123def456abc123def456abc123def456abc1",
+      allGreen: true,
+      pending: false,
+      checks: [
+        {
+          name: "unit",
+          status: "completed",
+          conclusion: "success",
+        },
+        {
+          name: "SonarCloud Code Analysis",
+          status: "completed",
+          conclusion: "failure",
+        },
+        {
+          name: "external/status",
+          status: "completed",
+          conclusion: "success",
+        },
+      ],
+    });
+  });
+
+  it("dispatches candidate flights with PR and node-ref workflow inputs", async () => {
+    routeHandlers = {
+      "POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches": (
+        params
+      ) => {
+        expect(params).toMatchObject({
+          owner: "Cogni-DAO",
+          repo: "cogni",
+          workflow_id: "candidate-flight.yml",
+          ref: "main",
+        });
+        return {};
+      },
+    };
+
+    const writer = makeWriter();
+
+    await expect(
+      writer.dispatchCandidateFlight({
+        owner: "Cogni-DAO",
+        repo: "cogni",
+        prNumber: 42,
+        headSha: SOURCE_SHA,
+      })
+    ).resolves.toMatchObject({
+      dispatched: true,
+      message: "Flight dispatched for PR #42 @ 01234567.",
+    });
+
+    await expect(
+      writer.dispatchNodeRefCandidateFlight({
+        owner: "Cogni-DAO",
+        repo: "cogni",
+        slug: "creative",
+        sourceSha: SOURCE_SHA,
+      })
+    ).resolves.toMatchObject({
+      dispatched: true,
+      message: "Candidate flight dispatched for creative@01234567.",
+    });
+
+    expect(requests.map((request) => request.params.inputs)).toEqual([
+      { pr_number: "42", head_sha: SOURCE_SHA },
+      { node_slug: "creative", source_sha: SOURCE_SHA },
+    ]);
+  });
+
+  it("preflights a node-ref flight when the parent already pins the source", async () => {
+    installNodeRefPreflightHandlers({ currentPinSha: SOURCE_SHA });
+
+    await expect(
+      makeWriter().prepareNodeRefCandidateFlight({
+        parentOwner: "Cogni-DAO",
+        parentRepo: "cogni",
+        nodeId: NODE_ID,
+        slug: "creative",
+        sourceSha: SOURCE_SHA,
+      })
+    ).resolves.toEqual({
+      nodeId: NODE_ID,
+      slug: "creative",
+      sourceSha: SOURCE_SHA,
+      sourceRepo: "https://github.com/Cogni-DAO/creative.git",
+      image: `ghcr.io/cogni-dao/creative-node:sha-${SOURCE_SHA}`,
+      parentPin: {
+        status: "already_pinned",
+        currentSha: SOURCE_SHA,
+      },
+    });
+  });
+
+  it("opens a parent pin PR when a node-ref source is not yet pinned", async () => {
+    installNodeRefPreflightHandlers({ currentPinSha: OLD_SOURCE_SHA });
+    routeHandlers["GET /repos/{owner}/{repo}/contents/{path}"] = (params) => {
+      if (params.path === "infra/catalog/creative.yaml") {
+        return fileResponse(catalogYaml());
+      }
+      if (params.path === ".cogni/repo-spec.yaml") {
+        return fileResponse(repoSpecYaml());
+      }
+      expect(params).toMatchObject({
+        path: ".gitmodules",
+        ref: "main",
+      });
+      return fileResponse(
+        `[submodule "nodes/old"]\n\tpath = nodes/old\n\turl = https://github.com/Cogni-DAO/old.git\n`
+      );
+    };
+    routeHandlers["POST /repos/{owner}/{repo}/git/blobs"] = (params) => {
+      const content = Buffer.from(String(params.content), "base64").toString(
+        "utf-8"
+      );
+      expect(content).toContain(`[submodule "nodes/creative"]`);
+      return { sha: "gitmodules-blob" };
+    };
+    routeHandlers["POST /repos/{owner}/{repo}/git/trees"] = (params) => {
+      expect(params.tree).toEqual([
+        {
+          path: "nodes/creative",
+          mode: "160000",
+          type: "commit",
+          sha: SOURCE_SHA,
+        },
+        {
+          path: ".gitmodules",
+          mode: "100644",
+          type: "blob",
+          sha: "gitmodules-blob",
+        },
+      ]);
+      return { sha: "pin-tree" };
+    };
+    routeHandlers["POST /repos/{owner}/{repo}/git/commits"] = (params) => {
+      expect(params).toMatchObject({
+        message: "chore(node): pin creative at 01234567",
+        tree: "pin-tree",
+        parents: ["parent-main"],
+      });
+      return { sha: "pin-commit" };
+    };
+    routeHandlers["POST /repos/{owner}/{repo}/git/refs"] = (params) => {
+      expect(params).toMatchObject({
+        ref: "refs/heads/cogni-operator/node-submodule-creative-pin-01234567",
+        sha: "pin-commit",
+      });
+      return {};
+    };
+    routeHandlers["POST /repos/{owner}/{repo}/pulls"] = (params) => {
+      expect(params).toMatchObject({
+        title: "chore(node): pin creative at 01234567",
+        head: "cogni-operator/node-submodule-creative-pin-01234567",
+        base: "main",
+      });
+      return {
+        number: 77,
+        html_url: "https://github.com/Cogni-DAO/cogni/pull/77",
+      };
+    };
+
+    await expect(
+      makeWriter().prepareNodeRefCandidateFlight({
+        parentOwner: "Cogni-DAO",
+        parentRepo: "cogni",
+        nodeId: NODE_ID,
+        slug: "creative",
+        sourceSha: SOURCE_SHA,
+      })
+    ).resolves.toMatchObject({
+      parentPin: {
+        status: "pin_pr_opened",
+        currentSha: OLD_SOURCE_SHA,
+        prNumber: 77,
+        prUrl: "https://github.com/Cogni-DAO/cogni/pull/77",
+        parentHeadSha: "pin-commit",
+      },
+    });
+  });
 });
 
 describe("GitHubRepoWriter.forkFromTemplate", () => {

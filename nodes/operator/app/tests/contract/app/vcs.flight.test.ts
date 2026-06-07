@@ -401,6 +401,61 @@ describe("POST /api/v1/vcs/flight", () => {
     });
   });
 
+  it("logs parent pin CI status failures", async () => {
+    mockDeployPlane.prepareNodeRefCandidateFlight.mockResolvedValue(
+      makePreparedNodeRef({
+        parentPin: {
+          status: "pin_pr_opened",
+          currentSha: null,
+          prNumber: 77,
+          prUrl: "https://github.com/test-owner/test-repo/pull/77",
+          parentHeadSha: "1111111111111111111111111111111111111111",
+        },
+      })
+    );
+    mockDeployPlane.getCiStatus.mockRejectedValue(
+      statusError(503, "github_unavailable", "GitHub unavailable")
+    );
+
+    await testApiHandler({
+      appHandler,
+      async test({ fetch }) {
+        const res = await fetch({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            nodeRef: { nodeId: NODE_ID, sourceSha: SOURCE_SHA },
+          }),
+        });
+        expect(res.status).toBe(500);
+      },
+    });
+
+    expect(mockLog.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "adapter.github_repo_write.error",
+        dep: "github",
+        operation: "get_parent_pin_ci_status",
+        reasonCode: "parent_ci_status_failed",
+        status: 503,
+        nodeId: NODE_ID,
+        slug: "creative",
+        prNumber: 77,
+      }),
+      "adapter.github_repo_write.error"
+    );
+    expectFlightRequestLog("error", {
+      mode: "node_ref",
+      outcome: "error",
+      status: 500,
+      errorCode: "parent_ci_status_failed",
+      githubStatus: 503,
+      nodeId: NODE_ID,
+      slug: "creative",
+      parentPrNumber: 77,
+    });
+  });
+
   it("fails closed when node-ref parent deployment repo config is missing", async () => {
     envState.current.NODE_SUBMODULE_PARENT_OWNER = undefined;
 
@@ -525,6 +580,128 @@ describe("POST /api/v1/vcs/flight", () => {
           nodeId: NODE_ID,
           slug: "creative",
           parentPrNumber: 77,
+        });
+      },
+    });
+  });
+
+  it("returns 503 when node-ref workflow dispatch is missing", async () => {
+    mockDeployPlane.prepareNodeRefCandidateFlight.mockResolvedValue(
+      makePreparedNodeRef()
+    );
+    mockDeployPlane.dispatchNodeRefCandidateFlight.mockRejectedValue(
+      statusError(404, "workflow_missing", "Not Found")
+    );
+
+    await testApiHandler({
+      appHandler,
+      async test({ fetch }) {
+        const res = await fetch({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            nodeRef: { nodeId: NODE_ID, sourceSha: SOURCE_SHA },
+          }),
+        });
+        expect(res.status).toBe(503);
+        const body = await res.json();
+        expect(body.error).toMatch(/workflow not found/);
+        expect(mockLog.error).toHaveBeenCalledWith(
+          expect.objectContaining({
+            event: "adapter.github_repo_write.error",
+            operation: "dispatch_node_ref_candidate_flight",
+            reasonCode: "workflow_not_found",
+            status: 404,
+            nodeId: NODE_ID,
+            slug: "creative",
+          }),
+          "adapter.github_repo_write.error"
+        );
+        expectFlightRequestLog("error", {
+          mode: "node_ref",
+          outcome: "error",
+          status: 503,
+          errorCode: "workflow_not_found",
+          githubStatus: 404,
+          nodeId: NODE_ID,
+          slug: "creative",
+        });
+      },
+    });
+  });
+
+  it("logs PR CI status failures", async () => {
+    mockDeployPlane.getCiStatus.mockRejectedValue(
+      statusError(503, "github_unavailable", "GitHub unavailable")
+    );
+
+    await testApiHandler({
+      appHandler,
+      async test({ fetch }) {
+        const res = await fetch({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ prNumber: 42 }),
+        });
+        expect(res.status).toBe(500);
+      },
+    });
+
+    expect(mockLog.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "adapter.github_repo_write.error",
+        dep: "github",
+        operation: "get_pr_ci_status",
+        reasonCode: "ci_status_failed",
+        status: 503,
+        prNumber: 42,
+      }),
+      "adapter.github_repo_write.error"
+    );
+    expectFlightRequestLog("error", {
+      mode: "pr",
+      outcome: "error",
+      status: 500,
+      errorCode: "ci_status_failed",
+      githubStatus: 503,
+      prNumber: 42,
+    });
+  });
+
+  it("returns 503 when PR workflow dispatch is missing", async () => {
+    mockDeployPlane.getCiStatus.mockResolvedValue(makeGreenCiStatus());
+    mockDeployPlane.dispatchCandidateFlight.mockRejectedValue(
+      statusError(404, "workflow_missing", "Not Found")
+    );
+
+    await testApiHandler({
+      appHandler,
+      async test({ fetch }) {
+        const res = await fetch({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ prNumber: 42 }),
+        });
+        expect(res.status).toBe(503);
+        const body = await res.json();
+        expect(body.error).toMatch(/workflow not found/);
+        expect(mockLog.error).toHaveBeenCalledWith(
+          expect.objectContaining({
+            event: "adapter.github_repo_write.error",
+            operation: "dispatch_candidate_flight",
+            reasonCode: "workflow_not_found",
+            status: 404,
+            prNumber: 42,
+          }),
+          "adapter.github_repo_write.error"
+        );
+        expectFlightRequestLog("error", {
+          mode: "pr",
+          outcome: "error",
+          status: 503,
+          errorCode: "workflow_not_found",
+          githubStatus: 404,
+          prNumber: 42,
         });
       },
     });
