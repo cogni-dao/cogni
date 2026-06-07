@@ -3,8 +3,8 @@
 # SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 # Script: scripts/ci/resolve-node-ref-image.sh
-# Purpose: Resolve the digest for an externally-built submodule artifact image
-#   addressed by node ref `<slug>@<source_sha>`.
+# Purpose: Resolve the digest for an externally-built artifact image addressed
+#   by node ref `<slug>@<source_sha>`.
 #
 # Emits the same payload shape as resolve-pr-build-images.sh:
 #   { image_name, image_tag, source_sha, targets: [{target, tag, digest, source_sha}] }
@@ -27,15 +27,15 @@ if ! [[ "$SOURCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
   echo "[ERROR] SOURCE_SHA must be a 40-char hex SHA" >&2
   exit 1
 fi
-if ! is_submodule_node "$NODE"; then
-  echo "[ERROR] ${NODE} is not a submodule node in this checkout" >&2
+if ! is_external_artifact_target "$NODE"; then
+  echo "[ERROR] ${NODE} is not an external artifact in this checkout" >&2
   exit 1
 fi
 
 catalog="${_image_tags_catalog_root}/${NODE}.yaml"
 image_repository="$(yq -N '.image_repository // ""' "$catalog")"
 if [ -z "$image_repository" ]; then
-  echo "[ERROR] image_repository missing for submodule node ${NODE}" >&2
+  echo "[ERROR] image_repository missing for external artifact ${NODE}" >&2
   exit 1
 fi
 

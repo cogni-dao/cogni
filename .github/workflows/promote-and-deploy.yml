@@ -316,6 +316,36 @@ jobs:
               echo "::error::preview-forward: no source_sha for $NODE in preview map"
               exit 1
             fi
+          elif is_external_artifact_target "$NODE"; then
+            catalog="app-src/infra/catalog/${NODE}.yaml"
+            image_repository="$(yq -N '.image_repository // ""' "$catalog")"
+            path_prefix="$(yq -N '.path_prefix // ""' "$catalog")"
+            if [ -z "$image_repository" ]; then
+              echo "::error::external artifact ${NODE} missing image_repository"
+              exit 1
+            fi
+            if [ -z "$path_prefix" ]; then
+              echo "::error::external artifact ${NODE} missing path_prefix gitlink pin"
+              exit 1
+            fi
+            pin_path="${path_prefix%/}"
+            read -r mode type APP_SOURCE_SHA _ < <(git -C app-src ls-tree HEAD -- "$pin_path")
+            if [ "$mode" != "160000" ] || [ "$type" != "commit" ] || [ -z "$APP_SOURCE_SHA" ]; then
+              echo "::error::external artifact ${NODE} source SHA cannot be inferred from gitlink ${pin_path}"
+              exit 1
+            fi
+            full_tag="${image_repository}:sha-${APP_SOURCE_SHA}"
+            digest_only=$(docker buildx imagetools inspect "$full_tag" --raw 2>/dev/null \
+              | python3 -c "import json,sys; print(json.load(sys.stdin).get('digest',''))" 2>/dev/null || true)
+            if [ -z "$digest_only" ]; then
+              digest_only=$(docker buildx imagetools inspect "$full_tag" 2>/dev/null \
+                | grep -oP 'Digest:\s+\Ksha256:[a-f0-9]+' | head -1 || true)
+            fi
+            if [ -z "$digest_only" ]; then
+              echo "::error::external artifact image not found: $full_tag"
+              exit 1
+            fi
+            DIGEST="${full_tag%%:*}@${digest_only}"
           else
             full_tag=$(image_tag_for_target "$(image_name_for_target "$NODE")" "preview-${HEAD_SHA}" "$NODE")
             digest_only=$(docker buildx imagetools inspect "$full_tag" --raw 2>/dev/null \

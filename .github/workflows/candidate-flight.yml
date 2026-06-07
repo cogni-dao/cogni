@@ -165,34 +165,34 @@ jobs:
           CHANGED_PATHS_FILE: ${{ steps.pr-files.outputs.changed_paths_file }}
         run: bash scripts/ci/detect-affected.sh
 
-      - name: Detect submodule births
-        id: submodule-births
+      - name: Detect external artifact targets
+        id: external-artifact-targets
         working-directory: app-src
         env:
-          ADDED_PATHS_FILE: ${{ steps.pr-files.outputs.added_paths_file }}
-          OUTPUT_FILE: ${{ runner.temp }}/submodule-births.json
-        run: bash scripts/ci/detect-submodule-births.sh
+          CHANGED_PATHS_FILE: ${{ steps.pr-files.outputs.changed_paths_file }}
+          OUTPUT_FILE: ${{ runner.temp }}/external-artifact-targets.json
+        run: bash scripts/ci/detect-external-artifact-targets.sh
 
       - name: Combine flight targets
         id: flight-targets
         env:
           NORMAL_FLIGHT_TARGETS_JSON: ${{ steps.detect.outputs.flight_targets_json }}
-          SUBMODULE_BIRTH_TARGETS_JSON: ${{ steps.submodule-births.outputs.submodule_birth_targets_json }}
+          EXTERNAL_ARTIFACT_TARGETS_JSON: ${{ steps.external-artifact-targets.outputs.external_artifact_targets_json }}
           HAS_PARENT_TARGETS: ${{ steps.detect.outputs.has_targets }}
-          HAS_SUBMODULE_BIRTHS: ${{ steps.submodule-births.outputs.has_submodule_births }}
+          HAS_EXTERNAL_ARTIFACT_TARGETS: ${{ steps.external-artifact-targets.outputs.has_external_artifact_targets }}
           NODE_SLUG: ${{ steps.meta.outputs.node_slug }}
         run: |
           set -euo pipefail
           if [ -n "$NODE_SLUG" ]; then
             combined=$(python3 -c 'import json, os; print(json.dumps([os.environ["NODE_SLUG"]]))')
           else
-            combined=$(python3 -c 'import json, os; items = json.loads(os.environ["NORMAL_FLIGHT_TARGETS_JSON"] or "[]") + json.loads(os.environ["SUBMODULE_BIRTH_TARGETS_JSON"] or "[]"); out = []; seen = set(); [out.append(item) or seen.add(item) for item in items if item not in seen]; print(json.dumps(out))')
+            combined=$(python3 -c 'import json, os; items = json.loads(os.environ["NORMAL_FLIGHT_TARGETS_JSON"] or "[]") + json.loads(os.environ["EXTERNAL_ARTIFACT_TARGETS_JSON"] or "[]"); out = []; seen = set(); [out.append(item) or seen.add(item) for item in items if item not in seen]; print(json.dumps(out))')
           fi
           csv=$(python3 -c 'import json, sys; print(",".join(json.loads(sys.argv[1])))' "$combined")
           has_flight_targets=false
           [ "$combined" != "[]" ] && has_flight_targets=true
           has_image_inputs=false
-          if [ -n "$NODE_SLUG" ] || [ "$HAS_PARENT_TARGETS" = "true" ] || [ "$HAS_SUBMODULE_BIRTHS" = "true" ]; then
+          if [ -n "$NODE_SLUG" ] || [ "$HAS_PARENT_TARGETS" = "true" ] || [ "$HAS_EXTERNAL_ARTIFACT_TARGETS" = "true" ]; then
             has_image_inputs=true
           fi
           echo "flight_targets_json=$combined" >> "$GITHUB_OUTPUT"
@@ -256,7 +256,7 @@ jobs:
           SOURCE_SHA: ${{ steps.meta.outputs.head_sha }}
           NODE: ${{ steps.meta.outputs.node_slug }}
           NODE_SOURCE_SHA: ${{ steps.meta.outputs.node_source_sha }}
-          SUBMODULE_BIRTHS_FILE: ${{ steps.submodule-births.outputs.births_file }}
+          EXTERNAL_ARTIFACT_TARGETS_FILE: ${{ steps.external-artifact-targets.outputs.targets_file }}
           OUTPUT_FILE: ${{ runner.temp }}/resolved-pr-images.json
         run: |
           set -euo pipefail
@@ -269,7 +269,7 @@ jobs:
       - name: Require at least one built image
         if: steps.flight-targets.outputs.has_image_inputs == 'true' && steps.images.outputs.has_images != 'true'
         run: |
-          echo "::error::No pushed PR images found for ${{ steps.meta.outputs.image_tag }}"
+          echo "::error::No deployable artifact images found for ${{ steps.meta.outputs.image_tag }}"
           exit 1
 
       - name: Upload resolved-pr-images artifact

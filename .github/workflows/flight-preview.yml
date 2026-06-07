@@ -154,6 +154,27 @@ jobs:
           echo "skip=false" >> "$GITHUB_OUTPUT"
           echo "Merged PR #${PR_NUMBER}: main SHA ${HEAD_SHA:0:8} (= queue commit), PR head SHA ${PR_HEAD_SHA:0:8}"
 
+      - name: Fetch merged PR changed-paths
+        id: pr-files
+        if: steps.pr.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
+          OUT: ${{ runner.temp }}/preview-pr-changed-paths.txt
+        run: |
+          set -euo pipefail
+          gh api --paginate "repos/${{ github.repository }}/pulls/${PR_NUMBER}/files" \
+            --jq '.[] | (.filename, .previous_filename) | select(. != null)' > "$OUT"
+          echo "changed_paths_file=$OUT" >> "$GITHUB_OUTPUT"
+
+      - name: Detect external artifact targets
+        id: external-artifact-targets
+        if: steps.pr.outputs.skip != 'true'
+        env:
+          CHANGED_PATHS_FILE: ${{ steps.pr-files.outputs.changed_paths_file }}
+          OUTPUT_FILE: ${{ runner.temp }}/external-artifact-targets.json
+        run: bash scripts/ci/detect-external-artifact-targets.sh
+
       - name: Set up Docker Buildx
         if: steps.pr.outputs.skip != 'true'
         uses: docker/setup-buildx-action@v3
@@ -171,6 +192,7 @@ jobs:
         if: steps.pr.outputs.skip != 'true'
         env:
           IMAGE_TAG: ${{ steps.pr.outputs.image_tag }}
+          EXTERNAL_ARTIFACT_TARGETS_FILE: ${{ steps.external-artifact-targets.outputs.targets_file }}
           OUTPUT_FILE: ${{ runner.temp }}/resolved-pr-images.json
         run: bash scripts/ci/resolve-pr-build-images.sh
 
@@ -180,7 +202,7 @@ jobs:
           PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
         run: |
-          echo "::error::flight-preview resolved PR #${PR_NUMBER} (sha ${HEAD_SHA:0:8}) but no \`mq-${PR_NUMBER}-${HEAD_SHA}\` images exist in GHCR. Most likely cause: the PR was admin-merged (bypassed merge_group), so pr-build never rebuilt against the queue commit. Recovery: open a follow-up PR that touches the affected node's paths (e.g. nodes/<node>/app/) and merge via the GH merge queue — NOT admin-merge. The merge_group rebuild produces the mq-{N}-{queue-sha} images, and the auto-flight on the resulting push:main heals preview."
+          echo "::error::flight-preview resolved PR #${PR_NUMBER} (sha ${HEAD_SHA:0:8}) but no deployable artifact images exist in GHCR. For parent-built artifacts, ensure merge_queue produced mq-${PR_NUMBER}-${HEAD_SHA}. For external artifacts, ensure image_repository:sha-<sourceSha> exists for the accepted gitlink pin."
           exit 1
 
       # Re-tag only the images that were actually built (affected-only CI may skip services).
@@ -207,6 +229,10 @@ jobs:
           PREVIEW_TAG="preview-${HEAD_SHA}"
 
           for target in "${ALL_TARGETS[@]}"; do
+            if is_external_artifact_target "$target"; then
+              echo "Skipping ${target} — external artifact resolves by image_repository:sha-<sourceSha>"
+              continue
+            fi
             # type:infra (e.g. litellm) deploys via Compose-on-VM, not k8s/Argo,
             # so there is no preview-{sha} tag to mint — deploy-infra resolves the
             # content-hash tag directly. resolve-pr-build-images.sh DOES resolve

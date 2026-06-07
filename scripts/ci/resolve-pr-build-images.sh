@@ -23,7 +23,7 @@
 #   IMAGE_NAME_APP       (default = IMAGE_NAME) APP-repo override.
 #   IMAGE_TAG            (required) the pr-{N}-{sha} tag
 #   SOURCE_SHA           (optional) the 40-char PR head SHA — overrides IMAGE_TAG parse
-#   SUBMODULE_BIRTHS_FILE (optional) detect-submodule-births.sh payload
+#   EXTERNAL_ARTIFACT_TARGETS_FILE (optional) detect-external-artifact-targets.sh payload
 #   OUTPUT_FILE          (default $RUNNER_TEMP/resolved-pr-images.json)
 
 set -euo pipefail
@@ -42,7 +42,7 @@ export IMAGE_NAME_MIGRATOR=${IMAGE_NAME_MIGRATOR:-${IMAGE_NAME_APP}-migrate}
 IMAGE_TAG=${IMAGE_TAG:-}
 SOURCE_SHA=${SOURCE_SHA:-}
 OUTPUT_FILE=${OUTPUT_FILE:-${RUNNER_TEMP:-/tmp}/resolved-pr-images.json}
-SUBMODULE_BIRTHS_FILE=${SUBMODULE_BIRTHS_FILE:-}
+EXTERNAL_ARTIFACT_TARGETS_FILE=${EXTERNAL_ARTIFACT_TARGETS_FILE:-}
 
 if [ -z "$IMAGE_TAG" ]; then
   echo "[ERROR] IMAGE_TAG is required" >&2
@@ -106,14 +106,14 @@ for target in "${ALL_TARGETS[@]}"; do
   fi
 done
 
-if [ -n "$SUBMODULE_BIRTHS_FILE" ] && [ -f "$SUBMODULE_BIRTHS_FILE" ]; then
+if [ -n "$EXTERNAL_ARTIFACT_TARGETS_FILE" ] && [ -f "$EXTERNAL_ARTIFACT_TARGETS_FILE" ]; then
   while IFS=$'\t' read -r target full_tag item_source_sha; do
     [ -n "$target" ] || continue
     if digest_ref=$(resolve_digest_ref "$full_tag"); then
       json_items+=("    {\n      \"target\": \"${target}\",\n      \"tag\": \"${full_tag}\",\n      \"digest\": \"${digest_ref}\",\n      \"source_sha\": \"${item_source_sha}\"\n    }")
       resolved_targets+=("$target")
     fi
-  done < <(python3 - "$SUBMODULE_BIRTHS_FILE" <<'PY'
+  done < <(python3 - "$EXTERNAL_ARTIFACT_TARGETS_FILE" <<'PY'
 import json
 import sys
 with open(sys.argv[1], "r", encoding="utf-8") as handle:
