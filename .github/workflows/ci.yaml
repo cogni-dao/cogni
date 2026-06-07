@@ -440,9 +440,8 @@ jobs:
   sonar:
     runs-on: ubuntu-latest
     needs: unit
-    # Sonar is PR-time signal only (decorates the PR with a comment + Sonar dashboard link).
-    # Has no meaning on the merge_group ref; skip to save runtime.
-    if: needs.unit.result == 'success' && github.event_name != 'merge_group'
+    # Sonar has no meaning on the merge_group ref; skip to save runtime.
+    if: vars.ENABLE_SONAR == 'true' && needs.unit.result == 'success' && github.event_name != 'merge_group'
     permissions:
       contents: read
       pull-requests: write # Required for PR decoration
@@ -478,3 +477,17 @@ jobs:
           loki_user: ${{ secrets.GRAFANA_CLOUD_LOKI_USER }}
           loki_token: ${{ secrets.GRAFANA_CLOUD_LOKI_API_KEY }}
           job_status: ${{ job.status }}
+
+  sonar-disabled:
+    runs-on: ubuntu-latest
+    needs: unit
+    if: vars.ENABLE_SONAR != 'true' && needs.unit.result == 'success' && github.event_name != 'merge_group'
+    steps:
+      - name: SonarCloud disabled
+        run: |
+          echo "::notice title=SonarCloud disabled::Set repository variable ENABLE_SONAR=true to restore the PR-time scan."
+          {
+            echo "### SonarCloud disabled"
+            echo ""
+            echo "Set repository variable \`ENABLE_SONAR=true\` to restore the PR-time scan."
+          } >> "$GITHUB_STEP_SUMMARY"
