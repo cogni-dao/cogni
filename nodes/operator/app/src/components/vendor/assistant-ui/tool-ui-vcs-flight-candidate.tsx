@@ -142,7 +142,7 @@ const FlightView: ToolCallMessagePartComponent<FlightArgs, FlightResult> = ({
         {sha && (
           <>
             <dt className="text-muted-foreground">Source SHA</dt>
-            <dd className="font-mono break-all">{sha}</dd>
+            <dd className="break-all font-mono">{sha}</dd>
           </>
         )}
         {workflowRef && (
@@ -164,12 +164,12 @@ const FlightView: ToolCallMessagePartComponent<FlightArgs, FlightResult> = ({
       )}
 
       {errorText && (
-        <pre className="bg-danger/10 text-danger rounded p-2 font-mono break-all whitespace-pre-wrap">
+        <pre className="whitespace-pre-wrap break-all rounded bg-danger/10 p-2 font-mono text-danger">
           {errorText}
         </pre>
       )}
 
-      <div className="border-border/60 text-muted-foreground flex flex-wrap gap-x-3 gap-y-1 border-t border-dashed pt-2">
+      <div className="flex flex-wrap gap-x-3 gap-y-1 border-border/60 border-t border-dashed pt-2 text-muted-foreground">
         {result?.workflowUrl && (
           <a
             href={result.workflowUrl}
