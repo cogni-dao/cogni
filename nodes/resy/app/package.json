@@ -36,6 +36,7 @@
     "@cogni/node-ui-kit": "workspace:*",
     "@cogni/ingestion-core": "workspace:*",
     "@cogni/langgraph-graphs": "workspace:*",
+    "@cogni/resy-graphs": "workspace:*",
     "@cogni/repo-spec": "workspace:*",
     "@cogni/scheduler-core": "workspace:*",
     "@cogni/work-items": "workspace:*",

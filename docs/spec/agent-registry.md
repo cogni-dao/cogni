@@ -47,6 +47,8 @@ Provide a canonical `AgentRegistrationDocument` schema and `AgentIdentityPort` t
 
 6. **AGENT_ID_STABLE**: `agentId` format remains `${providerId}:${graphName}` per existing [agent-discovery.md](./agent-discovery.md) invariant. The registry adds a `registrationId` (content-hash-based) as a separate, portable identifier.
 
+7. **NODE_EFFECTIVE_CATALOG**: Registration input is the node's effective runtime catalog exported by `@cogni/<node>-graphs`, not the shared base package by itself. Operator-only graphs can register on operator without leaking into node-template forks.
+
 ## Schema
 
 ### `agent_registrations` table
@@ -129,7 +131,7 @@ interface AgentChainRegistration {
 
 ### 1. AgentDescriptor vs AgentRegistrationDocument
 
-`AgentDescriptor` (from [agent-discovery.md](./agent-discovery.md)) remains the discovery type — minimal, used by UI. `AgentRegistrationDocument` is the full registration type — used for persistence and publication.
+`AgentDescriptor` (from [agent-discovery.md](./agent-discovery.md)) remains the discovery type — minimal, used by UI. `AgentRegistrationDocument` is the full registration type — used for persistence and publication. Both are derived from the node-effective runtime catalog: operator reads `@cogni/operator-graphs`; default nodes read their own `@cogni/<node>-graphs` package.
 
 | Type                          | Purpose                   | Where used                      |
 | ----------------------------- | ------------------------- | ------------------------------- |
@@ -138,6 +140,8 @@ interface AgentChainRegistration {
 
 **Rule:** `AgentRegistrationDocument` can always produce an `AgentDescriptor` (projection). Never the reverse.
 
+**Runtime scope rule:** A registration job must run once per node catalog it publishes. Reading `@cogni/langgraph-graphs` directly is insufficient because that package contains shared base catalogs but does not represent a deployed node's final runtime policy.
+
 ### 2. Publication Flow
 
 ```
@@ -145,7 +149,7 @@ interface AgentChainRegistration {
 │ REGISTRATION (offchain, always available)                           │
 │ ─────────────────────────────────                                   │
 │ 1. Agent code defines descriptor in graph manifest                  │
-│ 2. Bootstrap builds AgentRegistrationDocument from catalog          │
+│ 2. Bootstrap builds AgentRegistrationDocument from node catalog     │
 │ 3. OffchainAdapter stores in agent_registrations table              │
 │ 4. computeRegistrationHash() for integrity fingerprint              │
 │ 5. Result: REGISTERED (offchain)                                    │
@@ -194,14 +198,15 @@ Deterministic serialization via JSON Canonicalization Scheme (RFC 8785):
 
 ### File Pointers
 
-| File                                                     | Purpose                                                                           |
-| -------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| `src/ports/agent-catalog.port.ts`                        | Extend `AgentDescriptor` with optional `version`, `endpoints`, `registrationHash` |
-| `src/ports/agent-identity.port.ts`                       | New port: `register`, `resolve`, `publish`                                        |
-| `src/adapters/server/agent-registry/offchain.adapter.ts` | DB-backed registry with signed descriptors                                        |
-| `packages/db-schema/src/agent-registry.ts`               | `agent_registrations` table                                                       |
-| `src/bootstrap/agent-registry.factory.ts`                | Composition root wiring                                                           |
-| `src/contracts/agent-registry.v1.contract.ts`            | Zod schemas for registry API                                                      |
+| File                                                        | Purpose                                                                           |
+| ----------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `nodes/<node>/graphs/src/index.ts`                          | Node-effective catalog source for registration                                    |
+| `nodes/<node>/app/src/ports/agent-catalog.port.ts`          | Extend `AgentDescriptor` with optional `version`, `endpoints`, `registrationHash` |
+| `nodes/<node>/app/src/ports/agent-identity.port.ts`         | New port: `register`, `resolve`, `publish`                                        |
+| `nodes/<node>/app/src/adapters/server/agent-registry/*`     | DB-backed registry with signed descriptors                                        |
+| `packages/db-schema/src/agent-registry.ts`                  | `agent_registrations` table                                                       |
+| `nodes/<node>/app/src/bootstrap/agent-registry.factory.ts`  | Composition root wiring                                                           |
+| `packages/node-contracts/src/agent-registry.v1.contract.ts` | Zod schemas for registry API                                                      |
 
 ## Acceptance Checks
 
@@ -214,6 +219,7 @@ Deterministic serialization via JSON Canonicalization Scheme (RFC 8785):
 1. `AgentRegistrationDocument` type compiles and produces valid `AgentDescriptor` projection
 2. `computeRegistrationHash()` is deterministic across serialization round-trips
 3. `AgentIdentityPort.publish()` returns `{ published: false }` when no on-chain adapter configured
+4. Operator-only graphs register from `@cogni/operator-graphs` and are absent from node-template/canary/resy registration outputs
 
 ## Open Questions
 

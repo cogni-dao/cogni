@@ -15,9 +15,9 @@
  * @public
  */
 
-// P0: Default comes from package; P1: app-configurable via env
-import { DEFAULT_LANGGRAPH_GRAPH_ID } from "@cogni/langgraph-graphs";
 import { aiAgentsOperation } from "@cogni/node-contracts";
+// P0: Default comes from package; P1: app-configurable via env
+import { DEFAULT_LANGGRAPH_GRAPH_ID } from "@cogni/node-template-graphs";
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { listAgentsForApi } from "@/bootstrap/agent-discovery";

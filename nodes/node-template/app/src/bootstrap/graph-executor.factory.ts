@@ -38,11 +38,11 @@ import {
 } from "@cogni/graph-execution-host";
 import type { UserId } from "@cogni/ids";
 import {
-  LANGGRAPH_CATALOG,
   loadMcpTools,
   McpToolSource,
   parseMcpConfigFromEnv,
 } from "@cogni/langgraph-graphs";
+import { LANGGRAPH_CATALOG } from "@cogni/node-template-graphs";
 import { trace } from "@opentelemetry/api";
 import {
   type CompletionStreamFn,

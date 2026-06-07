@@ -25,13 +25,13 @@ import {
   createToolRunner,
 } from "@cogni/ai-core";
 import type { CatalogBoundTool } from "@cogni/ai-tools";
+import { LANGGRAPH_CATALOG } from "@cogni/canary-graphs";
 import {
   type CompletionFn,
   type CreateGraphFn,
   createInProcGraphRunner,
   type GraphResult,
   type InProcGraphRequest,
-  LANGGRAPH_CATALOG,
   type ToolExecFn,
 } from "@cogni/langgraph-graphs";
 import { trace } from "@opentelemetry/api";

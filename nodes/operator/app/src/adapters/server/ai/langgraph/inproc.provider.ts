@@ -31,9 +31,9 @@ import {
   createInProcGraphRunner,
   type GraphResult,
   type InProcGraphRequest,
-  LANGGRAPH_CATALOG,
   type ToolExecFn,
 } from "@cogni/langgraph-graphs";
+import { LANGGRAPH_CATALOG } from "@cogni/operator-graphs";
 import { trace } from "@opentelemetry/api";
 import type { Logger } from "pino";
 import { getExecutionScope } from "@/adapters/server/ai/execution-scope";
@@ -110,7 +110,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
     this.log = makeLogger({ component: "LangGraphInProcProvider" });
     this.boundToolMap = new Map(nodeBundle.map((bt) => [bt.contract.name, bt]));
 
-    // Use catalog from package (single source of truth)
+    // Use node graph package catalog (single source of truth for this runtime)
     this.catalog = LANGGRAPH_CATALOG as LangGraphCatalog<CreateGraphFn>;
 
     this.log.debug(

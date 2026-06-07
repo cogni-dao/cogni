@@ -5,7 +5,7 @@ title: LangGraph Patterns
 status: draft
 spec_state: draft
 trust: draft
-summary: Architecture patterns and invariants for LangGraph agentic workflows across InProc and Server execution paths.
+summary: Architecture patterns and invariants for shared and node-local LangGraph workflows across InProc and Server execution paths.
 read_when: Working with LangGraph graphs, modifying AI execution pipeline, or understanding package boundaries.
 implements:
 owner: derekg1729
@@ -18,7 +18,7 @@ tags: [ai-graphs, langgraph]
 
 ## Context
 
-Cogni's baseline Open Source foundation for building and executing AI agent graphs is LangGraph. All LangGraph code is isolated in `packages/langgraph-graphs/`, with executor-agnostic primitives in `packages/ai-core/` and pure tool definitions in `packages/ai-tools/`. Both InProc (cogni-developed) and LanggraphServer (Langchain non-OSS) executors implement `GraphExecutorPort` for unified billing and telemetry.
+Cogni's baseline Open Source foundation for building and executing AI agent graphs is LangGraph. Shared graph implementations and runtime helpers live in `packages/langgraph-graphs/`; node runtimes expose their effective catalog through `nodes/<node>/graphs/` packages such as `@cogni/operator-graphs` and `@cogni/node-template-graphs`. Executor-agnostic primitives live in `packages/ai-core/`, and pure tool definitions live in `packages/ai-tools/`. Both InProc (cogni-developed) and LangGraph Server (LangChain non-OSS) executors implement `GraphExecutorPort` for unified billing and telemetry.
 
 ## Goal
 
@@ -46,7 +46,7 @@ Define the package boundaries, execution paths, and invariants that govern LangG
 
 7. **ASSISTANT_FINAL_REQUIRED**: On success, emit exactly one `assistant_final` event with complete response.
 
-8. **CATALOG_SINGLE_SOURCE_OF_TRUTH**: Catalog exported by `@cogni/langgraph-graphs`, references compiled graphs.
+8. **NODE_RUNTIME_CATALOG_BOUNDARY**: App runtimes import `LANGGRAPH_CATALOG`, `LANGGRAPH_GRAPH_IDS`, and `DEFAULT_LANGGRAPH_GRAPH_ID` from their node-local graph package (`@cogni/<node>-graphs`). Shared `@cogni/langgraph-graphs` owns reusable graph implementations plus base catalogs, not app runtime policy.
 
 9. **NO_PARALLEL_REQUEST_TYPES**: Providers use `GraphRunRequest`/`GraphRunResult` from `@/ports`.
 
@@ -56,7 +56,7 @@ Define the package boundaries, execution paths, and invariants that govern LangG
 
 | Category                | Status         | Notes                                                                |
 | ----------------------- | -------------- | -------------------------------------------------------------------- |
-| **Package structure**   | ✅ Implemented | ai-core, ai-tools, langgraph-graphs                                  |
+| **Package structure**   | ✅ Implemented | ai-core, ai-tools, langgraph-graphs, nodes/<node>/graphs             |
 | **Compiled exports**    | 📋 Contract    | Graphs export `compile()` with no args                               |
 | **TOOL_CATALOG**        | 📋 Contract    | Canonical registry in `ai-tools`; wrapper checks `toolIds` allowlist |
 | **ALS runtime context** | 📋 Contract    | `getCogniExecContext()` per-run isolation                            |
@@ -93,9 +93,9 @@ packages/
 │       ├── catalog.ts                # TOOL_CATALOG: Record<string, BoundTool>
 │       └── tools/*.ts                # Pure implementations
 │
-└── langgraph-graphs/                 # ALL LangChain code lives here
+└── langgraph-graphs/                 # Shared LangChain graph implementations and helpers
     └── src/
-        ├── catalog.ts                # LANGGRAPH_CATALOG (graph metadata)
+        ├── catalog.ts                # NODE_LANGGRAPH_CATALOG, OPERATOR_LANGGRAPH_CATALOG, default node exports
         ├── graphs/                   # Graph definitions
         │   ├── index.ts              # Barrel: inproc entrypoints
         │   ├── poet/
@@ -119,11 +119,20 @@ packages/
                 ├── completion-adapter.ts # CogniCompletionAdapter (Runnable-based)
                 ├── tools.ts             # toLangChainToolsFromContext
                 └── entrypoint.ts        # createCogniEntrypoint
+nodes/
+└── <node>/
+    └── graphs/                       # Node runtime graph package
+        └── src/
+            └── index.ts              # Exports LANGGRAPH_CATALOG for this node runtime
 ```
 
 **Supported import surface:**
 
 ```typescript
+// App runtime catalog policy
+import { LANGGRAPH_CATALOG } from "@cogni/operator-graphs";
+import { LANGGRAPH_CATALOG } from "@cogni/node-template-graphs";
+
 // Compiled graph exports
 import { poetGraph, pondererGraph } from "@cogni/langgraph-graphs/graphs";
 
@@ -140,7 +149,7 @@ import {
 | ----------------------------------- | ---------------------- | ------------------------------------ |
 | `GraphRunRequest`, `GraphRunResult` | `@/ports`              | `GraphExecutorPort`, `GraphProvider` |
 | `GraphRunConfig`                    | `@cogni/ai-core`       | All adapters, graphs                 |
-| `LangGraphCatalogEntry`             | `langgraph/catalog.ts` | `LangGraphInProcProvider`            |
+| `LangGraphCatalogEntry`             | `langgraph/catalog.ts` | Node graph packages, providers       |
 
 ### Persistence Integration
 
@@ -174,14 +183,14 @@ InProc executes LangGraph within the Next.js server runtime with billing through
                               ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │ LangGraphInProcProvider                                             │
-│ - Looks up compiled graph from catalog                              │
+│ - Looks up compiled graph from node-local runtime catalog            │
 │ - Sets up AsyncLocalStorage context (completionFn, tokenSink)       │
 │ - Invokes: graph.invoke(messages, { configurable })                 │
 └─────────────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│ Compiled Graph (packages/langgraph-graphs/src/graphs/*)             │
+│ Compiled Graph (packages/langgraph-graphs/src/graphs/* or nodes/*)  │
 │ - Accesses runtime via getCogniExecContext()                        │
 │ - LLM calls route through CogniCompletionAdapter                    │
 │ - Tools resolved by toolIds via ToolRegistry                        │
@@ -227,10 +236,11 @@ func: async (args, runManager?, config?) => {
 };
 ```
 
-| Package                   | Owns                                  | Dependencies                         |
-| ------------------------- | ------------------------------------- | ------------------------------------ |
-| `@cogni/ai-tools`         | `TOOL_CATALOG`, contracts, schemas    | `zod` only                           |
-| `@cogni/langgraph-graphs` | `toLangChainTool` (wraps + allowlist) | `@cogni/ai-tools`, `@langchain/core` |
+| Package                   | Owns                                  | Dependencies                                        |
+| ------------------------- | ------------------------------------- | --------------------------------------------------- |
+| `@cogni/ai-tools`         | `TOOL_CATALOG`, contracts, schemas    | `zod` only                                          |
+| `@cogni/langgraph-graphs` | `toLangChainTool` (wraps + allowlist) | `@cogni/ai-tools`, `@langchain/core`                |
+| `@cogni/<node>-graphs`    | Node runtime catalog policy           | `@cogni/langgraph-graphs`, optional node graph code |
 
 ### langgraph.json Configuration
 
@@ -269,13 +279,14 @@ The `langgraph-server` package re-exports graphs from `@cogni/langgraph-graphs/g
 | `packages/ai-core/src/events/ai-events.ts`                          | AiEvent union type                        |
 | `packages/ai-core/src/tooling/tool-runner.ts`                       | createToolRunner (canonical pipeline)     |
 | `packages/ai-tools/src/catalog.ts`                                  | TOOL_CATALOG registry                     |
-| `packages/langgraph-graphs/src/catalog.ts`                          | LANGGRAPH_CATALOG (graph metadata)        |
+| `packages/langgraph-graphs/src/catalog.ts`                          | Shared base catalogs and graph metadata   |
 | `packages/langgraph-graphs/src/graphs/index.ts`                     | Barrel: inproc entrypoints                |
 | `packages/langgraph-graphs/src/runtime/cogni/exec-context.ts`       | CogniExecContext, runWithCogniExecContext |
 | `packages/langgraph-graphs/src/runtime/cogni/completion-adapter.ts` | CogniCompletionAdapter                    |
 | `packages/langgraph-graphs/src/runtime/cogni/entrypoint.ts`         | createCogniEntrypoint                     |
 | `packages/langgraph-graphs/src/runtime/core/server-entrypoint.ts`   | createServerEntrypoint                    |
 | `packages/langgraph-graphs/langgraph.json`                          | LangGraph Server graph registration       |
+| `nodes/<node>/graphs/src/index.ts`                                  | Effective runtime catalog for one node    |
 
 ## Acceptance Checks
 
@@ -287,7 +298,8 @@ The `langgraph-server` package re-exports graphs from `@cogni/langgraph-graphs/g
 **Manual:**
 
 1. Verify no `@langchain/*` imports exist in `src/` (`grep -r "@langchain" src/`)
-2. Verify graph catalog entries reference compiled graphs
+2. Verify node app imports catalog symbols from `@cogni/<node>-graphs`
+3. Verify graph catalog entries reference compiled graphs
 
 ## Open Questions
 
