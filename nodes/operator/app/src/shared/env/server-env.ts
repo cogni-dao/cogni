@@ -49,13 +49,12 @@ export class EnvValidationError extends Error {
 }
 
 function assertOpenFgaEnv(env: z.infer<typeof serverSchema>): void {
-  const anyOpenFgaEnv =
-    env.OPENFGA_API_URL !== undefined ||
+  const authzActivationEnv =
     env.OPENFGA_STORE_ID !== undefined ||
     env.OPENFGA_AUTHORIZATION_MODEL_ID !== undefined ||
     env.OPENFGA_API_TOKEN !== undefined;
 
-  if (!anyOpenFgaEnv) return;
+  if (!authzActivationEnv) return;
 
   const missing = [
     env.OPENFGA_API_URL === undefined ? "OPENFGA_API_URL" : undefined,

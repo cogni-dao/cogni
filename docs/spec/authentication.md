@@ -123,6 +123,11 @@ Bearer-token behavior:
 - An invalid presented token returns `null`; the request does not fall back to a browser session.
 - The token subject is a `user_id`, so downstream RBAC receives `actorId = user:{user_id}`.
 - The token is not an OpenFGA delegation grant. `agent:{id}` and `subjectId` require server-issued execution grants.
+- For external AI agents, registration authenticates the agent but does not
+  authorize node operations. Node developer flight authority is granted by a
+  node creator/admin through `POST /api/v1/nodes/{node_id}/developers`, stored
+  in OpenFGA, and enforced by `POST /api/v1/vcs/flight` as `node.flight` on
+  `node:{node_id}`.
 
 ### Post-Auth Redirect
 
@@ -193,6 +198,7 @@ Providers register conditionally — only when both `CLIENT_ID` and `CLIENT_SECR
 14. Valid `cogni_ag_sk_v1_*` bearer token on a `getSessionUser` route returns the token `sub` as `SessionUser.id`
 15. Invalid bearer token returns 401 on required-auth routes even if browser cookies are present
 16. Direct RBAC actor for browser and bearer-token requests is `user:{user_id}`, never wallet address or token material
+17. Registered AI agent bearer token cannot flight a node until the node creator/admin grants RBAC developer flight authority for that node
 
 ## Open Questions
 

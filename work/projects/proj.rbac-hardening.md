@@ -41,6 +41,7 @@ Implement the OpenFGA-based authorization system designed in the RBAC spec: Auth
 | Arch tests: authz-required-at-tool-exec, authz-required-at-broker, subject-binding-trusted | Partial     | 2   | task.5010 |
 | Composition root wiring (container.ts)                                                     | In Review   | 1   | task.5010 |
 | Observability + documentation chores                                                       | In Review   | 1   | task.5010 |
+| Direct `POST /api/v1/vcs/flight` node RBAC gate                                            | In Review   | 1   | task.5010 |
 
 **AuthorizationPort Interface:**
 
@@ -131,13 +132,14 @@ type AuthzDecision =
 
 ## Next Protected Actions
 
-| Protected action                                         | Phase | Status      | Notes                                                                                                      |
-| -------------------------------------------------------- | ----- | ----------- | ---------------------------------------------------------------------------------------------------------- |
-| `core__vcs_flight_candidate` tool execution              | P0    | In Review   | Covered through `toolRunner.exec()` when OpenFGA is configured                                             |
-| Direct `POST /api/v1/vcs/flight` dispatch                | P0.5  | Not Started | Route has session/bearer auth + CI gate; add OpenFGA action/resource design before dispatch                |
-| `GraphExecutorPort.runGraph()` / `graph.invoke`          | P1    | Not Started | Blocks unauthorized graph start before model/tool loop                                                     |
-| `ConnectionBroker.resolveForTool()` / `connection.use`   | P1    | Not Started | Blocks token materialization before BYO provider credential release                                        |
-| Durable `authz.check` event + `authz.unavailable` metric | P1    | Not Started | Current adapter returns decision/check details; event/metric sink still needs composition-root integration |
+| Protected action                                         | Phase | Status      | Notes                                                                                                                          |
+| -------------------------------------------------------- | ----- | ----------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `core__vcs_flight_candidate` tool execution              | P0    | In Review   | Covered through `toolRunner.exec()` when OpenFGA is configured                                                                 |
+| Direct `POST /api/v1/vcs/flight` dispatch                | P0.5  | In Review   | Checks `node.flight` on `node:{node_id}` before GitHub prepare/dispatch when OpenFGA is configured                             |
+| Node developer request/approval tuple-write surface      | P0.6  | In Review   | Owner-gated `POST /api/v1/nodes/{node_id}/developers` materializes approval as `node:{node_id}#developer@user:{agent_user_id}` |
+| `GraphExecutorPort.runGraph()` / `graph.invoke`          | P1    | Not Started | Blocks unauthorized graph start before model/tool loop                                                                         |
+| `ConnectionBroker.resolveForTool()` / `connection.use`   | P1    | Not Started | Blocks token materialization before BYO provider credential release                                                            |
+| Durable `authz.check` event + `authz.unavailable` metric | P1    | Not Started | Current adapter returns decision/check details; event/metric sink still needs composition-root integration                     |
 
 ## As-Built Specs
 

@@ -39,6 +39,7 @@ Shared authorization port, OpenFGA adapter, resource helpers, and deterministic 
 
 - `AuthorizationPort`
 - `AuthzCheckParams`, `AuthzDecision`, `AuthzAction`, `AuthzContext`
+- `AuthzRelationTuple`, `AuthzWriteDecision`
 - `authzToolResource`, `authzConnectionResource`, `authzGraphResource`, `authzUserResource`
 - `relationForAuthzAction`
 - `OpenFgaAuthorizationAdapter`
@@ -46,7 +47,7 @@ Shared authorization port, OpenFGA adapter, resource helpers, and deterministic 
 
 ## Responsibilities
 
-- This directory **does**: define shared authz contracts; map Cogni actions to OpenFGA relations; implement OpenFGA checks through the official SDK; provide deterministic tests fakes.
+- This directory **does**: define shared authz contracts; map Cogni actions to OpenFGA relations; implement OpenFGA checks and tuple writes through the official SDK; provide deterministic tests fakes.
 - This directory **does not**: read env vars; own OpenFGA deployment; define local role tables; import node app code.
 
 ## Usage

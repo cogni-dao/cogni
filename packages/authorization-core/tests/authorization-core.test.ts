@@ -17,11 +17,14 @@ import {
   type AuthzCheckParams,
   authzConnectionResource,
   authzGraphResource,
+  authzNodeResource,
   authzToolResource,
   FakeAuthorizationAdapter,
   OpenFgaAuthorizationAdapter,
   type OpenFgaCheckClient,
   type OpenFgaCheckRequest,
+  type OpenFgaStoreClient,
+  type OpenFgaWriteClient,
   relationForAuthzAction,
 } from "../src/index";
 
@@ -38,12 +41,14 @@ describe("relationForAuthzAction", () => {
     expect(relationForAuthzAction("connection.use")).toBe("can_use");
     expect(relationForAuthzAction("graph.invoke")).toBe("can_invoke");
     expect(relationForAuthzAction("user.act_as")).toBe("delegates");
+    expect(relationForAuthzAction("node.flight")).toBe("can_flight");
   });
 
   it("formats resource references", () => {
     expect(authzToolResource("x")).toBe("tool:x");
     expect(authzConnectionResource("c")).toBe("connection:c");
     expect(authzGraphResource("g")).toBe("graph:g");
+    expect(authzNodeResource("n")).toBe("node:n");
   });
 });
 
@@ -90,6 +95,27 @@ describe("FakeAuthorizationAdapter", () => {
         { name: "delegation", user: "agent:chat-v1", relation: "delegates" },
       ],
     });
+  });
+
+  it("records relation writes and deletes", async () => {
+    const authz = new FakeAuthorizationAdapter();
+    const tuple = {
+      user: "user:agent-1",
+      relation: "developer",
+      object: "node:node-1",
+    };
+
+    await expect(authz.writeRelation(tuple)).resolves.toMatchObject({
+      decision: "success",
+      code: "authz_write_success",
+    });
+    expect(authz.hasRelation(tuple)).toBe(true);
+
+    await expect(authz.deleteRelation(tuple)).resolves.toMatchObject({
+      decision: "success",
+      code: "authz_write_success",
+    });
+    expect(authz.hasRelation(tuple)).toBe(false);
   });
 });
 
@@ -181,5 +207,79 @@ describe("OpenFgaAuthorizationAdapter", () => {
         object: "user:alice",
       },
     ]);
+  });
+
+  it("resolves a stable store name before checking", async () => {
+    const seen: OpenFgaCheckRequest[] = [];
+    const client = {
+      async listStores(): Promise<{
+        stores: readonly { id: string; name: string }[];
+      }> {
+        return { stores: [{ id: "store-1", name: "cogni-rbac" }] };
+      },
+      async createStore(): Promise<{ id: string }> {
+        throw new Error("store should already exist");
+      },
+      async check(request: OpenFgaCheckRequest): Promise<{ allowed: boolean }> {
+        seen.push(request);
+        return { allowed: true };
+      },
+    } satisfies OpenFgaStoreClient;
+
+    const authz = new OpenFgaAuthorizationAdapter({
+      apiUrl: "http://openfga.test",
+      storeName: "cogni-rbac",
+      storeClient: client,
+    });
+
+    await expect(authz.check(baseCheck)).resolves.toMatchObject({
+      decision: "allow",
+      code: "authz_allowed",
+    });
+    expect(seen).toEqual([
+      {
+        user: "user:alice",
+        relation: "can_execute",
+        object: "tool:core__clock",
+      },
+    ]);
+  });
+
+  it("writes and deletes relation tuples through OpenFGA", async () => {
+    const written: unknown[] = [];
+    const deleted: unknown[] = [];
+    const client = {
+      async check(): Promise<{ allowed: boolean }> {
+        return { allowed: true };
+      },
+      async writeTuples(tuples: unknown[]): Promise<void> {
+        written.push(...tuples);
+      },
+      async deleteTuples(tuples: unknown[]): Promise<void> {
+        deleted.push(...tuples);
+      },
+    } satisfies OpenFgaWriteClient;
+
+    const authz = new OpenFgaAuthorizationAdapter({
+      apiUrl: "http://openfga.test",
+      storeId: "store",
+      client,
+    });
+    const tuple = {
+      user: "user:agent-1",
+      relation: "developer",
+      object: "node:node-1",
+    };
+
+    await expect(authz.writeRelation(tuple)).resolves.toMatchObject({
+      decision: "success",
+      code: "authz_write_success",
+    });
+    await expect(authz.deleteRelation(tuple)).resolves.toMatchObject({
+      decision: "success",
+      code: "authz_write_success",
+    });
+    expect(written).toEqual([tuple]);
+    expect(deleted).toEqual([tuple]);
   });
 });

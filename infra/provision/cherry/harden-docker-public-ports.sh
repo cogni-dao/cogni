@@ -3,7 +3,7 @@
 # SPDX-FileCopyrightText: 2026 Cogni-DAO
 #
 # Closes Docker-published "internal" ports (postgres, doltgres, redis,
-# litellm, temporal-grpc) to the public internet on Cogni Cherry VMs.
+# litellm, OpenFGA, temporal-grpc) to the public internet on Cogni Cherry VMs.
 #
 # Why DOCKER-USER and not UFW: Docker publishes ports via DNAT in
 # nat/PREROUTING and forwards via the DOCKER chain, bypassing UFW's INPUT.
@@ -21,7 +21,7 @@
 
 set -euo pipefail
 
-INTERNAL_PORTS="5432,5435,6379,4000,7233"
+INTERNAL_PORTS="5432,5435,6379,4000,7233,8080"
 POD_CIDR="10.42.0.0/16"
 SVC_CIDR="10.43.0.0/16"
 TAG="cogni-harden-internal-ports"

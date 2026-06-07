@@ -15,13 +15,15 @@ export type AuthzAction =
   | "tool.execute"
   | "connection.use"
   | "graph.invoke"
-  | "user.act_as";
+  | "user.act_as"
+  | "node.flight";
 
 export const AUTHZ_ACTIONS = [
   "tool.execute",
   "connection.use",
   "graph.invoke",
   "user.act_as",
+  "node.flight",
 ] as const satisfies readonly AuthzAction[];
 
 export type AuthzDecisionCode =
@@ -31,6 +33,7 @@ export type AuthzDecisionCode =
 
 export interface AuthzContext {
   readonly tenantId: string;
+  readonly nodeId?: string;
   readonly graphId?: string;
   readonly runId?: string;
   readonly toolCallId?: string;
@@ -68,7 +71,26 @@ export type AuthzDecision =
 
 export interface AuthorizationPort {
   check(params: AuthzCheckParams): Promise<AuthzDecision>;
+  writeRelation(tuple: AuthzRelationTuple): Promise<AuthzWriteDecision>;
+  deleteRelation(tuple: AuthzRelationTuple): Promise<AuthzWriteDecision>;
 }
+
+export interface AuthzRelationTuple {
+  readonly user: string;
+  readonly relation: string;
+  readonly object: string;
+}
+
+export type AuthzWriteDecision =
+  | {
+      readonly decision: "success";
+      readonly code: "authz_write_success";
+    }
+  | {
+      readonly decision: "failure";
+      readonly code: "authz_write_unavailable";
+      readonly reason?: string;
+    };
 
 export function authzToolResource(toolId: string): string {
   return `tool:${toolId}`;
@@ -86,6 +108,10 @@ export function authzUserResource(userId: string): string {
   return userId.startsWith("user:") ? userId : `user:${userId}`;
 }
 
+export function authzNodeResource(nodeId: string): string {
+  return `node:${nodeId}`;
+}
+
 export function relationForAuthzAction(action: AuthzAction): string {
   switch (action) {
     case "tool.execute":
@@ -96,6 +122,8 @@ export function relationForAuthzAction(action: AuthzAction): string {
       return "can_invoke";
     case "user.act_as":
       return "delegates";
+    case "node.flight":
+      return "can_flight";
   }
 }
 
@@ -103,5 +131,7 @@ export {
   OpenFgaAuthorizationAdapter,
   type OpenFgaAuthorizationAdapterConfig,
   type OpenFgaCheckClient,
+  type OpenFgaStoreClient,
+  type OpenFgaWriteClient,
 } from "./adapters/openfga-authorization.adapter";
 export { FakeAuthorizationAdapter } from "./test/fake-authorization.adapter";

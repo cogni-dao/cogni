@@ -460,6 +460,8 @@ log_info "LiteLLM callback routing (catalog-driven): ${LITELLM_NODE_ENDPOINTS}"
 # CI (no manual docker build / hand-pin). Resolve the same tag CI pushed.
 LITELLM_IMAGE="$(infra_image_tag litellm)"
 log_info "LiteLLM image (catalog content-hash): ${LITELLM_IMAGE}"
+OPENFGA_IMAGE="$(infra_image_tag openfga)"
+log_info "OpenFGA image (catalog content-hash): ${OPENFGA_IMAGE}"
 # Default node for unattributed spend — primary-host node_id from repo-spec
 # (REPO_SPEC_IS_IDENTITY_SSOT). The LiteLLM callback carries no hardcoded UUID.
 COGNI_DEFAULT_NODE_ID="$(default_node_id)"
@@ -729,6 +731,8 @@ MIGRATOR_IMAGE=${MIGRATOR_IMAGE:-unused-by-infra-deploy}
 SCHEDULER_WORKER_IMAGE=${SCHEDULER_WORKER_IMAGE:-unused-by-infra-deploy}
 # LiteLLM image — set above from GHCR content-hash tag.
 LITELLM_IMAGE=${LITELLM_IMAGE}
+# OpenFGA image — set above from GHCR content-hash tag.
+OPENFGA_IMAGE=${OPENFGA_IMAGE}
 ENV_EOF
 
 # Verify .env was written
@@ -790,6 +794,11 @@ append_env_if_set "$RUNTIME_ENV" POLY_WALLET_AEAD_KEY_ID "${POLY_WALLET_AEAD_KEY
 append_env_if_set "$RUNTIME_ENV" POLY_CLOB_GEO_BLOCK_TOKEN "${POLY_CLOB_GEO_BLOCK_TOKEN-}"
 # BYO-AI: Connection encryption
 append_env_if_set "$RUNTIME_ENV" CONNECTIONS_ENCRYPTION_KEY "${CONNECTIONS_ENCRYPTION_KEY-}"
+# OpenFGA authn is disabled by default for the VM-internal service. When
+# enabled, seed OPENFGA_API_TOKEN through the environment/OpenBao path; never
+# commit it in manifests.
+append_env_if_set "$RUNTIME_ENV" OPENFGA_AUTHN_METHOD "${OPENFGA_AUTHN_METHOD-}"
+append_env_if_set "$RUNTIME_ENV" OPENFGA_API_TOKEN "${OPENFGA_API_TOKEN-}"
 # Grafana observability (for OpenClaw grafana-health skill)
 derive_pdc_defaults_from_token
 append_env_if_set "$RUNTIME_ENV" GRAFANA_URL "${GRAFANA_URL-}"
@@ -939,6 +948,12 @@ if [[ "$LITELLM_IMAGE" == ghcr.io/* ]]; then
 else
   log_info "LiteLLM image is local ($LITELLM_IMAGE) — skipping pull"
 fi
+if [[ "$OPENFGA_IMAGE" == ghcr.io/* ]]; then
+  log_info "Pulling OpenFGA image: $OPENFGA_IMAGE"
+  docker pull "$OPENFGA_IMAGE"
+else
+  log_info "OpenFGA image is local ($OPENFGA_IMAGE) — skipping pull"
+fi
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Step 4: Assert profile services exist (guard against silent compose drift)
@@ -970,6 +985,7 @@ fi
 log_info "[$(date -u +%H:%M:%S)] Running DB provisioning..."
 emit_deployment_event "infra_deployment.db_provision_started" "in_progress" "Provisioning database users and schemas"
 $RUNTIME_COMPOSE --profile bootstrap run --rm db-provision
+$RUNTIME_COMPOSE --profile bootstrap run --rm openfga-migrate
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Step 6a: Bring up Doltgres + provision DBs + roles
@@ -1007,7 +1023,7 @@ emit_deployment_event "infra_deployment.stack_up_started" "in_progress" "Startin
 $RUNTIME_COMPOSE stop autoheal 2>/dev/null || true
 
 # Infra services only — excludes app, scheduler-worker, db-migrate, and one-shot backup jobs
-INFRA_SERVICES="postgres litellm redis alloy temporal-postgres temporal temporal-ui autoheal repo-init git-sync"
+INFRA_SERVICES="postgres litellm openfga redis alloy temporal-postgres temporal temporal-ui autoheal repo-init git-sync"
 # Doltgres is optional — only include if it's in the compose file for this env.
 if $RUNTIME_COMPOSE config --services 2>/dev/null | grep -q '^doltgres$'; then
   INFRA_SERVICES="$INFRA_SERVICES doltgres"
@@ -1676,6 +1692,7 @@ log_info "deploy-infra-remote.sh verified on VM (sha256 match)"
 # still hard-fail HERE on the runner if unset.
 : "${COGNI_DEFAULT_NODE_ID:?COGNI_DEFAULT_NODE_ID required (resolved on runner from repo-spec primary-host)}"
 : "${LITELLM_IMAGE:?LITELLM_IMAGE required (resolved on runner from infra/catalog/litellm.yaml content-hash)}"
+: "${OPENFGA_IMAGE:?OPENFGA_IMAGE required (resolved on runner from infra/catalog/openfga.yaml content-hash)}"
 COMMIT_SHA="${GITHUB_SHA:-$(git rev-parse HEAD 2>/dev/null || echo unknown)}"
 DEPLOY_ACTOR="${GITHUB_ACTOR:-$(whoami)}"
 
@@ -1709,7 +1726,7 @@ REMOTE_ENV_VARS=(
   POLY_WALLET_AEAD_KEY_HEX POLY_WALLET_AEAD_KEY_ID POLY_CLOB_GEO_BLOCK_TOKEN
   CONNECTIONS_ENCRYPTION_KEY COGNI_NODE_DBS NODE_APP_TARGETS EDGE_ENV_LINES
   LITELLM_NODE_ENDPOINTS COGNI_DEFAULT_NODE_ID ACTIONS_AUTOMATION_BOT_PAT
-  LITELLM_IMAGE COMMIT_SHA DEPLOY_ACTOR K8S_SECRETS_ONLY
+  LITELLM_IMAGE OPENFGA_IMAGE COMMIT_SHA DEPLOY_ACTOR K8S_SECRETS_ONLY
 )
 REMOTE_ENV_FILE="$ARTIFACT_DIR/deploy-infra-env.sh"
 : > "$REMOTE_ENV_FILE"

@@ -129,10 +129,21 @@ describe("env schemas", () => {
     expect(env.DATABASE_URL).toBe("sqlite://build.db");
   });
 
-  it("throws when OpenFGA config is partial", async () => {
+  it("allows OpenFGA URL before store bootstrap", async () => {
     Object.assign(process.env, {
       ...BASE_VALID_ENV,
       OPENFGA_API_URL: "http://localhost:8080",
+    });
+
+    const { serverEnv } = await import("@/shared/env/server");
+
+    expect(serverEnv().OPENFGA_API_URL).toBe("http://localhost:8080");
+  });
+
+  it("throws when OpenFGA store config is missing the service URL", async () => {
+    Object.assign(process.env, {
+      ...BASE_VALID_ENV,
+      OPENFGA_STORE_ID: "store-id",
     });
 
     const { serverEnv, EnvValidationError } = await import(

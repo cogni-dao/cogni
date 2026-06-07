@@ -7,7 +7,7 @@ set -euo pipefail
 # Module: infra/compose/postgres-init/provision.sh
 # Purpose: Idempotent database and role provisioning for runtime stack.
 # Scope: Executed by the db-provision service container; creates app role,
-#   per-node databases (DB_PER_NODE), and litellm database.
+#   per-node databases (DB_PER_NODE), litellm database, and optional openfga database.
 # Invariants:
 #   DB_PER_NODE: Each node gets its own database on the shared Postgres server.
 #   DB_IS_BOUNDARY: Database itself is the node boundary — no tenancy columns.
@@ -33,6 +33,9 @@ if [ -z "$LITELLM_DB" ]; then
   echo "❌ ERROR: LITELLM_DB_NAME is required"
   exit 1
 fi
+
+# OpenFGA database (shared, root-owned — single RBAC store server)
+OPENFGA_DB="${OPENFGA_DB_NAME:-}"
 
 # App User Credentials (required, no defaults)
 APP_USER="${APP_DB_USER:-}"
@@ -83,6 +86,10 @@ if ! [[ "$APP_READONLY_USER" =~ ^[a-zA-Z0-9_]+$ ]]; then
 fi
 if ! [[ "$LITELLM_DB" =~ ^[a-zA-Z0-9_]+$ ]]; then
   echo "❌ ERROR: LITELLM_DB_NAME contains invalid characters (allowed: a-zA-Z0-9_)"
+  exit 1
+fi
+if [ -n "$OPENFGA_DB" ] && ! [[ "$OPENFGA_DB" =~ ^[a-zA-Z0-9_]+$ ]]; then
+  echo "❌ ERROR: OPENFGA_DB_NAME contains invalid characters (allowed: a-zA-Z0-9_)"
   exit 1
 fi
 
@@ -254,4 +261,22 @@ else
   echo "   -> Database '$LITELLM_DB' already exists."
 fi
 
-echo "✅ Provisioning Complete (${#NODE_DBS[@]} node database(s) + litellm)."
+# ── OpenFGA Database (shared, root-owned) ─────────────────────────────────
+if [ -n "$OPENFGA_DB" ]; then
+  echo "🔧 Checking openfga database '$OPENFGA_DB'..."
+  openfga_db_exists=$(run_sql_as_root "postgres" "SELECT 1 FROM pg_database WHERE datname = '$OPENFGA_DB'" | grep -c 1 || true)
+  if [ "$openfga_db_exists" -eq 0 ]; then
+    echo "   -> Creating database '$OPENFGA_DB'..."
+    run_sql_as_root "postgres" "CREATE DATABASE \"$OPENFGA_DB\";"
+  else
+    echo "   -> Database '$OPENFGA_DB' already exists."
+  fi
+else
+  echo "   -> OPENFGA_DB_NAME not set; skipping openfga database provisioning."
+fi
+
+if [ -n "$OPENFGA_DB" ]; then
+  echo "✅ Provisioning Complete (${#NODE_DBS[@]} node database(s) + litellm + openfga)."
+else
+  echo "✅ Provisioning Complete (${#NODE_DBS[@]} node database(s) + litellm)."
+fi

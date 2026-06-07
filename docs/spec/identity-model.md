@@ -157,6 +157,34 @@ grant issues that identity server-side.
 `RunnableConfig.configurable`. It is attached only by trusted server launchers
 after validating a session or execution grant.
 
+## AI Agent Node Developer Identity
+
+V0 external AI agents enter through `POST /api/v1/agent/register`. Registration
+mints a canonical `user_id`, a billing account, and an HMAC bearer token. That
+credential authenticates the request; it does not by itself grant authority over
+any node.
+
+Node-scoped developer control is a separate OpenFGA relationship:
+
+| Step           | Actor                        | System Fact                                                                                 |
+| -------------- | ---------------------------- | ------------------------------------------------------------------------------------------- |
+| Register       | External AI agent            | `users.id = agent_user_id`; bearer token resolves to `SessionUser.id`                       |
+| Request        | `user:{agent_user_id}`       | Agent asks for developer flight control on one `node:{node_id}`                             |
+| Approve/reject | Node creator/admin           | `POST /api/v1/nodes/{node_id}/developers` writes or removes the OpenFGA tuple for that node |
+| Flight         | `user:{agent_user_id}` in V0 | `POST /api/v1/vcs/flight` checks `node.flight` on `node:{node_id}`                          |
+
+The node creator/admin is the human RLS owner for the node registry row in V0.
+That RLS ownership authorizes the approval act; it must not be confused with
+ongoing flight authority. After approval, the flight route uses RBAC, not
+`nodes.owner_user_id = caller`, so an external agent can flight exactly the node
+it was approved for.
+
+**VNext principal migration:** when the actors table and execution grants become
+the registration authority, approved AI agents should run as
+`actorId = agent:{actor_id}` with `subjectId = user:{approver_user_id}` only for
+explicit on-behalf-of delegation. Until then, registered agents are
+user-backed machine principals: `actorId = user:{agent_user_id}`.
+
 ## Scoping Rules
 
 ### Where Each Key Appears

@@ -16,7 +16,9 @@ import type {
   AuthzCheckParams,
   AuthzDecision,
   AuthzDecisionCode,
+  AuthzRelationTuple,
   AuthzSubcheck,
+  AuthzWriteDecision,
 } from "../index";
 import { authzUserResource, relationForAuthzAction } from "../index";
 
@@ -60,6 +62,7 @@ function checksFor(params: AuthzCheckParams): readonly AuthzSubcheck[] {
 
 export class FakeAuthorizationAdapter implements AuthorizationPort {
   private readonly decisions = new Map<string, FakeDecision>();
+  private readonly relations = new Set<string>();
 
   allow(params: AuthzCheckParams): void {
     this.decisions.set(keyFor(params), "allow");
@@ -99,4 +102,22 @@ export class FakeAuthorizationAdapter implements AuthorizationPort {
           : "Fake authz denied",
     };
   }
+
+  async writeRelation(tuple: AuthzRelationTuple): Promise<AuthzWriteDecision> {
+    this.relations.add(relationKey(tuple));
+    return { decision: "success", code: "authz_write_success" };
+  }
+
+  async deleteRelation(tuple: AuthzRelationTuple): Promise<AuthzWriteDecision> {
+    this.relations.delete(relationKey(tuple));
+    return { decision: "success", code: "authz_write_success" };
+  }
+
+  hasRelation(tuple: AuthzRelationTuple): boolean {
+    return this.relations.has(relationKey(tuple));
+  }
+}
+
+function relationKey(tuple: AuthzRelationTuple): string {
+  return JSON.stringify(tuple);
 }

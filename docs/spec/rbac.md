@@ -47,17 +47,37 @@ Authorization operates across three distinct layers with different purposes:
 
 ## Implementation Coverage
 
-| Surface                                  | Status              | Enforcement                                                                                                       |
-| ---------------------------------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| Shared authorization contract            | Active in task.5010 | `packages/authorization-core` exports `AuthorizationPort`, check params/decisions, helpers, OpenFGA adapter, fake |
-| Tool execution                           | Active in task.5010 | `createToolRunner()` calls `AuthorizationPort.check()` after ToolPolicy and before arg validation/execution       |
-| Operator in-process graph/chat execution | Active in task.5010 | Operator DI injects `AuthorizationPort`; inproc provider passes `actorId`, `tenantId`, `graphId` to tool runner   |
-| API-originated internal graph runs       | Identity-ready      | Route requires `actorUserId`, `billingAccountId`, `virtualKeyId`; tool authz receives `user:{actorUserId}`        |
-| Direct `POST /api/v1/vcs/flight` route   | Session/bearer-auth | Route requires `SessionUser` and CI green; it does not call OpenFGA in task.5010                                  |
-| `core__vcs_flight_candidate` graph tool  | Tool-authz-covered  | PR-manager graph invokes it through `toolRunner.exec()`, so OpenFGA can deny `tool.execute` for that tool         |
-| Connection broker token materialization  | Pending hardening   | Broker receives `{ actorId, tenantId }`; `connection.use` OpenFGA check is not wired in task.5010                 |
-| Graph invocation entry                   | Pending hardening   | `graph.invoke` check at `GraphExecutorPort.runGraph()` is not wired in task.5010                                  |
-| Authz audit metrics/events               | Pending hardening   | Current adapter returns decision details; durable `authz.check` event/metric emission is P1                       |
+| Surface                                  | Status              | Enforcement                                                                                                                     |
+| ---------------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Shared authorization contract            | Active in task.5010 | `packages/authorization-core` exports `AuthorizationPort`, check params/decisions, helpers, OpenFGA adapter, fake               |
+| Tool execution                           | Active in task.5010 | `createToolRunner()` calls `AuthorizationPort.check()` after ToolPolicy and before arg validation/execution                     |
+| Operator in-process graph/chat execution | Active in task.5010 | Operator DI injects `AuthorizationPort`; inproc provider passes `actorId`, `tenantId`, `graphId` to tool runner                 |
+| API-originated internal graph runs       | Identity-ready      | Route requires `actorUserId`, `billingAccountId`, `virtualKeyId`; tool authz receives `user:{actorUserId}`                      |
+| Direct `POST /api/v1/vcs/flight` route   | Active              | Route requires `SessionUser`, checks `node.flight` on `node:{node_id}` when OpenFGA is configured, then artifact-gates dispatch |
+| `core__vcs_flight_candidate` graph tool  | Tool-authz-covered  | PR-manager graph invokes it through `toolRunner.exec()`, so OpenFGA can deny `tool.execute` for that tool                       |
+| Connection broker token materialization  | Pending hardening   | Broker receives `{ actorId, tenantId }`; `connection.use` OpenFGA check is not wired in task.5010                               |
+| Graph invocation entry                   | Pending hardening   | `graph.invoke` check at `GraphExecutorPort.runGraph()` is not wired in task.5010                                                |
+| Authz audit metrics/events               | Pending hardening   | Current adapter returns decision details; durable `authz.check` event/metric emission is P1                                     |
+
+---
+
+## Runtime Deployment
+
+OpenFGA runs as shared VM runtime infrastructure, not as a node-scoped k8s app.
+
+| Surface       | Contract                                                                                                                                         |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Compose       | `infra/compose/runtime/docker-compose.yml` runs `openfga-migrate` then `openfga` against the shared Postgres `openfga` database                  |
+| Image         | `openfga/openfga:v1.17.1@sha256:ff96f68d2f03a029e051027415c106295c782084daeef0934479f04a3fdc2d57`                                                |
+| Pod endpoint  | Operator overlays set `OPENFGA_API_URL=http://operator-openfga-external:8080` through ConfigMap                                                  |
+| Store config  | `OPENFGA_STORE_ID` and `OPENFGA_AUTHORIZATION_MODEL_ID` are runtime config written after store/model bootstrap                                   |
+| Secret config | `OPENFGA_API_TOKEN` is only needed when OpenFGA authn is enabled; seed it through OpenBao/ESO as `cogni/<env>/operator/OPENFGA_API_TOKEN`        |
+| Network       | Port 8080 is published for k3s pod access through VM DNS and dropped on the public NIC by `infra/provision/cherry/harden-docker-public-ports.sh` |
+
+`OPENFGA_API_URL` may exist before a store is bootstrapped. The operator only
+constructs the OpenFGA adapter when both `OPENFGA_API_URL` and
+`OPENFGA_STORE_ID` are present, so service reachability can ship before policy
+activation.
 
 ---
 
@@ -124,6 +144,12 @@ type tenant
     define admin: [user, service]
     define member: [user] or admin
 
+type node
+  relations
+    define admin: [user]
+    define developer: [user, agent] or admin
+    define can_flight: developer
+
 type graph
   relations
     define owner: [user]
@@ -160,14 +186,21 @@ The current `user.delegates` relation is global—not scoped to tenant or graph.
 
 ## Action→Relation Mapping
 
-| Action           | Resource Type     | OpenFGA Check                             | Error Code     |
-| ---------------- | ----------------- | ----------------------------------------- | -------------- |
-| `tool.execute`   | `tool:{id}`       | `check(actor, can_execute, tool:{id})`    | `authz_denied` |
-| `connection.use` | `connection:{id}` | `check(actor, can_use, connection:{id})`  | `authz_denied` |
-| `graph.invoke`   | `graph:{id}`      | `check(actor, can_invoke, graph:{id})`    | `authz_denied` |
-| `user.act_as`    | `user:{user_id}`  | `check(actor, delegates, user:{user_id})` | `authz_denied` |
+| Action           | Resource Type     | OpenFGA Check                              | Error Code     |
+| ---------------- | ----------------- | ------------------------------------------ | -------------- |
+| `tool.execute`   | `tool:{id}`       | `check(actor, can_execute, tool:{id})`     | `authz_denied` |
+| `connection.use` | `connection:{id}` | `check(actor, can_use, connection:{id})`   | `authz_denied` |
+| `graph.invoke`   | `graph:{id}`      | `check(actor, can_invoke, graph:{id})`     | `authz_denied` |
+| `user.act_as`    | `user:{user_id}`  | `check(actor, delegates, user:{user_id})`  | `authz_denied` |
+| `node.flight`    | `node:{node_id}`  | `check(actor, can_flight, node:{node_id})` | `authz_denied` |
 
 **Delegation relation:** `user.delegates` grants agents the right to act on behalf of user. Dual-check queries `user.act_as` when `subject` is present.
+
+**Node developer relation:** `node.developer` grants an actor operational
+developer authority for one node. In V0, registered external AI agents
+authenticate as user-backed machine principals (`user:{agent_user_id}`), so
+approval writes them as users. VNext can grant true `agent:{actor_id}`
+principals without changing the `node.flight` route check.
 
 ---
 
@@ -300,8 +333,23 @@ There are two flight paths:
 
 1. **Direct route:** `POST /api/v1/vcs/flight`
    - Authenticates with browser session or HMAC machine bearer token.
-   - Resolves `SessionUser.id`, checks CI is green for the target PR head, then dispatches `candidate-flight.yml`.
-   - Does not call `AuthorizationPort.check()` in task.5010.
+   - Resolves the node by `nodeRef.nodeId` through service DB because the
+     caller may be an approved external agent, not the RLS owner.
+   - If OpenFGA is configured, checks:
+
+```typescript
+AuthorizationPort.check({
+  actorId: "user:{session_user_id}",
+  action: "node.flight",
+  resource: "node:{node_id}",
+  context: { tenantId: "{billing_account_id}", nodeId: "{node_id}" },
+});
+```
+
+- If OpenFGA is not configured, V0 rollout fallback preserves the legacy
+  owner-only check (`nodes.owner_user_id = SessionUser.id`).
+- Only after RBAC allow does it verify nodeRef source/image preflight through
+  the deploy plane and dispatch `candidate-flight.yml`.
 
 2. **PR-manager graph tool:** `core__vcs_flight_candidate`
    - Exposed to the operator-only `pr-manager` LangGraph catalog entry.
@@ -317,12 +365,32 @@ AuthorizationPort.check({
 });
 ```
 
-The end-to-end validation for task.5010 is therefore: an authenticated operator
-chat/API graph run selects `langgraph:pr-manager`, requests an explicit
-candidate-a flight, and observes either an allowed dispatch of
-`core__vcs_flight_candidate` or a fail-closed `authz_denied` /
-`authz_unavailable` before any GitHub workflow dispatch. Direct route-level
-OpenFGA for `/api/v1/vcs/flight` is a follow-up protected-action gate.
+The v0 external-agent validation is: register an AI agent, have the node
+creator/admin approve `node.developer` for the target `node:{node_id}`, call
+`POST /api/v1/vcs/flight` with the agent bearer token, and observe either an
+allowed candidate-a workflow dispatch or a fail-closed `authz_denied` /
+`authz_unavailable` before any GitHub prepare/dispatch call.
+
+The graph-tool validation remains: an authenticated operator chat/API graph run
+selects `langgraph:pr-manager`, requests an explicit candidate-a flight, and
+observes the `core__vcs_flight_candidate` tool authorization path.
+
+### 6. Node Developer Request Flow
+
+New node spawn + external AI agent flow:
+
+1. The AI agent calls `POST /api/v1/agent/register` and receives a bearer token.
+2. The agent asks for developer flight control for one `node:{node_id}`. V0 may
+   surface this as an operator work item; the durable authority is not the
+   request row.
+3. The node creator/admin approves or rejects. Approval writes OpenFGA tuples:
+   `node:{node_id}#developer@user:{agent_user_id}` in V0. Rejection removes
+   that tuple if present. The operator API surface is:
+   `POST /api/v1/nodes/{node_id}/developers { agentUserId, decision }`.
+4. The flight route enforces `node.flight` before touching GitHub.
+
+Approval authority comes from the node creator/admin's current ownership of the
+node registry row. Ongoing flight authority comes only from OpenFGA.
 
 Candidate-a deployment proof uses the existing app flight lever: PR Build
 produces per-target digests, `candidate-flight.yml` writes the candidate overlay
@@ -330,7 +398,7 @@ deploy branch, Argo reconciles the operator pod, and validation checks
 `/version.buildSha` on `https://test.cognidao.org` against the PR head SHA. A
 `/readyz` 200 alone is not deployment proof.
 
-### 6. Audit Events (P1)
+### 7. Audit Events (P1)
 
 The target durable audit event shape is:
 
@@ -358,7 +426,7 @@ The target durable audit event shape is:
 The task.5010 adapter returns decision/check details to the caller but does not
 emit this durable event itself.
 
-### 7. Caching Strategy (P1)
+### 8. Caching Strategy (P1)
 
 **Cache key:** `${actor}:${subject ?? 'direct'}:${action}:${resource}`
 
