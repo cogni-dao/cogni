@@ -336,33 +336,6 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
     };
   }
 
-  async dispatchCandidateFlight(input: {
-    owner: string;
-    repo: string;
-    prNumber: number;
-    headSha: string;
-  }): Promise<CandidateFlightDispatchResult> {
-    const octokit = await this.getOctokit(input.owner, input.repo);
-    await octokit.request(
-      "POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches",
-      {
-        owner: input.owner,
-        repo: input.repo,
-        workflow_id: "candidate-flight.yml",
-        ref: "main",
-        inputs: {
-          pr_number: String(input.prNumber),
-          head_sha: input.headSha,
-        },
-      }
-    );
-    return {
-      dispatched: true,
-      workflowUrl: `https://github.com/${input.owner}/${input.repo}/actions/workflows/candidate-flight.yml`,
-      message: `Flight dispatched for PR #${input.prNumber} @ ${input.headSha.slice(0, 8)}.`,
-    };
-  }
-
   async prepareNodeRefCandidateFlight(
     input: PrepareNodeRefCandidateFlightInput
   ): Promise<PreparedNodeRefCandidateFlight> {

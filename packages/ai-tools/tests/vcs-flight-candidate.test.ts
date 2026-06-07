@@ -4,7 +4,7 @@
 /**
  * Module: `@cogni/ai-tools/tests/vcs-flight-candidate`
  * Purpose: Unit tests for the core__vcs_flight_candidate tool contract + impl.
- * Scope: Tests contract shape, input validation, output validation, and implementation delegation; does not make network calls, does not spin up LangChain.
+ * Scope: Tests contract shape, input validation, output validation, and implementation delegation; does not dispatch workflows.
  * Invariants: NO_AUTO_FLIGHT — tool description must flag this.
  * Side-effects: none
  * Links: src/tools/vcs-flight-candidate.ts
@@ -24,11 +24,13 @@ import {
   vcsFlightCandidateContract,
 } from "../src/tools/vcs-flight-candidate";
 
+const SOURCE_SHA = "0123456789012345678901234567890123456789";
+
 function makeVcsStub(
   dispatchImpl: VcsCapability["dispatchCandidateFlight"] = async (params) => ({
     dispatched: true,
-    prNumber: params.prNumber,
-    headSha: params.headSha ?? null,
+    nodeSlug: params.nodeSlug,
+    sourceSha: params.sourceSha,
     workflowUrl: `https://github.com/${params.owner}/${params.repo}/actions/workflows/candidate-flight.yml`,
     message: "ok",
   })
@@ -58,18 +60,18 @@ describe("vcs_flight_candidate contract", () => {
     expect(vcsFlightCandidateContract.effect).toBe("state_change");
   });
 
-  it("description enforces NO_AUTO_FLIGHT via prompt", () => {
+  it("description rejects automatic PR-shaped artifact identity", () => {
     const desc = vcsFlightCandidateContract.description.toLowerCase();
-    // Both auto-flight guard and CI-prereq guard must be in the description.
     expect(desc).toContain("not auto-flight");
-    expect(desc).toContain("core__vcs_get_ci_status");
+    expect(desc).toContain("source");
+    expect(desc).toContain("do not use pr numbers");
   });
 
-  it("allowlist contains public fields only", () => {
+  it("allowlist contains public nodeRef fields only", () => {
     expect(vcsFlightCandidateContract.allowlist).toEqual([
       "dispatched",
-      "prNumber",
-      "headSha",
+      "nodeSlug",
+      "sourceSha",
       "workflowUrl",
       "message",
     ]);
@@ -77,138 +79,98 @@ describe("vcs_flight_candidate contract", () => {
 });
 
 describe("vcs_flight_candidate input schema", () => {
-  it("accepts prNumber only (headSha optional)", () => {
+  it("accepts node slug and 40-char sourceSha", () => {
     const ok = vcsFlightCandidateContract.inputSchema.parse({
       owner: "Cogni-DAO",
-      repo: "node-template",
-      prNumber: 954,
+      repo: "cogni",
+      nodeSlug: "creative",
+      sourceSha: SOURCE_SHA,
     });
-    expect(ok.prNumber).toBe(954);
-    expect(ok.headSha).toBeUndefined();
+    expect(ok.nodeSlug).toBe("creative");
+    expect(ok.sourceSha).toBe(SOURCE_SHA);
   });
 
-  it("accepts 7-to-40-char hex headSha", () => {
-    const short = vcsFlightCandidateContract.inputSchema.parse({
-      owner: "Cogni-DAO",
-      repo: "node-template",
-      prNumber: 954,
-      headSha: "27379ae",
-    });
-    expect(short.headSha).toBe("27379ae");
-
-    const long = vcsFlightCandidateContract.inputSchema.parse({
-      owner: "Cogni-DAO",
-      repo: "node-template",
-      prNumber: 954,
-      headSha: "27379ae765b6834adeae9db9118a36882cd3ca93",
-    });
-    expect(long.headSha?.length).toBe(40);
-  });
-
-  it("rejects non-hex headSha", () => {
+  it("rejects PR-shaped and non-SHA inputs", () => {
     expect(() =>
       vcsFlightCandidateContract.inputSchema.parse({
         owner: "Cogni-DAO",
-        repo: "node-template",
+        repo: "cogni",
         prNumber: 954,
-        headSha: "not-a-sha",
       })
     ).toThrow();
-  });
-
-  it("rejects non-positive prNumber", () => {
     expect(() =>
       vcsFlightCandidateContract.inputSchema.parse({
         owner: "Cogni-DAO",
-        repo: "node-template",
-        prNumber: 0,
+        repo: "cogni",
+        nodeSlug: "creative",
+        sourceSha: "27379ae",
       })
     ).toThrow();
   });
 
-  it("rejects empty owner or repo", () => {
+  it("rejects empty owner, repo, or invalid node slug", () => {
     expect(() =>
       vcsFlightCandidateContract.inputSchema.parse({
         owner: "",
         repo: "r",
-        prNumber: 1,
+        nodeSlug: "creative",
+        sourceSha: SOURCE_SHA,
       })
     ).toThrow();
     expect(() =>
       vcsFlightCandidateContract.inputSchema.parse({
         owner: "o",
         repo: "",
-        prNumber: 1,
+        nodeSlug: "creative",
+        sourceSha: SOURCE_SHA,
+      })
+    ).toThrow();
+    expect(() =>
+      vcsFlightCandidateContract.inputSchema.parse({
+        owner: "o",
+        repo: "r",
+        nodeSlug: "Creative",
+        sourceSha: SOURCE_SHA,
       })
     ).toThrow();
   });
 });
 
 describe("vcs_flight_candidate implementation", () => {
-  it("delegates to VcsCapability.dispatchCandidateFlight", async () => {
+  it("delegates nodeRef dispatch to VcsCapability.dispatchCandidateFlight", async () => {
     const spy = vi.fn<
       Parameters<VcsCapability["dispatchCandidateFlight"]>,
       Promise<DispatchCandidateFlightResult>
     >(async (params) => ({
       dispatched: true,
-      prNumber: params.prNumber,
-      headSha: params.headSha ?? null,
+      nodeSlug: params.nodeSlug,
+      sourceSha: params.sourceSha,
       workflowUrl:
         "https://github.com/o/r/actions/workflows/candidate-flight.yml",
-      message: `Flight dispatched for PR #${params.prNumber}`,
-    }));
-
-    const vcs = makeVcsStub(spy);
-    const impl = createVcsFlightCandidateImplementation({ vcsCapability: vcs });
-
-    const out = await impl.execute({
-      owner: "Cogni-DAO",
-      repo: "node-template",
-      prNumber: 954,
-      headSha: "27379ae7",
-    });
-
-    expect(spy).toHaveBeenCalledTimes(1);
-    expect(spy).toHaveBeenCalledWith({
-      owner: "Cogni-DAO",
-      repo: "node-template",
-      prNumber: 954,
-      headSha: "27379ae7",
-    });
-    expect(out.dispatched).toBe(true);
-    expect(out.prNumber).toBe(954);
-    expect(out.headSha).toBe("27379ae7");
-  });
-
-  it("passes undefined headSha through when caller omits it", async () => {
-    const spy = vi.fn<
-      Parameters<VcsCapability["dispatchCandidateFlight"]>,
-      Promise<DispatchCandidateFlightResult>
-    >(async (params) => ({
-      dispatched: true,
-      prNumber: params.prNumber,
-      headSha: null,
-      workflowUrl:
-        "https://github.com/o/r/actions/workflows/candidate-flight.yml",
-      message: "ok",
+      message: `Candidate flight dispatched for ${params.nodeSlug}`,
     }));
 
     const impl = createVcsFlightCandidateImplementation({
       vcsCapability: makeVcsStub(spy),
     });
 
-    await impl.execute({
-      owner: "o",
-      repo: "r",
-      prNumber: 1,
+    const out = await impl.execute({
+      owner: "Cogni-DAO",
+      repo: "cogni",
+      nodeSlug: "creative",
+      sourceSha: SOURCE_SHA,
     });
 
     expect(spy).toHaveBeenCalledWith({
-      owner: "o",
-      repo: "r",
-      prNumber: 1,
-      headSha: undefined,
+      owner: "Cogni-DAO",
+      repo: "cogni",
+      nodeSlug: "creative",
+      sourceSha: SOURCE_SHA,
+      workflowRef: undefined,
     });
+    expect(out.dispatched).toBe(true);
+    expect(out.nodeSlug).toBe("creative");
+    expect(out.sourceSha).toBe(SOURCE_SHA);
   });
 
   it("stub throws when capability not configured", async () => {
@@ -216,7 +178,8 @@ describe("vcs_flight_candidate implementation", () => {
       vcsFlightCandidateBoundTool.implementation.execute({
         owner: "o",
         repo: "r",
-        prNumber: 1,
+        nodeSlug: "creative",
+        sourceSha: SOURCE_SHA,
       })
     ).rejects.toThrow(/VcsCapability not configured/);
   });
@@ -226,33 +189,21 @@ describe("vcs_flight_candidate output schema", () => {
   it("accepts valid result", () => {
     const result = vcsFlightCandidateContract.outputSchema.parse({
       dispatched: true,
-      prNumber: 954,
-      headSha: "27379ae7",
+      nodeSlug: "creative",
+      sourceSha: SOURCE_SHA,
       workflowUrl:
         "https://github.com/Cogni-DAO/cogni/actions/workflows/candidate-flight.yml",
-      message: "Flight dispatched for PR #954",
+      message: "Candidate flight dispatched for creative",
     });
-    expect(result.dispatched).toBe(true);
-  });
-
-  it("accepts null headSha (no override)", () => {
-    const result = vcsFlightCandidateContract.outputSchema.parse({
-      dispatched: true,
-      prNumber: 954,
-      headSha: null,
-      workflowUrl:
-        "https://github.com/Cogni-DAO/cogni/actions/workflows/candidate-flight.yml",
-      message: "ok",
-    });
-    expect(result.headSha).toBeNull();
+    expect(result.sourceSha).toBe(SOURCE_SHA);
   });
 
   it("rejects non-URL workflowUrl", () => {
     expect(() =>
       vcsFlightCandidateContract.outputSchema.parse({
         dispatched: true,
-        prNumber: 1,
-        headSha: null,
+        nodeSlug: "creative",
+        sourceSha: SOURCE_SHA,
         workflowUrl: "not-a-url",
         message: "",
       })

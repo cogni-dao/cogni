@@ -74,13 +74,6 @@ export interface OperatorDeployPlanePort {
     prNumber: number;
   }): Promise<OperatorDeployCiStatus>;
 
-  dispatchCandidateFlight(input: {
-    owner: string;
-    repo: string;
-    prNumber: number;
-    headSha: string;
-  }): Promise<CandidateFlightDispatchResult>;
-
   prepareNodeRefCandidateFlight(
     input: PrepareNodeRefCandidateFlightInput
   ): Promise<PreparedNodeRefCandidateFlight>;

@@ -3,7 +3,7 @@
 
 /**
  * Module: `@cogni/ai-tools/tools/vcs-flight-candidate`
- * Purpose: AI tool that dispatches the `candidate-flight.yml` workflow for a PR.
+ * Purpose: AI tool that dispatches the `candidate-flight.yml` workflow for a nodeRef.
  * Scope: State-changing CI dispatch — thin wrapper over VcsCapability.dispatchCandidateFlight; does not import LangChain, does not check CI prerequisites (the workflow owns that), does not poll for the resulting run_id (racey).
  * Invariants:
  *   - TOOL_ID_NAMESPACED: ID is `core__vcs_flight_candidate`
@@ -26,19 +26,17 @@ import type { BoundTool, ToolContract, ToolImplementation } from "../types";
 
 export const VcsFlightCandidateInputSchema = z.object({
   owner: z.string().min(1).describe("Repository owner (e.g., 'Cogni-DAO')"),
-  repo: z.string().min(1).describe("Repository name (e.g., 'node-template')"),
-  prNumber: z
-    .number()
-    .int()
-    .min(1)
-    .describe("Pull request number to flight to candidate-a"),
-  headSha: z
+  repo: z.string().min(1).describe("Operator repository name (e.g., 'cogni')"),
+  nodeSlug: z
     .string()
-    .regex(/^[0-9a-f]{7,40}$/i)
-    .optional()
+    .min(1)
+    .regex(/^[a-z][a-z0-9-]*$/)
+    .describe("Catalog node slug to flight to candidate-a"),
+  sourceSha: z
+    .string()
+    .regex(/^[0-9a-f]{40}$/i)
     .describe(
-      "Optional head SHA override. Defaults to the PR's current HEAD; only set " +
-        "this when you explicitly want an older stable SHA instead of HEAD."
+      "External node repo source SHA. The child repo must publish image_repository:sha-<sourceSha>."
     ),
   workflowRef: z
     .string()
@@ -46,8 +44,7 @@ export const VcsFlightCandidateInputSchema = z.object({
     .optional()
     .describe(
       "Optional branch/ref from which to load candidate-flight.yml. Defaults to " +
-        "'main'. Set to a feature branch to test workflow changes before merging — " +
-        "e.g., flight PR #1004's app build using PR #1003's fixed workflow."
+        "'main'. Set to a feature branch to test workflow changes before merging."
     ),
 });
 export type VcsFlightCandidateInput = z.infer<
@@ -56,8 +53,8 @@ export type VcsFlightCandidateInput = z.infer<
 
 export const VcsFlightCandidateOutputSchema = z.object({
   dispatched: z.boolean(),
-  prNumber: z.number().int(),
-  headSha: z.string().nullable(),
+  nodeSlug: z.string(),
+  sourceSha: z.string(),
   workflowUrl: z.string().url(),
   message: z.string(),
 });
@@ -81,15 +78,14 @@ export const vcsFlightCandidateContract: ToolContract<
 > = {
   name: VCS_FLIGHT_CANDIDATE_NAME,
   description:
-    "Dispatch the `candidate-flight.yml` workflow for a pull request. " +
-    "Promotes the PR's per-app digests onto `deploy/candidate-a` and waits for " +
+    "Dispatch the `candidate-flight.yml` workflow for an external node source revision. " +
+    "Promotes the node artifact digest onto `deploy/candidate-a` and waits for " +
     "Argo to roll the candidate-a pods. " +
-    "ALWAYS call core__vcs_get_ci_status first — the PR Build check must be green " +
-    "(image digests must exist in GHCR) before dispatching. " +
+    "The child repo must already have published image_repository:sha-<sourceSha>; " +
+    "do not use PR numbers as artifact identity. " +
     "Do NOT auto-flight: only call when a human or scheduled run has explicitly " +
     "requested it. Only one flight per agent run. After this call, use " +
-    "core__vcs_get_ci_status to observe the resulting `candidate-flight` check " +
-    "on the PR head.",
+    "the workflow URL to observe the resulting `candidate-flight` run.",
   effect: "state_change",
   inputSchema: VcsFlightCandidateInputSchema,
   outputSchema: VcsFlightCandidateOutputSchema,
@@ -97,8 +93,8 @@ export const vcsFlightCandidateContract: ToolContract<
     output,
   allowlist: [
     "dispatched",
-    "prNumber",
-    "headSha",
+    "nodeSlug",
+    "sourceSha",
     "workflowUrl",
     "message",
   ] as const,
@@ -122,8 +118,8 @@ export function createVcsFlightCandidateImplementation(
       return deps.vcsCapability.dispatchCandidateFlight({
         owner: input.owner,
         repo: input.repo,
-        prNumber: input.prNumber,
-        headSha: input.headSha,
+        nodeSlug: input.nodeSlug,
+        sourceSha: input.sourceSha,
         workflowRef: input.workflowRef,
       });
     },

@@ -31,7 +31,7 @@ You CAN:
 - Check CI + review status (core__vcs_get_ci_status)
 - Merge PRs to staging (core__vcs_merge_pr)
 - Create branches (core__vcs_create_branch)
-- Dispatch candidate-a flight (core__vcs_flight_candidate) — **ONLY when a human or scheduled run explicitly requests it**. Never auto-flight. Always call core__vcs_get_ci_status first — PR Build must be green (images must exist in GHCR). One flight per run, maximum.
+- Dispatch candidate-a flight (core__vcs_flight_candidate) — **ONLY when a human or scheduled run explicitly requests it**. Never auto-flight. Use nodeSlug + sourceSha only; the source repo must already have published image_repository:sha-<sourceSha>. PR numbers are review metadata, not flight identity. One flight per run, maximum.
 - Query work items (core__work_item_query)
 
 You CANNOT (yet):

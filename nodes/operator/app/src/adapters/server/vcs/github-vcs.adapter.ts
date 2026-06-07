@@ -260,25 +260,17 @@ export class GitHubVcsAdapter implements VcsCapability {
   async dispatchCandidateFlight(params: {
     owner: string;
     repo: string;
-    prNumber: number;
-    headSha?: string;
+    nodeSlug: string;
+    sourceSha: string;
     workflowRef?: string;
   }): Promise<DispatchCandidateFlightResult> {
     const octokit = await this.getOctokit(params.owner, params.repo);
 
-    // workflow_dispatch inputs are always strings at the GitHub API boundary
-    // even when the workflow declares `type: string` — LiteLLM / Octokit
-    // preserves values as-is. We stringify prNumber explicitly.
     const inputs: Record<string, string> = {
-      pr_number: String(params.prNumber),
+      node_slug: params.nodeSlug,
+      source_sha: params.sourceSha,
     };
-    if (params.headSha) {
-      inputs.head_sha = params.headSha;
-    }
 
-    // GitHub returns HTTP 204 with no body on success. There is no run_id in
-    // the response — do NOT attempt to correlate here; the caller observes
-    // the resulting `candidate-flight` check on the PR head via getCiStatus.
     await octokit.request(
       "POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches",
       {
@@ -292,13 +284,12 @@ export class GitHubVcsAdapter implements VcsCapability {
 
     const workflowUrl = `https://github.com/${params.owner}/${params.repo}/actions/workflows/candidate-flight.yml`;
 
-    const shortSha = params.headSha ? params.headSha.slice(0, 8) : "HEAD";
     return {
       dispatched: true,
-      prNumber: params.prNumber,
-      headSha: params.headSha ?? null,
+      nodeSlug: params.nodeSlug,
+      sourceSha: params.sourceSha,
       workflowUrl,
-      message: `Flight dispatched for PR #${params.prNumber} @ ${shortSha}. Observe via core__vcs_get_ci_status (look for 'candidate-flight' check).`,
+      message: `Candidate flight dispatched for ${params.nodeSlug}@${params.sourceSha.slice(0, 8)}.`,
     };
   }
 
