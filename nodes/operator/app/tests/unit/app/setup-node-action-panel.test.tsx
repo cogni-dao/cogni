@@ -76,7 +76,6 @@ describe("NodeActionPanel", () => {
         status="published"
         publishedHandoff={{
           nodeRepoUrl: "https://github.com/cogni-test-org/atlas",
-          knowledgeRepoUrl: "https://www.dolthub.com/cogni-dao/knowledge-atlas",
           publishPrUrl: "https://github.com/Cogni-DAO/cogni/pull/42",
         }}
       />
@@ -84,16 +83,15 @@ describe("NodeActionPanel", () => {
 
     expect(screen.getByText("Launch pack ready.")).toBeVisible();
     expect(
-      screen.getByText(/open the new node repo and DoltHub repo/)
+      screen.getByText(
+        /your node is almost ready. copy paste this to your AI developer/
+      )
     ).toBeVisible();
     expect(screen.getByRole("link", { name: /Node repo/ })).toHaveAttribute(
       "href",
       "https://github.com/cogni-test-org/atlas"
     );
-    expect(screen.getByRole("link", { name: /DoltHub repo/ })).toHaveAttribute(
-      "href",
-      "https://www.dolthub.com/cogni-dao/knowledge-atlas"
-    );
+    expect(screen.queryByRole("link", { name: /DoltHub repo/ })).toBeNull();
     expect(screen.getByRole("link", { name: /Deployment PR/ })).toHaveAttribute(
       "href",
       "https://github.com/Cogni-DAO/cogni/pull/42"
@@ -116,7 +114,6 @@ describe("NodeActionPanel", () => {
         status="published"
         publishedHandoff={{
           nodeRepoUrl: null,
-          knowledgeRepoUrl: null,
           publishPrUrl: null,
         }}
       />

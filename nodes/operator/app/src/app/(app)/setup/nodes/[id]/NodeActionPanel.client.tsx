@@ -26,7 +26,6 @@ interface Props {
   readonly status: NodeStatus;
   readonly publishedHandoff?: {
     readonly nodeRepoUrl: string | null;
-    readonly knowledgeRepoUrl: string | null;
     readonly publishPrUrl: string | null;
   };
 }
@@ -105,13 +104,14 @@ export function NodeActionPanel({
               Launch pack ready.
             </p>
             <p className="text-muted-foreground">
-              Copy the prompt, then open the new node repo and DoltHub repo.
+              your node is almost ready. copy paste this to your AI developer,
+              and they'll guide you from here.
             </p>
           </div>
 
           <LaunchPackCopyButton nodeId={nodeId} />
 
-          <div className="grid gap-2 sm:grid-cols-3">
+          <div className="grid gap-2 sm:grid-cols-2">
             {publishedHandoff?.nodeRepoUrl ? (
               <Button asChild size="xl" variant="outline" className="w-full">
                 <a
@@ -120,18 +120,6 @@ export function NodeActionPanel({
                   rel="noopener noreferrer"
                 >
                   Node repo
-                  <ExternalLink className="size-4" />
-                </a>
-              </Button>
-            ) : null}
-            {publishedHandoff?.knowledgeRepoUrl ? (
-              <Button asChild size="xl" variant="outline" className="w-full">
-                <a
-                  href={publishedHandoff.knowledgeRepoUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  DoltHub repo
                   <ExternalLink className="size-4" />
                 </a>
               </Button>

@@ -22,7 +22,6 @@ import { nodeRepoUrlForSlug } from "@/features/nodes/launch-pack";
 import { getServerSessionUser } from "@/lib/auth/server";
 import { type NodeStatus, nodes } from "@/shared/db/nodes";
 import { serverEnv } from "@/shared/env";
-import { knowledgeRepoWebUrl } from "@/shared/node-app-scaffold/knowledge-remote";
 
 import { NODE_STATUS_DISPLAY } from "../node-display";
 import { NodeActionPanel } from "./NodeActionPanel.client";
@@ -70,10 +69,6 @@ export default async function NodeDashboardPage({
     mintOwner: env.NODE_MINT_OWNER,
     publishPrUrl: node.publishPrUrl,
   });
-  const knowledgeRepoUrl = env.DOLTHUB_OWNER
-    ? knowledgeRepoWebUrl({ owner: env.DOLTHUB_OWNER, slug: node.slug })
-    : null;
-
   const repoPath = `Cogni-DAO/cogni/nodes/${node.slug}`;
   const technical: ReadonlyArray<{
     label: string;
@@ -131,7 +126,6 @@ export default async function NodeDashboardPage({
             status={status}
             publishedHandoff={{
               nodeRepoUrl,
-              knowledgeRepoUrl,
               publishPrUrl: node.publishPrUrl,
             }}
           />
