@@ -271,6 +271,42 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
     ]);
   });
 
+  it("continues when org policy rejects default workflow write permissions", async () => {
+    setHappyForkHandlers();
+    routeHandlers["PUT /repos/{owner}/{repo}/actions/permissions/workflow"] = (
+      params
+    ) => {
+      expect(params).toMatchObject({
+        owner: "Cogni-DAO",
+        repo: "atlas",
+        default_workflow_permissions: "write",
+        can_approve_pull_request_reviews: false,
+      });
+      return Promise.reject(
+        statusError(409, "Write permissions for workflows are disabled")
+      );
+    };
+
+    const result = await makeWriter().forkFromTemplate({
+      templateOwner: "Cogni-DAO",
+      owner: "Cogni-DAO",
+      slug: "atlas",
+      nodeId: "11111111-1111-4111-8111-111111111111",
+      chainId: 8453,
+    });
+
+    expect(result).toEqual({
+      cloneUrl: "https://github.com/Cogni-DAO/atlas.git",
+      headSha: "identity-commit",
+    });
+    expect(requests.map((request) => request.route)).toContain(
+      "POST /repos/{owner}/{repo}/git/commits"
+    );
+    expect(requests.map((request) => request.route)).toContain(
+      "PATCH /repos/{owner}/{repo}/git/refs/{ref}"
+    );
+  });
+
   it("reuses an existing fork when GitHub reports template ancestry through source", async () => {
     setHappyForkHandlers();
     routeHandlers["POST /repos/{owner}/{repo}/forks"] = () =>

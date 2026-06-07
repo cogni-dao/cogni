@@ -1445,15 +1445,20 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       enabled: true,
       allowed_actions: "all",
     });
-    await octokit.request(
-      "PUT /repos/{owner}/{repo}/actions/permissions/workflow",
-      {
-        owner,
-        repo,
-        default_workflow_permissions: "write",
-        can_approve_pull_request_reviews: false,
-      }
-    );
+    try {
+      await octokit.request(
+        "PUT /repos/{owner}/{repo}/actions/permissions/workflow",
+        {
+          owner,
+          repo,
+          default_workflow_permissions: "write",
+          can_approve_pull_request_reviews: false,
+        }
+      );
+    } catch (err) {
+      const status = (err as { status?: number })?.status;
+      if (status !== 409) throw err;
+    }
   }
 
   /** Open the node-app PR; on 422 (one already exists for this head), return the existing one. */
