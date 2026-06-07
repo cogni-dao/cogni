@@ -68,7 +68,6 @@ describe("buildNodeLaunchPack", () => {
     expect(pack.prompt).toContain(".env.cogni");
     expect(pack.prompt).toContain("/contribute-to-cogni");
     expect(pack.prompt).toContain("recall the Cogni knowledge block");
-    expect(pack.prompt).toContain("Ensure the parent deployment PR is merged");
     expect(pack.prompt).toContain("Create a node customization PR");
     expect(pack.prompt).toContain("Do not push directly to main");
     expect(pack.prompt).toContain("merge your own PR");
@@ -78,6 +77,11 @@ describe("buildNodeLaunchPack", () => {
     expect(pack.prompt).toContain("Let the node repo CI build normally");
     expect(pack.prompt).toContain("child repo `main` SHA");
     expect(pack.prompt).toContain("ghcr.io/<owner>/<repo>:sha-<sourceSha>");
+    expect(pack.prompt.indexOf("Create a node customization PR")).toBeLessThan(
+      pack.prompt.indexOf("ensure the parent deployment PR is merged")
+    );
+    expect(pack.prompt).toContain("Right before flighting");
+    expect(pack.prompt).toContain("ensure the parent deployment PR is merged");
     expect(pack.prompt).toContain("operator API");
     expect(pack.prompt).toContain("child image tag exists");
     expect(pack.prompt).toContain("parent pin agrees");

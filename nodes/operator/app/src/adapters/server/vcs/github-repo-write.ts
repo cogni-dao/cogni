@@ -717,6 +717,8 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       owner,
       slug,
       renderRepoSpec({
+        slug,
+        repoOwner: owner,
         nodeId: input.nodeId,
         chainId: input.chainId,
         daoContract: input.daoContract,

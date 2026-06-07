@@ -32,6 +32,30 @@ function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, "");
 }
 
+export function ownerFromGithubPrUrl(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+  try {
+    const url = new URL(value);
+    if (url.hostname !== "github.com") {
+      return null;
+    }
+    return url.pathname.split("/").filter(Boolean)[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export function nodeRepoUrlForSlug(input: {
+  readonly slug: string;
+  readonly mintOwner: string | undefined;
+  readonly publishPrUrl: string | null;
+}): string | null {
+  const owner = input.mintOwner ?? ownerFromGithubPrUrl(input.publishPrUrl);
+  return owner ? `https://github.com/${owner}/${input.slug}` : null;
+}
+
 export function candidateUrlForSlug(slug: string): string {
   return `https://${slug}-test.cognidao.org`;
 }
@@ -61,10 +85,10 @@ export function buildNodeLaunchPack(
     "Start with @node-wizard-scorecard. Its first response is not a full matrix until the child customization PR exists.",
     "If this workspace lacks `.env.cogni`, run /contribute-to-cogni against the production operator first and save the file at the repo root. Then recall the Cogni knowledge block before editing.",
     "Required path:",
-    "1. Ensure the parent deployment PR is merged before treating this node as deployable.",
-    "2. Create a node customization PR in the node repo. Do not push directly to main, merge your own PR, or hand-edit the operator gitlink.",
-    "3. Verify the node repo-spec contains `knowledge.remote` for the Cogni-owned DoltHub mirror; do not add a DOLTHUB_REMOTE_URL env override.",
-    "4. Let the node repo CI build normally after that PR merges; use the child repo `main` SHA and `ghcr.io/<owner>/<repo>:sha-<sourceSha>` as the deploy identity.",
+    "1. Create a node customization PR in the node repo. Do not push directly to main, merge your own PR, or hand-edit the operator gitlink.",
+    "2. Verify the node repo-spec contains `knowledge.remote` for the Cogni-owned DoltHub mirror; do not add a DOLTHUB_REMOTE_URL env override.",
+    "3. Let the node repo CI build normally after that PR merges; use the child repo `main` SHA and `ghcr.io/<owner>/<repo>:sha-<sourceSha>` as the deploy identity.",
+    "4. Right before flighting, ensure the parent deployment PR is merged and the parent pin agrees with the image-producing child main SHA.",
     "5. Request candidate-a flight through the operator API only after the child image tag exists and the parent pin agrees.",
     "6. Verify the deployed /version at the candidate URL.",
     "7. Run agent-first API validation against that candidate.",

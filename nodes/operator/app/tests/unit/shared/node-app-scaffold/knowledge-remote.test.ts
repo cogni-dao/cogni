@@ -16,6 +16,7 @@ import {
   buildNodeKnowledgeRemote,
   knowledgeDatabaseForSlug,
   knowledgeRepoForSlug,
+  knowledgeRepoWebUrl,
 } from "@/shared/node-app-scaffold/knowledge-remote";
 
 describe("node knowledge remote naming", () => {
@@ -25,6 +26,12 @@ describe("node knowledge remote naming", () => {
 
   it("uses human-readable DoltHub repo names", () => {
     expect(knowledgeRepoForSlug("my-node")).toBe("knowledge-my-node");
+  });
+
+  it("derives the human-facing DoltHub repo URL", () => {
+    expect(
+      knowledgeRepoWebUrl({ owner: "cogni-dao-test", slug: "my-node" })
+    ).toBe("https://www.dolthub.com/cogni-dao-test/knowledge-my-node");
   });
 
   it("derives the Cogni-owned DoltHub remote URL from the env-scoped owner", () => {

@@ -18,7 +18,10 @@ import { NextResponse } from "next/server";
 
 import { resolveAppDb } from "@/bootstrap/container";
 import { nodeLaunchPackOperation } from "@/contracts/nodes.launch-pack.v1.contract";
-import { buildNodeLaunchPack } from "@/features/nodes/launch-pack";
+import {
+  buildNodeLaunchPack,
+  nodeRepoUrlForSlug,
+} from "@/features/nodes/launch-pack";
 import { getServerSessionUser } from "@/lib/auth/server";
 import { type NodeStatus, nodes } from "@/shared/db/nodes";
 import { serverEnv } from "@/shared/env";
@@ -28,21 +31,6 @@ export const dynamic = "force-dynamic";
 
 interface RouteParams {
   params: Promise<{ id: string }>;
-}
-
-function ownerFromGithubPrUrl(value: string | null): string | null {
-  if (!value) {
-    return null;
-  }
-  try {
-    const url = new URL(value);
-    if (url.hostname !== "github.com") {
-      return null;
-    }
-    return url.pathname.split("/").filter(Boolean)[0] ?? null;
-  } catch {
-    return null;
-  }
 }
 
 export async function GET(request: Request, ctx: RouteParams) {
@@ -84,8 +72,6 @@ export async function GET(request: Request, ctx: RouteParams) {
   }
 
   const env = serverEnv();
-  const nodeRepoOwner =
-    env.NODE_MINT_OWNER ?? ownerFromGithubPrUrl(node.publishPrUrl);
 
   return NextResponse.json(
     nodeLaunchPackOperation.output.parse(
@@ -93,9 +79,11 @@ export async function GET(request: Request, ctx: RouteParams) {
         nodeId: node.id,
         slug: node.slug,
         status: node.status as NodeStatus,
-        nodeRepoUrl: nodeRepoOwner
-          ? `https://github.com/${nodeRepoOwner}/${node.slug}`
-          : null,
+        nodeRepoUrl: nodeRepoUrlForSlug({
+          slug: node.slug,
+          mintOwner: env.NODE_MINT_OWNER,
+          publishPrUrl: node.publishPrUrl,
+        }),
         publishPrUrl: node.publishPrUrl,
         operatorOrigin: new URL(request.url).origin,
       })

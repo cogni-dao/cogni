@@ -49,10 +49,10 @@ reporting a terminal blocker that prevents opening one:
 | Gate                   | Evidence                                                            | Status         | Next action                                 |
 | ---------------------- | ------------------------------------------------------------------- | -------------- | ------------------------------------------- |
 | Launch pack facts      | node repo URL, parent PR, candidate URL                             | `pass/blocked` | missing fact to recover                     |
-| Parent birth PR        | merged or still open                                                | `pass/blocked` | wait/ask human to merge parent PR           |
 | Child customization PR | PR URL in node repo                                                 | `pass/blocked` | create PR from node repo branch             |
 | Child CI               | required checks green                                               | `pass/blocked` | fix child PR                                |
 | Child main image       | `ghcr.io/<owner>/<repo>:sha-<child-main-sha>` exists after merge    | `pass/blocked` | report missing image/tag                    |
+| Parent birth PR        | merged or still open                                                | `pass/blocked` | wait/ask human to merge parent PR           |
 | Parent pin             | parent gitlink pins the image-producing child main SHA              | `pass/blocked` | ask operator to update/publish parent pin   |
 | Candidate flight       | requested through operator API                                      | `pass/blocked` | call operator flight API only when eligible |
 | Candidate verification | candidate `/version` matches launched child SHA                     | `pass/blocked` | run agent-first validation                  |
@@ -85,13 +85,31 @@ operator-pin -> candidate-flight CI/CD path. Use
 `docs/spec/node-ci-cd-contract.md` for the CI/CD facts and
 `docs/guides/agent-api-validation.md` for the post-flight API exercise.
 
+## Fresh Boot Health
+
+After candidate flight and `/version` match, prove the freshly booted node is
+usable, not just deployed:
+
+| Check                  | Evidence                                                                                                | Status         |
+| ---------------------- | ------------------------------------------------------------------------------------------------------- | -------------- |
+| Registration works     | new agent registration succeeds against the candidate node                                              | `pass/blocked` |
+| Agent graph call works | registered agent gets a successful graph/completions response; ask for a haiku                          | `pass/blocked` |
+| Knowledge is live      | create a knowledge contribution and confirm the node repo-spec exposes a DoltHub `knowledge.remote.url` | `pass/blocked` |
+| Epoch is active        | candidate node reports an active/current epoch or equivalent live epoch state                           | `pass/blocked` |
+
+Include these rows in the human-facing scorecard when they are relevant to a
+fresh node spawn. If a row is blocked by missing credentials or absent endpoint
+surface, report the exact blocker instead of substituting a weaker health check.
+
 ## Minimal v0 Path
 
 1. Confirm launch-pack facts and recall the knowledge handoff.
-2. Ensure the parent birth PR is merged or explicitly ask the human to merge it.
-3. Open a child node customization PR.
-4. Wait for child PR CI, human/operator merge, and child `main` image tag.
+2. Open a child node customization PR.
+3. Wait for child PR CI, human/operator merge, and child `main` image tag.
+4. Right before flighting, ensure the parent birth PR is merged or explicitly
+   ask the human to merge it.
 5. Confirm the parent pin references that image-producing child SHA.
 6. Request candidate-a flight through the operator API.
-7. Verify candidate `/version` and run agent-first API validation.
+7. Verify candidate `/version`, run agent-first API validation, and complete
+   fresh boot health checks.
 8. Present the node formation scorecard to the human.

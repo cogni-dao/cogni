@@ -37,6 +37,8 @@ function repoRoot(): string {
 const RULES_DIR = join(repoRoot(), "nodes/node-template/.cogni/rules");
 
 const rendered = renderRepoSpec({
+  slug: "my-node",
+  repoOwner: "cogni-dao-test",
   nodeId: "11111111-2222-4333-8444-555555555555",
   chainId: 8453,
   daoContract: "0x1111111111111111111111111111111111111111",
@@ -56,6 +58,17 @@ interface ParsedGate {
 }
 interface ParsedSpec {
   node_id: string;
+  intent?: { name: string };
+  activity_ledger?: {
+    epoch_length_days: number;
+    approvers: string[];
+    activity_sources: {
+      github?: {
+        attribution_pipeline: string;
+        source_refs: string[];
+      };
+    };
+  };
   knowledge?: {
     database: string;
     remote: {
@@ -77,7 +90,23 @@ describe("renderRepoSpec — BORN_REVIEWABLE", () => {
 
   it("is parseable identity + governance YAML", () => {
     expect(spec.node_id).toBe("11111111-2222-4333-8444-555555555555");
+    expect(spec.intent?.name).toBe("my-node");
     expect(spec.payments.status).toBe("pending_activation");
+  });
+
+  it("keeps the node-template activity ledger so epoch ingest is active", () => {
+    expect(spec.activity_ledger).toMatchObject({
+      epoch_length_days: 7,
+      activity_sources: {
+        github: {
+          attribution_pipeline: "cogni-v0.0",
+          source_refs: ["cogni-dao-test/my-node"],
+        },
+      },
+    });
+    expect(spec.activity_ledger?.approvers).toContain(
+      "0x070075F1389Ae1182aBac722B36CA12285d0c949"
+    );
   });
 
   it("emits the default review gates so minted nodes are born-reviewable", () => {
