@@ -116,6 +116,68 @@ What the Publish PR contains:
 
 Per-node DNS, DB, and secrets reconcile **inside the flight/promote lane** (idempotent, catalog-driven — `DNS_IS_RECONCILED_PER_ENV`, Axiom 21), not via a full env reprovision. For the row-by-row deploy contract (nodePort allocation, overlay/AppSet proof, DB schema layer, the candidate-a-only trap) see [Create a New Node (Deploy)](./create-node.md).
 
+### V0 launch-agent auth bridge
+
+The wizard row is temporarily creator-scoped: `nodes.owner_user_id` is the
+signed-in user that created the row. That is not the final node authority model;
+real multi-actor authority belongs to RBAC/node membership. Until that lands,
+an AI developer cannot flight a wizard-created node with a fresh
+`POST /api/v1/agent/register` bearer token, because registration creates a new
+user id. For node-ref flight E2E, use the creator's candidate session cookie.
+
+Human, from the main workspace root, prepare the destination before copying the
+cURL so the clipboard only needs to hold one thing:
+
+```bash
+cd /Users/derek/dev/cogni-template
+mkdir -p .local-auth
+printf '%s\n' 'pbpaste > .local-auth/personal-test-users-me.curl && chmod 600 .local-auth/personal-test-users-me.curl && ls -lh .local-auth/personal-test-users-me.curl'
+```
+
+Then in the personal Chrome profile that created the node:
+
+1. Open `https://test.cognidao.org/api/v1/users/me`.
+2. Open DevTools with `Cmd + Option + I`.
+3. Select the Network tab.
+4. Refresh with `Cmd + R`.
+5. Right-click the `users/me` request and choose **Copy → Copy as cURL**.
+6. Return to Terminal, press the up arrow once if needed to recall the printed
+   `pbpaste ...` command, and press Enter. Do not paste the cURL into chat.
+
+Agent, extract the cookie locally without printing it:
+
+```bash
+COOKIE="$(node <<'NODE'
+const fs = require('node:fs');
+const s = fs.readFileSync('/Users/derek/dev/cogni-template/.local-auth/personal-test-users-me.curl', 'utf8');
+const match = s.match(/(?:^|\s)-b\s+(['"])([\s\S]*?)\1/);
+if (!match) process.exit(2);
+process.stdout.write(match[2]);
+NODE
+)"
+```
+
+Prove the cookie can read the owner-gated node row before flighting:
+
+```bash
+curl -fsS https://test.cognidao.org/api/v1/nodes/<nodeId>/launch-pack \
+  -H "Cookie: $COOKIE" |
+  jq -c '{nodeId, slug, status, nodeRepoUrl, parentDeploymentPrUrl, candidateUrl}'
+```
+
+Then request node-ref flight with the same cookie:
+
+```bash
+curl -i -X POST https://test.cognidao.org/api/v1/vcs/flight \
+  -H "Content-Type: application/json" \
+  -H "Cookie: $COOKIE" \
+  -d '{"nodeRef":{"nodeId":"<nodeId>","sourceSha":"<childSha>"}}'
+```
+
+If this clears `404 not found`, the creator-scoped auth bridge worked. The next
+blocker should be deploy-plane configuration or typed child image/pin preflight,
+not owner auth.
+
 ## Verification
 
 After formation completes successfully:
