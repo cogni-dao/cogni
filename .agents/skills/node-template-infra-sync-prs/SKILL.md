@@ -5,7 +5,7 @@ description: Use this whenever a node-template, node source repo, or Cogni CI/CD
 
 # Node Template Infra Sync PRs
 
-Use this skill to turn one upstream node CI/CD or template infra change into a complete, auditable set of downstream PRs. The default shape is **one target repo, one branch, one PR**. Do not batch multiple node repos into one PR, and do not stop after the obvious production repos; the test org is part of the contract.
+Use this skill to turn one upstream node CI/CD or template infra change into a complete, auditable set of downstream PRs. The default shape is **one target repo, one branch, one PR**. Do not batch multiple node repos into one PR, and do not stop after the obvious production repos; the test org is part of the contract. CI/CD contract changes that affect the parent/control-plane workflows must also be mirrored into `cogni-test-org/cogni-monorepo`.
 
 ## Core Rule
 
@@ -83,7 +83,7 @@ Start from the upstream change, then enumerate all downstream repos before openi
    - Include any test-org repo named directly by the user or referenced by catalog `source_repo`.
    - Do not target every marker-complete test-org repo. Most test-org nodes are throwaway wizard spawns; marker presence is evidence for classification, not inclusion.
    - Always check for `cogni-test-org/test-cog`; do not rely on search alone.
-   - Do not treat `cogni-test-org/cogni-monorepo` as a node-at-root repo just because it has workflow drift. It is a monorepo/control-plane fixture unless the user explicitly asks to update it.
+   - Do not treat `cogni-test-org/cogni-monorepo` as a node-at-root repo just because it has workflow drift. It is a monorepo/control-plane fixture. Include it for parent/control-plane CI/CD contract changes such as `candidate-flight.yml`, or when the user explicitly asks to update it.
 
 4. Scan CI contract state for each candidate.
    - Fetch `.github/workflows/pr-build.yml`, `.github/workflows/ci.yaml`, `.github/workflows/pr-lint.yaml`, `scripts/check-node-ci-workflow.mjs`, and `package.json` when present.
@@ -175,6 +175,7 @@ For each target, identify the exact source of truth and apply it once:
 - `Cogni-DAO/node-template` is the canonical source for node-at-root CI files unless the upstream PR changed a different canonical repo.
 - `cogni-test-org/node-template` mirrors `Cogni-DAO/node-template`.
 - Persistent test-org nodes like `cogni-test-org/test-cog` mirror `Cogni-DAO/node-template` for workflow contract files, but keep their existing app/package changes unless those are required for CI.
+- `cogni-test-org/cogni-monorepo` mirrors `Cogni-DAO/cogni` for parent/control-plane CI/CD contract files. For candidate-flight changes, port the canonical workflow and the referenced `scripts/ci/**` helpers 1:1; do not reimplement a test-org variant.
 - Throwaway test-org spawns are skipped unless the user explicitly names them.
 - Catalog `source_repo` rows map to the repo named by that row, not to the parent operator repo.
 - If a repo already has an open sync PR, reuse that PR and update its branch. Do not open PR #2 for the same target/purpose.
