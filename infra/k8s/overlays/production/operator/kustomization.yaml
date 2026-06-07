@@ -14,7 +14,7 @@ namePrefix: operator-
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/cogni-template
-    digest: "sha256:abac4373f0eead0456f57b07c1a8581ffd439738255da075857d74d2d0cabfa5"
+    digest: "sha256:7113390961e94ccc1774d2e9572b7baeb0ea1d68aada4828a83563f8d6203a4c"
 
 patches:
   # Node-specific ConfigMap values.
@@ -81,10 +81,6 @@ patches:
       - op: add
         path: /spec/template/metadata/labels/app.kubernetes.io~1instance
         value: "operator"
-      - op: add
-        path: /spec/template/metadata/annotations
-        value:
-          kubectl.kubernetes.io/restartedAt: "2026-06-06T18:32:37Z"
 
   # task.0423: Doltgres knowledge-plane migrator runs as a second initContainer
   # on the operator Deployment. DATABASE_URL maps to DOLTGRES_URL.
