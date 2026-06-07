@@ -43,7 +43,10 @@ compute_tree_hash() {
   {
     git diff HEAD 2>/dev/null
     git ls-files --others --exclude-standard -z 2>/dev/null \
-      | xargs -0 -I{} sh -c 'printf "%s\0" "{}"; [ -f "{}" ] && cat "{}"'
+      | while IFS= read -r -d '' file; do
+          printf "%s\0" "$file"
+          [ -f "$file" ] && cat "$file"
+        done
   } | shasum 2>/dev/null | awk '{print $1}'
 }
 
@@ -108,9 +111,10 @@ if [ "$VERBOSE" = true ]; then
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 fi
 
-# Rebuild only the package declarations needed for affected workspace checks.
-# Phase-2 follow-up will eliminate this prebuild via TS project references / isolatedDeclarations.
-run_check "packages:build" "node scripts/run-scoped-package-build.mjs"
+# Refresh only the package declarations needed for affected workspace checks.
+# Runtime tests resolve workspace packages from source; CI and explicit
+# `pnpm packages:build` own JavaScript artifact validation.
+run_check "packages:types" "node scripts/run-scoped-package-build.mjs"
 
 # In --fix mode, run lint and prettier auto-fix as a pre-pass so the verify-only turbo run
 # below sees the auto-fixed tree (lint:fix mutates files; turbo would cache stale state otherwise).
@@ -121,6 +125,8 @@ fi
 
 # One turbo invocation drives all parallel-safe checks: per-package lint + typecheck + test,
 # plus root-level //#lint, //#format:check, //#db:check (defined in turbo.json).
+# Vitest resolves workspace graph wrappers from source so stale ignored dist does
+# not affect app tests.
 # All participate in the same DAG so Turbo can schedule across the whole graph and cache per
 # task hash. Re-runs on no-change hit cache in <1s per task.
 #

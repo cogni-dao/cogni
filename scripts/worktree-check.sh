@@ -85,7 +85,7 @@ else
 fi
 
 if node scripts/run-scoped-package-build.mjs --dry-run >/tmp/cogni-worktree-package-plan.$$ 2>&1; then
-  if grep -q "Package build scope: none" /tmp/cogni-worktree-package-plan.$$; then
+  if grep -q "Package declaration scope: none" /tmp/cogni-worktree-package-plan.$$; then
     pass "package declaration outputs are present"
   else
     warn "package declarations need bootstrap: node scripts/run-scoped-package-build.mjs"

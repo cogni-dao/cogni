@@ -240,5 +240,13 @@ describe("single-node-scope workflow gate · structural pins", () => {
         "(catalog-derived regen artifact; bug.5086 parity — must mirror isNodeWiring " +
         "in classify.ts so a catalog-driven Caddyfile regen rides a node birth)"
     ).toContain('"infra/compose/edge/configs/Caddyfile.tmpl"');
+    expect(
+      enforce.run,
+      "devtools exception must be bounded to root app Vitest configs"
+    ).toContain('test("^nodes/[^/]+/app/vitest\\\\.config\\\\.mts$")');
+    expect(
+      enforce.run,
+      "devtools exception must be bounded to the shared Vitest helper"
+    ).toContain('startswith("scripts/vitest/")');
   });
 });

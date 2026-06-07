@@ -130,6 +130,8 @@ jobs:
         env:
           MATCHED: ${{ steps.domains.outputs.changes }}
           OPERATOR_FILES: ${{ steps.domains.outputs.operator_files }}
+          CANARY_FILES: ${{ steps.domains.outputs.canary_files }}
+          RESY_FILES: ${{ steps.domains.outputs.resy_files }}
         run: |
           count=$(jq 'length' <<<"$MATCHED")
           SCOPE=$(jq -r 'if length == 0 then "none" else join(" + ") end' <<<"$MATCHED")
@@ -175,6 +177,37 @@ jobs:
                   ))
              )' <<<"$OPERATOR_FILES" >/dev/null; then
             report "✅ scope: ${NODE} (+ operator ride-along)"
+            exit 0
+          fi
+
+          # Devtools exception: root app Vitest config is duplicated per node
+          # today, but changing that entrypoint for shared fast-check behavior
+          # is operator-owned tooling. Keep this bounded to exact root app
+          # config files plus the fast-check/Vitest policy surface.
+          NON_OPERATOR_FILES=$(jq -nc \
+            --argjson canary "${CANARY_FILES:-[]}" \
+            --argjson resy "${RESY_FILES:-[]}" \
+            '$canary + $resy')
+          if jq -e 'index("operator") != null' <<<"$MATCHED" >/dev/null \
+             && jq -e 'length > 0 and all(test("^nodes/[^/]+/app/vitest\\.config\\.mts$"))' <<<"$NON_OPERATOR_FILES" >/dev/null \
+             && jq -e 'all(
+               . == ".github/workflows/ci.yaml"
+               or . == "docs/guides/new-worktree-setup.md"
+               or . == "nodes/operator/app/vitest.config.mts"
+               or . == "packages/langgraph-graphs/vitest.config.ts"
+               or . == "packages/repo-spec/AGENTS.md"
+               or . == "packages/repo-spec/src/accessors.ts"
+               or . == "scripts/AGENTS.md"
+               or . == "scripts/check-fast.sh"
+               or . == "scripts/run-scoped-package-build.mjs"
+               or startswith("scripts/vitest/")
+               or . == "scripts/worktree-check.sh"
+               or . == "tests/ci-invariants/classify.ts"
+               or startswith("tests/ci-invariants/fixtures/single-node-scope/")
+               or . == "tests/ci-invariants/single-node-scope-meta.spec.ts"
+               or . == "vitest.config.mts"
+             )' <<<"$OPERATOR_FILES" >/dev/null; then
+            report "✅ scope: operator devtools (+ root app Vitest configs)"
             exit 0
           fi
 

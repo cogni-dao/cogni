@@ -53,7 +53,7 @@ pnpm install --offline --frozen-lockfile
 # 4. Check whether the worktree is ready for agent development
 pnpm worktree:check
 
-# 5. Build only package declarations needed in this worktree
+# 5. Emit only package declarations needed in this worktree
 node scripts/run-scoped-package-build.mjs
 
 # 6. Verify docs metadata
@@ -70,7 +70,7 @@ Error: Failed to resolve entry for package "@cogni/scheduler-core"
 
 The main checkout usually has these built already. A fresh worktree does not.
 
-`scripts/run-scoped-package-build.mjs` scopes against `origin/main` by default and also builds any package with missing declaration output, which is the common fresh-worktree failure. If a rebase or merge leaves declarations out of sync, run `pnpm packages:build:clean` to wipe all `dist/` and `.tsbuildinfo` state and rebuild from scratch.
+`scripts/run-scoped-package-build.mjs` scopes against `origin/main` by default and emits declarations for any package with missing declaration output, which is the common fresh-worktree failure. It does not run package JavaScript builds; explicit `pnpm packages:build` and CI own artifact validation. If a rebase or merge leaves declarations out of sync, run `pnpm packages:build:clean` to wipe all `dist/` and `.tsbuildinfo` state and rebuild from scratch.
 
 ## Turbo Scope
 
