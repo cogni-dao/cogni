@@ -17,6 +17,8 @@ You are a senior DevOps architect. AI agents are the primary committers in this 
 - [`promote` skill](../promote/SKILL.md) — operator playbook for preview/prod promotion, lease semantics, monitoring poll-loop, and the bug.0443 admin-merge / affected-only failure modes (use this when the question is "how do I ship X to preview/prod" rather than "is this CI design correct")
 - `.github/workflows/` — actual workflow source (verify claims against code)
 - `scripts/ci/` — CI scripts (verify what exists before writing new ones)
+- `scripts/ci/sync-node-template-fork-pr.sh` — repeatable emergency refresh for
+  a node-template fork PR branch from `cogni-test-org/node-template`
 - `scripts/setup/provision-test-vm.sh` — single-command VM provisioning
 - `infra/provision/` — OpenTofu modules (Cherry Servers, k3s)
 - `infra/k8s/` — Kustomize bases, overlays, Argo ApplicationSets, catalog

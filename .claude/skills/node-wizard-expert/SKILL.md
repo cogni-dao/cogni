@@ -28,6 +28,7 @@ That block is the evolving handoff contract for personal AI assistants launching
 - `nodes/operator/app/src/app/api/v1/nodes/[id]/launch-pack/route.ts`
 - `.claude/skills/conductor-worktree-setup/SKILL.md`
 - `scripts/conductor-worktree-setup.sh`
+- `scripts/ci/sync-node-template-fork-pr.sh`
 
 ## Operating Rule
 
@@ -43,3 +44,18 @@ pass without privileged manual bridge work. A child commit without a child
 Wizard-minted nodes must be named forks of `node-template`, not GitHub template-generated repos. Template generation copies a snapshot without shared git history, so agents cannot fetch `node-template` and merge future template updates. The publish path should call `GitHubRepoWriter.forkFromTemplate`, wait for the forked `main`, commit only the regenerated `.cogni/repo-spec.yaml` identity on top, and pin that identity commit as the operator submodule gitlink.
 
 If a same-named repo already exists, reuse it only when it is a fork of the configured `NODE_TEMPLATE_OWNER/node-template`; otherwise fail closed and repair the repo lineage explicitly.
+
+## Fast Repair
+
+When a minted test-node fork lags behind `cogni-test-org/node-template`, refresh
+its existing PR branch with:
+
+```bash
+PR_TITLE='ci: sync <slug> node CI' \
+  scripts/ci/sync-node-template-fork-pr.sh cogni-test-org/<slug> <branch>
+```
+
+This is the repeatable version of the manual `test-cog` repair: fetch the fork
+PR branch, merge the current test-org template, auto-resolve the known stale
+`ci.yaml` image-name conflict in favor of the template, run the node workflow
+invariant, push, and print the PR/check links.
