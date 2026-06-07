@@ -107,6 +107,20 @@ function setHappyForkHandlers(): void {
       });
       return {};
     },
+    "GET /repos/{owner}/{repo}/actions/workflows": (params) => {
+      expect(params).toMatchObject({
+        owner: "Cogni-DAO",
+        repo: "atlas",
+        per_page: 100,
+      });
+      return {
+        workflows: [
+          { path: ".github/workflows/ci.yaml", state: "active" },
+          { path: ".github/workflows/pr-build.yml", state: "active" },
+          { path: ".github/workflows/pr-lint.yaml", state: "active" },
+        ],
+      };
+    },
     "POST /repos/{owner}/{repo}/git/blobs": (params) => {
       expect(params).toMatchObject({
         owner: "Cogni-DAO",
@@ -201,6 +215,7 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
       "GET /repos/{owner}/{repo}/git/commits/{commit_sha}",
       "PUT /repos/{owner}/{repo}/actions/permissions",
       "PUT /repos/{owner}/{repo}/actions/permissions/workflow",
+      "GET /repos/{owner}/{repo}/actions/workflows",
       "POST /repos/{owner}/{repo}/git/blobs",
       "POST /repos/{owner}/{repo}/git/trees",
       "POST /repos/{owner}/{repo}/git/commits",
@@ -263,6 +278,7 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
       "GET /repos/{owner}/{repo}/git/commits/{commit_sha}",
       "PUT /repos/{owner}/{repo}/actions/permissions",
       "PUT /repos/{owner}/{repo}/actions/permissions/workflow",
+      "GET /repos/{owner}/{repo}/actions/workflows",
       "POST /repos/{owner}/{repo}/git/blobs",
       "POST /repos/{owner}/{repo}/git/trees",
       "POST /repos/{owner}/{repo}/git/commits",

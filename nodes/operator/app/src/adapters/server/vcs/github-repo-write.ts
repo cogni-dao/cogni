@@ -170,6 +170,11 @@ const FOOTPRINT = {
  */
 const APPSET_TEMPLATE_PATH = "scripts/ci/node-applicationset.yaml.tmpl";
 const SOURCE_SHA_PATTERN = /^[0-9a-fA-F]{40}$/;
+const NODE_REPO_REQUIRED_WORKFLOWS = [
+  ".github/workflows/ci.yaml",
+  ".github/workflows/pr-build.yml",
+  ".github/workflows/pr-lint.yaml",
+] as const;
 
 const CatalogEntrySchema = z.object({
   name: z.string(),
@@ -1459,6 +1464,39 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       const status = (err as { status?: number })?.status;
       if (status !== 409) throw err;
     }
+    await this.waitForNodeRepoWorkflows(octokit, owner, repo);
+  }
+
+  private async waitForNodeRepoWorkflows(
+    octokit: Octokit,
+    owner: string,
+    repo: string
+  ): Promise<void> {
+    for (let attempt = 0; attempt < 12; attempt++) {
+      const { data } = await octokit.request(
+        "GET /repos/{owner}/{repo}/actions/workflows",
+        { owner, repo, per_page: 100 }
+      );
+      const activePaths = new Set(
+        (
+          data as {
+            readonly workflows?: ReadonlyArray<{
+              readonly path?: string;
+              readonly state?: string;
+            }>;
+          }
+        ).workflows
+          ?.filter((workflow) => workflow.state === "active")
+          .map((workflow) => workflow.path) ?? []
+      );
+      if (NODE_REPO_REQUIRED_WORKFLOWS.every((path) => activePaths.has(path))) {
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+    throw new Error(
+      `forkFromTemplate: ${owner}/${repo} workflows not active after enabling Actions`
+    );
   }
 
   /** Open the node-app PR; on 422 (one already exists for this head), return the existing one. */
