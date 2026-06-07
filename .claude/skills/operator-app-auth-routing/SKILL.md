@@ -13,6 +13,7 @@ Keep page placement, chrome state, and auth enforcement separate. `proxy.ts` is 
 - Authenticated app pages live under `nodes/operator/app/src/app/(app)/...`.
 - A public route may still be auth-aware. Example: `/nodes` can stay public while showing session-aware account chrome.
 - Moving a page between route groups is not enough to change auth. Update `proxy.ts` and its tests when access changes.
+- Operator is the node-gallery host. Its own detail page is `/nodes/operator`; other nodes are node-at-root apps on their own subdomains unless their local validation guide says otherwise.
 
 ## Proxy Rules
 
@@ -42,6 +43,12 @@ Keep page placement, chrome state, and auth enforcement separate. `proxy.ts` is 
 - Include nested route examples for path families such as `/knowledge/:id`.
 - Assert public/auth-aware routes pass through without becoming app routes.
 - For chrome behavior, add focused component tests around `AccountSlot` or the header using mocked NextAuth session state.
+
+## Candidate Validation
+
+- Keep `nodes/operator/.cogni/validation.md` in sync with operator public routes, app routes, and auth expectations.
+- `/validate-candidate` reads node-local validation guides to choose human-axis routes. If this skill changes route policy, update that guide too.
+- Validate `/nodes/operator` only for operator gallery/detail changes. For non-operator nodes, validate the node's root/app pages on its own candidate subdomain.
 
 ## Pitfalls
 

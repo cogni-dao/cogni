@@ -70,6 +70,20 @@ Group the changed files into (node, surface type). Heuristics:
 | `scripts/**`, `.claude/**`, root configs                 | —        | `tooling`    |
 | everything else                                          | —        | `other`      |
 
+Before choosing concrete validation routes for an impacted node, read its
+node-local validation guide if present:
+
+```bash
+test -f nodes/<node>/.cogni/validation.md && sed -n '1,220p' nodes/<node>/.cogni/validation.md
+```
+
+Use that guide to resolve node-specific human-axis routes, auth prerequisites,
+agent-axis probes, and Loki selectors. The default convention is that standalone
+nodes are node-at-root apps on their own candidate subdomain. Do not assume a
+`/nodes/<slug>` detail route exists for every node. The operator is the known
+exception: its own gallery detail route is `/nodes/operator`, documented in
+`nodes/operator/.cogni/validation.md`.
+
 Build an **impact matrix** — one row per distinct (surface type × concrete target). For a UI page, the row target is the route (`/credits`, `/profile`). For an API route, the target is the method + path. For a graph, it's the graph name.
 
 ### The two axes: Human and Agent
@@ -311,6 +325,8 @@ UI page exercise runs are cheap (headless Chromium, single pageview). API route 
 
 - `docs/guides/candidate-auth-bootstrap.md` — how the storageState files get created (prereq)
 - `docs/guides/agent-api-validation.md` — API-flow reference
+- `nodes/<node>/.cogni/validation.md` — node-local candidate-a route and probe guide when present
+- `.claude/skills/operator-app-auth-routing/SKILL.md` — operator-specific auth, route group, proxy, and public chrome guidance
 - `scripts/dev/smoke-authed-state.mjs` — template for authed Playwright runs
 - `.local-auth/*.storageState.json` — the captured sessions (gitignored)
 - `work/items/task.0309.qa-agent-e2e-validation.md` — the graph-agent successor
