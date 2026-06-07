@@ -17,6 +17,8 @@ import {
   buildNodeLaunchPack,
   candidateUrlForSlug,
   NODE_LAUNCH_PACK_KNOWLEDGE_ID,
+  nodeRepoUrlForSlug,
+  ownerFromGithubPrUrl,
 } from "@/features/nodes/launch-pack";
 
 describe("candidateUrlForSlug", () => {
@@ -24,6 +26,54 @@ describe("candidateUrlForSlug", () => {
     expect(candidateUrlForSlug("atlas")).toBe(
       "https://atlas-test.cognidao.org"
     );
+  });
+});
+
+describe("ownerFromGithubPrUrl", () => {
+  it("extracts the GitHub owner from a PR URL", () => {
+    expect(
+      ownerFromGithubPrUrl("https://github.com/cogni-test-org/cogni/pull/1559")
+    ).toBe("cogni-test-org");
+  });
+
+  it("returns null for absent, invalid, or non-GitHub URLs", () => {
+    expect(ownerFromGithubPrUrl(null)).toBeNull();
+    expect(ownerFromGithubPrUrl("not a url")).toBeNull();
+    expect(
+      ownerFromGithubPrUrl("https://gitlab.com/cogni-test-org/cogni/pull/1559")
+    ).toBeNull();
+  });
+});
+
+describe("nodeRepoUrlForSlug", () => {
+  it("uses the configured mint owner when present", () => {
+    expect(
+      nodeRepoUrlForSlug({
+        slug: "atlas",
+        mintOwner: "cogni-nodes",
+        publishPrUrl: "https://github.com/cogni-test-org/cogni/pull/1559",
+      })
+    ).toBe("https://github.com/cogni-nodes/atlas");
+  });
+
+  it("falls back to the parent PR owner when mint owner is absent", () => {
+    expect(
+      nodeRepoUrlForSlug({
+        slug: "atlas",
+        mintOwner: undefined,
+        publishPrUrl: "https://github.com/cogni-test-org/cogni/pull/1559",
+      })
+    ).toBe("https://github.com/cogni-test-org/atlas");
+  });
+
+  it("returns null when no owner can be recovered", () => {
+    expect(
+      nodeRepoUrlForSlug({
+        slug: "atlas",
+        mintOwner: undefined,
+        publishPrUrl: null,
+      })
+    ).toBeNull();
   });
 });
 

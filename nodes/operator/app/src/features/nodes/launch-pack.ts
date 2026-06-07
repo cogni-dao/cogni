@@ -41,7 +41,7 @@ export function ownerFromGithubPrUrl(value: string | null): string | null {
     if (url.hostname !== "github.com") {
       return null;
     }
-    return url.pathname.split("/").filter(Boolean)[0] ?? null;
+    return url.pathname.split("/").find(Boolean) ?? null;
   } catch {
     return null;
   }
