@@ -53,7 +53,7 @@ Build-time scripts for migrations, seeds, type generation, development utilities
 
 ## Usage
 
-Minimal local commands:
+Use local script commands for setup, data tasks, docs metadata, or a targeted repair:
 
 ```bash
 node scripts/migrate.ts
@@ -86,6 +86,6 @@ pnpm check:agentsmd             # Validate all AGENTS.md files
 - `conductor-worktree-setup.sh` is the Conductor setup entrypoint. It symlinks `.env.cogni` and `.local-auth` from the primary checkout so secrets and captured auth do not drift across worktrees.
 - `run-scoped-package-build.mjs` scopes local package declaration refreshes against `origin/main` by default, falls back to all declaration refs when global build inputs change, and emits a warning so developers notice the scope expansion. JavaScript package artifacts belong to explicit `pnpm packages:build`, not `check:fast`.
 - `worktree-check.sh` is non-mutating and checks whether a fresh worktree has the minimum local state needed before an agent runs expensive gates.
-- `check-fast.sh` and `check-all.sh` run `workspace:lint` via `run-turbo-checks.sh` so local checks catch the same per-workspace Biome/ESLint failures that CI's workspace runs would catch.
+- For PR verification, push and monitor GitHub checks. `check-fast.sh` and `check-all.sh` exist for explicit local repro or human-requested local validation; they run `workspace:lint` via `run-turbo-checks.sh` so local checks catch the same per-workspace Biome/ESLint failures that CI's workspace runs would catch.
 - Fast Vitest configs resolve workspace package imports from source so app tests do not depend on ignored `dist` JavaScript freshness; explicit `pnpm packages:build` and CI still validate package artifacts.
 - `check-fast.sh` has two modes: default (strict, verify-only; uses `:check` variants; what `.husky/pre-push` gates on) and `--fix` (auto-fix lint/format; exposed as `pnpm check:fast:fix`). Both modes hash working-tree content before and after the run and fail with `✗ drift: files modified during checks` if anything mutated — pre-existing WIP is ignored.

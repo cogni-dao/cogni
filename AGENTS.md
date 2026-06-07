@@ -6,23 +6,25 @@ You are an agent inside a multi-agent system. The **operator** (`https://cognida
 
 ## Required Loop
 
-1. Adopt one work item, **one node** (`single-node-scope` is a CI gate; cross-node ⇒ separate item). Read `nodes/<node>/AGENTS.md` for that node's rules. **Recall the node's knowledge hub before designing or researching** — a prior agent may already have the finding (`RECALL_BEFORE_WRITE`; see [`/contribute-knowledge-to-cogni`](.claude/skills/contribute-knowledge-to-cogni/SKILL.md)).
-2. Claim + heartbeat + link PR via `/api/v1/work/items/$ID/{claims,heartbeat,pr,coordination}`. **`coordination.nextAction` is authoritative** — it overrides your plan.
-3. Implement on a worktree branch. Push — **CI is your verification.** Watch `gh pr checks`; iterate file-scoped fixes if red.
-4. After CI green + reviewed implementation: `POST /api/v1/vcs/flight { prNumber }`. The build lands at `https://<node>-test.cognidao.org`.
-5. Run [`/validate-candidate`](.claude/skills/validate-candidate/SKILL.md) against the deployed build. Adherence to its validation flow and scorecard format is strict — that's how the system confirms you followed the contract.
-6. Hit a contract blocker (auth, broken endpoint, invariant you can't satisfy)? File a bug: `POST /api/v1/work/items {type:'bug', node:'operator'}`, link from your active item.
+1. Adopt exactly one production work item and one node (`single-node-scope` is a CI gate; cross-node ⇒ separate item). Active work lives in the operator API. Read `nodes/<node>/AGENTS.md` for that node's rules. **Recall the node's knowledge hub before designing or researching** — a prior agent may already have the finding (`RECALL_BEFORE_WRITE`; see [`/contribute-knowledge-to-cogni`](.claude/skills/contribute-knowledge-to-cogni/SKILL.md)).
+2. Claim + heartbeat + link PR via `/api/v1/work/items/$ID/{claims,heartbeat,pr,coordination}`. **`coordination.nextAction` is authoritative** — re-read it after each phase and let it override your plan.
+3. Align the design. Find the most relevant design specs, guides, skills, and prior code for your feature space. Run a review-design pass before changing code, then refine existing artifacts instead of adding parallel ones.
+4. Implement on the feature branch. This repo has strict typechecking and linting: commit frequently, review your implementation, and iterate. Trust automated checks to verify cleanliness — configured pre-push gates and GitHub CI runs. Push, monitor `gh pr checks` to green, and use CI wait time to self-review with a review-implementation pass against your own diff.
+5. Validate end-to-end. Return to the core goal of your code and prove it through the real candidate deployment: after CI green, `POST /api/v1/vcs/flight { prNumber }`, then run [`/validate-candidate`](.claude/skills/validate-candidate/SKILL.md) against the deployed build and the specific PR-touched surfaces. Candidate flighting is the primary E2E environment; do not start local dev servers unless the user explicitly asks. Use the skill's scorecard format; post it to the PR before requesting implementation review.
+6. Hand off to the human with a TL;DR: goal, relevant prior design/code, code added, PR link, scorecard link, candidate-flight link, candidate URL, and what is newly visible or exercisable there.
+7. Close only after merge. Pre-merge work stays `needs_merge`; `status: done` means merged to `main`. Before closing, refine durable knowledge back into the hub only if the work produced reusable insight; most PRs should add no knowledge entry.
+8. Hit a contract blocker (auth, broken endpoint, invariant you can't satisfy)? File a bug: `POST /api/v1/work/items {type:'bug', node:'operator'}`, link from your active item.
 
 > Bearer token expected. New contributors register once via [`/contribute-to-cogni`](.claude/skills/contribute-to-cogni/SKILL.md); existing agents reuse the saved token.
 
 ## Definition of Done
 
-`status: done` ⇔ code merged. **Code only merges after both**:
+`status: done` ⇔ code merged. PRs are not ready for implementation review until the candidate scorecard is posted. **Code only merges after both**:
 
 1. Full green: reviewed implementation + CI green on the PR.
 2. `deploy_verified: true` — flighted to candidate-a, `/validate-candidate` scorecard posted, your own request observed in Loki at the deployed SHA.
 
-Two named human stops: `needs_review` post-`/design`, `needs_human_qa` post-flight. Drive yourself between them.
+Two named human stops may appear: `needs_review` for design review before implementation, and `needs_human_qa` after candidate validation. Do not request implementation review until the `/validate-candidate` scorecard is on the PR.
 
 Durable learning the work produced is **refined back into the hub** (recall → refine in place > write new), not buried in the PR — see [`/contribute-knowledge-to-cogni`](.claude/skills/contribute-knowledge-to-cogni/SKILL.md). Rare by design: most work teaches nothing reusable, and that's correct. Not a merge gate — a loop expectation.
 
@@ -35,9 +37,10 @@ Durable learning the work produced is **refined back into the hub** (recall → 
 - **Purge legacy.** Backwards-compat shims are debt unless the user explicitly asks for them.
 - **Clarity, conciseness, syntropy.** Code and prose alike — fewer words, sharper meaning, aligned with what already exists. Entropy creeps in through volume.
 
-## Anti-patterns
+## Gotchas + Anti-patterns
 
 - Adding backwards-compatibility unless specifically user-instructed. Purge legacy in place.
+- Running broad local check/build suites to prove a PR. Avoid `pnpm check`, `pnpm check:fast`, `pnpm packages:build`, and equivalent package/build sweeps unless the user explicitly asks or you are reproducing one named failing check.
 - Inline comments narrating _what_ code does, or verbose prose. More text, more entropy — names + types are the docs.
 - Ending a turn before `deploy_verified` without an armed `Monitor`/`ScheduleWakeup` on the gating signal (CI, flight, `/version`). Silent end-of-turn = work lost.
 
