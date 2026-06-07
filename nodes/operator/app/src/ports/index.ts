@@ -142,12 +142,11 @@ export type {
 } from "./onchain-verifier.port";
 export type {
   CandidateFlightDispatchResult,
-  NodeRefParentPin,
   OperatorDeployCheckInfo,
   OperatorDeployCiStatus,
   OperatorDeployPlanePort,
-  PreparedNodeRefCandidateFlight,
-  PrepareNodeRefCandidateFlightInput,
+  ValidatedNodeRefCandidateFlight,
+  ValidateNodeRefCandidateFlightInput,
 } from "./operator-deploy-plane.port";
 export type {
   OperatorWalletPort,

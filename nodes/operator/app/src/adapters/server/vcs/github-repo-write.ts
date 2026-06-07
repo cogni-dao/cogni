@@ -28,14 +28,16 @@ import type {
   OperatorDeployCheckInfo,
   OperatorDeployCiStatus,
   OperatorDeployPlanePort,
-  PreparedNodeRefCandidateFlight,
-  PrepareNodeRefCandidateFlightInput,
+  ValidatedNodeRefCandidateFlight,
+  ValidateNodeRefCandidateFlightInput,
 } from "@/ports";
 import {
   insertAppsetKustomization,
   insertCaddyBlock,
   nextFreeNodePort,
   renderCatalog,
+  renderExternalSecret,
+  renderExternalSecretKustomization,
   renderGitmodules,
   renderNodeAppset,
   renderOverlay,
@@ -363,9 +365,9 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
     };
   }
 
-  async prepareNodeRefCandidateFlight(
-    input: PrepareNodeRefCandidateFlightInput
-  ): Promise<PreparedNodeRefCandidateFlight> {
+  async validateNodeRefCandidateFlight(
+    input: ValidateNodeRefCandidateFlightInput
+  ): Promise<ValidatedNodeRefCandidateFlight> {
     const { parentOwner, parentRepo, nodeId, slug, sourceSha } = input;
     if (!SOURCE_SHA_PATTERN.test(sourceSha)) {
       throw deployPlaneError(
@@ -465,21 +467,12 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       );
     }
 
-    const parentPin = await this.ensureNodeSubmodulePin({
-      owner: parentOwner,
-      repo: parentRepo,
-      slug,
-      nodeRepoUrl: catalog.data.source_repo,
-      nodeRepoHeadSha: sourceSha,
-    });
-
     return {
       nodeId,
       slug,
       sourceSha,
       sourceRepo: catalog.data.source_repo,
       image: `${catalog.data.image_repository}:${tag}`,
-      parentPin,
     };
   }
 
@@ -1204,7 +1197,15 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       );
       await addBlob(
         overlayPath,
-        renderOverlay(templateOverlay, slug, nodePort, port)
+        renderOverlay(templateOverlay, slug, nodePort, port, env)
+      );
+      await addBlob(
+        `infra/k8s/secrets/external-secrets/${env}/${slug}/external-secret.yaml`,
+        renderExternalSecret(slug, env)
+      );
+      await addBlob(
+        `infra/k8s/secrets/external-secrets/${env}/${slug}/kustomization.yaml`,
+        renderExternalSecretKustomization()
       );
     }
 

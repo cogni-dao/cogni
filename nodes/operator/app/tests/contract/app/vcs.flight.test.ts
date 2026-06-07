@@ -4,10 +4,10 @@
 /**
  * Module: `@tests/contract/app/vcs.flight`
  * Purpose: Contract tests for POST /api/v1/vcs/flight.
- * Scope: Verifies PR CI gating, operator-local node-ref dispatch gating, and auth.
+ * Scope: Verifies PR CI gating, operator-local node-ref validation, and auth.
  * Invariants:
- *   - CI_GATE: PR and parent-pin PR checks must be green before dispatch.
- *   - NODE_REF_PARENT_PIN_GATE: parent pin PR head must match the prepared pin commit.
+ *   - CI_GATE: PR checks must be green before dispatch.
+ *   - NODE_REF_VALIDATION_ONLY: node-ref dispatch does not open/check a parent pin PR.
  *   - CONTRACTS_ARE_TRUTH: 202 response matches flightOperation.output schema.
  * Side-effects: none
  * Links: task.0370, nodes/operator/app/src/app/api/v1/vcs/flight/route.ts,
@@ -23,7 +23,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   CandidateFlightDispatchResult,
   OperatorDeployCiStatus,
-  PreparedNodeRefCandidateFlight,
+  ValidatedNodeRefCandidateFlight,
 } from "@/ports";
 
 const NODE_ID = "11111111-1111-4111-8111-111111111111";
@@ -32,7 +32,7 @@ const SOURCE_SHA = "0123456789012345678901234567890123456789";
 const mockDeployPlane = vi.hoisted(() => ({
   getCiStatus: vi.fn(),
   dispatchCandidateFlight: vi.fn(),
-  prepareNodeRefCandidateFlight: vi.fn(),
+  validateNodeRefCandidateFlight: vi.fn(),
   dispatchNodeRefCandidateFlight: vi.fn(),
 }));
 
@@ -190,19 +190,15 @@ function makeDispatchResult(
   };
 }
 
-function makePreparedNodeRef(
-  overrides: Partial<PreparedNodeRefCandidateFlight> = {}
-): PreparedNodeRefCandidateFlight {
+function makeValidatedNodeRef(
+  overrides: Partial<ValidatedNodeRefCandidateFlight> = {}
+): ValidatedNodeRefCandidateFlight {
   return {
     nodeId: NODE_ID,
     slug: "creative",
     sourceSha: SOURCE_SHA,
     sourceRepo: "https://github.com/Cogni-DAO/creative.git",
     image: `ghcr.io/cogni-dao/creative-node:sha-${SOURCE_SHA}`,
-    parentPin: {
-      status: "already_pinned",
-      currentSha: SOURCE_SHA,
-    },
     ...overrides,
   };
 }
@@ -303,9 +299,12 @@ describe("POST /api/v1/vcs/flight", () => {
     });
   });
 
-  it("returns 202 for an already-pinned node-ref candidate flight", async () => {
-    mockDeployPlane.prepareNodeRefCandidateFlight.mockResolvedValue(
-      makePreparedNodeRef()
+  it("returns 202 for a validated node-ref candidate flight without parent CI gating", async () => {
+    mockDeployPlane.validateNodeRefCandidateFlight.mockResolvedValue(
+      makeValidatedNodeRef()
+    );
+    mockDeployPlane.getCiStatus.mockRejectedValue(
+      new Error("node-ref must not check parent CI")
     );
     mockDeployPlane.dispatchNodeRefCandidateFlight.mockResolvedValue(
       makeDispatchResult("Candidate flight dispatched for creative@01234567.")
@@ -325,8 +324,10 @@ describe("POST /api/v1/vcs/flight", () => {
         const body = await res.json();
         expect(flightOperation.output.safeParse(body).success).toBe(true);
         expect(body.nodeRef.slug).toBe("creative");
+        expect(body.nodeRef.parentPrNumber).toBeUndefined();
+        expect(body.nodeRef.parentHeadSha).toBeUndefined();
         expect(
-          mockDeployPlane.prepareNodeRefCandidateFlight
+          mockDeployPlane.validateNodeRefCandidateFlight
         ).toHaveBeenCalledWith({
           parentOwner: "cogni-test-org",
           parentRepo: "cogni-monorepo",
@@ -334,6 +335,7 @@ describe("POST /api/v1/vcs/flight", () => {
           slug: "creative",
           sourceSha: SOURCE_SHA,
         });
+        expect(mockDeployPlane.getCiStatus).not.toHaveBeenCalled();
         expect(
           mockDeployPlane.dispatchNodeRefCandidateFlight
         ).toHaveBeenCalledWith({
@@ -356,7 +358,7 @@ describe("POST /api/v1/vcs/flight", () => {
   });
 
   it("returns classified node-ref preflight failures with request and adapter logs", async () => {
-    mockDeployPlane.prepareNodeRefCandidateFlight.mockRejectedValue(
+    mockDeployPlane.validateNodeRefCandidateFlight.mockRejectedValue(
       statusError(422, "source_missing", "sourceSha not found")
     );
 
@@ -380,7 +382,7 @@ describe("POST /api/v1/vcs/flight", () => {
           expect.objectContaining({
             event: "adapter.github_repo_write.error",
             dep: "github",
-            operation: "prepare_node_ref_candidate_flight",
+            operation: "validate_node_ref_candidate_flight",
             reasonCode: "source_missing",
             status: 422,
             nodeId: NODE_ID,
@@ -418,7 +420,7 @@ describe("POST /api/v1/vcs/flight", () => {
         const body = await res.json();
         expect(body.error).toMatch(/NODE_SUBMODULE_PARENT_OWNER/);
         expect(
-          mockDeployPlane.prepareNodeRefCandidateFlight
+          mockDeployPlane.validateNodeRefCandidateFlight
         ).not.toHaveBeenCalled();
         expectFlightRequestLog("error", {
           mode: "node_ref",
@@ -428,103 +430,6 @@ describe("POST /api/v1/vcs/flight", () => {
           nodeId: NODE_ID,
           slug: "creative",
           sourceSha8: SOURCE_SHA.slice(0, 8),
-        });
-      },
-    });
-  });
-
-  it("returns 409 when parent pin PR CI head differs from prepared pin commit", async () => {
-    mockDeployPlane.prepareNodeRefCandidateFlight.mockResolvedValue(
-      makePreparedNodeRef({
-        parentPin: {
-          status: "pin_pr_opened",
-          currentSha: null,
-          prNumber: 77,
-          prUrl: "https://github.com/test-owner/test-repo/pull/77",
-          parentHeadSha: "1111111111111111111111111111111111111111",
-        },
-      })
-    );
-    mockDeployPlane.getCiStatus.mockResolvedValue(
-      makeGreenCiStatus({
-        prNumber: 77,
-        headSha: "2222222222222222222222222222222222222222",
-      })
-    );
-
-    await testApiHandler({
-      appHandler,
-      async test({ fetch }) {
-        const res = await fetch({
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            nodeRef: { nodeId: NODE_ID, sourceSha: SOURCE_SHA },
-          }),
-        });
-        expect(res.status).toBe(409);
-        const body = await res.json();
-        expect(body.expectedHeadSha).toBe(
-          "1111111111111111111111111111111111111111"
-        );
-        expect(
-          mockDeployPlane.dispatchNodeRefCandidateFlight
-        ).not.toHaveBeenCalled();
-        expectFlightRequestLog("warn", {
-          mode: "node_ref",
-          outcome: "error",
-          status: 409,
-          errorCode: "parent_pin_head_mismatch",
-          nodeId: NODE_ID,
-          slug: "creative",
-          parentPrNumber: 77,
-        });
-      },
-    });
-  });
-
-  it("returns 422 when parent pin PR CI is not green", async () => {
-    mockDeployPlane.prepareNodeRefCandidateFlight.mockResolvedValue(
-      makePreparedNodeRef({
-        parentPin: {
-          status: "pin_pr_opened",
-          currentSha: "0000000000000000000000000000000000000000",
-          prNumber: 77,
-          prUrl: "https://github.com/test-owner/test-repo/pull/77",
-          parentHeadSha: "1111111111111111111111111111111111111111",
-        },
-      })
-    );
-    mockDeployPlane.getCiStatus.mockResolvedValue(
-      makeGreenCiStatus({
-        prNumber: 77,
-        headSha: "1111111111111111111111111111111111111111",
-        allGreen: false,
-      })
-    );
-
-    await testApiHandler({
-      appHandler,
-      async test({ fetch }) {
-        const res = await fetch({
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            nodeRef: { nodeId: NODE_ID, sourceSha: SOURCE_SHA },
-          }),
-        });
-        expect(res.status).toBe(422);
-        expect(
-          mockDeployPlane.dispatchNodeRefCandidateFlight
-        ).not.toHaveBeenCalled();
-        expectFlightRequestLog("warn", {
-          mode: "node_ref",
-          outcome: "error",
-          status: 422,
-          errorCode: "parent_ci_not_green",
-          nodeId: NODE_ID,
-          slug: "creative",
-          parentPrNumber: 77,
         });
       },
     });

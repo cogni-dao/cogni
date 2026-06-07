@@ -7,8 +7,8 @@
  * Scope: Interface only. Keeps hosted deploy operations out of shared AI-tool capabilities.
  * Invariants:
  *   - OPERATOR_OWNS_DEPLOY: deploy mutations target the operator parent repo/workflows.
- *   - PARENT_PIN_GATES_NODE_REF: node-ref flight dispatch requires an accepted parent gitlink pin
- *     or an exact green parent pin PR head.
+ *   - NODE_REF_PREFLIGHT_VALIDATES: node-ref flight dispatch validates source commit,
+ *     repo identity, catalog entry, and image tag before dispatch.
  * Side-effects: none
  * Links: docs/spec/node-ci-cd-contract.md, src/app/api/v1/vcs/flight/route.ts
  * @public
@@ -34,7 +34,7 @@ export interface CandidateFlightDispatchResult {
   readonly message: string;
 }
 
-export interface PrepareNodeRefCandidateFlightInput {
+export interface ValidateNodeRefCandidateFlightInput {
   readonly parentOwner: string;
   readonly parentRepo: string;
   readonly nodeId: string;
@@ -42,29 +42,12 @@ export interface PrepareNodeRefCandidateFlightInput {
   readonly sourceSha: string;
 }
 
-export type NodeRefParentPin =
-  | {
-      readonly status: "already_pinned";
-      readonly currentSha: string;
-      readonly prNumber?: undefined;
-      readonly prUrl?: undefined;
-      readonly parentHeadSha?: undefined;
-    }
-  | {
-      readonly status: "pin_pr_opened";
-      readonly currentSha: string | null;
-      readonly prNumber: number;
-      readonly prUrl: string;
-      readonly parentHeadSha: string;
-    };
-
-export interface PreparedNodeRefCandidateFlight {
+export interface ValidatedNodeRefCandidateFlight {
   readonly nodeId: string;
   readonly slug: string;
   readonly sourceSha: string;
   readonly sourceRepo: string;
   readonly image: string;
-  readonly parentPin: NodeRefParentPin;
 }
 
 export interface OperatorDeployPlanePort {
@@ -81,9 +64,9 @@ export interface OperatorDeployPlanePort {
     headSha: string;
   }): Promise<CandidateFlightDispatchResult>;
 
-  prepareNodeRefCandidateFlight(
-    input: PrepareNodeRefCandidateFlightInput
-  ): Promise<PreparedNodeRefCandidateFlight>;
+  validateNodeRefCandidateFlight(
+    input: ValidateNodeRefCandidateFlightInput
+  ): Promise<ValidatedNodeRefCandidateFlight>;
 
   dispatchNodeRefCandidateFlight(input: {
     owner: string;

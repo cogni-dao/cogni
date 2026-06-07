@@ -31,7 +31,7 @@ REST API routes for VCS operations — CI-gated candidate-a flight dispatch for 
 
 - **Exports:** none (route handlers only)
 - **Routes:**
-  - `POST /api/v1/vcs/flight` — CI-gated candidate-a flight request for either `prNumber` or `nodeRef`; requires Bearer or session auth; 202 on dispatch, 422 if CI is not green
+- `POST /api/v1/vcs/flight` — CI-gated candidate-a flight request for either `prNumber` or `nodeRef`; requires Bearer or session auth; PR flights require green PR CI, nodeRef flights validate source/image and dispatch directly
 
 ## Ports
 
@@ -40,7 +40,7 @@ REST API routes for VCS operations — CI-gated candidate-a flight dispatch for 
 
 ## Responsibilities
 
-- This directory **does:** verify PR or parent-pin CI gates, dispatch `candidate-flight.yml` via `OperatorDeployPlanePort`, return dispatch metadata.
+- This directory **does:** verify PR CI gates, validate nodeRef source/image readiness, dispatch `candidate-flight.yml` via `OperatorDeployPlanePort`, return dispatch metadata.
 - This directory **does not:** own the slot lease (workflow owns it), poll for run ID, write any DB state.
 
 ## Standards

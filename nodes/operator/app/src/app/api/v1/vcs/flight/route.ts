@@ -34,7 +34,7 @@ import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import type {
   OperatorDeployCiStatus,
   OperatorDeployPlanePort,
-  PreparedNodeRefCandidateFlight,
+  ValidatedNodeRefCandidateFlight,
 } from "@/ports";
 import { getGithubRepo } from "@/shared/config/repoSpec.server";
 import { nodes } from "@/shared/db/nodes";
@@ -59,8 +59,6 @@ interface FlightLogFields {
   readonly nodeId?: string | undefined;
   readonly slug?: string | undefined;
   readonly sourceSha8?: string | undefined;
-  readonly parentPrNumber?: number | undefined;
-  readonly pinStatus?: string | undefined;
   readonly checkCount?: number | undefined;
   readonly allGreen?: boolean | undefined;
   readonly pending?: boolean | undefined;
@@ -279,9 +277,9 @@ export const POST = wrapRouteHandlerWithLogging(
           return NextResponse.json({ error: message }, { status: 503 });
         }
 
-        let prepared: PreparedNodeRefCandidateFlight;
+        let validated: ValidatedNodeRefCandidateFlight;
         try {
-          prepared = await deployPlane.prepareNodeRefCandidateFlight({
+          validated = await deployPlane.validateNodeRefCandidateFlight({
             parentOwner: parentRepo.owner,
             parentRepo: parentRepo.repo,
             nodeId: node.id,
@@ -293,9 +291,9 @@ export const POST = wrapRouteHandlerWithLogging(
           const errorCode =
             error && typeof error === "object" && "code" in error
               ? String((error as { code: unknown }).code)
-              : "node_ref_prepare_failed";
+              : "node_ref_validation_failed";
           logGithubAdapterError(ctx, startedAt, {
-            operation: "prepare_node_ref_candidate_flight",
+            operation: "validate_node_ref_candidate_flight",
             reasonCode: errorCode,
             status: githubStatus(error),
             nodeId: nodeRef.nodeId,
@@ -327,107 +325,23 @@ export const POST = wrapRouteHandlerWithLogging(
           throw error;
         }
 
-        const parentPin = prepared.parentPin;
-        if (parentPin.status === "pin_pr_opened") {
-          let ciStatus: OperatorDeployCiStatus;
-          try {
-            ciStatus = await deployPlane.getCiStatus({
-              owner: parentRepo.owner,
-              repo: parentRepo.repo,
-              prNumber: parentPin.prNumber,
-            });
-          } catch (error) {
-            logGithubAdapterError(ctx, startedAt, {
-              operation: "get_parent_pin_ci_status",
-              reasonCode: "parent_ci_status_failed",
-              status: githubStatus(error),
-              nodeId: prepared.nodeId,
-              slug: prepared.slug,
-              prNumber: parentPin.prNumber,
-            });
-            logTerminal({
-              mode: "node_ref",
-              outcome: "error",
-              status: 500,
-              errorCode: "parent_ci_status_failed",
-              githubStatus: githubStatus(error),
-              nodeId: prepared.nodeId,
-              slug: prepared.slug,
-              sourceSha8: prepared.sourceSha.slice(0, 8),
-              parentPrNumber: parentPin.prNumber,
-            });
-            throw error;
-          }
-          if (ciStatus.headSha !== parentPin.parentHeadSha) {
-            logTerminal({
-              mode: "node_ref",
-              outcome: "error",
-              status: 409,
-              errorCode: "parent_pin_head_mismatch",
-              nodeId: prepared.nodeId,
-              slug: prepared.slug,
-              sourceSha8: prepared.sourceSha.slice(0, 8),
-              parentPrNumber: parentPin.prNumber,
-              checkCount: ciStatus.checks.length,
-            });
-            return NextResponse.json(
-              {
-                error:
-                  "parent pin PR CI head does not match the prepared pin commit",
-                parentPrNumber: parentPin.prNumber,
-                expectedHeadSha: parentPin.parentHeadSha,
-                actualHeadSha: ciStatus.headSha,
-              },
-              { status: 409 }
-            );
-          }
-          if (!ciStatus.allGreen || ciStatus.pending) {
-            logTerminal({
-              mode: "node_ref",
-              outcome: "error",
-              status: 422,
-              errorCode: "parent_ci_not_green",
-              nodeId: prepared.nodeId,
-              slug: prepared.slug,
-              sourceSha8: prepared.sourceSha.slice(0, 8),
-              parentPrNumber: parentPin.prNumber,
-              checkCount: ciStatus.checks.length,
-              allGreen: ciStatus.allGreen,
-              pending: ciStatus.pending,
-            });
-            return NextResponse.json(
-              {
-                error:
-                  "Parent pin PR CI is not green for this node-ref flight.",
-                parentPrNumber: parentPin.prNumber,
-                parentHeadSha: parentPin.parentHeadSha,
-                allGreen: ciStatus.allGreen,
-                pending: ciStatus.pending,
-              },
-              { status: 422 }
-            );
-          }
-        }
-
         // vnext: this records dispatch acceptance only. Workflow started/completed/failed
         // needs a GitHub Actions webhook or polling listener before those states are observable.
         try {
           const dispatch = await deployPlane.dispatchNodeRefCandidateFlight({
             owner: parentRepo.owner,
             repo: parentRepo.repo,
-            slug: prepared.slug,
-            sourceSha: prepared.sourceSha,
+            slug: validated.slug,
+            sourceSha: validated.sourceSha,
           });
 
           logTerminal({
             mode: "node_ref",
             outcome: "success",
             status: 202,
-            nodeId: prepared.nodeId,
-            slug: prepared.slug,
-            sourceSha8: prepared.sourceSha.slice(0, 8),
-            pinStatus: parentPin.status,
-            parentPrNumber: parentPin.prNumber,
+            nodeId: validated.nodeId,
+            slug: validated.slug,
+            sourceSha8: validated.sourceSha.slice(0, 8),
             dispatchStatus: "initiated",
           });
           return NextResponse.json(
@@ -435,17 +349,11 @@ export const POST = wrapRouteHandlerWithLogging(
               dispatched: dispatch.dispatched,
               slot: "candidate-a",
               nodeRef: {
-                nodeId: prepared.nodeId,
-                slug: prepared.slug,
-                sourceSha: prepared.sourceSha,
-                sourceRepo: prepared.sourceRepo,
-                image: prepared.image,
-                ...(parentPin.prNumber
-                  ? {
-                      parentPrNumber: parentPin.prNumber,
-                      parentHeadSha: parentPin.parentHeadSha,
-                    }
-                  : {}),
+                nodeId: validated.nodeId,
+                slug: validated.slug,
+                sourceSha: validated.sourceSha,
+                sourceRepo: validated.sourceRepo,
+                image: validated.image,
               },
               workflowUrl: dispatch.workflowUrl,
               message: dispatch.message,
@@ -460,8 +368,8 @@ export const POST = wrapRouteHandlerWithLogging(
             operation: "dispatch_node_ref_candidate_flight",
             reasonCode: errorCode,
             status: githubStatus(error),
-            nodeId: prepared.nodeId,
-            slug: prepared.slug,
+            nodeId: validated.nodeId,
+            slug: validated.slug,
           });
           logTerminal({
             mode: "node_ref",
@@ -469,9 +377,9 @@ export const POST = wrapRouteHandlerWithLogging(
             status: dispatchError?.response.status ?? 500,
             errorCode,
             githubStatus: githubStatus(error),
-            nodeId: prepared.nodeId,
-            slug: prepared.slug,
-            sourceSha8: prepared.sourceSha.slice(0, 8),
+            nodeId: validated.nodeId,
+            slug: validated.slug,
+            sourceSha8: validated.sourceSha.slice(0, 8),
           });
           if (dispatchError) return dispatchError.response;
           throw error;

@@ -21,6 +21,11 @@ on:
         description: "Child node repo source SHA for node-ref flight"
         required: false
         type: string
+      include_infra:
+        description: "Reserved: also run the slow infra lever. Default is app-only."
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -200,40 +205,29 @@ jobs:
           echo "has_flight_targets=$has_flight_targets" >> "$GITHUB_OUTPUT"
           echo "has_image_inputs=$has_image_inputs" >> "$GITHUB_OUTPUT"
 
-      # Node BIRTH detection (mochi gap): a flight that ADDS a new
-      # infra/catalog/<slug>.yaml is bringing a brand-new node online, so its
-      # edge route + DB + secret don't exist on the VM yet. Use the GitHub PR
-      # `files` API (status == 'added') as the authoritative added-paths source —
-      # the same reason the affected-detector above prefers it over a merge-base
-      # diff (squash-merged sibling branches pollute `git diff base...head`).
-      # Birth → needs_infra=true couples deploy-infra into THIS flight's graph
-      # (one-flight birth). Ordinary app flights → false: app/infra independence
-      # (task.0314) is preserved; the standalone candidate-flight-infra.yml lever
-      # remains for infra-only/manual changes.
-      - name: Detect node birth (added catalog entry)
+      # Infra inclusion is explicit and reserved. Node formation PRs declare the
+      # per-node substrate shape; a fast reconciler converges it after merge.
+      # Candidate flight stays app-only unless a human deliberately asks for the
+      # slow infra lever via include_infra=true.
+      - name: Decide infra inclusion
         id: birth
         env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ inputs.pr_number }}
           NODE_SLUG: ${{ steps.meta.outputs.node_slug }}
+          INCLUDE_INFRA: ${{ inputs.include_infra || false }}
         run: |
           set -euo pipefail
-          if [ -n "$NODE_SLUG" ]; then
-            echo "::notice::Node-ref flight for ${NODE_SLUG} — provisioning infra idempotently"
+          if [ "$INCLUDE_INFRA" = "true" ]; then
+            echo "::notice::include_infra=true — running reserved infra lever"
             echo "needs_infra=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          ADDED_CATALOG=$(gh api --paginate \
-            "repos/${{ github.repository }}/pulls/${PR_NUMBER}/files" \
-            --jq '.[] | select(.status == "added") | .filename
-                  | select(test("^infra/catalog/[^/]+\\.yaml$"))')
-          if [ -n "$ADDED_CATALOG" ]; then
-            echo "::notice::Node birth detected — new catalog entry: ${ADDED_CATALOG//$'\n'/ }"
-            echo "needs_infra=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "ℹ️  No added infra/catalog/*.yaml — app-only flight, infra independent"
+          if [ -n "$NODE_SLUG" ]; then
+            echo "ℹ️  Node-ref flight for ${NODE_SLUG} — app-only candidate flight"
             echo "needs_infra=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          echo "ℹ️  include_infra=false — app-only candidate flight"
+          echo "needs_infra=false" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         if: steps.flight-targets.outputs.has_image_inputs == 'true'
@@ -426,6 +420,12 @@ jobs:
             "deploy-branch/infra/k8s/overlays/candidate-a/${NODE}/"
           mkdir -p deploy-branch/infra/catalog
           cp "app-src/infra/catalog/${NODE}.yaml" "deploy-branch/infra/catalog/${NODE}.yaml"
+          if [ -d "app-src/infra/k8s/secrets/external-secrets/candidate-a/${NODE}" ]; then
+            mkdir -p "deploy-branch/infra/k8s/secrets/external-secrets/candidate-a/${NODE}"
+            rsync -a --delete \
+              "app-src/infra/k8s/secrets/external-secrets/candidate-a/${NODE}/" \
+              "deploy-branch/infra/k8s/secrets/external-secrets/candidate-a/${NODE}/"
+          fi
           if [ -d "app-src/nodes/${NODE}/k8s/external-secrets/candidate-a" ]; then
             mkdir -p "deploy-branch/nodes/${NODE}/k8s/external-secrets/candidate-a"
             rsync -a --delete \
@@ -516,10 +516,10 @@ jobs:
           path: deploy-sha-out/deploy-sha-${{ matrix.node }}.txt
           retention-days: 1
 
-  # Per-node public DNS. The node's overlay/secrets/DB all auto-fan on flight,
-  # but `<node>-test.<root>` only resolved if someone hand-made a Cloudflare A
-  # record (no `*-test` wildcard) — so a freshly-created node deployed but its
-  # public URL failed at DNS. This reconciles one A record per non-primary
+  # Per-node public DNS. Node formation PRs now declare overlay/AppSet/ESO
+  # shape, but `<node>-test.<root>` only resolved if someone hand-made a
+  # Cloudflare A record (no `*-test` wildcard) — so a freshly-created node
+  # deployed but its public URL failed at DNS. This reconciles one A record per non-primary
   # catalog node → the env VM IP (idempotent), so verify-candidate's smoke +
   # buildSha checks (which curl host_for_node(node, DOMAIN)) resolve.
   #
@@ -565,14 +565,9 @@ jobs:
           fi
           bash scripts/ci/reconcile-node-dns.sh candidate-a
 
-  # Node BIRTH only (mochi gap): a flight that ADDS a catalog node must
-  # provision that node's Compose infra — edge route + DB + secret — in the SAME
-  # flight, else the freshly-deployed pod has no DB/secret and the edge returns
-  # TLS-internal-error (no Caddy route). Mirrors candidate-flight-infra.yml's
-  # flight-infra job (the standalone infra lever, still available for manual /
-  # infra-only changes) but sources infra/compose/** from the PR head, not main,
-  # so the birthing PR's own infra lands. Skipped on every non-birth flight →
-  # task.0314 app/infra independence holds; the coupling fires ONLY on birth.
+  # Reserved slow infra lever. Ordinary PR and node-ref app flights stay app-only.
+  # Node formation PRs declare per-node substrate; fast reconcilers converge that
+  # desired state after merge.
   deploy-infra:
     needs: decide
     if: needs.decide.outputs.needs_infra == 'true'
@@ -707,9 +702,9 @@ jobs:
 
   verify-candidate:
     needs: [decide, flight, reconcile-dns, deploy-infra]
-    # deploy-infra runs ONLY on birth (added catalog node); on every ordinary
-    # app flight it is SKIPPED, and a skipped birth-infra must still let verify
-    # run — mirrors promote-and-deploy.yml's
+    # deploy-infra runs only when include_infra=true; every ordinary app flight
+    # skips it, and a skipped infra lever must still let verify run — mirrors
+    # promote-and-deploy.yml's
     # `(deploy-infra.result == 'success' || 'skipped')` gate.
     if: |
       always() &&

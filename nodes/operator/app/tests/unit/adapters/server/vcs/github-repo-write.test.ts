@@ -413,6 +413,96 @@ describe("GitHubRepoWriter.ensureNodeSubmodulePin", () => {
   });
 });
 
+describe("GitHubRepoWriter.validateNodeRefCandidateFlight", () => {
+  it("validates source repo identity and image tag without opening a parent pin PR", async () => {
+    const sourceSha = "0123456789012345678901234567890123456789";
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": (params) => {
+        if (params.path === "infra/catalog/creative.yaml") {
+          expect(params).toMatchObject({
+            owner: "Cogni-DAO",
+            repo: "cogni",
+            ref: "main",
+          });
+          return {
+            type: "file",
+            encoding: "base64",
+            content: Buffer.from(
+              [
+                "name: creative",
+                "type: node",
+                "path_prefix: nodes/creative/",
+                "source_repo: https://github.com/Cogni-DAO/creative.git",
+                "image_repository: ghcr.io/cogni-dao/creative-node",
+              ].join("\n"),
+              "utf-8"
+            ).toString("base64"),
+          };
+        }
+        expect(params).toMatchObject({
+          owner: "Cogni-DAO",
+          repo: "creative",
+          path: ".cogni/repo-spec.yaml",
+          ref: sourceSha,
+        });
+        return {
+          type: "file",
+          encoding: "base64",
+          content: Buffer.from(
+            [
+              'node_id: "11111111-1111-4111-8111-111111111111"',
+              "cogni_dao:",
+              '  chain_id: "8453"',
+            ].join("\n"),
+            "utf-8"
+          ).toString("base64"),
+        };
+      },
+      "GET /repos/{owner}/{repo}/commits/{ref}": (params) => {
+        expect(params).toMatchObject({
+          owner: "Cogni-DAO",
+          repo: "creative",
+          ref: sourceSha,
+        });
+        return { sha: sourceSha };
+      },
+      "GET /orgs/{org}/packages/{package_type}/{package_name}/versions": (
+        params
+      ) => {
+        expect(params).toMatchObject({
+          org: "cogni-dao",
+          package_type: "container",
+          package_name: "creative-node",
+        });
+        return [{ metadata: { container: { tags: [`sha-${sourceSha}`] } } }];
+      },
+    };
+
+    await expect(
+      makeWriter().validateNodeRefCandidateFlight({
+        parentOwner: "Cogni-DAO",
+        parentRepo: "cogni",
+        nodeId: "11111111-1111-4111-8111-111111111111",
+        slug: "creative",
+        sourceSha,
+      })
+    ).resolves.toEqual({
+      nodeId: "11111111-1111-4111-8111-111111111111",
+      slug: "creative",
+      sourceSha,
+      sourceRepo: "https://github.com/Cogni-DAO/creative.git",
+      image: `ghcr.io/cogni-dao/creative-node:sha-${sourceSha}`,
+    });
+
+    expect(requests.map((request) => request.route)).toEqual([
+      "GET /repos/{owner}/{repo}/contents/{path}",
+      "GET /repos/{owner}/{repo}/commits/{ref}",
+      "GET /repos/{owner}/{repo}/contents/{path}",
+      "GET /orgs/{org}/packages/{package_type}/{package_name}/versions",
+    ]);
+  });
+});
+
 describe("GitHubRepoWriter.packageImageTagExists", () => {
   it("probes GHCR tags through GitHub Packages REST with installation auth", async () => {
     routeHandlers = {

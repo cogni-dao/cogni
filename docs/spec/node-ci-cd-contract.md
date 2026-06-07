@@ -148,10 +148,10 @@ The model is good only if the boundary stays this simple:
 
 So: node-template repos carry **CI + image build**, not hosted flight/deploy
 workflows. Hosted flight is an operator action because it mutates operator-owned
-environment state: deploy branches, Argo applications, DNS, OpenBao/ESO, and
-candidate/preview/production provenance. A node repo may include a small
-"request flight" client or documentation, but not the workflow that performs
-the flight against a shared operator environment.
+candidate provenance. Durable preview/prod promotion may later mutate deploy
+branches, Argo applications, DNS, and OpenBao/ESO. A node repo may include a
+small "request flight" client or documentation, but not the workflow that
+performs the flight against a shared operator environment.
 
 This keeps Cogni an OSS foundation instead of a platform trap: node repos remain
 portable and self-verifying; the shared operator is just one deploy host. A node
@@ -165,15 +165,16 @@ GitHub permissions answer "can this App/API token do the mechanical GitHub
 operation?" They do not answer "should this agent be allowed to mutate this
 Cogni environment?"
 
-Flight authorization is operator-local:
+Flight authorization is product-local:
 
 1. Caller authenticates to the operator API as a human/session or bearer agent.
-2. Operator checks a Cogni capability, not GitHub membership. v0 can be a narrow
+2. Operator checks a Cogni product capability, not GitHub membership. v0 can be a narrow
    allowlist/capability row: `principal -> node_slug -> environment -> action`
    with TTL. v1 can become org membership/RBAC.
-3. Operator verifies objective gates before dispatch:
+3. Operator verifies objective gates before dispatching `candidate-flight`:
    - node exists in the operator registry/catalog;
-   - requested `sourceSha` exists in the registered node repo;
+   - requested `nodeRef` resolves to the registered node repo;
+   - requested `sourceSha` exists in that repo;
    - child `.cogni/repo-spec.yaml` at that SHA matches the node identity;
    - GHCR has `image_repository:sha-<sourceSha>`;
    - requested env is allowed for that principal (`candidate-a` first;
@@ -199,7 +200,7 @@ This holds **structurally** in `classify.ts`: a bare `nodes/<slug>` gitlink has 
 | ---------------------------------- | -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Merge gate (unit/component/static) | operator monorepo CI, shared root configs    | the node repo's **own** `ci.yaml` (node-template fork — `FORK_FREEDOM` + `setup-main-branch.sh` apply)                                                                                                                                                                                                                                                                                                                                                                     |
 | `POLICY_STAYS_LOCAL`               | shared root policy                           | own policy copies — drift is by-design sovereignty                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| operator's job                     | full gate + `single-node-scope` split        | pointer-validate + provision + flight + promote                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| operator's job                     | full gate + `single-node-scope` split        | candidate nodeRef flight + durable parent repin + promote                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `ci.yaml` scope filter             | `nodes/<X>/**` entry + operator `!` negation | **no** scope filter — `render-scope-filters.sh` skips submodule slugs (keyed off `.gitmodules`). A generated `nodes/<slug>/**` filter is **not** harmless: picomatch's globstar matches the bare gitlink `nodes/<slug>`, so the pin misclassifies as node-domain (`MATCHED: ["<slug>", "operator"]` → false cross-domain reject). With no filter, the gitlink falls to operator's `**`. The `nodes/*` ↔ filter mirror meta-test applies the same `.gitmodules` exclusion. |
 
 ### The node is a sovereign repo, not operator-built content (two views)
@@ -207,7 +208,7 @@ This holds **structurally** in `classify.ts`: a bare `nodes/<slug>` gitlink has 
 The node has **its own `.github/workflows/` and runs its own CI** — _and_ it is **`nodes/<slug>` only** from the operator. Both are true; they are two views of one object, not a contradiction:
 
 - **Node-repo view (the node-dev's clone).** A submodule node is a _full standalone repo_ with the node **at its root**: `app/`, `graphs/`, `k8s/`, `packages/`, plus its **own** `.github/workflows/ci.yaml`, biome/tsconfig/Dockerfile, and the `setup-main-branch.sh` gate. The node-dev clones _only_ this repo, runs the full merge gate there, and **builds + pushes its own image** to GHCR (`FORK_FREEDOM`). This sovereignty is the entire reason the submodule model exists. For the product/package shape of that root-level node repo, see [Node Backend-as-a-Service Architecture](./node-baas-architecture.md).
-- **Operator view (the monorepo).** The operator sees a `nodes/<slug>` **gitlink — a pointer**, not content. Even after `git submodule update --init nodes/<slug>`, the node's root `.github/workflows/` lands at `nodes/<slug>/.github/workflows/`, which **GitHub never executes** (only _repo-root_ `.github/workflows/` run). So the operator monorepo **never runs the node's workflows and never builds the node** — its job is exactly the table above: pointer-validate + provision + flight + promote the node's _pre-built_ image.
+- **Operator view (the monorepo).** The operator sees a `nodes/<slug>` **gitlink — a pointer**, not content. Even after `git submodule update --init nodes/<slug>`, the node's root `.github/workflows/` lands at `nodes/<slug>/.github/workflows/`, which **GitHub never executes** (only _repo-root_ `.github/workflows/` run). So the operator monorepo **never runs the node's workflows and never builds the node** — its job is exactly the table above: candidate nodeRef flight, durable parent repin, and promotion of the node's _pre-built_ image.
 
 **Corollary that breaks today's pin-PR (P0).** Because the node builds itself, the operator's `detect-affected.sh` must **exclude the gitlink from build targets** — a `build (<slug>)` leg on the parent is always wrong. The operator consumes the node's image by **digest** (catalog `repo`+`ref` pin), never by rebuilding source.
 
@@ -244,11 +245,11 @@ Two `full-app` templates differ **only by integration** (fork-whole vs submodule
 
 All three repos carry the node **app + its merge-gate CI + image build**. They differ on **one axis: how much of the deploy/infra plane they carry.**
 
-| Repo                                        | Node app                                  | Node CI (merge-gate + build→GHCR)    | Deploy/infra plane¹      | Who deploys it                                           |
-| ------------------------------------------- | ----------------------------------------- | ------------------------------------ | ------------------------ | -------------------------------------------------------- |
-| **cogni monorepo**                          | operator + inline nodes (`nodes/poly`, …) | yes (shared root configs)            | **owns it — every node** | itself                                                   |
-| **standalone-node** (fork-whole)            | node nested at `nodes/node-template/`     | yes                                  | **yes — you self-host**  | itself (you _are_ an operator)                           |
-| **node-template** (submodule, node-at-root) | node at repo root                         | **yes — own `ci.yaml` + build→GHCR** | **no**                   | the shared operator (pin → provision → flight → promote) |
+| Repo                                        | Node app                                  | Node CI (merge-gate + build→GHCR)    | Deploy/infra plane¹      | Who deploys it                                               |
+| ------------------------------------------- | ----------------------------------------- | ------------------------------------ | ------------------------ | ------------------------------------------------------------ |
+| **cogni monorepo**                          | operator + inline nodes (`nodes/poly`, …) | yes (shared root configs)            | **owns it — every node** | itself                                                       |
+| **standalone-node** (fork-whole)            | node nested at `nodes/node-template/`     | yes                                  | **yes — you self-host**  | itself (you _are_ an operator)                               |
+| **node-template** (submodule, node-at-root) | node at repo root                         | **yes — own `ci.yaml` + build→GHCR** | **no**                   | the shared operator (nodeRef flight → durable pin → promote) |
 
 ¹ Deploy/infra plane = `provision-env`, Argo AppSets + k8s overlays, `deploy-infra`, `candidate-flight`, OpenBao/ESO substrate, the operator app, `infra/catalog`, root monorepo tooling.
 
@@ -278,6 +279,29 @@ A submodule node-dev carries CI but **not** the deploy/infra plane, so the monor
 
 **Invariant: the node-dev declares shape in-repo; the operator's plane consumes it.** A new secret or service is **one edit in the node's own repo + its own CI** — never a monorepo PR. The value-set + deploy wiring belong to whoever owns the env. This keeps `secrets-add-new` / `create-service` correct verbatim for a **self-host** node (it owns its plane) and cleanly halved for a **submodule** node (operator owns the plane half).
 
+### NodeRef candidate flight precedes durable parent repin
+
+Candidate flight is the disposable proof path. The operator API accepts
+`nodeRef` + `sourceSha`, performs product authorization, verifies repo-spec
+identity and `sha-<sourceSha>` image existence, then dispatches
+`candidate-flight` with the environment GitHub App. The parent gitlink/catalog
+repin is the durable record and happens only after candidate verification.
+
+`deploy-infra` is not part of an ordinary `nodeRef` candidate flight and it is
+not the node-birth path. The automatic node formation PR declares the per-node
+substrate shape it can own in git for every hosted env: catalog row, per-env
+overlay/AppSet, ExternalSecret leaf, DNS/edge route, and provenance metadata.
+On merge, fast substrate reconcilers converge the non-git side effects: seed the
+OpenBao path behind the ExternalSecret and ensure the `cogni_<slug>` /
+`knowledge_<slug>` databases exist. A node app/image flight uses the existing
+candidate-flight rail and only advances image desired state.
+
+`candidate-flight` may retain an explicit reserved `include_infra=true` lever
+for operator-directed recovery, but it defaults false and is not exposed as the
+normal nodeRef API path. The normal launch loop is: merge formation desired
+state → reconcile substrate → flight child SHA → verify `/version` → durable
+parent repin/promotion.
+
 ### Forward path to deployment (Pareto-ordered)
 
 The submodule **birth** is as-built (#1506): the wizard mints the node repo as a named fork of node-template (`GitHubRepoWriter.forkFromTemplate` → direct identity commit to the new repo's `main`, no PR there) and the operator authors **one** pin-PR (`openNodeSubmodulePr` — a `160000` gitlink at `nodes/<slug>` + `.gitmodules` + the `gens/` footprint **minus the lockfile importer**, the only inline-only tax a submodule node sheds). The fork preserves a shared merge base with node-template, so spawned nodes can fetch and merge future template updates instead of manually porting unrelated histories. Proven E2E on candidate-a (2026-06-04): wizard Publish → minted node repo + pin-PR into the operator monorepo + review-bot trigger. What remains to carry a born node through **deploy → preview/prod** is the ordered list below. **P0 + P1 are the critical ~20%** — without them nothing merges or builds; **P2–P4 ride the existing inline-node rails** and only need recognition of the submodule seam, not new pipelines.
@@ -288,13 +312,13 @@ The submodule **birth** is as-built (#1506): the wizard mints the node repo as a
 
 - **P2 — node builds + pushes its own image (`FORK_FREEDOM`).** Inherited ~free once P1 lands: the node repo's own CI builds + pushes its app image to GHCR; the operator references the digest via the catalog `repo`+`ref` pin and never builds node code. _Decide once:_ the node's GHCR namespace + the Argo image reference for a submodule node (differs from the monorepo's namespace) — P3/P4 fall out of this choice.
 
-- **P3 — operator deploys the pinned node on candidate-a.** Selective `git submodule update --init nodes/<slug>` before any `nodes/*` walk (provisioning, `scripts/lib/secrets-catalog-loader.ts`, the review router, overlay/appset render) — **never** blanket `--recursive` (rebuilds the giant clone). Then the catalog row → per-`(env,node)` AppSet (#1465) → Argo deploys the node pod. Discovery is metadata-driven (not an fs-walk) **via the catalog→`nodes`-table feeder behind `NodeRegistryPort` — which is still unbuilt (#1507); a hard dependency of P3, not a present capability.** Until it lands, a submodule node's row does not project to the operator `nodes` table (the same gap that 500s `extractOwningNode` on the review path).
+- **P3 — operator flights the child SHA on candidate-a before durable parent repin.** The flight API resolves `nodeRef`, validates the child SHA, image tag, and repo-spec identity, then dispatches `candidate-flight`. Candidate `/version` must match the launched child SHA before the operator publishes the durable parent gitlink/catalog repin.
 
 - **P4 — promote node digest preview→prod.** The gitlink pin + catalog/overlay/appset advance through the deploy branches; build-once-promote-digest applies (the candidate-a-proven image promotes, never rebuilds).
 
 **Identity/config prerequisite (per-env, proven on candidate-a).** Minting authenticates as an env-scoped GitHub App that must (a) be installed **all-repositories** on the mint org and (b) hold **`workflows:write`** — the pin-PR commit edits `.github/workflows/ci.yaml`, which GitHub 403s without it. Mint target, template owner, and submodule-pin-PR parent are env config (`NODE_MINT_OWNER` / `NODE_TEMPLATE_OWNER` / `NODE_SUBMODULE_PARENT_{OWNER,REPO}`), fail-closed (mint) / fail-open (parent → `getGithubRepo()`), so a candidate/test operator has **zero access to the production org** (candidate-a mints into the disposable `cogni-test-org`, pin-PRs into a cogni-shaped fork there).
 
-> **Correction (live repro `cogni-test-org/cogni-monorepo#1`): the `.gitmodules` subtraction _is_ needed — the parent-CI build + scope planes must exclude submodule slugs.** The earlier "dead-but-harmless" reasoning was wrong on two counts: (1) **scope** — the generated dorny filter `nodes/<slug>/**` _does_ match the bare gitlink (picomatch's globstar matches the parent path), so the pin classifies as node-domain and `single-node-scope` false-fails `["<slug>", "operator"]`; (2) **build** — the catalog row puts the slug in `ALL_TARGETS`, so `detect-affected.sh` fans a build over the gitlink, which has no app tree (`lstat nodes/<slug>/app: no such file`). `classify.ts` _is_ correct (a bare gitlink routes to operator); the divergence is that the runtime dorny filter and the build-target list are derived independently and didn't know about gitlinks. **Fix:** `render-scope-filters.sh` + `single-node-scope-meta.spec.ts` skip submodule slugs (no filter generated → gitlink falls to operator's `**`); `image-tags.sh::is_submodule_node` + `detect-affected.sh` drop them from build/flight targets — all keyed off `.gitmodules` (the gitlink is the SSOT). `.gitmodules` is also added to `check-root-layout.ts`'s root allowlist. A submodule node is built **and** flighted by its own repo's CI; the parent only pins, scopes-as-operator, and (next P0) deploys its pre-built image.
+> **Correction (live repro `cogni-test-org/cogni-monorepo#1`): the `.gitmodules` subtraction _is_ needed — the parent-CI build + scope planes must exclude submodule slugs.** The earlier "dead-but-harmless" reasoning was wrong on two counts: (1) **scope** — the generated dorny filter `nodes/<slug>/**` _does_ match the bare gitlink (picomatch's globstar matches the parent path), so the pin classifies as node-domain and `single-node-scope` false-fails `["<slug>", "operator"]`; (2) **build** — the catalog row puts the slug in `ALL_TARGETS`, so `detect-affected.sh` fans a build over the gitlink, which has no app tree (`lstat nodes/<slug>/app: no such file`). `classify.ts` _is_ correct (a bare gitlink routes to operator); the divergence is that the runtime dorny filter and the build-target list are derived independently and didn't know about gitlinks. **Fix:** `render-scope-filters.sh` + `single-node-scope-meta.spec.ts` skip submodule slugs (no filter generated → gitlink falls to operator's `**`); `image-tags.sh::is_submodule_node` + `detect-affected.sh` drop them from build targets — all keyed off `.gitmodules` (the gitlink is the SSOT). `.gitmodules` is also added to `check-root-layout.ts`'s root allowlist. A submodule node is built by its own repo's CI, flighted by operator `nodeRef`, and durably pinned by the parent only after candidate verification.
 
 ---
 

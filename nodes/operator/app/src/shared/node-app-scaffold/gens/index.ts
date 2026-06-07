@@ -15,6 +15,10 @@
 export { insertAppsetKustomization, renderNodeAppset } from "./appset";
 export { insertCaddyBlock } from "./caddyfile";
 export { type RenderCatalogInput, renderCatalog } from "./catalog";
+export {
+  renderExternalSecret,
+  renderExternalSecretKustomization,
+} from "./external-secret";
 export { renderGitmodules } from "./gitmodules";
 export { nextFreeNodePort } from "./node-port";
 export { renderOverlay } from "./overlay";

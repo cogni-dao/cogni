@@ -30,12 +30,32 @@ export function renderOverlay(
   templateOverlay: string,
   slug: string,
   nodePort: number,
-  port: number
+  port: number,
+  env: string
 ): string {
   // Mirror scaffold-node.sh: rename slug first, then the word-bounded port literals (30200 must be
   // rewritten before 3200 so the `\b30200\b` match is not shadowed by a naive `3200` substring).
   const renamed = templateOverlay.split(TEMPLATE_SLUG).join(slug);
-  return renamed
+  const withPorts = renamed
     .replace(/\b30200\b/g, String(nodePort))
     .replace(/\b3200\b/g, String(port));
+  return includeExternalSecretResource(withPorts, env, slug);
+}
+
+function includeExternalSecretResource(
+  overlay: string,
+  env: string,
+  slug: string
+): string {
+  const resource = `  - ../../../secrets/external-secrets/${env}/${slug}\n`;
+  if (overlay.includes(resource)) return overlay;
+
+  const next = overlay.replace(
+    /(resources:\n(?: {2}- .+\n)+)/,
+    `$1${resource}`
+  );
+  if (next === overlay) {
+    throw new Error("renderOverlay: resources block not found");
+  }
+  return next;
 }
