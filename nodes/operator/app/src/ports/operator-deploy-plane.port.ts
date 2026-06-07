@@ -7,26 +7,11 @@
  * Scope: Interface only. Keeps hosted deploy operations out of shared AI-tool capabilities.
  * Invariants:
  *   - OPERATOR_OWNS_DEPLOY: deploy mutations target the operator parent repo/workflows.
- *   - PARENT_PIN_GATES_NODE_REF: node-ref flight dispatch requires an accepted parent gitlink pin
- *     or an exact green parent pin PR head.
+ *   - NODE_REF_ARTIFACT_GATE: node-ref flight dispatch requires a resolvable source artifact.
  * Side-effects: none
  * Links: docs/spec/node-ci-cd-contract.md, src/app/api/v1/vcs/flight/route.ts
  * @public
  */
-
-export interface OperatorDeployCheckInfo {
-  readonly name: string;
-  readonly status: string;
-  readonly conclusion: string | null;
-}
-
-export interface OperatorDeployCiStatus {
-  readonly prNumber: number;
-  readonly headSha: string;
-  readonly allGreen: boolean;
-  readonly pending: boolean;
-  readonly checks: readonly OperatorDeployCheckInfo[];
-}
 
 export interface CandidateFlightDispatchResult {
   readonly dispatched: boolean;
@@ -68,12 +53,6 @@ export interface PreparedNodeRefCandidateFlight {
 }
 
 export interface OperatorDeployPlanePort {
-  getCiStatus(input: {
-    owner: string;
-    repo: string;
-    prNumber: number;
-  }): Promise<OperatorDeployCiStatus>;
-
   prepareNodeRefCandidateFlight(
     input: PrepareNodeRefCandidateFlightInput
   ): Promise<PreparedNodeRefCandidateFlight>;

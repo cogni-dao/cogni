@@ -7,10 +7,10 @@
  *   Supports node-ref flights for externally built artifact rows.
  *   The candidate slot controller (GitHub Actions workflow) owns the actual slot lease
  *   on the deploy branch — this endpoint does not replicate that logic.
- * Scope: Auth → CI gate → dispatch. No lease table. No polling hacks.
+ * Scope: Auth → artifact gate → dispatch. No lease table. No polling hacks.
  * Invariants:
  *   - AUTH_REQUIRED: Bearer token (machine agents) or SIWE session. No open access.
- *   - CI_GATE: Rejects 422 if the parent pin PR CI is not fully green.
+ *   - ARTIFACT_GATE: Rejects before dispatch if the requested image tag is absent.
  *   - OPERATOR_DEPLOY_PLANE: Hosted flight dispatch goes through an operator-local port.
  *   - NODE_REF_CANDIDATE_ONLY: nodeRef dispatch targets candidate-a only; preview/prod promotion carries the resolved digest.
  *   - CONTRACTS_ARE_TRUTH: Input/output parsed through flightOperation contract.
@@ -32,7 +32,6 @@ import { createOperatorDeployPlane } from "@/bootstrap/capabilities/operator-dep
 import { resolveAppDb } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import type {
-  OperatorDeployCiStatus,
   OperatorDeployPlanePort,
   PreparedNodeRefCandidateFlight,
 } from "@/ports";
@@ -59,9 +58,6 @@ interface FlightLogFields {
   readonly sourceSha8?: string | undefined;
   readonly parentPrNumber?: number | undefined;
   readonly pinStatus?: string | undefined;
-  readonly checkCount?: number | undefined;
-  readonly allGreen?: boolean | undefined;
-  readonly pending?: boolean | undefined;
   readonly githubStatus?: number | undefined;
   readonly dispatchStatus?: "initiated" | undefined;
 }
@@ -329,85 +325,6 @@ export const POST = wrapRouteHandlerWithLogging(
       }
 
       const parentPin = prepared.parentPin;
-      if (parentPin.status === "pin_pr_opened") {
-        let ciStatus: OperatorDeployCiStatus;
-        try {
-          ciStatus = await deployPlane.getCiStatus({
-            owner: parentRepo.owner,
-            repo: parentRepo.repo,
-            prNumber: parentPin.prNumber,
-          });
-        } catch (error) {
-          logGithubAdapterError(ctx, startedAt, {
-            operation: "get_parent_pin_ci_status",
-            reasonCode: "parent_ci_status_failed",
-            status: githubStatus(error),
-            nodeId: prepared.nodeId,
-            slug: prepared.slug,
-            prNumber: parentPin.prNumber,
-          });
-          logTerminal({
-            mode: "node_ref",
-            outcome: "error",
-            status: 500,
-            errorCode: "parent_ci_status_failed",
-            githubStatus: githubStatus(error),
-            nodeId: prepared.nodeId,
-            slug: prepared.slug,
-            sourceSha8: prepared.sourceSha.slice(0, 8),
-            parentPrNumber: parentPin.prNumber,
-          });
-          throw error;
-        }
-        if (ciStatus.headSha !== parentPin.parentHeadSha) {
-          logTerminal({
-            mode: "node_ref",
-            outcome: "error",
-            status: 409,
-            errorCode: "parent_pin_head_mismatch",
-            nodeId: prepared.nodeId,
-            slug: prepared.slug,
-            sourceSha8: prepared.sourceSha.slice(0, 8),
-            parentPrNumber: parentPin.prNumber,
-            checkCount: ciStatus.checks.length,
-          });
-          return NextResponse.json(
-            {
-              error:
-                "parent pin PR CI head does not match the prepared pin commit",
-              parentPrNumber: parentPin.prNumber,
-              expectedHeadSha: parentPin.parentHeadSha,
-              actualHeadSha: ciStatus.headSha,
-            },
-            { status: 409 }
-          );
-        }
-        if (!ciStatus.allGreen || ciStatus.pending) {
-          logTerminal({
-            mode: "node_ref",
-            outcome: "error",
-            status: 422,
-            errorCode: "parent_ci_not_green",
-            nodeId: prepared.nodeId,
-            slug: prepared.slug,
-            sourceSha8: prepared.sourceSha.slice(0, 8),
-            parentPrNumber: parentPin.prNumber,
-            checkCount: ciStatus.checks.length,
-            allGreen: ciStatus.allGreen,
-            pending: ciStatus.pending,
-          });
-          return NextResponse.json(
-            {
-              error: "Parent pin PR CI is not green for this node-ref flight.",
-              parentPrNumber: parentPin.prNumber,
-              parentHeadSha: parentPin.parentHeadSha,
-              allGreen: ciStatus.allGreen,
-              pending: ciStatus.pending,
-            },
-            { status: 422 }
-          );
-        }
-      }
 
       // vnext: this records dispatch acceptance only. Workflow started/completed/failed
       // needs a GitHub Actions webhook or polling listener before those states are observable.

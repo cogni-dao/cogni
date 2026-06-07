@@ -4,10 +4,10 @@
 /**
  * Module: `@tests/contract/app/vcs.flight`
  * Purpose: Contract tests for POST /api/v1/vcs/flight.
- * Scope: Verifies operator-local node-ref dispatch gating and auth.
+ * Scope: Verifies operator-local node-ref artifact gating, dispatch, and auth.
  * Invariants:
- *   - CI_GATE: parent-pin PR checks must be green before dispatch.
- *   - NODE_REF_PARENT_PIN_GATE: parent pin PR head must match the prepared pin commit.
+ *   - ARTIFACT_GATE: prepareNodeRefCandidateFlight owns source/image proof before dispatch.
+ *   - PARENT_PIN_IS_REVIEW_METADATA: opened parent pin PRs do not block candidate flight.
  *   - CONTRACTS_ARE_TRUTH: 202 response matches flightOperation.output schema.
  * Side-effects: none
  * Links: task.0370, nodes/operator/app/src/app/api/v1/vcs/flight/route.ts,
@@ -22,7 +22,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
   CandidateFlightDispatchResult,
-  OperatorDeployCiStatus,
   PreparedNodeRefCandidateFlight,
 } from "@/ports";
 
@@ -30,7 +29,6 @@ const NODE_ID = "11111111-1111-4111-8111-111111111111";
 const SOURCE_SHA = "0123456789012345678901234567890123456789";
 
 const mockDeployPlane = vi.hoisted(() => ({
-  getCiStatus: vi.fn(),
   prepareNodeRefCandidateFlight: vi.fn(),
   dispatchNodeRefCandidateFlight: vi.fn(),
 }));
@@ -163,19 +161,6 @@ function statusError(
   message: string
 ): Error & { readonly status: number; readonly code: string } {
   return Object.assign(new Error(message), { status, code });
-}
-
-function makeGreenCiStatus(
-  overrides: Partial<OperatorDeployCiStatus> = {}
-): OperatorDeployCiStatus {
-  return {
-    prNumber: 42,
-    headSha: "abc123def456abc123def456abc123def456abc1",
-    allGreen: true,
-    pending: false,
-    checks: [],
-    ...overrides,
-  };
 }
 
 function makeDispatchResult(
@@ -372,7 +357,7 @@ describe("POST /api/v1/vcs/flight", () => {
     });
   });
 
-  it("returns 409 when parent pin PR CI head differs from prepared pin commit", async () => {
+  it("dispatches node-ref candidate flight when a parent pin PR was opened", async () => {
     mockDeployPlane.prepareNodeRefCandidateFlight.mockResolvedValue(
       makePreparedNodeRef({
         parentPin: {
@@ -384,11 +369,8 @@ describe("POST /api/v1/vcs/flight", () => {
         },
       })
     );
-    mockDeployPlane.getCiStatus.mockResolvedValue(
-      makeGreenCiStatus({
-        prNumber: 77,
-        headSha: "2222222222222222222222222222222222222222",
-      })
+    mockDeployPlane.dispatchNodeRefCandidateFlight.mockResolvedValue(
+      makeDispatchResult("Candidate flight dispatched for creative@01234567.")
     );
 
     await testApiHandler({
@@ -401,69 +383,29 @@ describe("POST /api/v1/vcs/flight", () => {
             nodeRef: { nodeId: NODE_ID, sourceSha: SOURCE_SHA },
           }),
         });
-        expect(res.status).toBe(409);
+        expect(res.status).toBe(202);
         const body = await res.json();
-        expect(body.expectedHeadSha).toBe(
+        expect(body.nodeRef.parentPrNumber).toBe(77);
+        expect(body.nodeRef.parentHeadSha).toBe(
           "1111111111111111111111111111111111111111"
         );
         expect(
           mockDeployPlane.dispatchNodeRefCandidateFlight
-        ).not.toHaveBeenCalled();
-        expectFlightRequestLog("warn", {
+        ).toHaveBeenCalledWith({
+          owner: "cogni-test-org",
+          repo: "cogni-monorepo",
+          slug: "creative",
+          sourceSha: SOURCE_SHA,
+        });
+        expectFlightRequestLog("info", {
           mode: "node_ref",
-          outcome: "error",
-          status: 409,
-          errorCode: "parent_pin_head_mismatch",
+          outcome: "success",
+          status: 202,
           nodeId: NODE_ID,
           slug: "creative",
           parentPrNumber: 77,
-        });
-      },
-    });
-  });
-
-  it("returns 422 when parent pin PR CI is not green", async () => {
-    mockDeployPlane.prepareNodeRefCandidateFlight.mockResolvedValue(
-      makePreparedNodeRef({
-        parentPin: {
-          status: "pin_pr_opened",
-          currentSha: "0000000000000000000000000000000000000000",
-          prNumber: 77,
-          prUrl: "https://github.com/test-owner/test-repo/pull/77",
-          parentHeadSha: "1111111111111111111111111111111111111111",
-        },
-      })
-    );
-    mockDeployPlane.getCiStatus.mockResolvedValue(
-      makeGreenCiStatus({
-        prNumber: 77,
-        headSha: "1111111111111111111111111111111111111111",
-        allGreen: false,
-      })
-    );
-
-    await testApiHandler({
-      appHandler,
-      async test({ fetch }) {
-        const res = await fetch({
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            nodeRef: { nodeId: NODE_ID, sourceSha: SOURCE_SHA },
-          }),
-        });
-        expect(res.status).toBe(422);
-        expect(
-          mockDeployPlane.dispatchNodeRefCandidateFlight
-        ).not.toHaveBeenCalled();
-        expectFlightRequestLog("warn", {
-          mode: "node_ref",
-          outcome: "error",
-          status: 422,
-          errorCode: "parent_ci_not_green",
-          nodeId: NODE_ID,
-          slug: "creative",
-          parentPrNumber: 77,
+          pinStatus: "pin_pr_opened",
+          dispatchStatus: "initiated",
         });
       },
     });

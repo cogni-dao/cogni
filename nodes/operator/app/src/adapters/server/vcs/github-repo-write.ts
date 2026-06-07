@@ -25,8 +25,6 @@ import { z } from "zod";
 
 import type {
   CandidateFlightDispatchResult,
-  OperatorDeployCheckInfo,
-  OperatorDeployCiStatus,
   OperatorDeployPlanePort,
   PreparedNodeRefCandidateFlight,
   PrepareNodeRefCandidateFlightInput,
@@ -246,99 +244,6 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       appId: config.appId,
       privateKey: config.privateKey,
     });
-  }
-
-  async getCiStatus(input: {
-    owner: string;
-    repo: string;
-    prNumber: number;
-  }): Promise<OperatorDeployCiStatus> {
-    const octokit = await this.getOctokit(input.owner, input.repo);
-    const { data: pr } = await octokit.request(
-      "GET /repos/{owner}/{repo}/pulls/{pull_number}",
-      {
-        owner: input.owner,
-        repo: input.repo,
-        pull_number: input.prNumber,
-      }
-    );
-
-    const [checksResponse, statusResponse] = await Promise.all([
-      octokit.request("GET /repos/{owner}/{repo}/commits/{ref}/check-runs", {
-        owner: input.owner,
-        repo: input.repo,
-        ref: pr.head.sha,
-        per_page: 100,
-      }),
-      octokit.request("GET /repos/{owner}/{repo}/commits/{ref}/status", {
-        owner: input.owner,
-        repo: input.repo,
-        ref: pr.head.sha,
-      }),
-    ]);
-
-    const rawCheckRuns = checksResponse.data.check_runs as Array<{
-      name: string;
-      status: string;
-      conclusion: string | null;
-      app: { slug: string } | null;
-    }>;
-    const legacyStatuses = statusResponse.data.statuses as Array<{
-      context: string;
-      state: string;
-    }>;
-    const checks: OperatorDeployCheckInfo[] = [
-      ...rawCheckRuns.map((check) => ({
-        name: check.name,
-        status: check.status,
-        conclusion: check.conclusion,
-      })),
-      ...legacyStatuses.map((status) => ({
-        name: status.context,
-        status: "completed",
-        conclusion:
-          status.state === "success"
-            ? "success"
-            : status.state === "pending"
-              ? null
-              : "failure",
-      })),
-    ];
-    const ciChecks = [
-      ...rawCheckRuns
-        .filter((check) => check.app?.slug === "github-actions")
-        .map((check) => ({
-          status: check.status,
-          conclusion: check.conclusion,
-        })),
-      ...legacyStatuses.map((status) => ({
-        status: "completed",
-        conclusion:
-          status.state === "success"
-            ? "success"
-            : status.state === "pending"
-              ? null
-              : "failure",
-      })),
-    ];
-    const pending = ciChecks.some(
-      (check) => check.status !== "completed" || check.conclusion === null
-    );
-    const allGreen =
-      ciChecks.length > 0 &&
-      !pending &&
-      ciChecks.every(
-        (check) =>
-          check.conclusion === "success" || check.conclusion === "skipped"
-      );
-
-    return {
-      prNumber: pr.number,
-      headSha: pr.head.sha,
-      allGreen,
-      pending,
-      checks,
-    };
   }
 
   async prepareNodeRefCandidateFlight(
