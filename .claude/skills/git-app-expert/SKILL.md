@@ -67,8 +67,9 @@ gh api "orgs/cogni-test-org/installations?per_page=20" | \
 ```
 
 Operator mint/flight Apps require `actions:write`, `administration:write`, `contents:write`,
-`workflows:write`, and `packages:read`. `packages:read` is required for node-ref GHCR package
-metadata preflight; do not add `GHCR_DEPLOY_TOKEN` or a PAT fallback. If the installation lacks a
+`workflows:write`, and `packages:write`. Package write includes the metadata access needed for
+node-ref GHCR package preflight and reserves operator authority for future package policy/visibility
+management; do not add `GHCR_DEPLOY_TOKEN` or a PAT fallback. If the installation lacks a
 newly requested permission, the org admin must approve the pending permission upgrade at the
 installation URL:
 

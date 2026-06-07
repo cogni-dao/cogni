@@ -70,27 +70,29 @@ Use these for `cogni-operator-test` and `cogni-operator`. This is the App that b
 `GH_REVIEW_APP_ID` in the operator pod and is allowed to mint node repos, write node identity,
 open parent pin PRs, dispatch candidate-flight, and preflight node-ref GHCR artifacts.
 
-| Permission     | Access       | Why                                                                                                   |
-| -------------- | ------------ | ----------------------------------------------------------------------------------------------------- |
-| Actions        | Read & write | Dispatches `candidate-flight.yml` with `workflow_dispatch`.                                           |
-| Administration | Read & write | Creates named forks from `node-template` and changes repo settings needed by node birth.              |
-| Checks         | Read & write | Writes review/check status where the operator acts as the App.                                        |
-| Contents       | Read & write | Writes `.cogni/repo-spec.yaml`, `.github/workflows/*`, `.gitmodules`, catalog, and pin branches.      |
-| Issues         | Read & write | Work-item/issue coordination where GitHub issues are used.                                            |
-| Packages       | Read-only    | Reads GHCR package metadata and versions for node-ref preflight. Required by `packageImageTagStatus`. |
-| Pull requests  | Read & write | Opens and updates node birth/pin PRs.                                                                 |
-| Workflows      | Read & write | Writes workflow files; GitHub rejects workflow-file edits without this.                               |
+| Permission     | Access       | Why                                                                                               |
+| -------------- | ------------ | ------------------------------------------------------------------------------------------------- |
+| Actions        | Read & write | Dispatches `candidate-flight.yml` with `workflow_dispatch`.                                       |
+| Administration | Read & write | Creates named forks from `node-template` and changes repo settings needed by node birth.          |
+| Checks         | Read & write | Writes review/check status where the operator acts as the App.                                    |
+| Contents       | Read & write | Writes `.cogni/repo-spec.yaml`, `.github/workflows/*`, `.gitmodules`, catalog, and pin branches.  |
+| Issues         | Read & write | Work-item/issue coordination where GitHub issues are used.                                        |
+| Packages       | Read & write | Reads GHCR package metadata for node-ref preflight; reserved to manage node package policy later. |
+| Pull requests  | Read & write | Opens and updates node birth/pin PRs.                                                             |
+| Workflows      | Read & write | Writes workflow files; GitHub rejects workflow-file edits without this.                           |
 
 Do **not** add a PAT, `GHCR_DEPLOY_TOKEN`, or any human-managed registry credential for this
 path. Node repo Actions publish with repo-local `GITHUB_TOKEN` and `permissions.packages: write`.
-The operator only reads GitHub Packages metadata with the App installation token.
+The current operator only reads GitHub Packages metadata with the App installation token, but the
+operator App should hold package write authority so package policy/visibility management can move
+into the operator instead of human console steps.
 
 `Administration` above is a **Repository permission** in the GitHub App UI. No separate
 organization permission is currently required for node birth beyond installing the operator App on
 **All repositories** in the mint org.
 
-The package permission required by the current operator is **Repository permissions → Packages →
-Read-only**. The live installation audit must show `.permissions.packages == "read"`.
+The package permission for operator Apps is **Repository permissions → Packages → Read and write**.
+The live installation audit must show `.permissions.packages == "write"`.
 
 > **Install scope for the minting App.** Step 7's single-repo install is enough for _review_ (payload-driven), but an App that **creates + commits to** new node repos must reach repos that don't exist yet. A `selected`-repos install means a freshly-minted `<owner>/<slug>` is **invisible to the App** → the identity-commit 404s even with `administration: write`. So the minting App needs **"All repositories"** on a dedicated nodes/test org (`cogni-test-org` for candidate/test; a production nodes org for live node birth) so it is not org-wide over unrelated operator infra repos. See [node-formation.md § Node Publish](../spec/node-formation.md) + [node-ci-cd-contract.md § Submodule-pinned nodes](../spec/node-ci-cd-contract.md).
 
@@ -248,7 +250,7 @@ Candidate/test must show `repository_selection: "all"` and at least:
   "contents": "write",
   "issues": "write",
   "metadata": "read",
-  "packages": "read",
+  "packages": "write",
   "pull_requests": "write",
   "workflows": "write"
 }
@@ -270,8 +272,8 @@ gh api "orgs/Cogni-DAO/installations?per_page=100" \
 
 Fail conditions:
 
-- `permissions.packages` is absent or not `"read"` → node-ref GHCR preflight cannot read package
-  metadata.
+- `permissions.packages` is absent or not `"write"` → node-ref GHCR preflight cannot read package
+  metadata, and future operator-owned package policy writes will fail.
 - `repository_selection` is not `"all"` for `cogni-operator-test` → newly spawned repos may be
   invisible to the App.
 - `permissions.workflows` is not `"write"` → node birth cannot write `.github/workflows/*`.
@@ -309,12 +311,12 @@ Expected: a non-empty array containing `sha-<sourceSha>`.
 
 ## Troubleshooting
 
-| Symptom                                    | Fix                                                                                                               |
-| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
-| 404 from webhook route                     | `GH_WEBHOOK_SECRET` not set — add it and restart                                                                  |
-| 401 from webhook route                     | Secret mismatch — compare app config vs env var                                                                   |
-| Check Run never appears                    | App missing `checks:write` permission                                                                             |
-| Review silently skipped                    | `GH_REVIEW_APP_ID` or private key not configured                                                                  |
-| No smee forwarding                         | `pnpm dev:smee` not running                                                                                       |
-| Node-ref flight returns `image_missing`    | App is not installed on the child source repo, lacks `packages:read`, or the `sha-<sourceSha>` tag does not exist |
-| Node-ref flight returns `image_not_public` | GHCR package exists but package visibility is not `public`; fix org package creation policy or package settings   |
+| Symptom                                    | Fix                                                                                                                |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| 404 from webhook route                     | `GH_WEBHOOK_SECRET` not set — add it and restart                                                                   |
+| 401 from webhook route                     | Secret mismatch — compare app config vs env var                                                                    |
+| Check Run never appears                    | App missing `checks:write` permission                                                                              |
+| Review silently skipped                    | `GH_REVIEW_APP_ID` or private key not configured                                                                   |
+| No smee forwarding                         | `pnpm dev:smee` not running                                                                                        |
+| Node-ref flight returns `image_missing`    | App is not installed on the child source repo, lacks `packages:write`, or the `sha-<sourceSha>` tag does not exist |
+| Node-ref flight returns `image_not_public` | GHCR package exists but package visibility is not `public`; fix org package creation policy or package settings    |
