@@ -2,10 +2,10 @@
 id: guide.candidate-flight-v0
 type: guide
 title: Candidate Flight V0 — Agent Guide
-status: draft
+status: legacy
 trust: draft
-summary: Short operational guide for flying one selected PR to the single candidate slot in the trunk-based CI/CD model
-read_when: Reviewing or implementing the v0 candidate-flight flow, or advising on how to flight one PR to `candidate-a`
+summary: Legacy guide for the retired PR-number candidate-flight shape; current node flights use nodeRef sourceSha.
+read_when: Auditing legacy PR-number candidate-flight mechanics or removing transitional in-repo CI/CD paths.
 owner: cogni-dev
 created: 2026-04-08
 verified: 2026-04-08
@@ -14,7 +14,7 @@ tags: [ci-cd, gitops, candidate-flight, agents]
 
 # Candidate Flight V0 — Agent Guide
 
-> Use this guide for the boring MVP only: one slot, one selected PR, no merge queue.
+> Legacy reference only. Current node flight is `POST /api/v1/vcs/flight { nodeRef: { nodeId, sourceSha } }`, and the source repo must publish `image_repository:sha-<sourceSha>`.
 
 ## Rules
 

@@ -155,8 +155,8 @@ Steps 1–5 land the rails; the node only becomes Healthy once each target env h
 
 ### 8. Flight + validate
 
-- [ ] Flight: `POST /api/v1/vcs/flight { prNumber }` (dispatches `candidate-flight.yml` once the PR is green).
-- [ ] Confirm `https://<node>-test.cognidao.org/version` `buildSha` == PR head SHA.
+- [ ] Flight: `POST /api/v1/vcs/flight { nodeRef: { nodeId, sourceSha } }` after the source repo has published `image_repository:sha-<sourceSha>`.
+- [ ] Confirm `https://<node>-test.cognidao.org/version` `buildSha` == `sourceSha`.
 - [ ] [`/validate-candidate`](../../.claude/skills/validate-candidate/SKILL.md) with captured auth (`.local-auth/candidate-a-<node>.storageState.json`).
 
 ## What the Node Wizard (#1381) Automates

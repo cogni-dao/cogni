@@ -13,8 +13,8 @@
  * Scope: Projects only the review-policy/build slice (rules + AGENTS + node CI) — does not
  *   modify the operator monorepo tree and does not run the mint flow. Re-roots
  *   `nodes/node-template/.cogni/rules/` → `<repo>/.cogni/rules/`, writes the AGENTS template to
- *   `<repo>/AGENTS.md`, and writes the node-at-root CI workflow to
- *   `<repo>/.github/workflows/ci.yaml`; reports drift by default, `--apply` commits + pushes to
+ *   `<repo>/AGENTS.md`, and writes the node-at-root image build workflow to
+ *   `<repo>/.github/workflows/pr-build.yml`; reports drift by default, `--apply` commits + pushes to
  *   the template main.
  * Invariants: idempotent — a no-drift run is a no-op; never touches the operator monorepo tree.
  * Side-effects: IO (clones into /tmp; with `--apply`, commits + pushes to the target repo via gh auth).
@@ -43,7 +43,7 @@ const CANONICAL_RULES = join(HUB_ROOT, "nodes/node-template/.cogni/rules");
 const AGENTS_TMPL = join(HUB_ROOT, "nodes/node-template/.cogni/AGENTS.tmpl.md");
 const NODE_CI_WORKFLOW = join(
   HUB_ROOT,
-  "nodes/node-template/.github/workflows/ci.yaml"
+  "nodes/node-template/.github/workflows/pr-build.yml"
 );
 const dest = join("/tmp", `seed-${TEMPLATE_REPO.replace("/", "_")}`);
 
@@ -60,7 +60,7 @@ cpSync(CANONICAL_RULES, join(dest, ".cogni/rules"), { recursive: true });
 writeFileSync(join(dest, "AGENTS.md"), readFileSync(AGENTS_TMPL, "utf8"));
 mkdirSync(join(dest, ".github/workflows"), { recursive: true });
 writeFileSync(
-  join(dest, ".github/workflows/ci.yaml"),
+  join(dest, ".github/workflows/pr-build.yml"),
   readFileSync(NODE_CI_WORKFLOW, "utf8")
 );
 
@@ -79,7 +79,7 @@ if (!APPLY) {
 }
 
 execSync(
-  `git -C "${dest}" add .cogni/rules AGENTS.md .github/workflows/ci.yaml`,
+  `git -C "${dest}" add .cogni/rules AGENTS.md .github/workflows/pr-build.yml`,
   {
     stdio: "inherit",
   }

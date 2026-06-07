@@ -6,7 +6,7 @@ dockerfile: nodes/pandora/app/Dockerfile
 image_tag_suffix: "-pandora"
 migrator_tag_suffix: "-pandora-migrate"
 source_repo: https://github.com/Cogni-DAO/pandora.git
-image_repository: ghcr.io/cogni-dao/cogni-node-template
+image_repository: ghcr.io/cogni-dao/pandora
 candidate_a_branch: deploy/candidate-a-pandora
 preview_branch: deploy/preview-pandora
 production_branch: deploy/production-pandora

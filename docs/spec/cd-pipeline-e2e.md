@@ -296,17 +296,17 @@ Promotion must be explicit and environment-driven, not branch-name-driven.
 ```text
 PR update
   → ci.yaml (required checks)
-  → pr-build.yml builds pr-{N}-{sha} images
-  → PR becomes ready for manual flight
-  → human dispatches candidate-flight.yml -f pr_number=N
-  → candidate-flight.yml acquires candidate-a lease, writes digests to deploy/candidate-a
+  → source repo publishes image_repository:sha-<sourceSha>
+  → sourceSha becomes ready for manual flight
+  → human/API dispatches candidate-flight.yml with node_slug + source_sha
+  → candidate-flight.yml resolves image_repository:sha-<sourceSha>, writes digests to deploy/candidate-a
   → Argo syncs candidate-a
   → smoke-candidate.sh runs validation
   → human decides merge based on standard CI + candidate-flight result
 
 Merge to main
   → flight-preview.yml fires on push:main (or manual workflow_dispatch)
-  → re-tag pr-{N}-{sha} → preview-{sha} in GHCR
+  → external artifacts resolve image_repository:sha-<sourceSha>; legacy in-repo artifacts may still re-tag mq-{N}-{sha} → preview-{sha}
   → flight-preview.sh reads .promote-state/review-state on deploy/preview
       ├── unlocked   → claim dispatching lease, dispatch promote-and-deploy
       ├── dispatching → queue-only (candidate-sha high-water mark)

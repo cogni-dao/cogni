@@ -33,7 +33,7 @@ The arc this guide drives:
        ↓
 3. Publish     operator mints the node repo and authors ONE submodule deployment PR (Step 8)
        ↓
-4. Flight      POST /api/v1/vcs/flight {prNumber} → build lands at <node>-test.cognidao.org
+4. Flight      POST /api/v1/vcs/flight {nodeRef:{nodeId,sourceSha}} → digest lands at <node>-test.cognidao.org
        ↓
 5. Ongoing     per-node deploy branch + Argo Application; subsequent merges auto-deploy (CATALOG_IS_SSOT)
 ```
@@ -110,8 +110,8 @@ What the Publish PR contains:
 
 **Your job after Publish:**
 
-1. **Review + merge** the operator PR (CI green). Note: a node-birth PR legitimately spans `<node> + operator` domains — the `single-node-scope` gate carves this out for the node's own deploy wiring (catalog/overlays/AppSets/Caddy/scheduler).
-2. **Flight**: `POST /api/v1/vcs/flight { prNumber }` → build lands at `https://<slug>-test.cognidao.org`.
+1. **Review + merge** the operator PR (CI green). Note: the node's source-code PRs happen in the child repo; the parent birth PR is operator control-plane work: gitlink/pin acceptance plus catalog/overlays/AppSets/Caddy/scheduler wiring.
+2. **Flight**: `POST /api/v1/vcs/flight { nodeRef: { nodeId, sourceSha } }` → the operator resolves `image_repository:sha-<sourceSha>` to a digest and deploys it at `https://<slug>-test.cognidao.org`. The parent PR number is review metadata for the operator pin PR, not the deploy coordinate.
 3. **Validate**: run [`/validate-candidate`](../../.claude/skills/validate-candidate/SKILL.md) against the deployed build.
 
 Per-node DNS, DB, and secrets reconcile **inside the flight/promote lane** (idempotent, catalog-driven — `DNS_IS_RECONCILED_PER_ENV`, Axiom 21), not via a full env reprovision. For the row-by-row deploy contract (nodePort allocation, overlay/AppSet proof, DB schema layer, the candidate-a-only trap) see [Create a New Node (Deploy)](./create-node.md).

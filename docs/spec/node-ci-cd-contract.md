@@ -4,7 +4,7 @@ type: spec
 title: Node CI/CD Contract
 status: active
 trust: reviewed
-summary: CI/CD sovereignty invariants, merge gate checks, external-node artifact contracts, workflow entrypoints, and file ownership classification
+summary: CI/CD sovereignty invariants, artifact contracts, workflow entrypoints, and operator control-plane ownership
 read_when: Modifying CI workflows, adding checks to merge gate, or planning multi-node CI extraction
 implements: []
 owner: cogni-dev
@@ -19,11 +19,16 @@ tags:
 
 ## Context
 
-Node sovereignty is non-negotiable. A node repo must run its own merge gate and build its own deployable artifacts without depending on the operator. The operator may host and deploy a node, but it must do so by validating a source revision and consuming an already-published artifact digest, not by rebuilding node source.
+Node sovereignty is non-negotiable. A source repo must run its own merge gate and build its own deployable artifacts without depending on the operator deploy plane. The operator may host and deploy those artifacts, but it must do so by validating a source revision and consuming an already-published artifact digest, not by rebuilding source.
+
+This spec distinguishes two things that are easy to conflate:
+
+- **Operator control-plane repo**: this repository's orchestration surface: operator app, catalog, overlays, AppSets, deploy branches, CI/CD scripts, docs, and templates.
+- **Operator app artifact**: the deployable image for the operator app itself. It is one artifact among many and should follow the same sourceSha → digest promotion contract.
 
 ## Goal
 
-Define the CI/CD invariants, merge gate, artifact contract, and file ownership boundaries that ensure every node can run its full pipeline independently while still being deployable by a shared operator.
+Define the CI/CD invariants, artifact contract, and file ownership boundaries that ensure every deployable artifact is built by its source repo and can still be deployed by a shared operator.
 
 ## Non-Goals
 
@@ -44,23 +49,23 @@ Define the CI/CD invariants, merge gate, artifact contract, and file ownership b
 
 5. **SCRIPTS_ARE_THE_API**: Workflows orchestrate by calling named pnpm scripts; no inline command duplication. Targets logic _duplicated across ≥2 workflows_ — that must live in `scripts/` to prevent drift. Gate-specific inline policy that is small, unique to one workflow, and pinned by a meta-test is allowed; the `single-node-scope` job in `ci.yaml` is the canonical example.
 
-6. **BUILD_ONCE_PROMOTE_DIGEST**: An artifact is built once for a source revision, resolved to an immutable digest, and promoted by digest. No environment rebuilds. For operator-hosted external nodes, the node repo builds; the operator only resolves and deploys the digest.
+6. **BUILD_ONCE_PROMOTE_DIGEST**: An artifact is built once for a source revision, resolved to an immutable digest, and promoted by digest. No environment rebuilds. The repo that owns the artifact builds; the operator deploy plane only resolves and deploys the digest.
 
 7. **SINGLE_RESPONSIBILITY**: Each workflow file owns one concern (build, promote+deploy, E2E+release). No monoliths.
 
-8. **SINGLE_DOMAIN_HARD_FAIL**: PRs may touch exactly one node's domain. Each non-operator node owns `nodes/<X>/`; the operator node owns `nodes/operator/` plus everything else in the repo (infra, packages, .github, docs, work, scripts, root configs) as one domain. Cross-domain PRs are rejected by the `single-node-scope` job in `ci.yaml`. Bounded ride-along whitelist: `pnpm-lock.yaml` (mechanical side-effect of node-level `package.json` changes), `work/**` (per-task work items, projects, charters; ride-along until task tracking moves to Dolt), and `docs/**` (cross-cutting prose that accompanies a node change) may ride a single non-operator node PR. See `## Single-Domain Scope` below.
+8. **SINGLE_DOMAIN_HARD_FAIL**: Source-code PRs happen in the source repo that owns the artifact. Parent repo PRs for hosted artifacts are operator control-plane changes: gitlink/pin acceptance, catalog rows, overlays, AppSets, DNS/provisioning wiring, and deploy-state machinery. Legacy in-tree node directories remain transitional and are still guarded by `single-node-scope`; they are not the future build model. See `## Single-Domain Scope` below.
 
-9. **SOURCE_SHA_IS_EXTERNAL_DEPLOY_IDENTITY**: For an operator-hosted external node, `sourceSha` is the deployment coordinate. Every flightable artifact for that source revision must be published as `<image_repository>:sha-<40-char-sourceSha>`. The operator resolves that tag to `image@sha256:<digest>` before writing deploy state.
+9. **SOURCE_SHA_IS_DEPLOY_IDENTITY**: `sourceSha` is the deployment coordinate for every node or node-shaped artifact. Every flightable artifact for that source revision must be published as `<image_repository>:sha-<40-char-sourceSha>`. The operator resolves that tag to `image@sha256:<digest>` before writing deploy state.
 
 ---
 
 ## Single-Domain Scope
 
-Every path in the repo belongs to **exactly one node domain**. A PR may touch exactly one domain. This invariant is enforced statically by the `single-node-scope` job in `ci.yaml` (task.0381), and at review-time by `PrReviewWorkflow` via `extractOwningNode` (resolver: task.0382; consumer: task.0410). The reviewer fetches per-node rule files from `<owningNode.path>/.cogni/rules/` (resolved via `resolveRulePath` — single source of truth in `@cogni/repo-spec`), refuses cross-domain PRs with a diagnostic comment + neutral check (no AI tokens spent), and emits a structured `review.routed` log. Both implementations consume the same set of fixtures and must agree.
+Every path in the operator control-plane repo belongs to **exactly one review domain**. A PR may touch exactly one domain unless a migration work item explicitly declares a broader scope. This invariant is enforced statically by the `single-node-scope` job in `ci.yaml` (task.0381), and at review-time by `PrReviewWorkflow` via `extractOwningNode` (resolver: task.0382; consumer: task.0410). The reviewer fetches per-domain rule files from the owning repo/path (resolved via `resolveRulePath` — single source of truth in `@cogni/repo-spec`), refuses accidental cross-domain PRs with a diagnostic comment + neutral check (no AI tokens spent), and emits a structured `review.routed` log. Both implementations consume the same set of fixtures and must agree.
 
 > **Routing-vs-policy principle.** Review **routing** is shared infrastructure (`packages/temporal-workflows`, `@cogni/repo-spec`). Review **policy** — rules, prompts, model selection — is per-node (`nodes/<X>/.cogni/`). Routing code never special-cases a particular node by string compare; the operator domain ships its rules at `nodes/operator/.cogni/rules/` like every other node. New review knobs land per-node first; promotions to shared infra require a spec update.
 
-### Domains
+### Transitional domains
 
 ```
 4 disjoint domains. PR scope = exactly 1 column.
@@ -79,18 +84,20 @@ Every path in the repo belongs to **exactly one node domain**. A PR may touch ex
   └─────────────────────────────────────────────────────────────┘
 ```
 
-The operator node's domain is broader because the operator IS the control plane — it owns the substrate every other node consumes. But it is still **one** domain, not an exemption.
+The broad `operator` domain is the control plane, not the operator app artifact. It owns the substrate every hosted artifact consumes. The operator app image is just one deployable artifact within that control plane and should not be used as the mental model for every operator-owned file.
+
+Future node source changes happen in child repos, not in `nodes/<X>/**` inside this repo. The in-tree `poly`, `resy`, and `node-template` domains are legacy migration surfaces. New hosted node PRs in this repo should be pin/deploy-state/control-plane changes and therefore route as operator-domain work.
 
 ### Rule
 
 ```
-domain(path) = X         if path matches  nodes/<X>/**  for X ∈ {poly, resy, node-template}
+domain(path) = X         if path matches  nodes/<X>/**  for legacy in-tree node X
              = operator   otherwise   (i.e., nodes/operator/** OR anywhere outside nodes/)
 
 PR passes iff |distinct domains touched| ≤ 1, with the bounded ride-along whitelist below.
 ```
 
-The set of non-operator domains is derived from the `nodes/*` directory listing minus `operator` — meta-tested in `tests/ci-invariants/single-node-scope-meta.spec.ts`. The repo-spec `nodes` registry must mirror the same set (enforced at the resolver boundary; meta-test asserts both directions). Adding `nodes/<X>/` requires updating the workflow filter list AND the registry — both meta-tests fire until they agree.
+The set of legacy non-operator domains is derived from the `nodes/*` directory listing minus `operator` and minus submodule gitlinks — meta-tested in `tests/ci-invariants/single-node-scope-meta.spec.ts`. The repo-spec `nodes` registry must mirror the same set (enforced at the resolver boundary; meta-test asserts both directions). Adding a hosted node as a submodule must not add a new parent-repo build domain; its source-code domain lives in the child repo.
 
 The dorny step must set `predicate-quantifier: 'every'` so the operator filter's `**` + `!nodes/<X>/**` negations actually subtract; under the default `some` quantifier the rules are OR'd and the negations are dead, which silently misclassifies every non-operator-node-only PR as that node + operator. Pinned by `single-node-scope-meta.spec.ts`.
 
@@ -133,25 +140,28 @@ Each gate firing is a feedback loop, not a barrier. Future: rejections logged st
 
 ---
 
-## Submodule-pinned nodes (new-node births)
+## Operator-hosted artifacts
 
-New nodes are born as **git submodules** at `nodes/<slug>` — a node-template fork the operator pins by SHA — not inline-copied into the monorepo. **New nodes only**: `operator`, `resy`, `poly`, `node-template` stay inline. At scale (50+ nodes) inline-copy is ~1100 files/node of clone bloat; the submodule boundary lets a node dev clone only their node repo as its own Conductor Project while the operator clones the thin parent and selectively inits the one node it operates on. Full rationale + the keeper-vs-tax decomposition of the inline wizard (#1462) live in knowledge conclusion `submodule-node-birth-design` — not restated here.
+The target model is artifact-first. A hosted node's source lives in the repo that owns it, and that repo publishes the artifact the operator deploys. A git submodule at `nodes/<slug>` is only the current approval-pin mechanism: a node-template fork the operator pins by SHA. It is not a build context, not a workflow execution surface, and not the long-term identity model.
+
+Legacy in-tree nodes (`resy`, `poly`, `node-template`, and any remaining similar rows) are transitional. They should be migrated toward the same `source_repo + image_repository + sourceSha + digest` contract instead of being preserved as a parallel first-class model.
 
 ### Plain-English authority model
 
 The model is good only if the boundary stays this simple:
 
-| Plane                   | Owner                                                      | Must not do                                                                                       |
-| ----------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| **Node repo**           | Node developer / node agents                               | Own shared-operator VM state, Argo, DNS, preview/prod promotion, or operator deploy branches      |
-| **Operator monorepo**   | Operator                                                   | Rebuild submodule-node source, invent node policy, or use GitHub repo permissions as product auth |
-| **GitHub App identity** | Environment-scoped automation credential                   | Decide who is allowed to flight; it only proves the operator has the mechanical ability to act    |
-| **Operator API / DB**   | Authorization boundary for flight/publish/promote requests | Delegate authorization to "who can push to a GitHub repo"                                         |
+| Plane                           | Owner                                                      | Must not do                                                                                               |
+| ------------------------------- | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| **Artifact source repo**        | Artifact developer / node agents                           | Own shared-operator VM state, Argo, DNS, preview/prod promotion, or operator deploy branches              |
+| **Operator control-plane repo** | Operator                                                   | Rebuild hosted artifact source, invent source-repo policy, or use GitHub repo permissions as product auth |
+| **Operator app artifact**       | Operator app source repo                                   | Stand in for the whole control plane; it is just one deployable image                                     |
+| **GitHub App identity**         | Environment-scoped automation credential                   | Decide who is allowed to flight; it only proves the operator has the mechanical ability to act            |
+| **Operator API / DB**           | Authorization boundary for flight/publish/promote requests | Delegate authorization to "who can push to a GitHub repo"                                                 |
 
-So: node-template repos carry **CI + image build**, not hosted flight/deploy
+So: artifact source repos carry **CI + image build**, not hosted flight/deploy
 workflows. Hosted flight is an operator action because it mutates operator-owned
 environment state: deploy branches, Argo applications, DNS, OpenBao/ESO, and
-candidate/preview/production provenance. A node repo may include a small
+candidate/preview/production provenance. A source repo may include a small
 "request flight" client or documentation, but not the workflow that performs
 the flight against a shared operator environment.
 
@@ -189,14 +199,14 @@ remain human-approved operator actions. This avoids relying on GitHub repo
 permissions while still stopping arbitrary agents from mutating arbitrary
 environments.
 
-### External artifact contract
+### Artifact contract
 
-Submodule nodes are external build planes. The operator's deploy plane consumes four stable facts:
+Deployable catalog rows are artifact records. The operator's deploy plane consumes four stable facts:
 
 | Fact               | Source of truth                                  | Purpose                                                   |
 | ------------------ | ------------------------------------------------ | --------------------------------------------------------- |
-| `source_repo`      | `infra/catalog/<slug>.yaml` in the operator repo | Where the node source revision lives                      |
-| `sourceSha`        | Flight request + parent submodule gitlink        | The exact child repo commit accepted for deployment       |
+| `source_repo`      | `infra/catalog/<slug>.yaml` in the operator repo | Where the artifact source revision lives                  |
+| `sourceSha`        | Flight request + optional parent gitlink         | The exact source commit accepted for deployment           |
 | `image_repository` | `infra/catalog/<slug>.yaml` in the operator repo | The deployable artifact repository for this catalog row   |
 | digest             | Registry lookup of `image_repository:sha-*`      | The immutable image reference written to k8s deploy state |
 
@@ -212,7 +222,7 @@ This tag is only a lookup key. It must be treated as immutable, but k8s receives
 <image_repository>@sha256:<digest>
 ```
 
-The node repo SHOULD also stamp OCI metadata (`org.opencontainers.image.source` and
+The source repo SHOULD also stamp OCI metadata (`org.opencontainers.image.source` and
 `org.opencontainers.image.revision`) so the registry artifact carries its source
 provenance. The operator still validates provenance independently through
 `source_repo`, `sourceSha`, `.cogni/repo-spec.yaml`, and digest resolution.
@@ -231,8 +241,10 @@ ghcr.io/<owner>/<repo>-webhook  # additional webhook
 ```
 
 Avoid default `-node`: it says who owns the artifact, not what is deployed. Do
-not add catalog types for this. Existing `type: node | service | infra` remains
-the deploy-shape taxonomy; `image_repository` names the artifact for that row.
+not add catalog types for this. `type: node | service | infra` is only the
+current deploy-shape taxonomy for routing and Argo/VM behavior; build and
+promotion logic should key on artifact fields (`source_repo`,
+`image_repository`, `sourceSha`, digest), not on node ontology.
 
 ### SUBMODULE_GITLINK_IS_OPERATOR_PIN
 
@@ -240,20 +252,22 @@ A change to a `nodes/<slug>` **submodule gitlink** (the pinned-commit pointer) c
 
 This holds **structurally** in `classify.ts`: a bare `nodes/<slug>` gitlink has no trailing path segment (`slash > 0` is false), so it falls through to operator-domain — and so do its catalog/overlay/appset rows, because a submodule slug is a gitlink, not an inline `nodes/*` directory, hence absent from the non-operator-node set. Pinned by the `single-node-scope` parity fixture `19-submodule-gitlink-operator-pin.json` (gitlink + `.gitmodules` + catalog + overlays×3 + appset → one operator domain, `pass: true`). The regression guard is a comment on the `slash > 0` branch in `classify.ts`.
 
-### Two CI models — do not conflate
+### Legacy inline CI vs artifact-owned CI
 
-| Concern                            | Inline node                                  | Submodule node                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| ---------------------------------- | -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Merge gate (unit/component/static) | operator monorepo CI, shared root configs    | the node repo's **own** `ci.yaml` (node-template fork — `FORK_FREEDOM` + `setup-main-branch.sh` apply)                                                                                                                                                                                                                                                                                                                                                                     |
-| `POLICY_STAYS_LOCAL`               | shared root policy                           | own policy copies — drift is by-design sovereignty                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| operator's job                     | full gate + `single-node-scope` split        | pointer-validate + provision + flight + promote                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `ci.yaml` scope filter             | `nodes/<X>/**` entry + operator `!` negation | **no** scope filter — `render-scope-filters.sh` skips submodule slugs (keyed off `.gitmodules`). A generated `nodes/<slug>/**` filter is **not** harmless: picomatch's globstar matches the bare gitlink `nodes/<slug>`, so the pin misclassifies as node-domain (`MATCHED: ["<slug>", "operator"]` → false cross-domain reject). With no filter, the gitlink falls to operator's `**`. The `nodes/*` ↔ filter mirror meta-test applies the same `.gitmodules` exclusion. |
+Inline node CI exists because this repo historically carried several node apps as source content. That is not the target architecture. The target is artifact-owned CI: the source repo that owns the artifact gates and builds it; the operator control-plane repo validates pins, resolves digests, and deploys.
+
+| Concern                            | Legacy inline node                           | Artifact-owned source repo                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ---------------------------------- | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Merge gate (unit/component/static) | operator monorepo CI, shared root configs    | the source repo's **own** CI (node-template fork — `FORK_FREEDOM` + `setup-main-branch.sh` apply for node artifacts)                                                                                                                                                                                                                                                                                                                                                                     |
+| `POLICY_STAYS_LOCAL`               | shared root policy                           | own policy copies — drift is by-design sovereignty                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| operator's job                     | full gate + `single-node-scope` split        | source-validate + optional pointer-validate + provision + flight + promote                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `ci.yaml` scope filter             | `nodes/<X>/**` entry + operator `!` negation | **no parent build-domain filter** — `render-scope-filters.sh` skips submodule slugs (keyed off `.gitmodules`). A generated `nodes/<slug>/**` filter is **not** harmless: picomatch's globstar matches the bare gitlink `nodes/<slug>`, so the pin misclassifies as node-domain (`MATCHED: ["<slug>", "operator"]` → false cross-domain reject). With no filter, the gitlink falls to operator's `**`. The `nodes/*` ↔ filter mirror meta-test applies the same `.gitmodules` exclusion. |
 
 ### The node is a sovereign repo, not operator-built content (two views)
 
 The node has **its own `.github/workflows/` and runs its own CI** — _and_ it is **`nodes/<slug>` only** from the operator. Both are true; they are two views of one object, not a contradiction:
 
-- **Node-repo view (the node-dev's clone).** A submodule node is a _full standalone repo_ with the node **at its root**: `app/`, `graphs/`, `k8s/`, `packages/`, plus its **own** `.github/workflows/ci.yaml`, biome/tsconfig/Dockerfile, and the `setup-main-branch.sh` gate. The node-dev clones _only_ this repo, runs the full merge gate there, and **builds + pushes its own image** to GHCR (`FORK_FREEDOM`). This sovereignty is the entire reason the submodule model exists. For the product/package shape of that root-level node repo, see [Node Backend-as-a-Service Architecture](./node-baas-architecture.md).
+- **Node-repo view (the node-dev's clone).** A submodule node is a _full standalone repo_ with the node **at its root**: `app/`, `graphs/`, `k8s/`, `packages/`, plus its **own** `.github/workflows/pr-build.yml`, biome/tsconfig/Dockerfile, and the `setup-main-branch.sh` gate. The node-dev clones _only_ this repo, runs the full merge gate there, and **builds + pushes its own image** to GHCR (`FORK_FREEDOM`). This sovereignty is the entire reason the submodule model exists. For the product/package shape of that root-level node repo, see [Node Backend-as-a-Service Architecture](./node-baas-architecture.md).
 - **Operator view (the monorepo).** The operator sees a `nodes/<slug>` **gitlink — a pointer**, not content. Even after `git submodule update --init nodes/<slug>`, the node's root `.github/workflows/` lands at `nodes/<slug>/.github/workflows/`, which **GitHub never executes** (only _repo-root_ `.github/workflows/` run). So the operator monorepo **never runs the node's workflows and never builds the node** — its job is exactly the table above: pointer-validate + provision + flight + promote the node's _pre-built_ image.
 
 **Corollary that breaks today's pin-PR (P0).** Because the node builds itself, the operator's `detect-affected.sh` must **exclude the gitlink from build targets** — a `build (<slug>)` leg on the parent is always wrong. The operator consumes the artifact by **digest** resolved from catalog `image_repository` + requested `sourceSha`, never by rebuilding source.
@@ -291,11 +305,11 @@ Two `full-app` templates differ **only by integration** (fork-whole vs submodule
 
 All three repos carry the node **app + its merge-gate CI + image build**. They differ on **one axis: how much of the deploy/infra plane they carry.**
 
-| Repo                                        | Node app                                  | Node CI (merge-gate + build→GHCR)    | Deploy/infra plane¹      | Who deploys it                                           |
-| ------------------------------------------- | ----------------------------------------- | ------------------------------------ | ------------------------ | -------------------------------------------------------- |
-| **cogni monorepo**                          | operator + inline nodes (`nodes/poly`, …) | yes (shared root configs)            | **owns it — every node** | itself                                                   |
-| **standalone-node** (fork-whole)            | node nested at `nodes/node-template/`     | yes                                  | **yes — you self-host**  | itself (you _are_ an operator)                           |
-| **node-template** (submodule, node-at-root) | node at repo root                         | **yes — own `ci.yaml` + build→GHCR** | **no**                   | the shared operator (pin → provision → flight → promote) |
+| Repo                                        | Node app                                  | Node CI (merge-gate + build→GHCR)         | Deploy/infra plane¹      | Who deploys it                                           |
+| ------------------------------------------- | ----------------------------------------- | ----------------------------------------- | ------------------------ | -------------------------------------------------------- |
+| **cogni monorepo**                          | operator + inline nodes (`nodes/poly`, …) | yes (shared root configs)                 | **owns it — every node** | itself                                                   |
+| **standalone-node** (fork-whole)            | node nested at `nodes/node-template/`     | yes                                       | **yes — you self-host**  | itself (you _are_ an operator)                           |
+| **node-template** (submodule, node-at-root) | node at repo root                         | **yes — own `pr-build.yml` + build→GHCR** | **no**                   | the shared operator (pin → provision → flight → promote) |
 
 ¹ Deploy/infra plane = `provision-env`, Argo AppSets + k8s overlays, `deploy-infra`, `candidate-flight`, OpenBao/ESO substrate, the operator app, `infra/catalog`, root monorepo tooling.
 
@@ -337,7 +351,7 @@ The forward deployment contract is:
 4. **Deploy state is digest-addressed.** `candidate-flight.yml` resolves `image_repository:sha-<sourceSha>` to `image_repository@sha256:<digest>`, writes only deploy-state branches, and verifies `/version.buildSha == sourceSha`.
 5. **Promotion preserves the digest.** Preview and production promote the candidate-proven digest. The operator never rebuilds child source and never substitutes a PR tag.
 
-**Identity/config prerequisite (per-env, proven on candidate-a).** Minting authenticates as an env-scoped GitHub App that must (a) be installed **all-repositories** on the mint org and (b) hold **`workflows:write`** — the pin-PR commit edits `.github/workflows/ci.yaml`, which GitHub 403s without it. Mint target, template owner, and submodule-pin-PR parent are env config (`NODE_MINT_OWNER` / `NODE_TEMPLATE_OWNER` / `NODE_SUBMODULE_PARENT_{OWNER,REPO}`), fail-closed (mint) / fail-open (parent → `getGithubRepo()`), so a candidate/test operator has **zero access to the production org** (candidate-a mints into the disposable `cogni-test-org`, pin-PRs into a cogni-shaped fork there).
+**Identity/config prerequisite (per-env, proven on candidate-a).** Minting authenticates as an env-scoped GitHub App that must (a) be installed **all-repositories** on the mint org and (b) hold **`workflows:write`** — the seed/pin flow edits `.github/workflows/pr-build.yml`, which GitHub 403s without it. Mint target, template owner, and submodule-pin-PR parent are env config (`NODE_MINT_OWNER` / `NODE_TEMPLATE_OWNER` / `NODE_SUBMODULE_PARENT_{OWNER,REPO}`), fail-closed (mint) / fail-open (parent → `getGithubRepo()`), so a candidate/test operator has **zero access to the production org** (candidate-a mints into the disposable `cogni-test-org`, pin-PRs into a cogni-shaped fork there).
 
 > **Correction (live repro `cogni-test-org/cogni-monorepo#1`): the `.gitmodules` subtraction _is_ needed.** The parent scope and build planes must exclude submodule slugs. A generated dorny filter `nodes/<slug>/**` matches the bare gitlink, and a catalog row can otherwise put the slug into `ALL_TARGETS`; both outcomes are wrong. `.gitmodules` is the parent repo's submodule-slug SSOT for CI exclusion. The child repo remains the build plane.
 
@@ -432,16 +446,16 @@ This standard does not split `.dependency-cruiser.cjs` per node. That's a separa
 
 ### Workflow Entrypoints
 
-| File                              | Type | Secrets                   | Trigger                      | Concern                                                                       |
-| --------------------------------- | ---- | ------------------------- | ---------------------------- | ----------------------------------------------------------------------------- |
-| `ci.yaml`                         | CI   | No                        | PR; push main                | Typecheck, lint, unit, component, docs, architecture, scope                   |
-| `stack-test.yml`                  | CI   | No                        | workflow_dispatch            | Per-node full-stack vitest                                                    |
-| `pr-build.yml`                    | CI   | GHCR write                | pull_request; merge_group    | Inline monorepo target image builds (`pr-*` / `mq-*`)                         |
-| `candidate-flight.yml`            | CD   | GHCR read; deploy         | workflow_dispatch            | Candidate-a deploy for inline PRs or external `nodeRef` source SHAs           |
-| `candidate-flight-infra.yml`      | CD   | SSH/secrets               | workflow_dispatch            | Candidate-a VM compose substrate only                                         |
-| `flight-preview.yml`              | CD   | GHCR read/write           | push main; workflow_dispatch | Preview dispatch/re-tag path for accepted inline monorepo artifacts           |
-| `promote-and-deploy.yml`          | CD   | SSH/secrets; deploy       | workflow_dispatch            | Preview/production digest promotion, infra reconcile, verify, e2e             |
-| `promote-preview-digest-seed.yml` | CD   | GHCR read; contents write | workflow_run                 | Maintains preview digest seed pins on `main` after dispatched preview flights |
+| File                              | Type | Secrets                   | Trigger                      | Concern                                                                        |
+| --------------------------------- | ---- | ------------------------- | ---------------------------- | ------------------------------------------------------------------------------ |
+| `ci.yaml`                         | CI   | No                        | PR; push main                | Typecheck, lint, unit, component, docs, architecture, scope                    |
+| `stack-test.yml`                  | CI   | No                        | workflow_dispatch            | Per-node full-stack vitest                                                     |
+| `pr-build.yml`                    | CI   | GHCR write                | pull_request; merge_group    | Transitional in-repo artifact build aliases (`pr-*` / `mq-*`)                  |
+| `candidate-flight.yml`            | CD   | GHCR read; deploy         | workflow_dispatch            | Candidate-a digest flight from `image_repository:sha-<sourceSha>`              |
+| `candidate-flight-infra.yml`      | CD   | SSH/secrets               | workflow_dispatch            | Candidate-a VM compose substrate only                                          |
+| `flight-preview.yml`              | CD   | GHCR read/write           | push main; workflow_dispatch | Preview dispatch/queue control; any re-tagging is transitional lookup plumbing |
+| `promote-and-deploy.yml`          | CD   | SSH/secrets; deploy       | workflow_dispatch            | Preview/production digest promotion, infra reconcile, verify, e2e              |
+| `promote-preview-digest-seed.yml` | CD   | GHCR read; contents write | workflow_run                 | Maintains preview digest seed pins on `main` after dispatched preview flights  |
 
 ### Local Gates
 
@@ -482,9 +496,9 @@ This standard does not split `.dependency-cruiser.cjs` per node. That's a separa
 
 ### Key Decisions
 
-#### 1. Why external node repos build themselves
+#### 1. Why source repos build their own artifacts
 
-Operator-hosted does not mean operator-built. If the parent repo builds child source, the node loses independent CI, local policy control, and fork freedom. The operator's job is to validate source identity, accept a gitlink pin, resolve published artifacts to digests, and mutate deploy state.
+Operator-hosted does not mean operator-built. If the parent repo builds hosted source, the artifact owner loses independent CI, local policy control, and fork freedom. The operator's job is to validate source identity, accept a pin when pins are still used, resolve published artifacts to digests, and mutate deploy state.
 
 #### 2. Why submodules remain narrow
 
@@ -503,8 +517,8 @@ Centralizing lint/depcruise configs causes fork friction, policy fights, and los
 | File                                       | Purpose                                                                                        |
 | ------------------------------------------ | ---------------------------------------------------------------------------------------------- |
 | `.github/workflows/ci.yaml`                | CI entrypoint                                                                                  |
-| `.github/workflows/pr-build.yml`           | Inline monorepo image build                                                                    |
-| `.github/workflows/candidate-flight.yml`   | Candidate-a digest flight for inline PRs and external node refs                                |
+| `.github/workflows/pr-build.yml`           | Transitional in-repo artifact build aliases                                                    |
+| `.github/workflows/candidate-flight.yml`   | Candidate-a digest flight for artifact source SHAs                                             |
 | `.github/workflows/promote-and-deploy.yml` | Promote + deploy + verify                                                                      |
 | `scripts/check-fast.sh`                    | `pnpm check:fast` implementation                                                               |
 | `scripts/check-all.sh`                     | `pnpm check` implementation                                                                    |
@@ -544,8 +558,9 @@ External-node-formation impact: a fresh fork clones, runs `setup-main-branch.sh`
 
 1. Verify `ci.yaml` calls only pnpm scripts (no inline commands)
 2. Verify CD workflows skip gracefully when secrets are missing (fork mode)
-3. Verify external-node flight refuses missing `image_repository:sha-<sourceSha>` and deploys only the resolved digest when present
+3. Verify artifact flight refuses missing `image_repository:sha-<sourceSha>` and deploys only the resolved digest when present
 4. Verify preview/production promotion preserves the candidate-proven digest without rebuilding
+5. Verify every future `type: node` deployable has `source_repo` + `image_repository`; remaining legacy rows are either migrated to the artifact contract or reclassified out of node deployables
 
 ## Related
 

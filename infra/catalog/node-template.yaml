@@ -7,6 +7,8 @@ dockerfile: nodes/node-template/app/Dockerfile
 # bug.0344 — see infra/catalog/operator.yaml for why these fields exist.
 image_tag_suffix: "-node-template"
 migrator_tag_suffix: "-node-template-migrate"
+source_repo: https://github.com/Cogni-DAO/node-template.git
+image_repository: ghcr.io/cogni-dao/node-template
 # task.0320 — per-env deploy branches (see operator.yaml).
 candidate_a_branch: deploy/candidate-a-node-template
 preview_branch: deploy/preview-node-template

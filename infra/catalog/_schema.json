@@ -41,7 +41,7 @@
       }
     },
     {
-      "$comment": "Submodule nodes are built by their child repo CI. source_repo names the repo; image_repository is the GHCR package candidate-flight resolves at sha-<sourceSha> for the pinned gitlink SHA.",
+      "$comment": "External artifacts are built by source_repo CI. image_repository is the GHCR package candidate-flight resolves at sha-<sourceSha> for the deployment sourceSha.",
       "if": {
         "required": ["source_repo"]
       },
@@ -99,12 +99,12 @@
     "source_repo": {
       "type": "string",
       "pattern": "^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(\\.git)?$",
-      "description": "Optional submodule node source repository clone URL. Inline nodes omit it; submodule births use it with the gitlink SHA to resolve the child repo image."
+      "description": "External artifact source repository clone URL. When present, the operator never builds this catalog row; it resolves image_repository:sha-<sourceSha> to a digest."
     },
     "image_repository": {
       "type": "string",
       "pattern": "^ghcr\\.io/[a-z0-9][a-z0-9_.-]*/[a-z0-9][a-z0-9_.-]*$",
-      "description": "Required with source_repo. GHCR repository for an externally-built deployable artifact, resolved at sha-<sourceSha>. Prefer ghcr.io/<owner>/<repo> for a single primary artifact or deployable-shaped suffixes such as -app/-worker when the repo publishes multiple artifacts. Inline nodes omit it and use IMAGE_NAME_APP."
+      "description": "Required with source_repo. GHCR repository for an externally-built deployable artifact, resolved at sha-<sourceSha>. Prefer ghcr.io/<owner>/<repo> for a single primary artifact or deployable-shaped suffixes such as -app/-worker when the repo publishes multiple artifacts."
     },
     "candidate_a_branch": {
       "type": "string",
