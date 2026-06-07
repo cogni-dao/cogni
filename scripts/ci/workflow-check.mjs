@@ -116,15 +116,15 @@ const workflowFiles = readdirSync(WORKFLOW_DIR)
 const candidateFlightText = readWorkflowText("candidate-flight.yml");
 if (
   candidateFlightText.includes(
-    "SUBMODULE_BIRTHS_FILE: ${{ steps.submodule-births.outputs.births_file }}"
+    "REMOTE_SOURCE_ARTIFACT_TARGETS_FILE: ${{ steps.remote-source-artifact-targets.outputs.targets_file }}"
   )
 ) {
   pass(
-    "candidate-flight wires submodule birth manifest output into image resolution"
+    "candidate-flight wires remote-source artifact target manifest output into image resolution"
   );
 } else {
   fail(
-    "candidate-flight must pass steps.submodule-births.outputs.births_file to SUBMODULE_BIRTHS_FILE"
+    "candidate-flight must pass steps.remote-source-artifact-targets.outputs.targets_file to REMOTE_SOURCE_ARTIFACT_TARGETS_FILE"
   );
 }
 

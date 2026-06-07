@@ -64,7 +64,7 @@ expected_fallback_targets=$(
   . scripts/ci/lib/image-tags.sh
   ordered_targets=()
   for target in "${ALL_TARGETS[@]}"; do
-    if is_submodule_node "$target"; then
+    if ! is_built_by_this_repo "$target"; then
       continue
     fi
     ordered_targets+=("$target")

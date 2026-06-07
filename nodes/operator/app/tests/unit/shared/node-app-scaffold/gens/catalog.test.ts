@@ -20,7 +20,7 @@ describe("renderCatalog", () => {
     expect(out).toContain(
       "source_repo: https://github.com/cogni-test-org/ay.git\n"
     );
-    expect(out).toContain("image_repository: ghcr.io/cogni-test-org/ay-node\n");
+    expect(out).toContain("image_repository: ghcr.io/cogni-test-org/ay\n");
   });
 
   it("derives child image repositories from the full source repo name", () => {
@@ -28,8 +28,6 @@ describe("renderCatalog", () => {
       sourceRepo: "https://github.com/Cogni-Test-Org/ay.node.git",
     });
 
-    expect(out).toContain(
-      "image_repository: ghcr.io/cogni-test-org/ay.node-node\n"
-    );
+    expect(out).toContain("image_repository: ghcr.io/cogni-test-org/ay.node\n");
   });
 });

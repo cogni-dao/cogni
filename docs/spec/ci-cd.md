@@ -8,7 +8,7 @@ summary: Trunk-based CI/CD where PRs prove safety in fixed candidate slots befor
 read_when: Understanding deployment pipelines, release workflow, or CI configuration
 owner: derekg1729
 created: 2026-02-05
-verified: 2026-06-04
+verified: 2026-06-07
 tags: []
 ---
 
@@ -20,17 +20,20 @@ This spec defines the target CI/CD model for the repo:
 
 - `main` is the only long-lived code branch
 - pull requests prove safety before merge in fixed `candidate-*` slots
-- accepted code promotes forward from `main` without rebuilds
+- accepted code promotes forward without rebuilds
+- deployable artifacts are addressed by source SHA and image digest, never by rebuilding source in a downstream lane
 - deploy branches hold environment state only and are reconciled by Argo CD
 
-This document supersedes the old canary-first branch model. The branch model, deploy-state model, and axioms below are the live contract — workflows, scripts, and agent skills that diverge from it are bugs, not allowed drift.
+The simplification target is one artifact contract and one promotion primitive. Everything else is policy: who may request a flight, which checks gate an environment, and when humans approve.
+
+The branch model, deploy-state model, and axioms below are the live contract — workflows, scripts, and agent skills that diverge from it are bugs, not allowed drift.
 
 ## Core Axioms
 
 1. **`main` is code truth**. It holds safe, accepted code.
 2. **Code merges when safe, not merely when ready**. Incomplete work should be hidden behind flags or stay in PRs.
-3. **Pre-merge safety happens in candidate or flight slots**. Do not call those lanes `canary`.
-4. **Build once, promote by digest**. Downstream environments never rebuild artifacts.
+3. **Pre-merge safety happens in candidate flight slots**.
+4. **Build once, promote by digest**. Downstream environments never rebuild artifacts. The source repo that owns an artifact builds it and publishes `image_repository:sha-<sourceSha>`; the deploy plane resolves that tag to `image_repository@sha256:<digest>` and promotes only the digest.
 5. **Deploy branches are environment state only**. `deploy/*` branches contain rendered deployment state, not product code.
 6. **Argo owns reconciliation**. CI writes desired state to git; Argo syncs from git.
 7. **Affected-only CI is the default**. Required checks should scope to the changed surface where practical.
@@ -39,7 +42,7 @@ This document supersedes the old canary-first branch model. The branch model, de
 10. **Agent guidance is part of the control plane**. Prompts, skills, AGENTS files, and workflow docs must not tell agents to PR into or diff against legacy branches.
 11. **Verification is a job-level gate, never a step-level skip** (bug.0321). GitHub treats a skipped step inside a running job as green. Every verification that is allowed to no-op (e.g. empty `promoted_apps`) must be gated at the _job_ level with `needs:` and `if:` so the job surfaces as **skipped (grey)** in the checks list, not as a silent-green success.
 12. **Gate ordering is enforced structurally, not by convention** (bug.0321 Fix 4). When step A must precede step B in the same job, A writes a marker to `$GITHUB_ENV` (e.g. `ARGOCD_SYNC_VERIFIED=true`) and B refuses to run without it. Comments rot at the next refactor; runtime checks don't.
-13. **Artifact provenance travels with the artifact** (bug.0321 Fix 4). `.promote-state/source-sha-by-app.json` on each deploy branch records per-app `source_sha` at promotion time. Production promotions copy it forward from preview; verifiers read it to assert per-app contract (`/version.buildSha == map[app]`), which is the only cross-PR-safe check when affected-only CI produces a mixed-SHA overlay. (task.0345 / PR #978 moved the probe from `/readyz.version` to the dedicated unauthenticated `/version` endpoint so that infra-degraded `/readyz` 503s cannot false-fail an artifact-identity check.)
+13. **Artifact provenance travels with the artifact** (bug.0321 Fix 4). `.promote-state/source-sha-by-app.json` on each deploy branch records the artifact source SHA that produced the deployed digest. This is true whether `source_repo` is this repo or another source repo. Production promotions copy the map forward from preview; verifiers read it to assert per-artifact contract (`/version.buildSha == map[app]`), which is the only cross-PR-safe check when affected-only CI produces a mixed-SHA overlay. (task.0345 / PR #978 moved the probe from `/readyz.version` to the dedicated unauthenticated `/version` endpoint so that infra-degraded `/readyz` 503s cannot false-fail an artifact-identity check.)
 14. **Skipped verification is not success** (bug.0328). When a downstream job (`release-slot`, `lock-preview-on-success`) consumes the result of a verification job that was gated `if: promoted_apps != ''` per Axiom 11, a `skipped` result is only a valid green signal when `promoted_apps == ''`. A skipped verification combined with a non-empty `promoted_apps` is a **contradiction** (the promote job pushed real digests but verification never ran, e.g. because `promote-build-payload.sh` aborted mid-run and left `$GITHUB_OUTPUT` empty), and must hard-fail the workflow. The job-level skip gate from Axiom 11 prevents _silent step-skip_ success; this axiom prevents _silent job-skip_ success at the consumer. Defense: emit `promoted_apps` incrementally + via `trap EXIT` so the signal survives abort, AND have consumers treat skip-with-promotions as failure.
 15. **Argo "Healthy" is necessary but not sufficient** (bug.0326). `status.health.status == Healthy` fires as soon as enough pods are Ready — including pods from the **old** ReplicaSet during a rolling update. `wait-for-argocd.sh` therefore requires the promoted app's own `Deployment` resource inside the Argo `Application` to report `status=Synced`, then asserts the new ReplicaSet has reached desired count (`status.updatedReplicas >= spec.replicas` AND `status.availableReplicas >= spec.replicas`). It does **not** wait for the old ReplicaSet to fully drain — that condition is not part of the contract and routinely false-fails when an old pod terminates slowly while the new RS is already serving traffic. `verify-buildsha.sh` (run after) is the canonical "/version.buildSha == expected" proof per Axiom 19.
 16. **`CATALOG_IS_SSOT`** (task.0374; supersedes the bug.0328 image-tags.sh-as-registry framing). `infra/catalog/*.yaml` is the single declaration site for nodes and node-shaped services for **CI fan-out and digest promotion**. Every consumer that needs a per-node enumeration reads catalog: `scripts/ci/lib/image-tags.sh` is a thin shim that populates `ALL_TARGETS` / `NODE_TARGETS` and resolves tag suffixes, node ports, DB names, and endpoint CSVs from catalog at source time, and node IDs from each node's `.cogni/repo-spec.yaml` (`REPO_SPEC_IS_IDENTITY_SSOT`, below); `scripts/ci/detect-affected.sh` maps changed paths to targets via catalog `path_prefix:`; ApplicationSet `files:` generators already enumerate catalog directly; per-workflow `decide` jobs read catalog via the `yq` pre-installed on `ubuntu-24.04` and emit `targets_json` + `apps_csv` outputs that downstream matrix cells consume; the **edge reverse-proxy roster** is catalog-driven too — `scripts/ci/render-caddyfile.sh` generates the Caddyfile by looping `NODE_TARGETS` (one site block per node, upstream port baked from catalog `node_port`), and `deploy-infra.sh` / `provision-env-vm.sh` write each node's per-env host (`host_for_node`) from one loop, so a new `type: node` auto-routes with no Caddyfile or deploy-script edit (task.5078). The scheduler-worker routing map is catalog-rendered as slug + `node_id` aliases by `scripts/ci/render-scheduler-worker-endpoints.sh`, and LiteLLM node-local metering callbacks are derived by `deploy-infra.sh` from the same catalog data. Catalog conformance is enforced on every PR by `check-jsonschema --schemafile infra/catalog/_schema.json infra/catalog/*.yaml` (pip-distributed CLI; no first-party GHA action), `scripts/ci/tests/render-caddyfile.test.sh` asserts the committed Caddyfile stays in sync with the catalog and `node_port` matches each per-env overlay Service nodePort (no split-brain), and `scripts/ci/render-scheduler-worker-endpoints.sh --check` asserts the committed scheduler-worker ConfigMap stays in sync with the catalog. Adding a node = drop a catalog yaml (incl. `node_port`; `node_id` lives in the node's `.cogni/repo-spec.yaml`, not the catalog) + Dockerfile + overlay; no hand-maintained route string should need editing. **Out of scope of this axiom (separate follow-ups):** `infra/compose/runtime/docker-compose.yml` per-service blocks and `infra/k8s/overlays/<env>/<node>/kustomization.yaml` generation. Both remain hand-maintained until a Kustomize-replacements / catalog-render pass lands.
@@ -47,6 +50,8 @@ This document supersedes the old canary-first branch model. The branch model, de
     **`REPO_SPEC_IS_IDENTITY_SSOT`** (corollary). The catalog is the SSOT for _deploy-shape_ (ports, tag suffixes, branches, `path_prefix`) — never for _identity_. A node's `node_id` is the in-repo projection of its on-chain DAO and is declared exactly once, in `nodes/<name>/.cogni/repo-spec.yaml` (ROADMAP "Repo-Spec Authority"). `image-tags.sh` resolves `node_id` from repo-spec (locating the tree via the catalog root, so the pre-merge birth flow's `COGNI_CATALOG_ROOT=app-src/infra/catalog` reads the PR's specs); the scheduler-worker map, LiteLLM metering callbacks, and `COGNI_DEFAULT_NODE_ID` (the primary-host `node_id`, replacing the formerly-hardcoded operator UUID in `cogni_callbacks.py`) all derive from it. `infra/catalog/_schema.json` _forbids_ a `node_id` key (`not: { required: [node_id] }`) and `tests/ci-invariants/catalog-identity-ssot.spec.ts` asserts every `type: node` has a repo-spec `node_id` — so the duplicate cannot return.
 
     **Build classes (corollary).** `image-tags.sh` also exposes an `is_infra_target` predicate. **`type: infra`** (shared VM-infra images like `litellm`) builds in CI like everything else but **deploys via Compose-on-VM, not k8s/Argo** — so it is in `ALL_TARGETS` only (never `NODE_TARGETS`), the k8s plane (overlays/promotion/Argo/gitops-coverage) skips it via `is_infra_target`, and the schema makes deploy-branches/`node_*` conditional. `type:infra` images are **content-hash tagged** (`<name>-<hash>` via `infra_image_tag`, build dir = catalog `build_context`): the affected build rebuilds them only on change, and `deploy-infra.sh` resolves the identical tag — killing the former manual `docker build` + hand-pin toil. Adding one is a one-file catalog drop (`type: infra` + `build_context`); see [create-service.md](../guides/create-service.md) §9b-infra.
+
+    **Artifact contract (corollary).** A deployable catalog row has `source_repo` + `image_repository`. `source_repo` names the build plane; `image_repository` names the deployable artifact. The deploy plane operates on an artifact record: `{ target, source_repo, sourceSha, image_repository, digest }`. It validates a requested `sourceSha`, requires `<image_repository>:sha-<sourceSha>` to exist, resolves that tag to `image_repository@sha256:<digest>`, writes only the digest to deploy state, and records `sourceSha` in `.promote-state/source-sha-by-app.json`. This is the same contract whether the source repo is this repo or another repo. Do not create catalog types for artifact variants; if a source repo publishes multiple deployables, use artifact-shaped package names such as `<repo>-app`, `<repo>-worker`, or `<repo>-webhook`.
 
 17. **`INFRA_K8S_MAIN_DERIVED`** (bug.0334). Every file under `infra/k8s/` on a deploy branch is byte-identical to `main` at the promoted SHA, OR is the per-overlay `env-state.yaml` (the VM-truth file written by provision). The promote workflow does a two-pass rsync: (1) `--ignore-existing` seed pass for `env-state.yaml` (bootstraps new overlays without clobbering VM-written IPs); (2) `--delete --exclude='env-state.yaml'` authoritative sync for everything else. Image digests are mutated by `promote-k8s-image.sh` after rsync — the only other deploy-branch-local write. Kustomize `replacements:` reads `env-state.yaml.data.VM_IP` and injects it into every EndpointSlice `/endpoints/0/addresses/0`, so VM IPs never live inline in `kustomization.yaml`. Violation: any non-digest, non-env-state diff between `main` and `deploy/<env>` after a promote.
 18. **`LANE_ISOLATION` + `BRANCH_HEAD_IS_LEASE`** (task.0372 + task.0376). Each `(env, node)` pair has its own `deploy/<env>-<node>` branch and its own Argo Application; matrix-fanned per-node cells in `candidate-flight.yml` / `flight-preview.yml` / `promote-and-deploy.yml` write to the per-node branch only. Sibling-node failure cannot fail this cell — isolation is structural (separate GHA jobs with `fail-fast: false`), not a script-level filter. The branch ref is the lease: `concurrency: flight-${{ matrix.env }}-${{ matrix.node }}` (cancel-in-progress: false) serializes same-(env, node) writes across workflow types; cross-cell pushes go to different refs and never race. Pre-matrix `acquire-candidate-slot.sh` / `release-candidate-slot.sh` / `infra/control/candidate-lease.json` are retired. AppSets are **one object per `(env, node)`** — `infra/k8s/argocd/<env>-<node>-applicationset.yaml`, named `cogni-<env>-<node>`, rendered from the catalog by `scripts/ci/render-node-appset.sh` (drift-gated in the `unit` job; node-set = catalog rows with a `candidate_a_branch`). This makes the appset reconcile itself lane-isolated: `reconcile-appset` applies **only the flighted node's** AppSet object, so a concurrent flight whose head lacks a pre-merge node's generator can no longer re-apply a shared appset and prune that node's Application (the shared-appset clobber, `bug.0378`). The retired shared `cogni-<env>` AppSet is orphan-deleted (`--cascade=orphan`, never pruning its live Applications) by the one-shot `migrate-appset-per-node.yml` cutover and defensively before every per-node apply. Each AppSet still uses `goTemplate: true` with `targetRevision: "deploy/<env>-{{.name}}"` (convention-over-config, not catalog-field indirection). Aggregator jobs (`aggregate-{preview,production}` in `promote-and-deploy.yml`) compute `current-sha = git merge-base $(deploy/<env>-<node> tips)` (`CURRENT_SHA_IS_MERGE_BASE`) and merge per-node `source-sha-by-app.json` entries into the rollup preserving unaffected entries (`ROLLUP_MAP_PRESERVES_UNAFFECTED`). `release.yml` reads the rollup `current-sha` byte-unchanged. Aggregators carry `concurrency: aggregate-${{ matrix.env }}` + rebase-retry on push (`AGGREGATOR_CONCURRENCY_GROUP`) and own preview lease state transitions (`AGGREGATOR_OWNS_LEASE`). Bootstrap: `scripts/ops/bootstrap-per-node-deploy-branches.sh` is idempotent + fast-forwarding; re-run as the last action immediately pre-merge of any AppSet / workflow flip (`BOOTSTRAP_FAST_FORWARDS_BEFORE_MERGE`). Catalog edits trigger full-matrix flights (`CATALOG_EDITS_ARE_GLOBAL_BUILD_INPUT`) so all per-node branches receive catalog changes in lockstep.
@@ -86,52 +91,55 @@ previewEnv --> productionEnv[ProductionEnv]
 
 ### PR Lane
 
-The PR lane is authoritative for merge safety in v0.
+The PR lane is authoritative for merge safety in v0. It is not the artifact identity model.
 
-1. `pull_request` runs affected-only CI where available.
-2. CI builds an immutable image for the exact PR head SHA.
-3. The PR-head artifact is the authoritative v0 artifact.
-4. Passing PRs become ready for manual candidate flight.
-5. A human explicitly chooses which PR to flight next.
-6. That chosen PR is deployed to `candidate-a` through `deploy/candidate-a`.
-7. Candidate validation runs against the stable slot URL.
-8. `candidate-flight` is authoritative for PRs explicitly sent to flight, but standard CI and build remain the universal merge gate in v0.
+The deployment coordinate for a deployable artifact is `sourceSha`, paired with its catalog `image_repository`:
+
+1. The source repo that owns the artifact runs its own PR CI.
+2. That repo publishes every flightable artifact as `<image_repository>:sha-<sourceSha>`.
+3. The operator API accepts `nodeRef { nodeId, sourceSha }` for hosted node flight. The parent PR number is review metadata for the operator pin/deploy-state PR, not the deploy coordinate.
+4. The operator verifies source identity, repo-spec identity, parent gitlink acceptance when a gitlink is still used, and image existence.
+5. `candidate-flight.yml` resolves `image_repository:sha-<sourceSha>` to an artifact record and writes `deploy/candidate-a-<target>` state.
+6. Candidate validation asserts `/version.buildSha == sourceSha`.
+
+`pr-*`, `mq-*`, and `preview-*` tags are transitional/control-plane artifact aliases for legacy in-repo build mechanics. They may exist while workflows are being migrated, but no node deploy request should use them as artifact identity.
 
 ### Main Lane
 
 The main lane is authoritative for promotion, not for pre-merge acceptance.
 
-1. Merge to `main` records the accepted PR SHA.
-2. The same proven digest promotes forward without rebuild.
+1. Merge to `main` records the accepted source state and any operator pin/deploy-state changes.
+2. The same proven artifact digest promotes forward without rebuild. The target model is carry-forward by artifact record; re-resolving `image_repository:sha-<sourceSha>` is acceptable only while the record store is being introduced and tags are treated immutable.
 3. `preview` is the first required post-merge promotion lane in v0.
 4. Production promotion happens from the same digest by policy:
    - `release.yml` (manual dispatch) cuts a `release/*` PR from the preview
      current-sha into `main`; merging it is the code-truth gate.
    - A human directly dispatches `promote-and-deploy.yml` with
      `environment=production`, `source_sha=<preview current-sha>`, and
-     `build_sha=<PR branch head SHA>`. `skip_infra=true` unless
+     `build_sha=<artifact sourceSha>`. `skip_infra=true` unless
      `infra/compose/**` changed. No intermediate PR: the dispatch IS the
      human gate, same entry point as preview uses. Same workflow, same
      verify-deploy contract, same e2e — just a different env input.
    - `promote-and-deploy.yml` promotes overlay digests on
      `deploy/production` and Argo CD reconciles production pods.
 
-If a post-merge soak lane is retained later, it must be modeled as an explicitly named environment with a distinct purpose. The term `canary` must not be reused for pre-merge acceptance.
-
-Merge queue is deferred in v0. If the repo later adopts merge queue, the workflow graph must add `merge_group` support and revisit artifact authority explicitly instead of assuming the PR-head artifact still maps cleanly to the accepted merge candidate.
+Merge queue is allowed only as a source-repo merge-safety mechanism. It does not change deployment identity: the deploy plane still consumes `sourceSha` + digest.
 
 ## Minimum Authoritative Validation For V0
 
 Do not block the rewrite on perfect black-box E2E maturity. For PRs explicitly sent to candidate flight in the current prototype, the required flight gate is:
 
 - affected-only static checks plus unit tests
-- successful image build for the exact PR SHA
+- source commit exists in `source_repo`
+- `.cogni/repo-spec.yaml` at that commit matches the registered node identity for node artifacts
+- `image_repository:sha-<sourceSha>` exists and resolves to a digest
+- the parent operator repo accepts the gitlink pin for that source SHA while gitlinks remain the approval-pin mechanism
 - **Argo CD reconciled to the deploy-branch tip SHA, the promoted Deployment resource is `Synced`, and app health is acceptable** for every app in `PROMOTED_APPS` (`scripts/ci/wait-for-argocd.sh`)
 - **new ReplicaSet available** for every promoted in-cluster Deployment (`scripts/ci/wait-for-in-cluster-services.sh`); routed node-apps also wait for Service endpoint cutover so public probes cannot hit an old pod
 - a prototype smoke pack passes:
-  - `/readyz` returns `200` on operator, poly, and resy
-  - `/livez` returns structured JSON on operator, poly, and resy
-- **contract probe passes**: `/version.buildSha` on each promoted node-app matches the SHA that built its overlay digest (`scripts/ci/verify-buildsha.sh` in `SOURCE_SHA_MAP` mode, reading `.promote-state/source-sha-by-app.json` from the deploy branch)
+  - `/readyz` returns `200` on the promoted public hosts required by the change
+  - `/livez` returns structured JSON on the promoted public hosts required by the change
+- **contract probe passes**: `/version.buildSha` on each promoted node-app matches the source SHA that produced its deployed digest (`scripts/ci/verify-buildsha.sh` in `SOURCE_SHA_MAP` mode, reading `.promote-state/source-sha-by-app.json` from the deploy branch)
 - any human or AI validation needed to call the change safe
 
 These gates run inside a **`verify-candidate` job** (for pre-merge candidate flight) or **`verify-deploy` job** (for post-merge preview + production promotion), both gated `if: promoted_apps != ''` at the job level per Axiom 11.
@@ -167,8 +175,6 @@ Promotion environments run accepted code only.
 | preview     | `deploy/preview`    | post-merge validation |
 | production  | `deploy/production` | production            |
 
-This spec does not require a `canary` environment. If one is retained during migration, it must be described explicitly as a post-merge soak lane and not as a branch or as a pre-merge safety lane.
-
 ### Per-Node Deploy Branches (task.0320 + task.0372)
 
 Per-node flighting lands in two parts to keep the rollout reversible and to preserve the promotion pipeline across the transition:
@@ -202,7 +208,7 @@ Transitions:
 
 On release-merge unlock, if `candidate-sha != current-sha` the workflow dispatches a fresh flight with `sha=candidate-sha` to drain the queue. A flight concurrency group (`flight-preview`) serializes entry to the `unlocked → dispatching` transition; the three-value lease is the correctness guarantee even if concurrency is bypassed.
 
-**Direct pushes to main are not a supported flight trigger.** The flight workflow re-tags `pr-{N}-{sha}` → `preview-{sha}` in GHCR and requires an associated PR number; direct pushes exit 0 with a message. Maintenance commits on `main` that carry no merged PR would trip the same PR-resolution guardrail, so `flight-preview.yml` skips its `flight` job when `github.event.head_commit.message` starts with either prefix: `chore(deps): argocd-image-updater` (bug.0344 Image Updater write-back) or `chore(preview):` (task.0349 digest-seed on `main`). Keying is **message-prefix**, not author identity (`github-actions[bot]` is shared).
+**Direct pushes to main are not a supported preview trigger.** Preview promotion needs a resolved artifact digest plus the `sourceSha` that produced it. The legacy in-repo preview workflow may re-tag `mq-{N}-{sha}` / accepted build outputs into a `preview-*` namespace while migration is in progress, but that is a lookup implementation detail, not the deployment contract. Node preview/prod promotion carries the already-resolved digest and its `sourceSha`. Maintenance commits on `main` that carry no deployable artifact change should not dispatch preview; `flight-preview.yml` skips its flight job for CI-owned maintenance prefixes such as `chore(deps): argocd-image-updater` and `chore(preview):`. Keying is **message-prefix**, not author identity (`github-actions[bot]` is shared).
 
 ## Workflow Design Targets
 
@@ -212,7 +218,6 @@ When implementation begins, workflow changes should follow these rules:
 2. **No branch-name inference for environment routing**. Environment selection must be explicit input, artifact metadata, or deployment-state driven.
 3. **No default `release/* -> main` conveyor**. If production still needs explicit approval, make it an environment or promotion control rather than a separate accepted-code branch.
 4. **No duplicate orchestration**. E2E, promote, and deploy ownership should be clear rather than split across overlapping workflow graphs.
-5. **No legacy branch guidance in prompts or docs**. Agents should not be told to diff against or PR into `staging` or a long-lived `canary` branch.
 
 ### App and infra levers are independent (task.0314)
 
@@ -247,13 +252,13 @@ promote-k8s ─► deploy-infra ─┬─► verify-deploy ─┐
 
 ### Source-SHA Map Provenance
 
-Every deploy branch carries `.promote-state/source-sha-by-app.json` — a merge-semantics JSON map from app name to the PR head SHA that built that app's current overlay digest.
+Every deploy branch carries `.promote-state/source-sha-by-app.json` — a merge-semantics JSON map from deployed artifact name to the source SHA that produced that artifact's current overlay digest.
 
 ```json
 {
   "operator": "abc123...",
-  "poly": "def456...",
-  "resy": "abc123...",
+  "creative": "def456...",
+  "pandora": "abc123...",
   "scheduler-worker": "abc123..."
 }
 ```
@@ -263,11 +268,11 @@ Every deploy branch carries `.promote-state/source-sha-by-app.json` — a merge-
 - `scripts/ci/update-source-sha-map.sh` — shared primitive that merges a single `app → sha` entry into the file. Untouched apps retain their prior entry (merge, not overwrite).
 - `scripts/ci/promote-build-payload.sh` — calls the primitive after each promoted app (candidate-flight path).
 - `.github/workflows/promote-and-deploy.yml` promote-k8s loop — calls the primitive after each promoted app (preview + production path).
-- Production promotion: a human dispatches `promote-and-deploy.yml` with `environment=production`, `source_sha=<preview current-sha>`, `build_sha=<PR branch head SHA>`. The `promote-k8s` job reads preview's overlay digests through the shared `preview-{sha}` tag convention, copies them onto `deploy/production`, and carries `.promote-state/source-sha-by-app.json` forward so `verify-buildsha.sh` can assert cross-PR mixed-SHA contract.
+- Production promotion: a human dispatches `promote-and-deploy.yml` with `environment=production`, `source_sha=<preview current-sha>`, and `build_sha=<source SHA that produced the promoted digest>`. The target contract is digest carry-forward from preview: production should reuse the preview-proven digest and copy the source map forward. Any remaining `preview-{sha}` lookup is transitional in-repo machinery and must resolve back to the same digest/sourceSha contract before deploy-state is written.
 
 **Reader**: `scripts/ci/verify-buildsha.sh` in `SOURCE_SHA_MAP` mode. When `NODES` is set (candidate-flight / promote-and-deploy pass `promoted_apps`), verifies only those apps' map entries — not every key in the file — so affected-only runs do not false-fail untouched apps (task.0349). When `NODES` is unset, every Ingress-probeable key in the map is checked. Each probe curls `/version` and asserts `.buildSha == map[app]`. (The probe is the dedicated `/version` endpoint, not `/readyz` — task.0345 / PR #978.)
 
-**Why the map instead of a single `EXPECTED_BUILDSHA`**: production promotions copy preview's overlays, which can mix digests from different PR head SHAs (affected-only CI rebuilds a subset). A single SHA check is only valid when every promoted app comes from the same build; the map is the only cross-PR-safe contract.
+**Why the map instead of a single `EXPECTED_BUILDSHA`**: production promotions copy preview's overlays, which can mix digests from different source repos and source SHAs. A single SHA check is only valid when every promoted artifact comes from the same source revision; the map is the only artifact-safe contract.
 
 ## Deploy Branch Rules
 
@@ -287,6 +292,8 @@ Every deploy branch carries `.promote-state/source-sha-by-app.json` — a merge-
 
 Track these explicitly during the spec rewrite, following the CI/CD scorecard style of keeping unresolved questions visible:
 
+- [ ] **Legacy in-repo catalog rows**
+      `operator`, `resy`, `canary`, and any remaining in-repo deployables must either gain `source_repo` + `image_repository` rows that publish `sha-<sourceSha>` artifacts from this repo, or be moved out of `type: node` if they are truly control-plane-only. Until then the schema cannot honestly require `source_repo` + `image_repository` for every `type: node` row without breaking current catalog validation.
 - [ ] **Candidate selection and slot control**
       Define the manual flight trigger, lease, timeout, cleanup, and status ownership without building a queueing system into v0.
 - [ ] **E2E validation workflows**
@@ -302,16 +309,6 @@ Track these explicitly during the spec rewrite, following the CI/CD scorecard st
 - [ ] **Merge queue integration later**
       If concurrency pressure eventually justifies merge queue, add `merge_group` workflows and revisit authoritative artifact selection at that time rather than mixing both models in v0.
 
-## Legacy Surfaces To Retire
-
-The following patterns are now legacy and should be removed during implementation:
-
-- long-lived `staging` or `canary` code-branch semantics
-- branch-based environment inference in workflow logic
-- prompts, skills, AGENTS files, or workflow docs that steer agents toward `origin/staging` or PRs into non-`main` branches
-- release branch enforcement as the normal path for accepted code
-- namespace, overlay, or deploy-state naming that still encodes `staging` for the preview lane
-
 ## Non-Goals For V0
 
 This spec does not require:
@@ -319,13 +316,12 @@ This spec does not require:
 - fully dynamic per-PR ephemeral environments
 - perfect end-to-end coverage before adopting the model
 - a production release branch for every accepted change
-- a decision today on every future soak, canary, or experimentation lane
+- a decision today on every future soak or experimentation lane
 
 ## Related Documentation
 
 - [CD Pipeline E2E](cd-pipeline-e2e.md) — trunk-alignment guide mapping legacy multi-node GitOps design to the target workflow and code-task changes
 - [Candidate Slot Controller](candidate-slot-controller.md) — v0 design for lease, TTL, superseding-push handling, and aggregate candidate-flight status
-- [CD Pipeline E2E Legacy Canary](cd-pipeline-e2e-legacy-canary.md) — historical canary/staging-era multi-node GitOps detail retained for reference during migration
 - [Node CI/CD Contract](node-ci-cd-contract.md) — CI/CD sovereignty invariants, file ownership
 - [Application Architecture](architecture.md) — Hexagonal design and code organization
 - [Deployment Architecture](../runbooks/DEPLOYMENT_ARCHITECTURE.md) — Infrastructure details

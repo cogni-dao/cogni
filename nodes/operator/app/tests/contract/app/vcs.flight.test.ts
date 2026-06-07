@@ -4,9 +4,9 @@
 /**
  * Module: `@tests/contract/app/vcs.flight`
  * Purpose: Contract tests for POST /api/v1/vcs/flight.
- * Scope: Verifies PR CI gating, operator-local node-ref dispatch gating, and auth.
+ * Scope: Verifies operator-local node-ref dispatch gating and auth.
  * Invariants:
- *   - CI_GATE: PR and parent-pin PR checks must be green before dispatch.
+ *   - CI_GATE: parent-pin PR checks must be green before dispatch.
  *   - NODE_REF_PARENT_PIN_GATE: parent pin PR head must match the prepared pin commit.
  *   - CONTRACTS_ARE_TRUTH: 202 response matches flightOperation.output schema.
  * Side-effects: none
@@ -31,7 +31,6 @@ const SOURCE_SHA = "0123456789012345678901234567890123456789";
 
 const mockDeployPlane = vi.hoisted(() => ({
   getCiStatus: vi.fn(),
-  dispatchCandidateFlight: vi.fn(),
   prepareNodeRefCandidateFlight: vi.fn(),
   dispatchNodeRefCandidateFlight: vi.fn(),
 }));
@@ -198,7 +197,7 @@ function makePreparedNodeRef(
     slug: "creative",
     sourceSha: SOURCE_SHA,
     sourceRepo: "https://github.com/Cogni-DAO/creative.git",
-    image: `ghcr.io/cogni-dao/creative-node:sha-${SOURCE_SHA}`,
+    image: `ghcr.io/cogni-dao/creative:sha-${SOURCE_SHA}`,
     parentPin: {
       status: "already_pinned",
       currentSha: SOURCE_SHA,
@@ -234,71 +233,11 @@ describe("POST /api/v1/vcs/flight", () => {
         const res = await fetch({
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ prNumber: 42 }),
+          body: JSON.stringify({
+            nodeRef: { nodeId: NODE_ID, sourceSha: SOURCE_SHA },
+          }),
         });
         expect(res.status).toBe(401);
-      },
-    });
-  });
-
-  it("returns 422 when PR CI is not green", async () => {
-    mockDeployPlane.getCiStatus.mockResolvedValue(
-      makeGreenCiStatus({ allGreen: false })
-    );
-
-    await testApiHandler({
-      appHandler,
-      async test({ fetch }) {
-        const res = await fetch({
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ prNumber: 42 }),
-        });
-        expect(res.status).toBe(422);
-        const body = await res.json();
-        expect(body.error).toMatch(/CI is not green/);
-        expect(mockDeployPlane.dispatchCandidateFlight).not.toHaveBeenCalled();
-        expectFlightRequestLog("warn", {
-          mode: "pr",
-          outcome: "error",
-          status: 422,
-          errorCode: "ci_not_green",
-          prNumber: 42,
-        });
-      },
-    });
-  });
-
-  it("returns 202 for a green PR flight", async () => {
-    mockDeployPlane.getCiStatus.mockResolvedValue(makeGreenCiStatus());
-    mockDeployPlane.dispatchCandidateFlight.mockResolvedValue(
-      makeDispatchResult("Flight dispatched for PR #42 @ abc123de.")
-    );
-
-    await testApiHandler({
-      appHandler,
-      async test({ fetch }) {
-        const res = await fetch({
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ prNumber: 42 }),
-        });
-        expect(res.status).toBe(202);
-        const body = await res.json();
-        expect(flightOperation.output.safeParse(body).success).toBe(true);
-        expect(body.prNumber).toBe(42);
-        expect(mockDeployPlane.getCiStatus).toHaveBeenCalledWith({
-          owner: "test-owner",
-          repo: "test-repo",
-          prNumber: 42,
-        });
-        expectFlightRequestLog("info", {
-          mode: "pr",
-          outcome: "success",
-          status: 202,
-          prNumber: 42,
-          dispatchStatus: "initiated",
-        });
       },
     });
   });

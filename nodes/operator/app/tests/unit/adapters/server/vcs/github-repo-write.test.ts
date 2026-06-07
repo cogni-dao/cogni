@@ -422,7 +422,7 @@ describe("GitHubRepoWriter.packageImageTagExists", () => {
         expect(params).toMatchObject({
           org: "cogni-dao",
           package_type: "container",
-          package_name: "creative-node",
+          package_name: "creative",
           per_page: 100,
         });
         if (params.page === 1) {
@@ -446,7 +446,7 @@ describe("GitHubRepoWriter.packageImageTagExists", () => {
       makeWriter().packageImageTagExists({
         owner: "Cogni-DAO",
         repo: "cogni",
-        imageRepository: "ghcr.io/cogni-dao/creative-node",
+        imageRepository: "ghcr.io/cogni-dao/creative",
         tag: "sha-0123456789012345678901234567890123456789",
       })
     ).resolves.toBe(true);
