@@ -162,6 +162,11 @@ export const serverSchema = z.object({
   NODE_SUBMODULE_PARENT_OWNER: optionalString,
   NODE_SUBMODULE_PARENT_REPO: optionalString,
 
+  // GHCR deploy-plane read token. Optional for ordinary app runtime, but when
+  // set node-ref preflight uses it to match candidate-flight's registry access.
+  GHCR_DEPLOY_USERNAME: optionalString,
+  GHCR_DEPLOY_TOKEN: optionalString,
+
   // Billing ingest token - Bearer auth for LiteLLM generic_api callback → billing ingest endpoint
   // Per billing-ingest-spec: CALLBACK_AUTHENTICATED invariant. Min 32 chars to reduce weak-token risk.
   // Required: Billing ingest endpoint will reject all callbacks without this token.

@@ -554,4 +554,99 @@ describe("GitHubRepoWriter.packageImageTagExists", () => {
       })
     ).resolves.toBe(false);
   });
+
+  it("uses GHCR deploy credentials to probe the registry manifest directly", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.startsWith("https://ghcr.io/token?")) {
+          expect(init?.headers).toMatchObject({
+            Authorization: expect.stringMatching(/^Basic /),
+          });
+          expect(decodeURIComponent(url)).toContain(
+            "scope=repository:cogni-test-org/ghcr:pull"
+          );
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ token: "registry-token" }),
+          };
+        }
+        if (
+          url ===
+          "https://ghcr.io/v2/cogni-test-org/ghcr/manifests/sha-0123456789012345678901234567890123456789"
+        ) {
+          expect(init?.headers).toMatchObject({
+            Authorization: "Bearer registry-token",
+          });
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({}),
+          };
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      })
+    );
+
+    await expect(
+      new GitHubRepoWriter({
+        appId: "1",
+        privateKey: "key",
+        ghcrDeployCredentials: {
+          username: "deploy-user",
+          token: "deploy-token",
+        },
+      }).packageImageTagExists({
+        owner: "cogni-test-org",
+        repo: "cogni-monorepo",
+        imageRepository: "ghcr.io/cogni-test-org/ghcr",
+        tag: "sha-0123456789012345678901234567890123456789",
+      })
+    ).resolves.toBe(true);
+
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(requests).toEqual([]);
+  });
+
+  it("fails closed when GHCR deploy credentials cannot read the manifest", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.startsWith("https://ghcr.io/token?")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ token: "registry-token" }),
+          };
+        }
+        if (url.startsWith("https://ghcr.io/v2/")) {
+          return {
+            ok: false,
+            status: 404,
+            json: async () => ({}),
+          };
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      })
+    );
+
+    await expect(
+      new GitHubRepoWriter({
+        appId: "1",
+        privateKey: "key",
+        ghcrDeployCredentials: {
+          username: "deploy-user",
+          token: "deploy-token",
+        },
+      }).packageImageTagExists({
+        owner: "cogni-test-org",
+        repo: "cogni-monorepo",
+        imageRepository: "ghcr.io/cogni-test-org/ghcr",
+        tag: "sha-0123456789012345678901234567890123456789",
+      })
+    ).resolves.toBe(false);
+  });
 });

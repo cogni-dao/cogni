@@ -46,6 +46,12 @@ import type { NodeKnowledgeRemote } from "@/shared/node-app-scaffold/knowledge-r
 export interface GitHubRepoWriterConfig {
   readonly appId: string;
   readonly privateKey: string;
+  readonly ghcrDeployCredentials?: GhcrDeployCredentials | undefined;
+}
+
+export interface GhcrDeployCredentials {
+  readonly username: string;
+  readonly token: string;
 }
 
 export interface CommitFileAndOpenPrInput {
@@ -973,6 +979,10 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
     input: PackageImageTagExistsInput
   ): Promise<boolean> {
     const parsed = parseGhcrImageRepository(input.imageRepository);
+    if (this.config.ghcrDeployCredentials) {
+      return this.ghcrManifestExists(parsed, input.tag);
+    }
+
     const octokit = await this.getOctokit(input.owner, input.repo);
 
     try {
@@ -1002,6 +1012,52 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       if (status === 403 || status === 404) return false;
       throw err;
     }
+  }
+
+  private async ghcrManifestExists(
+    image: { readonly owner: string; readonly packageName: string },
+    tag: string
+  ): Promise<boolean> {
+    const credentials = this.config.ghcrDeployCredentials;
+    if (!credentials) return false;
+
+    const repository = `${image.owner}/${image.packageName}`;
+    const tokenResponse = await fetch(
+      `https://ghcr.io/token?service=ghcr.io&scope=${encodeURIComponent(
+        `repository:${repository}:pull`
+      )}`,
+      {
+        headers: {
+          Authorization: `Basic ${Buffer.from(
+            `${credentials.username}:${credentials.token}`
+          ).toString("base64")}`,
+        },
+      }
+    );
+    if (!tokenResponse.ok) {
+      const status = tokenResponse.status;
+      if (status === 401 || status === 403 || status === 404) return false;
+      throw new Error(`GHCR token request failed with HTTP ${status}`);
+    }
+    const tokenBody = (await tokenResponse.json()) as { token?: string };
+    if (!tokenBody.token) {
+      throw new Error("GHCR token response did not include a token");
+    }
+
+    const manifestResponse = await fetch(
+      `https://ghcr.io/v2/${repository}/manifests/${tag}`,
+      {
+        headers: {
+          Authorization: `Bearer ${tokenBody.token}`,
+          Accept:
+            "application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json",
+        },
+      }
+    );
+    if (manifestResponse.ok) return true;
+    const status = manifestResponse.status;
+    if (status === 401 || status === 403 || status === 404) return false;
+    throw new Error(`GHCR manifest request failed with HTTP ${status}`);
   }
 
   /** Resolve `heads/main` → its commit + root-tree SHAs (the parent for a node-birth commit). */

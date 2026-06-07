@@ -29,5 +29,11 @@ export function createOperatorDeployPlane(
   return new GitHubRepoWriter({
     appId: env.GH_REVIEW_APP_ID,
     privateKey,
+    ghcrDeployCredentials: env.GHCR_DEPLOY_TOKEN
+      ? {
+          username: env.GHCR_DEPLOY_USERNAME ?? "Cogni-1729",
+          token: env.GHCR_DEPLOY_TOKEN,
+        }
+      : undefined,
   });
 }
