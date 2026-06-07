@@ -32,6 +32,30 @@ function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, "");
 }
 
+export function ownerFromGithubPrUrl(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+  try {
+    const url = new URL(value);
+    if (url.hostname !== "github.com") {
+      return null;
+    }
+    return url.pathname.split("/").filter(Boolean)[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export function nodeRepoUrlForSlug(input: {
+  readonly slug: string;
+  readonly mintOwner: string | undefined;
+  readonly publishPrUrl: string | null;
+}): string | null {
+  const owner = input.mintOwner ?? ownerFromGithubPrUrl(input.publishPrUrl);
+  return owner ? `https://github.com/${owner}/${input.slug}` : null;
+}
+
 export function candidateUrlForSlug(slug: string): string {
   return `https://${slug}-test.cognidao.org`;
 }

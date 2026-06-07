@@ -25,6 +25,13 @@ export function knowledgeRepoForSlug(slug: string): string {
   return `knowledge-${slug}`;
 }
 
+export function knowledgeRepoWebUrl(input: {
+  readonly owner: string;
+  readonly slug: string;
+}): string {
+  return `https://www.dolthub.com/${input.owner}/${knowledgeRepoForSlug(input.slug)}`;
+}
+
 export function buildNodeKnowledgeRemote(
   slug: string,
   owner: string
