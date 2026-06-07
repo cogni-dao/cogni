@@ -405,6 +405,8 @@ const NODES_PREFIX = "nodes/";
  *   with the implementing code.
  * - Exact single-node-scope policy maintenance files: the workflow gate,
  *   reference classifier, repo-spec resolver, parity fixtures, and narrow tests.
+ * - Exact fast-check devtools files: app Vitest source-resolution is repo
+ *   tooling, but some legacy in-tree app config entrypoints are duplicated.
  */
 const RIDE_ALONG_PATTERNS: ReadonlyArray<(p: string) => boolean> = [
   (p) => p === "pnpm-lock.yaml",
@@ -422,6 +424,39 @@ const RIDE_ALONG_PATTERNS: ReadonlyArray<(p: string) => boolean> = [
 
 function isRideAlong(p: string): boolean {
   return RIDE_ALONG_PATTERNS.some((m) => m(p));
+}
+
+const DEVTOOLS_OPERATOR_PATTERNS: ReadonlyArray<(p: string) => boolean> = [
+  (p) => p === ".github/workflows/ci.yaml",
+  (p) => p === "docs/guides/new-worktree-setup.md",
+  (p) => p === "nodes/operator/app/vitest.config.mts",
+  (p) => p === "packages/langgraph-graphs/vitest.config.ts",
+  (p) => p === "packages/repo-spec/AGENTS.md",
+  (p) => p === "packages/repo-spec/src/accessors.ts",
+  (p) => p === "scripts/AGENTS.md",
+  (p) => p === "scripts/check-fast.sh",
+  (p) => p === "scripts/run-scoped-package-build.mjs",
+  (p) => p.startsWith("scripts/vitest/"),
+  (p) => p === "scripts/worktree-check.sh",
+  (p) => p === "tests/ci-invariants/classify.ts",
+  (p) => p.startsWith("tests/ci-invariants/fixtures/single-node-scope/"),
+  (p) => p === "tests/ci-invariants/single-node-scope-meta.spec.ts",
+  (p) => p === "vitest.config.mts",
+];
+
+function isDevtoolsOperatorPath(path: string): boolean {
+  return DEVTOOLS_OPERATOR_PATTERNS.some((m) => m(path));
+}
+
+function isRootAppVitestConfig(
+  path: string,
+  nonOperatorByTop: Map<string, NodeRegistryEntry>
+): boolean {
+  const match = path.match(/^nodes\/([^/]+)\/app\/vitest\.config\.mts$/);
+  const node = match?.[1];
+  return Boolean(
+    node && node !== "node-template" && nonOperatorByTop.has(node)
+  );
 }
 
 /**
@@ -511,12 +546,14 @@ export function extractOwningNode(
 
   const sovereigns = new Map<string, { nodeId: string; path: string }>();
   const operatorPaths: string[] = [];
+  const nonOperatorPaths: string[] = [];
 
   for (const p of paths) {
     const top = topUnderNodes(p);
     const sov = top != null ? nonOperatorByTop.get(top) : undefined;
     if (sov) {
       sovereigns.set(sov.node_id, { nodeId: sov.node_id, path: sov.path });
+      nonOperatorPaths.push(p);
     } else {
       operatorPaths.push(p);
     }
@@ -537,6 +574,17 @@ export function extractOwningNode(
     operatorPaths.every((p) => isRideAlong(p) || isNodeWiring(p, sovereignTop))
   ) {
     operatorTouched = false;
+    rideAlongApplied = true;
+  }
+
+  if (
+    sovereigns.size > 0 &&
+    operatorPaths.length > 0 &&
+    nonOperatorPaths.every((p) => isRootAppVitestConfig(p, nonOperatorByTop)) &&
+    operatorPaths.every((p) => isDevtoolsOperatorPath(p))
+  ) {
+    sovereigns.clear();
+    operatorTouched = true;
     rideAlongApplied = true;
   }
 
@@ -565,6 +613,7 @@ export function extractOwningNode(
       kind: "single",
       nodeId: operatorEntry.node_id,
       path: operatorEntry.path,
+      ...(rideAlongApplied ? { rideAlongApplied: true } : {}),
     };
   }
 

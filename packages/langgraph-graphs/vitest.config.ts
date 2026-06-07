@@ -17,6 +17,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import tsconfigPaths from "vite-tsconfig-paths";
 import { defineProject } from "vitest/config";
+import { workspaceSourceAliases } from "../../scripts/vitest/workspace-source-aliases.mts";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -27,6 +28,9 @@ export default defineProject({
       projects: [path.resolve(__dirname, "../../tsconfig.json")],
     }),
   ],
+  resolve: {
+    alias: workspaceSourceAliases(path.resolve(__dirname, "../..")),
+  },
   test: {
     name: "langgraph-graphs",
     globals: true,

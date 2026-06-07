@@ -44,6 +44,8 @@ const OPERATOR_NODE = "operator";
  *   prose that travels with the implementing code.
  * - Exact single-node-scope policy maintenance files: the workflow gate,
  *   reference classifier, repo-spec resolver, parity fixtures, and narrow tests.
+ * - Exact fast-check devtools files: app Vitest source-resolution is repo
+ *   tooling, but some legacy in-tree app config entrypoints are duplicated.
  */
 const RIDE_ALONG_PATTERNS: ReadonlyArray<(p: string) => boolean> = [
   (p) => p === "pnpm-lock.yaml",
@@ -61,6 +63,36 @@ const RIDE_ALONG_PATTERNS: ReadonlyArray<(p: string) => boolean> = [
 
 function isRideAlong(path: string): boolean {
   return RIDE_ALONG_PATTERNS.some((m) => m(path));
+}
+
+const DEVTOOLS_OPERATOR_PATTERNS: ReadonlyArray<(p: string) => boolean> = [
+  (p) => p === ".github/workflows/ci.yaml",
+  (p) => p === "docs/guides/new-worktree-setup.md",
+  (p) => p === "nodes/operator/app/vitest.config.mts",
+  (p) => p === "packages/langgraph-graphs/vitest.config.ts",
+  (p) => p === "packages/repo-spec/AGENTS.md",
+  (p) => p === "packages/repo-spec/src/accessors.ts",
+  (p) => p === "scripts/AGENTS.md",
+  (p) => p === "scripts/check-fast.sh",
+  (p) => p === "scripts/run-scoped-package-build.mjs",
+  (p) => p.startsWith("scripts/vitest/"),
+  (p) => p === "scripts/worktree-check.sh",
+  (p) => p === "tests/ci-invariants/classify.ts",
+  (p) => p.startsWith("tests/ci-invariants/fixtures/single-node-scope/"),
+  (p) => p === "tests/ci-invariants/single-node-scope-meta.spec.ts",
+  (p) => p === "vitest.config.mts",
+];
+
+function isDevtoolsOperatorPath(path: string): boolean {
+  return DEVTOOLS_OPERATOR_PATTERNS.some((m) => m(path));
+}
+
+function isRootAppVitestConfig(path: string, nonOperatorNodes: Set<string>) {
+  const match = path.match(/^nodes\/([^/]+)\/app\/vitest\.config\.mts$/);
+  const node = match?.[1];
+  return Boolean(
+    node && node !== "node-template" && nonOperatorNodes.has(node)
+  );
 }
 
 /**
@@ -120,6 +152,7 @@ export function classify(
   const nodes = new Set(nonOperatorNodes);
   const domains = new Set<Domain>();
   const operatorPaths: string[] = [];
+  const nonOperatorPaths: string[] = [];
 
   for (const p of changedPaths) {
     let assigned: Domain = OPERATOR_NODE;
@@ -142,7 +175,11 @@ export function classify(
       }
     }
     domains.add(assigned);
-    if (assigned === OPERATOR_NODE) operatorPaths.push(p);
+    if (assigned === OPERATOR_NODE) {
+      operatorPaths.push(p);
+    } else {
+      nonOperatorPaths.push(p);
+    }
   }
 
   // The single non-operator node (if exactly one) — used for the NODE_BIRTH
@@ -158,6 +195,18 @@ export function classify(
     operatorPaths.every((p) => isRideAlong(p) || isNodeWiring(p, theNode))
   ) {
     domains.delete(OPERATOR_NODE);
+    rideAlongApplied = true;
+  }
+
+  if (
+    domains.size > 1 &&
+    domains.has(OPERATOR_NODE) &&
+    nonOperatorPaths.length > 0 &&
+    nonOperatorPaths.every((p) => isRootAppVitestConfig(p, nodes)) &&
+    operatorPaths.every((p) => isDevtoolsOperatorPath(p))
+  ) {
+    domains.clear();
+    domains.add(OPERATOR_NODE);
     rideAlongApplied = true;
   }
 
