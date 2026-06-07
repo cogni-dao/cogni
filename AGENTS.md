@@ -8,7 +8,7 @@ You are an agent inside a multi-agent system. The **operator** (`https://cognida
 
 1. Adopt one work item, **one node** (`single-node-scope` is a CI gate; cross-node ⇒ separate item). Read `nodes/<node>/AGENTS.md` for that node's rules. **Recall the node's knowledge hub before designing or researching** — a prior agent may already have the finding (`RECALL_BEFORE_WRITE`; see [`/contribute-knowledge-to-cogni`](.claude/skills/contribute-knowledge-to-cogni/SKILL.md)).
 2. Claim + heartbeat + link PR via `/api/v1/work/items/$ID/{claims,heartbeat,pr,coordination}`. **`coordination.nextAction` is authoritative** — it overrides your plan.
-3. Implement on a worktree branch. Push — **CI is your verification.** Watch `gh pr checks`; iterate file-scoped fixes if red.
+3. Implement on a worktree branch, self-review/refine, commit incrementally, then push/open the PR. Let pre-push run `pnpm check:fast` — **CI is your verification.** Watch `gh pr checks`; iterate file-scoped fixes if red.
 4. After CI green + reviewed implementation: `POST /api/v1/vcs/flight { prNumber }`. The build lands at `https://<node>-test.cognidao.org`.
 5. Run [`/validate-candidate`](.claude/skills/validate-candidate/SKILL.md) against the deployed build. Adherence to its validation flow and scorecard format is strict — that's how the system confirms you followed the contract.
 6. Hit a contract blocker (auth, broken endpoint, invariant you can't satisfy)? File a bug: `POST /api/v1/work/items {type:'bug', node:'operator'}`, link from your active item.
@@ -39,6 +39,7 @@ Durable learning the work produced is **refined back into the hub** (recall → 
 
 - Adding backwards-compatibility unless specifically user-instructed. Purge legacy in place.
 - Inline comments narrating _what_ code does, or verbose prose. More text, more entropy — names + types are the docs.
+- Running full CI/CD or long chains of bespoke focused checks locally. Do not run `pnpm check:full`; pre-push fast checks plus hosted CI are the gate.
 - Ending a turn before `deploy_verified` without an armed `Monitor`/`ScheduleWakeup` on the gating signal (CI, flight, `/version`). Silent end-of-turn = work lost.
 
 ## Pointers
