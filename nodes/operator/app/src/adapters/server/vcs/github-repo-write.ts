@@ -127,8 +127,7 @@ export interface PackageImageTagExistsInput {
 
 type PackageImageTagStatus =
   | { readonly status: "ready" }
-  | { readonly status: "missing" }
-  | { readonly status: "not_public"; readonly visibility: string };
+  | { readonly status: "missing" };
 
 /** Input to {@link GitHubRepoWriter.forkFromTemplate}: mint a node repo from `node-template`. */
 export interface ForkFromTemplateInput {
@@ -452,13 +451,6 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       imageRepository: catalog.data.image_repository,
       tag,
     });
-    if (imageStatus.status === "not_public") {
-      throw deployPlaneError(
-        "image_not_public",
-        `external artifact image is ${imageStatus.visibility}, expected public: ${catalog.data.image_repository}:${tag}`,
-        422
-      );
-    }
     if (imageStatus.status !== "ready") {
       throw deployPlaneError(
         "image_missing",
@@ -1006,7 +998,7 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
     const octokit = await this.getOctokit(input.owner, input.repo);
 
     try {
-      const { data: packageInfo } = await octokit.request(
+      await octokit.request(
         "GET /orgs/{org}/packages/{package_type}/{package_name}",
         {
           org: parsed.owner,
@@ -1014,15 +1006,6 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
           package_name: parsed.packageName,
         }
       );
-      if (packageInfo.visibility !== "public") {
-        return {
-          status: "not_public",
-          visibility:
-            typeof packageInfo.visibility === "string"
-              ? packageInfo.visibility
-              : "unknown",
-        };
-      }
 
       for (let page = 1; page <= 10; page += 1) {
         const { data } = await octokit.request(

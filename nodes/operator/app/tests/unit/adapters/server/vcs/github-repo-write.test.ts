@@ -632,7 +632,7 @@ payments_in:
     ).toHaveLength(2);
   });
 
-  it("rejects private source repo GHCR packages before flight", async () => {
+  it("accepts readable private source repo GHCR packages before flight", async () => {
     const sourceSha = "0123456789012345678901234567890123456789";
     const nodeId = "11111111-1111-4111-8111-111111111111";
     const encode = (value: string) =>
@@ -671,6 +671,43 @@ payments_in:
       "GET /orgs/{org}/packages/{package_type}/{package_name}": () => ({
         visibility: "private",
       }),
+      "GET /orgs/{org}/packages/{package_type}/{package_name}/versions": () => [
+        {
+          metadata: {
+            container: {
+              tags: [`sha-${sourceSha}`],
+            },
+          },
+        },
+      ],
+      "GET /repos/{owner}/{repo}/git/ref/{ref}": () => ({
+        ref: "refs/heads/main",
+        object: { type: "commit", sha: "parent-main" },
+      }),
+      "GET /repos/{owner}/{repo}/git/commits/{commit_sha}": () => ({
+        sha: "parent-main",
+        tree: { sha: "tree-main" },
+      }),
+      "GET /repos/{owner}/{repo}/git/trees/{tree_sha}": () => ({
+        tree: [
+          { path: ".gitmodules", type: "blob", sha: "gitmodules-sha" },
+          { path: "nodes", type: "tree", sha: "nodes-tree-sha" },
+        ],
+      }),
+      "GET /repos/{owner}/{repo}/git/blobs/{file_sha}": () => ({
+        content: encode(``),
+        encoding: "base64",
+      }),
+      "POST /repos/{owner}/{repo}/git/blobs": () => ({ sha: "blob-sha" }),
+      "POST /repos/{owner}/{repo}/git/trees": () => ({ sha: "new-tree" }),
+      "POST /repos/{owner}/{repo}/git/commits": () => ({ sha: "new-commit" }),
+      "POST /repos/{owner}/{repo}/git/refs": () => ({}),
+      "PATCH /repos/{owner}/{repo}/git/refs/{ref}": () => ({}),
+      "GET /repos/{owner}/{repo}/pulls": () => [],
+      "POST /repos/{owner}/{repo}/pulls": () => ({
+        number: 42,
+        html_url: "https://github.com/cogni-test-org/cogni-monorepo/pull/42",
+      }),
     };
 
     await expect(
@@ -681,13 +718,16 @@ payments_in:
         slug: "ghcr",
         sourceSha,
       })
-    ).rejects.toMatchObject({
-      code: "image_not_public",
-      status: 422,
+    ).resolves.toMatchObject({
+      nodeId,
+      slug: "ghcr",
+      sourceSha,
+      sourceRepo: "https://github.com/cogni-test-org/ghcr",
+      image: `ghcr.io/cogni-test-org/ghcr:sha-${sourceSha}`,
     });
 
-    expect(requests.map((request) => request.route)).not.toContain(
-      "GET /repos/{owner}/{repo}/git/ref/{ref}"
+    expect(requests.map((request) => request.route)).toContain(
+      "GET /orgs/{org}/packages/{package_type}/{package_name}/versions"
     );
   });
 
@@ -808,11 +848,20 @@ describe("GitHubRepoWriter.packageImageTagExists", () => {
     ).resolves.toBe(false);
   });
 
-  it("fails closed when the GHCR package is not public", async () => {
+  it("does not reject readable private GHCR packages", async () => {
     routeHandlers = {
       "GET /orgs/{org}/packages/{package_type}/{package_name}": () => ({
         visibility: "private",
       }),
+      "GET /orgs/{org}/packages/{package_type}/{package_name}/versions": () => [
+        {
+          metadata: {
+            container: {
+              tags: ["sha-0123456789012345678901234567890123456789"],
+            },
+          },
+        },
+      ],
     };
 
     await expect(
@@ -822,10 +871,11 @@ describe("GitHubRepoWriter.packageImageTagExists", () => {
         imageRepository: "ghcr.io/cogni-test-org/ghcr",
         tag: "sha-0123456789012345678901234567890123456789",
       })
-    ).resolves.toBe(false);
+    ).resolves.toBe(true);
 
     expect(requests.map((request) => request.route)).toEqual([
       "GET /orgs/{org}/packages/{package_type}/{package_name}",
+      "GET /orgs/{org}/packages/{package_type}/{package_name}/versions",
     ]);
   });
 });

@@ -96,9 +96,9 @@ The live installation audit must show `.permissions.packages == "write"`.
 
 > **Install scope for the minting App.** Step 7's single-repo install is enough for _review_ (payload-driven), but an App that **creates + commits to** new node repos must reach repos that don't exist yet. A `selected`-repos install means a freshly-minted `<owner>/<slug>` is **invisible to the App** → the identity-commit 404s even with `administration: write`. So the minting App needs **"All repositories"** on a dedicated nodes/test org (`cogni-test-org` for candidate/test; a production nodes org for live node birth) so it is not org-wide over unrelated operator infra repos. See [node-formation.md § Node Publish](../spec/node-formation.md) + [node-ci-cd-contract.md § Submodule-pinned nodes](../spec/node-ci-cd-contract.md).
 
-### Public GHCR package requirement for wizard E2E
+### GHCR package requirement for wizard E2E
 
-Public node repos must publish publicly pullable GHCR packages:
+Node repos must publish source-addressed GHCR packages:
 
 ```text
 ghcr.io/<lower-owner>/<lower-repo>:sha-<sourceSha>
@@ -119,18 +119,9 @@ labels: |
   org.opencontainers.image.source=https://github.com/${{ github.repository }}
 ```
 
-Package access inheritance is not enough for deploy. The operator now rejects node-ref images whose
-package metadata is not `visibility: public`, because Kubernetes anonymous pulls cannot use a
-GitHub App installation token.
-
-For `cogni-test-org`, set the org package creation policy:
-
-- Open `https://github.com/organizations/cogni-test-org/settings/packages`.
-- Under **Package Creation**, enable **Public** packages for organization members.
-- Save.
-- Existing packages such as `cogni-test-org/ghcr` and `cogni-test-org/node-template` must be
-  changed manually from the package settings page if they are still private. This is one-way:
-  public packages cannot be made private again.
+The operator rejects node-ref images only when the GitHub App installation for the source repo
+cannot read the package/tag. Package visibility is not a flight preflight gate; deploy-time image
+pull credentials are a separate substrate concern.
 
 4. **Subscribe to events:** Issues, Issue comment, Pull request, Pull request review, Push
 
@@ -279,9 +270,9 @@ Fail conditions:
 - `permissions.workflows` is not `"write"` → node birth cannot write `.github/workflows/*`.
 - `permissions.actions` is not `"write"` → the App cannot dispatch `candidate-flight.yml`.
 
-### Verify public GHCR package state
+### Verify GHCR package state
 
-After a fresh wizard spawn, the child repo package must be public and linked to the child repo:
+After a fresh wizard spawn, the child repo package must be linked to the child repo:
 
 ```bash
 repo=<spawned-repo-name>
@@ -294,7 +285,6 @@ Expected:
 ```json
 {
   "name": "<spawned-repo-name>",
-  "visibility": "public",
   "repository": "cogni-test-org/<spawned-repo-name>"
 }
 ```
@@ -311,12 +301,11 @@ Expected: a non-empty array containing `sha-<sourceSha>`.
 
 ## Troubleshooting
 
-| Symptom                                    | Fix                                                                                                                |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
-| 404 from webhook route                     | `GH_WEBHOOK_SECRET` not set — add it and restart                                                                   |
-| 401 from webhook route                     | Secret mismatch — compare app config vs env var                                                                    |
-| Check Run never appears                    | App missing `checks:write` permission                                                                              |
-| Review silently skipped                    | `GH_REVIEW_APP_ID` or private key not configured                                                                   |
-| No smee forwarding                         | `pnpm dev:smee` not running                                                                                        |
-| Node-ref flight returns `image_missing`    | App is not installed on the child source repo, lacks `packages:write`, or the `sha-<sourceSha>` tag does not exist |
-| Node-ref flight returns `image_not_public` | GHCR package exists but package visibility is not `public`; fix org package creation policy or package settings    |
+| Symptom                                 | Fix                                                                                                                   |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| 404 from webhook route                  | `GH_WEBHOOK_SECRET` not set — add it and restart                                                                      |
+| 401 from webhook route                  | Secret mismatch — compare app config vs env var                                                                       |
+| Check Run never appears                 | App missing `checks:write` permission                                                                                 |
+| Review silently skipped                 | `GH_REVIEW_APP_ID` or private key not configured                                                                      |
+| No smee forwarding                      | `pnpm dev:smee` not running                                                                                           |
+| Node-ref flight returns `image_missing` | App is not installed on the child source repo, lacks package read access, or the `sha-<sourceSha>` tag does not exist |
