@@ -1,5 +1,5 @@
 {
-  "name": "@cogni/ai-core",
+  "name": "@cogni/authorization-core",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -21,11 +21,12 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@cogni/authorization-core": "workspace:*",
-    "@types/json-schema": "^7.0.15"
+    "@openfga/sdk": "0.9.6"
   },
   "devDependencies": {
     "tsup": "^8.5.1",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vite-tsconfig-paths": "^5.1.4",
+    "vitest": "^4.0.7"
   }
 }

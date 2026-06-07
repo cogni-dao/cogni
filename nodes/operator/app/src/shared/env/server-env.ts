@@ -265,6 +265,12 @@ export const serverSchema = z.object({
   // Optional — BYO-AI features disabled when not set.
   CONNECTIONS_ENCRYPTION_KEY: optionalString,
 
+  // OpenFGA authorization — optional until the RBAC store is deployed.
+  OPENFGA_API_URL: optionalUrl,
+  OPENFGA_STORE_ID: optionalString,
+  OPENFGA_AUTHORIZATION_MODEL_ID: optionalString,
+  OPENFGA_API_TOKEN: optionalString,
+
   // PostHog product analytics — required
   // See docs/guides/posthog-setup.md for setup
   // PostHog Cloud free tier: 1M events/month at https://us.i.posthog.com

@@ -195,6 +195,7 @@
   },
   "pnpm": {
     "overrides": {
+      "@opentelemetry/api": "1.9.1",
       "ethers": "5.7.2"
     }
   },
@@ -212,6 +213,7 @@
     "@cogni/aragon-osx": "workspace:*",
     "@cogni/attribution-ledger": "workspace:*",
     "@cogni/attribution-pipeline-plugins": "workspace:*",
+    "@cogni/authorization-core": "workspace:*",
     "@cogni/cogni-contracts": "workspace:*",
     "@cogni/db-client": "workspace:*",
     "@cogni/db-schema": "workspace:*",
