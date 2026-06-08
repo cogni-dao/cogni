@@ -143,6 +143,23 @@ if (
   );
 }
 
+if (
+  candidateFlightText.includes(
+    "NODE_MINT_OWNER: ${{ secrets.NODE_MINT_OWNER }}"
+  ) &&
+  candidateFlightText.includes(
+    "NODE_TEMPLATE_OWNER: ${{ secrets.NODE_TEMPLATE_OWNER }}"
+  )
+) {
+  pass(
+    "candidate-flight deploy-infra carries node mint/template owner secrets"
+  );
+} else {
+  fail(
+    "candidate-flight deploy-infra must pass NODE_MINT_OWNER and NODE_TEMPLATE_OWNER"
+  );
+}
+
 console.log(`workflows: ${workflowFiles.join(", ")}`);
 
 if (failures > 0) {
