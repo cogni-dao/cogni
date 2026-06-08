@@ -9,7 +9,7 @@ read_when: Modifying CI workflows, adding checks to merge gate, or planning mult
 implements: []
 owner: cogni-dev
 created: 2025-12-22
-verified: 2026-06-07
+verified: 2026-06-08
 tags:
   - ci-cd
   - deployment
@@ -58,6 +58,12 @@ The simplification target is one artifact contract and one promotion primitive. 
 8. **SINGLE_DOMAIN_HARD_FAIL**: Source-code PRs happen in the source repo that owns the artifact. Parent repo PRs for hosted artifacts are operator control-plane changes: gitlink/pin acceptance, catalog rows, overlays, AppSets, DNS/provisioning wiring, and deploy-state machinery. Legacy in-tree node directories remain transitional and are still guarded by `single-node-scope`; they are not the future build model. See `## Single-Domain Scope` below.
 
 9. **SOURCE_SHA_IS_DEPLOY_IDENTITY**: `sourceSha` is the deployment coordinate for every deployable artifact. Every flightable artifact for that source revision must be published as `<image_repository>:sha-<40-char-sourceSha>`. The operator resolves that tag to `image@sha256:<digest>` before writing deploy state.
+
+10. **TARGET_SUBSTRATE_IS_ASSERTED_NOT_PROVISIONED**: App flights may verify
+    the target substrate required by a catalog deployable, but they must not
+    provision it. Missing substrate fails the flight with an explicit handoff to
+    `provision-env.yml`, `candidate-flight-infra.yml`, or the preview/prod
+    infra lane that owns the mutation.
 
 ---
 
@@ -248,6 +254,24 @@ current deploy-shape taxonomy for routing and Argo/VM behavior; build and
 promotion logic should key on artifact fields (`source_repo`,
 `image_repository`, `sourceSha`, digest), not on node ontology.
 
+### Target substrate assertion contract
+
+The unit of readiness is the catalog target, not the node. `infra/catalog/$TARGET.yaml`
+declares the deploy shape through `.type`, and `candidate-flight.yml` may run a
+read-only substrate gate before writing app deploy state. The gate reads the
+catalog row and dispatches by type:
+
+| `type`    | Assertion owner today                                                                                                                                                                                                                                                               | App-flight behavior                                                                                                                                        |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `node`    | `scripts/ci/assert-target-substrate.sh` checks the node-shaped substrate: VM/k3s/Argo reachability, namespace, per-target AppSet/Application, local catalog/overlay/AppSet, scoped DNS, edge/Caddy route, Service NodePort, Deployment-consumed Secret/ExternalSecret, and node DB. | Fail loud when missing; do not run `deploy-infra.sh`.                                                                                                      |
+| `service` | Service-specific contract TBD. It must assert Deployment/Service plus declared Secret/ExternalSecret/ConfigMap dependencies without inheriting node DNS, Caddy, NodePort, or node-DB assumptions.                                                                                   | Fail explicitly until the service contract exists. `scheduler-worker` is the reference service shape, not a node.                                          |
+| `infra`   | Compose-on-VM or infra-lane assertion. `litellm` is currently Compose-owned, not Argo-owned.                                                                                                                                                                                        | Fail explicitly in app flight; use `candidate-flight-infra.yml`, `provision-env.yml`, or preview/prod infra reconcile unless a Compose assertion is built. |
+
+This keeps `node` as one implementation branch under a target-shaped gate. A
+future OpenFGA or scheduler-worker deployable should extend the `service`
+branch rather than unwind node-specific assumptions from the generic flight
+path.
+
 ### SUBMODULE_GITLINK_IS_OPERATOR_PIN
 
 A change to a `nodes/<slug>` **submodule gitlink** (the pinned-commit pointer) classifies as **operator-domain**, not node-domain. The pointer is the control plane's _pin_; the node's _code_ was reviewed in the node repo's own PR queue. So the deploy PR — gitlink bump + the node's catalog/overlay/appset rows — is **one operator-domain change**, not a cross-domain rejection. Without this rule the bump touches `nodes/<slug>` (node) + `infra/` (operator) → `|S| = 2` → rejected by the gate. The operator filter's `!nodes/<slug>/**` negation must **not** subtract a submodule gitlink — only a real in-tree node directory is node-domain.
@@ -351,7 +375,8 @@ The forward deployment contract is:
 2. **The submodule template is node-at-root and self-building.** A minted node repo contains `app/`, `graphs/`, `k8s/`, `packages/`, node-local rules, and its own merge gate/build workflow at repo root. It publishes every flightable deployable to GHCR as `sha-<sourceSha>`.
 3. **Candidate flight is source-addressed.** The operator API accepts `nodeRef { nodeId, sourceSha }`, verifies the catalog, verifies the child commit exists, verifies `.cogni/repo-spec.yaml` identity at that commit, verifies `image_repository:sha-<sourceSha>` exists, ensures the parent gitlink pins that commit, then dispatches `candidate-flight.yml`.
 4. **Deploy state is digest-addressed.** `candidate-flight.yml` resolves `image_repository:sha-<sourceSha>` to `image_repository@sha256:<digest>`, writes only deploy-state branches, and verifies `/version.buildSha == sourceSha`.
-5. **Promotion preserves the digest.** Preview and production promote the candidate-proven digest. The operator never rebuilds child source and never substitutes a PR tag.
+5. **Substrate is asserted before app rollout.** For target shapes enabled in app flight today, `candidate-flight.yml` reconciles the per-target AppSet/DNS prerequisites, then runs the target substrate gate. The gate is read-only; missing VM, Argo objects, DNS, edge route, consumed Secret/ExternalSecret, Service NodePort, or DB stops the app flight and points to the explicit infra/substrate lane.
+6. **Promotion preserves the digest.** Preview and production promote the candidate-proven digest. The operator never rebuilds child source and never substitutes a PR tag.
 
 **Identity/config prerequisite (per-env, proven on candidate-a).** Minting authenticates as an env-scoped GitHub App that must (a) be installed **all-repositories** on the mint org and (b) hold **`workflows:write`** — the seed/pin flow edits `.github/workflows/pr-build.yml`, which GitHub 403s without it. Mint target, template owner, and submodule-pin-PR parent are env config (`NODE_MINT_OWNER` / `NODE_TEMPLATE_OWNER` / `NODE_SUBMODULE_PARENT_{OWNER,REPO}`), fail-closed (mint) / fail-open (parent → `getGithubRepo()`), so a candidate/test operator has **zero access to the production org** (candidate-a mints into the disposable `cogni-test-org`, pin-PRs into a cogni-shaped fork there).
 
@@ -448,16 +473,16 @@ This standard does not split `.dependency-cruiser.cjs` per node. That's a separa
 
 ### Workflow Entrypoints
 
-| File                              | Type | Secrets                   | Trigger                      | Concern                                                                        |
-| --------------------------------- | ---- | ------------------------- | ---------------------------- | ------------------------------------------------------------------------------ |
-| `ci.yaml`                         | CI   | No                        | PR; push main                | Typecheck, lint, unit, component, docs, architecture, scope                    |
-| `stack-test.yml`                  | CI   | No                        | workflow_dispatch            | Per-node full-stack vitest                                                     |
-| `pr-build.yml`                    | CI   | GHCR write                | pull_request; merge_group    | Transitional in-repo artifact build aliases (`pr-*` / `mq-*`)                  |
-| `candidate-flight.yml`            | CD   | GHCR read; deploy         | workflow_dispatch            | Candidate-a digest flight from `image_repository:sha-<sourceSha>`              |
-| `candidate-flight-infra.yml`      | CD   | SSH/secrets               | workflow_dispatch            | Candidate-a VM compose substrate only                                          |
-| `flight-preview.yml`              | CD   | GHCR read/write           | push main; workflow_dispatch | Preview dispatch/queue control; any re-tagging is transitional lookup plumbing |
-| `promote-and-deploy.yml`          | CD   | SSH/secrets; deploy       | workflow_dispatch            | Preview/production digest promotion, infra reconcile, verify, e2e              |
-| `promote-preview-digest-seed.yml` | CD   | GHCR read; contents write | workflow_run                 | Maintains preview digest seed pins on `main` after dispatched preview flights  |
+| File                              | Type | Secrets                   | Trigger                      | Concern                                                                                        |
+| --------------------------------- | ---- | ------------------------- | ---------------------------- | ---------------------------------------------------------------------------------------------- |
+| `ci.yaml`                         | CI   | No                        | PR; push main                | Typecheck, lint, unit, component, docs, architecture, scope                                    |
+| `stack-test.yml`                  | CI   | No                        | workflow_dispatch            | Per-node full-stack vitest                                                                     |
+| `pr-build.yml`                    | CI   | GHCR write                | pull_request; merge_group    | Transitional in-repo artifact build aliases (`pr-*` / `mq-*`)                                  |
+| `candidate-flight.yml`            | CD   | GHCR read; deploy         | workflow_dispatch            | Candidate-a target substrate assertion + digest flight from `image_repository:sha-<sourceSha>` |
+| `candidate-flight-infra.yml`      | CD   | SSH/secrets               | workflow_dispatch            | Candidate-a VM compose substrate only                                                          |
+| `flight-preview.yml`              | CD   | GHCR read/write           | push main; workflow_dispatch | Preview dispatch/queue control; any re-tagging is transitional lookup plumbing                 |
+| `promote-and-deploy.yml`          | CD   | SSH/secrets; deploy       | workflow_dispatch            | Preview/production digest promotion, infra reconcile, verify, e2e                              |
+| `promote-preview-digest-seed.yml` | CD   | GHCR read; contents write | workflow_run                 | Maintains preview digest seed pins on `main` after dispatched preview flights                  |
 
 ### Local Gates
 
@@ -522,6 +547,7 @@ Centralizing lint/depcruise configs causes fork friction, policy fights, and los
 | `.github/workflows/pr-build.yml`           | Transitional in-repo artifact build aliases                                                    |
 | `.github/workflows/candidate-flight.yml`   | Candidate-a digest flight for artifact source SHAs                                             |
 | `.github/workflows/promote-and-deploy.yml` | Promote + deploy + verify                                                                      |
+| `scripts/ci/assert-target-substrate.sh`    | Read-only catalog-target substrate gate used before selected app flights                       |
 | `scripts/check-fast.sh`                    | `pnpm check:fast` implementation                                                               |
 | `scripts/check-all.sh`                     | `pnpm check` implementation                                                                    |
 | `scripts/check-full.sh`                    | `pnpm check:full` implementation                                                               |
@@ -561,8 +587,9 @@ External-node-formation impact: a fresh fork clones, runs `setup-main-branch.sh`
 1. Verify `ci.yaml` calls only pnpm scripts (no inline commands)
 2. Verify CD workflows skip gracefully when secrets are missing (fork mode)
 3. Verify artifact flight refuses missing `image_repository:sha-<sourceSha>` and deploys only the resolved digest when present
-4. Verify preview/production promotion preserves the candidate-proven digest without rebuilding
-5. Verify every future `type: node` deployable has `source_repo` + `image_repository`; remaining legacy rows are either migrated to the artifact contract or reclassified out of node deployables
+4. Verify app flight refuses missing target substrate without running `deploy-infra.sh`
+5. Verify preview/production promotion preserves the candidate-proven digest without rebuilding
+6. Verify every future `type: node` deployable has `source_repo` + `image_repository`; remaining legacy rows are either migrated to the artifact contract or reclassified out of node deployables
 
 ## Related
 

@@ -15,7 +15,10 @@ Read these before starting:
 
 ## Phase 1 — Scan & Plan
 
-Run `git diff --name-status origin/staging...HEAD` and read the changed files. From this single scan, build a change manifest:
+Resolve the base branch from the work item or workspace. Default to `origin/main`
+when no work item-specific base is declared. Run
+`git diff --name-status ${BASE_REF:-origin/main}...HEAD` and read the changed
+files. From this single scan, build a change manifest:
 
 1. **Coherence check**: Do ALL changes align with the assigned work item? Flag any unrelated changes — they should be split into a separate branch before PR.
 
@@ -60,6 +63,10 @@ For each spec in the work item's `spec_refs` (skip if none):
 - Advance `spec_state` if appropriate (draft→proposed when invariants enumerated; proposed→active when code matches and Open Questions empty).
 - Update `verified:` date.
 - Do NOT add roadmap, phases, or planning content.
+- For CI/CD work, explicitly check whether the change crosses the app-flight vs
+  infra-provisioning boundary. App flight may assert deployable substrate; it
+  must not hide provisioning or Compose reconciliation unless the spec already
+  says that workflow owns the infra lever.
 
 ---
 
@@ -81,7 +88,8 @@ For each spec in the work item's `spec_refs` (skip if none):
 1. Run `pnpm check:docs` and fix any errors until clean.
 2. Commit all changes (doc updates, header updates, spec updates, work item, project) on the work item's branch. `git status` must be clean.
 3. Push to remote.
-4. Create PR to `staging` using `/pull-request` logic (conventional commit title + summary).
+4. Create PR to the resolved base branch using `/pull-request` logic
+   (conventional commit title + summary).
 5. Set `pr:` in work item frontmatter with the PR URL. Commit and push this update.
 6. Report: what was updated, what was flagged, any follow-up items discovered. Next command: `/review-implementation`.
 
