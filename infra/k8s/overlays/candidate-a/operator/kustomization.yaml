@@ -7,13 +7,14 @@ namespace: cogni-candidate-a
 
 resources:
   - ../../../base/node-app
+  - ../../../base/openfga-external
 
 namePrefix: operator-
 
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/cogni-template
-    digest: "sha256:7dca510fceeeb9ab1f653eec9863241bbff67236b0264bbcda2dd41ea8d1da6a"
+    digest: "sha256:bd62d34e31ef2be7f72887d5bcbda32f27c1405d00b4e57bfd1096ba8fb2e4c9"
 
 patches:
   - target:
@@ -59,6 +60,9 @@ patches:
       - op: add
         path: /data/NODE_SUBMODULE_PARENT_REPO
         value: "cogni-monorepo"
+      - op: add
+        path: /data/OPENFGA_API_URL
+        value: "http://operator-openfga-external:8080"
   - target:
       kind: Service
       name: node-app
@@ -146,6 +150,16 @@ patches:
       kind: Service
       metadata:
         name: litellm-external
+      spec:
+        type: ExternalName
+        externalName: cogni-candidate-a.vm.cognidao.org
+        clusterIP: null
+  - target: { kind: Service, name: openfga-external }
+    patch: |
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: openfga-external
       spec:
         type: ExternalName
         externalName: cogni-candidate-a.vm.cognidao.org
