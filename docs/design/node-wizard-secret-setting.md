@@ -22,10 +22,10 @@ knowledge_id: node-wizard-secret-setting
 
 The node wizard generates **secret shape**, not secret values.
 
-A wizard-created node-birth PR must make the new node deployable on the
-ESO-first substrate by adding the git artifacts that describe where secrets
-will flow. It must not mint an alternate set of app/runtime values, copy
-operator secrets into git, or save progress state that can be derived from
+A wizard-created node-birth PR must make the new node structurally deployable
+on the ESO-first substrate by adding the git artifacts that describe where
+secrets will flow. It must not mint an alternate set of app/runtime values,
+copy operator secrets into git, or save progress state that can be derived from
 GitHub, GHCR, OpenBao/ESO, candidate flight, or the deployed app.
 
 Values are owned by the secrets substrate:
@@ -40,15 +40,17 @@ catalog + node birth facts
 ```
 
 The wizard may trigger or report the owning lane, but it must not create a
-parallel source of truth.
+parallel source of truth. Creating all-env shape is not the same as proving
+all-env values exist; value materialization is validated by the
+provision/reconcile and flight lanes.
 
 ## Why This Exists
 
-The current node wizard can create a parent node-birth PR whose overlays still
-reference legacy imperative Secrets such as `<slug>-node-app-secrets`. That
+The prior node wizard could create a parent node-birth PR whose overlays still
+referenced legacy imperative Secrets such as `<slug>-node-app-secrets`. That
 shape cannot satisfy app-flight substrate assertions for an ESO-first target:
-candidate flight can see a Deployment, but the Deployment consumes a Secret
-that no ExternalSecret owns.
+flight can see a Deployment, but the Deployment consumes a Secret that no
+ExternalSecret owns.
 
 Fresh-node proof should fail only for real missing values, child images, or
 runtime health. It should not fail because the wizard emitted the wrong
@@ -72,18 +74,18 @@ Before changing live launch behavior, recall the operator knowledge block
 
 ## Wizard-Owned Artifacts
 
-A production wizard birth flow has two write surfaces: the child node repo seed
-and the parent operator PR that pins and deploys it. Together they should
-produce this footprint:
+A wizard birth flow has two write surfaces: the child node repo seed and the
+parent operator PR that pins and deploys it. Together they should produce this
+footprint for the birth matrix (`candidate-a`, `preview`, `production`):
 
-| Artifact                                             | Surface             | Wizard responsibility                                                                                        |
-| ---------------------------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `k8s/external-secrets/<env>/external-secret.yaml`    | child repo seed     | Declare one ExternalSecret for the node/env. When mounted, this appears at `nodes/<slug>/k8s/...`.           |
-| `k8s/external-secrets/<env>/kustomization.yaml`      | child repo seed     | Make the ExternalSecret leaf available to provision/reconcile.                                               |
-| `infra/catalog/<slug>.yaml`                          | parent operator PR  | Declare node topology, source repo, image repo, ports, and deploy branches.                                  |
-| `infra/k8s/overlays/<env>/<slug>/kustomization.yaml` | parent operator PR  | Point every node-app Deployment/initContainer secret reference at `<slug>-env-secrets` for ESO-enabled envs. |
-| `infra/k8s/argocd/<env>-<slug>-applicationset.yaml`  | parent operator PR  | Make the target visible to Argo/candidate flight.                                                            |
-| launch pack facts                                    | operator app record | Tell the assistant what was minted and what to prove next.                                                   |
+| Artifact                                             | Surface             | Wizard responsibility                                                                                                                                                                  |
+| ---------------------------------------------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `k8s/external-secrets/<env>/external-secret.yaml`    | child repo seed     | Declare one ExternalSecret for the node/env. When mounted, this appears at `nodes/<slug>/k8s/...`.                                                                                     |
+| `k8s/external-secrets/<env>/kustomization.yaml`      | child repo seed     | Make the ExternalSecret leaf available to provision/reconcile. Candidate flight syncs the `candidate-a` leaf today; preview/production runtime sync belongs to the env substrate lane. |
+| `infra/catalog/<slug>.yaml`                          | parent operator PR  | Declare node topology, source repo, image repo, ports, and deploy branches.                                                                                                            |
+| `infra/k8s/overlays/<env>/<slug>/kustomization.yaml` | parent operator PR  | Point every node-app Deployment/initContainer secret reference at `<slug>-env-secrets` for all birth envs.                                                                             |
+| `infra/k8s/argocd/<env>-<slug>-applicationset.yaml`  | parent operator PR  | Make the target visible to Argo and the candidate/preview/production flight lanes.                                                                                                     |
+| launch pack facts                                    | operator app record | Tell the assistant what was minted and what to prove next.                                                                                                                             |
 
 For each birth environment (`candidate-a`, `preview`, `production`), the
 minimum ExternalSecret is:
@@ -250,9 +252,26 @@ This includes:
 - explicit `valueFrom.secretKeyRef.name` references, such as Doltgres migrator
   `DOLTGRES_URL`
 
-The candidate-flight substrate assertion is read-only. If it finds a consumed
-Secret with no Ready ExternalSecret, the fix belongs to the birth PR shape or
-the secrets/provisioning lane, not the app-flight lane.
+App-flight substrate assertions are read-only. If they find a consumed Secret
+with no Ready ExternalSecret, the fix belongs to the birth PR shape or the
+secrets/provisioning lane, not the app-flight lane.
+
+## Runtime Reconciliation Boundary
+
+This design owns desired Git shape only. It proves that a new node has:
+
+- child repo ExternalSecret leaves for `candidate-a`, `preview`, and
+  `production`;
+- parent overlays for the same envs consuming `<slug>-env-secrets`;
+- a non-secret publish log event naming the generated shape and pinned SHAs.
+
+It does not prove that OpenBao already contains values at `cogni/<env>/<slug>`,
+that ESO is Ready in a cluster, or that preview/production deploy branches have
+synced node-domain leaves. Those are substrate and flight responsibilities. In
+the current pipeline, candidate flight initializes the node submodule and syncs
+`nodes/<slug>/k8s/external-secrets/candidate-a/` into the candidate deploy
+branch; preview/production value and leaf reconciliation must be proven by the
+env substrate lane.
 
 ## As-Built Anchors
 
@@ -264,6 +283,9 @@ the secrets/provisioning lane, not the app-flight lane.
   generated overlays from `<slug>-node-app-secrets` to `<slug>-env-secrets`.
 - `nodes/operator/app/src/adapters/server/vcs/github-repo-write.ts` writes the
   child repo leaves before opening the parent operator PR.
+- `.github/workflows/candidate-flight.yml` initializes the submodule and copies
+  the `candidate-a` node-domain ExternalSecret leaf into the candidate deploy
+  branch.
 - Generator and adapter tests assert the ExternalSecret name, target, extract
   key, and all-env overlay rewrite.
 - `nodes/operator/app/src/app/api/v1/nodes/[id]/publish/route.ts` logs
@@ -272,9 +294,15 @@ the secrets/provisioning lane, not the app-flight lane.
 
 ## Remaining Work
 
-1. Use a fresh throwaway node to prove the target substrate reconciler can pass
-   `reconcile-substrate`, `assert-substrate`, `flight`, and
-   `verify-candidate` without manual secret bridging.
+1. Use a fresh throwaway node to prove candidate-a publish logs
+   `feature.node_publish.secret_shape_generated`, the child repo contains all
+   three ExternalSecret leaves, the parent PR overlays consume
+   `<slug>-env-secrets`, and candidate flight materializes the candidate-a leaf
+   without manual secret bridging.
+2. Extend or verify the preview/production substrate lane so node-domain leaves
+   from `nodes/<slug>/k8s/external-secrets/{preview,production}/` reach the
+   corresponding deploy branch or cluster before those envs assert
+   `<slug>-env-secrets`.
 
 ## Non-Goals
 
@@ -297,6 +325,6 @@ block, likely `node-wizard-secret-setting`, after review:
 > directory contains one ExternalSecret extracting `<env>/<slug>` into that
 > target. Agent-generated, derived, shared, Grafana, CI, Compose, and
 > dual-plane values remain owned by the catalog/provision/reconcile secrets
-> substrate. Candidate flight may assert the consumed Secret and ExternalSecret,
-> but it must not seed or repair them. The wizard must never write secret values
-> to git or save them as wizard state.
+> substrate. App flight may assert the consumed Secret and ExternalSecret, but
+> it must not seed or repair them. The wizard must never write secret values to
+> git or save them as wizard state.
