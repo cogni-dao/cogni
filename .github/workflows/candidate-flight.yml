@@ -538,32 +538,85 @@ jobs:
     runs-on: ubuntu-latest
     environment: candidate-a
     steps:
+      # Workflow source at the root owns local composite actions + shared CI
+      # helpers, so telemetry remains available even when the PR-head app source
+      # predates .github/actions/loki-push.
+      - name: Checkout workflow source
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
       # PR head, not the workflow default branch: a PR that ADDS a node carries
       # the new catalog entry + the reconcile script here, so DNS covers it.
       - name: Checkout app source (PR catalog + scripts)
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:
           ref: ${{ needs.decide.outputs.head_sha }}
+          path: app-src
 
       - name: Reconcile node DNS (per-node A records → VM IP)
+        working-directory: app-src
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
           FORK_DOMAIN_ROOT: ${{ vars.FORK_DOMAIN_ROOT || 'cognidao.org' }}
           DOMAIN: ${{ vars.DOMAIN }}
+          DNS_RECONCILE_SUMMARY_FILE: ${{ runner.temp }}/dns-reconcile-summary.json
+          DNS_RECONCILE_CANDIDATE_SHA: ${{ needs.decide.outputs.node_source_sha || needs.decide.outputs.head_sha }}
+          DNS_RECONCILE_HEAD_SHA: ${{ needs.decide.outputs.head_sha }}
+          DNS_RECONCILE_NODE_SOURCE_SHA: ${{ needs.decide.outputs.node_source_sha }}
+          DNS_RECONCILE_PR_NUMBER: ${{ inputs.pr_number }}
+          DNS_RECONCILE_NODE_SLUG: ${{ needs.decide.outputs.node_slug }}
+          DNS_RECONCILE_STATUS_URL: ${{ needs.decide.outputs.status_url }}
         run: |
           set -euo pipefail
+          write_skip_summary() {
+            local reason="$1"
+            local candidate_sha8="${DNS_RECONCILE_CANDIDATE_SHA:0:8}"
+            jq -nc \
+              --arg status "skipped" \
+              --arg reason "$reason" \
+              --arg deploy_env "candidate-a" \
+              --arg domain "${DOMAIN:-}" \
+              --arg workflow "${GITHUB_WORKFLOW:-}" \
+              --arg job "${GITHUB_JOB:-}" \
+              --arg run_id "${GITHUB_RUN_ID:-}" \
+              --arg attempt "${GITHUB_RUN_ATTEMPT:-}" \
+              --arg ref "${GITHUB_REF_NAME:-}" \
+              --arg workflow_sha "${GITHUB_SHA:-}" \
+              --arg candidate_sha "${DNS_RECONCILE_CANDIDATE_SHA:-}" \
+              --arg candidate_sha8 "$candidate_sha8" \
+              --arg head_sha "${DNS_RECONCILE_HEAD_SHA:-}" \
+              --arg node_source_sha "${DNS_RECONCILE_NODE_SOURCE_SHA:-}" \
+              --arg pr_number "${DNS_RECONCILE_PR_NUMBER:-}" \
+              --arg node_slug "${DNS_RECONCILE_NODE_SLUG:-}" \
+              --arg status_url "${DNS_RECONCILE_STATUS_URL:-}" \
+              --arg emitted_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+              '{schema_version: 1, type: "dns_reconcile_summary", status: $status, skip_reason: $reason, deploy_env: $deploy_env, domain: $domain, workflow: $workflow, job: $job, run_id: $run_id, attempt: $attempt, ref: $ref, workflow_sha: $workflow_sha, candidate_sha: $candidate_sha, candidate_sha8: $candidate_sha8, head_sha: $head_sha, node_source_sha: $node_source_sha, pr_number: $pr_number, node_slug: $node_slug, status_url: $status_url, record_count: 0, states: {}, records: [], emitted_at: $emitted_at}' \
+              > "$DNS_RECONCILE_SUMMARY_FILE"
+          }
           # Flights run on a main-merge ref; a pre-#1445 head lacks this script.
           # Skip rather than 127 so older PRs still flight (their nodes already resolve).
           if [ ! -f scripts/ci/reconcile-node-dns.sh ]; then
             echo "::warning::scripts/ci/reconcile-node-dns.sh absent at this ref — skipping node DNS reconcile"
+            write_skip_summary "script_absent"
             exit 0
           fi
           if [ -z "${CLOUDFLARE_API_TOKEN:-}" ] || [ -z "${CLOUDFLARE_ZONE_ID:-}" ]; then
             echo "::warning::Cloudflare secrets unset on candidate-a — skipping node DNS reconcile (newly-created nodes won't resolve)"
+            write_skip_summary "cloudflare_secrets_missing"
             exit 0
           fi
           bash scripts/ci/reconcile-node-dns.sh candidate-a
+
+      - name: Push DNS reconcile telemetry to Loki
+        if: always()
+        uses: ./.github/actions/loki-push
+        with:
+          loki_url: ${{ secrets.GRAFANA_CLOUD_LOKI_URL }}
+          loki_user: ${{ secrets.GRAFANA_CLOUD_LOKI_USER }}
+          loki_token: ${{ secrets.GRAFANA_CLOUD_LOKI_API_KEY }}
+          log_file: ${{ runner.temp }}/dns-reconcile-summary.json
+          job_name: reconcile-dns
+          labels: workflow=candidate-flight kind=dns_reconcile slot=candidate-a
 
   # Node BIRTH only (mochi gap): a flight that ADDS a catalog node must
   # provision that node's Compose infra — edge route + DB + secret — in the SAME
