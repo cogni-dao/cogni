@@ -161,8 +161,9 @@ describe("buildNodeLaunchPack", () => {
     expect(pack.prompt).toContain("Checkpoint with the human");
     expect(pack.prompt).toContain("brief status, progress, and next-steps");
     expect(pack.prompt).toContain(
-      "https://cognidao.org/knowledge/browser-session-flight-auth"
+      "https://github.com/Cogni-DAO/cogni/blob/main/docs/guides/browser-session-flight-auth.md"
     );
+    expect(pack.prompt).toContain("approve this AI developer");
     expect(pack.prompt).toContain("operator API");
     expect(pack.prompt).toContain("child image tag exists");
     expect(pack.prompt).toContain("parent pin agrees");
