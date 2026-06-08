@@ -8,7 +8,7 @@ summary: Step-by-step guide for forming a new Cogni DAO node via the web wizard.
 read_when: Setting up a new DAO node, running the formation wizard, or testing formation locally.
 owner: derekg1729
 created: 2026-02-07
-verified:
+verified: 2026-06-08
 tags: [web3, setup, dao]
 ---
 
@@ -111,7 +111,7 @@ What the Publish PR contains:
 **Your job after Publish:**
 
 1. **Review + merge** the operator PR (CI green). Note: the node's source-code PRs happen in the child repo; the parent birth PR is operator control-plane work: gitlink/pin acceptance plus catalog/overlays/AppSets/Caddy/scheduler wiring.
-2. **Flight**: `POST /api/v1/vcs/flight { nodeRef: { nodeId, sourceSha } }` → the operator resolves `image_repository:sha-<sourceSha>` to a digest and deploys it at `https://<slug>-test.cognidao.org`. The parent PR number is review metadata for the operator pin PR, not the deploy coordinate.
+2. **Flight**: `POST /api/v1/vcs/flight { nodeRef: { nodeId, sourceSha } }` → the operator resolves `image_repository:sha-<sourceSha>` to a digest and deploys it at `https://<slug>-test.cognidao.org`. The parent PR number is review metadata for the operator pin PR, not the deploy coordinate. For creator/admin approval of an AI developer before flight, follow [Browser-Session Flight Auth](./browser-session-flight-auth.md).
 3. **Validate**: run [`/validate-candidate`](../../.claude/skills/validate-candidate/SKILL.md) against the deployed build.
 
 Per-node DNS, DB, and secrets reconcile **inside the flight/promote lane** (idempotent, catalog-driven — `DNS_IS_RECONCILED_PER_ENV`, Axiom 21), not via a full env reprovision. For the row-by-row deploy contract (nodePort allocation, overlay/AppSet proof, DB schema layer, the candidate-a-only trap) see [Create a New Node (Deploy)](./create-node.md).
@@ -152,6 +152,7 @@ Today only **production** is typically activated. Consequence (`bug.5087`): in `
 
 - [Node Formation Spec](../spec/node-formation.md) — formation + Publish + payment-activation design
 - [Create a New Node (Deploy)](./create-node.md) — the deploy-row contract Step 8 hands off to
+- [Browser-Session Flight Auth](./browser-session-flight-auth.md) — creator/admin approval before bearer-token nodeRef flights
 - [Fork Quickstart](../runbooks/fork-quickstart.md) — the standalone-fork alternative (`Cogni-DAO/standalone-node`)
 - [cicd-secrets-expert skill](../../.claude/skills/cicd-secrets-expert/SKILL.md) — why secrets are stripped from the Publish PR (ESO-inherited)
 - [Node Formation Project](../../work/projects/proj.node-formation-ui.md)

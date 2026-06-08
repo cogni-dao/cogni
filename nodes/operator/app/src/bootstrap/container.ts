@@ -23,6 +23,10 @@ import type {
 } from "@cogni/ai-tools";
 import { CORE_TOOL_BUNDLE, VCS_TOOL_BUNDLE } from "@cogni/ai-tools";
 import type { AttributionStore } from "@cogni/attribution-ledger";
+import {
+  type AuthorizationPort,
+  OpenFgaAuthorizationAdapter,
+} from "@cogni/authorization-core";
 import { DrizzleAttributionAdapter } from "@cogni/db-client";
 import type { FinancialLedgerPort } from "@cogni/financial-ledger";
 import { createTigerBeetleAdapter } from "@cogni/financial-ledger/adapters";
@@ -271,6 +275,8 @@ export interface Container {
   providerFunding: ProviderFundingPort | undefined;
   /** Connection broker — undefined when CONNECTIONS_ENCRYPTION_KEY not set */
   connectionBroker: ConnectionBrokerPort | undefined;
+  /** Authorization port — undefined until OpenFGA env is configured */
+  authorization: AuthorizationPort | undefined;
   /** Model catalog — aggregates all providers for model listing */
   modelCatalog: ModelCatalogPort;
   /** Provider resolver — resolves providerKey to ModelProviderPort for runtime dispatch */
@@ -833,6 +839,20 @@ function createContainer(): Container {
     });
   })();
 
+  const authorization: AuthorizationPort | undefined =
+    env.OPENFGA_API_URL && env.OPENFGA_STORE_ID
+      ? new OpenFgaAuthorizationAdapter({
+          apiUrl: env.OPENFGA_API_URL,
+          storeId: env.OPENFGA_STORE_ID,
+          ...(env.OPENFGA_API_TOKEN !== undefined
+            ? { apiToken: env.OPENFGA_API_TOKEN }
+            : {}),
+          ...(env.OPENFGA_AUTHORIZATION_MODEL_ID !== undefined
+            ? { authorizationModelId: env.OPENFGA_AUTHORIZATION_MODEL_ID }
+            : {}),
+        })
+      : undefined;
+
   // Redis client for run event streaming (ephemeral stream plane)
   // Per REDIS_IS_STREAM_PLANE: only transient data, no durable state
   const redisClient = new Redis(env.REDIS_URL, {
@@ -909,6 +929,7 @@ function createContainer(): Container {
       : undefined,
     providerFunding,
     connectionBroker,
+    authorization,
     // Multi-provider model ports
     ...(() => {
       const platformProvider = new PlatformModelProvider(llmService);

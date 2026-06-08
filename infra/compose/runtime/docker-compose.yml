@@ -107,6 +107,11 @@ services:
       - TEMPORAL_TASK_QUEUE=scheduler-tasks
       # Redis (stream plane — ephemeral only)
       - REDIS_URL=redis://redis:6379
+      # OpenFGA (authorization) — URL can be present before store/model ids are seeded.
+      - OPENFGA_API_URL=http://openfga:8080
+      - OPENFGA_STORE_ID
+      - OPENFGA_AUTHORIZATION_MODEL_ID
+      - OPENFGA_API_TOKEN
     volumes:
       - repo_data:/repo:ro
     depends_on:
@@ -264,12 +269,55 @@ services:
       APP_DB_READONLY_USER: ${APP_DB_READONLY_USER:-app_readonly}
       APP_DB_READONLY_PASSWORD: ${APP_DB_READONLY_PASSWORD:-}
       LITELLM_DB_NAME: litellm
+      OPENFGA_DB_NAME: openfga
     volumes:
       - ./postgres-init/provision.sh:/app/provision.sh:ro
     entrypoint: ["/bin/bash", "/app/provision.sh"]
     depends_on:
       postgres:
         condition: service_healthy
+
+  # =============================================================================
+  # OpenFGA — shared authorization runtime
+  # OpenFGA owns its relational schema through the upstream migrate command.
+  # =============================================================================
+
+  openfga-migrate:
+    image: ${OPENFGA_IMAGE:-openfga/openfga:v1.17.1@sha256:ff96f68d2f03a029e051027415c106295c782084daeef0934479f04a3fdc2d57}
+    restart: "no"
+    networks:
+      - internal
+    command: migrate
+    environment:
+      - OPENFGA_DATASTORE_ENGINE=postgres
+      - OPENFGA_DATASTORE_URI=postgres://${POSTGRES_ROOT_USER}:${POSTGRES_ROOT_PASSWORD}@postgres:5432/openfga?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  openfga:
+    image: ${OPENFGA_IMAGE:-openfga/openfga:v1.17.1@sha256:ff96f68d2f03a029e051027415c106295c782084daeef0934479f04a3fdc2d57}
+    restart: unless-stopped
+    labels:
+      - "autoheal=true"
+    networks:
+      - internal
+    # Expose to all interfaces for k3s pods (ExternalName → VM DNS:8080).
+    # Public-NIC traffic is dropped by infra/provision/cherry/harden-docker-public-ports.sh.
+    ports:
+      - "8080:8080"
+    command: run
+    environment:
+      - OPENFGA_DATASTORE_ENGINE=postgres
+      - OPENFGA_DATASTORE_URI=postgres://${POSTGRES_ROOT_USER}:${POSTGRES_ROOT_PASSWORD}@postgres:5432/openfga?sslmode=disable
+      - OPENFGA_LOG_FORMAT=json
+      - OPENFGA_METRICS_ADDR=0.0.0.0:2112
+      - OPENFGA_PLAYGROUND_ENABLED=false
+      - OPENFGA_AUTHN_METHOD=${OPENFGA_AUTHN_METHOD:-none}
+      - OPENFGA_AUTHN_PRESHARED_KEYS=${OPENFGA_API_TOKEN:-}
+    depends_on:
+      openfga-migrate:
+        condition: service_completed_successfully
 
   db-backup:
     image: postgres:15
@@ -466,6 +514,7 @@ services:
       - METRICS_TOKEN=${METRICS_TOKEN:-}
       - PROMETHEUS_REMOTE_WRITE_URL=${PROMETHEUS_REMOTE_WRITE_URL:-}
       - PROMETHEUS_USERNAME=${PROMETHEUS_USERNAME:-}
+      - COGNI_DEFAULT_NODE_ID=${COGNI_DEFAULT_NODE_ID:-}
       - PROMETHEUS_PASSWORD=${PROMETHEUS_PASSWORD:-}
 
   alloy-k8s-events:

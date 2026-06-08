@@ -10,7 +10,7 @@ read_when: Working on credit statements, activity ingestion, epoch enrichers, ep
 implements: proj.transparent-credit-payouts
 owner: derekg1729
 created: 2026-02-20
-verified: 2026-03-05
+verified: 2026-06-08
 tags: [governance, transparency, payments, attribution]
 ---
 
@@ -807,6 +807,24 @@ Enable transparent, verifiable credit distribution where contribution activity i
 ### Actor Migration Path (Planned)
 
 Finalized statements now preserve claimant identity explicitly (`claimant_key`, `claimant`) and treat `epoch_allocations.user_id` as the resolved-human override surface, not the only economic subject. `actor_id` is still the migration target: when the `actors` table ships ([proj.operator-plane](../../work/projects/proj.operator-plane.md) v1), claimant keys can resolve to actor-backed subjects without changing the deterministic statement model. For human actors (`kind=user`), `actor_id` bridges 1:1 to `user_id` via the actors table. For agent actors, `actor_id` enables new attribution paths (gateway usage → agent → rewards). Every economic event remains scoped by `(node_id, scope_id)` — `actor_id` is locally unique per node, not a global identity. No invariant changes — PAYOUT_DETERMINISTIC and ALL_MATH_BIGINT apply regardless of subject key. See [identity-model.md](./identity-model.md).
+
+### AI Agent Developer Actors (V0 Addendum)
+
+External AI agents can request developer flight control for a specific node
+before they are payout actors. The approval fact lives in RBAC, not in the
+attribution ledger:
+
+- Registration mints a `user_id` and bearer token for the AI agent.
+- The node creator/admin approves or rejects the agent for one `node:{node_id}`
+  through `POST /api/v1/nodes/{node_id}/developers`.
+- Approval writes the OpenFGA `developer` tuple. `can_flight` is computed by the authorization model.
+- `POST /api/v1/vcs/flight` checks `node.flight` before dispatching candidate-a.
+
+No attribution statement changes when an agent receives flight permission. If
+the agent later produces contribution activity, that activity enters the ledger
+like any other claimant: unresolved first, then resolved to a human `user_id` or
+future `actor_id` when bindings exist. Flight authority is operational control;
+credit attribution remains governed by `(node_id, scope_id)` epoch rules.
 
 ## Non-Goals
 

@@ -107,6 +107,25 @@ describe("assembleAssistantMessage", () => {
     });
   });
 
+  it("ignores tool_call_result without a matching start", () => {
+    const events: AiEvent[] = [
+      {
+        type: "tool_call_result",
+        toolCallId: "tc-orphan",
+        result: { error: "Tool execution is not authorized" },
+        isError: true,
+      },
+      { type: "assistant_final", content: "I cannot use that tool." },
+      { type: "done" },
+    ];
+
+    const msg = assembleAssistantMessage(RUN_ID, events);
+
+    expect(msg?.parts).toEqual([
+      { type: "text", text: "I cannot use that tool." },
+    ]);
+  });
+
   it("ignores usage_report and status events", () => {
     const events: AiEvent[] = [
       { type: "status", phase: "thinking" },

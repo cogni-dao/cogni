@@ -48,6 +48,28 @@ export class EnvValidationError extends Error {
   }
 }
 
+function assertOpenFgaEnv(env: z.infer<typeof serverSchema>): void {
+  const authzActivationEnv =
+    env.OPENFGA_STORE_ID !== undefined ||
+    env.OPENFGA_AUTHORIZATION_MODEL_ID !== undefined ||
+    env.OPENFGA_API_TOKEN !== undefined;
+
+  if (!authzActivationEnv) return;
+
+  const missing = [
+    env.OPENFGA_API_URL === undefined ? "OPENFGA_API_URL" : undefined,
+    env.OPENFGA_STORE_ID === undefined ? "OPENFGA_STORE_ID" : undefined,
+  ].filter((key): key is string => key !== undefined);
+
+  if (missing.length > 0) {
+    throw new EnvValidationError({
+      code: "INVALID_ENV",
+      missing,
+      invalid: [],
+    });
+  }
+}
+
 // Server schema with all environment variables
 export const serverSchema = z.object({
   NODE_ENV: z
@@ -265,6 +287,12 @@ export const serverSchema = z.object({
   // Optional — BYO-AI features disabled when not set.
   CONNECTIONS_ENCRYPTION_KEY: optionalString,
 
+  // OpenFGA authorization — optional until the RBAC store is deployed.
+  OPENFGA_API_URL: optionalUrl,
+  OPENFGA_STORE_ID: optionalString,
+  OPENFGA_AUTHORIZATION_MODEL_ID: optionalString,
+  OPENFGA_API_TOKEN: optionalString,
+
   // PostHog product analytics — required
   // See docs/guides/posthog-setup.md for setup
   // PostHog Cloud free tier: 1M events/month at https://us.i.posthog.com
@@ -296,6 +324,7 @@ export function serverEnv(): ServerEnv {
       // Cross-field invariants (beyond Zod schema)
       // Per DATABASE_RLS_SPEC.md design decision 7: enforce role separation at boot
       assertEnvInvariants(parsed);
+      assertOpenFgaEnv(parsed);
 
       // Per DATABASE_RLS_SPEC.md §SSL_REQUIRED_NON_LOCAL: reject non-localhost
       // PostgreSQL URLs without sslmode= to prevent credential sniffing.

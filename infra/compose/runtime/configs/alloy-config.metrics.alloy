@@ -19,7 +19,7 @@ discovery.relabel "docker_logs" {
 
   rule {
     source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
-    regex         = "(app|litellm|caddy|scheduler-worker|temporal|db-backup|openclaw-gateway|llm-proxy-openclaw|autoheal|alloy-k8s-events|pdc-agent)"
+    regex         = "(app|litellm|caddy|scheduler-worker|temporal|db-backup|openfga|openfga-migrate|openclaw-gateway|llm-proxy-openclaw|autoheal|alloy-k8s-events|pdc-agent)"
     action        = "keep"
   }
 
@@ -270,6 +270,50 @@ prometheus.relabel "worker_metrics" {
   rule {
     target_label = "service"
     replacement  = "scheduler-worker"
+  }
+}
+
+// =============================================================================
+// Prometheus Metrics: OpenFGA Scraping
+// =============================================================================
+// OpenFGA exposes Prometheus metrics on :2112/metrics. Keep only OpenFGA series
+// plus `up` and add low-cardinality service/env/node labels before remote write.
+
+prometheus.scrape "openfga_metrics" {
+  targets         = [{"__address__" = "openfga:2112"}]
+  forward_to      = [prometheus.relabel.openfga_metrics.receiver]
+  scrape_interval = "15s"
+  scrape_timeout  = "10s"
+  metrics_path    = "/metrics"
+}
+
+prometheus.relabel "openfga_metrics" {
+  forward_to = [prometheus.remote_write.grafana_cloud.receiver]
+
+  rule {
+    source_labels = ["__name__"]
+    regex         = "(openfga_.*|up)"
+    action        = "keep"
+  }
+
+  rule {
+    target_label = "env"
+    replacement  = sys.env("DEPLOY_ENVIRONMENT")
+  }
+
+  rule {
+    target_label = "service"
+    replacement  = "openfga"
+  }
+
+  rule {
+    target_label = "node_id"
+    replacement  = sys.env("COGNI_DEFAULT_NODE_ID")
+  }
+
+  rule {
+    regex  = "(instance|job|id|image|name|path|route|url|user|object|store_id|authorization_model_id|container_label_.*)"
+    action = "labeldrop"
   }
 }
 

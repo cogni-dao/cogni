@@ -1,0 +1,304 @@
+{
+  "schema_version": "1.1",
+  "type_definitions": [
+    {
+      "type": "user",
+      "relations": {
+        "delegates": {
+          "this": {}
+        }
+      },
+      "metadata": {
+        "relations": {
+          "delegates": {
+            "directly_related_user_types": [
+              {
+                "type": "agent"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "type": "agent"
+    },
+    {
+      "type": "service"
+    },
+    {
+      "type": "tenant",
+      "relations": {
+        "admin": {
+          "this": {}
+        },
+        "member": {
+          "union": {
+            "child": [
+              {
+                "this": {}
+              },
+              {
+                "computedUserset": {
+                  "relation": "admin"
+                }
+              }
+            ]
+          }
+        }
+      },
+      "metadata": {
+        "relations": {
+          "admin": {
+            "directly_related_user_types": [
+              {
+                "type": "user"
+              },
+              {
+                "type": "service"
+              }
+            ]
+          },
+          "member": {
+            "directly_related_user_types": [
+              {
+                "type": "user"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "type": "node",
+      "relations": {
+        "admin": {
+          "this": {}
+        },
+        "developer": {
+          "union": {
+            "child": [
+              {
+                "this": {}
+              },
+              {
+                "computedUserset": {
+                  "relation": "admin"
+                }
+              }
+            ]
+          }
+        },
+        "can_flight": {
+          "computedUserset": {
+            "relation": "developer"
+          }
+        }
+      },
+      "metadata": {
+        "relations": {
+          "admin": {
+            "directly_related_user_types": [
+              {
+                "type": "user"
+              }
+            ]
+          },
+          "developer": {
+            "directly_related_user_types": [
+              {
+                "type": "user"
+              },
+              {
+                "type": "agent"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "type": "graph",
+      "relations": {
+        "owner": {
+          "this": {}
+        },
+        "tenant": {
+          "this": {}
+        },
+        "can_invoke": {
+          "union": {
+            "child": [
+              {
+                "this": {}
+              },
+              {
+                "computedUserset": {
+                  "relation": "owner"
+                }
+              },
+              {
+                "tupleToUserset": {
+                  "tupleset": {
+                    "relation": "tenant"
+                  },
+                  "computedUserset": {
+                    "relation": "member"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "metadata": {
+        "relations": {
+          "owner": {
+            "directly_related_user_types": [
+              {
+                "type": "user"
+              }
+            ]
+          },
+          "tenant": {
+            "directly_related_user_types": [
+              {
+                "type": "tenant"
+              }
+            ]
+          },
+          "can_invoke": {
+            "directly_related_user_types": [
+              {
+                "type": "user"
+              },
+              {
+                "type": "agent"
+              },
+              {
+                "type": "service"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "type": "tool",
+      "relations": {
+        "graph": {
+          "this": {}
+        },
+        "can_execute": {
+          "union": {
+            "child": [
+              {
+                "this": {}
+              },
+              {
+                "tupleToUserset": {
+                  "tupleset": {
+                    "relation": "graph"
+                  },
+                  "computedUserset": {
+                    "relation": "can_invoke"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "metadata": {
+        "relations": {
+          "graph": {
+            "directly_related_user_types": [
+              {
+                "type": "graph"
+              }
+            ]
+          },
+          "can_execute": {
+            "directly_related_user_types": [
+              {
+                "type": "user"
+              },
+              {
+                "type": "agent"
+              },
+              {
+                "type": "service"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "type": "connection",
+      "relations": {
+        "owner": {
+          "this": {}
+        },
+        "tenant": {
+          "this": {}
+        },
+        "can_use": {
+          "union": {
+            "child": [
+              {
+                "this": {}
+              },
+              {
+                "computedUserset": {
+                  "relation": "owner"
+                }
+              },
+              {
+                "tupleToUserset": {
+                  "tupleset": {
+                    "relation": "tenant"
+                  },
+                  "computedUserset": {
+                    "relation": "member"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "metadata": {
+        "relations": {
+          "owner": {
+            "directly_related_user_types": [
+              {
+                "type": "user"
+              }
+            ]
+          },
+          "tenant": {
+            "directly_related_user_types": [
+              {
+                "type": "tenant"
+              }
+            ]
+          },
+          "can_use": {
+            "directly_related_user_types": [
+              {
+                "type": "user"
+              },
+              {
+                "type": "agent"
+              },
+              {
+                "type": "service"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

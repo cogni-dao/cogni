@@ -7,6 +7,7 @@ namespace: cogni-preview
 
 resources:
   - ../../../base/node-app
+  - ../../../base/openfga-external
   - ../../../secrets/external-secrets/preview/operator
 
 namePrefix: operator-
@@ -56,6 +57,9 @@ patches:
       - op: add
         path: /data/NODE_SUBMODULE_PARENT_REPO
         value: "cogni-monorepo"
+      - op: add
+        path: /data/OPENFGA_API_URL
+        value: "http://operator-openfga-external:8080"
   # NodePort assignment (operator = 30000) + instance label on selector.
   # Instance label prevents cross-node service routing: namePrefix only renames
   # resource names, not labels/selectors, so without this every Service
@@ -148,6 +152,16 @@ patches:
       kind: Service
       metadata:
         name: litellm-external
+      spec:
+        type: ExternalName
+        externalName: cogni-preview.vm.cognidao.org
+        clusterIP: null
+  - target: { kind: Service, name: openfga-external }
+    patch: |
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: openfga-external
       spec:
         type: ExternalName
         externalName: cogni-preview.vm.cognidao.org

@@ -209,8 +209,11 @@
     {
       "includes": [
         "packages/ai-core/tsup.config.ts",
+        "packages/ai-core/vitest.config.ts",
         "packages/ai-tools/tsup.config.ts",
         "packages/ai-tools/vitest.config.ts",
+        "packages/authorization-core/tsup.config.ts",
+        "packages/authorization-core/vitest.config.ts",
         "packages/aragon-osx/tsup.config.ts",
         "packages/cogni-contracts/tsup.config.ts",
         "packages/langgraph-graphs/tsup.config.ts",

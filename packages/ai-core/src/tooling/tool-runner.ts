@@ -10,14 +10,21 @@
  *   - TOOLCALL_ID_STABLE: Same toolCallId across start→result
  *   - TOOLRUNNER_ALLOWLIST_HARD_FAIL: Missing allowlist or redaction failure → error event
  *   - TOOLRUNNER_RESULT_SHAPE: Returns {ok:true, value} | {ok:false, errorCode, safeMessage}
- *   - TOOLRUNNER_PIPELINE_ORDER: tool lookup → policy check → validate args → execute → validate result → redact → emit → return
+ *   - TOOLRUNNER_PIPELINE_ORDER: tool lookup → policy check → optional authz check → validate args → emit start → execute → validate result → redact → emit result → return
  *   - DENY_BY_DEFAULT: Default to DenyAllPolicy if no policy provided
+ *   - AUTHZ_FAILS_CLOSED_BEFORE_EXEC: when authz is configured, missing identity, deny, or unavailable returns authz_* without executing the tool
  *   - SPAN_PORT_HANDLES_SCRUBBING: ai-core passes raw data to spanPort; adapter handles scrubbing/truncation
  * Side-effects: none (AiEvent emission via injected callback is caller's responsibility)
  * Links: @cogni/ai-tools, AI_SETUP_SPEC.md, TOOL_USE_SPEC.md
  * @public
  */
 
+import type {
+  AuthorizationPort,
+  AuthzDecision,
+  AuthzDecisionCode,
+} from "@cogni/authorization-core";
+import { authzToolResource } from "@cogni/authorization-core";
 import type {
   ToolCallResultEvent,
   ToolCallStartEvent,
@@ -67,6 +74,21 @@ export interface ToolRunnerConfig {
    * Default: { runId: 'unknown' }
    */
   readonly ctx?: ToolPolicyContext;
+
+  /** Optional shared authorization port. When provided, tool execution fails closed before validation/execution. */
+  readonly authz?: AuthorizationPort;
+
+  /** Actor performing tool execution. Required when authz is provided. */
+  readonly actorId?: string;
+
+  /** Tenant boundary for authz and audit. Required when authz is provided. */
+  readonly tenantId?: string;
+
+  /** Server-bound subject for on-behalf-of execution. */
+  readonly subjectId?: string;
+
+  /** Graph context for authz and audit. */
+  readonly graphId?: string;
 
   /**
    * Optional span port for tool instrumentation.
@@ -123,6 +145,11 @@ export function createToolRunner(
   const traceId = config?.traceId;
   const spanInput = config?.spanInput;
   const spanOutput = config?.spanOutput;
+  const authz = config?.authz;
+  const actorId = config?.actorId;
+  const tenantId = config?.tenantId;
+  const subjectId = config?.subjectId;
+  const graphId = config?.graphId;
 
   /**
    * Execute a tool by name with given arguments.
@@ -223,6 +250,59 @@ export function createToolRunner(
       };
     }
 
+    if (authz) {
+      if (!actorId || !tenantId) {
+        const result = authzFailureEvent(
+          toolCallId,
+          toolName,
+          "authz_unavailable",
+          "Tool authorization context is incomplete"
+        );
+        emit(result.event);
+        endSpan(
+          { errorCode: "authz_unavailable", reason: "missing_identity" },
+          "ERROR",
+          {
+            effect: boundTool.effect,
+            authzDecision: "unavailable",
+          }
+        );
+        return result.result;
+      }
+
+      const authzDecision = await authz.check({
+        actorId,
+        ...(subjectId !== undefined ? { subjectId } : {}),
+        action: "tool.execute",
+        resource: authzToolResource(toolName),
+        context: {
+          tenantId,
+          runId: ctx.runId,
+          toolCallId,
+          ...(graphId !== undefined ? { graphId } : {}),
+        },
+      });
+
+      if (authzDecision.decision === "deny") {
+        const result = authzFailureEvent(
+          toolCallId,
+          toolName,
+          authzDecision.code,
+          authzSafeMessage(authzDecision)
+        );
+        emit(result.event);
+        endSpan(
+          { errorCode: authzDecision.code, reason: authzDecision.reason },
+          authzDecision.code === "authz_unavailable" ? "ERROR" : "WARNING",
+          {
+            effect: boundTool.effect,
+            authzDecision: authzDecision.code,
+          }
+        );
+        return result.result;
+      }
+    }
+
     // 2. Validate args via boundTool.validateInput()
     // Per TOOL_SOURCE_RETURNS_BOUND_TOOL: BoundToolRuntime owns validation logic
     let validatedInput: unknown;
@@ -260,6 +340,10 @@ export function createToolRunner(
     const invocationCtx = {
       runId: ctx.runId,
       toolCallId,
+      actorId: actorId ?? "service:legacy_toolrunner",
+      tenantId: tenantId ?? "tenant:legacy_toolrunner",
+      ...(subjectId !== undefined ? { subjectId } : {}),
+      ...(graphId !== undefined ? { graphId } : {}),
       // connectionId will be added in P1 when connection auth is implemented
     };
     // Per FIX_LAYERING_CAPABILITY_TYPES: capabilities is opaque to ai-core
@@ -383,3 +467,35 @@ export function createToolRunner(
  * Type for the tool runner instance.
  */
 export type ToolRunner = ReturnType<typeof createToolRunner>;
+
+function authzFailureEvent(
+  toolCallId: string,
+  toolName: string,
+  errorCode: Extract<AuthzDecisionCode, "authz_denied" | "authz_unavailable">,
+  safeMessage: string
+): {
+  readonly event: ToolCallResultEvent;
+  readonly result: ToolResult<Record<string, unknown>>;
+} {
+  return {
+    event: {
+      type: "tool_call_result",
+      toolCallId,
+      result: { error: safeMessage },
+      isError: true,
+    },
+    result: {
+      ok: false,
+      errorCode,
+      safeMessage: `Tool '${toolName}' is not authorized`,
+    },
+  };
+}
+
+function authzSafeMessage(
+  decision: Extract<AuthzDecision, { readonly decision: "deny" }>
+): string {
+  return decision.code === "authz_unavailable"
+    ? "Authorization service is unavailable"
+    : "Tool execution is not authorized";
+}

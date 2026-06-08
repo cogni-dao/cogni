@@ -14,5 +14,6 @@
     "rootDir": "src"
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["node_modules", "dist", "__arch_probes__"]
+  "exclude": ["node_modules", "dist", "__arch_probes__"],
+  "references": [{ "path": "../authorization-core" }]
 }

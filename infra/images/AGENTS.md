@@ -15,6 +15,7 @@ or deployed to GHCR for k8s consumption.
 ## Pointers
 
 - [litellm/](litellm/): LiteLLM proxy with custom CogniNodeRouter billing callback
+- [openfga/](openfga/): OpenFGA runtime image with `curl` for Compose healthchecks
 - [sandbox-proxy/](sandbox-proxy/): nginx gateway config templates for OpenClaw LLM proxy
 
 ## Boundaries
@@ -29,8 +30,8 @@ or deployed to GHCR for k8s consumption.
 
 ## Public Surface
 
-- **Exports:** Docker images (litellm), nginx config templates (sandbox-proxy)
-- **CLI:** `docker build -f infra/images/litellm/Dockerfile infra/images/litellm/`
+- **Exports:** Docker images (litellm, openfga), nginx config templates (sandbox-proxy)
+- **CLI:** `docker build -f infra/images/litellm/Dockerfile infra/images/litellm/`; `docker build -f infra/images/openfga/Dockerfile infra/images/openfga/`
 
 ## Responsibilities
 
@@ -44,5 +45,6 @@ or deployed to GHCR for k8s consumption.
 ## Notes
 
 - `litellm/` was moved from `infra/litellm/` during the CD pipeline restructure
+- `openfga/` wraps the upstream OpenFGA image with `curl` for runtime health probes
 - `sandbox-proxy/` was moved from `infra/compose/sandbox-proxy/`
 - Docker Compose references these via `build.context: ../../images/litellm`

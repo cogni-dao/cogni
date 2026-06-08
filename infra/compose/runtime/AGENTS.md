@@ -9,7 +9,7 @@
 
 ## Purpose
 
-Production runtime configuration directory copied to VM hosts for container orchestration and database initialization. Contains app + postgres + litellm + alloy + temporal + git-sync services, OpenClaw gateway services under the `sandbox-openclaw` profile, and Playwright MCP server under the `mcp-playwright` profile (dev-only). Edge (Caddy) is in separate `../edge/` project.
+Production runtime configuration directory copied to VM hosts for container orchestration and database initialization. Contains app + postgres + litellm + openfga + alloy + temporal + git-sync services, OpenClaw gateway services under the `sandbox-openclaw` profile, and Playwright MCP server under the `mcp-playwright` profile (dev-only). Edge (Caddy) is in separate `../edge/` project.
 
 ## Pointers
 
@@ -36,12 +36,12 @@ Production runtime configuration directory copied to VM hosts for container orch
 
 - **Exports:** none
 - **CLI (if any):** docker-compose commands
-- **Env/Config keys:** `APP_IMAGE`, `MIGRATOR_IMAGE`, `APP_ENV`, `DEPLOY_ENVIRONMENT`, `COGNI_REPO_URL` (git-sync), `COGNI_REPO_REF` (git-sync, pinned SHA), `GIT_READ_USERNAME` (git-sync), `GIT_READ_TOKEN` (git-sync, Contents:Read PAT), `COGNI_REPO_PATH` (app, `/repo/current`), `COGNI_REPO_SHA` (app), `POSTGRES_ROOT_USER`, `POSTGRES_ROOT_PASSWORD`, `APP_DB_USER`, `APP_DB_PASSWORD`, `APP_DB_SERVICE_USER`, `APP_DB_SERVICE_PASSWORD`, `APP_DB_READONLY_USER`, `APP_DB_READONLY_PASSWORD`, `APP_DB_NAME`, `DATABASE_URL` (explicit DSN, app_user), `DATABASE_SERVICE_URL` (explicit DSN, app_service), `DB_BACKUP_INTERVAL_SECONDS`, `DB_BACKUP_RETENTION_DAYS`, `DB_BACKUP_OBSERVABILITY_GRACE_SECONDS`, `DOLTGRES_PASSWORD` / `DOLTGRES_READER_PASSWORD` / `DOLTGRES_WRITER_PASSWORD` (provisioning; derived deterministically from `POSTGRES_ROOT_PASSWORD` in deploy-infra.sh), `APP_BASE_URL`, `NEXTAUTH_URL`, `AUTH_SECRET`, `LITELLM_MASTER_KEY`, `OPENROUTER_API_KEY`, `LITELLM_DATABASE_URL`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`, `LANGFUSE_TRACING_ENVIRONMENT` (derived from DEPLOY_ENVIRONMENT), `GRAFANA_CLOUD_LOKI_URL`, `GRAFANA_CLOUD_LOKI_USER`, `GRAFANA_CLOUD_LOKI_API_KEY`, `GRAFANA_PDC_SIGNING_TOKEN`, `GRAFANA_PDC_HOSTED_GRAFANA_ID`, `GRAFANA_PDC_CLUSTER`, `GRAFANA_PDC_NETWORK_ID`, `GRAFANA_PDC_NETWORK_UUID`, `METRICS_TOKEN` (app+alloy), `BILLING_INGEST_TOKEN` (app+litellm, callback auth), `INTERNAL_OPS_TOKEN` (app internal ops auth), `COGNI_NODE_ENDPOINTS` (litellm, per-node callback routing), `PROMETHEUS_REMOTE_WRITE_URL` (alloy), `PROMETHEUS_USERNAME` (alloy), `PROMETHEUS_PASSWORD` (alloy), `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, `TEMPORAL_TASK_QUEUE`, `TEMPORAL_DB_USER`, `TEMPORAL_DB_PASSWORD`, `TEMPORAL_DB_HOST`, `TEMPORAL_DB_PORT`
+- **Env/Config keys:** `APP_IMAGE`, `MIGRATOR_IMAGE`, `APP_ENV`, `DEPLOY_ENVIRONMENT`, `COGNI_REPO_URL` (git-sync), `COGNI_REPO_REF` (git-sync, pinned SHA), `GIT_READ_USERNAME` (git-sync), `GIT_READ_TOKEN` (git-sync, Contents:Read PAT), `COGNI_REPO_PATH` (app, `/repo/current`), `COGNI_REPO_SHA` (app), `POSTGRES_ROOT_USER`, `POSTGRES_ROOT_PASSWORD`, `APP_DB_USER`, `APP_DB_PASSWORD`, `APP_DB_SERVICE_USER`, `APP_DB_SERVICE_PASSWORD`, `APP_DB_READONLY_USER`, `APP_DB_READONLY_PASSWORD`, `APP_DB_NAME`, `DATABASE_URL` (explicit DSN, app_user), `DATABASE_SERVICE_URL` (explicit DSN, app_service), `DB_BACKUP_INTERVAL_SECONDS`, `DB_BACKUP_RETENTION_DAYS`, `DB_BACKUP_OBSERVABILITY_GRACE_SECONDS`, `DOLTGRES_PASSWORD` / `DOLTGRES_READER_PASSWORD` / `DOLTGRES_WRITER_PASSWORD` (provisioning; derived deterministically from `POSTGRES_ROOT_PASSWORD` in deploy-infra.sh), `APP_BASE_URL`, `NEXTAUTH_URL`, `AUTH_SECRET`, `LITELLM_MASTER_KEY`, `OPENROUTER_API_KEY`, `LITELLM_DATABASE_URL`, `OPENFGA_API_URL`, `OPENFGA_STORE_ID`, `OPENFGA_AUTHORIZATION_MODEL_ID`, `OPENFGA_API_TOKEN`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`, `LANGFUSE_TRACING_ENVIRONMENT` (derived from DEPLOY_ENVIRONMENT), `GRAFANA_CLOUD_LOKI_URL`, `GRAFANA_CLOUD_LOKI_USER`, `GRAFANA_CLOUD_LOKI_API_KEY`, `GRAFANA_PDC_SIGNING_TOKEN`, `GRAFANA_PDC_HOSTED_GRAFANA_ID`, `GRAFANA_PDC_CLUSTER`, `GRAFANA_PDC_NETWORK_ID`, `GRAFANA_PDC_NETWORK_UUID`, `METRICS_TOKEN` (app+alloy), `BILLING_INGEST_TOKEN` (app+litellm, callback auth), `INTERNAL_OPS_TOKEN` (app internal ops auth), `COGNI_NODE_ENDPOINTS` (litellm, per-node callback routing), `COGNI_DEFAULT_NODE_ID` (repo-spec-derived default node label for shared runtime metrics), `PROMETHEUS_REMOTE_WRITE_URL` (alloy), `PROMETHEUS_USERNAME` (alloy), `PROMETHEUS_PASSWORD` (alloy), `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, `TEMPORAL_TASK_QUEUE`, `TEMPORAL_DB_USER`, `TEMPORAL_DB_PASSWORD`, `TEMPORAL_DB_HOST`, `TEMPORAL_DB_PORT`
 - **Files considered API:** `docker-compose.yml`, `db-backup/*.sh`, `postgres-init/*.sh`, `configs/alloy-config.alloy`, `sandbox-proxy/nginx-gateway.conf.template`, `openclaw/openclaw-gateway.json`
 
 ## Responsibilities
 
-- This directory **does**: Provide production runtime configuration copied to VM hosts for deployment (app, postgres, litellm, alloy, temporal). Includes LiteLLM networking + database wiring in dev stack.
+- This directory **does**: Provide production runtime configuration copied to VM hosts for deployment (app, postgres, litellm, openfga, alloy, temporal). Includes LiteLLM/OpenFGA networking + database wiring in dev stack.
 - This directory **does not**: Handle TLS termination (see `../edge/`), build-time configuration, or development-only settings
 
 ## Usage
@@ -109,7 +109,7 @@ docker compose --project-name cogni-runtime logs -f app
 - Caddy runs in separate edge project (see `../edge/`)
 - Alloy writes to Grafana Cloud Loki
 - Environment variables: `DEPLOY_ENVIRONMENT`, `LOKI_WRITE_URL`, `LOKI_USERNAME`, `LOKI_PASSWORD`
-- Metrics: App exposes `/api/metrics` (auth via `METRICS_TOKEN`); Alloy scrapes app + cAdvisor + node exporter and ships to Mimir (via `PROMETHEUS_*`)
+- Metrics: App exposes `/api/metrics` (auth via `METRICS_TOKEN`); Alloy scrapes app + scheduler-worker + OpenFGA + cAdvisor + node exporter and ships to Mimir (via `PROMETHEUS_*`)
 - Verify in Alloy UI (http://127.0.0.1:12345) and Grafana Cloud
 
 **OpenClaw Gateway Services (profile: sandbox-openclaw):**
@@ -136,6 +136,13 @@ docker compose --project-name cogni-runtime logs -f app
 - `temporal-ui`: Web UI for debugging schedules (localhost:8233)
 - Namespace auto-created via `DEFAULT_NAMESPACE=cogni-{APP_ENV}`
 - Port forwarding: host port 7233 (gRPC) — public-NIC traffic dropped by `DOCKER-USER` (see `infra/provision/cherry/harden-docker-public-ports.sh`); k3s pods reach via node IP. UI on 127.0.0.1:8233.
+
+**OpenFGA:**
+
+- `openfga`: shared authorization runtime on HTTP port 8080, backed by the shared Postgres `openfga` database. Image pinned to `openfga/openfga:v1.17.1@sha256:ff96f68d2f03a029e051027415c106295c782084daeef0934479f04a3fdc2d57`.
+- `openfga-migrate`: one-shot upstream schema migration; runs before the server starts.
+- Operator pods reach it through `OPENFGA_API_URL=http://operator-openfga-external:8080`. `OPENFGA_STORE_ID` is runtime config from store bootstrap; `OPENFGA_API_TOKEN` is pod-consumed secret material and belongs in OpenBao/ESO, not checked-in Secret YAML.
+- Host port 8080 is published for k3s pod access; public-NIC traffic is dropped by `infra/provision/cherry/harden-docker-public-ports.sh`. Logs are collected by Alloy, and Prometheus metrics are scraped from `openfga:2112` in preview/production metrics config.
 
 **Playwright MCP (profile: mcp-playwright, dev-only):**
 
