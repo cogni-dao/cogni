@@ -25,6 +25,7 @@ import {
   createToolRunner,
 } from "@cogni/ai-core";
 import type { CatalogBoundTool } from "@cogni/ai-tools";
+import type { AuthorizationPort } from "@cogni/authorization-core";
 import {
   type CompletionFn,
   type CreateGraphFn,
@@ -105,7 +106,8 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
     private readonly toolSource: ToolSourcePort,
     private readonly getMcpToolSource: () => Promise<ToolSourcePort | null> = () =>
       Promise.resolve(null),
-    nodeBundle: readonly CatalogBoundTool[] = []
+    nodeBundle: readonly CatalogBoundTool[] = [],
+    private readonly authorization?: AuthorizationPort
   ) {
     this.log = makeLogger({ component: "LangGraphInProcProvider" });
     this.boundToolMap = new Map(nodeBundle.map((bt) => [bt.contract.name, bt]));
@@ -229,9 +231,22 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
       const createToolExecFn = (emit: (e: AiEvent) => void): ToolExecFn => {
         const policy = createToolAllowlistPolicy(allToolIds);
         const source = createStaticToolSourceFromRecord(runtimeTools);
+        const actorId =
+          scope.actorUserId !== undefined
+            ? `user:${scope.actorUserId}`
+            : undefined;
+        const tenantId = scope.billing.billingAccountId;
         const toolRunner = createToolRunner(source, emit, {
           policy,
           ctx: { runId },
+          ...(this.authorization !== undefined
+            ? {
+                authz: this.authorization,
+                ...(actorId !== undefined ? { actorId } : {}),
+                tenantId,
+                graphId,
+              }
+            : {}),
         });
 
         return async (name, args, toolCallId) => {
@@ -275,7 +290,15 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
         }),
         ...(traceId !== undefined && { traceId }),
         ...(requestId !== undefined && { ingressRequestId: requestId }),
-        configurable: { model, toolIds },
+        configurable: {
+          model,
+          toolIds,
+          ...(scope.actorUserId !== undefined
+            ? { actorId: `user:${scope.actorUserId}` }
+            : {}),
+          tenantId: scope.billing.billingAccountId,
+          graphId,
+        },
       };
 
       return createInProcGraphRunner({

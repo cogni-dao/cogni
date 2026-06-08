@@ -460,6 +460,8 @@ log_info "LiteLLM callback routing (catalog-driven): ${LITELLM_NODE_ENDPOINTS}"
 # CI (no manual docker build / hand-pin). Resolve the same tag CI pushed.
 LITELLM_IMAGE="$(infra_image_tag litellm)"
 log_info "LiteLLM image (catalog content-hash): ${LITELLM_IMAGE}"
+OPENFGA_IMAGE="$(infra_image_tag openfga)"
+log_info "OpenFGA image (catalog content-hash): ${OPENFGA_IMAGE}"
 # Default node for unattributed spend — primary-host node_id from repo-spec
 # (REPO_SPEC_IS_IDENTITY_SSOT). The LiteLLM callback carries no hardcoded UUID.
 COGNI_DEFAULT_NODE_ID="$(default_node_id)"
@@ -693,6 +695,18 @@ LITELLM_IMAGE=${LITELLM_IMAGE:?LITELLM_IMAGE required (resolved on the runner fr
 
 # Runtime env (full config — compose validates all vars even for services we don't start)
 RUNTIME_ENV=/opt/cogni-template-runtime/.env
+previous_runtime_env_value() {
+  local key="$1"
+  [[ -f "$RUNTIME_ENV" ]] || return 0
+  awk -v key="$key" '
+    index($0, key "=") == 1 { value = substr($0, length(key) + 2) }
+    END { print value }
+  ' "$RUNTIME_ENV"
+}
+
+PREVIOUS_OPENFGA_AUTHORIZATION_MODEL_ID="$(previous_runtime_env_value OPENFGA_AUTHORIZATION_MODEL_ID)"
+PREVIOUS_OPENFGA_AUTHORIZATION_MODEL_HASH="$(previous_runtime_env_value OPENFGA_AUTHORIZATION_MODEL_HASH)"
+
 cat > "$RUNTIME_ENV" << ENV_EOF
 # Required vars
 DOMAIN=${DOMAIN}
@@ -729,6 +743,8 @@ MIGRATOR_IMAGE=${MIGRATOR_IMAGE:-unused-by-infra-deploy}
 SCHEDULER_WORKER_IMAGE=${SCHEDULER_WORKER_IMAGE:-unused-by-infra-deploy}
 # LiteLLM image — set above from GHCR content-hash tag.
 LITELLM_IMAGE=${LITELLM_IMAGE}
+# OpenFGA image — set above from GHCR content-hash tag.
+OPENFGA_IMAGE=${OPENFGA_IMAGE}
 ENV_EOF
 
 # Verify .env was written
@@ -790,6 +806,11 @@ append_env_if_set "$RUNTIME_ENV" POLY_WALLET_AEAD_KEY_ID "${POLY_WALLET_AEAD_KEY
 append_env_if_set "$RUNTIME_ENV" POLY_CLOB_GEO_BLOCK_TOKEN "${POLY_CLOB_GEO_BLOCK_TOKEN-}"
 # BYO-AI: Connection encryption
 append_env_if_set "$RUNTIME_ENV" CONNECTIONS_ENCRYPTION_KEY "${CONNECTIONS_ENCRYPTION_KEY-}"
+# OpenFGA authn is disabled by default for the VM-internal service. When
+# enabled, seed OPENFGA_API_TOKEN through the environment/OpenBao path; never
+# commit it in manifests.
+append_env_if_set "$RUNTIME_ENV" OPENFGA_AUTHN_METHOD "${OPENFGA_AUTHN_METHOD-}"
+append_env_if_set "$RUNTIME_ENV" OPENFGA_API_TOKEN "${OPENFGA_API_TOKEN-}"
 # Grafana observability (for OpenClaw grafana-health skill)
 derive_pdc_defaults_from_token
 append_env_if_set "$RUNTIME_ENV" GRAFANA_URL "${GRAFANA_URL-}"
@@ -939,6 +960,12 @@ if [[ "$LITELLM_IMAGE" == ghcr.io/* ]]; then
 else
   log_info "LiteLLM image is local ($LITELLM_IMAGE) — skipping pull"
 fi
+if [[ "$OPENFGA_IMAGE" == ghcr.io/* ]]; then
+  log_info "Pulling OpenFGA image: $OPENFGA_IMAGE"
+  docker pull "$OPENFGA_IMAGE"
+else
+  log_info "OpenFGA image is local ($OPENFGA_IMAGE) — skipping pull"
+fi
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Step 4: Assert profile services exist (guard against silent compose drift)
@@ -970,6 +997,7 @@ fi
 log_info "[$(date -u +%H:%M:%S)] Running DB provisioning..."
 emit_deployment_event "infra_deployment.db_provision_started" "in_progress" "Provisioning database users and schemas"
 $RUNTIME_COMPOSE --profile bootstrap run --rm db-provision
+$RUNTIME_COMPOSE --profile bootstrap run --rm openfga-migrate
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Step 6a: Bring up Doltgres + provision DBs + roles
@@ -1007,7 +1035,7 @@ emit_deployment_event "infra_deployment.stack_up_started" "in_progress" "Startin
 $RUNTIME_COMPOSE stop autoheal 2>/dev/null || true
 
 # Infra services only — excludes app, scheduler-worker, db-migrate, and one-shot backup jobs
-INFRA_SERVICES="postgres litellm redis alloy temporal-postgres temporal temporal-ui autoheal repo-init git-sync"
+INFRA_SERVICES="postgres litellm openfga redis alloy temporal-postgres temporal temporal-ui autoheal repo-init git-sync"
 # Doltgres is optional — only include if it's in the compose file for this env.
 if $RUNTIME_COMPOSE config --services 2>/dev/null | grep -q '^doltgres$'; then
   INFRA_SERVICES="$INFRA_SERVICES doltgres"
@@ -1073,6 +1101,107 @@ fi
 
 log_info "[$(date -u +%H:%M:%S)] Infra stack up complete"
 emit_deployment_event "infra_deployment.stack_up_complete" "success" "Infrastructure services started"
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Step 6.6a: Bootstrap OpenFGA store/model and publish operator runtime IDs
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+log_info "[$(date -u +%H:%M:%S)] Bootstrapping OpenFGA RBAC store/model..."
+if ! command -v jq >/dev/null 2>&1; then
+  if command -v apt-get >/dev/null 2>&1; then
+    log_info "jq not found on VM; installing jq for OpenFGA bootstrap..."
+    DEBIAN_FRONTEND=noninteractive apt-get update >/dev/null
+    DEBIAN_FRONTEND=noninteractive apt-get install -y jq >/dev/null
+  else
+    log_fatal "jq is required for OpenFGA bootstrap and apt-get is unavailable"
+  fi
+fi
+OPENFGA_BOOTSTRAP_ENV=$(OPENFGA_API_URL=http://127.0.0.1:8080 \
+  OPENFGA_STORE_NAME="cogni-${DEPLOY_ENVIRONMENT}-rbac" \
+  OPENFGA_MODEL_FILE=/tmp/rbac-model.json \
+  OPENFGA_API_TOKEN="${OPENFGA_API_TOKEN:-}" \
+  OPENFGA_AUTHORIZATION_MODEL_ID="$PREVIOUS_OPENFGA_AUTHORIZATION_MODEL_ID" \
+  OPENFGA_AUTHORIZATION_MODEL_HASH="$PREVIOUS_OPENFGA_AUTHORIZATION_MODEL_HASH" \
+  bash /tmp/bootstrap-openfga.sh)
+eval "$OPENFGA_BOOTSTRAP_ENV"
+printf '%s\n' "$OPENFGA_BOOTSTRAP_ENV" >> "$RUNTIME_ENV"
+log_info "OpenFGA RBAC config resolved: store=${OPENFGA_STORE_ID} model=${OPENFGA_AUTHORIZATION_MODEL_ID}"
+
+patch_operator_openfga_config() {
+  if ! command -v kubectl >/dev/null 2>&1; then
+    log_warn "kubectl not found — cannot patch OpenBao operator OpenFGA config"
+    return 1
+  fi
+  if ! timeout 10 kubectl get sa openbao-operator -n default >/dev/null 2>&1; then
+    log_warn "openbao-operator SA absent — cannot patch OpenBao operator OpenFGA config"
+    return 1
+  fi
+
+  local jwt tok op
+  jwt=$(timeout 10 kubectl create token openbao-operator -n default 2>/dev/null) || {
+    log_warn "could not mint openbao-operator token"
+    return 1
+  }
+  tok=$(timeout 10 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
+    bao write -field=token auth/kubernetes/login \
+    "role=${DEPLOY_ENVIRONMENT}-writer" "jwt=${jwt}" 2>/dev/null) || {
+    log_warn "OpenBao writer login failed for ${DEPLOY_ENVIRONMENT}-writer"
+    return 1
+  }
+
+  op="patch"
+  if ! timeout 10 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="${tok}" \
+      bao kv metadata get "cogni/${DEPLOY_ENVIRONMENT}/operator" >/dev/null 2>&1; then
+    op="put"
+  fi
+
+  timeout 20 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="${tok}" \
+    bao kv "$op" "cogni/${DEPLOY_ENVIRONMENT}/operator" \
+      "OPENFGA_STORE_ID=${OPENFGA_STORE_ID}" \
+      "OPENFGA_AUTHORIZATION_MODEL_ID=${OPENFGA_AUTHORIZATION_MODEL_ID}" \
+      "OPENFGA_AUTHORIZATION_MODEL_HASH=${OPENFGA_AUTHORIZATION_MODEL_HASH}" >/dev/null || return 1
+}
+
+refresh_operator_openfga_secret() {
+  local k8s_ns="cogni-${DEPLOY_ENVIRONMENT}" es_name="" candidate synced_store_id synced_model_id
+  for candidate in operator-env-secrets env-secrets; do
+    if kubectl -n "$k8s_ns" get externalsecret "$candidate" >/dev/null 2>&1; then
+      es_name="$candidate"
+      break
+    fi
+  done
+  if [[ -z "$es_name" ]]; then
+    log_error "No operator ExternalSecret found in ${k8s_ns}; cannot deliver OpenFGA runtime IDs"
+    return 1
+  fi
+
+  kubectl -n "$k8s_ns" annotate externalsecret "$es_name" \
+    force-sync="$(date +%s)" --overwrite >/dev/null 2>&1 || return 1
+  log_info "Requested ESO refresh for ${es_name}"
+  kubectl -n "$k8s_ns" wait --for=condition=Ready "externalsecret/${es_name}" --timeout=120s >/dev/null 2>&1 || return 1
+
+  for _ in $(seq 1 30); do
+    synced_store_id=$(kubectl -n "$k8s_ns" get secret operator-env-secrets \
+      -o jsonpath='{.data.OPENFGA_STORE_ID}' 2>/dev/null | base64 -d 2>/dev/null || true)
+    synced_model_id=$(kubectl -n "$k8s_ns" get secret operator-env-secrets \
+      -o jsonpath='{.data.OPENFGA_AUTHORIZATION_MODEL_ID}' 2>/dev/null | base64 -d 2>/dev/null || true)
+    if [[ "$synced_store_id" == "$OPENFGA_STORE_ID" && "$synced_model_id" == "$OPENFGA_AUTHORIZATION_MODEL_ID" ]]; then
+      log_info "operator-env-secrets contains current OpenFGA runtime IDs"
+      return 0
+    fi
+    sleep 2
+  done
+
+  log_error "operator-env-secrets did not sync current OpenFGA runtime IDs"
+  return 1
+}
+
+if patch_operator_openfga_config; then
+  log_info "OpenBao operator path patched with OpenFGA runtime IDs"
+  refresh_operator_openfga_secret
+else
+  log_error "OpenFGA store/model exist, but operator OpenBao config was not patched"
+  exit 1
+fi
 
 ALLOY_CONFIG="/opt/cogni-template-runtime/configs/alloy-config.metrics.alloy"
 ALLOY_HASH_FILE="/var/lib/cogni/alloy-config.sha256"
@@ -1170,7 +1299,7 @@ else
 fi
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# Step 6.6a: Checksum-gated restart for LiteLLM config changes
+# Step 6.6b: Checksum-gated restart for LiteLLM config changes
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 HASH_DIR="/var/lib/cogni"
 LITELLM_CONFIG="/opt/cogni-template-runtime/configs/litellm.config.yaml"
@@ -1195,7 +1324,7 @@ else
   fi
 fi
 
-# Steps 6.6b–6.6c (OpenClaw config hash + readiness gate) removed — sandbox-openclaw disabled.
+# Steps 6.6c–6.6d (OpenClaw config hash + readiness gate) removed — sandbox-openclaw disabled.
 # Step 6.6d (alloy checksum-restart) lives near the litellm block above; main
 # already added it at 88e67cdd4 (bug.5169) so this branch's earlier copy is dropped.
 
@@ -1455,30 +1584,134 @@ SECEOF
   kubectl -n "${K8S_NS}" rollout restart ${NODE_APP_DEPLOYMENTS} 2>/dev/null || true
   log_info "[$(date -u +%H:%M:%S)] Node-app pods restarting (scheduler-worker waits)..."
 
+  int_or_zero() {
+    case "${1:-}" in
+      ""|*[!0-9]*) printf '0\n' ;;
+      *) printf '%s\n' "$1" ;;
+    esac
+  }
+
+  deployment_updated_available() {
+    local deployment="$1"
+    local spec updated available observed generation
+    spec=$(int_or_zero "$(kubectl -n "${K8S_NS}" get "$deployment" -o jsonpath='{.spec.replicas}' 2>/dev/null || true)")
+    updated=$(int_or_zero "$(kubectl -n "${K8S_NS}" get "$deployment" -o jsonpath='{.status.updatedReplicas}' 2>/dev/null || true)")
+    available=$(int_or_zero "$(kubectl -n "${K8S_NS}" get "$deployment" -o jsonpath='{.status.availableReplicas}' 2>/dev/null || true)")
+    observed=$(int_or_zero "$(kubectl -n "${K8S_NS}" get "$deployment" -o jsonpath='{.status.observedGeneration}' 2>/dev/null || true)")
+    generation=$(int_or_zero "$(kubectl -n "${K8S_NS}" get "$deployment" -o jsonpath='{.metadata.generation}' 2>/dev/null || true)")
+    [[ "$spec" -eq 0 ]] && spec=1
+    [[ "$observed" -ge "$generation" && "$updated" -ge "$spec" && "$available" -ge "$spec" ]]
+  }
+
+  wait_rollout_or_updated_available() {
+    local deployment="$1" timeout="$2"
+    if kubectl -n "${K8S_NS}" rollout status "$deployment" --timeout="$timeout" 2>/dev/null; then
+      return 0
+    fi
+    if deployment_updated_available "$deployment"; then
+      log_warn "$deployment rollout status timed out, but updated replicas are available; continuing"
+      return 0
+    fi
+    return 1
+  }
+
+  operator_openfga_process_env_ready() {
+    local pod pods
+    for _ in $(seq 1 60); do
+      pods=$(kubectl -n "${K8S_NS}" get pods \
+        --field-selector=status.phase=Running \
+        -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null \
+        | grep '^operator-node-app-' || true)
+      while IFS= read -r pod; do
+        [[ -n "$pod" ]] || continue
+        if kubectl -n "${K8S_NS}" wait "pod/${pod}" --for=condition=Ready --timeout=5s >/dev/null 2>&1 \
+          && kubectl -n "${K8S_NS}" exec "$pod" -c app -- /bin/sh -c \
+            'test -n "${OPENFGA_API_URL:-}" && test -n "${OPENFGA_STORE_ID:-}" && test -n "${OPENFGA_AUTHORIZATION_MODEL_ID:-}"' 2>/dev/null; then
+          return 0
+        fi
+      done <<< "$pods"
+      sleep 2
+    done
+    return 1
+  }
+
+  operator_deployment_declares_openfga_config() {
+    local api_url secret_refs
+    api_url="$(kubectl -n "${K8S_NS}" get configmap operator-node-app-config \
+      -o jsonpath='{.data.OPENFGA_API_URL}' 2>/dev/null || true)"
+    secret_refs="$(kubectl -n "${K8S_NS}" get deployment operator-node-app \
+      -o jsonpath='{range .spec.template.spec.containers[*].envFrom[*]}{.secretRef.name}{"\n"}{end}' 2>/dev/null || true)"
+    [[ -n "$api_url" ]] && grep -qx 'operator-env-secrets' <<< "$secret_refs"
+  }
+
+  log_operator_openfga_env_diagnostics() {
+    local secret_refs pod pods
+    log_warn "operator OpenFGA process-env diagnostics follow (key presence only)"
+    kubectl -n "${K8S_NS}" get configmap operator-node-app-config \
+      -o jsonpath='operator-node-app-config.OPENFGA_API_URL={.data.OPENFGA_API_URL}{"\n"}' 2>/dev/null || true
+    secret_refs="$(kubectl -n "${K8S_NS}" get deployment operator-node-app \
+      -o jsonpath='{range .spec.template.spec.containers[*].envFrom[*]}{.secretRef.name}{"\n"}{end}' 2>/dev/null || true)"
+    printf 'operator-node-app container secretRefs:\n%s\n' "${secret_refs:-<none>}"
+    kubectl -n "${K8S_NS}" get pods -o wide | grep '^operator-node-app-' || true
+    pods=$(kubectl -n "${K8S_NS}" get pods \
+      --field-selector=status.phase=Running \
+      -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null \
+      | grep '^operator-node-app-' || true)
+    while IFS= read -r pod; do
+      [[ -n "$pod" ]] || continue
+      printf 'operator pod %s env key presence:\n' "$pod"
+      kubectl -n "${K8S_NS}" exec "$pod" -c app -- /bin/sh -c '
+        for key in OPENFGA_API_URL OPENFGA_STORE_ID OPENFGA_AUTHORIZATION_MODEL_ID; do
+          eval "value=\${$key:-}"
+          if [ -n "$value" ]; then
+            printf "%s=present\n" "$key"
+          else
+            printf "%s=missing\n" "$key"
+          fi
+        done
+      ' 2>/dev/null || true
+    done <<< "$pods"
+  }
+
   # ── Wait for node-app rollouts first ───────────────────────────────────────
   ROLLOUT_PIDS=""
   for node in ${NODE_APP_TARGETS}; do
-    kubectl -n "${K8S_NS}" rollout status "deployment/${node}-node-app" --timeout=300s 2>/dev/null &
+    wait_rollout_or_updated_available "deployment/${node}-node-app" 300s &
     ROLLOUT_PIDS="$ROLLOUT_PIDS $!"
   done
-  ROLLOUT_FAILED=0
+  NODE_APP_ROLLOUT_FAILED=0
   for pid in $ROLLOUT_PIDS; do
     if ! wait "$pid"; then
-      ROLLOUT_FAILED=1
+      NODE_APP_ROLLOUT_FAILED=1
     fi
   done
-  if [ $ROLLOUT_FAILED -ne 0 ]; then
+  if [ $NODE_APP_ROLLOUT_FAILED -ne 0 ]; then
     log_warn "One or more node-app rollouts did not complete within 300s"
   fi
   log_info "[$(date -u +%H:%M:%S)] Node-apps ready — rolling scheduler-worker"
 
   # ── Roll scheduler-worker only after node-apps are ready ───────────────────
+  ROLLOUT_FAILED=0
   kubectl -n "${K8S_NS}" rollout restart deployment/scheduler-worker 2>/dev/null || true
-  if ! kubectl -n "${K8S_NS}" rollout status deployment/scheduler-worker --timeout=300s 2>/dev/null; then
+  if ! wait_rollout_or_updated_available deployment/scheduler-worker 300s; then
     log_warn "scheduler-worker rollout did not complete within 300s"
     ROLLOUT_FAILED=1
   fi
+  if [[ " ${NODE_APP_TARGETS} " == *" operator "* ]]; then
+    if ! operator_deployment_declares_openfga_config; then
+      log_warn "operator deployment does not yet declare OpenFGA config; skipping process-env proof until the app flight applies the OpenFGA-aware overlay"
+    elif operator_openfga_process_env_ready; then
+      log_info "operator pod process env contains OpenFGA URL, store ID, and model ID"
+    else
+      log_operator_openfga_env_diagnostics
+      log_error "operator pod process env is missing OpenFGA URL, store ID, or model ID"
+      ROLLOUT_FAILED=1
+    fi
+  fi
   log_info "[$(date -u +%H:%M:%S)] All rollouts complete"
+  if [ $ROLLOUT_FAILED -ne 0 ]; then
+    exit 1
+  fi
   emit_deployment_event "infra_deployment.rollouts_complete" "success" "All k8s deployments rolled out"
 else
   log_warn "kubectl not found — skipping k8s secret creation (k3s may not be installed)"
@@ -1645,9 +1878,12 @@ scp $SSH_OPTS "$ARTIFACT_DIR/deploy-infra-remote.sh" root@"$VM_HOST":/tmp/deploy
 # Upload healthcheck and bootstrap scripts (called from deploy-infra-remote.sh)
 scp $SSH_OPTS \
   "$REPO_ROOT/scripts/ci/ensure-temporal-namespace.sh" \
+  "$REPO_ROOT/scripts/ci/bootstrap-openfga.sh" \
   "$REPO_ROOT/infra/provision/cherry/harden-docker-public-ports.sh" \
   "$REPO_ROOT/scripts/secrets/sync-app-webhook-secret.sh" \
   root@"$VM_HOST":/tmp/
+
+scp $SSH_OPTS "$REPO_ROOT/infra/openfga/rbac-model.json" root@"$VM_HOST":/tmp/rbac-model.json
 
 # Verify SCP landed correctly
 REMOTE_CHECK=$(ssh $SSH_OPTS root@"$VM_HOST" "echo host=\$(hostname) date=\$(date -u +%Y-%m-%dT%H:%M:%SZ) && sha256sum /tmp/deploy-infra-remote.sh | awk '{print \$1}'" 2>&1) || {
@@ -1676,6 +1912,7 @@ log_info "deploy-infra-remote.sh verified on VM (sha256 match)"
 # still hard-fail HERE on the runner if unset.
 : "${COGNI_DEFAULT_NODE_ID:?COGNI_DEFAULT_NODE_ID required (resolved on runner from repo-spec primary-host)}"
 : "${LITELLM_IMAGE:?LITELLM_IMAGE required (resolved on runner from infra/catalog/litellm.yaml content-hash)}"
+: "${OPENFGA_IMAGE:?OPENFGA_IMAGE required (resolved on runner from infra/catalog/openfga.yaml content-hash)}"
 COMMIT_SHA="${GITHUB_SHA:-$(git rev-parse HEAD 2>/dev/null || echo unknown)}"
 DEPLOY_ACTOR="${GITHUB_ACTOR:-$(whoami)}"
 
@@ -1709,7 +1946,7 @@ REMOTE_ENV_VARS=(
   POLY_WALLET_AEAD_KEY_HEX POLY_WALLET_AEAD_KEY_ID POLY_CLOB_GEO_BLOCK_TOKEN
   CONNECTIONS_ENCRYPTION_KEY COGNI_NODE_DBS NODE_APP_TARGETS EDGE_ENV_LINES
   LITELLM_NODE_ENDPOINTS COGNI_DEFAULT_NODE_ID ACTIONS_AUTOMATION_BOT_PAT
-  LITELLM_IMAGE COMMIT_SHA DEPLOY_ACTOR K8S_SECRETS_ONLY
+  LITELLM_IMAGE OPENFGA_IMAGE COMMIT_SHA DEPLOY_ACTOR K8S_SECRETS_ONLY
 )
 REMOTE_ENV_FILE="$ARTIFACT_DIR/deploy-infra-env.sh"
 : > "$REMOTE_ENV_FILE"

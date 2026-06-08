@@ -9,7 +9,7 @@ summary: Multi-provider auth (SIWE wallet + GitHub/Discord/Google OAuth) on Next
 read_when: Working on login flow, wallet connection, OAuth providers, account linking, or session management.
 owner: derekg1729
 created: 2026-02-06
-verified: 2026-02-28
+verified: 2026-06-08
 tags: [auth]
 ---
 
@@ -18,6 +18,10 @@ tags: [auth]
 ## Context
 
 The platform supports multiple authentication methods: SIWE wallet login (via RainbowKit) and OAuth providers (GitHub, Discord, Google). All providers resolve to a canonical `user_id` (UUID) via the `user_bindings` table. Wallet-session coherence is enforced for SIWE users. OAuth-only users have `walletAddress: null` and cannot access wallet-gated operations (payments, ledger approval).
+
+Machine bearer tokens use the same canonical user identity. A valid
+`cogni_ag_sk_v1_*` token resolves to `SessionUser.id = user_id` and
+`walletAddress = null`; it does not create an agent principal by itself.
 
 ## Goal
 
@@ -49,6 +53,10 @@ Provide multi-provider authentication on NextAuth v4 with JWT strategy. SIWE wal
 7. **LINK_IS_FAIL_CLOSED**: If a link flow was initiated (link_intent cookie present) but cannot be verified (expired, consumed, invalid JWT, DB transaction missing), the signIn callback rejects with `/profile?error=link_failed`. Never falls through to new-user creation.
 
 8. **SINGLE_ROUTING_AUTHORITY**: Server (`src/proxy.ts` + RSC redirects) is the routing authority for access control. Client may initiate navigation after client-side auth completion (SIWE) to trigger server routing — see `AuthRedirect` on public pages.
+
+9. **REQUEST_IDENTITY_UNIFIED**: API routes that import `getSessionUser` from `@/app/_lib/auth/session` accept either a browser session cookie or a valid HMAC machine bearer token. A presented but invalid bearer token returns no identity and does not fall back to cookies.
+
+10. **RBAC_ACTOR_IS_USER_ID**: For direct user and user-bound machine execution, runtime RBAC uses `actorId = user:{user_id}`. Wallet addresses, OAuth provider IDs, and bearer token strings are bindings/credentials, not RBAC actors.
 
 ## Design
 
@@ -103,6 +111,24 @@ interface SessionUser {
 
 `displayName` and `avatarColor` are loaded from `user_profiles` into the JWT on initial sign-in and on explicit `session.update()` calls. They are not re-fetched on every request.
 
+### Machine Bearer Tokens
+
+Agent API keys are HMAC-signed bearer tokens with prefix `cogni_ag_sk_v1_`.
+`resolveRequestIdentity()` verifies the signature and expiry, then returns a
+`SessionUser` whose `id` is the token payload `sub`.
+
+Bearer-token behavior:
+
+- A valid token authenticates API routes that use the shared `getSessionUser` alias.
+- An invalid presented token returns `null`; the request does not fall back to a browser session.
+- The token subject is a `user_id`, so downstream RBAC receives `actorId = user:{user_id}`.
+- The token is not an OpenFGA delegation grant. `agent:{id}` and `subjectId` require server-issued execution grants.
+- For external AI agents, registration authenticates the agent but does not
+  authorize node operations. Node developer flight authority is granted by a
+  node creator/admin through `POST /api/v1/nodes/{node_id}/developers`, stored
+  in OpenFGA, and enforced by `POST /api/v1/vcs/flight` as `node.flight` on
+  `node:{node_id}`.
+
 ### Post-Auth Redirect
 
 The `redirect` callback in `src/auth.ts` routes authenticated users:
@@ -140,6 +166,7 @@ Providers register conditionally — only when both `CLIENT_ID` and `CLIENT_SECR
 | `src/proxy.ts`                                      | Server-side auth routing (single authority for redirects)                                       |
 | `src/app/api/auth/[...nextauth]/route.ts`           | Route handler: JWT decode → pending/failed intent via AsyncLocalStorage                         |
 | `src/app/api/auth/link/[provider]/route.ts`         | Link initiation: DB insert + signed JWT cookie + redirect                                       |
+| `src/app/_lib/auth/request-identity.ts`             | Unified browser-session / HMAC bearer-token request identity resolver                           |
 | `src/shared/auth/link-intent-store.ts`              | Discriminated union types + AsyncLocalStorage for link intent propagation                       |
 | `src/shared/auth/session.ts`                        | SessionUser type (id, walletAddress, displayName, avatarColor)                                  |
 | `packages/db-schema/src/identity.ts`                | `linkTransactions` table schema (alongside user_bindings, identity_events)                      |
@@ -168,13 +195,18 @@ Providers register conditionally — only when both `CLIENT_ID` and `CLIENT_SECR
 11. Unauthenticated user on `/chat` → redirected to `/` (proxy)
 12. Authenticated user on `/` → redirected to `/chat` (proxy)
 13. SignInDialog shows only configured providers (fetches `/api/auth/providers`)
+14. Valid `cogni_ag_sk_v1_*` bearer token on a `getSessionUser` route returns the token `sub` as `SessionUser.id`
+15. Invalid bearer token returns 401 on required-auth routes even if browser cookies are present
+16. Direct RBAC actor for browser and bearer-token requests is `user:{user_id}`, never wallet address or token material
+17. Registered AI agent bearer token cannot flight a node until the node creator/admin grants RBAC developer flight authority for that node
 
 ## Open Questions
 
-- [ ] When RBAC actor type migrates from `user:{walletAddress}` to `user:{userId}`, does it happen here or as an RBAC spec update?
+- [x] RBAC actor type for direct user execution uses `user:{user_id}`. This spec owns credential-to-`SessionUser.id` resolution; [RBAC](./rbac.md) owns authorization checks after identity is resolved.
 
 ## Related
 
+- [Browser Session Flight Auth](../guides/browser-session-flight-auth.md) — Creator-session approval and machine bearer-token nodeRef flight setup
 - [Decentralized User Identity](./decentralized-user-identity.md) — user_bindings schema, binding invariants
 - [Security Auth](./security-auth.md) — auth surface identity resolution
 - [DAO Enforcement](./dao-enforcement.md)

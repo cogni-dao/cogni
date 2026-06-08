@@ -34,7 +34,8 @@
 }
 ```
 
-**External deps:** `json-schema` (types only). Types and minimal runtime utilities (no I/O).
+**External deps:** `json-schema` (types only), `zod`.
+**Internal deps:** `@cogni/authorization-core` for the optional tool execution authorization port.
 
 ## Public Surface
 
@@ -52,7 +53,7 @@
   - `ToolSpec` - Canonical tool definition (JSONSchema7 inputSchema)
   - `ToolInvocationRecord` - Tool execution record (timing, result, error)
   - `ToolRedactionConfig` - Redaction config for tool output
-  - `createToolRunner` - Canonical tool execution pipeline (policy enforcement, validation, redaction)
+  - `createToolRunner` - Canonical tool execution pipeline (policy enforcement, optional AuthorizationPort check, validation, redaction)
   - `ToolPolicy`, `createToolAllowlistPolicy`, `DENY_ALL_POLICY` - Tool policy interface and helpers
   - `BoundToolRuntime` - Minimal runtime interface (no Zod dependency)
   - `ToolSourcePort` - Port interface for tool sources (static, MCP)
@@ -94,7 +95,7 @@ pnpm --filter @cogni/ai-core build
 
 ## Dependency Policy
 
-**Allowed:** `zod` (GraphRunConfig validation), `json-schema` (types)
+**Allowed:** `zod` (GraphRunConfig validation), `json-schema` (types), `@cogni/authorization-core` (authz port contract)
 
 **Forbidden:** `@langchain/*`, `langfuse`, `@cogni/ai-tools` (ai-core defines interfaces; ai-tools implements)
 
@@ -102,7 +103,7 @@ pnpm --filter @cogni/ai-core build
 
 ## Dependencies
 
-- **Internal:** none (standalone package)
+- **Internal:** `@cogni/authorization-core`
 - **External:** `zod` (runtime), `json-schema` (types)
 
 ## Change Protocol

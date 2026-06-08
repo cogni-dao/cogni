@@ -10,7 +10,7 @@ read_when: Adding tools, modifying tool execution pipeline, implementing wire ad
 implements: []
 owner: cogni-dev
 created: 2026-02-02
-verified: 2026-04-27
+verified: 2026-06-08
 tags:
   - ai-graphs
   - tooling
@@ -124,15 +124,21 @@ Define the tool execution invariants, semantic types, wire format adapters, poli
 
 ---
 
-### Future Invariants (P1+ — Not Yet Enforced)
+### Authorization Invariants
 
-The following invariants are planned for P1+ and documented here for architectural visibility. They are NOT currently enforced by tests or runtime code.
+The `tool.execute` RBAC check is active when an `AuthorizationPort` is supplied
+to `createToolRunner()`. Connection broker and graph-entry checks remain P1
+hardening.
 
-F1. **AUTHZ_CHECK_BEFORE_TOOL_EXEC** _(P1)_: `toolRunner.exec()` must call `AuthorizationPort.check(actor, subject?, 'tool.execute', tool:{toolId}, ctx)` BEFORE tool execution. When subject is present (agent acting on behalf of user), both permission AND delegation are verified. No bypass paths. See [rbac.md](./rbac.md).
+F1. **AUTHZ_CHECK_BEFORE_TOOL_EXEC**: `toolRunner.exec()` calls `AuthorizationPort.check(actor, subject?, 'tool.execute', tool:{toolId}, ctx)` after ToolPolicy and before validation/execution when authz is configured. Missing identity, deny, or unavailable returns `authz_*` without executing the tool. When subject is present (agent acting on behalf of user), both permission AND delegation are verified. See [rbac.md](./rbac.md).
 
-F2. **CONTEXT_HAS_IDENTITY** _(P1)_: Every `ToolInvocationContext` must include `{ actorId, tenantId }` and optionally `{ subjectId, graphId }`. No anonymous tool execution. `subjectId` is set ONLY by server (not from request params) per OBO_SUBJECT_MUST_BE_BOUND. These fields are references only — no secrets.
+F2. **CONTEXT_HAS_IDENTITY**: Authz-enabled tool execution requires `{ actorId, tenantId }` and optionally `{ subjectId, graphId }`. No anonymous tool execution when authz is configured. `subjectId` is set ONLY by server (not from request params) per OBO_SUBJECT_MUST_BE_BOUND. These fields are references only — no secrets.
 
-F3. **CAPABILITY_OWNS_SECRETS** _(P1)_: Capabilities are injectable interfaces. Secrets/env access only inside runtime composition roots, never in tool files or ai-tools package.
+F3. **CAPABILITY_OWNS_SECRETS**: Capabilities are injectable interfaces. Secrets/env access only inside runtime composition roots, never in tool files or ai-tools package.
+
+P1. **AUTHZ_CHECK_BEFORE_TOKEN_MINT**: `ConnectionBroker.resolveForTool()` checks `connection.use` before token materialization.
+
+P1. **AUTHZ_CHECK_BEFORE_GRAPH_INVOKE**: `GraphExecutorPort.runGraph()` checks `graph.invoke` before starting a model/tool loop.
 
 ## Design
 
@@ -339,8 +345,8 @@ toolRunner.exec(toolId, rawArgs, ctx)
     ├─ 2. policy.decide(ctx, toolId, boundTool.effect)           ← ToolPolicy (cheap, deny-fast)
     │      └─ deny/require_approval → { ok: false, errorCode: 'policy_denied' }
     │
-    ├─ 3. [P1] authz.check(actor, subject?, 'tool.execute', tool:{id}) ← OpenFGA (skipped in P0)
-    │      └─ deny → { ok: false, errorCode: 'authz_denied' }
+    ├─ 3. If authz configured: authz.check(actor, subject?, 'tool.execute', tool:{id}) ← OpenFGA
+    │      └─ deny/unavailable/missing identity → { ok: false, errorCode: 'authz_*' }
     │
     ├─ 4. If boundTool.requiresConnection:
     │      ├─ Validate ctx.connectionId exists (uuid-validated at boundary)
@@ -351,7 +357,7 @@ toolRunner.exec(toolId, rawArgs, ctx)
     │      └─ ZodError → { ok: false, errorCode: 'validation' }
     │
     ├─ 6. Resolve capabilities (auth via broker if needed)
-    │      └─ authz.check for connection.use happens inside broker
+    │      └─ P1: authz.check for connection.use happens inside broker
     │
     ├─ 7. emit('tool_call_start', { toolCallId, args: validatedArgs })
     │
@@ -374,7 +380,7 @@ toolRunner.exec(toolId, rawArgs, ctx)
 - `BoundToolRuntime` owns validation/redaction logic; implemented in `@cogni/ai-tools`
 - Secrets never touch context; resolved via `AuthCapability` at step 6
 - Grant intersection checked at step 4, BEFORE broker resolve (step 6)
-- P1: OpenFGA authz check at step 3 (currently skipped)
+- OpenFGA `tool.execute` authz runs at step 3 when `AuthorizationPort` is configured
 
 #### 3. assistant-stream Tool API
 

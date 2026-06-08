@@ -9,7 +9,7 @@ summary: "Single source of truth for all identity primitives in the Cogni system
 read_when: Working on identity, scoping, multi-project, ledger attribution, node-operator boundaries, or any code that references node_id, scope_id, user_id, or billing_account_id.
 owner: derekg1729
 created: 2026-02-22
-verified: 2026-02-22
+verified: 2026-06-07
 tags: [identity, architecture, governance]
 ---
 
@@ -130,6 +130,60 @@ actor_id (N) ──── (1) billing_account_id Multiple actors per tenant
 ```
 
 **Orthogonality:** `scope_id` and `billing_account_id` are independent dimensions. A user's billing account is for paying for AI service consumption. A scope's DAO is for paying contributors. These never intersect — contributing to a project does not require a billing account, and using the AI service does not require contributing to a project.
+
+## Runtime Authorization Principals
+
+Runtime RBAC uses string principal identifiers. These are not database primary
+keys, and `actorId` is not the same thing as the `actor_id` economic-subject
+column.
+
+| Runtime Field | Format                    | Source of Truth                                               | Purpose                                     |
+| ------------- | ------------------------- | ------------------------------------------------------------- | ------------------------------------------- |
+| `actorId`     | `user:{user_id}`          | Browser session or HMAC machine bearer token `sub`            | Direct human/user-bound machine execution   |
+| `actorId`     | `agent:{agent_id}`        | Server-issued execution grant                                 | Autonomous agent execution                  |
+| `actorId`     | `service:{service_name}`  | Internal service bootstrap                                    | Internal service execution                  |
+| `subjectId`   | `user:{user_id}`          | Server-issued delegation/grant/session context only           | On-behalf-of authority for delegated runs   |
+| `tenantId`    | `{billing_account_id}`    | Billing resolver / execution grant / API-originated run input | Authorization tenant boundary and audit key |
+| `graphId`     | `{provider}:{graph_name}` | Graph catalog / execution request                             | Graph-scoped authorization context          |
+
+Current operator chat and API-originated graph runs bind direct users as
+`actorId = user:{user_id}` and `tenantId = billing_account_id` before
+`toolRunner.exec()` can call `AuthorizationPort.check()`. Machine bearer tokens
+are user-bound keys; they resolve to the same `SessionUser.id` shape as browser
+sessions. They are not standalone `agent:{id}` principals until an execution
+grant issues that identity server-side.
+
+**Subject binding:** `subjectId` never comes from a request body, tool args, or
+`RunnableConfig.configurable`. It is attached only by trusted server launchers
+after validating a session or execution grant.
+
+## AI Agent Node Developer Identity
+
+V0 external AI agents enter through `POST /api/v1/agent/register`. Registration
+mints a canonical `user_id`, a billing account, and an HMAC bearer token. That
+credential authenticates the request; it does not by itself grant authority over
+any node.
+
+Node-scoped developer control is a separate OpenFGA relationship:
+
+| Step           | Actor                        | System Fact                                                                                 |
+| -------------- | ---------------------------- | ------------------------------------------------------------------------------------------- |
+| Register       | External AI agent            | `users.id = agent_user_id`; bearer token resolves to `SessionUser.id`                       |
+| Request        | `user:{agent_user_id}`       | Agent asks for developer flight control on one `node:{node_id}`                             |
+| Approve/reject | Node creator/admin           | `POST /api/v1/nodes/{node_id}/developers` writes or removes the OpenFGA tuple for that node |
+| Flight         | `user:{agent_user_id}` in V0 | `POST /api/v1/vcs/flight` checks `node.flight` on `node:{node_id}`                          |
+
+The node creator/admin is the human RLS owner for the node registry row in V0.
+That RLS ownership authorizes the approval act; it must not be confused with
+ongoing flight authority. After approval, the flight route uses RBAC, not
+`nodes.owner_user_id = caller`, so an external agent can flight exactly the node
+it was approved for.
+
+**VNext principal migration:** when the actors table and execution grants become
+the registration authority, approved AI agents should run as
+`actorId = agent:{actor_id}` with `subjectId = user:{approver_user_id}` only for
+explicit on-behalf-of delegation. Until then, registered agents are
+user-backed machine principals: `actorId = user:{agent_user_id}`.
 
 ## Scoping Rules
 

@@ -101,7 +101,7 @@ export function buildNodeLaunchPack(
     "2. Verify the node repo-spec contains `knowledge.remote` for the Cogni-owned DoltHub mirror; do not add a DOLTHUB_REMOTE_URL env override.",
     "3. Let the node repo CI build normally after that PR merges; use the child repo `main` SHA and `ghcr.io/<owner>/<repo>:sha-<sourceSha>` as the deploy identity.",
     "4. Right before flighting, ensure the parent deployment PR is merged and the parent pin agrees with the image-producing child main SHA.",
-    "5. Checkpoint with the human: give a brief status, progress, and next-steps summary; then guide them through the simplest production browser-session auth setup at https://cognidao.org/knowledge/browser-session-flight-auth so the operator API can flight this creator-owned node.",
+    "5. Checkpoint with the human: give a brief status, progress, and next-steps summary; then follow the Cogni knowledge block above for agent registration, human node-developer approval, bearer-token nodeRef flight, and cleanup/revoke steps.",
     "6. Request candidate-a flight through the operator API only after the child image tag exists and the parent pin agrees.",
     "7. Verify the deployed /version at the candidate URL.",
     "8. Run agent-first API validation against that candidate.",

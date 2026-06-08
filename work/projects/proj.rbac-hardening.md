@@ -10,7 +10,7 @@ summary: Implement OpenFGA-based authorization with actor/subject model, tool ga
 outcome: All protected actions gated by AuthorizationPort.check() with dual-check for delegated execution
 assignees: derekg1729
 created: 2026-02-07
-updated: 2026-02-07
+updated: 2026-06-08
 labels: [authorization, rbac]
 ---
 
@@ -30,17 +30,18 @@ Implement the OpenFGA-based authorization system designed in the RBAC spec: Auth
 
 | Deliverable                                                                                | Status      | Est | Work Item |
 | ------------------------------------------------------------------------------------------ | ----------- | --- | --------- |
-| `AuthorizationPort` interface with dual-check logic                                        | Not Started | 2   | —         |
-| `OpenFgaAuthorizationAdapter` with retry + timeout                                         | Not Started | 2   | —         |
-| `FakeAuthorizationAdapter` for tests                                                       | Not Started | 1   | —         |
-| Context identity fields (actorId, subjectId?, tenantId, graphId)                           | Not Started | 1   | —         |
-| Subject binding enforcement (server-side only)                                             | Not Started | 1   | —         |
-| Wire into `toolRunner.exec()` (check before execution)                                     | Not Started | 2   | —         |
+| `AuthorizationPort` interface with dual-check logic                                        | In Review   | 2   | task.5010 |
+| `OpenFgaAuthorizationAdapter` with timeout                                                 | In Review   | 2   | task.5010 |
+| `FakeAuthorizationAdapter` for tests                                                       | In Review   | 1   | task.5010 |
+| Context identity fields (actorId, subjectId?, tenantId, graphId)                           | In Review   | 1   | task.5010 |
+| Subject binding enforcement (server-side only)                                             | Partial     | 1   | task.5010 |
+| Wire into `toolRunner.exec()` (check before execution)                                     | In Review   | 2   | task.5010 |
 | Wire into `ConnectionBroker.resolveForTool()` (check before token)                         | Not Started | 2   | —         |
-| Pass actor + subject through entire call chain                                             | Not Started | 2   | —         |
-| Arch tests: authz-required-at-tool-exec, authz-required-at-broker, subject-binding-trusted | Not Started | 2   | —         |
-| Composition root wiring (container.ts)                                                     | Not Started | 1   | —         |
-| Observability + documentation chores                                                       | Not Started | 1   | —         |
+| Pass actor + subject through entire call chain                                             | Partial     | 2   | task.5010 |
+| Arch tests: authz-required-at-tool-exec, authz-required-at-broker, subject-binding-trusted | Partial     | 2   | task.5010 |
+| Composition root wiring (container.ts)                                                     | In Review   | 1   | task.5010 |
+| Observability + documentation chores                                                       | In Review   | 1   | task.5010 |
+| Direct `POST /api/v1/vcs/flight` node RBAC gate                                            | In Review   | 1   | task.5010 |
 
 **AuthorizationPort Interface:**
 
@@ -49,48 +50,48 @@ interface AuthorizationPort {
   check(params: AuthzCheckParams): Promise<AuthzDecision>;
 }
 interface AuthzCheckParams {
-  actor: string; // "user:{wallet}" | "agent:{id}" | "service:{name}"
-  subject?: string; // "user:{wallet}" — only for OBO execution
+  actorId: string; // "user:{user_id}" | "agent:{id}" | "service:{name}"
+  subjectId?: string; // "user:{user_id}" — only for OBO execution
   action: AuthzAction; // "tool.execute" | "connection.use" | "graph.invoke"
   resource: string; // "tool:{id}" | "connection:{id}" | "graph:{id}"
   context: AuthzContext; // { tenantId, graphId?, runId? }
 }
-type AuthzDecision = "allow" | "deny";
+type AuthzDecision =
+  | { decision: "allow"; code: "authz_allowed" }
+  | { decision: "deny"; code: "authz_denied" | "authz_unavailable" };
 ```
 
 **Context Identity Fields (`@cogni/ai-core/tooling/types.ts`):**
 
-- [ ] Add `actorId: string` to `ToolInvocationContext`
-- [ ] Add `subjectId?: string` to `ToolInvocationContext` (OBO only)
-- [ ] Add `tenantId: string` to `ToolInvocationContext`
-- [ ] Add `graphId?: string` to `ToolInvocationContext`
-- [ ] Update `GraphRunConfig` to include actor + optional subject
+- [x] Add `actorId: string` to `ToolInvocationContext`
+- [x] Add `subjectId?: string` to `ToolInvocationContext` (OBO only)
+- [x] Add `tenantId: string` to `ToolInvocationContext`
+- [x] Add `graphId?: string` to `ToolInvocationContext`
+- [x] Pass direct-user graph context into `toolRunner.exec()`
 
 **Subject Binding (per OBO_SUBJECT_MUST_BE_BOUND):**
 
+- [x] `ToolInvocationContext.subjectId` is readonly, not from request body
 - [ ] `subjectId` set ONLY at session/grant issuance (server-side)
-- [ ] `ToolInvocationContext.subjectId` is readonly, not from request body
 - [ ] Arch test: grep for `subjectId` assignment outside trusted boundaries
 
 **Env Vars:**
 
-- [ ] Add `OPENFGA_API_URL`, `OPENFGA_STORE_ID` to env validation
-- [ ] Configure OpenFGA store per environment (single store per env)
+- [x] Add `OPENFGA_API_URL`, `OPENFGA_STORE_ID` to env validation
+- [x] Configure OpenFGA store/model per environment through deploy-infra bootstrap
 
 **File Pointers (P0 Scope):**
 
-| File                                           | Change                                          |
-| ---------------------------------------------- | ----------------------------------------------- |
-| `src/ports/authorization.port.ts`              | New: `AuthorizationPort` with actor+subject     |
-| `src/ports/index.ts`                           | Add authorization port export                   |
-| `src/adapters/server/authz/openfga.adapter.ts` | New: OpenFGA impl with dual-check               |
-| `src/adapters/test/authz/fake.adapter.ts`      | New: Test fake                                  |
-| `src/bootstrap/container.ts`                   | Wire authorization port                         |
-| `@cogni/ai-core/tooling/types.ts`              | Add actorId, subjectId?, tenantId, graphId      |
-| `@cogni/ai-core/tooling/tool-runner.ts`        | Inject AuthorizationPort, pass actor+subject    |
-| `src/shared/env/server.ts`                     | Add OPENFGA_API_URL, OPENFGA_STORE_ID           |
-| `tests/arch/authz-enforcement.test.ts`         | New: grep tests for bypass patterns             |
-| `tests/arch/subject-binding.test.ts`           | New: verify subjectId only from trusted sources |
+| File                                               | Change                                         |
+| -------------------------------------------------- | ---------------------------------------------- |
+| `packages/authorization-core/src/index.ts`         | `AuthorizationPort` with actor+subject         |
+| `packages/authorization-core/src/adapters/*`       | OpenFGA adapter with dual-check + timeout      |
+| `packages/authorization-core/src/test/*`           | Deterministic fake adapter                     |
+| `packages/ai-core/src/tooling/types.ts`            | actorId, subjectId?, tenantId, graphId context |
+| `packages/ai-core/src/tooling/tool-runner.ts`      | Inject AuthorizationPort, pass actor+subject   |
+| `nodes/operator/app/src/bootstrap/container.ts`    | Wire authorization port                        |
+| `nodes/operator/app/src/shared/env/server-env.ts`  | OPENFGA_API_URL, OPENFGA_STORE_ID              |
+| `packages/ai-core/tests/tool-runner.authz.test.ts` | Authz bypass regression tests                  |
 
 ### Walk (P1) — Graph Invoke + Audit + Caching
 
@@ -125,13 +126,27 @@ type AuthzDecision = "allow" | "deny";
 
 ## Dependencies
 
-- [ ] OpenFGA deployment (Docker service)
+- [x] OpenFGA deployment/store bootstrap (Docker service + deterministic store/model bootstrap)
 - [x] ToolPolicy design (TOOL_USE_SPEC.md)
 - [x] ConnectionBroker design (TENANT_CONNECTIONS_SPEC.md)
+
+## Next Protected Actions
+
+| Protected action                                         | Phase | Status      | Notes                                                                                                                          |
+| -------------------------------------------------------- | ----- | ----------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `core__vcs_flight_candidate` tool execution              | P0    | In Review   | Covered through `toolRunner.exec()` when OpenFGA is configured                                                                 |
+| Direct `POST /api/v1/vcs/flight` dispatch                | P0.5  | In Review   | Checks `node.flight` on `node:{node_id}` before GitHub prepare/dispatch when OpenFGA is configured                             |
+| Node developer request/approval tuple-write surface      | P0.6  | In Review   | Owner-gated `POST /api/v1/nodes/{node_id}/developers` materializes approval as `node:{node_id}#developer@user:{agent_user_id}` |
+| `GraphExecutorPort.runGraph()` / `graph.invoke`          | P1    | Not Started | Blocks unauthorized graph start before model/tool loop                                                                         |
+| `ConnectionBroker.resolveForTool()` / `connection.use`   | P1    | Not Started | Blocks token materialization before BYO provider credential release                                                            |
+| Durable `authz.check` event + `authz.unavailable` metric | P1    | Not Started | Current adapter returns decision/check details; event/metric sink still needs composition-root integration                     |
 
 ## As-Built Specs
 
 - [RBAC Spec](../../docs/spec/rbac.md) — Core invariants, actor model, OpenFGA schema, design decisions
+- [Identity Model](../../docs/spec/identity-model.md) — Runtime `actorId`/`tenantId` distinction from DB identity keys
+- [Authentication](../../docs/spec/authentication.md) — Browser session and HMAC bearer-token identity resolution
+- [Browser Session Flight Auth](../../docs/guides/browser-session-flight-auth.md) — Creator/admin approval and bearer-token nodeRef flight procedure
 
 ## Design Notes
 

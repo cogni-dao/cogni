@@ -4,6 +4,7 @@
   "include": [],
   "references": [
     { "path": "./nodes/operator/app/tsconfig.app.json" },
+    { "path": "./packages/authorization-core" },
     { "path": "./packages/ai-core" },
     { "path": "./packages/ai-tools" },
     { "path": "./packages/aragon-osx" },
@@ -31,6 +32,8 @@
     { "path": "./packages/node-shared" },
     { "path": "./packages/knowledge-base" },
     { "path": "./packages/knowledge-store" },
+    { "path": "./nodes/canary/packages/doltgres-schema" },
+    { "path": "./nodes/node-template/packages/doltgres-schema" },
     { "path": "./nodes/operator/packages/doltgres-schema" }
   ]
 }

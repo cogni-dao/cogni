@@ -16,7 +16,7 @@
  */
 
 import { flightOperation } from "@cogni/node-contracts";
-import { TEST_SESSION_USER_1 } from "@tests/_fakes/ids";
+import { TEST_SESSION_USER_1, TEST_SESSION_USER_2 } from "@tests/_fakes/ids";
 import { testApiHandler } from "next-test-api-route-handler";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -32,6 +32,14 @@ const mockDeployPlane = vi.hoisted(() => ({
   prepareNodeRefCandidateFlight: vi.fn(),
   dispatchNodeRefCandidateFlight: vi.fn(),
 }));
+const authzState = vi.hoisted(() => ({
+  decision: undefined as
+    | undefined
+    | "authz_allowed"
+    | "authz_denied"
+    | "authz_unavailable",
+  check: vi.fn(),
+}));
 
 const dbState = vi.hoisted(() => ({
   current: {
@@ -39,6 +47,9 @@ const dbState = vi.hoisted(() => ({
     slug: "creative",
     ownerUserId: "00000000-0000-4000-a000-000000000001",
   } as { id: string; slug: string; ownerUserId: string } | null,
+}));
+const billingState = vi.hoisted(() => ({
+  current: { id: "billing-agent-1" } as { id: string } | null,
 }));
 const envState = vi.hoisted(() => ({
   current: {
@@ -73,8 +84,14 @@ vi.mock("@/bootstrap/container", () => ({
     log: mockLog,
     clock: { now: () => new Date("2025-01-01T00:00:00Z") },
     config: { unhandledErrorPolicy: "rethrow" },
+    authorization:
+      authzState.decision === undefined
+        ? undefined
+        : {
+            check: authzState.check,
+          },
   }),
-  resolveAppDb: () => ({}),
+  resolveServiceDb: () => mockTx,
 }));
 
 vi.mock("@/bootstrap/otel", () => ({
@@ -113,10 +130,15 @@ vi.mock("@cogni/db-client", () => ({
 }));
 
 const mockTx = {
-  select: () => ({
+  select: (selection?: unknown) => ({
     from: () => ({
       where: () => ({
-        limit: () => (dbState.current ? [dbState.current] : []),
+        limit: () => {
+          if (selection) {
+            return billingState.current ? [billingState.current] : [];
+          }
+          return dbState.current ? [dbState.current] : [];
+        },
       }),
     }),
   }),
@@ -194,11 +216,27 @@ function makePreparedNodeRef(
 describe("POST /api/v1/vcs/flight", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    authzState.decision = undefined;
+    authzState.check.mockImplementation(async () => {
+      if (authzState.decision === "authz_allowed") {
+        return {
+          decision: "allow",
+          code: "authz_allowed",
+          checks: [],
+        };
+      }
+      return {
+        decision: "deny",
+        code: authzState.decision ?? "authz_denied",
+        checks: [],
+      };
+    });
     dbState.current = {
       id: NODE_ID,
       slug: "creative",
       ownerUserId: String(TEST_SESSION_USER_1.id),
     };
+    billingState.current = { id: "billing-agent-1" };
     envState.current = {
       GH_REVIEW_APP_ID: "1",
       GH_REVIEW_APP_PRIVATE_KEY_BASE64:
@@ -275,6 +313,117 @@ describe("POST /api/v1/vcs/flight", () => {
           sourceSha8: SOURCE_SHA.slice(0, 8),
           dispatchStatus: "initiated",
         });
+      },
+    });
+  });
+
+  it("allows a non-owner caller when OpenFGA grants node flight", async () => {
+    authzState.decision = "authz_allowed";
+    dbState.current = {
+      id: NODE_ID,
+      slug: "creative",
+      ownerUserId: String(TEST_SESSION_USER_1.id),
+    };
+    mockGetSessionUser.mockResolvedValue(TEST_SESSION_USER_2);
+    mockDeployPlane.prepareNodeRefCandidateFlight.mockResolvedValue(
+      makePreparedNodeRef()
+    );
+    mockDeployPlane.dispatchNodeRefCandidateFlight.mockResolvedValue(
+      makeDispatchResult("Candidate flight dispatched for creative@01234567.")
+    );
+
+    await testApiHandler({
+      appHandler,
+      async test({ fetch }) {
+        const res = await fetch({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            nodeRef: { nodeId: NODE_ID, sourceSha: SOURCE_SHA },
+          }),
+        });
+        expect(res.status).toBe(202);
+        expect(authzState.check).toHaveBeenCalledWith({
+          actorId: `user:${TEST_SESSION_USER_2.id}`,
+          action: "node.flight",
+          resource: `node:${NODE_ID}`,
+          context: {
+            tenantId: "billing-agent-1",
+            nodeId: NODE_ID,
+          },
+        });
+        expect(
+          mockDeployPlane.dispatchNodeRefCandidateFlight
+        ).toHaveBeenCalledOnce();
+      },
+    });
+  });
+
+  it("rejects denied node flight before GitHub dispatch", async () => {
+    authzState.decision = "authz_denied";
+    dbState.current = {
+      id: NODE_ID,
+      slug: "creative",
+      ownerUserId: String(TEST_SESSION_USER_1.id),
+    };
+    mockGetSessionUser.mockResolvedValue(TEST_SESSION_USER_2);
+
+    await testApiHandler({
+      appHandler,
+      async test({ fetch }) {
+        const res = await fetch({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            nodeRef: { nodeId: NODE_ID, sourceSha: SOURCE_SHA },
+          }),
+        });
+        expect(res.status).toBe(403);
+        const body = await res.json();
+        expect(body.errorCode).toBe("authz_denied");
+        expect(
+          mockDeployPlane.prepareNodeRefCandidateFlight
+        ).not.toHaveBeenCalled();
+        expect(
+          mockDeployPlane.dispatchNodeRefCandidateFlight
+        ).not.toHaveBeenCalled();
+        expectFlightRequestLog("warn", {
+          mode: "node_ref",
+          outcome: "error",
+          status: 403,
+          errorCode: "authz_denied",
+          nodeId: NODE_ID,
+          slug: "creative",
+        });
+      },
+    });
+  });
+
+  it("rejects OpenFGA flight without creating billing state", async () => {
+    authzState.decision = "authz_allowed";
+    billingState.current = null;
+    mockGetSessionUser.mockResolvedValue(TEST_SESSION_USER_2);
+
+    await testApiHandler({
+      appHandler,
+      async test({ fetch }) {
+        const res = await fetch({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            nodeRef: { nodeId: NODE_ID, sourceSha: SOURCE_SHA },
+          }),
+        });
+        expect(res.status).toBe(403);
+        const body = await res.json();
+        expect(body.errorCode).toBe("billing_account_missing");
+        expect(authzState.check).not.toHaveBeenCalled();
+        expect(
+          mockDeployPlane.prepareNodeRefCandidateFlight
+        ).not.toHaveBeenCalled();
+        expect(
+          mockDeployPlane.dispatchNodeRefCandidateFlight
+        ).not.toHaveBeenCalled();
       },
     });
   });

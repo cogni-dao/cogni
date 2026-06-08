@@ -29,6 +29,8 @@ files. From this single scan, build a change manifest:
 
 3. **Check spec impact**: Read the work item's `spec_refs`. For each linked spec, does the diff change behavior that the spec describes? Note which spec sections need updating.
 
+4. **Name the validation use case**: Identify the concrete user/agent action the work protects or enables. If the branch adds a shared spine rather than the final endpoint gate, say which path is covered now and which protected action remains in the project roadmap.
+
 Output a short TODO list of all actions before executing any of them.
 
 ---
@@ -86,6 +88,8 @@ For each spec in the work item's `spec_refs` (skip if none):
 ## Phase 6 — Finalize
 
 1. Run `pnpm check:docs` and fix any errors until clean.
+   - Validation prose must name the actual route, graph, tool, or deployment lever. Do not settle for generic "chat works" or "API responds" language when the work item is about authorization, deployment, billing, or another specific protected action.
+   - Candidate validation must prove the deployed pod, not just service liveness: cite the flight workflow, deploy branch or Argo app, and `/version.buildSha` match for the node URL being validated.
 2. Commit all changes (doc updates, header updates, spec updates, work item, project) on the work item's branch. `git status` must be clean.
 3. Push to remote.
 4. Create PR to the resolved base branch using `/pull-request` logic

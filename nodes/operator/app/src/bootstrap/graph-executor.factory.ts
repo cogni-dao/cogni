@@ -532,7 +532,8 @@ function createInProcProvider(
     inprocAdapter,
     container.toolSource,
     () => cache.getSource(),
-    [...CORE_TOOL_BUNDLE, ...VCS_TOOL_BUNDLE]
+    [...CORE_TOOL_BUNDLE, ...VCS_TOOL_BUNDLE],
+    container.authorization
   );
 }
 

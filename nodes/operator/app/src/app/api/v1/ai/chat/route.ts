@@ -322,6 +322,7 @@ export const POST = wrapRouteHandlerWithLogging(
         execute: async ({ writer }) => {
           try {
             let eventSeq = 0;
+            const startedToolCallIds = new Set<string>();
 
             for await (const event of deltaStream) {
               if (request.signal.aborted) break;
@@ -349,6 +350,8 @@ export const POST = wrapRouteHandlerWithLogging(
                   "ai.chat_assistant_final_received"
                 );
               } else if (event.type === "tool_call_start") {
+                startedToolCallIds.add(event.toolCallId);
+
                 // Close text block before tool call
                 if (textBlockOpen) {
                   writer.write({ type: "text-end", id: textPartId });
@@ -375,6 +378,14 @@ export const POST = wrapRouteHandlerWithLogging(
                   } as UIMessageChunk);
                 }
               } else if (event.type === "tool_call_result") {
+                if (!startedToolCallIds.has(event.toolCallId)) {
+                  ctx.log.warn(
+                    { toolCallId: event.toolCallId },
+                    "tool_call_result without start ignored for UI stream"
+                  );
+                  continue;
+                }
+
                 writer.write({
                   type: "tool-output-available",
                   toolCallId: event.toolCallId,

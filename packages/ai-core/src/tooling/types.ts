@@ -80,7 +80,9 @@ export type ToolErrorCode =
   | "redaction_failed"
   | "invalid_json"
   | "timeout"
-  | "policy_denied";
+  | "policy_denied"
+  | "authz_denied"
+  | "authz_unavailable";
 
 /**
  * Tool invocation record — captures full lifecycle of a tool call.
@@ -137,6 +139,14 @@ export interface ToolInvocationContext {
   readonly runId: string;
   /** Stable tool call ID (model-provided or generated) */
   readonly toolCallId: string;
+  /** Actor performing the invocation, e.g. user:{id}, agent:{id}, or service:{name}. */
+  readonly actorId: string;
+  /** Tenant/billing account boundary for authz and audit. */
+  readonly tenantId: string;
+  /** User subject for on-behalf-of execution; server-bound only. */
+  readonly subjectId?: string;
+  /** Graph context for authorization and audit. */
+  readonly graphId?: string;
   /**
    * Connection ID for authenticated tools (out-of-band, not in tool args).
    * Per CONNECTION_IN_CONTEXT_NOT_ARGS: connectionId in context, not tool schemas.
