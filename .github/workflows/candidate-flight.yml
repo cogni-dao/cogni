@@ -170,8 +170,9 @@ jobs:
         working-directory: app-src
         env:
           CHANGED_PATHS_FILE: ${{ steps.pr-files.outputs.changed_paths_file }}
+          COGNI_CATALOG_ROOT: infra/catalog
           OUTPUT_FILE: ${{ runner.temp }}/remote-source-artifact-targets.json
-        run: bash scripts/ci/detect-remote-source-artifact-targets.sh
+        run: bash ../scripts/ci/detect-remote-source-artifact-targets.sh
 
       - name: Combine flight targets
         id: flight-targets
@@ -261,14 +262,15 @@ jobs:
           SOURCE_SHA: ${{ steps.meta.outputs.head_sha }}
           NODE: ${{ steps.meta.outputs.node_slug }}
           NODE_SOURCE_SHA: ${{ steps.meta.outputs.node_source_sha }}
+          COGNI_CATALOG_ROOT: infra/catalog
           REMOTE_SOURCE_ARTIFACT_TARGETS_FILE: ${{ steps.remote-source-artifact-targets.outputs.targets_file }}
           OUTPUT_FILE: ${{ runner.temp }}/resolved-pr-images.json
         run: |
           set -euo pipefail
           if [ -n "$NODE" ]; then
-            SOURCE_SHA="$NODE_SOURCE_SHA" bash scripts/ci/resolve-node-ref-image.sh
+            SOURCE_SHA="$NODE_SOURCE_SHA" bash ../scripts/ci/resolve-node-ref-image.sh
           else
-            bash scripts/ci/resolve-pr-build-images.sh
+            bash ../scripts/ci/resolve-pr-build-images.sh
           fi
 
       - name: Require at least one built image

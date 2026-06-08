@@ -130,6 +130,27 @@ if (
 
 if (
   candidateFlightText.includes(
+    "run: bash ../scripts/ci/detect-remote-source-artifact-targets.sh"
+  ) &&
+  candidateFlightText.includes(
+    'SOURCE_SHA="$NODE_SOURCE_SHA" bash ../scripts/ci/resolve-node-ref-image.sh'
+  ) &&
+  candidateFlightText.includes(
+    "bash ../scripts/ci/resolve-pr-build-images.sh"
+  ) &&
+  candidateFlightText.includes("COGNI_CATALOG_ROOT: infra/catalog")
+) {
+  pass(
+    "candidate-flight resolves new workflow-source helpers against app-src catalogs"
+  );
+} else {
+  fail(
+    "candidate-flight helper steps must run workflow-source scripts from app-src with COGNI_CATALOG_ROOT=infra/catalog"
+  );
+}
+
+if (
+  candidateFlightText.includes(
     "username: ${{ secrets.GHCR_DEPLOY_USERNAME || github.actor }}"
   ) &&
   candidateFlightText.includes(
