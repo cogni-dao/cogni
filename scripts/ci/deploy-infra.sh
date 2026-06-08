@@ -1090,6 +1090,95 @@ fi
 log_info "[$(date -u +%H:%M:%S)] Infra stack up complete"
 emit_deployment_event "infra_deployment.stack_up_complete" "success" "Infrastructure services started"
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Step 6.6a: Bootstrap OpenFGA store/model and publish operator runtime IDs
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+log_info "[$(date -u +%H:%M:%S)] Bootstrapping OpenFGA RBAC store/model..."
+OPENFGA_BOOTSTRAP_ENV=$(OPENFGA_API_URL=http://127.0.0.1:8080 \
+  OPENFGA_STORE_NAME="cogni-${DEPLOY_ENVIRONMENT}-rbac" \
+  OPENFGA_MODEL_FILE=/tmp/rbac-model.json \
+  OPENFGA_API_TOKEN="${OPENFGA_API_TOKEN:-}" \
+  bash /tmp/bootstrap-openfga.sh)
+eval "$OPENFGA_BOOTSTRAP_ENV"
+printf '%s\n' "$OPENFGA_BOOTSTRAP_ENV" >> "$RUNTIME_ENV"
+log_info "OpenFGA RBAC config resolved: store=${OPENFGA_STORE_ID} model=${OPENFGA_AUTHORIZATION_MODEL_ID}"
+
+patch_operator_openfga_config() {
+  if ! command -v kubectl >/dev/null 2>&1; then
+    log_warn "kubectl not found — cannot patch OpenBao operator OpenFGA config"
+    return 1
+  fi
+  if ! timeout 10 kubectl get sa openbao-operator -n default >/dev/null 2>&1; then
+    log_warn "openbao-operator SA absent — cannot patch OpenBao operator OpenFGA config"
+    return 1
+  fi
+
+  local jwt tok op
+  jwt=$(timeout 10 kubectl create token openbao-operator -n default 2>/dev/null) || {
+    log_warn "could not mint openbao-operator token"
+    return 1
+  }
+  tok=$(timeout 10 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
+    bao write -field=token auth/kubernetes/login \
+    "role=${DEPLOY_ENVIRONMENT}-writer" "jwt=${jwt}" 2>/dev/null) || {
+    log_warn "OpenBao writer login failed for ${DEPLOY_ENVIRONMENT}-writer"
+    return 1
+  }
+
+  op="patch"
+  if ! timeout 10 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="${tok}" \
+      bao kv metadata get "cogni/${DEPLOY_ENVIRONMENT}/operator" >/dev/null 2>&1; then
+    op="put"
+  fi
+
+  timeout 20 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="${tok}" \
+    bao kv "$op" "cogni/${DEPLOY_ENVIRONMENT}/operator" \
+      "OPENFGA_STORE_ID=${OPENFGA_STORE_ID}" \
+      "OPENFGA_AUTHORIZATION_MODEL_ID=${OPENFGA_AUTHORIZATION_MODEL_ID}" >/dev/null || return 1
+}
+
+refresh_operator_openfga_secret() {
+  local k8s_ns="cogni-${DEPLOY_ENVIRONMENT}" es_name="" candidate synced_store_id synced_model_id
+  for candidate in operator-env-secrets env-secrets; do
+    if kubectl -n "$k8s_ns" get externalsecret "$candidate" >/dev/null 2>&1; then
+      es_name="$candidate"
+      break
+    fi
+  done
+  if [[ -z "$es_name" ]]; then
+    log_error "No operator ExternalSecret found in ${k8s_ns}; cannot deliver OpenFGA runtime IDs"
+    return 1
+  fi
+
+  kubectl -n "$k8s_ns" annotate externalsecret "$es_name" \
+    force-sync="$(date +%s)" --overwrite >/dev/null 2>&1 || return 1
+  log_info "Requested ESO refresh for ${es_name}"
+  kubectl -n "$k8s_ns" wait --for=condition=Ready "externalsecret/${es_name}" --timeout=120s >/dev/null 2>&1 || return 1
+
+  for _ in $(seq 1 30); do
+    synced_store_id=$(kubectl -n "$k8s_ns" get secret operator-env-secrets \
+      -o jsonpath='{.data.OPENFGA_STORE_ID}' 2>/dev/null | base64 -d 2>/dev/null || true)
+    synced_model_id=$(kubectl -n "$k8s_ns" get secret operator-env-secrets \
+      -o jsonpath='{.data.OPENFGA_AUTHORIZATION_MODEL_ID}' 2>/dev/null | base64 -d 2>/dev/null || true)
+    if [[ "$synced_store_id" == "$OPENFGA_STORE_ID" && "$synced_model_id" == "$OPENFGA_AUTHORIZATION_MODEL_ID" ]]; then
+      log_info "operator-env-secrets contains current OpenFGA runtime IDs"
+      return 0
+    fi
+    sleep 2
+  done
+
+  log_error "operator-env-secrets did not sync current OpenFGA runtime IDs"
+  return 1
+}
+
+if patch_operator_openfga_config; then
+  log_info "OpenBao operator path patched with OpenFGA runtime IDs"
+  refresh_operator_openfga_secret
+else
+  log_error "OpenFGA store/model exist, but operator OpenBao config was not patched"
+  exit 1
+fi
+
 ALLOY_CONFIG="/opt/cogni-template-runtime/configs/alloy-config.metrics.alloy"
 ALLOY_HASH_FILE="/var/lib/cogni/alloy-config.sha256"
 if [[ -f "$ALLOY_CONFIG" ]]; then
@@ -1186,7 +1275,7 @@ else
 fi
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# Step 6.6a: Checksum-gated restart for LiteLLM config changes
+# Step 6.6b: Checksum-gated restart for LiteLLM config changes
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 HASH_DIR="/var/lib/cogni"
 LITELLM_CONFIG="/opt/cogni-template-runtime/configs/litellm.config.yaml"
@@ -1211,7 +1300,7 @@ else
   fi
 fi
 
-# Steps 6.6b–6.6c (OpenClaw config hash + readiness gate) removed — sandbox-openclaw disabled.
+# Steps 6.6c–6.6d (OpenClaw config hash + readiness gate) removed — sandbox-openclaw disabled.
 # Step 6.6d (alloy checksum-restart) lives near the litellm block above; main
 # already added it at 88e67cdd4 (bug.5169) so this branch's earlier copy is dropped.
 
@@ -1494,7 +1583,19 @@ SECEOF
     log_warn "scheduler-worker rollout did not complete within 300s"
     ROLLOUT_FAILED=1
   fi
+  if [[ " ${NODE_APP_TARGETS} " == *" operator "* ]]; then
+    if kubectl -n "${K8S_NS}" exec deployment/operator-node-app -- /bin/sh -c \
+      'test -n "${OPENFGA_API_URL:-}" && test -n "${OPENFGA_STORE_ID:-}" && test -n "${OPENFGA_AUTHORIZATION_MODEL_ID:-}"' 2>/dev/null; then
+      log_info "operator pod process env contains OpenFGA URL, store ID, and model ID"
+    else
+      log_error "operator pod process env is missing OpenFGA URL, store ID, or model ID"
+      ROLLOUT_FAILED=1
+    fi
+  fi
   log_info "[$(date -u +%H:%M:%S)] All rollouts complete"
+  if [ $ROLLOUT_FAILED -ne 0 ]; then
+    exit 1
+  fi
   emit_deployment_event "infra_deployment.rollouts_complete" "success" "All k8s deployments rolled out"
 else
   log_warn "kubectl not found — skipping k8s secret creation (k3s may not be installed)"
@@ -1661,9 +1762,12 @@ scp $SSH_OPTS "$ARTIFACT_DIR/deploy-infra-remote.sh" root@"$VM_HOST":/tmp/deploy
 # Upload healthcheck and bootstrap scripts (called from deploy-infra-remote.sh)
 scp $SSH_OPTS \
   "$REPO_ROOT/scripts/ci/ensure-temporal-namespace.sh" \
+  "$REPO_ROOT/scripts/ci/bootstrap-openfga.sh" \
   "$REPO_ROOT/infra/provision/cherry/harden-docker-public-ports.sh" \
   "$REPO_ROOT/scripts/secrets/sync-app-webhook-secret.sh" \
   root@"$VM_HOST":/tmp/
+
+scp $SSH_OPTS "$REPO_ROOT/infra/openfga/rbac-model.json" root@"$VM_HOST":/tmp/rbac-model.json
 
 # Verify SCP landed correctly
 REMOTE_CHECK=$(ssh $SSH_OPTS root@"$VM_HOST" "echo host=\$(hostname) date=\$(date -u +%Y-%m-%dT%H:%M:%SZ) && sha256sum /tmp/deploy-infra-remote.sh | awk '{print \$1}'" 2>&1) || {

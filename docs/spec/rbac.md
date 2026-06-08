@@ -65,19 +65,23 @@ Authorization operates across three distinct layers with different purposes:
 
 OpenFGA runs as shared VM runtime infrastructure, not as a node-scoped k8s app.
 
-| Surface       | Contract                                                                                                                                         |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Compose       | `infra/compose/runtime/docker-compose.yml` runs `openfga-migrate` then `openfga` against the shared Postgres `openfga` database                  |
-| Image         | `openfga/openfga:v1.17.1@sha256:ff96f68d2f03a029e051027415c106295c782084daeef0934479f04a3fdc2d57`                                                |
-| Pod endpoint  | Operator overlays set `OPENFGA_API_URL=http://operator-openfga-external:8080` through ConfigMap                                                  |
-| Store config  | `OPENFGA_STORE_ID` and `OPENFGA_AUTHORIZATION_MODEL_ID` are runtime config written after store/model bootstrap                                   |
-| Secret config | `OPENFGA_API_TOKEN` is only needed when OpenFGA authn is enabled; seed it through OpenBao/ESO as `cogni/<env>/operator/OPENFGA_API_TOKEN`        |
-| Network       | Port 8080 is published for k3s pod access through VM DNS and dropped on the public NIC by `infra/provision/cherry/harden-docker-public-ports.sh` |
+| Surface       | Contract                                                                                                                                                                                                                                                                                                                                              |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Compose       | `infra/compose/runtime/docker-compose.yml` runs `openfga-migrate` then `openfga` against the shared Postgres `openfga` database                                                                                                                                                                                                                       |
+| Image         | `openfga/openfga:v1.17.1@sha256:ff96f68d2f03a029e051027415c106295c782084daeef0934479f04a3fdc2d57`                                                                                                                                                                                                                                                     |
+| Pod endpoint  | Operator overlays set `OPENFGA_API_URL=http://operator-openfga-external:8080` through ConfigMap                                                                                                                                                                                                                                                       |
+| Store config  | `scripts/ci/deploy-infra.sh` runs `scripts/ci/bootstrap-openfga.sh` after the OpenFGA runtime is healthy. The bootstrap creates or finds store `cogni-<env>-rbac`, writes or reuses `infra/openfga/rbac-model.json`, and records `OPENFGA_STORE_ID` / `OPENFGA_AUTHORIZATION_MODEL_ID` into `cogni/<env>/operator` for ESO delivery to operator pods. |
+| Secret config | `OPENFGA_API_TOKEN` is only needed when OpenFGA authn is enabled; seed it through OpenBao/ESO as `cogni/<env>/operator/OPENFGA_API_TOKEN`                                                                                                                                                                                                             |
+| Network       | Port 8080 is published for k3s pod access through VM DNS and dropped on the public NIC by `infra/provision/cherry/harden-docker-public-ports.sh`                                                                                                                                                                                                      |
 
 `OPENFGA_API_URL` may exist before a store is bootstrapped. The operator only
 constructs the OpenFGA adapter when both `OPENFGA_API_URL` and
 `OPENFGA_STORE_ID` are present, so service reachability can ship before policy
 activation.
+
+OpenFGA authorization models are immutable. The bootstrap compares the
+canonical JSON model before writing, so re-running deploys reuses an identical
+model ID instead of creating a new version each time.
 
 ---
 
