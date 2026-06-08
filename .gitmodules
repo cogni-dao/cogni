@@ -4,3 +4,6 @@
 [submodule "nodes/creative"]
 	path = nodes/creative
 	url = https://github.com/Cogni-DAO/creative.git
+[submodule "nodes/node-template"]
+	path = nodes/node-template
+	url = https://github.com/Cogni-DAO/node-template.git
