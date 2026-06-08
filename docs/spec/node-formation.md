@@ -44,7 +44,7 @@ This is distinct from a **standalone fork** — a solo operator who wants their 
 | `Cogni-DAO/standalone-node` | Fork-whole quickstart — your own instance, your own substrate (`fork-quickstart.md`).                                                                                                                   |
 | `Cogni-DAO/node-template`   | Template repo — Publish creates a named fork for the node repo, commits node identity on top, then submodule-pins it at `nodes/<slug>`. Maintained node-at-root from the `nodes/node-template/` subdir. |
 
-`CATALOG_IS_SSOT` ([ci-cd.md](ci-cd.md) Axiom 16) is what makes Publish a single reviewable PR rather than a manual checklist: the catalog entry is the only declaration site, and overlays, per-node AppSets (Axiom 18), Caddy routing, scheduler endpoints, DNS (Axiom 21), and the build matrix all derive from it. The deploy-row contract lives in [create-node.md](../guides/create-node.md); secrets are stripped from the Publish PR and inherited via ESO (`NO_SECRETS_IN_PR`, `bug.5086`).
+`CATALOG_IS_SSOT` ([ci-cd.md](ci-cd.md) Axiom 16) is what makes Publish a single reviewable PR rather than a manual checklist: the catalog entry is the only declaration site, and overlays, per-node AppSets (Axiom 18), Caddy routing, scheduler endpoints, DNS (Axiom 21), and the build matrix all derive from it. The deploy-row contract lives in [create-node.md](../guides/create-node.md); secret values are excluded from the Publish PR and inherited via ESO.
 
 ## Goal
 
@@ -335,7 +335,7 @@ After Formation returns a verified repo-spec fragment, the **operator** mints th
 **Mechanism** (`adapters/server/vcs/github-repo-write.ts` + `shared/node-app-scaffold/`):
 
 1. **Mint** — `POST /repos/Cogni-DAO/node-template/forks` creates `Cogni-DAO/<slug>` as a named fork of `node-template` (`default_branch_only: true`). This preserves a shared merge base so node developers can fetch and merge upstream template updates.
-2. **Identity** — commit the regenerated `.cogni/repo-spec.yaml` (formed `node_id` / `scope_id` + DAO addresses) to the fork's `main`. The new HEAD SHA is the gitlink pin.
+2. **Identity + ESO leaf** — commit the regenerated `.cogni/repo-spec.yaml` (formed `node_id` / `scope_id` + DAO addresses) and the candidate-a ExternalSecret leaf to the fork's `main`. The new HEAD SHA is the gitlink pin.
 3. **Pin** — the operator authors a PR on the monorepo: a `160000` gitlink at `nodes/<slug>` + a `.gitmodules` stanza, plus the footprint gens (catalog, overlays×3, per-node AppSets×3, Caddyfile route, `ci.yaml` scope filter, scheduler-worker endpoints) — **no `pnpm-lock.yaml`** (a submodule node is not a workspace member). One tree, one commit, one ref, one PR.
 4. **Author** — the PR opens under the operator App installation (author = the App, auditable — not `github-actions[bot]`, not a human PAT).
 
@@ -343,7 +343,7 @@ After Formation returns a verified repo-spec fragment, the **operator** mints th
 
 - `NO_ACTION_INDIRECTION` — the operator authors the PR itself; it never dispatches a workflow to act on its own behalf.
 - `SUBMODULE_NOT_INLINE` — node content lives in its own repo + a gitlink, never inlined into the operator tree.
-- `NO_SECRETS_IN_PR` — secrets-catalog + external-secrets are absent from the template seed; values live in OpenBao, inherited via ESO ([secrets-management.md](secrets-management.md)).
+- `NO_SECRET_VALUES_IN_PR` — secret values and per-node `secrets-catalog.yaml` are absent from the template seed. The PR may carry ESO shape (`k8s/external-secrets/**`) so OpenBao values can materialize as `<slug>-env-secrets` ([secrets-management.md](secrets-management.md), [node-wizard-secret-setting.md](../design/node-wizard-secret-setting.md)).
 - `GENS_ARE_BYTE_EXACT` — every footprint gen shares one template with its `scripts/ci/render-*.sh` source of truth, enforced by the per-gen CI drift gate.
 
 > Verification: flight the operator + Publish one throwaway node → it mints `Cogni-DAO/<slug>` and opens the submodule PR; the gitlink PR passes `single-node-scope`, and the node flights (`<node>-test/version == build_sha`). Requires the env's operator App to hold org `administration: write` + an "all repositories" install (it must create AND commit to the new repo — see node-ci-cd-contract.md).

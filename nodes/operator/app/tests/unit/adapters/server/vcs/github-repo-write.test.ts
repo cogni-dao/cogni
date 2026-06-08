@@ -130,10 +130,23 @@ function setHappyForkHandlers(): void {
       const content = Buffer.from(String(params.content), "base64").toString(
         "utf-8"
       );
-      expect(content).toContain(
-        'node_id: "11111111-1111-4111-8111-111111111111"'
-      );
-      return { sha: "repo-spec-blob" };
+      if (content.includes('node_id: "11111111-1111-4111-8111-111111111111"')) {
+        return { sha: "repo-spec-blob" };
+      }
+      if (
+        content.includes("kind: ExternalSecret") &&
+        content.includes("name: atlas-env-secrets") &&
+        content.includes("key: candidate-a/atlas")
+      ) {
+        return { sha: "external-secret-blob" };
+      }
+      if (
+        content.includes("kind: Kustomization") &&
+        content.includes("  - external-secret.yaml")
+      ) {
+        return { sha: "external-secret-kustomization-blob" };
+      }
+      throw new Error(`Unexpected blob content: ${content}`);
     },
     "POST /repos/{owner}/{repo}/git/trees": (params) => {
       expect(params).toMatchObject({
@@ -147,6 +160,18 @@ function setHappyForkHandlers(): void {
           mode: "100644",
           type: "blob",
           sha: "repo-spec-blob",
+        },
+        {
+          path: "k8s/external-secrets/candidate-a/external-secret.yaml",
+          mode: "100644",
+          type: "blob",
+          sha: "external-secret-blob",
+        },
+        {
+          path: "k8s/external-secrets/candidate-a/kustomization.yaml",
+          mode: "100644",
+          type: "blob",
+          sha: "external-secret-kustomization-blob",
         },
       ]);
       return { sha: "identity-tree" };
@@ -217,6 +242,8 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
       "PUT /repos/{owner}/{repo}/actions/permissions/workflow",
       "GET /repos/{owner}/{repo}/actions/workflows",
       "POST /repos/{owner}/{repo}/git/blobs",
+      "POST /repos/{owner}/{repo}/git/blobs",
+      "POST /repos/{owner}/{repo}/git/blobs",
       "POST /repos/{owner}/{repo}/git/trees",
       "POST /repos/{owner}/{repo}/git/commits",
       "POST /repos/{owner}/{repo}/git/refs",
@@ -279,6 +306,8 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
       "PUT /repos/{owner}/{repo}/actions/permissions",
       "PUT /repos/{owner}/{repo}/actions/permissions/workflow",
       "GET /repos/{owner}/{repo}/actions/workflows",
+      "POST /repos/{owner}/{repo}/git/blobs",
+      "POST /repos/{owner}/{repo}/git/blobs",
       "POST /repos/{owner}/{repo}/git/blobs",
       "POST /repos/{owner}/{repo}/git/trees",
       "POST /repos/{owner}/{repo}/git/commits",

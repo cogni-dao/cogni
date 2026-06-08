@@ -36,6 +36,8 @@ import {
   renderCatalog,
   renderGitmodules,
   renderNodeAppset,
+  renderNodeExternalSecret,
+  renderNodeExternalSecretKustomization,
   renderOverlay,
   renderRepoSpec,
 } from "@/shared/node-app-scaffold/gens";
@@ -177,6 +179,7 @@ const NODE_REPO_REQUIRED_WORKFLOWS = [
   ".github/workflows/pr-build.yml",
   ".github/workflows/pr-lint.yaml",
 ] as const;
+const ESO_BIRTH_ENVS = ["candidate-a"] as const;
 
 const CatalogEntrySchema = z.object({
   name: z.string(),
@@ -234,9 +237,9 @@ function deployPlaneError(
 }
 
 // Node-content rename/delete (NODE_RENAME_PATHS / NODE_DELETE_PATHS) is gone with the inline
-// `buildNodeSubtree`: a submodule node's files live in its own repo (minted via
-// `forkFromTemplate`), and the seed already strips `.cogni/secrets-catalog.yaml` +
-// `k8s/external-secrets` (bug.5086 Part D) — the operator never rewrites node-content blobs.
+// `buildNodeSubtree`: a submodule node's app files live in its own repo (minted via
+// `forkFromTemplate`). The operator writes only node identity plus the ESO-first leaf files that
+// must be visible after the repo is mounted as `nodes/<slug>`.
 
 export class GitHubRepoWriter implements OperatorDeployPlanePort {
   private readonly config: GitHubRepoWriterConfig;
@@ -633,6 +636,33 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
         knowledgeRemote: input.knowledgeRemote,
       })
     );
+    const externalSecretEntries: GitTreeEntry[] = [];
+    for (const env of ESO_BIRTH_ENVS) {
+      externalSecretEntries.push(
+        {
+          path: `k8s/external-secrets/${env}/external-secret.yaml`,
+          mode: "100644",
+          type: "blob",
+          sha: await this.createBlob(
+            octokit,
+            owner,
+            slug,
+            renderNodeExternalSecret(slug, env)
+          ),
+        },
+        {
+          path: `k8s/external-secrets/${env}/kustomization.yaml`,
+          mode: "100644",
+          type: "blob",
+          sha: await this.createBlob(
+            octokit,
+            owner,
+            slug,
+            renderNodeExternalSecretKustomization()
+          ),
+        }
+      );
+    }
     const { data: tree } = await octokit.request(
       "POST /repos/{owner}/{repo}/git/trees",
       {
@@ -646,6 +676,7 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
             type: "blob",
             sha: repoSpecSha,
           },
+          ...externalSecretEntries,
         ],
       }
     );
@@ -1106,7 +1137,11 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       );
       await addBlob(
         overlayPath,
-        renderOverlay(templateOverlay, slug, nodePort, port)
+        env === "candidate-a"
+          ? renderOverlay(templateOverlay, slug, nodePort, port, {
+              secretTargetName: `${slug}-env-secrets`,
+            })
+          : renderOverlay(templateOverlay, slug, nodePort, port)
       );
     }
 
@@ -1435,7 +1470,7 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       `Operator-authored node-birth PR for \`${slug}\` (App-direct via Git Data API).\n\n` +
       "Pins the minted node repo as a submodule and adds the operator-owned deployment footprint: " +
       "catalog entry, overlays×3, AppSet stanzas×3, and edge route. The node source, CI, review " +
-      "rules, and image build live in the minted node repo.";
+      "rules, image build, and candidate-a ExternalSecret leaf live in the minted node repo.";
     try {
       const { data: pr } = await octokit.request(
         "POST /repos/{owner}/{repo}/pulls",
