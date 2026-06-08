@@ -58,66 +58,21 @@ Single source of truth for environment variables. Lazy validation with Zod preve
 
 ## Vars by layer
 
-**Server-only (server.ts)**
+**Server-only (`server.ts`)**
 
-Unified serverEnv() provides all vars:
+- Runtime: `NODE_ENV`, `APP_ENV`, `SERVICE_NAME`, `DEPLOY_ENVIRONMENT`, `PORT`, `PINO_LOG_LEVEL`
+- Database: `DATABASE_URL`, `DATABASE_SERVICE_URL`; both are explicit DSNs, no component-piece fallback, startup rejects same-user/superuser DSNs
+- LLM/billing/ops: `LITELLM_BASE_URL`, `LITELLM_MASTER_KEY`, `LITELLM_MVP_API_KEY`, `OPENROUTER_API_KEY`, `BILLING_INGEST_TOKEN`, `SCHEDULER_API_TOKEN`, `INTERNAL_OPS_TOKEN`
+- Auth/session: `AUTH_SECRET`
+- Authorization: `OPENFGA_API_URL`, `OPENFGA_STORE_ID`, `OPENFGA_AUTHORIZATION_MODEL_ID`, `OPENFGA_API_TOKEN`; `OPENFGA_STORE_ID` is required when OpenFGA activation vars are present
+- Metrics/analytics: `METRICS_TOKEN`, `PROMETHEUS_REMOTE_WRITE_URL`, `PROMETHEUS_QUERY_URL`, `PROMETHEUS_READ_USERNAME`, `PROMETHEUS_READ_PASSWORD`, `ANALYTICS_K_THRESHOLD`, `ANALYTICS_QUERY_TIMEOUT_MS`
+- Temporal: `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, `TEMPORAL_TASK_QUEUE`
+- Repo access: `COGNI_REPO_PATH`, `COGNI_REPO_SHA`; `COGNI_REPO_ROOT` is derived from `COGNI_REPO_PATH`
+- DoltHub: `DOLTHUB_OWNER`, `DOLTHUB_API_TOKEN`, `DOLTHUB_OAUTH_CLIENT_ID`, `DOLTHUB_OAUTH_CLIENT_SECRET`
 
-- NODE_ENV (development|test|production, default development)
-- APP_ENV (test|production)
-- SERVICE_NAME (default: "app") - for observability service label
-- DEPLOY_ENVIRONMENT - deployment env label for metrics and analytics filtering
-- DATABASE_URL (required, app_user role with RLS enforced)
-- DATABASE_SERVICE_URL (required, app_service role with BYPASSRLS)
-- LITELLM_BASE_URL (url, auto-detects: localhost:4000 for dev, litellm:4000 for production)
-- LITELLM_MASTER_KEY
-- PORT (default 3000)
-- PINO_LOG_LEVEL (trace|debug|info|warn|error, default info)
+**Public client (`client.ts`)**
 
-Per DATABASE_RLS_SPEC.md design decision 7:
-
-- Both DATABASE_URL and DATABASE_SERVICE_URL are required explicit DSNs
-- No component-piece fallback (POSTGRES_USER, DB_HOST, etc. removed from runtime schema)
-- Startup invariants reject same-user or superuser DSNs
-
-Temporal (required infrastructure):
-
-- TEMPORAL_ADDRESS (required, e.g., localhost:7233)
-- TEMPORAL_NAMESPACE (required, e.g., cogni-test)
-- TEMPORAL_TASK_QUEUE (optional, default scheduler-tasks)
-
-Repo access:
-
-- COGNI_REPO_PATH (required, e.g., "/repo/current" or ".") — explicit repo mount path, no cwd fallback
-- COGNI_REPO_SHA (optional) — SHA override for git-sync worktree mounts without usable .git
-
-Constructed:
-
-- COGNI_REPO_ROOT — resolved from COGNI_REPO_PATH (required in all environments)
-
-Optional:
-
-- LITELLM_MVP_API_KEY (MVP wallet link single key - TODO: remove when proper wallet→key registry exists)
-- OPENROUTER_API_KEY (for LiteLLM providers)
-- AUTH_SECRET (≥32 chars) - TODO: when session management added
-- METRICS_TOKEN (≥32 chars) - Bearer auth for /api/metrics endpoint
-- BILLING_INGEST_TOKEN (≥32 chars) - Bearer auth for LiteLLM callback → billing ingest endpoint
-- SCHEDULER_API_TOKEN (≥32 chars) - Bearer auth for scheduler-worker → internal graph execution API
-- INTERNAL_OPS_TOKEN (≥32 chars) - Bearer auth for deploy-time internal ops endpoints
-- PROMETHEUS_REMOTE_WRITE_URL (url) - Grafana Cloud write endpoint (must end with /api/prom/push)
-- PROMETHEUS_QUERY_URL (url) - Explicit query endpoint (alternative to deriving from write URL)
-- PROMETHEUS_READ_USERNAME - Basic auth username for Prometheus queries (read path)
-- PROMETHEUS_READ_PASSWORD - Basic auth password for Prometheus queries (read-only token)
-- ANALYTICS_K_THRESHOLD (int, default 50) - K-anonymity threshold for public analytics
-- ANALYTICS_QUERY_TIMEOUT_MS (int, default 5000) - Prometheus query timeout
-- DOLTHUB_OWNER - Env-scoped DoltHub owner for node knowledge repos. Required with DOLTHUB_API_TOKEN; test/preview must use a non-production owner.
-- DOLTHUB_API_TOKEN - DoltHub PAT for REST/SQL API and node knowledge repo creation; does NOT authenticate the Dolt push protocol
-- DOLTHUB_OAUTH_CLIENT_ID / DOLTHUB_OAUTH_CLIENT_SECRET - reserved for v1 per-user identity (task.5070); not read by v0 push job
-
-**Public client (client.ts)**
-
-- NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID (optional; degrades to injected wallet only)
-
-Rule: only NEXT*PUBLIC*\* keys may appear in client.ts.
+- `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID`; only `NEXT_PUBLIC_*` keys may appear in client env.
 
 ## Responsibilities
 
@@ -126,24 +81,7 @@ Rule: only NEXT*PUBLIC*\* keys may appear in client.ts.
 
 ## Usage
 
-Server code:
-
-```typescript
-import { serverEnv } from "@shared/env";
-const env = serverEnv(); // lazy function call
-```
-
-Client code:
-
-```typescript
-import { clientEnv } from "@shared/env";
-```
-
-Helpers (rare):
-
-```typescript
-import { getEnv, requireEnv } from "@shared/env";
-```
+Server code calls `serverEnv()` lazily. Client code imports `clientEnv`. Helpers `getEnv` and `requireEnv` are rare.
 
 ## Standards
 
@@ -170,9 +108,8 @@ Bump Last reviewed date. Ensure pnpm lint && pnpm typecheck pass.
 
 ## Notes
 
-- Lazy serverEnv() function prevents build-time database access
-- assertRuntimeSecrets() validates secrets only at runtime (adapter methods, /health) to allow build without secrets
-- Production-only memoization in assertRuntimeSecrets() prevents test false-passes while optimizing runtime
+- Lazy `serverEnv()` prevents build-time database access.
+- `assertRuntimeSecrets()` validates secrets only at runtime and memoizes only in production.
 - AUTH_SECRET rotation can be added later via AUTH_SECRETS CSV when session management is implemented
 - LITELLM_BASE_URL automatically detects deployment context (local dev vs Docker network)
 - Empty-string secrets from k8s Secret manifests must use the `optionalString` helper, not `z.string().optional()` — the latter rejects `""` and breaks `/readyz` (PR #1166).
