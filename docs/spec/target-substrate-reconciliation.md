@@ -4,7 +4,7 @@ type: spec
 title: Target Substrate Reconciliation
 status: draft
 trust: draft
-summary: Design contract for the narrow per-target substrate reconciler that makes nodeRef candidate flights self-heal catalog-derived runtime substrate before digest promotion.
+summary: Design contract for the narrow per-target substrate reconciler that makes nodeRef candidate flights self-heal catalog-derived runtime substrate before digest promotion without reviving legacy secret bridges or broad infra deploys.
 read_when: Designing or reviewing candidate-flight target substrate changes, nodeRef flight, node formation launch E2E, per-node DNS/edge/DB/secret reconciliation, or changes around assert-target-substrate.sh.
 implements: []
 owner: derekg1729
@@ -37,8 +37,8 @@ The observed `coulditbe` failure split the planes correctly:
 
 - child source CI can fail to publish `image_repository:sha-<sourceSha>`;
 - DNS can be reconciled successfully;
-- Caddy live config, runtime DB inventory, k8s Secret/ExternalSecret, and node
-  database can still be missing.
+- Caddy live config, runtime DB inventory, ESO ExternalSecret sync, and
+  Postgres/Doltgres databases can still be missing.
 
 The first row belongs to the source repo CI repair. The remaining rows are
 operator-owned deploy substrate. They need a narrow, idempotent per-target
@@ -54,6 +54,13 @@ reconciler before `assert-target-substrate.sh` and before app digest promotion.
   source-of-truth rules.
 - [Secrets Classification](./secrets-classification.md) - A/B/D/G routing
   boundaries.
+- [Production Operator ESO Cutover](../runbooks/production-operator-eso-cutover.md)
+  - current production direction: OpenBao + ESO replaces the legacy app secret
+    bridge; cleanup is delayed for rollback, not kept as a design option.
+- [Node BaaS Architecture](./node-baas-architecture.md) - node-owned intent vs
+  operator-owned managed substrate.
+- [Databases](./databases.md) and [Knowledge Data Plane](./knowledge-data-plane.md)
+  - Postgres vs Doltgres split and per-node database independence.
 - [`cicd-secrets-expert`](../../.claude/skills/cicd-secrets-expert/SKILL.md) -
   operational checklist for secret value handling.
 - [`devops-expert`](../../.claude/skills/devops-expert/SKILL.md) - workflow and
@@ -88,9 +95,12 @@ The successful E2E path is:
 - Do not provision a new VM or bootstrap OpenBao/ESO from this lane. Missing
   environment substrate remains a loud failure with a pointer to
   `provision-env.yml`.
-- Do not write secret values from app flight. The reconciler may create or
-  apply Secret/ExternalSecret objects and may trigger ESO refresh, but OpenBao
-  value writes stay in the secrets lane.
+- Do not write secret values from app flight. The reconciler may apply
+  ExternalSecret objects and trigger ESO refresh, but OpenBao value writes stay
+  in the secrets lane. It must not recreate the legacy plain-Secret bridge.
+- Do not read pod-consumed DB role passwords from GitHub env secrets. DB role
+  credentials are OpenBao-owned; missing OpenBao read access or missing values
+  are loud substrate failures.
 - Do not make `type=service` or `type=infra` pretend to be `type=node`.
   Service and infra target contracts need explicit branches.
 - Do not add wizard-persisted CI state. The wizard emits launch facts; GitHub,
@@ -117,6 +127,14 @@ Inputs:
 
 The script reads `infra/catalog/$TARGET.yaml`, dispatches by `.type`, and
 implements only `type=node` in the first PR.
+
+The script must not accept pod secret values or DB role password values as
+inputs. The only allowed secret read for DB provisioning is the VM-local OpenBao
+read path described in `secrets-management.md` Invariant 15:
+`kubectl create token db-provisioner` -> OpenBao Kubernetes auth
+`<env>-db-reader` -> read the DB credential keys already used by ESO for the
+target service. If that read path is absent, sealed, unauthorized, or missing
+keys, the DB row fails. There is no GitHub-secret fallback.
 
 Exit contract:
 
@@ -150,17 +168,18 @@ inside the JSON body.
 
 For `type=node`, the reconciler owns these rows:
 
-| Row                   | Reconcile behavior                                                                                                                                                                        | Proof                                                                  |
-| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| AppSet                | Apply only `infra/k8s/argocd/<env>-<target>-applicationset.yaml` from `APP_SOURCE_DIR`; keep the #1577 lane isolation behavior.                                                           | `kubectl -n argocd get applicationset cogni-<env>-<target>`.           |
-| DNS                   | Upsert `<target>-test.<root>` to the env apex VM IP using `reconcile-node-dns.sh` logic, scoped to the target when practical.                                                             | Cloudflare A record equals apex origin IP.                             |
-| Edge env              | Ensure `/opt/cogni-template-edge/.env` has the derived `<TARGET>_DOMAIN` or primary `<TARGET>_UPSTREAM` line.                                                                             | File contains expected key/value.                                      |
-| Caddyfile             | Ensure committed/generated Caddyfile is present on the VM and contains the target route/NodePort.                                                                                         | File contains host placeholder and `host.docker.internal:<node_port>`. |
-| Caddy live config     | Recreate or reload Caddy only when edge env or Caddyfile hash changes. Prefer the existing `docker compose up -d --force-recreate caddy` pattern from `deploy-infra.sh`, scoped to Caddy. | Admin API config contains host and NodePort.                           |
-| Namespace             | Ensure `cogni-<env>` exists.                                                                                                                                                              | `kubectl get namespace`.                                               |
-| ExternalSecret/Secret | Ensure the target's declared ExternalSecret object exists, trigger a refresh if supported, and wait for Ready/Synced. Do not write OpenBao values.                                        | `ExternalSecret Ready=True` and Deployment-consumed Secret exists.     |
-| Postgres DB           | Create the catalog-derived app DB if absent; do not alter pod-consumed role passwords.                                                                                                    | `SELECT 1 FROM pg_database WHERE datname = <db>`.                      |
-| Runtime DB inventory  | Update `COGNI_NODE_DBS` in `/opt/cogni-template-runtime/.env` to include the catalog-derived DB name.                                                                                     | Runtime env includes the DB.                                           |
+| Row                  | Reconcile behavior                                                                                                                                                                                             | Proof                                                                                                                            |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| AppSet               | Apply only `infra/k8s/argocd/<env>-<target>-applicationset.yaml` from `APP_SOURCE_DIR`; keep the #1577 lane isolation behavior.                                                                                | `kubectl -n argocd get applicationset cogni-<env>-<target>`.                                                                     |
+| DNS                  | Upsert `<target>-test.<root>` to the env apex VM IP using `reconcile-node-dns.sh` logic, scoped to the target when practical.                                                                                  | Cloudflare A record equals apex origin IP.                                                                                       |
+| Edge env             | Ensure `/opt/cogni-template-edge/.env` has the derived `<TARGET>_DOMAIN` or primary `<TARGET>_UPSTREAM` line.                                                                                                  | File contains expected key/value.                                                                                                |
+| Caddyfile            | Ensure committed/generated Caddyfile is present on the VM and contains the target route/NodePort.                                                                                                              | File contains host placeholder and `host.docker.internal:<node_port>`.                                                           |
+| Caddy live config    | Recreate or reload Caddy only when edge env or Caddyfile hash changes. Prefer the existing `docker compose up -d --force-recreate caddy` pattern from `deploy-infra.sh`, scoped to Caddy.                      | Admin API config contains host and NodePort.                                                                                     |
+| Namespace            | Ensure `cogni-<env>` exists.                                                                                                                                                                                   | `kubectl get namespace`.                                                                                                         |
+| ExternalSecret       | Apply the target's declared ExternalSecret object from Git, annotate for force-sync when supported, and wait for Ready/Synced. Do not write OpenBao values and do not create `<target>-node-app-secrets`.      | `ExternalSecret Ready=True`; synced k8s Secret exists; Deployment consumes `<target>-env-secrets`.                               |
+| Postgres DB          | Create the catalog-derived app DB if absent, using OpenBao-sourced role credentials for any set-once role creation. Do not alter pod-consumed role passwords.                                                  | `SELECT 1 FROM pg_database WHERE datname = <db>`.                                                                                |
+| Doltgres DB          | Create the catalog-derived knowledge DB if absent (`cogni_<target>` -> `knowledge_<target>`), using OpenBao-sourced role credentials for any set-once role creation. Do not alter pod-consumed role passwords. | `SELECT 1 FROM doltgres pg_database WHERE datname = <knowledge_db>` and the DB is reachable through the target's `DOLTGRES_URL`. |
+| Runtime DB inventory | Update `COGNI_NODE_DBS` in `/opt/cogni-template-runtime/.env` to include the catalog-derived DB name.                                                                                                          | Runtime env includes the DB.                                                                                                     |
 
 The first implementation may reuse narrow functions factored out of
 `deploy-infra.sh`, but it must not call `deploy-infra.sh` wholesale. Shared code
@@ -172,16 +191,55 @@ duplication. Keep the workflow thin.
 The reconciler must respect the secrets specs:
 
 - It may apply an ExternalSecret manifest and wait for ESO.
-- It may create a k8s Secret only for the legacy plain-Secret bridge if that is
-  already the current live contract for the target/environment.
+- It may annotate the ExternalSecret for a force-sync and rely on Reloader or
+  the app rollout path to restart pods.
 - It must not generate, print, or patch secret values.
 - It must not `bao kv put` or `bao kv patch`.
 - It must not fix missing OpenBao keys by falling back to GitHub env secrets.
 - It must not `ALTER ROLE ... PASSWORD` for pod-consumed DB roles.
+- It must not create or update `<target>-node-app-secrets`.
+
+The first implementation should treat ESO as the only acceptable pod secret
+contract for nodeRef flight. A target Deployment that still consumes the legacy
+`<target>-node-app-secrets` plain Secret fails the secret row with an actionable
+message to cut that target to `<target>-env-secrets`. ESO is already live in the
+environments this design targets; preserving the bridge in the new reconciler
+would recreate the legacy secret operation the platform is actively removing.
 
 If a pod-consumed secret is missing because OpenBao lacks a value, the row fails
-with an actionable message pointing to the secrets lane. That is a substrate
-failure, not an app promotion failure.
+with an actionable message pointing to the secrets lane (`pnpm secrets:set`,
+the per-operation `secret-set.yml`, or the operator-mediated secret writer).
+That is a substrate failure, not an app promotion failure.
+
+### Database Boundary
+
+Postgres and Doltgres are both target-local substrate for node apps:
+
+- Postgres owns operational data (`cogni_<target>`).
+- Doltgres owns AI-written / AI-read knowledge (`knowledge_<target>`).
+
+The reconciler must provision both, or fail loudly before app promotion. A node
+that has a `/version` endpoint but no Doltgres knowledge DB is not a healthy
+node-wizard E2E result.
+
+The DB primitive should be extracted narrowly from the existing
+`deploy-infra.sh` / `postgres-init/provision.sh` / `doltgres-init/provision.sh`
+logic rather than shelling out to `deploy-infra.sh` wholesale. The extracted
+primitive owns:
+
+- confirming base Compose DB services are running;
+- adding the target DB to `COGNI_NODE_DBS` without disturbing other entries;
+- creating missing Postgres and Doltgres databases idempotently;
+- creating DB roles only when absent, with create-time passwords read from
+  OpenBao via the `<env>-db-reader` path;
+- refusing to alter existing pod-consumed role passwords;
+- emitting redacted evidence for each DB row.
+
+Runtime `.env` changes are process inputs, not proof by themselves. When the
+reconciler changes `COGNI_NODE_DBS`, it must run the narrow DB provisioners
+after the change. It must not restart unrelated Compose services. If a later
+implementation finds a Compose service that must reread the inventory, that
+restart must be explicitly named and justified in the DB row summary.
 
 ### Workflow Integration
 
@@ -224,9 +282,9 @@ Owned and mutable:
 - target AppSet object;
 - target DNS A record;
 - target Caddy edge env and route;
-- target DB existence and `COGNI_NODE_DBS` membership;
+- target Postgres and Doltgres DB existence plus `COGNI_NODE_DBS` membership;
 - target ExternalSecret object/refresh where the manifest already declares the
-  secret shape;
+  ESO secret shape;
 - target namespace when the env VM exists.
 
 Unowned and fail-loud:
@@ -237,7 +295,9 @@ Unowned and fail-loud:
 - missing Postgres/Caddy/docker/kubectl/OpenBao/ESO base services;
 - missing source image `sha-<sourceSha>`;
 - missing OpenBao values;
+- missing OpenBao `<env>-db-reader` path for DB role credential reads;
 - DB credential mismatch requiring password mutation;
+- Deployment still consuming legacy `<target>-node-app-secrets`;
 - unsupported target type.
 
 This distinction is the core safety property: app flight becomes self-healing
@@ -251,9 +311,13 @@ for target birth substrate without becoming a general environment provisioner.
    `scripts/ci/tests/assert-target-substrate.test.sh`:
    - creates missing edge env key;
    - recreates Caddy on env/Caddyfile change;
-   - creates missing DB and DB inventory entry;
+   - creates missing Postgres DB and DB inventory entry;
+   - creates missing Doltgres knowledge DB from the same inventory entry;
    - applies/refreshes ExternalSecret without secret value writes;
+   - fails if the Deployment still consumes the legacy plain Secret;
    - fails on missing OpenBao/ESO value;
+   - fails on missing OpenBao DB reader path instead of falling back to GitHub
+     env secrets;
    - is idempotent on second run;
    - emits redacted summary JSON.
 4. Wire `candidate-flight.yml` with a `reconcile-substrate` job before
@@ -310,7 +374,8 @@ from `main`.
 Acceptance:
 
 - `resolve image` finds `image_repository:sha-<sourceSha>`;
-- `reconcile-substrate` succeeds and posts a Loki summary;
+- `reconcile-substrate` succeeds and posts a Loki summary with successful edge,
+  ESO, Postgres, Doltgres, and DB inventory rows;
 - `assert-substrate` succeeds;
 - no `deploy-infra` job runs;
 - `flight` writes only `deploy/candidate-a-<slug>`;
@@ -350,7 +415,9 @@ Acceptance:
 - `reconcile-substrate` or `assert-substrate` fails before `flight`;
 - `flight` and `verify-candidate` are skipped or failed by job-level gates;
 - no deploy branch digest is promoted for the failed target;
-- summary tells the operator which owning lane fixes it.
+- summary tells the operator which owning lane fixes it;
+- a legacy plain-Secret consumer, missing OpenBao value, or missing
+  `<env>-db-reader` path fails without falling back to GitHub env secrets.
 
 ## Review Questions
 
@@ -358,12 +425,11 @@ Reviewers should decide these before implementation approval:
 
 1. Should `reconcile-dns` and `reconcile-appset` remain separate in the first
    PR, or should `reconcile-target-substrate.sh` own them immediately?
-2. For candidate-a, is the live secret contract still legacy
-   `<node>-node-app-secrets`, ESO `<node>-env-secrets`, or both during
-   transition?
-3. Should `reconcile-target-substrate.sh` create missing Postgres DBs directly,
-   or should it call a narrow extracted DB provision helper from
-   `deploy-infra.sh`?
+2. What is the smallest extracted DB helper that can provision Postgres and
+   Doltgres without calling `deploy-infra.sh` wholesale?
+3. Should phase one require the OpenBao DB reader path to exist in candidate-a,
+   or should it land that reader path in the same implementation PR before the
+   reconciler job is enabled?
 4. What Loki query should the scorecard standardize for
    `target_substrate_reconcile_summary`?
 5. Does this PR cover candidate-a only, or should preview/prod wiring land at
@@ -383,3 +449,11 @@ That is the smallest design that satisfies both constraints:
 
 - new nodes become healthy at `candidate-a` without manual VM edits;
 - app flight does not become a broad environment provisioner.
+
+The two load-bearing clarifications are:
+
+- pod secrets are ESO-only for this path; the reconciler applies and waits on
+  `<target>-env-secrets`, and refuses to recreate `<target>-node-app-secrets`;
+- database substrate means both Postgres and Doltgres, with DB role credentials
+  sourced from OpenBao or not used at all. GitHub env secrets are not a fallback
+  source for pod-consumed DB roles.
