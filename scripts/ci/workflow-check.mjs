@@ -179,6 +179,7 @@ const reconcileSubstrate = candidateJobs["reconcile-substrate"];
 const assertSubstrate = candidateJobs["assert-substrate"];
 const flight = candidateJobs.flight;
 const verifyCandidate = candidateJobs["verify-candidate"];
+const reportStatus = candidateJobs["report-status"];
 
 function needsList(job) {
   const needs = job?.needs;
@@ -250,6 +251,21 @@ if (
   pass("verify-candidate carries the reconcile-substrate gate");
 } else {
   fail("verify-candidate must carry the reconcile-substrate gate");
+}
+
+const reportNeeds = new Set(needsList(reportStatus));
+if (
+  reportNeeds.has("reconcile-substrate") &&
+  reportNeeds.has("assert-substrate") &&
+  candidateFlightText.includes("RECONCILE_SUBSTRATE_RESULT") &&
+  candidateFlightText.includes("ASSERT_SUBSTRATE_RESULT") &&
+  candidateFlightText.includes("Candidate flight failed before promotion")
+) {
+  pass("report-status exposes substrate reconcile/assert failures");
+} else {
+  fail(
+    "report-status must include reconcile/assert jobs and describe substrate failures before promotion"
+  );
 }
 
 console.log(`workflows: ${workflowFiles.join(", ")}`);

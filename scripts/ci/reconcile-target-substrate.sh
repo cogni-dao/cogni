@@ -260,6 +260,28 @@ mark_failed() {
   echo "::error::reconcile-target-substrate: $2" >&2
 }
 
+wait_for_k8s_object() {
+  local row="$1" namespace_arg="$2" kind="$3" name="$4" label="$5"
+  local ready=false
+  local kubectl_args=()
+  if [ -n "$namespace_arg" ]; then
+    kubectl_args=(-n "$namespace_arg")
+  fi
+  for _ in $(seq 1 "$wait_attempts"); do
+    if kubectl "${kubectl_args[@]}" get "$kind" "$name" >/dev/null 2>&1; then
+      ready=true
+      break
+    fi
+    sleep "$wait_sleep_seconds"
+  done
+  if $ready; then
+    emit_row "$row" unchanged "$label exists"
+    return 0
+  fi
+  mark_failed "$row" "$label missing after reconcile wait"
+  return 1
+}
+
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || mark_failed prerequisites "missing command on VM: $1"
 }
@@ -368,11 +390,34 @@ doltgres_sql() {
 ensure_postgres_role() {
   local role="$1" pass="$2" attrs="${3:-}"
   validate_ident "$role" || { mark_failed postgres_db "invalid Postgres role identifier: $role"; return 1; }
-  exists="$(postgres_sql postgres "SELECT 1 FROM pg_roles WHERE rolname='${role}'" 2>/dev/null | tr -d '[:space:]' || true)"
+  exists="$(postgres_sql postgres "SELECT 1 FROM pg_roles WHERE rolname='${role}'" 2>/dev/null | tr -d '[:space:]')" || {
+    mark_failed postgres_db "could not inspect Postgres role $role"
+    return 2
+  }
   if [ "$exists" = "1" ]; then
     return 1
   fi
-  postgres_sql postgres "CREATE ROLE \"${role}\" WITH LOGIN PASSWORD $(sql_literal "$pass") ${attrs};" >/dev/null
+  postgres_sql postgres "CREATE ROLE \"${role}\" WITH LOGIN PASSWORD $(sql_literal "$pass") ${attrs};" >/dev/null || {
+    mark_failed postgres_db "could not create Postgres role $role"
+    return 2
+  }
+  return 0
+}
+
+ensure_doltgres_role() {
+  local role="$1" pass="$2"
+  validate_ident "$role" || { mark_failed doltgres_db "invalid Doltgres role identifier: $role"; return 1; }
+  exists="$(doltgres_sql postgres "SELECT 1 FROM pg_roles WHERE rolname='${role}'" 2>/dev/null | tr -d '[:space:]')" || {
+    mark_failed doltgres_db "could not inspect Doltgres role $role"
+    return 2
+  }
+  if [ "$exists" = "1" ]; then
+    return 1
+  fi
+  doltgres_sql postgres "CREATE ROLE \"${role}\" WITH LOGIN PASSWORD $(sql_literal "$pass")" >/dev/null || {
+    mark_failed doltgres_db "could not create Doltgres role $role"
+    return 2
+  }
   return 0
 }
 
@@ -425,6 +470,8 @@ else
   mark_failed appset "staged AppSet file missing"
 fi
 
+wait_for_k8s_object argo_application argocd application "$app_name" "Argo Application $app_name"
+
 if [ -f "$external_secret_src" ]; then
   secret_state=updated
   kubectl -n "$namespace" get externalsecret "$expected_secret" >/dev/null 2>&1 || secret_state=created
@@ -450,6 +497,9 @@ if [ -f "$external_secret_src" ]; then
 else
   mark_failed externalsecret "staged ExternalSecret file missing"
 fi
+
+wait_for_k8s_object deployment "$namespace" deployment "$workload_name" "Deployment $workload_name"
+wait_for_k8s_object service "$namespace" service "$workload_name" "Service $workload_name"
 
 if kubectl -n "$namespace" get deployment "$workload_name" >/dev/null 2>&1; then
   consumed_secret_names="$(
@@ -551,9 +601,15 @@ if "${runtime_compose[@]}" ps -q postgres >/dev/null 2>&1; then
     readonly_pass="$(read_openbao_key APP_DB_READONLY_PASSWORD)" || { failed=1; readonly_pass=""; }
     if [ -n "$app_pass" ] && [ -n "$svc_pass" ] && [ -n "$readonly_pass" ]; then
       pg_state=unchanged
-      ensure_postgres_role "$APP_DB_USER" "$app_pass" "" >/dev/null 2>&1 && pg_state=created
-      ensure_postgres_role "$APP_DB_SERVICE_USER" "$svc_pass" "BYPASSRLS" >/dev/null 2>&1 && pg_state=created
-      ensure_postgres_role "$APP_DB_READONLY_USER" "$readonly_pass" "BYPASSRLS" >/dev/null 2>&1 && pg_state=created
+      role_rc=0
+      ensure_postgres_role "$APP_DB_USER" "$app_pass" "" || role_rc=$?
+      [ "$role_rc" -eq 0 ] && pg_state=created
+      role_rc=0
+      ensure_postgres_role "$APP_DB_SERVICE_USER" "$svc_pass" "BYPASSRLS" || role_rc=$?
+      [ "$role_rc" -eq 0 ] && pg_state=created
+      role_rc=0
+      ensure_postgres_role "$APP_DB_READONLY_USER" "$readonly_pass" "BYPASSRLS" || role_rc=$?
+      [ "$role_rc" -eq 0 ] && pg_state=created
       if ensure_postgres_db; then
         pg_state=created
       fi
@@ -574,8 +630,12 @@ if "${runtime_compose[@]}" ps -q doltgres >/dev/null 2>&1; then
   DOLTGRES_WRITER_PASSWORD="$(read_openbao_key DOLTGRES_WRITER_PASSWORD)" || { failed=1; DOLTGRES_WRITER_PASSWORD=""; }
   if [ -n "$DOLTGRES_PASSWORD" ] && [ -n "$DOLTGRES_READER_PASSWORD" ] && [ -n "$DOLTGRES_WRITER_PASSWORD" ]; then
     dg_state=unchanged
-    doltgres_sql postgres "CREATE ROLE knowledge_reader WITH LOGIN PASSWORD $(sql_literal "$DOLTGRES_READER_PASSWORD")" >/dev/null 2>&1 && dg_state=created || true
-    doltgres_sql postgres "CREATE ROLE knowledge_writer WITH LOGIN PASSWORD $(sql_literal "$DOLTGRES_WRITER_PASSWORD")" >/dev/null 2>&1 && dg_state=created || true
+    role_rc=0
+    ensure_doltgres_role knowledge_reader "$DOLTGRES_READER_PASSWORD" || role_rc=$?
+    [ "$role_rc" -eq 0 ] && dg_state=created
+    role_rc=0
+    ensure_doltgres_role knowledge_writer "$DOLTGRES_WRITER_PASSWORD" || role_rc=$?
+    [ "$role_rc" -eq 0 ] && dg_state=created
     if ensure_doltgres_db; then
       dg_state=created
     fi

@@ -108,6 +108,10 @@ if [ "${1:-}" = "get" ]; then
       [ -f "$FAKE_STATE_DIR/externalsecret" ] && exit 0
       exit 1
       ;;
+    "argocd:application:candidate-a-canary")
+      [ -f "$FAKE_STATE_DIR/appset" ] && exit 0
+      exit 1
+      ;;
     "cogni-candidate-a:deployment:canary-node-app")
       if printf '%s\n' "$*" | grep -Fq 'jsonpath='; then
         if [ "${FAKE_LEGACY_SECRET_CONSUMER:-}" = "1" ]; then
@@ -116,6 +120,9 @@ if [ "${1:-}" = "get" ]; then
           echo "canary-env-secrets"
         fi
       fi
+      exit 0
+      ;;
+    "cogni-candidate-a:service:canary-node-app")
       exit 0
       ;;
     ":sa:db-provisioner"|"default:sa:db-provisioner"|"default:serviceaccount:db-provisioner")
@@ -209,9 +216,9 @@ if printf '%s\n' "$command_text" | grep -q ' exec -T postgres '; then
     *"FROM pg_roles WHERE rolname='app_user'"*) [ -f "$FAKE_STATE_DIR/role_app_user" ] && echo 1; exit 0 ;;
     *"FROM pg_roles WHERE rolname='app_service'"*) [ -f "$FAKE_STATE_DIR/role_app_service" ] && echo 1; exit 0 ;;
     *"FROM pg_roles WHERE rolname='app_readonly'"*) [ -f "$FAKE_STATE_DIR/role_app_readonly" ] && echo 1; exit 0 ;;
-    *'CREATE ROLE "app_user"'*) touch "$FAKE_STATE_DIR/role_app_user"; exit 0 ;;
-    *'CREATE ROLE "app_service"'*) touch "$FAKE_STATE_DIR/role_app_service"; exit 0 ;;
-    *'CREATE ROLE "app_readonly"'*) touch "$FAKE_STATE_DIR/role_app_readonly"; exit 0 ;;
+    *'CREATE ROLE "app_user"'*) [ "${FAKE_POSTGRES_ROLE_CREATE_FAIL:-}" = "1" ] && exit 1; touch "$FAKE_STATE_DIR/role_app_user"; exit 0 ;;
+    *'CREATE ROLE "app_service"'*) [ "${FAKE_POSTGRES_ROLE_CREATE_FAIL:-}" = "1" ] && exit 1; touch "$FAKE_STATE_DIR/role_app_service"; exit 0 ;;
+    *'CREATE ROLE "app_readonly"'*) [ "${FAKE_POSTGRES_ROLE_CREATE_FAIL:-}" = "1" ] && exit 1; touch "$FAKE_STATE_DIR/role_app_readonly"; exit 0 ;;
     *"FROM pg_database WHERE datname='cogni_canary'"*) [ -f "$FAKE_STATE_DIR/pg_cogni_canary" ] && echo 1; exit 0 ;;
     *'CREATE DATABASE "cogni_canary"'*) touch "$FAKE_STATE_DIR/pg_cogni_canary"; exit 0 ;;
     *'GRANT CONNECT, CREATE, TEMP ON DATABASE "cogni_canary"'*) exit 0 ;;
@@ -219,8 +226,10 @@ if printf '%s\n' "$command_text" | grep -q ' exec -T postgres '; then
 fi
 if printf '%s\n' "$command_text" | grep -q ' exec -T doltgres '; then
   case "$command_text" in
-    *'CREATE ROLE knowledge_reader'*) [ -f "$FAKE_STATE_DIR/dg_role_reader" ] && exit 1; touch "$FAKE_STATE_DIR/dg_role_reader"; exit 0 ;;
-    *'CREATE ROLE knowledge_writer'*) [ -f "$FAKE_STATE_DIR/dg_role_writer" ] && exit 1; touch "$FAKE_STATE_DIR/dg_role_writer"; exit 0 ;;
+    *"FROM pg_roles WHERE rolname='knowledge_reader'"*) [ -f "$FAKE_STATE_DIR/dg_role_reader" ] && echo 1; exit 0 ;;
+    *"FROM pg_roles WHERE rolname='knowledge_writer'"*) [ -f "$FAKE_STATE_DIR/dg_role_writer" ] && echo 1; exit 0 ;;
+    *'CREATE ROLE "knowledge_reader"'*) [ "${FAKE_DOLTGRES_ROLE_CREATE_FAIL:-}" = "1" ] && exit 1; touch "$FAKE_STATE_DIR/dg_role_reader"; exit 0 ;;
+    *'CREATE ROLE "knowledge_writer"'*) [ "${FAKE_DOLTGRES_ROLE_CREATE_FAIL:-}" = "1" ] && exit 1; touch "$FAKE_STATE_DIR/dg_role_writer"; exit 0 ;;
     *"FROM pg_database WHERE datname='knowledge_canary'"*) [ -f "$FAKE_STATE_DIR/dg_knowledge_canary" ] && echo 1; exit 0 ;;
     *'CREATE DATABASE "knowledge_canary"'*) touch "$FAKE_STATE_DIR/dg_knowledge_canary"; exit 0 ;;
     *"dolt_commit"*) exit 0 ;;
@@ -305,6 +314,24 @@ if env "${BASE_ENV[@]}" FAKE_MISSING_BAO_VALUE=1 \
   exit 1
 fi
 grep -q "missing OpenBao key APP_DB_PASSWORD" "$TMPROOT/missing-bao.out"
+
+rm -f "$STATE_DIR/role_app_user" "$STATE_DIR/role_app_service" "$STATE_DIR/role_app_readonly" "$STATE_DIR/pg_cogni_canary"
+if env "${BASE_ENV[@]}" FAKE_POSTGRES_ROLE_CREATE_FAIL=1 \
+  SUBSTRATE_RECONCILE_SUMMARY_FILE="$TMPROOT/pg-role-fail-summary.json" \
+  bash scripts/ci/reconcile-target-substrate.sh >"$TMPROOT/pg-role-fail.out" 2>&1; then
+  echo "expected Postgres role create failure to fail" >&2
+  exit 1
+fi
+grep -q "could not create Postgres role app_user" "$TMPROOT/pg-role-fail.out"
+
+rm -f "$STATE_DIR/dg_role_reader" "$STATE_DIR/dg_role_writer" "$STATE_DIR/dg_knowledge_canary"
+if env "${BASE_ENV[@]}" FAKE_DOLTGRES_ROLE_CREATE_FAIL=1 \
+  SUBSTRATE_RECONCILE_SUMMARY_FILE="$TMPROOT/dg-role-fail-summary.json" \
+  bash scripts/ci/reconcile-target-substrate.sh >"$TMPROOT/dg-role-fail.out" 2>&1; then
+  echo "expected Doltgres role create failure to fail" >&2
+  exit 1
+fi
+grep -q "could not create Doltgres role knowledge_reader" "$TMPROOT/dg-role-fail.out"
 
 if env TARGET=scheduler-worker DEPLOY_ENVIRONMENT=candidate-a APP_SOURCE_DIR=. COGNI_CATALOG_ROOT=infra/catalog \
   SUBSTRATE_RECONCILE_SUMMARY_FILE="$TMPROOT/service-summary.json" \

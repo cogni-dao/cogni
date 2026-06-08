@@ -897,7 +897,8 @@ jobs:
         run: bash ci-src/scripts/ci/verify-buildsha.sh
 
   report-status:
-    needs: [decide, flight, verify-candidate]
+    needs:
+      [decide, reconcile-substrate, assert-substrate, flight, verify-candidate]
     if: always() && needs.decide.result == 'success'
     runs-on: ubuntu-latest
     steps:
@@ -909,12 +910,15 @@ jobs:
         env:
           HAS_TARGETS: ${{ needs.decide.outputs.has_targets }}
           HAS_FLIGHT_TARGETS: ${{ needs.decide.outputs.has_flight_targets }}
+          NEEDS_SUBSTRATE_CHECK: ${{ needs.decide.outputs.needs_substrate_check }}
+          RECONCILE_SUBSTRATE_RESULT: ${{ needs.reconcile-substrate.result }}
+          ASSERT_SUBSTRATE_RESULT: ${{ needs.assert-substrate.result }}
           FLIGHT_RESULT: ${{ needs.flight.result }}
           VERIFY_RESULT: ${{ needs.verify-candidate.result }}
           TARGETS_JSON: ${{ needs.decide.outputs.flight_targets_json }}
         run: |
           set -euo pipefail
-          echo "has_targets=${HAS_TARGETS} has_flight_targets=${HAS_FLIGHT_TARGETS} flight=${FLIGHT_RESULT} verify=${VERIFY_RESULT} flight_targets=${TARGETS_JSON}"
+          echo "has_targets=${HAS_TARGETS} has_flight_targets=${HAS_FLIGHT_TARGETS} substrate=${NEEDS_SUBSTRATE_CHECK} reconcile_substrate=${RECONCILE_SUBSTRATE_RESULT} assert_substrate=${ASSERT_SUBSTRATE_RESULT} flight=${FLIGHT_RESULT} verify=${VERIFY_RESULT} flight_targets=${TARGETS_JSON}"
           if [ "$HAS_FLIGHT_TARGETS" != "true" ]; then
             # No k8s app-lever targets. Either nothing affected, or the affected
             # set is type:infra only (e.g. litellm) — which deploys via the
@@ -925,6 +929,12 @@ jobs:
             else
               DESC="Candidate flight no-op (no affected nodes)"
             fi
+          elif [ "$NEEDS_SUBSTRATE_CHECK" = "true" ] && [ "$RECONCILE_SUBSTRATE_RESULT" != "success" ]; then
+            STATE=failure
+            DESC="Candidate flight failed before promotion (reconcile-substrate=${RECONCILE_SUBSTRATE_RESULT})"
+          elif [ "$NEEDS_SUBSTRATE_CHECK" = "true" ] && [ "$ASSERT_SUBSTRATE_RESULT" != "success" ]; then
+            STATE=failure
+            DESC="Candidate flight failed before promotion (assert-substrate=${ASSERT_SUBSTRATE_RESULT})"
           elif [ "$FLIGHT_RESULT" = "success" ] && [ "$VERIFY_RESULT" = "success" ]; then
             STATE=success
             DESC="Candidate flight passed (matrix: ${TARGETS_JSON})"
