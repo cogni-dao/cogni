@@ -220,11 +220,21 @@ jobs:
             "repos/${{ github.repository }}/pulls/${PR_NUMBER}/files" \
             --jq '.[] | select(.status == "added") | .filename
                   | select(test("^infra/catalog/[^/]+\\.yaml$"))')
-          if [ -n "$ADDED_CATALOG" ]; then
-            echo "::notice::Node birth detected — asserting substrate for new catalog entry: ${ADDED_CATALOG//$'\n'/ }"
+          ADDED_NODE_CATALOG=""
+          while IFS= read -r catalog_path; do
+            [ -n "$catalog_path" ] || continue
+            catalog_type=$(yq -N '.type // ""' "app-src/${catalog_path}")
+            if [ "$catalog_type" = "node" ]; then
+              ADDED_NODE_CATALOG+="${catalog_path}"$'\n'
+            else
+              echo "::notice::Added ${catalog_type:-unknown} catalog entry ${catalog_path} does not use node substrate assertion"
+            fi
+          done <<< "$ADDED_CATALOG"
+          if [ -n "$ADDED_NODE_CATALOG" ]; then
+            echo "::notice::Node birth detected — asserting substrate for new node catalog entry: ${ADDED_NODE_CATALOG//$'\n'/ }"
             echo "needs_substrate_check=true" >> "$GITHUB_OUTPUT"
           else
-            echo "ℹ️  No added infra/catalog/*.yaml — app-only flight, infra independent"
+            echo "ℹ️  No added node catalog entry — app-only flight, infra independent"
             echo "needs_substrate_check=false" >> "$GITHUB_OUTPUT"
           fi
 
