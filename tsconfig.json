@@ -31,6 +31,7 @@
     { "path": "./packages/node-shared" },
     { "path": "./packages/knowledge-base" },
     { "path": "./packages/knowledge-store" },
-    { "path": "./nodes/operator/packages/doltgres-schema" }
+    { "path": "./nodes/operator/packages/doltgres-schema" },
+    { "path": "./nodes/canary/packages/doltgres-schema" }
   ]
 }

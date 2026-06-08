@@ -14,7 +14,7 @@
 // biome-ignore-all lint/suspicious/noConsole: validator script; stdout is the only log surface
 // biome-ignore-all lint/style/noProcessEnv: script entry point
 
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
 const BASE_REF = process.env.MIGRATIONS_BASE_REF?.trim() || "origin/main";
@@ -36,6 +36,23 @@ function safeRead(spec) {
     throw new Error(
       `Failed to read ${spec} from git: ${err instanceof Error ? err.message : String(err)}`
     );
+  }
+}
+
+function nodeRoot(path) {
+  return path.match(/^(nodes\/[^/]+)/)?.[1] ?? null;
+}
+
+function isCurrentGitlink(path) {
+  const root = nodeRoot(path);
+  if (!root) return false;
+  try {
+    const entry = execFileSync("git", ["ls-files", "-s", "--", root], {
+      encoding: "utf8",
+    }).trim();
+    return entry.startsWith("160000 ");
+  } catch {
+    return false;
   }
 }
 
@@ -103,6 +120,7 @@ for (const line of lines) {
   if (status === "A") continue; // new files allowed
 
   if (status === "D") {
+    if (isCurrentGitlink(oldPath)) continue;
     violations.push({
       path: oldPath,
       reason: `deleted (status ${status})`,
