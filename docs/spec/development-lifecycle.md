@@ -10,8 +10,8 @@ read_when: Starting any contribution (agent or human), reviewing PRs, wiring a n
 implements: proj.development-workflows
 owner: derekg1729
 created: 2026-02-05
-updated: 2026-05-04
-verified: 2026-05-04
+updated: 2026-06-08
+verified: 2026-06-08
 tags: [workflow, commands, agentic, lifecycle]
 ---
 
@@ -204,13 +204,29 @@ Watch required checks (`unit`, `component`, `static`, `manifest`) on the PR head
 
 ### 6. Request candidate-a flight
 
+Use the flight lever that matches the artifact being deployed.
+
+For an in-repo operator app PR, dispatch the workflow directly:
+
+```bash
+gh workflow run candidate-flight.yml -f pr_number=$PR_NUMBER
+```
+
+For an externally built node artifact, call the operator API with the node's
+source identity:
+
 ```bash
 curl -s -X POST $BASE/api/v1/vcs/flight \
   -H "Authorization: Bearer $API_KEY" -H "content-type: application/json" \
-  -d "{\"prNumber\": $PR_NUMBER}"
+  -d '{"nodeRef":{"nodeId":"<node_id>","sourceSha":"<child_repo_main_sha>"}}'
 ```
 
-Response includes `slot`, `headSha`, `workflowUrl`. Endpoint is a thin gate: it verifies CI green and dispatches `candidate-flight.yml`. The candidate slot lease is owned by the workflow itself ([candidate-slot-controller](./candidate-slot-controller.md)) — the endpoint does not replicate that lease.
+The API response includes workflow dispatch metadata. The endpoint is a thin
+gate: it authenticates the caller, checks node flight authorization when RBAC is
+configured, verifies nodeRef source/image preflight, and dispatches
+`candidate-flight.yml`. The candidate slot lease is owned by the workflow itself
+([candidate-slot-controller](./candidate-slot-controller.md)) — the endpoint
+does not replicate that lease.
 
 ### 7. Self-validate
 
@@ -240,7 +256,7 @@ Distinct specialized agents own each lifecycle stage. No single agent runs the f
 | `qa-agent`        | Post-flight feature validation (task.0309) — manual predecessor is `/validate-candidate`                 |
 | `frontend-tester` | Playwright click-through (delegated by qa-agent for UI paths)                                            |
 
-`POST /api/v1/vcs/flight` is the **primitive** (deterministic dispatch — agent knows CI is green, wants to fly now). `pr-manager` is the **policy** layer (decides when to fly, monitors rollout, verifies SHA, requests merge). Do not add policy logic to the REST endpoint.
+`POST /api/v1/vcs/flight` is the **nodeRef primitive** for externally built node artifacts (deterministic dispatch — agent knows the source SHA and wants to fly now). Direct workflow dispatch remains the in-repo operator app PR lever. `pr-manager` is the **policy** layer (decides when to fly, monitors rollout, verifies SHA, requests merge). Do not add policy logic to the REST endpoint.
 
 | Responsibility            | `POST /api/v1/vcs/flight` | `pr-manager`          |
 | ------------------------- | ------------------------- | --------------------- |

@@ -9,7 +9,7 @@ summary: Multi-provider auth (SIWE wallet + GitHub/Discord/Google OAuth) on Next
 read_when: Working on login flow, wallet connection, OAuth providers, account linking, or session management.
 owner: derekg1729
 created: 2026-02-06
-verified: 2026-06-07
+verified: 2026-06-08
 tags: [auth]
 ---
 
@@ -206,6 +206,7 @@ Providers register conditionally — only when both `CLIENT_ID` and `CLIENT_SECR
 
 ## Related
 
+- [Browser Session Flight Auth](../guides/browser-session-flight-auth.md) — Creator-session approval and machine bearer-token nodeRef flight setup
 - [Decentralized User Identity](./decentralized-user-identity.md) — user_bindings schema, binding invariants
 - [Security Auth](./security-auth.md) — auth surface identity resolution
 - [DAO Enforcement](./dao-enforcement.md)

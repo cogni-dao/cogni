@@ -8,7 +8,7 @@ summary: OpenFGA-based authorization with actor/subject model and layered permis
 read_when: Implementing authorization checks, tool permissions, or on-behalf-of delegation
 owner: derekg1729
 created: 2026-02-05
-verified: 2026-06-07
+verified: 2026-06-08
 tags: [authorization]
 ---
 
@@ -47,17 +47,17 @@ Authorization operates across three distinct layers with different purposes:
 
 ## Implementation Coverage
 
-| Surface                                  | Status              | Enforcement                                                                                                                     |
-| ---------------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| Shared authorization contract            | Active in task.5010 | `packages/authorization-core` exports `AuthorizationPort`, check params/decisions, helpers, OpenFGA adapter, fake               |
-| Tool execution                           | Active in task.5010 | `createToolRunner()` calls `AuthorizationPort.check()` after ToolPolicy and before arg validation/execution                     |
-| Operator in-process graph/chat execution | Active in task.5010 | Operator DI injects `AuthorizationPort`; inproc provider passes `actorId`, `tenantId`, `graphId` to tool runner                 |
-| API-originated internal graph runs       | Identity-ready      | Route requires `actorUserId`, `billingAccountId`, `virtualKeyId`; tool authz receives `user:{actorUserId}`                      |
-| Direct `POST /api/v1/vcs/flight` route   | Active              | Route requires `SessionUser`, checks `node.flight` on `node:{node_id}` when OpenFGA is configured, then artifact-gates dispatch |
-| `core__vcs_flight_candidate` graph tool  | Tool-authz-covered  | PR-manager graph invokes it through `toolRunner.exec()`, so OpenFGA can deny `tool.execute` for that tool                       |
-| Connection broker token materialization  | Pending hardening   | Broker receives `{ actorId, tenantId }`; `connection.use` OpenFGA check is not wired in task.5010                               |
-| Graph invocation entry                   | Pending hardening   | `graph.invoke` check at `GraphExecutorPort.runGraph()` is not wired in task.5010                                                |
-| Authz audit metrics/events               | Pending hardening   | Current adapter returns decision details; durable `authz.check` event/metric emission is P1                                     |
+| Surface                                  | Status              | Enforcement                                                                                                                                                                           |
+| ---------------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Shared authorization contract            | Active in task.5010 | `packages/authorization-core` exports `AuthorizationPort`, check params/decisions, helpers, OpenFGA adapter, fake                                                                     |
+| Tool execution                           | Active in task.5010 | `createToolRunner()` calls `AuthorizationPort.check()` after ToolPolicy and before arg validation/execution                                                                           |
+| Operator in-process graph/chat execution | Active in task.5010 | Operator DI injects `AuthorizationPort`; inproc provider passes `actorId`, `tenantId`, `graphId` to tool runner                                                                       |
+| API-originated internal graph runs       | Identity-ready      | Route requires `actorUserId`, `billingAccountId`, `virtualKeyId`; tool authz receives `user:{actorUserId}`                                                                            |
+| Direct `POST /api/v1/vcs/flight` route   | Active              | Route requires request identity from browser session or valid machine bearer token, checks `node.flight` on `node:{node_id}` when OpenFGA is configured, then artifact-gates dispatch |
+| `core__vcs_flight_candidate` graph tool  | Tool-authz-covered  | PR-manager graph invokes it through `toolRunner.exec()`, so OpenFGA can deny `tool.execute` for that tool                                                                             |
+| Connection broker token materialization  | Pending hardening   | Broker receives `{ actorId, tenantId }`; `connection.use` OpenFGA check is not wired in task.5010                                                                                     |
+| Graph invocation entry                   | Pending hardening   | `graph.invoke` check at `GraphExecutorPort.runGraph()` is not wired in task.5010                                                                                                      |
+| Authz audit metrics/events               | Pending hardening   | Current adapter returns decision details; durable `authz.check` event/metric emission is P1                                                                                           |
 
 ---
 
@@ -337,7 +337,8 @@ cards; the graph still receives the fail-closed tool result.
 There are two flight paths:
 
 1. **Direct route:** `POST /api/v1/vcs/flight`
-   - Authenticates with browser session or HMAC machine bearer token.
+   - Authenticates with browser session or HMAC machine bearer token. Both
+     resolve to `SessionUser.id` and RBAC actor `user:{user_id}`.
    - Resolves the node by `nodeRef.nodeId` through service DB because the
      caller may be an approved external agent, not the RLS owner.
    - If OpenFGA is configured, checks:
@@ -458,6 +459,7 @@ Subject included in cache key because delegation status can change independently
 
 ## Related
 
+- [Browser Session Flight Auth](../guides/browser-session-flight-auth.md) — Creator/admin approval and bearer-token nodeRef flight validation
 - [RBAC Hardening Project](../../work/projects/proj.rbac-hardening.md) — Roadmap, implementation checklists, P1/P2 plans
 - [Tool Use Spec](tool-use.md) — Tool execution pipeline, DENY_BY_DEFAULT
 - [Tenant Connections Spec](tenant-connections.md) — Connection auth, GRANT_INTERSECTION

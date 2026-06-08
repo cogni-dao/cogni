@@ -10,7 +10,7 @@ summary: Implement OpenFGA-based authorization with actor/subject model, tool ga
 outcome: All protected actions gated by AuthorizationPort.check() with dual-check for delegated execution
 assignees: derekg1729
 created: 2026-02-07
-updated: 2026-06-07
+updated: 2026-06-08
 labels: [authorization, rbac]
 ---
 
@@ -78,7 +78,7 @@ type AuthzDecision =
 **Env Vars:**
 
 - [x] Add `OPENFGA_API_URL`, `OPENFGA_STORE_ID` to env validation
-- [ ] Configure OpenFGA store per environment (single store per env)
+- [x] Configure OpenFGA store/model per environment through deploy-infra bootstrap
 
 **File Pointers (P0 Scope):**
 
@@ -90,7 +90,7 @@ type AuthzDecision =
 | `packages/ai-core/src/tooling/types.ts`            | actorId, subjectId?, tenantId, graphId context |
 | `packages/ai-core/src/tooling/tool-runner.ts`      | Inject AuthorizationPort, pass actor+subject   |
 | `nodes/operator/app/src/bootstrap/container.ts`    | Wire authorization port                        |
-| `nodes/operator/app/src/shared/env/server.ts`      | OPENFGA_API_URL, OPENFGA_STORE_ID              |
+| `nodes/operator/app/src/shared/env/server-env.ts`  | OPENFGA_API_URL, OPENFGA_STORE_ID              |
 | `packages/ai-core/tests/tool-runner.authz.test.ts` | Authz bypass regression tests                  |
 
 ### Walk (P1) — Graph Invoke + Audit + Caching
@@ -126,7 +126,7 @@ type AuthzDecision =
 
 ## Dependencies
 
-- [ ] OpenFGA deployment (Docker service)
+- [x] OpenFGA deployment/store bootstrap (Docker service + deterministic store/model bootstrap)
 - [x] ToolPolicy design (TOOL_USE_SPEC.md)
 - [x] ConnectionBroker design (TENANT_CONNECTIONS_SPEC.md)
 
@@ -146,6 +146,7 @@ type AuthzDecision =
 - [RBAC Spec](../../docs/spec/rbac.md) — Core invariants, actor model, OpenFGA schema, design decisions
 - [Identity Model](../../docs/spec/identity-model.md) — Runtime `actorId`/`tenantId` distinction from DB identity keys
 - [Authentication](../../docs/spec/authentication.md) — Browser session and HMAC bearer-token identity resolution
+- [Browser Session Flight Auth](../../docs/guides/browser-session-flight-auth.md) — Creator/admin approval and bearer-token nodeRef flight procedure
 
 ## Design Notes
 

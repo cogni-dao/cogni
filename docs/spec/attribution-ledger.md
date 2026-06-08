@@ -10,7 +10,7 @@ read_when: Working on credit statements, activity ingestion, epoch enrichers, ep
 implements: proj.transparent-credit-payouts
 owner: derekg1729
 created: 2026-02-20
-verified: 2026-03-05
+verified: 2026-06-08
 tags: [governance, transparency, payments, attribution]
 ---
 
@@ -817,7 +817,7 @@ attribution ledger:
 - Registration mints a `user_id` and bearer token for the AI agent.
 - The node creator/admin approves or rejects the agent for one `node:{node_id}`
   through `POST /api/v1/nodes/{node_id}/developers`.
-- Approval writes OpenFGA node-developer / `can_flight` relationships.
+- Approval writes the OpenFGA `developer` tuple. `can_flight` is computed by the authorization model.
 - `POST /api/v1/vcs/flight` checks `node.flight` before dispatching candidate-a.
 
 No attribution statement changes when an agent receives flight permission. If
