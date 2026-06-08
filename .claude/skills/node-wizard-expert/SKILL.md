@@ -22,6 +22,7 @@ That block is the evolving handoff contract for personal AI assistants launching
 ## Ground Truth
 
 - `.claude/skills/node-wizard-scorecard/SKILL.md`
+- `docs/design/node-wizard-secret-setting.md`
 - `docs/guides/node-formation-guide.md`
 - `docs/spec/node-ci-cd-contract.md`
 - `nodes/operator/app/src/features/nodes/launch-pack.ts`
