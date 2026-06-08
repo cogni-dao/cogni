@@ -62,7 +62,7 @@ if [ "${1:-}" = "get" ]; then
       [ "${FAKE_MISSING_NAMESPACE:-}" = "1" ] && exit 1
       exit 0
       ;;
-    "argocd:applicationset:candidate-a-canary")
+    "argocd:applicationset:cogni-candidate-a-canary")
       [ "${FAKE_MISSING_APPSET:-}" = "1" ] && exit 1
       exit 0
       ;;
@@ -248,6 +248,18 @@ if env "${BASE_ENV[@]}" FAKE_MISSING_DB=1 bash scripts/ci/assert-target-substrat
   exit 1
 fi
 grep -q "Postgres database missing" "$TMPROOT/missing-db.out"
+
+cp "$REMOTE_ROOT/opt/cogni-template-runtime/.env" "$REMOTE_ROOT/opt/cogni-template-runtime/.env.bak"
+cat > "$REMOTE_ROOT/opt/cogni-template-runtime/.env" <<'EOF'
+COGNI_NODE_DBS=cogni_operator
+POSTGRES_ROOT_USER=postgres
+EOF
+if env "${BASE_ENV[@]}" bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/missing-db-inventory.out" 2>&1; then
+  echo "expected missing DB inventory to fail" >&2
+  exit 1
+fi
+grep -q "runtime env COGNI_NODE_DBS missing cogni_canary" "$TMPROOT/missing-db-inventory.out"
+mv "$REMOTE_ROOT/opt/cogni-template-runtime/.env.bak" "$REMOTE_ROOT/opt/cogni-template-runtime/.env"
 
 mv "$REMOTE_ROOT/opt/cogni-template-edge/.env" "$REMOTE_ROOT/opt/cogni-template-edge/.env.bak"
 if env "${BASE_ENV[@]}" bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/missing-edge-env.out" 2>&1; then

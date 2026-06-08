@@ -84,7 +84,7 @@ remote_script=$(mktemp)
 trap 'rm -f "$remote_script"' EXIT
 cat > "$remote_script" <<'REMOTE'
 #!/usr/bin/env bash
-set -euo pipefail
+set -uo pipefail
 
 env_name="$1"
 node="$2"
@@ -98,6 +98,7 @@ remote_root="${9:-}"
 
 namespace="cogni-${env_name}"
 app_name="${env_name}-${node}"
+appset_name="cogni-${env_name}-${node}"
 workload_name="${node}-node-app"
 edge_env="${remote_root}/opt/cogni-template-edge/.env"
 caddyfile="${remote_root}/opt/cogni-template-edge/configs/Caddyfile.tmpl"
@@ -105,8 +106,11 @@ runtime_env="${remote_root}/opt/cogni-template-runtime/.env"
 edge_compose=(docker compose --project-name cogni-edge --env-file "$edge_env" -f "${remote_root}/opt/cogni-template-edge/docker-compose.yml")
 runtime_compose=(docker compose --project-name cogni-runtime --env-file "$runtime_env" -f "${remote_root}/opt/cogni-template-runtime/docker-compose.yml")
 failed=0
+failures=()
 
 mark_fail() {
+  failures+=("$*")
+  echo "::error::assert-target-substrate: $*" >&2
   echo "[FAIL] $*" >&2
   failed=1
 }
@@ -128,10 +132,10 @@ else
   mark_fail "namespace missing: $namespace"
 fi
 
-if kubectl -n argocd get applicationset "$app_name" >/dev/null 2>&1; then
-  mark_ok "ApplicationSet exists: $app_name"
+if kubectl -n argocd get applicationset "$appset_name" >/dev/null 2>&1; then
+  mark_ok "ApplicationSet exists: $appset_name"
 else
-  mark_fail "ApplicationSet missing: $app_name"
+  mark_fail "ApplicationSet missing: $appset_name"
 fi
 
 app_ready=false
@@ -214,7 +218,7 @@ fi
 
 if "${edge_compose[@]}" ps -q caddy >/dev/null 2>&1; then
   mark_ok "Caddy compose service exists"
-  live_config="$("${edge_compose[@]}" exec -T caddy wget -qO- http://127.0.0.1:2019/config/ 2>/dev/null || true)"
+  live_config="$("${edge_compose[@]}" exec -T caddy wget -qO- http://127.0.0.1:2019/config/ </dev/null 2>/dev/null || true)"
   if printf '%s' "$live_config" | grep -Fq "$node_host" && printf '%s' "$live_config" | grep -Fq "host.docker.internal:${node_port}"; then
     mark_ok "live Caddy config carries $node_host -> host.docker.internal:${node_port}"
   else
@@ -225,18 +229,24 @@ else
 fi
 
 if [ -f "$runtime_env" ]; then
+  set -a
   # shellcheck disable=SC1090
-  set -a; source "$runtime_env"; set +a
-  case ",${COGNI_NODE_DBS:-}," in
-    *",${node_db},"*) mark_ok "runtime env includes DB inventory: $node_db" ;;
-    *) mark_fail "runtime env COGNI_NODE_DBS missing $node_db" ;;
-  esac
+  if source "$runtime_env"; then
+    set +a
+    case ",${COGNI_NODE_DBS:-}," in
+      *",${node_db},"*) mark_ok "runtime env includes DB inventory: $node_db" ;;
+      *) mark_fail "runtime env COGNI_NODE_DBS missing $node_db" ;;
+    esac
+  else
+    set +a
+    mark_fail "runtime env file is not sourceable: $runtime_env"
+  fi
 else
   mark_fail "runtime env file missing: $runtime_env"
 fi
 
 if "${runtime_compose[@]}" ps -q postgres >/dev/null 2>&1; then
-  if "${runtime_compose[@]}" exec -T postgres psql -U "${POSTGRES_ROOT_USER:-postgres}" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='${node_db}'" 2>/dev/null | tr -d '[:space:]' | grep -qx 1; then
+  if "${runtime_compose[@]}" exec -T postgres psql -U "${POSTGRES_ROOT_USER:-postgres}" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='${node_db}'" </dev/null 2>/dev/null | tr -d '[:space:]' | grep -qx 1; then
     mark_ok "Postgres database exists: $node_db"
   else
     mark_fail "Postgres database missing: $node_db"
@@ -247,19 +257,32 @@ fi
 
 if [ "$failed" -ne 0 ]; then
   echo ""
-  echo "Node substrate is not ready for ${node} in ${env_name}."
+  echo "Node substrate is not ready for ${node} in ${env_name}: ${#failures[@]} failure(s)."
+  printf '  - %s\n' "${failures[@]}"
   echo "Remediation: run the env provisioning lane or candidate-flight-infra.yml; app candidate-flight will not run deploy-infra implicitly."
   exit 1
 fi
 
-echo "Node substrate ready for ${node} in ${env_name}."
+echo "Node substrate ready for ${node} in ${env_name}: all checks passed."
 REMOTE
 
 local ssh_opts=()
 read -r -a ssh_opts <<< "$ssh_opts_raw"
+probe_log=$(mktemp)
+set +e
 "$ssh_bin" "${ssh_opts[@]}" "root@${vm_host}" bash -s -- \
   "$DEPLOY_ENVIRONMENT" "$node" "$node_db" "$node_host" "$edge_key" "$node_port" \
-  "$app_wait_attempts" "$app_wait_sleep_seconds" "$remote_root" < "$remote_script"
+  "$app_wait_attempts" "$app_wait_sleep_seconds" "$remote_root" < "$remote_script" 2>&1 | tee "$probe_log"
+ssh_rc=${PIPESTATUS[0]}
+set -e
+if grep -Eq '(^|\r)(\[FAIL\]|::error::assert-target-substrate:)' "$probe_log"; then
+  failure_count="$(grep -Ec '(^|\r)\[FAIL\]' "$probe_log" || true)"
+  echo "::error::assert-target-substrate: remote substrate probe emitted ${failure_count} failure(s); see [FAIL] lines above" >&2
+  rm -f "$probe_log"
+  return 1
+fi
+rm -f "$probe_log"
+return "$ssh_rc"
 }
 
 case "$target_type" in
