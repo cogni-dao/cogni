@@ -31,12 +31,12 @@ Public pages wrapped in `AppHeader` + `AppFooter` shell. `/` redirects signed-in
 - **Exports:** none
 - **Routes:** `/` (homepage — redirects signed-in users to `/chat`), `/explore` (redirects to `/explore/nodes`), `/explore/nodes`, `/explore/nodes/[slug]`
 - **Files considered API:** `layout.tsx`, `page.tsx`
-- **Deleted:** `AuthRedirect.tsx` — replaced by server-side proxy routing
+- **Auth intent:** `AuthPrompt.client.tsx` opens the sign-in dialog only when `proxy.ts` redirects an app route to `/?signIn=1&callbackUrl=...`.
 
 ## Responsibilities
 
-- This directory **does**: Render the public page shell (header + footer), expose public discovery pages, and keep account chrome session-aware.
-- This directory **does not**: Handle authentication, render protected content, manage session state, perform client-side redirects.
+- This directory **does**: Render the public page shell (header + footer), expose public discovery pages, keep account chrome session-aware, and handle proxy-issued sign-in intents.
+- This directory **does not**: Enforce authentication, render protected content, or decide protected-route policy.
 
 ## Usage
 
@@ -48,12 +48,12 @@ pnpm build   # build for production
 ## Standards
 
 - Server-side redirect (`getServerSessionUser` + `redirect()`) is defense-in-depth for `/`; `proxy.ts` handles primary auth routing.
-- No client-side auth redirects — proxy.ts is the single authority for auth routing.
+- Proxy.ts is the single authority for auth routing; `AuthPrompt.client.tsx` only handles the interactive sign-in transition after proxy redirects.
 - No auth guard — pages render for unauthenticated visitors.
 
 ## Dependencies
 
-- **Internal:** `@/features/layout` (AppHeader, AppFooter), `@/features/home` (HomeStats, NewHomeHero), `@/lib/auth/server` (getServerSessionUser)
+- **Internal:** `@/features/layout` (AppHeader, AppFooter), `@/features/home` (HomeStats, NewHomeHero), `@/components/kit/auth` (SignInDialog), `@/lib/auth/server` (getServerSessionUser)
 - **External:** next, react
 
 ## Change Protocol
@@ -63,4 +63,4 @@ pnpm build   # build for production
 
 ## Notes
 
-- `AuthRedirect` was deleted in task.0111 — its client-side `useSession()` redirect caused loops with `(app)/layout.tsx`'s guard. Proxy.ts now handles all auth routing server-side.
+- `AuthRedirect` was deleted in task.0111 — its client-side `useSession()` redirect caused loops with `(app)/layout.tsx`'s guard. Proxy.ts now handles auth routing; `AuthPrompt.client.tsx` only fulfills explicit sign-in intents.

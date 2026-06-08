@@ -135,14 +135,14 @@ describe("nodes feature components", () => {
     expect(screen.queryByRole("link", { name: /Visit app/ })).toBeNull();
   });
 
-  it("renders gallery summary, cards, and registration slot", () => {
+  it("renders gallery summary, cards, and non-expandable start CTA", () => {
     render(
       <NodesGallery
         items={[
           { node: alpha, metrics: alphaMetrics },
           { node: beta, metrics: betaMetrics },
         ]}
-        registrationForm={<div>Registration Form Slot</div>}
+        callToAction={<a href="/nodes">Start a node</a>}
       />
     );
 
@@ -152,8 +152,11 @@ describe("nodes feature components", () => {
     expect(screen.getByText(/2 listed/)).toBeVisible();
     expect(screen.getByText(/12 tracked events in 30d/)).toBeVisible();
     expect(screen.getByText(/3 finalized epochs/)).toBeVisible();
-    fireEvent.click(screen.getByText("Start a node"));
-    expect(screen.getByText("Registration Form Slot")).toBeVisible();
+    expect(screen.getByRole("link", { name: "Start a node" })).toHaveAttribute(
+      "href",
+      "/nodes"
+    );
+    expect(screen.queryByText("Expand")).toBeNull();
   });
 
   it("renders node detail metrics, repo link, epoch, and ownership table", () => {

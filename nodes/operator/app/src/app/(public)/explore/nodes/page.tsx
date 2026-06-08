@@ -14,10 +14,8 @@ import type { Metadata } from "next";
 import type { ReactElement } from "react";
 
 import { listNodeGallery } from "@/app/_facades/nodes/gallery.server";
-import { WalletConnectButton } from "@/components/kit/auth/WalletConnectButton";
-import { NodeRegistrationForm } from "@/features/nodes/components/NodeRegistrationForm.client";
 import { NodesGallery } from "@/features/nodes/components/NodesGallery";
-import { getServerSessionUser } from "@/lib/auth/server";
+import { StartNodeCta } from "@/features/nodes/components/StartNodeCta";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -29,24 +27,7 @@ export const metadata: Metadata = {
 };
 
 export default async function NodesPage(): Promise<ReactElement> {
-  const [items, user] = await Promise.all([
-    listNodeGallery(),
-    getServerSessionUser(),
-  ]);
+  const items = await listNodeGallery();
 
-  const registrationForm = user ? (
-    <NodeRegistrationForm />
-  ) : (
-    <div className="flex flex-col gap-4 rounded-md border border-border bg-muted/30 p-4 sm:flex-row sm:items-center sm:justify-between">
-      <div>
-        <h3 className="font-medium">Sign in to start a node</h3>
-        <p className="mt-1 text-muted-foreground text-sm">
-          Registration creates an operator-managed setup record.
-        </p>
-      </div>
-      <WalletConnectButton />
-    </div>
-  );
-
-  return <NodesGallery items={items} registrationForm={registrationForm} />;
+  return <NodesGallery items={items} callToAction={<StartNodeCta />} />;
 }

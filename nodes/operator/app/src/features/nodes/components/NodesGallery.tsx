@@ -4,7 +4,7 @@
 /**
  * Module: `@features/nodes/components/NodesGallery`
  * Purpose: Public network gallery layout for Cogni nodes.
- * Scope: Presentational composition over supplied node metrics and registration form slot.
+ * Scope: Presentational composition over supplied node metrics and call-to-action slot.
  * Side-effects: none
  * Links: src/app/(public)/explore/nodes/page.tsx
  * @public
@@ -36,7 +36,7 @@ export interface NodesGalleryItem {
 
 export interface NodesGalleryProps {
   readonly items: readonly NodesGalleryItem[];
-  readonly registrationForm: ReactNode;
+  readonly callToAction: ReactNode;
 }
 
 function formatNumber(value: number): string {
@@ -47,7 +47,7 @@ function formatNumber(value: number): string {
 
 export function NodesGallery({
   items,
-  registrationForm,
+  callToAction,
 }: NodesGalleryProps): ReactElement {
   const nodeCount = items.length;
   const devActivity30d = items.reduce(
@@ -85,23 +85,20 @@ export function NodesGallery({
         ))}
       </section>
 
-      <details className="group border-border border-t pt-6">
-        <summary className="flex cursor-pointer list-none items-center justify-between gap-4">
-          <div>
-            <h2 className="font-semibold text-xl">Start a node</h2>
-            <p className="mt-1 text-muted-foreground text-sm">
-              Register a slug, then continue through formation and publish.
+      <section className="border-border border-t pt-12 text-center">
+        <div className="mx-auto flex max-w-2xl flex-col items-center gap-5">
+          <div className="space-y-2">
+            <h2 className="font-semibold text-3xl tracking-tight">
+              Start a node
+            </h2>
+            <p className="text-muted-foreground">
+              Launch a community-owned AI app with the guided node formation
+              flow.
             </p>
           </div>
-          <span className="text-muted-foreground text-sm group-open:hidden">
-            Expand
-          </span>
-          <span className="hidden text-muted-foreground text-sm group-open:inline">
-            Collapse
-          </span>
-        </summary>
-        <div className="mt-6">{registrationForm}</div>
-      </details>
+          {callToAction}
+        </div>
+      </section>
     </div>
   );
 }
