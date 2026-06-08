@@ -11,7 +11,12 @@
  * @public
  */
 
-export function renderNodeExternalSecret(slug: string, env: string): string {
+import type { NodeBirthEnv } from "./envs";
+
+export function renderNodeExternalSecret(
+  slug: string,
+  env: NodeBirthEnv
+): string {
   return `# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 # SPDX-FileCopyrightText: 2025 Cogni-DAO
 apiVersion: external-secrets.io/v1

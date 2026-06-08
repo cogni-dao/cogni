@@ -50,22 +50,22 @@ You have a node app under `nodes/<node>/app` (a Next.js node) and you want it to
 
 Track these rows for every generated node PR. The wizard should emit the pure-git rows in one PR and open/follow side-effect work for provisioning before flight validation.
 
-| Row                   | Owner surface               | Required proof                                                                                                                              | Blocks flight? |
-| --------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
-| App scaffold          | `nodes/<node>/app`          | `pnpm --dir nodes/<node>/app build` or CI node image build succeeds                                                                         | Yes            |
-| Catalog declaration   | `infra/catalog/<node>.yaml` | `scripts/ci/detect-affected.sh` selects `<node>` for `infra/catalog/<node>.yaml` and `nodes/<node>/` changes                                | Yes            |
-| Environment overlays  | `infra/k8s/overlays/*`      | `kustomize build infra/k8s/overlays/{candidate-a,preview,production}/<node>` succeeds                                                       | Yes            |
-| ApplicationSet wiring | `infra/k8s/argocd/*`        | all three AppSets include `deploy/{candidate-a,preview,production}-<node>` generators                                                       | Yes            |
-| Edge routing          | catalog + Caddy template    | generated Caddyfile has `<node>-test`, `<node>-preview`, and production host routes with the catalog `node_port`                            | Yes            |
-| Scheduler routing     | catalog + worker ConfigMap  | `scripts/ci/render-scheduler-worker-endpoints.sh --check` includes `<node>` slug + `node_id` aliases                                        | Yes            |
-| Scheduler runtime DNS | worker overlay              | `scripts/ci/tests/scheduler-runtime-routing.test.sh` verifies scheduler-worker Temporal/Postgres/App Services use the env VM alias          | Yes            |
-| LiteLLM callbacks     | deploy-infra catalog render | `deploy-infra.sh --dry-run` derives `COGNI_NODE_ENDPOINTS` from all catalog nodes for node-local metering callbacks                         | Yes            |
-| Secrets               | OpenBao / ESO               | target cluster has the pod-consumed secret (`<node>-env-secrets` for ESO-enabled envs; legacy envs may still use `<node>-node-app-secrets`) | Yes            |
-| Databases             | deploy-infra                | Postgres `cogni_<node>` and Doltgres `knowledge_<node>` exist and app migrations complete                                                   | Yes            |
-| DNS                   | DNS ops                     | `<node>-test`, `<node>-preview`, and production hostnames resolve to the correct env VM                                                     | Yes            |
-| Candidate flight      | operator API / GitHub       | candidate-flight promotes only `<node>`, Argo syncs the deploy branch, and `/version.buildSha` equals PR head                               | Yes            |
-| Agent API validation  | `/validate-candidate`       | discover → register → chat/completions → runs list → SSE stream scorecard posted with Loki evidence                                         | Yes            |
-| Wizard repeatability  | node wizard                 | a second generated node (for example `<node>-2`) produces the same rows without manual script edits                                         | vNext gate     |
+| Row                   | Owner surface               | Required proof                                                                                                                               | Blocks flight? |
+| --------------------- | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
+| App scaffold          | `nodes/<node>/app`          | `pnpm --dir nodes/<node>/app build` or CI node image build succeeds                                                                          | Yes            |
+| Catalog declaration   | `infra/catalog/<node>.yaml` | `scripts/ci/detect-affected.sh` selects `<node>` for `infra/catalog/<node>.yaml` and `nodes/<node>/` changes                                 | Yes            |
+| Environment overlays  | `infra/k8s/overlays/*`      | `kustomize build infra/k8s/overlays/{candidate-a,preview,production}/<node>` succeeds                                                        | Yes            |
+| ApplicationSet wiring | `infra/k8s/argocd/*`        | all three AppSets include `deploy/{candidate-a,preview,production}-<node>` generators                                                        | Yes            |
+| Edge routing          | catalog + Caddy template    | generated Caddyfile has `<node>-test`, `<node>-preview`, and production host routes with the catalog `node_port`                             | Yes            |
+| Scheduler routing     | catalog + worker ConfigMap  | `scripts/ci/render-scheduler-worker-endpoints.sh --check` includes `<node>` slug + `node_id` aliases                                         | Yes            |
+| Scheduler runtime DNS | worker overlay              | `scripts/ci/tests/scheduler-runtime-routing.test.sh` verifies scheduler-worker Temporal/Postgres/App Services use the env VM alias           | Yes            |
+| LiteLLM callbacks     | deploy-infra catalog render | `deploy-infra.sh --dry-run` derives `COGNI_NODE_ENDPOINTS` from all catalog nodes for node-local metering callbacks                          | Yes            |
+| Secrets               | OpenBao / ESO               | wizard-born nodes consume `<node>-env-secrets` in candidate-a, preview, and production, backed by `nodes/<node>/k8s/external-secrets/<env>/` | Yes            |
+| Databases             | deploy-infra                | Postgres `cogni_<node>` and Doltgres `knowledge_<node>` exist and app migrations complete                                                    | Yes            |
+| DNS                   | DNS ops                     | `<node>-test`, `<node>-preview`, and production hostnames resolve to the correct env VM                                                      | Yes            |
+| Candidate flight      | operator API / GitHub       | candidate-flight promotes only `<node>`, Argo syncs the deploy branch, and `/version.buildSha` equals PR head                                | Yes            |
+| Agent API validation  | `/validate-candidate`       | discover → register → chat/completions → runs list → SSE stream scorecard posted with Loki evidence                                          | Yes            |
+| Wizard repeatability  | node wizard                 | a second generated node (for example `<node>-2`) produces the same rows without manual script edits                                          | vNext gate     |
 
 ## Steps
 
@@ -115,7 +115,7 @@ Each overlay must include:
 
 - **ConfigMap `node-app-config` patch:** `NODE_NAME`, `TEMPORAL_NAMESPACE`, `LITELLM_BASE_URL` (`http://<node>-litellm-external:4000`), `TEMPORAL_ADDRESS` (`<node>-temporal-external:7233`), `REDIS_URL` (`redis://<node>-redis-external:6379`), `NEXTAUTH_URL`.
 - **Service `node-app` patch:** `nodePort` + `app.kubernetes.io/instance: <node>` on the selector (without the instance label, `namePrefix` does _not_ rename selectors and every Service round-robins across all node pods).
-- **Deployment `node-app` patch:** env-specific secret refs (`<node>-env-secrets` for ESO-enabled envs) + instance labels on `matchLabels` and pod template.
+- **Deployment `node-app` patch:** `<node>-env-secrets` secret refs + instance labels on `matchLabels` and pod template.
 - **`migrate-doltgres` initContainer** appended to the Deployment (knowledge-plane migrator; `DATABASE_URL` ← `DOLTGRES_URL` secret).
 - **bug.0295 VM-DNS:** convert base headless `*-external` Services → `ExternalName` (`<env>.vm.cognidao.org`) and `$patch: delete` the matching `EndpointSlice`s.
 - **`images:` digest** — a placeholder (`sha256:000…0`) is fine: candidate-a is overwritten by candidate-flight on acquisition, preview is auto-seeded (`promote-preview-digest-seed.yml`, task.0349), production is human-gated (`promote-and-deploy.yml`).
@@ -144,7 +144,7 @@ The AppSet template renders `path: infra/k8s/overlays/<env>/{{.name}}`. **This i
 
 Steps 1–5 land the rails; the node only becomes Healthy once each target env has:
 
-- [ ] **Secrets** — `<node>-env-secrets` in ESO-enabled envs, backed by `nodes/<node>/k8s/external-secrets/<env>/` and OpenBao. Legacy envs may still use `<node>-node-app-secrets` until cut over.
+- [ ] **Secrets** — `<node>-env-secrets` in candidate-a, preview, and production, backed by `nodes/<node>/k8s/external-secrets/<env>/` and OpenBao.
 - [ ] **Databases** — per-node Postgres + Doltgres for the node. `COGNI_NODE_DBS` is derived from `NODE_TARGETS` at deploy time (`<node>` -> `cogni_<node>`), so a new catalog node cannot be skipped by a stale GitHub env secret.
 - [ ] **DNS** — `<node>-test` / `<node>-preview` / `<node>` `.cognidao.org` -> the env VM IP, via the [`/dns-ops`](../../.claude/skills/dns-ops/SKILL.md) skill. Must match the overlay `NEXTAUTH_URL`. For candidate-a, use the monorepo VM alias/IP (`cogni-candidate-a.vm.cognidao.org`), not the legacy poly candidate alias.
 - [ ] **Externals** — LiteLLM / Temporal / Redis reachable at the VM host (the ExternalName targets from Step 3).
@@ -163,9 +163,9 @@ Steps 1–5 land the rails; the node only becomes Healthy once each target env h
 
 **Today (#1381):** the wizard deploys the web3 contracts (DAO + GovernanceERC20 + CogniSignal) and then auto-drafts a **repo-spec-only PR** — just `.cogni/repo-spec.yaml` (node identity). It stops at identity; the node is not yet a build target and has no deploy footprint.
 
-**vNext:** the wizard spawns a full **node-app PR** that scaffolds `nodes/<node>/app` plus Steps **1, 3, 4, 5** of this guide — catalog entry, overlays × 3, AppSet generators × 3, deploy branches — so a newly-formed node starts life already wired for **test → preview → prod**. Those four steps are pure functions of the `type: node` catalog declaration, which is what makes the candidate-a-only trap structurally impossible to repeat. Step **6** (secrets/DB/DNS) stays imperative — the side-effecting half the wizard's "Deploy Infrastructure" stage drives after the PR merges. Step **2** is now verification only; Step **7** shrinks away once `wait-for-argocd.sh` is fully catalog-driven for required apps.
+**vNext:** the wizard spawns a full **node-app PR** that scaffolds `nodes/<node>/app` plus Steps **1, 3, 4, 5** of this guide — catalog entry, overlays × 3, AppSet generators × 3, deploy branches, and ExternalSecret leaves × 3 — so a newly-formed node starts life already wired for **test → preview → prod**. Those rows are pure functions of the `type: node` catalog declaration, which is what makes the candidate-a-only trap structurally impossible to repeat. Step **6** still owns value materialization, DBs, and DNS — the side-effecting half the wizard's "Deploy Infrastructure" stage drives after the PR merges. Step **2** is now verification only; Step **7** shrinks away once `wait-for-argocd.sh` is fully catalog-driven for required apps.
 
-> **Contract for the vNext wizard:** `formation(web3 + repo-spec)` → `node-app PR { nodes/<node>/app, catalog(type:node), overlays × 3, AppSet generators × 3, deploy branches × 3 }` → provision `{ secrets, DB, DNS } × 3`. Either the full matrix is generated or the node is not deployable — no partial (candidate-a-only) enablement.
+> **Contract for the vNext wizard:** `formation(web3 + repo-spec)` → `node-app PR { nodes/<node>/app, catalog(type:node), overlays × 3, AppSet generators × 3, ExternalSecret leaves × 3, deploy branches × 3 }` → provision `{ secret values, DB, DNS } × 3`. Either the full matrix is generated or the node is not deployable — no partial (candidate-a-only) enablement.
 
 ## Verification
 

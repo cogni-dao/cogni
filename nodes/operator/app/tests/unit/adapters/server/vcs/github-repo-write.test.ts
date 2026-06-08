@@ -136,7 +136,7 @@ function setHappyForkHandlers(): void {
       if (
         content.includes("kind: ExternalSecret") &&
         content.includes("name: atlas-env-secrets") &&
-        content.includes("key: candidate-a/atlas")
+        /key: (candidate-a|preview|production)\/atlas/.test(content)
       ) {
         return { sha: "external-secret-blob" };
       }
@@ -169,6 +169,30 @@ function setHappyForkHandlers(): void {
         },
         {
           path: "k8s/external-secrets/candidate-a/kustomization.yaml",
+          mode: "100644",
+          type: "blob",
+          sha: "external-secret-kustomization-blob",
+        },
+        {
+          path: "k8s/external-secrets/preview/external-secret.yaml",
+          mode: "100644",
+          type: "blob",
+          sha: "external-secret-blob",
+        },
+        {
+          path: "k8s/external-secrets/preview/kustomization.yaml",
+          mode: "100644",
+          type: "blob",
+          sha: "external-secret-kustomization-blob",
+        },
+        {
+          path: "k8s/external-secrets/production/external-secret.yaml",
+          mode: "100644",
+          type: "blob",
+          sha: "external-secret-blob",
+        },
+        {
+          path: "k8s/external-secrets/production/kustomization.yaml",
           mode: "100644",
           type: "blob",
           sha: "external-secret-kustomization-blob",
@@ -244,6 +268,10 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
       "POST /repos/{owner}/{repo}/git/blobs",
       "POST /repos/{owner}/{repo}/git/blobs",
       "POST /repos/{owner}/{repo}/git/blobs",
+      "POST /repos/{owner}/{repo}/git/blobs",
+      "POST /repos/{owner}/{repo}/git/blobs",
+      "POST /repos/{owner}/{repo}/git/blobs",
+      "POST /repos/{owner}/{repo}/git/blobs",
       "POST /repos/{owner}/{repo}/git/trees",
       "POST /repos/{owner}/{repo}/git/commits",
       "POST /repos/{owner}/{repo}/git/refs",
@@ -306,6 +334,10 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
       "PUT /repos/{owner}/{repo}/actions/permissions",
       "PUT /repos/{owner}/{repo}/actions/permissions/workflow",
       "GET /repos/{owner}/{repo}/actions/workflows",
+      "POST /repos/{owner}/{repo}/git/blobs",
+      "POST /repos/{owner}/{repo}/git/blobs",
+      "POST /repos/{owner}/{repo}/git/blobs",
+      "POST /repos/{owner}/{repo}/git/blobs",
       "POST /repos/{owner}/{repo}/git/blobs",
       "POST /repos/{owner}/{repo}/git/blobs",
       "POST /repos/{owner}/{repo}/git/blobs",
@@ -399,6 +431,216 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
     expect(result).toEqual({
       cloneUrl: "https://github.com/Cogni-DAO/atlas.git",
       headSha: "identity-commit",
+    });
+  });
+});
+
+describe("GitHubRepoWriter.openNodeSubmodulePr", () => {
+  it("authors all birth overlays against the ESO target secret", async () => {
+    const encode = (value: string) =>
+      Buffer.from(value, "utf-8").toString("base64");
+    const blobs = new Map<string, string>();
+    let blobId = 0;
+    const overlayTemplate = (
+      env: string
+    ) => `apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: cogni-${env}
+
+resources:
+  - ../../../base/node-app
+
+namePrefix: node-template-
+
+patches:
+  - target:
+      kind: Deployment
+      name: node-app
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/envFrom/1/secretRef/name
+        value: "node-template-node-app-secrets"
+      - op: replace
+        path: /spec/template/spec/initContainers/0/envFrom/1/secretRef/name
+        value: "node-template-node-app-secrets"
+      - op: replace
+        path: /spec/template/spec/containers/0/ports/0/containerPort
+        value: 3200
+      - op: add
+        path: /spec/template/spec/initContainers/-
+        value:
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: node-template-node-app-secrets
+                  key: DOLTGRES_URL
+  - target:
+      kind: Service
+      name: node-app
+    patch: |
+      - op: add
+        path: /spec/ports/0/nodePort
+        value: 30200
+      - op: replace
+        path: /spec/ports/0/targetPort
+        value: 3200
+`;
+
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/git/ref/{ref}": (params) => {
+        expect(params).toMatchObject({
+          owner: "Cogni-DAO",
+          repo: "cogni",
+          ref: "heads/main",
+        });
+        return { object: { sha: "parent-main" } };
+      },
+      "GET /repos/{owner}/{repo}/git/commits/{commit_sha}": (params) => {
+        expect(params).toMatchObject({
+          owner: "Cogni-DAO",
+          repo: "cogni",
+          commit_sha: "parent-main",
+        });
+        return { tree: { sha: "parent-tree" } };
+      },
+      "GET /repos/{owner}/{repo}/contents/{path}": (params) => {
+        const path = String(params.path);
+        if (path === ".gitmodules") {
+          return Promise.reject(statusError(404, "not found"));
+        }
+        if (path.startsWith("infra/k8s/overlays/")) {
+          const env = path.split("/")[3];
+          return {
+            type: "file",
+            encoding: "base64",
+            content: encode(overlayTemplate(env ?? "candidate-a")),
+          };
+        }
+        if (path === "scripts/ci/node-applicationset.yaml.tmpl") {
+          return {
+            type: "file",
+            encoding: "base64",
+            content: encode("appset __ENV__ __NODE__\n"),
+          };
+        }
+        if (path === "infra/k8s/argocd/kustomization.yaml") {
+          return {
+            type: "file",
+            encoding: "base64",
+            content: encode(`resources:
+  # >>> GENERATED node-appsets (scripts/ci/render-node-appset.sh) — DO NOT EDIT BY HAND
+  - candidate-a-node-template-applicationset.yaml
+  - preview-node-template-applicationset.yaml
+  - production-node-template-applicationset.yaml
+  # <<< GENERATED node-appsets
+`),
+          };
+        }
+        if (path === "infra/compose/edge/configs/Caddyfile.tmpl") {
+          return {
+            type: "file",
+            encoding: "base64",
+            content:
+              encode(`# ── operator (primary domain) → k3s NodePort 30000 ──────────────────────────────────
+{$OPERATOR_DOMAIN:localhost} {
+  reverse_proxy {$OPERATOR_UPSTREAM:host.docker.internal:30000}
+}
+`),
+          };
+        }
+        throw statusError(404, `not found: ${path}`);
+      },
+      "GET /repos/{owner}/{repo}/git/trees/{tree_sha}": (params) => {
+        if (params.tree_sha === "parent-tree") {
+          return {
+            tree: [{ path: "infra", type: "tree", sha: "infra-tree" }],
+          };
+        }
+        if (params.tree_sha === "infra-tree") {
+          return {
+            tree: [{ path: "catalog", type: "tree", sha: "catalog-tree" }],
+          };
+        }
+        expect(params.tree_sha).toBe("catalog-tree");
+        return {
+          tree: [
+            {
+              path: "node-template.yaml",
+              type: "blob",
+              sha: "node-template-catalog",
+            },
+          ],
+        };
+      },
+      "GET /repos/{owner}/{repo}/git/blobs/{file_sha}": (params) => {
+        expect(params.file_sha).toBe("node-template-catalog");
+        return {
+          content: encode(`name: node-template
+type: node
+node_port: 30200
+`),
+          encoding: "base64",
+        };
+      },
+      "POST /repos/{owner}/{repo}/git/blobs": (params) => {
+        const sha = `blob-${blobId++}`;
+        blobs.set(
+          sha,
+          Buffer.from(String(params.content), "base64").toString("utf-8")
+        );
+        return { sha };
+      },
+      "POST /repos/{owner}/{repo}/git/trees": (params) => {
+        const tree = params.tree as Array<{
+          readonly path: string;
+          readonly sha: string;
+        }>;
+        for (const env of ["candidate-a", "preview", "production"]) {
+          const entry = tree.find(
+            (item) =>
+              item.path === `infra/k8s/overlays/${env}/atlas/kustomization.yaml`
+          );
+          expect(entry).toBeDefined();
+          const content = blobs.get(entry?.sha ?? "");
+          expect(content).toContain("atlas-env-secrets");
+          expect(content).toContain(`namespace: cogni-${env}`);
+          expect(content).toContain("value: 30300");
+          expect(content).not.toContain("atlas-node-app-secrets");
+        }
+        return { sha: "birth-tree" };
+      },
+      "POST /repos/{owner}/{repo}/git/commits": (params) => {
+        expect(params).toMatchObject({
+          owner: "Cogni-DAO",
+          repo: "cogni",
+          message: "feat(node): pin atlas as a submodule",
+          tree: "birth-tree",
+          parents: ["parent-main"],
+        });
+        return { sha: "birth-commit" };
+      },
+      "POST /repos/{owner}/{repo}/git/refs": () => ({}),
+      "POST /repos/{owner}/{repo}/pulls": () => ({
+        number: 88,
+        html_url: "https://github.com/Cogni-DAO/cogni/pull/88",
+      }),
+    };
+
+    await expect(
+      makeWriter().openNodeSubmodulePr({
+        owner: "Cogni-DAO",
+        repo: "cogni",
+        slug: "atlas",
+        nodeId: "11111111-1111-4111-8111-111111111111",
+        chainId: 8453,
+        nodeRepoUrl: "https://github.com/Cogni-DAO/atlas.git",
+        nodeRepoHeadSha: "0123456789012345678901234567890123456789",
+      })
+    ).resolves.toEqual({
+      prNumber: 88,
+      prUrl: "https://github.com/Cogni-DAO/cogni/pull/88",
     });
   });
 });

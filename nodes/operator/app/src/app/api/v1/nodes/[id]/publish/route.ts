@@ -3,10 +3,11 @@
 
 /**
  * Module: `@app/api/v1/nodes/[id]/publish`
- * Purpose: Build the governance-only repo-spec YAML and open a PR against the target repo via the GitHub App.
+ * Purpose: Mint a node repo from node-template and open the parent submodule birth PR via the GitHub App.
  * Scope: Owner-gated. Advances dao_formed → published when the PR is opened. Idempotent: re-opening
  *   yields the existing PR.
- * Invariants: GH_APP_INSTALL_REQUIRED, NODE_SOVEREIGNTY (PR only; never force-push), STATE_MACHINE_TOTAL.
+ * Invariants: GH_APP_INSTALL_REQUIRED, NODE_SOVEREIGNTY (PR only; never force-push),
+ *   SECRET_SHAPE_NOT_VALUES, STATE_MACHINE_TOTAL.
  * Side-effects: IO (GitHub REST API, Postgres)
  * Links: src/adapters/server/vcs/github-repo-write.ts, task.5083
  * @public
@@ -25,6 +26,7 @@ import { transition } from "@/features/nodes/state-machine";
 import { getServerSessionUser } from "@/lib/auth/server";
 import { type NodeStatus, nodes } from "@/shared/db/nodes";
 import { serverEnv } from "@/shared/env";
+import { NODE_BIRTH_ENVS } from "@/shared/node-app-scaffold/gens";
 import { buildNodeKnowledgeRemote } from "@/shared/node-app-scaffold/knowledge-remote";
 import {
   createRequestContext,
@@ -496,6 +498,34 @@ export async function POST(request: Request, routeArgs: RouteParams) {
             nodeRepoUrl: minted.cloneUrl,
             nodeRepoHeadSha: minted.headSha,
           });
+          ctx.log.info(
+            {
+              event: EVENT_NAMES.NODE_PUBLISH_SECRET_SHAPE_GENERATED,
+              reqId: ctx.reqId,
+              traceId,
+              routeId: ctx.routeId,
+              nodeId: id,
+              slug: node.slug,
+              childRepoUrl: minted.cloneUrl,
+              childRepoHeadSha: minted.headSha,
+              parentOwner,
+              parentRepo,
+              parentPrNumber: pr.prNumber,
+              parentPrUrl: pr.prUrl,
+              secretTargetName: `${node.slug}-env-secrets`,
+              externalSecretEnvs: [...NODE_BIRTH_ENVS],
+              externalSecretPaths: NODE_BIRTH_ENVS.map(
+                (env) => `k8s/external-secrets/${env}/external-secret.yaml`
+              ),
+              overlayEnvs: [...NODE_BIRTH_ENVS],
+              overlayPaths: NODE_BIRTH_ENVS.map(
+                (env) =>
+                  `infra/k8s/overlays/${env}/${node.slug}/kustomization.yaml`
+              ),
+              durationMs: durationMs(),
+            },
+            EVENT_NAMES.NODE_PUBLISH_SECRET_SHAPE_GENERATED
+          );
           logStep("open_submodule_pr", "success", {
             slug: node.slug,
             owner: parentOwner,

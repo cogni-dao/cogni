@@ -118,6 +118,8 @@ vi.mock("@/shared/observability", () => {
     EVENT_NAMES: {
       ADAPTER_GITHUB_REPO_WRITE_ERROR: "adapter.github_repo_write.error",
       NODE_PUBLISH_COMPLETE: "feature.node_publish.complete",
+      NODE_PUBLISH_SECRET_SHAPE_GENERATED:
+        "feature.node_publish.secret_shape_generated",
     },
     createRequestContext: () => ({
       log: mockLog,
@@ -325,6 +327,19 @@ describe("POST /api/v1/nodes/[id]/publish", () => {
         prNumber: 1532,
       }),
       "feature.node_publish.complete"
+    );
+    expect(mockLog.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "feature.node_publish.secret_shape_generated",
+        nodeId: "11111111-1111-4111-8111-111111111111",
+        slug: "atlas",
+        childRepoHeadSha: "identity-commit",
+        parentPrNumber: 1532,
+        secretTargetName: "atlas-env-secrets",
+        externalSecretEnvs: ["candidate-a", "preview", "production"],
+        overlayEnvs: ["candidate-a", "preview", "production"],
+      }),
+      "feature.node_publish.secret_shape_generated"
     );
     expect(mockLogEvent).toHaveBeenCalledWith(
       mockLog,

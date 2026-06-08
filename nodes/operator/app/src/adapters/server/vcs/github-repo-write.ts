@@ -4,14 +4,15 @@
 /**
  * Module: `@adapters/server/vcs/github-repo-write`
  * Purpose: Operator-only helper that mints node repos, commits files, and opens pull requests via the GitHub App.
- * Scope: Thin Octokit calls behind one entry point; reuses GitHub App installation auth (cogni-node-template).
+ * Scope: Thin Octokit calls behind node birth, submodule pin, and candidate-flight prep entry points.
  *   Does not belong in `VcsCapability` because that capability is shared with poly/resy/node-template stubs
  *   and these write ops are operator-only.
  * Invariants:
  *   - GH_APP_INSTALL_REQUIRED: caller must verify the app is installed on the target repo; we surface a
  *     clear error if not. Public-repo install is sufficient for v0.
- *   - SINGLE_FILE_COMMIT: writes exactly one file path; no multi-file orchestration.
- *   - PR_AGAINST_BASE_REF: opens a PR with the given title/body against `baseRef`; never force-pushes.
+ *   - NODE_BIRTH_TREE: a publish creates one reviewable tree containing the gitlink plus generated
+ *     catalog, overlay, AppSet, edge-route, and ExternalSecret shape.
+ *   - PR_AGAINST_MAIN: opens node-birth PRs against `main`; never force-pushes review branches.
  * Side-effects: IO (GitHub REST API)
  * Links: docs/spec/node-formation.md, task.0370, task.5083
  * @internal
@@ -32,6 +33,7 @@ import type {
 import {
   insertAppsetKustomization,
   insertCaddyBlock,
+  NODE_BIRTH_ENVS,
   nextFreeNodePort,
   renderCatalog,
   renderGitmodules,
@@ -153,11 +155,6 @@ interface GitTreeEntry {
   readonly sha: string | null;
 }
 
-/**
- * Envs a node is born into (ALL_THREE_ENVS_OR_NONE), mirroring `scaffold-node.sh` `ENVS=(…)`.
- * candidate-b/canary overlay dirs are not part of the birth set.
- */
-const NODE_BIRTH_ENVS = ["candidate-a", "preview", "production"] as const;
 const TEMPLATE_SLUG = "node-template";
 const CONTAINER_PORT = 3200;
 
@@ -179,7 +176,6 @@ const NODE_REPO_REQUIRED_WORKFLOWS = [
   ".github/workflows/pr-build.yml",
   ".github/workflows/pr-lint.yaml",
 ] as const;
-const ESO_BIRTH_ENVS = ["candidate-a"] as const;
 
 const CatalogEntrySchema = z.object({
   name: z.string(),
@@ -637,7 +633,7 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       })
     );
     const externalSecretEntries: GitTreeEntry[] = [];
-    for (const env of ESO_BIRTH_ENVS) {
+    for (const env of NODE_BIRTH_ENVS) {
       externalSecretEntries.push(
         {
           path: `k8s/external-secrets/${env}/external-secret.yaml`,
@@ -1137,11 +1133,9 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       );
       await addBlob(
         overlayPath,
-        env === "candidate-a"
-          ? renderOverlay(templateOverlay, slug, nodePort, port, {
-              secretTargetName: `${slug}-env-secrets`,
-            })
-          : renderOverlay(templateOverlay, slug, nodePort, port)
+        renderOverlay(templateOverlay, slug, nodePort, port, {
+          secretTargetName: `${slug}-env-secrets`,
+        })
       );
     }
 
@@ -1470,7 +1464,7 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       `Operator-authored node-birth PR for \`${slug}\` (App-direct via Git Data API).\n\n` +
       "Pins the minted node repo as a submodule and adds the operator-owned deployment footprint: " +
       "catalog entry, overlays×3, AppSet stanzas×3, and edge route. The node source, CI, review " +
-      "rules, image build, and candidate-a ExternalSecret leaf live in the minted node repo.";
+      "rules, image build, and ExternalSecret leaves live in the minted node repo.";
     try {
       const { data: pr } = await octokit.request(
         "POST /repos/{owner}/{repo}/pulls",

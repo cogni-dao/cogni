@@ -85,14 +85,15 @@ produce this footprint:
 | `infra/k8s/argocd/<env>-<slug>-applicationset.yaml`  | parent operator PR  | Make the target visible to Argo/candidate flight.                                                            |
 | launch pack facts                                    | operator app record | Tell the assistant what was minted and what to prove next.                                                   |
 
-For the current candidate-a proof path, the minimum ExternalSecret is:
+For each birth environment (`candidate-a`, `preview`, `production`), the
+minimum ExternalSecret is:
 
 ```yaml
 apiVersion: external-secrets.io/v1
 kind: ExternalSecret
 metadata:
   name: <slug>-env-secrets
-  namespace: cogni-candidate-a
+  namespace: cogni-<env>
   labels:
     app.kubernetes.io/part-of: cogni-secrets-substrate
     app.kubernetes.io/component: <slug>
@@ -107,7 +108,7 @@ spec:
     deletionPolicy: Retain
   dataFrom:
     - extract:
-        key: candidate-a/<slug>
+        key: <env>/<slug>
 ```
 
 `ClusterSecretStore` has `path: cogni`, so the ExternalSecret extract key is
@@ -255,23 +256,23 @@ the secrets/provisioning lane, not the app-flight lane.
 
 ## As-Built Anchors
 
+- `nodes/operator/app/src/shared/node-app-scaffold/gens/envs.ts` defines the
+  `candidate-a`, `preview`, and `production` node-birth matrix.
 - `nodes/operator/app/src/shared/node-app-scaffold/gens/external-secret.ts`
-  renders the child repo's candidate-a ExternalSecret leaf without any secret
-  value.
+  renders each child repo ExternalSecret leaf without any secret value.
 - `nodes/operator/app/src/shared/node-app-scaffold/gens/overlay.ts` rewrites
-  candidate-a overlays from `<slug>-node-app-secrets` to
-  `<slug>-env-secrets`.
+  generated overlays from `<slug>-node-app-secrets` to `<slug>-env-secrets`.
 - `nodes/operator/app/src/adapters/server/vcs/github-repo-write.ts` writes the
-  child repo leaf before opening the parent operator PR.
-- Generator tests assert the ExternalSecret name, target, extract key, and
-  overlay rewrite.
+  child repo leaves before opening the parent operator PR.
+- Generator and adapter tests assert the ExternalSecret name, target, extract
+  key, and all-env overlay rewrite.
+- `nodes/operator/app/src/app/api/v1/nodes/[id]/publish/route.ts` logs
+  `feature.node_publish.secret_shape_generated` after the child repo and parent
+  PR are pinned, with paths and SHAs but no secret values.
 
 ## Remaining Work
 
-1. Update node formation docs to remove stale guidance that node-birth PRs omit
-   ExternalSecret manifests. They now live in the child repo seed and appear in
-   the parent tree through the submodule mount.
-2. Use a fresh throwaway node to prove the target substrate reconciler can pass
+1. Use a fresh throwaway node to prove the target substrate reconciler can pass
    `reconcile-substrate`, `assert-substrate`, `flight`, and
    `verify-candidate` without manual secret bridging.
 
@@ -281,7 +282,6 @@ the secrets/provisioning lane, not the app-flight lane.
 - Adding a fourth secret write entry point.
 - Storing secret values in wizard database rows.
 - Making app-flight mutate OpenBao, GitHub secrets, or Compose runtime state.
-- Solving preview/production secret migration in the first candidate-a fix.
 - Moving all `_shared` secrets to owner-scoped paths; that is tracked by the
   broader secrets substrate migration.
 
@@ -292,10 +292,11 @@ block, likely `node-wizard-secret-setting`, after review:
 
 > The node wizard owns secret shape, not secret values. A wizard-created
 > node-birth PR must generate ESO-first artifacts: overlays consume
-> `<slug>-env-secrets`, and `nodes/<slug>/k8s/external-secrets/candidate-a/`
-> contains one ExternalSecret extracting `candidate-a/<slug>` into that target.
-> Agent-generated, derived, shared, Grafana, CI, Compose, and dual-plane values
-> remain owned by the catalog/provision/reconcile secrets substrate. Candidate
-> flight may assert the consumed Secret and ExternalSecret, but it must not seed
-> or repair them. The wizard must never write secret values to git or save them
-> as wizard state.
+> `<slug>-env-secrets`, and each
+> `nodes/<slug>/k8s/external-secrets/{candidate-a,preview,production}/`
+> directory contains one ExternalSecret extracting `<env>/<slug>` into that
+> target. Agent-generated, derived, shared, Grafana, CI, Compose, and
+> dual-plane values remain owned by the catalog/provision/reconcile secrets
+> substrate. Candidate flight may assert the consumed Secret and ExternalSecret,
+> but it must not seed or repair them. The wizard must never write secret values
+> to git or save them as wizard state.

@@ -15,6 +15,7 @@
 export { insertAppsetKustomization, renderNodeAppset } from "./appset";
 export { insertCaddyBlock } from "./caddyfile";
 export { type RenderCatalogInput, renderCatalog } from "./catalog";
+export { NODE_BIRTH_ENVS, type NodeBirthEnv } from "./envs";
 export {
   renderNodeExternalSecret,
   renderNodeExternalSecretKustomization,

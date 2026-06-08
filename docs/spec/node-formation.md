@@ -335,7 +335,7 @@ After Formation returns a verified repo-spec fragment, the **operator** mints th
 **Mechanism** (`adapters/server/vcs/github-repo-write.ts` + `shared/node-app-scaffold/`):
 
 1. **Mint** — `POST /repos/Cogni-DAO/node-template/forks` creates `Cogni-DAO/<slug>` as a named fork of `node-template` (`default_branch_only: true`). This preserves a shared merge base so node developers can fetch and merge upstream template updates.
-2. **Identity + ESO leaf** — commit the regenerated `.cogni/repo-spec.yaml` (formed `node_id` / `scope_id` + DAO addresses) and the candidate-a ExternalSecret leaf to the fork's `main`. The new HEAD SHA is the gitlink pin.
+2. **Identity + ESO leaves** — commit the regenerated `.cogni/repo-spec.yaml` (formed `node_id` / `scope_id` + DAO addresses) and the `candidate-a`, `preview`, and `production` ExternalSecret leaves to the fork's `main`. The new HEAD SHA is the gitlink pin.
 3. **Pin** — the operator authors a PR on the monorepo: a `160000` gitlink at `nodes/<slug>` + a `.gitmodules` stanza, plus the footprint gens (catalog, overlays×3, per-node AppSets×3, Caddyfile route, `ci.yaml` scope filter, scheduler-worker endpoints) — **no `pnpm-lock.yaml`** (a submodule node is not a workspace member). One tree, one commit, one ref, one PR.
 4. **Author** — the PR opens under the operator App installation (author = the App, auditable — not `github-actions[bot]`, not a human PAT).
 
