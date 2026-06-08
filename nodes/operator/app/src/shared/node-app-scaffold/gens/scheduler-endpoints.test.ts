@@ -17,8 +17,9 @@ import { describe, expect, it } from "vitest";
 
 import { insertSchedulerEndpoint } from "./scheduler-endpoints";
 
-// The committed `infra/k8s/base/scheduler-worker/configmap.yaml` (origin/main): canary,
-// node-template, operator, resy — each with its slug entry + node_id alias.
+// The committed `infra/k8s/base/scheduler-worker/configmap.yaml`: in-tree runtime
+// nodes only. Remote-source artifacts such as node-template are skipped until
+// metadata projection exists.
 const BEFORE = `# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 # SPDX-FileCopyrightText: 2025 Cogni-DAO
 #
@@ -30,7 +31,7 @@ metadata:
 data:
   TEMPORAL_ADDRESS: "temporal:7233"
   # Per-node API endpoints — identical across envs (k8s Service DNS + port).
-  COGNI_NODE_ENDPOINTS: "canary=http://canary-node-app:3000,89612f02-114d-460d-87a5-c2ab212ccf6f=http://canary-node-app:3000,node-template=http://node-template-node-app:3000,b927a9dd-6132-4fc9-a51e-e3cee2568e3c=http://node-template-node-app:3000,operator=http://operator-node-app:3000,4ff8eac1-4eba-4ed0-931b-b1fe4f64713d=http://operator-node-app:3000,resy=http://resy-node-app:3000,f6d2a17d-b7f6-4ad1-a86b-f0ad2380999e=http://resy-node-app:3000"
+  COGNI_NODE_ENDPOINTS: "canary=http://canary-node-app:3000,89612f02-114d-460d-87a5-c2ab212ccf6f=http://canary-node-app:3000,operator=http://operator-node-app:3000,4ff8eac1-4eba-4ed0-931b-b1fe4f64713d=http://operator-node-app:3000,resy=http://resy-node-app:3000,f6d2a17d-b7f6-4ad1-a86b-f0ad2380999e=http://resy-node-app:3000"
   LOG_LEVEL: "info"
 `;
 

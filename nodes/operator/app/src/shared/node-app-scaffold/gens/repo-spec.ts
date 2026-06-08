@@ -16,7 +16,7 @@
  *   MUST remain. EPOCH_ACTIVE_BY_DEFAULT — the template's `activity_ledger:` block MUST remain so
  *   ledger ingest schedules are synthesized by @cogni/repo-spec.
  * Side-effects: none — pure function, no IO, no env.
- * Links: nodes/node-template/.cogni/repo-spec.yaml, nodes/node-template/.cogni/rules/, src/features/nodes/repo-spec-builder.ts, docs/spec/node-ci-cd-contract.md, task.5092
+ * Links: Cogni-DAO/node-template:.cogni/repo-spec.yaml, src/features/nodes/repo-spec-builder.ts, docs/spec/node-ci-cd-contract.md, task.5092
  * @public
  */
 
