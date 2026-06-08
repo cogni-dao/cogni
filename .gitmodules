@@ -7,3 +7,6 @@
 [submodule "nodes/coulditbe"]
 	path = nodes/coulditbe
 	url = https://github.com/Cogni-DAO/coulditbe.git
+[submodule "nodes/please"]
+	path = nodes/please
+	url = https://github.com/Cogni-DAO/please.git

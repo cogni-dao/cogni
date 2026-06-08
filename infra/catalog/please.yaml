@@ -1,0 +1,13 @@
+name: please
+type: node
+port: 3200
+node_port: 30800
+dockerfile: nodes/please/app/Dockerfile
+image_tag_suffix: "-please"
+migrator_tag_suffix: "-please-migrate"
+source_repo: https://github.com/Cogni-DAO/please.git
+image_repository: ghcr.io/cogni-dao/please
+candidate_a_branch: deploy/candidate-a-please
+preview_branch: deploy/preview-please
+production_branch: deploy/production-please
+path_prefix: nodes/please/
