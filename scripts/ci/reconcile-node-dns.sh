@@ -55,8 +55,8 @@ fi
 records_tmp=""
 if [ -n "${DNS_RECONCILE_SUMMARY_FILE:-}" ]; then
   records_tmp=$(mktemp -t dns-reconcile-records.XXXXXX)
-  trap 'rm -f "${records_tmp:-}"' EXIT
 fi
+SUMMARY_WRITTEN=false
 
 append_dns_record() {
   [ -n "$records_tmp" ] || return 0
@@ -87,12 +87,27 @@ PY
 write_dns_summary() {
   [ -n "${DNS_RECONCILE_SUMMARY_FILE:-}" ] || return 0
   local status="$1"
+  local candidate_sha="${DNS_RECONCILE_CANDIDATE_SHA:-}"
+  local candidate_sha8="${candidate_sha:0:8}"
   DNS_STATUS="$status" \
     DNS_DEPLOY_ENV="$DEPLOY_ENV" \
-    DNS_DOMAIN="$DOMAIN" \
-    DNS_VM_IP="$VM_IP" \
-    DNS_PROXIED="$PROXIED" \
+    DNS_DOMAIN="${DOMAIN:-}" \
+    DNS_VM_IP="${VM_IP:-}" \
+    DNS_PROXIED="${PROXIED:-}" \
     DNS_CHECK="$CHECK" \
+    DNS_WORKFLOW="${GITHUB_WORKFLOW:-}" \
+    DNS_JOB="${GITHUB_JOB:-}" \
+    DNS_RUN_ID="${GITHUB_RUN_ID:-}" \
+    DNS_ATTEMPT="${GITHUB_RUN_ATTEMPT:-}" \
+    DNS_REF="${GITHUB_REF_NAME:-}" \
+    DNS_WORKFLOW_SHA="${GITHUB_SHA:-}" \
+    DNS_CANDIDATE_SHA="$candidate_sha" \
+    DNS_CANDIDATE_SHA8="$candidate_sha8" \
+    DNS_HEAD_SHA="${DNS_RECONCILE_HEAD_SHA:-}" \
+    DNS_NODE_SOURCE_SHA="${DNS_RECONCILE_NODE_SOURCE_SHA:-}" \
+    DNS_PR_NUMBER="${DNS_RECONCILE_PR_NUMBER:-}" \
+    DNS_NODE_SLUG="${DNS_RECONCILE_NODE_SLUG:-}" \
+    DNS_STATUS_URL="${DNS_RECONCILE_STATUS_URL:-}" \
     python3 - "$records_tmp" <<'PY' >"${DNS_RECONCILE_SUMMARY_FILE}.tmp" || return 0
 import collections
 import datetime
@@ -119,6 +134,19 @@ payload = {
     "origin_ip": os.environ["DNS_VM_IP"],
     "proxied": os.environ["DNS_PROXIED"] == "true",
     "check": os.environ["DNS_CHECK"] == "true",
+    "workflow": os.environ["DNS_WORKFLOW"],
+    "job": os.environ["DNS_JOB"],
+    "run_id": os.environ["DNS_RUN_ID"],
+    "attempt": os.environ["DNS_ATTEMPT"],
+    "ref": os.environ["DNS_REF"],
+    "workflow_sha": os.environ["DNS_WORKFLOW_SHA"],
+    "candidate_sha": os.environ["DNS_CANDIDATE_SHA"],
+    "candidate_sha8": os.environ["DNS_CANDIDATE_SHA8"],
+    "head_sha": os.environ["DNS_HEAD_SHA"],
+    "node_source_sha": os.environ["DNS_NODE_SOURCE_SHA"],
+    "pr_number": os.environ["DNS_PR_NUMBER"],
+    "node_slug": os.environ["DNS_NODE_SLUG"],
+    "status_url": os.environ["DNS_STATUS_URL"],
     "record_count": len(records),
     "states": dict(sorted(states.items())),
     "records": records,
@@ -127,7 +155,12 @@ payload = {
 print(json.dumps(payload, separators=(",", ":")))
 PY
   mv "${DNS_RECONCILE_SUMMARY_FILE}.tmp" "$DNS_RECONCILE_SUMMARY_FILE"
+  SUMMARY_WRITTEN=true
 }
+
+if [ -n "${DNS_RECONCILE_SUMMARY_FILE:-}" ]; then
+  trap 'status=$?; if [ "$status" -ne 0 ] && [ "${SUMMARY_WRITTEN:-false}" != "true" ]; then write_dns_summary "failure"; fi; rm -f "${records_tmp:-}"' EXIT
+fi
 
 : "${CLOUDFLARE_API_TOKEN:?CLOUDFLARE_API_TOKEN required (GH env secret)}"
 : "${CLOUDFLARE_ZONE_ID:?CLOUDFLARE_ZONE_ID required (GH env secret)}"
