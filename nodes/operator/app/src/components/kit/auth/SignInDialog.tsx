@@ -50,12 +50,15 @@ interface SignInDialogProps {
   readonly onOpenChange: (open: boolean) => void;
   /** Called when user picks the Ethereum wallet option */
   readonly onWalletConnect: () => void;
+  /** OAuth redirect target after successful sign-in. */
+  readonly callbackUrl?: string;
 }
 
 export function SignInDialog({
   open,
   onOpenChange,
   onWalletConnect,
+  callbackUrl = "/chat",
 }: SignInDialogProps): ReactElement {
   // Optimistic: show all known OAuth buttons immediately to avoid pop-in lag.
   // The fetch narrows the set if a provider isn't configured server-side.
@@ -113,7 +116,7 @@ export function SignInDialog({
                 key={provider.id}
                 variant="outline"
                 className="h-12 justify-start gap-3 text-sm"
-                onClick={() => signIn(provider.id, { callbackUrl: "/chat" })}
+                onClick={() => signIn(provider.id, { callbackUrl })}
               >
                 <provider.icon className="size-5" />
                 {provider.label}

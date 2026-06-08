@@ -20,7 +20,7 @@ import { getToken } from "next-auth/jwt";
 
 import { authOptions, authSecret } from "@/auth";
 
-/** App routes that require authentication — unauthenticated visitors are redirected to /. */
+/** App routes that require authentication — unauthenticated visitors are redirected to the sign-in prompt. */
 const APP_ROUTES = [
   "/chat",
   "/profile",
@@ -42,6 +42,8 @@ function isAppRoute(pathname: string): boolean {
 }
 
 const AGENT_BEARER_PREFIX = "Bearer cogni_ag_sk_v1_";
+const SIGN_IN_PARAM = "signIn";
+const CALLBACK_PARAM = "callbackUrl";
 
 function isPublicApiRoute(pathname: string): boolean {
   return (
@@ -60,6 +62,14 @@ function hasAgentBearer(req: NextRequest): boolean {
   return (
     req.headers.get("authorization")?.startsWith(AGENT_BEARER_PREFIX) ?? false
   );
+}
+
+function signInRedirectUrl(req: NextRequest): URL {
+  const url = new URL("/", req.url);
+  const callbackUrl = `${req.nextUrl.pathname}${req.nextUrl.search}`;
+  url.searchParams.set(SIGN_IN_PARAM, "1");
+  url.searchParams.set(CALLBACK_PARAM, callbackUrl);
+  return url;
 }
 
 export async function proxy(req: NextRequest): Promise<NextResponse> {
@@ -102,9 +112,9 @@ export async function proxy(req: NextRequest): Promise<NextResponse> {
     return NextResponse.redirect(new URL("/chat", req.url));
   }
 
-  // Unauthenticated on app routes → redirect to /
+  // Unauthenticated on app routes → redirect to sign-in prompt with callback
   if (isAppRoute(pathname) && !isLoggedIn) {
-    return NextResponse.redirect(new URL("/", req.url));
+    return NextResponse.redirect(signInRedirectUrl(req));
   }
 
   // --- API route protection ---
