@@ -27,6 +27,12 @@ const dbState = vi.hoisted(() => ({
   agentUser: null as { id: string } | null,
 }));
 const mockGetServerSessionUser = vi.hoisted(() => vi.fn());
+const mockLogger = vi.hoisted(() => ({
+  child: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+}));
 
 function rowsFrom<T>(rows: T[]): {
   from(): { where(): { limit(): T[] } };
@@ -48,7 +54,12 @@ const mockServiceDb = {
 };
 
 vi.mock("@/bootstrap/container", () => ({
-  getContainer: () => ({ authorization: authz }),
+  getContainer: () => ({
+    authorization: authz,
+    clock: { now: () => "2026-06-08T00:00:00.000Z" },
+    config: { unhandledErrorPolicy: "respond_500" },
+    log: mockLogger,
+  }),
   resolveAppDb: () => mockAppDb,
   resolveServiceDb: () => mockServiceDb,
 }));
@@ -70,6 +81,7 @@ import * as appHandler from "@/app/api/v1/nodes/[id]/developers/route";
 describe("POST /api/v1/nodes/[id]/developers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockLogger.child.mockReturnValue(mockLogger);
     mockGetServerSessionUser.mockResolvedValue(TEST_SESSION_USER_1);
     authz.writeRelation.mockResolvedValue({
       decision: "success",
