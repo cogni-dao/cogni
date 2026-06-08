@@ -102,7 +102,7 @@ The per-node wizard patches the `nodes` registry row with the verified DAO, plug
 
 What the Publish PR contains:
 
-- **Submodule gitlink** — `nodes/<slug>` is a `160000` gitlink pointing at the node's own minted repo (`Cogni-DAO/<slug>`, `generate`d from the `node-template` template), plus a `.gitmodules` stanza. The node's ~1100 files live in _that_ repo, not inlined here; identity (`node_id` / `scope_id` + DAO addresses in `.cogni/repo-spec.yaml`) is set in the node repo before the pin.
+- **Submodule gitlink** — `nodes/<slug>` is a `160000` gitlink pointing at the node's own minted repo (`Cogni-DAO/<slug>`, a named fork of `node-template`), plus a `.gitmodules` stanza. The node's ~1100 files live in _that_ repo, not inlined here; identity (`node_id` / `scope_id` + DAO addresses in `.cogni/repo-spec.yaml`) is set in the node repo before the pin.
 - **Catalog entry** — `infra/catalog/<slug>.yaml`. This is the keystone: `CATALOG_IS_SSOT` ([ci-cd.md](../spec/ci-cd.md) Axiom 16) means overlays, AppSets, Caddy routing, scheduler endpoints, and the build matrix all derive from it. (The submodule _pin_ lives in `.gitmodules` — git-native — not the catalog.)
 - **Generated footprint** (byte-exact, drift-gated against `scripts/ci/render-*.sh`): overlays ×3 (`infra/k8s/overlays/{candidate-a,preview,production}/<slug>/`), per-node AppSets ×3 (`infra/k8s/argocd/<env>-<slug>-applicationset.yaml`, Axiom 18), Caddyfile route, `ci.yaml` scope filter, scheduler-worker endpoints. **No `pnpm-lock.yaml`** — a submodule node is not a workspace member of the operator monorepo.
 
