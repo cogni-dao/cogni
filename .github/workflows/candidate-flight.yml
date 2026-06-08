@@ -201,8 +201,10 @@ jobs:
           echo "has_image_inputs=$has_image_inputs" >> "$GITHUB_OUTPUT"
 
       # Node-ref and catalog-birth flights are app flights. They must not run
-      # hidden infra provisioning; they assert the substrate that provision-env /
-      # candidate-flight-infra owns already exists, then promote only the app digest.
+      # hidden infra provisioning; they assert the target substrate that
+      # provision-env / candidate-flight-infra owns already exists, then promote
+      # only the app digest. This workflow currently enables the gate only for
+      # type=node targets.
       - name: Detect substrate assertion need
         id: substrate
         env:
@@ -227,11 +229,11 @@ jobs:
             if [ "$catalog_type" = "node" ]; then
               ADDED_NODE_CATALOG+="${catalog_path}"$'\n'
             else
-              echo "::notice::Added ${catalog_type:-unknown} catalog entry ${catalog_path} does not use node substrate assertion"
+              echo "::notice::Added ${catalog_type:-unknown} catalog entry ${catalog_path} does not use app-flight substrate assertion in this workflow"
             fi
           done <<< "$ADDED_CATALOG"
           if [ -n "$ADDED_NODE_CATALOG" ]; then
-            echo "::notice::Node birth detected — asserting substrate for new node catalog entry: ${ADDED_NODE_CATALOG//$'\n'/ }"
+            echo "::notice::Node birth detected — asserting target substrate for new node catalog entry: ${ADDED_NODE_CATALOG//$'\n'/ }"
             echo "needs_substrate_check=true" >> "$GITHUB_OUTPUT"
           else
             echo "ℹ️  No added node catalog entry — app-only flight, infra independent"
@@ -395,9 +397,9 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -T 10 -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
 
-      - name: Assert node substrate
+      - name: Assert target substrate
         env:
-          NODE: ${{ matrix.node }}
+          TARGET: ${{ matrix.node }}
           VM_HOST: ${{ secrets.VM_HOST }}
           SSH_OPTS: "-i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6"
           DEPLOY_ENVIRONMENT: candidate-a
@@ -407,7 +409,7 @@ jobs:
           CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
           APP_SOURCE_DIR: app-src
           COGNI_CATALOG_ROOT: app-src/infra/catalog
-        run: bash ci-src/scripts/ci/assert-node-substrate.sh
+        run: bash ci-src/scripts/ci/assert-target-substrate.sh
 
   flight:
     needs: [decide, reconcile-appset, assert-substrate]
