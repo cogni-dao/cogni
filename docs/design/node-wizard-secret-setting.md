@@ -72,16 +72,18 @@ Before changing live launch behavior, recall the operator knowledge block
 
 ## Wizard-Owned Artifacts
 
-A production wizard-created node-birth PR should include:
+A production wizard birth flow has two write surfaces: the child node repo seed
+and the parent operator PR that pins and deploys it. Together they should
+produce this footprint:
 
-| Artifact                                                       | Wizard responsibility                                                                                        |
-| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `infra/catalog/<slug>.yaml`                                    | Declare node topology, source repo, image repo, ports, and deploy branches.                                  |
-| `infra/k8s/overlays/<env>/<slug>/kustomization.yaml`           | Point every node-app Deployment/initContainer secret reference at `<slug>-env-secrets` for ESO-enabled envs. |
-| `nodes/<slug>/k8s/external-secrets/<env>/external-secret.yaml` | Declare one ExternalSecret for the node/env.                                                                 |
-| `nodes/<slug>/k8s/external-secrets/<env>/kustomization.yaml`   | Make the ExternalSecret leaf available to provision/reconcile.                                               |
-| per-node AppSets                                               | Make the target visible to Argo/candidate flight.                                                            |
-| launch pack facts                                              | Tell the assistant what was minted and what to prove next.                                                   |
+| Artifact                                             | Surface             | Wizard responsibility                                                                                        |
+| ---------------------------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `k8s/external-secrets/<env>/external-secret.yaml`    | child repo seed     | Declare one ExternalSecret for the node/env. When mounted, this appears at `nodes/<slug>/k8s/...`.           |
+| `k8s/external-secrets/<env>/kustomization.yaml`      | child repo seed     | Make the ExternalSecret leaf available to provision/reconcile.                                               |
+| `infra/catalog/<slug>.yaml`                          | parent operator PR  | Declare node topology, source repo, image repo, ports, and deploy branches.                                  |
+| `infra/k8s/overlays/<env>/<slug>/kustomization.yaml` | parent operator PR  | Point every node-app Deployment/initContainer secret reference at `<slug>-env-secrets` for ESO-enabled envs. |
+| `infra/k8s/argocd/<env>-<slug>-applicationset.yaml`  | parent operator PR  | Make the target visible to Argo/candidate flight.                                                            |
+| launch pack facts                                    | operator app record | Tell the assistant what was minted and what to prove next.                                                   |
 
 For the current candidate-a proof path, the minimum ExternalSecret is:
 
@@ -251,21 +253,25 @@ The candidate-flight substrate assertion is read-only. If it finds a consumed
 Secret with no Ready ExternalSecret, the fix belongs to the birth PR shape or
 the secrets/provisioning lane, not the app-flight lane.
 
-## Implementation Plan
+## As-Built Anchors
 
-1. Add a scaffold generator for
-   `nodes/<slug>/k8s/external-secrets/candidate-a/{external-secret.yaml,kustomization.yaml}`.
-2. Update the overlay generator so candidate-a generated overlays consume
-   `<slug>-env-secrets`.
-3. Add generator tests that assert:
-   - the ExternalSecret name and target are `<slug>-env-secrets`;
-   - the extract key is `candidate-a/<slug>`;
-   - generated overlays contain no `<slug>-node-app-secrets`;
-   - generated overlays include `<slug>-env-secrets` for containers,
-     initContainers, and explicit secretKeyRef users.
-4. Update node formation docs to remove stale guidance that node-birth PRs omit
-   ExternalSecret manifests.
-5. Use a fresh throwaway node to prove the target substrate reconciler can pass
+- `nodes/operator/app/src/shared/node-app-scaffold/gens/external-secret.ts`
+  renders the child repo's candidate-a ExternalSecret leaf without any secret
+  value.
+- `nodes/operator/app/src/shared/node-app-scaffold/gens/overlay.ts` rewrites
+  candidate-a overlays from `<slug>-node-app-secrets` to
+  `<slug>-env-secrets`.
+- `nodes/operator/app/src/adapters/server/vcs/github-repo-write.ts` writes the
+  child repo leaf before opening the parent operator PR.
+- Generator tests assert the ExternalSecret name, target, extract key, and
+  overlay rewrite.
+
+## Remaining Work
+
+1. Update node formation docs to remove stale guidance that node-birth PRs omit
+   ExternalSecret manifests. They now live in the child repo seed and appear in
+   the parent tree through the submodule mount.
+2. Use a fresh throwaway node to prove the target substrate reconciler can pass
    `reconcile-substrate`, `assert-substrate`, `flight`, and
    `verify-candidate` without manual secret bridging.
 
