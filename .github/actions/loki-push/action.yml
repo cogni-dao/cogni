@@ -38,4 +38,4 @@ runs:
         LABELS: ${{ inputs.labels }}
       run: |
         # Best-effort push: never fails the job
-        scripts/ci/loki_push.sh || true
+        "$GITHUB_ACTION_PATH/../../../scripts/ci/loki_push.sh" || true
