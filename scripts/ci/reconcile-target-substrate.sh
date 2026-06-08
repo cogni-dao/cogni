@@ -42,7 +42,8 @@ init_summary() {
 append_row() {
   [ -n "$ROWS_FILE" ] || return 0
   local row="$1" state="$2" message="${3:-}"
-  ROW_NAME="$row" ROW_STATE="$state" ROW_MESSAGE="$message" python3 - <<'PY' >>"$ROWS_FILE"
+  local error_code="${4:-}"
+  ROW_NAME="$row" ROW_STATE="$state" ROW_MESSAGE="$message" ROW_ERROR_CODE="$error_code" python3 - <<'PY' >>"$ROWS_FILE"
 import json
 import os
 
@@ -53,6 +54,9 @@ payload = {
 message = os.environ.get("ROW_MESSAGE", "")
 if message:
     payload["message"] = message
+error_code = os.environ.get("ROW_ERROR_CODE", "")
+if error_code:
+    payload["error_code"] = error_code
 print(json.dumps(payload, separators=(",", ":")))
 PY
 }
@@ -89,6 +93,7 @@ if path:
                 rows.append(json.loads(line))
 
 states = collections.Counter(row.get("state", "unknown") for row in rows)
+failed_rows = sorted({row.get("row", "unknown") for row in rows if row.get("state") == "failed"})
 payload = {
     "schema_version": 1,
     "type": "target_substrate_reconcile_summary",
@@ -105,6 +110,9 @@ payload = {
     "attempt": os.environ["SUBSTRATE_ATTEMPT"],
     "ref": os.environ["SUBSTRATE_REF"],
     "states": dict(sorted(states.items())),
+    "row_count": len(rows),
+    "failed_row_count": len(failed_rows),
+    "failed_rows": failed_rows,
     "rows": rows,
     "emitted_at": datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
 }
@@ -251,12 +259,12 @@ caddy_src="$(remote_path "$caddy_src")"
 external_secret_src="$(remote_path "$external_secret_src")"
 
 emit_row() {
-  printf 'SUBSTRATE_ROW\t%s\t%s\t%s\n' "$1" "$2" "${3:-}"
+  printf 'SUBSTRATE_ROW\x1f%s\x1f%s\x1f%s\x1f%s\n' "$1" "$2" "${3:-}" "${4:-}" >&2
 }
 
 mark_failed() {
   failed=1
-  emit_row "$1" failed "$2"
+  emit_row "$1" failed "$2" "${3:-$1}"
   echo "::error::reconcile-target-substrate: $2" >&2
 }
 
@@ -668,9 +676,9 @@ ssh_rc=${PIPESTATUS[0]}
 set -e
 
 if [ -n "$ROWS_FILE" ]; then
-  while IFS=$'\t' read -r marker row state message; do
+  while IFS=$'\037' read -r marker row state message error_code; do
     [ "$marker" = "SUBSTRATE_ROW" ] || continue
-    append_row "$row" "$state" "$message"
+    append_row "$row" "$state" "$message" "$error_code"
   done <"$remote_log"
 fi
 rm -f "$remote_log"

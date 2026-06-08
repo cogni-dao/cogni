@@ -152,6 +152,10 @@ The script emits one JSON summary with:
   `run_id`, `status_url`;
 - per-row states: `unchanged`, `created`, `updated`, `refreshed`, `failed`,
   `unsupported`;
+- `row_count`, `failed_row_count`, and `failed_rows` for quick Loki/Grafana
+  inspection;
+- `error_code` on every failed row. The code is stable and low-cardinality;
+  human text stays in `message`;
 - redacted evidence only. No secret values, DSNs, tokens, or private keys.
 
 Push the summary to Loki using the existing `loki-push` action with
@@ -171,12 +175,14 @@ For `type=node`, the reconciler owns these rows:
 | Row                  | Reconcile behavior                                                                                                                                                                                             | Proof                                                                                                                            |
 | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | AppSet               | Apply only `infra/k8s/argocd/<env>-<target>-applicationset.yaml` from `APP_SOURCE_DIR`; keep the #1577 lane isolation behavior.                                                                                | `kubectl -n argocd get applicationset cogni-<env>-<target>`.                                                                     |
+| Argo Application     | Wait after AppSet apply for Argo to materialize the per-target Application before checking downstream objects.                                                                                                 | `kubectl -n argocd get application <env>-<target>`.                                                                              |
 | DNS                  | Upsert `<target>-test.<root>` to the env apex VM IP using `reconcile-node-dns.sh` logic, scoped to the target when practical.                                                                                  | Cloudflare A record equals apex origin IP.                                                                                       |
 | Edge env             | Ensure `/opt/cogni-template-edge/.env` has the derived `<TARGET>_DOMAIN` or primary `<TARGET>_UPSTREAM` line.                                                                                                  | File contains expected key/value.                                                                                                |
 | Caddyfile            | Ensure committed/generated Caddyfile is present on the VM and contains the target route/NodePort.                                                                                                              | File contains host placeholder and `host.docker.internal:<node_port>`.                                                           |
 | Caddy live config    | Recreate or reload Caddy only when edge env or Caddyfile hash changes. Prefer the existing `docker compose up -d --force-recreate caddy` pattern from `deploy-infra.sh`, scoped to Caddy.                      | Admin API config contains host and NodePort.                                                                                     |
 | Namespace            | Ensure `cogni-<env>` exists.                                                                                                                                                                                   | `kubectl get namespace`.                                                                                                         |
 | ExternalSecret       | Apply the target's declared ExternalSecret object from Git, annotate for force-sync when supported, and wait for Ready/Synced. Do not write OpenBao values and do not create `<target>-node-app-secrets`.      | `ExternalSecret Ready=True`; synced k8s Secret exists; Deployment consumes `<target>-env-secrets`.                               |
+| Deployment/Service   | Wait for Argo-created Deployment and Service before enforcing the secret contract. This prevents cold-start false negatives immediately after AppSet apply.                                                    | Deployment exists; Service exists and later assertion checks the catalog NodePort.                                               |
 | Postgres DB          | Create the catalog-derived app DB if absent, using OpenBao-sourced role credentials for any set-once role creation. Do not alter pod-consumed role passwords.                                                  | `SELECT 1 FROM pg_database WHERE datname = <db>`.                                                                                |
 | Doltgres DB          | Create the catalog-derived knowledge DB if absent (`cogni_<target>` -> `knowledge_<target>`), using OpenBao-sourced role credentials for any set-once role creation. Do not alter pod-consumed role passwords. | `SELECT 1 FROM doltgres pg_database WHERE datname = <knowledge_db>` and the DB is reachable through the target's `DOLTGRES_URL`. |
 | Runtime DB inventory | Update `COGNI_NODE_DBS` in `/opt/cogni-template-runtime/.env` to include the catalog-derived DB name.                                                                                                          | Runtime env includes the DB.                                                                                                     |
@@ -376,6 +382,9 @@ Acceptance:
 - `resolve image` finds `image_repository:sha-<sourceSha>`;
 - `reconcile-substrate` succeeds and posts a Loki summary with successful edge,
   ESO, Postgres, Doltgres, and DB inventory rows;
+- failed reconcile attempts post the same summary shape with `failed_rows` and
+  row `error_code`, and `report-status` describes the pre-promotion substrate
+  failure instead of a generic indeterminate result;
 - `assert-substrate` succeeds;
 - no `deploy-infra` job runs;
 - `flight` writes only `deploy/candidate-a-<slug>`;
@@ -419,21 +428,23 @@ Acceptance:
 - a legacy plain-Secret consumer, missing OpenBao value, or missing
   `<env>-db-reader` path fails without falling back to GitHub env secrets.
 
-## Review Questions
+## Implementation Decisions
 
-Reviewers should decide these before implementation approval:
+The first implementation keeps the scope intentionally narrow:
 
-1. Should `reconcile-dns` and `reconcile-appset` remain separate in the first
-   PR, or should `reconcile-target-substrate.sh` own them immediately?
-2. What is the smallest extracted DB helper that can provision Postgres and
-   Doltgres without calling `deploy-infra.sh` wholesale?
-3. Should phase one require the OpenBao DB reader path to exist in candidate-a,
-   or should it land that reader path in the same implementation PR before the
-   reconciler job is enabled?
-4. What Loki query should the scorecard standardize for
-   `target_substrate_reconcile_summary`?
-5. Does this PR cover candidate-a only, or should preview/prod wiring land at
-   the same time behind environment inputs?
+1. `reconcile-dns` and `reconcile-appset` remain separate workflow jobs because
+   they already have lane-specific concurrency and telemetry. The new
+   `reconcile-substrate` job owns the remaining target-local rows.
+2. DB provisioning stays in `reconcile-target-substrate.sh` until a second
+   reconciler needs the same logic. Helper extraction should happen only when it
+   removes real duplication.
+3. The OpenBao `<env>-db-reader` path is a prerequisite. Missing reader auth or
+   missing OpenBao values fail the app flight before digest promotion.
+4. Loki scorecards should query
+   `target_substrate_reconcile_summary` by low-cardinality labels and inspect the
+   JSON body fields `target`, `status`, `failed_rows`, and row `error_code`.
+5. PR #1579 covers candidate-a only. Preview/production wiring should follow
+   only after candidate-a proves the contract with a successful nodeRef flight.
 
 ## Decision
 

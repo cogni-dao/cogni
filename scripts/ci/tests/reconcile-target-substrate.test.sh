@@ -273,6 +273,7 @@ import sys
 payload = json.load(open(sys.argv[1], encoding="utf-8"))
 assert payload["type"] == "target_substrate_reconcile_summary"
 assert payload["status"] == "success"
+assert payload["failed_row_count"] == 0
 rows = {row["row"]: row["state"] for row in payload["rows"]}
 assert rows["edge_env"] == "updated"
 assert rows["postgres_db"] == "created"
@@ -314,6 +315,15 @@ if env "${BASE_ENV[@]}" FAKE_MISSING_BAO_VALUE=1 \
   exit 1
 fi
 grep -q "missing OpenBao key APP_DB_PASSWORD" "$TMPROOT/missing-bao.out"
+python3 - "$TMPROOT/missing-bao-summary.json" <<'PY'
+import json
+import sys
+
+payload = json.load(open(sys.argv[1], encoding="utf-8"))
+assert payload["status"] == "failure"
+assert "openbao_values" in payload["failed_rows"]
+assert any(row.get("error_code") == "openbao_values" for row in payload["rows"])
+PY
 
 rm -f "$STATE_DIR/role_app_user" "$STATE_DIR/role_app_service" "$STATE_DIR/role_app_readonly" "$STATE_DIR/pg_cogni_canary"
 if env "${BASE_ENV[@]}" FAKE_POSTGRES_ROLE_CREATE_FAIL=1 \
