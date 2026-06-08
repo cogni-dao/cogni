@@ -158,6 +158,11 @@ describe("buildNodeLaunchPack", () => {
     );
     expect(pack.prompt).toContain("Right before flighting");
     expect(pack.prompt).toContain("ensure the parent deployment PR is merged");
+    expect(pack.prompt).toContain("Checkpoint with the human");
+    expect(pack.prompt).toContain("brief status, progress, and next-steps");
+    expect(pack.prompt).toContain(
+      "https://cognidao.org/knowledge/browser-session-flight-auth"
+    );
     expect(pack.prompt).toContain("operator API");
     expect(pack.prompt).toContain("child image tag exists");
     expect(pack.prompt).toContain("parent pin agrees");
