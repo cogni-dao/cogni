@@ -1094,6 +1094,15 @@ emit_deployment_event "infra_deployment.stack_up_complete" "success" "Infrastruc
 # Step 6.6a: Bootstrap OpenFGA store/model and publish operator runtime IDs
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 log_info "[$(date -u +%H:%M:%S)] Bootstrapping OpenFGA RBAC store/model..."
+if ! command -v jq >/dev/null 2>&1; then
+  if command -v apt-get >/dev/null 2>&1; then
+    log_info "jq not found on VM; installing jq for OpenFGA bootstrap..."
+    DEBIAN_FRONTEND=noninteractive apt-get update >/dev/null
+    DEBIAN_FRONTEND=noninteractive apt-get install -y jq >/dev/null
+  else
+    log_fatal "jq is required for OpenFGA bootstrap and apt-get is unavailable"
+  fi
+fi
 OPENFGA_BOOTSTRAP_ENV=$(OPENFGA_API_URL=http://127.0.0.1:8080 \
   OPENFGA_STORE_NAME="cogni-${DEPLOY_ENVIRONMENT}-rbac" \
   OPENFGA_MODEL_FILE=/tmp/rbac-model.json \
