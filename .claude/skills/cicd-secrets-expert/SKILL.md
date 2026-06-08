@@ -58,6 +58,20 @@ startup, so prove: source object -> Deployment `envFrom` -> restarted pod env ->
 public health. Treat old Argo/workflow failures as leads until live cluster
 checks agree.
 
+## App flight substrate assertions are read-only
+
+`candidate-flight.yml` uses `scripts/ci/assert-target-substrate.sh` as a
+preflight for selected app rollouts. That gate may verify a Deployment-consumed
+k8s Secret exists and its matching ExternalSecret is Ready, but it must not seed
+OpenBao, patch GitHub secrets, run `deploy-infra.sh`, or repair Compose/env
+state. A missing secret is a substrate failure: use `pnpm secrets:set`, the
+env-provisioning lane, or the explicit infra flight that owns the mutation.
+
+The target shape matters. Today the implemented branch is `type=node`; a future
+`type=service` branch should assert the service's declared Secret /
+ExternalSecret / ConfigMap contract without inheriting node DNS, Caddy, NodePort,
+or node-DB assumptions.
+
 ## Decision tree — how do I write / rotate the value?
 
 | Operation                                             | Right pattern                                                                                                      | Today's reality                                                                                                            |
@@ -92,7 +106,7 @@ PATCH /app/hook/config  -d '{"secret":"<generated GH_WEBHOOK_SECRET>"}'   # endp
 
 No-human-secret done right: agent generates, agent pushes, **zero human, self-healing** (provisioning owns both copies → every infra-lever deploy re-converges). Do NOT make it `source: human`/carry — that drags a human into the App's "Change secret" field for a value that's ours to generate.
 
-⚠️ **Sync only fires on the infra lever** (`deploy-infra` via `candidate-flight-infra` / `provision-env`), NOT on app-lever promotes (`candidate-flight`/`flight-preview`/`promote-and-deploy` = Argo image bump, never touches the Secret). And the push uses deploy-infra's env value — correct for the plain-Secret model (preview/prod) but on the **ESO model (candidate-a)** the pod serves OpenBao's value; if those differ the sync must read the live Secret. (candidate-a live-read = tracked follow-up.)
+⚠️ **Sync only fires on the infra lever** (`deploy-infra` via `candidate-flight-infra` / `provision-env`), NOT on app-lever promotes (`candidate-flight`/`flight-preview`/`promote-and-deploy` = Argo image bump, never touches the Secret). `assert-target-substrate.sh` is also read-only: it can fail a flight when the Deployment-consumed Secret / ExternalSecret is absent or not Ready, but it does not heal the value. And the push uses deploy-infra's env value — correct for the plain-Secret model (preview/prod) but on the **ESO model (candidate-a)** the pod serves OpenBao's value; if those differ the sync must read the live Secret. (candidate-a live-read = tracked follow-up.)
 
 **Heal-proof test** = redeploy twice; a PR on the test repo must still post a `cogni-git-review` review.
 
@@ -103,6 +117,9 @@ No-human-secret done right: agent generates, agent pushes, **zero human, self-he
 - Generic catch-all workflow (`secrets-manage.yml`-shaped). Per-operation only.
 - `ssh root@vm kubectl ...` or `ssh root@vm bao ...`. Use local kubectl + port-forward + writer-role JWT.
 - Treating k8s Secret or ConfigMap presence as proof that a running pod has the value. Prove the process after rollout.
+- Treating a failed app-flight substrate assertion as permission to run
+  `deploy-infra` from the app flight. Heal secrets/substrate through the owning
+  secrets or infra lane; keep app flight read-only until image promotion.
 - Re-exporting `.local/<env>-openbao-root-token` after Phase 5b — violates Invariant 13.
 - `bao kv put` instead of `bao kv patch` (replaces sibling keys).
 - `bao login -method=kubernetes` in OpenBao CLI 2.5.x — that subcommand doesn't exist; use raw API: `bao write auth/kubernetes/login role=X jwt=Y`.
