@@ -24,6 +24,7 @@ resources:
   # candidate-b is provisioned separately (provision-env.yml) and not listed here.
   # >>> GENERATED node-appsets (scripts/ci/render-node-appset.sh) — DO NOT EDIT BY HAND
   - candidate-a-canary-applicationset.yaml
+  - candidate-a-coulditbe-applicationset.yaml
   - candidate-a-creative-applicationset.yaml
   - candidate-a-node-template-applicationset.yaml
   - candidate-a-operator-applicationset.yaml
@@ -31,6 +32,7 @@ resources:
   - candidate-a-resy-applicationset.yaml
   - candidate-a-scheduler-worker-applicationset.yaml
   - preview-canary-applicationset.yaml
+  - preview-coulditbe-applicationset.yaml
   - preview-creative-applicationset.yaml
   - preview-node-template-applicationset.yaml
   - preview-operator-applicationset.yaml
@@ -38,6 +40,7 @@ resources:
   - preview-resy-applicationset.yaml
   - preview-scheduler-worker-applicationset.yaml
   - production-canary-applicationset.yaml
+  - production-coulditbe-applicationset.yaml
   - production-creative-applicationset.yaml
   - production-node-template-applicationset.yaml
   - production-operator-applicationset.yaml

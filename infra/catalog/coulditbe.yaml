@@ -1,0 +1,13 @@
+name: coulditbe
+type: node
+port: 3200
+node_port: 30700
+dockerfile: nodes/coulditbe/app/Dockerfile
+image_tag_suffix: "-coulditbe"
+migrator_tag_suffix: "-coulditbe-migrate"
+source_repo: https://github.com/Cogni-DAO/coulditbe.git
+image_repository: ghcr.io/cogni-dao/coulditbe
+candidate_a_branch: deploy/candidate-a-coulditbe
+preview_branch: deploy/preview-coulditbe
+production_branch: deploy/production-coulditbe
+path_prefix: nodes/coulditbe/
