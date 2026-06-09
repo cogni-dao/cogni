@@ -352,6 +352,18 @@ jobs:
       - name: per-node ApplicationSet drift (CATALOG_IS_SSOT)
         run: bash scripts/ci/render-node-appset.sh --check
 
+      # Per-node overlay drift (CATALOG_IS_SSOT + NODE_AT_ROOT_MIGRATE_PATH,
+      # bug.5008). Wizard-born node overlays are frozen to the operator version
+      # that minted them; a stale operator ships monorepo migrate paths that
+      # kustomize-build fine but crash-loop the migrate initContainer at runtime.
+      # Regenerate from the node-template overlay + catalog and fail on drift
+      # before flight (run `pnpm gen:node-overlays`).
+      - name: per-node overlay drift (NODE_AT_ROOT_MIGRATE_PATH)
+        run: bash scripts/ci/render-node-overlays.sh --check
+
+      - name: node overlay renderer tests
+        run: bash scripts/ci/tests/render-node-overlays.test.sh
+
       - name: scheduler runtime routing tests
         run: bash scripts/ci/tests/scheduler-runtime-routing.test.sh
 

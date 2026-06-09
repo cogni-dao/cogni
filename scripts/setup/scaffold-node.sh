@@ -79,24 +79,15 @@ if [ -n "$NODE_ID" ]; then
 fi
 
 echo "==> 5. overlays x3 (ALL_THREE_ENVS_OR_NONE)"
+# Single source of overlay-generation truth: render-node-overlays.sh applies the
+# byte-exact transforms (slug, ports, ESO secret-target rename, node-at-root migrate
+# rewrites) and fails closed if the migrate override doesn't inject. Its --check
+# drift gate (bug.5008) governs these files in CI, so generating them any other way
+# would split-brain. The catalog row written above feeds node_port/port.
 for env in "${ENVS[@]}"; do
-  src="infra/k8s/overlays/$env/$TPL"
   dst="infra/k8s/overlays/$env/$SLUG"
-  [ -d "$src" ] || { echo "missing template overlay $src"; exit 1; }
-  cp -R "$src" "$dst"
-  f="$dst/kustomization.yaml"
-  perl -i -pe "s/$TPL/$SLUG/g" "$f"
-  perl -pi -e "s/\\b30200\\b/$NODEPORT/g; s/\\b3200\\b/$PORT/g" "$f"
-  # Node-at-root migrate paths: wizard-born nodes ship images with the app tree
-  # at /app/app, not the monorepo /app/nodes/<slug>/app the shared base assumes.
-  # Rewrite the Doltgres runner path and inject the Postgres migrate override so
-  # both initContainer migrate commands match the node's own image layout.
-  # Parity: gens/overlay.ts renderOverlay applies the identical transforms.
-  perl -0pi -e 's{/app/nodes/\$\(NODE_NAME\)/app}{/app/app}g' "$f"
-  perl -0pi -e 's{(        path: /spec/template/spec/initContainers/0/envFrom/1/secretRef/name\n        value: [^\n]*\n)}{$1      - op: replace\n        path: /spec/template/spec/initContainers/0/command/2\n        value: exec node /app/app/migrate.mjs /app/app/migrations\n}' "$f"
-  # Fail closed: a node whose migrate override didn't inject would crash-loop silently.
-  grep -q "exec node /app/app/migrate.mjs" "$f" \
-    || { echo "FAIL: $f missing node-at-root migrate override (NODE_AT_ROOT_MIGRATE_PATH)"; exit 1; }
+  mkdir -p "$dst"
+  bash "$ROOT/scripts/ci/render-node-overlays.sh" "$env" "$SLUG" > "$dst/kustomization.yaml"
 done
 
 echo "==> 6. per-node AppSets + bootstrap kustomization (catalog-derived, LANE_ISOLATION)"

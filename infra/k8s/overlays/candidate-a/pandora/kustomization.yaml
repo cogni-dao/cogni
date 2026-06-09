@@ -57,10 +57,10 @@ patches:
     patch: |
       - op: replace
         path: /spec/template/spec/containers/0/envFrom/1/secretRef/name
-        value: "pandora-node-app-secrets"
+        value: "pandora-env-secrets"
       - op: replace
         path: /spec/template/spec/initContainers/0/envFrom/1/secretRef/name
-        value: "pandora-node-app-secrets"
+        value: "pandora-env-secrets"
       - op: replace
         path: /spec/template/spec/initContainers/0/command/2
         value: exec node /app/app/migrate.mjs /app/app/migrations
@@ -98,7 +98,7 @@ patches:
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
-                  name: pandora-node-app-secrets
+                  name: pandora-env-secrets
                   key: DOLTGRES_URL
           resources:
             requests:

@@ -31,6 +31,7 @@
     "gen:scheduler-worker-endpoints": "ENDPOINTS=$(bash scripts/ci/render-scheduler-worker-endpoints.sh) yq -i '.data.COGNI_NODE_ENDPOINTS = strenv(ENDPOINTS)' infra/k8s/base/scheduler-worker/configmap.yaml",
     "gen:scope-filters": "bash scripts/ci/render-scope-filters.sh --write",
     "gen:node-appset": "bash scripts/ci/render-node-appset.sh --write",
+    "gen:node-overlays": "bash scripts/ci/render-node-overlays.sh --write",
     "workflow:check": "node scripts/ci/workflow-check.mjs",
     "conductor:setup": "bash scripts/conductor-worktree-setup.sh",
     "worktree:check": "bash scripts/worktree-check.sh",
