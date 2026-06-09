@@ -71,10 +71,14 @@ while [ "$#" -gt 0 ] && [[ "$1" == -* ]]; do
 done
 [ "$#" -gt 0 ] && shift # root@host
 cmd="$*"
+# Rewrite remote scratch /tmp/ FIRST. FAKE_REMOTE_ROOT lives under /tmp/ on CI
+# runners (mktemp), so doing this after the /opt passes would re-rewrite the
+# /tmp/ they just injected and double the path. Locally (macOS /var/folders) the
+# ordering is invisible — which is why this only ever failed in CI.
+cmd="${cmd//\/tmp\//${FAKE_REMOTE_ROOT}\/tmp\/}"
 cmd="${cmd//\/opt\/cogni-template-edge/${FAKE_REMOTE_ROOT}\/opt\/cogni-template-edge}"
 cmd="${cmd//\/opt\/cogni-template-runtime/${FAKE_REMOTE_ROOT}\/opt\/cogni-template-runtime}"
 cmd="${cmd//\/var\/lib\/cogni/${FAKE_REMOTE_ROOT}\/var\/lib\/cogni}"
-cmd="${cmd//\/tmp\//${FAKE_REMOTE_ROOT}\/tmp\/}"
 PATH="${FAKE_REMOTE_PATH}:${PATH}" bash -c "$cmd"
 EOF
 chmod +x "$FAKEBIN/ssh"
