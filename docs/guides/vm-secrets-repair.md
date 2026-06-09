@@ -126,8 +126,9 @@ Order: **candidate-a** (reprovision-friendly, gate first) → **preview** →
    `ALTER`ing to the value ESO syncs to the pod cannot diverge, and it's what makes
    rotation work (set-once would `28P01` on the next rotation). Source must be the
    OpenBao read, **never** a rendered `.env` (that is the bug.5002 anti-fix). It
-   applies the same per-DB GRANT/RLS/ownership `app_user` had; ownership migration
-   for existing DBs happens at cutover (Step 5).
+   applies the same per-DB GRANT/RLS/ownership `app_user` had on **fresh** DBs; an
+   existing app_user-owned DB is handled by reprovision / one-shot migration
+   (Step 5), never by an in-provisioner cutover branch.
 3. **Compose + cut over the DSN** — un-defer the three DSN keys in
    `secret-materialize` (`DSN_DEFER_KEYS`) so it composes `DATABASE_URL` /
    `DATABASE_SERVICE_URL` from the node's own `app_<node>` creds; strip the
@@ -138,13 +139,18 @@ Order: **candidate-a** (reprovision-friendly, gate first) → **preview** →
 4. **Provisioners read OpenBao only** — delete the `deploy-infra.sh:838-860`
    `derive_secret` block + `${X:-$(remote_env_value …)}` `.env` fallbacks;
    fail-loud-skip on read miss, never `.env` (the bug.5002 anti-fix).
-5. **Drop the legacy (same change, not deferred)** — `app_user`/`app_service` are
-   cluster-global with owned objects + grants in **every** node DB. Before
-   `DROP ROLE`, in **each** DB run `REASSIGN OWNED BY app_user TO app_<node>` (that
-   DB's matching per-node role) then `DROP OWNED BY app_user` — skip either and the
-   drop errors. After every DB is done: `DROP ROLE app_user`/`app_service` and
-   delete the `APP_DB_*_PASSWORD` GitHub Environment secrets (Invariant 5). The
-   shared role does not linger.
+5. **Retire the legacy (one-shot, NOT steady-state code)** — `provision.sh` only
+   creates fresh DBs owned by `app_<node>`; it deliberately does **not** migrate an
+   existing `app_user`-owned DB, because that branch would be dead code running on
+   every flight forever after cutover. So:
+   - **candidate-a** (throwaway) → **reprovision**: drop + recreate the node DBs
+     fresh, owned by `app_<node>` from creation. No migration code.
+   - **data-preserving env** → a **one-shot, audited** migration, run **once,
+     verified, then removed** (never committed into the recurring provisioner): per
+     DB `REASSIGN OWNED BY app_user TO app_<node>` + `DROP OWNED BY app_user`, then
+     cluster-level `DROP ROLE app_user`/`app_service`.
+
+   Then delete the `APP_DB_*_PASSWORD` GitHub Environment secrets (Invariant 5).
 6. **Falsifying gate** (below).
 
 ### Seam with the materialize redesign (coordinate before parallel work)
@@ -197,6 +203,18 @@ absent from `.env`; Loki shows the `<env>-db-reader` subject reading
 | `candidate-a` | Throwaway. Easiest path is a **reprovision** with the per-node-role `provision.sh`, then run the gate. No live users to protect.   |
 | `preview`     | Semi-live. In-place migration (Steps 1–5), per node, then the gate.                                                                |
 | `production`  | Live. In-place migration in a maintenance-aware window; have rollback ready (retire the shared role only after every node green). |
+
+## Endgame — declarative role/DB management (roadmap, not this PR)
+
+Hand-rolled superuser bash doing `CREATE`/`ALTER`/`GRANT` with by-hand idempotency
+is the bug.5002 / bug.5031 class — every guard is a place drift hides. This PR is
+the **last** hand-rolled increment; do not grow `provision.sh` further. The
+convergent endgame is **declarative**: a Postgres operator
+([CloudNativePG](https://cloudnative-pg.io/), CNCF) or the
+[Terraform `postgresql` provider](https://registry.terraform.io/providers/cyrilgdn/postgresql/latest/docs)
+reconciling desired role/DB/grant state, with ESO/Vault for credentials (already
+aligned). This is to role/DB management what Atlas is to schema in
+[`databases.md`](../spec/databases.md) — name it there as the SSOT roadmap item.
 
 ## Related
 
