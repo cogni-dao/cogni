@@ -10,3 +10,6 @@
 [submodule "nodes/please"]
 	path = nodes/please
 	url = https://github.com/Cogni-DAO/please.git
+[submodule "nodes/ayo"]
+	path = nodes/ayo
+	url = https://github.com/Cogni-DAO/ayo.git
