@@ -202,6 +202,7 @@ env \
   APP_DB_SERVICE_USER=app_service \
   APP_DB_SERVICE_PASSWORD=service-pass \
   DOLTGRES_PASSWORD=dolt-pass \
+  SUBSTRATE_RECONCILE_SUMMARY_FILE="$TMPROOT/summary.json" \
   bash scripts/ci/reconcile-node-substrate.sh candidate-a canary > "$TMPROOT/out.txt"
 
 grep -q "substrate ready inputs reconciled for canary" "$TMPROOT/out.txt"
@@ -220,6 +221,25 @@ grep -q -- '--profile bootstrap run --rm doltgres-provision' "$REMOTE_ROOT/docke
 
 if grep -q 'sk-or-existing\|app-pass\|service-pass\|dolt-token' "$TMPROOT/out.txt"; then
   echo "secret value leaked to output" >&2
+  exit 1
+fi
+
+# Structured reconcile summary is emitted, complete, and redacted.
+test -f "$TMPROOT/summary.json"
+python3 - "$TMPROOT/summary.json" <<'PY'
+import json, sys
+s = json.load(open(sys.argv[1]))
+assert s["type"] == "target_substrate_reconcile_summary", s["type"]
+assert s["status"] == "success", s["status"]
+assert s["target"] == "canary", s["target"]
+assert s["target_type"] == "node", s["target_type"]
+assert s["failed_row_count"] == 0, s["failed_rows"]
+rows = {r["row"] for r in s["rows"]}
+expected = {"writer_token", "dsn_seed", "externalsecret", "caddyfile", "remote_reconcile"}
+assert expected <= rows, (expected - rows, rows)
+PY
+if grep -qE 'app-pass|service-pass|dolt-pass|postgres-root' "$TMPROOT/summary.json"; then
+  echo "secret value leaked into reconcile summary" >&2
   exit 1
 fi
 

@@ -684,7 +684,22 @@ jobs:
           DOMAIN: ${{ vars.DOMAIN }}
           APP_SOURCE_DIR: app-src
           COGNI_CATALOG_ROOT: infra/catalog
+          HEAD_SHA: ${{ needs.decide.outputs.head_sha }}
+          NODE_SOURCE_SHA: ${{ needs.decide.outputs.node_source_sha }}
+          STATUS_URL: ${{ needs.decide.outputs.status_url }}
+          SUBSTRATE_RECONCILE_SUMMARY_FILE: ${{ runner.temp }}/node-substrate-reconcile-${{ matrix.node }}.json
         run: bash ci-src/scripts/ci/reconcile-node-substrate.sh candidate-a "${TARGET}"
+
+      - name: Push substrate reconcile telemetry to Loki
+        if: always()
+        uses: ./ci-src/.github/actions/loki-push
+        with:
+          loki_url: ${{ secrets.GRAFANA_CLOUD_LOKI_URL }}
+          loki_user: ${{ secrets.GRAFANA_CLOUD_LOKI_USER }}
+          loki_token: ${{ secrets.GRAFANA_CLOUD_LOKI_API_KEY }}
+          log_file: ${{ runner.temp }}/node-substrate-reconcile-${{ matrix.node }}.json
+          job_name: reconcile-substrate
+          labels: workflow=candidate-flight kind=target_substrate_reconcile slot=candidate-a
 
   flight:
     needs: [decide, reconcile-appset, reconcile-substrate, assert-substrate]

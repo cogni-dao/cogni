@@ -27,6 +27,7 @@ SSH_OPTS_RAW="${SSH_OPTS:--i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-n
 
 fail() {
   echo "::error::reconcile-node-substrate: $*" >&2
+  append_row "${CURRENT_ROW:-init}" failed "$*" "${CURRENT_ROW:-init}"
   exit 1
 }
 
@@ -36,6 +37,113 @@ log() {
 
 log_info() {
   log "$*"
+}
+
+# ── Structured reconcile summary (redacted) → Loki via candidate-flight ──────
+# Emitted only when SUBSTRATE_RECONCILE_SUMMARY_FILE is set. Schema mirrors
+# scripts/ci/assert-target-substrate.sh / the target_substrate_reconcile_summary
+# contract: per-row state + error_code, aggregate failed_rows. Key names and
+# states only — never secret values.
+SUMMARY_FILE="${SUBSTRATE_RECONCILE_SUMMARY_FILE:-}"
+ROWS_FILE=""
+SUMMARY_WRITTEN=false
+CURRENT_ROW="init"
+
+init_summary() {
+  [ -n "$SUMMARY_FILE" ] || return 0
+  command -v python3 >/dev/null 2>&1 || { SUMMARY_FILE=""; return 0; }
+  ROWS_FILE="$(mktemp -t substrate-reconcile-rows.XXXXXX)"
+}
+
+append_row() {
+  [ -n "${ROWS_FILE:-}" ] || return 0
+  ROW_NAME="$1" ROW_STATE="$2" ROW_MESSAGE="${3:-}" ROW_ERROR_CODE="${4:-}" \
+    python3 - >>"$ROWS_FILE" <<'PY'
+import json, os
+payload = {"row": os.environ["ROW_NAME"], "state": os.environ["ROW_STATE"]}
+message = os.environ.get("ROW_MESSAGE", "")
+error_code = os.environ.get("ROW_ERROR_CODE", "")
+if message:
+    payload["message"] = message
+if error_code:
+    payload["error_code"] = error_code
+print(json.dumps(payload, separators=(",", ":")))
+PY
+}
+
+# mark_row <name> <state> [message] — record a converged row and advance the
+# phase pointer fail() attributes errors to.
+mark_row() {
+  CURRENT_ROW="$1"
+  append_row "$1" "$2" "${3:-}"
+}
+
+write_summary() {
+  [ -n "$SUMMARY_FILE" ] || return 0
+  local status="$1"
+  SUBSTRATE_STATUS="$status" \
+    SUBSTRATE_TARGET="$TARGET_NODE" \
+    SUBSTRATE_TARGET_TYPE="node" \
+    SUBSTRATE_DEPLOY_ENV="$DEPLOY_ENVIRONMENT" \
+    SUBSTRATE_NODE_SOURCE_SHA="${NODE_SOURCE_SHA:-}" \
+    SUBSTRATE_HEAD_SHA="${HEAD_SHA:-${GITHUB_SHA:-}}" \
+    SUBSTRATE_RUN_ID="${GITHUB_RUN_ID:-}" \
+    SUBSTRATE_STATUS_URL="${STATUS_URL:-}" \
+    SUBSTRATE_WORKFLOW="${GITHUB_WORKFLOW:-}" \
+    SUBSTRATE_JOB="${GITHUB_JOB:-}" \
+    SUBSTRATE_ATTEMPT="${GITHUB_RUN_ATTEMPT:-}" \
+    SUBSTRATE_REF="${GITHUB_REF_NAME:-}" \
+    python3 - "${ROWS_FILE:-}" <<'PY' >"${SUMMARY_FILE}.tmp"
+import collections, datetime, json, os, sys
+rows = []
+path = sys.argv[1] if len(sys.argv) > 1 else ""
+if path:
+    with open(path, encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if line:
+                rows.append(json.loads(line))
+states = collections.Counter(row.get("state", "unknown") for row in rows)
+failed_rows = sorted({row.get("row", "unknown") for row in rows if row.get("state") == "failed"})
+payload = {
+    "schema_version": 1,
+    "type": "target_substrate_reconcile_summary",
+    "status": os.environ["SUBSTRATE_STATUS"],
+    "target": os.environ["SUBSTRATE_TARGET"],
+    "target_type": os.environ["SUBSTRATE_TARGET_TYPE"],
+    "deploy_env": os.environ["SUBSTRATE_DEPLOY_ENV"],
+    "node_source_sha": os.environ["SUBSTRATE_NODE_SOURCE_SHA"],
+    "head_sha": os.environ["SUBSTRATE_HEAD_SHA"],
+    "run_id": os.environ["SUBSTRATE_RUN_ID"],
+    "status_url": os.environ["SUBSTRATE_STATUS_URL"],
+    "workflow": os.environ["SUBSTRATE_WORKFLOW"],
+    "job": os.environ["SUBSTRATE_JOB"],
+    "attempt": os.environ["SUBSTRATE_ATTEMPT"],
+    "ref": os.environ["SUBSTRATE_REF"],
+    "states": dict(sorted(states.items())),
+    "row_count": len(rows),
+    "failed_row_count": len(failed_rows),
+    "failed_rows": failed_rows,
+    "rows": rows,
+    "emitted_at": datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+}
+print(json.dumps(payload, separators=(",", ":")))
+PY
+  mv "${SUMMARY_FILE}.tmp" "$SUMMARY_FILE"
+  SUMMARY_WRITTEN=true
+}
+
+cleanup() {
+  local rc=$?
+  rm -f "${caddy_tmp:-}"
+  if [ -n "$SUMMARY_FILE" ] && [ "$SUMMARY_WRITTEN" != "true" ]; then
+    if [ "$rc" -eq 0 ]; then
+      write_summary success
+    else
+      write_summary failure
+    fi
+  fi
+  rm -f "${ROWS_FILE:-}"
 }
 
 usage() {
@@ -112,6 +220,10 @@ remote_env_value() {
     || true
 }
 
+init_summary
+trap cleanup EXIT
+
+CURRENT_ROW="writer_token"
 BAO_TOKEN="$(
   remote "set -euo pipefail
     jwt=\$(kubectl create token openbao-operator -n default)
@@ -119,6 +231,7 @@ BAO_TOKEN="$(
       bao write -field=token auth/kubernetes/login role='${DEPLOY_ENVIRONMENT}-writer' jwt=\"\$jwt\""
 )"
 [[ -n "$BAO_TOKEN" ]] || fail "could not mint ${DEPLOY_ENVIRONMENT}-writer token"
+mark_row writer_token refreshed "minted ${DEPLOY_ENVIRONMENT}-writer token"
 
 export REPO_ROOT APP_SOURCE_DIR COGNI_CATALOG_ROOT
 export DEPLOY_ENV="$DEPLOY_ENVIRONMENT"
@@ -170,31 +283,37 @@ seed_kv() {
 # after which DSN custody moves into materialize and this phase becomes fully
 # read-only. DSNs are built from the VM .env DB components read above — the last
 # remaining .env dependency, retired by the env-repair lane.
+CURRENT_ROW="dsn_seed"
 log "seeding node DB DSNs for ${DEPLOY_ENVIRONMENT}/${TARGET_NODE} (transitional; materialize owns app keys)"
 for k in DATABASE_URL DATABASE_SERVICE_URL DOLTGRES_URL; do
   v="$(_resolve_node_value "$TARGET_NODE" "$k")"
   [[ -z "$v" ]] && continue
   seed_kv "$TARGET_NODE" "$k" "$v"
 done
+mark_row dsn_seed updated "node DB DSNs seeded (transitional)"
 
+CURRENT_ROW="externalsecret"
 external_secret_file="${APP_SOURCE_DIR}/nodes/${TARGET_NODE}/k8s/external-secrets/${DEPLOY_ENVIRONMENT}/external-secret.yaml"
 if [[ -f "$external_secret_file" ]]; then
   remote "kubectl create namespace 'cogni-${DEPLOY_ENVIRONMENT}' --dry-run=client -o yaml | kubectl apply -f - >/dev/null"
   copy_to_remote "$external_secret_file" "/tmp/${DEPLOY_ENVIRONMENT}-${TARGET_NODE}-external-secret.yaml"
   remote "kubectl -n 'cogni-${DEPLOY_ENVIRONMENT}' apply -f '/tmp/${DEPLOY_ENVIRONMENT}-${TARGET_NODE}-external-secret.yaml' >/dev/null && rm -f '/tmp/${DEPLOY_ENVIRONMENT}-${TARGET_NODE}-external-secret.yaml'"
   log "applied ExternalSecret ${TARGET_NODE}-env-secrets"
+  mark_row externalsecret updated "applied ExternalSecret ${TARGET_NODE}-env-secrets"
 else
   fail "missing node ExternalSecret leaf: $external_secret_file"
 fi
 
+CURRENT_ROW="caddyfile"
 caddy_tmp="$(mktemp)"
-trap 'rm -f "$caddy_tmp"' EXIT
 COGNI_CATALOG_ROOT="$COGNI_CATALOG_ROOT" bash "$REPO_ROOT/scripts/ci/render-caddyfile.sh" > "$caddy_tmp"
 if ! grep -Fq "{\$${edge_key}:" "$caddy_tmp" || ! grep -Fq "host.docker.internal:${node_port}" "$caddy_tmp"; then
   fail "rendered Caddyfile missing route for ${node_host} / host.docker.internal:${node_port}"
 fi
 copy_to_remote "$caddy_tmp" "/tmp/Caddyfile.${DEPLOY_ENVIRONMENT}.${TARGET_NODE}.tmpl"
+mark_row caddyfile updated "rendered + staged Caddyfile route for ${node_host}"
 
+CURRENT_ROW="remote_reconcile"
 remote "set -euo pipefail
   edge_env=/opt/cogni-template-edge/.env
   runtime_env=/opt/cogni-template-runtime/.env
@@ -239,4 +358,6 @@ remote "set -euo pipefail
     \"\${runtime_compose[@]}\" --profile bootstrap run --rm doltgres-provision >/dev/null
   fi"
 
+mark_row remote_reconcile updated "edge route, DB inventory, and DB provisioners reconciled on VM"
 log "substrate ready inputs reconciled for ${TARGET_NODE} (${DEPLOY_ENVIRONMENT})"
+write_summary success
