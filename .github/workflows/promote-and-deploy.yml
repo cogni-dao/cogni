@@ -438,20 +438,76 @@ jobs:
           path: out/
           retention-days: 1
 
-  # TRANSITIONAL (PR #1582 / #1584): reconcile-node-substrate.sh now seeds DSNs
-  # only — secret-materialize owns source:agent app keys. There is NO materialize
-  # phase here yet, so this is correct only for STEADY-STATE nodes whose app keys
-  # already exist in cogni/<env>/<node> (genesis / provision-env). A brand-new
-  # node promoted straight to preview/production would get DSNs but no app keys →
-  # incomplete ESO Secret. Wiring materialize-substrate into preview/prod lands
-  # with the env-repair lane (#1584, vm-secrets-repair.md), which owns the
-  # per-node DB-cred model that per-env materialize depends on. The #1582 lane is
-  # gated to candidate-a, where materialize-substrate runs.
+  # Materialize node-owned app secrets per-env BEFORE reconcile, on EVERY env
+  # (Invariant 16). App-key materialization is independent of the per-node DB-cred
+  # model (#1584) — it writes source:agent keys to cogni/<env>/<node> — so the lane
+  # is consistent across candidate-a/preview/production with no special-case.
+  # Orchestration only; logic lives in secret-materialize.sh.
+  materialize-substrate:
+    needs: [decide]
+    if: |
+      always() &&
+      needs.decide.outputs.has_node_targets == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ${{ fromJson(needs.decide.outputs.node_targets_json) }}
+    concurrency:
+      group: materialize-substrate-${{ needs.decide.outputs.environment }}-${{ matrix.node }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    environment: ${{ needs.decide.outputs.environment }}
+    steps:
+      - name: Checkout app source
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          ref: ${{ needs.decide.outputs.head_sha }}
+          fetch-depth: 0
+          token: ${{ secrets.ACTIONS_AUTOMATION_BOT_PAT || github.token }}
+          path: app-src
+
+      - name: Initialize node submodule when present
+        env:
+          GH_TOKEN: ${{ secrets.ACTIONS_AUTOMATION_BOT_PAT || github.token }}
+          NODE: ${{ matrix.node }}
+        run: |
+          set -euo pipefail
+          if git -C app-src config -f .gitmodules --get "submodule.nodes/${NODE}.path" >/dev/null 2>&1; then
+            git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
+            git -C app-src submodule update --init --depth 1 "nodes/${NODE}"
+          fi
+
+      - name: Setup SSH
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          SSH_DEPLOY_KEY: ${{ secrets.SSH_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$VM_HOST" ]; then
+            echo "::error::VM_HOST is required for secret materialization"
+            exit 1
+          fi
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          echo "$SSH_DEPLOY_KEY" | tr -d '\r' > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -T 10 -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Materialize node-owned OpenBao secrets
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          SSH_OPTS: "-i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6"
+          DEPLOY_ENVIRONMENT: ${{ needs.decide.outputs.environment }}
+          TARGET: ${{ matrix.node }}
+          DOMAIN: ${{ vars.DOMAIN }}
+          APP_SOURCE_DIR: app-src
+        run: bash app-src/scripts/ci/secret-materialize.sh "${DEPLOY_ENVIRONMENT}" "${TARGET}"
+
   reconcile-substrate:
-    needs: [decide, reconcile-appset, reconcile-dns]
+    needs: [decide, reconcile-appset, reconcile-dns, materialize-substrate]
     if: |
       always() &&
       needs.decide.outputs.has_node_targets == 'true' &&
+      needs.materialize-substrate.result == 'success' &&
       needs.reconcile-appset.result == 'success' &&
       needs.reconcile-dns.result == 'success'
     strategy:
