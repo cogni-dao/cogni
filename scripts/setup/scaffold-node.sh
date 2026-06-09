@@ -87,6 +87,13 @@ for env in "${ENVS[@]}"; do
   f="$dst/kustomization.yaml"
   perl -i -pe "s/$TPL/$SLUG/g" "$f"
   perl -pi -e "s/\\b30200\\b/$NODEPORT/g; s/\\b3200\\b/$PORT/g" "$f"
+  # Node-at-root migrate paths: wizard-born nodes ship images with the app tree
+  # at /app/app, not the monorepo /app/nodes/<slug>/app the shared base assumes.
+  # Rewrite the Doltgres runner path and inject the Postgres migrate override so
+  # both initContainer migrate commands match the node's own image layout.
+  # Parity: gens/overlay.ts renderOverlay applies the identical transforms.
+  perl -0pi -e 's{/app/nodes/\$\(NODE_NAME\)/app}{/app/app}g' "$f"
+  perl -0pi -e 's{(        path: /spec/template/spec/initContainers/0/envFrom/1/secretRef/name\n        value: [^\n]*\n)}{$1      - op: replace\n        path: /spec/template/spec/initContainers/0/command/2\n        value: exec node /app/app/migrate.mjs /app/app/migrations\n}' "$f"
 done
 
 echo "==> 6. per-node AppSets + bootstrap kustomization (catalog-derived, LANE_ISOLATION)"

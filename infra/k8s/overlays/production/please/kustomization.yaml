@@ -62,6 +62,9 @@ patches:
         path: /spec/template/spec/initContainers/0/envFrom/1/secretRef/name
         value: "please-env-secrets"
       - op: replace
+        path: /spec/template/spec/initContainers/0/command/2
+        value: exec node /app/app/migrate.mjs /app/app/migrations
+      - op: replace
         path: /spec/template/spec/containers/0/ports/0/containerPort
         value: 3200
       - op: add
@@ -87,7 +90,7 @@ patches:
           command:
             - /bin/sh
             - -c
-            - exec node /app/nodes/$(NODE_NAME)/app/migrate-doltgres.mjs /app/nodes/$(NODE_NAME)/app/doltgres-migrations
+            - exec node /app/app/migrate-doltgres.mjs /app/app/doltgres-migrations
           envFrom:
             - configMapRef:
                 name: please-node-app-config
