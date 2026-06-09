@@ -12,9 +12,8 @@
  */
 
 import type { ReactElement } from "react";
-
-import { LaunchPackCopyButton } from "@/app/(app)/nodes/[id]/LaunchPackCopyButton.client";
 import { Button, SectionCard } from "@/components";
+import { LaunchPackCopyButton } from "../LaunchPackCopyButton.client";
 
 import type { WizardStepProps } from "../types";
 

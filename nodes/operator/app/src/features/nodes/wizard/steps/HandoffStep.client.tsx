@@ -7,7 +7,7 @@
  *   (copy/paste agent prompt + created-artifact links) and adds the Aragon DAO link.
  * Scope: Presentational + clipboard (via LaunchPackCopyButton). No new business logic.
  * Side-effects: none (LaunchPackCopyButton owns its fetch)
- * Links: src/app/(app)/nodes/[id]/LaunchPackCopyButton.client.tsx
+ * Links: src/features/nodes/wizard/LaunchPackCopyButton.client.tsx
  * @public
  */
 
@@ -15,8 +15,8 @@
 
 import { ExternalLink } from "lucide-react";
 import type { ReactElement } from "react";
-import { LaunchPackCopyButton } from "@/app/(app)/nodes/[id]/LaunchPackCopyButton.client";
 import { Button, SectionCard } from "@/components";
+import { LaunchPackCopyButton } from "../LaunchPackCopyButton.client";
 import type { WizardStepProps } from "../types";
 
 interface LinkSpec {
