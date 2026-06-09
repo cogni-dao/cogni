@@ -8,7 +8,9 @@
 # docs/spec/secrets-management.md Invariants 15/16 and
 # docs/design/node-wizard-secret-setting.md, AS BUILT today:
 #   - input is the secrets catalog ONLY; it never reads the VM runtime .env;
-#   - source:agent app keys are generated once and preserved on re-run (0 pod churn);
+#   - read-once → diff → write-missing-only: one prefetch of the node + ancestor
+#     paths, a single batched write of just the absent keys, O(1) ssh per node.
+#     A re-flight of a born node writes NOTHING (created=0; 0 pod churn);
 #   - shared/human values are inherited transitionally (see inherit_shared_value);
 #   - it logs key NAMES only, never values.
 #
@@ -114,46 +116,92 @@ export DOMAIN
 # ROOT_TOKEN/ssh variants.
 source "$REPO_ROOT/scripts/setup/lib/reconcile-secrets.sh"
 
-# OpenBao read/write helpers bound to the env-writer token. seed_kv preserves an
-# existing path (patch) and only creates it (put) when absent.
-bao_get_field() {
-  local svc="$1" k="$2"
-  remote "kubectl exec -n openbao openbao-0 -- env BAO_TOKEN='${BAO_TOKEN}' BAO_ADDR=http://127.0.0.1:8200 \
-    bao kv get -format=json 'cogni/${DEPLOY_ENVIRONMENT}/${svc}'" \
-    2>/dev/null | jq -r --arg k "$k" '.data.data[$k] // empty' 2>/dev/null || true
+# Batched, idempotent OpenBao I/O (read-once → diff → write-missing-only).
+#
+# OpenBao is ClusterIP with no Ingress (infra/k8s/argocd/openbao/values.yaml), so
+# the only access from a CI runner is ssh→kubectl exec. The previous shape did
+# ~6 of those round-trips PER KEY (ancestor scan + existing-read + metadata +
+# write) and re-wrote every key every run. This collapses it to O(1) ssh per
+# node: one prefetch of the node + ancestor paths into an on-disk cache, then a
+# single batched write of ONLY the keys that are missing. A re-flight of a
+# born node reads the cache, finds every key present, writes nothing, and exits.
+# (North star: move this into an in-cluster Job that talks to OpenBao over
+# ClusterIP and drop ssh entirely — docs/design/node-wizard-secret-setting.md.)
+CACHE_DIR="$(mktemp -d -t materialize-cache.XXXXXX)"
+BATCH_DIR="${CACHE_DIR}/.batch"
+mkdir -p "$BATCH_DIR"
+trap 'rm -rf "$CACHE_DIR"' EXIT
+NODE_PATH_EXISTS=false
+
+bao_exec() {
+  remote "kubectl exec ${1} -n openbao openbao-0 -- env BAO_TOKEN='${BAO_TOKEN}' BAO_ADDR=http://127.0.0.1:8200 bao ${2}"
 }
 
+# Prefetch one path's full key/value map into the cache (one ssh). Runner-side jq
+# extracts; the remote only runs the proven `bao kv get -format=json` shape.
+prefetch_path() {
+  local svc="$1" json
+  json="$(bao_exec "" "kv get -format=json 'cogni/${DEPLOY_ENVIRONMENT}/${svc}'" 2>/dev/null \
+    | jq -c '.data.data // {}' 2>/dev/null || true)"
+  [[ -z "$json" ]] && json='{}'
+  mkdir -p "${CACHE_DIR}/${svc}"
+  while IFS=$'\t' read -r key val; do
+    [[ -z "$key" ]] && continue
+    printf '%s' "$val" > "${CACHE_DIR}/${svc}/${key}"
+  done < <(printf '%s' "$json" | jq -r 'to_entries[] | [.key, .value] | @tsv')
+}
+
+# Reads serve from the cache the single prefetch populated — no per-key ssh.
+# Overrides the lib's ssh/ROOT_TOKEN variants (sourced above).
+bao_get_field() {
+  local f="${CACHE_DIR}/$1/$2"
+  [[ -f "$f" ]] && cat "$f" || true
+}
+
+# Writes accumulate into BATCH_DIR; an already-present node key is a no-op
+# (idempotent — preserve existing, 0 pod churn). flush_batch writes once.
 seed_kv() {
-  local svc="$1" k="$2" v="$3"
+  local k="$2" v="$3"
   [[ -z "$v" ]] && return 0
-  local path="cogni/${DEPLOY_ENVIRONMENT}/${svc}"
-  local op="patch"
-  if ! remote "kubectl exec -n openbao openbao-0 -- env BAO_TOKEN='${BAO_TOKEN}' BAO_ADDR=http://127.0.0.1:8200 \
-    bao kv metadata get '${path}'" >/dev/null 2>&1; then
-    op="put"
-  fi
-  printf '%s' "$v" | remote "kubectl exec -i -n openbao openbao-0 -- env BAO_TOKEN='${BAO_TOKEN}' BAO_ADDR=http://127.0.0.1:8200 \
-    bao kv ${op} '${path}' '${k}=-'" >/dev/null
+  [[ -f "${CACHE_DIR}/${TARGET_NODE}/${k}" ]] && return 0
+  printf '%s' "$v" > "${BATCH_DIR}/${k}"
+}
+
+# One write for all missing keys. put when the node path is new, patch (merge —
+# never clobbers sibling keys) when it exists. JSON is built locally via jq
+# --rawfile so no secret value ever lands on a command line.
+flush_batch() {
+  local files=( "$BATCH_DIR"/* )
+  [[ -e "${files[0]}" ]] || return 0
+  local op="patch"; "$NODE_PATH_EXISTS" || op="put"
+  local json='{}' f k
+  for f in "${files[@]}"; do
+    k="$(basename "$f")"
+    json="$(jq --arg k "$k" --rawfile v "$f" '.[$k]=$v' <<<"$json")"
+  done
+  printf '%s' "$json" | bao_exec "-i" "kv ${op} 'cogni/${DEPLOY_ENVIRONMENT}/${TARGET_NODE}' -" >/dev/null
+}
+
+# Is this key minted fresh per-node (source:agent random)? Such keys are NEVER
+# inherited — skip the ancestor scan for them (the wasted round-trips the old
+# shape paid). Mirrors _resolve_node_value's agent branch.
+key_is_agent_generated() {
+  local k="$1"
+  [[ "$(_cat_field "$k" '.source')" == "agent" \
+    && "$(_cat_field "$k" '.service')" != "_shared" \
+    && "$(_cat_field "$k" '.shared')" != "true" \
+    && "$(_cat_field "$k" '.generate.kind')" =~ ^(base64|hex|sk-cogni)$ ]]
 }
 
 # Node-owned secrets only (node-baas-architecture.md: each node owns its own DB
-# + secrets). This phase does NOT read the shared Postgres superuser or any
-# env-level DB credential — that substrate belongs to env genesis/repair, not
-# node birth. It generates this node's source:agent app keys, preserving any
-# existing value (0 pod churn on re-run). The per-node DB role password + DSNs
-# are seeded by reconcile transitionally and move here once DB creds land
-# per-node at cogni/<env>/<node> (vm-secrets-repair.md, #1584 — DB creds are
-# per-node, never _shared; _shared may persist for other shared values until
-# inheritFrom). The superuser that creates the role is env-repair's, read-only.
+# + secrets). DSNs are deferred to reconcile until per-node DB creds land at
+# cogni/<env>/<node> (vm-secrets-repair.md, #1584); _shared persists for other
+# shared values until catalog inheritFrom.
 DSN_DEFER_KEYS=" DATABASE_URL DATABASE_SERVICE_URL DOLTGRES_URL "
 
-# Transitional shared/human inheritance. The blind ancestor scan is the
-# anti-pattern the north star replaces with an explicit catalog `inheritFrom`
-# (catalog-custody lane; not built yet). Until it lands, shared/human values a
-# node legitimately consumes (OPENROUTER_API_KEY, OAuth, etc.) are inherited
-# here. source:agent keys are regenerated per-node by _resolve_node_value
-# regardless, so they are NOT inherited in practice — only genuinely shared
-# values flow through this.
+# Transitional shared/human inheritance — the blind ancestor scan the north star
+# replaces with explicit catalog `inheritFrom` (catalog-custody lane). Now serves
+# from the prefetched cache, and only runs for non-agent keys.
 inherit_shared_value() {
   local k="$1" v=""
   [[ -n "${!k:-}" ]] && return 0
@@ -164,20 +212,30 @@ inherit_shared_value() {
   return 0
 }
 
+# One prefetch: node-path existence + node/ancestor key maps (O(1) ssh).
+if bao_exec "" "kv metadata get 'cogni/${DEPLOY_ENVIRONMENT}/${TARGET_NODE}'" >/dev/null 2>&1; then
+  NODE_PATH_EXISTS=true
+fi
+for svc in "$TARGET_NODE" node-template operator _shared; do
+  prefetch_path "$svc"
+done
+
 log "materializing node-owned OpenBao values for ${DEPLOY_ENVIRONMENT}/${TARGET_NODE} (key names only)"
-materialized=0
+created=0
+unchanged=0
 for k in "${NODE_BASELINE_KEYS[@]}"; do
   case "$DSN_DEFER_KEYS" in *" $k "*) continue ;; esac
   _node_gets_key "$TARGET_NODE" "$k" || continue
-  # TODO(inheritFrom): blind ancestor scan + copy-inheritance — anti-pattern the
-  # north star deletes. Each node freezes its own copy, so rotating a shared key
-  # never propagates. Replace with explicit catalog inheritFrom + read grants
-  # (secrets-classification.md owner-scoped paths; catalog-custody lane).
-  inherit_shared_value "$k"
+  if [[ -f "${CACHE_DIR}/${TARGET_NODE}/${k}" ]]; then
+    unchanged=$((unchanged + 1))
+    continue
+  fi
+  key_is_agent_generated "$k" || inherit_shared_value "$k"
   v="$(_resolve_node_value "$TARGET_NODE" "$k")"
   [[ -z "$v" ]] && continue
   seed_kv "$TARGET_NODE" "$k" "$v"
-  log "  materialized ${k}"
-  materialized=$((materialized + 1))
+  log "  created ${k}"
+  created=$((created + 1))
 done
-log "materialize complete for ${TARGET_NODE} (${DEPLOY_ENVIRONMENT}): ${materialized} key(s)"
+flush_batch
+log "materialize complete for ${TARGET_NODE} (${DEPLOY_ENVIRONMENT}): created=${created} unchanged=${unchanged}"

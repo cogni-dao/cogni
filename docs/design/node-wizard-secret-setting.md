@@ -318,6 +318,46 @@ canonical invariants in
 `NODE_SECRET_MATERIALIZATION_PRECEDES_SUBSTRATE_RECONCILE`); this table is the
 wizard-scoped view of them.
 
+### Materialize execution model (batched, idempotent)
+
+OpenBao is `ClusterIP` with no Ingress
+([`openbao/values.yaml`](../../infra/k8s/argocd/openbao/values.yaml)), so the only
+access from a CI runner is `ssh VM → kubectl exec openbao-0 → bao`. That single
+constraint dictates the execution shape, and it has two non-negotiables:
+
+- **No per-key SSH.** The retired v0 shape did ~6 round-trips _per key_ (ancestor
+  scan + existing-read + metadata + write) over a fan-out of nodes — O(keys×nodes)
+  SSH. The cost must be O(1) per node regardless of key count.
+- **No re-materializing what exists.** A re-flight of a born node must write
+  **nothing** — never regenerate or re-PATCH an already-present value (0 pod
+  churn, no rotation).
+
+The as-built `secret-materialize.sh` satisfies both with **read-once → diff →
+write-missing-only**:
+
+1. One prefetch reads the node path + ancestor paths (`node-template`, `operator`,
+   `_shared`) into an on-disk cache; node-path existence is one `metadata get`.
+2. All reads (`_resolve_node_value`'s existing-check, `inherit_shared_value`)
+   serve from that cache — zero per-key SSH. Agent-generated keys skip the
+   ancestor scan entirely (they are never inherited).
+3. Only keys **absent** from the node path are resolved and accumulated; present
+   keys are `unchanged` and skipped.
+4. A single batched write (`bao kv put` for a new path, `patch` to merge an
+   existing one) sends the missing keys as one JSON object on stdin — no secret
+   value ever lands on a command line, and `patch` never clobbers sibling keys.
+
+Net: token + prefetch + (one write only when something is missing). A re-flight is
+`created=0 unchanged=N` with no write at all. Regression-guarded by the
+idempotence assertion in `tests/secret-materialize.test.sh`.
+
+**North star (staged, not yet built):** the SSH dependency exists _only_ because
+the writer runs outside the cluster. Stage 2 moves materialize into an in-cluster
+Job (ServiceAccount bound to `<env>-writer`) that talks to OpenBao over ClusterIP
+— **zero SSH, zero fan-out**; the runner just applies the Job and waits. Stage 3
+makes `source: agent` keys declarative via ESO `Password` generators + `PushSecret`
+(`updatePolicy: IfNotExists`), so the cluster mints+stores them idempotently and
+the imperative writer shrinks to derived/inherited values only.
+
 ### DB-credential custody (do not invent OpenBao keys)
 
 All DB passwords are OpenBao-owned (secrets-management.md Invariant 15). They

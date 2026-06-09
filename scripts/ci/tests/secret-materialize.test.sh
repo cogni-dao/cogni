@@ -76,11 +76,19 @@ if [ "${1:-}" = "exec" ]; then
     [ -d "${FAKE_BAO_ROOT}/${path}" ] && exit 0 || exit 2
   fi
   if printf '%s\n' "$*" | grep -Eq 'bao kv (put|patch)'; then
-    path="${args[$((last_index - 1))]}"
     key_arg="${args[$last_index]}"
+    path="${args[$((last_index - 1))]}"
+    mkdir -p "${FAKE_BAO_ROOT}/${path}"
+    if [ "$key_arg" = "-" ]; then
+      # batched form: a JSON object of key/value pairs arrives on stdin
+      while IFS=$'\t' read -r k v; do
+        [ -z "$k" ] && continue
+        printf '%s' "$v" > "${FAKE_BAO_ROOT}/${path}/${k}"
+      done < <(jq -r 'to_entries[] | [.key, .value] | @tsv')
+      exit 0
+    fi
     key="${key_arg%%=*}"
     value="$(cat)"
-    mkdir -p "${FAKE_BAO_ROOT}/${path}"
     printf '%s' "$value" > "${FAKE_BAO_ROOT}/${path}/${key}"
     exit 0
   fi
@@ -124,6 +132,25 @@ fi
 # no secret value leaked to output
 if grep -q 'sk-or-existing\|writer-token' "$TMPROOT/out.txt"; then
   echo "secret value leaked to output" >&2
+  exit 1
+fi
+
+# Idempotence: a re-run of an already-materialized node must create NOTHING
+# (read-once → diff → write-missing-only). This is the regression guard against
+# re-materializing already-materialized secrets.
+env \
+  VM_HOST=fake \
+  DOMAIN=test.cognidao.org \
+  SSH_OPTS="-i fake-key -o StrictHostKeyChecking=no" \
+  SECRET_MATERIALIZE_SSH_BIN="$FAKEBIN/ssh" \
+  FAKE_REMOTE_PATH="$FAKEBIN" \
+  FAKE_BAO_ROOT="$BAO_ROOT" \
+  bash scripts/ci/secret-materialize.sh candidate-a canary > "$TMPROOT/out2.txt"
+
+grep -q 'created=0 ' "$TMPROOT/out2.txt" \
+  || { echo "re-run must create 0 keys (idempotent); got:" >&2; grep 'materialize complete' "$TMPROOT/out2.txt" >&2; exit 1; }
+if grep -qE '^\[secret-materialize\]   created ' "$TMPROOT/out2.txt"; then
+  echo "re-run created keys — not idempotent" >&2
   exit 1
 fi
 
