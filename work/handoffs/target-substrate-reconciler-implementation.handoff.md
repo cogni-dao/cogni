@@ -68,13 +68,13 @@ Pickup: implement and validate the narrow target substrate reconciler designed i
 
 ## Pointers
 
-| File / Resource | Why it matters |
-| --------------- | -------------- |
-| `docs/spec/target-substrate-reconciliation.md` | Source of truth for reconciler scope, boundaries, and validation. |
-| `.github/workflows/candidate-flight.yml` | Workflow graph to insert `reconcile-substrate` before `assert-substrate`. |
-| `scripts/ci/assert-target-substrate.sh` | Read-only proof gate the reconciler must satisfy. |
-| `scripts/ci/deploy-infra.sh` | Existing Caddy/DB/catalog logic to extract narrowly, not call wholesale. |
-| `docs/spec/secrets-management.md` | Defines ESO-only pod secret shape and OpenBao-owned DB role credentials. |
-| `.claude/skills/cicd-secrets-expert/SKILL.md` | Operational guardrails for secrets and forbidden fallbacks. |
-| `.claude/skills/devops-expert/SKILL.md` | CI/CD anti-patterns, especially no broad infra mutation from app flight. |
-| `scripts/ci/workflow-check.mjs` | Place to pin workflow invariants so the design cannot regress silently. |
+| File / Resource                                | Why it matters                                                            |
+| ---------------------------------------------- | ------------------------------------------------------------------------- |
+| `docs/spec/target-substrate-reconciliation.md` | Source of truth for reconciler scope, boundaries, and validation.         |
+| `.github/workflows/candidate-flight.yml`       | Workflow graph to insert `reconcile-substrate` before `assert-substrate`. |
+| `scripts/ci/assert-target-substrate.sh`        | Read-only proof gate the reconciler must satisfy.                         |
+| `scripts/ci/deploy-infra.sh`                   | Existing Caddy/DB/catalog logic to extract narrowly, not call wholesale.  |
+| `docs/spec/secrets-management.md`              | Defines ESO-only pod secret shape and OpenBao-owned DB role credentials.  |
+| `.claude/skills/cicd-secrets-expert/SKILL.md`  | Operational guardrails for secrets and forbidden fallbacks.               |
+| `.claude/skills/devops-expert/SKILL.md`        | CI/CD anti-patterns, especially no broad infra mutation from app flight.  |
+| `scripts/ci/workflow-check.mjs`                | Place to pin workflow invariants so the design cannot regress silently.   |
