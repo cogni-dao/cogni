@@ -307,6 +307,15 @@ jobs:
       - name: secrets fan-out tests (task.5094)
         run: bash scripts/ci/tests/secrets-fanout.test.sh
 
+      # Node secret lane split: materialize is the sole OpenBao writer (app keys
+      # + shared inheritance, DSNs deferred); reconcile seeds DSNs only and no
+      # longer double-writes app keys. Fakes-only, no network.
+      - name: node secret materialize tests
+        run: bash scripts/ci/tests/secret-materialize.test.sh
+
+      - name: node substrate reconcile tests
+        run: bash scripts/ci/tests/reconcile-node-substrate.test.sh
+
       # task.5078 — catalog-driven edge routing. Asserts the committed Caddyfile
       # is in sync with the catalog (drift gate that makes "add a node = 1
       # catalog PR" enforceable), every type:node has an edge block (canary
