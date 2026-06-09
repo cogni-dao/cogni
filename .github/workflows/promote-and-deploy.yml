@@ -98,69 +98,7 @@ jobs:
         env:
           NODES_INPUT: ${{ inputs.nodes }}
           OVERLAY_ENV: ${{ steps.env.outputs.environment }}
-        run: |
-          set -euo pipefail
-          # shellcheck source=scripts/ci/lib/image-tags.sh
-          . scripts/ci/lib/image-tags.sh
-          if [ -n "$NODES_INPUT" ]; then
-            IFS=',' read -r -a raw <<<"${NODES_INPUT// /}"
-          else
-            raw=("${ALL_TARGETS[@]}")
-          fi
-          # Filter to targets that have a per-env overlay in app-src. ApplicationSets
-          # are env-hardcoded; a target with no overlay (e.g. node-template in
-          # preview/production) has no Argo destination and would fail the rsync at
-          # the promote-k8s `Sync infra/k8s` step. The overlay directory is the SSoT
-          # for "this target deploys to this env".
-          list=()
-          skipped=()
-          for t in "${raw[@]}"; do
-            if [ -d "infra/k8s/overlays/${OVERLAY_ENV}/${t}" ]; then
-              list+=("$t")
-            else
-              skipped+=("$t")
-            fi
-          done
-          if [ "${#skipped[@]}" -gt 0 ]; then
-            echo "::warning::Skipping targets without ${OVERLAY_ENV} overlay: ${skipped[*]}"
-          fi
-          if [ "${#list[@]}" -eq 0 ]; then
-            # Legit no-op (e.g. an infra-only target like litellm has no k8s
-            # overlay): emit has_targets=false so every deploy job step-skips,
-            # rather than exit 1 (which hard-failed the whole promote + cascaded
-            # the aggregate-preview loud-fail backstop). Visible, not silent:
-            # ::warning:: + step summary; downstream jobs surface as skipped.
-            echo "::warning::No k8s targets to promote for ${OVERLAY_ENV} (all inputs lack an overlay under infra/k8s/overlays/${OVERLAY_ENV}/) — no-op."
-            echo "### Promote no-op — no k8s targets for \`${OVERLAY_ENV}\`" >> "$GITHUB_STEP_SUMMARY"
-            echo "All requested targets lack a per-env overlay; nothing to deploy." >> "$GITHUB_STEP_SUMMARY"
-            echo "targets_json=[]" >> "$GITHUB_OUTPUT"
-            echo "has_targets=false" >> "$GITHUB_OUTPUT"
-            echo "node_targets_json=[]" >> "$GITHUB_OUTPUT"
-            echo "has_node_targets=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          targets_json=$(printf '%s\n' "${list[@]}" \
-            | python3 -c 'import json,sys; print(json.dumps([line.strip() for line in sys.stdin if line.strip()]))')
-          declare -A node_target_set=()
-          for t in "${NODE_TARGETS[@]}"; do
-            node_target_set["$t"]=1
-          done
-          node_list=()
-          for t in "${list[@]}"; do
-            if [ -n "${node_target_set[$t]:-}" ]; then
-              node_list+=("$t")
-            fi
-          done
-          node_targets_json=$(printf '%s\n' "${node_list[@]}" \
-            | python3 -c 'import json,sys; print(json.dumps([line.strip() for line in sys.stdin if line.strip()]))')
-          has_node_targets=false
-          [ "${#node_list[@]}" -gt 0 ] && has_node_targets=true
-          echo "targets_json=$targets_json" >> "$GITHUB_OUTPUT"
-          echo "has_targets=true" >> "$GITHUB_OUTPUT"
-          echo "node_targets_json=$node_targets_json" >> "$GITHUB_OUTPUT"
-          echo "has_node_targets=$has_node_targets" >> "$GITHUB_OUTPUT"
-          echo "Targets: ${list[*]}"
-          echo "Node substrate targets: ${node_list[*]:-(none)}"
+        run: bash scripts/ci/resolve-promote-targets.sh
 
   reconcile-appset:
     needs: decide

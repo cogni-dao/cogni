@@ -38,8 +38,8 @@ rendered copy.
 - Maintaining a second full inventory of every catalog secret in markdown. The
   per-secret data lives in YAML — `nodes/<node>/.cogni/secrets-catalog.yaml`
   (node-domain) and `infra/secrets-catalog.yaml` (operator-domain). This spec
-  defines the categories, the node-formation input classification, and the
-  exceptions worth remembering; the YAML binds each secret to one.
+  defines categories and contract boundaries; the YAML binds each secret to
+  one current routing decision.
 - Defining OpenBao install topology, ESO chart pinning, or rotation cadence — those live in [`secrets-management.md`](./secrets-management.md).
 - Specifying GitHub-side secret naming conventions for CI-only secrets — [`node-ci-cd-contract.md`](./node-ci-cd-contract.md) §Workflow Entrypoints owns that.
 
@@ -105,73 +105,37 @@ writes OpenBao.
 | **F — Local-only**               | `.env.local` (gitignored)                                                                                        | Pure dev convenience. Never enters CI or any deployed runtime. Not in `setup-secrets.ts` (no `gh secret set` call).                                                                                                                                                         |
 | **G — Derived**                  | Auto-generated from repo state at provision time                                                                 | Output of walking `nodes/*/.cogni/repo-spec.yaml` or similar repo metadata. Re-runs of setup pick up new nodes automatically. Example: `COGNI_NODE_DBS`, `COGNI_NODE_ENDPOINTS`.                                                                                            |
 
-### Node-wizard formation input classification
+### Node-wizard formation contract
 
-This is the canonical list for "what does a fresh ordinary wizard node need?"
-Other docs should link here instead of re-enumerating these keys.
+For a normal wizard-created node, the per-node human-secret list is empty. The
+wizard declares node shape in git; it does not ask for, store, or transmit
+secret values. A node birth may depend on environment-level substrate that was
+already provisioned for the target environment, and missing environment
+substrate is repaired in the owning provisioning/secrets lane rather than
+passed as candidate-flight input.
 
-For a non-payment wizard-created node, the per-node human-secret list is empty.
-The new node consumes existing environment substrate and receives generated or
-derived node-local values from the substrate lane.
+This section intentionally does **not** enumerate the current per-key
+classification. The current v0 inventory lives in
+[`infra/secrets-catalog.yaml`](../../infra/secrets-catalog.yaml) and any
+node-domain `nodes/<node>/.cogni/secrets-catalog.yaml` files. That catalog is
+the only current place to decide whether a named key is required, shared,
+capability-gated, human-sourced, generated, or service-pinned. This spec
+describes how to read those decisions and which architectural constraints they
+must satisfy.
 
-1. **Derived/public config — not secrets.**
-   `DOMAIN` and/or `FORK_DOMAIN_ROOT` derive public hosts, DNS records,
-   `APP_BASE_URL`, and `NEXTAUTH_URL`. A wizard node needs the derived facts,
-   not a human-entered secret value.
+For PR #1582 v0, the node substrate lane is a transitional unblocker:
 
-2. **Environment access substrate — not pod runtime secrets.**
-   `VM_HOST` and `SSH_DEPLOY_KEY` let CI reach the candidate/preview/prod VM.
-   They are D-tier workflow inputs produced or recorded by environment
-   provisioning. They are required for candidate-flight reconciliation and
-   verification, but they are not copied into the node pod and are not
-   node-specific.
+- it preserves existing OpenBao values for the target node;
+- it generates or derives missing node-local material without human-entered
+  per-node values;
+- it may denormalize already-provisioned environment values that the catalog
+  currently allows the node to consume;
+- it still uses the environment's existing VM runtime bank for DB bridge inputs.
 
-3. **Deploy/image-pull substrate — not node secrets.**
-   Existing GHCR/git credentials let CI and/or the VM fetch artifacts. In
-   GitHub Actions, `candidate-flight.yml` can fall back to `github.token` for
-   registry login; some deploy paths still require the environment's existing
-   deploy/image-pull credential. This is deploy substrate, not a wizard-node
-   app secret.
-
-4. **DB role material — required v0 runtime bank, transitional authority.**
-   `APP_DB_USER`, `APP_DB_PASSWORD`, `APP_DB_SERVICE_USER`,
-   `APP_DB_SERVICE_PASSWORD`, `APP_DB_READONLY_USER`,
-   `APP_DB_READONLY_PASSWORD`, `DOLTGRES_PASSWORD`,
-   `DOLTGRES_READER_PASSWORD`, and `DOLTGRES_WRITER_PASSWORD` create or support
-   pod-facing DSNs. Target custody is OpenBao. In PR #1582 v0, the narrow node
-   substrate lane still relies on the already-provisioned environment's runtime
-   bank while creating `cogni_<slug>`, `knowledge_<slug>`, `DATABASE_URL`,
-   `DATABASE_SERVICE_URL`, and `DOLTGRES_URL` for the new node. That coupling is
-   transitional and must not be mistaken for the final authority model.
-
-5. **Generated node-local app material — no human input.**
-   Examples: `AUTH_SECRET`, `CONNECTIONS_ENCRYPTION_KEY`,
-   `INTERNAL_OPS_TOKEN`, `METRICS_TOKEN`, and `GH_WEBHOOK_SECRET`. These are
-   generated or preserved by the substrate lane for the node path. The wizard
-   never stores or asks for the value.
-
-6. **Shared app/runtime unlocks — feature-dependent.**
-   `LITELLM_MASTER_KEY` lets the node app call the shared LiteLLM proxy.
-   `OPENROUTER_API_KEY` is primarily consumed by LiteLLM Compose; node apps may
-   read it for optional provider-funding flows. These values are not basic
-   `/version` or `/readyz` blockers for an ordinary node, but feature paths
-   that call LLM/provider-funding infrastructure may require them.
-
-7. **Telemetry — optional for basic readiness.**
-   `POSTHOG_API_KEY` and `POSTHOG_HOST` enable analytics capture. Their absence
-   should not block candidate-a `/version` or `/readyz` for a new ordinary node.
-
-8. **On-chain/payment rails — not ordinary baseline.**
-   `EVM_RPC_URL` is required only when payment/on-chain rails are active;
-   `/readyz` treats missing RPC config as fatal only for active payment rails.
-   `POLYGON_RPC_URL`, Privy keys, wallet auth/signing material, and Poly wallet
-   AEAD material belong only to `poly` or another explicitly payment-enabled
-   node. They are never baseline for an ordinary wizard node.
-
-9. **Genesis-only provisioning.**
-   `CHERRY_AUTH_TOKEN` creates/provisions VMs. It is not a runtime value and is
-   irrelevant to a node birth inside an already-provisioned candidate-a
-   environment.
+Do not infer the final architecture from that bridge. The follow-up
+`secret-materialize <env> <node>` and shared-bank / owner-grant work must make
+inheritance explicit, catalog-derived, and OpenBao-owned before this contract
+is applied as a stricter vNext gate.
 
 ### A1 capability-gating + value-distinctness (`appliesTo` / `shared`)
 
@@ -180,33 +144,45 @@ Added by [`design.secrets-catalog-per-node`](../design/secrets-catalog-per-node.
 - **`appliesTo: <capability>`** — which nodes receive it. The loader fans it to every `type:node` whose node-spec declares that capability. Capability classes: `all-nodes` (boot-floor), `web`, `database`, `llm`, `openclaw`, `payments`. A marker (not a `_node_baseline` pseudo-service) because it must express **subsets** — a langgraph+dolt node must not be fanned `OPENCLAW_GATEWAY_TOKEN` or a payment key.
 - **`shared: true|false`** — value-distinctness, orthogonal to `appliesTo`:
 
-| `shared`          | OpenBao path                | value                                     | example                          |
-| ----------------- | --------------------------- | ----------------------------------------- | -------------------------------- |
-| `false` (default) | `cogni/<env>/<node>/<KEY>`  | **distinct per node** (generated at seed) | `AUTH_SECRET`, `APP_DB_PASSWORD` |
-| `true`            | `cogni/<env>/_shared/<KEY>` | **same** for all in-scope nodes           | `EVM_RPC_URL`, `POSTHOG_API_KEY` |
+| `shared`          | OpenBao path                | value                           | example                     |
+| ----------------- | --------------------------- | ------------------------------- | --------------------------- |
+| `false` (default) | `cogni/<env>/<node>/<KEY>`  | **distinct per node**           | node-local runtime material |
+| `true`            | `cogni/<env>/_shared/<KEY>` | **same** for all in-scope nodes | shared environment material |
 
 Path resolution lives in `openBaoPathFor()` in `scripts/lib/secrets-catalog-loader.ts`. `appliesTo` and `service:` are **mutually exclusive** (loader rejects both). `NO_NAME_COLLISIONS` (Invariant 2) is preserved — each name is declared once.
 
-**Custody (firm, not best-effort):** a shared `AUTH_SECRET` enables cross-node session forgery; a shared `PRIVY_SIGNING_KEY` **moves every node's money**. Payment/wallet/signing keys MUST be `appliesTo: payments`, `shared: false`, **never baseline** — OpenBao isolates read (per-node path + reader role); per-wallet owner-keys (#1411) isolate signing.
+**Custody direction:** secrets that prove caller identity, sign transactions,
+or unlock node-owned custody should not become ordinary shared baseline
+material. The exact per-key capability and sharing flags are catalog decisions
+and need human review before being promoted from v0 convention to CI-enforced
+vNext gates.
 
-### `authRole` — value-distinctness is NOT the security axis (DECIDED, migration in `proj.secrets-substrate`)
+### `authRole` — value-distinctness is NOT the security axis (target)
 
-> Decided direction from two independent security reviews (task.5094, 2026-05-31). The `shared:` flag and the `_shared` pseudo-service below are the **current** model; this section is the **target**. The `PRIVY_SIGNING_KEY` custody carve-out above is the first instance of this rule — `authRole` generalizes it instead of special-casing each secret.
+> The `shared:` flag and the `_shared` pseudo-service below are the **current**
+> model; this section is a target direction that still needs human review and a
+> separate implementation PR before it becomes a gate.
 
 `shared:` welds **two orthogonal axes** into one flag, and the weld is a bug class:
 
 - **Value-distinctness** (what `shared:` _means_): do all nodes get the same bytes? Harmless on its own.
 - **Identity boundary** (what actually owns blast radius): is the token presented to a service as **proof of who is calling**, or does it merely **unlock a resource** the caller could already reach?
 
-A shared value is fine for the second axis (one upstream account) but a **lateral-movement multiplier** for the first: if `LITELLM_MASTER_KEY` is the proxy admin key in every pod, one compromised pod controls the proxy for every node. So add one dimension + one CI gate, mirroring `custody:signing`:
+A shared value is fine for the second axis (one upstream account) but a
+**lateral-movement multiplier** for the first. The target model adds one
+dimension and one CI gate:
 
 ```
 authRole: caller-identity   # token IS the caller's identity to an internal service  → shared: true FORBIDDEN (CI gate)
 authRole: resource-unlock   # token only unlocks a shared upstream resource           → shared: true ALLOWED
 ```
 
-- **caller-identity** (`LITELLM_MASTER_KEY`, `SCHEDULER_API_TOKEN`, `BILLING_INGEST_TOKEN`, `GH_REVIEW_APP_PRIVATE_KEY_BASE64`): sharing is forbidden. Replace with a **per-node identity** — LiteLLM per-node virtual key, k8s projected-ServiceAccount JWT (`aud=scheduler|billing-ingest`, node derived from `sub`), or a per-node minted token + server-side `token→node` map. The master/signing key lives **only in the provisioner**, never the data plane.
-- **resource-unlock** (`OPENROUTER_API_KEY`, `TAVILY_API_KEY`, `POSTHOG_*`, `LANGFUSE_*`, `EVM_RPC_URL`, `PROMETHEUS_READ_*`): sharing legal. Prefer **egress-proxy injection** (pods never hold the value — route node→LiteLLM→OpenRouter) and **scoped per-node sub-keys** for attribution + per-node revoke on one account.
+- **caller-identity**: values presented as proof of which node or internal
+  service is calling. Target direction: replace shared caller identity with a
+  per-node identity mechanism.
+- **resource-unlock**: values that unlock a shared upstream resource while
+  caller identity is established elsewhere. Target direction: prefer proxy
+  injection or scoped sub-keys where the upstream supports it.
 
 ### Owner-scoped paths, not a `_shared` bucket
 
@@ -226,30 +202,29 @@ upstream into per-node accounts (Phase 4/6, opt-in).
 
 **Origin split of the live envs** (historically visible through GH-env inventory):
 
-| Class                                                                                                                      | ~count | Migration cost                                                      |
-| -------------------------------------------------------------------------------------------------------------------------- | ------ | ------------------------------------------------------------------- |
-| Agent-generated (passwords, DSNs, `AUTH_SECRET`, `LITELLM_MASTER_KEY`, internal tokens, AEAD, SSH key)                     | ~25    | none — regenerate on provision                                      |
-| Human/vendor (OpenRouter, RPC URLs, Grafana/Prometheus/Langfuse/PostHog, GH App, OAuth, Privy, Dolt creds, PATs, `DOMAIN`) | ~48    | preserve bytes while moving custody to OpenBao where runtime-facing |
+| Class                                                  | Migration cost                                                      |
+| ------------------------------------------------------ | ------------------------------------------------------------------- |
+| Agent-generated                                        | none — regenerate on provision                                      |
+| Human/vendor or externally issued environment material | preserve bytes while moving custody to OpenBao where runtime-facing |
 
 **Phases** (ranked risk-reduction-per-effort; MVP-gated):
 
-| Phase | Work                                                                                                      | Human touch            |
-| ----- | --------------------------------------------------------------------------------------------------------- | ---------------------- |
-| 1     | `authRole` field + Zod loader + CI gate forbidding `shared`/`_shared` on caller-identity                  | no                     |
-| 2     | Purge `_shared/` → owner paths + per-consumer read grants (provision generates-once)                      | no                     |
-| 3a    | `LITELLM_MASTER_KEY` → per-node LiteLLM virtual keys (minted at provision; master stays in provisioner)   | no                     |
-| 3b    | `SCHEDULER_API_TOKEN` / `BILLING_INGEST_TOKEN` → per-node token + `token→node` map, then projected-SA JWT | no                     |
-| 4/6   | Per-node GitHub App / PostHog project / OpenRouter sub-keys for true per-node attribution                 | yes — opt-in, deferred |
-| H     | Orphan cleanup — **DONE 2026-05-31** (below)                                                              | —                      |
+| Phase | Work                                                                                          | Human touch            |
+| ----- | --------------------------------------------------------------------------------------------- | ---------------------- |
+| 1     | `authRole` field + Zod loader + CI gate forbidding `shared`/`_shared` on caller-identity      | no                     |
+| 2     | Purge `_shared/` → owner paths + per-consumer read grants (provision generates-once)          | no                     |
+| 3a    | Replace shared upstream master tokens with per-node virtual keys where supported              | no                     |
+| 3b    | Replace shared internal caller tokens with per-node identity or projected-ServiceAccount JWTs | no                     |
+| 4/6   | Per-node external sub-keys for true per-node attribution where vendors support them           | yes — opt-in, deferred |
+| H     | Orphan cleanup — **DONE 2026-05-31** (below)                                                  | —                      |
 
 **Phase H (done).** 8 purged-prototype secrets — `POLY_PROTO_PRIVY_{APP_ID,APP_SECRET,SIGNING_KEY}`, `POLY_PROTO_WALLET_ADDRESS`, `POLY_CLOB_{API_KEY,API_SECRET,PASSPHRASE}`, `COPY_TRADE_TARGET_WALLETS` — deleted from the `candidate-a`, `preview`, and `production` GitHub environments. Confirmed no runtime consumer (`.env.local.example`, [`poly-tenant-and-collateral.md`](./poly-tenant-and-collateral.md), and `work/handoffs/task.0318.phase-{a,b3}` all mark them orphaned post-Stage-4). Removed a stale Privy _signing_ key from production.
 
 ### Co-consumed annotation (NOT a separate tier)
 
 When the same value is required by both a k8s app (A-tier) AND a Compose-infra
-container (B-tier) — e.g., `LITELLM_MASTER_KEY`, `BILLING_INGEST_TOKEN`,
-`APP_DB_*`, `METRICS_TOKEN`, `DOMAIN` — the script flags it with
-`coConsumed: true` on its routing entry. This is an **annotation, not a tier**.
+container (B-tier), the catalog may flag it with `coConsumed: true` on its
+routing entry. This is an **annotation, not a tier**.
 
 The target flow is single-custody:
 
@@ -291,9 +266,10 @@ Aligned to [`node-ci-cd-contract.md`](./node-ci-cd-contract.md) §Domains (the f
 
 If any of those four artifacts (catalog → ExternalSecret manifest → k8s Secret name → pod envFrom) disagrees, the secret has been introduced incorrectly.
 
-**Status in node-template:** the path namespace is reserved; no code under `nodes/node-template/app/` currently consumes any A2 secret. The poly-only entries (`POLYGON_RPC_URL`, `PRIVY_USER_WALLETS_*`, `POLY_WALLET_AEAD_KEY_*`) live in `infra/secrets-catalog.yaml` with `service: poly` as placeholders. When cogni-poly ports (`task.5053`), those entries should be moved to `nodes/poly/.cogni/secrets-catalog.yaml` in the cogni-poly tree — a single node-domain PR.
-
-**Caveat:** `POLYGON_RPC_URL` is currently marked `required: true` in the YAML. node-template baseline has no consumer code; the flag is over-specified for the baseline fork. Recommended fix in a follow-up: relax to `required: false` in node-template, leave `required: true` in cogni-poly's per-node catalog.
+**Status in node-template:** the path namespace is reserved. Current A2
+placeholder entries live in `infra/secrets-catalog.yaml`; when a downstream
+node owns those secrets in its own tree, move them to that node-domain catalog
+instead of duplicating the inventory in markdown.
 
 **Renaming on port — cogni / cogni-poly current state (read before task.5052 / task.5053).** Today cogni and cogni-poly create k8s Secrets imperatively (`kubectl create secret`) with the name `<node>-node-app-secrets` (e.g., `poly-node-app-secrets`), set via a kustomize overlay patch on `infra/k8s/base/node-app/deployment.yaml` (base name `node-app-secrets`, overlay-rebranded per node). Reference: cogni-monorepo `docs/guides/node-formation-guide.md` §"Create k8s secrets" + `infra/k8s/overlays/canary/poly/kustomization.yaml`. On ESO port, the manifest naming changes from `<node>-node-app-secrets` (imperative) to `<node>-env-secrets` (ESO-managed). Migration path:
 
@@ -306,13 +282,13 @@ This is the only material naming change the port imposes. The catalog file, node
 
 ## Per-service OpenBao path summary (A-tier and G-tier only)
 
-| OpenBao path                   | Tier   | Consumer                                                                                                            | Status in node-template                                                                                                                     |
-| ------------------------------ | ------ | ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cogni/<env>/node-template`    | A1     | `nodes/node-template/app/` Deployment                                                                               | ✅ ExternalSecret + catalog present                                                                                                         |
-| `cogni/<env>/scheduler-worker` | A1     | `services/scheduler-worker/` Deployment                                                                             | ✅ ExternalSecret + catalog present                                                                                                         |
-| `cogni/<env>/_shared`          | A1 / G | Multiple services that opt in (LITELLM_MASTER_KEY, SCHEDULER_API_TOKEN, BILLING_INGEST_TOKEN, COGNI_NODE_ENDPOINTS) | ⚠️ Pattern documented; no ExternalSecret yet — add when first cross-service key lands                                                       |
-| `cogni/<env>/poly`             | A2     | `nodes/poly/app/` (cogni-poly only)                                                                                 | 🔜 Reserved; lands with `task.5053` cogni-poly port. Catalog: `infra/catalog/poly.yaml::name=poly` (already present in cogni / cogni-poly). |
-| `cogni/<env>/_system`          | G      | `provision-env-vm.sh` / `deploy-infra.sh` (deploy-time only)                                                        | ⚠️ Pattern documented; OIDC federation for CI writers not yet wired                                                                         |
+| OpenBao path                   | Tier   | Consumer                                                     | Status in node-template                                                                                                                     |
+| ------------------------------ | ------ | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cogni/<env>/node-template`    | A1     | `nodes/node-template/app/` Deployment                        | ✅ ExternalSecret + catalog present                                                                                                         |
+| `cogni/<env>/scheduler-worker` | A1     | `services/scheduler-worker/` Deployment                      | ✅ ExternalSecret + catalog present                                                                                                         |
+| `cogni/<env>/_shared`          | A1 / G | Multiple services that opt in                                | ⚠️ Transitional shared-bank pattern; owner-grant replacement belongs in vNext                                                               |
+| `cogni/<env>/poly`             | A2     | `nodes/poly/app/` (cogni-poly only)                          | 🔜 Reserved; lands with `task.5053` cogni-poly port. Catalog: `infra/catalog/poly.yaml::name=poly` (already present in cogni / cogni-poly). |
+| `cogni/<env>/_system`          | G      | `provision-env-vm.sh` / `deploy-infra.sh` (deploy-time only) | ⚠️ Pattern documented; OIDC federation for CI writers not yet wired                                                                         |
 
 ## Adding a new secret — decision flow
 
@@ -353,8 +329,9 @@ because the deploy host already runs k3s.
 - `setup-secrets.ts` still exists as historical bootstrap/staging tooling. Do
   not extend it as runtime authority; new runtime materialization belongs in
   `secret-materialize`.
-- `OPENCLAW_GITHUB_RW_TOKEN` is tagged `tier: B` based on SETUP_DESIGN.md's "host-side git relay" description. If openclaw becomes a k8s pod (vs Compose container), retag.
-- `POLYGON_RPC_URL` `required: true` flag is over-specified for node-template baseline (no consumer). Relax in node-template, keep tight in cogni-poly fork.
+- Human review is needed before vNext hardens the current catalog flags into
+  stricter capability, sharing, and readiness gates. Until then, avoid adding
+  parallel per-key classifications in docs.
 
 ## Related
 

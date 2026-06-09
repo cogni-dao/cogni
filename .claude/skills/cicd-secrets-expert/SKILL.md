@@ -94,7 +94,7 @@ OpenBao, patch GitHub secrets, run `deploy-infra.sh`, or repair Compose/env
 state. A missing secret is a substrate failure. For a wizard-created ordinary
 node, there should be **zero per-node human secret values**. The environment
 must already have the substrate/runtime inputs classified in
-`docs/spec/secrets-classification.md#node-wizard-formation-input-classification`.
+`docs/spec/secrets-classification.md#node-wizard-formation-contract`.
 If an environment-bank value is missing, repair that bank; do not pass values
 through candidate-flight inputs or store them in the wizard.
 

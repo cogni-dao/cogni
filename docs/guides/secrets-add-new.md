@@ -92,10 +92,9 @@ For DB material, this means:
 Do not use this guide to invent a per-node human secret for a freshly wizarded
 ordinary node. The per-node human-secret list is empty.
 
-Use the canonical input classification in
-[`secrets-classification.md`](../spec/secrets-classification.md#node-wizard-formation-input-classification)
-to decide whether a missing value is node-local, environment substrate,
-feature-specific, or payments-only.
+Use the YAML catalog for the current key-level classification and
+[`secrets-classification.md`](../spec/secrets-classification.md#node-wizard-formation-contract)
+for the node-wizard formation boundary.
 
 If a needed environment value is missing, repair the environment bank before
 rerunning flight. Do not pass the value through candidate-flight inputs, save

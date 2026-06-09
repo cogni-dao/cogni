@@ -77,8 +77,8 @@ authority model.
 
 For a standard non-payment wizard node: **none per node**.
 
-Use the canonical input classification in
-[`secrets-classification.md`](../spec/secrets-classification.md#node-wizard-formation-input-classification).
+Use the formation contract in
+[`secrets-classification.md`](../spec/secrets-classification.md#node-wizard-formation-contract).
 The v0 candidate-a proof should not ask anyone for a new value during node
 birth. If a shared/environment value is needed and absent, that is an
 environment-bank repair, not a node-wizard form field.
@@ -168,17 +168,6 @@ write git shape for a consumer, but it never takes custody of secret bytes.
 The wizard does not generate these directly. The `secret-materialize` lane
 reads catalog metadata and writes missing values to OpenBao.
 
-Examples:
-
-- `AUTH_SECRET`
-- `CONNECTIONS_ENCRYPTION_KEY`
-- `INTERNAL_OPS_TOKEN`
-- `METRICS_TOKEN`
-- `GH_WEBHOOK_SECRET`
-- per-node DB DSNs and passwords
-- `APP_BASE_URL`
-- `NEXTAUTH_URL`
-
 If a value is `source: agent`, generation belongs to the secrets substrate
 materializer. The wizard can report that the new node needs materialization,
 but it must not write a secret value into the PR or a saved wizard record.
@@ -190,21 +179,14 @@ The wizard should not store them as state. If a derived value embeds or agrees
 with a secret, it must derive from OpenBao-owned inputs, not from VM `.env` or
 GitHub Environment Secrets.
 
-Examples:
-
-- `COGNI_NODE_DBS`
-- `COGNI_NODE_ENDPOINTS`
-- per-node database names such as `cogni_<slug>`
-- node-host-derived URLs when the provisioner has the environment domain
-- DSNs rendered from OpenBao-owned DB credential components
-
 ### Shared/operator environment values
 
 Shared values come from the environment's existing authority, then fan out
 through the catalog/provisioning model. The wizard does not copy them.
 
-The concrete key classification is canonical in
-[`secrets-classification.md`](../spec/secrets-classification.md#node-wizard-formation-input-classification).
+Concrete key-level classification is canonical in the YAML catalogs, with
+contract boundaries in
+[`secrets-classification.md`](../spec/secrets-classification.md#node-wizard-formation-contract).
 
 Today the provisioner may denormalize some shared values into
 `cogni/<env>/<node>` so a single `<node>-env-secrets` extract can feed the pod.

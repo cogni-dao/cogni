@@ -139,8 +139,8 @@ that node. Node formation is allowed to consume the environment's existing
 DAO/org values, but node-local material is generated or derived by the secrets
 substrate.
 
-The canonical classification of node-formation inputs lives in
-[`secrets-classification.md`](./secrets-classification.md#node-wizard-formation-input-classification).
+The node-formation contract lives in
+[`secrets-classification.md`](./secrets-classification.md#node-wizard-formation-contract).
 For a normal non-payment wizard node, the per-node human-secret list is empty.
 If a shared/environment value is needed and absent, the correct fix is to
 repair that environment bank before flight. Candidate flight must not accept
