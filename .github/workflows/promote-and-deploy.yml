@@ -57,6 +57,8 @@ jobs:
       preview_forward: ${{ steps.env.outputs.preview_forward }}
       targets_json: ${{ steps.targets.outputs.targets_json }}
       has_targets: ${{ steps.targets.outputs.has_targets }}
+      node_targets_json: ${{ steps.targets.outputs.node_targets_json }}
+      has_node_targets: ${{ steps.targets.outputs.has_node_targets }}
     steps:
       - name: Determine environment
         id: env
@@ -133,13 +135,32 @@ jobs:
             echo "All requested targets lack a per-env overlay; nothing to deploy." >> "$GITHUB_STEP_SUMMARY"
             echo "targets_json=[]" >> "$GITHUB_OUTPUT"
             echo "has_targets=false" >> "$GITHUB_OUTPUT"
+            echo "node_targets_json=[]" >> "$GITHUB_OUTPUT"
+            echo "has_node_targets=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           targets_json=$(printf '%s\n' "${list[@]}" \
             | python3 -c 'import json,sys; print(json.dumps([line.strip() for line in sys.stdin if line.strip()]))')
+          declare -A node_target_set=()
+          for t in "${NODE_TARGETS[@]}"; do
+            node_target_set["$t"]=1
+          done
+          node_list=()
+          for t in "${list[@]}"; do
+            if [ -n "${node_target_set[$t]:-}" ]; then
+              node_list+=("$t")
+            fi
+          done
+          node_targets_json=$(printf '%s\n' "${node_list[@]}" \
+            | python3 -c 'import json,sys; print(json.dumps([line.strip() for line in sys.stdin if line.strip()]))')
+          has_node_targets=false
+          [ "${#node_list[@]}" -gt 0 ] && has_node_targets=true
           echo "targets_json=$targets_json" >> "$GITHUB_OUTPUT"
           echo "has_targets=true" >> "$GITHUB_OUTPUT"
+          echo "node_targets_json=$node_targets_json" >> "$GITHUB_OUTPUT"
+          echo "has_node_targets=$has_node_targets" >> "$GITHUB_OUTPUT"
           echo "Targets: ${list[*]}"
+          echo "Node substrate targets: ${node_list[*]:-(none)}"
 
   reconcile-appset:
     needs: decide
@@ -247,7 +268,14 @@ jobs:
 
   promote-k8s:
     needs: [decide, reconcile-appset, reconcile-substrate]
-    if: needs.decide.outputs.has_targets == 'true'
+    if: |
+      always() &&
+      needs.decide.outputs.has_targets == 'true' &&
+      needs.reconcile-appset.result == 'success' &&
+      (
+        (needs.decide.outputs.has_node_targets == 'true' && needs.reconcile-substrate.result == 'success') ||
+        (needs.decide.outputs.has_node_targets != 'true' && needs.reconcile-substrate.result == 'skipped')
+      )
     strategy:
       fail-fast: false
       matrix:
@@ -476,13 +504,13 @@ jobs:
     needs: [decide, reconcile-appset, reconcile-dns]
     if: |
       always() &&
-      needs.decide.outputs.has_targets == 'true' &&
+      needs.decide.outputs.has_node_targets == 'true' &&
       needs.reconcile-appset.result == 'success' &&
       needs.reconcile-dns.result == 'success'
     strategy:
       fail-fast: false
       matrix:
-        node: ${{ fromJson(needs.decide.outputs.targets_json) }}
+        node: ${{ fromJson(needs.decide.outputs.node_targets_json) }}
     concurrency:
       group: reconcile-substrate-${{ needs.decide.outputs.environment }}-${{ matrix.node }}
       cancel-in-progress: false
@@ -535,7 +563,15 @@ jobs:
         run: bash app-src/scripts/ci/reconcile-node-substrate.sh "${DEPLOY_ENVIRONMENT}" "${TARGET}"
 
   deploy-infra:
-    if: inputs.skip_infra != 'true' && needs.decide.outputs.has_targets == 'true'
+    if: |
+      always() &&
+      inputs.skip_infra != 'true' &&
+      needs.decide.outputs.has_targets == 'true' &&
+      needs.promote-k8s.result == 'success' &&
+      (
+        (needs.decide.outputs.has_node_targets == 'true' && needs.reconcile-substrate.result == 'success') ||
+        (needs.decide.outputs.has_node_targets != 'true' && needs.reconcile-substrate.result == 'skipped')
+      )
     runs-on: ubuntu-latest
     needs: [decide, promote-k8s, reconcile-substrate]
     environment: ${{ needs.decide.outputs.environment }}
@@ -708,7 +744,10 @@ jobs:
     if: |
       always() &&
       needs.promote-k8s.result == 'success' &&
-      needs.reconcile-substrate.result == 'success' &&
+      (
+        (needs.decide.outputs.has_node_targets == 'true' && needs.reconcile-substrate.result == 'success') ||
+        (needs.decide.outputs.has_node_targets != 'true' && needs.reconcile-substrate.result == 'skipped')
+      ) &&
       (needs.deploy-infra.result == 'success' || needs.deploy-infra.result == 'skipped')
     strategy:
       fail-fast: false
