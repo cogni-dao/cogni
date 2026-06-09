@@ -92,6 +92,24 @@ under `FORCE ROW LEVEL SECURITY`). `service_<node>` is `BYPASSRLS` (workers);
 datasources go per-node. Postgres roles are **cluster-global**, so per-node means
 distinct names (`app_poly`, `app_operator`), not a per-DB `app_user`.
 
+**`FORCE ROW LEVEL SECURITY` is load-bearing here** and must not be optimized away:
+`app_<node>` *owns* its DB, and a table owner bypasses RLS **without** FORCE — so
+FORCE is exactly what keeps the owning per-node role tenant-isolated. It lives in
+the schema migrations (role-agnostic), so the rename doesn't touch it; keep it on
+all user tables.
+
+### Locked conventions (materialize mirrors these — #1585)
+
+- **Role names** — computed from the node (underscored, like `cogni_<node>`); only
+  the *password* is the OpenBao secret: `app_<node>` (owner, RLS-subject),
+  `service_<node>` (`BYPASSRLS`), `app_readonly` (shared, env-level).
+- **Invocation** — per-node roles need per-node passwords, but `provision.sh` today
+  provisions all nodes in one pass with one shared password (`COGNI_NODE_DBS` loop,
+  `docker-compose.yml:265`). The cutover invokes `provision.sh` **per-node**: the
+  caller (reconcile, `<env>-db-reader`) reads `cogni/<env>/<node>/APP_DB_PASSWORD`
+  and provisions that one node. Shared objects (litellm/openfga DBs, `app_readonly`)
+  still provision once.
+
 Order: **candidate-a** (reprovision-friendly, gate first) → **preview** →
 **production** (no real users — cut over fast).
 
@@ -101,11 +119,15 @@ Order: **candidate-a** (reprovision-friendly, gate first) → **preview** →
    `cogni/<env>/<node>` (preserve-existing). `APP_DB_USER` becomes the **derived**
    `app_<node>` (node name, not a secret). *Additive: writes new OpenBao keys; the
    shared `app_user` DSN is still live.*
-2. **Create per-node roles** — `provision.sh` creates `app_<node>` /
-   `service_<node>` from the OpenBao values, **set-once password** (never
-   re-`ALTER` — bug.5002), and applies the same per-DB GRANT/RLS/ownership
-   `app_user` had. For an existing DB, `REASSIGN OWNED BY app_user TO app_<node>`
-   + `ALTER DATABASE … OWNER` migrates ownership to the per-node role.
+2. **Create + reconcile per-node roles** — `provision.sh` creates `app_<node>` /
+   `service_<node>` if absent, then **reconciles the password to the OpenBao value
+   every run** (idempotent `ALTER ROLE … PASSWORD <openbao value>`) — **not**
+   set-once. The bug.5002 lesson is *single source = OpenBao*, not *never `ALTER`*:
+   `ALTER`ing to the value ESO syncs to the pod cannot diverge, and it's what makes
+   rotation work (set-once would `28P01` on the next rotation). Source must be the
+   OpenBao read, **never** a rendered `.env` (that is the bug.5002 anti-fix). It
+   applies the same per-DB GRANT/RLS/ownership `app_user` had; ownership migration
+   for existing DBs happens at cutover (Step 5).
 3. **Compose + cut over the DSN** — un-defer the three DSN keys in
    `secret-materialize` (`DSN_DEFER_KEYS`) so it composes `DATABASE_URL` /
    `DATABASE_SERVICE_URL` from the node's own `app_<node>` creds; strip the
@@ -117,10 +139,12 @@ Order: **candidate-a** (reprovision-friendly, gate first) → **preview** →
    `derive_secret` block + `${X:-$(remote_env_value …)}` `.env` fallbacks;
    fail-loud-skip on read miss, never `.env` (the bug.5002 anti-fix).
 5. **Drop the legacy (same change, not deferred)** — `app_user`/`app_service` are
-   cluster-global and own objects across every node DB, so they can only be dropped
-   once **all** of the env's nodes are reassigned (Step 2). After that — in this
-   change — `DROP ROLE app_user`/`app_service` and delete the `APP_DB_*_PASSWORD`
-   GitHub Environment secrets (Invariant 5). The shared role does not linger.
+   cluster-global with owned objects + grants in **every** node DB. Before
+   `DROP ROLE`, in **each** DB run `REASSIGN OWNED BY app_user TO app_<node>` (that
+   DB's matching per-node role) then `DROP OWNED BY app_user` — skip either and the
+   drop errors. After every DB is done: `DROP ROLE app_user`/`app_service` and
+   delete the `APP_DB_*_PASSWORD` GitHub Environment secrets (Invariant 5). The
+   shared role does not linger.
 6. **Falsifying gate** (below).
 
 ### Seam with the materialize redesign (coordinate before parallel work)
