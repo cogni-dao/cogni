@@ -64,12 +64,12 @@ if [ "${1:-}" = "exec" ]; then
   if printf '%s\n' "$*" | grep -q 'bao kv get -format=json'; then
     dir="${FAKE_BAO_ROOT}/${path}"
     if [ ! -d "$dir" ]; then exit 2; fi
-    jq_args=()
+    data="{}"
     for f in "$dir"/*; do
       [ -f "$f" ] || continue
-      jq_args+=(--arg "$(basename "$f")" "$(cat "$f")")
+      data="$(printf '%s' "$data" | jq --arg k "$(basename "$f")" --arg v "$(cat "$f")" '.[$k]=$v')"
     done
-    jq -n "${jq_args[@]}" '{data: {data: $ARGS.named}}'
+    printf '{"data":{"data":%s}}\n' "$data"
     exit 0
   fi
   if printf '%s\n' "$*" | grep -q 'bao kv metadata get'; then
