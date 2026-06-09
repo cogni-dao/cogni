@@ -2,11 +2,12 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `@tests/unit/app/setup-node-action-panel`
- * Purpose: Unit coverage for the node wizard next-action panel handoff copy.
- * Scope: Client component behavior with router/fetch/clipboard mocked.
+ * Module: `@tests/unit/app/node-handoff-step`
+ * Purpose: Unit coverage for the wizard handoff step — the AI-agent launch-pack payoff.
+ * Scope: Client component behavior with fetch/clipboard mocked; asserts preserved handoff copy,
+ *   the four created-artifact links (incl. Aragon DAO), and copy-button ordering.
  * Side-effects: none
- * Links: src/app/(app)/nodes/[id]/NodeActionPanel.client.tsx
+ * Links: src/features/nodes/wizard/steps/HandoffStep.client.tsx
  * @public
  */
 
@@ -24,12 +25,6 @@ import {
 } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const mockRefresh = vi.hoisted(() => vi.fn());
-
-vi.mock("next/navigation", () => ({
-  useRouter: () => ({ refresh: mockRefresh }),
-}));
-
 vi.mock("@/components", () => ({
   Button: ({
     children,
@@ -45,18 +40,39 @@ vi.mock("@/components", () => ({
   }) => {
     if (asChild && isValidElement(children)) {
       const child = children as ReactElement<Record<string, unknown>>;
-      return cloneElement(child, {
-        ...props,
-        ...child.props,
-      });
+      return cloneElement(child, { ...props, ...child.props });
     }
     return <button {...props}>{children}</button>;
   },
+  SectionCard: ({ children }: { readonly children?: ReactNode }) => (
+    <section>{children}</section>
+  ),
 }));
 
-import { NodeActionPanel } from "@/app/(app)/nodes/[id]/NodeActionPanel.client";
+import { HandoffStep } from "@/features/nodes/wizard/steps/HandoffStep.client";
+import type { WizardNode } from "@/features/nodes/wizard/types";
 
-describe("NodeActionPanel", () => {
+function makeNode(overrides: Partial<WizardNode> = {}): WizardNode {
+  return {
+    id: "11111111-1111-4111-8111-111111111111",
+    slug: "atlas",
+    status: "published",
+    daoAddress: "0x1111111111111111111111111111111111111111",
+    chainId: 8453,
+    operatorWalletAddress: null,
+    splitAddress: null,
+    publishPrUrl: "https://github.com/Cogni-DAO/cogni/pull/42",
+    failureReason: null,
+    nodeRepoUrl: "https://github.com/cogni-test-org/atlas",
+    knowledgeRepoUrl:
+      "https://www.dolthub.com/repositories/cogni-dao/knowledge-atlas",
+    daoUrl:
+      "https://app.aragon.org/dao/base-mainnet/0x1111111111111111111111111111111111111111",
+    ...overrides,
+  };
+}
+
+describe("HandoffStep", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     Object.defineProperty(navigator, "clipboard", {
@@ -69,19 +85,8 @@ describe("NodeActionPanel", () => {
     }) as typeof fetch;
   });
 
-  it("renders the published handoff as an AI-agent launch path", () => {
-    render(
-      <NodeActionPanel
-        nodeId="11111111-1111-4111-8111-111111111111"
-        status="published"
-        publishedHandoff={{
-          nodeRepoUrl: "https://github.com/cogni-test-org/atlas",
-          knowledgeRepoUrl:
-            "https://www.dolthub.com/repositories/cogni-dao/knowledge-atlas",
-          publishPrUrl: "https://github.com/Cogni-DAO/cogni/pull/42",
-        }}
-      />
-    );
+  it("renders the launch pack with all four artifact links incl. Aragon DAO", () => {
+    render(<HandoffStep node={makeNode()} />);
 
     expect(screen.getByText("Launch pack ready.")).toBeVisible();
     expect(
@@ -101,6 +106,11 @@ describe("NodeActionPanel", () => {
       "href",
       "https://github.com/Cogni-DAO/cogni/pull/42"
     );
+    expect(screen.getByRole("link", { name: /Aragon DAO/ })).toHaveAttribute(
+      "href",
+      "https://app.aragon.org/dao/base-mainnet/0x1111111111111111111111111111111111111111"
+    );
+
     const copyButton = screen.getByRole("button", {
       name: "Copy launch prompt",
     });
@@ -112,16 +122,15 @@ describe("NodeActionPanel", () => {
     ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   });
 
-  it("keeps the published launch prompt available when handoff links are missing", () => {
+  it("keeps the launch prompt available when artifact links are missing", () => {
     render(
-      <NodeActionPanel
-        nodeId="11111111-1111-4111-8111-111111111111"
-        status="published"
-        publishedHandoff={{
+      <HandoffStep
+        node={makeNode({
           nodeRepoUrl: null,
           knowledgeRepoUrl: null,
           publishPrUrl: null,
-        }}
+          daoUrl: null,
+        })}
       />
     );
 
@@ -130,12 +139,11 @@ describe("NodeActionPanel", () => {
       screen.getByRole("button", { name: "Copy launch prompt" })
     ).toBeVisible();
     expect(screen.queryByRole("link", { name: /Node repo/ })).toBeNull();
-    expect(screen.queryByRole("link", { name: /DoltHub repo/ })).toBeNull();
-    expect(screen.queryByRole("link", { name: /Deployment PR/ })).toBeNull();
+    expect(screen.queryByRole("link", { name: /Aragon DAO/ })).toBeNull();
   });
 
   it("copies the launch prompt from the owner-gated API", async () => {
-    render(<NodeActionPanel nodeId="node-1" status="published" />);
+    render(<HandoffStep node={makeNode({ id: "node-1" })} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Copy launch prompt" }));
 

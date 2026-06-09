@@ -11,6 +11,7 @@
 
 import { withTenantScope } from "@cogni/db-client";
 import { type UserId, userActor } from "@cogni/ids";
+import { getDaoUrl } from "@cogni/node-shared";
 import { and, eq } from "drizzle-orm";
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
@@ -19,6 +20,7 @@ import { Fragment, type ReactElement } from "react";
 import { resolveAppDb } from "@/bootstrap/container";
 import { PageContainer, SectionCard } from "@/components";
 import { nodeRepoUrlForSlug } from "@/features/nodes/launch-pack";
+import { NodeWizard } from "@/features/nodes/wizard/NodeWizard.client";
 import { getServerSessionUser } from "@/lib/auth/server";
 import { type NodeStatus, nodes } from "@/shared/db/nodes";
 import { serverEnv } from "@/shared/env";
@@ -28,9 +30,6 @@ import {
 } from "@/shared/node-app-scaffold/knowledge-remote";
 
 import { NODE_STATUS_DISPLAY } from "../node-display";
-import { NodeActionPanel } from "./NodeActionPanel.client";
-import { NodeDaoFormationPanel } from "./NodeDaoFormationPanel.client";
-import { NodeStatusBar } from "./NodeStatusBar";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -79,6 +78,10 @@ export default async function NodeDashboardPage({
   const knowledgeRepoUrl = knowledgeRemote
     ? knowledgeRemoteWebUrl(knowledgeRemote)
     : null;
+  const daoUrl =
+    node.daoAddress && node.chainId
+      ? getDaoUrl(node.chainId, node.daoAddress)
+      : null;
   const repoPath = `Cogni-DAO/cogni/nodes/${node.slug}`;
   const technical: ReadonlyArray<{
     label: string;
@@ -120,28 +123,28 @@ export default async function NodeDashboardPage({
       </Link>
 
       <SectionCard title={node.slug}>
-        <NodeStatusBar status={status} />
         <p className="text-muted-foreground text-sm">{display.description}</p>
         {node.failureReason ? (
           <p className="text-destructive text-sm">{node.failureReason}</p>
         ) : null}
       </SectionCard>
 
-      {status === "dao_pending" ? (
-        <NodeDaoFormationPanel nodeId={node.id} />
-      ) : (
-        <SectionCard title="Next step">
-          <NodeActionPanel
-            nodeId={node.id}
-            status={status}
-            publishedHandoff={{
-              nodeRepoUrl,
-              knowledgeRepoUrl,
-              publishPrUrl: node.publishPrUrl,
-            }}
-          />
-        </SectionCard>
-      )}
+      <NodeWizard
+        node={{
+          id: node.id,
+          slug: node.slug,
+          status,
+          daoAddress: node.daoAddress,
+          chainId: node.chainId,
+          operatorWalletAddress: node.operatorWalletAddress,
+          splitAddress: node.splitAddress,
+          publishPrUrl: node.publishPrUrl,
+          failureReason: node.failureReason,
+          nodeRepoUrl,
+          knowledgeRepoUrl,
+          daoUrl,
+        }}
+      />
 
       <details className="px-1 text-sm">
         <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
