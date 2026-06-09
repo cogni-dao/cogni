@@ -13,7 +13,7 @@ One-page reference for anyone touching secrets in node-template. Read this BEFOR
 
 ## Load-bearing invariants — gate every secrets decision
 
-From [`docs/spec/secrets-management.md`](../../../docs/spec/secrets-management.md):
+Load-bearing subset — canonical numbering is [`docs/spec/secrets-management.md`](../../../docs/spec/secrets-management.md) Invariants 1–16; the rows below are the ones that gate day-to-day secrets work (7, 10–12, 14 omitted — read the spec for the full set):
 
 | #   | Rule                                                                                           | Where it bites                                                |
 | --- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
@@ -100,12 +100,17 @@ through candidate-flight inputs or store them in the wizard.
 
 **"Read-only" applies to `assert`, not the whole flight.** Distinct from the
 read-only assertion, `candidate-flight.yml` / `promote-and-deploy.yml` run a
-**`materialize-substrate`** job _first_ — the **sole OpenBao writer in the flight**
+**`materialize-substrate`** job _first_ — the OpenBao writer in the flight
 (`scripts/ci/secret-materialize.sh`, `<env>-writer` token) — which generates the
 node's `source: agent` catalog secrets at `cogni/<env>/<node>/*` idempotently
 before reconcile/assert (canonical: [`ci-cd.md` Axiom 22](../../../docs/spec/ci-cd.md),
 `SUBSTRATE_IS_RECONCILED_BEFORE_PROMOTION`). The `assert-target-substrate.sh` gate
-stays read-only; the _workflow_ is not. **Prod gap (bug.5007):**
+stays read-only; the _workflow_ is not. **Transitional exception (as-built, PR #1582):**
+`materialize-substrate` is not yet the _sole_ writer — `reconcile-substrate` still
+mints `<env>-writer` to seed the DB DSNs (`DATABASE_URL`, `DATABASE_SERVICE_URL`,
+`DOLTGRES_URL`) until the env-repair lane lands per-node DB creds at `cogni/<env>/<node>`
+([`secrets-management.md` Inv 15](../../../docs/spec/secrets-management.md), #1584). The
+sole-writer / read-only-reconcile shape is the target, not today's state. **Prod gap (bug.5007):**
 `materialize-substrate` mints `<env>-writer` via the `openbao-operator`
 ServiceAccount, which `candidate-a` has but **production does not** — a prod
 promote currently fails there until prod is provisioned with the writer SA or the
@@ -186,13 +191,13 @@ No-human-secret done right: agent generates, agent pushes, **zero human, self-he
 
 `scripts/setup-secrets.ts` does NOT hold a hardcoded SECRETS array. It calls a Zod-validated loader that walks YAML catalogs:
 
-| File                                       | Domain                                                                             | Holds                                                                      |
-| ------------------------------------------ | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `nodes/<node>/.cogni/secrets-catalog.yaml` | **node-domain** (single-node-scope: poly engineer can add a poly secret in ONE PR) | A1/A2 entries the node owns; `service:` auto-fills from parent dir         |
-| `infra/secrets-catalog.yaml`               | **operator-domain**                                                                | `_shared`, `_system`, B/D/E/G entries + A2 placeholders for unported nodes |
-| `scripts/lib/secrets-catalog-loader.ts`    | **operator-domain (substrate)**                                                    | Zod schema + walker + uniqueness + service-allowlist assertions            |
+| File                                       | Domain                                                                             | Holds                                                                                                                                                                  |
+| ------------------------------------------ | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `infra/secrets-catalog.yaml`               | **operator-domain**                                                                | `_shared`, `_system`, B/D/E/G entries, A2 placeholders, **and (today) all node A1/A2 entries** — node-template's catalog was migrated here by task.5094                |
+| `nodes/<node>/.cogni/secrets-catalog.yaml` | **node-domain** (single-node-scope: poly engineer can add a poly secret in ONE PR) | A1/A2 entries the node owns; `service:` auto-fills from parent dir. **Loader-supported but currently empty** — no node populates it yet (post-task.5094 consolidation) |
+| `scripts/lib/secrets-catalog-loader.ts`    | **operator-domain (substrate)**                                                    | Zod schema + walker (walks both paths above) + uniqueness + service-allowlist assertions                                                                               |
 
-**To add a secret to your node:** edit `nodes/<your-node>/.cogni/secrets-catalog.yaml`. One PR, your node domain. Don't touch operator-domain files.
+**To add a node secret today:** edit `infra/secrets-catalog.yaml` — node entries are consolidated there post-task.5094 (per-node `.cogni/secrets-catalog.yaml` is loader-supported and is the sovereignty target, but no node uses it yet).
 **To add an operator-domain secret (B/D/E/G, or `_shared` cross-cutting):** edit `infra/secrets-catalog.yaml`. Operator-domain PR.
 **The loader rejects at module load:** missing `tier`, name collision across files, per-node `service:` mismatch with parent dir, unknown `service:` value not in the allowlist (`_shared`/`_system` + present nodes + canonical-future-domain names from `node-ci-cd-contract.md`).
 
