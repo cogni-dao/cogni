@@ -182,6 +182,10 @@ fi
 EOF
 chmod +x "$FAKEBIN/hostname"
 
+# DB component creds are provided via env so the test does not depend on the
+# awk-over-fake-ssh .env read (which behaves differently across awk builds in
+# CI). Real flights source these from the live VM .env; here we only need them
+# present so reconcile builds the DSNs it seeds.
 env \
   VM_HOST=fake \
   DOMAIN=test.cognidao.org \
@@ -191,6 +195,12 @@ env \
   FAKE_REMOTE_ROOT="$REMOTE_ROOT" \
   FAKE_REMOTE_PATH="$FAKEBIN" \
   FAKE_BAO_ROOT="$BAO_ROOT" \
+  POSTGRES_ROOT_PASSWORD=postgres-root \
+  APP_DB_USER=app_user \
+  APP_DB_PASSWORD=app-pass \
+  APP_DB_SERVICE_USER=app_service \
+  APP_DB_SERVICE_PASSWORD=service-pass \
+  DOLTGRES_PASSWORD=dolt-pass \
   bash scripts/ci/reconcile-node-substrate.sh candidate-a canary > "$TMPROOT/out.txt"
 
 grep -q "substrate ready inputs reconciled for canary" "$TMPROOT/out.txt"
