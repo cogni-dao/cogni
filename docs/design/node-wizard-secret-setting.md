@@ -311,30 +311,39 @@ nice-to-have; each row is verified against current code.
 
 `secret-materialize` input is `infra/secrets-catalog.yaml` **only**. The writer
 token is allowed in this phase and nowhere else; `reconcile-substrate` must hold
-no OpenBao write capability.
+no OpenBao write capability. The token boundary and custody rule are the
+canonical invariants in
+[`secrets-management.md`](../spec/secrets-management.md#core-invariants) (15
+`DB_ROLE_CREDS_ARE_OPENBAO_OWNED`, 16
+`NODE_SECRET_MATERIALIZATION_PRECEDES_SUBSTRATE_RECONCILE`); this table is the
+wizard-scoped view of them.
 
 ### DB-credential custody (do not invent OpenBao keys)
 
-DB credentials split three ways. Getting this wrong is how both PRs drifted:
+All DB passwords are OpenBao-owned (secrets-management.md Invariant 15). They
+differ only in how `secret-materialize` produces the value — never in custody:
 
-- **Catalog `source: agent`, materialize owns:** `APP_DB_PASSWORD`,
-  `APP_DB_SERVICE_PASSWORD`. Present in `secrets-catalog.yaml`; generate when
-  missing.
-- **Provisioner-derived, NOT catalog, leave alone:** `DOLTGRES_PASSWORD`,
-  `DOLTGRES_READER_PASSWORD`, `DOLTGRES_WRITER_PASSWORD`. Absent from the catalog
-  by design; deterministically derived from `POSTGRES_ROOT_PASSWORD` by
-  `doltgres-provision`. Materialize must not generate or read these, and the
-  reconcile engine must not `CREATE ROLE` for them.
-- **Catalog-present with a derive fallback:** `APP_DB_READONLY_PASSWORD` (tier B,
-  `required: false`, `generate.kind: hex`; deploy-infra derives one from
-  `POSTGRES_ROOT_PASSWORD` when unset). Materialize may generate it but must
-  **not** fail-loud on its absence.
-- **DSN composites, derived not stored as input:** `DATABASE_URL`,
+- **`source: agent` (generate once):** `APP_DB_PASSWORD`,
+  `APP_DB_SERVICE_PASSWORD`. Present in `secrets-catalog.yaml`; materialize
+  generates when missing.
+- **`source: derived` (compute from OpenBao input, write back to OpenBao):**
+  `DOLTGRES_PASSWORD`, `DOLTGRES_READER_PASSWORD`, `DOLTGRES_WRITER_PASSWORD`, and
+  `APP_DB_READONLY_PASSWORD`. The materializer derives each from the
+  OpenBao-owned `POSTGRES_ROOT_PASSWORD` and writes it to `cogni/<env>/<node>`.
+  These are not `source: human`, so materialize never fails loud on them.
+- **DSN composites (`source: derived`):** `DATABASE_URL`,
   `DATABASE_SERVICE_URL`, `DOLTGRES_URL`. Composed from OpenBao-owned components,
   never read from VM `.env`.
 
-DB role/database creation stays delegated to the standard `db-provision` /
-`doltgres-provision` Compose bootstrap. Neither phase hand-rolls `CREATE ROLE`.
+Legacy state being purged, not the target: today the three `DOLTGRES_*` (and
+`APP_DB_READONLY_PASSWORD` when unset) are derived deterministically **inside
+`deploy-infra.sh` / `doltgres-provision`** and are absent from the catalog. A
+value computed in a deploy script and never written to OpenBao is a parallel
+store. The north-star fix moves that derivation into `secret-materialize`
+(`source: derived` → OpenBao), and `deploy-infra` / `db-provision` /
+`doltgres-provision` become **read-only consumers** that create each role
+set-once from the OpenBao value. Neither substrate phase hand-rolls `CREATE
+ROLE` for a password it derived itself.
 
 ### Inheritance: explicit `inheritFrom`, not blind scan
 
