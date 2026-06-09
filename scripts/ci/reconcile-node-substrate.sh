@@ -5,12 +5,14 @@
 # reconcile-node-substrate.sh — day-2 substrate readiness for one catalog node.
 #
 # This is the narrow lane for a node added after an environment already exists.
-# secret-materialize (the sole OpenBao writer) runs BEFORE this and owns all
-# source:agent app keys + shared/human inheritance. This phase: seeds the node's
-# DB DSNs (transitional, until per-node DB creds land at cogni/<env>/<node> — see
-# docs/guides/vm-secrets-repair.md), applies the node-domain ExternalSecret leaf,
-# updates edge/DB inventory, and runs idempotent DB provisioners. It does not
-# promote images and does not run the broad deploy-infra compose reconcile.
+# secret-materialize (the SOLE OpenBao writer) runs BEFORE this and owns every
+# per-node value, including the per-node DB creds + DSNs at cogni/<env>/<node>.
+# This phase is READ-ONLY on OpenBao: it holds an <env>-db-reader token, reads the
+# node's per-node DB passwords, applies the node-domain ExternalSecret leaf, updates
+# edge/DB inventory, and runs the idempotent per-node DB provisioner (one node per
+# invocation). It performs zero OpenBao writes (no bao kv put/patch), does not
+# promote images, and does not run the broad deploy-infra compose reconcile.
+# See docs/guides/vm-secrets-repair.md.
 
 set -euo pipefail
 
@@ -214,47 +216,28 @@ copy_to_remote() {
   "$SCP_BIN" "${SSH_OPTS_ARR[@]}" "$1" "root@${VM_HOST}:$2"
 }
 
-remote_env_value() {
-  local key="$1"
-  remote "awk -F= -v key='${key}' 'index(\$0, key \"=\") == 1 { value = substr(\$0, length(key) + 2) } END { print value }' /opt/cogni-template-runtime/.env 2>/dev/null" \
-    || true
-}
-
 init_summary
 trap cleanup EXIT
 
-CURRENT_ROW="writer_token"
+# READ-ONLY: mint the <env>-db-reader token (bound to the db-provisioner SA), never
+# the writer. secret-materialize is the sole OpenBao writer; this phase performs
+# zero bao kv put/patch (Invariant 16 token boundary).
+CURRENT_ROW="reader_token"
 BAO_TOKEN="$(
   remote "set -euo pipefail
-    jwt=\$(kubectl create token openbao-operator -n default)
+    jwt=\$(kubectl create token db-provisioner -n default)
     kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
-      bao write -field=token auth/kubernetes/login role='${DEPLOY_ENVIRONMENT}-writer' jwt=\"\$jwt\""
+      bao write -field=token auth/kubernetes/login role='${DEPLOY_ENVIRONMENT}-db-reader' jwt=\"\$jwt\""
 )"
-[[ -n "$BAO_TOKEN" ]] || fail "could not mint ${DEPLOY_ENVIRONMENT}-writer token"
-mark_row writer_token refreshed "minted ${DEPLOY_ENVIRONMENT}-writer token"
+[[ -n "$BAO_TOKEN" ]] || fail "could not mint ${DEPLOY_ENVIRONMENT}-db-reader token"
+mark_row reader_token refreshed "minted ${DEPLOY_ENVIRONMENT}-db-reader token (read-only)"
 
-export REPO_ROOT APP_SOURCE_DIR COGNI_CATALOG_ROOT
-export DEPLOY_ENV="$DEPLOY_ENVIRONMENT"
-export DOMAIN
-export VM_IP="${VM_IP:-$(remote "hostname -I | awk '{print \$1}'" | tr -d '[:space:]')}"
-export CATALOG_FILE="${APP_SOURCE_DIR}/infra/secrets-catalog.yaml"
-export PAYMENT_NODES="${PAYMENT_NODES:-poly}"
+export REPO_ROOT APP_SOURCE_DIR COGNI_CATALOG_ROOT DOMAIN
 
-export POSTGRES_ROOT_PASSWORD="${POSTGRES_ROOT_PASSWORD:-$(remote_env_value POSTGRES_ROOT_PASSWORD)}"
-export APP_DB_USER="${APP_DB_USER:-$(remote_env_value APP_DB_USER)}"
-export APP_DB_PASSWORD="${APP_DB_PASSWORD:-$(remote_env_value APP_DB_PASSWORD)}"
-export APP_DB_SERVICE_USER="${APP_DB_SERVICE_USER:-$(remote_env_value APP_DB_SERVICE_USER)}"
-export APP_DB_SERVICE_PASSWORD="${APP_DB_SERVICE_PASSWORD:-$(remote_env_value APP_DB_SERVICE_PASSWORD)}"
-export DOLTGRES_PASSWORD="${DOLTGRES_PASSWORD:-$(remote_env_value DOLTGRES_PASSWORD)}"
-
-[[ -n "$APP_DB_USER" && -n "$APP_DB_PASSWORD" ]] \
-  || fail "runtime env missing APP_DB_USER/APP_DB_PASSWORD; run env provisioning"
-[[ -n "$APP_DB_SERVICE_USER" && -n "$APP_DB_SERVICE_PASSWORD" ]] \
-  || fail "runtime env missing APP_DB_SERVICE_USER/APP_DB_SERVICE_PASSWORD; run env provisioning"
-
-# shellcheck source=../setup/lib/reconcile-secrets.sh
-source "$REPO_ROOT/scripts/setup/lib/reconcile-secrets.sh"
-
+# Per-node DB role passwords come from OpenBao (cogni/<env>/<node>), read below via
+# the db-reader token — NEVER from VM .env. The superuser (POSTGRES_ROOT) stays in
+# the VM .env the compose db-provision service already reads. APP_DB_USER is no
+# longer threaded: provision.sh computes app_<node>/service_<node> from the node.
 bao_get_field() {
   local svc="$1" k="$2"
   remote "kubectl exec -n openbao openbao-0 -- env BAO_TOKEN='${BAO_TOKEN}' BAO_ADDR=http://127.0.0.1:8200 \
@@ -262,35 +245,20 @@ bao_get_field() {
     2>/dev/null | jq -r --arg k "$k" '.data.data[$k] // empty' 2>/dev/null || true
 }
 
-seed_kv() {
-  local svc="$1" k="$2" v="$3"
-  [[ -z "$v" ]] && return 0
-  local path="cogni/${DEPLOY_ENVIRONMENT}/${svc}"
-  local op="patch"
-  if ! remote "kubectl exec -n openbao openbao-0 -- env BAO_TOKEN='${BAO_TOKEN}' BAO_ADDR=http://127.0.0.1:8200 \
-    bao kv metadata get '${path}'" >/dev/null 2>&1; then
-    op="put"
-  fi
-  printf '%s' "$v" | remote "kubectl exec -i -n openbao openbao-0 -- env BAO_TOKEN='${BAO_TOKEN}' BAO_ADDR=http://127.0.0.1:8200 \
-    bao kv ${op} '${path}' '${k}=-'" >/dev/null
-}
+# Read THIS node's app + service DB passwords from OpenBao (materialize wrote them
+# as source:agent). Fail loud if absent — materialize runs before this phase
+# (Invariant 16). Key names only in logs; values never echoed.
+CURRENT_ROW="db_creds"
+app_db_password="$(bao_get_field "$TARGET_NODE" APP_DB_PASSWORD)"
+app_db_service_password="$(bao_get_field "$TARGET_NODE" APP_DB_SERVICE_PASSWORD)"
+[[ -n "$app_db_password" && -n "$app_db_service_password" ]] \
+  || fail "per-node DB creds absent at cogni/${DEPLOY_ENVIRONMENT}/${TARGET_NODE} — run secret-materialize first (it owns per-node APP_DB_PASSWORD/APP_DB_SERVICE_PASSWORD)"
+mark_row db_creds read "read per-node DB creds from OpenBao (key names only)"
 
-# Transitional DSN seed. secret-materialize now owns all source:agent app keys
-# and shared/human inheritance; the former double-write of those keys here is
-# removed (along with the blind preload scan). Reconcile keeps ONLY the DB DSN
-# write until per-node DB creds land at cogni/<env>/<node>
-# (docs/guides/vm-secrets-repair.md, #1584; DB creds are per-node, never _shared),
-# after which DSN custody moves into materialize and this phase becomes fully
-# read-only. DSNs are built from the VM .env DB components read above — the last
-# remaining .env dependency, retired by the env-repair lane.
-CURRENT_ROW="dsn_seed"
-log "seeding node DB DSNs for ${DEPLOY_ENVIRONMENT}/${TARGET_NODE} (transitional; materialize owns app keys)"
-for k in DATABASE_URL DATABASE_SERVICE_URL DOLTGRES_URL; do
-  v="$(_resolve_node_value "$TARGET_NODE" "$k")"
-  [[ -z "$v" ]] && continue
-  seed_kv "$TARGET_NODE" "$k" "$v"
-done
-mark_row dsn_seed updated "node DB DSNs seeded (transitional)"
+# DSN seeding removed: secret-materialize composes + writes the per-node DSNs
+# (DATABASE_URL/DATABASE_SERVICE_URL/DOLTGRES_URL) to cogni/<env>/<node>. This phase
+# holds a read-only db-reader token and performs zero OpenBao writes — it consumes
+# the per-node creds above and hands them to db-provision below.
 
 CURRENT_ROW="externalsecret"
 external_secret_file="${APP_SOURCE_DIR}/nodes/${TARGET_NODE}/k8s/external-secrets/${DEPLOY_ENVIRONMENT}/external-secret.yaml"
@@ -352,7 +320,16 @@ remote "set -euo pipefail
     \"\${edge_compose[@]}\" up -d --force-recreate caddy >/dev/null
   fi
   \"\${runtime_compose[@]}\" up -d postgres >/dev/null
-  \"\${runtime_compose[@]}\" --profile bootstrap run --rm db-provision >/dev/null
+  # Single-node db-provision: override COGNI_NODE_DBS to THIS node and inject its
+  # per-node OpenBao passwords (read above) via -e, so provision.sh reconciles the
+  # per-node app/service roles to the OpenBao value. The passwords transit this SSH
+  # command + the docker run env (VM-local, not echoed to CI logs); the declarative
+  # endgame (vm-secrets-repair.md) removes this bash transport.
+  \"\${runtime_compose[@]}\" --profile bootstrap run --rm \
+    -e COGNI_NODE_DBS='${node_db}' \
+    -e APP_DB_PASSWORD='${app_db_password}' \
+    -e APP_DB_SERVICE_PASSWORD='${app_db_service_password}' \
+    db-provision >/dev/null
   if \"\${runtime_compose[@]}\" config --services 2>/dev/null | grep -q '^doltgres$'; then
     \"\${runtime_compose[@]}\" up -d doltgres >/dev/null
     \"\${runtime_compose[@]}\" --profile bootstrap run --rm doltgres-provision >/dev/null
