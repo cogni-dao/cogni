@@ -146,9 +146,9 @@ The candidate-a infra lever proves this path. `scripts/ci/deploy-infra.sh` insta
 
 Known scope: this is same-VM persistent-volume backup. It protects against logical DB damage and operator mistakes, not full VM loss. Do not claim disaster recovery until an off-host object store sink and restore drill exist. The next hardening step is S3-compatible storage (or equivalent OSS object store) plus a scheduled restore rehearsal.
 
-### Per-node app image ≠ per-node migrator image
+### Migrations run inline as an initContainer (no separate migrator image)
 
-They share a Dockerfile (`nodes/<node>/app/Dockerfile`) but use different stages. `cogni-template:TAG-poly` = app runtime (`runner`). `cogni-template:TAG-poly-migrate` = migrator (`migrator`). The k8s overlay uses both — the Job targets `-migrate`, the Deployment targets the app tag.
+`task.0371` retired the separate `-migrate` image + Argo PreSync Job. Postgres + Doltgres migrations now run as the Deployment's `migrate` / `migrate-doltgres` **initContainers off the same runtime image** as the app, gated by rollout. The migrate runner path follows the node's image layout — `/app/nodes/<node>/app/migrate.mjs` (in-tree monorepo) vs `/app/app/migrate.mjs` (wizard-born node-at-root); the node's overlay declares it, and a layout mismatch is a `MODULE_NOT_FOUND` crash-loop before any DB connect. Canon + the layout contract: [databases.md §2](../../../docs/spec/databases.md). (The compose/`deploy-infra` Doltgres migrator on the VM is a separate path — see `POLY_MIGRATOR_IMAGE` below.)
 
 ## Doltgres knowledge plane (per-node, parallel to the Postgres side)
 
