@@ -133,15 +133,34 @@ seed_kv() {
 # env-level DB credential — that substrate belongs to env genesis/repair, not
 # node birth. It generates this node's source:agent app keys, preserving any
 # existing value (0 pod churn on re-run). The per-node DB role password + DSNs
-# are materialized by the paired per-node-role step (deferred); the superuser
-# that creates the role is env-repair's, read only at reconcile/provision time.
+# are seeded by reconcile transitionally and move here once cogni/<env>/_shared
+# exists (vm-secrets-repair.md); the superuser that creates the role is
+# env-repair's, read only at reconcile/provision time.
 DSN_DEFER_KEYS=" DATABASE_URL DATABASE_SERVICE_URL DOLTGRES_URL "
+
+# Transitional shared/human inheritance. The blind ancestor scan is the
+# anti-pattern the north star replaces with an explicit catalog `inheritFrom`
+# (catalog-custody lane; not built yet). Until it lands, shared/human values a
+# node legitimately consumes (OPENROUTER_API_KEY, OAuth, etc.) are inherited
+# here. source:agent keys are regenerated per-node by _resolve_node_value
+# regardless, so they are NOT inherited in practice — only genuinely shared
+# values flow through this.
+inherit_shared_value() {
+  local k="$1" v=""
+  [[ -n "${!k:-}" ]] && return 0
+  for svc in node-template operator _shared; do
+    v="$(bao_get_field "$svc" "$k")"
+    if [[ -n "$v" ]]; then export "${k}=${v}"; return 0; fi
+  done
+  return 0
+}
 
 log "materializing node-owned OpenBao values for ${DEPLOY_ENVIRONMENT}/${TARGET_NODE} (key names only)"
 materialized=0
 for k in "${NODE_BASELINE_KEYS[@]}"; do
   case "$DSN_DEFER_KEYS" in *" $k "*) continue ;; esac
   _node_gets_key "$TARGET_NODE" "$k" || continue
+  inherit_shared_value "$k"
   v="$(_resolve_node_value "$TARGET_NODE" "$k")"
   [[ -z "$v" ]] && continue
   seed_kv "$TARGET_NODE" "$k" "$v"
