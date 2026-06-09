@@ -129,17 +129,14 @@ if [ "${1:-}" = "exec" ]; then
   if printf '%s\n' "$*" | grep -q 'bao kv get -format=json'; then
     dir="${FAKE_BAO_ROOT}/${path}"
     if [ ! -d "$dir" ]; then exit 2; fi
-    {
-      printf '{"data":{"data":{'
-      first=1
-      for f in "$dir"/*; do
-        [ -f "$f" ] || continue
-        [ "$first" -eq 0 ] && printf ','
-        first=0
-        jq -Rn --arg k "$(basename "$f")" --arg v "$(cat "$f")" '$k + ":" + ($v|tojson)' | tr -d '\n'
-      done
-      printf '}}}\n'
-    }
+    # Portable valid-JSON builder (matches secret-materialize.test.sh). The prior
+    # `$k + ":" + ...` form emitted unquoted keys → invalid JSON.
+    data="{}"
+    for f in "$dir"/*; do
+      [ -f "$f" ] || continue
+      data="$(printf '%s' "$data" | jq --arg k "$(basename "$f")" --arg v "$(cat "$f")" '.[$k]=$v')"
+    done
+    printf '{"data":{"data":%s}}\n' "$data"
     exit 0
   fi
   if printf '%s\n' "$*" | grep -q 'bao kv metadata get'; then

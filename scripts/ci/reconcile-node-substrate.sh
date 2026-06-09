@@ -7,7 +7,7 @@
 # This is the narrow lane for a node added after an environment already exists.
 # secret-materialize (the sole OpenBao writer) runs BEFORE this and owns all
 # source:agent app keys + shared/human inheritance. This phase: seeds the node's
-# DB DSNs (transitional, until cogni/<env>/_shared lands — see
+# DB DSNs (transitional, until per-node DB creds land at cogni/<env>/<node> — see
 # docs/guides/vm-secrets-repair.md), applies the node-domain ExternalSecret leaf,
 # updates edge/DB inventory, and runs idempotent DB provisioners. It does not
 # promote images and does not run the broad deploy-infra compose reconcile.
@@ -165,7 +165,8 @@ seed_kv() {
 # Transitional DSN seed. secret-materialize now owns all source:agent app keys
 # and shared/human inheritance; the former double-write of those keys here is
 # removed (along with the blind preload scan). Reconcile keeps ONLY the DB DSN
-# write until cogni/<env>/_shared exists (docs/guides/vm-secrets-repair.md),
+# write until per-node DB creds land at cogni/<env>/<node>
+# (docs/guides/vm-secrets-repair.md, #1584; DB creds are per-node, never _shared),
 # after which DSN custody moves into materialize and this phase becomes fully
 # read-only. DSNs are built from the VM .env DB components read above — the last
 # remaining .env dependency, retired by the env-repair lane.

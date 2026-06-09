@@ -141,9 +141,10 @@ seed_kv() {
 # env-level DB credential — that substrate belongs to env genesis/repair, not
 # node birth. It generates this node's source:agent app keys, preserving any
 # existing value (0 pod churn on re-run). The per-node DB role password + DSNs
-# are seeded by reconcile transitionally and move here once cogni/<env>/_shared
-# exists (vm-secrets-repair.md); the superuser that creates the role is
-# env-repair's, read only at reconcile/provision time.
+# are seeded by reconcile transitionally and move here once DB creds land
+# per-node at cogni/<env>/<node> (vm-secrets-repair.md, #1584 — DB creds are
+# per-node, never _shared; _shared may persist for other shared values until
+# inheritFrom). The superuser that creates the role is env-repair's, read-only.
 DSN_DEFER_KEYS=" DATABASE_URL DATABASE_SERVICE_URL DOLTGRES_URL "
 
 # Transitional shared/human inheritance. The blind ancestor scan is the
