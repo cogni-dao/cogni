@@ -30,10 +30,6 @@ APP_SOURCE_DIR="${APP_SOURCE_DIR:-$REPO_ROOT}"
 SSH_BIN="${SECRET_MATERIALIZE_SSH_BIN:-ssh}"
 SSH_OPTS_RAW="${SSH_OPTS:--i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6}"
 
-# Env-bank service path holding per-environment DB component credentials. These
-# are seeded once by env genesis (provision-env-vm.sh), not by node birth.
-ENV_DB_BANK="${ENV_DB_BANK:-node-template}"
-
 fail() {
   echo "::error::secret-materialize: $*" >&2
   exit 1
@@ -55,7 +51,7 @@ Required env:
   VM_HOST
 
 Optional env:
-  APP_SOURCE_DIR, ENV_DB_BANK, SSH_OPTS
+  APP_SOURCE_DIR, SSH_OPTS
 USAGE
 }
 
@@ -132,25 +128,24 @@ seed_kv() {
     bao kv ${op} '${path}' '${k}=-'" >/dev/null
 }
 
-# DB component inputs come from OpenBao only. A missing value is an env-bank
-# precondition failure, never a VM .env fallback (Invariant 15 anti-fix).
-require_env_bank() {
-  local k="$1" v
-  v="$(bao_get_field "$ENV_DB_BANK" "$k")"
-  [[ -n "$v" ]] || fail "env-bank value cogni/${DEPLOY_ENVIRONMENT}/${ENV_DB_BANK}:${k} absent; seed it via env genesis before node materialization (do NOT read VM .env)"
-  printf '%s' "$v"
-}
+# Node-owned secrets only (node-baas-architecture.md: each node owns its own DB
+# + secrets). This phase does NOT read the shared Postgres superuser or any
+# env-level DB credential — that substrate belongs to env genesis/repair, not
+# node birth. It generates this node's source:agent app keys, preserving any
+# existing value (0 pod churn on re-run). The per-node DB role password + DSNs
+# are materialized by the paired per-node-role step (deferred); the superuser
+# that creates the role is env-repair's, read only at reconcile/provision time.
+DSN_DEFER_KEYS=" DATABASE_URL DATABASE_SERVICE_URL DOLTGRES_URL "
 
-# Declare/assign separately: an inline `export X="$(require_env_bank …)"` would
-# mask the subshell's `exit 1`, so set -e would not catch a missing env-bank
-# value and fail-loud would silently become fail-empty.
-POSTGRES_ROOT_PASSWORD="$(require_env_bank POSTGRES_ROOT_PASSWORD)"
-APP_DB_USER="$(require_env_bank APP_DB_USER)"
-APP_DB_PASSWORD="$(require_env_bank APP_DB_PASSWORD)"
-APP_DB_SERVICE_USER="$(require_env_bank APP_DB_SERVICE_USER)"
-APP_DB_SERVICE_PASSWORD="$(require_env_bank APP_DB_SERVICE_PASSWORD)"
-export POSTGRES_ROOT_PASSWORD APP_DB_USER APP_DB_PASSWORD APP_DB_SERVICE_USER APP_DB_SERVICE_PASSWORD
-
-log "materializing OpenBao values for ${DEPLOY_ENVIRONMENT}/${TARGET_NODE} (key names only)"
-seed_node_app_secrets "$TARGET_NODE"
-log "materialize complete for ${TARGET_NODE} (${DEPLOY_ENVIRONMENT})"
+log "materializing node-owned OpenBao values for ${DEPLOY_ENVIRONMENT}/${TARGET_NODE} (key names only)"
+materialized=0
+for k in "${NODE_BASELINE_KEYS[@]}"; do
+  case "$DSN_DEFER_KEYS" in *" $k "*) continue ;; esac
+  _node_gets_key "$TARGET_NODE" "$k" || continue
+  v="$(_resolve_node_value "$TARGET_NODE" "$k")"
+  [[ -z "$v" ]] && continue
+  seed_kv "$TARGET_NODE" "$k" "$v"
+  log "  materialized ${k}"
+  materialized=$((materialized + 1))
+done
+log "materialize complete for ${TARGET_NODE} (${DEPLOY_ENVIRONMENT}): ${materialized} key(s)"
