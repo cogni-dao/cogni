@@ -1,11 +1,11 @@
 {
-  "name": "ride-along: poly node files + data-research skill standard",
+  "name": "ride-along: legacy node files + data-research skill standard",
   "paths": [
-    "nodes/node-template/app/src/features/wallet-analysis/server/target-overlap-service.ts",
+    "nodes/legacy-alpha/app/src/features/wallet-analysis/server/target-overlap-service.ts",
     ".claude/skills/data-research/SKILL.md"
   ],
   "expected": {
-    "domains": ["node-template"],
+    "domains": ["legacy-alpha"],
     "pass": true,
     "rideAlongApplied": true
   }

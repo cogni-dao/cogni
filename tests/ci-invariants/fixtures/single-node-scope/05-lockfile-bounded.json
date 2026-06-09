@@ -1,12 +1,12 @@
 {
-  "name": "lockfile-inherits is bounded: poly + lockfile + .github/foo defeats it",
+  "name": "lockfile-inherits is bounded: legacy-alpha + lockfile + .github/foo defeats it",
   "paths": [
-    "nodes/node-template/app/package.json",
+    "nodes/legacy-alpha/app/package.json",
     "pnpm-lock.yaml",
     ".github/workflows/foo.yml"
   ],
   "expected": {
-    "domains": ["node-template", "operator"],
+    "domains": ["legacy-alpha", "operator"],
     "pass": false,
     "rideAlongApplied": false
   }

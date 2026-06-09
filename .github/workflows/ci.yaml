@@ -100,8 +100,8 @@ jobs:
           list-files: json # exposes <filter>_files so we can inspect which paths matched
           # Required so the operator filter's `**` + `!nodes/<X>/**` negations
           # actually subtract. Default `some` quantifier OR's the rules, so
-          # `**` matches everything and the negations are dead — a resy-only PR
-          # would (incorrectly) classify as resy + operator. Per-node filters
+          # `**` matches everything and the negations are dead — a node-only PR
+          # would (incorrectly) classify as node + operator. Per-node filters
           # have a single rule each, so the quantifier is a no-op for them.
           predicate-quantifier: "every"
           # Filter block is CATALOG_IS_SSOT — generated from the nodes/* listing
@@ -112,14 +112,11 @@ jobs:
             # >>> GENERATED scope-filters (scripts/ci/render-scope-filters.sh) — DO NOT EDIT BY HAND
             canary:
               - 'nodes/canary/**'
-            node-template:
-              - 'nodes/node-template/**'
             resy:
               - 'nodes/resy/**'
             operator:
               - '**'
               - '!nodes/canary/**'
-              - '!nodes/node-template/**'
               - '!nodes/resy/**'
             # <<< GENERATED scope-filters
 

@@ -15,9 +15,8 @@
 #   node's file and literally cannot reference another lane's object.
 #
 # Node-set SSOT: catalog entries (`infra/catalog/<name>.yaml`) that declare a
-#   `candidate_a_branch` — i.e. the deployable Argo apps (operator, resy,
-#   scheduler-worker, node-template, canary). `type: infra` rows (litellm) live on
-#   the VM/compose tier and never get an AppSet.
+#   `candidate_a_branch` — i.e. the deployable Argo apps. `type: infra` rows
+#   live on the VM/compose tier and never get an AppSet.
 #
 # Usage: render-node-appset.sh <env> <node>   # emit one object to stdout
 #        render-node-appset.sh --write         # (re)write all per-node files

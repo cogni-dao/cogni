@@ -218,11 +218,11 @@ The invariant is: **node declares shape; operator wires environment**.
 In the monorepo today:
 
 - root `packages/*` are cross-node/operator-owned packages;
-- `pnpm-workspace.yaml` already includes `nodes/*/graphs` and `nodes/*/packages/*`;
-- `nodes/node-template/graphs` exists as `@cogni/node-template-graphs`;
-- `nodes/node-template/packages/doltgres-schema` exists as `@cogni/node-template-doltgres-schema`;
-- `nodes/operator/packages/doltgres-schema` and `nodes/canary/packages/doltgres-schema` also exist;
-- node-template does not have a node-owned Postgres schema package because it currently has no node-local operational tables;
+- `pnpm-workspace.yaml` includes only legacy in-tree node workspaces; submodule-pinned nodes are not parent workspaces;
+- `Cogni-DAO/node-template` is the canonical node-at-root template source;
+- the operator monorepo may carry `nodes/node-template` only as a gitlink pin for deployment approval;
+- `nodes/operator/packages/doltgres-schema` and any remaining legacy in-tree node-local packages are migration surfaces;
+- node-template owns its graph and node-local packages in its external repo;
 - the active submodule design expects a node-at-root template with `app/`, `graphs/`, `k8s/`, `packages/`, own CI, and own policy.
 
 The proposed product shape is therefore not a greenfield rewrite. It is a naming and ownership cleanup around patterns already present.
@@ -231,7 +231,7 @@ The proposed product shape is therefore not a greenfield rewrite. It is a naming
 
 A 2026-06-05 package import audit found that most root packages are genuine shared substrate:
 
-- app-wide platform packages are imported by `canary`, `node-template`, `operator`, and `resy`: `@cogni/ai-core`, `@cogni/ai-tools`, `@cogni/db-client`, `@cogni/db-schema`, `@cogni/ids`, `@cogni/node-contracts`, `@cogni/node-core`, `@cogni/node-shared`, `@cogni/node-streams`, `@cogni/node-ui-kit`, `@cogni/scheduler-core`, `@cogni/work-items`;
+- app-wide platform packages are imported by operator, node-template, and remaining hosted node artifacts: `@cogni/ai-core`, `@cogni/ai-tools`, `@cogni/db-client`, `@cogni/db-schema`, `@cogni/ids`, `@cogni/node-contracts`, `@cogni/node-core`, `@cogni/node-shared`, `@cogni/node-streams`, `@cogni/node-ui-kit`, `@cogni/scheduler-core`, `@cogni/work-items`;
 - graph substrate is shared: `@cogni/langgraph-graphs`, `@cogni/graph-execution-core`, `@cogni/graph-execution-host`;
 - knowledge substrate is shared: `@cogni/knowledge-base` is imported by node-local Doltgres schema packages, and `@cogni/knowledge-store` is imported by apps and Doltgres packages;
 - some root packages are operator-plane utilities rather than node-product packages: `@cogni/dns-ops`, `@cogni/temporal-workflows`, attribution pipeline packages.
@@ -291,7 +291,7 @@ The highest-value moves, based on the current package layout, are:
 
 | Priority | Move                                                                                                                       | Why                                                                                                                               |
 | -------- | -------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| 1        | `nodes/node-template/graphs` → node-at-root `packages/graphs`                                                              | Makes the new node repo read as one product with a package layer; low conceptual risk because it is already node-local.           |
+| 1        | Keep `Cogni-DAO/node-template` graph packages node-at-root                                                                 | Makes the template repo read as one product with a package layer; low conceptual risk because it is already node-local.           |
 | 2        | node-at-root `packages/doltgres-schema` → `packages/doltgres`                                                              | Names the knowledge plane by capability instead of implementation detail; keeps schema/client/adapter helpers together.           |
 | 3        | Add node-at-root `.cogni/node.yaml`                                                                                        | Gives the wizard/operator a compact substrate declaration without moving code.                                                    |
 | 4        | Add `packages/postgres` only when a node-local operational table appears                                                   | Avoids empty scaffolding while preserving the intended split.                                                                     |

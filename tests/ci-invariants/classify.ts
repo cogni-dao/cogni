@@ -90,9 +90,7 @@ function isDevtoolsOperatorPath(path: string): boolean {
 function isRootAppVitestConfig(path: string, nonOperatorNodes: Set<string>) {
   const match = path.match(/^nodes\/([^/]+)\/app\/vitest\.config\.mts$/);
   const node = match?.[1];
-  return Boolean(
-    node && node !== "node-template" && nonOperatorNodes.has(node)
-  );
+  return Boolean(node && nonOperatorNodes.has(node));
 }
 
 /**

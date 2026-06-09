@@ -1,13 +1,13 @@
 {
-  "name": "ride-along: poly + pnpm-lock.yaml + work/items/_index.md (combined whitelist)",
+  "name": "ride-along: legacy-alpha + pnpm-lock.yaml + work/items/_index.md (combined whitelist)",
   "paths": [
-    "nodes/node-template/app/package.json",
+    "nodes/legacy-alpha/app/package.json",
     "pnpm-lock.yaml",
     "work/items/_index.md",
-    "work/items/wi.poly-feature.md"
+    "work/items/wi.legacy-alpha-feature.md"
   ],
   "expected": {
-    "domains": ["node-template"],
+    "domains": ["legacy-alpha"],
     "pass": true,
     "rideAlongApplied": true
   }

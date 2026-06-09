@@ -1,12 +1,12 @@
 {
   "name": "ride-along is bounded: work/items/ + .github/foo defeats it",
   "paths": [
-    "nodes/node-template/app/src/foo.ts",
-    "work/items/wi.poly-feature.md",
+    "nodes/legacy-alpha/app/src/foo.ts",
+    "work/items/wi.legacy-alpha-feature.md",
     ".github/workflows/foo.yml"
   ],
   "expected": {
-    "domains": ["node-template", "operator"],
+    "domains": ["legacy-alpha", "operator"],
     "pass": false,
     "rideAlongApplied": false
   }

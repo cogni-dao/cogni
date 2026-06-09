@@ -5,10 +5,17 @@
 # See: https://pnpm.io/workspaces
 
 packages:
-  # All node applications (operator + sovereign nodes)
-  - "nodes/*/app"
-  - "nodes/*/graphs"
-  - "nodes/*/packages/*"
+  # Legacy in-tree node workspaces. Submodule nodes live in their own repos and
+  # must not become parent workspaces when checked out locally.
+  - "nodes/operator/app"
+  - "nodes/operator/graphs"
+  - "nodes/operator/packages/*"
+  - "nodes/canary/app"
+  - "nodes/canary/graphs"
+  - "nodes/canary/packages/*"
+  - "nodes/resy/app"
+  - "nodes/resy/graphs"
+  - "nodes/resy/packages/*"
   # Shared packages (Node-owned, pure libraries)
   - "packages/*"
   # Operator services (future: git-review-daemon, git-admin-daemon)

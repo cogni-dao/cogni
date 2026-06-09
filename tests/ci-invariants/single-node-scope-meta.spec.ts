@@ -168,7 +168,7 @@ describe("single-node-scope workflow gate · structural pins", () => {
       "operator filter relies on `**` + `!nodes/<X>/**` to mean " +
         "\"everywhere outside another node's dir\". With dorny's default " +
         "`some` quantifier the rules are OR'd and the negations are dead, " +
-        "so a poly-only PR misclassifies as poly + operator. " +
+        "so a legacy-node-only PR misclassifies as legacy-node + operator. " +
         "Set `predicate-quantifier: every` on the dorny step."
     ).toBe("every");
   });

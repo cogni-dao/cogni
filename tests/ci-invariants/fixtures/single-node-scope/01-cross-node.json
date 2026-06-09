@@ -1,8 +1,8 @@
 {
-  "name": "cross-node: poly + resy",
-  "paths": ["nodes/node-template/app/foo.ts", "nodes/resy/app/bar.ts"],
+  "name": "cross-node: legacy-alpha + legacy-beta",
+  "paths": ["nodes/legacy-alpha/app/foo.ts", "nodes/legacy-beta/app/bar.ts"],
   "expected": {
-    "domains": ["node-template", "resy"],
+    "domains": ["legacy-alpha", "legacy-beta"],
     "pass": false,
     "rideAlongApplied": false
   }

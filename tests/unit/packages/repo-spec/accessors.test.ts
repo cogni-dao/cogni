@@ -611,20 +611,20 @@ describe("extractOwningNode", () => {
     expect(extractOwningNode(standardSpec(), [])).toEqual({ kind: "miss" });
   });
 
-  it("scenario 10: node-template is sovereign when registered", () => {
-    const nodeTemplate = {
+  it("scenario 10: registered legacy node path is sovereign", () => {
+    const sampleNode = {
       node_id: "00000000-0000-4000-8000-0000000000aa",
-      node_name: "Node Template",
-      path: "nodes/node-template",
+      node_name: "Sample Node",
+      path: "nodes/sample-node",
     };
     const spec = buildTestRepoSpec({
-      nodes: [TEST_NODE_ENTRIES.operator, nodeTemplate],
+      nodes: [TEST_NODE_ENTRIES.operator, sampleNode],
     });
-    const result = extractOwningNode(spec, ["nodes/node-template/app/foo.ts"]);
+    const result = extractOwningNode(spec, ["nodes/sample-node/app/foo.ts"]);
     expect(result).toEqual({
       kind: "single",
-      nodeId: nodeTemplate.node_id,
-      path: "nodes/node-template",
+      nodeId: sampleNode.node_id,
+      path: "nodes/sample-node",
     });
   });
 
@@ -696,51 +696,64 @@ describe("extractOwningNode", () => {
     ]);
   });
 
-  it("NODE_BIRTH ride-along: canary + its own catalog/overlay/AppSet → single { canary, rideAlongApplied: true }", () => {
-    const canary = {
+  it("NODE_BIRTH ride-along: legacy node source + its own catalog/overlay/AppSet → single node", () => {
+    const sampleNode = {
       node_id: "00000000-0000-4000-8000-0000000000ca",
-      node_name: "Canary",
-      path: "nodes/canary",
+      node_name: "Sample Node",
+      path: "nodes/sample-node",
     };
     const spec = buildTestRepoSpec({
-      nodes: [TEST_NODE_ENTRIES.operator, canary, TEST_NODE_ENTRIES.resy],
+      nodes: [
+        TEST_NODE_ENTRIES.operator,
+        sampleNode,
+        {
+          node_id: "00000000-0000-4000-8000-0000000000bb",
+          node_name: "Other Node",
+          path: "nodes/other-node",
+        },
+      ],
     });
     const result = extractOwningNode(spec, [
-      "nodes/canary/app/src/app/(public)/page.tsx",
-      "infra/catalog/canary.yaml",
+      "nodes/sample-node/app/src/app/(public)/page.tsx",
+      "infra/catalog/sample-node.yaml",
       "infra/compose/edge/configs/Caddyfile.tmpl",
-      "infra/k8s/overlays/candidate-a/canary/kustomization.yaml",
-      "infra/k8s/overlays/preview/canary/kustomization.yaml",
-      "infra/k8s/argocd/candidate-a-canary-applicationset.yaml",
+      "infra/k8s/overlays/candidate-a/sample-node/kustomization.yaml",
+      "infra/k8s/overlays/preview/sample-node/kustomization.yaml",
+      "infra/k8s/argocd/candidate-a-sample-node-applicationset.yaml",
     ]);
     expect(result).toEqual({
       kind: "single",
-      nodeId: canary.node_id,
-      path: "nodes/canary",
+      nodeId: sampleNode.node_id,
+      path: "nodes/sample-node",
       rideAlongApplied: true,
     });
   });
 
-  it("NODE_BIRTH bounded: canary cannot ride another node's catalog", () => {
-    const canary = {
+  it("NODE_BIRTH bounded: legacy node cannot ride another node's catalog", () => {
+    const sampleNode = {
       node_id: "00000000-0000-4000-8000-0000000000ca",
-      node_name: "Canary",
-      path: "nodes/canary",
+      node_name: "Sample Node",
+      path: "nodes/sample-node",
+    };
+    const otherNode = {
+      node_id: "00000000-0000-4000-8000-0000000000bb",
+      node_name: "Other Node",
+      path: "nodes/other-node",
     };
     const spec = buildTestRepoSpec({
-      nodes: [TEST_NODE_ENTRIES.operator, canary, TEST_NODE_ENTRIES.resy],
+      nodes: [TEST_NODE_ENTRIES.operator, sampleNode, otherNode],
     });
     const result = extractOwningNode(spec, [
-      "nodes/canary/app/src/foo.ts",
-      "infra/catalog/resy.yaml",
+      "nodes/sample-node/app/src/foo.ts",
+      "infra/catalog/other-node.yaml",
     ]);
     expect(result.kind).toBe("conflict");
     if (result.kind !== "conflict") return;
     expect(result.nodes).toEqual([
       { nodeId: TEST_NODE_IDS.operator, path: "nodes/operator" },
-      { nodeId: canary.node_id, path: "nodes/canary" },
+      { nodeId: sampleNode.node_id, path: "nodes/sample-node" },
     ]);
-    expect(result.operatorPaths).toEqual(["infra/catalog/resy.yaml"]);
+    expect(result.operatorPaths).toEqual(["infra/catalog/other-node.yaml"]);
     expect(result.operatorNodeId).toBe(TEST_NODE_IDS.operator);
   });
 

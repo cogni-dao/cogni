@@ -1,8 +1,8 @@
 {
-  "name": "ride-along: poly node files + docs/spec/foo.md",
-  "paths": ["nodes/node-template/app/src/foo.ts", "docs/spec/poly-redeem.md"],
+  "name": "ride-along: legacy node files + docs/spec/foo.md",
+  "paths": ["nodes/legacy-alpha/app/src/foo.ts", "docs/spec/legacy-node.md"],
   "expected": {
-    "domains": ["node-template"],
+    "domains": ["legacy-alpha"],
     "pass": true,
     "rideAlongApplied": true
   }

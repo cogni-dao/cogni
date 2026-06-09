@@ -1,11 +1,11 @@
 {
-  "name": "ride-along: poly node files + poly manager skill status card",
+  "name": "ride-along: legacy node files + legacy maintenance skill status card",
   "paths": [
-    "nodes/node-template/app/src/foo.ts",
-    ".claude/skills/poly-dev-manager/SKILL.md"
+    "nodes/legacy-alpha/app/src/foo.ts",
+    ".claude/skills/legacy-node-maintainer/SKILL.md"
   ],
   "expected": {
-    "domains": ["node-template"],
+    "domains": ["legacy-alpha"],
     "pass": true,
     "rideAlongApplied": true
   }

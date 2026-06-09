@@ -2,9 +2,9 @@
   "name": "devtools: operator fast-check tooling + legacy root app Vitest configs",
   "paths": [
     "docs/guides/new-worktree-setup.md",
-    "nodes/canary/app/vitest.config.mts",
+    "nodes/legacy-alpha/app/vitest.config.mts",
     "nodes/operator/app/vitest.config.mts",
-    "nodes/resy/app/vitest.config.mts",
+    "nodes/legacy-beta/app/vitest.config.mts",
     "packages/langgraph-graphs/vitest.config.ts",
     "scripts/AGENTS.md",
     "scripts/check-fast.sh",

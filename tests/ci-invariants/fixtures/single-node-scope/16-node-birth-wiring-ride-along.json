@@ -1,14 +1,14 @@
 {
   "name": "node-birth: node app + its OWN catalog/overlay/AppSet ride along (bug.5086)",
   "paths": [
-    "nodes/canary/app/src/app/(public)/page.tsx",
-    "infra/catalog/canary.yaml",
-    "infra/k8s/overlays/candidate-a/canary/kustomization.yaml",
-    "infra/k8s/overlays/preview/canary/kustomization.yaml",
-    "infra/k8s/argocd/candidate-a-canary-applicationset.yaml"
+    "nodes/legacy-alpha/app/src/app/(public)/page.tsx",
+    "infra/catalog/legacy-alpha.yaml",
+    "infra/k8s/overlays/candidate-a/legacy-alpha/kustomization.yaml",
+    "infra/k8s/overlays/preview/legacy-alpha/kustomization.yaml",
+    "infra/k8s/argocd/candidate-a-legacy-alpha-applicationset.yaml"
   ],
   "expected": {
-    "domains": ["canary"],
+    "domains": ["legacy-alpha"],
     "pass": true,
     "rideAlongApplied": true
   }

@@ -6,7 +6,7 @@
  * Purpose: Asserts the reference single-node-scope classifier matches every fixture's expected outcome.
  * Scope: Pure-data fixture replay backed by a reference classifier. Does NOT invoke the GitHub Action or shell out to git.
  * Invariants: POLICY_PARITY_WITH_0382, RIDE_ALONG, SINGLE_DOMAIN_HARD_FAIL.
- * Side-effects: IO (reads fixture JSON + nodes/ listing)
+ * Side-effects: IO (reads fixture JSON)
  * Notes: Fixtures are the shared source of truth. When task.0382 imports
  *        `classify` (or implements its equivalent), it should run against
  *        the same fixtures and the it.todo cases below should be filled in.
@@ -21,10 +21,9 @@ import { buildTestRepoSpec } from "@cogni/repo-spec/testing";
 import { describe, expect, it } from "vitest";
 import { type ClassifyResult, classify } from "./classify";
 
-const REPO_ROOT = path.resolve(__dirname, "../..");
 const FIXTURES_DIR = path.join(__dirname, "fixtures/single-node-scope");
-const NODES_DIR = path.join(REPO_ROOT, "nodes");
 const OPERATOR_NODE = "operator";
+const LEGACY_FIXTURE_NODES = ["legacy-alpha", "legacy-beta"] as const;
 
 interface Fixture {
   name: string;
@@ -44,43 +43,34 @@ function loadFixtures(): Array<{ file: string; data: Fixture }> {
     }));
 }
 
-function nonOperatorNodes(): string[] {
-  return readdirSync(NODES_DIR, { withFileTypes: true })
-    .filter((d) => d.isDirectory() && d.name !== OPERATOR_NODE)
-    .map((d) => d.name)
-    .sort();
-}
-
 /** Deterministic test UUID per registry slot (format mirrors `TEST_NODE_IDS`). */
 function testNodeId(index: number): string {
   return `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`;
 }
 
 /**
- * Registry DERIVED from the on-disk `nodes/` listing — including operator — so
- * the resolver side sees the same node set as the classifier side's
- * `nonOperatorNodes()`. Deriving (vs hardcoding) means a node birth — canary,
- * and every future node — tracks automatically without the two sides drifting.
+ * Synthetic legacy registry for policy fixtures.
+ *
+ * The structural meta test covers today's real `nodes/*` filters. These
+ * fixtures intentionally avoid real node names because in-tree node source
+ * directories are transitional; the policy under test is "legacy in-tree node
+ * domain" behavior, not canary/resy as architecture.
  */
-function onDiskRegistry(): Array<{
+function fixtureRegistry(): Array<{
   node_id: string;
   node_name: string;
   path: string;
 }> {
-  return readdirSync(NODES_DIR, { withFileTypes: true })
-    .filter((d) => d.isDirectory())
-    .map((d) => d.name)
-    .sort()
-    .map((name, i) => ({
-      node_id: testNodeId(i),
-      node_name: name,
-      path: `nodes/${name}`,
-    }));
+  return [OPERATOR_NODE, ...LEGACY_FIXTURE_NODES].map((name, i) => ({
+    node_id: testNodeId(i),
+    node_name: name,
+    path: `nodes/${name}`,
+  }));
 }
 
 describe("single-node-scope · CI gate side (reference classifier)", () => {
   const fixtures = loadFixtures();
-  const nodes = nonOperatorNodes();
+  const nodes = [...LEGACY_FIXTURE_NODES];
 
   expect(fixtures.length, "at least one fixture must exist").toBeGreaterThan(0);
 
@@ -94,8 +84,9 @@ describe("single-node-scope · CI gate side (reference classifier)", () => {
 
 /**
  * Translate `OwningNode` → `ClassifyResult`. The bash gate speaks domain *names*
- * (`"poly"`, `"operator"`); the resolver speaks `nodeId` UUIDs. Domain name is the
- * second segment of the registry entry's `path` (`nodes/poly` → `"poly"`).
+ * (`"legacy-alpha"`, `"operator"`); the resolver speaks `nodeId` UUIDs.
+ * Domain name is the second segment of the registry entry's `path`
+ * (`nodes/legacy-alpha` → `"legacy-alpha"`).
  */
 function toClassifyResult(o: OwningNode): ClassifyResult {
   if (o.kind === "miss") {
@@ -116,10 +107,7 @@ function toClassifyResult(o: OwningNode): ClassifyResult {
 describe("single-node-scope · runtime resolver side (task.0382)", () => {
   const fixtures = loadFixtures();
 
-  // Registry derived from the on-disk nodes/ listing (operator included, as
-  // extractOwningNode requires). Tracks node births without drifting from the
-  // classifier side.
-  const spec = buildTestRepoSpec({ nodes: onDiskRegistry() });
+  const spec = buildTestRepoSpec({ nodes: fixtureRegistry() });
 
   for (const { file, data } of fixtures) {
     it(`${file}: ${data.name}`, () => {

@@ -4,37 +4,26 @@
 /**
  * Module: `@shared/node-app-scaffold/gens/repo-spec`
  * Purpose: Pin BORN_REVIEWABLE — the minted `.cogni/repo-spec.yaml` must carry the default review
- *   gates, and every ai-rule it references must exist as a canonical rule file in
- *   `nodes/node-template/.cogni/rules/` (lockstep with the files inherited by the template fork).
- * Scope: Pure unit test over `renderRepoSpec` output + the canonical rules dir on disk; does not
- *   exercise the mint network path.
+ *   gates, and the ai-rule filenames must match the external node-template's inherited rules.
+ * Scope: Pure unit test over `renderRepoSpec` output; does not exercise the mint network path.
  * Invariants: minted spec has gates, has no `nodes:` registry (single-node-fork signal), and its
- *   ai-rule `rule_file`s all resolve to shipped rule files.
- * Side-effects: IO (reads the canonical rules dir).
- * Links: src/shared/node-app-scaffold/gens/repo-spec, nodes/node-template/.cogni/rules/
+ *   ai-rule `rule_file`s match the template contract.
+ * Side-effects: none.
+ * Links: src/shared/node-app-scaffold/gens/repo-spec, infra/catalog/node-template.yaml
  * @public
  */
 
-import { existsSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { parseRepoSpec } from "@cogni/repo-spec";
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 
 import { renderRepoSpec } from "./repo-spec";
 
-/** Walk up from this file to the repo root (the dir holding pnpm-workspace.yaml). */
-function repoRoot(): string {
-  let dir = dirname(fileURLToPath(import.meta.url));
-  for (let i = 0; i < 12; i++) {
-    if (existsSync(join(dir, "pnpm-workspace.yaml"))) return dir;
-    dir = dirname(dir);
-  }
-  throw new Error("repo root (pnpm-workspace.yaml) not found");
-}
-
-const RULES_DIR = join(repoRoot(), "nodes/node-template/.cogni/rules");
+const TEMPLATE_RULE_FILES = [
+  "pr-syntropy-coherence.yaml",
+  "patterns-and-docs.yaml",
+  "repo-goal-alignment.yaml",
+];
 
 const rendered = renderRepoSpec({
   slug: "my-node",
@@ -135,16 +124,11 @@ describe("renderRepoSpec — BORN_REVIEWABLE", () => {
     expect(spec.nodes).toBeUndefined();
   });
 
-  it("references only ai-rule files that exist as canonical node-template rules", () => {
+  it("references the external node-template ai-rule set", () => {
     const ruleFiles = gates
       .filter((g) => g.type === "ai-rule")
       .map((g) => g.with?.rule_file)
       .filter((rf): rf is string => typeof rf === "string");
-    expect(ruleFiles.length).toBeGreaterThan(0);
-    for (const rf of ruleFiles) {
-      expect(existsSync(join(RULES_DIR, rf)), `missing rule file: ${rf}`).toBe(
-        true
-      );
-    }
+    expect(ruleFiles).toEqual(TEMPLATE_RULE_FILES);
   });
 });

@@ -1,12 +1,12 @@
 {
   "name": "node-birth: node app + catalog-regen Caddyfile.tmpl rides along (bug.5086 — gen:caddyfile parity)",
   "paths": [
-    "nodes/canary/app/src/app/(public)/page.tsx",
-    "infra/catalog/canary.yaml",
+    "nodes/legacy-alpha/app/src/app/(public)/page.tsx",
+    "infra/catalog/legacy-alpha.yaml",
     "infra/compose/edge/configs/Caddyfile.tmpl"
   ],
   "expected": {
-    "domains": ["canary"],
+    "domains": ["legacy-alpha"],
     "pass": true,
     "rideAlongApplied": true
   }
