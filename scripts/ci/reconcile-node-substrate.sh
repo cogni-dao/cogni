@@ -4,11 +4,13 @@
 #
 # reconcile-node-substrate.sh — day-2 substrate readiness for one catalog node.
 #
-# This is the narrow lane for a node added after an environment already exists:
-# it preserves existing OpenBao values, generates only missing source:agent
-# per-node values, applies the node-domain ExternalSecret leaf, updates edge/DB
-# inventory, and runs idempotent DB provisioners. It does not promote images and
-# does not run the broad deploy-infra compose reconcile.
+# This is the narrow lane for a node added after an environment already exists.
+# secret-materialize (the sole OpenBao writer) runs BEFORE this and owns all
+# source:agent app keys + shared/human inheritance. This phase: seeds the node's
+# DB DSNs (transitional, until cogni/<env>/_shared lands — see
+# docs/guides/vm-secrets-repair.md), applies the node-domain ExternalSecret leaf,
+# updates edge/DB inventory, and runs idempotent DB provisioners. It does not
+# promote images and does not run the broad deploy-infra compose reconcile.
 
 set -euo pipefail
 
@@ -160,30 +162,19 @@ seed_kv() {
     bao kv ${op} '${path}' '${k}=-'" >/dev/null
 }
 
-preload_value() {
-  local k="$1" v=""
-  [[ -n "${!k:-}" ]] && return 0
-  for svc in "$TARGET_NODE" node-template operator _shared; do
-    v="$(bao_get_field "$svc" "$k")"
-    if [[ -n "$v" ]]; then
-      export "${k}=${v}"
-      return 0
-    fi
-  done
-  return 0
-}
-
-for k in "${NODE_BASELINE_KEYS[@]}"; do
-  case "$k" in
-    DATABASE_URL|DATABASE_SERVICE_URL|DOLTGRES_URL|APP_BASE_URL|NEXTAUTH_URL)
-      continue
-      ;;
-  esac
-  preload_value "$k"
+# Transitional DSN seed. secret-materialize now owns all source:agent app keys
+# and shared/human inheritance; the former double-write of those keys here is
+# removed (along with the blind preload scan). Reconcile keeps ONLY the DB DSN
+# write until cogni/<env>/_shared exists (docs/guides/vm-secrets-repair.md),
+# after which DSN custody moves into materialize and this phase becomes fully
+# read-only. DSNs are built from the VM .env DB components read above — the last
+# remaining .env dependency, retired by the env-repair lane.
+log "seeding node DB DSNs for ${DEPLOY_ENVIRONMENT}/${TARGET_NODE} (transitional; materialize owns app keys)"
+for k in DATABASE_URL DATABASE_SERVICE_URL DOLTGRES_URL; do
+  v="$(_resolve_node_value "$TARGET_NODE" "$k")"
+  [[ -z "$v" ]] && continue
+  seed_kv "$TARGET_NODE" "$k" "$v"
 done
-
-log "seeding missing OpenBao values for ${DEPLOY_ENVIRONMENT}/${TARGET_NODE}"
-seed_node_app_secrets "$TARGET_NODE"
 
 external_secret_file="${APP_SOURCE_DIR}/nodes/${TARGET_NODE}/k8s/external-secrets/${DEPLOY_ENVIRONMENT}/external-secret.yaml"
 if [[ -f "$external_secret_file" ]]; then

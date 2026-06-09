@@ -194,7 +194,12 @@ env \
   bash scripts/ci/reconcile-node-substrate.sh candidate-a canary > "$TMPROOT/out.txt"
 
 grep -q "substrate ready inputs reconciled for canary" "$TMPROOT/out.txt"
-test -f "$BAO_ROOT/cogni/candidate-a/canary/AUTH_SECRET"
+# secret-materialize owns source:agent app keys now; reconcile must NOT write them
+# (the double-write removal). Reconcile still seeds the DB DSNs transitionally.
+if [ -f "$BAO_ROOT/cogni/candidate-a/canary/AUTH_SECRET" ]; then
+  echo "reconcile should no longer seed source:agent app keys (AUTH_SECRET) — that is secret-materialize's job" >&2
+  exit 1
+fi
 test -f "$BAO_ROOT/cogni/candidate-a/canary/DATABASE_URL"
 test -f "$BAO_ROOT/cogni/candidate-a/canary/DOLTGRES_URL"
 grep -q '^CANARY_DOMAIN=canary-test.cognidao.org$' "$REMOTE_ROOT/opt/cogni-template-edge/.env"
