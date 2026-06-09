@@ -164,6 +164,8 @@ describe("buildNodeLaunchPack", () => {
       "agent registration, human node-developer approval"
     );
     expect(pack.prompt).not.toContain("browser-session-flight-auth.md");
+    expect(pack.prompt).not.toContain("node-app-secrets");
+    expect(pack.prompt).not.toContain("OpenBao");
     expect(pack.prompt).toContain("operator API");
     expect(pack.prompt).toContain("child image tag exists");
     expect(pack.prompt).toContain("parent pin agrees");

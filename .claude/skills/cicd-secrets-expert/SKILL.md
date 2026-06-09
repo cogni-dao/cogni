@@ -21,23 +21,50 @@ From [`docs/spec/secrets-management.md`](../../../docs/spec/secrets-management.m
 | 2   | ONE ExternalSecret per (service, env) with `dataFrom: extract`; target `<service>-env-secrets` | Adding keys = NO YAML edit                                    |
 | 3   | Pod `envFrom: secretRef: name: <service>-env-secrets` once per container                       | Pod spec set ONCE at service creation                         |
 | 4   | NO secret value in git — ever                                                                  | Base64-in-YAML = immediate rotate + audit                     |
-| 5   | OpenBao is SSOT; no parallel store (except Compose-infra `.env`, see routing)                  | Don't seed values in two places                               |
+| 5   | OpenBao is runtime SSOT; VM `.env` files are rendered views, not authorities                   | Don't seed runtime values in two places                       |
 | 6   | RBAC via path policy (`eso-reader`, `<env>-writer`) bound to k8s SAs                           | Phase 5b.3 + 5b.4 of `provision-env-vm.sh`                    |
 | 8   | Every access audited via OpenBao audit device → Loki                                           | Pipeline not built yet — bug.0445 follow-up                   |
 | 9   | Three entry points only: CLI / workflow_dispatch / operator-MCP. Never raw `bao kv put`        | See decision tree below                                       |
 | 13  | NO_OPERATOR_ROOT_TOKEN_ON_LAPTOP — bootstrap window only; day-2 uses writer-role JWT           | `.local/<env>-openbao-root-token` is never read post-Phase-5b |
+| 15  | Pod-facing DB role material is OpenBao-owned, even when Compose renders a copy                 | No DB password authority in GitHub env or VM `.env`           |
+| 16  | New-node secret materialization precedes substrate reconcile/assert                            | Generate safe agent values before first flight                |
 
-## Decision tree — where does the value live?
+## Authority model — classify by three axes
 
-| Tier | Consumed by                                                              | Path                                                           | Source of truth        |
-| ---- | ------------------------------------------------------------------------ | -------------------------------------------------------------- | ---------------------- |
-| A1   | k8s pod baseline (anything under `nodes/<n>/app/`, every fork)           | OpenBao `cogni/<env>/<service>/*` → ESO → k8s Secret → envFrom | OpenBao                |
-| A2   | k8s pod node-specific (downstream node like `poly`)                      | OpenBao `cogni/<env>/<node>/*` → ESO → k8s Secret → envFrom    | OpenBao                |
-| B    | Compose-infra service (postgres, litellm, temporal, redis, alloy, caddy) | GH Env Secret → `deploy-infra.sh` → `.env` on VM               | GH Environment Secrets |
-| D    | CI-only (workflow consumption, never runtime)                            | GH Env Secret → workflow `env:` block                          | GH Environment Secrets |
-| E    | Repo-level CI (cross-env, one value per repo)                            | GH Repo Secret                                                 | GH Repo Secrets        |
-| F    | Local dev only                                                           | `.env.local` (gitignored)                                      | Operator's laptop      |
-| G    | Derived from repo state at provision time (e.g. `nodes/*` listing)       | Computed by loader; written alongside other catalog values     | Auto-generated         |
+Do not use `tier` as the authority model. Every secret has:
+
+| Axis        | Values                                   | Question                       |
+| ----------- | ---------------------------------------- | ------------------------------ |
+| `origin`    | `agent` · `human` · `derived`            | Who can produce the bytes?     |
+| `custody`   | `openbao` · `github-env` · `repo-config` | Which system is authoritative? |
+| `consumers` | `pod` · `compose` · `ci` · `external`    | Where does the value get used? |
+
+Hard rule: if a value is consumed by a pod, provisions a pod-facing role, or
+must agree with a pod-facing value, custody is OpenBao. GitHub Environment
+Secrets may bootstrap access and carry CI-only credentials. VM `.env` files are
+rendered views for Compose, never authorities.
+
+Examples:
+
+- `POSTGRES_ROOT_PASSWORD`: Compose/bootstrap-only for now, because pods should
+  not consume it.
+- `APP_DB_PASSWORD`, `APP_DB_SERVICE_PASSWORD`,
+  `APP_DB_READONLY_PASSWORD`, `DOLTGRES_PASSWORD`,
+  `DOLTGRES_READER_PASSWORD`, `DOLTGRES_WRITER_PASSWORD`: OpenBao custody;
+  Compose renders copies to create roles.
+- Public URLs / owner slugs / feature modes: repo-config, not OpenBao.
+
+## Routing tree — where does the value render?
+
+| Tier | Consumed by                                                              | Render path                                                    | Custody                          |
+| ---- | ------------------------------------------------------------------------ | -------------------------------------------------------------- | -------------------------------- |
+| A1   | k8s pod baseline (anything under `nodes/<n>/app/`, every fork)           | OpenBao `cogni/<env>/<service>/*` → ESO → k8s Secret → envFrom | OpenBao                          |
+| A2   | k8s pod node-specific (downstream node like `poly`)                      | OpenBao `cogni/<env>/<node>/*` → ESO → k8s Secret → envFrom    | OpenBao                          |
+| B    | Compose-infra service (postgres, litellm, temporal, redis, alloy, caddy) | Rendered to VM `.env` or future Bao Agent                      | OpenBao unless CI/bootstrap-only |
+| D    | CI-only (workflow consumption, never runtime)                            | GH Env Secret → workflow `env:` block                          | GH Environment Secrets           |
+| E    | Repo-level CI (cross-env, one value per repo)                            | GH Repo Secret                                                 | GH Repo Secrets                  |
+| F    | Local dev only                                                           | `.env.local` (gitignored)                                      | Operator's laptop                |
+| G    | Derived from repo state at provision time (e.g. `nodes/*` listing)       | Computed by loader; written alongside other catalog values     | Auto-generated                   |
 
 Full tier definitions + invariants: [`docs/spec/secrets-classification.md`](../../../docs/spec/secrets-classification.md).
 Layer-cake framing (Identity → AuthN → AuthZ → Secrets → DAO → Operator): [`docs/spec/access-control-charter.md`](../../../docs/spec/access-control-charter.md).
@@ -64,8 +91,12 @@ checks agree.
 preflight for selected app rollouts. That gate may verify a Deployment-consumed
 k8s Secret exists and its matching ExternalSecret is Ready, but it must not seed
 OpenBao, patch GitHub secrets, run `deploy-infra.sh`, or repair Compose/env
-state. A missing secret is a substrate failure: use `pnpm secrets:set`, the
-env-provisioning lane, or the explicit infra flight that owns the mutation.
+state. A missing secret is a substrate failure. For a wizard-created ordinary
+node, there should be **zero per-node human secret values**. The environment
+must already have the substrate/runtime inputs classified in
+`docs/spec/secrets-classification.md#node-wizard-formation-contract`.
+If an environment-bank value is missing, repair that bank; do not pass values
+through candidate-flight inputs or store them in the wizard.
 
 The target shape matters. Today the implemented branch is `type=node`; a future
 `type=service` branch should assert the service's declared Secret /
@@ -74,13 +105,14 @@ or node-DB assumptions.
 
 ## Decision tree — how do I write / rotate the value?
 
-| Operation                                             | Right pattern                                                                                                      | Today's reality                                                                                                            |
-| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
-| Add new secret SHAPE (service X consumes key A)       | PR → `vault-config-operator` CRD → Argo reconciles                                                                 | Not built; tracked in `proj.agentic-fork-bootstrap` Walk                                                                   |
-| Rotate AUTO-GENERATED value (e.g., `AUTH_SECRET`)     | `rotate-secret.yml` workflow with env-protection; auto-generates value; **human approves event, never sees value** | Not built; do manual `openssl rand` + `pnpm secrets:set` per [`secrets-rotate.md`](../../../docs/guides/secrets-rotate.md) |
-| Rotate VENDOR-MINTED value (OpenAI key, Cherry token) | Operator-app UI (in `cogni` repo, not node-template)                                                               | Today: CLI on candidate-a; preview/prod TBD                                                                                |
-| Candidate-a experimentation                           | `pnpm secrets:set <env> <service> <KEY>` via port-forward + writer-role JWT                                        | Shipped — see [`secrets-add-new.md`](../../../docs/guides/secrets-add-new.md)                                              |
-| Dynamic DB credentials                                | OpenBao DB engine, no human in loop                                                                                | Future (Crawl row 3 of `proj.security-hardening`)                                                                          |
+| Operation                                             | Right pattern                                                                                                           | Today's reality                                                                                                            |
+| ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Add new secret SHAPE (service X consumes key A)       | PR → `vault-config-operator` CRD → Argo reconciles                                                                      | Not built; tracked in `proj.agentic-fork-bootstrap` Walk                                                                   |
+| Materialize a new wizard node's runtime secrets       | Generate/derive node-local values and inherit only explicit org/env grants; no per-node human values for ordinary nodes | PR #1582 v0 does this inside narrow substrate reconcile; standalone `secret-materialize` + shared-bank split is follow-up  |
+| Rotate AUTO-GENERATED value (e.g., `AUTH_SECRET`)     | `rotate-secret.yml` workflow with env-protection; auto-generates value; **human approves event, never sees value**      | Not built; do manual `openssl rand` + `pnpm secrets:set` per [`secrets-rotate.md`](../../../docs/guides/secrets-rotate.md) |
+| Rotate VENDOR-MINTED value (OpenAI key, Cherry token) | Operator-app UI (in `cogni` repo, not node-template)                                                                    | Today: CLI on candidate-a; preview/prod TBD                                                                                |
+| Candidate-a experimentation                           | `pnpm secrets:set <env> <service> <KEY>` via port-forward + writer-role JWT                                             | Shipped — see [`secrets-add-new.md`](../../../docs/guides/secrets-add-new.md)                                              |
+| Dynamic DB credentials                                | OpenBao DB engine, no human in loop                                                                                     | Future (Crawl row 3 of `proj.security-hardening`)                                                                          |
 
 The killer rule: **no human types a secret VALUE into a UI in production.** Auto-generated, vendor-minted via operator-app, or dynamic. Form-input is the anti-pattern.
 
@@ -90,14 +122,16 @@ Some secrets must **byte-equal a value held by an external system**, not merely 
 
 **The trap (live bug, preview 2026-06-03):** `GH_WEBHOOK_SECRET` was `source: agent` with **no `syncTo`**, generated `randHex 32` **every provision** → it could never match the App's webhook secret → **every webhook failed HMAC verification**, silently (a `level:40` warn `component:webhook-route msg:"webhook verification failed"`, no alert, no 5xx). The App just looks dead — no PR reviews, no node-wizard. `deploy-infra` re-applying the Secret was the **breaking** path, not the healing one — a generated value never equals an externally-held one **unless something pushes it there**. That push is what `syncTo` declares.
 
-**The classification has TWO orthogonal axes — don't conflate them.** `source:` = origin; `syncTo:` = external mirror.
+**`syncTo` is an external mirror, not custody.** `origin` says who can produce
+the bytes, `custody` says where the value is authoritative, and `syncTo` says
+whether a copy must also be pushed to an external system.
 
 | axis              | values                                                                                                                                              | answers                                                              |
 | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
 | `source:`         | `agent` (we generate, `generate:` required) · `human` (un-generatable; vendor-minted, human supplies once, e.g. `GH_REVIEW_APP_PRIVATE_KEY_BASE64`) | where the value **originates**                                       |
 | `syncTo:` _(opt)_ | `github-app-webhook` · _(unset)_                                                                                                                    | does it **also** live in an external system we must keep in lockstep |
 
-`GH_WEBHOOK_SECRET` is `source: agent` + `syncTo: github-app-webhook` — **we generate it** (origin is internal; calling it `source: external` lied about that), and it ALSO must byte-match the App. `bootstrap.sh::declare_or_gen` generates it; `deploy-infra` then pushes it (`scripts/secrets/sync-app-webhook-secret.sh`: App JWT → `PATCH /app/hook/config`):
+`GH_WEBHOOK_SECRET` is `source: agent` + `syncTo: github-app-webhook` — **we generate it** (origin is internal; calling it `source: external` lied about that), and it ALSO must byte-match the App. The materializer/provisioner generates it into OpenBao; the infra lane then pushes it (`scripts/secrets/sync-app-webhook-secret.sh`: App JWT → `PATCH /app/hook/config`):
 
 ```
 APPID + GH_REVIEW_APP_PRIVATE_KEY_BASE64 → RS256 JWT (iss=APPID, exp≤10m)
@@ -112,7 +146,12 @@ No-human-secret done right: agent generates, agent pushes, **zero human, self-he
 
 ## Anti-patterns — instant reject
 
-- Human typing a secret VALUE into a UI (GitHub form, web form, shell prompt). See killer rule.
+- Human typing a secret VALUE into a production UI or GitHub workflow input. See killer rule.
+- Treating `tier: B`, GitHub Environment Secrets, or VM `.env` as authority for
+  a runtime secret. If it feeds a pod or a pod-facing role, OpenBao owns it.
+- Candidate-flight accepting secret values as inputs. Flight may invoke
+  materialization for safe generated/derived node values and fail if the
+  environment's required DAO/org bank is missing; it must not carry values.
 - A **dual-plane** secret (must byte-match an external system — GitHub App webhook secret, OAuth client secret) declared with **no `syncTo:`** — it silently fails verification forever and `deploy-infra` re-breaks it every run. Add `syncTo:` (keep `source: agent` if we generate the value). See "Dual-plane secrets" above.
 - Generic catch-all workflow (`secrets-manage.yml`-shaped). Per-operation only.
 - `ssh root@vm kubectl ...` or `ssh root@vm bao ...`. Use local kubectl + port-forward + writer-role JWT.

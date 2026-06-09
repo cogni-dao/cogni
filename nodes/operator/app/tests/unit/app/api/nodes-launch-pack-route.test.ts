@@ -101,6 +101,7 @@ describe("GET /api/v1/nodes/[id]/launch-pack", () => {
     expect(body.prompt).toContain(
       ".claude/skills/node-wizard-scorecard/SKILL.md"
     );
+    expect(body.prompt).not.toContain("node-app-secrets");
     expect(body.prompt).toContain("blocked scorecard row");
   });
 

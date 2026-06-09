@@ -100,6 +100,7 @@ namespace="cogni-${env_name}"
 app_name="${env_name}-${node}"
 appset_name="cogni-${env_name}-${node}"
 workload_name="${node}-node-app"
+expected_secret_name="${node}-env-secrets"
 edge_env="${remote_root}/opt/cogni-template-edge/.env"
 caddyfile="${remote_root}/opt/cogni-template-edge/configs/Caddyfile.tmpl"
 runtime_env="${remote_root}/opt/cogni-template-runtime/.env"
@@ -179,10 +180,16 @@ if [ -z "$consumed_secret_names" ]; then
 else
   while IFS= read -r consumed_secret; do
     [ -n "$consumed_secret" ] || continue
+    if [ "$consumed_secret" = "${node}-node-app-secrets" ]; then
+      mark_fail "Deployment consumes legacy plain Secret ${consumed_secret}; expected ${expected_secret_name}"
+    elif [ "$consumed_secret" != "$expected_secret_name" ]; then
+      mark_fail "Deployment consumes unexpected Secret ${consumed_secret}; expected ${expected_secret_name}"
+    fi
+
     if kubectl -n "$namespace" get secret "$consumed_secret" >/dev/null 2>&1; then
       mark_ok "Deployment-consumed Secret exists: $consumed_secret"
     else
-      mark_fail "Deployment-consumed Secret missing: $consumed_secret"
+      mark_fail "ESO-synced Secret missing: $consumed_secret"
     fi
 
     if kubectl -n "$namespace" get externalsecret "$consumed_secret" >/dev/null 2>&1; then
@@ -192,8 +199,24 @@ else
       else
         mark_fail "Deployment-consumed ExternalSecret not Ready=True: $consumed_secret"
       fi
+    else
+      mark_fail "ExternalSecret missing for Deployment-consumed Secret: $consumed_secret"
     fi
   done <<< "$consumed_secret_names"
+fi
+
+# DSN keys must be materialized into the node Secret (reconcile seeds all three
+# today; secret-materialize owns them once per-node DB creds land). Fail loud if
+# the ESO-synced Secret lacks any DSN so a missing/empty-DSN node can never ship
+# green (DATABASE_SERVICE_URL → scheduler-worker, DOLTGRES_URL → knowledge).
+if kubectl -n "$namespace" get secret "$expected_secret_name" >/dev/null 2>&1; then
+  for dsn_key in DATABASE_URL DATABASE_SERVICE_URL DOLTGRES_URL; do
+    if [ -n "$(kubectl -n "$namespace" get secret "$expected_secret_name" -o jsonpath="{.data.${dsn_key}}" 2>/dev/null)" ]; then
+      mark_ok "node Secret carries DSN key: ${dsn_key}"
+    else
+      mark_fail "node Secret ${expected_secret_name} missing DSN key ${dsn_key}; materialize/reconcile did not write it"
+    fi
+  done
 fi
 
 if [ -f "$edge_env" ]; then
