@@ -93,7 +93,7 @@ datasources go per-node. Postgres roles are **cluster-global**, so per-node mean
 distinct names (`app_poly`, `app_operator`), not a per-DB `app_user`.
 
 **`FORCE ROW LEVEL SECURITY` is load-bearing here** and must not be optimized away:
-`app_<node>` *owns* its DB, and a table owner bypasses RLS **without** FORCE — so
+`app_<node>` _owns_ its DB, and a table owner bypasses RLS **without** FORCE — so
 FORCE is exactly what keeps the owning per-node role tenant-isolated. It lives in
 the schema migrations (role-agnostic), so the rename doesn't touch it; keep it on
 all user tables.
@@ -101,7 +101,7 @@ all user tables.
 ### Locked conventions (materialize mirrors these — #1585)
 
 - **Role names** — computed from the node (underscored, like `cogni_<node>`); only
-  the *password* is the OpenBao secret: `app_<node>` (owner, RLS-subject),
+  the _password_ is the OpenBao secret: `app_<node>` (owner, RLS-subject),
   `service_<node>` (`BYPASSRLS`), `app_readonly` (shared, env-level).
 - **Invocation** — per-node roles need per-node passwords, but `provision.sh` today
   provisions all nodes in one pass with one shared password (`COGNI_NODE_DBS` loop,
@@ -117,12 +117,12 @@ Order: **candidate-a** (reprovision-friendly, gate first) → **preview** →
    `APP_DB_SERVICE_PASSWORD` out of `reconcile-secrets.sh::COMPOSE_ONLY_KEYS` into
    the per-node `source: agent` set so `secret-materialize` generates them into
    `cogni/<env>/<node>` (preserve-existing). `APP_DB_USER` becomes the **derived**
-   `app_<node>` (node name, not a secret). *Additive: writes new OpenBao keys; the
-   shared `app_user` DSN is still live.*
+   `app_<node>` (node name, not a secret). _Additive: writes new OpenBao keys; the
+   shared `app_user` DSN is still live._
 2. **Create + reconcile per-node roles** — `provision.sh` creates `app_<node>` /
    `service_<node>` if absent, then **reconciles the password to the OpenBao value
    every run** (idempotent `ALTER ROLE … PASSWORD <openbao value>`) — **not**
-   set-once. The bug.5002 lesson is *single source = OpenBao*, not *never `ALTER`*:
+   set-once. The bug.5002 lesson is _single source = OpenBao_, not _never `ALTER`_:
    `ALTER`ing to the value ESO syncs to the pod cannot diverge, and it's what makes
    rotation work (set-once would `28P01` on the next rotation). Source must be the
    OpenBao read, **never** a rendered `.env` (that is the bug.5002 anti-fix). It
@@ -151,6 +151,7 @@ Order: **candidate-a** (reprovision-friendly, gate first) → **preview** →
      cluster-level `DROP ROLE app_user`/`app_service`.
 
    Then delete the `APP_DB_*_PASSWORD` GitHub Environment secrets (Invariant 5).
+
 6. **Falsifying gate** (below).
 
 ### Seam with the materialize redesign (coordinate before parallel work)
@@ -160,11 +161,11 @@ off the per-key SSH loop to an in-cluster read-once-diff-write **Job**. DSN seed
 must land in that Job form, **never** the old per-key SSH loop (the anti-pattern
 being removed). The two halves agree on this contract:
 
-| Owner | Does | Where |
-| --- | --- | --- |
+| Owner                                                        | Does                                                                                                                                                        | Where                |
+| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- |
 | materialize (Job — #1579 hosts the form, I specify the keys) | generate per-node `APP_DB_PASSWORD` / `APP_DB_SERVICE_PASSWORD` (`source: agent`); compose + write `DATABASE_URL` / `DATABASE_SERVICE_URL` / `DOLTGRES_URL` | `cogni/<env>/<node>` |
-| `provision.sh` (me) | `CREATE ROLE app_<node>` / `service_<node>` from those passwords (alongside `app_user` until cutover); per-DB grants/RLS | Postgres |
-| reconcile (me) | `<env>-db-reader` reads the per-node passwords, passes them to db-provision; applies the ESO leaf; **zero OpenBao writes, no `<env>-writer`** | — |
+| `provision.sh` (me)                                          | `CREATE ROLE app_<node>` / `service_<node>` from those passwords (alongside `app_user` until cutover); per-DB grants/RLS                                    | Postgres             |
+| reconcile (me)                                               | `<env>-db-reader` reads the per-node passwords, passes them to db-provision; applies the ESO leaf; **zero OpenBao writes, no `<env>-writer`**               | —                    |
 
 Shared conventions: role names `app_<node>` / `service_<node>` (node underscored,
 matching `cogni_<node>`) — materialize's DSN username and `provision.sh`'s role name
@@ -198,10 +199,10 @@ absent from `.env`; Loki shows the `<env>-db-reader` subject reading
 
 ## Per-env notes
 
-| Env           | Posture                                                                                                                            |
+| Env           | Posture                                                                                                                           |
 | ------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `candidate-a` | Throwaway. Easiest path is a **reprovision** with the per-node-role `provision.sh`, then run the gate. No live users to protect.   |
-| `preview`     | Semi-live. In-place migration (Steps 1–5), per node, then the gate.                                                                |
+| `candidate-a` | Throwaway. Easiest path is a **reprovision** with the per-node-role `provision.sh`, then run the gate. No live users to protect.  |
+| `preview`     | Semi-live. In-place migration (Steps 1–5), per node, then the gate.                                                               |
 | `production`  | Live. In-place migration in a maintenance-aware window; have rollback ready (retire the shared role only after every node green). |
 
 ## Endgame — declarative role/DB management (roadmap, not this PR)

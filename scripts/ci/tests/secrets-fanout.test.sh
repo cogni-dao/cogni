@@ -180,14 +180,20 @@ for k in APP_DB_PASSWORD APP_DB_SERVICE_PASSWORD COGNI_NODE_ENDPOINTS; do
   assert "$r" "compose-only $k is NOT pod-derived"
 done
 
-# 10d. No regression vs today's hand-list (minus composed DSNs the catalog cannot
-#      value). After the swap, NODE_BASELINE_KEYS == DERIVED ∪ DSNs by construction.
+# 10d. No regression vs today's hand-list (minus the composed DSNs the catalog
+#      cannot value, and minus their per-node password INPUTS — APP_DB_PASSWORD /
+#      APP_DB_SERVICE_PASSWORD are materialized to the node path for the DSN
+#      composition + db-provision, but are compose-consumed, not pod-derived; 10c
+#      asserts exactly that). After the swap, NODE_BASELINE pod keys == DERIVED.
 miss=0
 for k in "${NODE_BASELINE_KEYS[@]}"; do
-  case "$k" in DATABASE_URL | DATABASE_SERVICE_URL | DOLTGRES_URL) continue ;; esac
+  case "$k" in
+    DATABASE_URL | DATABASE_SERVICE_URL | DOLTGRES_URL) continue ;;
+    APP_DB_PASSWORD | APP_DB_SERVICE_PASSWORD) continue ;;
+  esac
   in_derived "$k" || { printf '  regression: baseline %s not derived\n' "$k"; miss=1; }
 done
-assert "$miss" "derived ⊇ current NODE_BASELINE_KEYS (minus composed DSNs)"
+assert "$miss" "derived ⊇ current NODE_BASELINE_KEYS (minus composed DSNs + their pw inputs)"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]

@@ -165,6 +165,12 @@ seed_kv() {
   [[ -z "$v" ]] && return 0
   [[ -f "${CACHE_DIR}/${TARGET_NODE}/${k}" ]] && return 0
   printf '%s' "$v" > "${BATCH_DIR}/${k}"
+  # Reflect the just-written value in the cache so intra-run compositions resolve
+  # within the same pass — e.g. DATABASE_URL (composed later in the loop) reads the
+  # APP_DB_PASSWORD generated a few keys earlier via bao_get_field. flush_batch still
+  # does the single OpenBao write; this only affects in-run reads.
+  mkdir -p "${CACHE_DIR}/${TARGET_NODE}"
+  printf '%s' "$v" > "${CACHE_DIR}/${TARGET_NODE}/${k}"
 }
 
 # One write for all missing keys. put when the node path is new, patch (merge —
@@ -194,10 +200,13 @@ key_is_agent_generated() {
 }
 
 # Node-owned secrets only (node-baas-architecture.md: each node owns its own DB
-# + secrets). DSNs are deferred to reconcile until per-node DB creds land at
-# cogni/<env>/<node> (vm-secrets-repair.md, #1584); _shared persists for other
-# shared values until catalog inheritFrom.
-DSN_DEFER_KEYS=" DATABASE_URL DATABASE_SERVICE_URL DOLTGRES_URL "
+# + secrets). DATABASE_URL/DATABASE_SERVICE_URL are now composed here from the
+# per-node app_<node>/service_<node> password (generated above, source:agent at
+# cogni/<env>/<node>) — the bug.5002 sole-source cutover. DOLTGRES_URL stays
+# deferred: it embeds the env Doltgres superuser password, which this runner cannot
+# read (decision B); reconcile composes it until the source:derived follow-up moves
+# DOLTGRES_PASSWORD into OpenBao. _shared persists until catalog inheritFrom.
+DSN_DEFER_KEYS=" DOLTGRES_URL "
 
 # Transitional shared/human inheritance — the blind ancestor scan the north star
 # replaces with explicit catalog `inheritFrom` (catalog-custody lane). Now serves
