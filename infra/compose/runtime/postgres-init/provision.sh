@@ -57,6 +57,10 @@ if [ -z "$APP_SERVICE_PASS" ]; then
   echo "❌ ERROR: APP_DB_SERVICE_PASSWORD is required (per-node service role password from OpenBao)"
   exit 1
 fi
+# DRIFT GUARD (bug.5031): this readonly-password derivation —
+# sha256('postgres-readonly:' + POSTGRES_ROOT_PASSWORD)[:32] — is duplicated in
+# scripts/setup/provision-grafana-postgres-datasources.sh (the Grafana datasource
+# consumer). The two MUST stay byte-identical; if you change one, change both.
 if [ -z "$APP_READONLY_PASS" ]; then
   if command -v sha256sum >/dev/null 2>&1; then
     APP_READONLY_PASS=$(printf 'postgres-readonly:%s' "$PG_PASS" | sha256sum | cut -c1-32)
@@ -164,6 +168,23 @@ ALTER ROLE "$APP_READONLY_USER" SET default_transaction_read_only = on;
 ALTER ROLE "$APP_READONLY_USER" SET statement_timeout = '30s';
 SQL
 
+# migrate_owned <db> <from_role> <to_role>
+#   Cutover for an ALREADY-provisioned DB: transfer objects owned by a legacy
+#   shared role to the per-node role, then drop the legacy role's remaining
+#   objects/privileges in this DB. Without it, existing tables stay owned by
+#   app_user → future ALTER-table migrations fail and DROP ROLE app_user can never
+#   complete (still owns objects). No-op on a fresh node (the shared role is
+#   absent). Idempotent: after the first run the legacy role owns nothing here, so
+#   REASSIGN/DROP OWNED are no-ops until the role is finally DROPped (runbook Step 5).
+migrate_owned() {
+  local db="$1" from="$2" to="$3" exists
+  exists=$(run_sql_as_root "postgres" "SELECT 1 FROM pg_roles WHERE rolname = '$from'" | grep -c 1 || true)
+  [ "$exists" -eq 0 ] && return 0
+  echo "   -> Reassigning objects owned by legacy '$from' → '$to' in '$db'..."
+  run_sql_as_root "$db" "REASSIGN OWNED BY \"$from\" TO \"$to\";"
+  run_sql_as_root "$db" "DROP OWNED BY \"$from\";"
+}
+
 # ── Per-Node Database Provisioning (DB_PER_NODE) ──────────────────────────
 # Each node gets its own database AND its own roles. The database IS the node
 # boundary; the per-node app_<node> role is the per-node credential boundary.
@@ -201,6 +222,12 @@ function provision_node_db() {
     run_sql_as_root "postgres" "ALTER DATABASE \"$db_name\" OWNER TO \"$app_role\";"
     run_sql_as_root "postgres" "GRANT CONNECT, CREATE, TEMP ON DATABASE \"$db_name\" TO \"$app_role\";"
   fi
+
+  # Cutover an already-provisioned DB: existing tables/schema are owned by the
+  # legacy shared roles; move them to the per-node roles BEFORE re-keying grants so
+  # the per-node role is the true owner (migrations + the eventual DROP ROLE work).
+  migrate_owned "$db_name" "app_user" "$app_role"
+  migrate_owned "$db_name" "app_service" "$svc_role"
 
   # App role hardening (owner; tenant-isolated under FORCE RLS from migrations).
   echo "   -> Applying grants on '$db_name'..."
