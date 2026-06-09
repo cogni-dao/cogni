@@ -37,27 +37,24 @@ fi
 # OpenFGA database (shared, root-owned — single RBAC store server)
 OPENFGA_DB="${OPENFGA_DB_NAME:-}"
 
-# App User Credentials (required, no defaults)
-APP_USER="${APP_DB_USER:-}"
+# Per-node app credentials. The role NAMES are COMPUTED from the node
+# (app_<node> / service_<node>); only the PASSWORDS are per-node OpenBao secrets,
+# passed by the caller (reconcile-substrate reads cogni/<env>/<node> via the
+# <env>-db-reader token). Roles are reconciled to these values every run —
+# single source is OpenBao (Invariant 15); see provision_app_role below.
 APP_PASS="${APP_DB_PASSWORD:-}"
-# Service role: explicit name + separate password (never present in web runtime env)
-APP_SERVICE_USER="${APP_DB_SERVICE_USER:-}"
 APP_SERVICE_PASS="${APP_DB_SERVICE_PASSWORD:-}"
-# Read-only role for Grafana/agent debugging. Defaults keep existing envs working;
-# operators may override both values when rotating the Postgres root secret.
+# Shared read-only role (env-level, NOT per-node): the Grafana datasource consumer.
+# Superuser-derived password; created once outside the per-node loop.
 APP_READONLY_USER="${APP_DB_READONLY_USER:-app_readonly}"
 APP_READONLY_PASS="${APP_DB_READONLY_PASSWORD:-}"
 
-if [ -z "$APP_USER" ] || [ -z "$APP_PASS" ]; then
-  echo "❌ ERROR: APP_DB_USER and APP_DB_PASSWORD are required"
-  exit 1
-fi
-if [ -z "$APP_SERVICE_USER" ]; then
-  echo "❌ ERROR: APP_DB_SERVICE_USER is required (explicit service role name)"
+if [ -z "$APP_PASS" ]; then
+  echo "❌ ERROR: APP_DB_PASSWORD is required (per-node app role password from OpenBao)"
   exit 1
 fi
 if [ -z "$APP_SERVICE_PASS" ]; then
-  echo "❌ ERROR: APP_DB_SERVICE_PASSWORD is required (service role credential, separate from APP_DB_PASSWORD)"
+  echo "❌ ERROR: APP_DB_SERVICE_PASSWORD is required (per-node service role password from OpenBao)"
   exit 1
 fi
 if [ -z "$APP_READONLY_PASS" ]; then
@@ -71,15 +68,9 @@ if [ -z "$APP_READONLY_PASS" ]; then
   fi
 fi
 
-# Validate identifiers (strict allowlist: alphanumeric + underscore only)
-if ! [[ "$APP_USER" =~ ^[a-zA-Z0-9_]+$ ]]; then
-  echo "❌ ERROR: APP_DB_USER contains invalid characters (allowed: a-zA-Z0-9_)"
-  exit 1
-fi
-if ! [[ "$APP_SERVICE_USER" =~ ^[a-zA-Z0-9_]+$ ]]; then
-  echo "❌ ERROR: APP_DB_SERVICE_USER contains invalid characters (allowed: a-zA-Z0-9_)"
-  exit 1
-fi
+# Validate identifiers (strict allowlist: alphanumeric + underscore only).
+# Per-node app_<node> / service_<node> names are computed + validated from the
+# (already validated) node DB name inside provision_node_db.
 if ! [[ "$APP_READONLY_USER" =~ ^[a-zA-Z0-9_]+$ ]]; then
   echo "❌ ERROR: APP_DB_READONLY_USER contains invalid characters (allowed: a-zA-Z0-9_)"
   exit 1
@@ -131,66 +122,51 @@ echo "✅ Postgres is up."
 
 echo "🔧 Starting Provisioning (Roles and Databases)..."
 
-# ── Role Creation (Idempotent, shared across all node DBs) ─────────────────
+# ── Roles ──────────────────────────────────────────────────────────────────
+# Per-node app_<node> / service_<node> roles are created in the node loop below
+# from this node's OpenBao passwords. The read-only role is shared (env-level) and
+# created once here.
 
-# App Role
-echo "🔧 Checking app role '$APP_USER'..."
-role_exists=$(run_sql_as_root "postgres" "SELECT 1 FROM pg_roles WHERE rolname = '$APP_USER'" | grep -c 1 || true)
-if [ "$role_exists" -eq 0 ]; then
-  echo "   -> Creating role '$APP_USER'..."
-  PGPASSWORD="$PG_PASS" psql -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d "postgres" -v ON_ERROR_STOP=1 \
-    -v app_pass="$APP_PASS" <<SQL
-CREATE ROLE "$APP_USER" WITH LOGIN PASSWORD :'app_pass';
+# provision_app_role <role> <password> [opts]
+#   Create the role if absent, then RECONCILE its password to <password> every run.
+#   <password> MUST be the OpenBao-read value (the same value ESO syncs to the pod):
+#   ALTERing to it can never diverge, and it is what makes rotation work. The
+#   bug.5002 anti-fix is reconciling to a rendered .env value — NEVER do that; the
+#   caller passes the OpenBao read here.
+provision_app_role() {
+  local role="$1" pass="$2" opts="${3:-}"
+  if ! [[ "$role" =~ ^[a-zA-Z0-9_]+$ ]]; then
+    echo "❌ ERROR: computed role name '$role' is invalid (allowed: a-zA-Z0-9_)"; exit 1
+  fi
+  local exists
+  exists=$(run_sql_as_root "postgres" "SELECT 1 FROM pg_roles WHERE rolname = '$role'" | grep -c 1 || true)
+  if [ "$exists" -eq 0 ]; then
+    echo "   -> Creating role '$role'${opts:+ ($opts)}..."
+    PGPASSWORD="$PG_PASS" psql -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d "postgres" -v ON_ERROR_STOP=1 \
+      -v pw="$pass" <<SQL
+CREATE ROLE "$role" WITH LOGIN PASSWORD :'pw' $opts;
 SQL
-else
-  # Do NOT re-ALTER the password here. DB creds are owned by OpenBao/ESO (the SSOT the
-  # app pod reads via its synced Secret). Forcing the role to deploy-infra's .env diverges
-  # from ESO → 28P01 → 502 (bug.5002). Set-once at create; never reconciled from .env.
-  echo "   -> Role '$APP_USER' already exists (password owned by ESO; not reconciled)."
-fi
-
-# Service Role (BYPASSRLS for scheduler, internal workers)
-echo "🔧 Checking service role '$APP_SERVICE_USER'..."
-service_role_exists=$(run_sql_as_root "postgres" "SELECT 1 FROM pg_roles WHERE rolname = '$APP_SERVICE_USER'" | grep -c 1 || true)
-if [ "$service_role_exists" -eq 0 ]; then
-  echo "   -> Creating service role '$APP_SERVICE_USER' with BYPASSRLS..."
-  PGPASSWORD="$PG_PASS" psql -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d "postgres" -v ON_ERROR_STOP=1 \
-    -v svc_pass="$APP_SERVICE_PASS" <<SQL
-CREATE ROLE "$APP_SERVICE_USER" WITH LOGIN PASSWORD :'svc_pass' BYPASSRLS;
+  else
+    echo "   -> Reconciling password for role '$role' to its OpenBao value..."
+    PGPASSWORD="$PG_PASS" psql -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d "postgres" -v ON_ERROR_STOP=1 \
+      -v pw="$pass" <<SQL
+ALTER ROLE "$role" WITH LOGIN PASSWORD :'pw';
 SQL
-else
-  # See app-role note: password owned by ESO; do not reconcile to .env (bug.5002).
-  echo "   -> Service role '$APP_SERVICE_USER' already exists (password owned by ESO; not reconciled)."
-fi
+  fi
+}
 
-# Read-only role (BYPASSRLS for cross-tenant support/debugging reads, no write grants)
-echo "🔧 Checking read-only role '$APP_READONLY_USER'..."
-readonly_role_exists=$(run_sql_as_root "postgres" "SELECT 1 FROM pg_roles WHERE rolname = '$APP_READONLY_USER'" | grep -c 1 || true)
-if [ "$readonly_role_exists" -eq 0 ]; then
-  echo "   -> Creating read-only role '$APP_READONLY_USER' with BYPASSRLS..."
-  PGPASSWORD="$PG_PASS" psql -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d "postgres" -v ON_ERROR_STOP=1 \
-    -v readonly_pass="$APP_READONLY_PASS" <<SQL
-CREATE ROLE "$APP_READONLY_USER" WITH LOGIN PASSWORD :'readonly_pass' BYPASSRLS;
+# Shared read-only role (env-level; superuser-derived password; BYPASSRLS support
+# reads for the Grafana datasource). Created once, outside the per-node loop.
+echo "🔧 Reconciling shared read-only role '$APP_READONLY_USER'..."
+provision_app_role "$APP_READONLY_USER" "$APP_READONLY_PASS" "BYPASSRLS"
+PGPASSWORD="$PG_PASS" psql -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d "postgres" -v ON_ERROR_STOP=1 <<SQL
 ALTER ROLE "$APP_READONLY_USER" SET default_transaction_read_only = on;
 ALTER ROLE "$APP_READONLY_USER" SET statement_timeout = '30s';
 SQL
-else
-  # Do NOT re-ALTER the password here (bug.5002 / Invariant 15). The read-only
-  # credential is owned out-of-band by its consumers — the Grafana Cloud Postgres
-  # datasource (provision-grafana-postgres-datasources.sh) derives the SAME value
-  # from POSTGRES_ROOT_PASSWORD. Re-ALTERing from this .env on every deploy makes
-  # db-provision a second writer; any divergence knocks the datasource off its
-  # value → 28P01 (the same class as bug.5031). Set-once at create; never
-  # reconciled from .env. Only re-apply the non-secret read-only SET settings.
-  echo "   -> Read-only role '$APP_READONLY_USER' already exists (password owned by consumers; not reconciled). Re-applying SET settings..."
-  PGPASSWORD="$PG_PASS" psql -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d "postgres" -v ON_ERROR_STOP=1 <<SQL
-ALTER ROLE "$APP_READONLY_USER" SET default_transaction_read_only = on;
-ALTER ROLE "$APP_READONLY_USER" SET statement_timeout = '30s';
-SQL
-fi
 
 # ── Per-Node Database Provisioning (DB_PER_NODE) ──────────────────────────
-# Each node gets its own database. The database IS the node boundary.
+# Each node gets its own database AND its own roles. The database IS the node
+# boundary; the per-node app_<node> role is the per-node credential boundary.
 
 function provision_node_db() {
   local db_name="$1"
@@ -201,55 +177,75 @@ function provision_node_db() {
     exit 1
   fi
 
-  echo "🔧 Provisioning node database '$db_name'..."
+  # Per-node role names are computed from the node (db cogni_<node> → app_<node>).
+  local node="${db_name#cogni_}"
+  local app_role="app_${node}"
+  local svc_role="service_${node}"
 
-  # Create database (idempotent)
+  echo "🔧 Provisioning node '$node' (db '$db_name', roles '$app_role'/'$svc_role')..."
+
+  # Per-node roles — passwords reconciled to this node's OpenBao values.
+  # app_role is RLS-SUBJECT (no BYPASSRLS): FORCE ROW LEVEL SECURITY on user
+  # tables keeps the owning role tenant-isolated. svc_role is BYPASSRLS (workers).
+  provision_app_role "$app_role" "$APP_PASS"
+  provision_app_role "$svc_role" "$APP_SERVICE_PASS" "BYPASSRLS"
+
+  # Create database (idempotent), owned by the per-node app role.
   local db_exists
   db_exists=$(run_sql_as_root "postgres" "SELECT 1 FROM pg_database WHERE datname = '$db_name'" | grep -c 1 || true)
   if [ "$db_exists" -eq 0 ]; then
-    echo "   -> Creating database '$db_name' with owner '$APP_USER'..."
-    run_sql_as_root "postgres" "CREATE DATABASE \"$db_name\" OWNER \"$APP_USER\";"
+    echo "   -> Creating database '$db_name' with owner '$app_role'..."
+    run_sql_as_root "postgres" "CREATE DATABASE \"$db_name\" OWNER \"$app_role\";"
   else
-    echo "   -> Database '$db_name' already exists. Ensuring ownership..."
-    run_sql_as_root "postgres" "ALTER DATABASE \"$db_name\" OWNER TO \"$APP_USER\";"
-    run_sql_as_root "postgres" "GRANT CONNECT, CREATE, TEMP ON DATABASE \"$db_name\" TO \"$APP_USER\";"
+    echo "   -> Database '$db_name' already exists. Ensuring ownership '$app_role'..."
+    run_sql_as_root "postgres" "ALTER DATABASE \"$db_name\" OWNER TO \"$app_role\";"
+    run_sql_as_root "postgres" "GRANT CONNECT, CREATE, TEMP ON DATABASE \"$db_name\" TO \"$app_role\";"
   fi
 
-  # RLS role hardening
-  echo "   -> Applying RLS role hardening on '$db_name'..."
-  run_sql_as_root "$db_name" "ALTER SCHEMA public OWNER TO \"$APP_USER\";"
-  run_sql_as_root "$db_name" "GRANT USAGE, CREATE ON SCHEMA public TO \"$APP_USER\";"
-  run_sql_as_root "$db_name" "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO \"$APP_USER\";"
-  run_sql_as_root "$db_name" "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO \"$APP_USER\";"
-  run_sql_as_root "$db_name" "ALTER DEFAULT PRIVILEGES FOR ROLE \"$APP_USER\" IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO \"$APP_USER\";"
-  run_sql_as_root "$db_name" "ALTER DEFAULT PRIVILEGES FOR ROLE \"$APP_USER\" IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO \"$APP_USER\";"
+  # App role hardening (owner; tenant-isolated under FORCE RLS from migrations).
+  echo "   -> Applying grants on '$db_name'..."
+  run_sql_as_root "$db_name" "ALTER SCHEMA public OWNER TO \"$app_role\";"
+  run_sql_as_root "$db_name" "GRANT USAGE, CREATE ON SCHEMA public TO \"$app_role\";"
+  run_sql_as_root "$db_name" "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO \"$app_role\";"
+  run_sql_as_root "$db_name" "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO \"$app_role\";"
+  run_sql_as_root "$db_name" "ALTER DEFAULT PRIVILEGES FOR ROLE \"$app_role\" IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO \"$app_role\";"
+  run_sql_as_root "$db_name" "ALTER DEFAULT PRIVILEGES FOR ROLE \"$app_role\" IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO \"$app_role\";"
 
   # Service role grants — includes CREATE for migrations (drizzle-kit needs to create schemas + tables)
-  run_sql_as_root "$db_name" "GRANT CONNECT, CREATE ON DATABASE \"$db_name\" TO \"$APP_SERVICE_USER\";"
-  run_sql_as_root "$db_name" "GRANT USAGE, CREATE ON SCHEMA public TO \"$APP_SERVICE_USER\";"
-  run_sql_as_root "$db_name" "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO \"$APP_SERVICE_USER\";"
-  run_sql_as_root "$db_name" "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO \"$APP_SERVICE_USER\";"
-  run_sql_as_root "$db_name" "ALTER DEFAULT PRIVILEGES FOR ROLE \"$APP_USER\" IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO \"$APP_SERVICE_USER\";"
-  run_sql_as_root "$db_name" "ALTER DEFAULT PRIVILEGES FOR ROLE \"$APP_USER\" IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO \"$APP_SERVICE_USER\";"
+  run_sql_as_root "$db_name" "GRANT CONNECT, CREATE ON DATABASE \"$db_name\" TO \"$svc_role\";"
+  run_sql_as_root "$db_name" "GRANT USAGE, CREATE ON SCHEMA public TO \"$svc_role\";"
+  run_sql_as_root "$db_name" "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO \"$svc_role\";"
+  run_sql_as_root "$db_name" "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO \"$svc_role\";"
+  run_sql_as_root "$db_name" "ALTER DEFAULT PRIVILEGES FOR ROLE \"$app_role\" IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO \"$svc_role\";"
+  run_sql_as_root "$db_name" "ALTER DEFAULT PRIVILEGES FOR ROLE \"$app_role\" IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO \"$svc_role\";"
 
-  # Read-only role grants — Grafana/agent support reads across tenants, writes denied by SQL privileges.
+  # Shared read-only role grants — Grafana/agent support reads across tenants, writes denied by SQL privileges.
   run_sql_as_root "$db_name" "GRANT CONNECT ON DATABASE \"$db_name\" TO \"$APP_READONLY_USER\";"
   run_sql_as_root "$db_name" "GRANT USAGE ON SCHEMA public TO \"$APP_READONLY_USER\";"
   run_sql_as_root "$db_name" "GRANT SELECT ON ALL TABLES IN SCHEMA public TO \"$APP_READONLY_USER\";"
   run_sql_as_root "$db_name" "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO \"$APP_READONLY_USER\";"
-  run_sql_as_root "$db_name" "ALTER DEFAULT PRIVILEGES FOR ROLE \"$APP_USER\" IN SCHEMA public GRANT SELECT ON TABLES TO \"$APP_READONLY_USER\";"
-  run_sql_as_root "$db_name" "ALTER DEFAULT PRIVILEGES FOR ROLE \"$APP_USER\" IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO \"$APP_READONLY_USER\";"
+  run_sql_as_root "$db_name" "ALTER DEFAULT PRIVILEGES FOR ROLE \"$app_role\" IN SCHEMA public GRANT SELECT ON TABLES TO \"$APP_READONLY_USER\";"
+  run_sql_as_root "$db_name" "ALTER DEFAULT PRIVILEGES FOR ROLE \"$app_role\" IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO \"$APP_READONLY_USER\";"
 
-  echo "   ✅ Node database '$db_name' provisioned."
+  echo "   ✅ Node '$node' provisioned (db '$db_name')."
 }
 
-# Provision each node database from comma-separated list
+# Per-node roles need per-node passwords; one APP_DB_PASSWORD serves exactly one
+# node. The caller (reconcile-substrate, <env>-db-reader) invokes db-provision
+# once per node. Guard against a multi-node invocation that would silently give
+# every node the same password.
 IFS=',' read -ra NODE_DBS <<< "$APP_DBS"
+_trimmed=()
 for db in "${NODE_DBS[@]}"; do
-  # Trim whitespace
   db=$(echo "$db" | xargs)
-  provision_node_db "$db"
+  [ -n "$db" ] && _trimmed+=("$db")
 done
+NODE_DBS=("${_trimmed[@]}")
+if [ "${#NODE_DBS[@]}" -ne 1 ]; then
+  echo "❌ ERROR: per-node provisioning expects exactly one node DB in COGNI_NODE_DBS (got ${#NODE_DBS[@]}: '${APP_DBS}'). The caller invokes db-provision once per node."
+  exit 1
+fi
+provision_node_db "${NODE_DBS[0]}"
 
 # ── LiteLLM Database (shared, root-owned) ─────────────────────────────────
 echo "🔧 Checking litellm database '$LITELLM_DB'..."
