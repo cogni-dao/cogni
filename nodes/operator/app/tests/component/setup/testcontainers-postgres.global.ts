@@ -30,11 +30,15 @@ const PROVISION_SH = path.resolve(
   "../../../../../../infra/compose/runtime/postgres-init/provision.sh"
 );
 
-const APP_DB_USER = "app_user";
+// Per-node model: provision.sh computes app_<node>/service_<node> from the DB name
+// (cogni_<node>) and ignores APP_DB_USER. The harness connects as those same
+// computed roles to prove FORCE-RLS + per-node ownership on a live cluster.
+const APP_DB_NAME = "cogni_apptest";
+const NODE = APP_DB_NAME.replace(/^cogni_/, "");
+const APP_DB_USER = `app_${NODE}`;
 const APP_DB_PASSWORD = "app_user_pass";
-const APP_DB_SERVICE_USER = "app_service";
+const APP_DB_SERVICE_USER = `service_${NODE}`;
 const APP_DB_SERVICE_PASSWORD = "service_pass";
-const APP_DB_NAME = "app_test_db";
 
 export async function setup() {
   // Start Postgres with provision.sh copied into the container

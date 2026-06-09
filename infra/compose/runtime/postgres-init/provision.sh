@@ -11,7 +11,9 @@ set -euo pipefail
 # Invariants:
 #   DB_PER_NODE: Each node gets its own database on the shared Postgres server.
 #   DB_IS_BOUNDARY: Database itself is the node boundary — no tenancy columns.
-#   Requires APP_DB_USER and APP_DB_PASSWORD; validates identifier syntax.
+#   Computes per-node roles app_<node>/service_<node> from each cogni_<node> DB
+#   name; requires only their passwords (APP_DB_PASSWORD/APP_DB_SERVICE_PASSWORD,
+#   OpenBao-sourced). Validates identifier syntax.
 # Side-effects: IO (psql commands); creates roles and databases in target Postgres instance.
 
 # Configuration from Env

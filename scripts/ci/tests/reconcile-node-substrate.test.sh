@@ -61,6 +61,12 @@ put_secret node-template INTERNAL_OPS_TOKEN existing-ops
 put_secret node-template SCHEDULER_API_TOKEN existing-scheduler
 put_secret node-template BILLING_INGEST_TOKEN existing-billing
 
+# Per-node DB creds: secret-materialize (the sole OpenBao writer) owns these at
+# cogni/<env>/<node>. Read-only reconcile reads them via the db-reader token and
+# hands them to db-provision. Distinct sentinels so the leak checks below are real.
+put_secret canary APP_DB_PASSWORD pernode-app-pw-sentinel
+put_secret canary APP_DB_SERVICE_PASSWORD pernode-svc-pw-sentinel
+
 cat > "$FAKEBIN/ssh" <<'EOF'
 #!/usr/bin/env bash
 while [ "$#" -gt 0 ] && [[ "$1" == -* ]]; do
@@ -183,10 +189,10 @@ fi
 EOF
 chmod +x "$FAKEBIN/hostname"
 
-# DB component creds are provided via env so the test does not depend on the
-# awk-over-fake-ssh .env read (which behaves differently across awk builds in
-# CI). Real flights source these from the live VM .env; here we only need them
-# present so reconcile builds the DSNs it seeds.
+# Read-only reconcile: the superuser (POSTGRES_ROOT) stays in the VM runtime .env
+# that the db-provision compose service reads; per-node app/service passwords come
+# from OpenBao (the put_secret canary ... above), read via the db-reader token —
+# NEVER from CI env. No APP_DB_* threaded: provision.sh computes app_<node>.
 env \
   VM_HOST=fake \
   DOMAIN=test.cognidao.org \
@@ -196,30 +202,29 @@ env \
   FAKE_REMOTE_ROOT="$REMOTE_ROOT" \
   FAKE_REMOTE_PATH="$FAKEBIN" \
   FAKE_BAO_ROOT="$BAO_ROOT" \
-  POSTGRES_ROOT_PASSWORD=postgres-root \
-  APP_DB_USER=app_user \
-  APP_DB_PASSWORD=app-pass \
-  APP_DB_SERVICE_USER=app_service \
-  APP_DB_SERVICE_PASSWORD=service-pass \
-  DOLTGRES_PASSWORD=dolt-pass \
   SUBSTRATE_RECONCILE_SUMMARY_FILE="$TMPROOT/summary.json" \
   bash scripts/ci/reconcile-node-substrate.sh candidate-a canary > "$TMPROOT/out.txt"
 
 grep -q "substrate ready inputs reconciled for canary" "$TMPROOT/out.txt"
-# secret-materialize owns source:agent app keys now; reconcile must NOT write them
-# (the double-write removal). Reconcile still seeds the DB DSNs transitionally.
-if [ -f "$BAO_ROOT/cogni/candidate-a/canary/AUTH_SECRET" ]; then
-  echo "reconcile should no longer seed source:agent app keys (AUTH_SECRET) — that is secret-materialize's job" >&2
+# READ-ONLY on OpenBao: secret-materialize is the sole writer. After reconcile the
+# node bank must hold ONLY the per-node creds we pre-seeded — reconcile writes
+# nothing (no source:agent app keys, no DSNs). This locks the zero-write posture.
+after_keys="$(cd "$BAO_ROOT/cogni/candidate-a/canary" && printf '%s\n' * | sort | paste -sd, -)"
+if [ "$after_keys" != "APP_DB_PASSWORD,APP_DB_SERVICE_PASSWORD" ]; then
+  echo "reconcile must perform ZERO OpenBao writes; canary bank changed to: $after_keys" >&2
   exit 1
 fi
-test -f "$BAO_ROOT/cogni/candidate-a/canary/DATABASE_URL"
-test -f "$BAO_ROOT/cogni/candidate-a/canary/DOLTGRES_URL"
 grep -q '^CANARY_DOMAIN=canary-test.cognidao.org$' "$REMOTE_ROOT/opt/cogni-template-edge/.env"
 grep -q 'COGNI_NODE_DBS=cogni_operator,cogni_canary' "$REMOTE_ROOT/opt/cogni-template-runtime/.env"
-grep -q -- '--profile bootstrap run --rm db-provision' "$REMOTE_ROOT/docker.log"
+# Per-node single-node db-provision: COGNI_NODE_DBS overridden to THIS node + the
+# per-node OpenBao passwords injected via -e (provision.sh computes app_<node>).
+grep -q -- '-e COGNI_NODE_DBS=cogni_canary' "$REMOTE_ROOT/docker.log"
+grep -qE -- '--profile bootstrap run --rm .* db-provision' "$REMOTE_ROOT/docker.log"
 grep -q -- '--profile bootstrap run --rm doltgres-provision' "$REMOTE_ROOT/docker.log"
 
-if grep -q 'sk-or-existing\|app-pass\|service-pass\|dolt-token' "$TMPROOT/out.txt"; then
+# Per-node DB passwords transit the VM-local SSH/docker env (by design), but must
+# NEVER reach CI stdout. The db-reader token must not leak either.
+if grep -q 'sk-or-existing\|pernode-app-pw-sentinel\|pernode-svc-pw-sentinel\|dolt-token\|writer-token' "$TMPROOT/out.txt"; then
   echo "secret value leaked to output" >&2
   exit 1
 fi
@@ -235,10 +240,10 @@ assert s["target"] == "canary", s["target"]
 assert s["target_type"] == "node", s["target_type"]
 assert s["failed_row_count"] == 0, s["failed_rows"]
 rows = {r["row"] for r in s["rows"]}
-expected = {"writer_token", "dsn_seed", "externalsecret", "caddyfile", "remote_reconcile"}
+expected = {"reader_token", "db_creds", "externalsecret", "caddyfile", "remote_reconcile"}
 assert expected <= rows, (expected - rows, rows)
 PY
-if grep -qE 'app-pass|service-pass|dolt-pass|postgres-root' "$TMPROOT/summary.json"; then
+if grep -qE 'pernode-app-pw-sentinel|pernode-svc-pw-sentinel|writer-token' "$TMPROOT/summary.json"; then
   echo "secret value leaked into reconcile summary" >&2
   exit 1
 fi

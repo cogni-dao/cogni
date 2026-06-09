@@ -262,9 +262,9 @@ services:
       DB_HOST: postgres
       DB_PORT: 5432
       COGNI_NODE_DBS: ${COGNI_NODE_DBS}
-      APP_DB_USER: ${APP_DB_USER}
+      # provision.sh computes per-node roles app_<node>/service_<node> from the DB
+      # name; only the per-node passwords are inputs (OpenBao-sourced via -e at flight).
       APP_DB_PASSWORD: ${APP_DB_PASSWORD}
-      APP_DB_SERVICE_USER: ${APP_DB_SERVICE_USER}
       APP_DB_SERVICE_PASSWORD: ${APP_DB_SERVICE_PASSWORD}
       APP_DB_READONLY_USER: ${APP_DB_READONLY_USER:-app_readonly}
       APP_DB_READONLY_PASSWORD: ${APP_DB_READONLY_PASSWORD:-}

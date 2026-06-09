@@ -6,7 +6,10 @@
 #   - source:agent app keys ARE materialized per-node (AUTH_SECRET);
 #   - genuinely-shared values inherited from the env bank ARE materialized
 #     (OPENROUTER_API_KEY from node-template);
-#   - the deferred DB DSNs are NOT written here (reconcile owns them today);
+#   - per-node DB creds + Postgres DSNs ARE composed sole-source here
+#     (APP_DB_PASSWORD/SERVICE generated; DATABASE_URL/SERVICE_URL embed the
+#     per-node app_<node> role + that password — the bug.5002 cutover);
+#   - only DOLTGRES_URL stays deferred (composed from the env superuser elsewhere);
 #   - no secret VALUE is echoed to stdout.
 
 set -euo pipefail
@@ -123,10 +126,24 @@ test -f "$BAO_ROOT/cogni/candidate-a/canary/AUTH_SECRET" \
 # shared value inherited from env bank
 test -f "$BAO_ROOT/cogni/candidate-a/canary/OPENROUTER_API_KEY" \
   || { echo "materialize did not inherit OPENROUTER_API_KEY" >&2; exit 1; }
-# DSNs are deferred — materialize must NOT write them (reconcile owns them today)
-if [ -f "$BAO_ROOT/cogni/candidate-a/canary/DATABASE_URL" ] \
-  || [ -f "$BAO_ROOT/cogni/candidate-a/canary/DOLTGRES_URL" ]; then
-  echo "materialize must defer DB DSNs to reconcile (cogni/<env>/_shared not built yet)" >&2
+# per-node DB creds generated (source:agent), not inherited from any shared bank
+for k in APP_DB_PASSWORD APP_DB_SERVICE_PASSWORD; do
+  test -f "$BAO_ROOT/cogni/candidate-a/canary/$k" \
+    || { echo "materialize did not generate per-node $k" >&2; exit 1; }
+done
+# Postgres DSNs composed sole-source here, embedding the per-node app_<node> role
+# (regression guard: a shared app_user DSN is the bug.5002 split-brain we killed)
+test -f "$BAO_ROOT/cogni/candidate-a/canary/DATABASE_URL" \
+  || { echo "materialize did not compose DATABASE_URL" >&2; exit 1; }
+test -f "$BAO_ROOT/cogni/candidate-a/canary/DATABASE_SERVICE_URL" \
+  || { echo "materialize did not compose DATABASE_SERVICE_URL" >&2; exit 1; }
+grep -q '://app_canary:' "$BAO_ROOT/cogni/candidate-a/canary/DATABASE_URL" \
+  || { echo "DATABASE_URL must embed per-node role app_canary, not shared app_user" >&2; exit 1; }
+grep -q '://service_canary:' "$BAO_ROOT/cogni/candidate-a/canary/DATABASE_SERVICE_URL" \
+  || { echo "DATABASE_SERVICE_URL must embed per-node role service_canary" >&2; exit 1; }
+# DOLTGRES_URL stays deferred (composed from the env superuser elsewhere, decision-B)
+if [ -f "$BAO_ROOT/cogni/candidate-a/canary/DOLTGRES_URL" ]; then
+  echo "materialize must defer DOLTGRES_URL (env-superuser-composed, not per-node yet)" >&2
   exit 1
 fi
 # no secret value leaked to output
