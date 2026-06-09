@@ -1,0 +1,13 @@
+name: ayo
+type: node
+port: 3200
+node_port: 30900
+dockerfile: nodes/ayo/app/Dockerfile
+image_tag_suffix: "-ayo"
+migrator_tag_suffix: "-ayo-migrate"
+source_repo: https://github.com/Cogni-DAO/ayo.git
+image_repository: ghcr.io/cogni-dao/ayo
+candidate_a_branch: deploy/candidate-a-ayo
+preview_branch: deploy/preview-ayo
+production_branch: deploy/production-ayo
+path_prefix: nodes/ayo/
