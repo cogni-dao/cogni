@@ -73,7 +73,13 @@ if [ "${1:-}" = "get" ]; then
     "cogni-candidate-a:deployment:canary-node-app")
       [ "${FAKE_MISSING_DEPLOYMENT:-}" = "1" ] && exit 1
       if printf '%s\n' "$*" | grep -Fq 'jsonpath='; then
-        echo "canary-node-app-secrets"
+        if [ "${FAKE_LEGACY_SECRET_CONSUMER:-}" = "1" ]; then
+          echo "canary-node-app-secrets"
+        elif [ "${FAKE_WRONG_SECRET_CONSUMER:-}" = "1" ]; then
+          echo "other-secret"
+        else
+          echo "canary-env-secrets"
+        fi
       fi
       exit 0
       ;;
@@ -88,12 +94,17 @@ if [ "${1:-}" = "get" ]; then
       fi
       exit 0
       ;;
-    "cogni-candidate-a:secret:canary-node-app-secrets")
+    "cogni-candidate-a:secret:canary-env-secrets")
       [ "${FAKE_MISSING_SECRET:-}" = "1" ] && exit 1
       exit 0
       ;;
-    "cogni-candidate-a:secret:canary-env-secrets") exit 1 ;;
-    "cogni-candidate-a:externalsecret:canary-env-secrets") exit 1 ;;
+    "cogni-candidate-a:externalsecret:canary-env-secrets")
+      [ "${FAKE_MISSING_EXTERNAL_SECRET:-}" = "1" ] && exit 1
+      if printf '%s\n' "$*" | grep -Fq 'jsonpath='; then
+        [ "${FAKE_EXTERNAL_SECRET_NOT_READY:-}" = "1" ] || echo True
+      fi
+      exit 0
+      ;;
   esac
 fi
 echo "fake kubectl: unexpected args ns=${ns} args=$*" >&2
@@ -237,11 +248,35 @@ if env "${BASE_ENV[@]}" FAKE_SERVICE_NODEPORT_MISMATCH=1 bash scripts/ci/assert-
 fi
 grep -q "Service NodePort mismatch" "$TMPROOT/service-nodeport-mismatch.out"
 
+if env "${BASE_ENV[@]}" FAKE_LEGACY_SECRET_CONSUMER=1 bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/legacy-secret-consumer.out" 2>&1; then
+  echo "expected legacy Secret consumer to fail" >&2
+  exit 1
+fi
+grep -q "Deployment consumes legacy plain Secret canary-node-app-secrets" "$TMPROOT/legacy-secret-consumer.out"
+
+if env "${BASE_ENV[@]}" FAKE_WRONG_SECRET_CONSUMER=1 bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/wrong-secret-consumer.out" 2>&1; then
+  echo "expected wrong Secret consumer to fail" >&2
+  exit 1
+fi
+grep -q "Deployment consumes unexpected Secret other-secret" "$TMPROOT/wrong-secret-consumer.out"
+
 if env "${BASE_ENV[@]}" FAKE_MISSING_SECRET=1 bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/missing-secret.out" 2>&1; then
   echo "expected missing secret to fail" >&2
   exit 1
 fi
-grep -q "Deployment-consumed Secret missing" "$TMPROOT/missing-secret.out"
+grep -q "ESO-synced Secret missing" "$TMPROOT/missing-secret.out"
+
+if env "${BASE_ENV[@]}" FAKE_MISSING_EXTERNAL_SECRET=1 bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/missing-external-secret.out" 2>&1; then
+  echo "expected missing ExternalSecret to fail" >&2
+  exit 1
+fi
+grep -q "ExternalSecret missing" "$TMPROOT/missing-external-secret.out"
+
+if env "${BASE_ENV[@]}" FAKE_EXTERNAL_SECRET_NOT_READY=1 bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/external-secret-not-ready.out" 2>&1; then
+  echo "expected not-Ready ExternalSecret to fail" >&2
+  exit 1
+fi
+grep -q "Deployment-consumed ExternalSecret not Ready=True" "$TMPROOT/external-secret-not-ready.out"
 
 if env "${BASE_ENV[@]}" FAKE_MISSING_DB=1 bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/missing-db.out" 2>&1; then
   echo "expected missing DB to fail" >&2

@@ -53,6 +53,23 @@ USAGE
   || fail "unsupported env '$DEPLOY_ENVIRONMENT'"
 [[ -n "${VM_HOST:-}" ]] || fail "VM_HOST is required"
 [[ -n "${DOMAIN:-}" ]] || fail "DOMAIN is required"
+
+case "$APP_SOURCE_DIR" in
+  /*) ;;
+  *) APP_SOURCE_DIR="$(cd "$APP_SOURCE_DIR" 2>/dev/null && pwd)" || fail "missing app source dir: $APP_SOURCE_DIR" ;;
+esac
+case "$COGNI_CATALOG_ROOT" in
+  /*) ;;
+  *)
+    if [[ -d "$COGNI_CATALOG_ROOT" ]]; then
+      COGNI_CATALOG_ROOT="$(cd "$COGNI_CATALOG_ROOT" && pwd)"
+    elif [[ -d "${APP_SOURCE_DIR}/${COGNI_CATALOG_ROOT}" ]]; then
+      COGNI_CATALOG_ROOT="$(cd "${APP_SOURCE_DIR}/${COGNI_CATALOG_ROOT}" && pwd)"
+    else
+      COGNI_CATALOG_ROOT="${APP_SOURCE_DIR}/${COGNI_CATALOG_ROOT}"
+    fi
+    ;;
+esac
 [[ -d "$COGNI_CATALOG_ROOT" ]] || fail "missing catalog root: $COGNI_CATALOG_ROOT"
 
 # shellcheck source=lib/image-tags.sh
@@ -180,10 +197,10 @@ fi
 
 caddy_tmp="$(mktemp)"
 trap 'rm -f "$caddy_tmp"' EXIT
-(
-  cd "$APP_SOURCE_DIR"
-  COGNI_CATALOG_ROOT="$COGNI_CATALOG_ROOT" bash "$REPO_ROOT/scripts/ci/render-caddyfile.sh" > "$caddy_tmp"
-)
+COGNI_CATALOG_ROOT="$COGNI_CATALOG_ROOT" bash "$REPO_ROOT/scripts/ci/render-caddyfile.sh" > "$caddy_tmp"
+if ! grep -Fq "{\$${edge_key}:" "$caddy_tmp" || ! grep -Fq "host.docker.internal:${node_port}" "$caddy_tmp"; then
+  fail "rendered Caddyfile missing route for ${node_host} / host.docker.internal:${node_port}"
+fi
 copy_to_remote "$caddy_tmp" "/tmp/Caddyfile.${DEPLOY_ENVIRONMENT}.${TARGET_NODE}.tmpl"
 
 remote "set -euo pipefail

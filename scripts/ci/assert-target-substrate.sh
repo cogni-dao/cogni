@@ -100,6 +100,7 @@ namespace="cogni-${env_name}"
 app_name="${env_name}-${node}"
 appset_name="cogni-${env_name}-${node}"
 workload_name="${node}-node-app"
+expected_secret_name="${node}-env-secrets"
 edge_env="${remote_root}/opt/cogni-template-edge/.env"
 caddyfile="${remote_root}/opt/cogni-template-edge/configs/Caddyfile.tmpl"
 runtime_env="${remote_root}/opt/cogni-template-runtime/.env"
@@ -179,10 +180,16 @@ if [ -z "$consumed_secret_names" ]; then
 else
   while IFS= read -r consumed_secret; do
     [ -n "$consumed_secret" ] || continue
+    if [ "$consumed_secret" = "${node}-node-app-secrets" ]; then
+      mark_fail "Deployment consumes legacy plain Secret ${consumed_secret}; expected ${expected_secret_name}"
+    elif [ "$consumed_secret" != "$expected_secret_name" ]; then
+      mark_fail "Deployment consumes unexpected Secret ${consumed_secret}; expected ${expected_secret_name}"
+    fi
+
     if kubectl -n "$namespace" get secret "$consumed_secret" >/dev/null 2>&1; then
       mark_ok "Deployment-consumed Secret exists: $consumed_secret"
     else
-      mark_fail "Deployment-consumed Secret missing: $consumed_secret"
+      mark_fail "ESO-synced Secret missing: $consumed_secret"
     fi
 
     if kubectl -n "$namespace" get externalsecret "$consumed_secret" >/dev/null 2>&1; then
@@ -192,6 +199,8 @@ else
       else
         mark_fail "Deployment-consumed ExternalSecret not Ready=True: $consumed_secret"
       fi
+    else
+      mark_fail "ExternalSecret missing for Deployment-consumed Secret: $consumed_secret"
     fi
   done <<< "$consumed_secret_names"
 fi

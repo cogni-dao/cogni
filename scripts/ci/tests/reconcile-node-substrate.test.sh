@@ -207,4 +207,19 @@ if grep -q 'sk-or-existing\|app-pass\|service-pass\|dolt-token' "$TMPROOT/out.tx
   exit 1
 fi
 
+ln -s "$REPO_ROOT" "$TMPROOT/app-src"
+env \
+  VM_HOST=fake \
+  DOMAIN=test.cognidao.org \
+  SSH_OPTS="-i fake-key -o StrictHostKeyChecking=no" \
+  APP_SOURCE_DIR="$TMPROOT/app-src" \
+  COGNI_CATALOG_ROOT=infra/catalog \
+  RECONCILE_NODE_SUBSTRATE_SSH_BIN="$FAKEBIN/ssh" \
+  RECONCILE_NODE_SUBSTRATE_SCP_BIN="$FAKEBIN/scp" \
+  FAKE_REMOTE_ROOT="$REMOTE_ROOT" \
+  FAKE_REMOTE_PATH="$FAKEBIN" \
+  FAKE_BAO_ROOT="$BAO_ROOT" \
+  bash scripts/ci/reconcile-node-substrate.sh candidate-a canary > "$TMPROOT/relative-catalog-root.out"
+grep -q "substrate ready inputs reconciled for canary" "$TMPROOT/relative-catalog-root.out"
+
 echo "PASS: reconcile-node-substrate.test.sh"
