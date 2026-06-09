@@ -205,6 +205,17 @@ else
   done <<< "$consumed_secret_names"
 fi
 
+# DSN keys must be materialized into the node Secret (reconcile seeds them today;
+# secret-materialize owns them once cogni/<env>/_shared lands). Fail loud if the
+# ESO-synced Secret lacks DATABASE_URL so a missing-DSN node can never ship green.
+if kubectl -n "$namespace" get secret "$expected_secret_name" >/dev/null 2>&1; then
+  if [ -n "$(kubectl -n "$namespace" get secret "$expected_secret_name" -o jsonpath='{.data.DATABASE_URL}' 2>/dev/null)" ]; then
+    mark_ok "node Secret carries DSN key: DATABASE_URL"
+  else
+    mark_fail "node Secret ${expected_secret_name} missing DSN key DATABASE_URL; materialize/reconcile did not write it"
+  fi
+fi
+
 if [ -f "$edge_env" ]; then
   if grep -Eq "^${edge_key}=" "$edge_env"; then
     mark_ok "edge env carries $edge_key for $node_host"

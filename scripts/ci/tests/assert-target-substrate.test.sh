@@ -96,6 +96,9 @@ if [ "${1:-}" = "get" ]; then
       ;;
     "cogni-candidate-a:secret:canary-env-secrets")
       [ "${FAKE_MISSING_SECRET:-}" = "1" ] && exit 1
+      if printf '%s\n' "$*" | grep -Fq 'jsonpath='; then
+        [ "${FAKE_MISSING_DSN:-}" = "1" ] || echo "cG9zdGdyZXM6Ly8="
+      fi
       exit 0
       ;;
     "cogni-candidate-a:externalsecret:canary-env-secrets")
@@ -277,6 +280,12 @@ if env "${BASE_ENV[@]}" FAKE_EXTERNAL_SECRET_NOT_READY=1 bash scripts/ci/assert-
   exit 1
 fi
 grep -q "Deployment-consumed ExternalSecret not Ready=True" "$TMPROOT/external-secret-not-ready.out"
+
+if env "${BASE_ENV[@]}" FAKE_MISSING_DSN=1 bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/missing-dsn.out" 2>&1; then
+  echo "expected missing DSN key to fail" >&2
+  exit 1
+fi
+grep -q "missing DSN key DATABASE_URL" "$TMPROOT/missing-dsn.out"
 
 if env "${BASE_ENV[@]}" FAKE_MISSING_DB=1 bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/missing-db.out" 2>&1; then
   echo "expected missing DB to fail" >&2
