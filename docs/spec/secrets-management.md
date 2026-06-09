@@ -139,24 +139,25 @@ that node. Node formation is allowed to consume the environment's existing
 DAO/org values, but node-local material is generated or derived by the secrets
 substrate.
 
-Required human values are environment/org preconditions, not node-birth inputs:
+Node formation has separate prerequisite classes:
 
-| Key                  | Scope              | Required for                        |
-| -------------------- | ------------------ | ----------------------------------- |
-| `OPENROUTER_API_KEY` | DAO/org runtime    | Shared LLM runtime                  |
-| `EVM_RPC_URL`        | DAO/org runtime    | Shared Base RPC endpoint            |
-| `POSTHOG_API_KEY`    | DAO/org runtime    | Shared telemetry project            |
-| `POSTHOG_HOST`       | DAO/org runtime    | Shared telemetry host               |
-| `DOMAIN`             | Environment config | Public host and derived app URLs    |
-| `VM_HOST`            | Environment CI     | Workflow access to the environment  |
-| `GHCR_DEPLOY_TOKEN`  | Repo/deploy        | Private image pulls from the VM     |
-| `CHERRY_AUTH_TOKEN`  | Genesis only       | VM provisioning, not runtime        |
-| `POLYGON_RPC_URL`    | Payments only      | `poly` / payment-capable nodes only |
+| Input                               | Class                   | Required for                                                                             |
+| ----------------------------------- | ----------------------- | ---------------------------------------------------------------------------------------- |
+| `DOMAIN` / `FORK_DOMAIN_ROOT`       | derived config          | Public host derivation, DNS, `APP_BASE_URL`, and `NEXTAUTH_URL`; not a secret.           |
+| `VM_HOST`                           | environment substrate   | Workflow SSH target; produced/recorded by environment provisioning.                      |
+| `SSH_DEPLOY_KEY`                    | environment substrate   | Workflow SSH credential for the VM; not node-specific.                                   |
+| image pull/deploy credential        | deploy substrate        | Existing GHCR/git credential for deploy paths when needed; not a pod app secret.         |
+| Postgres/Doltgres role material     | existing runtime bank   | v0 DB/DSN creation for the new node.                                                     |
+| `LITELLM_MASTER_KEY`                | shared runtime secret   | Shared LiteLLM proxy auth for node app calls.                                            |
+| `OPENROUTER_API_KEY`                | LiteLLM/provider secret | Primarily LiteLLM Compose; optional node-app provider-funding features may also read it. |
+| `POSTHOG_API_KEY` / `POSTHOG_HOST`  | optional telemetry      | Analytics capture; not a basic `/version` or `/readyz` blocker.                          |
+| `EVM_RPC_URL`                       | feature/runtime config  | Required only when on-chain/payment rails are active.                                    |
+| `POLYGON_RPC_URL` + wallet material | payments/custody        | `poly` / explicitly payment-enabled nodes only; never ordinary wizard-node baseline.     |
 
 For a normal non-payment wizard node, the per-node human-secret list is empty.
-If one of the shared DAO/org values is absent, the correct fix is to provision
-or repair the environment secret bank before flight. Candidate flight must not
-accept the value as a workflow input and the wizard must not store it.
+If a shared value is needed and absent, the correct fix is to provision or
+repair the environment bank before flight. Candidate flight must not accept
+the value as a workflow input and the wizard must not store it.
 
 V0 implementation checkpoint for PR #1582:
 

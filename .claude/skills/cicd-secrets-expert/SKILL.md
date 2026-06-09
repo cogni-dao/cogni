@@ -93,12 +93,13 @@ k8s Secret exists and its matching ExternalSecret is Ready, but it must not seed
 OpenBao, patch GitHub secrets, run `deploy-infra.sh`, or repair Compose/env
 state. A missing secret is a substrate failure. For a wizard-created ordinary
 node, there should be **zero per-node human secret values**. The environment
-must already have its DAO/org bank (`OPENROUTER_API_KEY`, `EVM_RPC_URL`,
-`POSTHOG_API_KEY`, `POSTHOG_HOST`) plus substrate config (`DOMAIN`, `VM_HOST`,
-deploy tokens). The new node gets generated/derived node-local material and
-explicitly allowed inherited values from the substrate lane. If the org/env
-bank is missing, repair that bank; do not pass values through candidate-flight
-inputs or store them in the wizard.
+must already have substrate facts (`DOMAIN`/`FORK_DOMAIN_ROOT`, `VM_HOST`,
+`SSH_DEPLOY_KEY`, deploy/image-pull credentials), existing DB role material,
+and any feature unlocks the node actually uses. `OPENROUTER_API_KEY` is
+primarily LiteLLM Compose input; PostHog is telemetry; `EVM_RPC_URL` is fatal
+only when payment/on-chain rails are active. If an environment-bank value is
+missing, repair that bank; do not pass values through candidate-flight inputs
+or store them in the wizard.
 
 The target shape matters. Today the implemented branch is `type=node`; a future
 `type=service` branch should assert the service's declared Secret /

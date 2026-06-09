@@ -73,26 +73,29 @@ historical broad fallback with an explicit OpenBao shared-bank / owner-grant
 model. Do not hide that follow-up by calling current denormalization the final
 authority model.
 
-### Human Keys Needed For A New Node
+### Inputs Needed For A New Node
 
 For a standard non-payment wizard node: **none per node**.
 
-The environment must already have these required human-provided org/env values:
+The already-provisioned environment must have substrate facts and any shared
+org/runtime unlocks its enabled features need:
 
-| Key                  | Scope              | Why the new node needs it                                      |
-| -------------------- | ------------------ | -------------------------------------------------------------- |
-| `OPENROUTER_API_KEY` | DAO/org runtime    | Shared LLM runtime unlock consumed by node apps                |
-| `EVM_RPC_URL`        | DAO/org runtime    | Shared Base RPC endpoint for on-chain reads                    |
-| `POSTHOG_API_KEY`    | DAO/org runtime    | Shared product telemetry project key                           |
-| `POSTHOG_HOST`       | DAO/org runtime    | Shared product telemetry host                                  |
-| `DOMAIN`             | Environment config | Builds the node's public host and derived app URLs             |
-| `VM_HOST`            | Environment CI     | Lets candidate/promotion workflows reach the environment VM    |
-| `GHCR_DEPLOY_TOKEN`  | Repo/deploy        | Lets the VM pull private GHCR images when needed               |
-| `CHERRY_AUTH_TOKEN`  | Genesis only       | Creates/provisions the VM; not a per-node or runtime app value |
+| Input                               | Class                   | Node-wizard meaning                                                                                 |
+| ----------------------------------- | ----------------------- | --------------------------------------------------------------------------------------------------- |
+| `DOMAIN` / `FORK_DOMAIN_ROOT`       | derived config          | Public host derivation, DNS, `APP_BASE_URL`, and `NEXTAUTH_URL`; not a secret.                      |
+| `VM_HOST`                           | environment substrate   | Workflow SSH target for candidate/promotion lanes; produced/recorded by environment provisioning.   |
+| `SSH_DEPLOY_KEY`                    | environment substrate   | Workflow SSH credential for the VM; not node-specific.                                              |
+| image pull/deploy credential        | deploy substrate        | Existing GHCR/git credential used by environment deploy paths when needed; not a pod app secret.    |
+| Postgres/Doltgres role material     | existing runtime bank   | Used by v0 reconciliation to create `cogni_<slug>` / `knowledge_<slug>` and node DSNs.              |
+| `LITELLM_MASTER_KEY`                | shared runtime secret   | Copied/denormalized so the node app can call the shared LiteLLM proxy.                              |
+| `OPENROUTER_API_KEY`                | LiteLLM/provider secret | Primarily consumed by LiteLLM Compose; node apps may use it for optional provider-funding features. |
+| `POSTHOG_API_KEY` / `POSTHOG_HOST`  | optional telemetry      | Enables analytics capture; absence should not block basic `/version` or `/readyz`.                  |
+| `EVM_RPC_URL`                       | feature/runtime config  | Required only when on-chain/payment rails are active; not ordinary wizard-node baseline.            |
+| `POLYGON_RPC_URL` + wallet material | payments/custody        | Required only for `poly` / explicitly payment-enabled nodes.                                        |
 
-Payment/custody nodes are different. `POLYGON_RPC_URL` is required for `poly`
-or another explicitly payment-enabled node, and wallet/Privy keys remain
-capability-gated. They are never baseline for an ordinary wizard node.
+The v0 candidate-a proof should not ask anyone for a new value during node
+birth. If a shared value is needed and absent, that is an environment-bank
+repair, not a node-wizard form field.
 
 ## Why This Exists
 

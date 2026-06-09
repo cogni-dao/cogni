@@ -92,18 +92,20 @@ For DB material, this means:
 Do not use this guide to invent a per-node human secret for a freshly wizarded
 ordinary node. The per-node human-secret list is empty.
 
-A new node may rely on required environment/org values that already exist:
+A new node may rely on existing environment inputs:
 
-- DAO/org runtime: `OPENROUTER_API_KEY`, `EVM_RPC_URL`,
-  `POSTHOG_API_KEY`, `POSTHOG_HOST`.
-- Environment/deploy substrate: `DOMAIN`, `VM_HOST`, `GHCR_DEPLOY_TOKEN`.
-- Genesis-only provisioning: `CHERRY_AUTH_TOKEN`.
+- Derived config: `DOMAIN` / `FORK_DOMAIN_ROOT` for public hosts and app URLs.
+- Environment substrate: `VM_HOST`, `SSH_DEPLOY_KEY`, and existing deploy/image
+  pull credentials.
+- Existing runtime bank: DB role material and `LITELLM_MASTER_KEY`.
+- Optional feature unlocks: `OPENROUTER_API_KEY`, PostHog keys, and `EVM_RPC_URL`
+  only when the corresponding feature path is active.
 - Payments-only nodes: `POLYGON_RPC_URL` and explicitly capability-gated
   wallet/custody values.
 
-If one of those is missing, repair the environment/org bank with the normal
-OpenBao write lane before rerunning flight. Do not pass the value through
-candidate-flight inputs, save it in the wizard, or add it to the node birth PR.
+If a needed environment value is missing, repair the environment bank before
+rerunning flight. Do not pass the value through candidate-flight inputs, save
+it in the wizard, or add it to the node birth PR.
 
 ## 1. Confirm The Destination
 
