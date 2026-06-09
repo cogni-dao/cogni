@@ -32,11 +32,13 @@ Values are owned by the secrets substrate:
 
 ```
 catalog + node birth facts
-  -> provision/reconcile lane
+  -> secret-materialize <env> <node>
   -> OpenBao path cogni/<env>/<node>
+  -> reconcile-substrate reads OpenBao and provisions DB/edge/ESO
   -> ExternalSecret dataFrom.extract
   -> k8s Secret <node>-env-secrets
   -> Deployment envFrom
+  -> assert-substrate verifies read-only
 ```
 
 The wizard may trigger or report the owning lane, but it must not create a
@@ -119,10 +121,15 @@ spec:
 
 ## Value Routing Classes
 
+Secrets use the authority model from `docs/spec/secrets-management.md`:
+`origin` answers who can produce the value, `custody` answers which system is
+authoritative, and `consumers` answers where it is rendered. The wizard may
+write git shape for a consumer, but it never takes custody of secret bytes.
+
 ### Agent-generated app values
 
-The wizard does not generate these directly. The provision/reconcile lane reads
-catalog metadata and writes values to OpenBao.
+The wizard does not generate these directly. The `secret-materialize` lane
+reads catalog metadata and writes missing values to OpenBao.
 
 Examples:
 
@@ -136,14 +143,15 @@ Examples:
 - `NEXTAUTH_URL`
 
 If a value is `source: agent`, generation belongs to the secrets substrate
-generator or provisioner. The wizard can report that the new node needs seed
-coverage, but it must not write a secret value into the PR or a saved wizard
-record.
+materializer. The wizard can report that the new node needs materialization,
+but it must not write a secret value into the PR or a saved wizard record.
 
 ### Derived values
 
 Derived values are recomputed from repo state after the node appears in git.
-The wizard should not store them as state.
+The wizard should not store them as state. If a derived value embeds or agrees
+with a secret, it must derive from OpenBao-owned inputs, not from VM `.env` or
+GitHub Environment Secrets.
 
 Examples:
 
@@ -151,6 +159,7 @@ Examples:
 - `COGNI_NODE_ENDPOINTS`
 - per-node database names such as `cogni_<slug>`
 - node-host-derived URLs when the provisioner has the environment domain
+- DSNs rendered from OpenBao-owned DB credential components
 
 ### Shared/operator environment values
 
@@ -169,6 +178,9 @@ Examples:
 Today the provisioner may denormalize some shared values into
 `cogni/<env>/<node>` so a single `<node>-env-secrets` extract can feed the pod.
 That is still a substrate write, not wizard custody.
+
+If a required shared/vendor value is missing, `secret-materialize` fails loud.
+Candidate flight must not accept the value as an input or invent it.
 
 ### Grafana and observability
 
@@ -192,7 +204,9 @@ blocking basic app launch.
 
 The wizard ignores these for v0 node birth:
 
-- B-tier Compose-infra values unless the infra/provision lane owns the write.
+- Compose-infra values unless the infra/provision lane owns the write. If a
+  Compose-rendered value creates or supports a pod-facing dependency, its
+  custody is OpenBao, not Compose.
 - D-tier CI-only values such as `VM_HOST` and `SSH_DEPLOY_KEY`.
 - E-tier repo-level values such as `GHCR_DEPLOY_TOKEN` and
   `CHERRY_AUTH_TOKEN`.
@@ -258,7 +272,24 @@ secrets/provisioning lane, not the app-flight lane.
 
 ## Runtime Reconciliation Boundary
 
-This design owns desired Git shape only. It proves that a new node has:
+This design owns desired Git shape only. The runtime sequence is:
+
+```
+secret-materialize <env> <node>
+  -> reconcile-substrate <env> <node>
+  -> assert-substrate <env> <node>
+  -> flight/promote/verify
+```
+
+`secret-materialize` is the only phase that writes OpenBao values for a new
+node. It preserves existing values, generates missing `source: agent` values,
+derives from non-secret and OpenBao-owned inputs, fails on missing
+`source: human` values, and logs key names only. `reconcile-substrate` reads
+OpenBao and provisions dependent substrate: DBs/roles, edge routing,
+`COGNI_NODE_DBS`, and the node ExternalSecret leaf. `assert-substrate` is
+read-only.
+
+The wizard proves that a new node has:
 
 - child repo ExternalSecret leaves for `candidate-a`, `preview`, and
   `production`;
@@ -270,8 +301,8 @@ that ESO is Ready in a cluster, or that preview/production deploy branches have
 synced node-domain leaves. Those are substrate and flight responsibilities. In
 the current pipeline, candidate flight initializes the node submodule and syncs
 `nodes/<slug>/k8s/external-secrets/candidate-a/` into the candidate deploy
-branch; preview/production value and leaf reconciliation must be proven by the
-env substrate lane.
+branch; preview/production materialization and leaf reconciliation must be
+proven by the env substrate lane.
 
 ## As-Built Anchors
 
@@ -297,8 +328,8 @@ env substrate lane.
 1. Use a fresh throwaway node to prove candidate-a publish logs
    `feature.node_publish.secret_shape_generated`, the child repo contains all
    three ExternalSecret leaves, the parent PR overlays consume
-   `<slug>-env-secrets`, and candidate flight materializes the candidate-a leaf
-   without manual secret bridging.
+   `<slug>-env-secrets`, and candidate flight runs materialize -> reconcile ->
+   assert without manual secret bridging.
 2. Extend or verify the preview/production substrate lane so node-domain leaves
    from `nodes/<slug>/k8s/external-secrets/{preview,production}/` reach the
    corresponding deploy branch or cluster before those envs assert
@@ -309,7 +340,8 @@ env substrate lane.
 - Building a generic secret management UI.
 - Adding a fourth secret write entry point.
 - Storing secret values in wizard database rows.
-- Making app-flight mutate OpenBao, GitHub secrets, or Compose runtime state.
+- Making app-flight accept secret values or repair secrets inside the read-only
+  assertion phase.
 - Moving all `_shared` secrets to owner-scoped paths; that is tracked by the
   broader secrets substrate migration.
 
@@ -323,8 +355,10 @@ block, likely `node-wizard-secret-setting`, after review:
 > `<slug>-env-secrets`, and each
 > `nodes/<slug>/k8s/external-secrets/{candidate-a,preview,production}/`
 > directory contains one ExternalSecret extracting `<env>/<slug>` into that
-> target. Agent-generated, derived, shared, Grafana, CI, Compose, and
-> dual-plane values remain owned by the catalog/provision/reconcile secrets
-> substrate. App flight may assert the consumed Secret and ExternalSecret, but
-> it must not seed or repair them. The wizard must never write secret values to
-> git or save them as wizard state.
+> target. Agent-generated, derived, shared, Grafana, CI, Compose, DB, and
+> dual-plane values remain owned by the secrets substrate. A new node's env
+> runtime path is `secret-materialize` (OpenBao writes) →
+> `reconcile-substrate` (DB/edge/ESO reads) → `assert-substrate` (read-only).
+> Flight may orchestrate those phases, but it must not accept secret values or
+> repair secrets inside the assertion phase. The wizard must never write secret
+> values to git or save them as wizard state.

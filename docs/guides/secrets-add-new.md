@@ -55,7 +55,37 @@ OpenBao cogni/<env>/<service>/<KEY>
   -> process.env.<KEY> after the pod starts
 ```
 
-GitHub Environment secrets are not the live source for ESO-backed pods. They are seed material for provisioning or CI-only consumers unless a specific workflow reads them and writes OpenBao.
+GitHub Environment secrets are not the live source for ESO-backed pods. They
+carry CI-only/bootstrap access credentials or sealed staging values for a
+workflow that writes OpenBao.
+
+## Authority Gate
+
+Before choosing a tier, separate three concepts:
+
+| Axis        | Values                                   | Question                       |
+| ----------- | ---------------------------------------- | ------------------------------ |
+| `origin`    | `agent` · `human` · `derived`            | Who can produce the bytes?     |
+| `custody`   | `openbao` · `github-env` · `repo-config` | Which system is authoritative? |
+| `consumers` | `pod` · `compose` · `ci` · `external`    | Where does the value get used? |
+
+The rule is strict: if a value is consumed by a pod, provisions a pod-facing
+role, or must agree with a pod-facing value, custody is OpenBao. VM `.env`
+files are rendered views for Compose, not authorities. GitHub Environment
+Secrets may carry CI-only/bootstrap credentials or sealed staging for a
+workflow that writes OpenBao; they are not the source of truth for app/runtime
+credentials.
+
+For DB material, this means:
+
+- `POSTGRES_ROOT_PASSWORD` may remain Compose/bootstrap-only for now because no
+  pod should use it.
+- `APP_DB_PASSWORD`, `APP_DB_SERVICE_PASSWORD`,
+  `APP_DB_READONLY_PASSWORD`, `DOLTGRES_PASSWORD`,
+  `DOLTGRES_READER_PASSWORD`, and `DOLTGRES_WRITER_PASSWORD` are
+  OpenBao-custodied when they create roles or support pod-facing DSNs.
+- `DATABASE_URL`, `DATABASE_SERVICE_URL`, and `DOLTGRES_URL` may be rendered
+  from components, but those components must be OpenBao-owned.
 
 ## 1. Confirm The Destination
 
@@ -208,12 +238,16 @@ Use `/version.buildSha` to verify the expected application build when a deploy c
 - Touch `OPENBAO_SEED_TOKEN`.
 - Use the OpenBao root token.
 - Treat a GitHub Environment secret timestamp as live pod proof.
+- Treat a VM `.env` entry as runtime secret authority.
 
 ## Anti-Patterns
 
 - Pasting secret values into chat, PRs, workflow inputs, shell history, or committed files.
 - Using this guide for plain runtime config.
 - Using GitHub Environment secrets as proof that an ESO-backed pod has the value.
+- Classifying a pod-facing DB credential as Compose-only because a Compose
+  provisioner renders it.
+- Rendering a runtime value from VM `.env` when OpenBao has a different value.
 - Treating k8s Secret presence as proof that a running process has the value.
 - Using stale `.local/<env>-vm-ip` or SSH keys when a provision artifact contains the current kubeconfig.
 - SSHing into production to run OpenBao or Kubernetes mutations instead of using the provisioned kubeconfig, Kubernetes auth, and deploy branch.
