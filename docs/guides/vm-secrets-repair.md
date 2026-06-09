@@ -74,15 +74,26 @@ node generates). That per-node-role `db-provision` change — deferred by #1582 
 **this lane's central work** (Step 2 below), not an external dependency. The
 alternative (a shared OpenBao DB path) is explicitly rejected.
 
-## Implementation — additive cutover (each step independently safe)
+## Implementation — per-node-role cutover (now)
 
-The change spans three files that ship together and the falsifying gate spans
-all of them (Invariant 16), so it lands as one PR. But the **per-step ordering is
-additive**: the new per-node role is created and granted *alongside* the shared
-`app_user` before anything cuts over, so no step has a broken intermediate state.
+The change spans three files that ship together; the falsifying gate spans all of
+them (Invariant 16), so it lands as one PR. **We cut over now** — no real users on
+any env, so the shared `app_user`/`app_service` do **not** survive the change (no
+dual-role "retire later"). Within a single provision run the new role is created
+before the legacy one is dropped (ordering safety), but the end state is per-node
+roles only.
+
+**RLS is unaffected by the rename.** Policies key on
+`current_setting('app.current_user_id')`, never on the role name
+([`database-rls.md`](../spec/database-rls.md)), so `app_<node>` is a drop-in with
+the same attributes as `app_user` (LOGIN, **no `BYPASSRLS`** → tenant-isolated
+under `FORCE ROW LEVEL SECURITY`). `service_<node>` is `BYPASSRLS` (workers);
+`app_readonly` stays **shared** (env-level Grafana datasource, `BYPASSRLS`) until
+datasources go per-node. Postgres roles are **cluster-global**, so per-node means
+distinct names (`app_poly`, `app_operator`), not a per-DB `app_user`.
 
 Order: **candidate-a** (reprovision-friendly, gate first) → **preview** →
-**production** (maintenance-aware, no real users — purge fast).
+**production** (no real users — cut over fast).
 
 1. **Generate per-node app creds** — move `APP_DB_PASSWORD` /
    `APP_DB_SERVICE_PASSWORD` out of `reconcile-secrets.sh::COMPOSE_ONLY_KEYS` into
@@ -90,10 +101,11 @@ Order: **candidate-a** (reprovision-friendly, gate first) → **preview** →
    `cogni/<env>/<node>` (preserve-existing). `APP_DB_USER` becomes the **derived**
    `app_<node>` (node name, not a secret). *Additive: writes new OpenBao keys; the
    shared `app_user` DSN is still live.*
-2. **Create per-node roles alongside** — `provision.sh` creates `app_<node>` /
-   `service_<node>` from the OpenBao values (`<env>-db-reader`) and applies the
-   same per-DB GRANT/RLS/ownership it gives `app_user`, **without dropping
-   `app_user`**. *Additive: both roles can log in; the pod hasn't switched yet.*
+2. **Create per-node roles** — `provision.sh` creates `app_<node>` /
+   `service_<node>` from the OpenBao values, **set-once password** (never
+   re-`ALTER` — bug.5002), and applies the same per-DB GRANT/RLS/ownership
+   `app_user` had. For an existing DB, `REASSIGN OWNED BY app_user TO app_<node>`
+   + `ALTER DATABASE … OWNER` migrates ownership to the per-node role.
 3. **Compose + cut over the DSN** — un-defer the three DSN keys in
    `secret-materialize` (`DSN_DEFER_KEYS`) so it composes `DATABASE_URL` /
    `DATABASE_SERVICE_URL` from the node's own `app_<node>` creds; strip the
@@ -104,9 +116,11 @@ Order: **candidate-a** (reprovision-friendly, gate first) → **preview** →
 4. **Provisioners read OpenBao only** — delete the `deploy-infra.sh:838-860`
    `derive_secret` block + `${X:-$(remote_env_value …)}` `.env` fallbacks;
    fail-loud-skip on read miss, never `.env` (the bug.5002 anti-fix).
-5. **Retire the legacy** — once every node is green under its own role, drop the
-   shared `app_user`/`app_service` grants and delete the `APP_DB_*_PASSWORD` GitHub
-   Environment secrets (Invariant 5). No destructive change before green.
+5. **Drop the legacy (same change, not deferred)** — `app_user`/`app_service` are
+   cluster-global and own objects across every node DB, so they can only be dropped
+   once **all** of the env's nodes are reassigned (Step 2). After that — in this
+   change — `DROP ROLE app_user`/`app_service` and delete the `APP_DB_*_PASSWORD`
+   GitHub Environment secrets (Invariant 5). The shared role does not linger.
 6. **Falsifying gate** (below).
 
 ### Seam with the materialize redesign (coordinate before parallel work)
