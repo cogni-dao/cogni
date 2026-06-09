@@ -91,10 +91,14 @@ checks agree.
 preflight for selected app rollouts. That gate may verify a Deployment-consumed
 k8s Secret exists and its matching ExternalSecret is Ready, but it must not seed
 OpenBao, patch GitHub secrets, run `deploy-infra.sh`, or repair Compose/env
-state. A missing secret is a substrate failure: use `secret-materialize` for
-new-node `source: agent` / derived material, `pnpm secrets:set` or
-`secret-set.yml` for human/vendor material, or the explicit infra flight that
-owns the mutation.
+state. A missing secret is a substrate failure. For a wizard-created ordinary
+node, there should be **zero per-node human secret values**. The environment
+must already have its DAO/org bank (`OPENROUTER_API_KEY`, `EVM_RPC_URL`,
+`POSTHOG_API_KEY`, `POSTHOG_HOST`) plus substrate config (`DOMAIN`, `VM_HOST`,
+deploy tokens). The new node gets generated/derived node-local material and
+explicitly allowed inherited values from the substrate lane. If the org/env
+bank is missing, repair that bank; do not pass values through candidate-flight
+inputs or store them in the wizard.
 
 The target shape matters. Today the implemented branch is `type=node`; a future
 `type=service` branch should assert the service's declared Secret /
@@ -103,14 +107,14 @@ or node-DB assumptions.
 
 ## Decision tree — how do I write / rotate the value?
 
-| Operation                                             | Right pattern                                                                                                                                            | Today's reality                                                                                                            |
-| ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| Add new secret SHAPE (service X consumes key A)       | PR → `vault-config-operator` CRD → Argo reconciles                                                                                                       | Not built; tracked in `proj.agentic-fork-bootstrap` Walk                                                                   |
-| Materialize a new node's runtime secrets              | `secret-materialize <env> <node>`: preserve OpenBao, generate missing `source: agent`, derive from OpenBao-owned inputs, fail on missing `source: human` | Being split from substrate reconcile; do not pass values through candidate-flight inputs                                   |
-| Rotate AUTO-GENERATED value (e.g., `AUTH_SECRET`)     | `rotate-secret.yml` workflow with env-protection; auto-generates value; **human approves event, never sees value**                                       | Not built; do manual `openssl rand` + `pnpm secrets:set` per [`secrets-rotate.md`](../../../docs/guides/secrets-rotate.md) |
-| Rotate VENDOR-MINTED value (OpenAI key, Cherry token) | Operator-app UI (in `cogni` repo, not node-template)                                                                                                     | Today: CLI on candidate-a; preview/prod TBD                                                                                |
-| Candidate-a experimentation                           | `pnpm secrets:set <env> <service> <KEY>` via port-forward + writer-role JWT                                                                              | Shipped — see [`secrets-add-new.md`](../../../docs/guides/secrets-add-new.md)                                              |
-| Dynamic DB credentials                                | OpenBao DB engine, no human in loop                                                                                                                      | Future (Crawl row 3 of `proj.security-hardening`)                                                                          |
+| Operation                                             | Right pattern                                                                                                           | Today's reality                                                                                                            |
+| ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Add new secret SHAPE (service X consumes key A)       | PR → `vault-config-operator` CRD → Argo reconciles                                                                      | Not built; tracked in `proj.agentic-fork-bootstrap` Walk                                                                   |
+| Materialize a new wizard node's runtime secrets       | Generate/derive node-local values and inherit only explicit org/env grants; no per-node human values for ordinary nodes | PR #1582 v0 does this inside narrow substrate reconcile; standalone `secret-materialize` + shared-bank split is follow-up  |
+| Rotate AUTO-GENERATED value (e.g., `AUTH_SECRET`)     | `rotate-secret.yml` workflow with env-protection; auto-generates value; **human approves event, never sees value**      | Not built; do manual `openssl rand` + `pnpm secrets:set` per [`secrets-rotate.md`](../../../docs/guides/secrets-rotate.md) |
+| Rotate VENDOR-MINTED value (OpenAI key, Cherry token) | Operator-app UI (in `cogni` repo, not node-template)                                                                    | Today: CLI on candidate-a; preview/prod TBD                                                                                |
+| Candidate-a experimentation                           | `pnpm secrets:set <env> <service> <KEY>` via port-forward + writer-role JWT                                             | Shipped — see [`secrets-add-new.md`](../../../docs/guides/secrets-add-new.md)                                              |
+| Dynamic DB credentials                                | OpenBao DB engine, no human in loop                                                                                     | Future (Crawl row 3 of `proj.security-hardening`)                                                                          |
 
 The killer rule: **no human types a secret VALUE into a UI in production.** Auto-generated, vendor-minted via operator-app, or dynamic. Form-input is the anti-pattern.
 
@@ -148,8 +152,8 @@ No-human-secret done right: agent generates, agent pushes, **zero human, self-he
 - Treating `tier: B`, GitHub Environment Secrets, or VM `.env` as authority for
   a runtime secret. If it feeds a pod or a pod-facing role, OpenBao owns it.
 - Candidate-flight accepting secret values as inputs. Flight may invoke
-  materialization for safe generated/derived values and fail on missing human
-  values; it must not carry values.
+  materialization for safe generated/derived node values and fail if the
+  environment's required DAO/org bank is missing; it must not carry values.
 - A **dual-plane** secret (must byte-match an external system — GitHub App webhook secret, OAuth client secret) declared with **no `syncTo:`** — it silently fails verification forever and `deploy-infra` re-breaks it every run. Add `syncTo:` (keep `source: agent` if we generate the value). See "Dual-plane secrets" above.
 - Generic catch-all workflow (`secrets-manage.yml`-shaped). Per-operation only.
 - `ssh root@vm kubectl ...` or `ssh root@vm bao ...`. Use local kubectl + port-forward + writer-role JWT.

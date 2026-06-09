@@ -132,6 +132,52 @@ self-serve. The catalog model (capability-gated, distinct-vs-shared custody line
 
 ---
 
+## New Node Wizard Contract
+
+A wizard-created node does **not** require a human to set a new secret value for
+that node. Node formation is allowed to consume the environment's existing
+DAO/org values, but node-local material is generated or derived by the secrets
+substrate.
+
+Required human values are environment/org preconditions, not node-birth inputs:
+
+| Key                  | Scope              | Required for                        |
+| -------------------- | ------------------ | ----------------------------------- |
+| `OPENROUTER_API_KEY` | DAO/org runtime    | Shared LLM runtime                  |
+| `EVM_RPC_URL`        | DAO/org runtime    | Shared Base RPC endpoint            |
+| `POSTHOG_API_KEY`    | DAO/org runtime    | Shared telemetry project            |
+| `POSTHOG_HOST`       | DAO/org runtime    | Shared telemetry host               |
+| `DOMAIN`             | Environment config | Public host and derived app URLs    |
+| `VM_HOST`            | Environment CI     | Workflow access to the environment  |
+| `GHCR_DEPLOY_TOKEN`  | Repo/deploy        | Private image pulls from the VM     |
+| `CHERRY_AUTH_TOKEN`  | Genesis only       | VM provisioning, not runtime        |
+| `POLYGON_RPC_URL`    | Payments only      | `poly` / payment-capable nodes only |
+
+For a normal non-payment wizard node, the per-node human-secret list is empty.
+If one of the shared DAO/org values is absent, the correct fix is to provision
+or repair the environment secret bank before flight. Candidate flight must not
+accept the value as a workflow input and the wizard must not store it.
+
+V0 implementation checkpoint for PR #1582:
+
+1. Node birth PR declares shape in git.
+2. Candidate flight runs the narrow node substrate readiness lane before the
+   read-only assertion.
+3. That lane preserves existing `cogni/<env>/<node>` values, fills generated
+   node-local values, denormalizes the existing environment values the node is
+   allowed to consume, applies the ExternalSecret, updates edge/DB inventory,
+   and runs targeted DB provisioners.
+4. The scorecard proves ESO sync, DB rows, edge route, `/version`, and
+   `/readyz` for the new node.
+
+This v0 lane is not the final shared backend. The next implementation PR should
+split `secret-materialize <env> <node>` from substrate reconcile and replace
+historical fallback copying with an explicit OpenBao shared-bank /
+owner-grant model. Until that lands, docs and PR descriptions must name the v0
+lane as transitional.
+
+---
+
 ## Core Invariants
 
 1. **PATH_CONVENTION_PER_SERVICE_PER_ENV.** Every secret lives at `cogni/<env>/<service>` in OpenBao KV v2, with the secret name as a key at that path. `<env>` ∈ {`candidate-a`, `preview`, `production`}; `<service>` is the catalog name (`node-template`, `scheduler-worker`, …). One path per (service, env). Multiple keys per path.
@@ -177,7 +223,7 @@ self-serve. The catalog model (capability-gated, distinct-vs-shared custody line
 
 15. **DB_ROLE_CREDS_ARE_OPENBAO_OWNED** (bug.5002 — the corollary of `OPENBAO_IS_SINGLE_SOURCE_OF_TRUTH` at the Compose↔k8s boundary). The DB role passwords a k8s pod authenticates with, or any password that must agree with a pod-facing DSN, are **owned by OpenBao**. This includes `APP_DB_PASSWORD`, `APP_DB_SERVICE_PASSWORD`, `APP_DB_READONLY_PASSWORD`, `DOLTGRES_PASSWORD`, `DOLTGRES_READER_PASSWORD`, and `DOLTGRES_WRITER_PASSWORD`. They may be rendered into Compose for role creation, Grafana datasource provisioning, or other substrate work, but Compose does not own them. `deploy-infra.sh` / `db-provision` / `doltgres-provision` MUST NOT be a **second writer** of these passwords: they create each role **once** from the OpenBao-sourced value and **never `ALTER … PASSWORD` from a rendered `.env`** on a later run. A `.env` rendered from GitHub env secrets is a parallel store (Invariant 5 violation); ALTERing the DB to it diverges from the value ESO syncs to the pod → `28P01 password authentication failed` → `/readyz` "infrastructure unreachable" → 502 (the candidate-a 2026-06-04 cluster-wide outage). The Compose **superuser** (`POSTGRES_ROOT_PASSWORD`) is exempt while no pod consumes it, but it too is set-once at init, never "reconciled" to a divergent source. **The fix for a provisioning auth failure is to align the source (point `db-provision` at OpenBao), never to overwrite the DB from `.env`.**
 
-16. **NODE_SECRET_MATERIALIZATION_PRECEDES_SUBSTRATE_RECONCILE.** A new node's first flight/promotion runs a `secret-materialize <env> <node>` primitive before any DB/edge/ExternalSecret substrate reconcile or read-only substrate assertion. The materializer reads the catalog, preserves existing OpenBao values, generates missing `source: agent` values, derives values only from non-secret inputs plus OpenBao-owned secret inputs, fails on missing `source: human` values, and logs key names only. Candidate flight and promote workflows MUST NOT accept secret values as inputs.
+16. **NODE_SECRET_MATERIALIZATION_PRECEDES_SUBSTRATE_RECONCILE.** A new node's first flight/promotion runs a materialization phase before any DB/edge/ExternalSecret substrate reconcile or read-only substrate assertion. In the final form this is a standalone `secret-materialize <env> <node>` primitive: it reads the catalog, preserves existing OpenBao values, generates missing `source: agent` values, derives values only from non-secret inputs plus OpenBao-owned secret inputs, inherits only explicitly granted shared values, and logs key names only. It must not require per-node human values for ordinary wizard nodes; missing shared DAO/org values are environment precondition failures. Candidate flight and promote workflows MUST NOT accept secret values as inputs.
 
 ---
 
@@ -329,14 +375,15 @@ bridge because they remove split brain now and keep the migration path clean.
 
 Keep these PRs separate so each one has a falsifiable outcome:
 
-| PR  | Scope                                       | Acceptance                                                                                                                                                                                             |
-| --- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 1   | Contract alignment                          | Specs, guides, and skills use `origin` / `custody` / `consumers`; no doc treats GitHub env or VM `.env` as runtime authority.                                                                          |
-| 2   | `secret-materialize <env> <node>` primitive | Catalog-derived; preserves OpenBao; generates missing `source: agent`; derives from OpenBao-owned inputs; fails on missing `source: human`; logs key names only; unit fake proves no value leaks.      |
-| 3   | DB credential OpenBao bridge                | Explicit static per-node DB keys are seeded in OpenBao; DB/Grafana provisioners render from OpenBao, not GH env or VM `.env`; role creation remains set-once.                                          |
-| 4   | Workflow wiring                             | `candidate-flight.yml`, `promote-and-deploy.yml`, and genesis provision run materialize -> reconcile-substrate -> assert-substrate before rollout verification. Workflows do not accept secret values. |
-| 5   | Human/vendor value lane                     | `secret-set.yml` or operator API writes human-sourced values through OIDC/OpenBao with sealed staging and audit proof; production uses env protection.                                                 |
-| 6   | Dynamic DB credentials                      | Replace static per-node DB passwords with OpenBao DB secrets engine and shorter ESO refresh intervals.                                                                                                 |
+| PR  | Scope                                        | Acceptance                                                                                                                                                                                             |
+| --- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1   | PR #1582 v0 node readiness                   | Contract docs name the v0 and target models; candidate flight has a narrow node substrate lane; a new non-payment wizard node needs zero per-node human secrets and can reach ESO/DB/edge assertion.   |
+| 2   | Standalone `secret-materialize <env> <node>` | Split OpenBao writes out of substrate reconcile; catalog-derived; preserves OpenBao; generates missing `source: agent`; inherits only explicit grants; logs key names only.                            |
+| 3   | Explicit shared-bank / owner-grant backend   | Replace broad fallback copying with a declared OpenBao shared-bank for DAO/org values and per-key grants to node capability classes.                                                                   |
+| 4   | DB credential OpenBao bridge                 | DB/Grafana provisioners render from OpenBao, not GH env or VM `.env`; role creation remains set-once; falsify by deleting GH DB-password secrets and deploying successfully.                           |
+| 5   | Workflow wiring cleanup                      | `candidate-flight.yml`, `promote-and-deploy.yml`, and genesis provision run materialize -> reconcile-substrate -> assert-substrate before rollout verification. Workflows do not accept secret values. |
+| 6   | Human/vendor value lane                      | `secret-set.yml` or operator API writes human-sourced org/env values through OIDC/OpenBao with sealed staging and audit proof; production uses env protection.                                         |
+| 7   | Dynamic DB credentials                       | Replace static DB passwords with OpenBao DB secrets engine and shorter ESO refresh intervals.                                                                                                          |
 
 ### Standardized tooling — three entry points, one primitive
 

@@ -46,6 +46,54 @@ parallel source of truth. Creating all-env shape is not the same as proving
 all-env values exist; value materialization is validated by the
 provision/reconcile and flight lanes.
 
+## V0 E2E Checkpoint
+
+For a normal wizard-created node, there are **no per-node human secret values**.
+The node inherits the environment's existing DAO/org unlocks and receives
+generated node-local material from the substrate lane.
+
+The explicit v0 flow is:
+
+1. Environment genesis/provisioning has already established the DAO/org secret
+   bank for the environment.
+2. The wizard creates the node-birth PR: catalog target, ExternalSecret leaf,
+   overlay, AppSet, child repo pin, and launch-pack facts.
+3. Candidate flight runs the narrow node substrate readiness lane before the
+   read-only substrate assertion.
+4. That lane preserves any existing `cogni/<env>/<slug>` values, fills missing
+   generated node-local values, denormalizes only the environment values the
+   node is allowed to consume, applies `<slug>-env-secrets`, updates edge/DB
+   inventory, and runs the targeted DB provisioners.
+5. `assert-substrate` verifies ExternalSecret readiness, DB/edge shape, and
+   app substrate without writing secrets.
+
+The v0 lane is a checkpoint, not the final backend. It still needs a follow-up
+PR that splits `secret-materialize` from substrate reconcile and replaces
+historical broad fallback with an explicit OpenBao shared-bank / owner-grant
+model. Do not hide that follow-up by calling current denormalization the final
+authority model.
+
+### Human Keys Needed For A New Node
+
+For a standard non-payment wizard node: **none per node**.
+
+The environment must already have these required human-provided org/env values:
+
+| Key                  | Scope              | Why the new node needs it                                      |
+| -------------------- | ------------------ | -------------------------------------------------------------- |
+| `OPENROUTER_API_KEY` | DAO/org runtime    | Shared LLM runtime unlock consumed by node apps                |
+| `EVM_RPC_URL`        | DAO/org runtime    | Shared Base RPC endpoint for on-chain reads                    |
+| `POSTHOG_API_KEY`    | DAO/org runtime    | Shared product telemetry project key                           |
+| `POSTHOG_HOST`       | DAO/org runtime    | Shared product telemetry host                                  |
+| `DOMAIN`             | Environment config | Builds the node's public host and derived app URLs             |
+| `VM_HOST`            | Environment CI     | Lets candidate/promotion workflows reach the environment VM    |
+| `GHCR_DEPLOY_TOKEN`  | Repo/deploy        | Lets the VM pull private GHCR images when needed               |
+| `CHERRY_AUTH_TOKEN`  | Genesis only       | Creates/provisions the VM; not a per-node or runtime app value |
+
+Payment/custody nodes are different. `POLYGON_RPC_URL` is required for `poly`
+or another explicitly payment-enabled node, and wallet/Privy keys remain
+capability-gated. They are never baseline for an ordinary wizard node.
+
 ## Why This Exists
 
 The prior node wizard could create a parent node-birth PR whose overlays still
@@ -281,11 +329,13 @@ secret-materialize <env> <node>
   -> flight/promote/verify
 ```
 
-`secret-materialize` is the only phase that writes OpenBao values for a new
-node. It preserves existing values, generates missing `source: agent` values,
-derives from non-secret and OpenBao-owned inputs, fails on missing
-`source: human` values, and logs key names only. `reconcile-substrate` reads
-OpenBao and provisions dependent substrate: DBs/roles, edge routing,
+In the target split, `secret-materialize` is the only phase that writes OpenBao
+values for a new node. It preserves existing values, generates missing
+`source: agent` node-local values, derives from non-secret and OpenBao-owned
+inputs, inherits only explicitly granted environment values, and logs key names
+only. Ordinary wizard nodes do not ask a human for per-node values; a missing
+DAO/org value is an environment-bank precondition failure. `reconcile-substrate`
+reads OpenBao and provisions dependent substrate: DBs/roles, edge routing,
 `COGNI_NODE_DBS`, and the node ExternalSecret leaf. `assert-substrate` is
 read-only.
 
