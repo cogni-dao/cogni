@@ -109,6 +109,25 @@ Order: **candidate-a** (reprovision-friendly, gate first) → **preview** →
    Environment secrets (Invariant 5). No destructive change before green.
 6. **Falsifying gate** (below).
 
+### Seam with the materialize redesign (coordinate before parallel work)
+
+The DSN-write half lives in `secret-materialize` — and #1579 is moving materialize
+off the per-key SSH loop to an in-cluster read-once-diff-write **Job**. DSN seeding
+must land in that Job form, **never** the old per-key SSH loop (the anti-pattern
+being removed). The two halves agree on this contract:
+
+| Owner | Does | Where |
+| --- | --- | --- |
+| materialize (Job — #1579 hosts the form, I specify the keys) | generate per-node `APP_DB_PASSWORD` / `APP_DB_SERVICE_PASSWORD` (`source: agent`); compose + write `DATABASE_URL` / `DATABASE_SERVICE_URL` / `DOLTGRES_URL` | `cogni/<env>/<node>` |
+| `provision.sh` (me) | `CREATE ROLE app_<node>` / `service_<node>` from those passwords (alongside `app_user` until cutover); per-DB grants/RLS | Postgres |
+| reconcile (me) | `<env>-db-reader` reads the per-node passwords, passes them to db-provision; applies the ESO leaf; **zero OpenBao writes, no `<env>-writer`** | — |
+
+Shared conventions: role names `app_<node>` / `service_<node>` (node underscored,
+matching `cogni_<node>`) — materialize's DSN username and `provision.sh`'s role name
+must agree. `app_readonly` stays **shared** (Grafana datasource, env-level).
+`DOLTGRES_URL` is composed by materialize from the env superuser (`DOLTGRES_PASSWORD`,
+decision B above). I do **not** seed DSNs anywhere; materialize owns DSN custody.
+
 ## Safety rules
 
 - **Never `ALTER … PASSWORD` a live role to a rendered `.env` value** to "self-heal
