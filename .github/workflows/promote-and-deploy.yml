@@ -205,14 +205,14 @@ jobs:
           bash scripts/ci/reconcile-node-dns.sh "${DEPLOY_ENVIRONMENT}"
 
   promote-k8s:
-    needs: [decide, reconcile-appset, reconcile-substrate]
+    needs: [decide, reconcile-appset, node-substrate]
     if: |
       always() &&
       needs.decide.outputs.has_targets == 'true' &&
       needs.reconcile-appset.result == 'success' &&
       (
-        (needs.decide.outputs.has_node_targets == 'true' && needs.reconcile-substrate.result == 'success') ||
-        (needs.decide.outputs.has_node_targets != 'true' && needs.reconcile-substrate.result == 'skipped')
+        (needs.decide.outputs.has_node_targets == 'true' && needs.node-substrate.result == 'success') ||
+        (needs.decide.outputs.has_node_targets != 'true' && needs.node-substrate.result == 'skipped')
       )
     strategy:
       fail-fast: false
@@ -438,76 +438,15 @@ jobs:
           path: out/
           retention-days: 1
 
-  # Materialize node-owned app secrets per-env BEFORE reconcile, on EVERY env
-  # (Invariant 16). App-key materialization is independent of the per-node DB-cred
-  # model (#1584) — it writes source:agent keys to cogni/<env>/<node> — so the lane
-  # is consistent across candidate-a/preview/production with no special-case.
-  # Orchestration only; logic lives in secret-materialize.sh.
-  materialize-substrate:
-    needs: [decide]
-    if: |
-      always() &&
-      needs.decide.outputs.has_node_targets == 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        node: ${{ fromJson(needs.decide.outputs.node_targets_json) }}
-    concurrency:
-      group: materialize-substrate-${{ needs.decide.outputs.environment }}-${{ matrix.node }}
-      cancel-in-progress: false
-    runs-on: ubuntu-latest
-    environment: ${{ needs.decide.outputs.environment }}
-    steps:
-      - name: Checkout app source
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
-        with:
-          ref: ${{ needs.decide.outputs.head_sha }}
-          fetch-depth: 0
-          token: ${{ secrets.ACTIONS_AUTOMATION_BOT_PAT || github.token }}
-          path: app-src
-
-      - name: Initialize node submodule when present
-        env:
-          GH_TOKEN: ${{ secrets.ACTIONS_AUTOMATION_BOT_PAT || github.token }}
-          NODE: ${{ matrix.node }}
-        run: |
-          set -euo pipefail
-          if git -C app-src config -f .gitmodules --get "submodule.nodes/${NODE}.path" >/dev/null 2>&1; then
-            git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
-            git -C app-src submodule update --init --depth 1 "nodes/${NODE}"
-          fi
-
-      - name: Setup SSH
-        env:
-          VM_HOST: ${{ secrets.VM_HOST }}
-          SSH_DEPLOY_KEY: ${{ secrets.SSH_DEPLOY_KEY }}
-        run: |
-          set -euo pipefail
-          if [ -z "$VM_HOST" ]; then
-            echo "::error::VM_HOST is required for secret materialization"
-            exit 1
-          fi
-          mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          echo "$SSH_DEPLOY_KEY" | tr -d '\r' > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -T 10 -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
-
-      - name: Materialize node-owned OpenBao secrets
-        env:
-          VM_HOST: ${{ secrets.VM_HOST }}
-          SSH_OPTS: "-i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6"
-          DEPLOY_ENVIRONMENT: ${{ needs.decide.outputs.environment }}
-          TARGET: ${{ matrix.node }}
-          DOMAIN: ${{ vars.DOMAIN }}
-          APP_SOURCE_DIR: app-src
-        run: bash app-src/scripts/ci/secret-materialize.sh "${DEPLOY_ENVIRONMENT}" "${TARGET}"
-
-  reconcile-substrate:
-    needs: [decide, reconcile-appset, reconcile-dns, materialize-substrate]
+  # Per-node substrate (materialize -> reconcile) per-env BEFORE pods, on EVERY env
+  # (Invariant 16). One job calls run-node-substrate.sh for each type:node target,
+  # uniform across candidate-a/preview/production with no special-case.
+  # Orchestration only; logic lives in run-node-substrate.sh.
+  node-substrate:
+    needs: [decide, reconcile-appset, reconcile-dns]
     if: |
       always() &&
       needs.decide.outputs.has_node_targets == 'true' &&
-      needs.materialize-substrate.result == 'success' &&
       needs.reconcile-appset.result == 'success' &&
       needs.reconcile-dns.result == 'success'
     strategy:
@@ -515,7 +454,7 @@ jobs:
       matrix:
         node: ${{ fromJson(needs.decide.outputs.node_targets_json) }}
     concurrency:
-      group: reconcile-substrate-${{ needs.decide.outputs.environment }}-${{ matrix.node }}
+      group: node-substrate-${{ needs.decide.outputs.environment }}-${{ matrix.node }}
       cancel-in-progress: false
     runs-on: ubuntu-latest
     environment: ${{ needs.decide.outputs.environment }}
@@ -546,7 +485,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "$VM_HOST" ]; then
-            echo "::error::VM_HOST is required for substrate reconciliation"
+            echo "::error::VM_HOST is required for node substrate"
             exit 1
           fi
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
@@ -554,16 +493,15 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -T 10 -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
 
-      - name: Reconcile node substrate readiness
+      - name: Run node substrate (materialize -> reconcile)
         env:
           VM_HOST: ${{ secrets.VM_HOST }}
           SSH_OPTS: "-i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6"
           DEPLOY_ENVIRONMENT: ${{ needs.decide.outputs.environment }}
-          TARGET: ${{ matrix.node }}
           DOMAIN: ${{ vars.DOMAIN }}
           APP_SOURCE_DIR: app-src
           COGNI_CATALOG_ROOT: app-src/infra/catalog
-        run: bash app-src/scripts/ci/reconcile-node-substrate.sh "${DEPLOY_ENVIRONMENT}" "${TARGET}"
+        run: bash app-src/scripts/ci/run-node-substrate.sh "${{ needs.decide.outputs.environment }}" "${{ matrix.node }}"
 
   deploy-infra:
     if: |
@@ -572,11 +510,11 @@ jobs:
       needs.decide.outputs.has_targets == 'true' &&
       needs.promote-k8s.result == 'success' &&
       (
-        (needs.decide.outputs.has_node_targets == 'true' && needs.reconcile-substrate.result == 'success') ||
-        (needs.decide.outputs.has_node_targets != 'true' && needs.reconcile-substrate.result == 'skipped')
+        (needs.decide.outputs.has_node_targets == 'true' && needs.node-substrate.result == 'success') ||
+        (needs.decide.outputs.has_node_targets != 'true' && needs.node-substrate.result == 'skipped')
       )
     runs-on: ubuntu-latest
-    needs: [decide, promote-k8s, reconcile-substrate]
+    needs: [decide, promote-k8s, node-substrate]
     environment: ${{ needs.decide.outputs.environment }}
     # 45m (was 15m, #785-era default): a cold-cache VM provisioning a NEW node
     # pulls the sandbox + LiteLLM images (~13m) BEFORE db-provision runs, so 15m
@@ -742,14 +680,13 @@ jobs:
   verify-deploy:
     # reconcile-dns ordered before the public /version probe so a newly-added node's
     # host resolves; its failure surfaces on reconcile-dns, the probe stays the gate.
-    needs:
-      [decide, promote-k8s, deploy-infra, reconcile-dns, reconcile-substrate]
+    needs: [decide, promote-k8s, deploy-infra, reconcile-dns, node-substrate]
     if: |
       always() &&
       needs.promote-k8s.result == 'success' &&
       (
-        (needs.decide.outputs.has_node_targets == 'true' && needs.reconcile-substrate.result == 'success') ||
-        (needs.decide.outputs.has_node_targets != 'true' && needs.reconcile-substrate.result == 'skipped')
+        (needs.decide.outputs.has_node_targets == 'true' && needs.node-substrate.result == 'success') ||
+        (needs.decide.outputs.has_node_targets != 'true' && needs.node-substrate.result == 'skipped')
       ) &&
       (needs.deploy-infra.result == 'success' || needs.deploy-infra.result == 'skipped')
     strategy:
