@@ -144,3 +144,37 @@ The `INFRA_ONLY` pass is invoked by `deploy-infra.sh`, which today runs **inside
 ### Verdict
 
 **APPROVE the direction; REQUEST one doc edit before code:** reframe Phase A per Finding 1 (net-new infra-DB-role pattern, not a task.5052 ride) and add the post-split lane-ownership call (Finding 2) + catalog file/path (Finding 3). Then: declarations can be drafted now; the `provision.sh` edit holds for dev2's split + manager sequencing. The store/tuple-continuity invariant and the one-PR-with-code constraint remain correct as written.
+
+---
+
+## Design Review — pass 3 (current-state vs roadmap, reviewer 2026-06-10)
+
+Re-analysis prompted by the correct observation: **OpenFGA is v0 operator-only today, but is on a hard trajectory to become a standard substrate consumed by _every_ node app.** Verified both halves precisely:
+
+| Artifact | Current state (v0) | Roadmap (all-nodes) |
+| --- | --- | --- |
+| OpenFGA server (DB, store, runtime) | one shared Compose instance / env; one `cogni-<env>-rbac` store | **same** — one shared instance, one env store (litellm-shape) |
+| Consumer of the authz API | **operator app only** — only `container.ts:843` builds the `AuthorizationPort` | **every node app** builds an `AuthorizationPort` and checks |
+| `OPENFGA_DB_PASSWORD` | operator-plane infra cred; server→shared-PG | **same** — singular, operator-plane; nodes hit the API, never the DB |
+| `OPENFGA_API_URL`/`STORE_ID`/`MODEL_ID` (consumed config) | published to the **operator** path only; **not** in `NODE_BASELINE_KEYS` (verified — no node ExternalSecret references it) | **fanned to every node app** via the existing baseline-fan / `_shared` seam (`reconcile-secrets.sh:41,205`) |
+
+This **sharpens, not overturns** Findings 2–3 — and surfaces the one thing pass-2 missed:
+
+### Finding 2 — UNCHANGED. Orthogonal to the consumer model.
+The `openfga` DB + login role are **singular operator-plane infra regardless of how many apps consume the API** (one server, one DB, created once in the infra-DB pass). The provision/deploy-split lane-ownership question is independent of consumer count. Stands as written.
+
+### Finding 3 — CORRECT for the DB password; that's the litellm precedent, and the all-nodes future _confirms_ it.
+`OPENFGA_DB_PASSWORD` → `infra/secrets-catalog.yaml` @ `cogni/<env>/openfga/*`, never a node catalog — **roadmap-stable.** The litellm analogy is exact: litellm is operator-plane shared infra whose DB cred is operator-owned *and* whose runtime config is fanned to every node. Nodes consuming OpenFGA's API no more makes its DB credential per-node than nodes calling litellm makes litellm's DB cred per-node. So Phase A is correct as designed; the all-nodes trajectory does not touch it.
+
+### 🔴 Finding 4 (NEW — the part pass-2 missed) — Phase B's publish target is where the roadmap bites. Build it for fan-out, not the operator path.
+The artifact that becomes "standard substrate for all node apps" is **not** the DB cred — it's the consumed runtime config (`OPENFGA_API_URL`/`STORE_ID`/`MODEL_ID`). Today the bootstrap publishes these to the **operator-specific** path (`patch_operator_openfga_config` → operator ExternalSecret). If Phase B's Job re-encodes that operator-hardcoded target, the v0→all-nodes port becomes a publish rewrite. **Build the publish against the fan-out seam now:** write `OPENFGA_API_URL/STORE_ID/MODEL_ID` to `cogni/<env>/_shared` (the spec's cross-service opt-in path, already delivered to every type:node by `seed_node_app_secrets`), or add them to `NODE_BASELINE_KEYS` with `shared: true`. Then **the consumer set stays operator-only today** (do _not_ wire node apps' `AuthorizationPort` speculatively — `container.ts:843` stays operator-only until node apps actually enforce; that's premature otherwise), but flipping a node on later = adding it to the consumer list, **not** re-architecting the Job. _(Aside: `STORE_ID`/`MODEL_ID` are non-secret identifiers per the cicd-secrets-expert config-vs-secret triage — they ride the OpenBao/ESO path only because they're bootstrap-resolved/dynamic. `_shared` is the right vehicle given they already flow through ESO; a ConfigMap is the purer home if you ever decouple them.)_
+
+### Resolve two open questions with the roadmap as the deciding reason
+- **"One store per env vs per node" → env-shared, permanently.** The all-nodes model is the *reason*, not just current simplicity: the model already carries per-node `node:` objects + `developer` relations, so every node app checks the **same** `cogni-<env>-rbac` graph. Per-node stores would shatter the authz graph (a `developer` granted on node X must be checkable by X's app against the shared model). Promote this from "keep unless isolation required" to "env-shared is the end-state."
+- **"C trigger" → named: the second consumer.** Today an OpenFGA/`ExternalName` outage blasts only the operator. The moment a node app beyond operator consumes the API, an outage takes down authz for **every** node — the SPOF goes N×. "First node app beyond operator wired to OpenFGA" is the concrete demand signal that promotes C off the backlog. Still demand-gated; now the trigger is specific.
+
+### Net prescription for current work (A/B), under the all-nodes model
+1. **Phase A — unchanged.** Singular operator-plane DB role + `infra/secrets-catalog.yaml` cred. Correct; roadmap-stable.
+2. **Phase B — publish to the `_shared`/baseline-fan seam, consumer-count-agnostic.** Operator-only consumer today; one-line node opt-in later. This is the single change the roadmap demands of current work.
+3. **Lock env-shared store + name the C trigger** in the open-questions section.
+4. **Do not** pull node-app `AuthorizationPort` wiring into this work — that's the roadmap's job, gated on the published config being fan-ready (which #2 guarantees).
