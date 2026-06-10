@@ -996,7 +996,50 @@ fi
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 log_info "[$(date -u +%H:%M:%S)] Running DB provisioning..."
 emit_deployment_event "infra_deployment.db_provision_started" "in_progress" "Provisioning database users and schemas"
-$RUNTIME_COMPOSE --profile bootstrap run --rm db-provision
+# Per-node db-provision (#1584): provision.sh now reconciles per-node roles
+# app_<node>/service_<node> to the per-node passwords OpenBao holds at
+# cogni/<env>/<node>, and refuses a multi-node COGNI_NODE_DBS so one shared
+# password can never leak across nodes. So loop the catalog node list (the same
+# NODE_TARGETS that drives node_database_csv) and invoke db-provision ONCE per
+# node, overriding COGNI_NODE_DBS to that single DB and injecting its OpenBao
+# passwords via -e — the same contract reconcile-node-substrate.sh uses. The
+# litellm/openfga root-owned DBs are (re)created idempotently each pass; harmless.
+# Per-node OpenBao read uses the same least-privilege ${DEPLOY_ENVIRONMENT}-db-reader
+# k8s-auth role proven above. Values are never echoed; only key names appear in logs.
+DB_READER_TOKEN=""
+mint_db_reader_token() {
+  local jwt
+  jwt=$(timeout 10 kubectl create token db-provisioner -n default 2>/dev/null) || return 1
+  timeout 10 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
+    bao write -field=token auth/kubernetes/login \
+    "role=${DEPLOY_ENVIRONMENT}-db-reader" "jwt=${jwt}" 2>/dev/null
+}
+read_node_db_secret() {
+  local node="$1" key="$2"
+  timeout 10 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
+    BAO_TOKEN="${DB_READER_TOKEN}" \
+    bao kv get -format=json "cogni/${DEPLOY_ENVIRONMENT}/${node}" 2>/dev/null \
+    | jq -r --arg k "$key" '.data.data[$k] // empty' 2>/dev/null || true
+}
+DB_READER_TOKEN="$(mint_db_reader_token || true)"
+[ -n "$DB_READER_TOKEN" ] || log_fatal "db-provision: could not mint ${DEPLOY_ENVIRONMENT}-db-reader token (OpenBao sealed / role absent) — per-node DB creds are required (#1584)"
+for node in "${NODE_TARGETS[@]}"; do
+  node_db="cogni_${node//-/_}"
+  app_pw="$(read_node_db_secret "$node" APP_DB_PASSWORD)"
+  svc_pw="$(read_node_db_secret "$node" APP_DB_SERVICE_PASSWORD)"
+  if [ -z "$app_pw" ] || [ -z "$svc_pw" ]; then
+    # fail-soft per node (parity with bug.5086 *-node-app-secrets): a dead/un-materialized
+    # catalog node must not wedge the whole env. secret-materialize owns these values.
+    log_warn "  Skipped ${node_db}: per-node DB creds absent at cogni/${DEPLOY_ENVIRONMENT}/${node} — run secret-materialize first"
+    continue
+  fi
+  log_info "  Provisioning ${node_db} (per-node OpenBao creds)..."
+  $RUNTIME_COMPOSE --profile bootstrap run --rm \
+    -e "COGNI_NODE_DBS=${node_db}" \
+    -e "APP_DB_PASSWORD=${app_pw}" \
+    -e "APP_DB_SERVICE_PASSWORD=${svc_pw}" \
+    db-provision
+done
 $RUNTIME_COMPOSE --profile bootstrap run --rm openfga-migrate
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
