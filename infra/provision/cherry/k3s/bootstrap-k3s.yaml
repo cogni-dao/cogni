@@ -87,9 +87,14 @@ write_files:
       # Restart journald with updated config
       systemctl restart systemd-journald
 
-      # Install k3s — disable traefik (Caddy handles ingress) and servicelb
+      # Install k3s — disable traefik (Caddy handles ingress) and servicelb.
+      # HONEST_ALLOCATABLE: system-reserved subtracts the co-resident Compose
+      # stack (~2.8GB) + OS from allocatable so the scheduler stops over-committing
+      # node-app pods onto RAM Compose already holds (the OOM/crash-loop disease);
+      # eviction-hard is the headroom safety net. Both templated — an infra-split
+      # app VM (no Compose on-box) sets system_reserved_memory low.
       echo "Installing k3s..."
-      curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--disable traefik --disable servicelb" sh -
+      curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--disable traefik --disable servicelb --kubelet-arg=system-reserved=memory=${system_reserved_memory} --kubelet-arg=eviction-hard=memory.available<${eviction_hard_memory}" sh -
 
       # Wait for k3s to be ready
       echo "Waiting for k3s node to be ready..."

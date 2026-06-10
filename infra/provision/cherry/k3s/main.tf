@@ -28,8 +28,10 @@ resource "cherryservers_server" "k3s" {
   ssh_key_ids = [cherryservers_ssh_key.k3s.id]
 
   user_data = base64encode(templatefile("${path.module}/bootstrap-k3s.yaml", {
-    ghcr_deploy_username = var.ghcr_deploy_username
-    ghcr_deploy_token    = var.ghcr_deploy_token
+    ghcr_deploy_username   = var.ghcr_deploy_username
+    ghcr_deploy_token      = var.ghcr_deploy_token
+    system_reserved_memory = var.system_reserved_memory
+    eviction_hard_memory   = var.eviction_hard_memory
   }))
 
   allow_reinstall = true
