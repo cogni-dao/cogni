@@ -4,7 +4,7 @@
 /**
  * Module: `@shared/node-app-scaffold/gens/overlay`
  * Purpose: Pure port of `scaffold-node.sh` step 5 — clone the `node-template` per-env
- *   `kustomization.yaml` into a new node's overlay, so the operator can author a node-birth PR
+ *   `kustomization.yaml` into a new node's overlay, so the operator can author a node-formation PR
  *   without `cp -R` + sed on a checkout.
  * Scope: Given the CURRENT committed `infra/k8s/overlays/<env>/node-template/kustomization.yaml`
  *   and the new node's `slug` + `nodePort` + container `port`, return the overlay byte-identical to

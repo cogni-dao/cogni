@@ -148,7 +148,7 @@ the value as a workflow input and the wizard must not store it.
 
 V0 implementation checkpoint for PR #1582:
 
-1. Node birth PR declares shape in git.
+1. Node formation PR declares shape in git.
 2. Candidate flight runs the narrow node substrate readiness lane before the
    read-only assertion.
 3. That lane preserves existing `cogni/<env>/<node>` values, fills generated
@@ -649,7 +649,7 @@ passes), with zero operator-domain edits. The substrate that makes it fan out (t
 Do not create a parallel secrets-vision doc. The durable contract lives here;
 the practical recipes live in `docs/guides/secrets-add-new.md` and
 `docs/guides/secrets-rotate.md`; routing details live in
-`docs/spec/secrets-classification.md`; node-birth behavior lives in
+`docs/spec/secrets-classification.md`; node-formation behavior lives in
 `docs/design/node-wizard-secret-setting.md`.
 
 Any doc that says "GitHub env is the runtime source of truth", "VM `.env` owns a

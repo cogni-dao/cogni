@@ -4,7 +4,7 @@
 /**
  * Module: `@shared/node-app-scaffold/gens/catalog`
  * Purpose: Pure port of `scaffold-node.sh` step 4 — render a new node's `infra/catalog/<slug>.yaml`
- *   from the `node-template.yaml` shape, so the operator can author a node-birth PR without bash/sed.
+ *   from the `node-template.yaml` shape, so the operator can author a node-formation PR without bash/sed.
  * Scope: Given a `slug` + container `port` + `node_port`, emit a `type:node` catalog entry valid per
  *   `infra/catalog/_schema.json`, with all `node-template`-derived fields renamed to `slug`.
  * Invariants: REPO_SPEC_IS_IDENTITY_SSOT — NO `node_id` (the schema forbids it; identity lives in

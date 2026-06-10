@@ -696,7 +696,7 @@ describe("extractOwningNode", () => {
     ]);
   });
 
-  it("NODE_BIRTH ride-along: legacy node source + its own catalog/overlay/AppSet → single node", () => {
+  it("NODE_FORMATION ride-along: legacy node source + its own catalog/overlay/AppSet → single node", () => {
     const sampleNode = {
       node_id: "00000000-0000-4000-8000-0000000000ca",
       node_name: "Sample Node",
@@ -729,7 +729,7 @@ describe("extractOwningNode", () => {
     });
   });
 
-  it("NODE_BIRTH bounded: legacy node cannot ride another node's catalog", () => {
+  it("NODE_FORMATION bounded: legacy node cannot ride another node's catalog", () => {
     const sampleNode = {
       node_id: "00000000-0000-4000-8000-0000000000ca",
       node_name: "Sample Node",

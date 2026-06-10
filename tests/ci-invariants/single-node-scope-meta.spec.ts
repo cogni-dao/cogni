@@ -231,14 +231,14 @@ describe("single-node-scope workflow gate · structural pins", () => {
     );
     expect(
       enforce.run,
-      "node-birth wiring whitelist must include the scheduler-worker configmap " +
+      "node-formation wiring whitelist must include the scheduler-worker configmap " +
         "(catalog-derived regen artifact; must mirror isNodeWiring in classify.ts)"
     ).toContain('"infra/k8s/base/scheduler-worker/configmap.yaml"');
     expect(
       enforce.run,
-      "node-birth wiring whitelist must include the edge Caddyfile.tmpl " +
+      "node-formation wiring whitelist must include the edge Caddyfile.tmpl " +
         "(catalog-derived regen artifact; bug.5086 parity — must mirror isNodeWiring " +
-        "in classify.ts so a catalog-driven Caddyfile regen rides a node birth)"
+        "in classify.ts so a catalog-driven Caddyfile regen rides a node formation)"
     ).toContain('"infra/compose/edge/configs/Caddyfile.tmpl"');
     expect(
       enforce.run,

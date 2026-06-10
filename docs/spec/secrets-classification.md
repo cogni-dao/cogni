@@ -109,7 +109,7 @@ writes OpenBao.
 
 For a normal wizard-created node, the per-node human-secret list is empty. The
 wizard declares node shape in git; it does not ask for, store, or transmit
-secret values. A node birth may depend on environment-level substrate that was
+secret values. A node formation may depend on environment-level substrate that was
 already provisioned for the target environment, and missing environment
 substrate is repaired in the owning provisioning/secrets lane rather than
 passed as candidate-flight input.

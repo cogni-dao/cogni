@@ -1,5 +1,5 @@
 {
-  "name": "submodule-gitlink pin: a submodule node-birth PR (bare nodes/<slug> gitlink + its catalog/overlays/appset + .gitmodules) is ONE operator domain (SUBMODULE_GITLINK_IS_OPERATOR_PIN)",
+  "name": "submodule-gitlink pin: a submodule node-formation PR (bare nodes/<slug> gitlink + its catalog/overlays/appset + .gitmodules) is ONE operator domain (SUBMODULE_GITLINK_IS_OPERATOR_PIN)",
   "paths": [
     "nodes/acme",
     ".gitmodules",

@@ -4,7 +4,7 @@
 /**
  * Module: `@shared/node-app-scaffold/gens/repo-spec`
  * Purpose: Render a new node's `.cogni/repo-spec.yaml` — the web3-anchored identity + governance
- *   doc — so the operator can author a node-birth PR carrying the node's own identity instead of
+ *   doc — so the operator can author a node-formation PR carrying the node's own identity instead of
  *   cloning the template's.
  * Scope: Pure transformer over server-verified DAO addresses + identity. `scope_id` is derived from
  *   `node_id` (uuidv5), never passed; `scope_key` defaults to `default`; payments stay

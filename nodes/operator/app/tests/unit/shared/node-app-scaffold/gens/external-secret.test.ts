@@ -4,14 +4,14 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  NODE_BIRTH_ENVS,
+  NODE_FORMATION_ENVS,
   renderNodeExternalSecret,
   renderNodeExternalSecretKustomization,
 } from "@/shared/node-app-scaffold/gens";
 
 describe("renderNodeExternalSecret", () => {
   it("renders one ESO leaf per birth env for a minted node", () => {
-    for (const env of NODE_BIRTH_ENVS) {
+    for (const env of NODE_FORMATION_ENVS) {
       const out = renderNodeExternalSecret("coulditbe", env);
 
       expect(out).toContain("name: coulditbe-env-secrets\n");

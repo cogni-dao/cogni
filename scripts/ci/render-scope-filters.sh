@@ -9,7 +9,7 @@
 # `!nodes/<slug>/**` operator negation per node, with single-node-scope-meta.spec.ts
 # as a tripwire that failed if you forgot. Adding a node was a manual 2-spot edit.
 # This generator loops the on-disk `nodes/*` listing (minus operator) instead, so
-# a node birth (a new `nodes/<slug>/` dir) yields its filter + negation for free.
+# a node formation (a new `nodes/<slug>/` dir) yields its filter + negation for free.
 #
 # `dorny/paths-filter` needs the filter inline in the workflow, so this script
 # generate-and-commits the region of `.github/workflows/ci.yaml` between the

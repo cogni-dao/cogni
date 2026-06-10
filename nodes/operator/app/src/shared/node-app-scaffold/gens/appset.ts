@@ -5,7 +5,7 @@
  * Module: `@shared/node-app-scaffold/gens/appset`
  * Purpose: Pure port of `scripts/ci/render-node-appset.sh` — emit a new node's per-`(env, slug)` Argo
  *   ApplicationSet objects and register them in the bootstrap kustomization, so the operator can author
- *   a node-birth PR without bash. One AppSet object per `(env, node)` is the structural LANE_ISOLATION
+ *   a node-formation PR without bash. One AppSet object per `(env, node)` is the structural LANE_ISOLATION
  *   fix (`bug.0378`): a flight only ever applies its own node's file.
  * Scope: `renderNodeAppset` substitutes the shared template (the SAME file the shell renderer feeds, so
  *   output is byte-exact and the `--check` drift gate stays green); `insertAppsetKustomization` re-renders

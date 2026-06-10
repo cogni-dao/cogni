@@ -1,6 +1,6 @@
 ---
 name: node-wizard-expert
-description: Use when designing, debugging, or operating the Cogni node formation wizard, node birth PRs, submodule-pinned node repos, child image builds, parent candidate-flight, or AI-assistant launch handoffs. Route launch execution and E2E proof to node-wizard-scorecard.
+description: Use when designing, debugging, or operating the Cogni node formation wizard, node formation PRs, submodule-pinned node repos, child image builds, parent candidate-flight, or AI-assistant launch handoffs. Route launch execution and E2E proof to node-wizard-scorecard.
 ---
 
 # Node Wizard Expert

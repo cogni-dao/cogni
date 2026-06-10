@@ -73,12 +73,12 @@ open parent pin PRs, and dispatch candidate-flight.
 | Permission     | Access       | Why                                                                                              |
 | -------------- | ------------ | ------------------------------------------------------------------------------------------------ |
 | Actions        | Read & write | Dispatches `candidate-flight.yml` with `workflow_dispatch`.                                      |
-| Administration | Read & write | Creates named forks from `node-template` and changes repo settings needed by node birth.         |
+| Administration | Read & write | Creates named forks from `node-template` and changes repo settings needed by node formation.     |
 | Checks         | Read & write | Writes review/check status where the operator acts as the App.                                   |
 | Contents       | Read & write | Writes `.cogni/repo-spec.yaml`, `.github/workflows/*`, `.gitmodules`, catalog, and pin branches. |
 | Issues         | Read & write | Work-item/issue coordination where GitHub issues are used.                                       |
 | Packages       | Read & write | Reserved for operator-owned package policy/visibility management; not a node-ref flight gate.    |
-| Pull requests  | Read & write | Opens and updates node birth/pin PRs.                                                            |
+| Pull requests  | Read & write | Opens and updates node formation/pin PRs.                                                        |
 | Workflows      | Read & write | Writes workflow files; GitHub rejects workflow-file edits without this.                          |
 
 Do **not** add a PAT, `GHCR_DEPLOY_TOKEN`, or any human-managed registry credential to child node
@@ -95,13 +95,13 @@ Parent candidate-flight and k3s pulls are separate cross-repo read paths. They r
 - the existing parent/cluster `GHCR_DEPLOY_TOKEN` registry credential with `read:packages`.
 
 `Administration` above is a **Repository permission** in the GitHub App UI. No separate
-organization permission is currently required for node birth beyond installing the operator App on
+organization permission is currently required for node formation beyond installing the operator App on
 **All repositories** in the mint org.
 
 The package permission for operator Apps is **Repository permissions → Packages → Read and write**.
 The live installation audit must show `.permissions.packages == "write"`.
 
-> **Install scope for the minting App.** Step 7's single-repo install is enough for _review_ (payload-driven), but an App that **creates + commits to** new node repos must reach repos that don't exist yet. A `selected`-repos install means a freshly-minted `<owner>/<slug>` is **invisible to the App** → the identity-commit 404s even with `administration: write`. So the minting App needs **"All repositories"** on a dedicated nodes/test org (`cogni-test-org` for candidate/test; a production nodes org for live node birth) so it is not org-wide over unrelated operator infra repos. See [node-formation.md § Node Publish](../spec/node-formation.md) + [node-ci-cd-contract.md § Submodule-pinned nodes](../spec/node-ci-cd-contract.md).
+> **Install scope for the minting App.** Step 7's single-repo install is enough for _review_ (payload-driven), but an App that **creates + commits to** new node repos must reach repos that don't exist yet. A `selected`-repos install means a freshly-minted `<owner>/<slug>` is **invisible to the App** → the identity-commit 404s even with `administration: write`. So the minting App needs **"All repositories"** on a dedicated nodes/test org (`cogni-test-org` for candidate/test; a production nodes org for live node formation) so it is not org-wide over unrelated operator infra repos. See [node-formation.md § Node Publish](../spec/node-formation.md) + [node-ci-cd-contract.md § Submodule-pinned nodes](../spec/node-ci-cd-contract.md).
 
 ### GHCR package requirement for wizard E2E
 
@@ -276,7 +276,7 @@ Fail conditions:
   will fail.
 - `repository_selection` is not `"all"` for `cogni-operator-test` → newly spawned repos may be
   invisible to the App.
-- `permissions.workflows` is not `"write"` → node birth cannot write `.github/workflows/*`.
+- `permissions.workflows` is not `"write"` → node formation cannot write `.github/workflows/*`.
 - `permissions.actions` is not `"write"` → the App cannot dispatch `candidate-flight.yml`.
 
 ### Verify GHCR package state

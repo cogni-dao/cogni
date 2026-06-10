@@ -40,7 +40,7 @@ export const nodeLaunchPackOperation = {
     candidateUrl: z.string().url(),
     knowledgeBlock: z.object({
       id: z.literal("node-launch-handoff"),
-      title: z.literal("AI assistant launch pack for node birth"),
+      title: z.literal("AI assistant launch pack for node formation"),
       url: z.string().url(),
     }),
     prompt: z.string().min(1),

@@ -8,7 +8,7 @@
 # readiness + per-node db-provision) for a SINGLE node in a SINGLE env. This is
 # the foundation for uniform substrate behavior across the whole node lifecycle:
 # candidate-a flight, preview promote, production promote all call this identically
-# — there is no "node-birth" special-case. Whoever the deployable set is, each node
+# — there is no "node-formation" special-case. Whoever the deployable set is, each node
 # in it gets its substrate run the same way, everywhere.
 #
 # Ordering is load-bearing: materialize (the sole OpenBao writer) MUST complete

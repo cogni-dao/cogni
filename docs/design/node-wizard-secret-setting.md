@@ -22,7 +22,7 @@ knowledge_id: node-wizard-secret-setting
 
 The node wizard generates **secret shape**, not secret values.
 
-A wizard-created node-birth PR must make the new node structurally deployable
+A wizard-created node-formation PR must make the new node structurally deployable
 on the ESO-first substrate by adding the git artifacts that describe where
 secrets will flow. It must not mint an alternate set of app/runtime values,
 copy operator secrets into git, or save progress state that can be derived from
@@ -31,7 +31,7 @@ GitHub, GHCR, OpenBao/ESO, candidate flight, or the deployed app.
 Values are owned by the secrets substrate:
 
 ```
-catalog + node birth facts
+catalog + node formation facts
   -> secret-materialize <env> <node>
   -> OpenBao path cogni/<env>/<node>
   -> reconcile-substrate reads OpenBao and provisions DB/edge/ESO
@@ -56,7 +56,7 @@ The explicit v0 flow is:
 
 1. Environment genesis/provisioning has already established the DAO/org secret
    bank for the environment.
-2. The wizard creates the node-birth PR: catalog target, ExternalSecret leaf,
+2. The wizard creates the node-formation PR: catalog target, ExternalSecret leaf,
    overlay, AppSet, child repo pin, and launch-pack facts.
 3. Candidate flight runs the narrow node substrate readiness lane before the
    read-only substrate assertion.
@@ -85,7 +85,7 @@ environment-bank repair, not a node-wizard form field.
 
 ## Why This Exists
 
-The prior node wizard could create a parent node-birth PR whose overlays still
+The prior node wizard could create a parent node-formation PR whose overlays still
 referenced legacy imperative Secrets such as `<slug>-node-app-secrets`. That
 shape cannot satisfy app-flight substrate assertions for an ESO-first target:
 flight can see a Deployment, but the Deployment consumes a Secret that no
@@ -209,13 +209,13 @@ There are two different classes:
   values.
 
 The wizard should not mint a Grafana admin/root token or copy an operator token
-into a node. If observability inputs are absent, node birth should still produce
+into a node. If observability inputs are absent, node formation should still produce
 valid substrate shape; the scorecard can mark observability incomplete without
 blocking basic app launch.
 
 ### CI, repo, Compose, and local-only values
 
-The wizard ignores these for v0 node birth:
+The wizard ignores these for v0 node formation:
 
 - Compose-infra values unless the infra/provision lane owns the write. If a
   Compose-rendered value creates or supports a pod-facing dependency, its
@@ -224,7 +224,7 @@ The wizard ignores these for v0 node birth:
 - E-tier repo-level values.
 - F-tier `.env.local` values.
 
-These are environment or repository substrate concerns, not per-node birth
+These are environment or repository substrate concerns, not per-node formation
 facts.
 
 ### Payments and custody values
@@ -420,7 +420,7 @@ proven by the env substrate lane.
 ## As-Built Anchors
 
 - `nodes/operator/app/src/shared/node-app-scaffold/gens/envs.ts` defines the
-  `candidate-a`, `preview`, and `production` node-birth matrix.
+  `candidate-a`, `preview`, and `production` node-formation matrix.
 - `nodes/operator/app/src/shared/node-app-scaffold/gens/external-secret.ts`
   renders each child repo ExternalSecret leaf without any secret value.
 - `nodes/operator/app/src/shared/node-app-scaffold/gens/overlay.ts` rewrites
@@ -484,7 +484,7 @@ This content should be promoted into the operator knowledge hub as a compact
 block, likely `node-wizard-secret-setting`, after review:
 
 > The node wizard owns secret shape, not secret values. A wizard-created
-> node-birth PR must generate ESO-first artifacts: overlays consume
+> node-formation PR must generate ESO-first artifacts: overlays consume
 > `<slug>-env-secrets`, and each
 > `nodes/<slug>/k8s/external-secrets/{candidate-a,preview,production}/`
 > directory contains one ExternalSecret extracting `<env>/<slug>` into that

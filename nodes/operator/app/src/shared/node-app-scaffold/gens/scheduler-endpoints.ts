@@ -4,7 +4,7 @@
 /**
  * Module: `@shared/node-app-scaffold/gens/scheduler-endpoints`
  * Purpose: Pure port of `scripts/ci/render-scheduler-worker-endpoints.sh`'s per-node insert, so
- *   the operator can author a node-birth PR's `scheduler-worker/configmap.yaml` edit without a
+ *   the operator can author a node-formation PR's `scheduler-worker/configmap.yaml` edit without a
  *   repo checkout or running bash + yq.
  * Scope: Given the CURRENT committed `infra/k8s/base/scheduler-worker/configmap.yaml` and a new
  *   node's slug + node_id (uuid), return the new configmap byte-identical to what
