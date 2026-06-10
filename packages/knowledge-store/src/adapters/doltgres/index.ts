@@ -165,14 +165,27 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
     opts?: { limit?: number }
   ): Promise<Knowledge[]> {
     const limit = opts?.limit ?? 20;
-    // Doltgres doesn't support ILIKE. Use LOWER() + LIKE as fallback.
-    // Escape LIKE wildcards in user query to prevent unintended pattern matching.
-    const escaped = query.toLowerCase().replace(/[%_\\]/g, "\\$&");
-    const lowerQuery = escapeValue(`%${escaped}%`);
+    // Case-insensitive match runs in the app layer, NOT via Doltgres SQL:
+    // Doltgres has no ILIKE, and LOWER() panics on out-of-line TEXT storage
+    // (*val.TextStorage) — fatal on the large `content` column. Fetch the
+    // domain's rows (domain is indexed) and filter here. Replaced by the
+    // derived pgvector search index (DOLT_IS_SOURCE_OF_TRUTH) when it lands.
+    const needle = query.toLowerCase();
     const rows = await this.sql.unsafe(
-      `SELECT * FROM knowledge WHERE domain = ${escapeValue(domain)} AND (LOWER(title) LIKE ${lowerQuery} OR LOWER(content) LIKE ${lowerQuery}) ORDER BY created_at DESC LIMIT ${limit}`
+      `SELECT * FROM knowledge WHERE domain = ${escapeValue(domain)} ORDER BY created_at DESC`
     );
-    return rows.map((r) => rowToKnowledge(r as Record<string, unknown>));
+    const matched: Knowledge[] = [];
+    for (const r of rows) {
+      const entry = rowToKnowledge(r as Record<string, unknown>);
+      if (
+        entry.title.toLowerCase().includes(needle) ||
+        entry.content.toLowerCase().includes(needle)
+      ) {
+        matched.push(entry);
+        if (matched.length >= limit) break;
+      }
+    }
+    return matched;
   }
 
   async listDomains(): Promise<string[]> {
