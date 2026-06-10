@@ -160,8 +160,13 @@ describe("buildNodeLaunchPack", () => {
     expect(pack.prompt).toContain("ensure the parent deployment PR is merged");
     expect(pack.prompt).toContain("Checkpoint with the human");
     expect(pack.prompt).toContain("brief status, progress, and next-steps");
+    expect(pack.prompt).toContain("Register as a contributor");
+    expect(pack.prompt).toContain("request developer access for this node");
     expect(pack.prompt).toContain(
-      "agent registration, human node-developer approval"
+      `/api/v1/nodes/11111111-1111-4111-8111-111111111111/developer-requests`
+    );
+    expect(pack.prompt).toContain(
+      "the node owner approves your request in the node UI"
     );
     expect(pack.prompt).not.toContain("browser-session-flight-auth.md");
     expect(pack.prompt).not.toContain("node-app-secrets");
