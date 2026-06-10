@@ -2051,45 +2051,70 @@ kubectl -n ${K8S_NAMESPACE} get events --sort-by=.lastTimestamp 2>&1 | tail -40
   fi
 }
 
-log_step "Phase 9: Verify /readyz on all nodes (up to 5 min)"
+log_step "Phase 9: Report node /readyz (SOFT — substrate is gated by Phases 5-8)"
 
-READYZ_OK=true
+# WHY SOFT + PARALLEL + GLOBAL-BUDGETED (the 60-min-timeout / orphaned-VM fix):
+# provision-env owns the SUBSTRATE (VM, k3s, Argo, OpenBao/ESO, Compose, AppSets,
+# DB-cred gate) — all gated, fail-loud, in Phases 3-8. App `/readyz 200` depends on
+# node IMAGES, which the PROMOTE lane ships, not provision. On a fresh env the images
+# aren't promoted yet, so gating provision success on per-node `/readyz` is asserting
+# a postcondition this job's scope cannot satisfy. The old loop made it worse: it
+# polled each declared node 5 min SEQUENTIALLY, so as the catalog grew (~12 nodes) the
+# phase alone exceeded GitHub's 60-min job cap → SIGKILL mid-run → the init-artifact
+# (kubeconfig + VM key) never got encrypted → an ORPHANED, unreachable VM every time.
+# Now: poll all declared nodes IN PARALLEL inside ONE wall-clock budget, then REPORT
+# (warn, never exit 1). Substrate-green provision completes in minutes and finalizes
+# VM_HOST + the init artifact; `/readyz 200` is proven by the promote lane afterwards.
+PHASE_9_BUDGET_SECS="${PHASE_9_BUDGET_SECS:-300}"
+
+# Resolve the declared (env-scoped) node → port set once. Per-env membership
+# (candidate-b 2026-06-04): NODE_TARGETS is the GLOBAL catalog, but an env deploys
+# only the nodes with an overlay under infra/k8s/overlays/${OVERLAY_DIR}/.
+declare -a RZ_NODES=() RZ_PORTS=()
 for node in "${NODE_TARGETS[@]}"; do
-  # Per-env node membership (bug: candidate-b 2026-06-04). NODE_TARGETS is the
-  # GLOBAL catalog (every type:node), but an env deploys only the nodes its
-  # ApplicationSet declares — i.e. the nodes with an overlay under
-  # infra/k8s/overlays/${OVERLAY_DIR}/ (the same env-scoped set Phase 4b.5 uses).
-  # Verifying an undeclared node (candidate-b is a 3-node OpenBao-proof env, no
-  # operator/resy overlay) reds a correctly-provisioned env. Skip what this env
-  # doesn't deploy.
   if [[ ! -d "$REPO_ROOT/infra/k8s/overlays/${OVERLAY_DIR}/${node}" ]]; then
-    log_info "  ${node}: not in ${DEPLOY_ENV} overlays — not deployed here, skipping /readyz"
+    log_info "  ${node}: not in ${DEPLOY_ENV} overlays — not deployed here, skipping"
     continue
   fi
   catalog_file="$REPO_ROOT/infra/catalog/${node}.yaml"
   node_port=$(yq -N '.node_port // ""' "$catalog_file" 2>/dev/null)
   if [[ -z "$node_port" || "$node_port" == "null" ]]; then
-    log_warn "  ${node}: no node_port in ${catalog_file}; skipping /readyz"
+    log_warn "  ${node}: no node_port in ${catalog_file}; skipping"
     continue
   fi
-  NODE_OK=false
-  for attempt in $(seq 1 30); do
-    STATUS=$(ssh $SSH_OPTS root@"$VM_IP" "curl -s -o /dev/null -w '%{http_code}' --connect-timeout 3 http://localhost:${node_port}/readyz" 2>/dev/null || echo "000")
-    if [[ "$STATUS" == "200" ]]; then
-      log_info "  ${node} (${node_port}): /readyz 200 ✅"
-      NODE_OK=true
-      break
-    fi
-    if (( attempt % 6 == 0 )); then
-      log_info "  ${node} (${node_port}): waiting... (${attempt}0s, last status: ${STATUS})"
-    fi
-    sleep 10
-  done
-  if [[ "$NODE_OK" != "true" ]]; then
-    log_error "  ${node} (${node_port}): /readyz FAILED after 5 min ❌"
-    READYZ_OK=false
+  RZ_NODES+=("$node"); RZ_PORTS+=("$node_port")
+done
+
+RZ_TOTAL=${#RZ_NODES[@]}
+RZ_RESULT_DIR=$(mktemp -d)
+# One backgrounded poller per node; each retries up to the GLOBAL budget, so total
+# wall-clock is ~PHASE_9_BUDGET_SECS regardless of node count (not budget × N).
+for i in "${!RZ_NODES[@]}"; do
+  node="${RZ_NODES[$i]}"; port="${RZ_PORTS[$i]}"
+  (
+    deadline=$(( $(date +%s) + PHASE_9_BUDGET_SECS ))
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+      st=$(ssh $SSH_OPTS root@"$VM_IP" "curl -s -o /dev/null -w '%{http_code}' --connect-timeout 3 http://localhost:${port}/readyz" 2>/dev/null || echo "000")
+      [ "$st" = "200" ] && { echo "200" > "$RZ_RESULT_DIR/$node"; exit 0; }
+      sleep 10
+    done
+    echo "timeout" > "$RZ_RESULT_DIR/$node"
+  ) &
+done
+wait
+
+RZ_SERVING=0; RZ_NOT=()
+for i in "${!RZ_NODES[@]}"; do
+  node="${RZ_NODES[$i]}"; port="${RZ_PORTS[$i]}"
+  if [[ "$(cat "$RZ_RESULT_DIR/$node" 2>/dev/null)" == "200" ]]; then
+    log_info "  ${node} (${port}): /readyz 200 ✅"
+    RZ_SERVING=$((RZ_SERVING + 1))
+  else
+    log_warn "  ${node} (${port}): not serving /readyz yet (app image lands via promote)"
+    RZ_NOT+=("$node")
   fi
 done
+rm -rf "$RZ_RESULT_DIR"
 
 # ══════════════════════════════════════════════════════════════
 # Phase 9a: Verify public /readyz via Cloudflare → Caddy → app
@@ -2139,12 +2164,14 @@ else
 fi
 
 echo ""
-if [[ "$READYZ_OK" == "true" ]]; then
-  log_info "═══ ALL DECLARED NODES HEALTHY — ${DEPLOY_ENV} IS GREEN ═══"
-  exit 0
-else
-  log_error "═══ SOME NODES FAILED /readyz — ${DEPLOY_ENV} PROVISION IS RED ═══"
-  phase_9_diagnostic
-  log_error "Debug: ssh -i .local/${DEPLOY_ENV}-vm-key root@$VM_IP 'kubectl -n ${K8S_NAMESPACE} logs -l app.kubernetes.io/name=node-app --tail=20'"
-  exit 1
+# Provision success = SUBSTRATE provisioned (gated fail-loud in Phases 3-8). App
+# `/readyz` is a soft report: not-yet-serving nodes mean images haven't been promoted
+# yet, which is the promote lane's job — NOT a provision failure. Exiting non-zero here
+# is what SIGKILLed the run before init-artifact custody and orphaned the VM.
+log_info "═══ ${DEPLOY_ENV} SUBSTRATE PROVISIONED ═══"
+log_info "  /readyz serving: ${RZ_SERVING}/${RZ_TOTAL} declared nodes"
+if [[ "${#RZ_NOT[@]}" -gt 0 ]]; then
+  log_warn "  not-yet-serving (promote app images to finish): ${RZ_NOT[*]}"
+  log_warn "  Debug a node: ssh -i .local/${DEPLOY_ENV}-vm-key root@$VM_IP 'kubectl -n ${K8S_NAMESPACE} get pods'"
 fi
+exit 0
