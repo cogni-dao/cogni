@@ -460,21 +460,28 @@ patches:
     patch: |
       - op: replace
         path: /spec/template/spec/containers/0/envFrom/1/secretRef/name
-        value: "node-template-node-app-secrets"
+        value: "node-template-env-secrets"
       - op: replace
         path: /spec/template/spec/initContainers/0/envFrom/1/secretRef/name
-        value: "node-template-node-app-secrets"
+        value: "node-template-env-secrets"
+      - op: replace
+        path: /spec/template/spec/initContainers/0/command/2
+        value: exec node /app/app/migrate.mjs /app/app/migrations
       - op: replace
         path: /spec/template/spec/containers/0/ports/0/containerPort
         value: 3200
       - op: add
         path: /spec/template/spec/initContainers/-
         value:
+          command:
+            - /bin/sh
+            - -c
+            - exec node /app/app/migrate-doltgres.mjs /app/app/doltgres-migrations
           env:
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
-                  name: node-template-node-app-secrets
+                  name: node-template-env-secrets
                   key: DOLTGRES_URL
   - target:
       kind: Service
