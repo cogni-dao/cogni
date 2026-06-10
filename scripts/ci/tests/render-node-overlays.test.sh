@@ -7,12 +7,12 @@
 #      catalog (the drift gate that makes a stale migrate path fail CI before flight).
 #   2. The renderer is byte-exact to the operator mint path (gens/overlay.ts): a
 #      node minted from current main reproduces verbatim.
-#   3. The render targets the node-at-root image layout (/app/app) and the ESO
-#      secret target (<slug>-env-secrets) — the two rewrites a stale operator froze
-#      to the wrong values.
+#   3. The node-template template overlay carries the node-at-root image layout
+#      (/app/app) and the ESO secret target (<slug>-env-secrets) directly; the
+#      renderer only slug/port-renames it (no path/secret rewrite).
 #   4. FALSIFYING GATE: a hand-staled overlay (monorepo migrate path) makes --check
 #      red. Without this, the gate could be a no-op.
-#   5. Fail-closed: a node-template overlay missing the migrate secret-ref anchor
+#   5. Fail-closed: a node-template overlay missing the node-at-root migrate command
 #      aborts the render instead of emitting a silently-crash-looping overlay.
 #
 # Run: bash scripts/ci/tests/render-node-overlays.test.sh
@@ -80,15 +80,15 @@ fi
 pass "--check correctly fails on a staled migrate path"
 restore; BACKUPS=()
 
-echo "[5/5] fail-closed: a template missing the migrate anchor aborts the render"
+echo "[5/5] fail-closed: a template missing the node-at-root migrate command aborts the render"
 TPL="infra/k8s/overlays/candidate-a/node-template/kustomization.yaml"
 stash "$TPL"
-# Drop the migrate initContainer secret-ref patch (the injection anchor).
-perl -0pi -e 's{ {6}- op: replace\n {8}path: /spec/template/spec/initContainers/0/envFrom/1/secretRef/name\n {8}value: [^\n]*\n}{}' "$TPL"
+# Drop the node-at-root Postgres migrate override op (the guard's anchor).
+perl -0pi -e 's{ {6}- op: replace\n {8}path: /spec/template/spec/initContainers/0/command/2\n {8}value: exec node /app/app/migrate\.mjs /app/app/migrations\n}{}' "$TPL"
 if bash "$RENDER" candidate-a ayo >/dev/null 2>&1; then
-  fail "render emitted an overlay despite the missing migrate anchor (would crash-loop)"
+  fail "render emitted an overlay despite the missing node-at-root migrate command (would crash-loop)"
 fi
-pass "render aborts fail-closed when the anchor is absent"
+pass "render aborts fail-closed when the migrate command is absent"
 restore; BACKUPS=()
 
 echo "PASS: render-node-overlays.test.sh"

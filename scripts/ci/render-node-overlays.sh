@@ -6,23 +6,23 @@
 # overlay from the node-template overlay (CATALOG_IS_SSOT + NODE_AT_ROOT_MIGRATE_PATH).
 #
 # Why a CI renderer + drift gate (bug.5008):
-#   Overlay content — the node-at-root migrate rewrite AND the ESO secret-target
-#   rename — was generated once at mint time by the operator's gens/overlay.ts (or
-#   scaffold-node.sh), committed verbatim, and FROZEN to that operator version.
-#   check-gitops-manifests.sh only kustomize-builds the overlay, so a wrong-but-valid
-#   migrate path (/app/nodes/<slug>/app on a node-at-root image) passes the build yet
-#   crash-loops the migrate initContainer at runtime (MODULE_NOT_FOUND). A node minted
-#   by a pre-#1583 operator shipped that stale path while CI stayed green. This renderer
-#   is the overlay twin of render-node-appset.sh: regenerate from the committed
-#   node-template overlay + catalog, diff vs committed, fail on drift BEFORE flight.
+#   A wizard-born node's overlay is generated once at mint time (operator gens/overlay.ts
+#   or scaffold-node.sh) and committed verbatim. check-gitops-manifests.sh only
+#   kustomize-builds it, so a wrong-but-valid migrate path (/app/nodes/<slug>/app on a
+#   node-at-root image) passes the build yet crash-loops the migrate initContainer at
+#   runtime (MODULE_NOT_FOUND). This renderer is the overlay twin of render-node-appset.sh:
+#   regenerate from the committed node-template overlay + catalog, diff vs committed, fail
+#   on drift BEFORE flight.
+#
+# The node-template template overlay is itself node-at-root (/app/app migrate paths) and
+#   carries the ESO `<slug>-env-secrets` target directly — so rendering a child is a pure
+#   slug + port rename, with no path or secret rewrite. node-template thus deploys with the
+#   exact shape it hands to every spawn (no split-brain template-vs-deployable).
 #
 # Byte-exact twins: gens/overlay.ts `renderOverlay` (operator mint path) and
-#   scaffold-node.sh step 5 (manual CLI) MUST emit identical output. All three consume
-#   the same node-template overlay as the template and apply the same transforms:
-#   slug rename, the two well-known port literals (30200→node_port, 3200→port), the
-#   `<slug>-node-app-secrets`→`<slug>-env-secrets` ESO target rename (what the substrate
-#   reconciler + assert-target-substrate.sh provision), and the node-at-root migrate
-#   rewrites. Drift between the twins now fails CI instead of crash-looping a pod.
+#   scaffold-node.sh step 5 (manual CLI) MUST emit identical output — all three consume the
+#   same node-template overlay and apply only the slug rename + the two well-known port
+#   literals (30200→node_port, 3200→port). Drift between the twins fails CI, not a pod.
 #
 # Node set: catalog rows that declare a `source_repo` (externally built, node-at-root
 #   image layout) EXCEPT node-template itself (the template). Monorepo nodes
@@ -76,17 +76,14 @@ render_one() {
   [ -n "$np" ] && [ -n "$port" ] \
     || { echo "[ERROR] $node: catalog has no node_port/port" >&2; return 1; }
   tmp="$(mktemp)"
-  SLUG="$node" NODEPORT="$np" PORT="$port" SECRET="$node-env-secrets" perl -0777 -pe '
+  SLUG="$node" NODEPORT="$np" PORT="$port" perl -0777 -pe '
     s/node-template/$ENV{SLUG}/g;
     s/\b30200\b/$ENV{NODEPORT}/g;
     s/\b3200\b/$ENV{PORT}/g;
-    s/\Q$ENV{SLUG}\E-node-app-secrets/$ENV{SECRET}/g;
-    s{/app/nodes/\$\(NODE_NAME\)/app}{/app/app}g;
-    s{( {8}path: /spec/template/spec/initContainers/0/envFrom/1/secretRef/name\n {8}value: [^\n]*\n)}{$1      - op: replace\n        path: /spec/template/spec/initContainers/0/command/2\n        value: exec node /app/app/migrate.mjs /app/app/migrations\n}g;
   ' "$tpl" > "$tmp"
   if ! grep -q 'exec node /app/app/migrate.mjs /app/app/migrations' "$tmp"; then
     rm -f "$tmp"
-    echo "[ERROR] $env/$node: node-at-root migrate override not injected (NODE_AT_ROOT_MIGRATE_PATH); the node-template overlay is missing the migrate initContainer secret-ref anchor." >&2
+    echo "[ERROR] $env/$node: node-at-root migrate path missing (NODE_AT_ROOT_MIGRATE_PATH); the node-template template overlay must carry /app/app migrate commands." >&2
     return 1
   fi
   cat "$tmp"
