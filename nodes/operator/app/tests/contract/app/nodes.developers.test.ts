@@ -46,11 +46,21 @@ function rowsFrom<T>(rows: T[]): {
   };
 }
 
+const transitionRequest = vi.hoisted(() => vi.fn());
+
 const mockAppDb = {
   select: () => rowsFrom(dbState.ownerNode ? [dbState.ownerNode] : []),
 };
 const mockServiceDb = {
   select: () => rowsFrom(dbState.agentUser ? [dbState.agentUser] : []),
+  update: () => ({
+    set: () => ({
+      where: () => {
+        transitionRequest();
+        return Promise.resolve(undefined);
+      },
+    }),
+  }),
 };
 
 vi.mock("@/bootstrap/container", () => ({
@@ -123,6 +133,7 @@ describe("POST /api/v1/nodes/[id]/developers", () => {
       object: `node:${NODE_ID}`,
     });
     expect(authz.deleteRelation).not.toHaveBeenCalled();
+    expect(transitionRequest).toHaveBeenCalled();
   });
 
   it("rejects by removing the node developer tuple", async () => {
