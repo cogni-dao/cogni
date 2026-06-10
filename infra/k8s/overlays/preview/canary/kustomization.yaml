@@ -13,7 +13,7 @@ namePrefix: canary-
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/cogni-template
-    digest: "sha256:b9c676a476d21807e3ad6d94a48cbeaeea1017733f5345c48362dd39583b883e"
+    digest: "sha256:8bc4b008417316d59394bd24210c1cbe8edbadfc5955f54234eb3e81d35521c0"
 
 patches:
   - target:
