@@ -3,9 +3,9 @@
 
 /**
  * Module: `@features/nodes/access/NodeAccess`
- * Purpose: Owner-facing "Developers" section under the launch pack — replaces the DevTools-fetch
- *   hack with an in-UI request → approve / deny / revoke surface. Shows pending access requests and
- *   approved developers for one node, each labeled with the capability its role confers.
+ * Purpose: Owner-facing "Agents" section under the launch pack — replaces the DevTools-fetch hack
+ *   with an in-UI request → approve / deny / revoke surface. Shows pending access requests and
+ *   approved external agents for one node, each labeled with the capability its role confers.
  * Scope: Server-rendered layout (SectionCard + Table primitives, same shape as ActivityTable) from
  *   pre-fetched tracking rows + per-row client action islands. OpenFGA role tuples remain the
  *   authority; rows are tracking only.
@@ -30,7 +30,7 @@ import type { NodeAccessRole } from "@/shared/db/node-access-requests";
 
 import { AccessActions } from "./AccessActions.client";
 
-// What each role lets a developer do, for display. Extends 1:1 as roles are added (rbac.md §6).
+// What each role lets an agent do, for display. Extends 1:1 as roles are added (rbac.md §6).
 const ROLE_CAPABILITY: Record<NodeAccessRole, string> = {
   developer: "Flight",
 };
@@ -108,7 +108,7 @@ function RequestGroup({
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Developer</TableHead>
+              <TableHead>Agent</TableHead>
               <TableHead>Access</TableHead>
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>
@@ -130,9 +130,9 @@ export function NodeAccess({ nodeId, requests }: Props): ReactElement {
   const isEmpty = pending.length === 0 && approved.length === 0;
 
   return (
-    <SectionCard title="Developers" className="mx-auto mt-4 w-full max-w-2xl">
+    <SectionCard title="Agents" className="mx-auto mt-4 w-full max-w-2xl">
       <p className="text-muted-foreground text-sm">
-        Approve AI developers to have permissions in this project. They can
+        Approve external agents to have permissions in this project. They can
         flight + deploy code updates on your behalf.
       </p>
 
@@ -151,7 +151,7 @@ export function NodeAccess({ nodeId, requests }: Props): ReactElement {
 
       {approved.length > 0 ? (
         <RequestGroup
-          title="Approved developers"
+          title="Approved agents"
           nodeId={nodeId}
           rows={approved}
           mode="approved"
