@@ -6,10 +6,10 @@
 #   - source:agent app keys ARE materialized per-node (AUTH_SECRET);
 #   - genuinely-shared values inherited from the env bank ARE materialized
 #     (OPENROUTER_API_KEY from node-template);
-#   - per-node DB creds + Postgres DSNs ARE composed sole-source here
+#   - per-node DB creds + ALL THREE DSNs ARE composed sole-source here
 #     (APP_DB_PASSWORD/SERVICE generated; DATABASE_URL/SERVICE_URL embed the
-#     per-node app_<node> role + that password — the bug.5002 cutover);
-#   - only DOLTGRES_URL stays deferred (composed from the env superuser elsewhere);
+#     per-node app_<node> role; DOLTGRES_PASSWORD derived per-node + DOLTGRES_URL
+#     composed from it as the postgres superuser — the bug.5002 cutover, both planes);
 #   - no secret VALUE is echoed to stdout.
 
 set -euo pipefail
@@ -141,11 +141,17 @@ grep -q '://app_canary:' "$BAO_ROOT/cogni/candidate-a/canary/DATABASE_URL" \
   || { echo "DATABASE_URL must embed per-node role app_canary, not shared app_user" >&2; exit 1; }
 grep -q '://service_canary:' "$BAO_ROOT/cogni/candidate-a/canary/DATABASE_SERVICE_URL" \
   || { echo "DATABASE_SERVICE_URL must embed per-node role service_canary" >&2; exit 1; }
-# DOLTGRES_URL stays deferred (composed from the env superuser elsewhere, decision-B)
-if [ -f "$BAO_ROOT/cogni/candidate-a/canary/DOLTGRES_URL" ]; then
-  echo "materialize must defer DOLTGRES_URL (env-superuser-composed, not per-node yet)" >&2
-  exit 1
-fi
+# Doltgres half of the cutover: the env superuser password is materialized per-node
+# (DOLTGRES_PASSWORD, derived from POSTGRES_ROOT_PASSWORD) and DOLTGRES_URL is composed
+# sole-source here from it. The pod reaches its own knowledge_<node> DB as the
+# `postgres` superuser — Doltgres 0.56.3 RBAC is table-DML-only (databases.md §5.2),
+# so a per-node role is not yet possible.
+test -f "$BAO_ROOT/cogni/candidate-a/canary/DOLTGRES_PASSWORD" \
+  || { echo "materialize did not materialize per-node DOLTGRES_PASSWORD" >&2; exit 1; }
+test -f "$BAO_ROOT/cogni/candidate-a/canary/DOLTGRES_URL" \
+  || { echo "materialize did not compose DOLTGRES_URL" >&2; exit 1; }
+grep -qE '://postgres:[^@]+@[^/]+/knowledge_canary\?' "$BAO_ROOT/cogni/candidate-a/canary/DOLTGRES_URL" \
+  || { echo "DOLTGRES_URL must reach knowledge_canary as the postgres superuser (non-empty pw)" >&2; exit 1; }
 # no secret value leaked to output
 if grep -q 'sk-or-existing\|writer-token' "$TMPROOT/out.txt"; then
   echo "secret value leaked to output" >&2

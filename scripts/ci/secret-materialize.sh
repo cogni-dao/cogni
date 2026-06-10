@@ -14,12 +14,14 @@
 #   - shared/human values are inherited transitionally (see inherit_shared_value);
 #   - it logs key NAMES only, never values.
 #
-# TRANSITIONAL (not yet the target): the DB DSNs (DATABASE_URL, DATABASE_SERVICE_URL,
-# DOLTGRES_URL) are still seeded by reconcile-substrate (which mints <env>-writer
-# for that one write) until the env-repair lane lands cogni/<env>/<node> DB creds
-# (docs/guides/vm-secrets-repair.md, #1584). Only after that does this become the
-# SOLE OpenBao writer and reconcile go fully read-only. Until then the falsifying
-# gate cannot pass and this PR must not claim deploy_verified via that gate.
+# SOLE WRITER: this script composes + writes all per-node DB DSNs (DATABASE_URL,
+# DATABASE_SERVICE_URL, DOLTGRES_URL) to cogni/<env>/<node> from OpenBao-owned
+# component passwords; reconcile-substrate is read-only (db-reader token, zero
+# writes). DATABASE_URL/_SERVICE_URL use per-node app_<node>/service_<node>
+# passwords (#1584); DOLTGRES_URL uses DOLTGRES_PASSWORD, the env Doltgres
+# superuser derived from POSTGRES_ROOT_PASSWORD and materialized per-node (this PR).
+# The falsifying gate (delete VM .env DOLTGRES_PASSWORD → deploy green from OpenBao
+# only) holds once provisioners read DOLTGRES_PASSWORD from OpenBao (deploy-infra).
 #
 # It does NOT apply ExternalSecrets, touch edge/DB inventory, or run provisioners
 # — those are reconcile-substrate's responsibilities.
@@ -200,13 +202,18 @@ key_is_agent_generated() {
 }
 
 # Node-owned secrets only (node-baas-architecture.md: each node owns its own DB
-# + secrets). DATABASE_URL/DATABASE_SERVICE_URL are now composed here from the
-# per-node app_<node>/service_<node> password (generated above, source:agent at
-# cogni/<env>/<node>) — the bug.5002 sole-source cutover. DOLTGRES_URL stays
-# deferred: it embeds the env Doltgres superuser password, which this runner cannot
-# read (decision B); reconcile composes it until the source:derived follow-up moves
-# DOLTGRES_PASSWORD into OpenBao. _shared persists until catalog inheritFrom.
-DSN_DEFER_KEYS=" DOLTGRES_URL "
+# + secrets). All three DSNs are now composed + written here — the bug.5002
+# sole-source cutover, complete for both planes:
+#   DATABASE_URL / DATABASE_SERVICE_URL  from per-node app_<node>/service_<node>
+#     passwords (source:agent at cogni/<env>/<node>);
+#   DOLTGRES_URL                         from DOLTGRES_PASSWORD — the env Doltgres
+#     superuser, derived from POSTGRES_ROOT_PASSWORD and materialized per-node just
+#     above it in NODE_BASELINE_KEYS (the pod connects as that superuser because
+#     Doltgres 0.56.3 RBAC is table-DML-only — databases.md §5.2).
+# Nothing is deferred: materialize is the SOLE OpenBao writer of all per-node DSNs,
+# reconcile is read-only. The DSN_DEFER mechanism is retained (empty) so a future
+# transitional key can be parked without re-introducing the loop guard.
+DSN_DEFER_KEYS=" "
 
 # Transitional shared/human inheritance — the blind ancestor scan the north star
 # replaces with explicit catalog `inheritFrom` (catalog-custody lane). Now serves

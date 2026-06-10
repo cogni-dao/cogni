@@ -46,7 +46,7 @@ declare -ga NODE_BASELINE_KEYS=(
   POLY_WALLET_AEAD_KEY_ID
   APP_DB_PASSWORD APP_DB_SERVICE_PASSWORD
   DATABASE_URL DATABASE_SERVICE_URL
-  DOLTGRES_URL
+  DOLTGRES_PASSWORD DOLTGRES_URL
   POSTHOG_API_KEY POSTHOG_HOST OPENROUTER_API_KEY
   EVM_RPC_URL POLYGON_RPC_URL
   APP_BASE_URL NEXTAUTH_URL
@@ -80,12 +80,17 @@ declare -ga SCHEDULER_WORKER_KEYS=(
 declare -ga COMPOSE_ONLY_KEYS=(
   POSTGRES_ROOT_PASSWORD
   APP_DB_READONLY_PASSWORD
-  TEMPORAL_DB_PASSWORD DOLTGRES_PASSWORD
+  TEMPORAL_DB_PASSWORD
 )
-# APP_DB_PASSWORD / APP_DB_SERVICE_PASSWORD moved to NODE_BASELINE_KEYS (per-node
-# source:agent, materialized to cogni/<env>/<node>) — they precede DATABASE_URL so
-# the DSN composition reads the generated password. APP_DB_READONLY_PASSWORD stays
-# Compose-only (env-level Grafana role, superuser-derived; not per-node).
+# APP_DB_PASSWORD / APP_DB_SERVICE_PASSWORD / DOLTGRES_PASSWORD moved to
+# NODE_BASELINE_KEYS (materialized to cogni/<env>/<node>) — each precedes its DSN
+# so the composition reads the OpenBao value. APP_DB_* are per-node source:agent;
+# DOLTGRES_PASSWORD is the env-level Doltgres superuser, derived from
+# POSTGRES_ROOT_PASSWORD (salt doltgres-root) and written per-node so DOLTGRES_URL
+# is OpenBao-sole-source (Invariant 15) — the pod connects as that superuser
+# because Doltgres 0.56.3 RBAC is table-DML-only (databases.md §5.2). The same
+# value lands in every node path; provisioners read it set-once. APP_DB_READONLY_PASSWORD
+# stays Compose-only (env-level Grafana role, not pod-facing).
 
 # ── Catalog-gated per-node fan-out (task.5094) ────────────────────────────────
 # The OpenBao seed fans NODE_BASELINE_KEYS to every type:node, gating + valuing
@@ -157,9 +162,19 @@ _resolve_node_value() {
     DATABASE_SERVICE_URL)
       printf 'postgresql://service_%s:%s@%s:5432/%s?sslmode=disable' \
         "${node//-/_}" "$(bao_get_field "$node" APP_DB_SERVICE_PASSWORD)" "${VM_IP}" "${db}"; return 0 ;;
+    DOLTGRES_PASSWORD)
+      # Env-level Doltgres superuser, derived from POSTGRES_ROOT_PASSWORD. Written
+      # per-node so DOLTGRES_URL composes from OpenBao (not a rendered .env). Same
+      # value every node; deterministic, never a fresh random (matches the live
+      # server, which was initialized with the same derivation).
+      derive_secret doltgres-root; return 0 ;;
     DOLTGRES_URL)
+      # Per-node knowledge_<node> DB, reached as the `postgres` superuser (Doltgres
+      # 0.56.3 RBAC is table-DML-only — databases.md §5.2). The password is read from
+      # cogni/<env>/<node> (DOLTGRES_PASSWORD, materialized just above), mirroring
+      # DATABASE_URL — never derived inline, never from .env.
       printf 'postgresql://postgres:%s@%s:5435/knowledge_%s?sslmode=disable' \
-        "${DOLTGRES_PASSWORD:-$(derive_secret doltgres-root)}" "${VM_IP}" "${node//-/_}"; return 0 ;;
+        "$(bao_get_field "$node" DOLTGRES_PASSWORD)" "${VM_IP}" "${node//-/_}"; return 0 ;;
   esac
   kind=$(_cat_field "$k" '.generate.kind')
   source=$(_cat_field "$k" '.source')

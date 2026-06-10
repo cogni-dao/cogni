@@ -174,8 +174,10 @@ for k in OPENROUTER_API_KEY POSTHOG_API_KEY POSTHOG_HOST EVM_RPC_URL; do
   assert "$r" "$k is a real server-env.ts pod read (cross-check)"
 done
 
-# 10c. Compose-only credentials MUST NOT leak into the pod universe.
-for k in APP_DB_PASSWORD APP_DB_SERVICE_PASSWORD COGNI_NODE_ENDPOINTS; do
+# 10c. Compose-only credentials MUST NOT leak into the pod universe. DOLTGRES_PASSWORD
+#      is materialized per-node for the DOLTGRES_URL composition (like APP_DB_PASSWORD),
+#      but the pod consumes only the composed URL — the raw superuser pw is compose-consumed.
+for k in APP_DB_PASSWORD APP_DB_SERVICE_PASSWORD DOLTGRES_PASSWORD COGNI_NODE_ENDPOINTS; do
   r=0; in_derived "$k" && r=1
   assert "$r" "compose-only $k is NOT pod-derived"
 done
@@ -189,7 +191,7 @@ miss=0
 for k in "${NODE_BASELINE_KEYS[@]}"; do
   case "$k" in
     DATABASE_URL | DATABASE_SERVICE_URL | DOLTGRES_URL) continue ;;
-    APP_DB_PASSWORD | APP_DB_SERVICE_PASSWORD) continue ;;
+    APP_DB_PASSWORD | APP_DB_SERVICE_PASSWORD | DOLTGRES_PASSWORD) continue ;;
   esac
   in_derived "$k" || { printf '  regression: baseline %s not derived\n' "$k"; miss=1; }
 done

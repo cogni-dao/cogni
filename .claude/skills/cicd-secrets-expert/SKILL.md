@@ -51,7 +51,9 @@ Examples:
 - `APP_DB_PASSWORD`, `APP_DB_SERVICE_PASSWORD`,
   `APP_DB_READONLY_PASSWORD`, `DOLTGRES_PASSWORD`,
   `DOLTGRES_READER_PASSWORD`, `DOLTGRES_WRITER_PASSWORD`: OpenBao custody;
-  Compose renders copies to create roles.
+  Compose renders copies to create roles. (`DOLTGRES_PASSWORD` is the env Doltgres
+  superuser the pod itself authenticates as — Doltgres RBAC is table-DML-only, so no
+  per-node role; why + value-shape in [databases.md §5.2](../../../docs/spec/databases.md).)
 - Public URLs / owner slugs / feature modes: repo-config, not OpenBao.
 
 ## Routing tree — where does the value render?

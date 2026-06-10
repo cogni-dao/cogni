@@ -195,6 +195,7 @@ Everything schema-time (drizzle-kit migrate, `CREATE SCHEMA`, `__drizzle_migrati
 
 ### Doltgres-specific gotchas
 
+- **Connects as the `postgres` superuser — RBAC is table-DML-only.** Doltgres `0.56.3` implements only table-level `SELECT/INSERT/UPDATE/DELETE/TRUNCATE` grants (no function/schema/role privileges, no `ALTER DEFAULT PRIVILEGES`), so per-node `knowledge_<node>` roles can't run the migrator or app — every node's `DOLTGRES_URL` uses the env superuser. As-built rationale + the upstream trigger to swap to per-node roles: [databases.md §5.2](../../../docs/spec/databases.md).
 - **`SET @@dolt_transaction_commit = 1` is MySQL-dialect syntax** — not verified on Doltgres's pg wire protocol. Don't add it to compose/scripts. The explicit trailing `SELECT dolt_commit('-Am', ...)` pattern is the repo's verified approach.
 - **DROP SCHEMA … CASCADE is not supported** (per the 0.56.0 error message). Drop tables individually, then DROP SCHEMA.
 - **Per-node DB name convention**: `cogni_<node>` (Postgres) → `knowledge_<node>` (Doltgres). `provision.sh` derives one from the other.

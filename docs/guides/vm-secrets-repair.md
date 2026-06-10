@@ -44,19 +44,26 @@ that govern this runbook:
   `_shared` classification, and `_shared` itself is a transitional bank being
   purged toward owner-scoped paths. **Do not create a `cogni/<env>/_shared` DB
   path** — pod-facing DB material lives at `cogni/<env>/<node>`.
-- **The env superuser is not pod-facing.** `POSTGRES_ROOT_PASSWORD` and the
-  Doltgres superuser password stay **Compose/bootstrap-only**; no pod consumes
-  them, so they are out of scope for this OpenBao migration (`_system` at most, if
-  ever removed from GH env — never `_shared`).
-- **Doltgres stays derive-from-master (B), not per-node (A) — for now.** The
-  north star is per-node Doltgres roles (A), but Doltgres 0.56 RBAC is vestigial:
-  `GRANT` reports success yet the role cannot even `SELECT current_user`, so
-  `deploy-infra.sh` ships `knowledge_<node>` access as the `postgres` superuser
-  (task.0311 / dolthub/doltgresql). So `DOLTGRES_PASSWORD` stays the **env-level
-  Doltgres superuser** (bootstrap-level like `POSTGRES_ROOT_PASSWORD` — not a
-  per-node secret, not `_shared`); the pod's per-node `DOLTGRES_URL` (its own
-  `knowledge_<node>` DB) is composed from it. Migrate to A when Doltgres `GRANT`
-  works. **Not blocking** the Postgres per-node-role purge below.
+- **The Postgres env superuser is not pod-facing.** `POSTGRES_ROOT_PASSWORD` stays
+  **Compose/bootstrap-only**; no pod consumes it, so it is out of scope for this
+  OpenBao migration (`_system` at most, if ever removed from GH env — never `_shared`).
+  **The Doltgres superuser is the exception** (next bullet): the pod reaches its
+  `knowledge_<node>` DB _as_ that superuser, so `DOLTGRES_PASSWORD` **is** pod-facing
+  and **is** OpenBao-owned — materialized per-node, not bootstrap-only.
+- **Doltgres stays derive-from-master (B), not per-node-role (A) — RBAC verdict
+  CONFIRMED.** Doltgres `0.56.3` RBAC is table-DML-only, so a per-node
+  `knowledge_<node>` role can't run the migrator or app and the pod connects as the
+  `postgres` superuser. The empirical proof + upstream citations are the SSOT in
+  [databases.md §5.2](../spec/databases.md) — not restated here. The **secrets
+  consequence** (this runbook's domain): `DOLTGRES_PASSWORD` is OpenBao-sole-source
+  like Postgres (not bootstrap-only) — the env superuser password, derived from
+  `POSTGRES_ROOT_PASSWORD` (salt `doltgres-root`), materialized **per-node** to
+  `cogni/<env>/<node>`, with `DOLTGRES_URL` composed from it by `secret-materialize`
+  (the sole OpenBao writer; reconcile read-only). Only the credential _value-shape_
+  differs from Postgres (env superuser, not per-node `source: agent`); migrate to A —
+  a per-node `knowledge_<node>` role — with **zero pipeline change** the day Doltgres
+  adds function/schema/role privileges. **Not blocking** the Postgres per-node-role
+  purge below.
 
 > An earlier draft of this runbook imported the superuser + four derived passwords
 > into `cogni/<env>/_shared`. That was wrong: it adopted the deferred shared-bank
