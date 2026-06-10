@@ -94,3 +94,37 @@ This design is the **substrate plumbing beneath** the app-layer RBAC product flo
 - **One store per env vs per node:** today a single `cogni-<env>-rbac` store serves all nodes. Keep env-shared (simpler, matches current authz model) unless per-node isolation becomes a requirement.
 - **Catalog type for OpenFGA:** introduce a `type=service` substrate contract in `assert-target-substrate.sh`, or model OpenFGA as a node-like target? The skill notes `type=service`/`type=infra` "fail until their own contracts exist" — this design is the trigger to define the `service` contract.
 - **Authz-data backup contract:** the app DBs have a `db-backup` timer; the OpenFGA store/model/tuples need an equivalent before C is "done."
+
+---
+
+## Design Review (reviewer, 2026-06-10)
+
+**Verdict: REQUEST CHANGES — right instinct, accurate as-built, two corrections + a re-anchor before Phase-A code.** Every cited `file:line` was verified correct (Step-6.6a @`deploy-infra.sh:1106`, helpers @1129/1164; `compose:293/312` root DSN; `provision.sh:270` root-owned DB no role; `assert-target-substrate.sh:288` fails `infra`/`service`; `bootstrap-openfga.sh` hash-idempotent). Rare for a design this size — the homework is real.
+
+### Blocking — fix before Phase-A code
+
+1. **Phase-A delivery mechanism is wrong: ESO cannot reach a Compose container.** A says the DSN "becomes ESO-delivered `OPENFGA_DATASTORE_URI`," but in A/B OpenFGA is still a **Compose** service (C hasn't happened). ESO delivers to k8s Secrets→pods only. In A/B the DSN must travel the **OpenBao → deploy-infra set-once reader → `.env`** path — the Invariant-15 diagram (`secrets-management.md:233`), the same path app DB creds + litellm already use. It becomes ESO-delivered **only at C**, when OpenFGA is a k8s pod. Split the read-path by phase: `.env`-reader in A/B, ESO at C.
+
+### Re-anchor — Phase 0 is mistracked
+
+2. **"Phase 0" is the Invariant-15 DB-cred SSOT reconcile (secrets-mgmt Phase 2 / `task.5052`), not the 1606/1607 scaling work.** Don't mint a new "Phase 0" number — link the actual task. **Current state (2026-06-10):** a prod operator promote (`skip_infra=false`) was dispatched as the **stopgap via the existing bespoke path** — deploy-infra → bootstrap-openfga to create prod's empty `OPENFGA_STORE_ID` (the prod 503) and flip operator `app_user → app_operator`. fga-dev owns verifying (a) prod store bootstrapped, (b) #1604's approve-flow clears its 503 on cognidao.org. If deploy-infra `28P01`'d at db-provision before reaching bootstrap, driving the bootstrap home **is** Phase 0.
+
+### Scope — defer C, don't just sequence it
+
+3. **C's statefulness justification is backwards.** The design keeps durable state in shared Postgres (Non-Goal #4), so the *workload* is stateless and rolls fine in Compose — exactly the litellm case the devops-expert skill codifies as "runtime stays Compose, the move was explicitly deferred." C's real upside is lane-uniformity / retiring `ExternalName`, not statefulness. At MVP altitude (`feedback_mvp_stage_first`), treat C as **demand-gated** (mirror PR #1606's framing). **A+B clear the 503 + the bug.5002 class and remove the split-brain; C earns its way in later.**
+
+4. **Catalog-type is a C-only question.** A/B leave OpenFGA `type: infra`, asserted by `candidate-flight-infra`/`deploy-infra` — no `assert-target-substrate.sh` change. Only C needs the `type=service` contract; don't define that branch until C.
+
+5. **Backup belongs in A, not "before C is done."** The authz data is in shared Postgres *today*; the gap is live now and widens the moment A makes OpenFGA a first-class DB consumer. Pull the `db-backup` parity into A.
+
+### Refinements
+
+6. **B relocates the publish step, it does not delete it.** The Job still writes `STORE_ID`/`MODEL_ID` to OpenBao + triggers ESO delivery — that's `patch_operator_openfga_config` + `refresh_operator_openfga_secret` logic *moved into a Job*, not eliminated. Say so honestly: B deletes the deploy-infra **gating**, relocates the **publish**. Also unresolved: how the Job obtains `infra/openfga/rbac-model.json` (today scp'd to `/tmp` @`deploy-infra.sh:1886`) — ConfigMap or baked image?
+7. **"OpenFGA is the one consumer still on root creds" is imprecise** — litellm's DSN also uses `POSTGRES_ROOT` (`provision.sh:259`, `compose:178`). Both are in Invariant-15 scope; say "OpenFGA *and litellm*."
+8. **Name a same-day sync-porter.** This touches `scripts/ci/`, `infra/**`, `deploy-infra.sh` — devops-expert requires a porter to `Cogni-DAO/cogni` for substrate backflow, committed before merge, else `sync-drift` accumulates.
+
+### Delivery constraints (manager, 2026-06-10)
+
+- **Land Phase A as ONE reviewed PR with the code — not the design alone.** Design rides with the Phase-A/B implementation (`feedback_one_pr_per_task`).
+- **Derek is freezing `.sh`/`.yml` churn once prod is green.** This unification *removes* bespoke logic (kills the split-brain) = **syntropy, not churn** — but **ping the manager before touching substrate scripts** so it sequences *after* prod is green.
+- Map A/B/C to work items under [`proj.rbac-hardening`](../../work/projects/proj.rbac-hardening.md); each phase = one task = one PR.
