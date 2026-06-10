@@ -1,0 +1,13 @@
+name: oss
+type: node
+port: 3200
+node_port: 31000
+dockerfile: nodes/oss/app/Dockerfile
+image_tag_suffix: "-oss"
+migrator_tag_suffix: "-oss-migrate"
+source_repo: https://github.com/Cogni-DAO/oss.git
+image_repository: ghcr.io/cogni-dao/oss
+candidate_a_branch: deploy/candidate-a-oss
+preview_branch: deploy/preview-oss
+production_branch: deploy/production-oss
+path_prefix: nodes/oss/

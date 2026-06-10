@@ -16,3 +16,6 @@
 [submodule "nodes/ayo"]
 	path = nodes/ayo
 	url = https://github.com/Cogni-DAO/ayo.git
+[submodule "nodes/oss"]
+	path = nodes/oss
+	url = https://github.com/Cogni-DAO/oss.git
