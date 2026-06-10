@@ -23,11 +23,7 @@ import { resolveServiceDb } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { upsertDeveloperRequest } from "@/features/nodes/developer-requests";
 import { nodes } from "@/shared/db/nodes";
-import {
-  EVENT_NAMES,
-  logEvent,
-  type RequestContext,
-} from "@/shared/observability";
+import { EVENT_NAMES, type RequestContext } from "@/shared/observability";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -57,26 +53,22 @@ function logRequestComplete(
   startedAt: number,
   fields: RequestLogFields
 ): void {
+  // App-local event (not in the node-shared registry), so log via ctx.log directly —
+  // matching how ADAPTER_GITHUB_REPO_WRITE_ERROR and other operator-local events are emitted.
   const payload = {
+    event: EVENT_NAMES.NODE_DEVELOPER_REQUEST_COMPLETE,
     reqId: ctx.reqId,
     routeId: ctx.routeId,
     durationMs: elapsedMs(startedAt),
     ...fields,
   };
-  if (fields.outcome === "success") {
-    logEvent(
-      ctx.log,
-      EVENT_NAMES.NODE_DEVELOPER_REQUEST_COMPLETE,
-      payload,
-      EVENT_NAMES.NODE_DEVELOPER_REQUEST_COMPLETE
-    );
-    return;
-  }
-  const level = fields.status >= 500 ? "error" : "warn";
-  ctx.log[level](
-    { event: EVENT_NAMES.NODE_DEVELOPER_REQUEST_COMPLETE, ...payload },
-    EVENT_NAMES.NODE_DEVELOPER_REQUEST_COMPLETE
-  );
+  const level =
+    fields.outcome === "success"
+      ? "info"
+      : fields.status >= 500
+        ? "error"
+        : "warn";
+  ctx.log[level](payload, EVENT_NAMES.NODE_DEVELOPER_REQUEST_COMPLETE);
 }
 
 export const POST = wrapRouteHandlerWithLogging<RouteParams>(
