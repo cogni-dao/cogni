@@ -163,7 +163,7 @@ describe("buildNodeLaunchPack", () => {
     expect(pack.prompt).toContain("Register as a contributor");
     expect(pack.prompt).toContain("request developer access for this node");
     expect(pack.prompt).toContain(
-      `/api/v1/nodes/11111111-1111-4111-8111-111111111111/developer-requests`
+      `/api/v1/nodes/11111111-1111-4111-8111-111111111111/access-requests`
     );
     expect(pack.prompt).toContain(
       "the node owner approves your request in the node UI"

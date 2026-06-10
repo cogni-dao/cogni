@@ -20,8 +20,8 @@ import { notFound, redirect } from "next/navigation";
 import type { ReactElement } from "react";
 import { resolveAppDb, resolveServiceDb } from "@/bootstrap/container";
 import { PageContainer } from "@/components";
-import { listDeveloperRequests } from "@/features/nodes/developer-requests";
-import { NodeDevelopers } from "@/features/nodes/developers/NodeDevelopers";
+import { listAccessRequests } from "@/features/nodes/access-requests";
+import { NodeAccess } from "@/features/nodes/access/NodeAccess";
 import { nodeRepoUrlForSlug } from "@/features/nodes/launch-pack";
 import { NodeWizard } from "@/features/nodes/wizard/NodeWizard.client";
 import { getServerSessionUser } from "@/lib/auth/server";
@@ -89,8 +89,8 @@ export default async function NodeDashboardPage({
   // Owner-only Developers section, mounted once the node is handed off to an AI dev. Ownership is
   // already proven by the scoped node read above, so the service-role request read is safe.
   const showDevelopers = status === "published" || status === "active";
-  const developerRequests = showDevelopers
-    ? await listDeveloperRequests(resolveServiceDb(), node.id)
+  const accessRequests = showDevelopers
+    ? await listAccessRequests(resolveServiceDb(), node.id)
     : [];
 
   return (
@@ -122,7 +122,7 @@ export default async function NodeDashboardPage({
       />
 
       {showDevelopers ? (
-        <NodeDevelopers nodeId={node.id} requests={developerRequests} />
+        <NodeAccess nodeId={node.id} requests={accessRequests} />
       ) : null}
     </PageContainer>
   );

@@ -2,13 +2,13 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `@tests/contract/app/nodes.developer-requests`
- * Purpose: Contract tests for the agent-facing node developer-access request endpoint.
- * Scope: Verifies POST /api/v1/nodes/[id]/developer-requests requires identity, requests for the
+ * Module: `@tests/contract/app/nodes.access-requests`
+ * Purpose: Contract tests for the agent-facing node access-request endpoint.
+ * Scope: Verifies POST /api/v1/nodes/[id]/access-requests requires identity, requests for the
  *   authenticated principal only, and idempotently upserts a single pending tracking row.
  * Invariants: AUTH_REQUIRED, SELF_REQUEST_ONLY, IDEMPOTENT_REOPEN, NOT_AUTHORITY.
  * Side-effects: none
- * Links: nodes/operator/app/src/app/api/v1/nodes/[id]/developer-requests/route.ts
+ * Links: nodes/operator/app/src/app/api/v1/nodes/[id]/access-requests/route.ts
  * @internal
  */
 
@@ -67,9 +67,9 @@ vi.mock("@/app/_lib/auth/session", () => ({
   getSessionUser: () => mockGetSessionUser(),
 }));
 
-import * as appHandler from "@/app/api/v1/nodes/[id]/developer-requests/route";
+import * as appHandler from "@/app/api/v1/nodes/[id]/access-requests/route";
 
-describe("POST /api/v1/nodes/[id]/developer-requests", () => {
+describe("POST /api/v1/nodes/[id]/access-requests", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockLogger.child.mockReturnValue(mockLogger);
@@ -91,7 +91,7 @@ describe("POST /api/v1/nodes/[id]/developer-requests", () => {
         expect(await res.json()).toEqual({
           nodeId: NODE_ID,
           agentUserId: TEST_SESSION_USER_1.id,
-          scope: "flight",
+          role: "developer",
           status: "pending",
         });
       },
@@ -101,7 +101,7 @@ describe("POST /api/v1/nodes/[id]/developer-requests", () => {
       expect.objectContaining({
         nodeId: NODE_ID,
         agentUserId: TEST_SESSION_USER_1.id,
-        scope: "flight",
+        role: "developer",
         status: "pending",
       })
     );

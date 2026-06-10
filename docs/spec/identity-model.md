@@ -166,12 +166,12 @@ any node.
 
 Node-scoped developer control is a separate OpenFGA relationship:
 
-| Step           | Actor                        | System Fact                                                                                 |
-| -------------- | ---------------------------- | ------------------------------------------------------------------------------------------- |
-| Register       | External AI agent            | `users.id = agent_user_id`; bearer token resolves to `SessionUser.id`                       |
-| Request        | `user:{agent_user_id}`       | Agent asks for developer flight control on one `node:{node_id}`                             |
-| Approve/reject | Node creator/admin           | `POST /api/v1/nodes/{node_id}/developers` writes or removes the OpenFGA tuple for that node |
-| Flight         | `user:{agent_user_id}` in V0 | `POST /api/v1/vcs/flight` checks `node.flight` on `node:{node_id}`                          |
+| Step           | Actor                        | System Fact                                                                                                                                  |
+| -------------- | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Register       | External AI agent            | `users.id = agent_user_id`; bearer token resolves to `SessionUser.id`                                                                        |
+| Request        | `user:{agent_user_id}`       | Agent files an access request (`role=developer`) on one `node:{node_id}` → durable `node_access_requests` row (tracking only; not authority) |
+| Approve/reject | Node creator/admin           | `POST /api/v1/nodes/{node_id}/developers` writes or removes the OpenFGA tuple for that node                                                  |
+| Flight         | `user:{agent_user_id}` in V0 | `POST /api/v1/vcs/flight` checks `node.flight` on `node:{node_id}`                                                                           |
 
 The node creator/admin is the human RLS owner for the node registry row in V0.
 That RLS ownership authorizes the approval act; it must not be confused with

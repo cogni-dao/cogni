@@ -2,14 +2,14 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `@features/nodes/developers/DeveloperActions.client`
- * Purpose: Owner action buttons for one developer row — Approve/Deny on a pending request, Revoke
- *   on an approved developer. Each click is an owner-gated decision against the existing
- *   POST /api/v1/nodes/[id]/developers route; the OpenFGA tuple write is the authority.
+ * Module: `@features/nodes/access/AccessActions.client`
+ * Purpose: Owner action buttons for one access row — Approve/Deny on a pending request, Revoke on
+ *   an approved developer. Each click is an owner-gated decision against the existing
+ *   POST /api/v1/nodes/[id]/developers route; the OpenFGA role tuple write is the authority.
  * Scope: Client island only. Shares busy/error state across a row's buttons, then refreshes the
  *   server-rendered list so the row moves between sections.
  * Side-effects: IO (POST decision), router.refresh.
- * Links: src/app/api/v1/nodes/[id]/developers/route.ts, ./NodeDevelopers.tsx
+ * Links: src/app/api/v1/nodes/[id]/developers/route.ts, ./NodeAccess.tsx
  * @public
  */
 
@@ -35,7 +35,7 @@ interface Props {
   readonly actions: ReadonlyArray<ActionSpec>;
 }
 
-export function DeveloperActions({
+export function AccessActions({
   nodeId,
   agentUserId,
   actions,

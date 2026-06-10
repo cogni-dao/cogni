@@ -2,15 +2,16 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `@app/api/v1/nodes/[id]/developer-requests`
- * Purpose: Agent-facing endpoint to request developer (flight) access to one node. Replaces the
- *   hacky "paste a fetch() into DevTools" handoff — an authenticated AI agent files a durable,
- *   idempotent request the node owner later approves in-UI.
+ * Module: `@app/api/v1/nodes/[id]/access-requests`
+ * Purpose: Agent-facing endpoint to request access (a node role) for one node. Replaces the hacky
+ *   "paste a fetch() into DevTools" handoff — an authenticated AI agent files a durable, idempotent
+ *   request the node owner later approves in-UI.
  * Scope: Bearer/session caller requests access FOR ITSELF; agentUserId is the authenticated
- *   principal, never the body. Writes a tracking row only — OpenFGA tuples remain flight authority.
+ *   principal, never the body. `role` defaults to `developer` (v0). Writes a tracking row only —
+ *   OpenFGA role tuples remain the authority.
  * Invariants: AUTH_REQUIRED, SELF_REQUEST_ONLY, NOT_AUTHORITY, IDEMPOTENT_REOPEN.
  * Side-effects: IO (Postgres read + upsert)
- * Links: docs/spec/rbac.md §6, src/features/nodes/developer-requests.ts
+ * Links: docs/spec/rbac.md §6, src/features/nodes/access-requests.ts
  * @public
  */
 
@@ -21,15 +22,16 @@ import { z } from "zod";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { resolveServiceDb } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
-import { upsertDeveloperRequest } from "@/features/nodes/developer-requests";
+import { upsertAccessRequest } from "@/features/nodes/access-requests";
 import { nodes } from "@/shared/db/nodes";
+import { NODE_ACCESS_ROLES } from "@/shared/db/node-access-requests";
 import { EVENT_NAMES, type RequestContext } from "@/shared/observability";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const DeveloperRequestInput = z
-  .object({ scope: z.literal("flight").optional() })
+const AccessRequestInput = z
+  .object({ role: z.enum(NODE_ACCESS_ROLES).optional() })
   .optional();
 
 interface RequestLogFields {
@@ -37,6 +39,7 @@ interface RequestLogFields {
   readonly status: number;
   readonly nodeId: string;
   readonly agentUserId?: string | undefined;
+  readonly role?: string | undefined;
   readonly errorCode?: string | undefined;
 }
 
@@ -56,7 +59,7 @@ function logRequestComplete(
   // App-local event (not in the node-shared registry), so log via ctx.log directly —
   // matching how ADAPTER_GITHUB_REPO_WRITE_ERROR and other operator-local events are emitted.
   const payload = {
-    event: EVENT_NAMES.NODE_DEVELOPER_REQUEST_COMPLETE,
+    event: EVENT_NAMES.NODE_ACCESS_REQUEST_COMPLETE,
     reqId: ctx.reqId,
     routeId: ctx.routeId,
     durationMs: elapsedMs(startedAt),
@@ -68,12 +71,12 @@ function logRequestComplete(
       : fields.status >= 500
         ? "error"
         : "warn";
-  ctx.log[level](payload, EVENT_NAMES.NODE_DEVELOPER_REQUEST_COMPLETE);
+  ctx.log[level](payload, EVENT_NAMES.NODE_ACCESS_REQUEST_COMPLETE);
 }
 
 export const POST = wrapRouteHandlerWithLogging<RouteParams>(
   {
-    routeId: "nodes.developer-requests",
+    routeId: "nodes.access-requests",
     auth: { mode: "required", getSessionUser },
   },
   async (ctx, request, sessionUser, routeCtx) => {
@@ -89,7 +92,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
     } catch {
       rawBody = undefined;
     }
-    const parsed = DeveloperRequestInput.safeParse(rawBody);
+    const parsed = AccessRequestInput.safeParse(rawBody);
     if (!parsed.success) {
       logTerminal({
         outcome: "error",
@@ -104,6 +107,8 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       );
     }
 
+    const role = parsed.data?.role ?? "developer";
+
     const db = resolveServiceDb();
     const existing = await db
       .select({ id: nodes.id })
@@ -116,15 +121,16 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         status: 404,
         nodeId: id,
         agentUserId: sessionUser.id,
+        role,
         errorCode: "node_not_found",
       });
       return NextResponse.json({ error: "not found" }, { status: 404 });
     }
 
-    await upsertDeveloperRequest(db, {
+    await upsertAccessRequest(db, {
       nodeId: id,
       agentUserId: sessionUser.id,
-      scope: "flight",
+      role,
     });
 
     logTerminal({
@@ -132,14 +138,10 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       status: 201,
       nodeId: id,
       agentUserId: sessionUser.id,
+      role,
     });
     return NextResponse.json(
-      {
-        nodeId: id,
-        agentUserId: sessionUser.id,
-        scope: "flight",
-        status: "pending",
-      },
+      { nodeId: id, agentUserId: sessionUser.id, role, status: "pending" },
       { status: 201 }
     );
   }
