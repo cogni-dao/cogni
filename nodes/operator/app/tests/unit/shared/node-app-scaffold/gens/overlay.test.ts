@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 
 import { renderOverlay } from "@/shared/node-app-scaffold/gens/overlay";
 
+// Mirrors the real node-template template overlay: node-at-root migrate paths (/app/app) + the ESO
+// `<slug>-env-secrets` target carried directly. renderOverlay only slug/port-renames it.
 const TEMPLATE = `namePrefix: node-template-
 patches:
   - target:
@@ -13,10 +15,13 @@ patches:
     patch: |
       - op: replace
         path: /spec/template/spec/containers/0/envFrom/1/secretRef/name
-        value: "node-template-node-app-secrets"
+        value: "node-template-env-secrets"
       - op: replace
         path: /spec/template/spec/initContainers/0/envFrom/1/secretRef/name
-        value: "node-template-node-app-secrets"
+        value: "node-template-env-secrets"
+      - op: replace
+        path: /spec/template/spec/initContainers/0/command/2
+        value: exec node /app/app/migrate.mjs /app/app/migrations
       - op: replace
         path: /spec/template/spec/containers/0/ports/0/containerPort
         value: 3200
@@ -27,12 +32,12 @@ patches:
           command:
             - /bin/sh
             - -c
-            - exec node /app/nodes/$(NODE_NAME)/app/migrate-doltgres.mjs /app/nodes/$(NODE_NAME)/app/doltgres-migrations
+            - exec node /app/app/migrate-doltgres.mjs /app/app/doltgres-migrations
           env:
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
-                  name: node-template-node-app-secrets
+                  name: node-template-env-secrets
                   key: DOLTGRES_URL
   - target:
       kind: Service
@@ -47,40 +52,38 @@ patches:
 `;
 
 describe("renderOverlay", () => {
-  it("keeps legacy secret refs unless a target secret is supplied", () => {
+  it("renames the slug and the two well-known port literals", () => {
     const out = renderOverlay(TEMPLATE, "coulditbe", 30500, 3500);
 
-    expect(out).toContain('value: "coulditbe-node-app-secrets"');
+    expect(out).toContain("namePrefix: coulditbe-");
     expect(out).toContain("value: 30500");
     expect(out).toContain("value: 3500");
+    expect(out).not.toContain("node-template");
+    expect(out).not.toContain("30200");
   });
 
-  it("rewrites all node-app secret refs to the ESO target when supplied", () => {
-    const out = renderOverlay(TEMPLATE, "coulditbe", 30500, 3500, {
-      secretTargetName: "coulditbe-env-secrets",
-    });
+  it("carries the ESO env-secrets target through unchanged (no secret rewrite)", () => {
+    const out = renderOverlay(TEMPLATE, "coulditbe", 30500, 3500);
 
     expect(out).toContain('value: "coulditbe-env-secrets"');
     expect(out).toContain("name: coulditbe-env-secrets");
-    expect(out).not.toContain("coulditbe-node-app-secrets");
+    expect(out).not.toContain("node-app-secrets");
   });
 
-  it("targets the node-at-root image layout for both migrate runners", () => {
+  it("preserves the node-at-root image layout for both migrate runners", () => {
     const out = renderOverlay(TEMPLATE, "coulditbe", 30500, 3500);
 
-    // Doltgres runner rewritten in place; Postgres runner injected as a base override.
     expect(out).toContain(
       "value: exec node /app/app/migrate.mjs /app/app/migrations"
     );
     expect(out).toContain(
       "exec node /app/app/migrate-doltgres.mjs /app/app/doltgres-migrations"
     );
-    // No monorepo /app/nodes/<slug>/app paths survive in the generated overlay.
-    expect(out).not.toContain("/app/nodes/$(NODE_NAME)/app");
+    expect(out).not.toContain("/app/nodes/");
   });
 
-  it("fails closed when the migrate initContainer secret-ref patch is absent", () => {
-    const noAnchor = `namePrefix: node-template-
+  it("fails closed when the node-at-root migrate command is absent", () => {
+    const noMigrate = `namePrefix: node-template-
 patches:
   - target:
       kind: Service
@@ -90,7 +93,7 @@ patches:
         path: /spec/ports/0/nodePort
         value: 30200
 `;
-    expect(() => renderOverlay(noAnchor, "coulditbe", 30500, 3500)).toThrow(
+    expect(() => renderOverlay(noMigrate, "coulditbe", 30500, 3500)).toThrow(
       /NODE_AT_ROOT_MIGRATE_PATH/
     );
   });

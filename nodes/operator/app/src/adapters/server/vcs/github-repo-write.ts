@@ -1133,9 +1133,7 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       );
       await addBlob(
         overlayPath,
-        renderOverlay(templateOverlay, slug, nodePort, port, {
-          secretTargetName: `${slug}-env-secrets`,
-        })
+        renderOverlay(templateOverlay, slug, nodePort, port)
       );
     }
 

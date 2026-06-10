@@ -80,10 +80,11 @@ fi
 
 echo "==> 5. overlays x3 (ALL_THREE_ENVS_OR_NONE)"
 # Single source of overlay-generation truth: render-node-overlays.sh applies the
-# byte-exact transforms (slug, ports, ESO secret-target rename, node-at-root migrate
-# rewrites) and fails closed if the migrate override doesn't inject. Its --check
-# drift gate (bug.5008) governs these files in CI, so generating them any other way
-# would split-brain. The catalog row written above feeds node_port/port.
+# byte-exact transforms (slug + ports; the node-template template overlay already
+# carries the node-at-root migrate paths + ESO env-secrets target) and fails closed
+# if the node-at-root migrate command is absent. Its --check drift gate (bug.5008)
+# governs these files in CI, so generating them any other way would split-brain.
+# The catalog row written above feeds node_port/port.
 for env in "${ENVS[@]}"; do
   dst="infra/k8s/overlays/$env/$SLUG"
   mkdir -p "$dst"
