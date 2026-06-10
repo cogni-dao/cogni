@@ -21,10 +21,22 @@ in-flight provision-vs-deploy decoupling of `scripts/setup/provision-env-vm.sh`
 
 ## Outcome
 
-Success is when the **node-wizard can mint 20 → 50+ node-apps and every one
-schedules and serves `/readyz 200` with no per-env capacity surgery** — because
-the app tier scales horizontally on _honest_ k3s scheduling and the heavy shared
-infra is provisioned once, off the app box.
+**Near-term (the actual work):** wizard-born nodes deploy reliably **where they
+are needed** — `operator` + the node(s) under test per env — on _honest_ k3s
+scheduling, with no per-env capacity surgery and no over-commit crash-loops.
+
+**Proven-out scaling path (demand-gated, NOT imminent):** the same architecture
+extends to 50+ concurrently-running node-apps by tiering shared infra off the app
+box and adding k3s workers — but only if real node-count pressure appears.
+
+> **Altitude check.** At 1 dev / 0 users, 50 _concurrent_ node-app pods per env
+> is almost certainly not the real requirement — most nodes need to _exist and be
+> managed_ by the operator, not run a pod in every env (product vision: nodes are
+> often fixtures; "ai-only canary PRs are the real POC"). So **Steps 0–1 are the
+> near-term answer; Steps 2–3 are options held in reserve.** Building the infra
+> split now — new VM, data migration, cross-VM networking, recurring spend —
+> ahead of that demand is the G02 perfectionism `feedback_mvp_stage_first` warns
+> against. The trigger to start Step 2 is named below, not assumed.
 
 ## The disease (root cause)
 
@@ -69,27 +81,60 @@ that design is set).
 - **Tune rollout `maxUnavailable`/`maxSurge`** so a stuck new RS can't pin a
   second replica's RAM per node during deploys.
 
-Realized density on a 6 GB box: ~3 → **~8–10**. Pure k3s config + kustomize
-patches.
+Honest density on a 6 GB co-resident box: ~3 (over-committed, crashing) →
+**~5–7 reliably scheduled** (allocatable ≈ 5.9 − 2.8 Compose − 0.7 k8s − 0.3
+evict ≈ 2.1 GB, ÷ 384Mi init reservation). **Tension to respect:** honest
+scheduling _lowers_ what the scheduler places (it stops over-committing) — it
+does not add RAM. Trimming the init request raises the ceiling but, set below
+actual migrate peak, **re-introduces the over-commit disease** when several
+migrates run at once. Profile the real peak before trimming; keep a margin.
+Pure k3s config + kustomize patches, no new VM, no new spend.
 
-### Step 2 — Tier shared infra off the app box ⭐ · the structural win
+### Step 2 — Tier shared infra off the app box · the structural option (demand-gated)
+
+**Trigger:** Step 1 honest density (~5–7/6 GB) is exhausted by genuine demand —
+i.e. an env legitimately needs more concurrently-running nodes than a single
+honestly-scheduled box holds. Not before.
 
 A dedicated **infra VM** runs the Compose stack; **app VMs run only k3s +
-node-apps** → `allocatable` becomes honest with zero reservation guesswork. The
-shared infra scales with _total load_, not node count: per-node DBs are schemas
-on one `postgres`/`doltgres` server, and one `litellm`/`temporal`/`redis` serves
-all nodes fine at this scale. Density: `max_node_apps ≈ (VM_RAM − 0.7 k8s) /
-req` → 6 GB app VM ≈ **~13**, 16 GB ≈ **~38**. Reuses the existing Compose stack
-(relocated, not rebuilt) and the existing `ExternalName`/ContainerRuntimePort
-portability that already abstracts in-VM service endpoints.
+node-apps** → `allocatable` becomes honest with no reservation guesswork.
+Density: `max_node_apps ≈ (VM_RAM − 0.7 k8s) / 384Mi` → 6 GB app VM ≈ **~13**,
+16 GB ≈ **~38**.
 
-### Step 3 — Horizontal app tier · 50+
+**This is a topology change with a real data plane — design it, don't wave it
+away:**
 
-Join additional Cherry VMs as **k3s agents (workers)**. Argo already deploys the
-apps; the scheduler spreads pods across workers with no per-node manifest change.
-Capacity becomes a provisioning knob — add a worker when `allocatable` drops
-below a threshold — not a redesign. 2 × 16 GB app workers (infra tiered off) ≈
-**~76 node-apps**. Cherry-only, OSS-only.
+- **Cross-VM networking.** Today postgres/doltgres/litellm/temporal are
+  _localhost_ to the app pods. Off-box, every query crosses the network →
+  requires Cherry **private networking** between the infra + app VMs (net-new
+  provisioning), **TLS + firewall** on postgres/doltgres (they currently bind
+  loopback, effectively trusted), and the existing `ExternalName`/
+  ContainerRuntimePort indirection repointed at the private endpoint (that
+  abstraction carries the endpoint _string_ only — not the network/TLS/firewall).
+- **New failure mode.** Co-resident, infra + app share one failure domain;
+  split, a **network partition** (infra VM reachable-but-slow, or unreachable)
+  is a new class the app tier must degrade against.
+- **Data migration.** Existing postgres/doltgres volumes must move off the app
+  box (dump/restore or re-provision from ESO-backed creds) — a one-time play,
+  not a config flip.
+- **The infra tier has its _own_ ceiling.** Moving the memory double-count off
+  the app box does not make shared infra infinite: one `litellm` proxying N
+  nodes' LLM traffic and one `temporal` running N nodes' workflows have limits
+  this doc does not measure. Assumption: fine to ~tens of nodes at MVP load;
+  **signal to shard:** litellm/temporal CPU saturation or p95 latency regression
+  in Grafana. Re-measure before trusting past ~20 nodes.
+
+Reuses the existing Compose stack (relocated, not rebuilt).
+
+### Step 3 — Horizontal app tier · 50+ (demand-gated)
+
+**Trigger:** one infra-tiered app VM is full and vertical (a bigger box) is no
+longer cost-effective. Join additional Cherry VMs as **k3s agents (workers)**;
+Argo already deploys the apps, so the scheduler spreads pods across workers with
+no per-node manifest change. Capacity becomes a provisioning knob — add a worker
+when `allocatable` drops below a threshold. 2 × 16 GB app workers (infra tiered
+off) ≈ **~76 node-apps**. Each VM is recurring Cherry spend — gate on demand,
+not headroom. Cherry-only, OSS-only.
 
 ## Invariants
 
@@ -101,6 +146,12 @@ below a threshold — not a redesign. 2 × 16 GB app workers (infra tiered off) 
 - [ ] SHARED_INFRA_NOT_PER_NODE: node-apps share one
       `postgres`/`doltgres`/`temporal`/`litellm`/`redis`; never per-node infra
       instances — that is the thing that fundamentally does not scale.
+- [ ] OFF_BOX_DATA_PLANE_IS_PRIVATE_AND_TLS (Step 2 only): if shared infra moves
+      off the app box, the DB/runtime endpoints ride a private Cherry network
+      with TLS + firewall — never a public interface or an untrusted hop. The
+      app tier degrades gracefully on infra-VM partition.
+- [ ] DEMAND_GATED_SCALING: Steps 2–3 (new VMs, spend) start only at their named
+      trigger — exhausted honest density / full app VM — never speculatively.
 - [ ] PER_ENV_MEMBERSHIP_IS_SSOT: an env's node set derives from one SSOT
       (`nodes_for_env`), not hand-maintained lists across the appset + overlay
       renderers + the wizard scaffolder. (Gotcha 19)
