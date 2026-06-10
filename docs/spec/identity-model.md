@@ -179,11 +179,16 @@ ongoing flight authority. After approval, the flight route uses RBAC, not
 `nodes.owner_user_id = caller`, so an external agent can flight exactly the node
 it was approved for.
 
-**VNext principal migration:** when the actors table and execution grants become
-the registration authority, approved AI agents should run as
-`actorId = agent:{actor_id}` with `subjectId = user:{approver_user_id}` only for
-explicit on-behalf-of delegation. Until then, registered agents are
-user-backed machine principals: `actorId = user:{agent_user_id}`.
+**Principal-agnostic by design (not a migration debt):** the `node` model accepts
+both principal types — `node.developer: [user, agent]` — so V0's user-backed
+machine principals (`actorId = user:{agent_user_id}`) and a later
+`actorId = agent:{actor_id}` form coexist **additively**: introducing
+agent-actor principals writes new `@agent:` tuples without a model change or
+tuple rewrite. V0 registers agents as users (user-bound bearer), which is a
+legitimate principal representation, not a stopgap. Agent-actor principals — with
+`subjectId = user:{approver_user_id}` for explicit on-behalf-of delegation —
+become meaningful once the actors table + execution grants are the registration
+authority; that is a forward capability, not a correction of V0.
 
 ## Scoping Rules
 
