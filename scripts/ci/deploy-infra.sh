@@ -996,6 +996,17 @@ fi
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 log_info "[$(date -u +%H:%M:%S)] Running DB provisioning..."
 emit_deployment_event "infra_deployment.db_provision_started" "in_progress" "Provisioning database users and schemas"
+# Shared infra DBs FIRST, decoupled from per-node creds. The litellm/openfga
+# root-owned DBs depend only on the root Postgres creds (.env) — never OpenBao,
+# never a node DB. On a fresh env the per-node loop below is fully fail-soft
+# (every node skips until its OpenBao creds materialize), so coupling infra-DB
+# creation to that loop left openfga uncreated → openfga-migrate hard-fails with
+# `database "openfga" does not exist`. This dedicated INFRA_ONLY pass guarantees
+# openfga + litellm exist before openfga-migrate regardless of node-cred state.
+log_info "  Provisioning shared infra DBs (litellm, openfga) — decoupled from per-node creds..."
+$RUNTIME_COMPOSE --profile bootstrap run --rm \
+  -e "PROVISION_INFRA_ONLY=1" \
+  db-provision
 # Per-node db-provision (#1584): provision.sh now reconciles per-node roles
 # app_<node>/service_<node> to the per-node passwords OpenBao holds at
 # cogni/<env>/<node>, and refuses a multi-node COGNI_NODE_DBS so one shared
@@ -1213,8 +1224,14 @@ refresh_operator_openfga_secret() {
     fi
   done
   if [[ -z "$es_name" ]]; then
-    log_error "No operator ExternalSecret found in ${k8s_ns}; cannot deliver OpenFGA runtime IDs"
-    return 1
+    # Fresh-env benign case: no operator app has synced yet, so its ExternalSecret
+    # does not exist. The runtime IDs are already durably in OpenBao (patch above,
+    # the SSOT) — ESO will pull them into the secret on the operator's FIRST rollout.
+    # This force-refresh is only an ACCELERATION for an already-running operator, so
+    # its absence is not a failure. Returning 1 here under set -e wrongly hard-fails
+    # the whole fresh-env provision (same fresh-env coupling class as the infra-DB gap).
+    log_warn "No operator ExternalSecret in ${k8s_ns} yet (fresh env); OpenFGA runtime IDs are in OpenBao — ESO will sync them on the operator's first rollout"
+    return 0
   fi
 
   kubectl -n "$k8s_ns" annotate externalsecret "$es_name" \
@@ -1734,11 +1751,22 @@ SECEOF
   log_info "[$(date -u +%H:%M:%S)] Node-apps ready — rolling scheduler-worker"
 
   # ── Roll scheduler-worker only after node-apps are ready ───────────────────
+  # Fresh-env ordering: deploy-infra runs in provision-env-vm.sh Phase 5f, BEFORE
+  # Phase 7 applies the ApplicationSets that create the Argo Apps → Deployments. So
+  # on a fresh provision this Deployment legitimately does not exist yet. Tolerate
+  # that (the AppSet sync + the deploy/flight verify lane own app-tier health); stay
+  # fatal only when the Deployment EXISTS but fails to roll out (established-env
+  # regression). Same benign-on-absent / fatal-on-real-failure shape as the OpenFGA
+  # ExternalSecret refresh above.
   ROLLOUT_FAILED=0
-  kubectl -n "${K8S_NS}" rollout restart deployment/scheduler-worker 2>/dev/null || true
-  if ! wait_rollout_or_updated_available deployment/scheduler-worker 300s; then
-    log_warn "scheduler-worker rollout did not complete within 300s"
-    ROLLOUT_FAILED=1
+  if ! kubectl -n "${K8S_NS}" get deployment/scheduler-worker >/dev/null 2>&1; then
+    log_warn "scheduler-worker Deployment not present yet (fresh env; ApplicationSets apply in Phase 7, after this) — skipping rollout verification; the AppSet sync + deploy/flight lane own app-tier health"
+  else
+    kubectl -n "${K8S_NS}" rollout restart deployment/scheduler-worker 2>/dev/null || true
+    if ! wait_rollout_or_updated_available deployment/scheduler-worker 300s; then
+      log_warn "scheduler-worker rollout did not complete within 300s"
+      ROLLOUT_FAILED=1
+    fi
   fi
   if [[ " ${NODE_APP_TARGETS} " == *" operator "* ]]; then
     if ! operator_deployment_declares_openfga_config; then

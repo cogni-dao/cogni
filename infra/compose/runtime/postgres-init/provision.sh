@@ -22,9 +22,19 @@ PG_PORT="${DB_PORT:-5432}"
 PG_USER="${POSTGRES_ROOT_USER:-postgres}"
 PG_PASS="${POSTGRES_ROOT_PASSWORD:-postgres}"
 
-# Per-node databases (comma-separated). Required — no defaults.
+# Infra-only mode: create the shared, root-owned infra DBs (litellm, openfga) and
+# nothing else. Decouples infra-DB creation from the per-node OpenBao creds so a
+# fresh env (node creds not yet materialized) still gets openfga/litellm BEFORE
+# openfga-migrate. Set by deploy-infra.sh's dedicated infra-DB pass; needs only the
+# root Postgres creds — never OpenBao, never a node DB.
+INFRA_ONLY="${PROVISION_INFRA_ONLY:-0}"
+# Per-node array — declared early so ${#NODE_DBS[@]} is safe under set -u even when
+# the per-node path is skipped (INFRA_ONLY).
+NODE_DBS=()
+
+# Per-node databases (comma-separated). Required in node mode — no defaults.
 APP_DBS="${COGNI_NODE_DBS:-}"
-if [ -z "$APP_DBS" ]; then
+if [ "$INFRA_ONLY" != "1" ] && [ -z "$APP_DBS" ]; then
   echo "❌ ERROR: COGNI_NODE_DBS is required (comma-separated list of database names)"
   exit 1
 fi
@@ -51,11 +61,11 @@ APP_SERVICE_PASS="${APP_DB_SERVICE_PASSWORD:-}"
 APP_READONLY_USER="${APP_DB_READONLY_USER:-app_readonly}"
 APP_READONLY_PASS="${APP_DB_READONLY_PASSWORD:-}"
 
-if [ -z "$APP_PASS" ]; then
+if [ "$INFRA_ONLY" != "1" ] && [ -z "$APP_PASS" ]; then
   echo "❌ ERROR: APP_DB_PASSWORD is required (per-node app role password from OpenBao)"
   exit 1
 fi
-if [ -z "$APP_SERVICE_PASS" ]; then
+if [ "$INFRA_ONLY" != "1" ] && [ -z "$APP_SERVICE_PASS" ]; then
   echo "❌ ERROR: APP_DB_SERVICE_PASSWORD is required (per-node service role password from OpenBao)"
   exit 1
 fi
@@ -163,12 +173,15 @@ SQL
 
 # Shared read-only role (env-level; superuser-derived password; BYPASSRLS support
 # reads for the Grafana datasource). Created once, outside the per-node loop.
-echo "🔧 Reconciling shared read-only role '$APP_READONLY_USER'..."
-provision_app_role "$APP_READONLY_USER" "$APP_READONLY_PASS" "BYPASSRLS"
-PGPASSWORD="$PG_PASS" psql -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d "postgres" -v ON_ERROR_STOP=1 <<SQL
+# Skipped in INFRA_ONLY: the per-node pass owns this role.
+if [ "$INFRA_ONLY" != "1" ]; then
+  echo "🔧 Reconciling shared read-only role '$APP_READONLY_USER'..."
+  provision_app_role "$APP_READONLY_USER" "$APP_READONLY_PASS" "BYPASSRLS"
+  PGPASSWORD="$PG_PASS" psql -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d "postgres" -v ON_ERROR_STOP=1 <<SQL
 ALTER ROLE "$APP_READONLY_USER" SET default_transaction_read_only = on;
 ALTER ROLE "$APP_READONLY_USER" SET statement_timeout = '30s';
 SQL
+fi
 
 # migrate_owned <db> <from_role> <to_role>
 #   In-provisioner cutover for an ALREADY-provisioned DB: transfer objects owned by
@@ -269,19 +282,21 @@ function provision_node_db() {
 # Per-node roles need per-node passwords; one APP_DB_PASSWORD serves exactly one
 # node. The caller (reconcile-substrate, <env>-db-reader) invokes db-provision
 # once per node. Guard against a multi-node invocation that would silently give
-# every node the same password.
-IFS=',' read -ra NODE_DBS <<< "$APP_DBS"
-_trimmed=()
-for db in "${NODE_DBS[@]}"; do
-  db=$(echo "$db" | xargs)
-  [ -n "$db" ] && _trimmed+=("$db")
-done
-NODE_DBS=("${_trimmed[@]}")
-if [ "${#NODE_DBS[@]}" -ne 1 ]; then
-  echo "❌ ERROR: per-node provisioning expects exactly one node DB in COGNI_NODE_DBS (got ${#NODE_DBS[@]}: '${APP_DBS}'). The caller invokes db-provision once per node."
-  exit 1
+# every node the same password. Skipped in INFRA_ONLY (no node creds, no node DB).
+if [ "$INFRA_ONLY" != "1" ]; then
+  IFS=',' read -ra NODE_DBS <<< "$APP_DBS"
+  _trimmed=()
+  for db in "${NODE_DBS[@]}"; do
+    db=$(echo "$db" | xargs)
+    [ -n "$db" ] && _trimmed+=("$db")
+  done
+  NODE_DBS=("${_trimmed[@]}")
+  if [ "${#NODE_DBS[@]}" -ne 1 ]; then
+    echo "❌ ERROR: per-node provisioning expects exactly one node DB in COGNI_NODE_DBS (got ${#NODE_DBS[@]}: '${APP_DBS}'). The caller invokes db-provision once per node."
+    exit 1
+  fi
+  provision_node_db "${NODE_DBS[0]}"
 fi
-provision_node_db "${NODE_DBS[0]}"
 
 # ── LiteLLM Database (shared, root-owned) ─────────────────────────────────
 echo "🔧 Checking litellm database '$LITELLM_DB'..."
@@ -307,8 +322,10 @@ else
   echo "   -> OPENFGA_DB_NAME not set; skipping openfga database provisioning."
 fi
 
+_node_summary="${#NODE_DBS[@]} node database(s)"
+[ "$INFRA_ONLY" = "1" ] && _node_summary="infra-only (no node DB)"
 if [ -n "$OPENFGA_DB" ]; then
-  echo "✅ Provisioning Complete (${#NODE_DBS[@]} node database(s) + litellm + openfga)."
+  echo "✅ Provisioning Complete (${_node_summary} + litellm + openfga)."
 else
-  echo "✅ Provisioning Complete (${#NODE_DBS[@]} node database(s) + litellm)."
+  echo "✅ Provisioning Complete (${_node_summary} + litellm)."
 fi
