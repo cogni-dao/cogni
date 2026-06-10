@@ -4,15 +4,15 @@
 /**
  * Module: `@adapters/server/vcs/github-repo-write`
  * Purpose: Operator-only helper that mints node repos, commits files, and opens pull requests via the GitHub App.
- * Scope: Thin Octokit calls behind node birth, submodule pin, and candidate-flight prep entry points.
+ * Scope: Thin Octokit calls behind node formation, submodule pin, and candidate-flight prep entry points.
  *   Does not belong in `VcsCapability` because that capability is shared with poly/resy/node-template stubs
  *   and these write ops are operator-only.
  * Invariants:
  *   - GH_APP_INSTALL_REQUIRED: caller must verify the app is installed on the target repo; we surface a
  *     clear error if not. Public-repo install is sufficient for v0.
- *   - NODE_BIRTH_TREE: a publish creates one reviewable tree containing the gitlink plus generated
+ *   - NODE_FORMATION_TREE: a publish creates one reviewable tree containing the gitlink plus generated
  *     catalog, overlay, AppSet, edge-route, and ExternalSecret shape.
- *   - PR_AGAINST_MAIN: opens node-birth PRs against `main`; never force-pushes review branches.
+ *   - PR_AGAINST_MAIN: opens node-formation PRs against `main`; never force-pushes review branches.
  * Side-effects: IO (GitHub REST API)
  * Links: docs/spec/node-formation.md, task.0370, task.5083
  * @internal
@@ -33,7 +33,7 @@ import type {
 import {
   insertAppsetKustomization,
   insertCaddyBlock,
-  NODE_BIRTH_ENVS,
+  NODE_FORMATION_ENVS,
   nextFreeNodePort,
   renderCatalog,
   renderGitmodules,
@@ -158,7 +158,7 @@ interface GitTreeEntry {
 const TEMPLATE_SLUG = "node-template";
 const CONTAINER_PORT = 3200;
 
-/** Footprint files edited in-place by the node-birth PR (single-file gens over current main). */
+/** Footprint files edited in-place by the node-formation PR (single-file gens over current main). */
 const FOOTPRINT = {
   caddyfile: "infra/compose/edge/configs/Caddyfile.tmpl",
   ciYaml: ".github/workflows/ci.yaml",
@@ -633,7 +633,7 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       })
     );
     const externalSecretEntries: GitTreeEntry[] = [];
-    for (const env of NODE_BIRTH_ENVS) {
+    for (const env of NODE_FORMATION_ENVS) {
       externalSecretEntries.push(
         {
           path: `k8s/external-secrets/${env}/external-secret.yaml`,
@@ -954,7 +954,7 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
     }
   }
 
-  /** Resolve `heads/main` → its commit + root-tree SHAs (the parent for a node-birth commit). */
+  /** Resolve `heads/main` → its commit + root-tree SHAs (the parent for a node-formation commit). */
   private async resolveMainBase(
     octokit: Octokit,
     owner: string,
@@ -1123,7 +1123,7 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
     );
 
     // overlays×3 — per birth env.
-    for (const env of NODE_BIRTH_ENVS) {
+    for (const env of NODE_FORMATION_ENVS) {
       const overlayPath = `infra/k8s/overlays/${env}/${slug}/kustomization.yaml`;
       const templateOverlay = await this.readFileOnMain(
         octokit,
@@ -1148,7 +1148,7 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       repo,
       APPSET_TEMPLATE_PATH
     );
-    for (const env of NODE_BIRTH_ENVS) {
+    for (const env of NODE_FORMATION_ENVS) {
       await addBlob(
         `infra/k8s/argocd/${env}-${slug}-applicationset.yaml`,
         renderNodeAppset(appsetTemplate, slug, env)
@@ -1162,7 +1162,7 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
     );
     await addBlob(
       FOOTPRINT.argocdKustomization,
-      insertAppsetKustomization(argocdKustomization, slug, NODE_BIRTH_ENVS)
+      insertAppsetKustomization(argocdKustomization, slug, NODE_FORMATION_ENVS)
     );
 
     // Caddyfile / ci.yaml / lockfile — single-file splices over main.
@@ -1461,7 +1461,7 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
   ): Promise<OpenNodeAppPrResult> {
     const title = `feat(node): bootstrap node-app for ${slug}`;
     const body =
-      `Operator-authored node-birth PR for \`${slug}\` (App-direct via Git Data API).\n\n` +
+      `Operator-authored node-formation PR for \`${slug}\` (App-direct via Git Data API).\n\n` +
       "Pins the minted node repo as a submodule and adds the operator-owned deployment footprint: " +
       "catalog entry, overlays×3, AppSet stanzas×3, and edge route. The node source, CI, review " +
       "rules, image build, and ExternalSecret leaves live in the minted node repo.";

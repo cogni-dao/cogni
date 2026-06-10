@@ -1,5 +1,5 @@
 {
-  "name": "node-birth bound: a node may NOT ride another node's wiring (legacy-alpha + legacy-beta catalog → fail)",
+  "name": "node-formation bound: a node may NOT ride another node's wiring (legacy-alpha + legacy-beta catalog → fail)",
   "paths": [
     "nodes/legacy-alpha/app/src/foo.ts",
     "infra/catalog/legacy-beta.yaml"

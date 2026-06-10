@@ -98,7 +98,7 @@ for the node-wizard formation boundary.
 
 If a needed environment value is missing, repair the environment bank before
 rerunning flight. Do not pass the value through candidate-flight inputs, save
-it in the wizard, or add it to the node birth PR.
+it in the wizard, or add it to the node formation PR.
 
 ## 1. Confirm The Destination
 

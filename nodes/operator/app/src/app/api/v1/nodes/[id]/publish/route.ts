@@ -26,7 +26,7 @@ import { transition } from "@/features/nodes/state-machine";
 import { getServerSessionUser } from "@/lib/auth/server";
 import { type NodeStatus, nodes } from "@/shared/db/nodes";
 import { serverEnv } from "@/shared/env";
-import { NODE_BIRTH_ENVS } from "@/shared/node-app-scaffold/gens";
+import { NODE_FORMATION_ENVS } from "@/shared/node-app-scaffold/gens";
 import { buildNodeKnowledgeRemote } from "@/shared/node-app-scaffold/knowledge-remote";
 import {
   createRequestContext,
@@ -513,12 +513,12 @@ export async function POST(request: Request, routeArgs: RouteParams) {
               parentPrNumber: pr.prNumber,
               parentPrUrl: pr.prUrl,
               secretTargetName: `${node.slug}-env-secrets`,
-              externalSecretEnvs: [...NODE_BIRTH_ENVS],
-              externalSecretPaths: NODE_BIRTH_ENVS.map(
+              externalSecretEnvs: [...NODE_FORMATION_ENVS],
+              externalSecretPaths: NODE_FORMATION_ENVS.map(
                 (env) => `k8s/external-secrets/${env}/external-secret.yaml`
               ),
-              overlayEnvs: [...NODE_BIRTH_ENVS],
-              overlayPaths: NODE_BIRTH_ENVS.map(
+              overlayEnvs: [...NODE_FORMATION_ENVS],
+              overlayPaths: NODE_FORMATION_ENVS.map(
                 (env) =>
                   `infra/k8s/overlays/${env}/${node.slug}/kustomization.yaml`
               ),

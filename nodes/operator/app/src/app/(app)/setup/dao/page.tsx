@@ -4,7 +4,7 @@
 /**
  * Module: `@app/(app)/setup/dao/page`
  * Purpose: Legacy DAO formation URL. Redirects to the node manager.
- * Scope: Server redirect only; node birth must start from a DB-backed node row.
+ * Scope: Server redirect only; node formation must start from a DB-backed node row.
  * Invariants: Requires authenticated session (wallet connected) via (app) route group.
  * Side-effects: redirect
  * Links: docs/spec/node-formation.md

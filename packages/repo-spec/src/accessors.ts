@@ -460,7 +460,7 @@ function isRootAppVitestConfig(
 }
 
 /**
- * NODE_BIRTH ride-along: a node may carry its OWN deploy wiring — the
+ * NODE_FORMATION ride-along: a node may carry its OWN deploy wiring — the
  * operator-owned files that exist only to make `nodes/<node>/` deployable.
  * Keep this in parity with `tests/ci-invariants/classify.ts` and the
  * `single-node-scope` bash gate.

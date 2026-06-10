@@ -1,5 +1,5 @@
 {
-  "name": "node-birth: node app + its OWN catalog/overlay/AppSet ride along (bug.5086)",
+  "name": "node-formation: node app + its OWN catalog/overlay/AppSet ride along (bug.5086)",
   "paths": [
     "nodes/legacy-alpha/app/src/app/(public)/page.tsx",
     "infra/catalog/legacy-alpha.yaml",

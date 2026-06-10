@@ -142,13 +142,13 @@ jobs:
             exit 0
           fi
 
-          # The single non-operator node (if exactly one), for the NODE_BIRTH
+          # The single non-operator node (if exactly one), for the NODE_FORMATION
           # wiring carve-out below.
           NODE=$(jq -r 'map(select(. != "operator")) | if length == 1 then .[0] else "" end' <<<"$MATCHED")
 
           # Ride-along exception: |S|=2, operator ∈ S, and every operator-matched
           # path is in the whitelist OR is the node's OWN deploy wiring (bug.5086
-          # NODE_BIRTH — catalog/overlays/AppSet for the one node in S). Whitelist
+          # NODE_FORMATION — catalog/overlays/AppSet for the one node in S). Whitelist
           # + isNodeWiring must mirror classify.ts (parity by convention; the
           # parity spec covers the TS side only).
           if [ "$count" -eq 2 ] \

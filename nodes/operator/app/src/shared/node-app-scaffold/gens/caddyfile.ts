@@ -4,7 +4,7 @@
 /**
  * Module: `@shared/node-app-scaffold/gens/caddyfile`
  * Purpose: Pure port of `scripts/ci/render-caddyfile.sh`'s per-node insert, so the operator can
- *   author a node-birth PR's `Caddyfile.tmpl` edit without a repo checkout or running bash.
+ *   author a node-formation PR's `Caddyfile.tmpl` edit without a repo checkout or running bash.
  * Scope: Given the CURRENT committed `infra/compose/edge/configs/Caddyfile.tmpl` and a new
  *   NON-PRIMARY node's slug + node_port, return the new content byte-identical to what
  *   `bash scripts/ci/render-caddyfile.sh` emits once that node is in the catalog.

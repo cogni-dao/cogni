@@ -94,7 +94,7 @@ function isRootAppVitestConfig(path: string, nonOperatorNodes: Set<string>) {
 }
 
 /**
- * NODE_BIRTH ride-along (bug.5086): a node may carry its OWN deploy wiring —
+ * NODE_FORMATION ride-along (bug.5086): a node may carry its OWN deploy wiring —
  * the operator-owned files that exist only to make `nodes/<node>/` deployable.
  * This lets a single welcome PR create + wire a node in one PR (the
  * CATALOG_IS_SSOT / create-node.md contract) without splitting node app from
@@ -180,7 +180,7 @@ export function classify(
     }
   }
 
-  // The single non-operator node (if exactly one) — used for the NODE_BIRTH
+  // The single non-operator node (if exactly one) — used for the NODE_FORMATION
   // wiring carve-out so a node may ride along its OWN catalog/overlays/AppSet.
   const nonOperator = [...domains].filter((d) => d !== OPERATOR_NODE);
   const theNode = nonOperator.length === 1 ? nonOperator[0] : "";

@@ -206,7 +206,7 @@ Everything schema-time (drizzle-kit migrate, `CREATE SCHEMA`, `__drizzle_migrati
 - **Repeated same-owner forks from one template do not work.** Live test:
   `cogni-dao/knowledge-node-template` → `cogni-dao/knowledge-<node>` failed
   once the owner already had a fork in that network with `owner already owns a
-repository in the same network`. For v0 node birth, create a fresh DoltHub
+repository in the same network`. For v0 node formation, create a fresh DoltHub
   database with `POST /api/v1alpha1/database` instead of forking a template.
 - **Empty DoltHub repos cannot be useful fork templates.** The initial
   `knowledge-node-template` had no contents; initializing it with a SQL write

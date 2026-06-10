@@ -13,7 +13,7 @@ last_commit: "cace4c0ead"
 
 ## Mission
 
-Pickup: review and validate PR #1579 after the post-review refinements. The branch implements the candidate-a target substrate reconciler for nodeRef/node-birth app flights, keeping `deploy-infra.sh` and secret-value writes out of the app lane while reconciling target-local substrate before digest promotion.
+Pickup: review and validate PR #1579 after the post-review refinements. The branch implements the candidate-a target substrate reconciler for nodeRef/node-formation app flights, keeping `deploy-infra.sh` and secret-value writes out of the app lane while reconciling target-local substrate before digest promotion.
 
 ## Goal
 

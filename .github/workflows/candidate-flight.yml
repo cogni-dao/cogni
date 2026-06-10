@@ -207,7 +207,7 @@ jobs:
       # scheduler-worker) have no node_id and would fail run-node-substrate.sh,
       # so they are excluded here — matching promote-and-deploy's node_targets_json
       # semantics. Every node in the set gets its substrate run uniformly; there
-      # is no node-birth special-case.
+      # is no node-formation special-case.
       - name: Select substrate node targets
         id: substrate-targets
         env:

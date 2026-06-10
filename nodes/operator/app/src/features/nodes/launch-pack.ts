@@ -16,7 +16,7 @@ import type { NodeStatus } from "@/shared/db/nodes";
 
 export const NODE_LAUNCH_PACK_KNOWLEDGE_ID = "node-launch-handoff";
 
-const KNOWLEDGE_TITLE = "AI assistant launch pack for node birth";
+const KNOWLEDGE_TITLE = "AI assistant launch pack for node formation";
 const KNOWLEDGE_BASE_URL = "https://cognidao.org";
 const OPERATOR_API_ROOT = "https://cognidao.org";
 

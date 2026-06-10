@@ -152,9 +152,9 @@ Full node lifecycle: DAO formation (done) -> zero-touch provisioning (this proje
 
 > See: [Node vs Operator Contract](../../docs/spec/node-operator-contract.md)
 
-### TS-Native Node-Birth Rails (direction, Run)
+### TS-Native Node-Formation Rails (direction, Run)
 
-**Today (deliberate, not just debt):** node birth runs Next.js app → GitHub Actions (YAML) → `scripts/ci/*.sh` (bash + `yq` + inline `python3`). This is a real **portability sweet spot**: a fork clones the node-template GitHub repo and runs the _entire_ birth flow with `gh` + `bash` + `yq` + `curl` — **no hard-required Cogni platform/operator backend**. Forks are self-sufficient. That property is load-bearing and must survive any migration.
+**Today (deliberate, not just debt):** node formation runs Next.js app → GitHub Actions (YAML) → `scripts/ci/*.sh` (bash + `yq` + inline `python3`). This is a real **portability sweet spot**: a fork clones the node-template GitHub repo and runs the _entire_ birth flow with `gh` + `bash` + `yq` + `curl` — **no hard-required Cogni platform/operator backend**. Forks are self-sufficient. That property is load-bearing and must survive any migration.
 
 **The cost we're paying:** bash boundaries are untyped (stringly-typed, `python3 -c` to parse JSON), and the bash operators are a _parallel_ implementation that drifts from the typed layer. Concrete: `@cogni/dns-ops` (`task.0232`) already ships a typed, tested CloudflareAdapter with `PROTECTED` (@/www) enforcement — and the bash reconcile (`#1445`) reimplemented the upsert **without** those guards, forcing them to be hand-written back in bash (`#1447`: apex guard + in-place update). One safety invariant, now in two places.
 
