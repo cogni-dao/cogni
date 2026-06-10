@@ -114,10 +114,13 @@ jobs:
               - 'nodes/canary/**'
             resy:
               - 'nodes/resy/**'
+            scheduler-worker:
+              - 'nodes/scheduler-worker/**'
             operator:
               - '**'
               - '!nodes/canary/**'
               - '!nodes/resy/**'
+              - '!nodes/scheduler-worker/**'
             # <<< GENERATED scope-filters
 
       # Intentionally inline — single-workflow gate, no logic duplicated across
