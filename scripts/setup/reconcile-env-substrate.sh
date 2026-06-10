@@ -64,6 +64,15 @@ ensure_sa() {
   remote "kubectl get sa $1 -n default >/dev/null 2>&1 || kubectl create sa $1 -n default"
 }
 
+# Fail-loud deploy-pointer preflight. A stale VM_HOST/SSH_DEPLOY_KEY (env VM migrated or
+# rebuilt without re-pointing VM_HOST, SSH_DEPLOY_KEY, and the <env>.vm.cognidao.org DNS
+# record) otherwise surfaces as a cryptic mid-run SSH timeout or 'Permission denied'. Catch
+# it up front with a diagnosis. See .claude/skills/devops-expert 'VM migration orphans deploy pointers'.
+if ! ssh $SSH_OPTS -o BatchMode=yes -o ConnectTimeout=15 "root@${VM_IP}" true 2>/tmp/_vmprobe; then
+  echo "::error::${DEPLOY_ENV}: cannot SSH root@${VM_IP} ($(tr -d '\n' </tmp/_vmprobe)). Deploy-pointer drift: the env VM was likely migrated/rebuilt without updating VM_HOST, SSH_DEPLOY_KEY, and the ${DEPLOY_ENV}.vm.cognidao.org DNS record. Verify VM_HOST resolves to the live Cherry VM for ${DEPLOY_ENV} and SSH_DEPLOY_KEY matches it." >&2
+  exit 1
+fi
+
 log "reconciling OpenBao substrate for env '${DEPLOY_ENV}' on ${VM_IP}"
 
 # ── KV v2 mount + kubernetes auth (idempotent: list-then-enable) ─────────────
