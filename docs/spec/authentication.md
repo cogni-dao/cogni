@@ -206,7 +206,6 @@ Providers register conditionally — only when both `CLIENT_ID` and `CLIENT_SECR
 
 ## Related
 
-- [Browser Session Flight Auth](../guides/browser-session-flight-auth.md) — Creator-session approval and machine bearer-token nodeRef flight setup
 - [Decentralized User Identity](./decentralized-user-identity.md) — user_bindings schema, binding invariants
 - [Security Auth](./security-auth.md) — auth surface identity resolution
 - [DAO Enforcement](./dao-enforcement.md)

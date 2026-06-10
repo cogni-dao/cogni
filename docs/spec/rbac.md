@@ -473,7 +473,6 @@ Subject included in cache key because delegation status can change independently
 
 ## Related
 
-- [Browser Session Flight Auth](../guides/browser-session-flight-auth.md) — Creator/admin approval and bearer-token nodeRef flight validation
 - [RBAC Hardening Project](../../work/projects/proj.rbac-hardening.md) — Roadmap, implementation checklists, P1/P2 plans
 - [Tool Use Spec](tool-use.md) — Tool execution pipeline, DENY_BY_DEFAULT
 - [Tenant Connections Spec](tenant-connections.md) — Connection auth, GRANT_INTERSECTION
