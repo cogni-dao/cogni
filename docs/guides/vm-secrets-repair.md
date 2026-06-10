@@ -51,21 +51,18 @@ that govern this runbook:
   `knowledge_<node>` DB _as_ that superuser, so `DOLTGRES_PASSWORD` **is** pod-facing
   and **is** OpenBao-owned — materialized per-node, not bootstrap-only.
 - **Doltgres stays derive-from-master (B), not per-node-role (A) — RBAC verdict
-  CONFIRMED.** Re-proven empirically against the pinned `dolthub/doltgresql:0.56.3`:
-  a non-superuser role can be `CREATE`d and `GRANT`ed, but function `EXECUTE`
-  (`current_user`, `count()`, any aggregate) is denied with **no** grant path,
-  `ALTER DEFAULT PRIVILEGES` is unsupported, and a role can't use a table it just
-  created — Doltgres implements only the five table-level DML privileges
-  ([DoltHub "Doltgres Now Supports Users", 2024-11-07](https://www.dolthub.com/blog/2024-11-07-doltgres-supports-users/);
-  [databases.md §5.2](../spec/databases.md)). So the pod reaches `knowledge_<node>`
-  as the `postgres` superuser. **But `DOLTGRES_PASSWORD` is now OpenBao-sole-source
-  like Postgres** (not bootstrap-only): the env superuser password is derived from
+  CONFIRMED.** Doltgres `0.56.3` RBAC is table-DML-only, so a per-node
+  `knowledge_<node>` role can't run the migrator or app and the pod connects as the
+  `postgres` superuser. The empirical proof + upstream citations are the SSOT in
+  [databases.md §5.2](../spec/databases.md) — not restated here. The **secrets
+  consequence** (this runbook's domain): `DOLTGRES_PASSWORD` is OpenBao-sole-source
+  like Postgres (not bootstrap-only) — the env superuser password, derived from
   `POSTGRES_ROOT_PASSWORD` (salt `doltgres-root`), materialized **per-node** to
-  `cogni/<env>/<node>`, and `DOLTGRES_URL` is composed from it by `secret-materialize`
+  `cogni/<env>/<node>`, with `DOLTGRES_URL` composed from it by `secret-materialize`
   (the sole OpenBao writer; reconcile read-only). Only the credential _value-shape_
-  differs from Postgres (env superuser, not per-node `source: agent`); migrate to A
-  — a per-node `knowledge_<node>` role — the day Doltgres implements function/schema/role
-  privileges, with **zero pipeline change**. **Not blocking** the Postgres per-node-role
+  differs from Postgres (env superuser, not per-node `source: agent`); migrate to A —
+  a per-node `knowledge_<node>` role — with **zero pipeline change** the day Doltgres
+  adds function/schema/role privileges. **Not blocking** the Postgres per-node-role
   purge below.
 
 > An earlier draft of this runbook imported the superuser + four derived passwords
