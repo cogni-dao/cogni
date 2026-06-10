@@ -8,14 +8,14 @@ namespace: cogni-production
 resources:
   - ../../../base/node-app
   - ../../../base/openfga-external
-  - ../../../secrets/external-secrets/production/operator
+  - ../../../../../nodes/operator/k8s/external-secrets/production
 
 namePrefix: operator-
 
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/cogni-template
-    digest: "sha256:198da4c9167ce459c9167fb69b908ce72c7612ffb2e2c40965d5b24c3a658e1f"
+    digest: "sha256:13b2f4838e2297d3716918890dedc6159536a3548009a46d510110c3cabb58ae"
 
 patches:
   # Node-specific ConfigMap values.
