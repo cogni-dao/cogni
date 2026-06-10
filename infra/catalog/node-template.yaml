@@ -13,4 +13,7 @@ image_repository: ghcr.io/cogni-dao/node-template
 candidate_a_branch: deploy/candidate-a-node-template
 preview_branch: deploy/preview-node-template
 production_branch: deploy/production-node-template
+# task.5017 — per-env node-set: candidate-a (flightable) + production. Not preview
+# (6 GB preview fits ~2-3 nodes; opt in here when preview is sized for it).
+envs: [candidate-a, production]
 path_prefix: nodes/node-template/
