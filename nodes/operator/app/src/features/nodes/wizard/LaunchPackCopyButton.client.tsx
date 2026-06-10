@@ -16,13 +16,24 @@ import { Check, Copy } from "lucide-react";
 import { type ReactElement, useState } from "react";
 
 import { Button } from "@/components";
+import type { ButtonProps } from "@/components/kit/inputs/Button";
 import type { NodeLaunchPackOutput } from "@/contracts/nodes.launch-pack.v1.contract";
 
 interface Props {
   readonly nodeId: string;
+  readonly variant?: ButtonProps["variant"];
+  readonly size?: ButtonProps["size"];
+  readonly className?: string;
+  readonly label?: string;
 }
 
-export function LaunchPackCopyButton({ nodeId }: Props): ReactElement {
+export function LaunchPackCopyButton({
+  nodeId,
+  variant = "outline",
+  size = "sm",
+  className,
+  label = "Copy agent prompt",
+}: Props): ReactElement {
   const [copied, setCopied] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -43,16 +54,16 @@ export function LaunchPackCopyButton({ nodeId }: Props): ReactElement {
   return (
     <Button
       type="button"
-      variant="outline"
-      size="sm"
-      className="gap-2"
+      variant={variant}
+      size={size}
+      className={className ?? "gap-2"}
       disabled={busy}
       aria-label="Copy launch prompt"
       title="Copy launch prompt"
       onClick={copyLaunchPrompt}
     >
       {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
-      {copied ? "Copied" : "Copy agent prompt"}
+      {copied ? "Copied" : label}
     </Button>
   );
 }
