@@ -33,11 +33,23 @@ else
   raw=("${ALL_TARGETS[@]}")
 fi
 
+# task.5017 — deploy ⊆ provisioned. A target promotes to OVERLAY_ENV only if its
+# catalog `envs:` node-set lists it (the same SSOT render-node-appset.sh gates on).
+# This is what stops promote-to-preview from selecting a node whose preview
+# AppSet was never rendered (which would hard-fail the appset-apply step).
+target_in_env() {
+  local target="$1" catalog_file="$REPO_ROOT/infra/catalog/${target}.yaml" envs
+  [[ -f "$catalog_file" ]] || return 0  # non-catalog target: leave to overlay gate
+  [[ "$(yq -r 'has("envs")' "$catalog_file")" == "true" ]] || return 0
+  envs="$(yq -r '.envs[]' "$catalog_file")"
+  grep -qxF "$OVERLAY_ENV" <<<"$envs"
+}
+
 list=()
 skipped=()
 for target in "${raw[@]}"; do
   [[ -n "$target" ]] || continue
-  if [[ -d "$REPO_ROOT/infra/k8s/overlays/${OVERLAY_ENV}/${target}" ]]; then
+  if target_in_env "$target" && [[ -d "$REPO_ROOT/infra/k8s/overlays/${OVERLAY_ENV}/${target}" ]]; then
     list+=("$target")
   else
     skipped+=("$target")
@@ -45,7 +57,7 @@ for target in "${raw[@]}"; do
 done
 
 if [[ "${#skipped[@]}" -gt 0 ]]; then
-  echo "::warning::Skipping targets without ${OVERLAY_ENV} overlay: ${skipped[*]}"
+  echo "::warning::Skipping targets not in the ${OVERLAY_ENV} node-set (catalog envs:) or without a ${OVERLAY_ENV} overlay: ${skipped[*]}"
 fi
 
 if [[ "${#list[@]}" -eq 0 ]]; then

@@ -10,4 +10,7 @@ image_repository: ghcr.io/cogni-dao/pandora
 candidate_a_branch: deploy/candidate-a-pandora
 preview_branch: deploy/preview-pandora
 production_branch: deploy/production-pandora
+# task.5017 — per-env node-set: production only. candidate-a is kept small
+# (operator + node-template + scheduler-worker); opt in here to flight-test on candidate-a.
+envs: [production]
 path_prefix: nodes/pandora/

@@ -27,6 +27,8 @@ migrator_tag_suffix: "-operator-migrate"
 candidate_a_branch: deploy/candidate-a-operator
 preview_branch: deploy/preview-operator
 production_branch: deploy/production-operator
+# task.5017 — per-env node-set. operator is the backbone: deploys to every env.
+envs: [candidate-a, preview, production]
 path_prefix: nodes/operator/
 # task.5078 — operator serves the bare base domain (https://${DOMAIN}); every
 # other node uses ${name}-${DOMAIN}. Catalog declares which entry is primary

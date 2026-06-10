@@ -358,6 +358,13 @@ jobs:
       - name: per-node ApplicationSet drift (CATALOG_IS_SSOT)
         run: bash scripts/ci/render-node-appset.sh --check
 
+      # Per-env node-set gate (task.5017): deploy ⊆ provisioned. Asserts each
+      # env renders only the nodes whose catalog `envs:` lists it (preview is the
+      # minimal operator+scheduler-worker backbone), SCHEDULER_WITH_OPERATOR,
+      # CANDIDATE_A_ALWAYS, determinism, and fail-closed on a missing `envs:`.
+      - name: per-env node-set tests
+        run: bash scripts/ci/tests/render-node-appset.test.sh
+
       # Per-node overlay drift (CATALOG_IS_SSOT + NODE_AT_ROOT_MIGRATE_PATH,
       # bug.5008). Wizard-born node overlays are frozen to the operator version
       # that minted them; a stale operator ships monorepo migrate paths that

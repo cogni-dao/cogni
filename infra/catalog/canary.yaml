@@ -11,4 +11,6 @@ migrator_tag_suffix: "-canary-migrate"
 candidate_a_branch: deploy/candidate-a-canary
 preview_branch: deploy/preview-canary
 production_branch: deploy/production-canary
+# task.5017 — per-env node-set: candidate-a (canary test node) + production.
+envs: [candidate-a, production]
 path_prefix: nodes/canary/

@@ -263,4 +263,26 @@ env \
   bash scripts/ci/reconcile-node-substrate.sh candidate-a canary > "$TMPROOT/relative-catalog-root.out"
 grep -q "substrate ready inputs reconciled for canary" "$TMPROOT/relative-catalog-root.out"
 
+# task.5017 — deploy ⊆ provisioned: reconciling a node into an env outside its
+# `envs:` node-set must fail loud BEFORE any substrate mutation (canary is
+# [candidate-a, production], not preview).
+set +e
+env \
+  VM_HOST=fake \
+  DOMAIN=test.cognidao.org \
+  SSH_OPTS="-i fake-key -o StrictHostKeyChecking=no" \
+  APP_SOURCE_DIR="$TMPROOT/app-src" \
+  COGNI_CATALOG_ROOT=infra/catalog \
+  RECONCILE_NODE_SUBSTRATE_SSH_BIN="$FAKEBIN/ssh" \
+  RECONCILE_NODE_SUBSTRATE_SCP_BIN="$FAKEBIN/scp" \
+  FAKE_REMOTE_ROOT="$REMOTE_ROOT" \
+  FAKE_REMOTE_PATH="$FAKEBIN" \
+  FAKE_BAO_ROOT="$BAO_ROOT" \
+  bash scripts/ci/reconcile-node-substrate.sh preview canary > "$TMPROOT/offset-env.out" 2>&1
+offset_rc=$?
+set -e
+[ "$offset_rc" -ne 0 ] || { echo "expected reconcile to fail for canary in preview (not in its envs)" >&2; exit 1; }
+grep -q "is not in the 'preview' node-set" "$TMPROOT/offset-env.out" \
+  || { echo "missing node-set rejection message; got:" >&2; cat "$TMPROOT/offset-env.out" >&2; exit 1; }
+
 echo "PASS: reconcile-node-substrate.test.sh"

@@ -107,4 +107,42 @@ resources:
       insertAppsetKustomization("resources:\n  - x.yaml\n", "foo", ENVS)
     ).toThrow(/sentinels/);
   });
+
+  // task.5017 — per-env node-set. A node born into a subset of envs must be
+  // added ONLY to those env blocks, and must NOT re-inflate the other envs'
+  // members (the old union-then-cartesian bug). Here preview already carries a
+  // smaller set (operator only); inserting `foo` for [candidate-a, production]
+  // leaves preview untouched.
+  it("adds a subset-born node only to its envs without re-inflating others", () => {
+    const TRIMMED = `apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - openbao-application.yaml
+  # >>> GENERATED node-appsets (scripts/ci/render-node-appset.sh) — DO NOT EDIT BY HAND
+  - candidate-a-canary-applicationset.yaml
+  - candidate-a-operator-applicationset.yaml
+  - preview-operator-applicationset.yaml
+  - production-canary-applicationset.yaml
+  - production-operator-applicationset.yaml
+  # <<< GENERATED node-appsets
+`;
+    expect(
+      insertAppsetKustomization(TRIMMED, "foo", ["candidate-a", "production"])
+    ).toBe(
+      `apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - openbao-application.yaml
+  # >>> GENERATED node-appsets (scripts/ci/render-node-appset.sh) — DO NOT EDIT BY HAND
+  - candidate-a-canary-applicationset.yaml
+  - candidate-a-foo-applicationset.yaml
+  - candidate-a-operator-applicationset.yaml
+  - preview-operator-applicationset.yaml
+  - production-canary-applicationset.yaml
+  - production-foo-applicationset.yaml
+  - production-operator-applicationset.yaml
+  # <<< GENERATED node-appsets
+`
+    );
+  });
 });

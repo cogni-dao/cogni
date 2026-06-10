@@ -65,6 +65,11 @@ migrator_tag_suffix: "-${slug}-migrate"
 ${sourceLines}candidate_a_branch: deploy/candidate-a-${slug}
 preview_branch: deploy/preview-${slug}
 production_branch: deploy/production-${slug}
+# task.5017 — per-env node-set (deploy ⊆ provisioned). A wizard birth enters all
+# NODE_FORMATION_ENVS; this list is the catalog twin so render-node-appset.sh
+# renders exactly the births appset.ts generates. Trimming a node's reach is a
+# later catalog edit (drop an env here) once its envs are provisioned.
+envs: [candidate-a, preview, production]
 path_prefix: nodes/${slug}/
 `;
 }

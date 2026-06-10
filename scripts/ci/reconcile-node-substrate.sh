@@ -196,6 +196,20 @@ for node in "${NODE_TARGETS[@]}"; do
 done
 "$node_known" || fail "target '$TARGET_NODE' is not a type=node catalog target"
 
+# task.5017 — deploy ⊆ provisioned. Refuse to provision substrate for a node whose
+# per-env node-set (`envs:`) doesn't include this env; otherwise an env would carry
+# substrate (DB/ES) for a node it never deploys. Fail loud, not silent.
+node_catalog_file="${COGNI_CATALOG_ROOT}/${TARGET_NODE}.yaml"
+[[ -f "$node_catalog_file" ]] || fail "missing catalog file: $node_catalog_file"
+if [[ "$(yq -r 'has("envs")' "$node_catalog_file")" != "true" ]]; then
+  fail "'$TARGET_NODE' has no 'envs' node-set in the catalog (CATALOG_IS_SSOT)"
+fi
+# here-string, not `yq | grep -q`: under pipefail a grep-match SIGPIPEs yq and the
+# 141 would surface as failure, wrongly rejecting a node that lists the env.
+node_envs="$(yq -r '.envs[]' "$node_catalog_file")"
+grep -qxF "$DEPLOY_ENVIRONMENT" <<<"$node_envs" \
+  || fail "'$TARGET_NODE' is not in the '$DEPLOY_ENVIRONMENT' node-set (envs: $(yq -r '.envs | join(",")' "$node_catalog_file")) — add the env to infra/catalog/${TARGET_NODE}.yaml to deploy it here"
+
 node_db="$(node_database_for_target "$TARGET_NODE")"
 node_host="$(host_for_node "$TARGET_NODE" "$DOMAIN")"
 node_port="$(node_port_for_target "$TARGET_NODE")"
