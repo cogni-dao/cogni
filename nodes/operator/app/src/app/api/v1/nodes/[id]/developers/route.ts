@@ -24,6 +24,7 @@ import {
   resolveServiceDb,
 } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
+import { transitionDeveloperRequestOnDecision } from "@/features/nodes/developer-requests";
 import { getServerSessionUser } from "@/lib/auth/server";
 import { nodes } from "@/shared/db/nodes";
 import {
@@ -225,6 +226,14 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         { status: 503 }
       );
     }
+
+    // Reflect the decision into the tracking row when the agent filed one. Best-effort UX state;
+    // the tuple write above is the authority, so a missing row is a no-op, never an error.
+    await transitionDeveloperRequestOnDecision(serviceDb, {
+      nodeId: id,
+      agentUserId: parsed.data.agentUserId,
+      decision: parsed.data.decision,
+    });
 
     logTerminal({
       outcome: "success",

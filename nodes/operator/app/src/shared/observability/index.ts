@@ -17,6 +17,7 @@ export const EVENT_NAMES = {
   ADAPTER_GITHUB_REPO_WRITE_ERROR: "adapter.github_repo_write.error",
   NODE_PUBLISH_SECRET_SHAPE_GENERATED:
     "feature.node_publish.secret_shape_generated",
+  NODE_DEVELOPER_REQUEST_COMPLETE: "feature.node_developer_request.complete",
 } as const;
 
 export type EventName = (typeof EVENT_NAMES)[keyof typeof EVENT_NAMES];
