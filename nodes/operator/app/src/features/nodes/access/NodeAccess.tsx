@@ -6,8 +6,9 @@
  * Purpose: Owner-facing "Developers" section under the launch pack — replaces the DevTools-fetch
  *   hack with an in-UI request → approve / deny / revoke surface. Shows pending access requests and
  *   approved developers for one node, each labeled with the capability its role confers.
- * Scope: Server-rendered layout (SectionCard + Table primitives) from pre-fetched tracking rows +
- *   per-row client action islands. OpenFGA role tuples remain the authority; rows are tracking only.
+ * Scope: Server-rendered layout (SectionCard + Table primitives, same shape as ActivityTable) from
+ *   pre-fetched tracking rows + per-row client action islands. OpenFGA role tuples remain the
+ *   authority; rows are tracking only.
  * Side-effects: none (AccessActions owns its IO)
  * Links: src/features/nodes/access-requests.ts, ./AccessActions.client.tsx, docs/spec/rbac.md §6
  * @public
@@ -16,11 +17,12 @@
 import type { ReactElement } from "react";
 
 import {
-  Badge,
   SectionCard,
   Table,
   TableBody,
   TableCell,
+  TableHead,
+  TableHeader,
   TableRow,
 } from "@/components";
 import type { NodeAccessRequestRow } from "@/features/nodes/access-requests";
@@ -54,15 +56,13 @@ function AccessRow({
   return (
     <TableRow>
       <TableCell>
-        <p className="truncate font-medium text-foreground text-sm">
-          {agentLabel(row)}
-        </p>
+        <p className="font-medium text-foreground text-sm">{agentLabel(row)}</p>
         <p className="truncate font-mono text-muted-foreground text-xs">
           {row.agentUserId}
         </p>
       </TableCell>
-      <TableCell>
-        <Badge intent="secondary">{ROLE_CAPABILITY[row.role]}</Badge>
+      <TableCell className="text-muted-foreground text-sm">
+        {ROLE_CAPABILITY[row.role]}
       </TableCell>
       <TableCell className="text-right">
         {mode === "pending" ? (
@@ -104,13 +104,22 @@ function RequestGroup({
       <h3 className="font-medium text-muted-foreground text-xs uppercase tracking-wide">
         {title}
       </h3>
-      <Table>
-        <TableBody>
-          {rows.map((row) => (
-            <AccessRow key={row.id} nodeId={nodeId} row={row} mode={mode} />
-          ))}
-        </TableBody>
-      </Table>
+      <div className="rounded-md border">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Developer</TableHead>
+              <TableHead>Access</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map((row) => (
+              <AccessRow key={row.id} nodeId={nodeId} row={row} mode={mode} />
+            ))}
+          </TableBody>
+        </Table>
+      </div>
     </section>
   );
 }
@@ -123,17 +132,12 @@ export function NodeAccess({ nodeId, requests }: Props): ReactElement {
   return (
     <SectionCard title="Developers" className="mx-auto mt-4 w-full max-w-2xl">
       <p className="text-muted-foreground text-sm">
-        AI developers you approve get{" "}
-        <span className="font-medium">Flight</span> access — they can deploy
-        this node to candidate. Approval is required before any flight; no
-        DevTools, no tokens to paste.
+        Approve AI developers to have permissions in this project. They can
+        flight + deploy code updates on your behalf.
       </p>
 
       {isEmpty ? (
-        <p className="text-muted-foreground text-sm">
-          No access requests yet. When your AI developer requests access, it
-          appears here for you to approve.
-        </p>
+        <p className="text-muted-foreground text-sm">No access requests yet.</p>
       ) : null}
 
       {pending.length > 0 ? (
