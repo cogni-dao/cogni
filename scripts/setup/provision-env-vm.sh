@@ -1814,10 +1814,11 @@ log_step "Phase 6: Apply ExternalSecret manifests"
 # canonical pattern called out in .claude/skills/cicd-secrets-expert
 # anti-patterns ("ssh root@vm kubectl ... — use local kubectl").
 #
-# Leaves are enumerated from the two SSOT trees per secrets-classification.md:
-#   - infra/k8s/secrets/external-secrets/<env>/<svc>/    (operator-domain)
+# Leaves are enumerated from the single SSOT tree per secrets-classification.md:
 #   - nodes/<node>/k8s/external-secrets/<env>/           (node-domain, A2)
-# An aggregator kustomization is deliberately absent — every prior incarnation
+# Every node carries its own ExternalSecret leaf in-repo (north-star per-node
+# substrate). The pre-wizard operator-domain tree was purged; there is now ONE
+# convention. An aggregator kustomization is deliberately absent — every prior incarnation
 # leaked a relative-up ref (../../../../../nodes/...) which broke remote
 # apply paths. Self-contained leaves compose without that smell.
 #
@@ -1830,15 +1831,6 @@ KUBECONFIG="$KUBECONFIG_LOCAL" kubectl create namespace "$K8S_NAMESPACE" \
   KUBECONFIG="$KUBECONFIG_LOCAL" kubectl apply -f -
 
 ES_APPLIED=0
-
-# Operator-domain leaves: infra/k8s/secrets/external-secrets/<env>/<svc>/
-for svc_dir in "$REPO_ROOT"/infra/k8s/secrets/external-secrets/"${DEPLOY_ENV}"/*/; do
-  [[ -d "$svc_dir" && -f "$svc_dir/kustomization.yaml" ]] || continue
-  svc=$(basename "${svc_dir%/}")
-  KUBECONFIG="$KUBECONFIG_LOCAL" kubectl -n "$K8S_NAMESPACE" apply -k "$svc_dir"
-  log_info "  applied operator-domain ExternalSecret: $svc"
-  ES_APPLIED=$((ES_APPLIED + 1))
-done
 
 # Node-domain leaves: nodes/<node>/k8s/external-secrets/<env>/
 for node_es_dir in "$REPO_ROOT"/nodes/*/k8s/external-secrets/"${DEPLOY_ENV}"/; do
@@ -1853,8 +1845,7 @@ done
 if [[ $ES_APPLIED -eq 0 ]]; then
   log_warn "No ExternalSecret manifests applied for ${DEPLOY_ENV}."
   log_warn "Pods consuming envFrom: secretRef will CrashLoop until the operator"
-  log_warn "adds an ExternalSecret kustomization under either"
-  log_warn "  infra/k8s/secrets/external-secrets/${DEPLOY_ENV}/<svc>/, or"
+  log_warn "adds an ExternalSecret kustomization under"
   log_warn "  nodes/<node>/k8s/external-secrets/${DEPLOY_ENV}/"
 else
   log_info "Applied ${ES_APPLIED} ExternalSecret manifest(s) for ${DEPLOY_ENV}"
