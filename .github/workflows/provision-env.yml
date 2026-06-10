@@ -36,9 +36,21 @@ on:
           - candidate-b
           - preview
           - production
-      encryption_passphrase:
-        description: "Operator-typed passphrase for the init artifact (NEVER stored)"
+      mode:
+        description: "full = cold-start provision (tofu+VM+DNS+init); substrate-only = reconcile OpenBao SA/role layer on an existing env (no tofu/VM/DNS)"
         required: true
+        default: full
+        type: choice
+        options:
+          - full
+          - substrate-only
+      encryption_passphrase:
+        description: "full mode: operator-typed passphrase for the init artifact (NEVER stored)"
+        required: false
+        type: string
+      openbao_root_token:
+        description: "substrate-only mode: the existing env's OpenBao root token, pulled from its init artifact at dispatch (one-shot, masked, NEVER stored — never a standing GH secret)"
+        required: false
         type: string
 
 permissions:
@@ -55,6 +67,7 @@ concurrency:
 
 jobs:
   provision:
+    if: inputs.mode == 'full'
     runs-on: ubuntu-latest
     environment: ${{ inputs.env }}
     timeout-minutes: 60
@@ -572,3 +585,52 @@ jobs:
           # Cherry credentials — it stays in tfstate on the runner, which is
           # ephemeral. Future PR moves tfstate to a remote backend (S3-equiv).
           echo "cleanup complete"
+
+  # substrate-only: reconcile the env's OpenBao SA/role layer on the EXISTING VM
+  # (no tofu/VM/DNS/init). Heals the drift where Phase 5b SAs/roles were never
+  # reconciled outside a cold-start (prod missing db-provisioner; preview missing
+  # both). Token custody v0: operator pastes the env's root token as a masked
+  # one-shot input — pulled from the init artifact at dispatch, NEVER a standing
+  # GH secret (same shape as encryption_passphrase). Endgame (prose, not built at
+  # MVP): a substrate-admin k8s-auth role minted short-lived per run, zero root
+  # token. See scripts/setup/reconcile-env-substrate.sh.
+  reconcile-substrate:
+    if: inputs.mode == 'substrate-only'
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.env }}
+    timeout-minutes: 15
+    env:
+      DEPLOY_ENV: ${{ inputs.env }}
+    steps:
+      - name: Mask root token
+        run: echo "::add-mask::${{ inputs.openbao_root_token }}"
+
+      - name: Validate substrate-only inputs
+        env:
+          OPENBAO_ROOT_TOKEN: ${{ inputs.openbao_root_token }}
+          VM_HOST: ${{ secrets.VM_HOST }}
+        run: |
+          set -euo pipefail
+          [ -n "$OPENBAO_ROOT_TOKEN" ] || { echo "::error::substrate-only requires the openbao_root_token input"; exit 1; }
+          [ -n "$VM_HOST" ] || { echo "::error::VM_HOST secret missing for ${DEPLOY_ENV}"; exit 1; }
+
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - name: Setup SSH to the env VM
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          SSH_DEPLOY_KEY: ${{ secrets.SSH_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          echo "$SSH_DEPLOY_KEY" | tr -d '\r' > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -T 10 -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Reconcile env OpenBao substrate
+        env:
+          VM_IP: ${{ secrets.VM_HOST }}
+          SSH_OPTS: "-i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6"
+          GH_REPO: ${{ github.repository }}
+          OPENBAO_ROOT_TOKEN: ${{ inputs.openbao_root_token }}
+        run: bash scripts/setup/reconcile-env-substrate.sh "${DEPLOY_ENV}"
