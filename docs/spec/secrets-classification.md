@@ -260,7 +260,7 @@ Aligned to [`node-ci-cd-contract.md`](./node-ci-cd-contract.md) §Domains (the f
 - Node directory: `nodes/<node>/` — bare name, no `-node` suffix.
 - Catalog file: `nodes/<node>/.cogni/secrets-catalog.yaml` (per-node, node-domain). Loader auto-fills `service: <node>` from the parent directory.
 - OpenBao service path: `cogni/<env>/<node>` — `<service>` IS the bare node name for node-domain services.
-- ExternalSecret manifest dir: `nodes/<node>/k8s/external-secrets/<env>/` (per-node, node-domain). Aggregator at `infra/k8s/secrets/external-secrets/<env>/kustomization.yaml` references the node-tree path.
+- ExternalSecret manifest dir: `nodes/<node>/k8s/external-secrets/<env>/` (per-node, node-domain) — the single repo-wide convention. Leaves are applied directly (provision Phase 6 globs `nodes/*/k8s/external-secrets/<env>/`; preview/prod overlays pull the leaf via `resources:`). No per-env aggregator — only the cluster-scoped `ClusterSecretStore` lives under `infra/k8s/secrets/external-secrets/`.
 - k8s Secret target name: `<node>-env-secrets` (per Invariant 2 of secrets-management.md).
 - Pod envFrom: `secretRef: name: <node>-env-secrets`.
 

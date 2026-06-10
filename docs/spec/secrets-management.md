@@ -243,7 +243,7 @@ lanes and read by CI workflows via OIDC.
 ### Consumption pattern — ExternalSecret with `dataFrom: extract`
 
 ```yaml
-# infra/k8s/secrets/external-secrets/<env>/<service>/external-secret.yaml
+# nodes/<node>/k8s/external-secrets/<env>/external-secret.yaml
 apiVersion: external-secrets.io/v1
 kind: ExternalSecret
 metadata:
@@ -548,21 +548,21 @@ Bound via OpenBao role definitions to Kubernetes ServiceAccounts (per-service-pe
 
 ## File Pointers
 
-| File                                                  | Purpose                                                                                      |
-| ----------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `infra/k8s/argocd/openbao/`                           | Argo Application installing OpenBao (`task.0284`)                                            |
-| `infra/k8s/argocd/external-secrets/`                  | Argo Application installing ESO controller (`task.0284`)                                     |
-| `infra/k8s/argocd/reloader/`                          | Argo Application installing Stakater Reloader (`task.5056`)                                  |
-| `infra/k8s/secrets/external-secrets/<env>/<service>/` | Per-service-per-env ExternalSecret YAML                                                      |
-| `scripts/secrets/set-secret.sh`                       | CLI implementation (`pnpm secrets:set`)                                                      |
-| `scripts/secrets/rotate-secret.sh`                    | CLI implementation (`pnpm secrets:rotate`)                                                   |
-| `.github/workflows/secret-set.yml`                    | Day-2 self-serve write (GH-OIDC → OpenBao; per-operation)                                    |
-| `scripts/lib/secrets-catalog-loader.ts`               | The one catalog reader (Zod); emits the pod-key universe                                     |
-| `nodes/<node>/.cogni/secrets-catalog.yaml`            | Per-node declaration surface (one-PR self-serve)                                             |
-| `docs/runbooks/fork-quickstart.md`                    | Bootstrap flow (substrate install + unseal + role bind, Steps 6 / 6.5)                       |
-| `docs/runbooks/production-operator-eso-cutover.md`    | Production operator OpenBao/ESO cutover, custody discovery, force-sync, and cleanup ordering |
-| `docs/guides/secrets-add-new.md`                      | Practical guide — adding a new secret                                                        |
-| `docs/guides/secrets-rotate.md`                       | Practical guide — rotation playbook + substrate-token rotation                               |
+| File                                               | Purpose                                                                                      |
+| -------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `infra/k8s/argocd/openbao/`                        | Argo Application installing OpenBao (`task.0284`)                                            |
+| `infra/k8s/argocd/external-secrets/`               | Argo Application installing ESO controller (`task.0284`)                                     |
+| `infra/k8s/argocd/reloader/`                       | Argo Application installing Stakater Reloader (`task.5056`)                                  |
+| `nodes/<node>/k8s/external-secrets/<env>/`         | Per-node-per-env ExternalSecret YAML (single repo-wide convention)                           |
+| `scripts/secrets/set-secret.sh`                    | CLI implementation (`pnpm secrets:set`)                                                      |
+| `scripts/secrets/rotate-secret.sh`                 | CLI implementation (`pnpm secrets:rotate`)                                                   |
+| `.github/workflows/secret-set.yml`                 | Day-2 self-serve write (GH-OIDC → OpenBao; per-operation)                                    |
+| `scripts/lib/secrets-catalog-loader.ts`            | The one catalog reader (Zod); emits the pod-key universe                                     |
+| `nodes/<node>/.cogni/secrets-catalog.yaml`         | Per-node declaration surface (one-PR self-serve)                                             |
+| `docs/runbooks/fork-quickstart.md`                 | Bootstrap flow (substrate install + unseal + role bind, Steps 6 / 6.5)                       |
+| `docs/runbooks/production-operator-eso-cutover.md` | Production operator OpenBao/ESO cutover, custody discovery, force-sync, and cleanup ordering |
+| `docs/guides/secrets-add-new.md`                   | Practical guide — adding a new secret                                                        |
+| `docs/guides/secrets-rotate.md`                    | Practical guide — rotation playbook + substrate-token rotation                               |
 
 ## Related
 
