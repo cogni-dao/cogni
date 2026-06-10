@@ -5,20 +5,20 @@ description: Authoritative map of Cogni's AI-agent infrastructure — the substr
 
 # Agent Infrastructure Expert
 
-You own the **infrastructure altitude** of Cogni agents: how a LangGraph graph becomes a production-grade, billed, observable, durably-orchestrated, deployed agent. Graph *authoring* (factory/prompts/tools/catalog) is one tier below you — route it to `agent-development.md`. You answer: where does it run, what ships it, how is it billed/observed, and is the eval gate real.
+You own the **infrastructure altitude** of Cogni agents: how a LangGraph graph becomes a production-grade, billed, observable, durably-orchestrated, deployed agent. Graph _authoring_ (factory/prompts/tools/catalog) is one tier below you — route it to `agent-development.md`. You answer: where does it run, what ships it, how is it billed/observed, and is the eval gate real.
 
 > **Stable skill, living scorecard.** This file holds the mental model and rules that don't move. All dated status — InProc↔Server alignment, built-vs-designed, doc DRY/drift/consolidation, doc-map staleness — lives in [`agent-infrastructure-scorecard`](../agent-infrastructure-scorecard/SKILL.md). **When reality moves, update the scorecard, not this skill.**
 
 ## Mental Model — Four Planes
 
-| Plane | What it does | Canonical doc |
-| --- | --- | --- |
-| **Author** | Write the graph: pure factory, prompts, `toolIds`, catalog entry, `cogni-exec.ts` entrypoint | [`langgraph-patterns.md`](../../../docs/spec/langgraph-patterns.md) + [`agent-development.md`](../../../docs/guides/agent-development.md) |
-| **Execute** | Run it behind one `GraphExecutorPort` — billing, credit-preflight, observability, ALS, tool-allowlist decorators, all applied once | [`graph-execution.md`](../../../docs/spec/graph-execution.md) |
-| **Orchestrate + Ship** | Temporal triggers it durably; the graph rides the node app image and runs in-proc; the worker reaches it over HTTP | [`unified-graph-launch.md`](../../../docs/spec/unified-graph-launch.md) + [`temporal-patterns.md`](../../../docs/spec/temporal-patterns.md) |
-| **Evaluate** | Score graphs after deploy; gate promotion on quality | [`proj.ai-evals-pipeline.md`](../../../work/projects/proj.ai-evals-pipeline.md) + [`ai-evals.md`](../../../docs/spec/ai-evals.md) |
+| Plane                  | What it does                                                                                                                       | Canonical doc                                                                                                                               |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Author**             | Write the graph: pure factory, prompts, `toolIds`, catalog entry, `cogni-exec.ts` entrypoint                                       | [`langgraph-patterns.md`](../../../docs/spec/langgraph-patterns.md) + [`agent-development.md`](../../../docs/guides/agent-development.md)   |
+| **Execute**            | Run it behind one `GraphExecutorPort` — billing, credit-preflight, observability, ALS, tool-allowlist decorators, all applied once | [`graph-execution.md`](../../../docs/spec/graph-execution.md)                                                                               |
+| **Orchestrate + Ship** | Temporal triggers it durably; the graph rides the node app image and runs in-proc; the worker reaches it over HTTP                 | [`unified-graph-launch.md`](../../../docs/spec/unified-graph-launch.md) + [`temporal-patterns.md`](../../../docs/spec/temporal-patterns.md) |
+| **Evaluate**           | Score graphs after deploy; gate promotion on quality                                                                               | [`proj.ai-evals-pipeline.md`](../../../work/projects/proj.ai-evals-pipeline.md) + [`ai-evals.md`](../../../docs/spec/ai-evals.md)           |
 
-*(Per-plane build status → scorecard.)*
+_(Per-plane build status → scorecard.)_
 
 ## Build → Ship → Run Topology (the load-bearing truth)
 
@@ -33,7 +33,7 @@ Temporal (schedule/webhook) → GraphRunWorkflow ─HTTP─► node app /api/int
    orchestrate (no graph code)                          execute in-proc (graph in image) → Redis → SSE
 ```
 
-**Known seam (the one B-grade edge):** the worker activity is a synchronous `await fetch()` that blocks for the *entire* graph and reads the decision body. The expensive, long-running, least-idempotent unit (the LLM graph) executes **outside Temporal's durability** — app crash mid-graph re-runs the whole graph (re-burns tokens), and a multi-minute sync HTTP call is exposed to ingress/LB idle timeouts. Deliberate and documented (graphs return *recomputable* decision artifacts; material writes happen in post-graph Activities; resume/checkpoint is a named P1 deferral). **Fine for short governance/PR-review graphs; harden to async-start→signal (or a LangGraph checkpointer) before any minutes-long agent rides it.**
+**Known seam (the one B-grade edge):** the worker activity is a synchronous `await fetch()` that blocks for the _entire_ graph and reads the decision body. The expensive, long-running, least-idempotent unit (the LLM graph) executes **outside Temporal's durability** — app crash mid-graph re-runs the whole graph (re-burns tokens), and a multi-minute sync HTTP call is exposed to ingress/LB idle timeouts. Deliberate and documented (graphs return _recomputable_ decision artifacts; material writes happen in post-graph Activities; resume/checkpoint is a named P1 deferral). **Fine for short governance/PR-review graphs; harden to async-start→signal (or a LangGraph checkpointer) before any minutes-long agent rides it.**
 
 ## Operating Rules
 
