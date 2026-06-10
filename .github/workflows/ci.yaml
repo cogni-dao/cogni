@@ -313,6 +313,9 @@ jobs:
       - name: node substrate reconcile tests
         run: bash scripts/ci/tests/reconcile-node-substrate.test.sh
 
+      - name: per-node substrate runner tests
+        run: bash scripts/ci/tests/run-node-substrate.test.sh
+
       # task.5078 — catalog-driven edge routing. Asserts the committed Caddyfile
       # is in sync with the catalog (drift gate that makes "add a node = 1
       # catalog PR" enforceable), every type:node has an edge block (canary

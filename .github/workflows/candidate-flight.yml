@@ -52,7 +52,8 @@ jobs:
       flight_targets_json: ${{ steps.flight-targets.outputs.flight_targets_json }}
       has_flight_targets: ${{ steps.flight-targets.outputs.has_flight_targets }}
       has_image_inputs: ${{ steps.flight-targets.outputs.has_image_inputs }}
-      needs_substrate_check: ${{ steps.substrate.outputs.needs_substrate_check }}
+      substrate_node_targets_json: ${{ steps.substrate-targets.outputs.substrate_node_targets_json }}
+      has_substrate_node_targets: ${{ steps.substrate-targets.outputs.has_substrate_node_targets }}
     steps:
       - name: Checkout workflow source
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
@@ -201,45 +202,27 @@ jobs:
           echo "has_flight_targets=$has_flight_targets" >> "$GITHUB_OUTPUT"
           echo "has_image_inputs=$has_image_inputs" >> "$GITHUB_OUTPUT"
 
-      # Node-ref and catalog-birth flights are app flights. They must not run
-      # hidden infra provisioning; they assert the target substrate that
-      # provision-env / candidate-flight-infra owns already exists, then promote
-      # only the app digest. This workflow currently enables the gate only for
-      # type=node targets.
-      - name: Detect substrate assertion need
-        id: substrate
+      # The per-node substrate matrix is the deployable TYPE:NODE set: the flight
+      # targets intersected with catalog NODE_TARGETS. Services (e.g.
+      # scheduler-worker) have no node_id and would fail run-node-substrate.sh,
+      # so they are excluded here — matching promote-and-deploy's node_targets_json
+      # semantics. Every node in the set gets its substrate run uniformly; there
+      # is no node-birth special-case.
+      - name: Select substrate node targets
+        id: substrate-targets
         env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ inputs.pr_number }}
-          NODE_SLUG: ${{ steps.meta.outputs.node_slug }}
+          FLIGHT_TARGETS_JSON: ${{ steps.flight-targets.outputs.flight_targets_json }}
+          COGNI_CATALOG_ROOT: app-src/infra/catalog
         run: |
           set -euo pipefail
-          if [ -n "$NODE_SLUG" ]; then
-            echo "::notice::Node-ref flight for ${NODE_SLUG} — asserting candidate-a substrate before app flight"
-            echo "needs_substrate_check=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          ADDED_CATALOG=$(gh api --paginate \
-            "repos/${{ github.repository }}/pulls/${PR_NUMBER}/files" \
-            --jq '.[] | select(.status == "added") | .filename
-                  | select(test("^infra/catalog/[^/]+\\.yaml$"))')
-          ADDED_NODE_CATALOG=""
-          while IFS= read -r catalog_path; do
-            [ -n "$catalog_path" ] || continue
-            catalog_type=$(yq -N '.type // ""' "app-src/${catalog_path}")
-            if [ "$catalog_type" = "node" ]; then
-              ADDED_NODE_CATALOG+="${catalog_path}"$'\n'
-            else
-              echo "::notice::Added ${catalog_type:-unknown} catalog entry ${catalog_path} does not use app-flight substrate assertion in this workflow"
-            fi
-          done <<< "$ADDED_CATALOG"
-          if [ -n "$ADDED_NODE_CATALOG" ]; then
-            echo "::notice::Node birth detected — asserting target substrate for new node catalog entry: ${ADDED_NODE_CATALOG//$'\n'/ }"
-            echo "needs_substrate_check=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "ℹ️  No added node catalog entry — app-only flight, infra independent"
-            echo "needs_substrate_check=false" >> "$GITHUB_OUTPUT"
-          fi
+          # shellcheck source=app-src/scripts/ci/lib/image-tags.sh
+          . app-src/scripts/ci/lib/image-tags.sh
+          node_targets_json=$(printf '%s\n' "${NODE_TARGETS[@]}" | jq -R . | jq -sc .)
+          substrate=$(python3 -c 'import json, sys; flight = json.loads(sys.argv[1] or "[]"); nodes = set(json.loads(sys.argv[2] or "[]")); print(json.dumps([t for t in flight if t in nodes]))' "$FLIGHT_TARGETS_JSON" "$node_targets_json")
+          has_substrate_node_targets=false
+          [ "$substrate" != "[]" ] && has_substrate_node_targets=true
+          echo "substrate_node_targets_json=$substrate" >> "$GITHUB_OUTPUT"
+          echo "has_substrate_node_targets=$has_substrate_node_targets" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         if: steps.flight-targets.outputs.has_image_inputs == 'true'
@@ -292,11 +275,11 @@ jobs:
     if: |
       always() &&
       needs.decide.result == 'success' &&
-      needs.decide.outputs.needs_substrate_check == 'true'
+      needs.decide.outputs.has_substrate_node_targets == 'true'
     strategy:
       fail-fast: false
       matrix:
-        node: ${{ fromJson(needs.decide.outputs.flight_targets_json) }}
+        node: ${{ fromJson(needs.decide.outputs.substrate_node_targets_json) }}
     concurrency:
       group: prepare-substrate-deploy-branch-candidate-a-${{ matrix.node }}
       cancel-in-progress: false
@@ -376,7 +359,7 @@ jobs:
       always() &&
       needs.decide.outputs.has_flight_targets == 'true' &&
       (
-        needs.decide.outputs.needs_substrate_check != 'true' ||
+        needs.decide.outputs.has_substrate_node_targets != 'true' ||
         needs.prepare-substrate-deploy-branch.result == 'success'
       )
     # Per-node lane (axiom 18, LANE_ISOLATION). A flight applies ONLY its own
@@ -492,17 +475,17 @@ jobs:
           ci_ssh_retry ssh "${ssh_opts[@]}" "root@${VM_HOST}" "bash /tmp/wait-appset-${NODE}.sh '$app_name' '$appset_name'; status=\$?; rm -f /tmp/wait-appset-${NODE}.sh; exit \$status"
 
   assert-substrate:
-    needs: [decide, reconcile-appset, reconcile-dns, reconcile-substrate]
+    needs: [decide, reconcile-appset, reconcile-dns, node-substrate]
     if: |
       always() &&
-      needs.decide.outputs.needs_substrate_check == 'true' &&
+      needs.decide.outputs.has_substrate_node_targets == 'true' &&
       needs.reconcile-appset.result == 'success' &&
       needs.reconcile-dns.result == 'success' &&
-      needs.reconcile-substrate.result == 'success'
+      needs.node-substrate.result == 'success'
     strategy:
       fail-fast: false
       matrix:
-        node: ${{ fromJson(needs.decide.outputs.flight_targets_json) }}
+        node: ${{ fromJson(needs.decide.outputs.substrate_node_targets_json) }}
     concurrency:
       group: assert-substrate-candidate-a-${{ matrix.node }}
       cancel-in-progress: false
@@ -550,90 +533,21 @@ jobs:
           ASSERT_TARGET_SUBSTRATE_APP_WAIT_SLEEP_SECONDS: 5
         run: bash ci-src/scripts/ci/assert-target-substrate.sh
 
-  materialize-substrate:
-    needs: [decide]
-    if: |
-      always() &&
-      needs.decide.outputs.needs_substrate_check == 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        node: ${{ fromJson(needs.decide.outputs.flight_targets_json) }}
-    concurrency:
-      group: materialize-substrate-candidate-a-${{ matrix.node }}
-      cancel-in-progress: false
-    runs-on: ubuntu-latest
-    environment: candidate-a
-    steps:
-      - name: Checkout workflow source
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
-        with:
-          path: ci-src
-
-      - name: Checkout app source
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
-        with:
-          ref: ${{ needs.decide.outputs.head_sha }}
-          fetch-depth: 0
-          path: app-src
-
-      - name: Initialize node submodule when present
-        env:
-          GH_TOKEN: ${{ github.token }}
-          NODE: ${{ matrix.node }}
-        run: |
-          set -euo pipefail
-          if git -C app-src config -f .gitmodules --get "submodule.nodes/${NODE}.path" >/dev/null 2>&1; then
-            git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
-            git -C app-src submodule update --init --depth 1 "nodes/${NODE}"
-          fi
-
-      - name: Setup SSH to candidate-a VM
-        env:
-          VM_HOST: ${{ secrets.VM_HOST }}
-          SSH_DEPLOY_KEY: ${{ secrets.SSH_DEPLOY_KEY }}
-          NODE_SOURCE_SHA: ${{ needs.decide.outputs.node_source_sha }}
-          DEPLOY_ENVIRONMENT: candidate-a
-        run: |
-          set -euo pipefail
-          bash ci-src/scripts/ci/require-node-ref-vm.sh
-          mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          echo "$SSH_DEPLOY_KEY" | tr -d '\r' > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -T 10 -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
-
-      - name: Materialize node-owned OpenBao secrets
-        env:
-          VM_HOST: ${{ secrets.VM_HOST }}
-          SSH_OPTS: "-i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6"
-          DEPLOY_ENVIRONMENT: candidate-a
-          TARGET: ${{ matrix.node }}
-          DOMAIN: ${{ vars.DOMAIN }}
-          APP_SOURCE_DIR: app-src
-        run: bash ci-src/scripts/ci/secret-materialize.sh candidate-a "${TARGET}"
-
-  reconcile-substrate:
+  node-substrate:
     needs:
-      [
-        decide,
-        reconcile-appset,
-        reconcile-dns,
-        prepare-substrate-deploy-branch,
-        materialize-substrate,
-      ]
+      [decide, reconcile-appset, reconcile-dns, prepare-substrate-deploy-branch]
     if: |
       always() &&
-      needs.decide.outputs.needs_substrate_check == 'true' &&
-      needs.materialize-substrate.result == 'success' &&
-      needs.prepare-substrate-deploy-branch.result == 'success' &&
+      needs.decide.outputs.has_substrate_node_targets == 'true' &&
       needs.reconcile-appset.result == 'success' &&
-      needs.reconcile-dns.result == 'success'
+      needs.reconcile-dns.result == 'success' &&
+      needs.prepare-substrate-deploy-branch.result == 'success'
     strategy:
       fail-fast: false
       matrix:
-        node: ${{ fromJson(needs.decide.outputs.flight_targets_json) }}
+        node: ${{ fromJson(needs.decide.outputs.substrate_node_targets_json) }}
     concurrency:
-      group: reconcile-substrate-candidate-a-${{ matrix.node }}
+      group: node-substrate-candidate-a-${{ matrix.node }}
       cancel-in-progress: false
     runs-on: ubuntu-latest
     environment: candidate-a
@@ -675,12 +589,11 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -T 10 -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
 
-      - name: Reconcile node substrate readiness
+      - name: Run node substrate (materialize -> reconcile)
         env:
           VM_HOST: ${{ secrets.VM_HOST }}
           SSH_OPTS: "-i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6"
           DEPLOY_ENVIRONMENT: candidate-a
-          TARGET: ${{ matrix.node }}
           DOMAIN: ${{ vars.DOMAIN }}
           APP_SOURCE_DIR: app-src
           COGNI_CATALOG_ROOT: infra/catalog
@@ -688,7 +601,7 @@ jobs:
           NODE_SOURCE_SHA: ${{ needs.decide.outputs.node_source_sha }}
           STATUS_URL: ${{ needs.decide.outputs.status_url }}
           SUBSTRATE_RECONCILE_SUMMARY_FILE: ${{ runner.temp }}/node-substrate-reconcile-${{ matrix.node }}.json
-        run: bash ci-src/scripts/ci/reconcile-node-substrate.sh candidate-a "${TARGET}"
+        run: bash ci-src/scripts/ci/run-node-substrate.sh candidate-a "${{ matrix.node }}"
 
       - name: Push substrate reconcile telemetry to Loki
         if: always()
@@ -698,18 +611,18 @@ jobs:
           loki_user: ${{ secrets.GRAFANA_CLOUD_LOKI_USER }}
           loki_token: ${{ secrets.GRAFANA_CLOUD_LOKI_API_KEY }}
           log_file: ${{ runner.temp }}/node-substrate-reconcile-${{ matrix.node }}.json
-          job_name: reconcile-substrate
+          job_name: node-substrate
           labels: workflow=candidate-flight kind=target_substrate_reconcile slot=candidate-a
 
   flight:
-    needs: [decide, reconcile-appset, reconcile-substrate, assert-substrate]
+    needs: [decide, reconcile-appset, node-substrate, assert-substrate]
     if: |
       always() &&
       needs.decide.outputs.has_flight_targets == 'true' &&
       needs.reconcile-appset.result == 'success' &&
       (
-        (needs.decide.outputs.needs_substrate_check == 'true' && needs.assert-substrate.result == 'success') ||
-        (needs.decide.outputs.needs_substrate_check != 'true' && needs.assert-substrate.result == 'skipped')
+        (needs.decide.outputs.has_substrate_node_targets == 'true' && needs.node-substrate.result == 'success' && needs.assert-substrate.result == 'success') ||
+        (needs.decide.outputs.has_substrate_node_targets != 'true' && needs.node-substrate.result == 'skipped' && needs.assert-substrate.result == 'skipped')
       )
     strategy:
       fail-fast: false
@@ -982,20 +895,19 @@ jobs:
           labels: workflow=candidate-flight kind=dns_reconcile slot=candidate-a
 
   verify-candidate:
-    needs:
-      [decide, flight, reconcile-dns, reconcile-substrate, assert-substrate]
+    needs: [decide, flight, reconcile-dns, node-substrate, assert-substrate]
     if: |
       always() &&
       needs.decide.outputs.has_flight_targets == 'true' &&
       needs.flight.result == 'success' &&
       needs.reconcile-dns.result == 'success' &&
       (
-        needs.decide.outputs.needs_substrate_check != 'true' ||
-        needs.reconcile-substrate.result == 'success'
+        needs.decide.outputs.has_substrate_node_targets != 'true' ||
+        needs.node-substrate.result == 'success'
       ) &&
       (
-        (needs.decide.outputs.needs_substrate_check == 'true' && needs.assert-substrate.result == 'success') ||
-        (needs.decide.outputs.needs_substrate_check != 'true' && needs.assert-substrate.result == 'skipped')
+        (needs.decide.outputs.has_substrate_node_targets == 'true' && needs.assert-substrate.result == 'success') ||
+        (needs.decide.outputs.has_substrate_node_targets != 'true' && needs.assert-substrate.result == 'skipped')
       )
     strategy:
       fail-fast: false
@@ -1116,8 +1028,7 @@ jobs:
       [
         decide,
         prepare-substrate-deploy-branch,
-        materialize-substrate,
-        reconcile-substrate,
+        node-substrate,
         assert-substrate,
         flight,
         verify-candidate,
@@ -1133,17 +1044,16 @@ jobs:
         env:
           HAS_TARGETS: ${{ needs.decide.outputs.has_targets }}
           HAS_FLIGHT_TARGETS: ${{ needs.decide.outputs.has_flight_targets }}
-          NEEDS_SUBSTRATE_CHECK: ${{ needs.decide.outputs.needs_substrate_check }}
+          HAS_SUBSTRATE_NODE_TARGETS: ${{ needs.decide.outputs.has_substrate_node_targets }}
           PREPARE_SUBSTRATE_DEPLOY_BRANCH_RESULT: ${{ needs.prepare-substrate-deploy-branch.result }}
-          MATERIALIZE_SUBSTRATE_RESULT: ${{ needs.materialize-substrate.result }}
-          RECONCILE_SUBSTRATE_RESULT: ${{ needs.reconcile-substrate.result }}
+          NODE_SUBSTRATE_RESULT: ${{ needs.node-substrate.result }}
           ASSERT_SUBSTRATE_RESULT: ${{ needs.assert-substrate.result }}
           FLIGHT_RESULT: ${{ needs.flight.result }}
           VERIFY_RESULT: ${{ needs.verify-candidate.result }}
           TARGETS_JSON: ${{ needs.decide.outputs.flight_targets_json }}
         run: |
           set -euo pipefail
-          echo "has_targets=${HAS_TARGETS} has_flight_targets=${HAS_FLIGHT_TARGETS} substrate=${NEEDS_SUBSTRATE_CHECK} prepare_substrate_deploy_branch=${PREPARE_SUBSTRATE_DEPLOY_BRANCH_RESULT} materialize_substrate=${MATERIALIZE_SUBSTRATE_RESULT} reconcile_substrate=${RECONCILE_SUBSTRATE_RESULT} assert_substrate=${ASSERT_SUBSTRATE_RESULT} flight=${FLIGHT_RESULT} verify=${VERIFY_RESULT} flight_targets=${TARGETS_JSON}"
+          echo "has_targets=${HAS_TARGETS} has_flight_targets=${HAS_FLIGHT_TARGETS} substrate=${HAS_SUBSTRATE_NODE_TARGETS} prepare_substrate_deploy_branch=${PREPARE_SUBSTRATE_DEPLOY_BRANCH_RESULT} node_substrate=${NODE_SUBSTRATE_RESULT} assert_substrate=${ASSERT_SUBSTRATE_RESULT} flight=${FLIGHT_RESULT} verify=${VERIFY_RESULT} flight_targets=${TARGETS_JSON}"
           if [ "$HAS_FLIGHT_TARGETS" != "true" ]; then
             # No k8s app-lever targets. Either nothing affected, or the affected
             # set is type:infra only (e.g. litellm) — which deploys via the
@@ -1154,16 +1064,13 @@ jobs:
             else
               DESC="Candidate flight no-op (no affected nodes)"
             fi
-          elif [ "$NEEDS_SUBSTRATE_CHECK" = "true" ] && [ "$PREPARE_SUBSTRATE_DEPLOY_BRANCH_RESULT" != "success" ]; then
+          elif [ "$HAS_SUBSTRATE_NODE_TARGETS" = "true" ] && [ "$PREPARE_SUBSTRATE_DEPLOY_BRANCH_RESULT" != "success" ]; then
             STATE=failure
             DESC="Candidate flight failed before promotion (prepare-substrate-deploy-branch=${PREPARE_SUBSTRATE_DEPLOY_BRANCH_RESULT})"
-          elif [ "$NEEDS_SUBSTRATE_CHECK" = "true" ] && [ "$MATERIALIZE_SUBSTRATE_RESULT" != "success" ]; then
+          elif [ "$HAS_SUBSTRATE_NODE_TARGETS" = "true" ] && [ "$NODE_SUBSTRATE_RESULT" != "success" ]; then
             STATE=failure
-            DESC="Candidate flight failed before promotion (materialize-substrate=${MATERIALIZE_SUBSTRATE_RESULT})"
-          elif [ "$NEEDS_SUBSTRATE_CHECK" = "true" ] && [ "$RECONCILE_SUBSTRATE_RESULT" != "success" ]; then
-            STATE=failure
-            DESC="Candidate flight failed before promotion (reconcile-substrate=${RECONCILE_SUBSTRATE_RESULT})"
-          elif [ "$NEEDS_SUBSTRATE_CHECK" = "true" ] && [ "$ASSERT_SUBSTRATE_RESULT" != "success" ]; then
+            DESC="Candidate flight failed before promotion (node-substrate=${NODE_SUBSTRATE_RESULT})"
+          elif [ "$HAS_SUBSTRATE_NODE_TARGETS" = "true" ] && [ "$ASSERT_SUBSTRATE_RESULT" != "success" ]; then
             STATE=failure
             DESC="Candidate flight failed before promotion (assert-substrate=${ASSERT_SUBSTRATE_RESULT})"
           elif [ "$FLIGHT_RESULT" = "success" ] && [ "$VERIFY_RESULT" = "success" ]; then
