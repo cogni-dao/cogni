@@ -11,7 +11,7 @@ migrator_tag_suffix: "-resy-migrate"
 candidate_a_branch: deploy/candidate-a-resy
 preview_branch: deploy/preview-resy
 production_branch: deploy/production-resy
-# task.5017 — per-env node-set: candidate-a (flightable) + production. Not preview
-# (6 GB preview fits ~2-3 nodes; opt in here when preview is sized for it).
-envs: [candidate-a, production]
+# task.5017 — per-env node-set: production only. candidate-a is kept small
+# (operator + node-template + scheduler-worker); opt in here to flight-test on candidate-a.
+envs: [production]
 path_prefix: nodes/resy/
