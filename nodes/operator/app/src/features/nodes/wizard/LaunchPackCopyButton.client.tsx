@@ -2,11 +2,11 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `@app/(app)/nodes/[id]/LaunchPackCopyButton.client`
- * Purpose: Launch prompt copy affordance for the node wizard after publish.
- *   Fetches the canonical launch pack at click time.
+ * Module: `@features/nodes/wizard/LaunchPackCopyButton.client`
+ * Purpose: Launch prompt copy affordance for the node wizard handoff. Fetches the canonical
+ *   launch pack at click time and copies the agent prompt to the clipboard.
  * Scope: Client clipboard action only.
- * Links: src/features/nodes/launch-pack.ts
+ * Links: src/features/nodes/launch-pack.ts, src/features/nodes/wizard/steps/HandoffStep.client.tsx
  * @public
  */
 
