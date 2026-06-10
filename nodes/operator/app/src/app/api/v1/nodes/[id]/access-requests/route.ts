@@ -23,8 +23,8 @@ import { getSessionUser } from "@/app/_lib/auth/session";
 import { resolveServiceDb } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { upsertAccessRequest } from "@/features/nodes/access-requests";
-import { nodes } from "@/shared/db/nodes";
 import { NODE_ACCESS_ROLES } from "@/shared/db/node-access-requests";
+import { nodes } from "@/shared/db/nodes";
 import { EVENT_NAMES, type RequestContext } from "@/shared/observability";
 
 export const runtime = "nodejs";
