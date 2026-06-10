@@ -21,11 +21,20 @@ import { type ReactElement, useEffect, useRef, useState } from "react";
 import { isAddress } from "viem";
 import { useAccount, useChainId } from "wagmi";
 
-import { Button, HintText, Input, SectionCard } from "@/components";
+import { Button, HintText, Input } from "@/components";
 import { useDAOFormation } from "@/features/setup/hooks/useDAOFormation";
 
 import { type Phase, PhaseList, type PhaseState } from "../PhaseList";
+import { StepSection } from "../StepSection";
 import type { WizardStepProps } from "../types";
+
+/** Derive a valid token symbol (≤10 uppercase alphanumerics) from the node slug. */
+function symbolFromSlug(slug: string): string {
+  return slug
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "")
+    .slice(0, 10);
+}
 
 const DAO_PHASES: ReadonlyArray<{ key: string; label: string }> = [
   { key: "PREFLIGHT", label: "Checking network" },
@@ -63,8 +72,8 @@ export function DaoStep({ node }: WizardStepProps): ReactElement {
   const router = useRouter();
   const patchedRef = useRef(false);
 
-  const [tokenName, setTokenName] = useState("");
-  const [tokenSymbol, setTokenSymbol] = useState("");
+  const [tokenName, setTokenName] = useState(node.slug);
+  const [tokenSymbol, setTokenSymbol] = useState(symbolFromSlug(node.slug));
   const [initialHolder, setInitialHolder] = useState("");
   const [patchError, setPatchError] = useState<string | null>(null);
 
@@ -141,7 +150,10 @@ export function DaoStep({ node }: WizardStepProps): ReactElement {
   }));
 
   return (
-    <SectionCard title="Create DAO">
+    <StepSection title="Create DAO">
+      <p className="text-muted-foreground text-sm">
+        Prefilled from your node name — edit if you like.
+      </p>
       {isIdle || isError ? (
         <>
           <div className="space-y-2">
@@ -252,6 +264,6 @@ export function DaoStep({ node }: WizardStepProps): ReactElement {
       {patchError ? (
         <p className="text-destructive text-sm">{patchError}</p>
       ) : null}
-    </SectionCard>
+    </StepSection>
   );
 }

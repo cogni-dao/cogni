@@ -15,8 +15,9 @@
 
 import { ExternalLink } from "lucide-react";
 import type { ReactElement } from "react";
-import { Button, SectionCard } from "@/components";
+import { Button } from "@/components";
 import { LaunchPackCopyButton } from "../LaunchPackCopyButton.client";
+import { StepSection } from "../StepSection";
 import type { WizardStepProps } from "../types";
 
 interface LinkSpec {
@@ -39,7 +40,7 @@ export function HandoffStep({ node }: WizardStepProps): ReactElement {
   ];
 
   return (
-    <SectionCard title="Hand off to your AI developer">
+    <StepSection title="Hand off to your AI developer">
       <div className="space-y-5 text-sm">
         <div className="space-y-2">
           <p className="font-medium text-base text-foreground">
@@ -70,6 +71,6 @@ export function HandoffStep({ node }: WizardStepProps): ReactElement {
           ))}
         </div>
       </div>
-    </SectionCard>
+    </StepSection>
   );
 }
