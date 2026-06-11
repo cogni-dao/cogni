@@ -419,6 +419,29 @@ describe("createContributionService", () => {
     expect(port.lastAppend?.edits).toEqual([edit]);
   });
 
+  it("forwards cite edges without running gates against them", async () => {
+    const port = new FakeContributionPort();
+    port.records = [contribution()];
+    const service = createContributionService({
+      port,
+      canMergeKnowledge: () => false,
+      rateLimit: { maxOpenPerPrincipal: 5 },
+      gates: [shapeGate],
+    });
+    const edit: KnowledgeContributionEdit = {
+      op: "cite",
+      citingId: "oss-cap-eval-harness",
+      citedId: "oss-promptfoo",
+      citationType: "supports",
+    };
+    await service.appendCommit({
+      principal: agent,
+      contributionId: "contrib-agent-1-abc123",
+      body: { message: "link synthesis to atom", edits: [edit] },
+    });
+    expect(port.lastAppend?.edits).toEqual([edit]);
+  });
+
   it("forwards typed edits on create so adapters can apply branch-local changes", async () => {
     const port = new FakeContributionPort();
     const service = createContributionService({
