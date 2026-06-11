@@ -64,6 +64,19 @@ if [ -n "$OPENFGA_DB" ] && [ -z "$OPENFGA_PASS" ]; then
   exit 1
 fi
 
+# Temporal role (shared infra — a single `temporal` login role serves every node,
+# the openfga-substrate-unification twin). Temporal's auto-setup owns its own
+# databases + schema; provision only reconciles the role PASSWORD to its OpenBao
+# value every run (Invariant 15), healing the 28P01 drift where the role diverged
+# from the Temporal container's configured value. The INFRA_ONLY pass owns it; the
+# per-node pass never carries the password.
+TEMPORAL_ROLE="${TEMPORAL_DB_USER:-temporal}"
+TEMPORAL_PASS="${TEMPORAL_DB_PASSWORD:-}"
+if [ "$INFRA_ONLY" = "1" ] && [ -z "$TEMPORAL_PASS" ]; then
+  echo "❌ ERROR: TEMPORAL_DB_PASSWORD is required for the temporal role (OpenBao-sourced; never fall back to a stale value)"
+  exit 1
+fi
+
 # Per-node app credentials. The role NAMES are COMPUTED from the node
 # (app_<node> / service_<node>); only the PASSWORDS are per-node OpenBao secrets,
 # passed by the caller (reconcile-substrate reads cogni/<env>/<node> via the
@@ -346,6 +359,17 @@ if [ -n "$OPENFGA_DB" ]; then
   fi
 else
   echo "   -> OPENFGA_DB_NAME not set; skipping openfga database provisioning."
+fi
+
+# ── Temporal role (shared infra; Temporal auto-setup owns its DBs/schema) ──
+# Reconcile the shared `temporal` login role password to its OpenBao value. The
+# role + databases already exist (Temporal auto-setup); this only ALTERs the
+# password so the role matches the container's OpenBao-sourced credential —
+# never touching schema/data (#1604-style continuity). CREATEDB lets a fresh-env
+# role run auto-setup's database creation. INFRA_ONLY pass owns it.
+if [ "$INFRA_ONLY" = "1" ]; then
+  echo "🔧 Reconciling temporal role '$TEMPORAL_ROLE' password to its OpenBao value..."
+  provision_app_role "$TEMPORAL_ROLE" "$TEMPORAL_PASS" "CREATEDB"
 fi
 
 _node_summary="${#NODE_DBS[@]} node database(s)"

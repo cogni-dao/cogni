@@ -264,7 +264,6 @@ REQUIRED_SECRETS=(
     "EVM_RPC_URL"
     "POLYGON_RPC_URL"
     "TEMPORAL_DB_USER"
-    "TEMPORAL_DB_PASSWORD"
     "INTERNAL_OPS_TOKEN"
     "POSTHOG_API_KEY"
     "POSTHOG_HOST"
@@ -726,6 +725,26 @@ OPENFGA_DB_PASSWORD="$(
 )"
 export OPENFGA_DB_PASSWORD
 
+# Temporal DB password is OpenBao-custodied (Invariant 15) — same rationale as
+# OPENFGA_DB_PASSWORD above: it backs the shared `temporal` login role + the
+# Temporal datastore DSN. Source it from the same ${DEPLOY_ENVIRONMENT}-db-reader
+# seam, from the shared-infra path cogni/<env>/_shared (temporal is owned by no
+# node). The Temporal Compose service reads it from the rendered .env below — it
+# never reads OpenBao directly. Empty (unseeded / OpenBao sealed) → provision.sh
+# fails loud at the role step; we never fall back to a stale GH-env value (the
+# 28P01 drift that wedged prod 2026-06-11).
+TEMPORAL_DB_PASSWORD="$(
+  jwt="$(timeout 10 kubectl create token db-provisioner -n default 2>/dev/null || true)"
+  [ -n "$jwt" ] || exit 0
+  tok="$(timeout 10 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
+    bao write -field=token auth/kubernetes/login \
+    "role=${DEPLOY_ENVIRONMENT}-db-reader" "jwt=${jwt}" 2>/dev/null || true)"
+  [ -n "$tok" ] || exit 0
+  timeout 10 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
+    BAO_TOKEN="${tok}" bao kv get -field=TEMPORAL_DB_PASSWORD "cogni/${DEPLOY_ENVIRONMENT}/_shared" 2>/dev/null || true
+)"
+export TEMPORAL_DB_PASSWORD
+
 cat > "$RUNTIME_ENV" << ENV_EOF
 # Required vars
 DOMAIN=${DOMAIN}
@@ -1047,10 +1066,12 @@ emit_deployment_event "infra_deployment.db_provision_started" "in_progress" "Pro
 # creation to that loop left openfga uncreated → openfga-migrate hard-fails with
 # `database "openfga" does not exist`. This dedicated INFRA_ONLY pass guarantees
 # openfga + litellm exist before openfga-migrate regardless of node-cred state.
-log_info "  Provisioning shared infra DBs (litellm, openfga) — decoupled from per-node creds..."
+log_info "  Provisioning shared infra DBs (litellm, openfga) + reconciling temporal role — decoupled from per-node creds..."
 $RUNTIME_COMPOSE --profile bootstrap run --rm \
   -e "PROVISION_INFRA_ONLY=1" \
   -e "OPENFGA_DB_PASSWORD=${OPENFGA_DB_PASSWORD}" \
+  -e "TEMPORAL_DB_USER=${TEMPORAL_DB_USER}" \
+  -e "TEMPORAL_DB_PASSWORD=${TEMPORAL_DB_PASSWORD}" \
   db-provision
 # Per-node db-provision (#1584): provision.sh now reconciles per-node roles
 # app_<node>/service_<node> to the per-node passwords OpenBao holds at
@@ -2054,7 +2075,7 @@ REMOTE_ENV_VARS=(
   POSTGRES_ROOT_USER POSTGRES_ROOT_PASSWORD APP_DB_USER APP_DB_PASSWORD
   APP_DB_SERVICE_USER APP_DB_SERVICE_PASSWORD APP_DB_READONLY_USER
   APP_DB_READONLY_PASSWORD APP_DB_NAME EVM_RPC_URL POLYGON_RPC_URL
-  TEMPORAL_DB_USER TEMPORAL_DB_PASSWORD GHCR_DEPLOY_TOKEN GHCR_USERNAME
+  TEMPORAL_DB_USER GHCR_DEPLOY_TOKEN GHCR_USERNAME
   GRAFANA_CLOUD_LOKI_URL GRAFANA_CLOUD_LOKI_USER GRAFANA_CLOUD_LOKI_API_KEY
   METRICS_TOKEN SCHEDULER_API_TOKEN BILLING_INGEST_TOKEN INTERNAL_OPS_TOKEN
   WORK_ITEMS_NOTION_TOKEN WORK_ITEMS_NOTION_DATA_SOURCE_ID WORK_ITEMS_NOTION_VERSION

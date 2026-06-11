@@ -51,24 +51,30 @@ all_deployable() {
 bash "$RENDER" --check >/dev/null || fail "committed AppSets are out of sync with the catalog"
 pass "committed AppSets in sync (--check green)"
 
-# 1. preview is the minimal backbone.
-preview="$(appsets_for_env preview | paste -sd, -)"
-[ "$preview" = "operator,scheduler-worker" ] \
-  || fail "preview node-set should be operator,scheduler-worker — got '$preview'"
-pass "preview node-set is minimal backbone ($preview)"
-
-# 1b. candidate-a is the full test slot — every deployable node is candidate-flightable
-# there (CANDIDATE_A_ALWAYS, the pre-merge validation gate). preview + production are the
-# lean backbone; a node opts into production only once it is proven on candidate-a.
-candidatea="$(appsets_for_env candidate-a | paste -sd, -)"
-deployable="$(all_deployable | paste -sd, -)"
+# Promotion-ladder invariant (NOT hardcoded per-env lists — that brittleness
+# red-mained the queue when #1626 expanded preview without editing this test).
+# Relations hold regardless of which nodes opt into an env via the catalog:
+#   candidate-a == all deployable   (the full pre-merge slot, CANDIDATE_A_ALWAYS)
+#   preview     ⊆ candidate-a       (a node previews only once candidate-flightable)
+#   production  ⊆ preview           (a node graduates to prod only after preview)
+# Adding a node to an env's catalog `envs` preserves the ladder — no test edit.
+candidatea="$(appsets_for_env candidate-a | sort -u)"
+deployable="$(all_deployable | sort -u)"
 [ "$candidatea" = "$deployable" ] \
-  || fail "candidate-a node-set should equal all deployable ($deployable) — got '$candidatea'"
-pass "candidate-a is the full test slot ($candidatea)"
-got="$(appsets_for_env production | paste -sd, -)"
-[ "$got" = "operator,scheduler-worker" ] \
-  || fail "production node-set should be operator,scheduler-worker — got '$got'"
-pass "production is the lean backbone ($got)"
+  || fail "candidate-a must equal all deployable nodes — got '$(echo $candidatea | tr ' ' ,)', expected '$(echo $deployable | tr ' ' ,)'"
+pass "candidate-a is the full test slot ($(echo $candidatea | tr ' ' ,))"
+
+preview="$(appsets_for_env preview | sort -u)"
+not_flightable="$(comm -23 <(echo "$preview") <(echo "$candidatea"))"
+[ -z "$not_flightable" ] \
+  || fail "preview node-set must be ⊆ candidate-a (candidate-proven first); offenders: $(echo $not_flightable | tr ' ' ,)"
+pass "preview ⊆ candidate-a ($(echo $preview | tr ' ' ,))"
+
+production="$(appsets_for_env production | sort -u)"
+not_in_preview="$(comm -23 <(echo "$production") <(echo "$preview"))"
+[ -z "$not_in_preview" ] \
+  || fail "production node-set must be ⊆ preview (promote through preview first); offenders: $(echo $not_in_preview | tr ' ' ,)"
+pass "production ⊆ preview ($(echo $production | tr ' ' ,))"
 
 # 2. SCHEDULER_WITH_OPERATOR for every env.
 for env in candidate-a preview production; do
