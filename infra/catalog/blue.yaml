@@ -16,3 +16,4 @@ production_branch: deploy/production-blue
 # later catalog edit (drop an env here) once its envs are provisioned.
 envs: [candidate-a, preview, production]
 path_prefix: nodes/blue/
+node_id: da3777a6-1f33-463a-a73c-70924806da50
