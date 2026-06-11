@@ -33,6 +33,7 @@ import type {
 import {
   insertAppsetKustomization,
   insertCaddyBlock,
+  insertSchedulerEndpoint,
   NODE_FORMATION_ENVS,
   nextFreeNodePort,
   renderCatalog,
@@ -1115,8 +1116,13 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
     };
 
     // catalog/<slug>.yaml — brand-new file (no current content to thread).
+    // Submodule node: project node_id into the catalog (drift-gated mirror of the
+    // minted repo-spec) so parent renderers (scheduler routing, billing) resolve it
+    // without reading across the gitlink. verify-scheduler-endpoints.sh asserts the match.
     const catalogInput =
-      "nodeRepoUrl" in input ? { sourceRepo: input.nodeRepoUrl } : {};
+      "nodeRepoUrl" in input
+        ? { sourceRepo: input.nodeRepoUrl, nodeId: input.nodeId }
+        : {};
     await addBlob(
       `infra/catalog/${slug}.yaml`,
       renderCatalog(slug, port, nodePort, catalogInput)
@@ -1181,11 +1187,27 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
     // misclassifies as node-domain and single-node-scope false-fails. With no filter the
     // gitlink falls to operator's `**`. Mirrors render-scope-filters.sh's submodule skip.
 
-    // No scheduler-worker endpoint splice yet: a submodule node's identity lives in the
-    // minted repo's `.cogni/repo-spec.yaml`, not in the parent checkout. The parent
-    // renderer skips `.gitmodules` nodes until the catalog -> NodeRegistry metadata
-    // projection lands, so inserting this endpoint here would make the generated PR fail
-    // the scheduler endpoint drift check.
+    // Scheduler-worker endpoint splice: the catalog now carries this submodule node's
+    // node_id projection (above), and the routing renderer enumerates every catalog
+    // type:node (is_built_by_this_repo lifted from the routing CSVs). So splice this node
+    // into the base configmap from the projected node_id — keeping it drift-clean with the
+    // catalog, born-green so chat/completions works on first flight (verify-scheduler-endpoints).
+    if ("nodeRepoUrl" in input) {
+      const schedulerConfigmapPath =
+        "infra/k8s/base/scheduler-worker/configmap.yaml";
+      const currentConfigmap = await this.fetchFileText({
+        owner,
+        repo,
+        path: schedulerConfigmapPath,
+        ref: "main",
+      });
+      if (currentConfigmap) {
+        await addBlob(
+          schedulerConfigmapPath,
+          insertSchedulerEndpoint(currentConfigmap, slug, input.nodeId)
+        );
+      }
+    }
 
     // No pnpm-lock.yaml: a submodule node is not a workspace member of the operator monorepo — its
     // packages resolve in its own repo + lockfile. (The single biggest chunk of inline-only tax.)

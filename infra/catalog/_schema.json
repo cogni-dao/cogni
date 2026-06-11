@@ -23,8 +23,10 @@
       "then": { "required": ["node_port"] }
     },
     {
-      "$comment": "REPO_SPEC_IS_IDENTITY_SSOT — node_id is declared in nodes/<name>/.cogni/repo-spec.yaml (the web3-anchored authority), never in the catalog. Forbid it here so the duplicate cannot be reintroduced.",
-      "not": { "required": ["node_id"] }
+      "$comment": "REPO_SPEC_IS_IDENTITY_SSOT — node_id lives in nodes/<name>/.cogni/repo-spec.yaml (the web3-anchored authority). A SUBMODULE node (source_repo set) has an unreadable-from-parent repo-spec at render time, so it carries a drift-gated node_id PROJECTION here (verify-scheduler-endpoints.sh asserts catalog.node_id == repo-spec.node_id). An IN-REPO node must NOT duplicate it — its repo-spec is readable.",
+      "if": { "required": ["source_repo"] },
+      "then": { "required": ["node_id"] },
+      "else": { "not": { "required": ["node_id"] } }
     },
     {
       "$comment": "Deploy branches are k8s/Argo per-env state. type:infra (e.g. litellm) deploys via Compose-on-VM (deploy-infra.sh resolves a content-hash tag), so it has no deploy branches.",
@@ -101,6 +103,11 @@
       "type": "string",
       "pattern": "^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(\\.git)?$",
       "description": "Artifact source repository clone URL. It names the build plane; deploy lanes resolve image_repository:sha-<sourceSha> to a digest."
+    },
+    "node_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "description": "Drift-gated projection of a SUBMODULE node's repo-spec node_id (UUID). Present only on submodule rows (source_repo set), where the repo-spec is unreadable from the parent at render time. verify-scheduler-endpoints.sh asserts it == nodes/<name>/.cogni/repo-spec.yaml; repo-spec is the identity SSOT."
     },
     "image_repository": {
       "type": "string",

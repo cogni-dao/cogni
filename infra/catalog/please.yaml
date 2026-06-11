@@ -13,3 +13,4 @@ production_branch: deploy/production-please
 # task.5017 — per-env node-set (deploy ⊆ provisioned). Must include candidate-a (candidate-flightable); preview/production are opt-in once proven.
 envs: [candidate-a]
 path_prefix: nodes/please/
+node_id: da8bbc56-96e6-413a-8b45-3a43bfeee6d6

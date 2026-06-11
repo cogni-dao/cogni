@@ -13,3 +13,4 @@ production_branch: deploy/production-oss
 # task.5017 — per-env node-set (deploy ⊆ provisioned). Must include candidate-a (candidate-flightable); preview/production are opt-in once proven.
 envs: [candidate-a]
 path_prefix: nodes/oss/
+node_id: 4d7ffb44-fc26-4a55-864f-eff9fbc8aba1

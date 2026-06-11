@@ -68,9 +68,13 @@ for _t in "${ALL_TARGETS[@]}"; do
   _image_tags_source_repo_cache["$_t"]="$_sr"
   _rs="${_image_tags_spec_root}/${_pp}.cogni/repo-spec.yaml"
   if [ -n "$_pp" ] && [ -f "$_rs" ]; then
+    # In-repo node: repo-spec is the readable identity SSOT (REPO_SPEC_IS_IDENTITY_SSOT).
     _nid=$(yq -N '.node_id // ""' "$_rs")
   else
-    _nid=""
+    # Submodule node: repo-spec lives across the gitlink, unreadable in the parent
+    # checkout. Read the catalog node_id projection — a drift-gated mirror of the
+    # repo-spec (verify-scheduler-endpoints.sh enforces catalog.node_id == repo-spec).
+    _nid=$(yq -N '.node_id // ""' "${_image_tags_catalog_root}/${_t}.yaml")
   fi
   _image_tags_node_id_cache["$_t"]="$_nid"
 done
@@ -262,11 +266,11 @@ node_database_csv() {
 }
 
 node_internal_service_endpoint_csv() {
+  # Routing (NOT build): the scheduler-worker must poll a queue per repo-spec UUID for
+  # EVERY catalog type:node, including submodule nodes this repo does not build.
+  # `is_built_by_this_repo` is a build-target filter and belongs only in build selection.
   local sep="" node node_id url
   for node in "${NODE_TARGETS[@]}"; do
-    if ! is_built_by_this_repo "$node"; then
-      continue
-    fi
     node_id="$(node_id_for_target "$node")" || return 1
     url="http://${node}-node-app:3000"
     printf '%s%s=%s,%s=%s' "$sep" "$node" "$url" "$node_id" "$url"
@@ -275,11 +279,10 @@ node_internal_service_endpoint_csv() {
 }
 
 node_billing_endpoint_csv() {
+  # Routing (NOT build): billing attribution resolves a node_id per catalog type:node
+  # for EVERY node, submodule or not. Build filtering does not belong here.
   local host="$1" sep="" node node_id port url
   for node in "${NODE_TARGETS[@]}"; do
-    if ! is_built_by_this_repo "$node"; then
-      continue
-    fi
     node_id="$(node_id_for_target "$node")" || return 1
     port="$(node_port_for_target "$node")" || return 1
     url="http://${host}:${port}"

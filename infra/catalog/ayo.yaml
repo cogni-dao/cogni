@@ -13,3 +13,4 @@ production_branch: deploy/production-ayo
 # task.5017 — per-env node-set (deploy ⊆ provisioned). Must include candidate-a (candidate-flightable); preview/production are opt-in once proven.
 envs: [candidate-a]
 path_prefix: nodes/ayo/
+node_id: a133ace7-4ca4-4c41-9e31-6cffa5778987

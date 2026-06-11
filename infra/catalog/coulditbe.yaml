@@ -13,3 +13,4 @@ production_branch: deploy/production-coulditbe
 # task.5017 — per-env node-set (deploy ⊆ provisioned). Must include candidate-a (candidate-flightable); preview/production are opt-in once proven.
 envs: [candidate-a]
 path_prefix: nodes/coulditbe/
+node_id: 04bfcc09-1937-4d3d-91a7-12b92947d167

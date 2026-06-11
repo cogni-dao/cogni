@@ -7,8 +7,11 @@
  *   from the `node-template.yaml` shape, so the operator can author a node-formation PR without bash/sed.
  * Scope: Given a `slug` + container `port` + `node_port`, emit a `type:node` catalog entry valid per
  *   `infra/catalog/_schema.json`, with all `node-template`-derived fields renamed to `slug`.
- * Invariants: REPO_SPEC_IS_IDENTITY_SSOT — NO `node_id` (the schema forbids it; identity lives in
- *   `.cogni/repo-spec.yaml`). CATALOG_IS_SSOT — fields mirror the committed `canary.yaml` shape.
+ * Invariants: REPO_SPEC_IS_IDENTITY_SSOT — `.cogni/repo-spec.yaml` is the identity source. A
+ *   submodule node's repo-spec is unreadable from the parent at render time, so the catalog carries a
+ *   drift-gated `node_id` PROJECTION (verify-scheduler-endpoints asserts it == repo-spec). The mint
+ *   generates both from one node_id, so they cannot drift at birth. CATALOG_IS_SSOT — fields mirror
+ *   the committed shape.
  * Side-effects: none — pure string transform, no IO, no env.
  * Links: infra/catalog/node-template.yaml, infra/catalog/_schema.json, scripts/setup/scaffold-node.sh, task.5092
  * @public
@@ -21,6 +24,8 @@
 export interface RenderCatalogInput {
   readonly sourceRepo?: string;
   readonly imageRepository?: string;
+  /** Submodule node identity, projected from the minted repo-spec (drift-gated). */
+  readonly nodeId?: string;
 }
 
 function imageRepositoryFromSourceRepo(sourceRepo: string): string {
@@ -55,6 +60,7 @@ export function renderCatalog(
 image_repository: ${input.imageRepository ?? imageRepositoryFromSourceRepo(input.sourceRepo)}
 `
     : "";
+  const nodeIdLine = input.nodeId ? `node_id: ${input.nodeId}\n` : "";
   return `name: ${slug}
 type: node
 port: ${port}
@@ -71,5 +77,5 @@ production_branch: deploy/production-${slug}
 # later catalog edit (drop an env here) once its envs are provisioned.
 envs: [candidate-a, preview, production]
 path_prefix: nodes/${slug}/
-`;
+${nodeIdLine}`;
 }
