@@ -53,8 +53,18 @@ fi
 OPENFGA_DB="${OPENFGA_DB_NAME:-}"
 OPENFGA_ROLE="openfga"
 OPENFGA_PASS="${OPENFGA_DB_PASSWORD:-}"
-# Fail loud on source-read failure (Invariant): if the DB exists in the catalog
-# but its OpenBao password didn't reach us, never fall back to root.
+# OpenFGA is SHARED infra — provisioned ONLY by the INFRA_ONLY pass (deploy-infra),
+# never by a per-node reconcile run (node-substrate). OPENFGA_DB_NAME is set in the
+# db-provision compose service env, so without this guard the openfga block + its
+# password-required check below fire on EVERY db-provision invocation — including the
+# per-node pass, which legitimately carries no openfga password and must not touch
+# shared infra. That made an empty/poisoned OPENFGA_DB_PASSWORD in the VM .env abort
+# node-substrate's per-node provision (and deadlock the promote: deploy-infra, which
+# fixes the .env, is gated behind node-substrate). Clearing OPENFGA_DB on non-infra
+# runs makes every `[ -n "$OPENFGA_DB" ]` guard below a no-op in the per-node pass.
+[ "$INFRA_ONLY" = "1" ] || OPENFGA_DB=""
+# Fail loud on source-read failure (Invariant): in the INFRA_ONLY pass, if the DB
+# exists in the catalog but its OpenBao password didn't reach us, never fall back to root.
 if [ -n "$OPENFGA_DB" ] && [ -z "$OPENFGA_PASS" ]; then
   echo "❌ ERROR: OPENFGA_DB_PASSWORD is required for the openfga role (OpenBao-sourced; never fall back to root)"
   exit 1
