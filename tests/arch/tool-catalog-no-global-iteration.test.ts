@@ -6,7 +6,7 @@
  * Purpose: Enforces OPEN_WORLD_CONTRACTS by asserting that node bootstrap files do not reference the TOOL_CATALOG symbol.
  * Scope: Reads source files as text and asserts absence of the TOOL_CATALOG symbol. Does NOT import the files (they have side effects), does NOT cover packages/langgraph-graphs/src/runtime/ (intentional carve-out).
  * Invariants:
- *   - OPEN_WORLD_CONTRACTS: nodes/{operator,resy}/app/src/bootstrap/ai/tool-source.factory.ts
+ *   - OPEN_WORLD_CONTRACTS: nodes/operator/app/src/bootstrap/ai/tool-source.factory.ts
  *     must not reference TOOL_CATALOG
  *   - container.ts files must not reference TOOL_CATALOG
  * Side-effects: IO (reads source files from disk)
@@ -21,7 +21,11 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const NODES = ["operator", "resy"] as const;
+// operator is the only in-tree node; oss/node-template are git submodules whose
+// nodes/<slug>/** files are absent in the submodule-less unit-job checkout, so
+// readFileSync below would ENOENT on them. This contract is enforced per-node at
+// each node's own CI; here we assert it for the in-tree node.
+const NODES = ["operator"] as const;
 
 const FACTORY_FILES = NODES.map(
   (node) => `nodes/${node}/app/src/bootstrap/ai/tool-source.factory.ts`

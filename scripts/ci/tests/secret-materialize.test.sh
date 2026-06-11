@@ -118,41 +118,41 @@ env \
   SECRET_MATERIALIZE_SSH_BIN="$FAKEBIN/ssh" \
   FAKE_REMOTE_PATH="$FAKEBIN" \
   FAKE_BAO_ROOT="$BAO_ROOT" \
-  bash scripts/ci/secret-materialize.sh candidate-a canary > "$TMPROOT/out.txt"
+  bash scripts/ci/secret-materialize.sh candidate-a oss > "$TMPROOT/out.txt"
 
 # source:agent app key generated per-node
-test -f "$BAO_ROOT/cogni/candidate-a/canary/AUTH_SECRET" \
+test -f "$BAO_ROOT/cogni/candidate-a/oss/AUTH_SECRET" \
   || { echo "materialize did not seed AUTH_SECRET" >&2; exit 1; }
 # shared value inherited from env bank
-test -f "$BAO_ROOT/cogni/candidate-a/canary/OPENROUTER_API_KEY" \
+test -f "$BAO_ROOT/cogni/candidate-a/oss/OPENROUTER_API_KEY" \
   || { echo "materialize did not inherit OPENROUTER_API_KEY" >&2; exit 1; }
 # per-node DB creds generated (source:agent), not inherited from any shared bank
 for k in APP_DB_PASSWORD APP_DB_SERVICE_PASSWORD; do
-  test -f "$BAO_ROOT/cogni/candidate-a/canary/$k" \
+  test -f "$BAO_ROOT/cogni/candidate-a/oss/$k" \
     || { echo "materialize did not generate per-node $k" >&2; exit 1; }
 done
 # Postgres DSNs composed sole-source here, embedding the per-node app_<node> role
 # (regression guard: a shared app_user DSN is the bug.5002 split-brain we killed)
-test -f "$BAO_ROOT/cogni/candidate-a/canary/DATABASE_URL" \
+test -f "$BAO_ROOT/cogni/candidate-a/oss/DATABASE_URL" \
   || { echo "materialize did not compose DATABASE_URL" >&2; exit 1; }
-test -f "$BAO_ROOT/cogni/candidate-a/canary/DATABASE_SERVICE_URL" \
+test -f "$BAO_ROOT/cogni/candidate-a/oss/DATABASE_SERVICE_URL" \
   || { echo "materialize did not compose DATABASE_SERVICE_URL" >&2; exit 1; }
-grep -q '://app_canary:' "$BAO_ROOT/cogni/candidate-a/canary/DATABASE_URL" \
-  || { echo "DATABASE_URL must embed per-node role app_canary, not shared app_user" >&2; exit 1; }
-grep -q '://service_canary:' "$BAO_ROOT/cogni/candidate-a/canary/DATABASE_SERVICE_URL" \
-  || { echo "DATABASE_SERVICE_URL must embed per-node role service_canary" >&2; exit 1; }
+grep -q '://app_oss:' "$BAO_ROOT/cogni/candidate-a/oss/DATABASE_URL" \
+  || { echo "DATABASE_URL must embed per-node role app_oss, not shared app_user" >&2; exit 1; }
+grep -q '://service_oss:' "$BAO_ROOT/cogni/candidate-a/oss/DATABASE_SERVICE_URL" \
+  || { echo "DATABASE_SERVICE_URL must embed per-node role service_oss" >&2; exit 1; }
 # Doltgres half of the cutover: the env superuser is the operator-canonical SSOT
 # (cogni/<env>/operator/DOLTGRES_PASSWORD); with operator unseeded in this isolated
 # materialize the composer falls back to the deterministic genesis derive, and
 # DOLTGRES_URL is composed sole-source from it (non-empty superuser pw). The pod
 # reaches its own knowledge_<node> DB as the `postgres` superuser — Doltgres 0.56.3
 # RBAC is table-DML-only (databases.md §5.2), so a per-node role is not yet possible.
-test -f "$BAO_ROOT/cogni/candidate-a/canary/DOLTGRES_PASSWORD" \
+test -f "$BAO_ROOT/cogni/candidate-a/oss/DOLTGRES_PASSWORD" \
   || { echo "materialize did not materialize per-node DOLTGRES_PASSWORD" >&2; exit 1; }
-test -f "$BAO_ROOT/cogni/candidate-a/canary/DOLTGRES_URL" \
+test -f "$BAO_ROOT/cogni/candidate-a/oss/DOLTGRES_URL" \
   || { echo "materialize did not compose DOLTGRES_URL" >&2; exit 1; }
-grep -qE '://postgres:[^@]+@[^/]+/knowledge_canary\?' "$BAO_ROOT/cogni/candidate-a/canary/DOLTGRES_URL" \
-  || { echo "DOLTGRES_URL must reach knowledge_canary as the postgres superuser (non-empty pw)" >&2; exit 1; }
+grep -qE '://postgres:[^@]+@[^/]+/knowledge_oss\?' "$BAO_ROOT/cogni/candidate-a/oss/DOLTGRES_URL" \
+  || { echo "DOLTGRES_URL must reach knowledge_oss as the postgres superuser (non-empty pw)" >&2; exit 1; }
 # no secret value leaked to output
 if grep -q 'sk-or-existing\|writer-token' "$TMPROOT/out.txt"; then
   echo "secret value leaked to output" >&2
@@ -169,7 +169,7 @@ env \
   SECRET_MATERIALIZE_SSH_BIN="$FAKEBIN/ssh" \
   FAKE_REMOTE_PATH="$FAKEBIN" \
   FAKE_BAO_ROOT="$BAO_ROOT" \
-  bash scripts/ci/secret-materialize.sh candidate-a canary > "$TMPROOT/out2.txt"
+  bash scripts/ci/secret-materialize.sh candidate-a oss > "$TMPROOT/out2.txt"
 
 grep -q 'created=0 ' "$TMPROOT/out2.txt" \
   || { echo "re-run must create 0 keys (idempotent); got:" >&2; grep 'materialize complete' "$TMPROOT/out2.txt" >&2; exit 1; }

@@ -64,8 +64,11 @@ put_secret node-template BILLING_INGEST_TOKEN existing-billing
 # Per-node DB creds: secret-materialize (the sole OpenBao writer) owns these at
 # cogni/<env>/<node>. Read-only reconcile reads them via the db-reader token and
 # hands them to db-provision. Distinct sentinels so the leak checks below are real.
-put_secret canary APP_DB_PASSWORD pernode-app-pw-sentinel
-put_secret canary APP_DB_SERVICE_PASSWORD pernode-svc-pw-sentinel
+# Target is operator (the only in-tree node — its nodes/operator/** ExternalSecret
+# leaf is present in the submodule-less unit-job checkout; oss/node-template are
+# gitlinks whose files are absent there).
+put_secret operator APP_DB_PASSWORD pernode-app-pw-sentinel
+put_secret operator APP_DB_SERVICE_PASSWORD pernode-svc-pw-sentinel
 # Doltgres superuser SSOT is operator-canonical (cogni/<env>/operator/DOLTGRES_PASSWORD),
 # shared env-wide; reconcile reads it from operator and injects it into doltgres-provision.
 put_secret operator DOLTGRES_PASSWORD doltgres-super-sentinel
@@ -194,7 +197,7 @@ chmod +x "$FAKEBIN/hostname"
 
 # Read-only reconcile: the superuser (POSTGRES_ROOT) stays in the VM runtime .env
 # that the db-provision compose service reads; per-node app/service passwords come
-# from OpenBao (the put_secret canary ... above), read via the db-reader token —
+# from OpenBao (the put_secret operator ... above), read via the db-reader token —
 # NEVER from CI env. No APP_DB_* threaded: provision.sh computes app_<node>.
 env \
   VM_HOST=fake \
@@ -206,22 +209,26 @@ env \
   FAKE_REMOTE_PATH="$FAKEBIN" \
   FAKE_BAO_ROOT="$BAO_ROOT" \
   SUBSTRATE_RECONCILE_SUMMARY_FILE="$TMPROOT/summary.json" \
-  bash scripts/ci/reconcile-node-substrate.sh candidate-a canary > "$TMPROOT/out.txt"
+  bash scripts/ci/reconcile-node-substrate.sh candidate-a operator > "$TMPROOT/out.txt"
 
-grep -q "substrate ready inputs reconciled for canary" "$TMPROOT/out.txt"
+grep -q "substrate ready inputs reconciled for operator" "$TMPROOT/out.txt"
 # READ-ONLY on OpenBao: secret-materialize is the sole writer. After reconcile the
 # node bank must hold ONLY the per-node creds we pre-seeded — reconcile writes
 # nothing (no source:agent app keys, no DSNs). This locks the zero-write posture.
-after_keys="$(cd "$BAO_ROOT/cogni/candidate-a/canary" && printf '%s\n' * | sort | paste -sd, -)"
-if [ "$after_keys" != "APP_DB_PASSWORD,APP_DB_SERVICE_PASSWORD" ]; then
-  echo "reconcile must perform ZERO OpenBao writes; canary bank changed to: $after_keys" >&2
+# operator's bank carries the env-wide DOLTGRES superuser SSOT in addition to its
+# per-node DB creds; reconcile must leave all three untouched.
+after_keys="$(cd "$BAO_ROOT/cogni/candidate-a/operator" && printf '%s\n' * | sort | paste -sd, -)"
+if [ "$after_keys" != "APP_DB_PASSWORD,APP_DB_SERVICE_PASSWORD,DOLTGRES_PASSWORD" ]; then
+  echo "reconcile must perform ZERO OpenBao writes; operator bank changed to: $after_keys" >&2
   exit 1
 fi
-grep -q '^CANARY_DOMAIN=canary-test.cognidao.org$' "$REMOTE_ROOT/opt/cogni-template-edge/.env"
-grep -q 'COGNI_NODE_DBS=cogni_operator,cogni_canary' "$REMOTE_ROOT/opt/cogni-template-runtime/.env"
+# operator is the primary (apex) host → the edge route key is OPERATOR_UPSTREAM
+# (host.docker.internal:<node_port>), not <SLUG>_DOMAIN.
+grep -q '^OPERATOR_UPSTREAM=host.docker.internal:30000$' "$REMOTE_ROOT/opt/cogni-template-edge/.env"
+grep -q 'COGNI_NODE_DBS=cogni_operator$' "$REMOTE_ROOT/opt/cogni-template-runtime/.env"
 # Per-node single-node db-provision: COGNI_NODE_DBS overridden to THIS node + the
 # per-node OpenBao passwords injected via -e (provision.sh computes app_<node>).
-grep -q -- '-e COGNI_NODE_DBS=cogni_canary' "$REMOTE_ROOT/docker.log"
+grep -q -- '-e COGNI_NODE_DBS=cogni_operator' "$REMOTE_ROOT/docker.log"
 grep -qE -- '--profile bootstrap run --rm .* db-provision' "$REMOTE_ROOT/docker.log"
 # doltgres-provision gets the operator-canonical superuser injected via -e (fail-loud
 # if absent; never the poisoned VM .env value).
@@ -241,7 +248,7 @@ import json, sys
 s = json.load(open(sys.argv[1]))
 assert s["type"] == "target_substrate_reconcile_summary", s["type"]
 assert s["status"] == "success", s["status"]
-assert s["target"] == "canary", s["target"]
+assert s["target"] == "operator", s["target"]
 assert s["target_type"] == "node", s["target_type"]
 assert s["failed_row_count"] == 0, s["failed_rows"]
 rows = {r["row"] for r in s["rows"]}
@@ -265,12 +272,12 @@ env \
   FAKE_REMOTE_ROOT="$REMOTE_ROOT" \
   FAKE_REMOTE_PATH="$FAKEBIN" \
   FAKE_BAO_ROOT="$BAO_ROOT" \
-  bash scripts/ci/reconcile-node-substrate.sh candidate-a canary > "$TMPROOT/relative-catalog-root.out"
-grep -q "substrate ready inputs reconciled for canary" "$TMPROOT/relative-catalog-root.out"
+  bash scripts/ci/reconcile-node-substrate.sh candidate-a operator > "$TMPROOT/relative-catalog-root.out"
+grep -q "substrate ready inputs reconciled for operator" "$TMPROOT/relative-catalog-root.out"
 
 # task.5017 — deploy ⊆ provisioned: reconciling a node into an env outside its
-# `envs:` node-set must fail loud BEFORE any substrate mutation (canary is
-# [candidate-a, production], not preview).
+# `envs:` node-set must fail loud BEFORE any substrate mutation (oss is
+# [candidate-a, preview], not production).
 set +e
 env \
   VM_HOST=fake \
@@ -283,11 +290,11 @@ env \
   FAKE_REMOTE_ROOT="$REMOTE_ROOT" \
   FAKE_REMOTE_PATH="$FAKEBIN" \
   FAKE_BAO_ROOT="$BAO_ROOT" \
-  bash scripts/ci/reconcile-node-substrate.sh preview canary > "$TMPROOT/offset-env.out" 2>&1
+  bash scripts/ci/reconcile-node-substrate.sh production oss > "$TMPROOT/offset-env.out" 2>&1
 offset_rc=$?
 set -e
-[ "$offset_rc" -ne 0 ] || { echo "expected reconcile to fail for canary in preview (not in its envs)" >&2; exit 1; }
-grep -q "is not in the 'preview' node-set" "$TMPROOT/offset-env.out" \
+[ "$offset_rc" -ne 0 ] || { echo "expected reconcile to fail for oss in production (not in its envs)" >&2; exit 1; }
+grep -q "is not in the 'production' node-set" "$TMPROOT/offset-env.out" \
   || { echo "missing node-set rejection message; got:" >&2; cat "$TMPROOT/offset-env.out" >&2; exit 1; }
 
 echo "PASS: reconcile-node-substrate.test.sh"
