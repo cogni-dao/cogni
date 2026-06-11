@@ -43,10 +43,10 @@ The old shared candidate-a shape is retired. Cogni monorepo and `cogni-poly`
 are separate candidate-a targets and must not share VM aliases, DNS records, or
 provisioning assumptions.
 
-- `84.32.9.111` is **Cogni monorepo candidate-a**. Cloudflare records observed
-  on 2026-06-01: `cogni-candidate-a.vm.cognidao.org`,
-  `test.cognidao.org`, `resy-test.cognidao.org`,
-  `node-template-test.cognidao.org`, and `canary-test.cognidao.org`.
+- `84.32.9.111` is **Cogni monorepo candidate-a** (apex `cogni-candidate-a.vm.cognidao.org` /
+  `test.cognidao.org`). Per-node `<node>-test` records are **catalog-driven** — auto-upserted to
+  this IP on flight by `reconcile-node-dns.sh` (ci-cd.md Axiom 21 `DNS_IS_RECONCILED_PER_ENV`),
+  never hand-maintained. Don't enumerate/edit them by hand; see the `dns-ops` skill.
 - `5.199.173.155` is **cogni-poly candidate-a only**. Cloudflare records
   observed on 2026-06-01: `candidate-a.vm.cognidao.org` and
   `poly-test.cognidao.org`.

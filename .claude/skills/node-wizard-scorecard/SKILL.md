@@ -68,6 +68,10 @@ reporting a terminal blocker that prevents opening one:
 - Do not request flight until the parent pin and child image agree.
 - Candidate flight must be requested through the operator API. Do not use
   source-repo deploy workflows or other privileged manual deploy paths.
+- DNS + edge are automatic — never hand-create a `<node>-test` record or run a
+  separate infra step. The flight reconciles both (`reconcile-node-dns.sh` +
+  the `node-substrate` edge reconcile; ci-cd.md Axiom 21). A fresh-flight
+  `NXDOMAIN` is almost always negative-cache — re-check `dig <host> +short @1.1.1.1`.
 - After merge, use the child repo's current `main` SHA as `sourceSha`. GitHub
   merge commits differ from PR head commits, and the child push build tags
   `sha-${github.sha}`.
