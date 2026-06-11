@@ -3,7 +3,7 @@
 
 /**
  * Module: `@tests/ci-invariants/catalog-identity-ssot`
- * Purpose: Pins REPO_SPEC_IS_IDENTITY_SSOT — `node_id` authority lives in `nodes/<name>/.cogni/repo-spec.yaml` (the web3-anchored SSOT). An in-repo row reads it directly; a SUBMODULE row (`source_repo` set, repo-spec unreadable from the parent at render time) carries a drift-gated `node_id` PROJECTION in `infra/catalog/*.yaml` so the billing/routing CSVs in `image-tags.sh` can resolve identity. The projection never forks: verify-scheduler-endpoints.sh asserts catalog.node_id == repo-spec.node_id.
+ * Purpose: Pins REPO_SPEC_IS_IDENTITY_SSOT — `node_id` authority lives in `nodes/<name>/.cogni/repo-spec.yaml`. In-repo rows read it directly; a submodule row (`source_repo` set, repo-spec unreadable from the parent) carries a drift-gated `node_id` PROJECTION in the catalog so `image-tags.sh`'s routing/billing CSVs resolve identity (verify-scheduler-endpoints asserts they match).
  * Scope: Static structural test that reads catalog + repo-spec files; does not shell out, build, or hit the network.
  * Invariants:
  *   IN_REPO_NODE_NO_CATALOG_NODE_ID: a row without `source_repo` must NOT carry `node_id` — identity stays in repo-spec.
