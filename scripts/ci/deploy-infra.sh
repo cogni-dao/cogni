@@ -1176,12 +1176,13 @@ if [[ -n "${TEMPORAL_DB_PASSWORD:-}" ]]; then
       _tp_elapsed=$((_tp_elapsed + 2))
     done
     # Local-trust socket: psql -U temporal -d postgres authenticates without the old
-    # password. -v binds the value safely; never echoed. SCRAM rehash on every run is
-    # cheap and idempotent.
+    # password. Value embedded directly (NOT psql -v :'pw' — that interpolation form
+    # errored "syntax error at or near :" through the compose/exec layer during the
+    # 2026-06-11 manual converge); TEMPORAL_DB_PASSWORD is hex-validated above, so the
+    # single-quoted literal is injection-safe. SCRAM rehash every run is cheap + idempotent.
     if $RUNTIME_COMPOSE exec -T temporal-postgres \
         psql -U "$_tp_user" -d postgres -v ON_ERROR_STOP=1 \
-        -v pw="$TEMPORAL_DB_PASSWORD" \
-        -c "ALTER USER \"$_tp_user\" WITH PASSWORD :'pw';" >/dev/null; then
+        -c "ALTER USER \"$_tp_user\" WITH PASSWORD '$TEMPORAL_DB_PASSWORD';" >/dev/null; then
       log_info "temporal-postgres superuser reconciled to OpenBao value."
     else
       log_fatal "temporal-postgres superuser reconcile failed — refusing to start temporal against a drifted password (would 28P01)."
