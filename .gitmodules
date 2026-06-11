@@ -7,3 +7,6 @@
 [submodule "nodes/blue"]
 	path = nodes/blue
 	url = https://github.com/Cogni-DAO/blue.git
+[submodule "nodes/habitat"]
+	path = nodes/habitat
+	url = https://github.com/Cogni-DAO/habitat.git
