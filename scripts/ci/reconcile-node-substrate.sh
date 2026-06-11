@@ -354,13 +354,21 @@ remote "set -euo pipefail
   fi
   rm -f \"\$runtime_env.bak\"
 
-  # Born-reachable: the new node's edge route must land during the app-flight,
-  # WITHOUT a separate (slow) flight-infra. force-recreate re-reads the edge .env
-  # (the just-written \$${edge_key}=${edge_value} upstream) and re-templates the
-  # Caddyfile.tmpl — a single ~5s caddy-container cutover, started if down. The
-  # old 'if ps -q caddy' gate silently skipped the reload when caddy wasn't
-  # detected, leaving a born node Healthy + DNS-resolving but edge-unreachable (000).
-  \"\${edge_compose[@]}\" up -d --force-recreate caddy >/dev/null
+  # Edge reconcile — mirror deploy-infra.sh's start-vs-recreate split (task.5078):
+  # a fresh substrate (first node on a new VM) has no edge caddy yet, so START it.
+  # An existing edge gets force-recreate: a new node always adds a new
+  # <SLUG>_DOMAIN env var, and a graceful 'caddy reload' resolves it to empty
+  # (Caddy's env is frozen at container start), silently dropping the new server
+  # block + its cert. The pre-existing 'if ps -q caddy' gate force-recreated only
+  # when caddy was ALREADY up, so a first-node flight onto a fresh edge never
+  # started it — node Healthy + DNS-resolving but edge-unreachable (000). Like
+  # deploy-infra this bounces the shared edge (~1s, all siblings) per flight;
+  # folding both into one hash-gated edge-reconcile helper is the follow-up.
+  if ! \"\${edge_compose[@]}\" ps -q caddy >/dev/null 2>&1; then
+    \"\${edge_compose[@]}\" up -d >/dev/null
+  else
+    \"\${edge_compose[@]}\" up -d --force-recreate caddy >/dev/null
+  fi
   \"\${runtime_compose[@]}\" up -d postgres >/dev/null
   # Single-node db-provision: override COGNI_NODE_DBS to THIS node and inject its
   # per-node OpenBao passwords (read above) via -e, so provision.sh reconciles the
