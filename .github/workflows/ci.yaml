@@ -339,6 +339,9 @@ jobs:
       - name: node-ref VM fail-closed tests
         run: bash scripts/ci/tests/require-node-ref-vm.test.sh
 
+      - name: per-cell substrate gate tests
+        run: bash scripts/ci/tests/resolve-substrate-gate.test.sh
+
       - name: affected image target tests
         run: bash scripts/ci/tests/detect-affected.test.sh
 

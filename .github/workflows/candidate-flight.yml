@@ -476,12 +476,16 @@ jobs:
 
   assert-substrate:
     needs: [decide, reconcile-appset, reconcile-dns, node-substrate]
+    # Per-cell isolation (Axiom 18): run whenever there are substrate targets and
+    # the env-level reconcile-dns succeeded. Do NOT gate on the matrix-aggregate
+    # node-substrate result — a sibling node's substrate failure must not skip
+    # this whole job and starve healthy cells of their assert marker. Each cell
+    # gates on its OWN node-substrate marker below.
     if: |
       always() &&
       needs.decide.outputs.has_substrate_node_targets == 'true' &&
-      needs.reconcile-appset.result == 'success' &&
       needs.reconcile-dns.result == 'success' &&
-      needs.node-substrate.result == 'success'
+      needs.node-substrate.result != 'skipped'
     strategy:
       fail-fast: false
       matrix:
@@ -502,6 +506,23 @@ jobs:
         with:
           ref: ${{ needs.decide.outputs.head_sha }}
           path: app-src
+
+      # Per-cell gate: this node's own node-substrate marker must be ok. The
+      # job-level gate intentionally does NOT check the aggregate node-substrate
+      # result, so a sibling's substrate failure can't skip this cell.
+      - name: Download this node's substrate marker
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.1.8
+        with:
+          name: substrate-ok-${{ matrix.node }}
+          path: ${{ runner.temp }}/substrate-marker
+      - name: Gate on this node's substrate marker
+        env:
+          NODE: ${{ matrix.node }}
+          KIND: substrate-ok
+          EXPECTED_JSON: ${{ needs.decide.outputs.substrate_node_targets_json }}
+          MARKER_DIR: ${{ runner.temp }}/substrate-marker
+        run: bash ci-src/scripts/ci/resolve-substrate-gate.sh
 
       - name: Setup SSH to candidate-a VM
         env:
@@ -532,6 +553,23 @@ jobs:
           ASSERT_TARGET_SUBSTRATE_APP_WAIT_ATTEMPTS: 60
           ASSERT_TARGET_SUBSTRATE_APP_WAIT_SLEEP_SECONDS: 5
         run: bash ci-src/scripts/ci/assert-target-substrate.sh
+
+      # Per-cell success marker (Axiom 18): full substrate readiness for THIS
+      # node = its node-substrate marker (gated above) AND its own assert. flight
+      # + verify-candidate gate on this marker, never the aggregate result.
+      - name: Emit per-node assert marker
+        env:
+          NODE: ${{ matrix.node }}
+        run: |
+          set -euo pipefail
+          mkdir -p marker-out
+          printf 'ok' > "marker-out/assert-ok-${NODE}.txt"
+      - name: Upload per-node assert marker
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: assert-ok-${{ matrix.node }}
+          path: marker-out/assert-ok-${{ matrix.node }}.txt
+          retention-days: 1
 
   node-substrate:
     needs:
@@ -603,6 +641,23 @@ jobs:
           SUBSTRATE_RECONCILE_SUMMARY_FILE: ${{ runner.temp }}/node-substrate-reconcile-${{ matrix.node }}.json
         run: bash ci-src/scripts/ci/run-node-substrate.sh candidate-a "${{ matrix.node }}"
 
+      # Per-cell success marker (Axiom 18). assert-substrate + flight + verify
+      # gate on THIS node's marker, never the matrix-aggregate node-substrate
+      # result — so a sibling node's substrate failure cannot block this lane.
+      - name: Emit per-node substrate marker
+        env:
+          NODE: ${{ matrix.node }}
+        run: |
+          set -euo pipefail
+          mkdir -p marker-out
+          printf 'ok' > "marker-out/substrate-ok-${NODE}.txt"
+      - name: Upload per-node substrate marker
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: substrate-ok-${{ matrix.node }}
+          path: marker-out/substrate-ok-${{ matrix.node }}.txt
+          retention-days: 1
+
       - name: Push substrate reconcile telemetry to Loki
         if: always()
         uses: ./ci-src/.github/actions/loki-push
@@ -616,14 +671,16 @@ jobs:
 
   flight:
     needs: [decide, reconcile-appset, node-substrate, assert-substrate]
+    # Per-cell isolation (Axiom 18): this job runs whenever there are flight
+    # targets. It does NOT gate on the matrix-aggregate node-substrate /
+    # assert-substrate result — that rollup goes failure if ANY node's substrate
+    # cell fails, which would block every healthy node's flight leg. Each cell
+    # gates on its OWN node's assert-ok marker below (a flight target with no
+    # substrate step, e.g. a service, has no marker and passes).
     if: |
       always() &&
       needs.decide.outputs.has_flight_targets == 'true' &&
-      needs.reconcile-appset.result == 'success' &&
-      (
-        (needs.decide.outputs.has_substrate_node_targets == 'true' && needs.node-substrate.result == 'success' && needs.assert-substrate.result == 'success') ||
-        (needs.decide.outputs.has_substrate_node_targets != 'true' && needs.node-substrate.result == 'skipped' && needs.assert-substrate.result == 'skipped')
-      )
+      needs.reconcile-appset.result == 'success'
     strategy:
       fail-fast: false
       matrix:
@@ -648,6 +705,24 @@ jobs:
           ref: ${{ needs.decide.outputs.head_sha }}
           fetch-depth: 0
           path: app-src
+
+      # Per-cell substrate gate (Axiom 18): require THIS node's own assert-ok
+      # marker. A sibling node's substrate failure leaves this node's marker
+      # intact, so this cell proceeds. A flight target that needed no substrate
+      # (not in substrate_node_targets_json) has no marker and passes.
+      - name: Download this node's assert marker
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.1.8
+        with:
+          name: assert-ok-${{ matrix.node }}
+          path: ${{ runner.temp }}/assert-marker
+      - name: Gate on this node's substrate readiness
+        env:
+          NODE: ${{ matrix.node }}
+          KIND: assert-ok
+          EXPECTED_JSON: ${{ needs.decide.outputs.substrate_node_targets_json }}
+          MARKER_DIR: ${{ runner.temp }}/assert-marker
+        run: bash ci-src/scripts/ci/resolve-substrate-gate.sh
 
       - name: Download resolved-pr-images
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.1.8
@@ -896,19 +971,17 @@ jobs:
 
   verify-candidate:
     needs: [decide, flight, reconcile-dns, node-substrate, assert-substrate]
+    # Per-cell isolation (Axiom 18): run whenever flight ran and env-level
+    # reconcile-dns succeeded. Do NOT gate on the matrix-aggregate flight /
+    # node-substrate / assert-substrate result — a sibling node's failure must
+    # not skip this whole job. Each cell proves its OWN flight succeeded via the
+    # per-cell deploy-sha artifact (Resolve EXPECTED_SHA, fail-closed on empty)
+    # and gates on its OWN node's assert-ok marker below.
     if: |
       always() &&
       needs.decide.outputs.has_flight_targets == 'true' &&
-      needs.flight.result == 'success' &&
-      needs.reconcile-dns.result == 'success' &&
-      (
-        needs.decide.outputs.has_substrate_node_targets != 'true' ||
-        needs.node-substrate.result == 'success'
-      ) &&
-      (
-        (needs.decide.outputs.has_substrate_node_targets == 'true' && needs.assert-substrate.result == 'success') ||
-        (needs.decide.outputs.has_substrate_node_targets != 'true' && needs.assert-substrate.result == 'skipped')
-      )
+      needs.flight.result != 'skipped' &&
+      needs.reconcile-dns.result == 'success'
     strategy:
       fail-fast: false
       matrix:
@@ -930,6 +1003,22 @@ jobs:
         with:
           ref: ${{ needs.decide.outputs.head_sha }}
           path: app-src
+
+      # Per-cell substrate gate (Axiom 18): same per-node assert-ok marker the
+      # flight cell used. A sibling node's substrate failure can't reach here.
+      - name: Download this node's assert marker
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.1.8
+        with:
+          name: assert-ok-${{ matrix.node }}
+          path: ${{ runner.temp }}/assert-marker
+      - name: Gate on this node's substrate readiness
+        env:
+          NODE: ${{ matrix.node }}
+          KIND: assert-ok
+          EXPECTED_JSON: ${{ needs.decide.outputs.substrate_node_targets_json }}
+          MARKER_DIR: ${{ runner.temp }}/assert-marker
+        run: bash ci-src/scripts/ci/resolve-substrate-gate.sh
 
       - name: Checkout per-node deploy branch (for source-sha map)
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
