@@ -328,13 +328,17 @@ if [ -n "$OPENFGA_DB" ]; then
     echo "   -> Creating database '$OPENFGA_DB' with owner '$OPENFGA_ROLE'..."
     run_sql_as_root "postgres" "CREATE DATABASE \"$OPENFGA_DB\" OWNER \"$OPENFGA_ROLE\";"
   else
-    # Pre-migration store is root-owned. Transfer ownership + existing objects to
-    # the openfga role WITHOUT dropping data — store + tuple continuity (#1604).
-    echo "   -> Database '$OPENFGA_DB' exists; migrating ownership to '$OPENFGA_ROLE' (store preserved)..."
+    # Pre-migration store is root(superuser)-owned. Hand the openfga role the DB +
+    # schema + full rights on the EXISTING (root-created) objects, WITHOUT dropping
+    # data — store + tuple continuity (#1604). Grant-based, not REASSIGN OWNED:
+    # REASSIGN fails on superuser-owned objects "required by the database system".
+    echo "   -> Database '$OPENFGA_DB' exists; granting ownership/rights to '$OPENFGA_ROLE' (store preserved)..."
     run_sql_as_root "postgres" "ALTER DATABASE \"$OPENFGA_DB\" OWNER TO \"$OPENFGA_ROLE\";"
     run_sql_as_root "postgres" "GRANT CONNECT, CREATE, TEMP ON DATABASE \"$OPENFGA_DB\" TO \"$OPENFGA_ROLE\";"
-    run_sql_as_root "$OPENFGA_DB" "REASSIGN OWNED BY \"$PG_USER\" TO \"$OPENFGA_ROLE\";"
+    run_sql_as_root "$OPENFGA_DB" "ALTER SCHEMA public OWNER TO \"$OPENFGA_ROLE\";"
     run_sql_as_root "$OPENFGA_DB" "GRANT ALL ON SCHEMA public TO \"$OPENFGA_ROLE\";"
+    run_sql_as_root "$OPENFGA_DB" "GRANT ALL ON ALL TABLES IN SCHEMA public TO \"$OPENFGA_ROLE\";"
+    run_sql_as_root "$OPENFGA_DB" "GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO \"$OPENFGA_ROLE\";"
   fi
 else
   echo "   -> OPENFGA_DB_NAME not set; skipping openfga database provisioning."
