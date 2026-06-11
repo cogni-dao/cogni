@@ -5,7 +5,7 @@ title: Operator Merge Authority — One Chokepoint, Policy-Routed Authorization
 status: draft
 spec_state: proposed
 trust: draft
-summary: The cogni-operator app is the single authority that merges PRs across the network. All merges flow through one VcsCapability.mergePr chokepoint; a deterministic policy router authorizes per PR class (routine work-item, node-formation, governance override). Execution stays with GitHub Merge Queue; the contributor never self-merges.
+summary: The cogni-operator app is the single authority that merges PRs across the network. All merges flow through one VcsCapability.mergePr chokepoint; a deterministic policy router authorizes per PR class (routine work-item, node-formation, governance override). GitHub re-enforces required checks at merge; the contributor never self-merges.
 read_when: Designing or reviewing how PRs get merged, wiring the operator as merge authority, adding a merge-authorization class, or converging the duplicate merge paths.
 implements: proj.development-workflows
 owner: derekg1729
@@ -26,7 +26,7 @@ As the network grows, the operator runs its gitops deployments — and merging i
 
 - **One merge chokepoint** — `VcsCapability.mergePr`. Every operator merge is auditable to one code path and one work-item session.
 - **The operator is the merge authority** — not the contributor who wrote the PR (separation of duties), not a passive "green CI ⇒ GitHub rubber-stamp." The operator _decides_, on deterministic gates, and _acts_.
-- **Authorization is deterministic, execution is a vendor primitive** — the merge decision is policy (gate booleans), never an LLM judgment, so the merge sequence stays auditable. GitHub Merge Queue rebases/retests/merges.
+- **Authorization is deterministic, execution is a vendor primitive** — the merge decision is policy (gate booleans), never an LLM judgment, so the merge sequence stays auditable. GitHub re-enforces required checks at merge (and the merge queue, if re-enabled, owns rebase/retest).
 - **One escape hatch with more authority, not less** — a PR that fails automated gates merges only through an on-chain DAO vote (the existing governance loop).
 
 ## Non-Goals
@@ -53,21 +53,23 @@ As the network grows, the operator runs its gitops deployments — and merging i
   AUTHORIZATION (deterministic policy router, operator-owned)        EXECUTION
   ──────────────────────────────────────────────────────────        ─────────
   routine work-item PR : CI.allGreen ∧ work_item.deploy_verified ─┐
-  node-formation PR    : CI.allGreen ∧ wizardNodeCount < CEILING  ─┼─▶ VcsCapability.mergePr ─┬─▶ enqueue → GitHub Merge Queue
-  governance override  : re-verified on-chain CogniAction         ─┘   (the one chokepoint)   └─▶ direct merge (override only)
+  node-formation PR    : CI.allGreen ∧ deployedNodes < CEILING    ─┼─▶ VcsCapability.mergePr (PUT /merge)
+  governance override  : re-verified on-chain CogniAction         ─┘   (the one chokepoint)
                                                                                  │
                                                        every merge bound to a work_item_sessions row (audit)
 ```
+
+> **Execution reality (verified 2026-06-11):** `main` has `required_merge_queue: absent` and `enforce_admins: false`. So the operator **direct-merges** via `mergePr` (`PUT /pulls/{}/merge`); GitHub still enforces the 4 required status checks on the merge API, so a gate-passing `mergePr` is double-checked. There is no enqueue layer to build. `NO_AGENTIC_REBASE` holds trivially (no rebase happens). The one residual cost is stale-merge risk for the _routine_ class (no queue rebase-retest) → gate routine on require-up-to-date, or re-enable the queue, before scaling routine throughput. Node-formation is additive/non-racing, so direct-merge is safe; governance override relies on the App's `enforce_admins:false` bypass to merge a failed-check PR.
 
 ### Authorization classes
 
 | Class                                                                    | Authority                            | Gate (all must hold)                                                                                                                         | Execution                      |
 | ------------------------------------------------------------------------ | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ |
-| **Routine** (work-item PR)                                               | operator                             | `CiStatusResult.allGreen` ∧ `work_item.deploy_verified == true` (`/validate-candidate` scorecard posted) ∧ authorizer ≠ claiming contributor | enqueue → Merge Queue          |
-| **Node-formation** (operator-authored `cogni-operator/node-submodule-*`) | operator                             | `allGreen` ∧ wizard-born node count `< CAPACITY_CEILING` (else comment + hand back)                                                          | enqueue → Merge Queue          |
+| **Routine** (work-item PR)                                               | operator                             | `CiStatusResult.allGreen` ∧ `work_item.deploy_verified == true` (`/validate-candidate` scorecard posted) ∧ authorizer ≠ claiming contributor | direct `mergePr` (gated)       |
+| **Node-formation** (operator-authored `cogni-operator/node-submodule-*`) | operator                             | `allGreen` ∧ wizard-born node count `< CAPACITY_CEILING` (else comment + hand back)                                                          | direct `mergePr` (gated)       |
 | **Governance override** (PR that failed automated gates)                 | DAO vote → CogniSignal `CogniAction` | on-chain re-verify (`ON_CHAIN_RE_VERIFY`, `CHAIN_DAO_MATCH`, `TX_HASH_DEDUP` — see [dao-governance-loop](./dao-governance-loop.md))          | direct merge (vote serializes) |
 
-The node-formation capacity gate is the MVP capacity primitive: the operator has **no** awareness of VM capacity, where to slot a node, or when to create a VM. Until that exists (vNext), `CAPACITY_CEILING` is one named constant counting wizard-born submodule nodes (`.gitmodules` `nodes/*` entries). At/over the ceiling the operator stops and hands back — the explicit boundary where compute planning must begin.
+The node-formation capacity gate is the MVP capacity primitive: the operator has **no** awareness of VM capacity, where to slot a node, or when to create a VM. Until that exists (vNext), the ceiling is the config value `NODE_CAPACITY_CEILING` (env, default 8 — never a hardcoded literal), and the count is wizard-born submodule nodes (`nodes/<slug>` entries in the deployment parent's `.gitmodules`). At/over the ceiling the operator stops and hands back — the explicit boundary where compute planning must begin. The count comes from the deployment SSOT (`.gitmodules`), **not** the operator `nodes` table, because that table is RLS-scoped per owner in the web runtime and the `app_service` BYPASSRLS client is dependency-cruiser-banned in routes.
 
 ### Session binding
 
@@ -79,18 +81,18 @@ When the network becomes an AI-led company with contributor evaluations and cred
 
 ## Invariants
 
-| Rule                               | Constraint                                                                                                                                                                       |
-| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `SINGLE_MERGE_CHOKEPOINT`          | Every operator merge goes through `VcsCapability.mergePr`. No feature issues `PUT /pulls/{}/merge` directly — governance `mergeChange()` must converge onto the capability.      |
-| `OPERATOR_IS_MERGE_AUTHORITY`      | The operator (App identity) authorizes merges. The contributing agent/human never merges its own work-item PR.                                                                   |
-| `MERGE_SEPARATION_OF_DUTIES`       | The authorizing principal differs from the PR's claiming contributor (`work_item_sessions.claimed_by_user_id`). A node's requesting user is never its approver.                  |
-| `ROUTINE_REQUIRES_DEPLOY_VERIFIED` | A work-item PR merges only when CI `allGreen` AND `work_item.deploy_verified == true`. (`DEPLOY_VERIFIED_SEPARATE` still holds: `done` = merged; `deploy_verified` = validated.) |
-| `NODE_FORMATION_CAPACITY_GATE`     | An operator-authored node-formation PR merges only when CI `allGreen` AND wizard-born node count `< CAPACITY_CEILING`. At/over ceiling: comment + hand back, do not merge.       |
-| `GOVERNANCE_OVERRIDE_ON_CHAIN`     | A PR that failed automated gates merges only via a re-verified on-chain `CogniAction` (`merge:change`).                                                                          |
-| `DETERMINISTIC_AUTHORIZATION`      | Routine + node-formation merge decisions are deterministic policy (gate booleans), not LLM judgment. Preserves `NO_AGENTIC_REBASE`.                                              |
-| `QUEUE_OWNS_SERIALIZATION`         | Routine + node-formation merges enqueue via GitHub Merge Queue (rebase/retest/merge owned by the queue, per `MERGE_QUEUE_DETERMINISM`). Governance override may direct-merge.    |
-| `MERGE_BOUND_TO_SESSION`           | Every operator merge resolves to an active `work_item_sessions` row by `(repo_full_name, pr_number)`. Unresolvable → reject/flag `unmediated`.                                   |
-| `MERGE_EMITS_RECEIPT`              | (future, non-blocking) A merge emits an append-only, idempotent record keyed for attribution. Compatible with the ledger; never inline in the merge path.                        |
+| Rule                               | Constraint                                                                                                                                                                                                                                                                                                                                                                   |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SINGLE_MERGE_CHOKEPOINT`          | Every operator merge goes through `VcsCapability.mergePr`. No feature issues `PUT /pulls/{}/merge` directly — governance `mergeChange()` must converge onto the capability.                                                                                                                                                                                                  |
+| `OPERATOR_IS_MERGE_AUTHORITY`      | The operator (App identity) authorizes merges. The contributing agent/human never merges its own work-item PR.                                                                                                                                                                                                                                                               |
+| `MERGE_SEPARATION_OF_DUTIES`       | The PR's requesting party is never its approver. For routine PRs that means authorizer ≠ claiming contributor (`work_item_sessions.claimed_by_user_id`). For node-formation the operator both authors and merges, so SoD means the **requesting node owner is excluded** and the gate is fully deterministic (CI = injection proof) — not distinct author/merger principals. |
+| `ROUTINE_REQUIRES_DEPLOY_VERIFIED` | A work-item PR merges only when CI `allGreen` AND `work_item.deploy_verified == true`. (`DEPLOY_VERIFIED_SEPARATE` still holds: `done` = merged; `deploy_verified` = validated.)                                                                                                                                                                                             |
+| `NODE_FORMATION_CAPACITY_GATE`     | An operator-authored node-formation PR merges only when CI `allGreen` AND wizard-born node count `< CAPACITY_CEILING`. At/over ceiling: comment + hand back, do not merge.                                                                                                                                                                                                   |
+| `GOVERNANCE_OVERRIDE_ON_CHAIN`     | A PR that failed automated gates merges only via a re-verified on-chain `CogniAction` (`merge:change`).                                                                                                                                                                                                                                                                      |
+| `DETERMINISTIC_AUTHORIZATION`      | Routine + node-formation merge decisions are deterministic policy (gate booleans), not LLM judgment. Preserves `NO_AGENTIC_REBASE`.                                                                                                                                                                                                                                          |
+| `QUEUE_OWNS_SERIALIZATION`         | `main` has no enforced merge queue today (verified 2026-06-11), so the operator direct-merges via `mergePr` gated on `allGreen` (GitHub re-enforces required checks). No rebase happens, so `NO_AGENTIC_REBASE` holds. If the queue is re-enabled, the routine class switches to enqueue and the queue owns rebase/retest per `MERGE_QUEUE_DETERMINISM`.                     |
+| `MERGE_BOUND_TO_SESSION`           | Every operator merge resolves to an active `work_item_sessions` row by `(repo_full_name, pr_number)`. Unresolvable → reject/flag `unmediated`.                                                                                                                                                                                                                               |
+| `MERGE_EMITS_RECEIPT`              | (future, non-blocking) A merge emits an append-only, idempotent record keyed for attribution. Compatible with the ledger; never inline in the merge path.                                                                                                                                                                                                                    |
 
 ## Code Pointers — converge these (verified 2026-06-11)
 
@@ -122,12 +124,27 @@ When the network becomes an AI-led company with contributor evaluations and cred
 **Merge-queue / branch protection (execution — unchanged):**
 
 - `infra/github/branch-protection.json` — required checks `[unit, component, static, manifest]`; `required_pull_request_reviews: null`.
-- `infra/github/merge-queue.json` — squash, `ALLGREEN`, `min_entries_to_merge: 1`.
+- `infra/github/merge-queue.json` — squash, `ALLGREEN`, `min_entries_to_merge: 1` (config payload; **not enforced on `main` today**).
+
+**Prototype (as-built — this PR): node-formation capacity gate.**
+
+- `nodes/operator/app/src/features/nodes/capacity.ts` — pure `countSubmoduleNodes(.gitmodules) → number` + `evaluateNodeCapacity({deployedNodeCount, ceiling}) → {allowed, reason}`. Unit-tested.
+- `nodes/operator/app/src/shared/env/server-env.ts` — `NODE_CAPACITY_CEILING` (config, default 8).
+- `nodes/operator/app/src/app/api/v1/nodes/[id]/publish/route.ts` — `check_capacity` step: reads the parent `.gitmodules` via `writer.fetchFileText`, evaluates the gate, returns `409 at_capacity` before minting consumes compute. (Enforced at publish — the cheapest point — rather than at merge; the merge step reuses the same primitive and is the next slice.)
+
+## Acceptance Checks
+
+E2E on candidate-a (test GitHub App on `cogni-test-org`, parent = the configured `NODE_SUBMODULE_PARENT_*`):
+
+1. **Under capacity → birth proceeds.** With deployed `nodes/*` < `NODE_CAPACITY_CEILING`, `POST /api/v1/nodes/{id}/publish` returns 200 + opens the submodule PR (unchanged behavior). Loki: `event="node.publish.complete"` with `step="check_capacity"`, `outcome="success"`, `deployedNodeCount`, `ceiling`.
+2. **At/over capacity → refused.** Set `NODE_CAPACITY_CEILING` below the current count (or mint up to it); `publish` returns **409** `{error:"network at node capacity", reason, deployedNodeCount, ceiling}` and mints nothing. Loki: `errorCode="at_capacity"`.
+3. **Count correctness.** `deployedNodeCount` in the response/log equals the number of `nodes/<slug>` entries in the parent repo's `.gitmodules`.
+4. **Config, not hardcoded.** Changing `NODE_CAPACITY_CEILING` in the candidate-a env and bouncing the pod changes the gate threshold with no code change.
 
 ## Open Questions
 
-- [ ] `CAPACITY_CEILING` value + count definition (wizard-born submodule nodes vs all deployed nodes). Today: 6 `nodes/*` submodules, 9 `type:node` catalog entries.
-- [ ] Routine enqueue surface: does the operator call `gh pr merge --auto` equivalent via the capability, or set GitHub auto-merge? Either way the operator is the actor; the queue executes.
+- [ ] Merge step (next slice): operator merges the node-formation PR after CI `allGreen` via `VcsCapability.mergePr` (reusing `evaluateNodeCapacity`) — explicit endpoint vs durable CI-green trigger (Temporal, mirrors `PrReviewWorkflow`).
+- [ ] Governance `mergeChange` → `VcsCapability.mergePr` dedupe (`SINGLE_MERGE_CHOKEPOINT`) — safe refactor of the live on-chain path; sequence after the prototype lands.
 - [ ] Where the policy router runs: a Temporal workflow (durable wait-for-CI-green, mirrors `PrReviewWorkflow`) vs an event-driven webhook handler. Must not depend on inbound-webhook delivery for the node-formation class.
 - [ ] DB-backed `TX_HASH_DEDUP` for the governance override (currently in-memory — carried from dao-governance-loop Open Questions).
 
