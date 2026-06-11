@@ -47,12 +47,19 @@ server:
     size: 10Gi
     # storageClass: omitted — defaults to cluster default (local-path on k3s).
 
+  # bug.5011: the 512Mi limit OOMKilled prod OpenBao (2026-06-11 02:25) on the
+  # memory-tight 6GB box → Shamir reseal → ESO/secrets outage until manual
+  # unseal. Raised headroom so a Raft vault under load isn't container-OOMKilled;
+  # the larger request also reserves it honestly so node pressure can't squeeze
+  # it. NOTE: this mitigates the OOM *trigger* only — the durable fix for the
+  # reseal-on-restart SPOF (any reboot/update reseals a Shamir 1-of-1 vault) is
+  # auto-unseal, tracked in bug.5011.
   resources:
     requests:
       cpu: 250m
-      memory: 256Mi
+      memory: 384Mi
     limits:
-      memory: 512Mi
+      memory: 1Gi
 
   # Readiness/liveness use OpenBao's /v1/sys/health endpoint. Sealed pods
   # return 503 by default; the chart's standby/sealed code mappings already
