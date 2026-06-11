@@ -336,6 +336,8 @@ This spec does not require:
 
 ## Related Documentation
 
+- [CI/CD Platform Boundary & Freeze Policy](cicd-platform-boundary.md) — where new deployment/platform work goes and what stops growing; surface classification + request→home routing for new work (operationalizes the line-29 "divergence is a bug" contract)
+- [Legacy CI/CD To Remove](legacy-cicd-to-remove.md) — artifact-identity legacy inventory with removal conditions
 - [CD Pipeline E2E](cd-pipeline-e2e.md) — trunk-alignment guide mapping legacy multi-node GitOps design to the target workflow and code-task changes
 - [Candidate Slot Controller](candidate-slot-controller.md) — v0 design for lease, TTL, superseding-push handling, and aggregate candidate-flight status
 - [Node CI/CD Contract](node-ci-cd-contract.md) — CI/CD sovereignty invariants, file ownership

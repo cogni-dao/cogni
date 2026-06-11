@@ -32,6 +32,8 @@ source_repo + sourceSha + image_repository
 
 Anything that uses a pull request number, merge-queue tag, or preview tag as artifact identity is transitional. PR numbers remain review metadata only.
 
+The categories below are about **artifact identity**. The adjacent freeze — where deployment _behavior_ leaks into `.sh` and CI YAML instead of into the substrate — and the routing for all new platform work live in [CI/CD Platform Boundary & Freeze Policy](./cicd-platform-boundary.md). Category 6 below is the bridge between the two.
+
 ## Inventory
 
 ### PR-shaped image tags
@@ -93,3 +95,15 @@ Anything that uses a pull request number, merge-queue tag, or preview tag as art
 **Why not removed here:** The current operator publish/pin PR flow uses gitlinks as the reviewable acceptance record.
 
 **Removal condition:** The operator has an explicit, reviewable source pin record that carries `source_repo`, `sourceSha`, and artifact rows without requiring a submodule checkout shape.
+
+### Deploy-brain in shell + CI YAML
+
+**Mechanic:** `scripts/ci/deploy-infra.sh` (2,167 lines) carries eight responsibilities — SSH/rsync Compose, `.env` assembly threading 70+ secrets via `printf %q`, Postgres/Doltgres/Temporal superuser reconciliation (incl. live `ALTER USER ... PASSWORD`), per-node k8s secret creation, OpenFGA store bootstrap, Argo Image-Updater bootstrap, Caddy edge render, systemd backup timer — mutating candidate-a, preview, and production. The promotion workflows (`candidate-flight.yml` ~1,100 lines, `promote-and-deploy.yml` ~1,000 lines) carry inline digest-resolution decision trees in `run:` blocks.
+
+**Why it is legacy:** A control plane expressed in bash and YAML is an accidental pseudo-platform. Its proper homes are OpenTofu (cloud infra), Argo CD + Kustomize (deploy state), and ESO + OpenBao (secrets). `ci-cd.md` already names `deploy-infra.sh`'s preview/prod `.env` rendering "the remaining transitional copy" (line 243) with the alignment target being to move the VM/Compose tier into k8s (line 326).
+
+**Why not removed here:** It works in production and the k8s/Compose-tier move (Ingress + cert-manager + ESO + a DB-provision Job) is staged, not done. Removing it before its responsibilities land in the substrate would break preview/prod deploys.
+
+**Why not expanded:** Frozen by [CI/CD Platform Boundary & Freeze Policy](./cicd-platform-boundary.md) — no new responsibility, secret, service, DB path, or inline decision tree. Its line count is a ratchet. New platform behavior routes to catalog/overlay/AppSet/ESO, never to more bash.
+
+**Removal condition:** Each responsibility migrates to its substrate home (DB-credential provisioning → Axiom 22 substrate lane; secret delivery → ESO; edge → Ingress+cert-manager; Image-Updater bootstrap → GitOps Application). `deploy-infra.sh` shrinks to a thin Compose-reconcile wrapper or is retired when the VM/Compose tier moves into k8s.
