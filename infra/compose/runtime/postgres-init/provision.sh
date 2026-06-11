@@ -51,6 +51,10 @@ fi
 # + reconciled like the per-node roles. Drops the root creds from the datastore
 # DSN (design.openfga-substrate-unification Phase A).
 OPENFGA_DB="${OPENFGA_DB_NAME:-}"
+# OpenFGA is shared infra (the INFRA_ONLY pass owns it); the per-node pass carries
+# OPENFGA_DB_NAME via compose env but no password — clear it so the openfga blocks
+# below skip instead of demanding a password the per-node pass never holds.
+[ "$INFRA_ONLY" = "1" ] || OPENFGA_DB=""
 OPENFGA_ROLE="openfga"
 OPENFGA_PASS="${OPENFGA_DB_PASSWORD:-}"
 # Fail loud on source-read failure (Invariant): if the DB exists in the catalog
