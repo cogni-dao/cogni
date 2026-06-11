@@ -190,14 +190,26 @@ describe("single-node-scope workflow gate · structural pins", () => {
 
   it("enforce step uses `dorny/paths-filter` outputs (changes + operator_files) inline", () => {
     const job = loadJob();
-    const enforce = findStep<{ env: Record<string, string>; run: string }>(
+    const enforce = findStep<{ run: string }>(
       job,
       (s) => s.name === "Enforce single-domain scope"
     );
-    expect(enforce.env.MATCHED).toContain("steps.domains.outputs.changes");
-    expect(enforce.env.OPERATOR_FILES).toContain(
-      "steps.domains.outputs.operator_files"
-    );
+    // ARG_MAX: a ~2200-path purge diff overflows execve when operator_files
+    // rides in `env:`. Both dorny outputs are spliced into the run: body
+    // (changes inline, operator_files via a quoted heredoc written to disk),
+    // never passed through `env:`.
+    expect(enforce.run).toContain("steps.domains.outputs.changes");
+    expect(enforce.run).toContain("steps.domains.outputs.operator_files");
+    expect(
+      enforce.run,
+      "operator_files must NOT ride in env (ARG_MAX); splice it into a quoted " +
+        "heredoc in the run: body instead"
+    ).toContain("COGNI_OPERATOR_FILES_EOF");
+    expect(
+      enforce.run,
+      "node-retirement exemption: a deletion-only sweep across fully-removed " +
+        "nodes is a sanctioned operator-domain retirement"
+    ).toContain("node retirement");
     expect(
       enforce.run,
       "ride-along whitelist must include pnpm-lock.yaml in the inline run: block"

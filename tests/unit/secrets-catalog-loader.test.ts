@@ -97,9 +97,9 @@ describe("secrets-catalog-loader · openBaoPathFor (fan-out path resolution)", (
   it("resolves distinct per-node paths for an appliesTo+distinct secret", () => {
     const r = { tier: "A1" as const, appliesTo: "web" as const };
     const a = openBaoPathFor(r, "AUTH_SECRET", "node-template", "candidate-a");
-    const b = openBaoPathFor(r, "AUTH_SECRET", "canary", "candidate-a");
+    const b = openBaoPathFor(r, "AUTH_SECRET", "oss", "candidate-a");
     expect(a).toBe("cogni/candidate-a/node-template/AUTH_SECRET");
-    expect(b).toBe("cogni/candidate-a/canary/AUTH_SECRET");
+    expect(b).toBe("cogni/candidate-a/oss/AUTH_SECRET");
     expect(a).not.toBe(b); // zero cross-node value reuse — distinct paths
   });
 
@@ -111,7 +111,7 @@ describe("secrets-catalog-loader · openBaoPathFor (fan-out path resolution)", (
     };
     expect(
       openBaoPathFor(r, "EVM_RPC_URL", "node-template", "candidate-a")
-    ).toBe(openBaoPathFor(r, "EVM_RPC_URL", "canary", "candidate-a"));
+    ).toBe(openBaoPathFor(r, "EVM_RPC_URL", "oss", "candidate-a"));
     expect(openBaoPathFor(r, "EVM_RPC_URL", "x", "candidate-a")).toBe(
       "cogni/candidate-a/_shared/EVM_RPC_URL"
     );
@@ -123,7 +123,7 @@ describe("secrets-catalog-loader · REAL repo catalog (guards the migration)", (
     encoding: "utf-8",
   }).trim();
 
-  it("loads without collision (canary dup removed) + migrates A1 baseline to appliesTo", () => {
+  it("loads without collision + migrates A1 baseline to appliesTo", () => {
     const { routing } = loadSecretsCatalog({ repoRoot });
     // node-template's A1 now lives operator-domain as capability-gated entries.
     expect(routing.AUTH_SECRET).toMatchObject({ appliesTo: "web" });
@@ -140,7 +140,7 @@ describe("secrets-catalog-loader · REAL repo catalog (guards the migration)", (
     const cn = openBaoPathFor(
       routing.AUTH_SECRET,
       "AUTH_SECRET",
-      "canary",
+      "oss",
       "preview"
     );
     expect(nt).not.toBe(cn);

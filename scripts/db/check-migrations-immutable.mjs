@@ -43,6 +43,47 @@ function nodeRoot(path) {
   return path.match(/^(nodes\/[^/]+)/)?.[1] ?? null;
 }
 
+/**
+ * NODE_RETIREMENT exemption: deleting an entire `nodes/<node>/` tree (node
+ * retirement) is a sanctioned operation, not an append-only violation. The
+ * immutability rule exists so a SURVIVING node's shipped migrations are never
+ * rewritten — but a retired node's DB is decommissioned alongside its code, so
+ * its migration history carries no forward-skip hazard.
+ *
+ * A node qualifies ONLY if every diffed path under `nodes/<node>/` is status
+ * `D` AND the directory no longer exists on disk (whole-tree removal). A PR that
+ * edits a surviving node's migrations — or deletes one migration while keeping
+ * the node — does NOT qualify and still fails.
+ */
+function retiredNodeRoots(diffLines) {
+  const byRoot = new Map(); // root -> { allDeleted: bool }
+  for (const line of diffLines) {
+    const [statusRaw, ...rest] = line.split("\t");
+    if (!statusRaw) continue;
+    const status = statusRaw[0];
+    // Renames/copies emit old+new; a surviving rename target means not retired.
+    for (const p of rest) {
+      const root = nodeRoot(p);
+      if (!root) continue;
+      const prev = byRoot.get(root) ?? { allDeleted: true };
+      if (status !== "D") prev.allDeleted = false;
+      byRoot.set(root, prev);
+    }
+  }
+  const retired = new Set();
+  for (const [root, state] of byRoot) {
+    if (!state.allDeleted) continue;
+    // Confirm the tree is gone on HEAD — `git ls-files` returns nothing for a
+    // fully-removed node (also excludes a bare submodule gitlink, which has no
+    // in-tree migration files anyway).
+    const tracked = execFileSync("git", ["ls-files", "--", root], {
+      encoding: "utf8",
+    }).trim();
+    if (tracked === "") retired.add(root);
+  }
+  return retired;
+}
+
 function isCurrentGitlink(path) {
   const root = nodeRoot(path);
   if (!root) return false;
@@ -96,6 +137,10 @@ if (!baseSha) {
 const diffOutput = git(`diff --name-status ${baseSha}`);
 const lines = diffOutput.split("\n").filter(Boolean);
 
+// NODE_RETIREMENT: nodes whose entire `nodes/<node>/` tree is deleted in this
+// diff — their migration deletions are exempt from the append-only rule.
+const retiredNodes = retiredNodeRoots(lines);
+
 const violations = [];
 let inspected = 0;
 
@@ -121,6 +166,7 @@ for (const line of lines) {
 
   if (status === "D") {
     if (isCurrentGitlink(oldPath)) continue;
+    if (retiredNodes.has(nodeRoot(oldPath))) continue; // whole-node retirement
     violations.push({
       path: oldPath,
       reason: `deleted (status ${status})`,

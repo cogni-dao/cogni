@@ -1,1 +1,0 @@
-ALTER TABLE "execution_requests" ALTER COLUMN "ok" DROP NOT NULL;

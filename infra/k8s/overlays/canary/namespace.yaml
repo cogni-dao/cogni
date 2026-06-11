@@ -1,9 +1,0 @@
-# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-# SPDX-FileCopyrightText: 2025 Cogni-DAO
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: cogni-staging
-  labels:
-    app.kubernetes.io/part-of: cogni
-    environment: staging

@@ -10,12 +10,6 @@ packages:
   - "nodes/operator/app"
   - "nodes/operator/graphs"
   - "nodes/operator/packages/*"
-  - "nodes/canary/app"
-  - "nodes/canary/graphs"
-  - "nodes/canary/packages/*"
-  - "nodes/resy/app"
-  - "nodes/resy/graphs"
-  - "nodes/resy/packages/*"
   # Shared packages (Node-owned, pure libraries)
   - "packages/*"
   # Operator services (future: git-review-daemon, git-admin-daemon)

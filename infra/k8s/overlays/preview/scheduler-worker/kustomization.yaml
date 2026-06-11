@@ -70,16 +70,6 @@ patches:
         type: ExternalName
         externalName: cogni-preview.vm.cognidao.org
         clusterIP: null
-  - target: { kind: Service, name: resy-app }
-    patch: |
-      apiVersion: v1
-      kind: Service
-      metadata:
-        name: resy-app
-      spec:
-        type: ExternalName
-        externalName: cogni-preview.vm.cognidao.org
-        clusterIP: null
   - target: { kind: EndpointSlice, name: temporal-1 }
     patch: |
       $patch: delete
@@ -108,10 +98,3 @@ patches:
       kind: EndpointSlice
       metadata:
         name: poly-app-1
-  - target: { kind: EndpointSlice, name: resy-app-1 }
-    patch: |
-      $patch: delete
-      apiVersion: discovery.k8s.io/v1
-      kind: EndpointSlice
-      metadata:
-        name: resy-app-1

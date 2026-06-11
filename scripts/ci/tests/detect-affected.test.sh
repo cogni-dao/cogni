@@ -43,7 +43,7 @@ output=$(
 echo "$output" | grep -q 'Selection reason: turbo-affected-package-change:packages/node-contracts/src/foo.ts'
 echo "$output" | grep -q 'Targets: operator,scheduler-worker'
 
-if echo "$output" | grep -q 'litellm\|canary\|resy\|node-template'; then
+if echo "$output" | grep -q 'litellm\|oss\|node-template'; then
   echo "[FAIL] package-level turbo affected selected packages absent from turbo output" >&2
   echo "$output" >&2
   exit 1

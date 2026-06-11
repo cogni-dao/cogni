@@ -16,15 +16,15 @@ REMOTE_ROOT="$TMPROOT/remote"
 mkdir -p "$FAKEBIN" "$REMOTE_ROOT/opt/cogni-template-edge/configs" "$REMOTE_ROOT/opt/cogni-template-runtime"
 
 cat > "$REMOTE_ROOT/opt/cogni-template-edge/.env" <<'EOF'
-CANARY_DOMAIN=canary-test.cognidao.org
+OSS_DOMAIN=oss-test.cognidao.org
 EOF
 cat > "$REMOTE_ROOT/opt/cogni-template-edge/configs/Caddyfile.tmpl" <<'EOF'
-{$CANARY_DOMAIN:canary.localhost} {
-  reverse_proxy {$CANARY_UPSTREAM:host.docker.internal:30400}
+{$OSS_DOMAIN:oss.localhost} {
+  reverse_proxy {$OSS_UPSTREAM:host.docker.internal:31000}
 }
 EOF
 cat > "$REMOTE_ROOT/opt/cogni-template-runtime/.env" <<'EOF'
-COGNI_NODE_DBS=cogni_operator,cogni_canary
+COGNI_NODE_DBS=cogni_operator,cogni_oss
 POSTGRES_ROOT_USER=postgres
 EOF
 touch "$REMOTE_ROOT/opt/cogni-template-edge/docker-compose.yml"
@@ -62,46 +62,46 @@ if [ "${1:-}" = "get" ]; then
       [ "${FAKE_MISSING_NAMESPACE:-}" = "1" ] && exit 1
       exit 0
       ;;
-    "argocd:applicationset:cogni-candidate-a-canary")
+    "argocd:applicationset:cogni-candidate-a-oss")
       [ "${FAKE_MISSING_APPSET:-}" = "1" ] && exit 1
       exit 0
       ;;
-    "argocd:application:candidate-a-canary")
+    "argocd:application:candidate-a-oss")
       [ "${FAKE_MISSING_APPLICATION:-}" = "1" ] && exit 1
       exit 0
       ;;
-    "cogni-candidate-a:deployment:canary-node-app")
+    "cogni-candidate-a:deployment:oss-node-app")
       [ "${FAKE_MISSING_DEPLOYMENT:-}" = "1" ] && exit 1
       if printf '%s\n' "$*" | grep -Fq 'jsonpath='; then
         if [ "${FAKE_LEGACY_SECRET_CONSUMER:-}" = "1" ]; then
-          echo "canary-node-app-secrets"
+          echo "oss-node-app-secrets"
         elif [ "${FAKE_WRONG_SECRET_CONSUMER:-}" = "1" ]; then
           echo "other-secret"
         else
-          echo "canary-env-secrets"
+          echo "oss-env-secrets"
         fi
       fi
       exit 0
       ;;
-    "cogni-candidate-a:service:canary-node-app")
+    "cogni-candidate-a:service:oss-node-app")
       [ "${FAKE_MISSING_SERVICE:-}" = "1" ] && exit 1
       if printf '%s\n' "$*" | grep -Fq 'jsonpath='; then
         if [ "${FAKE_SERVICE_NODEPORT_MISMATCH:-}" = "1" ]; then
           echo 39999
         else
-          echo 30400
+          echo 31000
         fi
       fi
       exit 0
       ;;
-    "cogni-candidate-a:secret:canary-env-secrets")
+    "cogni-candidate-a:secret:oss-env-secrets")
       [ "${FAKE_MISSING_SECRET:-}" = "1" ] && exit 1
       if printf '%s\n' "$*" | grep -Fq 'jsonpath='; then
         [ "${FAKE_MISSING_DSN:-}" = "1" ] || echo "cG9zdGdyZXM6Ly8="
       fi
       exit 0
       ;;
-    "cogni-candidate-a:externalsecret:canary-env-secrets")
+    "cogni-candidate-a:externalsecret:oss-env-secrets")
       [ "${FAKE_MISSING_EXTERNAL_SECRET:-}" = "1" ] && exit 1
       if printf '%s\n' "$*" | grep -Fq 'jsonpath='; then
         [ "${FAKE_EXTERNAL_SECRET_NOT_READY:-}" = "1" ] || echo True
@@ -125,7 +125,7 @@ if printf '%s\n' "$*" | grep -q ' exec -T caddy wget '; then
   if [ "${FAKE_MISSING_LIVE_CADDY_ROUTE:-}" = "1" ]; then
     echo '{"apps":{"http":{"servers":{}}}}'
   else
-    echo '{"host":"canary-test.cognidao.org","upstream":"host.docker.internal:30400"}'
+    echo '{"host":"oss-test.cognidao.org","upstream":"host.docker.internal:31000"}'
   fi
   exit 0
 fi
@@ -149,10 +149,10 @@ case "$url" in
   *"name=test.cognidao.org&type=A"*)
     echo '{"result":[{"content":"84.32.9.111","proxied":false}]}'
     ;;
-  *"name=canary-test.cognidao.org&type=A"*)
+  *"name=oss-test.cognidao.org&type=A"*)
     echo '{"result":[{"content":"84.32.9.111","proxied":false}]}'
     ;;
-  *"name=resy-test.cognidao.org&type=A"*)
+  *"name=node-template-test.cognidao.org&type=A"*)
     echo '{"result":[]}'
     ;;
   *)
@@ -163,7 +163,7 @@ EOF
 chmod +x "$FAKEBIN/cf-curl"
 
 BASE_ENV=(
-  TARGET=canary
+  TARGET=oss
   DEPLOY_ENVIRONMENT=candidate-a
   VM_HOST=192.0.2.10
   DOMAIN=test.cognidao.org
@@ -178,14 +178,14 @@ BASE_ENV=(
 )
 
 env "${BASE_ENV[@]}" bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/success.out"
-grep -q "Node substrate ready for canary" "$TMPROOT/success.out"
+grep -q "Node substrate ready for oss" "$TMPROOT/success.out"
 
 env "${BASE_ENV[@]}" CHECK_DNS=true \
   CLOUDFLARE_API_TOKEN=test-token CLOUDFLARE_ZONE_ID=zone123 FORK_DOMAIN_ROOT=cognidao.org \
   CF_CURL="$FAKEBIN/cf-curl" bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/scoped-dns.out"
-grep -q "Node substrate ready for canary" "$TMPROOT/scoped-dns.out"
+grep -q "Node substrate ready for oss" "$TMPROOT/scoped-dns.out"
 
-if env TARGET=canary DEPLOY_ENVIRONMENT=candidate-a VM_HOST="" DOMAIN=test.cognidao.org \
+if env TARGET=oss DEPLOY_ENVIRONMENT=candidate-a VM_HOST="" DOMAIN=test.cognidao.org \
   APP_SOURCE_DIR=. COGNI_CATALOG_ROOT=infra/catalog CHECK_DNS=false \
   ASSERT_TARGET_SUBSTRATE_SSH_BIN="$FAKEBIN/ssh" bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/missing-vm.out" 2>&1; then
   echo "expected missing VM_HOST to fail" >&2
@@ -200,15 +200,15 @@ fi
 grep -q "missing catalog file" "$TMPROOT/missing-catalog.out"
 
 mkdir -p "$TMPROOT/no-overlay/infra/catalog"
-cp infra/catalog/canary.yaml "$TMPROOT/no-overlay/infra/catalog/canary.yaml"
+cp infra/catalog/oss.yaml "$TMPROOT/no-overlay/infra/catalog/oss.yaml"
 if env "${BASE_ENV[@]}" APP_SOURCE_DIR="$TMPROOT/no-overlay" COGNI_CATALOG_ROOT="$TMPROOT/no-overlay/infra/catalog" bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/missing-overlay.out" 2>&1; then
   echo "expected missing overlay to fail" >&2
   exit 1
 fi
 grep -q "missing overlay dir" "$TMPROOT/missing-overlay.out"
 
-mkdir -p "$TMPROOT/no-appset/infra/catalog" "$TMPROOT/no-appset/infra/k8s/overlays/candidate-a/canary"
-cp infra/catalog/canary.yaml "$TMPROOT/no-appset/infra/catalog/canary.yaml"
+mkdir -p "$TMPROOT/no-appset/infra/catalog" "$TMPROOT/no-appset/infra/k8s/overlays/candidate-a/oss"
+cp infra/catalog/oss.yaml "$TMPROOT/no-appset/infra/catalog/oss.yaml"
 if env "${BASE_ENV[@]}" APP_SOURCE_DIR="$TMPROOT/no-appset" COGNI_CATALOG_ROOT="$TMPROOT/no-appset/infra/catalog" bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/missing-appset-file.out" 2>&1; then
   echo "expected missing appset file to fail" >&2
   exit 1
@@ -255,7 +255,7 @@ if env "${BASE_ENV[@]}" FAKE_LEGACY_SECRET_CONSUMER=1 bash scripts/ci/assert-tar
   echo "expected legacy Secret consumer to fail" >&2
   exit 1
 fi
-grep -q "Deployment consumes legacy plain Secret canary-node-app-secrets" "$TMPROOT/legacy-secret-consumer.out"
+grep -q "Deployment consumes legacy plain Secret oss-node-app-secrets" "$TMPROOT/legacy-secret-consumer.out"
 
 if env "${BASE_ENV[@]}" FAKE_WRONG_SECRET_CONSUMER=1 bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/wrong-secret-consumer.out" 2>&1; then
   echo "expected wrong Secret consumer to fail" >&2
@@ -302,7 +302,7 @@ if env "${BASE_ENV[@]}" bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/mi
   echo "expected missing DB inventory to fail" >&2
   exit 1
 fi
-grep -q "runtime env COGNI_NODE_DBS missing cogni_canary" "$TMPROOT/missing-db-inventory.out"
+grep -q "runtime env COGNI_NODE_DBS missing cogni_oss" "$TMPROOT/missing-db-inventory.out"
 mv "$REMOTE_ROOT/opt/cogni-template-runtime/.env.bak" "$REMOTE_ROOT/opt/cogni-template-runtime/.env"
 
 mv "$REMOTE_ROOT/opt/cogni-template-edge/.env" "$REMOTE_ROOT/opt/cogni-template-edge/.env.bak"
@@ -319,7 +319,7 @@ if env "${BASE_ENV[@]}" FAKE_MISSING_LIVE_CADDY_ROUTE=1 bash scripts/ci/assert-t
 fi
 grep -q "live Caddy config missing" "$TMPROOT/missing-live-caddy.out"
 
-if env TARGET=canary DEPLOY_ENVIRONMENT=candidate-a VM_HOST=192.0.2.10 DOMAIN=test.cognidao.org \
+if env TARGET=oss DEPLOY_ENVIRONMENT=candidate-a VM_HOST=192.0.2.10 DOMAIN=test.cognidao.org \
   APP_SOURCE_DIR=. COGNI_CATALOG_ROOT=infra/catalog CHECK_DNS=true \
   ASSERT_TARGET_SUBSTRATE_SSH_BIN="$FAKEBIN/ssh" ASSERT_TARGET_SUBSTRATE_REMOTE_ROOT="$REMOTE_ROOT" \
   FAKE_REMOTE_PATH="$FAKEBIN" bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/missing-dns.out" 2>&1; then
