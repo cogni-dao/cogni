@@ -34,7 +34,9 @@ resources:
   - candidate-a-please-applicationset.yaml
   - candidate-a-resy-applicationset.yaml
   - candidate-a-scheduler-worker-applicationset.yaml
+  - preview-node-template-applicationset.yaml
   - preview-operator-applicationset.yaml
+  - preview-oss-applicationset.yaml
   - preview-scheduler-worker-applicationset.yaml
   - production-operator-applicationset.yaml
   - production-scheduler-worker-applicationset.yaml
