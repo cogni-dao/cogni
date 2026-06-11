@@ -133,20 +133,29 @@ north-star already named in `secret-materialize.sh:122-131`.
 > for N nodes); it is enforced at the app layer (§Security boundary). The
 > `_system`/`_shared` denies are the policy-layer floor of defense-in-depth.
 
-### C. SecretsCapability + adapter + route (operator-app code)
+### C. Operator-local secrets port + route (operator-app code)
 
-- `packages/ai-tools/src/capabilities/secrets.ts` — `SecretsCapability` with
-  `writeSecret({ nodeSlug, env, key, value, op })`. `redact` strips the value.
-- `OpenBaoSecretsAdapter` — pod self-login → `bao kv patch` (or `put` only on a
-  brand-new node path) → ESO force-sync annotation. Reuses `set-secret.sh`'s
-  put-vs-patch gate verbatim. Token never leaves the adapter (the `NO_SECRETS_IN_CONTEXT`
-  invariant from `bootstrap/capabilities/vcs.ts`).
-- Bootstrap factory `createSecretsCapability(env)` + `stubSecretsCapability` on
-  non-operator nodes (canary/resy/poly), exactly like `createVcsCapability`.
+The REST path is operator-only, so it mirrors `OperatorDeployPlanePort`
+(`nodes/operator/app/src/ports/operator-deploy-plane.port.ts`) — the port the
+flight **route** actually calls — **not** the `packages/ai-tools` `VcsCapability`
+(that is the AI-tool layer, deferred to Phase 2). Keeping it app-local avoids a
+premature cross-node package and the `ToolContract`/`redact` machinery the route
+does not need (`packages-architecture.md`: packages are cross-node, ≥2 consumers).
+
+- `nodes/operator/app/src/ports/operator-secrets-plane.port.ts` —
+  `OperatorSecretsPlanePort` with `writeSecret({ nodeSlug, env, key, value, op })`;
+  deps via constructor, no env loading.
+- `OpenBaoSecretsAdapter` (operator-app adapter) — pod self-login → `bao kv patch`
+  (or `put` only on a brand-new node path) → ESO force-sync annotation. Reuses
+  `set-secret.sh`'s put-vs-patch gate verbatim. The writer token never leaves the
+  adapter (the `NO_SECRETS_IN_CONTEXT` invariant).
+- `createOperatorSecretsPlane(env)` inline factory in the route (mirrors
+  `createOperatorDeployPlane`: throws → 503 if unconfigured). No shared-node stub
+  needed — non-operator nodes do not expose this route.
 - `POST /api/v1/nodes/[id]/secrets` — `wrapRouteHandlerWithLogging` + owner/authz
-  gate → allowlist guard → adapter. A `GET` lists **key names only** (shape, not
-  values — the `SECRET_SHAPE_NOT_VALUES` invariant the `/publish` route already
-  honors).
+  gate → allowlist guard → port. **The target node slug is taken from the
+  OpenFGA-authorized `resource`, never from the request body** (no path injection).
+  Write/rotate only; a key-name listing (`GET`) is **not** in the minimum — defer.
 
 ## Security boundary — defense in depth (the #1 risk)
 
@@ -155,7 +164,10 @@ A scoping bug = cross-tenant secret write. Three independent gates, all mandator
 1. **OpenFGA** — `check({ action: "node.manage_secrets", resource: "node:<id>" })`.
    `authz_unavailable` → 503, anything-not-allow → 403. Fail-closed; never skip on
    `authorization === undefined` (return 503, do not fall back to owner-only for a
-   write this sensitive).
+   write this sensitive). **Hard precondition:** prod + preview have no OpenFGA
+   store today, so every check there is `authz_unavailable` → the feature is
+   **candidate-a-only** until OpenFGA is provisioned on those envs (same gating as
+   the OpenBao identity gap — see Open Questions).
 2. **Catalog allowlist** — resolve `<KEY>` in the granted node's catalog; require
    `tier == "A2"` and that `openBaoPathFor()` yields exactly `cogni/<env>/<node>/<KEY>`
    for the **granted** node slug. Refuse undeclared keys and any `B/D/E/F/G` tier.
@@ -179,11 +191,11 @@ caller (API key) → POST /api/v1/nodes/[id]/secrets
 
 Parallel to flight's `developer→can_flight` proof:
 
-| Axis       | Value                                                                                                                                              |
-| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Route      | `POST /api/v1/nodes/[id]/secrets`                                                                                                                  |
-| Authz      | `authorization.check(action: "node.manage_secrets")` → `can_manage_secrets ← developer`                                                            |
-| Observable | `kubectl exec <pod> -- test -n "$KEY"` on candidate-a **+** the agent's own OpenBao write in the Loki audit stream **+** `/readyz` green post-roll |
+| Axis       | Value                                                                                                                                                                                                    |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Route      | `POST /api/v1/nodes/[id]/secrets`                                                                                                                                                                        |
+| Authz      | `authorization.check(action: "node.manage_secrets")` → `can_manage_secrets ← developer`                                                                                                                  |
+| Observable | **primary:** `kubectl exec <pod> -- test -n "$KEY"` on candidate-a + `/readyz` green post-roll. **secondary (only once `bug.0445` ships audit→Loki):** the agent's own write in the OpenBao audit stream |
 
 ESO sync proves the k8s Secret; only the `kubectl exec` (or a value-derived runtime
 behavior) proves the **running process** sees it.
@@ -203,8 +215,11 @@ don't assume complete Loki rotation history until it closes).
 - Distinct `secrets_manager` role (vs. conferring through `developer`) if owners
   want to grant secret-write without flight rights — needs `NODE_ACCESS_ROLES` +
   the DB CHECK-constraint extension (`node-access-requests.ts:43`).
-- AI-tool path: a `core__node_secret_set` tool wired through `ToolBindingDeps`, so
-  the node's own assistant rotates values (same capability, second injection path).
+- AI-tool path: a `packages/ai-tools` `SecretsCapability` + `core__node_secret_set`
+  tool wired through `ToolBindingDeps` (with `stubSecretsCapability` on non-operator
+  nodes), so the node's own assistant rotates values. The cross-node package is
+  justified **only here** — where the tool layer (a package consumed by graphs)
+  actually needs it; Phase 1's REST path does not.
 
 ## Non-goals
 
@@ -224,5 +239,3 @@ don't assume complete Loki rotation history until it closes).
 - [ ] Per-node catalog files are empty today (A2 entries consolidated in
       `infra/secrets-catalog.yaml`); the allowlist check must read the consolidated
       catalog, not assume `nodes/<node>/.cogni/secrets-catalog.yaml` exists.
-      </content>
-      </invoke>
