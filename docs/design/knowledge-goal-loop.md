@@ -88,11 +88,7 @@ new column. The shipped regex —
 forbids parens and spaces, so `metric:rate(...)` is illegal by construction — and
 that is the right constraint: a KPI id is versioned + reusable; an inline
 expression smeared across rows is not. The deferred **KPI reader** maps the id → a
-0–100 number (same scale as `confidence_pct` and `target`). For v0 the obvious
-first KPI reader is _"the computed confidence of the goal's own hypothesis row"_ —
-i.e. the loop drives its own confidence up by filing supporting evidence, and
-`kpi == confidence_pct(hypothesisId)`. That requires **no new reader at all** and
-proves the loop end-to-end before any bespoke metric source is wired.
+0–100 number (same scale as `confidence_pct` and `target`).
 
 ```
 hypothesis row
@@ -107,6 +103,43 @@ The resolver cron already reads pending rows by `evaluate_at` and dispatches by
 `resolution_strategy` namespace (`PendingResolutionsOptions.strategy` takes a
 `"metric:"` prefix). A `metric:`-strategy goal is dispatched to the loop
 controller instead of the generic `agent` resolver.
+
+---
+
+## The KPI reader MUST be verifier-independent (worker ≠ verifier)
+
+This is the **load-bearing invariant** (`KPI_VERIFIER_INDEPENDENT`) and where a
+naïve version of this primitive goes wrong. The frontier consensus is unambiguous:
+
+- **Claude Code `/goal`** runs the worker until a **separate evaluator model**
+  (Haiku) judges the completion condition — deliberately splitting "the agent that
+  works from the one that decides it's done."
+- **Reflexion / self-eval research** shows self-grading **fails when the verifier
+  shares the worker's blind spot** — an agent that judges its own success against
+  its own knowledge inherits its own gaps.
+- **AgentPRM** scores *Progress* explicitly to kill steps that look locally good but
+  lead nowhere.
+
+The trap for THIS design: the loop's whole job is to file `evidence_for` edges to
+its own hypothesis, and each supporting edge bumps `confidence_pct` (`+10`, cap
+`+50`). So **if `kpi == confidence_pct(hypothesisId)`, the loop hits its target by
+the _volume_ of its own self-authored evidence — not by independent truth.** A goal
+could "succeed" having proven nothing.
+
+**Rule:** the KPI reader is **independent of the loop's own writes.** Valid v0
+readers:
+
+| KPI reader | Independent? | Notes |
+| ---------- | ------------ | ----- |
+| External metric (a real number the loop does not author — DB count, coverage %, market price) | ✅ | the target shape |
+| A **separate verifier/judge** — the **librarian** role reads the chain + grades it (the worker is the **storage-expert** role; Cogni already splits these) | ✅ | reuses the existing role split, mirrors `/goal`'s Haiku evaluator |
+| Held-out check (a test the worker can't see) | ✅ | strongest |
+| The goal's own `confidence_pct` | ❌ | **smoke-test only** — proves the loop _turns_, never that a goal is _met_. Must never gate a real goal. |
+
+The worker writes evidence; a different reader scores the KPI. `loopHaltReason`
+consumes `lastKpi` as an opaque 0–100 — it does not care who computed it, but the
+controller MUST wire it to an independent reader, not to `recomputeConfidence` of
+the row the loop is writing to.
 
 ---
 
@@ -163,6 +196,12 @@ each tick, halt on the first exhausted axis. This is `LoopBudget` in the seam fi
 | Iterations          | `maxIterations`     | `5`        | total Temporal-scheduled langgraph runs          |
 | Tokens              | `maxTokens`         | `200_000`  | running LLM-token sum across all iterations      |
 | Recursion depth     | `maxRecursionDepth` | `1`        | depth of spawned sub-goals (0 = no recursion)    |
+| No progress         | `maxStalledIterations` | `2`     | consecutive no-KPI-gain ticks → halt `no_progress` (invalidates) |
+
+**No-progress halt** stops a stuck goal from grinding to the iteration/token cap
+when the KPI isn't moving — the frontier "Progress" signal (AgentPRM). `LoopState`
+tracks `stalledIterations`; the pure predicate returns `no_progress` before the raw
+budget axes so a dead-end goal closes early instead of burning its full allotment.
 
 **Recursive allotment** = `maxRecursionDepth`. A loop step MAY decide the goal
 needs a sub-goal (a child hypothesis whose outcome becomes `evidence_for` the
@@ -201,28 +240,60 @@ computed from that evidence.**
 
 ---
 
+## Human surface: a goal is a type of agent
+
+A goal-loop **is** an agent type — a scheduled, self-terminating research agent —
+but it needs **no bespoke UI**. A goal is a `hypothesis` row with an evidence chain,
+so it already renders in the existing `/knowledge?mode=chains` view (`ChainPanel.tsx`):
+goal = chain root, the `evidence_for` atoms = the chain, `confidence_pct` = a progress
+proxy, the `outcome` = the verdict.
+
+What's actually missing is **navigation** — nothing leads a human there. The
+`schedules` surface is an **API** (`/api/v1/schedules`), not a page; "use it for now"
+means humans curl it, invisible.
+
+**v0 human UI = a thin "Goals" lens, NOT a new schedules page:**
+
+- list `hypothesis` rows with `resolution_strategy LIKE 'metric:%'`
+- per row: KPI vs target, budget burn (iterations / tokens), last run, enabled
+- each row links to its `/knowledge` chain (progress + verdict already render there)
+
+Don't stand up a parallel schedules UI page — that splits one concept across three
+surfaces (schedules API + knowledge chains + EDO). The single human concept is
+**a goal = schedule (cadence + budget) ⨝ knowledge chain (progress + verdict)**: the
+schedules API drives the loop, the knowledge chain shows it, the Goals lens joins
+them. Deferred to `/implement` alongside the controller.
+
+---
+
 ## What this PR ships vs defers
 
 **Ships (this PR — design + minimal seam):**
 
 - This design doc.
-- `packages/knowledge-store/src/domain/goal-loop.ts` — `Goal`, `LoopBudget`,
-  `LoopState`, `LoopHaltReason`, the pure `loopHaltReason` predicate, `haltEdge`,
-  the `metric:<kpi-id>` convention (`MetricResolutionStrategySchema`,
-  `kpiIdFromStrategy`), and `DEFAULT_LOOP_BUDGET`.
+- `packages/knowledge-store/src/domain/goal-loop.ts` — `Goal`, `LoopBudget`
+  (incl. `maxStalledIterations`), `LoopState` (incl. `stalledIterations`),
+  `LoopHaltReason` (incl. `no_progress`), the pure `loopHaltReason` predicate,
+  `haltEdge`, the `metric:<kpi-id>` convention (`MetricResolutionStrategySchema`,
+  `kpiIdFromStrategy`), the `KPI_VERIFIER_INDEPENDENT` invariant, and
+  `DEFAULT_LOOP_BUDGET`.
 - Barrel exports from `@cogni/knowledge-store`.
 
 **Deferred to a follow-up `/implement` (after review):**
 
-- `GoalLoopWorkflow` Temporal workflow + schedule registration.
+- The **verifier-independent KPI reader port** (`kpiId → 0–100`) — an external
+  metric or a separate librarian/judge, NOT `recomputeConfidence` of the row the
+  loop writes. Own-`confidence_pct` is a smoke-test only (see § worker ≠ verifier).
+- `GoalLoopWorkflow` Temporal workflow + schedule registration, threading
+  `stalledIterations` so `no_progress` fires.
 - The langgraph step node (one research/cite step per iteration).
-- The KPI reader port (`kpiId → 0–100`); v0 candidate = read the hypothesis's own
-  computed `confidence_pct`, requiring no new source.
 - The `metric:` dispatch branch in the resolver cron
   (`pendingResolutions({ strategy: "metric:" })` → controller).
 - Widening the `core__edo_hypothesize` Zod allow-list to accept `metric:<id>` as a
   resolution strategy at the tool boundary (validation-in-Zod per the spec).
 - `tags` ↔ `Goal` encode/decode helper + its tests.
+- The **"Goals" lens** UI (filter `metric:` hypotheses, KPI/budget header, link to
+  chain) — NOT a schedules page (see § Human surface).
 
 **Anti-sprawl note (per `knowledge-syntropy-expert`):** this is a Crawl-tier seam
 on `proj.knowledge-syntropy`, adjacent to the L0 Curator tier. It introduces no new

@@ -15,6 +15,11 @@
  *     `resolution_strategy` column as `metric:<kpi-id>`; no schema migration.
  *   - LOOP_TERMINATES — every loop run is bounded by LoopBudget; the guard is the
  *     first thing the controller checks each iteration.
+ *   - KPI_VERIFIER_INDEPENDENT — the KPI reader that produces `lastKpi` MUST be
+ *     independent of the loop's own writes. The worker (storage-expert role) files
+ *     evidence; a separate verifier (librarian/judge role, an external metric, or a
+ *     held-out check) reads the KPI. A loop that grades itself by its own
+ *     `confidence_pct` is a smoke-test only — never a real goal's KPI.
  * Side-effects: none
  * Links: docs/spec/knowledge-syntropy.md, docs/design/knowledge-goal-loop.md
  * @public
@@ -101,6 +106,12 @@ export const LoopBudgetSchema = z.object({
    * loop may grow, per EDO_RECURSION_VIA_CITATIONS.
    */
   maxRecursionDepth: z.number().int().min(0),
+  /**
+   * Consecutive iterations with no KPI gain before the loop halts early
+   * (`no_progress` → invalidates). Stops a stuck goal from grinding to the
+   * iteration/token cap. Frontier alignment: PRM "Progress" signal.
+   */
+  maxStalledIterations: z.number().int().positive(),
 });
 export type LoopBudget = z.infer<typeof LoopBudgetSchema>;
 
@@ -113,6 +124,7 @@ export const DEFAULT_LOOP_BUDGET: LoopBudget = {
   maxIterations: 5,
   maxTokens: 200_000,
   maxRecursionDepth: 1,
+  maxStalledIterations: 2,
 };
 
 // ---------------------------------------------------------------------------
@@ -126,6 +138,7 @@ export const DEFAULT_LOOP_BUDGET: LoopBudget = {
 export const LoopHaltReasonSchema = z.enum([
   "goal_met", // kpi >= target → file outcome (validates)
   "evaluate_at_passed", // wall-clock wall hit → file outcome (invalidates)
+  "no_progress", // KPI stalled for maxStalledIterations → file outcome (invalidates)
   "iterations_exhausted",
   "tokens_exhausted",
   "recursion_exhausted",
@@ -143,6 +156,8 @@ export const LoopStateSchema = z.object({
   recursionDepth: z.number().int().min(0),
   /** Most recent KPI reading, 0–100; null before the first read. */
   lastKpi: z.number().min(0).max(100).nullable(),
+  /** Consecutive iterations whose KPI read showed no gain over the prior. */
+  stalledIterations: z.number().int().min(0),
 });
 export type LoopState = z.infer<typeof LoopStateSchema>;
 
@@ -152,7 +167,7 @@ export type LoopState = z.infer<typeof LoopStateSchema>;
  * (LOOP_TERMINATES). `now` is injected so the check stays pure + testable.
  *
  * Order: goal-met wins over budget (a hit goal closes as validated even on the
- * last token); wall-clock wall next; then the three budget axes.
+ * last token); wall-clock wall next; then no-progress; then the three budget axes.
  */
 export function loopHaltReason(
   state: LoopState,
@@ -163,6 +178,9 @@ export function loopHaltReason(
   }
   if (now >= state.goal.evaluateAt) {
     return "evaluate_at_passed";
+  }
+  if (state.stalledIterations >= state.budget.maxStalledIterations) {
+    return "no_progress";
   }
   if (state.iterations >= state.budget.maxIterations) {
     return "iterations_exhausted";
