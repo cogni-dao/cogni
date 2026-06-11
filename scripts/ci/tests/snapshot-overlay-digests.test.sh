@@ -81,42 +81,42 @@ assert_eq() {
 ENV=candidate-a
 TREE="$TMPROOT/$ENV-tree"
 rm -rf "$TREE"
-emit_overlay "$ENV" operator         sha256:aaaa
-emit_overlay "$ENV" poly             sha256:bbbb
-emit_overlay "$ENV" resy             sha256:cccc
+emit_overlay "$ENV" node-template    sha256:aaaa
+emit_overlay "$ENV" operator         sha256:bbbb
+emit_overlay "$ENV" oss              sha256:cccc
 emit_overlay "$ENV" scheduler-worker sha256:dddd
 out=$(snapshot_in "$TREE" "$ENV")
-expected="operator	ghcr.io/cogni-dao/cogni-template@sha256:aaaa
-poly	ghcr.io/cogni-dao/cogni-template@sha256:bbbb
-resy	ghcr.io/cogni-dao/cogni-template@sha256:cccc
+expected="node-template	ghcr.io/cogni-dao/cogni-template@sha256:aaaa
+operator	ghcr.io/cogni-dao/cogni-template@sha256:bbbb
+oss	ghcr.io/cogni-dao/cogni-template@sha256:cccc
 scheduler-worker	ghcr.io/cogni-dao/cogni-template@sha256:dddd"
 assert_eq "case 1: all four targets snapshotted" "$expected" "$out"
 
 # ── Case 2: one overlay missing
 TREE="$TMPROOT/case2"
 mkdir -p "$TREE"
-emit_overlay "$ENV" operator sha256:aaaa
+emit_overlay "$ENV" operator sha256:bbbb
 mv "$TMPROOT/$ENV-tree/infra" "$TREE/"
-rm -rf "$TREE/infra/k8s/overlays/$ENV/poly"
+rm -rf "$TREE/infra/k8s/overlays/$ENV/oss"
 out=$(snapshot_in "$TREE" "$ENV")
-# operator + resy + scheduler-worker remain
-expected="operator	ghcr.io/cogni-dao/cogni-template@sha256:aaaa
-resy	ghcr.io/cogni-dao/cogni-template@sha256:cccc
+# node-template + operator + scheduler-worker remain
+expected="node-template	ghcr.io/cogni-dao/cogni-template@sha256:aaaa
+operator	ghcr.io/cogni-dao/cogni-template@sha256:bbbb
 scheduler-worker	ghcr.io/cogni-dao/cogni-template@sha256:dddd"
 assert_eq "case 2: missing overlay omitted" "$expected" "$out"
 
 # ── Case 3: mixed digest + newTag
 TREE="$TMPROOT/case3-tree"
-emit_overlay candidate-a operator         sha256:1111
-emit_overlay candidate-a poly             pr-999-abc-poly
-emit_overlay candidate-a resy             sha256:2222
-emit_overlay candidate-a scheduler-worker sha256:3333
+emit_overlay candidate-a node-template    sha256:1111
+emit_overlay candidate-a operator         sha256:3333
+emit_overlay candidate-a oss              pr-999-abc-oss
+emit_overlay candidate-a scheduler-worker sha256:4444
 mv "$TMPROOT/candidate-a-tree" "$TREE"  # latest emit_overlay run
 out=$(snapshot_in "$TREE" candidate-a)
-expected="operator	ghcr.io/cogni-dao/cogni-template@sha256:1111
-poly	ghcr.io/cogni-dao/cogni-template:pr-999-abc-poly
-resy	ghcr.io/cogni-dao/cogni-template@sha256:2222
-scheduler-worker	ghcr.io/cogni-dao/cogni-template@sha256:3333"
+expected="node-template	ghcr.io/cogni-dao/cogni-template@sha256:1111
+operator	ghcr.io/cogni-dao/cogni-template@sha256:3333
+oss	ghcr.io/cogni-dao/cogni-template:pr-999-abc-oss
+scheduler-worker	ghcr.io/cogni-dao/cogni-template@sha256:4444"
 assert_eq "case 3: tag-form preserved" "$expected" "$out"
 
 echo
