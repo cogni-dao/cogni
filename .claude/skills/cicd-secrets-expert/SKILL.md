@@ -54,6 +54,7 @@ Examples:
   Compose renders copies to create roles. (`DOLTGRES_PASSWORD` is the env Doltgres
   superuser the pod itself authenticates as — Doltgres RBAC is table-DML-only, so no
   per-node role; why + value-shape in [databases.md §5.2](../../../docs/spec/databases.md).)
+- `OPENFGA_DB_PASSWORD`: OpenBao custody. **OpenFGA is the first shared-infra DB given a dedicated, non-root login role** (its own `openfga` role, OpenBao-sourced — Phase A dropped root from the datastore DSN). That's the **hardening direction, not a snowflake**: `litellm` / `postgres` are still the un-hardened root-owned legacy. Consequence — **shared-infra DBs (openfga, litellm) are provisioned in the `INFRA_ONLY` pass only**; the per-node provision pass must not touch them (it holds no shared-infra password). `litellm` survives the per-node pass only by being root-owned (no password to demand); openfga's dedicated role _exposed_ that the per-node pass should never provision shared infra. `provision.sh` now gates openfga to `INFRA_ONLY`; gating `litellm` the same way is the fuller fix.
 - Public URLs / owner slugs / feature modes: repo-config, not OpenBao.
 
 ## Routing tree — where does the value render?

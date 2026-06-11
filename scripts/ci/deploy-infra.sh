@@ -722,8 +722,7 @@ OPENFGA_DB_PASSWORD="$(
     "role=${DEPLOY_ENVIRONMENT}-db-reader" "jwt=${jwt}" 2>/dev/null || true)"
   [ -n "$tok" ] || exit 0
   timeout 10 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
-    BAO_TOKEN="${tok}" bao kv get -format=json "cogni/${DEPLOY_ENVIRONMENT}/openfga" 2>/dev/null \
-    | jq -r '.data.data.OPENFGA_DB_PASSWORD // empty' 2>/dev/null || true
+    BAO_TOKEN="${tok}" bao kv get -field=OPENFGA_DB_PASSWORD "cogni/${DEPLOY_ENVIRONMENT}/openfga" 2>/dev/null || true
 )"
 export OPENFGA_DB_PASSWORD
 
@@ -890,8 +889,7 @@ DOLTGRES_PASSWORD_SSOT="$(
     "role=${DEPLOY_ENVIRONMENT}-db-reader" "jwt=${jwt}" 2>/dev/null || true)"
   [ -n "$tok" ] || exit 0
   timeout 10 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
-    BAO_TOKEN="${tok}" bao kv get -format=json "cogni/${DEPLOY_ENVIRONMENT}/operator" 2>/dev/null \
-    | jq -r '.data.data.DOLTGRES_PASSWORD // empty' 2>/dev/null || true
+    BAO_TOKEN="${tok}" bao kv get -field=DOLTGRES_PASSWORD "cogni/${DEPLOY_ENVIRONMENT}/operator" 2>/dev/null || true
 )"
 if [ -n "$DOLTGRES_PASSWORD_SSOT" ]; then
   DOLTGRES_PASSWORD="$DOLTGRES_PASSWORD_SSOT"
@@ -1076,8 +1074,7 @@ read_node_db_secret() {
   local node="$1" key="$2"
   timeout 10 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
     BAO_TOKEN="${DB_READER_TOKEN}" \
-    bao kv get -format=json "cogni/${DEPLOY_ENVIRONMENT}/${node}" 2>/dev/null \
-    | jq -r --arg k "$key" '.data.data[$k] // empty' 2>/dev/null || true
+    bao kv get -field="$key" "cogni/${DEPLOY_ENVIRONMENT}/${node}" 2>/dev/null || true
 }
 DB_READER_TOKEN="$(mint_db_reader_token || true)"
 [ -n "$DB_READER_TOKEN" ] || log_fatal "db-provision: could not mint ${DEPLOY_ENVIRONMENT}-db-reader token (OpenBao sealed / role absent) — per-node DB creds are required (#1584)"
