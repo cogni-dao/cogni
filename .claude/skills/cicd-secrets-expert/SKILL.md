@@ -164,6 +164,19 @@ No-human-secret done right: agent generates, agent pushes, **zero human, self-he
 
 **Heal-proof test** = redeploy twice; a PR on the test repo must still post a `cogni-git-review` review.
 
+## OpenBao availability — sealed = DOWN, not secure (READ THIS)
+
+Counterintuitive but load-bearing: a **sealed** OpenBao serves **nothing** — it 503s every ESO sync, every `materialize`/`reconcile-substrate` `auth/kubernetes/login`, and openfga's config load. OpenBao must run **UNSEALED ~100% of the time**; unsealed-and-running is the _correct_ operational state. The seal protects **data at rest** (stolen storage = encrypted/useless), **not** runtime access — that's auth methods + path policy (Invariant 6) + in-cluster-only (no Ingress). So "keep it sealed / minimize unsealed time" is backwards: an _unexpected_ seal is an **outage**, not a safe state.
+
+**The fragility (`bug.5011`, prod outage 2026-06-11 02:25):** prod OpenBao is **Shamir 1-of-1, no auto-unseal**. It OOMKilled on the 6 GB box → resealed → secret plane down (openfga 503, `node-substrate` promote failures) until a human `kubectl exec … bao operator unseal`. **Any** restart (OOM, reboot, chart upgrade) reseals it.
+
+**Recorded decision (`bug.5011`) — do not re-litigate without the trigger:**
+
+1. **Memory headroom** — OpenBao limit 512Mi→1Gi (#1617) so it isn't container-OOMKilled; #1616 lean-prod cut node pressure too. Mitigates the OOM _trigger_ only.
+2. **Sealed-state → Loki alert** — the no-silent-outage control: detect an unexpected seal, page, unseal in minutes. Free, no vendor. This is the durable fix, because you cannot prevent every reseal.
+3. **Auto-unseal (KMS) DEFERRED** behind a written trigger: _reseals recur post-#1617, OR a SOC2 engagement starts_. KMS is the audit-correct control but it is our first AWS/GCP dependency on a Cherry+OSS stack — premature at 0 users. If a real SOC2 deadline lands, flip it to now.
+4. **REJECTED: in-cluster stored-key unseal sidecar** — key-next-to-lock, fails SOC2.
+
 ## Anti-patterns — instant reject
 
 - Human typing a secret VALUE into a production UI or GitHub workflow input. See killer rule.
