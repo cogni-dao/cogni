@@ -1,1 +1,0 @@
-ALTER TABLE "epochs" ADD COLUMN "approvers" jsonb;

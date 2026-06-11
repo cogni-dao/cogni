@@ -118,11 +118,11 @@ write_files:
       echo "Waiting for Argo CD to be ready..."
       kubectl -n argocd wait --for=condition=Available deployment/argocd-server --timeout=300s
 
-      # Apply ApplicationSets (canary/preview/production) from repo
+      # Apply ApplicationSets (preview/production) from repo
       echo "Cloning repo for Argo ApplicationSets..."
       REPO_DIR="/tmp/cogni-bootstrap-repo"
       rm -rf "$REPO_DIR"
-      git clone --depth=1 --branch "${git_branch:-canary}" \
+      git clone --depth=1 --branch "${git_branch:-main}" \
         "https://github.com/cogni-dao/cogni.git" "$REPO_DIR"
 
       # Per-node AppSets: one `<env>-<node>-applicationset.yaml` object per node
@@ -139,7 +139,7 @@ write_files:
       rm -rf "$REPO_DIR"
 
       # Create app namespaces (Argo CreateNamespace=true handles this too, belt+suspenders)
-      for ns in cogni-canary cogni-preview cogni-production; do
+      for ns in cogni-preview cogni-production; do
         kubectl create namespace "$ns" 2>/dev/null || true
       done
 
