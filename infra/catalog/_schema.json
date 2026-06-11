@@ -121,13 +121,14 @@
     },
     "envs": {
       "type": "array",
-      "description": "task.5017 — the per-env node-set: which environments deploy this node. Consumed by scripts/ci/render-node-appset.sh (emits one ApplicationSet per env in this list) and scripts/ci/reconcile-node-substrate.sh (refuses to provision substrate for an env not listed). deploy ⊆ provisioned: an env only deploys nodes it lists. A node is flighted to candidate-a only when candidate-a is in its set — small by default; opt a node in to test it there.",
+      "description": "task.5017 — the per-env node-set: which environments deploy this node. Consumed by scripts/ci/render-node-appset.sh (emits one ApplicationSet per env in this list) and scripts/ci/reconcile-node-substrate.sh (refuses to provision substrate for an env not listed). deploy ⊆ provisioned: an env only deploys nodes it lists. Every node MUST include candidate-a (CANDIDATE_A_ALWAYS — the pre-merge flight/validation gate); preview and production are opt-in, added once a node is proven on candidate-a.",
       "items": {
         "type": "string",
         "enum": ["candidate-a", "preview", "production"]
       },
       "minItems": 1,
-      "uniqueItems": true
+      "uniqueItems": true,
+      "contains": { "const": "candidate-a" }
     },
     "is_primary_host": {
       "type": "boolean",

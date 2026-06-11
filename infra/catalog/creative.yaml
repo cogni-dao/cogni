@@ -10,7 +10,6 @@ image_repository: ghcr.io/cogni-dao/creative
 candidate_a_branch: deploy/candidate-a-creative
 preview_branch: deploy/preview-creative
 production_branch: deploy/production-creative
-# task.5017 — per-env node-set: production only. candidate-a is kept small
-# (operator + node-template + scheduler-worker); opt in here to flight-test on candidate-a.
-envs: [production]
+# task.5017 — per-env node-set (deploy ⊆ provisioned). Must include candidate-a (candidate-flightable); preview/production are opt-in once proven.
+envs: [candidate-a]
 path_prefix: nodes/creative/
