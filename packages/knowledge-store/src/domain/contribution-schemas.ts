@@ -56,36 +56,38 @@ export type ContributionCitationType = z.infer<
   typeof ContributionCitationTypeSchema
 >;
 
-export const KnowledgeContributionEditSchema = z.discriminatedUnion("op", [
-  z.object({ op: z.literal("insert"), entry: KnowledgeEntryInputSchema }),
-  z.object({
-    op: z.literal("update"),
-    targetRowId: z.string().min(1).max(256),
-    entry: KnowledgeEntryInputSchema,
-  }),
-  z.object({
-    op: z.literal("deprecate"),
-    targetRowId: z.string().min(1).max(256),
-    reason: z.string().min(1).max(512),
-  }),
-  z.object({
-    op: z.literal("cite"),
-    citingId: z.string().min(1).max(256),
-    citedId: z.string().min(1).max(256),
-    citationType: ContributionCitationTypeSchema,
-    context: z.string().max(512).optional(),
-  }),
-]).superRefine((edit, ctx) => {
-  // A self-referential edge would let a row support/contradict its own
-  // confidence — reject at the wire rather than in the adapter.
-  if (edit.op === "cite" && edit.citingId === edit.citedId) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "cite edge cannot be self-referential (citingId === citedId)",
-      path: ["citedId"],
-    });
-  }
-});
+export const KnowledgeContributionEditSchema = z
+  .discriminatedUnion("op", [
+    z.object({ op: z.literal("insert"), entry: KnowledgeEntryInputSchema }),
+    z.object({
+      op: z.literal("update"),
+      targetRowId: z.string().min(1).max(256),
+      entry: KnowledgeEntryInputSchema,
+    }),
+    z.object({
+      op: z.literal("deprecate"),
+      targetRowId: z.string().min(1).max(256),
+      reason: z.string().min(1).max(512),
+    }),
+    z.object({
+      op: z.literal("cite"),
+      citingId: z.string().min(1).max(256),
+      citedId: z.string().min(1).max(256),
+      citationType: ContributionCitationTypeSchema,
+      context: z.string().max(512).optional(),
+    }),
+  ])
+  .superRefine((edit, ctx) => {
+    // A self-referential edge would let a row support/contradict its own
+    // confidence — reject at the wire rather than in the adapter.
+    if (edit.op === "cite" && edit.citingId === edit.citedId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "cite edge cannot be self-referential (citingId === citedId)",
+        path: ["citedId"],
+      });
+    }
+  });
 export type KnowledgeContributionEdit = z.infer<
   typeof KnowledgeContributionEditSchema
 >;
