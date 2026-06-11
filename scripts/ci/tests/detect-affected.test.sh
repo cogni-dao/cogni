@@ -84,4 +84,34 @@ empty_output=$(
 echo "$empty_output" | grep -q 'Selection reason: turbo-no-image-targets:packages/node-contracts/src/foo.ts'
 echo "$empty_output" | grep -q 'Targets: none'
 
+# Substrate machinery: a change to a per-node provisioning script (not an image
+# build input) must select the node set so node-substrate re-runs on candidate-a.
+printf '%s\n' 'scripts/ci/reconcile-node-substrate.sh' > "$tmpdir/substrate-paths.txt"
+substrate_output=$(
+  TURBO_SCM_BASE=origin/main \
+  TURBO_SCM_HEAD=HEAD \
+  CHANGED_PATHS_FILE="$tmpdir/substrate-paths.txt" \
+  bash scripts/ci/detect-affected.sh
+)
+echo "$substrate_output" | grep -q 'Selection reason: substrate-machinery:scripts/ci/reconcile-node-substrate.sh'
+
+expected_substrate_targets=$(
+  # shellcheck source=../lib/image-tags.sh
+  . scripts/ci/lib/image-tags.sh
+  declare -A is_node=()
+  for node in "${NODE_TARGETS[@]}"; do is_node["$node"]=1; done
+  ordered_targets=()
+  for target in "${ALL_TARGETS[@]}"; do
+    [ -n "${is_node[$target]:-}" ] || continue
+    is_built_by_this_repo "$target" || continue
+    ordered_targets+=("$target")
+  done
+  IFS=,
+  printf '%s\n' "${ordered_targets[*]}"
+)
+echo "$substrate_output" | grep -q "Targets: ${expected_substrate_targets}"
+# Substrate-only change must NOT fan to non-node image targets (no no-op rebuilds
+# beyond the node set; deploy-infra / litellm etc. stay out).
+echo "$substrate_output" | grep -q 'Flight targets:'
+
 echo "detect-affected.test.sh OK"
