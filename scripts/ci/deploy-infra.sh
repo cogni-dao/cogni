@@ -1066,12 +1066,10 @@ emit_deployment_event "infra_deployment.db_provision_started" "in_progress" "Pro
 # creation to that loop left openfga uncreated → openfga-migrate hard-fails with
 # `database "openfga" does not exist`. This dedicated INFRA_ONLY pass guarantees
 # openfga + litellm exist before openfga-migrate regardless of node-cred state.
-log_info "  Provisioning shared infra DBs (litellm, openfga) + reconciling temporal role — decoupled from per-node creds..."
+log_info "  Provisioning shared infra DBs (litellm, openfga) — decoupled from per-node creds..."
 $RUNTIME_COMPOSE --profile bootstrap run --rm \
   -e "PROVISION_INFRA_ONLY=1" \
   -e "OPENFGA_DB_PASSWORD=${OPENFGA_DB_PASSWORD}" \
-  -e "TEMPORAL_DB_USER=${TEMPORAL_DB_USER}" \
-  -e "TEMPORAL_DB_PASSWORD=${TEMPORAL_DB_PASSWORD}" \
   db-provision
 # Per-node db-provision (#1584): provision.sh now reconciles per-node roles
 # app_<node>/service_<node> to the per-node passwords OpenBao holds at
@@ -1145,6 +1143,56 @@ else
 fi
 log_info "[$(date -u +%H:%M:%S)] DB provisioning complete"
 emit_deployment_event "infra_deployment.db_provision_complete" "success" "Database provisioned successfully"
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Step 6.5: Reconcile temporal-postgres superuser (idempotent; closes 28P01 trap)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Temporal runs on a DEDICATED postgres (compose service `temporal-postgres`) whose
+# `temporal` role is the SUPERUSER. That password is baked into the volume only at
+# first-init from TEMPORAL_DB_PASSWORD; nothing reconciles it afterward. When the env
+# value drifts from the frozen volume value (rotation / re-seed), the next deploy
+# restarts `temporal` against a password the volume superuser never adopted →
+# `pq: password authentication failed for user "temporal"` → temporal never binds
+# :7233 → every node's readiness fail-closes → all nodes 503 (prod + preview,
+# 2026-06-11). Reconcile the volume superuser to the OpenBao value BEFORE temporal
+# starts, idempotently every run, via the local-trust socket (no old password needed —
+# the manual heal both incidents). #1625 ALTERed a `temporal` role on the MAIN shared
+# postgres (the wrong DB) and never touched this volume; this is the real fix.
+if [[ -n "${TEMPORAL_DB_PASSWORD:-}" ]]; then
+  # TEMPORAL_DB_PASSWORD is catalog hex (generate: hex, bytes:24 → 48 hex chars);
+  # validate the shape so we never inject a malformed/quoted value into SQL.
+  if [[ "$TEMPORAL_DB_PASSWORD" =~ ^[0-9a-fA-F]+$ ]]; then
+    _tp_user="${TEMPORAL_DB_USER:-temporal}"
+    log_info "Bringing up temporal-postgres (dedicated) and reconciling its superuser..."
+    $RUNTIME_COMPOSE up -d temporal-postgres
+    # Wait for the dedicated postgres to accept local connections (pg_isready over
+    # the local-trust socket, no password) before ALTER — bounded, fail-loud.
+    _tp_elapsed=0
+    until $RUNTIME_COMPOSE exec -T temporal-postgres pg_isready -U "$_tp_user" -q; do
+      if [ "$_tp_elapsed" -ge 60 ]; then
+        log_fatal "temporal-postgres not ready after 60s — cannot reconcile superuser."
+      fi
+      sleep 2
+      _tp_elapsed=$((_tp_elapsed + 2))
+    done
+    # Local-trust socket: psql -U temporal -d postgres authenticates without the old
+    # password. -v binds the value safely; never echoed. SCRAM rehash on every run is
+    # cheap and idempotent.
+    if $RUNTIME_COMPOSE exec -T temporal-postgres \
+        psql -U "$_tp_user" -d postgres -v ON_ERROR_STOP=1 \
+        -v pw="$TEMPORAL_DB_PASSWORD" \
+        -c "ALTER USER \"$_tp_user\" WITH PASSWORD :'pw';" >/dev/null; then
+      log_info "temporal-postgres superuser reconciled to OpenBao value."
+    else
+      log_fatal "temporal-postgres superuser reconcile failed — refusing to start temporal against a drifted password (would 28P01)."
+    fi
+    unset _tp_user _tp_elapsed
+  else
+    log_fatal "TEMPORAL_DB_PASSWORD is not hex — refusing to reconcile temporal-postgres (malformed/unseeded value)."
+  fi
+else
+  log_warn "TEMPORAL_DB_PASSWORD unset (OpenBao sealed / unseeded) — skipping temporal-postgres reconcile; temporal will use the volume-init value."
+fi
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Step 6.6: Start/update infra services (rolling update, no down)
