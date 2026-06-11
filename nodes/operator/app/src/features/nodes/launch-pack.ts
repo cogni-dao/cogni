@@ -108,7 +108,7 @@ export function buildNodeLaunchPack(
     "9. Run agent-first API validation against that candidate.",
     "10. Present the human scorecard only after flight, /version, and agent-first validation are green.",
     "",
-    "Use `.claude/skills/node-formation-styling-guide/SKILL.md` when present for the customization PR. If parent merge, child image, parent pin, or flight eligibility is blocked, report the exact blocked scorecard row instead of inventing privileged manual steps.",
+    "Use `.claude/skills/node-styling/SKILL.md` for the customization PR. To screenshot your customization on the flighted candidate URL, use `.claude/skills/playwright-auth-bootstrap/SKILL.md` to bootstrap an authed Playwright session against the test env. If parent merge, child image, parent pin, or flight eligibility is blocked, report the exact blocked scorecard row instead of inventing privileged manual steps.",
   ].join("\n");
 
   return {

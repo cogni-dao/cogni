@@ -174,8 +174,10 @@ describe("buildNodeLaunchPack", () => {
     expect(pack.prompt).toContain("operator API");
     expect(pack.prompt).toContain("child image tag exists");
     expect(pack.prompt).toContain("parent pin agrees");
+    expect(pack.prompt).toContain(".claude/skills/node-styling/SKILL.md");
+    expect(pack.prompt).not.toContain("node-formation-styling-guide");
     expect(pack.prompt).toContain(
-      ".claude/skills/node-formation-styling-guide/SKILL.md"
+      ".claude/skills/playwright-auth-bootstrap/SKILL.md"
     );
     expect(pack.prompt).toContain("agent-first API validation");
     expect(pack.prompt).toContain("human scorecard");
