@@ -46,8 +46,19 @@ if [ -z "$LITELLM_DB" ]; then
   exit 1
 fi
 
-# OpenFGA database (shared, root-owned — single RBAC store server)
+# OpenFGA database (shared — single RBAC store server). Gets a dedicated
+# `openfga` login role whose password is OpenBao-sourced (Invariant 15), set-once
+# + reconciled like the per-node roles. Drops the root creds from the datastore
+# DSN (design.openfga-substrate-unification Phase A).
 OPENFGA_DB="${OPENFGA_DB_NAME:-}"
+OPENFGA_ROLE="openfga"
+OPENFGA_PASS="${OPENFGA_DB_PASSWORD:-}"
+# Fail loud on source-read failure (Invariant): if the DB exists in the catalog
+# but its OpenBao password didn't reach us, never fall back to root.
+if [ -n "$OPENFGA_DB" ] && [ -z "$OPENFGA_PASS" ]; then
+  echo "❌ ERROR: OPENFGA_DB_PASSWORD is required for the openfga role (OpenBao-sourced; never fall back to root)"
+  exit 1
+fi
 
 # Per-node app credentials. The role NAMES are COMPUTED from the node
 # (app_<node> / service_<node>); only the PASSWORDS are per-node OpenBao secrets,
@@ -308,15 +319,26 @@ else
   echo "   -> Database '$LITELLM_DB' already exists."
 fi
 
-# ── OpenFGA Database (shared, root-owned) ─────────────────────────────────
+# ── OpenFGA Database (dedicated openfga role) ─────────────────────────────
 if [ -n "$OPENFGA_DB" ]; then
-  echo "🔧 Checking openfga database '$OPENFGA_DB'..."
+  echo "🔧 Provisioning openfga database '$OPENFGA_DB' (role '$OPENFGA_ROLE')..."
+  provision_app_role "$OPENFGA_ROLE" "$OPENFGA_PASS"
   openfga_db_exists=$(run_sql_as_root "postgres" "SELECT 1 FROM pg_database WHERE datname = '$OPENFGA_DB'" | grep -c 1 || true)
   if [ "$openfga_db_exists" -eq 0 ]; then
-    echo "   -> Creating database '$OPENFGA_DB'..."
-    run_sql_as_root "postgres" "CREATE DATABASE \"$OPENFGA_DB\";"
+    echo "   -> Creating database '$OPENFGA_DB' with owner '$OPENFGA_ROLE'..."
+    run_sql_as_root "postgres" "CREATE DATABASE \"$OPENFGA_DB\" OWNER \"$OPENFGA_ROLE\";"
   else
-    echo "   -> Database '$OPENFGA_DB' already exists."
+    # Pre-migration store is root(superuser)-owned. Hand the openfga role the DB +
+    # schema + full rights on the EXISTING (root-created) objects, WITHOUT dropping
+    # data — store + tuple continuity (#1604). Grant-based, not REASSIGN OWNED:
+    # REASSIGN fails on superuser-owned objects "required by the database system".
+    echo "   -> Database '$OPENFGA_DB' exists; granting ownership/rights to '$OPENFGA_ROLE' (store preserved)..."
+    run_sql_as_root "postgres" "ALTER DATABASE \"$OPENFGA_DB\" OWNER TO \"$OPENFGA_ROLE\";"
+    run_sql_as_root "postgres" "GRANT CONNECT, CREATE, TEMP ON DATABASE \"$OPENFGA_DB\" TO \"$OPENFGA_ROLE\";"
+    run_sql_as_root "$OPENFGA_DB" "ALTER SCHEMA public OWNER TO \"$OPENFGA_ROLE\";"
+    run_sql_as_root "$OPENFGA_DB" "GRANT ALL ON SCHEMA public TO \"$OPENFGA_ROLE\";"
+    run_sql_as_root "$OPENFGA_DB" "GRANT ALL ON ALL TABLES IN SCHEMA public TO \"$OPENFGA_ROLE\";"
+    run_sql_as_root "$OPENFGA_DB" "GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO \"$OPENFGA_ROLE\";"
   fi
 else
   echo "   -> OPENFGA_DB_NAME not set; skipping openfga database provisioning."

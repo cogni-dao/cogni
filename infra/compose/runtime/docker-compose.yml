@@ -270,6 +270,7 @@ services:
       APP_DB_READONLY_PASSWORD: ${APP_DB_READONLY_PASSWORD:-}
       LITELLM_DB_NAME: litellm
       OPENFGA_DB_NAME: openfga
+      OPENFGA_DB_PASSWORD: ${OPENFGA_DB_PASSWORD}
     volumes:
       - ./postgres-init/provision.sh:/app/provision.sh:ro
     entrypoint: ["/bin/bash", "/app/provision.sh"]
@@ -290,7 +291,7 @@ services:
     command: migrate
     environment:
       - OPENFGA_DATASTORE_ENGINE=postgres
-      - OPENFGA_DATASTORE_URI=postgres://${POSTGRES_ROOT_USER}:${POSTGRES_ROOT_PASSWORD}@postgres:5432/openfga?sslmode=disable
+      - OPENFGA_DATASTORE_URI=postgres://openfga:${OPENFGA_DB_PASSWORD}@postgres:5432/openfga?sslmode=disable
     depends_on:
       postgres:
         condition: service_healthy
@@ -309,7 +310,7 @@ services:
     command: run
     environment:
       - OPENFGA_DATASTORE_ENGINE=postgres
-      - OPENFGA_DATASTORE_URI=postgres://${POSTGRES_ROOT_USER}:${POSTGRES_ROOT_PASSWORD}@postgres:5432/openfga?sslmode=disable
+      - OPENFGA_DATASTORE_URI=postgres://openfga:${OPENFGA_DB_PASSWORD}@postgres:5432/openfga?sslmode=disable
       - OPENFGA_LOG_FORMAT=json
       - OPENFGA_METRICS_ADDR=0.0.0.0:2112
       - OPENFGA_PLAYGROUND_ENABLED=false
