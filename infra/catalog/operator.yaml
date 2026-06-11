@@ -27,7 +27,7 @@ migrator_tag_suffix: "-operator-migrate"
 candidate_a_branch: deploy/candidate-a-operator
 preview_branch: deploy/preview-operator
 production_branch: deploy/production-operator
-# task.5017 — per-env node-set. operator is the backbone: deploys to every env.
+# task.5017 — per-env node-set (deploy ⊆ provisioned). Must include candidate-a (candidate-flightable); preview/production are opt-in once proven.
 envs: [candidate-a, preview, production]
 path_prefix: nodes/operator/
 # task.5078 — operator serves the bare base domain (https://${DOMAIN}); every

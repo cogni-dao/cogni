@@ -28,10 +28,10 @@ has_node_targets="$(awk -F= '$1 == "has_node_targets" {print $2}' "$out")"
 [[ "$has_node_targets" == "true" ]]
 grep -q "Skipping targets not in the preview node-set" "$TMPROOT/stdout"
 
-# task.5017 falsifying gate: please HAS a preview overlay but its catalog
-# envs: is [candidate-a, production] — deploy ⊆ provisioned must skip it for
-# preview, yet keep it for production. Without the envs gate this regresses to
-# selecting please and hard-failing the (deleted) preview AppSet apply.
+# task.5017 falsifying gate: please's catalog envs: is [candidate-a] — deploy ⊆
+# provisioned must SKIP it for preview AND production (not in those sets), yet
+# KEEP it for candidate-a. Without the envs gate this regresses to selecting
+# please and hard-failing the (deleted) preview/production AppSet apply.
 : > "$out"
 GITHUB_OUTPUT="$out" OVERLAY_ENV=preview NODES_INPUT="please" \
   bash scripts/ci/resolve-promote-targets.sh > "$TMPROOT/offset-stdout"
@@ -39,8 +39,8 @@ GITHUB_OUTPUT="$out" OVERLAY_ENV=preview NODES_INPUT="please" \
 grep -q "Skipping targets not in the preview node-set" "$TMPROOT/offset-stdout"
 
 : > "$out"
-GITHUB_OUTPUT="$out" OVERLAY_ENV=production NODES_INPUT="please" \
-  bash scripts/ci/resolve-promote-targets.sh > "$TMPROOT/prod-stdout"
+GITHUB_OUTPUT="$out" OVERLAY_ENV=candidate-a NODES_INPUT="please" \
+  bash scripts/ci/resolve-promote-targets.sh > "$TMPROOT/canda-stdout"
 [[ "$(awk -F= '$1 == "targets_json" {print substr($0, length($1) + 2)}' "$out")" == '["please"]' ]]
 
 : > "$out"
