@@ -1084,12 +1084,34 @@ $RUNTIME_COMPOSE --profile bootstrap run --rm openfga-migrate
 # migrator Job (infra/k8s/base/node-app/migration-job.yaml).
 # Guarded on compose presence — tolerates envs where doltgres is not in the compose file.
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Doltgres superuser password — authoritative source is the OpenBao SSOT, not the
+# fresh derive_secret. The live volume's superuser password is the one the running
+# apps already use, composed into DOLTGRES_URL at cogni/<env>/<node> (the #1610
+# recompose-excluded SSOT). Re-deriving from POSTGRES_ROOT_PASSWORD drifts whenever
+# the volume predates a root-cred rotation/restore — that drift 28P01'd prod
+# node-substrate at doltgres-provision (2026-06-10). Source the connect+compose
+# password from OpenBao so the provisioner and the per-node DOLTGRES_URL converge
+# on the live volume value. Non-destructive: no ALTER, never re-keys the volume.
+# Falls back to the derived value when OpenBao has no DOLTGRES_URL yet (fresh env).
+for _dg_node in "${NODE_TARGETS[@]}"; do
+  _dg_url="$(read_node_db_secret "$_dg_node" DOLTGRES_URL)"
+  [ -n "$_dg_url" ] || continue
+  _dg_pw="$(printf '%s' "$_dg_url" | sed -E 's#^postgresql://[^:]+:([^@]+)@.*#\1#')"
+  if [ -n "$_dg_pw" ] && [ "$_dg_pw" != "$_dg_url" ]; then
+    [ "$_dg_pw" != "$DOLTGRES_PASSWORD" ] && log_warn "Doltgres superuser password sourced from OpenBao SSOT (differs from derived — volume predates a root-cred rotation/restore)"
+    DOLTGRES_PASSWORD="$_dg_pw"
+    break
+  fi
+done
+
 if $RUNTIME_COMPOSE config --services 2>/dev/null | grep -q '^doltgres$'; then
   log_info "[$(date -u +%H:%M:%S)] Bringing up doltgres..."
   $RUNTIME_COMPOSE up -d doltgres
 
   log_info "[$(date -u +%H:%M:%S)] Provisioning Doltgres DBs + roles..."
-  $RUNTIME_COMPOSE --profile bootstrap run --rm doltgres-provision
+  $RUNTIME_COMPOSE --profile bootstrap run --rm \
+    -e DOLTGRES_PASSWORD="$DOLTGRES_PASSWORD" \
+    doltgres-provision
 
   log_info "[$(date -u +%H:%M:%S)] Doltgres up + DBs provisioned. Schema migration runs as k8s PreSync Job."
 else

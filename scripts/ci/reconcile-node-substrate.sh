@@ -269,6 +269,22 @@ app_db_service_password="$(bao_get_field "$TARGET_NODE" APP_DB_SERVICE_PASSWORD)
   || fail "per-node DB creds absent at cogni/${DEPLOY_ENVIRONMENT}/${TARGET_NODE} — run secret-materialize first (it owns per-node APP_DB_PASSWORD/APP_DB_SERVICE_PASSWORD)"
 mark_row db_creds read "read per-node DB creds from OpenBao (key names only)"
 
+# Doltgres superuser password — sourced from the authoritative OpenBao SSOT
+# (DOLTGRES_URL at cogni/<env>/<node>, the #1610 recompose-excluded value the live
+# volume + running apps already use). Passed to doltgres-provision below so it
+# connects with the live volume's password instead of a possibly-drifted derived
+# value (prod node-substrate 28P01'd here on 2026-06-10). Empty on fresh envs →
+# provisioner falls back to the VM .env DOLTGRES_PASSWORD. Non-destructive: never
+# re-keys the volume, never ALTERs.
+doltgres_url="$(bao_get_field "$TARGET_NODE" DOLTGRES_URL)"
+doltgres_superuser_password=""
+if [[ -n "$doltgres_url" ]]; then
+  doltgres_superuser_password="$(printf '%s' "$doltgres_url" | sed -E 's#^postgresql://[^:]+:([^@]+)@.*#\1#')"
+  [[ "$doltgres_superuser_password" == "$doltgres_url" ]] && doltgres_superuser_password=""
+fi
+dg_pw_env=""
+[[ -n "$doltgres_superuser_password" ]] && dg_pw_env="-e DOLTGRES_PASSWORD='${doltgres_superuser_password}'"
+
 # DSN seeding removed: secret-materialize composes + writes the per-node DSNs
 # (DATABASE_URL/DATABASE_SERVICE_URL/DOLTGRES_URL) to cogni/<env>/<node>. This phase
 # holds a read-only db-reader token and performs zero OpenBao writes — it consumes
@@ -356,7 +372,7 @@ remote "set -euo pipefail
     db-provision >/dev/null
   if \"\${runtime_compose[@]}\" config --services 2>/dev/null | grep -q '^doltgres$'; then
     \"\${runtime_compose[@]}\" up -d doltgres >/dev/null
-    \"\${runtime_compose[@]}\" --profile bootstrap run --rm doltgres-provision >/dev/null
+    \"\${runtime_compose[@]}\" --profile bootstrap run --rm ${dg_pw_env} doltgres-provision >/dev/null
   fi"
 
 mark_row remote_reconcile updated "edge route, DB inventory, and DB provisioners reconciled on VM"
