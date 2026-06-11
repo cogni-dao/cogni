@@ -120,13 +120,23 @@ jobs:
       # Intentionally inline — single-workflow gate, no logic duplicated across
       # workflows. SCRIPTS_ARE_THE_API targets cross-workflow drift, not unique
       # gate policy. See docs/spec/node-ci-cd-contract.md.
+      #
+      # ARG_MAX: dorny's matched-file JSON is spliced into a quoted heredoc at
+      # YAML-render time, NOT passed via `env:`. A whole-node-retirement diff
+      # (purge #1631, ~2200 deleted paths) overflows the execve arg+env limit
+      # when `operator_files` rides in `env:`, crashing the step with
+      # "Argument list too long" before bash even starts. Heredoc bodies are
+      # written to the script file on disk, so they don't count against ARG_MAX.
       - name: Enforce single-domain scope
-        env:
-          MATCHED: ${{ steps.domains.outputs.changes }}
-          OPERATOR_FILES: ${{ steps.domains.outputs.operator_files }}
-          CANARY_FILES: ${{ steps.domains.outputs.canary_files }}
-          RESY_FILES: ${{ steps.domains.outputs.resy_files }}
         run: |
+          # MATCHED is small (domain-name array); OPERATOR_FILES can be MB.
+          MATCHED='${{ steps.domains.outputs.changes }}'
+          opf="$(mktemp)"
+          cat > "$opf" <<'COGNI_OPERATOR_FILES_EOF'
+          ${{ steps.domains.outputs.operator_files }}
+          COGNI_OPERATOR_FILES_EOF
+          OPERATOR_FILES="$(cat "$opf")"
+
           count=$(jq 'length' <<<"$MATCHED")
           SCOPE=$(jq -r 'if length == 0 then "none" else join(" + ") end' <<<"$MATCHED")
 
@@ -137,6 +147,32 @@ jobs:
           if [ "$count" -le 1 ]; then
             report "✅ scope: ${SCOPE}"
             exit 0
+          fi
+
+          # NODE_RETIREMENT exemption: a deletion-only sweep across one-or-more
+          # fully-removed nodes is a sanctioned operator-domain retirement, not a
+          # cross-node feature change. A fully-deleted node drops out of the
+          # generated dorny filter (render-scope-filters.sh keys on the surviving
+          # nodes/* listing), so a pure retirement usually collapses to count<=1
+          # above; this branch is the first-class guard for the residual case
+          # where a still-filtered node is wholly removed in the same diff. PASS
+          # iff EVERY non-operator domain in S is a nodes/<node>/ tree with NO
+          # tracked file left on HEAD (whole-tree removal). A PR that edits a
+          # surviving node still fails — git ls-files returns its files.
+          NON_OPERATOR_DOMAINS=$(jq -r 'map(select(. != "operator")) | .[]' <<<"$MATCHED")
+          if [ -n "$NON_OPERATOR_DOMAINS" ]; then
+            all_retired=true
+            while IFS= read -r dom; do
+              [ -z "$dom" ] && continue
+              if git ls-files -- "nodes/${dom}" | grep -q .; then
+                all_retired=false; break
+              fi
+            done <<<"$NON_OPERATOR_DOMAINS"
+            if [ "$all_retired" = true ]; then
+              retired_csv=$(tr '\n' ',' <<<"$NON_OPERATOR_DOMAINS" | sed 's/,$//; s/,/, /g')
+              report "✅ scope: node retirement (deletion-only across fully-removed nodes: ${retired_csv})"
+              exit 0
+            fi
           fi
 
           # The single non-operator node (if exactly one), for the NODE_FORMATION
@@ -178,10 +214,12 @@ jobs:
           # today, but changing that entrypoint for shared fast-check behavior
           # is operator-owned tooling. Keep this bounded to exact root app
           # config files plus the fast-check/Vitest policy surface.
-          NON_OPERATOR_FILES=$(jq -nc \
-            --argjson canary "${CANARY_FILES:-[]}" \
-            --argjson resy "${RESY_FILES:-[]}" \
-            '$canary + $resy')
+          # Non-operator files = full changed-files − operator-matched files
+          # (CATALOG_IS_SSOT — no hand-listed per-node `<slug>_files` env, which
+          # rotted to canary/resy refs after the purge).
+          chf="$(mktemp)"
+          git diff --name-only "$(git merge-base origin/main HEAD)" | jq -R . | jq -s . > "$chf"
+          NON_OPERATOR_FILES=$(jq -nc --slurpfile changed "$chf" --argjson op "$OPERATOR_FILES" '$changed[0] - $op')
           if jq -e 'index("operator") != null' <<<"$MATCHED" >/dev/null \
              && jq -e 'length > 0 and all(test("^nodes/[^/]+/app/vitest\\.config\\.mts$"))' <<<"$NON_OPERATOR_FILES" >/dev/null \
              && jq -e 'all(

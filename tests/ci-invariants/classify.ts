@@ -142,6 +142,14 @@ function isNodeWiring(path: string, node: string): boolean {
  * Ride-along: if every operator-domain entry matches a RIDE_ALONG_PATTERNS
  * predicate and exactly one non-operator domain is also present, drop
  * "operator" from the set.
+ *
+ * NODE_RETIREMENT is intentionally NOT modeled here. Whether a node is "fully
+ * retired" depends on git state (no tracked file left on HEAD), which this pure,
+ * path-only classifier cannot observe. A pure retirement also drops the node
+ * from the generated dorny filter (render-scope-filters.sh keys on surviving
+ * nodes/*), so it collapses to operator-domain before classify is even reached.
+ * The bash gate in ci.yaml owns the residual still-filtered-but-wholly-removed
+ * case via `git ls-files`; see that step's NODE_RETIREMENT branch.
  */
 export function classify(
   changedPaths: string[],
