@@ -270,13 +270,16 @@ app_db_service_password="$(bao_get_field "$TARGET_NODE" APP_DB_SERVICE_PASSWORD)
 mark_row db_creds read "read per-node DB creds from OpenBao (key names only)"
 
 # Doltgres superuser password — sourced from the authoritative OpenBao SSOT
-# (DOLTGRES_URL at cogni/<env>/<node>, the #1610 recompose-excluded value the live
-# volume + running apps already use). Passed to doltgres-provision below so it
-# connects with the live volume's password instead of a possibly-drifted derived
-# value (prod node-substrate 28P01'd here on 2026-06-10). Empty on fresh envs →
-# provisioner falls back to the VM .env DOLTGRES_PASSWORD. Non-destructive: never
-# re-keys the volume, never ALTERs.
-doltgres_url="$(bao_get_field "$TARGET_NODE" DOLTGRES_URL)"
+# (DOLTGRES_URL, the #1610 recompose-excluded value the live volume + running apps
+# already use). The Doltgres superuser is shared across all nodes, so read it from
+# the primary (operator) whose URL tracks the live volume; per-node URLs can diverge
+# (recomposed to a new derived value). Fall back to this node on non-operator-primary
+# envs. Passed to doltgres-provision below so it connects with the live volume's
+# password instead of a possibly-drifted derived value (prod node-substrate 28P01'd
+# here on 2026-06-10). Empty on fresh envs → provisioner falls back to the VM .env
+# DOLTGRES_PASSWORD. Non-destructive: never re-keys the volume, never ALTERs.
+doltgres_url="$(bao_get_field operator DOLTGRES_URL)"
+[[ -n "$doltgres_url" ]] || doltgres_url="$(bao_get_field "$TARGET_NODE" DOLTGRES_URL)"
 doltgres_superuser_password=""
 if [[ -n "$doltgres_url" ]]; then
   doltgres_superuser_password="$(printf '%s' "$doltgres_url" | sed -E 's#^postgresql://[^:]+:([^@]+)@.*#\1#')"

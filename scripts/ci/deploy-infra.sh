@@ -1093,16 +1093,26 @@ $RUNTIME_COMPOSE --profile bootstrap run --rm openfga-migrate
 # password from OpenBao so the provisioner and the per-node DOLTGRES_URL converge
 # on the live volume value. Non-destructive: no ALTER, never re-keys the volume.
 # Falls back to the derived value when OpenBao has no DOLTGRES_URL yet (fresh env).
-for _dg_node in "${NODE_TARGETS[@]}"; do
+# Read the AUTHORITATIVE node's DOLTGRES_URL — the primary (operator), whose value
+# the running app uses and node-substrate already proved authenticates against the
+# live volume. Other nodes' OpenBao URLs can be stale/divergent (recomposed to the
+# new derived value), so picking the "first node with a URL" can grab the wrong one.
+# Prefer operator; fall back to the first node that has a URL (non-operator-primary
+# envs). Only override when the SSOT differs from the derived value (drifted volume).
+_dg_pw=""
+for _dg_node in operator "${NODE_TARGETS[@]}"; do
   _dg_url="$(read_node_db_secret "$_dg_node" DOLTGRES_URL)"
   [ -n "$_dg_url" ] || continue
   _dg_pw="$(printf '%s' "$_dg_url" | sed -E 's#^postgresql://[^:]+:([^@]+)@.*#\1#')"
   if [ -n "$_dg_pw" ] && [ "$_dg_pw" != "$_dg_url" ]; then
-    [ "$_dg_pw" != "$DOLTGRES_PASSWORD" ] && log_warn "Doltgres superuser password sourced from OpenBao SSOT (differs from derived — volume predates a root-cred rotation/restore)"
-    DOLTGRES_PASSWORD="$_dg_pw"
     break
   fi
+  _dg_pw=""
 done
+if [ -n "$_dg_pw" ] && [ "$_dg_pw" != "$DOLTGRES_PASSWORD" ]; then
+  log_warn "Doltgres superuser password sourced from OpenBao SSOT (differs from derived — volume predates a root-cred rotation/restore)"
+  DOLTGRES_PASSWORD="$_dg_pw"
+fi
 
 if $RUNTIME_COMPOSE config --services 2>/dev/null | grep -q '^doltgres$'; then
   log_info "[$(date -u +%H:%M:%S)] Bringing up doltgres..."
