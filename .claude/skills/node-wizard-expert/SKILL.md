@@ -40,6 +40,8 @@ not progress by themselves. Progress is a scorecard row moving from blocked to
 pass without privileged manual bridge work. A child commit without a child
 `sha-<child-sha>` GHCR image is a blocker, not a deployable pin.
 
+**DNS + edge are automatic — never hand-provision them.** A wizard-born node's public host (`<node>-<env>`) is reconciled per-env on flight by `reconcile-node-dns.sh` (catalog-driven A-record upsert), and its edge Caddy route by the flight's `node-substrate` job (`reconcile-edge-caddy.remote.sh`) — both idempotent, no manual step. The wizard declares the catalog row; the flight resolves the host. Canon: [`docs/spec/ci-cd.md` Axiom 21 `DNS_IS_RECONCILED_PER_ENV`](../../../docs/spec/ci-cd.md); operational detail in the `dns-ops` skill. A fresh-flight `NXDOMAIN` is almost always negative-cache — re-check `dig <host> +short @1.1.1.1`.
+
 ## Repo Ancestry Rule
 
 Wizard-minted nodes must be named forks of `node-template`, not GitHub template-generated repos. Template generation copies a snapshot without shared git history, so agents cannot fetch `node-template` and merge future template updates. The publish path should call `GitHubRepoWriter.forkFromTemplate`, wait for the forked `main`, commit only the regenerated `.cogni/repo-spec.yaml` identity on top, and pin that identity commit as the operator submodule gitlink.
