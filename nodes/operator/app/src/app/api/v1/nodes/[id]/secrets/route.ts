@@ -32,11 +32,7 @@ import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import type { OperatorSecretsPlanePort } from "@/ports";
 import { nodes } from "@/shared/db/nodes";
 import { serverEnv } from "@/shared/env";
-import {
-  EVENT_NAMES,
-  logEvent,
-  type RequestContext,
-} from "@/shared/observability";
+import { EVENT_NAMES, type RequestContext } from "@/shared/observability";
 import { isNodeSecretAllowed } from "@/shared/secrets/node-secrets-allowlist.data";
 
 export const runtime = "nodejs";
@@ -89,10 +85,8 @@ function logSecretWriteComplete(
     ...fields,
   };
   if (fields.outcome === "success") {
-    logEvent(
-      ctx.log,
-      EVENT_NAMES.NODE_SECRET_WRITE_COMPLETE,
-      payload,
+    ctx.log.info(
+      { event: EVENT_NAMES.NODE_SECRET_WRITE_COMPLETE, ...payload },
       EVENT_NAMES.NODE_SECRET_WRITE_COMPLETE
     );
     return;
@@ -157,7 +151,10 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         errorCode: "authz_unavailable",
       });
       return NextResponse.json(
-        { error: "authorization not configured", errorCode: "authz_unavailable" },
+        {
+          error: "authorization not configured",
+          errorCode: "authz_unavailable",
+        },
         { status: 503 }
       );
     }
@@ -181,7 +178,10 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       });
       return NextResponse.json(
         {
-          error: code === "authz_unavailable" ? "authorization unavailable" : "not authorized",
+          error:
+            code === "authz_unavailable"
+              ? "authorization unavailable"
+              : "not authorized",
           errorCode: code,
         },
         { status }
@@ -200,7 +200,10 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         errorCode: "key_not_allowed",
       });
       return NextResponse.json(
-        { error: "key not declared for this node (tier A2)", errorCode: "key_not_allowed" },
+        {
+          error: "key not declared for this node (tier A2)",
+          errorCode: "key_not_allowed",
+        },
         { status: 403 }
       );
     }
@@ -219,7 +222,10 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         errorCode: "deploy_env_unset",
       });
       return NextResponse.json(
-        { error: "deploy environment not configured", errorCode: "deploy_env_unset" },
+        {
+          error: "deploy environment not configured",
+          errorCode: "deploy_env_unset",
+        },
         { status: 503 }
       );
     }
@@ -240,7 +246,9 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       return NextResponse.json(
         {
           error:
-            error instanceof Error ? error.message : "secrets plane not configured",
+            error instanceof Error
+              ? error.message
+              : "secrets plane not configured",
           errorCode: "secrets_plane_config_missing",
         },
         { status: 503 }

@@ -26,7 +26,9 @@ describe("node-secrets allowlist (gate 2)", () => {
   });
 
   it("refuses an unknown slug entirely (no default bucket)", () => {
-    expect(isNodeSecretAllowed("does-not-exist", "POLYGON_RPC_URL")).toBe(false);
+    expect(isNodeSecretAllowed("does-not-exist", "POLYGON_RPC_URL")).toBe(
+      false
+    );
     expect(isNodeSecretAllowed("", "POLYGON_RPC_URL")).toBe(false);
   });
 

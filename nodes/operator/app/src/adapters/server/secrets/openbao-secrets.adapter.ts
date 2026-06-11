@@ -133,8 +133,14 @@ export class OpenBaoSecretsAdapter implements OperatorSecretsPlanePort {
   }
 }
 
-function httpError(code: string, status: number): Error & { code: string; status: number } {
-  return Object.assign(new Error(`${code} (status ${status})`), { code, status });
+function httpError(
+  code: string,
+  status: number
+): Error & { code: string; status: number } {
+  return Object.assign(new Error(`${code} (status ${status})`), {
+    code,
+    status,
+  });
 }
 
 async function readVersion(res: Response, failCode: string): Promise<number> {

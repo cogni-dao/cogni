@@ -25,18 +25,19 @@
  */
 
 /** Node slug → the A2 keys that slug may self-serve. Mirrors catalog `service: <slug>` + tier A2. */
-export const NODE_SECRETS_ALLOWLIST: Readonly<Record<string, readonly string[]>> =
-  {
-    poly: [
-      "POLYGON_RPC_URL",
-      "PRIVY_USER_WALLETS_APP_ID",
-      "PRIVY_USER_WALLETS_APP_SECRET",
-      "PRIVY_USER_WALLETS_SIGNING_KEY",
-      "POLY_WALLET_AEAD_KEY_HEX",
-      "POLY_WALLET_AEAD_KEY_ID",
-    ],
-    operator: ["NODE_MINT_OWNER", "NODE_TEMPLATE_OWNER"],
-  } as const;
+export const NODE_SECRETS_ALLOWLIST: Readonly<
+  Record<string, readonly string[]>
+> = {
+  poly: [
+    "POLYGON_RPC_URL",
+    "PRIVY_USER_WALLETS_APP_ID",
+    "PRIVY_USER_WALLETS_APP_SECRET",
+    "PRIVY_USER_WALLETS_SIGNING_KEY",
+    "POLY_WALLET_AEAD_KEY_HEX",
+    "POLY_WALLET_AEAD_KEY_ID",
+  ],
+  operator: ["NODE_MINT_OWNER", "NODE_TEMPLATE_OWNER"],
+} as const;
 
 /**
  * Gate 2: is `key` an allowlisted A2 secret for `nodeSlug`? Fail-closed — an
