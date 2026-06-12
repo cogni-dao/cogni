@@ -27,9 +27,11 @@ import { z } from "zod";
 
 import type {
   CandidateFlightDispatchResult,
+  NodePreviewPromoteResult,
   OperatorDeployPlanePort,
   PreparedNodeRefCandidateFlight,
   PrepareNodeRefCandidateFlightInput,
+  PromoteNodeToPreviewInput,
 } from "@/ports";
 import {
   insertAppsetKustomization,
@@ -364,6 +366,72 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       sourceRepo: catalog.data.source_repo,
       image: `${catalog.data.image_repository}:sha-${sourceSha}`,
       parentPin,
+    };
+  }
+
+  /**
+   * Node-merge → preview tie (PREVIEW_VIA_FLIGHT_PREVIEW). Bumps the parent catalog
+   * `source_sha` pin to the merged node SHA and enables auto-merge on the one-line PR.
+   * Landing that PR on parent main is the flight-preview.yml trigger — we never dispatch
+   * promote-and-deploy here. Image existence is NOT gated in-app: the GitHub Packages API
+   * false-negatives on private node images (git-app-expert), so flight-preview's own
+   * "no images found" hard-fail is the loud backstop, not a silent skip.
+   */
+  async promoteNodeToPreview(
+    input: PromoteNodeToPreviewInput
+  ): Promise<NodePreviewPromoteResult> {
+    const { parentOwner, parentRepo, slug, sourceSha } = input;
+    if (!SOURCE_SHA_PATTERN.test(sourceSha)) {
+      throw deployPlaneError(
+        "invalid_source_sha",
+        "sourceSha must be a 40-character hex SHA",
+        400
+      );
+    }
+
+    const catalogText = await this.fetchFileText({
+      owner: parentOwner,
+      repo: parentRepo,
+      path: `infra/catalog/${slug}.yaml`,
+      ref: "main",
+    });
+    if (!catalogText) {
+      throw deployPlaneError(
+        "catalog_missing",
+        `node catalog entry not found for ${slug}`,
+        404
+      );
+    }
+    const catalog = CatalogEntrySchema.safeParse(parseYaml(catalogText));
+    if (!catalog.success || catalog.data.name !== slug) {
+      throw deployPlaneError(
+        "invalid_catalog",
+        `invalid node catalog entry for ${slug}`,
+        409
+      );
+    }
+
+    const pin = await this.ensureCatalogSourceSha({
+      owner: parentOwner,
+      repo: parentRepo,
+      slug,
+      nodeRepoUrl: catalog.data.source_repo,
+      nodeRepoHeadSha: sourceSha,
+    });
+    if (pin.status === "already_pinned") {
+      return { status: "already_pinned", currentSha: pin.currentSha };
+    }
+    const autoMergeEnabled = await this.enableAutoMerge(
+      parentOwner,
+      parentRepo,
+      pin.prNumber
+    );
+    return {
+      status: "pin_pr_opened",
+      prNumber: pin.prNumber,
+      prUrl: pin.prUrl,
+      currentSha: pin.currentSha,
+      autoMergeEnabled,
     };
   }
 
@@ -890,6 +958,38 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       }
     }
     return count;
+  }
+
+  /**
+   * Enable GitHub auto-merge (SQUASH) on a parent PR. `main` has no merge queue, so auto-merge
+   * lands the PR the moment its required checks (unit/component/static/manifest) pass — and that
+   * push to `main` fires flight-preview.yml. Non-fatal: if the repo disallows auto-merge or the PR
+   * has no pending checks to gate on, GitHub rejects the mutation; we leave the PR open (a human
+   * lands it) and report false.
+   */
+  private async enableAutoMerge(
+    owner: string,
+    repo: string,
+    prNumber: number
+  ): Promise<boolean> {
+    const octokit = await this.getOctokit(owner, repo);
+    const { data: pr } = await octokit.request(
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}",
+      { owner, repo, pull_number: prNumber }
+    );
+    try {
+      await octokit.graphql(
+        `mutation($pullRequestId: ID!) {
+          enablePullRequestAutoMerge(input: { pullRequestId: $pullRequestId, mergeMethod: SQUASH }) {
+            pullRequest { number }
+          }
+        }`,
+        { pullRequestId: pr.node_id }
+      );
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /** Resolve `heads/main` → its commit + root-tree SHAs (the parent for a node-formation commit). */
