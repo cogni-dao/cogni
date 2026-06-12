@@ -225,6 +225,13 @@
       "when": 1780270000000,
       "tag": "0031_node_access_requests",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1781227345000,
+      "tag": "0032_rls_epoch_coverage",
+      "breakpoints": true
     }
   ]
 }
