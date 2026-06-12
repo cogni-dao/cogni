@@ -100,20 +100,22 @@ export function NodeRegistrationForm(): ReactElement {
         </ul>
       </div>
 
-      <div className="space-y-2">
-        <label className="font-medium text-sm" htmlFor="slug">
+      <div className="space-y-2 text-center">
+        <label className="block font-medium text-sm" htmlFor="slug">
           Name your node
         </label>
-        <Input
-          id="slug"
-          value={slug}
-          onChange={(e) => setSlug(e.target.value.toLowerCase())}
-          placeholder="my-node"
-        />
-        <p className="text-muted-foreground text-xs">
-          Lowercase letters, numbers and dashes. Deployed on Base mainnet (
-          {CHAIN_ID}).
-        </p>
+        <div className="mx-auto flex w-fit items-center gap-1.5">
+          <Input
+            id="slug"
+            value={slug}
+            onChange={(e) => setSlug(e.target.value.toLowerCase())}
+            placeholder="my-node"
+            className="w-40 text-right"
+          />
+          <span className="whitespace-nowrap text-muted-foreground text-sm">
+            .cognidao.org
+          </span>
+        </div>
         {slug && !slugValid ? (
           <p className="text-destructive text-sm">
             2-32 chars, lowercase letters/numbers/dashes, starts with a letter
