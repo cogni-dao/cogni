@@ -3,10 +3,8 @@
 
 /**
  * Module: `@cogni/knowledge-store/port/kpi-reader`
- * Purpose: KpiReader port — maps a `metric:<kpi-id>` goal's KPI id to a current
- *   0–100 reading. The goal-loop controller reads the KPI through this port
- *   each tick; `loopHaltReason` consumes the number opaquely.
- * Scope: Port interface + registry types only. No implementations, no I/O.
+ * Purpose: KpiReader port — maps a `metric:<kpi-id>` goal's KPI id to a current 0–100 reading; the goal-loop controller reads the KPI through this port each tick, and `loopHaltReason` consumes the number opaquely.
+ * Scope: Port interface + registry types only. Does not contain implementations or I/O.
  * Invariants:
  *   - KPI_VERIFIER_INDEPENDENT — a reader MUST be independent of the loop's own
  *     writes. The worker (storage-expert role) files `evidence_for` atoms; the

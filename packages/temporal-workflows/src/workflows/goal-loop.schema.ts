@@ -3,11 +3,8 @@
 
 /**
  * Module: `@cogni/temporal-workflows/workflows/goal-loop.schema`
- * Purpose: Zod schema for `GoalLoopWorkflowInput` — the single source of truth
- *   for the goal-loop workflow's input shape. A goal is a controller wrapped
- *   around ANY graph, so the step graph is a goal-level field (default
- *   `langgraph:research`), not a hardcoded constant.
- * Scope: Schema definition + `z.infer<>` type export. No business logic, no I/O.
+ * Purpose: Zod schema for `GoalLoopWorkflowInput` — the single source of truth for the goal-loop workflow's input shape; a goal is a controller wrapped around ANY graph (the step graph is a goal-level field, default `langgraph:research`).
+ * Scope: Schema definition + `z.infer<>` type export. Does not contain business logic, runtime I/O, or side-effects.
  * Invariants:
  *   - SINGLE_INPUT_CONTRACT: this `.strict()` schema is the single source of
  *     truth; producers parse with it before `workflowClient.start(...)`, the

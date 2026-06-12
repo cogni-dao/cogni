@@ -8,9 +8,9 @@
  *   via a verifier-independent reader, runs the pure halt guard FIRST, and then
  *   either files the goal's outcome (halt) or takes ONE research/cite step that
  *   writes ONE `evidence_for`-linked atom onto the goal's chain.
- * Scope: Deterministic orchestration only. All I/O (load goal, read KPI, run the
- *   research graph, file the outcome) is delegated to activities. Reuses the
- *   existing `research` graph via the unified GraphRunWorkflow — no new graph.
+ * Scope: Deterministic orchestration only; does not perform I/O (load goal, read
+ *   KPI, run the step graph, file the outcome are all delegated to activities).
+ *   Reuses the existing graph via the unified GraphRunWorkflow — no new graph.
  * Invariants:
  *   - Per TEMPORAL_DETERMINISM: no I/O in workflow code.
  *   - LOOP_TERMINATES: `goalLoopDecision` runs the pure halt guard before any step.

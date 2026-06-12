@@ -3,13 +3,9 @@
 
 /**
  * Module: `@cogni/knowledge-store/domain/resolver-dispatch`
- * Purpose: Pure router that classifies a pending hypothesis's
- *   `resolution_strategy` into the resolver that should handle it. The resolver
- *   cron reads pending rows by `evaluate_at` and dispatches by this
- *   classification: a `metric:<kpi-id>` row routes to the goal-loop controller
- *   (GoalLoopWorkflow) instead of the generic `agent` resolver.
- * Scope: Pure classification only. No Temporal, no I/O — the cron consumes this
- *   to pick a handler. Unit-testable without any orchestration plane.
+ * Purpose: Pure router that classifies a pending hypothesis's `resolution_strategy` into the resolver that should handle it; a `metric:<kpi-id>` row routes to the goal-loop controller (GoalLoopWorkflow), everything else to the generic `agent`/manual path.
+ * Scope: Pure classification only; does not touch Temporal or I/O — the cron
+ *   consumes this to pick a handler. Unit-testable without any orchestration plane.
  * Invariants:
  *   - METRIC_ROUTES_TO_GOAL_LOOP — `metric:<id>` ⇒ `goal_loop`; `agent` ⇒
  *     `agent`; null/manual ⇒ `manual` (cron skips); anything else ⇒ `unknown`.

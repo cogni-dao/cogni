@@ -3,12 +3,11 @@
 
 /**
  * Module: `@cogni/knowledge-store/tests/resolver-dispatch`
- * Purpose: Unit coverage for the pure resolution-strategy router — proves a
- *   `metric:<id>` row routes to the goal loop, `agent` to the agent resolver,
- *   null/manual is skipped, and unknown namespaces are fenced off.
- * Scope: Pure classification. No cron, no Temporal.
+ * Purpose: Unit coverage for the pure resolution-strategy router — proves a `metric:<id>` row routes to the goal loop, `agent` to the agent resolver, null/manual is skipped, and unknown namespaces are fenced off.
+ * Scope: Pure classification; does not touch a cron or Temporal.
  * Invariants: METRIC_ROUTES_TO_GOAL_LOOP, DISPATCH_IS_TOTAL
  * Side-effects: none
+ * Links: src/domain/resolver-dispatch.ts, docs/design/knowledge-goal-loop.md
  * @internal
  */
 

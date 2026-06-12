@@ -3,11 +3,11 @@
 
 /**
  * Module: `@cogni/knowledge-store/tests/goal-codec`
- * Purpose: Unit coverage for the pure `tags ⇄ Goal` codec — round-trip, the
- *   `goalFromRow` projection, and rejection of non-goal / malformed rows.
- * Scope: Pure codec only. No Temporal, no DB.
+ * Purpose: Unit coverage for the pure `tags ⇄ Goal` codec — round-trip, the `goalFromRow` projection, and rejection of non-goal / malformed rows.
+ * Scope: Pure codec only; does not touch Temporal or a DB.
  * Invariants: CODEC_ROUND_TRIPS, GOAL_REQUIRES_METRIC_STRATEGY
  * Side-effects: none
+ * Links: src/domain/goal-codec.ts, docs/design/knowledge-goal-loop.md
  * @internal
  */
 

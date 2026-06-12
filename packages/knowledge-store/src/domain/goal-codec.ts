@@ -7,7 +7,7 @@
  *   hypothesis row's `tags` (`string[]`) as `goal-<key>=<value>` strings; this
  *   module is the only place those wire strings are read/written, so the typed
  *   `Goal` / `LoopBudget` is what the rest of the controller consumes.
- * Scope: Pure encode/decode + the `Knowledge` row → `Goal` projection. No I/O.
+ * Scope: Pure encode/decode + the `Knowledge` row → `Goal` projection; does not do I/O.
  * Invariants:
  *   - GOAL_BUDGET_VIA_TAGS — target + budget live in `tags`, never new columns
  *     (docs/design/knowledge-goal-loop.md § Goal representation). LIKE-scannable,

@@ -7,8 +7,8 @@
  *   verifier-independent reader (`external-count`, normalized to 0–100 against
  *   a denominator) and ONE fenced smoke reader (`confidence-smoke`) that exists
  *   only to prove the loop turns — never to gate a real goal.
- * Scope: Registry composition + readers. The count/confidence *sources* are
- *   injected functions (I/O lives behind them); this module is pure wiring.
+ * Scope: Registry composition + readers; does not do I/O — the count/confidence
+ *   *sources* are injected functions (I/O lives behind them), this is pure wiring.
  * Invariants:
  *   - KPI_VERIFIER_INDEPENDENT — `external-count` is independent because its
  *     source counts rows the loop does NOT author (the loop files `evidence_for`

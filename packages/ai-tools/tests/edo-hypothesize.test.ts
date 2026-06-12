@@ -3,10 +3,8 @@
 
 /**
  * Module: `@cogni/ai-tools/tests/edo-hypothesize`
- * Purpose: Unit coverage for the `core__edo_hypothesize` input boundary — proves
- *   the `resolution_strategy` validation admits `metric:<kpi-id>` (the goal-loop
- *   hook) while still rejecting malformed namespaced identifiers.
- * Scope: Zod boundary only. No ports, no I/O.
+ * Purpose: Unit coverage for the `core__edo_hypothesize` input boundary — proves the `resolution_strategy` validation admits `metric:<kpi-id>` (the goal-loop hook) while still rejecting malformed namespaced identifiers.
+ * Scope: Zod boundary only; does not touch ports or I/O.
  * Invariants: goal hypotheses file with `resolution_strategy = metric:<kpi-id>`.
  * Side-effects: none
  * Links: src/tools/edo-hypothesize.ts, docs/design/knowledge-goal-loop.md

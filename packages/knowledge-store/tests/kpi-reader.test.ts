@@ -7,9 +7,10 @@
  *   Proves the registry routes by kpiId, the `external-count` reader is
  *   verifier-INDEPENDENT and normalizes to 0–100, and the `confidence-smoke`
  *   reader is fenced (`independent: false`).
- * Scope: Pure registry + readers (sources are injected fakes). No DB.
+ * Scope: Pure registry + readers (sources are injected fakes); does not use a DB.
  * Invariants: KPI_VERIFIER_INDEPENDENT, KPI_RANGE_0_100
  * Side-effects: none
+ * Links: src/domain/kpi-reader.ts, docs/design/knowledge-goal-loop.md
  * @internal
  */
 

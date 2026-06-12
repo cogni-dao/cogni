@@ -3,16 +3,15 @@
 
 /**
  * Module: `@cogni/temporal-workflows/tests/goal-loop-input-contract.test`
- * Purpose: Contract test for `GoalLoopWorkflowInputSchema` — proves the schema
- *   is the single source of truth, `stepGraphId` defaults to `research` (goal is
- *   graph-agnostic), and misshapen inputs reject under `.strict()`.
- * Scope: Pure schema validation only. No Temporal runtime, no I/O.
+ * Purpose: Contract test for `GoalLoopWorkflowInputSchema` — proves the schema is the single source of truth, `stepGraphId` defaults to `research` (goal is graph-agnostic), and misshapen inputs reject under `.strict()`.
+ * Scope: Pure schema validation only; does not exercise the Temporal runtime or any I/O.
  * Invariants:
  *   - SINGLE_INPUT_CONTRACT: a canonical dispatch payload parses cleanly.
  *   - GOAL_IS_GRAPH_AGNOSTIC: omitting `stepGraphId` yields the `research` default;
  *     any registered graph id is accepted.
  *   - DISPATCH_FAIL_FAST: unknown/typo'd fields reject at parse time.
  * Side-effects: none
+ * Links: src/workflows/goal-loop.schema.ts, docs/design/knowledge-goal-loop.md
  * @internal
  */
 

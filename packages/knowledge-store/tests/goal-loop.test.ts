@@ -3,12 +3,11 @@
 
 /**
  * Module: `@cogni/knowledge-store/tests/goal-loop`
- * Purpose: Unit coverage for the pure goal-loop halt predicate — proves the
- *   termination ordering (goal-met > wall-clock > no-progress > budget axes) and
- *   that the loop always terminates.
- * Scope: Pure predicate only. No Temporal, no langgraph, no DB.
+ * Purpose: Unit coverage for the pure goal-loop halt predicate — proves the termination ordering (goal-met > wall-clock > no-progress > budget axes) and that the loop always terminates.
+ * Scope: Pure predicate only; does not touch Temporal, langgraph, or a DB.
  * Invariants: LOOP_TERMINATES
  * Side-effects: none
+ * Links: src/domain/goal-loop.ts, docs/design/knowledge-goal-loop.md
  * @internal
  */
 
