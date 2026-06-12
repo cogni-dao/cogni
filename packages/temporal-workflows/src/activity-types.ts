@@ -185,21 +185,21 @@ export interface LoopBudgetWire {
 
 export interface GoalLoopActivities {
   /**
-   * Project the goal hypothesis row → Goal + budget + accumulated LoopState.
-   * Returns null if the row is not a goal (no `metric:` strategy / undecodable
-   * budget). `nowIso` is the activity's read clock, injected so the workflow's
-   * halt guard stays deterministic.
+   * Project the goal hypothesis row → Goal + budget. Returns null if the row is
+   * not a goal (no `metric:` strategy / undecodable budget). `nowIso` is the
+   * activity's read clock, injected so the workflow's halt guard stays
+   * deterministic. The MVP loop runs internally bounded by `LoopBudget` in
+   * workflow memory, so iteration/token accounting is NOT read back from Dolt —
+   * this activity loads only the static goal + budget once at loop start.
    */
-  loadGoalStateActivity(input: {
+  loadGoalActivity(input: {
     nodeId: string;
     hypothesisId: string;
   }): Promise<{
     goal: GoalWire;
     budget: LoopBudgetWire;
-    iterations: number;
-    tokensSpent: number;
-    recursionDepth: number;
-    stalledIterations: number;
+    /** Graph the per-tick step runs (from `goal-step-graph` tag, else null). */
+    stepGraphId: string | null;
     nowIso: string;
   } | null>;
 
@@ -216,6 +216,25 @@ export interface GoalLoopActivities {
   }): Promise<number>;
 
   /**
+   * Take ONE loop step: file ONE `evidence_for`-cited atom onto the goal's
+   * chain. Per ACTIVITY_IDEMPOTENCY the atom id is keyed on the stable business
+   * key `${hypothesisId}/${iteration}` so a Temporal retry reuses the same atom
+   * rather than double-writing. Returns the tokens the step spent (for the
+   * in-workflow budget accounting). `stepGraphId` is goal-level config (any
+   * graph can drive a goal); the implementation runs that graph to produce the
+   * finding, or falls back to a deterministic finding for the MVP.
+   */
+  runStepActivity(input: {
+    nodeId: string;
+    hypothesisId: string;
+    domain: string;
+    /** Stable business key `${hypothesisId}/${iteration}` — writes this atom once. */
+    idempotencyKey: string;
+    iteration: number;
+    stepGraphId: string;
+  }): Promise<{ ok: boolean; atomId: string; tokensSpent: number }>;
+
+  /**
    * File the goal's outcome (validates|invalidates) + recompute confidence.
    * Per ACTIVITY_IDEMPOTENCY the implementation MUST key on `${hypothesisId}`
    * (one outcome per goal) so a Temporal retry cannot file a second outcome.
@@ -228,23 +247,6 @@ export interface GoalLoopActivities {
     reason: string;
     lastKpi: number;
     target: number;
-  }): Promise<void>;
-
-  /**
-   * Persist one step's result + folded accounting (iterations/tokens/no-progress).
-   * Per ACTIVITY_IDEMPOTENCY the implementation MUST key on `idempotencyKey`
-   * (`${hypothesisId}/${iteration}`) so a retry folds the same step once, never
-   * double-counting iterations/tokens.
-   */
-  recordStepResultActivity(input: {
-    nodeId: string;
-    hypothesisId: string;
-    /** Stable business key `${hypothesisId}/${iteration}` — folds this step once. */
-    idempotencyKey: string;
-    runId: string;
-    ok: boolean;
-    priorKpi: number;
-    newKpi: number;
   }): Promise<void>;
 }
 

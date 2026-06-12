@@ -24,9 +24,6 @@ import {
 const validFixture = {
   nodeId: "operator",
   hypothesisId: "goal:oss-frontier-coverage",
-  billingAccountId: "1a2b3c4d-5e6f-4789-9abc-def012345678",
-  virtualKeyId: "vk_system_default",
-  model: "gpt-4o-mini",
 };
 
 describe("GoalLoopWorkflowInputSchema", () => {
@@ -66,9 +63,9 @@ describe("GoalLoopWorkflowInputSchema", () => {
     expect(GoalLoopWorkflowInputSchema.safeParse(rest).success).toBe(false);
   });
 
-  it("rejects an empty model string", () => {
+  it("rejects an empty nodeId string", () => {
     expect(
-      GoalLoopWorkflowInputSchema.safeParse({ ...validFixture, model: "" })
+      GoalLoopWorkflowInputSchema.safeParse({ ...validFixture, nodeId: "" })
         .success
     ).toBe(false);
   });

@@ -76,6 +76,100 @@ export function createExternalCountReader(
 }
 
 // ---------------------------------------------------------------------------
+// `judge` — the independent LLM-judge reader for one-off qualitative goals.
+//
+// The everyday one-off case: the goal carries its success criterion in prose
+// (`goal-success-criterion`), and a SEPARATE judge model scores the
+// accumulated evidence against that criterion → 0–100. This is the Claude
+// `/goal` Haiku-evaluator pattern, and the scalable default — you write the
+// success sentence, not reader code.
+//
+// `independent: true` is gated on the judge reading a signal the loop does NOT
+// author. The judge here reads the goal's *evidence chain* (the cited atoms)
+// and its prose criterion — NOT the goal row's own `confidence_pct` (the
+// self-grading number every `evidence_for` edge bumps). The score function is
+// injected so the I/O (an LLM call, or a deterministic heuristic) lives behind
+// the reader.
+//
+// HONEST v1 CAVEAT (KPI_VERIFIER_INDEPENDENT): a judge that grades the loop's
+// OWN evidence atoms still shares the worker's blind spot (the Reflexion
+// failure mode). v1 MUST point the judge at EXTERNAL ground truth — re-derive
+// the criterion from primary sources, or a held-out check the worker can't see
+// — not only the chain the loop wrote. v0 grades the chain so the primitive is
+// observably runnable end-to-end; do not promote a real high-stakes goal onto
+// the v0 judge without the ground-truth hardening.
+// ---------------------------------------------------------------------------
+
+export const JUDGE_KPI_ID = "judge" as const;
+
+/** One piece of accumulated evidence the judge scores against the criterion. */
+export interface JudgeEvidenceAtom {
+  id: string;
+  title: string;
+  content: string;
+}
+
+/** What the judge scores: the goal's prose criterion + the evidence so far. */
+export interface JudgeInput {
+  goal: Goal;
+  /** The goal's prose success sentence (from `goal-success-criterion`). */
+  criterion: string;
+  /** The `evidence_for` atoms the loop has filed onto the goal chain so far. */
+  evidence: readonly JudgeEvidenceAtom[];
+}
+
+/**
+ * Scores `criterion` against `evidence` → 0–100. Injected so the I/O (an
+ * independent judge-model call, or a cheap deterministic heuristic) lives
+ * behind the reader. MUST NOT read the goal's own `confidence_pct`.
+ */
+export type JudgeScoreFn = (input: JudgeInput) => Promise<number>;
+
+/** Loads the goal's prose criterion + its `evidence_for` atoms (independent of confidence_pct). */
+export type JudgeEvidenceSource = (
+  goal: Goal
+) => Promise<{ criterion: string; evidence: readonly JudgeEvidenceAtom[] }>;
+
+export interface JudgeReaderConfig {
+  /** KPI id this judge serves (default `judge` for the `metric:judge` binding). */
+  kpiId?: string;
+  /** Reads the criterion + evidence chain (NOT the goal's confidence_pct). */
+  source: JudgeEvidenceSource;
+  /** Scores criterion-vs-evidence → 0–100 (LLM call or deterministic heuristic). */
+  score: JudgeScoreFn;
+}
+
+export function createJudgeReader(config: JudgeReaderConfig): KpiReader {
+  return {
+    kpiId: config.kpiId ?? JUDGE_KPI_ID,
+    // Independent: scores the criterion + the loop's evidence atoms, never the
+    // goal row's self-grading confidence_pct. (v1 hardens to external ground
+    // truth — see the block comment above.)
+    independent: true,
+    async read(goal: Goal): Promise<number> {
+      const { criterion, evidence } = await config.source(goal);
+      return clamp0to100(await config.score({ goal, criterion, evidence }));
+    },
+  };
+}
+
+/**
+ * The v0 deterministic judge heuristic — the ONE thing the design permits to
+ * stub (never the loop wiring or the EDO writes). Scores by the count of
+ * distinct evidence atoms relative to the goal's `target` read as the
+ * "atoms-to-done" denominator: `score = clamp(atoms / (target/20) * 100)`,
+ * i.e. with the default target=80 the goal closes (validates) once ~4 distinct
+ * cited atoms accumulate. Cheap, deterministic, spends zero tokens — it proves
+ * the loop turns + accumulates evidence + closes on budget. A real judge model
+ * replaces this `score` fn without touching the reader/loop.
+ */
+export function deterministicJudgeScore(input: JudgeInput): Promise<number> {
+  const atomsToDone = Math.max(1, Math.round(input.goal.target / 20));
+  const distinct = new Set(input.evidence.map((e) => e.id)).size;
+  return Promise.resolve(clamp0to100((distinct / atomsToDone) * 100));
+}
+
+// ---------------------------------------------------------------------------
 // `confidence-smoke` — SMOKE-TEST ONLY. NOT for real goals.
 //
 // Returns the goal hypothesis's OWN computed `confidence_pct`. This is

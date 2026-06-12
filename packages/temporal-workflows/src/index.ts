@@ -59,7 +59,7 @@ export {
   type GoalLoopWorkflowInput,
   GoalLoopWorkflowInputSchema,
 } from "./workflows/goal-loop.schema.js";
-export type { GoalLoopTickResult } from "./workflows/goal-loop.workflow.js";
+export type { GoalLoopResult } from "./workflows/goal-loop.workflow.js";
 export type {
   GraphRunResult,
   GraphRunWorkflowInput,

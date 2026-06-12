@@ -29,16 +29,10 @@ export const DEFAULT_GOAL_STEP_GRAPH_ID = "langgraph:research" as const;
  */
 export const GoalLoopWorkflowInputSchema = z
   .object({
-    /** Owning node (routes the graph step + outcome write). */
+    /** Owning node (routes the goal-loop activities' HTTP delegation). */
     nodeId: z.string().min(1),
     /** The `knowledge.id` of the goal hypothesis this loop drives. */
     hypothesisId: z.string().min(1),
-    /** System billing account ID (resolved at schedule creation). */
-    billingAccountId: z.string().min(1),
-    /** System virtual key ID. */
-    virtualKeyId: z.string().min(1),
-    /** Model for the research step. */
-    model: z.string().min(1),
     /**
      * Graph the per-tick step runs. A goal is a controller wrapped around ANY
      * graph — default `research`, but any registered graph id is valid. Format

@@ -41,30 +41,102 @@ export const GOAL_TAG_KEYS = {
   maxStalledIterations: "goal-max-stalled",
 } as const;
 
-/** True for any `goal-…=` tag string this codec owns. */
+/**
+ * Optional string-valued goal config carried on `tags`. Unlike the numeric
+ * budget keys these are not part of `LoopBudget`; they parameterize the step
+ * graph + the `metric:judge` reader (the goal's prose success sentence). v0
+ * base64url-encodes the criterion so a free-text sentence survives the `tags`
+ * `string[]` wire without colliding with the `=` delimiter or LIKE scans.
+ */
+export const GOAL_CONFIG_TAG_KEYS = {
+  stepGraphId: "goal-step-graph",
+  successCriterion: "goal-success-criterion-b64",
+} as const;
+
+/** True for any `goal-…=` tag string this codec owns (budget or config). */
 export function isGoalTag(tag: string): boolean {
-  return Object.values(GOAL_TAG_KEYS).some((k) => tag.startsWith(`${k}=`));
+  return [
+    ...Object.values(GOAL_TAG_KEYS),
+    ...Object.values(GOAL_CONFIG_TAG_KEYS),
+  ].some((k) => tag.startsWith(`${k}=`));
+}
+
+function encodeB64(value: string): string {
+  return Buffer.from(value, "utf8").toString("base64url");
+}
+
+function decodeB64(value: string): string {
+  return Buffer.from(value, "base64url").toString("utf8");
 }
 
 // ---------------------------------------------------------------------------
 // Encode — `target` + `LoopBudget` → the five `goal-…=` tag strings.
 // ---------------------------------------------------------------------------
 
+/** Optional non-budget goal config the encoder may also stamp onto `tags`. */
+export interface GoalConfigInput {
+  /** Graph the per-tick step runs (any registered graph id). */
+  stepGraphId?: string;
+  /** The goal's prose success sentence — consumed by the `metric:judge` reader. */
+  successCriterion?: string;
+}
+
 /**
- * Encode a goal's target + loop budget as `goal-<key>=<value>` tag strings.
- * Validates inputs first (a malformed budget never reaches the wire). Returns
- * the five tags in a stable order; merge them with any non-goal tags caller-side.
+ * Encode a goal's target + loop budget (+ optional step-graph / success
+ * criterion) as `goal-<key>=<value>` tag strings. Validates the numeric inputs
+ * first (a malformed budget never reaches the wire). Returns the tags in a
+ * stable order; merge them with any non-goal tags caller-side.
  */
-export function encodeGoalTags(target: number, budget: LoopBudget): string[] {
+export function encodeGoalTags(
+  target: number,
+  budget: LoopBudget,
+  config: GoalConfigInput = {}
+): string[] {
   const parsedTarget = GoalSchema.shape.target.parse(target);
   const b = LoopBudgetSchema.parse(budget);
-  return [
+  const tags = [
     `${GOAL_TAG_KEYS.target}=${parsedTarget}`,
     `${GOAL_TAG_KEYS.maxIterations}=${b.maxIterations}`,
     `${GOAL_TAG_KEYS.maxTokens}=${b.maxTokens}`,
     `${GOAL_TAG_KEYS.maxRecursionDepth}=${b.maxRecursionDepth}`,
     `${GOAL_TAG_KEYS.maxStalledIterations}=${b.maxStalledIterations}`,
   ];
+  if (config.stepGraphId !== undefined && config.stepGraphId.length > 0) {
+    tags.push(`${GOAL_CONFIG_TAG_KEYS.stepGraphId}=${config.stepGraphId}`);
+  }
+  if (
+    config.successCriterion !== undefined &&
+    config.successCriterion.length > 0
+  ) {
+    tags.push(
+      `${GOAL_CONFIG_TAG_KEYS.successCriterion}=${encodeB64(config.successCriterion)}`
+    );
+  }
+  return tags;
+}
+
+function readStringTag(tags: readonly string[], key: string): string | null {
+  const prefix = `${key}=`;
+  const hit = tags.find((t) => t.startsWith(prefix));
+  return hit === undefined ? null : hit.slice(prefix.length);
+}
+
+/** Read the optional `goal-step-graph` tag, or null. */
+export function stepGraphIdFromTags(tags: readonly string[]): string | null {
+  return readStringTag(tags, GOAL_CONFIG_TAG_KEYS.stepGraphId);
+}
+
+/** Read + decode the optional `goal-success-criterion-b64` tag, or null. */
+export function successCriterionFromTags(
+  tags: readonly string[]
+): string | null {
+  const raw = readStringTag(tags, GOAL_CONFIG_TAG_KEYS.successCriterion);
+  if (raw === null) return null;
+  try {
+    return decodeB64(raw);
+  } catch {
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------

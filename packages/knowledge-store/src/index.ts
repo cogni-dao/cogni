@@ -50,10 +50,14 @@ export {
   type DecodedGoalTags,
   decodeGoalTags,
   encodeGoalTags,
+  GOAL_CONFIG_TAG_KEYS,
   GOAL_TAG_KEYS,
+  type GoalConfigInput,
   type GoalFromRow,
   goalFromRow,
   isGoalTag,
+  stepGraphIdFromTags,
+  successCriterionFromTags,
 } from "./domain/goal-codec.js";
 // Goal + KPI loop seam (proj.knowledge-syntropy — goal-loop controller seam)
 export {
@@ -81,9 +85,17 @@ export {
 export {
   createConfidenceSmokeReader,
   createExternalCountReader,
+  createJudgeReader,
   createKpiReaderRegistry,
+  deterministicJudgeScore,
   type ExternalCountReaderConfig,
   type ExternalCountSource,
+  type JudgeEvidenceAtom,
+  type JudgeEvidenceSource,
+  type JudgeInput,
+  JUDGE_KPI_ID,
+  type JudgeReaderConfig,
+  type JudgeScoreFn,
   type OwnConfidenceSource,
 } from "./domain/kpi-reader.js";
 // Resolver dispatch (pure namespace router: metric: → goal-loop, agent → agent)
