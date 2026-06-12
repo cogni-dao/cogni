@@ -184,6 +184,7 @@ Counterintuitive but load-bearing: a **sealed** OpenBao serves **nothing** — i
 
 ## Anti-patterns — instant reject
 
+- **A service carrying a divergent STATIC copy of a credential that another service owns via the SSOT.** The `scheduler-worker` ran the operator ledger off a SOPS-static `DATABASE_URL` (`app_service`) while the operator app moved to per-node ESO roles (`service_operator`); the static copy drifted → `password authentication failed` (28P01) on every collection → epochs frozen (2026-06-12). Same class as bug.5002. A pod's runtime cred must come from the **one** OpenBao→ESO source the owning node uses, never a hand-maintained second copy. **Worker-secrets-removal direction:** the scheduler-worker should hold no node-owned secrets of its own — DB creds come from the operator's SSOT, and GitHub access for any ledger backfill polling should be a **token minted by the operator app (the source app)**, not a stored `GH_REVIEW_APP_PRIVATE_KEY_BASE64` on the worker. Storing the App private key on the worker to "fix" a poll is the wrong layer.
 - Human typing a secret VALUE into a production UI or GitHub workflow input. See killer rule.
 - Treating `tier: B`, GitHub Environment Secrets, or VM `.env` as authority for
   a runtime secret. If it feeds a pod or a pod-facing role, OpenBao owns it.
