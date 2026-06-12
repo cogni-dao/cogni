@@ -18,6 +18,15 @@ The minimal procedure for changing a table. Follow it; don't improvise.
 5. Commit `.sql` + `_journal.json` + `NNNN_snapshot.json` together. Never `--no-verify` a schema PR.
 6. **Post-flight:** `kubectl logs <pod> -c migrate` must list your tag with `✅ migrations applied`. If it didn't run, `db:check` was bypassed.
 
+## RLS coverage — mandatory for any table with a FK to `users`
+
+Drizzle does not generate RLS. If your new table has a foreign key to `users`, you MUST add RLS in the same migration (hand-authored fallback below) or the coverage gate fails CI. Two correct shapes:
+
+- **User-facing reads** → an owner-scoped policy (`USING (... = current_setting('app.current_user_id', true))`). See `docs/spec/database-rls.md`.
+- **Service-role-only** (worker reads/writes via the BYPASSRLS role, no app-role path) → `ENABLE + FORCE` with **no policy** = deny-all (fail-closed). No fake policy needed.
+
+The gate (`tests/component/setup/testcontainers-postgres.global.ts`) fails if any `public` table with a FK to `users` has `relrowsecurity = false` — invariant `RLS_COVERAGE` in `database-rls.md`. It exists because user-FK tables historically shipped with no RLS (the `0010`→`0032` epoch-ledger leak); the gate makes that class of drift impossible to merge.
+
 ## Hand-authored fallback — only if drizzle-kit literally can't emit it
 
 Valid triggers: RLS policies, `ALTER POLICY`, triggers, custom Postgres functions, ARRAY DEFAULTs the TS schema can't express. **Plain `ADD COLUMN`, CHECK, partial index, FK — auto-gen handles all of this.** When in doubt, try `db:generate` first.
