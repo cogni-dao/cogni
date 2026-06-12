@@ -622,7 +622,7 @@ node_port: 30200
         expect(params).toMatchObject({
           owner: "Cogni-DAO",
           repo: "cogni",
-          message: "feat(node): pin atlas as a submodule",
+          message: "feat(node): register atlas",
           tree: "birth-tree",
           parents: ["parent-main"],
         });
@@ -652,96 +652,47 @@ node_port: 30200
   });
 });
 
-describe("GitHubRepoWriter.ensureNodeSubmodulePin", () => {
-  it("reuses an existing matching pin PR without moving the branch", async () => {
+describe("GitHubRepoWriter.ensureCatalogSourceSha", () => {
+  it("opens a catalog source_sha pin PR when the catalog pin differs", async () => {
     const childSha = "0123456789012345678901234567890123456789";
-    const branch = "heads/cogni-operator/node-submodule-atlas-pin-01234567";
+    let putContent = "";
     routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": (params) => {
+        expect(params.path).toBe("infra/catalog/atlas.yaml");
+        // Catalog read on main: existing source_sha differs from the requested pin.
+        if (params.ref === "main") {
+          return {
+            type: "file",
+            encoding: "base64",
+            sha: "catalog-blob",
+            content: Buffer.from(
+              "name: atlas\ntype: node\nsource_repo: https://github.com/Cogni-DAO/atlas.git\nimage_repository: ghcr.io/cogni-dao/atlas\nsource_sha: ffffffffffffffffffffffffffffffffffffffff\n",
+              "utf-8"
+            ).toString("base64"),
+          };
+        }
+        // File lookup on the new pin branch → not present yet.
+        return Promise.reject(statusError(404, "not found"));
+      },
       "GET /repos/{owner}/{repo}/git/ref/{ref}": (params) => {
-        if (params.ref === "heads/main") {
-          return { object: { sha: "parent-main" } };
-        }
-        expect(params.ref).toBe(branch);
-        return { object: { sha: "pin-head" } };
+        expect(params.ref).toBe("heads/main");
+        return { object: { sha: "parent-main" } };
       },
-      "GET /repos/{owner}/{repo}/git/commits/{commit_sha}": (params) => {
-        if (params.commit_sha === "parent-main") {
-          return { tree: { sha: "main-tree" } };
-        }
-        expect(params.commit_sha).toBe("pin-head");
-        return { tree: { sha: "pin-tree" } };
+      "POST /repos/{owner}/{repo}/git/refs": () => ({}),
+      "PUT /repos/{owner}/{repo}/contents/{path}": (params) => {
+        putContent = Buffer.from(String(params.content), "base64").toString(
+          "utf-8"
+        );
+        return { commit: { sha: "pin-commit" } };
       },
-      "GET /repos/{owner}/{repo}/git/trees/{tree_sha}": (params) => {
-        if (params.tree_sha === "main-tree") {
-          return {
-            tree: [
-              {
-                path: "nodes",
-                type: "tree",
-                mode: "040000",
-                sha: "main-nodes",
-              },
-            ],
-          };
-        }
-        if (params.tree_sha === "main-nodes") {
-          return { tree: [] };
-        }
-        if (params.tree_sha === "pin-tree") {
-          return {
-            tree: [
-              { path: "nodes", type: "tree", mode: "040000", sha: "pin-nodes" },
-              {
-                path: ".gitmodules",
-                type: "blob",
-                mode: "100644",
-                sha: "pin-gitmodules",
-              },
-            ],
-          };
-        }
-        expect(params.tree_sha).toBe("pin-nodes");
-        return {
-          tree: [
-            {
-              path: "atlas",
-              type: "commit",
-              mode: "160000",
-              sha: childSha,
-            },
-          ],
-        };
-      },
-      "GET /repos/{owner}/{repo}/git/blobs/{file_sha}": (params) => {
-        expect(params.file_sha).toBe("pin-gitmodules");
-        return {
-          content: Buffer.from(
-            `[submodule "nodes/atlas"]\n\tpath = nodes/atlas\n\turl = https://github.com/Cogni-DAO/atlas.git\n`,
-            "utf-8"
-          ).toString("base64"),
-          encoding: "base64",
-        };
-      },
-      "POST /repos/{owner}/{repo}/pulls": () =>
-        Promise.reject(statusError(422, "A pull request already exists")),
-      "GET /repos/{owner}/{repo}/pulls": (params) => {
-        expect(params).toMatchObject({
-          owner: "Cogni-DAO",
-          repo: "cogni",
-          state: "open",
-          head: "Cogni-DAO:cogni-operator/node-submodule-atlas-pin-01234567",
-        });
-        return [
-          {
-            number: 88,
-            html_url: "https://github.com/Cogni-DAO/cogni/pull/88",
-          },
-        ];
-      },
+      "POST /repos/{owner}/{repo}/pulls": () => ({
+        number: 88,
+        html_url: "https://github.com/Cogni-DAO/cogni/pull/88",
+      }),
     };
 
     await expect(
-      makeWriter().ensureNodeSubmodulePin({
+      makeWriter().ensureCatalogSourceSha({
         owner: "Cogni-DAO",
         repo: "cogni",
         slug: "atlas",
@@ -750,17 +701,16 @@ describe("GitHubRepoWriter.ensureNodeSubmodulePin", () => {
       })
     ).resolves.toEqual({
       status: "pin_pr_opened",
-      currentSha: null,
+      currentSha: "ffffffffffffffffffffffffffffffffffffffff",
       prNumber: 88,
       prUrl: "https://github.com/Cogni-DAO/cogni/pull/88",
-      parentHeadSha: "pin-head",
+      parentHeadSha: "pin-commit",
     });
 
-    expect(requests.map((request) => request.route)).not.toContain(
-      "POST /repos/{owner}/{repo}/git/commits"
-    );
-    expect(requests.map((request) => request.route)).not.toContain(
-      "PATCH /repos/{owner}/{repo}/git/refs/{ref}"
+    // The pin PR rewrites the catalog source_sha to the requested child SHA.
+    expect(putContent).toContain(`source_sha: ${childSha}`);
+    expect(putContent).not.toContain(
+      "ffffffffffffffffffffffffffffffffffffffff"
     );
   });
 });
@@ -786,6 +736,7 @@ type: node
 path_prefix: nodes/ghcr/
 source_repo: https://github.com/cogni-test-org/ghcr
 image_repository: ghcr.io/cogni-test-org/ghcr
+source_sha: ${sourceSha}
 `),
           };
         }
@@ -951,6 +902,9 @@ payments_in:
       "POST /repos/{owner}/{repo}/git/commits": () => ({ sha: "new-commit" }),
       "POST /repos/{owner}/{repo}/git/refs": () => ({}),
       "PATCH /repos/{owner}/{repo}/git/refs/{ref}": () => ({}),
+      "PUT /repos/{owner}/{repo}/contents/{path}": () => ({
+        commit: { sha: "pin-commit" },
+      }),
       "GET /repos/{owner}/{repo}/pulls": () => [],
       "POST /repos/{owner}/{repo}/pulls": () => ({
         number: 42,
