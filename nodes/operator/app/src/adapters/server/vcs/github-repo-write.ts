@@ -849,6 +849,49 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
     }
   }
 
+  /**
+   * Count wizard-deployed nodes in the network = `infra/catalog/*.yaml` entries with `type: node`
+   * AND a `source_repo` (remote-source / wizard-born), read from the deployment parent repo on `main`.
+   * This is the post-#1647 deployment SSOT for the merge-authority capacity gate: `.gitmodules` was
+   * retired (CATALOG_SOURCE_SHA_IS_THE_DEPLOY_PIN), so the old `.gitmodules` count is always 0
+   * (fail-open). Mirrors {@link allocateNodePort}'s catalog tree-walk.
+   */
+  async countDeployedWizardNodes(input: {
+    owner: string;
+    repo: string;
+  }): Promise<number> {
+    const { owner, repo } = input;
+    const octokit = await this.getOctokit(owner, repo);
+    const { baseTreeSha } = await this.resolveMainBase(octokit, owner, repo);
+    const catalogTreeSha = await this.findTreeEntrySha(
+      octokit,
+      owner,
+      repo,
+      baseTreeSha,
+      "infra/catalog"
+    );
+    if (!catalogTreeSha) return 0;
+    const { data: catalogTree } = await octokit.request(
+      "GET /repos/{owner}/{repo}/git/trees/{tree_sha}",
+      { owner, repo, tree_sha: catalogTreeSha }
+    );
+    const yamlBlobs = catalogTree.tree.filter(
+      (e) => e.type === "blob" && (e.path ?? "").endsWith(".yaml")
+    );
+    let count = 0;
+    for (const entry of yamlBlobs) {
+      if (!entry.sha) continue;
+      const text = await this.readBlob(octokit, owner, repo, entry.sha);
+      if (
+        /^type:\s*node\s*$/m.test(text) &&
+        /^source_repo:\s*\S+/m.test(text)
+      ) {
+        count += 1;
+      }
+    }
+    return count;
+  }
+
   /** Resolve `heads/main` → its commit + root-tree SHAs (the parent for a node-formation commit). */
   private async resolveMainBase(
     octokit: Octokit,

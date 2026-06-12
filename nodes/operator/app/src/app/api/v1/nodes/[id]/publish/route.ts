@@ -21,10 +21,7 @@ import { NextResponse } from "next/server";
 import { createNodeRepoWriter } from "@/bootstrap/capabilities/node-repo-write";
 import { resolveAppDb } from "@/bootstrap/container";
 import { withRootSpan } from "@/bootstrap/otel";
-import {
-  countSubmoduleNodes,
-  evaluateNodeCapacity,
-} from "@/features/nodes/capacity";
+import { evaluateNodeCapacity } from "@/features/nodes/capacity";
 import { createDoltHubDatabaseEnsurer } from "@/features/nodes/dolthub-database";
 import { transition } from "@/features/nodes/state-machine";
 import { getServerSessionUser } from "@/lib/auth/server";
@@ -410,8 +407,9 @@ export async function POST(request: Request, routeArgs: RouteParams) {
 
         // Capacity gate (merge-authority): the operator is the network's deploy authority — it refuses
         // to birth a new node once the deployment parent is at its compute ceiling. Enforced here, the
-        // cheapest point, before minting consumes GitHub/DoltHub/compute. Count = `nodes/<slug>`
-        // submodules in the parent repo's `.gitmodules` ("# nodes in the envs"); ceiling from config.
+        // cheapest point, before minting consumes GitHub/DoltHub/compute. Count = wizard-born nodes in
+        // the parent catalog (type:node + source_repo) — the post-#1647 deployment SSOT (`.gitmodules`
+        // is retired); ceiling from config.
         currentStep = "check_capacity";
         const writer = createNodeRepoWriter(env);
         logStep("check_capacity", "started", {
@@ -419,13 +417,11 @@ export async function POST(request: Request, routeArgs: RouteParams) {
           owner: parentOwner,
           repo: parentRepo,
         });
-        const gitmodules = await writer.fetchFileText({
-          owner: parentOwner,
-          repo: parentRepo,
-          path: ".gitmodules",
-        });
         const capacity = evaluateNodeCapacity({
-          deployedNodeCount: countSubmoduleNodes(gitmodules),
+          deployedNodeCount: await writer.countDeployedWizardNodes({
+            owner: parentOwner,
+            repo: parentRepo,
+          }),
           ceiling: env.NODE_CAPACITY_CEILING,
         });
         if (!capacity.allowed) {

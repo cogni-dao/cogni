@@ -73,6 +73,7 @@ const mockEnsureDatabase = vi.hoisted(() => vi.fn());
 const mockForkFromTemplate = vi.hoisted(() => vi.fn());
 const mockOpenNodeSubmodulePr = vi.hoisted(() => vi.fn());
 const mockFetchFileText = vi.hoisted(() => vi.fn());
+const mockCountDeployedWizardNodes = vi.hoisted(() => vi.fn());
 const mockLogEvent = vi.hoisted(() => vi.fn());
 const mockLog = vi.hoisted(() => ({
   child: vi.fn().mockReturnThis(),
@@ -102,6 +103,7 @@ vi.mock("@/bootstrap/capabilities/node-repo-write", () => ({
     forkFromTemplate: mockForkFromTemplate,
     openNodeSubmodulePr: mockOpenNodeSubmodulePr,
     fetchFileText: mockFetchFileText,
+    countDeployedWizardNodes: mockCountDeployedWizardNodes,
   }),
 }));
 
@@ -234,8 +236,9 @@ describe("POST /api/v1/nodes/[id]/publish", () => {
       prUrl: "https://github.com/cogni-test-org/cogni-monorepo/pull/1532",
     });
     mockFetchFileText.mockReset();
-    // Default: empty .gitmodules → 0 deployed nodes → under the ceiling.
-    mockFetchFileText.mockResolvedValue(null);
+    mockCountDeployedWizardNodes.mockReset();
+    // Default: 0 deployed wizard nodes in the catalog → under the ceiling.
+    mockCountDeployedWizardNodes.mockResolvedValue(0);
     mockLogEvent.mockReset();
     mockLog.child.mockClear();
     mockLog.debug.mockClear();
@@ -362,12 +365,7 @@ describe("POST /api/v1/nodes/[id]/publish", () => {
   });
 
   it("refuses to mint when the network is at the node-capacity ceiling", async () => {
-    const atCeiling = Array.from(
-      { length: 8 },
-      (_, i) =>
-        `[submodule "nodes/n${i}"]\n\tpath = nodes/n${i}\n\turl = https://example.com/n${i}.git`
-    ).join("\n");
-    mockFetchFileText.mockResolvedValue(atCeiling);
+    mockCountDeployedWizardNodes.mockResolvedValue(8);
 
     const response = await publishNode();
     const body = await response.json();

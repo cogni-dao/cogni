@@ -69,13 +69,13 @@ As the network grows, the operator runs its gitops deployments — and merging i
 | **Node-formation** (operator-authored `cogni-operator/node-submodule-*`) | operator                             | `allGreen` ∧ wizard-born node count `< CAPACITY_CEILING` (else comment + hand back)                                                          | direct `mergePr` (gated)       |
 | **Governance override** (PR that failed automated gates)                 | DAO vote → CogniSignal `CogniAction` | on-chain re-verify (`ON_CHAIN_RE_VERIFY`, `CHAIN_DAO_MATCH`, `TX_HASH_DEDUP` — see [dao-governance-loop](./dao-governance-loop.md))          | direct merge (vote serializes) |
 
-The node-formation capacity gate is the MVP capacity primitive: the operator has **no** awareness of VM capacity, where to slot a node, or when to create a VM. Until that exists (vNext), the ceiling is the config value `NODE_CAPACITY_CEILING` (env, default 8 — never a hardcoded literal), and the count is wizard-born submodule nodes (`nodes/<slug>` entries in the deployment parent's `.gitmodules`). The count comes from the deployment SSOT (`.gitmodules`), **not** the operator `nodes` table, because that table is RLS-scoped per owner in the web runtime and the `app_service` BYPASSRLS client is dependency-cruiser-banned in routes.
+The node-formation capacity gate is the MVP capacity primitive: the operator has **no** awareness of VM capacity, where to slot a node, or when to create a VM. Until that exists (vNext), the ceiling is the config value `NODE_CAPACITY_CEILING` (env, default 8 — never a hardcoded literal), and the count is wizard-born nodes in the deployment parent's catalog (`infra/catalog/*.yaml` entries with `type: node` + `source_repo`). The count comes from the deployment SSOT (the catalog — `.gitmodules` was retired by #1647, `CATALOG_SOURCE_SHA_IS_THE_DEPLOY_PIN`), **not** the operator `nodes` table, because that table is RLS-scoped per owner in the web runtime and the `app_service` BYPASSRLS client is dependency-cruiser-banned in routes.
 
 **What the ceiling actually bounds — and why `8`.** The real constraint is not how many nodes _exist_ but how many node-app pods _run concurrently per env VM_ (RAM). Formation-count is a **valid proxy for that today only because every node currently deploys to every env** — the over-commit disease that [node-app-scaling-architecture](../research/2026-06-10-node-app-scaling-architecture.md) removes. So `8` is not arbitrary: it is the measured honest single-6GB-VM density from that doc (~5–7 today, ~8 after the `migrate` init trim). The two specs share one number — set `NODE_CAPACITY_CEILING` from the scaling doc's measured density, do not pick it independently.
 
 **At/over the ceiling**, the operator stops and hands back with an explicit next action: **resize the env VM (scaling-architecture Step 1.5 — ~31 nodes on 16GB, zero topology change), or split per-env membership (Step 0) so existence stops implying a pod everywhere.** That hand-back is the boundary where compute planning begins.
 
-**Migration trigger (named, not assumed).** Once per-env membership lands (scaling Step 0), node _existence_ decouples from _running pods_: 50 nodes can exist while ~8 run per env. At that point a formation-time count over-blocks (it refuses the 9th node even when no env is near its pod ceiling), and the gate **moves from formation-time to deploy/membership-time**, counting concurrent pods per env VM rather than `.gitmodules` entries. Until Step 0 ships, the formation-time proxy is correct and is the right cheapest gate.
+**Migration trigger (named, not assumed).** Once per-env membership lands (scaling Step 0), node _existence_ decouples from _running pods_: 50 nodes can exist while ~8 run per env. At that point a formation-time count over-blocks (it refuses the 9th node even when no env is near its pod ceiling), and the gate **moves from formation-time to deploy/membership-time**, counting concurrent pods per env VM rather than catalog entries. Until Step 0 ships, the formation-time proxy is correct and is the right cheapest gate.
 
 ### Session binding
 
@@ -134,17 +134,18 @@ When the network becomes an AI-led company with contributor evaluations and cred
 
 **Prototype (as-built — this PR): node-formation capacity gate.**
 
-- `nodes/operator/app/src/features/nodes/capacity.ts` — pure `countSubmoduleNodes(.gitmodules) → number` + `evaluateNodeCapacity({deployedNodeCount, ceiling}) → {allowed, reason}`. Unit-tested.
+- `nodes/operator/app/src/features/nodes/capacity.ts` — pure `evaluateNodeCapacity({deployedNodeCount, ceiling}) → {allowed, reason}`. Unit-tested. The count is supplied by the deploy plane (no IO here).
+- `nodes/operator/app/src/adapters/server/vcs/github-repo-write.ts` — `countDeployedWizardNodes({owner, repo})`: walks the parent's `infra/catalog/` tree and counts `type: node` + `source_repo` entries (the post-#1647 deployment SSOT; `.gitmodules` is retired).
 - `nodes/operator/app/src/shared/env/server-env.ts` — `NODE_CAPACITY_CEILING` (config, default 8).
-- `nodes/operator/app/src/app/api/v1/nodes/[id]/publish/route.ts` — `check_capacity` step: reads the parent `.gitmodules` via `writer.fetchFileText`, evaluates the gate, returns `409 at_capacity` before minting consumes compute. (Enforced at publish — the cheapest point — rather than at merge; the merge step reuses the same primitive and is the next slice.)
+- `nodes/operator/app/src/app/api/v1/nodes/[id]/publish/route.ts` — `check_capacity` step: counts wizard-born catalog nodes via `writer.countDeployedWizardNodes`, evaluates the gate, returns `409 at_capacity` before minting consumes compute. (Enforced at publish — the cheapest point — rather than at merge; the merge step reuses the same primitive and is the next slice.)
 
 ## Acceptance Checks
 
 E2E on candidate-a (test GitHub App on `cogni-test-org`, parent = the configured `NODE_SUBMODULE_PARENT_*`):
 
-1. **Under capacity → birth proceeds.** With deployed `nodes/*` < `NODE_CAPACITY_CEILING`, `POST /api/v1/nodes/{id}/publish` returns 200 + opens the submodule PR (unchanged behavior). Loki: `event="node.publish.complete"` with `step="check_capacity"`, `outcome="success"`, `deployedNodeCount`, `ceiling`.
+1. **Under capacity → birth proceeds.** With deployed catalog `type: node` count < `NODE_CAPACITY_CEILING`, `POST /api/v1/nodes/{id}/publish` returns 200 + opens the node-formation PR (unchanged behavior). Loki: `event="node.publish.complete"` with `step="check_capacity"`, `outcome="success"`, `deployedNodeCount`, `ceiling`.
 2. **At/over capacity → refused.** Set `NODE_CAPACITY_CEILING` below the current count (or mint up to it); `publish` returns **409** `{error:"network at node capacity", reason, deployedNodeCount, ceiling}` and mints nothing. Loki: `errorCode="at_capacity"`.
-3. **Count correctness.** `deployedNodeCount` in the response/log equals the number of `nodes/<slug>` entries in the parent repo's `.gitmodules`.
+3. **Count correctness.** `deployedNodeCount` in the response/log equals the number of `infra/catalog/*.yaml` entries with `type: node` + `source_repo` in the parent repo.
 4. **Config, not hardcoded.** Changing `NODE_CAPACITY_CEILING` in the candidate-a env and bouncing the pod changes the gate threshold with no code change.
 
 ## Open Questions

@@ -4,15 +4,17 @@
 /**
  * Module: `@features/nodes/capacity`
  * Purpose: MVP node-capacity policy — the operator's deterministic gate on birthing new wizard nodes.
- * Scope: Pure functions only. Counts deployed wizard nodes from the parent repo's `.gitmodules` and
- *   decides allow/deny against a configured ceiling. No IO, no env, no GitHub — the caller fetches
- *   `.gitmodules` text and passes the ceiling from config.
+ * Scope: Pure decision only. `evaluateNodeCapacity` decides allow/deny against a configured ceiling;
+ *   the deployed-node count is supplied by the caller (the GitHub deploy plane reads the catalog).
+ *   No IO, no env, no GitHub here.
  * Invariants:
  *   - DETERMINISTIC_AUTHORIZATION (merge-authority): the decision is a gate boolean, never LLM judgment.
- *   - CAPACITY_FROM_DEPLOYMENT_SSOT: count = `nodes/<slug>` submodule gitlinks in the deployment parent
- *     repo's `.gitmodules` ("# nodes in the envs"), not the RLS-scoped operator `nodes` table.
+ *   - CAPACITY_FROM_CATALOG_SSOT: the network node-count = `infra/catalog/*.yaml` entries with
+ *     `type: node` + `source_repo` (wizard-born remote-source nodes) in the deployment parent repo —
+ *     NOT `.gitmodules` (retired by #1647, CATALOG_SOURCE_SHA_IS_THE_DEPLOY_PIN) and NOT the
+ *     RLS-scoped operator `nodes` table. Counting lives in `GitHubRepoWriter.countDeployedWizardNodes`.
  * Side-effects: none
- * Links: docs/spec/merge-authority.md
+ * Links: docs/spec/merge-authority.md, docs/spec/node-submodule-retirement.md
  * @public
  */
 
@@ -22,17 +24,6 @@ export interface NodeCapacityDecision {
   readonly deployedNodeCount: number;
   readonly ceiling: number;
   readonly reason: string;
-}
-
-/**
- * Count wizard-born nodes deployed in the network = `nodes/<slug>` submodule gitlinks declared in the
- * deployment parent repo's `.gitmodules`. Each wizard node is pinned as one such submodule, so this is
- * the network-wide "# nodes in the envs" without touching the per-owner RLS-scoped `nodes` table.
- */
-export function countSubmoduleNodes(gitmodulesText: string | null): number {
-  if (!gitmodulesText) return 0;
-  const matches = gitmodulesText.match(/^\s*path\s*=\s*nodes\/[^\s/]+\s*$/gm);
-  return matches ? matches.length : 0;
 }
 
 /**
