@@ -534,6 +534,42 @@ describe("loadCursor", () => {
   });
 });
 
+// ── resolveStreams ──────────────────────────────────────────────
+
+describe("resolveStreams", () => {
+  it("returns the poll adapter's streams when one is registered", async () => {
+    const { resolveStreams } = createAttributionActivities({
+      attributionStore: makeMockStore(),
+      sourceRegistrations: new Map([["github", makeMockRegistration()]]),
+      registries,
+      nodeId: NODE_ID,
+      scopeId: SCOPE_ID,
+      chainId: 8453,
+      logger: mockLogger,
+    });
+
+    await expect(resolveStreams({ source: "github" })).resolves.toEqual({
+      streams: ["pull_requests"],
+    });
+  });
+
+  it("POLL_SOURCE_OPTIONAL: returns no streams (skip poll) when source is webhook-only", async () => {
+    const { resolveStreams } = createAttributionActivities({
+      attributionStore: makeMockStore(),
+      sourceRegistrations: new Map(),
+      registries,
+      nodeId: NODE_ID,
+      scopeId: SCOPE_ID,
+      chainId: 8453,
+      logger: mockLogger,
+    });
+
+    await expect(resolveStreams({ source: "github" })).resolves.toEqual({
+      streams: [],
+    });
+  });
+});
+
 // ── collectFromSource ───────────────────────────────────────────
 
 describe("collectFromSource", () => {

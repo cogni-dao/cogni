@@ -11,7 +11,7 @@
  *   - Per CURSOR_STATE_PERSISTED: Cursors saved after each collect() call
  *   - Per NODE_SCOPED: All operations pass nodeId + scopeId from deps
  *   - Per TEMPORAL_DETERMINISM: Activities contain all I/O; workflows call only these proxies
- *   - Per SOURCE_NO_ADAPTER: collectFromSource and resolveStreams throw if no poll adapter registered for a configured source (fail loud, not silent skip)
+ *   - Per POLL_SOURCE_OPTIONAL: a configured source without a poll adapter is webhook-only — resolveStreams returns no streams (warn-logged) so collection is skipped and the epoch still enriches/cycles on webhook-ingested receipts. Receipt ingestion is idempotent across the webhook and poll planes (deterministic event IDs), so polling is a backfill optimization, not a hard dependency.
  *   - Per SELECTION_AUTO_POPULATE: materializeSelection inserts new selections (DO NOTHING on conflict), updates only userId on unresolved rows
  *   - Per SELECTION_POLICY_DELEGATED: materializeSelection resolves selection policy from the pipeline profile and dispatches via dispatchSelectionPolicy — zero hardcoded inclusion logic
  *   - Per IDENTITY_BEST_EFFORT: Unresolved receipts get userId=null in selection rows, never dropped
@@ -1319,9 +1319,15 @@ export function createAttributionActivities(deps: AttributionActivityDeps) {
   ): Promise<ResolveStreamsOutput> {
     const registration = sourceRegistrations.get(input.source);
     if (!registration?.poll) {
-      throw new Error(
-        `[SOURCE_NO_ADAPTER] No poll adapter registered for source "${input.source}" — check env vars (GH_REVIEW_APP_ID, GH_REVIEW_APP_PRIVATE_KEY_BASE64, GH_REPOS)`
+      // POLL_SOURCE_OPTIONAL: webhook-only source — no poll adapter registered.
+      // Skip polling (return no streams) so the epoch still enriches + cycles on
+      // webhook-ingested receipts. Polling is a backfill optimization, not a hard
+      // dependency (receipt ingestion is idempotent across both planes).
+      logger.warn(
+        { source: input.source },
+        "No poll adapter registered — treating source as webhook-only, skipping poll"
       );
+      return { streams: [] };
     }
     const streams = registration.poll.streams().map((s) => s.id);
     logger.info(
