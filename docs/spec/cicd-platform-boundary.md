@@ -169,7 +169,7 @@ The node owns the left edge (catalog row + schema + secret declaration). The ope
 
 ## The next layer: a typed operator control plane
 
-The freeze stops the bleak. This is where the deploy brain **goes instead**: into the `.ts` operator app, as a hexagonal capability the operator (and its AI brain) own — not bash, not `workflow_dispatch`. The model is Railway: the operator declares intent and sees live state; the substrate executes. The operator already mints overlays in TypeScript (`gens/overlay.ts`) — this extends that proven seam from _birth_ to _full deploy lifecycle_.
+The freeze stops the bleak. This is where the deploy brain **goes instead**: into the `.ts` operator app, as a hexagonal capability the operator (and its AI brain) own — not bash, not `workflow_dispatch`. The model is Railway: the operator declares intent and sees live state; the substrate executes. The operator already mints overlays in TypeScript (`gens/overlay.ts`) — this extends that proven seam from _birth_ to _full deploy lifecycle_. For the human-simple "how does this actually work" walkthrough — the SEE / DEPLOY / REMOVE flows, the node-page console, and the auth model (in-cluster read-only ServiceAccount + git writes, no VPS/SSH) — see [Operator-Managed Deployments](../design/operator-managed-deployments.md).
 
 Two layers, one first-class today:
 
