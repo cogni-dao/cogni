@@ -295,7 +295,10 @@ jobs:
 
       - name: Initialize node submodule when present
         env:
-          GH_TOKEN: ${{ github.token }}
+          # github.token is repo-scoped (cogni) and cannot clone a PRIVATE sibling
+          # node repo → "Repository not found". GIT_READ_TOKEN is an org-wide
+          # Contents:Read PAT that reads private node repos (bug.5014).
+          GH_TOKEN: ${{ secrets.GIT_READ_TOKEN }}
           NODE: ${{ matrix.node }}
         run: |
           set -euo pipefail
@@ -604,7 +607,10 @@ jobs:
 
       - name: Initialize node submodule when present
         env:
-          GH_TOKEN: ${{ github.token }}
+          # github.token is repo-scoped (cogni) and cannot clone a PRIVATE sibling
+          # node repo → "Repository not found". GIT_READ_TOKEN is an org-wide
+          # Contents:Read PAT that reads private node repos (bug.5014).
+          GH_TOKEN: ${{ secrets.GIT_READ_TOKEN }}
           NODE: ${{ matrix.node }}
         run: |
           set -euo pipefail
@@ -762,7 +768,9 @@ jobs:
 
       - name: Sync base + per-node overlay + per-node catalog to deploy branch
         env:
-          GH_TOKEN: ${{ github.token }}
+          # Private node submodule read needs the org-wide PAT, not the repo
+          # token (bug.5014).
+          GH_TOKEN: ${{ secrets.GIT_READ_TOKEN }}
           NODE: ${{ matrix.node }}
         run: |
           set -euo pipefail
