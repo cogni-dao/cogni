@@ -86,7 +86,7 @@ export function NodeRegistrationForm(): ReactElement {
         <ul className="space-y-3">
           {OUTCOMES.map((o) => (
             <li key={o.title} className="flex items-start gap-4">
-              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary ring-1 ring-primary/15">
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
                 {o.icon}
               </span>
               <div className="space-y-0.5 pt-0.5">
