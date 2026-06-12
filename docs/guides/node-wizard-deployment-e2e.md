@@ -4,7 +4,7 @@ type: guide
 title: "Node Wizard → Deployed — E2E Lifecycle & cogni-operator App Actions"
 status: draft
 trust: draft
-summary: The end-to-end map of a wizard-born node from dao_formed → running pods — every cogni-operator GitHub App action and gate at each stage, what's built vs not, and the lifecycle shortcomings (no CRUD, no management plane) that the DeployCapability closes next.
+summary: The end-to-end map of a wizard-born node from dao_formed to running pods — every cogni-operator GitHub App action and gate at each stage, what's built vs not, and the lifecycle shortcomings (no CRUD, no management plane) that the OperatorDeployPlanePort closes next.
 read_when: You need the whole-flow picture of where the cogni-operator App acts and gates across node formation → deployment, are debugging which stage a spawn stalled at, or are scoping node-lifecycle / management-plane work.
 owner: derekg1729
 created: 2026-06-12
@@ -81,7 +81,7 @@ Argo reconciles → PODS RUN (deployed)
 
 Today a node is **created, gitops'd, and forgotten** — there is **no CRUD and no management plane**. The pieces are disjoint:
 
-- **Three sources of truth that don't reconcile.** The operator `nodes` DB row (wizard working state, `status` ∈ dao*pending…active), the parent **catalog** (`infra/catalog/*.yaml` on `main` = deploy registration), and the **running pods** (Argo) are independent. A `nodes` row says `published` whether or not the catalog row ever merged or any pod runs. The catalog count (capacity) measures \_registered/merged* nodes, not what the DB thinks exists, not what's actually serving.
+- **Three sources of truth that don't reconcile.** The operator `nodes` DB row (wizard working state, `status` from `dao_pending` to `active`), the parent **catalog** (`infra/catalog/*.yaml` on `main` = deploy registration), and the **running pods** (Argo) are independent. A `nodes` row says `published` whether or not the catalog row ever merged or any pod runs. The catalog count (capacity) measures registered/merged nodes — not what the DB thinks exists, not what's actually serving.
 - **No update.** Once minted, there is no operator verb to rename, re-pin, re-scope envs, or change a node's identity through a management plane — it's hand-edited catalog/overlay PRs.
 - **No delete / retract.** Closing a formation PR leaves an **orphaned mint**: the forked repo, the DoltHub knowledge repo, and the `nodes` DB row all persist, unregistered and undeployed, with no cleanup. There is no "decommission a node" path.
 - **No list / status / health as data.** "Which nodes are deployed to which envs, at which SHA, healthy?" is reconstructed by hand from GitHub + GHCR + `/version` + Argo, not read from one place.
