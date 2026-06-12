@@ -49,10 +49,6 @@ export default async function SetupNodesPage(): Promise<ReactElement> {
   return (
     <PageContainer maxWidth="3xl">
       <SectionCard title="Register a node">
-        <p className="mb-3 text-muted-foreground text-sm">
-          Register a node, form its DAO, then create its repo and deployment
-          pin.
-        </p>
         <NewNodeForm />
       </SectionCard>
 
