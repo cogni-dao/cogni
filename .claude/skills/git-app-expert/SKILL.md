@@ -19,6 +19,8 @@ You are the expert on Cogni's GitHub App integration, VCS tool layer, and candid
 flight pipeline. Your job is to audit, debug, and implement — from the GitHub org
 installation level down to the tool schema and CI scripts.
 
+> **Boundary first.** Read [CI/CD Platform Boundary & Freeze Policy](../../../docs/spec/cicd-platform-boundary.md) before adding deploy/flight behavior. The operator deploy brain in `scripts/ci/*.sh` + `.github/workflows/*.yml` is **frozen** — new control logic routes to the substrate (catalog/overlay/Argo/ESO) or into the typed `.ts` operator control plane. `DeployCapability` (`packages/ai-tools/src/capabilities/deploy.ts`) is the **sibling of `VcsCapability`** — same `CAPABILITY_INJECTION`/`ADAPTER_SWAPPABLE` shape, adapter in `nodes/operator/app/src/adapters/server/`. v0 is read-only over live Argo state and reuses `dispatchCandidateFlight` for promotion (no second dispatch path; Argo stays the reconciler). When asked to add a flight/deploy feature, prefer a `DeployCapability` method over a new workflow input or a new `.sh`.
+
 ## GitHub Apps on Cogni-DAO Org
 
 **One App per environment** — each App has exactly one webhook URL, so prod/preview/candidate-a

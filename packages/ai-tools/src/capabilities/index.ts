@@ -14,6 +14,17 @@
  * @public
  */
 
+// Deploy capability (per cicd-platform-boundary spec § typed operator control plane; sibling of VcsCapability)
+export type {
+  DeployCapability,
+  DeploymentProof,
+  EnvSummary,
+  NodeDeployState,
+  NodeHealthState,
+  ReplicaCounts,
+  RetractionProof,
+  ScaleProof,
+} from "./deploy";
 // Hypothesis-loop capability (per knowledge-syntropy spec § The Hypothesis Loop)
 export type {
   ChainDirection,

@@ -193,10 +193,15 @@ Two layers, one first-class today:
                                           ▲ MVP stopgap      ▲ the real target
 ```
 
-### Prototype interfaces (sketch — not yet committed as code)
+### Prototype interfaces
+
+The read-only `DeployCapability` v0 ships in this PR as a real interface at
+[`packages/ai-tools/src/capabilities/deploy.ts`](../../packages/ai-tools/src/capabilities/deploy.ts)
+(type-only, exported from the `@cogni/ai-tools` barrel alongside `VcsCapability` — no runtime yet).
+`ComputeResourcePort` below stays a sketch until Akash is funded.
 
 ```ts
-// packages/ai-tools/src/capabilities/deploy.ts  — sibling to vcs.ts
+// packages/ai-tools/src/capabilities/deploy.ts  — sibling to vcs.ts (SHIPPED in this PR, read-only v0)
 //   Invariants: CAPABILITY_INJECTION, ADAPTER_SWAPPABLE, ARGO_IS_TRUTH (read; never a parallel control plane)
 export interface DeployCapability {
   // v0 — READ-ONLY (powers the node-network dashboard + brain awareness)
@@ -242,14 +247,14 @@ The provider seam is a **1:1 adapter swap** in the operator bootstrap — `Cherr
 
 **Prior art:** the Argo-GitOps foundation this builds on is [PR #628](https://github.com/Cogni-DAO/cogni/pull/628) (`task.0149`, open since 2026-03-25, superseded piecemeal by per-node flighting). The registry/adapter-swap pattern is proven in [`mcp-control-plane.md`](./mcp-control-plane.md). The decentralized-compute target is `infra/provision/akash/FUTURE_AKASH_INTEGRATION.md`. **Cherry Servers is the explicit MVP stopgap; Akash is the crypto-native end state.**
 
-## Smallest next PR
+## Enforcement
 
-This document is the policy-establishing PR. It moves nothing and breaks nothing. The smallest enforcement step **after** it (a separate, follow-up PR) is a **growth ratchet** — the boring, inspectable entropy-stopper:
+This policy lands with three teeth:
 
-- A CI check (added to the existing `static`/`unit` job, not a new workflow) that fails when `scripts/ci/deploy-infra.sh` exceeds its current line count, or when a net-new `.sh` is added under `scripts/ci/` that mutates infra/secrets without a `platform-waiver` PR label.
-- `devops-expert` is already a required reviewer on `scripts/ci/**`, `.github/workflows/**`, `infra/**`, `deploy/*` (per the skill); the ratchet makes the freeze machine-checkable instead of reviewer-memory-dependent.
+1. **Reviewer skills cite it.** [`devops-expert`](../../.claude/skills/devops-expert/SKILL.md) and [`git-app-expert`](../../.claude/skills/git-app-expert/SKILL.md) read this doc first and flag any PR that grows the frozen deploy brain instead of routing to the substrate or `DeployCapability`. `devops-expert` is already a required reviewer on `scripts/ci/**`, `.github/workflows/**`, `infra/**`, `deploy/*`.
+2. **The seam exists.** The read-only `DeployCapability` ships here, so "route it into the `.ts` control plane" is a real destination, not a promise.
 
-That follow-up is deliberately **out of this PR** so the policy lands first and is reviewable on its own.
+The remaining tooth — a **machine-checked growth ratchet** — is the smallest next PR: a check (added to the existing `static`/`unit` job, not a new workflow) that fails when `scripts/ci/deploy-infra.sh` exceeds its current line count, or when a net-new infra/secret-mutating `.sh` lands under `scripts/ci/` without a `platform-waiver` label. Deferred to its own PR so it can be tuned without false-failing in-flight bug-fix PRs that legitimately touch `deploy-infra.sh`.
 
 ## Explicit — what NOT to build yet
 

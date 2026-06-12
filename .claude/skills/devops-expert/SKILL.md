@@ -9,6 +9,7 @@ You are a senior DevOps architect. AI agents are the primary committers in this 
 
 ## Ground truth — read before advising
 
+- **[CI/CD Platform Boundary & Freeze Policy](../../../docs/spec/cicd-platform-boundary.md) — READ FIRST when advising on ANY new deployment/platform behavior.** The deploy brain (`scripts/ci/*.sh` + `.github/workflows/*.yml`) is **frozen** for the operator control plane: no new platform logic in bash/YAML, no new deploy/promote/provision workflow, no new infra/secret-mutating `.sh`. `deploy-infra.sh` (2,167 lines) is a 🔴 DANGER ZONE on a line-count ratchet. New platform work routes to the substrate (catalog row / Kustomize overlay / Argo AppSet / ESO declaration / OpenTofu) per the doc's request→home table, OR into the typed `.ts` operator control plane (`DeployCapability` + `ComputeResourcePort`, Cherry→Akash). When reviewing, the gate is: _bug-fix / catalog-driven / guard-tightening = OK in place; new branching, env policy, promotion semantics, secret/domain/lifecycle rules = platform work, NOT script work._ Standalone-node sovereignty (a node's own GH Actions) is explicitly NOT frozen.
 - [Multi-Repo Sync Contract](../../../docs/spec/repo-sync-contract.md) — operator-scope content lives in `Cogni-DAO/cogni` (HUB); `node-template` and `cogni-poly` are artifacts. `.cogni/sync-manifest.yaml` declares global excludes + per-artifact divergences; `.github/workflows/sync-drift-detector.yml` runs daily + on push:main, upserts a hub issue labeled `sync-drift` listing drift in three classes (🟡 different / 🔴 missing-on-artifact / 🟣 only-on-artifact). **Any review of a workflow / `infra/**`/`scripts/**`/`.github/**`change in any of the three repos MUST consider sync impact** — backflow refactors (substrate work pioneered in node-template, e.g. OpenBao/ESO) require a named same-day porter committed before merge, else drift accumulates. The`sync-drift` issue is the cross-repo dashboard.
 - [CI/CD Spec](../../../docs/spec/ci-cd.md) — operating rules, branch model, pipeline chain, environments, TODOs
 - [Candidate Flight V0 Guide](../../../docs/guides/candidate-flight-v0.md) — short operator guide for flying one selected PR to `candidate-a`
@@ -194,6 +195,7 @@ When reviewing code that touches CI/CD, deploy, or infra:
 ## Anti-patterns to flag
 
 - Rebuilding in production instead of promoting proven digest
+- **Growing the frozen deploy brain** (see Freeze Policy, top). A PR that adds a new responsibility / secret / service / DB path / inline decision tree to `deploy-infra.sh`, a net-new infra-mutating `scripts/ci/*.sh`, or a new deploy/promote/provision workflow — when the behavior could be a catalog field, overlay/AppSet, ESO declaration, or a `DeployCapability` method. Flag it; route it per the request→home table. (Bug fixes + catalog-driven + guard-tightening are fine in place.)
 - `:latest` or mutable tags in deploy manifests
 - One-off SSH edits not captured in scripts
 - PRs for machine-written deploy-branch updates
