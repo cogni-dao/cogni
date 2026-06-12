@@ -204,23 +204,13 @@ The read-only `DeployCapability` v0 ships in this PR as a real interface at
 // packages/ai-tools/src/capabilities/deploy.ts  — sibling to vcs.ts (SHIPPED in this PR, read-only v0)
 //   Invariants: CAPABILITY_INJECTION, ADAPTER_SWAPPABLE, ARGO_IS_TRUTH (read; never a parallel control plane)
 export interface DeployCapability {
-  // v0 — READ-ONLY (powers the node-network dashboard + brain awareness)
+  // v0 — READ-ONLY (powers the per-node deployment view + brain awareness)
   listEnvironments(): Promise<readonly EnvSummary[]>;
-  getDeployState(p: { env: string; node: string }): Promise<NodeDeployState>;
-  observe(p: { env: string; node: string }): Promise<NodeHealth>; // /version.buildSha + replicas
-  // Phase 1 — CONTROL (each returns a proof; promote wraps dispatchCandidateFlight first)
-  deployNode?(p: {
-    env: string;
-    node: string;
-    sourceSha: string;
-  }): Promise<DeploymentProof>;
-  retractNode?(p: { env: string; node: string }): Promise<RetractionProof>; // git-revert deploy branch
-  scaleNode?(p: {
-    env: string;
-    node: string;
-    replicas: number;
-  }): Promise<ScaleProof>;
+  getDeployState(p: { env: string; node: string }): Promise<NodeDeployState>; // sourceSha, digest, health, replicas
 }
+// Phase-1 control verbs (deployNode wraps flight · retractNode = git-revert · scaleNode = overlay patch)
+// are NOT on the v0 interface — an interface only its own spec implements is speculation. They land
+// when the read path ships + an adapter exists. Their shape is the phase table below.
 
 // @cogni/compute-control (DEFERRED — only when Akash is funded)
 //   Payment/settlement lives ONLY here; DeployCapability never sees it.

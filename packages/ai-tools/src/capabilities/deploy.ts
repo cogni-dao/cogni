@@ -3,10 +3,8 @@
 
 /**
  * Module: `@cogni/ai-tools/capabilities/deploy`
- * Purpose: Deploy capability interface for AI tools — typed, first-class awareness + control over the
- *   node-network's deploy state. The seam the deploy brain migrates INTO, off `.sh`/workflow_dispatch.
- * Scope: Defines DeployCapability for reading (v0) and, later, controlling per-(env,node) deploy state.
- *   Does NOT implement transport. Sibling of VcsCapability (see ./vcs).
+ * Purpose: Deploy capability interface for AI tools — typed read over the node-network's per-(env,node) deploy state, the seam the deploy brain migrates into off `.sh`/workflow_dispatch.
+ * Scope: Defines the read-only v0 DeployCapability (sibling of VcsCapability). Does NOT implement transport, mutate deploy state, or provision compute (that is ComputeResourcePort).
  * Invariants:
  *   - CAPABILITY_INJECTION: Implementation injected at bootstrap, not imported.
  *   - ADAPTER_SWAPPABLE: Argo/k8s adapter for v0; the interface never names a provider.
@@ -63,80 +61,30 @@ export interface NodeDeployState {
   readonly replicas: ReplicaCounts;
 }
 
-/**
- * Proof of a promotion. v0 wraps `VcsCapability.dispatchCandidateFlight` — there is no second
- * dispatch path. `workflowUrl` is where the caller observes the resulting run.
- */
-export interface DeploymentProof {
-  readonly dispatched: boolean;
-  readonly env: string;
-  readonly node: string;
-  readonly sourceSha: string;
-  readonly workflowUrl: string;
-}
-
-/** Proof of a retraction — a revert commit on the `deploy/<env>-<node>` branch (Argo reconciles). */
-export interface RetractionProof {
-  readonly retracted: boolean;
-  readonly env: string;
-  readonly node: string;
-  readonly revertSha: string;
-}
-
-/** Proof of a replica scale — an overlay patch on the deploy branch. */
-export interface ScaleProof {
-  readonly applied: boolean;
-  readonly env: string;
-  readonly node: string;
-  readonly replicas: number;
-}
-
 // ---------------------------------------------------------------------------
 // Capability interface
 // ---------------------------------------------------------------------------
 
 /**
- * Deploy capability — typed control over the node-network's deploy state.
+ * Deploy capability — typed READ over the node-network's deploy state.
  *
  * Per CAPABILITY_INJECTION: implementation injected at bootstrap (the operator's ArgoDeployAdapter).
  * Per ADAPTER_SWAPPABLE: an Argo/k8s adapter for v0; the provider underneath is invisible here.
  *
- * v0 exposes only the READ surface — it powers the operator's node-network CI/CD dashboard and the
- * brain's awareness without mutating anything. The optional control verbs are Phase 1; until an
- * adapter implements them they are absent, and promotion stays on the existing flight seam.
+ * v0 is read-only — it powers the operator's per-node deployment view (which envs a node is live in,
+ * at what SHA/health) without mutating anything. The Phase-1 control verbs (deploy / retract / scale)
+ * are intentionally NOT on this interface yet: they have no adapter, and an interface that only its
+ * own spec implements is speculation. They land here when the read path ships and an adapter exists;
+ * their shape is the phase table in docs/spec/cicd-platform-boundary.md. Promotion stays on the
+ * existing `VcsCapability.dispatchCandidateFlight` seam (ARGO_IS_TRUTH — no second control plane).
  */
 export interface DeployCapability {
-  /** List the environments in the network with a coarse rollup. */
+  /** List the environments in the network with a coarse per-env rollup. */
   listEnvironments(): Promise<readonly EnvSummary[]>;
 
-  /** Read the live deploy state for one node in one environment. */
+  /** Read the live deploy state for one node in one environment (sourceSha, digest, health, replicas). */
   getDeployState(params: {
     env: string;
     node: string;
   }): Promise<NodeDeployState>;
-
-  /** Observe a node's current health + `/version.buildSha` (point read; not a stream). */
-  observe(params: { env: string; node: string }): Promise<NodeDeployState>;
-
-  /**
-   * Promote a source revision into an `(env, node)` cell. Phase 1.
-   *
-   * v0 implementations omit this. When present it wraps `dispatchCandidateFlight` — it does NOT
-   * become a second promotion primitive (ARGO_IS_TRUTH).
-   */
-  deployNode?(params: {
-    env: string;
-    node: string;
-    sourceSha: string;
-  }): Promise<DeploymentProof>;
-
-  /** Roll a node back by reverting its deploy-branch tip (Argo reconciles). Phase 1. */
-  retractNode?(params: { env: string; node: string }): Promise<RetractionProof>;
-
-  /** Scale a node's replicas via an overlay patch on its deploy branch. Phase 1. */
-  scaleNode?(params: {
-    env: string;
-    node: string;
-    replicas: number;
-  }): Promise<ScaleProof>;
 }
