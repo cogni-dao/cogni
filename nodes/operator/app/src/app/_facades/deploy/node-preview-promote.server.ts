@@ -30,7 +30,7 @@ import { createOperatorDeployPlane } from "@/bootstrap/capabilities/operator-dep
 import { resolveServiceDb } from "@/bootstrap/container";
 import { nodes } from "@/shared/db/nodes";
 import type { ServerEnv } from "@/shared/env";
-import { EVENT_NAMES, logEvent } from "@/shared/observability";
+import { EVENT_NAMES } from "@/shared/observability";
 
 interface MergedPrContext {
   readonly owner: string;
@@ -119,10 +119,12 @@ async function promoteNodeToPreview(
       sourceSha: ctx.headSha,
     });
 
-    logEvent(
-      log,
-      EVENT_NAMES.NODE_PREVIEW_PROMOTE_COMPLETE,
+    // Operator-local event (not in @cogni/node-shared's EventName) → log via the plain
+    // logger, the same pattern as NODE_ACCESS_REQUEST_COMPLETE. No reqId: this is a
+    // fire-and-forget webhook dispatch, not a request-scoped handler.
+    log.info(
       {
+        event: EVENT_NAMES.NODE_PREVIEW_PROMOTE_COMPLETE,
         nodeId: node.id,
         slug: node.slug,
         repo: `${ctx.owner}/${ctx.repo}`,
