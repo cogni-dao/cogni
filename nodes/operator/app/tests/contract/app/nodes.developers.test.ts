@@ -123,6 +123,7 @@ describe("POST /api/v1/nodes/[id]/developers", () => {
           nodeId: NODE_ID,
           agentUserId: AGENT_USER_ID,
           decision: "approve",
+          role: "developer",
         });
       },
     });
@@ -134,6 +135,38 @@ describe("POST /api/v1/nodes/[id]/developers", () => {
     });
     expect(authz.deleteRelation).not.toHaveBeenCalled();
     expect(transitionRequest).toHaveBeenCalled();
+  });
+
+  it("approves a registered agent as production_promoter (role-aware grant)", async () => {
+    await testApiHandler({
+      appHandler,
+      params: { id: NODE_ID },
+      async test({ fetch }) {
+        const res = await fetch({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            agentUserId: AGENT_USER_ID,
+            decision: "approve",
+            role: "production_promoter",
+          }),
+        });
+        expect(res.status).toBe(200);
+        expect(await res.json()).toEqual({
+          nodeId: NODE_ID,
+          agentUserId: AGENT_USER_ID,
+          decision: "approve",
+          role: "production_promoter",
+        });
+      },
+    });
+
+    expect(authz.writeRelation).toHaveBeenCalledWith({
+      user: `user:${AGENT_USER_ID}`,
+      relation: "production_promoter",
+      object: `node:${NODE_ID}`,
+    });
+    expect(authz.deleteRelation).not.toHaveBeenCalled();
   });
 
   it("rejects by removing the node developer tuple", async () => {
