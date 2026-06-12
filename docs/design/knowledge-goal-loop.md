@@ -145,6 +145,29 @@ consumes `lastKpi` as an opaque 0–100 — it does not care who computed it, bu
 controller MUST wire it to an independent reader, not to `recomputeConfidence` of
 the row the loop is writing to.
 
+### Most goals are one-off — readers are KINDS, not per-goal code
+
+A `kpiId → coded-reader` registry only scales for the **few reusable** quantitative
+KPIs (`metric:oss-frontier-coverage` shared by many goals). The common case is a
+goal whose KPI is **never used again** — registering new reader code per goal does
+not scale. Because `KpiReader.read(goal)` receives the whole goal, the **params
+live on the goal**, and the registry holds a few generic reader **kinds**:
+
+| Reader kind                                  | How the goal supplies it                                      | When                                              |
+| -------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------- |
+| `metric:<reusable-id>` → coded reader        | nothing; the id maps to a registered metric                   | the handful of durable quantitative KPIs          |
+| **parameterized count/threshold**            | goal tags carry _what to count + denominator + source query_  | any measurable one-off goal, zero new code        |
+| **`metric:judge` — independent LLM judge**   | goal carries its **success criterion in prose** (a goal tag)  | the everyday qualitative one-off                  |
+
+**`metric:judge` is the scalable default for one-off goals** — the Claude `/goal`
+Haiku-evaluator pattern. You don't write reader code; you write the goal's success
+sentence, and a **separate** judge model grades the evidence 0–100. The hard
+constraint stands: the judge must score against **ground truth the loop does not
+author** (re-derive from primary sources / a held-out check), never the loop's own
+evidence atoms, or the worker games it (the Reflexion blind-spot). The registry's
+`independent` flag gates this — a judge reader is independent only when its source
+is external to the loop's writes.
+
 ---
 
 ## The loop controller
@@ -293,6 +316,45 @@ surfaces (schedules API + knowledge chains + EDO). The single human concept is
 **a goal = schedule (cadence + budget) ⨝ knowledge chain (progress + verdict)**: the
 schedules API drives the loop, the knowledge chain shows it, the Goals lens joins
 them. Deferred to `/implement` alongside the controller.
+
+---
+
+## How a goal gets set (the wiring)
+
+There is **no new write path** — a goal is created the way any EDO hypothesis is.
+Setting a goal = **one op: file the hypothesis + activate its schedule.**
+
+**AI path (an agent sets itself a goal):** call `core__edo_hypothesize` with —
+
+- `resolution_strategy = metric:<kpiId>` (the KPI binding; `metric:judge` for a one-off)
+- `evaluate_at` (the hard deadline)
+- goal tags: `goal-target=<n>`, `goal-max-iterations`, `goal-max-tokens`,
+  `goal-max-stalled`, `goal-step-graph=<graphId>`, and for judge
+  `goal-success-criterion=<prose>`
+- `content` = the goal statement
+
+The resolver cron sees a pending `metric:`-strategy row and registers/advances the
+per-goal Temporal schedule (`workflowId = hypothesisId`, overlap SKIP). **The
+`metric:` row IS the goal; the cron is its activation** — no separate "create
+schedule" call.
+
+**Human path (Goals lens):** a thin form collects goal statement + KPI kind +
+target + budget + step-graph and POSTs the same hypothesize+activate op. The lens
+then renders the live goal as its knowledge chain (evidence atoms + KPI vs target +
+budget burn + verdict) — no bespoke goal store.
+
+```
+set      → edo_hypothesize(metric:<kpi>, target, budget, [criterion]) + schedule activate
+each tick → read KPI (independent) → loopHaltReason → step (research→cited atom) | halt
+close     → outcome (validates|invalidates) → recompute confidence → schedule pauses
+observe   → the goal's knowledge chain (/knowledge?mode=chains) + Goals lens
+```
+
+> **Not yet runnable — this PR is the skeleton.** The activity bodies (DB/graph
+> I/O), the `metric:` resolver-dispatch registration, the `metric:judge` reader, and
+> the goal-creation surface (the `edo_hypothesize` budget/criterion tags + schedule
+> activation, and the Goals UI) are the follow-up `/implement`. Until those land,
+> **no goal can be created or run — there is nothing to flight-prove.**
 
 ---
 
