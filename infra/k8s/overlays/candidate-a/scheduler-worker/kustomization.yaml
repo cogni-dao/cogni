@@ -7,6 +7,8 @@ namespace: cogni-candidate-a
 
 resources:
   - ../../../base/scheduler-worker
+  # Operator GitHub App creds for the attribution-ledger github poll source.
+  - github-external-secret.yaml
 
 images:
   - name: ghcr.io/cogni-dao/cogni-template
@@ -24,6 +26,11 @@ patches:
       - op: replace
         path: /data/IMAGE_DIGEST
         value: "candidate-a-placeholder-scheduler-worker"
+      # Repo scope for the attribution github poll source. The candidate App
+      # (cogni-operator-test, 3956976) is installed on cogni-test-org.
+      - op: add
+        path: /data/GH_REPOS
+        value: "cogni-test-org/cogni-monorepo"
 
   # bug.0295: VM discovery via DNS (cogni-candidate-a.vm.cognidao.org).
   # Convert base headless Services → ExternalName; delete EndpointSlices.

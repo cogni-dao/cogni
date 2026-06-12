@@ -7,6 +7,8 @@ namespace: cogni-preview
 
 resources:
   - ../../../base/scheduler-worker
+  # Operator GitHub App creds for the attribution-ledger github poll source.
+  - github-external-secret.yaml
 
 # Image digest — updated by promote-k8s-image.sh on each CI push.
 # Argo CD ApplicationSet points here; digest change → auto-sync.
@@ -27,6 +29,11 @@ patches:
       - op: replace
         path: /data/IMAGE_DIGEST
         value: "staging-placeholder-scheduler-worker"
+      # Repo scope for the attribution github poll source. The preview App
+      # (node-template-preview, 3061922) reviews Cogni-DAO/preview-test-repo.
+      - op: add
+        path: /data/GH_REPOS
+        value: "Cogni-DAO/preview-test-repo"
 
   # bug.0295: VM discovery via DNS (cogni-preview.vm.cognidao.org).
   # Convert base headless Services → ExternalName; delete EndpointSlices.

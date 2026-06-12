@@ -7,6 +7,9 @@ namespace: cogni-production
 
 resources:
   - ../../../base/scheduler-worker
+  # Pulls operator GitHub App creds from OpenBao so the ledger container can
+  # register the `github` poll source (epoch attribution collection/backfill).
+  - github-external-secret.yaml
 
 # Image digest — updated by manual PR for production promotion.
 images:
@@ -25,6 +28,11 @@ patches:
       - op: replace
         path: /data/IMAGE_DIGEST
         value: "production-placeholder-scheduler-worker"
+      # Repo scope for the attribution-ledger GitHub poll source. Without it the
+      # ledger container skips the github adapter (GH_REPOS empty → no source).
+      - op: add
+        path: /data/GH_REPOS
+        value: "Cogni-DAO/cogni"
 
   # bug.0295: VM discovery via DNS (cogni.vm.cognidao.org).
   # Convert base headless Services → ExternalName; delete EndpointSlices.

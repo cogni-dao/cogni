@@ -62,6 +62,14 @@ spec:
                 name: scheduler-worker-secrets
             - configMapRef:
                 name: scheduler-worker-config
+            # Attribution-ledger GitHub poll source creds (GH_REVIEW_APP_ID +
+            # GH_REVIEW_APP_PRIVATE_KEY_BASE64). Provided per-env by the
+            # scheduler-worker-github-secrets ExternalSecret (operator OpenBao
+            # path). optional: a node/env without it just skips the github
+            # poll adapter instead of failing to start.
+            - secretRef:
+                name: scheduler-worker-github-secrets
+                optional: true
           resources:
             requests:
               memory: "128Mi"
