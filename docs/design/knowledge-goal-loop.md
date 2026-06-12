@@ -66,13 +66,13 @@ step graph writes; a separate judge scores.
 ### MVP checklist (required for flight + validate)
 
 - [ ] **Start surface** — internal `startGoal({statement, kpi:'judge', criterion,
-      target, budget, stepGraphId})` → files the `metric:judge` hypothesis (target +
+    target, budget, stepGraphId})` → files the `metric:judge` hypothesis (target +
       budget + criterion as tags) and `workflowClient.start(GoalLoopWorkflow,
-      {workflowId: hypothesisId})`. Internal-principal gated (like `core__edo_*`).
+    {workflowId: hypothesisId})`. Internal-principal gated (like `core__edo_*`).
 - [ ] **`GoalLoopWorkflow` — internal bounded loop.** Deterministic: load goal →
       `while (true) { kpi = readKpiActivity; d = goalLoopDecision(state,now); if
-      d.halt → fileGoalOutcomeActivity + break; else → executeChild(GraphRunWorkflow,
-      stepGraphId) writes ONE cited atom; state = applyStep(...) }`. All I/O in
+    d.halt → fileGoalOutcomeActivity + break; else → executeChild(GraphRunWorkflow,
+    stepGraphId) writes ONE cited atom; state = applyStep(...) }`. All I/O in
       activities; budget in workflow memory.
 - [ ] **Activity bodies (real I/O):** `loadGoalActivity` (read hypothesis row +
       `goalFromRow`), `readKpiActivity` (→ `metric:judge` reader), `runStepActivity`
@@ -218,11 +218,11 @@ goal whose KPI is **never used again** — registering new reader code per goal 
 not scale. Because `KpiReader.read(goal)` receives the whole goal, the **params
 live on the goal**, and the registry holds a few generic reader **kinds**:
 
-| Reader kind                                  | How the goal supplies it                                      | When                                              |
-| -------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------- |
-| `metric:<reusable-id>` → coded reader        | nothing; the id maps to a registered metric                   | the handful of durable quantitative KPIs          |
-| **parameterized count/threshold**            | goal tags carry _what to count + denominator + source query_  | any measurable one-off goal, zero new code        |
-| **`metric:judge` — independent LLM judge**   | goal carries its **success criterion in prose** (a goal tag)  | the everyday qualitative one-off                  |
+| Reader kind                                | How the goal supplies it                                     | When                                       |
+| ------------------------------------------ | ------------------------------------------------------------ | ------------------------------------------ |
+| `metric:<reusable-id>` → coded reader      | nothing; the id maps to a registered metric                  | the handful of durable quantitative KPIs   |
+| **parameterized count/threshold**          | goal tags carry _what to count + denominator + source query_ | any measurable one-off goal, zero new code |
+| **`metric:judge` — independent LLM judge** | goal carries its **success criterion in prose** (a goal tag) | the everyday qualitative one-off           |
 
 **`metric:judge` is the scalable default for one-off goals** — the Claude `/goal`
 Haiku-evaluator pattern. You don't write reader code; you write the goal's success
