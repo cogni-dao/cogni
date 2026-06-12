@@ -239,6 +239,20 @@
       "when": 1781289579960,
       "tag": "0033_resync_snapshot_baseline",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1781297484471,
+      "tag": "0034_military_human_robot",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1781301557846,
+      "tag": "0035_normal_komodo",
+      "breakpoints": true
     }
   ]
 }

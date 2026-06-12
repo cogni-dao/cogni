@@ -96,4 +96,18 @@ export interface OperatorDeployPlanePort {
   promoteNodeToPreview(
     input: PromoteNodeToPreviewInput
   ): Promise<NodePreviewPromoteResult>;
+
+  /**
+   * Promote a node to an environment by dispatching `promote-and-deploy.yml` via the operator App.
+   * Authorization (`node.promote_production` for prod) is enforced at the route BEFORE this is called.
+   * `sourceSha` is optional — omit it to let the workflow resolve the node's catalog `source_sha` pin
+   * (`CATALOG_SOURCE_SHA_IS_THE_DEPLOY_PIN`); never pass a child SHA as the parent ref.
+   */
+  dispatchNodePromote(input: {
+    owner: string;
+    repo: string;
+    env: string;
+    slug: string;
+    sourceSha?: string;
+  }): Promise<CandidateFlightDispatchResult>;
 }

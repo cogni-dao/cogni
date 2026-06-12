@@ -33,7 +33,7 @@ That's it. Git is the steering wheel; Argo is the engine; the operator app is th
         └───────────────┬─────────────────────────────┬──────────────────┘
                         │ READ                         │ WRITE (intent)
                         ▼                              ▼
-              DeployCapability.getDeployState   DeployCapability.deployNode / removeNode
+              DeployCapability.getDeployState   OperatorDeployPlanePort (flight/promote/remove)
                         │                              │
                         ▼                              ▼
               reads Argo + k8s API           commits to  deploy/<env>-<node>  (or catalog node-set)
@@ -63,8 +63,8 @@ No SSH. The operator pod runs **inside** the cluster, so it just asks the k8s/Ar
 
 ```
 You click [deploy to preview]
-   → DeployCapability.deployNode({ env: "preview", node: "blue", sourceSha })
-   → wraps the EXISTING flight path (VcsCapability.dispatchCandidateFlight) — no new pipeline
+   → OperatorDeployPlanePort.dispatchNodePromote({ env: "preview", node: "blue", sourceSha })
+   → the EXISTING App-dispatched flight/promote path (no new pipeline) — operator-local, RBAC-gated
    → Argo reconciles → pods roll → page flips to ✓ when /version.buildSha matches
 ```
 
@@ -85,10 +85,10 @@ Removal is a **clean GitOps delete**, not a hack — Argo's prune does the teard
 
 **No VPS. No SSH keys.** Reads and writes use two auths the platform already has:
 
-| Operation                                      | What it needs                                                                                 | Why not VPS/SSH                                                                                                  |
-| ---------------------------------------------- | --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| **READ** cluster state (`getDeployState`)      | an **in-cluster k8s ServiceAccount** with read-only RBAC on Argo `Application` + `Deployment` | the operator pod runs _inside_ candidate-a's k3s — it asks the local API; no network hop, no SSH key to leak     |
-| **WRITE** intent (`deployNode` / `removeNode`) | the **existing GitHub App** (same creds as flight today)                                      | writes go to a **git** branch / catalog, not to a machine — Argo pulls the change. Git is the only write surface |
+| Operation                                    | What it needs                                                                                 | Why not VPS/SSH                                                                                                  |
+| -------------------------------------------- | --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| **READ** cluster state (`getDeployState`)    | an **in-cluster k8s ServiceAccount** with read-only RBAC on Argo `Application` + `Deployment` | the operator pod runs _inside_ candidate-a's k3s — it asks the local API; no network hop, no SSH key to leak     |
+| **WRITE** intent (`OperatorDeployPlanePort`) | the **existing GitHub App** (same creds as flight today)                                      | writes go to a **git** branch / catalog, not to a machine — Argo pulls the change. Git is the only write surface |
 
 So the only _new_ grant is a **read-only k8s ServiceAccount token** mounted into the operator pod (a 1-file RBAC manifest + the adapter using the in-cluster config). That replaces the CI scripts' SSH-and-kubectl with an in-cluster, least-privilege read. The dangerous write path (SSH + `kubectl apply` in `deploy-infra.sh`) is **not** reused — writes stay in git.
 
@@ -96,14 +96,14 @@ So the only _new_ grant is a **read-only k8s ServiceAccount token** mounted into
 
 ## What exists vs what's next (honest)
 
-| Piece                                               | State                                                       |
-| --------------------------------------------------- | ----------------------------------------------------------- |
-| `DeployCapability` interface (read-only v0)         | ✅ shipped (`packages/ai-tools/src/capabilities/deploy.ts`) |
-| `ArgoDeployAdapter` (reads Argo via in-cluster SA)  | ❌ next PR — the only real work for the SEE flow            |
-| Read-only k8s ServiceAccount + RBAC manifest        | ❌ next PR (1 file)                                         |
-| `<NodeDeployments>` section on `node/[id]`          | ❌ next PR — mirrors the existing `<NodeAccess>` section    |
-| `deployNode` / `removeNode` (control verbs) + authz | ⏳ Phase 1 — after the read view proves out                 |
-| `ComputeResourcePort` (Cherry→Akash, crypto-pay)    | ⏳ deferred until Akash funded                              |
+| Piece                                              | State                                                       |
+| -------------------------------------------------- | ----------------------------------------------------------- |
+| `DeployCapability` interface (read-only v0)        | ✅ shipped (`packages/ai-tools/src/capabilities/deploy.ts`) |
+| `ArgoDeployAdapter` (reads Argo via in-cluster SA) | ❌ next PR — the only real work for the SEE flow            |
+| Read-only k8s ServiceAccount + RBAC manifest       | ❌ next PR (1 file)                                         |
+| `<NodeDeployments>` section on `node/[id]`         | ❌ next PR — mirrors the existing `<NodeAccess>` section    |
+| `OperatorDeployPlanePort` write verbs + authz      | flight ✅ · promote ✅ (RBAC-gated) · remove ⏳ Phase 1     |
+| `ComputeResourcePort` (Cherry→Akash, crypto-pay)   | ⏳ deferred until Akash funded                              |
 
 **Smallest next PR = the SEE flow**: ServiceAccount + `ArgoDeployAdapter` + the read-only panel on `node/[id]`. That is the first thing actually _visible_ on candidate-a — the operator app showing, in its own UI, which envs a node is deployed to.
 

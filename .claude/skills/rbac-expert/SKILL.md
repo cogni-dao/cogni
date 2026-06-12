@@ -1,6 +1,6 @@
 ---
 name: rbac-expert
-description: "Authorization/RBAC navigation for cogni-template — points at the canon (OpenFGA model, AuthorizationPort, rbac.md invariants, the access-request flow, the hardening roadmap) and captures the durable mental model + hard-won gotchas that aren't obvious when you read it: OpenFGA is the sole authority, principal→role→capability, deny-by-default / fail-closed-with-distinction, why authorization is `undefined`, immutable hashed models, the request→approve→flight grant loop, and which checks aren't wired yet. Use when adding an authz check to a route/tool, designing a new protected action or role, debugging authz_denied vs authz_unavailable, deciding why authorization is undefined, granting/revoking node access, or touching packages/authorization-core / OpenFgaAuthorizationAdapter / infra/openfga/rbac-model.json / scripts/ci/bootstrap-openfga.sh / node_access_requests / POST /api/v1/nodes/{id}/{access-requests,developers} / POST /api/v1/vcs/flight. Triggers: 'OpenFGA', 'RBAC', 'ReBAC', 'authorization', 'AuthorizationPort', 'authz check', 'node.flight', 'can_flight', 'developer role', 'access request', 'approve agent', 'grant access to a node', 'tuple write', 'writeRelation', 'authz_denied', 'authz_unavailable', 'deny by default', 'fail closed', 'subjectId', 'on-behalf-of', 'delegation', 'OPENFGA_STORE_ID', 'authorization model', 'immutable model', 'bootstrap-openfga', 'rbac-model.json', 'add a role', 'add a permission', 'why is authz undefined', 'why 503 authz_unavailable'."
+description: "Authorization/RBAC navigation for cogni-template — points at the canon (OpenFGA model, AuthorizationPort, rbac.md invariants, the access-request flow, the hardening roadmap) and captures the durable mental model + hard-won gotchas that aren't obvious when you read it: OpenFGA is the sole authority, principal→role→capability, deny-by-default / fail-closed-with-distinction, why authorization is `undefined`, immutable hashed models, the request→approve→flight grant loop, and which checks aren't wired yet. Use when adding an authz check to a route/tool, designing a new protected action or role, debugging authz_denied vs authz_unavailable, deciding why authorization is undefined, granting/revoking node access, or touching packages/authorization-core / OpenFgaAuthorizationAdapter / infra/openfga/rbac-model.json / scripts/ci/bootstrap-openfga.sh / node_access_requests / POST /api/v1/nodes/{id}/{access-requests,developers} / POST /api/v1/vcs/flight. Triggers: 'OpenFGA', 'RBAC', 'ReBAC', 'authorization', 'AuthorizationPort', 'authz check', 'node.flight', 'can_flight', 'developer role', 'access request', 'approve agent', 'grant access to a node', 'tuple write', 'writeRelation', 'authz_denied', 'authz_unavailable', 'deny by default', 'fail closed', 'subjectId', 'on-behalf-of', 'delegation', 'OPENFGA_STORE_ID', 'authorization model', 'immutable model', 'bootstrap-openfga', 'rbac-model.json', 'add a role', 'add a permission', 'why is authz undefined', 'why 503 authz_unavailable', 'production_promoter', 'preview_promoter', 'can_promote_production', 'NODE_ACCESS_ROLES', 'validate an rbac extension', 'prove a grant works', 'candidate-flight-infra', 'two-lever bootstrap', 'role-grant workflow'."
 ---
 
 # RBAC Expert
@@ -27,9 +27,33 @@ Navigation for authorization in cogni-template. **This file deliberately does NO
 
 ## The grant loop (node access — the product surface)
 
-`rbac.md §6`. `register` → agent `POST /nodes/{id}/access-requests` (files a tracking row; owner sees it in the **Agents** UI) → owner `POST /nodes/{id}/developers {decision}` (writes/deletes the OpenFGA tuple — _the authority_; the row transition is best-effort) → `POST /vcs/flight` enforces `node.flight`. Two flight paths share the check: the **direct route** and the **`core__vcs_flight_candidate` graph tool** (gated as `tool.execute`).
+`rbac.md §6`. `register` → agent `POST /nodes/{id}/access-requests {role}` (files a tracking row; owner sees it in the **Agents** UI) → owner `POST /nodes/{id}/developers {agentUserId, decision, role}` (writes/deletes the OpenFGA **role** tuple — _the authority_; the row transition is best-effort) → the gated route enforces the capability. The flow is **role-general**: `role ∈ NODE_ACCESS_ROLES` (`developer`→`can_flight`, `production_promoter`→`can_promote_production`); the approve route writes `relation:<role>` (default `developer`). Two flight paths share the `node.flight` check: the **direct route** and the **`core__vcs_flight_candidate` graph tool** (gated as `tool.execute`).
 
-> **Proof a grant actually works:** flight returns `403 authz_denied` _before_ approval and flips to a _downstream_ error (e.g. `catalog_missing` / preflight) _after_ — RBAC passed; the failure moved past it.
+> **A capability relation with no grantable role is inert.** Adding `can_X from <role>` to the model is only half the work — the role must ALSO be in `NODE_ACCESS_ROLES` + the access-request CHECK + writable by the approve route, or no principal can ever hold it. (This is why `production_promoter` shipped _with_ the role-grant path, not after.)
+
+> **Proof a grant actually works:** the gated route returns `403 authz_denied` _before_ approval and flips to a _downstream_ error (e.g. `catalog_missing` / preflight) _after_ — RBAC passed; the failure moved past it.
+
+## Validate an RBAC extension end-to-end (API + Grafana — NEVER SSH)
+
+Every new role/capability is proven on **candidate-a** entirely over HTTP, observed in Loki. **Do not SSH the VM to write tuples or read OpenFGA** — the grant API _is_ the surface. If a role can't be granted via API, that's the bug to fix (see grant loop), not an SSH workaround.
+
+**Setup** — one owner session + one fresh requester agent:
+
+- Owner session = captured `.local-auth/candidate-a-operator.storageState.json` (Bearer also works; the gated routes resolve Bearer→session).
+- Requester = `POST /api/v1/agent/register {name}` → `{userId, apiKey}`.
+- **Billing-before-authz gotcha:** the gated routes check a billing account _before_ the authz check (mirrors flight). A fresh principal 403s `billing_account_missing` and never reaches the gate — masking it. Provision one by hitting any BYO-AI status route once with the principal's Bearer: `GET /api/v1/auth/openai-compatible/status` get-or-creates the billing account.
+- Need a node you own → `POST /api/v1/nodes {slug, chainId}` returns its `id`.
+
+**The four-state proof** (gated route = the one your action maps to, e.g. `POST /api/v1/deploy/promote {nodeId, env:"production"}` for `can_promote_production`):
+
+1. **deny-by-default** → `403 authz_denied` (billing present, no role tuple).
+2. **grant** → requester `POST /nodes/{id}/access-requests {role}`; owner `POST /nodes/{id}/developers {agentUserId, decision:"approve", role}`.
+3. **flip** → re-hit the gated route → flips _off_ `authz_denied` to a downstream code (`catalog_missing`, preflight, 200). RBAC passed.
+4. **revoke** → owner `…{decision:"reject", role}` → back to `403 authz_denied`. Deny restored.
+
+**Observability (tier-1, ties to YOUR request):** each route logs `route="<routeId>"` — `deploy.promote`, `nodes.developers`, `nodes.access-requests`, `vcs.flight`. Query `{namespace="cogni-candidate-a", pod=~"operator-node-app-.*"} | json | route="deploy.promote"` and match the status ladder (403→…→403) to your exercise window. `scripts/loki-query.sh '<logql>' <mins> <limit>` — export `GRAFANA_URL`+`GRAFANA_SERVICE_ACCOUNT_TOKEN` **inline** (`.env.cogni` has placeholder lines that break `set -a; source`).
+
+**The two-lever bootstrap trap (503-vs-403 tell) — the reason you'd be tempted to SSH:** `candidate-flight` (app lever) deploys only the app image; it does **NOT** bootstrap the OpenFGA model. A PR that adds/renames a **relation** ships the app, but the deployed store still runs the old model → your gated route returns **`503 authz_unavailable`** (the check resolves a relation the model lacks → fail-closed), NOT `authz_denied`. Fix is a second lever, not a hand-edit: **`gh workflow run candidate-flight-infra.yml --ref <your-branch>`** → `deploy-infra.sh` → `bootstrap-openfga.sh` mints the new model, repoints `OPENFGA_AUTHORIZATION_MODEL_ID` in the operator config, and `rollout restart`s the pods. **Diagnostic:** an _existing_-relation route (`vcs/flight`→`can_flight`) returning `403 authz_denied` while your _new_-relation route returns `503` proves the adapter is healthy and only your relation is missing → model-bootstrap lever, not a code bug. candidate-a mirrors preview/prod only when **both** levers run (preview/prod get the model via `promote-and-deploy`'s `deploy-infra` job on merge).
 
 ## Gotchas (hard-won, not in the spec)
 
@@ -43,12 +67,13 @@ Navigation for authorization in cogni-template. **This file deliberately does NO
 
 ## Where each surface lives
 
-| Surface                                        | File                                                                                            |
-| ---------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| Authz construction (and when it's `undefined`) | `nodes/operator/app/src/bootstrap/container.ts` (~L842)                                         |
-| `node.flight` enforcement + V0 owner fallback  | `nodes/operator/app/src/app/api/v1/vcs/flight/route.ts`                                         |
-| Owner tuple write/delete (approve/deny/revoke) | `nodes/operator/app/src/app/api/v1/nodes/[id]/developers/route.ts`                              |
-| Agent access request                           | `nodes/operator/app/src/app/api/v1/nodes/[id]/access-requests/route.ts`                         |
-| Tracking schema + query helpers                | `nodes/operator/app/src/shared/db/node-access-requests.ts`, `features/nodes/access-requests.ts` |
-| OpenFGA adapter + deterministic fake           | `packages/authorization-core/src/adapters/`, `.../test/`                                        |
-| Per-env store/model bootstrap                  | `scripts/ci/bootstrap-openfga.sh` (via `scripts/ci/deploy-infra.sh`)                            |
+| Surface                                                       | File                                                                                              |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Authz construction (and when it's `undefined`)                | `nodes/operator/app/src/bootstrap/container.ts` (~L842)                                           |
+| `node.flight` enforcement + V0 owner fallback                 | `nodes/operator/app/src/app/api/v1/vcs/flight/route.ts`                                           |
+| Role tuple write/delete (approve/deny/revoke), **role-aware** | `nodes/operator/app/src/app/api/v1/nodes/[id]/developers/route.ts`                                |
+| Agent access request (role enum)                              | `nodes/operator/app/src/app/api/v1/nodes/[id]/access-requests/route.ts`                           |
+| Tracking schema + `NODE_ACCESS_ROLES` + CHECK                 | `nodes/operator/app/src/shared/db/node-access-requests.ts`, `features/nodes/access-requests.ts`   |
+| OpenFGA adapter + deterministic fake                          | `packages/authorization-core/src/adapters/`, `.../test/`                                          |
+| Per-env store/model bootstrap                                 | `scripts/ci/bootstrap-openfga.sh` (via `scripts/ci/deploy-infra.sh`)                              |
+| Re-bootstrap the model on candidate-a                         | `gh workflow run candidate-flight-infra.yml --ref <branch>` (the infra lever; app lever skips it) |
