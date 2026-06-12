@@ -15,7 +15,11 @@ import { describe, expect, it } from "vitest";
 
 import { createKnowledgeCapability } from "../src/capability.js";
 import { KnowledgeGateError } from "../src/domain/gates/index.js";
-import type { Knowledge, NewKnowledge } from "../src/domain/schemas.js";
+import type {
+  Knowledge,
+  NewCitation,
+  NewKnowledge,
+} from "../src/domain/schemas.js";
 import type { KnowledgeStorePort } from "../src/port/knowledge-store.port.js";
 
 function stubKnowledge(entry: NewKnowledge): Knowledge {
@@ -38,14 +42,23 @@ function stubKnowledge(entry: NewKnowledge): Knowledge {
 }
 
 function makeStubPort() {
-  const calls: { upsert: NewKnowledge[]; commits: string[] } = {
+  const calls: {
+    upsert: NewKnowledge[];
+    commits: string[];
+    citations: NewCitation[];
+  } = {
     upsert: [],
     commits: [],
+    citations: [],
   };
   const port = {
     upsertKnowledge: async (entry: NewKnowledge): Promise<Knowledge> => {
       calls.upsert.push(entry);
       return stubKnowledge(entry);
+    },
+    addCitation: async (edge: NewCitation) => {
+      calls.citations.push(edge);
+      return { id: "stub-edge", ...edge };
     },
     commit: async (message: string): Promise<string> => {
       calls.commits.push(message);
@@ -111,6 +124,32 @@ describe("createKnowledgeCapability — write path with v0 gates", () => {
     expect(calls.upsert[0]?.id).toBe("fed-rate-base-rate");
     expect(calls.commits).toHaveLength(1);
     expect(calls.commits[0]).toContain("Fed rate base rate");
+  });
+
+  it("writes outgoing citation edges before the commit (compounding write)", async () => {
+    const { port, calls } = makeStubPort();
+    const cap = createKnowledgeCapability(port);
+
+    await cap.write({
+      id: "oss-cap-eval-harness",
+      domain: "oss-ai",
+      title: "Eval harness comparison",
+      content: "promptfoo vs deepeval",
+      sourceType: "external",
+      sourceRef: "https://example.com",
+      citations: [
+        { citedId: "oss-promptfoo", citationType: "supports" },
+        { citedId: "oss-deepeval", citationType: "supports" },
+      ],
+    });
+
+    expect(calls.citations).toHaveLength(2);
+    expect(calls.citations[0]).toMatchObject({
+      citingId: "oss-cap-eval-harness",
+      citedId: "oss-promptfoo",
+      citationType: "supports",
+    });
+    expect(calls.commits).toHaveLength(1);
   });
 
   it("honors the opt-out via empty gate set (test-mode escape hatch)", async () => {

@@ -50,6 +50,19 @@ export interface KnowledgeListParams {
   limit?: number;
 }
 
+/**
+ * Outgoing edge written alongside a new entry. Restricted to the non-temporal
+ * knowledge edges — the hypothesis-loop edges (`evidence_for`/`derives_from`/
+ * `validates`/`invalidates`) are written through the `core__edo_*` tools, not
+ * here. Lets an agent compound knowledge in one write (e.g. a synthesis that
+ * `supports` the findings it summarizes).
+ */
+export interface KnowledgeWriteCitation {
+  citedId: string;
+  citationType: "supports" | "contradicts" | "extends" | "supersedes";
+  context?: string;
+}
+
 export interface KnowledgeWriteParams {
   id: string;
   domain: string;
@@ -60,6 +73,8 @@ export interface KnowledgeWriteParams {
   confidencePct?: number;
   sourceRef?: string;
   tags?: string[];
+  /** Outgoing edges (citing = this entry) committed in the same write. */
+  citations?: KnowledgeWriteCitation[];
 }
 
 /**

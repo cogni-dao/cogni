@@ -260,12 +260,30 @@ type KnowledgeEntryInput = {
 type KnowledgeContributionEdit =
   | { op: "insert"; entry: KnowledgeEntryInput }
   | { op: "update"; targetRowId: string; entry: KnowledgeEntryInput }
-  | { op: "deprecate"; targetRowId: string; reason: string };
+  | { op: "deprecate"; targetRowId: string; reason: string }
+  | {
+      op: "cite";
+      citingId: string;
+      citedId: string;
+      // non-temporal knowledge edges only; the hypothesis-loop edges
+      // (evidence_for/derives_from/validates/invalidates) stay behind /edo/*.
+      citationType: "supports" | "contradicts" | "extends" | "supersedes";
+      context?: string;
+    };
 ```
 
 `targetRowId` is evaluated on the contribution branch after checkout, not on
 `main`. That allows commit 2 to update a row created by commit 1 on the same
 branch. A missing update/deprecate target fails before `dolt_commit`.
+
+The `cite` op writes a typed edge into the `citations` table — the same
+primitive the EDO endpoints use, exposed for generic findings/scorecards so a
+composite can `supports`-cite the leaves it summarizes. Both endpoints resolve
+on the branch, so order `insert`s before the `cite`s that reference them. Each
+edge enforces `CITATION_TARGET_EXISTS_AT_WRITE` and recomputes the cited row's
+confidence inside the branch (a `supports`/`extends` bump, a `contradicts`
+penalty) so the reviewer sees the effect pre-merge. The edge is idempotent on
+its `(citing, cited, type)` triple.
 
 `insert.entry.id` is optional but recommended whenever a contributor expects to
 refer to the inserted row in a later commit. If omitted, the server generates a
