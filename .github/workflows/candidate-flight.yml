@@ -293,16 +293,29 @@ jobs:
           fetch-depth: 0
           path: app-src
 
-      - name: Initialize node submodule when present
+      - name: Materialize node source at its catalog pin
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.GIT_READ_TOKEN }}
           NODE: ${{ matrix.node }}
+          NODE_SOURCE_SHA: ${{ needs.decide.outputs.node_source_sha }}
         run: |
           set -euo pipefail
-          if git -C app-src config -f .gitmodules --get "submodule.nodes/${NODE}.path" >/dev/null 2>&1; then
-            git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
-            git -C app-src submodule update --init --depth 1 "nodes/${NODE}"
-          fi
+          # Remote-source node: fetch its tree at the catalog source_sha pin into
+          # nodes/<NODE> — no submodule, no gitlink, private-safe (GIT_READ_TOKEN).
+          # In-repo nodes carry no source_repo and are already in app-src.
+          # spec.node-submodule-retirement.
+          catalog="app-src/infra/catalog/${NODE}.yaml"
+          [ -f "$catalog" ] || exit 0
+          src_repo="$(yq -N '.source_repo // ""' "$catalog")"
+          [ -n "$src_repo" ] || exit 0
+          src_sha="${NODE_SOURCE_SHA:-$(yq -N '.source_sha // ""' "$catalog")}"
+          [ -n "$src_sha" ] || { echo "::error::no source_sha for remote-source node ${NODE}"; exit 1; }
+          repo_path="${src_repo#https://github.com/}"; repo_path="${repo_path%.git}"
+          rm -rf "app-src/nodes/${NODE}"
+          git init -q "app-src/nodes/${NODE}"
+          git -C "app-src/nodes/${NODE}" remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${repo_path}.git"
+          git -C "app-src/nodes/${NODE}" fetch -q --depth 1 origin "$src_sha"
+          git -C "app-src/nodes/${NODE}" checkout -q --detach FETCH_HEAD
 
       - name: Prepare deploy branch shape
         env:
@@ -602,16 +615,29 @@ jobs:
           fetch-depth: 0
           path: app-src
 
-      - name: Initialize node submodule when present
+      - name: Materialize node source at its catalog pin
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.GIT_READ_TOKEN }}
           NODE: ${{ matrix.node }}
+          NODE_SOURCE_SHA: ${{ needs.decide.outputs.node_source_sha }}
         run: |
           set -euo pipefail
-          if git -C app-src config -f .gitmodules --get "submodule.nodes/${NODE}.path" >/dev/null 2>&1; then
-            git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
-            git -C app-src submodule update --init --depth 1 "nodes/${NODE}"
-          fi
+          # Remote-source node: fetch its tree at the catalog source_sha pin into
+          # nodes/<NODE> — no submodule, no gitlink, private-safe (GIT_READ_TOKEN).
+          # In-repo nodes carry no source_repo and are already in app-src.
+          # spec.node-submodule-retirement.
+          catalog="app-src/infra/catalog/${NODE}.yaml"
+          [ -f "$catalog" ] || exit 0
+          src_repo="$(yq -N '.source_repo // ""' "$catalog")"
+          [ -n "$src_repo" ] || exit 0
+          src_sha="${NODE_SOURCE_SHA:-$(yq -N '.source_sha // ""' "$catalog")}"
+          [ -n "$src_sha" ] || { echo "::error::no source_sha for remote-source node ${NODE}"; exit 1; }
+          repo_path="${src_repo#https://github.com/}"; repo_path="${repo_path%.git}"
+          rm -rf "app-src/nodes/${NODE}"
+          git init -q "app-src/nodes/${NODE}"
+          git -C "app-src/nodes/${NODE}" remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${repo_path}.git"
+          git -C "app-src/nodes/${NODE}" fetch -q --depth 1 origin "$src_sha"
+          git -C "app-src/nodes/${NODE}" checkout -q --detach FETCH_HEAD
 
       - name: Setup SSH to candidate-a VM
         env:
@@ -762,14 +788,11 @@ jobs:
 
       - name: Sync base + per-node overlay + per-node catalog to deploy branch
         env:
-          GH_TOKEN: ${{ github.token }}
           NODE: ${{ matrix.node }}
         run: |
           set -euo pipefail
-          if git -C app-src config -f .gitmodules --get "submodule.nodes/${NODE}.path" >/dev/null 2>&1; then
-            git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
-            git -C app-src submodule update --init --depth 1 "nodes/${NODE}"
-          fi
+          # Node source already materialized at app-src/nodes/${NODE} by the
+          # "Materialize node source at its catalog pin" step (same job).
           rsync -a --delete app-src/infra/k8s/base/ deploy-branch/infra/k8s/base/
           mkdir -p "deploy-branch/infra/k8s/overlays/candidate-a/${NODE}"
           rsync -a --delete \
