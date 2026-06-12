@@ -750,7 +750,12 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
   ): Promise<EnsureNodeSubmodulePinResult> {
     const { owner, repo, slug, nodeRepoHeadSha } = input;
     const path = `infra/catalog/${slug}.yaml`;
-    const current = await this.fetchFileText({ owner, repo, path, ref: "main" });
+    const current = await this.fetchFileText({
+      owner,
+      repo,
+      path,
+      ref: "main",
+    });
     if (!current) {
       throw deployPlaneError(
         "catalog_missing",
