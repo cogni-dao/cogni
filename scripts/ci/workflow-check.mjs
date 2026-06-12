@@ -116,6 +116,7 @@ const workflowFiles = readdirSync(WORKFLOW_DIR)
 const candidateFlightText = readWorkflowText("candidate-flight.yml");
 if (
   candidateFlightText.includes(
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions ${{ }} expression matched as workflow text, not a JS template
     "REMOTE_SOURCE_ARTIFACT_TARGETS_FILE: ${{ steps.remote-source-artifact-targets.outputs.targets_file }}"
   )
 ) {
@@ -151,9 +152,11 @@ if (
 
 if (
   candidateFlightText.includes(
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions ${{ }} expression matched as workflow text, not a JS template
     "username: ${{ secrets.GHCR_DEPLOY_USERNAME || github.actor }}"
   ) &&
   candidateFlightText.includes(
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions ${{ }} expression matched as workflow text, not a JS template
     "password: ${{ secrets.GHCR_DEPLOY_TOKEN || github.token }}"
   )
 ) {
