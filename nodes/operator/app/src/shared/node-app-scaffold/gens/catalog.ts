@@ -24,8 +24,14 @@
 export interface RenderCatalogInput {
   readonly sourceRepo?: string;
   readonly imageRepository?: string;
-  /** Submodule node identity, projected from the minted repo-spec (drift-gated). */
+  /** Remote-source node identity, projected from the minted repo-spec (drift-gated). */
   readonly nodeId?: string;
+  /**
+   * Accepted deploy SHA for a remote-source node — the catalog pin that replaces the
+   * `nodes/<slug>` gitlink (spec.node-submodule-retirement, CATALOG_SOURCE_SHA_IS_THE_DEPLOY_PIN).
+   * Affected-flight detection + sourceSha resolution read this; the operator bumps it per flight.
+   */
+  readonly sourceSha?: string;
 }
 
 function imageRepositoryFromSourceRepo(sourceRepo: string): string {
@@ -55,10 +61,13 @@ export function renderCatalog(
   nodePort: number,
   input: RenderCatalogInput = {}
 ): string {
+  const sourceShaLine = input.sourceSha
+    ? `source_sha: ${input.sourceSha}\n`
+    : "";
   const sourceLines = input.sourceRepo
     ? `source_repo: ${input.sourceRepo}
 image_repository: ${input.imageRepository ?? imageRepositoryFromSourceRepo(input.sourceRepo)}
-`
+${sourceShaLine}`
     : "";
   const nodeIdLine = input.nodeId ? `node_id: ${input.nodeId}\n` : "";
   return `name: ${slug}
