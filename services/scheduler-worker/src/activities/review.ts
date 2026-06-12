@@ -204,7 +204,7 @@ export function createReviewActivities(deps: ReviewActivityDeps) {
       try {
         const spec = parseRepoSpec(input.repoSpecYaml);
         const dao = extractDaoConfig(spec);
-        if (dao) {
+        if (dao?.base_url) {
           const url = new URL("/propose/merge", dao.base_url);
           url.searchParams.set("dao", dao.dao_contract);
           url.searchParams.set("plugin", dao.plugin_contract);

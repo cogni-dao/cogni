@@ -52,6 +52,9 @@ export function renderRepoSpec(input: RenderRepoSpecInput): string {
       ? `  signal_contract: "${input.signalContract}"`
       : undefined,
     `  chain_id: "${input.chainId}"`,
+    // Governance proposal-UI host for the PR-review `/propose/merge` deep-link.
+    // Shared, env-agnostic — NOT the node's own app URL.
+    `  base_url: "https://proposal.cognidao.org"`,
   ]
     .filter((l): l is string => l !== undefined)
     .join("\n");
