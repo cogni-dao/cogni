@@ -28,6 +28,8 @@ function requireDatabaseUrl(): string {
 export default defineConfig({
   schema: [
     "./packages/db-schema/src/**/*.ts",
+    "./nodes/operator/app/src/shared/db/nodes.ts",
+    "./nodes/operator/app/src/shared/db/node-access-requests.ts",
     "./nodes/operator/app/src/shared/db/work-item-sessions.ts",
   ],
   out: "./nodes/operator/app/src/adapters/server/db/migrations",
