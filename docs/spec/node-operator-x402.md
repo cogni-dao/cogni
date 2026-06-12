@@ -90,7 +90,7 @@ All 10 invariants from [node-operator-contract.md](./node-operator-contract.md) 
 │   convenience, not capability.                                       │
 │                                                                      │
 │ What it PROVIDES (all optional):                                     │
-│   - git-review-daemon → automated PR code review                     │
+│   - in-process review (cogni-operator) → automated PR code review    │
 │   - git-admin-daemon → repo admin actions                            │
 │   - cognicred → contributor credit scoring                           │
 │   - node-registry → discovery + federation                           │
@@ -205,19 +205,19 @@ All 10 invariants from [node-operator-contract.md](./node-operator-contract.md) 
 
 ### Boot Seams Matrix (x402 Edition)
 
-| Capability                      | Node Owns                                           | Operator Provides | Call Direction                                  | Self-Host Option     |
-| ------------------------------- | --------------------------------------------------- | ----------------- | ----------------------------------------------- | -------------------- |
-| App deployment                  | Infra keys, deploy scripts                          | —                 | —                                               | Always self-host     |
-| DAO wallet ops                  | Wallet keys, signing                                | —                 | —                                               | Always self-host     |
-| **Inbound payments (x402)**     | **x402 middleware + facilitator call (no signing)** | **—**             | **User → Facilitator → Node receiving address** | **Always self-host** |
-| **Outbound payments (API key)** | **HYPERBOLIC_API_KEY**                              | **—**             | **Node → Hyperbolic**                           | **Always self-host** |
-| AI inference + metering         | **LiteLLM proxy (per-node Docker service)**         | —                 | Node → Hyperbolic                               | Always self-host     |
-| **Usage audit trail**           | **charge_receipts (per-node PostgreSQL)**           | **—**             | **Node-internal**                               | **Always self-host** |
-| PR code review                  | Manual review                                       | git-review-daemon | Operator → Node repo                            | OSS standalone       |
-| Repo admin actions              | Manual via GitHub UI                                | git-admin-daemon  | Operator → Node repo                            | OSS standalone       |
-| Cred scoring                    | —                                                   | cognicred         | Operator internal                               | vNext                |
-| Node discovery                  | —                                                   | node-registry     | Operator reads Node                             | —                    |
-| Repo-spec policy                | Authors `.cogni/repo-spec.yml`                      | Consumes snapshot | Operator reads Node                             | —                    |
+| Capability                      | Node Owns                                           | Operator Provides           | Call Direction                                  | Self-Host Option       |
+| ------------------------------- | --------------------------------------------------- | --------------------------- | ----------------------------------------------- | ---------------------- |
+| App deployment                  | Infra keys, deploy scripts                          | —                           | —                                               | Always self-host       |
+| DAO wallet ops                  | Wallet keys, signing                                | —                           | —                                               | Always self-host       |
+| **Inbound payments (x402)**     | **x402 middleware + facilitator call (no signing)** | **—**                       | **User → Facilitator → Node receiving address** | **Always self-host**   |
+| **Outbound payments (API key)** | **HYPERBOLIC_API_KEY**                              | **—**                       | **Node → Hyperbolic**                           | **Always self-host**   |
+| AI inference + metering         | **LiteLLM proxy (per-node Docker service)**         | —                           | Node → Hyperbolic                               | Always self-host       |
+| **Usage audit trail**           | **charge_receipts (per-node PostgreSQL)**           | **—**                       | **Node-internal**                               | **Always self-host**   |
+| PR code review                  | Manual review                                       | in-process (cogni-operator) | Operator → Node repo                            | In-process on operator |
+| Repo admin actions              | Manual via GitHub UI                                | git-admin-daemon            | Operator → Node repo                            | OSS standalone         |
+| Cred scoring                    | —                                                   | cognicred                   | Operator internal                               | vNext                  |
+| Node discovery                  | —                                                   | node-registry               | Operator reads Node                             | —                      |
+| Repo-spec policy                | Authors `.cogni/repo-spec.yml`                      | Consumes snapshot           | Operator reads Node                             | —                      |
 
 **Key change from original:** Inbound payments, outbound payments, and usage metering are all Node-owned with no Operator involvement. The Operator's role is purely governance services (git-review, cred scoring, node registry).
 
@@ -275,7 +275,7 @@ All 10 invariants from [node-operator-contract.md](./node-operator-contract.md) 
 - LiteLLM model routing with cost tracking
 - charge_receipts audit trail
 - Epoch-based contributor payouts (if DAO formed)
-- git-review-daemon (if registered with Operator)
+- in-process PR review (if the operator App is installed on the repo)
 - Cred scoring for contributors (if registered with Operator)
 
 **What Kai does NOT need:**
@@ -298,13 +298,12 @@ All 10 invariants from [node-operator-contract.md](./node-operator-contract.md) 
 
 ### Operator Services: What They Provide
 
-#### git-review-daemon (Optional)
+#### PR review — in-process on cogni-operator (Optional)
 
-- **What it does:** Automated PR code review for Node repos
-- **How Node connects:** Register repo with Operator, grant GitHub webhook access
-- **Data flow:** Operator reads Node's PRs via GitHub API, posts review comments
-- **Node sovereignty:** Node can unregister at any time. Manual review is always an option.
-- **Deployable standalone:** OSS, can self-host without Operator
+- **What it does:** Automated PR code review for Node repos (runs in-process in the operator app, `features/review/` + the `pr-review` LangGraph graph — not a separate daemon)
+- **How Node connects:** Install the operator's GitHub App on the repo; review is payload-driven on verified webhooks
+- **Data flow:** Operator reads Node's PRs via GitHub API, posts review check-runs/comments
+- **Node sovereignty:** Node can uninstall the App at any time. Manual review is always an option.
 
 #### git-admin-daemon (Optional)
 
@@ -402,7 +401,7 @@ With x402, federation is **agent discovery**, not financial pooling:
 
 ### P1: Operator Service Contracts
 
-- [ ] Define Operator→Node API contract for git-review-daemon registration
+- [ ] Define Operator→Node onboarding for in-process review (operator App install + webhook)
 - [ ] Define Node→Operator API contract for cred scoring data export
 - [ ] Define Node→Operator API contract for node-registry self-registration
 

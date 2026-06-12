@@ -80,12 +80,12 @@ The full design is the rest of this spec — Interaction Graph (component map), 
 
 PR comments are **notifications**, never state of record. Design decisions live in Dolt `designs`. Status lives in Dolt `work_items`. Deploy state lives in `/version.buildSha`. Coordination state lives in operator Postgres.
 
-| Surface                                | Carries                                          | Mutated by                                                                            |
-| -------------------------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------- |
-| Dolt `work_items`, `designs`           | status, design, outcome, validation block        | `/idea`, `/triage`, `/design`, `/implement`, `/closeout`, `/review-implementation`    |
-| Operator Postgres `work_item_sessions` | claim, heartbeat, deadline, branch, pr_number    | `POST /claims`, `/heartbeat`, `/pr`                                                   |
-| GitHub PR + CI                         | code, head SHA, required checks, merge state     | `git push`, `gh pr create`, GitHub Merge Queue                                        |
-| GitHub PR comments                     | scorecards, operator nudges (vNext: broadcaster) | `/validate-candidate`, `cogni-git-review`, agent (rare), operator broadcaster (vNext) |
+| Surface                                | Carries                                          | Mutated by                                                                                            |
+| -------------------------------------- | ------------------------------------------------ | ----------------------------------------------------------------------------------------------------- |
+| Dolt `work_items`, `designs`           | status, design, outcome, validation block        | `/idea`, `/triage`, `/design`, `/implement`, `/closeout`, `/review-implementation`                    |
+| Operator Postgres `work_item_sessions` | claim, heartbeat, deadline, branch, pr_number    | `POST /claims`, `/heartbeat`, `/pr`                                                                   |
+| GitHub PR + CI                         | code, head SHA, required checks, merge state     | `git push`, `gh pr create`, GitHub Merge Queue                                                        |
+| GitHub PR comments                     | scorecards, operator nudges (vNext: broadcaster) | `/validate-candidate`, in-process review (cogni-operator), agent (rare), operator broadcaster (vNext) |
 
 If something proposes a design change in a PR comment, that's a bug — capture it in Dolt via `/design` first.
 
@@ -252,7 +252,7 @@ Distinct specialized agents own each lifecycle stage. No single agent runs the f
 | ----------------- | -------------------------------------------------------------------------------------------------------- |
 | `pr-manager`      | VCS orchestration: listPrs, getCiStatus, flightCandidate, monitor Argo, verify SHA, request merge        |
 | `gov-engineering` | Dispatch loop: reads work queue → invokes `/design`, `/implement`, `/closeout`, `/review-implementation` |
-| `pr-review`       | Code-quality review on PR open/update (cogni-git-review GitHub App)                                      |
+| `pr-review`       | Code-quality review on PR open/update (in-process on cogni-operator)                                     |
 | `qa-agent`        | Post-flight feature validation (task.0309) — manual predecessor is `/validate-candidate`                 |
 | `frontend-tester` | Playwright click-through (delegated by qa-agent for UI paths)                                            |
 

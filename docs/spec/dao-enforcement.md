@@ -5,8 +5,8 @@ title: DAO Enforcement — Payments Financial Rails
 status: active
 spec_state: draft
 trust: draft
-summary: How the Cogni DAO owns the crypto widget payments loop — config-in-git, runtime invariants, and cogni-git-review static gates.
-read_when: Working with payments, credit minting, repo-spec, or cogni-git-review gates.
+summary: How the Cogni DAO owns the crypto widget payments loop — config-in-git, runtime invariants, and the operator's in-process review static gates.
+read_when: Working with payments, credit minting, repo-spec, or the operator's in-process review gates.
 owner: derekg1729
 created: 2026-02-06
 verified: 2026-02-06
@@ -20,7 +20,7 @@ tags: [web3, billing]
 The Cogni DAO "owns" the crypto widget payments loop in cogni-template. This spec is **binding** for the payments MVP:
 
 - It describes the only allowed way to mint credits from crypto payments.
-- It describes how repository config and cogni-git-review gates detect violations.
+- It describes how repository config and the operator's in-process review gates detect violations.
 
 For the payments MVP, DAO "ownership" of payments is enforced at three layers:
 
@@ -28,7 +28,7 @@ For the payments MVP, DAO "ownership" of payments is enforced at three layers:
 
 2. **Runtime Invariants** — Only authenticated SIWE sessions can call `POST /api/v1/payments/credits/confirm`. That endpoint resolves the caller's `billing_account_id` from the session only. Credits are minted by inserting a `credit_ledger` row with `reason = 'widget_payment'` and updating `billing_accounts.balance_credits`.
 
-3. **Static Enforcement (cogni-git-review)** — `.cogni/repo-spec.yaml` declares the payments config and allowed envs. cogni-git-review gates ensure no code paths exist outside the approved rails.
+3. **Static Enforcement (in-process review on cogni-operator)** — `.cogni/repo-spec.yaml` declares the payments config and allowed envs. The operator's in-process review gates ensure no code paths exist outside the approved rails.
 
 For MVP, we accept that crypto widgets are a **soft oracle**: we trust the widget's success callback as "user paid" and rely on later Ponder/on-chain reconciliation for hard guarantees.
 
@@ -70,7 +70,7 @@ Enforce DAO ownership of the crypto payments loop via config-in-git, runtime inv
 
 ### Repo-Spec Structure
 
-The `.cogni/repo-spec.yaml` in cogni-template MUST declare the payment widget and env conventions so cogni-git-review can enforce them.
+The `.cogni/repo-spec.yaml` in cogni-template MUST declare the payment widget and env conventions so the operator's in-process review can enforce them.
 
 Example (simplified):
 
@@ -110,9 +110,9 @@ This is declarative only. It describes:
 - Which env vars are considered sensitive API keys.
 - Which host/master-key pair defines the LLM proxy.
 
-### cogni-git-review Gates
+### In-Process Review Gates (cogni-operator)
 
-The cogni-git-review repository implements static gates that read `.cogni/repo-spec.yaml` and analyze PR diffs to enforce the rules above.
+The operator's in-process review (`nodes/operator/app/src/features/review/`) implements static gates that read `.cogni/repo-spec.yaml` and analyze PR diffs to enforce the rules above.
 
 #### Gate: wallet-address-literals
 
@@ -199,7 +199,7 @@ As additional payment providers and on-chain verification (Ponder) are added:
 
 - All on-chain payment flows must settle into `credit_ledger` via well-defined reasons (e.g. `widget_payment`, `onchain_deposit`).
 - `.cogni/repo-spec.yaml` remains the single source of truth for which env vars and providers participate in the DAO's financial rails.
-- cogni-git-review evolves with new gates and reasons, but the core invariants remain: no literal EVM addresses in code, single-owner minting paths per reason, sensitive keys confined to env modules and adapters.
+- The in-process review evolves with new gates and reasons, but the core invariants remain: no literal EVM addresses in code, single-owner minting paths per reason, sensitive keys confined to env modules and adapters.
 
 ### File Pointers
 
@@ -215,9 +215,9 @@ As additional payment providers and on-chain verification (Ponder) are added:
 
 **Automated:**
 
-- cogni-git-review `wallet-address-literals` gate fails on hardcoded `0x...` in `src/**`
-- cogni-git-review `widget-payment-reason` gate fails on `widget_payment` outside allowed paths
-- cogni-git-review `provider-api-key-usage` gate fails on sensitive env vars outside allowed paths
+- In-process review `wallet-address-literals` gate fails on hardcoded `0x...` in `src/**`
+- In-process review `widget-payment-reason` gate fails on `widget_payment` outside allowed paths
+- In-process review `provider-api-key-usage` gate fails on sensitive env vars outside allowed paths
 
 **Manual:**
 

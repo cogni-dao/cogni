@@ -12,5 +12,5 @@ packages:
   - "nodes/operator/packages/*"
   # Shared packages (Node-owned, pure libraries)
   - "packages/*"
-  # Operator services (future: git-review-daemon, git-admin-daemon)
+  # Operator services (review runs in-process in nodes/operator/app; future: git-admin-daemon)
   - "services/*"

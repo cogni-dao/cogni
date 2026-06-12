@@ -27,13 +27,18 @@ installation level down to the tool schema and CI scripts.
 cannot share one. Create + wire per the canonical guide:
 [`docs/guides/github-app-webhook-setup.md`](../../../docs/guides/github-app-webhook-setup.md).
 
-| App                        | ID      | Install ID | env              | webhooks → / installed on                                              |
-| -------------------------- | ------- | ---------- | ---------------- | ---------------------------------------------------------------------- |
-| `cogni-operator-test`      | 3956976 | 138046799  | candidate-a/test | `test.cognidao.org/...webhooks/github` · all repos on `cogni-test-org` |
-| `cogni-operator`           | 2994706 | 113665458  | production ops   | `cognidao.org/...webhooks/github` · all repos on `Cogni-DAO`           |
-| `cogni-node-template`      | 3062001 | 115515535  | legacy/vcs       | selected repos; use only if the env's `GH_REVIEW_APP_ID` is `3062001`  |
-| `cogni-git-review`         | 1761205 | 80293097   | production       | `cognidao.org/...webhooks/github` · `Cogni-DAO/cogni`                  |
-| `cogni-git-review-preview` | 2011345 | 87655574   | preview          | `preview.cognidao.org/...webhooks/github` · selected preview repos     |
+| App                   | ID      | Install ID | env              | webhooks → / installed on                                              |
+| --------------------- | ------- | ---------- | ---------------- | ---------------------------------------------------------------------- |
+| `cogni-operator-test` | 3956976 | 138046799  | candidate-a/test | `test.cognidao.org/...webhooks/github` · all repos on `cogni-test-org` |
+| `cogni-operator`      | 2994706 | 113665458  | production ops   | `cognidao.org/...webhooks/github` · all repos on `Cogni-DAO`           |
+| `cogni-node-template` | 3062001 | 115515535  | legacy/vcs       | selected repos; use only if the env's `GH_REVIEW_APP_ID` is `3062001`  |
+
+**Review runs in-process on `cogni-operator`** (`nodes/operator/app/src/features/review/` + the
+`pr-review` LangGraph graph) — there is no standalone review App per env. The retired
+`cogni-git-review` (App `1761205`, install `80293097`) and `cogni-git-review-preview` (App `2011345`,
+install `87655574`) Apps are redundant and, while still installed, POST to the operator webhook URL
+with their old secret → `webhook verification failed` (401) noise. Org-admin must uninstall them; see
+[github-app-webhook-setup.md § Decommission](../../../docs/guides/github-app-webhook-setup.md#decommission-the-standalone-review-app).
 
 `Cogni-DAO/test-repo` is only a legacy review-webhook fixture. It is not
 sufficient for node publish/flight testing: the candidate/test App must see the
