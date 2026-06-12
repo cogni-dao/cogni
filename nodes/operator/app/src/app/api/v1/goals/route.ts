@@ -26,8 +26,8 @@ import {
 } from "@cogni/knowledge-store";
 import { NextResponse } from "next/server";
 import { ZodError, z } from "zod";
-import { getSessionUser } from "@/app/_lib/auth/session";
 import { startGoal } from "@/app/_facades/goal-loop/start.server";
+import { getSessionUser } from "@/app/_lib/auth/session";
 import { getContainer, getTemporalWorkflowClient } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { getNodeId } from "@/shared/config/repoSpec.server";

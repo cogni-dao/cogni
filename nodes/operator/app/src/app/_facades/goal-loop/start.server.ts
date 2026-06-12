@@ -26,6 +26,7 @@
  * @public
  */
 
+import type { EdoCapability } from "@cogni/ai-tools";
 import {
   DEFAULT_LOOP_BUDGET,
   encodeGoalTags,
@@ -33,7 +34,6 @@ import {
   type LoopBudget,
   METRIC_STRATEGY_PREFIX,
 } from "@cogni/knowledge-store";
-import type { EdoCapability } from "@cogni/ai-tools";
 import {
   DEFAULT_GOAL_STEP_GRAPH_ID,
   GoalLoopWorkflowInputSchema,
