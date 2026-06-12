@@ -155,6 +155,83 @@ export interface SweepActivities {
 }
 
 // ---------------------------------------------------------------------------
+// Goal-loop Activities (AI goal + KPI loop I/O — docs/design/knowledge-goal-loop.md)
+//
+// All read/write through the owning node's API (EXECUTION_VIA_SERVICE_API); the
+// worker holds no DB creds on this path. `loadGoalStateActivity` projects the
+// goal hypothesis row → Goal/budget + accumulated LoopState (read from the EDO
+// chain + run ledger). `readKpiActivity` reads the KPI via a verifier-INDEPENDENT
+// reader (NEVER recomputeConfidence of the goal's own row). `fileGoalOutcome…`
+// records the validates/invalidates outcome. `recordStepResult…` persists the
+// step accounting (the durable iteration history is the atom + its citation).
+// ---------------------------------------------------------------------------
+
+/** JSON-serializable projection of a Goal (Temporal wire format — dates as ISO strings). */
+export interface GoalWire {
+  hypothesisId: string;
+  domain: string;
+  kpiId: string;
+  target: number;
+  /** ISO timestamp of the row's evaluate_at. */
+  evaluateAt: string;
+}
+
+export interface LoopBudgetWire {
+  maxIterations: number;
+  maxTokens: number;
+  maxRecursionDepth: number;
+  maxStalledIterations: number;
+}
+
+export interface GoalLoopActivities {
+  /**
+   * Project the goal hypothesis row → Goal + budget + accumulated LoopState.
+   * Returns null if the row is not a goal (no `metric:` strategy / undecodable
+   * budget). `nowIso` is the activity's read clock, injected so the workflow's
+   * halt guard stays deterministic.
+   */
+  loadGoalStateActivity(input: {
+    nodeId: string;
+    hypothesisId: string;
+  }): Promise<{
+    goal: GoalWire;
+    budget: LoopBudgetWire;
+    iterations: number;
+    tokensSpent: number;
+    recursionDepth: number;
+    stalledIterations: number;
+    nowIso: string;
+  } | null>;
+
+  /** Read the goal's KPI via its verifier-independent reader (0–100). */
+  readKpiActivity(input: {
+    nodeId: string;
+    hypothesisId: string;
+  }): Promise<number>;
+
+  /** File the goal's outcome (validates|invalidates) + recompute confidence. */
+  fileGoalOutcomeActivity(input: {
+    nodeId: string;
+    hypothesisId: string;
+    domain: string;
+    edge: "validates" | "invalidates";
+    reason: string;
+    lastKpi: number;
+    target: number;
+  }): Promise<void>;
+
+  /** Persist one step's result + folded accounting (iterations/tokens/no-progress). */
+  recordStepResultActivity(input: {
+    nodeId: string;
+    hypothesisId: string;
+    runId: string;
+    ok: boolean;
+    priorKpi: number;
+    newKpi: number;
+  }): Promise<void>;
+}
+
+// ---------------------------------------------------------------------------
 // Ledger Activities (attribution pipeline I/O)
 // ---------------------------------------------------------------------------
 

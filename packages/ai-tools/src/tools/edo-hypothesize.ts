@@ -22,6 +22,30 @@ import type { BoundTool, ToolContract, ToolImplementation } from "../types";
 
 // ─── Schemas ─────────────────────────────────────────────────────────────────
 
+// Canonical `resolution_strategy` shape — a namespaced identifier
+// (`agent` | `kind:<value>`, e.g. `market:0x123`, `metric:<kpi-id>`). This is
+// the SAME regex as `ResolutionStrategySchema` in @cogni/knowledge-store; it is
+// duplicated here (not imported) because ai-tools is the lower package and
+// knowledge-store depends on it, so importing the domain schema would invert the
+// dependency. Widening the tool boundary to admit `metric:<kpi-id>` is the
+// goal-loop hook (docs/design/knowledge-goal-loop.md): a goal is a hypothesis
+// whose resolution_strategy is `metric:<kpi-id>`.
+const RESOLUTION_STRATEGY_RE = /^[a-z][a-z0-9_]*(:[A-Za-z0-9_./~^-]+)?$/;
+const METRIC_STRATEGY_PREFIX = "metric:";
+
+const ResolutionStrategyToolSchema = z
+  .string()
+  .min(1)
+  .max(200)
+  .regex(
+    RESOLUTION_STRATEGY_RE,
+    "resolution_strategy must be a namespaced identifier: 'agent' | 'kind:<value>' (e.g. market:0x123, metric:oss-frontier-coverage)"
+  )
+  .refine(
+    (s) => s !== METRIC_STRATEGY_PREFIX,
+    "metric: resolution_strategy must name a kpi id (metric:<kpi-id>)"
+  );
+
 export const EdoHypothesizeInputSchema = z.object({
   id: z
     .string()
@@ -44,14 +68,9 @@ export const EdoHypothesizeInputSchema = z.object({
     .describe(
       "ISO timestamp — when this hypothesis should be resolved (the appointment with truth). REQUIRED."
     ),
-  resolutionStrategy: z
-    .string()
-    .min(1)
-    .max(200)
-    .optional()
-    .describe(
-      "Namespaced resolver identifier. Omit (or 'manual') = cron skips; only humans resolve. 'agent' = cron hands off to a resolver graph. Future: 'market:<id>', 'metric:<query>', 'http:<url>', 'deadline'."
-    ),
+  resolutionStrategy: ResolutionStrategyToolSchema.optional().describe(
+    "Namespaced resolver identifier. Omit (or 'manual') = cron skips; only humans resolve. 'agent' = cron hands off to a resolver graph. 'metric:<kpi-id>' = a self-terminating goal loop drives toward the KPI. Future: 'market:<id>', 'http:<url>', 'deadline'."
+  ),
   evidenceForIds: z
     .array(z.string())
     .optional()

@@ -15,8 +15,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  applyStep,
   DEFAULT_LOOP_BUDGET,
   type Goal,
+  goalLoopDecision,
   haltEdge,
   type LoopState,
   loopHaltReason,
@@ -94,5 +96,61 @@ describe("loopHaltReason — termination predicate", () => {
         NOW
       )
     ).toBe("recursion_exhausted");
+  });
+});
+
+describe("goalLoopDecision — per-tick controller decision", () => {
+  it("steps when fresh and under every cap", () => {
+    expect(goalLoopDecision(state(), NOW)).toEqual({ kind: "step" });
+  });
+
+  it("halts (validates) on goal_met", () => {
+    const d = goalLoopDecision(state({ lastKpi: 90 }), NOW);
+    expect(d).toEqual({ kind: "halt", reason: "goal_met", edge: "validates" });
+  });
+
+  it("halts (invalidates) on a budget axis", () => {
+    const d = goalLoopDecision(
+      state({ tokensSpent: DEFAULT_LOOP_BUDGET.maxTokens }),
+      NOW
+    );
+    expect(d).toEqual({
+      kind: "halt",
+      reason: "tokens_exhausted",
+      edge: "invalidates",
+    });
+  });
+});
+
+describe("applyStep — folds one step's accounting into LoopState", () => {
+  it("bumps iterations + tokens and resets the stall streak on KPI gain", () => {
+    const s = state({
+      iterations: 1,
+      tokensSpent: 1000,
+      lastKpi: 20,
+      stalledIterations: 1,
+    });
+    const next = applyStep(s, { tokensSpent: 500, newKpi: 35 });
+    expect(next.iterations).toBe(2);
+    expect(next.tokensSpent).toBe(1500);
+    expect(next.lastKpi).toBe(35);
+    expect(next.stalledIterations).toBe(0);
+  });
+
+  it("increments the stall streak when the KPI does not gain", () => {
+    const s = state({ lastKpi: 40, stalledIterations: 1 });
+    expect(applyStep(s, { tokensSpent: 100, newKpi: 40 }).stalledIterations).toBe(
+      2
+    );
+    expect(applyStep(s, { tokensSpent: 100, newKpi: 39 }).stalledIterations).toBe(
+      2
+    );
+  });
+
+  it("treats the first read (null prior) as progress, not a stall", () => {
+    const s = state({ lastKpi: null, stalledIterations: 0 });
+    expect(applyStep(s, { tokensSpent: 100, newKpi: 0 }).stalledIterations).toBe(
+      0
+    );
   });
 });

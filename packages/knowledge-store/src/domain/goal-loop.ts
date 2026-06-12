@@ -198,3 +198,64 @@ export function loopHaltReason(
 export function haltEdge(reason: LoopHaltReason): "validates" | "invalidates" {
   return reason === "goal_met" ? "validates" : "invalidates";
 }
+
+// ---------------------------------------------------------------------------
+// Per-tick decision — the deterministic core the GoalLoopWorkflow wraps.
+//
+// Keeps the workflow's branch logic pure + unit-testable: given the state after
+// reading the KPI, decide whether to halt (and with what reason/edge) or take
+// one more step. The workflow does the I/O (read KPI, run graph step, file
+// outcome); this function does the deciding.
+// ---------------------------------------------------------------------------
+
+/** Halt this tick: file the outcome with `edge`, then stop the schedule. */
+export interface GoalLoopHaltDecision {
+  kind: "halt";
+  reason: LoopHaltReason;
+  edge: "validates" | "invalidates";
+}
+
+/** Continue: take one research/cite step, then re-arm the next tick. */
+export interface GoalLoopStepDecision {
+  kind: "step";
+}
+
+export type GoalLoopDecision = GoalLoopHaltDecision | GoalLoopStepDecision;
+
+/**
+ * Decide what the controller does this tick. Runs the pure `loopHaltReason`
+ * guard FIRST (LOOP_TERMINATES); on any halt reason it returns the matching
+ * `haltEdge`, else it signals a step. `now` is injected so the decision stays
+ * pure + testable without Temporal.
+ */
+export function goalLoopDecision(
+  state: LoopState,
+  now: Date
+): GoalLoopDecision {
+  const reason = loopHaltReason(state, now);
+  if (reason !== null) {
+    return { kind: "halt", reason, edge: haltEdge(reason) };
+  }
+  return { kind: "step" };
+}
+
+/**
+ * Fold one completed step's accounting into `LoopState`: bump iterations, add
+ * tokens, and track the no-progress streak (a step whose new KPI did not exceed
+ * the prior reading is "stalled"). `recursionDepth` is threaded by the caller
+ * (it changes only when a sub-goal is spawned), so it is passed through as-is.
+ */
+export function applyStep(
+  state: LoopState,
+  step: { tokensSpent: number; newKpi: number }
+): LoopState {
+  const prior = state.lastKpi;
+  const gained = prior === null ? true : step.newKpi > prior;
+  return {
+    ...state,
+    iterations: state.iterations + 1,
+    tokensSpent: state.tokensSpent + step.tokensSpent,
+    lastKpi: step.newKpi,
+    stalledIterations: gained ? 0 : state.stalledIterations + 1,
+  };
+}

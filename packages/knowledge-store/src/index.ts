@@ -47,8 +47,13 @@ export {
 } from "./domain/gates/index.js";
 // Goal + KPI loop seam (proj.knowledge-syntropy — goal-loop, design-only v0)
 export {
+  applyStep,
   DEFAULT_LOOP_BUDGET,
   type Goal,
+  type GoalLoopDecision,
+  goalLoopDecision,
+  type GoalLoopHaltDecision,
+  type GoalLoopStepDecision,
   GoalSchema,
   haltEdge,
   kpiIdFromStrategy,
@@ -63,6 +68,30 @@ export {
   type MetricResolutionStrategy,
   MetricResolutionStrategySchema,
 } from "./domain/goal-loop.js";
+// Goal codec (tags ⇄ Goal) + KPI reader registry (goal-loop controller seam)
+export {
+  type DecodedGoalTags,
+  decodeGoalTags,
+  encodeGoalTags,
+  GOAL_TAG_KEYS,
+  type GoalFromRow,
+  goalFromRow,
+  isGoalTag,
+} from "./domain/goal-codec.js";
+export {
+  type ExternalCountReaderConfig,
+  type ExternalCountSource,
+  createConfidenceSmokeReader,
+  createExternalCountReader,
+  createKpiReaderRegistry,
+  type OwnConfidenceSource,
+} from "./domain/kpi-reader.js";
+// Resolver dispatch (pure namespace router: metric: → goal-loop, agent → agent)
+export {
+  AGENT_STRATEGY,
+  classifyResolutionStrategy,
+  type ResolverTarget,
+} from "./domain/resolver-dispatch.js";
 // Domain types & schemas
 export {
   type Citation,
@@ -100,6 +129,8 @@ export {
   type CreateEdoOutcomeInput,
   type KnowledgeContributionPort,
 } from "./port/contribution.port.js";
+// KPI reader port (goal-loop — verifier-independent metric read)
+export type { KpiReader, KpiReaderRegistry } from "./port/kpi-reader.port.js";
 // EDO resolver port (hypothesis loop)
 export type {
   ChainDirection,
