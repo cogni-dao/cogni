@@ -35,6 +35,10 @@ import {
 import { executeChild, proxyActivities, uuid4 } from "@temporalio/workflow";
 import { STANDARD_ACTIVITY_OPTIONS } from "../activity-profiles.js";
 import type { GoalLoopActivities } from "../activity-types.js";
+import {
+  DEFAULT_GOAL_STEP_GRAPH_ID,
+  type GoalLoopWorkflowInput,
+} from "./goal-loop.schema.js";
 import type { GraphRunResult } from "./graph-run.workflow.js";
 
 const {
@@ -43,26 +47,6 @@ const {
   fileGoalOutcomeActivity,
   recordStepResultActivity,
 } = proxyActivities<GoalLoopActivities>(STANDARD_ACTIVITY_OPTIONS);
-
-/** Graph the per-tick step runs. A goal step IS a research step (reused, not new). */
-export const GOAL_LOOP_STEP_GRAPH_ID = "langgraph:research" as const;
-
-/**
- * Input for GoalLoopWorkflow. Populated at schedule-registration time from the
- * goal hypothesis row (keyed on `hypothesisId`).
- */
-export interface GoalLoopWorkflowInput {
-  /** Owning node (routes the graph step + outcome write). */
-  nodeId: string;
-  /** The `knowledge.id` of the goal hypothesis this loop drives. */
-  hypothesisId: string;
-  /** System billing account ID (resolved at schedule creation). */
-  billingAccountId: string;
-  /** System virtual key ID. */
-  virtualKeyId: string;
-  /** Model for the research step. */
-  model: string;
-}
 
 export interface GoalLoopTickResult {
   hypothesisId: string;
@@ -88,7 +72,14 @@ export interface GoalLoopTickResult {
 export async function GoalLoopWorkflow(
   input: GoalLoopWorkflowInput
 ): Promise<GoalLoopTickResult> {
-  const { nodeId, hypothesisId, billingAccountId, virtualKeyId, model } = input;
+  const {
+    nodeId,
+    hypothesisId,
+    billingAccountId,
+    virtualKeyId,
+    model,
+    stepGraphId = DEFAULT_GOAL_STEP_GRAPH_ID,
+  } = input;
 
   // 1. Load the goal + budget + accumulated loop state from the hypothesis row.
   const loaded = await loadGoalStateActivity({ nodeId, hypothesisId });
@@ -132,25 +123,40 @@ export async function GoalLoopWorkflow(
     return { hypothesisId, outcome: "halted", haltReason: decision.reason };
   }
 
-  // Step: run ONE research step that writes ONE evidence_for-linked atom.
+  // Step: run ONE step on the goal's step graph that writes ONE
+  // evidence_for-linked atom. The step graph is goal-level config (any graph can
+  // be driven by a goal); it defaults to `research` but is not hardcoded here.
+  //
+  // Idempotency (ACTIVITY_IDEMPOTENCY): the evidence write is keyed on a STABLE
+  // business key, `${hypothesisId}/${iteration}`, NOT a random id. The child
+  // `GraphRunWorkflow` is itself deduped by a deterministic `workflowId` on the
+  // same key, so a Temporal retry reuses the same run rather than re-executing
+  // the graph — and `evidenceIdempotencyKey` makes the atom + its citation
+  // deterministic for the same tick, so even a re-run cannot double-write the
+  // evidence. (Residual: the actual write still rides the graph's
+  // `core__knowledge_write cite` tool; moving it into a dedicated write Activity
+  // is the follow-up — see docs/design/knowledge-goal-loop.md § ships vs defers.)
+  const evidenceIdempotencyKey = `${hypothesisId}/${state.iterations}`;
   const runId = uuid4();
   let graphResult: GraphRunResult;
   try {
     graphResult = await executeChild("GraphRunWorkflow", {
-      workflowId: `graph-run:goal:${hypothesisId}:${state.iterations}`,
+      workflowId: `graph-run:goal:${evidenceIdempotencyKey}`,
       args: [
         {
           nodeId,
-          graphId: GOAL_LOOP_STEP_GRAPH_ID,
+          graphId: stepGraphId,
           executionGrantId: null,
           input: {
             goalHypothesisId: hypothesisId,
             kpiId: goal.kpiId,
             domain: goal.domain,
             target: goal.target,
-            // The research step files its finding as an atom that
-            // evidence_for's the goal hypothesis (core__knowledge_write `cite`).
+            // The step files its finding as an atom that evidence_for's the
+            // goal hypothesis (core__knowledge_write `cite`). The atom + citation
+            // are keyed on this stable business key so a retry can't duplicate.
             citeEvidenceForId: hypothesisId,
+            evidenceIdempotencyKey,
             model,
             actorUserId: "cogni_system",
             billingAccountId,
@@ -158,7 +164,7 @@ export async function GoalLoopWorkflow(
           },
           runKind: "system_scheduled" as const,
           triggerSource: `goal:${hypothesisId}`,
-          triggerRef: `${hypothesisId}:${state.iterations}`,
+          triggerRef: evidenceIdempotencyKey,
           requestedBy: "cogni_system",
           runId,
         },
@@ -178,6 +184,7 @@ export async function GoalLoopWorkflow(
   await recordStepResultActivity({
     nodeId,
     hypothesisId,
+    idempotencyKey: evidenceIdempotencyKey,
     runId,
     ok: graphResult.ok,
     priorKpi: lastKpi,

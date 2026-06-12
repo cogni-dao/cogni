@@ -203,13 +203,23 @@ export interface GoalLoopActivities {
     nowIso: string;
   } | null>;
 
-  /** Read the goal's KPI via its verifier-independent reader (0–100). */
+  /**
+   * Read the goal's KPI via its verifier-INDEPENDENT reader (0–100). Per
+   * KPI_VERIFIER_INDEPENDENT the implementation MUST resolve through the
+   * `KpiReaderRegistry` independent read (which refuses a non-independent reader
+   * for a real goal); it MUST NEVER return `recomputeConfidence` of the goal's
+   * own row — that is the self-grading trap the loop exists to avoid.
+   */
   readKpiActivity(input: {
     nodeId: string;
     hypothesisId: string;
   }): Promise<number>;
 
-  /** File the goal's outcome (validates|invalidates) + recompute confidence. */
+  /**
+   * File the goal's outcome (validates|invalidates) + recompute confidence.
+   * Per ACTIVITY_IDEMPOTENCY the implementation MUST key on `${hypothesisId}`
+   * (one outcome per goal) so a Temporal retry cannot file a second outcome.
+   */
   fileGoalOutcomeActivity(input: {
     nodeId: string;
     hypothesisId: string;
@@ -220,10 +230,17 @@ export interface GoalLoopActivities {
     target: number;
   }): Promise<void>;
 
-  /** Persist one step's result + folded accounting (iterations/tokens/no-progress). */
+  /**
+   * Persist one step's result + folded accounting (iterations/tokens/no-progress).
+   * Per ACTIVITY_IDEMPOTENCY the implementation MUST key on `idempotencyKey`
+   * (`${hypothesisId}/${iteration}`) so a retry folds the same step once, never
+   * double-counting iterations/tokens.
+   */
   recordStepResultActivity(input: {
     nodeId: string;
     hypothesisId: string;
+    /** Stable business key `${hypothesisId}/${iteration}` — folds this step once. */
+    idempotencyKey: string;
     runId: string;
     ok: boolean;
     priorKpi: number;

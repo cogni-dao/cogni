@@ -54,10 +54,12 @@ export {
 export type { AttributionIngestRunV1 } from "./workflows/collect-epoch.workflow.js";
 export type { FinalizeEpochWorkflowInput } from "./workflows/finalize-epoch.workflow.js";
 // Workflow input/output types
-export type {
-  GoalLoopTickResult,
-  GoalLoopWorkflowInput,
-} from "./workflows/goal-loop.workflow.js";
+export {
+  DEFAULT_GOAL_STEP_GRAPH_ID,
+  type GoalLoopWorkflowInput,
+  GoalLoopWorkflowInputSchema,
+} from "./workflows/goal-loop.schema.js";
+export type { GoalLoopTickResult } from "./workflows/goal-loop.workflow.js";
 export type {
   GraphRunResult,
   GraphRunWorkflowInput,

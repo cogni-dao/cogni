@@ -47,6 +47,25 @@ export interface KpiReader {
  */
 export interface KpiReaderRegistry {
   get(kpiId: string): KpiReader | null;
-  /** Read the KPI for a goal, or `null` if no reader is registered for its id. */
-  read(goal: Goal): Promise<number | null>;
+  /**
+   * Read the KPI for a goal, or `null` if no reader is registered for its id.
+   *
+   * REFUSES a non-independent (smoke) reader for a real goal — per
+   * KPI_VERIFIER_INDEPENDENT, a real goal must never be gated on a self-grading
+   * reader. Pass `{ allowSmoke: true }` ONLY from smoke tests to read a fenced
+   * `independent: false` reader; without it, a non-independent reader throws.
+   */
+  read(goal: Goal, opts?: { allowSmoke?: boolean }): Promise<number | null>;
+}
+
+/** Thrown when a real goal is read through a non-independent (smoke) reader. */
+export class NonIndependentKpiReaderError extends Error {
+  constructor(public readonly kpiId: string) {
+    super(
+      `KpiReader '${kpiId}' is not verifier-independent (smoke-test only); ` +
+        "refusing to gate a real goal on a self-grading reader " +
+        "(KPI_VERIFIER_INDEPENDENT). Pass { allowSmoke: true } only from smoke tests."
+    );
+    this.name = "NonIndependentKpiReaderError";
+  }
 }

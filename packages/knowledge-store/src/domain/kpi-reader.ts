@@ -15,14 +15,20 @@
  *     atoms onto its own hypothesis chain; the source reads a *separate* signal).
  *     `confidence-smoke` is `independent: false` and labelled SMOKE-TEST ONLY.
  *   - REGISTRY_REFUSES_SMOKE_FOR_REAL_GOAL — `read` returns null for an
- *     unregistered id; a controller MUST additionally refuse a non-independent
- *     reader for a real goal (the `independent` flag is the gate).
+ *     unregistered id AND throws `NonIndependentKpiReaderError` for a
+ *     non-independent (smoke) reader unless `{ allowSmoke: true }` is passed
+ *     (smoke tests only). The `independent` flag is the gate; the registry
+ *     enforces it so no real goal is ever gated on a self-grading reader.
  * Side-effects: none (sources passed in do the I/O)
  * Links: docs/design/knowledge-goal-loop.md § worker ≠ verifier
  * @public
  */
 
-import type { KpiReader, KpiReaderRegistry } from "../port/kpi-reader.port.js";
+import {
+  type KpiReader,
+  type KpiReaderRegistry,
+  NonIndependentKpiReaderError,
+} from "../port/kpi-reader.port.js";
 import type { Goal } from "./goal-loop.js";
 
 const clamp0to100 = (n: number): number => Math.max(0, Math.min(100, n));
@@ -122,9 +128,18 @@ export function createKpiReaderRegistry(
     get(kpiId: string): KpiReader | null {
       return byId.get(kpiId) ?? null;
     },
-    async read(goal: Goal): Promise<number | null> {
+    async read(
+      goal: Goal,
+      opts?: { allowSmoke?: boolean }
+    ): Promise<number | null> {
       const reader = byId.get(goal.kpiId);
       if (!reader) return null;
+      // REGISTRY_REFUSES_SMOKE_FOR_REAL_GOAL — a real goal must never be gated
+      // on a self-grading reader (KPI_VERIFIER_INDEPENDENT). Only smoke tests
+      // may opt in to a fenced `independent: false` reader.
+      if (!reader.independent && opts?.allowSmoke !== true) {
+        throw new NonIndependentKpiReaderError(reader.kpiId);
+      }
       return reader.read(goal);
     },
   };

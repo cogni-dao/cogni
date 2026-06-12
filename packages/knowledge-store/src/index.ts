@@ -55,7 +55,7 @@ export {
   goalFromRow,
   isGoalTag,
 } from "./domain/goal-codec.js";
-// Goal + KPI loop seam (proj.knowledge-syntropy — goal-loop, design-only v0)
+// Goal + KPI loop seam (proj.knowledge-syntropy — goal-loop controller seam)
 export {
   applyStep,
   DEFAULT_LOOP_BUDGET,
@@ -153,7 +153,11 @@ export {
   type NewDomain,
 } from "./port/knowledge-store.port.js";
 // KPI reader port (goal-loop — verifier-independent metric read)
-export type { KpiReader, KpiReaderRegistry } from "./port/kpi-reader.port.js";
+export {
+  type KpiReader,
+  type KpiReaderRegistry,
+  NonIndependentKpiReaderError,
+} from "./port/kpi-reader.port.js";
 // Contribution service (framework-agnostic, cross-node shared)
 export {
   type AppendCommitBody,

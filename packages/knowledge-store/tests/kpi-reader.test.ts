@@ -21,6 +21,7 @@ import {
   createExternalCountReader,
   createKpiReaderRegistry,
 } from "../src/domain/kpi-reader.js";
+import { NonIndependentKpiReaderError } from "../src/port/kpi-reader.port.js";
 
 const GOAL: Goal = {
   hypothesisId: "goal-1",
@@ -109,5 +110,21 @@ describe("createKpiReaderRegistry", () => {
         denominator: 2,
       });
     expect(() => createKpiReaderRegistry([make(), make()])).toThrow();
+  });
+
+  it("REFUSES a non-independent (smoke) reader for a real goal", async () => {
+    const registry = createKpiReaderRegistry([
+      createConfidenceSmokeReader("oss-frontier-coverage", async () => 95),
+    ]);
+    await expect(registry.read(GOAL)).rejects.toBeInstanceOf(
+      NonIndependentKpiReaderError
+    );
+  });
+
+  it("reads a smoke reader only when allowSmoke is explicitly set", async () => {
+    const registry = createKpiReaderRegistry([
+      createConfidenceSmokeReader("oss-frontier-coverage", async () => 42),
+    ]);
+    expect(await registry.read(GOAL, { allowSmoke: true })).toBe(42);
   });
 });
