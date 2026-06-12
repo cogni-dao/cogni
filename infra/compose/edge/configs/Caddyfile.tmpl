@@ -45,13 +45,13 @@ www.{$DOMAIN} {
   }
 }
 
-# ── ayo node → k3s NodePort 30900 ──────────────────────────────────
-{$AYO_DOMAIN:ayo.localhost} {
+# ── blue node → k3s NodePort 31100 ──────────────────────────────────
+{$BLUE_DOMAIN:blue.localhost} {
   encode zstd gzip
 
   @public path /api/v1/public/*
   handle @public {
-    reverse_proxy {$AYO_UPSTREAM:host.docker.internal:30900} {
+    reverse_proxy {$BLUE_UPSTREAM:host.docker.internal:31100} {
       header_up X-Real-IP {remote_host}
       transport http {
         response_header_timeout 10s
@@ -59,11 +59,11 @@ www.{$DOMAIN} {
     }
   }
 
-  reverse_proxy {$AYO_UPSTREAM:host.docker.internal:30900}
+  reverse_proxy {$BLUE_UPSTREAM:host.docker.internal:31100}
 
   log {
     format json
-    output file /data/logs/caddy/access-ayo.log {
+    output file /data/logs/caddy/access-blue.log {
       roll_size 10MB
       roll_keep 7
       roll_keep_for 168h
@@ -71,13 +71,13 @@ www.{$DOMAIN} {
   }
 }
 
-# ── canary node → k3s NodePort 30400 ──────────────────────────────────
-{$CANARY_DOMAIN:canary.localhost} {
+# ── habitat node → k3s NodePort 31200 ──────────────────────────────────
+{$HABITAT_DOMAIN:habitat.localhost} {
   encode zstd gzip
 
   @public path /api/v1/public/*
   handle @public {
-    reverse_proxy {$CANARY_UPSTREAM:host.docker.internal:30400} {
+    reverse_proxy {$HABITAT_UPSTREAM:host.docker.internal:31200} {
       header_up X-Real-IP {remote_host}
       transport http {
         response_header_timeout 10s
@@ -85,63 +85,11 @@ www.{$DOMAIN} {
     }
   }
 
-  reverse_proxy {$CANARY_UPSTREAM:host.docker.internal:30400}
+  reverse_proxy {$HABITAT_UPSTREAM:host.docker.internal:31200}
 
   log {
     format json
-    output file /data/logs/caddy/access-canary.log {
-      roll_size 10MB
-      roll_keep 7
-      roll_keep_for 168h
-    }
-  }
-}
-
-# ── coulditbe node → k3s NodePort 30700 ──────────────────────────────────
-{$COULDITBE_DOMAIN:coulditbe.localhost} {
-  encode zstd gzip
-
-  @public path /api/v1/public/*
-  handle @public {
-    reverse_proxy {$COULDITBE_UPSTREAM:host.docker.internal:30700} {
-      header_up X-Real-IP {remote_host}
-      transport http {
-        response_header_timeout 10s
-      }
-    }
-  }
-
-  reverse_proxy {$COULDITBE_UPSTREAM:host.docker.internal:30700}
-
-  log {
-    format json
-    output file /data/logs/caddy/access-coulditbe.log {
-      roll_size 10MB
-      roll_keep 7
-      roll_keep_for 168h
-    }
-  }
-}
-
-# ── creative node → k3s NodePort 30600 ──────────────────────────────────
-{$CREATIVE_DOMAIN:creative.localhost} {
-  encode zstd gzip
-
-  @public path /api/v1/public/*
-  handle @public {
-    reverse_proxy {$CREATIVE_UPSTREAM:host.docker.internal:30600} {
-      header_up X-Real-IP {remote_host}
-      transport http {
-        response_header_timeout 10s
-      }
-    }
-  }
-
-  reverse_proxy {$CREATIVE_UPSTREAM:host.docker.internal:30600}
-
-  log {
-    format json
-    output file /data/logs/caddy/access-creative.log {
+    output file /data/logs/caddy/access-habitat.log {
       roll_size 10MB
       roll_keep 7
       roll_keep_for 168h
@@ -175,13 +123,13 @@ www.{$DOMAIN} {
   }
 }
 
-# ── pandora node → k3s NodePort 30500 ──────────────────────────────────
-{$PANDORA_DOMAIN:pandora.localhost} {
+# ── oss node → k3s NodePort 31000 ──────────────────────────────────
+{$OSS_DOMAIN:oss.localhost} {
   encode zstd gzip
 
   @public path /api/v1/public/*
   handle @public {
-    reverse_proxy {$PANDORA_UPSTREAM:host.docker.internal:30500} {
+    reverse_proxy {$OSS_UPSTREAM:host.docker.internal:31000} {
       header_up X-Real-IP {remote_host}
       transport http {
         response_header_timeout 10s
@@ -189,63 +137,11 @@ www.{$DOMAIN} {
     }
   }
 
-  reverse_proxy {$PANDORA_UPSTREAM:host.docker.internal:30500}
+  reverse_proxy {$OSS_UPSTREAM:host.docker.internal:31000}
 
   log {
     format json
-    output file /data/logs/caddy/access-pandora.log {
-      roll_size 10MB
-      roll_keep 7
-      roll_keep_for 168h
-    }
-  }
-}
-
-# ── please node → k3s NodePort 30800 ──────────────────────────────────
-{$PLEASE_DOMAIN:please.localhost} {
-  encode zstd gzip
-
-  @public path /api/v1/public/*
-  handle @public {
-    reverse_proxy {$PLEASE_UPSTREAM:host.docker.internal:30800} {
-      header_up X-Real-IP {remote_host}
-      transport http {
-        response_header_timeout 10s
-      }
-    }
-  }
-
-  reverse_proxy {$PLEASE_UPSTREAM:host.docker.internal:30800}
-
-  log {
-    format json
-    output file /data/logs/caddy/access-please.log {
-      roll_size 10MB
-      roll_keep 7
-      roll_keep_for 168h
-    }
-  }
-}
-
-# ── resy node → k3s NodePort 30300 ──────────────────────────────────
-{$RESY_DOMAIN:resy.localhost} {
-  encode zstd gzip
-
-  @public path /api/v1/public/*
-  handle @public {
-    reverse_proxy {$RESY_UPSTREAM:host.docker.internal:30300} {
-      header_up X-Real-IP {remote_host}
-      transport http {
-        response_header_timeout 10s
-      }
-    }
-  }
-
-  reverse_proxy {$RESY_UPSTREAM:host.docker.internal:30300}
-
-  log {
-    format json
-    output file /data/logs/caddy/access-resy.log {
+    output file /data/logs/caddy/access-oss.log {
       roll_size 10MB
       roll_keep 7
       roll_keep_for 168h

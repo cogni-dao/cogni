@@ -28,19 +28,13 @@ image_tag_suffix: "-ay"
 migrator_tag_suffix: "-ay-migrate"
 source_repo: https://github.com/cogni-test-org/ay.git
 image_repository: ghcr.io/cogni-test-org/ay
+source_sha: 0123456789012345678901234567890123456789
 candidate_a_branch: deploy/candidate-a-ay
 preview_branch: deploy/preview-ay
 production_branch: deploy/production-ay
 path_prefix: nodes/ay/
 YAML
-cat > .gitmodules <<'GITMODULES'
-[submodule "nodes/ay"]
-	path = nodes/ay
-	url = https://github.com/cogni-test-org/ay.git
-GITMODULES
-mkdir -p nodes
-git update-index --add --cacheinfo 160000,0123456789012345678901234567890123456789,nodes/ay
-git add infra/catalog/ay.yaml .gitmodules
+git add infra/catalog/ay.yaml
 git commit -q -m fixture
 
 printf 'infra/catalog/ay.yaml\n' > added.txt

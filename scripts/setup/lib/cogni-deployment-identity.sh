@@ -24,17 +24,6 @@ cogni_operator_domain_for_env() {
   esac
 }
 
-cogni_resy_domain_for_env() {
-  local deploy_env="$1" root="$2"
-  case "$deploy_env" in
-    production)  printf 'resy.%s' "$root" ;;
-    preview)     printf 'resy-preview.%s' "$root" ;;
-    candidate-a) printf 'resy-test.%s' "$root" ;;
-    candidate-*) printf 'resy-%s.%s' "$deploy_env" "$root" ;;
-    *)           return 1 ;;
-  esac
-}
-
 cogni_vm_host_for_env() {
   local deploy_env="$1" root="$2" slug="$3"
   case "$deploy_env" in

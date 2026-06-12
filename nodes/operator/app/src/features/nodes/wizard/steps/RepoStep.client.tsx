@@ -3,10 +3,10 @@
 
 /**
  * Module: `@features/nodes/wizard/steps/RepoStep.client`
- * Purpose: "Create node repo PR" step with first-class async feedback.
- * Scope: POSTs the unchanged publish endpoint; while pending, shows a labeled phase checklist,
- *   an elapsed timer, and an up-front time expectation — replacing the silent disabled button.
- *   Optimistic phases advance on a timer and reconcile to the real PR on completion.
+ * Purpose: "Create your app" step — the single friendly confirm that spawns the node's codebase,
+ *   knowledge hub, and deploy request. User-facing language (no fork/repo-spec/PR jargon).
+ * Scope: POSTs the unchanged publish endpoint; while pending, shows one labeled phase checklist
+ *   that advances optimistically and reconciles to the real result on completion.
  * Side-effects: IO (POST /api/v1/nodes/:id/publish), React state, router.refresh
  * Links: src/app/api/v1/nodes/[id]/publish/route.ts, src/features/nodes/wizard/PhaseList.tsx
  * @public
@@ -14,22 +14,46 @@
 
 "use client";
 
+import { BookOpen, Package, Rocket } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { type ReactElement, useEffect, useRef, useState } from "react";
+import { type ReactElement, useEffect, useState } from "react";
 
-import { Button, SectionCard } from "@/components";
+import { Button } from "@/components";
 
 import { type Phase, PhaseList } from "../PhaseList";
+import { StepSection } from "../StepSection";
 import type { WizardStepProps } from "../types";
 
-const PUBLISH_PHASES: readonly string[] = [
-  "Forking node-template",
-  "Committing repo-spec identity",
-  "Opening deployment PR",
+const WHAT_YOU_GET: ReadonlyArray<{
+  Icon: typeof Package;
+  title: string;
+  detail: string;
+}> = [
+  {
+    Icon: Package,
+    title: "Your codebase",
+    detail: "forked from our template, ready to run",
+  },
+  {
+    Icon: BookOpen,
+    title: "Your knowledge hub",
+    detail: "a Dolt database your node learns into",
+  },
+  {
+    Icon: Rocket,
+    title: "A deploy request",
+    detail: "so Cogni can take it live when you're ready",
+  },
 ];
 
-/** Optimistic advance cadence (ms) — phases light up over the expected ~30–60s window. */
-const PHASE_TICK_MS = 9000;
+/** User-facing checklist labels — advance optimistically while the POST is in flight. */
+const SPAWN_PHASES: readonly string[] = [
+  "Creating your codebase",
+  "Setting up your knowledge hub",
+  "Preparing your deploy request",
+];
+
+const PHASE_TICK_MS = 7000;
 
 interface NodeActionErrorBody {
   readonly reason?: unknown;
@@ -56,32 +80,19 @@ export function RepoStep({ node }: WizardStepProps): ReactElement {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [phaseIdx, setPhaseIdx] = useState(0);
-  const [elapsed, setElapsed] = useState(0);
-  const startedAt = useRef<number | null>(null);
 
-  // Drive the optimistic phase + elapsed timer while the publish POST is in flight.
   useEffect(() => {
     if (!submitting) return;
-    const tickPhase = window.setInterval(() => {
-      setPhaseIdx((i) => Math.min(i + 1, PUBLISH_PHASES.length - 1));
+    const tick = window.setInterval(() => {
+      setPhaseIdx((i) => Math.min(i + 1, SPAWN_PHASES.length - 1));
     }, PHASE_TICK_MS);
-    const tickClock = window.setInterval(() => {
-      if (startedAt.current !== null) {
-        setElapsed(Math.floor((performance.now() - startedAt.current) / 1000));
-      }
-    }, 1000);
-    return () => {
-      window.clearInterval(tickPhase);
-      window.clearInterval(tickClock);
-    };
+    return () => window.clearInterval(tick);
   }, [submitting]);
 
-  const handlePublish = async () => {
+  const handleSpawn = async () => {
     setError(null);
     setSubmitting(true);
     setPhaseIdx(0);
-    setElapsed(0);
-    startedAt.current = performance.now();
     try {
       const res = await fetch(`/api/v1/nodes/${node.id}/publish`, {
         method: "POST",
@@ -101,32 +112,40 @@ export function RepoStep({ node }: WizardStepProps): ReactElement {
   };
 
   if (submitting) {
-    const phases: Phase[] = PUBLISH_PHASES.map((label, i) => ({
+    const phases: Phase[] = SPAWN_PHASES.map((label, i) => ({
       label,
       state: i < phaseIdx ? "done" : i === phaseIdx ? "active" : "pending",
     }));
     return (
-      <SectionCard title="Creating node repo PR">
-        <div className="space-y-5 py-2">
-          <PhaseList phases={phases} />
-          <p className="text-muted-foreground text-xs">
-            This usually takes 30–60s. Elapsed {elapsed}s.
-          </p>
-        </div>
-      </SectionCard>
+      <StepSection title="Spawning your node">
+        <PhaseList phases={phases} />
+      </StepSection>
     );
   }
 
   return (
-    <SectionCard title="Create node repo">
-      <div className="space-y-4">
-        <p className="text-muted-foreground text-sm">
-          Fork <code>node-template</code>, commit this node's identity, and open
-          the operator deployment PR.
-        </p>
-        <Button onClick={handlePublish}>Create node repo PR</Button>
-        {error ? <p className="text-destructive text-sm">{error}</p> : null}
-      </div>
-    </SectionCard>
+    <StepSection title="Create your app">
+      <p className="text-muted-foreground text-sm">
+        This sets up everything your node needs:
+      </p>
+      <ul className="space-y-3">
+        {WHAT_YOU_GET.map(({ Icon, title, detail }) => (
+          <li key={title} className="flex items-start gap-3">
+            <Icon className="mt-0.5 size-5 shrink-0 text-primary" />
+            <span className="text-sm">
+              <span className="font-medium text-foreground">{title}</span>{" "}
+              <span className="text-muted-foreground">— {detail}</span>
+            </span>
+          </li>
+        ))}
+      </ul>
+      <p className="text-muted-foreground text-xs">
+        Less than a minute. Nothing's public yet — just click the button.
+      </p>
+      <Button onClick={handleSpawn} size="lg">
+        Spawn node
+      </Button>
+      {error ? <p className="text-destructive text-sm">{error}</p> : null}
+    </StepSection>
   );
 }

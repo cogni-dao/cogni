@@ -4,7 +4,8 @@
 #
 # Runtime routing guardrails for scheduler-worker:
 #   1. COGNI_NODE_ENDPOINTS stays catalog-derived with slug + UUID aliases.
-#   2. Remote-source artifact rows do not require repo-spec identity during parent rendering.
+#   2. Submodule (remote-source) rows route via the drift-gated catalog node_id projection;
+#      a missing projection fails loud (NO_SILENT_DROP).
 #   3. Scheduler-worker's off-cluster Temporal/Postgres/App Services point at
 #      the expected VM alias for each env, so workers can actually poll Temporal.
 #
@@ -26,14 +27,10 @@ bash scripts/ci/render-scheduler-worker-endpoints.sh --check >/dev/null \
   || fail "render-scheduler-worker-endpoints.sh --check failed"
 
 endpoints="$(yq -r '.data.COGNI_NODE_ENDPOINTS // ""' infra/k8s/base/scheduler-worker/configmap.yaml)"
+# Every catalog type:node is routed — submodule (remote-source) nodes resolve node_id
+# from the drift-gated catalog projection, in-repo nodes from their repo-spec. The
+# routing CSV no longer filters on is_built_by_this_repo (a build-target concern).
 for node in "${NODE_TARGETS[@]}"; do
-  if is_remote_source_artifact_target "$node"; then
-    case ",$endpoints," in
-      *",$node="*) fail "COGNI_NODE_ENDPOINTS includes remote-source artifact node $node before metadata projection exists" ;;
-      *) pass "$node remote-source artifact endpoint skipped" ;;
-    esac
-    continue
-  fi
   node_id="$(node_id_for_target "$node")"
   case ",$endpoints," in
     *",$node=http://$node-node-app:3000,"*) pass "$node slug endpoint" ;;
@@ -45,21 +42,27 @@ for node in "${NODE_TARGETS[@]}"; do
   esac
 done
 
-echo "[2/3] remote-source artifact catalog nodes are skipped during parent endpoint rendering"
+echo "[2/3] submodule catalog nodes route via the node_id projection; a missing projection fails loud"
 TMP_TREE="$(mktemp -d)"
 trap 'rm -rf "$TMP_TREE"' EXIT
 TMP_CATALOG="$TMP_TREE/infra/catalog"
 mkdir -p "$TMP_CATALOG" "$TMP_TREE/nodes/operator/.cogni"
 cp infra/catalog/operator.yaml "$TMP_CATALOG/operator.yaml"
 cp nodes/operator/.cogni/repo-spec.yaml "$TMP_TREE/nodes/operator/.cogni/repo-spec.yaml"
-yq '.name = "ay" | .path_prefix = "nodes/ay/" | .node_port = 30400 | .image_tag_suffix = "-ay" | .migrator_tag_suffix = "-ay-migrate" | .source_repo = "https://github.com/cogni-test-org/ay.git" | .image_repository = "ghcr.io/cogni-test-org/ay"' \
+AY_ID="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+# (a) projection present → routed (slug + projected UUID), no parent-readable repo-spec needed
+yq ".name = \"ay\" | .path_prefix = \"nodes/ay/\" | .node_port = 30400 | .image_tag_suffix = \"-ay\" | .migrator_tag_suffix = \"-ay-migrate\" | .source_repo = \"https://github.com/cogni-test-org/ay.git\" | .image_repository = \"ghcr.io/cogni-test-org/ay\" | .node_id = \"$AY_ID\"" \
   infra/catalog/node-template.yaml > "$TMP_CATALOG/ay.yaml"
 
 fixture_endpoints="$(COGNI_CATALOG_ROOT="$TMP_CATALOG" bash scripts/ci/render-scheduler-worker-endpoints.sh)" \
-  || fail "render failed for a remote-source artifact catalog node without nodes/ay/.cogni/repo-spec.yaml"
+  || fail "render failed for a submodule catalog node carrying a node_id projection"
 case ",$fixture_endpoints," in
-  *,ay=*) fail "fixture endpoints include remote-source artifact slug ay" ;;
-  *) pass "remote-source artifact slug ay omitted" ;;
+  *",ay=http://ay-node-app:3000,"*) pass "submodule slug ay routed via projection" ;;
+  *) fail "fixture endpoints missing submodule slug ay: $fixture_endpoints" ;;
+esac
+case ",$fixture_endpoints," in
+  *",$AY_ID=http://ay-node-app:3000,"*) pass "submodule projected UUID alias routed" ;;
+  *) fail "fixture endpoints missing projected UUID $AY_ID for ay: $fixture_endpoints" ;;
 esac
 case "$fixture_endpoints" in
   *"4ff8eac1-4eba-4ed0-931b-b1fe4f64713d=http://operator-node-app:3000"*) pass "inline operator UUID alias preserved" ;;
@@ -67,15 +70,23 @@ case "$fixture_endpoints" in
 esac
 
 fixture_billing_endpoints="$(COGNI_CATALOG_ROOT="$TMP_CATALOG" bash -c 'source scripts/ci/lib/image-tags.sh && node_billing_endpoint_csv host.docker.internal')" \
-  || fail "billing endpoint render failed for a remote-source artifact catalog node without nodes/ay/.cogni/repo-spec.yaml"
+  || fail "billing endpoint render failed for a submodule catalog node carrying a node_id projection"
 case ",$fixture_billing_endpoints," in
-  *,ay=*) fail "billing endpoints include remote-source artifact slug ay before metadata projection exists" ;;
-  *) pass "billing endpoint skips remote-source artifact slug ay" ;;
+  *",ay=http://host.docker.internal:30400,"*) pass "submodule slug ay billing-routed via projection" ;;
+  *) fail "billing endpoints missing submodule slug ay: $fixture_billing_endpoints" ;;
 esac
 case "$fixture_billing_endpoints" in
   *"4ff8eac1-4eba-4ed0-931b-b1fe4f64713d=http://host.docker.internal:30000"*) pass "inline operator billing UUID alias preserved" ;;
   *) fail "fixture billing endpoints lost inline operator UUID alias: $fixture_billing_endpoints" ;;
 esac
+
+# (b) projection ABSENT on a submodule node → render must fail loud (NO_SILENT_DROP)
+yq 'del(.node_id)' "$TMP_CATALOG/ay.yaml" > "$TMP_CATALOG/ay.tmp" && mv "$TMP_CATALOG/ay.tmp" "$TMP_CATALOG/ay.yaml"
+if COGNI_CATALOG_ROOT="$TMP_CATALOG" bash scripts/ci/render-scheduler-worker-endpoints.sh >/dev/null 2>&1; then
+  fail "render must fail loud for a submodule node missing its node_id projection (NO_SILENT_DROP)"
+else
+  pass "submodule node without node_id projection fails loud"
+fi
 
 echo "[3/3] scheduler off-cluster Services use env VM aliases"
 check_scheduler_vm_alias() {

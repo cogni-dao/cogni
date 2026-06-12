@@ -24,6 +24,7 @@ import {
   resolveServiceDb,
 } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
+import { transitionAccessRequestOnDecision } from "@/features/nodes/access-requests";
 import { getServerSessionUser } from "@/lib/auth/server";
 import { nodes } from "@/shared/db/nodes";
 import {
@@ -223,6 +224,30 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
           errorCode: write.code,
         },
         { status: 503 }
+      );
+    }
+
+    // Reflect the decision into the tracking row when the agent filed one. Best-effort UX state:
+    // the tuple write above is the authority, so a tracking-row failure must not fail the decision
+    // (a missing row is already a no-op). Log and continue.
+    try {
+      await transitionAccessRequestOnDecision(serviceDb, {
+        nodeId: id,
+        agentUserId: parsed.data.agentUserId,
+        decision: parsed.data.decision,
+      });
+    } catch (error) {
+      ctx.log.warn(
+        {
+          event: EVENT_NAMES.NODE_DEVELOPER_DECISION_COMPLETE,
+          reqId: ctx.reqId,
+          routeId: ctx.routeId,
+          nodeId: id,
+          agentUserId: parsed.data.agentUserId,
+          errorCode: "access_request_transition_failed",
+          err: error instanceof Error ? error.message : String(error),
+        },
+        "node_access_request_transition_failed"
       );
     }
 

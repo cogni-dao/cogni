@@ -215,6 +215,24 @@ key_is_agent_generated() {
 # transitional key can be parked without re-introducing the loop guard.
 DSN_DEFER_KEYS=" "
 
+# The per-node Postgres DSNs are COMPOSED from the per-node app_<node>/service_<node>
+# role (#1584). They are recomposed authoritatively every run and overwritten ONLY
+# on drift — e.g. a pre-#1584 DATABASE_URL still naming the legacy shared `app_user`
+# instead of `app_<node>`. Compare-then-write keeps a correct DSN byte-stable, so
+# healthy nodes see zero churn while a half-migrated node self-heals; the embedded
+# passwords stay write-missing (generate-once).
+#
+# DOLTGRES_URL is deliberately EXCLUDED: its password is the env Doltgres SUPERUSER
+# (immutable post-init — Doltgres 0.56.3 can't ALTER it; databases.md §5.2), NOT a
+# per-node app role, so it is not a #1584 victim. The superuser is the operator-
+# canonical stored SSOT (cogni/<env>/operator/DOLTGRES_PASSWORD); a drifted volume is
+# reconciled by writing that one field (`pnpm secrets:set <env> operator
+# DOLTGRES_PASSWORD`; secrets-rotate.md), after which every node's DOLTGRES_URL
+# recomposes from it on the next materialize. Recompose stays write-once here so an
+# unreconciled field can't clobber a healthy per-node URL mid-flight (the 2026-06-10
+# prod 28P01 was a re-derive, not a recompose).
+COMPOSED_DSN_KEYS=" DATABASE_URL DATABASE_SERVICE_URL "
+
 # Transitional shared/human inheritance — the blind ancestor scan the north star
 # replaces with explicit catalog `inheritFrom` (catalog-custody lane). Now serves
 # from the prefetched cache, and only runs for non-agent keys.
@@ -242,6 +260,22 @@ unchanged=0
 for k in "${NODE_BASELINE_KEYS[@]}"; do
   case "$DSN_DEFER_KEYS" in *" $k "*) continue ;; esac
   _node_gets_key "$TARGET_NODE" "$k" || continue
+  # Composed DSN: recompose authoritatively (bypass _resolve's preserve-existing)
+  # and overwrite ONLY when the stored value drifted from the canonical
+  # composition. Healthy nodes match → no write → no pod churn.
+  if [[ " $COMPOSED_DSN_KEYS " == *" $k "* ]]; then
+    v="$(_compose_node_value "$TARGET_NODE" "$k")"
+    [[ -z "$v" ]] && continue
+    if [[ "$(bao_get_field "$TARGET_NODE" "$k")" == "$v" ]]; then
+      unchanged=$((unchanged + 1))
+      continue
+    fi
+    rm -f "${CACHE_DIR}/${TARGET_NODE}/${k}"   # clear stale cache so seed_kv writes
+    seed_kv "$TARGET_NODE" "$k" "$v"
+    log "  recomposed ${k} (drift corrected)"
+    created=$((created + 1))
+    continue
+  fi
   if [[ -f "${CACHE_DIR}/${TARGET_NODE}/${k}" ]]; then
     unchanged=$((unchanged + 1))
     continue

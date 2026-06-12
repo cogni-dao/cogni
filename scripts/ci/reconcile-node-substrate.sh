@@ -196,6 +196,20 @@ for node in "${NODE_TARGETS[@]}"; do
 done
 "$node_known" || fail "target '$TARGET_NODE' is not a type=node catalog target"
 
+# task.5017 — deploy ⊆ provisioned. Refuse to provision substrate for a node whose
+# per-env node-set (`envs:`) doesn't include this env; otherwise an env would carry
+# substrate (DB/ES) for a node it never deploys. Fail loud, not silent.
+node_catalog_file="${COGNI_CATALOG_ROOT}/${TARGET_NODE}.yaml"
+[[ -f "$node_catalog_file" ]] || fail "missing catalog file: $node_catalog_file"
+if [[ "$(yq -r 'has("envs")' "$node_catalog_file")" != "true" ]]; then
+  fail "'$TARGET_NODE' has no 'envs' node-set in the catalog (CATALOG_IS_SSOT)"
+fi
+# here-string, not `yq | grep -q`: under pipefail a grep-match SIGPIPEs yq and the
+# 141 would surface as failure, wrongly rejecting a node that lists the env.
+node_envs="$(yq -r '.envs[]' "$node_catalog_file")"
+grep -qxF "$DEPLOY_ENVIRONMENT" <<<"$node_envs" \
+  || fail "'$TARGET_NODE' is not in the '$DEPLOY_ENVIRONMENT' node-set (envs: $(yq -r '.envs | join(",")' "$node_catalog_file")) — add the env to infra/catalog/${TARGET_NODE}.yaml to deploy it here"
+
 node_db="$(node_database_for_target "$TARGET_NODE")"
 node_host="$(host_for_node "$TARGET_NODE" "$DOMAIN")"
 node_port="$(node_port_for_target "$TARGET_NODE")"
@@ -255,6 +269,20 @@ app_db_service_password="$(bao_get_field "$TARGET_NODE" APP_DB_SERVICE_PASSWORD)
   || fail "per-node DB creds absent at cogni/${DEPLOY_ENVIRONMENT}/${TARGET_NODE} — run secret-materialize first (it owns per-node APP_DB_PASSWORD/APP_DB_SERVICE_PASSWORD)"
 mark_row db_creds read "read per-node DB creds from OpenBao (key names only)"
 
+# Doltgres superuser password — the OpenBao-custodied SSOT at the canonical operator
+# path (cogni/<env>/operator/DOLTGRES_PASSWORD). The superuser is shared env-wide
+# (one server, every node's knowledge_<node> DB), so operator holds the single
+# authoritative value and all consumers read it there — mirrors the #1613
+# OPENFGA_DB_PASSWORD pattern. It is immutable post-init (Doltgres 0.56.3 cannot
+# ALTER it — databases.md §5.2); a restored/rotated volume is reconciled to the live
+# value via `pnpm secrets:set <env> operator DOLTGRES_PASSWORD` (secrets-rotate.md),
+# never re-derived. Passed to doltgres-provision so it connects as the live superuser.
+# Fail-loud if the SSOT is empty — never silently fall back to a poisoned VM .env.
+doltgres_superuser_password="$(bao_get_field operator DOLTGRES_PASSWORD)"
+[[ -n "$doltgres_superuser_password" ]] \
+  || fail "doltgres superuser SSOT absent at cogni/${DEPLOY_ENVIRONMENT}/operator/DOLTGRES_PASSWORD — run secret-materialize, or seed/reconcile it via 'pnpm secrets:set ${DEPLOY_ENVIRONMENT} operator DOLTGRES_PASSWORD' (never fall back to a derived/.env value)"
+dg_pw_env="-e DOLTGRES_PASSWORD='${doltgres_superuser_password}'"
+
 # DSN seeding removed: secret-materialize composes + writes the per-node DSNs
 # (DATABASE_URL/DATABASE_SERVICE_URL/DOLTGRES_URL) to cogni/<env>/<node>. This phase
 # holds a read-only db-reader token and performs zero OpenBao writes — it consumes
@@ -291,12 +319,15 @@ fi
 copy_to_remote "$caddy_tmp" "/tmp/Caddyfile.${DEPLOY_ENVIRONMENT}.${TARGET_NODE}.tmpl"
 mark_row caddyfile updated "rendered + staged Caddyfile route for ${node_host}"
 
+# Shared VM-side edge-Caddy reconcile helper (same logic deploy-infra runs):
+# start-if-down + hash-gated force-recreate. Staged here, invoked in the heredoc.
+copy_to_remote "$REPO_ROOT/scripts/ci/reconcile-edge-caddy.remote.sh" "/tmp/reconcile-edge-caddy.remote.sh"
+
 CURRENT_ROW="remote_reconcile"
 remote "set -euo pipefail
   edge_env=/opt/cogni-template-edge/.env
   runtime_env=/opt/cogni-template-runtime/.env
   caddyfile=/opt/cogni-template-edge/configs/Caddyfile.tmpl
-  edge_compose=(docker compose --project-name cogni-edge --env-file \"\$edge_env\" -f /opt/cogni-template-edge/docker-compose.yml)
   runtime_compose=(docker compose --project-name cogni-runtime --env-file \"\$runtime_env\" -f /opt/cogni-template-runtime/docker-compose.yml)
 
   mkdir -p /opt/cogni-template-edge/configs
@@ -326,9 +357,17 @@ remote "set -euo pipefail
   fi
   rm -f \"\$runtime_env.bak\"
 
-  if \"\${edge_compose[@]}\" ps -q caddy >/dev/null 2>&1; then
-    \"\${edge_compose[@]}\" up -d --force-recreate caddy >/dev/null
-  fi
+  # Edge reconcile — the SAME shared helper deploy-infra runs: start-if-down on a
+  # fresh substrate (first node, no caddy yet), else hash-gated force-recreate so
+  # a new node's <SLUG>_DOMAIN actually lands (graceful 'caddy reload' resolves it
+  # to empty — Caddy's env is frozen at container start). The hash-gate means an
+  # unchanged Caddyfile + edge .env is a no-op, so per-flight reconciles no longer
+  # bounce the shared edge for every sibling (task.5078 follow-up, now folded).
+  EDGE_COMPOSE_BIN=\"docker compose --project-name cogni-edge --env-file \$edge_env -f /opt/cogni-template-edge/docker-compose.yml\" \\
+  CADDYFILE=\"\$caddyfile\" \\
+  EDGE_ENV_FILE=\"\$edge_env\" \\
+  HASH_DIR=/var/lib/cogni \\
+    bash /tmp/reconcile-edge-caddy.remote.sh >/dev/null
   \"\${runtime_compose[@]}\" up -d postgres >/dev/null
   # Single-node db-provision: override COGNI_NODE_DBS to THIS node and inject its
   # per-node OpenBao passwords (read above) via -e, so provision.sh reconciles the
@@ -342,7 +381,7 @@ remote "set -euo pipefail
     db-provision >/dev/null
   if \"\${runtime_compose[@]}\" config --services 2>/dev/null | grep -q '^doltgres$'; then
     \"\${runtime_compose[@]}\" up -d doltgres >/dev/null
-    \"\${runtime_compose[@]}\" --profile bootstrap run --rm doltgres-provision >/dev/null
+    \"\${runtime_compose[@]}\" --profile bootstrap run --rm ${dg_pw_env} doltgres-provision >/dev/null
   fi"
 
 mark_row remote_reconcile updated "edge route, DB inventory, and DB provisioners reconciled on VM"

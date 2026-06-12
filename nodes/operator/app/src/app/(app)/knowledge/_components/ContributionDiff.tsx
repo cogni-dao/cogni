@@ -86,6 +86,7 @@ export function ContributionDiff({
           title?: string;
           content?: string;
           entryType?: string;
+          domain?: string;
         } | null;
         const isHtml = row?.entryType === "html";
         return (
@@ -106,6 +107,11 @@ export function ContributionDiff({
                 {d.changeType}
               </span>
               <span className="font-mono text-muted-foreground">{d.rowId}</span>
+              {row?.domain && (
+                <span className="inline-flex rounded-md bg-primary/10 px-1.5 py-0.5 font-mono text-primary text-xs">
+                  {row.domain}
+                </span>
+              )}
               {row?.entryType && (
                 <span className="font-mono text-muted-foreground/70 text-xs">
                   {row.entryType}

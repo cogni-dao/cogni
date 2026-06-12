@@ -148,9 +148,19 @@ _node_gets_key() {
 # binds the node's FQDN; agent-random distinct keys mint a FRESH value per node
 # (isolation); _shared / shared:true / human keys pass through the .env value.
 _resolve_node_value() {
-  local node="$1" k="$2" existing kind source shared service db
+  local node="$1" k="$2" existing
   existing=$(bao_get_field "$node" "$k")
   if [[ -n "$existing" ]]; then printf '%s' "$existing"; return 0; fi
+  _compose_node_value "$node" "$k"
+}
+
+# Authoritative composer: build (node, key)'s value from canonical inputs,
+# IGNORING any existing OpenBao value. _resolve_node_value preserves an existing
+# value (0 churn on re-runs); secret-materialize uses THIS to overwrite a DRIFTED
+# composed DSN — e.g. a pre-#1584 DATABASE_URL still naming the legacy app_user
+# instead of the per-node app_<node> role (#1584 half-rollout self-heal).
+_compose_node_value() {
+  local node="$1" k="$2" kind source shared service db
   db="cogni_${node//-/_}"
   case "$k" in
     DATABASE_URL)
@@ -163,18 +173,28 @@ _resolve_node_value() {
       printf 'postgresql://service_%s:%s@%s:5432/%s?sslmode=disable' \
         "${node//-/_}" "$(bao_get_field "$node" APP_DB_SERVICE_PASSWORD)" "${VM_IP}" "${db}"; return 0 ;;
     DOLTGRES_PASSWORD)
-      # Env-level Doltgres superuser, derived from POSTGRES_ROOT_PASSWORD. Written
-      # per-node so DOLTGRES_URL composes from OpenBao (not a rendered .env). Same
-      # value every node; deterministic, never a fresh random (matches the live
-      # server, which was initialized with the same derivation).
+      # Env-wide Doltgres superuser (one server, every node's knowledge_<node> DB).
+      # Operator holds the single canonical SSOT (cogni/<env>/operator/DOLTGRES_PASSWORD)
+      # and every node inherits it, so the shared superuser never diverges across nodes.
+      # derive_secret is ONLY the genesis bootstrap for the very first seed (operator,
+      # fresh env) — deterministic so a not-yet-seeded peer composes the same value.
+      # It is NOT the source of truth: post-init the field is stored + reconciled to the
+      # live volume via `pnpm secrets:set <env> operator DOLTGRES_PASSWORD` (immutable
+      # superuser, Doltgres 0.56.3 can't ALTER it — databases.md §5.2), never re-derived.
+      local _dg; _dg="$(bao_get_field operator DOLTGRES_PASSWORD)"
+      [[ -n "$_dg" ]] && { printf '%s' "$_dg"; return 0; }
       derive_secret doltgres-root; return 0 ;;
     DOLTGRES_URL)
-      # Per-node knowledge_<node> DB, reached as the `postgres` superuser (Doltgres
-      # 0.56.3 RBAC is table-DML-only — databases.md §5.2). The password is read from
-      # cogni/<env>/<node> (DOLTGRES_PASSWORD, materialized just above), mirroring
-      # DATABASE_URL — never derived inline, never from .env.
+      # Per-node knowledge_<node> DB, reached as the shared `postgres` superuser
+      # (Doltgres 0.56.3 RBAC is table-DML-only — databases.md §5.2). Embed the
+      # operator-canonical superuser SSOT — never the per-node value (which can lag a
+      # volume restore). Same resolution as the DOLTGRES_PASSWORD branch (operator
+      # SSOT, else genesis derive) so the URL never embeds an empty password before
+      # operator is seeded. Composed, never derived inline, never from .env.
+      local _dgu; _dgu="$(bao_get_field operator DOLTGRES_PASSWORD)"
+      [[ -n "$_dgu" ]] || _dgu="$(derive_secret doltgres-root)"
       printf 'postgresql://postgres:%s@%s:5435/knowledge_%s?sslmode=disable' \
-        "$(bao_get_field "$node" DOLTGRES_PASSWORD)" "${VM_IP}" "${node//-/_}"; return 0 ;;
+        "$_dgu" "${VM_IP}" "${node//-/_}"; return 0 ;;
   esac
   kind=$(_cat_field "$k" '.generate.kind')
   source=$(_cat_field "$k" '.source')

@@ -54,7 +54,12 @@ Examples:
   Compose renders copies to create roles. (`DOLTGRES_PASSWORD` is the env Doltgres
   superuser the pod itself authenticates as — Doltgres RBAC is table-DML-only, so no
   per-node role; why + value-shape in [databases.md §5.2](../../../docs/spec/databases.md).)
+- `OPENFGA_DB_PASSWORD`: OpenBao custody. **OpenFGA is the first shared-infra DB given a dedicated, non-root login role** (its own `openfga` role, OpenBao-sourced — Phase A dropped root from the datastore DSN). That's the **hardening direction, not a snowflake**: `litellm` / `postgres` are still the un-hardened root-owned legacy. Consequence — **shared-infra DBs (openfga, litellm) are provisioned in the `INFRA_ONLY` pass only**; the per-node provision pass must not touch them (it holds no shared-infra password). `litellm` survives the per-node pass only by being root-owned (no password to demand); openfga's dedicated role _exposed_ that the per-node pass should never provision shared infra. `provision.sh` now gates openfga to `INFRA_ONLY`; gating `litellm` the same way is the fuller fix.
 - Public URLs / owner slugs / feature modes: repo-config, not OpenBao.
+
+## Biggest systemic shortcoming — the `.env`/`_shared` split-brain
+
+One logical `shared` secret becomes **three physical copies** — `_shared` SSOT, per-node inherited copy (ESO→pod), VM `.env` render (Compose) — written by three writers with **no lockstep**. They drift: the recurring root of secrets outages (litellm / temporal / doltgres / billing `401`·`28P01`). The tell: **pods have no `.env` and rarely drift; every `.env`-bound Compose service is the surface.** Never heal toward `.env` (Invariant 15); the endgame is to **eliminate the copies** (purge the `_shared` bucket + purge the server `.env` → Bao Agent / k8s). Mechanism, evidence, three-layer fix, falsification gate → [`docs/spec/secrets-split-brain.md`](../../../docs/spec/secrets-split-brain.md).
 
 ## Routing tree — where does the value render?
 
@@ -163,6 +168,19 @@ No-human-secret done right: agent generates, agent pushes, **zero human, self-he
 ⚠️ **Sync only fires on the infra lever** (`deploy-infra` via `candidate-flight-infra` / `provision-env`), NOT on app-lever promotes (`candidate-flight`/`flight-preview`/`promote-and-deploy` = Argo image bump, never touches the Secret). `assert-target-substrate.sh` is also read-only: it can fail a flight when the Deployment-consumed Secret / ExternalSecret is absent or not Ready, but it does not heal the value. And the push uses deploy-infra's env value — correct for the plain-Secret model (preview/prod) but on the **ESO model (candidate-a)** the pod serves OpenBao's value; if those differ the sync must read the live Secret. (candidate-a live-read = tracked follow-up.)
 
 **Heal-proof test** = redeploy twice; a PR on the test repo must still post a `cogni-git-review` review.
+
+## OpenBao availability — sealed = DOWN, not secure (READ THIS)
+
+Counterintuitive but load-bearing: a **sealed** OpenBao serves **nothing** — it 503s every ESO sync, every `materialize`/`reconcile-substrate` `auth/kubernetes/login`, and openfga's config load. OpenBao must run **UNSEALED ~100% of the time**; unsealed-and-running is the _correct_ operational state. The seal protects **data at rest** (stolen storage = encrypted/useless), **not** runtime access — that's auth methods + path policy (Invariant 6) + in-cluster-only (no Ingress). So "keep it sealed / minimize unsealed time" is backwards: an _unexpected_ seal is an **outage**, not a safe state.
+
+**The fragility (`bug.5011`, prod outage 2026-06-11 02:25):** prod OpenBao is **Shamir 1-of-1, no auto-unseal**. It OOMKilled on the 6 GB box → resealed → secret plane down (openfga 503, `node-substrate` promote failures) until a human `kubectl exec … bao operator unseal`. **Any** restart (OOM, reboot, chart upgrade) reseals it.
+
+**Recorded decision (`bug.5011`) — do not re-litigate without the trigger:**
+
+1. **Memory headroom** — OpenBao limit 512Mi→1Gi (#1617) so it isn't container-OOMKilled; #1616 lean-prod cut node pressure too. Mitigates the OOM _trigger_ only.
+2. **Sealed-state → Loki alert** — the no-silent-outage control: detect an unexpected seal, page, unseal in minutes. Free, no vendor. This is the durable fix, because you cannot prevent every reseal.
+3. **Auto-unseal (KMS) DEFERRED** behind a written trigger: _reseals recur post-#1617, OR a SOC2 engagement starts_. KMS is the audit-correct control but it is our first AWS/GCP dependency on a Cherry+OSS stack — premature at 0 users. If a real SOC2 deadline lands, flip it to now.
+4. **REJECTED: in-cluster stored-key unseal sidecar** — key-next-to-lock, fails SOC2.
 
 ## Anti-patterns — instant reject
 

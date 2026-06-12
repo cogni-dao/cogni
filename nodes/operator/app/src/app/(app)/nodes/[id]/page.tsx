@@ -3,9 +3,10 @@
 
 /**
  * Module: `@app/(app)/nodes/[id]/page`
- * Purpose: Dashboard for a single registered node — renders state + the appropriate action button.
- * Scope: Server fetch; client island for the action button so the user can click without page flicker.
- * Links: task.5083
+ * Purpose: Single registered node — server fetch + the always-mounted wizard shell.
+ * Scope: Owner-scoped DB read; projects the row + external URLs into the client `NodeWizard`.
+ *   The wizard frame owns identity + progress; no separate header/technical chrome.
+ * Links: src/features/nodes/wizard/NodeWizard.client.tsx, task.5083
  * @public
  */
 
@@ -16,9 +17,11 @@ import { and, eq } from "drizzle-orm";
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
-import { Fragment, type ReactElement } from "react";
-import { resolveAppDb } from "@/bootstrap/container";
-import { PageContainer, SectionCard } from "@/components";
+import type { ReactElement } from "react";
+import { resolveAppDb, resolveServiceDb } from "@/bootstrap/container";
+import { PageContainer } from "@/components";
+import { NodeAccess } from "@/features/nodes/access/NodeAccess";
+import { listAccessRequests } from "@/features/nodes/access-requests";
 import { nodeRepoUrlForSlug } from "@/features/nodes/launch-pack";
 import { NodeWizard } from "@/features/nodes/wizard/NodeWizard.client";
 import { getServerSessionUser } from "@/lib/auth/server";
@@ -82,35 +85,13 @@ export default async function NodeDashboardPage({
     node.daoAddress && node.chainId
       ? getDaoUrl(node.chainId, node.daoAddress)
       : null;
-  const repoPath = `Cogni-DAO/cogni/nodes/${node.slug}`;
-  const technical: ReadonlyArray<{
-    label: string;
-    value: string;
-    href?: string;
-  }> = [
-    {
-      label: "Repo path",
-      value: repoPath,
-      href: `https://github.com/Cogni-DAO/cogni/tree/main/nodes/${node.slug}`,
-    },
-    { label: "Chain", value: String(node.chainId ?? "—") },
-    ...(node.daoAddress ? [{ label: "DAO", value: node.daoAddress }] : []),
-    ...(node.operatorWalletAddress
-      ? [{ label: "Operator wallet", value: node.operatorWalletAddress }]
-      : []),
-    ...(node.splitAddress
-      ? [{ label: "Payment split", value: node.splitAddress }]
-      : []),
-    ...(node.publishPrUrl
-      ? [
-          {
-            label: "Deployment PR",
-            value: node.publishPrUrl,
-            href: node.publishPrUrl,
-          },
-        ]
-      : []),
-  ];
+
+  // Owner-only Developers section, mounted once the node is handed off to an AI dev. Ownership is
+  // already proven by the scoped node read above, so the service-role request read is safe.
+  const showDevelopers = status === "published" || status === "active";
+  const accessRequests = showDevelopers
+    ? await listAccessRequests(resolveServiceDb(), node.id)
+    : [];
 
   return (
     <PageContainer maxWidth="3xl">
@@ -122,14 +103,8 @@ export default async function NodeDashboardPage({
         Nodes
       </Link>
 
-      <SectionCard title={node.slug}>
-        <p className="text-muted-foreground text-sm">{display.description}</p>
-        {node.failureReason ? (
-          <p className="text-destructive text-sm">{node.failureReason}</p>
-        ) : null}
-      </SectionCard>
-
       <NodeWizard
+        statusLabel={display.label}
         node={{
           id: node.id,
           slug: node.slug,
@@ -146,30 +121,9 @@ export default async function NodeDashboardPage({
         }}
       />
 
-      <details className="px-1 text-sm">
-        <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
-          Technical details
-        </summary>
-        <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1.5">
-          {technical.map((row) => (
-            <Fragment key={row.label}>
-              <span className="text-muted-foreground">{row.label}</span>
-              {row.href ? (
-                <a
-                  className="break-all font-mono text-primary text-xs underline"
-                  href={row.href}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  {row.value}
-                </a>
-              ) : (
-                <span className="break-all font-mono text-xs">{row.value}</span>
-              )}
-            </Fragment>
-          ))}
-        </div>
-      </details>
+      {showDevelopers ? (
+        <NodeAccess nodeId={node.id} requests={accessRequests} />
+      ) : null}
     </PageContainer>
   );
 }

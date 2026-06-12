@@ -36,23 +36,15 @@ INDENT="            "
 
 # Non-operator node slugs, sorted. The `nodes/*` directory listing is the SSOT.
 #
-# SUBMODULE_GITLINK_IS_OPERATOR_PIN: a submodule-pinned node (`nodes/<slug>` is a
-# gitlink in `.gitmodules`) is excluded — its code lives in its own repo, so the
-# parent only ever holds the bare gitlink (operator domain). Emitting a
-# `<slug>: nodes/<slug>/**` filter would make picomatch's globstar match the bare
-# gitlink path `nodes/<slug>`, misclassifying the pin as a cross-domain change
-# (the single-node-scope false-fail). Stays in lockstep with
-# single-node-scope-meta.spec.ts's listNonOperatorNodes(). No-op without
-# .gitmodules (in-tree-only forks).
+# Remote-source nodes live in their own repos and are absent under nodes/ (no
+# gitlink, no .gitmodules). The single-node-scope domains are exactly the in-tree
+# nodes/* directories minus operator. Stays in lockstep with
+# single-node-scope-meta.spec.ts's listNonOperatorNodes().
 non_operator_nodes() {
   local d
   for d in "$NODES_DIR"/*/; do
     d="$(basename "$d")"
     [ "$d" = "$OPERATOR_NODE" ] && continue
-    if [ -f "$REPO_ROOT/.gitmodules" ] && \
-      grep -qE "^[[:space:]]*path[[:space:]]*=[[:space:]]*nodes/${d}[[:space:]]*\$" "$REPO_ROOT/.gitmodules"; then
-      continue
-    fi
     printf '%s\n' "$d"
   done | LC_ALL=C sort
 }

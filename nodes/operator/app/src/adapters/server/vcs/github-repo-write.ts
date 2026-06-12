@@ -4,14 +4,15 @@
 /**
  * Module: `@adapters/server/vcs/github-repo-write`
  * Purpose: Operator-only helper that mints node repos, commits files, and opens pull requests via the GitHub App.
- * Scope: Thin Octokit calls behind node formation, submodule pin, and candidate-flight prep entry points.
+ * Scope: Thin Octokit calls behind node formation, catalog source_sha pin, and candidate-flight prep.
  *   Does not belong in `VcsCapability` because that capability is shared with poly/resy/node-template stubs
  *   and these write ops are operator-only.
  * Invariants:
  *   - GH_APP_INSTALL_REQUIRED: caller must verify the app is installed on the target repo; we surface a
- *     clear error if not. Public-repo install is sufficient for v0.
- *   - NODE_FORMATION_TREE: a publish creates one reviewable tree containing the gitlink plus generated
- *     catalog, overlay, AppSet, edge-route, and ExternalSecret shape.
+ *     clear error if not. Installation must cover the node repo (private-safe).
+ *   - NODE_FORMATION_TREE: a publish creates one reviewable tree — catalog row (with source_sha pin),
+ *     overlay, AppSet, edge-route, and ExternalSecret shape. No gitlink, no .gitmodules
+ *     (spec.node-submodule-retirement).
  *   - PR_AGAINST_MAIN: opens node-formation PRs against `main`; never force-pushes review branches.
  * Side-effects: IO (GitHub REST API)
  * Links: docs/spec/node-formation.md, task.0370, task.5083
@@ -33,10 +34,10 @@ import type {
 import {
   insertAppsetKustomization,
   insertCaddyBlock,
+  insertSchedulerEndpoint,
   NODE_FORMATION_ENVS,
   nextFreeNodePort,
   renderCatalog,
-  renderGitmodules,
   renderNodeAppset,
   renderNodeExternalSecret,
   renderNodeExternalSecretKustomization,
@@ -86,16 +87,16 @@ export interface OpenNodeAppPrResult {
 }
 
 /**
- * Submodule-birth variant of {@link OpenNodeAppPrInput}: the node's ~1100 files live in an
- * already-minted standalone repo (the submodule target), not inline in the operator tree. The
- * operator PR pins that repo as a gitlink at `nodes/<slug>` + registers it in `.gitmodules`.
- * Minting the repo (GitHub fork of node-template) is the caller's responsibility — it requires a
- * standalone `node-template` template repo and is injected here as `nodeRepoUrl` + `nodeRepoHeadSha`.
+ * Remote-source node registration variant of {@link OpenNodeAppPrInput}: the node's files live in an
+ * already-minted standalone repo, not inline in the operator tree. The operator PR registers it via
+ * its catalog row (`source_repo` + `source_sha` pin) + operator footprint — no gitlink, no .gitmodules
+ * (spec.node-submodule-retirement). Minting the repo (GitHub fork of node-template) is the caller's
+ * responsibility, injected here as `nodeRepoUrl` + `nodeRepoHeadSha`.
  */
 export interface OpenNodeSubmodulePrInput extends OpenNodeAppPrInput {
-  /** Clone URL of the minted node repo, written into `.gitmodules`. */
+  /** Clone URL of the minted node repo → catalog `source_repo`. */
   readonly nodeRepoUrl: string;
-  /** Default-branch HEAD commit SHA of the minted node repo — the gitlink pin. */
+  /** Default-branch HEAD commit SHA of the minted node repo → catalog `source_sha` pin. */
   readonly nodeRepoHeadSha: string;
 }
 
@@ -348,7 +349,7 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       );
     }
 
-    const parentPin = await this.ensureNodeSubmodulePin({
+    const parentPin = await this.ensureCatalogSourceSha({
       owner: parentOwner,
       repo: parentRepo,
       slug,
@@ -705,7 +706,7 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
   async openNodeSubmodulePr(
     input: OpenNodeSubmodulePrInput
   ): Promise<OpenNodeAppPrResult> {
-    const { owner, repo, slug, nodeRepoUrl, nodeRepoHeadSha } = input;
+    const { owner, repo, slug } = input;
     const octokit = await this.getOctokit(owner, repo);
     const { baseCommitSha, baseTreeSha } = await this.resolveMainBase(
       octokit,
@@ -713,26 +714,9 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       repo
     );
 
-    // .gitmodules — append the submodule stanza over current main (create if absent).
-    const currentGitmodules = await this.readFileOnMain(
-      octokit,
-      owner,
-      repo,
-      ".gitmodules"
-    ).catch((err: unknown) => {
-      // Only a missing .gitmodules is expected (first submodule). Never swallow real errors — a
-      // transient read failure would otherwise overwrite an existing file, dropping its submodules.
-      if ((err as { status?: number })?.status === 404) return null;
-      throw err;
-    });
-    const gitmodulesSha = await this.createBlob(
-      octokit,
-      owner,
-      repo,
-      renderGitmodules(currentGitmodules, slug, nodeRepoUrl)
-    );
-
-    // Control-plane footprint gens (catalog, overlays, appsets, Caddyfile, scope-filter, scheduler).
+    // Control-plane footprint gens (catalog w/ source_sha pin, overlays, appsets, Caddyfile,
+    // scheduler). No gitlink, no .gitmodules — the node is registered by its catalog row +
+    // source_sha pin, not a submodule checkout (spec.node-submodule-retirement).
     const nodePort = await this.allocateNodePort(
       octokit,
       owner,
@@ -748,159 +732,70 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       nodePort
     );
 
-    // The node is a 160000 GITLINK (the pin), not an inline subtree.
     return this.commitTreeAndOpenPr(octokit, owner, repo, slug, {
       baseCommitSha,
       baseTreeSha,
-      entries: [
-        {
-          path: `nodes/${slug}`,
-          mode: "160000",
-          type: "commit",
-          sha: nodeRepoHeadSha,
-        },
-        {
-          path: ".gitmodules",
-          mode: "100644",
-          type: "blob",
-          sha: gitmodulesSha,
-        },
-        ...footprintEntries,
-      ],
-      message: `feat(node): pin ${slug} as a submodule`,
-      branch: `cogni-operator/node-submodule-${slug}`,
+      entries: footprintEntries,
+      message: `feat(node): register ${slug}`,
+      branch: `cogni-operator/node-register-${slug}`,
     });
   }
 
-  async ensureNodeSubmodulePin(
+  /**
+   * Pin a remote-source node for flight by bumping its catalog `source_sha` field
+   * (CATALOG_SOURCE_SHA_IS_THE_DEPLOY_PIN) — no gitlink, no `.gitmodules`. Opens a
+   * one-line catalog PR when the pin differs; idempotent via {@link commitFileAndOpenPr}.
+   */
+  async ensureCatalogSourceSha(
     input: EnsureNodeSubmodulePinInput
   ): Promise<EnsureNodeSubmodulePinResult> {
-    const { owner, repo, slug, nodeRepoUrl, nodeRepoHeadSha } = input;
-    const octokit = await this.getOctokit(owner, repo);
-    const { baseCommitSha, baseTreeSha } = await this.resolveMainBase(
-      octokit,
-      owner,
-      repo
-    );
-
-    const entry = await this.findTreeEntry(
-      octokit,
+    const { owner, repo, slug, nodeRepoHeadSha } = input;
+    const path = `infra/catalog/${slug}.yaml`;
+    const current = await this.fetchFileText({
       owner,
       repo,
-      baseTreeSha,
-      `nodes/${slug}`
-    );
+      path,
+      ref: "main",
+    });
+    if (!current) {
+      throw deployPlaneError(
+        "catalog_missing",
+        `node catalog entry not found for ${slug}`,
+        404
+      );
+    }
     const currentSha =
-      entry?.type === "commit" && entry.mode === "160000"
-        ? (entry.sha ?? null)
-        : null;
+      /^source_sha:\s*([0-9a-fA-F]{40})\s*$/m.exec(current)?.[1] ?? null;
     if (currentSha === nodeRepoHeadSha) {
       return { status: "already_pinned", currentSha };
     }
-
-    const branch = `cogni-operator/node-submodule-${slug}-pin-${nodeRepoHeadSha.slice(0, 8)}`;
-    const existingPinHeadSha = await this.resolveBranchHead(
-      octokit,
-      owner,
-      repo,
-      branch
-    );
-    if (existingPinHeadSha) {
-      const existingPinTreeSha = await this.resolveCommitTreeSha(
-        octokit,
-        owner,
-        repo,
-        existingPinHeadSha
-      );
-      const branchAlreadyPins = await this.treePinsNodeSubmodule(
-        octokit,
-        owner,
-        repo,
-        existingPinTreeSha,
-        slug,
-        nodeRepoUrl,
-        nodeRepoHeadSha
-      );
-      if (branchAlreadyPins) {
-        const pr = await this.openOrFindPinPr(
-          octokit,
-          owner,
-          repo,
-          slug,
-          branch,
-          nodeRepoHeadSha
+    const updated = currentSha
+      ? current.replace(
+          /^source_sha:\s*[0-9a-fA-F]{40}\s*$/m,
+          `source_sha: ${nodeRepoHeadSha}`
+        )
+      : current.replace(
+          /^(image_repository:.*\n)/m,
+          `$1source_sha: ${nodeRepoHeadSha}\n`
         );
-        return {
-          status: "pin_pr_opened",
-          currentSha,
-          parentHeadSha: existingPinHeadSha,
-          ...pr,
-        };
-      }
-    }
-
-    const currentGitmodules = await this.readFileOnMain(
-      octokit,
+    const branch = `cogni-operator/node-pin-${slug}-${nodeRepoHeadSha.slice(0, 8)}`;
+    const pr = await this.commitFileAndOpenPr({
       owner,
       repo,
-      ".gitmodules"
-    ).catch((err: unknown) => {
-      if ((err as { status?: number })?.status === 404) return null;
-      throw err;
+      baseRef: "main",
+      headBranch: branch,
+      path,
+      content: updated,
+      commitMessage: `chore(node): pin ${slug} at ${nodeRepoHeadSha.slice(0, 8)}`,
+      prTitle: `chore(node): pin ${slug} at ${nodeRepoHeadSha.slice(0, 8)}`,
+      prBody: `Bumps catalog \`source_sha\` for \`${slug}\` to \`${nodeRepoHeadSha}\` before node-ref flight (CATALOG_SOURCE_SHA_IS_THE_DEPLOY_PIN).`,
     });
-    const gitmodulesSha = await this.createBlob(
-      octokit,
-      owner,
-      repo,
-      renderGitmodules(currentGitmodules, slug, nodeRepoUrl)
-    );
-
-    const { data: finalTree } = await octokit.request(
-      "POST /repos/{owner}/{repo}/git/trees",
-      {
-        owner,
-        repo,
-        base_tree: baseTreeSha,
-        tree: [
-          {
-            path: `nodes/${slug}`,
-            mode: "160000",
-            type: "commit",
-            sha: nodeRepoHeadSha,
-          },
-          {
-            path: ".gitmodules",
-            mode: "100644",
-            type: "blob",
-            sha: gitmodulesSha,
-          },
-        ],
-      }
-    );
-    const { data: commit } = await octokit.request(
-      "POST /repos/{owner}/{repo}/git/commits",
-      {
-        owner,
-        repo,
-        message: `chore(node): pin ${slug} at ${nodeRepoHeadSha.slice(0, 8)}`,
-        tree: finalTree.sha,
-        parents: [baseCommitSha],
-      }
-    );
-    await this.upsertRef(octokit, owner, repo, branch, commit.sha);
-    const pr = await this.openOrFindPinPr(
-      octokit,
-      owner,
-      repo,
-      slug,
-      branch,
-      nodeRepoHeadSha
-    );
     return {
       status: "pin_pr_opened",
       currentSha,
-      parentHeadSha: commit.sha,
-      ...pr,
+      prNumber: pr.prNumber,
+      prUrl: pr.prUrl,
+      parentHeadSha: pr.headSha,
     };
   }
 
@@ -970,37 +865,6 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       { owner, repo, commit_sha: baseCommitSha }
     );
     return { baseCommitSha, baseTreeSha: baseCommit.tree.sha };
-  }
-
-  private async resolveBranchHead(
-    octokit: Octokit,
-    owner: string,
-    repo: string,
-    branch: string
-  ): Promise<string | null> {
-    try {
-      const { data: ref } = await octokit.request(
-        "GET /repos/{owner}/{repo}/git/ref/{ref}",
-        { owner, repo, ref: `heads/${branch}` }
-      );
-      return ref.object.sha;
-    } catch (err) {
-      if ((err as { status?: number })?.status === 404) return null;
-      throw err;
-    }
-  }
-
-  private async resolveCommitTreeSha(
-    octokit: Octokit,
-    owner: string,
-    repo: string,
-    commitSha: string
-  ): Promise<string> {
-    const { data: commit } = await octokit.request(
-      "GET /repos/{owner}/{repo}/git/commits/{commit_sha}",
-      { owner, repo, commit_sha: commitSha }
-    );
-    return commit.tree.sha;
   }
 
   private assertExistingTemplateFork(
@@ -1115,8 +979,17 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
     };
 
     // catalog/<slug>.yaml — brand-new file (no current content to thread).
+    // Remote-source node: project node_id (drift-gated mirror of the minted repo-spec)
+    // and source_sha (the deploy pin replacing the gitlink) into the catalog so parent
+    // renderers + the deploy plane resolve identity + deploy SHA from metadata alone.
     const catalogInput =
-      "nodeRepoUrl" in input ? { sourceRepo: input.nodeRepoUrl } : {};
+      "nodeRepoUrl" in input
+        ? {
+            sourceRepo: input.nodeRepoUrl,
+            nodeId: input.nodeId,
+            sourceSha: input.nodeRepoHeadSha,
+          }
+        : {};
     await addBlob(
       `infra/catalog/${slug}.yaml`,
       renderCatalog(slug, port, nodePort, catalogInput)
@@ -1181,11 +1054,27 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
     // misclassifies as node-domain and single-node-scope false-fails. With no filter the
     // gitlink falls to operator's `**`. Mirrors render-scope-filters.sh's submodule skip.
 
-    // No scheduler-worker endpoint splice yet: a submodule node's identity lives in the
-    // minted repo's `.cogni/repo-spec.yaml`, not in the parent checkout. The parent
-    // renderer skips `.gitmodules` nodes until the catalog -> NodeRegistry metadata
-    // projection lands, so inserting this endpoint here would make the generated PR fail
-    // the scheduler endpoint drift check.
+    // Scheduler-worker endpoint splice: the catalog now carries this submodule node's
+    // node_id projection (above), and the routing renderer enumerates every catalog
+    // type:node (is_built_by_this_repo lifted from the routing CSVs). So splice this node
+    // into the base configmap from the projected node_id — keeping it drift-clean with the
+    // catalog, born-green so chat/completions works on first flight (verify-scheduler-endpoints).
+    if ("nodeRepoUrl" in input) {
+      const schedulerConfigmapPath =
+        "infra/k8s/base/scheduler-worker/configmap.yaml";
+      const currentConfigmap = await this.fetchFileText({
+        owner,
+        repo,
+        path: schedulerConfigmapPath,
+        ref: "main",
+      });
+      if (currentConfigmap) {
+        await addBlob(
+          schedulerConfigmapPath,
+          insertSchedulerEndpoint(currentConfigmap, slug, input.nodeId)
+        );
+      }
+    }
 
     // No pnpm-lock.yaml: a submodule node is not a workspace member of the operator monorepo — its
     // packages resolve in its own repo + lockfile. (The single biggest chunk of inline-only tax.)
@@ -1194,36 +1083,6 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
   }
 
   /** Resolve a nested tree-entry SHA by walking a `/`-delimited repo path from a root tree. */
-  private async findTreeEntry(
-    octokit: Octokit,
-    owner: string,
-    repo: string,
-    rootTreeSha: string,
-    path: string
-  ): Promise<
-    | {
-        readonly path?: string;
-        readonly mode?: string;
-        readonly type?: string;
-        readonly sha?: string | null;
-      }
-    | undefined
-  > {
-    const segments = path.split("/");
-    let treeSha = rootTreeSha;
-    for (let i = 0; i < segments.length; i++) {
-      const { data: tree } = await octokit.request(
-        "GET /repos/{owner}/{repo}/git/trees/{tree_sha}",
-        { owner, repo, tree_sha: treeSha }
-      );
-      const match = tree.tree.find((e) => e.path === segments[i]);
-      if (!match) return undefined;
-      if (i === segments.length - 1) return match;
-      if (!match.sha || match.type !== "tree") return undefined;
-      treeSha = match.sha;
-    }
-    return undefined;
-  }
 
   private async findTreeEntrySha(
     octokit: Octokit,
@@ -1246,58 +1105,6 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       treeSha = match.sha;
     }
     return undefined;
-  }
-
-  private async treePinsNodeSubmodule(
-    octokit: Octokit,
-    owner: string,
-    repo: string,
-    rootTreeSha: string,
-    slug: string,
-    nodeRepoUrl: string,
-    nodeRepoHeadSha: string
-  ): Promise<boolean> {
-    const nodeEntry = await this.findTreeEntry(
-      octokit,
-      owner,
-      repo,
-      rootTreeSha,
-      `nodes/${slug}`
-    );
-    if (
-      nodeEntry?.type !== "commit" ||
-      nodeEntry.mode !== "160000" ||
-      nodeEntry.sha !== nodeRepoHeadSha
-    ) {
-      return false;
-    }
-
-    const gitmodulesEntry = await this.findTreeEntry(
-      octokit,
-      owner,
-      repo,
-      rootTreeSha,
-      ".gitmodules"
-    );
-    if (
-      gitmodulesEntry?.type !== "blob" ||
-      gitmodulesEntry.mode !== "100644" ||
-      !gitmodulesEntry.sha
-    ) {
-      return false;
-    }
-
-    const gitmodules = await this.readBlob(
-      octokit,
-      owner,
-      repo,
-      gitmodulesEntry.sha
-    );
-    return (
-      gitmodules.includes(`[submodule "nodes/${slug}"]`) &&
-      gitmodules.includes(`path = nodes/${slug}`) &&
-      gitmodules.includes(`url = ${nodeRepoUrl}`)
-    );
   }
 
   /** Read a blob by SHA and decode its (base64) contents to UTF-8. */
@@ -1480,41 +1287,6 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       if (!pr) {
         throw new Error(
           `Failed to open node-app PR and no open PR found for head ${branch}`
-        );
-      }
-      return { prNumber: pr.number, prUrl: pr.html_url };
-    }
-  }
-
-  private async openOrFindPinPr(
-    octokit: Octokit,
-    owner: string,
-    repo: string,
-    slug: string,
-    branch: string,
-    nodeRepoHeadSha: string
-  ): Promise<OpenNodeAppPrResult> {
-    const title = `chore(node): pin ${slug} at ${nodeRepoHeadSha.slice(0, 8)}`;
-    const body =
-      `Pins \`nodes/${slug}\` to child SHA \`${nodeRepoHeadSha}\` before node-ref flight.\n\n` +
-      "The flight endpoint refuses to deploy child refs that are not accepted by the operator parent repo.";
-    try {
-      const { data: pr } = await octokit.request(
-        "POST /repos/{owner}/{repo}/pulls",
-        { owner, repo, title, body, head: branch, base: "main" }
-      );
-      return { prNumber: pr.number, prUrl: pr.html_url };
-    } catch (err) {
-      const status = (err as { status?: number })?.status;
-      if (status !== 422) throw err;
-      const { data: existing } = await octokit.request(
-        "GET /repos/{owner}/{repo}/pulls",
-        { owner, repo, state: "open", head: `${owner}:${branch}`, per_page: 1 }
-      );
-      const pr = existing[0];
-      if (!pr) {
-        throw new Error(
-          `Failed to open node pin PR and no open PR found for head ${branch}`
         );
       }
       return { prNumber: pr.number, prUrl: pr.html_url };

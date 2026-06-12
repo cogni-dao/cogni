@@ -381,19 +381,33 @@ The graph-tool validation remains: an authenticated operator chat/API graph run
 selects `langgraph:pr-manager`, requests an explicit candidate-a flight, and
 observes the `core__vcs_flight_candidate` tool authorization path.
 
-### 6. Node Developer Request Flow
+### 6. Node Access Request Flow
 
 New node spawn + external AI agent flow:
 
 1. The AI agent calls `POST /api/v1/agent/register` and receives a bearer token.
-2. The agent asks for developer flight control for one `node:{node_id}`. V0 may
-   surface this as an operator work item; the durable authority is not the
-   request row.
-3. The node creator/admin approves or rejects. Approval writes OpenFGA tuples:
-   `node:{node_id}#developer@user:{agent_user_id}` in V0. Rejection removes
-   that tuple if present. The operator API surface is:
+2. The agent files an access request for one `node:{node_id}` via
+   `POST /api/v1/nodes/{node_id}/access-requests { role? }`. `role` defaults to
+   `developer` — V0's only role, which confers `can_flight`. This upserts a
+   durable, idempotent `node_access_requests` row (one per `(node, agent)`,
+   re-request reopens it to `pending`) the owner sees in-UI. The row is
+   tracking/UX only; it is never the authority.
+3. The node creator/admin approves or rejects in-UI. Approval writes the OpenFGA
+   role tuple `node:{node_id}#developer@user:{agent_user_id}` (V0) and transitions
+   the request row to `approved`; rejection removes the tuple and transitions the
+   row to `denied`/`revoked`. Operator API:
    `POST /api/v1/nodes/{node_id}/developers { agentUserId, decision }`.
-4. The flight route enforces `node.flight` before touching GitHub.
+4. The flight route enforces `node.flight` (computed `can_flight from developer`)
+   before touching GitHub.
+
+**Roles vs capabilities.** A request grants a _role_ (an OpenFGA relation on the
+`node` type); a role confers _capabilities_ (computed relations). V0 ships one
+role, `developer` → `can_flight`. New access levels (e.g. `maintainer` →
+`can_merge`, `releaser` → `can_promote`) are additive: extend the
+`node_access_requests.role` CHECK, add the immutable OpenFGA relation, and label
+the capability in the UI. The request table's `role` column **is** the OpenFGA
+relation name — never overload `scope` (reserved for the governance domain
+`scope_id`; see [identity-model.md](./identity-model.md)).
 
 Approval authority comes from the node creator/admin's current ownership of the
 node registry row. Ongoing flight authority comes only from OpenFGA.
@@ -459,7 +473,6 @@ Subject included in cache key because delegation status can change independently
 
 ## Related
 
-- [Browser Session Flight Auth](../guides/browser-session-flight-auth.md) — Creator/admin approval and bearer-token nodeRef flight validation
 - [RBAC Hardening Project](../../work/projects/proj.rbac-hardening.md) — Roadmap, implementation checklists, P1/P2 plans
 - [Tool Use Spec](tool-use.md) — Tool execution pipeline, DENY_BY_DEFAULT
 - [Tenant Connections Spec](tenant-connections.md) — Connection auth, GRANT_INTERSECTION

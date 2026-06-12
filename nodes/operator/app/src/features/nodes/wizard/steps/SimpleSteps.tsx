@@ -7,19 +7,21 @@
  * Scope: Presentational placeholders for not-yet-built activation stages (wallet, payments)
  *   plus active/failed terminals. Carry `available:false` semantics — designed "coming soon".
  * Side-effects: none
- * Links: src/features/nodes/wizard/step-registry.tsx
+ * Links: src/features/nodes/wizard/step-registry.tsx, ../StepSection.tsx
  * @public
  */
 
 import type { ReactElement } from "react";
-import { Button, SectionCard } from "@/components";
-import { LaunchPackCopyButton } from "../LaunchPackCopyButton.client";
 
+import { Button } from "@/components";
+
+import { LaunchPackCopyButton } from "../LaunchPackCopyButton.client";
+import { StepSection } from "../StepSection";
 import type { WizardStepProps } from "../types";
 
 export function WalletStep({ node }: WizardStepProps): ReactElement {
   return (
-    <SectionCard title="Operator wallet">
+    <StepSection title="Operator wallet">
       <div className="space-y-3 text-sm">
         <p className="text-muted-foreground">
           Operator wallet is ready. Activating payment rails is the next stage —
@@ -30,36 +32,36 @@ export function WalletStep({ node }: WizardStepProps): ReactElement {
           <LaunchPackCopyButton nodeId={node.id} />
         </div>
       </div>
-    </SectionCard>
+    </StepSection>
   );
 }
 
 export function PaymentsStep(): ReactElement {
   return (
-    <SectionCard title="Payments">
+    <StepSection title="Payments">
       <p className="text-muted-foreground text-sm">
         Payments configured. Opening the activation PR is the final step before
         this node goes live — coming soon.
       </p>
-    </SectionCard>
+    </StepSection>
   );
 }
 
 export function ActiveStep(): ReactElement {
   return (
-    <SectionCard title="Active">
+    <StepSection title="Active">
       <p className="text-muted-foreground text-sm">This node is live.</p>
-    </SectionCard>
+    </StepSection>
   );
 }
 
 export function FailedStep({ node }: WizardStepProps): ReactElement {
   return (
-    <SectionCard title="Setup failed">
+    <StepSection title="Setup failed">
       <p className="text-destructive text-sm">
         {node.failureReason ??
           "Bootstrap failed. Re-register the node to start over."}
       </p>
-    </SectionCard>
+    </StepSection>
   );
 }

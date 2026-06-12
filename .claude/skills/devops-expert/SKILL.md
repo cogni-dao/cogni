@@ -43,10 +43,10 @@ The old shared candidate-a shape is retired. Cogni monorepo and `cogni-poly`
 are separate candidate-a targets and must not share VM aliases, DNS records, or
 provisioning assumptions.
 
-- `84.32.9.111` is **Cogni monorepo candidate-a**. Cloudflare records observed
-  on 2026-06-01: `cogni-candidate-a.vm.cognidao.org`,
-  `test.cognidao.org`, `resy-test.cognidao.org`,
-  `node-template-test.cognidao.org`, and `canary-test.cognidao.org`.
+- `84.32.9.111` is **Cogni monorepo candidate-a** (apex `cogni-candidate-a.vm.cognidao.org` /
+  `test.cognidao.org`). Per-node `<node>-test` records are **catalog-driven** — auto-upserted to
+  this IP on flight by `reconcile-node-dns.sh` (ci-cd.md Axiom 21 `DNS_IS_RECONCILED_PER_ENV`),
+  never hand-maintained. Don't enumerate/edit them by hand; see the `dns-ops` skill.
 - `5.199.173.155` is **cogni-poly candidate-a only**. Cloudflare records
   observed on 2026-06-01: `candidate-a.vm.cognidao.org` and
   `poly-test.cognidao.org`.
@@ -186,6 +186,7 @@ When reviewing code that touches CI/CD, deploy, or infra:
 
 - **Reuse existing scripts.** If `promote-k8s-image.sh` already updates overlays, don't write a new one. If `deploy-infra.sh` already handles Compose infra, extend it — don't create a parallel path.
 - **No manual VM state.** Every change must be in a script or manifest. Ask: "if we destroy and reprovision this VM, does this change survive?"
+- **Re-point ALL deploy pointers on VM migration (deploy-pointer drift).** When an env's VM is rebuilt/migrated to a new box, **three** pointers must be updated together, or CI→VM access silently dies: (1) the Cloudflare `<env>.vm.cognidao.org` A record, (2) the GH env secret `VM_HOST`, (3) the GH env secret `SSH_DEPLOY_KEY`. The app path is independent (Cloudflare→cluster keeps serving), so a stale pointer is INVISIBLE until a deploy/reconcile/promote runs — then it fails as a cryptic `exit 255 / Connection timed out / Permission denied`. **Incident (2026-06-10):** the Jun-3 prod migration `.202→.152` left all three stale → every prod reconcile/promote failed silently for days; cognidao.org stayed green the whole time. Fix is loud-by-default now: `reconcile-env-substrate.sh` SSH-preflights and emits a clear diagnosis. Verify `VM_HOST` resolves to the live Cherry VM (project 254586) and `SSH_DEPLOY_KEY` authenticates before assuming a deploy bug. promote-and-deploy + deploy-infra should grow the same preflight (follow-up).
 - **No new mutable tags.** All image references use digests or `{env}-{sha}` tags.
 - **No new long-lived code branches.** Feature branches are short-lived. Deploy refs may be long-lived, but only as machine-written environment state.
 - **No PRs for deploy state.** Deploy branches get direct commits.

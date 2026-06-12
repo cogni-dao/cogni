@@ -264,7 +264,6 @@ REQUIRED_SECRETS=(
     "EVM_RPC_URL"
     "POLYGON_RPC_URL"
     "TEMPORAL_DB_USER"
-    "TEMPORAL_DB_PASSWORD"
     "INTERNAL_OPS_TOKEN"
     "POSTHOG_API_KEY"
     "POSTHOG_HOST"
@@ -707,6 +706,45 @@ previous_runtime_env_value() {
 PREVIOUS_OPENFGA_AUTHORIZATION_MODEL_ID="$(previous_runtime_env_value OPENFGA_AUTHORIZATION_MODEL_ID)"
 PREVIOUS_OPENFGA_AUTHORIZATION_MODEL_HASH="$(previous_runtime_env_value OPENFGA_AUTHORIZATION_MODEL_HASH)"
 
+# OpenFGA DB password is OpenBao-custodied (Invariant 15) — it provisions the
+# openfga login role + backs the datastore DSN. Source it here, the same env-wide
+# ${DEPLOY_ENVIRONMENT}-db-reader seam the per-node loop uses (read-only k8s-auth
+# token; value never echoed), from the service's own path cogni/<env>/openfga.
+# The openfga Compose service reads it from the rendered .env below — it never
+# reads OpenBao directly. Empty (unseeded / OpenBao sealed) → provision.sh fails
+# loud at the role step; we never fall back to root.
+OPENFGA_DB_PASSWORD="$(
+  jwt="$(timeout 10 kubectl create token db-provisioner -n default 2>/dev/null || true)"
+  [ -n "$jwt" ] || exit 0
+  tok="$(timeout 10 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
+    bao write -field=token auth/kubernetes/login \
+    "role=${DEPLOY_ENVIRONMENT}-db-reader" "jwt=${jwt}" 2>/dev/null || true)"
+  [ -n "$tok" ] || exit 0
+  timeout 10 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
+    BAO_TOKEN="${tok}" bao kv get -field=OPENFGA_DB_PASSWORD "cogni/${DEPLOY_ENVIRONMENT}/openfga" 2>/dev/null || true
+)"
+export OPENFGA_DB_PASSWORD
+
+# Temporal DB password is OpenBao-custodied (Invariant 15) — same rationale as
+# OPENFGA_DB_PASSWORD above: it backs the shared `temporal` login role + the
+# Temporal datastore DSN. Source it from the same ${DEPLOY_ENVIRONMENT}-db-reader
+# seam, from the shared-infra path cogni/<env>/_shared (temporal is owned by no
+# node). The Temporal Compose service reads it from the rendered .env below — it
+# never reads OpenBao directly. Empty (unseeded / OpenBao sealed) → provision.sh
+# fails loud at the role step; we never fall back to a stale GH-env value (the
+# 28P01 drift that wedged prod 2026-06-11).
+TEMPORAL_DB_PASSWORD="$(
+  jwt="$(timeout 10 kubectl create token db-provisioner -n default 2>/dev/null || true)"
+  [ -n "$jwt" ] || exit 0
+  tok="$(timeout 10 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
+    bao write -field=token auth/kubernetes/login \
+    "role=${DEPLOY_ENVIRONMENT}-db-reader" "jwt=${jwt}" 2>/dev/null || true)"
+  [ -n "$tok" ] || exit 0
+  timeout 10 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
+    BAO_TOKEN="${tok}" bao kv get -field=TEMPORAL_DB_PASSWORD "cogni/${DEPLOY_ENVIRONMENT}/_shared" 2>/dev/null || true
+)"
+export TEMPORAL_DB_PASSWORD
+
 cat > "$RUNTIME_ENV" << ENV_EOF
 # Required vars
 DOMAIN=${DOMAIN}
@@ -725,6 +763,7 @@ APP_DB_PASSWORD=${APP_DB_PASSWORD}
 APP_DB_SERVICE_USER=${APP_DB_SERVICE_USER}
 APP_DB_SERVICE_PASSWORD=${APP_DB_SERVICE_PASSWORD}
 APP_DB_NAME=${APP_DB_NAME}
+OPENFGA_DB_PASSWORD=${OPENFGA_DB_PASSWORD}
 DEPLOY_ENVIRONMENT=${DEPLOY_ENVIRONMENT}
 EVM_RPC_URL=${EVM_RPC_URL}
 POLYGON_RPC_URL=${POLYGON_RPC_URL}
@@ -850,9 +889,33 @@ APP_DB_READONLY_PASSWORD="${APP_DB_READONLY_PASSWORD:-$(derive_secret postgres-r
 printf '%s=%s\n' APP_DB_READONLY_USER "$APP_DB_READONLY_USER" >> "$RUNTIME_ENV"
 printf '%s=%s\n' APP_DB_READONLY_PASSWORD "$APP_DB_READONLY_PASSWORD" >> "$RUNTIME_ENV"
 
-# Doltgres has weak GRANT support so roles are near-permissive today; derived
-# secrets are still a least-privilege improvement over a shared root pw.
-DOLTGRES_PASSWORD="${DOLTGRES_PASSWORD:-$(derive_secret doltgres-root)}"
+# Doltgres superuser password — OpenBao-custodied SSOT at the canonical operator
+# path (cogni/<env>/operator/DOLTGRES_PASSWORD). Shared env-wide (one server, every
+# node's knowledge_<node> DB), immutable post-init (Doltgres 0.56.3 can't ALTER it;
+# databases.md §5.2). Source it via the same ${DEPLOY_ENVIRONMENT}-db-reader seam as
+# OPENFGA_DB_PASSWORD above so the rendered VM .env carries the LIVE value, not a
+# re-derived one that drifts after a volume restore / root-cred rotation (the
+# 2026-06-10 prod node-substrate 28P01). A drifted volume is reconciled via
+# `pnpm secrets:set <env> operator DOLTGRES_PASSWORD` (secrets-rotate.md), never
+# re-derived. derive_secret survives ONLY as the genesis default for a fresh volume
+# OpenBao has not seeded yet (first provision, pre-materialize). The reader/writer
+# roles are CREATEd fresh each provision (ALTERable, not the superuser) — left derived.
+DOLTGRES_PASSWORD_SSOT="$(
+  jwt="$(timeout 10 kubectl create token db-provisioner -n default 2>/dev/null || true)"
+  [ -n "$jwt" ] || exit 0
+  tok="$(timeout 10 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
+    bao write -field=token auth/kubernetes/login \
+    "role=${DEPLOY_ENVIRONMENT}-db-reader" "jwt=${jwt}" 2>/dev/null || true)"
+  [ -n "$tok" ] || exit 0
+  timeout 10 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
+    BAO_TOKEN="${tok}" bao kv get -field=DOLTGRES_PASSWORD "cogni/${DEPLOY_ENVIRONMENT}/operator" 2>/dev/null || true
+)"
+if [ -n "$DOLTGRES_PASSWORD_SSOT" ]; then
+  DOLTGRES_PASSWORD="$DOLTGRES_PASSWORD_SSOT"
+else
+  log_warn "Doltgres superuser SSOT empty at cogni/${DEPLOY_ENVIRONMENT}/operator/DOLTGRES_PASSWORD — using genesis derive (valid only for a fresh volume; reconcile via 'pnpm secrets:set ${DEPLOY_ENVIRONMENT} operator DOLTGRES_PASSWORD' if the volume already exists)"
+  DOLTGRES_PASSWORD="${DOLTGRES_PASSWORD:-$(derive_secret doltgres-root)}"
+fi
 DOLTGRES_READER_PASSWORD="${DOLTGRES_READER_PASSWORD:-$(derive_secret doltgres-reader)}"
 DOLTGRES_WRITER_PASSWORD="${DOLTGRES_WRITER_PASSWORD:-$(derive_secret doltgres-writer)}"
 printf '%s=%s\n' DOLTGRES_PASSWORD "$DOLTGRES_PASSWORD" >> "$RUNTIME_ENV"
@@ -864,61 +927,14 @@ if [[ "${K8S_SECRETS_ONLY:-false}" != "true" ]]; then
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Step 2: Start edge stack (idempotent - only starts if not running)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-log_info "Ensuring edge stack (Caddy) is running..."
-if ! $EDGE_COMPOSE ps -q caddy 2>/dev/null | grep -q .; then
-  log_info "Starting edge stack..."
-  $EDGE_COMPOSE up -d
-else
-  log_info "Edge stack already running"
-  # Check for Caddyfile changes and recreate the container if needed.
-  #
-  # task.5078: previously this did `caddy reload || restart`. Reload re-reads
-  # the Caddyfile but Caddy's runtime env stays whatever was set at the
-  # original `docker compose up -d`. When deploy-infra adds a new site env
-  # var to /opt/cogni-template-edge/.env (e.g., NODE_TEMPLATE_DOMAIN), reload
-  # substitutes `{$NODE_TEMPLATE_DOMAIN}` to empty, the new server block is
-  # silently absent, no cert gets provisioned, and TLS handshake errors out
-  # for the new hostname. `docker compose up -d` (without --force-recreate)
-  # detects the env_file delta and recreates the container with the new env
-  # — fully covers the new-domain case without disturbing Caddy when only
-  # existing-site Caddyfile lines changed.
-  HASH_DIR="/var/lib/cogni"
-  CADDYFILE="/opt/cogni-template-edge/configs/Caddyfile.tmpl"
-  EDGE_ENV_FILE="/opt/cogni-template-edge/.env"
-  CADDY_HASH_FILE="$HASH_DIR/caddyfile.sha256"
-  EDGE_ENV_HASH_FILE="$HASH_DIR/edge.env.sha256"
-
-  mkdir -p "$HASH_DIR"
-  caddyfile_changed=false
-  edge_env_changed=false
-
-  if [[ -f "$CADDYFILE" ]]; then
-    NEW_CADDY_HASH=$(hash_file "$CADDYFILE")
-    OLD_CADDY_HASH=$(cat "$CADDY_HASH_FILE" 2>/dev/null || echo "none")
-    if [[ "$NEW_CADDY_HASH" != "$OLD_CADDY_HASH" && "$NEW_CADDY_HASH" != "no-hash-tool" ]]; then
-      caddyfile_changed=true
-    fi
-  fi
-  if [[ -f "$EDGE_ENV_FILE" ]]; then
-    NEW_EDGE_ENV_HASH=$(hash_file "$EDGE_ENV_FILE")
-    OLD_EDGE_ENV_HASH=$(cat "$EDGE_ENV_HASH_FILE" 2>/dev/null || echo "none")
-    if [[ "$NEW_EDGE_ENV_HASH" != "$OLD_EDGE_ENV_HASH" && "$NEW_EDGE_ENV_HASH" != "no-hash-tool" ]]; then
-      edge_env_changed=true
-    fi
-  fi
-
-  if [[ "$caddyfile_changed" == "true" || "$edge_env_changed" == "true" ]]; then
-    log_info "Edge stack config changed (caddyfile=${caddyfile_changed} env=${edge_env_changed}), recreating Caddy..."
-    # --force-recreate guarantees the container restarts even when compose's
-    # delta detector doesn't classify env_file content as a change (which is
-    # its default — env_file additions only trigger recreate via the explicit
-    # flag). Belt-and-suspenders for the new-site-env-var case from task.5078.
-    $EDGE_COMPOSE up -d --force-recreate caddy
-    [[ "$caddyfile_changed" == "true" ]] && echo "$NEW_CADDY_HASH" > "$CADDY_HASH_FILE"
-    [[ "$edge_env_changed" == "true" ]] && echo "$NEW_EDGE_ENV_HASH" > "$EDGE_ENV_HASH_FILE"
-    log_info "Caddy recreated; new env_file values + Caddyfile in effect"
-  fi
-fi
+# Edge-Caddy reconcile (start-if-down + hash-gated force-recreate) lives in one
+# shared VM-side helper that both deploy-infra and reconcile-node-substrate scp
+# + invoke. CADDYFILE is the rendered template deploy-infra writes (see Step 1).
+EDGE_COMPOSE_BIN="$EDGE_COMPOSE" \
+CADDYFILE="/opt/cogni-template-edge/configs/Caddyfile.tmpl" \
+EDGE_ENV_FILE="/opt/cogni-template-edge/.env" \
+HASH_DIR="/var/lib/cogni" \
+  bash /tmp/reconcile-edge-caddy.remote.sh
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Step 2.5: Disk cleanup gate (before any image pulls)
@@ -996,6 +1012,18 @@ fi
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 log_info "[$(date -u +%H:%M:%S)] Running DB provisioning..."
 emit_deployment_event "infra_deployment.db_provision_started" "in_progress" "Provisioning database users and schemas"
+# Shared infra DBs FIRST, decoupled from per-node creds. The litellm/openfga
+# root-owned DBs depend only on the root Postgres creds (.env) — never OpenBao,
+# never a node DB. On a fresh env the per-node loop below is fully fail-soft
+# (every node skips until its OpenBao creds materialize), so coupling infra-DB
+# creation to that loop left openfga uncreated → openfga-migrate hard-fails with
+# `database "openfga" does not exist`. This dedicated INFRA_ONLY pass guarantees
+# openfga + litellm exist before openfga-migrate regardless of node-cred state.
+log_info "  Provisioning shared infra DBs (litellm, openfga) — decoupled from per-node creds..."
+$RUNTIME_COMPOSE --profile bootstrap run --rm \
+  -e "PROVISION_INFRA_ONLY=1" \
+  -e "OPENFGA_DB_PASSWORD=${OPENFGA_DB_PASSWORD}" \
+  db-provision
 # Per-node db-provision (#1584): provision.sh now reconciles per-node roles
 # app_<node>/service_<node> to the per-node passwords OpenBao holds at
 # cogni/<env>/<node>, and refuses a multi-node COGNI_NODE_DBS so one shared
@@ -1018,8 +1046,7 @@ read_node_db_secret() {
   local node="$1" key="$2"
   timeout 10 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
     BAO_TOKEN="${DB_READER_TOKEN}" \
-    bao kv get -format=json "cogni/${DEPLOY_ENVIRONMENT}/${node}" 2>/dev/null \
-    | jq -r --arg k "$key" '.data.data[$k] // empty' 2>/dev/null || true
+    bao kv get -field="$key" "cogni/${DEPLOY_ENVIRONMENT}/${node}" 2>/dev/null || true
 }
 DB_READER_TOKEN="$(mint_db_reader_token || true)"
 [ -n "$DB_READER_TOKEN" ] || log_fatal "db-provision: could not mint ${DEPLOY_ENVIRONMENT}-db-reader token (OpenBao sealed / role absent) — per-node DB creds are required (#1584)"
@@ -1050,13 +1077,18 @@ $RUNTIME_COMPOSE --profile bootstrap run --rm openfga-migrate
 # runs before the poly Deployment syncs. Same pattern as the Postgres
 # migrator Job (infra/k8s/base/node-app/migration-job.yaml).
 # Guarded on compose presence — tolerates envs where doltgres is not in the compose file.
+# DOLTGRES_PASSWORD was resolved from the operator-canonical OpenBao SSOT above (the
+# same value rendered into RUNTIME_ENV), so the provisioner connects as the live
+# superuser — no late sed-parse of DOLTGRES_URL, no derived-vs-live reconciliation here.
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 if $RUNTIME_COMPOSE config --services 2>/dev/null | grep -q '^doltgres$'; then
   log_info "[$(date -u +%H:%M:%S)] Bringing up doltgres..."
   $RUNTIME_COMPOSE up -d doltgres
 
   log_info "[$(date -u +%H:%M:%S)] Provisioning Doltgres DBs + roles..."
-  $RUNTIME_COMPOSE --profile bootstrap run --rm doltgres-provision
+  $RUNTIME_COMPOSE --profile bootstrap run --rm \
+    -e DOLTGRES_PASSWORD="$DOLTGRES_PASSWORD" \
+    doltgres-provision
 
   log_info "[$(date -u +%H:%M:%S)] Doltgres up + DBs provisioned. Schema migration runs as k8s PreSync Job."
 else
@@ -1064,6 +1096,57 @@ else
 fi
 log_info "[$(date -u +%H:%M:%S)] DB provisioning complete"
 emit_deployment_event "infra_deployment.db_provision_complete" "success" "Database provisioned successfully"
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Step 6.5: Reconcile temporal-postgres superuser (idempotent; closes 28P01 trap)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Temporal runs on a DEDICATED postgres (compose service `temporal-postgres`) whose
+# `temporal` role is the SUPERUSER. That password is baked into the volume only at
+# first-init from TEMPORAL_DB_PASSWORD; nothing reconciles it afterward. When the env
+# value drifts from the frozen volume value (rotation / re-seed), the next deploy
+# restarts `temporal` against a password the volume superuser never adopted →
+# `pq: password authentication failed for user "temporal"` → temporal never binds
+# :7233 → every node's readiness fail-closes → all nodes 503 (prod + preview,
+# 2026-06-11). Reconcile the volume superuser to the OpenBao value BEFORE temporal
+# starts, idempotently every run, via the local-trust socket (no old password needed —
+# the manual heal both incidents). #1625 ALTERed a `temporal` role on the MAIN shared
+# postgres (the wrong DB) and never touched this volume; this is the real fix.
+if [[ -n "${TEMPORAL_DB_PASSWORD:-}" ]]; then
+  # TEMPORAL_DB_PASSWORD is catalog hex (generate: hex, bytes:24 → 48 hex chars);
+  # validate the shape so we never inject a malformed/quoted value into SQL.
+  if [[ "$TEMPORAL_DB_PASSWORD" =~ ^[0-9a-fA-F]+$ ]]; then
+    _tp_user="${TEMPORAL_DB_USER:-temporal}"
+    log_info "Bringing up temporal-postgres (dedicated) and reconciling its superuser..."
+    $RUNTIME_COMPOSE up -d temporal-postgres
+    # Wait for the dedicated postgres to accept local connections (pg_isready over
+    # the local-trust socket, no password) before ALTER — bounded, fail-loud.
+    _tp_elapsed=0
+    until $RUNTIME_COMPOSE exec -T temporal-postgres pg_isready -U "$_tp_user" -q; do
+      if [ "$_tp_elapsed" -ge 60 ]; then
+        log_fatal "temporal-postgres not ready after 60s — cannot reconcile superuser."
+      fi
+      sleep 2
+      _tp_elapsed=$((_tp_elapsed + 2))
+    done
+    # Local-trust socket: psql -U temporal -d postgres authenticates without the old
+    # password. Value embedded directly (NOT psql -v :'pw' — that interpolation form
+    # errored "syntax error at or near :" through the compose/exec layer during the
+    # 2026-06-11 manual converge); TEMPORAL_DB_PASSWORD is hex-validated above, so the
+    # single-quoted literal is injection-safe. SCRAM rehash every run is cheap + idempotent.
+    if $RUNTIME_COMPOSE exec -T temporal-postgres \
+        psql -U "$_tp_user" -d postgres -v ON_ERROR_STOP=1 \
+        -c "ALTER USER \"$_tp_user\" WITH PASSWORD '$TEMPORAL_DB_PASSWORD';" >/dev/null; then
+      log_info "temporal-postgres superuser reconciled to OpenBao value."
+    else
+      log_fatal "temporal-postgres superuser reconcile failed — refusing to start temporal against a drifted password (would 28P01)."
+    fi
+    unset _tp_user _tp_elapsed
+  else
+    log_fatal "TEMPORAL_DB_PASSWORD is not hex — refusing to reconcile temporal-postgres (malformed/unseeded value)."
+  fi
+else
+  log_warn "TEMPORAL_DB_PASSWORD unset (OpenBao sealed / unseeded) — skipping temporal-postgres reconcile; temporal will use the volume-init value."
+fi
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Step 6.6: Start/update infra services (rolling update, no down)
@@ -1213,8 +1296,14 @@ refresh_operator_openfga_secret() {
     fi
   done
   if [[ -z "$es_name" ]]; then
-    log_error "No operator ExternalSecret found in ${k8s_ns}; cannot deliver OpenFGA runtime IDs"
-    return 1
+    # Fresh-env benign case: no operator app has synced yet, so its ExternalSecret
+    # does not exist. The runtime IDs are already durably in OpenBao (patch above,
+    # the SSOT) — ESO will pull them into the secret on the operator's FIRST rollout.
+    # This force-refresh is only an ACCELERATION for an already-running operator, so
+    # its absence is not a failure. Returning 1 here under set -e wrongly hard-fails
+    # the whole fresh-env provision (same fresh-env coupling class as the infra-DB gap).
+    log_warn "No operator ExternalSecret in ${k8s_ns} yet (fresh env); OpenFGA runtime IDs are in OpenBao — ESO will sync them on the operator's first rollout"
+    return 0
   fi
 
   kubectl -n "$k8s_ns" annotate externalsecret "$es_name" \
@@ -1240,7 +1329,15 @@ refresh_operator_openfga_secret() {
 
 if patch_operator_openfga_config; then
   log_info "OpenBao operator path patched with OpenFGA runtime IDs"
-  refresh_operator_openfga_secret
+  # Best-effort acceleration ONLY. patch_operator_openfga_config above already wrote
+  # the runtime IDs to OpenBao (the SSOT, hard-gated). The ESO force-refresh just pulls
+  # them into the operator Secret sooner; ESO syncs them on its normal cycle regardless.
+  # On a fresh/rebuilding env the operator ExternalSecret may be absent OR present-but-
+  # not-yet-Ready (ESO/app still converging when deploy-infra runs in Phase 5f) — neither
+  # is a deploy failure. Never let this acceleration fail the whole provision (it did:
+  # the 120s wait timed out → return 1 → FATAL). Operator secret/pod health is proven by
+  # the readyz/promote lane, not by force-refresh convergence here.
+  refresh_operator_openfga_secret || log_warn "operator ExternalSecret force-refresh did not converge (absent or not-Ready yet); IDs are in OpenBao and ESO will sync them on its normal cycle — non-fatal"
 else
   log_error "OpenFGA store/model exist, but operator OpenBao config was not patched"
   exit 1
@@ -1734,11 +1831,22 @@ SECEOF
   log_info "[$(date -u +%H:%M:%S)] Node-apps ready — rolling scheduler-worker"
 
   # ── Roll scheduler-worker only after node-apps are ready ───────────────────
+  # Fresh-env ordering: deploy-infra runs in provision-env-vm.sh Phase 5f, BEFORE
+  # Phase 7 applies the ApplicationSets that create the Argo Apps → Deployments. So
+  # on a fresh provision this Deployment legitimately does not exist yet. Tolerate
+  # that (the AppSet sync + the deploy/flight verify lane own app-tier health); stay
+  # fatal only when the Deployment EXISTS but fails to roll out (established-env
+  # regression). Same benign-on-absent / fatal-on-real-failure shape as the OpenFGA
+  # ExternalSecret refresh above.
   ROLLOUT_FAILED=0
-  kubectl -n "${K8S_NS}" rollout restart deployment/scheduler-worker 2>/dev/null || true
-  if ! wait_rollout_or_updated_available deployment/scheduler-worker 300s; then
-    log_warn "scheduler-worker rollout did not complete within 300s"
-    ROLLOUT_FAILED=1
+  if ! kubectl -n "${K8S_NS}" get deployment/scheduler-worker >/dev/null 2>&1; then
+    log_warn "scheduler-worker Deployment not present yet (fresh env; ApplicationSets apply in Phase 7, after this) — skipping rollout verification; the AppSet sync + deploy/flight lane own app-tier health"
+  else
+    kubectl -n "${K8S_NS}" rollout restart deployment/scheduler-worker 2>/dev/null || true
+    if ! wait_rollout_or_updated_available deployment/scheduler-worker 300s; then
+      log_warn "scheduler-worker rollout did not complete within 300s"
+      ROLLOUT_FAILED=1
+    fi
   fi
   if [[ " ${NODE_APP_TARGETS} " == *" operator "* ]]; then
     if ! operator_deployment_declares_openfga_config; then
@@ -1746,9 +1854,13 @@ SECEOF
     elif operator_openfga_process_env_ready; then
       log_info "operator pod process env contains OpenFGA URL, store ID, and model ID"
     else
+      # Non-fatal (same fresh-env class as the ExternalSecret refresh): on a fresh/
+      # rebuilding env the operator pod env may not have the OpenFGA IDs YET because
+      # ESO/the app are still converging when deploy-infra runs in Phase 5f. The IDs are
+      # in OpenBao (SSOT); ESO syncs them; operator RBAC readiness is proven by the
+      # readyz/promote lane, not by deploy-infra. Diagnostics only — do not abort.
       log_operator_openfga_env_diagnostics
-      log_error "operator pod process env is missing OpenFGA URL, store ID, or model ID"
-      ROLLOUT_FAILED=1
+      log_warn "operator pod process env not yet showing OpenFGA URL/store/model IDs (ESO still converging) — non-fatal; readyz/promote lane proves operator readiness"
     fi
   fi
   log_info "[$(date -u +%H:%M:%S)] All rollouts complete"
@@ -1922,6 +2034,7 @@ scp $SSH_OPTS "$ARTIFACT_DIR/deploy-infra-remote.sh" root@"$VM_HOST":/tmp/deploy
 scp $SSH_OPTS \
   "$REPO_ROOT/scripts/ci/ensure-temporal-namespace.sh" \
   "$REPO_ROOT/scripts/ci/bootstrap-openfga.sh" \
+  "$REPO_ROOT/scripts/ci/reconcile-edge-caddy.remote.sh" \
   "$REPO_ROOT/infra/provision/cherry/harden-docker-public-ports.sh" \
   "$REPO_ROOT/scripts/secrets/sync-app-webhook-secret.sh" \
   root@"$VM_HOST":/tmp/
@@ -1965,7 +2078,7 @@ REMOTE_ENV_VARS=(
   POSTGRES_ROOT_USER POSTGRES_ROOT_PASSWORD APP_DB_USER APP_DB_PASSWORD
   APP_DB_SERVICE_USER APP_DB_SERVICE_PASSWORD APP_DB_READONLY_USER
   APP_DB_READONLY_PASSWORD APP_DB_NAME EVM_RPC_URL POLYGON_RPC_URL
-  TEMPORAL_DB_USER TEMPORAL_DB_PASSWORD GHCR_DEPLOY_TOKEN GHCR_USERNAME
+  TEMPORAL_DB_USER GHCR_DEPLOY_TOKEN GHCR_USERNAME
   GRAFANA_CLOUD_LOKI_URL GRAFANA_CLOUD_LOKI_USER GRAFANA_CLOUD_LOKI_API_KEY
   METRICS_TOKEN SCHEDULER_API_TOKEN BILLING_INGEST_TOKEN INTERNAL_OPS_TOKEN
   WORK_ITEMS_NOTION_TOKEN WORK_ITEMS_NOTION_DATA_SOURCE_ID WORK_ITEMS_NOTION_VERSION

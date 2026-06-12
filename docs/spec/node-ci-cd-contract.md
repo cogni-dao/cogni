@@ -150,6 +150,12 @@ Each gate firing is a feedback loop, not a barrier. Future: rejections logged st
 
 ## Operator-hosted artifacts
 
+> **Superseded (the submodule gitlink is retired).** Sections below that describe a `nodes/<slug>`
+> **git submodule gitlink** + `.gitmodules` + pin PRs are historical. The gitlink is gone:
+> the operator never checks out node source — it fetches needed node files by `sourceSha` via the
+> GitHub API / `actions/checkout` (deploy) or pure catalog metadata (secret-free CI), and the deploy
+> pin is a `source_sha` **field on the catalog row**. See [node-submodule-retirement.md](./node-submodule-retirement.md).
+
 The target model is artifact-first. A hosted node's source lives in the repo that owns it, and that repo publishes the artifact the operator deploys. A git submodule at `nodes/<slug>` is only the current approval-pin mechanism: a node-template fork the operator pins by SHA. It is not a build context, not a workflow execution surface, and not the long-term identity model.
 
 Legacy in-tree node source directories, if any remain, are transitional. They should be migrated toward the same `source_repo + image_repository + sourceSha + digest` contract instead of being preserved as a parallel first-class model. `node-template` is no longer an in-tree source domain; it is the external template repo plus an operator pin/deployment row.

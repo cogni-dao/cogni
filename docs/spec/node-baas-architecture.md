@@ -199,17 +199,18 @@ A minted node must be born-reviewable: `.cogni/rules/` ships in the node repo be
 
 Cogni's BaaS surface should be small, composable, and portable:
 
-| Cogni substrate | Node declares                                      | Operator provides                                                  |
-| --------------- | -------------------------------------------------- | ------------------------------------------------------------------ |
-| Postgres        | `packages/postgres`, migrations, required DSNs     | per-node DB, roles, RLS hardening, backups                         |
-| Doltgres        | `packages/doltgres`, migrations, knowledge domains | per-node `knowledge_<node>` DB, migrator wiring, commit validation |
-| Auth/RLS        | app routes and tenant context usage                | app/service/read-only roles, DSN secrets                           |
-| Graphs          | `packages/graphs` definitions                      | execution host, routing, observability substrate where shared      |
-| Streams         | event contracts and consumers                      | Redis/SSE/WebSocket substrate where needed                         |
-| Storage         | bucket/object metadata expectations                | object store, credentials, lifecycle policies                      |
-| Secrets         | key names and consumers                            | OpenBao values, ESO manifests, rotation path                       |
-| Gateway         | service ports and health routes                    | domain, TLS, Caddy/ingress, per-env route                          |
-| Studio/Wizard   | node metadata and capabilities                     | operator UI, publish, flight, validation                           |
+| Cogni substrate | Node declares                                                                        | Operator provides                                                                                         |
+| --------------- | ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------- |
+| Postgres        | `packages/postgres`, migrations, required DSNs                                       | per-node DB, roles, RLS hardening, backups                                                                |
+| Doltgres        | `packages/doltgres`, migrations, knowledge domains                                   | per-node `knowledge_<node>` DB, migrator wiring, commit validation                                        |
+| Auth/RLS        | app routes and tenant context usage                                                  | app/service/read-only roles, DSN secrets                                                                  |
+| Authorization   | authz checks + protected actions in app routes; capability gating in the secrets fan | shared OpenFGA store/model, env-shared authz graph, `OPENFGA_*` runtime-config delivery, DB role + backup |
+| Graphs          | `packages/graphs` definitions                                                        | execution host, routing, observability substrate where shared                                             |
+| Streams         | event contracts and consumers                                                        | Redis/SSE/WebSocket substrate where needed                                                                |
+| Storage         | bucket/object metadata expectations                                                  | object store, credentials, lifecycle policies                                                             |
+| Secrets         | key names and consumers                                                              | OpenBao values, ESO manifests, rotation path                                                              |
+| Gateway         | service ports and health routes                                                      | domain, TLS, Caddy/ingress, per-env route                                                                 |
+| Studio/Wizard   | node metadata and capabilities                                                       | operator UI, publish, flight, validation                                                                  |
 
 The invariant is: **node declares shape; operator wires environment**.
 

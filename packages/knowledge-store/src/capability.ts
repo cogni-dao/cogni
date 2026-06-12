@@ -138,6 +138,19 @@ export function createKnowledgeCapability(
         tags: c.tags ?? null,
       });
 
+      // Outgoing edges land in the SAME auto-commit as the entry. The port
+      // enforces CITATION_TARGET_EXISTS + EDGE_TYPE_MATCHES (a no-op for these
+      // non-hypothesis edges). Confidence recompute on the cited rows is the
+      // resolver's job, not inlined here.
+      for (const cite of params.citations ?? []) {
+        await port.addCitation({
+          citingId: entry.id,
+          citedId: cite.citedId,
+          citationType: cite.citationType,
+          context: cite.context ?? null,
+        });
+      }
+
       await port.commit(`knowledge: ${entry.sourceType} — ${entry.title}`);
       return toEntry(entry);
     },

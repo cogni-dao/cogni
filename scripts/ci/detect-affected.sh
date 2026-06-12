@@ -98,6 +98,14 @@ add_all_targets() {
   done
 }
 
+add_node_targets() {
+  local target
+
+  for target in "${NODE_TARGETS[@]}"; do
+    add_target "$target"
+  done
+}
+
 turbo_version_spec() {
   python3 - <<'PY'
 import json
@@ -194,6 +202,25 @@ catalog_target_from_path() {
   return 1
 }
 
+# Substrate machinery exercised on candidate-a by the node-substrate job. These
+# are not image-build inputs, so absent this rule a change to them selects no
+# target and the provisioning path goes unproven until a preview/prod promote.
+# deploy-infra.sh is excluded — candidate-flight never runs it. See docs/spec/ci-cd.md.
+is_substrate_machinery_input() {
+  local path="$1"
+
+  case "$path" in
+    scripts/ci/run-node-substrate.sh | \
+    scripts/ci/secret-materialize.sh | \
+    scripts/ci/reconcile-node-substrate.sh | \
+    scripts/setup/lib/reconcile-secrets.sh)
+      return 0
+      ;;
+  esac
+
+  return 1
+}
+
 is_global_build_input() {
   local path="$1"
 
@@ -257,6 +284,12 @@ else
       add_all_targets
       selection_reason="global-build-input:${path}"
       break
+    fi
+
+    if is_substrate_machinery_input "$path"; then
+      add_node_targets
+      selection_reason="substrate-machinery:${path}"
+      continue
     fi
 
     case "$path" in

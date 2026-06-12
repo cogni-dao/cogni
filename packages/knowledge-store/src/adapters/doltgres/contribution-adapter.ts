@@ -429,6 +429,28 @@ async function applyEdit(input: {
     return;
   }
 
+  if (edit.op === "cite") {
+    // Generic typed edge between two knowledge rows. Both endpoints must
+    // resolve on the branch — the citing row may have been inserted by an
+    // earlier edit in the same batch, so order inserts before the cites that
+    // reference them. `insertCitationRow` enforces CITATION_TARGET_EXISTS +
+    // EDGE_TYPE_MATCHES_CITED_ENTRY_TYPE (a no-op for these non-hypothesis
+    // edges) and is idempotent on duplicate.
+    await assertKnowledgeRowExists(conn, edit.citingId);
+    await insertCitationRow({
+      conn,
+      citingId: edit.citingId,
+      citedId: edit.citedId,
+      citationType: edit.citationType,
+      context: edit.context,
+    });
+    // Recompute the cited row's confidence inside the branch so the reviewer
+    // sees the supports/contradicts effect pre-merge (mirrors the EDO outcome
+    // path).
+    await recomputeConfidenceOnConn(conn, edit.citedId);
+    return;
+  }
+
   await assertDomainRegistered(conn, edit.entry.domain);
   const confidencePct =
     principal.kind === "agent" ? 30 : (edit.entry.confidencePct ?? 30);

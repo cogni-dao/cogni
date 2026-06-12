@@ -38,3 +38,7 @@ spec:
           selfHeal: true
         syncOptions:
           - CreateNamespace=true
+          # SSA makes Argo a field manager so a hand-edit to a live pod-template
+          # field (e.g. serviceAccountName) is reconciled by selfHeal, not left as
+          # an unmanaged field client-side 3-way merge can't see.
+          - ServerSideApply=true

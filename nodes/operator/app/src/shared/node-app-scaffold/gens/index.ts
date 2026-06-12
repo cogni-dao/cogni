@@ -20,7 +20,6 @@ export {
   renderNodeExternalSecret,
   renderNodeExternalSecretKustomization,
 } from "./external-secret";
-export { renderGitmodules } from "./gitmodules";
 export { nextFreeNodePort } from "./node-port";
 export { renderOverlay } from "./overlay";
 export { type RenderRepoSpecInput, renderRepoSpec } from "./repo-spec";

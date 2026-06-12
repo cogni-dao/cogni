@@ -1,0 +1,21 @@
+name: blue
+type: node
+port: 3200
+node_port: 31100
+dockerfile: nodes/blue/app/Dockerfile
+image_tag_suffix: "-blue"
+migrator_tag_suffix: "-blue-migrate"
+source_repo: https://github.com/Cogni-DAO/blue.git
+image_repository: ghcr.io/cogni-dao/blue
+# Accepted deploy SHA — catalog pin replacing the gitlink (CATALOG_SOURCE_SHA_IS_THE_DEPLOY_PIN).
+source_sha: 488d1053a0bb1d8be154f0032ea7c77fa5f0793c
+candidate_a_branch: deploy/candidate-a-blue
+preview_branch: deploy/preview-blue
+production_branch: deploy/production-blue
+# task.5017 — per-env node-set (deploy ⊆ provisioned). A wizard birth enters all
+# NODE_FORMATION_ENVS; this list is the catalog twin so render-node-appset.sh
+# renders exactly the births appset.ts generates. Trimming a node's reach is a
+# later catalog edit (drop an env here) once its envs are provisioned.
+envs: [candidate-a, preview, production]
+path_prefix: nodes/blue/
+node_id: da3777a6-1f33-463a-a73c-70924806da50

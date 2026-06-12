@@ -193,11 +193,15 @@ loki.process "k8s_pod_logs" {
     }
   }
 
-  // Namespace allowlist: keep cogni-*, argocd, kube-system; drop everything else.
-  // The file-layer glob is wide so control-plane logs reach the pipeline; this
-  // stage is the single gate deciding what actually ships to Loki.
+  // Namespace allowlist: keep cogni-*, argocd, kube-system, and the secret plane
+  // (openbao, external-secrets); drop everything else. The file-layer glob is wide
+  // so control-plane logs reach the pipeline; this stage is the single gate
+  // deciding what actually ships to Loki. bug.5011: openbao/external-secrets were
+  // dropped here, so OpenBao's seal/unseal log lines never reached Loki — the
+  // secret-plane outage was invisible. These pod logs are host-mounted
+  // (/var/log/pods), so the signal was always reachable; only this gate hid it.
   stage.match {
-    selector = "{namespace!~\"cogni-.*|argocd|kube-system\"}"
+    selector = "{namespace!~\"cogni-.*|argocd|kube-system|openbao|external-secrets\"}"
     action   = "drop"
   }
 

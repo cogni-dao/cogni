@@ -36,6 +36,12 @@ write_files:
 
   # k3s server config — disable traefik + servicelb (Caddy handles ingress).
   # k3s install script reads this automatically; no INSTALL_K3S_EXEC flags needed.
+  # HONEST_ALLOCATABLE (docs/research/2026-06-10-node-app-scaling-architecture.md):
+  # this VM co-hosts the Compose stack (~2.8GB) k3s can't see, so without a
+  # reservation k3s reports the full VM RAM as allocatable and over-commits
+  # node-app pods → silent OOM/crash-loop. system-reserved subtracts the Compose
+  # footprint so over-commit becomes an honest Pending; eviction-hard is the
+  # safety net. Templated — an infra-split app VM (no Compose on-box) sets it low.
   - path: /etc/rancher/k3s/config.yaml
     owner: root:root
     permissions: "0644"
@@ -43,6 +49,9 @@ write_files:
       disable:
         - traefik
         - servicelb
+      kubelet-arg:
+        - "system-reserved=memory=${system_reserved_memory}"
+        - "eviction-hard=memory.available<${eviction_hard_memory}"
 
   # k3s container registry config — node-level, all pods get access.
   # - ghcr.io: auth for private cogni images (simpler than per-Deployment

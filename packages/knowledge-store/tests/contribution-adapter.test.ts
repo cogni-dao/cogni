@@ -65,6 +65,19 @@ class FakeReservedSql {
       rows.count = 1;
       return rows;
     }
+    // cite-path lookups: both endpoints resolve, no incoming edges yet.
+    if (query.includes("SELECT 1 FROM knowledge WHERE id")) {
+      return [{ "?column?": 1 }];
+    }
+    if (query.includes("entry_type FROM knowledge")) {
+      return [{ entry_type: "finding" }];
+    }
+    if (query.includes("source_type FROM knowledge")) {
+      return [{ source_type: "external" }];
+    }
+    if (query.includes("citation_type FROM citations")) {
+      return [];
+    }
     if (query.includes("FROM knowledge_contribution_commits")) {
       return [
         {
@@ -228,6 +241,42 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
     expect(
       fake.conn.queries.some((query) =>
         query.includes("head_commit = 'head123'")
+      )
+    ).toBe(true);
+  });
+
+  it("applies a cite edit as a citations insert + cited-row confidence recompute", async () => {
+    const fake = new FakeSql();
+
+    await adapterFor(fake).appendCommit({
+      contributionId: "contrib-agent-1-abc123",
+      principal: { id: "agent-1", kind: "agent" },
+      message: "link synthesis to atom",
+      edits: [
+        {
+          op: "cite",
+          citingId: "oss-cap-eval-harness",
+          citedId: "oss-promptfoo",
+          citationType: "supports",
+        },
+      ],
+    });
+
+    expect(
+      fake.conn.queries.some(
+        (q) =>
+          q.includes("INSERT INTO citations") &&
+          q.includes("'oss-cap-eval-harness'") &&
+          q.includes("'oss-promptfoo'") &&
+          q.includes("'supports'")
+      )
+    ).toBe(true);
+    // the edge recomputes the cited row's confidence inside the branch
+    expect(
+      fake.conn.queries.some(
+        (q) =>
+          q.includes("UPDATE knowledge SET confidence_pct") &&
+          q.includes("'oss-promptfoo'")
       )
     ).toBe(true);
   });

@@ -30,14 +30,12 @@ has_target() {
   return 1
 }
 
-gitlink_sha_for_target() {
-  local target="$1" prefix path mode type sha _
-  prefix="${_image_tags_pathprefix_cache[$target]:-}"
-  [ -n "$prefix" ] || return 1
-  path="${prefix%/}"
-  read -r mode type sha _ < <(git ls-tree HEAD -- "$path")
-  [ "$mode" = "160000" ] || return 1
-  [ "$type" = "commit" ] || return 1
+# Accepted deploy SHA for a remote-source node: read the catalog `source_sha` pin
+# (CATALOG_SOURCE_SHA_IS_THE_DEPLOY_PIN) — no gitlink, no node-source checkout.
+catalog_source_sha_for_target() {
+  local target="$1" sha
+  sha="$(yq -N '.source_sha // ""' "${_image_tags_catalog_root}/${target}.yaml")"
+  [ -n "$sha" ] || return 1
   printf '%s' "$sha"
 }
 
@@ -97,8 +95,8 @@ while IFS= read -r path; do
       continue
     fi
 
-    source_sha="$(gitlink_sha_for_target "$target")" || {
-      echo "[ERROR] source SHA for remote-source artifact ${target} cannot be inferred; expected ${_image_tags_pathprefix_cache[$target]:-nodes/${target}/} to be a gitlink at HEAD" >&2
+    source_sha="$(catalog_source_sha_for_target "$target")" || {
+      echo "[ERROR] source_sha missing for remote-source artifact ${target}; set source_sha in infra/catalog/${target}.yaml (CATALOG_SOURCE_SHA_IS_THE_DEPLOY_PIN)" >&2
       exit 1
     }
     source_repo="$(source_repo_for_target "$target")"

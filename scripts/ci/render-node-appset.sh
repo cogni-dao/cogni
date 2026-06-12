@@ -26,7 +26,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-CATALOG_DIR="$REPO_ROOT/infra/catalog"
+# Overridable so the unit test can point at a fixture catalog (task.5017).
+CATALOG_DIR="${CATALOG_DIR:-$REPO_ROOT/infra/catalog}"
 ARGOCD_DIR="$REPO_ROOT/infra/k8s/argocd"
 KUSTOMIZATION="$ARGOCD_DIR/kustomization.yaml"
 # Single source of truth for the AppSet shape — shared byte-for-byte with the
@@ -44,6 +45,29 @@ deployable_nodes() {
   for f in "$CATALOG_DIR"/*.yaml; do
     [ "$(yq -r '.candidate_a_branch // ""' "$f")" != "" ] || continue
     yq -r '.name' "$f"
+  done | LC_ALL=C sort
+}
+
+# Deployable node slugs whose per-env node-set (`envs:`) includes $1, sorted.
+# task.5017 — deploy ⊆ provisioned: an env only deploys the nodes that list it.
+# A deployable row that omits `envs` (schema-required) is a hard error, not a
+# silent all-env fallback — fail loud so a missing field can't fan out to a VM
+# that never provisioned the node.
+deployable_nodes_for_env() {
+  local env="$1" f name envs
+  for f in "$CATALOG_DIR"/*.yaml; do
+    [ "$(yq -r '.candidate_a_branch // ""' "$f")" != "" ] || continue
+    name="$(yq -r '.name' "$f")"
+    if [ "$(yq -r 'has("envs")' "$f")" != "true" ]; then
+      echo "[ERROR] $f is deployable but has no 'envs' node-set (CATALOG_IS_SSOT)." >&2
+      exit 1
+    fi
+    # Capture into a here-string first: `yq | grep -q` would SIGPIPE yq the moment
+    # grep matches, and `set -o pipefail` would surface that 141 as failure —
+    # silently skipping the very nodes that DO claim the env.
+    envs="$(yq -r '.envs[]' "$f")"
+    grep -qxF "$env" <<<"$envs" || continue
+    printf '%s\n' "$name"
   done | LC_ALL=C sort
 }
 
@@ -66,7 +90,7 @@ render_kustomization_block() {
   local env node
   printf '%s\n' "$KBEGIN"
   for env in "${ENVS[@]}"; do
-    for node in $(deployable_nodes); do
+    for node in $(deployable_nodes_for_env "$env"); do
       printf '  - %s-%s-applicationset.yaml\n' "$env" "$node"
     done
   done
@@ -108,21 +132,38 @@ committed_kustomization_block() {
 }
 
 write() {
-  local env node count=0
+  local env node count=0 expected="" pruned=0 committed base env_owned
   for env in "${ENVS[@]}"; do
-    for node in $(deployable_nodes); do
+    for node in $(deployable_nodes_for_env "$env"); do
       render_one "$env" "$node" > "$(appset_path "$env" "$node")"
+      expected="$expected$(basename "$(appset_path "$env" "$node")")"$'\n'
       count=$((count + 1))
     done
   done
+  # Prune env-owned AppSets a node no longer claims (removed from its `envs:` set,
+  # or the row left the catalog) so `pnpm gen:node-appset` is self-healing and the
+  # bootstrap never fans a stale node out to a VM that didn't provision it.
+  for committed in "$ARGOCD_DIR"/*-applicationset.yaml; do
+    [ -e "$committed" ] || continue
+    base="$(basename "$committed")"
+    env_owned=0
+    for env in "${ENVS[@]}"; do
+      case "$base" in "$env"-*) env_owned=1 ;; esac
+    done
+    [ "$env_owned" -eq 1 ] || continue
+    if ! grep -qxF "$base" <<<"$expected"; then
+      rm -f "$committed"
+      pruned=$((pruned + 1))
+    fi
+  done
   write_kustomization
-  echo "Wrote $count per-node ApplicationSet files + bootstrap kustomization."
+  echo "Wrote $count per-node ApplicationSet files (pruned $pruned stale) + bootstrap kustomization."
 }
 
 check() {
   local env node path stale=0 expected="" committed
   for env in "${ENVS[@]}"; do
-    for node in $(deployable_nodes); do
+    for node in $(deployable_nodes_for_env "$env"); do
       path="$(appset_path "$env" "$node")"
       expected="$expected$(basename "$path")"$'\n'
       if [ ! -f "$path" ]; then

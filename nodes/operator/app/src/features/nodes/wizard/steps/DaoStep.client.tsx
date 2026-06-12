@@ -4,8 +4,9 @@
 /**
  * Module: `@features/nodes/wizard/steps/DaoStep.client`
  * Purpose: Inline DAO formation step — form + in-place phase checklist (no modal).
- * Scope: Reuses the untouched `useDAOFormation` hook + reducer; renders progress inline and
- *   persists the verified result to the node row, then refreshes so the shell morphs forward.
+ * Scope: Reuses the untouched `useDAOFormation` hook + reducer. On success it stops the wagmi
+ *   receipt polling (reset), shows an optimistic "advancing" state, persists the verified result,
+ *   then refreshes so the shell morphs forward — never parking on a frozen checklist.
  * Invariants: Wallet signing is the only external popup; all wizard progress is inline.
  * Side-effects: IO (useDAOFormation wallet txs, PATCH /api/v1/nodes/:id), React state
  * Links: src/features/setup/hooks/useDAOFormation.ts, src/features/nodes/wizard/PhaseList.tsx
@@ -15,17 +16,26 @@
 "use client";
 
 import { getTransactionExplorerUrl, toUiError } from "@cogni/node-shared";
-import { ExternalLink, Info } from "lucide-react";
+import { CheckCircle2, ExternalLink, Info, Loader2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { type ReactElement, useEffect, useRef, useState } from "react";
 import { isAddress } from "viem";
 import { useAccount, useChainId } from "wagmi";
 
-import { Button, HintText, Input, SectionCard } from "@/components";
+import { Button, HintText, Input } from "@/components";
 import { useDAOFormation } from "@/features/setup/hooks/useDAOFormation";
 
 import { type Phase, PhaseList, type PhaseState } from "../PhaseList";
+import { StepSection } from "../StepSection";
 import type { WizardStepProps } from "../types";
+
+/** Derive a valid token symbol (≤10 uppercase alphanumerics) from the node slug. */
+function symbolFromSlug(slug: string): string {
+  return slug
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "")
+    .slice(0, 10);
+}
 
 const DAO_PHASES: ReadonlyArray<{ key: string; label: string }> = [
   { key: "PREFLIGHT", label: "Checking network" },
@@ -42,10 +52,6 @@ const DAO_PHASES: ReadonlyArray<{ key: string; label: string }> = [
 const PHASE_ORDER = DAO_PHASES.map((p) => p.key);
 
 function phaseStateFor(currentPhase: string, phaseKey: string): PhaseState {
-  if (currentPhase === "ERROR") {
-    // Mark the phase that was active as errored; earlier phases as done.
-    return "pending";
-  }
   const currentIdx =
     currentPhase === "SUCCESS"
       ? PHASE_ORDER.length
@@ -60,13 +66,15 @@ export function DaoStep({ node }: WizardStepProps): ReactElement {
   const { address: walletAddress } = useAccount();
   const chainId = useChainId();
   const formation = useDAOFormation();
+  const { reset: resetFormation } = formation;
   const router = useRouter();
   const patchedRef = useRef(false);
 
-  const [tokenName, setTokenName] = useState("");
-  const [tokenSymbol, setTokenSymbol] = useState("");
+  const [tokenName, setTokenName] = useState(node.slug);
+  const [tokenSymbol, setTokenSymbol] = useState(symbolFromSlug(node.slug));
   const [initialHolder, setInitialHolder] = useState("");
   const [patchError, setPatchError] = useState<string | null>(null);
+  const [advancing, setAdvancing] = useState(false);
 
   const effectiveHolder = initialHolder || walletAddress || "";
   const isValidName = tokenName.length >= 1 && tokenName.length <= 50;
@@ -99,14 +107,19 @@ export function DaoStep({ node }: WizardStepProps): ReactElement {
     });
   };
 
-  // Persist the verified formation result, then refresh so the shell advances.
+  // On success: persist the verified result, stop wagmi receipt polling, then
+  // refresh so the shell advances. `advancing` keeps the UI on a clear "setting
+  // up" state (never the frozen checklist) and prevents the form from flashing
+  // back when reset() returns the reducer to IDLE.
   useEffect(() => {
     if (phase !== "SUCCESS") return;
     if (!formation.state.addresses) return;
     if (patchedRef.current) return;
     patchedRef.current = true;
+    setAdvancing(true);
 
-    const addresses = formation.state.addresses;
+    const { addresses, daoTxHash, signalTxHash, signalBlockNumber } =
+      formation.state;
     void (async () => {
       try {
         const res = await fetch(`/api/v1/nodes/${node.id}`, {
@@ -118,140 +131,154 @@ export function DaoStep({ node }: WizardStepProps): ReactElement {
             pluginAddress: addresses.plugin,
             signalAddress: addresses.signal,
             tokenAddress: addresses.token,
-            daoTxHash: formation.state.daoTxHash,
-            signalTxHash: formation.state.signalTxHash,
-            signalBlockNumber: formation.state.signalBlockNumber,
+            daoTxHash,
+            signalTxHash,
+            signalBlockNumber,
           }),
         });
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
           setPatchError(body?.reason ?? body?.error ?? `HTTP ${res.status}`);
+          setAdvancing(false);
+          patchedRef.current = false;
           return;
         }
+        resetFormation(); // stop wagmi receipt polling before the refresh
         router.refresh();
       } catch (e) {
         setPatchError(e instanceof Error ? e.message : "request failed");
+        setAdvancing(false);
+        patchedRef.current = false;
       }
     })();
-  }, [phase, formation.state, node.id, router]);
+  }, [phase, formation.state, node.id, router, resetFormation]);
 
-  const phases: Phase[] = DAO_PHASES.map((p) => ({
-    label: p.label,
-    state: phaseStateFor(phase, p.key),
-  }));
+  if (advancing) {
+    return (
+      <StepSection title="DAO created">
+        <div className="flex flex-col items-center gap-3 py-6 text-center">
+          <CheckCircle2 className="size-10 text-success" />
+          <div className="flex items-center gap-2 text-muted-foreground text-sm">
+            <Loader2 className="size-4 animate-spin" />
+            Setting up your app…
+          </div>
+        </div>
+      </StepSection>
+    );
+  }
+
+  if (isInFlight || phase === "SUCCESS") {
+    const phases: Phase[] = DAO_PHASES.map((p) => ({
+      label: p.label,
+      state: phaseStateFor(phase, p.key),
+    }));
+    return (
+      <StepSection title="Create DAO">
+        <PhaseList phases={phases} />
+        {explorerUrl && (
+          <a
+            href={explorerUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-primary text-sm hover:underline"
+          >
+            <span>View transaction</span>
+            <ExternalLink className="size-4" />
+          </a>
+        )}
+        <p className="text-muted-foreground text-xs">
+          Keep this tab open — confirm each wallet prompt as it appears.
+        </p>
+      </StepSection>
+    );
+  }
 
   return (
-    <SectionCard title="Create DAO">
-      {isIdle || isError ? (
-        <>
-          <div className="space-y-2">
-            <label
-              htmlFor="tokenName"
-              className="font-medium text-foreground text-sm"
-            >
-              Token Name
-            </label>
-            <Input
-              id="tokenName"
-              value={tokenName}
-              onChange={(e) => setTokenName(e.target.value)}
-              placeholder="e.g., Cogni Governance"
-            />
-            {tokenName && !isValidName && (
-              <p className="text-destructive text-sm">
-                Token name must be 1-50 characters
-              </p>
-            )}
-          </div>
+    <StepSection title="Create DAO">
+      <p className="text-muted-foreground text-sm">
+        Prefilled from your node name — edit if you like.
+      </p>
 
-          <div className="space-y-2">
-            <label
-              htmlFor="tokenSymbol"
-              className="font-medium text-foreground text-sm"
-            >
-              Token Symbol
-            </label>
-            <Input
-              id="tokenSymbol"
-              value={tokenSymbol}
-              onChange={(e) => setTokenSymbol(e.target.value.toUpperCase())}
-              placeholder="e.g., COGNI"
-            />
-            {tokenSymbol && !isValidSymbol && (
-              <p className="text-destructive text-sm">
-                Symbol must be 1-10 uppercase letters/numbers
-              </p>
-            )}
-          </div>
+      <div className="space-y-2">
+        <label
+          htmlFor="tokenName"
+          className="font-medium text-foreground text-sm"
+        >
+          Token Name
+        </label>
+        <Input
+          id="tokenName"
+          value={tokenName}
+          onChange={(e) => setTokenName(e.target.value)}
+          placeholder="e.g., Cogni Governance"
+        />
+        {tokenName && !isValidName && (
+          <p className="text-destructive text-sm">
+            Token name must be 1-50 characters
+          </p>
+        )}
+      </div>
 
-          <div className="space-y-2">
-            <label
-              htmlFor="initialHolder"
-              className="font-medium text-foreground text-sm"
-            >
-              Initial Token Holder
-            </label>
-            <Input
-              id="initialHolder"
-              value={initialHolder}
-              onChange={(e) => setInitialHolder(e.target.value)}
-              placeholder={walletAddress || "0x..."}
-            />
-            <p className="text-muted-foreground text-sm">
-              Defaults to your connected wallet if left empty
-            </p>
-            {initialHolder && !isValidHolder && (
-              <p className="text-destructive text-sm">
-                Invalid Ethereum address
-              </p>
-            )}
-          </div>
+      <div className="space-y-2">
+        <label
+          htmlFor="tokenSymbol"
+          className="font-medium text-foreground text-sm"
+        >
+          Token Symbol
+        </label>
+        <Input
+          id="tokenSymbol"
+          value={tokenSymbol}
+          onChange={(e) => setTokenSymbol(e.target.value.toUpperCase())}
+          placeholder="e.g., COGNI"
+        />
+        {tokenSymbol && !isValidSymbol && (
+          <p className="text-destructive text-sm">
+            Symbol must be 1-10 uppercase letters/numbers
+          </p>
+        )}
+      </div>
 
-          {isError && formation.state.errorMessage ? (
-            <p className="text-destructive text-sm">
-              {toUiError(formation.state.errorMessage).message}
-            </p>
-          ) : null}
+      <div className="space-y-2">
+        <label
+          htmlFor="initialHolder"
+          className="font-medium text-foreground text-sm"
+        >
+          Initial Token Holder
+        </label>
+        <Input
+          id="initialHolder"
+          value={initialHolder}
+          onChange={(e) => setInitialHolder(e.target.value)}
+          placeholder={walletAddress || "0x..."}
+        />
+        <p className="text-muted-foreground text-sm">
+          Defaults to your connected wallet if left empty
+        </p>
+        {initialHolder && !isValidHolder && (
+          <p className="text-destructive text-sm">Invalid Ethereum address</p>
+        )}
+      </div>
 
-          <Button
-            onClick={handleSubmit}
-            disabled={!canSubmit}
-            className="w-full"
-          >
-            {isError ? "Try again" : "Create DAO"}
-          </Button>
+      {isError && formation.state.errorMessage ? (
+        <p className="text-destructive text-sm">
+          {toUiError(formation.state.errorMessage).message}
+        </p>
+      ) : null}
 
-          {!formation.isSupported && (
-            <HintText icon={<Info size={16} />}>
-              Connect to Base or Sepolia to create a DAO
-            </HintText>
-          )}
-        </>
-      ) : (
-        <div className="space-y-5 py-2">
-          <PhaseList phases={phases} />
-          {explorerUrl && (
-            <a
-              href={explorerUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 text-primary text-sm hover:underline"
-            >
-              <span>View transaction</span>
-              <ExternalLink className="size-4" />
-            </a>
-          )}
-          {isInFlight && (
-            <p className="text-muted-foreground text-xs">
-              Keep this tab open — confirm each wallet prompt as it appears.
-            </p>
-          )}
-        </div>
+      <Button onClick={handleSubmit} disabled={!canSubmit} className="w-full">
+        {isError ? "Try again" : "Create DAO"}
+      </Button>
+
+      {!formation.isSupported && (
+        <HintText icon={<Info size={16} />}>
+          Connect to Base or Sepolia to create a DAO
+        </HintText>
       )}
 
       {patchError ? (
         <p className="text-destructive text-sm">{patchError}</p>
       ) : null}
-    </SectionCard>
+    </StepSection>
   );
 }

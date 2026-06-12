@@ -270,6 +270,7 @@ services:
       APP_DB_READONLY_PASSWORD: ${APP_DB_READONLY_PASSWORD:-}
       LITELLM_DB_NAME: litellm
       OPENFGA_DB_NAME: openfga
+      OPENFGA_DB_PASSWORD: ${OPENFGA_DB_PASSWORD}
     volumes:
       - ./postgres-init/provision.sh:/app/provision.sh:ro
     entrypoint: ["/bin/bash", "/app/provision.sh"]
@@ -290,7 +291,7 @@ services:
     command: migrate
     environment:
       - OPENFGA_DATASTORE_ENGINE=postgres
-      - OPENFGA_DATASTORE_URI=postgres://${POSTGRES_ROOT_USER}:${POSTGRES_ROOT_PASSWORD}@postgres:5432/openfga?sslmode=disable
+      - OPENFGA_DATASTORE_URI=postgres://openfga:${OPENFGA_DB_PASSWORD}@postgres:5432/openfga?sslmode=disable
     depends_on:
       postgres:
         condition: service_healthy
@@ -309,7 +310,7 @@ services:
     command: run
     environment:
       - OPENFGA_DATASTORE_ENGINE=postgres
-      - OPENFGA_DATASTORE_URI=postgres://${POSTGRES_ROOT_USER}:${POSTGRES_ROOT_PASSWORD}@postgres:5432/openfga?sslmode=disable
+      - OPENFGA_DATASTORE_URI=postgres://openfga:${OPENFGA_DB_PASSWORD}@postgres:5432/openfga?sslmode=disable
       - OPENFGA_LOG_FORMAT=json
       - OPENFGA_METRICS_ADDR=0.0.0.0:2112
       - OPENFGA_PLAYGROUND_ENABLED=false
@@ -673,7 +674,7 @@ services:
       # REQUIRED — the worker derives per-node Temporal task queues from UUID
       # entries (slugs are convenience aliases only). UUIDs must match each
       # node's .cogni/repo-spec.yaml node_id.
-      - COGNI_NODE_ENDPOINTS=operator=http://app:3000,resy=http://resy:3300,4ff8eac1-4eba-4ed0-931b-b1fe4f64713d=http://app:3000,f6d2a17d-b7f6-4ad1-a86b-f0ad2380999e=http://resy:3300
+      - COGNI_NODE_ENDPOINTS=operator=http://app:3000,4ff8eac1-4eba-4ed0-931b-b1fe4f64713d=http://app:3000
       - SCHEDULER_API_TOKEN=${SCHEDULER_API_TOKEN}
       # GitHub App credentials (optional — required only for GitHub ingestion)
       # Bare passthrough: passes empty string "" when var is unset in host env.

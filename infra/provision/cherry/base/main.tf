@@ -33,6 +33,8 @@ resource "cherryservers_server" "server" {
       cogni_repo_ref       = var.cogni_repo_ref
       sops_age_private_key = var.sops_age_private_key
       harden_script        = file("${path.module}/../harden-docker-public-ports.sh")
+      system_reserved_memory = var.system_reserved_memory
+      eviction_hard_memory   = var.eviction_hard_memory
     }))
     allow_reinstall = true
     

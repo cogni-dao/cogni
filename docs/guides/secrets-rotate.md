@@ -165,6 +165,26 @@ kubectl annotate externalsecret -n cogni-<env> <service>-env-secrets \
 
 Do all three in one change-window — a gap between steps 1/3 and step 2 is a live `28P01` window. **This manual lockstep is precisely the toil the migration eliminates:** after Phase 2, step 2 happens automatically on the next deploy (deploy-infra reads the role password from OpenBao); after Phase 3 (below) there is no static password to rotate at all.
 
+## Immutable init-bound credentials (converge, don't rotate)
+
+Some credentials are fixed when a stateful resource is **initialized** and have no in-place "set new password" operation afterward. For these, rotation as described above does not exist — there are only two moves: **converge** (make the OpenBao SSOT agree with the live resource) and **re-init** (destroy + recreate the resource, a data migration). Classify by custody, not by name: a value the catalog routes through OpenBao but whose live counterpart is set-once-at-init belongs to this class.
+
+The current instance is the **Doltgres superuser** (`DOLTGRES_PASSWORD`): Doltgres 0.56.3 has no `ALTER` for it and supports only one server-wide root password (no per-database superuser — `databases.md §5.2`), so it is necessarily one env-wide value fixed at volume init. Its SSOT is operator-canonical and stored — `cogni/<env>/operator/DOLTGRES_PASSWORD` — rendered into every node's `DOLTGRES_URL` (a derived value; see [`secrets-classification.md`](../spec/secrets-classification.md) § "DATABASE_URL / … — derived, not catalog") and read by the provisioners. It is **never re-derived** (re-deriving from `POSTGRES_ROOT_PASSWORD` is what drifted prod and caused the 2026-06-10 `28P01`).
+
+**Converge — the common case (restore/drift).** The live resource holds value `X`; make OpenBao agree. Non-destructive, zero data movement:
+
+```bash
+# Recover X from the running pod's env (the only authoritative place it survives),
+# then write it to the SSOT. Never print X to chat/logs/argv.
+# (Prereq: kubeconfig + BAO_ADDR/BAO_TOKEN per secrets-add-new.md §4.)
+X=$(kubectl -n cogni-<env> exec deploy/operator -- printenv DOLTGRES_URL \
+  | sed -E 's#^postgresql://[^:]+:([^@]+)@.*#\1#')
+printf '%s' "$X" | pnpm secrets:set <env> operator DOLTGRES_PASSWORD
+unset X
+```
+
+**Re-init — genuine re-key (rare, destructive).** Export data → destroy + recreate the resource with a new value (set the SSOT _first_) → re-import. This is a data migration, run from a maintenance runbook with the resource briefly unavailable — not a rotation. The Doltgres volume procedure lives in the database spec ([`databases.md`](../spec/databases.md)); prefer converge unless the old credential is genuinely compromised.
+
 ## Dynamic database credentials (the production endgame)
 
 For production DB access, the canonical pattern is **OpenBao DB engine dynamic credentials** — each application session requests a fresh, short-lived credential from OpenBao; the credential expires automatically; no static password exists.

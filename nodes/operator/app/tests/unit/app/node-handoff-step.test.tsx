@@ -88,12 +88,8 @@ describe("HandoffStep", () => {
   it("renders the launch pack with all four artifact links incl. Aragon DAO", () => {
     render(<HandoffStep node={makeNode()} />);
 
-    expect(screen.getByText("Launch pack ready.")).toBeVisible();
-    expect(
-      screen.getByText(
-        /your node is almost ready. copy paste this to your AI developer/
-      )
-    ).toBeVisible();
+    expect(screen.getByText("Ready for your AI developer")).toBeVisible();
+    expect(screen.getByText(/This is where development begins/)).toBeVisible();
     expect(screen.getByRole("link", { name: /Node repo/ })).toHaveAttribute(
       "href",
       "https://github.com/cogni-test-org/atlas"
@@ -114,7 +110,7 @@ describe("HandoffStep", () => {
     const copyButton = screen.getByRole("button", {
       name: "Copy launch prompt",
     });
-    expect(copyButton).toHaveTextContent("Copy agent prompt");
+    expect(copyButton).toHaveTextContent("Copy your AI-dev prompt");
     expect(
       copyButton.compareDocumentPosition(
         screen.getByRole("link", { name: /Node repo/ })
@@ -134,7 +130,7 @@ describe("HandoffStep", () => {
       />
     );
 
-    expect(screen.getByText("Launch pack ready.")).toBeVisible();
+    expect(screen.getByText("Ready for your AI developer")).toBeVisible();
     expect(
       screen.getByRole("button", { name: "Copy launch prompt" })
     ).toBeVisible();

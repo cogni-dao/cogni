@@ -3,13 +3,13 @@
 
 /**
  * Module: `@features/nodes/wizard/NodeWizard.client`
- * Purpose: The always-mounted node-setup shell — persistent rail + status-driven step, morphing
- *   in place so server `router.refresh()` advances the flow without a page reset.
- * Scope: Renders `WizardRail` + the `step-registry` entry for the server-given status inside
- *   `AnimatePresence`. Status (from the server row) is the only cursor — fully resumable.
+ * Purpose: The always-mounted node-setup shell — one bordered WizardFrame whose body morphs to the
+ *   status-driven step in place, so server `router.refresh()` advances the flow without a page reset.
+ * Scope: Renders `WizardFrame` (identity + rail + animated body) + the `step-registry` entry for the
+ *   server-given status inside `AnimatePresence`. Status (from the server row) is the only cursor.
  * Invariants: No client-held step index; reorder stages by editing `state-machine.ts` only.
  * Side-effects: none (steps own their own IO)
- * Links: ./WizardRail.tsx, ./step-registry.tsx, src/features/nodes/state-machine.ts
+ * Links: ./WizardFrame.tsx, ./step-registry.tsx, src/features/nodes/state-machine.ts
  * @public
  */
 
@@ -20,29 +20,33 @@ import type { ReactElement } from "react";
 
 import { WIZARD_STEP_REGISTRY } from "./step-registry";
 import type { WizardNode } from "./types";
-import { WizardRail } from "./WizardRail";
+import { WizardFrame } from "./WizardFrame";
 
 interface Props {
   readonly node: WizardNode;
+  readonly statusLabel: string;
 }
 
-export function NodeWizard({ node }: Props): ReactElement {
+export function NodeWizard({ node, statusLabel }: Props): ReactElement {
   const { Component } = WIZARD_STEP_REGISTRY[node.status];
 
   return (
-    <div className="space-y-6">
-      <WizardRail status={node.status} />
+    <WizardFrame
+      title={node.slug}
+      statusLabel={statusLabel}
+      status={node.status}
+    >
       <AnimatePresence mode="wait" initial={false}>
         <motion.div
           key={node.status}
-          initial={{ opacity: 0, y: 10 }}
+          initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -10 }}
-          transition={{ duration: 0.22, ease: "easeOut" }}
+          exit={{ opacity: 0, y: -8 }}
+          transition={{ duration: 0.2, ease: "easeOut" }}
         >
           <Component node={node} />
         </motion.div>
       </AnimatePresence>
-    </div>
+    </WizardFrame>
   );
 }

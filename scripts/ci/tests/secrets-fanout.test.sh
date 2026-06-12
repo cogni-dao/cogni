@@ -68,71 +68,71 @@ seeded()  { grep -qE "^$1\|$2\|" "$SEED_LOG"; }
 # ── Drive the fan-out for two nodes ───────────────────────────────────────────
 : >"$SEED_LOG"
 seed_node_app_secrets node-template
-seed_node_app_secrets canary
+seed_node_app_secrets oss
 seed_node_app_secrets poly
 
 # 1. AUTH_SECRET distinct per node (the headline isolation invariant).
-nt_auth=$(val_for node-template AUTH_SECRET); cn_auth=$(val_for canary AUTH_SECRET)
+nt_auth=$(val_for node-template AUTH_SECRET); cn_auth=$(val_for oss AUTH_SECRET)
 r=0; [[ -n "$nt_auth" && -n "$cn_auth" && "$nt_auth" != "$cn_auth" ]] || r=1
 assert "$r" "AUTH_SECRET distinct per node"
 
 # 2. CONNECTIONS_ENCRYPTION_KEY distinct per node (cross-node decryption isolation).
-nt_cek=$(val_for node-template CONNECTIONS_ENCRYPTION_KEY); cn_cek=$(val_for canary CONNECTIONS_ENCRYPTION_KEY)
+nt_cek=$(val_for node-template CONNECTIONS_ENCRYPTION_KEY); cn_cek=$(val_for oss CONNECTIONS_ENCRYPTION_KEY)
 r=0; [[ -n "$cn_cek" && "$nt_cek" != "$cn_cek" ]] || r=1
 assert "$r" "CONNECTIONS_ENCRYPTION_KEY distinct per node"
 
 # 3. derive-env binds the node's own FQDN.
 r=0; [[ "$(val_for node-template NEXTAUTH_URL)" == "https://node-template.test.cognidao.org" \
-   && "$(val_for canary NEXTAUTH_URL)" == "https://canary.test.cognidao.org" ]] || r=1
+   && "$(val_for oss NEXTAUTH_URL)" == "https://oss.test.cognidao.org" ]] || r=1
 assert "$r" "NEXTAUTH_URL binds per-node FQDN"
 
 # 4. DATABASE_URL binds the per-node database cogni_<node>.
 r=0; [[ "$(val_for node-template DATABASE_URL)" == *"/cogni_node_template?"* \
-   && "$(val_for canary DATABASE_URL)" == *"/cogni_canary?"* ]] || r=1
+   && "$(val_for oss DATABASE_URL)" == *"/cogni_oss?"* ]] || r=1
 assert "$r" "DATABASE_URL binds cogni_<node>"
 
 r=0; [[ "$(val_for node-template DOLTGRES_URL)" == postgresql://postgres:*"@10.0.0.1:5435/knowledge_node_template?sslmode=disable" \
-   && "$(val_for canary DOLTGRES_URL)" == postgresql://postgres:*"@10.0.0.1:5435/knowledge_canary?sslmode=disable" ]] || r=1
+   && "$(val_for oss DOLTGRES_URL)" == postgresql://postgres:*"@10.0.0.1:5435/knowledge_oss?sslmode=disable" ]] || r=1
 assert "$r" "DOLTGRES_URL binds knowledge_<node>"
 
 # 5. Custody: poly-pinned (service:poly) keys NEVER fan to a non-poly node.
-r=0; { seeded node-template POLY_WALLET_AEAD_KEY_HEX || seeded canary POLY_WALLET_AEAD_KEY_HEX; } && r=1
+r=0; { seeded node-template POLY_WALLET_AEAD_KEY_HEX || seeded oss POLY_WALLET_AEAD_KEY_HEX; } && r=1
 assert "$r" "POLY_WALLET_AEAD_KEY_HEX excluded from non-poly nodes"
-r=0; seeded canary POLYGON_RPC_URL && r=1
+r=0; seeded oss POLYGON_RPC_URL && r=1
 assert "$r" "POLYGON_RPC_URL excluded from non-poly nodes"
 
 # 5b. External integrations: web/llm reach every node; payments/service-pinned
 #     reach only poly (the dead-secrets wiring fix).
 r=0; [[ "$(val_for node-template GH_OAUTH_CLIENT_ID)" == "gh-oauth-id" \
-   && "$(val_for canary GH_OAUTH_CLIENT_ID)" == "gh-oauth-id" \
+   && "$(val_for oss GH_OAUTH_CLIENT_ID)" == "gh-oauth-id" \
    && "$(val_for poly GH_OAUTH_CLIENT_ID)" == "gh-oauth-id" ]] || r=1
 assert "$r" "GH_OAUTH_CLIENT_ID (appliesTo: web) reaches every node"
 r=0; [[ "$(val_for node-template TAVILY_API_KEY)" == "tvly-shared" \
    && "$(val_for poly TAVILY_API_KEY)" == "tvly-shared" ]] || r=1
 assert "$r" "TAVILY_API_KEY (appliesTo: llm) reaches every node"
-r=0; { seeded node-template PRIVY_APP_ID || seeded canary PRIVY_APP_ID; } && r=1
+r=0; { seeded node-template PRIVY_APP_ID || seeded oss PRIVY_APP_ID; } && r=1
 assert "$r" "PRIVY_APP_ID (appliesTo: payments) excluded from non-poly nodes"
 r=0; [[ "$(val_for poly PRIVY_APP_ID)" == "privy-app-id" ]] || r=1
 assert "$r" "PRIVY_APP_ID reaches poly"
-r=0; { seeded node-template PRIVY_USER_WALLETS_APP_ID || seeded canary PRIVY_USER_WALLETS_APP_ID; } && r=1
+r=0; { seeded node-template PRIVY_USER_WALLETS_APP_ID || seeded oss PRIVY_USER_WALLETS_APP_ID; } && r=1
 assert "$r" "PRIVY_USER_WALLETS_APP_ID (service: poly) excluded from non-poly nodes"
 r=0; [[ "$(val_for poly PRIVY_USER_WALLETS_APP_ID)" == "privy-uw-id" ]] || r=1
 assert "$r" "PRIVY_USER_WALLETS_APP_ID reaches poly"
 
 # 6. _shared key passes through identically (same LiteLLM master key all nodes).
 r=0; [[ "$(val_for node-template LITELLM_MASTER_KEY)" == "sk-cogni-shared-master" \
-   && "$(val_for canary LITELLM_MASTER_KEY)" == "sk-cogni-shared-master" ]] || r=1
+   && "$(val_for oss LITELLM_MASTER_KEY)" == "sk-cogni-shared-master" ]] || r=1
 assert "$r" "LITELLM_MASTER_KEY shared value across nodes"
 
 # 7. human passthrough identical across nodes.
-r=0; [[ "$(val_for node-template OPENROUTER_API_KEY)" == "$(val_for canary OPENROUTER_API_KEY)" ]] || r=1
+r=0; [[ "$(val_for node-template OPENROUTER_API_KEY)" == "$(val_for oss OPENROUTER_API_KEY)" ]] || r=1
 assert "$r" "OPENROUTER_API_KEY shared value across nodes"
 
 # 8. Idempotency: an existing OpenBao value is preserved (no churn → 0 restarts).
 bao_get_field() { if [[ "$2" == "AUTH_SECRET" ]]; then printf 'PRESERVED-EXISTING'; else printf ''; fi; }
 : >"$SEED_LOG"
-seed_node_app_secrets canary
-r=0; [[ "$(val_for canary AUTH_SECRET)" == "PRESERVED-EXISTING" ]] || r=1
+seed_node_app_secrets oss
+r=0; [[ "$(val_for oss AUTH_SECRET)" == "PRESERVED-EXISTING" ]] || r=1
 assert "$r" "existing OpenBao value preserved on re-run"
 
 # 9. Drift guard: every NODE_BASELINE_KEY is classifiable — in the catalog, or

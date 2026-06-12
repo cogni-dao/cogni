@@ -13,7 +13,7 @@ resources:
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/cogni-template
-    digest: "sha256:056f09653b051d6f52eaf28b99c25e513318aad02901b18e3ca120322693b2dc"
+    digest: "sha256:6a1d4db11bc0c0d3b22bdeaa7b1231048ab7ca4af3ac3af03e0b8cef5e2411bb"
 
 patches:
   # Patch ConfigMap with staging-specific values
@@ -60,26 +60,6 @@ patches:
         type: ExternalName
         externalName: cogni-preview.vm.cognidao.org
         clusterIP: null
-  - target: { kind: Service, name: poly-app }
-    patch: |
-      apiVersion: v1
-      kind: Service
-      metadata:
-        name: poly-app
-      spec:
-        type: ExternalName
-        externalName: cogni-preview.vm.cognidao.org
-        clusterIP: null
-  - target: { kind: Service, name: resy-app }
-    patch: |
-      apiVersion: v1
-      kind: Service
-      metadata:
-        name: resy-app
-      spec:
-        type: ExternalName
-        externalName: cogni-preview.vm.cognidao.org
-        clusterIP: null
   - target: { kind: EndpointSlice, name: temporal-1 }
     patch: |
       $patch: delete
@@ -101,17 +81,3 @@ patches:
       kind: EndpointSlice
       metadata:
         name: app-1
-  - target: { kind: EndpointSlice, name: poly-app-1 }
-    patch: |
-      $patch: delete
-      apiVersion: discovery.k8s.io/v1
-      kind: EndpointSlice
-      metadata:
-        name: poly-app-1
-  - target: { kind: EndpointSlice, name: resy-app-1 }
-    patch: |
-      $patch: delete
-      apiVersion: discovery.k8s.io/v1
-      kind: EndpointSlice
-      metadata:
-        name: resy-app-1
