@@ -106,22 +106,22 @@ Two orthogonal axes — keep them separate to avoid the recurring "is X a node?"
 
 ### Boot Seams Matrix
 
-| Capability          | Node Owns                        | Operator Provides      | Call Direction       | Self-Host Option |
-| ------------------- | -------------------------------- | ---------------------- | -------------------- | ---------------- |
-| App deployment      | Infra keys, deploy scripts       | —                      | —                    | Always self-host |
-| DAO wallet ops      | Wallet keys, signing             | —                      | —                    | Always self-host |
-| Incoming payments   | PaymentReceiver contract         | —                      | —                    | Always self-host |
-| AI inference (Node) | Provider keys, billing           | —                      | Node → Provider      | Always self-host |
-| PR code review      | Manual review                    | git-review-daemon      | Operator → Node repo | OSS standalone   |
-| Repo admin actions  | Manual via GitHub UI             | git-admin-daemon       | Operator → Node repo | OSS standalone   |
-| Repo-spec policy    | Authors `.cogni/repo-spec.yml`   | Consumes snapshot+hash | Operator reads Node  | —                |
-| Project manifests   | Authors `.cogni/projects/*.yaml` | Consumes snapshot+hash | Operator reads Node  | —                |
-| Cred scoring        | —                                | cognicred              | Operator internal    | vNext            |
+| Capability          | Node Owns                        | Operator Provides           | Call Direction       | Self-Host Option       |
+| ------------------- | -------------------------------- | --------------------------- | -------------------- | ---------------------- |
+| App deployment      | Infra keys, deploy scripts       | —                           | —                    | Always self-host       |
+| DAO wallet ops      | Wallet keys, signing             | —                           | —                    | Always self-host       |
+| Incoming payments   | PaymentReceiver contract         | —                           | —                    | Always self-host       |
+| AI inference (Node) | Provider keys, billing           | —                           | Node → Provider      | Always self-host       |
+| PR code review      | Manual review                    | in-process (cogni-operator) | Operator → Node repo | In-process on operator |
+| Repo admin actions  | Manual via GitHub UI             | git-admin-daemon            | Operator → Node repo | OSS standalone         |
+| Repo-spec policy    | Authors `.cogni/repo-spec.yml`   | Consumes snapshot+hash      | Operator reads Node  | —                      |
+| Project manifests   | Authors `.cogni/projects/*.yaml` | Consumes snapshot+hash      | Operator reads Node  | —                      |
+| Cred scoring        | —                                | cognicred                   | Operator internal    | vNext                  |
 
 **AI Inference Billing:**
 
 - Node-run inference: Node owns provider keys and pays directly
-- Operator-run services (git-review, etc.): Operator pays for inference as cost of service delivery
+- Operator-run services (in-process PR review, etc.): Operator pays for inference as cost of service delivery
 
 ### Dependency Rules — Code Imports (Compile-Time)
 
@@ -210,7 +210,7 @@ apps/
       features/             # Vertical slices
       contracts/            # Zod API contracts
 services/                   # Data plane - independently deployable
-  git-review-daemon/        # PR review (OSS standalone available)
+  # PR review runs in-process in the operator app (features/review/), not a separate daemon
   git-admin-daemon/         # Repo admin (OSS standalone available)
   cognicred/                # Cred scoring engine
   node-launcher/            # One-click Node deployment (vNext)
@@ -235,7 +235,7 @@ scripts/
 **Design Principle — Mirror Rails, Not Features:**
 Operator shares CI/CD, observability, deploy invariants, and hex architecture with Node. Only domain logic differs.
 
-**Self-Host Note:** Operator data plane services (git-review-daemon, git-admin-daemon) will be open-sourced as standalone deployables. Sovereign Nodes can run their own instances without any Cogni Operator account.
+**Self-Host Note:** PR review runs in-process in the operator app (`features/review/`); other operator data-plane services (git-admin-daemon) will be open-sourced as standalone deployables. Sovereign Nodes can run their own instances without any Cogni Operator account.
 
 ### Current State
 

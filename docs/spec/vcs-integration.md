@@ -20,16 +20,16 @@ tags: [infra, github, auth, services]
 
 ### Key References
 
-|                 |                                                                                 |                                        |
-| --------------- | ------------------------------------------------------------------------------- | -------------------------------------- |
-| **Project**     | [proj.vcs-integration](../../work/projects/proj.vcs-integration.md)             | Roadmap and planning                   |
-| **Spec**        | [Node vs Operator Contract](./node-operator-contract.md)                        | Node/Operator boundary, data plane     |
-| **Spec**        | [Attribution Ledger](./attribution-ledger.md)                                   | Activity ingestion via source adapters |
-| **Spec**        | [Services Architecture](./services-architecture.md)                             | Service contracts and boundaries       |
-| **Spec**        | [Packages Architecture](./packages-architecture.md)                             | Package contracts and boundaries       |
-| **Sister Repo** | [cogni-git-review](https://github.com/cogni-dao/cogni-git-review)               | PR review bot (to be absorbed)         |
-| **Sister Repo** | [cogni-git-admin](https://github.com/cogni-dao/cogni-git-admin)                 | DAO admin bot (to be absorbed)         |
-| **Sister Repo** | [cogni-proposal-launcher](https://github.com/Cogni-DAO/cogni-proposal-launcher) | Aragon proposal UI (to be absorbed)    |
+|                 |                                                                                 |                                                                                            |
+| --------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| **Project**     | [proj.vcs-integration](../../work/projects/proj.vcs-integration.md)             | Roadmap and planning                                                                       |
+| **Spec**        | [Node vs Operator Contract](./node-operator-contract.md)                        | Node/Operator boundary, data plane                                                         |
+| **Spec**        | [Attribution Ledger](./attribution-ledger.md)                                   | Activity ingestion via source adapters                                                     |
+| **Spec**        | [Services Architecture](./services-architecture.md)                             | Service contracts and boundaries                                                           |
+| **Spec**        | [Packages Architecture](./packages-architecture.md)                             | Package contracts and boundaries                                                           |
+| **Legacy Repo** | [cogni-git-review](https://github.com/cogni-dao/cogni-git-review)               | PR review bot — **absorbed**; review now in-process on cogni-operator (`features/review/`) |
+| **Sister Repo** | [cogni-git-admin](https://github.com/cogni-dao/cogni-git-admin)                 | DAO admin bot (to be absorbed)                                                             |
+| **Sister Repo** | [cogni-proposal-launcher](https://github.com/Cogni-DAO/cogni-proposal-launcher) | Aragon proposal UI (to be absorbed)                                                        |
 
 ## Design
 
@@ -241,7 +241,7 @@ services/git-daemon/
 
 ### Dropping Probot
 
-Both sister repos use [Probot](https://probot.github.io/). Probot provides:
+The legacy review/admin bots were built on [Probot](https://probot.github.io/). Probot provides:
 
 - GitHub App JWT ↔ installation token management
 - Webhook signature verification
@@ -675,7 +675,7 @@ The architecture is VCS-agnostic at the handler level:
 | Webhook endpoint     | `/api/v1/webhooks/github`      | `/api/v1/webhooks/gitlab`         |
 | Token storage        | Stateless (short-lived)        | Encrypted DB (2h expiry, refresh) |
 
-The cogni-git-review sister repo already has a `VcsProvider` interface abstracting over GitHub/GitLab. This pattern carries forward into the handlers.
+The legacy cogni-git-review prototype had a `VcsProvider` interface abstracting over GitHub/GitLab; that pattern carried forward into the operator's in-process review handlers (`features/review/`).
 
 ### Permission Matrix
 
@@ -775,7 +775,7 @@ Admin app variables are optional — a Node may install only the review app.
 ## Open Questions
 
 - [ ] Should `git-daemon` expose a gRPC or HTTP internal API for token provisioning to `scheduler-worker`, or should they share an in-process factory via a package import?
-- [ ] What is the migration path for existing cogni-git-review Probot installations? Do we maintain backward-compatible webhook URLs during transition?
+- [x] ~~What is the migration path for existing cogni-git-review Probot installations?~~ **Resolved**: review is in-process on cogni-operator; webhooks land on the operator App's `/api/internal/webhooks/github`. The standalone cogni-git-review Apps are retired — uninstall per [github-app-webhook-setup.md § Decommission](../guides/github-app-webhook-setup.md#decommission-the-standalone-review-app).
 - [ ] Should the admin app's authorization policy (DAO allowlist) live in the Node's DB or in a config file? DB is more dynamic; config file is simpler and auditable.
 - [ ] Rate limit strategy: should `github-core` implement token rotation across multiple installation tokens, or is single-installation rate limit (5000 req/hr) sufficient for V0?
 - [ ] Should the operator's node registry tables live in the same Postgres as the scheduler-worker (monorepo phase) or a separate database? Same DB is simpler; separate DB is cleaner for eventual extraction.

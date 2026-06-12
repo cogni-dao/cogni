@@ -20,18 +20,18 @@ tags: [governance, web3, review, dao, alchemy]
 
 ### Key References
 
-|             |                                                                                       |                                     |
-| ----------- | ------------------------------------------------------------------------------------- | ----------------------------------- |
-| **Project** | [proj.system-tenant-governance](../../work/projects/proj.system-tenant-governance.md) | Roadmap and planning                |
-| **Spec**    | [Signal Execution](./governance-signal-execution.md)                                  | As-built: webhook → RPC → action    |
-| **Spec**    | [DAO Enforcement](./dao-enforcement.md)                                               | Payment rails + repo-spec authority |
-| **Spec**    | [Chain Configuration](./chain-config.md)                                              | Chain ID constants and validation   |
-| **Spec**    | [Governance Scheduling](./governance-scheduling.md)                                   | Cron-based governance schedule sync |
-| **Design**  | [Governance Integration Crawl](../design/governance-integration-crawl.md)             | Architecture rationale              |
-| **Guide**   | [Alchemy Webhook Setup](../guides/alchemy-webhook-setup.md)                           | Local dev webhook configuration     |
-| **Source**  | [cogni-git-review](https://github.com/Cogni-DAO/cogni-git-review)                     | Standalone review bot (ported)      |
-| **Source**  | [cogni-git-admin](https://github.com/Cogni-DAO/cogni-git-admin)                       | Standalone signal executor (ported) |
-| **Source**  | [cogni-proposal-launcher](https://github.com/Cogni-DAO/cogni-proposal-launcher)       | Standalone proposal UI (ported)     |
+|             |                                                                                       |                                                                                                 |
+| ----------- | ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| **Project** | [proj.system-tenant-governance](../../work/projects/proj.system-tenant-governance.md) | Roadmap and planning                                                                            |
+| **Spec**    | [Signal Execution](./governance-signal-execution.md)                                  | As-built: webhook → RPC → action                                                                |
+| **Spec**    | [DAO Enforcement](./dao-enforcement.md)                                               | Payment rails + repo-spec authority                                                             |
+| **Spec**    | [Chain Configuration](./chain-config.md)                                              | Chain ID constants and validation                                                               |
+| **Spec**    | [Governance Scheduling](./governance-scheduling.md)                                   | Cron-based governance schedule sync                                                             |
+| **Design**  | [Governance Integration Crawl](../design/governance-integration-crawl.md)             | Architecture rationale                                                                          |
+| **Guide**   | [Alchemy Webhook Setup](../guides/alchemy-webhook-setup.md)                           | Local dev webhook configuration                                                                 |
+| **Source**  | [cogni-git-review](https://github.com/Cogni-DAO/cogni-git-review)                     | Legacy review bot — absorbed; review now runs in-process on cogni-operator (`features/review/`) |
+| **Source**  | [cogni-git-admin](https://github.com/Cogni-DAO/cogni-git-admin)                       | Standalone signal executor (ported)                                                             |
+| **Source**  | [cogni-proposal-launcher](https://github.com/Cogni-DAO/cogni-proposal-launcher)       | Standalone proposal UI (ported)                                                                 |
 
 ## Design
 
@@ -93,7 +93,7 @@ sequenceDiagram
 │                                                                     │
 │  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐  │
 │  │  PR REVIEW       │  │  PROPOSAL        │  │  SIGNAL          │  │
-│  │  (git-review)    │  │  LAUNCHER        │  │  EXECUTOR        │  │
+│  │  (in-process)    │  │  LAUNCHER        │  │  EXECUTOR        │  │
 │  │                  │  │  (proposal-      │  │  (git-admin)     │  │
 │  │  features/       │  │   launcher)      │  │                  │  │
 │  │   review/        │  │                  │  │  features/       │  │
@@ -169,7 +169,7 @@ All contract addresses, chain ID, and base URL are read from repo-spec at runtim
 
 ## Goal
 
-Consolidate the three standalone governance services (cogni-git-review, cogni-git-admin, cogni-proposal-launcher) into cogni-template as a single deployment, providing a complete DAO governance loop: automated PR review → on-chain proposal creation → vote execution → GitHub action — all controlled by `.cogni/repo-spec.yaml`.
+Consolidate the legacy standalone governance services into cogni-template as a single deployment, providing a complete DAO governance loop: automated PR review → on-chain proposal creation → vote execution → GitHub action — all controlled by `.cogni/repo-spec.yaml`. PR review is **done** — it runs in-process on cogni-operator (`features/review/`, retiring the standalone cogni-git-review bot); cogni-git-admin and cogni-proposal-launcher remain to be absorbed.
 
 ## Non-Goals
 
@@ -181,7 +181,7 @@ Consolidate the three standalone governance services (cogni-git-review, cogni-gi
 
 ## Invariants
 
-### Subsystem 1: PR Review (from cogni-git-review)
+### Subsystem 1: PR Review (in-process on cogni-operator)
 
 | Rule                      | Constraint                                                                                                                                                     |
 | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |

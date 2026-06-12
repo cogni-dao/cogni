@@ -16,14 +16,14 @@ tags: [github, webhooks, ingestion, review, setup]
 
 > One GitHub App per environment. Each app has one webhook URL — you cannot share an app across local/preview/production.
 
-| Environment            | App name                      | App ID    | Install ID  | Webhook URL                                                 | Install on                    |
-| ---------------------- | ----------------------------- | --------- | ----------- | ----------------------------------------------------------- | ----------------------------- |
-| Local dev              | `cogni-review-dev-<yourname>` | per-dev   | per-dev     | smee.io proxy (see below)                                   | your personal test repo       |
-| candidate/test         | `cogni-operator-test`         | `3956976` | `138046799` | `https://test.cognidao.org/api/internal/webhooks/github`    | all repos on `cogni-test-org` |
-| Preview review-only    | `cogni-git-review-preview`    | `2011345` | `87655574`  | `https://preview.cognidao.org/api/internal/webhooks/github` | selected preview repos        |
-| Production review-only | `cogni-git-review`            | `1761205` | `80293097`  | `https://cognidao.org/api/internal/webhooks/github`         | `Cogni-DAO/cogni`             |
-| Production operator    | `cogni-operator`              | `2994706` | `113665458` | `https://cognidao.org/api/internal/webhooks/github`         | all repos on `Cogni-DAO`      |
+| Environment    | App name                      | App ID    | Install ID  | Webhook URL                                              | Install on                    |
+| -------------- | ----------------------------- | --------- | ----------- | -------------------------------------------------------- | ----------------------------- |
+| Local dev      | `cogni-review-dev-<yourname>` | per-dev   | per-dev     | smee.io proxy (see below)                                | your personal test repo       |
+| candidate/test | `cogni-operator-test`         | `3956976` | `138046799` | `https://test.cognidao.org/api/internal/webhooks/github` | all repos on `cogni-test-org` |
+| production     | `cogni-operator`              | `2994706` | `113665458` | `https://cognidao.org/api/internal/webhooks/github`      | all repos on `Cogni-DAO`      |
 
+> **One App per deployed env.** PR review runs **in-process on `cogni-operator`** (`features/review/` + the `pr-review` LangGraph graph) — there is no separate standalone review App. The retired `cogni-git-review` (1761205) / `cogni-git-review-preview` (2011345) Apps are redundant; uninstall them (see [decommission](#decommission-the-standalone-review-app)). Only local dev still uses a personal review-only App for smee-proxied webhook testing.
+>
 > The webhook source path is `github` (`api/internal/webhooks/[source]/route.ts` → `source === "github"` reads `GH_WEBHOOK_SECRET`). Review is **payload-driven** — the operator reviews whatever installed repo sends a verified webhook; `GH_REPOS` scopes only the proactive pr-manager, not the review webhook.
 >
 > `Cogni-DAO/test-repo` is a legacy review-only fixture. It does not satisfy the
@@ -49,11 +49,12 @@ tags: [github, webhooks, ingestion, review, setup]
 
 3. **Permissions (Repository):**
 
-### Review-only App permissions
+### Review-only App permissions (local dev only)
 
-Use these for local dev and review-only preview/production Apps. They can receive webhooks,
-create check runs, review PRs, and drive PR-manager on already-installed repos. They do not mint
-node repos and they do not validate node GHCR packages.
+Use these for a personal local-dev App. It can receive webhooks, create check runs, review PRs, and
+drive PR-manager on already-installed repos. It does not mint node repos and does not validate node
+GHCR packages. Deployed envs do **not** use a standalone review App — review runs in-process on the
+operator App below.
 
 | Permission    | Access       | Why                                         |
 | ------------- | ------------ | ------------------------------------------- |
@@ -313,11 +314,29 @@ Expected: a non-empty array containing `sha-<sourceSha>`.
 
 ## Troubleshooting
 
-| Symptom                                                         | Fix                                                                                          |
-| --------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| 404 from webhook route                                          | `GH_WEBHOOK_SECRET` not set — add it and restart                                             |
-| 401 from webhook route                                          | Secret mismatch — compare app config vs env var                                              |
-| Check Run never appears                                         | App missing `checks:write` permission                                                        |
-| Review silently skipped                                         | `GH_REVIEW_APP_ID` or private key not configured                                             |
-| No smee forwarding                                              | `pnpm dev:smee` not running                                                                  |
-| Node-ref flight returns `source_missing` or `repo_spec_missing` | Confirm the requested child SHA exists and contains `.cogni/repo-spec.yaml` with the node id |
+| Symptom                                                         | Fix                                                                                                                                                             |
+| --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 404 from webhook route                                          | `GH_WEBHOOK_SECRET` not set — add it and restart                                                                                                                |
+| 401 from webhook route                                          | Secret mismatch — compare app config vs env var                                                                                                                 |
+| Steady `webhook verification failed` noise in prod              | A retired standalone review App is still installed and POSTing with its old secret — uninstall it (see [decommission](#decommission-the-standalone-review-app)) |
+| Check Run never appears                                         | App missing `checks:write` permission                                                                                                                           |
+| Review silently skipped                                         | `GH_REVIEW_APP_ID` or private key not configured                                                                                                                |
+| No smee forwarding                                              | `pnpm dev:smee` not running                                                                                                                                     |
+| Node-ref flight returns `source_missing` or `repo_spec_missing` | Confirm the requested child SHA exists and contains `.cogni/repo-spec.yaml` with the node id                                                                    |
+
+## Decommission the standalone review App
+
+PR review is now served **in-process by `cogni-operator`** (`features/review/` + the `pr-review`
+LangGraph graph), so the standalone `cogni-git-review` Apps are redundant. While still installed they
+keep POSTing to the operator's webhook URL with their old secret, which fails HMAC verification and
+floods logs with `webhook verification failed` (the source of the prod 401 noise). These are GitHub
+org-admin actions — they cannot be done from this repo:
+
+- [ ] **Uninstall** the production review App `cogni-git-review` (App `1761205`, install `80293097`):
+      `https://github.com/organizations/Cogni-DAO/settings/installations/80293097` → Uninstall.
+- [ ] **Decide on** the preview review App `cogni-git-review-preview` (App `2011345`, install `87655574`):
+      uninstall it too, or — if preview review is wanted — point preview at a preview `cogni-operator`
+      App instead of this standalone bot. `https://github.com/organizations/Cogni-DAO/settings/installations/87655574`.
+- [ ] **Archive** the sister repo `Cogni-DAO/cogni-git-review` (its handlers live on in `features/review/`).
+- [ ] Verify the noise stops: `{env="production"} |= "webhook verification failed"` in Loki should go quiet,
+      and real review keeps firing: `{env="production"} |= "PrReviewWorkflow started"`.
