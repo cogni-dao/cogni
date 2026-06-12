@@ -54,6 +54,7 @@ const envState = vi.hoisted(() => ({
     NODE_TEMPLATE_OWNER: "cogni-test-org",
     NODE_SUBMODULE_PARENT_OWNER: "cogni-test-org",
     NODE_SUBMODULE_PARENT_REPO: "cogni-monorepo",
+    NODE_CAPACITY_CEILING: 8,
   } as {
     GH_REVIEW_APP_ID?: string;
     GH_REVIEW_APP_PRIVATE_KEY_BASE64?: string;
@@ -61,6 +62,7 @@ const envState = vi.hoisted(() => ({
     NODE_TEMPLATE_OWNER?: string;
     NODE_SUBMODULE_PARENT_OWNER?: string;
     NODE_SUBMODULE_PARENT_REPO?: string;
+    NODE_CAPACITY_CEILING?: number;
     DOLTHUB_OWNER?: string;
     DOLTHUB_API_TOKEN?: string;
   },
@@ -70,6 +72,8 @@ const mockGetServerSessionUser = vi.hoisted(() => vi.fn());
 const mockEnsureDatabase = vi.hoisted(() => vi.fn());
 const mockForkFromTemplate = vi.hoisted(() => vi.fn());
 const mockOpenNodeSubmodulePr = vi.hoisted(() => vi.fn());
+const mockFetchFileText = vi.hoisted(() => vi.fn());
+const mockCountDeployedWizardNodes = vi.hoisted(() => vi.fn());
 const mockLogEvent = vi.hoisted(() => vi.fn());
 const mockLog = vi.hoisted(() => ({
   child: vi.fn().mockReturnThis(),
@@ -98,6 +102,8 @@ vi.mock("@/bootstrap/capabilities/node-repo-write", () => ({
   createNodeRepoWriter: () => ({
     forkFromTemplate: mockForkFromTemplate,
     openNodeSubmodulePr: mockOpenNodeSubmodulePr,
+    fetchFileText: mockFetchFileText,
+    countDeployedWizardNodes: mockCountDeployedWizardNodes,
   }),
 }));
 
@@ -207,6 +213,7 @@ describe("POST /api/v1/nodes/[id]/publish", () => {
       NODE_TEMPLATE_OWNER: "cogni-test-org",
       NODE_SUBMODULE_PARENT_OWNER: "cogni-test-org",
       NODE_SUBMODULE_PARENT_REPO: "cogni-monorepo",
+      NODE_CAPACITY_CEILING: 8,
       DOLTHUB_OWNER: "cogni-dao",
       DOLTHUB_API_TOKEN: "test-dolthub-token",
     };
@@ -228,6 +235,10 @@ describe("POST /api/v1/nodes/[id]/publish", () => {
       prNumber: 1532,
       prUrl: "https://github.com/cogni-test-org/cogni-monorepo/pull/1532",
     });
+    mockFetchFileText.mockReset();
+    mockCountDeployedWizardNodes.mockReset();
+    // Default: 0 deployed wizard nodes in the catalog → under the ceiling.
+    mockCountDeployedWizardNodes.mockResolvedValue(0);
     mockLogEvent.mockReset();
     mockLog.child.mockClear();
     mockLog.debug.mockClear();
@@ -350,6 +361,33 @@ describe("POST /api/v1/nodes/[id]/publish", () => {
         prNumber: 1532,
         prUrl: "https://github.com/cogni-test-org/cogni-monorepo/pull/1532",
       })
+    );
+  });
+
+  it("refuses to mint when the network is at the node-capacity ceiling", async () => {
+    mockCountDeployedWizardNodes.mockResolvedValue(8);
+
+    const response = await publishNode();
+    const body = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(body.error).toBe("network at node capacity");
+    expect(body.deployedNodeCount).toBe(8);
+    expect(body.ceiling).toBe(8);
+    expect(mockEnsureDatabase).not.toHaveBeenCalled();
+    expect(mockForkFromTemplate).not.toHaveBeenCalled();
+    expect(mockOpenNodeSubmodulePr).not.toHaveBeenCalled();
+    expect(mockLog.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "feature.node_publish.complete",
+        step: "check_capacity",
+        outcome: "error",
+        errorCode: "at_capacity",
+        status: 409,
+        deployedNodeCount: 8,
+        ceiling: 8,
+      }),
+      "feature.node_publish.complete"
     );
   });
 
