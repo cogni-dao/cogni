@@ -143,14 +143,25 @@ ESO + Reloader propagate the rollback the same way they propagate a forward rota
 
 ## Rotating a static DB role password (today — pre-dynamic-creds)
 
-DB **role** passwords (`app_user`, `app_service`, the readonly role, Doltgres `knowledge_reader`/`knowledge_writer`) are the one case where the zero-touch flow above does **not** apply yet. The role is created **set-once** by `db-provision` and never re-`ALTER`ed (Invariant 15 / bug.5002), so a plain `bao kv patch` of `DATABASE_URL` does **not** reach the live Postgres role — ESO would hand the pod a password the DB never adopted → `28P01`. Until Phase 2 of the DB-cred migration lands (`deploy-infra` reading role passwords from OpenBao — see [`secrets-management.md` → DB-credential provisioning](../spec/secrets-management.md)), rotating a static DB role password is a **deliberate, single-window two-source operation**:
+DB **role** passwords are not the same as API keys. The secret value lives in
+OpenBao, but the database role also has state. For paths now covered by the
+OpenBao read bridge (`deploy-infra` for shared infra DB roles and
+`reconcile-substrate` for per-node app/service roles), the owning deploy lever
+must read the OpenBao value and converge the role from that value. Never align a
+role to a rendered VM `.env` copy.
+
+For roles that are still set-once and not automatically ALTERed, a plain
+`bao kv patch` does **not** reach the live Postgres role by itself. ESO would
+hand the pod a password the DB never adopted -> `28P01`. Rotating one of those
+static DB credentials is a deliberate, single-window operation:
 
 ```bash
 # 1. Write the new password to OpenBao (the source of record).
 printf '%s' "$NEW" | pnpm secrets:set <env> <service> APP_DB_PASSWORD
 #    (also re-patch the composed DATABASE_URL key if your catalog stores it separately)
 
-# 2. Apply the SAME value to the live role yourself — it will NOT self-heal.
+# 2. Apply the SAME value through the owning deploy/reconcile lever, or to the
+#    live role yourself if no lever owns that role yet. It will NOT self-heal.
 #    Use the OpenBao value you just wrote (you are the single writer this window),
 #    via the superuser socket on the VM. NOT a divergent .env value (that is bug.5002).
 ssh <vm> 'docker compose exec -T postgres \
@@ -163,7 +174,11 @@ kubectl annotate externalsecret -n cogni-<env> <service>-env-secrets \
   force-sync=$(date +%s) --overwrite
 ```
 
-Do all three in one change-window — a gap between steps 1/3 and step 2 is a live `28P01` window. **This manual lockstep is precisely the toil the migration eliminates:** after Phase 2, step 2 happens automatically on the next deploy (deploy-infra reads the role password from OpenBao); after Phase 3 (below) there is no static password to rotate at all.
+Do all three in one change-window — a gap between steps 1/3 and step 2 is a live
+`28P01` window. **This manual lockstep is precisely the toil the migration is
+eliminating:** covered roles converge from OpenBao on their owning deploy path;
+after dynamic DB credentials land (below), there is no static password to rotate
+at all.
 
 ## Immutable init-bound credentials (converge, don't rotate)
 

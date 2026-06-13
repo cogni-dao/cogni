@@ -86,6 +86,9 @@ patches:
         path: /spec/template/spec/initContainers/0/envFrom/1/secretRef/name
         value: "operator-env-secrets"
       - op: add
+        path: /spec/template/spec/serviceAccountName
+        value: "default"
+      - op: add
         path: /spec/selector/matchLabels/app.kubernetes.io~1instance
         value: "operator"
       - op: add

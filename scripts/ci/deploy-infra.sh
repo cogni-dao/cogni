@@ -552,6 +552,11 @@ log_error() {
     echo -e "\033[0;31m[ERROR]\033[0m $1"
 }
 
+log_fatal() {
+    echo -e "\033[0;31m[FATAL]\033[0m $1" >&2
+    exit 1
+}
+
 # Emit deployment event to Grafana Cloud Loki (remote script)
 emit_deployment_event() {
   local event="$1"
@@ -706,44 +711,128 @@ previous_runtime_env_value() {
 PREVIOUS_OPENFGA_AUTHORIZATION_MODEL_ID="$(previous_runtime_env_value OPENFGA_AUTHORIZATION_MODEL_ID)"
 PREVIOUS_OPENFGA_AUTHORIZATION_MODEL_HASH="$(previous_runtime_env_value OPENFGA_AUTHORIZATION_MODEL_HASH)"
 
-# OpenFGA DB password is OpenBao-custodied (Invariant 15) — it provisions the
-# openfga login role + backs the datastore DSN. Source it here, the same env-wide
-# ${DEPLOY_ENVIRONMENT}-db-reader seam the per-node loop uses (read-only k8s-auth
-# token; value never echoed), from the service's own path cogni/<env>/openfga.
-# The openfga Compose service reads it from the rendered .env below — it never
-# reads OpenBao directly. Empty (unseeded / OpenBao sealed) → provision.sh fails
-# loud at the role step; we never fall back to root.
-OPENFGA_DB_PASSWORD="$(
-  jwt="$(timeout 10 kubectl create token db-provisioner -n default 2>/dev/null || true)"
-  [ -n "$jwt" ] || exit 0
-  tok="$(timeout 10 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
-    bao write -field=token auth/kubernetes/login \
-    "role=${DEPLOY_ENVIRONMENT}-db-reader" "jwt=${jwt}" 2>/dev/null || true)"
-  [ -n "$tok" ] || exit 0
-  timeout 10 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
-    BAO_TOKEN="${tok}" bao kv get -field=OPENFGA_DB_PASSWORD "cogni/${DEPLOY_ENVIRONMENT}/openfga" 2>/dev/null || true
-)"
-export OPENFGA_DB_PASSWORD
+DB_READER_TOKEN=""
+mint_db_reader_token() {
+  if [[ -n "$DB_READER_TOKEN" ]]; then
+    printf '%s\n' "$DB_READER_TOKEN"
+    return 0
+  fi
 
-# Temporal DB password is OpenBao-custodied (Invariant 15) — same rationale as
-# OPENFGA_DB_PASSWORD above: it backs the shared `temporal` login role + the
-# Temporal datastore DSN. Source it from the same ${DEPLOY_ENVIRONMENT}-db-reader
-# seam, from the shared-infra path cogni/<env>/_shared (temporal is owned by no
-# node). The Temporal Compose service reads it from the rendered .env below — it
-# never reads OpenBao directly. Empty (unseeded / OpenBao sealed) → provision.sh
-# fails loud at the role step; we never fall back to a stale GH-env value (the
-# 28P01 drift that wedged prod 2026-06-11).
-TEMPORAL_DB_PASSWORD="$(
-  jwt="$(timeout 10 kubectl create token db-provisioner -n default 2>/dev/null || true)"
-  [ -n "$jwt" ] || exit 0
+  local jwt tok
+  jwt="$(timeout 10 kubectl create token db-provisioner -n default 2>/dev/null)" || return 1
   tok="$(timeout 10 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
     bao write -field=token auth/kubernetes/login \
-    "role=${DEPLOY_ENVIRONMENT}-db-reader" "jwt=${jwt}" 2>/dev/null || true)"
-  [ -n "$tok" ] || exit 0
+    "role=${DEPLOY_ENVIRONMENT}-db-reader" "jwt=${jwt}" 2>/dev/null)" || return 1
+  [[ -n "$tok" ]] || return 1
+  DB_READER_TOKEN="$tok"
+  printf '%s\n' "$DB_READER_TOKEN"
+}
+
+openbao_get_field() {
+  local svc="$1" key="$2" tok
+  tok="$(mint_db_reader_token)" || return 1
   timeout 10 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
-    BAO_TOKEN="${tok}" bao kv get -field=TEMPORAL_DB_PASSWORD "cogni/${DEPLOY_ENVIRONMENT}/_shared" 2>/dev/null || true
-)"
-export TEMPORAL_DB_PASSWORD
+    BAO_TOKEN="${tok}" bao kv get -field="$key" "cogni/${DEPLOY_ENVIRONMENT}/${svc}" 2>/dev/null || true
+}
+
+OPENBAO_RUNTIME_SSOT=false
+operator_eso_target_exists() {
+  command -v kubectl >/dev/null 2>&1 || return 1
+  kubectl -n "cogni-${DEPLOY_ENVIRONMENT}" get secret operator-env-secrets >/dev/null 2>&1
+}
+
+if operator_eso_target_exists; then
+  OPENBAO_RUNTIME_SSOT=true
+  log_info "operator-env-secrets exists; rendering runtime secrets from OpenBao SSoT"
+else
+  log_warn "operator-env-secrets not present; using workflow env values for fresh-env compatibility"
+fi
+
+source_openbao_runtime_key() {
+  local mode="$1" key="$2" svc value
+  shift 2
+  "$OPENBAO_RUNTIME_SSOT" || return 0
+  for svc in "$@"; do
+    value="$(openbao_get_field "$svc" "$key" || true)"
+    if [[ -n "$value" ]]; then
+      export "${key}=${value}"
+      log_info "  sourced ${key} from OpenBao cogni/${DEPLOY_ENVIRONMENT}/${svc}"
+      return 0
+    fi
+  done
+  if [[ "$mode" == "required" ]]; then
+    log_fatal "OpenBao runtime SSoT is active, but ${key} is absent from expected path(s): $*"
+  fi
+  return 0
+}
+
+source_operator_database_service_url() {
+  "$OPENBAO_RUNTIME_SSOT" || return 0
+  OPERATOR_DATABASE_SERVICE_URL="$(openbao_get_field operator DATABASE_SERVICE_URL || true)"
+  [[ -n "$OPERATOR_DATABASE_SERVICE_URL" ]] \
+    || log_fatal "OpenBao runtime SSoT is active, but operator DATABASE_SERVICE_URL is absent"
+  export OPERATOR_DATABASE_SERVICE_URL
+  log_info "  sourced scheduler-worker ledger DATABASE_URL from operator OpenBao SSoT"
+}
+
+# Established ESO environments render Compose .env, bridge Secrets, and the
+# GitHub App webhook sync from OpenBao, not GitHub Environment secret input.
+for key in \
+  AUTH_SECRET \
+  LITELLM_MASTER_KEY \
+  OPENROUTER_API_KEY \
+  SCHEDULER_API_TOKEN \
+  BILLING_INGEST_TOKEN \
+  INTERNAL_OPS_TOKEN \
+  GH_WEBHOOK_SECRET; do
+  source_openbao_runtime_key required "$key" operator node-template _shared
+done
+source_operator_database_service_url
+source_openbao_runtime_key required OPENFGA_DB_PASSWORD openfga
+source_openbao_runtime_key required TEMPORAL_DB_PASSWORD _shared
+
+for key in \
+  METRICS_TOKEN \
+  CONNECTIONS_ENCRYPTION_KEY \
+  POSTHOG_API_KEY \
+  POSTHOG_HOST \
+  EVM_RPC_URL \
+  POLYGON_RPC_URL \
+  TAVILY_API_KEY \
+  LANGFUSE_PUBLIC_KEY \
+  LANGFUSE_SECRET_KEY \
+  LANGFUSE_BASE_URL \
+  GH_REVIEW_APP_ID \
+  GH_REVIEW_APP_PRIVATE_KEY_BASE64 \
+  GH_OAUTH_CLIENT_ID \
+  GH_OAUTH_CLIENT_SECRET \
+  DISCORD_OAUTH_CLIENT_ID \
+  DISCORD_OAUTH_CLIENT_SECRET \
+  GOOGLE_OAUTH_CLIENT_ID \
+  GOOGLE_OAUTH_CLIENT_SECRET \
+  DOLTHUB_OWNER \
+  DOLT_CREDS_JWK \
+  DOLT_CREDS_KEYID \
+  DOLTHUB_API_TOKEN \
+  DOLTHUB_OAUTH_CLIENT_ID \
+  DOLTHUB_OAUTH_CLIENT_SECRET \
+  PRIVY_APP_ID \
+  PRIVY_APP_SECRET \
+  PRIVY_SIGNING_KEY \
+  PRIVY_USER_WALLETS_APP_ID \
+  PRIVY_USER_WALLETS_APP_SECRET \
+  PRIVY_USER_WALLETS_SIGNING_KEY \
+  POLY_WALLET_AEAD_KEY_HEX \
+  POLY_WALLET_AEAD_KEY_ID \
+  POLY_CLOB_GEO_BLOCK_TOKEN; do
+  source_openbao_runtime_key optional "$key" operator node-template _shared
+done
+
+# OpenFGA and Temporal DB passwords are OpenBao-custodied (Invariant 15). In
+# established ESO mode the required source_openbao_runtime_key calls above render
+# them from OpenBao and fail before Compose if OpenBao is sealed or unseeded. In
+# fresh/plain-Secret bootstrap mode, keep the workflow env values until the ESO
+# target exists.
 
 cat > "$RUNTIME_ENV" << ENV_EOF
 # Required vars
@@ -901,14 +990,7 @@ printf '%s=%s\n' APP_DB_READONLY_PASSWORD "$APP_DB_READONLY_PASSWORD" >> "$RUNTI
 # OpenBao has not seeded yet (first provision, pre-materialize). The reader/writer
 # roles are CREATEd fresh each provision (ALTERable, not the superuser) — left derived.
 DOLTGRES_PASSWORD_SSOT="$(
-  jwt="$(timeout 10 kubectl create token db-provisioner -n default 2>/dev/null || true)"
-  [ -n "$jwt" ] || exit 0
-  tok="$(timeout 10 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
-    bao write -field=token auth/kubernetes/login \
-    "role=${DEPLOY_ENVIRONMENT}-db-reader" "jwt=${jwt}" 2>/dev/null || true)"
-  [ -n "$tok" ] || exit 0
-  timeout 10 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
-    BAO_TOKEN="${tok}" bao kv get -field=DOLTGRES_PASSWORD "cogni/${DEPLOY_ENVIRONMENT}/operator" 2>/dev/null || true
+  openbao_get_field operator DOLTGRES_PASSWORD || true
 )"
 if [ -n "$DOLTGRES_PASSWORD_SSOT" ]; then
   DOLTGRES_PASSWORD="$DOLTGRES_PASSWORD_SSOT"
@@ -1666,7 +1748,7 @@ SECEOF
   # parity with SCHEDULER_WORKER_KEYS in scripts/setup/lib/reconcile-secrets.sh.)
   SECRET_FILE=$(mktemp)
   cat > "$SECRET_FILE" <<SECEOF
-DATABASE_URL=postgresql://${APP_DB_SERVICE_USER}:${APP_DB_SERVICE_PASSWORD}@${HOST_IP}:5432/cogni_operator?sslmode=disable
+DATABASE_URL=${OPERATOR_DATABASE_SERVICE_URL:-postgresql://${APP_DB_SERVICE_USER}:${APP_DB_SERVICE_PASSWORD}@${HOST_IP}:5432/cogni_operator?sslmode=disable}
 SCHEDULER_API_TOKEN=${SCHEDULER_API_TOKEN:-}
 INTERNAL_OPS_TOKEN=${INTERNAL_OPS_TOKEN:-}
 COGNI_NODE_DBS=${COGNI_NODE_DBS:-}
@@ -1700,6 +1782,9 @@ SECEOF
      GH_WEBHOOK_SECRET="${GH_WEBHOOK_SECRET:-}" \
      bash /tmp/sync-app-webhook-secret.sh; then
     log_info "  GitHub App webhook secret synced (pod ↔ App)"
+  elif [[ "${OPENBAO_RUNTIME_SSOT:-false}" == "true" ]]; then
+    log_error "  GitHub App webhook secret sync FAILED in OpenBao SSoT mode — refusing a silent webhook mismatch"
+    exit 1
   else
     log_warn "  GitHub App webhook secret sync FAILED — webhooks will fail verification until resolved"
   fi
@@ -2103,6 +2188,7 @@ REMOTE_ENV_VARS=(
   CONNECTIONS_ENCRYPTION_KEY COGNI_NODE_DBS NODE_APP_TARGETS EDGE_ENV_LINES
   LITELLM_NODE_ENDPOINTS COGNI_DEFAULT_NODE_ID ACTIONS_AUTOMATION_BOT_PAT
   LITELLM_IMAGE OPENFGA_IMAGE COMMIT_SHA DEPLOY_ACTOR K8S_SECRETS_ONLY
+  OPERATOR_DATABASE_SERVICE_URL
 )
 REMOTE_ENV_FILE="$ARTIFACT_DIR/deploy-infra-env.sh"
 : > "$REMOTE_ENV_FILE"

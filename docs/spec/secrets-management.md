@@ -45,7 +45,15 @@ A human or AI agent can declare a new secret, rotate an existing secret, or revo
 
 - Encrypted-secrets-in-git patterns (Sealed Secrets, SOPS+ksops). Rejected — see `proj.security-hardening` Design Notes.
 - Multi-tenant SaaS KMS (Tier-2). See `task.5051` under `proj.operator-plane`.
-- Compose-runtime secret migration **for non-DB service config** (LiteLLM, Temporal, Caddy). Compose services keep `.env` for these until they migrate to k3s. **Now in scope (the exception):** the pod-consumed **DB role passwords** — OpenBao-owned per Invariant 15 — whose Compose-side provisioner is being migrated to read from OpenBao instead of a GitHub-secret `.env` (see [DB-credential provisioning](#db-credential-provisioning--the-composek8s-boundary-bug5002-invariant-15)).
+- Full Compose-runtime secret elimination via Bao Agent or k3s migration. Compose
+  services still read rendered `.env` files, but established ESO environments
+  must render runtime values from OpenBao rather than GitHub env secrets. **Now in
+  scope:** the pod-consumed **DB role passwords** and critical shared runtime
+  values (`LITELLM_MASTER_KEY`, `OPENROUTER_API_KEY`, `GH_WEBHOOK_SECRET`,
+  `OPENFGA_DB_PASSWORD`, `TEMPORAL_DB_PASSWORD`, and scheduler-worker's operator
+  ledger DSN) whose Compose / bridge renderers must read OpenBao instead of a
+  GitHub-secret `.env` (see
+  [DB-credential provisioning](#db-credential-provisioning--the-composek8s-boundary-bug5002-invariant-15)).
 
 ---
 
