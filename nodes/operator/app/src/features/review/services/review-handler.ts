@@ -162,7 +162,7 @@ export async function handlePrReview(
     // 7. Build DAO deep link (for Check Run "View Details" page)
     const daoBaseUrl = (() => {
       const dao = extractDaoConfig(repoSpec);
-      if (!dao) return undefined;
+      if (!dao?.base_url) return undefined;
 
       try {
         const url = new URL("/propose/merge", dao.base_url);
