@@ -8,7 +8,6 @@ namespace: cogni-production
 resources:
   - ../../../base/node-app
   - ../../../base/openfga-external
-  - ../../../../../nodes/operator/k8s/external-secrets/production
 
 namePrefix: operator-
 
