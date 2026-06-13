@@ -261,7 +261,7 @@ vNext (filed against `proj.agentic-fork-bootstrap`, not gating today's bootstrap
 ```
 | 5 | Grafana/Loki query auth              | GET <GRAFANA_URL>/api/datasources                            | <code> | self-trace at marker   |  vNext  |
 | 6 | Knowledge entry write (cogni-side)   | once node-template adopts a doltgres-schema package          | <code> | dolt_log entry          |  vNext  |
-| 7 | Operator GH App integration          | POST /api/v1/vcs/flight {prNumber:<n>}                       | <code> | flight dispatched      |  vNext  |
+| 7 | Operator deploy-plane integration    | POST /api/v1/vcs/flight {nodeRef:{nodeId,sourceSha}}          | <code> | flight dispatched      |  vNext  |
 ```
 
 A 🟢 row requires (a) the HTTP status matches the contract AND (b) a feature-specific Loki line tied to the same exercise window — generic `request received` traffic is 🟡 at best. No-Loki environments are 🟡 with `no-grafana-data-available`, not 🟢.
