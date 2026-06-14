@@ -75,7 +75,7 @@ run_case() {
 
   local map_file="${TMPROOT}/map-${RANDOM}.json"
   cat >"$map_file" <<EOF
-{ "poly": "${EXPECTED}" }
+{ "operator": "${EXPECTED}" }
 EOF
 
   set +e
@@ -118,7 +118,7 @@ DIR4=$(mktemp -d --tmpdir="$TMPROOT" case4.XXXX)
 printf '{"version":"%s","buildTime":"t"}' "$EXPECTED" >"${DIR4}/1.json"
 run_case "no-buildSha-field-fails" "$DIR4" 1 3 1 || exit 1
 
-# --- Case 5: map has operator + poly; NODES=poly → operator must not be probed ---
+# --- Case 5: map has operator + node-template; NODES=node-template → operator must not be probed ---
 # If verify ignored NODES, it would expect operator=STALE while fake curl always
 # returns EXPECTED → timeout failure.
 DIR5=$(mktemp -d --tmpdir="$TMPROOT" case5.XXXX)
@@ -126,20 +126,20 @@ printf '{"version":"0.1.0","buildSha":"%s","buildTime":"t"}' "$EXPECTED" >"${DIR
 fake5=$(make_fake_curl "$DIR5")
 map5="${TMPROOT}/map5.json"
 cat >"$map5" <<EOF
-{ "operator": "${STALE}", "poly": "${EXPECTED}" }
+{ "operator": "${STALE}", "node-template": "${EXPECTED}" }
 EOF
 set +e
 CURL_CMD="$fake5" CUTOVER_TIMEOUT=10 CUTOVER_SLEEP=1 \
-  DOMAIN="example.test" SOURCE_SHA_MAP="$map5" NODES="poly" \
+  DOMAIN="example.test" SOURCE_SHA_MAP="$map5" NODES="node-template" \
   bash "$VERIFY_SCRIPT" >"${TMPROOT}/out-case5.log" 2>&1
 ex5=$?
 set -e
 if [ "$ex5" -ne 0 ]; then
-  echo "[FAIL] map+NODES=poly: expected exit 0, got ${ex5}"
+  echo "[FAIL] map+NODES=node-template: expected exit 0, got ${ex5}"
   cat "${TMPROOT}/out-case5.log"
   exit 1
 fi
-echo "[PASS] map-restricted-to-NODES-poly-only"
+echo "[PASS] map-restricted-to-NODES-node-template-only"
 
 # --- Case 6: NODES lists app absent from map → fail fast ---
 DIR6=$(mktemp -d --tmpdir="$TMPROOT" case6.XXXX)
@@ -147,7 +147,7 @@ printf '{"version":"0.1.0","buildSha":"%s","buildTime":"t"}' "$EXPECTED" >"${DIR
 fake6=$(make_fake_curl "$DIR6")
 map6="${TMPROOT}/map6.json"
 cat >"$map6" <<EOF
-{ "poly": "${EXPECTED}" }
+{ "operator": "${EXPECTED}" }
 EOF
 set +e
 CURL_CMD="$fake6" CUTOVER_TIMEOUT=3 CUTOVER_SLEEP=1 \

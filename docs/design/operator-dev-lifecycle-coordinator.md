@@ -13,6 +13,8 @@ tags: [operator, lifecycle, agentic, ci-cd, work-items]
 
 # Operator Dev Lifecycle Coordinator
 
+> Supersession note (2026-06-13): this draft predates the node-ref deploy-plane cutover. `POST /api/v1/vcs/flight` is now the `nodeRef { nodeId, sourceSha }` primitive for externally built node artifacts. PR-number examples below describe the older in-repo candidate-flight path and should not be copied as the REST endpoint contract; see [Development Lifecycle](../spec/development-lifecycle.md) for the current flight split.
+
 ## Outcome
 
 Success is when an external agent can claim a Cogni work item, stay reachable through a 30+ minute handshake, request candidate validation, and have the operator track the claim, validation hold, notifications, and evidence without duplicating CI/CD lease ownership.

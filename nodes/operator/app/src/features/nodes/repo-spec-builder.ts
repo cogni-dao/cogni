@@ -48,6 +48,7 @@ cogni_dao:
   plugin_contract: "${input.pluginAddress}"
   signal_contract: "${input.signalAddress}"
   chain_id: "${input.chainId}"
+  base_url: "https://proposal.cognidao.org"
 
 ${input.knowledgeRemote ? renderKnowledgeBlock(input.knowledgeRemote) : ""}
 

@@ -98,6 +98,25 @@
           "computedUserset": {
             "relation": "developer"
           }
+        },
+        "production_promoter": {
+          "union": {
+            "child": [
+              {
+                "this": {}
+              },
+              {
+                "computedUserset": {
+                  "relation": "admin"
+                }
+              }
+            ]
+          }
+        },
+        "can_promote_production": {
+          "computedUserset": {
+            "relation": "production_promoter"
+          }
         }
       },
       "metadata": {
@@ -110,6 +129,16 @@
             ]
           },
           "developer": {
+            "directly_related_user_types": [
+              {
+                "type": "user"
+              },
+              {
+                "type": "agent"
+              }
+            ]
+          },
+          "production_promoter": {
             "directly_related_user_types": [
               {
                 "type": "user"

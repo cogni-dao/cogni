@@ -453,12 +453,48 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
           node_slug: input.slug,
           source_sha: input.sourceSha,
         },
+        request: { signal: AbortSignal.timeout(15_000) },
       }
     );
     return {
       dispatched: true,
       workflowUrl: `https://github.com/${input.owner}/${input.repo}/actions/workflows/candidate-flight.yml`,
       message: `Candidate flight dispatched for ${input.slug}@${input.sourceSha.slice(0, 8)}.`,
+    };
+  }
+
+  async dispatchNodePromote(input: {
+    owner: string;
+    repo: string;
+    env: string;
+    slug: string;
+    sourceSha?: string;
+  }): Promise<CandidateFlightDispatchResult> {
+    const octokit = await this.getOctokit(input.owner, input.repo);
+    const inputs: Record<string, string> = {
+      environment: input.env,
+      nodes: input.slug,
+    };
+    // Omit source_sha for catalog-pin nodes (CATALOG_SOURCE_SHA_IS_THE_DEPLOY_PIN);
+    // never pass a child SHA as the parent checkout ref.
+    if (input.sourceSha) inputs.source_sha = input.sourceSha;
+    // workflow_dispatch is fire-and-forget (GitHub queues + returns 204); bound it
+    // so a slow/stuck GitHub call can't hang the promote route with no deadline.
+    await octokit.request(
+      "POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches",
+      {
+        owner: input.owner,
+        repo: input.repo,
+        workflow_id: "promote-and-deploy.yml",
+        ref: "main",
+        inputs,
+        request: { signal: AbortSignal.timeout(15_000) },
+      }
+    );
+    return {
+      dispatched: true,
+      workflowUrl: `https://github.com/${input.owner}/${input.repo}/actions/workflows/promote-and-deploy.yml`,
+      message: `Promote dispatched: ${input.slug} → ${input.env}.`,
     };
   }
 

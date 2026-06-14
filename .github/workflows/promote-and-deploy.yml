@@ -806,6 +806,7 @@ jobs:
       VM_HOST: ${{ secrets.VM_HOST }}
       DOMAIN: ${{ vars.DOMAIN }}
       K8S_NAMESPACE: cogni-${{ needs.decide.outputs.environment }}
+      PROMOTED_APPS: ${{ join(fromJson(needs.decide.outputs.node_targets_json), ',') }}
     steps:
       - uses: actions/checkout@v4
         with:

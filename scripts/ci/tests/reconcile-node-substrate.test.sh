@@ -123,6 +123,17 @@ if [ "${1:-}" = "create" ] && [ "${2:-}" = "namespace" ]; then
   echo "kind: Namespace"
   exit 0
 fi
+if [ "${1:-}" = "-n" ] && [ "${3:-}" = "get" ] && [ "${4:-}" = "externalsecret" ] && [ "${5:-}" = "env-secrets" ]; then
+  if [ -n "${FAKE_LEGACY_EXTERNAL_SECRET_TARGET:-}" ]; then
+    printf '%s' "$FAKE_LEGACY_EXTERNAL_SECRET_TARGET"
+    exit 0
+  fi
+  exit 1
+fi
+if [ "${1:-}" = "-n" ] && [ "${3:-}" = "delete" ] && [ "${4:-}" = "externalsecret" ] && [ "${5:-}" = "env-secrets" ]; then
+  printf '%s\n' "$*" >> "${FAKE_REMOTE_ROOT}/kubectl.log"
+  exit 0
+fi
 if [ "${1:-}" = "apply" ]; then
   cat >/dev/null
   exit 0
@@ -208,10 +219,13 @@ env \
   FAKE_REMOTE_ROOT="$REMOTE_ROOT" \
   FAKE_REMOTE_PATH="$FAKEBIN" \
   FAKE_BAO_ROOT="$BAO_ROOT" \
+  FAKE_LEGACY_EXTERNAL_SECRET_TARGET="operator-env-secrets" \
   SUBSTRATE_RECONCILE_SUMMARY_FILE="$TMPROOT/summary.json" \
   bash scripts/ci/reconcile-node-substrate.sh candidate-a operator > "$TMPROOT/out.txt"
 
 grep -q "substrate ready inputs reconciled for operator" "$TMPROOT/out.txt"
+grep -q "deleted legacy ExternalSecret env-secrets targeting operator-env-secrets" "$TMPROOT/out.txt"
+grep -q -- "-n cogni-candidate-a delete externalsecret env-secrets" "$REMOTE_ROOT/kubectl.log"
 # READ-ONLY on OpenBao: secret-materialize is the sole writer. After reconcile the
 # node bank must hold ONLY the per-node creds we pre-seeded — reconcile writes
 # nothing (no source:agent app keys, no DSNs). This locks the zero-write posture.

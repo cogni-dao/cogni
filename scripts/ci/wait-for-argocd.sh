@@ -238,7 +238,7 @@ deployment_sync_ready() {
 # proof per Axiom 19.
 rollout_check() {
   local app_name="$1"
-  local deployment namespace spec_replicas updated available
+  local deployment namespace spec_replicas updated available observed generation revision new_available
 
   case "$(echo "$app_name" | sed -E "s/^${DEPLOY_ENVIRONMENT}-//")" in
     scheduler-worker|*-migrator|migrator)
@@ -254,16 +254,25 @@ rollout_check() {
   fi
   namespace="cogni-${DEPLOY_ENVIRONMENT}"
 
-  read -r spec_replicas updated available < <(
+  read -r spec_replicas updated available observed generation revision < <(
     kubectl -n "$namespace" get deployment "$deployment" \
-      -o jsonpath='{.spec.replicas} {.status.updatedReplicas} {.status.availableReplicas}' 2>/dev/null \
+      -o jsonpath='{.spec.replicas} {.status.updatedReplicas} {.status.availableReplicas} {.status.observedGeneration} {.metadata.generation} {.metadata.annotations.deployment\.kubernetes\.io/revision}' 2>/dev/null \
       || true
   )
+  new_available="$(kubectl -n "$namespace" get rs -o json 2>/dev/null | jq -r \
+    --arg deployment "$deployment" \
+    --arg revision "${revision:-}" \
+    '[.items[]
+      | select(any(.metadata.ownerReferences[]?; .kind == "Deployment" and .name == $deployment))
+      | select(.metadata.annotations["deployment.kubernetes.io/revision"] == $revision)
+      | (.status.availableReplicas // 0)
+    ] | max // 0' 2>/dev/null || printf '0')"
 
-  echo "    ↻ ${app_name}: new-RS state — desired=${spec_replicas:-?} updated=${updated:-0} available=${available:-0}"
+  echo "    ↻ ${app_name}: new-RS state — desired=${spec_replicas:-?} updated=${updated:-0} deploymentAvailable=${available:-0} newRsAvailable=${new_available:-0} revision=${revision:-?}"
 
-  if [ "${updated:-0}" -ge "${spec_replicas:-1}" ] \
-     && [ "${available:-0}" -ge "${spec_replicas:-1}" ]; then
+  if [ "${observed:-0}" -ge "${generation:-0}" ] \
+     && [ "${updated:-0}" -ge "${spec_replicas:-1}" ] \
+     && [ "${new_available:-0}" -ge "${spec_replicas:-1}" ]; then
     return 0
   fi
   return 1

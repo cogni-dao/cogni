@@ -33,6 +33,7 @@ import { AccessActions } from "./AccessActions.client";
 // What each role lets an agent do, for display. Extends 1:1 as roles are added (rbac.md §6).
 const ROLE_CAPABILITY: Record<NodeAccessRole, string> = {
   developer: "Flight",
+  production_promoter: "Promote to production",
 };
 
 interface Props {
@@ -69,6 +70,7 @@ function AccessRow({
           <AccessActions
             nodeId={nodeId}
             agentUserId={row.agentUserId}
+            role={row.role}
             actions={[
               { decision: "approve", label: "Approve", variant: "default" },
               { decision: "reject", label: "Deny", variant: "outline" },
@@ -78,6 +80,7 @@ function AccessRow({
           <AccessActions
             nodeId={nodeId}
             agentUserId={row.agentUserId}
+            role={row.role}
             actions={[
               { decision: "reject", label: "Revoke", variant: "destructive" },
             ]}

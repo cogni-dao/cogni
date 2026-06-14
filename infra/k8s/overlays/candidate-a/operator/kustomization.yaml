@@ -8,6 +8,7 @@ namespace: cogni-candidate-a
 resources:
   - ../../../base/node-app
   - ../../../base/openfga-external
+  - external-secret.yaml
   - ./secrets-writer-sa.yaml
 
 namePrefix: operator-

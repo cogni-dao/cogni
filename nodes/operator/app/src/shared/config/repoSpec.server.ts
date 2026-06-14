@@ -5,7 +5,7 @@
  * Module: `@shared/config/repoSpec.server`
  * Purpose: Server-only thin wrapper — file I/O, caching, and accessor functions for repo-spec config including DAO governance and VCS identity.
  * Scope: Reads and caches repo-spec on first access; does not define schemas, validation logic, or perform network I/O.
- * Invariants: Chain ID must match CHAIN_ID; ledger config requires scope_id + scope_key; DaoConfig requires all five cogni_dao fields.
+ * Invariants: Chain ID must match CHAIN_ID; ledger config requires scope_id + scope_key; DaoConfig requires the four on-chain cogni_dao identity fields (base_url optional).
  *   getGithubRepo() is a v0 single-tenant hardcode (OPERATOR_GITHUB_REPO const) — task.0122 wires it to NodeRegistryPort for multi-tenant.
  * Side-effects: IO (reads repo-spec from disk) on first call only. getGithubRepo() has no IO.
  * Links: packages/repo-spec/src/index.ts, .cogni/repo-spec.yaml, docs/spec/vcs-integration.md
@@ -136,8 +136,9 @@ let cachedDaoConfig: DaoConfig | null | undefined;
 
 /**
  * DAO governance configuration from repo-spec.
- * Returns null if cogni_dao section is missing or incomplete.
- * All five fields must be present for the config to be valid.
+ * Returns null only when the on-chain identity (dao/plugin/signal contracts +
+ * chain_id) is incomplete. `base_url` is the optional governance-UI deep-link
+ * host and does not gate this read.
  */
 export function getDaoConfig(): DaoConfig | null {
   if (cachedDaoConfig !== undefined) return cachedDaoConfig;

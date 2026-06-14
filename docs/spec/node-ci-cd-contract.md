@@ -9,7 +9,7 @@ read_when: Modifying CI workflows, adding checks to merge gate, or planning mult
 implements: []
 owner: cogni-dev
 created: 2025-12-22
-verified: 2026-06-08
+verified: 2026-06-12
 tags:
   - ci-cd
   - deployment
@@ -207,11 +207,32 @@ Flight authorization is operator-local:
 4. Operator dispatches with its environment GitHub App. The App is a capability
    executor, not an authorization oracle.
 
-Until real RBAC lands, the safe Pareto default is: any registered agent may
-request **candidate/test** flight for the node/work item it owns; preview/prod
-remain human-approved operator actions. This avoids relying on GitHub repo
-permissions while still stopping arbitrary agents from mutating arbitrary
-environments.
+The as-built ladder is in **Env-promotion progression** below; the historical
+Pareto default (candidate-only for agents, preview/prod human-approved) is
+superseded by it.
+
+### Env-promotion progression (candidate → preview → production)
+
+A node walks one ladder. Each rung has its own trigger and its own
+authorization; the promotion **primitive is always the same** — `promote-and-deploy`
+by digest, the [one promotion primitive](./legacy-cicd-to-remove.md) — only the
+policy differs.
+
+| Env             | Trigger                                        | Authorization                                                                            | Mechanism                                                                                                                                                        |
+| --------------- | ---------------------------------------------- | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **candidate-a** | agent/human requests flight for a node it owns | `node.flight` → `can_flight` (the node `developer` role)                                 | source-addressed `candidate-flight.yml`                                                                                                                          |
+| **preview**     | **automatic on node `main`-merge**             | **ungated** — continues the trust the node earned to be spawned+flighted                 | operator (merge authority, [merge-authority.md](./merge-authority.md)) bumps catalog `source_sha` + merges to `main` → `flight-preview.yml` → promote-and-deploy |
+| **production**  | explicit operator/human action                 | `node.promote_production` → `can_promote_production` (`promoter` role; `admin` inherits) | `DeployCapability.promote(env=production)` → operator GitHub App dispatches promote-and-deploy ([cicd-platform-boundary.md](./cicd-platform-boundary.md))        |
+
+Invariants:
+
+- **`TRUST_LADDER_IS_MONOTONIC`**: a node reaches preview only after earning candidate-a, production only after a `production_promoter` grant. Preview adds no new gate because candidate-a already proved the trust; production does because it is the irreversible environment.
+- **`PROMOTION_RUNS_AS_THE_OPERATOR`**: preview + production promotion is an operator GitHub-App activity (merge for preview, dispatch for production) — never a contributor's personal `gh` credential. This supersedes the v0 "preview/prod are human-approved operator actions" framing: preview is now operator-automatic, production is operator-dispatched + RBAC-gated (human-approved until a `production_promoter` grant exists; today only the org admin holds it).
+- **`ONE_PROMOTION_PRIMITIVE`**: every rung promotes the candidate-proven digest via `promote-and-deploy`. No env rebuilds, no second dispatch path, no PR-tag substitution.
+
+RBAC is additive (immutable OpenFGA model, [rbac.md](./rbac.md)): the ladder is `can_flight` (candidate) + `can_promote_production` (prod) today; a `can_promote_preview` rung is a one-relation addition **if/when manual dev-driven preview promotes arrive** — preview _auto_-promote stays ungated regardless.
+
+Implementing PRs: #1643 (DeployCapability + freeze), #1653 (`can_promote_production` + promote dispatch), #1640 (operator merge authority + the preview merge-hook).
 
 ### Artifact contract
 

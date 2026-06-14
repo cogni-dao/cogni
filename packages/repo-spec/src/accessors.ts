@@ -255,14 +255,17 @@ export interface DaoConfig {
   readonly plugin_contract: string;
   readonly signal_contract: string;
   readonly chain_id: string;
-  readonly base_url: string;
+  /** Governance proposal-UI host for `/propose/merge` deep-links. Optional: its
+   * absence omits the link but never blanks treasury/governance reads. */
+  readonly base_url?: string;
 }
 
 /**
  * Extract DAO governance configuration from parsed repo-spec.
- * Returns null if cogni_dao is missing or any required field is absent.
- * All five fields (dao_contract, plugin_contract, signal_contract, chain_id, base_url)
- * must be present for the config to be valid.
+ * Returns null only if the on-chain identity (dao_contract, plugin_contract,
+ * signal_contract, chain_id) is incomplete. `base_url` is the governance-UI
+ * deep-link host only — it gates nothing but the proposal link, so it is NOT
+ * required here (see review-handler / treasury, which never read it).
  */
 export function extractDaoConfig(spec: RepoSpec): DaoConfig | null {
   const dao = spec.cogni_dao;
@@ -270,8 +273,7 @@ export function extractDaoConfig(spec: RepoSpec): DaoConfig | null {
     !dao?.dao_contract ||
     !dao.plugin_contract ||
     !dao.signal_contract ||
-    !dao.chain_id ||
-    !dao.base_url
+    !dao.chain_id
   ) {
     return null;
   }
@@ -281,7 +283,7 @@ export function extractDaoConfig(spec: RepoSpec): DaoConfig | null {
     plugin_contract: dao.plugin_contract,
     signal_contract: dao.signal_contract,
     chain_id: String(dao.chain_id),
-    base_url: dao.base_url,
+    ...(dao.base_url ? { base_url: dao.base_url } : {}),
   };
 }
 

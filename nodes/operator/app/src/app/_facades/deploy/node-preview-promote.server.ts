@@ -24,7 +24,7 @@
  * @public
  */
 
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import type { Logger } from "pino";
 import { createOperatorDeployPlane } from "@/bootstrap/capabilities/operator-deploy-plane";
 import { resolveServiceDb } from "@/bootstrap/container";
@@ -102,7 +102,10 @@ async function promoteNodeToPreview(
     const rows = await db
       .select({ id: nodes.id, slug: nodes.slug })
       .from(nodes)
-      .where(and(eq(nodes.repoOwner, ctx.owner), eq(nodes.repoName, ctx.repo)))
+      // A wizard node's fork is named after its slug (`forkFromTemplate` → `name: slug`), so the
+      // merged-PR repo name == the node slug. `nodes.repoOwner/repoName` is the PARENT deploy
+      // monorepo (`getGithubRepo()`), NOT the node's own source repo — so resolve by slug.
+      .where(eq(nodes.slug, ctx.repo))
       .limit(1);
     const node = rows[0];
     // SPAWNED_NODES_ONLY: an unregistered repo (parent monorepo, in-repo node) is handled
