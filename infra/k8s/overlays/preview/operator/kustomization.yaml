@@ -8,6 +8,7 @@ namespace: cogni-preview
 resources:
   - ../../../base/node-app
   - ../../../base/openfga-external
+  - external-secret.yaml
 
 namePrefix: operator-
 

@@ -108,10 +108,24 @@ Identify:
 - `<service>`: catalog service name, such as `operator`, `node-template`, `resy`, or `_shared`
 - `<KEY>`: uppercase env var name
 - `<namespace>`: the k8s namespace, such as `cogni-production`
-- `<externalsecret>` and `<secret>`: usually `<service>-env-secrets`; production operator uses `operator-env-secrets`
+- `<externalsecret>` and `<secret>`: usually `<service>-env-secrets`; the operator also follows this shape as `operator-env-secrets`
 - `<deployment>`: the Deployment that consumes the Secret
 
-## 2. Recover Kube Custody
+## 2. Choose The Writer Lane
+
+For generated node-owned values, prefer the deploy lane: declare the key's
+shape in the node catalog with `source: agent`, then let
+`secret-materialize` write the value during flight/promote. That path uses the
+environment writer role from CI and does not require a laptop kubeconfig,
+OpenBao root token, or Derek-owned GitHub credential.
+
+For human/vendor values, the intended self-serve lane is the GitHub Actions
+OIDC writer role (`gha-<env>-writer`) bound during provisioning to the same
+`<env>-writer` OpenBao policy. The workflow surface is still being finished;
+until it exists, the CLI path below is an operator day-2 path, not the node
+formation standard.
+
+## 3. Recover Kube Custody
 
 Agent worktrees usually do not contain `.local/`. Use the operator's primary clone or the downloaded/decrypted provision artifact. Do not rely on stale VM IP/key files when a provision artifact contains the current kubeconfig.
 
@@ -130,7 +144,7 @@ kubectl get ns openbao external-secrets
 
 If you do not know where the provision artifact was stored, search the primary clone's `.local/` directory for `<env>-kubeconfig.yaml` and `<env>-openbao-init.json`. The kubeconfig is the day-2 access file. The OpenBao init JSON/root token is bootstrap custody and must not be used as the day-2 write token.
 
-## 3. Prove The Substrate
+## 4. Prove The Substrate
 
 Before writing a value, prove the target cluster has ESO and can read OpenBao:
 
@@ -150,7 +164,7 @@ kubectl -n <namespace> get deploy <deployment> -o jsonpath='{range .spec.templat
 
 If the service still consumes a legacy Secret, stop and use the service-specific cutover runbook. Do not claim an OpenBao write is live in a pod that is not wired to `operator-env-secrets` / `<service>-env-secrets`.
 
-## 4. Mint A Short-Lived Writer Token
+## 5. Mint A Short-Lived Writer Token
 
 Open a local tunnel to OpenBao and exchange a Kubernetes ServiceAccount token for the env writer role:
 
@@ -165,7 +179,7 @@ export BAO_TOKEN=$(bao write -field=token auth/kubernetes/login \
 
 Do not export `.local/<env>-openbao-root-token` as `BAO_TOKEN`. The bootstrap root token is not a day-2 write credential.
 
-## 5. Write The Secret
+## 6. Write The Secret
 
 Interactive:
 
@@ -188,7 +202,7 @@ bao kv get -format=json "cogni/<env>/<service>" \
   | jq -e '.data.data | has("<KEY>")' >/dev/null
 ```
 
-## 6. Force ESO Sync
+## 7. Force ESO Sync
 
 ```bash
 kubectl -n <namespace> annotate externalsecret <externalsecret> \
@@ -203,7 +217,7 @@ kubectl -n <namespace> get secret <secret> -o json \
 
 This proves the k8s Secret has the key. It does not prove the running process has it.
 
-## 7. Prove The Running Process
+## 8. Prove The Running Process
 
 Pods read `envFrom` only at startup. After ESO sync, the Deployment must roll before `process.env.<KEY>` is live.
 
@@ -232,7 +246,7 @@ kubectl -n <namespace> exec "$POD" -- /bin/sh -c 'test -n "$OPENAI_API_KEY"'
 
 If Reloader is absent or does not roll the pod, do not use `kubectl rollout restart` as an invisible production mutation. Use the deploy branch/GitOps path: commit a one-time pod-template restart annotation to the relevant `deploy/<env>-<service>` branch, let Argo roll it, then repeat the process-level proof. Read `devops-expert` first.
 
-## 8. Public Health
+## 9. Public Health
 
 For public web services, finish with external health/version checks:
 
