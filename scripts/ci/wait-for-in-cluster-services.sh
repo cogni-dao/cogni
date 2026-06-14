@@ -146,35 +146,41 @@ wait_for_endpoint_cutover() {
 wait_for_new_rs_available() {
   local svc="$1"
   local deadline=$((SECONDS + ROLLOUT_TIMEOUT))
-  local observed generation desired updated available
+  local observed generation desired updated available revision new_available
 
   while [ "$SECONDS" -lt "$deadline" ]; do
-    read -r observed generation desired updated available < <(
+    read -r observed generation desired updated available revision < <(
       ssh "${SSH_OPTS[@]}" "root@${VM_HOST}" \
-        "kubectl -n ${NS} get deploy ${svc} -o jsonpath='{.status.observedGeneration} {.metadata.generation} {.spec.replicas} {.status.updatedReplicas} {.status.availableReplicas}'" \
+        "kubectl -n ${NS} get deploy ${svc} -o jsonpath='{.status.observedGeneration} {.metadata.generation} {.spec.replicas} {.status.updatedReplicas} {.status.availableReplicas} {.metadata.annotations.deployment\\.kubernetes\\.io/revision}'" \
         2>/dev/null || true
     )
+    new_available="$(
+      ssh "${SSH_OPTS[@]}" "root@${VM_HOST}" \
+        "kubectl -n ${NS} get rs -o json | jq -r --arg deployment '${svc}' --arg revision '${revision:-}' '[.items[] | select(any(.metadata.ownerReferences[]?; .kind == \"Deployment\" and .name == \$deployment)) | select(.metadata.annotations[\"deployment.kubernetes.io/revision\"] == \$revision) | (.status.availableReplicas // 0)] | max // 0'" \
+        2>/dev/null || printf '0'
+    )"
 
     observed="${observed:-0}"
     generation="${generation:-0}"
     desired="${desired:-0}"
     updated="${updated:-0}"
     available="${available:-0}"
+    new_available="${new_available:-0}"
 
     if [ "$desired" -le 0 ]; then
       echo "  ⚠ ${svc}: desired replicas unset or zero — skipping new-RS availability wait"
       return 0
     fi
 
-    if [ "$observed" -ge "$generation" ] && [ "$updated" -ge "$desired" ] && [ "$available" -ge "$desired" ]; then
-      echo "  ✓ ${svc}: new ReplicaSet available (updated=${updated}, available=${available}, desired=${desired})"
+    if [ "$observed" -ge "$generation" ] && [ "$updated" -ge "$desired" ] && [ "$new_available" -ge "$desired" ]; then
+      echo "  ✓ ${svc}: new ReplicaSet available (updated=${updated}, newRsAvailable=${new_available}, desired=${desired}, revision=${revision:-?})"
       return 0
     fi
 
     sleep 2
   done
 
-  echo "  ✗ ${svc}: new ReplicaSet availability timed out after ${ROLLOUT_TIMEOUT}s — observed=${observed:-?}, generation=${generation:-?}, updated=${updated:-?}, available=${available:-?}, desired=${desired:-?}"
+  echo "  ✗ ${svc}: new ReplicaSet availability timed out after ${ROLLOUT_TIMEOUT}s — observed=${observed:-?}, generation=${generation:-?}, updated=${updated:-?}, deploymentAvailable=${available:-?}, newRsAvailable=${new_available:-?}, desired=${desired:-?}, revision=${revision:-?}"
   return 1
 }
 

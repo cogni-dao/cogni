@@ -1818,14 +1818,24 @@ SECEOF
 
   deployment_updated_available() {
     local deployment="$1"
-    local spec updated available observed generation
+    local spec updated available observed generation revision new_available deployment_name
+    deployment_name="${deployment#deployment/}"
     spec=$(int_or_zero "$(kubectl -n "${K8S_NS}" get "$deployment" -o jsonpath='{.spec.replicas}' 2>/dev/null || true)")
     updated=$(int_or_zero "$(kubectl -n "${K8S_NS}" get "$deployment" -o jsonpath='{.status.updatedReplicas}' 2>/dev/null || true)")
     available=$(int_or_zero "$(kubectl -n "${K8S_NS}" get "$deployment" -o jsonpath='{.status.availableReplicas}' 2>/dev/null || true)")
     observed=$(int_or_zero "$(kubectl -n "${K8S_NS}" get "$deployment" -o jsonpath='{.status.observedGeneration}' 2>/dev/null || true)")
     generation=$(int_or_zero "$(kubectl -n "${K8S_NS}" get "$deployment" -o jsonpath='{.metadata.generation}' 2>/dev/null || true)")
+    revision="$(kubectl -n "${K8S_NS}" get "$deployment" -o jsonpath='{.metadata.annotations.deployment\.kubernetes\.io/revision}' 2>/dev/null || true)"
+    new_available=$(int_or_zero "$(kubectl -n "${K8S_NS}" get rs -o json 2>/dev/null | jq -r \
+      --arg deployment "${deployment_name}" \
+      --arg revision "${revision:-}" \
+      '[.items[]
+        | select(any(.metadata.ownerReferences[]?; .kind == "Deployment" and .name == $deployment))
+        | select(.metadata.annotations["deployment.kubernetes.io/revision"] == $revision)
+        | (.status.availableReplicas // 0)
+      ] | max // 0' 2>/dev/null || true)")
     [[ "$spec" -eq 0 ]] && spec=1
-    [[ "$observed" -ge "$generation" && "$updated" -ge "$spec" && "$available" -ge "$spec" ]]
+    [[ "$observed" -ge "$generation" && "$updated" -ge "$spec" && "$new_available" -ge "$spec" ]]
   }
 
   wait_rollout_or_updated_available() {
