@@ -8,8 +8,12 @@
 #
 # Usage: aggregate-rollup.sh <env>   (env ∈ candidate-a, preview, production)
 #
+# Optional env:
+#   ROLLUP_TARGETS_JSON  JSON array of targets selected by the current workflow.
+#                        Defaults to ALL_TARGETS only for legacy callers.
+#
 # Behavior:
-#   1. For each node in ALL_TARGETS, read origin/deploy/<env>-<node> tip.
+#   1. For each resolved target, read origin/deploy/<env>-<node> tip.
 #   2. current-sha = git merge-base $(per-node tips). Honest "what's been
 #      validated by every node" — release.yml read stays correct.
 #   3. Read existing deploy/<env>:.promote-state/source-sha-by-app.json,
@@ -43,9 +47,20 @@ cd "$work/whole"
 git config user.name "github-actions[bot]"
 git config user.email "github-actions[bot]@users.noreply.github.com"
 
+if [ -n "${ROLLUP_TARGETS_JSON:-}" ]; then
+  mapfile -t rollup_targets < <(printf '%s' "$ROLLUP_TARGETS_JSON" | jq -r '.[]')
+else
+  rollup_targets=("${ALL_TARGETS[@]}")
+fi
+
+if [ "${#rollup_targets[@]}" -eq 0 ]; then
+  echo "::error::No rollup targets resolved for ${ENV}"
+  exit 1
+fi
+
 per_node_shas=()
 declare -A per_node_maps=()
-for node in "${ALL_TARGETS[@]}"; do
+for node in "${rollup_targets[@]}"; do
   # Overlay-presence filter (bug.5078): a target with no per-env overlay
   # doesn't deploy to this env, so its per-node branch is not expected
   # to exist. Mirrors promote-and-deploy.yml `Resolve target node list`.
@@ -66,7 +81,14 @@ for node in "${ALL_TARGETS[@]}"; do
   fi
 done
 
-current_sha=$(git merge-base "${per_node_shas[@]}")
+if [ "${#per_node_shas[@]}" -eq 0 ]; then
+  echo "::error::No deploy branch SHAs resolved for ${ENV}"
+  exit 1
+elif [ "${#per_node_shas[@]}" -eq 1 ]; then
+  current_sha="${per_node_shas[0]}"
+else
+  current_sha=$(git merge-base "${per_node_shas[@]}")
+fi
 echo "current-sha (merge-base): $current_sha"
 
 mkdir -p .promote-state
