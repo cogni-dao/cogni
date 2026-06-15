@@ -8,7 +8,8 @@
  * Invariants:
  *   - CONFIDENCE_IS_POLICY: application writes initialize confidence explicitly.
  *   - DB_DEFAULT_IS_GUARDRAIL: database defaults are not normal write semantics.
- *   - DERIVED_CONFIDENCE_REQUIRES_BASIS: derived rows fail closed without cited confidence.
+ *   - DERIVED_INIT_THEN_RECOMPUTE: derived rows init to min-of-cited when a basis
+ *     is supplied, else a conservative baseline; never NULL, never throws.
  * Side-effects: none
  * Links: docs/spec/knowledge-syntropy.md
  * @public
@@ -34,11 +35,12 @@ const AGENT_PRINCIPAL_CAP = 30;
 const MIN_CONFIDENCE = 0;
 const MAX_CONFIDENCE = 100;
 
-// Recompute operates on an already-persisted entry whose derivation basis is
-// not re-presented as incoming citations, so derived rows recompute from a
-// conservative base rather than re-deriving (initialize is where derived fails
-// closed). Matches the pre-policy edo-resolver base.
-const RECOMPUTE_DERIVED_BASE = 40;
+// Derived rows (e.g. the goal-loop's system-sourced hypotheses/outcomes) are
+// created before their evidence chain exists — citations + the judge recompute
+// confidence post-hoc. So derived initializes to a conservative baseline and is
+// recomputed as evidence accrues; it computes min-of-cited only when a cited
+// basis is actually supplied at write time. Matches the pre-policy base.
+const DERIVED_BASELINE = 40;
 
 export interface ConfidenceCitationBasis {
   readonly citationType: CitationType | string;
@@ -78,7 +80,10 @@ export function initializeConfidence(
       ? derivedConfidence(context.citations ?? [])
       : BASELINE_CONFIDENCE_BY_SOURCE[entry.sourceType]);
 
-  return decision(applyPrincipalCap(raw, context), basisFor(entry, explicit));
+  return decision(
+    applyPrincipalCap(raw, context),
+    basisFor(entry, explicit, context.citations ?? [])
+  );
 }
 
 export function recomputeConfidence(
@@ -87,7 +92,7 @@ export function recomputeConfidence(
 ): ConfidenceDecision {
   const initial =
     entry.sourceType === "derived"
-      ? RECOMPUTE_DERIVED_BASE
+      ? DERIVED_BASELINE
       : BASELINE_CONFIDENCE_BY_SOURCE[entry.sourceType];
 
   let supportCount = 0;
@@ -130,25 +135,21 @@ function explicitConfidence(value: number | null | undefined): number | null {
   return value;
 }
 
+function hasCitedBasis(citations: readonly ConfidenceCitationBasis[]): boolean {
+  return citations.some((c) => c.citedConfidencePct != null);
+}
+
 function derivedConfidence(
   citations: readonly ConfidenceCitationBasis[]
 ): number {
-  if (citations.length === 0) {
-    throw new ConfidencePolicyError(
-      "derived confidence requires at least one cited confidence basis"
-    );
-  }
-  const cited = citations.map((c) => c.citedConfidencePct);
-  if (cited.some((v) => v == null)) {
-    throw new ConfidencePolicyError(
-      "derived confidence requires citedConfidencePct for every citation"
-    );
-  }
-  const values = cited.map((v) => {
-    assertWritableConfidence(v);
-    return v;
-  });
-  return Math.min(...values);
+  // Compute min-of-cited when a basis is supplied; otherwise fall back to the
+  // conservative derived baseline (recomputed once the evidence chain exists).
+  const cited = citations
+    .map((c) => c.citedConfidencePct)
+    .filter((v): v is number => v != null);
+  if (cited.length === 0) return DERIVED_BASELINE;
+  for (const v of cited) assertWritableConfidence(v);
+  return Math.min(...cited);
 }
 
 function applyPrincipalCap(
@@ -162,12 +163,16 @@ function applyPrincipalCap(
 
 function basisFor(
   entry: Pick<NewKnowledge, "confidencePct" | "sourceType">,
-  explicit: number | null
+  explicit: number | null,
+  citations: readonly ConfidenceCitationBasis[]
 ): string {
   if (explicit != null) return `explicit:${entry.sourceType}`;
-  return entry.sourceType === "derived"
-    ? "derived:min-cited-confidence"
-    : `baseline:${entry.sourceType}`;
+  if (entry.sourceType === "derived") {
+    return hasCitedBasis(citations)
+      ? "derived:min-cited-confidence"
+      : "derived:baseline";
+  }
+  return `baseline:${entry.sourceType}`;
 }
 
 function decision(confidencePct: number, basis: string): ConfidenceDecision {
