@@ -42,8 +42,14 @@ permissions:
   packages: read
   actions: read
 
+# Per-(env, nodes) lane (bug.5022). The operator-API prod-promote path dispatches
+# one node per run (github-repo-write.ts: `nodes: input.slug`), so an env-only group
+# let N near-simultaneous node promotes collide: with cancel-in-progress:false GitHub
+# keeps only ONE run pending per group, so the 3rd dispatch cancels the 2nd while it
+# queues. Including `inputs.nodes` gives each node its own lane. Same-node races stay
+# serialized by the per-(env,node) job groups (flight-/reconcile-appset-/node-substrate-).
 concurrency:
-  group: promote-deploy-${{ inputs.environment || github.ref_name }}
+  group: promote-deploy-${{ inputs.environment || github.ref_name }}-${{ inputs.nodes }}
   cancel-in-progress: false
 
 jobs:
