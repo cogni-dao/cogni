@@ -70,7 +70,6 @@ export interface KnowledgeWriteParams {
   content: string;
   sourceType: "human" | "analysis_signal" | "external" | "derived";
   entityId?: string;
-  confidencePct?: number;
   sourceRef?: string;
   tags?: string[];
   /** Outgoing edges (citing = this entry) committed in the same write. */

@@ -76,7 +76,6 @@ export function createEdoCapability(
         entryType: "hypothesis",
         confidencePct: initializeConfidence({
           sourceType: params.sourceType,
-          confidencePct: params.confidencePct,
         }).confidencePct,
         sourceType: params.sourceType,
         sourceRef: params.sourceRef ?? null,
@@ -112,7 +111,6 @@ export function createEdoCapability(
         entryType: "decision",
         confidencePct: initializeConfidence({
           sourceType: params.sourceType,
-          confidencePct: params.confidencePct,
         }).confidencePct,
         sourceType: params.sourceType,
         sourceRef: params.sourceRef ?? null,

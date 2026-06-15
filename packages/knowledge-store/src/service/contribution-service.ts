@@ -132,7 +132,6 @@ export interface ContributionService {
   merge(args: {
     principal: Principal;
     contributionId: string;
-    confidencePct?: number;
   }): Promise<{ commitHash: string }>;
   close(args: {
     principal: Principal;
@@ -322,14 +321,13 @@ export function createContributionService(
       return deps.port.diff(contributionId);
     },
 
-    async merge({ principal, contributionId, confidencePct }) {
+    async merge({ principal, contributionId }) {
       if (!deps.canMergeKnowledge(principal)) {
         throw new ContributionForbiddenError("merge requires admin session");
       }
       const result = await deps.port.merge({
         contributionId,
         principal,
-        confidencePct,
       });
       // Best-effort mirror. Caller wraps with its own .catch — service stays
       // framework-agnostic and never blocks the merge response on the push.

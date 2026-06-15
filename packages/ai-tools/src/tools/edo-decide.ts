@@ -45,7 +45,6 @@ export const EdoDecideInputSchema = z.object({
   sourceRef: z.string().optional(),
   sourceNode: z.string().optional(),
   tags: z.array(z.string()).optional(),
-  confidencePct: z.number().int().min(0).max(100).optional(),
 });
 export type EdoDecideInput = z.infer<typeof EdoDecideInputSchema>;
 
@@ -112,7 +111,6 @@ export function createEdoDecideImplementation(
         sourceRef: input.sourceRef,
         sourceNode: input.sourceNode,
         tags: input.tags,
-        confidencePct: input.confidencePct,
       });
 
       return {

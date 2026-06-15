@@ -216,9 +216,6 @@ export async function handleHypothesize(
             ...(parsed.data.tags !== undefined
               ? { tags: parsed.data.tags }
               : {}),
-            ...(parsed.data.confidencePct !== undefined
-              ? { confidencePct: parsed.data.confidencePct }
-              : {}),
           },
           ...(parsed.data.evidenceForIds !== undefined
             ? { evidenceForIds: parsed.data.evidenceForIds }
@@ -264,9 +261,6 @@ export async function handleHypothesize(
         ? { evidenceForIds: parsed.data.evidenceForIds }
         : {}),
       ...(parsed.data.tags !== undefined ? { tags: parsed.data.tags } : {}),
-      ...(parsed.data.confidencePct !== undefined
-        ? { confidencePct: parsed.data.confidencePct }
-        : {}),
     });
     log.info(
       {
@@ -325,9 +319,6 @@ export async function handleDecide(
             ...(parsed.data.tags !== undefined
               ? { tags: parsed.data.tags }
               : {}),
-            ...(parsed.data.confidencePct !== undefined
-              ? { confidencePct: parsed.data.confidencePct }
-              : {}),
           },
           derivesFromHypothesisId: parsed.data.derivesFromHypothesisId,
         },
@@ -364,9 +355,6 @@ export async function handleDecide(
       sourceRef,
       sourceNode,
       ...(parsed.data.tags !== undefined ? { tags: parsed.data.tags } : {}),
-      ...(parsed.data.confidencePct !== undefined
-        ? { confidencePct: parsed.data.confidencePct }
-        : {}),
     });
     log.info(
       {
@@ -490,9 +478,6 @@ export async function handleRecordOutcome(
             ...(parsed.data.tags !== undefined
               ? { tags: parsed.data.tags }
               : {}),
-            ...(parsed.data.confidencePct !== undefined
-              ? { confidencePct: parsed.data.confidencePct }
-              : {}),
           },
           hypothesisId: parsed.data.hypothesisId,
           edge: parsed.data.edge,
@@ -532,9 +517,6 @@ export async function handleRecordOutcome(
       sourceRef,
       sourceNode,
       ...(parsed.data.tags !== undefined ? { tags: parsed.data.tags } : {}),
-      ...(parsed.data.confidencePct !== undefined
-        ? { confidencePct: parsed.data.confidencePct }
-        : {}),
     });
     log.info(
       {

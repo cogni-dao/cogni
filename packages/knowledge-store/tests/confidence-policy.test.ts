@@ -21,6 +21,7 @@ import {
   initializeConfidence,
   recomputeConfidence,
 } from "../src/domain/confidence-policy.js";
+import { KnowledgeEntryInputSchema } from "../src/domain/contribution-schemas.js";
 
 describe("initializeConfidence — baselines by source type", () => {
   it("preserves an explicit, valid confidence value", () => {
@@ -153,6 +154,28 @@ describe("recomputeConfidence — citation-driven adjustment", () => {
       { citationType: "supports" },
     ]);
     expect(d.confidencePct).toBe(50); // 40 + 10
+  });
+});
+
+describe("CONFIDENCE_NOT_AUTHOR_SET — confidence is not a caller input", () => {
+  it("drops confidencePct from a knowledge entry input (no write surface accepts it)", () => {
+    const parsed = KnowledgeEntryInputSchema.parse({
+      domain: "meta",
+      title: "an entry",
+      content: "body",
+      confidencePct: 95,
+    } as Record<string, unknown>);
+    expect("confidencePct" in parsed).toBe(false);
+  });
+
+  it("accepts the same input without confidencePct (the field is simply gone)", () => {
+    const parsed = KnowledgeEntryInputSchema.parse({
+      domain: "meta",
+      title: "an entry",
+      content: "body",
+    });
+    expect(parsed.title).toBe("an entry");
+    expect("confidencePct" in parsed).toBe(false);
   });
 });
 

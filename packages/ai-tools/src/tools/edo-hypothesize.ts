@@ -83,7 +83,6 @@ export const EdoHypothesizeInputSchema = z.object({
   sourceRef: z.string().optional(),
   sourceNode: z.string().optional(),
   tags: z.array(z.string()).optional(),
-  confidencePct: z.number().int().min(0).max(100).optional(),
 });
 export type EdoHypothesizeInput = z.infer<typeof EdoHypothesizeInputSchema>;
 
@@ -162,7 +161,6 @@ export function createEdoHypothesizeImplementation(
         sourceRef: input.sourceRef,
         sourceNode: input.sourceNode,
         tags: input.tags,
-        confidencePct: input.confidencePct,
       });
 
       return {

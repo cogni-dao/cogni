@@ -125,7 +125,6 @@ export function createKnowledgeCapability(
       const c = gateResult.candidate;
       const confidence = initializeConfidence({
         sourceType: params.sourceType,
-        confidencePct: params.confidencePct,
       });
       const entry = await port.upsertKnowledge({
         id: c.id ?? params.id,

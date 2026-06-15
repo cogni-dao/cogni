@@ -32,7 +32,6 @@ export const KnowledgeEntryInputSchema = z.object({
   content: z.string().min(1).max(65536),
   entryType: z.string().min(1).max(64).optional(),
   tags: z.array(z.string().max(64)).max(32).optional(),
-  confidencePct: z.number().int().min(0).max(100).optional(),
 });
 export type KnowledgeEntryInput = z.infer<typeof KnowledgeEntryInputSchema>;
 

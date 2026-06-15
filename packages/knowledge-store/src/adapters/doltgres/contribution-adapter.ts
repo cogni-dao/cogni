@@ -423,7 +423,6 @@ async function applyEdit(input: {
   const confidencePct = initializeConfidence(
     {
       sourceType: "external",
-      confidencePct: edit.entry.confidencePct,
     },
     { principalKind: principal.kind }
   ).confidencePct;
@@ -549,7 +548,6 @@ export class DoltgresKnowledgeContributionAdapter
       const confidencePct = initializeConfidence(
         {
           sourceType: provenance.sourceType,
-          confidencePct: input.entry.confidencePct,
         },
         { principalKind: input.principal.kind }
       ).confidencePct;
@@ -594,7 +592,6 @@ export class DoltgresKnowledgeContributionAdapter
       const confidencePct = initializeConfidence(
         {
           sourceType: provenance.sourceType,
-          confidencePct: input.entry.confidencePct,
         },
         { principalKind: input.principal.kind }
       ).confidencePct;
@@ -632,7 +629,6 @@ export class DoltgresKnowledgeContributionAdapter
       const confidencePct = initializeConfidence(
         {
           sourceType: provenance.sourceType,
-          confidencePct: input.entry.confidencePct,
         },
         { principalKind: input.principal.kind }
       ).confidencePct;
@@ -826,7 +822,6 @@ export class DoltgresKnowledgeContributionAdapter
       const confidencePct = initializeConfidence(
         {
           sourceType: provenance.sourceType,
-          confidencePct: input.entry.confidencePct,
         },
         { principalKind: input.principal.kind }
       ).confidencePct;
@@ -866,7 +861,6 @@ export class DoltgresKnowledgeContributionAdapter
       const confidencePct = initializeConfidence(
         {
           sourceType: provenance.sourceType,
-          confidencePct: input.entry.confidencePct,
         },
         { principalKind: input.principal.kind }
       ).confidencePct;
@@ -899,7 +893,6 @@ export class DoltgresKnowledgeContributionAdapter
       const confidencePct = initializeConfidence(
         {
           sourceType: provenance.sourceType,
-          confidencePct: input.entry.confidencePct,
         },
         { principalKind: input.principal.kind }
       ).confidencePct;
@@ -1097,7 +1090,6 @@ export class DoltgresKnowledgeContributionAdapter
   async merge(input: {
     contributionId: string;
     principal: Principal;
-    confidencePct?: number;
   }): Promise<{ commitHash: string }> {
     const rec = await this.getById(input.contributionId);
     if (!rec) throw new ContributionNotFoundError(input.contributionId);
@@ -1123,13 +1115,6 @@ export class DoltgresKnowledgeContributionAdapter
         const msg = e instanceof Error ? e.message : String(e);
         throw new ContributionConflictError(
           `dolt_merge failed for ${rec.branch}: ${msg}`
-        );
-      }
-
-      if (input.confidencePct != null) {
-        const refPattern = `${sourceRefPrefix(rec.contributionId)}%`;
-        await conn.unsafe(
-          `UPDATE knowledge SET confidence_pct = ${escapeValue(input.confidencePct)} WHERE source_ref LIKE ${escapeValue(refPattern)}`
         );
       }
 
