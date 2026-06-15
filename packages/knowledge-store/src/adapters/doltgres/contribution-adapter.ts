@@ -23,6 +23,10 @@
 
 import { randomBytes } from "node:crypto";
 import type { ReservedSql, Sql } from "postgres";
+import {
+  initializeConfidence,
+  recomputeConfidence as recomputeConfidenceByPolicy,
+} from "../../domain/confidence-policy.js";
 import type {
   ContributionCommitRecord,
   ContributionDiffEntry,
@@ -217,45 +221,6 @@ async function assertKnowledgeRowExists(
 // inserts land on contrib/* not main).
 // ---------------------------------------------------------------------------
 
-const EDO_CONFIDENCE_AGENT_DEFAULT = 30;
-
-// Confidence formula constants (knowledge-syntropy § Confidence Is Computed).
-// Duplicated from edo-resolver.ts so the contribution adapter can recompute
-// inside its reserved-branch connection without dragging the whole resolver
-// across packages.
-const SUPPORT_BUMP = 10;
-const SUPPORT_CAP = 50;
-const CONTRADICT_PENALTY = 15;
-const INITIAL_BY_SOURCE: Record<string, number> = {
-  agent: 30,
-  analysis_signal: 40,
-  external: 50,
-  human: 70,
-  derived: 40,
-};
-const INITIAL_DEFAULT = 40;
-
-function initialConfidenceForSource(sourceType: string): number {
-  return INITIAL_BY_SOURCE[sourceType] ?? INITIAL_DEFAULT;
-}
-
-function isSupporting(citationType: string): boolean {
-  return (
-    citationType === "supports" ||
-    citationType === "validates" ||
-    citationType === "evidence_for" ||
-    citationType === "extends"
-  );
-}
-
-function isContradicting(citationType: string): boolean {
-  return citationType === "contradicts" || citationType === "invalidates";
-}
-
-function clampConfidence(n: number): number {
-  return Math.max(0, Math.min(100, n));
-}
-
 function citationIdFor(
   citingId: string,
   citedId: string,
@@ -391,20 +356,23 @@ async function recomputeConfidenceOnConn(
   }
   const sourceType = (entryRows[0] as Record<string, unknown>)
     .source_type as string;
-  const initial = initialConfidenceForSource(sourceType);
   const incoming = await conn.unsafe(
     `SELECT citation_type FROM citations WHERE cited_id = ${escapeValue(entryId)}`
   );
-  let supportCount = 0;
-  let contradictCount = 0;
-  for (const r of incoming) {
-    const t = (r as Record<string, unknown>).citation_type as string;
-    if (isSupporting(t)) supportCount++;
-    else if (isContradicting(t)) contradictCount++;
-  }
-  const supportBump = Math.min(SUPPORT_CAP, SUPPORT_BUMP * supportCount);
-  const penalty = CONTRADICT_PENALTY * contradictCount;
-  const next = clampConfidence(initial + supportBump - penalty);
+  const citations = incoming.map((r) => ({
+    citationType: (r as Record<string, unknown>).citation_type as string,
+  }));
+  const next = recomputeConfidenceByPolicy(
+    {
+      sourceType: sourceType as
+        | "human"
+        | "agent"
+        | "analysis_signal"
+        | "external"
+        | "derived",
+    },
+    citations
+  ).confidencePct;
   await conn.unsafe(
     `UPDATE knowledge SET confidence_pct = ${escapeValue(next)} WHERE id = ${escapeValue(entryId)}`
   );
@@ -452,8 +420,13 @@ async function applyEdit(input: {
   }
 
   await assertDomainRegistered(conn, edit.entry.domain);
-  const confidencePct =
-    principal.kind === "agent" ? 30 : (edit.entry.confidencePct ?? 30);
+  const confidencePct = initializeConfidence(
+    {
+      sourceType: "external",
+      confidencePct: edit.entry.confidencePct,
+    },
+    { principalKind: principal.kind }
+  ).confidencePct;
   if (edit.op === "update") {
     await assertKnowledgeRowExists(conn, edit.targetRowId);
     const entryType = edit.entry.entryType ?? "finding";
@@ -573,8 +546,13 @@ export class DoltgresKnowledgeContributionAdapter
   ): Promise<ContributionRecord> {
     return this.createEdoBatch(input, async ({ conn, contributionId }) => {
       const provenance = edoBatchProvenance(contributionId, input.principal, 1);
-      const confidencePct =
-        input.entry.confidencePct ?? EDO_CONFIDENCE_AGENT_DEFAULT;
+      const confidencePct = initializeConfidence(
+        {
+          sourceType: provenance.sourceType,
+          confidencePct: input.entry.confidencePct,
+        },
+        { principalKind: input.principal.kind }
+      ).confidencePct;
       await insertKnowledgeRow({
         conn,
         id: input.entry.id,
@@ -613,8 +591,13 @@ export class DoltgresKnowledgeContributionAdapter
   ): Promise<ContributionRecord> {
     return this.createEdoBatch(input, async ({ conn, contributionId }) => {
       const provenance = edoBatchProvenance(contributionId, input.principal, 1);
-      const confidencePct =
-        input.entry.confidencePct ?? EDO_CONFIDENCE_AGENT_DEFAULT;
+      const confidencePct = initializeConfidence(
+        {
+          sourceType: provenance.sourceType,
+          confidencePct: input.entry.confidencePct,
+        },
+        { principalKind: input.principal.kind }
+      ).confidencePct;
       await insertKnowledgeRow({
         conn,
         id: input.entry.id,
@@ -646,9 +629,13 @@ export class DoltgresKnowledgeContributionAdapter
   ): Promise<ContributionRecord> {
     return this.createEdoBatch(input, async ({ conn, contributionId }) => {
       const provenance = edoBatchProvenance(contributionId, input.principal, 1);
-      const confidencePct =
-        input.entry.confidencePct ??
-        initialConfidenceForSource(provenance.sourceType);
+      const confidencePct = initializeConfidence(
+        {
+          sourceType: provenance.sourceType,
+          confidencePct: input.entry.confidencePct,
+        },
+        { principalKind: input.principal.kind }
+      ).confidencePct;
       await insertKnowledgeRow({
         conn,
         id: input.entry.id,
@@ -836,8 +823,13 @@ export class DoltgresKnowledgeContributionAdapter
   ): Promise<ContributionRecord> {
     return this.appendEdoBatch(input, async ({ conn, contributionId }) => {
       const provenance = edoBatchProvenance(contributionId, input.principal, 1);
-      const confidencePct =
-        input.entry.confidencePct ?? EDO_CONFIDENCE_AGENT_DEFAULT;
+      const confidencePct = initializeConfidence(
+        {
+          sourceType: provenance.sourceType,
+          confidencePct: input.entry.confidencePct,
+        },
+        { principalKind: input.principal.kind }
+      ).confidencePct;
       await insertKnowledgeRow({
         conn,
         id: input.entry.id,
@@ -871,8 +863,13 @@ export class DoltgresKnowledgeContributionAdapter
   ): Promise<ContributionRecord> {
     return this.appendEdoBatch(input, async ({ conn, contributionId }) => {
       const provenance = edoBatchProvenance(contributionId, input.principal, 1);
-      const confidencePct =
-        input.entry.confidencePct ?? EDO_CONFIDENCE_AGENT_DEFAULT;
+      const confidencePct = initializeConfidence(
+        {
+          sourceType: provenance.sourceType,
+          confidencePct: input.entry.confidencePct,
+        },
+        { principalKind: input.principal.kind }
+      ).confidencePct;
       await insertKnowledgeRow({
         conn,
         id: input.entry.id,
@@ -899,9 +896,13 @@ export class DoltgresKnowledgeContributionAdapter
   ): Promise<ContributionRecord> {
     return this.appendEdoBatch(input, async ({ conn, contributionId }) => {
       const provenance = edoBatchProvenance(contributionId, input.principal, 1);
-      const confidencePct =
-        input.entry.confidencePct ??
-        initialConfidenceForSource(provenance.sourceType);
+      const confidencePct = initializeConfidence(
+        {
+          sourceType: provenance.sourceType,
+          confidencePct: input.entry.confidencePct,
+        },
+        { principalKind: input.principal.kind }
+      ).confidencePct;
       await insertKnowledgeRow({
         conn,
         id: input.entry.id,

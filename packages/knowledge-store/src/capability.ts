@@ -20,7 +20,7 @@ import type {
   KnowledgeSearchParams,
   KnowledgeWriteParams,
 } from "@cogni/ai-tools";
-
+import { initializeConfidence } from "./domain/confidence-policy.js";
 import {
   type KnowledgeGate,
   KnowledgeGateError,
@@ -28,8 +28,6 @@ import {
   V0_DETERMINISTIC_GATES,
 } from "./domain/gates/index.js";
 import type { KnowledgeStorePort } from "./port/knowledge-store.port.js";
-
-const CONFIDENCE_DRAFT = 30;
 
 function toEntry(k: {
   id: string;
@@ -74,7 +72,7 @@ export interface KnowledgeCapabilityOptions {
  * - write() runs the v0 gate chain, then upserts + auto-commits with a
  *   descriptive message. A failing gate throws `KnowledgeGateError` — the
  *   write is rejected at the seam, never reaches Doltgres.
- * - Confidence defaults to DRAFT (30%) if not specified.
+ * - Confidence is initialized by the shared domain policy if not specified.
  */
 export function createKnowledgeCapability(
   port: KnowledgeStorePort,
@@ -125,7 +123,10 @@ export function createKnowledgeCapability(
       // passed (the shape/provenance v0 gates only touch title/tags/etc), so
       // the original enum-typed value is the safe carrier.
       const c = gateResult.candidate;
-      const confidence = params.confidencePct ?? CONFIDENCE_DRAFT;
+      const confidence = initializeConfidence({
+        sourceType: params.sourceType,
+        confidencePct: params.confidencePct,
+      });
       const entry = await port.upsertKnowledge({
         id: c.id ?? params.id,
         domain: c.domain,
@@ -133,7 +134,7 @@ export function createKnowledgeCapability(
         content: c.content,
         sourceType: params.sourceType,
         entityId: c.entityId ?? null,
-        confidencePct: confidence,
+        confidencePct: confidence.confidencePct,
         sourceRef: c.sourceRef ?? null,
         tags: c.tags ?? null,
       });
