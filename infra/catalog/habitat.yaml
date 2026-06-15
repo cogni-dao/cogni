@@ -8,7 +8,7 @@ migrator_tag_suffix: "-habitat-migrate"
 source_repo: https://github.com/Cogni-DAO/habitat.git
 image_repository: ghcr.io/cogni-dao/habitat
 # Accepted deploy SHA — catalog pin replacing the gitlink (CATALOG_SOURCE_SHA_IS_THE_DEPLOY_PIN).
-source_sha: 98a7266aef436196ec92531205895af66047857e
+source_sha: 96a7e438998dab76e11109aeaa6e0aadbcd92907
 candidate_a_branch: deploy/candidate-a-habitat
 preview_branch: deploy/preview-habitat
 production_branch: deploy/production-habitat
