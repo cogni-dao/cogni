@@ -3,11 +3,10 @@
 
 /**
  * Module: `@contracts/knowledge.bootstrap.v1.contract`
- * Purpose: HTTP response contract for the session-start kickstart bundle —
- *   the "cognition substrate" a node serves to an agent at SessionStart in
- *   place of git-synced AGENTS.md sprawl. Mounted at
- *   GET /api/v1/knowledge/bootstrap and advertised via /.well-known/agent.json.
- * Scope: Zod schemas + types for the wire format. No business logic, I/O, or auth.
+ * Purpose: HTTP response contract for a node's session-start "cognition substrate" kickstart bundle.
+ *   Served at GET /api/v1/knowledge/bootstrap (advertised via /.well-known/agent.json) in place of
+ *   git-synced AGENTS.md sprawl.
+ * Scope: Zod schemas + types for the wire format only. Does not contain business logic, I/O, or auth.
  * Invariants:
  *   - INDEX_NOT_CONTENT: bundle carries skill/domain POINTERS (title + use-when
  *     + recall path), never full entry bodies — full content stays behind the
