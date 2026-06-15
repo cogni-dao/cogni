@@ -57,20 +57,6 @@ patches:
         type: ExternalName
         externalName: vm.cognidao.org
         clusterIP: null
-  - target: { kind: Service, name: poly-app }
-    patch: |
-      $patch: delete
-      apiVersion: v1
-      kind: Service
-      metadata:
-        name: poly-app
-  - target: { kind: Service, name: resy-app }
-    patch: |
-      $patch: delete
-      apiVersion: v1
-      kind: Service
-      metadata:
-        name: resy-app
   - target: { kind: EndpointSlice, name: temporal-1 }
     patch: |
       $patch: delete
@@ -92,17 +78,3 @@ patches:
       kind: EndpointSlice
       metadata:
         name: app-1
-  - target: { kind: EndpointSlice, name: poly-app-1 }
-    patch: |
-      $patch: delete
-      apiVersion: discovery.k8s.io/v1
-      kind: EndpointSlice
-      metadata:
-        name: poly-app-1
-  - target: { kind: EndpointSlice, name: resy-app-1 }
-    patch: |
-      $patch: delete
-      apiVersion: discovery.k8s.io/v1
-      kind: EndpointSlice
-      metadata:
-        name: resy-app-1

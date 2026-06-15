@@ -16,12 +16,20 @@
 
 // Re-export catalog (single source of truth for graph definitions)
 export {
+  type CatalogEntry,
   DEFAULT_LANGGRAPH_GRAPH_ID,
   LANGGRAPH_CATALOG,
   LANGGRAPH_GRAPH_IDS,
   LANGGRAPH_PROVIDER_ID,
+  type LangGraphCatalog,
   type LangGraphCatalogKeys,
   type LangGraphGraphId,
+  NODE_LANGGRAPH_CATALOG,
+  NODE_LANGGRAPH_GRAPH_IDS,
+  OPERATOR_LANGGRAPH_CATALOG,
+  OPERATOR_LANGGRAPH_GRAPH_IDS,
+  type OperatorLangGraphCatalogKeys,
+  type OperatorLangGraphGraphId,
 } from "./catalog";
 
 // Re-export graph constants and factories

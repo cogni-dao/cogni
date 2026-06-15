@@ -16,7 +16,7 @@
  * @internal
  */
 
-import { LANGGRAPH_CATALOG } from "@cogni/langgraph-graphs";
+import { LANGGRAPH_CATALOG } from "@cogni/operator-graphs";
 
 import type { AgentDescriptor } from "@/ports";
 

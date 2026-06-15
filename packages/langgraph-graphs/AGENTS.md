@@ -42,7 +42,8 @@ LangGraph graph definitions and runtime utilities for agentic AI execution. Cont
 
 - **Exports (subpaths):**
   - `@cogni/langgraph-graphs` — Barrel re-export of common types plus:
-    - `LANGGRAPH_CATALOG` — Graph catalog with registered graphs and metadata
+    - `LANGGRAPH_CATALOG` / `NODE_LANGGRAPH_CATALOG` — Node-safe graph catalog with registered graphs and metadata
+    - `OPERATOR_LANGGRAPH_CATALOG` — Operator-only superset that includes lifecycle/VCS graphs such as PR Manager
     - `McpToolSource` — ToolSourcePort implementation for MCP-discovered tools
     - `loadMcpTools()`, `parseMcpConfigFromEnv()` — MCP client connection + config parsing
     - `McpHttpServerConfig`, `McpSseServerConfig`, `McpStdioServerConfig` — Transport config types
@@ -64,8 +65,6 @@ LangGraph graph definitions and runtime utilities for agentic AI execution. Cont
     - `createPrReviewGraph()` — Single-call structured output graph for PR review (no tools, `responseFormat` for typed metrics)
     - `createBrowserGraph()` — Browser automation agent via Playwright MCP (mcpServerIds: ["playwright"])
     - `createFrontendTesterGraph()` — QA agent for UI testing via Playwright MCP
-    - `PR_MANAGER_GRAPH_NAME`, `PR_MANAGER_PROMPT` — PR Manager agent (merge bot, reads evolving playbook)
-    - `PR_MANAGER_TOOL_IDS` — VCS tools + repo_open (for playbook) + work_item_query
     - `POET_GRAPH_NAME`, `PONDERER_GRAPH_NAME`, `BRAIN_GRAPH_NAME`, `RESEARCH_GRAPH_NAME`, `PR_REVIEW_GRAPH_NAME`, `BROWSER_GRAPH_NAME`, `FRONTEND_TESTER_GRAPH_NAME` — Graph name constants
     - `InvokableGraph<I,O>`, `MessageGraphInput`, `MessageGraphOutput` — Type firewall
     - `GraphInvokeOptions`, `CreateReactAgentGraphOptions` — Factory types
@@ -102,7 +101,8 @@ pnpm --filter @cogni/langgraph-graphs test
 - ENTRYPOINT_IS_THIN: `server.ts` and `cogni-exec.ts` are ~1-liners calling `makeServerGraph`/`makeCogniGraph`
 - NO_CROSSING_THE_STREAMS: `server.ts` uses `initChatModel`; `cogni-exec.ts` uses ALS — never mix
 - TOOLS_DENY_BY_DEFAULT: toLangChainTool checks configurable.toolIds; returns policy_denied if not in list
-- TOOL_CATALOG_IS_CANONICAL: `LANGGRAPH_CATALOG` entries use `toolIds: string[]` references; providers resolve from `TOOL_CATALOG`
+- TOOL_CATALOG_IS_CANONICAL: catalog entries use `toolIds: string[]` references; providers resolve from `TOOL_CATALOG`
+- RUNTIME_CATALOG_ISOLATION: `LANGGRAPH_CATALOG` is node-safe; operator runtimes must explicitly opt into `OPERATOR_LANGGRAPH_CATALOG`
 
 ## Dependencies
 

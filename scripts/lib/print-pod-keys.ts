@@ -53,6 +53,6 @@ function main(): void {
 }
 
 // Run only when invoked directly (allows import in unit tests).
-if (process.argv[1] && process.argv[1].endsWith("print-pod-keys.ts")) {
+if (process.argv[1]?.endsWith("print-pod-keys.ts")) {
   main();
 }

@@ -4,10 +4,10 @@
 
 /**
  * Module: `@scripts/run-scoped-package-build`
- * Purpose: Build only the workspace packages needed for local affected checks.
- * Scope: Local check orchestration only; does not replace full main/CI package builds or validation.
- * Invariants: Changed packages always rebuild; buildables with missing declaration outputs rebuild regardless of git diff.
- * Side-effects: IO (spawns pnpm/tsc subprocesses and writes package dist outputs)
+ * Purpose: Emit only workspace package declarations needed for local affected checks.
+ * Scope: Local check orchestration only; does not build JavaScript artifacts.
+ * Invariants: Changed packages always refresh declarations; missing declaration outputs are detected regardless of git diff.
+ * Side-effects: IO (spawns tsc subprocesses and writes package declaration outputs)
  * Links: scripts/check-fast.sh, scripts/run-turbo-checks.sh, tsconfig.json
  * @internal
  */
@@ -45,9 +45,12 @@ const useAffected =
   explicitScope || (upstreamRef.length > 0 && currentBranch !== "main");
 
 if (!useAffected) {
-  console.log("Package build scope: full");
+  const workspaceGraph = loadWorkspaceGraph();
+  const targets = allBuildableWorkspaces(workspaceGraph);
+  console.log("Package declaration scope: full");
   if (!dryRun) {
-    runPnpm(["packages:build"]);
+    runBuildTargets(targets);
+    validateDeclarationOutputs(targets);
   }
   process.exit(0);
 }
@@ -61,13 +64,16 @@ const globalBuildInputsTouched = didTouchGlobalBuildInputs(
 );
 if (globalBuildInputsTouched) {
   console.error(
-    `${red}WARN(task.0306): global build inputs changed (${scopeBase}...${scopeHead}); falling back to full pnpm packages:build.${reset}`
+    `${red}WARN(task.0306): global build inputs changed (${scopeBase}...${scopeHead}); refreshing all package declarations.${reset}`
   );
+  const workspaceGraph = loadWorkspaceGraph();
+  const targets = allBuildableWorkspaces(workspaceGraph);
   console.log(
-    `Package build scope: full (global inputs changed: ${scopeBase}...${scopeHead})`
+    `Package declaration scope: full (global inputs changed: ${scopeBase}...${scopeHead})`
   );
   if (!dryRun) {
-    runPnpm(["packages:build"]);
+    runBuildTargets(targets);
+    validateDeclarationOutputs(targets);
   }
   process.exit(0);
 }
@@ -82,7 +88,7 @@ const changedWorkspaceNames = getChangedWorkspaceNames(
 const buildPlan = createBuildPlan(changedWorkspaceNames, workspaceGraph);
 
 if (buildPlan.targets.length === 0) {
-  console.log(`Package build scope: none (${scopeBase}...${scopeHead})`);
+  console.log(`Package declaration scope: none (${scopeBase}...${scopeHead})`);
   console.log("All required package declarations already exist.");
   process.exit(0);
 }
@@ -116,7 +122,7 @@ function createBuildPlan(changedNames, workspaceGraph) {
       !hasDeclarationOutput(workspace)
   );
 
-  // Always rebuild any buildable workspace whose declaration output is missing,
+  // Always refresh any buildable workspace whose declaration output is missing,
   // even outside the changed-set closure. Catches fresh-worktree bootstrap where
   // no source changed vs upstream but no packages have ever been built locally.
   const closureMissingNames = new Set(closureMissing.map((w) => w.name));
@@ -145,12 +151,16 @@ function createBuildPlan(changedNames, workspaceGraph) {
 }
 
 function printBuildPlan(scopeBase, scopeHead, buildPlan) {
-  console.log(`Package build scope: affected (${scopeBase}...${scopeHead})`);
-  console.log(`Package builds selected: ${buildPlan.targets.length}`);
+  console.log(
+    `Package declaration scope: affected (${scopeBase}...${scopeHead})`
+  );
+  console.log(
+    `Package declaration refreshes selected: ${buildPlan.targets.length}`
+  );
 
   if (buildPlan.affectedBuildables.length > 0) {
     console.log(
-      `Rebuild changed packages: ${buildPlan.affectedBuildables
+      `Refresh changed package declarations: ${buildPlan.affectedBuildables
         .map((workspace) => workspace.name)
         .join(", ")}`
     );
@@ -166,13 +176,6 @@ function printBuildPlan(scopeBase, scopeHead, buildPlan) {
 }
 
 function runBuildTargets(targets) {
-  const filters = targets.flatMap((workspace) => [
-    "--filter",
-    `./${workspace.relDir}`,
-  ]);
-
-  runPnpm(["-r", ...filters, "build"]);
-
   const refs = targets.map((workspace) => {
     if (!workspace.refPath) {
       throw new Error(
@@ -183,7 +186,15 @@ function runBuildTargets(targets) {
     return workspace.refPath;
   });
 
-  runPnpm(["exec", "tsc", "-b", ...refs]);
+  runPnpm(["exec", "tsc", "-b", "--force", "--emitDeclarationOnly", ...refs]);
+}
+
+function allBuildableWorkspaces(workspaceGraph) {
+  return sortWorkspaces(
+    [...workspaceGraph.byName.values()].filter(
+      (workspace) => workspace.buildable
+    )
+  );
 }
 
 function validateDeclarationOutputs(targets) {

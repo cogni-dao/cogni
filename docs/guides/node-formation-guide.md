@@ -8,7 +8,7 @@ summary: Step-by-step guide for forming a new Cogni DAO node via the web wizard.
 read_when: Setting up a new DAO node, running the formation wizard, or testing formation locally.
 owner: derekg1729
 created: 2026-02-07
-verified:
+verified: 2026-06-08
 tags: [web3, setup, dao]
 ---
 
@@ -27,13 +27,13 @@ This guide covers the **monorepo node** path — a node born into the Cogni mono
 The arc this guide drives:
 
 ```
-1. Register    wizard at /setup/nodes → DB-backed node row (Step 1)
+1. Register    wizard at /nodes → DB-backed node row (Step 1)
        ↓
 2. Formation   per-node wizard page → DAO + token + CogniSignal on-chain, server-verified (Steps 2-7)
        ↓
 3. Publish     operator mints the node repo and authors ONE submodule deployment PR (Step 8)
        ↓
-4. Flight      POST /api/v1/vcs/flight {prNumber} → build lands at <node>-test.cognidao.org
+4. Flight      POST /api/v1/vcs/flight {nodeRef:{nodeId,sourceSha}} → digest lands at <node>-test.cognidao.org
        ↓
 5. Ongoing     per-node deploy branch + Argo Application; subsequent merges auto-deploy (CATALOG_IS_SSOT)
 ```
@@ -51,7 +51,7 @@ Registration makes the operator DB-aware before any wallet transaction. Formatio
 
 ### 1. Register a Node
 
-Open `/setup/nodes` in the application, choose a slug, and create the node row. The canonical per-node wizard page is `src/app/(app)/setup/nodes/[id]/page.tsx`.
+Open `/nodes` in the application, choose a slug, and create the node row. The canonical per-node wizard page is `src/app/(app)/nodes/[id]/page.tsx`.
 
 ### 2. Fill in Token Details (3 fields)
 
@@ -102,16 +102,17 @@ The per-node wizard patches the `nodes` registry row with the verified DAO, plug
 
 What the Publish PR contains:
 
-- **Submodule gitlink** — `nodes/<slug>` is a `160000` gitlink pointing at the node's own minted repo (`Cogni-DAO/<slug>`, `generate`d from the `node-template` template), plus a `.gitmodules` stanza. The node's ~1100 files live in _that_ repo, not inlined here; identity (`node_id` / `scope_id` + DAO addresses in `.cogni/repo-spec.yaml`) is set in the node repo before the pin.
+- **Submodule gitlink** — `nodes/<slug>` is a `160000` gitlink pointing at the node's own minted repo (`Cogni-DAO/<slug>`, a named fork of `node-template`), plus a `.gitmodules` stanza. The node's ~1100 files live in _that_ repo, not inlined here; identity (`node_id` / `scope_id` + DAO addresses in `.cogni/repo-spec.yaml`) is set in the node repo before the pin.
 - **Catalog entry** — `infra/catalog/<slug>.yaml`. This is the keystone: `CATALOG_IS_SSOT` ([ci-cd.md](../spec/ci-cd.md) Axiom 16) means overlays, AppSets, Caddy routing, scheduler endpoints, and the build matrix all derive from it. (The submodule _pin_ lives in `.gitmodules` — git-native — not the catalog.)
 - **Generated footprint** (byte-exact, drift-gated against `scripts/ci/render-*.sh`): overlays ×3 (`infra/k8s/overlays/{candidate-a,preview,production}/<slug>/`), per-node AppSets ×3 (`infra/k8s/argocd/<env>-<slug>-applicationset.yaml`, Axiom 18), Caddyfile route, `ci.yaml` scope filter, scheduler-worker endpoints. **No `pnpm-lock.yaml`** — a submodule node is not a workspace member of the operator monorepo.
+- **ESO-first all-env shape** — the minted child repo carries `k8s/external-secrets/{candidate-a,preview,production}/{external-secret.yaml,kustomization.yaml}`; when pinned at `nodes/<slug>`, the substrate lane applies each leaf as `nodes/<slug>/k8s/external-secrets/<env>/` and materializes `<slug>-env-secrets`.
 
-**Secrets are NOT in the PR.** The per-node `secrets-catalog.yaml` + `k8s/external-secrets/**` are absent from the template seed (`NO_SECRETS_IN_PR`, `bug.5086` — see spec for why); a node inherits the shared secret baseline via ESO, so no secret value ever lands in git. To add a node-specific secret later, edit `nodes/<slug>/.cogni/secrets-catalog.yaml` (one PR, node domain) — see the [cicd-secrets-expert skill](../../.claude/skills/cicd-secrets-expert/SKILL.md).
+**Secret values are NOT in the PR.** The per-node `secrets-catalog.yaml` is absent from the template seed; a node inherits the shared secret baseline via OpenBao/ESO, so no secret value ever lands in git. ExternalSecret shape is present because each generated Deployment consumes `<slug>-env-secrets`. To add a node-specific secret later, edit `nodes/<slug>/.cogni/secrets-catalog.yaml` (one PR, node domain) — see the [cicd-secrets-expert skill](../../.claude/skills/cicd-secrets-expert/SKILL.md).
 
 **Your job after Publish:**
 
-1. **Review + merge** the operator PR (CI green). Note: a node-birth PR legitimately spans `<node> + operator` domains — the `single-node-scope` gate carves this out for the node's own deploy wiring (catalog/overlays/AppSets/Caddy/scheduler).
-2. **Flight**: `POST /api/v1/vcs/flight { prNumber }` → build lands at `https://<slug>-test.cognidao.org`.
+1. **Review + merge** the operator PR (CI green). Note: the node's source-code PRs happen in the child repo; the parent birth PR is operator control-plane work: gitlink/pin acceptance plus catalog/overlays/AppSets/Caddy/scheduler wiring.
+2. **Flight**: `POST /api/v1/vcs/flight { nodeRef: { nodeId, sourceSha } }` → the operator resolves `image_repository:sha-<sourceSha>` to a digest and deploys it at `https://<slug>-test.cognidao.org`. The parent PR number is review metadata for the operator pin PR, not the deploy coordinate. Before flight, the external agent requests access (`POST /api/v1/nodes/{nodeId}/access-requests`) and the node owner approves it in the node's **Agents** section — see [RBAC §6 Node Access Request Flow](../spec/rbac.md#6-node-access-request-flow).
 3. **Validate**: run [`/validate-candidate`](../../.claude/skills/validate-candidate/SKILL.md) against the deployed build.
 
 Per-node DNS, DB, and secrets reconcile **inside the flight/promote lane** (idempotent, catalog-driven — `DNS_IS_RECONCILED_PER_ENV`, Axiom 21), not via a full env reprovision. For the row-by-row deploy contract (nodePort allocation, overlay/AppSet proof, DB schema layer, the candidate-a-only trap) see [Create a New Node (Deploy)](./create-node.md).
@@ -152,6 +153,7 @@ Today only **production** is typically activated. Consequence (`bug.5087`): in `
 
 - [Node Formation Spec](../spec/node-formation.md) — formation + Publish + payment-activation design
 - [Create a New Node (Deploy)](./create-node.md) — the deploy-row contract Step 8 hands off to
+- [RBAC §6 Node Access Request Flow](../spec/rbac.md#6-node-access-request-flow) — agent requests access; owner approves in the node Agents section before bearer-token nodeRef flights
 - [Fork Quickstart](../runbooks/fork-quickstart.md) — the standalone-fork alternative (`Cogni-DAO/standalone-node`)
 - [cicd-secrets-expert skill](../../.claude/skills/cicd-secrets-expert/SKILL.md) — why secrets are stripped from the Publish PR (ESO-inherited)
 - [Node Formation Project](../../work/projects/proj.node-formation-ui.md)

@@ -1,0 +1,78 @@
+# Grafana unified-alerting provisioning — GitHub webhook plane health.
+#
+# WHY: On 2026-06-11 the production webhook secret drifted and 100% of GitHub
+# webhooks 401'd for 3+ days, silently killing BOTH PR review and attribution
+# ingestion (the webhook receiver inserts ingestion_receipts → epochs). Nothing
+# alerted. These rules make that failure mode loud.
+#
+# APPLY: Grafana Git Sync does not sync alerting (see ./README.md). Apply via the
+# alerting provisioning API or Terraform. Replace <FOLDER_UID> with the target
+# folder and confirm a contact point on the notification policy. Datasource UID
+# `grafanacloud-logs` is the production Loki source.
+#
+# Source events (operator webhook-route): msg="webhook processed" (verified) and
+# msg="webhook verification failed" (401, HMAC mismatch).
+apiVersion: 1
+groups:
+  - orgId: 1
+    folder: <FOLDER_UID>
+    name: webhook-plane
+    interval: 5m
+    rules:
+      # PRIMARY: total plane death — no verified webhook in 30m. This is the
+      # signal that was missing during the 3-day outage.
+      - uid: webhook-plane-no-verified
+        title: GitHub webhook plane DOWN — zero verified webhooks in 30m
+        condition: THRESHOLD
+        for: 10m
+        data:
+          - refId: COUNT
+            datasourceUid: grafanacloud-logs
+            relativeTimeRange: { from: 1800, to: 0 }
+            model:
+              datasource: { type: loki, uid: grafanacloud-logs }
+              expr: 'sum(count_over_time({env="production",pod=~"operator-node-app-.*",service="app"} | json | msg="webhook processed" [30m]))'
+              queryType: instant
+              refId: COUNT
+          - refId: THRESHOLD
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: COUNT
+              conditions:
+                - evaluator: { type: lt, params: [1] }
+              refId: THRESHOLD
+        annotations:
+          summary: "No GitHub webhook has verified in 30m — review + attribution ingestion are dead. Check operator GH_WEBHOOK_SECRET vs the cogni-operator App secret (bug.5000)."
+        labels: { severity: critical, plane: webhook }
+        noDataState: Alerting
+        execErrState: Alerting
+
+      # SECONDARY: sustained verification failures — a mis-keyed App still
+      # delivering (e.g. a not-yet-purged review App, or a fresh drift).
+      - uid: webhook-plane-verification-failing
+        title: GitHub webhook verification failing (sustained 401s)
+        condition: THRESHOLD
+        for: 15m
+        data:
+          - refId: COUNT
+            datasourceUid: grafanacloud-logs
+            relativeTimeRange: { from: 900, to: 0 }
+            model:
+              datasource: { type: loki, uid: grafanacloud-logs }
+              expr: 'sum(count_over_time({env="production",pod=~"operator-node-app-.*",service="app"} | json | msg="webhook verification failed" [15m]))'
+              queryType: instant
+              refId: COUNT
+          - refId: THRESHOLD
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: COUNT
+              conditions:
+                - evaluator: { type: gt, params: [50] }
+              refId: THRESHOLD
+        annotations:
+          summary: "Sustained GitHub webhook 401s — a delivering App's webhook secret doesn't match GH_WEBHOOK_SECRET. Identify the App and align or uninstall it."
+        labels: { severity: warning, plane: webhook }
+        noDataState: OK
+        execErrState: Alerting

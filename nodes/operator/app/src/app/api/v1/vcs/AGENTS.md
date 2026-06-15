@@ -9,7 +9,7 @@
 
 ## Purpose
 
-REST API routes for VCS operations — CI-gated candidate-a flight dispatch for external AI agents.
+REST API routes for VCS operations — artifact-gated candidate-a flight dispatch for external AI agents.
 
 ## Pointers
 
@@ -31,32 +31,33 @@ REST API routes for VCS operations — CI-gated candidate-a flight dispatch for 
 
 - **Exports:** none (route handlers only)
 - **Routes:**
-  - `POST /api/v1/vcs/flight` — CI-gated candidate-a flight request; requires Bearer or session auth; 202 on dispatch, 422 if CI not green
+  - `POST /api/v1/vcs/flight` — RBAC + artifact-gated candidate-a flight request for `nodeRef`; requires Bearer or session auth; checks `node.flight` when OpenFGA is configured; 202 on dispatch, 422 if source/image preflight fails
 
 ## Ports
 
-- **Uses ports:** `VcsCapability` (via container)
+- **Uses ports:** `OperatorDeployPlanePort` (via operator-local factory)
 - **Implements ports:** none
 
 ## Responsibilities
 
-- This directory **does:** verify CI green for PR head SHA, dispatch `candidate-flight.yml` via `VcsCapability`, return dispatch metadata.
+- This directory **does:** verify node flight authorization, verify nodeRef source/image preflight via `OperatorDeployPlanePort`, dispatch `candidate-flight.yml`, return dispatch metadata.
 - This directory **does not:** own the slot lease (workflow owns it), poll for run ID, write any DB state.
 
 ## Standards
 
 - All routes auth-protected (Bearer token or SIWE session required)
+- OpenFGA-configured flight routes fail closed before GitHub prepare/dispatch unless `node.flight` allows the caller on the target node
 - Input/output validated via `flightOperation` Zod contract
-- No direct Octokit — all GitHub calls go through `VcsCapability`
+- No direct Octokit — hosted deploy-plane calls go through `OperatorDeployPlanePort`
 
 ## Dependencies
 
-- **Internal:** `@cogni/node-contracts` (flightOperation), `@/bootstrap/container`, `@/shared/config/repoSpec.server`, `@/app/_lib/auth/session`
+- **Internal:** `@cogni/node-contracts` (flightOperation), `@/bootstrap/capabilities/operator-deploy-plane`, `@/shared/config/repoSpec.server`, `@/app/_lib/auth/session`
 - **External:** next/server
 
 ## Change Protocol
 
-- Update this file when **Routes** or **VcsCapability** interface changes
+- Update this file when **Routes** or deploy-plane port usage changes
 - Update `vcs.flight.v1.contract.ts` first if request/response shape changes
 
 ## Notes

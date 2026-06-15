@@ -23,18 +23,21 @@ import {
   KNOWLEDGE_WRITE_NAME,
   REPO_OPEN_NAME,
   REPO_SEARCH_NAME,
-  VCS_GET_CI_STATUS_NAME,
-  VCS_LIST_PRS_NAME,
   WEB_SEARCH_NAME,
 } from "@cogni/ai-tools";
 import { describe, expect, it } from "vitest";
-import { LANGGRAPH_CATALOG, LANGGRAPH_GRAPH_IDS } from "../../../src/catalog";
+import {
+  LANGGRAPH_CATALOG,
+  LANGGRAPH_GRAPH_IDS,
+  OPERATOR_LANGGRAPH_CATALOG,
+  OPERATOR_LANGGRAPH_GRAPH_IDS,
+} from "../../../src/catalog";
 import { createAutoresearchGraph } from "../../../src/graphs/autoresearch/graph";
 import { createOperatorGraph } from "../../../src/graphs/operator/graph";
 
 describe("operator catalog entries", () => {
   it("operating-review entry exists with systemPrompt and graphFactory", () => {
-    const entry = LANGGRAPH_CATALOG["operating-review"];
+    const entry = OPERATOR_LANGGRAPH_CATALOG["operating-review"];
     expect(entry).toBeDefined();
     expect(entry.displayName).toBe("Operating Review");
     expect(entry.systemPrompt).toBeDefined();
@@ -45,7 +48,7 @@ describe("operator catalog entries", () => {
   });
 
   it("git-reviewer entry exists with systemPrompt and graphFactory", () => {
-    const entry = LANGGRAPH_CATALOG["git-reviewer"];
+    const entry = OPERATOR_LANGGRAPH_CATALOG["git-reviewer"];
     expect(entry).toBeDefined();
     expect(entry.displayName).toBe("Git Reviewer");
     expect(entry.systemPrompt).toBeDefined();
@@ -54,11 +57,32 @@ describe("operator catalog entries", () => {
     expect(entry.graphFactory).toBe(createOperatorGraph);
   });
 
+  it("pr-manager entry exists only in the operator catalog", () => {
+    const entry = OPERATOR_LANGGRAPH_CATALOG["pr-manager"];
+
+    expect(entry).toBeDefined();
+    expect(entry.displayName).toBe("PR Manager");
+    expect(entry.systemPrompt).toBeDefined();
+    expect(entry.graphFactory).toBe(createOperatorGraph);
+    expect(LANGGRAPH_CATALOG["pr-manager"]).toBeUndefined();
+  });
+
   it("graph IDs include operator roles", () => {
-    expect(LANGGRAPH_GRAPH_IDS["operating-review"]).toBe(
+    expect(OPERATOR_LANGGRAPH_GRAPH_IDS["operating-review"]).toBe(
       "langgraph:operating-review"
     );
-    expect(LANGGRAPH_GRAPH_IDS["git-reviewer"]).toBe("langgraph:git-reviewer");
+    expect(OPERATOR_LANGGRAPH_GRAPH_IDS["git-reviewer"]).toBe(
+      "langgraph:git-reviewer"
+    );
+  });
+
+  it("node-runtime catalog does not advertise operator lifecycle graphs", () => {
+    expect(LANGGRAPH_CATALOG["operating-review"]).toBeUndefined();
+    expect(LANGGRAPH_CATALOG["git-reviewer"]).toBeUndefined();
+    expect(LANGGRAPH_CATALOG["pr-manager"]).toBeUndefined();
+    expect("operating-review" in LANGGRAPH_GRAPH_IDS).toBe(false);
+    expect("git-reviewer" in LANGGRAPH_GRAPH_IDS).toBe(false);
+    expect("pr-manager" in LANGGRAPH_GRAPH_IDS).toBe(false);
   });
 
   it("autoresearch entries exist with evidence tools and graph IDs", () => {
@@ -69,12 +93,14 @@ describe("operator catalog entries", () => {
     ] as const;
 
     for (const graphName of graphNames) {
-      const entry = LANGGRAPH_CATALOG[graphName];
+      const entry = OPERATOR_LANGGRAPH_CATALOG[graphName];
       expect(entry).toBeDefined();
       expect(entry.systemPrompt).toBeDefined();
       expect((entry.systemPrompt ?? "").length).toBeGreaterThan(1_000);
       expect(entry.graphFactory).toBe(createAutoresearchGraph);
-      expect(LANGGRAPH_GRAPH_IDS[graphName]).toBe(`langgraph:${graphName}`);
+      expect(OPERATOR_LANGGRAPH_GRAPH_IDS[graphName]).toBe(
+        `langgraph:${graphName}`
+      );
 
       expect(entry.toolIds).toEqual(
         expect.arrayContaining([
@@ -83,8 +109,6 @@ describe("operator catalog entries", () => {
           KNOWLEDGE_WRITE_NAME,
           REPO_SEARCH_NAME,
           REPO_OPEN_NAME,
-          VCS_LIST_PRS_NAME,
-          VCS_GET_CI_STATUS_NAME,
           WEB_SEARCH_NAME,
           EDO_HYPOTHESIZE_NAME,
           EDO_DECIDE_NAME,
@@ -96,16 +120,16 @@ describe("operator catalog entries", () => {
 
   it("existing graph entries are unchanged", () => {
     // Verify original entries still exist and don't have systemPrompt
-    const poet = LANGGRAPH_CATALOG.poet;
+    const poet = OPERATOR_LANGGRAPH_CATALOG.poet;
     expect(poet).toBeDefined();
     expect(poet.displayName).toBe("Poet");
     expect(poet.systemPrompt).toBeUndefined();
 
-    const brain = LANGGRAPH_CATALOG.brain;
+    const brain = OPERATOR_LANGGRAPH_CATALOG.brain;
     expect(brain).toBeDefined();
     expect(brain.systemPrompt).toBeUndefined();
 
-    const prReview = LANGGRAPH_CATALOG["pr-review"];
+    const prReview = OPERATOR_LANGGRAPH_CATALOG["pr-review"];
     expect(prReview).toBeDefined();
     expect(prReview.systemPrompt).toBeUndefined();
   });

@@ -14,12 +14,15 @@
 
 import { v5 as uuidv5 } from "uuid";
 
+import type { NodeKnowledgeRemote } from "@/shared/node-app-scaffold/knowledge-remote";
+
 export interface NodeRepoSpecInput {
   nodeId: string;
   chainId: number;
   daoAddress: string;
   pluginAddress: string;
   signalAddress: string;
+  knowledgeRemote?: NodeKnowledgeRemote;
 }
 
 export function buildPendingActivationRepoSpecYaml(
@@ -45,9 +48,24 @@ cogni_dao:
   plugin_contract: "${input.pluginAddress}"
   signal_contract: "${input.signalAddress}"
   chain_id: "${input.chainId}"
+  base_url: "https://proposal.cognidao.org"
+
+${input.knowledgeRemote ? renderKnowledgeBlock(input.knowledgeRemote) : ""}
 
 # Payment rails — activate with: pnpm node:activate-payments
 payments:
   status: pending_activation
+`;
+}
+
+function renderKnowledgeBlock(remote: NodeKnowledgeRemote): string {
+  return `knowledge:
+  database: "${remote.database}"
+  remote:
+    provider: dolthub
+    owner: "${remote.owner}"
+    repo: "${remote.repo}"
+    url: "${remote.url}"
+    custody: cogni-owned
 `;
 }

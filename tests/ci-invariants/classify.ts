@@ -44,6 +44,8 @@ const OPERATOR_NODE = "operator";
  *   prose that travels with the implementing code.
  * - Exact single-node-scope policy maintenance files: the workflow gate,
  *   reference classifier, repo-spec resolver, parity fixtures, and narrow tests.
+ * - Exact fast-check devtools files: app Vitest source-resolution is repo
+ *   tooling, but some legacy in-tree app config entrypoints are duplicated.
  */
 const RIDE_ALONG_PATTERNS: ReadonlyArray<(p: string) => boolean> = [
   (p) => p === "pnpm-lock.yaml",
@@ -63,8 +65,36 @@ function isRideAlong(path: string): boolean {
   return RIDE_ALONG_PATTERNS.some((m) => m(path));
 }
 
+const DEVTOOLS_OPERATOR_PATTERNS: ReadonlyArray<(p: string) => boolean> = [
+  (p) => p === ".github/workflows/ci.yaml",
+  (p) => p === "docs/guides/new-worktree-setup.md",
+  (p) => p === "nodes/operator/app/vitest.config.mts",
+  (p) => p === "packages/langgraph-graphs/vitest.config.ts",
+  (p) => p === "packages/repo-spec/AGENTS.md",
+  (p) => p === "packages/repo-spec/src/accessors.ts",
+  (p) => p === "scripts/AGENTS.md",
+  (p) => p === "scripts/check-fast.sh",
+  (p) => p === "scripts/run-scoped-package-build.mjs",
+  (p) => p.startsWith("scripts/vitest/"),
+  (p) => p === "scripts/worktree-check.sh",
+  (p) => p === "tests/ci-invariants/classify.ts",
+  (p) => p.startsWith("tests/ci-invariants/fixtures/single-node-scope/"),
+  (p) => p === "tests/ci-invariants/single-node-scope-meta.spec.ts",
+  (p) => p === "vitest.config.mts",
+];
+
+function isDevtoolsOperatorPath(path: string): boolean {
+  return DEVTOOLS_OPERATOR_PATTERNS.some((m) => m(path));
+}
+
+function isRootAppVitestConfig(path: string, nonOperatorNodes: Set<string>) {
+  const match = path.match(/^nodes\/([^/]+)\/app\/vitest\.config\.mts$/);
+  const node = match?.[1];
+  return Boolean(node && nonOperatorNodes.has(node));
+}
+
 /**
- * NODE_BIRTH ride-along (bug.5086): a node may carry its OWN deploy wiring —
+ * NODE_FORMATION ride-along (bug.5086): a node may carry its OWN deploy wiring —
  * the operator-owned files that exist only to make `nodes/<node>/` deployable.
  * This lets a single welcome PR create + wire a node in one PR (the
  * CATALOG_IS_SSOT / create-node.md contract) without splitting node app from
@@ -112,6 +142,14 @@ function isNodeWiring(path: string, node: string): boolean {
  * Ride-along: if every operator-domain entry matches a RIDE_ALONG_PATTERNS
  * predicate and exactly one non-operator domain is also present, drop
  * "operator" from the set.
+ *
+ * NODE_RETIREMENT is intentionally NOT modeled here. Whether a node is "fully
+ * retired" depends on git state (no tracked file left on HEAD), which this pure,
+ * path-only classifier cannot observe. A pure retirement also drops the node
+ * from the generated dorny filter (render-scope-filters.sh keys on surviving
+ * nodes/*), so it collapses to operator-domain before classify is even reached.
+ * The bash gate in ci.yaml owns the residual still-filtered-but-wholly-removed
+ * case via `git ls-files`; see that step's NODE_RETIREMENT branch.
  */
 export function classify(
   changedPaths: string[],
@@ -120,6 +158,7 @@ export function classify(
   const nodes = new Set(nonOperatorNodes);
   const domains = new Set<Domain>();
   const operatorPaths: string[] = [];
+  const nonOperatorPaths: string[] = [];
 
   for (const p of changedPaths) {
     let assigned: Domain = OPERATOR_NODE;
@@ -142,10 +181,14 @@ export function classify(
       }
     }
     domains.add(assigned);
-    if (assigned === OPERATOR_NODE) operatorPaths.push(p);
+    if (assigned === OPERATOR_NODE) {
+      operatorPaths.push(p);
+    } else {
+      nonOperatorPaths.push(p);
+    }
   }
 
-  // The single non-operator node (if exactly one) — used for the NODE_BIRTH
+  // The single non-operator node (if exactly one) — used for the NODE_FORMATION
   // wiring carve-out so a node may ride along its OWN catalog/overlays/AppSet.
   const nonOperator = [...domains].filter((d) => d !== OPERATOR_NODE);
   const theNode = nonOperator.length === 1 ? nonOperator[0] : "";
@@ -158,6 +201,18 @@ export function classify(
     operatorPaths.every((p) => isRideAlong(p) || isNodeWiring(p, theNode))
   ) {
     domains.delete(OPERATOR_NODE);
+    rideAlongApplied = true;
+  }
+
+  if (
+    domains.size > 1 &&
+    domains.has(OPERATOR_NODE) &&
+    nonOperatorPaths.length > 0 &&
+    nonOperatorPaths.every((p) => isRootAppVitestConfig(p, nodes)) &&
+    operatorPaths.every((p) => isDevtoolsOperatorPath(p))
+  ) {
+    domains.clear();
+    domains.add(OPERATOR_NODE);
     rideAlongApplied = true;
   }
 

@@ -5,7 +5,7 @@
  * Module: `@shared/node-app-scaffold/gens/appset`
  * Purpose: Pure port of `scripts/ci/render-node-appset.sh` — emit a new node's per-`(env, slug)` Argo
  *   ApplicationSet objects and register them in the bootstrap kustomization, so the operator can author
- *   a node-birth PR without bash. One AppSet object per `(env, node)` is the structural LANE_ISOLATION
+ *   a node-formation PR without bash. One AppSet object per `(env, node)` is the structural LANE_ISOLATION
  *   fix (`bug.0378`): a flight only ever applies its own node's file.
  * Scope: `renderNodeAppset` substitutes the shared template (the SAME file the shell renderer feeds, so
  *   output is byte-exact and the `--check` drift gate stays green); `insertAppsetKustomization` re-renders
@@ -34,30 +34,43 @@ export function renderNodeAppset(
   return template.replaceAll("__ENV__", env).replaceAll("__NODE__", slug);
 }
 
-/** Extract the deployable node slugs already listed in the generated block (across all birth envs). */
-function existingNodes(
-  blockLines: readonly string[],
-  envs: readonly string[]
-): string[] {
-  const nodes = new Set<string>();
+/**
+ * Canonical env render order — byte-exact to `render-node-appset.sh`'s
+ * `ENVS=(candidate-a preview production)`. The block must always re-render in
+ * this order regardless of the new node's birth envs (task.5017): a node born
+ * into a subset must NOT drop the preview/production members of OTHER nodes.
+ */
+const RENDER_ENVS = ["candidate-a", "preview", "production"] as const;
+
+/**
+ * Parse the GENERATED block into per-env node-sets (task.5017). Preserving which
+ * nodes are in which env block is load-bearing now that the node-set is per-env:
+ * the old union-then-cartesian flattening re-inflated every env to every node.
+ */
+function existingNodesByEnv(
+  blockLines: readonly string[]
+): Map<string, Set<string>> {
+  const byEnv = new Map<string, Set<string>>(
+    RENDER_ENVS.map((env) => [env, new Set<string>()])
+  );
   for (const line of blockLines) {
-    const match = line.match(/^ {2}- (.+)-applicationset\.yaml$/);
-    const envNode = match?.[1];
+    const envNode = line.match(/^ {2}- (.+)-applicationset\.yaml$/)?.[1];
     if (envNode === undefined) continue;
-    for (const env of envs) {
+    for (const env of RENDER_ENVS) {
       if (envNode.startsWith(`${env}-`)) {
-        nodes.add(envNode.slice(env.length + 1));
+        byEnv.get(env)?.add(envNode.slice(env.length + 1));
         break;
       }
     }
   }
-  return [...nodes];
+  return byEnv;
 }
 
 /**
  * Fold `<slug>` into the GENERATED node-appsets block of `infra/k8s/argocd/kustomization.yaml`,
- * re-rendering it env-major + node-sorted (LC_ALL=C order ≡ ASCII codepoint sort for kebab slugs),
- * byte-exact to `render-node-appset.sh`'s `render_kustomization_block`. Idempotent.
+ * adding it ONLY to the envs in its per-env node-set (`envs`), re-rendering env-major +
+ * node-sorted (LC_ALL=C order ≡ ASCII codepoint sort for kebab slugs), byte-exact to
+ * `render-node-appset.sh`'s `render_kustomization_block`. Idempotent.
  */
 export function insertAppsetKustomization(
   currentKustomization: string,
@@ -73,15 +86,17 @@ export function insertAppsetKustomization(
     );
   }
 
-  const nodes = existingNodes(lines.slice(begin + 1, end), envs);
-  if (nodes.includes(slug)) {
+  const byEnv = existingNodesByEnv(lines.slice(begin + 1, end));
+  if (envs.every((env) => byEnv.get(env)?.has(slug))) {
     return currentKustomization;
   }
-
-  const sorted = [...nodes, slug].sort();
-  const block: string[] = [];
   for (const env of envs) {
-    for (const node of sorted) {
+    byEnv.get(env)?.add(slug);
+  }
+
+  const block: string[] = [];
+  for (const env of RENDER_ENVS) {
+    for (const node of [...(byEnv.get(env) ?? [])].sort()) {
       block.push(`  - ${env}-${node}-applicationset.yaml`);
     }
   }

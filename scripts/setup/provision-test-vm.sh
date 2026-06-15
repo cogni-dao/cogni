@@ -47,8 +47,8 @@ if [[ -z "$DEPLOY_ENV" ]]; then
   echo ""
   echo "  preview       — preview.cognidao.org"
   echo "  production    — cognidao.org"
-  echo "  candidate-a   — test.cognidao.org + resy-test.cognidao.org"
-  echo "  candidate-b   — candidate-b.cognidao.org + resy-candidate-b.cognidao.org"
+  echo "  candidate-a   — test.cognidao.org"
+  echo "  candidate-b   — candidate-b.cognidao.org"
   echo "  --yes         — skip confirmation prompt (for CI/automation)"
   exit 1
 fi
@@ -91,11 +91,10 @@ esac
 COGNI_DOMAIN_ROOT="$(cogni_domain_root)"
 COGNI_DEPLOYMENT_SLUG="$(cogni_deployment_slug)"
 DOMAIN="${DOMAIN:-$(cogni_operator_domain_for_env "$DEPLOY_ENV" "$COGNI_DOMAIN_ROOT")}"
-RESY_DOMAIN="${RESY_DOMAIN:-$(cogni_resy_domain_for_env "$DEPLOY_ENV" "$COGNI_DOMAIN_ROOT")}"
 VM_DNS_HOST="${VM_DNS_HOST:-$(cogni_vm_host_for_env "$DEPLOY_ENV" "$COGNI_DOMAIN_ROOT" "$COGNI_DEPLOYMENT_SLUG")}"
-DNS_RECORDS=("$DOMAIN" "$RESY_DOMAIN" "$VM_DNS_HOST")
+DNS_RECORDS=("$DOMAIN" "$VM_DNS_HOST")
 CADDYFILE_TEMPLATE="$REPO_ROOT/infra/compose/edge/configs/Caddyfile.tmpl"
-COGNI_APP_TARGETS=("operator" "resy" "scheduler-worker")
+COGNI_APP_TARGETS=("operator" "scheduler-worker")
 
 # Allow branch override (e.g., testing a feature branch on preview infra)
 BRANCH="${COGNI_REPO_REF:-$BRANCH}"
@@ -232,7 +231,7 @@ APP_ENV="${DEPLOY_ENV}"
 DEPLOY_ENVIRONMENT="${DEPLOY_ENV}"
 
 # Per-node databases. cogni-poly lives in its own repo/VM after the split.
-COGNI_NODE_DBS="cogni_operator,cogni_resy"
+COGNI_NODE_DBS="cogni_operator"
 LITELLM_DB_NAME="litellm"
 
 # EVM RPC — use public Base mainnet endpoint for test
@@ -504,9 +503,7 @@ log_info "Writing .env files..."
 
 ssh $SSH_OPTS root@"$VM_IP" "cat > /opt/cogni-template-edge/.env << 'ENVEOF'
 DOMAIN=${DOMAIN}
-RESY_DOMAIN=${RESY_DOMAIN}
 OPERATOR_UPSTREAM=host.docker.internal:30000
-RESY_UPSTREAM=host.docker.internal:30300
 ENVEOF"
 
 # All required vars must be in .env — Docker Compose validates ALL services at parse time,
@@ -641,12 +638,11 @@ log_step "Phase 6: Create k8s secrets on cluster"
 # Create namespace (Argo CD creates it on first sync, but secrets need it now)
 ssh $SSH_OPTS root@"$VM_IP" "kubectl create namespace ${K8S_NAMESPACE} 2>/dev/null || true"
 
-# Node-app secrets — one per Cogni node (operator, resy)
+# Node-app secrets — one per Cogni node (operator)
 # The Deployment references secretRef: {namePrefix}-node-app-secrets
-for node in operator resy; do
+for node in operator; do
   case $node in
     operator) db_name="cogni_operator" ;;
-    resy)     db_name="cogni_resy" ;;
   esac
 
   NODE_DB_URL="postgresql://${APP_DB_USER}:${APP_DB_PASSWORD}@${VM_IP}:5432/${db_name}?sslmode=disable"
@@ -709,7 +705,6 @@ log_step "Phase 7: Apply ApplicationSets (triggers Argo sync)"
 # Gate: verify prerequisites exist before enabling Argo sync
 ssh $SSH_OPTS root@"$VM_IP" "
   kubectl -n ${K8S_NAMESPACE} get secret operator-node-app-secrets >/dev/null || { echo 'FATAL: operator secrets missing'; exit 1; }
-  kubectl -n ${K8S_NAMESPACE} get secret resy-node-app-secrets >/dev/null || { echo 'FATAL: resy secrets missing'; exit 1; }
   kubectl -n ${K8S_NAMESPACE} get secret scheduler-worker-secrets >/dev/null || { echo 'FATAL: scheduler-worker secrets missing'; exit 1; }
   echo 'All prerequisite secrets verified'
 "

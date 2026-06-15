@@ -129,6 +129,12 @@ const CatalogEntrySchema = z
     // `_shared` path; default (false) → distinct value per node at the node path.
     appliesTo: CapabilitySchema.optional(),
     shared: z.boolean().optional(),
+    // Canonical-custody lane: per-node materialization inherits this key's value
+    // verbatim from `cogni/<env>/<inheritFrom>/<KEY>` instead of the blind
+    // node-template→operator→_shared ancestor scan. Use when the value MUST
+    // byte-match one owner (SCHEDULER_API_TOKEN ← scheduler-worker). See
+    // scripts/ci/secret-materialize.sh inherit_shared_value + bug.5021.
+    inheritFrom: z.string().optional(),
     // Explicit fan-out destinations (supersedes the old `coConsumed` boolean).
     // The pod emitter (print-pod-keys.ts) includes a key iff `pod` ∈ consumedBy.
     // `tier` stays the source/authority; `consumedBy` is where it's consumed.
@@ -196,6 +202,10 @@ export interface SecretRouting {
   /** `true` → one value at `cogni/<env>/_shared/<KEY>` for all in-scope nodes;
    *  default → distinct value per node at `cogni/<env>/<node>/<KEY>`. */
   shared?: boolean;
+  /** Per-node materialization inherits this key verbatim from
+   *  `cogni/<env>/<inheritFrom>/<KEY>` (canonical-custody lane) instead of the
+   *  blind ancestor scan. Set when the value must byte-match one owner. */
+  inheritFrom?: string;
   /** Explicit consumption destinations. `pod` ∈ consumedBy ⟹ the key fans out
    *  to node-app pods (the print-pod-keys universe). Absent ⟹ defaulted from
    *  tier+path by the emitter. */
@@ -312,6 +322,7 @@ export function loadSecretsCatalog(opts: LoadOptions): LoadResult {
     if (entry.service !== undefined) r.service = entry.service;
     if (entry.appliesTo !== undefined) r.appliesTo = entry.appliesTo;
     if (entry.shared !== undefined) r.shared = entry.shared;
+    if (entry.inheritFrom !== undefined) r.inheritFrom = entry.inheritFrom;
     if (entry.consumedBy !== undefined) r.consumedBy = entry.consumedBy;
     routing[entry.name] = r;
   }

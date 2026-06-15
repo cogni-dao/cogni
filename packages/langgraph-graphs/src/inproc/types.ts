@@ -90,6 +90,10 @@ export interface InProcGraphRequest {
   readonly configurable: {
     readonly model: string;
     readonly toolIds?: readonly string[];
+    readonly actorId?: string;
+    readonly tenantId?: string;
+    readonly subjectId?: string;
+    readonly graphId?: string;
   };
 }
 

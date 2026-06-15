@@ -130,12 +130,12 @@ that belong in the same file because they're operator decisions.
 
 ## What V1 Defers (And Why That's OK)
 
-| Deferred                                                                        | Why                                                                 | When it lands                                                 |
-| ------------------------------------------------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------- |
-| Alchemy `EVM_RPC_URL`, `POLYGON_RPC_URL`                                        | Only used by on-chain reads for operator-wallet + poly node         | Wired post-deploy when fork activates Phase 3                 |
-| DAO formation (Phase 0)                                                         | Browser wallet sign at `cognidao.org/setup/dao` — irreducibly human | Pre-bootstrap step the human does once; not in agent scope    |
-| Split contract deploy (Phase 3)                                                 | Browser wallet sign on Base                                         | Removable only by routing through Privy server-wallet (vNext) |
-| All OAuth providers, Privy, Tavily, Discord, PostHog, SonarCloud, WalletConnect | Optional — app boots without them; agent leaves them unset          | Agent prompts only when a feature requiring them is enabled   |
+| Deferred                                                                        | Why                                                             | When it lands                                                 |
+| ------------------------------------------------------------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------- |
+| Alchemy `EVM_RPC_URL`, `POLYGON_RPC_URL`                                        | Only used by on-chain reads for operator-wallet + poly node     | Wired post-deploy when fork activates Phase 3                 |
+| DAO formation (Phase 0)                                                         | Browser wallet sign at `cognidao.org/nodes` — irreducibly human | Pre-bootstrap step the human does once; not in agent scope    |
+| Split contract deploy (Phase 3)                                                 | Browser wallet sign on Base                                     | Removable only by routing through Privy server-wallet (vNext) |
+| All OAuth providers, Privy, Tavily, Discord, PostHog, SonarCloud, WalletConnect | Optional — app boots without them; agent leaves them unset      | Agent prompts only when a feature requiring them is enabled   |
 
 Critically: `/readyz` returns 200 without any deferred credential. The deferred
 list is "features off by default," not "broken deployment."

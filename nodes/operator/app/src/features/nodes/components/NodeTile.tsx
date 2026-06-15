@@ -10,7 +10,7 @@
  * Invariants: token-only styling; the entire tile is one link; thumbnail falls back to a gradient
  *   placeholder; external links open in a new tab.
  * Side-effects: none
- * Links: src/features/home/components/NodeShowcase.tsx, src/app/(app)/setup/nodes/page.tsx
+ * Links: src/features/home/components/NodeShowcase.tsx, src/app/(app)/nodes/page.tsx
  * @public
  */
 

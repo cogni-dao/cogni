@@ -39,6 +39,18 @@ export const GraphRunConfigSchema = z.object({
   /** Tenant for billing attribution */
   billingAccountId: z.string(),
 
+  /** Actor performing execution, e.g. user:{id}, agent:{id}, or service:{name} */
+  actorId: z.string().optional(),
+
+  /** Tenant boundary for authorization. Defaults to billingAccountId at node app boundaries. */
+  tenantId: z.string().optional(),
+
+  /** Server-bound on-behalf-of user subject. Never supplied by tool args. */
+  subjectId: z.string().optional(),
+
+  /** Graph identifier for authorization context. */
+  graphId: z.string().optional(),
+
   /** Per-user LiteLLM virtual key ID */
   virtualKeyId: z.string(),
 

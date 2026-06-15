@@ -4,6 +4,7 @@
   "include": [],
   "references": [
     { "path": "./nodes/operator/app/tsconfig.app.json" },
+    { "path": "./packages/authorization-core" },
     { "path": "./packages/ai-core" },
     { "path": "./packages/ai-tools" },
     { "path": "./packages/aragon-osx" },

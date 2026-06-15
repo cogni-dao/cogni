@@ -14,7 +14,7 @@
  * @public
  */
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import yaml from "yaml";
@@ -25,33 +25,13 @@ const NODES_DIR = path.join(REPO_ROOT, "nodes");
 const OPERATOR_NODE = "operator";
 const SHA40 = /^[0-9a-f]{40}$/;
 
-const GITMODULES_PATH = path.join(REPO_ROOT, ".gitmodules");
-
-/**
- * Submodule-pinned node slugs — `nodes/<slug>` is a gitlink declared in
- * `.gitmodules`. Their code lives in their own repo; the parent holds only the
- * operator-domain pin, so they carry NO single-node-scope filter
- * (SUBMODULE_GITLINK_IS_OPERATOR_PIN). Must mirror the same exclusion in
- * render-scope-filters.sh's `non_operator_nodes()` so the generated filter block
- * and this expected listing stay in lockstep. No-op without `.gitmodules`.
- */
-function listSubmoduleNodes(): Set<string> {
-  if (!existsSync(GITMODULES_PATH)) return new Set();
-  const slugs = new Set<string>();
-  for (const line of readFileSync(GITMODULES_PATH, "utf8").split("\n")) {
-    const m = line.match(/^\s*path\s*=\s*nodes\/([^/\s]+)\s*$/);
-    if (m) slugs.add(m[1]);
-  }
-  return slugs;
-}
-
+// Remote-source nodes live in their own repos and are absent under nodes/ (no
+// gitlink, no .gitmodules). The single-node-scope domains are exactly the
+// in-tree nodes/* directories minus operator. Stays in lockstep with
+// render-scope-filters.sh's non_operator_nodes().
 function listNonOperatorNodes(): string[] {
-  const submodules = listSubmoduleNodes();
   return readdirSync(NODES_DIR, { withFileTypes: true })
-    .filter(
-      (d) =>
-        d.isDirectory() && d.name !== OPERATOR_NODE && !submodules.has(d.name)
-    )
+    .filter((d) => d.isDirectory() && d.name !== OPERATOR_NODE)
     .map((d) => d.name)
     .sort();
 }
@@ -168,7 +148,7 @@ describe("single-node-scope workflow gate · structural pins", () => {
       "operator filter relies on `**` + `!nodes/<X>/**` to mean " +
         "\"everywhere outside another node's dir\". With dorny's default " +
         "`some` quantifier the rules are OR'd and the negations are dead, " +
-        "so a poly-only PR misclassifies as poly + operator. " +
+        "so a legacy-node-only PR misclassifies as legacy-node + operator. " +
         "Set `predicate-quantifier: every` on the dorny step."
     ).toBe("every");
   });
@@ -190,14 +170,26 @@ describe("single-node-scope workflow gate · structural pins", () => {
 
   it("enforce step uses `dorny/paths-filter` outputs (changes + operator_files) inline", () => {
     const job = loadJob();
-    const enforce = findStep<{ env: Record<string, string>; run: string }>(
+    const enforce = findStep<{ run: string }>(
       job,
       (s) => s.name === "Enforce single-domain scope"
     );
-    expect(enforce.env.MATCHED).toContain("steps.domains.outputs.changes");
-    expect(enforce.env.OPERATOR_FILES).toContain(
-      "steps.domains.outputs.operator_files"
-    );
+    // ARG_MAX: a ~2200-path purge diff overflows execve when operator_files
+    // rides in `env:`. Both dorny outputs are spliced into the run: body
+    // (changes inline, operator_files via a quoted heredoc written to disk),
+    // never passed through `env:`.
+    expect(enforce.run).toContain("steps.domains.outputs.changes");
+    expect(enforce.run).toContain("steps.domains.outputs.operator_files");
+    expect(
+      enforce.run,
+      "operator_files must NOT ride in env (ARG_MAX); splice it into a quoted " +
+        "heredoc in the run: body instead"
+    ).toContain("COGNI_OPERATOR_FILES_EOF");
+    expect(
+      enforce.run,
+      "node-retirement exemption: a deletion-only sweep across fully-removed " +
+        "nodes is a sanctioned operator-domain retirement"
+    ).toContain("node retirement");
     expect(
       enforce.run,
       "ride-along whitelist must include pnpm-lock.yaml in the inline run: block"
@@ -231,14 +223,22 @@ describe("single-node-scope workflow gate · structural pins", () => {
     );
     expect(
       enforce.run,
-      "node-birth wiring whitelist must include the scheduler-worker configmap " +
+      "node-formation wiring whitelist must include the scheduler-worker configmap " +
         "(catalog-derived regen artifact; must mirror isNodeWiring in classify.ts)"
     ).toContain('"infra/k8s/base/scheduler-worker/configmap.yaml"');
     expect(
       enforce.run,
-      "node-birth wiring whitelist must include the edge Caddyfile.tmpl " +
+      "node-formation wiring whitelist must include the edge Caddyfile.tmpl " +
         "(catalog-derived regen artifact; bug.5086 parity — must mirror isNodeWiring " +
-        "in classify.ts so a catalog-driven Caddyfile regen rides a node birth)"
+        "in classify.ts so a catalog-driven Caddyfile regen rides a node formation)"
     ).toContain('"infra/compose/edge/configs/Caddyfile.tmpl"');
+    expect(
+      enforce.run,
+      "devtools exception must be bounded to root app Vitest configs"
+    ).toContain('test("^nodes/[^/]+/app/vitest\\\\.config\\\\.mts$")');
+    expect(
+      enforce.run,
+      "devtools exception must be bounded to the shared Vitest helper"
+    ).toContain('startswith("scripts/vitest/")');
   });
 });

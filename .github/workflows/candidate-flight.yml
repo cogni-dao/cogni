@@ -7,10 +7,18 @@ on:
     inputs:
       pr_number:
         description: "PR number to flight"
-        required: true
+        required: false
         type: string
       head_sha:
         description: "Optional PR head SHA override"
+        required: false
+        type: string
+      node_slug:
+        description: "Submodule node slug for node-ref flight"
+        required: false
+        type: string
+      source_sha:
+        description: "Child node repo source SHA for node-ref flight"
         required: false
         type: string
 
@@ -21,7 +29,7 @@ permissions:
   statuses: write
 
 concurrency:
-  group: candidate-flight-${{ inputs.pr_number }}
+  group: candidate-flight-${{ inputs.pr_number || format('{0}-{1}', inputs.node_slug, inputs.source_sha) }}
   cancel-in-progress: true
 
 env:
@@ -34,6 +42,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       head_sha: ${{ steps.meta.outputs.head_sha }}
+      node_slug: ${{ steps.meta.outputs.node_slug }}
+      node_source_sha: ${{ steps.meta.outputs.node_source_sha }}
       image_tag: ${{ steps.meta.outputs.image_tag }}
       status_url: ${{ steps.meta.outputs.status_url }}
       digests_json: ${{ steps.images.outputs.digests_json }}
@@ -42,7 +52,8 @@ jobs:
       flight_targets_json: ${{ steps.flight-targets.outputs.flight_targets_json }}
       has_flight_targets: ${{ steps.flight-targets.outputs.has_flight_targets }}
       has_image_inputs: ${{ steps.flight-targets.outputs.has_image_inputs }}
-      needs_infra: ${{ steps.birth.outputs.needs_infra }}
+      substrate_node_targets_json: ${{ steps.substrate-targets.outputs.substrate_node_targets_json }}
+      has_substrate_node_targets: ${{ steps.substrate-targets.outputs.has_substrate_node_targets }}
     steps:
       - name: Checkout workflow source
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
@@ -55,16 +66,44 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          BASE_REF=$(gh api "repos/${{ github.repository }}/pulls/${{ inputs.pr_number }}" --jq '.base.ref')
-          HEAD_SHA_INPUT="${{ inputs.head_sha }}"
-          if [ -n "$HEAD_SHA_INPUT" ]; then
-            HEAD_SHA="$HEAD_SHA_INPUT"
+          PR_NUMBER="${{ inputs.pr_number }}"
+          NODE_SLUG="${{ inputs.node_slug }}"
+          NODE_SOURCE_SHA="${{ inputs.source_sha }}"
+          if [ -n "$NODE_SLUG" ] || [ -n "$NODE_SOURCE_SHA" ]; then
+            if [ -n "$PR_NUMBER" ]; then
+              echo "::error::candidate-flight accepts either pr_number or node_slug/source_sha, not both"
+              exit 1
+            fi
+            if [ -z "$NODE_SLUG" ] || [ -z "$NODE_SOURCE_SHA" ]; then
+              echo "::error::node-ref flight requires both node_slug and source_sha"
+              exit 1
+            fi
+            if ! [[ "$NODE_SOURCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+              echo "::error::source_sha must be a 40-char hex SHA"
+              exit 1
+            fi
+            BASE_REF=main
+            HEAD_SHA="${{ github.sha }}"
+            IMAGE_TAG="sha-${NODE_SOURCE_SHA}"
           else
-            HEAD_SHA=$(gh api "repos/${{ github.repository }}/pulls/${{ inputs.pr_number }}" --jq '.head.sha')
+            if [ -z "$PR_NUMBER" ]; then
+              echo "::error::candidate-flight requires pr_number or node_slug/source_sha"
+              exit 1
+            fi
+            BASE_REF=$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.base.ref')
+            HEAD_SHA_INPUT="${{ inputs.head_sha }}"
+            if [ -n "$HEAD_SHA_INPUT" ]; then
+              HEAD_SHA="$HEAD_SHA_INPUT"
+            else
+              HEAD_SHA=$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.head.sha')
+            fi
+            IMAGE_TAG="pr-${PR_NUMBER}-${HEAD_SHA}"
           fi
           echo "base_ref=$BASE_REF" >> "$GITHUB_OUTPUT"
           echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
-          echo "image_tag=pr-${{ inputs.pr_number }}-${HEAD_SHA}" >> "$GITHUB_OUTPUT"
+          echo "node_slug=$NODE_SLUG" >> "$GITHUB_OUTPUT"
+          echo "node_source_sha=$NODE_SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
           echo "status_url=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> "$GITHUB_OUTPUT"
 
       - name: Checkout app source
@@ -75,6 +114,7 @@ jobs:
           path: app-src
 
       - name: Report pending candidate-flight status
+        if: inputs.pr_number != ''
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
@@ -96,8 +136,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ inputs.pr_number }}
           OUT: ${{ runner.temp }}/pr-changed-paths.txt
+          NODE_SLUG: ${{ steps.meta.outputs.node_slug }}
         run: |
           set -euo pipefail
+          if [ -n "$NODE_SLUG" ]; then
+            : > "$OUT"
+            : > "${OUT%.txt}-added.txt"
+            echo "ℹ️  Node-ref flight for ${NODE_SLUG}; PR changed-paths are not used"
+            echo "changed_paths_file=$OUT" >> "$GITHUB_OUTPUT"
+            echo "added_paths_file=${OUT%.txt}-added.txt" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           # Emit both filename and previous_filename so cross-directory
           # renames trigger rebuilds for the source side too (otherwise
           # renaming nodes/A/x.ts → nodes/B/x.ts only rebuilds B).
@@ -117,29 +166,35 @@ jobs:
           CHANGED_PATHS_FILE: ${{ steps.pr-files.outputs.changed_paths_file }}
         run: bash scripts/ci/detect-affected.sh
 
-      - name: Detect submodule births
-        id: submodule-births
+      - name: Detect remote-source artifact targets
+        id: remote-source-artifact-targets
         working-directory: app-src
         env:
-          ADDED_PATHS_FILE: ${{ steps.pr-files.outputs.added_paths_file }}
-          OUTPUT_FILE: ${{ runner.temp }}/submodule-births.json
-        run: bash scripts/ci/detect-submodule-births.sh
+          CHANGED_PATHS_FILE: ${{ steps.pr-files.outputs.changed_paths_file }}
+          COGNI_CATALOG_ROOT: infra/catalog
+          OUTPUT_FILE: ${{ runner.temp }}/remote-source-artifact-targets.json
+        run: bash ../scripts/ci/detect-remote-source-artifact-targets.sh
 
       - name: Combine flight targets
         id: flight-targets
         env:
           NORMAL_FLIGHT_TARGETS_JSON: ${{ steps.detect.outputs.flight_targets_json }}
-          SUBMODULE_BIRTH_TARGETS_JSON: ${{ steps.submodule-births.outputs.submodule_birth_targets_json }}
+          REMOTE_SOURCE_ARTIFACT_TARGETS_JSON: ${{ steps.remote-source-artifact-targets.outputs.remote_source_artifact_targets_json }}
           HAS_PARENT_TARGETS: ${{ steps.detect.outputs.has_targets }}
-          HAS_SUBMODULE_BIRTHS: ${{ steps.submodule-births.outputs.has_submodule_births }}
+          HAS_REMOTE_SOURCE_ARTIFACT_TARGETS: ${{ steps.remote-source-artifact-targets.outputs.has_remote_source_artifact_targets }}
+          NODE_SLUG: ${{ steps.meta.outputs.node_slug }}
         run: |
           set -euo pipefail
-          combined=$(python3 -c 'import json, os; items = json.loads(os.environ["NORMAL_FLIGHT_TARGETS_JSON"] or "[]") + json.loads(os.environ["SUBMODULE_BIRTH_TARGETS_JSON"] or "[]"); out = []; seen = set(); [out.append(item) or seen.add(item) for item in items if item not in seen]; print(json.dumps(out))')
+          if [ -n "$NODE_SLUG" ]; then
+            combined=$(python3 -c 'import json, os; print(json.dumps([os.environ["NODE_SLUG"]]))')
+          else
+            combined=$(python3 -c 'import json, os; items = json.loads(os.environ["NORMAL_FLIGHT_TARGETS_JSON"] or "[]") + json.loads(os.environ["REMOTE_SOURCE_ARTIFACT_TARGETS_JSON"] or "[]"); out = []; seen = set(); [out.append(item) or seen.add(item) for item in items if item not in seen]; print(json.dumps(out))')
+          fi
           csv=$(python3 -c 'import json, sys; print(",".join(json.loads(sys.argv[1])))' "$combined")
           has_flight_targets=false
           [ "$combined" != "[]" ] && has_flight_targets=true
           has_image_inputs=false
-          if [ "$HAS_PARENT_TARGETS" = "true" ] || [ "$HAS_SUBMODULE_BIRTHS" = "true" ]; then
+          if [ -n "$NODE_SLUG" ] || [ "$HAS_PARENT_TARGETS" = "true" ] || [ "$HAS_REMOTE_SOURCE_ARTIFACT_TARGETS" = "true" ]; then
             has_image_inputs=true
           fi
           echo "flight_targets_json=$combined" >> "$GITHUB_OUTPUT"
@@ -147,34 +202,27 @@ jobs:
           echo "has_flight_targets=$has_flight_targets" >> "$GITHUB_OUTPUT"
           echo "has_image_inputs=$has_image_inputs" >> "$GITHUB_OUTPUT"
 
-      # Node BIRTH detection (mochi gap): a flight that ADDS a new
-      # infra/catalog/<slug>.yaml is bringing a brand-new node online, so its
-      # edge route + DB + secret don't exist on the VM yet. Use the GitHub PR
-      # `files` API (status == 'added') as the authoritative added-paths source —
-      # the same reason the affected-detector above prefers it over a merge-base
-      # diff (squash-merged sibling branches pollute `git diff base...head`).
-      # Birth → needs_infra=true couples deploy-infra into THIS flight's graph
-      # (one-flight birth). Ordinary app flights → false: app/infra independence
-      # (task.0314) is preserved; the standalone candidate-flight-infra.yml lever
-      # remains for infra-only/manual changes.
-      - name: Detect node birth (added catalog entry)
-        id: birth
+      # The per-node substrate matrix is the deployable TYPE:NODE set: the flight
+      # targets intersected with catalog NODE_TARGETS. Services (e.g.
+      # scheduler-worker) have no node_id and would fail run-node-substrate.sh,
+      # so they are excluded here — matching promote-and-deploy's node_targets_json
+      # semantics. Every node in the set gets its substrate run uniformly; there
+      # is no node-formation special-case.
+      - name: Select substrate node targets
+        id: substrate-targets
         env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ inputs.pr_number }}
+          FLIGHT_TARGETS_JSON: ${{ steps.flight-targets.outputs.flight_targets_json }}
+          COGNI_CATALOG_ROOT: app-src/infra/catalog
         run: |
           set -euo pipefail
-          ADDED_CATALOG=$(gh api --paginate \
-            "repos/${{ github.repository }}/pulls/${PR_NUMBER}/files" \
-            --jq '.[] | select(.status == "added") | .filename
-                  | select(test("^infra/catalog/[^/]+\\.yaml$"))')
-          if [ -n "$ADDED_CATALOG" ]; then
-            echo "::notice::Node birth detected — new catalog entry: ${ADDED_CATALOG//$'\n'/ }"
-            echo "needs_infra=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "ℹ️  No added infra/catalog/*.yaml — app-only flight, infra independent"
-            echo "needs_infra=false" >> "$GITHUB_OUTPUT"
-          fi
+          # shellcheck source=app-src/scripts/ci/lib/image-tags.sh
+          . app-src/scripts/ci/lib/image-tags.sh
+          node_targets_json=$(printf '%s\n' "${NODE_TARGETS[@]}" | jq -R . | jq -sc .)
+          substrate=$(python3 -c 'import json, sys; flight = json.loads(sys.argv[1] or "[]"); nodes = set(json.loads(sys.argv[2] or "[]")); print(json.dumps([t for t in flight if t in nodes]))' "$FLIGHT_TARGETS_JSON" "$node_targets_json")
+          has_substrate_node_targets=false
+          [ "$substrate" != "[]" ] && has_substrate_node_targets=true
+          echo "substrate_node_targets_json=$substrate" >> "$GITHUB_OUTPUT"
+          echo "has_substrate_node_targets=$has_substrate_node_targets" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         if: steps.flight-targets.outputs.has_image_inputs == 'true'
@@ -195,14 +243,23 @@ jobs:
         env:
           IMAGE_TAG: ${{ steps.meta.outputs.image_tag }}
           SOURCE_SHA: ${{ steps.meta.outputs.head_sha }}
-          SUBMODULE_BIRTHS_FILE: ${{ steps.submodule-births.outputs.births_file }}
+          NODE: ${{ steps.meta.outputs.node_slug }}
+          NODE_SOURCE_SHA: ${{ steps.meta.outputs.node_source_sha }}
+          COGNI_CATALOG_ROOT: infra/catalog
+          REMOTE_SOURCE_ARTIFACT_TARGETS_FILE: ${{ steps.remote-source-artifact-targets.outputs.targets_file }}
           OUTPUT_FILE: ${{ runner.temp }}/resolved-pr-images.json
-        run: bash scripts/ci/resolve-pr-build-images.sh
+        run: |
+          set -euo pipefail
+          if [ -n "$NODE" ]; then
+            SOURCE_SHA="$NODE_SOURCE_SHA" bash ../scripts/ci/resolve-node-ref-image.sh
+          else
+            bash ../scripts/ci/resolve-pr-build-images.sh
+          fi
 
       - name: Require at least one built image
         if: steps.flight-targets.outputs.has_image_inputs == 'true' && steps.images.outputs.has_images != 'true'
         run: |
-          echo "::error::No pushed PR images found for ${{ steps.meta.outputs.image_tag }}"
+          echo "::error::No deployable artifact images found for ${{ steps.meta.outputs.image_tag }}"
           exit 1
 
       - name: Upload resolved-pr-images artifact
@@ -213,9 +270,111 @@ jobs:
           path: ${{ runner.temp }}/resolved-pr-images.json
           retention-days: 1
 
-  reconcile-appset:
+  prepare-substrate-deploy-branch:
     needs: decide
-    if: needs.decide.outputs.has_flight_targets == 'true'
+    if: |
+      always() &&
+      needs.decide.result == 'success' &&
+      needs.decide.outputs.has_substrate_node_targets == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ${{ fromJson(needs.decide.outputs.substrate_node_targets_json) }}
+    concurrency:
+      group: prepare-substrate-deploy-branch-candidate-a-${{ matrix.node }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    environment: candidate-a
+    steps:
+      - name: Checkout app source
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          ref: ${{ needs.decide.outputs.head_sha }}
+          fetch-depth: 0
+          path: app-src
+
+      - name: Materialize node source at its catalog pin
+        env:
+          GH_TOKEN: ${{ secrets.GIT_READ_TOKEN }}
+          NODE: ${{ matrix.node }}
+          NODE_SOURCE_SHA: ${{ needs.decide.outputs.node_source_sha }}
+        run: |
+          set -euo pipefail
+          # Remote-source node: fetch its tree at the catalog source_sha pin into
+          # nodes/<NODE> — no submodule, no gitlink, private-safe (GIT_READ_TOKEN).
+          # In-repo nodes carry no source_repo and are already in app-src.
+          # spec.node-submodule-retirement.
+          catalog="app-src/infra/catalog/${NODE}.yaml"
+          [ -f "$catalog" ] || exit 0
+          src_repo="$(yq -N '.source_repo // ""' "$catalog")"
+          [ -n "$src_repo" ] || exit 0
+          src_sha="${NODE_SOURCE_SHA:-$(yq -N '.source_sha // ""' "$catalog")}"
+          [ -n "$src_sha" ] || { echo "::error::no source_sha for remote-source node ${NODE}"; exit 1; }
+          repo_path="${src_repo#https://github.com/}"; repo_path="${repo_path%.git}"
+          rm -rf "app-src/nodes/${NODE}"
+          git init -q "app-src/nodes/${NODE}"
+          git -C "app-src/nodes/${NODE}" remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${repo_path}.git"
+          git -C "app-src/nodes/${NODE}" fetch -q --depth 1 origin "$src_sha"
+          git -C "app-src/nodes/${NODE}" checkout -q --detach FETCH_HEAD
+
+      - name: Prepare deploy branch shape
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NODE: ${{ matrix.node }}
+          PER_NODE_BRANCH: deploy/candidate-a-${{ matrix.node }}
+        run: |
+          set -euo pipefail
+          for required in \
+            "app-src/infra/k8s/overlays/candidate-a/${NODE}" \
+            "app-src/infra/catalog/${NODE}.yaml" \
+            "app-src/nodes/${NODE}/k8s/external-secrets/candidate-a"; do
+            if [ ! -e "$required" ]; then
+              echo "::error::Missing deploy-shape input at head_sha: $required"
+              exit 1
+            fi
+          done
+
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" deploy-branch
+          cd deploy-branch
+          git fetch origin "+refs/heads/deploy/*:refs/remotes/origin/deploy/*"
+          if git rev-parse --verify --quiet "refs/remotes/origin/${PER_NODE_BRANCH}" >/dev/null; then
+            git checkout -B "${PER_NODE_BRANCH}" "origin/${PER_NODE_BRANCH}"
+          else
+            echo "::notice::Bootstrapping ${PER_NODE_BRANCH} from deploy/candidate-a before substrate assertion"
+            git checkout -B "${PER_NODE_BRANCH}" "origin/deploy/candidate-a"
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          rsync -a --delete ../app-src/infra/k8s/base/ infra/k8s/base/
+          mkdir -p "infra/k8s/overlays/candidate-a/${NODE}"
+          rsync -a --delete \
+            "../app-src/infra/k8s/overlays/candidate-a/${NODE}/" \
+            "infra/k8s/overlays/candidate-a/${NODE}/"
+          mkdir -p infra/catalog
+          cp "../app-src/infra/catalog/${NODE}.yaml" "infra/catalog/${NODE}.yaml"
+          mkdir -p "nodes/${NODE}/k8s/external-secrets/candidate-a"
+          rsync -a --delete \
+            "../app-src/nodes/${NODE}/k8s/external-secrets/candidate-a/" \
+            "nodes/${NODE}/k8s/external-secrets/candidate-a/"
+
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Deploy branch ${PER_NODE_BRANCH} already has substrate shape"
+            exit 0
+          fi
+          git commit -m "candidate-flight ${NODE}: prepare substrate shape"
+          git push origin "HEAD:${PER_NODE_BRANCH}"
+
+  reconcile-appset:
+    needs: [decide, prepare-substrate-deploy-branch]
+    if: |
+      always() &&
+      needs.decide.outputs.has_flight_targets == 'true' &&
+      (
+        needs.decide.outputs.has_substrate_node_targets != 'true' ||
+        needs.prepare-substrate-deploy-branch.result == 'success'
+      )
     # Per-node lane (axiom 18, LANE_ISOLATION). A flight applies ONLY its own
     # node's ApplicationSet object — never a shared file carrying other lanes'
     # generators — so a concurrent flight of a different node cannot prune this
@@ -249,13 +408,13 @@ jobs:
         env:
           VM_HOST: ${{ secrets.VM_HOST }}
           SSH_DEPLOY_KEY: ${{ secrets.SSH_DEPLOY_KEY }}
+          NODE_SOURCE_SHA: ${{ needs.decide.outputs.node_source_sha }}
+          DEPLOY_ENVIRONMENT: candidate-a
         run: |
-          if [ -z "$VM_HOST" ]; then
-            echo "⚠️ No VM_HOST secret set on candidate-a — skipping AppSet reconcile"
-            echo "has_vm=false" >> "$GITHUB_OUTPUT"
+          bash ci-src/scripts/ci/require-node-ref-vm.sh
+          if [ "$VM_HOST" = "" ]; then
             exit 0
           fi
-          echo "has_vm=true" >> "$GITHUB_OUTPUT"
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           echo "$SSH_DEPLOY_KEY" | tr -d '\r' > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
@@ -281,11 +440,273 @@ jobs:
           # Anti-resurrection: the legacy shared `cogni-candidate-a` AppSet is
           # retired. Orphan-delete (never prune its live Applications) so it can
           # never reappear to re-clobber this lane, then apply the per-node object.
-          ci_ssh_retry ssh "${ssh_opts[@]}" "root@${VM_HOST}" "kubectl delete applicationset cogni-candidate-a -n argocd --cascade=orphan --ignore-not-found && kubectl apply -f /tmp/appset-${NODE}.yaml -n argocd && rm -f /tmp/appset-${NODE}.yaml"
+          ci_ssh_retry ssh "${ssh_opts[@]}" "root@${VM_HOST}" "kubectl delete applicationset cogni-candidate-a -n argocd --cascade=orphan --ignore-not-found && kubectl apply -f /tmp/appset-${NODE}.yaml -n argocd && kubectl -n argocd annotate applicationset cogni-candidate-a-${NODE} argocd.argoproj.io/application-set-refresh='true' --overwrite && rm -f /tmp/appset-${NODE}.yaml"
+
+      - name: Wait for candidate-a-${{ matrix.node }} Application
+        if: steps.ssh-setup.outputs.has_vm == 'true'
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          SSH_OPTS: "-i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6"
+          NODE: ${{ matrix.node }}
+        run: |
+          set -euo pipefail
+          # shellcheck source=ci-src/scripts/ci/lib/ssh-retry.sh
+          . ci-src/scripts/ci/lib/ssh-retry.sh
+          read -r -a ssh_opts <<< "$SSH_OPTS"
+          app_name="candidate-a-${NODE}"
+          appset_name="cogni-candidate-a-${NODE}"
+          remote_script="$(mktemp)"
+          cat >"$remote_script" <<'REMOTE_SCRIPT'
+          set -euo pipefail
+          app_name="$1"
+          appset_name="$2"
+          for _ in $(seq 1 60); do
+            if kubectl -n argocd get application "$app_name" >/dev/null 2>&1; then
+              echo "ApplicationSet generated Application: $app_name"
+              exit 0
+            fi
+            sleep 5
+          done
+
+          echo "::error::ApplicationSet did not generate Application: ${appset_name} -> ${app_name}"
+          echo "::group::ApplicationSet"
+          kubectl -n argocd get applicationset "$appset_name" -o yaml || true
+          echo "::endgroup::"
+          echo "::group::ApplicationSet describe"
+          kubectl -n argocd describe applicationset "$appset_name" || true
+          echo "::endgroup::"
+          echo "::group::Related Applications"
+          kubectl -n argocd get applications -o wide | grep -E "NAME|${app_name}|candidate-a" || true
+          echo "::endgroup::"
+          echo "::group::ApplicationSet controller logs"
+          kubectl -n argocd logs deployment/argocd-applicationset-controller --tail=200 || true
+          echo "::endgroup::"
+          exit 1
+          REMOTE_SCRIPT
+          ci_ssh_retry scp "${ssh_opts[@]}" "$remote_script" "root@${VM_HOST}:/tmp/wait-appset-${NODE}.sh"
+          rm -f "$remote_script"
+          ci_ssh_retry ssh "${ssh_opts[@]}" "root@${VM_HOST}" "bash /tmp/wait-appset-${NODE}.sh '$app_name' '$appset_name'; status=\$?; rm -f /tmp/wait-appset-${NODE}.sh; exit \$status"
+
+  assert-substrate:
+    needs: [decide, reconcile-appset, reconcile-dns, node-substrate]
+    # Per-cell isolation (Axiom 18): run whenever there are substrate targets and
+    # the env-level reconcile-dns succeeded. Do NOT gate on the matrix-aggregate
+    # node-substrate result — a sibling node's substrate failure must not skip
+    # this whole job and starve healthy cells of their assert marker. Each cell
+    # gates on its OWN node-substrate marker below.
+    if: |
+      always() &&
+      needs.decide.outputs.has_substrate_node_targets == 'true' &&
+      needs.reconcile-dns.result == 'success' &&
+      needs.node-substrate.result != 'skipped'
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ${{ fromJson(needs.decide.outputs.substrate_node_targets_json) }}
+    concurrency:
+      group: assert-substrate-candidate-a-${{ matrix.node }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    environment: candidate-a
+    steps:
+      - name: Checkout workflow source
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          path: ci-src
+
+      - name: Checkout app source
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          ref: ${{ needs.decide.outputs.head_sha }}
+          path: app-src
+
+      # Per-cell gate: this node's own node-substrate marker must be ok. The
+      # job-level gate intentionally does NOT check the aggregate node-substrate
+      # result, so a sibling's substrate failure can't skip this cell.
+      - name: Download this node's substrate marker
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.1.8
+        with:
+          name: substrate-ok-${{ matrix.node }}
+          path: ${{ runner.temp }}/substrate-marker
+      - name: Gate on this node's substrate marker
+        env:
+          NODE: ${{ matrix.node }}
+          KIND: substrate-ok
+          EXPECTED_JSON: ${{ needs.decide.outputs.substrate_node_targets_json }}
+          MARKER_DIR: ${{ runner.temp }}/substrate-marker
+        run: bash ci-src/scripts/ci/resolve-substrate-gate.sh
+
+      - name: Setup SSH to candidate-a VM
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          SSH_DEPLOY_KEY: ${{ secrets.SSH_DEPLOY_KEY }}
+          NODE_SOURCE_SHA: ${{ needs.decide.outputs.node_source_sha }}
+          DEPLOY_ENVIRONMENT: candidate-a
+        run: |
+          set -euo pipefail
+          bash ci-src/scripts/ci/require-node-ref-vm.sh
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          echo "$SSH_DEPLOY_KEY" | tr -d '\r' > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -T 10 -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Assert target substrate
+        env:
+          TARGET: ${{ matrix.node }}
+          VM_HOST: ${{ secrets.VM_HOST }}
+          SSH_OPTS: "-i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6"
+          DEPLOY_ENVIRONMENT: candidate-a
+          DOMAIN: ${{ vars.DOMAIN }}
+          FORK_DOMAIN_ROOT: ${{ vars.FORK_DOMAIN_ROOT || 'cognidao.org' }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          APP_SOURCE_DIR: app-src
+          COGNI_CATALOG_ROOT: app-src/infra/catalog
+          ASSERT_TARGET_SUBSTRATE_APP_WAIT_ATTEMPTS: 60
+          ASSERT_TARGET_SUBSTRATE_APP_WAIT_SLEEP_SECONDS: 5
+        run: bash ci-src/scripts/ci/assert-target-substrate.sh
+
+      # Per-cell success marker (Axiom 18): full substrate readiness for THIS
+      # node = its node-substrate marker (gated above) AND its own assert. flight
+      # + verify-candidate gate on this marker, never the aggregate result.
+      - name: Emit per-node assert marker
+        env:
+          NODE: ${{ matrix.node }}
+        run: |
+          set -euo pipefail
+          mkdir -p marker-out
+          printf 'ok' > "marker-out/assert-ok-${NODE}.txt"
+      - name: Upload per-node assert marker
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: assert-ok-${{ matrix.node }}
+          path: marker-out/assert-ok-${{ matrix.node }}.txt
+          retention-days: 1
+
+  node-substrate:
+    needs:
+      [decide, reconcile-appset, reconcile-dns, prepare-substrate-deploy-branch]
+    if: |
+      always() &&
+      needs.decide.outputs.has_substrate_node_targets == 'true' &&
+      needs.reconcile-appset.result == 'success' &&
+      needs.reconcile-dns.result == 'success' &&
+      needs.prepare-substrate-deploy-branch.result == 'success'
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ${{ fromJson(needs.decide.outputs.substrate_node_targets_json) }}
+    concurrency:
+      group: node-substrate-candidate-a-${{ matrix.node }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    environment: candidate-a
+    steps:
+      - name: Checkout workflow source
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          path: ci-src
+
+      - name: Checkout app source
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          ref: ${{ needs.decide.outputs.head_sha }}
+          fetch-depth: 0
+          path: app-src
+
+      - name: Materialize node source at its catalog pin
+        env:
+          GH_TOKEN: ${{ secrets.GIT_READ_TOKEN }}
+          NODE: ${{ matrix.node }}
+          NODE_SOURCE_SHA: ${{ needs.decide.outputs.node_source_sha }}
+        run: |
+          set -euo pipefail
+          # Remote-source node: fetch its tree at the catalog source_sha pin into
+          # nodes/<NODE> — no submodule, no gitlink, private-safe (GIT_READ_TOKEN).
+          # In-repo nodes carry no source_repo and are already in app-src.
+          # spec.node-submodule-retirement.
+          catalog="app-src/infra/catalog/${NODE}.yaml"
+          [ -f "$catalog" ] || exit 0
+          src_repo="$(yq -N '.source_repo // ""' "$catalog")"
+          [ -n "$src_repo" ] || exit 0
+          src_sha="${NODE_SOURCE_SHA:-$(yq -N '.source_sha // ""' "$catalog")}"
+          [ -n "$src_sha" ] || { echo "::error::no source_sha for remote-source node ${NODE}"; exit 1; }
+          repo_path="${src_repo#https://github.com/}"; repo_path="${repo_path%.git}"
+          rm -rf "app-src/nodes/${NODE}"
+          git init -q "app-src/nodes/${NODE}"
+          git -C "app-src/nodes/${NODE}" remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${repo_path}.git"
+          git -C "app-src/nodes/${NODE}" fetch -q --depth 1 origin "$src_sha"
+          git -C "app-src/nodes/${NODE}" checkout -q --detach FETCH_HEAD
+
+      - name: Setup SSH to candidate-a VM
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          SSH_DEPLOY_KEY: ${{ secrets.SSH_DEPLOY_KEY }}
+          NODE_SOURCE_SHA: ${{ needs.decide.outputs.node_source_sha }}
+          DEPLOY_ENVIRONMENT: candidate-a
+        run: |
+          set -euo pipefail
+          bash ci-src/scripts/ci/require-node-ref-vm.sh
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          echo "$SSH_DEPLOY_KEY" | tr -d '\r' > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -T 10 -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Run node substrate (materialize -> reconcile)
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          SSH_OPTS: "-i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6"
+          DEPLOY_ENVIRONMENT: candidate-a
+          DOMAIN: ${{ vars.DOMAIN }}
+          APP_SOURCE_DIR: app-src
+          COGNI_CATALOG_ROOT: infra/catalog
+          HEAD_SHA: ${{ needs.decide.outputs.head_sha }}
+          NODE_SOURCE_SHA: ${{ needs.decide.outputs.node_source_sha }}
+          STATUS_URL: ${{ needs.decide.outputs.status_url }}
+          SUBSTRATE_RECONCILE_SUMMARY_FILE: ${{ runner.temp }}/node-substrate-reconcile-${{ matrix.node }}.json
+        run: bash ci-src/scripts/ci/run-node-substrate.sh candidate-a "${{ matrix.node }}"
+
+      # Per-cell success marker (Axiom 18). assert-substrate + flight + verify
+      # gate on THIS node's marker, never the matrix-aggregate node-substrate
+      # result — so a sibling node's substrate failure cannot block this lane.
+      - name: Emit per-node substrate marker
+        env:
+          NODE: ${{ matrix.node }}
+        run: |
+          set -euo pipefail
+          mkdir -p marker-out
+          printf 'ok' > "marker-out/substrate-ok-${NODE}.txt"
+      - name: Upload per-node substrate marker
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: substrate-ok-${{ matrix.node }}
+          path: marker-out/substrate-ok-${{ matrix.node }}.txt
+          retention-days: 1
+
+      - name: Push substrate reconcile telemetry to Loki
+        if: always()
+        uses: ./ci-src/.github/actions/loki-push
+        with:
+          loki_url: ${{ secrets.GRAFANA_CLOUD_LOKI_URL }}
+          loki_user: ${{ secrets.GRAFANA_CLOUD_LOKI_USER }}
+          loki_token: ${{ secrets.GRAFANA_CLOUD_LOKI_API_KEY }}
+          log_file: ${{ runner.temp }}/node-substrate-reconcile-${{ matrix.node }}.json
+          job_name: node-substrate
+          labels: workflow=candidate-flight kind=target_substrate_reconcile slot=candidate-a
 
   flight:
-    needs: [decide, reconcile-appset]
-    if: needs.decide.outputs.has_flight_targets == 'true'
+    needs: [decide, reconcile-appset, node-substrate, assert-substrate]
+    # Per-cell isolation (Axiom 18): this job runs whenever there are flight
+    # targets. It does NOT gate on the matrix-aggregate node-substrate /
+    # assert-substrate result — that rollup goes failure if ANY node's substrate
+    # cell fails, which would block every healthy node's flight leg. Each cell
+    # gates on its OWN node's assert-ok marker below (a flight target with no
+    # substrate step, e.g. a service, has no marker and passes).
+    if: |
+      always() &&
+      needs.decide.outputs.has_flight_targets == 'true' &&
+      needs.reconcile-appset.result == 'success'
     strategy:
       fail-fast: false
       matrix:
@@ -310,6 +731,24 @@ jobs:
           ref: ${{ needs.decide.outputs.head_sha }}
           fetch-depth: 0
           path: app-src
+
+      # Per-cell substrate gate (Axiom 18): require THIS node's own assert-ok
+      # marker. A sibling node's substrate failure leaves this node's marker
+      # intact, so this cell proceeds. A flight target that needed no substrate
+      # (not in substrate_node_targets_json) has no marker and passes.
+      - name: Download this node's assert marker
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.1.8
+        with:
+          name: assert-ok-${{ matrix.node }}
+          path: ${{ runner.temp }}/assert-marker
+      - name: Gate on this node's substrate readiness
+        env:
+          NODE: ${{ matrix.node }}
+          KIND: assert-ok
+          EXPECTED_JSON: ${{ needs.decide.outputs.substrate_node_targets_json }}
+          MARKER_DIR: ${{ runner.temp }}/assert-marker
+        run: bash ci-src/scripts/ci/resolve-substrate-gate.sh
 
       - name: Download resolved-pr-images
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.1.8
@@ -352,6 +791,8 @@ jobs:
           NODE: ${{ matrix.node }}
         run: |
           set -euo pipefail
+          # Node source already materialized at app-src/nodes/${NODE} by the
+          # "Materialize node source at its catalog pin" step (same job).
           rsync -a --delete app-src/infra/k8s/base/ deploy-branch/infra/k8s/base/
           mkdir -p "deploy-branch/infra/k8s/overlays/candidate-a/${NODE}"
           rsync -a --delete \
@@ -422,7 +863,11 @@ jobs:
             echo "deploy_branch_sha=$DEPLOY_SHA" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          git commit -m "candidate-flight ${NODE}: pr-${{ inputs.pr_number }} ${HEAD_SHA}"
+          if [ -n "${{ needs.decide.outputs.node_source_sha }}" ]; then
+            git commit -m "candidate-flight ${NODE}: node-ref ${{ needs.decide.outputs.node_source_sha }}"
+          else
+            git commit -m "candidate-flight ${NODE}: pr-${{ inputs.pr_number }} ${HEAD_SHA}"
+          fi
           git push origin "HEAD:${PER_NODE_BRANCH}"
           DEPLOY_SHA=$(git rev-parse HEAD)
           echo "deploy_branch_sha=$DEPLOY_SHA" >> "$GITHUB_OUTPUT"
@@ -467,183 +912,99 @@ jobs:
     runs-on: ubuntu-latest
     environment: candidate-a
     steps:
+      # Workflow source at the root owns local composite actions + shared CI
+      # helpers, so telemetry remains available even when the PR-head app source
+      # predates .github/actions/loki-push.
+      - name: Checkout workflow source
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
       # PR head, not the workflow default branch: a PR that ADDS a node carries
       # the new catalog entry + the reconcile script here, so DNS covers it.
       - name: Checkout app source (PR catalog + scripts)
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:
           ref: ${{ needs.decide.outputs.head_sha }}
+          path: app-src
 
       - name: Reconcile node DNS (per-node A records → VM IP)
+        working-directory: app-src
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
           FORK_DOMAIN_ROOT: ${{ vars.FORK_DOMAIN_ROOT || 'cognidao.org' }}
           DOMAIN: ${{ vars.DOMAIN }}
+          DNS_RECONCILE_SUMMARY_FILE: ${{ runner.temp }}/dns-reconcile-summary.json
+          DNS_RECONCILE_CANDIDATE_SHA: ${{ needs.decide.outputs.node_source_sha || needs.decide.outputs.head_sha }}
+          DNS_RECONCILE_HEAD_SHA: ${{ needs.decide.outputs.head_sha }}
+          DNS_RECONCILE_NODE_SOURCE_SHA: ${{ needs.decide.outputs.node_source_sha }}
+          DNS_RECONCILE_PR_NUMBER: ${{ inputs.pr_number }}
+          DNS_RECONCILE_NODE_SLUG: ${{ needs.decide.outputs.node_slug }}
+          DNS_RECONCILE_STATUS_URL: ${{ needs.decide.outputs.status_url }}
         run: |
           set -euo pipefail
+          write_skip_summary() {
+            local reason="$1"
+            local candidate_sha8="${DNS_RECONCILE_CANDIDATE_SHA:0:8}"
+            jq -nc \
+              --arg status "skipped" \
+              --arg reason "$reason" \
+              --arg deploy_env "candidate-a" \
+              --arg domain "${DOMAIN:-}" \
+              --arg workflow "${GITHUB_WORKFLOW:-}" \
+              --arg job "${GITHUB_JOB:-}" \
+              --arg run_id "${GITHUB_RUN_ID:-}" \
+              --arg attempt "${GITHUB_RUN_ATTEMPT:-}" \
+              --arg ref "${GITHUB_REF_NAME:-}" \
+              --arg workflow_sha "${GITHUB_SHA:-}" \
+              --arg candidate_sha "${DNS_RECONCILE_CANDIDATE_SHA:-}" \
+              --arg candidate_sha8 "$candidate_sha8" \
+              --arg head_sha "${DNS_RECONCILE_HEAD_SHA:-}" \
+              --arg node_source_sha "${DNS_RECONCILE_NODE_SOURCE_SHA:-}" \
+              --arg pr_number "${DNS_RECONCILE_PR_NUMBER:-}" \
+              --arg node_slug "${DNS_RECONCILE_NODE_SLUG:-}" \
+              --arg status_url "${DNS_RECONCILE_STATUS_URL:-}" \
+              --arg emitted_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+              '{schema_version: 1, type: "dns_reconcile_summary", status: $status, skip_reason: $reason, deploy_env: $deploy_env, domain: $domain, workflow: $workflow, job: $job, run_id: $run_id, attempt: $attempt, ref: $ref, workflow_sha: $workflow_sha, candidate_sha: $candidate_sha, candidate_sha8: $candidate_sha8, head_sha: $head_sha, node_source_sha: $node_source_sha, pr_number: $pr_number, node_slug: $node_slug, status_url: $status_url, record_count: 0, states: {}, records: [], emitted_at: $emitted_at}' \
+              > "$DNS_RECONCILE_SUMMARY_FILE"
+          }
           # Flights run on a main-merge ref; a pre-#1445 head lacks this script.
           # Skip rather than 127 so older PRs still flight (their nodes already resolve).
           if [ ! -f scripts/ci/reconcile-node-dns.sh ]; then
             echo "::warning::scripts/ci/reconcile-node-dns.sh absent at this ref — skipping node DNS reconcile"
+            write_skip_summary "script_absent"
             exit 0
           fi
           if [ -z "${CLOUDFLARE_API_TOKEN:-}" ] || [ -z "${CLOUDFLARE_ZONE_ID:-}" ]; then
             echo "::warning::Cloudflare secrets unset on candidate-a — skipping node DNS reconcile (newly-created nodes won't resolve)"
+            write_skip_summary "cloudflare_secrets_missing"
             exit 0
           fi
           bash scripts/ci/reconcile-node-dns.sh candidate-a
 
-  # Node BIRTH only (mochi gap): a flight that ADDS a catalog node must
-  # provision that node's Compose infra — edge route + DB + secret — in the SAME
-  # flight, else the freshly-deployed pod has no DB/secret and the edge returns
-  # TLS-internal-error (no Caddy route). Mirrors candidate-flight-infra.yml's
-  # flight-infra job (the standalone infra lever, still available for manual /
-  # infra-only changes) but sources infra/compose/** from the PR head, not main,
-  # so the birthing PR's own infra lands. Skipped on every non-birth flight →
-  # task.0314 app/infra independence holds; the coupling fires ONLY on birth.
-  deploy-infra:
-    needs: decide
-    if: needs.decide.outputs.needs_infra == 'true'
-    concurrency:
-      group: candidate-flight-infra-candidate-a
-      cancel-in-progress: false
-    runs-on: ubuntu-latest
-    environment: candidate-a
-    timeout-minutes: 45
-    env:
-      VM_HOST: ${{ secrets.VM_HOST }}
-      DOMAIN: ${{ vars.DOMAIN }}
-      DEPLOY_ENVIRONMENT: candidate-a
-      APP_ENV: production
-      COGNI_REPO_URL: https://github.com/${{ github.repository }}.git
-      COGNI_REPO_REF: ${{ needs.decide.outputs.head_sha }}
-      GIT_READ_USERNAME: Cogni-1729
-      GIT_READ_TOKEN: ${{ secrets.GIT_READ_TOKEN }}
-      DATABASE_URL: ${{ secrets.DATABASE_URL }}
-      DATABASE_SERVICE_URL: ${{ secrets.DATABASE_SERVICE_URL }}
-      POSTGRES_ROOT_USER: ${{ secrets.POSTGRES_ROOT_USER }}
-      POSTGRES_ROOT_PASSWORD: ${{ secrets.POSTGRES_ROOT_PASSWORD }}
-      APP_DB_USER: ${{ secrets.APP_DB_USER }}
-      APP_DB_PASSWORD: ${{ secrets.APP_DB_PASSWORD }}
-      APP_DB_SERVICE_USER: ${{ secrets.APP_DB_SERVICE_USER }}
-      APP_DB_SERVICE_PASSWORD: ${{ secrets.APP_DB_SERVICE_PASSWORD }}
-      APP_DB_READONLY_USER: ${{ secrets.APP_DB_READONLY_USER }}
-      APP_DB_READONLY_PASSWORD: ${{ secrets.APP_DB_READONLY_PASSWORD }}
-      APP_DB_NAME: ${{ secrets.APP_DB_NAME }}
-      LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY }}
-      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-      AUTH_SECRET: ${{ secrets.AUTH_SECRET }}
-      EVM_RPC_URL: ${{ secrets.EVM_RPC_URL }}
-      POLYGON_RPC_URL: ${{ secrets.POLYGON_RPC_URL }}
-      TEMPORAL_DB_USER: ${{ secrets.TEMPORAL_DB_USER }}
-      TEMPORAL_DB_PASSWORD: ${{ secrets.TEMPORAL_DB_PASSWORD }}
-      GHCR_DEPLOY_TOKEN: ${{ secrets.GHCR_DEPLOY_TOKEN }}
-      GHCR_USERNAME: Cogni-1729
-      ACTIONS_AUTOMATION_BOT_PAT: ${{ secrets.ACTIONS_AUTOMATION_BOT_PAT }}
-      GRAFANA_CLOUD_LOKI_URL: ${{ secrets.GRAFANA_CLOUD_LOKI_URL }}
-      GRAFANA_CLOUD_LOKI_USER: ${{ secrets.GRAFANA_CLOUD_LOKI_USER }}
-      GRAFANA_CLOUD_LOKI_API_KEY: ${{ secrets.GRAFANA_CLOUD_LOKI_API_KEY }}
-      METRICS_TOKEN: ${{ secrets.METRICS_TOKEN }}
-      PROMETHEUS_REMOTE_WRITE_URL: ${{ secrets.PROMETHEUS_REMOTE_WRITE_URL }}
-      PROMETHEUS_USERNAME: ${{ secrets.PROMETHEUS_USERNAME }}
-      PROMETHEUS_PASSWORD: ${{ secrets.PROMETHEUS_PASSWORD }}
-      PROMETHEUS_QUERY_URL: ${{ secrets.PROMETHEUS_QUERY_URL }}
-      PROMETHEUS_READ_USERNAME: ${{ secrets.PROMETHEUS_READ_USERNAME }}
-      PROMETHEUS_READ_PASSWORD: ${{ secrets.PROMETHEUS_READ_PASSWORD }}
-      LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
-      LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
-      LANGFUSE_BASE_URL: ${{ secrets.LANGFUSE_BASE_URL }}
-      SCHEDULER_API_TOKEN: ${{ secrets.SCHEDULER_API_TOKEN }}
-      BILLING_INGEST_TOKEN: ${{ secrets.BILLING_INGEST_TOKEN }}
-      INTERNAL_OPS_TOKEN: ${{ secrets.INTERNAL_OPS_TOKEN }}
-      OPENCLAW_GATEWAY_TOKEN: ${{ secrets.OPENCLAW_GATEWAY_TOKEN }}
-      OPENCLAW_GITHUB_RW_TOKEN: ${{ secrets.OPENCLAW_GITHUB_RW_TOKEN }}
-      DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
-      GH_OAUTH_CLIENT_ID: ${{ secrets.GH_OAUTH_CLIENT_ID }}
-      GH_OAUTH_CLIENT_SECRET: ${{ secrets.GH_OAUTH_CLIENT_SECRET }}
-      DISCORD_OAUTH_CLIENT_ID: ${{ secrets.DISCORD_OAUTH_CLIENT_ID }}
-      DISCORD_OAUTH_CLIENT_SECRET: ${{ secrets.DISCORD_OAUTH_CLIENT_SECRET }}
-      GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
-      GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
-      DOLTHUB_REMOTE_URL: ${{ secrets.DOLTHUB_REMOTE_URL }}
-      DOLT_CREDS_JWK: ${{ secrets.DOLT_CREDS_JWK }}
-      DOLT_CREDS_KEYID: ${{ secrets.DOLT_CREDS_KEYID }}
-      DOLTHUB_API_TOKEN: ${{ secrets.DOLTHUB_API_TOKEN }}
-      DOLTHUB_OAUTH_CLIENT_ID: ${{ secrets.DOLTHUB_OAUTH_CLIENT_ID }}
-      DOLTHUB_OAUTH_CLIENT_SECRET: ${{ secrets.DOLTHUB_OAUTH_CLIENT_SECRET }}
-      GRAFANA_URL: ${{ secrets.GRAFANA_URL }}
-      GRAFANA_SERVICE_ACCOUNT_TOKEN: ${{ secrets.GRAFANA_SERVICE_ACCOUNT_TOKEN }}
-      GRAFANA_PDC_SIGNING_TOKEN: ${{ secrets.GRAFANA_PDC_SIGNING_TOKEN }}
-      GRAFANA_PDC_HOSTED_GRAFANA_ID: ${{ secrets.GRAFANA_PDC_HOSTED_GRAFANA_ID }}
-      GRAFANA_PDC_CLUSTER: ${{ secrets.GRAFANA_PDC_CLUSTER }}
-      GRAFANA_PDC_NETWORK_ID: ${{ secrets.GRAFANA_PDC_NETWORK_ID }}
-      GRAFANA_PDC_NETWORK_UUID: ${{ secrets.GRAFANA_PDC_NETWORK_UUID }}
-      GH_REVIEW_APP_ID: ${{ secrets.GH_REVIEW_APP_ID }}
-      GH_REVIEW_APP_PRIVATE_KEY_BASE64: ${{ secrets.GH_REVIEW_APP_PRIVATE_KEY_BASE64 }}
-      GH_REPOS: ${{ vars.GH_REPOS }}
-      GH_WEBHOOK_SECRET: ${{ secrets.GH_WEBHOOK_SECRET }}
-      PRIVY_APP_ID: ${{ secrets.PRIVY_APP_ID }}
-      PRIVY_APP_SECRET: ${{ secrets.PRIVY_APP_SECRET }}
-      PRIVY_SIGNING_KEY: ${{ secrets.PRIVY_SIGNING_KEY }}
-      PRIVY_USER_WALLETS_APP_ID: ${{ secrets.PRIVY_USER_WALLETS_APP_ID }}
-      PRIVY_USER_WALLETS_APP_SECRET: ${{ secrets.PRIVY_USER_WALLETS_APP_SECRET }}
-      PRIVY_USER_WALLETS_SIGNING_KEY: ${{ secrets.PRIVY_USER_WALLETS_SIGNING_KEY }}
-      POLY_WALLET_AEAD_KEY_HEX: ${{ secrets.POLY_WALLET_AEAD_KEY_HEX }}
-      POLY_WALLET_AEAD_KEY_ID: ${{ secrets.POLY_WALLET_AEAD_KEY_ID }}
-      POLY_CLOB_GEO_BLOCK_TOKEN: ${{ secrets.POLY_CLOB_GEO_BLOCK_TOKEN }}
-      CONNECTIONS_ENCRYPTION_KEY: ${{ secrets.CONNECTIONS_ENCRYPTION_KEY }}
-      POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
-      POSTHOG_HOST: ${{ secrets.POSTHOG_HOST }}
-      TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
-      COGNI_NODE_DBS: ${{ secrets.COGNI_NODE_DBS }}
-    steps:
-      - name: Checkout (for scripts + PR-head infra)
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+      - name: Push DNS reconcile telemetry to Loki
+        if: always()
+        uses: ./.github/actions/loki-push
         with:
-          ref: ${{ needs.decide.outputs.head_sha }}
-          fetch-depth: 0
-
-      - name: Setup SSH
-        run: |
-          if [ -z "$VM_HOST" ]; then
-            echo "⚠️ No VM_HOST secret set for candidate-a — skipping infra deploy"
-            exit 0
-          fi
-          mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          echo "${{ secrets.SSH_DEPLOY_KEY }}" | tr -d '\r' > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -T 10 -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
-
-      - name: Preflight Grafana PDC signing token
-        if: env.VM_HOST != '' && env.GRAFANA_PDC_SIGNING_TOKEN != ''
-        run: bash scripts/grafana-pdc-token-preflight.sh
-
-      - name: Deploy Compose infra to candidate-a VM (PR head)
-        if: env.VM_HOST != ''
-        run: bash scripts/ci/deploy-infra.sh --ref "$COGNI_REPO_REF"
-
-      - name: Provision Grafana Postgres datasources
-        if: env.VM_HOST != ''
-        run: bash scripts/ci/provision-grafana-postgres-datasources.sh
-
-      - name: Verify Grafana Postgres datasources
-        if: env.VM_HOST != ''
-        continue-on-error: true
-        run: bash scripts/ci/verify-grafana-postgres-datasources.sh
+          loki_url: ${{ secrets.GRAFANA_CLOUD_LOKI_URL }}
+          loki_user: ${{ secrets.GRAFANA_CLOUD_LOKI_USER }}
+          loki_token: ${{ secrets.GRAFANA_CLOUD_LOKI_API_KEY }}
+          log_file: ${{ runner.temp }}/dns-reconcile-summary.json
+          job_name: reconcile-dns
+          labels: workflow=candidate-flight kind=dns_reconcile slot=candidate-a
 
   verify-candidate:
-    needs: [decide, flight, reconcile-dns, deploy-infra]
-    # deploy-infra runs ONLY on birth (added catalog node); on every ordinary
-    # app flight it is SKIPPED, and a skipped birth-infra must still let verify
-    # run — mirrors promote-and-deploy.yml's
-    # `(deploy-infra.result == 'success' || 'skipped')` gate.
+    needs: [decide, flight, reconcile-dns, node-substrate, assert-substrate]
+    # Per-cell isolation (Axiom 18): run whenever flight ran and env-level
+    # reconcile-dns succeeded. Do NOT gate on the matrix-aggregate flight /
+    # node-substrate / assert-substrate result — a sibling node's failure must
+    # not skip this whole job. Each cell proves its OWN flight succeeded via the
+    # per-cell deploy-sha artifact (Resolve EXPECTED_SHA, fail-closed on empty)
+    # and gates on its OWN node's assert-ok marker below.
     if: |
       always() &&
       needs.decide.outputs.has_flight_targets == 'true' &&
-      needs.flight.result == 'success' &&
-      needs.reconcile-dns.result == 'success' &&
-      (needs.deploy-infra.result == 'success' || needs.deploy-infra.result == 'skipped')
+      needs.flight.result != 'skipped' &&
+      needs.reconcile-dns.result == 'success'
     strategy:
       fail-fast: false
       matrix:
@@ -665,6 +1026,22 @@ jobs:
         with:
           ref: ${{ needs.decide.outputs.head_sha }}
           path: app-src
+
+      # Per-cell substrate gate (Axiom 18): same per-node assert-ok marker the
+      # flight cell used. A sibling node's substrate failure can't reach here.
+      - name: Download this node's assert marker
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.1.8
+        with:
+          name: assert-ok-${{ matrix.node }}
+          path: ${{ runner.temp }}/assert-marker
+      - name: Gate on this node's substrate readiness
+        env:
+          NODE: ${{ matrix.node }}
+          KIND: assert-ok
+          EXPECTED_JSON: ${{ needs.decide.outputs.substrate_node_targets_json }}
+          MARKER_DIR: ${{ runner.temp }}/assert-marker
+        run: bash ci-src/scripts/ci/resolve-substrate-gate.sh
 
       - name: Checkout per-node deploy branch (for source-sha map)
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
@@ -697,13 +1074,14 @@ jobs:
         env:
           VM_HOST: ${{ secrets.VM_HOST }}
           SSH_DEPLOY_KEY: ${{ secrets.SSH_DEPLOY_KEY }}
+          NODE_SOURCE_SHA: ${{ needs.decide.outputs.node_source_sha }}
+          DEPLOY_ENVIRONMENT: candidate-a
         run: |
-          if [ -z "$VM_HOST" ]; then
-            echo "⚠️ No VM_HOST secret set on candidate-a — skipping verification"
-            echo "has_vm=false" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          bash ci-src/scripts/ci/require-node-ref-vm.sh
+          if [ "$VM_HOST" = "" ]; then
             exit 0
           fi
-          echo "has_vm=true" >> "$GITHUB_OUTPUT"
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           echo "$SSH_DEPLOY_KEY" | tr -d '\r' > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
@@ -752,13 +1130,21 @@ jobs:
         env:
           DOMAIN: ${{ vars.DOMAIN }}
           SOURCE_SHA_MAP: deploy-branch/.promote-state/source-sha-by-app.json
-          EXPECTED_BUILDSHA: ${{ needs.decide.outputs.head_sha }}
+          EXPECTED_BUILDSHA: ${{ needs.decide.outputs.node_source_sha || needs.decide.outputs.head_sha }}
           NODES: ${{ matrix.node }}
           COGNI_CATALOG_ROOT: app-src/infra/catalog
         run: bash ci-src/scripts/ci/verify-buildsha.sh
 
   report-status:
-    needs: [decide, flight, verify-candidate]
+    needs:
+      [
+        decide,
+        prepare-substrate-deploy-branch,
+        node-substrate,
+        assert-substrate,
+        flight,
+        verify-candidate,
+      ]
     if: always() && needs.decide.result == 'success'
     runs-on: ubuntu-latest
     steps:
@@ -770,22 +1156,35 @@ jobs:
         env:
           HAS_TARGETS: ${{ needs.decide.outputs.has_targets }}
           HAS_FLIGHT_TARGETS: ${{ needs.decide.outputs.has_flight_targets }}
+          HAS_SUBSTRATE_NODE_TARGETS: ${{ needs.decide.outputs.has_substrate_node_targets }}
+          PREPARE_SUBSTRATE_DEPLOY_BRANCH_RESULT: ${{ needs.prepare-substrate-deploy-branch.result }}
+          NODE_SUBSTRATE_RESULT: ${{ needs.node-substrate.result }}
+          ASSERT_SUBSTRATE_RESULT: ${{ needs.assert-substrate.result }}
           FLIGHT_RESULT: ${{ needs.flight.result }}
           VERIFY_RESULT: ${{ needs.verify-candidate.result }}
           TARGETS_JSON: ${{ needs.decide.outputs.flight_targets_json }}
         run: |
           set -euo pipefail
-          echo "has_targets=${HAS_TARGETS} has_flight_targets=${HAS_FLIGHT_TARGETS} flight=${FLIGHT_RESULT} verify=${VERIFY_RESULT} flight_targets=${TARGETS_JSON}"
+          echo "has_targets=${HAS_TARGETS} has_flight_targets=${HAS_FLIGHT_TARGETS} substrate=${HAS_SUBSTRATE_NODE_TARGETS} prepare_substrate_deploy_branch=${PREPARE_SUBSTRATE_DEPLOY_BRANCH_RESULT} node_substrate=${NODE_SUBSTRATE_RESULT} assert_substrate=${ASSERT_SUBSTRATE_RESULT} flight=${FLIGHT_RESULT} verify=${VERIFY_RESULT} flight_targets=${TARGETS_JSON}"
           if [ "$HAS_FLIGHT_TARGETS" != "true" ]; then
             # No k8s app-lever targets. Either nothing affected, or the affected
-            # set is type:infra only (e.g. litellm) — which deploys via Compose
-            # (deploy-infra.sh / candidate-flight-infra.yml), not this app lever.
+            # set is type:infra only (e.g. litellm) — which deploys via the
+            # explicit Compose infra workflow, not this app lever.
             STATE=success
             if [ "$HAS_TARGETS" = "true" ]; then
               DESC="Candidate flight no-op (infra-only affected set; deploys via Compose lever)"
             else
               DESC="Candidate flight no-op (no affected nodes)"
             fi
+          elif [ "$HAS_SUBSTRATE_NODE_TARGETS" = "true" ] && [ "$PREPARE_SUBSTRATE_DEPLOY_BRANCH_RESULT" != "success" ]; then
+            STATE=failure
+            DESC="Candidate flight failed before promotion (prepare-substrate-deploy-branch=${PREPARE_SUBSTRATE_DEPLOY_BRANCH_RESULT})"
+          elif [ "$HAS_SUBSTRATE_NODE_TARGETS" = "true" ] && [ "$NODE_SUBSTRATE_RESULT" != "success" ]; then
+            STATE=failure
+            DESC="Candidate flight failed before promotion (node-substrate=${NODE_SUBSTRATE_RESULT})"
+          elif [ "$HAS_SUBSTRATE_NODE_TARGETS" = "true" ] && [ "$ASSERT_SUBSTRATE_RESULT" != "success" ]; then
+            STATE=failure
+            DESC="Candidate flight failed before promotion (assert-substrate=${ASSERT_SUBSTRATE_RESULT})"
           elif [ "$FLIGHT_RESULT" = "success" ] && [ "$VERIFY_RESULT" = "success" ]; then
             STATE=success
             DESC="Candidate flight passed (matrix: ${TARGETS_JSON})"
@@ -803,6 +1202,7 @@ jobs:
           echo "description=${DESC}" >> "$GITHUB_OUTPUT"
 
       - name: Report terminal candidate-flight status
+        if: inputs.pr_number != ''
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}

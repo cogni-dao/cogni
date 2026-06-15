@@ -20,6 +20,9 @@ tags:
 
 > Like `secrets-add-new.md`, this is mostly one command. The complexity isn't in the mechanics — it's in choosing the right cadence per secret class and knowing the rollback path.
 
+Use this only for secrets. Plain runtime config changes through GitOps
+ConfigMaps or repo config; it does not rotate.
+
 ## Rotation cadence by class
 
 Per [NIST SP 800-57 §8 Key States](https://csrc.nist.gov/publications/detail/sp/800-57-part-1/rev-5/final), every key has a lifecycle. Cogni's cadence table:
@@ -140,14 +143,25 @@ ESO + Reloader propagate the rollback the same way they propagate a forward rota
 
 ## Rotating a static DB role password (today — pre-dynamic-creds)
 
-DB **role** passwords (`app_user`, `app_service`, the readonly role, Doltgres `knowledge_reader`/`knowledge_writer`) are the one case where the zero-touch flow above does **not** apply yet. The role is created **set-once** by `db-provision` and never re-`ALTER`ed (Invariant 15 / bug.5002), so a plain `bao kv patch` of `DATABASE_URL` does **not** reach the live Postgres role — ESO would hand the pod a password the DB never adopted → `28P01`. Until Phase 2 of the DB-cred migration lands (`deploy-infra` reading role passwords from OpenBao — see [`secrets-management.md` → DB-credential provisioning](../spec/secrets-management.md)), rotating a static DB role password is a **deliberate, single-window two-source operation**:
+DB **role** passwords are not the same as API keys. The secret value lives in
+OpenBao, but the database role also has state. For paths now covered by the
+OpenBao read bridge (`deploy-infra` for shared infra DB roles and
+`reconcile-substrate` for per-node app/service roles), the owning deploy lever
+must read the OpenBao value and converge the role from that value. Never align a
+role to a rendered VM `.env` copy.
+
+For roles that are still set-once and not automatically ALTERed, a plain
+`bao kv patch` does **not** reach the live Postgres role by itself. ESO would
+hand the pod a password the DB never adopted -> `28P01`. Rotating one of those
+static DB credentials is a deliberate, single-window operation:
 
 ```bash
 # 1. Write the new password to OpenBao (the source of record).
 printf '%s' "$NEW" | pnpm secrets:set <env> <service> APP_DB_PASSWORD
 #    (also re-patch the composed DATABASE_URL key if your catalog stores it separately)
 
-# 2. Apply the SAME value to the live role yourself — it will NOT self-heal.
+# 2. Apply the SAME value through the owning deploy/reconcile lever, or to the
+#    live role yourself if no lever owns that role yet. It will NOT self-heal.
 #    Use the OpenBao value you just wrote (you are the single writer this window),
 #    via the superuser socket on the VM. NOT a divergent .env value (that is bug.5002).
 ssh <vm> 'docker compose exec -T postgres \
@@ -160,7 +174,31 @@ kubectl annotate externalsecret -n cogni-<env> <service>-env-secrets \
   force-sync=$(date +%s) --overwrite
 ```
 
-Do all three in one change-window — a gap between steps 1/3 and step 2 is a live `28P01` window. **This manual lockstep is precisely the toil the migration eliminates:** after Phase 2, step 2 happens automatically on the next deploy (deploy-infra reads the role password from OpenBao); after Phase 3 (below) there is no static password to rotate at all.
+Do all three in one change-window — a gap between steps 1/3 and step 2 is a live
+`28P01` window. **This manual lockstep is precisely the toil the migration is
+eliminating:** covered roles converge from OpenBao on their owning deploy path;
+after dynamic DB credentials land (below), there is no static password to rotate
+at all.
+
+## Immutable init-bound credentials (converge, don't rotate)
+
+Some credentials are fixed when a stateful resource is **initialized** and have no in-place "set new password" operation afterward. For these, rotation as described above does not exist — there are only two moves: **converge** (make the OpenBao SSOT agree with the live resource) and **re-init** (destroy + recreate the resource, a data migration). Classify by custody, not by name: a value the catalog routes through OpenBao but whose live counterpart is set-once-at-init belongs to this class.
+
+The current instance is the **Doltgres superuser** (`DOLTGRES_PASSWORD`): Doltgres 0.56.3 has no `ALTER` for it and supports only one server-wide root password (no per-database superuser — `databases.md §5.2`), so it is necessarily one env-wide value fixed at volume init. Its SSOT is operator-canonical and stored — `cogni/<env>/operator/DOLTGRES_PASSWORD` — rendered into every node's `DOLTGRES_URL` (a derived value; see [`secrets-classification.md`](../spec/secrets-classification.md) § "DATABASE_URL / … — derived, not catalog") and read by the provisioners. It is **never re-derived** (re-deriving from `POSTGRES_ROOT_PASSWORD` is what drifted prod and caused the 2026-06-10 `28P01`).
+
+**Converge — the common case (restore/drift).** The live resource holds value `X`; make OpenBao agree. Non-destructive, zero data movement:
+
+```bash
+# Recover X from the running pod's env (the only authoritative place it survives),
+# then write it to the SSOT. Never print X to chat/logs/argv.
+# (Prereq: kubeconfig + BAO_ADDR/BAO_TOKEN per secrets-add-new.md §4.)
+X=$(kubectl -n cogni-<env> exec deploy/operator -- printenv DOLTGRES_URL \
+  | sed -E 's#^postgresql://[^:]+:([^@]+)@.*#\1#')
+printf '%s' "$X" | pnpm secrets:set <env> operator DOLTGRES_PASSWORD
+unset X
+```
+
+**Re-init — genuine re-key (rare, destructive).** Export data → destroy + recreate the resource with a new value (set the SSOT _first_) → re-import. This is a data migration, run from a maintenance runbook with the resource briefly unavailable — not a rotation. The Doltgres volume procedure lives in the database spec ([`databases.md`](../spec/databases.md)); prefer converge unless the old credential is genuinely compromised.
 
 ## Dynamic database credentials (the production endgame)
 

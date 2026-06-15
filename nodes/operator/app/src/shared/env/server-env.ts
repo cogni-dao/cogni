@@ -48,6 +48,28 @@ export class EnvValidationError extends Error {
   }
 }
 
+function assertOpenFgaEnv(env: z.infer<typeof serverSchema>): void {
+  const authzActivationEnv =
+    env.OPENFGA_STORE_ID !== undefined ||
+    env.OPENFGA_AUTHORIZATION_MODEL_ID !== undefined ||
+    env.OPENFGA_API_TOKEN !== undefined;
+
+  if (!authzActivationEnv) return;
+
+  const missing = [
+    env.OPENFGA_API_URL === undefined ? "OPENFGA_API_URL" : undefined,
+    env.OPENFGA_STORE_ID === undefined ? "OPENFGA_STORE_ID" : undefined,
+  ].filter((key): key is string => key !== undefined);
+
+  if (missing.length > 0) {
+    throw new EnvValidationError({
+      code: "INVALID_ENV",
+      missing,
+      invalid: [],
+    });
+  }
+}
+
 // Server schema with all environment variables
 export const serverSchema = z.object({
   NODE_ENV: z
@@ -136,15 +158,10 @@ export const serverSchema = z.object({
   // Required when on-chain governance signal execution is enabled.
   ALCHEMY_WEBHOOK_SECRET: optionalString,
 
-  // DoltHub credentials — service-side push of knowledge hubs to DoltHub
-  // remote (cogni-dao/knowledge-<node>). v0 push uses DoltHub Dolt creds
-  // (keypair, see docs/runbooks/dolthub-remote-bootstrap.md). DOLTHUB_REMOTE_URL
-  // gates the push job — when unset, merges still succeed locally and never
-  // attempt a push. DOLTHUB_API_TOKEN (PAT) is for the REST/SQL HTTP API only
-  // (future librarian/x402 reads). DoltHub OAuth pair is reserved for v1
-  // per-user identity (task.5070, blocked on DoltHub app approval). Per
-  // proj.knowledge-syntropy (W0c tier) + task.5069.
-  DOLTHUB_REMOTE_URL: optionalString,
+  // DoltHub credentials — node publish creates env-owned knowledge repos via
+  // REST. Runtime mirror remote URLs come only from repo-spec `knowledge.remote`;
+  // DOLT_CREDS_* authenticate the Dolt push protocol in Doltgres.
+  DOLTHUB_OWNER: optionalString,
   DOLTHUB_API_TOKEN: optionalString,
   DOLTHUB_OAUTH_CLIENT_ID: optionalString,
   DOLTHUB_OAUTH_CLIENT_SECRET: optionalString,
@@ -163,13 +180,14 @@ export const serverSchema = z.object({
   NODE_MINT_OWNER: optionalString,
   NODE_TEMPLATE_OWNER: optionalString,
 
-  // Node-formation Publish: the submodule-PIN-PR target (the operator's deployment monorepo).
-  // Wizard-scoped override ONLY — does NOT touch getGithubRepo()/operator identity. Fail-open: when
-  // unset, the pin-PR targets `node.repoOwner/repoName` (= Cogni-DAO/cogni in prod, unchanged). Set
-  // on candidate-a to a cogni-shaped mirror in the throwaway org so the test app can open the pin-PR
-  // without any Cogni-DAO access.
+  // Required env-scoped deployment parent for submodule pin PRs and node-ref flights.
   NODE_SUBMODULE_PARENT_OWNER: optionalString,
   NODE_SUBMODULE_PARENT_REPO: optionalString,
+
+  // MVP node-capacity ceiling (merge-authority): the operator refuses to birth a new node once the
+  // network has this many `nodes/<slug>` submodules deployed. Config, never hardcoded; tunable per env.
+  // vNext replaces the flat ceiling with VM-capacity-aware placement.
+  NODE_CAPACITY_CEILING: z.coerce.number().int().positive().default(8),
 
   // Billing ingest token - Bearer auth for LiteLLM generic_api callback → billing ingest endpoint
   // Per billing-ingest-spec: CALLBACK_AUTHENTICATED invariant. Min 32 chars to reduce weak-token risk.
@@ -274,6 +292,12 @@ export const serverSchema = z.object({
   // Optional — BYO-AI features disabled when not set.
   CONNECTIONS_ENCRYPTION_KEY: optionalString,
 
+  // OpenFGA authorization — optional until the RBAC store is deployed.
+  OPENFGA_API_URL: optionalUrl,
+  OPENFGA_STORE_ID: optionalString,
+  OPENFGA_AUTHORIZATION_MODEL_ID: optionalString,
+  OPENFGA_API_TOKEN: optionalString,
+
   // PostHog product analytics — required
   // See docs/guides/posthog-setup.md for setup
   // PostHog Cloud free tier: 1M events/month at https://us.i.posthog.com
@@ -305,6 +329,7 @@ export function serverEnv(): ServerEnv {
       // Cross-field invariants (beyond Zod schema)
       // Per DATABASE_RLS_SPEC.md design decision 7: enforce role separation at boot
       assertEnvInvariants(parsed);
+      assertOpenFgaEnv(parsed);
 
       // Per DATABASE_RLS_SPEC.md §SSL_REQUIRED_NON_LOCAL: reject non-localhost
       // PostgreSQL URLs without sslmode= to prevent credential sniffing.

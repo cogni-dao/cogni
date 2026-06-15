@@ -17,6 +17,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import tsconfigPaths from "vite-tsconfig-paths";
 import { defineConfig } from "vitest/config";
+import { workspaceSourceAliases } from "./scripts/vitest/workspace-source-aliases.mts";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -77,6 +78,7 @@ export default defineConfig({
   plugins: [tsconfigPaths({ projects: ["./tsconfig.base.json"] })],
   resolve: {
     alias: [
+      ...workspaceSourceAliases(__dirname),
       {
         find: /^@cogni\/repo-spec$/,
         replacement: path.resolve(

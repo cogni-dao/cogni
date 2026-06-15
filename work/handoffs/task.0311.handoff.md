@@ -82,6 +82,12 @@ Intermediate commits (4941 + 19e3) set up a compose-based migrator that the fina
 - `kubectl kustomize` renders all 6 overlays (candidate-a + preview × 3 nodes) — poly gets 2 Jobs (Postgres + Doltgres), operator/resy get 1 (Postgres only). All have `{node}-doltgres-external` EndpointSlices.
 - `docker compose --profile bootstrap config --services` — lists 2 doltgres services (server + provision, no migrator in compose).
 
+## RBAC verdict — why the knowledge plane runs as the superuser (2026-06-09, pinned `0.56.3`)
+
+The follow-up here (and `deploy-infra.sh`'s "0.56 RBAC non-functional" comment) was independently re-proven against the **currently pinned `dolthub/doltgresql:0.56.3`** image. A fresh non-superuser `knowledge_<node>` role: `CREATE ROLE … LOGIN` + `GRANT` all succeed, but `SELECT current_user` / `count()` → `permission denied for routine … (errno 1105 / sqlstate HY000)` and **no** `GRANT EXECUTE` (to the role or `PUBLIC`, retried) lifts it; `ALTER DEFAULT PRIVILEGES … is not yet supported`; a role is denied `INSERT`/`SELECT` on a table it just created until a superuser re-`GRANT`s; `pg_roles` is empty. Root cause is documented: Doltgres implements **only the five table-level DML privileges, only for tables** ([DoltHub "Doltgres Now Supports Users", 2024-11-07](https://www.dolthub.com/blog/2024-11-07-doltgres-supports-users/); [Dolt Access Management](https://docs.dolthub.com/sql-reference/server/access-management)) — no function `EXECUTE`, schema/`CREATE`, default-privileges, or role membership. **Not a Cogni defect, no bug filed.** Canon: [databases.md §5.2](../../docs/spec/databases.md).
+
+**Explicit trigger:** when Doltgres implements function/schema/role privileges, swap `DOLTGRES_PASSWORD` to a per-node `source: agent` value and compose `DOLTGRES_URL` with a `knowledge_<node>` role — **no secrets-pipeline change** (the pipeline is already OpenBao-sole-source per secrets-management Invariant 15; only the credential value-shape differs).
+
 ## What's NOT validated (the next agent's job)
 
 **Pre-merge candidate-a end-to-end.** Steps 2–5 + V1 + V2 of the runbook in task.0311 have not run. Human dispatched flight-infra (Step 1). Everything else is pending.

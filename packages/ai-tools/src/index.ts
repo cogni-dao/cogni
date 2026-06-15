@@ -20,9 +20,11 @@ export type {
   ClockCapability,
   CreateBranchResult,
   DecideParams,
+  DeployCapability,
   DispatchCandidateFlightResult,
   EdoCapability,
   EdoSourceType,
+  EnvSummary,
   GetChainParams,
   GetChainResult,
   HypothesizeParams,
@@ -38,9 +40,12 @@ export type {
   MetricsCapability,
   MetricTemplate,
   MetricWindow,
+  NodeDeployState,
+  NodeHealthState,
   PrSummary,
   RecordOutcomeParams,
   RecordOutcomeResult,
+  ReplicaCounts,
   RepoCapability,
   RepoListParams,
   RepoListResult,
@@ -86,6 +91,7 @@ export {
   hasToolId,
   TOOL_CATALOG,
   type ToolCatalog,
+  VCS_TOOL_BUNDLE,
 } from "./catalog";
 // Runtime adapter
 export { contractToRuntime, toBoundToolRuntime } from "./runtime-adapter";

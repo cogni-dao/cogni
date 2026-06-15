@@ -24,9 +24,18 @@ function toSummary(
 ): NodeSummary {
   return {
     slug: node.name,
+    ...(node.nodeId !== undefined && { nodeId: node.nodeId }),
     title: node.title,
     tagline: node.tagline,
     kind: "full-app",
+    repo: {
+      owner: "Cogni-DAO",
+      name: node.name === "operator" ? "cogni" : node.name,
+      url:
+        node.name === "operator"
+          ? "https://github.com/Cogni-DAO/cogni"
+          : `https://github.com/Cogni-DAO/${node.name}`,
+    },
     href: resolveHref(node, domain),
     thumbnailUrl: node.thumbnail,
     primary: node.primary,

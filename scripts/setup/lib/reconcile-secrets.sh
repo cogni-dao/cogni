@@ -43,8 +43,10 @@ declare -ga NODE_BASELINE_KEYS=(
   SCHEDULER_API_TOKEN BILLING_INGEST_TOKEN
   INTERNAL_OPS_TOKEN METRICS_TOKEN GH_WEBHOOK_SECRET
   CONNECTIONS_ENCRYPTION_KEY POLY_WALLET_AEAD_KEY_HEX
-  POLY_WALLET_AEAD_KEY_ID DATABASE_URL DATABASE_SERVICE_URL
-  DOLTGRES_URL
+  POLY_WALLET_AEAD_KEY_ID
+  APP_DB_PASSWORD APP_DB_SERVICE_PASSWORD
+  DATABASE_URL DATABASE_SERVICE_URL
+  DOLTGRES_PASSWORD DOLTGRES_URL
   POSTHOG_API_KEY POSTHOG_HOST OPENROUTER_API_KEY
   EVM_RPC_URL POLYGON_RPC_URL
   APP_BASE_URL NEXTAUTH_URL
@@ -55,7 +57,7 @@ declare -ga NODE_BASELINE_KEYS=(
   # owns the GitHub App auth). Per bug.5000 it is NO LONGER in
   # SCHEDULER_WORKER_KEYS — the worker HTTP-delegates review GitHub I/O to the
   # operator and holds no GitHub credential.
-  DOLTHUB_REMOTE_URL DOLT_CREDS_JWK DOLT_CREDS_KEYID DOLTHUB_API_TOKEN
+  DOLTHUB_OWNER DOLT_CREDS_JWK DOLT_CREDS_KEYID DOLTHUB_API_TOKEN
   TAVILY_API_KEY
   LANGFUSE_PUBLIC_KEY LANGFUSE_SECRET_KEY LANGFUSE_BASE_URL
   GH_OAUTH_CLIENT_ID GH_OAUTH_CLIENT_SECRET
@@ -77,9 +79,18 @@ declare -ga SCHEDULER_WORKER_KEYS=(
 # never seeded to OpenBao. Truth lives on the VM after first provision.
 declare -ga COMPOSE_ONLY_KEYS=(
   POSTGRES_ROOT_PASSWORD
-  APP_DB_PASSWORD APP_DB_SERVICE_PASSWORD APP_DB_READONLY_PASSWORD
-  TEMPORAL_DB_PASSWORD DOLTGRES_PASSWORD
+  APP_DB_READONLY_PASSWORD
+  TEMPORAL_DB_PASSWORD
 )
+# APP_DB_PASSWORD / APP_DB_SERVICE_PASSWORD / DOLTGRES_PASSWORD moved to
+# NODE_BASELINE_KEYS (materialized to cogni/<env>/<node>) — each precedes its DSN
+# so the composition reads the OpenBao value. APP_DB_* are per-node source:agent;
+# DOLTGRES_PASSWORD is the env-level Doltgres superuser, derived from
+# POSTGRES_ROOT_PASSWORD (salt doltgres-root) and written per-node so DOLTGRES_URL
+# is OpenBao-sole-source (Invariant 15) — the pod connects as that superuser
+# because Doltgres 0.56.3 RBAC is table-DML-only (databases.md §5.2). The same
+# value lands in every node path; provisioners read it set-once. APP_DB_READONLY_PASSWORD
+# stays Compose-only (env-level Grafana role, not pod-facing).
 
 # ── Catalog-gated per-node fan-out (task.5094) ────────────────────────────────
 # The OpenBao seed fans NODE_BASELINE_KEYS to every type:node, gating + valuing
@@ -137,20 +148,53 @@ _node_gets_key() {
 # binds the node's FQDN; agent-random distinct keys mint a FRESH value per node
 # (isolation); _shared / shared:true / human keys pass through the .env value.
 _resolve_node_value() {
-  local node="$1" k="$2" existing kind source shared service db
+  local node="$1" k="$2" existing
   existing=$(bao_get_field "$node" "$k")
   if [[ -n "$existing" ]]; then printf '%s' "$existing"; return 0; fi
+  _compose_node_value "$node" "$k"
+}
+
+# Authoritative composer: build (node, key)'s value from canonical inputs,
+# IGNORING any existing OpenBao value. _resolve_node_value preserves an existing
+# value (0 churn on re-runs); secret-materialize uses THIS to overwrite a DRIFTED
+# composed DSN — e.g. a pre-#1584 DATABASE_URL still naming the legacy app_user
+# instead of the per-node app_<node> role (#1584 half-rollout self-heal).
+_compose_node_value() {
+  local node="$1" k="$2" kind source shared service db
   db="cogni_${node//-/_}"
   case "$k" in
     DATABASE_URL)
-      printf 'postgresql://%s:%s@%s:5432/%s?sslmode=disable' \
-        "${APP_DB_USER}" "${APP_DB_PASSWORD}" "${VM_IP}" "${db}"; return 0 ;;
+      # Per-node: app_<node> role + the node's own source:agent password (OpenBao).
+      # Role name is computed from the node; the password is read from
+      # cogni/<env>/<node> (materialize generated it before this composition).
+      printf 'postgresql://app_%s:%s@%s:5432/%s?sslmode=disable' \
+        "${node//-/_}" "$(bao_get_field "$node" APP_DB_PASSWORD)" "${VM_IP}" "${db}"; return 0 ;;
     DATABASE_SERVICE_URL)
-      printf 'postgresql://%s:%s@%s:5432/%s?sslmode=disable' \
-        "${APP_DB_SERVICE_USER}" "${APP_DB_SERVICE_PASSWORD}" "${VM_IP}" "${db}"; return 0 ;;
+      printf 'postgresql://service_%s:%s@%s:5432/%s?sslmode=disable' \
+        "${node//-/_}" "$(bao_get_field "$node" APP_DB_SERVICE_PASSWORD)" "${VM_IP}" "${db}"; return 0 ;;
+    DOLTGRES_PASSWORD)
+      # Env-wide Doltgres superuser (one server, every node's knowledge_<node> DB).
+      # Operator holds the single canonical SSOT (cogni/<env>/operator/DOLTGRES_PASSWORD)
+      # and every node inherits it, so the shared superuser never diverges across nodes.
+      # derive_secret is ONLY the genesis bootstrap for the very first seed (operator,
+      # fresh env) — deterministic so a not-yet-seeded peer composes the same value.
+      # It is NOT the source of truth: post-init the field is stored + reconciled to the
+      # live volume via `pnpm secrets:set <env> operator DOLTGRES_PASSWORD` (immutable
+      # superuser, Doltgres 0.56.3 can't ALTER it — databases.md §5.2), never re-derived.
+      local _dg; _dg="$(bao_get_field operator DOLTGRES_PASSWORD)"
+      [[ -n "$_dg" ]] && { printf '%s' "$_dg"; return 0; }
+      derive_secret doltgres-root; return 0 ;;
     DOLTGRES_URL)
+      # Per-node knowledge_<node> DB, reached as the shared `postgres` superuser
+      # (Doltgres 0.56.3 RBAC is table-DML-only — databases.md §5.2). Embed the
+      # operator-canonical superuser SSOT — never the per-node value (which can lag a
+      # volume restore). Same resolution as the DOLTGRES_PASSWORD branch (operator
+      # SSOT, else genesis derive) so the URL never embeds an empty password before
+      # operator is seeded. Composed, never derived inline, never from .env.
+      local _dgu; _dgu="$(bao_get_field operator DOLTGRES_PASSWORD)"
+      [[ -n "$_dgu" ]] || _dgu="$(derive_secret doltgres-root)"
       printf 'postgresql://postgres:%s@%s:5435/knowledge_%s?sslmode=disable' \
-        "${DOLTGRES_PASSWORD:-$(derive_secret doltgres-root)}" "${VM_IP}" "${node//-/_}"; return 0 ;;
+        "$_dgu" "${VM_IP}" "${node//-/_}"; return 0 ;;
   esac
   kind=$(_cat_field "$k" '.generate.kind')
   source=$(_cat_field "$k" '.source')

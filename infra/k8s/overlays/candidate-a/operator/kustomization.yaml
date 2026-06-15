@@ -7,6 +7,8 @@ namespace: cogni-candidate-a
 
 resources:
   - ../../../base/node-app
+  - ../../../base/openfga-external
+  - external-secret.yaml
 
 namePrefix: operator-
 
@@ -47,15 +49,21 @@ patches:
       - op: add
         path: /data/NODE_TEMPLATE_OWNER
         value: "cogni-test-org"
-      # Submodule pin-PR target — a cogni-shaped mirror in the throwaway org so the test app
-      # (cogni-operator-test, zero Cogni-DAO access) can open the pin-PR. Wizard-scoped override;
-      # prod leaves these unset → pin-PR falls back to Cogni-DAO/cogni.
+      # DoltHub node knowledge repo owner — non-secret environment config.
+      # PAT stays in operator-env-secrets via OpenBao/ESO.
+      - op: add
+        path: /data/DOLTHUB_OWNER
+        value: "cogni-test-nodes"
+      # Submodule pin-PR target: candidate-a uses the throwaway org mirror.
       - op: add
         path: /data/NODE_SUBMODULE_PARENT_OWNER
         value: "cogni-test-org"
       - op: add
         path: /data/NODE_SUBMODULE_PARENT_REPO
         value: "cogni-monorepo"
+      - op: add
+        path: /data/OPENFGA_API_URL
+        value: "http://operator-openfga-external:8080"
   - target:
       kind: Service
       name: node-app
@@ -76,6 +84,9 @@ patches:
       - op: replace
         path: /spec/template/spec/initContainers/0/envFrom/1/secretRef/name
         value: "operator-env-secrets"
+      - op: add
+        path: /spec/template/spec/serviceAccountName
+        value: "default"
       - op: add
         path: /spec/selector/matchLabels/app.kubernetes.io~1instance
         value: "operator"
@@ -143,6 +154,16 @@ patches:
       kind: Service
       metadata:
         name: litellm-external
+      spec:
+        type: ExternalName
+        externalName: cogni-candidate-a.vm.cognidao.org
+        clusterIP: null
+  - target: { kind: Service, name: openfga-external }
+    patch: |
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: openfga-external
       spec:
         type: ExternalName
         externalName: cogni-candidate-a.vm.cognidao.org

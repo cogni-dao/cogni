@@ -199,30 +199,50 @@ A minted node must be born-reviewable: `.cogni/rules/` ships in the node repo be
 
 Cogni's BaaS surface should be small, composable, and portable:
 
-| Cogni substrate | Node declares                                      | Operator provides                                                  |
-| --------------- | -------------------------------------------------- | ------------------------------------------------------------------ |
-| Postgres        | `packages/postgres`, migrations, required DSNs     | per-node DB, roles, RLS hardening, backups                         |
-| Doltgres        | `packages/doltgres`, migrations, knowledge domains | per-node `knowledge_<node>` DB, migrator wiring, commit validation |
-| Auth/RLS        | app routes and tenant context usage                | app/service/read-only roles, DSN secrets                           |
-| Graphs          | `packages/graphs` definitions                      | execution host, routing, observability substrate where shared      |
-| Streams         | event contracts and consumers                      | Redis/SSE/WebSocket substrate where needed                         |
-| Storage         | bucket/object metadata expectations                | object store, credentials, lifecycle policies                      |
-| Secrets         | key names and consumers                            | OpenBao values, ESO manifests, rotation path                       |
-| Gateway         | service ports and health routes                    | domain, TLS, Caddy/ingress, per-env route                          |
-| Studio/Wizard   | node metadata and capabilities                     | operator UI, publish, flight, validation                           |
+| Cogni substrate | Node declares                                                                        | Operator provides                                                                                         |
+| --------------- | ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------- |
+| Postgres        | `packages/postgres`, migrations, required DSNs                                       | per-node DB, roles, RLS hardening, backups                                                                |
+| Doltgres        | `packages/doltgres`, migrations, knowledge domains                                   | per-node `knowledge_<node>` DB, migrator wiring, commit validation                                        |
+| Auth/RLS        | app routes and tenant context usage                                                  | app/service/read-only roles, DSN secrets                                                                  |
+| Authorization   | authz checks + protected actions in app routes; capability gating in the secrets fan | shared OpenFGA store/model, env-shared authz graph, `OPENFGA_*` runtime-config delivery, DB role + backup |
+| Graphs          | `packages/graphs` definitions                                                        | execution host, routing, observability substrate where shared                                             |
+| Streams         | event contracts and consumers                                                        | Redis/SSE/WebSocket substrate where needed                                                                |
+| Storage         | bucket/object metadata expectations                                                  | object store, credentials, lifecycle policies                                                             |
+| Secrets         | key names and consumers                                                              | OpenBao values, ESO manifests, rotation path                                                              |
+| Gateway         | service ports and health routes                                                      | domain, TLS, Caddy/ingress, per-env route                                                                 |
+| Studio/Wizard   | node metadata and capabilities                                                       | operator UI, publish, flight, validation                                                                  |
+| Cognition       | knowledge entries (skills/guides/playbooks), registered domains                      | session-start kickstart bundle (`/api/v1/cognition`), advertised via `/.well-known/agent.json`            |
 
 The invariant is: **node declares shape; operator wires environment**.
+
+## Cognition Substrate
+
+Supabase delivers Auth, Storage, and a generated API as managed services. The same product idea applies to an agent's **working cognition**: an agent should not have to git-sync a tree of `AGENTS.md` files to learn how to operate a node. The node is the subject-matter expert for its niche ([`knowledge-syntropy-expert`](../../.claude/skills/knowledge-syntropy-expert/SKILL.md)); its knowledge hub is the codified mind. So the operator serves that mind as a substrate, fetched at session start.
+
+**Endpoint.** `GET /api/v1/cognition` returns a node's kickstart bundle, advertised under `cognition` + `endpoints.knowledgeBootstrap` in `/.well-known/agent.json`. The bundle has three parts:
+
+| Part               | Source                                                                  | Owner         |
+| ------------------ | ----------------------------------------------------------------------- | ------------- |
+| Tooling invariants | `SESSION_BOOTSTRAP_INVARIANTS` constant in the node app                 | code          |
+| Skills index       | hub entries of type `skill`/`guide`/`playbook` (use-when framed titles) | knowledge hub |
+| Domain pointers    | `listDomainsFull()` — registered domains + entry counts                 | knowledge hub |
+
+The response carries a fully-rendered `markdown` field that a **SessionStart hook** echoes to stdout; both Claude Code and Codex inject SessionStart stdout into the model's context, so one operator endpoint feeds both runtimes identically. The hook is wired once per runtime and calls a single shared loader (`scripts/agent/session-cognition.sh`): Claude Code via `.claude/settings.json`, Codex via `.codex/config.toml` (identical `hooks.SessionStart` → `type:"command"` shape). The mechanism is symmetric; the one asymmetry is trust — Codex runs a repo-committed `.codex/` hook only after a one-time approval (`/hooks`), whereas this repo's `.claude` hooks are already trusted. Runtimes without a session hook (or behind it) self-serve the same URL.
+
+**The v0 ownership split is deliberate.** The _irreducible_ invariants are code-owned because they must render even when the hub is empty or unreachable — a session must always bootstrap. Everything _expandable_ (skills, guides, growing domain expertise) is hub-delivered and refined in place via the contribution flow, never by editing this file. As the merge-to-`main` knowledge flow is exercised, the invariants can migrate into a hub `rule` entry; until then they stay code-owned so the substrate has no chicken-and-egg.
+
+**Boundaries.** The bundle is **public and index-only** — skill/domain pointers (title, use-when, recall path), never full entry bodies. Full content stays behind the authed read routes (`KNOWLEDGE_READ_REQUIRES_PRINCIPAL`), so the public index does not widen the read surface. Root `AGENTS.md` drops to a thin bootstrap pointer at the bundle; node-scoped and subdir `AGENTS.md` files remain (closest-file-wins still holds for code-local rules). This is reversible: revert the PR and `AGENTS.md` carries the full orientation again.
 
 ## Current State
 
 In the monorepo today:
 
 - root `packages/*` are cross-node/operator-owned packages;
-- `pnpm-workspace.yaml` already includes `nodes/*/graphs` and `nodes/*/packages/*`;
-- `nodes/node-template/graphs` exists as `@cogni/node-template-graphs`;
-- `nodes/node-template/packages/doltgres-schema` exists as `@cogni/node-template-doltgres-schema`;
-- `nodes/operator/packages/doltgres-schema` and `nodes/canary/packages/doltgres-schema` also exist;
-- node-template does not have a node-owned Postgres schema package because it currently has no node-local operational tables;
+- `pnpm-workspace.yaml` includes only legacy in-tree node workspaces; submodule-pinned nodes are not parent workspaces;
+- `Cogni-DAO/node-template` is the canonical node-at-root template source;
+- the operator monorepo may carry `nodes/node-template` only as a gitlink pin for deployment approval;
+- `nodes/operator/packages/doltgres-schema` and any remaining legacy in-tree node-local packages are migration surfaces;
+- node-template owns its graph and node-local packages in its external repo;
 - the active submodule design expects a node-at-root template with `app/`, `graphs/`, `k8s/`, `packages/`, own CI, and own policy.
 
 The proposed product shape is therefore not a greenfield rewrite. It is a naming and ownership cleanup around patterns already present.
@@ -231,7 +251,7 @@ The proposed product shape is therefore not a greenfield rewrite. It is a naming
 
 A 2026-06-05 package import audit found that most root packages are genuine shared substrate:
 
-- app-wide platform packages are imported by `canary`, `node-template`, `operator`, and `resy`: `@cogni/ai-core`, `@cogni/ai-tools`, `@cogni/db-client`, `@cogni/db-schema`, `@cogni/ids`, `@cogni/node-contracts`, `@cogni/node-core`, `@cogni/node-shared`, `@cogni/node-streams`, `@cogni/node-ui-kit`, `@cogni/scheduler-core`, `@cogni/work-items`;
+- app-wide platform packages are imported by operator, node-template, and remaining hosted node artifacts: `@cogni/ai-core`, `@cogni/ai-tools`, `@cogni/db-client`, `@cogni/db-schema`, `@cogni/ids`, `@cogni/node-contracts`, `@cogni/node-core`, `@cogni/node-shared`, `@cogni/node-streams`, `@cogni/node-ui-kit`, `@cogni/scheduler-core`, `@cogni/work-items`;
 - graph substrate is shared: `@cogni/langgraph-graphs`, `@cogni/graph-execution-core`, `@cogni/graph-execution-host`;
 - knowledge substrate is shared: `@cogni/knowledge-base` is imported by node-local Doltgres schema packages, and `@cogni/knowledge-store` is imported by apps and Doltgres packages;
 - some root packages are operator-plane utilities rather than node-product packages: `@cogni/dns-ops`, `@cogni/temporal-workflows`, attribution pipeline packages.
@@ -291,7 +311,7 @@ The highest-value moves, based on the current package layout, are:
 
 | Priority | Move                                                                                                                       | Why                                                                                                                               |
 | -------- | -------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| 1        | `nodes/node-template/graphs` → node-at-root `packages/graphs`                                                              | Makes the new node repo read as one product with a package layer; low conceptual risk because it is already node-local.           |
+| 1        | Keep `Cogni-DAO/node-template` graph packages node-at-root                                                                 | Makes the template repo read as one product with a package layer; low conceptual risk because it is already node-local.           |
 | 2        | node-at-root `packages/doltgres-schema` → `packages/doltgres`                                                              | Names the knowledge plane by capability instead of implementation detail; keeps schema/client/adapter helpers together.           |
 | 3        | Add node-at-root `.cogni/node.yaml`                                                                                        | Gives the wizard/operator a compact substrate declaration without moving code.                                                    |
 | 4        | Add `packages/postgres` only when a node-local operational table appears                                                   | Avoids empty scaffolding while preserving the intended split.                                                                     |

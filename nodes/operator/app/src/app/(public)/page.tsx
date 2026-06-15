@@ -12,7 +12,7 @@
  */
 
 import { redirect } from "next/navigation";
-import type { ReactElement } from "react";
+import { type ReactElement, Suspense } from "react";
 
 import { resolveNodeRegistry } from "@/bootstrap/container";
 import { HomeStats } from "@/features/home/components/HomeStats";
@@ -20,7 +20,7 @@ import { NewHomeHero } from "@/features/home/components/NewHomeHero";
 import { NodeShowcase } from "@/features/home/components/NodeShowcase";
 import { getServerSessionUser } from "@/lib/auth/server";
 
-import { AuthRedirect } from "./AuthRedirect";
+import { AuthPrompt } from "./AuthPrompt.client";
 
 export default async function HomePage(): Promise<ReactElement> {
   const user = await getServerSessionUser();
@@ -32,7 +32,9 @@ export default async function HomePage(): Promise<ReactElement> {
 
   return (
     <div className="flex min-h-screen flex-col">
-      <AuthRedirect />
+      <Suspense fallback={null}>
+        <AuthPrompt />
+      </Suspense>
       <NewHomeHero />
       <NodeShowcase nodes={nodes} />
       <HomeStats />

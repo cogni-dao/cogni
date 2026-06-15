@@ -47,12 +47,9 @@ divergences:
       # "only-on-artifact"). See the artifact_only twin entry.
       - "AGENTS.md" # dev-freeze banner; both-list entry (see comment above)
       - "nodes/operator/**" # hub-only node
-      - "nodes/resy/**" # hub-only node
       - "infra/catalog/operator.yaml"
-      - "infra/catalog/resy.yaml"
       - "infra/catalog/node-template.yaml" # hub-style; artifact carries standalone-style (task.5078) — both-sides intentional divergence
       - ".github/workflows/release.yml" # no production env
-      - "infra/k8s/overlays/canary/**" # no canary env
       - "tests/ci-invariants/**" # hub-only CI structural tests
       - "infra/k8s/secrets/production/**" # hub production secrets — never ship to public template
       - "infra/k8s/secrets/staging/**" # hub staging secrets
@@ -76,10 +73,8 @@ divergences:
     reason: "Private per-node fork; carries the poly node, omits the template node + other hub nodes."
     omit_from_artifact:
       - "nodes/operator/**"
-      - "nodes/resy/**"
       - "nodes/node-template/**"
       - "infra/catalog/operator.yaml"
-      - "infra/catalog/resy.yaml"
       - "infra/catalog/scheduler-worker.yaml"
     artifact_only:
       - "nodes/poly/**"

@@ -57,10 +57,13 @@ patches:
     patch: |
       - op: replace
         path: /spec/template/spec/containers/0/envFrom/1/secretRef/name
-        value: "node-template-node-app-secrets"
+        value: "node-template-env-secrets"
       - op: replace
         path: /spec/template/spec/initContainers/0/envFrom/1/secretRef/name
-        value: "node-template-node-app-secrets"
+        value: "node-template-env-secrets"
+      - op: replace
+        path: /spec/template/spec/initContainers/0/command/2
+        value: exec node /app/app/migrate.mjs /app/app/migrations
       - op: replace
         path: /spec/template/spec/containers/0/ports/0/containerPort
         value: 3200
@@ -87,7 +90,7 @@ patches:
           command:
             - /bin/sh
             - -c
-            - exec node /app/nodes/$(NODE_NAME)/app/migrate-doltgres.mjs /app/nodes/$(NODE_NAME)/app/doltgres-migrations
+            - exec node /app/app/migrate-doltgres.mjs /app/app/doltgres-migrations
           envFrom:
             - configMapRef:
                 name: node-template-node-app-config
@@ -95,7 +98,7 @@ patches:
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
-                  name: node-template-node-app-secrets
+                  name: node-template-env-secrets
                   key: DOLTGRES_URL
           resources:
             requests:

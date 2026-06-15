@@ -39,12 +39,12 @@ Register (DB row) → Formation (wallet txs) → Publish (repo + operator PR) �
 
 This is distinct from a **standalone fork** — a solo operator who wants their own full instance on their own VM forks `Cogni-DAO/standalone-node` and follows [`fork-quickstart.md`](../runbooks/fork-quickstart.md). Two repos, two intents:
 
-| Repo                        | Role                                                                                                                                                                     |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `Cogni-DAO/standalone-node` | Fork-whole quickstart — your own instance, your own substrate (`fork-quickstart.md`).                                                                                    |
-| `Cogni-DAO/node-template`   | Template repo — Publish `generate`s a node's own repo from it, then submodule-pins it at `nodes/<slug>`. Maintained node-at-root from the `nodes/node-template/` subdir. |
+| Repo                        | Role                                                                                                                                                                                                   |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `Cogni-DAO/standalone-node` | Fork-whole quickstart — your own instance, your own substrate (`fork-quickstart.md`).                                                                                                                  |
+| `Cogni-DAO/node-template`   | Canonical node-at-root template repo — Publish creates a named fork, commits node identity on top, then submodule-pins it at `nodes/<slug>`. The operator repo does not carry a duplicate source tree. |
 
-`CATALOG_IS_SSOT` ([ci-cd.md](ci-cd.md) Axiom 16) is what makes Publish a single reviewable PR rather than a manual checklist: the catalog entry is the only declaration site, and overlays, per-node AppSets (Axiom 18), Caddy routing, scheduler endpoints, DNS (Axiom 21), and the build matrix all derive from it. The deploy-row contract lives in [create-node.md](../guides/create-node.md); secrets are stripped from the Publish PR and inherited via ESO (`NO_SECRETS_IN_PR`, `bug.5086`).
+`CATALOG_IS_SSOT` ([ci-cd.md](ci-cd.md) Axiom 16) is what makes Publish a single reviewable PR rather than a manual checklist: the catalog entry is the only declaration site, and overlays, per-node AppSets (Axiom 18), Caddy routing, scheduler endpoints, DNS (Axiom 21), and the build matrix all derive from it. The deploy-row contract lives in [create-node.md](../guides/create-node.md); secret values are excluded from the Publish PR and inherited via ESO.
 
 ## Goal
 
@@ -334,8 +334,8 @@ After Formation returns a verified repo-spec fragment, the **operator** mints th
 
 **Mechanism** (`adapters/server/vcs/github-repo-write.ts` + `shared/node-app-scaffold/`):
 
-1. **Mint** — `POST /repos/Cogni-DAO/node-template/generate` creates `Cogni-DAO/<slug>` from the `node-template` template repo (server-side copy; the template seed already strips `.cogni/secrets-catalog.yaml` + `k8s/external-secrets/**` per `bug.5086` — see `NO_SECRETS_IN_PR`).
-2. **Identity** — commit the regenerated `.cogni/repo-spec.yaml` (formed `node_id` / `scope_id` + DAO addresses) to the new repo's `main`; generate copies node-template's identity verbatim, so this overrides it. The new HEAD SHA is the gitlink pin.
+1. **Mint** — `POST /repos/Cogni-DAO/node-template/forks` creates `Cogni-DAO/<slug>` as a named fork of `node-template` (`default_branch_only: true`). This preserves a shared merge base so node developers can fetch and merge upstream template updates.
+2. **Identity + ESO leaves** — commit the regenerated `.cogni/repo-spec.yaml` (formed `node_id` / `scope_id` + DAO addresses) and the `candidate-a`, `preview`, and `production` ExternalSecret leaves to the fork's `main`. The new HEAD SHA is the gitlink pin.
 3. **Pin** — the operator authors a PR on the monorepo: a `160000` gitlink at `nodes/<slug>` + a `.gitmodules` stanza, plus the footprint gens (catalog, overlays×3, per-node AppSets×3, Caddyfile route, `ci.yaml` scope filter, scheduler-worker endpoints) — **no `pnpm-lock.yaml`** (a submodule node is not a workspace member). One tree, one commit, one ref, one PR.
 4. **Author** — the PR opens under the operator App installation (author = the App, auditable — not `github-actions[bot]`, not a human PAT).
 
@@ -343,7 +343,7 @@ After Formation returns a verified repo-spec fragment, the **operator** mints th
 
 - `NO_ACTION_INDIRECTION` — the operator authors the PR itself; it never dispatches a workflow to act on its own behalf.
 - `SUBMODULE_NOT_INLINE` — node content lives in its own repo + a gitlink, never inlined into the operator tree.
-- `NO_SECRETS_IN_PR` — secrets-catalog + external-secrets are absent from the template seed; values live in OpenBao, inherited via ESO ([secrets-management.md](secrets-management.md)).
+- `NO_SECRET_VALUES_IN_PR` — secret values and per-node `secrets-catalog.yaml` are absent from the template seed. The PR may carry ESO shape (`k8s/external-secrets/**`) so OpenBao values can materialize as `<slug>-env-secrets` ([secrets-management.md](secrets-management.md), [node-wizard-secret-setting.md](../design/node-wizard-secret-setting.md)).
 - `GENS_ARE_BYTE_EXACT` — every footprint gen shares one template with its `scripts/ci/render-*.sh` source of truth, enforced by the per-gen CI drift gate.
 
 > Verification: flight the operator + Publish one throwaway node → it mints `Cogni-DAO/<slug>` and opens the submodule PR; the gitlink PR passes `single-node-scope`, and the node flights (`<node>-test/version == build_sha`). Requires the env's operator App to hold org `administration: write` + an "all repositories" install (it must create AND commit to the new repo — see node-ci-cd-contract.md).
@@ -386,31 +386,32 @@ Payment activation runs in the child node's own repo after formation + infra set
 
 ### File Pointers
 
-| File                                                              | Purpose                                                |
-| ----------------------------------------------------------------- | ------------------------------------------------------ |
-| `packages/aragon-osx/src/aragon.ts`                               | OSx address constants (BASE + SEPOLIA only)            |
-| `packages/aragon-osx/src/encoding.ts`                             | TokenVoting struct encoding (viem, v1.3/v1.4 support)  |
-| `packages/aragon-osx/src/osx/events.ts`                           | OSx event ABIs + topic constants                       |
-| `packages/aragon-osx/src/osx/receipt.ts`                          | Strict receipt decoders (throws if events not found)   |
-| `packages/aragon-osx/src/osx/version.ts`                          | Pinned OSx version constants                           |
-| `src/shared/web3/node-formation/aragon-abi.ts`                    | Minimal ABIs: DAOFactory, TokenVoting, GovernanceERC20 |
-| `src/shared/web3/node-formation/bytecode.ts`                      | CogniSignal bytecode + ABI                             |
-| `src/features/setup/daoFormation/formation.reducer.ts`            | Pure reducer + types (state machine)                   |
-| `src/features/setup/daoFormation/txBuilders.ts`                   | Pure tx argument builders                              |
-| `src/features/setup/daoFormation/api.ts`                          | Server verification API client                         |
-| `src/features/setup/hooks/useAragonPreflight.ts`                  | Preflight validation hook                              |
-| `src/features/setup/hooks/useDAOFormation.ts`                     | Thin wiring layer (wagmi → reducer)                    |
-| `src/app/api/setup/verify/route.ts`                               | Server derives addresses from receipts, verifies state |
-| `src/contracts/setup.verify.v1.contract.ts`                       | Zod schemas for verify request/response                |
-| `src/app/(app)/setup/nodes/page.tsx`                              | DB-backed wizard entry point                           |
-| `src/app/(app)/setup/nodes/[id]/page.tsx`                         | Canonical per-node setup page                          |
-| `src/app/(app)/setup/nodes/[id]/NodeDaoFormationPanel.client.tsx` | Client component with form + flow orchestration        |
-| `src/app/(app)/setup/dao/page.tsx`                                | Legacy redirect to `/setup/nodes`                      |
-| `src/features/setup/components/FormationFlowDialog.tsx`           | Modal dialog for progress/success/error states         |
-| `scripts/node-activate-payments.ts`                               | Payment activation CLI (child node)                    |
-| `scripts/provision-operator-wallet.ts`                            | Standalone Privy wallet provisioning                   |
-| `scripts/deploy-split.ts`                                         | Standalone Split deployment                            |
-| `docs/guides/operator-wallet-setup.md`                            | Operator wallet + payment activation guide             |
+| File                                                        | Purpose                                                |
+| ----------------------------------------------------------- | ------------------------------------------------------ |
+| `packages/aragon-osx/src/aragon.ts`                         | OSx address constants (BASE + SEPOLIA only)            |
+| `packages/aragon-osx/src/encoding.ts`                       | TokenVoting struct encoding (viem, v1.3/v1.4 support)  |
+| `packages/aragon-osx/src/osx/events.ts`                     | OSx event ABIs + topic constants                       |
+| `packages/aragon-osx/src/osx/receipt.ts`                    | Strict receipt decoders (throws if events not found)   |
+| `packages/aragon-osx/src/osx/version.ts`                    | Pinned OSx version constants                           |
+| `src/shared/web3/node-formation/aragon-abi.ts`              | Minimal ABIs: DAOFactory, TokenVoting, GovernanceERC20 |
+| `src/shared/web3/node-formation/bytecode.ts`                | CogniSignal bytecode + ABI                             |
+| `src/features/setup/daoFormation/formation.reducer.ts`      | Pure reducer + types (state machine)                   |
+| `src/features/setup/daoFormation/txBuilders.ts`             | Pure tx argument builders                              |
+| `src/features/setup/daoFormation/api.ts`                    | Server verification API client                         |
+| `src/features/setup/hooks/useAragonPreflight.ts`            | Preflight validation hook                              |
+| `src/features/setup/hooks/useDAOFormation.ts`               | Thin wiring layer (wagmi → reducer)                    |
+| `src/app/api/setup/verify/route.ts`                         | Server derives addresses from receipts, verifies state |
+| `src/contracts/setup.verify.v1.contract.ts`                 | Zod schemas for verify request/response                |
+| `src/app/(app)/nodes/page.tsx`                              | DB-backed wizard entry point                           |
+| `src/app/(app)/nodes/[id]/page.tsx`                         | Canonical per-node setup page                          |
+| `src/app/(app)/nodes/[id]/NodeDaoFormationPanel.client.tsx` | Client component with form + flow orchestration        |
+| `src/app/(app)/nodes/payments/page.tsx`                     | Payment activation page                                |
+| `src/app/(app)/setup/dao/page.tsx`                          | Legacy redirect to `/nodes`                            |
+| `src/features/setup/components/FormationFlowDialog.tsx`     | Modal dialog for progress/success/error states         |
+| `scripts/node-activate-payments.ts`                         | Payment activation CLI (child node)                    |
+| `scripts/provision-operator-wallet.ts`                      | Standalone Privy wallet provisioning                   |
+| `scripts/deploy-split.ts`                                   | Standalone Split deployment                            |
+| `docs/guides/operator-wallet-setup.md`                      | Operator wallet + payment activation guide             |
 
 ### Appendix: Aragon OSx Addresses
 

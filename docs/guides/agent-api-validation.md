@@ -109,10 +109,31 @@ langgraph:brain       — general reasoning + tools
 langgraph:research    — web research
 langgraph:ponderer    — long-form thinking
 langgraph:pr-review   — code review
+langgraph:pr-manager  — PR lifecycle management; can inspect CI and merge eligible PRs
 langgraph:browser     — browser automation
 ```
 
 Pass the short name (without `langgraph:` prefix) as `graph_name` in completions requests.
+
+## PR Manager merge delegation
+
+External agents do not need direct write permission to the operator repo to finish a ready node-formation PR. If the parent deployment PR is non-draft, fully green, and the node-formation capacity gate already passed, ask the operator PR Manager graph to inspect and merge it:
+
+```bash
+curl -s -X POST $BASE/api/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $API_KEY" \
+  -d '{
+    "model": "gpt-4o-mini",
+    "graph_name": "pr-manager",
+    "messages": [{
+      "role": "user",
+      "content": "Inspect parent deployment PR https://github.com/OWNER/REPO/pull/NUMBER. If it is non-draft, fully green, and the node-formation capacity gate already passed, squash-merge it; otherwise report the exact blocker."
+    }]
+  }'
+```
+
+Do not use this to bypass missing gates. If PR Manager cannot prove eligibility, the correct result is a blocker report, not a manual gitlink edit or a direct GitHub merge by the external agent.
 
 ## Full validation flow (agent-first, no browser)
 
@@ -141,11 +162,38 @@ Pass the short name (without `langgraph:` prefix) as `graph_name` in completions
 6. **Reconnect proof:**
    - Repeat stream call with `Last-Event-ID`; verify replay resumes from cursor.
 
+7. **Write linked knowledge atoms (citation surface):**
+   - Prove knowledge **compounds**, not just accumulates. Open one contribution
+     and write ≥2 atoms plus ≥1 edge between them — e.g. two `finding`s and a
+     `scorecard` that `supports` both.
+
+   ```bash
+   # One contribution: 2 finding atoms + a scorecard, then link them.
+   CID=$(curl -s -X POST $BASE/api/v1/knowledge/contributions \
+     -H "Authorization: Bearer $API_KEY" -H "content-type: application/json" \
+     -d '{"message":"validate cite surface","edits":[
+       {"op":"insert","entry":{"id":"val-atom-a","domain":"infrastructure","title":"atom a","content":"...","entryType":"finding"}},
+       {"op":"insert","entry":{"id":"val-atom-b","domain":"infrastructure","title":"atom b","content":"...","entryType":"finding"}},
+       {"op":"insert","entry":{"id":"val-synth","domain":"infrastructure","title":"synthesis","content":"...","entryType":"scorecard"}},
+       {"op":"cite","citingId":"val-synth","citedId":"val-atom-a","citationType":"supports"},
+       {"op":"cite","citingId":"val-synth","citedId":"val-atom-b","citationType":"supports"}
+     ]}' | jq -r .contributionId)
+
+   # Confirm the rows + their domain landed on the branch.
+   curl -s "$BASE/api/v1/knowledge/contributions/$CID/diff" \
+     -H "Authorization: Bearer $API_KEY" | jq '.entries[] | {rowId, changeType, domain: (.after.domain)}'
+   ```
+
+   - `insert`s must precede the `cite`s that reference them (both resolve on the
+     branch). Agents may equivalently use `core__knowledge_write` with a
+     `citations` array to write an atom + its outgoing edges in one call.
+
 ## Proof criteria
 
 - Agent completes **discover → register → auth → execute → list runs → stream events** with no browser session.
 - Graph execution produced a successful run (`status: "success"`).
 - Metering path recorded downstream (charge receipt / billing telemetry) for the run.
+- **Knowledge compounds:** the linked-atoms contribution diff shows all entries with their `domain`, and a self-referential cite (`citingId === citedId`) is rejected `400`.
 - For contribution/API route changes, the live candidate-a call must have a feature-specific Loki marker from the same exercise window. Generic traffic to the pod is not enough for a green validation.
 
 ## Configs that matter most

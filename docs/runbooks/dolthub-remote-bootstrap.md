@@ -14,7 +14,7 @@ The end state: the webapp owns 100% of runtime push/pull. This bootstrap is the 
 | ---------------------------------------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Create the DoltHub repo                  | 🟢 fully automated | `POST /api/v1alpha1/database` with PAT — see Step 1                                                                                                                                                                                                                                                               |
 | Generate Dolt keypair                    | 🟢 automated       | `dolt creds new` on any host with the CLI                                                                                                                                                                                                                                                                         |
-| Set GitHub Environment Secrets           | 🟢 automated       | `pnpm setup:secrets --only DOLTHUB_REMOTE_URL,DOLT_CREDS_JWK,DOLT_CREDS_KEYID`                                                                                                                                                                                                                                    |
+| Set GitHub Environment Secrets           | 🟢 automated       | `pnpm setup:secrets --only DOLT_CREDS_JWK,DOLT_CREDS_KEYID`                                                                                                                                                                                                                                                       |
 | **Register pubkey with DoltHub account** | **🔴 UI-only**     | Paste at https://www.dolthub.com/settings/credentials — DoltHub does not expose a REST endpoint for credential registration (verified across `POST /credentials`, `/user/credentials`, `/keys`, `/user/keys`, `/creds`, `/user/creds`, GraphQL, all 404 or 400-only-GET). This is the only remaining manual step. |
 
 `dolt creds check` against an unregistered key confirms the gating mechanism: `rpc error: code = Unauthenticated desc = jwt_token validation failed: key not found`. The keypair exists locally and in the doltgres container; DoltHub's auth subsystem doesn't recognize it until the pubkey is registered.
@@ -56,7 +56,27 @@ curl -sS -X POST \
 # Idempotency: re-running returns "Error: database already exists" — safe to ignore.
 ```
 
-Repeat with different `repoName`s for each node hub (`knowledge-poly`, `knowledge-resy`, ...). v0 only mirrors operator.
+The node wizard now performs this repo-creation call automatically during node
+publish for every spawned node. It uses the environment's `DOLTHUB_API_TOKEN`
+and explicit `DOLTHUB_OWNER`, derives `repoName = knowledge-<node>`, and writes
+the resulting environment-owned mirror into the node's repo-spec:
+
+```yaml
+knowledge:
+  database: "knowledge_<node>"
+  remote:
+    provider: dolthub
+    owner: "cogni-dao"
+    repo: "knowledge-<node>"
+    url: "https://doltremoteapi.dolthub.com/cogni-dao/knowledge-<node>"
+    custody: cogni-owned
+```
+
+Each GitHub Environment must set the non-secret variable `DOLTHUB_OWNER`.
+Production uses `cogni-dao`; candidate/test/preview must use a non-production
+DoltHub org. The app fails closed when `DOLTHUB_API_TOKEN` is present without
+`DOLTHUB_OWNER` so test traffic cannot silently create repos under production.
+Users never create their own DoltHub repos in v0.
 
 Verification:
 
@@ -103,28 +123,29 @@ Capture **both**:
 
 This pubkey is the **service identity** for the operator-app's push job. It is not Derek's personal cred; it belongs to the operator service for as long as v0 lives. Rotation = repeat Steps 2–3 with a new keypair and update the secrets.
 
-## Step 4 — Set the GitHub Environment Secrets (prod-only writer)
+## Step 4 — Set the GitHub Environment Secrets (push auth)
 
-**`DOLTHUB_REMOTE_URL` is set ONLY in `production`.** The DoltHub mirror is a public canonical history — test and preview must never push to it (their commit graphs would diverge from prod, and contributor attribution would be wrong). `DOLT_CREDS_JWK` and `DOLT_CREDS_KEYID` can safely live in all three envs (they're inert without the URL); keeping them everywhere matches the rest of the secret-rotation surface and avoids special-casing later.
+Runtime chooses the mirror remote from repo-spec `knowledge.remote.url` only.
+There is no `DOLTHUB_REMOTE_URL` env override. `DOLT_CREDS_JWK` and
+`DOLT_CREDS_KEYID` authenticate the Dolt push protocol for whichever
+environment-owned repo the node repo-spec declares.
 
 ```bash
 REPO=Cogni-DAO/cogni
 KEYID=<keyid from step 2>
 JWK=$(cat ~/.dolt/creds/$KEYID.jwk)
-URL=https://doltremoteapi.dolthub.com/cogni-dao/knowledge-operator
 
-# URL only in production — the writer-guard
-gh secret set DOLTHUB_REMOTE_URL --repo $REPO --env production --body "$URL"
-
-# Creds in all three so the doltgres entrypoint wrapper writes the file
-# uniformly (no environment-conditional infra paths to maintain).
 for ENV in candidate-a preview production; do
   gh secret set DOLT_CREDS_JWK   --repo $REPO --env $ENV --body "$JWK"
   gh secret set DOLT_CREDS_KEYID --repo $REPO --env $ENV --body "$KEYID"
 done
 ```
 
-Gate model: **secret-presence only**, matching the rest of the codebase (Langfuse, Privy, PostHog). The operator wires `pushMainOnMerge` if and only if `DOLTHUB_REMOTE_URL` resolves at startup. There is no `DEPLOY_ENVIRONMENT` runtime check — if you fat-finger the URL onto candidate-a/preview, it will push there. The discipline lives at the secret-scope layer; treat the prod environment scope as a privileged surface.
+Gate model: repo-spec presence only. The app wires `pushMainOnMerge` if and
+only if `knowledge.remote.url` exists in the running node's repo-spec. The
+environment boundary is the repo-spec URL minted during node publish:
+production uses `cogni-dao`; candidate/test/preview use the non-production
+DoltHub owner configured by `DOLTHUB_OWNER`.
 
 The bootstrap host can now delete its local `~/.dolt/creds/<keyid>.jwk` — the cluster has the only authoritative copy.
 
@@ -141,7 +162,7 @@ docker exec -it cogni-runtime-doltgres-1 cat /root/.dolt/config_global.json
 # Should show "user.creds":"<keyid>" alongside server_uuid
 ```
 
-End-to-end push validation: merge any contribution via the inbox UI on candidate-a, then watch Loki for `msg="dolthub_push_ok"`. If you see `msg="dolthub_push_failed"`, the structured error includes the remote URL and the SQL error — usually means either the repo wasn't created (Step 1), the pubkey wasn't registered (Step 3), or the JWK was pasted truncated.
+End-to-end push validation: merge any contribution via the inbox UI on candidate-a, then watch Loki for `msg="dolthub_push_ok"`. If you see `msg="dolthub_push_failed"`, the structured error includes the repo-spec remote URL and the SQL error — usually means either the repo wasn't created (Step 1), the pubkey wasn't registered (Step 3), or the JWK was pasted truncated.
 
 ## What's wired by code (no manual steps)
 
@@ -150,17 +171,19 @@ End-to-end push validation: merge any contribution via the inbox UI on candidate
 | Push SQL                       | `packages/knowledge-store/src/adapters/doltgres/dolt-remote.ts`                        |
 | Lazy `dolt_remote add`         | same — first push registers `origin` idempotently                                      |
 | Service post-merge hook        | `packages/knowledge-store/src/service/contribution-service.ts` (`pushMainOnMerge` dep) |
-| DI wire-up                     | `nodes/operator/app/src/bootstrap/container.ts` (`createDoltgresPusher`)               |
+| DI wire-up                     | `nodes/*/app/src/bootstrap/container.ts` (`createDoltgresPusher`)                      |
 | Doltgres entrypoint wrapper    | `infra/compose/runtime/doltgres-init/install-creds.sh`                                 |
 | Compose `entrypoint:` override | `infra/compose/runtime/docker-compose.yml` doltgres service                            |
 
-When `DOLTHUB_REMOTE_URL` is unset, the push job is silently disabled — `pushMainOnMerge` is `undefined`, merges succeed locally with no remote attempt. This is the default for dev workspaces.
+When repo-spec has no `knowledge.remote`, the push job is silently disabled —
+`pushMainOnMerge` is `undefined`, and merges succeed locally with no remote
+attempt. This is the default for pre-knowledge/dev workspaces.
 
 ## Future work (v1+)
 
 - **Service-account cred provisioning via OAuth client_credentials** — currently blocked on DoltHub OAuth app approval (task.5070). When approved, OAuth still won't sign push directly; it would need to mint a Dolt cred on behalf of the service. DoltHub does not expose this today.
 - **Per-env separate creds** — for blast-radius isolation if any env's cred is compromised.
-- **Automated repo creation** — DoltHub doesn't expose `POST /repos`; would require either DoltHub adding the API or a UI-scraping workaround. Out of scope.
+- **Repo reconciliation cron** — repo creation is now automated by `POST /api/v1alpha1/database`; a later reconciler can periodically verify every registered node still has its declared remote repo.
 
 ## Why this can't be 100% automated yet
 

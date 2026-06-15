@@ -45,7 +45,51 @@ A human or AI agent can declare a new secret, rotate an existing secret, or revo
 
 - Encrypted-secrets-in-git patterns (Sealed Secrets, SOPS+ksops). Rejected — see `proj.security-hardening` Design Notes.
 - Multi-tenant SaaS KMS (Tier-2). See `task.5051` under `proj.operator-plane`.
-- Compose-runtime secret migration **for non-DB service config** (LiteLLM, Temporal, Caddy). Compose services keep `.env` for these until they migrate to k3s. **Now in scope (the exception):** the pod-consumed **DB role passwords** — OpenBao-owned per Invariant 15 — whose Compose-side provisioner is being migrated to read from OpenBao instead of a GitHub-secret `.env` (see [DB-credential provisioning](#db-credential-provisioning--the-composek8s-boundary-bug5002-invariant-15)).
+- Full Compose-runtime secret elimination via Bao Agent or k3s migration. Compose
+  services still read rendered `.env` files, but established ESO environments
+  must render runtime values from OpenBao rather than GitHub env secrets. **Now in
+  scope:** the pod-consumed **DB role passwords** and critical shared runtime
+  values (`LITELLM_MASTER_KEY`, `OPENROUTER_API_KEY`, `GH_WEBHOOK_SECRET`,
+  `OPENFGA_DB_PASSWORD`, `TEMPORAL_DB_PASSWORD`, and scheduler-worker's operator
+  ledger DSN) whose Compose / bridge renderers must read OpenBao instead of a
+  GitHub-secret `.env` (see
+  [DB-credential provisioning](#db-credential-provisioning--the-composek8s-boundary-bug5002-invariant-15)).
+
+---
+
+## Authority Model
+
+Do not use the catalog `tier` as the authority model. Tiers say where a value
+is commonly routed; they do not decide who owns the value. Every secret
+decision has three separate axes:
+
+| Axis        | Values                                   | Answers                                      |
+| ----------- | ---------------------------------------- | -------------------------------------------- |
+| `origin`    | `agent` · `human` · `derived`            | Who can produce the bytes?                   |
+| `custody`   | `openbao` · `github-env` · `repo-config` | Which system is authoritative?               |
+| `consumers` | `pod` · `compose` · `ci` · `external`    | Where is the value rendered or synchronized? |
+
+The default custody for runtime secrets is `openbao`. GitHub Environment
+Secrets may bootstrap access and carry CI-only credentials, but they are not
+the source of truth for app/runtime credentials. VM `.env` files are rendered
+views for Compose consumers, never authorities.
+
+The hard rule:
+
+> If a value is consumed by a pod, provisions a pod-facing role, or must agree
+> with a pod-facing value, its custody is OpenBao.
+
+Examples:
+
+- `POSTGRES_ROOT_PASSWORD` may remain Compose/bootstrap-only for now because no
+  pod should consume it.
+- `APP_DB_PASSWORD`, `APP_DB_SERVICE_PASSWORD`,
+  `APP_DB_READONLY_PASSWORD`, `DOLTGRES_PASSWORD`,
+  `DOLTGRES_READER_PASSWORD`, and `DOLTGRES_WRITER_PASSWORD` are
+  OpenBao-custodied even though Compose provisioners render copies. They create
+  or support pod-facing DSNs, Grafana datasources, or node substrate.
+- Non-secret public URLs and feature modes are repo/GitOps config, not
+  OpenBao.
 
 ---
 
@@ -64,11 +108,12 @@ Adding a secret is **two atoms**, each self-serve:
 └─────────────────────────────────────────────────────────────────────────────┘
                                    │  the catalog is the ONE list the provisioner reads
                                    ▼
-┌── ② WRITE THE VALUE (no laptop) ────────────────────────────────────────────┐
-│  source: agent  → generated at seed, distinct per node. Nothing to do.      │
-│  source: human  → secret-set workflow_dispatch (GH-OIDC → OpenBao; value    │
-│                   staged as a sealed GH Environment Secret) OR, for         │
-│                   candidate experimentation, `pnpm secrets:set`.            │
+┌── ② MATERIALIZE / WRITE THE VALUE ──────────────────────────────────────────┐
+│  source: agent   → secret-materialize generates once per env/node.          │
+│  source: derived → materializer derives from non-secret + OpenBao-owned     │
+│                   inputs.                                                   │
+│  source: human   → set through secret-set/operator API before flight;        │
+│                   materializer fails loud if absent.                         │
 └─────────────────────────────────────────────────────────────────────────────┘
                                    ▼
    OpenBao  cogni/<env>/<service>/<KEY>   ← single source of truth
@@ -95,6 +140,40 @@ self-serve. The catalog model (capability-gated, distinct-vs-shared custody line
 
 ---
 
+## New Node Wizard Contract
+
+A wizard-created node does **not** require a human to set a new secret value for
+that node. Node formation is allowed to consume the environment's existing
+DAO/org values, but node-local material is generated or derived by the secrets
+substrate.
+
+The node-formation contract lives in
+[`secrets-classification.md`](./secrets-classification.md#node-wizard-formation-contract).
+For a normal non-payment wizard node, the per-node human-secret list is empty.
+If a shared/environment value is needed and absent, the correct fix is to
+repair that environment bank before flight. Candidate flight must not accept
+the value as a workflow input and the wizard must not store it.
+
+V0 implementation checkpoint for PR #1582:
+
+1. Node formation PR declares shape in git.
+2. Candidate flight runs the narrow node substrate readiness lane before the
+   read-only assertion.
+3. That lane preserves existing `cogni/<env>/<node>` values, fills generated
+   node-local values, denormalizes the existing environment values the node is
+   allowed to consume, applies the ExternalSecret, updates edge/DB inventory,
+   and runs targeted DB provisioners.
+4. The scorecard proves ESO sync, DB rows, edge route, `/version`, and
+   `/readyz` for the new node.
+
+This v0 lane is not the final shared backend. The next implementation PR should
+split `secret-materialize <env> <node>` from substrate reconcile and replace
+historical fallback copying with an explicit OpenBao shared-bank /
+owner-grant model. Until that lands, docs and PR descriptions must name the v0
+lane as transitional.
+
+---
+
 ## Core Invariants
 
 1. **PATH_CONVENTION_PER_SERVICE_PER_ENV.** Every secret lives at `cogni/<env>/<service>` in OpenBao KV v2, with the secret name as a key at that path. `<env>` ∈ {`candidate-a`, `preview`, `production`}; `<service>` is the catalog name (`node-template`, `scheduler-worker`, …). One path per (service, env). Multiple keys per path.
@@ -105,7 +184,7 @@ self-serve. The catalog model (capability-gated, distinct-vs-shared custody line
 
 4. **NO_VALUE_IN_GIT.** Secret values never enter git history, PR diffs, GitHub Actions logs, chat transcripts, or AI agent context. Only secret NAMES and PATHS appear in committed YAML. Violation = immediate rotation + audit.
 
-5. **OPENBAO_IS_SINGLE_SOURCE_OF_TRUTH.** Every consumer (k8s pods via ESO, GitHub Actions via OIDC, CLI users via `bao` client, operator MCP tools) reads from OpenBao. No parallel store. GitHub env secrets contain ONLY the `OPENBAO_SEED_TOKEN` per env (plus a small allowlist of CI-pinned tokens documented per-secret).
+5. **OPENBAO_IS_SINGLE_SOURCE_OF_TRUTH.** Every runtime consumer (k8s pods via ESO, Compose renderers for pod-facing dependencies, CLI users via `bao` client, operator MCP tools) reads from OpenBao. No parallel runtime store. GitHub env secrets contain ONLY the `OPENBAO_SEED_TOKEN` per env plus a small allowlist of CI-only/bootstrap credentials documented per-secret. VM `.env` files are rendered views and MUST NOT be treated as authorities for app/runtime credentials.
 
 6. **RBAC_VIA_PATH_POLICY.** OpenBao policies grant access on path prefixes. `cogni/<env>/<service>/*` access is granted to the `<service>-<env>-reader` (read) and `<service>-<env>-writer` (read+write) roles. Pods authenticate via Kubernetes auth method; humans via OIDC; agents via the operator's mediated token. (Reference: [Vault policy templating](https://developer.hashicorp.com/vault/tutorials/policies/policy-templating).)
 
@@ -138,7 +217,13 @@ self-serve. The catalog model (capability-gated, distinct-vs-shared custody line
 
 14. **CATALOG_IS_THE_ONE_READER.** The set of keys that fan out to a pod is derived **only** from the secrets catalog (`infra/secrets-catalog.yaml` + `nodes/<node>/.cogni/secrets-catalog.yaml`), read through the single Zod loader (`scripts/lib/secrets-catalog-loader.ts`). No hand-maintained parallel list may decide pod fan-out — specifically `reconcile-secrets.sh::NODE_BASELINE_KEYS`, the per-secret `env:` map in `provision-env.yml`, and the `bootstrap.sh` `.env` heredoc are derived from the loader (e.g. a `--print-pod-keys <node>` emitter the bash side consumes), never independently authored. A catalog entry is the **declaration**; declaration must imply fan-out. Drift guard: `secrets-fanout.test.sh` fails closed if a catalog pod-key is not in the derived set. This is what makes Atom ① of the self-serve model real — a node dev's one-PR catalog edit reaches the pod without any operator-domain hand-edit. (Per-node _membership_ is already catalog-gated via `_node_gets_key`/`appliesTo`; this invariant extends the same SSOT to the key **universe**.)
 
-15. **DB_ROLE_CREDS_ARE_OPENBAO_OWNED** (bug.5002 — the corollary of `OPENBAO_IS_SINGLE_SOURCE_OF_TRUTH` at the Compose↔k8s boundary). The DB role passwords a k8s pod authenticates with — Postgres `app_user`, `app_service`, the read-only role, and the Doltgres `knowledge_reader`/`knowledge_writer` roles — are **owned by OpenBao** and reach the pod inside the ESO-synced `DATABASE_URL` / `DOLTGRES_URL` at `cogni/<env>/<service>`. `deploy-infra.sh` / `db-provision` / `doltgres-provision` MUST NOT be a **second writer** of these passwords: they create each role **once** from the OpenBao-sourced value and **never `ALTER … PASSWORD` from a rendered `.env`** on a later run. A `.env` rendered from GitHub env secrets is a parallel store (Invariant 5 violation); ALTERing the DB to it diverges from the value ESO syncs to the pod → `28P01 password authentication failed` → `/readyz` "infrastructure unreachable" → 502 (the candidate-a 2026-06-04 cluster-wide outage). The Compose **superuser** (`POSTGRES_ROOT_PASSWORD`) is exempt — it is a Compose-runtime credential per the Non-Goal, consumed by no k8s pod — but it too is set-once at init, never "reconciled" to a divergent source. **The fix for a provisioning auth failure is to align the source (point `db-provision` at OpenBao), never to overwrite the DB from `.env`.**
+15. **DB_ROLE_CREDS_ARE_OPENBAO_OWNED** (bug.5002 — the corollary of `OPENBAO_IS_SINGLE_SOURCE_OF_TRUTH` at the Compose↔k8s boundary). The DB role passwords a k8s pod authenticates with, or any password that must agree with a pod-facing DSN, are **owned by OpenBao**. This includes `APP_DB_PASSWORD`, `APP_DB_SERVICE_PASSWORD`, `APP_DB_READONLY_PASSWORD`, `DOLTGRES_PASSWORD`, `DOLTGRES_READER_PASSWORD`, and `DOLTGRES_WRITER_PASSWORD`. They may be rendered into Compose for role creation, Grafana datasource provisioning, or other substrate work, but Compose does not own them. `deploy-infra.sh` / `db-provision` / `doltgres-provision` MUST NOT be a **second writer** of these passwords: they create each role **once** from the OpenBao-sourced value and **never `ALTER … PASSWORD` from a rendered `.env`** on a later run. A `.env` rendered from GitHub env secrets is a parallel store (Invariant 5 violation); ALTERing the DB to it diverges from the value ESO syncs to the pod → `28P01 password authentication failed` → `/readyz` "infrastructure unreachable" → 502 (the candidate-a 2026-06-04 cluster-wide outage). The Compose **superuser** (`POSTGRES_ROOT_PASSWORD`) is exempt while no pod consumes it, but it too is set-once at init, never "reconciled" to a divergent source. **The fix for a provisioning auth failure is to align the source (point `db-provision` at OpenBao), never to overwrite the DB from `.env`.**
+
+    All six are OpenBao-owned; they differ only in how `secret-materialize` produces the value, never in custody. `APP_DB_PASSWORD` and `APP_DB_SERVICE_PASSWORD` are `source: agent` — generated once. The three `DOLTGRES_*` passwords and `APP_DB_READONLY_PASSWORD` are `source: derived` — the materializer computes them from the OpenBao-owned `POSTGRES_ROOT_PASSWORD` and **writes the result back to OpenBao**, so ESO syncs the actual value to the pod. The deterministic derivation that lives inside `deploy-infra.sh` / `doltgres-provision` today (`infra/compose/runtime/AGENTS.md`) is the **legacy bespoke handling Phase 2 replaces**, not the target: a password computed in a deploy script and never written to OpenBao is a parallel store — the same drift class as a rendered `.env`. Target: `deploy-infra` / `db-provision` / `doltgres-provision` **read** every DB password from OpenBao (set-once create), and derive none.
+
+16. **NODE_SECRET_MATERIALIZATION_PRECEDES_SUBSTRATE_RECONCILE.** A new node's first flight/promotion runs a materialization phase before any DB/edge/ExternalSecret substrate reconcile or read-only substrate assertion. In the final form this is a standalone `secret-materialize <env> <node>` primitive: it reads the catalog, preserves existing OpenBao values, generates missing `source: agent` values, derives values only from non-secret inputs plus OpenBao-owned secret inputs, inherits only explicitly granted shared values, and logs key names only. It must not require per-node human values for ordinary wizard nodes; missing shared DAO/org values are environment precondition failures. Candidate flight and promote workflows MUST NOT accept secret values as inputs.
+
+    The write/read split is a **token boundary**: in the target, only `secret-materialize` holds the `<env>-writer` role; `reconcile-substrate` and `assert-substrate` hold a read-only (`<env>-db-reader`) token and perform zero OpenBao writes (no `bao kv put`/`patch`). **Transitional exception (as-built, PR #1582):** `reconcile-substrate` still mints `<env>-writer` to seed the DB DSNs (`DATABASE_URL`, `DATABASE_SERVICE_URL`, `DOLTGRES_URL`) until the env-repair lane lands per-node DB creds at `cogni/<env>/<node>` (`vm-secrets-repair.md`, #1584). The read-only-reconcile target — and the falsifying gate (delete the VM `.env` `APP_DB_PASSWORD`, prove the node deploys green from OpenBao only) — hold only after that lane completes; #1582 must not claim `deploy_verified` via that gate. The catalog-custody surface (`inheritFrom`, DB-key tiering) is the orthogonal, non-blocking lane.
 
 ---
 
@@ -146,24 +231,27 @@ self-serve. The catalog model (capability-gated, distinct-vs-shared custody line
 
 ### Path convention
 
-```
-cogni/<env>/<service>           ← KV v2 path
-   ├─ OPENAI_API_KEY            ← key 1
-   ├─ DATABASE_URL              ← key 2
-   ├─ AUTH_SECRET               ← key 3
-   └─ …
+```text
+cogni/<env>/<service>           # KV v2 path
+  <KEY_1>                       # key 1
+  <KEY_2>                       # key 2
+  <KEY_3>                       # key 3
 ```
 
 `<env>` ∈ `candidate-a` | `preview` | `production`. `<service>` matches `infra/catalog/<service>.yaml::name`. Multiple keys per path; one path per (service, env).
 
-Cross-service secrets (e.g., a shared `OPENROUTER_API_KEY` consumed by both node-template and scheduler-worker) live at `cogni/<env>/_shared` and are referenced by services that explicitly opt in. Use sparingly — per-service paths are the default.
+Cross-service secrets live at `cogni/<env>/_shared` and are referenced by
+services that explicitly opt in. Use sparingly — per-service paths are the
+default. Concrete key classifications live in
+[`secrets-classification.md`](./secrets-classification.md).
 
-System-level secrets (Cherry token, Cloudflare token, GH PAT, ESO seed token) live at `cogni/<env>/_system`, written by `bootstrap.sh`, read by CI workflows via OIDC.
+System-level secrets live at `cogni/<env>/_system`, written by provisioning
+lanes and read by CI workflows via OIDC.
 
 ### Consumption pattern — ExternalSecret with `dataFrom: extract`
 
 ```yaml
-# infra/k8s/secrets/external-secrets/<env>/<service>/external-secret.yaml
+# nodes/<node>/k8s/external-secrets/<env>/external-secret.yaml
 apiVersion: external-secrets.io/v1
 kind: ExternalSecret
 metadata:
@@ -223,32 +311,59 @@ Postgres and Doltgres run as **Compose-on-VM** services, while the node-apps tha
 - The **pod** reads its `DATABASE_URL` / `DOLTGRES_URL` (role name + password) from `cogni/<env>/<service>` in OpenBao via ESO. **OpenBao is the pod's SSOT.**
 - **`deploy-infra.sh` / `db-provision` / `doltgres-provision`** create the matching DB roles **set-once** and never `ALTER … PASSWORD` on a later run (the #1500/#1502 fix).
 
-**Current state (as-built) — the split-brain is dormant, not gone.** `db-provision` set each role's create-time password from `deploy-infra`'s rendered `.env`, and that `.env` is rendered from **GitHub env secrets** (`APP_DB_PASSWORD`, `APP_DB_SERVICE_PASSWORD`; the readonly + Doltgres roles are `derive_secret(POSTGRES_ROOT_PASSWORD)`). It equals the OpenBao value **only by construction** — both were seeded from the same GH secret at provision time. Nothing enforces lockstep: rotate the GH secret (or `bao kv patch` OpenBao) independently and the two diverge silently. Set-once removed the _landmine_ (the per-deploy `ALTER` that turned dormant drift into an active 502) but **the two sources still both exist.** The flow below is the **target**, not yet the as-built — today `db-provision` reads `.env`, not OpenBao.
+**Current state (as-built) — the split-brain is dormant, not gone.** `db-provision` set each role's create-time password from `deploy-infra`'s rendered `.env`, and that `.env` has historically been rendered from **GitHub env secrets** (`APP_DB_PASSWORD`, `APP_DB_SERVICE_PASSWORD`; the readonly + Doltgres roles were derived from `POSTGRES_ROOT_PASSWORD`). It equals the OpenBao value **only by construction** when both stores were seeded from the same bootstrap inputs. Nothing enforces lockstep: rotate the GH secret (or `bao kv patch` OpenBao) independently and the two diverge silently. Set-once removed the _landmine_ (the per-deploy `ALTER` that turned dormant drift into an active 502) but **the two sources still both exist.** The flow below is the target.
 
 **Target — one source by construction (not by coincidence):**
 
 ```
-OpenBao  cogni/<env>/<service>   (app_user / app_service / readonly / doltgres role passwords)
+OpenBao  cogni/<env>/<service>   (static per-node DB role credentials + DSNs)
    ├─ ESO ─────────────────────────▶ <service>-env-secrets ──▶ pod   (DATABASE_URL / DOLTGRES_URL)
    └─ deploy-infra READS the same value (reader JWT) ──▶ CREATE ROLE …   (set-once)
 ```
 
 When `deploy-infra` reads each role password from the **same OpenBao value ESO syncs**, the DB role and the pod cannot disagree, no reconcile is ever needed, and the GH-secret DB passwords are retired (Invariant 5: GH env then holds only the seed token + CI-pinned allowlist).
 
+For the static bridge before dynamic DB credentials, each node path carries the
+pod-facing DB material explicitly:
+
+```text
+cogni/<env>/<node>
+  APP_DB_USER
+  APP_DB_PASSWORD
+  APP_DB_SERVICE_USER
+  APP_DB_SERVICE_PASSWORD
+  APP_DB_READONLY_USER
+  APP_DB_READONLY_PASSWORD
+  DATABASE_URL
+  DATABASE_SERVICE_URL
+  DOLTGRES_URL
+  DOLTGRES_PASSWORD
+  DOLTGRES_READER_PASSWORD
+  DOLTGRES_WRITER_PASSWORD
+```
+
+`DATABASE_URL`, `DATABASE_SERVICE_URL`, and `DOLTGRES_URL` may be rendered
+from components, but the components they embed are OpenBao-owned.
+
 #### Migration — phased, each phase independently shippable
 
-| Phase | Change                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | State       |
-| ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
-| **0** | **Set-once stabilization** — remove every `.env`→pod-role `ALTER` (#1500/#1502). The precondition: the _source_ of a one-time create can only be swapped cleanly once no per-deploy writer exists.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | **DONE**    |
-| **1** | **OpenBao read path on the deploy host** — `deploy-infra.sh` runs on the VM, which runs k3s; OpenBao is a reachable **ClusterIP** there. Mint a short-lived **reader**-role JWT via the _same_ k8s-auth pattern Invariant 13 uses for the writer role (`bao write auth/kubernetes/login role=<env>-db-reader jwt=$(kubectl create token …)`), scoped read-only to **all** DB keys at `cogni/<env>/*` (env-wide — deploy-infra provisions every node on the VM, not one service). `provision-env-vm.sh` Phase 5b adds the `<env>-db-reader` policy + role + `db-provisioner` SA beside `eso-reader`/`<env>-writer`. **No Ingress, no public exposure** — OpenBao stays ClusterIP; reuses the sanctioned k8s-auth seam, not a new entry point (Invariant 9).                   | **THIS PR** |
-| **2** | **Swap the source + retire the GH-secret DB passwords** — `deploy-infra`'s `.env` render fetches `APP_DB_PASSWORD` / `APP_DB_SERVICE_PASSWORD` / readonly / `DOLTGRES_*` from OpenBao via the Phase-1 reader token instead of GH env secrets. `db-provision` stays set-once, but the create-time value now provably equals the OpenBao value. Drop `APP_DB_*_PASSWORD` from the deploy workflow's required GH secrets. **Not uniform across roles — see "Derived roles" note below** (`readonly` + `DOLTGRES_*` aren't standalone OpenBao keys today). The **Grafana datasource** (the readonly role's second consumer, bug.5031 drift class) closes only if `provision-grafana-postgres-datasources.sh` is _also_ pointed at OpenBao — a Phase-2 code touch, not automatic. | TODO        |
-| **3** | **Dynamic-creds endgame** — OpenBao DB secrets engine (per-session creds, `refreshInterval: 15m`); no static role password exists, so there is nothing to drift _or_ rotate. `proj.security-hardening` Crawl row 3; see [`secrets-rotate.md`](../guides/secrets-rotate.md) "Dynamic database credentials".                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | FUTURE      |
+| Phase | Change                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | State       |
+| ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
+| **0** | **Set-once stabilization** — remove every `.env`→pod-role `ALTER` (#1500/#1502). The precondition: the _source_ of a one-time create can only be swapped cleanly once no per-deploy writer exists.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | **DONE**    |
+| **1** | **OpenBao read path on the deploy host** — `deploy-infra.sh` runs on the VM, which runs k3s; OpenBao is a reachable **ClusterIP** there. Mint a short-lived **reader**-role JWT via the _same_ k8s-auth pattern Invariant 13 uses for the writer role (`bao write auth/kubernetes/login role=<env>-db-reader jwt=$(kubectl create token …)`), scoped read-only to **all** DB keys at `cogni/<env>/*` (env-wide — deploy-infra provisions every node on the VM, not one service). `provision-env-vm.sh` Phase 5b adds the `<env>-db-reader` policy + role + `db-provisioner` SA beside `eso-reader`/`<env>-writer`. **No Ingress, no public exposure** — OpenBao stays ClusterIP; reuses the sanctioned k8s-auth seam, not a new entry point (Invariant 9). | **THIS PR** |
+| **2** | **Secret materializer owns static DB creds** — `secret-materialize <env> <node>` seeds the static per-node DB credentials above into OpenBao, preserving existing values. `deploy-infra` / the narrow node substrate reconcile render Compose `.env` copies by reading OpenBao via the Phase-1 reader token. `db-provision` stays set-once, but the create-time value now provably equals the OpenBao value. Drop `APP_DB_*_PASSWORD` and `DOLTGRES_*_PASSWORD` runtime dependencies from GH env secrets. The **Grafana datasource** (the readonly role's second consumer, bug.5031 drift class) closes only if `provision-grafana-postgres-datasources.sh` is _also_ pointed at OpenBao.                                                                  | TODO        |
+| **3** | **Dynamic-creds endgame** — OpenBao DB secrets engine (per-session creds, `refreshInterval: 15m`); no static role password exists, so there is nothing to drift _or_ rotate. `proj.security-hardening` Crawl row 3; see [`secrets-rotate.md`](../guides/secrets-rotate.md) "Dynamic database credentials".                                                                                                                                                                                                                                                                                                                                                                                                                                                 | FUTURE      |
 
-**Derived roles are not OpenBao keys yet (Phase-2 prerequisite).** `app_user` / `app_service` are GitHub env secrets seeded into OpenBao, so Phase 2 can read them per-role directly. But `readonly`, `DOLTGRES_READER`, and `DOLTGRES_WRITER` are computed by `derive_secret(POSTGRES_ROOT_PASSWORD)` at render time — in OpenBao they exist only _embedded_ inside the composed `DATABASE_URL` / `DOLTGRES_URL`, not as standalone per-role keys deploy-infra can fetch. Two ways to single-source them: **(a)** genesis seeds each derived value as its own key (explicit, more keys); or **(b)** Phase 2 sources `POSTGRES_ROOT_PASSWORD` from OpenBao and keeps `derive_secret` (deterministic → still single-sourced, fewer keys). **(b) is preferred** for the derived roles; reserve explicit per-role keys for the true GH-secret roles. The implementing PR must treat the two groups separately — "read them from OpenBao" is not uniform.
+**Static bridge decision.** `readonly`, `DOLTGRES_READER`, and
+`DOLTGRES_WRITER` must become explicit OpenBao keys in Phase 2. Keeping them as
+Compose-local derivations from `POSTGRES_ROOT_PASSWORD` leaves Compose as an
+authority for pod-facing material. The long-term destination is still dynamic
+DB credentials, but static per-node OpenBao-owned credentials are the right
+bridge because they remove split brain now and keep the migration path clean.
 
 **Scope honesty — necessary, not sufficient.** This migration fixes the DB-credential SSOT (root of bug.5002 and the deploy-infra completion-red). It does **not** fix the separate Compose **health-gate** failure mode (a transient `postgres`-unhealthy aborting the whole infra deploy). "3 envs green, repeatable" needs **both** — this design is one of the two.
 
-**Sequencing wrinkle (genesis vs steady-state).** OpenBao is itself a k3s/Argo app stood up _during_ a cold provision, so `db-provision` cannot read from it at genesis (chicken-and-egg). Resolution: **genesis still seeds OpenBao once from the GH secret** (the origin), and **every deploy thereafter reads FROM OpenBao** (the source). After genesis the GH DB-password secrets are deletable. The new coupling — a deploy now hard-depends on OpenBao being unsealed + reachable — is **not a new SPOF**: OpenBao-down already takes the pods down (ESO is their only DB-cred source), so the deploy path merely shares a dependency the runtime already carries. On an OpenBao read failure `deploy-infra` **fails loud and skips the role create** (db-provision surfaces the real error); it MUST NOT fall back to a divergent GH `.env` value — that is exactly the bug.5002 anti-fix.
+**Sequencing wrinkle (genesis vs steady-state).** OpenBao is itself a k3s/Argo app stood up _during_ a cold provision, so genesis may use bootstrap inputs to install OpenBao and mint the first writer role. Once that role exists, even genesis should run the same materializer primitive to create OpenBao runtime values before DB role creation. After genesis the GH DB-password secrets are deletable. The new coupling — a deploy now hard-depends on OpenBao being unsealed + reachable — is **not a new SPOF**: OpenBao-down already takes the pods down (ESO is their only DB-cred source), so the deploy path merely shares a dependency the runtime already carries. On an OpenBao read failure `deploy-infra` **fails loud and skips the role create** (db-provision surfaces the real error); it MUST NOT fall back to a divergent GH `.env` value — that is exactly the bug.5002 anti-fix.
 
 **The bug.5002 anti-fix (do NOT do this):** "self-heal drift" by ALTERing a pod-consumed DB role password to deploy-infra's rendered `.env` on every deploy. That makes deploy-infra a **second writer**, guarantees divergence whenever `.env` ≠ OpenBao, and converts a silent inconsistency into an active 502 outage. When `db-provision` can't authenticate, fix the **source** (point it at OpenBao), never overwrite the DB from `.env`.
 
@@ -258,6 +373,20 @@ When `deploy-infra` reads each role password from the **same OpenBao value ESO s
 - [ ] **Phase 2 — sole-source proof (falsifying):** rotate `APP_DB_PASSWORD` in **OpenBao only** (`bao kv patch`, no GH-secret edit), run a deploy. The Postgres role, the pod's `DATABASE_URL`, and the Grafana datasource all converge on the new value with **zero 28P01** and zero GH-secret change.
 - [ ] **Phase 2 — dependency-removed proof (negative):** delete the `APP_DB_*_PASSWORD` GH env secrets; a subsequent deploy still succeeds. Proves no GH-secret DB-password dependency remains.
 - [ ] **`deploy_verified`:** flight to candidate-a; the deploy's OpenBao reads appear in the audit device → Loki with the `<env>-db-reader` subject.
+
+#### Implementation split
+
+Keep these PRs separate so each one has a falsifiable outcome:
+
+| PR  | Scope                                        | Acceptance                                                                                                                                                                                             |
+| --- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1   | PR #1582 v0 node readiness                   | Contract docs name the v0 and target models; candidate flight has a narrow node substrate lane; a new non-payment wizard node needs zero per-node human secrets and can reach ESO/DB/edge assertion.   |
+| 2   | Standalone `secret-materialize <env> <node>` | Split OpenBao writes out of substrate reconcile; catalog-derived; preserves OpenBao; generates missing `source: agent`; inherits only explicit grants; logs key names only.                            |
+| 3   | Explicit shared-bank / owner-grant backend   | Replace broad fallback copying with a declared OpenBao shared-bank for DAO/org values and per-key grants to node capability classes.                                                                   |
+| 4   | DB credential OpenBao bridge                 | DB/Grafana provisioners render from OpenBao, not GH env or VM `.env`; role creation remains set-once; falsify by deleting GH DB-password secrets and deploying successfully.                           |
+| 5   | Workflow wiring cleanup                      | `candidate-flight.yml`, `promote-and-deploy.yml`, and genesis provision run materialize -> reconcile-substrate -> assert-substrate before rollout verification. Workflows do not accept secret values. |
+| 6   | Human/vendor value lane                      | `secret-set.yml` or operator API writes human-sourced org/env values through OIDC/OpenBao with sealed staging and audit proof; production uses env protection.                                         |
+| 7   | Dynamic DB credentials                       | Replace static DB passwords with OpenBao DB secrets engine and shorter ESO refresh intervals.                                                                                                          |
 
 ### Standardized tooling — three entry points, one primitive
 
@@ -276,7 +405,7 @@ Wrapper script at `scripts/secrets/set-secret.sh`. Validates path against catalo
 
 #### Entry 2 — GitHub workflow (ops; audit-logged)
 
-`.github/workflows/secrets-manage.yml` — workflow_dispatch with inputs:
+`.github/workflows/secret-set.yml` — workflow_dispatch with non-secret inputs:
 
 ```yaml
 inputs:
@@ -288,11 +417,16 @@ inputs:
     }
   service: { required: true, type: string }
   key: { required: true, type: string }
-  value: { required: true, type: string, sensitive: true } # masked in logs
-  operation: { required: true, type: choice, options: [set, rotate, delete] }
 ```
 
-The workflow authenticates to OpenBao via GitHub Actions OIDC federation (the `OPENBAO_SEED_TOKEN` per env in GH secrets is NOT used by this workflow; OIDC issues a job-scoped token with `secrets-writer` policy). Audit log entry generated in OpenBao. Production-env writes require explicit re-approval (GitHub environments protection rule).
+The value is staged separately as a sealed GitHub Environment Secret, read by
+the workflow, and immediately patched into OpenBao. It is **not** a workflow
+input. Dispatch inputs are visible in run metadata and are therefore forbidden
+for values. The workflow authenticates to OpenBao via GitHub Actions OIDC
+federation (the `OPENBAO_SEED_TOKEN` per env in GH secrets is NOT used by this
+workflow; OIDC issues a job-scoped token with the env writer policy). Audit log
+entry generated in OpenBao. Production-env writes require explicit re-approval
+through GitHub Environment protection rules.
 
 #### Entry 3 — Operator API (AI agents; MCP-mediated)
 
@@ -304,18 +438,41 @@ Response: 201 with a one-time-use submission URL the human visits to provide the
 
 AI agents CANNOT pass the value. They declare the SHAPE (env, service, key). The human (or operator-app UI) fills the value through a separate authenticated channel. The MCP tool `secret.declare` exposes this to agents; `secret.get_value` does NOT exist.
 
-### Value classification — two orthogonal axes
+### Value classification — three orthogonal axes
 
-A catalog entry answers two independent questions. Do not conflate them.
+A catalog entry answers three independent questions. Do not conflate them.
 
 **1. `source:` — where the value ORIGINATES (who can produce it):**
 
-| `source:` | Origin                                                                                                                                    | Provisioning behavior                                  |
-| --------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| `agent`   | we generate it (`generate:` field required)                                                                                               | generate once, store (`bootstrap.sh::declare_or_gen`)  |
-| `human`   | **un-generatable by us** — vendor-minted; a human supplies it once via the vendor's UI (e.g. a GitHub App **private key**, an OpenAI key) | carry the supplied value from GH env; never regenerate |
+| `source:` | Origin                                                                                                                                    | Provisioning behavior                                       |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| `agent`   | we generate it (`generate:` field required)                                                                                               | materialize once, preserve on reruns                        |
+| `human`   | **un-generatable by us** — vendor-minted; a human supplies it once via the vendor's UI (e.g. a GitHub App **private key**, an OpenAI key) | carry the supplied value from GH env; never regenerate      |
+| `derived` | computed from non-secret inputs and OpenBao-owned secret inputs                                                                           | recompute deterministically; never use Compose as authority |
 
-**2. `syncTo:` (optional) — does the value ALSO live in an external system we must keep in lockstep:**
+**2. `custody:` — where the value is authoritative:**
+
+| `custody:`    | Use                                                                 |
+| ------------- | ------------------------------------------------------------------- |
+| `openbao`     | runtime secrets, pod-facing DB role material, dual-plane app values |
+| `github-env`  | CI-only/bootstrap credentials, sealed staging for `secret-set.yml`  |
+| `repo-config` | non-secret config committed through Git/GitOps                      |
+
+`custody` is the security axis. A B-tier Compose value can still have
+`custody: openbao` if it provisions a pod-facing role or must agree with a
+pod-facing value. In that case Compose receives a rendered copy and owns
+nothing.
+
+**3. `consumers:` — where the value is rendered:**
+
+| consumer   | Render path                                            |
+| ---------- | ------------------------------------------------------ |
+| `pod`      | OpenBao -> ESO -> k8s Secret -> Deployment `envFrom`   |
+| `compose`  | OpenBao read at deploy time or future Bao Agent render |
+| `ci`       | OpenBao via OIDC or GH env only when truly CI-only     |
+| `external` | Explicit `syncTo` push such as GitHub App webhook sync |
+
+**`syncTo:` (optional) — does the value ALSO live in an external system we must keep in lockstep:**
 
 A value's origin is independent of whether it must be mirrored outward. The GitHub App **webhook secret** is `source: agent` (we generate it) **and** `syncTo: github-app-webhook` (GitHub holds a copy that must byte-match). `syncTo` names the external mirror; provisioning runs the matching push after writing the pod Secret.
 
@@ -399,20 +556,22 @@ Bound via OpenBao role definitions to Kubernetes ServiceAccounts (per-service-pe
 
 ## File Pointers
 
-| File                                                  | Purpose                                                                |
-| ----------------------------------------------------- | ---------------------------------------------------------------------- |
-| `infra/k8s/argocd/openbao/`                           | Argo Application installing OpenBao (`task.0284`)                      |
-| `infra/k8s/argocd/external-secrets/`                  | Argo Application installing ESO controller (`task.0284`)               |
-| `infra/k8s/argocd/reloader/`                          | Argo Application installing Stakater Reloader (`task.5056`)            |
-| `infra/k8s/secrets/external-secrets/<env>/<service>/` | Per-service-per-env ExternalSecret YAML                                |
-| `scripts/secrets/set-secret.sh`                       | CLI implementation (`pnpm secrets:set`)                                |
-| `scripts/secrets/rotate-secret.sh`                    | CLI implementation (`pnpm secrets:rotate`)                             |
-| `.github/workflows/secret-set.yml`                    | Day-2 self-serve write (GH-OIDC → OpenBao; per-operation)              |
-| `scripts/lib/secrets-catalog-loader.ts`               | The one catalog reader (Zod); emits the pod-key universe               |
-| `nodes/<node>/.cogni/secrets-catalog.yaml`            | Per-node declaration surface (one-PR self-serve)                       |
-| `docs/runbooks/fork-quickstart.md`                    | Bootstrap flow (substrate install + unseal + role bind, Steps 6 / 6.5) |
-| `docs/guides/secrets-add-new.md`                      | Practical guide — adding a new secret                                  |
-| `docs/guides/secrets-rotate.md`                       | Practical guide — rotation playbook + substrate-token rotation         |
+| File                                                     | Purpose                                                                                         |
+| -------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `infra/k8s/argocd/openbao/`                              | Argo Application installing OpenBao (`task.0284`)                                               |
+| `infra/k8s/argocd/external-secrets/`                     | Argo Application installing ESO controller (`task.0284`)                                        |
+| `infra/k8s/argocd/reloader/`                             | Argo Application installing Stakater Reloader (`task.5056`)                                     |
+| `nodes/<node>/k8s/external-secrets/<env>/`               | Remote-source/wizard node ExternalSecret YAML, pinned into the operator tree                    |
+| `infra/k8s/overlays/<env>/operator/external-secret.yaml` | Legacy operator overlay copy; Argo-owned exception for the operator Deployment patch            |
+| `scripts/secrets/set-secret.sh`                          | CLI implementation (`pnpm secrets:set`)                                                         |
+| `scripts/secrets/rotate-secret.sh`                       | CLI implementation (`pnpm secrets:rotate`)                                                      |
+| `.github/workflows/secret-set.yml`                       | Planned day-2 self-serve write (GH-OIDC → OpenBao; per-operation); auth roles already provision |
+| `scripts/lib/secrets-catalog-loader.ts`                  | The one catalog reader (Zod); emits the pod-key universe                                        |
+| `nodes/<node>/.cogni/secrets-catalog.yaml`               | Per-node declaration surface (one-PR self-serve)                                                |
+| `docs/runbooks/fork-quickstart.md`                       | Bootstrap flow (substrate install + unseal + role bind, Steps 6 / 6.5)                          |
+| `docs/runbooks/production-operator-eso-cutover.md`       | Production operator OpenBao/ESO cutover, custody discovery, force-sync, and cleanup ordering    |
+| `docs/guides/secrets-add-new.md`                         | Practical guide — adding a new secret                                                           |
+| `docs/guides/secrets-rotate.md`                          | Practical guide — rotation playbook + substrate-token rotation                                  |
 
 ## Related
 
@@ -444,13 +603,10 @@ the cleanest proof of the model: adding a secret is a single-node-domain PR (`si
 passes), with zero operator-domain edits. The substrate that makes it fan out (the emitter, the
 `consumedBy` model, the `reconcile-secrets.sh` swap) is the separate operator-domain track.
 
-> **Why `source: agent`, not `human`:** the candidate-a proof must validate Atom ① + the
-> catalog→ESO→Reloader wire **without** depending on the Atom ② value-write path, which on
-> candidate-a still hits the OpenBao-reachability question (plaintext, ClusterIP, no Ingress — the
-> `secret-set.yml` runner can't reach it yet; that resolves per-fork, see Invariant 9). An
-> agent-generated value is seeded by provisioning itself, so it exercises the full declare→pod loop
-> standalone. The `secret-set.yml` value-write (Atom ② for `source: human`) is proven separately once
-> per-fork OpenBao exposure lands — do not block Atom ① on it.
+> **Why `source: agent`, not `human`:** the candidate-a proof must validate
+> declaration, materialization, ESO sync, and pod rollout without depending on a
+> vendor/human value. Human-sourced values use the separate `secret-set` or
+> operator API lane and are a loud precondition before flight/promotion.
 
 **The falsifying "before" (proves the gap is real):**
 
@@ -473,17 +629,19 @@ passes), with zero operator-domain edits. The substrate that makes it fan out (t
 
 - [ ] Flight this branch → candidate-a; confirm build SHA == head.
 - [ ] **Declare** (Atom ①): land the node-template-scoped probe PR (`nodes/node-template/.cogni/secrets-catalog.yaml`).
-      Provision (or Phase-5c reconcile) auto-seeds `cogni/candidate-a/node-template/NODE_TEMPLATE_SELFSERVE_PROBE`
-      from the catalog (`source: agent`) — verify via `bao kv get` (port-forward) **with zero per-secret
-      hand-edits and zero `pnpm secrets:set`**. This is the catalog-SSOT proof.
+      `secret-materialize candidate-a node-template` auto-seeds
+      `cogni/candidate-a/node-template/NODE_TEMPLATE_SELFSERVE_PROBE` from the
+      catalog (`source: agent`) — verify via `bao kv get` (port-forward)
+      **with zero per-secret hand-edits and zero `pnpm secrets:set`**. This is
+      the catalog-to-OpenBao proof.
 - [ ] ESO: the node-template `*-env-secrets` ExternalSecret reports `SecretSynced`; the synced k8s
       Secret contains the probe key.
 - [ ] **Reloader closes the loop:** the pod rolling-restarts on the Secret change; `kubectl exec … printenv`
       shows `NODE_TEMPLATE_SELFSERVE_PROBE` in the running container — **no manual rollout**.
-- [ ] **Self-serve assertion:** the entire flow touched only `nodes/node-template/.cogni/secrets-catalog.yaml`
-      (+ a value via sealed channel) — zero edits to `reconcile-secrets.sh`, `provision-env.yml`,
+- [ ] **Self-serve assertion:** the entire `source: agent` flow touched only
+      `nodes/node-template/.cogni/secrets-catalog.yaml` plus the materializer
+      runtime — zero edits to `reconcile-secrets.sh`, `provision-env.yml`,
       `bootstrap.sh`, pod specs, or ExternalSecret YAML.
-- [ ] `secret-set.yml` audit: the OpenBao write appears in the audit device → Loki with the OIDC subject.
 
 **Regression / negative:**
 
@@ -495,22 +653,18 @@ passes), with zero operator-domain edits. The substrate that makes it fan out (t
 > The actionable, checkable step list lives in the work item (`task.5104`); this section is the
 > acceptance contract those steps must satisfy.
 
-## Docs Consolidation (executed with the implementing PR)
+## Docs Hygiene
 
-The self-serve model makes several pre-OpenBao docs actively wrong (they assert GH-env as SSOT).
-Pruned/refined atomically with the code so no doc outlives the model it describes:
+Do not create a parallel secrets-vision doc. The durable contract lives here;
+the practical recipes live in `docs/guides/secrets-add-new.md` and
+`docs/guides/secrets-rotate.md`; routing details live in
+`docs/spec/secrets-classification.md`; node-formation behavior lives in
+`docs/design/node-wizard-secret-setting.md`.
 
-| Doc                                                                                  | Action                                                                | Reason                                                                                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------ | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `.claude/commands/env-update.md`                                                     | **REWRITTEN** (this PR)                                               | Was a 15-surface manual-propagation checklist (the drift anti-pattern). Now the catalog-SSOT self-serve path.                                                                                                                             |
-| `docs/runbooks/SECRET_ROTATION.md`                                                   | **DELETE** + retarget inbound links → `docs/guides/secrets-rotate.md` | Pre-`task.0284`; asserts "all secrets in GitHub Actions Secrets" — contradicts `OPENBAO_IS_SINGLE_SOURCE_OF_TRUTH`.                                                                                                                       |
-| `docs/runbooks/INFRASTRUCTURE_SETUP.md`                                              | **OUT OF SCOPE** — flag, don't delete here                            | Stale (pre-OpenBao Terraform + GH-secret VM setup) but it's a _VM-provisioning_ doc with ~10 inbound links across deploy skills/specs. Its deletion is a separate docs-hygiene PR, not the secret self-serve model. Tracked, not bundled. |
-| `docs/spec/secrets-management.md`                                                    | **REFINED** (this PR)                                                 | Self-serve model section + `CATALOG_IS_THE_ONE_READER` + corrected Entry 2 + Reloader + this validation.                                                                                                                                  |
-| `docs/design/secrets-catalog-per-node.md`                                            | KEEP                                                                  | The catalog model; this spec references it, no duplication.                                                                                                                                                                               |
-| `docs/guides/secrets-add-new.md` · `secrets-rotate.md` · `cicd-secrets-expert` SKILL | KEEP (light touch: `secret-set.yml` name + Entry-2 status)            | Canonical recipes; no stale-SSOT claims.                                                                                                                                                                                                  |
-
-Killer-rule check: every deleted doc asserts the OLD (GH-env-SSOT) model; no deleted doc is the sole
-copy of a still-valid recipe (the port-forward CLI recipe stays in `secrets-add-new.md`).
+Any doc that says "GitHub env is the runtime source of truth", "VM `.env` owns a
+pod-facing value", or "candidate-flight accepts secret values" is stale and
+must be rewritten or deleted. Link preservation is secondary to purging the old
+authority model.
 
 ## Acceptance
 
@@ -518,4 +672,4 @@ copy of a still-valid recipe (the port-forward CLI recipe stays in `secrets-add-
 - ✅ Adding a new secret to an existing service-env path requires zero git changes
 - ✅ Rotating a secret requires zero git changes
 - ✅ Secret values never appear in any committed file, PR diff, GitHub Actions log line, chat transcript, or AI agent context window
-- ✅ A node dev adds a secret to their node end-to-end (`NODE_TEMPLATE_SELFSERVE_PROBE` proof) touching only their per-node catalog + a sealed value channel — no operator-domain edit, no kubectl, no laptop root token
+- ✅ A node dev adds a `source: agent` secret to their node end-to-end (`NODE_TEMPLATE_SELFSERVE_PROBE` proof) touching only their per-node catalog plus the materializer runtime — no operator-domain edit, no kubectl, no laptop root token

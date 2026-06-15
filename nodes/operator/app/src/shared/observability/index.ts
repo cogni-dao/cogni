@@ -10,6 +10,19 @@
  * @public
  */
 
+import { EVENT_NAMES as NODE_SHARED_EVENT_NAMES } from "@cogni/node-shared";
+
+export const EVENT_NAMES = {
+  ...NODE_SHARED_EVENT_NAMES,
+  ADAPTER_GITHUB_REPO_WRITE_ERROR: "adapter.github_repo_write.error",
+  NODE_PUBLISH_SECRET_SHAPE_GENERATED:
+    "feature.node_publish.secret_shape_generated",
+  NODE_ACCESS_REQUEST_COMPLETE: "feature.node_access_request.complete",
+  NODE_PREVIEW_PROMOTE_COMPLETE: "feature.node_preview_promote.complete",
+} as const;
+
+export type EventName = (typeof EVENT_NAMES)[keyof typeof EVENT_NAMES];
+
 // --- Extracted: events, context, client (from @cogni/node-shared) ---
 // NOTE: logEvent/logRequestWarn/etc. come through ./server (which re-exports from @cogni/node-shared)
 export {
@@ -21,10 +34,7 @@ export {
   clientLogger,
   // Context
   createRequestContext,
-  // Event registry
-  EVENT_NAMES,
   type EventBase,
-  type EventName,
   type PaymentsConfirmedEvent,
   type PaymentsIntentCreatedEvent,
   type PaymentsStateTransitionEvent,

@@ -16,6 +16,9 @@
 #                      config to the VM.
 #     --dry-run        Validate config + worktree resolution, print planned
 #                      actions, exit 0 without any SSH.
+#     --k8s-secrets-only
+#                      Update k8s app secrets + roll pods without touching
+#                      Compose infra. Bridge mode until pods consume ESO.
 # Invariants:
 #   - DEPLOY_ENVIRONMENT must be set to 'candidate-a', 'preview', or 'production'
 #     (legacy 'canary' value is still accepted for backward compatibility during
@@ -40,10 +43,13 @@ set -euo pipefail
 #                  This is the INFRA_REF_IS_EXPLICIT invariant (task.0314).
 # --dry-run        Resolve the source worktree and print planned actions
 #                  (rsync source, VM target, services) without any SSH.
+# --k8s-secrets-only
+#                  Update k8s app secrets + roll pods without touching Compose.
 REF="main"
 DRY_RUN=false
+K8S_SECRETS_ONLY=false
 usage() {
-  echo "Usage: $0 [--ref <git-ref>] [--dry-run]" >&2
+  echo "Usage: $0 [--ref <git-ref>] [--dry-run] [--k8s-secrets-only]" >&2
   exit 2
 }
 while [[ $# -gt 0 ]]; do
@@ -66,6 +72,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --dry-run)
       DRY_RUN=true
+      shift
+      ;;
+    --k8s-secrets-only)
+      K8S_SECRETS_ONLY=true
       shift
       ;;
     *)
@@ -254,7 +264,6 @@ REQUIRED_SECRETS=(
     "EVM_RPC_URL"
     "POLYGON_RPC_URL"
     "TEMPORAL_DB_USER"
-    "TEMPORAL_DB_PASSWORD"
     "INTERNAL_OPS_TOKEN"
     "POSTHOG_API_KEY"
     "POSTHOG_HOST"
@@ -320,7 +329,7 @@ OPTIONAL_SECRETS=(
     "DISCORD_OAUTH_CLIENT_SECRET"
     "GOOGLE_OAUTH_CLIENT_ID"
     "GOOGLE_OAUTH_CLIENT_SECRET"
-    "DOLTHUB_REMOTE_URL"
+    "DOLTHUB_OWNER"
     "DOLT_CREDS_JWK"
     "DOLT_CREDS_KEYID"
     "DOLTHUB_API_TOKEN"
@@ -328,6 +337,8 @@ OPTIONAL_SECRETS=(
     "DOLTHUB_OAUTH_CLIENT_SECRET"
     "GH_REVIEW_APP_ID"
     "GH_REVIEW_APP_PRIVATE_KEY_BASE64"
+    "NODE_MINT_OWNER"
+    "NODE_TEMPLATE_OWNER"
     "GH_REPOS"
     "GH_WEBHOOK_SECRET"
     "TAVILY_API_KEY"
@@ -448,6 +459,8 @@ log_info "LiteLLM callback routing (catalog-driven): ${LITELLM_NODE_ENDPOINTS}"
 # CI (no manual docker build / hand-pin). Resolve the same tag CI pushed.
 LITELLM_IMAGE="$(infra_image_tag litellm)"
 log_info "LiteLLM image (catalog content-hash): ${LITELLM_IMAGE}"
+OPENFGA_IMAGE="$(infra_image_tag openfga)"
+log_info "OpenFGA image (catalog content-hash): ${OPENFGA_IMAGE}"
 # Default node for unattributed spend — primary-host node_id from repo-spec
 # (REPO_SPEC_IS_IDENTITY_SSOT). The LiteLLM callback carries no hardcoded UUID.
 COGNI_DEFAULT_NODE_ID="$(default_node_id)"
@@ -537,6 +550,11 @@ log_warn() {
 
 log_error() {
     echo -e "\033[0;31m[ERROR]\033[0m $1"
+}
+
+log_fatal() {
+    echo -e "\033[0;31m[FATAL]\033[0m $1" >&2
+    exit 1
 }
 
 # Emit deployment event to Grafana Cloud Loki (remote script)
@@ -681,6 +699,141 @@ LITELLM_IMAGE=${LITELLM_IMAGE:?LITELLM_IMAGE required (resolved on the runner fr
 
 # Runtime env (full config — compose validates all vars even for services we don't start)
 RUNTIME_ENV=/opt/cogni-template-runtime/.env
+previous_runtime_env_value() {
+  local key="$1"
+  [[ -f "$RUNTIME_ENV" ]] || return 0
+  awk -v key="$key" '
+    index($0, key "=") == 1 { value = substr($0, length(key) + 2) }
+    END { print value }
+  ' "$RUNTIME_ENV"
+}
+
+PREVIOUS_OPENFGA_AUTHORIZATION_MODEL_ID="$(previous_runtime_env_value OPENFGA_AUTHORIZATION_MODEL_ID)"
+PREVIOUS_OPENFGA_AUTHORIZATION_MODEL_HASH="$(previous_runtime_env_value OPENFGA_AUTHORIZATION_MODEL_HASH)"
+
+DB_READER_TOKEN=""
+mint_db_reader_token() {
+  if [[ -n "$DB_READER_TOKEN" ]]; then
+    printf '%s\n' "$DB_READER_TOKEN"
+    return 0
+  fi
+
+  local jwt tok
+  jwt="$(timeout 10 kubectl create token db-provisioner -n default 2>/dev/null)" || return 1
+  tok="$(timeout 10 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
+    bao write -field=token auth/kubernetes/login \
+    "role=${DEPLOY_ENVIRONMENT}-db-reader" "jwt=${jwt}" 2>/dev/null)" || return 1
+  [[ -n "$tok" ]] || return 1
+  DB_READER_TOKEN="$tok"
+  printf '%s\n' "$DB_READER_TOKEN"
+}
+
+openbao_get_field() {
+  local svc="$1" key="$2" tok
+  tok="$(mint_db_reader_token)" || return 1
+  timeout 10 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
+    BAO_TOKEN="${tok}" bao kv get -field="$key" "cogni/${DEPLOY_ENVIRONMENT}/${svc}" 2>/dev/null || true
+}
+
+OPENBAO_RUNTIME_SSOT=false
+operator_eso_target_exists() {
+  command -v kubectl >/dev/null 2>&1 || return 1
+  kubectl -n "cogni-${DEPLOY_ENVIRONMENT}" get secret operator-env-secrets >/dev/null 2>&1
+}
+
+if operator_eso_target_exists; then
+  OPENBAO_RUNTIME_SSOT=true
+  log_info "operator-env-secrets exists; rendering runtime secrets from OpenBao SSoT"
+else
+  log_warn "operator-env-secrets not present; using workflow env values for fresh-env compatibility"
+fi
+
+source_openbao_runtime_key() {
+  local mode="$1" key="$2" svc value
+  shift 2
+  "$OPENBAO_RUNTIME_SSOT" || return 0
+  for svc in "$@"; do
+    value="$(openbao_get_field "$svc" "$key" || true)"
+    if [[ -n "$value" ]]; then
+      export "${key}=${value}"
+      log_info "  sourced ${key} from OpenBao cogni/${DEPLOY_ENVIRONMENT}/${svc}"
+      return 0
+    fi
+  done
+  if [[ "$mode" == "required" ]]; then
+    log_fatal "OpenBao runtime SSoT is active, but ${key} is absent from expected path(s): $*"
+  fi
+  return 0
+}
+
+source_operator_database_service_url() {
+  "$OPENBAO_RUNTIME_SSOT" || return 0
+  OPERATOR_DATABASE_SERVICE_URL="$(openbao_get_field operator DATABASE_SERVICE_URL || true)"
+  [[ -n "$OPERATOR_DATABASE_SERVICE_URL" ]] \
+    || log_fatal "OpenBao runtime SSoT is active, but operator DATABASE_SERVICE_URL is absent"
+  export OPERATOR_DATABASE_SERVICE_URL
+  log_info "  sourced scheduler-worker ledger DATABASE_URL from operator OpenBao SSoT"
+}
+
+# Established ESO environments render Compose .env, bridge Secrets, and the
+# GitHub App webhook sync from OpenBao, not GitHub Environment secret input.
+for key in \
+  AUTH_SECRET \
+  LITELLM_MASTER_KEY \
+  OPENROUTER_API_KEY \
+  SCHEDULER_API_TOKEN \
+  BILLING_INGEST_TOKEN \
+  INTERNAL_OPS_TOKEN \
+  GH_WEBHOOK_SECRET; do
+  source_openbao_runtime_key required "$key" operator node-template _shared
+done
+source_operator_database_service_url
+source_openbao_runtime_key required OPENFGA_DB_PASSWORD openfga
+source_openbao_runtime_key required TEMPORAL_DB_PASSWORD _shared
+
+for key in \
+  METRICS_TOKEN \
+  CONNECTIONS_ENCRYPTION_KEY \
+  POSTHOG_API_KEY \
+  POSTHOG_HOST \
+  EVM_RPC_URL \
+  POLYGON_RPC_URL \
+  TAVILY_API_KEY \
+  LANGFUSE_PUBLIC_KEY \
+  LANGFUSE_SECRET_KEY \
+  LANGFUSE_BASE_URL \
+  GH_REVIEW_APP_ID \
+  GH_REVIEW_APP_PRIVATE_KEY_BASE64 \
+  GH_OAUTH_CLIENT_ID \
+  GH_OAUTH_CLIENT_SECRET \
+  DISCORD_OAUTH_CLIENT_ID \
+  DISCORD_OAUTH_CLIENT_SECRET \
+  GOOGLE_OAUTH_CLIENT_ID \
+  GOOGLE_OAUTH_CLIENT_SECRET \
+  DOLTHUB_OWNER \
+  DOLT_CREDS_JWK \
+  DOLT_CREDS_KEYID \
+  DOLTHUB_API_TOKEN \
+  DOLTHUB_OAUTH_CLIENT_ID \
+  DOLTHUB_OAUTH_CLIENT_SECRET \
+  PRIVY_APP_ID \
+  PRIVY_APP_SECRET \
+  PRIVY_SIGNING_KEY \
+  PRIVY_USER_WALLETS_APP_ID \
+  PRIVY_USER_WALLETS_APP_SECRET \
+  PRIVY_USER_WALLETS_SIGNING_KEY \
+  POLY_WALLET_AEAD_KEY_HEX \
+  POLY_WALLET_AEAD_KEY_ID \
+  POLY_CLOB_GEO_BLOCK_TOKEN; do
+  source_openbao_runtime_key optional "$key" operator node-template _shared
+done
+
+# OpenFGA and Temporal DB passwords are OpenBao-custodied (Invariant 15). In
+# established ESO mode the required source_openbao_runtime_key calls above render
+# them from OpenBao and fail before Compose if OpenBao is sealed or unseeded. In
+# fresh/plain-Secret bootstrap mode, keep the workflow env values until the ESO
+# target exists.
+
 cat > "$RUNTIME_ENV" << ENV_EOF
 # Required vars
 DOMAIN=${DOMAIN}
@@ -699,6 +852,7 @@ APP_DB_PASSWORD=${APP_DB_PASSWORD}
 APP_DB_SERVICE_USER=${APP_DB_SERVICE_USER}
 APP_DB_SERVICE_PASSWORD=${APP_DB_SERVICE_PASSWORD}
 APP_DB_NAME=${APP_DB_NAME}
+OPENFGA_DB_PASSWORD=${OPENFGA_DB_PASSWORD}
 DEPLOY_ENVIRONMENT=${DEPLOY_ENVIRONMENT}
 EVM_RPC_URL=${EVM_RPC_URL}
 POLYGON_RPC_URL=${POLYGON_RPC_URL}
@@ -717,6 +871,8 @@ MIGRATOR_IMAGE=${MIGRATOR_IMAGE:-unused-by-infra-deploy}
 SCHEDULER_WORKER_IMAGE=${SCHEDULER_WORKER_IMAGE:-unused-by-infra-deploy}
 # LiteLLM image — set above from GHCR content-hash tag.
 LITELLM_IMAGE=${LITELLM_IMAGE}
+# OpenFGA image — set above from GHCR content-hash tag.
+OPENFGA_IMAGE=${OPENFGA_IMAGE}
 ENV_EOF
 
 # Verify .env was written
@@ -754,7 +910,7 @@ append_env_if_set "$RUNTIME_ENV" DISCORD_OAUTH_CLIENT_ID "${DISCORD_OAUTH_CLIENT
 append_env_if_set "$RUNTIME_ENV" DISCORD_OAUTH_CLIENT_SECRET "${DISCORD_OAUTH_CLIENT_SECRET-}"
 append_env_if_set "$RUNTIME_ENV" GOOGLE_OAUTH_CLIENT_ID "${GOOGLE_OAUTH_CLIENT_ID-}"
 append_env_if_set "$RUNTIME_ENV" GOOGLE_OAUTH_CLIENT_SECRET "${GOOGLE_OAUTH_CLIENT_SECRET-}"
-append_env_if_set "$RUNTIME_ENV" DOLTHUB_REMOTE_URL "${DOLTHUB_REMOTE_URL-}"
+append_env_if_set "$RUNTIME_ENV" DOLTHUB_OWNER "${DOLTHUB_OWNER-}"
 append_env_if_set "$RUNTIME_ENV" DOLT_CREDS_JWK "${DOLT_CREDS_JWK-}"
 append_env_if_set "$RUNTIME_ENV" DOLT_CREDS_KEYID "${DOLT_CREDS_KEYID-}"
 append_env_if_set "$RUNTIME_ENV" DOLTHUB_API_TOKEN "${DOLTHUB_API_TOKEN-}"
@@ -778,6 +934,11 @@ append_env_if_set "$RUNTIME_ENV" POLY_WALLET_AEAD_KEY_ID "${POLY_WALLET_AEAD_KEY
 append_env_if_set "$RUNTIME_ENV" POLY_CLOB_GEO_BLOCK_TOKEN "${POLY_CLOB_GEO_BLOCK_TOKEN-}"
 # BYO-AI: Connection encryption
 append_env_if_set "$RUNTIME_ENV" CONNECTIONS_ENCRYPTION_KEY "${CONNECTIONS_ENCRYPTION_KEY-}"
+# OpenFGA authn is disabled by default for the VM-internal service. When
+# enabled, seed OPENFGA_API_TOKEN through the environment/OpenBao path; never
+# commit it in manifests.
+append_env_if_set "$RUNTIME_ENV" OPENFGA_AUTHN_METHOD "${OPENFGA_AUTHN_METHOD-}"
+append_env_if_set "$RUNTIME_ENV" OPENFGA_API_TOKEN "${OPENFGA_API_TOKEN-}"
 # Grafana observability (for OpenClaw grafana-health skill)
 derive_pdc_defaults_from_token
 append_env_if_set "$RUNTIME_ENV" GRAFANA_URL "${GRAFANA_URL-}"
@@ -817,73 +978,45 @@ APP_DB_READONLY_PASSWORD="${APP_DB_READONLY_PASSWORD:-$(derive_secret postgres-r
 printf '%s=%s\n' APP_DB_READONLY_USER "$APP_DB_READONLY_USER" >> "$RUNTIME_ENV"
 printf '%s=%s\n' APP_DB_READONLY_PASSWORD "$APP_DB_READONLY_PASSWORD" >> "$RUNTIME_ENV"
 
-# Doltgres has weak GRANT support so roles are near-permissive today; derived
-# secrets are still a least-privilege improvement over a shared root pw.
-DOLTGRES_PASSWORD="${DOLTGRES_PASSWORD:-$(derive_secret doltgres-root)}"
+# Doltgres superuser password — OpenBao-custodied SSOT at the canonical operator
+# path (cogni/<env>/operator/DOLTGRES_PASSWORD). Shared env-wide (one server, every
+# node's knowledge_<node> DB), immutable post-init (Doltgres 0.56.3 can't ALTER it;
+# databases.md §5.2). Source it via the same ${DEPLOY_ENVIRONMENT}-db-reader seam as
+# OPENFGA_DB_PASSWORD above so the rendered VM .env carries the LIVE value, not a
+# re-derived one that drifts after a volume restore / root-cred rotation (the
+# 2026-06-10 prod node-substrate 28P01). A drifted volume is reconciled via
+# `pnpm secrets:set <env> operator DOLTGRES_PASSWORD` (secrets-rotate.md), never
+# re-derived. derive_secret survives ONLY as the genesis default for a fresh volume
+# OpenBao has not seeded yet (first provision, pre-materialize). The reader/writer
+# roles are CREATEd fresh each provision (ALTERable, not the superuser) — left derived.
+DOLTGRES_PASSWORD_SSOT="$(
+  openbao_get_field operator DOLTGRES_PASSWORD || true
+)"
+if [ -n "$DOLTGRES_PASSWORD_SSOT" ]; then
+  DOLTGRES_PASSWORD="$DOLTGRES_PASSWORD_SSOT"
+else
+  log_warn "Doltgres superuser SSOT empty at cogni/${DEPLOY_ENVIRONMENT}/operator/DOLTGRES_PASSWORD — using genesis derive (valid only for a fresh volume; reconcile via 'pnpm secrets:set ${DEPLOY_ENVIRONMENT} operator DOLTGRES_PASSWORD' if the volume already exists)"
+  DOLTGRES_PASSWORD="${DOLTGRES_PASSWORD:-$(derive_secret doltgres-root)}"
+fi
 DOLTGRES_READER_PASSWORD="${DOLTGRES_READER_PASSWORD:-$(derive_secret doltgres-reader)}"
 DOLTGRES_WRITER_PASSWORD="${DOLTGRES_WRITER_PASSWORD:-$(derive_secret doltgres-writer)}"
 printf '%s=%s\n' DOLTGRES_PASSWORD "$DOLTGRES_PASSWORD" >> "$RUNTIME_ENV"
 printf '%s=%s\n' DOLTGRES_READER_PASSWORD "$DOLTGRES_READER_PASSWORD" >> "$RUNTIME_ENV"
 printf '%s=%s\n' DOLTGRES_WRITER_PASSWORD "$DOLTGRES_WRITER_PASSWORD" >> "$RUNTIME_ENV"
 
+if [[ "${K8S_SECRETS_ONLY:-false}" != "true" ]]; then
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Step 2: Start edge stack (idempotent - only starts if not running)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-log_info "Ensuring edge stack (Caddy) is running..."
-if ! $EDGE_COMPOSE ps -q caddy 2>/dev/null | grep -q .; then
-  log_info "Starting edge stack..."
-  $EDGE_COMPOSE up -d
-else
-  log_info "Edge stack already running"
-  # Check for Caddyfile changes and recreate the container if needed.
-  #
-  # task.5078: previously this did `caddy reload || restart`. Reload re-reads
-  # the Caddyfile but Caddy's runtime env stays whatever was set at the
-  # original `docker compose up -d`. When deploy-infra adds a new site env
-  # var to /opt/cogni-template-edge/.env (e.g., NODE_TEMPLATE_DOMAIN), reload
-  # substitutes `{$NODE_TEMPLATE_DOMAIN}` to empty, the new server block is
-  # silently absent, no cert gets provisioned, and TLS handshake errors out
-  # for the new hostname. `docker compose up -d` (without --force-recreate)
-  # detects the env_file delta and recreates the container with the new env
-  # — fully covers the new-domain case without disturbing Caddy when only
-  # existing-site Caddyfile lines changed.
-  HASH_DIR="/var/lib/cogni"
-  CADDYFILE="/opt/cogni-template-edge/configs/Caddyfile.tmpl"
-  EDGE_ENV_FILE="/opt/cogni-template-edge/.env"
-  CADDY_HASH_FILE="$HASH_DIR/caddyfile.sha256"
-  EDGE_ENV_HASH_FILE="$HASH_DIR/edge.env.sha256"
-
-  mkdir -p "$HASH_DIR"
-  caddyfile_changed=false
-  edge_env_changed=false
-
-  if [[ -f "$CADDYFILE" ]]; then
-    NEW_CADDY_HASH=$(hash_file "$CADDYFILE")
-    OLD_CADDY_HASH=$(cat "$CADDY_HASH_FILE" 2>/dev/null || echo "none")
-    if [[ "$NEW_CADDY_HASH" != "$OLD_CADDY_HASH" && "$NEW_CADDY_HASH" != "no-hash-tool" ]]; then
-      caddyfile_changed=true
-    fi
-  fi
-  if [[ -f "$EDGE_ENV_FILE" ]]; then
-    NEW_EDGE_ENV_HASH=$(hash_file "$EDGE_ENV_FILE")
-    OLD_EDGE_ENV_HASH=$(cat "$EDGE_ENV_HASH_FILE" 2>/dev/null || echo "none")
-    if [[ "$NEW_EDGE_ENV_HASH" != "$OLD_EDGE_ENV_HASH" && "$NEW_EDGE_ENV_HASH" != "no-hash-tool" ]]; then
-      edge_env_changed=true
-    fi
-  fi
-
-  if [[ "$caddyfile_changed" == "true" || "$edge_env_changed" == "true" ]]; then
-    log_info "Edge stack config changed (caddyfile=${caddyfile_changed} env=${edge_env_changed}), recreating Caddy..."
-    # --force-recreate guarantees the container restarts even when compose's
-    # delta detector doesn't classify env_file content as a change (which is
-    # its default — env_file additions only trigger recreate via the explicit
-    # flag). Belt-and-suspenders for the new-site-env-var case from task.5078.
-    $EDGE_COMPOSE up -d --force-recreate caddy
-    [[ "$caddyfile_changed" == "true" ]] && echo "$NEW_CADDY_HASH" > "$CADDY_HASH_FILE"
-    [[ "$edge_env_changed" == "true" ]] && echo "$NEW_EDGE_ENV_HASH" > "$EDGE_ENV_HASH_FILE"
-    log_info "Caddy recreated; new env_file values + Caddyfile in effect"
-  fi
-fi
+# Edge-Caddy reconcile (start-if-down + hash-gated force-recreate) lives in one
+# shared VM-side helper that both deploy-infra and reconcile-node-substrate scp
+# + invoke. CADDYFILE is the rendered template deploy-infra writes (see Step 1).
+EDGE_COMPOSE_BIN="$EDGE_COMPOSE" \
+CADDYFILE="/opt/cogni-template-edge/configs/Caddyfile.tmpl" \
+EDGE_ENV_FILE="/opt/cogni-template-edge/.env" \
+HASH_DIR="/var/lib/cogni" \
+  bash /tmp/reconcile-edge-caddy.remote.sh
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Step 2.5: Disk cleanup gate (before any image pulls)
@@ -925,6 +1058,12 @@ if [[ "$LITELLM_IMAGE" == ghcr.io/* ]]; then
 else
   log_info "LiteLLM image is local ($LITELLM_IMAGE) — skipping pull"
 fi
+if [[ "$OPENFGA_IMAGE" == ghcr.io/* ]]; then
+  log_info "Pulling OpenFGA image: $OPENFGA_IMAGE"
+  docker pull "$OPENFGA_IMAGE"
+else
+  log_info "OpenFGA image is local ($OPENFGA_IMAGE) — skipping pull"
+fi
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Step 4: Assert profile services exist (guard against silent compose drift)
@@ -955,7 +1094,62 @@ fi
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 log_info "[$(date -u +%H:%M:%S)] Running DB provisioning..."
 emit_deployment_event "infra_deployment.db_provision_started" "in_progress" "Provisioning database users and schemas"
-$RUNTIME_COMPOSE --profile bootstrap run --rm db-provision
+# Shared infra DBs FIRST, decoupled from per-node creds. The litellm/openfga
+# root-owned DBs depend only on the root Postgres creds (.env) — never OpenBao,
+# never a node DB. On a fresh env the per-node loop below is fully fail-soft
+# (every node skips until its OpenBao creds materialize), so coupling infra-DB
+# creation to that loop left openfga uncreated → openfga-migrate hard-fails with
+# `database "openfga" does not exist`. This dedicated INFRA_ONLY pass guarantees
+# openfga + litellm exist before openfga-migrate regardless of node-cred state.
+log_info "  Provisioning shared infra DBs (litellm, openfga) — decoupled from per-node creds..."
+$RUNTIME_COMPOSE --profile bootstrap run --rm \
+  -e "PROVISION_INFRA_ONLY=1" \
+  -e "OPENFGA_DB_PASSWORD=${OPENFGA_DB_PASSWORD}" \
+  db-provision
+# Per-node db-provision (#1584): provision.sh now reconciles per-node roles
+# app_<node>/service_<node> to the per-node passwords OpenBao holds at
+# cogni/<env>/<node>, and refuses a multi-node COGNI_NODE_DBS so one shared
+# password can never leak across nodes. So loop the catalog node list (the same
+# NODE_TARGETS that drives node_database_csv) and invoke db-provision ONCE per
+# node, overriding COGNI_NODE_DBS to that single DB and injecting its OpenBao
+# passwords via -e — the same contract reconcile-node-substrate.sh uses. The
+# litellm/openfga root-owned DBs are (re)created idempotently each pass; harmless.
+# Per-node OpenBao read uses the same least-privilege ${DEPLOY_ENVIRONMENT}-db-reader
+# k8s-auth role proven above. Values are never echoed; only key names appear in logs.
+DB_READER_TOKEN=""
+mint_db_reader_token() {
+  local jwt
+  jwt=$(timeout 10 kubectl create token db-provisioner -n default 2>/dev/null) || return 1
+  timeout 10 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
+    bao write -field=token auth/kubernetes/login \
+    "role=${DEPLOY_ENVIRONMENT}-db-reader" "jwt=${jwt}" 2>/dev/null
+}
+read_node_db_secret() {
+  local node="$1" key="$2"
+  timeout 10 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
+    BAO_TOKEN="${DB_READER_TOKEN}" \
+    bao kv get -field="$key" "cogni/${DEPLOY_ENVIRONMENT}/${node}" 2>/dev/null || true
+}
+DB_READER_TOKEN="$(mint_db_reader_token || true)"
+[ -n "$DB_READER_TOKEN" ] || log_fatal "db-provision: could not mint ${DEPLOY_ENVIRONMENT}-db-reader token (OpenBao sealed / role absent) — per-node DB creds are required (#1584)"
+for node in "${NODE_TARGETS[@]}"; do
+  node_db="cogni_${node//-/_}"
+  app_pw="$(read_node_db_secret "$node" APP_DB_PASSWORD)"
+  svc_pw="$(read_node_db_secret "$node" APP_DB_SERVICE_PASSWORD)"
+  if [ -z "$app_pw" ] || [ -z "$svc_pw" ]; then
+    # fail-soft per node (parity with bug.5086 *-node-app-secrets): a dead/un-materialized
+    # catalog node must not wedge the whole env. secret-materialize owns these values.
+    log_warn "  Skipped ${node_db}: per-node DB creds absent at cogni/${DEPLOY_ENVIRONMENT}/${node} — run secret-materialize first"
+    continue
+  fi
+  log_info "  Provisioning ${node_db} (per-node OpenBao creds)..."
+  $RUNTIME_COMPOSE --profile bootstrap run --rm \
+    -e "COGNI_NODE_DBS=${node_db}" \
+    -e "APP_DB_PASSWORD=${app_pw}" \
+    -e "APP_DB_SERVICE_PASSWORD=${svc_pw}" \
+    db-provision
+done
+$RUNTIME_COMPOSE --profile bootstrap run --rm openfga-migrate
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Step 6a: Bring up Doltgres + provision DBs + roles
@@ -965,13 +1159,18 @@ $RUNTIME_COMPOSE --profile bootstrap run --rm db-provision
 # runs before the poly Deployment syncs. Same pattern as the Postgres
 # migrator Job (infra/k8s/base/node-app/migration-job.yaml).
 # Guarded on compose presence — tolerates envs where doltgres is not in the compose file.
+# DOLTGRES_PASSWORD was resolved from the operator-canonical OpenBao SSOT above (the
+# same value rendered into RUNTIME_ENV), so the provisioner connects as the live
+# superuser — no late sed-parse of DOLTGRES_URL, no derived-vs-live reconciliation here.
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 if $RUNTIME_COMPOSE config --services 2>/dev/null | grep -q '^doltgres$'; then
   log_info "[$(date -u +%H:%M:%S)] Bringing up doltgres..."
   $RUNTIME_COMPOSE up -d doltgres
 
   log_info "[$(date -u +%H:%M:%S)] Provisioning Doltgres DBs + roles..."
-  $RUNTIME_COMPOSE --profile bootstrap run --rm doltgres-provision
+  $RUNTIME_COMPOSE --profile bootstrap run --rm \
+    -e DOLTGRES_PASSWORD="$DOLTGRES_PASSWORD" \
+    doltgres-provision
 
   log_info "[$(date -u +%H:%M:%S)] Doltgres up + DBs provisioned. Schema migration runs as k8s PreSync Job."
 else
@@ -979,6 +1178,57 @@ else
 fi
 log_info "[$(date -u +%H:%M:%S)] DB provisioning complete"
 emit_deployment_event "infra_deployment.db_provision_complete" "success" "Database provisioned successfully"
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Step 6.5: Reconcile temporal-postgres superuser (idempotent; closes 28P01 trap)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Temporal runs on a DEDICATED postgres (compose service `temporal-postgres`) whose
+# `temporal` role is the SUPERUSER. That password is baked into the volume only at
+# first-init from TEMPORAL_DB_PASSWORD; nothing reconciles it afterward. When the env
+# value drifts from the frozen volume value (rotation / re-seed), the next deploy
+# restarts `temporal` against a password the volume superuser never adopted →
+# `pq: password authentication failed for user "temporal"` → temporal never binds
+# :7233 → every node's readiness fail-closes → all nodes 503 (prod + preview,
+# 2026-06-11). Reconcile the volume superuser to the OpenBao value BEFORE temporal
+# starts, idempotently every run, via the local-trust socket (no old password needed —
+# the manual heal both incidents). #1625 ALTERed a `temporal` role on the MAIN shared
+# postgres (the wrong DB) and never touched this volume; this is the real fix.
+if [[ -n "${TEMPORAL_DB_PASSWORD:-}" ]]; then
+  # TEMPORAL_DB_PASSWORD is catalog hex (generate: hex, bytes:24 → 48 hex chars);
+  # validate the shape so we never inject a malformed/quoted value into SQL.
+  if [[ "$TEMPORAL_DB_PASSWORD" =~ ^[0-9a-fA-F]+$ ]]; then
+    _tp_user="${TEMPORAL_DB_USER:-temporal}"
+    log_info "Bringing up temporal-postgres (dedicated) and reconciling its superuser..."
+    $RUNTIME_COMPOSE up -d temporal-postgres
+    # Wait for the dedicated postgres to accept local connections (pg_isready over
+    # the local-trust socket, no password) before ALTER — bounded, fail-loud.
+    _tp_elapsed=0
+    until $RUNTIME_COMPOSE exec -T temporal-postgres pg_isready -U "$_tp_user" -q; do
+      if [ "$_tp_elapsed" -ge 60 ]; then
+        log_fatal "temporal-postgres not ready after 60s — cannot reconcile superuser."
+      fi
+      sleep 2
+      _tp_elapsed=$((_tp_elapsed + 2))
+    done
+    # Local-trust socket: psql -U temporal -d postgres authenticates without the old
+    # password. Value embedded directly (NOT psql -v :'pw' — that interpolation form
+    # errored "syntax error at or near :" through the compose/exec layer during the
+    # 2026-06-11 manual converge); TEMPORAL_DB_PASSWORD is hex-validated above, so the
+    # single-quoted literal is injection-safe. SCRAM rehash every run is cheap + idempotent.
+    if $RUNTIME_COMPOSE exec -T temporal-postgres \
+        psql -U "$_tp_user" -d postgres -v ON_ERROR_STOP=1 \
+        -c "ALTER USER \"$_tp_user\" WITH PASSWORD '$TEMPORAL_DB_PASSWORD';" >/dev/null; then
+      log_info "temporal-postgres superuser reconciled to OpenBao value."
+    else
+      log_fatal "temporal-postgres superuser reconcile failed — refusing to start temporal against a drifted password (would 28P01)."
+    fi
+    unset _tp_user _tp_elapsed
+  else
+    log_fatal "TEMPORAL_DB_PASSWORD is not hex — refusing to reconcile temporal-postgres (malformed/unseeded value)."
+  fi
+else
+  log_warn "TEMPORAL_DB_PASSWORD unset (OpenBao sealed / unseeded) — skipping temporal-postgres reconcile; temporal will use the volume-init value."
+fi
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Step 6.6: Start/update infra services (rolling update, no down)
@@ -993,7 +1243,7 @@ emit_deployment_event "infra_deployment.stack_up_started" "in_progress" "Startin
 $RUNTIME_COMPOSE stop autoheal 2>/dev/null || true
 
 # Infra services only — excludes app, scheduler-worker, db-migrate, and one-shot backup jobs
-INFRA_SERVICES="postgres litellm redis alloy temporal-postgres temporal temporal-ui autoheal repo-init git-sync"
+INFRA_SERVICES="postgres litellm openfga redis alloy temporal-postgres temporal temporal-ui autoheal repo-init git-sync"
 # Doltgres is optional — only include if it's in the compose file for this env.
 if $RUNTIME_COMPOSE config --services 2>/dev/null | grep -q '^doltgres$'; then
   INFRA_SERVICES="$INFRA_SERVICES doltgres"
@@ -1011,8 +1261,34 @@ else
   log_warn "Grafana PDC agent not started: GRAFANA_PDC_SIGNING_TOKEN, GRAFANA_PDC_HOSTED_GRAFANA_ID, or GRAFANA_PDC_CLUSTER is unset"
 fi
 
+runtime_compose_up_with_retry() {
+  local profile="$1"
+  shift
+  local max_attempts=3
+  local attempt output
+  for attempt in $(seq 1 "$max_attempts"); do
+    if [[ -n "$profile" ]]; then
+      if output="$(COMPOSE_PROFILES="$profile" $RUNTIME_COMPOSE up -d --remove-orphans "$@" 2>&1)"; then
+        printf '%s\n' "$output"
+        return 0
+      fi
+    elif output="$($RUNTIME_COMPOSE up -d --remove-orphans "$@" 2>&1)"; then
+      printf '%s\n' "$output"
+      return 0
+    fi
+
+    printf '%s\n' "$output" >&2
+    if [[ "$attempt" == "$max_attempts" ]]; then
+      return 1
+    fi
+    log_warn "Runtime compose up failed on attempt ${attempt}/${max_attempts}; waiting for health state to settle before retry"
+    $RUNTIME_COMPOSE ps 2>&1 || true
+    sleep 20
+  done
+}
+
 if $pdc_enabled; then
-  COMPOSE_PROFILES=pdc $RUNTIME_COMPOSE up -d --remove-orphans $INFRA_SERVICES
+  runtime_compose_up_with_retry pdc $INFRA_SERVICES
   sleep 5
   if ! $RUNTIME_COMPOSE ps --status running pdc-agent 2>/dev/null | grep -q 'pdc-agent'; then
     log_warn "Grafana PDC agent is not running after compose up; recent logs follow"
@@ -1026,13 +1302,128 @@ if $pdc_enabled; then
   log_info "Grafana pdc-agent recent logs:"
   $RUNTIME_COMPOSE logs --tail=40 pdc-agent || true
 else
-  $RUNTIME_COMPOSE up -d --remove-orphans $INFRA_SERVICES
+  runtime_compose_up_with_retry "" $INFRA_SERVICES
 fi
 
 # Sandbox-openclaw disabled — removed from k8s catalog and compose deploy path.
 
 log_info "[$(date -u +%H:%M:%S)] Infra stack up complete"
 emit_deployment_event "infra_deployment.stack_up_complete" "success" "Infrastructure services started"
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Step 6.6a: Bootstrap OpenFGA store/model and publish operator runtime IDs
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+log_info "[$(date -u +%H:%M:%S)] Bootstrapping OpenFGA RBAC store/model..."
+if ! command -v jq >/dev/null 2>&1; then
+  if command -v apt-get >/dev/null 2>&1; then
+    log_info "jq not found on VM; installing jq for OpenFGA bootstrap..."
+    DEBIAN_FRONTEND=noninteractive apt-get update >/dev/null
+    DEBIAN_FRONTEND=noninteractive apt-get install -y jq >/dev/null
+  else
+    log_fatal "jq is required for OpenFGA bootstrap and apt-get is unavailable"
+  fi
+fi
+OPENFGA_BOOTSTRAP_ENV=$(OPENFGA_API_URL=http://127.0.0.1:8080 \
+  OPENFGA_STORE_NAME="cogni-${DEPLOY_ENVIRONMENT}-rbac" \
+  OPENFGA_MODEL_FILE=/tmp/rbac-model.json \
+  OPENFGA_API_TOKEN="${OPENFGA_API_TOKEN:-}" \
+  OPENFGA_AUTHORIZATION_MODEL_ID="$PREVIOUS_OPENFGA_AUTHORIZATION_MODEL_ID" \
+  OPENFGA_AUTHORIZATION_MODEL_HASH="$PREVIOUS_OPENFGA_AUTHORIZATION_MODEL_HASH" \
+  bash /tmp/bootstrap-openfga.sh)
+eval "$OPENFGA_BOOTSTRAP_ENV"
+printf '%s\n' "$OPENFGA_BOOTSTRAP_ENV" >> "$RUNTIME_ENV"
+log_info "OpenFGA RBAC config resolved: store=${OPENFGA_STORE_ID} model=${OPENFGA_AUTHORIZATION_MODEL_ID}"
+
+patch_operator_openfga_config() {
+  if ! command -v kubectl >/dev/null 2>&1; then
+    log_warn "kubectl not found — cannot patch OpenBao operator OpenFGA config"
+    return 1
+  fi
+  if ! timeout 10 kubectl get sa openbao-operator -n default >/dev/null 2>&1; then
+    log_warn "openbao-operator SA absent — cannot patch OpenBao operator OpenFGA config"
+    return 1
+  fi
+
+  local jwt tok op
+  jwt=$(timeout 10 kubectl create token openbao-operator -n default 2>/dev/null) || {
+    log_warn "could not mint openbao-operator token"
+    return 1
+  }
+  tok=$(timeout 10 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
+    bao write -field=token auth/kubernetes/login \
+    "role=${DEPLOY_ENVIRONMENT}-writer" "jwt=${jwt}" 2>/dev/null) || {
+    log_warn "OpenBao writer login failed for ${DEPLOY_ENVIRONMENT}-writer"
+    return 1
+  }
+
+  op="patch"
+  if ! timeout 10 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="${tok}" \
+      bao kv metadata get "cogni/${DEPLOY_ENVIRONMENT}/operator" >/dev/null 2>&1; then
+    op="put"
+  fi
+
+  timeout 20 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="${tok}" \
+    bao kv "$op" "cogni/${DEPLOY_ENVIRONMENT}/operator" \
+      "OPENFGA_STORE_ID=${OPENFGA_STORE_ID}" \
+      "OPENFGA_AUTHORIZATION_MODEL_ID=${OPENFGA_AUTHORIZATION_MODEL_ID}" \
+      "OPENFGA_AUTHORIZATION_MODEL_HASH=${OPENFGA_AUTHORIZATION_MODEL_HASH}" >/dev/null || return 1
+}
+
+refresh_operator_openfga_secret() {
+  local k8s_ns="cogni-${DEPLOY_ENVIRONMENT}" es_name="" candidate synced_store_id synced_model_id
+  for candidate in operator-env-secrets env-secrets; do
+    if kubectl -n "$k8s_ns" get externalsecret "$candidate" >/dev/null 2>&1; then
+      es_name="$candidate"
+      break
+    fi
+  done
+  if [[ -z "$es_name" ]]; then
+    # Fresh-env benign case: no operator app has synced yet, so its ExternalSecret
+    # does not exist. The runtime IDs are already durably in OpenBao (patch above,
+    # the SSOT) — ESO will pull them into the secret on the operator's FIRST rollout.
+    # This force-refresh is only an ACCELERATION for an already-running operator, so
+    # its absence is not a failure. Returning 1 here under set -e wrongly hard-fails
+    # the whole fresh-env provision (same fresh-env coupling class as the infra-DB gap).
+    log_warn "No operator ExternalSecret in ${k8s_ns} yet (fresh env); OpenFGA runtime IDs are in OpenBao — ESO will sync them on the operator's first rollout"
+    return 0
+  fi
+
+  kubectl -n "$k8s_ns" annotate externalsecret "$es_name" \
+    force-sync="$(date +%s)" --overwrite >/dev/null 2>&1 || return 1
+  log_info "Requested ESO refresh for ${es_name}"
+  kubectl -n "$k8s_ns" wait --for=condition=Ready "externalsecret/${es_name}" --timeout=120s >/dev/null 2>&1 || return 1
+
+  for _ in $(seq 1 30); do
+    synced_store_id=$(kubectl -n "$k8s_ns" get secret operator-env-secrets \
+      -o jsonpath='{.data.OPENFGA_STORE_ID}' 2>/dev/null | base64 -d 2>/dev/null || true)
+    synced_model_id=$(kubectl -n "$k8s_ns" get secret operator-env-secrets \
+      -o jsonpath='{.data.OPENFGA_AUTHORIZATION_MODEL_ID}' 2>/dev/null | base64 -d 2>/dev/null || true)
+    if [[ "$synced_store_id" == "$OPENFGA_STORE_ID" && "$synced_model_id" == "$OPENFGA_AUTHORIZATION_MODEL_ID" ]]; then
+      log_info "operator-env-secrets contains current OpenFGA runtime IDs"
+      return 0
+    fi
+    sleep 2
+  done
+
+  log_error "operator-env-secrets did not sync current OpenFGA runtime IDs"
+  return 1
+}
+
+if patch_operator_openfga_config; then
+  log_info "OpenBao operator path patched with OpenFGA runtime IDs"
+  # Best-effort acceleration ONLY. patch_operator_openfga_config above already wrote
+  # the runtime IDs to OpenBao (the SSOT, hard-gated). The ESO force-refresh just pulls
+  # them into the operator Secret sooner; ESO syncs them on its normal cycle regardless.
+  # On a fresh/rebuilding env the operator ExternalSecret may be absent OR present-but-
+  # not-yet-Ready (ESO/app still converging when deploy-infra runs in Phase 5f) — neither
+  # is a deploy failure. Never let this acceleration fail the whole provision (it did:
+  # the 120s wait timed out → return 1 → FATAL). Operator secret/pod health is proven by
+  # the readyz/promote lane, not by force-refresh convergence here.
+  refresh_operator_openfga_secret || log_warn "operator ExternalSecret force-refresh did not converge (absent or not-Ready yet); IDs are in OpenBao and ESO will sync them on its normal cycle — non-fatal"
+else
+  log_error "OpenFGA store/model exist, but operator OpenBao config was not patched"
+  exit 1
+fi
 
 ALLOY_CONFIG="/opt/cogni-template-runtime/configs/alloy-config.metrics.alloy"
 ALLOY_HASH_FILE="/var/lib/cogni/alloy-config.sha256"
@@ -1130,7 +1521,7 @@ else
 fi
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# Step 6.6a: Checksum-gated restart for LiteLLM config changes
+# Step 6.6b: Checksum-gated restart for LiteLLM config changes
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 HASH_DIR="/var/lib/cogni"
 LITELLM_CONFIG="/opt/cogni-template-runtime/configs/litellm.config.yaml"
@@ -1155,7 +1546,7 @@ else
   fi
 fi
 
-# Steps 6.6b–6.6c (OpenClaw config hash + readiness gate) removed — sandbox-openclaw disabled.
+# Steps 6.6c–6.6d (OpenClaw config hash + readiness gate) removed — sandbox-openclaw disabled.
 # Step 6.6d (alloy checksum-restart) lives near the litellm block above; main
 # already added it at 88e67cdd4 (bug.5169) so this branch's earlier copy is dropped.
 
@@ -1194,6 +1585,10 @@ if command -v kubectl &>/dev/null; then
   probe_dependency "temporal" "temporal" "7233"
   probe_dependency "litellm" "$(hostname -I | awk '{print $1}')" "4000"
   probe_dependency "redis" "$(hostname -I | awk '{print $1}')" "6379"
+fi
+
+else
+  log_info "K8s-secrets-only mode: skipping Compose infra reconcile"
 fi
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1305,7 +1700,7 @@ DISCORD_OAUTH_CLIENT_ID=${DISCORD_OAUTH_CLIENT_ID:-}
 DISCORD_OAUTH_CLIENT_SECRET=${DISCORD_OAUTH_CLIENT_SECRET:-}
 GOOGLE_OAUTH_CLIENT_ID=${GOOGLE_OAUTH_CLIENT_ID:-}
 GOOGLE_OAUTH_CLIENT_SECRET=${GOOGLE_OAUTH_CLIENT_SECRET:-}
-DOLTHUB_REMOTE_URL=${DOLTHUB_REMOTE_URL:-}
+DOLTHUB_OWNER=${DOLTHUB_OWNER:-}
 DOLT_CREDS_JWK=${DOLT_CREDS_JWK:-}
 DOLT_CREDS_KEYID=${DOLT_CREDS_KEYID:-}
 DOLTHUB_API_TOKEN=${DOLTHUB_API_TOKEN:-}
@@ -1327,6 +1722,8 @@ POLY_CLOB_GEO_BLOCK_TOKEN=${POLY_CLOB_GEO_BLOCK_TOKEN:-}
 GH_WEBHOOK_SECRET=${GH_WEBHOOK_SECRET:-}
 GH_REVIEW_APP_ID=${GH_REVIEW_APP_ID:-}
 GH_REVIEW_APP_PRIVATE_KEY_BASE64=${GH_REVIEW_APP_PRIVATE_KEY_BASE64:-}
+NODE_MINT_OWNER=${NODE_MINT_OWNER:-}
+NODE_TEMPLATE_OWNER=${NODE_TEMPLATE_OWNER:-}
 GH_REPOS=${GH_REPOS:-}
 LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY:-}
 LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY:-}
@@ -1351,7 +1748,7 @@ SECEOF
   # parity with SCHEDULER_WORKER_KEYS in scripts/setup/lib/reconcile-secrets.sh.)
   SECRET_FILE=$(mktemp)
   cat > "$SECRET_FILE" <<SECEOF
-DATABASE_URL=postgresql://${APP_DB_SERVICE_USER}:${APP_DB_SERVICE_PASSWORD}@${HOST_IP}:5432/cogni_operator?sslmode=disable
+DATABASE_URL=${OPERATOR_DATABASE_SERVICE_URL:-postgresql://${APP_DB_SERVICE_USER}:${APP_DB_SERVICE_PASSWORD}@${HOST_IP}:5432/cogni_operator?sslmode=disable}
 SCHEDULER_API_TOKEN=${SCHEDULER_API_TOKEN:-}
 INTERNAL_OPS_TOKEN=${INTERNAL_OPS_TOKEN:-}
 COGNI_NODE_DBS=${COGNI_NODE_DBS:-}
@@ -1385,6 +1782,9 @@ SECEOF
      GH_WEBHOOK_SECRET="${GH_WEBHOOK_SECRET:-}" \
      bash /tmp/sync-app-webhook-secret.sh; then
     log_info "  GitHub App webhook secret synced (pod ↔ App)"
+  elif [[ "${OPENBAO_RUNTIME_SSOT:-false}" == "true" ]]; then
+    log_error "  GitHub App webhook secret sync FAILED in OpenBao SSoT mode — refusing a silent webhook mismatch"
+    exit 1
   else
     log_warn "  GitHub App webhook secret sync FAILED — webhooks will fail verification until resolved"
   fi
@@ -1409,33 +1809,167 @@ SECEOF
   kubectl -n "${K8S_NS}" rollout restart ${NODE_APP_DEPLOYMENTS} 2>/dev/null || true
   log_info "[$(date -u +%H:%M:%S)] Node-app pods restarting (scheduler-worker waits)..."
 
+  int_or_zero() {
+    case "${1:-}" in
+      ""|*[!0-9]*) printf '0\n' ;;
+      *) printf '%s\n' "$1" ;;
+    esac
+  }
+
+  deployment_updated_available() {
+    local deployment="$1"
+    local spec updated available observed generation revision new_available deployment_name
+    deployment_name="${deployment#deployment/}"
+    spec=$(int_or_zero "$(kubectl -n "${K8S_NS}" get "$deployment" -o jsonpath='{.spec.replicas}' 2>/dev/null || true)")
+    updated=$(int_or_zero "$(kubectl -n "${K8S_NS}" get "$deployment" -o jsonpath='{.status.updatedReplicas}' 2>/dev/null || true)")
+    available=$(int_or_zero "$(kubectl -n "${K8S_NS}" get "$deployment" -o jsonpath='{.status.availableReplicas}' 2>/dev/null || true)")
+    observed=$(int_or_zero "$(kubectl -n "${K8S_NS}" get "$deployment" -o jsonpath='{.status.observedGeneration}' 2>/dev/null || true)")
+    generation=$(int_or_zero "$(kubectl -n "${K8S_NS}" get "$deployment" -o jsonpath='{.metadata.generation}' 2>/dev/null || true)")
+    revision="$(kubectl -n "${K8S_NS}" get "$deployment" -o jsonpath='{.metadata.annotations.deployment\.kubernetes\.io/revision}' 2>/dev/null || true)"
+    new_available=$(int_or_zero "$(kubectl -n "${K8S_NS}" get rs -o json 2>/dev/null | jq -r \
+      --arg deployment "${deployment_name}" \
+      --arg revision "${revision:-}" \
+      '[.items[]
+        | select(any(.metadata.ownerReferences[]?; .kind == "Deployment" and .name == $deployment))
+        | select(.metadata.annotations["deployment.kubernetes.io/revision"] == $revision)
+        | (.status.availableReplicas // 0)
+      ] | max // 0' 2>/dev/null || true)")
+    [[ "$spec" -eq 0 ]] && spec=1
+    [[ "$observed" -ge "$generation" && "$updated" -ge "$spec" && "$new_available" -ge "$spec" ]]
+  }
+
+  wait_rollout_or_updated_available() {
+    local deployment="$1" timeout="$2"
+    if kubectl -n "${K8S_NS}" rollout status "$deployment" --timeout="$timeout" 2>/dev/null; then
+      return 0
+    fi
+    if deployment_updated_available "$deployment"; then
+      log_warn "$deployment rollout status timed out, but updated replicas are available; continuing"
+      return 0
+    fi
+    return 1
+  }
+
+  operator_openfga_process_env_ready() {
+    local pod pods
+    for _ in $(seq 1 60); do
+      pods=$(kubectl -n "${K8S_NS}" get pods \
+        --field-selector=status.phase=Running \
+        -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null \
+        | grep '^operator-node-app-' || true)
+      while IFS= read -r pod; do
+        [[ -n "$pod" ]] || continue
+        if kubectl -n "${K8S_NS}" wait "pod/${pod}" --for=condition=Ready --timeout=5s >/dev/null 2>&1 \
+          && kubectl -n "${K8S_NS}" exec "$pod" -c app -- /bin/sh -c \
+            'test -n "${OPENFGA_API_URL:-}" && test -n "${OPENFGA_STORE_ID:-}" && test -n "${OPENFGA_AUTHORIZATION_MODEL_ID:-}"' 2>/dev/null; then
+          return 0
+        fi
+      done <<< "$pods"
+      sleep 2
+    done
+    return 1
+  }
+
+  operator_deployment_declares_openfga_config() {
+    local api_url secret_refs
+    api_url="$(kubectl -n "${K8S_NS}" get configmap operator-node-app-config \
+      -o jsonpath='{.data.OPENFGA_API_URL}' 2>/dev/null || true)"
+    secret_refs="$(kubectl -n "${K8S_NS}" get deployment operator-node-app \
+      -o jsonpath='{range .spec.template.spec.containers[*].envFrom[*]}{.secretRef.name}{"\n"}{end}' 2>/dev/null || true)"
+    [[ -n "$api_url" ]] && grep -qx 'operator-env-secrets' <<< "$secret_refs"
+  }
+
+  log_operator_openfga_env_diagnostics() {
+    local secret_refs pod pods
+    log_warn "operator OpenFGA process-env diagnostics follow (key presence only)"
+    kubectl -n "${K8S_NS}" get configmap operator-node-app-config \
+      -o jsonpath='operator-node-app-config.OPENFGA_API_URL={.data.OPENFGA_API_URL}{"\n"}' 2>/dev/null || true
+    secret_refs="$(kubectl -n "${K8S_NS}" get deployment operator-node-app \
+      -o jsonpath='{range .spec.template.spec.containers[*].envFrom[*]}{.secretRef.name}{"\n"}{end}' 2>/dev/null || true)"
+    printf 'operator-node-app container secretRefs:\n%s\n' "${secret_refs:-<none>}"
+    kubectl -n "${K8S_NS}" get pods -o wide | grep '^operator-node-app-' || true
+    pods=$(kubectl -n "${K8S_NS}" get pods \
+      --field-selector=status.phase=Running \
+      -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null \
+      | grep '^operator-node-app-' || true)
+    while IFS= read -r pod; do
+      [[ -n "$pod" ]] || continue
+      printf 'operator pod %s env key presence:\n' "$pod"
+      kubectl -n "${K8S_NS}" exec "$pod" -c app -- /bin/sh -c '
+        for key in OPENFGA_API_URL OPENFGA_STORE_ID OPENFGA_AUTHORIZATION_MODEL_ID; do
+          eval "value=\${$key:-}"
+          if [ -n "$value" ]; then
+            printf "%s=present\n" "$key"
+          else
+            printf "%s=missing\n" "$key"
+          fi
+        done
+      ' 2>/dev/null || true
+    done <<< "$pods"
+  }
+
   # ── Wait for node-app rollouts first ───────────────────────────────────────
   ROLLOUT_PIDS=""
   for node in ${NODE_APP_TARGETS}; do
-    kubectl -n "${K8S_NS}" rollout status "deployment/${node}-node-app" --timeout=300s 2>/dev/null &
+    wait_rollout_or_updated_available "deployment/${node}-node-app" 300s &
     ROLLOUT_PIDS="$ROLLOUT_PIDS $!"
   done
-  ROLLOUT_FAILED=0
+  NODE_APP_ROLLOUT_FAILED=0
   for pid in $ROLLOUT_PIDS; do
     if ! wait "$pid"; then
-      ROLLOUT_FAILED=1
+      NODE_APP_ROLLOUT_FAILED=1
     fi
   done
-  if [ $ROLLOUT_FAILED -ne 0 ]; then
+  if [ $NODE_APP_ROLLOUT_FAILED -ne 0 ]; then
     log_warn "One or more node-app rollouts did not complete within 300s"
   fi
   log_info "[$(date -u +%H:%M:%S)] Node-apps ready — rolling scheduler-worker"
 
   # ── Roll scheduler-worker only after node-apps are ready ───────────────────
-  kubectl -n "${K8S_NS}" rollout restart deployment/scheduler-worker 2>/dev/null || true
-  if ! kubectl -n "${K8S_NS}" rollout status deployment/scheduler-worker --timeout=300s 2>/dev/null; then
-    log_warn "scheduler-worker rollout did not complete within 300s"
-    ROLLOUT_FAILED=1
+  # Fresh-env ordering: deploy-infra runs in provision-env-vm.sh Phase 5f, BEFORE
+  # Phase 7 applies the ApplicationSets that create the Argo Apps → Deployments. So
+  # on a fresh provision this Deployment legitimately does not exist yet. Tolerate
+  # that (the AppSet sync + the deploy/flight verify lane own app-tier health); stay
+  # fatal only when the Deployment EXISTS but fails to roll out (established-env
+  # regression). Same benign-on-absent / fatal-on-real-failure shape as the OpenFGA
+  # ExternalSecret refresh above.
+  ROLLOUT_FAILED=0
+  if ! kubectl -n "${K8S_NS}" get deployment/scheduler-worker >/dev/null 2>&1; then
+    log_warn "scheduler-worker Deployment not present yet (fresh env; ApplicationSets apply in Phase 7, after this) — skipping rollout verification; the AppSet sync + deploy/flight lane own app-tier health"
+  else
+    kubectl -n "${K8S_NS}" rollout restart deployment/scheduler-worker 2>/dev/null || true
+    if ! wait_rollout_or_updated_available deployment/scheduler-worker 300s; then
+      log_warn "scheduler-worker rollout did not complete within 300s"
+      ROLLOUT_FAILED=1
+    fi
+  fi
+  if [[ " ${NODE_APP_TARGETS} " == *" operator "* ]]; then
+    if ! operator_deployment_declares_openfga_config; then
+      log_warn "operator deployment does not yet declare OpenFGA config; skipping process-env proof until the app flight applies the OpenFGA-aware overlay"
+    elif operator_openfga_process_env_ready; then
+      log_info "operator pod process env contains OpenFGA URL, store ID, and model ID"
+    else
+      # Non-fatal (same fresh-env class as the ExternalSecret refresh): on a fresh/
+      # rebuilding env the operator pod env may not have the OpenFGA IDs YET because
+      # ESO/the app are still converging when deploy-infra runs in Phase 5f. The IDs are
+      # in OpenBao (SSOT); ESO syncs them; operator RBAC readiness is proven by the
+      # readyz/promote lane, not by deploy-infra. Diagnostics only — do not abort.
+      log_operator_openfga_env_diagnostics
+      log_warn "operator pod process env not yet showing OpenFGA URL/store/model IDs (ESO still converging) — non-fatal; readyz/promote lane proves operator readiness"
+    fi
   fi
   log_info "[$(date -u +%H:%M:%S)] All rollouts complete"
+  if [ $ROLLOUT_FAILED -ne 0 ]; then
+    exit 1
+  fi
   emit_deployment_event "infra_deployment.rollouts_complete" "success" "All k8s deployments rolled out"
 else
   log_warn "kubectl not found — skipping k8s secret creation (k3s may not be installed)"
+fi
+
+if [[ "${K8S_SECRETS_ONLY:-false}" == "true" ]]; then
+  log_info "K8s-secrets-only mode complete"
+  exit 0
 fi
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1594,9 +2128,13 @@ scp $SSH_OPTS "$ARTIFACT_DIR/deploy-infra-remote.sh" root@"$VM_HOST":/tmp/deploy
 # Upload healthcheck and bootstrap scripts (called from deploy-infra-remote.sh)
 scp $SSH_OPTS \
   "$REPO_ROOT/scripts/ci/ensure-temporal-namespace.sh" \
+  "$REPO_ROOT/scripts/ci/bootstrap-openfga.sh" \
+  "$REPO_ROOT/scripts/ci/reconcile-edge-caddy.remote.sh" \
   "$REPO_ROOT/infra/provision/cherry/harden-docker-public-ports.sh" \
   "$REPO_ROOT/scripts/secrets/sync-app-webhook-secret.sh" \
   root@"$VM_HOST":/tmp/
+
+scp $SSH_OPTS "$REPO_ROOT/infra/openfga/rbac-model.json" root@"$VM_HOST":/tmp/rbac-model.json
 
 # Verify SCP landed correctly
 REMOTE_CHECK=$(ssh $SSH_OPTS root@"$VM_HOST" "echo host=\$(hostname) date=\$(date -u +%Y-%m-%dT%H:%M:%SZ) && sha256sum /tmp/deploy-infra-remote.sh | awk '{print \$1}'" 2>&1) || {
@@ -1625,6 +2163,7 @@ log_info "deploy-infra-remote.sh verified on VM (sha256 match)"
 # still hard-fail HERE on the runner if unset.
 : "${COGNI_DEFAULT_NODE_ID:?COGNI_DEFAULT_NODE_ID required (resolved on runner from repo-spec primary-host)}"
 : "${LITELLM_IMAGE:?LITELLM_IMAGE required (resolved on runner from infra/catalog/litellm.yaml content-hash)}"
+: "${OPENFGA_IMAGE:?OPENFGA_IMAGE required (resolved on runner from infra/catalog/openfga.yaml content-hash)}"
 COMMIT_SHA="${GITHUB_SHA:-$(git rev-parse HEAD 2>/dev/null || echo unknown)}"
 DEPLOY_ACTOR="${GITHUB_ACTOR:-$(whoami)}"
 
@@ -1634,7 +2173,7 @@ REMOTE_ENV_VARS=(
   POSTGRES_ROOT_USER POSTGRES_ROOT_PASSWORD APP_DB_USER APP_DB_PASSWORD
   APP_DB_SERVICE_USER APP_DB_SERVICE_PASSWORD APP_DB_READONLY_USER
   APP_DB_READONLY_PASSWORD APP_DB_NAME EVM_RPC_URL POLYGON_RPC_URL
-  TEMPORAL_DB_USER TEMPORAL_DB_PASSWORD GHCR_DEPLOY_TOKEN GHCR_USERNAME
+  TEMPORAL_DB_USER GHCR_DEPLOY_TOKEN GHCR_USERNAME
   GRAFANA_CLOUD_LOKI_URL GRAFANA_CLOUD_LOKI_USER GRAFANA_CLOUD_LOKI_API_KEY
   METRICS_TOKEN SCHEDULER_API_TOKEN BILLING_INGEST_TOKEN INTERNAL_OPS_TOKEN
   WORK_ITEMS_NOTION_TOKEN WORK_ITEMS_NOTION_DATA_SOURCE_ID WORK_ITEMS_NOTION_VERSION
@@ -1648,15 +2187,18 @@ REMOTE_ENV_VARS=(
   GRAFANA_PDC_NETWORK_UUID POSTHOG_API_KEY POSTHOG_HOST TAVILY_API_KEY
   DISCORD_BOT_TOKEN GH_OAUTH_CLIENT_ID GH_OAUTH_CLIENT_SECRET
   DISCORD_OAUTH_CLIENT_ID DISCORD_OAUTH_CLIENT_SECRET GOOGLE_OAUTH_CLIENT_ID
-  GOOGLE_OAUTH_CLIENT_SECRET DOLTHUB_REMOTE_URL DOLT_CREDS_JWK DOLT_CREDS_KEYID
-  DOLTHUB_API_TOKEN DOLTHUB_OAUTH_CLIENT_ID DOLTHUB_OAUTH_CLIENT_SECRET
+  GOOGLE_OAUTH_CLIENT_SECRET DOLTHUB_OWNER
+  DOLT_CREDS_JWK DOLT_CREDS_KEYID DOLTHUB_API_TOKEN
+  DOLTHUB_OAUTH_CLIENT_ID DOLTHUB_OAUTH_CLIENT_SECRET
   GH_REVIEW_APP_ID GH_REVIEW_APP_PRIVATE_KEY_BASE64 GH_REPOS GH_WEBHOOK_SECRET
+  NODE_MINT_OWNER NODE_TEMPLATE_OWNER
   PRIVY_APP_ID PRIVY_APP_SECRET PRIVY_SIGNING_KEY PRIVY_USER_WALLETS_APP_ID
   PRIVY_USER_WALLETS_APP_SECRET PRIVY_USER_WALLETS_SIGNING_KEY
   POLY_WALLET_AEAD_KEY_HEX POLY_WALLET_AEAD_KEY_ID POLY_CLOB_GEO_BLOCK_TOKEN
   CONNECTIONS_ENCRYPTION_KEY COGNI_NODE_DBS NODE_APP_TARGETS EDGE_ENV_LINES
   LITELLM_NODE_ENDPOINTS COGNI_DEFAULT_NODE_ID ACTIONS_AUTOMATION_BOT_PAT
-  LITELLM_IMAGE COMMIT_SHA DEPLOY_ACTOR
+  LITELLM_IMAGE OPENFGA_IMAGE COMMIT_SHA DEPLOY_ACTOR K8S_SECRETS_ONLY
+  OPERATOR_DATABASE_SERVICE_URL
 )
 REMOTE_ENV_FILE="$ARTIFACT_DIR/deploy-infra-env.sh"
 : > "$REMOTE_ENV_FILE"

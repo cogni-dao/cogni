@@ -14,7 +14,7 @@
 #
 #   next-free-node-port.sh           # print the next free port = max(node_port)+100
 #                                     # (preserves the ~x00 stride). The scaffolder
-#                                     # / node-birth wizard calls this when minting
+#                                     # / node-formation wizard calls this when minting
 #                                     # a new type:node catalog entry.
 #
 #   next-free-node-port.sh --check    # assert node_port is UNIQUE across the

@@ -9,7 +9,7 @@
  *   - TOOL_ID_NAMESPACED: ID is `core__knowledge_write`
  *   - EFFECT_TYPED: effect is `state_change`
  *   - AUTO_COMMIT: Every write creates a Doltgres commit automatically.
- *   - CONFIDENCE_DEFAULTS: New entries default to 30% (draft).
+ *   - CONFIDENCE_IS_POLICY: Confidence is never author-set; the domain policy initializes + recomputes it.
  * Side-effects: IO (database write + dolt_commit via capability)
  * Links: docs/spec/knowledge-data-plane.md
  * @public
@@ -57,15 +57,6 @@ export const KnowledgeWriteInputSchema = z.object({
     .string()
     .optional()
     .describe("Optional stable subject key (e.g., a market ID, entity name)"),
-  confidencePct: z
-    .number()
-    .int()
-    .min(0)
-    .max(100)
-    .optional()
-    .describe(
-      "Confidence 0-100. Defaults to 30 (draft). 80=verified, 95+=hardened."
-    ),
   sourceRef: z
     .string()
     .optional()
@@ -74,6 +65,30 @@ export const KnowledgeWriteInputSchema = z.object({
     .array(z.string())
     .optional()
     .describe("Searchable tags for categorization"),
+  citations: z
+    .array(
+      z.object({
+        citedId: z
+          .string()
+          .min(1)
+          .max(200)
+          .describe("ID of an existing knowledge entry to link to"),
+        citationType: z
+          .enum(["supports", "contradicts", "extends", "supersedes"])
+          .describe(
+            "Edge type: supports/extends corroborate, contradicts disputes, supersedes marks lineage"
+          ),
+        context: z
+          .string()
+          .max(512)
+          .optional()
+          .describe("One sentence on why this edge exists"),
+      })
+    )
+    .optional()
+    .describe(
+      "Outgoing edges linking THIS entry to existing atoms — compound knowledge instead of writing it flat. E.g. a synthesis that `supports` the findings it summarizes. Committed atomically with the entry. (Hypothesis-loop edges go through core__edo_* tools, not here.)"
+    ),
 });
 export type KnowledgeWriteInput = z.infer<typeof KnowledgeWriteInputSchema>;
 
@@ -87,6 +102,7 @@ export const KnowledgeWriteOutputSchema = z.object({
     tags: z.array(z.string()).nullable(),
   }),
   committed: z.boolean(),
+  citationsWritten: z.number(),
   message: z.string(),
 });
 export type KnowledgeWriteOutput = z.infer<typeof KnowledgeWriteOutputSchema>;
@@ -108,12 +124,13 @@ export const knowledgeWriteContract: ToolContract<
     "Use this to persist curated facts, research findings, or analysis results. " +
     "New entries default to 30% confidence (draft). " +
     "Include a sourceRef (URL, DOI, signal ID) for provenance tracking. " +
+    "Pass `citations` to link this entry to existing atoms (supports/extends/supersedes/contradicts) and compound knowledge instead of writing it flat. " +
     "Every write creates a versioned Doltgres commit automatically.",
   effect: "state_change",
   inputSchema: KnowledgeWriteInputSchema,
   outputSchema: KnowledgeWriteOutputSchema,
   redact: (output) => output,
-  allowlist: ["entry", "committed", "message"] as const,
+  allowlist: ["entry", "committed", "citationsWritten", "message"] as const,
 };
 
 // ─── Implementation ──────────────────────────────────────────────────────────
@@ -139,11 +156,14 @@ export function createKnowledgeWriteImplementation(
         content: input.content,
         sourceType: input.sourceType,
         entityId: input.entityId,
-        confidencePct: input.confidencePct ?? CONFIDENCE.DRAFT,
         sourceRef: input.sourceRef,
         tags: input.tags,
+        citations: input.citations,
       });
 
+      const citationsWritten = input.citations?.length ?? 0;
+      const linkSuffix =
+        citationsWritten > 0 ? `, ${citationsWritten} edge(s) linked` : "";
       return {
         entry: {
           id: entry.id,
@@ -154,7 +174,8 @@ export function createKnowledgeWriteImplementation(
           tags: entry.tags,
         },
         committed: true,
-        message: `Knowledge '${entry.id}' written and committed (confidence: ${entry.confidencePct ?? CONFIDENCE.DRAFT}%)`,
+        citationsWritten,
+        message: `Knowledge '${entry.id}' written and committed (confidence: ${entry.confidencePct ?? CONFIDENCE.DRAFT}%${linkSuffix})`,
       };
     },
   };

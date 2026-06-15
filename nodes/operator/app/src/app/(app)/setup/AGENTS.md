@@ -9,7 +9,7 @@
 
 ## Purpose
 
-Web pages for DAO formation and node configuration workflows. Protected route group requiring wallet connection.
+Legacy setup pages. Protected route group requiring wallet connection.
 
 ## Pointers
 
@@ -29,21 +29,20 @@ Web pages for DAO formation and node configuration workflows. Protected route gr
 ## Public Surface
 
 - **Routes:**
-  - `/setup/nodes` [GET] - DB-backed node registration + formation wizard
-  - `/setup/nodes/[id]` [GET] - canonical per-node setup wizard
-  - `/setup/dao` [GET] - legacy redirect to `/setup/nodes`
+  - `/setup/dao` [GET] - legacy redirect to `/nodes`
+  - `/setup/dao/payments` [GET] - legacy redirect to `/nodes/payments`
 - **Exports:** none (page components only)
 
 ## Responsibilities
 
-- This directory **does**: Render setup pages, wire feature hooks to UI components
+- This directory **does**: Redirect legacy setup URLs to canonical node routes
 - This directory **does not**: Contain transaction logic, state machines, or API calls
 
 ## Usage
 
 ```bash
 # Access page (requires running dev server + wallet connection)
-open http://localhost:3000/setup/nodes
+open http://localhost:3000/setup/dao
 ```
 
 ## Standards

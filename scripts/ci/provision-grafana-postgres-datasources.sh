@@ -12,6 +12,10 @@ log() {
   echo "[grafana-postgres] $*"
 }
 
+# DRIFT GUARD (bug.5031): the postgres-readonly derivation below is duplicated in
+# infra/compose/runtime/postgres-init/provision.sh (which creates the role this
+# datasource authenticates as). The two MUST stay byte-identical; change both or
+# neither.
 derive_secret() {
   local salt="$1"
   if command -v openssl >/dev/null 2>&1; then

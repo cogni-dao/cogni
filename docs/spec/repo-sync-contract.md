@@ -23,8 +23,8 @@ tags:
 
 Cogni's deployment artifacts span three git repos today:
 
-- `Cogni-DAO/cogni` — the **monorepo hub**. Holds `nodes/operator/`, `nodes/node-template/`, `nodes/resy/`, plus the canonical `scripts/ci/`, `infra/k8s/base/`, `.github/workflows/`, `infra/compose/`, `infra/catalog/`.
-- `Cogni-DAO/standalone-node` — the **OSS template artifact**. Public surface for forks. Mirrors the hub's `nodes/node-template/` 1:1 and inherits operator-scope infrastructure.
+- `Cogni-DAO/cogni` — the **operator control-plane hub**. Holds `nodes/operator/`, submodule pins for hosted node repos, any remaining legacy in-tree node directories while they are being migrated, plus the canonical `scripts/ci/`, `infra/k8s/base/`, `.github/workflows/`, `infra/compose/`, `infra/catalog/`.
+- `Cogni-DAO/node-template` — the **canonical node-at-root template**. Public source for named node forks. The hub may pin it as a submodule/deployment row, but does not mirror its source under `nodes/node-template/**`.
 - `Cogni-DAO/cogni-poly` — a **per-node fork artifact**. Polymarket-specific node that historically branched off node-template; continues to land operator-scope CI/infra fixes that the hub needs.
 
 Operator-scope fixes have been diverging across these three repos with no shared lineage. Empirical evidence and the backlog of unsynced PRs are tracked in [proj.repo-sync](../../work/projects/proj.repo-sync.md). The canonical example: `scripts/ci/wait-for-in-cluster-services.sh` is byte-identical-stale between hub and node-template, while cogni-poly already eliminated the divergence in [#127](https://github.com/Cogni-DAO/cogni-poly/pull/127). bug.5001 is the same anti-pattern repeated.
@@ -60,11 +60,11 @@ Define the contract that:
 
 4. **DECLARED_DIVERGENCE**: Any intentional divergence between a hub path and its artifact counterpart MUST appear in the manifest's `divergences:` block with a `reason:` field. Undeclared divergence is a contract violation surfaced by the drift detector.
 
-5. **MULTI_NODE_OUT_OF_BOX**: The hub MUST ship multi-node fundamentals (catalog-driven Caddyfile, catalog-driven `deploy-infra.sh` per-node env vars, catalog-driven CI gating). node-template inherits these and ships them in fork-quickstart even though it ships with one node today. Single-node hardcoding in operator-scope paths is a contract violation regardless of which repo it lives in.
+5. **MULTI_NODE_OUT_OF_BOX**: The hub MUST ship multi-node fundamentals (catalog-driven Caddyfile, catalog-driven `deploy-infra.sh` per-node env vars, catalog-driven CI gating). node-template ports the relevant operator-hosted node contract without becoming an in-tree hub source directory. Single-node hardcoding in operator-scope paths is a contract violation regardless of which repo it lives in.
 
 6. **ONE_FIX_ONE_LINEAGE**: A fix that addresses the same root cause as an existing upstream PR MUST cite the upstream PR in its description and be cherry-picked or rebased onto upstream's commit, not re-implemented. Reviewers reject parallel fixes with no shared lineage.
 
-7. **CATALOG_BOUNDARY**: `infra/catalog/*.yaml` is the API between operator-scope and per-node scope. Operator-scope code reads from the catalog and never special-cases node names. Per-node bits (a node's own `nodes/<name>/`) are downstream-only and do not propagate up — with the sole exception of `nodes/node-template/`, which IS the canonical template node and propagates hub → node-template-artifact 1:1.
+7. **CATALOG_BOUNDARY**: `infra/catalog/*.yaml` is the API between operator-scope and per-node scope. Operator-scope code reads from the catalog and never special-cases node names. Per-node source bits live in their source repo. A hub `nodes/<name>` gitlink is an operator pin, not source content.
 
 ---
 
@@ -73,8 +73,8 @@ Define the contract that:
 ```
                               Cogni-DAO/cogni  (HUB)
                               ├── nodes/operator/         (operator app, hub-only)
-                              ├── nodes/node-template/    (template node — exported to node-template-artifact)
-                              ├── nodes/resy/             (per-node, hub-only)
+                              ├── nodes/node-template     (gitlink pin to Cogni-DAO/node-template)
+                              ├── nodes/<legacy>/         (transitional in-tree node source, if any)
                               ├── scripts/ci/             (operator-scope)
                               ├── scripts/setup/          (operator-scope)
                               ├── infra/k8s/base/         (operator-scope)
@@ -87,12 +87,12 @@ Define the contract that:
                                        │
                           ┌────────────┴────────────┐
                           ▼                          ▼
-                Cogni-DAO/standalone-node       Cogni-DAO/cogni-poly
-                (OSS template artifact)       (per-node fork artifact)
-                ├── nodes/node-template/      ├── nodes/poly/         (fork-owned, not hub-mirrored)
-                │   (mirrors hub 1:1)         └── operator-scope paths (hub-mirrored)
-                └── operator-scope paths
-                    (hub-mirrored)
+                Cogni-DAO/node-template          Cogni-DAO/cogni-poly
+                (node-at-root template)        (per-node fork artifact)
+                ├── app/                       ├── nodes/poly/         (fork-owned, not hub-mirrored)
+                ├── graphs/                    └── operator-scope paths (hub-mirrored)
+                ├── packages/
+                └── operator-hosted node contract files
 ```
 
 **Primary flow:** hub → artifacts (forward sync).

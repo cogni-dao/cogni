@@ -17,6 +17,7 @@ export const tsupConfig = defineConfig({
   entry: [
     "src/index.ts",
     "src/domain/contribution-schemas.ts",
+    "src/domain/goal-loop.ts",
     "src/adapters/doltgres/index.ts",
     "src/adapters/fake/index.ts",
   ],

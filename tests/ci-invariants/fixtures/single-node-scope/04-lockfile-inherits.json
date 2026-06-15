@@ -1,8 +1,8 @@
 {
-  "name": "lockfile-inherits: poly package.json + pnpm-lock.yaml",
-  "paths": ["nodes/node-template/app/package.json", "pnpm-lock.yaml"],
+  "name": "lockfile-inherits: legacy-alpha package.json + pnpm-lock.yaml",
+  "paths": ["nodes/legacy-alpha/app/package.json", "pnpm-lock.yaml"],
   "expected": {
-    "domains": ["node-template"],
+    "domains": ["legacy-alpha"],
     "pass": true,
     "rideAlongApplied": true
   }

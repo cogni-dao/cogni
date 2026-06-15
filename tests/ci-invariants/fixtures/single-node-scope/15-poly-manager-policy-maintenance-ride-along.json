@@ -1,8 +1,8 @@
 {
-  "name": "ride-along: poly node files + poly manager skill + single-node-scope policy maintenance",
+  "name": "ride-along: legacy node files + legacy maintenance skill + single-node-scope policy maintenance",
   "paths": [
-    "nodes/node-template/app/src/foo.ts",
-    ".claude/skills/poly-dev-manager/SKILL.md",
+    "nodes/legacy-alpha/app/src/foo.ts",
+    ".claude/skills/legacy-node-maintainer/SKILL.md",
     ".github/workflows/ci.yaml",
     "docs/design/poly-bet-sizer-v1.md",
     "docs/research/poly/layering-policy-spike-2026-05-02.md",
@@ -14,7 +14,7 @@
     "tests/unit/packages/repo-spec/accessors.test.ts"
   ],
   "expected": {
-    "domains": ["node-template"],
+    "domains": ["legacy-alpha"],
     "pass": true,
     "rideAlongApplied": true
   }

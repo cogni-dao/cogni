@@ -3,10 +3,11 @@
 
 /**
  * Module: `@tests/ci-invariants/catalog-identity-ssot`
- * Purpose: Pins REPO_SPEC_IS_IDENTITY_SSOT — `node_id` is declared only in `nodes/<name>/.cogni/repo-spec.yaml` (the web3-anchored authority), never duplicated in `infra/catalog/*.yaml`, so the billing/routing CSVs in `image-tags.sh` resolve identity from one source.
+ * Purpose: Pins REPO_SPEC_IS_IDENTITY_SSOT — `node_id` authority lives in `nodes/<name>/.cogni/repo-spec.yaml`. In-repo rows read it directly; a submodule row (`source_repo` set, repo-spec unreadable from the parent) carries a drift-gated `node_id` PROJECTION in the catalog so `image-tags.sh`'s routing/billing CSVs resolve identity (verify-scheduler-endpoints asserts they match).
  * Scope: Static structural test that reads catalog + repo-spec files; does not shell out, build, or hit the network.
  * Invariants:
- *   NO_CATALOG_NODE_ID: no catalog entry may carry a `node_id` key (deploy-shape ≠ identity).
+ *   IN_REPO_NODE_NO_CATALOG_NODE_ID: a row without `source_repo` must NOT carry `node_id` — identity stays in repo-spec.
+ *   SUBMODULE_NODE_HAS_CATALOG_NODE_ID: a row with `source_repo` must carry a UUID `node_id` projection.
  *   EVERY_INLINE_NODE_HAS_REPO_SPEC_ID: every inline `type: node` catalog entry has a repo-spec
  *     with a UUID `node_id`; submodule pins are external identities.
  * Side-effects: IO (reads infra/catalog/*.yaml and nodes/<name>/.cogni/repo-spec.yaml)
@@ -15,20 +16,20 @@
  * @public
  */
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import yaml from "yaml";
 
 const REPO_ROOT = path.resolve(__dirname, "../..");
 const CATALOG_DIR = path.join(REPO_ROOT, "infra/catalog");
-const GITMODULES_PATH = path.join(REPO_ROOT, ".gitmodules");
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 interface CatalogEntry {
   name: string;
   type: "node" | "service";
   path_prefix?: string;
+  source_repo?: unknown;
   node_id?: unknown;
 }
 
@@ -44,36 +45,41 @@ function listCatalogEntries(): { file: string; entry: CatalogEntry }[] {
     }));
 }
 
-function listSubmodulePrefixes(): Set<string> {
-  if (!existsSync(GITMODULES_PATH)) return new Set();
-  const prefixes = new Set<string>();
-  for (const line of readFileSync(GITMODULES_PATH, "utf8").split("\n")) {
-    const match = line.match(/^\s*path\s*=\s*(nodes\/[^/\s]+)\s*$/);
-    if (match?.[1]) prefixes.add(`${match[1]}/`);
-  }
-  return prefixes;
-}
-
 describe("catalog identity SSOT (REPO_SPEC_IS_IDENTITY_SSOT)", () => {
   const entries = listCatalogEntries();
-  const submodulePrefixes = listSubmodulePrefixes();
 
-  it("no catalog entry declares node_id (identity lives in repo-spec, not the catalog)", () => {
+  it("in-repo rows (no source_repo) do not declare node_id (identity lives in repo-spec)", () => {
     const offenders = entries
+      .filter(({ entry }) => !Object.hasOwn(entry, "source_repo"))
       .filter(({ entry }) => Object.hasOwn(entry, "node_id"))
       .map(({ file }) => file);
     expect(
       offenders,
-      `infra/catalog/${offenders.join(", ")} must NOT declare node_id — it is sourced ` +
-        "from nodes/<name>/.cogni/repo-spec.yaml. Remove the catalog node_id."
+      `infra/catalog/${offenders.join(", ")} must NOT declare node_id — an in-repo node's ` +
+        "identity is sourced from nodes/<name>/.cogni/repo-spec.yaml. Remove the catalog node_id."
+    ).toEqual([]);
+  });
+
+  it("submodule rows (source_repo set) carry a UUID node_id projection", () => {
+    const missing = entries
+      .filter(({ entry }) => Object.hasOwn(entry, "source_repo"))
+      .filter(({ entry }) => !UUID.test(String(entry.node_id ?? "")))
+      .map(({ file }) => file);
+    expect(
+      missing,
+      `infra/catalog/${missing.join(", ")} (submodule rows) must declare a UUID node_id — ` +
+        "the drift-gated projection of the parent-unreadable repo-spec node_id."
     ).toEqual([]);
   });
 
   it("every inline type:node entry has a repo-spec with a UUID node_id", () => {
     for (const { file, entry } of entries) {
       if (entry.type !== "node") continue;
+      // Remote-source nodes (source_repo set) live in their own repo — no
+      // in-parent repo-spec; their identity is the catalog node_id projection
+      // (asserted above). Only inline nodes carry a parent repo-spec.
+      if (Object.hasOwn(entry, "source_repo")) continue;
       const prefix = entry.path_prefix ?? `nodes/${entry.name}/`;
-      if (submodulePrefixes.has(prefix)) continue;
       const specPath = path.join(REPO_ROOT, prefix, ".cogni/repo-spec.yaml");
       const spec = yaml.parse(readFileSync(specPath, "utf8")) as {
         node_id?: string;

@@ -62,7 +62,7 @@ export const NODE_PROGRESS_STEPS: ReadonlyArray<{
   { label: "Register" },
   { label: "DAO" },
   { label: "Repo" },
-  { label: "Wallet" },
+  { label: "Handoff" },
   { label: "Payments" },
 ];
 
@@ -101,6 +101,6 @@ export function wizardUrlForStatus(nodeId: string, status: NodeStatus): string {
     case "payments_ready":
     case "active":
     case "failed":
-      return `/setup/nodes/${nodeId}`;
+      return `/nodes/${nodeId}`;
   }
 }

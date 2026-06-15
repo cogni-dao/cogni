@@ -18,14 +18,14 @@ tags: [nodes, dev, infrastructure]
 
 ```
 nodes/operator/         → Operator dashboard (port 3000)
-nodes/node-template/    → Base template for new nodes
-nodes/poly/             → Poly prediction node (port 3100)
-nodes/resy/             → Resy reservations node (port 3300)
+nodes/node-template     → Gitlink pin to the external node-template repo
+nodes/<legacy>/         → Transitional in-tree node source, pending externalization
 ```
 
-Each node has two workspace packages: `app/` (Next.js) and `graphs/` (AI graphs).
-All nodes share infra services (Postgres, Temporal, LiteLLM, Redis) and the same
-database. Auth sessions are shared — sign in once, use any node.
+The forward model is node-at-root source repos pinned into the operator repo as
+`nodes/<slug>` gitlinks. A checked-out external node owns its own `app/`,
+`graphs/`, packages, CI, and tests in that source repo. Remaining in-tree node
+directories are migration surfaces, not the pattern for new work.
 
 ## Running Locally
 
@@ -33,12 +33,11 @@ database. Auth sessions are shared — sign in once, use any node.
 # Start infra + operator (always first)
 pnpm dev:stack                   # infra + operator on :3000
 
-# Then add nodes in separate terminals
-pnpm dev:poly                    # poly on :3100
+# Then add remaining in-tree legacy nodes in separate terminals
 pnpm dev:resy                    # resy on :3300
 
 # Or start everything at once (one terminal)
-pnpm dev:stack:full              # infra + operator + poly + resy
+pnpm dev:stack:full              # infra + operator + remaining in-tree nodes
 ```
 
 Auth is shared — sign in on any port, the cookie works on all (same `localhost`).
@@ -54,14 +53,13 @@ pnpm docker:stack:full           # currently launches operator only
 # Operator (default, runs in pnpm check)
 pnpm typecheck
 
-# Individual nodes (from repo root, same pattern)
-pnpm typecheck:node-template
-pnpm typecheck:poly
+# Remaining in-tree legacy nodes (from repo root, transitional)
 pnpm typecheck:resy
 ```
 
-All typecheck commands run from the repo root using `tsc -p <path>/tsconfig.app.json`.
-Each node's tsconfig overrides `@/*` paths to resolve to its own `src/`.
+All parent-repo typecheck commands run from the repo root using `tsc -p <path>/tsconfig.app.json`.
+Gitlink-pinned nodes such as `node-template` typecheck in their own source repo.
+Each node app tsconfig overrides `@/*` paths to resolve to its own `src/`.
 
 ## Testing
 
@@ -72,10 +70,8 @@ pnpm test
 # Operator stack tests (requires dev:stack:test running)
 pnpm test:stack:dev
 
-# Node-specific tests (from repo root, via pnpm filter)
-pnpm --filter @cogni/poly-app test
+# Remaining in-tree node-specific tests (from repo root, transitional)
 pnpm --filter @cogni/resy-app test
-pnpm --filter @cogni/poly-graphs test
 pnpm --filter @cogni/resy-graphs test
 ```
 
@@ -85,19 +81,16 @@ pnpm --filter @cogni/resy-graphs test
 pnpm check          # Operator: typecheck + lint + format + tests + docs + arch
 ```
 
-Node typechecks are not yet in the `pnpm check` pipeline — run them manually
-when you change node-specific code. This will be unified in task.0248.
+External node checks run in the node source repo. Remaining in-tree node
+typechecks are not yet in the `pnpm check` pipeline; run them manually only
+when touching those transitional directories.
 
 ## Creating a New Node
 
-1. Copy `nodes/node-template/` → `nodes/{name}/`
-2. Update `app/package.json`: name → `@cogni/{name}-app`, port
-3. Update `graphs/package.json`: name → `@cogni/{name}-graphs`
-4. Add root scripts to `package.json`:
-   - `"typecheck:{name}": "tsc -p nodes/{name}/app/tsconfig.app.json --noEmit"`
-5. Add node-specific features under `app/src/features/`
-6. Add node-specific graphs under `graphs/src/graphs/`
-7. Run `pnpm install` to link the new workspace packages
+Do not copy an in-tree directory. Create or fork the node-at-root source repo
+from `Cogni-DAO/node-template`, then add it to the operator repo as a
+`nodes/<slug>` gitlink plus catalog/deploy wiring. The node source repo owns its
+own package scripts, lockfile, graph catalog, tests, and image build.
 
 ## Database & Auth
 

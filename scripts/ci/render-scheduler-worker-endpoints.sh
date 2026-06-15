@@ -22,6 +22,11 @@ render() {
   node_internal_service_endpoint_csv
 }
 
+# Node routing renders from catalog metadata only. A remote-source node's catalog
+# `node_id` is written at formation from the fetched repo-spec, and `node_id` is
+# immutable — so catalog == repo-spec by construction. The secret-free gate never
+# reads node source to "re-verify" it (spec.node-submodule-retirement,
+# SECRET_FREE_CI_IS_METADATA_ONLY).
 check() {
   local expected actual override_hits first_envfrom second_envfrom
   expected="$(render)"

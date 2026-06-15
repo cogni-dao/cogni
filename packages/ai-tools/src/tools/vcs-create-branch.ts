@@ -36,7 +36,7 @@ export const VcsCreateBranchInputSchema = z.object({
     .string()
     .min(1)
     .describe(
-      "Source ref to branch from — a branch name (e.g., 'staging') or commit SHA"
+      "Source ref to branch from — a branch name (e.g., 'main') or commit SHA"
     ),
 });
 export type VcsCreateBranchInput = z.infer<typeof VcsCreateBranchInputSchema>;
@@ -65,7 +65,7 @@ export const vcsCreateBranchContract: ToolContract<
   description:
     "Create a new branch in a GitHub repository from an existing ref. " +
     "Use branch naming convention: agent/<work-item-id>/<description>. " +
-    "Always branch from 'staging' for feature work.",
+    "Branch from 'main' for normal feature work unless the task names a different base.",
   effect: "state_change",
   inputSchema: VcsCreateBranchInputSchema,
   outputSchema: VcsCreateBranchOutputSchema,

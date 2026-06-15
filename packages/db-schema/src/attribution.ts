@@ -15,7 +15,9 @@
  * - RECEIPT_SCOPE_AGNOSTIC: ingestion_receipts has no scope_id — scope assigned at selection via epoch membership.
  * - EVALUATION_UNIQUE_PER_REF_STATUS: UNIQUE(epoch_id, evaluation_ref, status) — one draft + one locked per ref.
  * - EVALUATION_FINAL_ATOMIC: locked evaluation writes + artifacts_hash + epoch open→review in one transaction (enforced in store).
- * - No RLS in V0 — worker uses service-role connection.
+ * - RLS deny-all on the user-FK ledger tables (epoch_selection, epoch_user_projections):
+ *   ENABLE + FORCE with no policy (migration 0032). All access is via the BYPASSRLS
+ *   service-role worker; there is no app-role read path. See docs/spec/database-rls.md (RLS_COVERAGE).
  * Side-effects: none (schema definitions only)
  * Links: docs/spec/attribution-ledger.md
  * @public

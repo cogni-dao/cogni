@@ -218,6 +218,41 @@
       "when": 1780183500000,
       "tag": "0030_nodes_published_status",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1780270000000,
+      "tag": "0031_node_access_requests",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1781227345000,
+      "tag": "0032_rls_epoch_coverage",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1781289579960,
+      "tag": "0033_resync_snapshot_baseline",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1781297484471,
+      "tag": "0034_military_human_robot",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1781301557846,
+      "tag": "0035_normal_komodo",
+      "breakpoints": true
     }
   ]
 }

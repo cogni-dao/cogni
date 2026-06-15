@@ -11,24 +11,34 @@ last_commit: ""
 
 # Handoff: {title}
 
-## Context
+## Mission
 
-- {3-5 bullets: what is this work, why does it exist}
+{One paragraph. Use "New mission:" only for fresh work. Use "Pickup:" when the next developer is taking over existing work. State what they own now and why it matters.}
+
+## Goal
+
+- {Desired end state}
+- {Clear E2E validation signal}
+- {If deploy behavior is in scope: candidate-a flight proof, expected URL, /version field, SHA/ref match, workflow run, or promoted lane evidence}
+
+## Start By Reading
+
+- {Minimal docs/specs/files/functions needed to orient quickly}
+- {Prefer high-signal source files over broad directories}
 
 ## Current State
 
 - {Facts only: what's done, what's not, what's blocked}
 
-## Decisions Made
+## Design / Implementation Target
 
-- {Link to spec/ADR/PR where possible, not prose}
+1. {Outcome-oriented requirement}
+2. {Boundary that must hold}
+3. {Regression that must not happen}
 
-## Next Actions
+## Next Actions / Risks
 
 - [ ] {Checklist, max 10 items}
-
-## Risks / Gotchas
-
 - {Max 5 bullets}
 
 ## Pointers

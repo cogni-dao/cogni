@@ -23,8 +23,10 @@
       "then": { "required": ["node_port"] }
     },
     {
-      "$comment": "REPO_SPEC_IS_IDENTITY_SSOT — node_id is declared in nodes/<name>/.cogni/repo-spec.yaml (the web3-anchored authority), never in the catalog. Forbid it here so the duplicate cannot be reintroduced.",
-      "not": { "required": ["node_id"] }
+      "$comment": "REPO_SPEC_IS_IDENTITY_SSOT — node_id lives in nodes/<name>/.cogni/repo-spec.yaml (the web3-anchored authority). A SUBMODULE node (source_repo set) has an unreadable-from-parent repo-spec at render time, so it carries a drift-gated node_id PROJECTION here (verify-scheduler-endpoints.sh asserts catalog.node_id == repo-spec.node_id). An IN-REPO node must NOT duplicate it — its repo-spec is readable.",
+      "if": { "required": ["source_repo"] },
+      "then": { "required": ["node_id"] },
+      "else": { "not": { "required": ["node_id"] } }
     },
     {
       "$comment": "Deploy branches are k8s/Argo per-env state. type:infra (e.g. litellm) deploys via Compose-on-VM (deploy-infra.sh resolves a content-hash tag), so it has no deploy branches.",
@@ -36,8 +38,18 @@
         "required": [
           "candidate_a_branch",
           "preview_branch",
-          "production_branch"
+          "production_branch",
+          "envs"
         ]
+      }
+    },
+    {
+      "$comment": "Artifact rows with source_repo publish image_repository:sha-<sourceSha>. If source_repo is not this repo, the operator consumes the artifact by digest and does not build it.",
+      "if": {
+        "required": ["source_repo"]
+      },
+      "then": {
+        "required": ["image_repository"]
       }
     }
   ],
@@ -90,12 +102,17 @@
     "source_repo": {
       "type": "string",
       "pattern": "^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(\\.git)?$",
-      "description": "Optional submodule node source repository clone URL. Inline nodes omit it; submodule births use it with the gitlink SHA to resolve the child repo image."
+      "description": "Artifact source repository clone URL. It names the build plane; deploy lanes resolve image_repository:sha-<sourceSha> to a digest."
+    },
+    "node_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "description": "Drift-gated projection of a SUBMODULE node's repo-spec node_id (UUID). Present only on submodule rows (source_repo set), where the repo-spec is unreadable from the parent at render time. verify-scheduler-endpoints.sh asserts it == nodes/<name>/.cogni/repo-spec.yaml; repo-spec is the identity SSOT."
     },
     "image_repository": {
       "type": "string",
       "pattern": "^ghcr\\.io/[a-z0-9][a-z0-9_.-]*/[a-z0-9][a-z0-9_.-]*$",
-      "description": "Optional GHCR repository for externally-built submodule nodes. Inline nodes use IMAGE_NAME_APP; submodule nodes usually use ghcr.io/<node-owner>/cogni-node-template."
+      "description": "Required with source_repo. GHCR repository for the deployable artifact, resolved at sha-<sourceSha>. Prefer ghcr.io/<owner>/<repo> for a single primary artifact or deployable-shaped suffixes such as -app/-worker when the repo publishes multiple artifacts."
     },
     "candidate_a_branch": {
       "type": "string",
@@ -108,6 +125,17 @@
     "production_branch": {
       "type": "string",
       "pattern": "^deploy/production-[a-z0-9-]+$"
+    },
+    "envs": {
+      "type": "array",
+      "description": "task.5017 — the per-env node-set: which environments deploy this node. Consumed by scripts/ci/render-node-appset.sh (emits one ApplicationSet per env in this list) and scripts/ci/reconcile-node-substrate.sh (refuses to provision substrate for an env not listed). deploy ⊆ provisioned: an env only deploys nodes it lists. Every node MUST include candidate-a (CANDIDATE_A_ALWAYS — the pre-merge flight/validation gate); preview and production are opt-in, added once a node is proven on candidate-a.",
+      "items": {
+        "type": "string",
+        "enum": ["candidate-a", "preview", "production"]
+      },
+      "minItems": 1,
+      "uniqueItems": true,
+      "contains": { "const": "candidate-a" }
     },
     "is_primary_host": {
       "type": "boolean",

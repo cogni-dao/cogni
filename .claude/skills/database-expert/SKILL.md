@@ -102,6 +102,10 @@ drizzle-kit compiles the config to a temp directory before running. `import { X 
 
 Shared-era migration applied to every deployed DB before the schema split. Each node's `migrations/` has the same SQL file + matching `meta/_journal.json` entry so hashes match the pre-existing `__drizzle_migrations` rows. Tripwire READMEs in those dirs explain; **do not "clean up" the duplicate** without coordinating across every deployed DB.
 
+### node-template TODO: baseline-squash the migration history
+
+New nodes replay operator's full `0000→0032` history (incl. the `0010`→`0032` epoch-RLS create-then-fix). Not a security risk — fresh DBs apply all migrations atomically before serving — but it's legacy baggage every fork inherits. Standard fix (Rails/Django/Atlas-style) is to collapse to a single `0000_init` baseline with RLS correct from the start. Deferred: it's a breaking op for deployed DBs (`__drizzle_migrations` reconciliation) and fights the immutability gate, so do it on the fresh `node-app` lineage, not operator. Tracked as `task.5018`.
+
 ### `drizzle-kit generate` on operator/resy will emit DROP migrations for orphan poly tables
 
 `poly_copy_trade_*` exists in operator/resy DBs as harmless orphans from the shared-era apply. Their configs no longer include those tables, so generate sees them as drift and wants to `DROP TABLE`. **Inspect any auto-generated migration; discard DROP statements for `poly_copy_trade_*`.** Orphans stay until an explicit future cleanup.
@@ -146,9 +150,9 @@ The candidate-a infra lever proves this path. `scripts/ci/deploy-infra.sh` insta
 
 Known scope: this is same-VM persistent-volume backup. It protects against logical DB damage and operator mistakes, not full VM loss. Do not claim disaster recovery until an off-host object store sink and restore drill exist. The next hardening step is S3-compatible storage (or equivalent OSS object store) plus a scheduled restore rehearsal.
 
-### Per-node app image ≠ per-node migrator image
+### Migrations run inline as an initContainer (no separate migrator image)
 
-They share a Dockerfile (`nodes/<node>/app/Dockerfile`) but use different stages. `cogni-template:TAG-poly` = app runtime (`runner`). `cogni-template:TAG-poly-migrate` = migrator (`migrator`). The k8s overlay uses both — the Job targets `-migrate`, the Deployment targets the app tag.
+`task.0371` retired the separate `-migrate` image + Argo PreSync Job. Postgres + Doltgres migrations now run as the Deployment's `migrate` / `migrate-doltgres` **initContainers off the same runtime image** as the app, gated by rollout. The migrate runner path follows the node's image layout — `/app/nodes/<node>/app/migrate.mjs` (in-tree monorepo) vs `/app/app/migrate.mjs` (wizard-born node-at-root); the node's overlay declares it, and a layout mismatch is a `MODULE_NOT_FOUND` crash-loop before any DB connect. Canon + the layout contract: [databases.md §2](../../../docs/spec/databases.md). (The compose/`deploy-infra` Doltgres migrator on the VM is a separate path — see `POLY_MIGRATOR_IMAGE` below.)
 
 ## Doltgres knowledge plane (per-node, parallel to the Postgres side)
 
@@ -195,10 +199,35 @@ Everything schema-time (drizzle-kit migrate, `CREATE SCHEMA`, `__drizzle_migrati
 
 ### Doltgres-specific gotchas
 
+- **Connects as the `postgres` superuser — RBAC is table-DML-only.** Doltgres `0.56.3` implements only table-level `SELECT/INSERT/UPDATE/DELETE/TRUNCATE` grants (no function/schema/role privileges, no `ALTER DEFAULT PRIVILEGES`), so per-node `knowledge_<node>` roles can't run the migrator or app — every node's `DOLTGRES_URL` uses the env superuser. As-built rationale + the upstream trigger to swap to per-node roles: [databases.md §5.2](../../../docs/spec/databases.md).
 - **`SET @@dolt_transaction_commit = 1` is MySQL-dialect syntax** — not verified on Doltgres's pg wire protocol. Don't add it to compose/scripts. The explicit trailing `SELECT dolt_commit('-Am', ...)` pattern is the repo's verified approach.
 - **DROP SCHEMA … CASCADE is not supported** (per the 0.56.0 error message). Drop tables individually, then DROP SCHEMA.
 - **Per-node DB name convention**: `cogni_<node>` (Postgres) → `knowledge_<node>` (Doltgres). `provision.sh` derives one from the other.
 - **Port 5435** on the host (not 5432 — Postgres owns that). k8s pods reach via `{node}-doltgres-external` EndpointSlice → node InternalIP:5435.
+
+### DoltHub repo formation gotchas (verified in PR #1527)
+
+- **Repeated same-owner forks from one template do not work.** Live test:
+  `cogni-dao/knowledge-node-template` → `cogni-dao/knowledge-<node>` failed
+  once the owner already had a fork in that network with `owner already owns a
+repository in the same network`. For v0 node formation, create a fresh DoltHub
+  database with `POST /api/v1alpha1/database` instead of forking a template.
+- **Empty DoltHub repos cannot be useful fork templates.** The initial
+  `knowledge-node-template` had no contents; initializing it with a SQL write
+  fixed the empty-template problem but not the same-owner fork-network limit.
+  vNext fork alignment needs a one-fork-per-owner topology or a non-fork clone
+  path, not repeated forks under one owner.
+- **PAT creates REST/SQL databases; Dolt push uses Dolt creds.**
+  `DOLTHUB_API_TOKEN` with API read/write rights successfully created
+  `cogni-test-nodes/knowledge-e2e-*`, wrote
+  `cogni_external_probe`, polled the write op to `Success`, and read back
+  `[{ label: "ok" }]`. That PAT does not authenticate `dolt push`; push still
+  requires `DOLT_CREDS_JWK` + `DOLT_CREDS_KEYID` with the pubkey registered in
+  DoltHub settings.
+- **Environment owner must be explicit.** Do not default test/preview/candidate
+  to `cogni-dao`. `DOLTHUB_OWNER` is the boundary: production uses `cogni-dao`,
+  non-prod uses a Dolt test org such as `cogni-test-nodes`, and publish should
+  fail closed when `DOLTHUB_API_TOKEN` is present without `DOLTHUB_OWNER`.
 
 ## When to promote a node-local slice to core
 

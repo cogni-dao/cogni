@@ -116,23 +116,47 @@ const workflowFiles = readdirSync(WORKFLOW_DIR)
 const candidateFlightText = readWorkflowText("candidate-flight.yml");
 if (
   candidateFlightText.includes(
-    "SUBMODULE_BIRTHS_FILE: ${{ steps.submodule-births.outputs.births_file }}"
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions ${{ }} expression matched as workflow text, not a JS template
+    "REMOTE_SOURCE_ARTIFACT_TARGETS_FILE: ${{ steps.remote-source-artifact-targets.outputs.targets_file }}"
   )
 ) {
   pass(
-    "candidate-flight wires submodule birth manifest output into image resolution"
+    "candidate-flight wires remote-source artifact target manifest output into image resolution"
   );
 } else {
   fail(
-    "candidate-flight must pass steps.submodule-births.outputs.births_file to SUBMODULE_BIRTHS_FILE"
+    "candidate-flight must pass steps.remote-source-artifact-targets.outputs.targets_file to REMOTE_SOURCE_ARTIFACT_TARGETS_FILE"
   );
 }
 
 if (
   candidateFlightText.includes(
+    "run: bash ../scripts/ci/detect-remote-source-artifact-targets.sh"
+  ) &&
+  candidateFlightText.includes(
+    'SOURCE_SHA="$NODE_SOURCE_SHA" bash ../scripts/ci/resolve-node-ref-image.sh'
+  ) &&
+  candidateFlightText.includes(
+    "bash ../scripts/ci/resolve-pr-build-images.sh"
+  ) &&
+  candidateFlightText.includes("COGNI_CATALOG_ROOT: infra/catalog")
+) {
+  pass(
+    "candidate-flight resolves new workflow-source helpers against app-src catalogs"
+  );
+} else {
+  fail(
+    "candidate-flight helper steps must run workflow-source scripts from app-src with COGNI_CATALOG_ROOT=infra/catalog"
+  );
+}
+
+if (
+  candidateFlightText.includes(
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions ${{ }} expression matched as workflow text, not a JS template
     "username: ${{ secrets.GHCR_DEPLOY_USERNAME || github.actor }}"
   ) &&
   candidateFlightText.includes(
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions ${{ }} expression matched as workflow text, not a JS template
     "password: ${{ secrets.GHCR_DEPLOY_TOKEN || github.token }}"
   )
 ) {

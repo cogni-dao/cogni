@@ -65,7 +65,7 @@ services:
       - DISCORD_OAUTH_CLIENT_SECRET
       - GOOGLE_OAUTH_CLIENT_ID
       - GOOGLE_OAUTH_CLIENT_SECRET
-      - DOLTHUB_REMOTE_URL
+      - DOLTHUB_OWNER
       - DOLTHUB_API_TOKEN
       - DOLTHUB_OAUTH_CLIENT_ID
       - DOLTHUB_OAUTH_CLIENT_SECRET
@@ -111,6 +111,11 @@ services:
       - SCHEDULER_WORKER_HEALTH_URL=${SCHEDULER_WORKER_HEALTH_URL:-http://scheduler-worker:9000}
       # Redis (stream plane — ephemeral only)
       - REDIS_URL=redis://redis:6379
+      # OpenFGA (authorization) — URL can be present before store/model ids are seeded.
+      - OPENFGA_API_URL=http://openfga:8080
+      - OPENFGA_STORE_ID
+      - OPENFGA_AUTHORIZATION_MODEL_ID
+      - OPENFGA_API_TOKEN
       # MCP server URLs (Docker-internal DNS — per mcp-control-plane spec)
       - MCP_PLAYWRIGHT_URL=${MCP_PLAYWRIGHT_URL:-http://playwright-mcp:3003/mcp}
       - MCP_GRAFANA_URL=${MCP_GRAFANA_URL:-http://grafana-mcp:8000/mcp}
@@ -219,7 +224,6 @@ services:
     environment:
       - DOMAIN=${DOMAIN}
       - POLY_DOMAIN=${POLY_DOMAIN:-poly.localhost}
-      - RESY_DOMAIN=${RESY_DOMAIN:-resy.localhost}
     volumes:
       - ../edge/configs/Caddyfile.tmpl:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -374,19 +378,39 @@ services:
       DB_PORT: 5432
       # DB_PER_NODE: comma-separated list of node databases to provision (required, no default)
       COGNI_NODE_DBS: ${COGNI_NODE_DBS}
-      APP_DB_USER: ${APP_DB_USER}
+      # provision.sh computes per-node roles app_<node>/service_<node> from the DB
+      # name; only the per-node passwords are inputs.
       APP_DB_PASSWORD: ${APP_DB_PASSWORD}
-      APP_DB_SERVICE_USER: ${APP_DB_SERVICE_USER}
       APP_DB_SERVICE_PASSWORD: ${APP_DB_SERVICE_PASSWORD}
       APP_DB_READONLY_USER: ${APP_DB_READONLY_USER:-app_readonly}
       APP_DB_READONLY_PASSWORD: ${APP_DB_READONLY_PASSWORD:-readonly_password}
       LITELLM_DB_NAME: litellm_dev
+      OPENFGA_DB_NAME: openfga_dev
     volumes:
       - ./postgres-init/provision.sh:/app/provision.sh:ro
     entrypoint: ["/bin/bash", "/app/provision.sh"]
     depends_on:
       postgres:
         condition: service_healthy
+
+  openfga:
+    image: openfga/openfga:v1.17.1@sha256:ff96f68d2f03a029e051027415c106295c782084daeef0934479f04a3fdc2d57
+    container_name: openfga
+    restart: unless-stopped
+    labels:
+      - "autoheal=true"
+    networks:
+      - cogni-edge
+    ports:
+      - "8080:8080"
+    command: run
+    environment:
+      - OPENFGA_DATASTORE_ENGINE=memory
+      - OPENFGA_LOG_FORMAT=json
+      - OPENFGA_METRICS_ADDR=0.0.0.0:2112
+      - OPENFGA_PLAYGROUND_ENABLED=false
+      - OPENFGA_AUTHN_METHOD=${OPENFGA_AUTHN_METHOD:-none}
+      - OPENFGA_AUTHN_PRESHARED_KEYS=${OPENFGA_API_TOKEN:-}
 
   db-backup:
     image: postgres:15
@@ -671,7 +695,7 @@ services:
       # The worker derives per-node Temporal task queues from UUID entries;
       # slug entries are treated as convenience aliases and skipped for queue
       # naming. UUIDs must match each node's .cogni/repo-spec.yaml node_id.
-      - COGNI_NODE_ENDPOINTS=${COGNI_NODE_ENDPOINTS:-operator=http://app:3000,poly=http://poly:3100,resy=http://resy:3300,4ff8eac1-4eba-4ed0-931b-b1fe4f64713d=http://app:3000,5ed2d64f-2745-4676-983b-2fb7e05b2eba=http://poly:3100,f6d2a17d-b7f6-4ad1-a86b-f0ad2380999e=http://resy:3300}
+      - COGNI_NODE_ENDPOINTS=${COGNI_NODE_ENDPOINTS:-operator=http://app:3000,poly=http://poly:3100,4ff8eac1-4eba-4ed0-931b-b1fe4f64713d=http://app:3000,5ed2d64f-2745-4676-983b-2fb7e05b2eba=http://poly:3100}
       - SCHEDULER_API_TOKEN=${SCHEDULER_API_TOKEN?SCHEDULER_API_TOKEN is required}
       # GitHub App credentials (optional — required only for GitHub ingestion)
       # Bare passthrough: passes empty string "" when var is unset in host env.

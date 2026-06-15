@@ -50,7 +50,6 @@ export const EdoRecordOutcomeInputSchema = z.object({
   sourceRef: z.string().optional(),
   sourceNode: z.string().optional(),
   tags: z.array(z.string()).optional(),
-  confidencePct: z.number().int().min(0).max(100).optional(),
 });
 export type EdoRecordOutcomeInput = z.infer<typeof EdoRecordOutcomeInputSchema>;
 
@@ -127,7 +126,6 @@ export function createEdoRecordOutcomeImplementation(
         sourceRef: input.sourceRef,
         sourceNode: input.sourceNode,
         tags: input.tags,
-        confidencePct: input.confidencePct,
       });
 
       return {

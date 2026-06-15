@@ -5,7 +5,7 @@
 # Unit tests for catalog-driven edge routing (task.5078):
 #   1. The committed Caddyfile.tmpl is in sync with the catalog (drift gate —
 #      this is what makes "add a node = 1 catalog PR" enforceable).
-#   2. Every type:node gets an edge block — canary included (the regression the
+#   2. Every type:node gets an edge block — oss included (the regression the
 #      hand-maintained roster shipped: a catalog node with no edge route).
 #   3. catalog node_port == per-env overlay Service nodePort (the one coupling
 #      this design introduces; assert it can't drift into split-brain).
@@ -29,7 +29,7 @@ bash scripts/ci/render-caddyfile.sh --check >/dev/null \
   || fail "render-caddyfile.sh --check: committed Caddyfile.tmpl is stale (run: pnpm gen:caddyfile)"
 pass "committed Caddyfile.tmpl matches the catalog"
 
-echo "[2/4] every type:node has an edge block (canary regression guard)"
+echo "[2/4] every type:node has an edge block (oss regression guard)"
 RENDERED="$(bash scripts/ci/render-caddyfile.sh)"
 for node in "${NODE_TARGETS[@]}"; do
   slug="$(printf '%s' "$node" | tr '[:lower:]-' '[:upper:]_')"
@@ -45,7 +45,7 @@ for node in "${NODE_TARGETS[@]}"; do
     pass "$node → edge block + upstream :$(node_port_for_target "$node")"
   fi
 done
-grep -q '{$CANARY_DOMAIN' <<<"$RENDERED" || fail "canary block absent — the exact gap this task closes"
+grep -q '{$OSS_DOMAIN' <<<"$RENDERED" || fail "oss block absent — the exact gap this task closes"
 
 echo "[3/4] catalog node_port == overlay Service nodePort (no split-brain)"
 for node in "${NODE_TARGETS[@]}"; do

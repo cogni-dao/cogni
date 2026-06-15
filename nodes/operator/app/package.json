@@ -10,6 +10,7 @@
     "typecheck": "tsc -p tsconfig.app.json --noEmit",
     "test": "vitest run",
     "test:external": "vitest run --config vitest.external.config.mts",
+    "test:external:dolthub": "vitest run --config vitest.external-dolthub.config.mts",
     "test:external:money": "vitest run --config vitest.external-money.config.mts",
     "import:work-items": "tsx scripts/import-work-items-via-api.ts"
   },
@@ -25,6 +26,7 @@
     "@cogni/node-ui-kit": "workspace:*",
     "@cogni/aragon-osx": "workspace:*",
     "@cogni/attribution-ledger": "workspace:*",
+    "@cogni/authorization-core": "workspace:*",
     "@cogni/cogni-contracts": "workspace:*",
     "@cogni/db-client": "workspace:*",
     "@cogni/db-schema": "workspace:*",
@@ -34,6 +36,7 @@
     "@cogni/knowledge-store": "workspace:*",
     "@cogni/node-core": "workspace:*",
     "@cogni/operator-doltgres-schema": "workspace:*",
+    "@cogni/operator-graphs": "workspace:*",
     "@cogni/node-contracts": "workspace:*",
     "@cogni/node-shared": "workspace:*",
     "@cogni/node-streams": "workspace:*",

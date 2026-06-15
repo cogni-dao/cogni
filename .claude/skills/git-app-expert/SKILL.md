@@ -19,17 +19,27 @@ You are the expert on Cogni's GitHub App integration, VCS tool layer, and candid
 flight pipeline. Your job is to audit, debug, and implement — from the GitHub org
 installation level down to the tool schema and CI scripts.
 
+> **Boundary first.** Read [CI/CD Platform Boundary & Freeze Policy](../../../docs/spec/cicd-platform-boundary.md) before adding deploy/flight behavior. The operator deploy brain in `scripts/ci/*.sh` + `.github/workflows/*.yml` is **frozen** — new control logic routes to the substrate (catalog/overlay/Argo/ESO) or into the typed `.ts` operator control plane. `DeployCapability` (`packages/ai-tools/src/capabilities/deploy.ts`) is the **sibling of `VcsCapability`** — same `CAPABILITY_INJECTION`/`ADAPTER_SWAPPABLE` shape, adapter in `nodes/operator/app/src/adapters/server/`. v0 is read-only over live Argo state and reuses `dispatchCandidateFlight` for promotion (no second dispatch path; Argo stays the reconciler). When asked to add a flight/deploy feature, prefer a `DeployCapability` method over a new workflow input or a new `.sh`.
+
 ## GitHub Apps on Cogni-DAO Org
 
 **One App per environment** — each App has exactly one webhook URL, so prod/preview/candidate-a
 cannot share one. Create + wire per the canonical guide:
 [`docs/guides/github-app-webhook-setup.md`](../../../docs/guides/github-app-webhook-setup.md).
 
-| App                   | ID        | Install ID | env          | webhooks → / installed on                                      |
-| --------------------- | --------- | ---------- | ------------ | -------------------------------------------------------------- |
-| `cogni-node-template` | 3062001   | 115515535  | (vcs/flight) | org-wide; `actions:write` for `workflow_dispatch`              |
-| `cogni-git-review`    | 1761205   | 80293097   | production   | `cognidao.org/...webhooks/github` · `Cogni-DAO/cogni`          |
-| `cogni-operator-test` | (per-env) | —          | candidate-a  | `test.cognidao.org/...webhooks/github` · `Cogni-DAO/test-repo` |
+| App                        | ID      | Install ID | env              | webhooks → / installed on                                              |
+| -------------------------- | ------- | ---------- | ---------------- | ---------------------------------------------------------------------- |
+| `cogni-operator-test`      | 3956976 | 138046799  | candidate-a/test | `test.cognidao.org/...webhooks/github` · all repos on `cogni-test-org` |
+| `cogni-operator`           | 2994706 | 113665458  | production ops   | `cognidao.org/...webhooks/github` · all repos on `Cogni-DAO`           |
+| `cogni-node-template`      | 3062001 | 115515535  | legacy/vcs       | selected repos; use only if the env's `GH_REVIEW_APP_ID` is `3062001`  |
+| `cogni-git-review`         | 1761205 | 80293097   | production       | `cognidao.org/...webhooks/github` · `Cogni-DAO/cogni`                  |
+| `cogni-git-review-preview` | 2011345 | 87655574   | preview          | `preview.cognidao.org/...webhooks/github` · selected preview repos     |
+
+`Cogni-DAO/test-repo` is only a legacy review-webhook fixture. It is not
+sufficient for node publish/flight testing: the candidate/test App must see the
+template repo, parent pin repo, and freshly minted node repos in the disposable
+GitHub org (`cogni-test-org`) without gaining access to production `Cogni-DAO`
+repos. Pair this with `DOLTHUB_OWNER=cogni-test-nodes` for node knowledge repos.
 
 **Where the App creds live (post-ESO migration, #1460/#1476):** the running operator pod reads
 `GH_REVIEW_APP_ID` / `GH_REVIEW_APP_PRIVATE_KEY_BASE64` / `GH_WEBHOOK_SECRET` from **OpenBao**
@@ -52,12 +62,30 @@ env means setting all three planes' creds + matching the webhook secret on both 
 
 ```bash
 gh api "orgs/Cogni-DAO/installations?per_page=20" | \
-  jq '.installations[] | select(.app_id == 3062001) | {app_slug, permissions}'
+  jq '.installations[] | select(.app_id == 2994706) | {app_slug, id, repository_selection, permissions}'
+
+gh api "orgs/cogni-test-org/installations?per_page=20" | \
+  jq '.installations[] | select(.app_id == 3956976) | {app_slug, id, repository_selection, permissions}'
 ```
 
-`actions:write` is required for `workflow_dispatch`. If the installation shows `actions:read`,
-the org admin must approve the pending permission upgrade at:
-`github.com/organizations/Cogni-DAO/settings/installations/115515535`
+Operator mint/flight Apps require `actions:write`, `administration:write`, `contents:write`,
+`workflows:write`, and `packages:write`. Package write reserves operator authority for future
+package policy/visibility management; node-ref flight must not treat GitHub Packages metadata reads
+as the deploy gate because private package metadata can false-negative even when the child image
+exists. Do not add a PAT to child node repos for publishing: child workflows publish with their
+repo-local `GITHUB_TOKEN` and `permissions.packages: write`. Parent candidate-flight and k3s image
+pulls are separate cross-repo read paths and still need either public packages, package Actions
+access grants, or the existing `GHCR_DEPLOY_TOKEN`/registry credential path with `read:packages`.
+If the installation lacks a newly requested permission, the org admin must approve the pending
+permission upgrade at the installation URL:
+
+```text
+https://github.com/organizations/cogni-test-org/settings/installations/138046799
+https://github.com/organizations/Cogni-DAO/settings/installations/113665458
+```
+
+The legacy `cogni-node-template` installation approval URL is
+`https://github.com/organizations/Cogni-DAO/settings/installations/115515535`.
 
 **Common gotcha**: the GitHub App _definition_ can request `actions:write` while the org
 _installation_ still shows `read` — they diverge when the org hasn't accepted the expanded

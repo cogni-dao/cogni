@@ -15,6 +15,7 @@
  */
 
 import { NextResponse } from "next/server";
+import { dispatchNodePreviewPromote } from "@/app/_facades/deploy/node-preview-promote.server";
 import { dispatchPrReview } from "@/app/_facades/review/dispatch.server";
 import { getContainer } from "@/bootstrap/container";
 import { dispatchSignalExecution } from "@/features/governance/services/signal-dispatch";
@@ -124,6 +125,9 @@ export async function POST(
     if (source === "github" && eventType === "pull_request") {
       const payload = JSON.parse(bodyBuffer.toString("utf-8"));
       dispatchPrReview(payload, env, log);
+      // Node-merge → preview tie: a merged spawned-node PR pins the parent catalog
+      // source_sha so flight-preview.yml advances preview (PREVIEW_VIA_FLIGHT_PREVIEW).
+      dispatchNodePreviewPromote(payload, env, log);
     }
 
     if (source === "alchemy") {
@@ -160,6 +164,7 @@ export async function POST(
     if (source === "github" && eventType === "pull_request") {
       const payload = JSON.parse(bodyBuffer.toString("utf-8"));
       dispatchPrReview(payload, env, log);
+      dispatchNodePreviewPromote(payload, env, log);
     }
 
     if (source === "alchemy") {

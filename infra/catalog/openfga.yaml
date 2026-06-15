@@ -1,0 +1,11 @@
+name: openfga
+# infra = shared VM-infra image: built in CI like every other target, but
+# deployed via Compose-on-VM (deploy-infra.sh), not k8s/Argo.
+type: infra
+port: 8080
+dockerfile: infra/images/openfga/Dockerfile
+build_context: infra/images/openfga
+# image_tag_suffix is unused for type:infra (content-hash tag: openfga-<hash>).
+image_tag_suffix: "-openfga"
+migrator_tag_suffix: ""
+path_prefix: infra/images/openfga/

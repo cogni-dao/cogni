@@ -1,11 +1,8 @@
 {
-  "name": "single non-operator node: poly only",
-  "paths": [
-    "nodes/node-template/app/foo.ts",
-    "nodes/node-template/graphs/y.ts"
-  ],
+  "name": "single non-operator node: legacy-alpha only",
+  "paths": ["nodes/legacy-alpha/app/foo.ts", "nodes/legacy-alpha/graphs/y.ts"],
   "expected": {
-    "domains": ["node-template"],
+    "domains": ["legacy-alpha"],
     "pass": true,
     "rideAlongApplied": false
   }

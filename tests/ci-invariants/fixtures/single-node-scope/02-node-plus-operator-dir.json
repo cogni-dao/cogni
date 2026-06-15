@@ -1,8 +1,8 @@
 {
-  "name": "node + operator dir: poly + nodes/operator",
-  "paths": ["nodes/node-template/app/foo.ts", "nodes/operator/app/x.ts"],
+  "name": "node + operator dir: legacy-alpha + nodes/operator",
+  "paths": ["nodes/legacy-alpha/app/foo.ts", "nodes/operator/app/x.ts"],
   "expected": {
-    "domains": ["node-template", "operator"],
+    "domains": ["legacy-alpha", "operator"],
     "pass": false,
     "rideAlongApplied": false
   }

@@ -13,7 +13,9 @@
 
 import {
   extractChainId,
+  extractDaoConfig,
   extractGovernanceConfig,
+  extractKnowledgeConfig,
   extractLedgerApprovers,
   extractLedgerConfig,
   extractNodeId,
@@ -106,6 +108,36 @@ describe("extractScopeId", () => {
   });
 });
 
+describe("extractDaoConfig", () => {
+  const ON_CHAIN = {
+    dao_contract: "0x1111111111111111111111111111111111111111",
+    plugin_contract: "0x2222222222222222222222222222222222222222",
+    signal_contract: "0x3333333333333333333333333333333333333333",
+    chain_id: String(TEST_CHAIN_ID),
+  };
+
+  it("resolves without base_url — the four on-chain fields are sufficient (treasury must not blank)", () => {
+    const dao = extractDaoConfig(buildSpec({ cogni_dao: ON_CHAIN }));
+    expect(dao).not.toBeNull();
+    expect(dao?.dao_contract).toBe(ON_CHAIN.dao_contract);
+    expect(dao?.base_url).toBeUndefined();
+  });
+
+  it("includes base_url when present (governance deep-link host)", () => {
+    const dao = extractDaoConfig(
+      buildSpec({
+        cogni_dao: { ...ON_CHAIN, base_url: "https://proposal.cognidao.org" },
+      })
+    );
+    expect(dao?.base_url).toBe("https://proposal.cognidao.org");
+  });
+
+  it("returns null when an on-chain identity field is missing", () => {
+    const { dao_contract: _omitted, ...withoutDao } = ON_CHAIN;
+    expect(extractDaoConfig(buildSpec({ cogni_dao: withoutDao }))).toBeNull();
+  });
+});
+
 describe("extractChainId", () => {
   it("parses string chain_id to number", () => {
     const spec = buildSpec();
@@ -170,6 +202,38 @@ describe("extractPaymentConfig", () => {
     });
     const config = extractPaymentConfig(spec, TEST_CHAIN_ID);
     expect(config.provider).toBe("cogni-usdc-backend-v1");
+  });
+});
+
+describe("extractKnowledgeConfig", () => {
+  it("returns undefined when knowledge is absent", () => {
+    expect(extractKnowledgeConfig(buildSpec())).toBeUndefined();
+  });
+
+  it("returns the node knowledge database and Cogni-owned DoltHub remote", () => {
+    const spec = buildSpec({
+      knowledge: {
+        database: "knowledge_my_node",
+        remote: {
+          provider: "dolthub",
+          owner: "cogni-dao-test",
+          repo: "knowledge-my-node",
+          url: "https://doltremoteapi.dolthub.com/cogni-dao-test/knowledge-my-node",
+          custody: "cogni-owned",
+        },
+      },
+    });
+
+    expect(extractKnowledgeConfig(spec)).toEqual({
+      database: "knowledge_my_node",
+      remote: {
+        provider: "dolthub",
+        owner: "cogni-dao-test",
+        repo: "knowledge-my-node",
+        url: "https://doltremoteapi.dolthub.com/cogni-dao-test/knowledge-my-node",
+        custody: "cogni-owned",
+      },
+    });
   });
 });
 
@@ -578,20 +642,20 @@ describe("extractOwningNode", () => {
     expect(extractOwningNode(standardSpec(), [])).toEqual({ kind: "miss" });
   });
 
-  it("scenario 10: node-template is sovereign when registered", () => {
-    const nodeTemplate = {
+  it("scenario 10: registered legacy node path is sovereign", () => {
+    const sampleNode = {
       node_id: "00000000-0000-4000-8000-0000000000aa",
-      node_name: "Node Template",
-      path: "nodes/node-template",
+      node_name: "Sample Node",
+      path: "nodes/sample-node",
     };
     const spec = buildTestRepoSpec({
-      nodes: [TEST_NODE_ENTRIES.operator, nodeTemplate],
+      nodes: [TEST_NODE_ENTRIES.operator, sampleNode],
     });
-    const result = extractOwningNode(spec, ["nodes/node-template/app/foo.ts"]);
+    const result = extractOwningNode(spec, ["nodes/sample-node/app/foo.ts"]);
     expect(result).toEqual({
       kind: "single",
-      nodeId: nodeTemplate.node_id,
-      path: "nodes/node-template",
+      nodeId: sampleNode.node_id,
+      path: "nodes/sample-node",
     });
   });
 
@@ -663,51 +727,64 @@ describe("extractOwningNode", () => {
     ]);
   });
 
-  it("NODE_BIRTH ride-along: canary + its own catalog/overlay/AppSet → single { canary, rideAlongApplied: true }", () => {
-    const canary = {
+  it("NODE_FORMATION ride-along: legacy node source + its own catalog/overlay/AppSet → single node", () => {
+    const sampleNode = {
       node_id: "00000000-0000-4000-8000-0000000000ca",
-      node_name: "Canary",
-      path: "nodes/canary",
+      node_name: "Sample Node",
+      path: "nodes/sample-node",
     };
     const spec = buildTestRepoSpec({
-      nodes: [TEST_NODE_ENTRIES.operator, canary, TEST_NODE_ENTRIES.resy],
+      nodes: [
+        TEST_NODE_ENTRIES.operator,
+        sampleNode,
+        {
+          node_id: "00000000-0000-4000-8000-0000000000bb",
+          node_name: "Other Node",
+          path: "nodes/other-node",
+        },
+      ],
     });
     const result = extractOwningNode(spec, [
-      "nodes/canary/app/src/app/(public)/page.tsx",
-      "infra/catalog/canary.yaml",
+      "nodes/sample-node/app/src/app/(public)/page.tsx",
+      "infra/catalog/sample-node.yaml",
       "infra/compose/edge/configs/Caddyfile.tmpl",
-      "infra/k8s/overlays/candidate-a/canary/kustomization.yaml",
-      "infra/k8s/overlays/preview/canary/kustomization.yaml",
-      "infra/k8s/argocd/candidate-a-canary-applicationset.yaml",
+      "infra/k8s/overlays/candidate-a/sample-node/kustomization.yaml",
+      "infra/k8s/overlays/preview/sample-node/kustomization.yaml",
+      "infra/k8s/argocd/candidate-a-sample-node-applicationset.yaml",
     ]);
     expect(result).toEqual({
       kind: "single",
-      nodeId: canary.node_id,
-      path: "nodes/canary",
+      nodeId: sampleNode.node_id,
+      path: "nodes/sample-node",
       rideAlongApplied: true,
     });
   });
 
-  it("NODE_BIRTH bounded: canary cannot ride another node's catalog", () => {
-    const canary = {
+  it("NODE_FORMATION bounded: legacy node cannot ride another node's catalog", () => {
+    const sampleNode = {
       node_id: "00000000-0000-4000-8000-0000000000ca",
-      node_name: "Canary",
-      path: "nodes/canary",
+      node_name: "Sample Node",
+      path: "nodes/sample-node",
+    };
+    const otherNode = {
+      node_id: "00000000-0000-4000-8000-0000000000bb",
+      node_name: "Other Node",
+      path: "nodes/other-node",
     };
     const spec = buildTestRepoSpec({
-      nodes: [TEST_NODE_ENTRIES.operator, canary, TEST_NODE_ENTRIES.resy],
+      nodes: [TEST_NODE_ENTRIES.operator, sampleNode, otherNode],
     });
     const result = extractOwningNode(spec, [
-      "nodes/canary/app/src/foo.ts",
-      "infra/catalog/resy.yaml",
+      "nodes/sample-node/app/src/foo.ts",
+      "infra/catalog/other-node.yaml",
     ]);
     expect(result.kind).toBe("conflict");
     if (result.kind !== "conflict") return;
     expect(result.nodes).toEqual([
       { nodeId: TEST_NODE_IDS.operator, path: "nodes/operator" },
-      { nodeId: canary.node_id, path: "nodes/canary" },
+      { nodeId: sampleNode.node_id, path: "nodes/sample-node" },
     ]);
-    expect(result.operatorPaths).toEqual(["infra/catalog/resy.yaml"]);
+    expect(result.operatorPaths).toEqual(["infra/catalog/other-node.yaml"]);
     expect(result.operatorNodeId).toBe(TEST_NODE_IDS.operator);
   });
 

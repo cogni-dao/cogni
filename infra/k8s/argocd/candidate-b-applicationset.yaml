@@ -19,7 +19,6 @@ spec:
   generators:
     - list:
         elements:
-          - { name: canary }
           - { name: node-template }
           - { name: scheduler-worker }
   template:

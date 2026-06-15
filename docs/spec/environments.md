@@ -119,7 +119,7 @@ pnpm test:stack:dev           # Run stack tests against host app
 
 **Infrastructure:**
 
-- All services containerized (app, postgres, litellm, caddy)
+- All services containerized (app, postgres, litellm, openfga, caddy)
 - Caddy provides HTTPS on `https://localhost/`
 - PostgreSQL exposed on `localhost:55432` for debugging
 
@@ -168,7 +168,7 @@ DB_HOST=localhost DB_PORT=55432 TEST_BASE_URL=https://localhost/
 
 - All services containerized with hardened compose file
 - Only accessible via Caddy HTTPS
-- No debug ports exposed
+- No debug ports exposed; shared infra ports are published only when k3s pods need VM access and are firewall-hardened
 - Production security configuration
 
 **Environment:** Automatically loads `.env.local` for local development, uses CI environment variables in production.
@@ -200,13 +200,14 @@ postgresql://postgres:postgres@localhost:55432/cogni_template_stack_test
 
 ### Port Summary
 
-| Service    | App Only         | Host Stack Dev    | Host Stack Test  | Docker Dev Stack    | Docker Test Stack   | Docker Stack        |
-| ---------- | ---------------- | ----------------- | ---------------- | ------------------- | ------------------- | ------------------- |
-| App        | `localhost:3000` | `localhost:3000`  | `localhost:3000` | `https://localhost` | `https://localhost` | `https://localhost` |
-| PostgreSQL | None             | `localhost:55432` | `localhost:5432` | `localhost:55432`   | `localhost:55432`   | Internal only       |
-| LiteLLM    | None             | `localhost:4000`  | `localhost:4000` | Internal only       | Internal only       | Internal only       |
+| Service    | App Only         | Host Stack Dev    | Host Stack Test  | Docker Dev Stack    | Docker Test Stack   | Docker Stack           |
+| ---------- | ---------------- | ----------------- | ---------------- | ------------------- | ------------------- | ---------------------- |
+| App        | `localhost:3000` | `localhost:3000`  | `localhost:3000` | `https://localhost` | `https://localhost` | `https://localhost`    |
+| PostgreSQL | None             | `localhost:55432` | `localhost:5432` | `localhost:55432`   | `localhost:55432`   | VM-internal pod bridge |
+| LiteLLM    | None             | `localhost:4000`  | `localhost:4000` | Internal only       | Internal only       | VM-internal pod bridge |
+| OpenFGA    | None             | None              | None             | `localhost:8080`    | `localhost:8080`    | VM-internal pod bridge |
 
-Docker Dev Stack modes expose PostgreSQL on `55432` for debugging and test access. Full production Docker Stack keeps all services internal. All containers communicate internally via `postgres:5432`.
+Docker Dev Stack modes expose PostgreSQL on `55432` for debugging and test access. Full production Docker Stack publishes selected shared infra ports only for k3s pod access through VM DNS; public-NIC traffic is dropped by `infra/provision/cherry/harden-docker-public-ports.sh`. All containers communicate internally via service DNS such as `postgres:5432` and `openfga:8080`.
 
 ### File Pointers
 

@@ -15,8 +15,7 @@ export interface MergeResult {
 }
 
 export async function mergeContribution(
-  contributionId: string,
-  confidencePct?: number
+  contributionId: string
 ): Promise<MergeResult> {
   const response = await fetch(
     `/api/v1/knowledge/contributions/${encodeURIComponent(contributionId)}/merge`,
@@ -25,7 +24,7 @@ export async function mergeContribution(
       headers: { "Content-Type": "application/json" },
       credentials: "same-origin",
       cache: "no-store",
-      body: JSON.stringify(confidencePct != null ? { confidencePct } : {}),
+      body: "{}",
     }
   );
   if (!response.ok) {

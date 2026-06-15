@@ -17,8 +17,8 @@
  * @internal
  */
 
-import { LANGGRAPH_CATALOG } from "@cogni/langgraph-graphs";
 import type { AiEvent } from "@cogni/node-core";
+import { LANGGRAPH_CATALOG } from "@cogni/operator-graphs";
 // biome-ignore lint/style/noRestrictedImports: SDK allowed in langgraph dev adapter per OFFICIAL_SDK_ONLY invariant
 import type { Client } from "@langchain/langgraph-sdk";
 import type { Logger } from "pino";
@@ -164,7 +164,7 @@ export class LangGraphDevProvider implements GraphExecutorPort {
       // Config bug: graph in availableGraphs but not in catalog
       this.log.error(
         { runId, graphName },
-        "Graph missing from LANGGRAPH_CATALOG; defaulting to deny-all"
+        "Graph missing from configured LangGraph catalog; defaulting to deny-all"
       );
       resolvedToolIds = [];
     } else if (toolIds === undefined) {

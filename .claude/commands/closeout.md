@@ -15,7 +15,10 @@ Read these before starting:
 
 ## Phase 1 — Scan & Plan
 
-Run `git diff --name-status origin/staging...HEAD` and read the changed files. From this single scan, build a change manifest:
+Resolve the base branch from the work item or workspace. Default to `origin/main`
+when no work item-specific base is declared. Run
+`git diff --name-status ${BASE_REF:-origin/main}...HEAD` and read the changed
+files. From this single scan, build a change manifest:
 
 1. **Coherence check**: Do ALL changes align with the assigned work item? Flag any unrelated changes — they should be split into a separate branch before PR.
 
@@ -25,6 +28,8 @@ Run `git diff --name-status origin/staging...HEAD` and read the changed files. F
    - Internal-only refactors or formatting? → no doc update needed
 
 3. **Check spec impact**: Read the work item's `spec_refs`. For each linked spec, does the diff change behavior that the spec describes? Note which spec sections need updating.
+
+4. **Name the validation use case**: Identify the concrete user/agent action the work protects or enables. If the branch adds a shared spine rather than the final endpoint gate, say which path is covered now and which protected action remains in the project roadmap.
 
 Output a short TODO list of all actions before executing any of them.
 
@@ -60,6 +65,10 @@ For each spec in the work item's `spec_refs` (skip if none):
 - Advance `spec_state` if appropriate (draft→proposed when invariants enumerated; proposed→active when code matches and Open Questions empty).
 - Update `verified:` date.
 - Do NOT add roadmap, phases, or planning content.
+- For CI/CD work, explicitly check whether the change crosses the app-flight vs
+  infra-provisioning boundary. App flight may assert deployable substrate; it
+  must not hide provisioning or Compose reconciliation unless the spec already
+  says that workflow owns the infra lever.
 
 ---
 
@@ -79,9 +88,12 @@ For each spec in the work item's `spec_refs` (skip if none):
 ## Phase 6 — Finalize
 
 1. Run `pnpm check:docs` and fix any errors until clean.
+   - Validation prose must name the actual route, graph, tool, or deployment lever. Do not settle for generic "chat works" or "API responds" language when the work item is about authorization, deployment, billing, or another specific protected action.
+   - Candidate validation must prove the deployed pod, not just service liveness: cite the flight workflow, deploy branch or Argo app, and `/version.buildSha` match for the node URL being validated.
 2. Commit all changes (doc updates, header updates, spec updates, work item, project) on the work item's branch. `git status` must be clean.
 3. Push to remote.
-4. Create PR to `staging` using `/pull-request` logic (conventional commit title + summary).
+4. Create PR to the resolved base branch using `/pull-request` logic
+   (conventional commit title + summary).
 5. Set `pr:` in work item frontmatter with the PR URL. Commit and push this update.
 6. Report: what was updated, what was flagged, any follow-up items discovered. Next command: `/review-implementation`.
 

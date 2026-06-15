@@ -132,7 +132,6 @@ export interface ContributionService {
   merge(args: {
     principal: Principal;
     contributionId: string;
-    confidencePct?: number;
   }): Promise<{ commitHash: string }>;
   close(args: {
     principal: Principal;
@@ -152,7 +151,9 @@ export function createContributionService(
     if (!edits || edits.length === 0 || gates.length === 0) return edits;
     const out: KnowledgeContributionEdit[] = [];
     for (const edit of edits) {
-      if (edit.op === "deprecate") {
+      // deprecate + cite carry no entry payload — nothing for the write gates
+      // (shape/provenance) to validate; forward unchanged.
+      if (edit.op === "deprecate" || edit.op === "cite") {
         out.push(edit);
         continue;
       }
@@ -320,14 +321,13 @@ export function createContributionService(
       return deps.port.diff(contributionId);
     },
 
-    async merge({ principal, contributionId, confidencePct }) {
+    async merge({ principal, contributionId }) {
       if (!deps.canMergeKnowledge(principal)) {
         throw new ContributionForbiddenError("merge requires admin session");
       }
       const result = await deps.port.merge({
         contributionId,
         principal,
-        confidencePct,
       });
       // Best-effort mirror. Caller wraps with its own .catch — service stays
       // framework-agnostic and never blocks the merge response on the push.

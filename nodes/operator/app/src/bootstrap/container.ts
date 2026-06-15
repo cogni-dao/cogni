@@ -21,8 +21,12 @@ import type {
   VcsCapability,
   WebSearchCapability,
 } from "@cogni/ai-tools";
-import { CORE_TOOL_BUNDLE } from "@cogni/ai-tools";
+import { CORE_TOOL_BUNDLE, VCS_TOOL_BUNDLE } from "@cogni/ai-tools";
 import type { AttributionStore } from "@cogni/attribution-ledger";
+import {
+  type AuthorizationPort,
+  OpenFgaAuthorizationAdapter,
+} from "@cogni/authorization-core";
 import { DrizzleAttributionAdapter } from "@cogni/db-client";
 import type { FinancialLedgerPort } from "@cogni/financial-ledger";
 import { createTigerBeetleAdapter } from "@cogni/financial-ledger/adapters";
@@ -139,6 +143,7 @@ import { createVcsCapability } from "@/bootstrap/capabilities/vcs";
 import { createWebSearchCapability } from "@/bootstrap/capabilities/web-search";
 import { createWorkItemCapability } from "@/bootstrap/capabilities/work-item";
 import type { RateLimitBypassConfig } from "@/bootstrap/http/wrapPublicRoute";
+import { resolveKnowledgeMirrorRemoteUrl } from "@/bootstrap/knowledge-mirror";
 import { startProcessHealthPublisher } from "@/bootstrap/publishers";
 import type {
   AccountService,
@@ -175,6 +180,7 @@ import type {
 } from "@/ports/server";
 import {
   getDaoTreasuryAddress,
+  getKnowledgeConfig,
   getNodeId,
   getOperatorWalletConfig,
   getPaymentConfig,
@@ -269,6 +275,8 @@ export interface Container {
   providerFunding: ProviderFundingPort | undefined;
   /** Connection broker — undefined when CONNECTIONS_ENCRYPTION_KEY not set */
   connectionBroker: ConnectionBrokerPort | undefined;
+  /** Authorization port — undefined until OpenFGA env is configured */
+  authorization: AuthorizationPort | undefined;
   /** Model catalog — aggregates all providers for model listing */
   modelCatalog: ModelCatalogPort;
   /** Provider resolver — resolves providerKey to ModelProviderPort for runtime dispatch */
@@ -639,14 +647,7 @@ function createContainer(): Container {
     const contributionPort = new DoltgresKnowledgeContributionAdapter({
       sql: doltClient,
     });
-    // Optional post-merge mirror to DoltHub (task.5069). Disabled when
-    // DOLTHUB_REMOTE_URL is unset. Gate-by-secret-presence follows the
-    // established pattern (Langfuse, Privy, PostHog) — DOLTHUB_REMOTE_URL
-    // is only granted to the production GitHub Environment Secret scope, so
-    // candidate-a/preview boot with the hook undefined and never push. v0
-    // invariant: prod is the only writer. Bootstrap: see
-    // docs/runbooks/dolthub-remote-bootstrap.md.
-    const remoteUrl = env.DOLTHUB_REMOTE_URL;
+    const remoteUrl = resolveKnowledgeMirrorRemoteUrl(getKnowledgeConfig());
     const pushMainOnMerge = remoteUrl
       ? wrapPushSafe(
           createDoltgresPusher({
@@ -674,7 +675,7 @@ function createContainer(): Container {
       ...(pushMainOnMerge ? { pushMainOnMerge } : {}),
     });
     log.info(
-      { dolthubMirror: Boolean(env.DOLTHUB_REMOTE_URL) },
+      { dolthubMirror: Boolean(remoteUrl) },
       "Knowledge store + EDO capability configured (Doltgres)"
     );
   } else {
@@ -726,7 +727,8 @@ function createContainer(): Container {
     vcsCapability,
     workItemCapability,
   });
-  const toolSource = createBoundToolSource([...CORE_TOOL_BUNDLE], toolBindings);
+  const operatorToolBundle = [...CORE_TOOL_BUNDLE, ...VCS_TOOL_BUNDLE];
+  const toolSource = createBoundToolSource(operatorToolBundle, toolBindings);
 
   // Config: rethrow in dev/test for diagnosis, respond_500 in production for safety
   const config: ContainerConfig = {
@@ -837,6 +839,20 @@ function createContainer(): Container {
     });
   })();
 
+  const authorization: AuthorizationPort | undefined =
+    env.OPENFGA_API_URL && env.OPENFGA_STORE_ID
+      ? new OpenFgaAuthorizationAdapter({
+          apiUrl: env.OPENFGA_API_URL,
+          storeId: env.OPENFGA_STORE_ID,
+          ...(env.OPENFGA_API_TOKEN !== undefined
+            ? { apiToken: env.OPENFGA_API_TOKEN }
+            : {}),
+          ...(env.OPENFGA_AUTHORIZATION_MODEL_ID !== undefined
+            ? { authorizationModelId: env.OPENFGA_AUTHORIZATION_MODEL_ID }
+            : {}),
+        })
+      : undefined;
+
   // Redis client for run event streaming (ephemeral stream plane)
   // Per REDIS_IS_STREAM_PLANE: only transient data, no durable state
   const redisClient = new Redis(env.REDIS_URL, {
@@ -913,6 +929,7 @@ function createContainer(): Container {
       : undefined,
     providerFunding,
     connectionBroker,
+    authorization,
     // Multi-provider model ports
     ...(() => {
       const platformProvider = new PlatformModelProvider(llmService);
@@ -1010,13 +1027,19 @@ export function resolveNodeRegistry(): NodeRegistryPort {
   return new CompositeNodeRegistryAdapter([
     new StaticNodeRegistryAdapter(SHOWCASE_NODES, domain),
     new DbNodeRegistryAdapter({
-      listListedSlugs: async () => {
+      listListedNodes: async () => {
         try {
           const rows = await resolveServiceDb()
-            .select({ slug: nodes.slug })
+            .select({
+              id: nodes.id,
+              slug: nodes.slug,
+              repoOwner: nodes.repoOwner,
+              repoName: nodes.repoName,
+              repoUrl: nodes.repoUrl,
+            })
             .from(nodes)
             .where(eq(nodes.status, "active"));
-          return rows.map((r) => r.slug);
+          return rows;
         } catch (err) {
           // Don't let a projection-read failure blank the homepage silently.
           log.warn({ err }, "node_registry_projection_read_failed");

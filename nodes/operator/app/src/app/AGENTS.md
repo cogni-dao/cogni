@@ -56,13 +56,13 @@ Next.js App Router delivery layer. UI pages and API routes that expose features 
 - **Suspense / error boundaries:** each route group exposes a
   `loading.tsx` + `error.tsx`. `(app)/loading.tsx` renders a generic
   fallback inside the sidebar shell; high-traffic routes
-  (`/dashboard`, `/chat`, `/work`, `/credits`, `/activity`, `/gov/*`)
+  (`/dashboard`, `/chat`, `/work`, `/credits`, `/activity`, `/gov/*`, `/nodes*`)
   override with a per-route `loading.tsx` that mirrors the page's
   macro layout. `(public)/loading.tsx` renders the marketing-shaped
   skeleton (Hero + cards + feed) used by `/`; `propose/merge`
   overrides with a form skeleton. Reusable primitives
   (`PageHeaderSkeleton`, `TableSkeleton`, `CardGridSkeleton`) live
-  under `kit/layout/`. `/setup/nodes*` and `/setup/dao*` are left on the generic fallback
+  under `kit/layout/`. `/nodes*` and legacy `/setup/dao*` redirects are left on the generic fallback
   for v0 — wizard-flow shape isn't worth a bespoke skeleton yet.
 
 ## Responsibilities

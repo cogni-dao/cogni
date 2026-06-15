@@ -21,6 +21,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@cogni/authorization-core": "workspace:*",
     "@types/json-schema": "^7.0.15"
   },
   "devDependencies": {

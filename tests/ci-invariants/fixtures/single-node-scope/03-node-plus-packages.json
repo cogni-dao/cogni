@@ -1,8 +1,8 @@
 {
-  "name": "node + infra: poly + packages/",
-  "paths": ["nodes/node-template/app/foo.ts", "packages/repo-spec/src/x.ts"],
+  "name": "node + infra: legacy-alpha + packages/",
+  "paths": ["nodes/legacy-alpha/app/foo.ts", "packages/repo-spec/src/x.ts"],
   "expected": {
-    "domains": ["node-template", "operator"],
+    "domains": ["legacy-alpha", "operator"],
     "pass": false,
     "rideAlongApplied": false
   }

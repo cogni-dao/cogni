@@ -45,10 +45,6 @@ nodes:
     node_name: "Poly Prediction"
     path: "nodes/poly"
     endpoint: "http://poly:3100/api/internal/billing/ingest"
-  - node_id: "f6d2a17d-b7f6-4ad1-a86b-f0ad2380999e"
-    node_name: "Resy Helper"
-    path: "nodes/resy"
-    endpoint: "http://resy:3300/api/internal/billing/ingest"
 
 # Control GitHub check conclusion behavior for gate errors/timeouts
 # false (default): errors/timeouts result in 'neutral' conclusion (non-blocking)

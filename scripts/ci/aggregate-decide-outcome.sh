@@ -16,6 +16,10 @@
 #                            must be the loud-fail backstop. The downstream
 #                            "Unlock preview on failure" step is gated
 #                            `if: always()` so the lease still releases.
+#   E2E_RESULT skipped      → allowed only for preview. Preview can skip e2e
+#                            while still being a valid per-node deploy when
+#                            promote, verify, and verify-deploy all succeeded.
+#                            Production remains strict and requires e2e success.
 #   STRICT_FAIL set         → exit 1 if outcome != dispatched. Used by
 #                            aggregate-production whose job-level `if:`
 #                            already requires all upstream results success;
@@ -67,6 +71,11 @@ fi
 
 outcome=failed
 no_promotion=0
+e2e_ok=false
+if [ "$E2E_RESULT" = "success" ] || { [ "$ENV" = "preview" ] && [ "$E2E_RESULT" = "skipped" ]; }; then
+  e2e_ok=true
+fi
+
 if [ "$any_promoted" != "true" ]; then
   echo "::error::aggregate-${ENV}: no cell reported promoted=true — refusing to advance"
   no_promotion=1
@@ -75,7 +84,7 @@ elif [ ${#unverified[@]} -gt 0 ]; then
 elif [ "$PROMOTE_RESULT" = "success" ] \
   && [ "$VERIFY_RESULT" = "success" ] \
   && [ "$VERIFY_DEPLOY_RESULT" = "success" ] \
-  && [ "$E2E_RESULT" = "success" ] \
+  && [ "$e2e_ok" = "true" ] \
   && [ "$DEPLOY_INFRA_RESULT" != "failure" ] \
   && [ "$DEPLOY_INFRA_RESULT" != "cancelled" ]; then
   outcome=dispatched

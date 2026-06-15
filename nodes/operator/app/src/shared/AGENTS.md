@@ -41,6 +41,9 @@ App-local building blocks that cannot be extracted to `@cogni/node-shared` (env,
   - Database schemas (Drizzle ORM) — `db/schema.ts`
   - Config server (`repoSpec.server.ts`) — file I/O + env
   - AI model catalog (`model-catalog.server.ts`) — LiteLLM fetch + env
+  - Node app scaffold generators (`node-app-scaffold/gens/`) — pure catalog,
+    overlay, AppSet, gitmodule, and ExternalSecret renderers for operator
+    GitHub App writes
   - Wagmi chain adapter (`evm-wagmi.ts`, `wagmi.config.ts`) — wagmi/chains runtime dep
   - Onchain client interface (`onchain/`) — viem types
   - Server logger (`observability/server/logger.ts`) — pino runtime
@@ -49,7 +52,7 @@ App-local building blocks that cannot be extracted to `@cogni/node-shared` (env,
   - CSS utility (`util/cn.ts`) — clsx + tailwind-merge
   - React hook (`hooks/useIsMobile.ts`)
 - **Re-exports from `@cogni/node-shared`:** observability barrels, web3 barrels, util barrels combine app-local + package exports
-- **Env/Config keys:** `PINO_LOG_LEVEL`, `DATABASE_URL`, `LITELLM_*`, `APP_ENV`, `NODE_ENV`
+- **Env/Config keys:** `PINO_LOG_LEVEL`, `DATABASE_URL`, `LITELLM_*`, `APP_ENV`, `NODE_ENV`, `OPENFGA_API_URL`, `OPENFGA_STORE_ID`, `OPENFGA_AUTHORIZATION_MODEL_ID`, `OPENFGA_API_TOKEN`
 
 ## Responsibilities
 

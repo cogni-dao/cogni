@@ -1,0 +1,15 @@
+{
+  "name": "node-formation: node app + its OWN catalog/overlay/AppSet ride along (bug.5086)",
+  "paths": [
+    "nodes/legacy-alpha/app/src/app/(public)/page.tsx",
+    "infra/catalog/legacy-alpha.yaml",
+    "infra/k8s/overlays/candidate-a/legacy-alpha/kustomization.yaml",
+    "infra/k8s/overlays/preview/legacy-alpha/kustomization.yaml",
+    "infra/k8s/argocd/candidate-a-legacy-alpha-applicationset.yaml"
+  ],
+  "expected": {
+    "domains": ["legacy-alpha"],
+    "pass": true,
+    "rideAlongApplied": true
+  }
+}
