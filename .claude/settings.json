@@ -24,7 +24,7 @@
           },
           {
             "type": "command",
-            "command": "URL=\"${COGNI_COGNITION_URL:-https://cognidao.org/api/v1/cognition}\"; BUNDLE=\"$(curl -fsS --max-time 6 \"$URL\" 2>/dev/null | jq -r '.markdown // empty' 2>/dev/null)\"; if [ -n \"$BUNDLE\" ]; then printf '%s\\n' \"$BUNDLE\"; else echo \"(cognition substrate unreachable at $URL — self-serve: curl -fsS \\\"$URL\\\" | jq -r .markdown)\"; fi"
+            "command": "bash scripts/agent/session-cognition.sh"
           }
         ]
       }

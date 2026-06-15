@@ -18,9 +18,12 @@ into your context at session start. It is the source of truth, not this file.
   curl -fsS https://cognidao.org/api/v1/cognition | jq -r .markdown
   ```
 
-A SessionStart hook in [`.claude/settings.json`](.claude/settings.json) does this
-automatically; Claude Code and Codex both inject SessionStart stdout into context.
-Why this shape: see [`docs/spec/node-baas-architecture.md`](docs/spec/node-baas-architecture.md) § Cognition Substrate.
+SessionStart hooks inject this automatically — Claude Code ([`.claude/settings.json`](.claude/settings.json))
+and Codex ([`.codex/config.toml`](.codex/config.toml)) both run the shared loader
+[`scripts/agent/session-cognition.sh`](scripts/agent/session-cognition.sh) and inject its stdout.
+**Codex needs a one-time trust** of the `.codex/` layer (approve via `/hooks`). Conductor/other
+runtimes: run the self-serve `curl` above. Why this shape: see
+[`docs/spec/node-baas-architecture.md`](docs/spec/node-baas-architecture.md) § Cognition Substrate.
 
 ## The irreducible loop (the bundle expands this)
 
