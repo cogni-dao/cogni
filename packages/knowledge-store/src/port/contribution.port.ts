@@ -42,7 +42,6 @@ export interface CreateEdoHypothesisInput {
     evaluateAt: Date;
     resolutionStrategy?: string | null;
     tags?: string[];
-    confidencePct?: number;
   };
   evidenceForIds?: string[];
 }
@@ -61,7 +60,6 @@ export interface CreateEdoDecisionInput {
     title: string;
     content: string;
     tags?: string[];
-    confidencePct?: number;
   };
   derivesFromHypothesisId: string;
 }
@@ -81,7 +79,6 @@ export interface CreateEdoOutcomeInput {
     title: string;
     content: string;
     tags?: string[];
-    confidencePct?: number;
   };
   hypothesisId: string;
   edge: "validates" | "invalidates";
@@ -174,7 +171,6 @@ export interface KnowledgeContributionPort {
   merge(input: {
     contributionId: string;
     principal: Principal;
-    confidencePct?: number;
   }): Promise<{ commitHash: string }>;
 
   close(input: {

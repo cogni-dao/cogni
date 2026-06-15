@@ -10,7 +10,7 @@
  *   - Contract remains stable; breaking changes require new version
  *   - All consumers use z.infer types
  *   - Server stamps branch edits with source_ref='contribution:<id>:<seq>'
- *   - confidencePct is capped at 30 server-side for principal.kind==='agent'
+ *   - Confidence is never author-set; the server policy initializes + recomputes it
  * Side-effects: none
  * Links: docs/design/knowledge-contribution-api.md, docs/spec/knowledge-data-plane.md, work/items/task.0425.knowledge-contribution-api.md
  * @internal
@@ -50,9 +50,7 @@ export type ContributionsListQuery = z.infer<
   typeof ContributionsListQuerySchema
 >;
 
-export const ContributionMergeRequestSchema = z.object({
-  confidencePct: z.number().int().min(30).max(95).optional(),
-});
+export const ContributionMergeRequestSchema = z.object({});
 export type ContributionMergeRequest = z.infer<
   typeof ContributionMergeRequestSchema
 >;

@@ -48,7 +48,6 @@ export interface HypothesizeParams {
   sourceRef?: string;
   sourceNode?: string;
   tags?: string[];
-  confidencePct?: number;
 }
 
 /**
@@ -67,7 +66,6 @@ export interface DecideParams {
   sourceRef?: string;
   sourceNode?: string;
   tags?: string[];
-  confidencePct?: number;
 }
 
 /**
@@ -87,7 +85,6 @@ export interface RecordOutcomeParams {
   sourceRef?: string;
   sourceNode?: string;
   tags?: string[];
-  confidencePct?: number;
 }
 
 /**

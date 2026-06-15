@@ -304,9 +304,6 @@ export async function handleMerge(
     const result = await svc.merge({
       principal,
       contributionId,
-      ...(parsed.data.confidencePct != null
-        ? { confidencePct: parsed.data.confidencePct }
-        : {}),
     });
     return NextResponse.json({ contributionId, ...result });
   } catch (e) {

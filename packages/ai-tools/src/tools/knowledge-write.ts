@@ -9,7 +9,7 @@
  *   - TOOL_ID_NAMESPACED: ID is `core__knowledge_write`
  *   - EFFECT_TYPED: effect is `state_change`
  *   - AUTO_COMMIT: Every write creates a Doltgres commit automatically.
- *   - CONFIDENCE_DEFAULTS: New entries default to 30% (draft).
+ *   - CONFIDENCE_IS_POLICY: Confidence is never author-set; the domain policy initializes + recomputes it.
  * Side-effects: IO (database write + dolt_commit via capability)
  * Links: docs/spec/knowledge-data-plane.md
  * @public
@@ -57,15 +57,6 @@ export const KnowledgeWriteInputSchema = z.object({
     .string()
     .optional()
     .describe("Optional stable subject key (e.g., a market ID, entity name)"),
-  confidencePct: z
-    .number()
-    .int()
-    .min(0)
-    .max(100)
-    .optional()
-    .describe(
-      "Confidence 0-100. Defaults to 30 (draft). 80=verified, 95+=hardened."
-    ),
   sourceRef: z
     .string()
     .optional()
@@ -165,7 +156,6 @@ export function createKnowledgeWriteImplementation(
         content: input.content,
         sourceType: input.sourceType,
         entityId: input.entityId,
-        confidencePct: input.confidencePct ?? CONFIDENCE.DRAFT,
         sourceRef: input.sourceRef,
         tags: input.tags,
         citations: input.citations,
