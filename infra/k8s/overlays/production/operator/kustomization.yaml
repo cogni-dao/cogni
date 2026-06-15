@@ -8,14 +8,14 @@ namespace: cogni-production
 resources:
   - ../../../base/node-app
   - ../../../base/openfga-external
-  - external-secret.yaml
+  - ../../../../../nodes/operator/k8s/external-secrets/production
 
 namePrefix: operator-
 
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/cogni-template
-    digest: "sha256:76c938d334a38f65f525bdc8532fcf82c3dae7a7c54e2e5edb657d1ce2a2cb48"
+    digest: "sha256:7f4cf6605b858f14e3f716b9ec956b20c311cd755ac5428604df82dd3fb06368"
 
 patches:
   # Node-specific ConfigMap values.
@@ -85,9 +85,6 @@ patches:
       - op: replace
         path: /spec/template/spec/initContainers/0/envFrom/1/secretRef/name
         value: "operator-env-secrets"
-      - op: add
-        path: /spec/template/spec/serviceAccountName
-        value: "default"
       - op: add
         path: /spec/selector/matchLabels/app.kubernetes.io~1instance
         value: "operator"
