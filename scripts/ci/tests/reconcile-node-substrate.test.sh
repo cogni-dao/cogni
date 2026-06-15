@@ -290,7 +290,7 @@ env \
 grep -q "substrate ready inputs reconciled for operator" "$TMPROOT/relative-catalog-root.out"
 
 # task.5017 — deploy ⊆ provisioned: reconciling a node into an env outside its
-# `envs:` node-set must fail loud BEFORE any substrate mutation (oss is
+# `envs:` node-set must fail loud BEFORE any substrate mutation (node-template is
 # [candidate-a, preview], not production).
 set +e
 env \
@@ -304,10 +304,10 @@ env \
   FAKE_REMOTE_ROOT="$REMOTE_ROOT" \
   FAKE_REMOTE_PATH="$FAKEBIN" \
   FAKE_BAO_ROOT="$BAO_ROOT" \
-  bash scripts/ci/reconcile-node-substrate.sh production oss > "$TMPROOT/offset-env.out" 2>&1
+  bash scripts/ci/reconcile-node-substrate.sh production node-template > "$TMPROOT/offset-env.out" 2>&1
 offset_rc=$?
 set -e
-[ "$offset_rc" -ne 0 ] || { echo "expected reconcile to fail for oss in production (not in its envs)" >&2; exit 1; }
+[ "$offset_rc" -ne 0 ] || { echo "expected reconcile to fail for node-template in production (not in its envs)" >&2; exit 1; }
 grep -q "is not in the 'production' node-set" "$TMPROOT/offset-env.out" \
   || { echo "missing node-set rejection message; got:" >&2; cat "$TMPROOT/offset-env.out" >&2; exit 1; }
 
