@@ -21,6 +21,10 @@
           {
             "type": "command",
             "command": "if [ ! -f node_modules/.modules.yaml ]; then echo 'pnpm store not linked — running install...'; pnpm install --frozen-lockfile; else echo 'node_modules already linked — skipping install'; fi"
+          },
+          {
+            "type": "command",
+            "command": "URL=\"${COGNI_BOOTSTRAP_URL:-https://cognidao.org/api/v1/knowledge/bootstrap}\"; BUNDLE=\"$(curl -fsS --max-time 6 \"$URL\" 2>/dev/null | jq -r '.markdown // empty' 2>/dev/null)\"; if [ -n \"$BUNDLE\" ]; then printf '%s\\n' \"$BUNDLE\"; else echo \"(cognition substrate unreachable at $URL — self-serve: curl -fsS \\\"$URL\\\" | jq -r .markdown)\"; fi"
           }
         ]
       }

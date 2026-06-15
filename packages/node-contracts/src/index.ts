@@ -61,6 +61,7 @@ export * from "./graphs.run.internal.v1.contract";
 export * from "./http/openapi.v1";
 export * from "./http/router.v1";
 // ── Knowledge ───────────────────────────────────────────────────────────────
+export * from "./knowledge.bootstrap.v1.contract";
 export * from "./knowledge.contributions.v1.contract";
 export * from "./knowledge.domains.v1.contract";
 export * from "./knowledge.list.v1.contract";

@@ -72,6 +72,10 @@ export async function GET(request: Request) {
       promote: `${origin}/api/v1/deploy/promote`,
       nodeAccessRequest: `${origin}/api/v1/nodes/{id}/access-requests`,
       nodeDevelopers: `${origin}/api/v1/nodes/{id}/developers`,
+      // Cognition substrate: the session-start kickstart bundle (irreducible
+      // invariants + live skills index + domain pointers). A SessionStart hook
+      // fetches this and injects it — replaces git-synced AGENTS.md sprawl.
+      knowledgeBootstrap: `${origin}/api/v1/knowledge/bootstrap`,
     },
     process: {
       contributionSpec: "docs/spec/development-lifecycle.md",
@@ -86,6 +90,14 @@ export async function GET(request: Request) {
         "flight_candidate_a",
         "validate_candidate_with_loki",
       ],
+    },
+    cognition: {
+      // The node serves an agent's session-start cognition as a substrate.
+      // Wire a SessionStart hook that echoes the bundle's markdown into context;
+      // Claude Code and Codex both inject SessionStart stdout. The bundle is
+      // public + index-only (full entry bodies stay behind the authed routes).
+      bootstrapUrl: `${origin}/api/v1/knowledge/bootstrap`,
+      sessionStartHook: `curl -fsS ${origin}/api/v1/knowledge/bootstrap | jq -r .markdown`,
     },
     defaults: {
       model: "gpt-4o-mini",
