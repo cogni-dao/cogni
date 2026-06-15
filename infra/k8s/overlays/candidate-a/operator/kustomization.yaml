@@ -9,14 +9,13 @@ resources:
   - ../../../base/node-app
   - ../../../base/openfga-external
   - external-secret.yaml
-  - ./secrets-writer-sa.yaml
 
 namePrefix: operator-
 
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/cogni-template
-    digest: "sha256:b949e97a3efd25c84495442ddad248f1c539f8642ac2db158178cf9685e3357a"
+    digest: "sha256:0250cc2e6c01a80172d19b00583b65c50990b27849ca16815e75d2d899511b53"
 
 patches:
   - target:
@@ -65,12 +64,6 @@ patches:
       - op: add
         path: /data/OPENFGA_API_URL
         value: "http://operator-openfga-external:8080"
-      # Node self-serve secret writes — the operator's OpenBao writer role (the
-      # SA + projected token are wired on the Deployment below). OPENBAO_ADDR
-      # defaults to the in-cluster ClusterIP, so only the role name is set here.
-      - op: add
-        path: /data/OPENBAO_NODE_SECRETS_WRITER_ROLE
-        value: "candidate-a-node-secrets-writer"
   - target:
       kind: Service
       name: node-app
@@ -92,39 +85,14 @@ patches:
         path: /spec/template/spec/initContainers/0/envFrom/1/secretRef/name
         value: "operator-env-secrets"
       - op: add
+        path: /spec/template/spec/serviceAccountName
+        value: "default"
+      - op: add
         path: /spec/selector/matchLabels/app.kubernetes.io~1instance
         value: "operator"
       - op: add
         path: /spec/template/metadata/labels/app.kubernetes.io~1instance
         value: "operator"
-
-  # design.node-self-serve-secrets §1.B: the operator pod's OWN OpenBao identity.
-  # serviceAccountName resolves to operator-secrets-writer (namePrefix), bound by
-  # the <env>-node-secrets-writer k8s-auth role. The projected token carries the
-  # cogni-openbao audience (the default audience is bound to no role — silent-auth trap).
-  - target:
-      kind: Deployment
-      name: node-app
-    patch: |
-      - op: add
-        path: /spec/template/spec/serviceAccountName
-        value: secrets-writer
-      - op: add
-        path: /spec/template/spec/volumes
-        value:
-          - name: openbao-token
-            projected:
-              sources:
-                - serviceAccountToken:
-                    path: token
-                    audience: cogni-openbao
-                    expirationSeconds: 3600
-      - op: add
-        path: /spec/template/spec/containers/0/volumeMounts
-        value:
-          - name: openbao-token
-            mountPath: /var/run/secrets/openbao
-            readOnly: true
 
   # task.0423: Doltgres knowledge-plane migrator runs as a second initContainer
   # on the operator Deployment. DATABASE_URL maps to DOLTGRES_URL (separate from
