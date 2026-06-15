@@ -14,6 +14,8 @@
  */
 
 import {
+  CitationTargetNotFoundError,
+  CitationTypeMismatchError,
   ContributionConflictError,
   ContributionForbiddenError,
   ContributionNotFoundError,
@@ -68,6 +70,20 @@ function mapError(e: unknown): NextResponse {
     return NextResponse.json({ error: e.message }, { status: 429 });
   if (e instanceof DomainNotRegisteredError)
     return NextResponse.json({ error: e.message }, { status: 400 });
+  // A cite/EDO edit whose target resolves on neither the branch nor main, or
+  // whose edge type doesn't match the cited entry_type, is a client error —
+  // never a 500 (bug.5024). The cross-plane (main ∪ branch) resolution lives in
+  // the adapter; these map the genuinely-absent / mistyped cases to typed 4xx.
+  if (e instanceof CitationTargetNotFoundError)
+    return NextResponse.json(
+      { error: e.message, code: "cited_not_found" },
+      { status: 404 }
+    );
+  if (e instanceof CitationTypeMismatchError)
+    return NextResponse.json(
+      { error: e.message, code: "edge_type_mismatch" },
+      { status: 400 }
+    );
   if (e instanceof KnowledgeGateError)
     return NextResponse.json(
       { error: "knowledge gate rejected write", issues: e.errors },
