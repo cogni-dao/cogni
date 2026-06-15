@@ -25,9 +25,9 @@ on:
         required: false
         default: ""
       skip_infra:
-        description: "Skip deploy-infra (Compose) step — use for app-only changes; infra has its own lever (candidate-flight-infra.yml)"
+        description: "Skip deploy-infra (Compose) step. Default true: app-digest promotion is orthogonal to substrate (mirrors candidate-flight, which has no deploy-infra job). Set false ONLY when the promoted diff touches infra/compose/**, an ESO/OpenBao secret the VM must materialize, or edge/runtime topology."
         required: false
-        default: "false"
+        default: "true"
         type: choice
         options: ["true", "false"]
       deploy_infra_mode:

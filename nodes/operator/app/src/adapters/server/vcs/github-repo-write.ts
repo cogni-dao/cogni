@@ -474,6 +474,12 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
     const inputs: Record<string, string> = {
       environment: input.env,
       nodes: input.slug,
+      // APP_PROMOTE_IS_NO_INFRA: the agent-facing promote endpoint reconciles the
+      // app digest only — orthogonal to substrate, mirroring candidate-flight (no
+      // deploy-infra job). Set explicitly, not via the workflow default, so the
+      // contract can't silently flip. Compose/secret/edge changes go through a
+      // deliberate infra lever, never an app promotion.
+      skip_infra: "true",
     };
     // Omit source_sha for catalog-pin nodes (CATALOG_SOURCE_SHA_IS_THE_DEPLOY_PIN);
     // never pass a child SHA as the parent checkout ref.

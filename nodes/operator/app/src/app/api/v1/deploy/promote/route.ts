@@ -8,6 +8,7 @@
  * Invariants:
  *   - AUTHZ_BEFORE_SIDE_EFFECT: `node.promote_production` (→ `can_promote_production`) is checked before any dispatch.
  *   - PROMOTION_RUNS_AS_THE_OPERATOR: dispatch uses the operator GitHub App, never a personal credential.
+ *   - APP_PROMOTE_IS_NO_INFRA: promotion reconciles the app digest only (`skip_infra=true`), orthogonal to substrate; Compose/secret/edge changes use a deliberate infra lever.
  *   - PRODUCTION_ONLY_V0: only `env=production` is accepted; preview auto-promote is the operator merge-hook path (ungated). A `can_promote_preview` rung is additive when manual preview promotes arrive.
  * Side-effects: IO (authz check, GitHub workflow_dispatch)
  * Links: docs/spec/node-ci-cd-contract.md § Env-promotion progression, docs/spec/rbac.md, docs/spec/cicd-platform-boundary.md

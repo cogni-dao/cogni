@@ -113,6 +113,11 @@ Admin-merging bypasses `merge_group` → no `mq-*` images → `flight-preview.ym
 
 Manual only. There is no production auto-trigger today (`promote-to-production.yml` was removed in bug.0361).
 
+Two ways to dispatch:
+
+- **Agent / API (preferred):** `POST /api/v1/deploy/promote {nodeId, env:"production", sourceSha?}` — RBAC-gated (`can_promote_production`), dispatched by the operator GitHub App, never a personal credential. **App-digest only — `skip_infra=true` is hard-set (`APP_PROMOTE_IS_NO_INFRA`)**; infra is a separate deliberate lever.
+- **Human CLI:** the `gh` dispatch below.
+
 ```bash
 # SOURCE_SHA must be (a) on main, (b) new enough to contain all current
 # verify-deploy scripts. The newest per-node preview promotion sha is the
@@ -122,14 +127,26 @@ gh workflow run promote-and-deploy.yml --ref main \
   -f environment=production \
   -f source_sha=$SOURCE_SHA \
   -f build_sha=$SOURCE_SHA \
-  -f nodes= \
-  -f skip_infra=false
+  -f nodes=
+  # skip_infra defaults to TRUE (app-digest promotion is orthogonal to substrate,
+  # mirroring candidate-flight, which has no deploy-infra job). Add `-f skip_infra=false`
+  # ONLY when this SOURCE_SHA's diff vs the deployed sha changes the substrate:
 ```
+
+### When to deploy infra (`skip_infra=false`) — the 1%
+
+App promotion never implies infra. Set `skip_infra=false` ONLY when the promoted diff touches the substrate/Compose layer:
+
+1. **`infra/compose/**`\*\* — edge/Caddy routes, litellm, temporal, autoheal, db-backup, alloy, openclaw-gateway runtime.
+2. **A new/changed secret the VM must materialize** — a new per-node `ExternalSecret` / ESO-OpenBao declaration, or a compose service consuming a new env var. If it's _pod_ secrets only (no Compose change), add `-f deploy_infra_mode=k8s-secrets-only` instead.
+3. **Edge/runtime topology** — a new Compose service, a Caddy route, NodePort/ingress wiring living in compose infra.
+
+Everything else — app code, app image, k8s overlay/digest, **DB migrations** (run by the migrator image in the k8s lane, not deploy-infra) — is app-only ⇒ leave `skip_infra` at its `true` default.
 
 - `source_sha` = newest sha that's currently green on any preview node (preflight #4). Do NOT use `deploy/preview:.promote-state/current-sha` — `aggregate-rollup.sh` writes the merge-base of per-node tips there, which under prolonged affected-only divergence lands behind the workflow scripts and hard-fails verify-deploy at exit 127. The per-app digest + BUILD_SHA forwarding (via `preview_forward=true` and `source-sha-by-app.json`) is what actually carries each node's content; `source_sha` is only the Argo / deploy-branch label.
 - `build_sha` = same as `source_sha` for normal merge-queue merges (pr-build merge_group bakes BUILD_SHA = queue commit = main HEAD). Differs only in unusual squash-merge scenarios.
 - `nodes` = empty for all-nodes; CSV like `operator,poly` to scope.
-- `skip_infra` = false unless infra didn't change and you want a faster run.
+- `skip_infra` = **defaults true** (app-only). Set `false` ONLY for the substrate-change cases enumerated above; app promotion is orthogonal to infra.
 
 After dispatch, **always** confirm production `/version.buildSha` actually advanced — see Monitoring.
 

@@ -1087,3 +1087,58 @@ describe("GitHubRepoWriter.packageImageTagExists", () => {
     ]);
   });
 });
+
+const DISPATCH_ROUTE =
+  "POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches";
+
+describe("GitHubRepoWriter.dispatchNodePromote", () => {
+  it("dispatches promote-and-deploy with skip_infra=true (APP_PROMOTE_IS_NO_INFRA)", async () => {
+    routeHandlers = { [DISPATCH_ROUTE]: () => ({}) };
+
+    const result = await makeWriter().dispatchNodePromote({
+      owner: "Cogni-DAO",
+      repo: "cogni",
+      env: "production",
+      slug: "habitat",
+    });
+
+    expect(result.dispatched).toBe(true);
+    const dispatch = requests.find(
+      (request) => request.route === DISPATCH_ROUTE
+    );
+    expect(dispatch?.params).toMatchObject({
+      workflow_id: "promote-and-deploy.yml",
+      ref: "main",
+      inputs: {
+        environment: "production",
+        nodes: "habitat",
+        skip_infra: "true",
+      },
+    });
+    expect(
+      (dispatch?.params.inputs as Record<string, string>).source_sha
+    ).toBeUndefined();
+  });
+
+  it("forwards source_sha only when provided (catalog-pin nodes omit it)", async () => {
+    routeHandlers = { [DISPATCH_ROUTE]: () => ({}) };
+
+    await makeWriter().dispatchNodePromote({
+      owner: "Cogni-DAO",
+      repo: "cogni",
+      env: "production",
+      slug: "habitat",
+      sourceSha: "abc1230000000000000000000000000000000000",
+    });
+
+    const dispatch = requests.find(
+      (request) => request.route === DISPATCH_ROUTE
+    );
+    expect((dispatch?.params.inputs as Record<string, string>).source_sha).toBe(
+      "abc1230000000000000000000000000000000000"
+    );
+    expect((dispatch?.params.inputs as Record<string, string>).skip_infra).toBe(
+      "true"
+    );
+  });
+});
