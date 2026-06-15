@@ -29,6 +29,7 @@ const canonicalOwnerFiles = [
   "infra/github/merge-queue.json",
   "infra/provision/cherry/base/terraform.tfvars.example",
   "infra/provision/cherry/base/variables.tf",
+  "infra/k8s/overlays/production/operator/kustomization.yaml",
 ] as const;
 
 function readRepoFile(file: string): string {

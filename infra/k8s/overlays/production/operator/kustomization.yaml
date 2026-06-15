@@ -44,13 +44,13 @@ patches:
         value: "https://cognidao.org"
       - op: add
         path: /data/NODE_MINT_OWNER
-        value: "Cogni-DAO"
+        value: "cogni-dao"
       - op: add
         path: /data/NODE_TEMPLATE_OWNER
-        value: "Cogni-DAO"
+        value: "cogni-dao"
       - op: add
         path: /data/NODE_SUBMODULE_PARENT_OWNER
-        value: "Cogni-DAO"
+        value: "cogni-dao"
       - op: add
         path: /data/NODE_SUBMODULE_PARENT_REPO
         value: "cogni"
