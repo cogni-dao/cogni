@@ -109,10 +109,31 @@ langgraph:brain       — general reasoning + tools
 langgraph:research    — web research
 langgraph:ponderer    — long-form thinking
 langgraph:pr-review   — code review
+langgraph:pr-manager  — PR lifecycle management; can inspect CI and merge eligible PRs
 langgraph:browser     — browser automation
 ```
 
 Pass the short name (without `langgraph:` prefix) as `graph_name` in completions requests.
+
+## PR Manager merge delegation
+
+External agents do not need direct write permission to the operator repo to finish a ready node-formation PR. If the parent deployment PR is non-draft, fully green, and the node-formation capacity gate already passed, ask the operator PR Manager graph to inspect and merge it:
+
+```bash
+curl -s -X POST $BASE/api/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $API_KEY" \
+  -d '{
+    "model": "gpt-4o-mini",
+    "graph_name": "pr-manager",
+    "messages": [{
+      "role": "user",
+      "content": "Inspect parent deployment PR https://github.com/OWNER/REPO/pull/NUMBER. If it is non-draft, fully green, and the node-formation capacity gate already passed, squash-merge it; otherwise report the exact blocker."
+    }]
+  }'
+```
+
+Do not use this to bypass missing gates. If PR Manager cannot prove eligibility, the correct result is a blocker report, not a manual gitlink edit or a direct GitHub merge by the external agent.
 
 ## Full validation flow (agent-first, no browser)
 

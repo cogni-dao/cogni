@@ -29,7 +29,7 @@ export const VcsMergePrInputSchema = z.object({
   prNumber: z.number().int().min(1).describe("Pull request number to merge"),
   method: z
     .enum(["squash", "merge", "rebase"])
-    .describe("Merge method. Use 'squash' for feature PRs targeting staging."),
+    .describe("Merge method. Use 'squash' for accepted feature PRs."),
 });
 export type VcsMergePrInput = z.infer<typeof VcsMergePrInputSchema>;
 
@@ -58,8 +58,8 @@ export const vcsMergePrContract: ToolContract<
   description:
     "Merge a pull request. IMPORTANT: Always check CI status and review approval " +
     "with core__vcs_get_ci_status before merging. " +
-    "Never merge PRs targeting main directly — those go through the release workflow. " +
-    "Use 'squash' for feature PRs targeting staging.",
+    "The normal code target is main; preview and production are promoted later by the deploy plane. " +
+    "Use 'squash' for accepted feature PRs.",
   effect: "state_change",
   inputSchema: VcsMergePrInputSchema,
   outputSchema: VcsMergePrOutputSchema,
