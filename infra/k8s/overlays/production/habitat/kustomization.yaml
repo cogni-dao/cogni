@@ -13,7 +13,7 @@ namePrefix: habitat-
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/habitat
-    digest: "sha256:6d849d73ec4b754560f93ac49c7d6dd2fd75962d6fcacc1ff15574e5aa6f663e"
+    digest: "sha256:5572d02c957a154f94998e428594a5295af446e8eaebc47c6c8eb0f39e7120d5"
 
 patches:
   - target:
