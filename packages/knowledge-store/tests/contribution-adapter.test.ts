@@ -16,6 +16,7 @@ import { describe, expect, it } from "vitest";
 
 import { DoltgresKnowledgeContributionAdapter } from "../src/adapters/doltgres/contribution-adapter.js";
 import type { Principal } from "../src/domain/contribution-schemas.js";
+import { CitationTargetNotFoundError } from "../src/port/knowledge-store.port.js";
 
 const record = {
   id: "contrib-agent-1-abc123",
@@ -280,4 +281,173 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
       )
     ).toBe(true);
   });
+
+  // bug.5024: a branch contribution citing a row that was merged to main AFTER
+  // the branch forked. The target resolves on main but not on the branch HEAD;
+  // the cite must still succeed (main ∪ branch resolution) and skip the
+  // branch-local confidence recompute (no branch row to UPDATE).
+  it("accepts a cross-plane cite (target on main, absent from branch) and skips recompute", async () => {
+    const fake = new CrossPlaneFakeSql({
+      mainEntryTypes: new Map([["cicd-agent-playbook", "finding"]]),
+      branchEntryTypes: new Map(),
+    });
+
+    const adapter = new DoltgresKnowledgeContributionAdapter({
+      sql: fake as unknown as Sql,
+    });
+    const commit = await adapter.appendCommit({
+      contributionId: "contrib-agent-1-abc123",
+      principal: { id: "agent-1", kind: "agent" },
+      message: "cite a merged-main atom from a branch entry",
+      edits: [
+        {
+          op: "cite",
+          citingId: "oss-langgraph",
+          citedId: "cicd-agent-playbook",
+          citationType: "supports",
+        },
+      ],
+    });
+
+    expect(commit.commitHash).toBe("next456");
+    // The edge is recorded on the branch even though the target is main-only.
+    expect(
+      fake.conn.queries.some(
+        (q) =>
+          q.includes("INSERT INTO citations") &&
+          q.includes("'cicd-agent-playbook'")
+      )
+    ).toBe(true);
+    // main was consulted for the cited entry_type when the branch lookup missed.
+    expect(
+      fake.queries.some(
+        (q) =>
+          q.includes("entry_type FROM knowledge") &&
+          q.includes("'cicd-agent-playbook'")
+      )
+    ).toBe(true);
+    // No branch-local recompute: the cited row isn't on the branch to UPDATE.
+    expect(
+      fake.conn.queries.some((q) =>
+        q.includes("UPDATE knowledge SET confidence_pct")
+      )
+    ).toBe(false);
+    expect(
+      fake.conn.queries.some((q) => q.includes("source_type FROM knowledge"))
+    ).toBe(false);
+  });
+
+  it("throws CitationTargetNotFoundError when the cited row is on neither branch nor main", async () => {
+    const fake = new CrossPlaneFakeSql({
+      mainEntryTypes: new Map(),
+      branchEntryTypes: new Map(),
+    });
+
+    const adapter = new DoltgresKnowledgeContributionAdapter({
+      sql: fake as unknown as Sql,
+    });
+    await expect(
+      adapter.appendCommit({
+        contributionId: "contrib-agent-1-abc123",
+        principal: { id: "agent-1", kind: "agent" },
+        message: "cite a bogus id",
+        edits: [
+          {
+            op: "cite",
+            citingId: "oss-langgraph",
+            citedId: "does-not-exist-anywhere",
+            citationType: "supports",
+          },
+        ],
+      })
+    ).rejects.toBeInstanceOf(CitationTargetNotFoundError);
+  });
 });
+
+/**
+ * Fakes that distinguish the branch (reserved connection) plane from the merged
+ * `main` (pool) plane so the cross-plane cite path (bug.5024) can be exercised.
+ * `entry_type FROM knowledge` reads resolve against the per-plane id maps; the
+ * citing-row existence check (`SELECT 1 ...`) always resolves on the branch.
+ */
+function idFromQuery(query: string): string | undefined {
+  return query.match(/id = '([^']+)'/)?.[1];
+}
+
+class CrossPlaneFakeReservedSql {
+  readonly queries: string[] = [];
+
+  constructor(private readonly branchEntryTypes: Map<string, string>) {}
+
+  async unsafe(
+    query: string
+  ): Promise<Record<string, unknown>[] & { count?: number }> {
+    this.queries.push(query);
+    if (query.includes("dolt_hashof")) return [{ dolt_hashof: "head123" }];
+    if (query.includes("dolt_commit")) return [{ dolt_commit: ["{next456}"] }];
+    if (query.includes("SELECT 1 FROM knowledge WHERE id"))
+      return [{ "?column?": 1 }];
+    if (query.includes("entry_type FROM knowledge")) {
+      const t = this.branchEntryTypes.get(idFromQuery(query) ?? "");
+      return t ? [{ entry_type: t }] : [];
+    }
+    if (query.includes("source_type FROM knowledge"))
+      return [{ source_type: "external" }];
+    if (query.includes("citation_type FROM citations")) return [];
+    if (query.includes("UPDATE knowledge_contributions")) {
+      const rows: Record<string, unknown>[] & { count?: number } = [];
+      rows.count = 1;
+      return rows;
+    }
+    if (query.includes("FROM knowledge_contribution_commits")) {
+      return [
+        {
+          contribution_id: "contrib-agent-1-abc123",
+          seq: 4,
+          commit_hash: "next456",
+          principal_kind: "agent",
+          principal_id: "agent-1",
+          auth_source: "bearer",
+          message: "append",
+          edit_count: 1,
+          source_ref: "contribution:contrib-agent-1-abc123:4",
+          created_at: new Date("2026-05-19T00:00:00.000Z"),
+        },
+      ];
+    }
+    return [];
+  }
+
+  release(): void {
+    this.queries.push("release");
+  }
+}
+
+class CrossPlaneFakeSql {
+  readonly queries: string[] = [];
+  readonly conn: CrossPlaneFakeReservedSql;
+  private readonly mainEntryTypes: Map<string, string>;
+
+  constructor(opts: {
+    mainEntryTypes: Map<string, string>;
+    branchEntryTypes: Map<string, string>;
+  }) {
+    this.mainEntryTypes = opts.mainEntryTypes;
+    this.conn = new CrossPlaneFakeReservedSql(opts.branchEntryTypes);
+  }
+
+  async unsafe(query: string): Promise<Record<string, unknown>[]> {
+    this.queries.push(query);
+    if (query.includes("FROM knowledge_contributions")) return [record];
+    if (query.includes("entry_type FROM knowledge")) {
+      const t = this.mainEntryTypes.get(idFromQuery(query) ?? "");
+      return t ? [{ entry_type: t }] : [];
+    }
+    if (query.includes("dolt_diff")) return [];
+    return [];
+  }
+
+  async reserve(): Promise<ReservedSql> {
+    return this.conn as unknown as ReservedSql;
+  }
+}
