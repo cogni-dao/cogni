@@ -15,7 +15,10 @@
  */
 
 import type { Sql } from "postgres";
-
+import {
+  initializeConfidence,
+  recomputeConfidence as recomputeConfidenceByPolicy,
+} from "../../domain/confidence-policy.js";
 import type {
   Citation,
   CitationType,
@@ -38,47 +41,6 @@ import { escapeValue } from "./util.js";
 
 const WALK_CHAIN_DEFAULT_DEPTH = 5;
 const WALK_CHAIN_MAX_DEPTH = 10;
-
-// ---------------------------------------------------------------------------
-// Confidence formula constants (knowledge-syntropy § Confidence Is Computed)
-// ---------------------------------------------------------------------------
-
-const SUPPORT_BUMP = 10;
-const SUPPORT_CAP = 50;
-const CONTRADICT_PENALTY = 15;
-const CLAMP_MIN = 0;
-const CLAMP_MAX = 100;
-
-// Initial confidence per source_type (knowledge-syntropy § Write Protocol).
-const INITIAL_BY_SOURCE: Record<string, number> = {
-  agent: 30,
-  analysis_signal: 40,
-  external: 50,
-  human: 70,
-  derived: 40,
-};
-const INITIAL_DEFAULT = 40;
-
-function initialConfidenceForSource(sourceType: string): number {
-  return INITIAL_BY_SOURCE[sourceType] ?? INITIAL_DEFAULT;
-}
-
-function isSupporting(citationType: string): boolean {
-  return (
-    citationType === "supports" ||
-    citationType === "validates" ||
-    citationType === "evidence_for" ||
-    citationType === "extends"
-  );
-}
-
-function isContradicting(citationType: string): boolean {
-  return citationType === "contradicts" || citationType === "invalidates";
-}
-
-function clamp(n: number): number {
-  return Math.max(CLAMP_MIN, Math.min(CLAMP_MAX, n));
-}
 
 // ---------------------------------------------------------------------------
 // Adapter
@@ -168,7 +130,9 @@ export class DoltgresEdoResolverAdapter implements EdoResolverPort {
       entryType: "outcome",
       sourceType: input.sourceType,
       sourceRef: input.sourceRef ?? null,
-      confidencePct: initialConfidenceForSource(input.sourceType),
+      confidencePct: initializeConfidence({
+        sourceType: input.sourceType,
+      }).confidencePct,
     });
 
     // 2. Write the validates/invalidates citation.
@@ -210,17 +174,7 @@ export class DoltgresEdoResolverAdapter implements EdoResolverPort {
     const incoming: Citation[] =
       await this.store.listCitationsByCitedId(entryId);
 
-    const initial = initialConfidenceForSource(entry.sourceType);
-    let supportCount = 0;
-    let contradictCount = 0;
-    for (const c of incoming) {
-      if (isSupporting(c.citationType)) supportCount++;
-      else if (isContradicting(c.citationType)) contradictCount++;
-    }
-
-    const supportBump = Math.min(SUPPORT_CAP, SUPPORT_BUMP * supportCount);
-    const contradictPenalty = CONTRADICT_PENALTY * contradictCount;
-    const next = clamp(initial + supportBump - contradictPenalty);
+    const next = recomputeConfidenceByPolicy(entry, incoming).confidencePct;
 
     // Persist (idempotent — writing the same value is a no-op semantically).
     await this.store.updateKnowledge(entryId, { confidencePct: next });

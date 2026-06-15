@@ -17,6 +17,11 @@
 import type { ReservedSql, Sql } from "postgres";
 import { DomainNotRegisteredError } from "../../port/knowledge-store.port.js";
 
+export interface SqlColumnValue {
+  readonly column: string;
+  readonly value: unknown;
+}
+
 export function escapeValue(val: unknown): string {
   if (val === null || val === undefined) return "NULL";
   if (typeof val === "number") {
@@ -36,6 +41,32 @@ export function escapeRef(ref: string): string {
     throw new Error(`Invalid Dolt ref: ${ref}`);
   }
   return `'${ref}'`;
+}
+
+export function definedSqlColumns(
+  columns: readonly SqlColumnValue[]
+): SqlColumnValue[] {
+  return columns.filter((c) => c.value !== undefined);
+}
+
+export function insertColumnsSql(columns: readonly SqlColumnValue[]): {
+  readonly names: string;
+  readonly values: string;
+} {
+  const defined = definedSqlColumns(columns);
+  if (defined.length === 0) {
+    throw new Error("insert requires at least one column");
+  }
+  return {
+    names: defined.map((c) => c.column).join(", "),
+    values: defined.map((c) => escapeValue(c.value)).join(", "),
+  };
+}
+
+export function updateSetSql(columns: readonly SqlColumnValue[]): string {
+  return definedSqlColumns(columns)
+    .map((c) => `${c.column} = ${escapeValue(c.value)}`)
+    .join(", ");
 }
 
 /**

@@ -13,6 +13,19 @@
 
 // Capability factories (shared across all nodes)
 export { createKnowledgeCapability } from "./capability.js";
+// Domain types & schemas
+export {
+  assertWritableConfidence,
+  BASELINE_CONFIDENCE_BY_SOURCE,
+  CONFIDENCE_POLICY_VERSION,
+  type ConfidenceCitationBasis,
+  type ConfidenceDecision,
+  ConfidencePolicyError,
+  clampConfidence,
+  explainConfidence,
+  initializeConfidence,
+  recomputeConfidence,
+} from "./domain/confidence-policy.js";
 // Contribution domain
 export {
   type ContributionCommitRecord,
@@ -45,7 +58,6 @@ export {
   shapeGate,
   V0_DETERMINISTIC_GATES,
 } from "./domain/gates/index.js";
-// Domain types & schemas
 export {
   type Citation,
   CitationSchema,

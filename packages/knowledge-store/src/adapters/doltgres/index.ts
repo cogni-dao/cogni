@@ -17,6 +17,7 @@
  */
 
 import type { Sql } from "postgres";
+import { initializeConfidence } from "../../domain/confidence-policy.js";
 import type {
   Citation,
   CitationType,
@@ -36,7 +37,14 @@ import {
   type KnowledgeStorePort,
   type NewDomain,
 } from "../../port/knowledge-store.port.js";
-import { assertDomainRegistered, escapeRef, escapeValue } from "./util.js";
+import {
+  assertDomainRegistered,
+  escapeRef,
+  escapeValue,
+  insertColumnsSql,
+  type SqlColumnValue,
+  updateSetSql,
+} from "./util.js";
 
 // ---------------------------------------------------------------------------
 // Row mapping
@@ -70,6 +78,53 @@ function rowToCitation(row: Record<string, unknown>): Citation {
     context: (row.context as string) ?? null,
     createdAt: row.created_at ? new Date(row.created_at as string) : undefined,
   };
+}
+
+function knowledgeInsertColumns(entry: NewKnowledge): SqlColumnValue[] {
+  const confidence = initializeConfidence(entry).confidencePct;
+  return [
+    { column: "id", value: entry.id },
+    { column: "domain", value: entry.domain },
+    { column: "entity_id", value: entry.entityId ?? undefined },
+    { column: "title", value: entry.title },
+    { column: "content", value: entry.content },
+    { column: "entry_type", value: entry.entryType ?? undefined },
+    { column: "confidence_pct", value: confidence },
+    { column: "source_type", value: entry.sourceType },
+    { column: "source_ref", value: entry.sourceRef ?? undefined },
+    { column: "tags", value: entry.tags ?? undefined },
+    { column: "evaluate_at", value: entry.evaluateAt ?? undefined },
+    {
+      column: "resolution_strategy",
+      value: entry.resolutionStrategy ?? undefined,
+    },
+  ];
+}
+
+function knowledgeUpdateColumns(
+  entry: Partial<NewKnowledge>
+): SqlColumnValue[] {
+  const columns: SqlColumnValue[] = [];
+  const push = (column: string, key: keyof NewKnowledge): void => {
+    if (!(key in entry)) return;
+    // NO_NULL_CONFIDENCE_WRITES: never write confidence_pct = NULL. A nullish
+    // value on update preserves the row's policy-managed confidence.
+    if (key === "confidencePct" && entry[key] == null) return;
+    columns.push({ column, value: entry[key] });
+  };
+
+  push("domain", "domain");
+  push("entity_id", "entityId");
+  push("title", "title");
+  push("content", "content");
+  push("entry_type", "entryType");
+  push("confidence_pct", "confidencePct");
+  push("source_type", "sourceType");
+  push("source_ref", "sourceRef");
+  push("tags", "tags");
+  push("evaluate_at", "evaluateAt");
+  push("resolution_strategy", "resolutionStrategy");
+  return columns;
 }
 
 /**
@@ -264,40 +319,13 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
   async upsertKnowledge(entry: NewKnowledge): Promise<Knowledge> {
     await assertDomainRegistered(this.sql, entry.domain);
     assertHypothesisEvaluateAt(entry);
-    const cols = [
-      "id",
-      "domain",
-      "entity_id",
-      "title",
-      "content",
-      "entry_type",
-      "confidence_pct",
-      "source_type",
-      "source_ref",
-      "tags",
-      "evaluate_at",
-      "resolution_strategy",
-    ];
-    const vals = [
-      escapeValue(entry.id),
-      escapeValue(entry.domain),
-      escapeValue(entry.entityId ?? null),
-      escapeValue(entry.title),
-      escapeValue(entry.content),
-      escapeValue(entry.entryType ?? "finding"),
-      escapeValue(entry.confidencePct ?? null),
-      escapeValue(entry.sourceType),
-      escapeValue(entry.sourceRef ?? null),
-      entry.tags ? escapeValue(entry.tags) : "NULL",
-      escapeValue(entry.evaluateAt ?? null),
-      escapeValue(entry.resolutionStrategy ?? null),
-    ];
+    const insert = insertColumnsSql(knowledgeInsertColumns(entry));
 
     // Doltgres does not support EXCLUDED or ON CONFLICT DO UPDATE reliably.
     // Use insert-or-update: try INSERT, on duplicate key fall back to UPDATE.
     try {
       const rows = await this.sql.unsafe(
-        `INSERT INTO knowledge (${cols.join(", ")}) VALUES (${vals.join(", ")}) RETURNING *`
+        `INSERT INTO knowledge (${insert.names}) VALUES (${insert.values}) RETURNING *`
       );
       return rowToKnowledge(rows[0] as Record<string, unknown>);
     } catch (e: unknown) {
@@ -305,11 +333,12 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
       if (!msg.includes("duplicate") && !msg.includes("Duplicate")) throw e;
     }
     // Row exists — update it
-    const updateCols = cols.slice(1); // skip id (PK)
-    const updateVals = vals.slice(1);
-    const setClauses = updateCols
-      .map((col, i) => `${col} = ${updateVals[i]}`)
-      .join(", ");
+    const setClauses = updateSetSql(knowledgeUpdateColumns(entry));
+    if (setClauses.length === 0) {
+      const existing = await this.getKnowledge(entry.id);
+      if (!existing) throw new Error(`Knowledge ${entry.id} not found`);
+      return existing;
+    }
     const rows = await this.sql.unsafe(
       `UPDATE knowledge SET ${setClauses} WHERE id = ${escapeValue(entry.id)} RETURNING *`
     );
@@ -321,37 +350,10 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
   async addKnowledge(entry: NewKnowledge): Promise<Knowledge> {
     await assertDomainRegistered(this.sql, entry.domain);
     assertHypothesisEvaluateAt(entry);
-    const cols = [
-      "id",
-      "domain",
-      "entity_id",
-      "title",
-      "content",
-      "entry_type",
-      "confidence_pct",
-      "source_type",
-      "source_ref",
-      "tags",
-      "evaluate_at",
-      "resolution_strategy",
-    ];
-    const vals = [
-      escapeValue(entry.id),
-      escapeValue(entry.domain),
-      escapeValue(entry.entityId ?? null),
-      escapeValue(entry.title),
-      escapeValue(entry.content),
-      escapeValue(entry.entryType ?? "finding"),
-      escapeValue(entry.confidencePct ?? null),
-      escapeValue(entry.sourceType),
-      escapeValue(entry.sourceRef ?? null),
-      entry.tags ? escapeValue(entry.tags) : "NULL",
-      escapeValue(entry.evaluateAt ?? null),
-      escapeValue(entry.resolutionStrategy ?? null),
-    ];
+    const insert = insertColumnsSql(knowledgeInsertColumns(entry));
 
     const rows = await this.sql.unsafe(
-      `INSERT INTO knowledge (${cols.join(", ")}) VALUES (${vals.join(", ")}) RETURNING *`
+      `INSERT INTO knowledge (${insert.names}) VALUES (${insert.values}) RETURNING *`
     );
     return rowToKnowledge(rows[0] as Record<string, unknown>);
   }
@@ -363,26 +365,7 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
     if (update.domain !== undefined) {
       await assertDomainRegistered(this.sql, update.domain);
     }
-    const setClauses: string[] = [];
-    const fieldMap: Record<string, keyof NewKnowledge> = {
-      domain: "domain",
-      entity_id: "entityId",
-      title: "title",
-      content: "content",
-      entry_type: "entryType",
-      confidence_pct: "confidencePct",
-      source_type: "sourceType",
-      source_ref: "sourceRef",
-      tags: "tags",
-      evaluate_at: "evaluateAt",
-      resolution_strategy: "resolutionStrategy",
-    };
-
-    for (const [col, key] of Object.entries(fieldMap)) {
-      if (key in update) {
-        setClauses.push(`${col} = ${escapeValue(update[key])}`);
-      }
-    }
+    const setClauses = updateSetSql(knowledgeUpdateColumns(update));
 
     if (setClauses.length === 0) {
       const existing = await this.getKnowledge(id);
@@ -391,7 +374,7 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
     }
 
     const rows = await this.sql.unsafe(
-      `UPDATE knowledge SET ${setClauses.join(", ")} WHERE id = ${escapeValue(id)} RETURNING *`
+      `UPDATE knowledge SET ${setClauses} WHERE id = ${escapeValue(id)} RETURNING *`
     );
     if (rows.length === 0) throw new Error(`Knowledge ${id} not found`);
     return rowToKnowledge(rows[0] as Record<string, unknown>);
