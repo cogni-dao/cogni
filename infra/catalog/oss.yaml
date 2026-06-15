@@ -8,7 +8,7 @@ migrator_tag_suffix: "-oss-migrate"
 source_repo: https://github.com/Cogni-DAO/oss.git
 image_repository: ghcr.io/cogni-dao/oss
 # Accepted deploy SHA — catalog pin replacing the gitlink (CATALOG_SOURCE_SHA_IS_THE_DEPLOY_PIN).
-source_sha: bc19c6267e20c138873dd0102cb0944c3f525080
+source_sha: bb604a03673e75cf0d07ba48b1f03ddca5c34dcb
 candidate_a_branch: deploy/candidate-a-oss
 preview_branch: deploy/preview-oss
 production_branch: deploy/production-oss
