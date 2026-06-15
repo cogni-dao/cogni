@@ -21,6 +21,10 @@
           {
             "type": "command",
             "command": "if [ ! -f node_modules/.modules.yaml ]; then echo 'pnpm store not linked — running install...'; pnpm install --frozen-lockfile; else echo 'node_modules already linked — skipping install'; fi"
+          },
+          {
+            "type": "command",
+            "command": "KEY=\"${COGNI_API_KEY:-$(grep -m1 '^COGNI_API_KEY_PROD=' .env.cogni 2>/dev/null | cut -d= -f2-)}\"; if [ -n \"$KEY\" ]; then echo '--- cogni node bootstrap (node-agent-bootstrap) ---'; curl -s --max-time 8 \"${COGNI_KNOWLEDGE_BASE:-https://cognidao.org}/api/v1/knowledge?domain=meta&limit=100\" -H \"Authorization: Bearer $KEY\" 2>/dev/null | jq -r '(.items // .entries // .)[]? | select(.id==\"node-agent-bootstrap\").content' 2>/dev/null || true; fi"
           }
         ]
       }
