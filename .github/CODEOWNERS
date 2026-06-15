@@ -1,6 +1,6 @@
-* @Cogni-DAO
+* @cogni-dao
 
 # Baseline UI primitive package — see packages/node-ui-kit/AGENTS.md for the
 # wrap-don't-fork override pattern. Changes here ripple to every fork that
 # adopts the kit; require explicit owner review.
-/packages/node-ui-kit/ @Cogni-DAO @derekg1729
+/packages/node-ui-kit/ @cogni-dao @derekg1729

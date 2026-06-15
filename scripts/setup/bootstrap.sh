@@ -246,12 +246,13 @@ done
 # Detect repo from origin (works for forks)
 ORIGIN_URL=$(git -C "$REPO_ROOT" remote get-url origin)
 GH_REPO=$(echo "$ORIGIN_URL" | sed -E 's#.*github.com[:/]([^/]+/[^/.]+).*#\1#')
+GH_REPO_LOWER=$(printf "%s" "$GH_REPO" | tr '[:upper:]' '[:lower:]')
 log "GitHub repo: ${BOLD}${GH_REPO}${NC}"
 
 # Refuse to run inside the upstream node template. Bootstrap mutates secrets,
 # environments, and deploy branches — it must target a repo that owns its
-# deploy state. The hub (Cogni-DAO/cogni) is valid; the bare template is not.
-if [[ "$GH_REPO" == "Cogni-DAO/standalone-node" ]]; then
+# deploy state. The hub (cogni-dao/cogni) is valid; the bare template is not.
+if [[ "$GH_REPO_LOWER" == "cogni-dao/standalone-node" ]]; then
   err "origin points at the upstream node template (${GH_REPO}). Bootstrap must run inside the hub or a fork."
   err "Fork first for node-template: see docs/runbooks/fork-quickstart.md"
   exit 2
@@ -294,7 +295,7 @@ log "Admin role verified for ${GITHUB_ADMIN_USERNAME}"
 # asking. Two consumers read it: CI build workflows via
 # `${{ vars.FORK_IMAGE_NAME || upstream-default }}`, and provision-env-vm.sh via
 # the exported env below. (bug.5083)
-if [[ "$GH_REPO" == "Cogni-DAO/cogni" ]]; then
+if [[ "$GH_REPO_LOWER" == "cogni-dao/cogni" ]]; then
   log "Hub repo detected; image namespace remains catalog/default-driven"
 else
   FORK_IMAGE_NAME=$(fork_image_name "$REPO_ROOT")

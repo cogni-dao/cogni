@@ -2,7 +2,7 @@
   "_comment": [
     "Source-of-truth payload for the merge queue configuration on `main`.",
     "Apply via the GitHub UI (Settings → Branches → main → 'Require merge queue') or via REST:",
-    "  gh api -X PUT 'repos/Cogni-DAO/cogni/branches/main/protection' --input infra/github/branch-protection.json",
+    "  gh api -X PUT 'repos/cogni-dao/cogni/branches/main/protection' --input infra/github/branch-protection.json",
     "  Then in UI: Settings → Branches → main → check 'Require merge queue', set merge method = squash,",
     "  paste the values below into the form. (REST for queue config requires beta endpoints; UI is canonical.)",
     "",

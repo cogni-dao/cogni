@@ -27,6 +27,7 @@ import { CHAIN_ID } from "@/shared/web3";
 interface RepoSpecModule {
   getPaymentConfig: () => InboundPaymentConfig;
   getGovernanceConfig: () => GovernanceConfig;
+  getGithubRepo: () => { owner: string; repo: string };
   getKnowledgeConfig: () => KnowledgeConfig | undefined;
 }
 
@@ -57,6 +58,11 @@ async function loadPaymentConfig(): Promise<RepoSpecModule> {
 }
 
 describe("getPaymentConfig (repo-spec)", () => {
+  it("returns the canonical GitHub repo owner for VCS operations", async () => {
+    const { getGithubRepo } = await loadPaymentConfig();
+    expect(getGithubRepo()).toEqual({ owner: "cogni-dao", repo: "cogni" });
+  });
+
   it("returns mapped inbound payment config for a valid repo-spec", async () => {
     const tmpDir = writeRepoSpec(
       [

@@ -16,7 +16,7 @@ A production-ready Next.js template for AI-powered autonomous organizations.
 _We love you! ❤️_
 
 ```bash
-git clone https://github.com/Cogni-DAO/cogni
+git clone https://github.com/cogni-dao/cogni
 cd cogni-template
 scripts/bootstrap/setup.sh   # Install tools + dependencies, prompts to start dev stack
 cp .env.local.example .env.local  # Configure environment (add OpenRouter API key)
@@ -80,7 +80,7 @@ _We're working to automate more of this! Want to help? Contribute setup automati
 
 **DAO Setup**
 
-- Run `make dao-setup` from [cogni-signal-evm-contracts](https://github.com/Cogni-DAO/cogni-signal-evm-contracts)
+- Run `make dao-setup` from [cogni-signal-evm-contracts](https://github.com/cogni-dao/cogni-signal-evm-contracts)
 
 ---
 

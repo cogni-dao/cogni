@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/Cogni-DAO/cogni/.cogni/sync-manifest.schema.json",
+  "$id": "https://github.com/cogni-dao/cogni/.cogni/sync-manifest.schema.json",
   "title": "Cogni multi-repo sync manifest (inverse form v2)",
   "description": "spec.repo-sync-contract — inverse manifest: declares global excludes + per-artifact divergences (omit_from_artifact + artifact_only). Anything else under hub is expected to mirror 1:1 across all artifacts. Mirrors the CATALOG_IS_SSOT pattern (infra/catalog/_schema.json).",
   "type": "object",
@@ -14,7 +14,7 @@
     "hub": {
       "type": "string",
       "pattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$",
-      "description": "GitHub owner/repo of the canonical hub. Per HUB_IS_COGNI_MONOREPO this is Cogni-DAO/cogni."
+      "description": "GitHub owner/repo of the canonical hub. Per HUB_IS_COGNI_MONOREPO this is cogni-dao/cogni."
     },
     "artifacts": {
       "type": "array",

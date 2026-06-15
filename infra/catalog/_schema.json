@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/Cogni-DAO/cogni/infra/catalog/_schema.json",
+  "$id": "https://github.com/cogni-dao/cogni/infra/catalog/_schema.json",
   "title": "Cogni node/service catalog entry",
   "description": "task.0374 — single declaration site for nodes and node-shaped services. Consumed by image-tags.sh, detect-affected.sh, ApplicationSet generators, and per-workflow decide jobs. See docs/spec/ci-cd.md axiom 16 (CATALOG_IS_SSOT).",
   "type": "object",

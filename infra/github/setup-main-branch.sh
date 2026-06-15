@@ -12,7 +12,7 @@
 #
 # Usage:
 #   bash infra/github/setup-main-branch.sh                      # applies to current repo (gh auth context)
-#   bash infra/github/setup-main-branch.sh Cogni-DAO/test-repo  # applies to an explicit repo
+#   bash infra/github/setup-main-branch.sh cogni-dao/test-repo  # applies to an explicit repo
 #
 # Prerequisites:
 #   - gh CLI authed as a repo admin

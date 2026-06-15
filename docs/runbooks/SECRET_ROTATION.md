@@ -14,7 +14,7 @@ tags: [security, ops, secrets]
 
 # Secret Rotation Runbook
 
-All production secrets are stored in **GitHub Actions Secrets** (`Cogni-DAO/cogni`) and injected into the deploy script at CI time. The deploy script SSHes them to the server — no secrets file is written to disk or uploaded as an artifact.
+All production secrets are stored in **GitHub Actions Secrets** (`cogni-dao/cogni`) and injected into the deploy script at CI time. The deploy script SSHes them to the server — no secrets file is written to disk or uploaded as an artifact.
 
 ## Rotation Status (2026-03-24)
 
@@ -36,7 +36,7 @@ These are validated by `scripts/ci/deploy.sh` — missing = hard failure.
 | `OPENROUTER_API_KEY`       | Yes                      | Human: [OpenRouter Keys](https://openrouter.ai/keys)                                                                                               | MISSING | Create key, then `gh secret set OPENROUTER_API_KEY`       |
 | `EVM_RPC_URL`              | Yes                      | Human: [Alchemy Dashboard](https://dashboard.alchemy.com/) → Apps → Create App (Base mainnet) → API Key                                            | MISSING | Copy full URL, then `gh secret set EVM_RPC_URL`           |
 | `OPENCLAW_GATEWAY_TOKEN`   | Yes                      | Agent: `openssl rand -base64 32`                                                                                                                   | ROTATED | —                                                         |
-| `OPENCLAW_GITHUB_RW_TOKEN` | Yes                      | Human: [GitHub PAT](https://github.com/settings/tokens?type=beta) → Fine-grained → Contents:Write + Pull requests:Write, scoped to Cogni-DAO repos | STALE   | Regenerate, then `gh secret set OPENCLAW_GITHUB_RW_TOKEN` |
+| `OPENCLAW_GITHUB_RW_TOKEN` | Yes                      | Human: [GitHub PAT](https://github.com/settings/tokens?type=beta) → Fine-grained → Contents:Write + Pull requests:Write, scoped to cogni-dao repos | STALE   | Regenerate, then `gh secret set OPENCLAW_GITHUB_RW_TOKEN` |
 | `POSTHOG_API_KEY`          | Yes                      | Human: [PostHog](https://us.posthog.com/settings/project#variables) → Project Settings → Project API Key                                           | MISSING | Copy key, then `gh secret set POSTHOG_API_KEY`            |
 | `POSTHOG_HOST`             | Yes                      | Human: PostHog instance URL (e.g. `https://us.i.posthog.com`)                                                                                      | MISSING | `gh secret set POSTHOG_HOST`                              |
 | `DATABASE_URL`             | Yes                      | Agent (on fresh deploy): auto-derived from DB credentials below                                                                                    | MISSING | Set after choosing DB passwords (see Database section)    |
@@ -53,7 +53,7 @@ These are validated by `scripts/ci/deploy.sh` — missing = hard failure.
 | `DOMAIN`                   | Yes                      | Human: your server's domain                                                                                                                        | MISSING | `gh secret set DOMAIN`                                    |
 | `VM_HOST`                  | Yes                      | Human: server IP or hostname                                                                                                                       | MISSING | `gh secret set VM_HOST`                                   |
 | `SSH_DEPLOY_KEY`           | Yes                      | Agent: `ssh-keygen -t ed25519`                                                                                                                     | ROTATED | Add pubkey to server (see below)                          |
-| `GHCR_DEPLOY_TOKEN`        | Yes (remote docker pull) | Human: [GitHub PAT](https://github.com/settings/tokens?type=beta) → Fine-grained → Packages:Read, scoped to Cogni-DAO                              | STALE   | Regenerate, then `gh secret set GHCR_DEPLOY_TOKEN`        |
+| `GHCR_DEPLOY_TOKEN`        | Yes (remote docker pull) | Human: [GitHub PAT](https://github.com/settings/tokens?type=beta) → Fine-grained → Packages:Read, scoped to cogni-dao                              | STALE   | Regenerate, then `gh secret set GHCR_DEPLOY_TOKEN`        |
 
 ### SSH Public Keys (add to servers)
 
@@ -79,20 +79,20 @@ SVC_PW=$(openssl rand -base64 24)
 TEMP_PW=$(openssl rand -base64 24)
 
 # Set credentials
-echo postgres | gh secret set POSTGRES_ROOT_USER --repo Cogni-DAO/cogni
-echo "$ROOT_PW" | gh secret set POSTGRES_ROOT_PASSWORD --repo Cogni-DAO/cogni
-echo app_user | gh secret set APP_DB_USER --repo Cogni-DAO/cogni
-echo "$APP_PW" | gh secret set APP_DB_PASSWORD --repo Cogni-DAO/cogni
-echo app_service | gh secret set APP_DB_SERVICE_USER --repo Cogni-DAO/cogni
-echo "$SVC_PW" | gh secret set APP_DB_SERVICE_PASSWORD --repo Cogni-DAO/cogni
-echo cogni_template | gh secret set APP_DB_NAME --repo Cogni-DAO/cogni
-echo temporal | gh secret set TEMPORAL_DB_USER --repo Cogni-DAO/cogni
-echo "$TEMP_PW" | gh secret set TEMPORAL_DB_PASSWORD --repo Cogni-DAO/cogni
+echo postgres | gh secret set POSTGRES_ROOT_USER --repo cogni-dao/cogni
+echo "$ROOT_PW" | gh secret set POSTGRES_ROOT_PASSWORD --repo cogni-dao/cogni
+echo app_user | gh secret set APP_DB_USER --repo cogni-dao/cogni
+echo "$APP_PW" | gh secret set APP_DB_PASSWORD --repo cogni-dao/cogni
+echo app_service | gh secret set APP_DB_SERVICE_USER --repo cogni-dao/cogni
+echo "$SVC_PW" | gh secret set APP_DB_SERVICE_PASSWORD --repo cogni-dao/cogni
+echo cogni_template | gh secret set APP_DB_NAME --repo cogni-dao/cogni
+echo temporal | gh secret set TEMPORAL_DB_USER --repo cogni-dao/cogni
+echo "$TEMP_PW" | gh secret set TEMPORAL_DB_PASSWORD --repo cogni-dao/cogni
 
 # Construct DSNs (adjust host:port for your server)
 DB_HOST="postgres"  # Docker service name
-echo "postgresql://app_user:${APP_PW}@${DB_HOST}:5432/cogni_template" | gh secret set DATABASE_URL --repo Cogni-DAO/cogni
-echo "postgresql://app_service:${SVC_PW}@${DB_HOST}:5432/cogni_template" | gh secret set DATABASE_SERVICE_URL --repo Cogni-DAO/cogni
+echo "postgresql://app_user:${APP_PW}@${DB_HOST}:5432/cogni_template" | gh secret set DATABASE_URL --repo cogni-dao/cogni
+echo "postgresql://app_service:${SVC_PW}@${DB_HOST}:5432/cogni_template" | gh secret set DATABASE_SERVICE_URL --repo cogni-dao/cogni
 ```
 
 ## Internal Service Tokens (required, agent-generated)
@@ -194,17 +194,17 @@ Deploy uses `${VAR:-}` fallback — empty = feature disabled.
 ```bash
 # One-liner to rotate all agent-owned secrets
 for SECRET in AUTH_SECRET SCHEDULER_API_TOKEN BILLING_INGEST_TOKEN INTERNAL_OPS_TOKEN METRICS_TOKEN OPENCLAW_GATEWAY_TOKEN; do
-  openssl rand -base64 32 | gh secret set "$SECRET" --repo Cogni-DAO/cogni
+  openssl rand -base64 32 | gh secret set "$SECRET" --repo cogni-dao/cogni
 done
-echo "sk-cogni-$(openssl rand -hex 24)" | gh secret set LITELLM_MASTER_KEY --repo Cogni-DAO/cogni
-openssl rand -hex 32 | gh secret set GH_WEBHOOK_SECRET --repo Cogni-DAO/cogni
+echo "sk-cogni-$(openssl rand -hex 24)" | gh secret set LITELLM_MASTER_KEY --repo cogni-dao/cogni
+openssl rand -hex 32 | gh secret set GH_WEBHOOK_SECRET --repo cogni-dao/cogni
 ```
 
 ### SSH key rotation
 
 ```bash
 ssh-keygen -t ed25519 -f /tmp/deploy_key -N "" -C "cogni-deploy-$(date +%Y%m%d)"
-gh secret set SSH_DEPLOY_KEY --repo Cogni-DAO/cogni < /tmp/deploy_key
+gh secret set SSH_DEPLOY_KEY --repo cogni-dao/cogni < /tmp/deploy_key
 cat /tmp/deploy_key.pub  # Add to server ~/.ssh/authorized_keys
 rm /tmp/deploy_key       # Private key only lives in GitHub Secrets
 ```
@@ -213,4 +213,4 @@ rm /tmp/deploy_key       # Private key only lives in GitHub Secrets
 
 1. Visit the linked dashboard URL in the table above
 2. Regenerate or create a new credential
-3. Run `gh secret set SECRET_NAME --repo Cogni-DAO/cogni` and paste the value
+3. Run `gh secret set SECRET_NAME --repo cogni-dao/cogni` and paste the value

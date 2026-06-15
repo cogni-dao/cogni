@@ -37,11 +37,11 @@ The script does what's API-doable in three steps:
 
 1. `PATCH /repos/{repo}` — squash-only, auto-merge enabled, delete-branch-on-merge.
 2. `PUT /repos/{repo}/branches/main/protection` — required status checks `["unit","component","static","manifest"]`.
-3. Prints the **one manual UI step** required for the merge queue. REST silently drops `required_merge_queue` (verified empirically against `Cogni-DAO/test-repo`, 2026-04-28). Until GitHub exposes this via REST, that toggle is a click in Settings → Branches.
+3. Prints the **one manual UI step** required for the merge queue. REST silently drops `required_merge_queue` (verified empirically against `cogni-dao/test-repo`, 2026-04-28). Until GitHub exposes this via REST, that toggle is a click in Settings → Branches.
 
 ## Why these specific required checks
 
-The required-status-checks set is intentionally narrow because of an empirical constraint: **GitHub Merge Queue waits forever for required checks whose workflows lack a `merge_group:` trigger** (validated on `Cogni-DAO/test-repo` PR #53). Any check added to this list MUST be produced by a workflow that fires on both `pull_request:` AND `merge_group:` events.
+The required-status-checks set is intentionally narrow because of an empirical constraint: **GitHub Merge Queue waits forever for required checks whose workflows lack a `merge_group:` trigger** (validated on `cogni-dao/test-repo` PR #53). Any check added to this list MUST be produced by a workflow that fires on both `pull_request:` AND `merge_group:` events.
 
 This forces a clear policy: **PR-only workflows (CodeQL default-setup, Validate PR title, etc.) cannot be required.** They run on PRs as advisory signal only. The deeper rationale and the alternatives considered (stub-job pattern, Rulesets) live in [`docs/spec/merge-queue-config.md`](../../docs/spec/merge-queue-config.md).
 
@@ -49,7 +49,7 @@ This forces a clear policy: **PR-only workflows (CodeQL default-setup, Validate 
 
 ```bash
 diff <(jq 'with_entries(select(.key | startswith("_") | not))' infra/github/branch-protection.json) \
-     <(gh api repos/Cogni-DAO/cogni/branches/main/protection \
+     <(gh api repos/cogni-dao/cogni/branches/main/protection \
         | jq '{required_status_checks:{strict:.required_status_checks.strict,contexts:.required_status_checks.contexts},
                enforce_admins:null,required_pull_request_reviews:null,restrictions:null,
                required_linear_history:.required_linear_history.enabled,
