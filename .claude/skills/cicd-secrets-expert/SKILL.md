@@ -161,6 +161,8 @@ The honest answer to "can a node add its own secret without Derek's GitHub/kube 
 
 Three defense-in-depth gates in #1627: OpenFGA `can_manage_secrets` (fail-closed) → catalog A2 allowlist (build-time typed module) → OpenBao policy explicit-`deny` on `_system`/`_shared`.
 
+**Validation status + the road to a proper e2e:** [`docs/design/node-self-serve-secrets-validation-roadmap.md`](../../../docs/design/node-self-serve-secrets-validation-roadmap.md) — the layered proof (L1 candidate-a authz **done**; L2 full write needs the allowlist codegen + the OpenBao writer-role DRY fix; L3 human-in-loop deployed e2e). **Load-bearing gotcha:** the write env is operator-stamped (`deployEnv = env.DEPLOY_ENVIRONMENT`), so `cogni/<operator-env>/<node>/*` is the only path it can write — a prod operator **cannot** write a candidate-a node's secret. Any cross-env "set my candidate-a secret from the prod operator" needs an explicit authz-scoped `targetEnv` param (not in #1627).
+
 ## Dual-plane secrets — the silent-webhook-fail class (READ THIS)
 
 Some secrets must **byte-equal a value held by an external system**, not merely exist. The operator's `GH_WEBHOOK_SECRET` must equal the **GitHub App's webhook secret**; an OAuth `*_CLIENT_SECRET` must equal the provider's app config. These are **dual-plane**: one copy in our pod, one on the external plane — they only work if identical.
