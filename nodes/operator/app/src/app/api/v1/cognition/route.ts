@@ -2,9 +2,9 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `@app/api/v1/knowledge/bootstrap/route`
- * Purpose: GET /api/v1/knowledge/bootstrap — the node's "cognition substrate"
- *   kickstart bundle. Composes the irreducible session invariants (code-owned)
+ * Module: `@app/api/v1/cognition/route`
+ * Purpose: GET /api/v1/cognition — the node's session-start cognition substrate
+ *   bundle. Composes the irreducible session invariants (code-owned)
  *   with a live skills index + domain pointers from the knowledge hub, plus a
  *   rendered markdown bundle a SessionStart hook echoes into agent context.
  * Scope: Single public GET. Reads via container.knowledgeStorePort. Public
@@ -21,9 +21,9 @@
  */
 
 import {
-  type BootstrapDomainPointer,
-  type BootstrapSkillPointer,
-  KnowledgeBootstrapResponseSchema,
+  CognitionBundleResponseSchema,
+  type CognitionDomainPointer,
+  type CognitionSkillPointer,
 } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
 import { getContainer } from "@/bootstrap/container";
@@ -56,15 +56,15 @@ function publicOrigin(request: Request): string {
 }
 
 export const GET = wrapRouteHandlerWithLogging(
-  { routeId: "knowledge.bootstrap", auth: { mode: "none" } },
+  { routeId: "cognition.bundle", auth: { mode: "none" } },
   async (ctx, request) => {
     const container = getContainer();
     const origin = publicOrigin(request);
     const node = container.nodeId;
     const buildSha = serverEnv().APP_BUILD_SHA ?? "unknown";
 
-    const skillsIndex: BootstrapSkillPointer[] = [];
-    const domainPointers: BootstrapDomainPointer[] = [];
+    const skillsIndex: CognitionSkillPointer[] = [];
+    const domainPointers: CognitionDomainPointer[] = [];
 
     // Cognition is delivered live from the hub; the irreducible invariants below
     // are the only piece that must survive an unconfigured/empty hub.
@@ -114,11 +114,11 @@ export const GET = wrapRouteHandlerWithLogging(
         domains: domainPointers.length,
         hub: Boolean(port),
       },
-      "knowledge.bootstrap_success"
+      "cognition.bundle_success"
     );
 
     const response = NextResponse.json(
-      KnowledgeBootstrapResponseSchema.parse({
+      CognitionBundleResponseSchema.parse({
         node,
         version: "v1",
         buildSha,

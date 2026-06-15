@@ -11,11 +11,11 @@ irreducible tooling invariants, the live skills index, and the knowledge-domain
 pointers — as a **kickstart bundle** from the node's knowledge endpoint, injected
 into your context at session start. It is the source of truth, not this file.
 
-- **Bundle:** `GET https://cognidao.org/api/v1/knowledge/bootstrap` (public, index-only)
+- **Bundle:** `GET https://cognidao.org/api/v1/cognition` (public, index-only)
 - **Discovery:** `GET https://cognidao.org/.well-known/agent.json` → `cognition` + `endpoints`
 - **If it didn't load** (no SessionStart hook, or the hub was unreachable), self-serve:
   ```bash
-  curl -fsS https://cognidao.org/api/v1/knowledge/bootstrap | jq -r .markdown
+  curl -fsS https://cognidao.org/api/v1/cognition | jq -r .markdown
   ```
 
 A SessionStart hook in [`.claude/settings.json`](.claude/settings.json) does this

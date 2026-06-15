@@ -51,7 +51,7 @@ function isPublicApiRoute(pathname: string): boolean {
     pathname === "/api/v1/agent/register" ||
     // Session-start cognition substrate — a discovery seam like register and
     // /.well-known/agent.json. Index-only (no entry bodies), so unauthenticated.
-    pathname === "/api/v1/knowledge/bootstrap"
+    pathname === "/api/v1/cognition"
   );
 }
 

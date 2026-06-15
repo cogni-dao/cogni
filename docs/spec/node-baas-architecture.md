@@ -211,7 +211,7 @@ Cogni's BaaS surface should be small, composable, and portable:
 | Secrets         | key names and consumers                                                              | OpenBao values, ESO manifests, rotation path                                                              |
 | Gateway         | service ports and health routes                                                      | domain, TLS, Caddy/ingress, per-env route                                                                 |
 | Studio/Wizard   | node metadata and capabilities                                                       | operator UI, publish, flight, validation                                                                  |
-| Cognition       | knowledge entries (skills/guides/playbooks), registered domains                      | session-start kickstart bundle (`/api/v1/knowledge/bootstrap`), advertised via `/.well-known/agent.json`  |
+| Cognition       | knowledge entries (skills/guides/playbooks), registered domains                      | session-start kickstart bundle (`/api/v1/cognition`), advertised via `/.well-known/agent.json`            |
 
 The invariant is: **node declares shape; operator wires environment**.
 
@@ -219,7 +219,7 @@ The invariant is: **node declares shape; operator wires environment**.
 
 Supabase delivers Auth, Storage, and a generated API as managed services. The same product idea applies to an agent's **working cognition**: an agent should not have to git-sync a tree of `AGENTS.md` files to learn how to operate a node. The node is the subject-matter expert for its niche ([`knowledge-syntropy-expert`](../../.claude/skills/knowledge-syntropy-expert/SKILL.md)); its knowledge hub is the codified mind. So the operator serves that mind as a substrate, fetched at session start.
 
-**Endpoint.** `GET /api/v1/knowledge/bootstrap` returns a node's kickstart bundle, advertised under `cognition` + `endpoints.knowledgeBootstrap` in `/.well-known/agent.json`. The bundle has three parts:
+**Endpoint.** `GET /api/v1/cognition` returns a node's kickstart bundle, advertised under `cognition` + `endpoints.knowledgeBootstrap` in `/.well-known/agent.json`. The bundle has three parts:
 
 | Part               | Source                                                                  | Owner         |
 | ------------------ | ----------------------------------------------------------------------- | ------------- |

@@ -2,9 +2,9 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `@contracts/knowledge.bootstrap.v1.contract`
- * Purpose: HTTP response contract for a node's session-start "cognition substrate" kickstart bundle.
- *   Served at GET /api/v1/knowledge/bootstrap (advertised via /.well-known/agent.json) in place of
+ * Module: `@contracts/cognition.v1.contract`
+ * Purpose: HTTP response contract for a node's session-start cognition substrate bundle.
+ *   Served at GET /api/v1/cognition (advertised via /.well-known/agent.json) in place of
  *   git-synced AGENTS.md sprawl.
  * Scope: Zod schemas + types for the wire format only. Does not contain business logic, I/O, or auth.
  * Invariants:
@@ -22,25 +22,25 @@
 
 import { z } from "zod";
 
-export const BootstrapSkillPointerSchema = z.object({
+export const CognitionSkillPointerSchema = z.object({
   id: z.string(),
   /** The entry's "use when X" framed title — discovery metadata, not body. */
   title: z.string(),
   entryType: z.string(),
   domain: z.string(),
 });
-export type BootstrapSkillPointer = z.infer<typeof BootstrapSkillPointerSchema>;
+export type CognitionSkillPointer = z.infer<typeof CognitionSkillPointerSchema>;
 
-export const BootstrapDomainPointerSchema = z.object({
+export const CognitionDomainPointerSchema = z.object({
   domain: z.string(),
   description: z.string().nullable(),
   entryCount: z.number().int(),
 });
-export type BootstrapDomainPointer = z.infer<
-  typeof BootstrapDomainPointerSchema
+export type CognitionDomainPointer = z.infer<
+  typeof CognitionDomainPointerSchema
 >;
 
-export const KnowledgeBootstrapResponseSchema = z.object({
+export const CognitionBundleResponseSchema = z.object({
   node: z.string(),
   version: z.literal("v1"),
   buildSha: z.string(),
@@ -48,9 +48,9 @@ export const KnowledgeBootstrapResponseSchema = z.object({
   /** Irreducible session contract — code-owned, survives an empty/down hub. */
   toolingInvariants: z.array(z.string()),
   /** Live from the hub: cognition entries (skill/guide/playbook), index only. */
-  skillsIndex: z.array(BootstrapSkillPointerSchema),
+  skillsIndex: z.array(CognitionSkillPointerSchema),
   /** Live from the hub: registered domains the agent should RECALL first. */
-  domainPointers: z.array(BootstrapDomainPointerSchema),
+  domainPointers: z.array(CognitionDomainPointerSchema),
   /** Recall + contribute pointers (paths, not bodies). */
   recallProtocol: z.string(),
   /**
@@ -59,6 +59,6 @@ export const KnowledgeBootstrapResponseSchema = z.object({
    */
   markdown: z.string(),
 });
-export type KnowledgeBootstrapResponse = z.infer<
-  typeof KnowledgeBootstrapResponseSchema
+export type CognitionBundleResponse = z.infer<
+  typeof CognitionBundleResponseSchema
 >;

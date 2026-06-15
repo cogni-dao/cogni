@@ -208,10 +208,10 @@ describe("proxy — API route protection", () => {
     expect(mockGetToken).not.toHaveBeenCalled();
   });
 
-  it("allows /api/v1/knowledge/bootstrap without auth", async () => {
+  it("allows /api/v1/cognition without auth", async () => {
     mockGetToken.mockResolvedValue(null);
 
-    const res = await proxy(makeRequest("/api/v1/knowledge/bootstrap"));
+    const res = await proxy(makeRequest("/api/v1/cognition"));
 
     expect(res.status).toBe(200);
     expect(mockGetToken).not.toHaveBeenCalled();

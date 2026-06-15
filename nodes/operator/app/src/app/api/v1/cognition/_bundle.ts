@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `@app/api/v1/knowledge/bootstrap/_bundle`
+ * Module: `@app/api/v1/cognition/_bundle`
  * Purpose: Pure composition of the session-start kickstart bundle — the
  *   irreducible tooling invariants (code-owned) plus the markdown renderer
  *   that frames hub-delivered skills + domain pointers for a SessionStart hook.
@@ -18,8 +18,8 @@
  */
 
 import type {
-  BootstrapDomainPointer,
-  BootstrapSkillPointer,
+  CognitionDomainPointer,
+  CognitionSkillPointer,
 } from "@cogni/node-contracts";
 
 /**
@@ -62,8 +62,8 @@ export interface RenderBundleInput {
   origin: string;
   buildSha: string;
   toolingInvariants: readonly string[];
-  skillsIndex: readonly BootstrapSkillPointer[];
-  domainPointers: readonly BootstrapDomainPointer[];
+  skillsIndex: readonly CognitionSkillPointer[];
+  domainPointers: readonly CognitionDomainPointer[];
 }
 
 /**
@@ -101,7 +101,7 @@ export function renderBundleMarkdown(input: RenderBundleInput): string {
   return [
     `# Cogni \`${node}\` — Session Cognition (live from the knowledge endpoint · build \`${buildSha}\`)`,
     "",
-    `> Delivered at session start from ${origin}/api/v1/knowledge/bootstrap — this replaces git-synced AGENTS.md sprawl. Re-fetch any time.`,
+    `> Delivered at session start from ${origin}/api/v1/cognition — this replaces git-synced AGENTS.md sprawl. Re-fetch any time.`,
     "",
     "## Tooling invariants (irreducible session contract)",
     "",
