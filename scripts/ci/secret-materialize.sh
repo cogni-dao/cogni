@@ -241,8 +241,8 @@ inherit_shared_value() {
   [[ -n "${!k:-}" ]] && return 0
   # Explicit catalog `inheritFrom: <service>` — the canonical-custody lane that
   # replaces the blind ancestor scan for keys whose value must byte-match ONE
-  # owner (e.g. SCHEDULER_API_TOKEN must equal the token the scheduler-worker
-  # SENDS, sourced from cogni/<env>/scheduler-worker/). bug.5021.
+  # owner (e.g. SCHEDULER_API_TOKEN must equal the token the worker SENDS, which
+  # deploy-infra writes into scheduler-worker-secrets from cogni/<env>/operator). bug.5021.
   from="$(_cat_field "$k" '.inheritFrom')"
   if [[ -n "$from" && "$from" != "null" ]]; then
     v="$(bao_get_field "$from" "$k")"
@@ -257,12 +257,12 @@ inherit_shared_value() {
 }
 
 # One prefetch: node-path existence + node/ancestor key maps (O(1) ssh).
-# scheduler-worker is an inheritFrom source (SCHEDULER_API_TOKEN) — prefetch it
-# so bao_get_field (cache-only) can resolve the canonical value (bug.5021).
+# operator is the inheritFrom source for SCHEDULER_API_TOKEN (bug.5021) and is
+# already in the prefetch set below, so bao_get_field (cache-only) resolves it.
 if bao_exec "" "kv metadata get 'cogni/${DEPLOY_ENVIRONMENT}/${TARGET_NODE}'" >/dev/null 2>&1; then
   NODE_PATH_EXISTS=true
 fi
-for svc in "$TARGET_NODE" node-template operator _shared scheduler-worker; do
+for svc in "$TARGET_NODE" node-template operator _shared; do
   prefetch_path "$svc"
 done
 
@@ -289,7 +289,7 @@ for k in "${NODE_BASELINE_KEYS[@]}"; do
     continue
   fi
   # inheritFrom keys: a single canonical owner holds the authoritative value
-  # (SCHEDULER_API_TOKEN ← scheduler-worker, the exact token the worker SENDS).
+  # (SCHEDULER_API_TOKEN ← operator, the exact token the worker SENDS).
   # The node MUST byte-match it, so — like composed DSNs — we overwrite-on-drift
   # instead of preserve-existing. A freshly-formed node that inherited a
   # divergent ancestor self-heals on the next materialize, killing the
