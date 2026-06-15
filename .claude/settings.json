@@ -21,6 +21,10 @@
           {
             "type": "command",
             "command": "if [ ! -f node_modules/.modules.yaml ]; then echo 'pnpm store not linked — running install...'; pnpm install --frozen-lockfile; else echo 'node_modules already linked — skipping install'; fi"
+          },
+          {
+            "type": "command",
+            "command": "bash scripts/agent/session-cognition.sh"
           }
         ]
       }

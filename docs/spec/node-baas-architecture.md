@@ -211,8 +211,27 @@ Cogni's BaaS surface should be small, composable, and portable:
 | Secrets         | key names and consumers                                                              | OpenBao values, ESO manifests, rotation path                                                              |
 | Gateway         | service ports and health routes                                                      | domain, TLS, Caddy/ingress, per-env route                                                                 |
 | Studio/Wizard   | node metadata and capabilities                                                       | operator UI, publish, flight, validation                                                                  |
+| Cognition       | knowledge entries (skills/guides/playbooks), registered domains                      | session-start kickstart bundle (`/api/v1/cognition`), advertised via `/.well-known/agent.json`            |
 
 The invariant is: **node declares shape; operator wires environment**.
+
+## Cognition Substrate
+
+Supabase delivers Auth, Storage, and a generated API as managed services. The same product idea applies to an agent's **working cognition**: an agent should not have to git-sync a tree of `AGENTS.md` files to learn how to operate a node. The node is the subject-matter expert for its niche ([`knowledge-syntropy-expert`](../../.claude/skills/knowledge-syntropy-expert/SKILL.md)); its knowledge hub is the codified mind. So the operator serves that mind as a substrate, fetched at session start.
+
+**Endpoint.** `GET /api/v1/cognition` returns a node's kickstart bundle, advertised under `cognition` + `endpoints.knowledgeBootstrap` in `/.well-known/agent.json`. The bundle has three parts:
+
+| Part               | Source                                                                  | Owner         |
+| ------------------ | ----------------------------------------------------------------------- | ------------- |
+| Tooling invariants | `SESSION_BOOTSTRAP_INVARIANTS` constant in the node app                 | code          |
+| Skills index       | hub entries of type `skill`/`guide`/`playbook` (use-when framed titles) | knowledge hub |
+| Domain pointers    | `listDomainsFull()` — registered domains + entry counts                 | knowledge hub |
+
+The response carries a fully-rendered `markdown` field that a **SessionStart hook** echoes to stdout; both Claude Code and Codex inject SessionStart stdout into the model's context, so one operator endpoint feeds both runtimes identically. The hook is wired once per runtime and calls a single shared loader (`scripts/agent/session-cognition.sh`): Claude Code via `.claude/settings.json`, Codex via `.codex/config.toml` (identical `hooks.SessionStart` → `type:"command"` shape). The mechanism is symmetric; the one asymmetry is trust — Codex runs a repo-committed `.codex/` hook only after a one-time approval (`/hooks`), whereas this repo's `.claude` hooks are already trusted. Runtimes without a session hook (or behind it) self-serve the same URL.
+
+**The v0 ownership split is deliberate.** The _irreducible_ invariants are code-owned because they must render even when the hub is empty or unreachable — a session must always bootstrap. Everything _expandable_ (skills, guides, growing domain expertise) is hub-delivered and refined in place via the contribution flow, never by editing this file. As the merge-to-`main` knowledge flow is exercised, the invariants can migrate into a hub `rule` entry; until then they stay code-owned so the substrate has no chicken-and-egg.
+
+**Boundaries.** The bundle is **public and index-only** — skill/domain pointers (title, use-when, recall path), never full entry bodies. Full content stays behind the authed read routes (`KNOWLEDGE_READ_REQUIRES_PRINCIPAL`), so the public index does not widen the read surface. Root `AGENTS.md` drops to a thin bootstrap pointer at the bundle; node-scoped and subdir `AGENTS.md` files remain (closest-file-wins still holds for code-local rules). This is reversible: revert the PR and `AGENTS.md` carries the full orientation again.
 
 ## Current State
 

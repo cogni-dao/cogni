@@ -1,0 +1,16 @@
+# Codex project config — mirrors .claude/settings.json for cross-runtime parity.
+#
+# SessionStart hook: pulls the node's cognition substrate bundle and prints it to
+# stdout, which Codex injects as developer context (developers.openai.com/codex/hooks).
+# Same mechanism + matcher shape as the Claude Code hook; both call one shared script.
+#
+# ONE-TIME TRUST: project-local hooks run only after you trust the .codex/ layer —
+# approve once with `/hooks` in Codex (or `--dangerously-bypass-hook-trust` for CI).
+
+[[hooks.SessionStart]]
+matcher = "startup|resume"
+
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "bash scripts/agent/session-cognition.sh"
+statusMessage = "Loading Cogni cognition substrate"

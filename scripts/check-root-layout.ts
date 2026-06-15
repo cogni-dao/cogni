@@ -68,6 +68,7 @@ const ALLOWED_ROOT_ENTRIES = new Set<string>([
   ".agents",
   ".allstar",
   ".claude",
+  ".codex",
   ".cogni",
   ".dependency-cruiser.cjs",
   ".dockerignore",
