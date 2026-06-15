@@ -20,13 +20,15 @@ tags: [agents, pr-manager, playbook, vcs, ci-cd]
 
 These are non-negotiable. ALL must pass before merging:
 
-| Gate              | Rule                                                                                               |
-| ----------------- | -------------------------------------------------------------------------------------------------- |
-| Target branch     | `main`. Feature branches PR into main. Release branches (`release/*`) PR into main for production. |
-| CI status         | ALL checks `success`. Zero exceptions.                                                             |
-| Draft             | Never merge draft PRs.                                                                             |
-| Human PR approval | Requires ≥1 approving review.                                                                      |
-| Bot PR approval   | NOT required — CI green is sufficient.                                                             |
+| Gate              | Rule                                                                                      |
+| ----------------- | ----------------------------------------------------------------------------------------- |
+| Target branch     | `main`. Feature and operator control-plane PRs target main; `deploy/*` is env state only. |
+| CI status         | ALL required checks `success`. Zero exceptions.                                           |
+| Draft             | Never merge draft PRs.                                                                    |
+| Human PR approval | Requires ≥1 approving review unless the PR type below explicitly exempts it.              |
+| Bot PR approval   | NOT required — CI green is sufficient.                                                    |
+
+CI/CD authority: pre-merge safety happens in candidate flight; accepted code promotes from `main` to preview/production by digest without rebuilds. Do not infer environment routing from branch names.
 
 ## PR Type Handling
 
@@ -48,9 +50,17 @@ Priority: **merge fast** — these are free throughput wins.
 - CI green, no approval → skip, note PR age
 - CI failing → skip, note which checks failed
 
-### Release PRs (head branch `release/*`, targets `main`)
+### Operator-authored node-formation PRs
 
-**DO NOT TOUCH.** The `auto-merge-release-prs.yml` workflow handles these. Report status only.
+These register hosted nodes in the operator control plane. They are operator-domain PRs, not child source-code PRs.
+
+- CI green + capacity gate already passed → squash-merge
+- CI green but capacity status unknown → skip, flag "needs capacity confirmation"
+- CI failing → skip, note which checks failed
+
+### Production release / promotion PRs
+
+Do not invent release-branch policy. Production is a deploy-plane promotion with a human gate; if a `release/*` PR exists, report status only unless the active CI/CD spec or a human explicitly says to merge it.
 
 ## Staleness
 

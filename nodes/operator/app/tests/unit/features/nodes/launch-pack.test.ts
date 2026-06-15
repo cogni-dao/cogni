@@ -158,6 +158,16 @@ describe("buildNodeLaunchPack", () => {
     );
     expect(pack.prompt).toContain("Right before flighting");
     expect(pack.prompt).toContain("ensure the parent deployment PR is merged");
+    expect(pack.prompt).toContain("ask the Cogni PR Manager graph");
+    expect(pack.prompt).toContain(
+      "POST https://cognidao.org/api/v1/chat/completions"
+    );
+    expect(pack.prompt).toContain('model "gpt-4o-mini"');
+    expect(pack.prompt).toContain('graph_name "pr-manager"');
+    expect(pack.prompt).toContain("squash-merge it");
+    expect(pack.prompt).toContain(
+      "node-formation capacity gate already passed"
+    );
     expect(pack.prompt).toContain("Checkpoint with the human");
     expect(pack.prompt).toContain("brief status, progress, and next-steps");
     expect(pack.prompt).toContain("Register as a contributor");
