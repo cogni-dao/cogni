@@ -34,7 +34,7 @@ inbox with N single-commit branches for one unit of work (the noob failure).
 Walk top-to-bottom. **Most agent work stops at step 1.**
 
 1. **STAY SILENT.** Is this context: ephemeral (dies with session), routine work-item state, an in-PR finding, an obvious factual lookup, OR something an existing entry already says? → **write nothing.** Knowledge entries are precious; sprawl is the failure mode. **≥80% of contributable-feeling moments belong here.**
-2. **RECALL.** Use `/knowledge?mode=browse` filtered by domain, or `core__knowledge_search`. Is there an existing entry that already covers your claim? If yes → step 3. Also recall **your own** open contribution (`GET /contributions?state=open`) so you append rather than fork.
+2. **RECALL — both planes.** (a) The **merged** plane: `/knowledge?mode=browse` filtered by domain, or `core__knowledge_search`. (b) **Your own open contribution _branch_**: `GET /contributions?state=open` for the id, then **`GET /contributions/{id}/diff` to read the entries already on it.** Branch-local entries do **not** appear in `/knowledge?domain=` (it returns merged-`main` only) — so an agent who recalls the merged plane alone will re-discover, re-author, or outright deny knowledge it wrote minutes ago on its own branch. Read the branch before you write or before you answer "does X exist / is it linked." Cite the siblings you find; append rather than fork.
 3. **REFINE.** Found a related entry that's slightly off, stale, or bloated? **Sharpen it in place** via an `op: update` edit. Shorter + sharper + raises confidence. **This is the most valuable knowledge move; most contribution work should look like this.**
 4. **CITE.** Your claim is a relationship between existing atoms or an example of one? Add a `citation` edge — `supports`, `contradicts`, `extends`, `supersedes`. Or write a sibling atom that cites the parent. Never inline "companion to X" prose.
 5. **WRITE ATOMIC.** No existing atom fits AND the claim earns its keep → file new entry. See routing below for which entry type / sub-skill.
@@ -104,11 +104,17 @@ KEY=$(grep -E "^COGNI_API_KEY_TEST=" .env.cogni | cut -d= -f2- | tr -d "\"")   #
 BASE=https://test.cognidao.org   # or production cognidao.org
 ```
 
-**Step 1 — recall your open contribution (so you append, not fork):**
+**Step 1 — recall your open contribution AND read what's already on its branch:**
 
 ```bash
 CID=$(curl -sS "$BASE/api/v1/knowledge/contributions?state=open&limit=20" \
   -H "Authorization: Bearer $KEY" | jq -r '.contributions[0].contributionId // empty')
+
+# MANDATORY when CID exists: read the entries already on YOUR branch. These are
+# NOT in /knowledge?domain= (merged-main only) — skip this and you'll re-author
+# or deny knowledge you wrote this session. Cite/refine these siblings.
+[ -n "$CID" ] && curl -sS "$BASE/api/v1/knowledge/contributions/$CID/diff" \
+  -H "Authorization: Bearer $KEY" | jq -r '.entries[] | "\(.rowId): \((.after // .before).title)"'
 ```
 
 **Step 2 — only if you have none open, create ONCE and capture the id:**
@@ -204,6 +210,7 @@ Don't set `confidencePct` on the request unless you have a defensible reason. In
 ## Anti-patterns
 
 - **Re-POSTing `/contributions` for related work instead of appending via `/commits`** — the fracturing failure: N single-commit branches for one unit of work (and an inbox no human wants to triage).
+- **Recalling the merged plane only — never reading your own open branch.** `/knowledge?domain=` returns merged-`main`; your `contrib/*` branch entries are invisible to it. Answering "does X exist / is it linked" or deciding to write _without_ `GET /contributions/{id}/diff` is how an agent denies or duplicates knowledge it authored minutes ago (the exact failure that prompted this rule).
 - **Registering a fresh agent key per contribution** — multiplies principals; reuse your one saved key.
 - Filing a new entry when RECALL would surface an existing match
 - Writing a `content` prose blob instead of structured markdown (headings / bold lead / table / list) — renders as an unscannable wall; see "Format the `content` field"
