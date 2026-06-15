@@ -105,7 +105,7 @@ it in the wizard, or add it to the node formation PR.
 Identify:
 
 - `<env>`: `candidate-a`, `preview`, or `production`
-- `<service>`: catalog service name, such as `operator`, `node-template`, `resy`, or `_shared`
+- `<service>`: catalog service name, such as `operator`, `node-template`, `scheduler-worker`, or `_shared`
 - `<KEY>`: uppercase env var name
 - `<namespace>`: the k8s namespace, such as `cogni-production`
 - `<externalsecret>` and `<secret>`: usually `<service>-env-secrets`; the operator also follows this shape as `operator-env-secrets`

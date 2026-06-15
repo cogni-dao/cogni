@@ -116,6 +116,11 @@ export {
   createGithubReviewAdapter,
   type GithubReviewAdapter,
 } from "./review/github-review.adapter";
+// Node self-serve secrets — OpenBao writer adapter (design.node-self-serve-secrets).
+export {
+  OpenBaoSecretsAdapter,
+  type OpenBaoSecretsAdapterDeps,
+} from "./secrets/openbao-secrets.adapter";
 // NOTE: Sandbox adapters (SandboxRunnerAdapter, SandboxGraphProvider) are NOT
 // re-exported here. They pull in dockerode → ssh2 → cpu-features (native addon)
 // which breaks Turbopack bundling. Import directly from subpath when needed:

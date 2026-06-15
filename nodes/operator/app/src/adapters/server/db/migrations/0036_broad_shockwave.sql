@@ -1,0 +1,2 @@
+ALTER TABLE "node_access_requests" DROP CONSTRAINT "node_access_requests_role_check";--> statement-breakpoint
+ALTER TABLE "node_access_requests" ADD CONSTRAINT "node_access_requests_role_check" CHECK ("node_access_requests"."role" IN ('developer','secrets_manager','production_promoter'));

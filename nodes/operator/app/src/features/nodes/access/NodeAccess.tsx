@@ -30,9 +30,12 @@ import type { NodeAccessRole } from "@/shared/db/node-access-requests";
 
 import { AccessActions } from "./AccessActions.client";
 
-// What each role lets an agent do, for display. Extends 1:1 as roles are added (rbac.md §6).
+// What each role lets an agent do, for display — one distinct, least-privilege
+// role per capability (rbac.md §6). developer→can_flight, secrets_manager→
+// can_manage_secrets, production_promoter→can_promote_production. Extends 1:1.
 const ROLE_CAPABILITY: Record<NodeAccessRole, string> = {
-  developer: "Flight",
+  developer: "Candidate flight",
+  secrets_manager: "Manage secrets",
   production_promoter: "Promote to production",
 };
 
@@ -135,8 +138,8 @@ export function NodeAccess({ nodeId, requests }: Props): ReactElement {
   return (
     <SectionCard title="Agents" className="mx-auto mt-4 w-full max-w-2xl">
       <p className="text-muted-foreground text-sm">
-        Approve external agents to have permissions in this project. They can
-        flight + deploy code updates on your behalf.
+        Approve external agents to act on this node. Each row shows the exact
+        capabilities the agent's role grants.
       </p>
 
       {isEmpty ? (

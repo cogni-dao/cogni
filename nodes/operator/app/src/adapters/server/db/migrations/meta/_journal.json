@@ -253,6 +253,13 @@
       "when": 1781301557846,
       "tag": "0035_normal_komodo",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1781490660339,
+      "tag": "0036_broad_shockwave",
+      "breakpoints": true
     }
   ]
 }

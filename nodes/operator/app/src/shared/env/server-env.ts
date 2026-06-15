@@ -298,6 +298,14 @@ export const serverSchema = z.object({
   OPENFGA_AUTHORIZATION_MODEL_ID: optionalString,
   OPENFGA_API_TOKEN: optionalString,
 
+  // OpenBao node-secrets writer — the operator pod's OWN in-cluster identity for
+  // node self-serve secret writes (design.node-self-serve-secrets §Phase 1.B).
+  // Optional: the secrets plane returns 503 until the writer role is provisioned
+  // (candidate-a first). ADDR + SA_TOKEN_PATH default to the in-cluster wiring.
+  OPENBAO_ADDR: z.string().url().default("http://openbao.openbao.svc:8200"),
+  OPENBAO_NODE_SECRETS_WRITER_ROLE: optionalString,
+  OPENBAO_SA_TOKEN_PATH: z.string().default("/var/run/secrets/openbao/token"),
+
   // PostHog product analytics — required
   // See docs/guides/posthog-setup.md for setup
   // PostHog Cloud free tier: 1M events/month at https://us.i.posthog.com

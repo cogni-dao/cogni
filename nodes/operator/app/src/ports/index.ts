@@ -150,6 +150,12 @@ export type {
   PromoteNodeToPreviewInput,
 } from "./operator-deploy-plane.port";
 export type {
+  OperatorSecretsPlanePort,
+  SecretWriteOp,
+  WriteNodeSecretInput,
+  WriteNodeSecretResult,
+} from "./operator-secrets-plane.port";
+export type {
   OperatorWalletPort,
   TransferIntent,
 } from "./operator-wallet.port";

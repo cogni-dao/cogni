@@ -40,10 +40,15 @@ export const NODE_ACCESS_REQUEST_STATUSES = [
 export type NodeAccessRequestStatus =
   (typeof NODE_ACCESS_REQUEST_STATUSES)[number];
 
-// The OpenFGA relation a request grants. `developer`→can_flight (candidate-a);
-// `production_promoter`→can_promote_production (production). A new role (e.g. preview_promoter→
-// can_promote_preview) is added here + in the immutable OpenFGA model + the CHECK below.
-export const NODE_ACCESS_ROLES = ["developer", "production_promoter"] as const;
+// The OpenFGA relation a request grants — one distinct, least-privilege role per
+// capability. `developer`→can_flight (candidate-a); `secrets_manager`→can_manage_secrets;
+// `production_promoter`→can_promote_production (production). A new role is added here +
+// in the immutable OpenFGA model + the CHECK below.
+export const NODE_ACCESS_ROLES = [
+  "developer",
+  "secrets_manager",
+  "production_promoter",
+] as const;
 
 export type NodeAccessRole = (typeof NODE_ACCESS_ROLES)[number];
 
@@ -78,7 +83,7 @@ export const nodeAccessRequests = pgTable(
     ),
     check(
       "node_access_requests_role_check",
-      sql`${t.role} IN ('developer','production_promoter')`
+      sql`${t.role} IN ('developer','secrets_manager','production_promoter')`
     ),
     index("node_access_requests_node_id_idx").on(t.nodeId),
     index("node_access_requests_agent_user_id_idx").on(t.agentUserId),

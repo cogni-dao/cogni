@@ -428,15 +428,30 @@ workflow; OIDC issues a job-scoped token with the env writer policy). Audit log
 entry generated in OpenBao. Production-env writes require explicit re-approval
 through GitHub Environment protection rules.
 
-#### Entry 3 — Operator API (AI agents; MCP-mediated)
+#### Entry 3 — Operator API (node-owner self-serve; OpenFGA-authorized)
 
 ```
-POST /api/v1/secrets/declare
-Body: { env, service, key }
-Response: 201 with a one-time-use submission URL the human visits to provide the value
+POST /api/v1/nodes/<id>/secrets
+Body: { key, value, op: "set" | "rotate" }
+Response: 200 { written, version, path }   # path = cogni/<env>/<node>/<KEY>, no value
 ```
 
-AI agents CANNOT pass the value. They declare the SHAPE (env, service, key). The human (or operator-app UI) fills the value through a separate authenticated channel. The MCP tool `secret.declare` exposes this to agents; `secret.get_value` does NOT exist.
+A node-owner granted OpenFGA `developer` on the node sets/rotates a node-scoped
+**A2 value** through the operator holding only an **API key** — no kubeconfig, no
+writer JWT. The operator checks `can_manage_secrets` (per-node, fail-closed: 503 on
+`authz_unavailable`, 403 on deny — never owner-fallback), enforces the catalog
+allowlist and the OpenBao `_system`/`_shared` policy deny, then writes
+`cogni/data/<env>/<node>/<KEY>` with the operator pod's **OWN** in-cluster OpenBao
+identity (projected SA token → k8s-auth over ClusterIP). The value transits TLS to
+the operator and never leaves it; env + node slug are operator-stamped from the
+OpenFGA-authorized resource, never the request body. Per-node isolation is
+**tuple-based** (OpenFGA), not a shared writer token. Spec + roadmap:
+[`docs/design/node-self-serve-secrets.md`](../design/node-self-serve-secrets.md).
+
+> Supersedes the prior shape-only `secrets/declare` sketch (agent declares shape,
+> human fills value). The node-self-serve spike (#1627) deliberately closed that
+> human-in-the-loop gap: the authorized caller passes the value over TLS and the
+> operator — not a human with a kubeconfig — performs the OpenBao write.
 
 ### Value classification — three orthogonal axes
 

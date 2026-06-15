@@ -84,7 +84,7 @@ Some secrets are values issued by external systems (OpenAI keys, OpenRouter keys
 # 1. Mint new value at the issuer (browser, dashboard, API).
 # 2. Apply it via the CLI in interactive mode (prompts for value).
 #    Prereq: BAO_ADDR + BAO_TOKEN (port-forward + bao login).
-pnpm secrets:set production poly OPENAI_API_KEY
+pnpm secrets:set production node-template OPENAI_API_KEY
 # Prompts: "Value for cogni/...: " (secure input; never echoes)
 # Writes via bao kv patch, preserves prior version
 # 3. Verify new key is in use (your app's health endpoint or external API logs).
@@ -103,8 +103,8 @@ When you have reason to believe a secret has been exposed (laptop theft, acciden
 
 ```bash
 # 1. Rotate immediately to lock out the old value.
-pnpm secrets:set production poly OPENAI_API_KEY
-kubectl annotate externalsecret -n cogni-production poly-env-secrets \
+pnpm secrets:set production node-template OPENAI_API_KEY
+kubectl annotate externalsecret -n cogni-production node-template-env-secrets \
   force-sync=$(date +%s) --overwrite
 #    (interactive prompt for new value, ESO force-sync, pod restarts in <2 min)
 

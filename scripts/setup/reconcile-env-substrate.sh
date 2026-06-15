@@ -128,6 +128,28 @@ bao_exec "write auth/kubernetes/role/${DEPLOY_ENV}-db-reader \
   bound_service_account_namespaces=default \
   policies=${DEPLOY_ENV}-db-reader ttl=15m" >/dev/null
 
+# ── <env>-node-secrets-writer (operator pod's OWN identity; node self-serve) ──
+# Additive, narrowly-scoped writer for the operator pod so node-owners can set/
+# rotate A2 secret VALUES through the operator (design.node-self-serve-secrets §1.B).
+# Distinct from <env>-writer: bound to the operator-secrets-writer SA in the
+# cogni-<env> namespace (where the operator actually runs — NOT default), and
+# explicit-deny on the two shared paths a per-node grant must never reach. The SA +
+# projected token (audience cogni-openbao) are created by the operator overlay.
+log "writing ${DEPLOY_ENV}-node-secrets-writer policy + role (SA operator-secrets-writer @ cogni-${DEPLOY_ENV})..."
+bao_policy "${DEPLOY_ENV}-node-secrets-writer" <<HCL
+path "cogni/data/${DEPLOY_ENV}/*"             { capabilities = ["read", "create", "update", "patch"] }
+path "cogni/metadata/${DEPLOY_ENV}/*"         { capabilities = ["read", "list"] }
+path "cogni/data/${DEPLOY_ENV}/_system/*"     { capabilities = ["deny"] }
+path "cogni/data/${DEPLOY_ENV}/_shared/*"     { capabilities = ["deny"] }
+path "cogni/metadata/${DEPLOY_ENV}/_system/*" { capabilities = ["deny"] }
+path "cogni/metadata/${DEPLOY_ENV}/_shared/*" { capabilities = ["deny"] }
+HCL
+bao_exec "write auth/kubernetes/role/${DEPLOY_ENV}-node-secrets-writer \
+  bound_service_account_names=operator-secrets-writer \
+  bound_service_account_namespaces=cogni-${DEPLOY_ENV} \
+  audience=cogni-openbao \
+  policies=${DEPLOY_ENV}-node-secrets-writer ttl=1h" >/dev/null
+
 # ── GitHub Actions OIDC writer (jwt twin of <env>-writer policy) ─────────────
 if ! bao_exec "auth list -format=json" 2>/dev/null | jq -e '."github-actions/"' >/dev/null 2>&1; then
   log "enabling github-actions (jwt) auth method..."; bao_exec "auth enable -path=github-actions jwt" >/dev/null
