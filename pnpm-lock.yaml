@@ -1280,6 +1280,9 @@ importers:
       '@cogni/ingestion-core':
         specifier: workspace:*
         version: link:../ingestion-core
+      '@cogni/knowledge-store':
+        specifier: workspace:*
+        version: link:../knowledge-store
       '@cogni/repo-spec':
         specifier: workspace:*
         version: link:../repo-spec

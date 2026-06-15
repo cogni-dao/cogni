@@ -62,20 +62,20 @@ describe("initializeConfidence — baselines by source type", () => {
   });
 });
 
-describe("initializeConfidence — derived fails closed", () => {
-  it("rejects derived without any cited basis", () => {
-    expect(() => initializeConfidence({ sourceType: "derived" })).toThrow(
-      ConfidencePolicyError
-    );
+describe("initializeConfidence — derived initialize-then-recompute", () => {
+  it("initializes derived to the conservative baseline (40) without a cited basis", () => {
+    const d = initializeConfidence({ sourceType: "derived" });
+    expect(d.confidencePct).toBe(40);
+    expect(d.basis).toBe("derived:baseline");
   });
 
-  it("rejects derived when a citation lacks citedConfidencePct", () => {
-    expect(() =>
-      initializeConfidence(
-        { sourceType: "derived" },
-        { citations: [{ citationType: "supports" }] }
-      )
-    ).toThrow(ConfidencePolicyError);
+  it("falls back to baseline when a citation lacks citedConfidencePct", () => {
+    const d = initializeConfidence(
+      { sourceType: "derived" },
+      { citations: [{ citationType: "supports" }] }
+    );
+    expect(d.confidencePct).toBe(40);
+    expect(d.basis).toBe("derived:baseline");
   });
 
   it("derives the minimum cited confidence when a basis is present", () => {

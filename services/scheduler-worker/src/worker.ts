@@ -18,7 +18,7 @@
 
 import { createRequire } from "node:module";
 import { NativeConnection, Worker } from "@temporalio/worker";
-
+import { createGoalLoopActivities } from "./activities/goal-loop.js";
 import { createActivities } from "./activities/index.js";
 import { createReviewActivities } from "./activities/review.js";
 import { createSweepActivities } from "./activities/sweep.js";
@@ -131,10 +131,23 @@ export async function startSchedulerWorker(
     );
   }
 
+  // Goal-loop activities register unconditionally: they hold no DB cred — every
+  // op HTTP-delegates to the owning node's /api/internal/goal-loop route via
+  // container.config (node endpoints + SCHEDULER_API_TOKEN the worker already
+  // has). Mirrors the review-activity delegation pattern (bug.5000).
+  const goalLoopActivities = createGoalLoopActivities({
+    nodeEndpoints: container.config.nodeEndpoints,
+    schedulerApiToken: container.config.schedulerApiToken,
+    logger:
+      container.logger.child?.({ component: "goal-loop-activities" }) ??
+      container.logger,
+  });
+
   const allActivities = {
     ...graphActivities,
     ...reviewActivities,
     ...sweepActivities,
+    ...goalLoopActivities,
   };
   const workflowsPath = require.resolve("@cogni/temporal-workflows/scheduler");
 
