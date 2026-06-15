@@ -8,13 +8,14 @@ namespace: cogni-preview
 resources:
   - ../../../base/node-app
   - ../../../base/openfga-external
+  - external-secret.yaml
 
 namePrefix: operator-
 
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/cogni-template
-    digest: "sha256:7f40a3b7beadcdf3432831a115153365ce95b986844cc5f261eee66d2122f47b"
+    digest: "sha256:a81136c461a26f8a9f69f5860f30957f76698971286285c92b4438f4c9527981"
 
 patches:
   # Node-specific ConfigMap values.
