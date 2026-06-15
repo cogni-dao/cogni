@@ -9,7 +9,7 @@ read_when: Modifying CI workflows, adding checks to merge gate, or planning mult
 implements: []
 owner: cogni-dev
 created: 2025-12-22
-verified: 2026-06-12
+verified: 2026-06-15
 tags:
   - ci-cd
   - deployment
@@ -229,10 +229,24 @@ Invariants:
 - **`TRUST_LADDER_IS_MONOTONIC`**: a node reaches preview only after earning candidate-a, production only after a `production_promoter` grant. Preview adds no new gate because candidate-a already proved the trust; production does because it is the irreversible environment.
 - **`PROMOTION_RUNS_AS_THE_OPERATOR`**: preview + production promotion is an operator GitHub-App activity (merge for preview, dispatch for production) — never a contributor's personal `gh` credential. This supersedes the v0 "preview/prod are human-approved operator actions" framing: preview is now operator-automatic, production is operator-dispatched + RBAC-gated (human-approved until a `production_promoter` grant exists; today only the org admin holds it).
 - **`ONE_PROMOTION_PRIMITIVE`**: every rung promotes the candidate-proven digest via `promote-and-deploy`. No env rebuilds, no second dispatch path, no PR-tag substitution.
+- **`APP_PROMOTE_IS_NO_INFRA`**: promotion reconciles the **app digest only** — it is orthogonal to substrate, mirroring `candidate-flight.yml` (which has no `deploy-infra` job). The operator-API promote (`dispatchNodePromote`) hard-sets `skip_infra=true`; `promote-and-deploy.yml` defaults `skip_infra=true`. Per-node ESO `ExternalSecret`s are materialized by the ungated `node-substrate` lane, so the no-infra default does **not** skip secret reconciliation. `deploy-infra` (Compose + k8s bridge secrets) is a **deliberate** lever — run it only when the promoted diff touches `infra/compose/**`, a VM-materialized OpenBao/ESO bridge secret, or edge/runtime topology (human dispatch `-f skip_infra=false`, or `-f deploy_infra_mode=k8s-secrets-only` for pod-secret-only changes).
 
 RBAC is additive (immutable OpenFGA model, [rbac.md](./rbac.md)): the ladder is `can_flight` (candidate) + `can_promote_production` (prod) today; a `can_promote_preview` rung is a one-relation addition **if/when manual dev-driven preview promotes arrive** — preview _auto_-promote stays ungated regardless.
 
-Implementing PRs: #1643 (DeployCapability + freeze), #1653 (`can_promote_production` + promote dispatch), #1640 (operator merge authority + the preview merge-hook).
+#### Agent-facing CI/CD API surface
+
+An agent drives the ladder over HTTP with its registered Bearer key — never a personal `gh` credential. The operator GitHub App performs every dispatch.
+
+| Action                 | Endpoint                                  | Body                                        | Authz (action → relation)                                                                      | Result                                                        |
+| ---------------------- | ----------------------------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| Flight to candidate-a  | `POST /api/v1/vcs/flight`                 | `{ nodeRef: { nodeId, sourceSha } }`        | `node.flight` → `can_flight` (`developer`)                                                     | `202` + `candidate-flight.yml` dispatch (candidate-a only)    |
+| Promote to production  | `POST /api/v1/deploy/promote`             | `{ nodeId, env: "production", sourceSha? }` | `node.promote_production` → `can_promote_production` (`production_promoter`; `admin` inherits) | `200` dispatched; app-digest only (`APP_PROMOTE_IS_NO_INFRA`) |
+| Request a role         | `POST /api/v1/nodes/{id}/access-requests` | `{ role }`                                  | self-request (`SELF_REQUEST_ONLY`)                                                             | tracking row `pending` (OpenFGA tuple is the authority)       |
+| Owner approves/revokes | `POST /api/v1/nodes/{id}/developers`      | `{ agentUserId, decision, role }`           | node **owner** session (`OWNER_GATING`)                                                        | writes/deletes the OpenFGA role tuple — the grant             |
+
+Deny-by-default holds: before a grant the gated route returns `403 authz_denied`; after the owner approves it flips to a downstream code (dispatch result, or `dispatch_failed` if the env's operator App is uninstalled). `503 authz_unavailable` ≠ `403` — the former means the env's OpenFGA store is unbootstrapped, not a denial. Preview is auto-promoted on `main`-merge and has no agent-facing endpoint. These endpoints are advertised in `/.well-known/agent.json`.
+
+Implementing PRs: #1643 (DeployCapability + freeze), #1653 (`can_promote_production` + promote dispatch), #1640 (operator merge authority + the preview merge-hook), #1670 (`APP_PROMOTE_IS_NO_INFRA` default + agent-facing surface in `agent.json`).
 
 ### Artifact contract
 

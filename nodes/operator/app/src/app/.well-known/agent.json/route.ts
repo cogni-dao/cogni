@@ -4,9 +4,9 @@
 /**
  * Module: `@app/.well-known/agent.json`
  * Purpose: Discovery document for machine agents — publishes register,
- *   work-item, coordination, completions, run, validation, and flight URLs
- *   plus the auth scheme so external clients can bootstrap without hard-coding
- *   paths or reading docs.
+ *   work-item, coordination, completions, run, validation, flight, and
+ *   promote URLs plus the auth scheme so external clients can bootstrap
+ *   without hard-coding paths or reading docs.
  * Scope: Single GET handler. Honors `x-forwarded-host`/`x-forwarded-proto`
  *   from Caddy / k8s ingress so the published URLs are externally reachable
  *   (falling back to the raw Host header then request.url for local dev).
@@ -62,7 +62,16 @@ export async function GET(request: Request) {
       workItemCoordination: `${origin}/api/v1/work/items/{id}/coordination`,
       runs: `${origin}/api/v1/agent/runs`,
       runStream: `${origin}/api/v1/agent/runs/{runId}/stream`,
+      // CI/CD plane (see docs/spec/node-ci-cd-contract.md § Env-promotion).
+      // flight → candidate-a (node.flight/can_flight); promote → production
+      // (node.promote_production/can_promote_production). Both dispatch via the
+      // operator GitHub App — never a personal gh credential. Promotion is
+      // app-digest only (no infra). Grant the role via the access-request →
+      // owner-approve loop below.
       flight: `${origin}/api/v1/vcs/flight`,
+      promote: `${origin}/api/v1/deploy/promote`,
+      nodeAccessRequest: `${origin}/api/v1/nodes/{id}/access-requests`,
+      nodeDevelopers: `${origin}/api/v1/nodes/{id}/developers`,
     },
     process: {
       contributionSpec: "docs/spec/development-lifecycle.md",
