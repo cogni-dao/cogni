@@ -44,6 +44,8 @@ Enforce tenant isolation at the PostgreSQL level via RLS policies, so that every
 
 5. **SSL_REQUIRED_NON_LOCAL**: Any `DATABASE_URL` not pointing to `localhost` or `127.0.0.1` must include `sslmode=require` (or stricter). Enforced by Zod refine at boot.
 
+6. **RLS_COVERAGE**: Every `public` base table with a direct foreign key to `users` is tenant-scoped and MUST have RLS enabled. A table that is read exclusively by the BYPASSRLS service role and has no app-role read path satisfies this with **deny-all** — `ENABLE + FORCE ROW LEVEL SECURITY` and **no policy** — which fails closed if an app-role query is ever pointed at it. A policy is therefore not required by this invariant; RLS being enabled is. Enforced by a catalog-derived preflight in `tests/component/setup/testcontainers-postgres.global.ts` that flags any table with an `f`-type constraint referencing `users` and `relrowsecurity = false` (combined with the `RLS_ON_USER_TABLES` FORCE check: FK→users ⇒ ENABLE ⇒ FORCE). FK-based, not a column-name match, so external identifiers like `ingestion_receipts.platform_user_id` are correctly ignored. This invariant exists because the gate historically checked only ENABLE→FORCE — never coverage — so user-FK tables added after `0004_enable_rls.sql` (genesis: `0010_shallow_paibok.sql`, which created `activity_curation`/`epoch_allocations`, later renamed to `epoch_selection`/`epoch_user_projections`, with no RLS) drifted in silently. Known limit: the gate catches only direct FKs to `users`; transitive tenancy (FK to `billing_accounts`, not `users`) is covered by the hand-written subquery policies above.
+
 ## Design
 
 ### Policy Design
@@ -141,6 +143,18 @@ CREATE POLICY tenant_isolation ON graph_runs
 | ------------------------- | ------------------------------------- |
 | `ai_invocation_summaries` | No user FK; pure telemetry; no PII    |
 | `execution_requests`      | No user FK; idempotency layer; no PII |
+
+#### Service-Only Tables (deny-all RLS, no policy)
+
+These tables are written and read **exclusively by the BYPASSRLS service role** — no app-role read path exists. They satisfy `RLS_COVERAGE` with `ENABLE + FORCE` and **no policy** (deny-all): an app-role query returns zero rows (fail-closed) rather than leaking across tenants. Add an owner-scoped policy only if/when an app-role read path is introduced.
+
+| Table                       | User FK         | Service-role owner                      |
+| --------------------------- | --------------- | --------------------------------------- |
+| `epoch_selection`           | `user_id`       | `DrizzleAttributionAdapter` (worker)    |
+| `epoch_user_projections`    | `user_id`       | `DrizzleAttributionAdapter` (worker)    |
+| `node_access_requests`      | `agent_user_id` | nodes access-request routes (serviceDb) |
+| `provider_funding_attempts` | (none)          | `OpenRouterFundingAdapter` (serviceDb)  |
+| `work_item_sessions`        | (none)          | `DrizzleWorkItemSessionAdapter`         |
 
 ### Design Decisions
 
@@ -346,25 +360,27 @@ Follows the Commit 3 construction-time binding pattern. `UserDrizzlePaymentAttem
 
 ### File Pointers
 
-| File                                                    | Role                                                              |
-| ------------------------------------------------------- | ----------------------------------------------------------------- |
-| `infra/compose/postgres-init/provision.sh`              | DML grants, `app_service` role, `ALTER DEFAULT PRIVILEGES`        |
-| `src/adapters/server/db/migrations/0004_enable_rls.sql` | RLS + policies on 10 tables (hand-written SQL migration)          |
-| `packages/db-schema/src/index.ts`                       | Root barrel re-exporting all schema slices                        |
-| `packages/db-client/src/client.ts`                      | `createAppDbClient` (app-role, root export)                       |
-| `packages/db-client/src/service.ts`                     | `createServiceDbClient` (service-role, `./service` sub-path only) |
-| `packages/db-client/src/build-client.ts`                | Shared `buildClient()` factory + `Database` type                  |
-| `packages/ids/src/index.ts`                             | `UserId`, `ActorId`, `toUserId`, `userActor` branded types        |
-| `packages/ids/src/system.ts`                            | `SYSTEM_ACTOR: ActorId` (sub-path gated)                          |
-| `packages/db-client/src/tenant-scope.ts`                | `withTenantScope` + `setTenantContext` (accept `ActorId`)         |
-| `src/adapters/server/db/drizzle.client.ts`              | `getAppDb()` singleton (app-role only)                            |
-| `src/adapters/server/db/drizzle.service-client.ts`      | `getServiceDb()` singleton (BYPASSRLS, depcruiser-gated)          |
-| `src/adapters/server/db/tenant-scope.ts`                | Re-exports from `@cogni/db-client`                                |
-| `src/shared/db/db-url.ts`                               | Append `?sslmode=require` for non-localhost URLs                  |
-| `src/shared/env/server.ts`                              | Zod refine rejecting non-localhost URLs without `sslmode`         |
-| `src/shared/env/invariants.ts`                          | Role separation checks (`assertEnvInvariants()`)                  |
-| `tests/component/db/rls-tenant-isolation.int.test.ts`   | Cross-tenant isolation + missing-context tests                    |
-| `tests/component/db/rls-adapter-wiring.int.test.ts`     | Adapter wiring gate tests                                         |
+| File                                                            | Role                                                                                |
+| --------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `infra/compose/postgres-init/provision.sh`                      | DML grants, `app_service` role, `ALTER DEFAULT PRIVILEGES`                          |
+| `src/adapters/server/db/migrations/0004_enable_rls.sql`         | RLS + policies on 10 tables (hand-written SQL migration)                            |
+| `src/adapters/server/db/migrations/0032_rls_epoch_coverage.sql` | Deny-all RLS on `epoch_selection` + `epoch_user_projections` (closes the 0010 leak) |
+| `tests/component/setup/testcontainers-postgres.global.ts`       | Preflight gates: ENABLE⇒FORCE + RLS_COVERAGE (`%user_id` ⇒ RLS enabled)             |
+| `packages/db-schema/src/index.ts`                               | Root barrel re-exporting all schema slices                                          |
+| `packages/db-client/src/client.ts`                              | `createAppDbClient` (app-role, root export)                                         |
+| `packages/db-client/src/service.ts`                             | `createServiceDbClient` (service-role, `./service` sub-path only)                   |
+| `packages/db-client/src/build-client.ts`                        | Shared `buildClient()` factory + `Database` type                                    |
+| `packages/ids/src/index.ts`                                     | `UserId`, `ActorId`, `toUserId`, `userActor` branded types                          |
+| `packages/ids/src/system.ts`                                    | `SYSTEM_ACTOR: ActorId` (sub-path gated)                                            |
+| `packages/db-client/src/tenant-scope.ts`                        | `withTenantScope` + `setTenantContext` (accept `ActorId`)                           |
+| `src/adapters/server/db/drizzle.client.ts`                      | `getAppDb()` singleton (app-role only)                                              |
+| `src/adapters/server/db/drizzle.service-client.ts`              | `getServiceDb()` singleton (BYPASSRLS, depcruiser-gated)                            |
+| `src/adapters/server/db/tenant-scope.ts`                        | Re-exports from `@cogni/db-client`                                                  |
+| `src/shared/db/db-url.ts`                                       | Append `?sslmode=require` for non-localhost URLs                                    |
+| `src/shared/env/server.ts`                                      | Zod refine rejecting non-localhost URLs without `sslmode`                           |
+| `src/shared/env/invariants.ts`                                  | Role separation checks (`assertEnvInvariants()`)                                    |
+| `tests/component/db/rls-tenant-isolation.int.test.ts`           | Cross-tenant isolation + missing-context tests                                      |
+| `tests/component/db/rls-adapter-wiring.int.test.ts`             | Adapter wiring gate tests                                                           |
 
 ## Acceptance Checks
 

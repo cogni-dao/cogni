@@ -21,6 +21,7 @@ import { NextResponse } from "next/server";
 import { createNodeRepoWriter } from "@/bootstrap/capabilities/node-repo-write";
 import { resolveAppDb } from "@/bootstrap/container";
 import { withRootSpan } from "@/bootstrap/otel";
+import { evaluateNodeCapacity } from "@/features/nodes/capacity";
 import { createDoltHubDatabaseEnsurer } from "@/features/nodes/dolthub-database";
 import { transition } from "@/features/nodes/state-machine";
 import { getServerSessionUser } from "@/lib/auth/server";
@@ -145,6 +146,7 @@ type PublishStep =
   | "load_node"
   | "validate_state"
   | "validate_addresses"
+  | "check_capacity"
   | "bootstrap_dolthub"
   | "fork_from_template"
   | "open_submodule_pr"
@@ -403,6 +405,58 @@ export async function POST(request: Request, routeArgs: RouteParams) {
           );
         }
 
+        // Capacity gate (merge-authority): the operator is the network's deploy authority — it refuses
+        // to birth a new node once the deployment parent is at its compute ceiling. Enforced here, the
+        // cheapest point, before minting consumes GitHub/DoltHub/compute. Count = wizard-born nodes in
+        // the parent catalog (type:node + source_repo) — the post-#1647 deployment SSOT (`.gitmodules`
+        // is retired); ceiling from config.
+        currentStep = "check_capacity";
+        const writer = createNodeRepoWriter(env);
+        logStep("check_capacity", "started", {
+          slug: node.slug,
+          owner: parentOwner,
+          repo: parentRepo,
+        });
+        const capacity = evaluateNodeCapacity({
+          deployedNodeCount: await writer.countDeployedWizardNodes({
+            owner: parentOwner,
+            repo: parentRepo,
+          }),
+          ceiling: env.NODE_CAPACITY_CEILING,
+        });
+        if (!capacity.allowed) {
+          logStep("check_capacity", "error", {
+            slug: node.slug,
+            errorCode: "at_capacity",
+            deployedNodeCount: capacity.deployedNodeCount,
+            ceiling: capacity.ceiling,
+          });
+          logTerminal("warn", {
+            outcome: "error",
+            errorCode: "at_capacity",
+            status: 409,
+            slug: node.slug,
+            nodeStatus: node.status,
+            deployedNodeCount: capacity.deployedNodeCount,
+            ceiling: capacity.ceiling,
+          });
+          logRequestEnd(ctx.log, { status: 409, durationMs: durationMs() });
+          return NextResponse.json(
+            {
+              error: "network at node capacity",
+              reason: capacity.reason,
+              deployedNodeCount: capacity.deployedNodeCount,
+              ceiling: capacity.ceiling,
+            },
+            { status: 409 }
+          );
+        }
+        logStep("check_capacity", "success", {
+          slug: node.slug,
+          deployedNodeCount: capacity.deployedNodeCount,
+          ceiling: capacity.ceiling,
+        });
+
         const knowledgeRemote = buildNodeKnowledgeRemote(
           node.slug,
           env.DOLTHUB_OWNER
@@ -453,7 +507,7 @@ export async function POST(request: Request, routeArgs: RouteParams) {
         // Submodule birth: mint the node's own repo as a named fork of node-template (its ~1100 files
         // live there, not inlined into the operator), then the operator authors a PR pinning it as a git
         // submodule at `nodes/<slug>` + the footprint gens — one App-authored commit, PR URL synchronous.
-        const writer = createNodeRepoWriter(env);
+        // `writer` was created above for the capacity gate and is reused here.
         const identity = {
           nodeId: node.id,
           chainId: node.chainId,

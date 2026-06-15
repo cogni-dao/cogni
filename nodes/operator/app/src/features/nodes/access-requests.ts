@@ -56,8 +56,12 @@ export async function upsertAccessRequest(
       status: "pending",
     })
     .onConflictDoUpdate({
-      target: [nodeAccessRequests.nodeId, nodeAccessRequests.agentUserId],
-      set: { status: "pending", role: input.role, updatedAt: sql`now()` },
+      target: [
+        nodeAccessRequests.nodeId,
+        nodeAccessRequests.agentUserId,
+        nodeAccessRequests.role,
+      ],
+      set: { status: "pending", updatedAt: sql`now()` },
     });
 }
 
@@ -71,6 +75,7 @@ export async function transitionAccessRequestOnDecision(
   input: {
     readonly nodeId: string;
     readonly agentUserId: string;
+    readonly role: NodeAccessRole;
     readonly decision: "approve" | "reject";
   }
 ): Promise<void> {
@@ -84,7 +89,8 @@ export async function transitionAccessRequestOnDecision(
     .where(
       and(
         eq(nodeAccessRequests.nodeId, input.nodeId),
-        eq(nodeAccessRequests.agentUserId, input.agentUserId)
+        eq(nodeAccessRequests.agentUserId, input.agentUserId),
+        eq(nodeAccessRequests.role, input.role)
       )
     );
 }

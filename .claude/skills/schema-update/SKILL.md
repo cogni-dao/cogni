@@ -13,10 +13,19 @@ The minimal procedure for changing a table. Follow it; don't improvise.
 
 1. **Edit the schema TS.** Core table → `packages/db-schema/src/`. Node-local → `nodes/<node>/packages/db-schema/src/` (poly is the only one with this package today; create one for a new node by forking poly's). Never reach into `nodes/<node>/app/src/...` for schema.
 2. **`pnpm db:generate:<node>`.** Auto-gen emits `NNNN_<tag>.sql`, the `_journal.json` entry, and `NNNN_snapshot.json` together. Inspect the `.sql` — drop unintended `DROP TABLE "poly_copy_trade_*"` from operator/resy gens (orphan tables, intentional).
-3. **`pnpm db:check`.** Validates: snapshot/`prevId` chain (drizzle-kit) **and** strict-monotonic journal `when` (`scripts/db/check-journal-when.mjs`). If it red-flags non-monotonic `when`, your auto-gen `Date.now()` landed before a prior entry — bump the new entry's `when` past the violation it reports. Pre-existing future-dated entries on a node (poly idx 33 today, normalizes ~May 5 2026) emit a warning so you know your auto-gen will need a manual bump until the wall clock catches up; not fatal.
+3. **`pnpm db:check`.** Validates: snapshot/`prevId` chain (drizzle-kit), strict-monotonic journal `when` (`scripts/db/check-journal-when.mjs`), applied-migration immutability (`check-migrations-immutable.mjs`), **and generate-cleanliness** (`check-generate-clean.mjs` — fails if `db:generate:operator` would emit any drift, i.e. you edited schema TS without committing the migration). A clean tree ⇒ `db:generate` says "No schema changes". If it red-flags non-monotonic `when`, your auto-gen `Date.now()` landed before a prior entry — bump the new entry's `when` past the violation it reports. Pre-existing future-dated entries on a node (poly idx 33 today, normalizes ~May 5 2026) emit a warning so you know your auto-gen will need a manual bump until the wall clock catches up; not fatal.
 4. **Core table only:** copy the new `NNNN_*.sql` + journal entry into every other node's `migrations/` dir (each deployed DB has its own `__drizzle_migrations` table; they need their own copy with matching journal idx + `when`).
 5. Commit `.sql` + `_journal.json` + `NNNN_snapshot.json` together. Never `--no-verify` a schema PR.
 6. **Post-flight:** `kubectl logs <pod> -c migrate` must list your tag with `✅ migrations applied`. If it didn't run, `db:check` was bypassed.
+
+## RLS coverage — mandatory for any table with a FK to `users`
+
+Drizzle does not generate RLS. If your new table has a foreign key to `users`, you MUST add RLS in the same migration (hand-authored fallback below) or the coverage gate fails CI. Two correct shapes:
+
+- **User-facing reads** → an owner-scoped policy (`USING (... = current_setting('app.current_user_id', true))`). See `docs/spec/database-rls.md`.
+- **Service-role-only** (worker reads/writes via the BYPASSRLS role, no app-role path) → `ENABLE + FORCE` with **no policy** = deny-all (fail-closed). No fake policy needed.
+
+The gate (`tests/component/setup/testcontainers-postgres.global.ts`) fails if any `public` table with a FK to `users` has `relrowsecurity = false` — invariant `RLS_COVERAGE` in `database-rls.md`. It exists because user-FK tables historically shipped with no RLS (the `0010`→`0032` epoch-ledger leak); the gate makes that class of drift impossible to merge.
 
 ## Hand-authored fallback — only if drizzle-kit literally can't emit it
 

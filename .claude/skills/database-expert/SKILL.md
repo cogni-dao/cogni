@@ -102,6 +102,10 @@ drizzle-kit compiles the config to a temp directory before running. `import { X 
 
 Shared-era migration applied to every deployed DB before the schema split. Each node's `migrations/` has the same SQL file + matching `meta/_journal.json` entry so hashes match the pre-existing `__drizzle_migrations` rows. Tripwire READMEs in those dirs explain; **do not "clean up" the duplicate** without coordinating across every deployed DB.
 
+### node-template TODO: baseline-squash the migration history
+
+New nodes replay operator's full `0000→0032` history (incl. the `0010`→`0032` epoch-RLS create-then-fix). Not a security risk — fresh DBs apply all migrations atomically before serving — but it's legacy baggage every fork inherits. Standard fix (Rails/Django/Atlas-style) is to collapse to a single `0000_init` baseline with RLS correct from the start. Deferred: it's a breaking op for deployed DBs (`__drizzle_migrations` reconciliation) and fights the immutability gate, so do it on the fresh `node-app` lineage, not operator. Tracked as `task.5018`.
+
 ### `drizzle-kit generate` on operator/resy will emit DROP migrations for orphan poly tables
 
 `poly_copy_trade_*` exists in operator/resy DBs as harmless orphans from the shared-era apply. Their configs no longer include those tables, so generate sees them as drift and wants to `DROP TABLE`. **Inspect any auto-generated migration; discard DROP statements for `poly_copy_trade_*`.** Orphans stay until an explicit future cleanup.

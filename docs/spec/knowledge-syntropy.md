@@ -137,7 +137,7 @@ The atomic unit of what the node believes. Each row is a single assertion with p
 | `content`             | text        | NOT NULL                  | Full knowledge body — the actual assertion                                                                                                                                                                                                  |
 | `entry_type`          | text        | NOT NULL                  | `event`, `hypothesis`, `decision`, `outcome` (see § The EDO Loop) + `observation`, `finding`, `conclusion`, `rule`, `scorecard`, `skill`, `guide`, `html`                                                                                   |
 | `status`              | text        | NOT NULL, default `draft` | `draft` → `candidate` → `established` → `canonical` → `deprecated`                                                                                                                                                                          |
-| `confidence_pct`      | integer     | NOT NULL, default 40      | 0–100, computed from citations. Default 40 matches `analysis_signal` baseline; agents may write lower (30 for draft) or higher per § Confidence Defaults.                                                                                   |
+| `confidence_pct`      | integer     | NOT NULL, default 40      | 0–100. Initialized + recomputed by the application confidence policy (see § CONFIDENCE_INITIALIZED); `DEFAULT 40` is a guardrail only — normal writes always send an explicit value and never `NULL`.                                       |
 | `source_type`         | text        | NOT NULL                  | `human`, `agent`, `analysis_signal`, `external`, `derived`                                                                                                                                                                                  |
 | `source_ref`          | text        |                           | Pointer to origin (URL, signal ID, commit hash)                                                                                                                                                                                             |
 | `source_node`         | text        |                           | Which AI node/agent created this                                                                                                                                                                                                            |
@@ -212,15 +212,17 @@ The storage expert processes each inflow item through this protocol:
 
 **CITATIONS_ON_DERIVED** — Any entry with `source_type: 'derived'` must create at least one `citations` edge of type `supports` or `extends` pointing to the entries it was derived from.
 
-**CONFIDENCE_INITIALIZED** — New entries start at the confidence level matching their source:
+**CONFIDENCE_INITIALIZED** — Confidence is **application/domain policy, not a DB default**. Every normal write resolves an explicit value through the central policy module `packages/knowledge-store/src/domain/confidence-policy.ts` (`initializeConfidence`) before reaching the adapter. The `knowledge.confidence_pct NOT NULL DEFAULT 40` constraint is a **guardrail only** — no application path may rely on the omitted-column default, and no path may write `NULL` (NO_NULL_CONFIDENCE_WRITES). New entries start at the baseline-v0 prior matching their source:
 
-| Source Type       | Initial Confidence | Rationale                                    |
-| ----------------- | ------------------ | -------------------------------------------- |
-| `agent`           | 30%                | Unvalidated AI output                        |
-| `analysis_signal` | 40%                | Promoted from awareness, has some validation |
-| `external`        | 50%                | External source, not yet corroborated        |
-| `human`           | 70%                | Human-reviewed                               |
-| `derived`         | Inherited          | Average of cited entries' confidence         |
+| Source Type       | Baseline (v0) | Rationale                                                                            |
+| ----------------- | ------------- | ------------------------------------------------------------------------------------ |
+| `agent`           | 30%           | Unvalidated AI output                                                                |
+| `analysis_signal` | 40%           | Promoted from awareness, has some validation                                         |
+| `external`        | 50%           | External source, not yet corroborated                                                |
+| `human`           | 70%           | Human-reviewed                                                                       |
+| `derived`         | Computed      | Minimum of cited entries' confidence — **fails closed** if no cited basis is present |
+
+These priors are **versioned baseline-v0 policy** (`CONFIDENCE_POLICY_VERSION`), not eternal truth. They are the inherited default for `node-template` and every node; a node may tune the policy to its mission (operator: infra/deploy verification; poly: market outcome calibration; resy: reservation success) while preserving the shared contract — explicit confidence, no DB-default reliance, derived fails closed. Agent principals are capped at the `agent` baseline regardless of source.
 
 **COMMIT_PER_LOGICAL_WRITE** — Each logical write operation (which may touch multiple rows) gets one Dolt commit with a descriptive message. Not one commit per row, not batched across unrelated writes.
 

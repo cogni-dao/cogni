@@ -19,6 +19,7 @@ import { useRouter } from "next/navigation";
 import { type ReactElement, useState } from "react";
 
 import { Button } from "@/components";
+import type { NodeAccessRole } from "@/shared/db/node-access-requests";
 
 type Decision = "approve" | "reject";
 type Variant = "default" | "outline" | "destructive";
@@ -32,12 +33,16 @@ interface ActionSpec {
 interface Props {
   readonly nodeId: string;
   readonly agentUserId: string;
+  // The role the decision acts on — approve grants it, revoke/deny removes it.
+  // Omitting it makes the route default to `developer` (the role-blind bug).
+  readonly role: NodeAccessRole;
   readonly actions: ReadonlyArray<ActionSpec>;
 }
 
 export function AccessActions({
   nodeId,
   agentUserId,
+  role,
   actions,
 }: Props): ReactElement {
   const router = useRouter();
@@ -52,7 +57,7 @@ export function AccessActions({
         const res = await fetch(`/api/v1/nodes/${nodeId}/developers`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ agentUserId, decision }),
+          body: JSON.stringify({ agentUserId, decision, role }),
         });
         if (!res.ok) {
           const body = (await res.json().catch(() => ({}))) as {
@@ -60,12 +65,14 @@ export function AccessActions({
             error?: string;
           };
           setError(body.errorCode ?? body.error ?? `HTTP ${res.status}`);
-          setBusy(false);
           return;
         }
         router.refresh();
       } catch (e) {
         setError(e instanceof Error ? e.message : "request failed");
+      } finally {
+        // Always clear busy — never leave the button spinning if the refresh
+        // is slow or the row persists (the role-blind/clobber cases).
         setBusy(false);
       }
     })();

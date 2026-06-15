@@ -806,6 +806,7 @@ jobs:
       VM_HOST: ${{ secrets.VM_HOST }}
       DOMAIN: ${{ vars.DOMAIN }}
       K8S_NAMESPACE: cogni-${{ needs.decide.outputs.environment }}
+      PROMOTED_APPS: ${{ join(fromJson(needs.decide.outputs.node_targets_json), ',') }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -965,6 +966,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.ACTIONS_AUTOMATION_BOT_PAT }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          ROLLUP_TARGETS_JSON: ${{ needs.decide.outputs.targets_json }}
         run: bash scripts/ci/aggregate-rollup.sh preview
 
       - name: Lock preview on success
@@ -1038,4 +1040,5 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.ACTIONS_AUTOMATION_BOT_PAT }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          ROLLUP_TARGETS_JSON: ${{ needs.decide.outputs.targets_json }}
         run: bash scripts/ci/aggregate-rollup.sh production

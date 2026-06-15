@@ -187,7 +187,8 @@ See [Database RLS Spec](database-rls.md) for the dual-client architecture and st
 - `pnpm db:migrate:{operator,poly,resy}:container` — container-only: invoked by each node's Dockerfile default CMD
 - `pnpm db:generate:{operator,poly,resy}` — generate new migrations for a node's schema (runs drizzle-kit diff)
 - `pnpm db:check:{operator,poly,resy,poly:doltgres}` — validate a node's snapshot chain via `drizzle-kit check` (no DB connection; static)
-- `pnpm db:check` — umbrella: runs `db:check` against every node config. Invoked by `pnpm check` (pre-commit) and `pnpm check:fast` (pre-push).
+- `pnpm db:check:generate-clean` — run `drizzle-kit generate` for operator with stdin closed and fail if it would emit any migration (i.e. schema TS drifted from the committed snapshot baseline). Self-restores; leaves no artifacts (`scripts/db/check-generate-clean.mjs`).
+- `pnpm db:check` — umbrella: snapshot chain + journal `when` monotonicity + applied-file immutability + generate-cleanliness. Invoked by `pnpm check` (pre-commit), `pnpm check:fast` (pre-push), and CI's `static` job.
 
 **Execution Contexts:**
 
@@ -220,7 +221,8 @@ See [Database RLS Spec](database-rls.md) for the dual-client architecture and st
 
 - **Migration files on `origin/main` are immutable.** Every `.sql` and `meta/<idx>_snapshot.json` already merged is frozen; `meta/_journal.json` is append-only. Schema changes always land as a NEW numbered forward migration. drizzle-orm's runtime migrator decides "applied?" by `lastDbMigration.created_at < migration.folderMillis` — **it never compares the file's hash to the tracking-row hash** (see `node_modules/drizzle-orm/pg-core/dialect.js`'s `async migrate(...)`). So editing an applied migration's SQL silently no-ops on every deployed DB while passing CI on a fresh test DB. Enforced by `scripts/db/check-migrations-immutable.mjs` (run via `pnpm db:check:immutable` and CI's `static` job).
 - Never future-date `when`. Never edit a committed snapshot's `prevId` to silence `db:check`.
-- `db:check` catches snapshot/`prevId` breakage **and** non-monotonic `when` (via `scripts/db/check-journal-when.mjs`) **and** post-merge mutation of frozen files (via `scripts/db/check-migrations-immutable.mjs`). Pre-existing future-dated entries that already shipped are warning-only — the load-bearing guards are strict-monotonic ordering + file immutability, which is what every silent-skip incident has tripped on.
+- `db:check` catches snapshot/`prevId` breakage **and** non-monotonic `when` (via `scripts/db/check-journal-when.mjs`) **and** post-merge mutation of frozen files (via `scripts/db/check-migrations-immutable.mjs`) **and** generate-drift (via `scripts/db/check-generate-clean.mjs`). Pre-existing future-dated entries that already shipped are warning-only — the load-bearing guards are strict-monotonic ordering + file immutability, which is what every silent-skip incident has tripped on.
+- **A node's `drizzle.config.ts` `schema` array MUST list every table the node owns** — the `@cogni/db-schema` core glob **plus** each node-local schema file (operator: `nodes.ts`, `node-access-requests.ts`, `work-item-sessions.ts`). Omitting one makes `drizzle-kit generate` blind to that table and emit a destructive `DROP TABLE` against a live table. `db:check:generate-clean` is the guard. The snapshot baseline must also match reality: when hand-written migrations advance the schema without emitting `_snapshot.json`, the chain goes stale and `generate` drifts. Resync with one no-op migration carrying a corrected snapshot (e.g. `0033_resync_snapshot_baseline`) — empty `.sql` (every DB already matches), so no destructive statements and no history rewrite.
 - Pushing schema with `--no-verify` skips `db:check`. Don't.
 - After flight, confirm `kubectl logs <pod> -c migrate` lists your new tag. Silent skip is exactly the failure mode this section prevents.
 

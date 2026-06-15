@@ -3,9 +3,11 @@
 
 /**
  * Module: `@app/api/v1/nodes/[id]/developers`
- * Purpose: Owner-gated approval surface for node developer flighting authority.
- * Scope: Browser-session owners approve/reject registered agent users for one node by writing/removing OpenFGA `developer` tuples.
- * Invariants: OWNER_GATING, OPENFGA_IS_AUTHORITY, NO_LOCAL_ROLE_TABLE.
+ * Purpose: Owner-gated approval surface for node access roles (the grant half of the request→approve workflow).
+ * Scope: Browser-session owners approve/reject a registered agent for one node by writing/removing the
+ *   requested OpenFGA role tuple — `developer` (→can_flight) or `production_promoter` (→can_promote_production).
+ *   `role` defaults to `developer`. Without a grant path the role relations are inert (rbac.md §6).
+ * Invariants: OWNER_GATING, OPENFGA_IS_AUTHORITY, NO_LOCAL_ROLE_TABLE, ROLE_FROM_NODE_ACCESS_ROLES.
  * Side-effects: IO (Postgres read, OpenFGA tuple write/delete)
  * Links: docs/spec/rbac.md, docs/spec/identity-model.md
  * @public
@@ -26,6 +28,7 @@ import {
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { transitionAccessRequestOnDecision } from "@/features/nodes/access-requests";
 import { getServerSessionUser } from "@/lib/auth/server";
+import { NODE_ACCESS_ROLES } from "@/shared/db/node-access-requests";
 import { nodes } from "@/shared/db/nodes";
 import {
   EVENT_NAMES,
@@ -39,6 +42,7 @@ export const dynamic = "force-dynamic";
 const DeveloperDecisionInput = z.object({
   agentUserId: z.string().uuid(),
   decision: z.enum(["approve", "reject"]),
+  role: z.enum(NODE_ACCESS_ROLES).default("developer"),
 });
 
 type DeveloperDecision = z.infer<typeof DeveloperDecisionInput>["decision"];
@@ -49,6 +53,7 @@ interface DeveloperDecisionLogFields {
   readonly nodeId: string;
   readonly decision?: DeveloperDecision | undefined;
   readonly agentUserId?: string | undefined;
+  readonly role?: string | undefined;
   readonly errorCode?: string | undefined;
 }
 
@@ -201,7 +206,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
 
     const tuple = {
       user: `user:${parsed.data.agentUserId}`,
-      relation: "developer",
+      relation: parsed.data.role,
       object: `node:${id}`,
     };
     const write =
@@ -234,6 +239,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       await transitionAccessRequestOnDecision(serviceDb, {
         nodeId: id,
         agentUserId: parsed.data.agentUserId,
+        role: parsed.data.role,
         decision: parsed.data.decision,
       });
     } catch (error) {
@@ -257,11 +263,13 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       nodeId: id,
       decision: parsed.data.decision,
       agentUserId: parsed.data.agentUserId,
+      role: parsed.data.role,
     });
     return NextResponse.json({
       nodeId: id,
       agentUserId: parsed.data.agentUserId,
       decision: parsed.data.decision,
+      role: parsed.data.role,
     });
   }
 );

@@ -184,6 +184,11 @@ export const serverSchema = z.object({
   NODE_SUBMODULE_PARENT_OWNER: optionalString,
   NODE_SUBMODULE_PARENT_REPO: optionalString,
 
+  // MVP node-capacity ceiling (merge-authority): the operator refuses to birth a new node once the
+  // network has this many `nodes/<slug>` submodules deployed. Config, never hardcoded; tunable per env.
+  // vNext replaces the flat ceiling with VM-capacity-aware placement.
+  NODE_CAPACITY_CEILING: z.coerce.number().int().positive().default(8),
+
   // Billing ingest token - Bearer auth for LiteLLM generic_api callback → billing ingest endpoint
   // Per billing-ingest-spec: CALLBACK_AUTHENTICATED invariant. Min 32 chars to reduce weak-token risk.
   // Required: Billing ingest endpoint will reject all callbacks without this token.

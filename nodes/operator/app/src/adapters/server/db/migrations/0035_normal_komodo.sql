@@ -1,0 +1,2 @@
+ALTER TABLE "node_access_requests" DROP CONSTRAINT "node_access_requests_node_agent_key";--> statement-breakpoint
+ALTER TABLE "node_access_requests" ADD CONSTRAINT "node_access_requests_node_agent_role_key" UNIQUE("node_id","agent_user_id","role");

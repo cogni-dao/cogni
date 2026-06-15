@@ -8,23 +8,30 @@
 #
 # Usage: verify-deployment.sh
 # Env:   DOMAIN (required), VM_HOST (optional, for diagnostics on failure),
-#        K8S_NAMESPACE (optional), SSH_DEPLOY_KEY (optional)
+#        K8S_NAMESPACE (optional), SSH_DEPLOY_KEY (optional),
+#        PROMOTED_APPS (optional CSV of catalog node targets to verify)
 
 set -euo pipefail
 
 DOMAIN="${DOMAIN:?DOMAIN is required}"
 MAX_ATTEMPTS="${MAX_ATTEMPTS:-30}"
-SLEEP="${SLEEP:-15}"
+SLEEP="${SLEEP:-${SLEEP_SECONDS:-15}}"
+PROMOTED_APPS="${PROMOTED_APPS:-}"
 
-if [[ "$DOMAIN" == *.*.* ]]; then
-  NODE_JOIN="-"
-else
-  NODE_JOIN="."
-fi
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./lib/image-tags.sh
+. "$SCRIPT_DIR/lib/image-tags.sh"
 
-OPERATOR_URL="https://${DOMAIN}"
-POLY_URL="https://poly${NODE_JOIN}${DOMAIN}"
-RESY_URL="https://resy${NODE_JOIN}${DOMAIN}"
+should_check() {
+  local app="$1"
+  if [ -z "$PROMOTED_APPS" ]; then
+    return 0
+  fi
+  case ",${PROMOTED_APPS}," in
+    *",${app},"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
 # ── Health polls ─────────────────────────────────────────────────────────────
 
@@ -48,28 +55,41 @@ poll_health() {
   return 1
 }
 
-# Poll all nodes in parallel
-poll_health "operator" "$OPERATOR_URL" &
-PID_OP=$!
-poll_health "poly" "$POLY_URL" &
-PID_POLY=$!
-poll_health "resy" "$RESY_URL" &
-PID_RESY=$!
+nodes_to_check=()
+for node in "${NODE_TARGETS[@]}"; do
+  if should_check "$node"; then
+    nodes_to_check+=("$node")
+  else
+    echo "[skip] ${node} readyz — not in PROMOTED_APPS=${PROMOTED_APPS}"
+  fi
+done
+
+if [ "${#nodes_to_check[@]}" -eq 0 ]; then
+  echo "No node targets to verify (PROMOTED_APPS=${PROMOTED_APPS:-<all>})"
+  exit 0
+fi
+
+pids=()
+for node in "${nodes_to_check[@]}"; do
+  poll_health "$node" "https://$(host_for_node "$node" "$DOMAIN")" &
+  pids+=("$!")
+done
 
 FAILED=0
-wait $PID_OP || FAILED=1
-wait $PID_POLY || FAILED=1
-wait $PID_RESY || FAILED=1
+for pid in "${pids[@]}"; do
+  wait "$pid" || FAILED=1
+done
 
 if [ $FAILED -ne 0 ]; then
   echo "❌ One or more nodes failed health checks"
   exit 1
 fi
-echo "✅ All nodes healthy"
+echo "✅ Target nodes healthy"
 
 # ── Smoke tests ──────────────────────────────────────────────────────────────
 
-for url in "$OPERATOR_URL" "$POLY_URL" "$RESY_URL"; do
+for node in "${nodes_to_check[@]}"; do
+  url="https://$(host_for_node "$node" "$DOMAIN")"
   BODY=$(curl -sk "$url/livez" 2>/dev/null)
   echo "$url/livez → $BODY"
   if ! echo "$BODY" | grep -q '"status"'; then

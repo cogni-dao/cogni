@@ -13,6 +13,7 @@
 
 import {
   extractChainId,
+  extractDaoConfig,
   extractGovernanceConfig,
   extractKnowledgeConfig,
   extractLedgerApprovers,
@@ -104,6 +105,36 @@ describe("extractScopeId", () => {
   it("throws when scope_id is missing", () => {
     const spec = buildSpec();
     expect(() => extractScopeId(spec)).toThrow(/Missing scope_id/);
+  });
+});
+
+describe("extractDaoConfig", () => {
+  const ON_CHAIN = {
+    dao_contract: "0x1111111111111111111111111111111111111111",
+    plugin_contract: "0x2222222222222222222222222222222222222222",
+    signal_contract: "0x3333333333333333333333333333333333333333",
+    chain_id: String(TEST_CHAIN_ID),
+  };
+
+  it("resolves without base_url — the four on-chain fields are sufficient (treasury must not blank)", () => {
+    const dao = extractDaoConfig(buildSpec({ cogni_dao: ON_CHAIN }));
+    expect(dao).not.toBeNull();
+    expect(dao?.dao_contract).toBe(ON_CHAIN.dao_contract);
+    expect(dao?.base_url).toBeUndefined();
+  });
+
+  it("includes base_url when present (governance deep-link host)", () => {
+    const dao = extractDaoConfig(
+      buildSpec({
+        cogni_dao: { ...ON_CHAIN, base_url: "https://proposal.cognidao.org" },
+      })
+    );
+    expect(dao?.base_url).toBe("https://proposal.cognidao.org");
+  });
+
+  it("returns null when an on-chain identity field is missing", () => {
+    const { dao_contract: _omitted, ...withoutDao } = ON_CHAIN;
+    expect(extractDaoConfig(buildSpec({ cogni_dao: withoutDao }))).toBeNull();
   });
 });
 

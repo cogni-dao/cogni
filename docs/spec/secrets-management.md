@@ -45,7 +45,15 @@ A human or AI agent can declare a new secret, rotate an existing secret, or revo
 
 - Encrypted-secrets-in-git patterns (Sealed Secrets, SOPS+ksops). Rejected — see `proj.security-hardening` Design Notes.
 - Multi-tenant SaaS KMS (Tier-2). See `task.5051` under `proj.operator-plane`.
-- Compose-runtime secret migration **for non-DB service config** (LiteLLM, Temporal, Caddy). Compose services keep `.env` for these until they migrate to k3s. **Now in scope (the exception):** the pod-consumed **DB role passwords** — OpenBao-owned per Invariant 15 — whose Compose-side provisioner is being migrated to read from OpenBao instead of a GitHub-secret `.env` (see [DB-credential provisioning](#db-credential-provisioning--the-composek8s-boundary-bug5002-invariant-15)).
+- Full Compose-runtime secret elimination via Bao Agent or k3s migration. Compose
+  services still read rendered `.env` files, but established ESO environments
+  must render runtime values from OpenBao rather than GitHub env secrets. **Now in
+  scope:** the pod-consumed **DB role passwords** and critical shared runtime
+  values (`LITELLM_MASTER_KEY`, `OPENROUTER_API_KEY`, `GH_WEBHOOK_SECRET`,
+  `OPENFGA_DB_PASSWORD`, `TEMPORAL_DB_PASSWORD`, and scheduler-worker's operator
+  ledger DSN) whose Compose / bridge renderers must read OpenBao instead of a
+  GitHub-secret `.env` (see
+  [DB-credential provisioning](#db-credential-provisioning--the-composek8s-boundary-bug5002-invariant-15)).
 
 ---
 
@@ -548,21 +556,22 @@ Bound via OpenBao role definitions to Kubernetes ServiceAccounts (per-service-pe
 
 ## File Pointers
 
-| File                                               | Purpose                                                                                      |
-| -------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `infra/k8s/argocd/openbao/`                        | Argo Application installing OpenBao (`task.0284`)                                            |
-| `infra/k8s/argocd/external-secrets/`               | Argo Application installing ESO controller (`task.0284`)                                     |
-| `infra/k8s/argocd/reloader/`                       | Argo Application installing Stakater Reloader (`task.5056`)                                  |
-| `nodes/<node>/k8s/external-secrets/<env>/`         | Per-node-per-env ExternalSecret YAML (single repo-wide convention)                           |
-| `scripts/secrets/set-secret.sh`                    | CLI implementation (`pnpm secrets:set`)                                                      |
-| `scripts/secrets/rotate-secret.sh`                 | CLI implementation (`pnpm secrets:rotate`)                                                   |
-| `.github/workflows/secret-set.yml`                 | Day-2 self-serve write (GH-OIDC → OpenBao; per-operation)                                    |
-| `scripts/lib/secrets-catalog-loader.ts`            | The one catalog reader (Zod); emits the pod-key universe                                     |
-| `nodes/<node>/.cogni/secrets-catalog.yaml`         | Per-node declaration surface (one-PR self-serve)                                             |
-| `docs/runbooks/fork-quickstart.md`                 | Bootstrap flow (substrate install + unseal + role bind, Steps 6 / 6.5)                       |
-| `docs/runbooks/production-operator-eso-cutover.md` | Production operator OpenBao/ESO cutover, custody discovery, force-sync, and cleanup ordering |
-| `docs/guides/secrets-add-new.md`                   | Practical guide — adding a new secret                                                        |
-| `docs/guides/secrets-rotate.md`                    | Practical guide — rotation playbook + substrate-token rotation                               |
+| File                                                     | Purpose                                                                                         |
+| -------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `infra/k8s/argocd/openbao/`                              | Argo Application installing OpenBao (`task.0284`)                                               |
+| `infra/k8s/argocd/external-secrets/`                     | Argo Application installing ESO controller (`task.0284`)                                        |
+| `infra/k8s/argocd/reloader/`                             | Argo Application installing Stakater Reloader (`task.5056`)                                     |
+| `nodes/<node>/k8s/external-secrets/<env>/`               | Remote-source/wizard node ExternalSecret YAML, pinned into the operator tree                    |
+| `infra/k8s/overlays/<env>/operator/external-secret.yaml` | Legacy operator overlay copy; Argo-owned exception for the operator Deployment patch            |
+| `scripts/secrets/set-secret.sh`                          | CLI implementation (`pnpm secrets:set`)                                                         |
+| `scripts/secrets/rotate-secret.sh`                       | CLI implementation (`pnpm secrets:rotate`)                                                      |
+| `.github/workflows/secret-set.yml`                       | Planned day-2 self-serve write (GH-OIDC → OpenBao; per-operation); auth roles already provision |
+| `scripts/lib/secrets-catalog-loader.ts`                  | The one catalog reader (Zod); emits the pod-key universe                                        |
+| `nodes/<node>/.cogni/secrets-catalog.yaml`               | Per-node declaration surface (one-PR self-serve)                                                |
+| `docs/runbooks/fork-quickstart.md`                       | Bootstrap flow (substrate install + unseal + role bind, Steps 6 / 6.5)                          |
+| `docs/runbooks/production-operator-eso-cutover.md`       | Production operator OpenBao/ESO cutover, custody discovery, force-sync, and cleanup ordering    |
+| `docs/guides/secrets-add-new.md`                         | Practical guide — adding a new secret                                                           |
+| `docs/guides/secrets-rotate.md`                          | Practical guide — rotation playbook + substrate-token rotation                                  |
 
 ## Related
 

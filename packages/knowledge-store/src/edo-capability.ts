@@ -25,11 +25,9 @@ import type {
   RecordOutcomeParams,
   RecordOutcomeResult,
 } from "@cogni/ai-tools";
-
+import { initializeConfidence } from "./domain/confidence-policy.js";
 import type { EdoResolverPort } from "./port/edo-resolver.port.js";
 import type { KnowledgeStorePort } from "./port/knowledge-store.port.js";
-
-const CONFIDENCE_AGENT_DEFAULT = 30;
 
 function toEntry(k: {
   id: string;
@@ -76,7 +74,10 @@ export function createEdoCapability(
         title: params.title,
         content: params.content,
         entryType: "hypothesis",
-        confidencePct: params.confidencePct ?? CONFIDENCE_AGENT_DEFAULT,
+        confidencePct: initializeConfidence({
+          sourceType: params.sourceType,
+          confidencePct: params.confidencePct,
+        }).confidencePct,
         sourceType: params.sourceType,
         sourceRef: params.sourceRef ?? null,
         tags: params.tags ?? null,
@@ -109,7 +110,10 @@ export function createEdoCapability(
         title: params.title,
         content: params.content,
         entryType: "decision",
-        confidencePct: params.confidencePct ?? CONFIDENCE_AGENT_DEFAULT,
+        confidencePct: initializeConfidence({
+          sourceType: params.sourceType,
+          confidencePct: params.confidencePct,
+        }).confidencePct,
         sourceType: params.sourceType,
         sourceRef: params.sourceRef ?? null,
         tags: params.tags ?? null,

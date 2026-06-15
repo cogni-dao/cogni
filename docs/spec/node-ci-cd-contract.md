@@ -9,7 +9,7 @@ read_when: Modifying CI workflows, adding checks to merge gate, or planning mult
 implements: []
 owner: cogni-dev
 created: 2025-12-22
-verified: 2026-06-08
+verified: 2026-06-12
 tags:
   - ci-cd
   - deployment
@@ -207,11 +207,32 @@ Flight authorization is operator-local:
 4. Operator dispatches with its environment GitHub App. The App is a capability
    executor, not an authorization oracle.
 
-Until real RBAC lands, the safe Pareto default is: any registered agent may
-request **candidate/test** flight for the node/work item it owns; preview/prod
-remain human-approved operator actions. This avoids relying on GitHub repo
-permissions while still stopping arbitrary agents from mutating arbitrary
-environments.
+The as-built ladder is in **Env-promotion progression** below; the historical
+Pareto default (candidate-only for agents, preview/prod human-approved) is
+superseded by it.
+
+### Env-promotion progression (candidate → preview → production)
+
+A node walks one ladder. Each rung has its own trigger and its own
+authorization; the promotion **primitive is always the same** — `promote-and-deploy`
+by digest, the [one promotion primitive](./legacy-cicd-to-remove.md) — only the
+policy differs.
+
+| Env             | Trigger                                        | Authorization                                                                            | Mechanism                                                                                                                                                        |
+| --------------- | ---------------------------------------------- | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **candidate-a** | agent/human requests flight for a node it owns | `node.flight` → `can_flight` (the node `developer` role)                                 | source-addressed `candidate-flight.yml`                                                                                                                          |
+| **preview**     | **automatic on node `main`-merge**             | **ungated** — continues the trust the node earned to be spawned+flighted                 | operator (merge authority, [merge-authority.md](./merge-authority.md)) bumps catalog `source_sha` + merges to `main` → `flight-preview.yml` → promote-and-deploy |
+| **production**  | explicit operator/human action                 | `node.promote_production` → `can_promote_production` (`promoter` role; `admin` inherits) | `DeployCapability.promote(env=production)` → operator GitHub App dispatches promote-and-deploy ([cicd-platform-boundary.md](./cicd-platform-boundary.md))        |
+
+Invariants:
+
+- **`TRUST_LADDER_IS_MONOTONIC`**: a node reaches preview only after earning candidate-a, production only after a `production_promoter` grant. Preview adds no new gate because candidate-a already proved the trust; production does because it is the irreversible environment.
+- **`PROMOTION_RUNS_AS_THE_OPERATOR`**: preview + production promotion is an operator GitHub-App activity (merge for preview, dispatch for production) — never a contributor's personal `gh` credential. This supersedes the v0 "preview/prod are human-approved operator actions" framing: preview is now operator-automatic, production is operator-dispatched + RBAC-gated (human-approved until a `production_promoter` grant exists; today only the org admin holds it).
+- **`ONE_PROMOTION_PRIMITIVE`**: every rung promotes the candidate-proven digest via `promote-and-deploy`. No env rebuilds, no second dispatch path, no PR-tag substitution.
+
+RBAC is additive (immutable OpenFGA model, [rbac.md](./rbac.md)): the ladder is `can_flight` (candidate) + `can_promote_production` (prod) today; a `can_promote_preview` rung is a one-relation addition **if/when manual dev-driven preview promotes arrive** — preview _auto_-promote stays ungated regardless.
+
+Implementing PRs: #1643 (DeployCapability + freeze), #1653 (`can_promote_production` + promote dispatch), #1640 (operator merge authority + the preview merge-hook).
 
 ### Artifact contract
 
@@ -383,6 +404,7 @@ The forward deployment contract is:
 4. **Deploy state is digest-addressed.** `candidate-flight.yml` resolves `image_repository:sha-<sourceSha>` to `image_repository@sha256:<digest>`, writes only deploy-state branches, and verifies `/version.buildSha == sourceSha`.
 5. **Substrate is asserted before app rollout.** For target shapes enabled in app flight today, `candidate-flight.yml` reconciles the per-target AppSet/DNS prerequisites, then runs the target substrate gate. The gate is read-only; missing VM, Argo objects, DNS, edge route, consumed Secret/ExternalSecret, Service NodePort, or DB stops the app flight and points to the explicit infra/substrate lane.
 6. **Promotion preserves the digest.** Preview and production promote the candidate-proven digest. The operator never rebuilds child source and never substitutes a PR tag.
+7. **Node-merge advances preview automatically (`PREVIEW_VIA_FLIGHT_PREVIEW`).** A spawned node gets the same merge→preview model an in-repo node already has, out of the box. On a node-repo `pull_request` merge, the operator GitHub App (webhook plane) bumps the parent catalog `source_sha` to the merged node SHA and enables auto-merge on that one-line pin PR. Landing it on parent `main` is the `flight-preview.yml` (push:main) trigger — the operator **never** dispatches `promote-and-deploy.yml` itself, reusing the one preview primitive with no second promote path. The pin is the **PR head SHA** (the build the node's PR CI published as `sha-<headSha>`); image existence is not gated in-app (the GitHub Packages API false-negatives on private node images), so `flight-preview`'s "no images found" hard-fail is the loud backstop. Production stays human-gated (vNext). RBAC: v0 rides the candidate-a grant — a `node.promote` gate is vNext only if a node can earn preview without first earning candidate-a.
 
 **Identity/config prerequisite (per-env, proven on candidate-a).** Minting authenticates as an env-scoped GitHub App that must (a) be installed **all-repositories** on the mint org and (b) hold **`workflows:write`** — the seed/pin flow edits `.github/workflows/pr-build.yml`, which GitHub 403s without it. Mint target, template owner, and submodule-pin-PR parent are env config (`NODE_MINT_OWNER` / `NODE_TEMPLATE_OWNER` / `NODE_SUBMODULE_PARENT_{OWNER,REPO}`), fail-closed (mint) / fail-open (parent → `getGithubRepo()`), so a candidate/test operator has **zero access to the production org** (candidate-a mints into the disposable `cogni-test-org`, pin-PRs into a cogni-shaped fork there).
 

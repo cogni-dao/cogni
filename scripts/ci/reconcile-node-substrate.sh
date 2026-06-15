@@ -291,6 +291,15 @@ dg_pw_env="-e DOLTGRES_PASSWORD='${doltgres_superuser_password}'"
 CURRENT_ROW="externalsecret"
 external_secret_file="${APP_SOURCE_DIR}/nodes/${TARGET_NODE}/k8s/external-secrets/${DEPLOY_ENVIRONMENT}/external-secret.yaml"
 if [[ -f "$external_secret_file" ]]; then
+  expected_secret_name="${TARGET_NODE}-env-secrets"
+  legacy_target="$(remote "kubectl -n 'cogni-${DEPLOY_ENVIRONMENT}' get externalsecret env-secrets -o jsonpath='{.spec.target.name}' 2>/dev/null || true")"
+  if [[ "$legacy_target" == "$expected_secret_name" ]]; then
+    remote "kubectl -n 'cogni-${DEPLOY_ENVIRONMENT}' delete externalsecret env-secrets --wait=true >/dev/null"
+    log "deleted legacy ExternalSecret env-secrets targeting ${expected_secret_name}"
+    mark_row externalsecret_legacy pruned "deleted legacy ExternalSecret env-secrets targeting ${expected_secret_name}"
+  elif [[ -n "$legacy_target" ]]; then
+    log "leaving legacy ExternalSecret env-secrets in place; target is ${legacy_target}, expected ${expected_secret_name}"
+  fi
   remote "kubectl create namespace 'cogni-${DEPLOY_ENVIRONMENT}' --dry-run=client -o yaml | kubectl apply -f - >/dev/null"
   copy_to_remote "$external_secret_file" "/tmp/${DEPLOY_ENVIRONMENT}-${TARGET_NODE}-external-secret.yaml"
   remote "kubectl -n 'cogni-${DEPLOY_ENVIRONMENT}' apply -f '/tmp/${DEPLOY_ENVIRONMENT}-${TARGET_NODE}-external-secret.yaml' >/dev/null && rm -f '/tmp/${DEPLOY_ENVIRONMENT}-${TARGET_NODE}-external-secret.yaml'"

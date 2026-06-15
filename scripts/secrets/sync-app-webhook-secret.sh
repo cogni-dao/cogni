@@ -2,15 +2,15 @@
 # SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 # SPDX-FileCopyrightText: 2025 Cogni-DAO
 #
-# sync-app-webhook-secret.sh — push a `source: external` webhook secret to the
-# GitHub App's webhook config so the pod's value and the App's value match.
+# sync-app-webhook-secret.sh — push the generated webhook secret to the GitHub
+# App's webhook config so the pod's value and the App's value match.
 #
-# WHY: GH_WEBHOOK_SECRET is `source: external` (secrets-management.md) — it is
-# agent-GENERATED (bootstrap.sh::declare_or_gen) but must byte-equal the GitHub
+# WHY: GH_WEBHOOK_SECRET is `source: agent` + `syncTo: github-app-webhook`
+# (secrets-management.md) — we generate it, and it must byte-equal the GitHub
 # App's webhook secret, which lives on GitHub's side. Provisioning owns BOTH
-# copies: it writes the value to the pod (k8s Secret / OpenBao) AND pushes it to
-# the App here, via the App's own key. Without this, every webhook fails HMAC
-# verification silently and `deploy-infra` re-breaks it on each redeploy.
+# copies: it writes the value to OpenBao / the pod Secret and pushes it to the
+# App here, via the App's own key. Without this, every webhook fails HMAC
+# verification silently and a Secret re-apply can re-break it on each redeploy.
 # See `.claude/skills/cicd-secrets-expert/SKILL.md` "Dual-plane secrets".
 #
 # No human, self-healing: agent generates → agent pushes → both sides converge.
