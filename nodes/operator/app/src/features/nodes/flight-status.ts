@@ -24,7 +24,6 @@ import type {
   NodeFlightStatus,
   NodeProbeContext,
   NodeProber,
-  ProbeResult,
   RunCarriesResult,
 } from "@/ports";
 
