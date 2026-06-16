@@ -8,18 +8,29 @@
  *   stale Temporal routing, worker-401) that Argo health + /readyz cannot see.
  * Scope: Pure orchestration + host derivation. All I/O is injected via NodeProber (no fetch/db here).
  * Invariants:
- *   - RUNGS_ARE_ORDERED: serving precedes run-carries precedes logs-in-loki; a failed rung short-circuits
- *     the rungs that depend on it (no run-carries probe against a 525 edge).
+ *   - RUNGS_ARE_ORDERED: serving precedes run-carries; a failed serving rung short-circuits run-carries
+ *     (no chat probe against a 525 edge).
  *   - HOST_CONVENTION mirrors hostForNode() (resolve.ts) + the env→subdomain map (candidate-a→test).
  *   - NO_CLUSTER_AUTH: verification is external + Cogni-token only — never GH/kubectl/Argo creds.
  * Side-effects: none (prober injected)
- * Links: src/shared/node-registry/resolve.ts, task.5021, docs/guides/agent-api-validation.md
+ * Links: src/ports/node-flight.port.ts, src/shared/node-registry/resolve.ts, task.5021
  * @public
  */
 
+import type {
+  EnvFlightStatus,
+  FlightEnv,
+  NodeFlightStatus,
+  NodeProber,
+  RunCarriesResult,
+} from "@/ports";
+
 /** The three deploy envs a node flights through. Mirrors RENDER_ENVS (node-app-scaffold/gens/appset.ts). */
-export const FLIGHT_ENVS = ["candidate-a", "preview", "production"] as const;
-export type FlightEnv = (typeof FLIGHT_ENVS)[number];
+export const FLIGHT_ENVS: readonly FlightEnv[] = [
+  "candidate-a",
+  "preview",
+  "production",
+];
 
 /** candidate-a serves at `<host>-test`, preview at `<host>-preview`, production bare. */
 const ENV_SUBDOMAIN: Record<FlightEnv, string> = {
@@ -49,53 +60,6 @@ export function hostForEnv(
  */
 export function rootDomain(apex: string): string {
   return apex.replace(/^(test|preview)\./, "");
-}
-
-/** A single rung verdict. `skip` = an upstream rung failed so this one was not probed. */
-export type RungStatus = "pass" | "degraded" | "fail" | "skip";
-
-/** serving: the node answers /readyz 200 and exposes a /version buildSha. */
-export interface ServingResult {
-  readonly status: RungStatus;
-  readonly readyzCode: number;
-  readonly buildSha: string | null;
-}
-
-/**
- * run-carries: a freshly-registered agent's graph completion actually produces a run.
- * `pass` = run created AND a normal completion (poem/text). `degraded` = run created but the
- * completion errored DOWNSTREAM of run-creation (e.g. insufficient_quota) — the substrate carried
- * the run, the failure moved past it. `fail` = no run created (hang / no Temporal poller / worker-401).
- */
-export interface RunCarriesResult {
-  readonly status: RungStatus;
-  readonly durationMs: number;
-  readonly runs: number;
-  /** human-readable: "poem", "insufficient_quota", "hang:no-run", "register-failed", … */
-  readonly detail: string;
-}
-
-export interface EnvFlightStatus {
-  readonly env: FlightEnv;
-  readonly host: string;
-  readonly serving: ServingResult;
-  readonly runCarries: RunCarriesResult;
-}
-
-export interface NodeFlightStatus {
-  readonly nodeId: string;
-  readonly slug: string;
-  readonly envs: readonly EnvFlightStatus[];
-  /** true iff EVERY env carries a run (degraded counts — the substrate works, billing is separate). */
-  readonly allEnvsCarry: boolean;
-}
-
-/** Injected I/O. Implemented by an adapter that does real fetch against the node's public surface. */
-export interface NodeProber {
-  /** GET https://<host>/readyz + /version. */
-  serving(host: string): Promise<ServingResult>;
-  /** Register a throwaway agent, run the free `poet` graph, read back the run count. */
-  runCarries(host: string): Promise<RunCarriesResult>;
 }
 
 /**

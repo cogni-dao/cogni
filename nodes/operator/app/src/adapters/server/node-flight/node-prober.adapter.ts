@@ -15,11 +15,7 @@
  * @public
  */
 
-import type {
-  NodeProber,
-  RunCarriesResult,
-  ServingResult,
-} from "@/features/nodes/flight-status";
+import type { NodeProber, RunCarriesResult, ServingResult } from "@/ports";
 
 const SERVING_TIMEOUT_MS = 10_000;
 /** The hang we hunt is ~60s; give a touch of headroom so a real hang reads as a timeout, not a probe abort. */

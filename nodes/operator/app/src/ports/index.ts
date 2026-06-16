@@ -131,6 +131,15 @@ export type {
 } from "./model-provider.port";
 export type { ModelProviderResolverPort } from "./model-provider-resolver.port";
 export type {
+  EnvFlightStatus,
+  FlightEnv,
+  NodeFlightStatus,
+  NodeProber,
+  RunCarriesResult,
+  RungStatus,
+  ServingResult,
+} from "./node-flight.port";
+export type {
   NodeKind,
   NodeRegistryPort,
   NodeSummary,

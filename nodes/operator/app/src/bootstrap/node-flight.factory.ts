@@ -11,8 +11,8 @@
  * @public
  */
 
-import { HttpNodeProber } from "@/adapters/server/node-flight/node-prober.adapter";
-import type { NodeProber } from "@/features/nodes/flight-status";
+import { HttpNodeProber } from "@/adapters/server";
+import type { NodeProber } from "@/ports";
 
 /** Real-fetch prober that exercises a node's public surface (serving + run-carries). */
 export function createNodeProber(): NodeProber {

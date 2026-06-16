@@ -14,12 +14,10 @@ import { describe, expect, it } from "vitest";
 import { classifyRunCarries } from "@/adapters/server/node-flight/node-prober.adapter";
 import {
   hostForEnv,
-  type NodeProber,
-  type RunCarriesResult,
   rootDomain,
-  type ServingResult,
   verifyFlightStatus,
 } from "@/features/nodes/flight-status";
+import type { NodeProber, RunCarriesResult, ServingResult } from "@/ports";
 
 describe("hostForEnv", () => {
   it("prefixes non-primary nodes per env, bare on prod", () => {
