@@ -29,6 +29,6 @@ The setup script also fetches `origin/main` and fast-forwards the primary checko
 
 ## Invariants
 
-- Symlink `.env.cogni` and `.local-auth` from the primary checkout; never copy them into worktrees.
+- Symlink `.env.cogni` and `.local-auth` from the primary checkout; never copy them into worktrees. Session-start cognition reads `.env.cogni` itself, so Conductor workspaces must not require manual key exports after the one-time agent registration bootstrap.
 - Keep `pnpm install --offline --frozen-lockfile`, `pnpm packages:build`, and `pnpm worktree:check` in the setup path.
 - If the setup contract changes, update the script, this skill, `docs/guides/new-worktree-setup.md`, and launch-pack wording together.

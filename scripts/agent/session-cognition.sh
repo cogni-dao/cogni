@@ -5,15 +5,54 @@
 # SessionStart stdout into agent context. Non-fatal by design: any failure
 # degrades to a one-line self-serve hint so a session never blocks on the network.
 #
-# URL resolution (no per-node env needed):
-#   1. COGNI_COGNITION_URL              — explicit override (e.g. candidate/test)
-#   2. this node's own hub, derived from .cogni/repo-spec.yaml `intent.name`
-#      (operator → apex cognidao.org; any other slug → <slug>.cognidao.org)
-#   3. operator fallback — so a node whose own hub isn't deployed yet still gets
+# URL resolution is repo-spec only (no per-node env override):
+#   1. this node's own hub, derived from .cogni/repo-spec.yaml `intent.name`
+#      (operator -> apex cognidao.org; any other slug -> <slug>.cognidao.org)
+#   2. operator fallback, so a node whose own hub isn't deployed yet still gets
 #      the shared Cogni contract instead of nothing.
+#
+# Credentials load from the environment first, then ./.env.cogni. Conductor
+# worktree setup symlinks .env.cogni from the primary checkout, so future
+# sessions need only the one-time bootstrap that registers the agent and saves
+# its key there.
 set -u
 
 OPERATOR_URL="https://cognidao.org/api/v1/cognition"
+
+read_env_file_value() {
+  var_name="$1"
+  env_file="${2:-.env.cogni}"
+  [ -f "$env_file" ] || return 0
+  awk -F= -v key="$var_name" '
+    $1 == key {
+      value = substr($0, length(key) + 2)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+      gsub(/^["'\'']|["'\'']$/, "", value)
+      print value
+      exit
+    }
+  ' "$env_file" 2>/dev/null
+}
+
+agent_key() {
+  if [ -n "${COGNI_API_KEY:-}" ]; then
+    printf '%s\n' "$COGNI_API_KEY"
+    return
+  fi
+
+  key="$(read_env_file_value COGNI_API_KEY)"
+  if [ -n "$key" ]; then
+    printf '%s\n' "$key"
+    return
+  fi
+
+  # Current local Cogni worktrees keep env-scoped keys in .env.cogni. The
+  # session-start loader targets production URLs, so use the production key.
+  key="$(read_env_file_value COGNI_API_KEY_PROD)"
+  if [ -n "$key" ]; then
+    printf '%s\n' "$key"
+  fi
+}
 
 # node slug from repo-spec intent.name (root .cogni/repo-spec.yaml in any node repo)
 node_slug=""
@@ -34,13 +73,14 @@ case "$node_slug" in
   *) node_url="https://${node_slug}.cognidao.org/api/v1/cognition" ;;
 esac
 
-URL="${COGNI_COGNITION_URL:-$node_url}"
+URL="$node_url"
+AGENT_KEY="$(agent_key)"
 
 # Pass the agent key as a bearer when present; without it, auth-gated cognition
 # requests 401 and fall through to the self-serve hint below.
 fetch() {
-  if [ -n "${COGNI_API_KEY:-}" ]; then
-    curl -fsS --max-time 6 -H "Authorization: Bearer ${COGNI_API_KEY}" "$1" 2>/dev/null | jq -r '.markdown // empty' 2>/dev/null
+  if [ -n "$AGENT_KEY" ]; then
+    curl -fsS --max-time 6 -H "Authorization: Bearer ${AGENT_KEY}" "$1" 2>/dev/null | jq -r '.markdown // empty' 2>/dev/null
   else
     curl -fsS --max-time 6 "$1" 2>/dev/null | jq -r '.markdown // empty' 2>/dev/null
   fi
@@ -57,5 +97,5 @@ fi
 if [ -n "$bundle" ]; then
   printf '%s\n' "$bundle"
 else
-  printf '(cognition substrate unreachable at %s — self-serve: curl -fsS "%s" | jq -r .markdown)\n' "$URL" "$URL"
+  printf '(cognition substrate unreachable at %s — self-serve: register via /api/v1/agent/register, save COGNI_API_KEY in .env.cogni, then retry)\n' "$URL"
 fi
