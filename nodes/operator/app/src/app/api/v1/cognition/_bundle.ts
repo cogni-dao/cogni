@@ -33,7 +33,7 @@ export const SESSION_BOOTSTRAP_INVARIANTS: readonly string[] = [
   "RECALL the node knowledge hub before designing or researching (RECALL_BEFORE_WRITE) — two planes: merged (/api/v1/knowledge?domain=) AND your own open contribution branch (GET /contributions/{id}/diff).",
   "Every code change flows through the operator. Align to existing specs/skills/prior code before writing; refine and simplify in place over adding parallel artifacts.",
   "Push to a feature branch and let CI verify — do not run broad local check/build suites. Monitor `gh pr checks` to green.",
-  "Definition of Done = merged AND deploy_verified: flight to candidate-a, post a /validate-candidate scorecard, observe your own request in Loki at the deployed SHA.",
+  "Definition of Done = merged AND validated on candidate-a: flight the PR, exercise the changed surface against the live deployed URL, read your own request back from Loki at the deployed SHA, then post a /validate-candidate scorecard on the PR. The posted scorecard IS the validation signal — not a work-item flag to flip.",
   "Clean architecture: strict typing (no `any`), Zod boundaries, hexagonal layering, Pino→Loki observability, idempotent ops. Purge legacy — no backwards-compat shims unless the user asks.",
   "Durable learning refines back into the knowledge hub (rare, recall→refine over write-new), never inline comments or docs sprawl.",
   "A new knowledge entry nearly always cites an existing one (supports/contradicts/extends/supersedes) so the hub compounds as a DAG, not islands — cite freely across planes; an entry on your open branch may cite one already merged to main, and the edge goes live in main's DAG when your contribution merges.",

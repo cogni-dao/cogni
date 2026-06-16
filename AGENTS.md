@@ -30,7 +30,7 @@ runtimes: run the self-serve `curl` above. Why this shape: see
 1. Adopt ONE production work item + ONE node (`single-node-scope` is a CI gate). Claim + heartbeat + link PR via `/api/v1/work/items/{id}/{claims,heartbeat,pr,coordination}`; `coordination.nextAction` is authoritative.
 2. **RECALL** the node's knowledge hub before designing or researching — both planes (merged + your open contribution branch). See [`/contribute-knowledge-to-cogni`](.claude/skills/contribute-knowledge-to-cogni/SKILL.md).
 3. Align to existing specs/skills/prior code; refine in place over adding parallel artifacts. Implement on a feature branch; let CI verify (don't run broad local suites); monitor `gh pr checks` to green.
-4. **Done = merged AND `deploy_verified`**: flight to candidate-a, post a [`/validate-candidate`](.claude/skills/validate-candidate/SKILL.md) scorecard, observe your own request in Loki at the deployed SHA.
+4. **Done = merged AND validated on candidate-a**: flight the PR, exercise the changed surface on the live deployed URL, observe your own request in Loki at the deployed SHA, and post a [`/validate-candidate`](.claude/skills/validate-candidate/SKILL.md) scorecard — that posted scorecard is the validation signal, not a flag to flip.
 
 ## Pointers
 
