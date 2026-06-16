@@ -22,7 +22,6 @@ import type {
   EnvFlightStatus,
   FlightEnv,
   NodeFlightStatus,
-  NodeProbeContext,
   NodeProber,
   RunCarriesResult,
 } from "@/ports";
@@ -107,13 +106,11 @@ export async function verifyFlightStatus(
 const okRun = (s: string) => s === "pass" || s === "degraded";
 
 /**
- * The Move-2 LIVE end-state gate for ONE (node, env). **Liveness is proven by the two PUBLIC rungs**
- * (serving + run-carries) — the operator holds NO Grafana token (open-ended Grafana access is a
- * dev-direct RBAC concern, not an API proxy). A completed run transitively proves the worker carried
- * `scheduler-tasks-<uuid>`, the token matched, and the run was written, so Loki is not needed for the
- * verdict. The three Loki rungs are **diagnostics + observability-completeness**, injected only where a
- * read token exists (`/validate-candidate`, CI): they block ONLY on an explicit `fail` (token present,
- * logs genuinely absent — a real observability gap, no silent pass); an unwired `skip` never blocks.
+ * Fail-loud LIVENESS gate for ONE (node, env), proven by the two PUBLIC rungs: `serving` (`/readyz`)
+ * and `run-carries` (a real graph run completes). A completed run transitively proves the substrate —
+ * the scheduler-worker polled `scheduler-tasks-<nodeId>`, the `SCHEDULER_API_TOKEN` matched (no 401),
+ * the graph ran, and the run was written — so the verdict needs no cluster/Grafana auth. `live` is true
+ * iff serving passes AND the run carries (pass|degraded); a failed serving short-circuits run-carries.
  */
 export async function assertLive(
   params: {
@@ -127,36 +124,22 @@ export async function assertLive(
 ): Promise<AssertLiveResult> {
   const { slug, nodeId, primary, env, baseDomain } = params;
   const host = hostForEnv(slug, primary, env, baseDomain);
-  const ctx: NodeProbeContext = { slug, nodeId, env, host };
 
   const serving = await prober.serving(host);
-  const [runCarries, logInLoki, doltgresExists, workerCarriesUuid] =
-    await Promise.all([
-      serving.status === "pass"
-        ? prober.runCarries(host)
-        : Promise.resolve<RunCarriesResult>({
-            status: "skip",
-            durationMs: 0,
-            runs: 0,
-            detail: `skipped:serving-${serving.status}`,
-          }),
-      prober.logInLoki(ctx),
-      prober.doltgresExists(ctx),
-      prober.workerCarriesUuid(ctx),
-    ]);
+  const runCarries: RunCarriesResult =
+    serving.status === "pass"
+      ? await prober.runCarries(host)
+      : {
+          status: "skip",
+          durationMs: 0,
+          runs: 0,
+          detail: `skipped:serving-${serving.status}`,
+        };
 
-  // Liveness = the two PUBLIC rungs. The Loki rungs block ONLY on an explicit `fail` (real
-  // observability gap with a token present), never on `skip` (unwired) — no operator token required.
   const failures: string[] = [];
   if (serving.status !== "pass") failures.push(`serving:${serving.readyzCode}`);
   if (!okRun(runCarries.status))
     failures.push(`run-carries:${runCarries.detail}`);
-  if (logInLoki.status === "fail")
-    failures.push(`log-in-loki:${logInLoki.detail}`);
-  if (doltgresExists.status === "fail")
-    failures.push(`doltgres:${doltgresExists.detail}`);
-  if (workerCarriesUuid.status === "fail")
-    failures.push(`worker-carries-uuid:${workerCarriesUuid.detail}`);
 
   return {
     nodeId,
@@ -164,13 +147,7 @@ export async function assertLive(
     env,
     host,
     live: failures.length === 0,
-    probes: {
-      serving,
-      runCarries,
-      logInLoki,
-      doltgresExists,
-      workerCarriesUuid,
-    },
+    probes: { serving, runCarries },
     failures,
   };
 }

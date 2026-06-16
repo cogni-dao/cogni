@@ -15,25 +15,9 @@
  * @public
  */
 
-import type {
-  NodeProbeContext,
-  NodeProber,
-  ProbeResult,
-  RunCarriesResult,
-  ServingResult,
-} from "@/ports";
-
-/** Operator's read-only Grafana/Loki Viewer credential (datasource:read + logs:read). */
-export interface LokiConfig {
-  readonly url: string;
-  readonly token: string;
-  /** Grafana datasource UID for hosted Loki. */
-  readonly datasourceUid: string;
-}
+import type { NodeProber, RunCarriesResult, ServingResult } from "@/ports";
 
 const SERVING_TIMEOUT_MS = 10_000;
-const LOKI_TIMEOUT_MS = 12_000;
-const LOKI_WINDOW_MINUTES = 30;
 /** The hang we hunt is ~60s; give a touch of headroom so a real hang reads as a timeout, not a probe abort. */
 const RUN_CARRIES_TIMEOUT_MS = 70_000;
 
@@ -60,10 +44,6 @@ function readBuildSha(body: unknown): string | null {
 }
 
 export class HttpNodeProber implements NodeProber {
-  /** Loki config is OPTIONAL: when the operator's Viewer token is unwired, the Loki rungs report
-   *  "loki-unwired" (a loud fail in assertLive) rather than silently passing. */
-  constructor(private readonly loki?: LokiConfig) {}
-
   async serving(host: string): Promise<ServingResult> {
     let readyzCode = 0;
     try {
@@ -184,96 +164,6 @@ export class HttpNodeProber implements NodeProber {
       return 0;
     }
   }
-
-  // ── Loki-read probes (operator Viewer token, read-only) ───────────────────
-
-  /** node-app emitted logs for this env recently → it is observable, not silently dark. */
-  async logInLoki(ctx: NodeProbeContext): Promise<ProbeResult> {
-    const sel = lokiNodeSelector(ctx);
-    if (!sel) return { status: "skip", detail: "no-nodeId" };
-    const n = await this.lokiCount(`{env="${ctx.env}"} | json | ${sel}`);
-    if (n === null) return { status: "skip", detail: "loki-unwired" };
-    return n > 0
-      ? { status: "pass", detail: `logs:${n}` }
-      : { status: "fail", detail: "no-logs" };
-  }
-
-  /** Doltgres knowledge-plane DB migrated/connected (read-only Loki signal — no DB creds). */
-  async doltgresExists(ctx: NodeProbeContext): Promise<ProbeResult> {
-    const sel = lokiNodeSelector(ctx);
-    if (!sel) return { status: "skip", detail: "no-nodeId" };
-    const n = await this.lokiCount(
-      `{env="${ctx.env}"} | json | ${sel} |~ "(?i)doltgres"`
-    );
-    if (n === null) return { status: "skip", detail: "loki-unwired" };
-    return n > 0
-      ? { status: "pass", detail: "doltgres-observed" }
-      : { status: "fail", detail: "no-doltgres-logs" };
-  }
-
-  /** A scheduler-worker pod actually polls `scheduler-tasks-<nodeId>` (bug.5021 RC#1 routing check). */
-  async workerCarriesUuid(ctx: NodeProbeContext): Promise<ProbeResult> {
-    if (!ctx.nodeId) return { status: "skip", detail: "no-nodeId" };
-    const lines = await this.lokiLines(
-      `{env="${ctx.env}", service="scheduler-worker"} | json | phase="polling"`
-    );
-    if (lines === null) return { status: "skip", detail: "loki-unwired" };
-    const wanted = `scheduler-tasks-${ctx.nodeId}`;
-    const carried = lines.some((l) => l.includes(wanted));
-    return carried
-      ? { status: "pass", detail: "polling-queue" }
-      : { status: "fail", detail: "queue-not-polled" };
-  }
-
-  /** Raw Loki query_range. Returns log lines, [] on empty, or null when the Viewer token is unwired. */
-  private async lokiLines(logql: string): Promise<string[] | null> {
-    if (!this.loki) return null;
-    const endNs = `${Date.now()}000000`;
-    const startNs = `${Date.now() - LOKI_WINDOW_MINUTES * 60_000}000000`;
-    const base = `${this.loki.url.replace(/\/$/, "")}/api/datasources/proxy/uid/${this.loki.datasourceUid}/loki/api/v1/query_range`;
-    const qs = new URLSearchParams({
-      query: logql,
-      start: startNs,
-      end: endNs,
-      limit: "50",
-      direction: "backward",
-    });
-    try {
-      const r = await fetchWithTimeout(
-        `${base}?${qs.toString()}`,
-        {
-          method: "GET",
-          headers: { Authorization: `Bearer ${this.loki.token}` },
-        },
-        LOKI_TIMEOUT_MS
-      );
-      if (!r.ok) return [];
-      const j: unknown = await r.json();
-      const result = (j as { data?: { result?: unknown } })?.data?.result;
-      if (!Array.isArray(result)) return [];
-      const lines: string[] = [];
-      for (const stream of result) {
-        const values = (stream as { values?: unknown }).values;
-        if (Array.isArray(values))
-          for (const v of values)
-            if (Array.isArray(v) && typeof v[1] === "string") lines.push(v[1]);
-      }
-      return lines;
-    } catch {
-      return [];
-    }
-  }
-
-  private async lokiCount(logql: string): Promise<number | null> {
-    const lines = await this.lokiLines(logql);
-    return lines === null ? null : lines.length;
-  }
-}
-
-/** Loki nodeId selector — prefer the UUID label, which is what the pino logger stamps. */
-function lokiNodeSelector(ctx: NodeProbeContext): string | null {
-  if (ctx.nodeId) return `nodeId="${ctx.nodeId}"`;
-  return null;
 }
 
 /** Pure classifier — exported for unit tests. */

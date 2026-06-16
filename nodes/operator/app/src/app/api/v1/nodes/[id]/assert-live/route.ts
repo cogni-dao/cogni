@@ -3,22 +3,24 @@
 
 /**
  * Module: `@app/api/v1/nodes/[id]/assert-live`
- * Purpose: Move-2 LIVE end-state gate. GET asserts ONE node in ONE env is actually alive across five
- *   read-only rungs (serving, run-carries, log-in-Loki, doltgres-exists, worker-carries-UUID) and is
- *   **fail-loud**: HTTP 200 only when `live`, HTTP 422 + the failure list otherwise — so a flight
- *   done-gate (`assert-target-substrate.sh` via `curl -fsS`) fails loudly on green-but-dead.
- * Scope: Thin shell — Cogni-token auth, resolve {id} via dev1's NodeRegistryPort (for the repo-spec
- *   nodeId the worker queue + Loki labels use), delegate to the feature verifier. No cluster/GH auth.
- * Invariants: COGNI_TOKEN_ONLY; READ_ONLY_PROBES; NO_SILENT_PASS (loki-unwired ⇒ live=false).
- * Side-effects: IO (registry read, network probes)
- * Links: src/features/nodes/flight-status.ts (assertLive), src/ports/node-flight.port.ts, task.5024
+ * Purpose: Single-env LIVENESS gate. GET asserts ONE node in ONE env is actually alive across the two
+ *   PUBLIC rungs (serving + run-carries) and is **fail-loud**: HTTP 200 only when `live`, HTTP 422 +
+ *   the failure list otherwise — so a `curl -fsS` done-gate fails loudly on green-but-dead.
+ * Scope: Thin shell — Cogni-token auth, developer-RBAC gate, resolve {id} via dev1's NodeRegistryPort,
+ *   delegate to the feature verifier with a public-surface prober. No cluster/GH/Grafana auth.
+ * Invariants:
+ *   - COGNI_TOKEN_ONLY; READ_ONLY_PROBES; NO_SILENT_PASS (a non-carrying run ⇒ live=false, HTTP 422).
+ *   - DEVELOPER_GATED: requires `node.flight` (→ `can_flight from developer`); fail-closed without a store.
+ * Side-effects: IO (registry read, authz check, network probes)
+ * Links: src/features/nodes/flight-status.ts (assertLive), vcs/flight/route.ts (same tuple), task.5024
  * @public
  */
 
+import type { AuthzDecisionCode } from "@cogni/authorization-core";
 import { NextResponse } from "next/server";
 
 import { getSessionUser } from "@/app/_lib/auth/session";
-import { resolveNodeRegistry } from "@/bootstrap/container";
+import { getContainer, resolveNodeRegistry } from "@/bootstrap/container";
 import { createNodeProber } from "@/bootstrap/node-flight.factory";
 import {
   assertLive,
@@ -63,10 +65,31 @@ export async function GET(
 
   const { id } = await ctx.params;
 
-  // Consume dev1's registry: it carries the repo-spec nodeId (UUID) the worker queue + Loki use.
+  // Consume dev1's registry: it carries the repo-spec nodeId (UUID) the worker queue uses.
   const summaries = await resolveNodeRegistry().listPublic();
   const node = summaries.find((n) => n.nodeId === id || n.slug === id);
-  const slug = node?.slug ?? id;
+  if (!node?.nodeId) {
+    return NextResponse.json({ error: "node_not_found" }, { status: 404 });
+  }
+
+  // Developer-gated: the SAME `node.flight` tuple as flight. Fail-closed (deny) without a store.
+  const authorization = getContainer().authorization;
+  if (!authorization) {
+    return NextResponse.json({ error: "authz_unavailable" }, { status: 503 });
+  }
+  const decision = await authorization.check({
+    actorId: `user:${sessionUser.id}`,
+    action: "node.flight",
+    resource: `node:${node.nodeId}`,
+    context: { nodeId: node.nodeId },
+  });
+  if (decision.decision !== "allow") {
+    const code: AuthzDecisionCode = decision.code;
+    return NextResponse.json(
+      { error: code },
+      { status: code === "authz_unavailable" ? 503 : 403 }
+    );
+  }
 
   const apex = baseDomain(serverEnv());
   if (!apex) {
@@ -75,9 +98,9 @@ export async function GET(
 
   const result = await assertLive(
     {
-      slug,
-      nodeId: node?.nodeId ?? (id.includes("-") ? id : undefined),
-      primary: node?.primary ?? slug === "operator",
+      slug: node.slug,
+      nodeId: node.nodeId,
+      primary: node.primary ?? node.slug === "operator",
       env,
       baseDomain: rootDomain(apex),
     },

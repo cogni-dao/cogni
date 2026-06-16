@@ -18,19 +18,9 @@ import {
   rootDomain,
   verifyFlightStatus,
 } from "@/features/nodes/flight-status";
-import type {
-  NodeProber,
-  ProbeResult,
-  RunCarriesResult,
-  ServingResult,
-} from "@/ports";
+import type { NodeProber, RunCarriesResult, ServingResult } from "@/ports";
 
-const PROBE = (status: ProbeResult["status"]): ProbeResult => ({
-  status,
-  detail: status,
-});
-
-/** Build a complete fake NodeProber; all five rungs default to pass-ish, override per test. */
+/** Build a fake NodeProber; both PUBLIC rungs default to pass-ish, override per test. */
 function makeProber(o: Partial<NodeProber> = {}): NodeProber {
   return {
     serving: async () => ({ status: "pass", readyzCode: 200, buildSha: "abc" }),
@@ -40,9 +30,6 @@ function makeProber(o: Partial<NodeProber> = {}): NodeProber {
       runs: 1,
       detail: "poem",
     }),
-    logInLoki: async () => PROBE("pass"),
-    doltgresExists: async () => PROBE("pass"),
-    workerCarriesUuid: async () => PROBE("pass"),
     ...o,
   };
 }
@@ -171,38 +158,14 @@ describe("assertLive (fail-loud live gate)", () => {
     baseDomain: "cognidao.org",
   };
 
-  it("is live only when all five rungs pass", async () => {
+  it("is live when both public rungs pass", async () => {
     const r = await assertLive(args, makeProber());
     expect(r.live).toBe(true);
     expect(r.failures).toHaveLength(0);
     expect(r.host).toBe("beacon.cognidao.org");
   });
 
-  it("loki-unwired (skip) does NOT block — run-carries is the liveness truth, operator holds no token", async () => {
-    const r = await assertLive(
-      args,
-      makeProber({
-        logInLoki: async () => PROBE("skip"),
-        doltgresExists: async () => PROBE("skip"),
-        workerCarriesUuid: async () => PROBE("skip"),
-      })
-    );
-    expect(r.live).toBe(true);
-    expect(r.failures).toHaveLength(0);
-  });
-
-  it("an explicit Loki FAIL blocks (token present, logs genuinely absent — no silent observability gap)", async () => {
-    const r = await assertLive(
-      args,
-      makeProber({
-        logInLoki: async () => ({ status: "fail", detail: "no-logs" }),
-      })
-    );
-    expect(r.live).toBe(false);
-    expect(r.failures.some((f) => f.includes("log-in-loki"))).toBe(true);
-  });
-
-  it("a dead run-carries blocks regardless of Loki (the bug.5021 hang)", async () => {
+  it("a dead run-carries blocks (the bug.5021 hang — no run created)", async () => {
     const r = await assertLive(
       args,
       makeProber({

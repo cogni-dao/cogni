@@ -39,23 +39,22 @@ _direct_ read-only token (grant via RBAC, mint a per-principal Viewer SA), **not
 
 ## Why the operator holds no token
 
-The operator's `assertLive` gate (`task.5024`, `src/features/nodes/flight-status.ts`) verifies a node
-is live across five rungs, but **liveness is proven by the two PUBLIC rungs** — `serving` (`/readyz`)
-and `run-carries` (a real graph run completes). **`run-carries` transitively proves the Loki rungs:** a
-completed run means the scheduler-worker polled `scheduler-tasks-<nodeId>` (routing), the
+The operator's `flight-status` / `assertLive` gate (`task.5024`,
+`src/features/nodes/flight-status.ts`) is **liveness-only**, proven by the two PUBLIC rungs — `serving`
+(`/readyz`) and `run-carries` (a real graph run completes). **`run-carries` transitively proves the
+rest:** a completed run means the scheduler-worker polled `scheduler-tasks-<nodeId>` (routing), the
 `SCHEDULER_API_TOKEN` matched (no 401 — `bug.5021`), the graph executed, and the run was written to the
-DB. So the gate needs **no** Grafana token.
+DB. So the gate needs **no** Grafana token, and the operator prober holds none.
 
-The three Loki rungs (`log-in-Loki`, `doltgres-exists`, `worker-carries-UUID`) are
-**diagnostics + observability-completeness**, not gate requirements. They are **injectable**: a caller
-that _does_ hold a read token (`/validate-candidate`, CI) constructs the prober with a `LokiConfig` and
-lights them up; the operator pod injects none, so they `skip` (`loki-unwired`) and **never block** the
-verdict. They block **only** on an explicit `fail` — a token present and logs genuinely absent — so a
-real observability gap is still loud (no silent pass).
+Deeper **observability verification** (did the node's runs actually emit logs in Loki? is the worker
+polling the UUID queue?) is a query against Loki, and querying belongs to whoever **directly** holds a
+read token — the dev in `/validate-candidate`, or CI — **not** the operator. That is north-star ②
+(`task.5025`): a flighting dev gets a developer-RBAC-scoped `glsa_` read token (minted from the admin
+root, OpenBao/ESO custody) and reads their deployment's Grafana/Loki **directly**.
 
 **Anti-pattern:** wiring `cogni/<env>/_shared/GRAFANA_SERVICE_ACCOUNT_TOKEN` into the operator pod's
-ExternalSecret to make `assertLive` self-query Loki. That turns the control plane into a Grafana proxy
-for a verdict it already gets publicly. Don't.
+ExternalSecret to make the gate self-query Loki. That turns the control plane into a Grafana proxy for a
+verdict it already gets publicly, and a proxy never converges on the open-ended query space. Don't.
 
 ## See also
 

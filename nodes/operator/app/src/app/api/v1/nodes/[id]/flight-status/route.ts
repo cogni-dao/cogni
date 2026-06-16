@@ -3,21 +3,25 @@
 
 /**
  * Module: `@app/api/v1/nodes/[id]/flight-status`
- * Purpose: The substrate VERIFICATION GATE endpoint — GET per-node, per-env proof that a node not only
- *   deployed (serving) but actually carries a real graph run. Lets a dev (or /validate-candidate) catch
- *   the "green-but-dead" class — 200-but-no-Temporal-poller, stale routing, worker-401 — that Argo can't see.
- * Scope: Thin HTTP shell — Cogni-token auth, resolve {id}→slug, derive the root zone, delegate to the
- *   feature verifier with a real-fetch prober. No cluster/GH auth, no business logic here.
- * Invariants: COGNI_TOKEN_ONLY (getSessionUser = Bearer-first); NO_CLUSTER_AUTH; read-only (no mutation).
- * Side-effects: IO (DB read for slug, network probes via the prober)
- * Links: src/features/nodes/flight-status.ts, src/adapters/server/node-flight/node-prober.adapter.ts, task.5021
+ * Purpose: Per-node, per-env LIVENESS view — GET proof that a node not only deployed (serving) but
+ *   actually carries a real graph run. Lets a node's DEVELOPER catch the "green-but-dead" class
+ *   (200-but-no-Temporal-poller, stale routing, worker-401) that Argo health can't see.
+ * Scope: Thin HTTP shell — Cogni-token auth, developer-RBAC gate, resolve {id} via dev1's registry,
+ *   delegate to the feature verifier with a public-surface prober. No cluster/GH/Grafana auth.
+ * Invariants:
+ *   - COGNI_TOKEN_ONLY (getSessionUser = Bearer-first); NO_CLUSTER_AUTH; read-only.
+ *   - DEVELOPER_GATED: requires `node.flight` (→ `can_flight from developer`) — the SAME tuple as flight,
+ *     not world-readable. Fail-closed when the authz store is unavailable.
+ * Side-effects: IO (registry read, authz check, network probes)
+ * Links: src/features/nodes/flight-status.ts, vcs/flight/route.ts (same tuple), task.5024
  * @public
  */
 
+import type { AuthzDecisionCode } from "@cogni/authorization-core";
 import { NextResponse } from "next/server";
 
 import { getSessionUser } from "@/app/_lib/auth/session";
-import { resolveNodeRegistry } from "@/bootstrap/container";
+import { getContainer, resolveNodeRegistry } from "@/bootstrap/container";
 import { createNodeProber } from "@/bootstrap/node-flight.factory";
 import { rootDomain, verifyFlightStatus } from "@/features/nodes/flight-status";
 import { serverEnv } from "@/shared/env";
@@ -43,13 +47,33 @@ export async function GET(
 
   const { id } = await ctx.params;
 
-  // Consume dev1's registry: match {id} as either the repo-spec nodeId (UUID) or the slug. The registry
-  // exposes only PUBLIC node facts, so no owner-gating. (A raw nodes.id query would uuid-cast-error on a
-  // slug like "operator" — that 500 is exactly what the candidate-a self-exercise caught.)
+  // Consume dev1's registry: match {id} as either the repo-spec nodeId (UUID) or the slug.
   const summaries = await resolveNodeRegistry().listPublic();
   const node = summaries.find((n) => n.nodeId === id || n.slug === id);
-  const slug = node?.slug ?? id;
+  if (!node?.nodeId) {
+    return NextResponse.json({ error: "node_not_found" }, { status: 404 });
+  }
 
+  // Developer-gated: the SAME `node.flight` tuple as flight. Fail-closed (deny) without a store.
+  const authorization = getContainer().authorization;
+  if (!authorization) {
+    return NextResponse.json({ error: "authz_unavailable" }, { status: 503 });
+  }
+  const decision = await authorization.check({
+    actorId: `user:${sessionUser.id}`,
+    action: "node.flight",
+    resource: `node:${node.nodeId}`,
+    context: { nodeId: node.nodeId },
+  });
+  if (decision.decision !== "allow") {
+    const code: AuthzDecisionCode = decision.code;
+    return NextResponse.json(
+      { error: code },
+      { status: code === "authz_unavailable" ? 503 : 403 }
+    );
+  }
+
+  const slug = node.slug;
   const apex = baseDomain(serverEnv());
   if (!apex) {
     return NextResponse.json(
@@ -63,9 +87,9 @@ export async function GET(
 
   const status = await verifyFlightStatus(
     {
-      nodeId: node?.nodeId ?? id,
+      nodeId: node.nodeId,
       slug,
-      primary: node?.primary ?? slug === "operator",
+      primary: node.primary ?? slug === "operator",
       baseDomain: rootDomain(apex),
     },
     createNodeProber()

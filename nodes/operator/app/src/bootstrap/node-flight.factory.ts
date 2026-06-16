@@ -13,25 +13,12 @@
 
 import { HttpNodeProber } from "@/adapters/server";
 import type { NodeProber } from "@/ports";
-import { serverEnv } from "@/shared/env";
-
-/** Hosted-Loki datasource UID (mirrors scripts/loki-query.sh default). */
-const LOKI_DATASOURCE_UID = "grafanacloud-logs";
 
 /**
- * Real-fetch prober for the verification gate (serving + run-carries + Loki rungs). The operator's
- * read-only Grafana Viewer token (cogni/<env>/_shared, Phase 5e) lights up the Loki rungs; when it is
- * unwired those rungs report "loki-unwired" (a loud fail in assertLive), never a silent pass.
+ * Real-fetch prober for the liveness gate — exercises a node's PUBLIC surface only (serving +
+ * run-carries). The operator holds NO Grafana token; observability querying is a dev-direct RBAC
+ * concern (docs/spec/grafana-observability-access.md), not an operator-API proxy.
  */
 export function createNodeProber(): NodeProber {
-  const env = serverEnv();
-  const loki =
-    env.GRAFANA_URL && env.GRAFANA_SERVICE_ACCOUNT_TOKEN
-      ? {
-          url: env.GRAFANA_URL,
-          token: env.GRAFANA_SERVICE_ACCOUNT_TOKEN,
-          datasourceUid: LOKI_DATASOURCE_UID,
-        }
-      : undefined;
-  return new HttpNodeProber(loki);
+  return new HttpNodeProber();
 }
