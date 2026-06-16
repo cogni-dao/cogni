@@ -144,6 +144,13 @@ describe("buildNodeLaunchPack", () => {
     expect(pack.prompt).toContain(".env.cogni");
     expect(pack.prompt).toContain("/contribute-to-cogni");
     expect(pack.prompt).toContain("recall the Cogni knowledge block above");
+    // Register-before-recall is the whole point: a fresh node has no token, and
+    // the knowledge block is auth-gated, so /contribute-to-cogni (mint token)
+    // MUST come before "recall the Cogni knowledge block". Lock the ordering so
+    // it cannot silently regress (the prior bug ordered recall first → 401 loop).
+    expect(pack.prompt.indexOf("/contribute-to-cogni")).toBeLessThan(
+      pack.prompt.indexOf("recall the Cogni knowledge block above")
+    );
     expect(pack.prompt).toContain("Create a node customization PR");
     expect(pack.prompt).toContain("Do not push directly to main");
     expect(pack.prompt).toContain("merge your own PR");
