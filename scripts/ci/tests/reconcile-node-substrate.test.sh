@@ -245,8 +245,10 @@ grep -q 'COGNI_NODE_DBS=cogni_operator$' "$REMOTE_ROOT/opt/cogni-template-runtim
 grep -q -- '-e COGNI_NODE_DBS=cogni_operator' "$REMOTE_ROOT/docker.log"
 grep -qE -- '--profile bootstrap run --rm .* db-provision' "$REMOTE_ROOT/docker.log"
 # doltgres-provision gets the operator-canonical superuser injected via -e (fail-loud
-# if absent; never the poisoned VM .env value).
-grep -qE -- '--profile bootstrap run --rm -e DOLTGRES_PASSWORD=.* doltgres-provision' "$REMOTE_ROOT/docker.log"
+# if absent; never the poisoned VM .env value) AND is node-scoped via -e COGNI_NODE_DBS
+# (bug.5033 — symmetric with db-provision so knowledge_<node> is created deterministically,
+# not silently skipped → no node-app Init:CrashLoopBackOff).
+grep -qE -- '--profile bootstrap run --rm -e COGNI_NODE_DBS=cogni_operator -e DOLTGRES_PASSWORD=.* doltgres-provision' "$REMOTE_ROOT/docker.log"
 
 # Per-node DB passwords + the doltgres superuser transit the VM-local SSH/docker env
 # (by design), but must NEVER reach CI stdout. The db-reader token must not leak either.
