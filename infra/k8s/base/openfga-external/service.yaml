@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# Operator-only opt-in resource for the shared Compose OpenFGA runtime.
+apiVersion: v1
+kind: Service
+metadata:
+  name: openfga-external
+spec:
+  type: ExternalName
+  externalName: cogni-preview.vm.cognidao.org
+  ports:
+    - port: 8080
+      protocol: TCP
+      name: http
