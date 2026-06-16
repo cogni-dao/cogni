@@ -8,7 +8,15 @@
 set -u
 
 URL="${COGNI_COGNITION_URL:-https://cognidao.org/api/v1/cognition}"
-bundle="$(curl -fsS --max-time 6 "$URL" 2>/dev/null | jq -r '.markdown // empty' 2>/dev/null)"
+
+# Cognition now requires a principal (KNOWLEDGE_READ_REQUIRES_PRINCIPAL). Pass the
+# agent key as a bearer when present; without it the request 401s and we fall
+# through to the self-serve hint below. (Arrays avoided for bash 3.2 portability.)
+if [ -n "${COGNI_API_KEY:-}" ]; then
+  bundle="$(curl -fsS --max-time 6 -H "Authorization: Bearer ${COGNI_API_KEY}" "$URL" 2>/dev/null | jq -r '.markdown // empty' 2>/dev/null)"
+else
+  bundle="$(curl -fsS --max-time 6 "$URL" 2>/dev/null | jq -r '.markdown // empty' 2>/dev/null)"
+fi
 
 if [ -n "$bundle" ]; then
   printf '%s\n' "$bundle"

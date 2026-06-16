@@ -7,9 +7,10 @@
  *   bundle. Composes the irreducible session invariants (code-owned)
  *   with a live skills index + domain pointers from the knowledge hub, plus a
  *   rendered markdown bundle a SessionStart hook echoes into agent context.
- * Scope: Single public GET. Reads via container.knowledgeStorePort. Public
- *   (auth: none) and index-only — like /.well-known/agent.json. Full entry
- *   bodies stay behind the authed read routes (KNOWLEDGE_READ_REQUIRES_PRINCIPAL).
+ * Scope: Single authed GET (any principal: cookie-session human OR bearer
+ *   agent). Reads via container.knowledgeStorePort. Index-only — full entry
+ *   bodies stay behind the same authed read routes (KNOWLEDGE_READ_REQUIRES_PRINCIPAL).
+ *   The public bootstrap seam stays /api/v1/agent/register: register → key → cognition.
  * Invariants:
  *   - INDEX_NOT_CONTENT: returns skill/domain pointers, never full bodies.
  *   - IRREDUCIBLE_INVARIANTS_ALWAYS_PRESENT: invariants + markdown render even
@@ -26,6 +27,7 @@ import {
   type CognitionSkillPointer,
 } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
+import { getSessionUser } from "@/app/_lib/auth/session";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { serverEnv } from "@/shared/env";
@@ -39,9 +41,10 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 const PER_DOMAIN_LIMIT = 50;
-// Unauthed + does N+1 Doltgres reads; cache so repeated session starts collapse
-// to one DB pass per window instead of hammering the hub.
-const CACHE_CONTROL = "public, max-age=60, stale-while-revalidate=300";
+// Authed but principal-agnostic (index-only, identical for every caller) + does
+// N+1 Doltgres reads; cache privately so repeated session starts collapse to one
+// DB pass per window instead of hammering the hub.
+const CACHE_CONTROL = "private, max-age=60, stale-while-revalidate=300";
 
 /** External origin this request reached us through (forwarded headers first). */
 function publicOrigin(request: Request): string {
@@ -56,8 +59,14 @@ function publicOrigin(request: Request): string {
 }
 
 export const GET = wrapRouteHandlerWithLogging(
-  { routeId: "cognition.bundle", auth: { mode: "none" } },
-  async (ctx, request) => {
+  {
+    routeId: "cognition.bundle",
+    auth: { mode: "required", getSessionUser },
+  },
+  async (ctx, request, sessionUser) => {
+    if (!sessionUser) {
+      return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    }
     const container = getContainer();
     const origin = publicOrigin(request);
     const node = container.nodeId;

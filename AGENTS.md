@@ -11,11 +11,13 @@ irreducible tooling invariants, the live skills index, and the knowledge-domain
 pointers — as a **kickstart bundle** from the node's knowledge endpoint, injected
 into your context at session start. It is the source of truth, not this file.
 
-- **Bundle:** `GET https://cognidao.org/api/v1/cognition` (public, index-only)
+- **Bundle:** `GET https://cognidao.org/api/v1/cognition` (authed, index-only — needs a principal)
 - **Discovery:** `GET https://cognidao.org/.well-known/agent.json` → `cognition` + `endpoints`
-- **If it didn't load** (no SessionStart hook, or the hub was unreachable), self-serve:
+- **If it didn't load** (no SessionStart hook, no `COGNI_API_KEY`, or the hub was unreachable), self-serve — register for a key first (the one public seam), then fetch with it:
   ```bash
-  curl -fsS https://cognidao.org/api/v1/cognition | jq -r .markdown
+  KEY=$(curl -fsS -X POST https://cognidao.org/api/v1/agent/register \
+    -H 'content-type: application/json' -d '{"name":"my-agent"}' | jq -r .apiKey)
+  curl -fsS -H "Authorization: Bearer $KEY" https://cognidao.org/api/v1/cognition | jq -r .markdown
   ```
 
 SessionStart hooks inject this automatically — Claude Code ([`.claude/settings.json`](.claude/settings.json))

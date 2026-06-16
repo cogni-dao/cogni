@@ -27,6 +27,17 @@ vi.mock("@/auth", () => ({
   authOptions: { secret: "test-secret" },
 }));
 
+// Perimeter observability — keep this a true unit (no pino/prom-client) and
+// capture the denial event the proxy emits before any route handler runs.
+const mockLoggerInfo = vi.fn();
+vi.mock("@/shared/observability", () => ({
+  EVENT_NAMES: { AUTH_PERIMETER_DENIED: "auth.perimeter.denied" },
+  makeLogger: () => ({ info: mockLoggerInfo }),
+}));
+vi.mock("@/shared/config", () => ({
+  getNodeId: () => "test-node",
+}));
+
 // Import after mocks
 import { proxy } from "@/proxy";
 
@@ -187,6 +198,7 @@ describe("proxy — page-level routing", () => {
 describe("proxy — API route protection", () => {
   beforeEach(() => {
     mockGetToken.mockReset();
+    mockLoggerInfo.mockReset();
   });
 
   it("allows /api/v1/public/* without auth", async () => {
@@ -208,10 +220,18 @@ describe("proxy — API route protection", () => {
     expect(mockGetToken).not.toHaveBeenCalled();
   });
 
-  it("allows /api/v1/cognition without auth", async () => {
+  it("rejects unauthenticated on /api/v1/cognition", async () => {
     mockGetToken.mockResolvedValue(null);
 
     const res = await proxy(makeRequest("/api/v1/cognition"));
+
+    expect(res.status).toBe(401);
+  });
+
+  it("allows agent bearer on /api/v1/cognition", async () => {
+    mockGetToken.mockResolvedValue(null);
+
+    const res = await proxy(makeAgentRequest("/api/v1/cognition"));
 
     expect(res.status).toBe(200);
     expect(mockGetToken).not.toHaveBeenCalled();
@@ -225,6 +245,35 @@ describe("proxy — API route protection", () => {
     expect(res.status).toBe(401);
     const body = await res.json();
     expect(body.error).toBe("Unauthorized");
+  });
+
+  it("logs a perimeter denial event when rejecting an unauthenticated /api/v1 request", async () => {
+    mockGetToken.mockResolvedValue(null);
+
+    const res = await proxy(makeRequest("/api/v1/users/me"));
+
+    expect(res.status).toBe(401);
+    expect(mockLoggerInfo).toHaveBeenCalledTimes(1);
+    const [fields, msg] = mockLoggerInfo.mock.calls[0];
+    expect(msg).toBe("auth.perimeter.denied");
+    expect(fields).toMatchObject({
+      event: "auth.perimeter.denied",
+      routeId: "auth.perimeter",
+      route: "/api/v1/users/me",
+      method: "GET",
+      reason: "no_session",
+      status: 401,
+    });
+    expect(typeof fields.reqId).toBe("string");
+  });
+
+  it("does NOT log a perimeter denial when an agent bearer is allowed through", async () => {
+    mockGetToken.mockResolvedValue(null);
+
+    const res = await proxy(makeAgentRequest("/api/v1/cognition"));
+
+    expect(res.status).toBe(200);
+    expect(mockLoggerInfo).not.toHaveBeenCalled();
   });
 
   it("allows authenticated on /api/v1/*", async () => {
