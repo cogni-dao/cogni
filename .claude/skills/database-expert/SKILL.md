@@ -21,6 +21,7 @@ Navigation aid for database schema, migrations, and DSN plumbing. Per-node schem
 - READMEs under `nodes/<node>/app/src/adapters/server/db/migrations/` — tripwires explaining the shared-era `0027_silent_nextwave.sql` duplicate.
 - [docs/spec/knowledge-data-plane.md](../../../docs/spec/knowledge-data-plane.md) — Doltgres knowledge plane architecture (separate from the awareness/Postgres side).
 - [work/items/task.0311…md](../../../work/items/task.0311.poly-knowledge-syntropy-seed.md) — why the Doltgres migrator pattern (per-node migrator image + trailing `dolt_commit`) exists; body has the Doltgres 0.56.0 compatibility test results.
+- [docs/runbooks/doltgres-pod-exec-access.md](../../../docs/runbooks/doltgres-pod-exec-access.md) — read/write a node's Doltgres via the app pod when VM SSH keys are stale (Doltgres is a Compose container, not a k8s pod); `postgres` driver must be imported by absolute path. Used for the 2026-06-04 candidate-a → prod knowledge recovery.
 - `nodes/poly/packages/doltgres-schema/AGENTS.md` — reference example for the per-node doltgres-schema package pattern (fork it when a node adopts Doltgres).
 
 ## Layout at a glance
