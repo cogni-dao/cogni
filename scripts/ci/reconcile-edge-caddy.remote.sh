@@ -86,26 +86,39 @@ else
   if [[ "$caddyfile_changed" == "true" || "$edge_env_changed" == "true" ]]; then
     log_info "Edge stack config changed (caddyfile=${caddyfile_changed} env=${edge_env_changed}), recreating Caddy..."
     "${EDGE_COMPOSE[@]}" up -d --force-recreate caddy
+    log_info "Caddy recreated; new env_file values + Caddyfile loaded"
+
+    # Re-sync the on-disk Caddyfile into the running config, THEN verify, THEN
+    # persist the hash. The force-recreate above loads the frozen env (the new
+    # $<SLUG>_DOMAIN), but it snapshots the Caddyfile at recreate time; a new
+    # node's site block can land in the Caddyfile AFTER that snapshot because the
+    # per-node (reconcile-node-substrate.sh) and env-wide (deploy-infra.sh)
+    # reconciles write the SAME shared Caddyfile with no lock. The reload re-reads
+    # the latest on-disk file into the running config (safe: the recreate already
+    # loaded the env, so {$<SLUG>_DOMAIN} resolves).
+    #
+    # ORDERING IS LOAD-BEARING: persist the hashes ONLY after the reload AND a
+    # live-config probe both succeed. The prior bug stored the hash right after
+    # the recreate, so a reload/config miss left the new site on disk but absent
+    # from the running config — and every later reconcile then saw "no change",
+    # never retried, and served external 000 behind a GREEN deploy forever. We now
+    # fail loud (exit 1, hash NOT persisted) so the next reconcile retries and the
+    # flight surfaces the failure instead of silently half-deploying.
+    # (task.5078 edge-routing; healed by hand on candidate-a 2026-06-16 — a reload
+    # took beacon-test from external 000 → 200 with no other change.)
+    if ! "${EDGE_COMPOSE[@]}" exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile; then
+      log_warn "caddy reload FAILED — config hash NOT persisted; next reconcile will retry"
+      exit 1
+    fi
+    # Reload can return 0 yet the running config be empty (adapter quirk / admin
+    # race). Probe the live admin API — the same endpoint assert-target-substrate.sh
+    # reads — and require at least one route present before trusting the reconcile.
+    if ! "${EDGE_COMPOSE[@]}" exec -T caddy wget -qO- http://localhost:2019/config/apps/http/servers 2>/dev/null | grep -q reverse_proxy; then
+      log_warn "Caddy running config has no routes after reload — hash NOT persisted; failing loud"
+      exit 1
+    fi
+    log_info "Caddy reloaded + running config verified live; persisting config hash(es)"
     [[ "$caddyfile_changed" == "true" ]] && echo "$NEW_CADDY_HASH" > "$CADDY_HASH_FILE"
     [[ "$edge_env_changed" == "true" ]] && echo "$NEW_EDGE_ENV_HASH" > "$EDGE_ENV_HASH_FILE"
-    log_info "Caddy recreated; new env_file values + Caddyfile in effect"
-
-    # Re-sync the on-disk Caddyfile into the running config. The force-recreate
-    # above loads the frozen env (the new $<SLUG>_DOMAIN), but it snapshots the
-    # Caddyfile at recreate time — and a new node's site block can be appended to
-    # the Caddyfile AFTER that snapshot (the per-node and env-wide reconciles race
-    # on the same file). The hash is then stored, so every later reconcile sees
-    # "no change" and never recreates: the new node's server block lives on disk
-    # but is absent from the running config → the node is Argo-Healthy and serves
-    # in-cluster yet returns external 000 indefinitely (bug.5031). A reload here is
-    # safe (the recreate already loaded the env, so {$<SLUG>_DOMAIN} resolves) and
-    # idempotently re-reads the latest on-disk Caddyfile into the running config,
-    # defeating the TOCTOU. Verified by hand on candidate-a 2026-06-16: a reload
-    # took beacon-test from external 000 → 200 with no other change.
-    if "${EDGE_COMPOSE[@]}" exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile 2>/dev/null; then
-      log_info "Caddy reloaded; running config re-synced to on-disk Caddyfile"
-    else
-      log_warn "caddy reload after recreate failed (non-fatal; recreate already applied)"
-    fi
   fi
 fi
