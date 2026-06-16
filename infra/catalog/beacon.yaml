@@ -7,7 +7,7 @@ image_tag_suffix: "-beacon"
 migrator_tag_suffix: "-beacon-migrate"
 source_repo: https://github.com/cogni-dao/beacon.git
 image_repository: ghcr.io/cogni-dao/beacon
-source_sha: aa61230ff8f5182a612f0f642cdeb81ce33b3662
+source_sha: 5c4200da670c3e5d9ee91b6e962f620670c4b731
 candidate_a_branch: deploy/candidate-a-beacon
 preview_branch: deploy/preview-beacon
 production_branch: deploy/production-beacon
