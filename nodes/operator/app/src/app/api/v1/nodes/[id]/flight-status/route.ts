@@ -63,7 +63,7 @@ export async function GET(
     actorId: `user:${sessionUser.id}`,
     action: "node.flight",
     resource: `node:${node.nodeId}`,
-    context: { nodeId: node.nodeId },
+    context: { tenantId: node.nodeId, nodeId: node.nodeId },
   });
   if (decision.decision !== "allow") {
     const code: AuthzDecisionCode = decision.code;
