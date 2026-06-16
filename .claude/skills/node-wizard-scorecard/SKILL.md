@@ -103,12 +103,12 @@ operator-pin -> candidate-flight CI/CD path. Use
 After candidate flight and `/version` match, prove the freshly booted node is
 usable, not just deployed:
 
-| Check                  | Evidence                                                                                                | Status         |
-| ---------------------- | ------------------------------------------------------------------------------------------------------- | -------------- |
-| Registration works     | new agent registration succeeds against the candidate node                                              | `pass/blocked` |
+| Check                  | Evidence                                                                                                                                                                                                                                           | Status         |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
+| Registration works     | new agent registration succeeds against the candidate node                                                                                                                                                                                         | `pass/blocked` |
 | Agent graph call works | registered agent gets a successful graph/completions response; ask for a haiku. **Known gap:** a fresh node with no LLM/LiteLLM secret provisioned **times out** here (deployed ≠ usable) — report `blocked` with the timeout, don't paper over it | `pass/blocked` |
-| Knowledge is live      | create a knowledge contribution and confirm the node repo-spec exposes a DoltHub `knowledge.remote.url` | `pass/blocked` |
-| Epoch is active        | candidate node reports an active/current epoch or equivalent live epoch state                           | `pass/blocked` |
+| Knowledge is live      | create a knowledge contribution and confirm the node repo-spec exposes a DoltHub `knowledge.remote.url`                                                                                                                                            | `pass/blocked` |
+| Epoch is active        | candidate node reports an active/current epoch or equivalent live epoch state                                                                                                                                                                      | `pass/blocked` |
 
 Include these rows in the human-facing scorecard when they are relevant to a
 fresh node spawn. If a row is blocked by missing credentials or absent endpoint
