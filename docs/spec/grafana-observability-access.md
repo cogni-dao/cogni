@@ -1,3 +1,20 @@
+---
+id: spec.grafana-observability-access
+type: spec
+title: Grafana / Loki Observability Access
+status: draft
+trust: draft
+summary: How Grafana/Loki query credentials are granted across Cogni — one provisioned admin root mints three scoped consumers (validator/CI `_shared` Viewer, Alloy push, dev-direct RBAC tokens). The operator control plane is NOT a Grafana proxy and holds no query token; assertLive gates on the public run-carries rung.
+read_when: Wiring or debating whether the operator/API should hold a Grafana token; granting a dev/agent Loki query access; designing an automated observability gate; reviewing an ExternalSecret that pulls a GRAFANA_* key into a pod.
+owner: derekg1729
+created: 2026-06-16
+verified: 2026-06-16
+tags:
+  - secrets
+  - observability
+  - grafana
+---
+
 # Grafana / Loki Observability Access
 
 **Decision (2026-06-16):** the operator control plane does **NOT** hold a Grafana query token, and the
