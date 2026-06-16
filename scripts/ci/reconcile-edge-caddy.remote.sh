@@ -86,8 +86,38 @@ else
   if [[ "$caddyfile_changed" == "true" || "$edge_env_changed" == "true" ]]; then
     log_info "Edge stack config changed (caddyfile=${caddyfile_changed} env=${edge_env_changed}), recreating Caddy..."
     "${EDGE_COMPOSE[@]}" up -d --force-recreate caddy
+    log_info "Caddy recreated; new env_file values + Caddyfile loaded"
+
+    # Re-sync the on-disk Caddyfile into the running config, THEN verify, THEN
+    # persist the hash. The force-recreate above loads the frozen env (the new
+    # $<SLUG>_DOMAIN), but it snapshots the Caddyfile at recreate time; a new
+    # node's site block can land in the Caddyfile AFTER that snapshot because the
+    # per-node (reconcile-node-substrate.sh) and env-wide (deploy-infra.sh)
+    # reconciles write the SAME shared Caddyfile with no lock. The reload re-reads
+    # the latest on-disk file into the running config (safe: the recreate already
+    # loaded the env, so {$<SLUG>_DOMAIN} resolves).
+    #
+    # ORDERING IS LOAD-BEARING: persist the hashes ONLY after the reload AND a
+    # live-config probe both succeed. The prior bug stored the hash right after
+    # the recreate, so a reload/config miss left the new site on disk but absent
+    # from the running config — and every later reconcile then saw "no change",
+    # never retried, and served external 000 behind a GREEN deploy forever. We now
+    # fail loud (exit 1, hash NOT persisted) so the next reconcile retries and the
+    # flight surfaces the failure instead of silently half-deploying.
+    # (task.5078 edge-routing; healed by hand on candidate-a 2026-06-16 — a reload
+    # took beacon-test from external 000 → 200 with no other change.)
+    # `caddy reload` validates + atomically swaps the running config; rc 0 means
+    # the new on-disk Caddyfile (incl. the new node's site block) is now live. It
+    # is the reliable gate — persist the hash ONLY on its success. (A per-node
+    # admin-API verify-and-heal — reusing assert-target-substrate.sh's :2019 probe
+    # — is the stronger follow-up; left out here to keep this a minimal bug-fix and
+    # avoid a hard dependency on a probe tool inside the caddy image.)
+    if ! "${EDGE_COMPOSE[@]}" exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile; then
+      log_warn "caddy reload FAILED — config hash NOT persisted; next reconcile will retry"
+      exit 1
+    fi
+    log_info "Caddy reloaded; running config re-synced to on-disk Caddyfile; persisting config hash(es)"
     [[ "$caddyfile_changed" == "true" ]] && echo "$NEW_CADDY_HASH" > "$CADDY_HASH_FILE"
     [[ "$edge_env_changed" == "true" ]] && echo "$NEW_EDGE_ENV_HASH" > "$EDGE_ENV_HASH_FILE"
-    log_info "Caddy recreated; new env_file values + Caddyfile in effect"
   fi
 fi
