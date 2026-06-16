@@ -15,10 +15,13 @@
 
 /* eslint-disable boundaries/no-unknown-files */
 
+import { randomUUID } from "node:crypto";
 import { type NextRequest, NextResponse } from "next/server";
 import { getToken } from "next-auth/jwt";
 
 import { authOptions, authSecret } from "@/auth";
+import { getNodeId } from "@/shared/config";
+import { EVENT_NAMES, logEvent, makeLogger } from "@/shared/observability";
 
 /** App routes that require authentication — unauthenticated visitors are redirected to the sign-in prompt. */
 const APP_ROUTES = [
@@ -74,6 +77,46 @@ function signInRedirectUrl(req: NextRequest): URL {
   return url;
 }
 
+// Perimeter denials are rejected here, before any route handler runs, so the
+// request-scoped logger (wrapRouteHandlerWithLogging) never observes them —
+// leaving auth failures invisible in Loki. Emit a structured denial event from
+// the proxy instead. Lazy + fully guarded: observability must never crash the
+// auth decision (or middleware init / tests).
+let perimeterLogger: ReturnType<typeof makeLogger> | undefined;
+function perimeterLog(): ReturnType<typeof makeLogger> {
+  if (!perimeterLogger) {
+    let nodeId = "unknown";
+    try {
+      nodeId = getNodeId();
+    } catch {
+      // repo-spec unavailable (e.g. test env) — fall back to "unknown".
+    }
+    perimeterLogger = makeLogger({ nodeId });
+  }
+  return perimeterLogger;
+}
+
+/** Why an unauthenticated /api/v1 request was rejected at the perimeter. */
+type PerimeterDenyReason = "no_session" | "no_auth_secret";
+
+function logPerimeterDenial(
+  req: NextRequest,
+  reason: PerimeterDenyReason
+): void {
+  try {
+    logEvent(perimeterLog(), EVENT_NAMES.AUTH_PERIMETER_DENIED, {
+      reqId: randomUUID(),
+      routeId: "auth.perimeter",
+      route: req.nextUrl.pathname,
+      method: req.method,
+      reason,
+      status: 401,
+    });
+  } catch {
+    // Never let an observability failure break the auth perimeter.
+  }
+}
+
 export async function proxy(req: NextRequest): Promise<NextResponse> {
   const { pathname } = req.nextUrl;
   const isPublicApi = isPublicApiRoute(pathname);
@@ -97,6 +140,7 @@ export async function proxy(req: NextRequest): Promise<NextResponse> {
     pathname.startsWith("/api/v1/") &&
     !isAgentBearerRequest
   ) {
+    logPerimeterDenial(req, "no_auth_secret");
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -131,6 +175,7 @@ export async function proxy(req: NextRequest): Promise<NextResponse> {
       return NextResponse.next();
     }
     if (!isLoggedIn) {
+      logPerimeterDenial(req, "no_session");
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
   }

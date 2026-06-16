@@ -19,6 +19,9 @@ export const EVENT_NAMES = {
     "feature.node_publish.secret_shape_generated",
   NODE_ACCESS_REQUEST_COMPLETE: "feature.node_access_request.complete",
   NODE_PREVIEW_PROMOTE_COMPLETE: "feature.node_preview_promote.complete",
+  // Auth perimeter (proxy): request rejected before reaching any route handler,
+  // so the request-scoped logger never sees it — emitted directly from the proxy.
+  AUTH_PERIMETER_DENIED: "auth.perimeter.denied",
 } as const;
 
 export type EventName = (typeof EVENT_NAMES)[keyof typeof EVENT_NAMES];
