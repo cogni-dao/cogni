@@ -88,6 +88,32 @@ Arm with `Monitor { persistent: true, timeout_ms: 3600000 }`.
 
 *Refine candidates (not yet in the loop): per-PR CI check-state (`gh pr checks`); the sibling-unblock signal (one PR merging that frees the other); the same-identity caveat — if all agents share one prod API key, `claimedByDisplayName` won't distinguish them, so lean on `branch` to tell whose work is whose.*
 
+## Human-facing output — a status MATRIX, nothing else
+
+Derek scans many agents. Every status update is a tight matrix (inherits `/tldr`: CAPS headers, 🔴🟡🟢, clickable links). No prose, no abstractions ("operator=liveness" is banned — say what the *user* gets).
+
+**Rules:**
+- **Ultra concise** — the matrix + a one-line next-action. Nothing else.
+- **Say what each item IS in human terms** — the before→after, not the jargon. Bad: "typed env-singleton registry." Good: "new node's graph chat hangs → it just works."
+- **Every row links** — clickable URLs, not IDs alone: the **PR** (`github.com/.../pull/N`), the **live page** to click (`https://<node>-test.cognidao.org`, prod), the **gh run** when relevant. Work items by id is fine; a URL is better.
+- **Owner per row** (which dev / agent).
+
+**Shape** (this is the format — adheres to the retired `pr-coordinator-v0` scorecard):
+
+```
+## STORY: <one-line outcome that must be true>  · <story-id>
+
+| 🔴🟡🟢 | what it is (before → after) | owner | PR | live / proof |
+|--------|-----------------------------|-------|----|--------------|
+| 🟢 | new node crashloops on its DB → gets it clean | dev1 | [#1706](url) merged | — |
+| 🟡 | dev can't see if their flight is alive → API tells them | dev2 | [#1705](url) | [candidate-a](https://x-test.cognidao.org) |
+| 🔴 | new node's chat hangs forever → routes automatically | dev1 | [#1710](url) | gh run |
+
+**Next:** <the single action you're taking or need from the human>
+```
+
+Lead with 🔴/🟡; 🟢 is earned (merged + proven live), never aspirational.
+
 ## Eventual home
 
 This is the human-driven v0. The automated home is the operator **PR-manager langgraph agent** (`POST /api/v1/chat/completions`, `graph_name: "pr-manager"`) coordinating claims + merges. Until that carries the loop, run it here.
