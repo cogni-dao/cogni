@@ -106,14 +106,15 @@ export async function verifyFlightStatus(
 }
 
 const okRun = (s: string) => s === "pass" || s === "degraded";
-const isPass = (p: ProbeResult) => p.status === "pass";
 
 /**
- * The Move-2 LIVE end-state gate for ONE (node, env). Runs all five rungs and is **fail-loud**:
- * `live` is true ONLY when serving passes, the run carries (pass|degraded), and all three Loki rungs
- * pass. A failed serving short-circuits the (slow) run-carries probe; the Loki rungs always run (they
- * read Loki independently and explain *why* — e.g. serving-down but worker-carries-UUID = it's the
- * node-app, not routing). "loki-unwired" is a loud failure, never a silent pass.
+ * The Move-2 LIVE end-state gate for ONE (node, env). **Liveness is proven by the two PUBLIC rungs**
+ * (serving + run-carries) — the operator holds NO Grafana token (open-ended Grafana access is a
+ * dev-direct RBAC concern, not an API proxy). A completed run transitively proves the worker carried
+ * `scheduler-tasks-<uuid>`, the token matched, and the run was written, so Loki is not needed for the
+ * verdict. The three Loki rungs are **diagnostics + observability-completeness**, injected only where a
+ * read token exists (`/validate-candidate`, CI): they block ONLY on an explicit `fail` (token present,
+ * logs genuinely absent — a real observability gap, no silent pass); an unwired `skip` never blocks.
  */
 export async function assertLive(
   params: {
@@ -145,14 +146,17 @@ export async function assertLive(
       prober.workerCarriesUuid(ctx),
     ]);
 
+  // Liveness = the two PUBLIC rungs. The Loki rungs block ONLY on an explicit `fail` (real
+  // observability gap with a token present), never on `skip` (unwired) — no operator token required.
   const failures: string[] = [];
   if (serving.status !== "pass") failures.push(`serving:${serving.readyzCode}`);
   if (!okRun(runCarries.status))
     failures.push(`run-carries:${runCarries.detail}`);
-  if (!isPass(logInLoki)) failures.push(`log-in-loki:${logInLoki.detail}`);
-  if (!isPass(doltgresExists))
+  if (logInLoki.status === "fail")
+    failures.push(`log-in-loki:${logInLoki.detail}`);
+  if (doltgresExists.status === "fail")
     failures.push(`doltgres:${doltgresExists.detail}`);
-  if (!isPass(workerCarriesUuid))
+  if (workerCarriesUuid.status === "fail")
     failures.push(`worker-carries-uuid:${workerCarriesUuid.detail}`);
 
   return {

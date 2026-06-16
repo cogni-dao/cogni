@@ -178,7 +178,7 @@ describe("assertLive (fail-loud live gate)", () => {
     expect(r.host).toBe("beacon.cognidao.org");
   });
 
-  it("fails loud on loki-unwired — NEVER a silent pass", async () => {
+  it("loki-unwired (skip) does NOT block — run-carries is the liveness truth, operator holds no token", async () => {
     const r = await assertLive(
       args,
       makeProber({
@@ -187,23 +187,39 @@ describe("assertLive (fail-loud live gate)", () => {
         workerCarriesUuid: async () => PROBE("skip"),
       })
     );
-    expect(r.live).toBe(false);
-    expect(r.failures.length).toBeGreaterThanOrEqual(3);
+    expect(r.live).toBe(true);
+    expect(r.failures).toHaveLength(0);
   });
 
-  it("a worker-not-polling-UUID failure is loud (the bug.5021 RC#1 regression)", async () => {
+  it("an explicit Loki FAIL blocks (token present, logs genuinely absent — no silent observability gap)", async () => {
     const r = await assertLive(
       args,
       makeProber({
-        workerCarriesUuid: async () => ({
+        logInLoki: async () => ({ status: "fail", detail: "no-logs" }),
+      })
+    );
+    expect(r.live).toBe(false);
+    expect(r.failures.some((f) => f.includes("log-in-loki"))).toBe(true);
+  });
+
+  it("a dead run-carries blocks regardless of Loki (the bug.5021 hang)", async () => {
+    const r = await assertLive(
+      args,
+      makeProber({
+        serving: async () => ({
+          status: "pass",
+          readyzCode: 200,
+          buildSha: "x",
+        }),
+        runCarries: async () => ({
           status: "fail",
-          detail: "queue-not-polled",
+          durationMs: 60_000,
+          runs: 0,
+          detail: "hang:no-run",
         }),
       })
     );
     expect(r.live).toBe(false);
-    expect(r.failures.some((f) => f.includes("worker-carries-uuid"))).toBe(
-      true
-    );
+    expect(r.failures.some((f) => f.includes("run-carries"))).toBe(true);
   });
 });
