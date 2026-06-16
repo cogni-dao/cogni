@@ -1,0 +1,20 @@
+name: beacon
+type: node
+port: 3200
+node_port: 31300
+dockerfile: nodes/beacon/app/Dockerfile
+image_tag_suffix: "-beacon"
+migrator_tag_suffix: "-beacon-migrate"
+source_repo: https://github.com/cogni-dao/beacon.git
+image_repository: ghcr.io/cogni-dao/beacon
+source_sha: aa61230ff8f5182a612f0f642cdeb81ce33b3662
+candidate_a_branch: deploy/candidate-a-beacon
+preview_branch: deploy/preview-beacon
+production_branch: deploy/production-beacon
+# task.5017 — per-env node-set (deploy ⊆ provisioned). A wizard birth enters all
+# NODE_FORMATION_ENVS; this list is the catalog twin so render-node-appset.sh
+# renders exactly the births appset.ts generates. Trimming a node's reach is a
+# later catalog edit (drop an env here) once its envs are provisioned.
+envs: [candidate-a, preview, production]
+path_prefix: nodes/beacon/
+node_id: f97f68f2-8406-4a3b-b5a9-d579b779f19d
