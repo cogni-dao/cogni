@@ -29,11 +29,10 @@ vi.mock("@/auth", () => ({
 
 // Perimeter observability — keep this a true unit (no pino/prom-client) and
 // capture the denial event the proxy emits before any route handler runs.
-const mockLogEvent = vi.fn();
+const mockLoggerInfo = vi.fn();
 vi.mock("@/shared/observability", () => ({
   EVENT_NAMES: { AUTH_PERIMETER_DENIED: "auth.perimeter.denied" },
-  logEvent: (...args: unknown[]) => mockLogEvent(...args),
-  makeLogger: () => ({ info: vi.fn() }),
+  makeLogger: () => ({ info: mockLoggerInfo }),
 }));
 vi.mock("@/shared/config", () => ({
   getNodeId: () => "test-node",
@@ -199,7 +198,7 @@ describe("proxy — page-level routing", () => {
 describe("proxy — API route protection", () => {
   beforeEach(() => {
     mockGetToken.mockReset();
-    mockLogEvent.mockReset();
+    mockLoggerInfo.mockReset();
   });
 
   it("allows /api/v1/public/* without auth", async () => {
@@ -254,10 +253,11 @@ describe("proxy — API route protection", () => {
     const res = await proxy(makeRequest("/api/v1/users/me"));
 
     expect(res.status).toBe(401);
-    expect(mockLogEvent).toHaveBeenCalledTimes(1);
-    const [, eventName, fields] = mockLogEvent.mock.calls[0];
-    expect(eventName).toBe("auth.perimeter.denied");
+    expect(mockLoggerInfo).toHaveBeenCalledTimes(1);
+    const [fields, msg] = mockLoggerInfo.mock.calls[0];
+    expect(msg).toBe("auth.perimeter.denied");
     expect(fields).toMatchObject({
+      event: "auth.perimeter.denied",
       routeId: "auth.perimeter",
       route: "/api/v1/users/me",
       method: "GET",
@@ -273,7 +273,7 @@ describe("proxy — API route protection", () => {
     const res = await proxy(makeAgentRequest("/api/v1/cognition"));
 
     expect(res.status).toBe(200);
-    expect(mockLogEvent).not.toHaveBeenCalled();
+    expect(mockLoggerInfo).not.toHaveBeenCalled();
   });
 
   it("allows authenticated on /api/v1/*", async () => {

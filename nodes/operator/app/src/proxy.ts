@@ -21,7 +21,7 @@ import { getToken } from "next-auth/jwt";
 
 import { authOptions, authSecret } from "@/auth";
 import { getNodeId } from "@/shared/config";
-import { EVENT_NAMES, logEvent, makeLogger } from "@/shared/observability";
+import { EVENT_NAMES, makeLogger } from "@/shared/observability";
 
 /** App routes that require authentication — unauthenticated visitors are redirected to the sign-in prompt. */
 const APP_ROUTES = [
@@ -104,14 +104,21 @@ function logPerimeterDenial(
   reason: PerimeterDenyReason
 ): void {
   try {
-    logEvent(perimeterLog(), EVENT_NAMES.AUTH_PERIMETER_DENIED, {
-      reqId: randomUUID(),
-      routeId: "auth.perimeter",
-      route: req.nextUrl.pathname,
-      method: req.method,
-      reason,
-      status: 401,
-    });
+    // Direct logger call (not logEvent): AUTH_PERIMETER_DENIED is an
+    // operator-local event, and logEvent only types the shared registry —
+    // the same pattern as ADAPTER_GITHUB_REPO_WRITE_ERROR / NODE_*_COMPLETE.
+    perimeterLog().info(
+      {
+        event: EVENT_NAMES.AUTH_PERIMETER_DENIED,
+        reqId: randomUUID(),
+        routeId: "auth.perimeter",
+        route: req.nextUrl.pathname,
+        method: req.method,
+        reason,
+        status: 401,
+      },
+      EVENT_NAMES.AUTH_PERIMETER_DENIED
+    );
   } catch {
     // Never let an observability failure break the auth perimeter.
   }
