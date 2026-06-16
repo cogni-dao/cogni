@@ -380,6 +380,14 @@ jobs:
       - name: scheduler node routing tests
         run: bash scripts/ci/render-scheduler-worker-endpoints.sh --check
 
+      # task.5026 — env-singleton scheduler-worker routing reconcile. Propagates
+      # the catalog-rendered base/scheduler-worker onto deploy/<env>-scheduler-worker
+      # (the branch the worker's Argo app syncs) on every node flight, so a node-add
+      # actually reaches the worker + Reloader rolls it. Local git checkout seam, no
+      # network. Closes bug.5035/bug.5021 (the manual scheduler-worker heal).
+      - name: scheduler-worker routing reconcile tests
+        run: bash scripts/ci/tests/reconcile-scheduler-worker-routing.test.sh
+
       # single-node-scope filters are CATALOG_IS_SSOT: generated from the
       # nodes/* listing. Fails if a node was added/removed under nodes/ without
       # regenerating the dorny filter block (run `pnpm gen:scope-filters`).

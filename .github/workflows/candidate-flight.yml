@@ -992,8 +992,78 @@ jobs:
           job_name: reconcile-dns
           labels: workflow=candidate-flight kind=dns_reconcile slot=candidate-a
 
+  # Env-singleton substrate reconcile (substrate-registry: scheduler-worker-routing,
+  # task.5026). The worker polls one Temporal queue per node from COGNI_NODE_ENDPOINTS
+  # in its ConfigMap; a node-add changes that set, but the worker's Argo app syncs
+  # deploy/<env>-scheduler-worker — a branch a node flight never refreshed, so the new
+  # routing never reached the worker (graph /chat/completions hung; bug.5035/bug.5021,
+  # the manual scheduler-worker heal). This propagates the catalog-rendered, gated
+  # base/scheduler-worker onto that branch; Argo + the Reloader annotation (#1609) roll
+  # the worker. Env-singleton, mirrors reconcile-dns: single per-env job, not per-node.
+  reconcile-scheduler-worker-routing:
+    needs: [decide]
+    if: needs.decide.result == 'success'
+    # Serialize per-env so concurrent node flights never race on the shared branch.
+    concurrency:
+      group: reconcile-scheduler-worker-routing-candidate-a
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    environment: candidate-a
+    steps:
+      # Workflow source at the root owns the loki-push composite action.
+      - name: Checkout workflow source
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      # PR head: a PR that ADDS a node carries the new catalog + the rendered
+      # base/scheduler-worker configmap here, so routing covers it.
+      - name: Checkout app source (PR catalog + base manifests)
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          ref: ${{ needs.decide.outputs.head_sha }}
+          path: app-src
+
+      - name: Reconcile scheduler-worker routing (propagate to per-env deploy branch)
+        working-directory: app-src
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APP_SOURCE_DIR: "."
+          SWR_RECONCILE_SUMMARY_FILE: ${{ runner.temp }}/swr-reconcile-summary.json
+          SWR_RECONCILE_HEAD_SHA: ${{ needs.decide.outputs.head_sha }}
+          SWR_RECONCILE_NODE_SOURCE_SHA: ${{ needs.decide.outputs.node_source_sha }}
+          SWR_RECONCILE_PR_NUMBER: ${{ inputs.pr_number }}
+          SWR_RECONCILE_NODE_SLUG: ${{ needs.decide.outputs.node_slug }}
+          SWR_RECONCILE_STATUS_URL: ${{ needs.decide.outputs.status_url }}
+        run: |
+          set -euo pipefail
+          # Flights run on a main-merge ref; a head predating this script should
+          # skip rather than 127 (its routing already shipped via deploy-infra).
+          if [ ! -f scripts/ci/reconcile-scheduler-worker-routing.sh ]; then
+            echo "::warning::scripts/ci/reconcile-scheduler-worker-routing.sh absent at this ref — skipping routing reconcile"
+            exit 0
+          fi
+          bash scripts/ci/reconcile-scheduler-worker-routing.sh candidate-a
+
+      - name: Push scheduler-worker routing telemetry to Loki
+        if: always()
+        uses: ./.github/actions/loki-push
+        with:
+          loki_url: ${{ secrets.GRAFANA_CLOUD_LOKI_URL }}
+          loki_user: ${{ secrets.GRAFANA_CLOUD_LOKI_USER }}
+          loki_token: ${{ secrets.GRAFANA_CLOUD_LOKI_API_KEY }}
+          log_file: ${{ runner.temp }}/swr-reconcile-summary.json
+          job_name: reconcile-scheduler-worker-routing
+          labels: workflow=candidate-flight kind=scheduler_worker_routing_reconcile slot=candidate-a
+
   verify-candidate:
-    needs: [decide, flight, reconcile-dns, node-substrate, assert-substrate]
+    needs:
+      [
+        decide,
+        flight,
+        reconcile-dns,
+        reconcile-scheduler-worker-routing,
+        node-substrate,
+        assert-substrate,
+      ]
     # Per-cell isolation (Axiom 18): run whenever flight ran and env-level
     # reconcile-dns succeeded. Do NOT gate on the matrix-aggregate flight /
     # node-substrate / assert-substrate result — a sibling node's failure must
@@ -1004,7 +1074,8 @@ jobs:
       always() &&
       needs.decide.outputs.has_flight_targets == 'true' &&
       needs.flight.result != 'skipped' &&
-      needs.reconcile-dns.result == 'success'
+      needs.reconcile-dns.result == 'success' &&
+      needs.reconcile-scheduler-worker-routing.result == 'success'
     strategy:
       fail-fast: false
       matrix:

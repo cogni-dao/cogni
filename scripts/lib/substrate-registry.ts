@@ -28,6 +28,7 @@
  * Side-effects: none (validateRegistry throws on a malformed registry at import).
  * Links: docs/spec/node-baas-architecture.md, scripts/ci/reconcile-node-substrate.sh,
  *   scripts/ci/render-scheduler-worker-endpoints.sh,
+ *   scripts/ci/reconcile-scheduler-worker-routing.sh (env-singleton deploy-branch propagation),
  *   infra/k8s/base/scheduler-worker/deployment.yaml (reloader annotation),
  *   knowledge: substrate-completeness-scorecard
  * @public
@@ -157,10 +158,9 @@ export const SUBSTRATE_DEPENDENCIES: readonly SubstrateDependency[] = [
     description:
       "The scheduler-worker must poll one Temporal task queue per node, driven by COGNI_NODE_ENDPOINTS in the catalog-rendered ConfigMap. Absent → graph /chat/completions hangs.",
     reconcile: {
-      mechanism: "declarative",
-      owner:
-        "infra/k8s/base/scheduler-worker/deployment.yaml (reloader.stakater.com/auto)",
-      note: "Reloader auto-rolls the worker when its ConfigMap changes (the roll half — present since #1609). KNOWN DELIVERY GAP: a node flight refreshes deploy/<env>-<node>, but the worker's Argo app syncs deploy/<env>-scheduler-worker — which a node-add never refreshes, so the new ConfigMap never reaches the worker and Reloader has nothing to react to (matches the manual heal of deploy/<env>-scheduler-worker). assertLive is the loud backstop until the deploy-branch refresh is wired.",
+      mechanism: "ci-script",
+      owner: "scripts/ci/reconcile-scheduler-worker-routing.sh",
+      note: "TWO HALVES, both now wired (task.5026). DELIVERY: a per-env-singleton flight job propagates the catalog-rendered base/scheduler-worker (env-invariant, gated against catalog by render-scheduler-worker-endpoints.sh --check) onto deploy/<env>-scheduler-worker — the branch the worker's Argo app actually syncs, which a node-add never refreshed before (this was the manual heal). ROLL: base/scheduler-worker/deployment.yaml carries reloader.stakater.com/auto (#1609), so Argo syncing the changed ConfigMap auto-rolls the worker. Idempotent (no-op when the routing CSV is unchanged); the env overlay's pinned digest is never touched. assertLive proves the worker actually polls the new node's queue (a graph run completes).",
     },
     assertLive: stubAssertLive("scheduler-worker-routing"),
   },

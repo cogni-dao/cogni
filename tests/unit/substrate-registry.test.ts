@@ -87,10 +87,15 @@ describe("substrate-registry", () => {
     expect(dep?.reconcile.note).toMatch(/COGNI_NODE_DBS/);
   });
 
-  it("scheduler-worker-routing is declarative (Reloader) and records the delivery gap", () => {
+  it("scheduler-worker-routing propagates to the per-env deploy branch (task.5026)", () => {
     const dep = getDependency("scheduler-worker-routing");
-    expect(dep?.reconcile.mechanism).toBe("declarative");
-    expect(dep?.reconcile.owner).toMatch(/reloader/i);
+    // The delivery gap is closed: a CI-script reconcile now refreshes the branch
+    // the worker's Argo app actually syncs, and Reloader rolls it.
+    expect(dep?.reconcile.mechanism).toBe("ci-script");
+    expect(dep?.reconcile.owner).toMatch(
+      /reconcile-scheduler-worker-routing\.sh/
+    );
     expect(dep?.reconcile.note).toMatch(/deploy\/<env>-scheduler-worker/);
+    expect(dep?.reconcile.note).toMatch(/reloader/i);
   });
 });
