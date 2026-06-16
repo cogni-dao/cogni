@@ -13,11 +13,39 @@
 import { describe, expect, it } from "vitest";
 import { classifyRunCarries } from "@/adapters/server/node-flight/node-prober.adapter";
 import {
+  assertLive,
   hostForEnv,
   rootDomain,
   verifyFlightStatus,
 } from "@/features/nodes/flight-status";
-import type { NodeProber, RunCarriesResult, ServingResult } from "@/ports";
+import type {
+  NodeProber,
+  ProbeResult,
+  RunCarriesResult,
+  ServingResult,
+} from "@/ports";
+
+const PROBE = (status: ProbeResult["status"]): ProbeResult => ({
+  status,
+  detail: status,
+});
+
+/** Build a complete fake NodeProber; all five rungs default to pass-ish, override per test. */
+function makeProber(o: Partial<NodeProber> = {}): NodeProber {
+  return {
+    serving: async () => ({ status: "pass", readyzCode: 200, buildSha: "abc" }),
+    runCarries: async () => ({
+      status: "pass",
+      durationMs: 1,
+      runs: 1,
+      detail: "poem",
+    }),
+    logInLoki: async () => PROBE("pass"),
+    doltgresExists: async () => PROBE("pass"),
+    workerCarriesUuid: async () => PROBE("pass"),
+    ...o,
+  };
+}
 
 describe("hostForEnv", () => {
   it("prefixes non-primary nodes per env, bare on prod", () => {
@@ -101,10 +129,10 @@ describe("verifyFlightStatus", () => {
   });
 
   it("skips run-carries when serving fails (no chat probe against a 525 edge)", async () => {
-    const prober: NodeProber = {
+    const prober = makeProber({
       serving: async () => serving("fail"),
       runCarries: async () => carry("pass"),
-    };
+    });
     const r = await verifyFlightStatus(
       {
         nodeId: "n1",
@@ -119,10 +147,7 @@ describe("verifyFlightStatus", () => {
   });
 
   it("allEnvsCarry is true when every env passes or degrades", async () => {
-    const prober: NodeProber = {
-      serving: async () => serving("pass"),
-      runCarries: async () => carry("degraded"),
-    };
+    const prober = makeProber({ runCarries: async () => carry("degraded") });
     const r = await verifyFlightStatus(
       {
         nodeId: "n1",
@@ -134,5 +159,51 @@ describe("verifyFlightStatus", () => {
     );
     expect(r.allEnvsCarry).toBe(true);
     expect(r.envs).toHaveLength(3);
+  });
+});
+
+describe("assertLive (fail-loud live gate)", () => {
+  const args = {
+    slug: "beacon",
+    nodeId: "uuid-1",
+    primary: false,
+    env: "production" as const,
+    baseDomain: "cognidao.org",
+  };
+
+  it("is live only when all five rungs pass", async () => {
+    const r = await assertLive(args, makeProber());
+    expect(r.live).toBe(true);
+    expect(r.failures).toHaveLength(0);
+    expect(r.host).toBe("beacon.cognidao.org");
+  });
+
+  it("fails loud on loki-unwired — NEVER a silent pass", async () => {
+    const r = await assertLive(
+      args,
+      makeProber({
+        logInLoki: async () => PROBE("skip"),
+        doltgresExists: async () => PROBE("skip"),
+        workerCarriesUuid: async () => PROBE("skip"),
+      })
+    );
+    expect(r.live).toBe(false);
+    expect(r.failures.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("a worker-not-polling-UUID failure is loud (the bug.5021 RC#1 regression)", async () => {
+    const r = await assertLive(
+      args,
+      makeProber({
+        workerCarriesUuid: async () => ({
+          status: "fail",
+          detail: "queue-not-polled",
+        }),
+      })
+    );
+    expect(r.live).toBe(false);
+    expect(r.failures.some((f) => f.includes("worker-carries-uuid"))).toBe(
+      true
+    );
   });
 });

@@ -84,6 +84,13 @@ export const serverSchema = z.object({
   // Deployment environment (for observability labels and analytics filtering)
   DEPLOY_ENVIRONMENT: z.string().optional(),
 
+  // Operator read-only Grafana/Loki Viewer credential (datasource:read + logs:read), minted to
+  // cogni/<env>/_shared by provision Phase 5e. Powers the assertLive Loki rungs (log-in-Loki,
+  // doltgres-exists, worker-carries-UUID). OPTIONAL: unwired → those rungs report "loki-unwired"
+  // (a loud fail in the gate), never a silent pass. task.5024.
+  GRAFANA_URL: z.string().url().optional(),
+  GRAFANA_SERVICE_ACCOUNT_TOKEN: z.string().optional(),
+
   // Build SHA for observability (canonical source for /metrics, /readyz, agent.json)
   APP_BUILD_SHA: z.string().optional(),
 

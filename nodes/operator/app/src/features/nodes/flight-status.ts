@@ -18,10 +18,13 @@
  */
 
 import type {
+  AssertLiveResult,
   EnvFlightStatus,
   FlightEnv,
   NodeFlightStatus,
+  NodeProbeContext,
   NodeProber,
+  ProbeResult,
   RunCarriesResult,
 } from "@/ports";
 
@@ -100,4 +103,71 @@ export async function verifyFlightStatus(
   );
 
   return { nodeId, slug, envs, allEnvsCarry };
+}
+
+const okRun = (s: string) => s === "pass" || s === "degraded";
+const isPass = (p: ProbeResult) => p.status === "pass";
+
+/**
+ * The Move-2 LIVE end-state gate for ONE (node, env). Runs all five rungs and is **fail-loud**:
+ * `live` is true ONLY when serving passes, the run carries (pass|degraded), and all three Loki rungs
+ * pass. A failed serving short-circuits the (slow) run-carries probe; the Loki rungs always run (they
+ * read Loki independently and explain *why* — e.g. serving-down but worker-carries-UUID = it's the
+ * node-app, not routing). "loki-unwired" is a loud failure, never a silent pass.
+ */
+export async function assertLive(
+  params: {
+    readonly slug: string;
+    readonly nodeId: string | undefined;
+    readonly primary: boolean;
+    readonly env: FlightEnv;
+    readonly baseDomain: string;
+  },
+  prober: NodeProber
+): Promise<AssertLiveResult> {
+  const { slug, nodeId, primary, env, baseDomain } = params;
+  const host = hostForEnv(slug, primary, env, baseDomain);
+  const ctx: NodeProbeContext = { slug, nodeId, env, host };
+
+  const serving = await prober.serving(host);
+  const [runCarries, logInLoki, doltgresExists, workerCarriesUuid] =
+    await Promise.all([
+      serving.status === "pass"
+        ? prober.runCarries(host)
+        : Promise.resolve<RunCarriesResult>({
+            status: "skip",
+            durationMs: 0,
+            runs: 0,
+            detail: `skipped:serving-${serving.status}`,
+          }),
+      prober.logInLoki(ctx),
+      prober.doltgresExists(ctx),
+      prober.workerCarriesUuid(ctx),
+    ]);
+
+  const failures: string[] = [];
+  if (serving.status !== "pass") failures.push(`serving:${serving.readyzCode}`);
+  if (!okRun(runCarries.status))
+    failures.push(`run-carries:${runCarries.detail}`);
+  if (!isPass(logInLoki)) failures.push(`log-in-loki:${logInLoki.detail}`);
+  if (!isPass(doltgresExists))
+    failures.push(`doltgres:${doltgresExists.detail}`);
+  if (!isPass(workerCarriesUuid))
+    failures.push(`worker-carries-uuid:${workerCarriesUuid.detail}`);
+
+  return {
+    nodeId,
+    slug,
+    env,
+    host,
+    live: failures.length === 0,
+    probes: {
+      serving,
+      runCarries,
+      logInLoki,
+      doltgresExists,
+      workerCarriesUuid,
+    },
+    failures,
+  };
 }

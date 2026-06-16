@@ -54,10 +54,57 @@ export interface NodeFlightStatus {
   readonly allEnvsCarry: boolean;
 }
 
-/** Injected I/O. Implemented by an adapter that does real fetch against the node's public surface. */
+/** A simple rung verdict for the Loki-read probes (log-in-Loki, doltgres, worker-carries-UUID). */
+export interface ProbeResult {
+  readonly status: RungStatus;
+  /** "logs:<n>", "doltgres-migrated", "polling-queue", "loki-unwired", "absent", … */
+  readonly detail: string;
+}
+
+/** Per-(node,env) context every probe needs to address one node in one env. */
+export interface NodeProbeContext {
+  readonly slug: string;
+  /** repo-spec UUID — the key the worker queue + Loki nodeId label use. May be unknown for a bare slug. */
+  readonly nodeId: string | undefined;
+  readonly env: FlightEnv;
+  /** Public host for this (node, env) — `<slug>-test.<base>` etc. */
+  readonly host: string;
+}
+
+/** Injected I/O. Adapter does real fetch (public surface) + Loki reads (operator Viewer token). */
 export interface NodeProber {
   /** GET https://<host>/readyz + /version. */
   serving(host: string): Promise<ServingResult>;
   /** Register a throwaway agent, run the free `poet` graph, read back the run count. */
   runCarries(host: string): Promise<RunCarriesResult>;
+  /** Loki: the node-app emitted logs for this env recently (it is observable, not silently dark). */
+  logInLoki(ctx: NodeProbeContext): Promise<ProbeResult>;
+  /** Loki: the node's Doltgres knowledge-plane DB migrated/connected (read-only signal, no DB creds). */
+  doltgresExists(ctx: NodeProbeContext): Promise<ProbeResult>;
+  /** Loki: a scheduler-worker pod actually polls `scheduler-tasks-<nodeId>` (the bug.5021 RC#1 check). */
+  workerCarriesUuid(ctx: NodeProbeContext): Promise<ProbeResult>;
+}
+
+/** The five live rungs for one node in one env. */
+export interface LiveProbes {
+  readonly serving: ServingResult;
+  readonly runCarries: RunCarriesResult;
+  readonly logInLoki: ProbeResult;
+  readonly doltgresExists: ProbeResult;
+  readonly workerCarriesUuid: ProbeResult;
+}
+
+/**
+ * Fail-loud live verdict for one (node, env). `live` is true ONLY when every rung is satisfied
+ * (serving pass, run-carries pass|degraded, the three Loki rungs pass). A `skip`/`fail` anywhere —
+ * including "loki-unwired" — keeps `live=false` with a loud `failures` list. NEVER silently passes.
+ */
+export interface AssertLiveResult {
+  readonly nodeId: string | undefined;
+  readonly slug: string;
+  readonly env: FlightEnv;
+  readonly host: string;
+  readonly live: boolean;
+  readonly probes: LiveProbes;
+  readonly failures: readonly string[];
 }
