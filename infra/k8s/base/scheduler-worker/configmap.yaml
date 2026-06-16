@@ -18,7 +18,7 @@ data:
   TEMPORAL_TASK_QUEUE: "scheduler-tasks"
   # Per-node API endpoints — identical across envs (k8s Service DNS + port).
   # Each entry maps nodeId/slug to the node's internal Service.
-  COGNI_NODE_ENDPOINTS: "canary=http://canary-node-app:3000,89612f02-114d-460d-87a5-c2ab212ccf6f=http://canary-node-app:3000,node-template=http://node-template-node-app:3000,b927a9dd-6132-4fc9-a51e-e3cee2568e3c=http://node-template-node-app:3000,operator=http://operator-node-app:3000,4ff8eac1-4eba-4ed0-931b-b1fe4f64713d=http://operator-node-app:3000,resy=http://resy-node-app:3000,f6d2a17d-b7f6-4ad1-a86b-f0ad2380999e=http://resy-node-app:3000"
+  COGNI_NODE_ENDPOINTS: "beacon=http://beacon-node-app:3000,f97f68f2-8406-4a3b-b5a9-d579b779f19d=http://beacon-node-app:3000,blue=http://blue-node-app:3000,da3777a6-1f33-463a-a73c-70924806da50=http://blue-node-app:3000,habitat=http://habitat-node-app:3000,dbf1eeb7-85d4-4fd5-a4fe-da85c668bb03=http://habitat-node-app:3000,node-template=http://node-template-node-app:3000,b927a9dd-6132-4fc9-a51e-e3cee2568e3c=http://node-template-node-app:3000,operator=http://operator-node-app:3000,4ff8eac1-4eba-4ed0-931b-b1fe4f64713d=http://operator-node-app:3000,oss=http://oss-node-app:3000,4d7ffb44-fc26-4a55-864f-eff9fbc8aba1=http://oss-node-app:3000"
   # Observability
   LOG_LEVEL: "info"
   SERVICE_NAME: "scheduler-worker"
