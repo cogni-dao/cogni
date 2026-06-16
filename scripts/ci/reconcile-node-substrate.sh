@@ -390,7 +390,14 @@ remote "set -euo pipefail
     db-provision >/dev/null
   if \"\${runtime_compose[@]}\" config --services 2>/dev/null | grep -q '^doltgres$'; then
     \"\${runtime_compose[@]}\" up -d doltgres >/dev/null
-    \"\${runtime_compose[@]}\" --profile bootstrap run --rm ${dg_pw_env} doltgres-provision >/dev/null
+    # bug.5033: node-scope doltgres-provision with -e COGNI_NODE_DBS='${node_db}',
+    # symmetric with db-provision above. Otherwise doltgres-provision relied on the
+    # env-file COGNI_NODE_DBS (whole fleet) and the surrounding grep gate silently
+    # skips on any compose hiccup → knowledge_<node> uncreated → node-app
+    # Init:CrashLoopBackOff. Scoping to THIS node is deterministic + idempotent.
+    \"\${runtime_compose[@]}\" --profile bootstrap run --rm \
+      -e COGNI_NODE_DBS='${node_db}' \
+      ${dg_pw_env} doltgres-provision >/dev/null
   fi"
 
 mark_row remote_reconcile updated "edge route, DB inventory, and DB provisioners reconciled on VM"
