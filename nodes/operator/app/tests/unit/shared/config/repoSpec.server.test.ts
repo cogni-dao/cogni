@@ -29,6 +29,8 @@ interface RepoSpecModule {
   getGovernanceConfig: () => GovernanceConfig;
   getGithubRepo: () => { owner: string; repo: string };
   getKnowledgeConfig: () => KnowledgeConfig | undefined;
+  getNodeName: () => string;
+  getNodeMission: () => string | null;
 }
 
 const TEST_NODE_ID = "00000000-0000-4000-8000-000000000001";
@@ -61,6 +63,35 @@ describe("getPaymentConfig (repo-spec)", () => {
   it("returns the canonical GitHub repo owner for VCS operations", async () => {
     const { getGithubRepo } = await loadPaymentConfig();
     expect(getGithubRepo()).toEqual({ owner: "cogni-dao", repo: "cogni" });
+  });
+
+  it("returns node identity from repo-spec intent", async () => {
+    const tmpDir = writeRepoSpec(
+      [
+        `node_id: "${TEST_NODE_ID}"`,
+        "intent:",
+        "  name: operator",
+        "  mission: Coordinate code, deploys, and validation for Cogni nodes.",
+        "cogni_dao:",
+        `  chain_id: "${CHAIN_ID}"`,
+        "payments_in:",
+        "  credits_topup:",
+        "    provider: cogni-usdc-backend-v1",
+        '    receiving_address: "0x1111111111111111111111111111111111111111"',
+      ].join("\n")
+    );
+    useTmpRoot(tmpDir);
+
+    try {
+      const { getNodeName, getNodeMission } = await loadPaymentConfig();
+
+      expect(getNodeName()).toBe("operator");
+      expect(getNodeMission()).toBe(
+        "Coordinate code, deploys, and validation for Cogni nodes."
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 
   it("returns mapped inbound payment config for a valid repo-spec", async () => {
