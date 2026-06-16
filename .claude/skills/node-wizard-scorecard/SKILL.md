@@ -68,10 +68,19 @@ reporting a terminal blocker that prevents opening one:
 - Do not request flight until the parent pin and child image agree.
 - Candidate flight must be requested through the operator API. Do not use
   source-repo deploy workflows or other privileged manual deploy paths.
-- DNS + edge are automatic — never hand-create a `<node>-test` record or run a
-  separate infra step. The flight reconciles both (`reconcile-node-dns.sh` +
-  the `node-substrate` edge reconcile; ci-cd.md Axiom 21). A fresh-flight
-  `NXDOMAIN` is almost always negative-cache — re-check `dig <host> +short @1.1.1.1`.
+- DNS is automatic — never hand-create a `<node>-test` record. The flight upserts
+  it (`reconcile-node-dns.sh`; ci-cd.md Axiom 21). A fresh-flight `NXDOMAIN` is
+  almost always negative-cache — re-check `dig <host> +short @1.1.1.1`.
+- **Edge is automatic-but-fragile — DO NOT assume a flighted node serves
+  externally (KNOWN GAP).** The `node-substrate` edge reconcile writes the Caddy
+  route, but on a fresh node the running config may not pick it up → the node is
+  Argo-Healthy and serves **in-cluster** yet returns external **000** (proven on
+  beacon prod, 2026-06-16). External 000 + DNS resolving + pod Healthy = the
+  **edge-reload gap (bug.5031 / PR #1697)**, not negative cache. Heal + the full
+  substrate-gaps table (doltgres-DB-missing `Init:CrashLoopBackOff`, preview
+  global-lease freeze, prod-promote `sourceSha` footgun, no-LLM-backend) live in
+  `node-wizard-expert` SKILL.md → "Substrate E2E is NOT yet hands-off". Mirror
+  this into the hub entry `node-formation-wizard-scorecard`.
 - After merge, use the child repo's current `main` SHA as `sourceSha`. GitHub
   merge commits differ from PR head commits, and the child push build tags
   `sha-${github.sha}`.
@@ -97,7 +106,7 @@ usable, not just deployed:
 | Check                  | Evidence                                                                                                | Status         |
 | ---------------------- | ------------------------------------------------------------------------------------------------------- | -------------- |
 | Registration works     | new agent registration succeeds against the candidate node                                              | `pass/blocked` |
-| Agent graph call works | registered agent gets a successful graph/completions response; ask for a haiku                          | `pass/blocked` |
+| Agent graph call works | registered agent gets a successful graph/completions response; ask for a haiku. **Known gap:** a fresh node with no LLM/LiteLLM secret provisioned **times out** here (deployed ≠ usable) — report `blocked` with the timeout, don't paper over it | `pass/blocked` |
 | Knowledge is live      | create a knowledge contribution and confirm the node repo-spec exposes a DoltHub `knowledge.remote.url` | `pass/blocked` |
 | Epoch is active        | candidate node reports an active/current epoch or equivalent live epoch state                           | `pass/blocked` |
 
