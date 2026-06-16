@@ -17,9 +17,9 @@
 import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
-import { HttpNodeProber } from "@/adapters/server/node-flight/node-prober.adapter";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { resolveServiceDb } from "@/bootstrap/container";
+import { createNodeProber } from "@/bootstrap/node-flight.factory";
 import { rootDomain, verifyFlightStatus } from "@/features/nodes/flight-status";
 import { nodes } from "@/shared/db/nodes";
 import { serverEnv } from "@/shared/env";
@@ -74,7 +74,7 @@ export async function GET(
       primary: slug === "operator",
       baseDomain: rootDomain(apex),
     },
-    new HttpNodeProber()
+    createNodeProber()
   );
 
   return NextResponse.json(status);
