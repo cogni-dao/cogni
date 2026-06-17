@@ -28,6 +28,11 @@ patches:
       - op: replace
         path: /data/NODE_NAME
         value: "operator"
+      # Deploy-env name the secrets route stamps onto the OpenBao path
+      # (cogni/<env>/<node>/<KEY>). Distinct from APP_ENV (a build flag).
+      - op: add
+        path: /data/DEPLOY_ENVIRONMENT
+        value: "preview"
       - op: replace
         path: /data/TEMPORAL_NAMESPACE
         value: "cogni-preview"
