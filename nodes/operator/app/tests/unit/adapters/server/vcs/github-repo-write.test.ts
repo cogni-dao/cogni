@@ -715,6 +715,92 @@ describe("GitHubRepoWriter.ensureCatalogSourceSha", () => {
   });
 });
 
+describe("GitHubRepoWriter.promoteNodeToPreview", () => {
+  const DISPATCH =
+    "POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches";
+  const childSha = "0123456789012345678901234567890123456789";
+  const staleCatalog =
+    "name: habitat\ntype: node\npath_prefix: nodes/ghcr/\nsource_repo: https://github.com/Cogni-DAO/habitat.git\nimage_repository: ghcr.io/cogni-dao/habitat\nsource_sha: ffffffffffffffffffffffffffffffffffffffff\n";
+
+  it("source-addresses the node sha on the preview dispatch — ZERO writes to main, no PR (task.5022 Design A)", async () => {
+    routeHandlers = {
+      // Catalog row is read only to validate existence/identity — never written.
+      "GET /repos/{owner}/{repo}/contents/{path}": (params) => {
+        expect(params.path).toBe("infra/catalog/habitat.yaml");
+        expect(params.ref).toBe("main");
+        return {
+          type: "file",
+          encoding: "base64",
+          sha: "catalog-blob",
+          content: Buffer.from(staleCatalog, "utf-8").toString("base64"),
+        };
+      },
+      [DISPATCH]: () => ({}),
+    };
+
+    const result = await makeWriter().promoteNodeToPreview({
+      parentOwner: "Cogni-DAO",
+      parentRepo: "cogni",
+      slug: "habitat",
+      sourceSha: childSha,
+    });
+
+    expect(result).toMatchObject({
+      status: "dispatched",
+      sourceSha: childSha,
+    });
+
+    // The dispatch carries the node sha as node_source_sha; ref stays main (the
+    // operator WORKFLOW checkout ref, not a deploy pin). No source_sha override.
+    const dispatch = requests.find((request) => request.route === DISPATCH);
+    expect(dispatch?.params).toMatchObject({
+      workflow_id: "promote-and-deploy.yml",
+      ref: "main",
+      inputs: {
+        environment: "preview",
+        nodes: "habitat",
+        skip_infra: "true",
+        node_source_sha: childSha,
+      },
+    });
+    expect(
+      (dispatch?.params.inputs as Record<string, string>).source_sha
+    ).toBeUndefined();
+
+    // ZERO writes to main: no catalog PUT, no PR.
+    expect(
+      requests.some(
+        (r) => r.route === "PUT /repos/{owner}/{repo}/contents/{path}"
+      )
+    ).toBe(false);
+    expect(
+      requests.some((r) => r.route === "POST /repos/{owner}/{repo}/pulls")
+    ).toBe(false);
+  });
+
+  it("rejects a missing catalog row (404 catalog_missing) without dispatching", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": () => {
+        const err = new Error("Not Found") as Error & { status: number };
+        err.status = 404;
+        throw err;
+      },
+      [DISPATCH]: () => ({}),
+    };
+
+    await expect(
+      makeWriter().promoteNodeToPreview({
+        parentOwner: "Cogni-DAO",
+        parentRepo: "cogni",
+        slug: "habitat",
+        sourceSha: childSha,
+      })
+    ).rejects.toThrow(/catalog/i);
+
+    expect(requests.some((r) => r.route === DISPATCH)).toBe(false);
+  });
+});
+
 describe("GitHubRepoWriter.prepareNodeRefCandidateFlight", () => {
   it("prepares node-ref flights from source repo identity without GHCR metadata", async () => {
     const sourceSha = "0123456789012345678901234567890123456789";
@@ -1115,8 +1201,14 @@ describe("GitHubRepoWriter.dispatchNodePromote", () => {
         skip_infra: "true",
       },
     });
+    // Production omits BOTH addressing inputs ⇒ the workflow reads the catalog
+    // source_sha pin (CATALOG_SOURCE_SHA_IS_THE_DEPLOY_PIN) — Design A is additive,
+    // production behavior unchanged.
     expect(
       (dispatch?.params.inputs as Record<string, string>).source_sha
+    ).toBeUndefined();
+    expect(
+      (dispatch?.params.inputs as Record<string, string>).node_source_sha
     ).toBeUndefined();
   });
 
@@ -1140,5 +1232,28 @@ describe("GitHubRepoWriter.dispatchNodePromote", () => {
     expect((dispatch?.params.inputs as Record<string, string>).skip_infra).toBe(
       "true"
     );
+  });
+
+  it("forwards node_source_sha when provided (source-addressed preview promote)", async () => {
+    routeHandlers = { [DISPATCH_ROUTE]: () => ({}) };
+
+    await makeWriter().dispatchNodePromote({
+      owner: "Cogni-DAO",
+      repo: "cogni",
+      env: "preview",
+      slug: "habitat",
+      nodeSourceSha: "def4560000000000000000000000000000000000",
+    });
+
+    const dispatch = requests.find(
+      (request) => request.route === DISPATCH_ROUTE
+    );
+    expect(
+      (dispatch?.params.inputs as Record<string, string>).node_source_sha
+    ).toBe("def4560000000000000000000000000000000000");
+    // node_source_sha is NOT a checkout ref — source_sha stays absent (ref=main).
+    expect(
+      (dispatch?.params.inputs as Record<string, string>).source_sha
+    ).toBeUndefined();
   });
 });

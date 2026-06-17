@@ -3,11 +3,14 @@
 
 /**
  * Module: `@app/_facades/deploy/node-preview-promote.server`
- * Purpose: Node-merge → preview tie. On a spawned node-repo PR merge, bump the parent
- *   catalog `source_sha` pin + enable auto-merge so flight-preview.yml advances preview —
- *   the same merge→preview model in-repo nodes already get, now for node spawns out of the box.
- * Scope: Webhook-triggered facade. Resolves the node, delegates the GitHub writes to the
- *   operator deploy plane. No promote-and-deploy dispatch here (PREVIEW_VIA_FLIGHT_PREVIEW).
+ * Purpose: Node-merge → preview tie. On a spawned node-repo PR merge, promote the node to
+ *   preview the same way production promotes — the operator dispatches promote-and-deploy at
+ *   env=preview SOURCE-ADDRESSED by the merged node head sha (`node_source_sha`), writing ZERO
+ *   commits to main. Gives node spawns the same merge→preview model in-repo nodes get, out of
+ *   the box.
+ * Scope: Webhook-triggered facade. Resolves the node, delegates the source-addressed dispatch
+ *   to the operator deploy plane (ONE_PROMOTION_PRIMITIVE; task.5022 — no main write; the pin
+ *   lands on deploy/preview).
  * Invariants:
  *   - SPAWNED_NODES_ONLY: acts only when the merged-PR repo is a registered external node
  *     (the `nodes` table excludes inline operator/resy/node-template), so in-repo + parent
@@ -20,7 +23,7 @@
  *     A `node.promote` gate is vNext if a node can earn preview without candidate-a.
  * Side-effects: IO (DB read, GitHub REST/GraphQL via OperatorDeployPlanePort). Fire-and-forget.
  * Links: docs/spec/ci-cd.md, docs/spec/node-ci-cd-contract.md,
- *   src/ports/operator-deploy-plane.port.ts, .github/workflows/flight-preview.yml
+ *   src/ports/operator-deploy-plane.port.ts, .github/workflows/promote-and-deploy.yml
  * @public
  */
 
@@ -134,12 +137,7 @@ async function promoteNodeToPreview(
         prNumber: ctx.prNumber,
         sourceSha8: ctx.headSha.slice(0, 8),
         status: result.status,
-        ...(result.status === "pin_pr_opened"
-          ? {
-              pinPrNumber: result.prNumber,
-              autoMergeEnabled: result.autoMergeEnabled,
-            }
-          : {}),
+        workflowUrl: result.workflowUrl,
       },
       EVENT_NAMES.NODE_PREVIEW_PROMOTE_COMPLETE
     );

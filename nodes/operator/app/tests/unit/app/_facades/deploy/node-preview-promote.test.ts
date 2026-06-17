@@ -78,11 +78,10 @@ describe("dispatchNodePreviewPromote", () => {
   it("pins the PR head SHA when a registered node's PR merges (PIN_IS_PR_HEAD_SHA)", async () => {
     nodeRows = [{ id: "node-1", slug: "habitat" }];
     promoteNodeToPreview.mockResolvedValue({
-      status: "pin_pr_opened",
-      prNumber: 99,
-      prUrl: "https://github.com/Cogni-DAO/node-template/pull/99",
-      currentSha: "b".repeat(40),
-      autoMergeEnabled: true,
+      status: "dispatched",
+      sourceSha: "a".repeat(40),
+      workflowUrl:
+        "https://github.com/Cogni-DAO/node-template/actions/workflows/promote-and-deploy.yml",
     });
 
     dispatchNodePreviewPromote(mergedPayload(), ENV, log);
