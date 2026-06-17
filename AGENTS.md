@@ -30,12 +30,9 @@ itself; no per-session URL or key export is required after bootstrap.
 runtimes: run the self-serve `curl` above. Why this shape: see
 [`docs/spec/node-baas-architecture.md`](docs/spec/node-baas-architecture.md) § Cognition Substrate.
 
-## The irreducible loop (the bundle expands this)
+## The irreducible loop
 
-1. Adopt ONE production work item + ONE node (`single-node-scope` is a CI gate). Claim + heartbeat + link PR via `/api/v1/work/items/{id}/{claims,heartbeat,pr,coordination}`; `coordination.nextAction` is authoritative.
-2. **RECALL** the node's knowledge hub before designing or researching — both planes (merged + your open contribution branch). See [`/contribute-knowledge-to-cogni`](.claude/skills/contribute-knowledge-to-cogni/SKILL.md).
-3. Align to existing specs/skills/prior code; refine in place over adding parallel artifacts. Implement on a feature branch; let CI verify (don't run broad local suites); monitor `gh pr checks` to green.
-4. **Done = merged AND validated on candidate-a**: flight the PR, exercise the changed surface on the live deployed URL, observe your own request in Loki at the deployed SHA, and post a [`/validate-candidate`](.claude/skills/validate-candidate/SKILL.md) scorecard — that posted scorecard is the validation signal, not a flag to flip.
+The tooling invariants (ONE work item + node, RECALL_BEFORE_WRITE, branch→CI→candidate-a validation, Definition of Done) are **served in the session-start cognition bundle** — the single source of truth. They are deliberately NOT duplicated here; read them from the bundle each session.
 
 ## Pointers
 
