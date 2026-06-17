@@ -157,6 +157,29 @@ today's shape plus the principal binding — no namespace-per-node (heavier ops,
 need). Namespace-per-node is a documented future upgrade if cross-node noisy-neighbor
 or quota isolation at the Temporal layer is ever required.
 
+## Syntropy: graph and non-graph recurring work are ONE spine, not two
+
+The design intent is **shared primitives, not a parallel stack** — AI graph execution
+and node recurring-work run on the *same* spine, diverging only at the leaf:
+
+| Primitive | Shared by graph + non-graph |
+| --- | --- |
+| Schedule CRUD (`POST /schedules` → DB row + Temporal Schedule) | one path |
+| `ExecutionGrant` + `validateGrantForScope(actor, nodeId, grantId, scope)` | one validator — graph uses `graph:execute:<id>`, task uses `task:dispatch:<route>`. **The graph path migrates onto the generalized validator** (do NOT leave `validateGrantForGraph` as a parallel) |
+| Per-node task queue (`scheduler-tasks-<uuid>`) + namespace | one model |
+| `NodePrincipalResolver` (per-node identity) | one resolver — lifts BOTH graph dispatch and task dispatch off the shared `SCHEDULER_API_TOKEN` |
+| Schedule action = discriminated union `{kind:'graph', graphId} \| {kind:'http-dispatch', route}` | one contract; node declares `graph` xor `route`; workflow selection branches on `kind` |
+
+The **only** legitimate divergence is the leaf workflow, and it follows
+`temporal-patterns.md`'s LangGraph-vs-Temporal boundary: `GraphRunWorkflow` runs the
+LLM graph-executor path (reasoning loop + `graph_runs`); `NodeTaskWorkflow` is a plain
+durable write (no graph child). They **share the node-dispatch helper** (nodeUrl
+resolution + principal + `Idempotency-Key`) rather than cloning it.
+
+**Anti-pattern this design forbids (split-brain):** `dispatchNodeTaskActivity` as a fork
+of `executeGraphActivity`, a second grant validator, a second principal path. Generalize
+the existing graph primitives so the non-graph path *reuses* them — that is the syntropy.
+
 ## What this is NOT
 
 - Not a new workflow per node (one generic `NodeTaskWorkflow`, forever).
