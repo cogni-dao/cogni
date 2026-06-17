@@ -38,7 +38,7 @@ export const SESSION_BOOTSTRAP_INVARIANTS: readonly string[] = [
   "Definition of Done = merged AND validated on candidate-a: flight the PR, exercise the changed surface against the live deployed URL, read your own request back from Loki at the deployed SHA, then post a /validate-candidate scorecard on the PR. The posted scorecard IS the validation signal — not a work-item flag to flip.",
   "Clean architecture: strict typing (no `any`), Zod boundaries, hexagonal layering, Pino→Loki observability, idempotent ops. Purge legacy — no backwards-compat shims unless the user asks.",
   "Durable learning refines back into the knowledge hub (rare, recall→refine over write-new), never inline comments or docs sprawl.",
-  "A new knowledge entry nearly always cites an existing one (supports/contradicts/extends/supersedes) so the hub compounds as a DAG, not islands — cite freely across planes; an entry on your open branch may cite one already merged to main, and the edge goes live in main's DAG when your contribution merges.",
+  "A new knowledge entry nearly always cites an existing one (supports/contradicts/extends/supersedes) so the hub compounds as a DAG, not islands.",
 ];
 
 const COGNITION_ENTRY_TYPES: ReadonlySet<string> = new Set([
@@ -200,8 +200,8 @@ export function renderBundleMarkdown(input: RenderBundleInput): string {
     `- Browse a domain: \`GET ${origin}/api/v1/knowledge?domain=<domain>\``,
     `- Full entry body: \`GET ${origin}/api/v1/knowledge/{id}\``,
     `- Discovery doc: \`GET ${origin}/.well-known/agent.json\``,
-    "- Contribute durable knowledge: `/contribute-knowledge-to-cogni` (recall both planes → refine in place > write new; a new entry nearly always cites an existing one — link across planes, don't island)",
-    `- Link to existing knowledge: add a citation edge in your edit — \`POST ${origin}/api/v1/knowledge/contributions/{id}/commits\` with \`{op:"cite", citingId, citedId, citationType}\`. Cross-plane cites (target already merged to main) resolve and stay valid post-merge.`,
+    "- Contribute durable knowledge: `/contribute-knowledge-to-cogni` (refine in place > write new).",
+    `- Cite an existing entry in your edit: \`POST ${origin}/api/v1/knowledge/contributions/{id}/commits\` with \`{op:"cite", citingId, citedId, citationType}\` — cross-plane cites (target on main) resolve and stay valid post-merge.`,
     "",
   ].join("\n");
 }
