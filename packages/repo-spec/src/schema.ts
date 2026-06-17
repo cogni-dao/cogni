@@ -80,6 +80,113 @@ export const governanceSpecSchema = z.object({
 
 export type GovernanceSpec = z.infer<typeof governanceSpecSchema>;
 
+// ---------------------------------------------------------------------------
+// Node-facing recurring-work schedules (story.5008 / task.5030)
+// ---------------------------------------------------------------------------
+
+/**
+ * Schema for a single node-facing schedule entry.
+ *
+ * This is the left edge a node owns (CATALOG_IS_SSOT / node-baas "node declares
+ * shape, operator wires env"): a node declares a recurring job in its own
+ * repo-spec; the operator runs it on schedule under that node's tenant identity.
+ *
+ * Invariants (review G3 — node↔Temporal tenant interface):
+ *   - WORKFLOWTYPE_FROM_ROUTE_XOR_GRAPH: exactly one of `route` (http-dispatch →
+ *     NodeTaskWorkflow) or `graph` (graph run → GraphRunWorkflow) is set. There is
+ *     NO node-facing `target` enum — that is operator vocabulary; the workflowType
+ *     is *inferred* from which field is present (route XOR graph).
+ *   - PLATFORM_OVERLAP_AND_CATCHUP: `overlap`/`catchupWindow` are NOT node-facing.
+ *     They are platform invariants the operator fixes (OVERLAP_SKIP_DEFAULT /
+ *     CATCHUP_WINDOW_ZERO). The schema does not accept them — a node cannot tune them.
+ *   - ROUTE_IS_RELATIVE: `route` is a relative path on the node's own resolved host
+ *     (operator allow-lists it to the node's nodeUrl — never an absolute/foreign URL).
+ *   - PAYLOAD_OPAQUE: `payload` is opaque to the operator; the node's route owns its
+ *     meaning. The operator forwards it verbatim inside the NodeTaskInput envelope.
+ *   - `id` is stable → it derives both the scheduleId and the Temporal workflowId
+ *     (`node-task:{node}:{id}` — WORKFLOW_ID_STABILITY).
+ */
+export const nodeScheduleSchema = z
+  .object({
+    /** Stable schedule id — derives scheduleId + workflowId. Lowercase kebab token. */
+    id: z
+      .string()
+      .regex(
+        /^[a-z][a-z0-9-]{0,63}$/,
+        "id must be a lowercase kebab token (max 64 chars)"
+      ),
+    /** 5-field cron expression (minute hour day month weekday) */
+    cron: z
+      .string()
+      .regex(
+        /^(\S+\s+){4}\S+$/,
+        "Cron must be a 5-field expression (minute hour day month weekday)"
+      ),
+    /** IANA timezone (defaults to UTC) */
+    timezone: z.string().default("UTC"),
+    /**
+     * Relative HTTP route on the node's OWN host (http-dispatch). The operator
+     * dispatches POST {nodeUrl}{route} under the node's tenant principal. Mutually
+     * exclusive with `graph`. Must be a leading-slash relative path (no host, no scheme).
+     */
+    route: z
+      .string()
+      .regex(
+        /^\/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$/,
+        "route must be a relative path beginning with '/' on the node's own host (no scheme/host)"
+      )
+      .optional(),
+    /** Graph id to execute (graph run → GraphRunWorkflow). Mutually exclusive with `route`. */
+    graph: z.string().min(1).optional(),
+    /**
+     * Opaque job payload forwarded verbatim to the node's route / graph input.
+     * The operator never interprets it; the node's handler owns its meaning.
+     */
+    payload: z.record(z.string(), z.unknown()).default({}),
+  })
+  .strict()
+  .superRefine((entry, ctx) => {
+    const hasRoute = entry.route !== undefined;
+    const hasGraph = entry.graph !== undefined;
+    // WORKFLOWTYPE_FROM_ROUTE_XOR_GRAPH — exactly one
+    if (hasRoute === hasGraph) {
+      ctx.addIssue({
+        code: "custom",
+        message:
+          "Exactly one of `route` (http-dispatch) or `graph` (graph run) must be set per schedule",
+      });
+    }
+    // ROUTE_IS_RELATIVE — reject anything that smells like an absolute/foreign URL
+    if (
+      hasRoute &&
+      entry.route &&
+      /^[a-z][a-z0-9+.-]*:\/\//i.test(entry.route)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["route"],
+        message:
+          "route must not be an absolute URL — relative path on the node's own host only",
+      });
+    }
+  });
+
+export type NodeScheduleSpec = z.infer<typeof nodeScheduleSchema>;
+
+/**
+ * Node-facing `schedules` block.
+ * Optional — existing deployments without recurring work continue to work.
+ * Duplicate ids are rejected (each id maps to one stable schedule/workflow).
+ */
+export const nodeSchedulesSchema = z
+  .array(nodeScheduleSchema)
+  .default([])
+  .refine((arr) => new Set(arr.map((s) => s.id)).size === arr.length, {
+    message: "Duplicate schedule ids in schedules[]",
+  });
+
+export type NodeSchedules = z.infer<typeof nodeSchedulesSchema>;
+
 /**
  * Schema for activity_ledger section — epoch and ingestion configuration.
  */
@@ -410,6 +517,15 @@ export const repoSpecSchema = z
 
     /** Governance schedule configuration (optional — defaults to empty schedules) */
     governance: governanceSpecSchema.optional().default({ schedules: [] }),
+
+    /**
+     * Node-facing recurring-work schedules (story.5008). The node declares
+     * recurring jobs; the operator reconciles them into Temporal Schedules under
+     * the node's tenant identity (see syncNodeSchedules). Optional — defaults to
+     * empty. Distinct from `governance.schedules` (operator charters): this is the
+     * node-author-facing contract (route XOR graph; no operator vocab leak).
+     */
+    schedules: nodeSchedulesSchema.optional().default([]),
 
     /** PR review gate configuration (optional — gates run in declared order). */
     gates: gatesArraySchema.optional(),

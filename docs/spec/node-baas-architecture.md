@@ -71,9 +71,51 @@ A sovereign node must be able to change these without an operator code PR:
 | Secrets          | `.cogni/secrets-catalog.yaml` key declarations             | create OpenBao paths, ESO manifests, and per-env values                          |
 | Storage          | `.cogni/node.yaml` bucket/object declarations              | provision object store credentials and lifecycle policy                          |
 | Streams          | `.cogni/node.yaml` stream declarations and event contracts | provision Redis/SSE/WebSocket substrate when enabled                             |
+| Recurring work   | `.cogni/repo-spec.yaml` `schedules[]` (cron + route/graph) | reconcile into Temporal Schedules under the node's tenant identity (see below)   |
 | Runtime shape    | `k8s/base`, health endpoints, ports                        | render overlays, AppSets, gateway routes                                         |
 
 The operator may reject invalid declarations, but it should not require a root package or infra code edit for routine node evolution.
+
+### Node→Temporal seam (recurring work)
+
+Recurring work is a node-controlled surface that fits the same CATALOG_IS_SSOT split:
+**the node declares the schedule shape; the operator wires it into Temporal under
+that node's tenant identity** — the node writes zero Temporal code and the operator
+adds zero per-node code.
+
+```yaml
+# .cogni/repo-spec.yaml
+schedules:
+  - id: metrics-ingest # stable → scheduleId + workflowId
+    cron: "*/15 * * * *"
+    timezone: UTC
+    route: /api/internal/ops/metrics-ingest # http-dispatch: relative path on the node's OWN host
+    payload: { window: "15m" } # opaque to operator; the node's route owns its meaning
+  - id: nightly-report
+    cron: "0 0 * * *"
+    graph: sandbox:openclaw # graph run instead of http-dispatch
+```
+
+Contract (the seam, not the implementation):
+
+| Node declares                                  | Operator wires                                                                                                                                                           |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `id`, `cron`, `timezone`                       | the Temporal Schedule (cronExpressions + timezone)                                                                                                                       |
+| `route` **XOR** `graph`                        | the workflowType — **inferred** (`route` → `NodeTaskWorkflow`, `graph` → `GraphRunWorkflow`); there is no node-facing `target` enum (operator vocab stays operator-side) |
+| `payload`                                      | forwarded verbatim inside the workflow input envelope                                                                                                                    |
+| _(nothing)_                                    | `overlap: skip` + `catchupWindow: 0s` — **platform invariants**, operator-fixed, never node-tunable                                                                      |
+| _(nothing — pinned from the node's `node_id`)_ | the tenant identity: a per-node `ExecutionGrant` + per-node dispatch principal; `workflowId = node-task:{node}:{scheduleId}`                                             |
+
+Security boundary (M8): the schedule's `nodeId` is **operator-pinned to the repo-spec's
+own `node_id`** (`extractNodeSchedules`), never free-text — a repo-spec is structurally
+incapable of authoring a schedule for a foreign node. `route` is a relative path on the
+node's own resolved host (no absolute/foreign URL — SSRF / cross-tenant guard).
+
+Reconciliation (`syncNodeSchedules`, `@cogni/scheduler-core`) is `SYSTEM_OPS_ONLY`
+(CRUD_AUTHORITY) — it runs at node provision/flight + decommission, advisory-locked,
+**never a node-callable API**. Decommission pauses the node's schedules and revokes its
+grants (M7 teardown). The full execution model — `NodeTaskWorkflow`, grant↔node binding,
+the per-node dispatch principal — lives in [Temporal Patterns § Node-as-tenant](./temporal-patterns.md).
 
 ## Node-at-Repo-Root Layout
 
