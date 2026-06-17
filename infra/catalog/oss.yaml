@@ -7,10 +7,12 @@ image_tag_suffix: "-oss"
 migrator_tag_suffix: "-oss-migrate"
 source_repo: https://github.com/Cogni-DAO/oss.git
 image_repository: ghcr.io/cogni-dao/oss
+# Accepted deploy SHA — catalog pin replacing the gitlink (CATALOG_SOURCE_SHA_IS_THE_DEPLOY_PIN).
+source_sha: bb604a03673e75cf0d07ba48b1f03ddca5c34dcb
 candidate_a_branch: deploy/candidate-a-oss
 preview_branch: deploy/preview-oss
 production_branch: deploy/production-oss
 # task.5017 — per-env node-set (deploy ⊆ provisioned). Must include candidate-a (candidate-flightable); preview/production are opt-in once proven.
-envs: [candidate-a, preview]
+envs: [candidate-a, preview, production]
 path_prefix: nodes/oss/
 node_id: 4d7ffb44-fc26-4a55-864f-eff9fbc8aba1
