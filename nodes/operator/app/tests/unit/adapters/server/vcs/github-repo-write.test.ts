@@ -1198,3 +1198,214 @@ describe("GitHubRepoWriter.dispatchNodePromote", () => {
     ).toBeUndefined();
   });
 });
+
+describe("GitHubRepoWriter.syncCanonicalFilesToFork", () => {
+  const SOURCE_SHA = "abcdef1234567890abcdef1234567890abcdef12";
+  const BRANCH = "cogni-operator/sync-canonical-abcdef12";
+  const b64 = (s: string) => Buffer.from(s, "utf-8").toString("base64");
+  const fileBlob = (content: string) => ({
+    type: "file" as const,
+    encoding: "base64" as const,
+    content: b64(content),
+  });
+
+  // Dispatch one shared `GET .../contents/{path}` handler by repo (source vs fork) + path.
+  function contentsHandler(
+    source: Record<string, string>,
+    fork: Record<string, string | null>
+  ): RouteHandler {
+    return (params) => {
+      const repo = String(params.repo);
+      const path = String(params.path);
+      const table = repo === "node-template" ? source : fork;
+      const content = table[path];
+      if (content === undefined || content === null) {
+        throw statusError(404, `not found: ${repo}/${path}`);
+      }
+      return fileBlob(content);
+    };
+  }
+
+  function syncInput() {
+    return {
+      sourceOwner: "Cogni-DAO",
+      sourceRepo: "node-template",
+      sourceRef: SOURCE_SHA,
+      targetOwner: "cogni-test-org",
+      targetRepo: "test-cog",
+      slug: "test-cog",
+      canonicalPaths: [
+        ".github/workflows/ci.yaml",
+        ".github/workflows/pr-build.yml",
+        ".github/workflows/pr-lint.yaml",
+      ],
+    };
+  }
+
+  it("returns no_changes (no tree/commit/PR) when every canonical file is byte-identical", async () => {
+    const identical = {
+      ".github/workflows/ci.yaml": "CI\n",
+      ".github/workflows/pr-build.yml": "BUILD\n",
+      ".github/workflows/pr-lint.yaml": "LINT\n",
+    };
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": contentsHandler(
+        identical,
+        identical
+      ),
+    };
+
+    const result = await makeWriter().syncCanonicalFilesToFork(syncInput());
+
+    expect(result).toEqual({
+      status: "no_changes",
+      branch: BRANCH,
+      changedPaths: [],
+    });
+    const routes = requests.map((r) => r.route);
+    expect(routes).not.toContain("POST /repos/{owner}/{repo}/git/trees");
+    expect(routes).not.toContain("POST /repos/{owner}/{repo}/pulls");
+  });
+
+  it("commits only changed/missing files as one tree and opens one PR on the stable branch", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": contentsHandler(
+        {
+          ".github/workflows/ci.yaml": "CI-NEW\n",
+          ".github/workflows/pr-build.yml": "BUILD\n",
+          ".github/workflows/pr-lint.yaml": "LINT\n",
+        },
+        {
+          ".github/workflows/ci.yaml": "CI-OLD\n", // differs → changed
+          ".github/workflows/pr-build.yml": null, // missing on fork → changed
+          ".github/workflows/pr-lint.yaml": "LINT\n", // identical → skipped
+        }
+      ),
+      "POST /repos/{owner}/{repo}/git/blobs": (params) => {
+        const content = Buffer.from(String(params.content), "base64").toString(
+          "utf-8"
+        );
+        if (content === "CI-NEW\n") return { sha: "blob-ci" };
+        if (content === "BUILD\n") return { sha: "blob-build" };
+        throw new Error(`Unexpected blob content: ${content}`);
+      },
+      "GET /repos/{owner}/{repo}/git/ref/{ref}": (params) => {
+        expect(params).toMatchObject({
+          owner: "cogni-test-org",
+          repo: "test-cog",
+          ref: "heads/main",
+        });
+        return { object: { sha: "fork-main" } };
+      },
+      "GET /repos/{owner}/{repo}/git/commits/{commit_sha}": (params) => {
+        expect(params).toMatchObject({ commit_sha: "fork-main" });
+        return { tree: { sha: "fork-tree" } };
+      },
+      "POST /repos/{owner}/{repo}/git/trees": (params) => {
+        expect(params).toMatchObject({
+          owner: "cogni-test-org",
+          repo: "test-cog",
+          base_tree: "fork-tree",
+        });
+        expect(params.tree).toEqual([
+          {
+            path: ".github/workflows/ci.yaml",
+            mode: "100644",
+            type: "blob",
+            sha: "blob-ci",
+          },
+          {
+            path: ".github/workflows/pr-build.yml",
+            mode: "100644",
+            type: "blob",
+            sha: "blob-build",
+          },
+        ]);
+        return { sha: "mirror-tree" };
+      },
+      "POST /repos/{owner}/{repo}/git/commits": (params) => {
+        expect(params).toMatchObject({
+          tree: "mirror-tree",
+          parents: ["fork-main"],
+        });
+        return { sha: "mirror-commit" };
+      },
+      "POST /repos/{owner}/{repo}/git/refs": (params) => {
+        expect(params).toMatchObject({
+          ref: `refs/heads/${BRANCH}`,
+          sha: "mirror-commit",
+        });
+        return {};
+      },
+      "POST /repos/{owner}/{repo}/pulls": (params) => {
+        expect(params).toMatchObject({ head: BRANCH, base: "main" });
+        expect(String(params.title)).toContain("abcdef12");
+        return {
+          number: 7,
+          html_url: "https://github.com/cogni-test-org/test-cog/pull/7",
+        };
+      },
+    };
+
+    const result = await makeWriter().syncCanonicalFilesToFork(syncInput());
+
+    expect(result).toEqual({
+      status: "pr_opened",
+      branch: BRANCH,
+      prNumber: 7,
+      prUrl: "https://github.com/cogni-test-org/test-cog/pull/7",
+      changedPaths: [
+        ".github/workflows/ci.yaml",
+        ".github/workflows/pr-build.yml",
+      ],
+    });
+  });
+
+  it("reuses an existing open PR for the stable branch instead of opening a second", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": contentsHandler(
+        { ".github/workflows/ci.yaml": "CI-NEW\n" },
+        { ".github/workflows/ci.yaml": "CI-OLD\n" }
+      ),
+      "POST /repos/{owner}/{repo}/git/blobs": () => ({ sha: "blob-ci" }),
+      "GET /repos/{owner}/{repo}/git/ref/{ref}": () => ({
+        object: { sha: "fork-main" },
+      }),
+      "GET /repos/{owner}/{repo}/git/commits/{commit_sha}": () => ({
+        tree: { sha: "fork-tree" },
+      }),
+      "POST /repos/{owner}/{repo}/git/trees": () => ({ sha: "mirror-tree" }),
+      "POST /repos/{owner}/{repo}/git/commits": () => ({
+        sha: "mirror-commit",
+      }),
+      "POST /repos/{owner}/{repo}/git/refs": () =>
+        Promise.reject(statusError(422, "Reference already exists")),
+      "PATCH /repos/{owner}/{repo}/git/refs/{ref}": () => ({}),
+      "POST /repos/{owner}/{repo}/pulls": () =>
+        Promise.reject(statusError(422, "A pull request already exists")),
+      "GET /repos/{owner}/{repo}/pulls": (params) => {
+        expect(params).toMatchObject({
+          state: "open",
+          head: `cogni-test-org:${BRANCH}`,
+        });
+        return [
+          {
+            number: 9,
+            html_url: "https://github.com/cogni-test-org/test-cog/pull/9",
+          },
+        ];
+      },
+    };
+
+    const result = await makeWriter().syncCanonicalFilesToFork({
+      ...syncInput(),
+      canonicalPaths: [".github/workflows/ci.yaml"],
+    });
+
+    expect(result).toMatchObject({
+      status: "pr_opened",
+      branch: BRANCH,
+      prNumber: 9,
+    });
+  });
+});

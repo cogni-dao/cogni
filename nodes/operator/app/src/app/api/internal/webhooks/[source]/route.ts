@@ -15,6 +15,7 @@
  */
 
 import { NextResponse } from "next/server";
+import { dispatchCanonicalForkSync } from "@/app/_facades/deploy/canonical-fork-sync.server";
 import { dispatchNodePreviewPromote } from "@/app/_facades/deploy/node-preview-promote.server";
 import { dispatchPrReview } from "@/app/_facades/review/dispatch.server";
 import { getContainer } from "@/bootstrap/container";
@@ -131,6 +132,12 @@ export async function POST(
       dispatchNodePreviewPromote(payload, env, log);
     }
 
+    // node-template merge→main → mirror canonical content to every child fork (one PR each).
+    if (source === "github" && eventType === "push") {
+      const payload = JSON.parse(bodyBuffer.toString("utf-8"));
+      dispatchCanonicalForkSync(payload, env, log);
+    }
+
     if (source === "alchemy") {
       const payload = JSON.parse(bodyBuffer.toString("utf-8"));
       dispatchSignalExecution(payload, env, log);
@@ -166,6 +173,11 @@ export async function POST(
       const payload = JSON.parse(bodyBuffer.toString("utf-8"));
       dispatchPrReview(payload, env, log);
       dispatchNodePreviewPromote(payload, env, log);
+    }
+
+    if (source === "github" && eventType === "push") {
+      const payload = JSON.parse(bodyBuffer.toString("utf-8"));
+      dispatchCanonicalForkSync(payload, env, log);
     }
 
     if (source === "alchemy") {

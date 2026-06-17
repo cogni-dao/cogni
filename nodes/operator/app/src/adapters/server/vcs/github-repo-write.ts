@@ -32,11 +32,16 @@ import { z } from "zod";
 
 import type {
   CandidateFlightDispatchResult,
+  CatalogForkTarget,
+  MirrorCanonicalFilesInput,
+  MirrorCanonicalFilesResult,
   NodePreviewPromoteResult,
   OperatorDeployPlanePort,
   PreparedNodeRefCandidateFlight,
   PrepareNodeRefCandidateFlightInput,
   PromoteNodeToPreviewInput,
+  SyncTemplateUpstreamInput,
+  SyncTemplateUpstreamResult,
 } from "@/ports";
 import {
   insertAppsetKustomization,
@@ -148,6 +153,9 @@ const NODE_REPO_REQUIRED_WORKFLOWS = [
   ".github/workflows/pr-lint.yaml",
 ] as const;
 
+/** Stable head-branch prefix for the forward-mirror PR (BRANCH_IS_IDEMPOTENCY_KEY). */
+const MIRROR_BRANCH_PREFIX = "cogni-operator/sync-canonical-";
+
 const CatalogEntrySchema = z.object({
   name: z.string(),
   type: z.literal("node"),
@@ -201,6 +209,34 @@ function deployPlaneError(
   status: number
 ): Error & { readonly code: string; readonly status: number } {
   return Object.assign(new Error(message), { code, status });
+}
+
+/** Slugs that are catalog `type: node` but are never fork-sync targets. */
+const FORK_SYNC_EXCLUDED_SLUGS = new Set(["node-template", "operator"]);
+
+/**
+ * Pure: one `infra/catalog/<slug>.yaml` body → a fork target, or null. Null when the row is not a
+ * `type: node` with a parseable `source_repo`, or the slug is the source/hub. Exported for unit tests.
+ */
+export function catalogYamlToForkTarget(
+  slug: string,
+  yamlText: string
+): CatalogForkTarget | null {
+  if (FORK_SYNC_EXCLUDED_SLUGS.has(slug)) return null;
+  let parsed: unknown;
+  try {
+    parsed = parseYaml(yamlText);
+  } catch {
+    return null;
+  }
+  const row = parsed as { type?: unknown; source_repo?: unknown };
+  if (row?.type !== "node" || typeof row.source_repo !== "string") return null;
+  try {
+    const { owner, repo } = parseGithubRepoUrl(row.source_repo);
+    return { owner, name: repo, slug };
+  } catch {
+    return null;
+  }
 }
 
 // Node-content rename/delete (NODE_RENAME_PATHS / NODE_DELETE_PATHS) is gone with the inline
@@ -528,6 +564,251 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
         return Buffer.from(data.content, "base64").toString("utf-8");
       }
       return this.readBlob(octokit, input.owner, input.repo, data.sha);
+    } catch (error) {
+      if ((error as { status?: number })?.status === 404) return null;
+      throw error;
+    }
+  }
+
+  async syncCanonicalFilesToFork(
+    input: MirrorCanonicalFilesInput
+  ): Promise<MirrorCanonicalFilesResult> {
+    const {
+      sourceOwner,
+      sourceRepo,
+      sourceRef,
+      targetOwner,
+      targetRepo,
+      slug,
+      canonicalPaths,
+    } = input;
+
+    const srcOctokit = await this.getOctokit(sourceOwner, sourceRepo);
+    const tgtOctokit = await this.getOctokit(targetOwner, targetRepo);
+
+    // Resolve the canonical content version → a deterministic, idempotent head branch.
+    const sourceSha = await this.resolveCommitSha(
+      srcOctokit,
+      sourceOwner,
+      sourceRepo,
+      sourceRef
+    );
+    const shortSha = sourceSha.slice(0, 8);
+    const branch = `${MIRROR_BRANCH_PREFIX}${shortSha}`;
+
+    // Read each canonical file from source@sourceSha; diff against the fork's main; keep changed-only.
+    const changedPaths: string[] = [];
+    const entries: GitTreeEntry[] = [];
+    for (const path of canonicalPaths) {
+      const sourceContent = await this.readFileAtRef(
+        srcOctokit,
+        sourceOwner,
+        sourceRepo,
+        path,
+        sourceSha
+      );
+      if (sourceContent === null) {
+        throw deployPlaneError(
+          "canonical_missing",
+          `canonical file ${path} not found in ${sourceOwner}/${sourceRepo}@${shortSha}`,
+          422
+        );
+      }
+      const targetContent = await this.readFileAtRef(
+        tgtOctokit,
+        targetOwner,
+        targetRepo,
+        path,
+        "main"
+      );
+      if (targetContent === sourceContent) continue;
+      changedPaths.push(path);
+      const blobSha = await this.createBlob(
+        tgtOctokit,
+        targetOwner,
+        targetRepo,
+        sourceContent
+      );
+      entries.push({ path, mode: "100644", type: "blob", sha: blobSha });
+    }
+
+    if (entries.length === 0) {
+      return { status: "no_changes", branch, changedPaths: [] };
+    }
+
+    const { baseCommitSha, baseTreeSha } = await this.resolveMainBase(
+      tgtOctokit,
+      targetOwner,
+      targetRepo
+    );
+    const fileList = changedPaths.map((p) => `- \`${p}\``).join("\n");
+    const { prNumber, prUrl } = await this.commitTreeAndOpenPr(
+      tgtOctokit,
+      targetOwner,
+      targetRepo,
+      slug,
+      {
+        baseCommitSha,
+        baseTreeSha,
+        entries,
+        message: `chore: sync ${changedPaths.length} canonical file(s) from ${sourceOwner}/${sourceRepo}@${shortSha}`,
+        branch,
+        pr: {
+          title: `chore: sync canonical node-template files (${shortSha})`,
+          body:
+            `Operator-authored forward-mirror of canonical node-template content from ` +
+            `\`${sourceOwner}/${sourceRepo}@${shortSha}\` (App-direct via Git Data API). ` +
+            `The mirrored set is whatever canonical paths the caller declares — CI workflows, ` +
+            `scripts, package manifests, or any other operator-scope file — not CI alone.\n\n` +
+            `Changed files:\n${fileList}\n`,
+        },
+      }
+    );
+    return { status: "pr_opened", branch, prNumber, prUrl, changedPaths };
+  }
+
+  async listCatalogForkTargets(input: {
+    parentOwner: string;
+    parentRepo: string;
+  }): Promise<readonly CatalogForkTarget[]> {
+    const { parentOwner, parentRepo } = input;
+    const octokit = await this.getOctokit(parentOwner, parentRepo);
+    let entries: Array<{ name: string; type: string }>;
+    try {
+      const { data } = await octokit.request(
+        "GET /repos/{owner}/{repo}/contents/{path}",
+        {
+          owner: parentOwner,
+          repo: parentRepo,
+          path: "infra/catalog",
+          ref: "main",
+        }
+      );
+      entries = Array.isArray(data)
+        ? (data as Array<{ name: string; type: string }>)
+        : [];
+    } catch (error) {
+      if ((error as { status?: number })?.status === 404) return [];
+      throw error;
+    }
+    const targets: CatalogForkTarget[] = [];
+    for (const entry of entries) {
+      if (entry.type !== "file" || !entry.name.endsWith(".yaml")) continue;
+      const slug = entry.name.replace(/\.yaml$/, "");
+      if (FORK_SYNC_EXCLUDED_SLUGS.has(slug)) continue;
+      const text = await this.fetchFileText({
+        owner: parentOwner,
+        repo: parentRepo,
+        path: `infra/catalog/${entry.name}`,
+      });
+      if (!text) continue;
+      const target = catalogYamlToForkTarget(slug, text);
+      if (target) targets.push(target);
+    }
+    return targets;
+  }
+
+  async syncTemplateUpstreamToFork(
+    input: SyncTemplateUpstreamInput
+  ): Promise<SyncTemplateUpstreamResult> {
+    const {
+      templateOwner,
+      templateRepo,
+      templateSha,
+      forkOwner,
+      forkRepo,
+      forkBranch,
+    } = input;
+    // Same-org cross-fork PRs can't disambiguate by `owner:branch` (template + fork share an owner →
+    // GitHub resolves head to the base repo → false "up to date"). Instead materialize the upstream
+    // commit as a branch IN the fork (the SHA is reachable via the shared fork network), then open a
+    // SAME-repo PR head=that branch → base=fork main. The diff is exactly the un-merged upstream deltas.
+    const octokit = await this.getOctokit(forkOwner, forkRepo);
+    const branch = `cogni-operator/upstream-${templateSha.slice(0, 8)}`;
+    try {
+      await octokit.request("POST /repos/{owner}/{repo}/git/refs", {
+        owner: forkOwner,
+        repo: forkRepo,
+        ref: `refs/heads/${branch}`,
+        sha: templateSha,
+      });
+    } catch (err) {
+      const status = (err as { status?: number })?.status;
+      if (status !== 422) throw err; // 422 = ref already exists (idempotent re-run)
+    }
+    const title = `chore: merge node-template upstream (${templateSha.slice(0, 8)})`;
+    const body =
+      `Optional Tier-2 sync: merges node-template app/graphs/runtime improvements from ` +
+      `\`${templateOwner}/${templateRepo}@${templateSha.slice(0, 8)}\` into this fork, preserving your ` +
+      `customizations (review + resolve conflicts as the fork owner). The required CI/contract files ` +
+      `arrive separately as a surgical Tier-1 PR that always applies cleanly.`;
+    try {
+      const { data: pr } = await octokit.request(
+        "POST /repos/{owner}/{repo}/pulls",
+        {
+          owner: forkOwner,
+          repo: forkRepo,
+          title,
+          body,
+          head: branch,
+          base: forkBranch,
+        }
+      );
+      return { status: "pr_opened", prNumber: pr.number, prUrl: pr.html_url };
+    } catch (err) {
+      const status = (err as { status?: number })?.status;
+      if (status !== 422) throw err;
+      // 422 = open PR already exists for this head, or no commits between (fork already up to date).
+      const { data: existing } = await octokit.request(
+        "GET /repos/{owner}/{repo}/pulls",
+        {
+          owner: forkOwner,
+          repo: forkRepo,
+          state: "open",
+          head: `${forkOwner}:${branch}`,
+          per_page: 1,
+        }
+      );
+      const pr = existing[0];
+      return pr
+        ? { status: "pr_opened", prNumber: pr.number, prUrl: pr.html_url }
+        : { status: "up_to_date" };
+    }
+  }
+
+  /** Resolve a ref to a 40-char commit SHA: pass-through if already a SHA, else look up `heads/<ref>`. */
+  private async resolveCommitSha(
+    octokit: Octokit,
+    owner: string,
+    repo: string,
+    ref: string
+  ): Promise<string> {
+    if (SOURCE_SHA_PATTERN.test(ref)) return ref;
+    const { data } = await octokit.request(
+      "GET /repos/{owner}/{repo}/git/ref/{ref}",
+      { owner, repo, ref: `heads/${ref}` }
+    );
+    return data.object.sha;
+  }
+
+  /** Read a file's UTF-8 contents at any ref; null on 404. Blob fallback for >1MB files. */
+  private async readFileAtRef(
+    octokit: Octokit,
+    owner: string,
+    repo: string,
+    path: string,
+    ref: string
+  ): Promise<string | null> {
+    try {
+      const { data } = await octokit.request(
+        "GET /repos/{owner}/{repo}/contents/{path}",
+        { owner, repo, path, ref }
+      );
+      if (Array.isArray(data) || data.type !== "file") return null;
+      if (data.encoding === "base64" && data.content) {
+        return Buffer.from(data.content, "base64").toString("utf-8");
+      }
+      return this.readBlob(octokit, owner, repo, data.sha);
     } catch (error) {
       if ((error as { status?: number })?.status === 404) return null;
       throw error;
@@ -874,6 +1155,7 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       entries: GitTreeEntry[];
       message: string;
       branch: string;
+      pr?: { title: string; body: string };
     }
   ): Promise<OpenNodeAppPrResult> {
     const { data: finalTree } = await octokit.request(
@@ -891,7 +1173,7 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       }
     );
     await this.upsertRef(octokit, owner, repo, args.branch, commit.sha);
-    return this.openOrFindPr(octokit, owner, repo, slug, args.branch);
+    return this.openOrFindPr(octokit, owner, repo, slug, args.branch, args.pr);
   }
 
   /** Resolve the next free NodePort: read each `infra/catalog/*.yaml` `node_port`, then `+100`. */
@@ -1229,14 +1511,16 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
     owner: string,
     repo: string,
     slug: string,
-    branch: string
+    branch: string,
+    pr?: { title: string; body: string }
   ): Promise<OpenNodeAppPrResult> {
-    const title = `feat(node): bootstrap node-app for ${slug}`;
+    const title = pr?.title ?? `feat(node): bootstrap node-app for ${slug}`;
     const body =
+      pr?.body ??
       `Operator-authored node-formation PR for \`${slug}\` (App-direct via Git Data API).\n\n` +
-      "Pins the minted node repo as a submodule and adds the operator-owned deployment footprint: " +
-      "catalog entry, overlays×3, AppSet stanzas×3, and edge route. The node source, CI, review " +
-      "rules, image build, and ExternalSecret leaves live in the minted node repo.";
+        "Pins the minted node repo as a submodule and adds the operator-owned deployment footprint: " +
+        "catalog entry, overlays×3, AppSet stanzas×3, and edge route. The node source, CI, review " +
+        "rules, image build, and ExternalSecret leaves live in the minted node repo.";
     try {
       const { data: pr } = await octokit.request(
         "POST /repos/{owner}/{repo}/pulls",

@@ -158,11 +158,16 @@ export type {
 } from "./onchain-verifier.port";
 export type {
   CandidateFlightDispatchResult,
+  CatalogForkTarget,
+  MirrorCanonicalFilesInput,
+  MirrorCanonicalFilesResult,
   NodePreviewPromoteResult,
   OperatorDeployPlanePort,
   PreparedNodeRefCandidateFlight,
   PrepareNodeRefCandidateFlightInput,
   PromoteNodeToPreviewInput,
+  SyncTemplateUpstreamInput,
+  SyncTemplateUpstreamResult,
 } from "./operator-deploy-plane.port";
 export type {
   OperatorSecretsPlanePort,
