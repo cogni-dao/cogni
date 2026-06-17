@@ -11,14 +11,8 @@
  * @internal
  */
 
-import {
-  type CommitFileAndOpenPrInput,
-  type CommitFileAndOpenPrResult,
-  GitHubRepoWriter,
-} from "@/adapters/server";
+import { GitHubRepoWriter } from "@/adapters/server";
 import type { ServerEnv } from "@/shared/env";
-
-export type { CommitFileAndOpenPrInput, CommitFileAndOpenPrResult };
 
 export function createNodeRepoWriter(env: ServerEnv): GitHubRepoWriter {
   if (!env.GH_REVIEW_APP_ID || !env.GH_REVIEW_APP_PRIVATE_KEY_BASE64) {

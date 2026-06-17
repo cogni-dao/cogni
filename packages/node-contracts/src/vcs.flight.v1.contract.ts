@@ -31,8 +31,6 @@ export const flightOperation = {
       sourceSha: z.string(),
       sourceRepo: z.string().url(),
       image: z.string(),
-      parentPrNumber: z.number().int().positive().optional(),
-      parentHeadSha: z.string().optional(),
     }),
     workflowUrl: z.string().url(),
     message: z.string(),

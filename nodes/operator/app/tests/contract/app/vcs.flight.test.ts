@@ -205,10 +205,6 @@ function makePreparedNodeRef(
     sourceSha: SOURCE_SHA,
     sourceRepo: "https://github.com/Cogni-DAO/creative.git",
     image: `ghcr.io/cogni-dao/creative:sha-${SOURCE_SHA}`,
-    parentPin: {
-      status: "already_pinned",
-      currentSha: SOURCE_SHA,
-    },
     ...overrides,
   };
 }
@@ -506,17 +502,9 @@ describe("POST /api/v1/vcs/flight", () => {
     });
   });
 
-  it("dispatches node-ref candidate flight when a parent pin PR was opened", async () => {
+  it("dispatches node-ref candidate flight source-addressed, with no catalog pin PR", async () => {
     mockDeployPlane.prepareNodeRefCandidateFlight.mockResolvedValue(
-      makePreparedNodeRef({
-        parentPin: {
-          status: "pin_pr_opened",
-          currentSha: null,
-          prNumber: 77,
-          prUrl: "https://github.com/test-owner/test-repo/pull/77",
-          parentHeadSha: "1111111111111111111111111111111111111111",
-        },
-      })
+      makePreparedNodeRef()
     );
     mockDeployPlane.dispatchNodeRefCandidateFlight.mockResolvedValue(
       makeDispatchResult("Candidate flight dispatched for creative@01234567.")
@@ -534,10 +522,11 @@ describe("POST /api/v1/vcs/flight", () => {
         });
         expect(res.status).toBe(202);
         const body = await res.json();
-        expect(body.nodeRef.parentPrNumber).toBe(77);
-        expect(body.nodeRef.parentHeadSha).toBe(
-          "1111111111111111111111111111111111111111"
-        );
+        // Candidate flight is source-addressed (ONE_PROMOTION_PRIMITIVE,
+        // MAIN_WRITE_IS_GOVERNANCE_ONLY): no pin PR is opened on `main`, so the
+        // response carries no parent-pin provenance.
+        expect(body.nodeRef.parentPrNumber).toBeUndefined();
+        expect(body.nodeRef.parentHeadSha).toBeUndefined();
         expect(
           mockDeployPlane.dispatchNodeRefCandidateFlight
         ).toHaveBeenCalledWith({
@@ -552,8 +541,6 @@ describe("POST /api/v1/vcs/flight", () => {
           status: 202,
           nodeId: NODE_ID,
           slug: "creative",
-          parentPrNumber: 77,
-          pinStatus: "pin_pr_opened",
           dispatchStatus: "initiated",
         });
       },

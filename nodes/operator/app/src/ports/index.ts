@@ -159,7 +159,6 @@ export type {
 export type {
   CandidateFlightDispatchResult,
   NodePreviewPromoteResult,
-  NodeRefParentPin,
   OperatorDeployPlanePort,
   PreparedNodeRefCandidateFlight,
   PrepareNodeRefCandidateFlightInput,

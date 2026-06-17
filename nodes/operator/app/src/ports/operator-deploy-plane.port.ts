@@ -33,29 +33,12 @@ export interface PrepareNodeRefCandidateFlightInput {
   readonly sourceSha: string;
 }
 
-export type NodeRefParentPin =
-  | {
-      readonly status: "already_pinned";
-      readonly currentSha: string;
-      readonly prNumber?: undefined;
-      readonly prUrl?: undefined;
-      readonly parentHeadSha?: undefined;
-    }
-  | {
-      readonly status: "pin_pr_opened";
-      readonly currentSha: string | null;
-      readonly prNumber: number;
-      readonly prUrl: string;
-      readonly parentHeadSha: string;
-    };
-
 export interface PreparedNodeRefCandidateFlight {
   readonly nodeId: string;
   readonly slug: string;
   readonly sourceSha: string;
   readonly sourceRepo: string;
   readonly image: string;
-  readonly parentPin: NodeRefParentPin;
 }
 
 export interface PromoteNodeToPreviewInput {
