@@ -25,7 +25,8 @@
  * @public
  */
 
-import { FLIGHT_ENVS, type FlightEnv, isFlightEnv } from "./flight-status";
+import type { FlightEnv } from "@/ports";
+import { FLIGHT_ENVS, isFlightEnv } from "./flight-status";
 
 export { FLIGHT_ENVS, type FlightEnv, isFlightEnv };
 
