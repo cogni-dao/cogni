@@ -89,6 +89,10 @@ For CI failures, use `env="ci"`:
 - `env` - Environment: local | candidate-a | preview | production | ci
 - `service` - Service name (see #2 above for full list — app pods, infra
   compose containers, argocd controllers all share this label)
+- `node` - Node id (UUID) — `{env="<env>",node="<nodeId>"}` selects exactly one
+  node's app logs. Only app pod lines carry it (promoted from the pino `nodeId`
+  field; infra/control-plane lines have no `node` label). Added task.5028;
+  prefer this over the fragile `pod=~"<slug>-node-app-.*"` prefix hack.
 - `source` - `k8s` (in-cluster pod logs from cAdvisor) | `k8s-events`
   (kubernetes Events stream — pod OOMKilled, probe failures, evictions,
   rollout events; shipped by `alloy-k8s-events`). Use `source="k8s-events"`

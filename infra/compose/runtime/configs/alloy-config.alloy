@@ -87,6 +87,16 @@ loki.process "docker_logs" {
       status_code = "status",
       duration_ms = "durationMs",
       log_msg     = "msg",
+      node        = "nodeId",
+    }
+  }
+
+  // Promote the app's `nodeId` to a `node` stream label so per-node reads can select
+  // {node="<id>"} (task.5028). Low-cardinality (one value per node); only app lines that
+  // carry nodeId get the label — infra/non-JSON lines are unaffected (extracted key absent).
+  stage.labels {
+    values = {
+      node = "",
     }
   }
 
