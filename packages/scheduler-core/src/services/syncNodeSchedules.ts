@@ -6,15 +6,10 @@
  * Purpose: Reconcile a node's declarative `schedules` (repo-spec) into Temporal Schedules under that node's tenant identity. Pure orchestration — depends only on ports + injected callbacks.
  * Scope: Create/update/pause/resume Temporal schedules for each node-declared schedule; pause schedules removed from the spec; teardown (decommission) pauses schedules + revokes grants. Does NOT do tenant-facing schedule CRUD or workflow execution. Mirror of syncGovernanceSchedules for the node-as-tenant path (story.5008 / task.5030).
  * Invariants:
- *   - SYSTEM_OPS_ONLY (CRUD_AUTHORITY): runs at node provision/flight + decommission, NEVER a node-callable API; advisory-locked by the job seam (single writer).
- *   - WORKFLOW_ID_STABILITY: workflowId = `node-task:{nodeId}:{scheduleId}`; scheduleId = `node-task:{nodeId}:{id}`.
- *   - WORKFLOWTYPE_FROM_KIND: http-dispatch → NodeTaskWorkflow, graph → GraphRunWorkflow (the repo-spec inferred kind; NO operator `target` vocab in the node spec).
- *   - PLATFORM_OVERLAP_AND_CATCHUP: overlap=skip (OVERLAP_SKIP_DEFAULT) + catchupWindowMs=0 (CATCHUP_WINDOW_ZERO) are operator-fixed here, never node-tunable.
- *   - REAL_CRON_DRIFT: cron drift is detected by comparing the desired cron against the STORED cron (DB row), NOT against describeSchedule().cron (Temporal compiles crons to calendars → null). Fixes the latent bug in scheduleConfigChanged, which skips cron.
- *   - M8_NODE_PINNED: every desired schedule's nodeId is the repo-spec's own node_id (pinned upstream by extractNodeSchedules). This service additionally rejects any entry whose nodeId differs from the caller's authoritative nodeId (defense-in-depth).
- *   - PRUNE_IS_PAUSE: schedules removed from the spec are paused (reversible), never deleted.
- *   - TEARDOWN_REVOKES (M7): decommission pauses every node schedule AND revokes its grant; validation fails closed on revoked grants downstream.
- *   - PURE_ORCHESTRATION: no adapters, no Temporal client, no DB — only ports/types/callbacks.
+ *   - SYSTEM_OPS_ONLY (CRUD_AUTHORITY): provision/flight/decommission only, not node-callable, single-writer advisory lock.
+ *   - NODE_PINNED (M8): nodeId is the repo-spec own node_id, foreign-node schedules rejected.
+ *   - WORKFLOWTYPE_FROM_KIND: route to NodeTaskWorkflow, graph to GraphRunWorkflow, no operator target vocab.
+ *   - REAL_CRON_DRIFT: cron compared to STORED cron not the Temporal calendar; prune pauses, teardown revokes grants.
  * Side-effects: IO (Temporal RPC via ScheduleControlPort; DB upsert + grant mint/revoke via injected callbacks)
  * Links: docs/spec/temporal-patterns.md (node-as-tenant), docs/spec/node-baas-architecture.md (node→Temporal seam), packages/repo-spec/src/accessors.ts (extractNodeSchedules), docs/design/node-temporal-tenant-interface.md
  * @public

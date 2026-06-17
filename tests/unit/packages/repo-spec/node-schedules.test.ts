@@ -4,7 +4,7 @@
 /**
  * Module: `@tests/unit/packages/repo-spec/node-schedules`
  * Purpose: Unit tests for the node-facing `schedules` block and extractNodeSchedules() — route XOR graph inference, platform-invariant rejection, and M8 foreign-node pinning.
- * Scope: Pure schema + accessor tests. No I/O.
+ * Scope: Pure schema + accessor tests; does not perform I/O or exercise a runtime.
  * Invariants: A repo-spec cannot produce a foreign-nodeId schedule (M8); overlap/catchupWindow are not node-facing; exactly one of route/graph per entry.
  * Side-effects: none
  * Links: packages/repo-spec/src/schema.ts (nodeScheduleSchema), packages/repo-spec/src/accessors.ts (extractNodeSchedules)

@@ -4,7 +4,7 @@
 /**
  * Module: `@tests/unit/packages/scheduler-core/sync-node-schedules`
  * Purpose: Unit tests for syncNodeSchedules + teardownNodeSchedules — pure orchestration via a fake ScheduleControlPort. Proves REAL cron-drift (the latent bug fix), workflowId stability, foreign-node rejection (M8), prune-as-pause, and teardown revoke.
- * Scope: Pure service tests with in-memory fakes. No real Temporal/DB.
+ * Scope: Pure service tests with in-memory fakes; does not touch real Temporal or DB.
  * Invariants: cron change → update (not skip); workflowId/scheduleId = node-task:{node}:{id}; foreign nodeId throws; teardown pauses + revokes.
  * Side-effects: none
  * Links: packages/scheduler-core/src/services/syncNodeSchedules.ts
