@@ -13,9 +13,13 @@ tags: [temporal, node-baas, ai-graphs]
 
 # Node↔Temporal Tenant Interface
 
-> **The held vision:** a node declares a recurring job in its own repo-spec; the
-> operator runs it on schedule, under _that node's_ identity and grant — with the
-> node writing **zero** Temporal code and the operator adding **zero** per-node code.
+> **The held vision:** a node declares a recurring job in its own repo-spec; it runs
+> on schedule under _that node's_ identity and grant — with the node writing **zero**
+> Temporal code and the operator adding **zero** per-node code. The operator's **managed
+> Temporal substrate runs it by default** (a hosted convenience); a sovereign node can
+> swap in its **own Temporal + worker** behind the same contract — see _Sovereignty &
+> Scale_. The operator is the recurring-work _trigger_, never the _executor_, and never
+> in a user-request path.
 
 ## The honest finding: this is ~80% assembly, not new infrastructure
 
@@ -41,7 +45,7 @@ is narrow and specific.
 > grant↔node binding, scope-generalized grant validation, route allow-listing, and
 > per-node principal resolution are **real new primitive work the build creates** — the
 > 20%. Gap 3 below is reframed accordingly. The uniform `principal → ExecutionGrant →
-> scoped action` model is a *target this work builds*, not a property that exists today.
+scoped action` model is a _target this work builds_, not a property that exists today.
 
 ## The three gaps (and the minimal closes)
 
@@ -85,8 +89,8 @@ requirements the build MUST honor (review M-fixes):**
   is new work + tests, not reuse.
 
 This single addition unlocks recurring non-graph work for **all** nodes and becomes the
-generic "non-graph workflow" (superseding CollectEpoch's special status). *(It does not
-"retire a cron" — governance-sync is already an in-app Temporal job, not external cron.)*
+generic "non-graph workflow" (superseding CollectEpoch's special status). _(It does not
+"retire a cron" — governance-sync is already an in-app Temporal job, not external cron.)_
 
 ### Gap 2 — no node-facing declarative schedule field
 
@@ -138,9 +142,9 @@ root as the shared-LLM-account 429: shared credentials, no tenant binding).
    the build creates.
 3. **Per-node dispatch principal, FAIL-CLOSED (G1, the seam to the secrets work).** Replace
    the shared `SCHEDULER_API_TOKEN` with a `NodePrincipalResolver.resolve(nodeId) → {token} |
-   throws`. T1 ships a stub that **throws when unprovisioned** — a shared-token
+throws`. T1 ships a stub that **throws when unprovisioned** — a shared-token
    `NodeTaskWorkflow` is **not done** (CI/review gate, not prose). The credential
-   *provisioning* is the shared-secrets-on-spawn work (separate dev); this declares the slot
+   _provisioning_ is the shared-secrets-on-spawn work (separate dev); this declares the slot
    it must fill — hard sequencing dependency.
 4. **Teardown contract (M7).** The reconcile mirror (syncGovernanceSchedules) pauses a removed
    schedule but does **not** revoke its grant — so "killing a node revokes atomically" is
@@ -157,18 +161,59 @@ today's shape plus the principal binding — no namespace-per-node (heavier ops,
 need). Namespace-per-node is a documented future upgrade if cross-node noisy-neighbor
 or quota isolation at the Temporal layer is ever required.
 
+## Sovereignty & Scale — the managed scheduler is a convenience, not a lock-in
+
+> **Reframe (the "operator runs it" correction, 2026-06-17).** The operator is the
+> recurring-work **trigger**, never the **executor**. At each tick
+> `dispatchNodeTaskActivity` does `POST {nodeUrl}{route}` under the node's own grant +
+> principal — the work runs in the node's route, in the node's DB. **The operator is in
+> zero user-request paths**; a node's users hit the node directly. The operator is only
+> the cron that fires scheduled triggers, under tenant identity.
+
+"Operator runs it" is the **hosted-node** model, and it is a managed convenience — not a
+sovereignty cost — because the seam is **portable**. The same node-owned contract drives
+two swappable reconcile backends:
+
+| Model                       | Reconcile backend (cron + worker)                                               | Owner                                                             |
+| --------------------------- | ------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| **Hosted** (submodule node) | operator's managed Temporal + `scheduler-worker` (`syncNodeSchedules`)          | operator — consistent; it already owns the hosted node's plane    |
+| **Standalone-sovereign**    | the node's **own Temporal + worker**, reconciling the SAME `schedules` contract | the node — `standalone-node` sovereignty is explicitly not frozen |
+
+**`TEMPORAL_IS_SWAPPABLE_SUBSTRATE`.** The node-facing surface is two portable things: the
+declarative `schedules` repo-spec block (node-owned shape) and the `ExecutionGrant` +
+`validateGrantForScope` / `NodePrincipalResolver` ports. **Those ports are an _auth
+abstraction over a Temporal substrate the operator manages_ — a convenience, not a
+binding.** A node that wants its own scheduler swaps the Temporal + worker behind the same
+contract + port shape; nothing in its repo-spec or its route changes. Operator-managed is
+the easy default; self-hosting is a backend swap, not a rewrite.
+
+**Scale + reliability — don't bake centrality.** The managed substrate scales on standard
+Temporal patterns, and the sovereign escape hatch caps the central blast radius:
+
+- per-node task queue (`scheduler-tasks-<uuid>`, built) isolates execution today;
+- `scheduler-worker` is a **horizontal pool**, not a singleton;
+- namespace-per-node is the documented next isolation rung (_Isolation boundary_, above);
+- node-local reconcile (the standalone row) offloads a node's entire schedule volume off
+  the operator when it chooses — so "operator Temporal down → no scheduled fires" is bounded
+  to _hosted_ nodes, and any node can opt out of that dependency entirely.
+
+**The invariant this protects (`SCHEDULER_BACKEND_IS_NOT_THE_CONTRACT`):** the
+operator-managed scheduler must never become the _only_ way a node runs recurring work.
+T1/T3 build the hosted path so the contract + ports stay backend-agnostic; `syncNodeSchedules`
+and the worker must never assume a single shared Temporal is the model.
+
 ## Syntropy: graph and non-graph recurring work are ONE spine, not two
 
 The design intent is **shared primitives, not a parallel stack** — AI graph execution
-and node recurring-work run on the *same* spine, diverging only at the leaf:
+and node recurring-work run on the _same_ spine, diverging only at the leaf:
 
-| Primitive | Shared by graph + non-graph |
-| --- | --- |
-| Schedule CRUD (`POST /schedules` → DB row + Temporal Schedule) | one path |
-| `ExecutionGrant` + `validateGrantForScope(actor, nodeId, grantId, scope)` | one validator — graph uses `graph:execute:<id>`, task uses `task:dispatch:<route>`. **The graph path migrates onto the generalized validator** (do NOT leave `validateGrantForGraph` as a parallel) |
-| Per-node task queue (`scheduler-tasks-<uuid>`) + namespace | one model |
-| `NodePrincipalResolver` (per-node identity) | one resolver — lifts BOTH graph dispatch and task dispatch off the shared `SCHEDULER_API_TOKEN` |
-| Schedule action = discriminated union `{kind:'graph', graphId} \| {kind:'http-dispatch', route}` | one contract; node declares `graph` xor `route`; workflow selection branches on `kind` |
+| Primitive                                                                                        | Shared by graph + non-graph                                                                                                                                                                         |
+| ------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Schedule CRUD (`POST /schedules` → DB row + Temporal Schedule)                                   | one path                                                                                                                                                                                            |
+| `ExecutionGrant` + `validateGrantForScope(actor, nodeId, grantId, scope)`                        | one validator — graph uses `graph:execute:<id>`, task uses `task:dispatch:<route>`. **The graph path migrates onto the generalized validator** (do NOT leave `validateGrantForGraph` as a parallel) |
+| Per-node task queue (`scheduler-tasks-<uuid>`) + namespace                                       | one model                                                                                                                                                                                           |
+| `NodePrincipalResolver` (per-node identity)                                                      | one resolver — lifts BOTH graph dispatch and task dispatch off the shared `SCHEDULER_API_TOKEN`                                                                                                     |
+| Schedule action = discriminated union `{kind:'graph', graphId} \| {kind:'http-dispatch', route}` | one contract; node declares `graph` xor `route`; workflow selection branches on `kind`                                                                                                              |
 
 The **only** legitimate divergence is the leaf workflow, and it follows
 `temporal-patterns.md`'s LangGraph-vs-Temporal boundary: `GraphRunWorkflow` runs the
@@ -178,7 +223,7 @@ resolution + principal + `Idempotency-Key`) rather than cloning it.
 
 **Anti-pattern this design forbids (split-brain):** `dispatchNodeTaskActivity` as a fork
 of `executeGraphActivity`, a second grant validator, a second principal path. Generalize
-the existing graph primitives so the non-graph path *reuses* them — that is the syntropy.
+the existing graph primitives so the non-graph path _reuses_ them — that is the syntropy.
 
 ## What this is NOT
 
