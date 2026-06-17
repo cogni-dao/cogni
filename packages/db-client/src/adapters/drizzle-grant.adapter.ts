@@ -7,7 +7,8 @@
  * Scope: Implements ExecutionGrantUserPort and ExecutionGrantWorkerPort with Drizzle ORM. Does not contain business logic.
  * Invariants:
  * - Per GRANT_NOT_SESSION: Grants are durable, not session-based
- * - Per GRANT_SCOPES_CONSTRAIN_GRAPHS: Scope format is "graph:execute:{graphId}"
+ * - Per GRANT_SCOPES_CONSTRAIN_ACTIONS (M2, task.5029): scopes are generalized strings checked via @cogni/scheduler-core validateGrantScope — "graph:execute:{graphId}" (graphs) or "task:dispatch:{nodeId}:{route}" (node tasks)
+ * - Per GRANT_NODE_BINDING (M1, task.5029): validation asserts the grant is bound to the dispatched nodeId — a node-task scope embeds its nodeId, so a grant minted for node A cannot authorize a dispatch to node B
  * - withTenantScope called on every method (uniform invariant, no-op on serviceDb)
  * Side-effects: IO (database operations)
  * Links: ports/scheduling/execution-grant.port.ts, docs/spec/scheduler.md
@@ -21,9 +22,12 @@ import {
   type ExecutionGrantUserPort,
   type ExecutionGrantWorkerPort,
   GrantExpiredError,
+  GrantNodeMismatchError,
   GrantNotFoundError,
   GrantRevokedError,
   GrantScopeMismatchError,
+  graphExecuteScope,
+  validateGrantScope,
 } from "@cogni/scheduler-core";
 import { and, eq, isNull } from "drizzle-orm";
 import type { Database, LoggerLike } from "../client";
@@ -67,17 +71,26 @@ function validateGrantFields(
   return toGrant(row);
 }
 
-function checkGrantScopes(
+/**
+ * Generalized scope + node-binding check (M1+M2, task.5029). Delegates to the
+ * single checker in `@cogni/scheduler-core` and maps its result to the typed
+ * errors. `nodeId` is the node the worker is dispatching for — for node-task
+ * scopes (`task:dispatch:<nodeId>:<route>`) the binding is enforced here; for
+ * graph scopes it is carried for parity/audit but the scope itself is the
+ * authority.
+ */
+function checkGrantScope(
   grant: ExecutionGrant,
-  graphId: string
+  nodeId: string,
+  requiredScope: string
 ): ExecutionGrant {
-  const hasWildcard = grant.scopes.includes("graph:execute:*");
-  const hasSpecificScope = grant.scopes.includes(`graph:execute:${graphId}`);
-
-  if (!hasWildcard && !hasSpecificScope) {
-    throw new GrantScopeMismatchError(grant.id, graphId, grant.scopes);
+  const result = validateGrantScope(grant.scopes, requiredScope, nodeId);
+  if (result === "node_mismatch") {
+    throw new GrantNodeMismatchError(grant.id, nodeId);
   }
-
+  if (result === "scope_mismatch") {
+    throw new GrantScopeMismatchError(grant.id, requiredScope, grant.scopes);
+  }
   return grant;
 }
 
@@ -250,16 +263,31 @@ export class DrizzleExecutionGrantWorkerAdapter
     });
   }
 
-  async validateGrantForGraph(
+  async validateGrantForScope(
     actorId: ActorId,
+    nodeId: string,
     grantId: string,
-    graphId: string
+    requiredScope: string
   ): Promise<ExecutionGrant> {
     const grant = await this.validateGrant(actorId, grantId);
     this.logger.info(
-      { grantId, graphId },
-      "Validated execution grant for graph"
+      { grantId, nodeId, requiredScope },
+      "Validated execution grant for scope"
     );
-    return checkGrantScopes(grant, graphId);
+    return checkGrantScope(grant, nodeId, requiredScope);
+  }
+
+  async validateGrantForGraph(
+    actorId: ActorId,
+    nodeId: string,
+    grantId: string,
+    graphId: string
+  ): Promise<ExecutionGrant> {
+    return this.validateGrantForScope(
+      actorId,
+      nodeId,
+      grantId,
+      graphExecuteScope(graphId)
+    );
   }
 }

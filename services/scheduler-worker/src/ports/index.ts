@@ -92,8 +92,50 @@ export interface ReviewHttpClient {
   ) => Promise<InternalReviewPrContextOutput>;
 }
 
+/**
+ * Per-node dispatch principal (G1, task.5029 — the seam to the secrets-on-spawn
+ * work). Resolves the wire credential a NodeTask dispatch authenticates with,
+ * scoped to ONE node. FAIL-CLOSED: the shared `SCHEDULER_API_TOKEN` must NOT be
+ * a fallback — an unprovisioned node MUST throw, so a NodeTaskWorkflow can never
+ * silently run under the shared credential (the per-node attribution + blast-
+ * radius isolation the design exists to create). The credential *provisioning*
+ * is a separate dev's job; this port only declares the slot it must fill.
+ */
+export interface NodePrincipalResolver {
+  /** @throws NodePrincipalUnprovisionedError when the node has no per-node credential. */
+  resolve: (nodeId: string) => Promise<{ token: string }>;
+}
+
+/**
+ * Thrown by NodePrincipalResolver when a node has no provisioned per-node
+ * dispatch credential. Non-retryable: the credential won't appear on retry
+ * (provisioning is out-of-band). This is the CI/review gate that keeps a
+ * shared-token NodeTask from counting as "done".
+ */
+export class NodePrincipalUnprovisionedError extends Error {
+  readonly code = "node_principal_unprovisioned" as const;
+  constructor(nodeId: string) {
+    super(
+      `No per-node dispatch principal provisioned for node ${nodeId} (fail-closed — shared SCHEDULER_API_TOKEN is NOT a fallback)`
+    );
+    this.name = "NodePrincipalUnprovisionedError";
+  }
+}
+
 /** Grant validation routed by nodeId — returns the grant on success, throws on 403. */
 export interface ExecutionGrantHttpValidator {
+  /**
+   * Validate a grant for a generalized scope (M2, task.5029). The dispatched
+   * `nodeId` is sent to the node so it can assert the grant↔node binding (M1).
+   */
+  validateGrantForScope: (
+    actorId: ActorId,
+    nodeId: string,
+    grantId: string,
+    scope: string
+  ) => Promise<ExecutionGrant>;
+
+  /** Back-compat: validate a grant for `graph:execute:<graphId>`. */
   validateGrantForGraph: (
     actorId: ActorId,
     nodeId: string,
@@ -144,8 +186,16 @@ export class GrantRevokedError extends Error {
 }
 export class GrantScopeMismatchError extends Error {
   readonly code = "grant_scope_mismatch" as const;
-  constructor(grantId: string, graphId: string) {
-    super(`Grant scope mismatch: ${grantId} cannot execute ${graphId}`);
+  constructor(grantId: string, scope: string) {
+    super(`Grant scope mismatch: ${grantId} cannot perform ${scope}`);
     this.name = "GrantScopeMismatchError";
+  }
+}
+/** M1 (task.5029): grant is not bound to the dispatched node. Fail-closed, non-retryable. */
+export class GrantNodeMismatchError extends Error {
+  readonly code = "grant_node_mismatch" as const;
+  constructor(grantId: string, nodeId: string) {
+    super(`Grant node mismatch: ${grantId} is not bound to node ${nodeId}`);
+    this.name = "GrantNodeMismatchError";
   }
 }

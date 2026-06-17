@@ -47,6 +47,14 @@ const mockLogger = {
   child: () => mockLogger,
 } as unknown as Parameters<typeof createActivities>[0]["logger"];
 
+// Fail-closed per-node principal resolver mock (G1, task.5029). The graph-path
+// activities under test never call it; node-task dispatch tests override it.
+const mockNodePrincipalResolver = {
+  resolve: vi.fn(),
+} as unknown as Parameters<
+  typeof createActivities
+>[0]["nodePrincipalResolver"];
+
 describe("createActivities", () => {
   it("returns all expected activity functions", () => {
     const mockGrantAdapter = {
@@ -61,6 +69,7 @@ describe("createActivities", () => {
     const activities = createActivities({
       grantAdapter: mockGrantAdapter,
       runAdapter: mockRunAdapter,
+      nodePrincipalResolver: mockNodePrincipalResolver,
       config: {
         nodeEndpoints: new Map([["operator", "http://localhost:3000"]]),
         schedulerApiToken: "test-token-min-32-characters-long",
@@ -89,6 +98,7 @@ describe("validateGrantActivity", () => {
     const activities = createActivities({
       grantAdapter: mockGrantAdapter,
       runAdapter: {} as Parameters<typeof createActivities>[0]["runAdapter"],
+      nodePrincipalResolver: mockNodePrincipalResolver,
       config: {
         nodeEndpoints: new Map([["operator", "http://localhost:3000"]]),
         schedulerApiToken: "test-token-min-32-characters-long",
@@ -120,6 +130,7 @@ describe("validateGrantActivity", () => {
     const activities = createActivities({
       grantAdapter: mockGrantAdapter,
       runAdapter: {} as Parameters<typeof createActivities>[0]["runAdapter"],
+      nodePrincipalResolver: mockNodePrincipalResolver,
       config: {
         nodeEndpoints: new Map([["operator", "http://localhost:3000"]]),
         schedulerApiToken: "test-token-min-32-characters-long",
@@ -150,6 +161,7 @@ describe("createGraphRunActivity", () => {
         typeof createActivities
       >[0]["grantAdapter"],
       runAdapter: mockRunAdapter,
+      nodePrincipalResolver: mockNodePrincipalResolver,
       config: {
         nodeEndpoints: new Map([["operator", "http://localhost:3000"]]),
         schedulerApiToken: "test-token-min-32-characters-long",
@@ -197,6 +209,7 @@ describe("updateGraphRunActivity", () => {
         typeof createActivities
       >[0]["grantAdapter"],
       runAdapter: mockRunAdapter,
+      nodePrincipalResolver: mockNodePrincipalResolver,
       config: {
         nodeEndpoints: new Map([["operator", "http://localhost:3000"]]),
         schedulerApiToken: "test-token-min-32-characters-long",
@@ -231,6 +244,7 @@ describe("updateGraphRunActivity", () => {
         typeof createActivities
       >[0]["grantAdapter"],
       runAdapter: mockRunAdapter,
+      nodePrincipalResolver: mockNodePrincipalResolver,
       config: {
         nodeEndpoints: new Map([["operator", "http://localhost:3000"]]),
         schedulerApiToken: "test-token-min-32-characters-long",
@@ -266,6 +280,7 @@ describe("updateGraphRunActivity", () => {
         typeof createActivities
       >[0]["grantAdapter"],
       runAdapter: mockRunAdapter,
+      nodePrincipalResolver: mockNodePrincipalResolver,
       config: {
         nodeEndpoints: new Map([["operator", "http://localhost:3000"]]),
         schedulerApiToken: "test-token-min-32-characters-long",
@@ -303,6 +318,7 @@ describe("HTTP error translation (task.0280 phase 2)", () => {
     const activities = createActivities({
       grantAdapter: mockGrantAdapter,
       runAdapter: {} as Parameters<typeof createActivities>[0]["runAdapter"],
+      nodePrincipalResolver: mockNodePrincipalResolver,
       config: {
         nodeEndpoints: new Map([["operator", "http://localhost:3000"]]),
         schedulerApiToken: "test-token-min-32-characters-long",
@@ -334,6 +350,7 @@ describe("HTTP error translation (task.0280 phase 2)", () => {
         typeof createActivities
       >[0]["grantAdapter"],
       runAdapter: mockRunAdapter,
+      nodePrincipalResolver: mockNodePrincipalResolver,
       config: {
         nodeEndpoints: new Map([["operator", "http://localhost:3000"]]),
         schedulerApiToken: "test-token-min-32-characters-long",
@@ -364,6 +381,7 @@ describe("HTTP error translation (task.0280 phase 2)", () => {
         typeof createActivities
       >[0]["grantAdapter"],
       runAdapter: mockRunAdapter,
+      nodePrincipalResolver: mockNodePrincipalResolver,
       config: {
         nodeEndpoints: new Map([["operator", "http://localhost:3000"]]),
         schedulerApiToken: "test-token-min-32-characters-long",
@@ -396,6 +414,7 @@ describe("executeGraphActivity", () => {
         typeof createActivities
       >[0]["grantAdapter"],
       runAdapter: {} as Parameters<typeof createActivities>[0]["runAdapter"],
+      nodePrincipalResolver: mockNodePrincipalResolver,
       config: {
         nodeEndpoints: new Map([["operator", "http://localhost:3000"]]),
         schedulerApiToken: "test-token-min-32-characters-long",
@@ -448,6 +467,7 @@ describe("executeGraphActivity", () => {
         typeof createActivities
       >[0]["grantAdapter"],
       runAdapter: {} as Parameters<typeof createActivities>[0]["runAdapter"],
+      nodePrincipalResolver: mockNodePrincipalResolver,
       config: {
         nodeEndpoints: new Map([["operator", "http://localhost:3000"]]),
         schedulerApiToken: "test-token-min-32-characters-long",

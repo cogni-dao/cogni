@@ -37,6 +37,7 @@ export {
   InvalidCronExpressionError,
   InvalidTimezoneError,
   isGrantExpiredError,
+  isGrantNodeMismatchError,
   isGrantNotFoundError,
   isGrantRevokedError,
   isGrantScopeMismatchError,

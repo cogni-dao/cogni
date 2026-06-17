@@ -13,6 +13,16 @@
  * @public
  */
 
+// Grant scope mint + checker (M1 grant↔node binding + M2 scope generalization)
+export {
+  graphExecuteScope,
+  graphExecuteWildcardScope,
+  nodeTaskScope,
+  nodeTaskWildcardScope,
+  parseNodeTaskScope,
+  type ScopeCheckResult,
+  validateGrantScope,
+} from "./scopes";
 // Job payloads (Zod schemas for producer/consumer validation)
 export {
   type ExecuteScheduledRunPayload,
@@ -36,6 +46,7 @@ export {
   type ExecutionRequest,
   type ExecutionRequestPort,
   GrantExpiredError,
+  GrantNodeMismatchError,
   GrantNotFoundError,
   GrantRevokedError,
   GrantScopeMismatchError,
@@ -44,6 +55,7 @@ export {
   InvalidCronExpressionError,
   InvalidTimezoneError,
   isGrantExpiredError,
+  isGrantNodeMismatchError,
   isGrantNotFoundError,
   isGrantRevokedError,
   isGrantScopeMismatchError,

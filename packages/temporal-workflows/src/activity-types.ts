@@ -64,6 +64,33 @@ export interface SchedulerActivities {
     errorMessage?: string;
     errorCode?: string;
   }): Promise<void>;
+
+  // ── NodeTask activities (generic non-graph HTTP dispatch — task.5029) ──
+
+  /**
+   * Validate the execution grant for a node-task dispatch (M1 grant↔node +
+   * M2 scope generalization). Mints the node-bound scope
+   * `task:dispatch:<nodeId>:<route>` and HTTP-validates it. Throws (non-retryable)
+   * on any grant failure.
+   */
+  validateNodeGrantActivity(input: {
+    nodeId: string;
+    grantId: string;
+    route: string;
+  }): Promise<void>;
+
+  /**
+   * Dispatch a node task: POST {nodeUrl}{route} with the per-node principal
+   * (G1 fail-closed) + `Idempotency-Key: ${nodeId}/${scheduleId}/${scheduledFor}`.
+   * The route is bound to the node's OWN resolved host (M3 SSRF guard).
+   */
+  dispatchNodeTaskActivity(input: {
+    nodeId: string;
+    route: string;
+    payload: Record<string, unknown>;
+    scheduleId: string;
+    scheduledFor: string;
+  }): Promise<{ ok: boolean; status?: number }>;
 }
 
 // ---------------------------------------------------------------------------
