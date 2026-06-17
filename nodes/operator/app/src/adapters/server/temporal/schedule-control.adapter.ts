@@ -67,7 +67,10 @@ function buildWorkflowArgs(
   workflowType: string
 ): Record<string, unknown> {
   if (workflowType === NODE_TASK_WORKFLOW_TYPE) {
-    const input = (params.input ?? {}) as Record<string, unknown>;
+    const input =
+      params.input && typeof params.input === "object"
+        ? (params.input as Record<string, unknown>)
+        : {};
     const route =
       typeof input.route === "string"
         ? input.route

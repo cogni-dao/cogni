@@ -58,7 +58,7 @@ export const NodeTaskInputSchema = z
     /** Node-relative route the dispatch activity POSTs (ROUTE_RELATIVE_ONLY). */
     route: NodeRouteSchema,
     /** Opaque payload forwarded to the node's route. The node's route owns its meaning. */
-    payload: z.record(z.unknown()),
+    payload: z.record(z.string(), z.unknown()),
     /**
      * Execution grant ID authorizing this dispatch. Required for scheduled node
      * tasks (unlike graphs, there is no API-triggered NodeTask path that skips
