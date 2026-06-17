@@ -5,8 +5,11 @@ workflow_id: goal-evaluations
 
 # Goal-alignment for the Cogni operator node — the AI control plane that runs and
 # manages the node network: its code, deploys, knowledge, governance, and the web3
-# linkage between mission, finances, and code. A PR passes if it advances that
-# mission OR is a sound, scoped, well-tested change.
+# linkage between mission, finances, and code. A PR passes only if it genuinely
+# advances that mission — the network-wide CI/CD substrate is called out explicitly
+# because plumbing PRs are the most common mission-advancing shape.
+# Generic quality (architecture, tests) is intentionally NOT here — that belongs in
+# hard gates, not this mission filter.
 # Keep in sync with `intent.mission` in nodes/operator/.cogni/repo-spec.yaml.
 evaluations:
   - advances-operator-mission: >
@@ -14,19 +17,14 @@ evaluations:
       node network — the shared substrate (CI/CD, knowledge syntropy, observability),
       the gitops/web3 linkage of DAO ownership, finances, and code, or node formation
       and lifecycle management.
-  - clear-purpose: >
-      This PR has a clear, scoped purpose and moves the operator toward a stated goal
-      rather than adding unscoped surface area.
-  - sound-and-tested: >
-      This PR is a sound, well-structured change (clean architecture, typed
-      boundaries) that maintains or improves test coverage and reliability.
+  - cicd-improvement-for-all-nodes: >
+      This PR is a clear improvement to the CI/CD, deployment, or developer-tooling
+      substrate that benefits every node in the network — not just one node's app code.
 
 success_criteria:
   neutral_on_missing_metrics: true
   any_of:
     - metric: advances-operator-mission
       gte: 0.8
-    - metric: clear-purpose
-      gte: 0.8
-    - metric: sound-and-tested
+    - metric: cicd-improvement-for-all-nodes
       gte: 0.8
