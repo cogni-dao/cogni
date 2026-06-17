@@ -19,7 +19,7 @@
  */
 
 import { SYSTEM_ACTOR } from "@cogni/ids/system";
-import type { GraphRunKind } from "@cogni/scheduler-core";
+import { type GraphRunKind, nodeTaskScope } from "@cogni/scheduler-core";
 import { ApplicationFailure, activityInfo } from "@temporalio/activity";
 import {
   activityDurationMs,
@@ -31,10 +31,13 @@ import type { Logger } from "../observability/logger.js";
 import {
   type ExecutionGrantHttpValidator,
   GrantExpiredError,
+  GrantNodeMismatchError,
   GrantNotFoundError,
   GrantRevokedError,
   GrantScopeMismatchError,
   type GraphRunHttpWriter,
+  type NodePrincipalResolver,
+  NodePrincipalUnprovisionedError,
   RunHttpClientError,
 } from "../ports/index.js";
 
@@ -50,7 +53,8 @@ export function translateHttpError(err: unknown, where: string): never {
     err instanceof GrantNotFoundError ||
     err instanceof GrantExpiredError ||
     err instanceof GrantRevokedError ||
-    err instanceof GrantScopeMismatchError
+    err instanceof GrantScopeMismatchError ||
+    err instanceof GrantNodeMismatchError
   ) {
     throw ApplicationFailure.nonRetryable(`${where}: ${err.message}`, err.code);
   }
@@ -71,6 +75,8 @@ export function translateHttpError(err: unknown, where: string): never {
 export interface ActivityDeps {
   grantAdapter: ExecutionGrantHttpValidator;
   runAdapter: GraphRunHttpWriter;
+  /** Per-node dispatch principal (G1, task.5029) — fail-closed. */
+  nodePrincipalResolver: NodePrincipalResolver;
   config: {
     nodeEndpoints: Map<string, string>;
     schedulerApiToken: string;
@@ -166,7 +172,8 @@ function getWorkflowCorrelation(): {
  * Per Temporal patterns: activities are plain async functions.
  */
 export function createActivities(deps: ActivityDeps) {
-  const { grantAdapter, runAdapter, config, logger } = deps;
+  const { grantAdapter, runAdapter, nodePrincipalResolver, config, logger } =
+    deps;
 
   /**
    * Validates grant before execution (fail-fast).
@@ -500,11 +507,182 @@ export function createActivities(deps: ActivityDeps) {
     }
   }
 
+  // ── NodeTask activities (generic non-graph HTTP dispatch — task.5029) ──
+
+  /**
+   * Validate the grant for a node-task dispatch (M1 grant↔node + M2 scope).
+   * Mints the node-bound scope `task:dispatch:<nodeId>:<route>` (single mint in
+   * @cogni/scheduler-core) and HTTP-validates it via the generalized validator.
+   * Any grant failure → non-retryable ApplicationFailure (state won't change).
+   */
+  async function validateNodeGrantActivity(input: {
+    nodeId: string;
+    grantId: string;
+    route: string;
+  }): Promise<void> {
+    const { nodeId, grantId, route } = input;
+    const correlation = getWorkflowCorrelation();
+    const scope = nodeTaskScope(nodeId, route);
+    try {
+      await grantAdapter.validateGrantForScope(
+        SYSTEM_ACTOR,
+        nodeId,
+        grantId,
+        scope
+      );
+      logWorkerEvent(logger, WORKER_EVENT_NAMES.ACTIVITY_GRANT_VALIDATED, {
+        ...correlation,
+        nodeId,
+        grantId,
+        scope,
+      });
+    } catch (err) {
+      translateHttpError(err, "validateNodeGrantActivity");
+    }
+  }
+
+  /**
+   * Dispatch a node task: POST {nodeUrl}{route} under the node's OWN principal
+   * (G1 fail-closed) with `Idempotency-Key: ${nodeId}/${scheduleId}/${scheduledFor}`.
+   *
+   * Security:
+   *  - G1: the wire token comes from `nodePrincipalResolver.resolve(nodeId)`,
+   *    which THROWS for an unprovisioned node — never the shared token.
+   *  - M3 (SSRF): `route` must be node-relative; we re-assert it here (defense in
+   *    depth — the schema already rejects absolute/foreign URLs at dispatch) and
+   *    bind it to the node's OWN resolved host.
+   */
+  async function dispatchNodeTaskActivity(input: {
+    nodeId: string;
+    route: string;
+    payload: Record<string, unknown>;
+    scheduleId: string;
+    scheduledFor: string;
+  }): Promise<{ ok: boolean; status?: number }> {
+    const { nodeId, route, payload, scheduleId, scheduledFor } = input;
+    const correlation = getWorkflowCorrelation();
+    const start = performance.now();
+
+    // M3 (SSRF, defense-in-depth): reject anything that is not a clean
+    // node-relative path before it can be concatenated onto the node host.
+    if (
+      !route.startsWith("/") ||
+      route.startsWith("//") ||
+      /^[a-z][a-z0-9+.-]*:/i.test(route) ||
+      route.includes("..")
+    ) {
+      throw ApplicationFailure.nonRetryable(
+        `Invalid node-task route "${route}" — must be a node-relative path`,
+        "INVALID_NODE_ROUTE"
+      );
+    }
+
+    const nodeUrl = config.nodeEndpoints.get(nodeId);
+    if (!nodeUrl) {
+      throw ApplicationFailure.nonRetryable(
+        `Unknown nodeId "${nodeId}" — not in COGNI_NODE_ENDPOINTS`,
+        "UNKNOWN_NODE"
+      );
+    }
+
+    // G1 (fail-closed): resolve the per-node principal. An unprovisioned node
+    // throws here — the dispatch never falls back to the shared token.
+    let token: string;
+    try {
+      ({ token } = await nodePrincipalResolver.resolve(nodeId));
+    } catch (err) {
+      if (err instanceof NodePrincipalUnprovisionedError) {
+        throw ApplicationFailure.nonRetryable(err.message, err.code);
+      }
+      throw err;
+    }
+
+    const url = `${nodeUrl.replace(/\/$/, "")}${route}`;
+    // ACTIVITY_IDEMPOTENCY: business-key idempotency (no attempt), the node
+    // route MUST dedup on this. Retry profile is maximumAttempts:1 (MVP).
+    const idempotencyKey = `${nodeId}/${scheduleId}/${scheduledFor}`;
+
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+          "Idempotency-Key": idempotencyKey,
+        },
+        body: JSON.stringify(payload),
+      });
+    } catch (err) {
+      // Network error — retryable (but maximumAttempts:1 means it ends here).
+      const durationMs = performance.now() - start;
+      activityDurationMs
+        .labels({ activity: "dispatchNodeTask", status: "error" })
+        .observe(durationMs);
+      throw err instanceof Error
+        ? err
+        : new Error(`dispatchNodeTaskActivity: ${String(err)}`);
+    }
+
+    const durationMs = performance.now() - start;
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => "<unreadable>");
+      activityDurationMs
+        .labels({ activity: "dispatchNodeTask", status: "error" })
+        .observe(durationMs);
+      activityErrorsTotal
+        .labels({
+          activity: "dispatchNodeTask",
+          error_type:
+            response.status >= 400 && response.status < 500
+              ? "non_retryable"
+              : "retryable",
+        })
+        .inc();
+      logger.error(
+        {
+          ...correlation,
+          nodeId,
+          route,
+          status: response.status,
+          errorText,
+          idempotencyKey,
+          durationMs,
+        },
+        "node-task dispatch failed"
+      );
+      if (response.status >= 400 && response.status < 500) {
+        throw ApplicationFailure.nonRetryable(
+          `Node-task dispatch client error: ${response.status} - ${errorText}`,
+          "NodeTaskClientError",
+          { status: response.status, nodeId, route }
+        );
+      }
+      throw new Error(
+        `Node-task dispatch server error: ${response.status} - ${errorText}`
+      );
+    }
+
+    activityDurationMs
+      .labels({ activity: "dispatchNodeTask", status: "success" })
+      .observe(durationMs);
+    logWorkerEvent(logger, WORKER_EVENT_NAMES.ACTIVITY_GRAPH_COMPLETED, {
+      ...correlation,
+      nodeId,
+      route,
+      idempotencyKey,
+      durationMs,
+    });
+    return { ok: true, status: response.status };
+  }
+
   return {
     validateGrantActivity,
     createGraphRunActivity,
     executeGraphActivity,
     updateGraphRunActivity,
+    validateNodeGrantActivity,
+    dispatchNodeTaskActivity,
   };
 }
 

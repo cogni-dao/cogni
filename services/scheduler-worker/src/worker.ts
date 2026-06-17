@@ -91,6 +91,7 @@ export async function startSchedulerWorker(
   const graphActivities = createActivities({
     grantAdapter: container.grantAdapter,
     runAdapter: container.runAdapter,
+    nodePrincipalResolver: container.nodePrincipalResolver,
     config: container.config,
     logger:
       container.logger.child?.({ component: "activities" }) ?? container.logger,

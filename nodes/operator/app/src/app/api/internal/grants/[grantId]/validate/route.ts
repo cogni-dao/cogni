@@ -20,15 +20,18 @@ import {
   type InternalValidateGrantOutput,
 } from "@cogni/node-contracts";
 import { verifySchedulerBearer } from "@cogni/node-shared";
+import { graphExecuteScope } from "@cogni/scheduler-core";
 import { NextResponse } from "next/server";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import {
   isGrantExpiredError,
+  isGrantNodeMismatchError,
   isGrantNotFoundError,
   isGrantRevokedError,
   isGrantScopeMismatchError,
 } from "@/ports/server";
+import { getNodeId } from "@/shared/config";
 import { serverEnv } from "@/shared/env";
 
 export const dynamic = "force-dynamic";
@@ -73,15 +76,44 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       );
     }
 
-    const { graphId } = parsed.data;
+    const ownNodeId = getNodeId();
+    // M1 grant↔node binding: the worker tells us which node it is dispatching
+    // for. The request reached THIS node's URL, so a mismatch means a routing /
+    // spoofing bug — fail closed before touching the grant.
+    const dispatchNodeId = parsed.data.nodeId ?? ownNodeId;
+    if (parsed.data.nodeId && parsed.data.nodeId !== ownNodeId) {
+      log.warn(
+        { grantId, requestedNodeId: parsed.data.nodeId, ownNodeId },
+        "Grant validation node mismatch (request reached the wrong node)"
+      );
+      const response: InternalValidateGrantError = {
+        ok: false,
+        error: "grant_node_mismatch",
+      };
+      return NextResponse.json(response, { status: 403 });
+    }
+
+    // M2 scope generalization: prefer the explicit `scope`; otherwise derive
+    // the graph scope from the back-compat `graphId`.
+    const requiredScope =
+      parsed.data.scope ??
+      (parsed.data.graphId ? graphExecuteScope(parsed.data.graphId) : null);
+    if (!requiredScope) {
+      return NextResponse.json(
+        { error: "one of `scope` or `graphId` is required" },
+        { status: 400 }
+      );
+    }
+
     const container = getContainer();
 
     try {
       const grant =
-        await container.executionGrantWorkerPort.validateGrantForGraph(
+        await container.executionGrantWorkerPort.validateGrantForScope(
           SYSTEM_ACTOR,
+          dispatchNodeId,
           grantId,
-          graphId
+          requiredScope
         );
       const response: InternalValidateGrantOutput = {
         ok: true,
@@ -101,11 +133,15 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       if (isGrantNotFoundError(err)) errorCode = "grant_not_found";
       else if (isGrantExpiredError(err)) errorCode = "grant_expired";
       else if (isGrantRevokedError(err)) errorCode = "grant_revoked";
+      else if (isGrantNodeMismatchError(err)) errorCode = "grant_node_mismatch";
       else if (isGrantScopeMismatchError(err))
         errorCode = "grant_scope_mismatch";
 
       if (errorCode) {
-        log.info({ grantId, graphId, errorCode }, "Grant validation rejected");
+        log.info(
+          { grantId, requiredScope, errorCode },
+          "Grant validation rejected"
+        );
         const response: InternalValidateGrantError = {
           ok: false,
           error: errorCode,
@@ -113,7 +149,10 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         return NextResponse.json(response, { status: 403 });
       }
 
-      log.error({ grantId, graphId, err }, "Unexpected error validating grant");
+      log.error(
+        { grantId, requiredScope, err },
+        "Unexpected error validating grant"
+      );
       return NextResponse.json({ error: "Internal error" }, { status: 500 });
     }
   }

@@ -21,10 +21,12 @@ import type {
   InternalValidateGrantError,
   InternalValidateGrantOutput,
 } from "@cogni/node-contracts";
+import { graphExecuteScope } from "@cogni/scheduler-core";
 import type { Logger } from "../observability/logger.js";
 import {
   type ExecutionGrantHttpValidator,
   GrantExpiredError,
+  GrantNodeMismatchError,
   GrantNotFoundError,
   GrantRevokedError,
   GrantScopeMismatchError,
@@ -35,6 +37,7 @@ import {
 // Re-export for any direct consumer — port module is the source of truth.
 export {
   GrantExpiredError,
+  GrantNodeMismatchError,
   GrantNotFoundError,
   GrantRevokedError,
   GrantScopeMismatchError,
@@ -225,61 +228,82 @@ export function createHttpExecutionGrantValidator(
 ): ExecutionGrantHttpValidator {
   const { nodeEndpoints, schedulerApiToken, logger } = deps;
 
+  async function validateGrantForScope(
+    _actorId: Parameters<
+      ExecutionGrantHttpValidator["validateGrantForScope"]
+    >[0],
+    nodeId: string,
+    grantId: string,
+    scope: string
+  ) {
+    const base = resolveNodeUrl(nodeEndpoints, nodeId);
+    const url = `${base}/api/internal/grants/${encodeURIComponent(grantId)}/validate`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: authHeaders(schedulerApiToken),
+      // M1: send the dispatched nodeId so the node asserts the grant↔node
+      // binding; M2: send the generalized scope (graph + task share one path).
+      body: JSON.stringify({ nodeId, scope }),
+    });
+
+    if (response.status === 403) {
+      const body = (await response
+        .json()
+        .catch(() => null)) as InternalValidateGrantError | null;
+      const code = body?.error;
+      if (code === "grant_not_found") throw new GrantNotFoundError(grantId);
+      if (code === "grant_expired") throw new GrantExpiredError(grantId);
+      if (code === "grant_revoked") throw new GrantRevokedError(grantId);
+      if (code === "grant_node_mismatch")
+        throw new GrantNodeMismatchError(grantId, nodeId);
+      if (code === "grant_scope_mismatch")
+        throw new GrantScopeMismatchError(grantId, scope);
+      throw new GrantNotFoundError(grantId);
+    }
+
+    if (!response.ok) {
+      const errorText = await readErrorText(response);
+      const retryable = isRetryableStatus(response.status);
+      logger.error(
+        {
+          nodeId,
+          url,
+          status: response.status,
+          errorText,
+          retryable,
+          grantId,
+          scope,
+        },
+        "grants.validate.internal failed"
+      );
+      throw new RunHttpClientError(
+        `POST ${url} -> ${response.status}: ${errorText}`,
+        response.status,
+        retryable
+      );
+    }
+
+    const body = (await response.json()) as InternalValidateGrantOutput;
+    return {
+      id: body.grant.id,
+      userId: body.grant.userId,
+      billingAccountId: body.grant.billingAccountId,
+      scopes: body.grant.scopes,
+      expiresAt: body.grant.expiresAt ? new Date(body.grant.expiresAt) : null,
+      revokedAt: body.grant.revokedAt ? new Date(body.grant.revokedAt) : null,
+      createdAt: new Date(body.grant.createdAt),
+    };
+  }
+
   return {
-    async validateGrantForGraph(_actorId, nodeId, grantId, graphId) {
-      const base = resolveNodeUrl(nodeEndpoints, nodeId);
-      const url = `${base}/api/internal/grants/${encodeURIComponent(grantId)}/validate`;
-      const response = await fetch(url, {
-        method: "POST",
-        headers: authHeaders(schedulerApiToken),
-        body: JSON.stringify({ graphId }),
-      });
-
-      if (response.status === 403) {
-        const body = (await response
-          .json()
-          .catch(() => null)) as InternalValidateGrantError | null;
-        const code = body?.error;
-        if (code === "grant_not_found") throw new GrantNotFoundError(grantId);
-        if (code === "grant_expired") throw new GrantExpiredError(grantId);
-        if (code === "grant_revoked") throw new GrantRevokedError(grantId);
-        if (code === "grant_scope_mismatch")
-          throw new GrantScopeMismatchError(grantId, graphId);
-        throw new GrantNotFoundError(grantId);
-      }
-
-      if (!response.ok) {
-        const errorText = await readErrorText(response);
-        const retryable = isRetryableStatus(response.status);
-        logger.error(
-          {
-            nodeId,
-            url,
-            status: response.status,
-            errorText,
-            retryable,
-            grantId,
-            graphId,
-          },
-          "grants.validate.internal failed"
-        );
-        throw new RunHttpClientError(
-          `POST ${url} -> ${response.status}: ${errorText}`,
-          response.status,
-          retryable
-        );
-      }
-
-      const body = (await response.json()) as InternalValidateGrantOutput;
-      return {
-        id: body.grant.id,
-        userId: body.grant.userId,
-        billingAccountId: body.grant.billingAccountId,
-        scopes: body.grant.scopes,
-        expiresAt: body.grant.expiresAt ? new Date(body.grant.expiresAt) : null,
-        revokedAt: body.grant.revokedAt ? new Date(body.grant.revokedAt) : null,
-        createdAt: new Date(body.grant.createdAt),
-      };
+    validateGrantForScope,
+    async validateGrantForGraph(actorId, nodeId, grantId, graphId) {
+      return validateGrantForScope(
+        actorId,
+        nodeId,
+        grantId,
+        graphExecuteScope(graphId)
+      );
     },
   };
 }

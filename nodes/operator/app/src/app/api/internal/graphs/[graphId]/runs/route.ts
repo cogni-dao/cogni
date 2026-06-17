@@ -54,6 +54,7 @@ import {
   isGrantRevokedError,
   isGrantScopeMismatchError,
 } from "@/ports/server";
+import { getNodeId } from "@/shared/config";
 import { serverEnv } from "@/shared/env";
 
 export const dynamic = "force-dynamic";
@@ -300,8 +301,11 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         >
       >;
       try {
+        // M1 (task.5029): pass this node's own id so grant validation can
+        // assert the grant↔node binding (a leaked grantId can't cross tenants).
         grant = await container.executionGrantWorkerPort.validateGrantForGraph(
           SYSTEM_ACTOR,
+          getNodeId(),
           executionGrantId,
           graphId
         );

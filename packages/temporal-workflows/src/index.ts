@@ -65,6 +65,12 @@ export type {
   GraphRunWorkflowInput,
 } from "./workflows/graph-run.workflow.js";
 export {
+  NodeRouteSchema,
+  type NodeTaskInput,
+  NodeTaskInputSchema,
+} from "./workflows/node-task.schema.js";
+export type { NodeTaskResult } from "./workflows/node-task.workflow.js";
+export {
   type PrReviewWorkflowInput,
   PrReviewWorkflowInputSchema,
 } from "./workflows/pr-review.schema.js";

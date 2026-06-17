@@ -36,6 +36,7 @@ export {
   type ExecutionRequest,
   type ExecutionRequestPort,
   GrantExpiredError,
+  GrantNodeMismatchError,
   GrantNotFoundError,
   GrantRevokedError,
   GrantScopeMismatchError,
@@ -44,6 +45,7 @@ export {
   InvalidCronExpressionError,
   InvalidTimezoneError,
   isGrantExpiredError,
+  isGrantNodeMismatchError,
   isGrantNotFoundError,
   isGrantRevokedError,
   isGrantScopeMismatchError,
@@ -66,6 +68,16 @@ export {
   type ScheduleWorkerPort,
   type UpdateScheduleInput,
 } from "./ports";
+// Grant scope mint + checker (M1 grant↔node binding + M2 scope generalization)
+export {
+  graphExecuteScope,
+  graphExecuteWildcardScope,
+  nodeTaskScope,
+  nodeTaskWildcardScope,
+  parseNodeTaskScope,
+  type ScopeCheckResult,
+  validateGrantScope,
+} from "./scopes";
 // Services (pure orchestration — no adapters, no I/O beyond ports)
 export {
   type GovernanceScheduleConfig,
