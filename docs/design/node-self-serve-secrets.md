@@ -32,9 +32,11 @@ caller holds only an API key — never a kubeconfig, never the OpenBao writer JW
 This is the **value-write** complement to two shipped pieces:
 [`node-wizard-secret-setting.md`](./node-wizard-secret-setting.md) (wizard emits
 secret _shape_) and [`secrets-catalog-per-node.md`](./secrets-catalog-per-node.md)
-(the per-node catalog that _is_ the allowlist). It mirrors the **flight triangle**
+(the per-node catalog declares shape for typed consumption + ESO fan-out — it is
+**not** a write-gate). A node owns its whole `cogni/<env>/<node>/*` namespace; the
+RBAC grant, not a key list, is the boundary. It mirrors the **flight triangle**
 (`developer → can_flight` → operator-held GitHub App creds → dispatch) one rung
-over: `developer → can_manage_secrets` → operator-held OpenBao writer → write.
+over: `secrets_manager → can_manage_secrets` → operator-held OpenBao writer → write.
 
 > **Scope discipline (freeze-aware).** The only CI/CD-plane change is one
 > _additive_ substrate role-binding block (§Phase 1.B). Everything else is
@@ -71,8 +73,8 @@ pod. Hence the observable is API-plane (§Closed loop), not `kubectl exec`.
       │  POST /api/v1/nodes/<id>/secrets   { key: "FOO", value: "s3cr3t" }    │
       ▼                                                                       │
  ┌──────────────── OPERATOR POD (one pod, serves EVERY node) ─────────────┐   │
- │ GATE 1  OpenFGA: is THIS caller `developer` on node <id>?  ────────────┼───┼─► OpenFGA store
- │ GATE 2  allowlist: is FOO declared in <id>'s catalog (tier A2)?        │   │  (per-node tuples)
+ │ GATE 1  OpenFGA: is THIS caller a secrets_manager on node <id>?  ──────┼───┼─► OpenFGA store
+ │ GATE 2  is FOO a substrate-reserved key? (denylist; new keys OK)        │   │  (per-node tuples)
  │ GATE 3  self-login with the POD's OWN k8s identity  ───────────────────┼───┼─► OpenBao
  │         bao kv patch  cogni/<env>/<id>/FOO = s3cr3t   (value on stdin) │   │
  └────────────────────────────────────────────────────────────────────────┘   │
@@ -233,23 +235,18 @@ A scoping bug = cross-tenant secret write. Three independent gates, all mandator
    store today, so every check there is `authz_unavailable` → the feature is
    **candidate-a-only** until OpenFGA is provisioned on those envs (same gating as
    the OpenBao identity gap — see Open Questions).
-2. **Catalog allowlist (defense-in-depth, not the floor).** Resolve `<KEY>` in the
-   granted node's A2 catalog and require `openBaoPathFor()` to yield exactly
-   `cogni/<env>/<node>/<KEY>` for the **granted** slug; refuse undeclared keys and any
-   `B/D/E/F/G` tier. (`set-secret.sh` validates `_system`/KEY-regex but **not** catalog
-   membership — that check is net-new and lives here.) **Runtime-image constraint:** the
-   operator container copies only `nodes/operator/.cogni` — **not**
-   `infra/secrets-catalog.yaml` nor `secrets-catalog-loader.ts` (verified against
-   `nodes/operator/app/Dockerfile`; same finding as the #1479 homepage showcase). So
-   this gate **must not** `fs`-read the consolidated catalog at runtime. It reads a
-   **build-time-generated typed allowlist module** bundled into the app — codegen at
-   build from `infra/secrets-catalog.yaml`'s A2 entries (the #1479 typed-module pattern)
-   — never a runtime glob, never the empty per-node `.cogni/*.yaml`. If that module is
-   absent, **fail closed** (refuse the write); never fall back to a runtime read.
-   **This gate is depth, not the security floor:** gates 1 + 3 already bound the blast
-   radius — an undeclared key can only land at `cogni/<env>/<node>/*` (the granted
-   node's own path → its own namespace/pod), so a missing or stale allowlist is
-   self-inflicted on the caller's own node, never cross-tenant.
+2. **Namespace ownership (denylist, not allowlist).** A `can_manage_secrets`
+   owner owns their **entire** `cogni/<env>/<node>/*` namespace and may add / set /
+   rotate **any** key there — including brand-new ones. That is the scope: a node
+   controls its own secrets. So gate 2 is **not** a per-key allowlist (which would
+   block "add a new key" _and_ require impossible per-node catalog codegen in an
+   operator image that carries no node catalogs). It is a small, fixed,
+   operator-domain **denylist** of the substrate-managed keys that live in a node's
+   own path (`APP_DB_*`, `DOLTGRES_*`, `DATABASE*_URL`, `AUTH_SECRET`,
+   `POSTGRES_ROOT_PASSWORD` — `node-secrets-reserved.data.ts`), so an owner can't
+   clobber their own DB/DSN/auth. Everything else is allowed by default. This is a
+   footgun guard, not the security floor — gates 1 + 3 + the operator-stamped path
+   bound the blast radius to the node's own namespace.
 3. **OpenBao policy** — explicit `deny` on `_system/*` and `_shared/*` (§B), so even
    an app-layer bypass cannot touch system seed or cross-node shared values.
 

@@ -6,15 +6,18 @@
  * Purpose: Node-owner self-serve secret VALUE write/rotate. A `developer` on the
  *   node sets `cogni/<env>/<node>/<KEY>` through the operator pod's own OpenBao
  *   identity — caller holds only an API key. The value-write sibling of vcs/flight.
- * Scope: auth → OpenFGA gate → catalog allowlist gate → secrets plane port.
+ * Scope: auth → OpenFGA gate → substrate-reserved-key guard → secrets plane port.
  *   Write/rotate only; key-name listing (GET) is deferred.
  * Invariants:
  *   - AUTH_REQUIRED: Bearer (agents) or SIWE session. No open access.
  *   - OPENFGA_FAIL_CLOSED: undefined authz or `authz_unavailable` → 503; not-allow → 403.
  *     Never owner-fallback for a write this sensitive (design §Security boundary).
+ *   - NAMESPACE_OWNERSHIP: a `can_manage_secrets` owner owns ALL of
+ *     `cogni/<env>/<node>/*` and may add/set/rotate any key there. The boundary is
+ *     OpenFGA per-node + the operator-stamped path + OpenBao `_system`/`_shared`
+ *     deny — NOT a per-key allowlist. Gate 2 only denies substrate-reserved keys.
  *   - PATH_FROM_AUTHORIZED_RESOURCE: node slug from the loaded node, env from
  *     serverEnv — never the request body (closes both cross-pollination axes).
- *   - ALLOWLIST_IS_DEPTH: gate 2 bounds key-shape (A2-only); gates 1+3 are the floor.
  *   - NO_SECRETS_IN_LOG: the value never enters a log line; only key + KV version.
  * Side-effects: IO (Postgres read, OpenBao HTTP write via OperatorSecretsPlanePort).
  * Links: docs/design/node-self-serve-secrets.md, src/app/api/v1/vcs/flight/route.ts
@@ -33,7 +36,7 @@ import type { OperatorSecretsPlanePort } from "@/ports";
 import { nodes } from "@/shared/db/nodes";
 import { serverEnv } from "@/shared/env";
 import { EVENT_NAMES, type RequestContext } from "@/shared/observability";
-import { isNodeSecretAllowed } from "@/shared/secrets/node-secrets-allowlist.data";
+import { isNodeOwnedSecretKey } from "@/shared/secrets/node-secrets-reserved.data";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -188,8 +191,11 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       );
     }
 
-    // Gate 2 — catalog allowlist (A2-only, this node's own keys). Depth, not floor.
-    if (!isNodeSecretAllowed(node.slug, key)) {
+    // Gate 2 — substrate-reserved-key guard. The node owns its whole
+    // cogni/<env>/<node>/* namespace and may add/set/rotate any key (RBAC +
+    // path-scope is the boundary); only refuse substrate-managed keys (DB
+    // creds/DSNs/auth) so an owner can't clobber their own substrate.
+    if (!isNodeOwnedSecretKey(key)) {
       logTerminal({
         outcome: "error",
         status: 403,
@@ -197,12 +203,12 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         slug: node.slug,
         key,
         op,
-        errorCode: "key_not_allowed",
+        errorCode: "key_reserved",
       });
       return NextResponse.json(
         {
-          error: "key not declared for this node (tier A2)",
-          errorCode: "key_not_allowed",
+          error: "key is substrate-managed and cannot be set via self-serve",
+          errorCode: "key_reserved",
         },
         { status: 403 }
       );
