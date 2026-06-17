@@ -51,9 +51,7 @@ const mockLogger = {
 // activities under test never call it; node-task dispatch tests override it.
 const mockNodePrincipalResolver = {
   resolve: vi.fn(),
-} as unknown as Parameters<
-  typeof createActivities
->[0]["nodePrincipalResolver"];
+} as unknown as Parameters<typeof createActivities>[0]["nodePrincipalResolver"];
 
 describe("createActivities", () => {
   it("returns all expected activity functions", () => {

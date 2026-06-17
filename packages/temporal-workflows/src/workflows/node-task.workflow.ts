@@ -64,9 +64,8 @@ export async function NodeTaskWorkflow(
 
   // 1. SCHEDULED_TIME_FROM_TEMPORAL — authoritative scheduled time.
   const info = workflowInfo();
-  const scheduledStartTime = info.searchAttributes?.TemporalScheduledStartTime as
-    | Date[]
-    | undefined;
+  const scheduledStartTime = info.searchAttributes
+    ?.TemporalScheduledStartTime as Date[] | undefined;
   const scheduledFor = scheduledStartTime?.[0]
     ? scheduledStartTime[0].toISOString()
     : // Fallback to the workflow start time for non-scheduled (manual trigger)

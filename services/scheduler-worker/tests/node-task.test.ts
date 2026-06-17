@@ -57,9 +57,9 @@ const mockLogger = {
 describe("validateGrantScope (M1 grant↔node + M2 scope generalization)", () => {
   it("accepts an exact node-task scope for the dispatched node", () => {
     const scopes = [nodeTaskScope(NODE_A, ROUTE)];
-    expect(validateGrantScope(scopes, nodeTaskScope(NODE_A, ROUTE), NODE_A)).toBe(
-      "ok"
-    );
+    expect(
+      validateGrantScope(scopes, nodeTaskScope(NODE_A, ROUTE), NODE_A)
+    ).toBe("ok");
   });
 
   it("accepts the node-bound wildcard for any route on its own node", () => {
@@ -149,9 +149,9 @@ describe("NodeTaskInputSchema route allow-listing (M3 / SSRF)", () => {
     "/api/../../etc/passwd",
   ]) {
     it(`rejects foreign/absolute/traversal route: ${bad}`, () => {
-      expect(NodeTaskInputSchema.safeParse({ ...base, route: bad }).success).toBe(
-        false
-      );
+      expect(
+        NodeTaskInputSchema.safeParse({ ...base, route: bad }).success
+      ).toBe(false);
     });
   }
 
@@ -187,10 +187,9 @@ function makeActivities(overrides?: {
       validateGrantForGraph: vi.fn(),
     } as unknown as Parameters<typeof createActivities>[0]["grantAdapter"],
     runAdapter: {} as Parameters<typeof createActivities>[0]["runAdapter"],
-    nodePrincipalResolver:
-      resolver as Parameters<
-        typeof createActivities
-      >[0]["nodePrincipalResolver"],
+    nodePrincipalResolver: resolver as Parameters<
+      typeof createActivities
+    >[0]["nodePrincipalResolver"],
     config: {
       nodeEndpoints: new Map([[NODE_A, "http://node-a:3000"]]),
       schedulerApiToken: "shared-token-must-never-be-used-here",

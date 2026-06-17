@@ -229,7 +229,9 @@ export function createHttpExecutionGrantValidator(
   const { nodeEndpoints, schedulerApiToken, logger } = deps;
 
   async function validateGrantForScope(
-    _actorId: Parameters<ExecutionGrantHttpValidator["validateGrantForScope"]>[0],
+    _actorId: Parameters<
+      ExecutionGrantHttpValidator["validateGrantForScope"]
+    >[0],
     nodeId: string,
     grantId: string,
     scope: string
