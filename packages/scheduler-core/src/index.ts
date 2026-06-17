@@ -77,6 +77,22 @@ export {
   syncGovernanceSchedules,
   type UpsertGovernanceScheduleRowParams,
 } from "./services/syncGovernanceSchedules";
+export {
+  ForeignNodeScheduleError,
+  isForeignNodeScheduleError,
+  type NodeScheduleEntry,
+  type NodeScheduleRowState,
+  type NodeScheduleSyncDeps,
+  type NodeScheduleSyncResult,
+  type NodeScheduleTeardownDeps,
+  type NodeScheduleTeardownResult,
+  type NodeTaskInputEnvelope,
+  nodeScheduleId,
+  nodeScheduleIdPrefix,
+  syncNodeSchedules,
+  teardownNodeSchedules,
+  type UpsertNodeScheduleRowParams,
+} from "./services/syncNodeSchedules";
 // Types
 export {
   type ExecutionGrant,

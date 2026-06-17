@@ -273,6 +273,65 @@ export const EXTERNAL_API_ACTIVITY_OPTIONS: ActivityOptions = {
 };
 ```
 
+### Node-as-tenant (declarative node schedules)
+
+A node declares recurring work in its own repo-spec; the operator runs it on schedule
+under _that node's_ tenant identity. The node writes **zero** Temporal code; the operator
+adds **zero** per-node code. This generalizes the graph-schedule path (which already works
+end-to-end) to non-graph HTTP-dispatch via one generic workflow.
+
+```yaml
+# .cogni/repo-spec.yaml — the node-author-facing contract
+schedules:
+  - id: metrics-ingest # stable → scheduleId + workflowId
+    cron: "*/15 * * * *"
+    timezone: UTC
+    route: /api/internal/ops/metrics-ingest # relative path on the node's OWN host
+    payload: { window: "15m" }
+```
+
+#### The reconcile + dispatch flow
+
+```
+syncNodeSchedules (SYSTEM_OPS_ONLY, advisory-locked, @cogni/scheduler-core)
+  → ensure per-node ExecutionGrant (scope: task:dispatch:<route> | graph:execute:<id>)
+  → upsert DB row (stores the cron — the SSOT for drift; Temporal can't read it back)
+  → ScheduleControlPort.create/update/pause/resume
+       scheduleId = workflowId = node-task:{nodeId}:{scheduleId}   (WORKFLOW_ID_STABILITY)
+       overlap=SKIP, catchupWindow=0s                              (operator-fixed)
+       route → NodeTaskWorkflow   |   graph → GraphRunWorkflow      (workflowType inferred)
+
+NodeTaskWorkflow(input: NodeTaskInput)                              (the generic non-graph workflow)
+  scheduledFor = TemporalScheduledStartTime search attr            (SCHEDULED_TIME_FROM_TEMPORAL)
+  → validateGrantActivity(actor, nodeId, grantId, "task:dispatch:<route>")
+  → dispatchNodeTaskActivity: POST {nodeUrl}{route}, principal = per-node token (fail-closed)
+       Idempotency-Key: {nodeId}/{scheduleId}/{scheduledFor}       (the node route MUST dedup on it)
+```
+
+#### Invariants specific to node-as-tenant
+
+| Invariant                       | Rule                                                                                                   |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| **WORKFLOWTYPE_FROM_ROUTE_XOR_GRAPH** | The node declares `route` XOR `graph`; the workflowType is *inferred* from which is present. There is no node-facing `target` enum — that is operator vocabulary. |
+| **PLATFORM_OVERLAP_AND_CATCHUP** | `overlap`/`catchupWindow` are NOT in the node-facing schema. The operator fixes `skip`/`0s`; a node cannot tune them. |
+| **REAL_CRON_DRIFT**             | Cron drift is detected against the **stored cron** (DB row), never `describeSchedule().cron` — Temporal compiles crons to calendars and returns null. (The governance equivalent skips cron entirely; that is a latent bug this path fixes.) |
+| **NODE_ID_PINNED (M8)**         | A schedule's `nodeId` is pinned to the repo-spec's own `node_id`; a repo-spec cannot author a foreign-node schedule. `route` is relative to the node's own host (SSRF / cross-tenant guard). |
+| **TENANT_PRINCIPAL_FAIL_CLOSED** | Dispatch uses a per-node principal resolved at runtime; an unprovisioned node throws — there is no shared-token fallback. |
+| **TEARDOWN_REVOKES (M7)**       | Node decommission pauses the node's schedules **and** `revokedAt`s its grants in one saga; validation fails closed on revoked grants. |
+
+#### Idempotency is a two-sided contract
+
+The operator forwards `Idempotency-Key: {nodeId}/{scheduleId}/{scheduledFor}`; the node's
+route **must** dedup on it. A key the receiver ignores does not make a POST idempotent. The
+MVP retry profile is `maximumAttempts: 1` precisely because the dedup contract is the node's
+responsibility — a retry profile is gated on that contract being proven.
+
+> **Ownership:** the `NodeTaskInput` schema and `NodeTaskWorkflow` / `dispatchNodeTaskActivity`
+> live in `packages/temporal-workflows` (SINGLE_INPUT_CONTRACT, owned by the workflow-bundle
+> work). The repo-spec `schedules` block + `syncNodeSchedules` + teardown live in
+> `@cogni/repo-spec` and `@cogni/scheduler-core`. See
+> [docs/design/node-temporal-tenant-interface.md](../design/node-temporal-tenant-interface.md).
+
 ### LangGraph vs Temporal Boundary
 
 The boundary between LangGraph and Temporal is **durability and runtime semantics**, not DAG shape or AI-vs-non-AI. Both systems can express DAGs; the question is whether a step needs crash recovery, idempotency, and cross-process coordination (Temporal) or in-process intelligence and dataflow (LangGraph).

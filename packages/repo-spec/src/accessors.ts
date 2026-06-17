@@ -64,6 +64,35 @@ export interface InboundPaymentConfig {
   provider: string;
 }
 
+/**
+ * A node-facing schedule resolved against the repo-spec's OWN node identity.
+ *
+ * M8 (security): `nodeId` is operator-pinned to the repo-spec's own `node_id` here
+ * at extraction time — it is NOT free-text from the schedule entry. A repo-spec
+ * therefore cannot author a schedule for a foreign node; every resolved schedule
+ * carries the declaring node's identity. Downstream (syncNodeSchedules) treats
+ * `nodeId` as authoritative for routing + the workflowId (`node-task:{nodeId}:{id}`).
+ *
+ * `kind` is the *inferred* workflowType selector (route XOR graph) — there is no
+ * node-facing `target` enum; the operator vocabulary stays operator-side.
+ */
+export interface NodeScheduleConfig {
+  /** Stable schedule id (from the entry). */
+  id: string;
+  /** Operator-pinned node id — the repo-spec's own node_id (NOT free-text). */
+  nodeId: string;
+  cron: string;
+  timezone: string;
+  /** Inferred from which of route/graph is present. */
+  kind: "http-dispatch" | "graph";
+  /** Relative route on the node's own host — set iff kind === "http-dispatch". */
+  route?: string;
+  /** Graph id — set iff kind === "graph". */
+  graph?: string;
+  /** Opaque payload forwarded verbatim. */
+  payload: Record<string, unknown>;
+}
+
 export type KnowledgeConfig = KnowledgeSpec;
 
 // ---------------------------------------------------------------------------
@@ -190,6 +219,34 @@ export function extractGovernanceConfig(spec: RepoSpec): GovernanceConfig {
   }
 
   return config;
+}
+
+/**
+ * Extract node-facing recurring-work schedules, each pinned to this repo-spec's
+ * OWN node identity (M8). The returned `nodeId` is `spec.node_id`, never anything
+ * declared inside a schedule entry — so a repo-spec is structurally incapable of
+ * producing a schedule for a foreign node.
+ *
+ * `kind` (the workflowType selector) is inferred from route XOR graph; the schema
+ * already guarantees exactly one is present, so this is a pure mapping.
+ */
+export function extractNodeSchedules(spec: RepoSpec): NodeScheduleConfig[] {
+  const ownNodeId = spec.node_id;
+  const declared = spec.schedules ?? [];
+  return declared.map((entry) => {
+    const kind: "http-dispatch" | "graph" =
+      entry.route !== undefined ? "http-dispatch" : "graph";
+    return {
+      id: entry.id,
+      nodeId: ownNodeId,
+      cron: entry.cron,
+      timezone: entry.timezone,
+      kind,
+      ...(entry.route !== undefined ? { route: entry.route } : {}),
+      ...(entry.graph !== undefined ? { graph: entry.graph } : {}),
+      payload: entry.payload,
+    };
+  });
 }
 
 /**
