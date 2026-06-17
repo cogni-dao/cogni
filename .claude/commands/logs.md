@@ -93,6 +93,15 @@ For CI failures, use `env="ci"`:
   node's app logs. Only app pod lines carry it (promoted from the pino `nodeId`
   field; infra/control-plane lines have no `node` label). Added task.5028;
   prefer this over the fragile `pod=~"<slug>-node-app-.*"` prefix hack.
+
+> **This guide is operator-scope** (direct Grafana/MCP, full-fleet read). A **node
+> developer** debugging only _their_ node does NOT use this — they call the operator
+> **proxy** `GET /api/v1/nodes/{id}/observability/logs?env=<env>&filter=<logql pipeline>`
+> with their Cogni API key (needs the `developer` grant). The operator runs the query
+> server-side forced to `{service="app",node="<id>"}` and returns only their lines —
+> no Grafana token in dev hands. Scope envelope (which services/envs) +
+> the design: `docs/spec/grafana-observability-access.md` §"Node-dev log scope envelope".
+
 - `source` - `k8s` (in-cluster pod logs from cAdvisor) | `k8s-events`
   (kubernetes Events stream — pod OOMKilled, probe failures, evictions,
   rollout events; shipped by `alloy-k8s-events`). Use `source="k8s-events"`

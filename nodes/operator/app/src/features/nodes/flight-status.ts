@@ -33,6 +33,11 @@ export const FLIGHT_ENVS: readonly FlightEnv[] = [
   "production",
 ];
 
+/** Canonical guard for the deploy-env set — reuse instead of re-deriving a local env list. */
+export function isFlightEnv(v: string | null): v is FlightEnv {
+  return v !== null && (FLIGHT_ENVS as readonly string[]).includes(v);
+}
+
 /** candidate-a serves at `<host>-test`, preview at `<host>-preview`, production bare. */
 const ENV_SUBDOMAIN: Record<FlightEnv, string> = {
   "candidate-a": "test",
