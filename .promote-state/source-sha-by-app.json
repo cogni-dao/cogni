@@ -1,7 +1,8 @@
 {
-  "operator": "247b1433c2e7cf6a2ad73e4d28a204f9f4950be8",
-  "scheduler-worker": "c8c27b470fd62129f95ffa28da2af9d9e2dedabe",
   "beacon": "4dff3d33626cd6a5e7f60b1025ee01e225a60d8f",
+  "blue": "bc24ec2b800e84692aedccb014496d1fea462306",
+  "operator": "247b1433c2e7cf6a2ad73e4d28a204f9f4950be8",
   "oss": "364b761c856dd711827989562ddac57b44c06079",
-  "blue": "bc24ec2b800e84692aedccb014496d1fea462306"
+  "red": "f6ccabfb8f9bd8802bcf8a6e828130f5d9aa939c",
+  "scheduler-worker": "c8c27b470fd62129f95ffa28da2af9d9e2dedabe"
 }
