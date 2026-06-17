@@ -62,7 +62,7 @@ If you reach step 8, you're sprawling in git, where humans can't recall it. Know
 - **RECALL_BEFORE_WRITE** — search before researching, research before writing. Skipping this is the second-largest entropy source.
 - **ATTRIBUTION_TRACEABLE** — every entry + commit traces to its contributor (principal, source node). Lineage is never anonymized, never overwritten. Foundation for cross-node reputation and downstream equity mechanics.
 - **ENTRY_HAS_PROVENANCE** + **ENTRY_HAS_DOMAIN** — `source_type`/`source_ref` set, domain registered, or write rejected.
-- **DEPRECATE_NOT_DELETE** — superseded rows get `status: deprecated` + a `supersedes` citation edge. History (and the contributor chain) is preserved.
+- **DELETE_IS_CLEAN** — Dolt is git-versioned, so a `DELETE` keeps the row's content, commits, and contributor chain in history (the log _is_ the tombstone). Dead/retired knowledge (no successor) is **deleted** from the live table — never soft-flagged. Supersession is **REFINE in place** (same row id), not write-new-then-deprecate-old. Deletion refuses if a live row cites the target; cascades the entry's own outbound edges. (`status='deprecated'` survives only for the EDO temporal hypothesis lifecycle.)
 - **SCHEMA_GENERIC_CONTENT_SPECIFIC** — `domain` / `tags` / `entry_type` carry specificity. New tables require justification.
 - **DOLT_IS_SOURCE_OF_TRUTH** — Postgres search index is derived and rebuildable.
 - **AUTO_COMMIT_ON_WRITE** — every write commits via the capability layer.

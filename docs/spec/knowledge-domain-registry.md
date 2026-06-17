@@ -128,7 +128,7 @@ Body: `{ id, name, description? }`.
 | Invalid input (Zod)               | 400    | Standard contract-validation 400.                                       |
 | Not signed in (no session cookie) | 401    | Standard auth 401.                                                      |
 
-DELETE / PUT endpoints are **out of scope** in v0 (per `DEPRECATE_NOT_DELETE` spirit). Domain registration is sticky.
+DELETE / PUT endpoints are **out of scope** in v0 — domain registration is sticky (append-only). (Distinct from knowledge rows, which are `DELETE_IS_CLEAN`: domains are referenced by FK and don't accumulate corpses, so stickiness is the simpler default.)
 
 ### Auth
 
@@ -294,7 +294,7 @@ Phase 1 must therefore avoid hard-coding `knowledge_operator` anywhere in `packa
 | `DOMAIN_FK_ENFORCED_AT_WRITE`    | Every write to `knowledge` verifies `domain` exists in `domains` before INSERT. Unregistered → `DomainNotRegisteredError` → HTTP 400.                                                                                                                                                 |
 | `DOMAIN_REGISTRY_EXTENDS_VIA_UI` | Base domains are seeded by the schema migrator (reference data). The UI's `POST /api/v1/knowledge/domains` is for **extension** — adding new domains beyond the seeded set. `NODES_BOOT_EMPTY` scopes to content tables (`knowledge`, `citations`, `sources`), not `domains`.         |
 | `DOMAIN_CHECK_AT_ADAPTER_LAYER`  | The check lives in the Doltgres adapters (not in `createKnowledgeCapability`), so it shares the caller's client and works on per-PR contribution branches.                                                                                                                            |
-| `DOMAIN_REGISTRATION_IS_STICKY`  | No DELETE / PUT endpoints in v0. Domain rows are append-only. (Inherits `DEPRECATE_NOT_DELETE` spirit.)                                                                                                                                                                               |
+| `DOMAIN_REGISTRATION_IS_STICKY`  | No DELETE / PUT endpoints in v0. Domain rows are append-only (FK-referenced, so they don't accumulate corpses — distinct from knowledge rows, which are `DELETE_IS_CLEAN`).                                                                                                           |
 | `DOMAIN_HTTP_COOKIE_ONLY`        | GET + POST `/api/v1/knowledge/domains` are cookie-session only (bearer/x402 rejected) — domain creation is a trusted-human act in v0. Narrower than `KNOWLEDGE_READ_REQUIRES_PRINCIPAL`; bearer recall gets the domain list from the `GET /api/v1/knowledge` browse response instead. |
 | `DOMAIN_LIST_SINGLE_QUERY`       | `listDomainsFull()` returns rows + `entry_count` in one SQL query (`LEFT JOIN knowledge … GROUP BY`). No N+1.                                                                                                                                                                         |
 | `DOMAIN_HELPER_SQL_SAFE`         | The shared helper escapes its `domain` argument via `escapeValue()` (Doltgres requires `sql.unsafe`).                                                                                                                                                                                 |

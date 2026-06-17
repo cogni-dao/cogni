@@ -271,7 +271,7 @@ interface KnowledgeStorePort {
     id: string,
     update: Partial<NewKnowledge>
   ): Promise<Knowledge>;
-  deleteKnowledge(id: string): Promise<void>; // admin/cleanup only; agents use DEPRECATE_NOT_DELETE
+  deleteKnowledge(id: string): Promise<void>; // DELETE_IS_CLEAN — Dolt history preserves content + attribution; contribution `delete` op is the attributed agent path
 
   // Write — edges (knowledge-syntropy)
   addCitation(edge: NewCitation): Promise<Citation>;

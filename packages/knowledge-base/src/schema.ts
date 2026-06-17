@@ -13,7 +13,7 @@
  *   - DOLT_IS_SOURCE_OF_TRUTH (knowledge-syntropy): all knowledge data lives here. Postgres search index is derived and rebuildable.
  *   - ENTRY_HAS_PROVENANCE: every `knowledge` row has `source_type` + `source_ref`.
  *   - ENTRY_HAS_DOMAIN: every `knowledge` row's `domain` matches a registered row in `domains`.
- *   - DEPRECATE_NOT_DELETE: superseded entries get `status='deprecated'` + a `citations` row of type `supersedes`. Never DELETE.
+ *   - DELETE_IS_CLEAN: dead/retired knowledge is DELETEd (Dolt history preserves content + commits + attribution); supersession is refine-in-place. `status='deprecated'` retained only for the EDO temporal hypothesis lifecycle.
  *   - CONFIDENCE_EVERYWHERE: every row in every knowledge table has `confidence_pct` (integer 0-100). New rows default to 40 — start low, raise as evidence accumulates. 100 is reserved for "factual and works" (objectively verifiable + currently functioning). See seed `cogni-meta-confidence-convention`.
  *   - No FK references to Postgres tables (different database server).
  *   - No RLS — access control via Doltgres roles (knowledge_reader / knowledge_writer).

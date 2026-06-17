@@ -420,10 +420,32 @@ async function applyEdit(input: {
   const { conn, mainSql, contributionId, principal, seq, edit } = input;
   const ref = sourceRef(contributionId, seq);
   const sourceNode = principal.id;
-  if (edit.op === "deprecate") {
+  if (edit.op === "delete") {
+    // DELETE_IS_CLEAN: dead knowledge is removed from the live table, not
+    // soft-flagged. Dolt's version history preserves the row's content, every
+    // commit, and the contributor chain — the log IS the tombstone (audit +
+    // attribution survive). The delete itself is attributed via the
+    // surrounding contribution commit (principal + source_ref).
     await assertKnowledgeRowExists(conn, edit.targetRowId);
+    // DAG safety: refuse if a live row cites this one — deleting would dangle
+    // that inbound edge. Repoint/remove those citations first, or refine the
+    // target in place instead of deleting.
+    const inbound = (await conn.unsafe(
+      `SELECT citing_id FROM citations WHERE cited_id = ${escapeValue(edit.targetRowId)} LIMIT 5`
+    )) as Array<{ citing_id: string }>;
+    if (inbound.length > 0) {
+      const citers = inbound.map((r) => r.citing_id).join(", ");
+      throw new ContributionConflictError(
+        `cannot delete '${edit.targetRowId}': cited by ${citers}. Remove or repoint those edges first, or refine the entry in place.`
+      );
+    }
+    // Cascade the dead entry's OWN outbound edges (its claims about others),
+    // then the row. Inbound is guaranteed empty by the guard above.
     await conn.unsafe(
-      `UPDATE knowledge SET status = ${escapeValue("deprecated")}, source_type = ${escapeValue("external")}, source_ref = ${escapeValue(ref)}, source_node = ${escapeValue(sourceNode)}, updated_at = now() WHERE id = ${escapeValue(edit.targetRowId)}`
+      `DELETE FROM citations WHERE citing_id = ${escapeValue(edit.targetRowId)}`
+    );
+    await conn.unsafe(
+      `DELETE FROM knowledge WHERE id = ${escapeValue(edit.targetRowId)}`
     );
     return;
   }

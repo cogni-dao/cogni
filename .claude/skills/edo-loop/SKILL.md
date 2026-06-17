@@ -29,15 +29,15 @@ If any gate fails → **DO NOT WRITE ANYTHING.** No "write a finding instead" fa
 
 After RECALL surfaces a related hypothesis, pick the right edge type. Default is REFINE/CITE; opening a new atomic hypothesis is the rare path.
 
-| Your prediction relative to an existing hypothesis | Action                 | Citation edge                                                   | What lands on the chain                                   |
-| -------------------------------------------------- | ---------------------- | --------------------------------------------------------------- | --------------------------------------------------------- |
-| Same prediction, you have new evidence             | REFINE                 | `evidence_for` (from observation → hypothesis)                  | One commit; hypothesis confidence recomputes              |
-| Same prediction, you're acting on it               | REFINE                 | `derives_from` (from your decision → hypothesis)                | One commit; decision row compounds onto branch            |
-| Same prediction, outcome lands now                 | REFINE                 | `validates` / `invalidates` (from outcome → hypothesis)         | Closes the loop; confidence recomputes                    |
-| Adjacent / different conditions                    | NEW + cite             | `extends` (new hypothesis → original)                           | New sibling hypothesis, links to parent                   |
-| Contradicts the existing claim                     | NEW + cite             | `contradicts` (new hypothesis → original)                       | New sibling; original's confidence decreases on recompute |
-| Approach replaced                                  | NEW + cite + deprecate | `supersedes` (new → original) + `status:deprecated` on original | Per DEPRECATE_NOT_DELETE                                  |
-| No related hypothesis exists                       | WRITE ATOMIC           | none                                                            | New chain, but only after RECALL confirmed empty          |
+| Your prediction relative to an existing hypothesis | Action                 | Citation edge                                                   | What lands on the chain                                                      |
+| -------------------------------------------------- | ---------------------- | --------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| Same prediction, you have new evidence             | REFINE                 | `evidence_for` (from observation → hypothesis)                  | One commit; hypothesis confidence recomputes                                 |
+| Same prediction, you're acting on it               | REFINE                 | `derives_from` (from your decision → hypothesis)                | One commit; decision row compounds onto branch                               |
+| Same prediction, outcome lands now                 | REFINE                 | `validates` / `invalidates` (from outcome → hypothesis)         | Closes the loop; confidence recomputes                                       |
+| Adjacent / different conditions                    | NEW + cite             | `extends` (new hypothesis → original)                           | New sibling hypothesis, links to parent                                      |
+| Contradicts the existing claim                     | NEW + cite             | `contradicts` (new hypothesis → original)                       | New sibling; original's confidence decreases on recompute                    |
+| Approach replaced                                  | NEW + cite + deprecate | `supersedes` (new → original) + `status:deprecated` on original | EDO temporal lifecycle keeps `status` (the carve-out from `DELETE_IS_CLEAN`) |
+| No related hypothesis exists                       | WRITE ATOMIC           | none                                                            | New chain, but only after RECALL confirmed empty                             |
 
 ## EDO + PRs — when a code contribution carries a chain
 

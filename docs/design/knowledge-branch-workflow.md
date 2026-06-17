@@ -102,7 +102,7 @@ POST /knowledge/contributions/:id/commits
   -> serialize append for that contribution
   -> reject if branch head no longer matches recorded head
   -> checkout existing branch
-  -> apply inserts/updates/deprecations
+  -> apply inserts/updates/deletes/cites
   -> dolt_commit(message)
   -> record next seq + attribution pointer
 
@@ -150,8 +150,9 @@ iteration must preserve that:
   server-generated IDs are discoverable through the branch diff, not guessed.
 - Every insert/update keeps provenance; branch updates may change the latest
   source pointer, while Dolt history preserves prior values.
-- Deprecation is explicit. A contribution deprecates or supersedes knowledge; it
-  does not delete it.
+- Removal is clean. Supersession refines the row in place (Dolt history keeps the
+  prior value); genuinely dead knowledge is deleted (DAG-safe — refused if still
+  cited). Dolt history is the audit trail, so no soft-delete tombstone is kept.
 - The app records who authored each contribution commit because Dolt commits do
   not carry Cogni auth/session context.
 - Merge promotes branch knowledge into trusted `main`; confidence/citation
@@ -166,7 +167,7 @@ The minimal Cogni layer is:
 - Principal attribution: owner, commit author, resolver.
 - HTTP policy: owner can append/close; session user can merge.
 - Syntropy validation: domain registered, provenance present, update targets
-  valid on the branch, deprecate-not-delete.
+  valid on the branch, delete-is-clean (DAG-safe delete, refine over rewrite).
 - JSON projections for clients: contribution record, commit timeline, review
   diff.
 
@@ -175,25 +176,25 @@ The exact data model and routes are specified in
 
 ## Invariants
 
-| Rule                                | Constraint                                                                    |
-| ----------------------------------- | ----------------------------------------------------------------------------- |
-| DOLT_IS_SOURCE_OF_TRUTH             | Doltgres `main` is the trusted knowledge state.                               |
-| INTERNAL_WRITES_TO_MAIN             | Trusted internal tools may write directly to `main`.                          |
-| EXTERNAL_WRITES_TO_BRANCH           | External contributors write to `contrib/*` branches only.                     |
-| CONTRIBUTION_BRANCH_IS_MULTI_COMMIT | An open contribution branch can receive many commits before merge.            |
-| COMMIT_IS_LOGICAL_BATCH             | Each contribution commit has one message and one coherent edit batch.         |
-| APPEND_ADVANCES_RECORDED_HEAD       | An append starts from the contribution's recorded branch head or conflicts.   |
-| COMMIT_SEQUENCE_IS_UNIQUE           | A contribution cannot record two commits with the same sequence number.       |
-| INSERT_ID_IS_STABLE                 | Inserts may carry client-supplied IDs for later branch-local updates.         |
-| TARGET_ROW_REQUIRED_FOR_UPDATE      | Updating/deprecating existing knowledge requires a valid branch-local target. |
-| REVIEW_DIFF_IS_DOLT_DIFF            | Review uses Dolt diff primitives, not hand-rolled staging comparison.         |
-| MERGE_REQUIRES_SESSION              | Bearer agents cannot merge to `main`; session users can.                      |
-| OWNER_CAN_CLOSE                     | A branch owner can close their own open contribution.                         |
-| OWNER_CAN_APPEND                    | A branch owner can append commits while the contribution is open.             |
-| DEPRECATE_NOT_DELETE                | Knowledge rows are deprecated/superseded, not deleted.                        |
-| PROVENANCE_REQUIRED                 | Every inserted or updated row keeps source/provenance.                        |
-| DOMAIN_REGISTERED                   | Every edited row must reference a registered domain.                          |
-| ATTRIBUTION_INDEX_ONLY              | Cogni metadata points to Dolt commits; it does not replace Dolt history.      |
+| Rule                                | Constraint                                                                                         |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------- |
+| DOLT_IS_SOURCE_OF_TRUTH             | Doltgres `main` is the trusted knowledge state.                                                    |
+| INTERNAL_WRITES_TO_MAIN             | Trusted internal tools may write directly to `main`.                                               |
+| EXTERNAL_WRITES_TO_BRANCH           | External contributors write to `contrib/*` branches only.                                          |
+| CONTRIBUTION_BRANCH_IS_MULTI_COMMIT | An open contribution branch can receive many commits before merge.                                 |
+| COMMIT_IS_LOGICAL_BATCH             | Each contribution commit has one message and one coherent edit batch.                              |
+| APPEND_ADVANCES_RECORDED_HEAD       | An append starts from the contribution's recorded branch head or conflicts.                        |
+| COMMIT_SEQUENCE_IS_UNIQUE           | A contribution cannot record two commits with the same sequence number.                            |
+| INSERT_ID_IS_STABLE                 | Inserts may carry client-supplied IDs for later branch-local updates.                              |
+| TARGET_ROW_REQUIRED_FOR_UPDATE      | Updating/deprecating existing knowledge requires a valid branch-local target.                      |
+| REVIEW_DIFF_IS_DOLT_DIFF            | Review uses Dolt diff primitives, not hand-rolled staging comparison.                              |
+| MERGE_REQUIRES_SESSION              | Bearer agents cannot merge to `main`; session users can.                                           |
+| OWNER_CAN_CLOSE                     | A branch owner can close their own open contribution.                                              |
+| OWNER_CAN_APPEND                    | A branch owner can append commits while the contribution is open.                                  |
+| DELETE_IS_CLEAN                     | Dead rows are DELETEd (Dolt history keeps content + attribution); supersession is refine-in-place. |
+| PROVENANCE_REQUIRED                 | Every inserted or updated row keeps source/provenance.                                             |
+| DOMAIN_REGISTERED                   | Every edited row must reference a registered domain.                                               |
+| ATTRIBUTION_INDEX_ONLY              | Cogni metadata points to Dolt commits; it does not replace Dolt history.                           |
 
 ## Pareto MVP
 
