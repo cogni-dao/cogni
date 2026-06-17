@@ -81,7 +81,10 @@ export const GET = wrapRouteHandlerWithLogging(
     const skillsIndex: CognitionSkillPointer[] = [];
     const domainPointers: CognitionDomainPointer[] = [];
     // The current node's orientation entry id, by `<slug>-agent-orientation`
-    // convention — captured during the scan, its excerpt fetched below.
+    // convention — captured during the scan, its excerpt fetched below. A
+    // node-specific entry (`<name>-agent-orientation`) wins over the generic
+    // `cogni-agent-orientation` starter seed every node inherits.
+    const exactOrientationId = `${name}-agent-orientation`;
     let orientationId: string | null = null;
 
     // Cognition is delivered live from the hub; the irreducible invariants below
@@ -102,7 +105,9 @@ export const GET = wrapRouteHandlerWithLogging(
           limit: PER_DOMAIN_LIMIT,
         });
         for (const r of rows) {
-          if (!orientationId && r.id.endsWith("-agent-orientation")) {
+          if (r.id === exactOrientationId) {
+            orientationId = r.id;
+          } else if (!orientationId && r.id.endsWith("-agent-orientation")) {
             orientationId = r.id;
           }
           if (!isCognitionEntry(r.entryType)) continue;
