@@ -151,9 +151,9 @@ export function createContributionService(
     if (!edits || edits.length === 0 || gates.length === 0) return edits;
     const out: KnowledgeContributionEdit[] = [];
     for (const edit of edits) {
-      // deprecate + cite carry no entry payload — nothing for the write gates
+      // delete + cite carry no entry payload — nothing for the write gates
       // (shape/provenance) to validate; forward unchanged.
-      if (edit.op === "deprecate" || edit.op === "cite") {
+      if (edit.op === "delete" || edit.op === "cite") {
         out.push(edit);
         continue;
       }

@@ -397,7 +397,7 @@ describe("createContributionService", () => {
     }
   });
 
-  it("forwards deprecate edits without running gates against them", async () => {
+  it("forwards delete edits without running gates against them", async () => {
     const port = new FakeContributionPort();
     port.records = [contribution()];
     const service = createContributionService({
@@ -407,14 +407,14 @@ describe("createContributionService", () => {
       gates: [shapeGate],
     });
     const edit: KnowledgeContributionEdit = {
-      op: "deprecate",
+      op: "delete",
       targetRowId: "operator:knowledge:stale",
       reason: "superseded",
     };
     await service.appendCommit({
       principal: agent,
       contributionId: "contrib-agent-1-abc123",
-      body: { message: "deprecate test", edits: [edit] },
+      body: { message: "delete test", edits: [edit] },
     });
     expect(port.lastAppend?.edits).toEqual([edit]);
   });
@@ -477,7 +477,7 @@ describe("createContributionService", () => {
       rateLimit: { maxOpenPerPrincipal: 5 },
     });
     const edit: KnowledgeContributionEdit = {
-      op: "deprecate",
+      op: "delete",
       targetRowId: "operator:knowledge:stale",
       reason: "superseded by contribution branch revision",
     };
@@ -485,7 +485,7 @@ describe("createContributionService", () => {
     await service.appendCommit({
       principal: agent,
       contributionId: "contrib-agent-1-abc123",
-      body: { message: "deprecate stale row", edits: [edit] },
+      body: { message: "delete stale row", edits: [edit] },
     });
 
     expect(port.lastAppend?.contributionId).toBe("contrib-agent-1-abc123");
@@ -509,7 +509,7 @@ describe("createContributionService", () => {
           message: "not mine",
           edits: [
             {
-              op: "deprecate",
+              op: "delete",
               targetRowId: "operator:knowledge:stale",
               reason: "not mine",
             },

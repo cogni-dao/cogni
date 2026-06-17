@@ -178,7 +178,12 @@ export interface KnowledgeStorePort {
     id: string,
     update: Partial<NewKnowledge>
   ): Promise<Knowledge>;
-  /** Admin/cleanup only; agents use DEPRECATE_NOT_DELETE. */
+  /**
+   * Hard-delete a row. DELETE_IS_CLEAN — dead knowledge leaves the live table;
+   * Dolt version history preserves content + commits + contributor chain. The
+   * contribution `delete` op is the attributed agent path; this is the raw
+   * primitive. Callers must clear inbound citations first (else the DAG dangles).
+   */
   deleteKnowledge(id: string): Promise<void>;
 
   // --- Read — knowledge identity (knowledge-syntropy: CITATION_TARGET_EXISTS_AT_WRITE) ---
