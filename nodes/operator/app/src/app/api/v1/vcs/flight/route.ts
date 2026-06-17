@@ -56,8 +56,6 @@ interface FlightLogFields {
   readonly nodeId?: string | undefined;
   readonly slug?: string | undefined;
   readonly sourceSha8?: string | undefined;
-  readonly parentPrNumber?: number | undefined;
-  readonly pinStatus?: string | undefined;
   readonly githubStatus?: number | undefined;
   readonly dispatchStatus?: "initiated" | undefined;
 }
@@ -399,8 +397,6 @@ export const POST = wrapRouteHandlerWithLogging(
         throw error;
       }
 
-      const parentPin = prepared.parentPin;
-
       // vnext: this records dispatch acceptance only. Workflow started/completed/failed
       // needs a GitHub Actions webhook or polling listener before those states are observable.
       try {
@@ -418,8 +414,6 @@ export const POST = wrapRouteHandlerWithLogging(
           nodeId: prepared.nodeId,
           slug: prepared.slug,
           sourceSha8: prepared.sourceSha.slice(0, 8),
-          pinStatus: parentPin.status,
-          parentPrNumber: parentPin.prNumber,
           dispatchStatus: "initiated",
         });
         return NextResponse.json(
@@ -432,12 +426,6 @@ export const POST = wrapRouteHandlerWithLogging(
               sourceSha: prepared.sourceSha,
               sourceRepo: prepared.sourceRepo,
               image: prepared.image,
-              ...(parentPin.prNumber
-                ? {
-                    parentPrNumber: parentPin.prNumber,
-                    parentHeadSha: parentPin.parentHeadSha,
-                  }
-                : {}),
             },
             workflowUrl: dispatch.workflowUrl,
             message: dispatch.message,

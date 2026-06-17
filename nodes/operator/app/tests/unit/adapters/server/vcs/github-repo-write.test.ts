@@ -652,69 +652,6 @@ node_port: 30200
   });
 });
 
-describe("GitHubRepoWriter.ensureCatalogSourceSha", () => {
-  it("opens a catalog source_sha pin PR when the catalog pin differs", async () => {
-    const childSha = "0123456789012345678901234567890123456789";
-    let putContent = "";
-    routeHandlers = {
-      "GET /repos/{owner}/{repo}/contents/{path}": (params) => {
-        expect(params.path).toBe("infra/catalog/atlas.yaml");
-        // Catalog read on main: existing source_sha differs from the requested pin.
-        if (params.ref === "main") {
-          return {
-            type: "file",
-            encoding: "base64",
-            sha: "catalog-blob",
-            content: Buffer.from(
-              "name: atlas\ntype: node\nsource_repo: https://github.com/Cogni-DAO/atlas.git\nimage_repository: ghcr.io/cogni-dao/atlas\nsource_sha: ffffffffffffffffffffffffffffffffffffffff\n",
-              "utf-8"
-            ).toString("base64"),
-          };
-        }
-        // File lookup on the new pin branch → not present yet.
-        return Promise.reject(statusError(404, "not found"));
-      },
-      "GET /repos/{owner}/{repo}/git/ref/{ref}": (params) => {
-        expect(params.ref).toBe("heads/main");
-        return { object: { sha: "parent-main" } };
-      },
-      "POST /repos/{owner}/{repo}/git/refs": () => ({}),
-      "PUT /repos/{owner}/{repo}/contents/{path}": (params) => {
-        putContent = Buffer.from(String(params.content), "base64").toString(
-          "utf-8"
-        );
-        return { commit: { sha: "pin-commit" } };
-      },
-      "POST /repos/{owner}/{repo}/pulls": () => ({
-        number: 88,
-        html_url: "https://github.com/Cogni-DAO/cogni/pull/88",
-      }),
-    };
-
-    await expect(
-      makeWriter().ensureCatalogSourceSha({
-        owner: "Cogni-DAO",
-        repo: "cogni",
-        slug: "atlas",
-        nodeRepoUrl: "https://github.com/Cogni-DAO/atlas.git",
-        nodeRepoHeadSha: childSha,
-      })
-    ).resolves.toEqual({
-      status: "pin_pr_opened",
-      currentSha: "ffffffffffffffffffffffffffffffffffffffff",
-      prNumber: 88,
-      prUrl: "https://github.com/Cogni-DAO/cogni/pull/88",
-      parentHeadSha: "pin-commit",
-    });
-
-    // The pin PR rewrites the catalog source_sha to the requested child SHA.
-    expect(putContent).toContain(`source_sha: ${childSha}`);
-    expect(putContent).not.toContain(
-      "ffffffffffffffffffffffffffffffffffffffff"
-    );
-  });
-});
-
 describe("GitHubRepoWriter.promoteNodeToPreview", () => {
   const DISPATCH =
     "POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches";
@@ -907,7 +844,6 @@ payments_in:
       sourceSha,
       sourceRepo: "https://github.com/cogni-test-org/ghcr",
       image: `ghcr.io/cogni-test-org/ghcr:sha-${sourceSha}`,
-      parentPin: { status: "already_pinned", currentSha: sourceSha },
     });
 
     const installUrls = vi

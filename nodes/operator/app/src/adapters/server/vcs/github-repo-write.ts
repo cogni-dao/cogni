@@ -4,7 +4,7 @@
 /**
  * Module: `@adapters/server/vcs/github-repo-write`
  * Purpose: Operator-only helper that mints node repos, commits files, and opens pull requests via the GitHub App.
- * Scope: Thin Octokit calls behind node formation, catalog source_sha pin, and candidate-flight prep.
+ * Scope: Thin Octokit calls behind node formation and candidate-flight prep.
  *   Does not belong in `VcsCapability` because that capability is shared with poly/resy/node-template stubs
  *   and these write ops are operator-only.
  * Invariants:
@@ -106,27 +106,6 @@ export interface OpenNodeSubmodulePrInput extends OpenNodeAppPrInput {
   /** Default-branch HEAD commit SHA of the minted node repo → catalog `source_sha` pin. */
   readonly nodeRepoHeadSha: string;
 }
-
-export interface EnsureNodeSubmodulePinInput {
-  readonly owner: string;
-  readonly repo: string;
-  readonly slug: string;
-  readonly nodeRepoUrl: string;
-  readonly nodeRepoHeadSha: string;
-}
-
-export type EnsureNodeSubmodulePinResult =
-  | {
-      readonly status: "already_pinned";
-      readonly currentSha: string;
-    }
-  | {
-      readonly status: "pin_pr_opened";
-      readonly currentSha: string | null;
-      readonly prNumber: number;
-      readonly prUrl: string;
-      readonly parentHeadSha: string;
-    };
 
 export interface PackageImageTagExistsInput {
   readonly owner: string;
@@ -358,21 +337,17 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       );
     }
 
-    const parentPin = await this.ensureCatalogSourceSha({
-      owner: parentOwner,
-      repo: parentRepo,
-      slug,
-      nodeRepoUrl: catalog.data.source_repo,
-      nodeRepoHeadSha: sourceSha,
-    });
-
+    // No catalog pin on `main`: candidate flight is source-addressed (the dispatch
+    // carries `source_sha`), so the deploy pin never touches the operator code branch
+    // (MAIN_WRITE_IS_GOVERNANCE_ONLY / ONE_PROMOTION_PRIMITIVE, task.5022). The prior
+    // pin PR stalled open forever — a catalog-only PR earns no required merge_group
+    // checks and a bot catalog commit carries no `(#NNN)` for any flight rung to resolve.
     return {
       nodeId,
       slug,
       sourceSha,
       sourceRepo: catalog.data.source_repo,
       image: `${catalog.data.image_repository}:sha-${sourceSha}`,
-      parentPin,
     };
   }
 
@@ -876,64 +851,6 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       message: `feat(node): register ${slug}`,
       branch: `cogni-operator/node-register-${slug}`,
     });
-  }
-
-  /**
-   * Pin a remote-source node for flight by bumping its catalog `source_sha` field
-   * (CATALOG_SOURCE_SHA_IS_THE_DEPLOY_PIN) — no gitlink, no `.gitmodules`. Opens a
-   * one-line catalog PR when the pin differs; idempotent via {@link commitFileAndOpenPr}.
-   */
-  async ensureCatalogSourceSha(
-    input: EnsureNodeSubmodulePinInput
-  ): Promise<EnsureNodeSubmodulePinResult> {
-    const { owner, repo, slug, nodeRepoHeadSha } = input;
-    const path = `infra/catalog/${slug}.yaml`;
-    const current = await this.fetchFileText({
-      owner,
-      repo,
-      path,
-      ref: "main",
-    });
-    if (!current) {
-      throw deployPlaneError(
-        "catalog_missing",
-        `node catalog entry not found for ${slug}`,
-        404
-      );
-    }
-    const currentSha =
-      /^source_sha:\s*([0-9a-fA-F]{40})\s*$/m.exec(current)?.[1] ?? null;
-    if (currentSha === nodeRepoHeadSha) {
-      return { status: "already_pinned", currentSha };
-    }
-    const updated = currentSha
-      ? current.replace(
-          /^source_sha:\s*[0-9a-fA-F]{40}\s*$/m,
-          `source_sha: ${nodeRepoHeadSha}`
-        )
-      : current.replace(
-          /^(image_repository:.*\n)/m,
-          `$1source_sha: ${nodeRepoHeadSha}\n`
-        );
-    const branch = `cogni-operator/node-pin-${slug}-${nodeRepoHeadSha.slice(0, 8)}`;
-    const pr = await this.commitFileAndOpenPr({
-      owner,
-      repo,
-      baseRef: "main",
-      headBranch: branch,
-      path,
-      content: updated,
-      commitMessage: `chore(node): pin ${slug} at ${nodeRepoHeadSha.slice(0, 8)}`,
-      prTitle: `chore(node): pin ${slug} at ${nodeRepoHeadSha.slice(0, 8)}`,
-      prBody: `Bumps catalog \`source_sha\` for \`${slug}\` to \`${nodeRepoHeadSha}\` before node-ref flight (CATALOG_SOURCE_SHA_IS_THE_DEPLOY_PIN).`,
-    });
-    return {
-      status: "pin_pr_opened",
-      currentSha,
-      prNumber: pr.prNumber,
-      prUrl: pr.prUrl,
-      parentHeadSha: pr.headSha,
-    };
   }
 
   async packageImageTagExists(

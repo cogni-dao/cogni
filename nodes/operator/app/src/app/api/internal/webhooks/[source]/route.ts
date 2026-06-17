@@ -125,8 +125,9 @@ export async function POST(
     if (source === "github" && eventType === "pull_request") {
       const payload = JSON.parse(bodyBuffer.toString("utf-8"));
       dispatchPrReview(payload, env, log);
-      // Node-merge → preview tie: a merged spawned-node PR pins the parent catalog
-      // source_sha so flight-preview.yml advances preview (PREVIEW_VIA_FLIGHT_PREVIEW).
+      // Node-merge → preview tie: a merged spawned-node PR dispatches promote-and-deploy
+      // at env=preview SOURCE-ADDRESSED by the PR head sha, pin on deploy/preview, ZERO
+      // writes to main (PREVIEW_VIA_SOURCE_ADDRESSED_PROMOTE, task.5022).
       dispatchNodePreviewPromote(payload, env, log);
     }
 
