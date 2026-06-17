@@ -7,6 +7,12 @@ evaluations:
   - proper-ci-cd: This PR implements improvements to the CI/CD pipeline. Ensuring clean, tested, and deployed code.
   - standard-cogni-template: This PR contributes to building a standardized template for a typescript AI application.
   - test-coverage: This PR improves test coverage or reliability of existing features.
+  - cogni-generated-node-birth: >
+      This PR is an operator-authored Cogni node-birth PR that pins a newly generated node repo as a
+      submodule and adds only the expected operator deployment footprint (catalog row, per-env
+      overlays/AppSets, edge route, and .gitmodules/gitlink). The child node source, tests, CI,
+      review rules, and image build live in the minted node repo, so parent-side test changes are
+      not required for this PR shape.
 
 success_criteria:
   neutral_on_missing_metrics: true
@@ -16,4 +22,6 @@ success_criteria:
     - metric: standard-cogni-template
       gte: 0.8
     - metric: test-coverage
+      gte: 0.8
+    - metric: cogni-generated-node-birth
       gte: 0.8

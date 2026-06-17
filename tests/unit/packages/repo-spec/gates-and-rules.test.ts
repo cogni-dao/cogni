@@ -170,8 +170,8 @@ describe("parseRule", () => {
     const yaml = readRuleFixture("repo-goal-alignment.yaml");
     const rule = parseRule(yaml);
     expect(rule.id).toBe("cogni-git-review-repo-goal-alignment");
-    expect(rule.evaluations).toHaveLength(3);
-    expect(rule.success_criteria.any_of).toHaveLength(3);
+    expect(rule.evaluations).toHaveLength(4);
+    expect(rule.success_criteria.any_of).toHaveLength(4);
   });
 
   it("parses pre-parsed object", () => {
