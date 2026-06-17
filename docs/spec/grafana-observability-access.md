@@ -4,7 +4,7 @@ type: spec
 title: Grafana / Loki Observability Access
 status: draft
 trust: draft
-summary: How a developer-RBAC'd dev reads their node's Grafana/Loki logs WITHOUT seeing other nodes and WITHOUT holding a token. The operator is a node-pinned query PROXY (runs the dev's LogQL server-side constrained to `{node="<id>"}`), never a credential issuer — a returned token's reach is ungoverned by the per-node check, a pinned proxy is node-scoped by construction. The operator's own liveness gate still holds no token (it uses the public run-carries rung). Real blocker: node Loki streams have no `node` label yet.
+summary: How a developer-RBAC'd dev reads only their node's Grafana/Loki logs without holding a token — the operator is a node-pinned query PROXY (runs the dev's LogQL server-side, constrained to the node label) rather than a credential issuer, because a returned token's reach is ungoverned by the per-node check while a pinned proxy is node-scoped by construction. The operator's own liveness gate still holds no token (it uses the public run-carries rung). Blocked today on node Loki streams lacking a node stream label.
 read_when: Wiring or debating whether the operator/API should hold or hand out a Grafana token; granting a dev/agent Loki query access; designing an automated observability gate; reviewing an ExternalSecret that pulls a GRAFANA_* key into a pod; deciding proxy-vs-issuer for observability reads.
 owner: derekg1729
 created: 2026-06-16

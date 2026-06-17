@@ -4,7 +4,7 @@ type: spec
 title: Substrate Access-Grant Plane
 status: draft
 trust: draft
-summary: How an external node developer, on a `developer` RBAC grant for node X, gains permissioned READ access to node X's observability substrates (Grafana/Loki, PostHog, DB) WITHOUT seeing other nodes and WITHOUT the operator proxying queries. Splits substrates into runtime (operator→pod, secrets plane) vs developer-observability (dev←operator-issued); per-node isolation feasibility differs by each substrate's native primitive. v0 issues the shared env Grafana token; vNext issues per-principal node-scoped credentials.
+summary: How an external node developer, on a `developer` RBAC grant for node X, gains permissioned READ access to node X's observability substrates (Grafana/Loki, PostHog, DB) without seeing other nodes. The operator serves node-scoped reads as a query PROXY pinned to the node (the dev holds no token) rather than issuing a credential, because a returned token's reach escapes the per-node check. Splits substrates into runtime (operator-to-pod secrets plane) vs developer-observability (operator-proxied); per-node isolation feasibility differs by each substrate's native primitive, and the real blocker is the missing node Loki stream label.
 read_when: Designing how a dev/agent gains access to a node's logs/analytics/DB; adding a substrate to the access-grant fan-out; deciding whether the operator issues vs proxies a credential; assessing per-node isolation feasibility for a substrate; reviewing the developer-grant route or `node.yaml` substrate declarations.
 implements: []
 owner: derekg1729
