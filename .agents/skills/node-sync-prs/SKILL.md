@@ -9,15 +9,17 @@ Cogni nodes each carry their **own copy** of shared code (`packages/knowledge-st
 
 > **Why this is a skill, not a one-off:** every operator standard change needs this until the operator app does it automatically (a dependabot-for-nodes). Run it the same way each time so nothing is missed and the result is auditable.
 
-## Core rule — one ledger, one PR per repo
+## Core rule — the live PRs are the ledger, one PR per repo
 
-Maintain a 1:1 ledger; never batch repos into one PR.
+One upstream change → one branch → one PR **per repo**; never batch repos.
+
+Do **not** persist a local ledger file — a gitignored `.context/` JSON is forgotten by the next session and drifts from reality. The **source of truth is the open/merged PRs themselves**, made queryable by a **stable branch name** keyed to the upstream change:
 
 ```text
-upstream change → target repo → mirror branch → PR URL → check state → merge state
+codex/adopt-<change>-<upstreamPR>      e.g. codex/adopt-delete-op-port-1730
 ```
 
-Save it at `.context/node-sync-prs/<upstream-pr-or-sha>.json`, update on every discover/skip/open/fix/merge/block. Reuse the JSON shape from [`node-template-infra-sync-prs`](../node-template-infra-sync-prs/SKILL.md) (`upstream`, `canonical`, `targets[]`, `skipped[]`).
+Re-running the skill is idempotent: enumerate targets fresh, then for each find its PR by that branch (`gh pr list --head <branch>` / `gh pr view`), and resume (open if missing, skip if merged). The end-of-run report table is ephemeral (in your answer), not a saved file.
 
 ## 1. Define the change
 
@@ -71,5 +73,5 @@ Reuse an existing open sync PR for the same repo/purpose — never open PR #2 fo
 
 - **node-template first**, then forks — forks inherit the template, so the canonical port is highest leverage.
 - **Targeted edits over whole-file copy** for drifted code; byte-for-byte only for genuinely identical files.
-- **No silent skips** — every enumerated repo lands in `targets[]` or `skipped[]` with a reason.
+- **No silent skips** — every enumerated repo is accounted for in the report: a PR link, or a one-line skip reason.
 - This is interim. The durable fix is operator-app auto-sync (dependabot-for-nodes); note that as the standing follow-up, don't re-solve it per port.
