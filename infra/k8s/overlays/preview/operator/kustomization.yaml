@@ -9,6 +9,7 @@ resources:
   - ../../../base/node-app
   - ../../../base/openfga-external
   - external-secret.yaml
+  - ./secrets-writer-sa.yaml
 
 namePrefix: operator-
 
@@ -60,6 +61,12 @@ patches:
       - op: add
         path: /data/OPENFGA_API_URL
         value: "http://operator-openfga-external:8080"
+      # Node self-serve secret writes — operator's OpenBao writer role (SA +
+      # projected token wired on the Deployment below). OPENBAO_ADDR defaults to
+      # the in-cluster ClusterIP, so only the role name is set here.
+      - op: add
+        path: /data/OPENBAO_NODE_SECRETS_WRITER_ROLE
+        value: "preview-node-secrets-writer"
   # NodePort assignment (operator = 30000) + instance label on selector.
   # Instance label prevents cross-node service routing: namePrefix only renames
   # resource names, not labels/selectors, so without this every Service
@@ -85,9 +92,29 @@ patches:
       - op: replace
         path: /spec/template/spec/initContainers/0/envFrom/1/secretRef/name
         value: "operator-env-secrets"
+      # design.node-self-serve-secrets §1.B: the operator pod's OWN OpenBao
+      # identity, bound by the preview-node-secrets-writer k8s-auth role.
+      # Projected token carries the cogni-openbao audience. SSA (#1642) keeps
+      # this drift-free.
       - op: add
         path: /spec/template/spec/serviceAccountName
-        value: "default"
+        value: secrets-writer
+      - op: add
+        path: /spec/template/spec/volumes
+        value:
+          - name: openbao-token
+            projected:
+              sources:
+                - serviceAccountToken:
+                    path: token
+                    audience: cogni-openbao
+                    expirationSeconds: 3600
+      - op: add
+        path: /spec/template/spec/containers/0/volumeMounts
+        value:
+          - name: openbao-token
+            mountPath: /var/run/secrets/openbao
+            readOnly: true
       - op: add
         path: /spec/selector/matchLabels/app.kubernetes.io~1instance
         value: "operator"
