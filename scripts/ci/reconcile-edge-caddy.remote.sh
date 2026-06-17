@@ -117,7 +117,15 @@ else
       exit 1
     fi
     log_info "Caddy reloaded; running config re-synced to on-disk Caddyfile; persisting config hash(es)"
-    [[ "$caddyfile_changed" == "true" ]] && echo "$NEW_CADDY_HASH" > "$CADDY_HASH_FILE"
-    [[ "$edge_env_changed" == "true" ]] && echo "$NEW_EDGE_ENV_HASH" > "$EDGE_ENV_HASH_FILE"
+    # Use `if` blocks, NOT `[[ cond ]] && echo`: under `set -e`, a trailing
+    # `[[ false ]] && …` leaves the script's exit status at 1, which the caller's
+    # `set -e` heredoc reads as a hard failure. That broke EVERY re-flight of an
+    # existing node — its <SLUG>_DOMAIN is already in the edge .env so
+    # edge_env_changed=false (the final command), while the shared Caddyfile
+    # differs so caddyfile_changed=true and the recreate+reload path runs. The
+    # reload itself succeeded; this idiom turned a successful reconcile into a
+    # red flight (bug.5037).
+    if [[ "$caddyfile_changed" == "true" ]]; then echo "$NEW_CADDY_HASH" > "$CADDY_HASH_FILE"; fi
+    if [[ "$edge_env_changed" == "true" ]]; then echo "$NEW_EDGE_ENV_HASH" > "$EDGE_ENV_HASH_FILE"; fi
   fi
 fi

@@ -358,6 +358,12 @@ jobs:
       - name: edge routing tests (task.5078)
         run: bash scripts/ci/tests/render-caddyfile.test.sh
 
+      # bug.5037 — the edge-Caddy reconcile must exit 0 when only the Caddyfile
+      # changed (re-flight of an existing node), not let a trailing `[[ false ]]`
+      # test fail the whole substrate reconcile.
+      - name: edge-Caddy reconcile exit-code guard (bug.5037)
+        run: bash scripts/ci/tests/reconcile-edge-caddy.test.sh
+
       # Catalog-driven node DNS: idempotent Cloudflare A-record upsert +
       # reconcile fans one record per non-primary type:node. Stateful CF shim,
       # no network. Closes the node-formation DNS gap (catalog → overlays →
