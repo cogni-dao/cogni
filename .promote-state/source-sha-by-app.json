@@ -1,5 +1,6 @@
 {
+  "beacon": "4dff3d33626cd6a5e7f60b1025ee01e225a60d8f",
+  "blue": "bc24ec2b800e84692aedccb014496d1fea462306",
   "operator": "247b1433c2e7cf6a2ad73e4d28a204f9f4950be8",
-  "scheduler-worker": "c8c27b470fd62129f95ffa28da2af9d9e2dedabe",
-  "beacon": "4dff3d33626cd6a5e7f60b1025ee01e225a60d8f"
+  "scheduler-worker": "c8c27b470fd62129f95ffa28da2af9d9e2dedabe"
 }
