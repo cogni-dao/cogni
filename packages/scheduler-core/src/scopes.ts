@@ -3,12 +3,12 @@
 
 /**
  * Module: `@cogni/scheduler-core/scopes`
- * Purpose: The single mint + checker for execution-grant scope strings — graph
- *   scopes (`graph:execute:<graphId>`) and node-task scopes
+ * Purpose: The single mint and checker for execution-grant scope strings (graph and node-task).
+ *   Covers graph scopes (`graph:execute:<graphId>`) and node-task scopes
  *   (`task:dispatch:<nodeId>:<route>`). Centralized so M2's `validateGrantForScope`
  *   has ONE checker for both, and M1's grant↔node binding is structural (the
  *   nodeId is embedded in the task scope; the grants table has no node_id column).
- * Scope: Pure string functions + a pure predicate. No I/O, no zod, no drizzle.
+ * Scope: Pure string functions and a pure predicate; does not perform I/O, zod parsing, or drizzle access.
  * Invariants:
  *   - SCOPE_IS_NODE_BOUND (M1): a node-task scope embeds its nodeId — a grant
  *     minted for node A can never authorize a dispatch to node B.
