@@ -33,11 +33,26 @@ export interface RenderRepoSpecInput {
   readonly pluginContract?: string | undefined;
   readonly signalContract?: string | undefined;
   readonly knowledgeRemote?: NodeKnowledgeRemote | undefined;
+  /**
+   * One-line node mission (`intent.mission`) — the north-star the cognition
+   * substrate surfaces at session start. Formation has no UI to capture this
+   * yet, so a starter seed is emitted by default for the launch agent to refine.
+   */
+  readonly mission?: string | undefined;
 }
 
 /** uuidv5 of the scope key under the node_id namespace — matches `repo-spec-builder`'s derivation. */
 function deriveScopeId(nodeId: string): string {
   return uuidv5("default", nodeId);
+}
+
+/**
+ * Starter `intent.mission` for a freshly-minted node: a refine-me seed so every
+ * new node ships with a mission the launch agent narrows in `.cogni/repo-spec.yaml`
+ * (and a matching `<slug>-agent-orientation` hub entry it refines as the repo grows).
+ */
+function starterMission(slug: string): string {
+  return `Define ${slug}'s one-line mission here — refine in .cogni/repo-spec.yaml (surfaced at session start).`;
 }
 
 /** Render `.cogni/repo-spec.yaml` for a freshly-formed node (pending payment activation). */
@@ -60,6 +75,11 @@ export function renderRepoSpec(input: RenderRepoSpecInput): string {
     .join("\n");
 
   const sourceRef = `${input.repoOwner}/${input.slug}`;
+  // YAML double-quoted scalar: collapse any embedded quotes so the spec stays parseable.
+  const mission = (input.mission ?? starterMission(input.slug)).replace(
+    /"/g,
+    "'"
+  );
 
   return `# Node Template — repo-spec
 #
@@ -78,6 +98,7 @@ scope_key: "default"
 
 intent:
   name: ${input.slug}
+  mission: "${mission}"
 
 cogni_dao:
 ${daoLines}

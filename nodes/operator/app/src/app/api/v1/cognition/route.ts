@@ -33,7 +33,9 @@ import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { getNodeMission, getNodeName } from "@/shared/config";
 import { serverEnv } from "@/shared/env";
 import {
+  excerptFromContent,
   isCognitionEntry,
+  type OrientationExcerpt,
   renderBundleMarkdown,
   SESSION_BOOTSTRAP_INVARIANTS,
 } from "./_bundle";
@@ -78,6 +80,9 @@ export const GET = wrapRouteHandlerWithLogging(
 
     const skillsIndex: CognitionSkillPointer[] = [];
     const domainPointers: CognitionDomainPointer[] = [];
+    // The current node's orientation entry id, by `<slug>-agent-orientation`
+    // convention — captured during the scan, its excerpt fetched below.
+    let orientationId: string | null = null;
 
     // Cognition is delivered live from the hub; the irreducible invariants below
     // are the only piece that must survive an unconfigured/empty hub.
@@ -85,6 +90,9 @@ export const GET = wrapRouteHandlerWithLogging(
     if (port) {
       const domains = await port.listDomainsFull();
       for (const d of domains) {
+        // Suppress empty domains (e.g. a placeholder `nodes` with 0 entries):
+        // a bare count is noise in a precious index.
+        if (d.entryCount === 0) continue;
         domainPointers.push({
           domain: d.id,
           description: d.description,
@@ -94,6 +102,9 @@ export const GET = wrapRouteHandlerWithLogging(
           limit: PER_DOMAIN_LIMIT,
         });
         for (const r of rows) {
+          if (!orientationId && r.id.endsWith("-agent-orientation")) {
+            orientationId = r.id;
+          }
           if (!isCognitionEntry(r.entryType)) continue;
           skillsIndex.push({
             id: r.id,
@@ -102,6 +113,17 @@ export const GET = wrapRouteHandlerWithLogging(
             domain: r.domain,
           });
         }
+      }
+    }
+
+    let orientation: OrientationExcerpt | null = null;
+    if (port && orientationId) {
+      const entry = await port.getKnowledge(orientationId);
+      if (entry) {
+        orientation = {
+          id: entry.id,
+          excerpt: excerptFromContent(entry.content),
+        };
       }
     }
 
@@ -121,6 +143,7 @@ export const GET = wrapRouteHandlerWithLogging(
       toolingInvariants,
       skillsIndex,
       domainPointers,
+      orientation,
     });
 
     ctx.log.info(
