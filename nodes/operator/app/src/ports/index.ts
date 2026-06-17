@@ -108,6 +108,11 @@ export {
   normalizeErrorToExecutionCode,
 } from "./llm.port";
 export type {
+  LokiLogLine,
+  LokiQueryRange,
+  LokiReaderPort,
+} from "./loki-reader.port";
+export type {
   InstantQueryParams,
   MetricsQueryPort,
   MetricTemplate,

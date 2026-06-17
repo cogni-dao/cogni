@@ -100,6 +100,7 @@ export {
   type TemplateQueryErrorCode,
 } from "./metrics/mimir.adapter";
 export { HttpNodeProber } from "./node-flight/node-prober.adapter";
+export { HttpLokiReader } from "./observability/loki-reader.adapter";
 export { ViemEvmOnchainClient } from "./onchain/viem-evm-onchain-client.adapter";
 export { ViemTreasuryAdapter } from "./onchain/viem-treasury.adapter";
 export { UserDrizzlePaymentAttemptRepository } from "./payments/drizzle-payment-attempt.adapter";

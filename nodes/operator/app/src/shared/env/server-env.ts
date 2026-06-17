@@ -202,6 +202,13 @@ export const serverSchema = z.object({
   PROMETHEUS_QUERY_URL: optionalUrl,
   PROMETHEUS_READ_USERNAME: optionalString,
   PROMETHEUS_READ_PASSWORD: optionalString,
+
+  // Grafana/Loki READ credential for the node-pinned log-read PROXY (task.5025). The operator
+  // holds this read-only Viewer token to run a dev's LogQL server-side, forced to {node="<id>"};
+  // the dev never holds it (spec.grafana-observability-access: proxy, not issuer). Optional: the
+  // proxy route returns 503 observability_unwired until ESO surfaces these from cogni/<env>/_shared.
+  GRAFANA_URL: optionalUrl,
+  GRAFANA_SERVICE_ACCOUNT_TOKEN: optionalString,
   ANALYTICS_K_THRESHOLD: z.coerce.number().int().positive().default(50),
   ANALYTICS_QUERY_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
 
