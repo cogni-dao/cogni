@@ -22,6 +22,9 @@ patches:
       - op: replace
         path: /data/TEMPORAL_NAMESPACE
         value: "cogni-production"
+      - op: add
+        path: /data/DEPLOY_ENVIRONMENT
+        value: "production"
       - op: replace
         path: /data/IMAGE_DIGEST
         value: "production-placeholder-scheduler-worker"

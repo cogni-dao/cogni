@@ -21,6 +21,9 @@ patches:
       - op: replace
         path: /data/TEMPORAL_NAMESPACE
         value: "cogni-candidate-a"
+      - op: add
+        path: /data/DEPLOY_ENVIRONMENT
+        value: "candidate-a"
       - op: replace
         path: /data/IMAGE_DIGEST
         value: "candidate-a-placeholder-scheduler-worker"
