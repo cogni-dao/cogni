@@ -133,10 +133,8 @@ export {
   type TemporalScheduleControlConfig,
 } from "./temporal";
 export { SystemClock } from "./time/system.adapter";
-// Single-file commit + open-PR helper (task.5083) — operator-only.
+// Operator-only GitHub-App repo writer — node formation + candidate-flight prep.
 export {
-  type CommitFileAndOpenPrInput,
-  type CommitFileAndOpenPrResult,
   type ForkFromTemplateInput,
   GitHubRepoWriter,
   type GitHubRepoWriterConfig,
