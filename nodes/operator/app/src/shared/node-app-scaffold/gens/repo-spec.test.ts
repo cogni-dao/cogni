@@ -47,7 +47,7 @@ interface ParsedGate {
 }
 interface ParsedSpec {
   node_id: string;
-  intent?: { name: string };
+  intent?: { name: string; mission?: string };
   activity_ledger?: {
     epoch_length_days: number;
     approvers: string[];
@@ -81,6 +81,26 @@ describe("renderRepoSpec — BORN_REVIEWABLE", () => {
     expect(spec.node_id).toBe("11111111-2222-4333-8444-555555555555");
     expect(spec.intent?.name).toBe("my-node");
     expect(spec.payments.status).toBe("pending_activation");
+  });
+
+  it("emits a starter intent.mission seed for the launch agent to refine", () => {
+    expect(spec.intent?.mission).toBeTruthy();
+    expect(spec.intent?.mission).toContain("my-node");
+  });
+
+  it("honours an explicit mission when provided", () => {
+    const withMission = parseYaml(
+      renderRepoSpec({
+        slug: "my-node",
+        repoOwner: "cogni-dao-test",
+        nodeId: "11111111-2222-4333-8444-555555555555",
+        chainId: 8453,
+        mission: "Mirror Polymarket copy-trades for the DAO.",
+      })
+    ) as ParsedSpec;
+    expect(withMission.intent?.mission).toBe(
+      "Mirror Polymarket copy-trades for the DAO."
+    );
   });
 
   it("keeps the node-template activity ledger so epoch ingest is active", () => {

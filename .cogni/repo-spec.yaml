@@ -31,6 +31,10 @@ activity_ledger:
 
 intent:
   name: cogni-template
+  # One-line north star surfaced by the cognition substrate at session start.
+  # The running operator app reads its OWN node spec (nodes/operator/.cogni/repo-spec.yaml);
+  # this is the monorepo identity for tooling that resolves the repo root.
+  mission: "The Cogni node platform monorepo — the operator control plane plus the node template every Cogni DAO node is forged from."
 
 # Node registry — operator declares child nodes in the monorepo.
 # Each entry points to a node dir with its own .cogni/repo-spec.yaml.

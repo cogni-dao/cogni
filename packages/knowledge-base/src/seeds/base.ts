@@ -31,6 +31,29 @@ export const BASE_KNOWLEDGE_SEEDS: NewKnowledge[] = [
     tags: ["meta", "knowledge-store", "onboarding"],
   },
   {
+    id: "cogni-agent-orientation",
+    domain: "meta",
+    title: "Agent orientation starter for this node",
+    entryType: "guide",
+    content:
+      "**Use when:** any agent starts a session on this node (coding, launch, research, governance, validation, or ops). This is the node's agent operating map: recall it first, then refine it for THIS node and keep it current as the node grows.\n\n" +
+      "This is the starter orientation every Cogni node inherits from the base seed set. Replace the placeholders below with this node's specifics, and write the node's own living map as a sibling `<slug>-agent-orientation` entry (a re-seed may overwrite this starter, so node-owned context belongs in the slug-specific entry).\n\n" +
+      "## Where to edit\n" +
+      "- App code, node-owned packages, and `.cogni/repo-spec.yaml` (the running app reads its OWN node spec, not the monorepo root). Fill in the real paths for this node.\n\n" +
+      "## What NOT to run\n" +
+      "- No broad local suites; push a feature branch and let CI verify.\n" +
+      "- Don't modify `.github/workflows/*` in a feature commit (can quarantine CI).\n\n" +
+      "## What can break prod / candidate\n" +
+      "- DB creds come from ESO/OpenBao on every env; never write plaintext DB passwords.\n" +
+      "- Deploys ship prebuilt images by SHA; verify the live build before validating.\n\n" +
+      "## What to recall next\n" +
+      "- `cognition-substrate-bootstrap` (why the session bundle exists) and the skills index in the session bundle. Then create this node's `<slug>-agent-orientation` and cite this entry.\n\n" +
+      "Refine whenever repo layout, scripts, CI, deploy, auth, or validation behavior changes.",
+    sourceType: "human",
+    confidencePct: 60,
+    tags: ["agent-orientation", "operating-map", "onboarding", "session-start"],
+  },
+  {
     id: "cogni-meta-confidence-convention",
     domain: "meta",
     title: "Confidence-score convention across the knowledge plane",

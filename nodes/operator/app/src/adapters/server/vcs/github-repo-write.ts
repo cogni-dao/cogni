@@ -153,6 +153,8 @@ export interface ForkFromTemplateInput {
   readonly pluginContract?: string;
   readonly signalContract?: string;
   readonly knowledgeRemote?: NodeKnowledgeRemote;
+  /** One-line node mission (`intent.mission`); a starter seed is emitted when omitted. */
+  readonly mission?: string;
 }
 
 /** One entry in a `POST /git/trees` payload; `sha: null` deletes the path from `base_tree`. */
@@ -765,6 +767,7 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
         pluginContract: input.pluginContract,
         signalContract: input.signalContract,
         knowledgeRemote: input.knowledgeRemote,
+        mission: input.mission,
       })
     );
     const externalSecretEntries: GitTreeEntry[] = [];

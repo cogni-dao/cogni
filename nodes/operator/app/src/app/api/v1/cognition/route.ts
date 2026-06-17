@@ -8,11 +8,13 @@
  *   with a live skills index + domain pointers from the knowledge hub, plus a
  *   rendered markdown bundle a SessionStart hook echoes into agent context.
  * Scope: Single authed GET (any principal: cookie-session human OR bearer
- *   agent). Reads via container.knowledgeStorePort. Index-only — full entry
- *   bodies stay behind the same authed read routes (KNOWLEDGE_READ_REQUIRES_PRINCIPAL).
+ *   agent). Reads via container.knowledgeStorePort. Index-first — full entry
+ *   bodies stay behind the same authed read routes (KNOWLEDGE_READ_REQUIRES_PRINCIPAL),
+ *   save one bounded current-node orientation excerpt.
  *   The public bootstrap seam stays /api/v1/agent/register: register → key → cognition.
  * Invariants:
- *   - INDEX_NOT_CONTENT: returns skill/domain pointers, never full bodies.
+ *   - INDEX_FIRST: returns skill/domain pointers + one bounded orientation
+ *     excerpt, never full entry bodies.
  *   - IRREDUCIBLE_INVARIANTS_ALWAYS_PRESENT: invariants + markdown render even
  *     when the hub is unconfigured or empty.
  *   - NO_INTERNAL_BIND_ADDR: origin derived from forwarded headers first.
@@ -33,7 +35,9 @@ import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { getNodeMission, getNodeName } from "@/shared/config";
 import { serverEnv } from "@/shared/env";
 import {
+  excerptFromContent,
   isCognitionEntry,
+  type OrientationExcerpt,
   renderBundleMarkdown,
   SESSION_BOOTSTRAP_INVARIANTS,
 } from "./_bundle";
@@ -78,6 +82,12 @@ export const GET = wrapRouteHandlerWithLogging(
 
     const skillsIndex: CognitionSkillPointer[] = [];
     const domainPointers: CognitionDomainPointer[] = [];
+    // The current node's orientation entry id, by `<slug>-agent-orientation`
+    // convention — captured during the scan, its excerpt fetched below. A
+    // node-specific entry (`<name>-agent-orientation`) wins over the generic
+    // `cogni-agent-orientation` starter seed every node inherits.
+    const exactOrientationId = `${name}-agent-orientation`;
+    let orientationId: string | null = null;
 
     // Cognition is delivered live from the hub; the irreducible invariants below
     // are the only piece that must survive an unconfigured/empty hub.
@@ -85,6 +95,9 @@ export const GET = wrapRouteHandlerWithLogging(
     if (port) {
       const domains = await port.listDomainsFull();
       for (const d of domains) {
+        // Suppress empty domains (e.g. a placeholder `nodes` with 0 entries):
+        // a bare count is noise in a precious index.
+        if (d.entryCount === 0) continue;
         domainPointers.push({
           domain: d.id,
           description: d.description,
@@ -94,6 +107,11 @@ export const GET = wrapRouteHandlerWithLogging(
           limit: PER_DOMAIN_LIMIT,
         });
         for (const r of rows) {
+          if (r.id === exactOrientationId) {
+            orientationId = r.id;
+          } else if (!orientationId && r.id.endsWith("-agent-orientation")) {
+            orientationId = r.id;
+          }
           if (!isCognitionEntry(r.entryType)) continue;
           skillsIndex.push({
             id: r.id,
@@ -102,6 +120,17 @@ export const GET = wrapRouteHandlerWithLogging(
             domain: r.domain,
           });
         }
+      }
+    }
+
+    let orientation: OrientationExcerpt | null = null;
+    if (port && orientationId) {
+      const entry = await port.getKnowledge(orientationId);
+      if (entry) {
+        orientation = {
+          id: entry.id,
+          excerpt: excerptFromContent(entry.content),
+        };
       }
     }
 
@@ -121,6 +150,7 @@ export const GET = wrapRouteHandlerWithLogging(
       toolingInvariants,
       skillsIndex,
       domainPointers,
+      orientation,
     });
 
     ctx.log.info(
@@ -129,6 +159,7 @@ export const GET = wrapRouteHandlerWithLogging(
         name,
         skills: skillsIndex.length,
         domains: domainPointers.length,
+        orientation: orientation?.id ?? null,
         hub: Boolean(port),
       },
       "cognition.bundle_success"
