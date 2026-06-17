@@ -339,7 +339,7 @@ module.exports = {
       name: "no-internal-adapter-imports",
       severity: "error",
       from: {
-        path: "^nodes/operator/app/src/(?!adapters/server/)(?!auth\\.ts$)(?!bootstrap/container\\.ts$)(?!bootstrap/graph-executor\\.factory\\.ts$)(?!bootstrap/agent-discovery\\.ts$)(?!bootstrap/jobs/syncGovernanceSchedules\\.job\\.ts$)",
+        path: "^nodes/operator/app/src/(?!adapters/server/)(?!auth\\.ts$)(?!bootstrap/container\\.ts$)(?!bootstrap/graph-executor\\.factory\\.ts$)(?!bootstrap/agent-discovery\\.ts$)(?!bootstrap/jobs/syncGovernanceSchedules\\.job\\.ts$)(?!bootstrap/jobs/syncNodeSchedules\\.job\\.ts$)",
       },
       to: {
         path: "^nodes/operator/app/src/adapters/server/(?!index\\.ts$).*\\.ts$",
@@ -349,7 +349,7 @@ module.exports = {
         "Exempt: auth.ts (bootstrap), container.ts (trust boundaries), " +
         "graph-executor.factory.ts + agent-discovery.ts (sandbox subpath imports " +
         "to avoid Turbopack bundling dockerode native addon chain), " +
-        "syncGovernanceSchedules.job.ts (needs serviceDb for advisory lock).",
+        "syncGovernanceSchedules.job.ts + syncNodeSchedules.job.ts (need serviceDb for advisory lock).",
     },
 
     // adapters/test: must use @/adapters/test (index.ts), not internal files
@@ -604,13 +604,13 @@ module.exports = {
       from: {
         path: "^nodes/operator/app/src/",
         pathNot:
-          "^nodes/operator/app/src/(auth\\.ts|bootstrap/container\\.ts|bootstrap/jobs/syncGovernanceSchedules\\.job\\.ts)$",
+          "^nodes/operator/app/src/(auth\\.ts|bootstrap/container\\.ts|bootstrap/jobs/syncGovernanceSchedules\\.job\\.ts|bootstrap/jobs/syncNodeSchedules\\.job\\.ts)$",
       },
       to: {
         path: "^nodes/operator/app/src/adapters/server/db/drizzle\\.service-client\\.ts$",
       },
       comment:
-        "Only auth.ts, container.ts, and governance job may import the service-db adapter (BYPASSRLS singleton)",
+        "Only auth.ts, container.ts, and the governance + node schedule jobs may import the service-db adapter (BYPASSRLS singleton)",
     },
 
     // =========================================================================
