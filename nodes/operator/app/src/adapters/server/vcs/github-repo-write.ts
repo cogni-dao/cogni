@@ -14,6 +14,11 @@
  *     overlay, AppSet, edge-route, and ExternalSecret shape. No gitlink, no .gitmodules
  *     (spec.node-submodule-retirement).
  *   - PR_AGAINST_MAIN: opens node-formation PRs against `main`; never force-pushes review branches.
+ *   - PREVIEW_SOURCE_ADDRESSED: preview promotion dispatches `promote-and-deploy.yml`
+ *     (ONE_PROMOTION_PRIMITIVE) source-addressed by the node image sha (`node_source_sha`
+ *     input, like candidate-flight) and writes ZERO commits to `main`. The pin is recorded on
+ *     `deploy/preview`. The App's main-write privilege is reserved for governance/code merges,
+ *     never routine deploy pins (task.5022; the prior pin-PR/main-commit stalled or polluted main).
  * Side-effects: IO (GitHub REST API)
  * Links: docs/spec/node-formation.md, task.0370, task.5083
  * @internal
@@ -370,12 +375,30 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
   }
 
   /**
-   * Node-merge → preview tie (PREVIEW_VIA_FLIGHT_PREVIEW). Bumps the parent catalog
-   * `source_sha` pin to the merged node SHA and enables auto-merge on the one-line PR.
-   * Landing that PR on parent main is the flight-preview.yml trigger — we never dispatch
-   * promote-and-deploy here. Image existence is NOT gated in-app: the GitHub Packages API
-   * false-negatives on private node images (git-app-expert), so flight-preview's own
-   * "no images found" hard-fail is the loud backstop, not a silent skip.
+   * Node-merge → preview tie. Dispatches preview exactly like production
+   * (PROMOTION_RUNS_AS_THE_OPERATOR + ONE_PROMOTION_PRIMITIVE) — and writes ZERO
+   * commits to operator `main`.
+   *
+   * SOURCE_ADDRESSED_LIKE_CANDIDATE_FLIGHT: the node image sha rides the dispatch as
+   * the `node_source_sha` input — the same source-addressing candidate-flight.yml
+   * already uses. promote-and-deploy's "Resolve digest for this node" remote-source
+   * branch PREFERS that input over the `yq '.source_sha' infra/catalog/<slug>.yaml`
+   * catalog read, so the merged node head sha resolves the image directly. The pin is
+   * then recorded where deploy state belongs — `.promote-state/source-sha-by-app.json`
+   * on `deploy/preview` (the existing promote machinery, update-source-sha-map.sh) —
+   * never on `main`. The operator App's main-write privilege is reserved for
+   * governance/code merges, not routine deploy pins (deploy state lives on deploy
+   * branches, separate from code).
+   *
+   * The dispatch `ref` stays `main`: that is the operator WORKFLOW checkout ref, not a
+   * deploy pin. We confirm the catalog row exists/identifies the slug (a missing or
+   * mismatched row is a real misconfiguration), but read NOTHING from it for
+   * resolution — the input carries the sha. Image existence is NOT gated in-app: the
+   * GitHub Packages API false-negatives on private node images (git-app-expert), so
+   * the workflow's own "image not found" hard-fail is the loud backstop.
+   *
+   * (This replaces the stalling pin-PR — and its successor direct-main-commit — that
+   * polluted `main` with a deploy-state firehose: PRs #1699/#1700/#1711, task.5022.)
    */
   async promoteNodeToPreview(
     input: PromoteNodeToPreviewInput
@@ -389,6 +412,8 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       );
     }
 
+    // Confirm the catalog row exists + identifies this slug. We do NOT read source_sha
+    // from it — the dispatch carries the node sha (SOURCE_ADDRESSED_LIKE_CANDIDATE_FLIGHT).
     const catalogText = await this.fetchFileText({
       owner: parentOwner,
       repo: parentRepo,
@@ -411,27 +436,19 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       );
     }
 
-    const pin = await this.ensureCatalogSourceSha({
+    const dispatch = await this.dispatchNodePromote({
       owner: parentOwner,
       repo: parentRepo,
+      env: "preview",
       slug,
-      nodeRepoUrl: catalog.data.source_repo,
-      nodeRepoHeadSha: sourceSha,
+      // Source-address the node image; NO source_sha (operator checkout ref stays main).
+      nodeSourceSha: sourceSha,
     });
-    if (pin.status === "already_pinned") {
-      return { status: "already_pinned", currentSha: pin.currentSha };
-    }
-    const autoMergeEnabled = await this.enableAutoMerge(
-      parentOwner,
-      parentRepo,
-      pin.prNumber
-    );
+
     return {
-      status: "pin_pr_opened",
-      prNumber: pin.prNumber,
-      prUrl: pin.prUrl,
-      currentSha: pin.currentSha,
-      autoMergeEnabled,
+      status: "dispatched",
+      sourceSha,
+      workflowUrl: dispatch.workflowUrl,
     };
   }
 
@@ -469,6 +486,7 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
     env: string;
     slug: string;
     sourceSha?: string;
+    nodeSourceSha?: string;
   }): Promise<CandidateFlightDispatchResult> {
     const octokit = await this.getOctokit(input.owner, input.repo);
     const inputs: Record<string, string> = {
@@ -484,6 +502,12 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
     // Omit source_sha for catalog-pin nodes (CATALOG_SOURCE_SHA_IS_THE_DEPLOY_PIN);
     // never pass a child SHA as the parent checkout ref.
     if (input.sourceSha) inputs.source_sha = input.sourceSha;
+    // Source-addressed node image sha (like candidate-flight): when present, the
+    // workflow's remote-source digest resolver pins THIS instead of reading the
+    // catalog `source_sha` on the checked-out operator ref — so preview promote needs
+    // NO catalog write to operator main. Absent (production) ⇒ workflow reads the
+    // catalog pin, behavior unchanged.
+    if (input.nodeSourceSha) inputs.node_source_sha = input.nodeSourceSha;
     // workflow_dispatch is fire-and-forget (GitHub queues + returns 204); bound it
     // so a slow/stuck GitHub call can't hang the promote route with no deadline.
     await octokit.request(
@@ -1000,38 +1024,6 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       }
     }
     return count;
-  }
-
-  /**
-   * Enable GitHub auto-merge (SQUASH) on a parent PR. `main` has no merge queue, so auto-merge
-   * lands the PR the moment its required checks (unit/component/static/manifest) pass — and that
-   * push to `main` fires flight-preview.yml. Non-fatal: if the repo disallows auto-merge or the PR
-   * has no pending checks to gate on, GitHub rejects the mutation; we leave the PR open (a human
-   * lands it) and report false.
-   */
-  private async enableAutoMerge(
-    owner: string,
-    repo: string,
-    prNumber: number
-  ): Promise<boolean> {
-    const octokit = await this.getOctokit(owner, repo);
-    const { data: pr } = await octokit.request(
-      "GET /repos/{owner}/{repo}/pulls/{pull_number}",
-      { owner, repo, pull_number: prNumber }
-    );
-    try {
-      await octokit.graphql(
-        `mutation($pullRequestId: ID!) {
-          enablePullRequestAutoMerge(input: { pullRequestId: $pullRequestId, mergeMethod: SQUASH }) {
-            pullRequest { number }
-          }
-        }`,
-        { pullRequestId: pr.node_id }
-      );
-      return true;
-    } catch {
-      return false;
-    }
   }
 
   /** Resolve `heads/main` → its commit + root-tree SHAs (the parent for a node-formation commit). */

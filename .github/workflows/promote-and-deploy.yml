@@ -20,6 +20,9 @@ on:
       build_sha:
         description: "SHA baked into images at build time (PR branch head). Defaults to source_sha. Ignored in preview-forward mode."
         required: false
+      node_source_sha:
+        description: "Remote-source node image sha (source-addressed, like candidate-flight). When present, the remote-source digest resolver pins this sha instead of reading infra/catalog/<node>.yaml source_sha. Absent ⇒ catalog read (CATALOG_SOURCE_SHA_IS_THE_DEPLOY_PIN) — production unchanged."
+        required: false
       nodes:
         description: "CSV of nodes to promote (default: all NODE_TARGETS + scheduler-worker). Set by flight-preview.yml from RESOLVED_TARGETS."
         required: false
@@ -263,6 +266,7 @@ jobs:
           NODE: ${{ matrix.node }}
           HEAD_SHA: ${{ needs.decide.outputs.head_sha }}
           PREVIEW_FORWARD: ${{ needs.decide.outputs.preview_forward }}
+          NODE_SOURCE_SHA: ${{ inputs.node_source_sha }}
         run: |
           set -euo pipefail
           # shellcheck source=scripts/ci/lib/image-tags.sh
@@ -295,11 +299,22 @@ jobs:
               echo "::error::remote-source artifact ${NODE} missing image_repository"
               exit 1
             fi
-            # Deploy SHA from the catalog source_sha pin, not a gitlink
-            # (CATALOG_SOURCE_SHA_IS_THE_DEPLOY_PIN, spec.node-submodule-retirement).
-            APP_SOURCE_SHA="$(yq -N '.source_sha // ""' "$catalog")"
+            # Source-addressed (like candidate-flight): when the dispatch carries
+            # node_source_sha, honor it as the deploy pin — preview promote dispatches
+            # the merged node head sha this way, so NO catalog write to operator main is
+            # needed. Absent ⇒ fall back to the catalog source_sha pin
+            # (CATALOG_SOURCE_SHA_IS_THE_DEPLOY_PIN, spec.node-submodule-retirement) —
+            # production omits the input and is unchanged. This same APP_SOURCE_SHA is
+            # both the image tag below AND the value recorded into
+            # .promote-state/source-sha-by-app.json (update-source-sha-map.sh), so the
+            # deploy/preview pin always matches what was deployed.
+            if [ -n "${NODE_SOURCE_SHA:-}" ]; then
+              APP_SOURCE_SHA="$NODE_SOURCE_SHA"
+            else
+              APP_SOURCE_SHA="$(yq -N '.source_sha // ""' "$catalog")"
+            fi
             if [ -z "$APP_SOURCE_SHA" ]; then
-              echo "::error::remote-source artifact ${NODE} missing source_sha pin in $catalog"
+              echo "::error::remote-source artifact ${NODE} missing source_sha (no node_source_sha input and no pin in $catalog)"
               exit 1
             fi
             full_tag="${image_repository}:sha-${APP_SOURCE_SHA}"
