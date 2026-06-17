@@ -7,7 +7,7 @@ image_tag_suffix: "-red"
 migrator_tag_suffix: "-red-migrate"
 source_repo: https://github.com/cogni-dao/red.git
 image_repository: ghcr.io/cogni-dao/red
-source_sha: f6ccabfb8f9bd8802bcf8a6e828130f5d9aa939c
+source_sha: 89836a13250fc7e336bbf3b857b3752150979783
 candidate_a_branch: deploy/candidate-a-red
 preview_branch: deploy/preview-red
 production_branch: deploy/production-red
