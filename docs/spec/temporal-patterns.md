@@ -310,14 +310,14 @@ NodeTaskWorkflow(input: NodeTaskInput)                              (the generic
 
 #### Invariants specific to node-as-tenant
 
-| Invariant                       | Rule                                                                                                   |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| **WORKFLOWTYPE_FROM_ROUTE_XOR_GRAPH** | The node declares `route` XOR `graph`; the workflowType is *inferred* from which is present. There is no node-facing `target` enum — that is operator vocabulary. |
-| **PLATFORM_OVERLAP_AND_CATCHUP** | `overlap`/`catchupWindow` are NOT in the node-facing schema. The operator fixes `skip`/`0s`; a node cannot tune them. |
-| **REAL_CRON_DRIFT**             | Cron drift is detected against the **stored cron** (DB row), never `describeSchedule().cron` — Temporal compiles crons to calendars and returns null. (The governance equivalent skips cron entirely; that is a latent bug this path fixes.) |
-| **NODE_ID_PINNED (M8)**         | A schedule's `nodeId` is pinned to the repo-spec's own `node_id`; a repo-spec cannot author a foreign-node schedule. `route` is relative to the node's own host (SSRF / cross-tenant guard). |
-| **TENANT_PRINCIPAL_FAIL_CLOSED** | Dispatch uses a per-node principal resolved at runtime; an unprovisioned node throws — there is no shared-token fallback. |
-| **TEARDOWN_REVOKES (M7)**       | Node decommission pauses the node's schedules **and** `revokedAt`s its grants in one saga; validation fails closed on revoked grants. |
+| Invariant                             | Rule                                                                                                                                                                                                                                         |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **WORKFLOWTYPE_FROM_ROUTE_XOR_GRAPH** | The node declares `route` XOR `graph`; the workflowType is _inferred_ from which is present. There is no node-facing `target` enum — that is operator vocabulary.                                                                            |
+| **PLATFORM_OVERLAP_AND_CATCHUP**      | `overlap`/`catchupWindow` are NOT in the node-facing schema. The operator fixes `skip`/`0s`; a node cannot tune them.                                                                                                                        |
+| **REAL_CRON_DRIFT**                   | Cron drift is detected against the **stored cron** (DB row), never `describeSchedule().cron` — Temporal compiles crons to calendars and returns null. (The governance equivalent skips cron entirely; that is a latent bug this path fixes.) |
+| **NODE_ID_PINNED (M8)**               | A schedule's `nodeId` is pinned to the repo-spec's own `node_id`; a repo-spec cannot author a foreign-node schedule. `route` is relative to the node's own host (SSRF / cross-tenant guard).                                                 |
+| **TENANT_PRINCIPAL_FAIL_CLOSED**      | Dispatch uses a per-node principal resolved at runtime; an unprovisioned node throws — there is no shared-token fallback.                                                                                                                    |
+| **TEARDOWN_REVOKES (M7)**             | Node decommission pauses the node's schedules **and** `revokedAt`s its grants in one saga; validation fails closed on revoked grants.                                                                                                        |
 
 #### Idempotency is a two-sided contract
 

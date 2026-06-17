@@ -71,7 +71,7 @@ A sovereign node must be able to change these without an operator code PR:
 | Secrets          | `.cogni/secrets-catalog.yaml` key declarations             | create OpenBao paths, ESO manifests, and per-env values                          |
 | Storage          | `.cogni/node.yaml` bucket/object declarations              | provision object store credentials and lifecycle policy                          |
 | Streams          | `.cogni/node.yaml` stream declarations and event contracts | provision Redis/SSE/WebSocket substrate when enabled                             |
-| Recurring work   | `.cogni/repo-spec.yaml` `schedules[]` (cron + route/graph)  | reconcile into Temporal Schedules under the node's tenant identity (see below)   |
+| Recurring work   | `.cogni/repo-spec.yaml` `schedules[]` (cron + route/graph) | reconcile into Temporal Schedules under the node's tenant identity (see below)   |
 | Runtime shape    | `k8s/base`, health endpoints, ports                        | render overlays, AppSets, gateway routes                                         |
 
 The operator may reject invalid declarations, but it should not require a root package or infra code edit for routine node evolution.
@@ -98,13 +98,13 @@ schedules:
 
 Contract (the seam, not the implementation):
 
-| Node declares                              | Operator wires                                                              |
-| ------------------------------------------ | --------------------------------------------------------------------------- |
-| `id`, `cron`, `timezone`                   | the Temporal Schedule (cronExpressions + timezone)                          |
-| `route` **XOR** `graph`                    | the workflowType — **inferred** (`route` → `NodeTaskWorkflow`, `graph` → `GraphRunWorkflow`); there is no node-facing `target` enum (operator vocab stays operator-side) |
-| `payload`                                  | forwarded verbatim inside the workflow input envelope                       |
-| _(nothing)_                                | `overlap: skip` + `catchupWindow: 0s` — **platform invariants**, operator-fixed, never node-tunable |
-| _(nothing — pinned from the node's `node_id`)_ | the tenant identity: a per-node `ExecutionGrant` + per-node dispatch principal; `workflowId = node-task:{node}:{scheduleId}` |
+| Node declares                                  | Operator wires                                                                                                                                                           |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `id`, `cron`, `timezone`                       | the Temporal Schedule (cronExpressions + timezone)                                                                                                                       |
+| `route` **XOR** `graph`                        | the workflowType — **inferred** (`route` → `NodeTaskWorkflow`, `graph` → `GraphRunWorkflow`); there is no node-facing `target` enum (operator vocab stays operator-side) |
+| `payload`                                      | forwarded verbatim inside the workflow input envelope                                                                                                                    |
+| _(nothing)_                                    | `overlap: skip` + `catchupWindow: 0s` — **platform invariants**, operator-fixed, never node-tunable                                                                      |
+| _(nothing — pinned from the node's `node_id`)_ | the tenant identity: a per-node `ExecutionGrant` + per-node dispatch principal; `workflowId = node-task:{node}:{scheduleId}`                                             |
 
 Security boundary (M8): the schedule's `nodeId` is **operator-pinned to the repo-spec's
 own `node_id`** (`extractNodeSchedules`), never free-text — a repo-spec is structurally
