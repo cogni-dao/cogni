@@ -13,16 +13,6 @@
  * @public
  */
 
-// Grant scope mint + checker (M1 grant↔node binding + M2 scope generalization)
-export {
-  graphExecuteScope,
-  graphExecuteWildcardScope,
-  nodeTaskScope,
-  nodeTaskWildcardScope,
-  parseNodeTaskScope,
-  type ScopeCheckResult,
-  validateGrantScope,
-} from "./scopes";
 // Job payloads (Zod schemas for producer/consumer validation)
 export {
   type ExecuteScheduledRunPayload,
@@ -78,6 +68,16 @@ export {
   type ScheduleWorkerPort,
   type UpdateScheduleInput,
 } from "./ports";
+// Grant scope mint + checker (M1 grant↔node binding + M2 scope generalization)
+export {
+  graphExecuteScope,
+  graphExecuteWildcardScope,
+  nodeTaskScope,
+  nodeTaskWildcardScope,
+  parseNodeTaskScope,
+  type ScopeCheckResult,
+  validateGrantScope,
+} from "./scopes";
 // Services (pure orchestration — no adapters, no I/O beyond ports)
 export {
   type GovernanceScheduleConfig,

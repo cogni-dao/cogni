@@ -133,8 +133,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       if (isGrantNotFoundError(err)) errorCode = "grant_not_found";
       else if (isGrantExpiredError(err)) errorCode = "grant_expired";
       else if (isGrantRevokedError(err)) errorCode = "grant_revoked";
-      else if (isGrantNodeMismatchError(err))
-        errorCode = "grant_node_mismatch";
+      else if (isGrantNodeMismatchError(err)) errorCode = "grant_node_mismatch";
       else if (isGrantScopeMismatchError(err))
         errorCode = "grant_scope_mismatch";
 
