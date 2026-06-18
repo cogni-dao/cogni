@@ -153,8 +153,12 @@ const NODE_REPO_REQUIRED_WORKFLOWS = [
   ".github/workflows/pr-lint.yaml",
 ] as const;
 
-/** Stable head-branch prefix for the forward-mirror PR (BRANCH_IS_IDEMPOTENCY_KEY). */
-const MIRROR_BRANCH_PREFIX = "cogni-operator/sync-canonical-";
+// Stable, SHA-free branches → ONE living PR per fork per tier, force-updated on each node-template
+// merge (Dependabot/Renovate pattern: rebase-in-place, never delete+recreate). Keyed by the sync
+// concern, not the source SHA, so a new template release refreshes the same PR instead of opening a new one.
+const SYNC_BRANCH = "cogni-operator/node-template-sync";
+const UPSTREAM_BRANCH = "cogni-operator/node-template-upstream";
+const CHANGELOG_MAX = 30;
 
 const CatalogEntrySchema = z.object({
   name: z.string(),
@@ -594,7 +598,7 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       sourceRef
     );
     const shortSha = sourceSha.slice(0, 8);
-    const branch = `${MIRROR_BRANCH_PREFIX}${shortSha}`;
+    const branch = SYNC_BRANCH;
 
     // Read each canonical file from source@sourceSha; diff against the fork's main; keep changed-only.
     const changedPaths: string[] = [];
@@ -642,6 +646,12 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       targetRepo
     );
     const fileList = changedPaths.map((p) => `- \`${p}\``).join("\n");
+    const title = "chore: sync CI + contract files from node-template";
+    const body =
+      `Syncs this fork's canonical files to \`${sourceOwner}/${sourceRepo}@${shortSha}\`. ` +
+      `One PR, force-updated on each node-template release — not a new PR per change.\n\n` +
+      `Files overwritten to match canonical (${changedPaths.length}):\n${fileList}\n\n` +
+      `_Maintained automatically by cogni-operator._`;
     const { prNumber, prUrl } = await this.commitTreeAndOpenPr(
       tgtOctokit,
       targetOwner,
@@ -651,18 +661,19 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
         baseCommitSha,
         baseTreeSha,
         entries,
-        message: `chore: sync ${changedPaths.length} canonical file(s) from ${sourceOwner}/${sourceRepo}@${shortSha}`,
+        message: `chore: sync canonical files from ${sourceOwner}/${sourceRepo}@${shortSha}`,
         branch,
-        pr: {
-          title: `chore: sync canonical node-template files (${shortSha})`,
-          body:
-            `Operator-authored forward-mirror of canonical node-template content from ` +
-            `\`${sourceOwner}/${sourceRepo}@${shortSha}\` (App-direct via Git Data API). ` +
-            `The mirrored set is whatever canonical paths the caller declares — CI workflows, ` +
-            `scripts, package manifests, or any other operator-scope file — not CI alone.\n\n` +
-            `Changed files:\n${fileList}\n`,
-        },
+        pr: { title, body },
       }
+    );
+    // Living PR: openOrFindPr only sets title/body on CREATE, so refresh them on the reused PR.
+    await this.updatePrBody(
+      tgtOctokit,
+      targetOwner,
+      targetRepo,
+      prNumber,
+      title,
+      body
     );
     return { status: "pr_opened", branch, prNumber, prUrl, changedPaths };
   }
@@ -723,56 +734,118 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
     // GitHub resolves head to the base repo → false "up to date"). Instead materialize the upstream
     // commit as a branch IN the fork (the SHA is reachable via the shared fork network), then open a
     // SAME-repo PR head=that branch → base=fork main. The diff is exactly the un-merged upstream deltas.
+    // Living PR: one stable branch force-updated to the latest node-template tip (Dependabot pattern).
+    // Same-org cross-fork PRs can't disambiguate by `owner:branch`, so materialize the upstream commit
+    // as a branch IN the fork (reachable via the shared fork network) + a SAME-repo PR head→base.
     const octokit = await this.getOctokit(forkOwner, forkRepo);
-    const branch = `cogni-operator/upstream-${templateSha.slice(0, 8)}`;
+    await this.upsertRef(
+      octokit,
+      forkOwner,
+      forkRepo,
+      UPSTREAM_BRANCH,
+      templateSha
+    );
+    const title = "chore: merge node-template upstream";
+
+    let pr: { number: number; html_url: string };
     try {
-      await octokit.request("POST /repos/{owner}/{repo}/git/refs", {
-        owner: forkOwner,
-        repo: forkRepo,
-        ref: `refs/heads/${branch}`,
-        sha: templateSha,
-      });
-    } catch (err) {
-      const status = (err as { status?: number })?.status;
-      if (status !== 422) throw err; // 422 = ref already exists (idempotent re-run)
-    }
-    const title = `chore: merge node-template upstream (${templateSha.slice(0, 8)})`;
-    const body =
-      `Optional Tier-2 sync: merges node-template app/graphs/runtime improvements from ` +
-      `\`${templateOwner}/${templateRepo}@${templateSha.slice(0, 8)}\` into this fork, preserving your ` +
-      `customizations (review + resolve conflicts as the fork owner). The required CI/contract files ` +
-      `arrive separately as a surgical Tier-1 PR that always applies cleanly.`;
-    try {
-      const { data: pr } = await octokit.request(
+      const { data } = await octokit.request(
         "POST /repos/{owner}/{repo}/pulls",
         {
           owner: forkOwner,
           repo: forkRepo,
           title,
-          body,
-          head: branch,
+          body: title,
+          head: UPSTREAM_BRANCH,
           base: forkBranch,
         }
       );
-      return { status: "pr_opened", prNumber: pr.number, prUrl: pr.html_url };
+      pr = data;
     } catch (err) {
-      const status = (err as { status?: number })?.status;
-      if (status !== 422) throw err;
-      // 422 = open PR already exists for this head, or no commits between (fork already up to date).
+      if ((err as { status?: number })?.status !== 422) throw err;
       const { data: existing } = await octokit.request(
         "GET /repos/{owner}/{repo}/pulls",
         {
           owner: forkOwner,
           repo: forkRepo,
           state: "open",
-          head: `${forkOwner}:${branch}`,
+          head: `${forkOwner}:${UPSTREAM_BRANCH}`,
           per_page: 1,
         }
       );
-      const pr = existing[0];
-      return pr
-        ? { status: "pr_opened", prNumber: pr.number, prUrl: pr.html_url }
-        : { status: "up_to_date" };
+      const found = existing[0];
+      // No commits between the branch and fork main, and no open PR → fork already current.
+      if (!found) return { status: "up_to_date" };
+      pr = found;
+    }
+
+    // Body = the node-template commit changelog this PR carries (lint'd PR titles → clean enumeration).
+    const subjects = await this.prCommitSubjects(
+      octokit,
+      forkOwner,
+      forkRepo,
+      pr.number
+    );
+    const log = subjects.length
+      ? subjects.map((s) => `- ${s}`).join("\n")
+      : "_(no commits — see the Commits tab)_";
+    const body =
+      `Merges node-template upstream into this fork, preserving your customizations ` +
+      `(a merge, not an overwrite). One PR, force-updated as node-template advances.\n\n` +
+      `Up to \`${templateOwner}/${templateRepo}@${templateSha.slice(0, 8)}\` — node-template changes:\n` +
+      `${log}\n\n` +
+      `Review + resolve conflicts as the fork owner. Optional — close to skip.\n` +
+      `_Maintained automatically by cogni-operator._`;
+    await this.updatePrBody(
+      octokit,
+      forkOwner,
+      forkRepo,
+      pr.number,
+      title,
+      body
+    );
+    return { status: "pr_opened", prNumber: pr.number, prUrl: pr.html_url };
+  }
+
+  /** First line of each commit on a PR (lint'd subjects → changelog), newest-capped. */
+  private async prCommitSubjects(
+    octokit: Octokit,
+    owner: string,
+    repo: string,
+    prNumber: number
+  ): Promise<string[]> {
+    try {
+      const { data } = await octokit.request(
+        "GET /repos/{owner}/{repo}/pulls/{pull_number}/commits",
+        { owner, repo, pull_number: prNumber, per_page: CHANGELOG_MAX }
+      );
+      return (data as Array<{ commit: { message: string } }>)
+        .map((c) => c.commit.message.split("\n")[0]?.trim() ?? "")
+        .filter(Boolean);
+    } catch {
+      return [];
+    }
+  }
+
+  /** Refresh a living PR's title + body (openOrFindPr only sets them on create). */
+  private async updatePrBody(
+    octokit: Octokit,
+    owner: string,
+    repo: string,
+    prNumber: number,
+    title: string,
+    body: string
+  ): Promise<void> {
+    try {
+      await octokit.request("PATCH /repos/{owner}/{repo}/pulls/{pull_number}", {
+        owner,
+        repo,
+        pull_number: prNumber,
+        title,
+        body,
+      });
+    } catch {
+      // Best-effort body refresh; never fail the sync over a description update.
     }
   }
 
