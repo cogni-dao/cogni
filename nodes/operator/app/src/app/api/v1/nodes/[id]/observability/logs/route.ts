@@ -4,15 +4,18 @@
 /**
  * Module: `@app/api/v1/nodes/[id]/observability/logs`
  * Purpose: north-star ② (task.5025) — the node-scoped Loki log-read PROXY. A developer-RBAC'd dev
- *   sends a LogQL pipeline filter; the operator runs it server-side **forced to `{node="<id>"}`** with
- *   its OWN read token and returns only that node's lines. The dev **never holds a Grafana token** →
- *   node-scoped by construction (the per-node OpenFGA check gates WHO; the forced selector gates REACH).
+ *   sends the SAME full LogQL they'd write for loki-query.sh / the Grafana MCP (`?query=`); the
+ *   operator authorizes its reach (forcing `{env,service="app",node="<id>"}`), runs it server-side
+ *   with its OWN read token, and returns only that node's lines. The dev **never holds a Grafana
+ *   token** → node-scoped by construction (the per-node OpenFGA check gates WHO; the rebuilt selector
+ *   gates REACH).
  * Scope: Thin shell — Cogni-token auth, developer-RBAC gate (same `node.flight` tuple as flight),
- *   resolve {id} via dev1's registry, build the pinned LogQL, delegate to the Loki reader.
+ *   resolve {slug|node_id} via dev1's registry, scope-validate the caller's LogQL, delegate to Loki.
  * Invariants:
  *   - COGNI_TOKEN_ONLY (Bearer-first); DEVELOPER_GATED (`node.flight`); fail-closed without a store.
  *   - NEVER_ISSUES_A_TOKEN: returns log lines, never a Grafana credential.
- *   - NODE_PIN_IS_FORCED: the selector is built server-side; the dev `filter` is pipeline-only.
+ *   - NODE_PIN_IS_FORCED: env/service/node are re-emitted server-side; a caller matcher may only narrow
+ *     (see scopeNodeLogQL). Out-of-scope selectors → 400, never a widened query.
  *   - GRACEFUL_UNWIRED: 503 `observability_unwired` until the operator's read token is ESO-wired.
  * Side-effects: IO (registry read, authz check, Loki query)
  * Links: src/features/nodes/observability-logs.ts, src/bootstrap/observability.factory.ts,
@@ -27,10 +30,10 @@ import { getSessionUser } from "@/app/_lib/auth/session";
 import { getContainer, resolveNodeRegistry } from "@/bootstrap/container";
 import { createLokiReader } from "@/bootstrap/observability.factory";
 import {
-  buildNodeScopedLogQL,
   FLIGHT_ENVS,
   isFlightEnv,
   ObservabilityQueryError,
+  scopeNodeLogQL,
 } from "@/features/nodes/observability-logs";
 
 export const runtime = "nodejs";
@@ -100,13 +103,15 @@ export async function GET(
     );
   }
 
-  // Build the node-pinned query. The selector is forced to this node; `filter` is pipeline-only.
+  // Authorize the caller's full LogQL query against this node. `?query=` takes the SAME LogQL a dev
+  // writes for loki-query.sh / the MCP; the operator forces env/service/node and lets other labels
+  // only narrow. Empty query → just this node's app stream.
   let query: string;
   try {
-    query = buildNodeScopedLogQL({
+    query = scopeNodeLogQL({
       env,
       nodeId: node.nodeId,
-      filter: params.get("filter") ?? undefined,
+      query: params.get("query") ?? undefined,
     });
   } catch (err) {
     if (err instanceof ObservabilityQueryError) {

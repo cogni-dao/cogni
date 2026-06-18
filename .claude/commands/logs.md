@@ -96,11 +96,24 @@ For CI failures, use `env="ci"`:
 
 > **This guide is operator-scope** (direct Grafana/MCP, full-fleet read). A **node
 > developer** debugging only _their_ node does NOT use this — they call the operator
-> **proxy** `GET /api/v1/nodes/{id}/observability/logs?env=<env>&filter=<logql pipeline>`
-> with their Cogni API key (needs the `developer` grant). The operator runs the query
-> server-side forced to `{service="app",node="<id>"}` and returns only their lines —
-> no Grafana token in dev hands. Scope envelope (which services/envs) +
-> the design: `docs/spec/grafana-observability-access.md` §"Node-dev log scope envelope".
+> **proxy** `GET /api/v1/nodes/{slug|node_id}/observability/logs?env=<env>&query=<full LogQL>`
+> with their Cogni API key (needs the `developer` grant). `query` takes the **same LogQL string
+> you'd paste into the MCP / `loki-query.sh` above** — e.g.
+> `query={service="app"} | json | level="error"` (URL-encode it). The operator forces
+> `env`/`service`/`node` to the caller's node and lets any other label matcher only narrow, so the
+> dev can never reach another node. `{slug|node_id}` resolves to the node's **repo-spec `node_id`**
+> (the deployment-identity SSOT, = `nodes.id`), not a private registry id — so this works for
+> spawned/external nodes (e.g. Beacon), not only wizard-born ones. Results come back as raw Loki
+> JSON; no Grafana token ever reaches the dev. An empty `query` returns the node's app stream.
+>
+> **Parity / scope:** for the caller's node slice this is **1:1** with this guide's MCP /
+> `loki-query.sh` path — same selector syntax, same `| json | …` pipeline, same JSON output — the
+> only difference is the operator runs it under an OpenFGA check instead of handing out a token. It
+> is **not** yet multi-scope: querying *other* nodes, shared services (`scheduler-worker`, …), or
+> env-wide is the **generic** route `GET /api/v1/observability/logs` + the `logs.query` RBAC action
+> (Phase 1, not yet built). When that lands, this guide will direct all node-dev agents to it
+> instead of the MCP. Identity + phasing: `docs/design/substrate-grafana-observability.md` §"Phase
+> 0"; node-scoped design: `docs/spec/grafana-observability-access.md` §"Node-dev log scope envelope".
 
 - `source` - `k8s` (in-cluster pod logs from cAdvisor) | `k8s-events`
   (kubernetes Events stream — pod OOMKilled, probe failures, evictions,

@@ -190,6 +190,28 @@ legitimate principal representation, not a stopgap. Agent-actor principals — w
 become meaningful once the actors table + execution grants are the registration
 authority; that is a forward capability, not a correction of V0.
 
+### Operator node-registry projection (OPERATOR_NODE_ROW_ID_IS_NODE_ID)
+
+The repo-spec `.cogni/repo-spec.yaml::node_id` is authoritative. The operator's `nodes`
+table is a **projection** of it (same relationship as `SPECS_GIT_AUTHORITATIVE` → derived
+index): the projection is rebuildable, never a second authority.
+
+That projection is keyed under the **same** identity — `nodes.id` **is** the node's
+repo-spec `node_id`, not a private surrogate. So the OpenFGA resource `node:<nodes.id>`,
+the Loki `node` label, the flight `nodeRef.nodeId`, and `NodeSummary.nodeId` are all the
+one repo-spec `node_id`. There is no separate "registry row id."
+
+- **Wizard-born nodes:** `nodes.id`'s `defaultRandom()` UUID *is* the act of minting the
+  `node_id`; `publish` writes that same value into the node's minted repo-spec. Authority
+  flows row → repo-spec, then the repo-spec is authoritative forever after.
+- **Externally-formed nodes:** the operator inserts the row with `id = <child repo-spec
+  node_id>` (read from the child repo), never a fresh UUID — so identity cannot fork.
+- **Addressing vs authority:** `nodes.slug` is the human/agent-friendly handle used to
+  *address* a node in API paths and UIs; the UUID `node_id` is the immutable *authority*
+  that reaches OpenFGA tuples and Loki labels. A slug is unique but not guaranteed
+  immutable, so it must never be an OpenFGA resource or a ledger key. Resolve `{id}` path
+  segments by `node_id` **or** `slug`, then use the UUID downstream.
+
 ## Scoping Rules
 
 ### Where Each Key Appears

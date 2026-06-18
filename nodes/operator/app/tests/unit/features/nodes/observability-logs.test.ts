@@ -3,76 +3,156 @@
 
 /**
  * Module: tests for `@features/nodes/observability-logs`.
- * Purpose: Pin the SECURITY core of the log-read proxy — the node selector is always forced, and a
- *   dev-supplied `filter` can never open a second stream selector to widen scope past their node.
+ * Purpose: Pin the SECURITY core of the log-read proxy — the node/service/env selector is always
+ *   re-emitted server-side, a caller's full LogQL can only NARROW within their node, and any attempt
+ *   to reach another node/service/env is rejected. Parity: the caller writes the same LogQL they'd
+ *   paste into loki-query.sh / the MCP.
  * Scope: Pure logic only.
  * Links: src/features/nodes/observability-logs.ts, task.5025
  */
 
 import { describe, expect, it } from "vitest";
 import {
-  buildNodeScopedLogQL,
   isFlightEnv,
-  MAX_FILTER_LENGTH,
+  MAX_QUERY_LENGTH,
   ObservabilityQueryError,
+  scopeNodeLogQL,
 } from "@/features/nodes/observability-logs";
 
 const NODE = "f97f68f2-8406-4a3b-b5a9-d579b779f19d";
 
-describe("buildNodeScopedLogQL", () => {
-  it("forces the node/service/env selector with no filter", () => {
-    expect(buildNodeScopedLogQL({ env: "production", nodeId: NODE })).toBe(
+describe("scopeNodeLogQL", () => {
+  it("returns just the node app stream for an empty query", () => {
+    expect(scopeNodeLogQL({ env: "production", nodeId: NODE })).toBe(
       `{env="production", service="app", node="${NODE}"}`
+    );
+    expect(scopeNodeLogQL({ env: "preview", nodeId: NODE, query: "   " })).toBe(
+      `{env="preview", service="app", node="${NODE}"}`
     );
   });
 
-  it("appends a pipeline filter after the forced selector", () => {
+  it("accepts a full LogQL selector and keeps the pipeline (loki-query.sh parity)", () => {
     expect(
-      buildNodeScopedLogQL({
+      scopeNodeLogQL({
         env: "candidate-a",
         nodeId: NODE,
-        filter: '| json | level="error"',
+        query: `{env="candidate-a", service="app", node="${NODE}"} | json | level="error"`,
       })
     ).toBe(
       `{env="candidate-a", service="app", node="${NODE}"} | json | level="error"`
     );
   });
 
-  it("REJECTS a filter containing braces (no second stream selector)", () => {
-    expect(() =>
-      buildNodeScopedLogQL({
-        env: "production",
-        nodeId: NODE,
-        filter: '} or {node="other-node"}',
-      })
-    ).toThrow(ObservabilityQueryError);
+  it("forces env/service/node even when the caller omits them", () => {
+    expect(
+      scopeNodeLogQL({ env: "production", nodeId: NODE, query: "{} | json" })
+    ).toBe(`{env="production", service="app", node="${NODE}"} | json`);
   });
 
-  it("rejects even a lone opening brace", () => {
-    expect(() =>
-      buildNodeScopedLogQL({ env: "production", nodeId: NODE, filter: "{" })
-    ).toThrow(ObservabilityQueryError);
-  });
-
-  it("rejects an over-length filter", () => {
-    expect(() =>
-      buildNodeScopedLogQL({
+  it("keeps an extra narrowing label matcher (e.g. stream, pod)", () => {
+    expect(
+      scopeNodeLogQL({
         env: "production",
         nodeId: NODE,
-        filter: "x".repeat(MAX_FILTER_LENGTH + 1),
+        query: '{stream="stderr"} | json | reqId="abc"',
       })
-    ).toThrow(ObservabilityQueryError);
+    ).toBe(
+      `{env="production", service="app", node="${NODE}", stream="stderr"} | json | reqId="abc"`
+    );
+  });
+
+  it("accepts a bare pipeline (no leading selector) as a convenience", () => {
+    expect(
+      scopeNodeLogQL({
+        env: "production",
+        nodeId: NODE,
+        query: '| json | level="error"',
+      })
+    ).toBe(
+      `{env="production", service="app", node="${NODE}"} | json | level="error"`
+    );
+  });
+
+  it("REJECTS a query that targets a different node", () => {
+    expect(() =>
+      scopeNodeLogQL({
+        env: "production",
+        nodeId: NODE,
+        query: '{node="other-node-uuid"} | json',
+      })
+    ).toThrowError(expect.objectContaining({ code: "query_out_of_scope" }));
+  });
+
+  it("REJECTS a non-app service (only app carries the node label today)", () => {
+    expect(() =>
+      scopeNodeLogQL({
+        env: "production",
+        nodeId: NODE,
+        query: '{service="scheduler-worker"} | json',
+      })
+    ).toThrowError(expect.objectContaining({ code: "query_out_of_scope" }));
+  });
+
+  it("REJECTS a mismatched env", () => {
+    expect(() =>
+      scopeNodeLogQL({
+        env: "production",
+        nodeId: NODE,
+        query: '{env="preview"} | json',
+      })
+    ).toThrowError(expect.objectContaining({ code: "query_out_of_scope" }));
+  });
+
+  it("REJECTS a regex matcher on a forced label (no =~ widening)", () => {
+    expect(() =>
+      scopeNodeLogQL({
+        env: "production",
+        nodeId: NODE,
+        query: '{service=~"app|scheduler-worker"}',
+      })
+    ).toThrowError(expect.objectContaining({ code: "query_out_of_scope" }));
+  });
+
+  it("REJECTS a malformed / unparseable selector", () => {
+    expect(() =>
+      scopeNodeLogQL({
+        env: "production",
+        nodeId: NODE,
+        query: "{ not-logql }",
+      })
+    ).toThrowError(expect.objectContaining({ code: "invalid_query" }));
+  });
+
+  it("REJECTS a bare pipeline that smuggles a brace", () => {
+    expect(() =>
+      scopeNodeLogQL({
+        env: "production",
+        nodeId: NODE,
+        query: '} or {node="other"}',
+      })
+    ).toThrowError(expect.objectContaining({ code: "invalid_query" }));
+  });
+
+  it("REJECTS an over-length query", () => {
+    expect(() =>
+      scopeNodeLogQL({
+        env: "production",
+        nodeId: NODE,
+        query: `{} ${"x".repeat(MAX_QUERY_LENGTH)}`,
+      })
+    ).toThrowError(expect.objectContaining({ code: "invalid_query" }));
   });
 
   it("escapes quotes/backslashes in the nodeId (no selector breakout)", () => {
-    const q = buildNodeScopedLogQL({ env: "production", nodeId: 'a"b\\c' });
-    expect(q).toBe('{env="production", service="app", node="a\\"b\\\\c"}');
+    expect(scopeNodeLogQL({ env: "production", nodeId: 'a"b\\c' })).toBe(
+      '{env="production", service="app", node="a\\"b\\\\c"}'
+    );
   });
 
-  it("treats a blank filter as no filter", () => {
-    expect(
-      buildNodeScopedLogQL({ env: "preview", nodeId: NODE, filter: "   " })
-    ).toBe(`{env="preview", service="app", node="${NODE}"}`);
+  it("throws ObservabilityQueryError instances", () => {
+    expect(() =>
+      scopeNodeLogQL({ env: "production", nodeId: NODE, query: "{bad}" })
+    ).toThrow(ObservabilityQueryError);
   });
 });
 

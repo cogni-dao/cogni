@@ -42,11 +42,14 @@ The two prerequisites landed:
 1. **`node` (nodeId) stream label** — Alloy promotes the pino `nodeId` field to a Loki stream label
    (`task.5028`, `infra/compose/runtime/configs/alloy-config{,.metrics}.alloy`). Proven live on
    candidate-a: `{env="candidate-a", service="app", node="<id>"}` selects exactly one node's app logs.
-2. **Operator query-proxy** — `GET /api/v1/nodes/{id}/observability/logs` (`task.5025`,
-   `src/features/nodes/observability-logs.ts`): developer-RBAC-gated, builds the LogQL **forced** to
-   `{env, service="app", node="<id>"}` + an optional dev pipeline filter (braces rejected), runs it with
-   the operator's own read token, returns only that node's lines. The dev holds nothing. Returns
-   `503 observability_unwired` where the operator pod has no `_shared` Grafana read creds.
+2. **Operator query-proxy** — `GET /api/v1/nodes/{slug|node_id}/observability/logs?env=&query=`
+   (`task.5025`, `src/features/nodes/observability-logs.ts`): developer-RBAC-gated. The caller sends the
+   **same full LogQL** they'd run against `loki-query.sh` / the MCP (`?query=`); the operator parses the
+   stream selector, **forces** `env`/`service`/`node` to the caller's node and lets any other label
+   matcher only narrow (out-of-scope selectors → `400`), then runs it with the operator's own read token
+   and returns only that node's lines. The dev holds nothing. An empty `query` returns the node's app
+   stream. Returns `503 observability_unwired` where the operator pod has no `_shared` Grafana read creds.
+   This is 1:1 with the operator-scope MCP path for the caller's slice — same syntax, same JSON output.
 
 **Out of MVP scope (do not build):** per-principal label-scoped `glc_` access-policy tokens, per-dev
 Grafana service accounts, any "mint a token and hand it to the dev" path — they re-introduce a held
@@ -64,9 +67,11 @@ What a node developer can read is bounded by what is **node-attributable**. Stat
 | CI / build failures                   | `env="ci"`         | not node-scoped (per-PR)                                                                                                 | **No** — the dev sees their PR's checks on GitHub                                                                                         |
 
 **Envelope rule:** the proxy serves only services that carry per-node attribution. Today that is `app`
-(via the `node` label). The next rung is binding `nodeId` into node-aware shared services
-(`scheduler-worker` first) so their per-node lines become reachable through the same forced-filter proxy —
-**not** by widening the selector to a shared service (that would leak cross-node lines).
+(via the `node` label) — a caller `service=` matcher must equal `app` or the query is rejected
+`query_out_of_scope`. The next rung is binding `nodeId` into node-aware shared services
+(`scheduler-worker` first) so their per-node lines become reachable by widening the `service` allowlist
+in `scopeNodeLogQL` — **not** by trusting a caller-supplied selector to a shared service (that would leak
+cross-node lines).
 
 **Env envelope:** the readable envs are the canonical `FLIGHT_ENVS` (`candidate-a` · `preview` ·
 `production`) — the same set a node deploys through. The proxy imports that list rather than re-declaring
