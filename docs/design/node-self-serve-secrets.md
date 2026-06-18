@@ -362,142 +362,104 @@ substrate-gaps table; _"No LLM backend → provision the node's secret"_ is exac
    env's store**. So self-serve is reachable only where formation happened to land
    them, and a dev hits a `403`/`404` (or the old kube fallback) everywhere else.
 
-### The RIGHT plan — separate three planes that today are wrongly fused
+### The RIGHT plan — formation fans the grant per env; keep per-env isolation
 
-The mistake to avoid (I made it first): treating "secrets across all envs" as
-_per-env self-serve_, where the dev registers + holds a key + is granted on **each**
-env-operator. **That is wrong, and the evidence is decisive: identity is fully
-per-env today.** Agent API keys are HMAC-signed with each env's own `AUTH_SECRET`
-(`request-identity.ts`) — a prod-issued key **fails validation on candidate-a** —
-users live in each env-operator's own Postgres, and OpenFGA stores are per-env
-(`cogni-<env>-rbac`). So per-env self-serve forces a dev to hold **three
-identities** and target three hosts. That is exactly the friction the BaaS model
-exists to remove (Supabase: one account, many environments), and it scales as
-`N_envs × M_nodes`. **Reject it.**
+> **Converged via three independent adversarial reviews (2026-06-18).** An earlier
+> draft of this section proposed a global control-plane operator + an
+> operator→operator mTLS delegated write. **All three reviewers rejected it** and
+> they converged: (security) the mTLS "target trusts control-plane, can't re-check"
+> delegation **is** the skeleton key this doc claims to reject — one service-cred
+> leak = total cross-env compromise, plus a confused-deputy; (consistency) it
+> contradicts Phase 1's env-axis-closed-by-topology floor and is **spec-blocked** by
+> `openfga-substrate-unification.md`'s "one store per env, permanently"; (simplicity)
+> it is a project-sized re-platforming where **one PR** suffices. The plan below is
+> their converged answer.
 
-The fix is to separate three planes that the current per-env operator topology
-fuses together:
+Three planes, scoped correctly — but reached cheaply, **without** centralizing
+identity:
 
-| Plane                                                       | Right scope                          | Why                                                                                                                              |
-| ----------------------------------------------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
-| **Identity** (who you are: API key + principal)             | **GLOBAL** — one dev, one key        | one relationship with "the operator"; per-env keys (today) are 3× ceremony, un-BaaS                                              |
-| **Authorization** (may you write key K on node Y in env E?) | **per-(node, env)**                  | safety/blast-radius — a candidate-a grant must **not** write prod; the prod grant is separately approved (e.g. gated on promote) |
-| **Data** (the secret value bytes)                           | **per-env** (`cogni/<env>/<node>/*`) | env isolation; each env's pods read only their own; distinct values per env (test X-app vs prod X-app) are the point             |
+| Plane                                            | Right scope                          | How it's reached                                                                         |
+| ------------------------------------------------ | ------------------------------------ | ---------------------------------------------------------------------------------------- |
+| **Identity** (API key + principal)               | _logically_ one dev relationship     | keep per-env identity infra; the operator **brokers/custodies** per-env creds (deferred) |
+| **Authorization** (write key K on node Y, env E) | **per-(node, env)** — already is     | one OpenFGA tuple in **that env's own** store; prod grant gated on promotion             |
+| **Data** (the value bytes)                       | **per-env** (`cogni/<env>/<node>/*`) | the **shipped #1627 route**, env operator-stamped — unchanged                            |
 
-This keeps the per-env _safety_ that per-env identity accidentally gave us
-(separate prod authorization) **without** the per-env _identity_ cost.
+**Foundation (the actual fix — ~1 PR, reuses shipped primitives): node formation
+fans the grant into every env it provisions.** At each env's provision/flight, the
+substrate lane idempotently ensures, **in that env's own stores**: (a) the node's
+`nodes` registry row, (b) the owner's `users` row, (c) the owner's
+`developer`/`can_manage_secrets` OpenFGA tuple. All three already exist as
+primitives — `writeRelation` (`nodes/[id]/developers/route.ts:208-211`), the `users`
+upsert (`agent/register/route.ts:41-57`). **Result:** the already-shipped #1627
+per-env route becomes reachable on every env the node lives on — the dev sets a
+candidate-a secret by calling the candidate-a operator, a prod secret by calling the
+prod operator, **zero kube on any of them.** Per-env data **and** per-env authz are
+**preserved** — no cross-env channel is created, so Phase 1's env-axis-closed-by-
+topology safety (§Security boundary) stays intact and there is **no skeleton key.**
 
-**Foundation (the real, larger lift): one control plane for Identity + node
-registry + RBAC; per-env data planes.** Designate a single control-plane operator
-(prod / `cognidao.org`) as the canonical home for principal/key validation, the
-`nodes` registry, and OpenFGA grants. The dev holds **one** key. Env-operators stay
-**data planes** (own in-cluster OpenBao writer, own pods). This is the
-global-control-plane / per-env-data-plane split — the same direction the deploy
-port is already heading (`cicd-platform-boundary.md`), now extended to identity +
-authz + secrets. _Today everything is per-env, so this is net-new — the honest cost
-of doing it right; #1627's per-env model was correct for a one-env MVP but does not
-scale to "a dev manages all of their node's envs."_
+- `source: agent` keys: still operator-generated per env by `secret-materialize`
+  (no dev; clobber-protected since #1753).
+- `source: human` keys: per-env self-serve via the shipped route, now reachable
+  because formation fanned the grant. Distinct values per env (test X-app vs prod
+  X-app) are the point.
 
-**The cross-env secret write** then becomes a single authorized call:
+**Safety carried over from the per-env model (the security review's required fixes):**
 
-- `source: agent` keys: still operator-**generated** per env by `secret-materialize`
-  at flight (no dev, all envs; clobber-protected since #1753).
-- `source: human` keys: the dev calls the **control-plane** operator once, env-targeted —
+- **Prod grant is promotion-gated, never auto-self-healed.** Formation auto-asserts
+  the grant on **candidate-a/preview** (cheap, low-blast); the **production** grant
+  is a separate approval (mirror `production_promoter`). A candidate-a reprovision
+  writes only candidate-a's store — it must **never** mint a prod tuple. This keeps
+  unmerged test-env code off the prod authz path.
+- **Per-(node, env) authz already holds** by topology: each env's OpenFGA store is
+  separate, so a `(beacon, candidate-a)` grant is physically incapable of authorizing
+  a prod write. No model change needed for the per-env path (unlike the rejected
+  cross-env design, which needed a net-new `(node,env)` resource type).
 
-```
-POST cognidao.org/api/v1/nodes/<id>/secrets { key, value, targetEnv: "candidate-a" }
-  → prod operator: OpenFGA check (it knows the node + grant)  [GATE 1, here]
-  → authz-scoped targetEnv  [NEW: targetEnv ∈ caller's grant]
-  → delegate to test.cognidao.org internal endpoint (operator→operator service cred, mTLS)
-  → candidate-a operator writes cogni/candidate-a/<node>/* via its OWN in-cluster writer
-```
+**The dev's "one relationship" (the only residual) is a deferred UX polish, not a
+blocker.** Today the dev still targets a per-env hostname and (naively) holds a
+per-env key. When that friction is actually felt (trigger: ≥2 external nodes, or a
+dev managing ≥3 envs), solve it with a **thin operator key-broker** — the operator
+custodies the per-env creds behind one dev login (or mints **audience-scoped child
+tokens** per env from a global principal, so a leaked candidate-a token still cannot
+speak to prod — the security review's point: discard per-env _keys_, keep per-env
+_credential scope_). This is additive over existing per-env primitives; it is **not**
+identity unification and introduces **no** cross-env write channel.
 
-The target operator **trusts the control-plane operator's authz** (it can't
-re-check — it doesn't know the node); the trust seam is a service credential held
-**only by the control-plane operator pod** (ESO-sourced, like `OPENFGA_API_TOKEN`),
-never by a dev. The value crosses operator→operator over TLS, lands in the target
-env's OpenBao, and the data plane stays per-env (each operator still writes only
-its own env). Authorization is checked **once, per-(node, targetEnv)**, on the
-control plane — so a dev granted on `(beacon, candidate-a)` cannot write
-`(beacon, production)` without a separate prod grant.
+**Deliverables:**
 
-**Deliverables (sequenced; this is a project-sized lift, not one PR — name it
-honestly):**
+1. **Formation grant fan-out** (the unblocker, ~1 PR): idempotently provision
+   `{node row, owner user, developer tuple}` into candidate-a + preview at
+   provision/flight; production grant behind a promotion-gated approval. Lives in
+   the substrate/wizard lane (`reconcile-node-substrate.sh` + `writeRelation`).
+2. **Verify** the shipped #1627 route end-to-end per env once (1) lands.
+3. **Guide**: per-env self-serve is THE path for `source: human` node secrets (call
+   the env's own operator host); `source: agent` keys are auto-fanned, never hand-set.
+4. **(Deferred, triggered)** operator key-broker / audience-scoped tokens for the
+   single-relationship UX.
 
-1. **Control plane for identity + registry + RBAC** — the foundation. Make a
-   single operator authoritative for principal/key validation + `nodes` registry +
-   OpenFGA grants across envs (or a shared identity/authz store the env-operators
-   read). _Net-new; today these are per-env (verified). The big rock._
-2. **Per-(node, env) authz** — scope `can_manage_secrets` to `(node, env)`, granted
-   on the envs a node is actually deployed to; prod grant separately approved
-   (gate on promotion). Mirrors how `production_promoter` is a distinct grant.
-3. **Operator→operator delegated write** — `writeSecret({ targetEnv })` on the
-   control plane → mTLS service call → target env-operator writes its own OpenBao.
-4. **Formation provisions the `(node, env)` grants** for the node's deployed envs,
-   idempotent + re-asserted on provision/flight (so candidate-a rebuilds self-heal).
+**Rejected (with the reviews' teeth):**
 
-**Rejected:**
-
-- **Per-env dev identity** (register + key + grant on each env-operator). _Verified
-  to be today's reality and explicitly the wrong target_ — three identities per dev,
-  scaling `N_envs × M_nodes`; it is the friction the BaaS model exists to remove.
+- **Global control plane + operator→operator mTLS delegated write.** It is the
+  skeleton key (one leaked service cred = write any node's secret on any env; target
+  can't re-check the claim), it contradicts Phase 1's topology closure, and it is
+  spec-blocked by `openfga-substrate-unification.md`'s permanent per-env store. A
+  project-sized re-platforming where formation fan-out (1 PR) delivers the same dev
+  outcome with isolation **preserved**.
+- **Per-env dev identity exposed raw** (the dev juggles 3 keys). The 3-key friction
+  is a UX problem — solve via broker/audience-scoped tokens, not by re-platforming
+  identity, and not by making the dev manage three keys by hand.
 - **Production as a node's test env** ("no users yet"). Every node gets first-class
   test envs; conflating them violates the BaaS contract and trains prod-is-staging.
-- **Per-secret kube CLI** as the standard path — the day-2 admin escape hatch only;
-  it hard-gates every external dev on one person's `.local` creds.
+- **Per-secret kube CLI** as the standard path — the day-2 admin escape hatch only.
 
-### Alignment with the operator control plane (the deploy port) — REQUIRED
-
-This is **not a secrets one-off.** It is the secrets row of the same typed
-operator control plane that owns deploy, framed in
-[`cicd-platform-boundary.md`](../spec/cicd-platform-boundary.md) ("the deploy
-brain goes into the `.ts` operator app as a hexagonal capability… the model is
-Railway: the operator declares intent and sees live state; the substrate
-executes") and [`operator-managed-deployments.md`](./operator-managed-deployments.md)
-(SEE / DEPLOY / REMOVE). `OperatorSecretsPlanePort` (#1627) is already a **sibling
-of `OperatorDeployPlanePort`**; the cross-env write above is "give the secrets
-plane the same cross-env targeting deploy already has" — `dispatchNodePromote({ env })`
-is the precedent for `writeSecret({ targetEnv })`.
-
-**But one axis differs, and it is the whole design tension.** The deploy port
-reaches other envs **declaratively**: it writes intent to git, the GitHub App is
-the only write credential, and Argo reconciles — _"git is the steering wheel;
-a compromised operator token can look but not touch."_ **Secrets cannot ride that
-rail** — a value can't transit a git commit or a `workflow_dispatch` input without
-plaintext exposure (Non-goal). So cross-env secrets are the **one** control-plane
-operation that needs a **live, custodial channel**, which is exactly why 3b is an
-operator→operator call and not "write the value to a deploy branch." Any future
-"operator owns VMs / logs / health / scaling" surface that is **read or
-git-declarative** inherits the deploy port's safe non-custodial model; **secret
-_values_ are the deliberate exception** and must stay on the narrow
-authorized-mesh path. Build 3b as that sibling capability, reusing the deploy
-plane's RBAC-gated, env-targeted shape — not a parallel mechanism.
-
-> **OpenFGA control gap (the thing the operator doesn't yet own).** The store is
-> on every env, but the operator app is **operator-only consumer per-env**
-> today; it cannot manage another env's tuples. 3b's control-plane operator
-> needs cross-env authz reach — track it with the all-node consumption path in
-> [`openfga-substrate-unification.md`](./openfga-substrate-unification.md)
-> (Phase B: relocate bootstrap to a self-owned Job, publish store/model to the
-> `_shared` fan), so "operator authorizes any env" is a substrate capability,
-> not a bespoke cross-env token.
-
-**Rejected alternatives:**
-
-- **Prod operator holds a writer + network path into _every_ env's OpenBao
-  directly** (no mesh, one skeleton key). Rejected — makes the prod operator a
-  single credential that can write all envs' secret planes; max blast radius,
-  violates the per-env data-plane isolation the design is built on.
-- **`secret-set.yml` GitHub Actions OIDC writer** (deploy-port-style dispatch).
-  Rejected for human values — the value can't ride a `workflow_dispatch` input
-  without plaintext exposure (Non-goal). Fine for `source: agent` keys, but those
-  are already minted by `secret-materialize`; it adds nothing for the vendor-value
-  case this bug is about.
-- **Unify the operator DB + OpenFGA across all envs into one shared store.**
-  Rejected for now — candidate-a/preview run _unmerged_ operator code; a shared
-  control-plane schema would couple test envs to prod's migration state (the exact
-  test-isolation the separate stores buy). 3b keeps registry on prod and delegates
-  execution, getting the centralized UX without merging the data planes.
+> **Deploy-port relation (corrected — it is a _non_-precedent for live custody).**
+> The deploy port reaches other envs **declaratively** (git → Argo; _"look but not
+> touch"_). Secret _values_ cannot ride that rail (no plaintext in git/dispatch), so
+> they are the deliberate **exception**, not a sibling that gets "the same cross-env
+> targeting." This plan therefore does **not** build a cross-env secret channel at
+> all — it keeps writes per-env and fans only the _grant_ (which is git/CI-safe). The
+> control-plane convergence the deploy port is heading toward (`cicd-platform-boundary.md`)
+> remains valid for read/git-declarative surfaces; secrets stay per-env by design.
 
 ## Non-goals
 
