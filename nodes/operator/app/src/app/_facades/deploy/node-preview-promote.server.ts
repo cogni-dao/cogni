@@ -31,6 +31,7 @@ import { eq } from "drizzle-orm";
 import type { Logger } from "pino";
 import { createOperatorDeployPlane } from "@/bootstrap/capabilities/operator-deploy-plane";
 import { resolveServiceDb } from "@/bootstrap/container";
+import { isFirstClassSlug } from "@/features/nodes/first-class-nodes";
 import { nodes } from "@/shared/db/nodes";
 import type { ServerEnv } from "@/shared/env";
 import { EVENT_NAMES } from "@/shared/observability";
@@ -114,6 +115,18 @@ async function promoteNodeToPreview(
     // SPAWNED_NODES_ONLY: an unregistered repo (parent monorepo, in-repo node) is handled
     // by flight-preview.yml directly — nothing to do here.
     if (!node) return;
+
+    // NOT_PREVIEW_PROMOTABLE: first-class nodes (operator, node-template) are now registry rows
+    // (story.5009) so an agent can be granted on them — but they own their own deploy pipelines and
+    // are NOT spawned preview nodes. node-template's repo name == its slug, so without this guard a
+    // node-template merge would resolve here and spuriously dispatch a preview promotion.
+    if (isFirstClassSlug(node.slug)) {
+      log.debug(
+        { slug: node.slug },
+        "node preview promote skipped — first-class node (own deploy pipeline)"
+      );
+      return;
+    }
 
     const parentOwner = env.NODE_SUBMODULE_PARENT_OWNER as string;
     const parentRepo = env.NODE_SUBMODULE_PARENT_REPO as string;

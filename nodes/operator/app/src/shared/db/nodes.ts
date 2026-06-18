@@ -4,9 +4,11 @@
 /**
  * Module: `@shared/db/nodes`
  * Purpose: Operator-local Drizzle schema for the externally-registered node registry.
- * Scope: Wizard working state for operator-managed nodes. Existing inline nodes
- *   (operator/resy/canary/node-template) are NOT registered here — they live in `infra/catalog/*.yaml`.
- * Invariants: NODES_TABLE_SCOPE (external only), STATE_MACHINE_TOTAL, OWNER_GATING, NO_PRIVATE_KEYS,
+ * Scope: Wizard working state for operator-managed nodes, PLUS first-class rows for the hub itself
+ *   (`operator`) and the fork source (`node-template`) registered via `/api/v1/nodes/register` so an
+ *   RBAC-gated agent can act on them (story.5009). The DB row is identity/ownership/RBAC-anchor only;
+ *   `infra/catalog/*.yaml` stays the deploy SSoT (CATALOG_IS_SSOT). See features/nodes/first-class-nodes.ts.
+ * Invariants: NODES_TABLE_SCOPE (wizard nodes + fixed first-class set), STATE_MACHINE_TOTAL, OWNER_GATING, NO_PRIVATE_KEYS,
  *   OPERATOR_NODE_ROW_ID_IS_NODE_ID — `nodes.id` IS the operator's projection of the node's repo-spec
  *   `node_id` (the deployment-identity SSOT, docs/spec/identity-model.md). It is the OpenFGA `node:<id>`
  *   resource and the Loki `node` label, never an unrelated surrogate. Wizard creation's `defaultRandom()`

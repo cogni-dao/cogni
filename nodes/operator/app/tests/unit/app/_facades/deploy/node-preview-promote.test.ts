@@ -126,6 +126,20 @@ describe("dispatchNodePreviewPromote", () => {
     expect(promoteNodeToPreview).not.toHaveBeenCalled();
   });
 
+  it("skips first-class nodes — they own their deploy pipeline (NOT_PREVIEW_PROMOTABLE)", async () => {
+    // node-template's repo name == its slug, so it resolves here; the guard must skip it.
+    nodeRows = [{ id: "node-nt", slug: "node-template" }];
+    dispatchNodePreviewPromote(
+      mergedPayload({
+        repository: { name: "node-template", owner: { login: "Cogni-DAO" } },
+      }),
+      ENV,
+      log
+    );
+    await flush();
+    expect(promoteNodeToPreview).not.toHaveBeenCalled();
+  });
+
   it("no-ops when the deploy-plane GitHub App is unconfigured", async () => {
     nodeRows = [{ id: "node-1", slug: "habitat" }];
     dispatchNodePreviewPromote(
