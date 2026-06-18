@@ -803,7 +803,9 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
     );
     const log = subjects.length
       ? subjects
-          .map((s) => `- ${qualifyUpstreamPrRefs(s, templateOwner, templateRepo)}`)
+          .map(
+            (s) => `- ${qualifyUpstreamPrRefs(s, templateOwner, templateRepo)}`
+          )
           .join("\n")
       : "_(no commits — see the Commits tab)_";
     const body =
