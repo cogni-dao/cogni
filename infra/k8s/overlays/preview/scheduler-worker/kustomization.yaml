@@ -24,6 +24,9 @@ patches:
       - op: replace
         path: /data/TEMPORAL_NAMESPACE
         value: "cogni-preview"
+      - op: add
+        path: /data/DEPLOY_ENVIRONMENT
+        value: "preview"
       - op: replace
         path: /data/IMAGE_DIGEST
         value: "staging-placeholder-scheduler-worker"
