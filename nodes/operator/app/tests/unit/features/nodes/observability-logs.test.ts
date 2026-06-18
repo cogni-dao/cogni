@@ -12,7 +12,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildNodeScopedLogQL,
-  isObservabilityEnv,
+  isFlightEnv,
   MAX_FILTER_LENGTH,
   ObservabilityQueryError,
 } from "@/features/nodes/observability-logs";
@@ -76,12 +76,12 @@ describe("buildNodeScopedLogQL", () => {
   });
 });
 
-describe("isObservabilityEnv", () => {
-  it("accepts the three flight envs, rejects others", () => {
-    expect(isObservabilityEnv("production")).toBe(true);
-    expect(isObservabilityEnv("candidate-a")).toBe(true);
-    expect(isObservabilityEnv("preview")).toBe(true);
-    expect(isObservabilityEnv("local")).toBe(false);
-    expect(isObservabilityEnv(null)).toBe(false);
+describe("isFlightEnv (canonical env envelope, reused — not a local copy)", () => {
+  it("accepts the deploy envs, rejects others", () => {
+    expect(isFlightEnv("production")).toBe(true);
+    expect(isFlightEnv("candidate-a")).toBe(true);
+    expect(isFlightEnv("preview")).toBe(true);
+    expect(isFlightEnv("local")).toBe(false);
+    expect(isFlightEnv(null)).toBe(false);
   });
 });

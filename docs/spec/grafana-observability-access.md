@@ -4,7 +4,7 @@ type: spec
 title: Grafana / Loki Observability Access
 status: draft
 trust: draft
-summary: How a developer-RBAC'd dev reads only their node's Grafana/Loki logs without holding a token — the operator is a node-pinned query PROXY (runs the dev's LogQL server-side, constrained to the node label) rather than a credential issuer, because a returned token's reach is ungoverned by the per-node check while a pinned proxy is node-scoped by construction. The operator's own liveness gate still holds no token (it uses the public run-carries rung). Blocked today on node Loki streams lacking a node stream label.
+summary: How a developer-RBAC'd dev reads only their node's Grafana/Loki logs without holding a token — the operator is a node-pinned query PROXY (runs the dev's LogQL server-side, scoped to that one node's app stream) rather than a credential issuer, because a returned token's reach is ungoverned by the per-node check while a pinned proxy is node-scoped by construction. BUILT — task.5028 node label plus task.5025 proxy. Scope envelope covers only node-attributable services (app today); shared infra is operator-only. The operator's own liveness gate still holds no token.
 read_when: Wiring or debating whether the operator/API should hold or hand out a Grafana token; granting a dev/agent Loki query access; designing an automated observability gate; reviewing an ExternalSecret that pulls a GRAFANA_* key into a pod; deciding proxy-vs-issuer for observability reads.
 owner: derekg1729
 created: 2026-06-16
@@ -35,24 +35,43 @@ node-scoped from day one.
 > The MVP proxy serves exactly one shape: **read this node's log lines** (LogQL pinned to the node label).
 > Dashboards, datasource introspection, and ad-hoc multi-tenant queries are out of scope.
 
-## The real blocker — node Loki streams have no `node` label
+## Status — built (task.5028 + task.5025)
 
-Neither a proxy nor a scoped token can isolate a node's logs if the logs aren't labeled per node. Today
-Alloy/pino label streams `app` / `env` / `service` only; node identity lives in the `pod` name prefix and a
-JSON field inside the line — **there is nothing for a `{node="<id>"}` selector to match.** So the
-**sequence** is:
+The two prerequisites landed:
 
-1. **Add a `node` (nodeId) stream label** to node Loki streams (Alloy + pino) — the actual substrate gap.
-2. **Operator query-proxy** that runs the dev's LogQL server-side, AND-ed with `{node="<id>"}`, returning
-   only that node's lines. The operator holds its own read token for this; the dev holds nothing.
+1. **`node` (nodeId) stream label** — Alloy promotes the pino `nodeId` field to a Loki stream label
+   (`task.5028`, `infra/compose/runtime/configs/alloy-config{,.metrics}.alloy`). Proven live on
+   candidate-a: `{env="candidate-a", service="app", node="<id>"}` selects exactly one node's app logs.
+2. **Operator query-proxy** — `GET /api/v1/nodes/{id}/observability/logs` (`task.5025`,
+   `src/features/nodes/observability-logs.ts`): developer-RBAC-gated, builds the LogQL **forced** to
+   `{env, service="app", node="<id>"}` + an optional dev pipeline filter (braces rejected), runs it with
+   the operator's own read token, returns only that node's lines. The dev holds nothing. Returns
+   `503 observability_unwired` where the operator pod has no `_shared` Grafana read creds.
 
-Until (1) lands, the dev-read route (`GET /api/v1/nodes/{id}/observability/logs`) is a **guarded stub**:
-developer-RBAC-gated, but **always `503 observability_proxy_not_built`** — it holds no token and returns
-none, so it cannot leak.
+**Out of MVP scope (do not build):** per-principal label-scoped `glc_` access-policy tokens, per-dev
+Grafana service accounts, any "mint a token and hand it to the dev" path — they re-introduce a held
+credential the per-node check can't govern. The proxy makes them unnecessary.
 
-**Out of MVP scope (do not build now):** per-principal label-scoped `glc_` access-policy tokens, per-dev
-Grafana service accounts, any "mint a token and hand it to the dev" path. Those re-introduce a held
-credential; the proxy makes them unnecessary for the debug-my-node use case.
+## Node-dev log scope envelope
+
+What a node developer can read is bounded by what is **node-attributable**. Stated so it does not drift:
+
+| Source                                | `service`          | Node-attributable?                                                                                                       | In the proxy?                                                                                                                             |
+| ------------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Node app pod                          | `app`              | ✅ carries the `node` stream label                                                                                       | **Yes** — the MVP                                                                                                                         |
+| Graph execution worker                | `scheduler-worker` | ❌ **not today** — `makeLogger()` binds no `nodeId`; it is node-aware (one Worker per nodeId) so it _could_, but doesn't | **No** — until it binds `nodeId` (follow-up), then add it to the proxy's allowed services with a forced `\| json \| nodeId="<id>"` filter |
+| Temporal / LiteLLM / Caddy / Postgres | shared infra       | ❌ **never** per-line node-attributable (not node-aware)                                                                 | **No** — an operator-only debugging surface; a node dev escalates to the operator                                                         |
+| CI / build failures                   | `env="ci"`         | not node-scoped (per-PR)                                                                                                 | **No** — the dev sees their PR's checks on GitHub                                                                                         |
+
+**Envelope rule:** the proxy serves only services that carry per-node attribution. Today that is `app`
+(via the `node` label). The next rung is binding `nodeId` into node-aware shared services
+(`scheduler-worker` first) so their per-node lines become reachable through the same forced-filter proxy —
+**not** by widening the selector to a shared service (that would leak cross-node lines).
+
+**Env envelope:** the readable envs are the canonical `FLIGHT_ENVS` (`candidate-a` · `preview` ·
+`production`) — the same set a node deploys through. The proxy imports that list rather than re-declaring
+it, so a new deploy env is readable automatically. Note: real multi-node validation is **prod-only**
+(operator is the only node deployed to candidate-a).
 
 ## The provisioned credentials (unchanged)
 
@@ -91,5 +110,5 @@ to a dev from an API route (a dormant env-wide leak). The sanctioned shape is th
 - [`docs/spec/substrate-access-grant.md`](./substrate-access-grant.md) — the cross-substrate plane (Grafana/PostHog/DB/Temporal), health scorecard, sequencing
 - `fork-quickstart.md` §6 (Phase 5e mint), `infra/secrets-catalog.yaml` (`GRAFANA_*` = `service: _shared`)
 - `docs/spec/secrets-classification.md` (tier/routing), `.claude/skills/cicd-secrets-expert/SKILL.md`
-- `nodes/operator/app/src/app/api/v1/nodes/[id]/observability/logs/route.ts` (guarded stub — proxy, never a token)
+- `nodes/operator/app/src/app/api/v1/nodes/[id]/observability/logs/route.ts` + `src/features/nodes/observability-logs.ts` (the built proxy — node-pin builder, never a token)
 - `nodes/operator/app/src/features/nodes/flight-status.ts` (`assertLive`), `task.5024`, `task.5025`

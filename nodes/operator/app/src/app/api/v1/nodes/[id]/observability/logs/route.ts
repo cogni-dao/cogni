@@ -28,8 +28,8 @@ import { getContainer, resolveNodeRegistry } from "@/bootstrap/container";
 import { createLokiReader } from "@/bootstrap/observability.factory";
 import {
   buildNodeScopedLogQL,
-  isObservabilityEnv,
-  OBSERVABILITY_ENVS,
+  FLIGHT_ENVS,
+  isFlightEnv,
   ObservabilityQueryError,
 } from "@/features/nodes/observability-logs";
 
@@ -90,11 +90,11 @@ export async function GET(
 
   const params = new URL(request.url).searchParams;
   const env = params.get("env");
-  if (!isObservabilityEnv(env)) {
+  if (!isFlightEnv(env)) {
     return NextResponse.json(
       {
         error: "invalid_env",
-        message: `env must be one of ${OBSERVABILITY_ENVS.join(", ")}`,
+        message: `env must be one of ${FLIGHT_ENVS.join(", ")}`,
       },
       { status: 400 }
     );
