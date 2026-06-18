@@ -231,7 +231,7 @@ The driving use case is mundane on purpose: a **beacon user creates a "campaign"
 configurable bundle of recurring social posts + analytics pulls. Functionally that is
 **cron that POSTs a node route on a cadence.** The substrate to run it already exists and
 is proven (T1 merged; the operator-self dispatch loop ran end-to-end on candidate-a). The
-*only* real gap is that a schedule's `nodeId` is pinned to the operator, so it can only
+_only_ real gap is that a schedule's `nodeId` is pinned to the operator, so it can only
 fire operator routes. Everything else below the line is hardening we are **consciously
 deferring** until a real user validates the campaign flow (MVP-stage discipline).
 
@@ -241,7 +241,7 @@ deferring** until a real user validates the campaign flow (MVP-stage discipline)
   `nodeTaskScope`, the route SSRF guard, the `ExecutionGrant` the adapter already mints).
 - **The two changes:** (1) a schedule can target a node other than the operator — `nodeId`
   is supplied by the caller (validated), not hardcoded `getNodeId()`; (2) **per-node identity
-  on both legs — NO shared master secret.** beacon calls the create seam with its *own*
+  on both legs — NO shared master secret.** beacon calls the create seam with its _own_
   `cogni_ag_sk_` agent key (control plane); the operator dispatches under a **per-node
   credential** (data plane) by reusing T1's per-node `NodePrincipalResolver` (the fail-closed
   one, backed by beacon's own dispatch token via ESO) — **never** the shared
@@ -250,7 +250,7 @@ deferring** until a real user validates the campaign flow (MVP-stage discipline)
 - **Per-node identity is the security floor, not optional.** A shared `SCHEDULER_API_TOKEN`
   across tenants is a one-way door (leak anywhere → impersonate the operator everywhere, lateral
   reach into every node's internal routes) and is **rejected**. **Explicitly vFuture (deferred):**
-  *automating* per-node credential provisioning at node-spawn (secrets-on-spawn); signed-dispatch
+  _automating_ per-node credential provisioning at node-spawn (secrets-on-spawn); signed-dispatch
   (operator-signed JWT `aud=node`, verified with the operator's public key — the zero-distributed-
   secret target); OpenFGA `can_schedule`; per-node namespaces; the declarative repo-spec reconcile
   loop; and F2 direct-consume.
@@ -264,7 +264,7 @@ the operator **provisions + hands credentials** (Postgres → DSN, Storage → o
 creds, Streams → Redis); the node's app then **consumes directly**, it does not call an
 operator API per write. Applied here: the operator provisions Temporal (namespace +
 per-node queue + worker + access via ESO); **beacon's app creates schedules itself with
-`nodeId = beacon`** (it *is* the node — `getNodeId()` returns beacon), and a node's *fixed*
+`nodeId = beacon`** (it _is_ the node — `getNodeId()` returns beacon), and a node's _fixed_
 jobs are declared in its repo-spec `schedules:` block ("node declares shape; operator wires
 environment", [§ Core Model](../spec/node-baas-architecture.md#core-model) / Decision Rule 8).
 This also realizes the sovereignty story below (`TEMPORAL_IS_SWAPPABLE_SUBSTRATE`): a node
@@ -272,7 +272,7 @@ that wants its own Temporal swaps the backend behind the same contract.
 
 **Why not F2 now:** F2 requires provisioning Temporal access into every node (creds via ESO)
 — real work for zero proven demand. The MVP's node-authed create path is the throwaway-light
-bridge; when a node genuinely needs to own its scheduler, migrate the *create seam* (operator
+bridge; when a node genuinely needs to own its scheduler, migrate the _create seam_ (operator
 API → direct consume), not the workflow/dispatch primitives, which are unchanged. See
 [node-baas-architecture.md](../spec/node-baas-architecture.md) (add a **Scheduling/Recurring**
 row to the BaaS Substrate Map when F2 lands) and _Sovereignty & Scale_ above.
