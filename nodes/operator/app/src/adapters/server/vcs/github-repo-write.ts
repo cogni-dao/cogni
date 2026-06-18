@@ -248,6 +248,21 @@ export function catalogYamlToForkTarget(
 // `forkFromTemplate`). The operator writes only node identity plus the ESO-first leaf files that
 // must be visible after the repo is mounted as `nodes/<slug>`.
 
+/**
+ * Qualify bare `#NN` PR/issue refs in a node-template commit subject to the source repo.
+ * A bare `#NN` in a FORK's PR body auto-links to the FORK's own #NN (GitHub same-repo
+ * resolution) — almost always a closed/unrelated PR, e.g. node-template's `(#25)` linking
+ * to beacon#25. `owner/repo#NN` resolves to node-template instead. Refs already qualified
+ * (`foo/bar#NN`) are left untouched (the char before `#` is then a word char). Exported for tests.
+ */
+export function qualifyUpstreamPrRefs(
+  subject: string,
+  owner: string,
+  repo: string
+): string {
+  return subject.replace(/(^|[^\w/-])#(\d+)\b/g, `$1${owner}/${repo}#$2`);
+}
+
 export class GitHubRepoWriter implements OperatorDeployPlanePort {
   private readonly config: GitHubRepoWriterConfig;
   private readonly appAuth: ReturnType<typeof createAppAuth>;
@@ -787,7 +802,11 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       pr.number
     );
     const log = subjects.length
-      ? subjects.map((s) => `- ${s}`).join("\n")
+      ? subjects
+          .map(
+            (s) => `- ${qualifyUpstreamPrRefs(s, templateOwner, templateRepo)}`
+          )
+          .join("\n")
       : "_(no commits — see the Commits tab)_";
     const body =
       `Merges node-template upstream into this fork, preserving your customizations ` +
