@@ -2,16 +2,25 @@
 id: design.node-temporal-tenant-interface
 type: design
 title: Node↔Temporal Tenant Interface
-status: draft
+status: superseded
 trust: draft
-summary: "How a node declares recurring work and the operator runs it under that node's tenant identity — generalizing the existing graph-schedule path (schedule CRUD + ExecutionGrant + Temporal Schedule) to non-graph HTTP-dispatch, with one new generic workflow and a declarative repo-spec contract. story.5008."
+summary: "SUPERSEDED by spec/substrate-temporal.md. How a node declares recurring work and the operator runs it under that node's tenant identity — generalizing the existing graph-schedule path (schedule CRUD + ExecutionGrant + Temporal Schedule) to non-graph HTTP-dispatch, with one new generic workflow and a declarative repo-spec contract. story.5008."
 read_when: Designing or reviewing node recurring-work, the generic NodeTaskWorkflow, the declarative node-schedule contract, or the tenant-principal execution binding.
 owner: derekg1729
 created: 2026-06-17
+verified: 2026-06-18
 tags: [temporal, node-baas, ai-graphs]
 ---
 
 # Node↔Temporal Tenant Interface
+
+> **⚠️ Superseded by [substrate-temporal.md](../spec/substrate-temporal.md) (2026-06-18).**
+> The operator-dispatch-as-default framing below is replaced: schedule **create is
+> node-direct** (the node's own Temporal client creates the schedule; the operator is
+> NOT in the create path), and the shared worker runs only generic workflows. The
+> operator-side node-callable create seam (task.5035 Req 2) was **rejected** and the
+> per-node dispatch token (Req 3) **deferred** until a real HTTP-dispatch consumer
+> exists. Retained for the assembly analysis + tenant-principal reasoning.
 
 > **The held vision:** a node declares a recurring job in its own repo-spec; it runs
 > on schedule under _that node's_ identity and grant — with the node writing **zero**
