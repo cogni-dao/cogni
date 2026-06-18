@@ -4,30 +4,61 @@
 /**
  * Module: `@app/(app)/knowledge/_components/ContributionView`
  * Purpose: Full-page view of a single contribution — the permalink target for an
- *   inbox contribution. Renders metadata + the shared diff + a copy-link. Merge /
- *   reject stay in the inbox review surface (`/knowledge?mode=inbox`).
- * Scope: Presentation. Fetches the record via React Query (cookie-session).
- * Side-effects: IO (GET /api/v1/knowledge/contributions/[id]).
+ *   inbox contribution. Renders metadata, shared diff, copy-link, and terminal
+ *   merge / reject actions for open contributions.
+ * Scope: Presentation. Fetches and mutates the record via React Query
+ *   (cookie-session).
+ * Side-effects: IO (GET /api/v1/knowledge/contributions/[id], POST merge/close).
  * @internal
  */
 
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
+import { useState } from "react";
 
+import { Alert, AlertDescription } from "@/components";
+import { closeContribution } from "../_api/closeContribution";
 import { fetchContribution } from "../_api/fetchContribution";
+import { mergeContribution } from "../_api/mergeContribution";
+import { ContributionActions } from "./ContributionActions";
 import { ContributionDiff } from "./ContributionDiff";
 import { CopyLinkButton } from "./CopyLinkButton";
 import { RelativeTime } from "./RelativeTime";
 
 export function ContributionView({ id }: { readonly id: string }) {
+  const queryClient = useQueryClient();
+  const [actionError, setActionError] = useState<string | null>(null);
+
   const query = useQuery({
     queryKey: ["knowledge", "contribution", id],
     queryFn: () => fetchContribution(id),
     staleTime: 15_000,
     retry: false,
+  });
+
+  const invalidateContribution = () => {
+    queryClient.invalidateQueries({ queryKey: ["knowledge"] });
+    queryClient.invalidateQueries({
+      queryKey: ["knowledge", "contribution", id],
+    });
+  };
+
+  const mergeMutation = useMutation({
+    mutationFn: (contributionId: string) => mergeContribution(contributionId),
+    onMutate: () => setActionError(null),
+    onSuccess: invalidateContribution,
+    onError: (error) => setActionError(errorMessage(error)),
+  });
+
+  const closeMutation = useMutation({
+    mutationFn: (vars: { contributionId: string; reason: string }) =>
+      closeContribution(vars.contributionId, vars.reason),
+    onMutate: () => setActionError(null),
+    onSuccess: invalidateContribution,
+    onError: (error) => setActionError(errorMessage(error)),
   });
 
   return (
@@ -87,6 +118,25 @@ export function ContributionView({ id }: { readonly id: string }) {
             </div>
           </div>
 
+          <ContributionActions
+            item={query.data}
+            busy={mergeMutation.isPending}
+            rejectBusy={closeMutation.isPending}
+            onMerge={(item) => mergeMutation.mutate(item.contributionId)}
+            onReject={(item, reason) =>
+              closeMutation.mutate({
+                contributionId: item.contributionId,
+                reason,
+              })
+            }
+          />
+
+          {actionError && (
+            <Alert variant="destructive">
+              <AlertDescription>{actionError}</AlertDescription>
+            </Alert>
+          )}
+
           <div className="mt-2 flex flex-col gap-1">
             <span className="font-medium text-muted-foreground text-xs uppercase tracking-wider">
               Entries
@@ -97,4 +147,8 @@ export function ContributionView({ id }: { readonly id: string }) {
       )}
     </div>
   );
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "Contribution action failed.";
 }

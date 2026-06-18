@@ -14,17 +14,10 @@
 "use client";
 
 import type { ContributionRecord } from "@cogni/node-contracts";
-import { GitMerge, X } from "lucide-react";
 import { type ReactElement, useState } from "react";
 
-import {
-  Button,
-  Input,
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-} from "@/components";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components";
+import { ContributionActions } from "./ContributionActions";
 import { ContributionDiff, diffHasHtmlEntry } from "./ContributionDiff";
 import { CopyLinkButton } from "./CopyLinkButton";
 import { RelativeTime } from "./RelativeTime";
@@ -57,8 +50,6 @@ function Field({
   );
 }
 
-const REASON_MAX = 512;
-
 export function ContributionDetail({
   item,
   open,
@@ -68,7 +59,6 @@ export function ContributionDetail({
   onMerge,
   onReject,
 }: ContributionDetailProps): ReactElement {
-  const [rejectReason, setRejectReason] = useState("");
   const [hasHtml, setHasHtml] = useState(false);
 
   return (
@@ -76,7 +66,6 @@ export function ContributionDetail({
       open={open}
       onOpenChange={(o) => {
         if (!o) {
-          setRejectReason("");
           setHasHtml(false);
         }
         onOpenChange(o);
@@ -124,52 +113,13 @@ export function ContributionDetail({
             </SheetHeader>
 
             <div className="mt-6 flex flex-col gap-5 px-1">
-              {item.state === "open" && (
-                <div className="flex flex-col gap-3 rounded-md border border-border/50 bg-muted/20 px-3 py-3">
-                  <div className="flex flex-col gap-1.5">
-                    <label
-                      htmlFor="reject-reason"
-                      className="font-medium text-muted-foreground text-xs uppercase tracking-wider"
-                    >
-                      Reject reason
-                    </label>
-                    <Input
-                      id="reject-reason"
-                      className="h-8 text-sm"
-                      placeholder="Why is this contribution rejected?"
-                      maxLength={REASON_MAX}
-                      value={rejectReason}
-                      disabled={busy || rejectBusy}
-                      onChange={(e) => setRejectReason(e.target.value)}
-                    />
-                  </div>
-                  <div className="flex justify-end gap-2">
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      className="h-8 gap-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive"
-                      disabled={
-                        busy || rejectBusy || rejectReason.trim() === ""
-                      }
-                      onClick={() => onReject(item, rejectReason.trim())}
-                    >
-                      <X className="size-3.5" />
-                      {rejectBusy ? "Rejecting…" : "Reject"}
-                    </Button>
-                    <Button
-                      type="button"
-                      size="sm"
-                      className="h-8 gap-1.5"
-                      disabled={busy || rejectBusy}
-                      onClick={() => onMerge(item)}
-                    >
-                      <GitMerge className="size-3.5" />
-                      {busy ? "Merging…" : "Merge to main"}
-                    </Button>
-                  </div>
-                </div>
-              )}
+              <ContributionActions
+                item={item}
+                busy={busy}
+                rejectBusy={rejectBusy}
+                onMerge={onMerge}
+                onReject={onReject}
+              />
 
               <Field label="Entries">
                 <ContributionDiff
