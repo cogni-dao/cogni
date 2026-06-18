@@ -137,8 +137,7 @@ describe("RLS Adapter Wiring Gate", () => {
         // biome-ignore lint/suspicious/noExplicitAny: unused-port stub
         {} as any,
         // biome-ignore lint/suspicious/noExplicitAny: unused-port stub
-        {} as any,
-        "test-node"
+        {} as any
       );
     });
 
