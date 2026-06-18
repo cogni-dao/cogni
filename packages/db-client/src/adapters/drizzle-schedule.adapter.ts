@@ -103,11 +103,6 @@ export class DrizzleScheduleUserAdapter implements ScheduleUserPort {
     private readonly db: Database,
     private readonly scheduleControl: ScheduleControlPort,
     private readonly grantPort: ExecutionGrantUserPort,
-    /**
-     * This operator's resolved node id (getNodeId()). Scopes NodeTask grants to
-     * `task:dispatch:<nodeId>:<route>` so a schedule cannot dispatch as a foreign node.
-     */
-    private readonly nodeId: string,
     logger?: LoggerLike
   ) {
     this.logger = logger ?? defaultLogger;
@@ -127,10 +122,14 @@ export class DrizzleScheduleUserAdapter implements ScheduleUserPort {
     // NodeTask: grant scope = task:dispatch:<nodeId>:<route>, graphId tunnel = task:<route>,
     // workflowType = NodeTaskWorkflow (the schedule-control adapter's configured queue is
     // already this node's per-node queue, so no taskQueueOverride is needed).
+    // Grant scope binds to the schedule's OWN nodeId (input.nodeId), not a ctor
+    // pin — so a non-operator (tenant) schedule dispatches as its own node. The
+    // route layer supplies + authorizes nodeId: the operator's user path passes
+    // getNodeId(); the node-authed create seam passes the caller node's id.
     const isNodeTask = input.route !== undefined;
     const route = input.route;
     const grantScope = isNodeTask
-      ? nodeTaskScope(this.nodeId, route as string)
+      ? nodeTaskScope(input.nodeId, route as string)
       : `graph:execute:${input.graphId}`;
     const storedGraphId = isNodeTask
       ? `task:${route as string}`
