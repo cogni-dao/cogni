@@ -363,6 +363,28 @@ A node dev (any node — wizard-born or a future external import, since identity
 generic `/api/v1/observability/logs` route with the `logs.query` RBAC action. `logs.md` is updated now
 to route node devs to this first-class proxy; the "all agents drop the MCP" switch lands with Phase 1.
 
+#### Credential wiring — as-built, verified on candidate-a (2026-06-18)
+
+The proxy returns `503 observability_unwired` until the operator pod holds `GRAFANA_URL` +
+`GRAFANA_SERVICE_ACCOUNT_TOKEN`. The verified delivery path (no overlay change on any env):
+
+- **Custody = operator service path, not `_shared`.** The operator's ExternalSecret already pulls
+  `extract: key: <env>/operator`; nothing pulls `_shared` as a k8s bank, and the only OpenBao consumer
+  of these creds is the operator pod (`loki-query.sh` / `grafana-postgres-datasource.sh` read a local
+  `.env`). So the creds live at **`cogni/<env>/operator/{GRAFANA_URL,GRAFANA_SERVICE_ACCOUNT_TOKEN}`**
+  and the catalog classifies them `service: operator`. The token must be a Grafana **stack `glsa_`**
+  SA token with `datasources:query`; `GRAFANA_URL` has no trailing slash.
+- **To light up any env:** `pnpm secrets:set <env> operator GRAFANA_URL` + `… GRAFANA_SERVICE_ACCOUNT_TOKEN`,
+  force-sync `operator-env-secrets`; Reloader rolls the operator pod. **No manifest/overlay change** —
+  this is why merge→promote→`secrets:set production operator …` lights up prod with nothing else.
+- **Verified on candidate-a:** creds written to `cogni/candidate-a/operator`, ESO synced, operator pod
+  confirmed holding both env vars, and the operator queried candidate-a Loki via the exact reader path
+  (`/api/datasources/proxy/uid/grafanacloud-logs/loki/api/v1/query_range`) → **HTTP 200, real app log
+  lines**. The full proxy chain (auth → registry → `node.flight` → scope → reader) additionally needs an
+  **active registered node** in the env's operator `nodes` table; candidate-a has none today, so the
+  end-user line-return is proven on prod (Beacon registered) or via a throwaway registered node — the
+  RBAC/scope/identity logic is covered by unit + contract tests.
+
 ### Phase 1 — generic Grafana Cloud proxy
 
 - Add `GET /api/v1/observability/logs`.

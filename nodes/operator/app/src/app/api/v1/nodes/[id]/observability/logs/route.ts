@@ -219,8 +219,9 @@ export async function GET(
       {
         error: "observability_unwired",
         message:
-          "operator holds no Grafana read token in this env — ESO wire of " +
-          "cogni/<env>/_shared/{GRAFANA_URL,GRAFANA_SERVICE_ACCOUNT_TOKEN} into the operator pod is pending",
+          "operator holds no Grafana read token in this env — set " +
+          "cogni/<env>/operator/{GRAFANA_URL,GRAFANA_SERVICE_ACCOUNT_TOKEN} in OpenBao (the operator " +
+          "ExternalSecret already delivers the operator path) and force-sync operator-env-secrets",
       },
       { status: 503 }
     );
