@@ -69,11 +69,16 @@ function cronToHumanReadable(cron: string): string {
   return cron;
 }
 
+type ScheduleKind = "graph" | "node-task";
+
 export function SchedulesView() {
   const queryClient = useQueryClient();
   const [isFormOpen, setIsFormOpen] = useState(false);
+  const [scheduleKind, setScheduleKind] = useState<ScheduleKind>("graph");
   const [prompt, setPrompt] = useState("");
   const [selectedAgent, setSelectedAgent] = useState("");
+  const [taskRoute, setTaskRoute] = useState("");
+  const [taskPayload, setTaskPayload] = useState("{}");
   const [selectedCron, setSelectedCron] = useState("");
   const [selectedTimezone, setSelectedTimezone] = useState("UTC");
   const [selectedModelRef, setSelectedModelRef] = useState<ModelRef | null>(
@@ -124,6 +129,8 @@ export function SchedulesView() {
       queryClient.invalidateQueries({ queryKey: ["schedules"] });
       setPrompt("");
       setSelectedAgent("");
+      setTaskRoute("");
+      setTaskPayload("{}");
       setSelectedCron("");
       setSelectedTimezone("UTC");
       setSelectedModelRef(modelsData?.defaultRef ?? null);
@@ -158,8 +165,27 @@ export function SchedulesView() {
   });
 
   const handleCreate = () => {
-    if (!prompt.trim() || !selectedAgent || !selectedCron || !selectedModelRef)
+    if (!selectedCron) return;
+
+    if (scheduleKind === "node-task") {
+      if (!taskRoute.trim()) return;
+      let payload: Record<string, unknown>;
+      try {
+        payload = taskPayload.trim() ? JSON.parse(taskPayload) : {};
+      } catch {
+        setMutationError("Payload must be valid JSON");
+        return;
+      }
+      createMutation.mutate({
+        route: taskRoute.trim(),
+        input: payload,
+        cron: selectedCron,
+        timezone: selectedTimezone,
+      });
       return;
+    }
+
+    if (!prompt.trim() || !selectedAgent || !selectedModelRef) return;
     createMutation.mutate({
       graphId: selectedAgent,
       input: {
@@ -185,13 +211,16 @@ export function SchedulesView() {
   const defaultModelId = modelsData?.defaultRef?.modelId ?? "";
   const hasAgents = agents.length > 0;
   const hasModels = models.length > 0;
-  const isFormValid =
+  const isGraphFormValid =
     prompt.trim() &&
     selectedAgent &&
     selectedCron &&
     selectedModelRef &&
     hasAgents &&
     hasModels;
+  const isNodeTaskFormValid = taskRoute.trim() && selectedCron;
+  const isFormValid =
+    scheduleKind === "node-task" ? isNodeTaskFormValid : isGraphFormValid;
 
   if (schedulesError || agentsError || modelsError) {
     const error = schedulesError ?? agentsError ?? modelsError;
@@ -251,57 +280,128 @@ export function SchedulesView() {
         <div className="rounded-lg border bg-card p-6">
           <h2 className="mb-4 font-semibold text-lg">New Schedule</h2>
           <div className="grid gap-4 md:grid-cols-2">
-            {/* Prompt */}
+            {/* Schedule kind toggle: graph run vs NodeTask http-dispatch */}
             <div className="md:col-span-2">
-              <label
-                htmlFor="prompt"
-                className="mb-2 block font-medium text-sm"
+              <label htmlFor="kind" className="mb-2 block font-medium text-sm">
+                Type
+              </label>
+              <Select
+                value={scheduleKind}
+                onValueChange={(v) => setScheduleKind(v as ScheduleKind)}
               >
-                Prompt
-              </label>
-              <Input
-                id="prompt"
-                placeholder="Enter the prompt for this scheduled run..."
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-              />
+                <SelectTrigger id="kind">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="graph">Graph run</SelectItem>
+                  <SelectItem value="node-task">
+                    NodeTask (HTTP dispatch)
+                  </SelectItem>
+                </SelectContent>
+              </Select>
             </div>
 
-            {/* Agent Select */}
-            <div>
-              <label htmlFor="agent" className="mb-2 block font-medium text-sm">
-                Agent
-              </label>
-              {!hasAgents ? (
-                <p className="text-muted-foreground text-sm">
-                  No agents available. Configure agents first.
-                </p>
-              ) : (
-                <Select value={selectedAgent} onValueChange={setSelectedAgent}>
-                  <SelectTrigger id="agent">
-                    <SelectValue placeholder="Select an agent" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {agents.map((agent) => (
-                      <SelectItem key={agent.graphId} value={agent.graphId}>
-                        {agent.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              )}
-            </div>
+            {scheduleKind === "graph" && (
+              <>
+                {/* Prompt */}
+                <div className="md:col-span-2">
+                  <label
+                    htmlFor="prompt"
+                    className="mb-2 block font-medium text-sm"
+                  >
+                    Prompt
+                  </label>
+                  <Input
+                    id="prompt"
+                    placeholder="Enter the prompt for this scheduled run..."
+                    value={prompt}
+                    onChange={(e) => setPrompt(e.target.value)}
+                  />
+                </div>
 
-            {/* Model Select */}
-            <div>
-              <div className="mb-2 font-medium text-sm">Model</div>
-              <ModelPicker
-                models={models}
-                value={selectedModelRef?.modelId || defaultModelId}
-                onValueChange={setSelectedModelRef}
-                disabled={!hasModels}
-              />
-            </div>
+                {/* Agent Select */}
+                <div>
+                  <label
+                    htmlFor="agent"
+                    className="mb-2 block font-medium text-sm"
+                  >
+                    Agent
+                  </label>
+                  {!hasAgents ? (
+                    <p className="text-muted-foreground text-sm">
+                      No agents available. Configure agents first.
+                    </p>
+                  ) : (
+                    <Select
+                      value={selectedAgent}
+                      onValueChange={setSelectedAgent}
+                    >
+                      <SelectTrigger id="agent">
+                        <SelectValue placeholder="Select an agent" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {agents.map((agent) => (
+                          <SelectItem key={agent.graphId} value={agent.graphId}>
+                            {agent.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                </div>
+
+                {/* Model Select */}
+                <div>
+                  <div className="mb-2 font-medium text-sm">Model</div>
+                  <ModelPicker
+                    models={models}
+                    value={selectedModelRef?.modelId || defaultModelId}
+                    onValueChange={setSelectedModelRef}
+                    disabled={!hasModels}
+                  />
+                </div>
+              </>
+            )}
+
+            {scheduleKind === "node-task" && (
+              <>
+                {/* Route */}
+                <div className="md:col-span-2">
+                  <label
+                    htmlFor="route"
+                    className="mb-2 block font-medium text-sm"
+                  >
+                    Route
+                  </label>
+                  <Input
+                    id="route"
+                    placeholder="/api/internal/ops/node-task-echo"
+                    value={taskRoute}
+                    onChange={(e) => setTaskRoute(e.target.value)}
+                  />
+                  <p className="mt-1 text-muted-foreground text-xs">
+                    Node-relative path the schedule POSTs to (no scheme, no
+                    "..").
+                  </p>
+                </div>
+
+                {/* Payload */}
+                <div className="md:col-span-2">
+                  <label
+                    htmlFor="payload"
+                    className="mb-2 block font-medium text-sm"
+                  >
+                    Payload (JSON)
+                  </label>
+                  <Input
+                    id="payload"
+                    placeholder='{"ping":"ok"}'
+                    value={taskPayload}
+                    onChange={(e) => setTaskPayload(e.target.value)}
+                  />
+                </div>
+              </>
+            )}
 
             {/* Frequency Select */}
             <div>

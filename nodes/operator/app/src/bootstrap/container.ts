@@ -568,6 +568,7 @@ function createContainer(): Container {
     db,
     scheduleControl,
     executionGrantPort,
+    getNodeId(),
     log.child({ component: "DrizzleScheduleUserAdapter" })
   );
 

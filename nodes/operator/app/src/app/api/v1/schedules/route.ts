@@ -137,13 +137,18 @@ export const POST = wrapRouteHandlerWithLogging(
       // Credit gating removed from schedule creation — handled at execution time
       // via PreflightCreditCheckDecorator (same path as chat). Single authority.
 
-      // Create schedule
+      // Create schedule. graphId xor route is enforced by the contract; thread
+      // exactly one through for a graph run vs NodeTask (http-dispatch) schedule.
+      // Spread conditionally so exactOptionalPropertyTypes never sees `undefined`.
       const schedule = await container.scheduleManager.createSchedule(
         toUserId(sessionUser.id),
         account.id,
         {
           nodeId: getNodeId(),
-          graphId: input.graphId,
+          // Contract refine guarantees exactly one of route/graphId is set.
+          ...(input.route !== undefined
+            ? { route: input.route }
+            : { graphId: input.graphId as string }),
           input: input.input,
           cron: input.cron,
           timezone: input.timezone,
@@ -151,7 +156,11 @@ export const POST = wrapRouteHandlerWithLogging(
       );
 
       ctx.log.info(
-        { scheduleId: schedule.id, graphId: input.graphId },
+        {
+          scheduleId: schedule.id,
+          graphId: schedule.graphId,
+          route: input.route,
+        },
         "schedules.create_success"
       );
 

@@ -38,7 +38,7 @@ import {
   GitHubAppTokenProvider,
   GitHubSourceAdapter,
 } from "../adapters/ingestion/index.js";
-import { createFailClosedNodePrincipalResolver } from "../adapters/node-principal.js";
+import { createSharedTokenNodePrincipalResolver } from "../adapters/node-principal.js";
 import { createReviewHttpClient } from "../adapters/review-http.js";
 import {
   createHttpExecutionGrantValidator,
@@ -64,7 +64,7 @@ import type { Env } from "./env.js";
 export interface ServiceContainer {
   grantAdapter: ExecutionGrantHttpValidator;
   runAdapter: GraphRunHttpWriter;
-  /** Per-node dispatch principal (G1, task.5029) — fail-closed stub until secrets-on-spawn lands. */
+  /** Per-node dispatch principal (task.5034) — MVP resolves the shared SCHEDULER_API_TOKEN, identical to graph dispatch; per-node credential is the hardening for both paths. */
   nodePrincipalResolver: NodePrincipalResolver;
   /** HTTP client for the operator's review GitHub plane (bug.5000). */
   reviewClient: ReviewHttpClient;
@@ -179,10 +179,15 @@ export function createContainer(config: Env, logger: Logger): ServiceContainer {
   return {
     grantAdapter: createHttpExecutionGrantValidator(deps),
     runAdapter: createHttpGraphRunWriter(deps),
-    // G1 (task.5029): fail-closed per-node principal. Stub throws for every
-    // node until the secrets-on-spawn work provides a per-node credential —
-    // the shared SCHEDULER_API_TOKEN is intentionally NOT passed here.
-    nodePrincipalResolver: createFailClosedNodePrincipalResolver(),
+    // MVP (task.5034): per-node dispatch principal = the shared SCHEDULER_API_TOKEN,
+    // IDENTICAL to the credential the graph dispatch already uses in run-http.ts.
+    // NodeTask is consistent with graphs (syntropy) and dispatch can succeed today.
+    // The per-node credential is the hardening for BOTH paths (task.5033 +
+    // secrets-on-spawn); the fail-closed resolver is built but intentionally not
+    // wired until that credential store exists.
+    nodePrincipalResolver: createSharedTokenNodePrincipalResolver(
+      config.SCHEDULER_API_TOKEN
+    ),
     // Review GitHub I/O is HTTP-delegated to the operator (bug.5000); the worker
     // holds no GitHub credential. Always targets the "operator" node endpoint.
     reviewClient: createReviewHttpClient({

@@ -93,7 +93,17 @@ export function isInvalidTimezoneError(
 export interface CreateScheduleInput {
   /** Originating node ID from repo-spec. Routes execution to correct node. */
   nodeId: string;
-  graphId: string;
+  /**
+   * Graph ID to execute. Set for a graph schedule (mutually exclusive with route).
+   * For a NodeTask schedule the adapter synthesizes `task:<route>` instead.
+   */
+  graphId?: string;
+  /**
+   * Node-relative route for a NodeTask http-dispatch schedule (mutually exclusive
+   * with graphId). When set, the adapter routes to NodeTaskWorkflow and grants
+   * `task:dispatch:<nodeId>:<route>` scope.
+   */
+  route?: string;
   input: unknown;
   cron: string;
   timezone: string;

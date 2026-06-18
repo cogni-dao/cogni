@@ -8,28 +8,56 @@
  * Invariants:
  *   - Contract remains stable; breaking changes require new version
  *   - All consumers use z.infer types
- *   - Cron must be valid 5-field expression
- *   - Timezone must be valid IANA timezone
+ *   - Exactly one of graphId xor route is set (graph run xor node-task dispatch)
+ *   - route is node-relative — starts with a slash, no scheme, no protocol-relative, no traversal
  * Side-effects: none
- * Links: /api/v1/schedules route, docs/spec/scheduler.md
+ * Links: /api/v1/schedules route, docs/design/node-temporal-tenant-interface.md
  * @internal
  */
 
 import { z } from "zod";
 
 /**
- * Schedule creation input schema.
+ * Node-relative route guard for a NodeTask schedule (SSRF / cross-tenant defense).
+ * Must start with a single "/", carry no scheme (":") , no protocol-relative ("//"),
+ * and no path traversal ("..").
  */
-export const ScheduleCreateInputSchema = z.object({
-  /** Graph ID in format provider:name (e.g., "langgraph:poet") */
-  graphId: z.string().min(1),
-  /** Graph input payload (messages, model, etc.) */
-  input: z.record(z.string(), z.unknown()),
-  /** 5-field cron expression (e.g., "0 9 * * *" for 9am daily) */
-  cron: z.string().min(1),
-  /** IANA timezone (e.g., "UTC", "America/New_York") */
-  timezone: z.string().min(1),
-});
+const RouteSchema = z
+  .string()
+  .min(1)
+  .refine(
+    (r) =>
+      r.startsWith("/") &&
+      !r.startsWith("//") &&
+      !r.includes(":") &&
+      !r.includes(".."),
+    {
+      message:
+        "route must be node-relative: start with '/', no scheme, no '//', no '..'",
+    }
+  );
+
+/**
+ * Schedule creation input schema. Exactly one of graphId (graph run) xor
+ * route (NodeTask http-dispatch) is supplied.
+ */
+export const ScheduleCreateInputSchema = z
+  .object({
+    /** Graph ID in format provider:name (e.g., "langgraph:poet"). Mutually exclusive with route. */
+    graphId: z.string().min(1).optional(),
+    /** Node-relative route for a NodeTask http-dispatch schedule. Mutually exclusive with graphId. */
+    route: RouteSchema.optional(),
+    /** Graph input payload (messages, model, etc.) or NodeTask payload. */
+    input: z.record(z.string(), z.unknown()),
+    /** 5-field cron expression (e.g., "0 9 * * *" for 9am daily) */
+    cron: z.string().min(1),
+    /** IANA timezone (e.g., "UTC", "America/New_York") */
+    timezone: z.string().min(1),
+  })
+  .refine((v) => (v.graphId === undefined) !== (v.route === undefined), {
+    message: "Provide exactly one of graphId or route",
+    path: ["graphId"],
+  });
 
 /**
  * Schedule response schema (returned after creation).
