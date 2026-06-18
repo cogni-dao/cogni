@@ -19,11 +19,11 @@ Do not proceed until they pick. **Recommend (A) for anything that needs more tha
 
 This is the load-bearing part. Devs already poll for direction (`contribute-to-cogni`: poll `coordination.nextAction`, treat as authoritative, re-read after each phase). The manager's job is to make that channel carry real direction. What actually exists:
 
-- **`coordination.nextAction`** — the dev's authoritative "what next." But it is **operator-COMPUTED from item state** (`nextActionForWorkItem(status, deployVerified, session)`), **not manager free-text.** You shape it by changing **state**: `PATCH status` / `blockedBy` / `parentId`. Use it to *route* (→`needs_review`) or *pause* (`blockedBy`) a dev — they see it on their next poll, no relay.
+- **`coordination.nextAction`** — the dev's authoritative "what next." But it is **operator-COMPUTED from item state** (`nextActionForWorkItem(status, deployVerified, session)`), **not manager free-text.** You shape it by changing **state**: `PATCH status` / `blockedBy` / `parentId`. Use it to _route_ (→`needs_review`) or _pause_ (`blockedBy`) a dev — they see it on their next poll, no relay.
 - **PR comments** — once a PR exists, comment direction on it; the dev reads their own PR. Reliable, but post-PR only.
-- **`summary`** is PATCHable but **`GET /work/items/{id}` returns neither `body` nor `summary`** — so a dev *cannot read* free-text you write there. Do not rely on it as a dev channel.
+- **`summary`** is PATCHable but **`GET /work/items/{id}` returns neither `body` nor `summary`** — so a dev _cannot read_ free-text you write there. Do not rely on it as a dev channel.
 
-**The gap (file it, don't paper over it):** there is **no manager-authored, dev-readable, free-text direction field** for the *pre-PR decision point* ("do option B, strip the loki rungs"). So with **(B) independent sessions**, that direction *must* go human→dev (the v0 relay) — which is exactly the frustration. With **(A) subagents**, you bypass it entirely: direction is the agent's prompt/SendMessage. **Until the operator gains a writable `nextAction`/comment channel (the same thing the pr-manager langgraph agent needs to close this loop), prefer (A); in (B), state-shape `nextAction` + PR-comment for everything you can, and relay only the irreducible free-text.**
+**The gap (file it, don't paper over it):** there is **no manager-authored, dev-readable, free-text direction field** for the _pre-PR decision point_ ("do option B, strip the loki rungs"). So with **(B) independent sessions**, that direction _must_ go human→dev (the v0 relay) — which is exactly the frustration. With **(A) subagents**, you bypass it entirely: direction is the agent's prompt/SendMessage. **Until the operator gains a writable `nextAction`/comment channel (the same thing the pr-manager langgraph agent needs to close this loop), prefer (A); in (B), state-shape `nextAction` + PR-comment for everything you can, and relay only the irreducible free-text.**
 
 ## The loop
 
@@ -32,8 +32,8 @@ This is the load-bearing part. Devs already poll for direction (`contribute-to-c
 2. **Decompose into linked tasks with NON-OVERLAPPING contracts.** Each `task` carries `parentId: <story>` and:
    - a scope one agent can fully own,
    - an explicit **owns / do-NOT-touch** file boundary so two agents never edit the same file,
-   - the **shared seam** when they interlock — e.g. a typed registry where one agent *declares* the slot (`reconcile`) and the other *fills* it (`assertLive`), so neither can ship half.
-   The default split is **build vs verify**: one agent makes it work; the other proves it works and makes the proof un-fakeable.
+   - the **shared seam** when they interlock — e.g. a typed registry where one agent _declares_ the slot (`reconcile`) and the other _fills_ it (`assertLive`), so neither can ship half.
+     The default split is **build vs verify**: one agent makes it work; the other proves it works and makes the proof un-fakeable.
 
 3. **Inject guardrails into every task.** Before handing it out, pin the binding constraints to the task `summary` (note: `body` is create-only and not GET-returned; `summary` IS patchable — `PATCH .../work/items/{id} {set:{summary}}`). Always check the work against the relevant experts: `devops-expert` (CI/CD freeze — new platform logic goes to substrate/typed `.ts`, not deploy bash), `cicd-secrets-expert` (OpenBao/ESO custody; never `.env`/plaintext, never ALTER a DB password), plus any spec invariants. Name the required reviewer. A task without guardrails is debt.
 
@@ -41,11 +41,11 @@ This is the load-bearing part. Devs already poll for direction (`contribute-to-c
 
 5. **Intervene only on collision or drift.** Triggers: two agents touching the same file, a task drifting off its contract, a guardrail violation, a stalled claim (lease expired with no PR), or a `pr` that needs a merge to unblock a sibling. Otherwise, let them work.
 
-6. **Route a finished task to done — you own the merge.** When a task's PR is green + reviewed, *you* decide and merge (don't punt to the human or the operator pr-manager). Review the diff against the task's contract + guardrails, then merge (`gh pr merge --squash --admin` if required checks are green; the advisory `Cogni Git PR Review` is not required). For the deploy-verify rung — flight + prove the change live — drive [`/promote`](../promote/SKILL.md) and [`/validate-candidate`](../validate-candidate/SKILL.md); this skill **replaces `pr-coordinator-v0`** (its single-slot flight→QA→score→merge loop is now: those two skills for the mechanics + this skill for the decision).
+6. **Route a finished task to done — you own the merge.** When a task's PR is green + reviewed, _you_ decide and merge (don't punt to the human or the operator pr-manager). Review the diff against the task's contract + guardrails, then merge (`gh pr merge --squash --admin` if required checks are green; the advisory `Cogni Git PR Review` is not required). For the deploy-verify rung — flight + prove the change live — drive [`/promote`](../promote/SKILL.md) and [`/validate-candidate`](../validate-candidate/SKILL.md); this skill **replaces `pr-coordinator-v0`** (its single-slot flight→QA→score→merge loop is now: those two skills for the mechanics + this skill for the decision).
 
 ## Verification discipline (non-negotiable)
 
-- **Re-review against ground truth, not your own text.** Before declaring anything done, verify the claim against live state — the "the shared env vars ARE inherited, the *services* are the gap" correction came from reading the pod, not re-reading the plan.
+- **Re-review against ground truth, not your own text.** Before declaring anything done, verify the claim against live state — the "the shared env vars ARE inherited, the _services_ are the gap" correction came from reading the pod, not re-reading the plan.
 - **Never forward subagent synthesis as fact.** Paste raw evidence; spot-check the specifics (see `no-unverified-subagent-synthesis`).
 - **Green ≠ done.** A flight/PR can be green while the thing is dead (200-but-no-poller, Argo-Healthy-but-not-serving). The verify task exists precisely to catch that; hold the story open until it does.
 
@@ -54,6 +54,7 @@ This is the load-bearing part. Devs already poll for direction (`contribute-to-c
 **ONE persistent, claim-aware Monitor over ALL linked tasks** (not one per task; keep total monitors to 0–1). Poll every 60s (remote API → rate-limit safe). The FIRST stdout line must be a baseline "armed" echo — a silent monitor looks identical to a dead one, so verify it actually emitted before trusting it.
 
 **Poll TWO endpoints per task — claims are a blind spot:**
+
 - `GET /api/v1/work/items/{id}` → `status`, `pr`, `branch`. (NOT `assignees` — agents claim via the lease, which never writes `assignees`.)
 - `GET /api/v1/work/items/{id}/coordination` → `session.status` (`active`/expired) + `claimedByDisplayName`. **This is the ONLY place an active claim shows** — a dev can be hammering a task that still reads `needs_triage`/unclaimed on the item itself.
 
@@ -78,21 +79,24 @@ while true; do
   sleep 60
 done
 ```
+
 Arm with `Monitor { persistent: true, timeout_ms: 3600000 }`.
 
 **Act on these events — not the rest:**
+
 - `pr`/`branch` appears → **collision check**: `comm -12 <(gh pr view <A> --json files -q '.files[].path'|sort) <(gh pr view <B> ...|sort)`. Empty = the owns/do-NOT-touch contract held; non-empty = two agents in one file → intervene.
 - `claim=active → expired` with no PR → stalled agent; re-hand or re-spawn.
 - `status → needs_review` or CI red → route to review / relay the failure.
 - silence on heartbeats → correct (that's the point).
 
-*Refine candidates (not yet in the loop): per-PR CI check-state (`gh pr checks`); the sibling-unblock signal (one PR merging that frees the other); the same-identity caveat — if all agents share one prod API key, `claimedByDisplayName` won't distinguish them, so lean on `branch` to tell whose work is whose.*
+_Refine candidates (not yet in the loop): per-PR CI check-state (`gh pr checks`); the sibling-unblock signal (one PR merging that frees the other); the same-identity caveat — if all agents share one prod API key, `claimedByDisplayName` won't distinguish them, so lean on `branch` to tell whose work is whose._
 
 ## Human-facing output — a status MATRIX, nothing else
 
-Derek scans many agents. Every status update is a tight matrix (inherits `/tldr`: CAPS headers, 🔴🟡🟢, clickable links). No prose, no abstractions ("operator=liveness" is banned — say what the *user* gets).
+Derek scans many agents. Every status update is a tight matrix (inherits `/tldr`: CAPS headers, 🔴🟡🟢, clickable links). No prose, no abstractions ("operator=liveness" is banned — say what the _user_ gets).
 
 **Rules:**
+
 - **Ultra concise** — the matrix + a one-line next-action. Nothing else.
 - **Say what each item IS in human terms** — the before→after, not the jargon. Bad: "typed env-singleton registry." Good: "new node's graph chat hangs → it just works."
 - **Every row links** — clickable URLs, not IDs alone: the **PR** (`github.com/.../pull/N`), the **live page** to click (`https://<node>-test.cognidao.org`, prod), the **gh run** when relevant. Work items by id is fine; a URL is better.
@@ -119,4 +123,5 @@ Lead with 🔴/🟡; 🟢 is earned (merged + proven live), never aspirational.
 This is the human-driven v0. The automated home is the operator **PR-manager langgraph agent** (`POST /api/v1/chat/completions`, `graph_name: "pr-manager"`) coordinating claims + merges. Until that carries the loop, run it here.
 
 ## Reference — the proven cycle (2026-06-16)
+
 `story.5006` (substrate completeness) → `task.5023` (build: env-singleton reconcile + typed registry) + `task.5024` (verify: assertLive live-gate + flight-status API). Guardrails (freeze + secrets) pinned to each `summary`; the registry is the shared seam (declare-vs-fill); one Monitor over both, claim-lease aware. Decision point ran as (B).
