@@ -327,85 +327,92 @@ don't assume complete Loki rotation history until it closes).
   justified **only here** — where the tool layer (a package consumed by graphs)
   actually needs it; Phase 1's REST path does not.
 
-## Phase 3 — Cross-env writes (the test-env self-serve blocker · `bug.5038`)
+## Phase 3 — Secrets across ALL envs (the node-BaaS requirement · `bug.5038`)
 
-**The blocker, stated plainly:** a node registered through the prod operator can
-only self-serve on **production**. Setting a secret on a _test_ env
-(candidate-a/preview) for that node falls back to the operator-admin CLI
-(kube port-forward + writer JWT) — i.e. **one person's `.local` creds.** That is
-backwards: the least-protected env is the most human-gated, and it hard-blocks
-every external developer. (Surfaced by the beacon dev, who could only write
-`cogni/production/beacon/*` from `cognidao.org` and clobbered a `source: agent`
-key there.)
+**The requirement, not a workaround.** A node spawns into **all three envs**
+(candidate-a, preview, production) — that is the BaaS contract
+([`node-baas-architecture.md`](../spec/node-baas-architecture.md): _"node declares
+shape; operator wires environment"_, where _environment_ = every env). A node
+developer holding **only an API key** must be able to set/rotate a `source: human`
+secret value for their node on **any** of those envs, with zero kube. **Production
+is never a testing ground** — a node's test envs are first-class, and the dev needs
+to put a _test_ X-OAuth app's creds on candidate-a/preview and a _separate prod_
+app's creds on production. Per-env values are the point, not a limitation.
 
-**Root cause** (not a bug in the route — a topology fact): env is
-operator-stamped from `serverEnv().DEPLOY_ENVIRONMENT` (correct — it closes the
-env-injection axis), and the **control plane is per-env**: each env's operator runs
-its own `nodes` registry + OpenFGA store. So no single operator both _knows the
-prod-registered node_ and _writes the test env's OpenBao_.
+This is the **Secrets row of the BaaS Substrate Map** (_node declares key names +
+consumers; operator provides OpenBao values, ESO manifests, **rotation path**_) and
+the gap is real and observed: the first prod node launch (beacon, 2026-06-16)
+proved the **control plane** works but the **substrate lane** (DB + edge + secrets)
+"needed manual intervention — nothing self-healed" (node-wizard-expert
+substrate-gaps table; _"No LLM backend → provision the node's secret"_ is exactly a
+`source: human` cross-env secret with no self-serve supply path).
 
-The shape mirrors the **deploy port**: control plane authorizes, env-local plane
-executes. Deploy gets away with `workflow_dispatch` because it carries only a PR
-number; secrets cannot (plaintext value in a CI input — see Non-goals), so the
-cross-env path must carry the value operator→operator, never through CI.
+**Why it's blocked today — two facts, both fixable:**
 
-### Decision — phase the fix; simplest first, mesh deferred behind a trigger
+1. **The write primitive is per-env (correct) but only reachable where the node's
+   identity + grant exist.** #1627's route stamps env from the operator's own
+   `DEPLOY_ENVIRONMENT` (right — closes env-injection) and checks **that env's**
+   OpenFGA store + `nodes` registry. The OpenFGA store is substrate on **every** env
+   (`openfga-substrate-unification.md`: one `cogni-<env>-rbac` store per env; prod
+   live 2026-06-14) — so the store is _not_ missing. What's missing is the node's
+   **registry row + owner `can_manage_secrets` tuple in each env**.
+2. **Node formation does not fan identity + authz across envs.** It wires (or should
+   wire) DB, DNS, edge, and `source: agent` secrets per env — but the node's
+   **registry row and the owner's OpenFGA grant are not provisioned into every
+   env's store**. So self-serve is reachable only where formation happened to land
+   them, and a dev hits a `403`/`404` (or the old kube fallback) everywhere else.
 
-**Phase 3a (this bug — the MVP unblock): per-env self-serve, _gated on a
-verification spike_.** The hypothesis: a dev manages a test-env secret by talking
-to **that env's own operator**, where the node is registered and the dev is
-granted, reusing the shipped #1627 write — `POST /nodes` (register) →
-`POST /nodes/[id]/access-requests` → owner `POST /nodes/[id]/developers` →
-`POST /nodes/[id]/secrets`, all API, no kube. **But three preconditions are
-unproven and each can sink it — prove them before calling 3a "done", do not
-assume "zero new code":**
+### The RIGHT plan
 
-1. **Registry row ≠ running node.** A `nodes` row + an OpenBao write are useless
-   unless the test env actually has the node's `cogni/<env>/<node>/*` ExternalSecret
-   fan-out **and a deployed pod consuming `<node>-env-secrets`.** That is the
-   node-formation/flight path, not a single `POST /nodes`. If the test env has no
-   deployed node, self-serve writes into a void.
-2. **Owner bootstrap (chicken-and-egg).** The grant rung needs an existing **owner**
-   on the test-env operator to approve. If self-registration makes the dev the
-   owner, fine — API-only. If not, the _first_ grant still needs an admin → back to
-   a human. Prove who owns a freshly-registered test node.
-3. **The node's tuples must live in the target env's OpenFGA store, and that
-   env's operator must be able to check them.** _Correction (2026-06-18):_ the
-   "preview/prod have no OpenFGA store" line in §Security boundary is **stale** —
-   per [`openfga-substrate-unification.md`](./openfga-substrate-unification.md)
-   the store is substrate, **one env-shared `cogni-<env>-rbac` store on every
-   env** (prod store live since 2026-06-14). So OpenFGA presence is **not** the
-   blocker. The real gaps are: (a) the node + `developer`/`can_manage_secrets`
-   tuples must exist in **that env's** store (each env's operator checks its own
-   store), and (b) on **candidate-a**, `candidate-flight` does **not** bootstrap
-   the model (`project_candidate_flight_no_openfga_bootstrap`) and the env is
-   reprovisioned often → tuples/rows are ephemeral. **preview** is the durable
-   choice (store present, not a flight slot). So the env choice resolves toward
-   **preview**, and the spike is really preconditions 1+2 (node wiring + owner
-   bootstrap) on preview — _not_ "provision OpenFGA".
+**Foundation (the actual fix — `OPERATOR_WIRES_EVERY_ENV`): node formation
+provisions node-identity + the owner grant into all three envs.** Exactly as the
+operator fans DB/DNS/edge/`source:agent`-secrets per env, formation (and each env's
+provision/flight re-assert) must write the node's `nodes` row + the owner's
+`developer`/`can_manage_secrets` tuple into **that env's** registry + OpenFGA store.
+This is one invariant added to the substrate/wizard lane (`reconcile-node-substrate.sh`
 
-> **Honest read:** 3a is the right _direction_ and may be a small change, but the
-> "zero Derek, works today" framing is aspirational until the spike clears all
-> three. The realistic near-term unblock is likely **one** admin-run bootstrap
-> (provision/own the node on a durable test env) after which the dev self-serves
-> kube-free — i.e. zero _per-secret_ human creds, not zero human at registration.
+- launch-pack + the OpenFGA tuple-write), idempotent and re-asserted on reprovision
+  (so candidate-a's frequent rebuilds self-heal the grant instead of dropping it).
+  **Without this, no per-env self-serve is reachable; with it, every env is.**
 
-> **Interim that already works for a brand-new node (precondition-1 corollary):**
-> 3a's hard part is that the node must already _run_ on the chosen test env. A
-> freshly-formed node typically runs on only **one** env (often production, where
-> it was registered) and has **no users / no data yet**. For that node the
-> test↔prod boundary is moot — its production deployment _is_ its test env. So the
-> dev sets `source: human` vendor secrets via self-serve on the operator that
-> already knows it (e.g. `cognidao.org` → `cogni/production/<node>/*`), which
-> works **today** (granted `can_manage_secrets`, key not substrate-reserved). This
-> is the unblock for the _first_ node; bug.5038 (3a/3b) is the general fix for
-> nodes that genuinely need an _isolated_ test env distinct from a populated prod.
+**Then the two secret classes both work on every env, no human kube:**
 
-**Phase 3b (scalable target — deferred behind a trigger): `targetEnv` + operator
-mesh.** When operating per-env across N envs/nodes becomes the friction (or a
-second external node lands), promote the **prod operator to the single control
-plane** for registry + RBAC and let a dev manage _any_ env of their node from one
-host:
+- **`source: agent`** (DB creds, `AUTH_SECRET`, `CONNECTIONS_ENCRYPTION_KEY`, …):
+  the operator **generates** them per env via `secret-materialize` at flight/promote
+  — already automated, and clobber-protected as of #1753. No dev action, all envs.
+- **`source: human`** (X-OAuth secret, LLM/LiteLLM key, vendor tokens): the dev
+  supplies the value **per env** via the shipped #1627 write against **that env's
+  operator** — now reachable because the foundation fanned the grant. Each
+  env-operator writes only its own `cogni/<env>/<node>/*` with its own in-cluster
+  writer (env axis stays closed). Distinct values per env are supported and
+  expected (test app vs prod app).
+
+**Deliverables (one PR-sized task each; the foundation is the unblocker):**
+
+1. **Formation fan-out** of node-identity + owner-grant to candidate-a + preview +
+   production, idempotent + re-asserted on provision/flight. _(The real gap. Lives
+   in the node-wizard/substrate lane — see node-wizard-expert substrate-gaps.)_
+2. **Confirm #1627 is deployed on all three env-operators** and the per-env write
+   succeeds end-to-end once (1) lands — the write primitive itself is done.
+3. **Guide**: document per-env self-serve as THE path for `source: human` node
+   secrets (call the env's own operator host); state that `source: agent` keys are
+   auto-fanned and must never be hand-set.
+
+**Rejected:**
+
+- **Production as a node's test env** ("it has no users yet"). Rejected outright —
+  every node gets first-class test envs; conflating them violates the BaaS contract
+  and trains a prod-is-staging habit that breaks the first time a node has data.
+- **Per-secret kube CLI** (the operator-admin `secrets-add-new.md` §3–8 fallback as
+  the _standard_ path). It is the day-2 admin escape hatch, never the node-dev
+  contract — it hard-gates every external dev on one person's `.local` creds.
+
+### Convergence (deferred behind a trigger): single-pane `targetEnv` + operator mesh
+
+Per-env hosts (above) deliver the capability. The **UX** convergence — a dev manages
+all of their node's envs from **one** operator surface — is `targetEnv` +
+operator-to-operator delegation. Promote the prod operator to the single control
+plane for registry + RBAC and let a dev target any env from one host:
 
 ```
 POST cognidao.org/api/v1/nodes/<id>/secrets { key, value, targetEnv: "candidate-a" }
