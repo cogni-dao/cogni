@@ -12,7 +12,7 @@ resources:
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/cogni-template
-    digest: "sha256:edf229df670b3a7f319d269afb34f9f5d7b9b55cf2d440f4bbef287078a5b0ec"
+    digest: "sha256:e9b468433da3d4353590be1023135229c75a285648164d3a2c1af1e25f18469c"
 
 patches:
   - target:
@@ -22,6 +22,9 @@ patches:
       - op: replace
         path: /data/TEMPORAL_NAMESPACE
         value: "cogni-production"
+      - op: add
+        path: /data/DEPLOY_ENVIRONMENT
+        value: "production"
       - op: replace
         path: /data/IMAGE_DIGEST
         value: "production-placeholder-scheduler-worker"
