@@ -37,15 +37,3 @@ payments_in:
       - Base
     allowed_tokens:
       - USDC
-
-# Node-facing recurring work (story.5008). The operator declares its OWN
-# recurring jobs here; syncNodeSchedules reconciles them into Temporal Schedules
-# under this node's tenant identity (node-direct create). This first entry proves
-# the node-task http-dispatch path end-to-end: NodeTaskWorkflow POSTs the route
-# below every 5 minutes, emitting node_task.heartbeat.received in Loki.
-schedules:
-  - id: node-task-heartbeat
-    cron: "*/5 * * * *"
-    timezone: UTC
-    route: /api/internal/ops/node-task-heartbeat
-    payload: {}

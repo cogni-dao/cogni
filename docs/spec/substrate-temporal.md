@@ -1,151 +1,106 @@
 ---
 id: spec.substrate-temporal
 type: spec
-title: Temporal Substrate — one shared generic worker, per-node queues, node-direct scheduling
+title: Temporal Substrate — one shared generic worker; nodes schedule their own routes & graphs
 status: draft
 trust: draft
-summary: "How the Temporal substrate serves N nodes without a worker-pod-per-node and without redeploying a shared worker on every node addition. The load-bearing rule: node-specific logic lives in the node's route/graph, never in shared workflow code — so ONE shared worker runs only GENERIC workflows (NodeTaskWorkflow, GraphRunWorkflow) and a new node adds zero worker code. Nodes create schedules directly against provisioned Temporal (operator out of the per-user path); a per-node worker is an opt-in sovereign escape hatch, never the default."
-read_when: "Designing how a node runs recurring or triggered durable work; deciding shared-worker vs per-node-worker; reviewing beacon scheduling or task.5035; before routing any node's recurring work through the operator or shipping node logic into the shared worker."
+summary: "Temporal is a Cogni substrate. ONE shared, operator-run worker executes only GENERIC workflows (GraphRunWorkflow, NodeTaskWorkflow, the operator's own epoch/governance) and dispatches the work INTO the node — this is how AI graphs and epochs already run, proven live. A node consumes the substrate by creating schedules that point at its OWN routes or graphs: no per-workflow Temporal code, no per-node worker. That is the extensible building block — a node ships 300 routes/graphs and can schedule any of them. The only sovereignty delta worth building: node-direct schedule CREATE (the node's own Temporal client + ESO creds) so /schedules registers under the node, not the operator. A per-node worker is an opt-in escape hatch for custom durable workflows only."
+read_when: "Designing how a node runs recurring/triggered/durable work; making /schedules an extensible node building block; scoping task.5035; before proposing a per-node worker as default, a pg-boss second scheduler, or an operator-in-the-loop create API."
 owner: derekg1729
 created: 2026-06-18
+verified: 2026-06-18
 tags: [temporal, node-baas, substrate, scheduling, sovereignty]
 ---
 
 # Temporal Substrate
 
-## Context
+## The model in one line
 
-Temporal is a Cogni **substrate**, like Postgres / Storage / Streams in
-[node-baas-architecture.md](./node-baas-architecture.md) § BaaS Substrate Map. Nodes need
-durable recurring + triggered work — beacon: a user creates a campaign → scheduled social
-posts + metrics ingest. The hard question this doc settles is the **sharing model**: how
-does one substrate serve N nodes without either of the two sad outcomes —
+ONE shared, operator-run worker executes only **generic** workflows and dispatches the work
+**into the node**; a node consumes the substrate by **scheduling its own routes and graphs**
+through those generic workflows. No per-workflow Temporal code. No per-node worker. This is
+**already how AI graphs and epochs run** — it is proven, not proposed.
 
-- a Temporal **worker pod per node**, or
-- **redeploying a shared worker** every time a node adds work.
+## The extensible building block (this is the point)
 
-## The load-bearing insight
+`/schedules` is the node's recurring-work console. A node schedules **any route or any graph
+it owns**, via two generic workflows — and writes **zero** Temporal code to do it:
 
-A Temporal worker can only execute workflow types whose **code it has registered**. So
-_where node-specific logic lives_ decides everything:
+| A node wants to…                         | It schedules…                           | The work runs…              |
+| ---------------------------------------- | --------------------------------------- | --------------------------- |
+| run one of its HTTP ops routes on a cron | `NodeTaskWorkflow` → the node's `route` | in the node's route handler |
+| run an AI graph on a cron / trigger      | `GraphRunWorkflow` → the node's `graph` | in the node's graph runtime |
 
-- logic in **workflow code** → a shared worker needs every node's code (**redeploy per
-  node**), or every node runs its own worker (**a pod per node**). Both sad.
-- logic in the **node's own HTTP route / graph** → the shared worker needs only **generic**
-  workflows, and serves all nodes with **zero per-node code**.
+So a node "builds 300 different things" by writing **300 routes or graphs** — its normal
+product code — and scheduling any of them from `/schedules`. The Temporal workflow types are
+**fixed and generic**; the variety lives in the node's routes/graphs. **A new node adds zero
+worker code and triggers no redeploy.** That is what makes it a building block instead of a
+per-feature integration.
 
-> **The whole design follows: the shared worker runs ONLY generic workflows; node-specific
-> work lives in the node's route/graph. A new node adds zero worker code and triggers no
-> redeploy.**
+## As-built today (the proof this is right)
 
-## The substrate (what the operator provisions, once)
+- **AI graphs** run via `GraphRunWorkflow`: the shared `scheduler-worker` runs the workflow
+  and `executeGraphActivity` dispatches it into the node's graph route. **Live, proven (red ran
+  end-to-end).**
+- **Epochs** run via `CollectEpochWorkflow` on the same shared worker.
+- **`NodeTaskWorkflow`** (merged) is the non-graph sibling — fire a node's HTTP route on a
+  schedule. Same shared worker, same per-node task queue, same dispatch-into-node shape.
+- `/schedules` + `POST /api/v1/schedules` already create Temporal schedules.
 
-- One Temporal cluster; one shared namespace per env (`cogni-<env>`).
-- **One shared worker** (`services/scheduler-worker`) registering only **generic** workflows:
-  - `NodeTaskWorkflow` — fire a node's HTTP route on schedule (the node's work is _in the route_).
-  - `GraphRunWorkflow` — run a node's graph (the node's work is _in the graph_).
-  - the operator's own governance/epoch workflows (operator-specific, operator-owned).
-- A per-node task queue `scheduler-tasks-<nodeId>` the shared worker polls.
-- Per-node Temporal connection creds (scoped to the shared namespace), delivered via ESO
-  into the node's secret namespace, so the node's **app** can talk to Temporal directly.
+The substrate exists and works. The variety knob (routes/graphs) is the node's own app code.
 
-This substrate **does not change when a node is added.**
+## How a node consumes it
 
-## How a node consumes it — no worker, operator out of the create path
+1. **Create (the sovereignty delta — the real build).** The node's app holds its **own**
+   Temporal client (ESO-provisioned namespace creds) and calls `schedule.create(action =
+NodeTaskWorkflow | GraphRunWorkflow, route|graph = its own, taskQueue = its own queue)`.
+   Today schedule-create runs through the operator's client; making it **node-direct** (node's
+   client, node's creds) is the one change that takes the operator out of the create path.
+2. **Execute (shared, generic — unchanged).** The shared worker polls the node's queue, runs
+   the generic workflow, and dispatches into the node's route/graph. The **work runs in the
+   node**; the shared worker is generic dispatch infrastructure (like the Temporal cluster
+   itself, or the node's operator-hosted Postgres) — never node-specific code.
 
-> **As-built vs target (SPECS_ARE_AS_BUILT).** The **execution** half is as-built and live:
-> one shared generic worker runs `NodeTaskWorkflow`/`GraphRunWorkflow` on per-node queues
-> (today under a shared dispatch token; per-node tokens are the hardening). The
-> **node-direct create** half (step 1) is the **target** — today schedules are created
-> operator-side (the operator's `ScheduleControlPort`; `syncNodeSchedules` is built but
-> unwired). Reaching node-direct create means handing the node a Temporal client +
-> ESO-provisioned namespace creds; it is gated on a real consumer, not built on principle.
+Net: operator out of the **create** path; the node's **work** runs in the node; the shared
+worker is shared substrate plumbing, not the operator's business logic in your path.
 
-1. **Create (node-direct).** The node's app holds a Temporal **client** (provisioned creds)
-   and calls `schedule.create(action = NodeTaskWorkflow | GraphRunWorkflow, taskQueue = its
-own)`. The operator is **not called** — node → Temporal directly. A client is
-   request-scoped and cheap; it is **not** a worker.
-2. **Execute (shared worker).** On each tick the shared worker runs the generic workflow:
-   `NodeTaskWorkflow` `POST`s the node's route under a **per-node dispatch identity**; the
-   node's route does the work. `GraphRunWorkflow` runs the node's graph.
-3. The node provides: a **client** (to create) + an **HTTP route** (to receive dispatch) +
-   a **per-node credential** (to authenticate the dispatch). **Not** a worker, **not**
-   custom workflow code.
+## The dispatch hop (honest, and already how graphs work)
 
-Net: the operator is out of the per-user **create** path; the shared worker is the durable
-**cron + dispatch** substrate (generic, shared); the **work runs in the node**.
+Because the shared worker holds no node code, it calls the node over HTTP — exactly as
+`executeGraphActivity` already does for graphs. That hop carries a per-node dispatch identity
+(today the shared `SCHEDULER_API_TOKEN`, as graph dispatch uses; **per-node tokens are the
+hardening, deferred**) and uses `maximumAttempts: 1` (at-most-once → no dedup store for MVP).
+This is not new tax — it is the existing graph-dispatch mechanism, reused.
 
-## The dispatch tax (honest)
+## The escape hatch — a per-node worker (opt-in, RARE)
 
-Because the shared worker has no node code, it calls the node over HTTP. That hop costs:
+A node that needs **custom durable orchestration** — multi-step sagas, signals, long human
+waits, work that cannot be expressed as "fire my route/graph" — runs its **own** Temporal
+worker with its **own** workflow defs, polling its own queue (the per-node queue is the
+graduation seam). This is the only case that costs a worker pod, and it is **opt-in, never the
+node-template default.** Generic recurring/triggered work never needs it.
 
-- **per-node identity** — a per-node dispatch credential (or operator-signed token), **never
-  a shared master token** (a shared master is a one-way door: leak anywhere → impersonate
-  the operator to every node).
-- **idempotency** — MVP uses `maximumAttempts: 1` (at-most-once → **no dedup store needed**).
-  A retry profile is gated on the node implementing dedup on `Idempotency-Key`. No receipts
-  table for MVP.
+## What this is NOT (the wrong turns this spec closes)
 
-This tax is the price of _not_ shipping node code into the shared worker — far cheaper than
-a per-node worker pod or per-node redeploys.
+- ❌ **per-node worker as the default** — graphs prove the shared worker suffices; a pod per
+  node for "fire my route on a cron" is the over-engineering.
+- ❌ **a second scheduler (pg-boss/cron)** — Temporal already runs the node's graphs + epochs;
+  a parallel scheduler is redundant.
+- ❌ **an operator-in-the-loop create API** — create is node-direct (node's own client).
 
-## The sovereign escape hatch — the ONLY case for a per-node worker
+## What this means for task.5035
 
-A node that needs **custom durable workflows** (multi-step orchestration, signals, long
-human waits — work that cannot be expressed as "fire my route") runs its **own** worker:
-
-- its worker registers its custom workflows + activities and polls **its** queue — the
-  per-node queue is the graduation seam (the shared worker stops polling it, or the node
-  moves to its own namespace).
-- execution is fully in-node; the operator is nowhere.
-
-This is **opt-in**, for nodes that have outgrown HTTP-dispatch. It is **not** the default,
-precisely because it costs a pod per node.
-
-## Answering the sharing questions directly
-
-| Question                                           | Answer                                                                                                                                         |
-| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| Can one shared worker serve all nodes?             | **Yes** — it runs only generic workflows; node logic is in the node's route/graph.                                                             |
-| Can that continue as nodes are added?              | **Yes** — a new node adds a queue + route + creds; **zero** shared-worker code; **no** redeploy.                                               |
-| Does every new node spawn its own worker?          | **No** — only nodes that opt into custom workflows. Generic recurring/triggered work needs no node worker.                                     |
-| Does the shared worker redeploy per node workflow? | **No** — adding a node adds no workflow type. The shared worker redeploys only when a **generic** workflow changes (a substrate change, rare). |
-
-## Tradeoffs
-
-|                             | Shared generic worker (default)                | Per-node worker (escape hatch)                   |
-| --------------------------- | ---------------------------------------------- | ------------------------------------------------ |
-| worker pods                 | 1, shared by all nodes                         | 1 per node                                       |
-| redeploy on new node        | none                                           | n/a — the node owns + deploys its worker         |
-| node-specific workflow code | no (logic in route/graph)                      | yes                                              |
-| operator in execution path  | yes — generic dispatch substrate               | no — fully sovereign                             |
-| node must run               | a client + a route + a credential              | a client + a worker + its workflows              |
-| best for                    | hosted nodes; generic recurring/triggered work | custom durable orchestration / zero operator dep |
-
-## What this means now
-
-- **beacon** — generic recurring work (scheduled posts, metrics ingest) → shared worker via
-  `NodeTaskWorkflow`. beacon needs: a Temporal **client** to create schedules + its ops
-  **routes** + a **per-node dispatch credential** to verify inbound. **No** own worker, **no**
-  `operator_dispatch_receipts` (`maximumAttempts: 1`), **no** operator create API.
-  - **Day-1 fallback:** if a Temporal client is too much for the first ship, beacon may run a
-    node-local cron and skip the substrate, behind a 2-method `RecurringWorkPort`
-    (`schedule`/`cancel`) so the swap to the substrate later is zero product-code change. The
-    substrate above is the durable home; cron is a temporary fill of the same port.
-- **operator (`task.5035`)** — **provision the substrate** for a node (per-node queue +
-  namespace-scoped Temporal creds via ESO) and keep the shared worker's generic workflows.
-  **Not** a node-callable schedule API; **not** per-node worker deploys. Schedule creation is
-  node-direct.
-- **node-template** — ships the Temporal-client + ops-route + `RecurringWorkPort` scaffolding
-  as standard; the per-node-worker scaffolding only for the escape-hatch case.
+Re-scoped to its true shape: **give the node app its own Temporal client + ESO-provisioned
+per-node namespace creds, and make `/schedules` create node-direct** against the existing
+generic workflows. **Not** a per-node worker; **not** pg-boss; **not** an operator schedule
+API. The shared worker + `NodeTaskWorkflow`/`GraphRunWorkflow` + per-node queues already exist.
 
 ## References
 
-- [node-baas-architecture.md](./node-baas-architecture.md) — substrate provisioning model
-  (operator provisions, node consumes directly); add a **Temporal / Recurring** row to the
-  BaaS Substrate Map.
-- [temporal-patterns.md](./temporal-patterns.md) — workflow determinism, `NodeTaskWorkflow` /
-  `GraphRunWorkflow`, schedule config, per-node queue.
-- Supersedes the operator-dispatch-as-default framing in
-  [node-temporal-tenant-interface.md](../design/node-temporal-tenant-interface.md).
+- [temporal-patterns.md](./temporal-patterns.md) — determinism, `CRUD_AUTHORITY`, the
+  generic workflows, schedule config, the LangGraph-vs-Temporal (AI) boundary.
+- [node-baas-architecture.md](./node-baas-architecture.md) — operator provisions substrate,
+  node consumes directly (Postgres/Storage/Streams precedent).
+- [node-temporal-tenant-interface.md](../design/node-temporal-tenant-interface.md) — the
+  superseded operator-dispatch-as-default design.
   </content>

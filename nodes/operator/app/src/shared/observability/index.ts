@@ -21,7 +21,6 @@ export const EVENT_NAMES = {
   NODE_SECRET_WRITE_COMPLETE: "feature.node_secret_write.complete",
   NODE_PREVIEW_PROMOTE_COMPLETE: "feature.node_preview_promote.complete",
   NODE_SCHEDULES_SYNC_COMPLETE: "feature.node_schedules_sync.complete",
-  NODE_TASK_HEARTBEAT_RECEIVED: "node_task.heartbeat.received",
   // Auth perimeter (proxy): request rejected before reaching any route handler,
   // so the request-scoped logger never sees it — emitted directly from the proxy.
   AUTH_PERIMETER_DENIED: "auth.perimeter.denied",

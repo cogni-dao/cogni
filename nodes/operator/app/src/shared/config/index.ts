@@ -24,11 +24,9 @@ export {
   getNodeId,
   getNodeMission,
   getNodeName,
-  getNodeSchedules,
   getOperatorWalletConfig,
   getPaymentConfig,
   getScopeId,
   type InboundPaymentConfig,
   type KnowledgeConfig,
-  type NodeScheduleConfig,
 } from "./repoSpec.server";

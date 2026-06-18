@@ -71,8 +71,6 @@ export * from "./meta.livez.read.v1.contract";
 export * from "./meta.readyz.read.v1.contract";
 export * from "./meta.route-manifest.read.v1.contract";
 export * from "./meta.version.read.v1.contract";
-// ── Schedules ───────────────────────────────────────────────────────────────
-export * from "./node-schedules-sync.internal.v1.contract";
 // ── Payments ────────────────────────────────────────────────────────────────
 export * from "./payments.credits.summary.v1.contract";
 export * from "./payments.intent.v1.contract";
@@ -84,6 +82,7 @@ export * from "./review.internal.v1.contract";
 // ── Runs ────────────────────────────────────────────────────────────────────
 export * from "./run-stream.contract";
 export * from "./runs.stream.v1.contract";
+// ── Schedules ───────────────────────────────────────────────────────────────
 export * from "./schedules.create.v1.contract";
 export * from "./schedules.delete.v1.contract";
 export * from "./schedules.list.v1.contract";
