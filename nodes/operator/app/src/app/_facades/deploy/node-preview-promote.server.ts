@@ -31,6 +31,7 @@ import { eq } from "drizzle-orm";
 import type { Logger } from "pino";
 import { createOperatorDeployPlane } from "@/bootstrap/capabilities/operator-deploy-plane";
 import { resolveServiceDb } from "@/bootstrap/container";
+import { getGithubRepo } from "@/shared/config";
 import { nodes } from "@/shared/db/nodes";
 import type { ServerEnv } from "@/shared/env";
 import { EVENT_NAMES } from "@/shared/observability";
@@ -103,7 +104,12 @@ async function promoteNodeToPreview(
   try {
     const db = resolveServiceDb();
     const rows = await db
-      .select({ id: nodes.id, slug: nodes.slug })
+      .select({
+        id: nodes.id,
+        slug: nodes.slug,
+        repoOwner: nodes.repoOwner,
+        repoName: nodes.repoName,
+      })
       .from(nodes)
       // A wizard node's fork is named after its slug (`forkFromTemplate` → `name: slug`), so the
       // merged-PR repo name == the node slug. `nodes.repoOwner/repoName` is the PARENT deploy
@@ -114,6 +120,23 @@ async function promoteNodeToPreview(
     // SPAWNED_NODES_ONLY: an unregistered repo (parent monorepo, in-repo node) is handled
     // by flight-preview.yml directly — nothing to do here.
     if (!node) return;
+
+    // SPAWNED_NODES_ONLY (general): the preview tie applies ONLY to nodes deployed via the parent
+    // monorepo submodule pin — exactly the rows whose repoOwner/repoName IS the parent monorepo
+    // (set by the wizard create path). `node-template` is now a seeded registry row (story.5009)
+    // carrying its OWN repo, and its repo name == its slug — so a node-template merge resolves here
+    // and would otherwise spuriously dispatch a preview promotion. It owns its own deploy pipeline.
+    const parentMonorepo = getGithubRepo();
+    const deployedViaParent =
+      node.repoOwner.toLowerCase() === parentMonorepo.owner.toLowerCase() &&
+      node.repoName.toLowerCase() === parentMonorepo.repo.toLowerCase();
+    if (!deployedViaParent) {
+      log.debug(
+        { slug: node.slug, repo: `${node.repoOwner}/${node.repoName}` },
+        "node preview promote skipped — registered external repo (own deploy pipeline)"
+      );
+      return;
+    }
 
     const parentOwner = env.NODE_SUBMODULE_PARENT_OWNER as string;
     const parentRepo = env.NODE_SUBMODULE_PARENT_REPO as string;
