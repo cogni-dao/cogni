@@ -10,7 +10,8 @@
  *   token** → node-scoped by construction (the per-node OpenFGA check gates WHO; the rebuilt selector
  *   gates REACH).
  * Scope: Thin shell — Cogni-token auth, developer-RBAC gate (same `node.flight` tuple as flight),
- *   resolve {slug|node_id} via dev1's registry, scope-validate the caller's LogQL, delegate to Loki.
+ *   resolve {slug|node_id} against the FULL nodes registry (any status — authz gates, not status),
+ *   scope-validate the caller's LogQL, delegate to Loki.
  * Invariants:
  *   - COGNI_TOKEN_ONLY (Bearer-first); DEVELOPER_GATED (`node.flight`); fail-closed without a store.
  *   - NEVER_ISSUES_A_TOKEN: returns log lines, never a Grafana credential.
@@ -29,9 +30,10 @@ import type { AuthzDecisionCode } from "@cogni/authorization-core";
 import { NextResponse } from "next/server";
 
 import { getSessionUser } from "@/app/_lib/auth/session";
-import { getContainer, resolveNodeRegistry } from "@/bootstrap/container";
+import { getContainer, resolveServiceDb } from "@/bootstrap/container";
 import { createLokiReader } from "@/bootstrap/observability.factory";
 import { getCurrentTraceId } from "@/bootstrap/otel";
+import { resolveNodeRef } from "@/features/nodes/node-lookup";
 import {
   FLIGHT_ENVS,
   isFlightEnv,
@@ -118,10 +120,11 @@ export async function GET(
 
   const { id } = await ctx.params;
 
-  // Consume dev1's registry: match {id} as either the repo-spec nodeId (UUID) or the slug.
-  const summaries = await resolveNodeRegistry().listPublic();
-  const node = summaries.find((n) => n.nodeId === id || n.slug === id);
-  if (!node?.nodeId) {
+  // Resolve {id} (repo-spec node_id OR slug) against the FULL registry, any status — a node dev's
+  // node is `published` long before it is `active`, so authorization gates access, not the active-only
+  // public showcase (`listPublic()` would 404 every real deployed node). Service-role read (no RLS).
+  const node = await resolveNodeRef(resolveServiceDb(), id);
+  if (!node) {
     logComplete({
       outcome: "error",
       status: 404,

@@ -9,10 +9,24 @@
  * Links: src/features/nodes/node-lookup.ts
  */
 
+import type { Database } from "@cogni/db-client";
 import { describe, expect, it } from "vitest";
-import { isNodeId, nodeIdOrSlug } from "@/features/nodes/node-lookup";
+import {
+  isNodeId,
+  nodeIdOrSlug,
+  resolveNodeRef,
+} from "@/features/nodes/node-lookup";
 
 const UUID = "f97f68f2-8406-4a3b-b5a9-d579b779f19d";
+
+/** Minimal drizzle stub: `select().from().where().limit()` → the given rows. */
+function fakeDb(rows: ReadonlyArray<{ id: string; slug: string }>): Database {
+  return {
+    select: () => ({
+      from: () => ({ where: () => ({ limit: async () => rows }) }),
+    }),
+  } as unknown as Database;
+}
 
 describe("isNodeId", () => {
   it("accepts canonical UUIDs (a candidate node_id / nodes.id)", () => {
@@ -35,5 +49,25 @@ describe("nodeIdOrSlug", () => {
 
   it("emits a condition for a slug segment (slug only — no uuid cast)", () => {
     expect(nodeIdOrSlug("beacon")).toBeDefined();
+  });
+});
+
+describe("resolveNodeRef", () => {
+  it("resolves a matched node (any status) to its canonical nodeId + slug", async () => {
+    // The row's status is irrelevant — resolveNodeRef applies no status filter (unlike listPublic),
+    // so a `published` deployed node like beacon resolves and the route can authorize it.
+    const db = fakeDb([{ id: UUID, slug: "beacon" }]);
+    await expect(resolveNodeRef(db, "beacon")).resolves.toEqual({
+      nodeId: UUID,
+      slug: "beacon",
+    });
+    await expect(resolveNodeRef(db, UUID)).resolves.toEqual({
+      nodeId: UUID,
+      slug: "beacon",
+    });
+  });
+
+  it("returns null when no node matches", async () => {
+    await expect(resolveNodeRef(fakeDb([]), "ghost")).resolves.toBeNull();
   });
 });
