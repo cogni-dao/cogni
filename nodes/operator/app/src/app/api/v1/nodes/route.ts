@@ -6,9 +6,10 @@
  * Purpose: List + create rows in the operator's node registry.
  * Scope: Owner-scoped reads via RLS; writes use a session-derived owner_user_id. Managed nodes get
  *   their own repo and a deployment pin at `nodes/<slug>/` in the operator's repo.
- * Invariants: OWNER_GATING, NODES_TABLE_SCOPE (operator-managed — slug, not user-provided URL), USER_ROW_ENSURED.
- * Side-effects: IO (Postgres)
- * Links: task.5083
+ * Invariants: OWNER_GATING, NODES_TABLE_SCOPE (operator-managed — slug, not user-provided URL), USER_ROW_ENSURED,
+ *   OPENFGA_IS_AUTHORITY (creation seeds the owner→admin tuple; best-effort where no store exists).
+ * Side-effects: IO (Postgres write, best-effort OpenFGA tuple write)
+ * Links: task.5083, story.5009, docs/spec/rbac.md
  * @public
  */
 
@@ -19,7 +20,7 @@ import { desc, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
-import { resolveAppDb } from "@/bootstrap/container";
+import { getContainer, resolveAppDb } from "@/bootstrap/container";
 import { getCurrentTraceId } from "@/bootstrap/otel";
 import { parseNodeSlug } from "@/features/nodes/node-slug";
 import { getServerSessionUser } from "@/lib/auth/server";
@@ -175,13 +176,48 @@ export async function POST(request: Request) {
     );
   }
 
+  const createdNode = inserted[0];
+
+  // OPENFGA_IS_AUTHORITY: seed the owner→admin tuple so the creator can immediately act on
+  // the node (flight / manage_secrets / promote_production all derive from `admin`). Without
+  // this, every node-scoped route returns authz_denied for the owner on stores-enabled envs
+  // (candidate-a) — a latent bug for all wizard nodes, not just first-class registrations.
+  // Best-effort + idempotent (writeRelation uses onDuplicateWrites:"ignore"): on envs with no
+  // OpenFGA store (prod/preview today) `authorization` is undefined and node-scoped routes
+  // fall back to the owner check, so skipping the seed there is correct, not a regression.
+  const authorization = getContainer().authorization;
+  let adminTupleSeeded = false;
+  if (authorization) {
+    const seed = await authorization.writeRelation({
+      user: `user:${session.id}`,
+      relation: "admin",
+      object: `node:${createdNode.id}`,
+    });
+    adminTupleSeeded = seed.decision === "success";
+    if (!adminTupleSeeded) {
+      // The row exists but the owner cannot yet act on it. Surface loudly; a reconcile/
+      // re-seed path is owned by the existing-repo registration slice (story.5009).
+      ctx.log.error(
+        {
+          event: "node.admin_tuple_seed_failed",
+          reqId: ctx.reqId,
+          routeId: ctx.routeId,
+          nodeId: createdNode.id,
+          errorCode: seed.code,
+        },
+        "node.admin_tuple_seed_failed"
+      );
+    }
+  }
+
   logEvent(ctx.log, EVENT_NAMES.NODE_FORMATION_CREATE_COMPLETE, {
     reqId: ctx.reqId,
     routeId: ctx.routeId,
     outcome: "success",
     slug: parsedSlug.value.slug,
     chainId: parsed.data.chainId,
+    adminTupleSeeded,
     durationMs: Math.round(performance.now() - startTime),
   });
-  return NextResponse.json({ node: inserted[0] }, { status: 201 });
+  return NextResponse.json({ node: createdNode }, { status: 201 });
 }
