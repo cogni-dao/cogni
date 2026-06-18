@@ -108,8 +108,7 @@ export async function POST(request: Request) {
     const existing = await withTenantScope(
       db,
       userActor(session.id as UserId),
-      async (tx) =>
-        tx.select().from(nodes).where(eq(nodes.slug, slug)).limit(1)
+      async (tx) => tx.select().from(nodes).where(eq(nodes.slug, slug)).limit(1)
     );
     if (existing[0]) {
       return NextResponse.json({ node: existing[0], alreadyRegistered: true });

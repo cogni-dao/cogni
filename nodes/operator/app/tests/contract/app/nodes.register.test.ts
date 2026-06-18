@@ -119,7 +119,10 @@ describe("POST /api/v1/nodes/register", () => {
     const res = await register("node-template");
     expect(res.status).toBe(201);
     expect(insertValues).toHaveBeenCalledWith(
-      expect.objectContaining({ slug: "node-template", repoName: "node-template" })
+      expect.objectContaining({
+        slug: "node-template",
+        repoName: "node-template",
+      })
     );
   });
 
