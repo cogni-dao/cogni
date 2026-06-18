@@ -119,11 +119,16 @@ shape in the node catalog with `source: agent`, then let
 environment writer role from CI and does not require a laptop kubeconfig,
 OpenBao root token, or Derek-owned GitHub credential.
 
-For human/vendor values, the intended self-serve lane is the GitHub Actions
-OIDC writer role (`gha-<env>-writer`) bound during provisioning to the same
-`<env>-writer` OpenBao policy. The workflow surface is still being finished;
-until it exists, the CLI path below is an operator day-2 path, not the node
-formation standard.
+For human/vendor values, the **shipped** self-serve lane is the operator API —
+`POST /api/v1/nodes/<id>/secrets`, OpenFGA `can_manage_secrets`, caller holds only
+an API key, no kube (candidate-a + **production live**, #1627 + #1737). That is the
+node owner's path; the how-to lives in the node guide `add-secret.md` (node-template
+→ every fork) and the hub entry `node-self-serve-secrets`.
+
+**The CLI path below is the admin/ops fallback** — the env's OpenBao writer-role
+path for operators who already hold kube custody. A node owner should use the
+self-serve API, not this. (`secrets_manager` is per-node **authority**, not the
+operator's writer **custody** — don't conflate them.)
 
 ## 3. Recover Kube Custody
 
