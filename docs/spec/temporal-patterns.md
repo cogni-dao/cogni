@@ -275,10 +275,26 @@ export const EXTERNAL_API_ACTIVITY_OPTIONS: ActivityOptions = {
 
 ### Node-as-tenant (declarative node schedules)
 
-A node declares recurring work in its own repo-spec; the operator runs it on schedule
-under _that node's_ tenant identity. The node writes **zero** Temporal code; the operator
-adds **zero** per-node code. This generalizes the graph-schedule path (which already works
-end-to-end) to non-graph HTTP-dispatch via one generic workflow.
+> **As-built vs target — CREATE differs by tenant (task.5035).** The **execution**
+> substrate below is generic and shipped (`NodeTaskWorkflow` / `GraphRunWorkflow`,
+> grant↔node binding, the per-node dispatch principal, the per-node queue). What differs
+> is who **creates** the schedule:
+>
+> - **System tenant (operator — governance / epochs):** declares schedules in its own
+>   repo-spec; the operator reconciles them via `syncGovernanceSchedules`. **This is wired
+>   and live — repo-spec-defined workflows for the system tenant stay 100% supported**, and
+>   epochs run on exactly this path.
+> - **Node tenants (recurring work):** the going-forward CREATE is **node-direct** — the
+>   node's own Temporal client, operator out of the create path — per
+>   [substrate-temporal.md](./substrate-temporal.md). The `syncNodeSchedules` reconcile
+>   path below is **built but unwired** (no production caller today); it is retained as the
+>   execution-contract reference and the same reconcile capability the system tenant uses,
+>   not as the node create default.
+
+The generic execution substrate runs a node's recurring work under _that node's_ tenant
+identity. The node writes **zero** Temporal code; the shared worker adds **zero** per-node
+code. This generalizes the graph-schedule path (which already works end-to-end) to
+non-graph HTTP-dispatch via one generic workflow.
 
 ```yaml
 # .cogni/repo-spec.yaml — the node-author-facing contract
@@ -291,6 +307,12 @@ schedules:
 ```
 
 #### The reconcile + dispatch flow
+
+The **dispatch/execution** half (`NodeTaskWorkflow` → validate-grant → dispatch) is the
+shipped, tenant-agnostic substrate. The `syncNodeSchedules` **create/reconcile** half is
+built but **unwired** for node tenants — node-direct create supersedes it as the default
+(see the banner above) — while the system tenant's equivalent (`syncGovernanceSchedules`)
+is wired and live.
 
 ```
 syncNodeSchedules (SYSTEM_OPS_ONLY, advisory-locked, @cogni/scheduler-core)
@@ -330,7 +352,9 @@ responsibility — a retry profile is gated on that contract being proven.
 > live in `packages/temporal-workflows` (SINGLE_INPUT_CONTRACT, owned by the workflow-bundle
 > work). The repo-spec `schedules` block + `syncNodeSchedules` + teardown live in
 > `@cogni/repo-spec` and `@cogni/scheduler-core`. See
-> [docs/design/node-temporal-tenant-interface.md](../design/node-temporal-tenant-interface.md).
+> [substrate-temporal.md](./substrate-temporal.md) for the node-direct create model (it
+> supersedes the operator-dispatch framing in the now-retired
+> node-temporal-tenant-interface.md).
 
 ### LangGraph vs Temporal Boundary
 
