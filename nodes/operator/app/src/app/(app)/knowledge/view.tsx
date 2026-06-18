@@ -229,7 +229,9 @@ export function KnowledgeDashboardView() {
           mode="chains"
         />
       )}
-      {mode === "graph" && <GraphView rows={knowledgeQuery.data?.items ?? []} />}
+      {mode === "graph" && (
+        <GraphView rows={knowledgeQuery.data?.items ?? []} />
+      )}
       {mode === "domains" && (
         <DomainsPanel
           rows={domainsQuery.data?.domains ?? []}
