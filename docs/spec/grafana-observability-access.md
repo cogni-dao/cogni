@@ -4,7 +4,7 @@ type: spec
 title: Grafana / Loki Observability Access
 status: draft
 trust: draft
-summary: How a developer-RBAC'd dev reads only their node's Grafana/Loki logs without holding a token — the operator is a node-pinned query PROXY (runs the dev's LogQL server-side, forced to {service="app",node="<id>"}) rather than a credential issuer, because a returned token's reach is ungoverned by the per-node check while a pinned proxy is node-scoped by construction. BUILT (task.5028 node label + task.5025 proxy). Scope envelope: only node-attributable services (app today); shared infra is operator-only. The operator's own liveness gate still holds no token.
+summary: How a developer-RBAC'd dev reads only their node's Grafana/Loki logs without holding a token — the operator is a node-pinned query PROXY (runs the dev's LogQL server-side, scoped to that one node's app stream) rather than a credential issuer, because a returned token's reach is ungoverned by the per-node check while a pinned proxy is node-scoped by construction. BUILT — task.5028 node label plus task.5025 proxy. Scope envelope covers only node-attributable services (app today); shared infra is operator-only. The operator's own liveness gate still holds no token.
 read_when: Wiring or debating whether the operator/API should hold or hand out a Grafana token; granting a dev/agent Loki query access; designing an automated observability gate; reviewing an ExternalSecret that pulls a GRAFANA_* key into a pod; deciding proxy-vs-issuer for observability reads.
 owner: derekg1729
 created: 2026-06-16
