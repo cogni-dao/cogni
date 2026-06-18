@@ -120,7 +120,7 @@ held credential whose reach the per-node check cannot govern; the proxy makes th
 
 ## See also
 
-- [`grafana-observability-access.md`](./grafana-observability-access.md) — Grafana proxy-not-issuer + the Loki-label blocker
+- [`grafana-observability-access.md`](./grafana-observability-access.md) — Grafana/Loki proxy-not-issuer, the **stable-envelope-over-swappable-backend** design, v0 (shipped #1734) shortcomings, and the self-hosted OSS-Loki `X-Scope-OrgID` target
 - [`node-baas-architecture.md`](./node-baas-architecture.md) — BaaS substrate map + "node declares shape; operator wires environment"
 - [`rbac.md`](./rbac.md) — OpenFGA `node.developer`/`can_flight`, the grant→approve loop
 - [`.claude/skills/cicd-secrets-expert/SKILL.md`](../../.claude/skills/cicd-secrets-expert/SKILL.md) — runtime-substrate secrets plane (the other axis)
