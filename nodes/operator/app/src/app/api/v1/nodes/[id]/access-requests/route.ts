@@ -15,7 +15,6 @@
  * @public
  */
 
-import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
@@ -23,6 +22,7 @@ import { getSessionUser } from "@/app/_lib/auth/session";
 import { resolveServiceDb } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { upsertAccessRequest } from "@/features/nodes/access-requests";
+import { nodeIdOrSlug } from "@/features/nodes/node-lookup";
 import { NODE_ACCESS_ROLES } from "@/shared/db/node-access-requests";
 import { nodes } from "@/shared/db/nodes";
 import { EVENT_NAMES, type RequestContext } from "@/shared/observability";
@@ -113,9 +113,10 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
     const existing = await db
       .select({ id: nodes.id })
       .from(nodes)
-      .where(eq(nodes.id, id))
+      .where(nodeIdOrSlug(id))
       .limit(1);
-    if (!existing[0]) {
+    const node = existing[0];
+    if (!node) {
       logTerminal({
         outcome: "error",
         status: 404,
@@ -126,9 +127,11 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       });
       return NextResponse.json({ error: "not found" }, { status: 404 });
     }
+    // `{id}` may be a slug; the tracking FK is the canonical node identity (`nodes.id`).
+    const nodeRowId = node.id;
 
     await upsertAccessRequest(db, {
-      nodeId: id,
+      nodeId: nodeRowId,
       agentUserId: sessionUser.id,
       role,
     });
@@ -136,12 +139,17 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
     logTerminal({
       outcome: "success",
       status: 201,
-      nodeId: id,
+      nodeId: nodeRowId,
       agentUserId: sessionUser.id,
       role,
     });
     return NextResponse.json(
-      { nodeId: id, agentUserId: sessionUser.id, role, status: "pending" },
+      {
+        nodeId: nodeRowId,
+        agentUserId: sessionUser.id,
+        role,
+        status: "pending",
+      },
       { status: 201 }
     );
   }

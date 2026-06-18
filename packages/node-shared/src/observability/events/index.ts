@@ -69,6 +69,7 @@ export const EVENT_NAMES = {
   NODE_PUBLISH_SECRET_SHAPE_GENERATED:
     "feature.node_publish.secret_shape_generated",
   NODE_DEVELOPER_DECISION_COMPLETE: "feature.node_developer_decision.complete",
+  NODE_OBSERVABILITY_LOGS_COMPLETE: "feature.node_observability_logs.complete",
   VCS_FLIGHT_REQUEST_COMPLETE: "feature.vcs_flight.request_complete",
 
   // Adapter Events
