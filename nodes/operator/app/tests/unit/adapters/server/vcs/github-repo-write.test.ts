@@ -1201,7 +1201,7 @@ describe("GitHubRepoWriter.dispatchNodePromote", () => {
 
 describe("GitHubRepoWriter.syncCanonicalFilesToFork", () => {
   const SOURCE_SHA = "abcdef1234567890abcdef1234567890abcdef12";
-  const BRANCH = "cogni-operator/sync-canonical-abcdef12";
+  const BRANCH = "cogni-operator/node-template-sync";
   const b64 = (s: string) => Buffer.from(s, "utf-8").toString("base64");
   const fileBlob = (content: string) => ({
     type: "file" as const,
@@ -1339,11 +1339,19 @@ describe("GitHubRepoWriter.syncCanonicalFilesToFork", () => {
       },
       "POST /repos/{owner}/{repo}/pulls": (params) => {
         expect(params).toMatchObject({ head: BRANCH, base: "main" });
-        expect(String(params.title)).toContain("abcdef12");
+        // Stable, commitlint-standard title (no SHA); the SHA lives in the body.
+        expect(String(params.title)).toBe(
+          "chore: sync CI + contract files from node-template"
+        );
+        expect(String(params.body)).toContain("abcdef12");
         return {
           number: 7,
           html_url: "https://github.com/cogni-test-org/test-cog/pull/7",
         };
+      },
+      "PATCH /repos/{owner}/{repo}/pulls/{pull_number}": (params) => {
+        expect(params).toMatchObject({ pull_number: 7 });
+        return {};
       },
     };
 
@@ -1395,6 +1403,10 @@ describe("GitHubRepoWriter.syncCanonicalFilesToFork", () => {
           },
         ];
       },
+      "PATCH /repos/{owner}/{repo}/pulls/{pull_number}": (params) => {
+        expect(params).toMatchObject({ pull_number: 9 });
+        return {};
+      },
     };
 
     const result = await makeWriter().syncCanonicalFilesToFork({
@@ -1407,5 +1419,81 @@ describe("GitHubRepoWriter.syncCanonicalFilesToFork", () => {
       branch: BRANCH,
       prNumber: 9,
     });
+  });
+});
+
+describe("GitHubRepoWriter.syncTemplateUpstreamToFork", () => {
+  const UPSTREAM_BRANCH = "cogni-operator/node-template-upstream";
+  const SHA = "1234567890123456789012345678901234567890";
+  const upstreamInput = () => ({
+    templateOwner: "Cogni-DAO",
+    templateRepo: "node-template",
+    templateSha: SHA,
+    forkOwner: "cogni-test-org",
+    forkRepo: "blue",
+    forkBranch: "main",
+  });
+
+  it("force-updates the stable branch and refreshes the PR body with the commit changelog", async () => {
+    routeHandlers = {
+      // upsertRef: branch exists → PATCH force
+      "POST /repos/{owner}/{repo}/git/refs": () =>
+        Promise.reject(statusError(422, "Reference already exists")),
+      "PATCH /repos/{owner}/{repo}/git/refs/{ref}": (params) => {
+        expect(params).toMatchObject({
+          ref: `heads/${UPSTREAM_BRANCH}`,
+          sha: SHA,
+          force: true,
+        });
+        return {};
+      },
+      "POST /repos/{owner}/{repo}/pulls": (params) => {
+        expect(params).toMatchObject({ head: UPSTREAM_BRANCH, base: "main" });
+        expect(String(params.title)).toBe(
+          "chore: merge node-template upstream"
+        );
+        return {
+          number: 5,
+          html_url: "https://github.com/cogni-test-org/blue/pull/5",
+        };
+      },
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}/commits": (params) => {
+        expect(params).toMatchObject({ pull_number: 5 });
+        return [
+          { commit: { message: "feat(graphs): add poet graph\n\ndetail" } },
+          { commit: { message: "fix(app): header crash" } },
+        ];
+      },
+      "PATCH /repos/{owner}/{repo}/pulls/{pull_number}": (params) => {
+        expect(params).toMatchObject({ pull_number: 5 });
+        const body = String(params.body);
+        expect(body).toContain("- feat(graphs): add poet graph");
+        expect(body).toContain("- fix(app): header crash");
+        expect(body).not.toContain("detail"); // first line only
+        return {};
+      },
+    };
+
+    const result = await makeWriter().syncTemplateUpstreamToFork(
+      upstreamInput()
+    );
+    expect(result).toMatchObject({
+      status: "pr_opened",
+      prNumber: 5,
+      prUrl: "https://github.com/cogni-test-org/blue/pull/5",
+    });
+  });
+
+  it("returns up_to_date when no commits separate the fork from upstream and no PR exists", async () => {
+    routeHandlers = {
+      "POST /repos/{owner}/{repo}/git/refs": () => ({}),
+      "POST /repos/{owner}/{repo}/pulls": () =>
+        Promise.reject(statusError(422, "No commits between main and main")),
+      "GET /repos/{owner}/{repo}/pulls": () => [],
+    };
+    const result = await makeWriter().syncTemplateUpstreamToFork(
+      upstreamInput()
+    );
+    expect(result).toEqual({ status: "up_to_date" });
   });
 });
