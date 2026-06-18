@@ -273,62 +273,82 @@ export const EXTERNAL_API_ACTIVITY_OPTIONS: ActivityOptions = {
 };
 ```
 
-### Node-as-tenant (declarative node schedules)
+### Recurring work for a node (the suggested way)
 
-> **As-built vs target — CREATE differs by tenant (task.5035).** The **execution**
-> substrate below is generic and shipped (`NodeTaskWorkflow` / `GraphRunWorkflow`,
-> grant↔node binding, the per-node dispatch principal, the per-node queue). What differs
-> is who **creates** the schedule:
->
-> - **System tenant (operator — governance / epochs):** declares schedules in its own
->   repo-spec; the operator reconciles them via `syncGovernanceSchedules`. **This is wired
->   and live — repo-spec-defined workflows for the system tenant stay 100% supported**, and
->   epochs run on exactly this path.
-> - **Node tenants (recurring work):** the going-forward CREATE is **node-direct** — the
->   node's own Temporal client, operator out of the create path — per
->   [substrate-temporal.md](./substrate-temporal.md). The `syncNodeSchedules` reconcile
->   path below is **built but unwired** (no production caller today); it is retained as the
->   execution-contract reference and the same reconcile capability the system tenant uses,
->   not as the node create default.
+This is the **canonical pattern for a node to run recurring or scheduled work** on the Cogni
+Temporal substrate. The substrate is **one shared generic worker** the operator runs and
+provisions once; for this path a node runs **no worker** and writes **no** Temporal/workflow
+code. Direct, standardized Temporal access for every node — the node holds a Temporal
+**client**, exactly like it holds a Postgres DSN. The model is three parts: **declare →
+create → execute.**
 
-The generic execution substrate runs a node's recurring work under _that node's_ tenant
-identity. The node writes **zero** Temporal code; the shared worker adds **zero** per-node
-code. This generalizes the graph-schedule path (which already works end-to-end) to
-non-graph HTTP-dispatch via one generic workflow.
+**1. Declare** the recurring jobs as `schedules[]` in the node's repo-spec (`route` XOR
+`graph` per entry):
 
 ```yaml
 # .cogni/repo-spec.yaml — the node-author-facing contract
 schedules:
-  - id: metrics-ingest # stable → scheduleId + workflowId
+  - id: metrics-ingest # stable id → scheduleId + workflowId
     cron: "*/15 * * * *"
     timezone: UTC
-    route: /api/internal/ops/metrics-ingest # relative path on the node's OWN host
-    payload: { window: "15m" }
+    route: /api/internal/ops/metrics-ingest # http-dispatch: a RELATIVE path on the node's OWN host
+    payload: { window: "15m" } # opaque to the operator; the node's route owns its meaning
+  - id: nightly-report
+    cron: "0 0 * * *"
+    graph: my-node:report # OR run a graph instead of POSTing a route
 ```
 
-#### The reconcile + dispatch flow
+**2. Create — node-direct.** The node's app holds its own Temporal **client** (ESO-provisioned,
+namespace-scoped creds) and creates the schedule against its **own** per-node task queue
+(`scheduler-tasks-<nodeId>`), with `action = NodeTaskWorkflow` (for `route`) or
+`GraphRunWorkflow` (for `graph`). The operator is **out of the create path**. Bind the create
+backend behind a small **`RecurringWorkPort`** (`schedule`/`cancel`) so a day-1 node-local cron
+(no Temporal client yet) and the Temporal-client backend are swappable with **zero
+product-code change**.
 
-The **dispatch/execution** half (`NodeTaskWorkflow` → validate-grant → dispatch) is the
-shipped, tenant-agnostic substrate. The `syncNodeSchedules` **create/reconcile** half is
-built but **unwired** for node tenants — node-direct create supersedes it as the default
-(see the banner above) — while the system tenant's equivalent (`syncGovernanceSchedules`)
-is wired and live.
+> **As-built today:** schedule creation is still operator-side (the operator's
+> `ScheduleControlPort`); `RecurringWorkPort` + the node's own client are the **target**,
+> reached by provisioning the node a Temporal client + ESO namespace creds — gated on a real
+> consumer, not built on principle. The **system tenant** (operator governance / epochs)
+> creates its own schedules via `syncGovernanceSchedules` — **wired and live; epochs run on
+> exactly this path and are unaffected.** `syncNodeSchedules` (`@cogni/scheduler-core`) is the
+> same reconcile capability, built but unwired for node tenants.
+
+**3. Execute — the shared worker.** On each tick the shared generic worker runs the generic
+workflow under the node's tenant identity: `NodeTaskWorkflow` POSTs the node's `route` (the
+node's route does the work); `GraphRunWorkflow` runs the node's `graph`. The node provides a
+**client** (to create), an **HTTP route or graph** (the work), and a **per-node dispatch
+credential** (to authenticate inbound dispatch) — not a worker, not custom workflow code.
+
+#### Create → execute flow
 
 ```
-syncNodeSchedules (SYSTEM_OPS_ONLY, advisory-locked, @cogni/scheduler-core)
+RecurringWorkPort.schedule(entry)   (node-direct: node's Temporal client → its own queue)
   → ensure per-node ExecutionGrant (scope: task:dispatch:<route> | graph:execute:<id>)
-  → upsert DB row (stores the cron — the SSOT for drift; Temporal can't read it back)
-  → ScheduleControlPort.create/update/pause/resume
+  → schedule.create on scheduler-tasks-<nodeId>
        scheduleId = workflowId = node-task:{nodeId}:{scheduleId}   (WORKFLOW_ID_STABILITY)
-       overlap=SKIP, catchupWindow=0s                              (operator-fixed)
+       overlap=SKIP, catchupWindow=0s                              (operator-fixed platform invariants)
        route → NodeTaskWorkflow   |   graph → GraphRunWorkflow      (workflowType inferred)
 
-NodeTaskWorkflow(input: NodeTaskInput)                              (the generic non-graph workflow)
+NodeTaskWorkflow(input: NodeTaskInput)                              (the generic shared-worker workflow)
   scheduledFor = TemporalScheduledStartTime search attr            (SCHEDULED_TIME_FROM_TEMPORAL)
   → validateGrantActivity(actor, nodeId, grantId, "task:dispatch:<route>")
   → dispatchNodeTaskActivity: POST {nodeUrl}{route}, principal = per-node token (fail-closed)
        Idempotency-Key: {nodeId}/{scheduleId}/{scheduledFor}       (the node route MUST dedup on it)
 ```
+
+> The system tenant reaches the identical Temporal Schedule via `syncGovernanceSchedules` /
+> `syncNodeSchedules` (operator reconcile, `SYSTEM_OPS_ONLY`, advisory-locked) instead of a
+> node-held client — same workflowId, queue, and invariants; only the creator differs.
+
+#### When you need a per-node worker (the escape hatch)
+
+If your recurring work needs **custom durable workflows** — signals, child workflows, long
+human waits, multi-step orchestration that cannot be expressed as "fire my route" — graduate
+to your **own** per-node worker: it registers your custom workflows + activities and polls
+**your** per-node queue; execution is fully in-node, operator out of it. This is **opt-in**
+(it costs a worker pod per node) and is **never the default** — see
+[substrate-temporal.md](./substrate-temporal.md) § the sovereign escape hatch.
 
 #### Invariants specific to node-as-tenant
 
@@ -434,17 +454,21 @@ This violates ONE_RUN_EXECUTION_PATH. The graph run is invisible to the dashboar
 
 #### Namespaces
 
-| Namespace          | Purpose                                                   |
-| ------------------ | --------------------------------------------------------- |
-| `cogni-governance` | Governance workflows (signal collection, routing, agents) |
-| `cogni-scheduler`  | User-created scheduled graph executions                   |
+One **shared** Temporal namespace per environment — tenant isolation comes from per-node task
+queues, not separate namespaces.
+
+| Namespace     | Purpose                                                                                                                                    |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `cogni-<env>` | One namespace per env (`cogni-candidate-a` / `cogni-preview` / `cogni-production`). All nodes + the operator's governance/epochs share it. |
 
 #### Task Queues
 
-| Queue              | Workers             | Workflows                 |
-| ------------------ | ------------------- | ------------------------- |
-| `governance-tasks` | `governance-worker` | Collection, Router, Agent |
-| `scheduler-tasks`  | `scheduler-worker`  | ScheduledGraphRun         |
+Per `QUEUE_PER_NODE_ISOLATION` (task.0280): one Worker per `nodeId` polls `scheduler-tasks-<nodeId>`,
+so a failing node's queue backlog cannot starve other nodes.
+
+| Queue                      | Worker                                   | Workflows                                                                                                                                |
+| -------------------------- | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `scheduler-tasks-<nodeId>` | shared `scheduler-worker` (one per node) | `NodeTaskWorkflow` / `GraphRunWorkflow` for that node; `scheduler-tasks-operator` also carries the operator's governance/epoch workflows |
 
 #### Search Attributes
 
