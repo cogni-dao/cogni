@@ -13,7 +13,7 @@ namePrefix: habitat-
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/habitat
-    digest: "sha256:6d849d73ec4b754560f93ac49c7d6dd2fd75962d6fcacc1ff15574e5aa6f663e"
+    digest: "sha256:42a56fb2c95cf6b3ef72fcc119ddf4faf7e101b21f653aca371e42719acb6eb3"
 
 patches:
   - target:
@@ -23,6 +23,11 @@ patches:
       - op: replace
         path: /data/NODE_NAME
         value: "habitat"
+      # Per-env runtime env-name the app stamps onto OpenBao paths + observability
+      # labels (metrics/logger read DEPLOY_ENVIRONMENT; absent → silent "local").
+      - op: add
+        path: /data/DEPLOY_ENVIRONMENT
+        value: "production"
       - op: replace
         path: /data/TEMPORAL_NAMESPACE
         value: "cogni-production"
