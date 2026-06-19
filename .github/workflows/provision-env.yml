@@ -37,19 +37,20 @@ on:
           - preview
           - production
       mode:
-        description: "full = cold-start provision (tofu+VM+DNS+init); substrate-only = reconcile OpenBao SA/role layer on an existing env (no tofu/VM/DNS)"
+        description: "full = cold-start provision (tofu+VM+DNS+init); substrate-only = reconcile OpenBao SA/role layer on an existing env (no tofu/VM/DNS); observability = re-push Alloy node-label config + seed operator Grafana read creds so the node-log proxy is born-observable (bug.5041)"
         required: true
         default: full
         type: choice
         options:
           - full
           - substrate-only
+          - observability
       encryption_passphrase:
         description: "full mode: operator-typed passphrase for the init artifact (NEVER stored)"
         required: false
         type: string
       openbao_root_token:
-        description: "substrate-only mode: the existing env's OpenBao root token, pulled from its init artifact at dispatch (one-shot, masked, NEVER stored — never a standing GH secret)"
+        description: "substrate-only + observability modes: the existing env's OpenBao root token, pulled from its init artifact at dispatch (one-shot, masked, NEVER stored — never a standing GH secret). For observability it gates only Gap 2 (operator Grafana cred seed); Gap 1 (Alloy config re-push) runs without it."
         required: false
         type: string
 
@@ -634,3 +635,53 @@ jobs:
           GH_REPO: ${{ github.repository }}
           OPENBAO_ROOT_TOKEN: ${{ inputs.openbao_root_token }}
         run: bash scripts/setup/reconcile-env-substrate.sh "${DEPLOY_ENV}"
+
+  # observability: born-observable verify-and-heal for the operator node-log proxy.
+  # Re-pushes the Alloy node-label config (bug.5041 Gap 1; the promote pipeline
+  # SKIPS deploy-infra by default so an app-only promote never re-pushes it) and
+  # seeds the operator Grafana read creds at cogni/<env>/operator (Gap 2; Phase 5e
+  # mints to _shared but never mirrored to operator → wired by hand on cand-a/prod).
+  # Gap 1 runs without any token; Gap 2 needs the env's root token (same one-shot
+  # masked custody as substrate-only). Idempotent; a re-run is a no-op.
+  # See scripts/setup/reconcile-observability.sh.
+  reconcile-observability:
+    if: inputs.mode == 'observability'
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.env }}
+    timeout-minutes: 15
+    env:
+      DEPLOY_ENV: ${{ inputs.env }}
+    steps:
+      - name: Mask root token
+        run: echo "::add-mask::${{ inputs.openbao_root_token }}"
+
+      - name: Validate observability inputs
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          OPENBAO_ROOT_TOKEN: ${{ inputs.openbao_root_token }}
+        run: |
+          set -euo pipefail
+          [ -n "$VM_HOST" ] || { echo "::error::VM_HOST secret missing for ${DEPLOY_ENV}"; exit 1; }
+          if [ -z "$OPENBAO_ROOT_TOKEN" ]; then
+            echo "::warning::no openbao_root_token — Gap 2 (operator Grafana cred seed) will be SKIPPED; only Gap 1 (Alloy config re-push) runs."
+          fi
+
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - name: Setup SSH to the env VM
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          SSH_DEPLOY_KEY: ${{ secrets.SSH_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          echo "$SSH_DEPLOY_KEY" | tr -d '\r' > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -T 10 -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Reconcile observability substrate (Alloy config + operator Grafana creds)
+        env:
+          VM_IP: ${{ secrets.VM_HOST }}
+          SSH_OPTS: "-i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6"
+          OPENBAO_ROOT_TOKEN: ${{ inputs.openbao_root_token }}
+        run: bash scripts/setup/reconcile-observability.sh "${DEPLOY_ENV}"

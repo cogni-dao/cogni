@@ -1668,6 +1668,18 @@ else
                PROMETHEUS_REMOTE_WRITE_URL PROMETHEUS_USERNAME PROMETHEUS_PASSWORD; do
         seed_kv _shared "$k" "${MINTED[$k]}"
       done
+      # Born-observable: the operator node-log proxy (createLokiReader) reads
+      # GRAFANA_URL + GRAFANA_SERVICE_ACCOUNT_TOKEN from the OPERATOR pod, via the
+      # operator ExternalSecret that extracts cogni/<env>/operator. These two keys
+      # were reclassified to service: operator (source: human) and previously had
+      # to be wired BY HAND post-provision. Mirror the minted read creds to the
+      # operator path so the proxy is wired at birth, not by hand (bug.5041 Gap 2).
+      # Same single glsa_ read token + stack URL the _shared seed got (one Grafana
+      # stack for every env; env is just a Loki label). reconcile-observability.sh
+      # is the day-2 heal for an env provisioned BEFORE this seed existed.
+      log_info "Seeding operator Grafana read creds to cogni/${DEPLOY_ENV}/operator (born-observable)"
+      seed_kv operator GRAFANA_URL "${MINTED[GRAFANA_URL]}"
+      seed_kv operator GRAFANA_SERVICE_ACCOUNT_TOKEN "${MINTED[GRAFANA_SERVICE_ACCOUNT_TOKEN]}"
       # Export under the names deploy-infra.sh + provision-grafana-postgres-
       # datasources.sh expect (deploy-infra writes runtime/.env's
       # LOKI_*/PROMETHEUS_* from these GRAFANA_CLOUD_* runner-env names; the

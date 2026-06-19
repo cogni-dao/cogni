@@ -348,6 +348,12 @@ jobs:
       - name: node substrate reconcile tests
         run: bash scripts/ci/tests/reconcile-node-substrate.test.sh
 
+      # bug.5041 — born-observable reconcile. Asserts Gap 1 (Alloy node-label
+      # config re-push + checksum restart + verify) and Gap 2 (mirror operator
+      # Grafana read creds to cogni/<env>/operator, idempotent, force-refresh ES).
+      - name: observability reconcile tests (bug.5041)
+        run: bash scripts/ci/tests/reconcile-observability.test.sh
+
       - name: per-node substrate runner tests
         run: bash scripts/ci/tests/run-node-substrate.test.sh
 
