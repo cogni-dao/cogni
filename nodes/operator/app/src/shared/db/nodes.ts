@@ -6,9 +6,15 @@
  * Purpose: Operator-local Drizzle schema for the externally-registered node registry.
  * Scope: Wizard working state for operator-managed nodes. Existing inline nodes
  *   (operator/resy/canary/node-template) are NOT registered here — they live in `infra/catalog/*.yaml`.
- * Invariants: NODES_TABLE_SCOPE (external only), STATE_MACHINE_TOTAL, OWNER_GATING, NO_PRIVATE_KEYS.
+ * Invariants: NODES_TABLE_SCOPE (external only), STATE_MACHINE_TOTAL, OWNER_GATING, NO_PRIVATE_KEYS,
+ *   OPERATOR_NODE_ROW_ID_IS_NODE_ID — `nodes.id` IS the operator's projection of the node's repo-spec
+ *   `node_id` (the deployment-identity SSOT, docs/spec/identity-model.md). It is the OpenFGA `node:<id>`
+ *   resource and the Loki `node` label, never an unrelated surrogate. Wizard creation's `defaultRandom()`
+ *   is the act of minting that `node_id` — `publish` writes the same value into the minted repo-spec.
+ *   An externally-formed node MUST be inserted with `id = <child repo-spec node_id>`, never a fresh UUID,
+ *   so identity can never fork. `slug` is the human/agent addressing handle (see node-lookup.ts).
  * Side-effects: none
- * Links: docs/spec/node-formation.md, work/projects/proj.node-formation-ui.md, task.5083
+ * Links: docs/spec/identity-model.md, docs/spec/node-formation.md, work/projects/proj.node-formation-ui.md, task.5083
  * @public
  */
 
@@ -44,7 +50,11 @@ export type RepoVisibility = (typeof REPO_VISIBILITIES)[number];
 export const nodes = pgTable(
   "nodes",
   {
+    // OPERATOR_NODE_ROW_ID_IS_NODE_ID: this is the node's repo-spec `node_id` projection, not a private
+    // surrogate. `defaultRandom()` mints it for wizard-born nodes (publish copies it into the repo-spec);
+    // an external-import path must instead insert the child's repo-spec `node_id` here.
     id: uuid("id").defaultRandom().primaryKey(),
+    // Human/agent addressing handle. Unique; resolve `{id}` paths by id OR slug (node-lookup.ts).
     slug: text("slug").notNull().unique(),
     // Parent deployment repo for the submodule pin PR. Slug is the unique node key.
     repoUrl: text("repo_url").notNull(),

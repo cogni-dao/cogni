@@ -113,17 +113,55 @@ Identify:
 
 ## 2. Choose The Writer Lane
 
-For generated node-owned values, prefer the deploy lane: declare the key's
-shape in the node catalog with `source: agent`, then let
-`secret-materialize` write the value during flight/promote. That path uses the
-environment writer role from CI and does not require a laptop kubeconfig,
-OpenBao root token, or Derek-owned GitHub credential.
+Three lanes, by `source` and who you are. Pick before you touch anything.
 
-For human/vendor values, the intended self-serve lane is the GitHub Actions
-OIDC writer role (`gha-<env>-writer`) bound during provisioning to the same
-`<env>-writer` OpenBao policy. The workflow surface is still being finished;
-until it exists, the CLI path below is an operator day-2 path, not the node
-formation standard.
+| Value kind                                                                                                | Lane                                                                                                     | Who runs it                        |
+| --------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| `source: agent` (generated/derived — `AUTH_SECRET`, `CONNECTIONS_ENCRYPTION_KEY`, DB creds, DSNs, tokens) | **Never set by hand.** `secret-materialize` mints it per node on every flight/promote.                   | the substrate (CI), automatically  |
+| `source: human` vendor value (OAuth secret, API key) — **same env as the operator you call**              | **Self-serve API**: `POST /api/v1/nodes/<id>/secrets` with only an API key + `can_manage_secrets` grant. | node owner / their agent           |
+| `source: human` vendor value — **different env** than any operator that knows the node                    | **Operator-admin CLI** (§3–8 below) against the target env's OpenBao.                                    | operator-admin (kube + writer JWT) |
+
+> **🚫 Do not self-serve a `source: agent` key.** It is minted fresh per node
+> and is on the route's substrate-reserved denylist
+> (`node-secrets-reserved.data.ts`) — a write is rejected `403 key_reserved`.
+> Overwriting one breaks the node: `CONNECTIONS_ENCRYPTION_KEY` makes every
+> stored BYO-AI connection undecryptable, `AUTH_SECRET` invalidates sessions,
+> `GH_WEBHOOK_SECRET` silently fails webhook HMAC. If the value already exists,
+> the substrate owns it; leave it alone.
+
+### Self-serve API: the env is the operator you call, not a body field
+
+`POST /api/v1/nodes/<id>/secrets` writes `cogni/<env>/<node>/<KEY>` where `<env>`
+is **stamped from the operator pod's own `DEPLOY_ENVIRONMENT`** — it is _not_
+read from the request body and there is no `targetEnv` param. So **the operator
+host you call IS the environment you write:**
+
+| Operator host               | Writes to env | Has node registry + RBAC for…       |
+| --------------------------- | ------------- | ----------------------------------- |
+| `https://cognidao.org`      | `production`  | production-registered nodes         |
+| `https://test.cognidao.org` | `candidate-a` | candidate-a operator's own registry |
+
+**Cross-env is NOT supported by self-serve today.** A node registered through the
+prod operator (its `nodes` row + your `can_manage_secrets` grant live in the
+prod operator's DB + OpenFGA store) can only be self-served on **production** —
+the candidate-a/preview operators run their own separate DB + OpenFGA and don't
+know that node. There is no way to set a _candidate-a_ secret for a
+_prod-registered_ node via the API. For that, use the operator-admin CLI
+(§3–8) against the target env's OpenBao, or wait for the shared-control-plane /
+`targetEnv` work (see `docs/design/node-self-serve-secrets.md` Open Questions).
+
+⚠️ **Calling the wrong host writes the wrong env.** `cognidao.org` is
+**production**. Pointing a "set my candidate-a secret" call at it lands the value
+in prod — and if the key was a `source: agent` key, clobbers the live one.
+
+### Catalog lanes (for completeness)
+
+For `source: agent` values the deploy lane is automatic: declare the key's shape
+in the catalog with `source: agent` and `secret-materialize` writes it during
+flight/promote using the env writer role from CI — no laptop kubeconfig, OpenBao
+root token, or Derek-owned GitHub credential. The GitHub Actions OIDC writer-role
+workflow (`gha-<env>-writer`) for human values is still unbuilt; until it exists
+the CLI path below is the operator day-2 path for cross-env human values.
 
 ## 3. Recover Kube Custody
 

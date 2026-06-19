@@ -260,6 +260,13 @@
       "when": 1781490660339,
       "tag": "0036_broad_shockwave",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1781500000001,
+      "tag": "0037_seed_first_class_nodes",
+      "breakpoints": true
     }
   ]
 }

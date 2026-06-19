@@ -27,6 +27,7 @@ import {
 } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { transitionAccessRequestOnDecision } from "@/features/nodes/access-requests";
+import { nodeIdOrSlug } from "@/features/nodes/node-lookup";
 import { getServerSessionUser } from "@/lib/auth/server";
 import { NODE_ACCESS_ROLES } from "@/shared/db/node-access-requests";
 import { nodes } from "@/shared/db/nodes";
@@ -149,10 +150,11 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         tx
           .select({ id: nodes.id })
           .from(nodes)
-          .where(and(eq(nodes.id, id), eq(nodes.ownerUserId, session.id)))
+          .where(and(nodeIdOrSlug(id), eq(nodes.ownerUserId, session.id)))
           .limit(1)
     );
-    if (!existing[0]) {
+    const ownerNode = existing[0];
+    if (!ownerNode) {
       logTerminal({
         outcome: "error",
         status: 404,
@@ -163,6 +165,9 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       });
       return NextResponse.json({ error: "not found" }, { status: 404 });
     }
+    // The path `{id}` may be a slug; the OpenFGA resource + tracking FK must use the canonical
+    // node identity (`nodes.id` == repo-spec node_id), never the raw addressing segment.
+    const nodeRowId = ownerNode.id;
 
     const serviceDb = resolveServiceDb();
     const agentUsers = await serviceDb
@@ -207,7 +212,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
     const tuple = {
       user: `user:${parsed.data.agentUserId}`,
       relation: parsed.data.role,
-      object: `node:${id}`,
+      object: `node:${nodeRowId}`,
     };
     const write =
       parsed.data.decision === "approve"
@@ -237,7 +242,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
     // (a missing row is already a no-op). Log and continue.
     try {
       await transitionAccessRequestOnDecision(serviceDb, {
-        nodeId: id,
+        nodeId: nodeRowId,
         agentUserId: parsed.data.agentUserId,
         role: parsed.data.role,
         decision: parsed.data.decision,
@@ -266,7 +271,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       role: parsed.data.role,
     });
     return NextResponse.json({
-      nodeId: id,
+      nodeId: nodeRowId,
       agentUserId: parsed.data.agentUserId,
       decision: parsed.data.decision,
       role: parsed.data.role,

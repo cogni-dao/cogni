@@ -1,54 +1,98 @@
 ---
 name: node-template-sync
-description: Use when a canonical node-template change must reach the child node forks, or when asked how node-template updates propagate to nodes, to mirror node-template CI/infra/config to forks, to sync node-template to all nodes, to debug a missing or stale fork sync PR, or to verify the node-template→fork mirror. Covers the AUTOMATED operator flow (merge→main webhook) and the manual fallback. Triggers: "sync node-template", "ship node-template update to nodes", "mirror canonical files to forks", "why didn't fork X get the update", "node-template merge didn't sync".
+description: Use to CLOSE OUT a node-template release — sweep the auto-generated fork-sync PRs, triage per-node edge cases, drive each to merge, AND hand-port the same node-template app changes into the operator (cogni) app and drive that PR to merge + promotion. Also covers how the automated two-tier sync works and why operator is excluded. Triggers: "close out the node-template sync", "merge the fork sync PRs", "node-template merged, propagate it", "sync node-template to nodes and operator", "why didn't fork X get the update", "port node-template feature into operator", "cherry-pick node-template to cogni".
 ---
 
-# node-template → fork sync
+# node-template release close-out
 
-Keeping every child node fork aligned with `node-template`'s **canonical content**. **The mechanism is automated** (operator, on merge→main); **the inherited file set is not yet complete** — see the scope gap below. This skill is for understanding, verifying, and the rare manual fallback — not a manual playbook to run by hand.
+When `node-template` merges to main, the operator GitHub App **auto-opens** fork-sync PRs on every child fork. They do **not** merge themselves, and the operator (cogni) app gets **nothing** automatically. This skill is the agent that finishes the job. It has exactly **two responsibilities** — everything else is noise:
 
-## ⚠️ Scope gap (open) — graphs + runtime do NOT sync yet
+1. **Sweep every auto-generated fork-sync PR → triage per-node edge cases → drive to merge.**
+2. **Hand-port the same node-template app changes into the operator app → drive that PR to merge + promotion.**
 
-Today `CANONICAL_FORK_SYNC_PATHS` is the **byte-for-byte-safe CI subset** (3 workflows + `check-node-ci-workflow.mjs`). node-template improvements to **default graphs (`graphs/**`, `packages/**-graphs`) and runtime/app code do NOT propagate** — the feature's real goal is unmet until they do. They can't simply be added to the hardcoded list: forks **customize** those files, so a byte-for-byte overwrite would propose clobbering fork work. The fix is a **fork-inheritance manifest** node-template declares (framework-owned = mirror · fork-owned = never touch · shared-customizable = merge/flag), applying `repo-sync-contract`'s `omit_from_artifact`/`artifact_only` model to the node-template→fork axis. Then a default-graph improvement is in the inherited set and syncs with no code change. **That manifest is the next deliverable.**
+> Expect this to run on every node-template release. Fork ports are high-volume; operator ports are recurring and manual (there will be thousands over the project's life). Treat it as routine close-out, not a one-off.
 
-## How it works (as-built — PR #1681 / task.5020)
+---
+
+## Responsibility 1 — sweep + merge the fork-sync PRs
+
+### Find them
+
+```bash
+gh search prs --state open "head:cogni-operator/node-template-sync"      # Tier 1: CI/contract overwrite
+gh search prs --state open "head:cogni-operator/node-template-upstream"  # Tier 2: app/graphs upstream merge
+```
+
+### Triage each (the per-node edge-case pass)
+
+Pull state + checks and classify — do NOT blind-merge:
+
+```bash
+gh pr view <n> --repo <owner>/<fork> \
+  --json mergeable,mergeStateStatus,changedFiles,additions,statusCheckRollup \
+  --jq '{mergeable,mergeStateStatus,changedFiles, bad:[.statusCheckRollup[]|select((.conclusion//.state) as $c|$c!="SUCCESS" and $c!="NEUTRAL" and $c!="SKIPPED")|{name,s:(.conclusion//.state)}]}'
+```
+
+| State                               | Meaning                                             | Action                                                                                                                                                                                                                       |
+| ----------------------------------- | --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MERGEABLE` / `CLEAN`, checks green | fresh fork, upstream applies clean                  | **Merge** (`gh pr merge <n> --repo … --merge`).                                                                                                                                                                              |
+| `CONFLICTING` / `DIRTY`             | fork diverged from node-template (customized files) | **Resolve per-fork** — check out the branch, merge fork main, resolve conflicts preserving fork customizations (`FORK_FREEDOM`), push. Then merge. This is real per-node work, not a button.                                 |
+| Checks failing                      | CI broke on the merged delta                        | Read the failing job. A `Cogni Git PR Review` FAILURE is usually a goal-alignment advisory, not a hard gate — confirm it's not a required check before merging past it. A `static`/`unit`/`resolve` failure is a real block. |
+
+**Per-node edge cases that block** (the diff between a clean fork and a stale one): diverged `package.json`/lockfile, fork-local graph/runtime customizations, node-specific config the merge would clobber. Tier 1 (CI/contract) is byte-safe and almost always clean; Tier 2 (upstream app merge) is where divergence bites — the more a fork has customized, the bigger the conflict.
+
+### Verify the sweep
+
+- **Loki:** event `node_template_fork_sync_complete` at the deployed buildSha — `forks`, `ciOpened`, `templateOpened`, `entries[]`.
+- After merge, each fork runs its own candidate-flight/promotion pipeline (the fork's CD, not this skill).
+
+---
+
+## Responsibility 2 — port the change into the operator app
+
+Operator is **excluded** from auto-sync (`FORK_SYNC_EXCLUDED_SLUGS = {node-template, operator}`) and **cannot** be added (see below). So the same node-template app change is applied to operator **by hand**, as a normal operator PR.
+
+1. **Diff what landed.** Identify the merged node-template PR(s) and the files they touched (repo-root paths). Cross-check whether operator already has the feature (many originated in the monorepo before the split):
+   ```bash
+   gh pr view <n> --repo cogni-dao/node-template --json title,files
+   ```
+2. **Map paths into the monorepo:** node-template `app/**` → `nodes/operator/app/**`; shared substrate → the matching `packages/**`. Operator's app is a **divergent superset** (control plane) — reconcile against what exists; never blind-overwrite.
+3. **Apply as a standard operator code PR** through the full lifecycle: one work item, branch → CI green → candidate-a validate.
+4. **Drive to merge + promotion** — this is the part forks get for free but operator doesn't: after merge, promote per `/promote` (candidate-a → preview → prod as appropriate).
+
+**Worked example — node-template#43 (3D knowledge graph):** merged to node-template; operator lacked `/api/v1/knowledge/graph` + `GraphView`. Port = new route + `GraphView.tsx` + `react-force-graph-3d` under `nodes/operator/app/**`, reconciled against operator's existing knowledge UI, then merge + promote.
+
+---
+
+## Reference — how the auto-sync works (as-built, PR #1750)
 
 ```
 node-template merge → main
-  → operator GitHub App webhook  (push event, HMAC-verified at /api/internal/webhooks/github)
+  → operator GitHub App webhook (push, HMAC-verified at /api/internal/webhooks/github)
     → dispatchCanonicalForkSync  (src/app/_facades/deploy/canonical-fork-sync.server.ts)
-      → for each active child fork:  OperatorDeployPlanePort.syncCanonicalFilesToFork
-        → read canonical paths @ pushed SHA → diff vs fork main → changed-only tree
-        → open/update ONE PR on branch  cogni-operator/sync-canonical-<shortSha>
+      → targets = infra/catalog/*.yaml source_repo rows in the parent monorepo
+        (NODE_SUBMODULE_PARENT_{OWNER,REPO}); node-template + operator EXCLUDED
+      → per fork, two decoupled tiers (per-tier, per-fork error isolation):
+          Tier 1  syncCanonicalFilesToFork    → byte-overwrite CI/contract files
+          Tier 2  syncTemplateUpstreamToFork  → MERGE node-template upstream (preserves fork edits)
 ```
 
-- **One PR per fork.** The SHA-stable branch is the idempotency key — webhook re-delivery updates the same PR, never opens a second.
-- **Per-fork error isolation.** One fork failing (e.g. App not installed) logs `failed` and never aborts the others.
-- **Canonical set** = `CANONICAL_FORK_SYNC_PATHS` in the facade. Add a path only if it is **identical across all forks** — never node-specific (`package.json` carries per-node deps; do not clobber).
+- **One living PR per tier per fork.** SHA-free branches force-updated each release (Dependabot pattern): Tier 1 `cogni-operator/node-template-sync`, Tier 2 `cogni-operator/node-template-upstream`.
+- **Tier 1 paths** (`CI_CONTRACT_PATHS`): `.github/workflows/{ci.yaml,pr-build.yml,pr-lint.yaml}`, `scripts/check-node-ci-workflow.mjs`. Add a path only if identical across all forks.
+- **Targets from `infra/catalog`**, not the nodes table or the node registry (the registry resolves to the parent monorepo / hub).
 
-## Two wiring traps (the hard-won part — also in the `node-template-fork-sync` hub entry)
+### Why operator can't be auto-synced
 
-1. **Trigger = the App's existing webhook. Never a held secret.** An `INTERNAL_OPS_TOKEN` route was built then removed: that token is CI-only; no human/agent should wield it. The freeze-correct on-demand alternative is an OpenFGA-gated `node.*` action (like `node.flight`), not a static bearer.
-2. **Fork targets come from the `nodes` table, NOT the node registry.** `resolveNodeRegistry().listPublic()` exposes the **parent monorepo** (DB rows) or a **hardcoded `Cogni-DAO/<name>`** (showcase, incl. `operator → Cogni-DAO/cogni`). Enumerating it targets the **hub itself**. Targets are active `nodes` rows as `${NODE_MINT_OWNER}/<slug>` (forkFromTemplate's naming); that table already excludes operator/resy/template.
+- **Tier 1 is the wrong direction.** Per [`repo-sync-contract`](../../../docs/spec/repo-sync-contract.md) `HUB_IS_COGNI_MONOREPO`, cogni is the canonical _source_ of operator-scope CI; node-template pulls from it. Hub↔template CI drift is watched (correct direction) by `sync-drift-detector.yml`.
+- **Tier 2 can't mechanically run.** It needs node-template + target in one git object store (materialize upstream SHA as a branch → same-repo PR). cogni isn't a fork of node-template → the SHA is unreachable. And paths don't correspond (root vs `nodes/operator/**`), and operator's app is a divergent superset. This is the bidirectional history-preserving case `repo-sync-contract` defers to v2 (josh-proxy). Hence: hand-port (Responsibility 2).
 
-## Verify a sync
+### Wiring traps
 
-- **Loki:** event `node_template_fork_sync_complete` at the deployed buildSha — fields `forks`, `opened`, `noChanges`, `failed`, `prs[]`.
-- **GitHub:** each target fork shows a `cogni-operator/sync-canonical-<sha>` branch + open PR titled `chore: sync canonical node-template files (<sha>)`.
-- **forks: 0** is valid (no active child forks registered for the operator's env) — the trigger fired; there was nothing to mirror.
-
-## If a fork didn't get the update
-
-- The App must subscribe to **`push`** events and be installed on the fork's org (candidate-a App = `cogni-operator-test` on `cogni-test-org`; prod = `cogni-operator` on `Cogni-DAO`).
-- The fork must be an **active** row in the operator's `nodes` table (wizard-spawned). Hand-created repos not in the table are not targeted.
-- The changed file must be in `CANONICAL_FORK_SYNC_PATHS`; otherwise no diff → no PR (correct).
-
-## Manual fallback
-
-There is intentionally **no token route and no `scripts/ci/*.sh`** (the old `sync-node-template-fork-pr.sh` is retired — fragile partial-clone + blind merge). If you must trigger out-of-band, the home is the typed operator deploy plane (`syncCanonicalFilesToFork`), invoked via an authenticated, RBAC-gated operator action — never a curl with a shared secret.
+1. **Trigger = the App's existing webhook. Never a held secret.** No token route, no `scripts/ci/*.sh` (the old `sync-node-template-fork-pr.sh` is retired). On-demand alternative is an OpenFGA-gated `node.*` action.
+2. **`forks: 0` is valid** — trigger fired, no catalog forks for that env.
 
 ## References
 
-- Code: `src/app/_facades/deploy/canonical-fork-sync.server.ts`, `src/adapters/server/vcs/github-repo-write.ts` (`syncCanonicalFilesToFork`), `src/app/api/internal/webhooks/[source]/route.ts`.
-- As-built contract: [`docs/spec/repo-sync-contract.md`](../../../docs/spec/repo-sync-contract.md) §v0.2.
-- Hub knowledge: `node-template-fork-sync` (operator / infrastructure).
+- Code: `src/app/_facades/deploy/canonical-fork-sync.server.ts`, `src/adapters/server/vcs/github-repo-write.ts`, `src/app/api/internal/webhooks/[source]/route.ts`.
+- Contracts: [`docs/spec/repo-sync-contract.md`](../../../docs/spec/repo-sync-contract.md), [`docs/spec/node-ci-cd-contract.md`](../../../docs/spec/node-ci-cd-contract.md).
+- Hub knowledge: `node-template-fork-sync` (operator / infrastructure). Promotion: `/promote` skill.

@@ -137,6 +137,38 @@ describe("POST /api/v1/nodes/[id]/developers", () => {
     expect(transitionRequest).toHaveBeenCalled();
   });
 
+  it("addresses by slug but writes the tuple to the resolved node_id (not the slug)", async () => {
+    // The row's id (== repo-spec node_id) differs from the slug path segment. OpenFGA must key on
+    // the resolved id, never the addressing slug.
+    await testApiHandler({
+      appHandler,
+      params: { id: "beacon" },
+      async test({ fetch }) {
+        const res = await fetch({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            agentUserId: AGENT_USER_ID,
+            decision: "approve",
+          }),
+        });
+        expect(res.status).toBe(200);
+        expect(await res.json()).toEqual({
+          nodeId: NODE_ID,
+          agentUserId: AGENT_USER_ID,
+          decision: "approve",
+          role: "developer",
+        });
+      },
+    });
+
+    expect(authz.writeRelation).toHaveBeenCalledWith({
+      user: `user:${AGENT_USER_ID}`,
+      relation: "developer",
+      object: `node:${NODE_ID}`,
+    });
+  });
+
   it("approves a registered agent as production_promoter (role-aware grant)", async () => {
     await testApiHandler({
       appHandler,
