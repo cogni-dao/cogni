@@ -258,11 +258,14 @@ single OpenFGA tuple `{user, developer, node:X}`; gate 1 checks the **exact** `n
 from the URL, so a caller authorized on X gets 403 targeting Y. The **env** axis is closed
 by deployment topology, not a tuple: each env runs its **own** operator pod against its
 **own** OpenFGA store and self-logins with its **own** `<env>-node-secrets-writer` identity
-(OpenBao policy scoped to `cogni/data/<env>/*`). The operator stamps the env from its own
-`serverEnv().APP_ENV`, never the request body, so a candidate-a caller cannot write
-preview/prod even by forging a path. And on any env with no OpenFGA store (preview/prod
-today) **every** check is `authz_unavailable` → 503 — fail-closed by default until that
-env is provisioned. Net: an unauthorized (node, env) pair never reaches the write step.
+(OpenBao policy scoped to `cogni/data/<env>/*`). _Post-D1:_ the caller now **states**
+`env` in the body, but the route 409s unless it equals the operator's own
+`DEPLOY_ENVIRONMENT`, and the OpenBao policy is env-scoped regardless — so a candidate-a
+caller still cannot write preview/prod (a wrong env is a loud 409, not a silent
+cross-write). The env axis stays closed by validation + policy, not by ignoring the
+body. On an env whose OpenFGA store is unprovisioned, the check is `authz_unavailable`
+→ 503, fail-closed (candidate-a + prod stores are live; preview to confirm). Net: an
+unauthorized (node, env) pair never reaches the write step.
 
 > **Per-node isolation is tuple-based, not token-based.** A `developer` grant on
 > node X confers `can_manage_secrets` on **X only** (OpenFGA tuple
@@ -382,7 +385,7 @@ identity:
 | ------------------------------------------------ | ------------------------------------ | ---------------------------------------------------------------------------------------- |
 | **Identity** (API key + principal)               | _logically_ one dev relationship     | keep per-env identity infra; the operator **brokers/custodies** per-env creds (deferred) |
 | **Authorization** (write key K on node Y, env E) | **per-(node, env)** — already is     | one OpenFGA tuple in **that env's own** store; prod grant gated on promotion             |
-| **Data** (the value bytes)                       | **per-env** (`cogni/<env>/<node>/*`) | the **shipped #1627 route**, env operator-stamped — unchanged                            |
+| **Data** (the value bytes)                       | **per-env** (`cogni/<env>/<node>/*`) | the shipped route, env a **validated body param** (D1) == the operator's own env         |
 
 > **Architect correction (2026-06-18, Derek).** Do **not** create a separate node
 > registration per env. **A node is registered ONCE — in the (prod/control-plane)
