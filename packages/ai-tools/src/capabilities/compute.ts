@@ -3,11 +3,8 @@
 
 /**
  * Module: `@cogni/ai-tools/capabilities/compute`
- * Purpose: Compute-substrate capability — the typed control plane's read over the
- *   compute provider account(s) that fund the node network's VMs. The READ half ships
- *   now (cost/balance awareness); the WRITE half (provision/release/settle) is funding-gated.
- * Scope: Defines the read-only v0 ComputeResourcePort + the provider-agnostic ComputeBalance type.
- *   Does NOT implement transport, provision/release compute, or settle payment.
+ * Purpose: Compute-substrate capability — the typed control plane's read over the compute provider account(s) that fund the node network's VMs (cost/balance awareness); the write half (provision/release/settle) is funding-gated.
+ * Scope: Defines the read-only v0 ComputeResourcePort + the provider-agnostic ComputeBalance type. Does NOT implement transport, provision/release compute, or settle payment.
  * Invariants:
  *   - CAPABILITY_INJECTION: Implementation injected at bootstrap, not imported.
  *   - PROVIDER_AGNOSTIC: Types speak uniform units (currency + remaining), never provider units.
