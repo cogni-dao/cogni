@@ -5,7 +5,10 @@
 # Proves the materialize side of the secret-materialize / reconcile split:
 #   - source:agent app keys ARE materialized per-node (AUTH_SECRET);
 #   - genuinely-shared values inherited from the env bank ARE materialized
-#     (OPENROUTER_API_KEY from node-template);
+#     (POSTHOG_API_KEY from node-template via the blind ancestor scan);
+#   - canonical-custody (inheritFrom: operator) keys are materialized from the
+#     operator path, NOT the blind ancestor scan (OPENROUTER_API_KEY — kills the
+#     per-node split-brain that 429'd freshly-formed prod nodes);
 #   - per-node DB creds + ALL THREE DSNs ARE composed sole-source here
 #     (APP_DB_PASSWORD/SERVICE generated; DATABASE_URL/SERVICE_URL embed the
 #     per-node app_<node> role; DOLTGRES_PASSWORD derived per-node + DOLTGRES_URL
@@ -32,9 +35,13 @@ put_secret() {
   printf '%s' "$value" > "$BAO_ROOT/cogni/candidate-a/${svc}/${key}"
 }
 
-# Env-bank shared values a node legitimately inherits (transitional, pre-inheritFrom).
-put_secret node-template OPENROUTER_API_KEY sk-or-existing
+# Blind-ancestor-scan shared value a node legitimately inherits (transitional).
 put_secret node-template POSTHOG_API_KEY phc_existing
+# Canonical-custody (inheritFrom: operator) value: seeded at the OPERATOR path
+# only. A divergent node-template copy must be IGNORED — the node inherits the
+# operator value (overwrite-on-drift), killing the split-brain bug.5021/429 class.
+put_secret operator OPENROUTER_API_KEY sk-or-operator-canonical
+put_secret node-template OPENROUTER_API_KEY sk-or-stale-divergent
 
 cat > "$FAKEBIN/ssh" <<'EOF'
 #!/usr/bin/env bash
@@ -123,9 +130,15 @@ env \
 # source:agent app key generated per-node
 test -f "$BAO_ROOT/cogni/candidate-a/oss/AUTH_SECRET" \
   || { echo "materialize did not seed AUTH_SECRET" >&2; exit 1; }
-# shared value inherited from env bank
+# shared value inherited from env bank (blind ancestor scan)
+test -f "$BAO_ROOT/cogni/candidate-a/oss/POSTHOG_API_KEY" \
+  || { echo "materialize did not inherit POSTHOG_API_KEY" >&2; exit 1; }
+# canonical-custody key: must be the OPERATOR value, NOT the stale node-template
+# copy — proves inheritFrom: operator overwrites the per-node split-brain.
 test -f "$BAO_ROOT/cogni/candidate-a/oss/OPENROUTER_API_KEY" \
   || { echo "materialize did not inherit OPENROUTER_API_KEY" >&2; exit 1; }
+test "$(cat "$BAO_ROOT/cogni/candidate-a/oss/OPENROUTER_API_KEY")" = sk-or-operator-canonical \
+  || { echo "OPENROUTER_API_KEY must inherit the operator-canonical value, not the stale node-template copy" >&2; exit 1; }
 # per-node DB creds generated (source:agent), not inherited from any shared bank
 for k in APP_DB_PASSWORD APP_DB_SERVICE_PASSWORD; do
   test -f "$BAO_ROOT/cogni/candidate-a/oss/$k" \
@@ -154,7 +167,7 @@ test -f "$BAO_ROOT/cogni/candidate-a/oss/DOLTGRES_URL" \
 grep -qE '://postgres:[^@]+@[^/]+/knowledge_oss\?' "$BAO_ROOT/cogni/candidate-a/oss/DOLTGRES_URL" \
   || { echo "DOLTGRES_URL must reach knowledge_oss as the postgres superuser (non-empty pw)" >&2; exit 1; }
 # no secret value leaked to output
-if grep -q 'sk-or-existing\|writer-token' "$TMPROOT/out.txt"; then
+if grep -q 'sk-or-operator-canonical\|sk-or-stale-divergent\|writer-token' "$TMPROOT/out.txt"; then
   echo "secret value leaked to output" >&2
   exit 1
 fi
