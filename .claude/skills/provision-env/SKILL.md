@@ -46,6 +46,17 @@ gh workflow run provision-env.yml --repo <owner>/<repo> \
 # run a branch's version with --ref <branch> (e.g. to test a renderer/secrets fix before main)
 ```
 
+### Modes (`-f mode=`)
+
+A full provision is the default. Narrow, idempotent **day-2 heal** modes reconcile ONE substrate piece on an existing VM without a full re-provision (verify-and-heal; a re-run is a no-op):
+
+- **`observability`** — make the env **born-observable** so the node-log proxy (`GET /api/v1/nodes/{id}/observability/logs`) can read any node's logs. Reconciles the two per-env pieces a fresh provision's Phase 5e already wires but an env provisioned **before** the feature lacks: (1) re-push the Alloy `nodeId`→`node` Loki-label config + restart, (2) seed the operator Grafana read creds at `cogni/<env>/operator`. **Use this — never hand-write `cogni/<env>/operator/GRAFANA_*`.**
+  ```bash
+  gh workflow run provision-env.yml -f env=<env> -f mode=observability \
+    -f openbao_root_token='<root token from .local/<env>-openbao-init.json>'
+  ```
+  Cred precedence: explicit `GRAFANA_*` inputs → else mirror `cogni/<env>/_shared` (Phase 5e auto-mint). If `_shared` was never minted (no `GH_GRAFANA_CLOUD_ADMIN_TOKEN` at provision time), pass the `glsa_` read token + URL explicitly — one Grafana stack serves every env (env is just a Loki label). Scripts: `scripts/setup/reconcile-observability.sh`; fresh-env seed in `provision-env-vm.sh` Phase 5e. Spec: `docs/spec/grafana-observability-access.md` §"Born observable".
+
 ## Phase map (where things die)
 
 | Phase                        | Does                                               | Common failure                                                                                                 |
