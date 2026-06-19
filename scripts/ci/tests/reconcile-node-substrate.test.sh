@@ -292,15 +292,20 @@ env \
 grep -q "substrate ready inputs reconciled for operator" "$TMPROOT/relative-catalog-root.out"
 
 # task.5017 — deploy ⊆ provisioned: reconciling a node into an env outside its
-# `envs:` node-set must fail loud BEFORE any substrate mutation (node-template is
-# [candidate-a, preview], not production).
+# `envs:` node-set must fail loud BEFORE any substrate mutation. Every real catalog node
+# is now all-envs (node-template opted into production in story.5009), so this guard is
+# exercised against a FIXTURE catalog where node-template is restricted to [candidate-a] —
+# testing the enforcement logic with controlled input, decoupled from the live node-set.
+RESTRICTED_CATALOG="$TMPROOT/restricted-catalog"
+cp -r infra/catalog "$RESTRICTED_CATALOG"
+yq -i '.envs = ["candidate-a"]' "$RESTRICTED_CATALOG/node-template.yaml"
 set +e
 env \
   VM_HOST=fake \
   DOMAIN=test.cognidao.org \
   SSH_OPTS="-i fake-key -o StrictHostKeyChecking=no" \
   APP_SOURCE_DIR="$TMPROOT/app-src" \
-  COGNI_CATALOG_ROOT=infra/catalog \
+  COGNI_CATALOG_ROOT="$RESTRICTED_CATALOG" \
   RECONCILE_NODE_SUBSTRATE_SSH_BIN="$FAKEBIN/ssh" \
   RECONCILE_NODE_SUBSTRATE_SCP_BIN="$FAKEBIN/scp" \
   FAKE_REMOTE_ROOT="$REMOTE_ROOT" \
@@ -309,7 +314,7 @@ env \
   bash scripts/ci/reconcile-node-substrate.sh production node-template > "$TMPROOT/offset-env.out" 2>&1
 offset_rc=$?
 set -e
-[ "$offset_rc" -ne 0 ] || { echo "expected reconcile to fail for node-template in production (not in its envs)" >&2; exit 1; }
+[ "$offset_rc" -ne 0 ] || { echo "expected reconcile to fail for node-template in production (restricted fixture)" >&2; exit 1; }
 grep -q "is not in the 'production' node-set" "$TMPROOT/offset-env.out" \
   || { echo "missing node-set rejection message; got:" >&2; cat "$TMPROOT/offset-env.out" >&2; exit 1; }
 

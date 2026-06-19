@@ -42,6 +42,7 @@ resources:
   - production-beacon-applicationset.yaml
   - production-blue-applicationset.yaml
   - production-habitat-applicationset.yaml
+  - production-node-template-applicationset.yaml
   - production-operator-applicationset.yaml
   - production-oss-applicationset.yaml
   - production-red-applicationset.yaml
