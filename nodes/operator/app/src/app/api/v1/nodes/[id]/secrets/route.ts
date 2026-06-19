@@ -155,6 +155,53 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       );
     }
 
+    // This operator serves exactly ONE env. Validate the stated env matches it
+    // FIRST (before node lookup / authz): fail fast, and a wrong-env intent is a
+    // loud 409 naming the right host — never a silent wrong-env write (the beacon
+    // prod-clobber). The path env stays the operator's own; cross-env delivery is a
+    // future swappable adapter. The served-env→host map is public (the guide), so
+    // returning it pre-authz leaks nothing.
+    const env = serverEnv();
+    const deployEnv = env.DEPLOY_ENVIRONMENT;
+    if (!deployEnv) {
+      logTerminal({
+        outcome: "error",
+        status: 503,
+        nodeId: id,
+        key,
+        op,
+        env: requestedEnv,
+        errorCode: "deploy_env_unset",
+      });
+      return NextResponse.json(
+        {
+          error: "deploy environment not configured",
+          errorCode: "deploy_env_unset",
+        },
+        { status: 503 }
+      );
+    }
+    if (requestedEnv !== deployEnv) {
+      logTerminal({
+        outcome: "error",
+        status: 409,
+        nodeId: id,
+        key,
+        op,
+        env: requestedEnv,
+        errorCode: "wrong_operator_env",
+      });
+      return NextResponse.json(
+        {
+          error: `this operator serves env '${deployEnv}'; to write env '${requestedEnv}' call that environment's operator`,
+          errorCode: "wrong_operator_env",
+          servedEnv: deployEnv,
+          requestedEnv,
+        },
+        { status: 409 }
+      );
+    }
+
     // Resolve the node ONCE via the shared registry resolver (by nodeId OR slug) —
     // the same surface the observability logs proxy uses, so this inherits the
     // published-node resolution and the "one env-aware record" invariant.
@@ -244,54 +291,6 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
           errorCode: "key_reserved",
         },
         { status: 403 }
-      );
-    }
-
-    // This operator writes only its OWN env. The caller's `requestedEnv` is
-    // validated to equal it, so a foreign-env intent is a loud 409 (with the host
-    // to call) — NOT a silent write to the wrong env (the beacon prod-clobber).
-    // The env axis stays closed: the path env is still the operator's own, never
-    // an arbitrary body value. Cross-env delivery is a future swappable adapter.
-    const env = serverEnv();
-    const deployEnv = env.DEPLOY_ENVIRONMENT;
-    if (!deployEnv) {
-      logTerminal({
-        outcome: "error",
-        status: 503,
-        nodeId: id,
-        slug: node.slug,
-        key,
-        op,
-        env: requestedEnv,
-        errorCode: "deploy_env_unset",
-      });
-      return NextResponse.json(
-        {
-          error: "deploy environment not configured",
-          errorCode: "deploy_env_unset",
-        },
-        { status: 503 }
-      );
-    }
-    if (requestedEnv !== deployEnv) {
-      logTerminal({
-        outcome: "error",
-        status: 409,
-        nodeId: id,
-        slug: node.slug,
-        key,
-        op,
-        env: requestedEnv,
-        errorCode: "wrong_operator_env",
-      });
-      return NextResponse.json(
-        {
-          error: `this operator serves env '${deployEnv}'; to write env '${requestedEnv}' call that environment's operator`,
-          errorCode: "wrong_operator_env",
-          servedEnv: deployEnv,
-          requestedEnv,
-        },
-        { status: 409 }
       );
     }
 
