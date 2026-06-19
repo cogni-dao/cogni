@@ -264,7 +264,7 @@ This proves the k8s Secret has the key. It does not prove the running process ha
 
 ## 8. Prove The Running Process
 
-Pods read `envFrom` only at startup. After ESO sync, the Deployment must roll before `process.env.<KEY>` is live.
+Pods read `envFrom` only at startup. After ESO sync, the Deployment must roll before `process.env.<KEY>` is live. The `reloader.stakater.com/auto: "true"` annotation auto-rolls the pod **only if Stakater Reloader is installed in the target cluster** — it is a silent no-op otherwise (the gap that left prod unrolled in bug.5040; backfill via `scripts/setup/register-substrate-apps.sh`).
 
 Check whether Reloader exists:
 

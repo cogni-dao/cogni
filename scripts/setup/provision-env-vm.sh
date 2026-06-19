@@ -1219,11 +1219,17 @@ phase_5b_timeout() {
 }
 
 # ── 5b.1 Register Argo Applications for the substrate ─────────────────────
-# Substitute ${FORK_REPO} + ${DEPLOY_BRANCH} placeholders, apply the two
-# Application CRs into the argocd namespace, then wait for both to complete
-# their first sync. Argo's repo-server clones the deploy branch, runs
+# Substitute ${FORK_REPO} + ${DEPLOY_BRANCH} placeholders, apply the
+# Application CRs into the argocd namespace, then wait for each to complete
+# its first sync. Argo's repo-server clones the deploy branch, runs
 # `kustomize build --enable-helm` (per the bootstrap argocd-cm patch), and
 # applies server-side.
+#
+# The substrate list (openbao external-secrets reloader) is mirrored in
+# scripts/setup/register-substrate-apps.sh, which BACKFILLS a substrate app
+# onto an already-running cluster that was last provisioned before that app
+# existed in-repo (e.g. prod predates the `reloader` Application — bug.5040).
+# Keep the two lists in sync.
 log_info "Enabling --enable-helm in argocd-cm for kustomize-with-helm substrate..."
 ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 root@"$VM_IP" '
   kubectl -n argocd patch cm argocd-cm --type merge \
