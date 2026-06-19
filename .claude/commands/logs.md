@@ -102,9 +102,17 @@ For CI failures, use `env="ci"`:
 > `query={service="app"} | json | level="error"` (URL-encode it). The operator forces
 > `env`/`service`/`node` to the caller's node and lets any other label matcher only narrow, so the
 > dev can never reach another node. `{slug|node_id}` resolves to the node's **repo-spec `node_id`**
-> (the deployment-identity SSOT, = `nodes.id`), not a private registry id — so this works for
-> spawned/external nodes (e.g. Beacon), not only wizard-born ones. Results come back as raw Loki
-> JSON; no Grafana token ever reaches the dev. An empty `query` returns the node's app stream.
+> (the deployment-identity SSOT, = `nodes.id`), at **any** registry status (`resolveNodeRef` — deployed
+> nodes are `published`, never `active`), so this works for any registered node, not only wizard-born
+> ones. Results come back as raw Loki JSON; no Grafana token ever reaches the dev. An empty `query`
+> returns the node's app stream.
+>
+> **"Born observable" caveat — two halves must be in the SAME env.** The proxy resolves a node from
+> **that env's operator registry** (the env where it was minted), and the forced `{node="<id>"}`
+> selector needs that env's Alloy to promote the `node` label. A node's registry row and its `node`
+> label can split across envs (e.g. beacon: row in prod, label only on candidate-a). Per-env substrate
+> gaps tracked: **bug.5041** (prod Alloy `node` label stale), **bug.5040** (prod Reloader). Full
+> born-observable contract: `docs/spec/grafana-observability-access.md` §"Born observable".
 >
 > **Parity / scope:** for the caller's node slice this is **1:1** with this guide's MCP /
 > `loki-query.sh` path — same selector syntax, same `| json | …` pipeline, same JSON output — the

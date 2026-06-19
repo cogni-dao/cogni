@@ -4,11 +4,12 @@ type: spec
 title: Grafana / Loki Observability Access
 status: draft
 trust: draft
-summary: How a developer-RBAC'd dev reads only their node's Grafana/Loki logs without holding a token — the operator is a node-pinned query PROXY (runs the dev's LogQL server-side, scoped to that one node's app stream) rather than a credential issuer, because a returned token's reach is ungoverned by the per-node check while a pinned proxy is node-scoped by construction. BUILT — task.5028 node label plus task.5025 proxy. Scope envelope covers only node-attributable services (app today); shared infra is operator-only. The operator's own liveness gate still holds no token.
-read_when: Wiring or debating whether the operator/API should hold or hand out a Grafana token; granting a dev/agent Loki query access; designing an automated observability gate; reviewing an ExternalSecret that pulls a GRAFANA_* key into a pod; deciding proxy-vs-issuer for observability reads.
+summary: How a developer-RBAC'd dev reads only their node's logs through ONE stable operator endpoint (GET /api/v1/nodes/{id}/observability/logs) — a node-pinned query PROXY over a SWAPPABLE log backend, not a credential issuer (a returned token's reach is ungoverned by the per-node check; a pinned proxy is node-scoped by construction). The caller sends full LogQL (?query=); the operator forces env/service/node and rejects out-of-scope. "Born observable" is a per-ENV substrate guarantee (node label + operator read creds), not a node change. Resolves any-status via resolveNodeRef. Operator read creds are service:operator (not _shared).
+read_when: Wiring or debating whether the operator/API should hold or hand out a Grafana token; granting a dev/agent log-read access; making a node born-observable / closing the prod node-label + operator-creds substrate gaps; reviewing an ExternalSecret that pulls a GRAFANA_* key into a pod; deciding proxy-vs-issuer for observability reads.
 owner: derekg1729
 created: 2026-06-16
-verified: 2026-06-17
+verified: 2026-06-19
+updated: 2026-06-19
 tags:
   - secrets
   - observability
@@ -34,6 +35,37 @@ node-scoped from day one.
 > space is open-ended and never converges." True for _arbitrary Grafana access_ — so that is NOT the MVP.
 > The MVP proxy serves exactly one shape: **read this node's log lines** (LogQL pinned to the node label).
 > Dashboards, datasource introspection, and ad-hoc multi-tenant queries are out of scope.
+
+## Born observable — the per-env substrate contract (north star)
+
+**Every node is "born observable": a node developer reads their node's logs through the one stable endpoint
+above, in every env, with zero manual wiring.** Crucially this is a **per-ENV substrate guarantee, not a
+node change** — the node app already emits what's needed; the env + operator must be born carrying the rest.
+Six requirements, and where each lives:
+
+| #   | Requirement                                                    | Where it lives                                                                                 | Born-hands-off?                                                                                                                                           |
+| --- | -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Node app logs carry `nodeId` (= repo-spec `node_id`)           | **node-template app** (`getNodeId()`)                                                          | ✅ every fork inherits it — no node code change                                                                                                           |
+| 2   | Env Alloy promotes `nodeId` → `node` Loki **stream label**     | **infra** (`infra/compose/runtime/configs/alloy-config{,.metrics}.alloy`, per-env VM)          | ⚠️ repo config ✅; a VM provisioned before task.5028 is **stale** (prod = bug.5041)                                                                       |
+| 3   | Node registered + resolvable by `node_id`/slug, **any status** | **operator** (`nodes` table + `resolveNodeRef`, service-role)                                  | ⚠️ wizard registers it; resolution any-status = the `resolveNodeRef` fix (deployed nodes are `published`, never `active` — `listPublic()` 404'd them all) |
+| 4   | Operator pod holds the Grafana **read** credential             | **operator-service secret** `cogni/<env>/operator/{GRAFANA_URL,GRAFANA_SERVICE_ACCOUNT_TOKEN}` | ⚠️ delivered by the operator ExternalSecret; must be **seeded by provisioning** per env, not by hand                                                      |
+| 5   | Dev holds a `developer` grant on the node                      | **operator RBAC** (request → owner approve → OpenFGA tuple)                                    | ✅ works                                                                                                                                                  |
+| 6   | Node dev knows the read path                                   | **node-template `logs.md` skill**                                                              | ⚠️ forks inherit it once node-template ships it                                                                                                           |
+
+The node-facing contract is **one stable endpoint over a swappable backend** — fold of PR #1742:
+
+- **`OBSERVABILITY_BACKEND_IS_SWAPPABLE`** — the node-dev contract is `GET …/observability/logs`; Grafana
+  Cloud Loki (today) vs self-hosted OSS Loki (target, `X-Scope-OrgID` per node) is an implementation
+  detail behind it, swapped without changing the node's repo-spec or read path. Same stance as
+  `TEMPORAL_IS_SWAPPABLE_SUBSTRATE`. Design + phasing: [`docs/design/substrate-grafana-observability.md`](../design/substrate-grafana-observability.md).
+- **`AUTH_IS_OPENFGA_GATED`** — WHO can read is the `developer`/`node.flight` OpenFGA tuple, on every
+  backend; the dev never holds a backend credential.
+
+**Per-env reality (the failure mode this contract closes):** the two halves a node needs can sit in
+different envs. A wizard node's registry row (req 3) lives in the operator DB where it was minted (prod);
+its `node` label (req 2) only exists where the env's Alloy is current. **beacon** has its row in prod but
+prod lacks the label (bug.5041); candidate-a has the label + beacon's shadow-pod logs but not beacon's row.
+Born-observable means provisioning guarantees reqs 2 + 4 on **every** env so the halves never split.
 
 ## Status — built (task.5028 + task.5025)
 
@@ -75,8 +107,10 @@ cross-node lines).
 
 **Env envelope:** the readable envs are the canonical `FLIGHT_ENVS` (`candidate-a` · `preview` ·
 `production`) — the same set a node deploys through. The proxy imports that list rather than re-declaring
-it, so a new deploy env is readable automatically. Note: real multi-node validation is **prod-only**
-(operator is the only node deployed to candidate-a).
+it, so a new deploy env is readable automatically. Note: candidate-a shadow-runs multiple nodes
+(`node-template` + test nodes), so the proxy IS exercisable there — proven end-to-end via `node-template`
+(authed `GET …/observability/logs` returned its app lines). The proxy resolves a node by `node_id`/slug at
+**any** status (`resolveNodeRef`), since deployed nodes are `published`, not `active`.
 
 ## The provisioned credentials (unchanged)
 
@@ -85,14 +119,18 @@ Provisioning demands **one** human input — the Grafana Cloud **admin** token (
 derives **scoped** credentials — the admin token never leaves the runner (Invariant 13: never written to
 OpenBao, never reaches the VM). From that one root:
 
-| consumer           | credential                                            | where it lives                                                    | who/what queries                                                           |
-| ------------------ | ----------------------------------------------------- | ----------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| **Validator / CI** | child **Viewer** SA `glsa_` (read: datasource + logs) | `cogni/<env>/_shared/{GRAFANA_URL,GRAFANA_SERVICE_ACCOUNT_TOKEN}` | `/validate-candidate` scorecard, `scripts/loki-query.sh`, agent self-trace |
-| **Alloy push**     | access-policy `glc_` (write: metrics/logs)            | VM `.env` (Compose)                                               | Alloy remote-write only                                                    |
-| **Dev node-read**  | **none — the operator proxies** (its own read token)  | the operator pod (never handed out)                               | the operator, server-side pinned to `{node="<id>"}` on the dev's behalf    |
+| consumer           | credential                                                      | where it lives                                                     | who/what queries                                                        |
+| ------------------ | --------------------------------------------------------------- | ------------------------------------------------------------------ | ----------------------------------------------------------------------- |
+| **Operator proxy** | **Viewer** SA `glsa_` (read: datasource + logs)                 | `cogni/<env>/operator/{GRAFANA_URL,GRAFANA_SERVICE_ACCOUNT_TOKEN}` | the operator, server-side pinned to `{node="<id>"}` on the dev's behalf |
+| **Alloy push**     | access-policy `glc_` (write: metrics/logs)                      | VM `.env` (Compose)                                                | Alloy remote-write only                                                 |
+| **Validator / CI** | the same `glsa_` read SA, from a **local `.env`** (not OpenBao) | `loki-query.sh` auto-sources `.env.canary`/`.env.cogni`            | `/validate-candidate` scorecard, agent self-trace                       |
 
-The validator/CI shared Viewer token is fine: validator and CI are **trusted env-wide consumers**, not
-per-node-scoped principals. The per-node concern is the **external dev**, and that path is the proxy above.
+**Custody correction (this session):** the operator-pod read credential is `service: operator`, not
+`_shared`. The only OpenBao consumer of these keys is the operator pod; `loki-query.sh` /
+`grafana-postgres-datasource.sh` read `GRAFANA_*` from a local `.env`, so nothing consumes a
+`cogni/<env>/_shared/GRAFANA_*` path as a k8s bank. One Grafana stack (`<org>.grafana.net`) serves all
+envs — a single `glsa_` read token reads every env's logs (env is just a Loki label), so the operator's
+read credential is one token, custodied at `cogni/<env>/operator`.
 
 ## Why the operator's own liveness gate holds no token (unchanged)
 
@@ -106,14 +144,17 @@ This is distinct from the dev-read proxy: the gate gets its verdict **publicly**
 not query Loki at all; the dev-read genuinely needs a Loki query, which the operator runs **pinned to one
 node**. Both keep arbitrary Loki query power out of the open path.
 
-**Anti-pattern:** wiring `cogni/<env>/_shared/GRAFANA_SERVICE_ACCOUNT_TOKEN` into the operator pod to make
-the **liveness gate** self-query Loki (it has a public verdict already), **or** returning any Grafana token
-to a dev from an API route (a dormant env-wide leak). The sanctioned shape is the node-pinned proxy.
+**Anti-pattern:** wiring the operator's Grafana token to make the **liveness gate** self-query Loki (it has
+a public verdict already), **or** returning any Grafana token to a dev from an API route (a dormant
+env-wide leak). The operator's read token IS wired (`cogni/<env>/operator`) — but only the **node-pinned
+proxy** consumes it; the liveness gate stays public-verdict-only.
 
 ## See also
 
 - [`docs/spec/substrate-access-grant.md`](./substrate-access-grant.md) — the cross-substrate plane (Grafana/PostHog/DB/Temporal), health scorecard, sequencing
-- `fork-quickstart.md` §6 (Phase 5e mint), `infra/secrets-catalog.yaml` (`GRAFANA_*` = `service: _shared`)
+- `fork-quickstart.md` §6 (Phase 5e mint), `infra/secrets-catalog.yaml` (`GRAFANA_*` = `service: operator`)
+- [`docs/design/substrate-grafana-observability.md`](../design/substrate-grafana-observability.md) — the access-plane design + phasing (Grafana-Cloud stopgap → OSS-Loki)
+- born-observable substrate gaps: bug.5040 (prod Reloader), bug.5041 (prod Alloy `node` label stale)
 - `docs/spec/secrets-classification.md` (tier/routing), `.claude/skills/cicd-secrets-expert/SKILL.md`
 - `nodes/operator/app/src/app/api/v1/nodes/[id]/observability/logs/route.ts` + `src/features/nodes/observability-logs.ts` (the built proxy — node-pin builder, never a token)
 - `nodes/operator/app/src/features/nodes/flight-status.ts` (`assertLive`), `task.5024`, `task.5025`
