@@ -129,30 +129,37 @@ Three lanes, by `source` and who you are. Pick before you touch anything.
 > `GH_WEBHOOK_SECRET` silently fails webhook HMAC. If the value already exists,
 > the substrate owns it; leave it alone.
 
-### Self-serve API: the env is the operator you call, not a body field
+### Self-serve API: `env` is a required, validated body field
 
-`POST /api/v1/nodes/<id>/secrets` writes `cogni/<env>/<node>/<KEY>` where `<env>`
-is **stamped from the operator pod's own `DEPLOY_ENVIRONMENT`** — it is _not_
-read from the request body and there is no `targetEnv` param. So **the operator
-host you call IS the environment you write:**
+`POST /api/v1/nodes/<id>/secrets` takes a **required `env`** (a `FLIGHT_ENVS`
+value — `candidate-a` · `preview` · `production`), mirroring deploy's
+`dispatchNodePromote({ env })` and the observability logs proxy's `?env=`:
 
-| Operator host               | Writes to env | Has node registry + RBAC for…       |
-| --------------------------- | ------------- | ----------------------------------- |
-| `https://cognidao.org`      | `production`  | production-registered nodes         |
-| `https://test.cognidao.org` | `candidate-a` | candidate-a operator's own registry |
+```json
+{
+  "env": "candidate-a",
+  "key": "X_OAUTH_CLIENT_SECRET",
+  "value": "…",
+  "op": "set"
+}
+```
 
-**Cross-env is NOT supported by self-serve today.** A node registered through the
-prod operator (its `nodes` row + your `can_manage_secrets` grant live in the
-prod operator's DB + OpenFGA store) can only be self-served on **production** —
-the candidate-a/preview operators run their own separate DB + OpenFGA and don't
-know that node. There is no way to set a _candidate-a_ secret for a
-_prod-registered_ node via the API. For that, use the operator-admin CLI
-(§3–8) against the target env's OpenBao, or wait for the shared-control-plane /
-`targetEnv` work (see `docs/design/node-self-serve-secrets.md` Open Questions).
+The operator writes only its **own** env. It compares your stated `env` to its own
+`DEPLOY_ENVIRONMENT` and **`409 wrong_operator_env`** on a mismatch, naming the host
+to call instead. So you state intent and a wrong target is a **loud rejection, never
+a silent wrong-env write** (the bug that clobbered prod beacon). Mapping today:
 
-⚠️ **Calling the wrong host writes the wrong env.** `cognidao.org` is
-**production**. Pointing a "set my candidate-a secret" call at it lands the value
-in prod — and if the key was a `source: agent` key, clobbers the live one.
+| Operator host               | Serves env (accepts `env=`) |
+| --------------------------- | --------------------------- |
+| `https://cognidao.org`      | `production`                |
+| `https://test.cognidao.org` | `candidate-a`               |
+
+**Cross-env is still NOT delivered by self-serve today** (you must call the host
+that serves your target env). A node's registry + `can_manage_secrets` grant must
+also exist on that env's operator. Setting a _candidate-a_ secret for a node only
+registered on prod is not yet API-reachable — use the operator-admin CLI (§3–8)
+against that env's OpenBao until the env-aware node model + cross-env write adapter
+land (see `docs/design/node-self-serve-secrets.md` Phase 3, deliverables D1–D4).
 
 ### Catalog lanes (for completeness)
 
