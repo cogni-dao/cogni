@@ -30,12 +30,11 @@
  * @public
  */
 
-import type { AuthzDecisionCode } from "@cogni/authorization-core";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getSessionUser } from "@/app/_lib/auth/session";
+import { resolveNodeAndAuthorize } from "@/app/_lib/node-rbac";
 import { createOperatorSecretsPlane } from "@/bootstrap/capabilities/operator-secrets-plane";
-import { getContainer, resolveNodeRegistry } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { FLIGHT_ENVS, isFlightEnv } from "@/features/nodes/flight-status";
 import type { OperatorSecretsPlanePort } from "@/ports";
@@ -62,11 +61,6 @@ const WriteSecretInput = z.object({
   // incident). Cross-env delivery is a future swappable adapter; today env must match.
   env: z.string(),
 });
-
-type AuthzErrorCode = Extract<
-  AuthzDecisionCode,
-  "authz_denied" | "authz_unavailable"
->;
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -202,75 +196,37 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       );
     }
 
-    // Resolve the node ONCE via the shared registry resolver (by nodeId OR slug) —
-    // the same surface the observability logs proxy uses, so this inherits the
-    // published-node resolution and the "one env-aware record" invariant.
-    const summaries = await resolveNodeRegistry().listPublic();
-    const found = summaries.find((n) => n.nodeId === id || n.slug === id);
-    if (!found?.nodeId) {
-      logTerminal({
-        outcome: "error",
-        status: 404,
-        nodeId: id,
-        key,
-        op,
-        env: requestedEnv,
-        errorCode: "node_not_found",
-      });
-      return NextResponse.json({ error: "not found" }, { status: 404 });
-    }
-    const node = { id: found.nodeId, slug: found.slug };
-
-    // Gate 1 — OpenFGA. Fail-closed: no authority configured → 503 (never owner-fallback).
-    const authorization = getContainer().authorization;
-    if (!authorization) {
-      logTerminal({
-        outcome: "error",
-        status: 503,
-        nodeId: id,
-        slug: node.slug,
-        key,
-        op,
-        errorCode: "authz_unavailable",
-      });
-      return NextResponse.json(
-        {
-          error: "authorization not configured",
-          errorCode: "authz_unavailable",
-        },
-        { status: 503 }
-      );
-    }
-    const decision = await authorization.check({
-      actorId: `user:${sessionUser.id}`,
+    // Gate 1 — resolve + authorize via the shared node-rbac seam (same resolver the
+    // node UI + flight/observability routes use). Keep this route's structured logging
+    // + exact body shapes by switching on the typed failure.
+    const gate = await resolveNodeAndAuthorize({
+      id,
+      userId: sessionUser.id,
       action: "node.manage_secrets",
-      resource: `node:${node.id}`,
-      context: { tenantId: node.id, nodeId: node.id },
     });
-    if (decision.decision !== "allow") {
-      const code = decision.code as AuthzErrorCode;
-      const status = code === "authz_unavailable" ? 503 : 403;
+    if (!gate.ok) {
       logTerminal({
         outcome: "error",
-        status,
+        status: gate.status,
         nodeId: id,
-        slug: node.slug,
+        slug: gate.slug,
         key,
         op,
         env: requestedEnv,
-        errorCode: code,
+        errorCode: gate.errorCode,
       });
-      return NextResponse.json(
-        {
-          error:
-            code === "authz_unavailable"
-              ? "authorization unavailable"
-              : "not authorized",
-          errorCode: code,
-        },
-        { status }
-      );
+      const body =
+        gate.errorCode === "node_not_found"
+          ? { error: "not found" }
+          : gate.errorCode === "authz_unavailable"
+            ? {
+                error: "authorization not configured",
+                errorCode: gate.errorCode,
+              }
+            : { error: "not authorized", errorCode: gate.errorCode };
+      return NextResponse.json(body, { status: gate.status });
     }
+    const node = gate.node;
 
     // Gate 2 — substrate-reserved-key guard. The node owns its whole
     // cogni/<env>/<node>/* namespace and may add/set/rotate any key (RBAC +

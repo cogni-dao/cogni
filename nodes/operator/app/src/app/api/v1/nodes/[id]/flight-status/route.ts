@@ -17,11 +17,10 @@
  * @public
  */
 
-import type { AuthzDecisionCode } from "@cogni/authorization-core";
 import { NextResponse } from "next/server";
 
 import { getSessionUser } from "@/app/_lib/auth/session";
-import { getContainer, resolveNodeRegistry } from "@/bootstrap/container";
+import { resolveNodeAndAuthorize } from "@/app/_lib/node-rbac";
 import { createNodeProber } from "@/bootstrap/node-flight.factory";
 import { rootDomain, verifyFlightStatus } from "@/features/nodes/flight-status";
 import { serverEnv } from "@/shared/env";
@@ -47,31 +46,20 @@ export async function GET(
 
   const { id } = await ctx.params;
 
-  // Consume dev1's registry: match {id} as either the repo-spec nodeId (UUID) or the slug.
-  const summaries = await resolveNodeRegistry().listPublic();
-  const node = summaries.find((n) => n.nodeId === id || n.slug === id);
-  if (!node?.nodeId) {
-    return NextResponse.json({ error: "node_not_found" }, { status: 404 });
-  }
-
-  // Developer-gated: the SAME `node.flight` tuple as flight. Fail-closed (deny) without a store.
-  const authorization = getContainer().authorization;
-  if (!authorization) {
-    return NextResponse.json({ error: "authz_unavailable" }, { status: 503 });
-  }
-  const decision = await authorization.check({
-    actorId: `user:${sessionUser.id}`,
+  // Resolve {id} (UUID or slug) + developer-gate (`node.flight`) via the shared
+  // node-rbac seam — fail-closed without a store.
+  const gate = await resolveNodeAndAuthorize({
+    id,
+    userId: sessionUser.id,
     action: "node.flight",
-    resource: `node:${node.nodeId}`,
-    context: { tenantId: node.nodeId, nodeId: node.nodeId },
   });
-  if (decision.decision !== "allow") {
-    const code: AuthzDecisionCode = decision.code;
+  if (!gate.ok) {
     return NextResponse.json(
-      { error: code },
-      { status: code === "authz_unavailable" ? 503 : 403 }
+      { error: gate.errorCode },
+      { status: gate.status }
     );
   }
+  const node = gate.node;
 
   const slug = node.slug;
   const apex = baseDomain(serverEnv());
@@ -89,7 +77,7 @@ export async function GET(
     {
       nodeId: node.nodeId,
       slug,
-      primary: node.primary ?? slug === "operator",
+      primary: slug === "operator",
       baseDomain: rootDomain(apex),
     },
     createNodeProber()

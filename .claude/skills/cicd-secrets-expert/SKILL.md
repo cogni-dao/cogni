@@ -7,6 +7,19 @@ description: "Secrets architecture reference for node-template — when to use O
 
 One-page reference for anyone touching secrets in node-template. Read this BEFORE the spec; this points at what to actually read.
 
+## Node self-serve secrets — VERIFIED working (2026-06-19, candidate-a)
+
+A node-owner sets a secret with only an API key — **proven end-to-end on candidate-a**
+(`POST test.cognidao.org/api/v1/nodes/<id>/secrets {env, key, value}` → `200 written, version`).
+The full mental model lives in [`docs/guides/node-secret-auth-how-it-works.md`](../../../docs/guides/node-secret-auth-how-it-works.md); the canon is [`docs/design/node-self-serve-secrets.md`](../../../docs/design/node-self-serve-secrets.md). The non-obvious, hard-won facts:
+
+- **Per-env sealed operators — NO cross-env write.** Each env runs its own operator pod; the OpenBao policy (`cogni/<env>/*`, `_system`/`_shared` denied) makes a candidate-a token physically unable to write prod. The auth chain: operator pod's **projected SA token** (`audience: cogni-openbao`) → `auth/kubernetes/login` (role `<env>-node-secrets-writer`, SA `operator-secrets-writer@cogni-<env>`) → KV put/patch. No kube/SSH; caller holds only an API key.
+- **RBAC is granular: `can_manage_secrets ← secrets_manager`, NOT `developer`.** `developer → can_flight` (logs/flight); `secrets_manager` is a **distinct** grant for secret writes (both ∪ `admin`). Requesting `developer` and expecting secret-write is the trap — 403 `authz_denied` is the right answer to the wrong role.
+- **`env` is an explicit validated body param (D1, #1754)**, == the operator's own `DEPLOY_ENVIRONMENT` else `409 wrong_operator_env`. Node resolved via `resolveNodeRef` (status-agnostic) through the shared `withNodeRbac` seam (`src/app/_lib/node-rbac.ts`, #1771).
+- **Prod is NOT provisioned (`bug.5007`):** `createOperatorSecretsPlane` throws → **503** ("candidate-a only today"); the `production-node-secrets-writer` OpenBao role + operator overlay token/env-var aren't wired. Self-serve on prod fails until provisioned.
+- **`source: agent` keys are off-limits** (denylist `node-secrets-reserved.data.ts`, #1753) — they're substrate-minted per node; clobbering one breaks the node.
+- **Control-plane framing:** `OperatorSecretsPlanePort` is the secrets row of the typed operator control plane ([`cicd-platform-boundary.md`](../../../docs/spec/cicd-platform-boundary.md)) — sibling of `OperatorDeployPlanePort`; one port per substrate (Argo/OpenBao/Cherry-Akash), unified by the `(node_id, env)+OpenFGA` contract. A **node is a bundle of services** (`node → services → deployments`, [`node-baas-architecture.md`](../../../docs/spec/node-baas-architecture.md)), not one deployable.
+
 ## North star
 
 [`proj.agentic-fork-bootstrap`](../../../work/projects/proj.agentic-fork-bootstrap.md) — easy-start guide for a forking dev that uses OpenBao. Every PR is measured against the **forker's manual-command count**. If your change adds a manual step to `fork-quickstart.md`, that's debt — try a workflow first.

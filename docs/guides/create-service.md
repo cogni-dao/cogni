@@ -20,6 +20,20 @@ You are adding a new independently deployable service to the `services/` directo
 
 **Do NOT use this guide for:** Shared libraries (use `packages/`), feature code in the Next.js app (`src/features/`), or one-off scripts (`scripts/`).
 
+> **⚠️ Scope: this guide is for the OPERATOR MONOREPO only** (e.g. `scheduler-worker`,
+> a shared infra service). **It does NOT apply to a node-spawn (wizard) node.** A
+> sovereign node is its own repo with its own CI (`FORK_FREEDOM`); its services live
+> in **that node's** `services/` and are built by **that node's** image, not by editing
+> the operator's `scripts/ci/`, `infra/catalog/`, or `infra/k8s/`. Per the
+> `node → services → deployments` model in
+> [`node-baas-architecture.md`](../spec/node-baas-architecture.md): the node
+> **declares** its deployable units; the **operator wires** them per env. The §9 "Repo
+> Integration" steps below all mutate operator-monorepo files —
+> doing that for a node's service is the exact node-as-monorepo-fragment anti-pattern.
+> **Per-node custom-service deploy/scale wiring is the forward gap** named in node-baas;
+> for an ordinary node today, recurring work runs on the shared worker (no custom
+> service needed). If you're spawning a node, start from the node wizard, not here.
+
 ## Preconditions
 
 - [ ] Code meets the "When to Create a Service" criteria in [Services Architecture Spec](../spec/services-architecture.md)

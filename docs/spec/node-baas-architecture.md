@@ -58,6 +58,34 @@ The node declares **shape**. The operator provisions and connects that shape per
 
 This is the same split already used for submodule nodes: the node repo owns app, packages, base manifests, local policy, and image build; the operator owns catalog, overlays, AppSets, provisioning, flight, and promotion.
 
+### A node is a bundle, not a service — `node → services → deployments`
+
+A **node is a codebase bundle**, not a single deployable. One node repo can build
+**many independently-deployable units** — the Next.js `app/`, a Temporal worker under
+`services/`, a migrator, future co-services — each with its **own image, its own
+health, and its own scaling**. Calling a node "a service" (or assuming it _is_ the
+Next.js app) is a category error: the app is one unit the node produces.
+
+```text
+Node              codebase bundle · identity = repo-spec node_id
+  └─ 1:N  Service / deployable unit   app · worker · migrator · …   (own build + scaling)
+        └─ 1:N  Deployment = (node, service, env) cell              the thing that runs, per env
+```
+
+**The deployment unit is `(node, service, env)`, not `(node, env)`.** A node's worker
+can run 5 replicas in production while its app runs 1 — same node identity, different
+services, independent scaling. `node_id` is the join key (identity · UI · RBAC ·
+catalog projection); each **service** of that node is what actually deploys and scales.
+
+> **Today's reality + the gap.** Most nodes ship only the `app/` unit; recurring work
+> runs on the **shared** generic worker (RecurringWorkPort, below), so a node rarely
+> needs its own service yet. A node that needs a **custom, independently-scaled
+> service** (its own worker process, not the shared one) is the escape hatch — it
+> declares the unit in **its own** `services/` and the operator wires per-(node,
+> service, env) deploy + scale. That per-node-service deploy/scale wiring is **not
+> first-class yet** (the catalog models one deployable per row); it is the forward
+> work this `node → services → deployments` model names.
+
 ### Node-controlled surfaces
 
 A sovereign node must be able to change these without an operator code PR:
