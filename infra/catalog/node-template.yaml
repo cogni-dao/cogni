@@ -9,11 +9,14 @@ image_tag_suffix: "-node-template"
 migrator_tag_suffix: "-node-template-migrate"
 source_repo: https://github.com/Cogni-DAO/node-template.git
 image_repository: ghcr.io/cogni-dao/node-template
+# Accepted deploy SHA — the catalog pin that replaces the nodes/<slug> gitlink
+# (spec.node-submodule-retirement, CATALOG_SOURCE_SHA_IS_THE_DEPLOY_PIN).
+source_sha: eefab8f82bd3f3074a22b9a7263ca7db0a7a374c
 # task.0320 — per-env deploy branches (see operator.yaml).
 candidate_a_branch: deploy/candidate-a-node-template
 preview_branch: deploy/preview-node-template
 production_branch: deploy/production-node-template
 # task.5017 — per-env node-set (deploy ⊆ provisioned). Must include candidate-a (candidate-flightable); preview/production are opt-in once proven.
-envs: [candidate-a, preview]
+envs: [candidate-a, preview, production]
 path_prefix: nodes/node-template/
 node_id: b927a9dd-6132-4fc9-a51e-e3cee2568e3c
