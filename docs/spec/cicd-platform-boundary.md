@@ -171,13 +171,41 @@ The node owns the left edge (catalog row + schema + secret declaration). The ope
 
 The freeze stops the bleak. This is where the deploy brain **goes instead**: into the `.ts` operator app, as a hexagonal capability the operator (and its AI brain) own — not bash, not `workflow_dispatch`. The model is Railway: the operator declares intent and sees live state; the substrate executes. The operator already mints overlays in TypeScript (`gens/overlay.ts`) — this extends that proven seam from _birth_ to _full deploy lifecycle_. For the human-simple "how does this actually work" walkthrough — the SEE / DEPLOY / REMOVE flows, the node-page console, and the auth model (in-cluster read-only ServiceAccount + git writes, no VPS/SSH) — see [Operator-Managed Deployments](../design/operator-managed-deployments.md).
 
-**Write vs read are different homes** (this is the correction to the earlier draft of this doc):
+**One control plane, one port per substrate boundary — NOT one God-port.** The
+ports below look like four interfaces; they are one control plane expressed
+hexagonally — **one adapter boundary each** (Argo/GitHub · OpenBao · Cherry/Akash),
+because merging distinct substrates into a single interface is the actual
+anti-pattern. What makes them a _family_ and not sprawl is an **identical
+contract shape**, enforced by review, not inheritance:
 
-| Layer                 | Port                                           | Owns                                                                                                          | Status                             |
-| --------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
-| **Deploy WRITES**     | **`OperatorDeployPlanePort`** (operator-LOCAL) | `flight` + `promote` (+ later `rollback`/`scale`) — App-dispatched, RBAC-gated, with the artifact verify-gate | flight ✅ · promote (this work)    |
-| **Deploy READS**      | `DeployCapability` (`@cogni/ai-tools`)         | env/node deploy-state awareness for the brain + dashboard. **Read-only — no writes.**                         | v0 read-only                       |
-| **Compute substrate** | `ComputeResourcePort`                          | provision/release a cluster, report capacity + cost, **settle payment** (Cherry→Akash)                        | **deferred** until Akash is funded |
+> **`OPERATOR_PLANE_CONTRACT`** — every control-plane write is `(node_id, env)`-scoped,
+> resolves the node **once** via the shared registry, gates on OpenFGA `node:<id>`,
+> executes with the **operator's own** in-cluster identity, and the caller holds
+> **only an API key** (no kube/vault/compute cred). Reads (`DeployCapability`) are
+> the freely-callable CQRS half — never carry a gated write. The umbrella is this
+> shape + the operator composition root, **and** a shared `withNodeRbac(action)`
+> route helper (the node-resolve + authz gate is currently copy-pasted across the
+> secrets/logs/flight routes — that duplication is the DRY debt to retire, not the
+> port split).
+
+**Write vs read are different homes** (this corrects the earlier draft):
+
+| Layer                 | Port                                            | Substrate      | Owns                                                                                                                                                 | Status                                              |
+| --------------------- | ----------------------------------------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| **Deploy WRITES**     | **`OperatorDeployPlanePort`** (operator-LOCAL)  | Argo / GitHub  | `flight` + `promote` (+ later `rollback`/`scale`) — App-dispatched, RBAC-gated, with the artifact verify-gate                                        | flight ✅ · promote ✅                              |
+| **Secret WRITES**     | **`OperatorSecretsPlanePort`** (operator-LOCAL) | OpenBao        | node-owner `source:human` secret **values** (`writeSecret({nodeId, env, key})`) — `can_manage_secrets`-gated, env-param (D1), per-env OpenBao policy | candidate-a ✅ (proven 200) · prod 503 (`bug.5007`) |
+| **Deploy READS**      | `DeployCapability` (`@cogni/ai-tools`)          | Argo (read)    | env/node deploy-state awareness for the brain + dashboard. **Read-only — no writes.**                                                                | v0 read-only                                        |
+| **Compute substrate** | `ComputeResourcePort`                           | Cherry → Akash | provision/release a cluster, report capacity + cost, **settle payment**                                                                              | **deferred** until Akash is funded                  |
+
+`OperatorSecretsPlanePort` is the **secrets row of the same plane**: operator-local
+(a gated write, not a brain tool — like `OperatorDeployPlanePort`), env-parameterized
+(D1, mirroring `dispatchNodePromote({env})`), resolving the node via the same
+runtime registry the node UI + RBAC use (`resolveNodeRegistry`, keyed by `node_id`),
+gated by OpenFGA `node.manage_secrets`. It is the one control-plane write that cannot
+be git-declarative (a secret value can't transit git/`workflow_dispatch`), so it
+self-logins to OpenBao with the operator pod's own projected SA token rather than
+dispatching a workflow — the only mechanism difference from the deploy port.
+Design: [`node-self-serve-secrets.md`](../design/node-self-serve-secrets.md).
 
 **`OperatorDeployPlanePort`** (`nodes/operator/app/src/ports/operator-deploy-plane.port.ts`, created #1562/#1550/#1572) is **the** operator deploy control plane: operator-local _by design_, deliberately kept **out of** the shared AI-tool capabilities because deploy dispatch is a gated operator action, not a freely-callable brain tool. Both deploy writes live here — `dispatchNodeRefCandidateFlight` and `dispatchNodePromote` — App-dispatched, with `prepareNodeRefCandidateFlight`'s artifact verify-gate. It does **not** create a second control plane: it dispatches the existing `candidate-flight.yml` / `promote-and-deploy.yml` workflows. Argo stays the reconciler; git stays the deploy-state truth (Axioms 4 & 6).
 
@@ -191,6 +219,8 @@ The freeze stops the bleak. This is where the deploy brain **goes instead**: int
         ▼                                               │
    OperatorDeployPlanePort ──flight + promote──────────►│  Argo reconciles → cluster
         │  (App-dispatched, RBAC-gated WRITES)          │
+   OperatorSecretsPlanePort ─writeSecret({node,env})──► OpenBao (self-login; the one
+        │  (RBAC-gated; NOT git-declarative)             non-git-declarative write) → ESO
    DeployCapability  ──reads Argo state──────────────►  │
         ▼
    ComputeResourcePort ──provision/pay──► Cherry (Tofu)  →  Akash (crypto, decentralized)

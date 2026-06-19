@@ -258,11 +258,14 @@ single OpenFGA tuple `{user, developer, node:X}`; gate 1 checks the **exact** `n
 from the URL, so a caller authorized on X gets 403 targeting Y. The **env** axis is closed
 by deployment topology, not a tuple: each env runs its **own** operator pod against its
 **own** OpenFGA store and self-logins with its **own** `<env>-node-secrets-writer` identity
-(OpenBao policy scoped to `cogni/data/<env>/*`). The operator stamps the env from its own
-`serverEnv().APP_ENV`, never the request body, so a candidate-a caller cannot write
-preview/prod even by forging a path. And on any env with no OpenFGA store (preview/prod
-today) **every** check is `authz_unavailable` → 503 — fail-closed by default until that
-env is provisioned. Net: an unauthorized (node, env) pair never reaches the write step.
+(OpenBao policy scoped to `cogni/data/<env>/*`). _Post-D1:_ the caller now **states**
+`env` in the body, but the route 409s unless it equals the operator's own
+`DEPLOY_ENVIRONMENT`, and the OpenBao policy is env-scoped regardless — so a candidate-a
+caller still cannot write preview/prod (a wrong env is a loud 409, not a silent
+cross-write). The env axis stays closed by validation + policy, not by ignoring the
+body. On an env whose OpenFGA store is unprovisioned, the check is `authz_unavailable`
+→ 503, fail-closed (candidate-a + prod stores are live; preview to confirm). Net: an
+unauthorized (node, env) pair never reaches the write step.
 
 > **Per-node isolation is tuple-based, not token-based.** A `developer` grant on
 > node X confers `can_manage_secrets` on **X only** (OpenFGA tuple
@@ -327,6 +330,183 @@ don't assume complete Loki rotation history until it closes).
   justified **only here** — where the tool layer (a package consumed by graphs)
   actually needs it; Phase 1's REST path does not.
 
+## Phase 3 — Secrets across ALL envs (the node-BaaS requirement · `bug.5038`)
+
+**The requirement, not a workaround.** A node spawns into **all three envs**
+(candidate-a, preview, production) — that is the BaaS contract
+([`node-baas-architecture.md`](../spec/node-baas-architecture.md): _"node declares
+shape; operator wires environment"_, where _environment_ = every env). A node
+developer holding **only an API key** must be able to set/rotate a `source: human`
+secret value for their node on **any** of those envs, with zero kube. **Production
+is never a testing ground** — a node's test envs are first-class, and the dev needs
+to put a _test_ X-OAuth app's creds on candidate-a/preview and a _separate prod_
+app's creds on production. Per-env values are the point, not a limitation.
+
+This is the **Secrets row of the BaaS Substrate Map** (_node declares key names +
+consumers; operator provides OpenBao values, ESO manifests, **rotation path**_) and
+the gap is real and observed: the first prod node launch (beacon, 2026-06-16)
+proved the **control plane** works but the **substrate lane** (DB + edge + secrets)
+"needed manual intervention — nothing self-healed" (node-wizard-expert
+substrate-gaps table; _"No LLM backend → provision the node's secret"_ is exactly a
+`source: human` cross-env secret with no self-serve supply path).
+
+**Why it's blocked today — two facts, both fixable:**
+
+1. **The write primitive is per-env (correct) but only reachable where the node's
+   identity + grant exist.** #1627's route stamps env from the operator's own
+   `DEPLOY_ENVIRONMENT` (right — closes env-injection) and checks **that env's**
+   OpenFGA store + `nodes` registry. The OpenFGA store is substrate on **every** env
+   (`openfga-substrate-unification.md`: one `cogni-<env>-rbac` store per env; prod
+   live 2026-06-14) — so the store is _not_ missing. What's missing is the node's
+   **registry row + owner `can_manage_secrets` tuple in each env**.
+2. **Node formation does not fan identity + authz across envs.** It wires (or should
+   wire) DB, DNS, edge, and `source: agent` secrets per env — but the node's
+   **registry row and the owner's OpenFGA grant are not provisioned into every
+   env's store**. So self-serve is reachable only where formation happened to land
+   them, and a dev hits a `403`/`404` (or the old kube fallback) everywhere else.
+
+### The RIGHT plan — formation fans the grant per env; keep per-env isolation
+
+> **Converged via three independent adversarial reviews (2026-06-18).** An earlier
+> draft of this section proposed a global control-plane operator + an
+> operator→operator mTLS delegated write. **All three reviewers rejected it** and
+> they converged: (security) the mTLS "target trusts control-plane, can't re-check"
+> delegation **is** the skeleton key this doc claims to reject — one service-cred
+> leak = total cross-env compromise, plus a confused-deputy; (consistency) it
+> contradicts Phase 1's env-axis-closed-by-topology floor and is **spec-blocked** by
+> `openfga-substrate-unification.md`'s "one store per env, permanently"; (simplicity)
+> it is a project-sized re-platforming where **one PR** suffices. The plan below is
+> their converged answer.
+
+Three planes, scoped correctly — but reached cheaply, **without** centralizing
+identity:
+
+| Plane                                            | Right scope                          | How it's reached                                                                         |
+| ------------------------------------------------ | ------------------------------------ | ---------------------------------------------------------------------------------------- |
+| **Identity** (API key + principal)               | _logically_ one dev relationship     | keep per-env identity infra; the operator **brokers/custodies** per-env creds (deferred) |
+| **Authorization** (write key K on node Y, env E) | **per-(node, env)** — already is     | one OpenFGA tuple in **that env's own** store; prod grant gated on promotion             |
+| **Data** (the value bytes)                       | **per-env** (`cogni/<env>/<node>/*`) | the shipped route, env a **validated body param** (D1) == the operator's own env         |
+
+> **Architect correction (2026-06-18, Derek).** Do **not** create a separate node
+> registration per env. **A node is registered ONCE — in the (prod/control-plane)
+> operator — and that record is _env-aware_:** it knows which envs the node is
+> deployed in, exactly as the deploy-port / node-awareness layer already tracks a
+> node's per-env deploy state ("node X: candidate-a ✓, preview ✓, production —").
+> Per-env `nodes` rows are incidental current state, **not** the target. The earlier
+> "fan a registration into each env" framing is retracted.
+
+**Foundation: ONE env-aware node record + ONE grant; per-env value writes
+authorized against it.** Three layers, scoped to match Derek's correction:
+
+1. **Node identity & awareness = singular + env-aware** (the deploy-port / node
+   model). One `nodes` record in the control-plane operator; "which envs is it in"
+   is an attribute of that record (derived from deploy state), never a second
+   registration. _This is the real foundation, and it replaces "register per env."_
+2. **Authorization = granted once on that node record.** The owner gets
+   `can_manage_secrets` on node X one time. Env-scoping for **safety** is a separate,
+   deliberate gate (below) — not a separate registration.
+3. **Secret VALUE = per-env, written into that env's own vault.** The value never
+   becomes a single super-operator's to push everywhere (that was the rejected
+   skeleton key). The cross-env step carries only a **narrowly-scoped, signed,
+   single-use, target-verified capability to write exactly `(node, env, key)`** — the
+   target env validates the signature + its own `APP_ENV` + TTL + replay-nonce before
+   writing its OpenBao (the security review's required shape; "verify the claim," not
+   "trust the channel"). A leaked cred can write nothing beyond its one named tuple.
+
+- `source: agent` keys: still operator-generated per env by `secret-materialize`
+  (no dev; clobber-protected since #1753).
+- `source: human` keys: the dev sets the value once, env-targeted; it lands in that
+  env's vault. Distinct values per env (test X-app vs prod X-app) are the point.
+
+**Test↔prod isolation stays hard:** the **production** secret-write is a separate,
+deliberate grant (mirror `production_promoter`); a test grant can never authorize a
+prod write, and a `source: human` prod value is never auto-asserted from test-env
+code.
+
+**Honest size (correcting my "~1 PR" claim):** Derek's correction makes this a small
+**project, not one PR**. It needs (a) the env-aware single node model in the
+operator's node-awareness layer, (b) one identity that the per-env write path can
+trust, and (c) the scoped/signed cross-env write. The simplicity review preferred a
+1-PR per-env fan-out, but that path **is** "register/grant per env," which the
+architect rejected — so we take the larger, correct shape.
+
+**Deliverables (sequenced):**
+
+1. **Env-aware node model** — the operator's node-awareness (deploy-port layer)
+   exposes, for the single `nodes` record, which envs the node is deployed in. One
+   registration, env-presence as an attribute. _The foundation; Derek's correction._
+2. **One grant, prod-gated** — `can_manage_secrets` granted once on the node record;
+   the **production** secret-write is a separate deliberate grant (mirror
+   `production_promoter`), so test authz can never reach prod.
+3. **Scoped, signed cross-env write** — env-targeted `writeSecret`, where the value
+   lands in the target env's own vault via a single-use, signed, target-verified
+   `(node, env, key)` capability (verify the claim, not trust the channel). Reuses
+   the shipped #1627 per-env write as the executor.
+4. **Guide** — `source: human` secrets are set through this path, env-targeted;
+   `source: agent` keys are auto-generated per env, never hand-set.
+5. **(Deferred, triggered)** smooth the dev to a single login (operator key-broker /
+   audience-scoped tokens — discard per-env _keys_, keep per-env _credential scope_).
+
+**Rejected (with the reviews' teeth):**
+
+- **A second node registration per env.** _Architect-rejected._ One env-aware record;
+  per-env `nodes` rows are incidental state, not the model.
+- **Blind operator→operator mTLS delegated write** (target trusts the channel, can't
+  re-check). The skeleton key — one leaked service cred writes any env's secrets.
+  Replaced by the scoped/signed/target-verified capability in deliverable 3.
+- **Production as a node's test env** ("no users yet"). Every node gets first-class
+  test envs; conflating them violates the BaaS contract and trains prod-is-staging.
+- **Per-secret kube CLI** as the standard path — the day-2 admin escape hatch only.
+
+### Port alignment — secrets is a sibling of the deploy + observability planes
+
+The shape is already established by the operator's existing primitives. Every
+node-scoped, env-targeted operator action follows **one pattern**, and secrets is
+the lone outlier that breaks it:
+
+| Operator action                      | Port / surface                                             | Node resolved                                                  | Env                               | Authz (on `node:<id>`)                      | Dev holds                          |
+| ------------------------------------ | ---------------------------------------------------------- | -------------------------------------------------------------- | --------------------------------- | ------------------------------------------- | ---------------------------------- |
+| Deploy **read** (state)              | `DeployCapability.getDeployState({env, node})`             | once                                                           | **param**                         | —                                           | nothing                            |
+| Deploy **write** (promote)           | `OperatorDeployPlanePort.dispatchNodePromote({env, slug})` | once                                                           | **param**                         | `node.promote_*` (prod is a distinct grant) | nothing                            |
+| Observability **read** (logs, #1766) | `…/observability/logs?env=` → Loki reader                  | once (`resolveNodeRegistry().listPublic()`, by id **or** slug) | **param** (`FLIGHT_ENVS`)         | `node.flight`                               | nothing (operator holds the token) |
+| **Secrets write** (#1627 today)      | `OperatorSecretsPlanePort.writeSecret(...)`                | once (direct `nodes` select)                                   | **stamped from `serverEnv()` ❌** | `node.manage_secrets`                       | nothing                            |
+
+**The fix is to make secrets obey the same pattern** — that _is_ the alignment
+Derek asked for:
+
+1. **`env` becomes a parameter, not a stamp.** `writeSecret({ nodeId, env, key,
+value, op })`, `env` validated against the shared **`FLIGHT_ENVS`** enum — exactly
+   like `dispatchNodePromote({ env })` and the logs proxy's `?env=`. This is the one
+   change that turns secrets from "only my own env" into "any env, like its siblings."
+2. **One env-aware node identity, reused — not a new registration.** The route
+   resolves the node through the **same `resolveNodeRegistry()` resolver the logs
+   proxy uses** (by id **or** slug), so it inherits #1766's published-node fix and
+   Derek's "one record" invariant for free. Today #1627 does a direct `nodes` select —
+   **migrate it onto the registry port.** "Which envs is the node in" is **not** a new
+   field to denormalize: compose **`DeployCapability.getDeployState({env, node})`** —
+   the existing env-aware read — to confirm the `(node, env)` cell is live before a
+   write. Identity (registry) × env-presence (deploy state) = the env-aware node model,
+   built from two primitives that already exist.
+3. **Prod is a distinct grant, mirroring deploy.** Deploy already splits
+   `node.promote_production` from ordinary flight (a separate `production_promoter`
+   tuple). Secrets mirrors it: a **`node.manage_secrets_production`** scope distinct
+   from the test/preview grant, so the prod write is a deliberate, separately-approved
+   capability — the test↔prod isolation, expressed the way the deploy port already
+   expresses it.
+4. **The write executor is adapter-swappable** (like `DeployCapability`, whose
+   interface "never names a provider"). For the operator's own env: the shipped #1627
+   direct OpenBao write. For a remote env: the **scoped/signed/target-verified
+   `(node, env, key)` capability** (the security review's safe shape). The port
+   interface is identical either way — the adapter owns _how_ the value reaches env
+   E's vault. **No skeleton key in the interface**; the cross-env delivery is one
+   swappable adapter, fail-closed until built.
+
+**Net:** secrets stops being a special case and becomes the **secrets row** of the
+same typed, node-scoped, env-parameterized operator control plane that deploy and
+observability already are — `cicd-platform-boundary.md`'s Railway model, realized.
+The only secrets-specific part is the value-delivery adapter (4); everything else is
+the established pattern.
+
 ## Non-goals
 
 - A generic secret-management UI (the wizard doc's non-goal still holds).
@@ -342,6 +522,18 @@ don't assume complete Loki rotation history until it closes).
       even `openbao-operator` today — `bug.5007`). Candidate-a first.
 - [ ] Confirm `audience: cogni-openbao` matches OpenBao's `bound_audiences` on the
       k8s auth backend before wiring the projected token.
+- [ ] **`bug.5038` D1 — env param:** migrate the #1627 secrets route off the direct
+      `nodes` select onto `resolveNodeRegistry()` and accept `env` as a `FLIGHT_ENVS`
+      parameter (drop the `serverEnv()` stamp). Verify against the logs-proxy shape.
+- [ ] **D3 — prod scope:** add `node.manage_secrets_production` to the OpenFGA model
+      as a distinct grant (mirror `production_promoter`); confirm a test grant returns
+      `authz_denied` for an `env=production` write.
+- [ ] **D4 — cross-env adapter:** design the scoped/signed/target-verified
+      `(node, env, key)` write capability (security review's required shape); operator's
+      own env uses the shipped direct write. Fail-closed until built.
+- [ ] **Env-aware identity:** confirm one global dev identity the per-env write path
+      can trust (audience-scoped child tokens vs. operator key-broker) — the deferred
+      single-relationship UX, not a D1 blocker.
 - [x] Allowlist source resolved: A2 entries live in `infra/secrets-catalog.yaml`
       (per-node `.cogni/*.yaml` empty today) **and** the operator runtime image carries
       neither that file nor the loader — so gate 2 reads a **build-time-generated typed
