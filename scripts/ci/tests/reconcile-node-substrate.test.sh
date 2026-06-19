@@ -250,6 +250,14 @@ grep -qE -- '--profile bootstrap run --rm .* db-provision' "$REMOTE_ROOT/docker.
 # not silently skipped → no node-app Init:CrashLoopBackOff).
 grep -qE -- '--profile bootstrap run --rm -e COGNI_NODE_DBS=cogni_operator -e DOLTGRES_PASSWORD=.* doltgres-provision' "$REMOTE_ROOT/docker.log"
 
+# Born-observable (bug.5041): the Alloy node-label config is staged to the VM and
+# the shared hash-gated restart helper runs — on EVERY substrate-readiness pass,
+# so an app-only promote (skip_infra) re-pushes it. First run = changed = restart.
+test -f "$REMOTE_ROOT/opt/cogni-template-runtime/configs/alloy-config.metrics.alloy" \
+  || { echo "alloy node-label config not staged to the VM runtime configs dir" >&2; exit 1; }
+grep -q 'restart alloy' "$REMOTE_ROOT/docker.log" \
+  || { echo "alloy not restarted after config change (born-observable Gap 1)" >&2; exit 1; }
+
 # Per-node DB passwords + the doltgres superuser transit the VM-local SSH/docker env
 # (by design), but must NEVER reach CI stdout. The db-reader token must not leak either.
 if grep -q 'sk-or-existing\|pernode-app-pw-sentinel\|pernode-svc-pw-sentinel\|doltgres-super-sentinel\|dolt-token\|writer-token' "$TMPROOT/out.txt"; then

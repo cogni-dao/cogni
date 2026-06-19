@@ -332,6 +332,18 @@ mark_row caddyfile updated "rendered + staged Caddyfile route for ${node_host}"
 # start-if-down + hash-gated force-recreate. Staged here, invoked in the heredoc.
 copy_to_remote "$REPO_ROOT/scripts/ci/reconcile-edge-caddy.remote.sh" "/tmp/reconcile-edge-caddy.remote.sh"
 
+# Born-observable: re-push the Alloy runtime config (the nodeId→`node` Loki
+# stream-label promotion, task.5028) + the shared hash-gated restart helper, so
+# the node-log proxy's forced {node="<id>"} selector resolves on EVERY env. The
+# promote pipeline runs deploy-infra (which already does this) only when
+# skip_infra=false, so an app-only promote never re-pushed it; folding the same
+# rsync + checksum-restart primitive into this always-on substrate-readiness lane
+# (Axiom 22) closes that gap with no new workflow / bespoke script (bug.5041).
+# Idempotent: the hash-gate makes an unchanged config a no-op, and N per-node
+# invocations of one env-global config collapse to one push + restart.
+copy_to_remote "$REPO_ROOT/infra/compose/runtime/configs/alloy-config.metrics.alloy" "/tmp/alloy-config.metrics.alloy"
+copy_to_remote "$REPO_ROOT/scripts/ci/reconcile-alloy-config.remote.sh" "/tmp/reconcile-alloy-config.remote.sh"
+
 CURRENT_ROW="remote_reconcile"
 remote "set -euo pipefail
   edge_env=/opt/cogni-template-edge/.env
@@ -377,6 +389,17 @@ remote "set -euo pipefail
   EDGE_ENV_FILE=\"\$edge_env\" \\
   HASH_DIR=/var/lib/cogni \\
     bash /tmp/reconcile-edge-caddy.remote.sh >/dev/null
+
+  # Alloy node-label reconcile — stage the fresh config (rsync's restart-on-change
+  # half) then the SAME hash-gated restart deploy-infra runs. Born-observable on
+  # the normal flow even when deploy-infra is skipped (bug.5041). Idempotent.
+  mkdir -p /opt/cogni-template-runtime/configs
+  mv /tmp/alloy-config.metrics.alloy /opt/cogni-template-runtime/configs/alloy-config.metrics.alloy
+  RUNTIME_COMPOSE_BIN=\"docker compose --project-name cogni-runtime --env-file \$runtime_env -f /opt/cogni-template-runtime/docker-compose.yml\" \\
+  ALLOY_CONFIG=/opt/cogni-template-runtime/configs/alloy-config.metrics.alloy \\
+  HASH_DIR=/var/lib/cogni \\
+    bash /tmp/reconcile-alloy-config.remote.sh >/dev/null
+
   \"\${runtime_compose[@]}\" up -d postgres >/dev/null
   # Single-node db-provision: override COGNI_NODE_DBS to THIS node and inject its
   # per-node OpenBao passwords (read above) via -e, so provision.sh reconciles the
