@@ -453,18 +453,56 @@ architect rejected — so we take the larger, correct shape.
   Replaced by the scoped/signed/target-verified capability in deliverable 3.
 - **Production as a node's test env** ("no users yet"). Every node gets first-class
   test envs; conflating them violates the BaaS contract and trains prod-is-staging.
-- **Production as a node's test env** ("no users yet"). Every node gets first-class
-  test envs; conflating them violates the BaaS contract and trains prod-is-staging.
 - **Per-secret kube CLI** as the standard path — the day-2 admin escape hatch only.
 
-> **Deploy-port relation (corrected — it is a _non_-precedent for live custody).**
-> The deploy port reaches other envs **declaratively** (git → Argo; _"look but not
-> touch"_). Secret _values_ cannot ride that rail (no plaintext in git/dispatch), so
-> they are the deliberate **exception**, not a sibling that gets "the same cross-env
-> targeting." This plan therefore does **not** build a cross-env secret channel at
-> all — it keeps writes per-env and fans only the _grant_ (which is git/CI-safe). The
-> control-plane convergence the deploy port is heading toward (`cicd-platform-boundary.md`)
-> remains valid for read/git-declarative surfaces; secrets stay per-env by design.
+### Port alignment — secrets is a sibling of the deploy + observability planes
+
+The shape is already established by the operator's existing primitives. Every
+node-scoped, env-targeted operator action follows **one pattern**, and secrets is
+the lone outlier that breaks it:
+
+| Operator action                      | Port / surface                                             | Node resolved                                                  | Env                               | Authz (on `node:<id>`)                      | Dev holds                          |
+| ------------------------------------ | ---------------------------------------------------------- | -------------------------------------------------------------- | --------------------------------- | ------------------------------------------- | ---------------------------------- |
+| Deploy **read** (state)              | `DeployCapability.getDeployState({env, node})`             | once                                                           | **param**                         | —                                           | nothing                            |
+| Deploy **write** (promote)           | `OperatorDeployPlanePort.dispatchNodePromote({env, slug})` | once                                                           | **param**                         | `node.promote_*` (prod is a distinct grant) | nothing                            |
+| Observability **read** (logs, #1766) | `…/observability/logs?env=` → Loki reader                  | once (`resolveNodeRegistry().listPublic()`, by id **or** slug) | **param** (`FLIGHT_ENVS`)         | `node.flight`                               | nothing (operator holds the token) |
+| **Secrets write** (#1627 today)      | `OperatorSecretsPlanePort.writeSecret(...)`                | once (direct `nodes` select)                                   | **stamped from `serverEnv()` ❌** | `node.manage_secrets`                       | nothing                            |
+
+**The fix is to make secrets obey the same pattern** — that _is_ the alignment
+Derek asked for:
+
+1. **`env` becomes a parameter, not a stamp.** `writeSecret({ nodeId, env, key,
+value, op })`, `env` validated against the shared **`FLIGHT_ENVS`** enum — exactly
+   like `dispatchNodePromote({ env })` and the logs proxy's `?env=`. This is the one
+   change that turns secrets from "only my own env" into "any env, like its siblings."
+2. **One env-aware node identity, reused — not a new registration.** The route
+   resolves the node through the **same `resolveNodeRegistry()` resolver the logs
+   proxy uses** (by id **or** slug), so it inherits #1766's published-node fix and
+   Derek's "one record" invariant for free. Today #1627 does a direct `nodes` select —
+   **migrate it onto the registry port.** "Which envs is the node in" is **not** a new
+   field to denormalize: compose **`DeployCapability.getDeployState({env, node})`** —
+   the existing env-aware read — to confirm the `(node, env)` cell is live before a
+   write. Identity (registry) × env-presence (deploy state) = the env-aware node model,
+   built from two primitives that already exist.
+3. **Prod is a distinct grant, mirroring deploy.** Deploy already splits
+   `node.promote_production` from ordinary flight (a separate `production_promoter`
+   tuple). Secrets mirrors it: a **`node.manage_secrets_production`** scope distinct
+   from the test/preview grant, so the prod write is a deliberate, separately-approved
+   capability — the test↔prod isolation, expressed the way the deploy port already
+   expresses it.
+4. **The write executor is adapter-swappable** (like `DeployCapability`, whose
+   interface "never names a provider"). For the operator's own env: the shipped #1627
+   direct OpenBao write. For a remote env: the **scoped/signed/target-verified
+   `(node, env, key)` capability** (the security review's safe shape). The port
+   interface is identical either way — the adapter owns _how_ the value reaches env
+   E's vault. **No skeleton key in the interface**; the cross-env delivery is one
+   swappable adapter, fail-closed until built.
+
+**Net:** secrets stops being a special case and becomes the **secrets row** of the
+same typed, node-scoped, env-parameterized operator control plane that deploy and
+observability already are — `cicd-platform-boundary.md`'s Railway model, realized.
+The only secrets-specific part is the value-delivery adapter (4); everything else is
+the established pattern.
 
 ## Non-goals
 
@@ -481,12 +519,18 @@ architect rejected — so we take the larger, correct shape.
       even `openbao-operator` today — `bug.5007`). Candidate-a first.
 - [ ] Confirm `audience: cogni-openbao` matches OpenBao's `bound_audiences` on the
       k8s auth backend before wiring the projected token.
-- [ ] **Phase 3a (`bug.5038`):** confirm an external agent can register a node +
-      receive a grant on a test-env operator API-only (no kube), and that a
-      candidate-a reprovision preserves the node row + grant (else prefer preview).
-- [ ] **Phase 3b trigger:** define when per-env operation becomes painful enough to
-      build the `targetEnv` + operator-mesh delegation (e.g. ≥2 external nodes, or a
-      dev manages ≥3 envs). Until then, 3a holds.
+- [ ] **`bug.5038` D1 — env param:** migrate the #1627 secrets route off the direct
+      `nodes` select onto `resolveNodeRegistry()` and accept `env` as a `FLIGHT_ENVS`
+      parameter (drop the `serverEnv()` stamp). Verify against the logs-proxy shape.
+- [ ] **D3 — prod scope:** add `node.manage_secrets_production` to the OpenFGA model
+      as a distinct grant (mirror `production_promoter`); confirm a test grant returns
+      `authz_denied` for an `env=production` write.
+- [ ] **D4 — cross-env adapter:** design the scoped/signed/target-verified
+      `(node, env, key)` write capability (security review's required shape); operator's
+      own env uses the shipped direct write. Fail-closed until built.
+- [ ] **Env-aware identity:** confirm one global dev identity the per-env write path
+      can trust (audience-scoped child tokens vs. operator key-broker) — the deferred
+      single-relationship UX, not a D1 blocker.
 - [x] Allowlist source resolved: A2 entries live in `infra/secrets-catalog.yaml`
       (per-node `.cogni/*.yaml` empty today) **and** the operator runtime image carries
       neither that file nor the loader — so gate 2 reads a **build-time-generated typed
