@@ -15,6 +15,7 @@
 import type { ToolSourcePort } from "@cogni/ai-core";
 import type {
   ComputeResourcePort,
+  DeployCapability,
   EdoCapability,
   KnowledgeCapability,
   MetricsCapability,
@@ -135,6 +136,7 @@ import {
 import { createToolBindings } from "@/bootstrap/ai/tool-bindings";
 import { createBoundToolSource } from "@/bootstrap/ai/tool-source.factory";
 import { createComputeCapability } from "@/bootstrap/capabilities/compute";
+import { createDeployCapability } from "@/bootstrap/capabilities/deploy";
 import {
   createMetricsCapability,
   derivePrometheusQueryUrl,
@@ -243,6 +245,8 @@ export interface Container {
   repoCapability: RepoCapability;
   /** VCS capability for GitHub operations - requires GH_REVIEW_APP_ID */
   vcsCapability: VcsCapability;
+  /** Read-only deploy capability (SEE flow) — undefined when no base domain is configured */
+  deployCapability: DeployCapability | undefined;
   /** Tool source with real implementations for AI tool execution */
   toolSource: ToolSourcePort;
   /** External-agent knowledge contribution service — undefined when DOLTGRES_URL is unset */
@@ -631,6 +635,9 @@ function createContainer(): Container {
   // VcsCapability for AI tools (requires GH_REVIEW_APP_ID)
   const vcsCapability = createVcsCapability(env);
 
+  // DeployCapability (read-only SEE flow) — probe-backed v0; undefined when no base domain.
+  const deployCapability = createDeployCapability(env);
+
   // KnowledgeCapability + EdoCapability for AI tools (require DOLTGRES_URL)
   let knowledgeCapability: KnowledgeCapability;
   let edoCapability: EdoCapability;
@@ -911,6 +918,7 @@ function createContainer(): Container {
     webSearchCapability,
     repoCapability,
     vcsCapability,
+    deployCapability,
     toolSource,
     knowledgeContributionService,
     knowledgeStorePort,

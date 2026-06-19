@@ -10,6 +10,7 @@
  * @public
  */
 
+import type { NodeDeployState } from "@cogni/ai-tools";
 import { withTenantScope } from "@cogni/db-client";
 import { type UserId, userActor } from "@cogni/ids";
 import { getDaoUrl } from "@cogni/node-shared";
@@ -18,10 +19,16 @@ import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import type { ReactElement } from "react";
-import { resolveAppDb, resolveServiceDb } from "@/bootstrap/container";
+import {
+  getContainer,
+  resolveAppDb,
+  resolveServiceDb,
+} from "@/bootstrap/container";
 import { PageContainer } from "@/components";
 import { NodeAccess } from "@/features/nodes/access/NodeAccess";
 import { listAccessRequests } from "@/features/nodes/access-requests";
+import { NodeDeployments } from "@/features/nodes/deployments/NodeDeployments";
+import { FLIGHT_ENVS } from "@/features/nodes/flight-status";
 import { nodeRepoUrlForSlug } from "@/features/nodes/launch-pack";
 import { NodeWizard } from "@/features/nodes/wizard/NodeWizard.client";
 import { getServerSessionUser } from "@/lib/auth/server";
@@ -93,6 +100,22 @@ export default async function NodeDashboardPage({
     ? await listAccessRequests(resolveServiceDb(), node.id)
     : [];
 
+  // SEE flow: read which envs this node is live in. Probe-backed (public surface), so only fetch once
+  // the node is published — earlier statuses serve nowhere. Degrade to null if the capability is
+  // unwired (no base domain) so the page never breaks.
+  const deployCapability = getContainer().deployCapability;
+  const deployEnvs: NodeDeployState[] | null =
+    showDevelopers && deployCapability
+      ? await Promise.all(
+          FLIGHT_ENVS.map((deployEnv) =>
+            deployCapability.getDeployState({
+              env: deployEnv,
+              node: node.slug,
+            })
+          )
+        )
+      : null;
+
   return (
     <PageContainer maxWidth="3xl">
       <Link
@@ -120,6 +143,8 @@ export default async function NodeDashboardPage({
           daoUrl,
         }}
       />
+
+      {deployEnvs ? <NodeDeployments envs={deployEnvs} /> : null}
 
       {showDevelopers ? (
         <NodeAccess nodeId={node.id} requests={accessRequests} />

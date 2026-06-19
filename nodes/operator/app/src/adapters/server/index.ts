@@ -90,6 +90,10 @@ export {
   type TokenRefreshFn,
 } from "./connections/drizzle-broker.adapter";
 export { type Database, getAppDb } from "./db/client";
+export {
+  ProbeDeployAdapter,
+  type ProbeDeployConfig,
+} from "./deploy/probe-deploy.adapter";
 export { DrizzleGovernanceStatusAdapter } from "./governance/drizzle-governance-status.adapter";
 export {
   ALCHEMY_ADAPTER_VERSION,

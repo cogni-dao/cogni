@@ -26,47 +26,17 @@ import type {
   RunCarriesResult,
 } from "@/ports";
 
-/** The three deploy envs a node flights through. Mirrors RENDER_ENVS (node-app-scaffold/gens/appset.ts). */
-export const FLIGHT_ENVS: readonly FlightEnv[] = [
-  "candidate-a",
-  "preview",
-  "production",
-];
+// Host-derivation + the deploy-env set live in `shared` (layer-neutral) so the deploy adapter +
+// bootstrap factory — which cannot import `features` — share one source of truth. Re-exported here so
+// every existing flight-status consumer keeps its import path.
+export {
+  FLIGHT_ENVS,
+  hostForEnv,
+  isFlightEnv,
+  rootDomain,
+} from "@/shared/node-registry/deploy-hosts";
 
-/** Canonical guard for the deploy-env set — reuse instead of re-deriving a local env list. */
-export function isFlightEnv(v: string | null): v is FlightEnv {
-  return v !== null && (FLIGHT_ENVS as readonly string[]).includes(v);
-}
-
-/** candidate-a serves at `<host>-test`, preview at `<host>-preview`, production bare. */
-const ENV_SUBDOMAIN: Record<FlightEnv, string> = {
-  "candidate-a": "test",
-  preview: "preview",
-  production: "",
-};
-
-/**
- * Derive the public host a node serves at, per env. Primary node (operator) serves the env apex
- * (test./preview./bare); others prefix the slug (`<slug>-test.<base>`, prod `<slug>.<base>`).
- */
-export function hostForEnv(
-  slug: string,
-  primary: boolean,
-  env: FlightEnv,
-  baseDomain: string
-): string {
-  const sub = ENV_SUBDOMAIN[env];
-  if (primary) return sub ? `${sub}.${baseDomain}` : baseDomain;
-  return sub ? `${slug}-${sub}.${baseDomain}` : `${slug}.${baseDomain}`;
-}
-
-/**
- * The verifier probes ALL envs (test./preview./bare), so it needs the ROOT zone, not the operator's
- * own env apex. Strip a leading env subdomain: `test.cognidao.org` / `preview.cognidao.org` → `cognidao.org`.
- */
-export function rootDomain(apex: string): string {
-  return apex.replace(/^(test|preview)\./, "");
-}
+import { FLIGHT_ENVS, hostForEnv } from "@/shared/node-registry/deploy-hosts";
 
 /**
  * Verify a node's flight status across all envs. Pure orchestration: derive hosts, run the ordered

@@ -96,16 +96,22 @@ So the only _new_ grant is a **read-only k8s ServiceAccount token** mounted into
 
 ## What exists vs what's next (honest)
 
-| Piece                                              | State                                                       |
-| -------------------------------------------------- | ----------------------------------------------------------- |
-| `DeployCapability` interface (read-only v0)        | ✅ shipped (`packages/ai-tools/src/capabilities/deploy.ts`) |
-| `ArgoDeployAdapter` (reads Argo via in-cluster SA) | ❌ next PR — the only real work for the SEE flow            |
-| Read-only k8s ServiceAccount + RBAC manifest       | ❌ next PR (1 file)                                         |
-| `<NodeDeployments>` section on `node/[id]`         | ❌ next PR — mirrors the existing `<NodeAccess>` section    |
-| `OperatorDeployPlanePort` write verbs + authz      | flight ✅ · promote ✅ (RBAC-gated) · remove ⏳ Phase 1     |
-| `ComputeResourcePort` (Cherry→Akash, crypto-pay)   | ⏳ deferred until Akash funded                              |
+| Piece                                              | State                                                                                                              |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `DeployCapability` interface (read-only v0)        | ✅ shipped (`packages/ai-tools/src/capabilities/deploy.ts`)                                                        |
+| `ProbeDeployAdapter` (v0 SEE flow, public probes)  | ✅ shipped — `serving` probe per env ⇒ live/not-live + `buildSha`; no k8s SA needed (`src/adapters/server/deploy`) |
+| `GET /api/v1/nodes/[id]/deploy-state`              | ✅ shipped — developer-RBAC'd (`node.flight`) per-env read                                                         |
+| `<NodeDeployments>` section on `node/[id]`         | ✅ shipped — mirrors the existing `<NodeAccess>` section                                                           |
+| `ArgoDeployAdapter` (reads Argo via in-cluster SA) | ⏳ enrichment follow-up — adds `sourceSha`/`digest`/true replica counts behind the same interface                  |
+| Read-only k8s ServiceAccount + RBAC manifest       | ⏳ follow-up (only needed once the Argo adapter lands)                                                             |
+| `OperatorDeployPlanePort` write verbs + authz      | flight ✅ · promote ✅ (RBAC-gated) · remove ⏳ Phase 1                                                            |
+| `ComputeResourcePort` (Cherry→Akash, crypto-pay)   | ⏳ deferred until Akash funded                                                                                     |
 
-**Smallest next PR = the SEE flow**: ServiceAccount + `ArgoDeployAdapter` + the read-only panel on `node/[id]`. That is the first thing actually _visible_ on candidate-a — the operator app showing, in its own UI, which envs a node is deployed to.
+**SEE flow shipped (probe-backed v0)**: the operator app now shows, in its own UI, which envs a node
+is live in (`candidate-a ✓ / preview ✓ / production ✗`), reading each env's PUBLIC surface — no
+in-cluster k8s ServiceAccount required. A wizard-test junk node (live nowhere) is visibly distinct
+from a real one. The richer `ArgoDeployAdapter` (sourceSha/digest/replicas, in-cluster SA) swaps in
+behind the same `DeployCapability` interface as an enrichment follow-up.
 
 ## Related
 
