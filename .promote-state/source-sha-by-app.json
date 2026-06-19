@@ -5,5 +5,6 @@
   "oss": "c38dd01be51e10eca77c2acc9854a7c17378dc06",
   "blue": "ed418bbb26ec7b12c032626cb715d75f085eefc2",
   "red": "6c3e1116a1140b48b6811df064cedb6da398b307",
-  "habitat": "8cb4f16e6a6757bf45fb50b25896c5ca2fee91c3"
+  "habitat": "8cb4f16e6a6757bf45fb50b25896c5ca2fee91c3",
+  "node-template": "eefab8f82bd3f3074a22b9a7263ca7db0a7a374c"
 }
