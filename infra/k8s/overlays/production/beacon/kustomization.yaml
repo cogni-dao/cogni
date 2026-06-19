@@ -13,7 +13,7 @@ namePrefix: beacon-
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/beacon
-    digest: "sha256:548cfd07e470b1fbed7dc83c91f823f1451811412470e69d0102ab0b64bb5dab"
+    digest: "sha256:b9cd1661d96bbce7d6500dcc89904083fcb4443da214f85c8eb735109d7827b7"
 
 patches:
   - target:
@@ -23,6 +23,11 @@ patches:
       - op: replace
         path: /data/NODE_NAME
         value: "beacon"
+      # Per-env runtime env-name the app stamps onto OpenBao paths + observability
+      # labels (metrics/logger read DEPLOY_ENVIRONMENT; absent → silent "local").
+      - op: add
+        path: /data/DEPLOY_ENVIRONMENT
+        value: "production"
       - op: replace
         path: /data/TEMPORAL_NAMESPACE
         value: "cogni-production"
