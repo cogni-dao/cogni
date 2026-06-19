@@ -75,6 +75,12 @@ export {
   type LangfuseAdapterConfig,
   type LangfuseSpanHandle,
 } from "./ai-telemetry/langfuse.adapter";
+export {
+  CherryComputeAdapter,
+  type CherryComputeAdapterConfig,
+  CherryComputeError,
+  type CherryComputeErrorCode,
+} from "./compute/cherry-compute.adapter";
 // Connection broker adapter
 export {
   ConnectionDecryptionError,
@@ -93,12 +99,6 @@ export {
   GITHUB_ADAPTER_VERSION,
   GitHubWebhookNormalizer,
 } from "./ingestion/github-webhook";
-export {
-  type CherryComputeAdapterConfig,
-  CherryComputeAdapter,
-  CherryComputeError,
-  type CherryComputeErrorCode,
-} from "./compute/cherry-compute.adapter";
 export {
   type MimirAdapterConfig,
   MimirMetricsAdapter,

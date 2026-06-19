@@ -28,9 +28,9 @@ describe("CherryComputeAdapter", () => {
   it("maps a team's account credit to a provider-agnostic ComputeBalance", async () => {
     const fetchImpl = vi.fn<typeof fetch>(async (url, init) => {
       expect(String(url)).toBe(`${BASE}/teams`);
-      expect(
-        (init?.headers as Record<string, string>).Authorization
-      ).toBe("Bearer cherry-token");
+      expect((init?.headers as Record<string, string>).Authorization).toBe(
+        "Bearer cherry-token"
+      );
       return jsonResponse([
         { id: 42, credit: { account: { remaining: 12.5, currency: "EUR" } } },
       ]);
