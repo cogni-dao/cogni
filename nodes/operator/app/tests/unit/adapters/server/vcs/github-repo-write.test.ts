@@ -1496,4 +1496,239 @@ describe("GitHubRepoWriter.syncTemplateUpstreamToFork", () => {
     );
     expect(result).toEqual({ status: "up_to_date" });
   });
+
+  it("Tier-3 carve-out: restores the fork's node-local paths + deletes upstream-only ones, then points the branch at the carved commit", async () => {
+    const FORK_TREE = "fork-tree";
+    const UPSTREAM_TREE = "upstream-tree";
+    const CARVED_COMMIT = "carved-commit-sha";
+    let treeEntries: Array<{ path: string; sha: string | null }> = [];
+
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/git/ref/{ref}": (params) => {
+        // listTreeBlobs(heads/main) resolves the fork tip.
+        expect(params.ref).toBe("heads/main");
+        return { object: { sha: "fork-main-commit" } };
+      },
+      "GET /repos/{owner}/{repo}/git/commits/{commit_sha}": (params) => {
+        if (params.commit_sha === "fork-main-commit") {
+          return { tree: { sha: FORK_TREE } };
+        }
+        expect(params.commit_sha).toBe(SHA); // upstream tip
+        return { tree: { sha: UPSTREAM_TREE } };
+      },
+      "GET /repos/{owner}/{repo}/git/trees/{tree_sha}": (params) => {
+        expect(params.recursive).toBe("1");
+        if (params.tree_sha === FORK_TREE) {
+          return {
+            tree: [
+              // node-local, fork-customized → must be restored to fork blob
+              {
+                path: "app/src/app/(public)/page.tsx",
+                type: "blob",
+                sha: "fork-home",
+              },
+              {
+                path: ".cogni/repo-spec.yaml",
+                type: "blob",
+                sha: "fork-spec",
+              },
+              // substrate → must NOT appear in carve entries
+              {
+                path: "packages/knowledge-base/src/seeds/base.ts",
+                type: "blob",
+                sha: "fork-sub",
+              },
+            ],
+          };
+        }
+        expect(params.tree_sha).toBe(UPSTREAM_TREE);
+        return {
+          tree: [
+            {
+              path: "app/src/app/(public)/page.tsx",
+              type: "blob",
+              sha: "tmpl-home",
+            },
+            { path: ".cogni/repo-spec.yaml", type: "blob", sha: "tmpl-spec" },
+            // upstream-introduced node-local file the fork lacks → must be deleted
+            {
+              path: "app/src/app/(public)/about/page.tsx",
+              type: "blob",
+              sha: "tmpl-about",
+            },
+            {
+              path: "packages/knowledge-base/src/seeds/base.ts",
+              type: "blob",
+              sha: "tmpl-sub",
+            },
+          ],
+        };
+      },
+      "POST /repos/{owner}/{repo}/git/trees": (params) => {
+        expect(params.base_tree).toBe(UPSTREAM_TREE);
+        treeEntries = params.tree as typeof treeEntries;
+        return { sha: "carved-tree" };
+      },
+      "POST /repos/{owner}/{repo}/git/commits": (params) => {
+        expect(params).toMatchObject({
+          tree: "carved-tree",
+          parents: [SHA],
+        });
+        return { sha: CARVED_COMMIT };
+      },
+      // upsertRef points UPSTREAM_BRANCH at the CARVED commit, not the raw template sha.
+      "POST /repos/{owner}/{repo}/git/refs": () =>
+        Promise.reject(statusError(422, "Reference already exists")),
+      "PATCH /repos/{owner}/{repo}/git/refs/{ref}": (params) => {
+        expect(params).toMatchObject({
+          ref: `heads/${UPSTREAM_BRANCH}`,
+          sha: CARVED_COMMIT,
+          force: true,
+        });
+        return {};
+      },
+      "POST /repos/{owner}/{repo}/pulls": () => ({
+        number: 5,
+        html_url: "https://github.com/cogni-test-org/blue/pull/5",
+      }),
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}/commits": () => [],
+      "PATCH /repos/{owner}/{repo}/pulls/{pull_number}": () => ({}),
+    };
+
+    const result = await makeWriter().syncTemplateUpstreamToFork({
+      ...upstreamInput(),
+      nodeLocalPaths: ["app/src/app/(public)/**", ".cogni/repo-spec.yaml"],
+    });
+
+    expect(result).toMatchObject({ status: "pr_opened", prNumber: 5 });
+
+    // home + repo-spec restored to FORK blobs; the upstream-only about page deleted; substrate untouched.
+    expect(treeEntries).toEqual(
+      expect.arrayContaining([
+        {
+          path: "app/src/app/(public)/page.tsx",
+          mode: "100644",
+          type: "blob",
+          sha: "fork-home",
+        },
+        {
+          path: ".cogni/repo-spec.yaml",
+          mode: "100644",
+          type: "blob",
+          sha: "fork-spec",
+        },
+        {
+          path: "app/src/app/(public)/about/page.tsx",
+          mode: "100644",
+          type: "blob",
+          sha: null,
+        },
+      ])
+    );
+    expect(
+      treeEntries.some((e) =>
+        e.path.startsWith("packages/knowledge-base")
+      )
+    ).toBe(false);
+  });
+
+  it("skips the carve commit entirely when no node-local path diverges (branch stays at template sha)", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/git/ref/{ref}": () => ({
+        object: { sha: "fork-main-commit" },
+      }),
+      "GET /repos/{owner}/{repo}/git/commits/{commit_sha}": (params) =>
+        params.commit_sha === "fork-main-commit"
+          ? { tree: { sha: "fork-tree" } }
+          : { tree: { sha: "upstream-tree" } },
+      "GET /repos/{owner}/{repo}/git/trees/{tree_sha}": () => ({
+        // Identical node-local blob on both sides → no override needed.
+        tree: [
+          {
+            path: "app/src/app/(public)/page.tsx",
+            type: "blob",
+            sha: "same-home",
+          },
+        ],
+      }),
+      "POST /repos/{owner}/{repo}/git/refs": () =>
+        Promise.reject(statusError(422, "Reference already exists")),
+      "PATCH /repos/{owner}/{repo}/git/refs/{ref}": (params) => {
+        // No carve commit → branch points at the raw template sha.
+        expect(params).toMatchObject({
+          ref: `heads/${UPSTREAM_BRANCH}`,
+          sha: SHA,
+          force: true,
+        });
+        return {};
+      },
+      "POST /repos/{owner}/{repo}/pulls": () => ({
+        number: 6,
+        html_url: "https://github.com/cogni-test-org/blue/pull/6",
+      }),
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}/commits": () => [],
+      "PATCH /repos/{owner}/{repo}/pulls/{pull_number}": () => ({}),
+    };
+
+    const result = await makeWriter().syncTemplateUpstreamToFork({
+      ...upstreamInput(),
+      nodeLocalPaths: ["app/src/app/(public)/**"],
+    });
+
+    expect(result).toMatchObject({ status: "pr_opened", prNumber: 6 });
+    expect(requests.map((r) => r.route)).not.toContain(
+      "POST /repos/{owner}/{repo}/git/commits"
+    );
+  });
+});
+
+describe("GitHubRepoWriter.resolveNodeLocalPaths", () => {
+  const b64 = (s: string) => Buffer.from(s, "utf-8").toString("base64");
+
+  it("reads node_local globs from the template's sync-manifest at sourceRef", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": (params) => {
+        expect(params).toMatchObject({
+          owner: "Cogni-DAO",
+          repo: "node-template",
+          path: ".cogni/sync-manifest.yaml",
+          ref: "feedsha",
+        });
+        return {
+          type: "file",
+          encoding: "base64",
+          content: b64(`schema: 2
+node_local:
+  - "app/src/app/(public)/**"
+  - ".cogni/repo-spec.yaml"
+`),
+        };
+      },
+    };
+
+    await expect(
+      makeWriter().resolveNodeLocalPaths({
+        sourceOwner: "Cogni-DAO",
+        sourceRepo: "node-template",
+        sourceRef: "feedsha",
+      })
+    ).resolves.toEqual(["app/src/app/(public)/**", ".cogni/repo-spec.yaml"]);
+  });
+
+  it("falls back to the default floor when the manifest is absent (404)", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": () => {
+        throw statusError(404, "not found");
+      },
+    };
+
+    const result = await makeWriter().resolveNodeLocalPaths({
+      sourceOwner: "Cogni-DAO",
+      sourceRepo: "node-template",
+      sourceRef: "feedsha",
+    });
+    // Default floor is non-empty and includes the public route + repo-spec.
+    expect(result).toContain("app/src/app/(public)/**");
+    expect(result).toContain(".cogni/repo-spec.yaml");
+  });
 });

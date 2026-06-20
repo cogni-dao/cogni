@@ -57,6 +57,10 @@ import {
   renderRepoSpec,
 } from "@/shared/node-app-scaffold/gens";
 import type { NodeKnowledgeRemote } from "@/shared/node-app-scaffold/knowledge-remote";
+import {
+  makeNodeLocalMatcher,
+  parseNodeLocalPaths,
+} from "@/shared/node-app-scaffold/node-local-paths";
 
 export interface GitHubRepoWriterConfig {
   readonly appId: string;
@@ -693,6 +697,20 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
     return { status: "pr_opened", branch, prNumber, prUrl, changedPaths };
   }
 
+  async resolveNodeLocalPaths(input: {
+    sourceOwner: string;
+    sourceRepo: string;
+    sourceRef: string;
+  }): Promise<readonly string[]> {
+    const manifest = await this.fetchFileText({
+      owner: input.sourceOwner,
+      repo: input.sourceRepo,
+      path: ".cogni/sync-manifest.yaml",
+      ref: input.sourceRef,
+    });
+    return parseNodeLocalPaths(manifest);
+  }
+
   async listCatalogForkTargets(input: {
     parentOwner: string;
     parentRepo: string;
@@ -744,6 +762,7 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       forkOwner,
       forkRepo,
       forkBranch,
+      nodeLocalPaths,
     } = input;
     // Same-org cross-fork PRs can't disambiguate by `owner:branch` (template + fork share an owner →
     // GitHub resolves head to the base repo → false "up to date"). Instead materialize the upstream
@@ -753,12 +772,24 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
     // Same-org cross-fork PRs can't disambiguate by `owner:branch`, so materialize the upstream commit
     // as a branch IN the fork (reachable via the shared fork network) + a SAME-repo PR head→base.
     const octokit = await this.getOctokit(forkOwner, forkRepo);
+    // Tier-3 carve-out: rewrite the upstream tip so node-local (identity/presentation) paths match the
+    // FORK's main, then point the branch at that commit. The PR diff then carries Tier-2 substrate only,
+    // so node-template's starter presentation never lands and the merge stops conflicting on node-local
+    // UI/branding (THREE_TIER_CARVE_OUT, spec.repo-sync-contract). Empty list ⇒ legacy whole-repo merge.
+    const branchSha = await this.carveOutNodeLocalPaths(
+      octokit,
+      forkOwner,
+      forkRepo,
+      forkBranch,
+      templateSha,
+      nodeLocalPaths ?? []
+    );
     await this.upsertRef(
       octokit,
       forkOwner,
       forkRepo,
       UPSTREAM_BRANCH,
-      templateSha
+      branchSha
     );
     const title = "chore: merge node-template upstream";
 
@@ -1187,6 +1218,116 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       }
     }
     return count;
+  }
+
+  /**
+   * Tier-3 carve-out. Build a commit atop `templateSha` whose node-local (identity/presentation) paths
+   * are restored to the FORK's `forkBranch` version, returning that commit SHA (or `templateSha`
+   * unchanged when nothing diverges / no globs declared). The upstream branch then points here, so a
+   * SAME-repo PR head=branch → base=forkBranch shows only Tier-2 substrate deltas — node-template's
+   * starter presentation is never in the diff. Uses recursive trees on both sides:
+   *   - a node-local path present on the fork → override the upstream blob with the fork's blob;
+   *   - a node-local path that exists on upstream but NOT the fork → delete it from the branch tip
+   *     (so an upstream-introduced presentation file can't ride in).
+   * @returns the carved commit SHA, or `templateSha` if there is nothing to carve.
+   */
+  private async carveOutNodeLocalPaths(
+    octokit: Octokit,
+    owner: string,
+    repo: string,
+    forkBranch: string,
+    templateSha: string,
+    nodeLocalPaths: readonly string[]
+  ): Promise<string> {
+    if (nodeLocalPaths.length === 0) return templateSha;
+    const isNodeLocal = makeNodeLocalMatcher(nodeLocalPaths);
+
+    // Fork main tip → its tree (the source of restored blobs); upstream tip → its tree (the base we edit).
+    const forkBlobs = await this.listTreeBlobs(
+      octokit,
+      owner,
+      repo,
+      `heads/${forkBranch}`
+    );
+    const { tipTreeSha: upstreamTreeSha, blobs: upstreamBlobs } =
+      await this.listTreeBlobsAtCommit(octokit, owner, repo, templateSha);
+
+    const entries: GitTreeEntry[] = [];
+    const seen = new Set<string>();
+    // Restore every node-local path the fork carries to the fork's blob.
+    for (const [path, sha] of forkBlobs) {
+      if (!isNodeLocal(path)) continue;
+      seen.add(path);
+      // Unchanged on both sides → no tree entry needed.
+      if (upstreamBlobs.get(path) === sha) continue;
+      entries.push({ path, mode: "100644", type: "blob", sha });
+    }
+    // Delete node-local paths upstream introduced that the fork does NOT have.
+    for (const [path] of upstreamBlobs) {
+      if (seen.has(path) || !isNodeLocal(path)) continue;
+      if (forkBlobs.has(path)) continue;
+      entries.push({ path, mode: "100644", type: "blob", sha: null });
+    }
+
+    if (entries.length === 0) return templateSha;
+
+    const { data: tree } = await octokit.request(
+      "POST /repos/{owner}/{repo}/git/trees",
+      { owner, repo, base_tree: upstreamTreeSha, tree: entries }
+    );
+    const { data: commit } = await octokit.request(
+      "POST /repos/{owner}/{repo}/git/commits",
+      {
+        owner,
+        repo,
+        message:
+          "chore: merge node-template upstream (node-local presentation preserved)",
+        tree: tree.sha,
+        parents: [templateSha],
+      }
+    );
+    return commit.sha;
+  }
+
+  /** Resolve a ref's commit → its recursive blob map (`path → blob sha`). */
+  private async listTreeBlobs(
+    octokit: Octokit,
+    owner: string,
+    repo: string,
+    ref: string
+  ): Promise<Map<string, string>> {
+    const { data: refData } = await octokit.request(
+      "GET /repos/{owner}/{repo}/git/ref/{ref}",
+      { owner, repo, ref }
+    );
+    return (
+      await this.listTreeBlobsAtCommit(octokit, owner, repo, refData.object.sha)
+    ).blobs;
+  }
+
+  /** Resolve a commit SHA → its tip tree SHA + recursive blob map (`path → blob sha`). */
+  private async listTreeBlobsAtCommit(
+    octokit: Octokit,
+    owner: string,
+    repo: string,
+    commitSha: string
+  ): Promise<{ tipTreeSha: string; blobs: Map<string, string> }> {
+    const { data: commit } = await octokit.request(
+      "GET /repos/{owner}/{repo}/git/commits/{commit_sha}",
+      { owner, repo, commit_sha: commitSha }
+    );
+    const tipTreeSha = commit.tree.sha;
+    const { data: tree } = await octokit.request(
+      "GET /repos/{owner}/{repo}/git/trees/{tree_sha}",
+      { owner, repo, tree_sha: tipTreeSha, recursive: "1" }
+    );
+    const blobs = new Map<string, string>();
+    for (const entry of tree.tree) {
+      if (entry.type === "blob" && entry.path && entry.sha) {
+        blobs.set(entry.path, entry.sha);
+      }
+    }
+    return { tipTreeSha, blobs };
   }
 
   /** Resolve `heads/main` → its commit + root-tree SHAs (the parent for a node-formation commit). */

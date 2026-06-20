@@ -109,6 +109,14 @@ export interface SyncTemplateUpstreamInput {
   readonly forkRepo: string;
   /** Fork base branch the upstream merges into, e.g. `main`. */
   readonly forkBranch: string;
+  /**
+   * Tier-3 (node identity / presentation) globs to carve OUT of the upstream merge — the fork's own
+   * version of these paths is restored before the PR opens, so node-template's starter
+   * presentation/branding/identity never overwrites a fork's. Declared in node-template's
+   * `.cogni/sync-manifest.yaml#node_local` (TIER3_IS_DATA); the caller resolves it and passes it here.
+   * Empty/omitted ⇒ no carve-out (legacy whole-repo merge behavior).
+   */
+  readonly nodeLocalPaths?: readonly string[];
 }
 
 export type SyncTemplateUpstreamResult =
@@ -154,6 +162,12 @@ export interface OperatorDeployPlanePort {
    * preserves fork customizations (`FORK_FREEDOM`, `POLICY_STAYS_LOCAL`). `up_to_date` when no commits
    * separate the fork from upstream. Distinct from `syncCanonicalFilesToFork` (Tier 1): that surgically
    * overwrites the flight-contract files so a CI fix lands cleanly even when this merge conflicts.
+   *
+   * THREE_TIER_CARVE_OUT (spec.repo-sync-contract): `nodeLocalPaths` (Tier 3 — node identity /
+   * presentation) are restored to the FORK's version before the PR opens, so the upstream PR carries
+   * only Tier-2 substrate (`build their mission, not their plumbing`). With Tier 3 out of the diff the
+   * merge stops conflicting on node-local UI/branding/identity, so Tier 1 + Tier 2 are always
+   * auto-mergeable. node-template is a starter only — its presentation never overwrites a fork's.
    */
   syncTemplateUpstreamToFork(
     input: SyncTemplateUpstreamInput
@@ -177,6 +191,19 @@ export interface OperatorDeployPlanePort {
   syncCanonicalFilesToFork(
     input: MirrorCanonicalFilesInput
   ): Promise<MirrorCanonicalFilesResult>;
+
+  /**
+   * Resolve the Tier-3 (node identity / presentation) globs from the template repo's
+   * `.cogni/sync-manifest.yaml#node_local` at `sourceRef` (TIER3_IS_DATA — declared in node-template,
+   * read at runtime). Falls back to the hardcoded default floor when the manifest is missing or carries
+   * no `node_local:` block, so the carve-out is always at least the obvious presentation surface.
+   * The facade resolves this once per sync and threads it into every fork's Tier-2 merge.
+   */
+  resolveNodeLocalPaths(input: {
+    readonly sourceOwner: string;
+    readonly sourceRepo: string;
+    readonly sourceRef: string;
+  }): Promise<readonly string[]>;
 
   dispatchNodeRefCandidateFlight(input: {
     owner: string;

@@ -66,6 +66,8 @@ Define the contract that:
 
 7. **CATALOG_BOUNDARY**: `infra/catalog/*.yaml` is the API between operator-scope and per-node scope. Operator-scope code reads from the catalog and never special-cases node names. Per-node source bits live in their source repo. A hub `nodes/<name>` gitlink is an operator pin, not source content.
 
+8. **THREE_TIER_FORK_SYNC**: The `node-template → fork` propagation (a different axis from hub↔artifact drift above) is **three** tiers, by content kind: **Tier 1 — flight contract** (force-overwritten), **Tier 2 — foundational substrate** (merged, conflict-free → always auto-mergeable), **Tier 3 — node identity/presentation** (NEVER synced — `node-template` is a starter). The Tier-3 set is **declared as data** in `.cogni/sync-manifest.yaml`'s `node_local:` block (read at runtime from the template's own copy, `TIER3_IS_DATA`), and is carved OUT of the Tier-2 merge by restoring the fork's own version of those paths. Operator mission: *build their mission (Tier 3, node-owned), not their plumbing (Tier 1+2, synced)*. See § Three-Tier Fork Sync.
+
 ---
 
 ## Topology
@@ -120,6 +122,35 @@ Anything not covered by `exclude` or the artifact's divergence MUST mirror 1:1. 
 This is the inverse of the v1 (schema=1) form, which enumerated `scope[]` of included paths. Inversion makes "I added a new operator-scope dir but forgot to update the manifest" an impossible class of bug.
 
 See the live file for current content. The schema is the durable contract; if doc and live drift, the schema wins.
+
+The manifest also carries a top-level **`node_local:`** glob block — the Tier-3 declaration consumed by § Three-Tier Fork Sync below. It is a **different axis** from `divergences[]`: `divergences` is the hub↔artifact drift model (consumed by the drift-detector); `node_local` is the node-template→fork carve-out (consumed by the operator's fork-sync at runtime). A path may legitimately appear in neither, one, or both.
+
+---
+
+## Three-Tier Fork Sync
+
+The hub↔artifact drift model above is the **detector** axis (surfacing). The **`node-template → spawned fork`** propagation is a separate, actively-pushing axis: on a push to `node-template`'s default branch the operator GitHub App opens sync PRs on every child fork (`dispatchCanonicalForkSync` → `fanOutForkSync`). It is **three tiers, by content kind:**
+
+| Tier | Content | Mechanism | Mergeability |
+| --- | --- | --- | --- |
+| **1 — Flight contract** | `.github/workflows/{ci.yaml,pr-build.yml,pr-lint.yaml}`, `scripts/check-node-ci-workflow.mjs` (`CI_CONTRACT_PATHS`) | Surgical force-overwrite (`syncCanonicalFilesToFork`) | byte-safe, lands even when Tier 2 conflicts |
+| **2 — Foundational substrate** | the rest of the node's plumbing: `app/src/app/api/**`, `app/src/shared/**`, `app/src/bootstrap/**`, `graphs/**`, `packages/**`, base `k8s/`, etc. — everything **not** Tier 1 or Tier 3 | Three-way merge of node-template upstream (`syncTemplateUpstreamToFork`), preserving fork edits via the shared merge-base | **conflict-free → always auto-mergeable** (Tier 3 is removed from the diff) |
+| **3 — Node identity / presentation** | the node's *face*: homepage / landing UI (`app/src/app/(public)/**`), home feature surface (`app/src/features/home/**`), branding/theme/assets, `.cogni/repo-spec.yaml`, persona — declared in `.cogni/sync-manifest.yaml#node_local` | **NEVER synced.** Restored to the fork's own version inside the Tier-2 merge | n/a — opens no PR |
+
+### Invariants
+
+- **`TIER3_IS_DATA`**: the Tier-3 set is **declared**, not hardcoded in the operator. It lives in `node-template`'s `.cogni/sync-manifest.yaml#node_local` and is read at runtime from the template at the pushed SHA (`OperatorDeployPlanePort.resolveNodeLocalPaths`). A node-template PR that adds a new presentation directory declares it node-local **in the same PR**. A hardcoded floor (`nodes/operator/app/src/shared/node-app-scaffold/node-local-paths.ts`, `DEFAULT_NODE_LOCAL_PATHS`) is used only when the template manifest omits the block, so the carve-out is never empty.
+- **`TIER3_NEVER_SYNCED`**: `node-template` is a **starter**, not a parent — its identity/presentation must never overwrite a fork's. The Tier-2 merge tree restores each `node_local` path to the **fork's** `main` version (and deletes any node-local file the upstream introduced that the fork lacks) before the PR opens.
+- **`TIER2_IS_ALWAYS_MERGEABLE`**: carving Tier 3 OUT of the Tier-2 merge is precisely what removes the recurring conflict class (a node-template homepage/branding PR colliding with every fork's own homepage). With Tier 3 gone from the diff, Tier 1 + Tier 2 are conflict-free and a fork can always auto-merge them.
+- **`TIERS_DECOUPLED`**: per-tier, per-fork error isolation — a Tier-1 failure never blocks Tier 2 and vice versa.
+
+### Why this shape (the #30 symptom)
+
+Before this, Tier 2 merged the *whole repo*, so a node-template homepage PR ([node-template#30](https://github.com/Cogni-DAO/node-template/pull/30)) swept node-local presentation into every fork. The resulting fork PRs (oss/beacon) came up **DIRTY** — conflicted on the forks' own homepages — *and* carried real cognition-substrate edits (`app/src/app/api/v1/cognition/_bundle.ts`, `packages/knowledge-base/src/seeds/base.ts`) in the same PR. You could neither merge (forces unwanted homepage) nor close (drops substrate). Splitting substrate (Tier 2, synced) from identity (Tier 3, node-owned) dissolves the bind: the substrate flows automatically; the homepage stays the fork's.
+
+### Mechanism
+
+Approach: **restore-the-fork's-version inside the merge** (not a declared-allowlist re-implementation of Tier 2). The upstream commit is materialized as the living branch `cogni-operator/node-template-upstream`; before the PR opens, `carveOutNodeLocalPaths` rewrites that branch tip so every `node_local` path matches the fork's `main` (override the blob; or delete it if the fork lacks it). This keeps Tier 2 a real three-way merge (preserving legitimate fork substrate edits) while guaranteeing Tier 3 never appears in the diff. When no node-local path diverges, no carve commit is created and the branch points straight at the template SHA.
 
 ---
 
