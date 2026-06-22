@@ -95,10 +95,11 @@ export type LlmToolChoice =
   | { readonly type: "function"; readonly function: { readonly name: string } };
 
 /**
- * Caller info for direct LLM calls (no graph execution).
+ * Caller info for a single-completion LLM call (no graph orchestration).
+ * This is the executor-internal seam's caller struct — features never construct it
+ * directly (see the LlmService doc below). Multi-step graph runs use GraphLlmCaller.
  * Per AI_SETUP_SPEC.md P1 invariant GRAPH_CALLER_TYPE_REQUIRED:
  * DO NOT add graphRunId as optional field here.
- * Use GraphLlmCaller for graph executions.
  */
 export interface LlmCaller {
   billingAccountId: string;

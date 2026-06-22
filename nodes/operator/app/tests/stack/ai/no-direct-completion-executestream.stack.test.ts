@@ -37,14 +37,16 @@ const ALLOWLIST = [
 
 /** Filter raw grep output down to real call sites outside the allowlist. */
 function callSitesOutsideAllowlist(grepOutput: string): string[] {
-  return grepOutput
-    .split("\n")
-    .filter(Boolean)
-    .filter((line) => !ALLOWLIST.some((allowed) => line.includes(allowed)))
-    // Filter out type-only references (import type, interface, type alias, signatures)
-    .filter((line) => !line.includes("import type"))
-    .filter((line) => !line.includes(": ExecuteStream"))
-    .filter((line) => !line.includes("ExecuteStreamParams"));
+  return (
+    grepOutput
+      .split("\n")
+      .filter(Boolean)
+      .filter((line) => !ALLOWLIST.some((allowed) => line.includes(allowed)))
+      // Filter out type-only references (import type, interface, type alias, signatures)
+      .filter((line) => !line.includes("import type"))
+      .filter((line) => !line.includes(": ExecuteStream"))
+      .filter((line) => !line.includes("ExecuteStreamParams"))
+  );
 }
 
 describe("BILLABLE_AI_THROUGH_EXECUTOR Invariant", () => {
