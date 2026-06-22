@@ -125,7 +125,7 @@ describe("bootstrap container DI wiring", { timeout: 30_000 }, () => {
       expect(container).toHaveProperty("log");
       expect(container).toHaveProperty("llmService");
       expect(container).toHaveProperty("clock");
-      expect(container.llmService.completion).toBeTypeOf("function");
+      expect(container.llmService.completionStream).toBeTypeOf("function");
     });
   });
 });
