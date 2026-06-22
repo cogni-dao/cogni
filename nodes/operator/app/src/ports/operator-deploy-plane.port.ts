@@ -10,10 +10,12 @@
  *   - NODE_REF_ARTIFACT_GATE: node-ref flight dispatch requires a resolvable source artifact.
  *   - ONE_PROMOTION_PRIMITIVE: every promotion rung (candidate-a, preview, production)
  *     dispatches `promote-and-deploy.yml` directly via the operator App — no rung routes
- *     through a code-branch PR. Preview is SOURCE-ADDRESSED by the node image sha
- *     (`node_source_sha` input, like candidate-flight): the workflow resolves the image from
- *     the input and records the pin on `deploy/preview`, writing ZERO commits to `main`
- *     (task.5022; the App's main-write privilege is reserved for governance/code merges).
+ *     through a code-branch PR. Preview AND production are SOURCE-ADDRESSED by the node image
+ *     sha (`node_source_sha` input, like candidate-flight) for REMOTE-SOURCE (fork) nodes: the
+ *     workflow resolves the image from the input and records the pin on the env deploy branch,
+ *     writing ZERO commits to `main` (task.5022; the App's main-write privilege is reserved for
+ *     governance/code merges). IN-REPO nodes (no catalog `source_repo`) are not source-addressed
+ *     by node sha — they pass `source_sha` (the operator checkout ref) instead.
  * Side-effects: none
  * Links: docs/spec/node-ci-cd-contract.md, src/app/api/v1/vcs/flight/route.ts
  * @public
@@ -58,6 +60,28 @@ export interface NodePreviewPromoteResult {
   readonly status: "dispatched";
   /** Node-repo PR head SHA promoted — the `node_source_sha` the workflow pins. */
   readonly sourceSha: string;
+  readonly workflowUrl: string;
+}
+
+export interface PromoteNodeToProductionInput {
+  readonly parentOwner: string;
+  readonly parentRepo: string;
+  readonly slug: string;
+  /**
+   * Node-repo commit SHA to promote — the build the node's PR CI published as `sha-<sourceSha>`.
+   * For a REMOTE-SOURCE (fork) node this source-addresses the image (`node_source_sha`). For an
+   * IN-REPO node it is the operator checkout ref (`source_sha`); never crossed between the two.
+   */
+  readonly sourceSha: string;
+}
+
+export interface NodeProductionPromoteResult {
+  /** Always `dispatched`: production mirrors preview (ONE_PROMOTION_PRIMITIVE). */
+  readonly status: "dispatched";
+  /** SHA promoted — `node_source_sha` (remote-source) or `source_sha` (in-repo). */
+  readonly sourceSha: string;
+  /** `remote_source` when source-addressed by node sha; `in_repo` when passing the checkout ref. */
+  readonly sourceAddressing: "remote_source" | "in_repo";
   readonly workflowUrl: string;
 }
 
@@ -196,6 +220,22 @@ export interface OperatorDeployPlanePort {
   promoteNodeToPreview(
     input: PromoteNodeToPreviewInput
   ): Promise<NodePreviewPromoteResult>;
+
+  /**
+   * Production promote, RBAC-gated at the route (`node.promote_production`). Mirrors
+   * `promoteNodeToPreview`: dispatches `promote-and-deploy.yml` at env=production. Reads the parent
+   * catalog row via the App to DISCRIMINATE the node kind (the catalog is absent on the operator's
+   * runtime disk) — it reads `source_repo` PRESENCE, never `source_sha`, for resolution:
+   *   - REMOTE-SOURCE (catalog has `source_repo`, e.g. beacon): source-addressed by the node sha
+   *     (`node_source_sha`), NO `source_sha` — identical to preview. The catalog `source_sha` is
+   *     birth-only metadata, never a deploy authority here.
+   *   - IN-REPO (no `source_repo`, e.g. operator/poly): NOT source-addressed by node sha — passes
+   *     `source_sha` (the operator checkout ref), behavior unchanged.
+   * Writes ZERO commits to `main`. `skip_infra=true` (APP_PROMOTE_IS_NO_INFRA) is set by the dispatch.
+   */
+  promoteNodeToProduction(
+    input: PromoteNodeToProductionInput
+  ): Promise<NodeProductionPromoteResult>;
 
   /**
    * Promote a node to an environment by dispatching `promote-and-deploy.yml` via the operator App.

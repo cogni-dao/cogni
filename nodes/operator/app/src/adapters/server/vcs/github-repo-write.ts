@@ -36,10 +36,12 @@ import type {
   MirrorCanonicalFilesInput,
   MirrorCanonicalFilesResult,
   NodePreviewPromoteResult,
+  NodeProductionPromoteResult,
   OperatorDeployPlanePort,
   PreparedNodeRefCandidateFlight,
   PrepareNodeRefCandidateFlightInput,
   PromoteNodeToPreviewInput,
+  PromoteNodeToProductionInput,
   SyncTemplateUpstreamInput,
   SyncTemplateUpstreamResult,
 } from "@/ports";
@@ -462,6 +464,79 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
     return {
       status: "dispatched",
       sourceSha,
+      workflowUrl: dispatch.workflowUrl,
+    };
+  }
+
+  /**
+   * Production promote — ONE_PROMOTION_PRIMITIVE, the production twin of `promoteNodeToPreview`.
+   * Authorization (`node.promote_production`) is enforced at the route BEFORE this is called.
+   *
+   * Reads the parent catalog row via the App (it is absent on the operator's runtime disk) ONLY to
+   * discriminate the node kind — `source_repo` PRESENCE, never `source_sha`, drives resolution:
+   *   - REMOTE-SOURCE (catalog has `source_repo`, e.g. beacon): source-address the node image with
+   *     `node_source_sha = sourceSha` and OMIT `source_sha` — identical to preview. The catalog
+   *     `source_sha` is birth-only metadata, never a deploy authority for promotion.
+   *   - IN-REPO (no `source_repo`, e.g. operator/poly): pass `source_sha = sourceSha` (the operator
+   *     checkout ref); in-repo nodes are not source-addressed by node sha (unchanged).
+   * Writes ZERO commits to `main`; `skip_infra=true` (APP_PROMOTE_IS_NO_INFRA) via the dispatch.
+   */
+  async promoteNodeToProduction(
+    input: PromoteNodeToProductionInput
+  ): Promise<NodeProductionPromoteResult> {
+    const { parentOwner, parentRepo, slug, sourceSha } = input;
+    if (!SOURCE_SHA_PATTERN.test(sourceSha)) {
+      throw deployPlaneError(
+        "invalid_source_sha",
+        "sourceSha must be a 40-character hex SHA",
+        400
+      );
+    }
+
+    // Confirm the catalog row exists + identifies this slug, and read ONLY `source_repo`'s presence
+    // (the remote-source vs in-repo discriminator). We never read `source_sha` for resolution.
+    const catalogText = await this.fetchFileText({
+      owner: parentOwner,
+      repo: parentRepo,
+      path: `infra/catalog/${slug}.yaml`,
+      ref: "main",
+    });
+    if (!catalogText) {
+      throw deployPlaneError(
+        "catalog_missing",
+        `node catalog entry not found for ${slug}`,
+        404
+      );
+    }
+    const row = parseYaml(catalogText) as {
+      name?: unknown;
+      source_repo?: unknown;
+    };
+    if (row?.name !== slug) {
+      throw deployPlaneError(
+        "invalid_catalog",
+        `invalid node catalog entry for ${slug}`,
+        409
+      );
+    }
+    const isRemoteSource = typeof row.source_repo === "string";
+
+    const dispatch = await this.dispatchNodePromote({
+      owner: parentOwner,
+      repo: parentRepo,
+      env: "production",
+      slug,
+      // REMOTE-SOURCE: source-address the node image (no source_sha — operator checkout ref stays
+      // main), exactly like preview. IN-REPO: source_sha is the operator checkout ref (unchanged).
+      ...(isRemoteSource
+        ? { nodeSourceSha: sourceSha }
+        : { sourceSha }),
+    });
+
+    return {
+      status: "dispatched",
+      sourceSha,
+      sourceAddressing: isRemoteSource ? "remote_source" : "in_repo",
       workflowUrl: dispatch.workflowUrl,
     };
   }

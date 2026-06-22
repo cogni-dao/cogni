@@ -162,10 +162,12 @@ export type {
   MirrorCanonicalFilesInput,
   MirrorCanonicalFilesResult,
   NodePreviewPromoteResult,
+  NodeProductionPromoteResult,
   OperatorDeployPlanePort,
   PreparedNodeRefCandidateFlight,
   PrepareNodeRefCandidateFlightInput,
   PromoteNodeToPreviewInput,
+  PromoteNodeToProductionInput,
   SyncTemplateUpstreamInput,
   SyncTemplateUpstreamResult,
 } from "./operator-deploy-plane.port";
