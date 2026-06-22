@@ -46,6 +46,24 @@ divergences:
       # "different") AND artifact_only below (suppresses the resulting 🟣
       # "only-on-artifact"). See the artifact_only twin entry.
       - "AGENTS.md" # dev-freeze banner; both-list entry (see comment above)
+      # The /promote skill is ANOTHER both-sides intentional divergence (bug.5044).
+      # The hub's .claude/skills/promote/SKILL.md is the cogni-template MONOREPO-
+      # INTERNAL playbook (operator/poly/resy/scheduler-worker nodes, deploy/<env>-
+      # <node> branches, mq-*/pr-* tags, merge-queue leases, bug.0443) — none of
+      # which applies to a spawned fork node. The artifact instead carries the
+      # GENERIC node-deploy skill authored at the hub overlay source below
+      # (.cogni/node-template-overlay/.claude/skills/promote/SKILL.md), which
+      # describes ONLY the fork-node path: POST /api/v1/vcs/flight, POST
+      # /api/v1/deploy/promote, auto-preview, source-addressed sha-<sourceSha>
+      # images, and /version.buildSha verify. Both-sides divergence ⇒ list the
+      # skill path in BOTH omit_from_artifact (suppresses hub-side 🟡 "different")
+      # AND artifact_only (suppresses the resulting 🟣 "only-on-artifact").
+      - ".claude/skills/promote/SKILL.md" # monorepo-internal; artifact carries the generic overlay version (bug.5044)
+      # Hub-only authoring source for the artifact's generic /promote skill. The
+      # artifact carries the rendered file at .claude/skills/promote/SKILL.md (see
+      # artifact_only twin above), NOT this overlay path — so the overlay tree is
+      # hub-only and must be omitted to avoid a false 🔴 missing-on-artifact.
+      - ".cogni/node-template-overlay/**" # hub-only source for the generic node skill set
       - "nodes/operator/**" # hub-only node
       - "infra/catalog/operator.yaml"
       - "infra/catalog/node-template.yaml" # hub-style; artifact carries standalone-style (task.5078) — both-sides intentional divergence
@@ -58,6 +76,7 @@ divergences:
       - "scripts/experiments/**" # hub-only research scripts
     artifact_only:
       - "AGENTS.md" # dev-freeze banner twin (see omit_from_artifact comment) — both lists required to zero the bidirectional drift flag
+      - ".claude/skills/promote/SKILL.md" # generic node-deploy skill twin (bug.5044) — see omit_from_artifact; both lists required to zero the bidirectional drift flag
       - "infra/fork.yaml"
       - "infra/k8s/overlays/_template/node-template/**"
       - "infra/catalog/node-template.yaml" # standalone-style fork catalog — see omit_from_artifact twin (both-sides divergence)
