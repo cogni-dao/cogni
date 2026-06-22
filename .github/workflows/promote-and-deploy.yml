@@ -96,10 +96,18 @@ jobs:
             echo "preview_forward=$PREVIEW_FORWARD"
           } >> "$GITHUB_OUTPUT"
 
+      # Pin the OPERATOR-repo ref (github.sha), NOT head_sha. This step only
+      # provides operator-repo tooling — scripts/ci/lib/image-tags.sh and
+      # resolve-promote-targets.sh, which read infra/catalog + infra/k8s/overlays.
+      # For a remote-source (fork) node, head_sha is the NODE repo's sha and does
+      # NOT exist in Cogni-DAO/cogni, so `ref: head_sha` hard-fails the checkout
+      # (bug.5043). In-repo nodes happened to work because head_sha was an
+      # operator-repo sha. github.sha = the dispatched workflow ref (consistent
+      # with deploy-infra's tooling checkout below).
       - name: Checkout (for image-tags lib)
         uses: actions/checkout@v4
         with:
-          ref: ${{ steps.env.outputs.head_sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 1
 
       - name: Resolve target node list
@@ -488,18 +496,27 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GIT_READ_TOKEN || github.token }}
           NODE: ${{ matrix.node }}
+          NODE_SOURCE_SHA: ${{ inputs.node_source_sha }}
         run: |
           set -euo pipefail
-          # Remote-source node: fetch its tree at the catalog source_sha pin into
-          # nodes/<NODE> — no submodule, no gitlink, private-safe (GIT_READ_TOKEN).
-          # In-repo nodes carry no source_repo and are already in app-src.
-          # spec.node-submodule-retirement.
+          # Remote-source node: fetch its tree into nodes/<NODE> — no submodule,
+          # no gitlink, private-safe (GIT_READ_TOKEN). In-repo nodes carry no
+          # source_repo and are already in app-src. spec.node-submodule-retirement.
           catalog="app-src/infra/catalog/${NODE}.yaml"
           [ -f "$catalog" ] || exit 0
           src_repo="$(yq -N '.source_repo // ""' "$catalog")"
           [ -n "$src_repo" ] || exit 0
-          src_sha="$(yq -N '.source_sha // ""' "$catalog")"
-          [ -n "$src_sha" ] || { echo "::error::no source_sha for remote-source node ${NODE}"; exit 1; }
+          # Honor the SAME deploy-pin precedence as the digest job (promote-k8s):
+          # node_source_sha input wins, catalog source_sha is the fallback
+          # (CATALOG_SOURCE_SHA_IS_THE_DEPLOY_PIN only when the input is absent).
+          # Without this, digest pinned node_source_sha while materialize fetched
+          # the tree at the stale catalog pin → split-brain prod revert (bug.5043).
+          if [ -n "${NODE_SOURCE_SHA:-}" ]; then
+            src_sha="$NODE_SOURCE_SHA"
+          else
+            src_sha="$(yq -N '.source_sha // ""' "$catalog")"
+          fi
+          [ -n "$src_sha" ] || { echo "::error::no source_sha for remote-source node ${NODE} (no node_source_sha input and no pin in catalog)"; exit 1; }
           repo_path="${src_repo#https://github.com/}"; repo_path="${repo_path%.git}"
           rm -rf "app-src/nodes/${NODE}"
           git init -q "app-src/nodes/${NODE}"
