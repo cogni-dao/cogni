@@ -337,8 +337,10 @@ export class LiteLlmAdapter implements LlmService {
     const providerCostUsd = getProviderCostFromHeaders(response);
     const litellmCallId = getLitellmCallIdFromHeaders(response);
 
-    // Create a deferred promise for the final result (matches completion() return type)
-    type CompletionResult = Awaited<ReturnType<LlmService["completion"]>>;
+    // Create a deferred promise for the final result (matches completionStream's `final`)
+    type CompletionResult = Awaited<
+      Awaited<ReturnType<LlmService["completionStream"]>>["final"]
+    >;
     const deferred = defer<CompletionResult>();
 
     const stream: AsyncIterable<ChatDeltaEvent> =
