@@ -71,21 +71,6 @@ describe.skipIf(!ollamaAvailable)(
       modelId = firstModel?.id ?? "unknown";
     });
 
-    it("completion() returns valid LlmCompletionResult", async () => {
-      const adapter = new OpenAiCompatibleLlmAdapter({ baseUrl: OLLAMA_URL });
-      const result = await adapter.completion({
-        messages: [{ role: "user", content: "Say hello." }],
-        model: modelId,
-        caller,
-      });
-
-      expect(result.message.role).toBe("assistant");
-      expect(result.message.content.length).toBeGreaterThan(0);
-      expect(result.usage.promptTokens).toBeGreaterThan(0);
-      expect(result.resolvedProvider).toBe("openai-compatible");
-      expect(result.resolvedModel).toBeTruthy();
-    }, 60_000);
-
     it("completionStream() yields text_delta events and resolves final", async () => {
       const adapter = new OpenAiCompatibleLlmAdapter({ baseUrl: OLLAMA_URL });
       const { stream, final } = await adapter.completionStream({
@@ -112,6 +97,8 @@ describe.skipIf(!ollamaAvailable)(
       // Usage may be 0 if server doesn't support stream_options.include_usage
       expect(finalResult.usage).toBeDefined();
       expect(finalResult.finishReason).toBeTruthy();
+      expect(finalResult.resolvedProvider).toBe("openai-compatible");
+      expect(finalResult.resolvedModel).toBeTruthy();
     }, 60_000);
   }
 );

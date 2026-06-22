@@ -217,17 +217,26 @@ export interface LlmCompletionResult {
   resolvedDisplayName?: string;
 }
 
+/**
+ * LLM transport port. EXECUTOR-INTERNAL ONLY.
+ *
+ * BILLABLE_AI_THROUGH_EXECUTOR (graph-execution-spec): this port emits no preflight
+ * credit check and no usage-receipt commit on its own — those live in the
+ * GraphExecutorPort decorator stack (PreflightCreditCheckDecorator + UsageCommitDecorator).
+ * Calling it directly from a feature/route silently bypasses the fair-billing gate
+ * (see bug.5042 — beacon's Research/Generate panels did exactly this).
+ *
+ * The ONLY sanctioned LLM entrypoint for node features is the graph executor —
+ * use the `completionStream` facade (`@/app/_facades/ai/completion.server`) or
+ * `GraphExecutorPort.runGraph`. Direct consumers of this port are restricted to
+ * `features/ai/services/completion.ts` and the in-proc completion adapter, enforced
+ * by `tests/stack/ai/no-direct-completion-executestream.stack.test.ts`.
+ *
+ * Note: there is intentionally no non-streaming `completion()` method — a single
+ * streaming seam keeps billing/telemetry centralized. Non-streaming callers drain
+ * the stream and await `final`.
+ */
 export interface LlmService {
-  completion(params: {
-    messages: Message[];
-    model?: string;
-    temperature?: number;
-    maxTokens?: number;
-    caller: LlmCaller;
-    /** Billing correlation metadata forwarded to LiteLLM as x-litellm-spend-logs-metadata header */
-    spendLogsMetadata?: { run_id: string; graph_id: string; node_id?: string };
-  }): Promise<LlmCompletionResult>;
-
   completionStream(params: CompletionStreamParams): Promise<{
     stream: AsyncIterable<ChatDeltaEvent>;
     final: Promise<LlmCompletionResult>;

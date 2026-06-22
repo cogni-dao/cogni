@@ -75,7 +75,8 @@ AI feature owns all LLM interaction endpoints, runtimes, and services. Provides 
 
 ## Ports
 
-- **Uses ports:** AccountService (recordChargeReceipt), LlmService (completion, completionStream), AiTelemetryPort (recordInvocation), LangfusePort (createTrace, recordGeneration), GraphExecutorPort (runGraph — used by internal execution route, not facade)
+- **Uses ports:** AccountService (recordChargeReceipt), AiTelemetryPort (recordInvocation), LangfusePort (createTrace, recordGeneration), GraphExecutorPort (runGraph — used by internal execution route, not facade)
+  - `LlmService` (completionStream) is **executor-internal only** — consumed solely by `services/completion.ts` (`executeStream`) and the in-proc completion adapter. It carries NO preflight credit gate and NO usage-receipt commit on its own (those live in the GraphExecutorPort decorator stack). Features/routes MUST NOT inject or call it directly — that silently bypasses fair billing (bug.5042). Enforced by `no-direct-completion-executestream.stack.test.ts`. Build AI features via the graph executor / `completionStream` facade. See [agent-development.md](../../../../../docs/guides/agent-development.md#billing-safe-ai-the-only-way-to-call-an-llm).
 - **Implements ports:** none
 - **Contracts:** chat.completions.v1, ai.chat.v1, ai.threads.v1, ai.models.v1, ai.activity.v1
 
@@ -89,7 +90,7 @@ AI feature owns all LLM interaction endpoints, runtimes, and services. Provides 
   - Fetch and cache available models list (server-side cache with SWR)
   - Validate selected models against server-side allowlist
   - Transform between wire formats and domain DTOs
-  - Delegate to LlmCaller port for actual LLM calls
+  - Run all billable LLM work through the graph executor (preflight credit gate + post-call usage commit); `executeStream` is the executor-internal seam over `LlmService.completionStream`, never a public entrypoint
   - Record charge receipts via AccountService.recordChargeReceipt (per ACTIVITY_METRICS.md)
   - Record AI invocation telemetry via AiTelemetryPort (per AI_SETUP_SPEC.md)
   - Create Langfuse traces for observability (optional, env-gated)

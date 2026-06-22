@@ -73,7 +73,6 @@ const TEST_SCOPE = {
     virtualKeyId: TEST_VIRTUAL_KEY_ID,
   },
   llmService: {
-    completion: vi.fn(),
     completionStream: vi.fn(),
   } as unknown as import("@/ports").LlmService,
   usageSource: "litellm" as const,

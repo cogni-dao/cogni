@@ -13,7 +13,7 @@
  */
 
 import type { Message } from "@cogni/node-core";
-import type { LlmCaller, LlmCompletionResult, LlmService } from "@/ports";
+import type { LlmCaller, LlmService } from "@/ports";
 
 export interface FakeLlmOptions {
   shouldThrow?: boolean;
@@ -46,57 +46,6 @@ export class FakeLlmService implements LlmService {
       finishReason: "stop",
       ...options,
     };
-  }
-
-  async completion(params: {
-    messages: Message[];
-    model?: string;
-    temperature?: number;
-    maxTokens?: number;
-    caller: LlmCaller;
-  }): Promise<LlmCompletionResult> {
-    // Log the call for assertions
-    this.callLog.push({ ...params });
-
-    // Simulate delay if configured
-    if (this.options.delay) {
-      await new Promise((resolve) => setTimeout(resolve, this.options.delay));
-    }
-
-    // Throw error if configured
-    if (this.options.shouldThrow) {
-      throw new Error(this.options.errorMessage ?? "Mock LLM error");
-    }
-
-    // Return mock response with all fields per LlmCompletionResult
-    const response: LlmCompletionResult = {
-      message: {
-        role: "assistant" as const,
-        content: this.options.responseContent ?? "Default mock response",
-        timestamp: new Date().toISOString(),
-      },
-      providerMeta: {
-        model: params.model ?? "mock-model",
-        provider: "fake",
-        requestId: "fake-request-id",
-      },
-      providerCostUsd: 0.0001, // Small fixed cost for billing tests
-      // New fields per AI_SETUP_SPEC.md
-      litellmCallId: "fake-litellm-call-id",
-      promptHash: this.options.promptHash ?? "fake-prompt-hash-sha256",
-      resolvedProvider: "fake",
-      resolvedModel: params.model ?? "mock-model",
-    };
-
-    if (this.options.finishReason) {
-      response.finishReason = this.options.finishReason;
-    }
-
-    if (this.options.usage) {
-      response.usage = this.options.usage;
-    }
-
-    return response;
   }
 
   async completionStream(
