@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@cogni/node-contracts/vcs.merge.v1`
- * Purpose: Zod contract for POST /api/v1/vcs/merge — agent-initiated, operator-executed
- *   merge of a green operator-monorepo PR into `main`.
- * Scope: Input/output shapes only. No network calls, no GitHub API import.
+ * Purpose: Zod contract for the operator-executed PR merge request (POST /api/v1/vcs/merge).
+ * Scope: Input/output shapes only. Does not make network calls or import the GitHub API.
  * Invariants:
  *   - CONTRACTS_ARE_TRUTH: wire shape is owned by vcs.merge.v1.contract.
  *   - NO_REPO_FROM_AGENT: owner/repo are operator-resolved from env, never request body
