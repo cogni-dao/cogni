@@ -97,7 +97,12 @@ jobs:
             else
               HEAD_SHA=$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.head.sha')
             fi
-            IMAGE_TAG="pr-${PR_NUMBER}-${HEAD_SHA}"
+            # ONE identity (SOURCE_SHA_IS_DEPLOY_IDENTITY): the in-repo PR lane
+            # resolves the same `sha-<headSha>` image pr-build publishes — the
+            # legacy pr-{N}-{X} namespace is purged. (The node_slug+source_sha
+            # lane above is the converged primary; this PR-number lane is the
+            # transitional monorepo dispatch until it is unified onto node_slug.)
+            IMAGE_TAG="sha-${HEAD_SHA}"
           fi
           echo "base_ref=$BASE_REF" >> "$GITHUB_OUTPUT"
           echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
@@ -866,7 +871,7 @@ jobs:
           if [ -n "${{ needs.decide.outputs.node_source_sha }}" ]; then
             git commit -m "candidate-flight ${NODE}: node-ref ${{ needs.decide.outputs.node_source_sha }}"
           else
-            git commit -m "candidate-flight ${NODE}: pr-${{ inputs.pr_number }} ${HEAD_SHA}"
+            git commit -m "candidate-flight ${NODE}: sha-${HEAD_SHA}"
           fi
           git push origin "HEAD:${PER_NODE_BRANCH}"
           DEPLOY_SHA=$(git rev-parse HEAD)

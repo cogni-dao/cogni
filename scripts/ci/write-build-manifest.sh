@@ -24,10 +24,9 @@ if [ ! -f "$IMAGES_FILE" ]; then
   exit 1
 fi
 
-if [ -z "$PR_NUMBER" ]; then
-  echo "[ERROR] PR_NUMBER is required" >&2
-  exit 1
-fi
+# PR_NUMBER is informational provenance only (the manifest is not load-bearing —
+# deploy identity is sha-<HEAD_SHA>). It is empty on a direct push to main with no
+# `(#NNN)` subject; record null rather than hard-failing.
 
 if [ -z "$HEAD_SHA" ]; then
   echo "[ERROR] HEAD_SHA is required" >&2
@@ -52,7 +51,7 @@ manifest = {
     "schema_version": 1,
     "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     "repository": os.environ["REPOSITORY"],
-    "pr_number": int(os.environ["PR_NUMBER"]),
+    "pr_number": int(os.environ["PR_NUMBER"]) if os.environ.get("PR_NUMBER") else None,
     "head_sha": os.environ["HEAD_SHA"],
     "ref_name": os.environ.get("REF_NAME", ""),
     "workflow": {

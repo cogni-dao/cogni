@@ -36,15 +36,13 @@ The categories below are about **artifact identity**. The adjacent freeze — wh
 
 ## Inventory
 
-### PR-shaped image tags
+### PR-shaped image tags — ✅ REMOVED (in-repo artifacts)
 
-**Mechanic:** `.github/workflows/pr-build.yml`, `scripts/ci/resolve-pr-build-images.sh`, and `flight-preview.yml` still use `pr-<prNumber>-<headSha>`, `mq-<prNumber>-<queueSha>`, and `preview-<sha>` for in-repo artifacts.
+**Status (2026-06-23):** Removed for the operator's own in-repo artifacts. `pr-build.yml` now publishes `<image>:sha-<sourceSha>` on `pull_request` / `merge_group` / `push:main` (mirroring node-template); `resolve-pr-build-images.sh` parses `sha-`; `flight-preview.yml` resolves `sha-<mainSha>` directly (the `preview-<sha>` re-tag step is deleted); `promote-and-deploy.yml` resolves `sha-<sourceSha>` for in-repo nodes. The `pr-<n>-<sha>` / `mq-<n>-<sha>` / `preview-<sha>` namespaces no longer exist.
 
-**Why it is legacy:** The deploy coordinate is not `source_repo + sourceSha + image_repository`; it is a PR-derived lookup namespace.
+**Original mechanic (historical):** `pr-build.yml`, `resolve-pr-build-images.sh`, and `flight-preview.yml` used `pr-<prNumber>-<headSha>`, `mq-<prNumber>-<queueSha>`, and `preview-<sha>` for in-repo artifacts — a PR-derived lookup namespace, not `source_repo + sourceSha + image_repository`.
 
-**Why not removed here:** Operator-owned in-repo artifacts still need this path until their catalog rows publish `source_repo` + `image_repository` and the source-SHA resolver covers them.
-
-**Removal condition:** Every deployable catalog row has an artifact source repo and every source repo publishes `image_repository:sha-<sourceSha>`. Preview resolves all changed targets by source-SHA tags; no re-tagging step remains.
+**Residual:** `candidate-flight.yml` still accepts a `pr_number` workflow input for the transitional monorepo dispatch lane, but it resolves the same `sha-<headSha>` image (no pr-/mq- tag). Deleting that input + unifying onto `node_slug + source_sha` is tracked under _Candidate PR-number dispatch_ below.
 
 ### Candidate PR-number dispatch
 
@@ -66,15 +64,11 @@ The categories below are about **artifact identity**. The adjacent freeze — wh
 
 **Removal condition:** Parent-owned deployables publish `source_repo` + `image_repository` rows and use the same `sha-<sourceSha>` resolver. `detect-affected.sh` remains a build-plane selector only; deploy selection consumes artifact records.
 
-### Preview re-tagging
+### Preview re-tagging — ✅ REMOVED
 
-**Mechanic:** `flight-preview.yml` re-tags merge-queue images into `preview-<mainSha>` for parent-built targets.
+**Status (2026-06-23):** Done. The `Re-tag merge_group images as preview-{sha}` step is deleted from `flight-preview.yml`; it now resolves `sha-<mainSha>` (published by pr-build on `merge_group` AND `push:main`) and `promote-and-deploy.yml` resolves the same `sha-<sourceSha>` for in-repo nodes — one digest, carried forward, no mint-a-new-tag step. `promote-preview-seed-main.sh` seeds from `sha-<mergeSha>` too.
 
-**Why it is legacy:** Preview should carry the candidate-proven digest forward, not mint a new lookup tag.
-
-**Why not removed here:** Parent-built in-repo artifacts still need a lookup path for `promote-and-deploy.yml`. Remote-source artifact rows now bypass this and resolve `image_repository:sha-<sourceSha>` directly.
-
-**Removal condition:** `promote-and-deploy.yml` consumes a resolved digest payload or resolves every target from `image_repository:sha-<sourceSha>`; the `Re-tag merge_group images as preview-{sha}` step is deleted.
+**Original mechanic (historical):** `flight-preview.yml` re-tagged merge-queue images into `preview-<mainSha>` for parent-built targets — a new lookup tag instead of carrying the candidate-proven digest forward.
 
 ### Digest re-resolution instead of carry-forward
 

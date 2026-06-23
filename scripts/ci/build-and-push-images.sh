@@ -26,6 +26,10 @@ export IMAGE_NAME_MIGRATOR=${IMAGE_NAME_MIGRATOR:-${IMAGE_NAME_APP}-migrate}
 IMAGE_TAG=${IMAGE_TAG:-}
 PLATFORM=${PLATFORM:-linux/amd64}
 OUTPUT_FILE=${OUTPUT_FILE:-${RUNNER_TEMP:-/tmp}/build-images.json}
+# FORK_FREEDOM: a fork PR builds for signal but must not push to a namespace its
+# token can't write. SHOULD_PUSH=false → build-only (no push, no digest). Defaults
+# to true so same-repo / merge_group / push:main behavior is unchanged.
+SHOULD_PUSH=${SHOULD_PUSH:-true}
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -141,9 +145,13 @@ build_target() {
     --cache-from "type=gha,scope=build-${target}"
     --cache-to "type=gha,mode=max,scope=build-${target}"
     --tag "$tag"
-    --push
-    "$context"
   )
+  if [ "$SHOULD_PUSH" = "false" ]; then
+    # FORK_FREEDOM build-only: validate the image compiles; do not push.
+    args+=("$context")
+  else
+    args+=(--push "$context")
+  fi
   docker buildx build "${args[@]}"
 }
 
@@ -168,10 +176,16 @@ for target in "${requested_targets[@]}"; do
   [ -z "$target" ] && continue
 
   full_tag=$(resolve_tag "$target")
-  log_info "Building and pushing ${target} -> ${full_tag}"
+  log_info "Building ${target} -> ${full_tag} (push=${SHOULD_PUSH})"
   build_target "$target" "$full_tag"
-  digest_ref=$(resolve_digest_ref "$full_tag")
-  log_info "Resolved ${target} digest: ${digest_ref}"
+  if [ "$SHOULD_PUSH" = "false" ]; then
+    # Build-only (FORK_FREEDOM): no pushed image, so no resolvable digest.
+    digest_ref=""
+    log_info "Built ${target} (not pushed); no digest"
+  else
+    digest_ref=$(resolve_digest_ref "$full_tag")
+    log_info "Resolved ${target} digest: ${digest_ref}"
+  fi
 
   json_items+=("    {\n      \"target\": \"${target}\",\n      \"tag\": \"${full_tag}\",\n      \"digest\": \"${digest_ref}\"\n    }")
   built_targets+=("$target")
