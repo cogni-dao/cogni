@@ -2138,8 +2138,6 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
     const payload = rulesetGetToPutPayload(full as RulesetResponse);
 
     // 3. Idempotent apply on the target: PUT if a same-named ruleset exists, else POST.
-    //    octokit's generated rulesets types are stricter than the write surface; cast
-    //    the verbatim-copied payload at this single boundary.
     const { data: targetRulesets } = await targetOctokit.request(
       "GET /repos/{owner}/{repo}/rulesets",
       { owner: targetOwner, repo: targetRepo }
@@ -2148,22 +2146,38 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       targetRulesets as ReadonlyArray<{ id: number; name: string }>
     ).find((r) => r.name === MERGE_QUEUE_RULESET_NAME);
     if (existing) {
-      await targetOctokit.request(
+      await this.requestRaw(
+        targetOctokit,
         "PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}",
         {
           owner: targetOwner,
           repo: targetRepo,
           ruleset_id: existing.id,
-          ...(payload as unknown as Record<string, unknown>),
+          ...payload,
         }
       );
     } else {
-      await targetOctokit.request("POST /repos/{owner}/{repo}/rulesets", {
-        owner: targetOwner,
-        repo: targetRepo,
-        ...(payload as unknown as Record<string, unknown>),
-      });
+      await this.requestRaw(
+        targetOctokit,
+        "POST /repos/{owner}/{repo}/rulesets",
+        { owner: targetOwner, repo: targetRepo, ...payload }
+      );
     }
+  }
+
+  /**
+   * Issue a GitHub request through octokit's LOOSE (`route: string`) overload. The
+   * generated rulesets write-params (enum unions, discriminated rule parameters) are
+   * stricter than our verbatim-copied `RulesetWritePayload`, which is runtime-correct
+   * but not statically assignable to them. Typing `route` as `string` selects the
+   * generic overload whose body is `RequestParameters`, accepting the dynamic payload.
+   */
+  private async requestRaw(
+    octokit: Octokit,
+    route: string,
+    params: Record<string, unknown>
+  ): Promise<void> {
+    await octokit.request(route, params);
   }
 
   private async ensureActionsEnabled(
