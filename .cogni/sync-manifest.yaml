@@ -47,8 +47,19 @@ divergences:
       # "only-on-artifact"). See the artifact_only twin entry.
       - "AGENTS.md" # dev-freeze banner; both-list entry (see comment above)
       - "nodes/operator/**" # hub-only node
+      - "nodes/scheduler-worker/**" # hub-only control-plane service node
       - "infra/catalog/operator.yaml"
       - "infra/catalog/node-template.yaml" # hub-style; artifact carries standalone-style (task.5078) — both-sides intentional divergence
+      # 1-repo-1-node: standalone-node IS one node, not the hub's multi-node registry.
+      # Its infra/catalog carries only node-template + scheduler-worker; the hub's other
+      # node rows are siblings it must not mirror (were flagged 🔴 missing-on-artifact).
+      - "infra/catalog/beacon.yaml"
+      - "infra/catalog/blue.yaml"
+      - "infra/catalog/habitat.yaml"
+      - "infra/catalog/litellm.yaml"
+      - "infra/catalog/openfga.yaml"
+      - "infra/catalog/oss.yaml"
+      - "infra/catalog/red.yaml"
       - ".github/workflows/release.yml" # no production env
       - "tests/ci-invariants/**" # hub-only CI structural tests
       - "infra/k8s/secrets/production/**" # hub production secrets — never ship to public template
@@ -58,6 +69,10 @@ divergences:
       - "scripts/experiments/**" # hub-only research scripts
     artifact_only:
       - "AGENTS.md" # dev-freeze banner twin (see omit_from_artifact comment) — both lists required to zero the bidirectional drift flag
+      # The node BODY. standalone-node ships the whole single node under nodes/node-template/**;
+      # the hub has ZERO files there (node-template is a catalog-pinned remote source, not in-tree),
+      # so every file flagged 🟣 only-on-artifact. This one rule is ~68% of cogni#1366 (~1146 items).
+      - "nodes/node-template/**"
       - "infra/fork.yaml"
       - "infra/k8s/overlays/_template/node-template/**"
       - "infra/catalog/node-template.yaml" # standalone-style fork catalog — see omit_from_artifact twin (both-sides divergence)
