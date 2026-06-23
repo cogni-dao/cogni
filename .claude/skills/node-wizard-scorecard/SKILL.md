@@ -70,8 +70,11 @@ reporting a terminal blocker that prevents opening one:
   repo (including PRs the agent itself authored from a fork), because branch
   protection independently enforces that the standard checks went green.
 - Do not push directly to child `main`.
-- Do not merge your own child or parent PR. Stop at ready/mergeable and report
-  the human/operator merge row as pending.
+- Merge via the operator (`POST /api/v1/vcs/merge`) on green — including a PR you
+  authored from your own fork. The owner-granted RBAC tuple (`node.flight`) IS the
+  trust boundary; branch protection independently enforces the green checks. There
+  is NO self-merge restriction (that contradicted the operator-merge-via-RBAC model).
+  The lone human gate is the one-time RBAC owner-approve, never a per-PR merge.
 - Do not hand-edit the operator gitlink from the child-repo agent.
 - Do not infer GHCR success from a commit existing; the image tag must exist.
 - Do not request flight until the parent pin and child image agree.
@@ -127,7 +130,7 @@ surface, report the exact blocker instead of substituting a weaker health check.
 
 1. Confirm launch-pack facts and recall the knowledge handoff.
 2. Confirm the node repo `main` has branch protection requiring the standard CI
-   checks before merge (the backstop for operator run-checks + merge-on-green);
+   checks before merge (the backstop for operator run-ci + merge-on-green);
    enable it if missing.
 3. Open a child node customization PR.
 4. Wait for child PR CI, human/operator merge, and child `main` image tag.
