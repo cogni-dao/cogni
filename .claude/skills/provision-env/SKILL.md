@@ -48,14 +48,16 @@ gh workflow run provision-env.yml --repo <owner>/<repo> \
 
 ### Modes (`-f mode=`)
 
-A full provision is the default. Narrow, idempotent **day-2 heal** modes reconcile ONE substrate piece on an existing VM without a full re-provision (verify-and-heal; a re-run is a no-op):
+A full provision is the default. The narrow, idempotent **day-2 heal** mode reconciles the OpenBao SA/role substrate on an existing VM without a full re-provision (verify-and-heal; a re-run is a no-op):
 
-- **`observability`** — make the env **born-observable** so the node-log proxy (`GET /api/v1/nodes/{id}/observability/logs`) can read any node's logs. Reconciles the two per-env pieces a fresh provision's Phase 5e already wires but an env provisioned **before** the feature lacks: (1) re-push the Alloy `nodeId`→`node` Loki-label config + restart, (2) seed the operator Grafana read creds at `cogni/<env>/operator`. **Use this — never hand-write `cogni/<env>/operator/GRAFANA_*`.**
-  ```bash
-  gh workflow run provision-env.yml -f env=<env> -f mode=observability \
-    -f openbao_root_token='<root token from .local/<env>-openbao-init.json>'
-  ```
-  Cred precedence: explicit `GRAFANA_*` inputs → else mirror `cogni/<env>/_shared` (Phase 5e auto-mint). If `_shared` was never minted (no `GH_GRAFANA_CLOUD_ADMIN_TOKEN` at provision time), pass the `glsa_` read token + URL explicitly — one Grafana stack serves every env (env is just a Loki label). Scripts: `scripts/setup/reconcile-observability.sh`; fresh-env seed in `provision-env-vm.sh` Phase 5e. Spec: `docs/spec/grafana-observability-access.md` §"Born observable".
+- **`substrate-only`** — reconcile the env's OpenBao auth/role/SA layer on the existing VM (no tofu/VM/DNS). See `scripts/setup/reconcile-env-substrate.sh`.
+
+> **Born-observable is NOT a provision mode** (it was `mode=observability` until the substrate fold; superseded). The node-log proxy (`GET /api/v1/nodes/{id}/observability/logs`) depends on two per-env pieces, and **both now come up on the normal flow — no bespoke lane, no "never hand-write" prohibition:**
+>
+> 1. **Alloy `nodeId`→`node` Loki-label config.** Re-pushed + checksum-restarted by the substrate-readiness lane (`scripts/ci/reconcile-node-substrate.sh` → `reconcile-alloy-config.remote.sh`), which runs on **every** candidate-flight + promote — so even an app-only promote (`skip_infra: true`) lands it current. Idempotent; an unchanged config is a no-op.
+> 2. **Operator Grafana read creds** at `cogni/<env>/operator/{GRAFANA_URL,GRAFANA_SERVICE_ACCOUNT_TOKEN}`. The catalog row (`infra/secrets-catalog.yaml`, `service: operator`) + the operator ExternalSecret + provision **Phase 5e** (mints the `glsa_` read token from the one-time `GH_GRAFANA_CLOUD_ADMIN_TOKEN` and seeds **both** `_shared` AND `operator`) own this. A fresh provision wires it at birth.
+>
+> **If an OLD env (provisioned before Phase 5e seeded the operator path) lacks the creds:** re-run the standard provision, or seed `cogni/<env>/operator/GRAFANA_*` through the normal secret path (`secret-materialize.sh` / the substrate lane) — one Grafana stack serves every env (env is just a Loki label), so the same `glsa_` read token + URL is correct everywhere. Spec: `docs/spec/grafana-observability-access.md` §"Born observable".
 
 ## Phase map (where things die)
 
