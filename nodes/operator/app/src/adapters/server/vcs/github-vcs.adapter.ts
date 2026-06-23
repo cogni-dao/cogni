@@ -359,6 +359,7 @@ export class GitHubVcsAdapter implements VcsCapability {
       approved: runIds.length,
       prNumber: params.prNumber,
       headSha,
+      headRepo: pr.head.repo?.full_name ?? null,
       runIds,
       message:
         runIds.length > 0

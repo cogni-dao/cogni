@@ -35,6 +35,7 @@ const fakeVcs = vi.hoisted(() => ({
 }));
 
 const mockResolveNodeRepo = vi.hoisted(() => vi.fn());
+const mockDispatchPrBuild = vi.hoisted(() => vi.fn());
 const authzHolder = vi.hoisted(
   () =>
     ({ current: null }) as {
@@ -68,7 +69,10 @@ const mockLog = vi.hoisted(() => ({
 }));
 
 vi.mock("@/bootstrap/capabilities/operator-deploy-plane", () => ({
-  createOperatorDeployPlane: () => ({ resolveNodeRepo: mockResolveNodeRepo }),
+  createOperatorDeployPlane: () => ({
+    resolveNodeRepo: mockResolveNodeRepo,
+    dispatchPrBuild: mockDispatchPrBuild,
+  }),
 }));
 
 vi.mock("@/bootstrap/capabilities/vcs", () => ({
@@ -166,8 +170,14 @@ describe("POST /api/v1/vcs/run-checks", () => {
       approved: 2,
       prNumber: 7,
       headSha: "0123456789012345678901234567890123456789",
+      headRepo: "flock-leader/cogni",
       runIds: [101, 102],
       message: "Approved 2 workflow run(s) for PR #7 @ 01234567.",
+    });
+    mockDispatchPrBuild.mockResolvedValue({
+      dispatched: true,
+      workflowUrl: "https://github.com/Cogni-DAO/cogni/actions",
+      message: "Trusted build dispatched.",
     });
   });
 
@@ -217,6 +227,37 @@ describe("POST /api/v1/vcs/run-checks", () => {
     expect(fakeVcs.approveWorkflowRuns).toHaveBeenCalledWith({
       owner: "Cogni-DAO",
       repo: NODE_SLUG,
+      prNumber: 7,
+    });
+    // run-ci's build half: the operator dispatches the trusted pr-build of the
+    // approved head so a flightable sha-<headSha> image exists.
+    expect(mockDispatchPrBuild).toHaveBeenCalledWith({
+      owner: "Cogni-DAO",
+      repo: NODE_SLUG,
+      headRepo: "flock-leader/cogni",
+      headSha: "0123456789012345678901234567890123456789",
+      prNumber: 7,
+    });
+  });
+
+  it("operator monorepo lane: catalog_missing for the operator node falls back to NODE_SUBMODULE_PARENT", async () => {
+    dbState.byId.operator = { nodeId: NODE_ID, slug: "operator" };
+    grant(NODE_ID);
+    mockResolveNodeRepo.mockRejectedValue(
+      Object.assign(new Error("not found"), { code: "catalog_missing" })
+    );
+    const res = await post({ nodeId: "operator", prNumber: 7 });
+    expect(res.status).toBe(200);
+    expect(fakeVcs.approveWorkflowRuns).toHaveBeenCalledWith({
+      owner: "cogni-test-org",
+      repo: "cogni-monorepo",
+      prNumber: 7,
+    });
+    expect(mockDispatchPrBuild).toHaveBeenCalledWith({
+      owner: "cogni-test-org",
+      repo: "cogni-monorepo",
+      headRepo: "flock-leader/cogni",
+      headSha: "0123456789012345678901234567890123456789",
       prNumber: 7,
     });
   });

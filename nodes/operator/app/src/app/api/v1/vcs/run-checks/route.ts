@@ -42,6 +42,9 @@ import { EVENT_NAMES, logEvent } from "@/shared/observability";
 
 export const runtime = "nodejs";
 
+/** The one in-repo node — its "own repo" is the operator monorepo (NODE_SUBMODULE_PARENT). */
+const OPERATOR_NODE_SLUG = "operator";
+
 export const POST = wrapRouteHandlerWithLogging(
   { routeId: "vcs.runChecks", auth: { mode: "required", getSessionUser } },
   async (ctx, request, sessionUser) => {
@@ -115,10 +118,18 @@ export const POST = wrapRouteHandlerWithLogging(
       );
     }
 
+    let deployPlane: ReturnType<typeof createOperatorDeployPlane>;
+    try {
+      deployPlane = createOperatorDeployPlane(env);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "deploy plane not configured";
+      return fail(503, "deploy_plane_config_missing", message, { prNumber });
+    }
     let owner: string;
     let repo: string;
     try {
-      const nodeRepo = await createOperatorDeployPlane(env).resolveNodeRepo({
+      const nodeRepo = await deployPlane.resolveNodeRepo({
         parentOwner,
         parentRepo,
         slug: rbac.node.slug,
@@ -127,18 +138,25 @@ export const POST = wrapRouteHandlerWithLogging(
       repo = nodeRepo.repo;
     } catch (error) {
       const code = (error as { code?: string })?.code;
-      if (code === "catalog_missing") {
+      // IN-REPO node (the operator): its catalog row carries no `source_repo`, so
+      // resolveNodeRepo 404s. The operator's "own repo" IS the monorepo — run CI
+      // against NODE_SUBMODULE_PARENT, mirroring the merge route's monorepo lane.
+      if (code === "catalog_missing" && rbac.node.slug === OPERATOR_NODE_SLUG) {
+        owner = parentOwner;
+        repo = parentRepo;
+      } else if (code === "catalog_missing") {
         return fail(404, "catalog_missing", "node catalog entry not found", {
           prNumber,
           slug: rbac.node.slug,
         });
+      } else {
+        return fail(
+          503,
+          "merge_target_not_configured",
+          "node repo not resolvable",
+          { prNumber, slug: rbac.node.slug }
+        );
       }
-      return fail(
-        503,
-        "merge_target_not_configured",
-        "node repo not resolvable",
-        { prNumber, slug: rbac.node.slug }
-      );
     }
 
     // 5. Approve the held fork-PR runs (adapter approves only `pull_request` runs — safe).
@@ -150,6 +168,30 @@ export const POST = wrapRouteHandlerWithLogging(
     } catch (error) {
       const g = classifyGithubOpError(error);
       return fail(g.status, g.errorCode, g.error, { prNumber });
+    }
+
+    // 5b. Build the deployable image (the BUILD half of run-ci — "the build is
+    //     100% critical to CI"). A fork PR's `pull_request` run is read-only and
+    //     cannot push, so the approved gate CI alone yields no flightable image.
+    //     The operator dispatches the SAME pr-build.yml (workflow_dispatch, trusted
+    //     base-repo context) for the approved head → `sha-<headSha>`, which
+    //     candidate-flight then resolves. No new workflow; RBAC was the gate above.
+    if (result.headRepo && result.headSha) {
+      try {
+        await deployPlane.dispatchPrBuild({
+          owner,
+          repo,
+          headRepo: result.headRepo,
+          headSha: result.headSha,
+          prNumber,
+        });
+      } catch (error) {
+        const g = classifyGithubOpError(error);
+        return fail(g.status, g.errorCode, g.error, {
+          prNumber,
+          slug: rbac.node.slug,
+        });
+      }
     }
 
     // 6. Success.

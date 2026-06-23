@@ -251,6 +251,23 @@ export interface OperatorDeployPlanePort {
   }): Promise<CandidateFlightDispatchResult>;
 
   /**
+   * Dispatch `pr-build.yml` (workflow_dispatch) in the BASE repo for a TRUSTED build of an approved
+   * PR head. A fork contributor's `pull_request` run is read-only (GitHub's fork-PR security model)
+   * so it can't push — this operator-dispatched run (base repo, packages:write) builds the tree at
+   * `headRepo@headSha` and pushes the same `sha-<headSha>` image candidate-flight resolves. It is the
+   * BUILD half of `run-ci`. RBAC (`node.flight`) is enforced at the route BEFORE this is called.
+   * Reuses the SAME pr-build workflow — no new workflow, no fork-build lane (the purged abstraction
+   * stays purged; the capability lives in pr-build.yml itself).
+   */
+  dispatchPrBuild(input: {
+    owner: string;
+    repo: string;
+    headRepo: string;
+    headSha: string;
+    prNumber: number;
+  }): Promise<CandidateFlightDispatchResult>;
+
+  /**
    * Promote a node to preview OR production — ONE code path, ONE_PROMOTION_PRIMITIVE. The rung
    * differs only by the dispatched `env` + the route's authz (preview is the ungated node-merge
    * hook; production is RBAC-gated on `node.promote_production`, enforced BEFORE this is called).

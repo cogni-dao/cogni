@@ -101,6 +101,10 @@ export interface ApproveWorkflowRunsResult {
   readonly approved: number;
   readonly prNumber: number;
   readonly headSha: string | null;
+  // The PR head repo `owner/name` (the fork, for a fork PR). Enables the
+  // operator to dispatch a trusted pr-build of the approved head (run-ci's build
+  // half). Null only if the PR/head is unresolvable.
+  readonly headRepo: string | null;
   readonly runIds: readonly number[];
   readonly message: string;
 }

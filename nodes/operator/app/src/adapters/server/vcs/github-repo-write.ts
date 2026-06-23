@@ -551,6 +551,38 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
     };
   }
 
+  async dispatchPrBuild(input: {
+    owner: string;
+    repo: string;
+    headRepo: string;
+    headSha: string;
+    prNumber: number;
+  }): Promise<CandidateFlightDispatchResult> {
+    const octokit = await this.getOctokit(input.owner, input.repo);
+    // workflow_dispatch on the SAME pr-build.yml (ref: main = the trusted workflow
+    // definition), building the approved head at headRepo@headSha → sha-<headSha>.
+    await octokit.request(
+      "POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches",
+      {
+        owner: input.owner,
+        repo: input.repo,
+        workflow_id: "pr-build.yml",
+        ref: "main",
+        inputs: {
+          head_repo: input.headRepo,
+          head_sha: input.headSha,
+          pr_number: String(input.prNumber),
+        },
+        request: { signal: AbortSignal.timeout(15_000) },
+      }
+    );
+    return {
+      dispatched: true,
+      workflowUrl: `https://github.com/${input.owner}/${input.repo}/actions/workflows/pr-build.yml`,
+      message: `Trusted build dispatched for ${input.headRepo}@${input.headSha.slice(0, 8)} (PR #${input.prNumber}).`,
+    };
+  }
+
   async dispatchNodePromote(input: {
     owner: string;
     repo: string;
