@@ -42,7 +42,7 @@ describe("sha- artifact identity (SOURCE_SHA_IS_DEPLOY_IDENTITY)", () => {
 
   it("pr-build.yml tags sha-<sourceSha>, never pr-{N}/mq-{N}", () => {
     const yml = WF("pr-build.yml");
-    expect(yml).toContain("IMAGE_TAG=\"sha-${SOURCE_SHA}\"");
+    expect(yml).toMatch(/IMAGE_TAG="sha-\$\{SOURCE_SHA\}"/);
     expect(yml).not.toMatch(/IMAGE_TAG="(pr|mq)-/);
   });
 
@@ -58,8 +58,8 @@ describe("sha- artifact identity (SOURCE_SHA_IS_DEPLOY_IDENTITY)", () => {
       expect(yml, `${name}: legacy IMAGE_TAG=`).not.toMatch(
         /IMAGE_TAG="(pr|mq|preview)-/
       );
-      expect(yml, `${name}: legacy preview- image-tag base`).not.toContain(
-        '"preview-${HEAD_SHA}"'
+      expect(yml, `${name}: legacy preview- image-tag base`).not.toMatch(
+        /"preview-\$\{HEAD_SHA\}"/
       );
       expect(yml, `${name}: legacy mq- image_tag output`).not.toMatch(
         /image_tag=mq-/
@@ -69,7 +69,7 @@ describe("sha- artifact identity (SOURCE_SHA_IS_DEPLOY_IDENTITY)", () => {
 
   it("flight-preview.yml resolves sha-<mainSha> directly (no re-tag to preview-)", () => {
     const yml = WF("flight-preview.yml");
-    expect(yml).toContain("image_tag=sha-${HEAD_SHA}");
+    expect(yml).toMatch(/image_tag=sha-\$\{HEAD_SHA\}/);
     // The mq-→preview- re-tag step is purged.
     expect(yml).not.toContain("PREVIEW_TAG=");
     expect(yml).not.toMatch(/Re-tag merge_group images/);
