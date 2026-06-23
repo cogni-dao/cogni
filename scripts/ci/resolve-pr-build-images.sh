@@ -56,12 +56,10 @@ fi
 # promote-build-payload.sh can write .promote-state/source-sha-by-app.json
 # for cross-env contract verification (bug.0321 Fix 4). Fall back to
 # parsing the IMAGE_TAG when the caller didn't pass it explicitly.
-# Two tag namespaces (bug.0412):
-#   pr-{N}-{X}  — pull_request build, X = BUILD_SHA = original PR head SHA
-#   mq-{N}-{Y}  — merge_group build, Y = BUILD_SHA = queue/rebased commit
-# Both encode BUILD_SHA as the trailing 40-char hex.
+# ONE identity (SOURCE_SHA_IS_DEPLOY_IDENTITY): every in-repo image is tagged
+# `sha-<sourceSha>` — the legacy pr-{N}-{X}/mq-{N}-{Y} namespaces are purged.
 if [ -z "$SOURCE_SHA" ]; then
-  SOURCE_SHA=$(printf '%s' "$IMAGE_TAG" | sed -E 's/^(pr|mq)-[0-9]+-//')
+  SOURCE_SHA=$(printf '%s' "$IMAGE_TAG" | sed -E 's/^sha-//')
 fi
 
 if ! command -v docker >/dev/null 2>&1; then

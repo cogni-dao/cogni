@@ -6,20 +6,29 @@ name: PR Build
 # job merges per-leg fragments into the canonical build-manifest.json
 # artifact so downstream candidate-flight consumers see no contract change.
 #
-# Triggers on both `pull_request` and `merge_group` (task.0391):
-# - pull_request: builds at PR head SHA, tagged pr-{N}-{X}. PR-time CI signal,
-#   consumed by candidate-flight.yml. Tag is IMMUTABLE post-build.
-# - merge_group: builds at the queue's rebased candidate SHA Y, tagged
-#   mq-{N}-{Y}. flight-preview.yml on push:main resolves this tag and re-tags
-#   it as preview-{mainSHA}, so the preview env reflects the rebased tree
-#   (PR #1033). Tag namespace is intentionally distinct from pr-{N}-{X} so
-#   merge_group rebuilds cannot mutate the PR-time image — that mutation
-#   broke candidate-flight verify-buildsha when a PR merged mid-flight
-#   (bug.0412).
+# ONE artifact identity: every event publishes `<image_repository>:sha-<sourceSha>`
+# (SOURCE_SHA_IS_DEPLOY_IDENTITY / BUILD_ONCE_PROMOTE_DIGEST, node-ci-cd-contract.md).
+# The legacy pr-{N}-{X} / mq-{N}-{Y} / preview-{sha} split-brain is purged — the
+# operator app artifact now follows the same contract as every node-template node.
+#
+# Triggers (mirrors Cogni-DAO/node-template's pr-build.yml):
+# - pull_request: builds at PR head SHA → sha-{headSHA}. PR-time CI signal +
+#   the `manifest` required check (same-repo PRs push; forks build via the G2 lane).
+# - merge_group: builds at the queue's rebased candidate SHA Y → sha-{Y}. Produces
+#   the `manifest` required check the merge queue waits on; Y == the squash-merged
+#   main SHA, so flight-preview finds sha-{mainSHA} already built when it runs.
+# - push:main: builds at the merged main SHA → sha-{mainSHA}. This is what makes the
+#   operator self-deployable on EVERY merge — incl. a direct/admin/`/vcs/merge`
+#   squash that bypasses the queue (the #1792 undeployable-main fix). On a queue
+#   merge it is a redundant cache-hot rebuild of the same sha- (accepted, matches
+#   node-template). The merge queue STAYS — it is the merge gate, orthogonal to
+#   the build trigger.
 
 on:
   pull_request:
   merge_group:
+  push:
+    branches: [main]
 
 permissions:
   contents: read
@@ -28,8 +37,10 @@ permissions:
 # Different concurrency keys per event type. Cross-event races (force-push to
 # an enqueued PR) are eliminated by the queue's eviction-on-push behavior.
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('pr-build-pr-{0}', github.event.pull_request.number) || format('pr-build-mq-{0}', github.event.merge_group.head_ref) }}
-  cancel-in-progress: true
+  group: ${{ github.event_name == 'pull_request' && format('pr-build-pr-{0}', github.event.pull_request.number) || github.event_name == 'merge_group' && format('pr-build-mq-{0}', github.event.merge_group.head_ref) || format('pr-build-push-{0}', github.ref) }}
+  # Cancel superseded PR / merge_group runs, but NEVER cancel a push:main build —
+  # it publishes the deployable sha-<mainSha> image (cancelling would drop it).
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 env:
   # FORK_FREEDOM: owner-derived so a fork pushes to its OWN GHCR namespace (image-tags.sh
@@ -43,17 +54,24 @@ jobs:
   # build SHA, checkout ref). Resolve once here; downstream jobs read outputs.
   resolve:
     runs-on: ubuntu-latest
+    # Build on: push:main (the self-deploy build), merge_group (the queue's
+    # `manifest` check), and same-repo PRs (PR-time signal). Fork PRs are handled
+    # by the operator G2 lane, not here. Skip maintenance commits on main that
+    # carry no deployable change (mirrors flight-preview.yml's guard).
     if: |
+      (github.event_name == 'push' &&
+        !startsWith(github.event.head_commit.message, 'chore(deps): argocd-image-updater') &&
+        !startsWith(github.event.head_commit.message, 'chore(preview):')) ||
       github.event_name == 'merge_group' ||
       github.event.pull_request.head.repo.full_name == github.repository
     outputs:
       pr_number: ${{ steps.r.outputs.pr_number }}
-      original_head_sha: ${{ steps.r.outputs.original_head_sha }}
-      build_sha: ${{ steps.r.outputs.build_sha }}
+      source_sha: ${{ steps.r.outputs.source_sha }}
       checkout_ref: ${{ steps.r.outputs.checkout_ref }}
       base_ref: ${{ steps.r.outputs.base_ref }}
       head_ref_name: ${{ steps.r.outputs.head_ref_name }}
       image_tag: ${{ steps.r.outputs.image_tag }}
+      should_push: ${{ steps.r.outputs.should_push }}
     steps:
       - id: r
         env:
@@ -61,60 +79,64 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           REPO: ${{ github.repository }}
           PR_HEAD_REF_PR: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           MQ_HEAD_REF: ${{ github.event.merge_group.head_ref }}
           MQ_BASE_REF: ${{ github.event.merge_group.base_ref }}
           PR_NUMBER_PR: ${{ github.event.pull_request.number }}
           PR_HEAD_SHA_PR: ${{ github.event.pull_request.head.sha }}
           PR_BASE_REF_PR: ${{ github.event.pull_request.base.ref }}
           PUSH_SHA: ${{ github.sha }}
+          PUSH_REF_NAME: ${{ github.ref_name }}
+          PUSH_SUBJECT: ${{ github.event.head_commit.message }}
         run: |
           set -euo pipefail
+          # ONE identity for every event: SOURCE_SHA is the source revision being
+          # built; the image tag is always `sha-<SOURCE_SHA>` (no pr-/mq-/preview-).
+          # PR_NUMBER is resolved on all events purely to drive affected-only
+          # detection (the GitHub PR files API in `detect`); it is NEVER the tag.
+          PR_NUMBER=""
+          SHOULD_PUSH=true
           if [ "$EVENT_NAME" = "pull_request" ]; then
             PR_NUMBER="$PR_NUMBER_PR"
-            ORIGINAL_HEAD_SHA="$PR_HEAD_SHA_PR"
-            BUILD_SHA="$ORIGINAL_HEAD_SHA"
-            CHECKOUT_REF="$ORIGINAL_HEAD_SHA"
+            SOURCE_SHA="$PR_HEAD_SHA_PR"
+            CHECKOUT_REF="$SOURCE_SHA"
             BASE_REF="$PR_BASE_REF_PR"
             HEAD_REF_NAME="$PR_HEAD_REF_PR"
+            # FORK_FREEDOM: a fork PR builds for signal but cannot push to the
+            # base GHCR namespace (the resolve `if` currently gates forks out, so
+            # in practice this is always same-repo here; kept explicit for safety).
+            [ "$PR_HEAD_REPO" = "$REPO" ] || SHOULD_PUSH=false
           elif [ "$EVENT_NAME" = "merge_group" ]; then
-            # head_ref format: refs/heads/gh-readonly-queue/<base>/pr-<N>-<orig_head_sha>[-<salt>]
-            # The head SHA in the ref name may be an abbreviated prefix (~7 chars);
-            # we look up the full SHA via API to keep pr-{N}-{X} tag consistent
-            # with what pr-build(pull_request) produced.
-            PR_PATH="${MQ_HEAD_REF##*/}" # "pr-<N>-<sha>[-<salt>]"
-            if [[ ! "$PR_PATH" =~ ^pr-([0-9]+)- ]]; then
-              echo "::error::Could not parse PR number from merge_group head_ref: $MQ_HEAD_REF"
-              exit 1
+            # head_ref: refs/heads/gh-readonly-queue/<base>/pr-<N>-<orig_head_sha>[-<salt>]
+            PR_PATH="${MQ_HEAD_REF##*/}"
+            if [[ "$PR_PATH" =~ ^pr-([0-9]+)- ]]; then
+              PR_NUMBER="${BASH_REMATCH[1]}"
             fi
-            PR_NUMBER="${BASH_REMATCH[1]}"
-            ORIGINAL_HEAD_SHA=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.head.sha')
-            if [ -z "$ORIGINAL_HEAD_SHA" ] || [ "$ORIGINAL_HEAD_SHA" = "null" ]; then
-              echo "::error::Could not resolve full head SHA for PR #${PR_NUMBER}"
-              exit 1
-            fi
-            BUILD_SHA="$PUSH_SHA"      # queue commit (Y) — what's actually built
-            CHECKOUT_REF="$PUSH_SHA"   # checkout the queue commit (Y's tree)
+            SOURCE_SHA="$PUSH_SHA"       # queue/rebased commit (Y) == squash-merge main SHA
+            CHECKOUT_REF="$PUSH_SHA"
             BASE_REF="${MQ_BASE_REF#refs/heads/}"
             HEAD_REF_NAME="${MQ_HEAD_REF#refs/heads/}"
+          elif [ "$EVENT_NAME" = "push" ]; then
+            SOURCE_SHA="$PUSH_SHA"        # merged main SHA — the self-deploy build
+            CHECKOUT_REF="$PUSH_SHA"
+            BASE_REF="main"
+            HEAD_REF_NAME="$PUSH_REF_NAME"
+            # Resolve the merged PR number from the commit subject `(#NNN)` for
+            # affected-only detection (same primary path flight-preview.yml uses).
+            # No PR (direct push) → empty → detect-affected falls back to full scope.
+            PR_NUMBER=$(printf '%s' "$PUSH_SUBJECT" | sed -nE 's/.*\(#([0-9]+)\)[[:space:]]*$/\1/p' | head -1)
           else
             echo "::error::Unsupported event: $EVENT_NAME"
             exit 1
           fi
-          # bug.0412 — split tag namespaces so merge_group rebuilds cannot
-          # mutate the immutable pull_request-time image that candidate-flight
-          # consumes. pull_request → pr-{N}-{X}; merge_group → mq-{N}-{Y}.
-          if [ "$EVENT_NAME" = "merge_group" ]; then
-            IMAGE_TAG="mq-${PR_NUMBER}-${BUILD_SHA}"
-          else
-            IMAGE_TAG="pr-${PR_NUMBER}-${ORIGINAL_HEAD_SHA}"
-          fi
+          IMAGE_TAG="sha-${SOURCE_SHA}"
           echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
-          echo "original_head_sha=$ORIGINAL_HEAD_SHA" >> "$GITHUB_OUTPUT"
-          echo "build_sha=$BUILD_SHA" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
           echo "checkout_ref=$CHECKOUT_REF" >> "$GITHUB_OUTPUT"
           echo "base_ref=$BASE_REF" >> "$GITHUB_OUTPUT"
           echo "head_ref_name=$HEAD_REF_NAME" >> "$GITHUB_OUTPUT"
           echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+          echo "should_push=$SHOULD_PUSH" >> "$GITHUB_OUTPUT"
 
   detect:
     needs: resolve
@@ -143,6 +165,14 @@ jobs:
           OUT: ${{ runner.temp }}/pr-changed-paths.txt
         run: |
           set -euo pipefail
+          # No PR resolved (a direct push to main with no `(#NNN)` subject):
+          # emit no changed-paths file so detect-affected.sh falls back to its
+          # full-scope build — never silently builds nothing.
+          if [ -z "$PR_NUMBER" ]; then
+            echo "ℹ️  No PR resolved for this event — detect-affected uses full scope"
+            echo "changed_paths_file=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           # Emit both filename and previous_filename so cross-directory
           # renames trigger rebuilds for the source side too (otherwise
           # renaming nodes/A/x.ts → nodes/B/x.ts only rebuilds B).
@@ -186,7 +216,7 @@ jobs:
     env:
       IMAGE_TAG: ${{ needs.resolve.outputs.image_tag }}
       PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
-      HEAD_SHA: ${{ needs.resolve.outputs.original_head_sha }}
+      HEAD_SHA: ${{ needs.resolve.outputs.source_sha }}
     strategy:
       fail-fast: false
       matrix:
@@ -200,6 +230,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Login to GHCR
+        if: needs.resolve.outputs.should_push == 'true'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -211,19 +242,20 @@ jobs:
           TARGETS: ${{ matrix.target }}
           GHCR_USERNAME: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # On pull_request: BUILD_SHA = PR head SHA (overrides the ephemeral
-          # refs/pull/{N}/merge commit GITHUB_SHA — see bug.0313).
-          # On merge_group: BUILD_SHA = queue commit SHA (Y) — the actual
-          # rebased tree being built. /readyz reports this so deployed pods
-          # report the SHA whose tree they were built from.
-          BUILD_SHA: ${{ needs.resolve.outputs.build_sha }}
+          # BUILD_SHA = SOURCE_SHA — the source revision baked into the image
+          # (/version.buildSha == sourceSha, the deploy contract). One identity
+          # across pull_request / merge_group / push:main (overrides the ephemeral
+          # refs/pull/{N}/merge GITHUB_SHA on pull_request — see bug.0313).
+          BUILD_SHA: ${{ needs.resolve.outputs.source_sha }}
+          # FORK_FREEDOM: build for signal, push only when we own the namespace.
+          SHOULD_PUSH: ${{ needs.resolve.outputs.should_push }}
           OUTPUT_FILE: ${{ runner.temp }}/build-fragment-${{ matrix.target }}.json
         run: bash scripts/ci/build-and-push-images.sh
 
       - name: Upload build fragment
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: pr-build-fragment-${{ matrix.target }}-${{ needs.resolve.outputs.pr_number }}-${{ needs.resolve.outputs.original_head_sha }}-${{ needs.resolve.outputs.build_sha }}
+          name: pr-build-fragment-${{ matrix.target }}-${{ needs.resolve.outputs.source_sha }}
           path: ${{ runner.temp }}/build-fragment-${{ matrix.target }}.json
           retention-days: 1
           if-no-files-found: error
@@ -243,7 +275,7 @@ jobs:
       # Required by merge-build-fragments.sh + write-build-manifest.sh.
       IMAGE_TAG: ${{ needs.resolve.outputs.image_tag }}
       PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
-      HEAD_SHA: ${{ needs.resolve.outputs.original_head_sha }}
+      HEAD_SHA: ${{ needs.resolve.outputs.source_sha }}
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:
@@ -254,7 +286,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: ${{ runner.temp }}/build-fragments
-          pattern: pr-build-fragment-*-${{ needs.resolve.outputs.pr_number }}-${{ needs.resolve.outputs.original_head_sha }}-${{ needs.resolve.outputs.build_sha }}
+          pattern: pr-build-fragment-*-${{ needs.resolve.outputs.source_sha }}
           merge-multiple: true
 
       - name: Merge fragments into build-images.json
@@ -277,7 +309,7 @@ jobs:
       - name: Upload build manifest
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: build-manifest-pr-${{ needs.resolve.outputs.pr_number }}-${{ needs.resolve.outputs.original_head_sha }}-${{ needs.resolve.outputs.build_sha }}
+          name: build-manifest-${{ needs.resolve.outputs.source_sha }}
           path: ${{ runner.temp }}/build-manifest.json
           retention-days: 7
           if-no-files-found: error

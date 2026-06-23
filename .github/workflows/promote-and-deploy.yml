@@ -272,6 +272,7 @@ jobs:
         env:
           NODE: ${{ matrix.node }}
           HEAD_SHA: ${{ needs.decide.outputs.head_sha }}
+          BUILD_SHA: ${{ needs.decide.outputs.build_sha }}
           PREVIEW_FORWARD: ${{ needs.decide.outputs.preview_forward }}
           NODE_SOURCE_SHA: ${{ inputs.node_source_sha }}
         run: |
@@ -332,7 +333,12 @@ jobs:
             fi
             DIGEST="${full_tag%%:*}@${digest_only}"
           else
-            full_tag=$(image_tag_for_target "$(image_name_for_target "$NODE")" "preview-${HEAD_SHA}" "$NODE")
+            # In-repo artifact (operator, scheduler-worker): ONE identity —
+            # `<image>:sha-<sourceSha>{suffix}` (SOURCE_SHA_IS_DEPLOY_IDENTITY).
+            # The sha IS the BUILD_SHA baked into the image, which verify-buildsha
+            # asserts — so the tag-sha, the recorded source_sha, and /version.buildSha
+            # are the same value. (Was the legacy preview-{sha} re-tag, now purged.)
+            full_tag=$(image_tag_for_target "$(image_name_for_target "$NODE")" "sha-${BUILD_SHA}" "$NODE")
             digest_only=$(docker buildx imagetools inspect "$full_tag" --raw 2>/dev/null \
               | python3 -c "import json,sys; print(json.load(sys.stdin).get('digest',''))" 2>/dev/null || true)
             if [ -z "$digest_only" ]; then
@@ -346,7 +352,7 @@ jobs:
               exit 0
             fi
             DIGEST="${full_tag%%:*}@${digest_only}"
-            APP_SOURCE_SHA="${{ needs.decide.outputs.build_sha }}"
+            APP_SOURCE_SHA="$BUILD_SHA"
           fi
           echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
           echo "source_sha=$APP_SOURCE_SHA" >> "$GITHUB_OUTPUT"

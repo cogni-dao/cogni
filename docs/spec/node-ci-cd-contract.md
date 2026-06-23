@@ -548,10 +548,10 @@ This standard does not split `.dependency-cruiser.cjs` per node. That's a separa
 | --------------------------------- | ---- | ------------------------- | ---------------------------- | ---------------------------------------------------------------------------------------------- |
 | `ci.yaml`                         | CI   | No                        | PR; push main                | Typecheck, lint, unit, component, docs, architecture, scope                                    |
 | `stack-test.yml`                  | CI   | No                        | workflow_dispatch            | Per-node full-stack vitest                                                                     |
-| `pr-build.yml`                    | CI   | GHCR write                | pull_request; merge_group    | Transitional in-repo artifact build aliases (`pr-*` / `mq-*`)                                  |
+| `pr-build.yml`                    | CI   | GHCR write                | pull_request; merge_group; push main | In-repo artifact build → `<image>:sha-<sourceSha>` (SOURCE_SHA_IS_DEPLOY_IDENTITY). `push:main` self-builds every merge (incl. admin/`/vcs/merge` squash); `merge_group` produces the `manifest` queue check |
 | `candidate-flight.yml`            | CD   | GHCR read; deploy         | workflow_dispatch            | Candidate-a target substrate assertion + digest flight from `image_repository:sha-<sourceSha>` |
 | `candidate-flight-infra.yml`      | CD   | SSH/secrets               | workflow_dispatch            | Candidate-a VM compose substrate only                                                          |
-| `flight-preview.yml`              | CD   | GHCR read/write           | push main; workflow_dispatch | Preview dispatch/queue control; any re-tagging is transitional lookup plumbing                 |
+| `flight-preview.yml`              | CD   | GHCR read                 | push main; workflow_dispatch | Preview dispatch by digest: resolves the merge's `sha-<mainSha>` images and dispatches `promote-and-deploy(preview)`. NO re-tag step — promote consumes the same `sha-<mainSha>` digest |
 | `promote-and-deploy.yml`          | CD   | SSH/secrets; deploy       | workflow_dispatch            | Preview/production digest promotion, infra reconcile, verify, e2e                              |
 | `promote-preview-digest-seed.yml` | CD   | GHCR read; contents write | workflow_run                 | Maintains preview digest seed pins on `main` after dispatched preview flights                  |
 

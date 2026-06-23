@@ -1,26 +1,21 @@
 name: Flight Preview
 
 # Triggered on every push to main (PR merged) or via workflow_dispatch(sha).
-# Re-tags mq-{N}-{queueSHA} → preview-{mainSHA} in GHCR (no rebuild) and then
-# calls scripts/ci/flight-preview.sh, which dispatches promote-and-deploy
-# env=preview for the merged SHA. Preview tracks the latest merged SHA
-# (latest-wins); there is no review lease/hold.
+# Resolves the merge's `sha-<mainSHA>` images (published by pr-build.yml on
+# merge_group AND push:main) and calls scripts/ci/flight-preview.sh, which
+# dispatches promote-and-deploy env=preview for the merged SHA. There is NO
+# re-tag step — promote-and-deploy resolves the same sha-<mainSHA> digest
+# directly (BUILD_ONCE_PROMOTE_DIGEST). Preview is latest-wins; no review lease.
 #
 # SHA resolution: HEAD_SHA is the commit on main (github.sha for push events,
-# inputs.sha for dispatch). With merge queue enabled, the squash-merged commit
-# on main equals the queue commit Y that pr-build (merge_group) built, so
-# HEAD_SHA = Y and the merge_group's rebuilt image is at mq-{N}-{HEAD_SHA}.
-# We use that tag for source lookup and HEAD_SHA as the destination preview-{}
-# tag, the source_sha to promote-and-deploy, and the BUILD_SHA assertion.
+# inputs.sha for dispatch). pr-build publishes `<image>:sha-<HEAD_SHA>` on both
+# the merge_group build (queue commit == merged main SHA) and the push:main build
+# — so flight-preview source-addresses by `sha-<HEAD_SHA>`, passes HEAD_SHA as
+# both source_sha and the BUILD_SHA assertion.
 #
-# bug.0412 changed this from pr-{N}-{prHeadSHA} to mq-{N}-{HEAD_SHA}: the old
-# pattern collided with candidate-flight, which also consumes pr-{N}-{X}.
-# pr-build now keeps pull_request tags immutable; flight-preview owns the
-# mq-{N}-{Y} namespace exclusively.
-#
-# Direct pushes to main (no associated PR) are NOT a supported flight trigger:
-# the re-tag source images are pr-build outputs, and a direct push has no PR
-# number. Such pushes exit 0 with a message and do nothing.
+# Direct pushes to main with no associated PR resolve no PR number; such pushes
+# exit 0 with a message and do nothing (the push:main pr-build still publishes
+# the image, so a later workflow_dispatch can flight it).
 
 on:
   push:
@@ -144,17 +139,14 @@ jobs:
             exit 0
           fi
 
-          # bug.0412 — pr-build.yml emits two distinct GHCR tag namespaces:
-          # `pr-{N}-{X}` for pull_request builds (immutable, candidate-flight
-          # consumes), and `mq-{N}-{Y}` for merge_group rebuilds where Y is
-          # the queue/rebased commit. With merge queue enabled, the squash-
-          # merged commit on main equals the queue commit — i.e. HEAD_SHA = Y —
-          # so the merge_group's rebuilt image is at `mq-{N}-{HEAD_SHA}`.
-          # That image carries the rebased tree's BUILD_SHA, which is what
-          # preview should reflect.
+          # ONE identity (SOURCE_SHA_IS_DEPLOY_IDENTITY): pr-build publishes
+          # `<image>:sha-<sourceSha>` on BOTH merge_group (sourceSha = queue commit
+          # = this merged main SHA) AND push:main (sourceSha = this merged main SHA).
+          # Either way the deployable for this merge is at `sha-${HEAD_SHA}` — no
+          # pr-/mq-/preview- namespaces, no re-tag. promote-and-deploy resolves the
+          # same `sha-${HEAD_SHA}` directly, so preview carries that exact digest.
           #
-          # PR_HEAD_SHA (the original PR branch head) is still recorded for
-          # logging / artifact provenance only; it is NOT the image lookup key.
+          # PR_HEAD_SHA (the original PR branch head) is recorded for logging only.
           PR_HEAD_SHA=$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.head.sha')
           if [ -z "$PR_HEAD_SHA" ]; then
             echo "❌ Failed to resolve head SHA for PR #${PR_NUMBER}"
@@ -164,9 +156,9 @@ jobs:
           echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
           echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
           echo "pr_head_sha=$PR_HEAD_SHA" >> "$GITHUB_OUTPUT"
-          echo "image_tag=mq-${PR_NUMBER}-${HEAD_SHA}" >> "$GITHUB_OUTPUT"
+          echo "image_tag=sha-${HEAD_SHA}" >> "$GITHUB_OUTPUT"
           echo "skip=false" >> "$GITHUB_OUTPUT"
-          echo "Merged PR #${PR_NUMBER}: main SHA ${HEAD_SHA:0:8} (= queue commit), PR head SHA ${PR_HEAD_SHA:0:8}"
+          echo "Merged PR #${PR_NUMBER}: main SHA ${HEAD_SHA:0:8} → image sha-${HEAD_SHA:0:8}; PR head ${PR_HEAD_SHA:0:8}"
 
       - name: Fetch merged PR changed-paths
         id: pr-files
@@ -201,14 +193,37 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
-      - name: Resolve PR image digests
+      # Resolve the merge's `sha-<mainSha>` images directly (no re-tag). On a
+      # queue merge the merge_group build already published them (instant hit).
+      # On a non-queue/admin/direct merge there is no merge_group build, so wait
+      # (bounded) for the push:main build of pr-build.yml to publish them. This is
+      # the only added cost of self-building on push:main; the queue path is
+      # unaffected. promote-and-deploy resolves the same sha-<mainSha> directly.
+      - name: Resolve preview image digests (bounded wait for push:main build)
         id: images
         if: steps.pr.outputs.skip != 'true'
         env:
           IMAGE_TAG: ${{ steps.pr.outputs.image_tag }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
           REMOTE_SOURCE_ARTIFACT_TARGETS_FILE: ${{ steps.remote-source-artifact-targets.outputs.targets_file }}
           OUTPUT_FILE: ${{ runner.temp }}/resolved-pr-images.json
-        run: bash scripts/ci/resolve-pr-build-images.sh
+        run: |
+          set -euo pipefail
+          deadline=$(( SECONDS + 900 ))   # 15 min — covers a cold push:main build
+          while :; do
+            GITHUB_OUTPUT=/dev/null bash scripts/ci/resolve-pr-build-images.sh || true
+            if [ -s "$OUTPUT_FILE" ] && [ "$(jq '.targets | length' "$OUTPUT_FILE")" -gt 0 ]; then
+              break
+            fi
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::warning::No sha-${HEAD_SHA:0:8} images after wait — emitting empty (hard-fail follows)"
+              break
+            fi
+            echo "Waiting for sha-${HEAD_SHA:0:8} build to publish… ($((deadline - SECONDS))s left)"
+            sleep 20
+          done
+          # Final authoritative resolve writes has_images/resolved_targets to step outputs.
+          bash scripts/ci/resolve-pr-build-images.sh
 
       - name: Hard-fail when no images found for resolved PR
         if: steps.pr.outputs.skip != 'true' && steps.images.outputs.has_images != 'true'
@@ -216,60 +231,8 @@ jobs:
           PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
         run: |
-          echo "::error::flight-preview resolved PR #${PR_NUMBER} (sha ${HEAD_SHA:0:8}) but no deployable artifact images exist in GHCR. For parent-built artifacts, ensure merge_queue produced mq-${PR_NUMBER}-${HEAD_SHA}. For remote-source artifacts, ensure image_repository:sha-<sourceSha> exists for the accepted gitlink pin."
+          echo "::error::flight-preview resolved PR #${PR_NUMBER} (sha ${HEAD_SHA:0:8}) but no deployable artifact images exist in GHCR. In-repo + remote-source artifacts alike must publish image_repository:sha-<sourceSha> — ensure pr-build.yml (merge_group or push:main) built sha-${HEAD_SHA}."
           exit 1
-
-      # Re-tag only the images that were actually built (affected-only CI may skip services).
-      # promote-and-deploy resolves preview-{sha} tags — this creates them without rebuilding.
-      # Source tag is mq-{N}-{HEAD_SHA} (pr-build merge_group output, bug.0412);
-      # destination is preview-{HEAD_SHA} so promote-and-deploy can look it up.
-      - name: Re-tag merge_group images as preview-{sha} in GHCR
-        if: steps.pr.outputs.skip != 'true' && steps.images.outputs.has_images == 'true'
-        env:
-          PR_IMAGE_TAG: ${{ steps.pr.outputs.image_tag }}
-          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
-          RESOLVED_TARGETS: ${{ steps.images.outputs.resolved_targets }}
-        run: |
-          # Canonical target catalog + tag-suffix + GHCR-package mapping
-          # (bug.0328 + bug.0344). Iterating ALL_TARGETS means adding a new
-          # node is a one-line edit in scripts/ci/lib/image-tags.sh — no
-          # inline list to drift here (root cause of PR #923). image_name_for_target
-          # picks the APP vs MIGRATOR GHCR package per target (bug.0344
-          # GHCR split — gives the image updater's app/migrator aliases
-          # independent Status.Summary.Images entries).
-          # shellcheck source=../../scripts/ci/lib/image-tags.sh
-          . scripts/ci/lib/image-tags.sh
-
-          PREVIEW_TAG="preview-${HEAD_SHA}"
-
-          for target in "${ALL_TARGETS[@]}"; do
-            if is_remote_source_artifact_target "$target"; then
-              echo "Skipping ${target} — remote-source artifact resolves by image_repository:sha-<sourceSha>"
-              continue
-            fi
-            # type:infra (e.g. litellm) deploys via Compose-on-VM, not k8s/Argo,
-            # so there is no preview-{sha} tag to mint — deploy-infra resolves the
-            # content-hash tag directly. resolve-pr-build-images.sh DOES resolve
-            # infra (via infra_image_tag), so it lands in RESOLVED_TARGETS; the
-            # naive mq-{N}-{sha}{suffix} src below never exists for it. Skip here,
-            # mirroring promote-build-payload.sh's is_infra_target guard.
-            if is_infra_target "$target"; then
-              echo "Skipping ${target} — infra image (Compose-deployed, no k8s preview tag)"
-              continue
-            fi
-            if ! echo "$RESOLVED_TARGETS" | grep -qw "$target"; then
-              echo "Skipping ${target} — not in PR build (not affected or not built)"
-              continue
-            fi
-            suffix=$(tag_suffix_for_target "$target")
-            image_name=$(image_name_for_target "$target")
-            src="${image_name}:${PR_IMAGE_TAG}${suffix}"
-            dst="${image_name}:${PREVIEW_TAG}${suffix}"
-            echo "Re-tagging ${target}: ${image_name##*/}:${PR_IMAGE_TAG}${suffix} → ${PREVIEW_TAG}${suffix}"
-            docker buildx imagetools create --tag "$dst" "$src"
-          done
-
-          echo "✅ Re-tag complete for preview-${HEAD_SHA:0:8}"
 
       # The script writes `status=dispatched` to $GITHUB_OUTPUT and a markdown
       # banner to $GITHUB_STEP_SUMMARY — no decision logic lives in this
