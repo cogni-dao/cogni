@@ -425,6 +425,34 @@ The forward deployment contract is:
 
 > **Correction (live repro `cogni-test-org/cogni-monorepo#1`): gitlink-aware scope routing is still needed while submodules remain.** A generated dorny filter `nodes/<slug>/**` matches the bare gitlink, so submodule pins must route as operator-domain work. Build exclusion should not depend on submodule ontology: it follows artifact source ownership. The child repo remains the build plane because its `source_repo` is not this repo.
 
+### Node-scoped external-contributor approval + merge contract
+
+A read-only external agent (e.g. `flock-leader`, pull-only on GitHub) drives a fork PR to a node's
+OWN repo entirely through the operator GitHub App — no human, no `gh` privilege on the agent's side:
+
+1. **`POST /api/v1/vcs/run-checks` `{ nodeId, prNumber }`.** GitHub holds a first-time / outside
+   fork contributor's `pull_request` workflow runs in `action_required`. The operator App releases
+   them so the node's own CI can run. RBAC `node.flight` on the named node is the gate; the App
+   approves ONLY standard `pull_request` runs (never `pull_request_target` / secret-bearing runs) —
+   safety is structural. `owner/repo` are operator-resolved from the node's catalog `source_repo`.
+2. **The node's own CI runs** (`pr-build.yml` `push:main` / `pull_request`) and publishes
+   `sha-<sha>` images — the node repo builds itself. There is no operator-dispatched "fork-build"
+   lane; that abstraction is purged.
+3. **`POST /api/v1/vcs/merge` `{ nodeId, prNumber }`** on green. RBAC `node.flight` on the same node
+   authorizes the squash merge of any PR to that node's repo, INCLUDING a PR the agent authored from
+   its own fork — the owner-granted RBAC tuple IS the trust boundary (no self-merge / probation
+   check). **Branch protection on the node repo is the merge authority**; the operator's
+   `evaluateMergeGate` is fast-fail UX, not the sole gate.
+4. **Node-merge auto-promotes preview** via the existing `dispatchNodePreviewPromote`
+   (`PREVIEW_VIA_SOURCE_ADDRESSED_PROMOTE`, above) — the merged PR head SHA source-addresses the
+   preview promote. No additional wiring.
+
+> **Superseded (the monorepo PR-number lane is LEGACY, kept).** `POST /api/v1/vcs/merge` WITHOUT
+> `nodeId` (operator-node RBAC + monorepo `NODE_SUBMODULE_PARENT_*` repo) and the monorepo
+> `POST /api/v1/vcs/flight { codePr }` lane remain for operator-monorepo PRs, but the node-scoped
+> `approve-checks` + `merge` flow above is the primary external-contributor path. A node repo with no
+> catalog row falls back to the monorepo lane on merge; approve-checks surfaces 404 `catalog_missing`.
+
 ---
 
 ## Node-owned packages

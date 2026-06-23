@@ -11,15 +11,18 @@
  *   deploy-brain / script / workflow logic (freeze-policy compliant).
  * Invariants:
  *   - AUTH_REQUIRED: Bearer token (machine agents) or SIWE session.
- *   - MERGE_AUTHORITY_IS_OPERATOR_NODE: authorized through the shared `resolveNodeAndAuthorize`
- *     seam against the OPERATOR node (slug `operator`), reusing `can_flight` — merging the
- *     monorepo is a repo-level operator authority, not an arbitrary agent-supplied node. NOTE:
- *     this gates the single most IRREVERSIBLE repo action (merge-to-main) on `can_flight`, a
- *     deliberate least-privilege concession accepted only because a dedicated `can_merge` relation
- *     needs an OpenFGA model re-bootstrap. A `merger` / `can_merge` role + scope-to-node + a
- *     probation tier (first N merges human-reviewed, then graduate) is the COMMITTED vNext — this
- *     is intentional MVP over-trust. The seam FAILS CLOSED (503) when no authority is configured.
- *   - NO_REPO_FROM_AGENT: owner/repo are env-resolved (operator's own monorepo), never the body.
+ *   - NODE_SCOPED_OR_LEGACY: with `nodeId` (id-or-slug), authorized via `resolveNodeAndAuthorize`
+ *     against THAT node (reusing `can_flight`) and the merge target is the node's catalog
+ *     `source_repo` — an agent holding RBAC for a node may merge any PR to that node's repo,
+ *     INCLUDING a PR it authored from its own fork (the owner-granted RBAC tuple IS the trust
+ *     boundary; no self-merge / probation check). WITHOUT `nodeId`, the KEPT LEGACY lane runs:
+ *     authorized against the OPERATOR node (slug `operator`) + merge target = the operator's own
+ *     monorepo (`NODE_SUBMODULE_PARENT_*`). NOTE: gating the single most IRREVERSIBLE repo action
+ *     (merge-to-main) on `can_flight` is a deliberate least-privilege MVP concession — a dedicated
+ *     `can_merge` role + probation tier is the COMMITTED vNext. The seam FAILS CLOSED (503) when no
+ *     authority is configured.
+ *   - NO_REPO_FROM_AGENT: owner/repo are operator-resolved (node catalog `source_repo`, or the
+ *     monorepo env), never the body (anti-spoof).
  *   - BRANCH_PROTECTION_IS_AUTHORITY: GitHub independently rejects a non-green merge (405); the
  *     `evaluateMergeGate` pre-check is fast-fail UX + clear errors, not the sole gate.
  *   - NO_SEPARATION_OF_DUTIES (V0): autonomous self-merge on green is intended ("no human required
@@ -37,9 +40,11 @@ import { mergeOperation } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { resolveNodeAndAuthorize } from "@/app/_lib/node-rbac";
+import { createOperatorDeployPlane } from "@/bootstrap/capabilities/operator-deploy-plane";
 import { stubVcsCapability } from "@/bootstrap/capabilities/vcs";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
+import { classifyGithubOpError } from "@/features/vcs/github-op-error";
 import {
   classifyMergeFailure,
   evaluateMergeGate,
@@ -86,12 +91,13 @@ export const POST = wrapRouteHandlerWithLogging(
     if (!parsed.success) {
       return fail(400, "validation_error", "Invalid request");
     }
-    const { prNumber, method } = parsed.data;
+    const { prNumber, method, nodeId } = parsed.data;
 
-    // 2. RBAC — the ONE node-authz seam, against the operator node, reusing can_flight.
-    //    Fails closed (503) when no authority is configured (see MERGE_AUTHORITY_IS_OPERATOR_NODE).
+    // 2. RBAC — the ONE node-authz seam, reusing can_flight. node-scoped (the named node) when
+    //    `nodeId` is supplied; else the operator node (legacy monorepo lane). Fails closed (503)
+    //    when no authority is configured (see NODE_SCOPED_OR_LEGACY).
     const rbac = await resolveNodeAndAuthorize({
-      id: OPERATOR_NODE_SLUG,
+      id: nodeId ?? OPERATOR_NODE_SLUG,
       userId: sessionUser.id,
       action: "node.flight",
     });
@@ -100,7 +106,9 @@ export const POST = wrapRouteHandlerWithLogging(
         rbac.errorCode === "authz_unavailable"
           ? "authorization unavailable"
           : rbac.errorCode === "node_not_found"
-            ? "operator node not found"
+            ? nodeId
+              ? "node not found"
+              : "operator node not found"
             : "not authorized";
       return fail(rbac.status, rbac.errorCode, error, { prNumber });
     }
@@ -113,10 +121,50 @@ export const POST = wrapRouteHandlerWithLogging(
       });
     }
 
-    // 4. Merge target = the operator's own monorepo (env-scoped, anti-spoof).
+    // 4. Merge target (operator-resolved, anti-spoof):
+    //      nodeId present → the NAMED node's own repo (catalog `source_repo`). An explicit nodeId
+    //        must resolve to ITS OWN repo — `catalog_missing` is a hard 404, NEVER a silent retarget
+    //        to the monorepo (NODE_SCOPED_NEVER_RETARGETS).
+    //      nodeId absent  → the operator's own monorepo (env-scoped legacy lane).
     const env = serverEnv();
-    const owner = env.NODE_SUBMODULE_PARENT_OWNER;
-    const repo = env.NODE_SUBMODULE_PARENT_REPO;
+    let owner: string | undefined;
+    let repo: string | undefined;
+    if (nodeId) {
+      const parentOwner = env.NODE_SUBMODULE_PARENT_OWNER;
+      const parentRepo = env.NODE_SUBMODULE_PARENT_REPO;
+      if (!parentOwner || !parentRepo) {
+        return fail(
+          503,
+          "merge_target_not_configured",
+          "merge target repo not configured",
+          { prNumber }
+        );
+      }
+      try {
+        const nodeRepo = await createOperatorDeployPlane(env).resolveNodeRepo({
+          parentOwner,
+          parentRepo,
+          slug: rbac.node.slug,
+        });
+        owner = nodeRepo.owner;
+        repo = nodeRepo.repo;
+      } catch (error) {
+        const code = (error as { code?: string })?.code;
+        return fail(
+          code === "catalog_missing" ? 404 : 503,
+          code === "catalog_missing"
+            ? "catalog_missing"
+            : "node_repo_unresolved",
+          code === "catalog_missing"
+            ? "node repo not resolvable from catalog"
+            : "node repo could not be resolved",
+          { prNumber, slug: rbac.node.slug }
+        );
+      }
+    } else {
+      owner = env.NODE_SUBMODULE_PARENT_OWNER;
+      repo = env.NODE_SUBMODULE_PARENT_REPO;
+    }
     if (!owner || !repo) {
       return fail(
         503,
@@ -127,7 +175,15 @@ export const POST = wrapRouteHandlerWithLogging(
     }
 
     // 5. CI / state gate (fast-fail; GitHub branch protection is the real backstop).
-    const ci = await vcs.getCiStatus({ owner, repo, prNumber });
+    //    Guard the read: a node-scoped target may be a repo the App isn't installed on, or the PR
+    //    may not exist — emit the terminal event with a coded status, never an opaque 500.
+    let ci: Awaited<ReturnType<typeof vcs.getCiStatus>>;
+    try {
+      ci = await vcs.getCiStatus({ owner, repo, prNumber });
+    } catch (error) {
+      const g = classifyGithubOpError(error);
+      return fail(g.status, g.errorCode, g.error, { prNumber });
+    }
     const prCtx = {
       prNumber,
       prAuthor: ci.author,
@@ -145,7 +201,13 @@ export const POST = wrapRouteHandlerWithLogging(
     }
 
     // 6. Merge (squash). Classify failure on the surfaced GitHub HTTP status.
-    const result = await vcs.mergePr({ owner, repo, prNumber, method });
+    let result: Awaited<ReturnType<typeof vcs.mergePr>>;
+    try {
+      result = await vcs.mergePr({ owner, repo, prNumber, method });
+    } catch (error) {
+      const g = classifyGithubOpError(error);
+      return fail(g.status, g.errorCode, g.error, prCtx);
+    }
     if (!result.merged) {
       const f = classifyMergeFailure(result.status, result.message);
       return fail(f.status, f.errorCode, f.error, {

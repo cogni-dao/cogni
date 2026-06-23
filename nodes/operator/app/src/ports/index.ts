@@ -166,6 +166,8 @@ export type {
   PreparedNodeRefCandidateFlight,
   PrepareNodeRefCandidateFlightInput,
   PromoteNodeInput,
+  ResolvedNodeRepo,
+  ResolveNodeRepoInput,
   SyncTemplateUpstreamInput,
   SyncTemplateUpstreamResult,
 } from "./operator-deploy-plane.port";

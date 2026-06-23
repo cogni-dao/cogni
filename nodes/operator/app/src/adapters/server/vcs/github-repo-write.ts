@@ -40,6 +40,8 @@ import type {
   PreparedNodeRefCandidateFlight,
   PrepareNodeRefCandidateFlightInput,
   PromoteNodeInput,
+  ResolvedNodeRepo,
+  ResolveNodeRepoInput,
   SyncTemplateUpstreamInput,
   SyncTemplateUpstreamResult,
 } from "@/ports";
@@ -396,6 +398,42 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       sourceRepo: catalog.data.source_repo,
       image: `${catalog.data.image_repository}:sha-${sourceSha}`,
     };
+  }
+
+  /**
+   * Resolve a node's own source repo from `infra/catalog/<slug>.yaml` `source_repo` (read via the
+   * App — the catalog is absent on the operator's runtime disk). Reuses the same catalog-read seam
+   * as `prepareNodeRefCandidateFlight`. Throws coded `catalog_missing` (404) when the row is absent.
+   */
+  async resolveNodeRepo(
+    input: ResolveNodeRepoInput
+  ): Promise<ResolvedNodeRepo> {
+    const { parentOwner, parentRepo, slug } = input;
+
+    const catalogText = await this.fetchFileText({
+      owner: parentOwner,
+      repo: parentRepo,
+      path: `infra/catalog/${slug}.yaml`,
+      ref: "main",
+    });
+    if (!catalogText) {
+      throw deployPlaneError(
+        "catalog_missing",
+        `node catalog entry not found for ${slug}`,
+        404
+      );
+    }
+
+    const catalog = CatalogEntrySchema.safeParse(parseYaml(catalogText));
+    if (!catalog.success || catalog.data.name !== slug) {
+      throw deployPlaneError(
+        "catalog_missing",
+        `node catalog entry not found for ${slug}`,
+        404
+      );
+    }
+
+    return parseGithubRepoUrl(catalog.data.source_repo);
   }
 
   /**
