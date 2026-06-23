@@ -141,6 +141,22 @@ export interface CatalogForkTarget {
   readonly slug: string;
 }
 
+export interface ResolveNodeRepoInput {
+  /** Parent monorepo owner — `NODE_SUBMODULE_PARENT_OWNER`. */
+  readonly parentOwner: string;
+  /** Parent monorepo repo — `NODE_SUBMODULE_PARENT_REPO`. */
+  readonly parentRepo: string;
+  /** Resolved node slug (`infra/catalog/<slug>.yaml`). */
+  readonly slug: string;
+}
+
+export interface ResolvedNodeRepo {
+  /** Node source repo owner, parsed from the catalog row's `source_repo`. */
+  readonly owner: string;
+  /** Node source repo name. */
+  readonly repo: string;
+}
+
 export interface OperatorDeployPlanePort {
   prepareNodeRefCandidateFlight(
     input: PrepareNodeRefCandidateFlightInput
@@ -190,6 +206,15 @@ export interface OperatorDeployPlanePort {
   syncCanonicalFilesToFork(
     input: MirrorCanonicalFilesInput
   ): Promise<MirrorCanonicalFilesResult>;
+
+  /**
+   * Resolve a node's OWN source repo (`{owner, repo}`) from the parent monorepo's
+   * `infra/catalog/<slug>.yaml` `source_repo` (read via the App — the catalog is absent on the
+   * operator's runtime disk). The node-scoped VCS routes (`approve-checks`, `merge`) target the
+   * node's repo, not the monorepo. Throws a coded `catalog_missing` (404) when the row is absent —
+   * the merge route catches it to fall back to the monorepo (legacy lane); approve-checks surfaces it.
+   */
+  resolveNodeRepo(input: ResolveNodeRepoInput): Promise<ResolvedNodeRepo>;
 
   dispatchNodeRefCandidateFlight(input: {
     owner: string;
