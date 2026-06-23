@@ -42,6 +42,58 @@ server:
       }
       service_registration "kubernetes" {}
 
+      # AWS KMS auto-unseal (bug.5011 / bug.5051; access-control-charter.md
+      # CC6.1). The `seal` stanza is an OpenBao-native OSS feature — no sidecar,
+      # no custom unseal script. With it present, OpenBao wraps its master key
+      # with the KMS key and calls kms:Decrypt on EVERY pod start to unwrap and
+      # auto-unseal itself. A restart (OOM / reboot / chart bump / `kubectl
+      # delete pod`) no longer reseals → the recurring days-long secret-plane
+      # outage (preview+prod, 2026-06-20+) becomes structurally impossible.
+      #
+      # Root-of-trust is OFF the k3s node by design. The OSS-native seals were
+      # evaluated and rejected for THIS single-node bare-metal stack:
+      #   - seal "transit": relocates the manual-unseal SPOF to a second OpenBao
+      #     that itself must be unsealed (turtles), and doubles Raft/PVC surface
+      #     on a box that already OOMKills the first vault.
+      #   - seal "pkcs11" + SoftHSM: token DB + PIN live on the same node =
+      #     key-next-to-lock, the pattern bug.5011 explicitly REJECTED (SOC2
+      #     CC6.1). A real HSM needs hardware Cherry doesn't offer.
+      # Full comparison: PR body + infra/provision/aws-kms/main.tf.
+      #
+      # The stanza is intentionally EMPTY of values. Both the key id and the
+      # AWS credential are sourced from environment (the OpenBao-native env
+      # fallback for `seal "awskms"`), so NOTHING about the key or the
+      # credential is committed to git (Invariant 4) and NOTHING needs deploy-
+      # branch templating. Env wiring is `extraSecretEnvironmentVars` below:
+      #   VAULT_AWSKMS_SEAL_KEY_ID → kms_key_id   (non-secret identifier)
+      #   AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY → seal principal credential
+      #   AWS_REGION → key region
+      # (OpenBao keeps the VAULT_-prefixed env name for Vault compatibility.)
+      seal "awskms" {}
+
+  # Seal-backend env → StatefulSet container. Every value comes from a pre-
+  # seeded k8s Secret (`openbao-seal-aws`), never a literal here, so NO secret
+  # byte and not even the key id lives in git. The Secret is created ONCE per
+  # env at provision time (provision-env-vm.sh Phase 5b) from the
+  # infra/provision/aws-kms/ outputs. This credential is the seal-backend
+  # bootstrap secret — the one thing that cannot live in OpenBao because it is
+  # what unseals OpenBao (the Shamir-key analogue). If the Secret is absent the
+  # pod fails to start LOUDLY (missing secretKeyRef) rather than silently
+  # falling back to Shamir.
+  extraSecretEnvironmentVars:
+    - envName: VAULT_AWSKMS_SEAL_KEY_ID
+      secretName: openbao-seal-aws
+      secretKey: VAULT_AWSKMS_SEAL_KEY_ID
+    - envName: AWS_ACCESS_KEY_ID
+      secretName: openbao-seal-aws
+      secretKey: AWS_ACCESS_KEY_ID
+    - envName: AWS_SECRET_ACCESS_KEY
+      secretName: openbao-seal-aws
+      secretKey: AWS_SECRET_ACCESS_KEY
+    - envName: AWS_REGION
+      secretName: openbao-seal-aws
+      secretKey: AWS_REGION
+
   dataStorage:
     enabled: true
     size: 10Gi

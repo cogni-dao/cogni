@@ -367,6 +367,48 @@ bridge because they remove split brain now and keep the migration path clean.
 
 **The bug.5002 anti-fix (do NOT do this):** "self-heal drift" by ALTERing a pod-consumed DB role password to deploy-infra's rendered `.env` on every deploy. That makes deploy-infra a **second writer**, guarantees divergence whenever `.env` ≠ OpenBao, and converts a silent inconsistency into an active 502 outage. When `db-provision` can't authenticate, fix the **source** (point it at OpenBao), never overwrite the DB from `.env`.
 
+### Availability — auto-unseal (bug.5011 / bug.5051; CC6.1)
+
+A **sealed** OpenBao serves nothing (it 503s every ESO sync and every
+`auth/kubernetes/login`), so unsealed-and-running is the correct operational
+state and an _unexpected_ seal is an **outage**, not a safe state. With Shamir
+1-of-1 (the OSS baseline), **any** pod restart — OOMKill, reboot, chart bump,
+`kubectl delete pod` — reseals the vault and strands the whole env's secret plane
+until a human types the unseal key. This recurred for days on preview + prod
+(2026-06-20+), silently, because running pods serve baked-in env and only fresh
+OpenBao logins 503.
+
+The durable fix is OpenBao's **native `seal` stanza** with an **off-node
+root-of-trust**: `seal "awskms" {}` in
+[`infra/k8s/argocd/openbao/values.yaml`](../../infra/k8s/argocd/openbao/values.yaml).
+OpenBao wraps its master key with an AWS KMS key and calls `kms:Decrypt` on every
+start to auto-unseal — a restart no longer reseals. The KMS key + a least-
+privilege seal IAM principal (`kms:Encrypt`/`Decrypt`/`DescribeKey` on that one
+key, nothing else) are per-env OpenTofu in
+[`infra/provision/aws-kms/`](../../infra/provision/aws-kms/README.md).
+
+**Root-of-trust must live off the k3s node** or a node restart reseals it again,
+which is why the OSS-native seals were evaluated and rejected for this single-node
+bare-metal stack: `seal "transit"` relocates the manual-unseal SPOF to a second
+OpenBao that itself must be unsealed (turtles) and doubles the Raft/PVC surface on
+an already-OOMing box; `seal "pkcs11"` + SoftHSM puts the token DB + PIN on the
+same node (key-next-to-lock, the SOC2-CC6.1-failing pattern bug.5011 explicitly
+rejected). The seal **mechanism** stays 100% OpenBao-native; only the
+root-of-trust is managed.
+
+**Chicken-and-egg (Invariant 4).** The AWS credential that authorizes
+`kms:Decrypt` is the one secret that cannot live in OpenBao — it is what unseals
+OpenBao (the Shamir-key analogue). It ships to the pod as plain env
+(`VAULT_AWSKMS_SEAL_KEY_ID` + `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` /
+`AWS_REGION`) via the chart's `extraSecretEnvironmentVars` referencing a
+pre-seeded `openbao-seal-aws` k8s Secret — never inline in git. The Secret is
+created once per env at `provision-env-vm.sh` Phase 5b from the OpenTofu outputs.
+Migrating an existing Shamir vault is the native one-time
+`bao operator unseal -migrate` (runbook in the module README); after migration the
+`.local/<env>-openbao-init.json` Shamir keys are historical recovery material
+only. The bug.5011-owed **sealed-state → Loki alert** remains a separate
+follow-up (defense-in-depth even with auto-unseal).
+
 #### E2E validation contract (Phases 1–2, on candidate-a)
 
 - [ ] **Phase 1 — read path:** on a VM **(re)provisioned with this code**, `deploy-infra`'s read-proof mints the `<env>-db-reader` JWT and lists `cogni/<env>/*` from the deploy context (logged; value never echoed). The role/SA are written by `provision-env-vm.sh`, so a VM provisioned _before_ this PR self-skips the proof with a warning until reprovisioned — **the bug.5002 recovery reprovision lands it for free if this merges first.** Negative (manual): the read-only policy returns 403 on `bao kv patch`.

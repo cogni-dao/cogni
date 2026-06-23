@@ -156,7 +156,7 @@ Score against the top-0.1% reference stack (HashiCorp Vault production reference
    │  OpenFGA RBAC         │  OpenFGA / Cedar               │   🟢   │
    │  envFrom secretRef    │  envFrom secretRef             │   🟢   │
    │  Loki audit pipeline  │  Loki  +  tamper-evident sink  │   🔴   │
-   │  Shamir keys on disk  │  Cloud KMS auto-unseal         │   🔴   │
+   │  Shamir keys on disk  │  Cloud KMS auto-unseal         │   🟡   │
    │  Static DB passwords  │  Vault DB engine (1h TTL)      │   🔴   │
    │  K8s SA JWT auth      │  SPIFFE/SPIRE (preferred)      │   🟡   │
    │  Quarterly access rev │  SCIM + JIT elevation          │   🟡   │
@@ -167,11 +167,26 @@ Score against the top-0.1% reference stack (HashiCorp Vault production reference
 
 ### Audit-blocking gaps (🔴)
 
-| Gap                                                                | Why it blocks a SOC2 Type II audit                                               | Task                                                     |
-| ------------------------------------------------------------------ | -------------------------------------------------------------------------------- | -------------------------------------------------------- |
-| Cloud KMS auto-unseal — eliminate `.local/<env>-openbao-init.json` | CC6.1 — unseal keys must not sit on operator laptops                             | [`task.5065`](https://cognidao.org/work/items/task.5065) |
-| WORM / Object-Lock audit sink alongside Loki                       | CC7.2 + CC8.1 — Loki alone is mutable; auditor needs tamper-evident copy         | [`task.5066`](https://cognidao.org/work/items/task.5066) |
-| Dynamic DB credentials via OpenBao DB engine                       | CC6.1 — long-lived `APP_DB_PASSWORD` fails "when was this last rotated" question | [`task.5067`](https://cognidao.org/work/items/task.5067) |
+| Gap                                          | Why it blocks a SOC2 Type II audit                                               | Task                                                     |
+| -------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| WORM / Object-Lock audit sink alongside Loki | CC7.2 + CC8.1 — Loki alone is mutable; auditor needs tamper-evident copy         | [`task.5066`](https://cognidao.org/work/items/task.5066) |
+| Dynamic DB credentials via OpenBao DB engine | CC6.1 — long-lived `APP_DB_PASSWORD` fails "when was this last rotated" question | [`task.5067`](https://cognidao.org/work/items/task.5067) |
+
+**Cloud KMS auto-unseal — config shipped, awaiting per-env KMS provisioning (🔴→🟡).**
+The OpenBao-native `seal "awskms" {}` stanza is in the substrate
+([`infra/k8s/argocd/openbao/values.yaml`](../../infra/k8s/argocd/openbao/values.yaml));
+the per-env KMS key + least-privilege seal IAM principal are declared in
+[`infra/provision/aws-kms/`](../../infra/provision/aws-kms/README.md). This
+eliminates the reseal-on-restart SPOF (`bug.5011` / `bug.5051`) and removes the
+unseal keys from operator laptops — the `.local/<env>-openbao-init.json` Shamir
+keys become historical recovery material only. **OSS-native seals
+(transit / SoftHSM) were evaluated and rejected** for the single-node bare-metal
+stack: transit relocates the manual-unseal SPOF to a second OpenBao (turtles) +
+doubles operational surface; SoftHSM is key-next-to-lock (the rejected pattern).
+The seal mechanism stays 100% OpenBao-native; only the root-of-trust is managed.
+The remaining 🟡 is operational — a human must create an AWS account + run the
+OpenTofu module + the one-time `bao operator unseal -migrate` per env (runbook in
+the module README). Flips to 🟢 once all three envs are migrated.
 
 ### Acceptable tradeoffs to document (🟡)
 
