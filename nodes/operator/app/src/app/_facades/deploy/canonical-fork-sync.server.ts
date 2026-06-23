@@ -3,9 +3,11 @@
 
 /**
  * Module: `@app/_facades/deploy/canonical-fork-sync.server`
- * Purpose: node-template merge→main → fork sync. On a push to node-template's default branch, push two
- *   tiers of update to every active child fork: (1) surgical CI/contract-file overwrite (required, always
- *   applies), (2) an optional upstream-merge PR carrying app/graphs/runtime improvements (fork reviews).
+ * Purpose: node-template merge→main → fork sync. On a push to node-template's default branch, push
+ *   THREE tiers to every active child fork: (1) surgical CI/contract-file overwrite (required, always
+ *   applies); (2) an upstream-merge PR carrying foundational substrate (app/graphs/runtime/packages),
+ *   with Tier 3 carved OUT so it is conflict-free + always auto-mergeable; (3) node identity/presentation
+ *   (homepage, branding, repo-spec, persona) — NEVER synced, node-template is a starter only.
  * Scope: Webhook-triggered facade (sibling of dispatchNodePreviewPromote). Resolves spawned-node forks from
  *   the `nodes` table; delegates per-fork writes to the operator deploy plane. No new trigger, no token —
  *   the operator GitHub App webhook (HMAC-verified upstream) is the trigger.
@@ -16,9 +18,13 @@
  *     on candidate-a → cogni-test-org forks the App can write; Cogni-DAO/cogni on prod → Cogni-DAO forks).
  *     node-template (source) + operator (hub) excluded. NOT the `nodes` table (wizard-spawn state, may not
  *     hold catalog-declared forks) and NOT the node registry (its repo is the parent monorepo / hardcoded).
- *   - TWO_TIERS_DECOUPLED (node-ci-cd-contract): Tier 1 surgically overwrites the flight-contract files so a
- *     CI fix lands cleanly even when Tier 2's app merge conflicts; Tier 2 preserves fork customizations
- *     (`FORK_FREEDOM`, `POLICY_STAYS_LOCAL`) via the shared merge-base. Per-tier, per-fork error isolation.
+ *   - TIERS_DECOUPLED (node-ci-cd-contract): Tier 1 surgically overwrites the flight-contract files so a
+ *     CI fix lands cleanly even when Tier 2's substrate merge conflicts; Tier 2 preserves fork
+ *     customizations (`FORK_FREEDOM`, `POLICY_STAYS_LOCAL`) via the shared merge-base. Per-tier,
+ *     per-fork error isolation.
+ *   - TIER3_NEVER_SYNCED (repo-sync-contract): node identity/presentation (`node_local` globs declared in
+ *     node-template's sync-manifest) is restored to the fork's own version inside Tier 2's merge — never
+ *     overwritten. Carving it OUT is exactly what makes Tier 1 + Tier 2 always auto-mergeable.
  * Side-effects: IO (DB read via service db, GitHub Git Data API writes via the deploy plane). Fire-and-forget.
  * Links: src/ports/operator-deploy-plane.port.ts, src/adapters/server/vcs/github-repo-write.ts,
  *   src/app/api/internal/webhooks/[source]/route.ts, docs/spec/node-ci-cd-contract.md, docs/spec/repo-sync-contract.md
@@ -99,11 +105,16 @@ export function extractTemplateMainPush(
   return { sourceOwner: owner, sourceRepo: name, defaultBranch, afterSha };
 }
 
-/** Both tiers per fork, error-isolated. Injected `deployPlane` keeps this unit-testable with no GitHub/DB. */
+/**
+ * All tiers per fork, error-isolated. Injected `deployPlane` keeps this unit-testable with no GitHub/DB.
+ * `nodeLocalPaths` (Tier 3 — node identity/presentation, resolved once from node-template's manifest)
+ * is threaded into every fork's Tier-2 merge so the upstream PR carries substrate only.
+ */
 export async function fanOutForkSync(
   deployPlane: OperatorDeployPlanePort,
   ctx: TemplateMainPush,
-  targets: readonly ForkSyncTarget[]
+  targets: readonly ForkSyncTarget[],
+  nodeLocalPaths: readonly string[]
 ): Promise<readonly ForkSyncLedgerEntry[]> {
   const out: ForkSyncLedgerEntry[] = [];
   for (const t of targets) {
@@ -139,6 +150,7 @@ export async function fanOutForkSync(
         forkOwner: t.owner,
         forkRepo: t.name,
         forkBranch: "main",
+        nodeLocalPaths,
       });
       template = r.status;
       if (r.status === "pr_opened") templatePrUrl = r.prUrl;
@@ -207,7 +219,15 @@ async function syncToAllForks(
       parentRepo,
     });
 
-    const entries = await fanOutForkSync(plane, ctx, targets);
+    // Tier-3 globs are DATA: resolved once from node-template's own sync-manifest at the pushed SHA,
+    // then carved out of every fork's Tier-2 merge (TIER3_IS_DATA, spec.repo-sync-contract).
+    const nodeLocalPaths = await plane.resolveNodeLocalPaths({
+      sourceOwner: ctx.sourceOwner,
+      sourceRepo: ctx.sourceRepo,
+      sourceRef: ctx.afterSha,
+    });
+
+    const entries = await fanOutForkSync(plane, ctx, targets, nodeLocalPaths);
 
     log.info(
       {

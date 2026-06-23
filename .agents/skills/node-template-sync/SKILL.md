@@ -72,13 +72,16 @@ node-template merge → main
     → dispatchCanonicalForkSync  (src/app/_facades/deploy/canonical-fork-sync.server.ts)
       → targets = infra/catalog/*.yaml source_repo rows in the parent monorepo
         (NODE_SUBMODULE_PARENT_{OWNER,REPO}); node-template + operator EXCLUDED
-      → per fork, two decoupled tiers (per-tier, per-fork error isolation):
+      → resolveNodeLocalPaths (reads node-template's .cogni/sync-manifest.yaml#node_local — Tier 3)
+      → per fork, decoupled tiers (per-tier, per-fork error isolation):
           Tier 1  syncCanonicalFilesToFork    → byte-overwrite CI/contract files
-          Tier 2  syncTemplateUpstreamToFork  → MERGE node-template upstream (preserves fork edits)
+          Tier 2  syncTemplateUpstreamToFork  → MERGE substrate upstream, Tier-3 CARVED OUT
+          Tier 3  (node_local globs)          → NEVER synced — restored to the fork's own version
 ```
 
-- **One living PR per tier per fork.** SHA-free branches force-updated each release (Dependabot pattern): Tier 1 `cogni-operator/node-template-sync`, Tier 2 `cogni-operator/node-template-upstream`.
+- **One living PR per syncing tier per fork.** SHA-free branches force-updated each release (Dependabot pattern): Tier 1 `cogni-operator/node-template-sync`, Tier 2 `cogni-operator/node-template-upstream`. Tier 3 opens no PR — it is the carve-out _inside_ Tier 2.
 - **Tier 1 paths** (`CI_CONTRACT_PATHS`): `.github/workflows/{ci.yaml,pr-build.yml,pr-lint.yaml}`, `scripts/check-node-ci-workflow.mjs`. Add a path only if identical across all forks.
+- **Tier 3 paths** (`node_local` in node-template's `.cogni/sync-manifest.yaml`): node identity/presentation — homepage, landing UI, branding/theme, `.cogni/repo-spec.yaml`, persona. These are restored to the FORK's version inside the Tier-2 merge so they're never overwritten; carving them out is what makes Tier 1 + Tier 2 always auto-mergeable. Default floor: `nodes/operator/app/src/shared/node-app-scaffold/node-local-paths.ts`.
 - **Targets from `infra/catalog`**, not the nodes table or the node registry (the registry resolves to the parent monorepo / hub).
 
 ### Why operator can't be auto-synced

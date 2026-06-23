@@ -30,6 +30,23 @@ exclude:
   - ".local-auth/**"
   - "**/*.tsbuildinfo"
 
+# Tier 3 — node identity / presentation (spec.repo-sync-contract). These globs are the node's FACE:
+# homepage, landing UI, branding/theme/assets, repo-spec identity, persona. node-template is a STARTER
+# only, so on a node-template→fork sync these paths are carved OUT of the Tier-2 substrate merge and
+# RESTORED to the fork's own version — never overwritten ("build their mission, not their plumbing").
+# This is a DIFFERENT axis from divergences[] below (hub↔artifact drift). The operator fork-sync reads
+# node-template's copy of THIS list at runtime (TIER3_IS_DATA); a node-template PR adding a new
+# presentation dir declares it here in the same PR. Default floor lives in
+# nodes/operator/app/src/shared/node-app-scaffold/node-local-paths.ts (used when this block is absent).
+node_local:
+  - "app/src/app/(public)/**" # public-facing pages (homepage, landing, marketing)
+  - "app/src/features/home/**" # home/landing feature surface
+  - "app/src/styles/branding/**" # branding tokens / theme
+  - "app/src/app/branding/**"
+  - "public/branding/**" # static brand assets
+  - ".cogni/repo-spec.yaml" # node identity
+  - ".cogni/persona/**" # persona / character
+
 # Per-artifact divergences. Two shapes:
 #   omit_from_artifact: paths the hub has that the artifact intentionally lacks.
 #   artifact_only:      paths the artifact has that the hub intentionally lacks.
