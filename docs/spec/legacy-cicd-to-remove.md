@@ -42,7 +42,7 @@ The categories below are about **artifact identity**. The adjacent freeze — wh
 
 **Original mechanic (historical):** `pr-build.yml`, `resolve-pr-build-images.sh`, and `flight-preview.yml` used `pr-<prNumber>-<headSha>`, `mq-<prNumber>-<queueSha>`, and `preview-<sha>` for in-repo artifacts — a PR-derived lookup namespace, not `source_repo + sourceSha + image_repository`.
 
-**Residual:** `candidate-flight.yml` still accepts a `pr_number` workflow input for the transitional monorepo dispatch lane, but it resolves the same `sha-<headSha>` image (no pr-/mq- tag). Deleting that input + unifying onto `node_slug + source_sha` is tracked under *Candidate PR-number dispatch* below.
+**Residual:** `candidate-flight.yml` still accepts a `pr_number` workflow input for the transitional monorepo dispatch lane, but it resolves the same `sha-<headSha>` image (no pr-/mq- tag). Deleting that input + unifying onto `node_slug + source_sha` is tracked under _Candidate PR-number dispatch_ below.
 
 ### Candidate PR-number dispatch
 

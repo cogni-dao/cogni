@@ -150,8 +150,7 @@ Each gate firing is a feedback loop, not a barrier. Future: rejections logged st
 
 ## Operator-hosted artifacts
 
-> **Superseded (the submodule gitlink is retired).** Sections below that describe a `nodes/<slug>`
-> **git submodule gitlink** + `.gitmodules` + pin PRs are historical. The gitlink is gone:
+> **Superseded (the submodule gitlink is retired).** Sections below that describe a `nodes/<slug>` > **git submodule gitlink** + `.gitmodules` + pin PRs are historical. The gitlink is gone:
 > the operator never checks out node source — it fetches needed node files by `sourceSha` via the
 > GitHub API / `actions/checkout` (deploy) or pure catalog metadata (secret-free CI), and the deploy
 > pin is a `source_sha` **field on the catalog row**. See [node-submodule-retirement.md](./node-submodule-retirement.md).
@@ -544,16 +543,16 @@ This standard does not split `.dependency-cruiser.cjs` per node. That's a separa
 
 ### Workflow Entrypoints
 
-| File                              | Type | Secrets                   | Trigger                      | Concern                                                                                        |
-| --------------------------------- | ---- | ------------------------- | ---------------------------- | ---------------------------------------------------------------------------------------------- |
-| `ci.yaml`                         | CI   | No                        | PR; push main                | Typecheck, lint, unit, component, docs, architecture, scope                                    |
-| `stack-test.yml`                  | CI   | No                        | workflow_dispatch            | Per-node full-stack vitest                                                                     |
+| File                              | Type | Secrets                   | Trigger                              | Concern                                                                                                                                                                                                      |
+| --------------------------------- | ---- | ------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `ci.yaml`                         | CI   | No                        | PR; push main                        | Typecheck, lint, unit, component, docs, architecture, scope                                                                                                                                                  |
+| `stack-test.yml`                  | CI   | No                        | workflow_dispatch                    | Per-node full-stack vitest                                                                                                                                                                                   |
 | `pr-build.yml`                    | CI   | GHCR write                | pull_request; merge_group; push main | In-repo artifact build → `<image>:sha-<sourceSha>` (SOURCE_SHA_IS_DEPLOY_IDENTITY). `push:main` self-builds every merge (incl. admin/`/vcs/merge` squash); `merge_group` produces the `manifest` queue check |
-| `candidate-flight.yml`            | CD   | GHCR read; deploy         | workflow_dispatch            | Candidate-a target substrate assertion + digest flight from `image_repository:sha-<sourceSha>` |
-| `candidate-flight-infra.yml`      | CD   | SSH/secrets               | workflow_dispatch            | Candidate-a VM compose substrate only                                                          |
-| `flight-preview.yml`              | CD   | GHCR read                 | push main; workflow_dispatch | Preview dispatch by digest: resolves the merge's `sha-<mainSha>` images and dispatches `promote-and-deploy(preview)`. NO re-tag step — promote consumes the same `sha-<mainSha>` digest |
-| `promote-and-deploy.yml`          | CD   | SSH/secrets; deploy       | workflow_dispatch            | Preview/production digest promotion, infra reconcile, verify, e2e                              |
-| `promote-preview-digest-seed.yml` | CD   | GHCR read; contents write | workflow_run                 | Maintains preview digest seed pins on `main` after dispatched preview flights                  |
+| `candidate-flight.yml`            | CD   | GHCR read; deploy         | workflow_dispatch                    | Candidate-a target substrate assertion + digest flight from `image_repository:sha-<sourceSha>`                                                                                                               |
+| `candidate-flight-infra.yml`      | CD   | SSH/secrets               | workflow_dispatch                    | Candidate-a VM compose substrate only                                                                                                                                                                        |
+| `flight-preview.yml`              | CD   | GHCR read                 | push main; workflow_dispatch         | Preview dispatch by digest: resolves the merge's `sha-<mainSha>` images and dispatches `promote-and-deploy(preview)`. NO re-tag step — promote consumes the same `sha-<mainSha>` digest                      |
+| `promote-and-deploy.yml`          | CD   | SSH/secrets; deploy       | workflow_dispatch                    | Preview/production digest promotion, infra reconcile, verify, e2e                                                                                                                                            |
+| `promote-preview-digest-seed.yml` | CD   | GHCR read; contents write | workflow_run                         | Maintains preview digest seed pins on `main` after dispatched preview flights                                                                                                                                |
 
 ### Local Gates
 
