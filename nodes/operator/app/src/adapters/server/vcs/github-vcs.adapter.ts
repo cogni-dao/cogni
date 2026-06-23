@@ -18,6 +18,7 @@
  */
 
 import type {
+  ApproveWorkflowRunsResult,
   CheckInfo,
   CiStatusResult,
   CreateBranchResult,
@@ -251,9 +252,21 @@ export class GitHubVcsAdapter implements VcsCapability {
         message: data.message,
       };
     } catch (error) {
-      // GitHub returns 405 for already merged or not mergeable
+      // Surface the GitHub HTTP status so callers classify structurally
+      // (405 = refused/not-mergeable/already-merged, 409 = head modified)
+      // rather than substring-matching the message.
+      const status =
+        error &&
+        typeof error === "object" &&
+        "status" in error &&
+        typeof (error as { status: unknown }).status === "number"
+          ? (error as { status: number }).status
+          : undefined;
       const message = error instanceof Error ? error.message : "Merge failed";
-      return { merged: false, message };
+      // exactOptionalPropertyTypes: omit `status` rather than set it `undefined`.
+      return status === undefined
+        ? { merged: false, message }
+        : { merged: false, status, message };
     }
   }
 
@@ -290,6 +303,67 @@ export class GitHubVcsAdapter implements VcsCapability {
       sourceSha: params.sourceSha,
       workflowUrl,
       message: `Candidate flight dispatched for ${params.nodeSlug}@${params.sourceSha.slice(0, 8)}.`,
+    };
+  }
+
+  async approveWorkflowRuns(params: {
+    owner: string;
+    repo: string;
+    prNumber: number;
+  }): Promise<ApproveWorkflowRunsResult> {
+    const octokit = await this.getOctokit(params.owner, params.repo);
+
+    // Resolve the PR head SHA — workflow runs are keyed by head_sha.
+    const { data: pr } = await octokit.request(
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}",
+      {
+        owner: params.owner,
+        repo: params.repo,
+        pull_number: params.prNumber,
+      }
+    );
+    const headSha = pr.head.sha;
+
+    // List the workflow runs GitHub is holding behind the fork-PR approval gate.
+    const { data: runsData } = await octokit.request(
+      "GET /repos/{owner}/{repo}/actions/runs",
+      {
+        owner: params.owner,
+        repo: params.repo,
+        head_sha: headSha,
+        status: "action_required",
+        event: "pull_request",
+        per_page: 100,
+      }
+    );
+
+    const pending = runsData.workflow_runs as Array<{ id: number }>;
+
+    // Approve each held run. `POST .../actions/runs/{run_id}/approve` requires
+    // the installation to hold `actions: write` (cogni-node-template does).
+    const runIds: number[] = [];
+    for (const run of pending) {
+      await octokit.request(
+        "POST /repos/{owner}/{repo}/actions/runs/{run_id}/approve",
+        {
+          owner: params.owner,
+          repo: params.repo,
+          run_id: run.id,
+        }
+      );
+      runIds.push(run.id);
+    }
+
+    const shortSha = headSha.slice(0, 8);
+    return {
+      approved: runIds.length,
+      prNumber: params.prNumber,
+      headSha,
+      runIds,
+      message:
+        runIds.length > 0
+          ? `Approved ${runIds.length} workflow run(s) for PR #${params.prNumber} @ ${shortSha}.`
+          : `No workflow runs awaiting approval for PR #${params.prNumber} @ ${shortSha}.`,
     };
   }
 

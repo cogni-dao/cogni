@@ -46,20 +46,29 @@ scorecard.
 Return this matrix only after the child customization PR exists, or when
 reporting a terminal blocker that prevents opening one:
 
-| Gate                   | Evidence                                                            | Status         | Next action                                 |
-| ---------------------- | ------------------------------------------------------------------- | -------------- | ------------------------------------------- |
-| Launch pack facts      | node repo URL, parent PR, candidate URL                             | `pass/blocked` | missing fact to recover                     |
-| Child customization PR | PR URL in node repo                                                 | `pass/blocked` | create PR from node repo branch             |
-| Child CI               | required checks green                                               | `pass/blocked` | fix child PR                                |
-| Child main image       | `ghcr.io/<owner>/<repo>:sha-<child-main-sha>` exists after merge    | `pass/blocked` | report missing image/tag                    |
-| Parent birth PR        | merged or still open                                                | `pass/blocked` | wait/ask human to merge parent PR           |
-| Parent pin             | parent gitlink pins the image-producing child main SHA              | `pass/blocked` | ask operator to update/publish parent pin   |
-| Candidate flight       | requested through operator API                                      | `pass/blocked` | call operator flight API only when eligible |
-| Candidate verification | candidate `/version` matches launched child SHA                     | `pass/blocked` | run agent-first validation                  |
-| Agent-first validation | candidate API exercised using `docs/guides/agent-api-validation.md` | `pass/blocked` | present human scorecard                     |
+| Gate                   | Evidence                                                                 | Status         | Next action                                                                               |
+| ---------------------- | ------------------------------------------------------------------------ | -------------- | ----------------------------------------------------------------------------------------- |
+| Launch pack facts      | node repo URL, parent PR, candidate URL                                  | `pass/blocked` | missing fact to recover                                                                   |
+| Branch protection      | node repo `main` requires the standard CI checks (and a PR) before merge | `pass/blocked` | enable branch protection on the spawned node repo — required checks = the standard CI set |
+| Child customization PR | PR URL in node repo                                                      | `pass/blocked` | create PR from node repo branch                                                           |
+| Child CI               | required checks green                                                    | `pass/blocked` | fix child PR                                                                              |
+| Child main image       | `ghcr.io/<owner>/<repo>:sha-<child-main-sha>` exists after merge         | `pass/blocked` | report missing image/tag                                                                  |
+| Parent birth PR        | merged or still open                                                     | `pass/blocked` | wait/ask human to merge parent PR                                                         |
+| Parent pin             | parent gitlink pins the image-producing child main SHA                   | `pass/blocked` | ask operator to update/publish parent pin                                                 |
+| Candidate flight       | requested through operator API                                           | `pass/blocked` | call operator flight API only when eligible                                               |
+| Candidate verification | candidate `/version` matches launched child SHA                          | `pass/blocked` | run agent-first validation                                                                |
+| Agent-first validation | candidate API exercised using `docs/guides/agent-api-validation.md`      | `pass/blocked` | present human scorecard                                                                   |
 
 ## Rules
 
+- **Every spawned node repo's `main` MUST have branch protection requiring the
+  standard CI checks (and a PR) before merge.** This is the precondition that
+  gives operator "merge on green" real teeth and a backstop: without it, a PR
+  whose checks were skipped or never ran can merge _vacuously_ and the operator's
+  own merge gate becomes the only authority. With it, an RBAC-holder can safely
+  approve the standard CI workflows on — and merge — external-dev PRs to that
+  repo (including PRs the agent itself authored from a fork), because branch
+  protection independently enforces that the standard checks went green.
 - Do not push directly to child `main`.
 - Do not merge your own child or parent PR. Stop at ready/mergeable and report
   the human/operator merge row as pending.
@@ -117,12 +126,15 @@ surface, report the exact blocker instead of substituting a weaker health check.
 ## Minimal v0 Path
 
 1. Confirm launch-pack facts and recall the knowledge handoff.
-2. Open a child node customization PR.
-3. Wait for child PR CI, human/operator merge, and child `main` image tag.
-4. Right before flighting, ensure the parent birth PR is merged or explicitly
+2. Confirm the node repo `main` has branch protection requiring the standard CI
+   checks before merge (the backstop for operator run-checks + merge-on-green);
+   enable it if missing.
+3. Open a child node customization PR.
+4. Wait for child PR CI, human/operator merge, and child `main` image tag.
+5. Right before flighting, ensure the parent birth PR is merged or explicitly
    ask the human to merge it.
-5. Confirm the parent pin references that image-producing child SHA.
-6. Request candidate-a flight through the operator API.
-7. Verify candidate `/version`, run agent-first API validation, and complete
+6. Confirm the parent pin references that image-producing child SHA.
+7. Request candidate-a flight through the operator API.
+8. Verify candidate `/version`, run agent-first API validation, and complete
    fresh boot health checks.
-8. Present the node formation scorecard to the human.
+9. Present the node formation scorecard to the human.

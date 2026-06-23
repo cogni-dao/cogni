@@ -75,6 +75,30 @@ monorepo candidate-a.
 
 > **Node formation is the exception to "everything is a workflow."** A new node's PR is authored by the **operator GitHub App directly** via the Git Data API (`nodes/operator/app/src/shared/node-app-scaffold/` + `adapters/server/vcs/github-repo-write.ts`) — no dispatched Action (task.5092; see [node-formation.md](../../../docs/spec/node-formation.md#node-publish-operator-authored-pr)). Its per-node Argo AppSet (`infra/k8s/argocd/<env>-<node>-applicationset.yaml` — one object per `(env, node)` for structural lane isolation, `bug.0378`) is catalog-rendered by `scripts/ci/render-node-appset.sh` (`pnpm gen:node-appset`, drift-gated in the `unit` job). The TS scaffolder and the shell renderer share one template (`scripts/ci/node-applicationset.yaml.tmpl`), so their output is byte-identical. Its per-node Kustomize **overlay** is likewise catalog-rendered — `scripts/ci/render-node-overlays.sh` (`pnpm gen:node-overlays`, drift-gated), the byte-exact twin of the operator's mint-time `gens/overlay.ts`, applying the node-at-root migrate rewrite (`/app/nodes/<slug>/app` → `/app/app`). The drift gate is what stops a **stale operator** from minting an overlay that kustomize-builds but crash-loops `migrate` at flight (`bug.5008`).
 
+### Operator VCS routes — external-contributor approve + merge (operator App is the privilege bridge)
+
+A read-only external agent (e.g. `flock-leader`) drives a fork PR to a node's OWN repo entirely
+through the operator GitHub App — no human, no `gh` write on the agent's side. **Node-scoped is the
+primary path:**
+
+- **`POST /api/v1/vcs/run-checks` `{ nodeId, prNumber }`** — releases GitHub's `action_required`
+  hold on a fork contributor's `pull_request` runs so the node's own CI runs. RBAC `node.flight` on
+  the named node is the gate; only standard `pull_request` runs are approved (never
+  `pull_request_target` / secret-bearing — safe by structure). `owner/repo` resolved from the node's
+  catalog `source_repo`.
+- **`POST /api/v1/vcs/merge` `{ nodeId, prNumber }`** — squash-merges any PR to the node's repo on
+  green (including a fork PR the agent authored). RBAC `node.flight` is the gate; the owner-granted
+  RBAC tuple IS the trust boundary (no self-merge / probation check). **Branch protection on the node
+  repo is the merge authority**; `evaluateMergeGate` is fast-fail UX. Node-merge auto-promotes
+  preview via the existing `dispatchNodePreviewPromote`.
+
+**"fork-build" is purged — the node repo builds itself** (`pr-build.yml` `push:main` → `sha-<sha>`).
+There is no operator-dispatched fork-build lane.
+
+**LEGACY (monorepo PR-number lane, kept):** `POST /api/v1/vcs/merge { prNumber }` WITHOUT `nodeId`
+(operator-node RBAC + monorepo `NODE_SUBMODULE_PARENT_*` repo) and `POST /api/v1/vcs/flight { codePr }`
+remain for operator-monorepo PRs.
+
 ### Workflows (`.github/workflows/`) — pipeline entry points
 
 | Workflow                                 | Trigger                                   | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |

@@ -35,11 +35,13 @@ import type {
   CatalogForkTarget,
   MirrorCanonicalFilesInput,
   MirrorCanonicalFilesResult,
-  NodePreviewPromoteResult,
+  NodePromoteResult,
   OperatorDeployPlanePort,
   PreparedNodeRefCandidateFlight,
   PrepareNodeRefCandidateFlightInput,
-  PromoteNodeToPreviewInput,
+  PromoteNodeInput,
+  ResolvedNodeRepo,
+  ResolveNodeRepoInput,
   SyncTemplateUpstreamInput,
   SyncTemplateUpstreamResult,
 } from "@/ports";
@@ -172,6 +174,16 @@ const CatalogEntrySchema = z.object({
   image_repository: z
     .string()
     .regex(/^ghcr\.io\/[a-z0-9][a-z0-9_.-]*\/[a-z0-9][a-z0-9_.-]*$/),
+});
+
+// Promote-time discriminator: validates the slug identity + reads `source_repo` PRESENCE only
+// (remote-source vs in-repo). `source_repo` is optional here — in-repo nodes (operator/poly) omit
+// it — so this is intentionally laxer than CatalogEntrySchema (which mandates it for the
+// remote-source fork path). We never read `source_sha`: it is birth-only metadata, not a deploy
+// authority for promotion (bug.5043).
+const PromoteDiscriminatorSchema = z.object({
+  name: z.string(),
+  source_repo: z.string().url().optional(),
 });
 
 function parseGhcrImageRepository(imageRepository: string): {
@@ -393,45 +405,15 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
   }
 
   /**
-   * Node-merge → preview tie. Dispatches preview exactly like production
-   * (PROMOTION_RUNS_AS_THE_OPERATOR + ONE_PROMOTION_PRIMITIVE) — and writes ZERO
-   * commits to operator `main`.
-   *
-   * SOURCE_ADDRESSED_LIKE_CANDIDATE_FLIGHT: the node image sha rides the dispatch as
-   * the `node_source_sha` input — the same source-addressing candidate-flight.yml
-   * already uses. promote-and-deploy's "Resolve digest for this node" remote-source
-   * branch PREFERS that input over the `yq '.source_sha' infra/catalog/<slug>.yaml`
-   * catalog read, so the merged node head sha resolves the image directly. The pin is
-   * then recorded where deploy state belongs — `.promote-state/source-sha-by-app.json`
-   * on `deploy/preview` (the existing promote machinery, update-source-sha-map.sh) —
-   * never on `main`. The operator App's main-write privilege is reserved for
-   * governance/code merges, not routine deploy pins (deploy state lives on deploy
-   * branches, separate from code).
-   *
-   * The dispatch `ref` stays `main`: that is the operator WORKFLOW checkout ref, not a
-   * deploy pin. We confirm the catalog row exists/identifies the slug (a missing or
-   * mismatched row is a real misconfiguration), but read NOTHING from it for
-   * resolution — the input carries the sha. Image existence is NOT gated in-app: the
-   * GitHub Packages API false-negatives on private node images (git-app-expert), so
-   * the workflow's own "image not found" hard-fail is the loud backstop.
-   *
-   * (This replaces the stalling pin-PR — and its successor direct-main-commit — that
-   * polluted `main` with a deploy-state firehose: PRs #1699/#1700/#1711, task.5022.)
+   * Resolve a node's own source repo from `infra/catalog/<slug>.yaml` `source_repo` (read via the
+   * App — the catalog is absent on the operator's runtime disk). Reuses the same catalog-read seam
+   * as `prepareNodeRefCandidateFlight`. Throws coded `catalog_missing` (404) when the row is absent.
    */
-  async promoteNodeToPreview(
-    input: PromoteNodeToPreviewInput
-  ): Promise<NodePreviewPromoteResult> {
-    const { parentOwner, parentRepo, slug, sourceSha } = input;
-    if (!SOURCE_SHA_PATTERN.test(sourceSha)) {
-      throw deployPlaneError(
-        "invalid_source_sha",
-        "sourceSha must be a 40-character hex SHA",
-        400
-      );
-    }
+  async resolveNodeRepo(
+    input: ResolveNodeRepoInput
+  ): Promise<ResolvedNodeRepo> {
+    const { parentOwner, parentRepo, slug } = input;
 
-    // Confirm the catalog row exists + identifies this slug. We do NOT read source_sha
-    // from it — the dispatch carries the node sha (SOURCE_ADDRESSED_LIKE_CANDIDATE_FLIGHT).
     const catalogText = await this.fetchFileText({
       owner: parentOwner,
       repo: parentRepo,
@@ -445,27 +427,98 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
         404
       );
     }
+
     const catalog = CatalogEntrySchema.safeParse(parseYaml(catalogText));
     if (!catalog.success || catalog.data.name !== slug) {
+      throw deployPlaneError(
+        "catalog_missing",
+        `node catalog entry not found for ${slug}`,
+        404
+      );
+    }
+
+    return parseGithubRepoUrl(catalog.data.source_repo);
+  }
+
+  /**
+   * Promote a node to preview OR production — ONE code path, ONE_PROMOTION_PRIMITIVE
+   * (PROMOTION_RUNS_AS_THE_OPERATOR). The rung differs ONLY by the dispatched `env` and the
+   * route's authz: preview is the ungated node-merge hook; production is RBAC-gated on
+   * `node.promote_production`, enforced BEFORE this is called. Writes ZERO commits to `main`.
+   *
+   * SOURCE_ADDRESSED_LIKE_CANDIDATE_FLIGHT: for a REMOTE-SOURCE (fork) node the node image sha
+   * rides the dispatch as `node_source_sha` — the same source-addressing candidate-flight.yml
+   * already uses. promote-and-deploy's "Resolve digest for this node" remote-source branch PREFERS
+   * that input over the `yq '.source_sha' infra/catalog/<slug>.yaml` read, so the node head sha
+   * resolves the image directly. The pin is recorded where deploy state belongs —
+   * `.promote-state/source-sha-by-app.json` on `deploy/<env>` (update-source-sha-map.sh) — never on
+   * `main`. The operator App's main-write privilege is reserved for governance/code merges, not
+   * routine deploy pins.
+   *
+   * Reads the parent catalog row via the App (it is absent on the operator's runtime disk) ONLY to
+   * DISCRIMINATE the node kind — `source_repo` PRESENCE, never `source_sha`, drives resolution:
+   *   - REMOTE-SOURCE (catalog has `source_repo`, e.g. beacon): `node_source_sha = sourceSha`, NO
+   *     `source_sha`. The catalog `source_sha` is birth-only metadata, never a deploy authority
+   *     for promotion (the stale-pin vestige bug.5043 retired).
+   *   - IN-REPO (no `source_repo`, e.g. operator/poly): pass `source_sha = sourceSha` (the operator
+   *     checkout ref); in-repo nodes are not source-addressed by node sha.
+   * A missing/mismatched row is a real misconfiguration (404/409). Image existence is NOT gated
+   * in-app: the GitHub Packages API false-negatives on private node images (git-app-expert), so the
+   * workflow's own "image not found" hard-fail is the loud backstop.
+   *
+   * (This replaces the stalling pin-PR — and its successor direct-main-commit — that polluted
+   * `main` with a deploy-state firehose: PRs #1699/#1700/#1711, task.5022.)
+   */
+  async promoteNode(input: PromoteNodeInput): Promise<NodePromoteResult> {
+    const { env, parentOwner, parentRepo, slug, sourceSha } = input;
+    if (!SOURCE_SHA_PATTERN.test(sourceSha)) {
+      throw deployPlaneError(
+        "invalid_source_sha",
+        "sourceSha must be a 40-character hex SHA",
+        400
+      );
+    }
+
+    // Confirm the catalog row exists + identifies this slug, and read ONLY `source_repo`'s presence
+    // (the remote-source vs in-repo discriminator). We never read `source_sha` for resolution.
+    const catalogText = await this.fetchFileText({
+      owner: parentOwner,
+      repo: parentRepo,
+      path: `infra/catalog/${slug}.yaml`,
+      ref: "main",
+    });
+    if (!catalogText) {
+      throw deployPlaneError(
+        "catalog_missing",
+        `node catalog entry not found for ${slug}`,
+        404
+      );
+    }
+    const row = PromoteDiscriminatorSchema.safeParse(parseYaml(catalogText));
+    if (!row.success || row.data.name !== slug) {
       throw deployPlaneError(
         "invalid_catalog",
         `invalid node catalog entry for ${slug}`,
         409
       );
     }
+    const isRemoteSource = row.data.source_repo !== undefined;
 
     const dispatch = await this.dispatchNodePromote({
       owner: parentOwner,
       repo: parentRepo,
-      env: "preview",
+      env,
       slug,
-      // Source-address the node image; NO source_sha (operator checkout ref stays main).
-      nodeSourceSha: sourceSha,
+      // REMOTE-SOURCE: source-address the node image (no source_sha — operator checkout ref stays
+      // main). IN-REPO: source_sha is the operator checkout ref.
+      ...(isRemoteSource ? { nodeSourceSha: sourceSha } : { sourceSha }),
     });
 
     return {
       status: "dispatched",
+      env,
       sourceSha,
+      sourceAddressing: isRemoteSource ? "remote_source" : "in_repo",
       workflowUrl: dispatch.workflowUrl,
     };
   }

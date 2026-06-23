@@ -10,8 +10,20 @@
 # unaware of substrate drift (chart bumps, hand-edits, partial syncs).
 #
 # Substitution at apply time (provision-env-vm.sh Phase 5b.1):
-#   ${FORK_REPO}     → https://github.com/${GH_REPO}.git
-#   ${DEPLOY_BRANCH} → deploy/${DEPLOY_ENV} (same branch Phase 4c writes to)
+#   ${FORK_REPO} → https://github.com/${GH_REPO}.git
+#
+# targetRevision: main (bug.5051) — NOT ${DEPLOY_BRANCH}/deploy/${DEPLOY_ENV}.
+# These substrate manifests (infra/k8s/argocd/openbao/) are shared SOURCE with
+# ZERO per-env templating, not per-env rendered overlay state — they were
+# mis-filed as deploy-state. The main→deploy-branch propagation carries app
+# digests + .promote-state, NOT infra/** changes, so a reviewed substrate fix
+# authored on main never reached the deploy branch and thus never reached any
+# cluster (Argo showed Synced/Healthy against the stale deploy-branch value —
+# e.g. #1617's 512Mi→1Gi limit bump silently no-op'd, the bug.5051 OOM root
+# cause). Tracking `main` means a reviewed substrate change actually deploys.
+# Tradeoff (honest): substrate changes then hit ALL envs on Argo's next sync
+# with no per-env staging — acceptable because substrate changes are rare +
+# PR-reviewed, and the prior behavior (changes reach NO env) is strictly worse.
 #
 # SyncPolicy invariants:
 #   - prune: false. OpenBao Raft data is stateful; removing the kustomize from
@@ -34,7 +46,7 @@ spec:
   project: default
   source:
     repoURL: ${FORK_REPO}
-    targetRevision: ${DEPLOY_BRANCH}
+    targetRevision: main
     path: infra/k8s/argocd/openbao
   destination:
     server: https://kubernetes.default.svc

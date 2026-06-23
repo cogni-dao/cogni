@@ -94,8 +94,10 @@ export * from "./treasury.snapshot.v1.contract";
 // ── Users ───────────────────────────────────────────────────────────────────
 export * from "./users.ownership.v1.contract";
 export * from "./users.profile.v1.contract";
-// ── VCS ─────────────────────────────────────────────────────────────────────
 export * from "./vcs.flight.v1.contract";
+export * from "./vcs.merge.v1.contract";
+// ── VCS ─────────────────────────────────────────────────────────────────────
+export * from "./vcs.run-checks.v1.contract";
 export * from "./work.items.create.v1.contract";
 export * from "./work.items.delete.v1.contract";
 export * from "./work.items.get.v1.contract";

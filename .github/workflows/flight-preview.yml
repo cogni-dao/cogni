@@ -68,6 +68,9 @@ jobs:
       status: ${{ steps.flight.outputs.status }}
       pr_number: ${{ steps.pr.outputs.pr_number }}
       head_sha: ${{ steps.pr.outputs.head_sha }}
+      # Clickable URL of the promote-and-deploy run this flight spawned, resolved
+      # by flight-preview.sh (best-effort; may be empty if resolution timed out).
+      spawned_run_url: ${{ steps.flight.outputs.spawned_run_url }}
     steps:
       - name: Checkout app source
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
@@ -124,8 +127,19 @@ jobs:
               echo "::error::flight-preview triggered by push to main but no PR resolvable for ${HEAD_SHA:0:8} after primary (commit subject) + fallback (API 5×3s) lookups. Direct pushes to main are incident-only per docs/spec/ci-cd.md. If this push is intentional, dispatch flight-preview.yml manually with an explicit sha input after the commit you want flighted is on main."
               exit 1
             fi
-            # workflow_dispatch with a non-PR SHA (incident recovery path) — skip cleanly.
-            echo "ℹ️  Dispatched with SHA ${HEAD_SHA:0:8} that has no PR — skipping."
+            # workflow_dispatch with a non-PR SHA. Skip cleanly either way, but a
+            # HUMAN-typed dispatch that resolves no PR is operator error — make it
+            # LOUD (bug.5050) so a green-no-op run can't be mistaken for a deploy.
+            # (A push-triggered skip is a legitimate quiet incident-path and is
+            # handled above; this branch only fires for workflow_dispatch.)
+            echo "::warning::flight-preview dispatched with SHA ${HEAD_SHA:0:8} that resolves to NO PR — promote-and-deploy was NOT dispatched. This run did nothing. Re-dispatch with a PR-merge SHA."
+            {
+              echo "## ⚠️ Flight Preview — no-op (nothing deployed)"
+              echo ""
+              echo "Dispatched with SHA \`${HEAD_SHA}\` that resolves to **NO PR** — \`promote-and-deploy\` was **NOT** dispatched."
+              echo ""
+              echo "This is almost certainly operator error: a manual \`workflow_dispatch\` must target a PR-merge SHA on main. Re-dispatch with a PR-merge SHA."
+            } >> "$GITHUB_STEP_SUMMARY"
             echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -328,6 +342,11 @@ jobs:
         env:
           PR_NUMBER: ${{ needs.flight.outputs.pr_number }}
           HEAD_SHA: ${{ needs.flight.outputs.head_sha }}
+          SPAWNED_RUN_URL: ${{ needs.flight.outputs.spawned_run_url }}
         run: |
           echo "✅ promote-and-deploy dispatched for PR #${PR_NUMBER} (${HEAD_SHA:0:8})."
-          echo "Watch: gh run list --workflow=promote-and-deploy.yml --limit 1"
+          if [ -n "${SPAWNED_RUN_URL}" ]; then
+            echo "🔗 Spawned run: ${SPAWNED_RUN_URL}"
+          else
+            echo "Watch: gh run list --workflow=promote-and-deploy.yml --limit 1"
+          fi

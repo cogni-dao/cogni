@@ -12,6 +12,7 @@
  */
 
 export type {
+  ApproveWorkflowRunsResult,
   AuthCapability,
   ChainDirection,
   ChainNodeEntry,

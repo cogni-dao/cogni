@@ -67,19 +67,6 @@ export class CodexLlmAdapter implements LlmService {
     private readonly mcpConfig?: CodexMcpConfig
   ) {}
 
-  async completion(
-    params: Parameters<LlmService["completion"]>[0]
-  ): ReturnType<LlmService["completion"]> {
-    const { stream, final } = await this.completionStream({
-      ...params,
-    });
-    // Drain stream, collect text
-    for await (const _event of stream) {
-      // just drain
-    }
-    return final;
-  }
-
   async completionStream(params: CompletionStreamParams): Promise<{
     stream: AsyncIterable<ChatDeltaEvent>;
     final: Promise<LlmCompletionResult>;
