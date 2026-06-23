@@ -123,16 +123,13 @@ describe("buildNodeLaunchPack", () => {
     );
     expect(pack.prompt).toContain("Parent deployment PR:");
     expect(pack.prompt).toContain("Candidate URL:");
+
+    // Identity + goal: a ZERO-privilege external dev (no GitHub write).
     expect(pack.prompt).toContain(
       "You are the AI developer taking this node from spawned scaffold to first deployed customization."
     );
-    expect(pack.prompt).toContain("make a simple node style-kit customization");
-    expect(pack.prompt).toContain(
-      "get that PR deployed to Cogni operator candidate-a via a flight"
-    );
-    expect(pack.prompt).toContain(
-      "report the node spawn scorecard/status and any useful URLs"
-    );
+    expect(pack.prompt).toContain("ZERO privileged GitHub access");
+    expect(pack.prompt).toContain("style-kit customization");
     expect(pack.prompt).toContain(
       "The Cogni operator is the coordination service"
     );
@@ -141,6 +138,7 @@ describe("buildNodeLaunchPack", () => {
     );
     expect(pack.prompt).not.toContain("@node-wizard-scorecard");
     expect(pack.prompt).not.toContain("Its first response");
+
     expect(pack.prompt).toContain(".env.cogni");
     expect(pack.prompt).toContain("/contribute-to-cogni");
     expect(pack.prompt).toContain("recall the Cogni knowledge block above");
@@ -151,54 +149,62 @@ describe("buildNodeLaunchPack", () => {
     expect(pack.prompt.indexOf("/contribute-to-cogni")).toBeLessThan(
       pack.prompt.indexOf("recall the Cogni knowledge block above")
     );
-    expect(pack.prompt).toContain("Create a node customization PR");
-    expect(pack.prompt).toContain("Do not push directly to main");
-    expect(pack.prompt).toContain("merge your own PR");
+
+    // Step 1 — FORK-FIRST. The agent is read-only on the Cogni-owned upstream,
+    // so it contributes via a fork PR; the operator merges on its behalf. This
+    // is the core correction over the pre-#1792 "create a PR in the node repo"
+    // (which assumed write) + "merge via the pr-manager graph" model.
+    expect(pack.prompt).toContain("Fork the node repo");
+    expect(pack.prompt).toContain("read-only");
+    expect(pack.prompt).toContain("the operator merges on your behalf");
+    expect(pack.prompt).toContain("Do not push to upstream `main`");
+    // The stale self-merge / pr-manager-graph path must never return.
+    expect(pack.prompt).not.toContain("merge your own PR");
+    expect(pack.prompt).not.toContain("ask the Cogni PR Manager graph");
+    expect(pack.prompt).not.toContain('graph_name "pr-manager"');
+    expect(pack.prompt).not.toContain("/api/v1/chat/completions");
+
     expect(pack.prompt).toContain("knowledge.remote");
     expect(pack.prompt).toContain("Cogni-owned DoltHub mirror");
     expect(pack.prompt).toContain("do not add a DOLTHUB_REMOTE_URL");
-    expect(pack.prompt).toContain("Let the node repo CI build normally");
-    expect(pack.prompt).toContain("child repo `main` SHA");
-    expect(pack.prompt).toContain("ghcr.io/<owner>/<repo>:sha-<sourceSha>");
-    expect(pack.prompt.indexOf("Create a node customization PR")).toBeLessThan(
-      pack.prompt.indexOf("ensure the parent deployment PR is merged")
-    );
-    expect(pack.prompt).toContain("Right before flighting");
-    expect(pack.prompt).toContain("ensure the parent deployment PR is merged");
-    expect(pack.prompt).toContain("ask the Cogni PR Manager graph");
-    expect(pack.prompt).toContain(
-      "POST https://cognidao.org/api/v1/chat/completions"
-    );
-    expect(pack.prompt).toContain('model "gpt-4o-mini"');
-    expect(pack.prompt).toContain('graph_name "pr-manager"');
-    expect(pack.prompt).toContain("squash-merge it");
-    expect(pack.prompt).toContain(
-      "node-formation capacity gate already passed"
-    );
-    expect(pack.prompt).toContain("Checkpoint with the human");
-    expect(pack.prompt).toContain("brief status, progress, and next-steps");
-    expect(pack.prompt).toContain("Register as a contributor");
-    expect(pack.prompt).toContain("request developer access for this node");
+
+    // Step 2 — RBAC owner-approve is the ONE human gate, fired immediately so it
+    // resolves in parallel; the bearer can use the grant but never self-approve.
+    expect(pack.prompt).toContain("developer-access request");
     expect(pack.prompt).toContain(
       `/api/v1/nodes/11111111-1111-4111-8111-111111111111/access-requests`
     );
-    expect(pack.prompt).toContain(
-      "the node owner approves your request in the node UI"
+    expect(pack.prompt).toContain("ONE human gate");
+    expect(pack.prompt).toContain("approves it once in the node UI");
+    expect(pack.prompt).toContain("can never approve itself");
+    // The access request precedes flight in the documented order.
+    expect(pack.prompt.indexOf("access-requests")).toBeLessThan(
+      pack.prompt.indexOf("/api/v1/vcs/flight")
     );
+
+    // Steps 4-7 — every privileged action runs through the operator vcs routes
+    // (#1792): release held fork-PR CI, flight, then merge child + parent pin.
+    expect(pack.prompt).toContain("/api/v1/vcs/run-checks");
+    expect(pack.prompt).toContain("/api/v1/vcs/flight");
+    expect(pack.prompt).toContain("/api/v1/vcs/merge");
+    expect(pack.prompt).toContain("{nodeId, prNumber}");
+    expect(pack.prompt).toContain("nodeRef:{nodeId, sourceSha}");
+    expect(pack.prompt).toContain("child image");
+    expect(pack.prompt).toContain("parent");
+
     expect(pack.prompt).not.toContain("browser-session-flight-auth.md");
     expect(pack.prompt).not.toContain("node-app-secrets");
     expect(pack.prompt).not.toContain("OpenBao");
     expect(pack.prompt).toContain("operator API");
-    expect(pack.prompt).toContain("child image tag exists");
-    expect(pack.prompt).toContain("parent pin agrees");
+
     expect(pack.prompt).toContain(".claude/skills/node-styling/SKILL.md");
     expect(pack.prompt).not.toContain("node-formation-styling-guide");
     expect(pack.prompt).toContain(
       ".claude/skills/playwright-auth-bootstrap/SKILL.md"
     );
     expect(pack.prompt).toContain("agent-first API validation");
-    expect(pack.prompt).toContain("human scorecard");
+    expect(pack.prompt).toContain("scorecard");
     expect(pack.prompt).toContain("blocked scorecard row");
-    expect(pack.prompt).toContain("Verify the deployed /version");
+    expect(pack.prompt).toContain("/version");
   });
 });

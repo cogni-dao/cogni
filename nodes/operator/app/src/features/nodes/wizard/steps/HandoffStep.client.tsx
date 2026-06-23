@@ -42,6 +42,18 @@ export function HandoffStep({ node }: WizardStepProps): ReactElement {
   return (
     <StepSection title="Ready for your AI developer">
       <div className="space-y-6 text-sm">
+        {/* What the human does — one paste, one approval. The AI dev does the rest. */}
+        <p className="text-center text-muted-foreground">
+          Hand this prompt to an AI developer that has a GitHub account{" "}
+          <span className="text-foreground">(Claude Code, OpenClaw, …)</span>.
+          It forks your node repo, ships a first change to a live test deploy,
+          and reports back —{" "}
+          <span className="text-foreground">
+            your only step is to approve its access request
+          </span>{" "}
+          when it asks.
+        </p>
+
         {/* Primary CTA — centered, accent, front and center */}
         <div className="flex flex-col items-center gap-3 py-2 text-center">
           <LaunchPackCopyButton
@@ -67,9 +79,7 @@ export function HandoffStep({ node }: WizardStepProps): ReactElement {
 
         <p className="text-muted-foreground">
           Everything below is what you just created — all useful, but you don't
-          need to save it. The one that matters:{" "}
-          <span className="text-foreground">open your node repo</span> and get
-          it running in your workspace.
+          need to save them; your AI dev recovers what it needs from the prompt.
         </p>
 
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
