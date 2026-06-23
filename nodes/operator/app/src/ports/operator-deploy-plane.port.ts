@@ -199,6 +199,22 @@ export interface OperatorDeployPlanePort {
   }): Promise<CandidateFlightDispatchResult>;
 
   /**
+   * Dispatch `candidate-flight.yml` for an operator-MONOREPO PR, by `pr_number` — the code-PR flight
+   * path. Sibling of {@link dispatchNodeRefCandidateFlight} (which carries node_slug/source_sha); this
+   * carries the workflow's transitional `pr_number` input instead. owner/repo are the operator's own
+   * parent repo (env-resolved at the route, anti-spoof). The route RBAC-gates on the OPERATOR node's
+   * `can_flight` BEFORE this is called. Reuses the existing workflow dispatch — adds NO deploy-brain
+   * (freeze-policy compliant). NOTE: for a FORK monorepo PR the `pr-{N}-{sha}` image only exists after
+   * the operator-approved fork build (separate work); this flights whatever image candidate-flight
+   * resolves for that PR.
+   */
+  dispatchCodePrCandidateFlight(input: {
+    owner: string;
+    repo: string;
+    prNumber: number;
+  }): Promise<CandidateFlightDispatchResult>;
+
+  /**
    * Promote a node to preview OR production — ONE code path, ONE_PROMOTION_PRIMITIVE. The rung
    * differs only by the dispatched `env` + the route's authz (preview is the ungated node-merge
    * hook; production is RBAC-gated on `node.promote_production`, enforced BEFORE this is called).

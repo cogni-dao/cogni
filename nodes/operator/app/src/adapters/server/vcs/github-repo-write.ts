@@ -509,6 +509,38 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
     };
   }
 
+  /**
+   * Code-PR flight: dispatch `candidate-flight.yml` for an operator-MONOREPO PR by `pr_number` — the
+   * transitional workflow input candidate-flight.yml already accepts. Sibling of
+   * {@link dispatchNodeRefCandidateFlight}; reuses the same workflow_dispatch primitive with the
+   * PR-shaped inputs instead of node_slug/source_sha. No new deploy-brain (freeze-policy compliant).
+   */
+  async dispatchCodePrCandidateFlight(input: {
+    owner: string;
+    repo: string;
+    prNumber: number;
+  }): Promise<CandidateFlightDispatchResult> {
+    const octokit = await this.getOctokit(input.owner, input.repo);
+    await octokit.request(
+      "POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches",
+      {
+        owner: input.owner,
+        repo: input.repo,
+        workflow_id: "candidate-flight.yml",
+        ref: "main",
+        inputs: {
+          pr_number: String(input.prNumber),
+        },
+        request: { signal: AbortSignal.timeout(15_000) },
+      }
+    );
+    return {
+      dispatched: true,
+      workflowUrl: `https://github.com/${input.owner}/${input.repo}/actions/workflows/candidate-flight.yml`,
+      message: `Candidate flight dispatched for PR #${input.prNumber}.`,
+    };
+  }
+
   async dispatchNodePromote(input: {
     owner: string;
     repo: string;

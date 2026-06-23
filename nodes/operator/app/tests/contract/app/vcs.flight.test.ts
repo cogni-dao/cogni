@@ -27,11 +27,18 @@ import type {
 
 const NODE_ID = "11111111-1111-4111-8111-111111111111";
 const SOURCE_SHA = "0123456789012345678901234567890123456789";
+const OPERATOR_NODE_ID = "22222222-2222-4222-8222-222222222222";
+const CODE_PR_NUMBER = 1799;
 
 const mockDeployPlane = vi.hoisted(() => ({
   prepareNodeRefCandidateFlight: vi.fn(),
   dispatchNodeRefCandidateFlight: vi.fn(),
+  dispatchCodePrCandidateFlight: vi.fn(),
 }));
+// The code-PR path authorizes through the shared `resolveNodeAndAuthorize` seam (operator node,
+// can_flight) — mocked directly here, mirroring the merge route's seam, so the nodeRef DB/billing
+// authz scaffolding above stays untouched.
+const mockResolveNodeAndAuthorize = vi.hoisted(() => vi.fn());
 const authzState = vi.hoisted(() => ({
   decision: undefined as
     | undefined
@@ -77,6 +84,11 @@ const mockLog = vi.hoisted(() => ({
 
 vi.mock("@/bootstrap/capabilities/operator-deploy-plane", () => ({
   createOperatorDeployPlane: () => mockDeployPlane,
+}));
+
+vi.mock("@/app/_lib/node-rbac", () => ({
+  resolveNodeAndAuthorize: (input: unknown) =>
+    mockResolveNodeAndAuthorize(input),
 }));
 
 vi.mock("@/bootstrap/container", () => ({
@@ -241,6 +253,11 @@ describe("POST /api/v1/vcs/flight", () => {
       NODE_SUBMODULE_PARENT_REPO: "cogni-monorepo",
     };
     mockGetSessionUser.mockResolvedValue(TEST_SESSION_USER_1);
+    // Default: operator node resolves + grants can_flight (the allow path).
+    mockResolveNodeAndAuthorize.mockResolvedValue({
+      ok: true,
+      node: { nodeId: OPERATOR_NODE_ID, slug: "operator" },
+    });
   });
 
   it("returns 401 when unauthenticated", async () => {
@@ -543,6 +560,200 @@ describe("POST /api/v1/vcs/flight", () => {
           slug: "creative",
           dispatchStatus: "initiated",
         });
+      },
+    });
+  });
+});
+
+describe("POST /api/v1/vcs/flight — codePr (operator-monorepo PR)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    envState.current = {
+      GH_REVIEW_APP_ID: "1",
+      GH_REVIEW_APP_PRIVATE_KEY_BASE64:
+        Buffer.from("private-key").toString("base64"),
+      NODE_SUBMODULE_PARENT_OWNER: "cogni-test-org",
+      NODE_SUBMODULE_PARENT_REPO: "cogni-monorepo",
+    };
+    mockGetSessionUser.mockResolvedValue(TEST_SESSION_USER_2);
+    mockResolveNodeAndAuthorize.mockResolvedValue({
+      ok: true,
+      node: { nodeId: OPERATOR_NODE_ID, slug: "operator" },
+    });
+    mockDeployPlane.dispatchCodePrCandidateFlight.mockResolvedValue(
+      makeDispatchResult(
+        `Candidate flight dispatched for PR #${CODE_PR_NUMBER}.`
+      )
+    );
+  });
+
+  it("returns 401 when unauthenticated", async () => {
+    mockGetSessionUser.mockResolvedValue(null);
+
+    await testApiHandler({
+      appHandler,
+      async test({ fetch }) {
+        const res = await fetch({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ codePr: { prNumber: CODE_PR_NUMBER } }),
+        });
+        expect(res.status).toBe(401);
+        expect(
+          mockDeployPlane.dispatchCodePrCandidateFlight
+        ).not.toHaveBeenCalled();
+      },
+    });
+  });
+
+  it("denies (403) when OpenFGA denies operator-node can_flight, before dispatch", async () => {
+    mockResolveNodeAndAuthorize.mockResolvedValue({
+      ok: false,
+      status: 403,
+      errorCode: "authz_denied",
+      slug: "operator",
+    });
+
+    await testApiHandler({
+      appHandler,
+      async test({ fetch }) {
+        const res = await fetch({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ codePr: { prNumber: CODE_PR_NUMBER } }),
+        });
+        expect(res.status).toBe(403);
+        const body = await res.json();
+        expect(body.errorCode).toBe("authz_denied");
+        // Authorized against the OPERATOR node, reusing node.flight (can_flight).
+        expect(mockResolveNodeAndAuthorize).toHaveBeenCalledWith({
+          id: "operator",
+          userId: TEST_SESSION_USER_2.id,
+          action: "node.flight",
+        });
+        expect(
+          mockDeployPlane.dispatchCodePrCandidateFlight
+        ).not.toHaveBeenCalled();
+        expectFlightRequestLog("warn", {
+          mode: "code_pr",
+          outcome: "error",
+          status: 403,
+          errorCode: "authz_denied",
+          prNumber: CODE_PR_NUMBER,
+        });
+      },
+    });
+  });
+
+  it("fails closed (503) when no authority is configured", async () => {
+    mockResolveNodeAndAuthorize.mockResolvedValue({
+      ok: false,
+      status: 503,
+      errorCode: "authz_unavailable",
+      slug: "operator",
+    });
+
+    await testApiHandler({
+      appHandler,
+      async test({ fetch }) {
+        const res = await fetch({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ codePr: { prNumber: CODE_PR_NUMBER } }),
+        });
+        expect(res.status).toBe(503);
+        const body = await res.json();
+        expect(body.errorCode).toBe("authz_unavailable");
+        expect(
+          mockDeployPlane.dispatchCodePrCandidateFlight
+        ).not.toHaveBeenCalled();
+      },
+    });
+  });
+
+  it("grants → dispatches candidate-flight.yml with pr_number → 202", async () => {
+    await testApiHandler({
+      appHandler,
+      async test({ fetch }) {
+        const res = await fetch({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ codePr: { prNumber: CODE_PR_NUMBER } }),
+        });
+        expect(res.status).toBe(202);
+        const body = await res.json();
+        expect(flightOperation.output.safeParse(body).success).toBe(true);
+        expect(body.codePr.prNumber).toBe(CODE_PR_NUMBER);
+        expect(body.slot).toBe("candidate-a");
+        // owner/repo are env-resolved (anti-spoof), never from the request body.
+        expect(
+          mockDeployPlane.dispatchCodePrCandidateFlight
+        ).toHaveBeenCalledWith({
+          owner: "cogni-test-org",
+          repo: "cogni-monorepo",
+          prNumber: CODE_PR_NUMBER,
+        });
+        expectFlightRequestLog("info", {
+          mode: "code_pr",
+          outcome: "success",
+          status: 202,
+          prNumber: CODE_PR_NUMBER,
+          dispatchStatus: "initiated",
+        });
+      },
+    });
+  });
+
+  it("returns 503 workflow_not_found when GitHub 404s the workflow", async () => {
+    mockDeployPlane.dispatchCodePrCandidateFlight.mockRejectedValue(
+      statusError(404, "not_found", "Not Found")
+    );
+
+    await testApiHandler({
+      appHandler,
+      async test({ fetch }) {
+        const res = await fetch({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ codePr: { prNumber: CODE_PR_NUMBER } }),
+        });
+        expect(res.status).toBe(503);
+        const body = await res.json();
+        expect(body.error).toMatch(/candidate-flight\.yml workflow not found/);
+        expect(mockLog.error).toHaveBeenCalledWith(
+          expect.objectContaining({
+            event: "adapter.github_repo_write.error",
+            operation: "dispatch_code_pr_candidate_flight",
+            reasonCode: "workflow_not_found",
+            prNumber: CODE_PR_NUMBER,
+          }),
+          "adapter.github_repo_write.error"
+        );
+        expectFlightRequestLog("error", {
+          mode: "code_pr",
+          outcome: "error",
+          status: 503,
+          errorCode: "workflow_not_found",
+          prNumber: CODE_PR_NUMBER,
+        });
+      },
+    });
+  });
+
+  it("rejects a body with neither nodeRef nor codePr (validation_error)", async () => {
+    await testApiHandler({
+      appHandler,
+      async test({ fetch }) {
+        const res = await fetch({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        });
+        expect(res.status).toBe(400);
+        expect(mockResolveNodeAndAuthorize).not.toHaveBeenCalled();
+        expect(
+          mockDeployPlane.dispatchCodePrCandidateFlight
+        ).not.toHaveBeenCalled();
       },
     });
   });
