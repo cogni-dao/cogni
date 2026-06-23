@@ -3,8 +3,8 @@
 
 /**
  * Module: `@cogni/tests/unit/app/_facades/deploy/canonical-fork-sync`
- * Purpose: Unit-prove the push guard + the two-tier fan-out (CI overwrite + upstream merge), incl. per-tier
- *   per-fork error isolation.
+ * Purpose: Unit-prove the push guard + the three-tier fan-out (CI overwrite + substrate merge with the
+ *   Tier-3 carve-out threaded in), incl. per-tier per-fork error isolation.
  * Scope: Pure `extractTemplateMainPush` + `fanOutForkSync` with a fake deploy plane. No GitHub/DB.
  * Links: src/app/_facades/deploy/canonical-fork-sync.server.ts
  * @internal
@@ -21,6 +21,7 @@ import {
 import type {
   MirrorCanonicalFilesResult,
   OperatorDeployPlanePort,
+  SyncTemplateUpstreamInput,
   SyncTemplateUpstreamResult,
 } from "@/ports";
 
@@ -85,9 +86,13 @@ const TARGETS: ForkSyncTarget[] = [
   { owner: "cogni-test-org", name: "oss", slug: "oss" },
 ];
 
+const NODE_LOCAL = ["app/src/app/(public)/**", ".cogni/repo-spec.yaml"];
+
 function fakePlane(over: {
   ci?: (repo: string) => Promise<MirrorCanonicalFilesResult>;
-  upstream?: (repo: string) => Promise<SyncTemplateUpstreamResult>;
+  upstream?: (
+    i: SyncTemplateUpstreamInput
+  ) => Promise<SyncTemplateUpstreamResult>;
 }): OperatorDeployPlanePort {
   return {
     syncCanonicalFilesToFork: vi.fn((i: { targetRepo: string }) =>
@@ -96,14 +101,14 @@ function fakePlane(over: {
         (async () => ({ status: "no_changes", branch: "b", changedPaths: [] }))
       )(i.targetRepo)
     ),
-    syncTemplateUpstreamToFork: vi.fn((i: { forkRepo: string }) =>
-      (over.upstream ?? (async () => ({ status: "up_to_date" })))(i.forkRepo)
+    syncTemplateUpstreamToFork: vi.fn((i: SyncTemplateUpstreamInput) =>
+      (over.upstream ?? (async () => ({ status: "up_to_date" })))(i)
     ),
   } as unknown as OperatorDeployPlanePort;
 }
 
-describe("fanOutForkSync — two tiers, per-tier per-fork isolation", () => {
-  it("records both tiers per fork", async () => {
+describe("fanOutForkSync — three tiers, per-tier per-fork isolation", () => {
+  it("records both PR-opening tiers per fork and threads Tier-3 globs into the merge", async () => {
     const plane = fakePlane({
       ci: async (repo) => ({
         status: "pr_opened",
@@ -112,18 +117,22 @@ describe("fanOutForkSync — two tiers, per-tier per-fork isolation", () => {
         prUrl: `https://github.com/cogni-test-org/${repo}/pull/1`,
         changedPaths: [".github/workflows/ci.yaml"],
       }),
-      upstream: async (repo) => ({
+      upstream: async (i) => ({
         status: "pr_opened",
         prNumber: 2,
-        prUrl: `https://github.com/cogni-test-org/${repo}/pull/2`,
+        prUrl: `https://github.com/cogni-test-org/${i.forkRepo}/pull/2`,
       }),
     });
-    const entries = await fanOutForkSync(plane, CTX, TARGETS);
+    const entries = await fanOutForkSync(plane, CTX, TARGETS, NODE_LOCAL);
     expect(entries).toHaveLength(2);
     expect(entries.every((e) => e.ci === "pr_opened")).toBe(true);
     expect(entries.every((e) => e.template === "pr_opened")).toBe(true);
     expect(entries[0]?.ciPrUrl).toContain("/pull/1");
     expect(entries[0]?.templatePrUrl).toContain("/pull/2");
+    // Tier 3 is DATA: the resolved node-local globs flow into every fork's Tier-2 merge.
+    expect(plane.syncTemplateUpstreamToFork).toHaveBeenCalledWith(
+      expect.objectContaining({ nodeLocalPaths: NODE_LOCAL })
+    );
   });
 
   it("Tier 1 failure does NOT block Tier 2 (decoupled), and vice versa", async () => {
@@ -132,12 +141,13 @@ describe("fanOutForkSync — two tiers, per-tier per-fork isolation", () => {
         if (repo === "blue") throw new Error("App not installed");
         return { status: "no_changes", branch: "b", changedPaths: [] };
       },
-      upstream: async (repo) => {
-        if (repo === "oss") throw new Error("merge conflict compute failed");
+      upstream: async (i) => {
+        if (i.forkRepo === "oss")
+          throw new Error("merge conflict compute failed");
         return { status: "pr_opened", prNumber: 9, prUrl: "u" };
       },
     });
-    const entries = await fanOutForkSync(plane, CTX, TARGETS);
+    const entries = await fanOutForkSync(plane, CTX, TARGETS, NODE_LOCAL);
     const blue = entries.find((e) => e.target.endsWith("/blue"));
     const oss = entries.find((e) => e.target.endsWith("/oss"));
     // blue: Tier 1 failed but Tier 2 still ran and opened.
@@ -152,9 +162,12 @@ describe("fanOutForkSync — two tiers, per-tier per-fork isolation", () => {
 
   it("up_to_date upstream is a clean Tier-2 outcome", async () => {
     const plane = fakePlane({}); // defaults: ci no_changes, upstream up_to_date
-    const entries = await fanOutForkSync(plane, CTX, [
-      TARGETS[0] as ForkSyncTarget,
-    ]);
+    const entries = await fanOutForkSync(
+      plane,
+      CTX,
+      [TARGETS[0] as ForkSyncTarget],
+      NODE_LOCAL
+    );
     expect(entries[0]?.template).toBe("up_to_date");
     expect(entries[0]?.templatePrUrl).toBeUndefined();
   });

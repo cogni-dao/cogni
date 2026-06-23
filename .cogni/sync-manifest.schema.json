@@ -7,6 +7,12 @@
   "additionalProperties": false,
   "required": ["schema", "hub", "artifacts", "exclude", "divergences"],
   "properties": {
+    "node_local": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 },
+      "description": "Tier 3 (node identity / presentation) globs — homepage, landing UI, branding/theme, repo-spec, persona. Carved OUT of the node-template→fork Tier-2 substrate merge: node-template is a starter only, so its presentation NEVER overwrites a fork's (spec.repo-sync-contract THREE_TIER_CARVE_OUT). Read at runtime by the operator fork-sync from node-template's copy of this manifest (TIER3_IS_DATA). Distinct axis from divergences[] (hub↔artifact drift)."
+    },
     "schema": {
       "const": 2,
       "description": "Manifest schema version. Bump = lock-step PRs across all repos per MANIFEST_BOOTSTRAP."
