@@ -59,6 +59,13 @@ export interface MergeResult {
   readonly merged: boolean;
   readonly sha?: string;
   readonly message: string;
+  /**
+   * GitHub HTTP status surfaced on a failed merge (`merged: false`).
+   * Lets callers classify the failure structurally — 405 = GitHub refused
+   * (not mergeable / branch protection / already merged), 409 = head modified —
+   * instead of substring-matching `message`. Undefined on success.
+   */
+  readonly status?: number;
 }
 
 /** Result of creating a branch. */

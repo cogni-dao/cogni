@@ -251,9 +251,21 @@ export class GitHubVcsAdapter implements VcsCapability {
         message: data.message,
       };
     } catch (error) {
-      // GitHub returns 405 for already merged or not mergeable
+      // Surface the GitHub HTTP status so callers classify structurally
+      // (405 = refused/not-mergeable/already-merged, 409 = head modified)
+      // rather than substring-matching the message.
+      const status =
+        error &&
+        typeof error === "object" &&
+        "status" in error &&
+        typeof (error as { status: unknown }).status === "number"
+          ? (error as { status: number }).status
+          : undefined;
       const message = error instanceof Error ? error.message : "Merge failed";
-      return { merged: false, message };
+      // exactOptionalPropertyTypes: omit `status` rather than set it `undefined`.
+      return status === undefined
+        ? { merged: false, message }
+        : { merged: false, status, message };
     }
   }
 
