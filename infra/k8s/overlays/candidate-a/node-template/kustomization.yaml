@@ -12,8 +12,8 @@ namePrefix: node-template-
 
 images:
   - name: ghcr.io/cogni-dao/cogni-template
-    newName: ghcr.io/cogni-dao/cogni-template
-    digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    newName: ghcr.io/cogni-dao/node-template
+    digest: "sha256:8ff114467e42b608e48a8b67c0ef8b39a2a0c38fbf3d9f412cae84262a1f2f36"
 
 patches:
   - target:
