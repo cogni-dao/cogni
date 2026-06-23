@@ -528,6 +528,10 @@ export async function POST(request: Request, routeArgs: RouteParams) {
             templateOwner,
             owner: mintOwner,
             slug: node.slug,
+            // Born protected: inherit the deployment monorepo's EXACT branch
+            // protection (one SSOT; no operator-invented node policy).
+            protectionSourceOwner: parentOwner,
+            protectionSourceRepo: parentRepo,
             ...identity,
           });
           logStep("fork_from_template", "success", {

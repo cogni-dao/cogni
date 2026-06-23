@@ -40,7 +40,10 @@ vi.mock("@octokit/core", () => ({
   },
 }));
 
-import { GitHubRepoWriter } from "@/adapters/server/vcs/github-repo-write";
+import {
+  GitHubRepoWriter,
+  protectionGetToPutPayload,
+} from "@/adapters/server/vcs/github-repo-write";
 
 function statusError(
   status: number,
@@ -277,6 +280,84 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
       "POST /repos/{owner}/{repo}/git/refs",
       "PATCH /repos/{owner}/{repo}/git/refs/{ref}",
     ]);
+  });
+
+  it("copies the monorepo's branch protection VERBATIM onto the new node repo", async () => {
+    setHappyForkHandlers();
+    // Source = the deployment monorepo; GET its protection, PUT the same to the node.
+    routeHandlers["GET /repos/{owner}/{repo}/branches/{branch}/protection"] = (
+      params
+    ) => {
+      expect(params).toMatchObject({
+        owner: "Cogni-DAO",
+        repo: "cogni",
+        branch: "main",
+      });
+      return {
+        required_status_checks: {
+          strict: false,
+          contexts: ["unit", "component", "static", "manifest"],
+        },
+        enforce_admins: { enabled: false },
+        required_pull_request_reviews: null,
+        restrictions: null,
+        required_linear_history: { enabled: false },
+        allow_force_pushes: { enabled: false },
+        allow_deletions: { enabled: false },
+        required_conversation_resolution: { enabled: false },
+        lock_branch: { enabled: false },
+        allow_fork_syncing: { enabled: false },
+      };
+    };
+    let putParams: Record<string, unknown> | undefined;
+    routeHandlers["PUT /repos/{owner}/{repo}/branches/{branch}/protection"] = (
+      params
+    ) => {
+      putParams = params;
+      return {};
+    };
+
+    await makeWriter().forkFromTemplate({
+      templateOwner: "Cogni-DAO",
+      owner: "Cogni-DAO",
+      slug: "atlas",
+      nodeId: "11111111-1111-4111-8111-111111111111",
+      chainId: 8453,
+      protectionSourceOwner: "Cogni-DAO",
+      protectionSourceRepo: "cogni",
+    });
+
+    // The node's main gets the EXACT monorepo required set + flags (no node-invented policy).
+    expect(putParams).toMatchObject({
+      owner: "Cogni-DAO",
+      repo: "atlas",
+      branch: "main",
+      required_status_checks: {
+        strict: false,
+        contexts: ["unit", "component", "static", "manifest"],
+      },
+      enforce_admins: false,
+      required_pull_request_reviews: null,
+      restrictions: null,
+    });
+  });
+
+  it("fails loud when the monorepo source is unprotected (404)", async () => {
+    setHappyForkHandlers();
+    routeHandlers["GET /repos/{owner}/{repo}/branches/{branch}/protection"] =
+      () => Promise.reject(statusError(404, "Branch not protected"));
+
+    await expect(
+      makeWriter().forkFromTemplate({
+        templateOwner: "Cogni-DAO",
+        owner: "Cogni-DAO",
+        slug: "atlas",
+        nodeId: "11111111-1111-4111-8111-111111111111",
+        chainId: 8453,
+        protectionSourceOwner: "Cogni-DAO",
+        protectionSourceRepo: "cogni",
+      })
+    ).rejects.toThrow(/unprotected/i);
   });
 
   it("does not reuse an existing same-named repo unless it is the template fork", async () => {
@@ -1858,5 +1939,61 @@ node_local:
     // Default floor is non-empty and includes the public route + repo-spec.
     expect(result).toContain("app/src/app/(public)/**");
     expect(result).toContain(".cogni/repo-spec.yaml");
+  });
+});
+
+describe("protectionGetToPutPayload", () => {
+  it("flattens the GET response into the verbatim PUT payload (monorepo fixture shape)", () => {
+    const put = protectionGetToPutPayload({
+      required_status_checks: {
+        strict: false,
+        contexts: ["unit", "component", "static", "manifest"],
+      },
+      enforce_admins: { enabled: false },
+      required_pull_request_reviews: null,
+      required_linear_history: { enabled: false },
+      allow_force_pushes: { enabled: false },
+      allow_deletions: { enabled: false },
+      required_conversation_resolution: { enabled: false },
+      lock_branch: { enabled: false },
+      allow_fork_syncing: { enabled: false },
+    });
+    expect(put).toEqual({
+      required_status_checks: {
+        strict: false,
+        contexts: ["unit", "component", "static", "manifest"],
+      },
+      enforce_admins: false,
+      required_pull_request_reviews: null,
+      restrictions: null,
+      required_linear_history: false,
+      allow_force_pushes: false,
+      allow_deletions: false,
+      required_conversation_resolution: false,
+      lock_branch: false,
+      allow_fork_syncing: false,
+    });
+  });
+
+  it("preserves enforce_admins=true and a present review requirement", () => {
+    const put = protectionGetToPutPayload({
+      required_status_checks: { strict: true, contexts: ["unit"] },
+      enforce_admins: { enabled: true },
+      required_pull_request_reviews: {
+        dismiss_stale_reviews: true,
+        require_code_owner_reviews: false,
+        required_approving_review_count: 2,
+      },
+    });
+    expect(put.enforce_admins).toBe(true);
+    expect(put.required_status_checks).toEqual({
+      strict: true,
+      contexts: ["unit"],
+    });
+    expect(put.required_pull_request_reviews).toEqual({
+      dismiss_stale_reviews: true,
+      require_code_owner_reviews: false,
+      required_approving_review_count: 2,
+    });
   });
 });

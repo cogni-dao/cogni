@@ -11,7 +11,11 @@
  * Invariants:
  *   - BRANCH_PROTECTION_IS_AUTHORITY: this gate is fast-fail UX. GitHub branch
  *     protection independently rejects a non-green merge (405) — the real backstop.
- *     `allGreen` here gates on github-actions check runs (see GitHubVcsAdapter).
+ *   - REQUIRED_CHECKS_ARE_GITHUB_DEFINED: `ci.allGreen` reflects GitHub's OWN
+ *     required-status-check set for the PR's base branch (read from branch
+ *     protection by GitHubVcsAdapter), not an operator-invented list. Green ⇔
+ *     every required context is satisfied; an unprotected branch (no required
+ *     checks) is NOT green. There is no bespoke greenness rule here.
  *   - STATUS_NOT_SUBSTRING: failures are classified on the surfaced GitHub HTTP
  *     status, never a message substring.
  * Side-effects: none (pure)

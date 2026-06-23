@@ -272,6 +272,9 @@ describe("POST /api/v1/nodes/[id]/publish", () => {
         repo: "knowledge-atlas",
         url: "https://doltremoteapi.dolthub.com/cogni-dao/knowledge-atlas",
       },
+      // Born protected: copy the deployment monorepo's exact branch protection.
+      protectionSourceOwner: "cogni-test-org",
+      protectionSourceRepo: "cogni-monorepo",
     });
     expect(mockOpenNodeSubmodulePr).toHaveBeenCalledWith({
       owner: "cogni-test-org",

@@ -626,7 +626,11 @@ Centralizing lint/depcruise configs causes fork friction, policy fights, and los
 
 ## Repo Setup Fixture
 
-Every Cogni node-template fork (and `node-template` itself) shares the same `main`-branch GitHub configuration: classic branch protection with a narrow required-status-checks set + GitHub Merge Queue. The canonical fixture lives in `infra/github/` and is applied via a single command:
+There are **two** `main`-branch GitHub configurations, by repo role:
+
+### Monorepo (`Cogni-DAO/cogni` / `node-template` itself)
+
+Classic branch protection with the full required-status-checks set + GitHub Merge Queue. The canonical fixture lives in `infra/github/` and is applied manually via a single command:
 
 ```bash
 bash infra/github/setup-main-branch.sh                      # current repo
@@ -643,7 +647,17 @@ What the fixture establishes:
 
 The required-status-checks set is constrained by an empirical GitHub Merge Queue behavior: the queue waits forever for required checks whose workflows lack a `merge_group:` trigger. Full design + rationale in [`merge-queue-config.md`](./merge-queue-config.md), validated against `Cogni-DAO/test-repo` PR #53.
 
-External-node-formation impact: a fresh fork clones, runs `setup-main-branch.sh`, clicks once in Settings → Branches, and is in lock-step with `Cogni-DAO/cogni`'s gate. No spelunking through Settings; no ad-hoc divergence.
+### Spawned node repos (forks minted by the operator)
+
+A spawned node repo is **born protected** with the monorepo's config, **verbatim**. Node formation (`GitHubRepoWriter.forkFromTemplate`) reads the deployment monorepo's (`NODE_SUBMODULE_PARENT_*`) live `main` branch protection and copies it onto the new node repo's `main` — same required-status-check set (`unit`, `component`, `static`, `manifest`), same flags — with **no manual step and no operator-invented node policy**. There is exactly **one** source of truth for protection: the monorepo. (Fails loud if the monorepo is unprotected — it MUST be the canonical protected repo for nodes to inherit it.) `restrictions` is not replicated (push is open; the monorepo has none).
+
+This slots into the node contribution model — **only the operator GitHub App is authenticated on a node repo; every contribution is a fork PR.** A fork PR satisfies the required set the same way it does on the monorepo: `static`/`unit`/`component` run once `POST /vcs/run-checks` releases the held fork CI, and `manifest`/`build` (behind `pr-build.yml`'s resolve fork-guard) **skip** — which GitHub counts as passing for a required check, so they never deadlock the golden path.
+
+**The merge gate reads GitHub's required set, never an operator-invented list.** `GitHubVcsAdapter.getCiStatus` fetches `…/branches/{base}/protection/required_status_checks` and computes `allGreen` as "every required context is satisfied (`success` or `skipped`)." An unprotected branch (no required checks) is **not green** — `/vcs/merge` fails closed. So "merge on green" means precisely "all of GitHub's required checks are green," and the operator never re-defines greenness.
+
+> Existing node repos minted before this became automatic need a one-time backfill by the operator App (or a repo admin): copy the monorepo's protection onto their `main` (`gh api PUT /repos/{repo}/branches/main/protection`).
+
+External-node-formation impact: a spawned node is in lock-step with the monorepo's exact merge-on-green gate the moment it is formed — no spelunking through Settings, no ad-hoc divergence.
 
 ## Acceptance Checks
 

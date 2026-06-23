@@ -162,35 +162,63 @@ export class GitHubVcsAdapter implements VcsCapability {
       })),
     ];
 
-    // Gate on GitHub Actions check runs only — third-party app checks (SonarCloud, etc.)
-    // are informational and do not block merge via branch protection.
-    const ciChecks = [
-      ...rawCheckRuns
-        .filter((cr) => cr.app?.slug === "github-actions")
-        .map((cr) => ({ status: cr.status, conclusion: cr.conclusion })),
-      // Legacy commit statuses are always included (they are GitHub-native)
-      ...(statusResponse.data.statuses as Array<{ state: string }>).map(
-        (s) => ({
-          status: "completed",
-          conclusion:
-            s.state === "success"
-              ? "success"
-              : s.state === "pending"
-                ? null
-                : "failure",
-        })
-      ),
-    ];
+    // Index GitHub-native check producers by context name — github-actions check
+    // runs (by name) + legacy commit statuses (by context). Third-party app checks
+    // (SonarCloud, etc.) are informational and never gate a merge.
+    const byContext = new Map<
+      string,
+      { status: string; conclusion: string | null }
+    >();
+    for (const cr of rawCheckRuns) {
+      if (cr.app?.slug === "github-actions") {
+        byContext.set(cr.name, {
+          status: cr.status,
+          conclusion: cr.conclusion,
+        });
+      }
+    }
+    for (const s of statusResponse.data.statuses as Array<{
+      context: string;
+      state: string;
+    }>) {
+      byContext.set(s.context, {
+        status: "completed",
+        conclusion:
+          s.state === "success"
+            ? "success"
+            : s.state === "pending"
+              ? null
+              : "failure",
+      });
+    }
 
-    const pending = ciChecks.some(
-      (c) => c.status !== "completed" || c.conclusion === null
+    // REQUIRED_CHECKS_ARE_GITHUB_DEFINED: "green" is GitHub's OWN required-status-
+    // check set for the PR's base branch (from branch protection), never an
+    // operator-invented list. A required context is satisfied iff it completed
+    // success|skipped — GitHub's own rule (a required check that legitimately
+    // skips, e.g. a fork-guarded build, is passing). An unprotected branch (no
+    // required checks) is NOT green: merge-on-green is meaningless without a
+    // required set, so it fails closed.
+    const requiredContexts = await this.getRequiredContexts(
+      octokit,
+      params.owner,
+      params.repo,
+      pr.base.ref
     );
+    const pending = requiredContexts.some((ctx) => {
+      const c = byContext.get(ctx);
+      return !c || c.status !== "completed" || c.conclusion === null;
+    });
     const allGreen =
-      ciChecks.length > 0 &&
-      !pending &&
-      ciChecks.every(
-        (c) => c.conclusion === "success" || c.conclusion === "skipped"
-      );
+      requiredContexts.length > 0 &&
+      requiredContexts.every((ctx) => {
+        const c = byContext.get(ctx);
+        return (
+          c != null &&
+          c.status === "completed" &&
+          (c.conclusion === "success" || c.conclusion === "skipped")
+        );
+      });
 
     // Compute review decision from individual reviews.
     // Take the latest review per reviewer; if any APPROVED and none CHANGES_REQUESTED → approved.
@@ -225,6 +253,31 @@ export class GitHubVcsAdapter implements VcsCapability {
       pending,
       checks,
     };
+  }
+
+  /**
+   * The branch's REQUIRED status-check contexts, per GitHub branch protection —
+   * the single source of truth for what "green" means (no operator-invented set).
+   * Returns `[]` when the branch is unprotected or requires no checks (which the
+   * merge gate treats as not-green / fail-closed). Uses the App's `administration`
+   * read (the same privilege it uses to WRITE protection at node formation).
+   */
+  private async getRequiredContexts(
+    octokit: Octokit,
+    owner: string,
+    repo: string,
+    branch: string
+  ): Promise<string[]> {
+    try {
+      const { data } = await octokit.request(
+        "GET /repos/{owner}/{repo}/branches/{branch}/protection/required_status_checks",
+        { owner, repo, branch }
+      );
+      return (data.contexts ?? []) as string[];
+    } catch (error) {
+      if ((error as { status?: number })?.status === 404) return [];
+      throw error;
+    }
   }
 
   async mergePr(params: {

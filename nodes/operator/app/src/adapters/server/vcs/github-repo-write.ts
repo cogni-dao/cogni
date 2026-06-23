@@ -127,6 +127,15 @@ export interface ForkFromTemplateInput {
   readonly knowledgeRemote?: NodeKnowledgeRemote;
   /** One-line node mission (`intent.mission`); a starter seed is emitted when omitted. */
   readonly mission?: string;
+  /**
+   * Repo whose `main` branch-protection is copied VERBATIM onto the new node repo
+   * (the deployment monorepo — `NODE_SUBMODULE_PARENT_*`). The node inherits the
+   * EXACT required-status-check set + flags the monorepo enforces, so there is one
+   * SSOT for protection and the operator invents no node-specific policy. Omit to
+   * skip protection (e.g. a test that doesn't exercise it).
+   */
+  readonly protectionSourceOwner?: string;
+  readonly protectionSourceRepo?: string;
 }
 
 /** One entry in a `POST /git/trees` payload; `sha: null` deletes the path from `base_tree`. */
@@ -277,6 +286,77 @@ export function qualifyUpstreamPrRefs(
   repo: string
 ): string {
   return subject.replace(/(^|[^\w/-])#(\d+)\b/g, `$1${owner}/${repo}#$2`);
+}
+
+/** Subset of GET branches/{branch}/protection that we replicate onto a node repo. */
+interface ProtectionResponse {
+  readonly required_status_checks?: {
+    readonly strict?: boolean;
+    readonly contexts?: readonly string[];
+  } | null;
+  readonly enforce_admins?: { readonly enabled?: boolean } | null;
+  readonly required_pull_request_reviews?: {
+    readonly dismiss_stale_reviews?: boolean;
+    readonly require_code_owner_reviews?: boolean;
+    readonly required_approving_review_count?: number;
+  } | null;
+  readonly required_linear_history?: { readonly enabled?: boolean };
+  readonly allow_force_pushes?: { readonly enabled?: boolean };
+  readonly allow_deletions?: { readonly enabled?: boolean };
+  readonly required_conversation_resolution?: { readonly enabled?: boolean };
+  readonly lock_branch?: { readonly enabled?: boolean };
+  readonly allow_fork_syncing?: { readonly enabled?: boolean };
+}
+
+/**
+ * Transform a GET branch-protection response into the flat PUT payload, copying
+ * the source config verbatim for the fields we replicate. The GET nests each flag
+ * under `{enabled}`; PUT wants flat booleans, and `required_status_checks` /
+ * `enforce_admins` / `required_pull_request_reviews` / `restrictions` are required
+ * (nullable). `restrictions` is intentionally NOT replicated — the canonical
+ * monorepo config has none (push open) and the GET→PUT user/team/app shape is
+ * lossy. Pure; exported for unit tests.
+ */
+export function protectionGetToPutPayload(src: ProtectionResponse): {
+  required_status_checks: { strict: boolean; contexts: string[] } | null;
+  enforce_admins: boolean;
+  required_pull_request_reviews: {
+    dismiss_stale_reviews: boolean;
+    require_code_owner_reviews: boolean;
+    required_approving_review_count: number;
+  } | null;
+  restrictions: null;
+  required_linear_history: boolean;
+  allow_force_pushes: boolean;
+  allow_deletions: boolean;
+  required_conversation_resolution: boolean;
+  lock_branch: boolean;
+  allow_fork_syncing: boolean;
+} {
+  const rsc = src.required_status_checks;
+  const prr = src.required_pull_request_reviews;
+  return {
+    required_status_checks: rsc
+      ? { strict: rsc.strict ?? false, contexts: [...(rsc.contexts ?? [])] }
+      : null,
+    enforce_admins: src.enforce_admins?.enabled ?? false,
+    required_pull_request_reviews: prr
+      ? {
+          dismiss_stale_reviews: prr.dismiss_stale_reviews ?? false,
+          require_code_owner_reviews: prr.require_code_owner_reviews ?? false,
+          required_approving_review_count:
+            prr.required_approving_review_count ?? 0,
+        }
+      : null,
+    restrictions: null,
+    required_linear_history: src.required_linear_history?.enabled ?? false,
+    allow_force_pushes: src.allow_force_pushes?.enabled ?? false,
+    allow_deletions: src.allow_deletions?.enabled ?? false,
+    required_conversation_resolution:
+      src.required_conversation_resolution?.enabled ?? false,
+    lock_branch: src.lock_branch?.enabled ?? false,
+    allow_fork_syncing: src.allow_fork_syncing?.enabled ?? false,
+  };
 }
 
 export class GitHubRepoWriter implements OperatorDeployPlanePort {
@@ -1231,6 +1311,24 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       }
     );
     await this.upsertRef(octokit, owner, slug, "main", commit.sha);
+    // Born protected: copy the monorepo's branch protection VERBATIM onto the new
+    // node repo, so its `main` enforces the EXACT required checks the network does.
+    // A node without protection makes the operator's merge-on-green hollow; fail
+    // loud — an unprotected node is not a formed node.
+    if (input.protectionSourceOwner && input.protectionSourceRepo) {
+      const sourceOctokit = await this.getOctokit(
+        input.protectionSourceOwner,
+        input.protectionSourceRepo
+      );
+      await this.replicateBranchProtection(
+        sourceOctokit,
+        input.protectionSourceOwner,
+        input.protectionSourceRepo,
+        octokit,
+        owner,
+        slug
+      );
+    }
     return { cloneUrl, headSha: commit.sha };
   }
 
@@ -1833,6 +1931,51 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
         force: true,
       });
     }
+  }
+
+  /**
+   * Copy the monorepo's `main` branch-protection VERBATIM onto the new node repo.
+   * PROTECTION_HAS_ONE_SSOT: the node inherits the EXACT required-status-check set
+   * + flags the deployment monorepo enforces — the operator invents no node-specific
+   * policy. This is the merge-on-green backstop GitHub enforces independently of the
+   * operator's `/vcs/merge` gate. Reads the source via the App's `administration`
+   * read and writes the node via the same privilege used by {@link ensureActionsEnabled}.
+   * Fails loud if the source is unprotected (the monorepo MUST be the canonical
+   * protected repo). Idempotent: the PUT converges on re-run.
+   */
+  private async replicateBranchProtection(
+    sourceOctokit: Octokit,
+    sourceOwner: string,
+    sourceRepo: string,
+    targetOctokit: Octokit,
+    targetOwner: string,
+    targetRepo: string
+  ): Promise<void> {
+    let source: ProtectionResponse;
+    try {
+      const { data } = await sourceOctokit.request(
+        "GET /repos/{owner}/{repo}/branches/{branch}/protection",
+        { owner: sourceOwner, repo: sourceRepo, branch: "main" }
+      );
+      source = data as ProtectionResponse;
+    } catch (err) {
+      if ((err as { status?: number })?.status === 404) {
+        throw new Error(
+          `replicateBranchProtection: source ${sourceOwner}/${sourceRepo}@main is unprotected — ` +
+            `the deployment monorepo must be branch-protected before nodes can inherit it`
+        );
+      }
+      throw err;
+    }
+    await targetOctokit.request(
+      "PUT /repos/{owner}/{repo}/branches/{branch}/protection",
+      {
+        owner: targetOwner,
+        repo: targetRepo,
+        branch: "main",
+        ...protectionGetToPutPayload(source),
+      }
+    );
   }
 
   private async ensureActionsEnabled(
