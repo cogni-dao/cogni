@@ -40,7 +40,18 @@ server:
         path    = "/openbao/data"
         node_id = "openbao-0"
       }
-      service_registration "kubernetes" {}
+      # bug.5051: NO service_registration. The chart does NOT grant the openbao
+      # ServiceAccount a Role/RoleBinding to get/patch its own pod, so each
+      # `service_registration "kubernetes"` attempt is 403 Forbidden, retried
+      # every 5s forever (~17k/day) — a slow memory leak that climbs from ~132Mi
+      # idle to the 1Gi limit over ~9 days and OOMKills the pod → Shamir reseal
+      # → silent multi-day secret-plane outage on EVERY env (preview/prod/cand-a
+      # all exit-137 ~2026-06-20). The registration is also UNUSED: ESO's
+      # ClusterSecretStore targets the plain `openbao` Service; there is no
+      # `openbao-active`/`openbao-standby` Service, so the vault-active/
+      # vault-sealed pod labels this would set route nothing. Verified against
+      # openbao-helm 0.28.2: removing this line is the only render delta (the SA,
+      # the kubernetes AUTH method, and raft storage are all unaffected).
 
   dataStorage:
     enabled: true
