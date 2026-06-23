@@ -5,18 +5,16 @@
  * Module: `@tests/unit/app/api/cognition-bundle`
  * Purpose: Unit tests for the cognition bundle markdown renderer.
  * Scope: Pure rendering only; route IO and hub reads are validated separately.
- * Invariants: Session-start heading is human node identity first, deploy SHA as metadata.
+ * Invariants: Session-start heading is human node identity first, deploy SHA as
+ *   metadata; the current-node orientation entry renders IN FULL (no excerpt,
+ *   no second recall).
  * Side-effects: none
  * Links: src/app/api/v1/cognition/_bundle.ts
  * @public
  */
 
 import { describe, expect, it } from "vitest";
-import {
-  excerptFromContent,
-  ORIENTATION_EXCERPT_MAX,
-  renderBundleMarkdown,
-} from "@/app/api/v1/cognition/_bundle";
+import { renderBundleMarkdown } from "@/app/api/v1/cognition/_bundle";
 
 const baseInput = {
   node: "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d",
@@ -63,21 +61,28 @@ describe("renderBundleMarkdown", () => {
     expect(heading).not.toContain("f52036b3");
   });
 
-  it("surfaces a current-node orientation excerpt above the tooling invariants", () => {
+  it("renders the current-node orientation entry IN FULL above the tooling invariants", () => {
+    const fullBody = [
+      "**Use when:** any agent starts a session on the operator node.",
+      "",
+      "## Where to edit",
+      "App code lives in nodes/operator/app. Node-owned packages under packages/.",
+      "",
+      "## What can break prod",
+      "DB creds via ESO; never alter them in deploy-infra.",
+    ].join("\n");
+
     const markdown = renderBundleMarkdown({
       ...baseInput,
-      orientation: {
-        id: "operator-agent-orientation",
-        excerpt:
-          "Operator is the agentic git-manager. Edit nodes/operator/app.",
-      },
+      orientation: { id: "operator-agent-orientation", content: fullBody },
     });
 
     expect(markdown).toContain("## Orientation — recall this first");
-    expect(markdown).toContain(
-      "Operator is the agentic git-manager. Edit nodes/operator/app."
-    );
-    expect(markdown).toContain("Recall `operator-agent-orientation`");
+    // The whole body is inlined — not just a leading-paragraph excerpt.
+    expect(markdown).toContain(fullBody);
+    expect(markdown).toContain("## What can break prod");
+    // No second-hop "recall the full thing from the hub" line.
+    expect(markdown).not.toContain("Recall `operator-agent-orientation`");
     // Map comes before the constitution.
     expect(markdown.indexOf("## Orientation — recall this first")).toBeLessThan(
       markdown.indexOf("## Tooling invariants")
@@ -89,23 +94,5 @@ describe("renderBundleMarkdown", () => {
 
     expect(markdown).toContain("## Orientation — recall this first");
     expect(markdown).toContain("No `operator-agent-orientation` entry yet");
-  });
-});
-
-describe("excerptFromContent", () => {
-  it("takes the leading paragraph and flattens whitespace", () => {
-    const excerpt = excerptFromContent(
-      "**Use when:** starting a session.\nLine two.\n\nSecond block ignored."
-    );
-    expect(excerpt).toBe("**Use when:** starting a session. Line two.");
-    expect(excerpt).not.toContain("Second block");
-  });
-
-  it("caps length with an ellipsis", () => {
-    const excerpt = excerptFromContent(
-      "x".repeat(ORIENTATION_EXCERPT_MAX + 50)
-    );
-    expect(excerpt.length).toBeLessThanOrEqual(ORIENTATION_EXCERPT_MAX + 1);
-    expect(excerpt.endsWith("…")).toBe(true);
   });
 });

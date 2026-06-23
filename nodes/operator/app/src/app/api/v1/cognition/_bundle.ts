@@ -10,10 +10,9 @@
  * Invariants:
  *   - IRREDUCIBLE_INVARIANTS_ALWAYS_PRESENT: the constant is the one piece of
  *     cognition that must render even when the hub is empty/unreachable.
- *   - INDEX_FIRST: renders pointers (id + title + recall path), never full entry
- *     bodies. The ONE bounded exception is a single current-node orientation
- *     excerpt (the map an agent needs to start, not just the constitution) —
- *     capped at ORIENTATION_EXCERPT_MAX chars, one entry, never a full body.
+ *   - ORIENTATION_LOADED_IN_FULL: renders pointers (id + title + recall path)
+ *     for skills/domains, but the current-node `<slug>-agent-orientation` entry
+ *     is rendered IN FULL — the bootstrap IS the agent's operating map.
  * Side-effects: none
  * Links: docs/spec/node-baas-architecture.md
  * @internal
@@ -60,32 +59,10 @@ export function escapeCell(value: string | null | undefined): string {
     .trim();
 }
 
-/** Max length of the bounded orientation excerpt (INDEX_FIRST carve-out). */
-export const ORIENTATION_EXCERPT_MAX = 480;
-
-/** A single current-node orientation entry surfaced as a bounded excerpt. */
-export interface OrientationExcerpt {
+/** The current-node orientation entry — rendered in full as the session map. */
+export interface OrientationEntry {
   id: string;
-  excerpt: string;
-}
-
-/**
- * Bounded first-section excerpt of an orientation entry body — the agent's
- * map, not a docs dump. Takes the leading paragraph, flattens whitespace, and
- * caps length so the bundle stays INDEX_FIRST.
- */
-export function excerptFromContent(
-  content: string,
-  maxChars: number = ORIENTATION_EXCERPT_MAX
-): string {
-  const firstBlock =
-    content
-      .trim()
-      .split(/\n{2,}/)[0]
-      ?.trim() ?? "";
-  const flat = firstBlock.replace(/\s*\r?\n\s*/g, " ").trim();
-  if (flat.length <= maxChars) return flat;
-  return `${flat.slice(0, maxChars).trimEnd()}…`;
+  content: string;
 }
 
 export interface RenderBundleInput {
@@ -98,8 +75,8 @@ export interface RenderBundleInput {
   toolingInvariants: readonly string[];
   skillsIndex: readonly CognitionSkillPointer[];
   domainPointers: readonly CognitionDomainPointer[];
-  /** The current node's `<slug>-agent-orientation` excerpt, or null if unseeded. */
-  orientation: OrientationExcerpt | null;
+  /** The current node's `<slug>-agent-orientation` entry (full), or null if unseeded. */
+  orientation: OrientationEntry | null;
 }
 
 /**
@@ -153,17 +130,12 @@ export function renderBundleMarkdown(input: RenderBundleInput): string {
           .join("\n")
       : "| _(none)_ | | |";
 
-  // The map, not just the constitution: one bounded current-node orientation
-  // excerpt (INDEX_FIRST carve-out). Falls back to a seed prompt when unset so
-  // the convention surfaces even before the entry exists.
+  // The map, not just the constitution: the current-node orientation entry
+  // rendered IN FULL — the bootstrap IS the orientation (no second recall).
+  // Falls back to a seed prompt when unset so the convention surfaces even
+  // before the entry exists.
   const orientationLines = orientation
-    ? [
-        "## Orientation — recall this first",
-        "",
-        orientation.excerpt,
-        "",
-        `_Current-node operating map. Recall \`${orientation.id}\` for the full context (where to edit, what not to run, what can break prod/candidate, what to recall next), and refine it when repo layout, scripts, CI, deploy, auth, or validation change._`,
-      ]
+    ? ["## Orientation — recall this first", "", orientation.content]
     : [
         "## Orientation — recall this first",
         "",
