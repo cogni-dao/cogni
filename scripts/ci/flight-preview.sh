@@ -68,6 +68,64 @@ emit_summary() {
   } >> "$GITHUB_STEP_SUMMARY"
 }
 
+# Emit `<name>=<value>` to $GITHUB_OUTPUT when running under Actions.
+# No-op from a plain shell so CLI/test callers aren't surprised.
+emit_output() {
+  local name="$1" value="$2"
+  if [ -n "${GITHUB_OUTPUT:-}" ]; then
+    echo "${name}=${value}" >> "$GITHUB_OUTPUT"
+  fi
+}
+
+# Resolve the URL of the promote-and-deploy run that THIS dispatch just spawned
+# and surface it (clickable) to the step summary + a job output, so operators
+# don't have to hand-hunt `gh run list`.
+#
+# `gh workflow run` returns no run id, and the spawned run takes a few seconds
+# to appear — so we poll `gh run list` for the newest workflow_dispatch run
+# created at/after the dispatch timestamp ($1, UTC ISO-8601). This is purely
+# observational: a resolution miss emits a LOUD ::warning:: but NEVER fails the
+# job — the dispatch itself already succeeded.
+surface_spawned_run_url() {
+  local dispatched_at="$1"
+  local list_url="https://github.com/${REPO}/actions/workflows/promote-and-deploy.yml"
+  local attempts=6 delay=5 i run_json run_url
+
+  for ((i = 1; i <= attempts; i++)); do
+    # Newest dispatch run created at/after our pre-dispatch timestamp wins.
+    run_json=$(gh run list \
+      --repo "$REPO" \
+      --workflow=promote-and-deploy.yml \
+      --event workflow_dispatch \
+      --limit 5 \
+      --json databaseId,createdAt,url,headSha 2>/dev/null || echo '[]')
+    run_url=$(printf '%s' "$run_json" | jq -r --arg ts "$dispatched_at" \
+      '[.[] | select(.createdAt >= $ts)] | sort_by(.createdAt) | last | .url // empty' 2>/dev/null || echo "")
+    if [ -n "$run_url" ]; then
+      echo "🔗 Spawned promote-and-deploy run: ${run_url}"
+      emit_output "spawned_run_url" "$run_url"
+      if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+        {
+          echo ""
+          echo "- Spawned run: [promote-and-deploy](${run_url})"
+        } >> "$GITHUB_STEP_SUMMARY"
+      fi
+      return 0
+    fi
+    [ "$i" -lt "$attempts" ] && sleep "$delay"
+  done
+
+  local budget=$((attempts * delay))
+  echo "::warning::Preview flight dispatched OK but could not resolve the spawned promote-and-deploy run URL within ${budget}s — find it at ${list_url}"
+  if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+    {
+      echo ""
+      echo "- ⚠️ Spawned run URL unresolved within ${budget}s — find it in the [promote-and-deploy run list](${list_url})"
+    } >> "$GITHUB_STEP_SUMMARY"
+  fi
+  return 0
+}
+
 if [ -z "$GH_TOKEN" ]; then
   echo "❌ GH_TOKEN required (arg 4 or env)"
   exit 1
@@ -77,6 +135,10 @@ export GH_TOKEN
 SHORT_SHA="${SHA:0:8}"
 
 echo "🚀 Dispatching promote-and-deploy env=preview for ${SHORT_SHA} (nodes=${NODES_CSV:-all})..."
+# Capture a UTC timestamp BEFORE the dispatch so we can identify the run this
+# call spawns (gh workflow run returns no run id). Trim sub-second precision so
+# the >= filter is robust against gh's ISO-8601 createdAt granularity.
+DISPATCHED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 gh workflow run promote-and-deploy.yml \
   --repo "$REPO" \
   --ref main \
@@ -88,4 +150,8 @@ gh workflow run promote-and-deploy.yml \
 echo "✅ Preview flight dispatched for ${SHORT_SHA}"
 emit_status "dispatched"
 emit_summary "dispatched" "promote-and-deploy kicked off; \`deploy-preview\` job in this workflow will run."
+
+# Surface the spawned run's clickable URL (best-effort; never fails the job).
+surface_spawned_run_url "$DISPATCHED_AT"
+
 exit 0
