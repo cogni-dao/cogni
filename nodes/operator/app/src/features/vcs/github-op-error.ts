@@ -4,7 +4,7 @@
 /**
  * Module: `@features/vcs/github-op-error`
  * Purpose: Classify an uncaught GitHub read/op error into a coded HTTP result for the node-scoped
- *   VCS routes (run-checks, merge), so they emit a terminal Loki event with a coded status instead
+ *   VCS routes (run-ci, merge), so they emit a terminal Loki event with a coded status instead
  *   of an opaque 500. Shared by both routes — node-scoped targets are arbitrary node repos the
  *   operator App may not be installed on.
  * Scope: Pure classification. No network, no Octokit, no logging.
@@ -13,7 +13,7 @@
  *     a client error.
  *   - PR_NOT_FOUND_IS_404: a GitHub 404 on the read maps to a clean 404.
  * Side-effects: none
- * Links: nodes/operator/app/src/app/api/v1/vcs/{run-checks,merge}/route.ts
+ * Links: nodes/operator/app/src/app/api/v1/vcs/{run-ci,merge}/route.ts
  * @public
  */
 

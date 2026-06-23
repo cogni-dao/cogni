@@ -429,7 +429,7 @@ The forward deployment contract is:
 A read-only external agent (e.g. `flock-leader`, pull-only on GitHub) drives a fork PR to a node's
 OWN repo entirely through the operator GitHub App — no human, no `gh` privilege on the agent's side:
 
-1. **`POST /api/v1/vcs/run-checks` `{ nodeId, prNumber }`.** GitHub holds a first-time / outside
+1. **`POST /api/v1/vcs/run-ci` `{ nodeId, prNumber }`.** GitHub holds a first-time / outside
    fork contributor's `pull_request` workflow runs in `action_required`. The operator App releases
    them so the node's own CI can run. RBAC `node.flight` on the named node is the gate; the App
    approves ONLY standard `pull_request` runs (never `pull_request_target` / secret-bearing runs) —
@@ -449,8 +449,8 @@ OWN repo entirely through the operator GitHub App — no human, no `gh` privileg
 > **Superseded (the monorepo PR-number lane is LEGACY, kept).** `POST /api/v1/vcs/merge` WITHOUT
 > `nodeId` (operator-node RBAC + monorepo `NODE_SUBMODULE_PARENT_*` repo) and the monorepo
 > `POST /api/v1/vcs/flight { codePr }` lane remain for operator-monorepo PRs, but the node-scoped
-> `approve-checks` + `merge` flow above is the primary external-contributor path. A node repo with no
-> catalog row falls back to the monorepo lane on merge; approve-checks surfaces 404 `catalog_missing`.
+> `run-ci` + `merge` flow above is the primary external-contributor path. A node repo with no
+> catalog row falls back to the monorepo lane on merge; run-ci surfaces 404 `catalog_missing`.
 
 ---
 

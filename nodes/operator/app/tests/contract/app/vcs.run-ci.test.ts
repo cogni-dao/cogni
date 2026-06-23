@@ -2,22 +2,22 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 /**
- * Module: `@tests/contract/app/vcs.run-checks`
- * Purpose: Contract tests for POST /api/v1/vcs/run-checks (node-scoped).
+ * Module: `@tests/contract/app/vcs.run-ci`
+ * Purpose: Contract tests for POST /api/v1/vcs/run-ci (node-scoped).
  * Scope: Verifies auth (401), RBAC (403 deny → grant happy path), VCS-not-configured (503),
  *   node repo resolution from catalog `source_repo`, and 404 on catalog_missing.
  * Invariants:
  *   - RBAC_IS_THE_GATE: `node.flight` on the named node authorizes the approval.
  *   - NO_REPO_FROM_AGENT: owner/repo resolved from the node's catalog `source_repo`.
- *   - CONTRACTS_ARE_TRUTH: 200 response matches runChecksOperation.output schema.
+ *   - CONTRACTS_ARE_TRUTH: 200 response matches runCiOperation.output schema.
  * Side-effects: none
- * Links: nodes/operator/app/src/app/api/v1/vcs/run-checks/route.ts,
- *   packages/node-contracts/src/vcs.run-checks.v1.contract.ts
+ * Links: nodes/operator/app/src/app/api/v1/vcs/run-ci/route.ts,
+ *   packages/node-contracts/src/vcs.run-ci.v1.contract.ts
  * @internal
  */
 
 import { FakeAuthorizationAdapter } from "@cogni/authorization-core";
-import { runChecksOperation } from "@cogni/node-contracts";
+import { runCiOperation } from "@cogni/node-contracts";
 import { TEST_SESSION_USER_1 } from "@tests/_fakes/ids";
 import { testApiHandler } from "next-test-api-route-handler";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -113,7 +113,7 @@ vi.mock("@/shared/observability", async (importOriginal) => {
     createRequestContext: () => ({
       log: mockLog,
       reqId: "req-1",
-      routeId: "vcs.runChecks",
+      routeId: "vcs.runCi",
     }),
     logRequestEnd: vi.fn(),
     logRequestStart: vi.fn(),
@@ -129,7 +129,7 @@ vi.mock("@/app/_lib/auth/session", () => ({
   getSessionUser: () => mockGetSessionUser(),
 }));
 
-import * as appHandler from "@/app/api/v1/vcs/run-checks/route";
+import * as appHandler from "@/app/api/v1/vcs/run-ci/route";
 
 async function post(body: unknown): Promise<Response> {
   let res!: Response;
@@ -146,7 +146,7 @@ async function post(body: unknown): Promise<Response> {
   return res;
 }
 
-describe("POST /api/v1/vcs/run-checks", () => {
+describe("POST /api/v1/vcs/run-ci", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     authzHolder.current = new FakeAuthorizationAdapter();
@@ -216,7 +216,7 @@ describe("POST /api/v1/vcs/run-checks", () => {
     const res = await post({ nodeId: NODE_SLUG, prNumber: 7 });
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(runChecksOperation.output.safeParse(body).success).toBe(true);
+    expect(runCiOperation.output.safeParse(body).success).toBe(true);
     expect(body.approved).toBe(2);
     expect(body.runIds).toEqual([101, 102]);
     expect(mockResolveNodeRepo).toHaveBeenCalledWith({
