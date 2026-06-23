@@ -161,11 +161,11 @@ export type {
   CatalogForkTarget,
   MirrorCanonicalFilesInput,
   MirrorCanonicalFilesResult,
-  NodePreviewPromoteResult,
+  NodePromoteResult,
   OperatorDeployPlanePort,
   PreparedNodeRefCandidateFlight,
   PrepareNodeRefCandidateFlightInput,
-  PromoteNodeToPreviewInput,
+  PromoteNodeInput,
   SyncTemplateUpstreamInput,
   SyncTemplateUpstreamResult,
 } from "./operator-deploy-plane.port";

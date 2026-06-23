@@ -652,7 +652,7 @@ node_port: 30200
   });
 });
 
-describe("GitHubRepoWriter.promoteNodeToPreview", () => {
+describe("GitHubRepoWriter.promoteNode (env=preview)", () => {
   const DISPATCH =
     "POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches";
   const childSha = "0123456789012345678901234567890123456789";
@@ -675,7 +675,8 @@ describe("GitHubRepoWriter.promoteNodeToPreview", () => {
       [DISPATCH]: () => ({}),
     };
 
-    const result = await makeWriter().promoteNodeToPreview({
+    const result = await makeWriter().promoteNode({
+      env: "preview",
       parentOwner: "Cogni-DAO",
       parentRepo: "cogni",
       slug: "habitat",
@@ -684,7 +685,9 @@ describe("GitHubRepoWriter.promoteNodeToPreview", () => {
 
     expect(result).toMatchObject({
       status: "dispatched",
+      env: "preview",
       sourceSha: childSha,
+      sourceAddressing: "remote_source",
     });
 
     // The dispatch carries the node sha as node_source_sha; ref stays main (the
@@ -726,10 +729,137 @@ describe("GitHubRepoWriter.promoteNodeToPreview", () => {
     };
 
     await expect(
-      makeWriter().promoteNodeToPreview({
+      makeWriter().promoteNode({
+        env: "preview",
         parentOwner: "Cogni-DAO",
         parentRepo: "cogni",
         slug: "habitat",
+        sourceSha: childSha,
+      })
+    ).rejects.toThrow(/catalog/i);
+
+    expect(requests.some((r) => r.route === DISPATCH)).toBe(false);
+  });
+});
+
+describe("GitHubRepoWriter.promoteNode (env=production)", () => {
+  const DISPATCH =
+    "POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches";
+  const childSha = "0123456789012345678901234567890123456789";
+  // REMOTE-SOURCE (fork) catalog: has source_repo + a stale source_sha pin.
+  const forkCatalog =
+    "name: beacon\ntype: node\npath_prefix: nodes/beacon/\nsource_repo: https://github.com/cogni-dao/beacon.git\nimage_repository: ghcr.io/cogni-dao/beacon\nsource_sha: ffffffffffffffffffffffffffffffffffffffff\n";
+  // IN-REPO catalog: NO source_repo (operator/poly shape).
+  const inRepoCatalog =
+    "name: operator\ntype: node\npath_prefix: nodes/operator/\ndockerfile: nodes/operator/app/Dockerfile\n";
+
+  it("source-addresses node_source_sha for a REMOTE-SOURCE (fork) node — no stale catalog pin, no source_sha (bug.5043)", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": (params) => {
+        expect(params.path).toBe("infra/catalog/beacon.yaml");
+        expect(params.ref).toBe("main");
+        return {
+          type: "file",
+          encoding: "base64",
+          sha: "catalog-blob",
+          content: Buffer.from(forkCatalog, "utf-8").toString("base64"),
+        };
+      },
+      [DISPATCH]: () => ({}),
+    };
+
+    const result = await makeWriter().promoteNode({
+      env: "production",
+      parentOwner: "Cogni-DAO",
+      parentRepo: "cogni",
+      slug: "beacon",
+      sourceSha: childSha,
+    });
+
+    expect(result).toMatchObject({
+      status: "dispatched",
+      env: "production",
+      sourceSha: childSha,
+      sourceAddressing: "remote_source",
+    });
+
+    const dispatch = requests.find((request) => request.route === DISPATCH);
+    expect(dispatch?.params).toMatchObject({
+      workflow_id: "promote-and-deploy.yml",
+      ref: "main",
+      inputs: {
+        environment: "production",
+        nodes: "beacon",
+        skip_infra: "true",
+        node_source_sha: childSha,
+      },
+    });
+    // No source_sha override: the caller sha is the node image, not the checkout ref.
+    expect(
+      (dispatch?.params.inputs as Record<string, string>).source_sha
+    ).toBeUndefined();
+    // ZERO writes to main.
+    expect(
+      requests.some(
+        (r) => r.route === "PUT /repos/{owner}/{repo}/contents/{path}"
+      )
+    ).toBe(false);
+  });
+
+  it("passes source_sha (checkout ref) for an IN-REPO node — no node_source_sha, behavior unchanged", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": (params) => {
+        expect(params.path).toBe("infra/catalog/operator.yaml");
+        return {
+          type: "file",
+          encoding: "base64",
+          sha: "catalog-blob",
+          content: Buffer.from(inRepoCatalog, "utf-8").toString("base64"),
+        };
+      },
+      [DISPATCH]: () => ({}),
+    };
+
+    const result = await makeWriter().promoteNode({
+      env: "production",
+      parentOwner: "Cogni-DAO",
+      parentRepo: "cogni",
+      slug: "operator",
+      sourceSha: childSha,
+    });
+
+    expect(result).toMatchObject({
+      status: "dispatched",
+      env: "production",
+      sourceSha: childSha,
+      sourceAddressing: "in_repo",
+    });
+
+    const dispatch = requests.find((request) => request.route === DISPATCH);
+    expect((dispatch?.params.inputs as Record<string, string>).source_sha).toBe(
+      childSha
+    );
+    expect(
+      (dispatch?.params.inputs as Record<string, string>).node_source_sha
+    ).toBeUndefined();
+  });
+
+  it("rejects a missing catalog row (404) without dispatching", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": () => {
+        const err = new Error("Not Found") as Error & { status: number };
+        err.status = 404;
+        throw err;
+      },
+      [DISPATCH]: () => ({}),
+    };
+
+    await expect(
+      makeWriter().promoteNode({
+        env: "production",
+        parentOwner: "Cogni-DAO",
+        parentRepo: "cogni",
+        slug: "beacon",
         sourceSha: childSha,
       })
     ).rejects.toThrow(/catalog/i);

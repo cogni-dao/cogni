@@ -13,7 +13,7 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const promoteNodeToPreview = vi.fn();
+const promoteNode = vi.fn();
 let nodeRows: Array<{
   id: string;
   slug: string;
@@ -27,7 +27,7 @@ vi.mock("@/shared/config", () => ({
 }));
 
 vi.mock("@/bootstrap/capabilities/operator-deploy-plane", () => ({
-  createOperatorDeployPlane: () => ({ promoteNodeToPreview }),
+  createOperatorDeployPlane: () => ({ promoteNode }),
 }));
 
 vi.mock("@/bootstrap/container", () => ({
@@ -80,7 +80,7 @@ async function flush(): Promise<void> {
 }
 
 beforeEach(() => {
-  promoteNodeToPreview.mockReset();
+  promoteNode.mockReset();
   nodeRows = [];
 });
 
@@ -94,9 +94,11 @@ describe("dispatchNodePreviewPromote", () => {
         repoName: "cogni",
       },
     ];
-    promoteNodeToPreview.mockResolvedValue({
+    promoteNode.mockResolvedValue({
       status: "dispatched",
+      env: "preview",
       sourceSha: "a".repeat(40),
+      sourceAddressing: "remote_source",
       workflowUrl:
         "https://github.com/Cogni-DAO/node-template/actions/workflows/promote-and-deploy.yml",
     });
@@ -104,7 +106,8 @@ describe("dispatchNodePreviewPromote", () => {
     dispatchNodePreviewPromote(mergedPayload(), ENV, log);
     await flush();
 
-    expect(promoteNodeToPreview).toHaveBeenCalledWith({
+    expect(promoteNode).toHaveBeenCalledWith({
+      env: "preview",
       parentOwner: "Cogni-DAO",
       parentRepo: "node-template",
       slug: "habitat",
@@ -133,7 +136,7 @@ describe("dispatchNodePreviewPromote", () => {
       log
     );
     await flush();
-    expect(promoteNodeToPreview).not.toHaveBeenCalled();
+    expect(promoteNode).not.toHaveBeenCalled();
   });
 
   it("ignores a non-closed action", async () => {
@@ -147,14 +150,14 @@ describe("dispatchNodePreviewPromote", () => {
     ];
     dispatchNodePreviewPromote(mergedPayload({ action: "opened" }), ENV, log);
     await flush();
-    expect(promoteNodeToPreview).not.toHaveBeenCalled();
+    expect(promoteNode).not.toHaveBeenCalled();
   });
 
   it("ignores an unregistered repo — flight-preview owns in-repo nodes (SPAWNED_NODES_ONLY)", async () => {
     nodeRows = [];
     dispatchNodePreviewPromote(mergedPayload(), ENV, log);
     await flush();
-    expect(promoteNodeToPreview).not.toHaveBeenCalled();
+    expect(promoteNode).not.toHaveBeenCalled();
   });
 
   it("skips a registered external-repo node — it owns its own deploy pipeline (SPAWNED_NODES_ONLY)", async () => {
@@ -176,7 +179,7 @@ describe("dispatchNodePreviewPromote", () => {
       log
     );
     await flush();
-    expect(promoteNodeToPreview).not.toHaveBeenCalled();
+    expect(promoteNode).not.toHaveBeenCalled();
   });
 
   it("no-ops when the deploy-plane GitHub App is unconfigured", async () => {
@@ -194,6 +197,6 @@ describe("dispatchNodePreviewPromote", () => {
       log
     );
     await flush();
-    expect(promoteNodeToPreview).not.toHaveBeenCalled();
+    expect(promoteNode).not.toHaveBeenCalled();
   });
 });

@@ -21,7 +21,7 @@ on:
         description: "SHA baked into images at build time (PR branch head). Defaults to source_sha. Ignored in preview-forward mode."
         required: false
       node_source_sha:
-        description: "Remote-source node image sha (source-addressed, like candidate-flight). When present, the remote-source digest resolver pins this sha instead of reading infra/catalog/<node>.yaml source_sha. Absent ⇒ catalog read (CATALOG_SOURCE_SHA_IS_THE_DEPLOY_PIN) — production unchanged."
+        description: "Remote-source (fork) node image sha — source-addressed like candidate-flight. REQUIRED to promote a remote-source node (preview AND production); the resolver pins this sha. The catalog source_sha is birth-only metadata, never a deploy authority — a remote-source promote that omits this hard-fails (bug.5043). Not used by the preview-forward path (production w/ no shas reads deploy/preview-<node>)."
         required: false
       nodes:
         description: "CSV of nodes to promote (default: all NODE_TARGETS + scheduler-worker). Set by flight-preview.yml from RESOLVED_TARGETS."
@@ -76,7 +76,14 @@ jobs:
           ENV="${{ inputs.environment }}"
           RAW_SOURCE_SHA="${{ inputs.source_sha }}"
           PREVIEW_FORWARD=false
-          if [ "$ENV" = "production" ] && [ -z "$RAW_SOURCE_SHA" ]; then
+          # Preview-forward only when NEITHER a source_sha NOR a node_source_sha is given.
+          # A fork-node production promote is SOURCE-ADDRESSED via node_source_sha (no
+          # source_sha); it must NOT be hijacked into preview-forward, or the digest job
+          # deploys the stale deploy/preview-<node> pin while node-substrate materializes
+          # the requested sha — a silent split-brain verify-buildsha can't catch because it
+          # self-confirms the preview pin it wrote (bug.5043). node_source_sha present ⇒
+          # preview_forward=false ⇒ digest reaches the remote-source branch that honors it.
+          if [ "$ENV" = "production" ] && [ -z "$RAW_SOURCE_SHA" ] && [ -z "${{ inputs.node_source_sha }}" ]; then
             PREVIEW_FORWARD=true
             RAW_SOURCE_SHA="${{ github.sha }}"
           fi
@@ -299,24 +306,19 @@ jobs:
               echo "::error::remote-source artifact ${NODE} missing image_repository"
               exit 1
             fi
-            # Source-addressed (like candidate-flight): when the dispatch carries
-            # node_source_sha, honor it as the deploy pin — preview promote dispatches
-            # the merged node head sha this way, so NO catalog write to operator main is
-            # needed. Absent ⇒ fall back to the catalog source_sha pin
-            # (CATALOG_SOURCE_SHA_IS_THE_DEPLOY_PIN, spec.node-submodule-retirement) —
-            # production omits the input and is unchanged. This same APP_SOURCE_SHA is
-            # both the image tag below AND the value recorded into
-            # .promote-state/source-sha-by-app.json (update-source-sha-map.sh), so the
-            # deploy/preview pin always matches what was deployed.
-            if [ -n "${NODE_SOURCE_SHA:-}" ]; then
-              APP_SOURCE_SHA="$NODE_SOURCE_SHA"
-            else
-              APP_SOURCE_SHA="$(yq -N '.source_sha // ""' "$catalog")"
-            fi
-            if [ -z "$APP_SOURCE_SHA" ]; then
-              echo "::error::remote-source artifact ${NODE} missing source_sha (no node_source_sha input and no pin in $catalog)"
+            # Source-addressed ONLY (ONE_PROMOTION_PRIMITIVE, like candidate-flight): a
+            # remote-source node MUST carry node_source_sha on the dispatch — every rung
+            # (candidate/preview/production) source-addresses via the operator (`promoteNode`).
+            # The catalog source_sha is birth-only metadata, NEVER a deploy authority (bug.5043);
+            # a dispatch that omits the input hard-fails LOUDLY rather than silently deploying the
+            # stale pin. This APP_SOURCE_SHA is both the image tag below AND the value recorded into
+            # .promote-state/source-sha-by-app.json (update-source-sha-map.sh), so the deploy/<env>
+            # pin always matches what was deployed.
+            if [ -z "${NODE_SOURCE_SHA:-}" ]; then
+              echo "::error::remote-source artifact ${NODE} requires node_source_sha (source-addressed promote); catalog source_sha is birth-only, not a deploy pin (bug.5043)"
               exit 1
             fi
+            APP_SOURCE_SHA="$NODE_SOURCE_SHA"
             full_tag="${image_repository}:sha-${APP_SOURCE_SHA}"
             digest_only=$(docker buildx imagetools inspect "$full_tag" --raw 2>/dev/null \
               | python3 -c "import json,sys; print(json.load(sys.stdin).get('digest',''))" 2>/dev/null || true)
@@ -484,22 +486,26 @@ jobs:
           token: ${{ secrets.ACTIONS_AUTOMATION_BOT_PAT || github.token }}
           path: app-src
 
-      - name: Materialize node source at its catalog pin
+      - name: Materialize node source at the dispatched node_source_sha
         env:
           GH_TOKEN: ${{ secrets.GIT_READ_TOKEN || github.token }}
           NODE: ${{ matrix.node }}
+          NODE_SOURCE_SHA: ${{ inputs.node_source_sha }}
         run: |
           set -euo pipefail
-          # Remote-source node: fetch its tree at the catalog source_sha pin into
-          # nodes/<NODE> — no submodule, no gitlink, private-safe (GIT_READ_TOKEN).
-          # In-repo nodes carry no source_repo and are already in app-src.
-          # spec.node-submodule-retirement.
+          # Remote-source node: fetch its tree into nodes/<NODE> — no submodule,
+          # no gitlink, private-safe (GIT_READ_TOKEN). In-repo nodes carry no
+          # source_repo and are already in app-src. spec.node-submodule-retirement.
           catalog="app-src/infra/catalog/${NODE}.yaml"
           [ -f "$catalog" ] || exit 0
           src_repo="$(yq -N '.source_repo // ""' "$catalog")"
           [ -n "$src_repo" ] || exit 0
-          src_sha="$(yq -N '.source_sha // ""' "$catalog")"
-          [ -n "$src_sha" ] || { echo "::error::no source_sha for remote-source node ${NODE}"; exit 1; }
+          # Source-addressed ONLY (ONE_PROMOTION_PRIMITIVE) — the SAME contract as the digest job:
+          # a remote-source node MUST carry node_source_sha. The catalog source_sha is birth-only
+          # metadata, NEVER a deploy authority (bug.5043). Hard-fail a dispatch that omits it rather
+          # than fetching the tree at the stale pin (which would split-brain vs the digest job).
+          src_sha="${NODE_SOURCE_SHA:-}"
+          [ -n "$src_sha" ] || { echo "::error::remote-source node ${NODE} requires node_source_sha (source-addressed promote); catalog source_sha is birth-only, not a deploy pin (bug.5043)"; exit 1; }
           repo_path="${src_repo#https://github.com/}"; repo_path="${repo_path%.git}"
           rm -rf "app-src/nodes/${NODE}"
           git init -q "app-src/nodes/${NODE}"

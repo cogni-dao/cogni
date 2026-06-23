@@ -141,7 +141,8 @@ async function promoteNodeToPreview(
     const parentOwner = env.NODE_SUBMODULE_PARENT_OWNER as string;
     const parentRepo = env.NODE_SUBMODULE_PARENT_REPO as string;
 
-    const result = await createOperatorDeployPlane(env).promoteNodeToPreview({
+    const result = await createOperatorDeployPlane(env).promoteNode({
+      env: "preview",
       parentOwner,
       parentRepo,
       slug: node.slug,

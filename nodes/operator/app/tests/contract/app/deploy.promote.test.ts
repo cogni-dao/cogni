@@ -23,6 +23,7 @@ const NODE_ID = "22222222-2222-4222-8222-222222222222";
 
 const mockDeployPlane = vi.hoisted(() => ({
   dispatchNodePromote: vi.fn(),
+  promoteNode: vi.fn(),
 }));
 const authzState = vi.hoisted(() => ({
   decision: undefined as
@@ -155,6 +156,13 @@ describe("POST /api/v1/deploy/promote", () => {
       workflowUrl: "https://github.com/test-owner/test-repo/actions",
       message: "Promote dispatched: sigh → production.",
     });
+    mockDeployPlane.promoteNode.mockResolvedValue({
+      status: "dispatched",
+      env: "production",
+      sourceSha: "0123456789012345678901234567890123456789",
+      sourceAddressing: "remote_source",
+      workflowUrl: "https://github.com/test-owner/test-repo/actions",
+    });
   });
 
   it("returns 401 when unauthenticated", async () => {
@@ -193,12 +201,29 @@ describe("POST /api/v1/deploy/promote", () => {
     expect(mockDeployPlane.dispatchNodePromote).not.toHaveBeenCalled();
   });
 
-  it("returns 200 and dispatches when authorized", async () => {
+  it("returns 200 and dispatches the raw catalog-pin path when no sourceSha (preview-forward mode)", async () => {
     const res = await post({ nodeId: NODE_ID, env: "production" });
     expect(res.status).toBe(200);
     expect(mockDeployPlane.dispatchNodePromote).toHaveBeenCalledWith(
       expect.objectContaining({ env: "production", slug: "sigh" })
     );
+    expect(mockDeployPlane.promoteNode).not.toHaveBeenCalled();
+  });
+
+  it("routes to the SOURCE-ADDRESSED path (promoteNode, env=production) when a sourceSha is supplied (ONE_PROMOTION_PRIMITIVE)", async () => {
+    const sourceSha = "0123456789012345678901234567890123456789";
+    const res = await post({ nodeId: NODE_ID, env: "production", sourceSha });
+    expect(res.status).toBe(200);
+    expect(mockDeployPlane.promoteNode).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env: "production",
+        parentOwner: "test-owner",
+        parentRepo: "test-repo",
+        slug: "sigh",
+        sourceSha,
+      })
+    );
+    expect(mockDeployPlane.dispatchNodePromote).not.toHaveBeenCalled();
   });
 
   it("returns typed 502 dispatch_failed when dispatch throws (not a raw 500)", async () => {
