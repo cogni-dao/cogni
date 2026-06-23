@@ -22,6 +22,7 @@ export type {
   DecideParams,
   DeployCapability,
   DispatchCandidateFlightResult,
+  DispatchForkPrBuildResult,
   EdoCapability,
   EdoSourceType,
   EnvSummary,

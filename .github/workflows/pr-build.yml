@@ -6,7 +6,9 @@ name: PR Build
 # job merges per-leg fragments into the canonical build-manifest.json
 # artifact so downstream candidate-flight consumers see no contract change.
 #
-# Triggers on both `pull_request` and `merge_group` (task.0391):
+# Triggers on `pull_request`, `merge_group` (task.0391), and `workflow_dispatch`
+# (FORK_FREEDOM, replaces the parallel fork-pr-build.yml — one pipeline, three
+# triggers, every job reused):
 # - pull_request: builds at PR head SHA, tagged pr-{N}-{X}. PR-time CI signal,
 #   consumed by candidate-flight.yml. Tag is IMMUTABLE post-build.
 # - merge_group: builds at the queue's rebased candidate SHA Y, tagged
@@ -16,10 +18,36 @@ name: PR Build
 #   merge_group rebuilds cannot mutate the PR-time image — that mutation
 #   broke candidate-flight verify-buildsha when a PR merged mid-flight
 #   (bug.0412).
+# - workflow_dispatch: OPERATOR-APPROVED, TRUSTED-CONTEXT build of a FORK PR's
+#   HEAD. A fork PR's own `pull_request` event runs with a READ-ONLY
+#   GITHUB_TOKEN and no `packages: write` (GitHub's fork security model), so the
+#   `resolve` job's `head.repo.full_name == github.repository` gate skips it and
+#   no image is ever built → fork code can't flight. This dispatch runs in the
+#   BASE repo (writable token), checks out `{head_repo}@{head_sha}`, and builds
+#   the SAME immutable `pr-{N}-{sha}` tag candidate-flight already resolves — no
+#   new tag convention, no duplicated jobs. It NEVER auto-fires on fork push (no
+#   pull_request_target / pwn-request); it is dispatched ONLY by the operator
+#   App AFTER a developer-RBAC-gated approval (POST /api/v1/vcs/fork-build →
+#   `can_flight` on the operator node). Permissions are GHCR-push only
+#   (contents:read + packages:write) — no deploy/infra/promote secrets.
 
 on:
   pull_request:
   merge_group:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Fork PR number (in the base repo)"
+        required: true
+        type: string
+      head_repo:
+        description: "Fork head repo, owner/name (e.g. flock-leader/cogni)"
+        required: true
+        type: string
+      head_sha:
+        description: "Fork PR head SHA (40-char hex) — the tree that gets built"
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -28,7 +56,7 @@ permissions:
 # Different concurrency keys per event type. Cross-event races (force-push to
 # an enqueued PR) are eliminated by the queue's eviction-on-push behavior.
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('pr-build-pr-{0}', github.event.pull_request.number) || format('pr-build-mq-{0}', github.event.merge_group.head_ref) }}
+  group: ${{ github.event_name == 'pull_request' && format('pr-build-pr-{0}', github.event.pull_request.number) || (github.event_name == 'workflow_dispatch' && format('pr-build-fork-{0}-{1}', inputs.pr_number, inputs.head_sha)) || format('pr-build-mq-{0}', github.event.merge_group.head_ref) }}
   cancel-in-progress: true
 
 env:
@@ -43,14 +71,22 @@ jobs:
   # build SHA, checkout ref). Resolve once here; downstream jobs read outputs.
   resolve:
     runs-on: ubuntu-latest
+    # workflow_dispatch is the operator-approved fork-build trigger — it is
+    # dispatch-only (never a fork push), so it is admitted unconditionally; the
+    # same-repo `head.repo.full_name == github.repository` gate still keeps a
+    # fork's OWN `pull_request` event out of the build path (FORK_FREEDOM).
     if: |
       github.event_name == 'merge_group' ||
+      github.event_name == 'workflow_dispatch' ||
       github.event.pull_request.head.repo.full_name == github.repository
     outputs:
       pr_number: ${{ steps.r.outputs.pr_number }}
       original_head_sha: ${{ steps.r.outputs.original_head_sha }}
       build_sha: ${{ steps.r.outputs.build_sha }}
       checkout_ref: ${{ steps.r.outputs.checkout_ref }}
+      # checkout_repo: the fork repo on workflow_dispatch, empty (→ this repo)
+      # otherwise. Downstream checkouts default to the current repo when empty.
+      checkout_repo: ${{ steps.r.outputs.checkout_repo }}
       base_ref: ${{ steps.r.outputs.base_ref }}
       head_ref_name: ${{ steps.r.outputs.head_ref_name }}
       image_tag: ${{ steps.r.outputs.image_tag }}
@@ -67,8 +103,46 @@ jobs:
           PR_HEAD_SHA_PR: ${{ github.event.pull_request.head.sha }}
           PR_BASE_REF_PR: ${{ github.event.pull_request.base.ref }}
           PUSH_SHA: ${{ github.sha }}
+          # FORK_FREEDOM workflow_dispatch inputs (empty for pull_request / merge_group).
+          DISPATCH_PR_NUMBER: ${{ inputs.pr_number }}
+          DISPATCH_HEAD_REPO: ${{ inputs.head_repo }}
+          DISPATCH_HEAD_SHA: ${{ inputs.head_sha }}
         run: |
           set -euo pipefail
+          CHECKOUT_REPO=""
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            # Operator-approved fork build. Validate inputs strictly (the dispatch
+            # carries the trusted GHCR-push token, so the fork-supplied values must
+            # be well-formed before they drive a checkout/build).
+            if [[ ! "$DISPATCH_PR_NUMBER" =~ ^[0-9]+$ ]]; then
+              echo "::error::pr_number must be numeric (got: $DISPATCH_PR_NUMBER)"; exit 1
+            fi
+            if [[ ! "$DISPATCH_HEAD_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+              echo "::error::head_repo must be owner/name (got: $DISPATCH_HEAD_REPO)"; exit 1
+            fi
+            if [[ ! "$DISPATCH_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+              echo "::error::head_sha must be a 40-char hex SHA (got: $DISPATCH_HEAD_SHA)"; exit 1
+            fi
+            PR_NUMBER="$DISPATCH_PR_NUMBER"
+            ORIGINAL_HEAD_SHA="$DISPATCH_HEAD_SHA"
+            BUILD_SHA="$ORIGINAL_HEAD_SHA"   # baked into /version.buildSha — same as pull_request
+            CHECKOUT_REF="$ORIGINAL_HEAD_SHA"
+            CHECKOUT_REPO="$DISPATCH_HEAD_REPO"  # the fork tree gets built in this (base) trusted context
+            BASE_REF="main"
+            HEAD_REF_NAME="$ORIGINAL_HEAD_SHA"
+            # IMMUTABLE pr-{N}-{sha} — identical to the pull_request path so
+            # candidate-flight resolves the fork build with no contract change.
+            IMAGE_TAG="pr-${PR_NUMBER}-${ORIGINAL_HEAD_SHA}"
+            echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+            echo "original_head_sha=$ORIGINAL_HEAD_SHA" >> "$GITHUB_OUTPUT"
+            echo "build_sha=$BUILD_SHA" >> "$GITHUB_OUTPUT"
+            echo "checkout_ref=$CHECKOUT_REF" >> "$GITHUB_OUTPUT"
+            echo "checkout_repo=$CHECKOUT_REPO" >> "$GITHUB_OUTPUT"
+            echo "base_ref=$BASE_REF" >> "$GITHUB_OUTPUT"
+            echo "head_ref_name=$HEAD_REF_NAME" >> "$GITHUB_OUTPUT"
+            echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [ "$EVENT_NAME" = "pull_request" ]; then
             PR_NUMBER="$PR_NUMBER_PR"
             ORIGINAL_HEAD_SHA="$PR_HEAD_SHA_PR"
@@ -112,6 +186,7 @@ jobs:
           echo "original_head_sha=$ORIGINAL_HEAD_SHA" >> "$GITHUB_OUTPUT"
           echo "build_sha=$BUILD_SHA" >> "$GITHUB_OUTPUT"
           echo "checkout_ref=$CHECKOUT_REF" >> "$GITHUB_OUTPUT"
+          echo "checkout_repo=$CHECKOUT_REPO" >> "$GITHUB_OUTPUT"
           echo "base_ref=$BASE_REF" >> "$GITHUB_OUTPUT"
           echo "head_ref_name=$HEAD_REF_NAME" >> "$GITHUB_OUTPUT"
           echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
@@ -126,6 +201,9 @@ jobs:
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:
+          # Defaults to this repo on pull_request/merge_group; the fork repo on
+          # the operator-approved workflow_dispatch (FORK_FREEDOM).
+          repository: ${{ needs.resolve.outputs.checkout_repo || github.repository }}
           ref: ${{ needs.resolve.outputs.checkout_ref }}
           fetch-depth: 0
 
@@ -194,6 +272,7 @@ jobs:
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:
+          repository: ${{ needs.resolve.outputs.checkout_repo || github.repository }}
           ref: ${{ needs.resolve.outputs.checkout_ref }}
 
       - name: Set up Docker Buildx
@@ -247,6 +326,7 @@ jobs:
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:
+          repository: ${{ needs.resolve.outputs.checkout_repo || github.repository }}
           ref: ${{ needs.resolve.outputs.checkout_ref }}
 
       - name: Download build fragments

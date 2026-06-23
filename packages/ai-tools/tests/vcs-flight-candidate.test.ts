@@ -47,6 +47,9 @@ function makeVcsStub(
       throw new Error("not used");
     },
     dispatchCandidateFlight: dispatchImpl,
+    dispatchForkPrBuild: async () => {
+      throw new Error("not used");
+    },
   };
 }
 

@@ -22,6 +22,7 @@ import type {
   CiStatusResult,
   CreateBranchResult,
   DispatchCandidateFlightResult,
+  DispatchForkPrBuildResult,
   MergeResult,
   PrSummary,
   VcsCapability,
@@ -302,6 +303,46 @@ export class GitHubVcsAdapter implements VcsCapability {
       sourceSha: params.sourceSha,
       workflowUrl,
       message: `Candidate flight dispatched for ${params.nodeSlug}@${params.sourceSha.slice(0, 8)}.`,
+    };
+  }
+
+  async dispatchForkPrBuild(params: {
+    owner: string;
+    repo: string;
+    prNumber: number;
+    headRepo: string;
+    headSha: string;
+    workflowRef?: string;
+  }): Promise<DispatchForkPrBuildResult> {
+    // Dispatch in the BASE repo (owner/repo) — the trusted context that holds a
+    // writable GHCR token. The workflow checks out headRepo@headSha (the fork
+    // tree). workflow_dispatch inputs are strings.
+    const octokit = await this.getOctokit(params.owner, params.repo);
+
+    await octokit.request(
+      "POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches",
+      {
+        owner: params.owner,
+        repo: params.repo,
+        workflow_id: "pr-build.yml",
+        ref: params.workflowRef ?? "main",
+        inputs: {
+          pr_number: String(params.prNumber),
+          head_repo: params.headRepo,
+          head_sha: params.headSha,
+        },
+      }
+    );
+
+    const workflowUrl = `https://github.com/${params.owner}/${params.repo}/actions/workflows/pr-build.yml`;
+
+    return {
+      dispatched: true,
+      prNumber: params.prNumber,
+      headRepo: params.headRepo,
+      headSha: params.headSha,
+      workflowUrl,
+      message: `Fork PR build dispatched for ${params.headRepo}@${params.headSha.slice(0, 8)} (PR #${params.prNumber}).`,
     };
   }
 

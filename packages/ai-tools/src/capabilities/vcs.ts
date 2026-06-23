@@ -90,6 +90,21 @@ export interface DispatchCandidateFlightResult {
   readonly message: string;
 }
 
+/**
+ * Result of dispatching the trusted-context fork-PR build (`pr-build.yml`'s
+ * `workflow_dispatch` trigger — FORK_FREEDOM). Same 204-no-body caveat as
+ * {@link DispatchCandidateFlightResult}: the caller observes the run from
+ * `workflowUrl`.
+ */
+export interface DispatchForkPrBuildResult {
+  readonly dispatched: boolean;
+  readonly prNumber: number;
+  readonly headRepo: string;
+  readonly headSha: string;
+  readonly workflowUrl: string;
+  readonly message: string;
+}
+
 // ---------------------------------------------------------------------------
 // Capability interface
 // ---------------------------------------------------------------------------
@@ -151,4 +166,25 @@ export interface VcsCapability {
     sourceSha: string;
     workflowRef?: string;
   }): Promise<DispatchCandidateFlightResult>;
+
+  /**
+   * Dispatch the trusted-context fork-PR build (`pr-build.yml` via
+   * `workflow_dispatch`) for an operator-approved fork PR — FORK_FREEDOM.
+   *
+   * Builds `{headRepo}@{headSha}` in the BASE repo's trusted context (writable
+   * GHCR token), producing the immutable `pr-{prNumber}-{headSha}` images that
+   * `candidate-flight.yml` already resolves. The workflow runs in the base repo
+   * (`owner`/`repo`); `headRepo`/`headSha` are the fork tree to build.
+   *
+   * This is a thin GitHub-dispatch wrapper. The TRUST GATE (developer
+   * `can_flight` on the operator node) lives in the calling route, NOT here.
+   */
+  dispatchForkPrBuild(params: {
+    owner: string;
+    repo: string;
+    prNumber: number;
+    headRepo: string;
+    headSha: string;
+    workflowRef?: string;
+  }): Promise<DispatchForkPrBuildResult>;
 }

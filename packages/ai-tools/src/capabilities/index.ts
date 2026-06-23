@@ -85,6 +85,7 @@ export type {
   CiStatusResult,
   CreateBranchResult,
   DispatchCandidateFlightResult,
+  DispatchForkPrBuildResult,
   MergeResult,
   PrSummary,
   VcsCapability,
