@@ -153,19 +153,6 @@ curl -sS -X POST "$BASE/api/v1/knowledge/contributions/$CID/commits" \
 
 One POST can carry a **mixed-op batch** (`insert` + `update` + `deprecate`, up to 50) in a single commit when the changes belong together — that's one review for one coherent unit, not N branches.
 
-**Step 4 — hand the human a clickable review link (ALWAYS, every path):**
-
-A contribution sits in the inbox at draft confidence until a human (admin session) reviews and merges it. Your job isn't done when the `POST` returns a `contributionId` — it's done when the human has a **direct, clickable URL** to that contribution's review page. End every contribution turn with it:
-
-```bash
-echo "Review + merge: $BASE/knowledge/inbox/$CID"   # e.g. https://cognidao.org/knowledge/inbox/contrib-…
-```
-
-- **Per-contribution review page:** `$BASE/knowledge/inbox/{contributionId}` — opens the diff for this exact branch. This is the one to surface.
-- **Full inbox list:** `$BASE/knowledge/inbox` — all open contributions awaiting review.
-- `$BASE` is `https://cognidao.org` (prod) or `https://test.cognidao.org` (candidate-a) — match the hub you wrote to.
-- Return the **bare URL** in your final message so the terminal renders it clickable — never just the raw `contributionId` (a human can't act on an opaque id), and never an `api/v1/...` path (that's JSON, not the review UI).
-
 **Two distinct "refine" cases — don't conflate them:**
 
 | You want to refine…                             | How                                                                                                                |
@@ -225,7 +212,6 @@ Don't set `confidencePct` on the request unless you have a defensible reason. In
 - **Re-POSTing `/contributions` for related work instead of appending via `/commits`** — the fracturing failure: N single-commit branches for one unit of work (and an inbox no human wants to triage).
 - **Recalling the merged plane only — never reading your own open branch.** `/knowledge?domain=` returns merged-`main`; your `contrib/*` branch entries are invisible to it. Answering "does X exist / is it linked" or deciding to write _without_ `GET /contributions/{id}/diff` is how an agent denies or duplicates knowledge it authored minutes ago (the exact failure that prompted this rule).
 - **Registering a fresh agent key per contribution** — multiplies principals; reuse your one saved key.
-- **Ending the turn without a clickable inbox URL** — returning a bare `contributionId` (or an `api/v1/...` JSON path) leaves the human with nothing to act on. The contribution is stranded at draft confidence until someone reviews it; always close with `$BASE/knowledge/inbox/{contributionId}` (see Step 4). Applies to every path — direct, `edo-loop`, and `dolt-human-visuals`.
 - Filing a new entry when RECALL would surface an existing match
 - **Filing a new atom with zero citation edges — the island failure.** A new entry should nearly always `cite` a parent/sibling RECALL surfaced (cross-plane to merged atoms works); islands don't compound and leave the hub a flat document store
 - Writing a `content` prose blob instead of structured markdown (headings / bold lead / table / list) — renders as an unscannable wall; see "Format the `content` field"
