@@ -129,3 +129,5 @@ HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=3 \
   CMD curl -fsS http://localhost:3000/livez || exit 1
 
 CMD ["node", "nodes/operator/app/server.js"]
+
+# rebuild: ship #1792 (vcs run-checks + node-scoped merge) to prod via merge queue
