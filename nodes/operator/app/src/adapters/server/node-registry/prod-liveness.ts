@@ -28,14 +28,22 @@
  */
 
 import type { NodeProber } from "@/ports";
-import { hostForEnv } from "@/shared/node-registry/deploy-hosts";
+import {
+  type FlightEnv,
+  hostForEnv,
+} from "@/shared/node-registry/deploy-hosts";
 
 /** Static host-derivation config — injected so this rollup never reads env. */
 export interface ProdLivenessConfig {
   /** Root zone the network serves under (e.g. `cognidao.org`), env subdomains stripped. */
   readonly baseDomain: string;
-  /** Slug of the PRIMARY node (operator), which serves the bare prod apex rather than a slugged host. */
+  /** Slug of the PRIMARY node (operator), which serves the env apex rather than a slugged host. */
   readonly primarySlug: string;
+  /**
+   * The operator's OWN deploy env — probe THIS env's hosts, never a hardcoded `production`
+   * (`ENV_SCOPED_VIEW`): test operator → `<slug>-test`, preview → `<slug>-preview`, prod → `<slug>`.
+   */
+  readonly env: FlightEnv;
 }
 
 export interface ProdLivenessDeps {
@@ -58,7 +66,7 @@ export async function resolveLiveProdSlugs(
       const host = hostForEnv(
         slug,
         slug === deps.config.primarySlug,
-        "production",
+        deps.config.env,
         deps.config.baseDomain
       );
       try {

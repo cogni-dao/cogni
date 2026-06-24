@@ -60,3 +60,14 @@ export function hostForEnv(
 export function rootDomain(apex: string): string {
   return apex.replace(/^(test|preview)\./, "");
 }
+
+/**
+ * The operator's OWN deploy env, inferred from the apex it serves: `test.<base>` → candidate-a,
+ * `preview.<base>` → preview, bare `<base>` → production. So a test operator scopes its network view to
+ * the TEST hosts, preview to preview, prod to prod (`ENV_SCOPED_VIEW`) — never hardcode `production`.
+ */
+export function envForApex(apex: string): FlightEnv {
+  if (apex.startsWith("test.")) return "candidate-a";
+  if (apex.startsWith("preview.")) return "preview";
+  return "production";
+}

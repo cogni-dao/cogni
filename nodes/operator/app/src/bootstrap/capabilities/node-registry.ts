@@ -26,7 +26,7 @@
 import { resolveLiveProdSlugs } from "@/adapters/server";
 import { ttlSingleFlight } from "@/shared/cache/ttl-single-flight";
 import type { ServerEnv } from "@/shared/env";
-import { rootDomain } from "@/shared/node-registry/deploy-hosts";
+import { envForApex, rootDomain } from "@/shared/node-registry/deploy-hosts";
 import { baseDomain } from "@/shared/node-registry/resolve";
 
 import { createNodeProber } from "../node-flight.factory";
@@ -58,7 +58,12 @@ export function createLiveSlugsAccessor(
 
   const deps = {
     prober: createNodeProber(),
-    config: { baseDomain: rootDomain(apex), primarySlug: PRIMARY_SLUG },
+    config: {
+      baseDomain: rootDomain(apex),
+      primarySlug: PRIMARY_SLUG,
+      // ENV_SCOPED_VIEW: probe the operator's OWN env (test→test net, etc.), not a hardcoded prod.
+      env: envForApex(apex),
+    },
   };
 
   // The cache wraps the rollup over the LATEST candidate set seen. We capture candidates in a mutable

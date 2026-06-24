@@ -13,8 +13,21 @@
 import { describe, expect, it, vi } from "vitest";
 import { resolveLiveProdSlugs } from "@/adapters/server/node-registry/prod-liveness";
 import type { NodeProber, ServingResult } from "@/ports";
+import { envForApex } from "@/shared/node-registry/deploy-hosts";
 
-const CONFIG = { baseDomain: "cognidao.org", primarySlug: "operator" } as const;
+describe("envForApex (operator self-env)", () => {
+  it("maps the apex subdomain to the operator's own deploy env", () => {
+    expect(envForApex("test.cognidao.org")).toBe("candidate-a");
+    expect(envForApex("preview.cognidao.org")).toBe("preview");
+    expect(envForApex("cognidao.org")).toBe("production");
+  });
+});
+
+const CONFIG = {
+  baseDomain: "cognidao.org",
+  primarySlug: "operator",
+  env: "production",
+} as const;
 
 /** Fake prober: per-host serving verdict from a map; missing host ⇒ fail. */
 function proberFromHosts(
@@ -62,6 +75,27 @@ describe("resolveLiveProdSlugs", () => {
     expect(calledHosts).toContain("cognidao.org");
     expect(calledHosts).toContain("resy.cognidao.org");
     expect(calledHosts).toContain("node-template.cognidao.org");
+  });
+
+  it("ENV_SCOPED_VIEW: a candidate-a operator probes the -test hosts, not prod", async () => {
+    const calledHosts: string[] = [];
+    const prober = proberFromHosts(
+      {
+        "test.cognidao.org": "pass", // operator (primary) test apex
+        "beacon-test.cognidao.org": "pass", // non-primary slugged test host
+      },
+      (h) => calledHosts.push(h)
+    );
+
+    const live = await resolveLiveProdSlugs(["operator", "beacon"], {
+      prober,
+      config: { ...CONFIG, env: "candidate-a" },
+    });
+
+    expect([...live].sort()).toEqual(["beacon", "operator"]);
+    expect(calledHosts).toContain("test.cognidao.org");
+    expect(calledHosts).toContain("beacon-test.cognidao.org");
+    expect(calledHosts).not.toContain("cognidao.org"); // never the prod apex
   });
 
   it("degrades per-node: a thrown probe excludes only that slug", async () => {
