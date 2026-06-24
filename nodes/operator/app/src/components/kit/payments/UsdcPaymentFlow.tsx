@@ -143,7 +143,7 @@ export function UsdcPaymentFlow({
         txHash={state.txHash}
         explorerUrl={state.explorerUrl}
         result={state.result}
-        errorMessage={state.errorMessage}
+        error={state.error}
         creditsAdded={state.creditsAdded}
         onReset={onReset}
         onClose={handleDialogClose}

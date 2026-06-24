@@ -12,14 +12,20 @@
  * @public
  */
 
-import type { PaymentFlowState } from "@cogni/node-core";
+import type { PaymentFlowState, PaymentUiError } from "@cogni/node-core";
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
 } from "@cogni/node-ui-kit/shadcn/dialog";
-import { CheckCircle2, ExternalLink, Loader2, XCircle } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowRight,
+  CheckCircle2,
+  ExternalLink,
+  Loader2,
+} from "lucide-react";
 import type { ReactElement } from "react";
 import { Button } from "@/components/kit/inputs/Button";
 
@@ -42,8 +48,8 @@ export interface PaymentFlowDialogProps {
   /** Result state (SUCCESS/ERROR) */
   result: "SUCCESS" | "ERROR" | null;
 
-  /** User-friendly error message */
-  errorMessage: string | null;
+  /** Structured, user-facing error (title + message + optional hint + recoverable) */
+  error: PaymentUiError | null;
 
   /** Credits added (on success) */
   creditsAdded: number | null;
@@ -91,7 +97,7 @@ export function PaymentFlowDialog({
   txHash,
   explorerUrl,
   result,
-  errorMessage,
+  error,
   creditsAdded,
   onReset,
   onClose,
@@ -193,29 +199,66 @@ export function PaymentFlowDialog({
             </>
           )}
 
-          {/* ERROR state */}
+          {/* ERROR state — structured, calm, actionable */}
           {isTerminal && result === "ERROR" && (
-            <>
-              <div className="flex flex-col items-center gap-6 py-8">
-                <XCircle className="h-16 w-16 text-destructive" />
-                <p className="font-semibold text-foreground text-xl">
-                  {errorMessage ?? "Payment failed"}
-                </p>
+            <div className="flex flex-col gap-5">
+              <div className="flex flex-col items-center gap-4 pt-4 text-center">
+                {/* Soft tinted glyph — informs, doesn't alarm */}
+                <div className="flex h-12 w-12 items-center justify-center rounded-full bg-destructive/10">
+                  <AlertTriangle className="h-6 w-6 text-destructive" />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <p className="font-semibold text-foreground text-lg">
+                    {error?.title ?? "Payment didn't complete"}
+                  </p>
+                  <p className="text-muted-foreground text-sm leading-relaxed">
+                    {error?.message ??
+                      "Something interrupted the payment. No funds were moved."}
+                  </p>
+                </div>
               </div>
 
-              {/* Transaction link (if payment reached on-chain) */}
-              {txHash && explorerUrl && (
-                <a
-                  href={explorerUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center justify-center gap-1 text-primary text-sm hover:underline"
-                >
-                  <span>View transaction</span>
-                  <ExternalLink className="h-4 w-4" />
-                </a>
+              {/* Actionable next step — the delicate part: what the user can do */}
+              {error?.hint && (
+                <div className="flex items-start gap-2.5 rounded-lg border border-border/60 bg-muted/40 px-3.5 py-3 text-left">
+                  <ArrowRight className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                  <p className="text-foreground/90 text-sm leading-relaxed">
+                    {error.hint}
+                  </p>
+                </div>
               )}
-            </>
+
+              <div className="flex flex-col gap-2">
+                {error?.recoverable !== false ? (
+                  <Button
+                    onClick={() => {
+                      onReset();
+                      onClose();
+                    }}
+                    size="lg"
+                  >
+                    Try again
+                  </Button>
+                ) : (
+                  <Button onClick={onClose} size="lg" variant="secondary">
+                    Close
+                  </Button>
+                )}
+
+                {/* Transaction link (if payment reached on-chain) */}
+                {txHash && explorerUrl && (
+                  <a
+                    href={explorerUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center justify-center gap-1 text-muted-foreground text-sm hover:text-foreground hover:underline"
+                  >
+                    <span>View transaction</span>
+                    <ExternalLink className="h-4 w-4" />
+                  </a>
+                )}
+              </div>
+            </div>
           )}
         </div>
       </DialogContent>

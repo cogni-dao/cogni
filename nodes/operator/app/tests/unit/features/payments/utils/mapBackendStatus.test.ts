@@ -3,11 +3,10 @@
 
 /**
  * Module: `@tests/unit/features/payments/utils/mapBackendStatus`
- * Purpose: Unit tests for mapBackendStatus utility covering all PaymentStatus and PaymentErrorCode mappings.
- * Scope: Tests status → UI phase mapping and error code → message conversion. Does not test business logic.
- * Invariants: All enum values covered; messages are user-friendly; type safety validated.
+ * Purpose: Unit tests for mapBackendStatus — status → UI phase + structured error.
+ * Scope: Tests status mapping and error code → structured PaymentUiError. Does not test business logic.
+ * Invariants: All enum values covered; every FAILED maps to a structured error carrying a stable code.
  * Side-effects: none
- * Notes: Validates single source of truth for status interpretation.
  * Links: src/features/payments/utils/mapBackendStatus.ts, types/payments.ts
  * @public
  */
@@ -18,80 +17,44 @@ import { mapBackendStatus } from "@/features/payments/utils/mapBackendStatus";
 
 describe("mapBackendStatus", () => {
   describe("PaymentStatus mapping", () => {
-    it("maps PENDING_VERIFICATION to PENDING phase", () => {
-      const result = mapBackendStatus("PENDING_VERIFICATION");
-
-      expect(result).toEqual({
+    it("maps PENDING_VERIFICATION to PENDING phase with no error", () => {
+      expect(mapBackendStatus("PENDING_VERIFICATION")).toEqual({
         phase: "PENDING",
         result: null,
-        errorMessage: null,
+        error: null,
       });
     });
 
-    it("maps CONFIRMED to DONE phase with SUCCESS result", () => {
-      const result = mapBackendStatus("CONFIRMED");
-
-      expect(result).toEqual({
+    it("maps CONFIRMED to DONE phase with SUCCESS result and no error", () => {
+      expect(mapBackendStatus("CONFIRMED")).toEqual({
         phase: "DONE",
         result: "SUCCESS",
-        errorMessage: null,
+        error: null,
       });
     });
 
-    it("maps FAILED to DONE phase with ERROR result", () => {
-      const result = mapBackendStatus("FAILED");
-
-      expect(result).toEqual({
-        phase: "DONE",
-        result: "ERROR",
-        errorMessage: "Payment failed",
-      });
+    it("maps FAILED (no code) to a structured UNKNOWN error", () => {
+      const { phase, result, error } = mapBackendStatus("FAILED");
+      expect(phase).toBe("DONE");
+      expect(result).toBe("ERROR");
+      expect(error?.code).toBe("UNKNOWN");
+      expect(error?.title).toBeTruthy();
+      expect(error?.message).toBeTruthy();
+      expect(error?.recoverable).toBe(true);
     });
   });
 
-  describe("PaymentErrorCode message mapping", () => {
-    it("maps SENDER_MISMATCH to user-friendly message", () => {
-      const result = mapBackendStatus("FAILED", "SENDER_MISMATCH");
-
-      expect(result.errorMessage).toBe(
-        "Transaction sender does not match your wallet"
-      );
+  describe("PaymentErrorCode → structured error", () => {
+    it("maps a code to a structured error carrying that stable code + copy", () => {
+      const { error } = mapBackendStatus("FAILED", "SENDER_MISMATCH");
+      expect(error?.code).toBe("SENDER_MISMATCH");
+      expect(error?.title).toBeTruthy();
+      expect(error?.message).toBeTruthy();
     });
 
-    it("maps INVALID_TOKEN to user-friendly message", () => {
-      const result = mapBackendStatus("FAILED", "INVALID_TOKEN");
-
-      expect(result.errorMessage).toBe("Wrong token used for payment");
-    });
-
-    it("maps INSUFFICIENT_AMOUNT to user-friendly message", () => {
-      const result = mapBackendStatus("FAILED", "INSUFFICIENT_AMOUNT");
-
-      expect(result.errorMessage).toBe("Payment amount too low");
-    });
-
-    it("maps TX_REVERTED to user-friendly message", () => {
-      const result = mapBackendStatus("FAILED", "TX_REVERTED");
-
-      expect(result.errorMessage).toBe("Transaction reverted on-chain");
-    });
-
-    it("maps RECEIPT_NOT_FOUND to user-friendly message", () => {
-      const result = mapBackendStatus("FAILED", "RECEIPT_NOT_FOUND");
-
-      expect(result.errorMessage).toBe("Transaction not found after 24 hours");
-    });
-
-    it("maps INTENT_EXPIRED to user-friendly message", () => {
-      const result = mapBackendStatus("FAILED", "INTENT_EXPIRED");
-
-      expect(result.errorMessage).toBe("Payment intent expired");
-    });
-
-    it("returns default message for undefined errorCode", () => {
-      const result = mapBackendStatus("FAILED", undefined);
-
-      expect(result.errorMessage).toBe("Payment failed");
+    it("never leaks a raw 'debug' field into the UI error", () => {
+      const { error } = mapBackendStatus("FAILED", "TX_REVERTED");
+      expect(error).not.toHaveProperty("debug");
     });
   });
 
@@ -102,31 +65,32 @@ describe("mapBackendStatus", () => {
         "CONFIRMED",
         "FAILED",
       ];
-
       for (const status of allStatuses) {
         const result = mapBackendStatus(status);
-        expect(result).toBeDefined();
         expect(result.phase).toBeDefined();
       }
     });
 
-    it("covers all PaymentErrorCode enum values", () => {
+    it("maps every PaymentErrorCode to its own stable code (no generic fallthrough)", () => {
       const allCodes: PaymentErrorCode[] = [
         "SENDER_MISMATCH",
         "INVALID_TOKEN",
         "INVALID_RECIPIENT",
+        "INVALID_CHAIN",
         "INSUFFICIENT_AMOUNT",
         "INSUFFICIENT_CONFIRMATIONS",
+        "TX_NOT_FOUND",
         "TX_REVERTED",
+        "TOKEN_TRANSFER_NOT_FOUND",
+        "RECIPIENT_MISMATCH",
         "RECEIPT_NOT_FOUND",
         "INTENT_EXPIRED",
         "RPC_ERROR",
       ];
-
       for (const code of allCodes) {
-        const result = mapBackendStatus("FAILED", code);
-        expect(result.errorMessage).toBeDefined();
-        expect(result.errorMessage).not.toBe("Payment failed"); // Should have specific message
+        const { error } = mapBackendStatus("FAILED", code);
+        expect(error?.code).toBe(code); // specific, not "UNKNOWN"
+        expect(error?.message).toBeTruthy();
       }
     });
   });

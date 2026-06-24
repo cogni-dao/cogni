@@ -23,6 +23,26 @@
 export type PaymentFlowPhase = "READY" | "PENDING" | "DONE";
 
 /**
+ * Structured, user-facing payment error.
+ *
+ * Errors are propagated as structure, never a flattened "something went wrong"
+ * string: the UI needs to know *what* happened, *who can fix it*, and *whether
+ * retrying helps*. Every failure that reaches the user is shaped into this.
+ */
+export interface PaymentUiError {
+  /** Stable code for analytics + presentation (e.g. INSUFFICIENT_BALANCE). */
+  code: string;
+  /** Short headline — what happened, in the user's terms (e.g. "Not enough USDC"). */
+  title: string;
+  /** One calm sentence explaining the situation. */
+  message: string;
+  /** Optional concrete next step the user can take (e.g. add funds on Base). */
+  hint?: string;
+  /** Whether retrying the same action can plausibly succeed (drives "Try again"). */
+  recoverable: boolean;
+}
+
+/**
  * Complete payment flow state for UI rendering.
  * Consumed by UsdcPaymentFlow component, exported by usePaymentFlow hook.
  */
@@ -40,7 +60,7 @@ export interface PaymentFlowState {
 
   // DONE phase
   result: "SUCCESS" | "ERROR" | null;
-  errorMessage: string | null;
+  error: PaymentUiError | null;
   creditsAdded: number | null;
 }
 

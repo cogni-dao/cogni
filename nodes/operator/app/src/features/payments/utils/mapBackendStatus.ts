@@ -3,16 +3,21 @@
 
 /**
  * Module: `@features/payments/utils/mapBackendStatus`
- * Purpose: Maps backend payment statuses to UI phases and error messages.
+ * Purpose: Maps backend payment statuses to UI phases + structured errors.
  * Scope: Maps PaymentStatus to UiPhase + UiResult. Does not perform business logic.
- * Invariants: Status values match contract exactly; error codes map to messages.
+ * Invariants: Status values match contract exactly; error codes map via formatPaymentError (one SSOT).
  * Side-effects: none
  * Notes: Single place backend status strings are interpreted.
  * Links: docs/spec/payments-design.md
  * @public
  */
 
-import type { PaymentErrorCode, PaymentStatus } from "@cogni/node-core";
+import type {
+  PaymentErrorCode,
+  PaymentStatus,
+  PaymentUiError,
+} from "@cogni/node-core";
+import { formatPaymentError } from "./formatPaymentError";
 
 export type UiPhase = "READY" | "PENDING" | "DONE";
 export type UiResult = "SUCCESS" | "ERROR" | null;
@@ -20,7 +25,7 @@ export type UiResult = "SUCCESS" | "ERROR" | null;
 export interface MappedStatus {
   phase: UiPhase;
   result: UiResult;
-  errorMessage: string | null;
+  error: PaymentUiError | null;
 }
 
 /**
@@ -31,7 +36,7 @@ export interface MappedStatus {
  *
  * @param status - Backend status from GET /api/v1/payments/attempts/:id
  * @param errorCode - Optional error code for FAILED status
- * @returns UI-friendly phase, result, and error message
+ * @returns UI-friendly phase, result, and structured error
  */
 export function mapBackendStatus(
   status: PaymentStatus,
@@ -39,15 +44,11 @@ export function mapBackendStatus(
 ): MappedStatus {
   switch (status) {
     case "PENDING_VERIFICATION":
-      return { phase: "PENDING", result: null, errorMessage: null };
+      return { phase: "PENDING", result: null, error: null };
     case "CONFIRMED":
-      return { phase: "DONE", result: "SUCCESS", errorMessage: null };
+      return { phase: "DONE", result: "SUCCESS", error: null };
     case "FAILED":
-      return {
-        phase: "DONE",
-        result: "ERROR",
-        errorMessage: getErrorMessage(errorCode),
-      };
+      return { phase: "DONE", result: "ERROR", error: toUiError(errorCode) };
     default:
       // Exhaustive check - catches new backend statuses at compile time
       return assertNever(status);
@@ -59,24 +60,12 @@ function assertNever(value: never): never {
 }
 
 /**
- * Converts backend error codes to human-readable messages.
- * Matches error codes from PAYMENTS_DESIGN.md error enumeration.
+ * Convert a backend error code into a structured user-facing error.
+ * Delegates to formatPaymentError (SSOT for code→presentation), dropping `debug`.
  */
-function getErrorMessage(errorCode?: PaymentErrorCode): string {
-  const messages: Record<PaymentErrorCode, string> = {
-    SENDER_MISMATCH: "Transaction sender does not match your wallet",
-    INVALID_TOKEN: "Wrong token used for payment",
-    INVALID_RECIPIENT: "Payment sent to wrong address",
-    INVALID_CHAIN: "Payment sent on wrong blockchain network",
-    INSUFFICIENT_AMOUNT: "Payment amount too low",
-    INSUFFICIENT_CONFIRMATIONS: "Transaction needs more confirmations",
-    TX_NOT_FOUND: "Transaction not found on-chain",
-    TX_REVERTED: "Transaction reverted on-chain",
-    TOKEN_TRANSFER_NOT_FOUND: "No token transfer found in transaction",
-    RECIPIENT_MISMATCH: "Payment sent to wrong recipient",
-    RECEIPT_NOT_FOUND: "Transaction not found after 24 hours",
-    INTENT_EXPIRED: "Payment intent expired",
-    RPC_ERROR: "Unable to verify transaction on-chain",
-  };
-  return errorCode ? messages[errorCode] : "Payment failed";
+function toUiError(errorCode?: PaymentErrorCode): PaymentUiError {
+  const { debug: _debug, ...ui } = formatPaymentError(
+    errorCode ? { code: errorCode } : undefined
+  );
+  return ui;
 }

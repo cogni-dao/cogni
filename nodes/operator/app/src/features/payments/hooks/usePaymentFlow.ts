@@ -14,7 +14,7 @@
 
 "use client";
 
-import type { PaymentFlowState } from "@cogni/node-core";
+import type { PaymentFlowState, PaymentUiError } from "@cogni/node-core";
 import { usdCentsToCredits } from "@cogni/node-core";
 import { clientLogger, EVENT_NAMES } from "@cogni/node-shared";
 import { useCallback, useEffect, useReducer, useRef } from "react";
@@ -29,8 +29,34 @@ import { paymentsClient } from "../api/paymentsClient";
 import { formatPaymentError } from "../utils/formatPaymentError";
 import { mapBackendStatus } from "../utils/mapBackendStatus";
 
+/**
+ * Structure a thrown error (wallet/simulation/network) into a UI error +
+ * a debug string for logging. SSOT for error shape is formatPaymentError.
+ */
+function toUiError(error: unknown): {
+  ui: PaymentUiError;
+  debug: string | undefined;
+} {
+  const { debug, ...ui } = formatPaymentError(error);
+  return { ui, debug };
+}
+
+/** Wrap a plain server/client message string (no error object) into a UI error. */
+function uiErrorFromMessage(message: string): PaymentUiError {
+  return {
+    code: "REQUEST_FAILED",
+    title: "Couldn't complete payment",
+    message,
+    recoverable: true,
+  };
+}
+
 // Re-export types for convenience
-export type { PaymentFlowPhase, PaymentFlowState } from "@cogni/node-core";
+export type {
+  PaymentFlowPhase,
+  PaymentFlowState,
+  PaymentUiError,
+} from "@cogni/node-core";
 
 export interface UsePaymentFlowOptions {
   amountUsdCents: number;
@@ -82,7 +108,7 @@ type InternalState =
     }
   | {
       phase: "ERROR";
-      message: string;
+      error: PaymentUiError;
       txHash: string | null;
       chainId: number | null;
     };
@@ -97,7 +123,7 @@ type Action =
       to: string;
       amountRaw: string;
     }
-  | { type: "INTENT_FAILED"; error: string }
+  | { type: "INTENT_FAILED"; error: PaymentUiError }
   | {
       type: "TX_HASH_RECEIVED";
       attemptId: string;
@@ -107,7 +133,7 @@ type Action =
   | { type: "TX_CONFIRMED"; attemptId: string; chainId: number; txHash: string }
   | { type: "SUBMIT_STARTED" }
   | { type: "SUBMIT_COMPLETED"; needsPolling: boolean }
-  | { type: "SUBMIT_FAILED"; error: string }
+  | { type: "SUBMIT_FAILED"; error: PaymentUiError }
   | {
       type: "VERIFICATION_SUCCESS";
       creditsAdded: number;
@@ -116,7 +142,7 @@ type Action =
     }
   | {
       type: "VERIFICATION_FAILED";
-      error: string;
+      error: PaymentUiError;
       txHash: string | null;
       chainId: number | null;
     }
@@ -140,7 +166,7 @@ function reducer(state: InternalState, action: Action): InternalState {
     case "INTENT_FAILED":
       return {
         phase: "ERROR",
-        message: action.error,
+        error: action.error,
         txHash: null,
         chainId: null,
       };
@@ -182,14 +208,14 @@ function reducer(state: InternalState, action: Action): InternalState {
       if ("txHash" in state && "chainId" in state) {
         return {
           phase: "ERROR",
-          message: action.error,
+          error: action.error,
           txHash: state.txHash,
           chainId: state.chainId,
         };
       }
       return {
         phase: "ERROR",
-        message: action.error,
+        error: action.error,
         txHash: null,
         chainId: null,
       };
@@ -205,7 +231,7 @@ function reducer(state: InternalState, action: Action): InternalState {
     case "VERIFICATION_FAILED":
       return {
         phase: "ERROR",
-        message: action.error,
+        error: action.error,
         txHash: action.txHash,
         chainId: action.chainId,
       };
@@ -236,7 +262,7 @@ function derivePublicState(internal: InternalState): PaymentFlowState {
         explorerUrl: null,
         isInFlight: false,
         result: null,
-        errorMessage: null,
+        error: null,
         creditsAdded: null,
       };
 
@@ -249,7 +275,7 @@ function derivePublicState(internal: InternalState): PaymentFlowState {
         explorerUrl: null,
         isInFlight: true,
         result: null,
-        errorMessage: null,
+        error: null,
         creditsAdded: null,
       };
 
@@ -262,7 +288,7 @@ function derivePublicState(internal: InternalState): PaymentFlowState {
         explorerUrl: null,
         isInFlight: true,
         result: null,
-        errorMessage: null,
+        error: null,
         creditsAdded: null,
       };
 
@@ -276,7 +302,7 @@ function derivePublicState(internal: InternalState): PaymentFlowState {
         explorerUrl: getTransactionExplorerUrl(chainId, txHash),
         isInFlight: true,
         result: null,
-        errorMessage: null,
+        error: null,
         creditsAdded: null,
       };
     }
@@ -291,7 +317,7 @@ function derivePublicState(internal: InternalState): PaymentFlowState {
         explorerUrl: getTransactionExplorerUrl(chainId, txHash),
         isInFlight: true,
         result: null,
-        errorMessage: null,
+        error: null,
         creditsAdded: null,
       };
     }
@@ -306,7 +332,7 @@ function derivePublicState(internal: InternalState): PaymentFlowState {
         explorerUrl: getTransactionExplorerUrl(chainId, txHash),
         isInFlight: true,
         result: null,
-        errorMessage: null,
+        error: null,
         creditsAdded: null,
       };
     }
@@ -323,7 +349,7 @@ function derivePublicState(internal: InternalState): PaymentFlowState {
         ),
         isInFlight: false,
         result: "SUCCESS",
-        errorMessage: null,
+        error: null,
         creditsAdded: internal.creditsAdded,
       };
     }
@@ -340,7 +366,7 @@ function derivePublicState(internal: InternalState): PaymentFlowState {
             : null,
         isInFlight: false,
         result: "ERROR",
-        errorMessage: internal.message,
+        error: internal.error,
         creditsAdded: null,
       };
     }
@@ -371,15 +397,15 @@ export function usePaymentFlow(
   // Handle wallet write errors
   useEffect(() => {
     if (writeError && internalState.phase === "AWAITING_SIGNATURE") {
-      const formatted = formatPaymentError(writeError);
+      const { ui, debug } = toUiError(writeError);
       // User rejection is expected behavior, not an error
       clientLogger.warn(EVENT_NAMES.CLIENT_PAYMENTS_FLOW_WALLET_WRITE_ERROR, {
         phase: internalState.phase,
-        error: formatted.debug,
+        error: debug,
       });
       dispatch({
         type: "INTENT_FAILED",
-        error: formatted.userMessage,
+        error: ui,
       });
     }
   }, [writeError, internalState.phase]);
@@ -387,14 +413,14 @@ export function usePaymentFlow(
   // Handle receipt errors
   useEffect(() => {
     if (receiptError && internalState.phase === "AWAITING_CONFIRMATION") {
-      const formatted = formatPaymentError(receiptError);
+      const { ui, debug } = toUiError(receiptError);
       clientLogger.error(EVENT_NAMES.CLIENT_PAYMENTS_FLOW_RECEIPT_ERROR, {
         phase: internalState.phase,
-        error: formatted.debug,
+        error: debug,
       });
       dispatch({
         type: "SUBMIT_FAILED",
-        error: formatted.userMessage,
+        error: ui,
       });
     }
   }, [receiptError, internalState.phase]);
@@ -450,7 +476,10 @@ export function usePaymentFlow(
         }
 
         if (!result.ok) {
-          dispatch({ type: "SUBMIT_FAILED", error: result.error });
+          dispatch({
+            type: "SUBMIT_FAILED",
+            error: uiErrorFromMessage(result.error),
+          });
           return;
         }
 
@@ -474,7 +503,9 @@ export function usePaymentFlow(
         ) {
           dispatch({
             type: "VERIFICATION_FAILED",
-            error: result.data.errorMessage ?? "Verification failed",
+            error: uiErrorFromMessage(
+              result.data.errorMessage ?? "Verification failed"
+            ),
             txHash,
             chainId,
           });
@@ -518,7 +549,7 @@ export function usePaymentFlow(
       if (!result.ok) {
         dispatch({
           type: "VERIFICATION_FAILED",
-          error: result.error,
+          error: uiErrorFromMessage(result.error),
           txHash,
           chainId,
         });
@@ -541,7 +572,7 @@ export function usePaymentFlow(
         } else {
           dispatch({
             type: "VERIFICATION_FAILED",
-            error: mapped.errorMessage ?? "Verification failed",
+            error: mapped.error ?? uiErrorFromMessage("Verification failed"),
             txHash,
             chainId,
           });
@@ -568,7 +599,7 @@ export function usePaymentFlow(
   useEffect(() => {
     if (internalState.phase === "ERROR" && !errorCalledRef.current && onError) {
       errorCalledRef.current = true;
-      onError(internalState.message);
+      onError(internalState.error.message);
     }
   }, [internalState, onError]);
 
@@ -591,7 +622,10 @@ export function usePaymentFlow(
     }
 
     if (!result.ok) {
-      dispatch({ type: "INTENT_FAILED", error: result.error });
+      dispatch({
+        type: "INTENT_FAILED",
+        error: uiErrorFromMessage(result.error),
+      });
       return;
     }
 
@@ -622,7 +656,7 @@ export function usePaymentFlow(
         });
       } catch (simError) {
         if (attemptIdRef.current !== currentAttemptId) return;
-        const formatted = formatPaymentError(simError);
+        const { ui, debug } = toUiError(simError);
         clientLogger.error(EVENT_NAMES.CLIENT_PAYMENTS_FLOW_SIMULATION_FAILED, {
           attemptId,
           chainId,
@@ -630,9 +664,10 @@ export function usePaymentFlow(
           to,
           amountRaw,
           payer: address,
-          reason: formatted.debug,
+          reason: debug,
+          code: ui.code,
         });
-        dispatch({ type: "INTENT_FAILED", error: formatted.userMessage });
+        dispatch({ type: "INTENT_FAILED", error: ui });
         return;
       }
     }
