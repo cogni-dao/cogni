@@ -15,6 +15,7 @@
  */
 
 import type { NodeDeployState } from "@cogni/ai-tools";
+import { CheckCircle, Circle } from "lucide-react";
 import type { ReactElement } from "react";
 
 import {
@@ -27,15 +28,25 @@ import {
   TableRow,
 } from "@/components";
 
-// Friendly env labels for the deploy lane, in flight order.
-const ENV_LABEL: Record<string, string> = {
-  "candidate-a": "Candidate A",
+// We lead with the env's TIER (its user-facing role) and keep the PLACEMENT (which VM/slot serves it
+// today) as a muted hint. They're 1:1 now — Test == the candidate-a VM — but fan out as we add VMs and
+// active nodes need several test envs for PR-validation volume; the tier label stays stable while the
+// placement disambiguates. So `candidate-a` reads as "Test · candidate-a", not the raw lane id.
+const ENV_TIER: Record<string, string> = {
+  "candidate-a": "Test",
   preview: "Preview",
   production: "Production",
 };
 
-function envLabel(env: string): string {
-  return ENV_LABEL[env] ?? env;
+function tierLabel(env: string): string {
+  return ENV_TIER[env] ?? env;
+}
+
+// Show the raw placement id only when it differs from the tier name (i.e. the Test tier on candidate-a);
+// Preview/Production are their own placement today, so no redundant sub-label.
+function placementLabel(env: string): string | null {
+  const tier = ENV_TIER[env];
+  return tier && tier.toLowerCase() !== env ? env : null;
 }
 
 /** A live env serves /readyz 200; the probe adapter maps that to health=healthy. */
@@ -53,16 +64,30 @@ function DeployRow({
   readonly state: NodeDeployState;
 }): ReactElement {
   const live = isLive(state);
+  const placement = placementLabel(state.env);
   return (
     <TableRow>
-      <TableCell className="font-medium text-foreground text-sm">
-        {envLabel(state.env)}
+      <TableCell className="text-sm">
+        <span className="font-medium text-foreground">
+          {tierLabel(state.env)}
+        </span>
+        {placement ? (
+          <span className="ml-2 font-mono text-muted-foreground text-xs">
+            {placement}
+          </span>
+        ) : null}
       </TableCell>
       <TableCell className="text-sm">
         {live ? (
-          <span className="text-foreground">✓ Live</span>
+          <span className="inline-flex items-center gap-1.5 text-foreground">
+            <CheckCircle className="size-4 text-success" aria-hidden="true" />
+            Live
+          </span>
         ) : (
-          <span className="text-muted-foreground">✗ Not deployed</span>
+          <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+            <Circle className="size-4" aria-hidden="true" />
+            Not deployed
+          </span>
         )}
       </TableCell>
       <TableCell className="text-right font-mono text-muted-foreground text-xs">
