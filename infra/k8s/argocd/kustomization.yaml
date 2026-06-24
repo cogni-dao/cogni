@@ -25,6 +25,7 @@ resources:
   # >>> GENERATED node-appsets (scripts/ci/render-node-appset.sh) — DO NOT EDIT BY HAND
   - candidate-a-beacon-applicationset.yaml
   - candidate-a-blue-applicationset.yaml
+  - candidate-a-games-applicationset.yaml
   - candidate-a-habitat-applicationset.yaml
   - candidate-a-node-template-applicationset.yaml
   - candidate-a-operator-applicationset.yaml
@@ -33,6 +34,7 @@ resources:
   - candidate-a-scheduler-worker-applicationset.yaml
   - preview-beacon-applicationset.yaml
   - preview-blue-applicationset.yaml
+  - preview-games-applicationset.yaml
   - preview-habitat-applicationset.yaml
   - preview-node-template-applicationset.yaml
   - preview-operator-applicationset.yaml
@@ -41,6 +43,7 @@ resources:
   - preview-scheduler-worker-applicationset.yaml
   - production-beacon-applicationset.yaml
   - production-blue-applicationset.yaml
+  - production-games-applicationset.yaml
   - production-habitat-applicationset.yaml
   - production-node-template-applicationset.yaml
   - production-operator-applicationset.yaml
