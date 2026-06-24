@@ -63,6 +63,11 @@ export const nodeAccessRequests = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     role: text("role").notNull().default("developer"),
+    // The AI agent's own GitHub login, declared at REQUEST time (rbac.md §6a). The agent requests
+    // access for its own GitHub account; on approve the owner-gated grant resolves push-access for
+    // THIS login — the human never supplies a login, they just click Approve. Nullable: a request
+    // with no GitHub identity grants only the OpenFGA role (the fork-PR fallback still applies).
+    githubLogin: text("github_login"),
     status: text("status").notNull().default("pending"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()

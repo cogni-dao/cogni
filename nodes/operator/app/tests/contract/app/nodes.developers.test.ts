@@ -34,6 +34,7 @@ const dbState = vi.hoisted(() => ({
     repoName: string;
   } | null,
   agentUser: null as { id: string } | null,
+  requestedGithubLogin: null as string | null,
   githubBinding: null as { login: string | null } | null,
 }));
 const deployPlane = vi.hoisted(() => ({
@@ -65,10 +66,13 @@ const transitionRequest = vi.hoisted(() => vi.fn());
 const mockAppDb = {
   select: () => rowsFrom(dbState.ownerNode ? [dbState.ownerNode] : []),
 };
-// The route runs two serviceDb selects: the agent-user existence check (projection has `id`) and the
-// `user_bindings` GitHub-login lookup (projection has `login`). Differentiate by the projection keys.
+// The route runs three serviceDb selects, differentiated by projection key: agent-user existence
+// (`id`), the access-request declared login (`githubLogin`), and the `user_bindings` fallback (`login`).
 const mockServiceDb = {
   select: (proj?: Record<string, unknown>) => {
+    if (proj && "githubLogin" in proj) {
+      return rowsFrom([{ githubLogin: dbState.requestedGithubLogin }]);
+    }
     if (proj && "login" in proj) {
       return rowsFrom(dbState.githubBinding ? [dbState.githubBinding] : []);
     }
@@ -138,10 +142,11 @@ describe("POST /api/v1/nodes/[id]/developers", () => {
       repoName: REPO_NAME,
     };
     dbState.agentUser = { id: AGENT_USER_ID };
+    dbState.requestedGithubLogin = null;
     dbState.githubBinding = null;
   });
 
-  it("approves a developer; no GitHub binding ⇒ tuple written, branch-push skipped", async () => {
+  it("approves a developer; no GitHub login anywhere ⇒ tuple written, branch-push skipped", async () => {
     await testApiHandler({
       appHandler,
       params: { id: NODE_ID },
@@ -175,8 +180,9 @@ describe("POST /api/v1/nodes/[id]/developers", () => {
     expect(transitionRequest).toHaveBeenCalled();
   });
 
-  it("approve provisions branch-push for the agent's bound GitHub login", async () => {
-    dbState.githubBinding = { login: "flock-leader" };
+  it("approve (no param) grants the login the agent declared on its request", async () => {
+    // The human supplies NO githubLogin — it comes from the agent's own access request (§6a).
+    dbState.requestedGithubLogin = "flock-leader";
 
     await testApiHandler({
       appHandler,
@@ -209,7 +215,10 @@ describe("POST /api/v1/nodes/[id]/developers", () => {
     });
   });
 
-  it("approve uses the owner-attested githubLogin when no binding exists (V0)", async () => {
+  it("falls back to the github user_binding when the request declared no login", async () => {
+    dbState.requestedGithubLogin = null;
+    dbState.githubBinding = { login: "linked-dev" };
+
     await testApiHandler({
       appHandler,
       params: { id: NODE_ID },
@@ -220,10 +229,8 @@ describe("POST /api/v1/nodes/[id]/developers", () => {
           body: JSON.stringify({
             agentUserId: AGENT_USER_ID,
             decision: "approve",
-            githubLogin: "external-dev",
           }),
         });
-        expect(res.status).toBe(200);
         expect((await res.json()).branchPush).toBe("granted");
       },
     });
@@ -231,13 +238,13 @@ describe("POST /api/v1/nodes/[id]/developers", () => {
     expect(deployPlane.setNodeCollaborator).toHaveBeenCalledWith({
       owner: REPO_OWNER,
       repo: REPO_NAME,
-      login: "external-dev",
+      login: "linked-dev",
       permission: "push",
     });
   });
 
   it("invited outcome when GitHub returns a pending invitation", async () => {
-    dbState.githubBinding = { login: "flock-leader" };
+    dbState.requestedGithubLogin = "flock-leader";
     deployPlane.setNodeCollaborator.mockResolvedValue({ invitationId: 999 });
 
     await testApiHandler({
@@ -258,7 +265,7 @@ describe("POST /api/v1/nodes/[id]/developers", () => {
   });
 
   it("branch-push failure never reverses the authoritative tuple write", async () => {
-    dbState.githubBinding = { login: "flock-leader" };
+    dbState.requestedGithubLogin = "flock-leader";
     deployPlane.setNodeCollaborator.mockRejectedValue(new Error("403 admin"));
 
     await testApiHandler({
@@ -342,7 +349,7 @@ describe("POST /api/v1/nodes/[id]/developers", () => {
   });
 
   it("rejects by removing the developer tuple AND de-provisioning branch-push", async () => {
-    dbState.githubBinding = { login: "flock-leader" };
+    dbState.requestedGithubLogin = "flock-leader";
 
     await testApiHandler({
       appHandler,

@@ -439,26 +439,25 @@ resolved from the node catalog `source_repo`. Revocation calls
 `DELETE /repos/{owner}/{repo}/collaborators/{login}`. This is a _side-effect of the
 RBAC grant_, not a new OpenFGA relation — `developer` stays `[user, agent] or admin`.
 
-**Identity binding (`PUSH_LOGIN_FROM_BINDING`).** The collaborator login is resolved
-from `user_bindings (provider='github')` — the same binding the `/profile` OAuth
-link writes ([identity.ts](../../packages/db-schema/src/identity.ts),
-[decentralized-identity.md](./decentralized-identity.md)). A grant for an agent with
-no GitHub binding fails closed (`github_identity_unbound`) — never guess a login.
+**Identity binding (`PUSH_LOGIN_FROM_REQUEST`). The AI agent declares its OWN GitHub
+login when it files the access request — the human approving never supplies a login.**
+This is the load-bearing design: an external AI developer requests node access _for its
+own GitHub account_ (`POST /nodes/{id}/access-requests { role, githubLogin }`), the login
+is persisted on the `node_access_requests` row (`SELF_REQUEST_ONLY` — it can only declare
+its own identity), and the owner-gated approve _resolves it from that row_ and grants push
+for it. The owner clicks **Approve** — no `githubLogin` param, no DevTools, no UI field to
+fill. Resolution order at approve: the request row's declared login, then the agent's
+`github` `user_bindings` row (the `/profile` OAuth fallback), else
+`skipped:github_identity_unbound` (the role grant + fork-PR fallback still apply). The
+agent's declared login IS bound to its `agentUserId` (it's its own request), so `reject`
+resolves the same login and de-provisions cleanly — no orphaned collaborator. Never guess a
+login.
 
-- **V0 bind:** owner attests the login at approve-time (passes `githubLogin`; the
-  owner-approve step _is_ the identity attestation). Sufficient for `flock-leader`.
-  Two V0 caveats, both closed by binding-based identity: (1) the attested `githubLogin`
-  is decoupled from `agentUserId` — the tuple goes to the agent, push goes to whatever
-  login the owner names, so the owner must match them; (2) a `reject` de-provisions only
-  when a login is resolvable (a binding, or `githubLogin` re-supplied on the reject) —
-  otherwise push access is **not** auto-revoked. The route never drops this silently: it
-  emits `branch_push_deprovision_skipped` so an orphaned collaborator is observable for
-  manual removal. The OpenFGA tuple delete is always authoritative.
-- **VNext bind:** agent-native, browserless GitHub-identity proof (token
-  introspection or nonce challenge-response → write a `bind` `user_bindings` row +
-  `identity_events` evidence), so no human approves identity, only the access grant.
-  Binding-based identity closes both V0 caveats — the login is bound to the agent and
-  always resolvable on revoke.
+- **VNext hardening:** prove the declared login (agent-native, browserless GitHub-identity
+  proof — token introspection or nonce challenge-response → write a `bind` `user_bindings`
+  row + `identity_events` evidence) so the declaration is cryptographically attested, not
+  just owner-trusted at approve. The request→approve flow is unchanged; only the trust on
+  the declared login strengthens.
 
 **No human clicking.** The _one_ human action is the owner's one-time per-node
 access approval (governance, not per-contribution — mission-compliant). Everything

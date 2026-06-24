@@ -10,7 +10,7 @@
  *   branch-push on the node repo via the operator App (rbac.md §6a) — best-effort, never reversing the
  *   authoritative tuple write. Without a grant path the role relations are inert (rbac.md §6).
  * Invariants: OWNER_GATING, OPENFGA_IS_AUTHORITY, NO_LOCAL_ROLE_TABLE, ROLE_FROM_NODE_ACCESS_ROLES,
- *   TRUST_BOUNDARY_IS_MERGE_NOT_PUSH, PUSH_LOGIN_FROM_BINDING.
+ *   TRUST_BOUNDARY_IS_MERGE_NOT_PUSH, PUSH_LOGIN_FROM_REQUEST (no githubLogin param — from the request row).
  * Side-effects: IO (Postgres read, OpenFGA tuple write/delete, GitHub repo collaborator add/remove via App)
  * Links: docs/spec/rbac.md (§6, §6a), docs/spec/identity-model.md
  * @public
@@ -30,7 +30,10 @@ import {
   resolveServiceDb,
 } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
-import { transitionAccessRequestOnDecision } from "@/features/nodes/access-requests";
+import {
+  getRequestedGithubLogin,
+  transitionAccessRequestOnDecision,
+} from "@/features/nodes/access-requests";
 import { nodeIdOrSlug } from "@/features/nodes/node-lookup";
 import { getServerSessionUser } from "@/lib/auth/server";
 import { NODE_ACCESS_ROLES } from "@/shared/db/node-access-requests";
@@ -50,10 +53,8 @@ const DeveloperDecisionInput = z.object({
   agentUserId: z.string().uuid(),
   decision: z.enum(["approve", "reject"]),
   role: z.enum(NODE_ACCESS_ROLES).default("developer"),
-  // Owner-attested GitHub login for branch-push provisioning when the agent has no `github`
-  // user_binding (V0 — the owner-approve step is the identity attestation; rbac.md §6a). When a
-  // binding exists it wins; this is the fallback only. Never a guessed login.
-  githubLogin: z.string().min(1).optional(),
+  // NO githubLogin here by design (rbac.md §6a): the human approving never supplies a GitHub login.
+  // The agent declared its own login on the access REQUEST; approve resolves it from there.
 });
 
 /** Outcome of the §6a GitHub branch-push side-effect, surfaced in the response + audit log. */
@@ -271,6 +272,13 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         ? "skipped:github_identity_unbound"
         : "skipped:not_developer_role";
     if (parsed.data.role === "developer") {
+      // Resolve the agent's GitHub login: the login it declared on its own access REQUEST (primary,
+      // rbac.md §6a — the human supplies nothing), else its linked `github` user_binding (fallback).
+      const requestedLogin = await getRequestedGithubLogin(serviceDb, {
+        nodeId: nodeRowId,
+        agentUserId: parsed.data.agentUserId,
+        role: parsed.data.role,
+      });
       const [binding] = await serviceDb
         .select({ login: userBindings.providerLogin })
         .from(userBindings)
@@ -281,7 +289,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
           )
         )
         .limit(1);
-      const login = binding?.login ?? parsed.data.githubLogin ?? null;
+      const login = requestedLogin ?? binding?.login ?? null;
       if (!login && parsed.data.decision === "reject") {
         // De-provisioning needs a login. An owner-attested grant (no `github` binding) can't be
         // auto-revoked here unless the reject re-supplies `githubLogin` — surface it loudly so push
