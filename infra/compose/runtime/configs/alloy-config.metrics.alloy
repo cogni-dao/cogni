@@ -76,17 +76,26 @@ loki.process "docker_logs" {
   // Extract JSON fields from app logs (fail-safe: non-JSON lines get no extracted fields)
   stage.json {
     expressions = {
-      route       = "route",
-      status_code = "status",
-      duration_ms = "durationMs",
-      log_msg     = "msg",
-      node        = "nodeId",
+      route        = "route",
+      status_code  = "status",
+      duration_ms  = "durationMs",
+      log_msg      = "msg",
+      node_emitter = "svcNode",
+      node_legacy  = "nodeId",
     }
   }
 
-  // Promote the app's `nodeId` to a `node` stream label so per-node reads can select
-  // {node="<id>"} (task.5028). Low-cardinality (one value per node); only app lines that
-  // carry nodeId get the label — infra/non-JSON lines are unaffected (extracted key absent).
+  // Derive the `node` stream label from the EMITTER identity (`svcNode`), falling back to
+  // the legacy `nodeId` field for pods not yet emitting svcNode. svcNode is leak-proof:
+  // operator control-plane events override `nodeId` with the TARGET node they act on, but
+  // never set svcNode — so an operator line about node X stays labeled `node=<operator>`.
+  stage.template {
+    source   = "node"
+    template = "{{ if .node_emitter }}{{ .node_emitter }}{{ else }}{{ .node_legacy }}{{ end }}"
+  }
+
+  // Promote to a `node` stream label so per-node reads can select {node="<id>"} (task.5028).
+  // Low-cardinality (one value per node); only app lines that carry the field get the label.
   stage.labels {
     values = {
       node = "",
@@ -194,12 +203,21 @@ loki.process "k8s_pod_logs" {
     expression = ".*/pods/(?P<namespace>[^_]+)_(?P<pod>[^_]+)_[^/]+/(?P<container>[^/]+)/.*"
   }
 
-  // Parse the app's JSON message (set by stage.cri) to recover `nodeId` for the node label.
+  // Parse the app's JSON message (set by stage.cri) to recover the node identity for the
+  // node label. Prefer the leak-proof emitter field `svcNode`; fall back to legacy `nodeId`
+  // for pods not yet emitting it. Operator control-plane events override `nodeId` with the
+  // TARGET node they act on, but never set svcNode — see alloy-config.alloy.
   // Fail-safe: control-plane / non-JSON pod logs extract nothing and get no `node` label.
   stage.json {
     expressions = {
-      node = "nodeId",
+      node_emitter = "svcNode",
+      node_legacy  = "nodeId",
     }
+  }
+
+  stage.template {
+    source   = "node"
+    template = "{{ if .node_emitter }}{{ .node_emitter }}{{ else }}{{ .node_legacy }}{{ end }}"
   }
 
   stage.labels {

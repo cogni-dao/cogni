@@ -29,12 +29,25 @@ export function makeLogger(bindings?: Record<string, unknown>): Logger {
   // Silence logs in test tooling (VITEST or NODE_ENV=test)
   const isTestTooling = isVitest || nodeEnv === "test";
 
+  // Reserved emitter identity for the `node` Loki stream label. The mutable `nodeId`
+  // field gets overridden at call time by operator control-plane events that set it to
+  // the TARGET node they act on (e.g. approving a developer on node X) — Alloy/Loki then
+  // mislabel that operator line `node=X`, leaking it into X's per-node log view. `svcNode`
+  // is bound once from the emitter and never set by a call site, so Alloy derives a
+  // leak-proof `node` label from it (with a legacy `nodeId` fallback). See alloy-config.alloy.
+  const emitterNode = bindings?.nodeId;
+
   const config = {
     level: pinoLogLevel,
     enabled: !isTestTooling,
     // Stable base: bindings first, then reserved keys (prevents overwrite)
     // env label added by Alloy from DEPLOY_ENVIRONMENT, not in app logs
-    base: { ...bindings, app: "cogni-template", service: serviceName },
+    base: {
+      ...bindings,
+      app: "cogni-template",
+      service: serviceName,
+      ...(typeof emitterNode === "string" ? { svcNode: emitterNode } : {}),
+    },
     messageKey: "msg",
     timestamp: pino.stdTimeFunctions.isoTime, // RFC3339 format (matches Alloy stage.timestamp)
     redact: { paths: REDACT_PATHS, censor: "[REDACTED]" },
