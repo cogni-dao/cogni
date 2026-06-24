@@ -120,6 +120,7 @@ describe("features/payments/services/creditsConfirm", () => {
       billingAccountId,
       balanceCredits: expectedCredits,
       creditsApplied: expectedCredits,
+      systemBonusCredits: 75_000_000,
     });
   });
 
@@ -163,6 +164,7 @@ describe("features/payments/services/creditsConfirm", () => {
       billingAccountId,
       balanceCredits: existingEntry.balanceAfter,
       creditsApplied: 0,
+      systemBonusCredits: 0,
     });
   });
 
