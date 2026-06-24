@@ -316,17 +316,20 @@ for k in "${NODE_BASELINE_KEYS[@]}"; do
   v="$(_resolve_node_value "$TARGET_NODE" "$k")"
   if [[ -z "$v" ]]; then
     # We only reach here for a key the node is SUPPOSED to get (_node_gets_key
-    # filtered above). A required source:human value (EVM_RPC_URL, POSTHOG_*) is
-    # substrate with NO minting owner — it must already sit in the env bank at
-    # cogni/<env>/_shared/<KEY>. If it doesn't, inherit_shared_value resolves empty
-    # and the pre-fix `continue` silently shipped a half-provisioned node whose
-    # outbound path no-ops at runtime (bug.5087: payments outbound + chain reads
-    # silently skipped). Fail-fast on the incomplete required HUMAN set — repair the
-    # BANK, never the node (design.secrets-catalog-per-node). Deliberately scoped to
-    # source:human: an agent/composed key resolving empty is a generator gap (a
-    # different class), and "seed it at _shared" is the wrong remedy for a key we mint.
+    # filtered above). EVM_RPC_URL/POSTHOG_* are required source:human SHARED
+    # substrate: ONE value the operator owns per env, which every fleet node
+    # INHERITS via inherit_shared_value (the node-template→operator→_shared scan) —
+    # NOT a per-node human paste. The sole human action is the operator (or a
+    # standalone sovereign fork that has no operator ancestor) seeding it ONCE into
+    # cogni/<env>/_shared/<KEY>. If the operator bank lacks even that, the scan
+    # resolves empty and the pre-fix `continue` silently shipped a half-provisioned
+    # node whose outbound path no-ops at runtime (bug.5087: payments outbound +
+    # chain reads silently skipped). Fail-fast on the incomplete required HUMAN set
+    # — repair the BANK (seed _shared once), never the node. Scoped to source:human:
+    # an agent/composed key resolving empty is a generator gap (a different class),
+    # and "seed it at _shared" is the wrong remedy for a key we mint.
     if [[ "$(_cat_field "$k" '.required')" == "true" && "$(_cat_field "$k" '.source')" == "human" ]]; then
-      fail "required human secret ${k} resolved empty for ${DEPLOY_ENVIRONMENT}/${TARGET_NODE} — env bank incomplete. Seed it once per env at cogni/${DEPLOY_ENVIRONMENT}/_shared/${k}, then re-run. See docs/guides/secrets-add-new.md."
+      fail "required human secret ${k} resolved empty for ${DEPLOY_ENVIRONMENT}/${TARGET_NODE} — operator env bank incomplete. Seed it ONCE per env at cogni/${DEPLOY_ENVIRONMENT}/_shared/${k} (fleet nodes then inherit it); see docs/guides/secrets-add-new.md."
     fi
     continue
   fi
