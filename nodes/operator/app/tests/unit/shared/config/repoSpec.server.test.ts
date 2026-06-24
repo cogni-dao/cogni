@@ -116,6 +116,8 @@ describe("getPaymentConfig (repo-spec)", () => {
         chainId: CHAIN_ID,
         receivingAddress: "0x1111111111111111111111111111111111111111",
         provider: "cogni-usdc-backend-v1",
+        markupFactor: 2.0,
+        revenueShare: 0,
       });
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });

@@ -470,6 +470,9 @@ async function verifyAndSettle(
           defaultVirtualKeyId,
           amountUsdCents: attempt.amountUsdCents,
           clientPaymentId,
+          // revenueShare is governance config from repo-spec (payments_in), carried via
+          // pricingConfig. 0 when post-credit funding is unconfigured (no provider → no bonus).
+          revenueShare: postCreditFundingDeps?.pricingConfig?.revenueShare ?? 0,
           metadata: {
             paymentAttemptId: attempt.id,
             txHash: attempt.txHash,

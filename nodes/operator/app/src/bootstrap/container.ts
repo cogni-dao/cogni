@@ -805,8 +805,8 @@ function createContainer(): Container {
           expectedAddress: operatorWalletConfig.address,
           splitAddress: paymentConfig.receivingAddress,
           treasuryAddress,
-          markupPpm: numberToPpm(env.USER_PRICE_MARKUP_FACTOR),
-          revenueSharePpm: numberToPpm(env.SYSTEM_TENANT_REVENUE_SHARE),
+          markupPpm: numberToPpm(paymentConfig.markupFactor),
+          revenueSharePpm: numberToPpm(paymentConfig.revenueShare),
           maxTopUpUsd: env.OPERATOR_MAX_TOPUP_USD,
           rpcUrl: env.EVM_RPC_URL,
         });
@@ -817,13 +817,17 @@ function createContainer(): Container {
   const providerFunding: ProviderFundingPort | undefined = (() => {
     if (!env.OPENROUTER_API_KEY || !operatorWallet) return undefined;
 
-    // MARGIN_PRESERVED: markup × (1 - fee) must be > 1 + revenueShare
+    // MARGIN_PRESERVED: markup × (1 - fee) must be > 1 + revenueShare.
+    // Markup + revenue share are governance config from repo-spec (payments_in);
+    // operatorWallet existing guarantees getPaymentConfig() is defined (cached).
+    const paymentConfig = getPaymentConfig();
+    if (!paymentConfig) return undefined;
     const effectiveMarkup =
-      env.USER_PRICE_MARKUP_FACTOR * (1 - env.OPENROUTER_CRYPTO_FEE);
-    if (effectiveMarkup <= 1 + env.SYSTEM_TENANT_REVENUE_SHARE) {
+      paymentConfig.markupFactor * (1 - env.OPENROUTER_CRYPTO_FEE);
+    if (effectiveMarkup <= 1 + paymentConfig.revenueShare) {
       throw new Error(
-        `MARGIN_PRESERVED violation: markup(${env.USER_PRICE_MARKUP_FACTOR}) × (1 - fee(${env.OPENROUTER_CRYPTO_FEE})) ` +
-          `must be > 1 + revenueShare(${env.SYSTEM_TENANT_REVENUE_SHARE}). ` +
+        `MARGIN_PRESERVED violation: markup(${paymentConfig.markupFactor}) × (1 - fee(${env.OPENROUTER_CRYPTO_FEE})) ` +
+          `must be > 1 + revenueShare(${paymentConfig.revenueShare}). ` +
           "DAO would lose money on every purchase."
       );
     }

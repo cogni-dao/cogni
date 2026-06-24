@@ -62,6 +62,10 @@ export interface InboundPaymentConfig {
   chainId: number;
   receivingAddress: string;
   provider: string;
+  /** Purchase-side markup multiplier (governance config; drives top-up + Split allocation). */
+  markupFactor: number;
+  /** System-tenant (DAO) bonus-credit fraction (0–1); 0 = no system-account credit increase. */
+  revenueShare: number;
 }
 
 /**
@@ -175,6 +179,8 @@ export function extractPaymentConfig(
     chainId,
     receivingAddress: topup.receiving_address.trim(),
     provider: topup.provider.trim(),
+    markupFactor: topup.markup_factor,
+    revenueShare: topup.revenue_share,
   };
 }
 
