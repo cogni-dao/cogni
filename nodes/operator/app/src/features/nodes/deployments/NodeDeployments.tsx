@@ -28,10 +28,10 @@ import {
   TableRow,
 } from "@/components";
 
-// We lead with the env's TIER (its user-facing role) and keep the PLACEMENT (which VM/slot serves it
-// today) as a muted hint. They're 1:1 now — Test == the candidate-a VM — but fan out as we add VMs and
-// active nodes need several test envs for PR-validation volume; the tier label stays stable while the
-// placement disambiguates. So `candidate-a` reads as "Test · candidate-a", not the raw lane id.
+// Label each env by its user-facing TIER (its role), not the backend deploy-lane id: candidate-a → Test.
+// The VM PLACEMENT (which slot serves a tier) is deliberately NOT surfaced yet — with one test VM it adds
+// no signal and would only show on one row. It earns a sub-label once a tier fans out across VMs
+// (candidate-a, candidate-b, … for PR-validation volume); until then the tier name is the whole story.
 const ENV_TIER: Record<string, string> = {
   "candidate-a": "Test",
   preview: "Preview",
@@ -40,13 +40,6 @@ const ENV_TIER: Record<string, string> = {
 
 function tierLabel(env: string): string {
   return ENV_TIER[env] ?? env;
-}
-
-// Show the raw placement id only when it differs from the tier name (i.e. the Test tier on candidate-a);
-// Preview/Production are their own placement today, so no redundant sub-label.
-function placementLabel(env: string): string | null {
-  const tier = ENV_TIER[env];
-  return tier && tier.toLowerCase() !== env ? env : null;
 }
 
 /** A live env serves /readyz 200; the probe adapter maps that to health=healthy. */
@@ -64,18 +57,10 @@ function DeployRow({
   readonly state: NodeDeployState;
 }): ReactElement {
   const live = isLive(state);
-  const placement = placementLabel(state.env);
   return (
     <TableRow>
-      <TableCell className="text-sm">
-        <span className="font-medium text-foreground">
-          {tierLabel(state.env)}
-        </span>
-        {placement ? (
-          <span className="ml-2 font-mono text-muted-foreground text-xs">
-            {placement}
-          </span>
-        ) : null}
+      <TableCell className="font-medium text-foreground text-sm">
+        {tierLabel(state.env)}
       </TableCell>
       <TableCell className="text-sm">
         {live ? (
