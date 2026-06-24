@@ -5,7 +5,7 @@
  * Module: `@adapters/server/vcs/github-repo-write`
  * Purpose: Operator-only helper that mints node repos, commits files, and opens pull requests via the GitHub App.
  *   At formation it also replicates the monorepo's merge gate onto the node verbatim: branch
- *   protection, canonical merge settings (squash-only, auto-merge), and the `merge_queue` ruleset.
+ *   protection, canonical repo settings (squash-only, auto-merge, is_template:false), and the `merge_queue` ruleset.
  * Scope: Thin Octokit calls behind node formation and candidate-flight prep.
  *   Does not belong in `VcsCapability` because that capability is shared with poly/resy/node-template stubs
  *   and these write ops are operator-only.
@@ -1464,13 +1464,14 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
         owner,
         slug
       );
-      // Born with the monorepo's merge mechanism too: canonical repo merge
-      // settings (squash-only, auto-merge on, delete-on-merge — auto-merge is
-      // REQUIRED for the queue path) + the `merge_queue` ruleset copied verbatim
+      // Born with the monorepo's merge mechanism too: canonical repo settings
+      // (squash-only, auto-merge on, delete-on-merge — auto-merge is REQUIRED for
+      // the queue path; plus `is_template:false` since forking the template repo
+      // inherits its template flag) + the `merge_queue` ruleset copied verbatim
       // from the monorepo. The queue is admin-opt-in on the monorepo, so when it
       // is not yet enabled there this is a clean skip (the node mirrors the
       // monorepo: born queue-less). See docs/spec/merge-authority.md.
-      await this.ensureCanonicalMergeSettings(octokit, owner, slug);
+      await this.ensureCanonicalRepoSettings(octokit, owner, slug);
       await this.replicateMergeQueue(
         sourceOctokit,
         input.protectionSourceOwner,
@@ -2130,12 +2131,15 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
   }
 
   /**
-   * Set a node repo's canonical merge settings (squash-only, auto-merge enabled,
-   * delete-branch-on-merge) — mirrors `setup-main-branch.sh` step 1. `allow_auto_merge`
-   * is REQUIRED for the merge-queue path: `mergePr` enables auto-merge to route a PR
-   * through the queue, which fails if the repo forbids it. Idempotent.
+   * Set a node repo's canonical repo settings — mirrors `setup-main-branch.sh` step 1:
+   *   - Merge settings: squash-only, auto-merge enabled, delete-branch-on-merge.
+   *     `allow_auto_merge` is REQUIRED for the merge-queue path (`mergePr` enables
+   *     auto-merge to route a PR through the queue; fails if the repo forbids it).
+   *   - `is_template: false`: a node is NOT a template. Forking `node-template` (which
+   *     IS a template) makes the fork inherit `is_template: true` — clear it so the node
+   *     doesn't masquerade as a "Use this template" repo. Idempotent.
    */
-  private async ensureCanonicalMergeSettings(
+  private async ensureCanonicalRepoSettings(
     octokit: Octokit,
     owner: string,
     repo: string
@@ -2148,6 +2152,7 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       allow_rebase_merge: false,
       delete_branch_on_merge: true,
       allow_auto_merge: true,
+      is_template: false,
     });
   }
 
