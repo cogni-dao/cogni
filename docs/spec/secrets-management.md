@@ -449,12 +449,14 @@ identity (projected SA token → k8s-auth over ClusterIP). The value transits TL
 the operator and never leaves it; the node slug is operator-stamped from the
 OpenFGA-authorized resource and env is validated against the operator's own.
 Per-node isolation is **tuple-based** (OpenFGA), not a shared writer token.
-**Provisioned + write-proven on candidate-a AND production** (2026-06-24; prod
-operator returns `200`). [`bug.5040`](https://cognidao.org/work/items/bug.5040)
-(prod Reloader) is fixed — controller installed so writes roll the pod; the prod
+**Provisioned + write-proven (with take-effect) on ALL THREE envs** — candidate-a,
+production, and preview (2026-06-24; each returns `200` on a non-operator
+`node-template` write, then ESO + Reloader roll the pod).
+[`bug.5040`](https://cognidao.org/work/items/bug.5040) (prod Reloader) is fixed; the prod
 writer role + SAs exist ([`bug.5007`](https://cognidao.org/work/items/bug.5007) SA-absent
-framing is stale). **`preview` is the only gated env** (`503 authz_unavailable` — its
-OpenFGA store isn't resolvable by the operator pod). The canonical
+framing is stale). Preview required an **OpenFGA model re-bootstrap** (its model predated
+the `can_manage_secrets` relation → `503 authz_unavailable`); the durable fix — re-bootstrap
+OpenFGA on every promote, not just `skip_infra=false` — is [`task.5049`](https://cognidao.org/work/items/task.5049). The canonical
 per-env status table lives in
 [`secrets-add-new.md`](../guides/secrets-add-new.md#per-env-status-canonical--link-here-do-not-re-state).
 Spec + roadmap:
