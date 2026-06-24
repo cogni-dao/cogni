@@ -13,7 +13,10 @@
 
 const SLUG_RE = /^[a-z][a-z0-9-]{1,31}$/;
 
-const RESERVED_SLUGS = new Set(["operator", "resy", "node-template", "poly"]);
+// Only the operator's own first-class slugs are reserved (they anchor seeded registry rows + the
+// monorepo's own apps). `resy`/`poly` were stale reservations for planned-but-never-built nodes —
+// purged so an owner can actually register them.
+const RESERVED_SLUGS = new Set(["operator", "node-template"]);
 
 export interface ParsedSlug {
   readonly slug: string;
