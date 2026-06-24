@@ -429,28 +429,32 @@ The forward deployment contract is:
 A read-only external agent (e.g. `flock-leader`, pull-only on GitHub) drives a fork PR to a node's
 OWN repo entirely through the operator GitHub App — no human, no `gh` privilege on the agent's side:
 
-1. **`POST /api/v1/vcs/run-ci` `{ nodeId, prNumber }`.** GitHub holds a first-time / outside
-   fork contributor's `pull_request` workflow runs in `action_required`. The operator App releases
-   them so the node's own CI can run. RBAC `node.flight` on the named node is the gate; the App
-   approves ONLY standard `pull_request` runs (never `pull_request_target` / secret-bearing runs) —
-   safety is structural. `owner/repo` are operator-resolved from the node's catalog `source_repo`.
-2. **The node's own CI runs** (`pr-build.yml` `push:main` / `pull_request`) and publishes
-   `sha-<sha>` images — the node repo builds itself. There is no operator-dispatched "fork-build"
-   lane; that abstraction is purged.
-3. **`POST /api/v1/vcs/merge` `{ nodeId, prNumber }`** on green. RBAC `node.flight` on the same node
-   authorizes the squash merge of any PR to that node's repo, INCLUDING a PR the agent authored from
-   its own fork — the owner-granted RBAC tuple IS the trust boundary (no self-merge / probation
-   check). **Branch protection on the node repo is the merge authority**; the operator's
-   `evaluateMergeGate` is fast-fail UX, not the sole gate.
-4. **Node-merge auto-promotes preview** via the existing `dispatchNodePreviewPromote`
-   (`PREVIEW_VIA_SOURCE_ADDRESSED_PROMOTE`, above) — the merged PR head SHA source-addresses the
-   preview promote. No additional wiring.
+1. **`POST /api/v1/vcs/run-ci` `{ nodeId, prNumber }`** — full CI = **gate + build**. (a) Releases
+   GitHub's `action_required` hold on the fork contributor's `pull_request` gate runs (RBAC
+   `node.flight`; only standard `pull_request` runs, never `pull_request_target` — safe by structure),
+   AND (b) dispatches the trusted `pr-build.yml` (`workflow_dispatch`) of the approved head →
+   `sha-<headSha>`. A fork contributor's `pull_request` runs read-only and cannot push the deployable,
+   so the operator builds it — via the **same** `pr-build.yml` in the base repo (`packages:write`),
+   NOT a separate fork-build workflow. `owner/repo` are operator-resolved from the node's catalog
+   `source_repo`; the in-repo operator resolves to `NODE_SUBMODULE_PARENT_*`.
+2. **`POST /api/v1/vcs/flight` `{ nodeRef: { nodeId, sourceSha } }`** — flights candidate-a. Every
+   node — child OR the in-repo operator — flights by `nodeRef` (`resolve-node-ref-image.sh` +
+   `prepareNodeRefCandidateFlight` handle the in-repo operator: no `source_repo` → the parent's own
+   app image `sha-<sourceSha>`). There is **no `codePr`/`pr_number` deploy identity** (that
+   anti-pattern was rejected). Validate the deployed candidate-a `/version.buildSha == sourceSha`.
+3. **`POST /api/v1/vcs/merge` `{ nodeId, prNumber }`** on green. RBAC `node.flight` authorizes the
+   squash merge of any PR to that node's repo, INCLUDING a PR the agent authored from its own fork —
+   the owner-granted RBAC tuple IS the trust boundary (no self-merge / probation check). **Branch
+   protection is the merge authority**; `evaluateMergeGate` is fast-fail UX.
+4. **Node-merge auto-promotes preview** via `dispatchNodePreviewPromote` — the merged head SHA
+   source-addresses the preview promote. Production: `POST /api/v1/deploy/promote` (`can_promote_production`).
 
-> **Superseded (the monorepo PR-number lane is LEGACY, kept).** `POST /api/v1/vcs/merge` WITHOUT
-> `nodeId` (operator-node RBAC + monorepo `NODE_SUBMODULE_PARENT_*` repo) and the monorepo
-> `POST /api/v1/vcs/flight { codePr }` lane remain for operator-monorepo PRs, but the node-scoped
-> `run-ci` + `merge` flow above is the primary external-contributor path. A node repo with no
-> catalog row falls back to the monorepo lane on merge; run-ci surfaces 404 `catalog_missing`.
+> **One build path, one flight identity.** Both the child-node repos and the in-repo operator follow
+> the identical contract above (`sha-<sourceSha>`, `run-ci`, `nodeRef`). The legacy monorepo no-`nodeId`
+> merge lane (`POST /api/v1/vcs/merge { prNumber }` → operator-node RBAC + `NODE_SUBMODULE_PARENT_*`)
+> is kept as a convenience; the `codePr` flight lane is **removed** (#1789 closed) — the operator
+> flights by `nodeRef` like every node. A node repo with no catalog row falls back to the monorepo
+> merge lane; run-ci surfaces 404 `catalog_missing`.
 
 ---
 
