@@ -172,7 +172,7 @@ describe("buildNodeLaunchPack", () => {
     // Node-specific guardrails (the bits that ARE node-scoped, not generic CICD).
     expect(pack.prompt).toContain("knowledge.remote");
     expect(pack.prompt).toContain("do not add a DOLTHUB_REMOTE_URL");
-    expect(pack.prompt).toContain("do not push to upstream main");
+    expect(pack.prompt).toContain("do not push to `main`");
 
     // RBAC owner-approve is the lone human step, fired immediately (node-scoped
     // URL stays in the prompt because it interpolates THIS node's id).
