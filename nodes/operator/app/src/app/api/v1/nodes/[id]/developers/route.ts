@@ -344,6 +344,16 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
           }
         } catch (error) {
           branchPush = "error";
+          // Stable failure-class signal: the GitHub HTTP status distinguishes 404 (App not installed
+          // on the resolved repo) from 403 (App lacks admin) from other — the field that pinpointed
+          // the wrong-repo bug. `err` is a controlled GitHub API message (no secrets/user content).
+          const githubStatus =
+            error &&
+            typeof error === "object" &&
+            "status" in error &&
+            typeof (error as { status: unknown }).status === "number"
+              ? (error as { status: number }).status
+              : undefined;
           ctx.log.warn(
             {
               event: EVENT_NAMES.NODE_DEVELOPER_DECISION_COMPLETE,
@@ -352,6 +362,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
               nodeId: id,
               agentUserId: parsed.data.agentUserId,
               errorCode: "branch_push_provision_failed",
+              githubStatus,
               err: error instanceof Error ? error.message : String(error),
             },
             "branch_push_provision_failed"

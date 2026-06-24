@@ -30,13 +30,13 @@ import type { NodeAccessRole } from "@/shared/db/node-access-requests";
 
 import { AccessActions } from "./AccessActions.client";
 
-// What each role lets an agent do, for display — one distinct, least-privilege
-// role per capability (rbac.md §6). developer→can_flight, secrets_manager→
-// can_manage_secrets, production_promoter→can_promote_production. Extends 1:1.
+// What each role lets an agent do, for display (rbac.md §6/§6a). developer→can_flight
+// AND GitHub branch-push on the node repo; secrets_manager→can_manage_secrets;
+// production_promoter→can_promote_production. Lead with the role, then its grants.
 const ROLE_CAPABILITY: Record<NodeAccessRole, string> = {
-  developer: "Candidate flight",
-  secrets_manager: "Manage secrets",
-  production_promoter: "Promote to production",
+  developer: "Developer — flight + GitHub branch-push",
+  secrets_manager: "Secrets manager — manage secrets",
+  production_promoter: "Production promoter — promote to prod",
 };
 
 interface Props {
