@@ -14,6 +14,7 @@
 
 import type { ToolSourcePort } from "@cogni/ai-core";
 import type {
+  ComputeResourcePort,
   EdoCapability,
   KnowledgeCapability,
   MetricsCapability,
@@ -133,6 +134,7 @@ import {
 } from "@/adapters/test";
 import { createToolBindings } from "@/bootstrap/ai/tool-bindings";
 import { createBoundToolSource } from "@/bootstrap/ai/tool-source.factory";
+import { createComputeCapability } from "@/bootstrap/capabilities/compute";
 import {
   createMetricsCapability,
   derivePrometheusQueryUrl,
@@ -233,6 +235,8 @@ export interface Container {
   scheduleManager: ScheduleUserPort;
   /** Metrics capability for AI tools - requires PROMETHEUS_URL to be configured */
   metricsCapability: MetricsCapability;
+  /** Compute-substrate balance reads (story.5011) — stub (empty) until CHERRY_AUTH_TOKEN is on the runtime */
+  computeCapability: ComputeResourcePort;
   /** Web search capability for AI tools - requires TAVILY_API_KEY to be configured */
   webSearchCapability: WebSearchCapability;
   /** Repo capability for AI tools - requires COGNI_REPO_PATH */
@@ -590,6 +594,9 @@ function createContainer(): Container {
   // MetricsCapability for AI tools (requires PROMETHEUS_URL)
   const metricsCapability = createMetricsCapability(env);
 
+  // ComputeResourcePort balance reads (requires CHERRY_AUTH_TOKEN; empty stub otherwise)
+  const computeCapability = createComputeCapability(env);
+
   // WebSearchCapability for AI tools (requires TAVILY_API_KEY)
   const webSearchCapability = createWebSearchCapability(env);
 
@@ -900,6 +907,7 @@ function createContainer(): Container {
     graphRunRepository,
     scheduleManager,
     metricsCapability,
+    computeCapability,
     webSearchCapability,
     repoCapability,
     vcsCapability,

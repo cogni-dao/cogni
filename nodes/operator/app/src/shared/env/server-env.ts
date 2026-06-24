@@ -212,6 +212,18 @@ export const serverSchema = z.object({
   ANALYTICS_K_THRESHOLD: z.coerce.number().int().positive().default(50),
   ANALYTICS_QUERY_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
 
+  // Compute-substrate spend awareness (story.5011). CHERRY_AUTH_TOKEN is the same Cherry
+  // Servers API token used for provisioning; here it powers the READ-only balance read
+  // exposed on-demand via GET /api/v1/compute/balances (ComputeResourcePort + CherryComputeAdapter).
+  // Optional: when unset the compute capability returns no balances (graceful degradation)
+  // until ESO surfaces the token onto the operator runtime.
+  CHERRY_AUTH_TOKEN: optionalString,
+  COMPUTE_BALANCE_QUERY_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(5000),
+
   // EVM RPC - On-chain verification (Phase 3)
   // Required for production/preview/dev; not used in test mode (FakeEvmOnchainClient)
   EVM_RPC_URL: optionalUrl,

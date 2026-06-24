@@ -75,6 +75,12 @@ export {
   type LangfuseAdapterConfig,
   type LangfuseSpanHandle,
 } from "./ai-telemetry/langfuse.adapter";
+export {
+  CherryComputeAdapter,
+  type CherryComputeAdapterConfig,
+  CherryComputeError,
+  type CherryComputeErrorCode,
+} from "./compute/cherry-compute.adapter";
 // Connection broker adapter
 export {
   ConnectionDecryptionError,
