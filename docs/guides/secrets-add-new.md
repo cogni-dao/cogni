@@ -16,7 +16,58 @@ tags:
 
 # Add or Update a Service Secret
 
-Updating a pod-consumed secret is a control-plane operation: OpenBao write, ESO sync, pod restart proof. Do not edit pod specs, create per-secret ExternalSecrets, or hand-edit k8s Secret YAML.
+## The path: self-serve API
+
+The intended way a node owner sets a vendor/human secret value is the
+**self-serve operator API** — you hold only a Cogni **API key** plus a
+`secrets_manager` OpenFGA grant on the node; **no kubeconfig, no OpenBao token,
+no SSH**:
+
+```
+POST /api/v1/nodes/<id>/secrets
+Body: { "env": "candidate-a", "key": "X_OAUTH_CLIENT_SECRET", "value": "…", "op": "set" }
+→ 200 { written, version, path }   # path = cogni/<env>/<node>/<KEY>, never the value
+```
+
+The operator pod performs the OpenBao write with its **own** projected-SA
+identity (`resolveNodeRef` + the shared `withNodeRbac` seam in
+[`src/app/_lib/node-rbac.ts`](../../nodes/operator/app/src/app/_lib/node-rbac.ts)),
+checks `can_manage_secrets ← secrets_manager` (fail-closed), refuses
+substrate-reserved keys, and writes only its own env. See
+[§2 Choose The Writer Lane](#2-choose-the-writer-lane) for the full lane table
+and [`node-self-serve-secrets.md`](../design/node-self-serve-secrets.md) for the
+design.
+
+> **RBAC is `secrets_manager`, not `developer`.** `developer → can_flight`
+> (logs/flight); secret writes are a **distinct** grant
+> (`can_manage_secrets ← secrets_manager`, both ∪ `admin`). Requesting
+> `developer` and expecting a secret-write succeeds is the trap — the right
+> answer to the wrong role is `403 authz_denied`.
+
+### Per-env status (canonical — link here, do not re-state)
+
+This is the one place the per-env reality lives. The self-serve API is **code-deployed
+on every env**, but the OpenBao writer role + RBAC store + Reloader controller are
+only fully provisioned on candidate-a today.
+
+| Env           | Self-serve write | Why                                                                                                                                                                                                                                                                                                                                                                                |
+| ------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `candidate-a` | ✅ PROVEN e2e    | End-to-end, including a **non-operator node** (`node-template`, `200 written`).                                                                                                                                                                                                                                                                                                    |
+| `preview`     | ⛔ NOT proven    | Likely no OpenFGA store (→ `503 authz_unavailable`) + `preview-node-secrets-writer` role unverified + Reloader gaps.                                                                                                                                                                                                                                                               |
+| `production`  | ⛔ 503           | Code deployed but `createOperatorSecretsPlane` throws: `production-node-secrets-writer` OpenBao role not provisioned ([`bug.5007`](https://cognidao.org/work/items/bug.5007)); prod OpenFGA `secrets_manager` bootstrap unverified; prod likely lacks the Stakater Reloader controller ([`bug.5040`](https://cognidao.org/work/items/bug.5040)) so a write would not roll the pod. |
+
+Until preview/prod are provisioned, a vendor value for those envs goes through the
+**break-glass operator-admin CLI** ([§3–8 below](#3-recover-kube-custody)) against
+that env's OpenBao — kube + writer JWT, admin-only.
+
+> The CLI path (`pnpm secrets:set`, §3–8) is **legacy / break-glass / day-2 admin**,
+> not the node-dev contract. Reach for it only for the envs/cases the self-serve API
+> cannot yet serve (preview/prod, cross-env). It is documented here for completeness,
+> not as the default.
+
+`source: agent` keys (DB creds, DSNs, `AUTH_SECRET`, `CONNECTIONS_ENCRYPTION_KEY`,
+`GH_WEBHOOK_SECRET`) are **never** hand-set on either lane — they are substrate-minted
+per node and denylisted (`node-secrets-reserved.data.ts`). See §2.
 
 ## First Gate
 
@@ -113,13 +164,15 @@ Identify:
 
 ## 2. Choose The Writer Lane
 
-Three lanes, by `source` and who you are. Pick before you touch anything.
+Three lanes, by `source` and who you are. Pick before you touch anything. The
+**self-serve API is the default lane** for a node owner; the CLI lane is
+break-glass admin (see the [per-env status](#per-env-status-canonical--link-here-do-not-re-state)).
 
-| Value kind                                                                                                | Lane                                                                                                     | Who runs it                        |
-| --------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | ---------------------------------- |
-| `source: agent` (generated/derived — `AUTH_SECRET`, `CONNECTIONS_ENCRYPTION_KEY`, DB creds, DSNs, tokens) | **Never set by hand.** `secret-materialize` mints it per node on every flight/promote.                   | the substrate (CI), automatically  |
-| `source: human` vendor value (OAuth secret, API key) — **same env as the operator you call**              | **Self-serve API**: `POST /api/v1/nodes/<id>/secrets` with only an API key + `can_manage_secrets` grant. | node owner / their agent           |
-| `source: human` vendor value — **different env** than any operator that knows the node                    | **Operator-admin CLI** (§3–8 below) against the target env's OpenBao.                                    | operator-admin (kube + writer JWT) |
+| Value kind                                                                                                                                  | Lane                                                                                                                | Who runs it                        |
+| ------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| `source: agent` (generated/derived — `AUTH_SECRET`, `CONNECTIONS_ENCRYPTION_KEY`, DB creds, DSNs, tokens)                                   | **Never set by hand.** `secret-materialize` mints it per node on every flight/promote.                              | the substrate (CI), automatically  |
+| `source: human` vendor value (OAuth secret, API key) — **same env as the operator you call**                                                | ✅ **THE PATH — Self-serve API**: `POST /api/v1/nodes/<id>/secrets` with only an API key + `secrets_manager` grant. | node owner / their agent           |
+| `source: human` vendor value — **different env** than any operator that knows the node, OR an env the API does not yet serve (preview/prod) | ⚠️ **Break-glass operator-admin CLI** (§3–8 below) against the target env's OpenBao.                                | operator-admin (kube + writer JWT) |
 
 > **🚫 Do not self-serve a `source: agent` key.** It is minted fresh per node
 > and is on the route's substrate-reserved denylist
@@ -169,6 +222,16 @@ flight/promote using the env writer role from CI — no laptop kubeconfig, OpenB
 root token, or Derek-owned GitHub credential. The GitHub Actions OIDC writer-role
 workflow (`gha-<env>-writer`) for human values is still unbuilt; until it exists
 the CLI path below is the operator day-2 path for cross-env human values.
+
+## CLI / kube path (§3–8) — LEGACY / BREAK-GLASS ADMIN
+
+> **⚠️ This is the break-glass / day-2 admin lane, not the node-dev contract.**
+> Use it only when the [self-serve API](#the-path-self-serve-api) cannot serve
+> your case — an env not yet provisioned (preview/prod, see the
+> [per-env status](#per-env-status-canonical--link-here-do-not-re-state)), or a
+> cross-env write. It requires kube custody + a short-lived OpenBao writer JWT
+> and is operator-admin-only. A node owner adding a vendor secret on candidate-a
+> should never reach this far.
 
 ## 3. Recover Kube Custody
 

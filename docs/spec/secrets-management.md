@@ -432,20 +432,29 @@ through GitHub Environment protection rules.
 
 ```
 POST /api/v1/nodes/<id>/secrets
-Body: { key, value, op: "set" | "rotate" }
+Body: { env, key, value, op: "set" | "rotate" }   # env is a REQUIRED FLIGHT_ENVS value
 Response: 200 { written, version, path }   # path = cogni/<env>/<node>/<KEY>, no value
 ```
 
-A node-owner granted OpenFGA `developer` on the node sets/rotates a node-scoped
+A node-owner granted OpenFGA `secrets_manager` on the node sets/rotates a node-scoped
 **A2 value** through the operator holding only an **API key** — no kubeconfig, no
-writer JWT. The operator checks `can_manage_secrets` (per-node, fail-closed: 503 on
+writer JWT. The required `env` field is validated == this operator's own
+`DEPLOY_ENVIRONMENT` (else `409 wrong_operator_env`); the path env stays the
+operator's own. The operator checks `can_manage_secrets ← secrets_manager`
+(per-node, fail-closed: 503 on
 `authz_unavailable`, 403 on deny — never owner-fallback), enforces the catalog
 allowlist and the OpenBao `_system`/`_shared` policy deny, then writes
 `cogni/data/<env>/<node>/<KEY>` with the operator pod's **OWN** in-cluster OpenBao
 identity (projected SA token → k8s-auth over ClusterIP). The value transits TLS to
-the operator and never leaves it; env + node slug are operator-stamped from the
-OpenFGA-authorized resource, never the request body. Per-node isolation is
-**tuple-based** (OpenFGA), not a shared writer token. Spec + roadmap:
+the operator and never leaves it; the node slug is operator-stamped from the
+OpenFGA-authorized resource and env is validated against the operator's own.
+Per-node isolation is **tuple-based** (OpenFGA), not a shared writer token.
+**Provisioned per-env on candidate-a only today** — preview/prod are gated
+([`bug.5007`](https://cognidao.org/work/items/bug.5007) writer role,
+[`bug.5040`](https://cognidao.org/work/items/bug.5040) Reloader); the canonical
+per-env status table lives in
+[`secrets-add-new.md`](../guides/secrets-add-new.md#per-env-status-canonical--link-here-do-not-re-state).
+Spec + roadmap:
 [`docs/design/node-self-serve-secrets.md`](../design/node-self-serve-secrets.md).
 
 > Supersedes the prior shape-only `secrets/declare` sketch (agent declares shape,
