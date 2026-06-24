@@ -54,7 +54,9 @@ describe("normalizeErrorToExecutionCode — fault-party before bucket", () => {
 
   it("preserves an explicit insufficient_credits AiExecutionError (user balance path)", () => {
     expect(
-      normalizeErrorToExecutionCode(new AiExecutionError("insufficient_credits"))
+      normalizeErrorToExecutionCode(
+        new AiExecutionError("insufficient_credits")
+      )
     ).toBe("insufficient_credits");
   });
 
