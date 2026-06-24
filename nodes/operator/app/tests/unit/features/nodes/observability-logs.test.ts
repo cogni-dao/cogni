@@ -264,8 +264,8 @@ describe("resolveLogWindow", () => {
   });
 
   it("throws ObservabilityQueryError instances", () => {
-    expect(() =>
-      resolveLogWindow({ nowMs: NOW, start: "bad" })
-    ).toThrow(ObservabilityQueryError);
+    expect(() => resolveLogWindow({ nowMs: NOW, start: "bad" })).toThrow(
+      ObservabilityQueryError
+    );
   });
 });
