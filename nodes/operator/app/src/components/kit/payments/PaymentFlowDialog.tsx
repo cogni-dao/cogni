@@ -211,7 +211,7 @@ export function PaymentFlowDialog({
                   <p className="font-semibold text-foreground text-lg">
                     {error?.title ?? "Payment didn't complete"}
                   </p>
-                  <p className="text-balance text-muted-foreground text-sm leading-relaxed">
+                  <p className="text-muted-foreground text-sm leading-relaxed">
                     {error?.message ??
                       "Something interrupted the payment. No funds were moved."}
                   </p>
