@@ -4,6 +4,8 @@
 /**
  * Module: `@adapters/server/vcs/github-repo-write`
  * Purpose: Operator-only helper that mints node repos, commits files, and opens pull requests via the GitHub App.
+ *   At formation it also replicates the monorepo's merge gate onto the node verbatim: branch
+ *   protection, canonical merge settings (squash-only, auto-merge), and the `merge_queue` ruleset.
  * Scope: Thin Octokit calls behind node formation and candidate-flight prep.
  *   Does not belong in `VcsCapability` because that capability is shared with poly/resy/node-template stubs
  *   and these write ops are operator-only.
@@ -356,6 +358,86 @@ export function protectionGetToPutPayload(src: ProtectionResponse): {
       src.required_conversation_resolution?.enabled ?? false,
     lock_branch: src.lock_branch?.enabled ?? false,
     allow_fork_syncing: src.allow_fork_syncing?.enabled ?? false,
+  };
+}
+
+/** The canonical name of the merge-queue ruleset (matches infra/github/merge-queue-ruleset.json). */
+export const MERGE_QUEUE_RULESET_NAME = "main-merge-queue";
+
+/** Subset of GET /repos/{owner}/{repo}/rulesets/{id} that we replicate onto a node repo. */
+interface RulesetResponse {
+  readonly name?: string;
+  readonly target?: string;
+  readonly enforcement?: string;
+  readonly conditions?: {
+    readonly ref_name?: {
+      readonly include?: readonly string[];
+      readonly exclude?: readonly string[];
+    };
+  } | null;
+  readonly rules?: ReadonlyArray<{
+    readonly type: string;
+    readonly parameters?: Record<string, unknown>;
+  }>;
+  readonly bypass_actors?: ReadonlyArray<{
+    readonly actor_id?: number | null;
+    readonly actor_type?: string;
+    readonly bypass_mode?: string;
+  }>;
+}
+
+/** Flat POST/PUT body for the rulesets API — the write-accepted subset of a ruleset. */
+export interface RulesetWritePayload {
+  name: string;
+  target: "branch";
+  enforcement: "active" | "evaluate" | "disabled";
+  conditions: { ref_name: { include: string[]; exclude: string[] } };
+  rules: Array<{ type: string; parameters?: Record<string, unknown> }>;
+  bypass_actors: Array<{
+    actor_id: number | null;
+    actor_type: string;
+    bypass_mode: string;
+  }>;
+}
+
+/**
+ * Transform a GET ruleset response into the POST/PUT body, copying the source
+ * verbatim for the fields a write accepts (name, target, enforcement, conditions,
+ * rules, bypass_actors) and dropping the read-only envelope (id, source, `*_at`,
+ * node_id, `_links`, current_user_can_bypass). VERBATIM — the monorepo's ruleset
+ * is the single source of truth, including any bypass actors it declares (our
+ * canonical fixture declares none). Pure; exported for unit tests.
+ */
+export function rulesetGetToPutPayload(
+  src: RulesetResponse
+): RulesetWritePayload {
+  const refName = src.conditions?.ref_name;
+  const enforcement =
+    src.enforcement === "active" ||
+    src.enforcement === "evaluate" ||
+    src.enforcement === "disabled"
+      ? src.enforcement
+      : "active";
+  return {
+    name: src.name ?? MERGE_QUEUE_RULESET_NAME,
+    target: "branch",
+    enforcement,
+    conditions: {
+      ref_name: {
+        include: [...(refName?.include ?? ["~DEFAULT_BRANCH"])],
+        exclude: [...(refName?.exclude ?? [])],
+      },
+    },
+    rules: (src.rules ?? []).map((r) =>
+      r.parameters
+        ? { type: r.type, parameters: { ...r.parameters } }
+        : { type: r.type }
+    ),
+    bypass_actors: (src.bypass_actors ?? []).map((a) => ({
+      actor_id: a.actor_id ?? null,
+      actor_type: a.actor_type ?? "RepositoryRole",
+      bypass_mode: a.bypass_mode ?? "always",
+    })),
   };
 }
 
@@ -1382,6 +1464,21 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
         owner,
         slug
       );
+      // Born with the monorepo's merge mechanism too: canonical repo merge
+      // settings (squash-only, auto-merge on, delete-on-merge — auto-merge is
+      // REQUIRED for the queue path) + the `merge_queue` ruleset copied verbatim
+      // from the monorepo. The queue is admin-opt-in on the monorepo, so when it
+      // is not yet enabled there this is a clean skip (the node mirrors the
+      // monorepo: born queue-less). See docs/spec/merge-authority.md.
+      await this.ensureCanonicalMergeSettings(octokit, owner, slug);
+      await this.replicateMergeQueue(
+        sourceOctokit,
+        input.protectionSourceOwner,
+        input.protectionSourceRepo,
+        octokit,
+        owner,
+        slug
+      );
     }
     return { cloneUrl, headSha: commit.sha };
   }
@@ -2030,6 +2127,126 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
         ...protectionGetToPutPayload(source),
       }
     );
+  }
+
+  /**
+   * Set a node repo's canonical merge settings (squash-only, auto-merge enabled,
+   * delete-branch-on-merge) — mirrors `setup-main-branch.sh` step 1. `allow_auto_merge`
+   * is REQUIRED for the merge-queue path: `mergePr` enables auto-merge to route a PR
+   * through the queue, which fails if the repo forbids it. Idempotent.
+   */
+  private async ensureCanonicalMergeSettings(
+    octokit: Octokit,
+    owner: string,
+    repo: string
+  ): Promise<void> {
+    await octokit.request("PATCH /repos/{owner}/{repo}", {
+      owner,
+      repo,
+      allow_squash_merge: true,
+      allow_merge_commit: false,
+      allow_rebase_merge: false,
+      delete_branch_on_merge: true,
+      allow_auto_merge: true,
+    });
+  }
+
+  /**
+   * Copy the monorepo's `merge_queue` ruleset VERBATIM onto the new node repo, so the
+   * node requires the same queue the network does. PROTECTION_HAS_ONE_SSOT extends to
+   * the queue: the monorepo is the source of truth.
+   *
+   * Unlike branch protection (which MUST exist — an unprotected node is unformed), the
+   * queue is admin-opt-in on the monorepo. When the monorepo has no `merge_queue`
+   * ruleset this is a clean SKIP (logged, not an error): the node mirrors the monorepo
+   * and is born queue-less. Once an admin enables the queue ruleset on the monorepo,
+   * every subsequently-formed node inherits it automatically. Idempotent on the target
+   * (find-by-name → PUT, else POST). See docs/spec/merge-authority.md.
+   */
+  private async replicateMergeQueue(
+    sourceOctokit: Octokit,
+    sourceOwner: string,
+    sourceRepo: string,
+    targetOctokit: Octokit,
+    targetOwner: string,
+    targetRepo: string
+  ): Promise<void> {
+    // 1. Find the queue ruleset on the source (summary list has no rules; match by name).
+    const { data: sourceRulesets } = await sourceOctokit.request(
+      "GET /repos/{owner}/{repo}/rulesets",
+      { owner: sourceOwner, repo: sourceRepo }
+    );
+    const summary = (
+      sourceRulesets as ReadonlyArray<{ id: number; name: string }>
+    ).find((r) => r.name === MERGE_QUEUE_RULESET_NAME);
+    if (!summary) {
+      // Source has no `main-merge-queue` ruleset — the queue is admin-opt-in on the
+      // monorepo and not yet enabled. Clean skip: the node mirrors the monorepo and is
+      // born queue-less. Re-runs once the monorepo gains the ruleset will replicate it.
+      return;
+    }
+
+    // 2. GET the full ruleset (with rules + parameters) and build the write payload.
+    const { data: full } = await sourceOctokit.request(
+      "GET /repos/{owner}/{repo}/rulesets/{ruleset_id}",
+      { owner: sourceOwner, repo: sourceRepo, ruleset_id: summary.id }
+    );
+    const payload = rulesetGetToPutPayload(full as RulesetResponse);
+
+    // 3. Idempotent apply on the target: PUT if a same-named ruleset exists, else POST.
+    const { data: targetRulesets } = await targetOctokit.request(
+      "GET /repos/{owner}/{repo}/rulesets",
+      { owner: targetOwner, repo: targetRepo }
+    );
+    const existing = (
+      targetRulesets as ReadonlyArray<{ id: number; name: string }>
+    ).find((r) => r.name === MERGE_QUEUE_RULESET_NAME);
+    try {
+      if (existing) {
+        await this.requestRaw(
+          targetOctokit,
+          "PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}",
+          {
+            owner: targetOwner,
+            repo: targetRepo,
+            ruleset_id: existing.id,
+            ...payload,
+          }
+        );
+      } else {
+        await this.requestRaw(
+          targetOctokit,
+          "POST /repos/{owner}/{repo}/rulesets",
+          { owner: targetOwner, repo: targetRepo, ...payload }
+        );
+      }
+    } catch (err) {
+      // QUEUE_IS_BEST_EFFORT: the `merge_queue` ruleset rule is an organization /
+      // GitHub-Team feature — a node minted under a PERSONAL account (or a plan
+      // without it) returns 403/422 (verified against GitHub: same payload accepted
+      // on an org repo, rejected on a personal one). The queue is an enhancement, not
+      // the merge-on-green backstop (branch protection is), so a node that cannot
+      // carry it is still a formed node: skip, don't fail formation. Other errors
+      // (auth, network) are real — rethrow.
+      const status = (err as { status?: number })?.status;
+      if (status === 403 || status === 422) return;
+      throw err;
+    }
+  }
+
+  /**
+   * Issue a GitHub request through octokit's LOOSE (`route: string`) overload. The
+   * generated rulesets write-params (enum unions, discriminated rule parameters) are
+   * stricter than our verbatim-copied `RulesetWritePayload`, which is runtime-correct
+   * but not statically assignable to them. Typing `route` as `string` selects the
+   * generic overload whose body is `RequestParameters`, accepting the dynamic payload.
+   */
+  private async requestRaw(
+    octokit: Octokit,
+    route: string,
+    params: Record<string, unknown>
+  ): Promise<void> {
+    await octokit.request(route, params);
   }
 
   private async ensureActionsEnabled(

@@ -42,7 +42,9 @@ vi.mock("@octokit/core", () => ({
 
 import {
   GitHubRepoWriter,
+  MERGE_QUEUE_RULESET_NAME,
   protectionGetToPutPayload,
+  rulesetGetToPutPayload,
 } from "@/adapters/server/vcs/github-repo-write";
 
 function statusError(
@@ -66,6 +68,12 @@ function installFetchMock(): void {
 
 function setHappyForkHandlers(): void {
   routeHandlers = {
+    // Canonical merge settings (squash-only, auto-merge, delete-on-merge) — applied
+    // to the node by ensureCanonicalMergeSettings during forkFromTemplate.
+    "PATCH /repos/{owner}/{repo}": () => ({}),
+    // Merge-queue replication source lookup. Default: the monorepo has no queue
+    // ruleset (admin-opt-in), so replicateMergeQueue finds nothing and skips.
+    "GET /repos/{owner}/{repo}/rulesets": () => [],
     "POST /repos/{owner}/{repo}/forks": (params) => {
       expect(params).toMatchObject({
         owner: "Cogni-DAO",
@@ -340,6 +348,99 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
       required_pull_request_reviews: null,
       restrictions: null,
     });
+  });
+
+  it("replicates the monorepo's merge_queue ruleset onto the node when present", async () => {
+    setHappyForkHandlers();
+    routeHandlers["GET /repos/{owner}/{repo}/branches/{branch}/protection"] =
+      () => ({
+        required_status_checks: { strict: false, contexts: ["unit"] },
+        enforce_admins: { enabled: false },
+        required_pull_request_reviews: null,
+      });
+    routeHandlers["PUT /repos/{owner}/{repo}/branches/{branch}/protection"] =
+      () => ({});
+    // Source (monorepo) HAS the queue ruleset; target (node) has none → POST.
+    routeHandlers["GET /repos/{owner}/{repo}/rulesets"] = (params) =>
+      params.repo === "cogni" ? [{ id: 77, name: "main-merge-queue" }] : [];
+    routeHandlers["GET /repos/{owner}/{repo}/rulesets/{ruleset_id}"] = () => ({
+      name: "main-merge-queue",
+      target: "branch",
+      enforcement: "active",
+      conditions: { ref_name: { include: ["~DEFAULT_BRANCH"], exclude: [] } },
+      rules: [{ type: "merge_queue", parameters: { merge_method: "SQUASH" } }],
+    });
+    routeHandlers["POST /repos/{owner}/{repo}/rulesets"] = () => ({ id: 99 });
+
+    await makeWriter().forkFromTemplate({
+      templateOwner: "Cogni-DAO",
+      owner: "Cogni-DAO",
+      slug: "atlas",
+      nodeId: "11111111-1111-4111-8111-111111111111",
+      chainId: 8453,
+      protectionSourceOwner: "Cogni-DAO",
+      protectionSourceRepo: "cogni",
+    });
+
+    // The node got canonical merge settings (auto-merge ON) + the queue ruleset POSTed.
+    const patch = requests.find(
+      (r) => r.route === "PATCH /repos/{owner}/{repo}"
+    );
+    expect(patch?.params).toMatchObject({
+      owner: "Cogni-DAO",
+      repo: "atlas",
+      allow_auto_merge: true,
+      allow_squash_merge: true,
+    });
+    const post = requests.find(
+      (r) => r.route === "POST /repos/{owner}/{repo}/rulesets"
+    );
+    expect(post?.params).toMatchObject({
+      owner: "Cogni-DAO",
+      repo: "atlas",
+      name: "main-merge-queue",
+      enforcement: "active",
+    });
+  });
+
+  it("does NOT fail formation when the node repo cannot carry a merge queue (422/403)", async () => {
+    // QUEUE_IS_BEST_EFFORT: the merge_queue ruleset is org/Team-only — a personal-account
+    // node 422s. The queue is an enhancement (branch protection is the backstop), so
+    // formation must still succeed; the node is born queue-less.
+    setHappyForkHandlers();
+    routeHandlers["GET /repos/{owner}/{repo}/branches/{branch}/protection"] =
+      () => ({
+        required_status_checks: { strict: false, contexts: ["unit"] },
+        enforce_admins: { enabled: false },
+        required_pull_request_reviews: null,
+      });
+    routeHandlers["PUT /repos/{owner}/{repo}/branches/{branch}/protection"] =
+      () => ({});
+    routeHandlers["GET /repos/{owner}/{repo}/rulesets"] = (params) =>
+      params.repo === "cogni" ? [{ id: 77, name: "main-merge-queue" }] : [];
+    routeHandlers["GET /repos/{owner}/{repo}/rulesets/{ruleset_id}"] = () => ({
+      name: "main-merge-queue",
+      target: "branch",
+      enforcement: "active",
+      conditions: { ref_name: { include: ["~DEFAULT_BRANCH"], exclude: [] } },
+      rules: [{ type: "merge_queue", parameters: { merge_method: "SQUASH" } }],
+    });
+    routeHandlers["POST /repos/{owner}/{repo}/rulesets"] = () =>
+      Promise.reject(
+        statusError(422, "Invalid rule 'merge_queue': unsupported on this plan")
+      );
+
+    // Resolves (no throw) despite the queue write failing.
+    const result = await makeWriter().forkFromTemplate({
+      templateOwner: "Cogni-DAO",
+      owner: "Cogni-DAO",
+      slug: "atlas",
+      nodeId: "11111111-1111-4111-8111-111111111111",
+      chainId: 8453,
+      protectionSourceOwner: "Cogni-DAO",
+      protectionSourceRepo: "cogni",
+    });
+    expect(result.headSha).toBeTruthy();
   });
 
   it("fails loud when the monorepo source is unprotected (404)", async () => {
@@ -1995,5 +2096,79 @@ describe("protectionGetToPutPayload", () => {
       require_code_owner_reviews: false,
       required_approving_review_count: 2,
     });
+  });
+});
+
+describe("rulesetGetToPutPayload", () => {
+  it("copies the merge_queue ruleset verbatim, dropping the read-only envelope", () => {
+    const put = rulesetGetToPutPayload({
+      // read-only envelope fields a real GET returns — must be stripped:
+      // (id, source, source_type, created_at, updated_at, node_id, _links)
+      name: MERGE_QUEUE_RULESET_NAME,
+      target: "branch",
+      enforcement: "active",
+      conditions: { ref_name: { include: ["~DEFAULT_BRANCH"], exclude: [] } },
+      rules: [
+        {
+          type: "merge_queue",
+          parameters: {
+            merge_method: "SQUASH",
+            grouping_strategy: "ALLGREEN",
+            min_entries_to_merge: 1,
+            max_entries_to_merge: 5,
+            max_entries_to_build: 5,
+            min_entries_to_merge_wait_minutes: 5,
+            check_response_timeout_minutes: 60,
+          },
+        },
+      ],
+    });
+    expect(put).toEqual({
+      name: MERGE_QUEUE_RULESET_NAME,
+      target: "branch",
+      enforcement: "active",
+      conditions: { ref_name: { include: ["~DEFAULT_BRANCH"], exclude: [] } },
+      rules: [
+        {
+          type: "merge_queue",
+          parameters: {
+            merge_method: "SQUASH",
+            grouping_strategy: "ALLGREEN",
+            min_entries_to_merge: 1,
+            max_entries_to_merge: 5,
+            max_entries_to_build: 5,
+            min_entries_to_merge_wait_minutes: 5,
+            check_response_timeout_minutes: 60,
+          },
+        },
+      ],
+      bypass_actors: [],
+    });
+  });
+
+  it("preserves bypass_actors verbatim (monorepo is the SSOT, incl. any bypass)", () => {
+    const put = rulesetGetToPutPayload({
+      name: MERGE_QUEUE_RULESET_NAME,
+      target: "branch",
+      enforcement: "active",
+      conditions: { ref_name: { include: ["~DEFAULT_BRANCH"], exclude: [] } },
+      rules: [{ type: "merge_queue", parameters: { merge_method: "SQUASH" } }],
+      bypass_actors: [
+        { actor_id: 5, actor_type: "Integration", bypass_mode: "always" },
+      ],
+    });
+    expect(put.bypass_actors).toEqual([
+      { actor_id: 5, actor_type: "Integration", bypass_mode: "always" },
+    ]);
+  });
+
+  it("falls back to safe defaults when fields are absent", () => {
+    const put = rulesetGetToPutPayload({});
+    expect(put.name).toBe(MERGE_QUEUE_RULESET_NAME);
+    expect(put.target).toBe("branch");
+    expect(put.enforcement).toBe("active");
+    expect(put.conditions.ref_name.include).toEqual(["~DEFAULT_BRANCH"]);
+    expect(put.rules).toEqual([]);
+    expect(put.bypass_actors).toEqual([]);
   });
 });

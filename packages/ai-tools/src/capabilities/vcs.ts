@@ -57,6 +57,13 @@ export interface CiStatusResult {
 /** Result of merging a pull request. */
 export interface MergeResult {
   readonly merged: boolean;
+  /**
+   * True when the PR was added to the merge queue instead of merged directly —
+   * the base branch requires a merge queue, so the merge happens asynchronously
+   * on the queue's rebased candidate. Mutually exclusive with `merged`; `sha` is
+   * undefined in this case (the merged SHA is not known until the queue drains).
+   */
+  readonly enqueued?: boolean;
   readonly sha?: string;
   readonly message: string;
   /**

@@ -250,6 +250,22 @@ describe("POST /api/v1/vcs/merge", () => {
     });
   });
 
+  it("enqueues (async) when the base branch requires a merge queue — no sha, schema-valid", async () => {
+    grant(NODE_ID);
+    fakeVcs.mergePr.mockResolvedValue({
+      merged: false,
+      enqueued: true,
+      message: "Pull request added to the merge queue",
+    });
+    const res = await post({ prNumber: 42, nodeId: NODE_SLUG });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(mergeOperation.output.safeParse(body).success).toBe(true);
+    expect(body.merged).toBe(false);
+    expect(body.enqueued).toBe(true);
+    expect(body.sha).toBeUndefined();
+  });
+
   it("node-scoped: catalog_missing is a 404, NEVER a silent retarget to the monorepo", async () => {
     grant(NODE_ID);
     mockResolveNodeRepo.mockRejectedValue(

@@ -17,6 +17,11 @@
     "Tuned for ~1-2 PR/day MVP cadence: queue depth ~= 0, fast feedback, low burn.",
     "Re-tune if observed depth > 2 sustained or merge wait > 30 min.",
     "",
+    "ORG-ONLY: the `merge_queue` ruleset rule is an organization / GitHub-Team feature. Verified",
+    "against GitHub: this exact payload is accepted on an org repo (cogni-dao/*) and rejected (422)",
+    "on a personal-account repo. Operator-minted nodes live under the org owner, so this applies; a",
+    "node under a personal account is born queue-less (node formation skips the queue on 403/422).",
+    "",
     "Apply: bash infra/github/setup-main-branch.sh [<owner>/<repo>] (idempotent POST-or-PUT by name)."
   ],
   "name": "main-merge-queue",

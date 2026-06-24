@@ -6,6 +6,9 @@
  * Purpose: VcsCapability adapter using Octokit + GitHub App authentication.
  * Scope: Implements VcsCapability for GitHub API operations (list PRs, CI status, merge, create branch, dispatch candidate-flight).
  * Invariants:
+ *   - MERGE_IS_QUEUE_TOLERANT: `mergePr` detects the base branch's merge-queue state (GraphQL
+ *     `mergeQueue`) and either direct-merges (no queue → `merged` + `sha`) or enqueues via
+ *     `enablePullRequestAutoMerge` (queue required → `enqueued`, async, no `sha`).
  *   - AUTH_VIA_APP: Uses @octokit/auth-app for GitHub App JWT + installation token management
  *   - INSTALLATION_CACHED: Installation ID resolved once per owner/repo and cached
  *   - TOKEN_AUTO_REFRESH: Octokit auth-app handles token caching and refresh automatically
@@ -280,6 +283,19 @@ export class GitHubVcsAdapter implements VcsCapability {
     }
   }
 
+  /**
+   * Merge a PR — queue-tolerant. When the base branch requires a merge queue,
+   * GitHub `405`s a direct `PUT .../merge`, so we instead enable auto-merge
+   * (`enablePullRequestAutoMerge`), which GitHub routes through the queue: the
+   * merge happens asynchronously on the queue's rebased candidate (`enqueued`,
+   * no `sha` yet). When no queue is required (today's state everywhere), we
+   * direct-merge exactly as before (`merged` + `sha`, synchronous). The branch's
+   * queue state is detected deterministically up front (GraphQL `mergeQueue`) so
+   * we never have to disambiguate a `405`.
+   *
+   * MERGED_XOR_ENQUEUED: the merge gate (caller) has already asserted the PR is
+   * green; this method only chooses the execution path by queue requirement.
+   */
   async mergePr(params: {
     owner: string;
     repo: string;
@@ -287,6 +303,41 @@ export class GitHubVcsAdapter implements VcsCapability {
     method: "squash" | "merge" | "rebase";
   }): Promise<MergeResult> {
     const octokit = await this.getOctokit(params.owner, params.repo);
+
+    // Resolve the PR's base branch + GraphQL node id once (node id is required by
+    // the auto-merge mutation; base ref drives the queue check).
+    let baseRef: string;
+    let prNodeId: string;
+    try {
+      const { data: pr } = await octokit.request(
+        "GET /repos/{owner}/{repo}/pulls/{pull_number}",
+        { owner: params.owner, repo: params.repo, pull_number: params.prNumber }
+      );
+      baseRef = pr.base.ref;
+      prNodeId = pr.node_id;
+    } catch (error) {
+      return this.toMergeFailure(error);
+    }
+
+    const queueEnabled = await this.isMergeQueueEnabled(
+      octokit,
+      params.owner,
+      params.repo,
+      baseRef
+    );
+
+    if (queueEnabled) {
+      try {
+        await this.enableAutoMerge(octokit, prNodeId, params.method);
+        return {
+          merged: false,
+          enqueued: true,
+          message: `Pull request added to the merge queue on '${baseRef}' (async — merge completes on the queue's rebased candidate)`,
+        };
+      } catch (error) {
+        return this.toMergeFailure(error);
+      }
+    }
 
     try {
       const { data } = await octokit.request(
@@ -301,26 +352,79 @@ export class GitHubVcsAdapter implements VcsCapability {
 
       return {
         merged: data.merged,
+        enqueued: false,
         sha: data.sha,
         message: data.message,
       };
     } catch (error) {
-      // Surface the GitHub HTTP status so callers classify structurally
-      // (405 = refused/not-mergeable/already-merged, 409 = head modified)
-      // rather than substring-matching the message.
-      const status =
-        error &&
-        typeof error === "object" &&
-        "status" in error &&
-        typeof (error as { status: unknown }).status === "number"
-          ? (error as { status: number }).status
-          : undefined;
-      const message = error instanceof Error ? error.message : "Merge failed";
-      // exactOptionalPropertyTypes: omit `status` rather than set it `undefined`.
-      return status === undefined
-        ? { merged: false, message }
-        : { merged: false, status, message };
+      return this.toMergeFailure(error);
     }
+  }
+
+  /**
+   * Normalize a thrown GitHub error into a failed `MergeResult`, surfacing the
+   * HTTP status so callers classify structurally (405 = refused/not-mergeable/
+   * already-merged, 409 = head modified) rather than substring-matching.
+   */
+  private toMergeFailure(error: unknown): MergeResult {
+    const status =
+      error &&
+      typeof error === "object" &&
+      "status" in error &&
+      typeof (error as { status: unknown }).status === "number"
+        ? (error as { status: number }).status
+        : undefined;
+    const message = error instanceof Error ? error.message : "Merge failed";
+    // exactOptionalPropertyTypes: omit `status` rather than set it `undefined`.
+    return status === undefined
+      ? { merged: false, enqueued: false, message }
+      : { merged: false, enqueued: false, status, message };
+  }
+
+  /**
+   * True when `branch` has an active merge queue (a `merge_queue` ruleset or the
+   * legacy "Require merge queue" toggle). GraphQL `repository.mergeQueue(branch)`
+   * returns a non-null node when one exists. Fail-open to `false` (direct merge)
+   * if the query errors — never block a merge on a flaky discovery call.
+   */
+  private async isMergeQueueEnabled(
+    octokit: Octokit,
+    owner: string,
+    repo: string,
+    branch: string
+  ): Promise<boolean> {
+    try {
+      const result = await octokit.graphql<{
+        repository: { mergeQueue: { id: string } | null } | null;
+      }>(
+        `query ($owner: String!, $repo: String!, $branch: String!) {
+          repository(owner: $owner, name: $repo) {
+            mergeQueue(branch: $branch) { id }
+          }
+        }`,
+        { owner, repo, branch }
+      );
+      return Boolean(result.repository?.mergeQueue?.id);
+    } catch {
+      return false;
+    }
+  }
+
+  /** Enable auto-merge on a PR (routes through the merge queue when required). */
+  private async enableAutoMerge(
+    octokit: Octokit,
+    pullRequestId: string,
+    method: "squash" | "merge" | "rebase"
+  ): Promise<void> {
+    const mergeMethod = method.toUpperCase(); // GraphQL PullRequestMergeMethod
+    await octokit.graphql(
+      `mutation ($pullRequestId: ID!, $mergeMethod: PullRequestMergeMethod!) {
+        enablePullRequestAutoMerge(input: { pullRequestId: $pullRequestId, mergeMethod: $mergeMethod }) {
+          pullRequest { id state }
+        }
+      }`,
+      { pullRequestId, mergeMethod }
+    );
   }
 
   async dispatchCandidateFlight(params: {
