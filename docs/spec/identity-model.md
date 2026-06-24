@@ -166,12 +166,26 @@ any node.
 
 Node-scoped developer control is a separate OpenFGA relationship:
 
-| Step           | Actor                        | System Fact                                                                                                                                  |
-| -------------- | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| Register       | External AI agent            | `users.id = agent_user_id`; bearer token resolves to `SessionUser.id`                                                                        |
-| Request        | `user:{agent_user_id}`       | Agent files an access request (`role=developer`) on one `node:{node_id}` → durable `node_access_requests` row (tracking only; not authority) |
-| Approve/reject | Node creator/admin           | `POST /api/v1/nodes/{node_id}/developers` writes or removes the OpenFGA tuple for that node                                                  |
-| Flight         | `user:{agent_user_id}` in V0 | `POST /api/v1/vcs/flight` checks `node.flight` on `node:{node_id}`                                                                           |
+| Step           | Actor                        | System Fact                                                                                                                                                                                |
+| -------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Register       | External AI agent            | `users.id = agent_user_id`; bearer token resolves to `SessionUser.id`                                                                                                                      |
+| Request        | `user:{agent_user_id}`       | Agent files an access request (`role=developer`) on one `node:{node_id}`, **declaring its own `githubLogin`** → durable `node_access_requests` row (tracking only; not authority)          |
+| Approve/reject | Node creator/admin           | `POST /api/v1/nodes/{node_id}/developers` writes/removes the OpenFGA tuple AND provisions/de-provisions **GitHub branch-push** for the declared login on the node's own repo (rbac.md §6a) |
+| Flight         | `user:{agent_user_id}` in V0 | `POST /api/v1/vcs/flight` checks `node.flight` on `node:{node_id}`                                                                                                                         |
+
+**Two planes from one grant (`TWO_PLANE_DEVELOPER_GRANT`, rbac.md §6a).** A `developer`
+approval grants the agent TWO things, keyed by TWO identities of the SAME agent: (1) the
+OpenFGA `developer` relation on `node:{node_id}` keyed by `user:{agent_user_id}` (→
+`can_flight`), and (2) GitHub `push` on the node's OWN repo keyed by the agent's **GitHub
+login**. The agent binds its GitHub identity by declaring `githubLogin` on its OWN access
+request (`SELF_REQUEST_ONLY`); the human approving supplies nothing
+(`PUSH_LOGIN_FROM_REQUEST`). The operator App is the privilege bridge — the agent never
+holds standing GitHub admin — and resolves the node's own repo from the catalog
+`source_repo` (NOT `nodes.repoOwner`/`repoName`, which is the submodule-parent monorepo;
+see bug.5054), then adds/removes the collaborator. The OpenFGA tuple is the SOLE authority
+for flight; branch-push is a best-effort side-effect that never reverses it. VNext:
+cryptographically prove the declared login (agent-native GitHub-identity proof →
+`user_bindings`) rather than trusting the owner's attestation at approve-time.
 
 The node creator/admin is the human RLS owner for the node registry row in V0.
 That RLS ownership authorizes the approval act; it must not be confused with

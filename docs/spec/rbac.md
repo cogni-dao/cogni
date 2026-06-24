@@ -392,13 +392,20 @@ New node spawn + external AI agent flow:
    durable, idempotent `node_access_requests` row (one per `(node, agent)`,
    re-request reopens it to `pending`) the owner sees in-UI. The row is
    tracking/UX only; it is never the authority.
-3. The node creator/admin approves or rejects in-UI. Approval writes the OpenFGA
-   role tuple `node:{node_id}#developer@user:{agent_user_id}` (V0) and transitions
-   the request row to `approved`; rejection removes the tuple and transitions the
-   row to `denied`/`revoked`. Operator API:
+3. The node creator/admin approves or rejects in-UI. Approval (a) writes the OpenFGA
+   role tuple `node:{node_id}#developer@user:{agent_user_id}` (V0), (b) **provisions
+   GitHub branch-push** on the node repo for the agent's bound GitHub login (see
+   §6a), and (c) transitions the request row to `approved`; rejection removes the
+   tuple, **de-provisions the collaborator**, and transitions the row to
+   `denied`/`revoked`. Operator API:
    `POST /api/v1/nodes/{node_id}/developers { agentUserId, decision }`.
 4. The flight route enforces `node.flight` (computed `can_flight from developer`)
    before touching GitHub.
+5. The agent **auto-accepts** the GitHub repo invitation with its own token
+   (`PATCH /user/repository_invitations/{id}`) — no human click. It then clones
+   `<owner>/<node>` directly, pushes feature branches, and opens in-repo PRs.
+   Branch protection on `main` (node-repo backstop) + the operator merge gate keep
+   merge authority unchanged; branch-push only lets it _propose_.
 
 **Roles vs capabilities.** A request grants a _role_ (an OpenFGA relation on the
 `node` type); a role confers _capabilities_ (computed relations). V0 ships one
@@ -411,6 +418,51 @@ relation name — never overload `scope` (reserved for the governance domain
 
 Approval authority comes from the node creator/admin's current ownership of the
 node registry row. Ongoing flight authority comes only from OpenFGA.
+
+### 6a. GitHub Branch-Push Provisioning — the Contributor Golden Path
+
+**Principle: `TRUST_BOUNDARY_IS_MERGE_NOT_PUSH`.** The trust boundary is
+merge / deploy / secrets (gated by branch protection + the operator merge route +
+OpenFGA), **not** the ability to push a branch. So the golden path for a _trusted_
+contributor (a known human dev or a registered agent like `flock-leader`) is
+native GitHub branch-push on the node repo — not a personal fork. Forks remain the
+fallback only for _anonymous / no-trust_ contributors (and a fork of a single node
+works; the fork-network one-per-account limit is exactly why a multi-node
+contributor cannot use forks — see [node-formation.md](./node-formation.md)
+`SOVEREIGN_NODE_REPO`).
+
+**The operator App is the privilege bridge — agents never hold standing GitHub
+admin.** On `developer` approval the operator App (which holds org
+`administration: write`, the same install that mints node repos) calls
+`PUT /repos/{owner}/{repo}/collaborators/{login}` with `permission: push`, owner/repo
+resolved from the node catalog `source_repo`. Revocation calls
+`DELETE /repos/{owner}/{repo}/collaborators/{login}`. This is a _side-effect of the
+RBAC grant_, not a new OpenFGA relation — `developer` stays `[user, agent] or admin`.
+
+**Identity binding (`PUSH_LOGIN_FROM_REQUEST`). The AI agent declares its OWN GitHub
+login when it files the access request — the human approving never supplies a login.**
+This is the load-bearing design: an external AI developer requests node access _for its
+own GitHub account_ (`POST /nodes/{id}/access-requests { role, githubLogin }`), the login
+is persisted on the `node_access_requests` row (`SELF_REQUEST_ONLY` — it can only declare
+its own identity), and the owner-gated approve _resolves it from that row_ and grants push
+for it. The owner clicks **Approve** — no `githubLogin` param, no DevTools, no UI field to
+fill. Resolution order at approve: the request row's declared login, then the agent's
+`github` `user_bindings` row (the `/profile` OAuth fallback), else
+`skipped:github_identity_unbound` (the role grant + fork-PR fallback still apply). The
+agent's declared login IS bound to its `agentUserId` (it's its own request), so `reject`
+resolves the same login and de-provisions cleanly — no orphaned collaborator. Never guess a
+login.
+
+- **VNext hardening:** prove the declared login (agent-native, browserless GitHub-identity
+  proof — token introspection or nonce challenge-response → write a `bind` `user_bindings`
+  row + `identity_events` evidence) so the declaration is cryptographically attested, not
+  just owner-trusted at approve. The request→approve flow is unchanged; only the trust on
+  the declared login strengthens.
+
+**No human clicking.** The _one_ human action is the owner's one-time per-node
+access approval (governance, not per-contribution — mission-compliant). Everything
+else is API: the operator provisions the collaborator; the **agent auto-accepts the
+invitation with its own token** (§6 step 5). A pure-API agent never needs a browser.
 
 Candidate-a deployment proof uses the existing app flight lever: PR Build
 produces per-target digests, `candidate-flight.yml` writes the candidate overlay

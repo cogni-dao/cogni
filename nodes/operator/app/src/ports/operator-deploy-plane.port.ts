@@ -243,6 +243,31 @@ export interface OperatorDeployPlanePort {
    */
   resolveNodeRepo(input: ResolveNodeRepoInput): Promise<ResolvedNodeRepo>;
 
+  /**
+   * Grant a GitHub identity branch-push (Write) on a node repo — the operator App as the privilege
+   * bridge for the contributor golden path (rbac.md §6a, TRUST_BOUNDARY_IS_MERGE_NOT_PUSH). The App
+   * holds `administration: write`; the agent never holds standing GitHub admin. Idempotent (re-granting
+   * is a GitHub no-op). Returns the invitation id when GitHub creates a pending invite — an outside
+   * collaborator the agent then auto-accepts with its own token (rbac.md §6 step 5) — else null
+   * (applied immediately for an org member / existing collaborator).
+   */
+  setNodeCollaborator(input: {
+    owner: string;
+    repo: string;
+    login: string;
+    permission?: "pull" | "triage" | "push" | "maintain" | "admin";
+  }): Promise<{ invitationId: number | null }>;
+
+  /**
+   * Revoke a node-repo collaborator (rbac.md §6a de-provision, on access reject/revoke). Idempotent:
+   * a 404 (already not a collaborator) is treated as success so revocation is safe to retry.
+   */
+  removeNodeCollaborator(input: {
+    owner: string;
+    repo: string;
+    login: string;
+  }): Promise<void>;
+
   dispatchNodeRefCandidateFlight(input: {
     owner: string;
     repo: string;

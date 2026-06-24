@@ -802,6 +802,60 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
     }
   }
 
+  /**
+   * Grant a GitHub identity branch-push (Write) on a node repo — the operator App as the
+   * privilege bridge for the contributor golden path (rbac.md §6a, TRUST_BOUNDARY_IS_MERGE_NOT_PUSH).
+   * The App installation supplies the privilege (`administration: write`); the agent never holds
+   * standing GitHub admin. Idempotent: re-granting an existing collaborator is a GitHub no-op.
+   * Returns the invitation id when GitHub creates a pending invite (an outside collaborator the agent
+   * then auto-accepts with its own token — §6 step 5), or null when the grant applied immediately
+   * (org member / already a collaborator).
+   */
+  async setNodeCollaborator(input: {
+    owner: string;
+    repo: string;
+    login: string;
+    permission?: "pull" | "triage" | "push" | "maintain" | "admin";
+  }): Promise<{ invitationId: number | null }> {
+    const octokit = await this.getOctokit(input.owner, input.repo);
+    const { status, data } = await octokit.request(
+      "PUT /repos/{owner}/{repo}/collaborators/{username}",
+      {
+        owner: input.owner,
+        repo: input.repo,
+        username: input.login,
+        permission: input.permission ?? "push",
+      }
+    );
+    // 201 + invitation body ⇒ pending acceptance; 204 ⇒ applied immediately (already a member).
+    const invitationId =
+      status === 201 && data && typeof data === "object" && "id" in data
+        ? (data as { id: number }).id
+        : null;
+    return { invitationId };
+  }
+
+  /**
+   * Revoke a node-repo collaborator (rbac.md §6a de-provision, on reject/revoke). Idempotent: a 404
+   * (already not a collaborator) is treated as success so revocation is safe to retry.
+   */
+  async removeNodeCollaborator(input: {
+    owner: string;
+    repo: string;
+    login: string;
+  }): Promise<void> {
+    const octokit = await this.getOctokit(input.owner, input.repo);
+    try {
+      await octokit.request(
+        "DELETE /repos/{owner}/{repo}/collaborators/{username}",
+        { owner: input.owner, repo: input.repo, username: input.login }
+      );
+    } catch (error) {
+      if ((error as { status?: number })?.status === 404) return;
+      throw error;
+    }
+  }
+
   async fetchFileText(input: {
     owner: string;
     repo: string;

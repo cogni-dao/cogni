@@ -124,12 +124,12 @@ describe("buildNodeLaunchPack", () => {
     expect(pack.prompt).toContain("Parent deployment PR:");
     expect(pack.prompt).toContain("Candidate URL:");
 
-    // Identity + goal: a ZERO-privilege external dev (no GitHub write) who forks.
+    // Identity + goal: a ZERO-privilege external dev who requests branch-push for its own account.
     expect(pack.prompt).toContain(
       "You are the AI developer taking this node from spawned scaffold to first deployed customization."
     );
     expect(pack.prompt).toContain("ZERO privileged GitHub access");
-    expect(pack.prompt).toContain("FORKS the node repo");
+    expect(pack.prompt).toContain("branch-push on the node repo");
     expect(pack.prompt).toContain("style-kit customization");
     expect(pack.prompt).toContain(
       ".claude/skills/node-wizard-scorecard/SKILL.md"
@@ -159,8 +159,11 @@ describe("buildNodeLaunchPack", () => {
     expect(pack.prompt).not.toContain("/api/v1/vcs/flight");
     expect(pack.prompt).not.toContain("/api/v1/vcs/merge");
 
-    // Fork-first + the stale self-merge / pr-manager-graph path stays purged.
-    expect(pack.prompt).toContain("read-only");
+    // Branch-push framing present, but the contribution FLOW is delegated to the guide — the launch
+    // pack must NOT embed the fork mechanism (it points at cicd-e2e-required-sequence). Self-merge /
+    // pr-manager-graph path stays purged.
+    expect(pack.prompt).toContain("branch-push");
+    expect(pack.prompt).not.toContain("fork the node repo");
     expect(pack.prompt).not.toContain("merge your own PR");
     expect(pack.prompt).not.toContain("ask the Cogni PR Manager graph");
     expect(pack.prompt).not.toContain('graph_name "pr-manager"');
@@ -169,7 +172,7 @@ describe("buildNodeLaunchPack", () => {
     // Node-specific guardrails (the bits that ARE node-scoped, not generic CICD).
     expect(pack.prompt).toContain("knowledge.remote");
     expect(pack.prompt).toContain("do not add a DOLTHUB_REMOTE_URL");
-    expect(pack.prompt).toContain("do not push to upstream main");
+    expect(pack.prompt).toContain("do not push to `main`");
 
     // RBAC owner-approve is the lone human step, fired immediately (node-scoped
     // URL stays in the prompt because it interpolates THIS node's id).
@@ -177,7 +180,7 @@ describe("buildNodeLaunchPack", () => {
     expect(pack.prompt).toContain(
       `/api/v1/nodes/11111111-1111-4111-8111-111111111111/access-requests`
     );
-    expect(pack.prompt).toContain("single human step");
+    expect(pack.prompt).toContain("only human step in the whole path");
     expect(pack.prompt).toContain("never self-approve");
 
     expect(pack.prompt).not.toContain("browser-session-flight-auth.md");

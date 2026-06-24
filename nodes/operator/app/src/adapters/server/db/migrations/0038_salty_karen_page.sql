@@ -1,0 +1,1 @@
+ALTER TABLE "node_access_requests" ADD COLUMN "github_login" text;

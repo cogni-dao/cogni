@@ -30,6 +30,7 @@ export interface NodeAccessRequestRow {
   readonly agentUserId: string;
   readonly agentDisplayName: string | null;
   readonly role: NodeAccessRole;
+  readonly githubLogin: string | null;
   readonly status: NodeAccessRequestStatus;
   readonly createdAt: Date;
   readonly updatedAt: Date;
@@ -37,7 +38,8 @@ export interface NodeAccessRequestRow {
 
 /**
  * Idempotently open a pending access request for one (node, agent). Re-requesting reopens the
- * single row to `pending` rather than inserting a duplicate.
+ * single row to `pending` rather than inserting a duplicate. `githubLogin` is the agent's OWN
+ * declared GitHub identity (rbac.md §6a) — re-declared on each request, consumed at approve.
  */
 export async function upsertAccessRequest(
   db: Database,
@@ -45,6 +47,7 @@ export async function upsertAccessRequest(
     readonly nodeId: string;
     readonly agentUserId: string;
     readonly role: NodeAccessRole;
+    readonly githubLogin?: string | null;
   }
 ): Promise<void> {
   await db
@@ -53,6 +56,7 @@ export async function upsertAccessRequest(
       nodeId: input.nodeId,
       agentUserId: input.agentUserId,
       role: input.role,
+      githubLogin: input.githubLogin ?? null,
       status: "pending",
     })
     .onConflictDoUpdate({
@@ -61,8 +65,38 @@ export async function upsertAccessRequest(
         nodeAccessRequests.agentUserId,
         nodeAccessRequests.role,
       ],
-      set: { status: "pending", updatedAt: sql`now()` },
+      set: {
+        status: "pending",
+        githubLogin: input.githubLogin ?? null,
+        updatedAt: sql`now()`,
+      },
     });
+}
+
+/**
+ * The GitHub login the agent declared on its (node, agent, role) request — the identity the owner's
+ * approve grants push for (rbac.md §6a). `null` when the agent declared none or filed no request.
+ */
+export async function getRequestedGithubLogin(
+  db: Database,
+  input: {
+    readonly nodeId: string;
+    readonly agentUserId: string;
+    readonly role: NodeAccessRole;
+  }
+): Promise<string | null> {
+  const [row] = await db
+    .select({ githubLogin: nodeAccessRequests.githubLogin })
+    .from(nodeAccessRequests)
+    .where(
+      and(
+        eq(nodeAccessRequests.nodeId, input.nodeId),
+        eq(nodeAccessRequests.agentUserId, input.agentUserId),
+        eq(nodeAccessRequests.role, input.role)
+      )
+    )
+    .limit(1);
+  return row?.githubLogin ?? null;
 }
 
 /**
@@ -107,6 +141,7 @@ export async function listAccessRequests(
       agentUserId: nodeAccessRequests.agentUserId,
       agentDisplayName: users.name,
       role: nodeAccessRequests.role,
+      githubLogin: nodeAccessRequests.githubLogin,
       status: nodeAccessRequests.status,
       createdAt: nodeAccessRequests.createdAt,
       updatedAt: nodeAccessRequests.updatedAt,

@@ -109,6 +109,31 @@ describe("POST /api/v1/nodes/[id]/access-requests", () => {
     expect(upsert.onConflict).toHaveBeenCalled();
   });
 
+  it("persists the agent's self-declared githubLogin on the request", async () => {
+    await testApiHandler({
+      appHandler,
+      params: { id: NODE_ID },
+      async test({ fetch }) {
+        const res = await fetch({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            role: "developer",
+            githubLogin: "flock-leader",
+          }),
+        });
+        expect(res.status).toBe(201);
+      },
+    });
+
+    expect(upsert.values).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentUserId: TEST_SESSION_USER_1.id,
+        githubLogin: "flock-leader",
+      })
+    );
+  });
+
   it("rejects an unauthenticated caller before any write", async () => {
     mockGetSessionUser.mockResolvedValue(null);
 

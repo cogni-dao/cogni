@@ -33,6 +33,8 @@ Navigation for authorization in cogni-template. **This file deliberately does NO
 
 > **Proof a grant actually works:** the gated route returns `403 authz_denied` _before_ approval and flips to a _downstream_ error (e.g. `catalog_missing` / preflight) _after_ — RBAC passed; the failure moved past it.
 
+> **`developer` grants TWO planes (rbac.md §6a, `PUSH_LOGIN_FROM_REQUEST`, proven on candidate-a 2026-06-24).** A `developer` approval is not just the OpenFGA tuple — it ALSO provisions **GitHub branch-push** on the node's repo for the agent's GitHub identity. The agent declares its own `githubLogin` on the access REQUEST (`SELF_REQUEST_ONLY`); the owner's Approve click supplies NO login. The operator App (privilege bridge; agent holds no standing GitHub admin) resolves the node's **own** repo via `resolveNodeRepo` (catalog `source_repo`) — **NOT** `nodes.repoOwner`/`repoName`, which is the submodule-parent monorepo (bug.5054, the cause of an `App not installed on Cogni-DAO/cogni (404)` mis-grant). The agent then auto-accepts the GitHub invite with its own token (no human). Branch-push is best-effort: failure (`branchPush: error`/`skipped:*`, observable via `routeId="nodes.developers"` + `githubStatus`) never reverses the authoritative tuple. Two contributor tiers: trusted = branch-push (this), anonymous = fork-PR.
+
 ## Validate an RBAC extension end-to-end (API + Grafana — NEVER SSH)
 
 Every new role/capability is proven on **candidate-a** entirely over HTTP, observed in Loki. **Do not SSH the VM to write tuples or read OpenFGA** — the grant API _is_ the surface. If a role can't be granted via API, that's the bug to fix (see grant loop), not an SSH workaround.
