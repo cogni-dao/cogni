@@ -24,7 +24,10 @@ import type {
   NewCitation,
   NewKnowledge,
 } from "../../domain/schemas.js";
-import { HYPOTHESIS_TARGETED_EDGES } from "../../domain/schemas.js";
+import {
+  HYPOTHESIS_TARGETED_EDGES,
+  isWorkItemEndpointId,
+} from "../../domain/schemas.js";
 import type {
   ChainNode,
   EdoResolverPort,
@@ -243,16 +246,35 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
   // --- Write — edges ---
 
   async addCitation(edge: NewCitation): Promise<Citation> {
+    const citingIsWork = isWorkItemEndpointId(edge.citingId);
+    const citedIsWork = isWorkItemEndpointId(edge.citedId);
+    const workEndpointCount = (citingIsWork ? 1 : 0) + (citedIsWork ? 1 : 0);
+    if (workEndpointCount > 0 && workEndpointCount !== 1) {
+      throw new Error(
+        `citation edge must connect exactly one work item and one knowledge entry: ${edge.citingId} -> ${edge.citedId}`
+      );
+    }
+    if (workEndpointCount > 0 && edge.citationType !== "tracks") {
+      throw new Error(
+        `work-item citation edge must use citation_type='tracks', got '${edge.citationType}'`
+      );
+    }
+    if (workEndpointCount === 0 && edge.citationType === "tracks") {
+      throw new Error(
+        "citation_type='tracks' requires exactly one work-item endpoint"
+      );
+    }
+
     const citedRow = this.rows.get(edge.citedId);
-    if (!citedRow) {
+    if (!citedRow && !citedIsWork) {
       throw new CitationTargetNotFoundError(edge.citedId);
     }
     const expected = expectedEntryTypeForEdge(edge.citationType);
-    if (expected !== null && citedRow.entryType !== expected) {
+    if (expected !== null && citedRow?.entryType !== expected) {
       throw new CitationTypeMismatchError(
         edge.citationType,
         edge.citedId,
-        citedRow.entryType ?? "(none)",
+        citedRow?.entryType ?? "(none)",
         expected
       );
     }
@@ -422,7 +444,9 @@ export class FakeEdoResolverAdapter implements EdoResolverPort {
     if (!entry) {
       throw new Error(`recomputeConfidence: entry '${entryId}' not found`);
     }
-    const incoming = await this.store.listCitationsByCitedId(entryId);
+    const incoming = (await this.store.listCitationsByCitedId(entryId)).filter(
+      (c) => c.citationType !== "tracks"
+    );
     const next = recomputeConfidenceByPolicy(entry, incoming).confidencePct;
     await this.store.updateKnowledge(entryId, { confidencePct: next });
     return next;

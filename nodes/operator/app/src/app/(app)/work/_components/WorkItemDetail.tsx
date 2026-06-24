@@ -13,6 +13,7 @@ import {
   SheetTitle,
 } from "@/components";
 
+import { EntityCitationLinks } from "../../_components/EntityCitationLinks";
 import { StatusPill, TypeIcon } from "./work-item-icons";
 
 type SubjectRef = WorkItemDto["assignees"][number];
@@ -103,6 +104,8 @@ export function WorkItemDetail({
                   <Markdown content={item.outcome} />
                 </Field>
               )}
+
+              <EntityCitationLinks entityId={item.id} />
 
               {/* Project */}
               {item.projectId && (

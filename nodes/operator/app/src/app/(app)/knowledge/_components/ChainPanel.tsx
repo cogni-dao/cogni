@@ -16,94 +16,31 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
+import Link from "next/link";
 import { useMemo } from "react";
 
 import { Badge } from "@/components";
 
 import { type ChainNodeDto, fetchChain } from "../_api/fetchChain";
-import { ConfidenceBar } from "./ConfidenceBar";
-
-type BadgeIntent = "default" | "secondary" | "destructive" | "outline";
 
 interface ChainPanelProps {
   readonly rootId: string;
 }
 
-interface ChipStyle {
-  readonly intent: BadgeIntent;
-  readonly className?: string;
-  readonly label: string;
-}
-
-function chipFor(citationType: string): ChipStyle {
-  switch (citationType) {
-    case "validates":
-      return {
-        intent: "default",
-        // Override the primary palette with a green tint so the loop-closes
-        // signal reads at a glance.
-        className: "bg-success/15 text-success border-success/30 shadow-none",
-        label: "validates",
-      };
-    case "invalidates":
-      return {
-        intent: "destructive",
-        className: "bg-destructive/15 text-destructive border-destructive/30",
-        label: "invalidates",
-      };
-    case "derives_from":
-      return {
-        intent: "default",
-        className: "bg-info/15 text-info border-info/30 shadow-none",
-        label: "derives_from",
-      };
-    case "evidence_for":
-      return { intent: "outline", label: "evidence_for" };
-    case "supports":
-      return { intent: "secondary", label: "supports" };
-    case "contradicts":
-      return {
-        intent: "destructive",
-        className: "bg-destructive/10 text-destructive border-destructive/30",
-        label: "contradicts",
-      };
-    case "extends":
-      return { intent: "secondary", label: "extends" };
-    case "supersedes":
-      return { intent: "outline", label: "supersedes" };
-    default:
-      return { intent: "outline", label: citationType };
-  }
-}
-
-function EdgeChip({
-  citationType,
-  direction,
-}: {
-  readonly citationType: string;
-  readonly direction: "out" | "in";
-}) {
-  const style = chipFor(citationType);
-  const arrow = direction === "out" ? "→" : "←";
+function ChainEntryChip({ node }: { readonly node: ChainNodeDto }) {
+  const { entry, edgeFromParent } = node;
+  const edgeLabel = edgeFromParent
+    ? `${edgeFromParent.direction} ${edgeFromParent.citationType}`
+    : "root";
   return (
-    <Badge
-      intent={style.intent}
-      size="sm"
-      {...(style.className ? { className: style.className } : {})}
-    >
-      <span className="font-mono">
-        {arrow} {style.label}
-      </span>
-    </Badge>
-  );
-}
-
-function EntryTypeChip({ entryType }: { readonly entryType: string | null }) {
-  if (!entryType) return null;
-  return (
-    <Badge intent="outline" size="sm">
-      <span className="font-mono">{entryType}</span>
-    </Badge>
+    <Link href={`/knowledge/${encodeURIComponent(entry.id)}`}>
+      <Badge intent="outline" size="sm">
+        <span className="font-mono">{edgeLabel}</span>
+        <span className="ml-1.5 font-mono text-muted-foreground">
+          {entry.id}
+        </span>
+      </Badge>
+    </Link>
   );
 }
 
@@ -155,15 +92,17 @@ export function ChainPanel({ rootId }: ChainPanelProps) {
           within the walk depth.
         </p>
       ) : (
-        <ol className="flex flex-col gap-3">
+        <ol className="flex flex-col gap-2">
           {byDepth.map(({ depth, nodes }) => (
             <li key={depth} className="flex flex-col gap-2">
               <span className="font-mono text-muted-foreground text-xs">
                 depth {depth}
               </span>
-              <ul className="flex flex-col gap-2">
+              <ul className="flex flex-wrap gap-1.5">
                 {nodes.map((node) => (
-                  <ChainEntryCard key={node.entry.id} node={node} />
+                  <li key={node.entry.id}>
+                    <ChainEntryChip node={node} />
+                  </li>
                 ))}
               </ul>
             </li>
@@ -172,46 +111,4 @@ export function ChainPanel({ rootId }: ChainPanelProps) {
       )}
     </div>
   );
-}
-
-function ChainEntryCard({ node }: { readonly node: ChainNodeDto }) {
-  const { entry, edgeFromParent } = node;
-  // entryType isn't on the chain DTO; the root component above doesn't carry
-  // it either. We rely on the citation edge to convey the EDO role.
-  return (
-    <li className="flex flex-col gap-1.5 rounded-md border border-border/60 bg-muted/10 p-3">
-      <div className="flex flex-wrap items-center gap-2">
-        {edgeFromParent && (
-          <EdgeChip
-            citationType={edgeFromParent.citationType}
-            direction={edgeFromParent.direction}
-          />
-        )}
-        <EntryTypeChip entryType={inferEntryType(entry.id)} />
-        <span className="font-mono text-muted-foreground text-xs">
-          {entry.id}
-        </span>
-      </div>
-      <div className="font-medium text-sm leading-snug">{entry.title}</div>
-      {entry.confidencePct !== null && (
-        <div className="flex items-center gap-2">
-          <ConfidenceBar value={entry.confidencePct} width={80} />
-        </div>
-      )}
-    </li>
-  );
-}
-
-// The chain DTO does not currently carry entry_type on each node (the wire
-// contract returns the same shape as KnowledgeEntry, which omits entry_type
-// to match the existing capability output). Infer a best-effort label from
-// the id prefix convention used by the EDO seeds (`proof:edo-decide-...`).
-// This is presentational only; the canonical source is the citation edge.
-function inferEntryType(id: string): string | null {
-  if (id.includes("hypothesize") || id.includes("hypothesis"))
-    return "hypothesis";
-  if (id.includes("decide") || id.includes("decision")) return "decision";
-  if (id.includes("outcome")) return "outcome";
-  if (id.includes("event") || id.startsWith("evt:")) return "event";
-  return null;
 }

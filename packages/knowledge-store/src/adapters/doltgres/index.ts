@@ -27,7 +27,10 @@ import type {
   NewCitation,
   NewKnowledge,
 } from "../../domain/schemas.js";
-import { HYPOTHESIS_TARGETED_EDGES } from "../../domain/schemas.js";
+import {
+  HYPOTHESIS_TARGETED_EDGES,
+  isWorkItemEndpointId,
+} from "../../domain/schemas.js";
 import {
   CitationTargetNotFoundError,
   CitationTypeMismatchError,
@@ -403,10 +406,45 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
   // --- Edges (knowledge-syntropy: hypothesis loop) ---
 
   async addCitation(edge: NewCitation): Promise<Citation> {
+    const citingIsWork = isWorkItemEndpointId(edge.citingId);
+    const citedIsWork = isWorkItemEndpointId(edge.citedId);
+    const workEndpointCount = (citingIsWork ? 1 : 0) + (citedIsWork ? 1 : 0);
+    if (workEndpointCount > 0 && workEndpointCount !== 1) {
+      throw new Error(
+        `citation edge must connect exactly one work item and one knowledge entry: ${edge.citingId} -> ${edge.citedId}`
+      );
+    }
+    if (workEndpointCount > 0 && edge.citationType !== "tracks") {
+      throw new Error(
+        `work-item citation edge must use citation_type='tracks', got '${edge.citationType}'`
+      );
+    }
+    if (workEndpointCount === 0 && edge.citationType === "tracks") {
+      throw new Error(
+        "citation_type='tracks' requires exactly one work-item endpoint"
+      );
+    }
+    if (citingIsWork) {
+      const rows = await this.sql.unsafe(
+        `SELECT 1 FROM work_items WHERE id = ${escapeValue(edge.citingId)} LIMIT 1`
+      );
+      if (rows.length === 0)
+        throw new CitationTargetNotFoundError(edge.citingId);
+    }
+    if (citedIsWork) {
+      const rows = await this.sql.unsafe(
+        `SELECT 1 FROM work_items WHERE id = ${escapeValue(edge.citedId)} LIMIT 1`
+      );
+      if (rows.length === 0)
+        throw new CitationTargetNotFoundError(edge.citedId);
+    }
+
     // CITATION_TARGET_EXISTS_AT_WRITE + EDGE_TYPE_MATCHES_CITED_ENTRY_TYPE
     // collapsed into one SELECT (knowledge-syntropy spec).
-    const citedEntryType = await this.getKnowledgeEntryType(edge.citedId);
-    if (citedEntryType === null) {
+    const citedEntryType = citedIsWork
+      ? null
+      : await this.getKnowledgeEntryType(edge.citedId);
+    if (citedEntryType === null && !citedIsWork) {
       throw new CitationTargetNotFoundError(edge.citedId);
     }
     const expected = expectedEntryTypeForEdge(edge.citationType);
@@ -414,7 +452,7 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
       throw new CitationTypeMismatchError(
         edge.citationType,
         edge.citedId,
-        citedEntryType,
+        citedEntryType ?? "(none)",
         expected
       );
     }

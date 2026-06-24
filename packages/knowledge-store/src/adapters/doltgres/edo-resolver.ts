@@ -173,8 +173,12 @@ export class DoltgresEdoResolverAdapter implements EdoResolverPort {
 
     const incoming: Citation[] =
       await this.store.listCitationsByCitedId(entryId);
+    const confidenceEdges = incoming.filter((c) => c.citationType !== "tracks");
 
-    const next = recomputeConfidenceByPolicy(entry, incoming).confidencePct;
+    const next = recomputeConfidenceByPolicy(
+      entry,
+      confidenceEdges
+    ).confidencePct;
 
     // Persist (idempotent — writing the same value is a no-op semantically).
     await this.store.updateKnowledge(entryId, { confidencePct: next });
@@ -221,7 +225,10 @@ export class DoltgresEdoResolverAdapter implements EdoResolverPort {
          FROM citations c
          JOIN walk w ON w.id = c.citing_id
          WHERE w.depth + 1 <= ${maxDepth}
-           AND NOT (c.cited_id = ANY(w.path))`
+           AND NOT (c.cited_id = ANY(w.path))
+           AND EXISTS (
+             SELECT 1 FROM knowledge child WHERE child.id = c.cited_id
+           )`
       );
     }
     if (includeIn) {
@@ -236,7 +243,10 @@ export class DoltgresEdoResolverAdapter implements EdoResolverPort {
          FROM citations c
          JOIN walk w ON w.id = c.cited_id
          WHERE w.depth + 1 <= ${maxDepth}
-           AND NOT (c.citing_id = ANY(w.path))`
+           AND NOT (c.citing_id = ANY(w.path))
+           AND EXISTS (
+             SELECT 1 FROM knowledge child WHERE child.id = c.citing_id
+           )`
       );
     }
 

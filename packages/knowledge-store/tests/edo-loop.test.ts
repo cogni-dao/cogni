@@ -547,4 +547,51 @@ describe("EDO chain walk — walkChain", () => {
     // re-emit `a` at depth 2 even though the cycle closes back to it.
     expect(chain.map((n) => n.entry.id).sort()).toEqual(["a", "b"]);
   });
+
+  it("skips work-item tracking edges for confidence and chain traversal", async () => {
+    const { store, resolver } = await bootstrap();
+    await store.addKnowledge({
+      id: "h",
+      domain: DOMAIN,
+      title: "tracked hypothesis",
+      content: "...",
+      entryType: "hypothesis",
+      sourceType: "agent",
+      evaluateAt: new Date("2026-01-01"),
+    });
+    await store.addKnowledge({
+      id: "b",
+      domain: DOMAIN,
+      title: "unrelated branch",
+      content: "...",
+      entryType: "finding",
+      sourceType: "agent",
+    });
+
+    await store.addCitation({
+      citingId: "task.5017",
+      citedId: "h",
+      citationType: "tracks",
+    });
+    await store.addCitation({
+      citingId: "task.5017",
+      citedId: "b",
+      citationType: "tracks",
+    });
+    await store.addCitation({
+      citingId: "h",
+      citedId: "task.5017",
+      citationType: "tracks",
+    });
+    await store.addCitation({
+      citingId: "b",
+      citedId: "task.5017",
+      citationType: "tracks",
+    });
+
+    await expect(resolver.recomputeConfidence("h")).resolves.toBe(30);
+
+    const chain = await resolver.walkChain("h", { direction: "both" });
+    expect(chain.map((n) => n.entry.id)).toEqual(["h"]);
+  });
 });

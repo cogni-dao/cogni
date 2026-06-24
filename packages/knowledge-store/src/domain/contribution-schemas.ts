@@ -50,6 +50,7 @@ export const ContributionCitationTypeSchema = z.enum([
   "contradicts",
   "extends",
   "supersedes",
+  "tracks",
 ]);
 export type ContributionCitationType = z.infer<
   typeof ContributionCitationTypeSchema

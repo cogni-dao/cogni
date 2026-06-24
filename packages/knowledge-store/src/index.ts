@@ -28,6 +28,8 @@ export {
 } from "./domain/confidence-policy.js";
 // Contribution domain
 export {
+  type ContributionCitationType,
+  ContributionCitationTypeSchema,
   type ContributionCommitRecord,
   ContributionCommitRecordSchema,
   type ContributionDiffEntry,
@@ -130,6 +132,7 @@ export {
   type EntryType,
   EntryTypeSchema,
   HYPOTHESIS_TARGETED_EDGES,
+  isWorkItemEndpointId,
   type Knowledge,
   KnowledgeSchema,
   type NewCitation,

@@ -289,7 +289,7 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
   it("accepts a cross-plane cite (target on main, absent from branch) and skips recompute", async () => {
     const fake = new CrossPlaneFakeSql({
       mainEntryTypes: new Map([["cicd-agent-playbook", "finding"]]),
-      branchEntryTypes: new Map(),
+      branchEntryTypes: new Map([["oss-langgraph", "finding"]]),
     });
 
     const adapter = new DoltgresKnowledgeContributionAdapter({
@@ -335,6 +335,105 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
     expect(
       fake.conn.queries.some((q) => q.includes("source_type FROM knowledge"))
     ).toBe(false);
+  });
+
+  it("accepts a work-item tracking cite and skips confidence recompute", async () => {
+    const fake = new CrossPlaneFakeSql({
+      mainEntryTypes: new Map([["work-knowledge-write-planes", "finding"]]),
+      branchEntryTypes: new Map(),
+      mainWorkItemIds: new Set(["task.5017"]),
+    });
+
+    const adapter = new DoltgresKnowledgeContributionAdapter({
+      sql: fake as unknown as Sql,
+    });
+    await adapter.appendCommit({
+      contributionId: "contrib-agent-1-abc123",
+      principal: { id: "agent-1", kind: "agent" },
+      message: "link work item to durable knowledge",
+      edits: [
+        {
+          op: "cite",
+          citingId: "task.5017",
+          citedId: "work-knowledge-write-planes",
+          citationType: "tracks",
+        },
+      ],
+    });
+
+    expect(
+      fake.queries.some(
+        (q) => q.includes("FROM work_items") && q.includes("'task.5017'")
+      )
+    ).toBe(true);
+    expect(
+      fake.conn.queries.some(
+        (q) =>
+          q.includes("INSERT INTO citations") &&
+          q.includes("'task.5017'") &&
+          q.includes("'work-knowledge-write-planes'") &&
+          q.includes("'tracks'")
+      )
+    ).toBe(true);
+    expect(
+      fake.conn.queries.some((q) =>
+        q.includes("UPDATE knowledge SET confidence_pct")
+      )
+    ).toBe(false);
+  });
+
+  it("rejects a work-item tracking cite when the work item is absent from main", async () => {
+    const fake = new CrossPlaneFakeSql({
+      mainEntryTypes: new Map([["work-knowledge-write-planes", "finding"]]),
+      branchEntryTypes: new Map(),
+      mainWorkItemIds: new Set(),
+    });
+
+    const adapter = new DoltgresKnowledgeContributionAdapter({
+      sql: fake as unknown as Sql,
+    });
+    await expect(
+      adapter.appendCommit({
+        contributionId: "contrib-agent-1-abc123",
+        principal: { id: "agent-1", kind: "agent" },
+        message: "link missing work item",
+        edits: [
+          {
+            op: "cite",
+            citingId: "task.9999",
+            citedId: "work-knowledge-write-planes",
+            citationType: "tracks",
+          },
+        ],
+      })
+    ).rejects.toBeInstanceOf(CitationTargetNotFoundError);
+  });
+
+  it("rejects a work-item tracking cite when the knowledge endpoint is branch-only", async () => {
+    const fake = new CrossPlaneFakeSql({
+      mainEntryTypes: new Map(),
+      branchEntryTypes: new Map([["branch-only-entry", "finding"]]),
+      mainWorkItemIds: new Set(["task.5017"]),
+    });
+
+    const adapter = new DoltgresKnowledgeContributionAdapter({
+      sql: fake as unknown as Sql,
+    });
+    await expect(
+      adapter.appendCommit({
+        contributionId: "contrib-agent-1-abc123",
+        principal: { id: "agent-1", kind: "agent" },
+        message: "link branch-only knowledge to work",
+        edits: [
+          {
+            op: "cite",
+            citingId: "branch-only-entry",
+            citedId: "task.5017",
+            citationType: "tracks",
+          },
+        ],
+      })
+    ).rejects.toBeInstanceOf(CitationTargetNotFoundError);
   });
 
   it("throws CitationTargetNotFoundError when the cited row is on neither branch nor main", async () => {
@@ -427,18 +526,26 @@ class CrossPlaneFakeSql {
   readonly queries: string[] = [];
   readonly conn: CrossPlaneFakeReservedSql;
   private readonly mainEntryTypes: Map<string, string>;
+  private readonly mainWorkItemIds: Set<string>;
 
   constructor(opts: {
     mainEntryTypes: Map<string, string>;
     branchEntryTypes: Map<string, string>;
+    mainWorkItemIds?: Set<string>;
   }) {
     this.mainEntryTypes = opts.mainEntryTypes;
+    this.mainWorkItemIds = opts.mainWorkItemIds ?? new Set();
     this.conn = new CrossPlaneFakeReservedSql(opts.branchEntryTypes);
   }
 
   async unsafe(query: string): Promise<Record<string, unknown>[]> {
     this.queries.push(query);
     if (query.includes("FROM knowledge_contributions")) return [record];
+    if (query.includes("FROM work_items")) {
+      return this.mainWorkItemIds.has(idFromQuery(query) ?? "")
+        ? [{ "?column?": 1 }]
+        : [];
+    }
     if (query.includes("entry_type FROM knowledge")) {
       const t = this.mainEntryTypes.get(idFromQuery(query) ?? "");
       return t ? [{ entry_type: t }] : [];

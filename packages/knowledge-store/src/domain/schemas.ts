@@ -74,6 +74,8 @@ export const CitationTypeSchema = z.enum([
   "contradicts",
   "extends",
   "supersedes",
+  // Cross-plane work item ↔ knowledge tracking edge
+  "tracks",
   // Hypothesis loop edges (see knowledge-syntropy.md § The Hypothesis Loop)
   "evidence_for", // event/observation/finding → hypothesis (or decision)
   "derives_from", // decision → hypothesis (strict)
@@ -81,6 +83,22 @@ export const CitationTypeSchema = z.enum([
   "invalidates", // outcome → hypothesis (strict)
 ]);
 export type CitationType = z.infer<typeof CitationTypeSchema>;
+
+export const WORK_ITEM_ENDPOINT_TYPES = [
+  "task",
+  "bug",
+  "spike",
+  "story",
+  "subtask",
+] as const;
+
+export type WorkItemEndpointType = (typeof WORK_ITEM_ENDPOINT_TYPES)[number];
+
+const WORK_ITEM_ENDPOINT_ID_RE = /^(task|bug|spike|story|subtask)\.\d+$/;
+
+export function isWorkItemEndpointId(id: string): boolean {
+  return WORK_ITEM_ENDPOINT_ID_RE.test(id);
+}
 
 /**
  * Citation types that MUST point at a hypothesis row. The adapter's
