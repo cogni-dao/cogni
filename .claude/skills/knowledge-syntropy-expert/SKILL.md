@@ -67,6 +67,7 @@ If you reach step 8, you're sprawling in git, where humans can't recall it. Know
 - **DOLT_IS_SOURCE_OF_TRUTH** — Postgres search index is derived and rebuildable.
 - **AUTO_COMMIT_ON_WRITE** — every write commits via the capability layer.
 - **EXTERNAL_WRITES_TO_BRANCH** — bearer agents → `contrib/*`; only session users merge to `main`.
+- **CROSS_LINKS_ARE_EDGES_NOT_COLUMNS** — a relationship between any two entities (knowledge↔knowledge **and** work-item↔knowledge) is a single `citations` row, never a ref-column duplicated on each endpoint (that fractures — the two copies drift). The work-item↔knowledge link generalizes `citations` to allow a work-item endpoint (id-shape `task./bug./…\d+`); it is authored via the contribution `cite` op (so links are curated, validated both-endpoints-exist-on-`main`) and read both directions via the indexed `citing_id`/`cited_id`. Work-item **lifecycle** (claim/status/PR) stays direct-write (autonomy); cross-**links** are curated knowledge. `work_items` holds no link data. Full rationale + roadmap: hub entry `work-knowledge-write-planes` (meta) + work item `story.5017`.
 
 ## Anti-sprawl rules
 
