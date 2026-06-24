@@ -75,25 +75,33 @@ monorepo candidate-a.
 
 > **Node formation is the exception to "everything is a workflow."** A new node's PR is authored by the **operator GitHub App directly** via the Git Data API (`nodes/operator/app/src/shared/node-app-scaffold/` + `adapters/server/vcs/github-repo-write.ts`) — no dispatched Action (task.5092; see [node-formation.md](../../../docs/spec/node-formation.md#node-publish-operator-authored-pr)). Its per-node Argo AppSet (`infra/k8s/argocd/<env>-<node>-applicationset.yaml` — one object per `(env, node)` for structural lane isolation, `bug.0378`) is catalog-rendered by `scripts/ci/render-node-appset.sh` (`pnpm gen:node-appset`, drift-gated in the `unit` job). The TS scaffolder and the shell renderer share one template (`scripts/ci/node-applicationset.yaml.tmpl`), so their output is byte-identical. Its per-node Kustomize **overlay** is likewise catalog-rendered — `scripts/ci/render-node-overlays.sh` (`pnpm gen:node-overlays`, drift-gated), the byte-exact twin of the operator's mint-time `gens/overlay.ts`, applying the node-at-root migrate rewrite (`/app/nodes/<slug>/app` → `/app/app`). The drift gate is what stops a **stale operator** from minting an overlay that kustomize-builds but crash-loops `migrate` at flight (`bug.5008`).
 
-### Operator VCS routes — external-contributor approve + merge (operator App is the privilege bridge)
+### Operator VCS routes — contributor CI + merge (operator App is the privilege bridge)
 
-A read-only external agent (e.g. `flock-leader`) drives a fork PR to a node's OWN repo entirely
-through the operator GitHub App — no human, no `gh` write on the agent's side. **Node-scoped is the
-primary path:**
+**STANDARD path = branch-push, not fork.** A developer requests node access (RBAC) declaring their
+`githubLogin`; the owner's Approve provisions GitHub branch-push (collaborator) on the node repo for
+that login. They then push a branch and open a **same-repo PR**, whose normal `pull_request` build
+produces a flightable image — no operator dispatch needed. One-time setup lives in the
+`developer-rbac-request` hub guide; the per-change loop in `cicd-e2e-required-sequence`.
 
-- **`POST /api/v1/vcs/run-checks` `{ nodeId, prNumber }`** — releases GitHub's `action_required`
-  hold on a fork contributor's `pull_request` runs so the node's own CI runs. RBAC `node.flight` on
-  the named node is the gate; only standard `pull_request` runs are approved (never
-  `pull_request_target` / secret-bearing — safe by structure). `owner/repo` resolved from the node's
-  catalog `source_repo`.
-- **`POST /api/v1/vcs/merge` `{ nodeId, prNumber }`** — squash-merges any PR to the node's repo on
-  green (including a fork PR the agent authored). RBAC `node.flight` is the gate; the owner-granted
-  RBAC tuple IS the trust boundary (no self-merge / probation check). **Branch protection on the node
-  repo is the merge authority**; `evaluateMergeGate` is fast-fail UX. Node-merge auto-promotes
-  preview via the existing `dispatchNodePreviewPromote`.
+**FALLBACK path = fork PR** (external agent with no grant, e.g. a read-only `flock-leader`): driven
+entirely through the operator GitHub App — no human, no `gh` write on the agent's side:
 
-**"fork-build" is purged — the node repo builds itself** (`pr-build.yml` `push:main` → `sha-<sha>`).
-There is no operator-dispatched fork-build lane.
+- **`POST /api/v1/vcs/run-ci` `{ nodeId, prNumber }`** — releases GitHub's `action_required` hold on
+  the fork's `pull_request` runs **and** dispatches the trusted `pr-build` (`workflow_dispatch`) that
+  builds the fork head into a flightable image. RBAC `node.flight` on the named node is the gate; only
+  standard `pull_request` runs are approved (never `pull_request_target` / secret-bearing — safe by
+  structure). `owner/repo` resolved from the node's catalog `source_repo`.
+- **`POST /api/v1/vcs/merge` `{ nodeId, prNumber }`** — merges any PR to the node's repo on green
+  (squash if no queue; **enqueues** if the node has a merge queue → response `{enqueued:true}`, poll
+  the PR to `MERGED`). RBAC `node.flight` is the gate; the owner-granted RBAC tuple IS the trust
+  boundary. **Branch protection on the node repo is the merge authority**; `evaluateMergeGate` is
+  fast-fail UX. Node-merge auto-promotes preview via `dispatchNodePreviewPromote`.
+
+**Node ≡ monorepo — no split-brain.** The operator-dispatched trusted `pr-build` lane (`run-ci` →
+`workflow_dispatch`) exists on nodes exactly as on the monorepo: `node-template`'s `pr-build.yml`
+carries the `workflow_dispatch` trigger + fork-head resolve (nt #57), so fork PRs to a node get a
+flightable image the same way they do on the monorepo. A node also self-builds on `push:main` →
+`sha-<sha>`, so every merge is deployable.
 
 **LEGACY (monorepo PR-number lane, kept):** `POST /api/v1/vcs/merge { prNumber }` WITHOUT `nodeId`
 (operator-node RBAC + monorepo `NODE_SUBMODULE_PARENT_*` repo) and `POST /api/v1/vcs/flight { codePr }`

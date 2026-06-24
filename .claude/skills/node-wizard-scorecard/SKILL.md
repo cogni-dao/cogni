@@ -127,7 +127,7 @@ surface, report the exact blocker instead of substituting a weaker health check.
 
 1. Confirm launch-pack facts and recall the knowledge handoff.
 2. Confirm the node repo `main` has branch protection requiring the standard CI
-   checks before merge (the backstop for operator run-checks + merge-on-green);
+   checks before merge (the backstop for operator run-ci + merge-on-green);
    enable it if missing.
 3. Open a child node customization PR.
 4. Wait for child PR CI, human/operator merge, and child `main` image tag.

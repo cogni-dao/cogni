@@ -172,7 +172,7 @@ describe("buildNodeLaunchPack", () => {
     // Node-specific guardrails (the bits that ARE node-scoped, not generic CICD).
     expect(pack.prompt).toContain("knowledge.remote");
     expect(pack.prompt).toContain("do not add a DOLTHUB_REMOTE_URL");
-    expect(pack.prompt).toContain("do not push to `main`");
+    expect(pack.prompt).toContain("Do not push to `main`");
 
     // RBAC owner-approve is the lone human step, fired immediately (node-scoped
     // URL stays in the prompt because it interpolates THIS node's id).
@@ -180,7 +180,7 @@ describe("buildNodeLaunchPack", () => {
     expect(pack.prompt).toContain(
       `/api/v1/nodes/11111111-1111-4111-8111-111111111111/access-requests`
     );
-    expect(pack.prompt).toContain("only human step in the whole path");
+    expect(pack.prompt).toContain("the only human step");
     expect(pack.prompt).toContain("never self-approve");
 
     expect(pack.prompt).not.toContain("browser-session-flight-auth.md");
