@@ -110,6 +110,15 @@ export {
   type TemplateQueryErrorCode,
 } from "./metrics/mimir.adapter";
 export { HttpNodeProber } from "./node-flight/node-prober.adapter";
+export {
+  LiveNodeRegistryAdapter,
+  type LiveNodeRegistryDeps,
+} from "./node-registry/live-node-registry.adapter";
+export {
+  type ProdLivenessConfig,
+  type ProdLivenessDeps,
+  resolveLiveProdSlugs,
+} from "./node-registry/prod-liveness";
 export { HttpLokiReader } from "./observability/loki-reader.adapter";
 export { ViemEvmOnchainClient } from "./onchain/viem-evm-onchain-client.adapter";
 export { ViemTreasuryAdapter } from "./onchain/viem-treasury.adapter";

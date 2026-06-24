@@ -123,6 +123,7 @@ import { DrizzleWorkItemSessionAdapter } from "@/adapters/server/db/work-item-se
 import { SHOWCASE_NODES } from "@/adapters/server/node-registry/bundled-nodes.data";
 import { CompositeNodeRegistryAdapter } from "@/adapters/server/node-registry/composite-node-registry.adapter";
 import { DbNodeRegistryAdapter } from "@/adapters/server/node-registry/db-node-registry.adapter";
+import { LiveNodeRegistryAdapter } from "@/adapters/server/node-registry/live-node-registry.adapter";
 import { StaticNodeRegistryAdapter } from "@/adapters/server/node-registry/static-node-registry.adapter";
 import { ServiceDrizzlePaymentAttemptRepository } from "@/adapters/server/payments/drizzle-payment-attempt.adapter";
 import { OpenRouterFundingAdapter } from "@/adapters/server/treasury/openrouter-funding.adapter";
@@ -141,6 +142,7 @@ import {
   createMetricsCapability,
   derivePrometheusQueryUrl,
 } from "@/bootstrap/capabilities/metrics";
+import { createLiveSlugsAccessor } from "@/bootstrap/capabilities/node-registry";
 import { createRepoCapability } from "@/bootstrap/capabilities/repo";
 import { createScheduleCapability } from "@/bootstrap/capabilities/schedule";
 import { createVcsCapability } from "@/bootstrap/capabilities/vcs";
@@ -1033,14 +1035,36 @@ export function resolveServiceDb(): Database {
 }
 
 /**
- * Resolve the public node registry: operator's bundled curated nodes + the live DB projection
- * (`status='active'`), composed behind NodeRegistryPort. Service-role (non-RLS) read; the DB
- * adapter degrades to [] on failure so the homepage never breaks.
+ * Module-singleton cached prod-liveness accessor for the public gallery. Built once (not per request)
+ * so the short-TTL single-flight cache is shared across all homepage renders — concurrent/repeat
+ * callers share one refresh and NEVER probe the network inline. `undefined` when no base domain is
+ * configured, in which case the gallery skips the liveness filter rather than blanking.
+ */
+let cachedLiveSlugsAccessor:
+  | ReturnType<typeof createLiveSlugsAccessor>
+  | undefined;
+let liveSlugsAccessorBuilt = false;
+
+function getLiveSlugsAccessor(): ReturnType<typeof createLiveSlugsAccessor> {
+  if (!liveSlugsAccessorBuilt) {
+    cachedLiveSlugsAccessor = createLiveSlugsAccessor(serverEnv());
+    liveSlugsAccessorBuilt = true;
+  }
+  return cachedLiveSlugsAccessor;
+}
+
+/**
+ * Resolve the public node registry: the HONEST gallery. The candidate set (operator's bundled catalog
+ * nodes + the DB wizard projection, `status='active'`) is INTERSECTED with a CACHED prod-liveness
+ * snapshot, so the gallery shows exactly the nodes whose PRODUCTION host is verified-live — a
+ * decommissioned/never-promoted node is filtered out without a gallery code edit. Service-role
+ * (non-RLS) DB read; both the DB adapter and the liveness filter degrade gracefully so the homepage
+ * never breaks on a transient infra blip.
  */
 export function resolveNodeRegistry(): NodeRegistryPort {
   const domain = baseDomain(serverEnv());
   const log = makeLogger({ service: "cogni-template", nodeId: getNodeId() });
-  return new CompositeNodeRegistryAdapter([
+  const inner = new CompositeNodeRegistryAdapter([
     new StaticNodeRegistryAdapter(SHOWCASE_NODES, domain),
     new DbNodeRegistryAdapter({
       listListedNodes: async () => {
@@ -1065,4 +1089,9 @@ export function resolveNodeRegistry(): NodeRegistryPort {
       domain,
     }),
   ]);
+
+  const liveSlugs = getLiveSlugsAccessor();
+  if (!liveSlugs) return inner; // No base domain ⇒ no liveness filter (dev/local).
+
+  return new LiveNodeRegistryAdapter({ inner, getLiveSlugs: liveSlugs });
 }

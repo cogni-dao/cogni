@@ -45,10 +45,6 @@ nodes:
     node_name: "Cogni Operator"
     path: "nodes/operator"
     endpoint: "http://app:3000/api/internal/billing/ingest"
-  - node_id: "5ed2d64f-2745-4676-983b-2fb7e05b2eba"
-    node_name: "Poly Prediction"
-    path: "nodes/poly"
-    endpoint: "http://poly:3100/api/internal/billing/ingest"
 
 # Control GitHub check conclusion behavior for gate errors/timeouts
 # false (default): errors/timeouts result in 'neutral' conclusion (non-blocking)

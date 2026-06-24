@@ -3,14 +3,23 @@
 
 /**
  * Module: `@adapters/server/node-registry/bundled-nodes.data`
- * Purpose: Operator's curated, shipped showcase nodes (those with committed homepage screenshots).
- *   The StaticNodeRegistryAdapter source; composed with the DB projection for dynamic nodes.
+ * Purpose: Operator's curated CANDIDATE nodes — the in-image catalog nodes that have no wizard DB row
+ *   (operator, plus shipped full-app catalog nodes with committed homepage screenshots). This is a
+ *   CANDIDATE set, NOT a showcase: it is composed with the DB projection and then INTERSECTED with the
+ *   cached prod-liveness snapshot (LiveNodeRegistryAdapter), so a dead/decommissioned catalog node never
+ *   reaches the gallery. Curate freely — liveness, not this list, decides what ships.
  * Scope: Static data only — no IO, no env. `name` matches infra/catalog/<name>.yaml.
- * Invariants: `primary` true means the node serves the bare base domain (operator). `thumbnail` is a
- *   committed screenshot under public/showcase/.
+ * Invariants:
+ *   - PRIMARY_SERVES_APEX: `primary: true` means the node serves the bare base domain (operator).
+ *   - THUMBNAIL_IS_PRESENTATION: `thumbnail` is a committed screenshot under public/showcase/; a node
+ *     without one degrades to the NodeTile gradient placeholder (never a broken image).
+ *   - LIVENESS_GATES_DISPLAY: an entry here is only a CANDIDATE; it shows iff its prod host is live.
+ *     Decommissioned nodes (e.g. the removed `canary`) must be deleted here too — a dead candidate is
+ *     pure noise even though the liveness filter would also drop it.
  * Side-effects: none
- * Notes: Dynamic/new nodes flow via the DB projection, not here — this stays a small curated bundle.
- * Links: public/showcase/*.png, src/adapters/server/node-registry/static-node-registry.adapter.ts
+ * Notes: Dynamic/wizard nodes flow via the DB projection, not here — this stays a small curated bundle.
+ * Links: public/showcase/*.png, src/adapters/server/node-registry/static-node-registry.adapter.ts,
+ *   src/adapters/server/node-registry/live-node-registry.adapter.ts
  * @public
  */
 
@@ -31,7 +40,11 @@ export interface ShowcaseNode {
   primary?: boolean;
 }
 
-/** Showcased nodes, in display order. Curate freely — copy is intentionally editable. */
+/**
+ * Curated candidate nodes, in display order. Each is shown ONLY if its production host is verified-live
+ * (LiveNodeRegistryAdapter). Curate freely — copy is intentionally editable. Delete decommissioned
+ * nodes here rather than relying on the liveness filter to hide a dead tile's noise.
+ */
 export const SHOWCASE_NODES: readonly ShowcaseNode[] = [
   {
     name: "operator",
@@ -47,13 +60,6 @@ export const SHOWCASE_NODES: readonly ShowcaseNode[] = [
     title: "Resy Helper",
     tagline: "Claims restaurant reservations in seconds, beating scalper bots.",
     thumbnail: "/showcase/resy.png",
-  },
-  {
-    name: "canary",
-    title: "Canary",
-    tagline:
-      "An autonomous AI node — governed on-chain, ships its own pull requests.",
-    thumbnail: "/showcase/canary.png",
   },
   {
     name: "node-template",
