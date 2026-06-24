@@ -6,10 +6,11 @@
  * Purpose: Owner action buttons for one access row — Approve/Deny on a pending request, Revoke on
  *   an approved developer. Each click is an owner-gated decision against the existing
  *   POST /api/v1/nodes/[id]/developers route; the OpenFGA role tuple write is the authority.
- * Scope: Client island only. The clicked button shows a kit waiting signal (Loader2) and the loading
- *   state spans BOTH the POST and the server re-render (useTransition wraps router.refresh), so the
- *   click visibly completes — the row moves between sections — or surfaces an error, but never hangs.
- * Side-effects: IO (POST decision), router.refresh (inside a transition).
+ * Scope: Client island only. The clicked button shows a kit waiting signal (Loader2) tied strictly to
+ *   the in-flight decision POST — always cleared when it settles, so the button completes or errors but
+ *   never hangs. On success router.refresh() (inside a transition, to avoid the clobber race) moves the
+ *   row between sections; the spinner is NOT gated on the transition's pending flag, which can stick.
+ * Side-effects: IO (POST decision), router.refresh (inside a transition, fire-and-forget).
  * Links: src/app/api/v1/nodes/[id]/developers/route.ts, ./NodeAccess.tsx
  * @public
  */
@@ -18,7 +19,7 @@
 
 import { Loader2 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { type ReactElement, useEffect, useState, useTransition } from "react";
+import { type ReactElement, useState, useTransition } from "react";
 
 import { Button } from "@/components";
 import type { NodeAccessRole } from "@/shared/db/node-access-requests";
@@ -48,23 +49,14 @@ export function AccessActions({
   actions,
 }: Props): ReactElement {
   const router = useRouter();
-  // `submitting` tracks the in-flight POST (and which button fired it); `isRefreshing` tracks the
-  // subsequent RSC re-render. The loading signal spans both — the previous code cleared a single
-  // `busy` flag the instant the POST resolved, BEFORE the fire-and-forget router.refresh() re-rendered,
-  // so the button re-enabled while the row still showed the old state — which read as a hang until a
-  // second click forced the refresh to land.
+  // `submitting` tracks the in-flight decision POST (and which button fired it) — and ONLY that. It
+  // is the single source of the waiting signal and is always cleared when the request settles, so the
+  // button can never spin forever. We deliberately do NOT gate the UI on useTransition's pending flag:
+  // `router.refresh()` wrapped in a transition can leave that flag stuck indefinitely, which both
+  // froze the spinner AND blocked the re-render (the infinite-spinner bug).
   const [submitting, setSubmitting] = useState<Decision | null>(null);
-  const [isRefreshing, startTransition] = useTransition();
+  const [, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
-  const busy = submitting !== null || isRefreshing;
-
-  // When a post-success refresh settles, drop the spinner even if the row happened to persist —
-  // a re-enabled button always beats an indefinite spin.
-  useEffect(() => {
-    if (!isRefreshing) {
-      setSubmitting(null);
-    }
-  }, [isRefreshing]);
 
   const decide = (decision: Decision): void => {
     setSubmitting(decision);
@@ -82,16 +74,20 @@ export function AccessActions({
             error?: string;
           };
           setError(body.errorCode ?? body.error ?? `HTTP ${res.status}`);
-          setSubmitting(null);
           return;
         }
-        // Keep the waiting signal through the server re-render so the click visibly completes
-        // (the row moves between sections) instead of appearing to hang.
+        // The decision committed server-side (the role tuple + best-effort row transition). Reconcile
+        // the server-rendered list so the row moves between sections. Wrapped in a transition so this
+        // non-urgent RSC refetch isn't clobbered by the urgent setSubmitting(null) below — the race
+        // that originally made the click need a second press — but the spinner is NOT tied to it.
         startTransition(() => {
           router.refresh();
         });
       } catch (e) {
         setError(e instanceof Error ? e.message : "request failed");
+      } finally {
+        // Always clear the waiting signal once the request resolves — success or failure — so the
+        // button completes or errors, but never hangs.
         setSubmitting(null);
       }
     })();
@@ -105,7 +101,7 @@ export function AccessActions({
             key={action.decision + action.label}
             size="sm"
             variant={action.variant}
-            disabled={busy}
+            disabled={submitting !== null}
             rightIcon={
               submitting === action.decision ? (
                 <Loader2 className="animate-spin" />
