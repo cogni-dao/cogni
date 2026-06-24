@@ -47,22 +47,22 @@ design.
 ### Per-env status (canonical — link here, do not re-state)
 
 This is the one place the per-env reality lives. The self-serve API is **code-deployed
-on every env**, but the OpenBao writer role + RBAC store + Reloader controller are
-only fully provisioned on candidate-a today.
+on every env**. As of **2026-06-24** the write path is **proven on candidate-a AND
+production**; only **preview** is still blocked (its OpenFGA authz layer is down).
 
-| Env           | Self-serve write | Why                                                                                                                                                                                                                                                                                                                                                                                |
-| ------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `candidate-a` | ✅ PROVEN e2e    | End-to-end, including a **non-operator node** (`node-template`, `200 written`).                                                                                                                                                                                                                                                                                                    |
-| `preview`     | ⛔ NOT proven    | Likely no OpenFGA store (→ `503 authz_unavailable`) + `preview-node-secrets-writer` role unverified + Reloader gaps.                                                                                                                                                                                                                                                               |
-| `production`  | ⛔ 503           | Code deployed but `createOperatorSecretsPlane` throws: `production-node-secrets-writer` OpenBao role not provisioned ([`bug.5007`](https://cognidao.org/work/items/bug.5007)); prod OpenFGA `secrets_manager` bootstrap unverified; prod likely lacks the Stakater Reloader controller ([`bug.5040`](https://cognidao.org/work/items/bug.5040)) so a write would not roll the pod. |
+| Env           | Self-serve write    | State (verified 2026-06-24, live)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `candidate-a` | ✅ PROVEN e2e       | End-to-end, including a **non-operator node** (`node-template`, `200 written`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `production`  | ✅ WRITE PROVEN     | `POST cognidao.org/api/v1/nodes/operator/secrets {env:production}` → **`200`** (KV version bumped). The `production-node-secrets-writer` OpenBao role + operator overlay (`OPENBAO_NODE_SECRETS_WRITER_ROLE` via `envFrom` + projected SA token) **are** provisioned (#1737); OpenFGA store is **live** (`node-template` → `403 authz_denied`, not 503). **Reloader installed 2026-06-24** ([`bug.5040`](https://cognidao.org/work/items/bug.5040)) so writes now roll the pod. Remaining: a non-operator (`node-template`) write — `secrets_manager` request filed, pending owner approve. |
+| `preview`     | ⛔ authz down (503) | Operator is up (env-guard returns `409`), but a correct-env write returns **`503 authz_unavailable`** — the preview operator can't resolve its OpenFGA store/model, so every authz check fails closed _before_ any write. Fix preview's OpenFGA bootstrap/reachability first; the writer role + Reloader are downstream of that.                                                                                                                                                                                                                                                            |
 
-Until preview/prod are provisioned, a vendor value for those envs goes through the
+For **preview** (authz down) or any **cross-env** write, a vendor value goes through the
 **break-glass operator-admin CLI** ([§3–8 below](#3-recover-kube-custody)) against
 that env's OpenBao — kube + writer JWT, admin-only.
 
 > The CLI path (`pnpm secrets:set`, §3–8) is **legacy / break-glass / day-2 admin**,
 > not the node-dev contract. Reach for it only for the envs/cases the self-serve API
-> cannot yet serve (preview/prod, cross-env). It is documented here for completeness,
+> cannot yet serve (preview, cross-env). It is documented here for completeness,
 > not as the default.
 
 `source: agent` keys (DB creds, DSNs, `AUTH_SECRET`, `CONNECTIONS_ENCRYPTION_KEY`,
