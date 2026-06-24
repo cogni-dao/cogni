@@ -33,7 +33,10 @@ import { mapBackendStatus } from "../utils/mapBackendStatus";
  * Structure a thrown error (wallet/simulation/network) into a UI error +
  * a debug string for logging. SSOT for error shape is formatPaymentError.
  */
-function toUiError(error: unknown): { ui: PaymentUiError; debug?: string } {
+function toUiError(error: unknown): {
+  ui: PaymentUiError;
+  debug: string | undefined;
+} {
   const { debug, ...ui } = formatPaymentError(error);
   return { ui, debug };
 }

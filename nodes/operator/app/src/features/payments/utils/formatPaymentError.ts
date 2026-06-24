@@ -43,8 +43,7 @@ const BACKEND_PRESENTATION: Record<
   SENDER_MISMATCH: {
     code: "SENDER_MISMATCH",
     title: "Wrong wallet",
-    message:
-      "The payment came from a different wallet than the one connected.",
+    message: "The payment came from a different wallet than the one connected.",
     hint: "Reconnect the wallet you paid from, then try again.",
     recoverable: true,
   },
@@ -179,7 +178,9 @@ export function formatPaymentError(error: unknown): FormattedError {
     typeof (error as { code: unknown }).code === "string"
   ) {
     const preset =
-      BACKEND_PRESENTATION[(error as { code: string }).code as PaymentErrorCode];
+      BACKEND_PRESENTATION[
+        (error as { code: string }).code as PaymentErrorCode
+      ];
     if (preset) return { ...preset, debug };
   }
 
@@ -226,8 +227,7 @@ export function formatPaymentError(error: unknown): FormattedError {
     return {
       code: "INSUFFICIENT_GAS",
       title: "Not enough ETH for gas",
-      message:
-        "This wallet needs a little ETH on Base to cover network fees.",
+      message: "This wallet needs a little ETH on Base to cover network fees.",
       hint: "Add a small amount of ETH on Base, then try again.",
       recoverable: true,
       debug,

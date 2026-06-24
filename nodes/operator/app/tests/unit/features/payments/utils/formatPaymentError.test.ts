@@ -20,7 +20,7 @@ import { formatPaymentError } from "@/features/payments/utils/formatPaymentError
 describe("formatPaymentError", () => {
   it("classifies an ERC-20 'exceeds balance' revert as INSUFFICIENT_BALANCE", () => {
     const err = new Error(
-      "The contract function \"transfer\" reverted with the following reason:\nERC20: transfer amount exceeds balance"
+      'The contract function "transfer" reverted with the following reason:\nERC20: transfer amount exceeds balance'
     );
     const out = formatPaymentError(err);
     expect(out.code).toBe("INSUFFICIENT_BALANCE");
@@ -34,7 +34,9 @@ describe("formatPaymentError", () => {
     // but the revert reason is still on the message. The old code gated on constructor.name
     // and silently fell through to "Something went wrong"; this must NOT.
     class Yx extends Error {}
-    const err = new Yx("execution reverted: ERC20: transfer amount exceeds balance");
+    const err = new Yx(
+      "execution reverted: ERC20: transfer amount exceeds balance"
+    );
     expect(err.constructor.name).toBe("Yx"); // not "ContractFunctionExecutionError"
     expect(formatPaymentError(err).code).toBe("INSUFFICIENT_BALANCE");
   });
