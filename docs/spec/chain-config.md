@@ -43,7 +43,7 @@ Ensure chain identity and payment addresses are governed in git (not env), valid
 
 5. **SINGLE_PATH_DIFFERENT_CONTENTS**: All deployments (dev/preview/prod) read `.cogni/repo-spec.yaml` from the same path; the app never branches on env to pick a different file.
 
-6. **RPC_IN_ENVIRONMENT**: `EVM_RPC_URL` varies per deployment, never committed.
+6. **RPC_IN_ENVIRONMENT**: `EVM_RPC_URL` varies per deployment, never committed. It is a **provisioned per-env `_shared` substrate** (`node declares shape; operator wires environment`, [node-baas-architecture.md](./node-baas-architecture.md)), seeded once per env into `cogni/<env>/_shared/EVM_RPC_URL` — **not a per-node manual paste**. `EVM_RPC_URL` is `appliesTo: all-nodes, shared: true, required: true, source: human`; `secret-materialize.sh` fails-fast when a `required` key resolves empty (repair the bank, never the node) so a missing endpoint surfaces loudly at provision/flight instead of silently no-op'ing outbound web3 at runtime (bug.5087). Capability-gating requiredness (chain-only for on-chain/payments nodes) is the follow-up.
 
 ## Design
 

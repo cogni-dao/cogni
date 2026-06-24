@@ -314,7 +314,20 @@ for k in "${NODE_BASELINE_KEYS[@]}"; do
   fi
   key_is_agent_generated "$k" || inherit_shared_value "$k"
   v="$(_resolve_node_value "$TARGET_NODE" "$k")"
-  [[ -z "$v" ]] && continue
+  if [[ -z "$v" ]]; then
+    # We only reach here for a key the node is SUPPOSED to get (_node_gets_key
+    # filtered above). A source:human shared substrate value (EVM_RPC_URL,
+    # POSTHOG_*) has no minting owner — it must already sit in the env bank at
+    # cogni/<env>/_shared/<KEY>. If it doesn't, inherit_shared_value resolves
+    # empty and the pre-fix `continue` silently shipped a half-provisioned node
+    # whose outbound path no-ops at runtime (bug.5087: payments outbound + chain
+    # reads silently skipped). Fail-fast on the incomplete required set instead —
+    # repair the BANK, never the node (design.secrets-catalog-per-node).
+    if [[ "$(_cat_field "$k" '.required')" == "true" ]]; then
+      fail "required secret ${k} resolved empty for ${DEPLOY_ENVIRONMENT}/${TARGET_NODE} — env bank incomplete (source:$(_cat_field "$k" '.source')). Seed it once per env at cogni/${DEPLOY_ENVIRONMENT}/_shared/${k}, then re-run. See docs/guides/secrets-add-new.md."
+    fi
+    continue
+  fi
   seed_kv "$TARGET_NODE" "$k" "$v"
   log "  created ${k}"
   created=$((created + 1))
