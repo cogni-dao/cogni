@@ -211,6 +211,15 @@ export function setBuildInfo(version: string, commitSha: string) {
   appBuildInfo.labels({ version, commit_sha: commitSha }).set(1);
 }
 
+// Compute-substrate spend awareness (story.5011): remaining balance per compute
+// provider account, in `currency` major units. Set on each on-demand read of
+// GET /api/v1/compute/balances; scraped via /api/metrics → Mimir → Grafana alert.
+export const computeBalanceRemaining = getOrCreateGauge(
+  "compute_balance_remaining",
+  "Remaining compute-provider account balance in currency major units (provider-agnostic)",
+  ["provider", "account", "currency"] as const
+);
+
 // =============================================================================
 // BYO-AI Auth Metrics (alertable — critical auth path)
 // =============================================================================

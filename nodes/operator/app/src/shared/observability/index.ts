@@ -27,12 +27,6 @@ export const EVENT_NAMES = {
   // Auth perimeter (proxy): request rejected before reaching any route handler,
   // so the request-scoped logger never sees it — emitted directly from the proxy.
   AUTH_PERIMETER_DENIED: "auth.perimeter.denied",
-  // Compute-substrate spend awareness (story.5011): the compute-balance scheduled job
-  // emits .observed per provider account, .low when remaining < threshold, and
-  // .check_failed when the balance read itself errors (so a dead monitor is visible).
-  COMPUTE_BALANCE_OBSERVED: "infrastructure.compute_balance.observed",
-  COMPUTE_BALANCE_LOW: "infrastructure.compute_balance.low",
-  COMPUTE_BALANCE_CHECK_FAILED: "infrastructure.compute_balance.check_failed",
 } as const;
 
 export type EventName = (typeof EVENT_NAMES)[keyof typeof EVENT_NAMES];
