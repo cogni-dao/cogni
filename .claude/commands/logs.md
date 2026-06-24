@@ -109,13 +109,13 @@ For CI failures, use `env="ci"`:
 >
 > **Query params** (all optional except `env`):
 >
-> | param | default | bounds | meaning |
-> | --- | --- | --- | --- |
-> | `env` | — (required) | `candidate-a` \| `preview` \| `production` | which deploy env to read |
-> | `query` | node app stream | ≤2048 chars | the full LogQL (same string as MCP / `loki-query.sh`) |
-> | `limit` | `100` | 1–1000 | max lines returned (newest-first) |
-> | `minutes` | `60` | 1–1440 | **relative** window: last N minutes back from now |
-> | `start` / `end` | — | span ≤24h | **absolute** window — RFC3339 (`2026-06-24T00:00:00Z`) or epoch-ms; missing `end`→now, missing `start`→`end-1h`. Overrides `minutes` when present. |
+> | param           | default         | bounds                                     | meaning                                                                                                                                            |
+> | --------------- | --------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+> | `env`           | — (required)    | `candidate-a` \| `preview` \| `production` | which deploy env to read                                                                                                                           |
+> | `query`         | node app stream | ≤2048 chars                                | the full LogQL (same string as MCP / `loki-query.sh`)                                                                                              |
+> | `limit`         | `100`           | 1–1000                                     | max lines returned (newest-first)                                                                                                                  |
+> | `minutes`       | `60`            | 1–1440                                     | **relative** window: last N minutes back from now                                                                                                  |
+> | `start` / `end` | —               | span ≤24h                                  | **absolute** window — RFC3339 (`2026-06-24T00:00:00Z`) or epoch-ms; missing `end`→now, missing `start`→`end-1h`. Overrides `minutes` when present. |
 >
 > Absolute beats relative; either form is capped at a 24h span (mirrors the operator-scope read budget).
 > A bad instant, `start ≥ end`, or a >24h span → `400 invalid_window`. Example — one historical hour:
