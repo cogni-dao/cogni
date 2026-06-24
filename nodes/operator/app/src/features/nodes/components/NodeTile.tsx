@@ -54,16 +54,13 @@ function Banner({
       />
     );
   }
-  // No committed screenshot → a branded monogram placeholder. Intentional, not a gap: a subtle
-  // diagonal token gradient with a faint dot-grid texture and the node's initial in a soft ring, so a
-  // mixed gallery of screenshot-cards and placeholder-cards still reads as deliberate.
+  // No committed screenshot → a branded monogram placeholder. Intentional, not a gap: a diagonal token
+  // gradient wash with the node's initial set in a ringed, frosted chip, so a mixed gallery of
+  // screenshot-cards and placeholder-cards reads as deliberate rather than broken. Token utilities only
+  // (no arbitrary literals, no inline styles) to satisfy ui-governance.
   return (
-    <div className="relative flex h-full w-full items-center justify-center overflow-hidden bg-gradient-to-br from-primary/20 via-primary/5 to-background">
-      <div
-        aria-hidden
-        className="absolute inset-0 opacity-[0.18] [background-image:radial-gradient(circle,hsl(var(--foreground))_1px,transparent_1px)] [background-size:16px_16px]"
-      />
-      <span className="relative flex h-16 w-16 items-center justify-center rounded-full border border-primary/30 bg-background/60 font-bold text-3xl text-foreground/80 uppercase shadow-sm backdrop-blur-sm">
+    <div className="relative flex h-full w-full items-center justify-center overflow-hidden bg-gradient-to-br from-primary/25 via-primary/10 to-background">
+      <span className="flex h-16 w-16 items-center justify-center rounded-full border border-primary/30 bg-background/60 font-bold text-3xl text-foreground/80 uppercase shadow-sm backdrop-blur-sm">
         {title.charAt(0)}
       </span>
     </div>
