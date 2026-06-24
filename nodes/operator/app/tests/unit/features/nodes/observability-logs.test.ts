@@ -14,8 +14,10 @@
 import { describe, expect, it } from "vitest";
 import {
   isFlightEnv,
+  MAX_MINUTES,
   MAX_QUERY_LENGTH,
   ObservabilityQueryError,
+  resolveLogWindow,
   scopeNodeLogQL,
 } from "@/features/nodes/observability-logs";
 
@@ -163,5 +165,107 @@ describe("isFlightEnv (canonical env envelope, reused — not a local copy)", ()
     expect(isFlightEnv("preview")).toBe(true);
     expect(isFlightEnv("local")).toBe(false);
     expect(isFlightEnv(null)).toBe(false);
+  });
+});
+
+describe("resolveLogWindow", () => {
+  // Fixed clock so window math is deterministic (no Date.now in the pure helper).
+  const NOW = 1_782_000_000_000; // 2026-06-20T...Z, an arbitrary epoch-ms
+  const ns = (ms: number): string => `${ms}000000`;
+
+  it("defaults to the last 60 minutes when no params are given", () => {
+    expect(resolveLogWindow({ nowMs: NOW })).toEqual({
+      startNs: ns(NOW - 60 * 60_000),
+      endNs: ns(NOW),
+    });
+  });
+
+  it("honors a relative `minutes` window", () => {
+    expect(resolveLogWindow({ nowMs: NOW, minutes: "180" })).toEqual({
+      startNs: ns(NOW - 180 * 60_000),
+      endNs: ns(NOW),
+    });
+  });
+
+  it("clamps `minutes` to the 24h max and falls back to default on garbage", () => {
+    expect(resolveLogWindow({ nowMs: NOW, minutes: "99999" }).startNs).toBe(
+      ns(NOW - MAX_MINUTES * 60_000)
+    );
+    expect(resolveLogWindow({ nowMs: NOW, minutes: "-5" }).startNs).toBe(
+      ns(NOW - 60 * 60_000)
+    );
+    expect(resolveLogWindow({ nowMs: NOW, minutes: "abc" }).startNs).toBe(
+      ns(NOW - 60 * 60_000)
+    );
+  });
+
+  it("accepts an absolute RFC3339 start/end window (loki-query.sh parity)", () => {
+    const startMs = Date.parse("2026-06-19T00:00:00.000Z");
+    const endMs = Date.parse("2026-06-19T06:00:00.000Z");
+    expect(
+      resolveLogWindow({
+        nowMs: NOW,
+        start: "2026-06-19T00:00:00.000Z",
+        end: "2026-06-19T06:00:00.000Z",
+      })
+    ).toEqual({ startNs: ns(startMs), endNs: ns(endMs) });
+  });
+
+  it("accepts epoch-millisecond instants", () => {
+    const startMs = NOW - 30 * 60_000;
+    expect(
+      resolveLogWindow({
+        nowMs: NOW,
+        start: String(startMs),
+        end: String(NOW),
+      })
+    ).toEqual({ startNs: ns(startMs), endNs: ns(NOW) });
+  });
+
+  it("defaults a missing end to now, a missing start to end-1h (absolute mode)", () => {
+    const endMs = NOW - 10 * 60_000;
+    expect(resolveLogWindow({ nowMs: NOW, start: String(endMs) }).endNs).toBe(
+      ns(NOW)
+    );
+    expect(resolveLogWindow({ nowMs: NOW, end: String(endMs) }).startNs).toBe(
+      ns(endMs - 60 * 60_000)
+    );
+  });
+
+  it("absolute overrides relative when both are present", () => {
+    const startMs = NOW - 2 * 60_000;
+    expect(
+      resolveLogWindow({
+        nowMs: NOW,
+        minutes: "180",
+        start: String(startMs),
+        end: String(NOW),
+      })
+    ).toEqual({ startNs: ns(startMs), endNs: ns(NOW) });
+  });
+
+  it("REJECTS an unparseable instant", () => {
+    expect(() =>
+      resolveLogWindow({ nowMs: NOW, start: "not-a-date", end: String(NOW) })
+    ).toThrowError(expect.objectContaining({ code: "invalid_window" }));
+  });
+
+  it("REJECTS start >= end", () => {
+    expect(() =>
+      resolveLogWindow({ nowMs: NOW, start: String(NOW), end: String(NOW) })
+    ).toThrowError(expect.objectContaining({ code: "invalid_window" }));
+  });
+
+  it("REJECTS a span exceeding the 24h max", () => {
+    const startMs = NOW - (MAX_MINUTES * 60_000 + 1);
+    expect(() =>
+      resolveLogWindow({ nowMs: NOW, start: String(startMs), end: String(NOW) })
+    ).toThrowError(expect.objectContaining({ code: "invalid_window" }));
+  });
+
+  it("throws ObservabilityQueryError instances", () => {
+    expect(() => resolveLogWindow({ nowMs: NOW, start: "bad" })).toThrow(
+      ObservabilityQueryError
+    );
   });
 });

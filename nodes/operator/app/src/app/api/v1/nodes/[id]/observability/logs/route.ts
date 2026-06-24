@@ -38,6 +38,7 @@ import {
   FLIGHT_ENVS,
   isFlightEnv,
   ObservabilityQueryError,
+  resolveLogWindow,
   scopeNodeLogQL,
 } from "@/features/nodes/observability-logs";
 import {
@@ -55,8 +56,6 @@ const clock = { now: () => new Date().toISOString() };
 
 const MAX_LIMIT = 1000;
 const DEFAULT_LIMIT = 100;
-const MAX_MINUTES = 24 * 60;
-const DEFAULT_MINUTES = 60;
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -231,9 +230,34 @@ export async function GET(
   }
 
   const limit = clampInt(params.get("limit"), DEFAULT_LIMIT, MAX_LIMIT);
-  const minutes = clampInt(params.get("minutes"), DEFAULT_MINUTES, MAX_MINUTES);
-  const endNs = `${Date.now()}000000`;
-  const startNs = `${Date.now() - minutes * 60_000}000000`;
+
+  // Window: relative `minutes` (default) OR absolute `start`/`end` (RFC3339 | epoch-ms),
+  // both capped at a 24h span. Same 400 `invalid_window` path as a bad query.
+  let startNs: string;
+  let endNs: string;
+  try {
+    ({ startNs, endNs } = resolveLogWindow({
+      nowMs: Date.now(),
+      minutes: params.get("minutes"),
+      start: params.get("start"),
+      end: params.get("end"),
+    }));
+  } catch (err) {
+    if (err instanceof ObservabilityQueryError) {
+      logComplete({
+        outcome: "error",
+        status: 400,
+        errorCode: err.code,
+        nodeId: node.nodeId,
+        env,
+      });
+      return NextResponse.json(
+        { error: err.code, message: err.message },
+        { status: 400 }
+      );
+    }
+    throw err;
+  }
 
   try {
     const lines = await reader.queryRange({ query, startNs, endNs, limit });

@@ -47,9 +47,10 @@ const FORCED_LABELS = new Set(["env", "service", "node"]);
 
 export type ObservabilityQueryErrorCode =
   | "invalid_query"
-  | "query_out_of_scope";
+  | "query_out_of_scope"
+  | "invalid_window";
 
-/** Thrown when the caller-supplied query cannot be parsed or would reach beyond the node (→ HTTP 400). */
+/** Thrown when the caller-supplied query/window cannot be parsed or would reach beyond the node (→ HTTP 400). */
 export class ObservabilityQueryError extends Error {
   constructor(
     readonly code: ObservabilityQueryErrorCode,
@@ -178,4 +179,93 @@ function parseMatchers(matchersRaw: string): LabelMatcher[] {
 /** Double-quote a LogQL label value, escaping `\` and `"`. */
 function quote(value: string): string {
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+// ── Time window ────────────────────────────────────────────────────────────
+// The proxy queries Loki over a bounded window. Two mutually-exclusive forms:
+//   - relative: `minutes` back from now (default 60, max 1440)   ← the existing knob
+//   - absolute: `start`/`end` instants (RFC3339 or epoch-ms)     ← loki-query.sh parity
+// Either form is clamped to a 24h max span: a single dev query never scans more
+// of Loki than the operator-scope path would. Absolute beats relative when both
+// are present.
+
+/** Relative-window bounds (minutes). Owned here so the route holds no window math. */
+export const DEFAULT_MINUTES = 60;
+export const MAX_MINUTES = 24 * 60;
+/** Hard cap on any single query's span — relative or absolute. */
+export const MAX_WINDOW_MS = MAX_MINUTES * 60_000;
+
+const msToNs = (ms: number): string => `${ms}000000`;
+
+/** Parse an instant as either epoch-milliseconds (all digits) or an RFC3339/ISO-8601 string. */
+function parseInstantMs(raw: string, label: string): number {
+  const trimmed = raw.trim();
+  if (/^\d+$/.test(trimmed)) {
+    const ms = Number(trimmed);
+    if (Number.isSafeInteger(ms) && ms >= 0) return ms;
+  } else {
+    const ms = Date.parse(trimmed);
+    if (Number.isFinite(ms)) return ms;
+  }
+  throw new ObservabilityQueryError(
+    "invalid_window",
+    `'${label}' must be an RFC3339 timestamp or epoch-milliseconds integer`
+  );
+}
+
+function clampMinutes(raw: string | null | undefined): number {
+  const n = Number.parseInt(raw ?? "", 10);
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_MINUTES;
+  return Math.min(n, MAX_MINUTES);
+}
+
+/**
+ * Resolve the Loki query window (nanosecond `startNs`/`endNs`) from the caller's params.
+ *
+ * - no `start`/`end`        → relative: `[now - minutes, now]` (minutes clamped to ≤24h)
+ * - `start` and/or `end`    → absolute: each parsed as RFC3339 or epoch-ms; missing `end`
+ *                             defaults to now, missing `start` to `end - 1h`
+ *
+ * Throws `ObservabilityQueryError('invalid_window')` on an unparseable instant,
+ * `start >= end`, or a span exceeding `MAX_WINDOW_MS`.
+ */
+export function resolveLogWindow(input: {
+  readonly nowMs: number;
+  readonly minutes?: string | null;
+  readonly start?: string | null;
+  readonly end?: string | null;
+}): { startNs: string; endNs: string } {
+  const hasAbsolute =
+    (input.start ?? "").trim() !== "" || (input.end ?? "").trim() !== "";
+
+  if (!hasAbsolute) {
+    const minutes = clampMinutes(input.minutes);
+    return {
+      startNs: msToNs(input.nowMs - minutes * 60_000),
+      endNs: msToNs(input.nowMs),
+    };
+  }
+
+  const endMs =
+    (input.end ?? "").trim() !== ""
+      ? parseInstantMs(input.end as string, "end")
+      : input.nowMs;
+  const startMs =
+    (input.start ?? "").trim() !== ""
+      ? parseInstantMs(input.start as string, "start")
+      : endMs - DEFAULT_MINUTES * 60_000;
+
+  if (startMs >= endMs) {
+    throw new ObservabilityQueryError(
+      "invalid_window",
+      "'start' must be before 'end'"
+    );
+  }
+  if (endMs - startMs > MAX_WINDOW_MS) {
+    throw new ObservabilityQueryError(
+      "invalid_window",
+      `window span exceeds the ${MAX_MINUTES / 60}h maximum`
+    );
+  }
+  return { startNs: msToNs(startMs), endNs: msToNs(endMs) };
 }
