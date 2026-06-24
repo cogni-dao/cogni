@@ -382,7 +382,8 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
       protectionSourceRepo: "cogni",
     });
 
-    // The node got canonical merge settings (auto-merge ON) + the queue ruleset POSTed.
+    // The node got canonical repo settings (auto-merge ON, NOT a template) + the
+    // queue ruleset POSTed.
     const patch = requests.find(
       (r) => r.route === "PATCH /repos/{owner}/{repo}"
     );
@@ -391,6 +392,7 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
       repo: "atlas",
       allow_auto_merge: true,
       allow_squash_merge: true,
+      is_template: false,
     });
     const post = requests.find(
       (r) => r.route === "POST /repos/{owner}/{repo}/rulesets"
