@@ -180,7 +180,7 @@ describe("buildNodeLaunchPack", () => {
     expect(pack.prompt).toContain(
       `/api/v1/nodes/11111111-1111-4111-8111-111111111111/access-requests`
     );
-    expect(pack.prompt).toContain("single human step");
+    expect(pack.prompt).toContain("only human step in the whole path");
     expect(pack.prompt).toContain("never self-approve");
 
     expect(pack.prompt).not.toContain("browser-session-flight-auth.md");
