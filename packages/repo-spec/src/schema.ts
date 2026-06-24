@@ -429,7 +429,7 @@ export const nodeRegistryEntrySchema = z.object({
   node_id: z.string().uuid(),
   /** Human-friendly display name (for logging, UI, dashboards) */
   node_name: z.string().min(1),
-  /** Path relative to repo root (e.g., "." for operator, "nodes/poly" for poly) */
+  /** Path relative to repo root (e.g., "nodes/operator" for operator, "nodes/<slug>" for a child) */
   path: z.string().min(1),
   /** Docker-internal endpoint for billing callback routing (optional — runtime config) */
   endpoint: z.string().optional(),

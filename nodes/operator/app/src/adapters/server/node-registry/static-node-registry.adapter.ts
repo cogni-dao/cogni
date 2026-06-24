@@ -3,25 +3,24 @@
 
 /**
  * Module: `@adapters/server/node-registry/static-node-registry.adapter`
- * Purpose: NodeRegistryPort adapter for operator's curated, shipped showcase nodes (the ones with
- *   committed homepage screenshots). Composed with the DB-projection adapter for dynamic nodes.
- * Scope: Maps bundled full-app nodes → NodeSummary, resolving hrefs from a base domain. Pure: the
+ * Purpose: NodeRegistryPort adapter for the operator's committed network roster — the full set of
+ *   deployed web nodes (the catalog `type: node` entries). Composed with the DB-projection adapter for
+ *   wizard-created dynamic nodes.
+ * Scope: Maps roster full-app nodes → NodeSummary, resolving hrefs from a base domain. Pure: the
  *   domain is injected (no env access here); the server factory supplies it.
- * Invariants: every bundled node is `kind: "full-app"`; href via the catalog host convention.
+ * Invariants: every roster node is `kind: "full-app"`; href via the catalog host convention.
  * Side-effects: none
- * Links: src/ports/node-registry.port.ts, src/shared/node-registry/resolve.ts
+ * Links: src/ports/node-registry.port.ts, src/shared/node-registry/resolve.ts,
+ *   src/adapters/server/node-registry/network-nodes.data.ts
  * @public
  */
 
 import type { NodeRegistryPort, NodeSummary } from "@/ports";
 import { resolveHref } from "@/shared/node-registry/resolve";
 
-import { SHOWCASE_NODES, type ShowcaseNode } from "./bundled-nodes.data";
+import { NETWORK_NODES, type NetworkNode } from "./network-nodes.data";
 
-function toSummary(
-  node: ShowcaseNode,
-  domain: string | undefined
-): NodeSummary {
+function toSummary(node: NetworkNode, domain: string | undefined): NodeSummary {
   return {
     slug: node.name,
     ...(node.nodeId !== undefined && { nodeId: node.nodeId }),
@@ -42,10 +41,10 @@ function toSummary(
   };
 }
 
-/** Serves the curated v0 full-app nodes. Replaced by a DB-projection adapter in v0.1. */
+/** Serves the committed network roster of full-app web nodes (catalog `type: node`). */
 export class StaticNodeRegistryAdapter implements NodeRegistryPort {
   constructor(
-    private readonly nodes: readonly ShowcaseNode[] = SHOWCASE_NODES,
+    private readonly nodes: readonly NetworkNode[] = NETWORK_NODES,
     private readonly domain: string | undefined = undefined
   ) {}
 

@@ -7,8 +7,9 @@
  *   authed node-setup list. Handles live nodes (homepage screenshot, external link) and in-formation
  *   nodes (gradient placeholder, status badge, internal setup link) via one view model.
  * Scope: Presentational. Callers map their own data (NodeSummary / wizard rows) to NodeTileView.
- * Invariants: token-only styling; the entire tile is one link; thumbnail falls back to a gradient
- *   placeholder; external links open in a new tab.
+ * Invariants: token-only styling; the entire tile is one link; a node without a committed screenshot
+ *   falls back to a branded monogram placeholder (never a broken image); external links open in a new
+ *   tab.
  * Side-effects: none
  * Links: src/features/home/components/NodeShowcase.tsx, src/app/(app)/nodes/page.tsx
  * @public
@@ -53,9 +54,13 @@ function Banner({
       />
     );
   }
+  // No committed screenshot → a branded monogram placeholder. Intentional, not a gap: a diagonal token
+  // gradient wash with the node's initial set in a ringed, frosted chip, so a mixed gallery of
+  // screenshot-cards and placeholder-cards reads as deliberate rather than broken. Token utilities only
+  // (no arbitrary literals, no inline styles) to satisfy ui-governance.
   return (
-    <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-primary/25 via-primary/10 to-transparent">
-      <span className="font-bold text-4xl text-foreground/70 uppercase">
+    <div className="relative flex h-full w-full items-center justify-center overflow-hidden bg-gradient-to-br from-primary/25 via-primary/10 to-background">
+      <span className="flex h-16 w-16 items-center justify-center rounded-full border border-primary/30 bg-background/60 font-bold text-3xl text-foreground/80 uppercase shadow-sm backdrop-blur-sm">
         {title.charAt(0)}
       </span>
     </div>

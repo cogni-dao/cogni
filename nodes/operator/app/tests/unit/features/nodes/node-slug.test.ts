@@ -29,11 +29,20 @@ describe("parseNodeSlug", () => {
     expect(parseNodeSlug("a".repeat(33)).ok).toBe(false); // too long
   });
 
-  it("rejects reserved monorepo slugs", () => {
-    for (const s of ["operator", "poly", "resy", "node-template"]) {
+  it("rejects the operator's own first-class slugs", () => {
+    for (const s of ["operator", "node-template"]) {
       const r = parseNodeSlug(s);
       expect(r.ok).toBe(false);
       if (!r.ok) expect(r.reason).toMatch(/reserved/);
+    }
+  });
+
+  it("accepts formerly-reserved planned-node slugs (resy/poly were stale reservations)", () => {
+    for (const s of ["poly", "resy"]) {
+      expect(parseNodeSlug(s)).toEqual({
+        ok: true,
+        value: { slug: s, path: `nodes/${s}` },
+      });
     }
   });
 });

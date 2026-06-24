@@ -3,19 +3,19 @@
 
 /**
  * Module: `@adapters/server/node-registry/static-node-registry.adapter`
- * Purpose: Unit tests for the bundled static NodeRegistryPort adapter.
- * Scope: Verifies ShowcaseNode → NodeSummary mapping + href resolution. No IO/env.
- * Invariants: every bundled node is kind "full-app"; slug=name, thumbnailUrl=thumbnail; href via convention.
+ * Purpose: Unit tests for the static network-roster NodeRegistryPort adapter.
+ * Scope: Verifies NetworkNode → NodeSummary mapping + href resolution. No IO/env.
+ * Invariants: every roster node is kind "full-app"; slug=name, thumbnailUrl=thumbnail; href via convention.
  * Side-effects: none
  * Links: src/adapters/server/node-registry/static-node-registry.adapter.ts
  * @public
  */
 
 import { describe, expect, it } from "vitest";
-import type { ShowcaseNode } from "@/adapters/server/node-registry/bundled-nodes.data";
+import type { NetworkNode } from "@/adapters/server/node-registry/network-nodes.data";
 import { StaticNodeRegistryAdapter } from "@/adapters/server/node-registry/static-node-registry.adapter";
 
-const NODES: ShowcaseNode[] = [
+const NODES: NetworkNode[] = [
   {
     name: "operator",
     nodeId: "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d",

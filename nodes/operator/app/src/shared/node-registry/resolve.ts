@@ -14,7 +14,7 @@
  * @public
  */
 
-/** Minimal shape needed to resolve a node's href (structurally satisfied by ShowcaseNode + DB rows). */
+/** Minimal shape needed to resolve a node's href (structurally satisfied by NetworkNode + DB rows). */
 export interface NodeHrefInput {
   readonly name: string;
   readonly url?: string | undefined;
