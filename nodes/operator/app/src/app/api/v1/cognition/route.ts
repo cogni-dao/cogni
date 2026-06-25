@@ -8,13 +8,13 @@
  *   with a live skills index + domain pointers from the knowledge hub, plus a
  *   rendered markdown bundle a SessionStart hook echoes into agent context.
  * Scope: Single authed GET (any principal: cookie-session human OR bearer
- *   agent). Reads via container.knowledgeStorePort. Index-first — full entry
- *   bodies stay behind the same authed read routes (KNOWLEDGE_READ_REQUIRES_PRINCIPAL),
- *   save one bounded current-node orientation excerpt.
+ *   agent). Reads via container.knowledgeStorePort. Index-first — skill/domain
+ *   bodies stay behind the same authed read routes (KNOWLEDGE_READ_REQUIRES_PRINCIPAL);
+ *   the current-node orientation entry is the one exception, rendered in full.
  *   The public bootstrap seam stays /api/v1/agent/register: register → key → cognition.
  * Invariants:
- *   - INDEX_FIRST: returns skill/domain pointers + one bounded orientation
- *     excerpt, never full entry bodies.
+ *   - ORIENTATION_LOADED_IN_FULL: returns skill/domain pointers; the
+ *     current-node orientation entry is rendered in full.
  *   - IRREDUCIBLE_INVARIANTS_ALWAYS_PRESENT: invariants + markdown render even
  *     when the hub is unconfigured or empty.
  *   - NO_INTERNAL_BIND_ADDR: origin derived from forwarded headers first.
@@ -35,9 +35,8 @@ import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { getNodeMission, getNodeName } from "@/shared/config";
 import { serverEnv } from "@/shared/env";
 import {
-  excerptFromContent,
   isCognitionEntry,
-  type OrientationExcerpt,
+  type OrientationEntry,
   renderBundleMarkdown,
   SESSION_BOOTSTRAP_INVARIANTS,
 } from "./_bundle";
@@ -123,13 +122,13 @@ export const GET = wrapRouteHandlerWithLogging(
       }
     }
 
-    let orientation: OrientationExcerpt | null = null;
+    let orientation: OrientationEntry | null = null;
     if (port && orientationId) {
       const entry = await port.getKnowledge(orientationId);
       if (entry) {
         orientation = {
           id: entry.id,
-          excerpt: excerptFromContent(entry.content),
+          content: entry.content,
         };
       }
     }
