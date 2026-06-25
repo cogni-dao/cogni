@@ -97,7 +97,7 @@ when there's a second human signer or the balance warrants it — not before.
   just because outbound auto-top-up is gone; outbound is now a separate, deferred
   human step.
 
-## Built in this PR (the seam)
+## Built in this PR (the seam + trigger)
 
 - `packages/repo-spec`: `payments_out.steward_wallet` schema + `extractStewardWalletConfig`.
 - `packages/operator-wallet`: `OperatorWalletPort.withdrawToSteward` + Privy adapter
@@ -105,6 +105,11 @@ when there's a second human signer or the balance warrants it — not before.
 - `node-shared`: `payments.steward_withdrawal` event.
 - operator container + `repoSpec.server`: wire optional `stewardAddress` from repo-spec.
 - Fake operator wallet: `withdrawToSteward` test double.
+- **Trigger route**: `POST /api/v1/payments/steward-withdrawal` — session-gated +
+  `STEWARD_SELF_AUTHORIZED` (caller wallet must equal the configured steward wallet,
+  which at MVP is the governance approver/admin wallet). `{amountUsd}` → fixed USDC
+  transfer to the pinned steward address; emits `payments.steward_withdrawal`;
+  fails closed (503) when the operator/steward wallet is unconfigured.
 
 ## UI home: the node Admin tab
 
@@ -122,18 +127,31 @@ card layout. Add a **"Provider Top-Ups"** card that:
   approver/node-admin gate;
 - lists recent `payments.steward_withdrawal` / `payments.topup_confirmed` events.
 
-## Next steps (→ /implement, separate PRs)
+## Next steps (separate PRs)
 
-1. **Trigger surface**: `POST /api/v1/payments/steward-withdrawal` (RBAC: node-admin),
-   amount-in-USD → `withdrawToSteward`, emit `payments.steward_withdrawal`. Surfaced via
-   the Admin-tab "Provider Top-Ups" card (above), not a standalone page.
+1. **Admin-tab UI** (node-template): the "Provider Top-Ups" card that calls
+   `POST /steward-withdrawal` and renders balances — built in node-template so all forks
+   inherit it (see "Works for ALL nodes" above).
 2. **Confirm unification + metrics**: a single `provider balances` read wrapping
-   OpenRouter `/credits` + the existing Cherry `compute/balances` (+ steward wallet USDC),
-   rendered in the Admin-tab card. Log `payments.topup_confirmed` with the delta.
+   OpenRouter `/credits` + the existing Cherry `compute/balances` (+ steward wallet USDC).
+   Log `payments.topup_confirmed` with the delta.
 3. **Retire the dead chain**: remove `fundOpenRouterTopUp`, `ProviderFundingPort`,
    `TransferIntent`, `openrouter-funding.adapter` (coordinate with the x402 branch's
    #1844 to avoid conflict).
 4. **vNext**: x402 per-call to remove the human inch (the autonomous rung).
+
+## Proof / validation plan (e2e CICD — flight + validate BEFORE merge)
+
+Per `cicd-e2e-required-sequence`: flight → validate-candidate → human checkpoint →
+merge → promote. **No merge until proven.** What's provable where:
+
+- **Candidate-a** (`POST /steward-withdrawal`): auth gate (403 for non-steward), schema
+  (400), and fail-closed (`503 OPERATOR_WALLET_UNCONFIGURED`) if candidate lacks Privy.
+  If candidate has the operator wallet wired + funded (test = real Base $), a real small
+  `withdrawToSteward` proves the on-chain transfer + `payments.steward_withdrawal` Loki event.
+- **Outbound real-money caveat** (payments-expert): if candidate lacks Privy/funding, the
+  real transfer is provable only on a wired env — the small real top-up then runs on prod
+  after promote (operator wallet → steward wallet, our own admin wallet → low risk).
 
 ## Works for ALL nodes (propagation)
 
