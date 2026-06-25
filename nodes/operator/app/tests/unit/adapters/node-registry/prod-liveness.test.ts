@@ -39,7 +39,12 @@ function identityFor(host: string): NodeIdentity {
   };
 }
 
-/** Fake prober: per-host serving verdict from a map; missing host ⇒ fail. Identity echoes the host. */
+/**
+ * Fake prober: per-host serving verdict from a map; missing host ⇒ fail. Identity echoes the host, but
+ * ONLY for hosts that serve (`pass`) — a dead host's well-known is also unreachable ⇒ null identity. This
+ * models the common case while still proving serving + identity are independent (see the dedicated
+ * "thrown identity probe still yields health" test for the independence edge).
+ */
 function proberFromHosts(
   byHost: Record<string, ServingResult["status"]>,
   onCall?: (host: string) => void
@@ -61,7 +66,7 @@ function proberFromHosts(
       detail: "unused",
     }),
     identity: async (host: string) =>
-      host in byHost ? identityFor(host) : null,
+      byHost[host] === "pass" ? identityFor(host) : null,
   };
 }
 
