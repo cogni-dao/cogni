@@ -320,18 +320,20 @@ clientLogger.warn(EVENT_NAMES.CLIENT_CHAT_STREAM_ERROR, { messageId });
 6. **LANGFUSE_SESSION_LIMIT:** sessionId <=200 chars; truncate or reject before sending
 7. **LANGFUSE_USER_OPT_OUT:** Per-user `maskContent=true` sends hashes only (no readable content)
 8. **LANGFUSE_PAYLOAD_CAPS:** Hard limits on trace/generation/tool span I/O size; exceeded => summary + hash + bytes only
+9. **LANGFUSE_NODE_ATTRIBUTION:** Every trace carries `nodeId` (= repo-spec `node_id`) as a tag AND metadata field — the AI-trace twin of `NODE_IDENTITY_IN_OBSERVABILITY` for logs. Without it the shared Langfuse project (one project, all nodes — `LANGFUSE_*` is `shared:true`) cannot be filtered to one node, so a node dev cannot read only their traces. ⚠️ **Not yet wired** — the decorator stamps `tags:[providerId,graphId]` + metadata with no node; inject `getNodeId()` where it already binds `billingAccountId`. See [Substrate Access-Grant Plane](./substrate-access-grant.md).
+10. **LANGFUSE_DEV_READ_IS_PROXIED:** A `developer`-grant dev reads their node's traces through `GET /api/v1/nodes/{id}/observability/traces` — the operator runs the trace-list AND-ed with `nodeId=<id>` via the operator-held key. The dev NEVER holds `LANGFUSE_SECRET_KEY` (it reads the whole shared project = every node's traces — same reach correction as the Grafana proxy).
 
 ### Trace Contract
 
-| Field       | Source                                                  | Requirement                                                              |
-| ----------- | ------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `id`        | `ctx.traceId` (OTel)                                    | 32-hex validated; fallback generates ID + stores otelTraceId in metadata |
-| `sessionId` | `caller.sessionId`                                      | <=200 chars; truncate if exceeded                                        |
-| `userId`    | `caller.userId`                                         | Stable internal ID (not email); in metadata, NOT as tag                  |
-| `input`     | Scrubbed messages                                       | Non-null; last user message + structure (scrubbed)                       |
-| `output`    | Scrubbed response                                       | Non-null; set on terminal outcome (scrubbed)                             |
-| `tags`      | `[providerId, graphId, env]`                            | Low-cardinality only; NO userId                                          |
-| `metadata`  | `{runId, reqId, graphId, providerId, billingAccountId}` | Correlation keys                                                         |
+| Field       | Source                                                          | Requirement                                                                                       |
+| ----------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `id`        | `ctx.traceId` (OTel)                                            | 32-hex validated; fallback generates ID + stores otelTraceId in metadata                          |
+| `sessionId` | `caller.sessionId`                                              | <=200 chars; truncate if exceeded                                                                 |
+| `userId`    | `caller.userId`                                                 | Stable internal ID (not email); in metadata, NOT as tag                                           |
+| `input`     | Scrubbed messages                                               | Non-null; last user message + structure (scrubbed)                                                |
+| `output`    | Scrubbed response                                               | Non-null; set on terminal outcome (scrubbed)                                                      |
+| `tags`      | `[providerId, graphId, nodeId]`                                 | Low-cardinality only; NO userId. `nodeId` is the per-node read filter (LANGFUSE_NODE_ATTRIBUTION) |
+| `metadata`  | `{runId, reqId, graphId, providerId, nodeId, billingAccountId}` | Correlation keys; `nodeId` = repo-spec `node_id`                                                  |
 
 ### Terminal States (exactly one per trace)
 
