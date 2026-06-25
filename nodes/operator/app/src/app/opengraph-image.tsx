@@ -16,6 +16,10 @@
  * @public
  */
 
+// satori (the next/og renderer) supports ONLY inline styles — no className /
+// CSS files — so the no-inline-styles rule cannot apply to this image route.
+/* eslint-disable no-inline-styles/no-inline-styles */
+
 import { ImageResponse } from "next/og";
 import {
   getNodeBrandColor,
