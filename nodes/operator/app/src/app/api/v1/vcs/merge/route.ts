@@ -15,7 +15,11 @@
  *     against THAT node (reusing `can_flight`) and the merge target is the node's catalog
  *     `source_repo` — an agent holding RBAC for a node may merge any PR to that node's repo,
  *     INCLUDING a PR it authored from its own fork (the owner-granted RBAC tuple IS the trust
- *     boundary; no self-merge / probation check). WITHOUT `nodeId`, the KEPT LEGACY lane runs:
+ *     boundary; no self-merge / probation check). The operator is the one IN-REPO node: it has no
+ *     catalog `source_repo` (its own repo IS the monorepo), so `{nodeId:operator}` resolves to
+ *     `NODE_SUBMODULE_PARENT_*`, uniform with the run-ci + flight routes — see
+ *     NODE_SCOPED_NEVER_RETARGETS at step 4 for why this is the ONLY safe retarget. WITHOUT
+ *     `nodeId`, the KEPT LEGACY lane runs:
  *     authorized against the OPERATOR node (slug `operator`) + merge target = the operator's own
  *     monorepo (`NODE_SUBMODULE_PARENT_*`). NOTE: gating the single most IRREVERSIBLE repo action
  *     (merge-to-main) on `can_flight` is a deliberate least-privilege MVP concession — a dedicated
@@ -125,9 +129,11 @@ export const POST = wrapRouteHandlerWithLogging(
     }
 
     // 4. Merge target (operator-resolved, anti-spoof):
-    //      nodeId present → the NAMED node's own repo (catalog `source_repo`). An explicit nodeId
-    //        must resolve to ITS OWN repo — `catalog_missing` is a hard 404, NEVER a silent retarget
-    //        to the monorepo (NODE_SCOPED_NEVER_RETARGETS).
+    //      nodeId present → the NAMED node's own repo (catalog `source_repo`). EXCEPTION: the
+    //        operator is an IN-REPO node — its catalog row carries no `source_repo` because its
+    //        "own repo" IS the monorepo, so `{nodeId:operator}` resolves to NODE_SUBMODULE_PARENT,
+    //        uniform with the run-ci + flight routes. For every OTHER node a missing catalog row is
+    //        a hard 404, NEVER a silent retarget (NODE_SCOPED_NEVER_RETARGETS).
     //      nodeId absent  → the operator's own monorepo (env-scoped legacy lane).
     const env = serverEnv();
     let owner: string | undefined;
@@ -153,16 +159,29 @@ export const POST = wrapRouteHandlerWithLogging(
         repo = nodeRepo.repo;
       } catch (error) {
         const code = (error as { code?: string })?.code;
-        return fail(
-          code === "catalog_missing" ? 404 : 503,
-          code === "catalog_missing"
-            ? "catalog_missing"
-            : "node_repo_unresolved",
-          code === "catalog_missing"
-            ? "node repo not resolvable from catalog"
-            : "node repo could not be resolved",
-          { prNumber, slug: rbac.node.slug }
-        );
+        // IN-REPO node (the operator): its catalog row carries no `source_repo`, so
+        // resolveNodeRepo 404s. The operator's "own repo" IS the monorepo — merge against
+        // NODE_SUBMODULE_PARENT, mirroring the no-nodeId legacy lane and the run-ci route.
+        // NODE_SCOPED_NEVER_RETARGETS still holds for every OTHER node: only the known operator
+        // identity retargets; any other slug with a missing catalog row still hard-404s.
+        if (
+          code === "catalog_missing" &&
+          rbac.node.slug === OPERATOR_NODE_SLUG
+        ) {
+          owner = parentOwner;
+          repo = parentRepo;
+        } else {
+          return fail(
+            code === "catalog_missing" ? 404 : 503,
+            code === "catalog_missing"
+              ? "catalog_missing"
+              : "node_repo_unresolved",
+            code === "catalog_missing"
+              ? "node repo not resolvable from catalog"
+              : "node repo could not be resolved",
+            { prNumber, slug: rbac.node.slug }
+          );
+        }
       }
     } else {
       owner = env.NODE_SUBMODULE_PARENT_OWNER;
