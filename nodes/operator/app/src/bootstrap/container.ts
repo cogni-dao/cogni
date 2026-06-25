@@ -88,6 +88,7 @@ import {
   DrizzleScheduleUserAdapter,
   DrizzleThreadPersistenceAdapter,
   EvmRpcOnChainVerifierAdapter,
+  FundingReadyRailGuardAdapter,
   GITHUB_ADAPTER_VERSION,
   GitHubWebhookNormalizer,
   getAppDb,
@@ -775,6 +776,16 @@ function createContainer(): Container {
           !env.PRIVY_APP_SECRET ||
           !env.PRIVY_SIGNING_KEY
         ) {
+          const missingPrivyVars = [
+            !env.PRIVY_APP_ID && "PRIVY_APP_ID",
+            !env.PRIVY_APP_SECRET && "PRIVY_APP_SECRET",
+            !env.PRIVY_SIGNING_KEY && "PRIVY_SIGNING_KEY",
+          ].filter((v): v is string => Boolean(v));
+          log.warn(
+            { missingPrivyVars },
+            `Operator wallet disabled — missing Privy var(s): ${missingPrivyVars.join(", ")}. ` +
+              "Outbound funding/payments will be REFUSED (no wallet to sign Split distribute / OpenRouter top-up)."
+          );
           return undefined;
         }
         if (!operatorWalletConfig) {
@@ -817,7 +828,11 @@ function createContainer(): Container {
         });
       })();
 
-  const paymentRailGuard: PaymentRailGuardPort = (() => {
+  // Inbound rail guard: proves the receiving Split's economics match repo-spec.
+  // This is the RECEIVE side only — it says nothing about whether the node can
+  // loop money OUT. Outbound-funding readiness is composed below once
+  // operatorWallet + providerFunding are resolved.
+  const inboundPaymentRailGuard: PaymentRailGuardPort = (() => {
     if (env.isTestMode) {
       return { assertReady: async () => undefined };
     }
@@ -866,7 +881,23 @@ function createContainer(): Container {
   // ProviderFunding: optional — only when OPENROUTER_API_KEY is configured + operator wallet available
   // Per MARGIN_PRESERVED: fail fast if pricing constants don't preserve positive margin
   const providerFunding: ProviderFundingPort | undefined = (() => {
-    if (!env.OPENROUTER_API_KEY || !operatorWallet) return undefined;
+    if (!env.OPENROUTER_API_KEY || !operatorWallet) {
+      // Loud on a payments-active node (payments_in configured) that can't top up
+      // the provider — this is the outbound half of the money loop. Silent before
+      // bug.5087, which let the rail credit users with no way to fund OpenRouter.
+      if (!env.isTestMode && getPaymentConfig()) {
+        const missing = [
+          !env.OPENROUTER_API_KEY && "OPENROUTER_API_KEY",
+          !operatorWallet && "operatorWallet",
+        ].filter((v): v is string => Boolean(v));
+        log.warn(
+          { missing },
+          `Provider funding disabled on a payments-active node — missing: ${missing.join(", ")}. ` +
+            "OpenRouter top-up cannot run; payment intents will be REFUSED (fail closed)."
+        );
+      }
+      return undefined;
+    }
 
     // MARGIN_PRESERVED: markup × (1 - fee) must be > 1 + revenueShare.
     // Markup + revenue share are governance config from repo-spec (payments_in);
@@ -890,6 +921,18 @@ function createContainer(): Container {
       log.child({ component: "OpenRouterFundingAdapter" })
     );
   })();
+
+  // Final rail guard: compose the inbound Split guard with an outbound-funding
+  // readiness gate. The rail is all-or-nothing — if the node can RECEIVE USDC but
+  // cannot LOOP it out (operatorWallet OR providerFunding absent), intent creation
+  // fails closed (PAYMENT_RAIL_UNCONFIGURED → 503) before any transfer params are
+  // issued. test-mode keeps the no-op guard so tests can still create intents.
+  // Prevents bug.5087: crediting a user with no way to distribute the Split /
+  // top up OpenRouter (a real $2 prod payment got stuck this way).
+  const fundingReady = !!operatorWallet && !!providerFunding;
+  const paymentRailGuard: PaymentRailGuardPort = env.isTestMode
+    ? inboundPaymentRailGuard
+    : new FundingReadyRailGuardAdapter(inboundPaymentRailGuard, fundingReady);
 
   // Connection broker — BYO-AI credential resolution
   // Undefined when CONNECTIONS_ENCRYPTION_KEY not set
