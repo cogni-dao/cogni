@@ -25,12 +25,12 @@ because Coinbase deprecated the underlying Commerce APIs. So the operator wallet
 accumulated USDC with no defined path to fund the services the node depends on.
 
 **Key correction to earlier assumptions:** the vendors are NOT card-only. Both accept
-USDC crypto checkout *today*:
+USDC crypto checkout _today_:
 
-| Vendor | Crypto checkout | Chain / token | Shape |
-| --- | --- | --- | --- |
-| **OpenRouter** | Coinbase Business Checkouts | USDC on **Base** | wallet-connect (per-session operator-signed `TransferIntent`) — a plain transfer to a fixed address will NOT credit |
-| **Cherry** | Coingate (also BVNK) | USDC on **Base** (Coingate supports many chains) | hosted per-invoice **deposit address** — "send 57.9 USDC to `0x…` on Base" + QR, fiat-pegged with a ~20-min expiry; a plain transfer to that per-invoice address DOES credit |
+| Vendor         | Crypto checkout             | Chain / token                                    | Shape                                                                                                                                                                        |
+| -------------- | --------------------------- | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **OpenRouter** | Coinbase Business Checkouts | USDC on **Base**                                 | wallet-connect (per-session operator-signed `TransferIntent`) — a plain transfer to a fixed address will NOT credit                                                          |
+| **Cherry**     | Coingate (also BVNK)        | USDC on **Base** (Coingate supports many chains) | hosted per-invoice **deposit address** — "send 57.9 USDC to `0x…` on Base" + QR, fiat-pegged with a ~20-min expiry; a plain transfer to that per-invoice address DOES credit |
 
 So the "100% no cards" constraint is **achievable now** for both core services. The
 only irreducible gap is the last human inch: neither checkout can be driven by a
@@ -43,7 +43,7 @@ per-invoice address that isn't knowable ahead of time and isn't in any allowlist
 - **Manual provider top-up** is the rung we build now: operator wallet → steward
   wallet → human completes vendor checkout → confirm via balance API.
 - **x402 per-call** (USDC-on-Base, the rail OpenRouter actually sanctions for
-  "headless on-chain payments") is the *future autonomous rung* — it removes the
+  "headless on-chain payments") is the _future autonomous rung_ — it removes the
   human inch. `signX402Payment` already exists on the x402 foundation branch. Parked,
   documented, not built here.
 
@@ -71,14 +71,14 @@ OpenRouter credits  /  Cherry team balance
 ### Why "steward", not "operator"/"ops"
 
 `operator` is already the CICD-manager node, and it owns the `operator wallet`
-(the Privy wallet 0xSplits pays into). Reusing either term for the *human* payout
+(the Privy wallet 0xSplits pays into). Reusing either term for the _human_ payout
 wallet would overload load-bearing names. **Steward** is node-generic (every node can
 declare one), implies a trusted human custodian, and has zero code/config collisions.
 
 ### Why repo-spec config, not a Gnosis Safe (yet)
 
 The steward wallet is a thin **pass-through** holding small working balances, not a
-treasury. A Safe multisig is the right primitive for the *treasury tier* — and the DAO
+treasury. A Safe multisig is the right primitive for the _treasury tier_ — and the DAO
 already has Aragon there. Putting a multisig on a relay wallet at 1-operator / MVP
 stage is ceremony with no security payoff. Declaring `payments_out.steward_wallet` in
 repo-spec makes it git-tracked + governance-visible, exactly like `payments_in` pins
@@ -106,14 +106,30 @@ when there's a second human signer or the balance warrants it — not before.
 - operator container + `repoSpec.server`: wire optional `stewardAddress` from repo-spec.
 - Fake operator wallet: `withdrawToSteward` test double.
 
+## UI home: the node Admin tab
+
+The trigger UI and top-up metrics live in the node **Admin** tab — the existing
+approver/node-admin–gated surface (the "DAO Admin / Approver-gated surfaces" page,
+alongside Epoch Review & Sign, Holdings, Governance System). Its own footer already
+promises this: _"Services, budgets, and member management will surface here as those
+capabilities ship."_ Provider top-ups are exactly such a service/budget capability, so
+they belong there rather than in a bespoke page — reuse the Admin tab's RBAC gate and
+card layout. Add a **"Provider Top-Ups"** card that:
+
+- shows current provider balances (OpenRouter credits, Cherry team balance) + the
+  steward wallet's USDC balance — the "watch" surface;
+- initiates a steward withdrawal (amount-in-USD → `withdrawToSteward`) behind the same
+  approver/node-admin gate;
+- lists recent `payments.steward_withdrawal` / `payments.topup_confirmed` events.
+
 ## Next steps (→ /implement, separate PRs)
 
 1. **Trigger surface**: `POST /api/v1/payments/steward-withdrawal` (RBAC: node-admin),
-   amount-in-USD → `withdrawToSteward`, emit `payments.steward_withdrawal`. (And/or an
-   admin script for the prototype.)
-2. **Confirm unification**: a single `provider balances` read wrapping OpenRouter
-   `/credits` + the existing Cherry `compute/balances`, so the human-completed checkout
-   is verifiable in one call. Log `payments.topup_confirmed` with the delta.
+   amount-in-USD → `withdrawToSteward`, emit `payments.steward_withdrawal`. Surfaced via
+   the Admin-tab "Provider Top-Ups" card (above), not a standalone page.
+2. **Confirm unification + metrics**: a single `provider balances` read wrapping
+   OpenRouter `/credits` + the existing Cherry `compute/balances` (+ steward wallet USDC),
+   rendered in the Admin-tab card. Log `payments.topup_confirmed` with the delta.
 3. **Retire the dead chain**: remove `fundOpenRouterTopUp`, `ProviderFundingPort`,
    `TransferIntent`, `openrouter-funding.adapter` (coordinate with the x402 branch's
    #1844 to avoid conflict).
