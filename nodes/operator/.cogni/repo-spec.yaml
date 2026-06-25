@@ -16,7 +16,8 @@ intent:
   hook: "The AI git-manager for community-owned nodes"
   mission: "Cogni's first node — empowering AI-powered, web3-governed nodes with streamlined CI/CD, knowledge syntropy, and shared infrastructure, so each builds its mission, not its plumbing. An open-source, gitops-native substrate aligning DAO ownership, code, and knowledge into one verifiable lineage; strongest within the network, forkable to run fully sovereign."
   brand:
-    thumbnail: "https://cognidao.org/showcase/operator.png"
+    # Relative to THIS node's own host (served from app public/) → operator resolves it per-env.
+    thumbnail: "/showcase/operator.png"
     color: "#6366f1"
 
 # Privy-managed operator wallet — the runtime container reads THIS file as

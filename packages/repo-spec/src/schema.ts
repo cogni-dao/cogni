@@ -463,7 +463,10 @@ export const repoSpecSchema = z
         mission: z.string().min(1).optional(),
         brand: z
           .object({
-            thumbnail: z.string().url().optional(),
+            // Relative PATH the node serves from its OWN app `public/` (e.g. `/showcase/foo.png`), NOT
+            // an absolute URL — the operator resolves it against the node's env-host so it's correct on
+            // test/preview/prod with no CDN and no operator asset-hosting. Absolute URLs allowed too.
+            thumbnail: z.string().optional(),
             color: z.string().optional(),
           })
           .optional(),
