@@ -11,7 +11,4 @@
  * @public
  */
 
-export type {
-  OperatorWalletPort,
-  TransferIntent,
-} from "@cogni/operator-wallet";
+export type { OperatorWalletPort } from "@cogni/operator-wallet";

@@ -18,27 +18,7 @@ import {
   getTestOperatorWallet,
   resetTestOperatorWallet,
 } from "@/adapters/test";
-import type { OperatorWalletPort, TransferIntent } from "@/ports";
-
-const FAKE_INTENT: TransferIntent = {
-  metadata: {
-    sender: "0x1111111111111111111111111111111111111111",
-    contract_address: "0x03059433BCdB6144624cC2443159D9445C32b7a8",
-    chain_id: 8453,
-  },
-  call_data: {
-    recipient_amount: "1000000",
-    deadline: "2026-12-31T23:59:59Z",
-    recipient: "0x4444444444444444444444444444444444444444",
-    recipient_currency: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-    refund_destination: "0x1111111111111111111111111111111111111111",
-    fee_amount: "50000",
-    id: "0x00000000000000000000000000000001",
-    operator: "0x5555555555555555555555555555555555555555",
-    signature: "0xdeadbeef",
-    prefix: "0x",
-  },
-};
+import type { OperatorWalletPort } from "@/ports";
 
 describe("OperatorWalletPort contract", () => {
   let adapter: FakeOperatorWalletAdapter;
@@ -67,10 +47,10 @@ describe("OperatorWalletPort contract", () => {
     );
   });
 
-  it("fundOpenRouterTopUp returns a transaction hash", async () => {
-    const txHash = await adapter.fundOpenRouterTopUp(FAKE_INTENT);
+  it("withdrawToSteward returns a transaction hash", async () => {
+    const txHash = await adapter.withdrawToSteward(1_000_000n);
     expect(txHash).toMatch(/^0x[a-fA-F0-9]{64}$/);
-    expect(adapter.lastFundTopUpIntent).toEqual(FAKE_INTENT);
+    expect(adapter.lastWithdrawToStewardAmount).toBe(1_000_000n);
   });
 
   it("satisfies OperatorWalletPort interface", () => {
@@ -79,7 +59,7 @@ describe("OperatorWalletPort contract", () => {
     expect(port.getAddress).toBeDefined();
     expect(port.getSplitAddress).toBeDefined();
     expect(port.distributeSplit).toBeDefined();
-    expect(port.fundOpenRouterTopUp).toBeDefined();
+    expect(port.withdrawToSteward).toBeDefined();
   });
 });
 

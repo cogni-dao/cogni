@@ -4,7 +4,7 @@
 /**
  * Module: `@tests/_fakes/payments/mock-services`
  * Purpose: Mock factories for payment-related port interfaces used in unit tests.
- * Scope: Controllable vi.fn() mocks for ServiceAccountService, TreasurySettlementPort, ProviderFundingPort, and FinancialLedgerPort.
+ * Scope: Controllable vi.fn() mocks for ServiceAccountService, TreasurySettlementPort, and FinancialLedgerPort.
  * Invariants: All methods return vi.fn() mocks; no real I/O.
  * Side-effects: none
  * Links: src/ports/
@@ -13,11 +13,7 @@
 
 import type { FinancialLedgerPort } from "@cogni/financial-ledger";
 import { vi } from "vitest";
-import type {
-  ProviderFundingPort,
-  ServiceAccountService,
-  TreasurySettlementPort,
-} from "@/ports";
+import type { ServiceAccountService, TreasurySettlementPort } from "@/ports";
 
 export function createMockServiceAccountService(): ServiceAccountService {
   return {
@@ -46,15 +42,5 @@ export function createMockFinancialLedger(): FinancialLedgerPort & {
     linkedTransfers: vi.fn().mockResolvedValue(undefined),
     lookupAccounts: vi.fn().mockResolvedValue([]),
     getAccountBalance: vi.fn(),
-  };
-}
-
-export function createMockProviderFunding(): ProviderFundingPort & {
-  fundAfterCreditPurchase: ReturnType<typeof vi.fn>;
-} {
-  return {
-    fundAfterCreditPurchase: vi
-      .fn()
-      .mockResolvedValue({ txHash: "0xfake-funding-tx", topUpUsd: 0.9211 }),
   };
 }

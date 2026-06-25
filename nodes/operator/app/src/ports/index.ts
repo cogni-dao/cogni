@@ -178,10 +178,7 @@ export type {
   WriteNodeSecretInput,
   WriteNodeSecretResult,
 } from "./operator-secrets-plane.port";
-export type {
-  OperatorWalletPort,
-  TransferIntent,
-} from "./operator-wallet.port";
+export type { OperatorWalletPort } from "./operator-wallet.port";
 export {
   type CreatePaymentAttemptParams,
   isPaymentAttemptNotFoundPortError,
@@ -204,11 +201,6 @@ export {
   type PaymentRailMisconfigurationCode,
   PaymentRailMisconfiguredPortError,
 } from "./payment-rail-guard.port";
-export type {
-  ProviderFundingContext,
-  ProviderFundingOutcome,
-  ProviderFundingPort,
-} from "./provider-funding.port";
 export type {
   ProxyBillingEntry,
   SandboxErrorCode,

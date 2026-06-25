@@ -19,7 +19,4 @@ export {
   PPM,
   SPLIT_TOTAL_ALLOCATION,
 } from "./domain/split-allocation.js";
-export type {
-  OperatorWalletPort,
-  TransferIntent,
-} from "./port/operator-wallet.port.js";
+export type { OperatorWalletPort } from "./port/operator-wallet.port.js";
