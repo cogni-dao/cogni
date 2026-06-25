@@ -71,7 +71,7 @@ export function dispatchSignalExecution(
   if (!daoConfig) {
     log.debug(
       { event: EVENT_NAMES.SIGNAL_DISPATCH_SKIPPED, reason: "no_dao_config" },
-      "signal dispatch skipped — cogni_dao not configured in repo-spec"
+      "signal dispatch skipped — governance not configured in repo-spec"
     );
     return;
   }

@@ -55,7 +55,7 @@ type ActivationPhase =
 interface Props {
   /** From repo-spec operator_wallet.address (legacy flow) or nodes.operator_wallet_address (wizard flow) — null if not configured */
   operatorWalletAddress: string | null;
-  /** From repo-spec cogni_dao.dao_contract (legacy flow) or nodes.dao_address (wizard flow) — null if not configured */
+  /** From repo-spec governance.dao_contract (legacy flow) or nodes.dao_address (wizard flow) — null if not configured */
   daoTreasuryAddress: string | null;
   /** When invoked via the external-node wizard (`?nodeId=...`), persist the Split address back to the node row on success. */
   nodeId?: string | null;
@@ -267,7 +267,7 @@ payments:
             <div className="space-y-2 text-sm">
               {!hasTreasury && (
                 <p className="text-destructive">
-                  ✗ <code>cogni_dao.dao_contract</code> not found in repo-spec.
+                  ✗ <code>governance.dao_contract</code> not found in repo-spec.
                   Complete DAO formation at the <strong>Formation</strong> tab
                   first.
                 </p>

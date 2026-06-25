@@ -38,7 +38,7 @@ Get the full governance loop working **today** with the existing GitHub App (+ a
 - **`WebhookNormalizer` port**: `@cogni/ingestion-core` — `verify()` + `normalize()` interface
 - **GitHub webhook normalizer**: Handles `pull_request`, `issues`, `push`, etc.
 - **PR review pipeline**: Full gate orchestration, AI rules, check runs, PR comments
-- **`.cogni/repo-spec.yaml`**: Already has `cogni_dao` section with contract addresses
+- **`.cogni/repo-spec.yaml`**: Already has `governance` section with contract addresses
 - **GitHub App auth**: `review-adapter.factory.ts` creates Octokit from App credentials
 - **EVM RPC adapter**: `evm-rpc-onchain-verifier.adapter.ts` — viem client already configured
 
@@ -226,7 +226,7 @@ app/(governance)/
 
 ### Phase 4: Wire the Loop (~30 min)
 
-1. **Verify `.cogni/repo-spec.yaml`** has correct `cogni_dao` section with contract addresses
+1. **Verify `.cogni/repo-spec.yaml`** has correct `governance` section with contract addresses
 2. **Verify review summary** generates correct deep link URLs pointing to `/merge-change` (now local)
 3. **Update `base_url`** in repo-spec to point to self (or keep external URL for other repos)
 4. **Smee setup** for local Alchemy webhook testing

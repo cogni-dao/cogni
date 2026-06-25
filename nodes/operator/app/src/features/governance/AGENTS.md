@@ -44,7 +44,7 @@ Governance feature slice — schedule sync, governance status dashboard, claiman
 - **Routes (app pages):** `/gov` (system), `/gov/epoch` (current), `/gov/history` (finalized), `/gov/holdings` (aggregated), `/gov/review` (approver admin — inline editing + EIP-712 sign & finalize)
 - **Routes (API — in `src/app/api/v1/attribution/`):** `GET /epochs`, `GET /epochs/:id/user-projections`, `GET /epochs/:id/statement`, `GET /epochs/:id/claimants`, `GET /epochs/:id/activity`, `GET /epochs/:id/sign-data`, `GET|PATCH|DELETE /epochs/:id/review-subject-overrides`
 - **CLI:** `pnpm governance:schedules:sync`, `pnpm db:seed`, `pnpm dev:setup`
-- **Env/Config keys:** `.cogni/repo-spec.yaml` → `governance.schedules`, `cogni_dao` (signal contract, chain_id, etc.)
+- **Env/Config keys:** `.cogni/repo-spec.yaml` → `governance.schedules`, `governance` (signal contract, chain_id, etc.)
 
 ## Ports
 

@@ -75,11 +75,11 @@ export const TEST_NODE_ENTRIES = {
 
 /**
  * Build a parsed `RepoSpec` from minimal-valid inputs plus arbitrary overrides.
- * Replaces the ad-hoc `parseRepoSpec({ node_id: ..., cogni_dao: { ... }, ... })`
+ * Replaces the ad-hoc `parseRepoSpec({ node_id: ..., governance: { ... }, ... })`
  * pattern duplicated across `tests/unit/packages/repo-spec/*.test.ts` and any
  * test that needs a `RepoSpec` fixture.
  *
- * The default fixture has `node_id`, `cogni_dao.chain_id`, and `payments_in.credits_topup`
+ * The default fixture has `node_id`, `governance.chain_id`, and `payments_in.credits_topup`
  * set — enough to satisfy `parseRepoSpec` for the largest set of accessor tests.
  * Override any field to introduce variant shapes (gates, nodes, ledger, etc.).
  */
@@ -88,7 +88,7 @@ export function buildTestRepoSpec(
 ): RepoSpec {
   return parseRepoSpec({
     node_id: TEST_NODE_IDS.default,
-    cogni_dao: { chain_id: String(TEST_CHAIN_ID) },
+    governance: { chain_id: String(TEST_CHAIN_ID) },
     payments_in: {
       credits_topup: {
         provider: "cogni-usdc-backend-v1",
@@ -122,7 +122,7 @@ interface RepoSpecYamlOptions {
 export function buildTestRepoSpecYaml(opts: RepoSpecYamlOptions = {}): string {
   const nodeId = opts.nodeId ?? TEST_NODE_IDS.operator;
   return `node_id: "${nodeId}"
-cogni_dao:
+governance:
   chain_id: "${TEST_CHAIN_ID}"
 ${opts.extra ?? ""}`;
 }

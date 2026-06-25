@@ -57,12 +57,23 @@ fail_on_error: true
 operator_wallet:
   address: "0xdCCa8D85603C2CC47dc6974a790dF846f8695056" # Privy-managed operator wallet
 
-cogni_dao:
+governance:
   dao_contract: "0xF61c3fafD4D34b4568e7a500d92b28Ac175e83C6" # Current Cogni parent DAO Contract Address
   plugin_contract: "0x609B427f04C1C42De3e28898cb7b9Bad329e6b77" # DAO's Aragon Voting Plugin Address
   signal_contract: "0x590FC79B9c925C377fA63F4AaF54cdbF4Ee273A1" # DAO's CogniSignal Contract Address
   chain_id: "8453" # Chain ID: Eth Sepolia testnet
   base_url: "https://proposal.cognidao.org" # v0 Base URL: cogni-proposal-launcher service
+  # Governance council schedules (charter-scoped per governance-council.md).
+  # Each triggers a sandbox agent run with a 1-word entrypoint. Cron: https://crontab.guru/
+  schedules:
+    - charter: HEARTBEAT
+      cron: "0 * * * *" # once per hour — git delta check + Discord status
+      timezone: UTC
+      entrypoint: HEARTBEAT
+    - charter: LEDGER_INGEST
+      cron: "0 6 * * *" # daily at 6am UTC
+      timezone: UTC
+      entrypoint: LEDGER_INGEST
 
 # DAO Financial Rails Configuration
 # Inbound payment configuration for USDC credits top-up
@@ -146,16 +157,4 @@ gates:
   #   with:
   #     rule_file: ai-rule-template.yaml
 
-# Governance schedule definitions (charter-scoped per governance-council.md)
-# Each schedule triggers a sandbox agent run with a 1-word entrypoint.
-# Cron Format syntax: https://crontab.guru/
-governance:
-  schedules:
-    - charter: HEARTBEAT
-      cron: "0 * * * *" # once per hour — git delta check + Discord status
-      timezone: UTC
-      entrypoint: HEARTBEAT
-    - charter: LEDGER_INGEST
-      cron: "0 6 * * *" # daily at 6am UTC
-      timezone: UTC
-      entrypoint: LEDGER_INGEST
+# (governance.schedules merged into the unified `governance` section above)

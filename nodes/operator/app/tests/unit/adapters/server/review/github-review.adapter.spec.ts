@@ -49,7 +49,7 @@ const mockLogger = {
 const minimalRepoSpecYaml = stringifyYaml({
   node_id: TEST_NODE_IDS.operator,
   scope_id: "00000000-0000-4000-8000-000000000002",
-  cogni_dao: { chain_id: "8453" },
+  governance: { chain_id: "8453" },
   payments_in: {
     credits_topup: {
       provider: "cogni-usdc-backend-v1",

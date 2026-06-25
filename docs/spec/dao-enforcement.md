@@ -84,7 +84,7 @@ payments_in:
     allowed_tokens:
       - USDC
 
-cogni_dao:
+governance:
   chain_id: "8453"
 
 providers:

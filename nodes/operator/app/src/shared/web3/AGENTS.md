@@ -77,7 +77,7 @@ import { CHAIN, CHAIN_ID, USDC_TOKEN_ADDRESS } from "@/shared/web3";
 ## Change Protocol
 
 - Update this file when adding new chain constants or changing target chain
-- Update .cogni/repo-spec.yaml cogni_dao.chain_id to match
+- Update .cogni/repo-spec.yaml governance.chain_id to match
 - Bump **Last reviewed** date
 - Run `pnpm validate:chain` to verify consistency
 

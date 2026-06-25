@@ -43,7 +43,7 @@ const TEST_CHAIN_ID = 8453;
 function buildSpec(overrides: Partial<RepoSpec> = {}): RepoSpec {
   return parseRepoSpec({
     node_id: TEST_NODE_ID,
-    cogni_dao: { chain_id: String(TEST_CHAIN_ID) },
+    governance: { chain_id: String(TEST_CHAIN_ID) },
     payments_in: {
       credits_topup: {
         provider: "cogni-usdc-backend-v1",
@@ -60,7 +60,7 @@ function buildFullSpec(): RepoSpec {
     node_id: TEST_NODE_ID,
     scope_id: TEST_SCOPE_ID,
     scope_key: "default",
-    cogni_dao: { chain_id: String(TEST_CHAIN_ID) },
+    governance: { chain_id: String(TEST_CHAIN_ID) },
     payments_in: {
       credits_topup: {
         provider: "cogni-usdc-backend-v1",
@@ -139,7 +139,7 @@ describe("extractDaoConfig", () => {
   };
 
   it("resolves without base_url — the four on-chain fields are sufficient (treasury must not blank)", () => {
-    const dao = extractDaoConfig(buildSpec({ cogni_dao: ON_CHAIN }));
+    const dao = extractDaoConfig(buildSpec({ governance: ON_CHAIN }));
     expect(dao).not.toBeNull();
     expect(dao?.dao_contract).toBe(ON_CHAIN.dao_contract);
     expect(dao?.base_url).toBeUndefined();
@@ -148,7 +148,7 @@ describe("extractDaoConfig", () => {
   it("includes base_url when present (governance deep-link host)", () => {
     const dao = extractDaoConfig(
       buildSpec({
-        cogni_dao: { ...ON_CHAIN, base_url: "https://proposal.cognidao.org" },
+        governance: { ...ON_CHAIN, base_url: "https://proposal.cognidao.org" },
       })
     );
     expect(dao?.base_url).toBe("https://proposal.cognidao.org");
@@ -156,7 +156,7 @@ describe("extractDaoConfig", () => {
 
   it("returns null when an on-chain identity field is missing", () => {
     const { dao_contract: _omitted, ...withoutDao } = ON_CHAIN;
-    expect(extractDaoConfig(buildSpec({ cogni_dao: withoutDao }))).toBeNull();
+    expect(extractDaoConfig(buildSpec({ governance: withoutDao }))).toBeNull();
   });
 });
 
@@ -169,7 +169,7 @@ describe("extractChainId", () => {
   it("handles numeric chain_id", () => {
     const spec = parseRepoSpec({
       node_id: TEST_NODE_ID,
-      cogni_dao: { chain_id: 8453 },
+      governance: { chain_id: 8453 },
       payments_in: {
         credits_topup: {
           provider: "test",
@@ -183,7 +183,7 @@ describe("extractChainId", () => {
   it("throws on non-numeric string", () => {
     const spec = parseRepoSpec({
       node_id: TEST_NODE_ID,
-      cogni_dao: { chain_id: "not-a-number" },
+      governance: { chain_id: "not-a-number" },
       payments_in: {
         credits_topup: {
           provider: "test",
@@ -191,7 +191,7 @@ describe("extractChainId", () => {
         },
       },
     });
-    expect(() => extractChainId(spec)).toThrow(/Invalid cogni_dao\.chain_id/);
+    expect(() => extractChainId(spec)).toThrow(/Invalid governance\.chain_id/);
   });
 });
 
@@ -216,7 +216,7 @@ describe("extractPaymentConfig", () => {
   it("trims whitespace from address and provider", () => {
     const spec = parseRepoSpec({
       node_id: TEST_NODE_ID,
-      cogni_dao: { chain_id: String(TEST_CHAIN_ID) },
+      governance: { chain_id: String(TEST_CHAIN_ID) },
       payments_in: {
         credits_topup: {
           provider: " cogni-usdc-backend-v1 ",
@@ -289,7 +289,7 @@ describe("extractGovernanceConfig", () => {
       node_id: TEST_NODE_ID,
       scope_id: TEST_SCOPE_ID,
       scope_key: "default",
-      cogni_dao: { chain_id: String(TEST_CHAIN_ID) },
+      governance: { chain_id: String(TEST_CHAIN_ID) },
       payments_in: {
         credits_topup: {
           provider: "cogni-usdc-backend-v1",
@@ -358,7 +358,7 @@ describe("extractLedgerConfig", () => {
   it("returns null when scope_id is missing", () => {
     const spec = parseRepoSpec({
       node_id: TEST_NODE_ID,
-      cogni_dao: { chain_id: String(TEST_CHAIN_ID) },
+      governance: { chain_id: String(TEST_CHAIN_ID) },
       payments_in: {
         credits_topup: {
           provider: "test",
@@ -383,7 +383,7 @@ describe("extractLedgerConfig", () => {
       node_id: TEST_NODE_ID,
       scope_id: TEST_SCOPE_ID,
       scope_key: "default",
-      cogni_dao: { chain_id: String(TEST_CHAIN_ID) },
+      governance: { chain_id: String(TEST_CHAIN_ID) },
       payments_in: {
         credits_topup: {
           provider: "test",
@@ -420,7 +420,7 @@ describe("extractLedgerApprovers", () => {
       node_id: TEST_NODE_ID,
       scope_id: TEST_SCOPE_ID,
       scope_key: "default",
-      cogni_dao: { chain_id: String(TEST_CHAIN_ID) },
+      governance: { chain_id: String(TEST_CHAIN_ID) },
       payments_in: {
         credits_topup: {
           provider: "test",

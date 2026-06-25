@@ -151,7 +151,7 @@ Enable the DAO to execute governance decisions (merge PRs, manage collaborators)
 | repoUrl      | string? | Repository URL                         |
 | changeNumber | number? | PR number                              |
 
-**Repo-spec: `cogni_dao` section**
+**Repo-spec: `governance` section**
 
 | Field           | Type   | Validation                     | Description                        |
 | --------------- | ------ | ------------------------------ | ---------------------------------- |
@@ -184,7 +184,7 @@ Enable the DAO to execute governance decisions (merge PRs, manage collaborators)
 | `apps/operator/src/app/(public)/propose/merge/`                     | Public proposal creation page (wallet connect → tx)    |
 | `apps/operator/src/features/review/services/review-handler.ts`      | Builds deep link URL via `extractDaoConfig()`          |
 | `packages/repo-spec/src/accessors.ts`                               | `extractDaoConfig()` — canonical DAO config extractor  |
-| `packages/repo-spec/src/schema.ts`                                  | Zod schema for `cogni_dao` with EVM address validation |
+| `packages/repo-spec/src/schema.ts`                                  | Zod schema for `governance` with EVM address validation |
 | `.cogni/repo-spec.yaml`                                             | DAO contract addresses, chain ID, base URL             |
 
 ## Acceptance Checks

@@ -86,7 +86,7 @@ Enable any founder to register a node, form a fully-verified Cogni DAO via walle
 
 6. **FORK_FREEDOM**: Formation tooling works standalone without Cogni Operator accounts.
 
-7. **FORMATION_IS_GOVERNANCE_ONLY**: Formation outputs `cogni_dao` and `payments.status: pending_activation`. It does NOT provision operator wallets, deploy Split contracts, or configure payment rails. Those belong to payment activation in the child node's trust domain.
+7. **FORMATION_IS_GOVERNANCE_ONLY**: Formation outputs `governance` and `payments.status: pending_activation`. It does NOT provision operator wallets, deploy Split contracts, or configure payment rails. Those belong to payment activation in the child node's trust domain.
 
 8. **CHILD_OWNS_OPERATOR_WALLET**: The child node's Privy app credentials create and control the operator wallet. The shared operator repo never creates, stores, or administers child node wallets.
 
@@ -308,7 +308,7 @@ Populates at formation time:
 
 - `node_id` — random UUID
 - `scope_id` — deterministic from node_id
-- `cogni_dao.dao_contract`, `plugin_contract`, `signal_contract`, `chain_id`
+- `governance.dao_contract`, `plugin_contract`, `signal_contract`, `chain_id`
 - `payments.status: pending_activation`
 
 Populated later by `pnpm node:activate-payments` (child node CLI):
@@ -359,7 +359,7 @@ Payment activation runs in the child node's own repo after formation + infra set
 - Privy credentials in env (`PRIVY_APP_ID`, `PRIVY_APP_SECRET`, `PRIVY_SIGNING_KEY`)
 - Funded deployer EOA on Base (`DEPLOYER_PRIVATE_KEY`) for Split deployment gas
 - `EVM_RPC_URL` for on-chain calls
-- `cogni_dao.dao_contract` in repo-spec (from formation)
+- `governance.dao_contract` in repo-spec (from formation)
 
 **Steps (each idempotent):**
 

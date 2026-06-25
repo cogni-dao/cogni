@@ -172,7 +172,7 @@ This is distinct from the governance agent workflows (signal collection, brief g
 
 **Configuration via `.cogni/repo-spec.yaml`:**
 
-The repo-spec already has `cogni_dao`, `payments_in`, `providers`, `llm_proxy`, and `gates` sections. A natural extension:
+The repo-spec already has `governance`, `payments_in`, `providers`, `llm_proxy`, and `gates` sections. A natural extension:
 
 ```yaml
 governance:

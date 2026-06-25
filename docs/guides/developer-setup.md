@@ -158,16 +158,16 @@ EVM_RPC_URL=<alchemy rpc url for same chain as your DAO>
 
 **Local repo-spec setup:**
 
-After forming a DAO via `/nodes`, create `.cogni/repo-spec.dev.yaml` (gitignored) by copying the committed spec and replacing the `cogni_dao` block with your test DAO:
+After forming a DAO via `/nodes`, create `.cogni/repo-spec.dev.yaml` (gitignored) by copying the committed spec and replacing the `governance` block with your test DAO:
 
 ```bash
 cp .cogni/repo-spec.yaml .cogni/repo-spec.dev.yaml
 ```
 
-Edit the `cogni_dao` section with your formation output and add `base_url`:
+Edit the `governance` section with your formation output and add `base_url`:
 
 ```yaml
-cogni_dao:
+governance:
   dao_contract: "<from formation>"
   plugin_contract: "<from formation>"
   signal_contract: "<from formation>"

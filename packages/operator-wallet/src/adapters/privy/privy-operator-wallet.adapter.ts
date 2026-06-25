@@ -47,7 +47,7 @@ export interface PrivyOperatorWalletConfig {
   expectedAddress: string;
   /** Split contract address (from payments_in.credits_topup.receiving_address) */
   splitAddress: string;
-  /** DAO treasury address from repo-spec (cogni_dao.dao_contract) */
+  /** DAO treasury address from repo-spec (governance.dao_contract) */
   treasuryAddress: string;
   /**
    * Human-custodied steward wallet address (repo-spec payments_out.steward_wallet).

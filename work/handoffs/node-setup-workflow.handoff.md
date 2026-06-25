@@ -43,7 +43,7 @@ last_commit: 4851e7e7e
 - [ ] **Automate technical wiring (the agent's checklist):**
   1. Generate `node_id` UUID (or use the one from DAO formation)
   2. Derive `scope_id` via `uuidv5(node_id, "default")`
-  3. Create `nodes/{name}/.cogni/repo-spec.yaml` — paste DAO formation output + add `scope_id`, `scope_key`, `cogni_dao.chain_id`
+  3. Create `nodes/{name}/.cogni/repo-spec.yaml` — paste DAO formation output + add `scope_id`, `scope_key`, `governance.chain_id`
   4. Add entry to operator `.cogni/repo-spec.yaml` `nodes[]` — `node_id`, `node_name`, `path`, `endpoint`
   5. Copy `nodes/node-template/` → `nodes/{name}/`
   6. Add to `.env.local`: `DATABASE_URL_{NAME}`, `DATABASE_SERVICE_URL_{NAME}`, `AUTH_SECRET_{NAME}`

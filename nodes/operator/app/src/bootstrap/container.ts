@@ -783,7 +783,7 @@ function createContainer(): Container {
         const treasuryAddress = getDaoTreasuryAddress();
         if (!treasuryAddress) {
           log.warn(
-            "operator_wallet configured but cogni_dao.dao_contract missing — skipping operator wallet"
+            "operator_wallet configured but governance.dao_contract missing — skipping operator wallet"
           );
           return undefined;
         }
