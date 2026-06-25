@@ -127,7 +127,6 @@ import { LiveNodeRegistryAdapter } from "@/adapters/server/node-registry/live-no
 import { NETWORK_NODES } from "@/adapters/server/node-registry/network-nodes.data";
 import { StaticNodeRegistryAdapter } from "@/adapters/server/node-registry/static-node-registry.adapter";
 import { ServiceDrizzlePaymentAttemptRepository } from "@/adapters/server/payments/drizzle-payment-attempt.adapter";
-import { OpenRouterFundingAdapter } from "@/adapters/server/treasury/openrouter-funding.adapter";
 import { SplitTreasurySettlementAdapter } from "@/adapters/server/treasury/split-treasury-settlement.adapter";
 import {
   FakeMetricsAdapter,
@@ -170,7 +169,6 @@ import type {
   PaymentAttemptServiceRepository,
   PaymentAttemptUserRepository,
   PaymentRailGuardPort,
-  ProviderFundingPort,
   RunStreamPort,
   ServiceAccountService,
   ThreadPersistencePort,
@@ -286,8 +284,6 @@ export interface Container {
   operatorWallet: OperatorWalletPort | undefined;
   /** Treasury settlement — undefined when operator wallet not configured */
   treasurySettlement: TreasurySettlementPort | undefined;
-  /** Provider funding — undefined when OPENROUTER_API_KEY not set */
-  providerFunding: ProviderFundingPort | undefined;
   /** Connection broker — undefined when CONNECTIONS_ENCRYPTION_KEY not set */
   connectionBroker: ConnectionBrokerPort | undefined;
   /** Authorization port — undefined until OpenFGA env is configured */
@@ -863,33 +859,12 @@ function createContainer(): Container {
     });
   })();
 
-  // ProviderFunding: optional — only when OPENROUTER_API_KEY is configured + operator wallet available
-  // Per MARGIN_PRESERVED: fail fast if pricing constants don't preserve positive margin
-  const providerFunding: ProviderFundingPort | undefined = (() => {
-    if (!env.OPENROUTER_API_KEY || !operatorWallet) return undefined;
-
-    // MARGIN_PRESERVED: markup × (1 - fee) must be > 1 + revenueShare.
-    // Markup + revenue share are governance config from repo-spec (payments_in);
-    // operatorWallet existing guarantees getPaymentConfig() is defined (cached).
-    const paymentConfig = getPaymentConfig();
-    if (!paymentConfig) return undefined;
-    const effectiveMarkup =
-      paymentConfig.markupFactor * (1 - env.OPENROUTER_CRYPTO_FEE);
-    if (effectiveMarkup <= 1 + paymentConfig.revenueShare) {
-      throw new Error(
-        `MARGIN_PRESERVED violation: markup(${paymentConfig.markupFactor}) × (1 - fee(${env.OPENROUTER_CRYPTO_FEE})) ` +
-          `must be > 1 + revenueShare(${paymentConfig.revenueShare}). ` +
-          "DAO would lose money on every purchase."
-      );
-    }
-
-    return new OpenRouterFundingAdapter(
-      getServiceDb(),
-      operatorWallet,
-      { apiKey: env.OPENROUTER_API_KEY },
-      log.child({ component: "OpenRouterFundingAdapter" })
-    );
-  })();
+  // ProviderFunding (OpenRouter/Coinbase top-up) was retired — OpenRouter 410'd
+  // programmatic crypto top-up. AI egress now pays per-request in USDC over x402
+  // (operator wallet signs EIP-3009 via signX402Payment; facilitator broadcasts).
+  // The x402 client shim + litellm wiring land in a later PR (needs a Hyperbolic
+  // key + backend decision). The post-credit chain here is now just inbound credit
+  // + Split distribute (treasurySettlement below).
 
   // Connection broker — BYO-AI credential resolution
   // Undefined when CONNECTIONS_ENCRYPTION_KEY not set
@@ -1001,7 +976,6 @@ function createContainer(): Container {
     treasurySettlement: operatorWallet
       ? new SplitTreasurySettlementAdapter(operatorWallet, USDC_TOKEN_ADDRESS)
       : undefined,
-    providerFunding,
     connectionBroker,
     authorization,
     // Multi-provider model ports

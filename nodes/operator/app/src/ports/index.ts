@@ -179,7 +179,7 @@ export type {
 } from "./operator-secrets-plane.port";
 export type {
   OperatorWalletPort,
-  TransferIntent,
+  X402PaymentParams,
 } from "./operator-wallet.port";
 export {
   type CreatePaymentAttemptParams,
@@ -203,11 +203,6 @@ export {
   type PaymentRailMisconfigurationCode,
   PaymentRailMisconfiguredPortError,
 } from "./payment-rail-guard.port";
-export type {
-  ProviderFundingContext,
-  ProviderFundingOutcome,
-  ProviderFundingPort,
-} from "./provider-funding.port";
 export type {
   ProxyBillingEntry,
   SandboxErrorCode,

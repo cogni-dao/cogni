@@ -3,16 +3,16 @@
 
 /**
  * Module: `@features/payments/application/confirmCreditsPurchase`
- * Purpose: Application orchestrator — composes credit confirmation with treasury settlement, TigerBeetle co-writes, and provider funding.
- * Scope: Orchestrates the full credit purchase chain: credit user → settle treasury → record USDC movements in TB → top up provider.
- *   Steps 1-2 (credits) always succeed independently. Steps 3-6 (settlement, TB, funding) are non-blocking — log critical on failure.
+ * Purpose: Application orchestrator — composes credit confirmation with treasury settlement and the TigerBeetle Split-distribute co-write.
+ * Scope: Orchestrates the post-credit chain: credit user → settle treasury (Split distribute) → record the Treasury→OperatorFloat USDC movement in TB.
+ *   Steps 1-2 (credits) always succeed independently. Steps 3-4 (settlement, TB) are non-blocking — log critical on failure.
  *   `runPostCreditFunding` is extracted so both the widget path (confirmCreditsPurchase) and on-chain path (verifyAndSettle) can invoke post-credit steps.
  * Invariants:
  *   - Credit confirmation always succeeds independently of downstream steps
- *   - Settlement and funding skipped on idempotent replay
- *   - SETTLEMENT_NON_BLOCKING: Steps 3-6 never fail the user response
+ *   - Settlement skipped on idempotent replay
+ *   - SETTLEMENT_NON_BLOCKING: Steps 3-4 never fail the user response
  *   - CO_WRITE_NON_BLOCKING: TigerBeetle writes fire-and-forget
- *   - ASSET_SWAP_NOT_EXPENSE: Top-up posts OperatorFloat → ProviderFloat
+ * Notes: The dead OpenRouter/Coinbase provider-funding path (old steps 5-6: ProviderFundingPort + OperatorFloat→ProviderFloat co-write) was retired — OpenRouter 410'd programmatic crypto top-up. AI egress now pays per-request in USDC over x402 (operator wallet signs EIP-3009, facilitator broadcasts); that lands in a later PR. Inbound crediting + Split distribute are unchanged.
  * Side-effects: IO (via delegated ports)
  * Links: docs/spec/financial-ledger.md, task.0086
  * @public
@@ -27,7 +27,6 @@ import {
   USDC_SCALE,
   uuidToBigInt,
 } from "@cogni/financial-ledger";
-import { calculateOpenRouterTopUp } from "@cogni/node-core";
 import { EVENT_NAMES } from "@cogni/node-shared";
 import type { Logger } from "pino";
 import { v5 as uuidv5 } from "uuid";
@@ -37,8 +36,6 @@ import {
 } from "@/features/payments/services/creditsConfirm";
 import type {
   AccountService,
-  ProviderFundingOutcome,
-  ProviderFundingPort,
   ServiceAccountService,
   TreasurySettlementOutcome,
   TreasurySettlementPort,
@@ -51,16 +48,7 @@ export interface ConfirmCreditsPurchaseDeps {
   serviceAccountService: ServiceAccountService;
   treasurySettlement: TreasurySettlementPort | undefined;
   financialLedger: FinancialLedgerPort | undefined;
-  providerFunding: ProviderFundingPort | undefined;
   log: Logger;
-  /** Pricing config for provider top-up calculation. Required when providerFunding is set. */
-  pricingConfig?:
-    | {
-        markupFactor: number;
-        revenueShare: number;
-        cryptoFee: number;
-      }
-    | undefined;
 }
 
 export interface ConfirmCreditsPurchaseResult {
@@ -74,22 +62,13 @@ export interface ConfirmCreditsPurchaseResult {
 }
 
 // ---------------------------------------------------------------------------
-// Post-credit funding (steps 3-6) — extracted for reuse by on-chain path
+// Post-credit funding (steps 3-4) — extracted for reuse by on-chain path
 // ---------------------------------------------------------------------------
 
 export interface PostCreditFundingDeps {
   treasurySettlement: TreasurySettlementPort | undefined;
   financialLedger: FinancialLedgerPort | undefined;
-  providerFunding: ProviderFundingPort | undefined;
   log: Logger;
-  /** Pricing config for provider top-up calculation. Required when providerFunding is set. */
-  pricingConfig?:
-    | {
-        markupFactor: number;
-        revenueShare: number;
-        cryptoFee: number;
-      }
-    | undefined;
 }
 
 export interface PostCreditFundingResult {
@@ -112,15 +91,13 @@ function deterministicTransferId(
 }
 
 /**
- * Confirm a credit purchase and run the full settlement + funding chain.
+ * Confirm a credit purchase and run the post-credit settlement chain.
  *
  * Steps 1-2 (credit user + mint system tenant bonus) delegate to confirmCreditsPayment.
- * Step 3 (treasury settlement) delegates to TreasurySettlementPort.
- * Step 4 (TB co-write: Split distribute) records Treasury → OperatorFloat in TigerBeetle.
- * Step 5 (provider funding) delegates to ProviderFundingPort.
- * Step 6 (TB co-write: provider top-up) records OperatorFloat → ProviderFloat in TigerBeetle.
+ * Step 3 (treasury settlement) delegates to TreasurySettlementPort (Split distribute).
+ * Step 4 (TB co-write) records Treasury → OperatorFloat in TigerBeetle.
  *
- * Steps 3-6 are non-blocking — log critical on failure, never fail user response.
+ * Steps 3-4 are non-blocking — log critical on failure, never fail user response.
  */
 export async function confirmCreditsPurchase(
   deps: ConfirmCreditsPurchaseDeps,
@@ -136,7 +113,7 @@ export async function confirmCreditsPurchase(
   // Skip settlement on idempotent replay (duplicate payment)
   if (result.creditsApplied === 0) return result;
 
-  // Steps 3-6: post-credit funding chain (treasury settlement, TB co-writes, provider top-up)
+  // Steps 3-4: post-credit chain (treasury settlement + TB co-write)
   const fundingResult = await runPostCreditFunding(deps, {
     paymentIntentId: input.clientPaymentId,
     amountUsdCents: input.amountUsdCents,
@@ -149,12 +126,10 @@ export async function confirmCreditsPurchase(
 }
 
 /**
- * Run post-credit funding chain (steps 3-6).
+ * Run post-credit chain (steps 3-4).
  *
  * Step 3: Treasury settlement — call Split distribute via TreasurySettlementPort.
  * Step 4: TB co-write — record Split distribute (Treasury → OperatorFloat).
- * Step 5: Provider funding — top up OpenRouter via ProviderFundingPort.
- * Step 6: TB co-write — record provider top-up (OperatorFloat → ProviderFloat).
  *
  * All steps are non-blocking — log critical on failure, never throw.
  * Called by both the widget path (confirmCreditsPurchase) and on-chain path (verifyAndSettle).
@@ -207,66 +182,8 @@ export async function runPostCreditFunding(
     }
   }
 
-  // Step 5: Provider funding (OpenRouter top-up)
-  let fundingOutcome: ProviderFundingOutcome | undefined;
-  let fundingError = false;
-  if (deps.providerFunding && !deps.pricingConfig) {
-    log.warn(
-      { paymentIntentId },
-      "providerFunding configured but pricingConfig missing — skipping funding"
-    );
-  }
-  if (deps.providerFunding && deps.pricingConfig) {
-    try {
-      const topUpUsd = calculateOpenRouterTopUp(
-        amountUsdCents,
-        deps.pricingConfig.markupFactor,
-        deps.pricingConfig.revenueShare,
-        deps.pricingConfig.cryptoFee
-      );
-      fundingOutcome = await deps.providerFunding.fundAfterCreditPurchase({
-        paymentIntentId,
-        amountUsdCents,
-        topUpUsd,
-      });
-
-      // Step 6: TB co-write — record provider top-up (OperatorFloat → ProviderFloat)
-      if (deps.financialLedger && fundingOutcome) {
-        try {
-          // topUpUsd is a float from pricing — convert to cents then to micro-USDC
-          const topUpMicroUsdc =
-            BigInt(Math.round(fundingOutcome.topUpUsd * 100)) *
-            (USDC_SCALE / 100n);
-          await deps.financialLedger.transfer({
-            id: deterministicTransferId(
-              paymentIntentId,
-              TRANSFER_CODE.PROVIDER_TOPUP
-            ),
-            debitAccountId: ACCOUNT.ASSETS_OPERATOR_FLOAT,
-            creditAccountId: ACCOUNT.ASSETS_PROVIDER_FLOAT,
-            amount: topUpMicroUsdc,
-            ledger: LEDGER.USDC,
-            code: TRANSFER_CODE.PROVIDER_TOPUP,
-          });
-        } catch (err) {
-          log.error(
-            { err, paymentIntentId },
-            "TB co-write failed for provider top-up — continuing"
-          );
-        }
-      }
-    } catch (err) {
-      fundingError = true;
-      log.error(
-        { err, paymentIntentId },
-        "provider funding failed — credits confirmed, funding skipped"
-      );
-    }
-  }
-
-  // Terminal event — carries the on-chain txns so the full payments→DAO/OpenRouter
-  // path is traceable by paymentIntentId in one query (the tx hashes are already in
-  // hand from the settlement/funding outcomes; do not drop them).
+  // Terminal event — carries the on-chain Split-distribute txn so the
+  // payments→DAO path is traceable by paymentIntentId in one query.
   log.info(
     {
       event: EVENT_NAMES.PAYMENTS_FUNDING_COMPLETE,
@@ -274,15 +191,10 @@ export async function runPostCreditFunding(
       amountUsdCents,
       settlementOk: !!settlement,
       settlementError: !!settlementError,
-      fundingConfigured: !!deps.providerFunding,
-      fundingError,
       // Split distribute (Treasury → operator + DAO) tx
       distributeTxHash: settlement?.txHash,
-      // OpenRouter top-up (operator → provider) tx + gross amount
-      providerTxHash: fundingOutcome?.txHash,
-      topUpUsd: fundingOutcome?.topUpUsd,
     },
-    "post-credit funding chain complete"
+    "post-credit settlement chain complete"
   );
 
   return {

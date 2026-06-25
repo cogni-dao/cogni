@@ -11,23 +11,25 @@
  * @public
  */
 
-import type { OperatorWalletPort, TransferIntent } from "@/ports";
+import type { Hex } from "viem";
+import type { OperatorWalletPort, X402PaymentParams } from "@/ports";
 
 const FAKE_OPERATOR_ADDRESS = "0x1111111111111111111111111111111111111111";
 const FAKE_SPLIT_ADDRESS = "0x2222222222222222222222222222222222222222";
 const FAKE_TX_HASH =
   "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const FAKE_X402_SIGNATURE = `0x${"cd".repeat(65)}` as Hex;
 
 export class FakeOperatorWalletAdapter implements OperatorWalletPort {
   private address = FAKE_OPERATOR_ADDRESS;
   private splitAddress = FAKE_SPLIT_ADDRESS;
   private distributeSplitResult = FAKE_TX_HASH;
-  private fundTopUpResult = FAKE_TX_HASH;
+  private signX402Result: Hex = FAKE_X402_SIGNATURE;
 
   /** Last params passed to distributeSplit */
   public lastDistributeSplitToken: string | undefined;
-  /** Last params passed to fundOpenRouterTopUp */
-  public lastFundTopUpIntent: TransferIntent | undefined;
+  /** Last params passed to signX402Payment */
+  public lastX402Params: X402PaymentParams | undefined;
 
   async getAddress(): Promise<string> {
     return this.address;
@@ -42,9 +44,9 @@ export class FakeOperatorWalletAdapter implements OperatorWalletPort {
     return this.distributeSplitResult;
   }
 
-  async fundOpenRouterTopUp(intent: TransferIntent): Promise<string> {
-    this.lastFundTopUpIntent = intent;
-    return this.fundTopUpResult;
+  async signX402Payment(params: X402PaymentParams): Promise<Hex> {
+    this.lastX402Params = params;
+    return this.signX402Result;
   }
 
   // ── Test helpers ──
@@ -61,17 +63,17 @@ export class FakeOperatorWalletAdapter implements OperatorWalletPort {
     this.distributeSplitResult = txHash;
   }
 
-  setFundTopUpResult(txHash: string): void {
-    this.fundTopUpResult = txHash;
+  setSignX402Result(signature: Hex): void {
+    this.signX402Result = signature;
   }
 
   reset(): void {
     this.address = FAKE_OPERATOR_ADDRESS;
     this.splitAddress = FAKE_SPLIT_ADDRESS;
     this.distributeSplitResult = FAKE_TX_HASH;
-    this.fundTopUpResult = FAKE_TX_HASH;
+    this.signX402Result = FAKE_X402_SIGNATURE;
     this.lastDistributeSplitToken = undefined;
-    this.lastFundTopUpIntent = undefined;
+    this.lastX402Params = undefined;
   }
 }
 

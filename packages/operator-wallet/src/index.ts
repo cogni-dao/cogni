@@ -19,7 +19,18 @@ export {
   PPM,
   SPLIT_TOTAL_ALLOCATION,
 } from "./domain/split-allocation.js";
+export {
+  BASE_CHAIN_ID,
+  buildX402Domain,
+  buildX402TypedData,
+  TRANSFER_WITH_AUTHORIZATION,
+  USDC_ADDRESS,
+  USDC_EIP712_NAME,
+  USDC_EIP712_VERSION,
+  X402_EIP712_TYPES,
+  type X402TypedData,
+} from "./domain/x402-eip3009.js";
 export type {
   OperatorWalletPort,
-  TransferIntent,
+  X402PaymentParams,
 } from "./port/operator-wallet.port.js";

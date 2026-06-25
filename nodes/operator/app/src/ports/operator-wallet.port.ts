@@ -13,5 +13,5 @@
 
 export type {
   OperatorWalletPort,
-  TransferIntent,
+  X402PaymentParams,
 } from "@cogni/operator-wallet";
