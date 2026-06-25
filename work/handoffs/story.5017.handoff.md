@@ -49,7 +49,7 @@ Pickup: you own building the **work-item ↔ knowledge cross-link** for the oper
 3. **Validate both-endpoints-on-`main`.** Knowledge endpoint → knowledge `main`; work endpoint → `work_items` `main`. Reject otherwise. (Main-only, by Derek's decision; pending-inbox linking is out of scope — see roadmap R1.)
 4. **Do not regress EDO.** `recomputeConfidence`, `walkChain` (`JOIN knowledge`), and `/knowledge/graph` must **skip work endpoints** gracefully — no thrown error, no silent confidence corruption. Hypothesis edges (`derives_from`/`validates`/`invalidates`) stay knowledge-only.
 5. **UI = the chip, standardized.** Work-item detail + knowledge detail render edges via `listCitationsBy{Citing,Cited}Id` as the small clickable chip (work→`/work`, knowledge→`/knowledge/{id}`). Retire `ChainPanel` depth-cards to the same chip.
-6. **Plane boundary holds.** Work-item lifecycle (claim/status/PR) stays direct-write (autonomy); only the *link* is curated/inbox-authored.
+6. **Plane boundary holds.** Work-item lifecycle (claim/status/PR) stays direct-write (autonomy); only the _link_ is curated/inbox-authored.
 
 ## Next Actions / Risks
 
@@ -64,12 +64,12 @@ Pickup: you own building the **work-item ↔ knowledge cross-link** for the oper
 
 ## Pointers
 
-| File / Resource | Why it matters |
-| --------------- | -------------- |
-| `story.5017` summary | Locked design + roadmap (R1 auto-merge pure-cite = the link-autonomy fix) |
-| `contribution-adapter.ts` `insertCitationRow`/`resolveCitedEntryType` | Where work-endpoint validation diverges from knowledge |
-| `edo-resolver.ts` `walkChain`/`recomputeConfidence` | EDO read sites that must skip work nodes (Req 4) |
-| `knowledge/graph/route.ts` | Graph route drops non-knowledge edges; add work nodes or accept knowledge-only |
-| `ChainPanel.tsx` | Bespoke depth-X cards to retire to chips |
-| `listCitationsBy{Citing,Cited}Id` (knowledge-store doltgres adapter) | Both-direction read for the UI chips |
-| `bug.5059` | playwright-cli auth regression blocking the UI validation axis |
+| File / Resource                                                       | Why it matters                                                                 |
+| --------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `story.5017` summary                                                  | Locked design + roadmap (R1 auto-merge pure-cite = the link-autonomy fix)      |
+| `contribution-adapter.ts` `insertCitationRow`/`resolveCitedEntryType` | Where work-endpoint validation diverges from knowledge                         |
+| `edo-resolver.ts` `walkChain`/`recomputeConfidence`                   | EDO read sites that must skip work nodes (Req 4)                               |
+| `knowledge/graph/route.ts`                                            | Graph route drops non-knowledge edges; add work nodes or accept knowledge-only |
+| `ChainPanel.tsx`                                                      | Bespoke depth-X cards to retire to chips                                       |
+| `listCitationsBy{Citing,Cited}Id` (knowledge-store doltgres adapter)  | Both-direction read for the UI chips                                           |
+| `bug.5059`                                                            | playwright-cli auth regression blocking the UI validation axis                 |
