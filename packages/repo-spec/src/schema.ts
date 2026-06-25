@@ -34,6 +34,21 @@ export const creditsTopupSpecSchema = z.object({
 
   /** Optional: Informational list of token names (not enforced by schema) */
   allowed_tokens: z.array(z.string()).optional(),
+
+  /**
+   * Purchase-side price markup multiplier (governance config; was env USER_PRICE_MARKUP_FACTOR).
+   * Drives the OpenRouter top-up amount and the 0xSplits allocation (DAO margin).
+   * Default is tuned for a 95% provider top-up / 5% DAO Split margin with a 5% provider fee:
+   * 1 / (0.95 top-up share × 0.95 fee complement). Distinct from spend-side LLM markup.
+   */
+  markup_factor: z.number().min(1.0).default(1.10803324099723),
+
+  /**
+   * Fraction of purchased credits minted as a system-tenant (DAO) bonus (0–1).
+   * Default 0 = no system-account credit increase (the DAO earns USDC margin via the
+   * Split, not free minted AI credits). New nodes inherit 0; a node opts back in explicitly.
+   */
+  revenue_share: z.number().min(0).max(1).default(0),
 });
 
 export type CreditsTopupSpec = z.infer<typeof creditsTopupSpecSchema>;

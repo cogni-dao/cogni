@@ -51,6 +51,7 @@ describe("features/payments/application/confirmCreditsPurchase", () => {
     defaultVirtualKeyId: "vk-123",
     amountUsdCents: 1000,
     clientPaymentId: "payment-1",
+    revenueShare: 0.75,
   };
 
   let accountService: ReturnType<typeof createMockAccountService>;

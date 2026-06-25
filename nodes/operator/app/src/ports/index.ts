@@ -196,6 +196,13 @@ export {
   type PaymentErrorCode,
   TxHashAlreadyBoundPortError,
 } from "./payment-attempt.port";
+export {
+  isPaymentRailMisconfiguredPortError,
+  type PaymentRailGuardConfig,
+  type PaymentRailGuardPort,
+  type PaymentRailMisconfigurationCode,
+  PaymentRailMisconfiguredPortError,
+} from "./payment-rail-guard.port";
 export type {
   ProviderFundingContext,
   ProviderFundingOutcome,

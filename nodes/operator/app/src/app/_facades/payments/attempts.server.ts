@@ -32,6 +32,7 @@ import {
   submitTxHash,
 } from "@/features/payments/services/paymentService";
 import { getOrCreateBillingAccountForUser } from "@/lib/auth/mapping";
+import { getPaymentConfig } from "@/shared/config";
 import { serverEnv } from "@/shared/env/server-env";
 import type {
   PaymentsIntentCreatedEvent,
@@ -60,11 +61,14 @@ function buildPostCreditFundingDeps(
 
   const pricingConfig = (() => {
     if (!container.providerFunding) return undefined;
-    const env = serverEnv();
+    // Purchase-side markup + revenue share are governance config (repo-spec payments_in);
+    // only the crypto provider fee is an external-rail env constant.
+    const paymentConfig = getPaymentConfig();
+    if (!paymentConfig) return undefined;
     return {
-      markupFactor: env.USER_PRICE_MARKUP_FACTOR,
-      revenueShare: env.SYSTEM_TENANT_REVENUE_SHARE,
-      cryptoFee: env.OPENROUTER_CRYPTO_FEE,
+      markupFactor: paymentConfig.markupFactor,
+      revenueShare: paymentConfig.revenueShare,
+      cryptoFee: serverEnv().OPENROUTER_CRYPTO_FEE,
     };
   })();
 
@@ -101,7 +105,7 @@ export async function createPaymentIntentFacade(
   const userRepo = container.paymentAttemptsForUser(
     toUserId(params.sessionUser.id)
   );
-  const { clock } = container;
+  const { clock, paymentRailGuard } = container;
 
   let billingAccount: Awaited<
     ReturnType<typeof getOrCreateBillingAccountForUser>
@@ -142,7 +146,7 @@ export async function createPaymentIntentFacade(
   }
   const fromAddress = getAddress(params.sessionUser.walletAddress);
 
-  const result = await createIntent(userRepo, clock, {
+  const result = await createIntent(userRepo, clock, paymentRailGuard, {
     billingAccountId: billingAccount.id,
     fromAddress,
     amountUsdCents: params.amountUsdCents,
