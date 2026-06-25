@@ -126,6 +126,7 @@ export { ViemEvmOnchainClient } from "./onchain/viem-evm-onchain-client.adapter"
 export { ViemTreasuryAdapter } from "./onchain/viem-treasury.adapter";
 export { UserDrizzlePaymentAttemptRepository } from "./payments/drizzle-payment-attempt.adapter";
 export { EvmRpcOnChainVerifierAdapter } from "./payments/evm-rpc-onchain-verifier.adapter";
+export { FundingReadyRailGuardAdapter } from "./payments/funding-ready-rail-guard.adapter";
 export { PonderOnChainVerifierAdapter } from "./payments/ponder-onchain-verifier.adapter";
 export { SplitPaymentRailGuardAdapter } from "./payments/split-payment-rail-guard.adapter";
 export {

@@ -527,10 +527,13 @@ async function verifyAndSettle(
             amountUsdCents: attempt.amountUsdCents,
           });
         } else {
-          // Outbound (Split distribute + OpenRouter top-up) is unconfigured in this
-          // env (operator wallet / treasury / provider ports absent). Credits were
-          // minted inbound, but USDC stays in the Split and OpenRouter is NOT topped
-          // up. Logged so this is never a silent gap again (bug.5087).
+          // Defense-in-depth backstop. As of bug.5087 the rail fails CLOSED at
+          // intent creation (FundingReadyRailGuardAdapter → PAYMENT_RAIL_UNCONFIGURED)
+          // whenever payments are active but outbound funding is unwired, so on a
+          // payments-active node we should never reach here with deps undefined. If
+          // we do (e.g. test-mode, or a non-payments env that somehow credited),
+          // log loudly: credits were minted inbound but USDC stays in the Split and
+          // OpenRouter is NOT topped up.
           log.warn(
             {
               event: "payments.settlement_skipped",
