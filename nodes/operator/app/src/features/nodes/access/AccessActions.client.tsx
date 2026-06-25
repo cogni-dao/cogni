@@ -97,14 +97,15 @@ export function AccessActions({
             size="sm"
             variant={action.variant}
             disabled={submitting !== null}
-            rightIcon={
-              submitting === action.decision ? (
-                <Loader2 className="animate-spin" />
-              ) : undefined
-            }
             onClick={() => decide(action.decision)}
           >
-            {action.label}
+            {/* Swap the label FOR the spinner (don't append it) so the button never grows wider
+                while loading — appending widened the Actions cell and overflowed the table. */}
+            {submitting === action.decision ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              action.label
+            )}
           </Button>
         ))}
       </div>
