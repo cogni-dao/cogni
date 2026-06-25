@@ -20,6 +20,13 @@
  */
 
 import { NextResponse } from "next/server";
+import {
+  getNodeBrandColor,
+  getNodeHook,
+  getNodeMission,
+  getNodeName,
+  getNodeThumbnail,
+} from "@/shared/config/repoSpec.server";
 import { serverEnv } from "@/shared/env";
 
 export const runtime = "nodejs";
@@ -49,6 +56,15 @@ export async function GET(request: Request) {
     name: "Cogni Node API",
     version: "v1",
     buildSha: env.APP_BUILD_SHA,
+    // IDENTITY_IS_REPO_SPEC_PROJECTION: the node's display identity, projected from its own repo-spec
+    // `intent` (never hardcoded). The operator reads THIS to render gallery cards — no operator-side
+    // per-node literals. A node customizes itself by editing repo-spec, not operator code.
+    identity: {
+      name: getNodeName(),
+      hook: getNodeHook(),
+      mission: getNodeMission(),
+      brand: { thumbnail: getNodeThumbnail(), color: getNodeBrandColor() },
+    },
     registrationUrl: `${origin}/api/v1/agent/register`,
     auth: { type: "bearer", keyPrefix: "cogni_ag_sk_v1_" },
     endpoints: {

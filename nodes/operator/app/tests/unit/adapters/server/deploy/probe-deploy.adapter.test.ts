@@ -34,6 +34,7 @@ function proberReturning(serving: ServingResult): {
       runs: 1,
       detail: "unused",
     }),
+    identity: async () => null,
   };
   return { prober, hosts };
 }

@@ -3,16 +3,17 @@
 
 /**
  * Module: tests for `@adapters/server/node-registry/prod-liveness`.
- * Purpose: Pin the cross-node prod-liveness rollup — production host derivation, "pass ⇒ live",
- *   per-node degrade (a failed/thrown probe excludes that slug only), and concurrency.
+ * Purpose: Pin the cross-node liveness+identity rollup — env-scoped host derivation, "pass ⇒ live" /
+ *   non-pass ⇒ down, identity read alongside liveness in one pass, per-node degrade (a thrown probe ⇒
+ *   {down, null} for that slug only), and that the map key set equals the candidate set (not filtered).
  * Scope: Pure logic with a fake NodeProber (no network).
  * Side-effects: none
  * Links: src/adapters/server/node-registry/prod-liveness.ts
  */
 
 import { describe, expect, it, vi } from "vitest";
-import { resolveLiveProdSlugs } from "@/adapters/server/node-registry/prod-liveness";
-import type { NodeProber, ServingResult } from "@/ports";
+import { resolveNodeLiveness } from "@/adapters/server/node-registry/prod-liveness";
+import type { NodeIdentity, NodeProber, ServingResult } from "@/ports";
 import { envForApex } from "@/shared/node-registry/deploy-hosts";
 
 describe("envForApex (operator self-env)", () => {
@@ -29,7 +30,21 @@ const CONFIG = {
   env: "production",
 } as const;
 
-/** Fake prober: per-host serving verdict from a map; missing host ⇒ fail. */
+function identityFor(host: string): NodeIdentity {
+  return {
+    name: host.split(".")[0] ?? host,
+    hook: `${host} hook`,
+    mission: `${host} mission`,
+    brand: { thumbnail: `https://${host}/showcase/x.png`, color: "#abc" },
+  };
+}
+
+/**
+ * Fake prober: per-host serving verdict from a map; missing host ⇒ fail. Identity echoes the host, but
+ * ONLY for hosts that serve (`pass`) — a dead host's well-known is also unreachable ⇒ null identity. This
+ * models the common case while still proving serving + identity are independent (see the dedicated
+ * "thrown identity probe still yields health" test for the independence edge).
+ */
 function proberFromHosts(
   byHost: Record<string, ServingResult["status"]>,
   onCall?: (host: string) => void
@@ -50,31 +65,47 @@ function proberFromHosts(
       runs: 0,
       detail: "unused",
     }),
+    identity: async (host: string) =>
+      byHost[host] === "pass" ? identityFor(host) : null,
   };
 }
 
-describe("resolveLiveProdSlugs", () => {
-  it("derives the prod host per slug and keeps only passing ones", async () => {
+describe("resolveNodeLiveness", () => {
+  it("derives the prod host per slug, maps pass⇒live / non-pass⇒down, and attaches identity", async () => {
     const calledHosts: string[] = [];
     const prober = proberFromHosts(
       {
         "cognidao.org": "pass", // operator = primary ⇒ bare apex
         "node-template.cognidao.org": "pass",
-        "resy.cognidao.org": "fail", // 525 edge ⇒ excluded
+        "resy.cognidao.org": "fail", // 525 edge ⇒ down
       },
       (h) => calledHosts.push(h)
     );
 
-    const live = await resolveLiveProdSlugs(
+    const live = await resolveNodeLiveness(
       ["operator", "resy", "node-template"],
       { prober, config: CONFIG }
     );
 
-    expect([...live].sort()).toEqual(["node-template", "operator"]);
-    // Operator probed at the bare apex, others at the slugged prod host.
+    expect(live.get("operator")?.health).toBe("live");
+    expect(live.get("node-template")?.health).toBe("live");
+    expect(live.get("resy")?.health).toBe("down");
+    // identity is read for the live hosts; the dead resy host returns null from the fake.
+    expect(live.get("operator")?.identity?.hook).toBe("cognidao.org hook");
+    expect(live.get("resy")?.identity).toBeNull();
+    // operator probed at the bare apex, others at the slugged prod host.
     expect(calledHosts).toContain("cognidao.org");
-    expect(calledHosts).toContain("resy.cognidao.org");
     expect(calledHosts).toContain("node-template.cognidao.org");
+  });
+
+  it("returns ALL candidate slugs (does NOT filter down nodes)", async () => {
+    const prober = proberFromHosts({ "cognidao.org": "pass" });
+    const live = await resolveNodeLiveness(["operator", "resy"], {
+      prober,
+      config: CONFIG,
+    });
+    expect([...live.keys()].sort()).toEqual(["operator", "resy"]);
+    expect(live.get("resy")?.health).toBe("down");
   });
 
   it("ENV_SCOPED_VIEW: a candidate-a operator probes the -test hosts, not prod", async () => {
@@ -87,18 +118,19 @@ describe("resolveLiveProdSlugs", () => {
       (h) => calledHosts.push(h)
     );
 
-    const live = await resolveLiveProdSlugs(["operator", "beacon"], {
+    const live = await resolveNodeLiveness(["operator", "beacon"], {
       prober,
       config: { ...CONFIG, env: "candidate-a" },
     });
 
-    expect([...live].sort()).toEqual(["beacon", "operator"]);
+    expect(live.get("operator")?.health).toBe("live");
+    expect(live.get("beacon")?.health).toBe("live");
     expect(calledHosts).toContain("test.cognidao.org");
     expect(calledHosts).toContain("beacon-test.cognidao.org");
     expect(calledHosts).not.toContain("cognidao.org"); // never the prod apex
   });
 
-  it("degrades per-node: a thrown probe excludes only that slug", async () => {
+  it("degrades per-node: a thrown serving probe ⇒ {down, identity} for only that slug", async () => {
     const prober: NodeProber = {
       serving: async (host: string) => {
         if (host === "resy.cognidao.org") throw new Error("network down");
@@ -110,20 +142,46 @@ describe("resolveLiveProdSlugs", () => {
         runs: 0,
         detail: "unused",
       }),
+      identity: async () => null,
     };
 
-    const live = await resolveLiveProdSlugs(["operator", "resy"], {
+    const live = await resolveNodeLiveness(["operator", "resy"], {
       prober,
       config: CONFIG,
     });
 
-    expect([...live]).toEqual(["operator"]);
+    expect(live.get("operator")?.health).toBe("live");
+    expect(live.get("resy")?.health).toBe("down");
   });
 
-  it("empty candidate set ⇒ empty live set, no probes", async () => {
+  it("a thrown identity probe still yields health (identity is independent)", async () => {
+    const prober: NodeProber = {
+      serving: async () => ({
+        status: "pass",
+        readyzCode: 200,
+        buildSha: null,
+      }),
+      runCarries: async () => ({
+        status: "fail",
+        durationMs: 0,
+        runs: 0,
+        detail: "unused",
+      }),
+      identity: async () => {
+        throw new Error("well-known unreachable");
+      },
+    };
+    const live = await resolveNodeLiveness(["operator"], {
+      prober,
+      config: CONFIG,
+    });
+    expect(live.get("operator")).toEqual({ health: "live", identity: null });
+  });
+
+  it("empty candidate set ⇒ empty map, no probes", async () => {
     const serving = vi.fn();
     const prober = proberFromHosts({}, serving);
-    const live = await resolveLiveProdSlugs([], { prober, config: CONFIG });
+    const live = await resolveNodeLiveness([], { prober, config: CONFIG });
     expect(live.size).toBe(0);
     expect(serving).not.toHaveBeenCalled();
   });
@@ -131,11 +189,14 @@ describe("resolveLiveProdSlugs", () => {
   it("dedupes candidate slugs before probing", async () => {
     const serving = vi.fn((_h: string) => {});
     const prober = proberFromHosts({ "cognidao.org": "pass" }, serving);
-    const live = await resolveLiveProdSlugs(
+    const live = await resolveNodeLiveness(
       ["operator", "operator", "operator"],
-      { prober, config: CONFIG }
+      {
+        prober,
+        config: CONFIG,
+      }
     );
-    expect([...live]).toEqual(["operator"]);
+    expect([...live.keys()]).toEqual(["operator"]);
     expect(serving).toHaveBeenCalledTimes(1);
   });
 });

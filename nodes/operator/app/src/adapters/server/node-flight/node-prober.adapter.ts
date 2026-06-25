@@ -4,22 +4,93 @@
 /**
  * Module: `@adapters/server/node-flight/node-prober`
  * Purpose: Real-fetch implementation of NodeProber — exercises a node's PUBLIC surface exactly as an
- *   external dev would (register an agent, run the free `poet` graph, read back runs). No cluster/GH auth.
+ *   external dev would (register an agent, run the free `poet` graph, read back runs) AND reads its
+ *   self-described identity from `/.well-known/agent.json`. No cluster/GH auth.
  * Scope: HTTP I/O only. Classification rules live in the feature; this adapter just measures + reports.
  * Invariants:
- *   - PUBLIC_SURFACE_ONLY: hits https://<host>/{readyz,version,api/v1/agent/register,chat/completions,agent/runs}.
+ *   - PUBLIC_SURFACE_ONLY: hits https://<host>/{readyz,version,api/v1/agent/register,chat/completions,agent/runs,.well-known/agent.json}.
  *   - RUN_CARRIES_IS_TRUTH: a created run (runs>=1) + fast return = the substrate carried it, even if the
  *     completion errors downstream (insufficient_quota → degraded, not fail). A 60s hang with runs=0 = fail.
+ *   - IDENTITY_IS_ZOD_PARSED: the well-known `identity` block is parsed defensively — a node not yet
+ *     projecting identity returns generic JSON with no `identity` ⇒ `null` (never a throw), and a malformed
+ *     block degrades to null rather than corrupting a gallery card.
+ *   - THUMBNAIL_RESOLVED_TO_HOST: the node publishes a host-relative thumbnail PATH; this adapter joins it
+ *     against `https://<host>` so the image loads from the node's OWN env host (no cross-env / CDN leak).
  * Side-effects: network I/O
- * Links: src/features/nodes/flight-status.ts, docs/guides/agent-api-validation.md
+ * Links: src/features/nodes/flight-status.ts, docs/guides/agent-api-validation.md,
+ *   src/app/.well-known/agent.json/route.ts (the projection this reads)
  * @public
  */
 
-import type { NodeProber, RunCarriesResult, ServingResult } from "@/ports";
+import { z } from "zod";
+import type {
+  NodeIdentity,
+  NodeProber,
+  RunCarriesResult,
+  ServingResult,
+} from "@/ports";
 
 const SERVING_TIMEOUT_MS = 10_000;
 /** The hang we hunt is ~60s; give a touch of headroom so a real hang reads as a timeout, not a probe abort. */
 const RUN_CARRIES_TIMEOUT_MS = 70_000;
+
+/**
+ * Defensive schema for the well-known `identity` block. Every field is optional/nullable: a node that
+ * has not projected identity omits the whole block (the wrapping `.identity` is `.optional()` at the
+ * call site), and a partially-declared node leaves individual fields null. Unknown sibling keys are
+ * ignored — this only pins the shape the gallery consumes.
+ */
+const wellKnownIdentitySchema = z.object({
+  name: z.string(),
+  hook: z.string().nullable().optional(),
+  mission: z.string().nullable().optional(),
+  brand: z
+    .object({
+      thumbnail: z.string().nullable().optional(),
+      color: z.string().nullable().optional(),
+    })
+    .optional(),
+});
+
+/** Resolve a host-relative thumbnail PATH against the node's own host → absolute, so it loads per-env. */
+function resolveThumbnail(
+  thumbnail: string | null | undefined,
+  host: string
+): string | null {
+  if (!thumbnail) return null;
+  try {
+    // `new URL` leaves an already-absolute URL intact and joins a relative path against the host base.
+    return new URL(thumbnail, `https://${host}`).toString();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Pure parser for a well-known document → NodeIdentity (exported for unit tests). Returns `null` when
+ * the document has no valid `identity` block. `brand.thumbnail` is resolved to an absolute URL against
+ * `host`; every undeclared field collapses to `null`.
+ */
+export function parseWellKnownIdentity(
+  body: unknown,
+  host: string
+): NodeIdentity | null {
+  if (!body || typeof body !== "object" || !("identity" in body)) return null;
+  const parsed = wellKnownIdentitySchema.safeParse(
+    (body as { identity: unknown }).identity
+  );
+  if (!parsed.success) return null;
+  const id = parsed.data;
+  return {
+    name: id.name,
+    hook: id.hook ?? null,
+    mission: id.mission ?? null,
+    brand: {
+      thumbnail: resolveThumbnail(id.brand?.thumbnail, host),
+      color: id.brand?.color ?? null,
+    },
+  };
+}
 
 async function fetchWithTimeout(
   url: string,
@@ -71,6 +142,21 @@ export class HttpNodeProber implements NodeProber {
 
     const status = readyzCode === 200 ? "pass" : "fail";
     return { status, readyzCode, buildSha };
+  }
+
+  async identity(host: string): Promise<NodeIdentity | null> {
+    try {
+      const r = await fetchWithTimeout(
+        `https://${host}/.well-known/agent.json`,
+        { method: "GET" },
+        SERVING_TIMEOUT_MS
+      );
+      if (!r.ok) return null;
+      return parseWellKnownIdentity(await r.json(), host);
+    } catch {
+      // Unreachable host / non-JSON body ⇒ no identity (the gallery degrades to a titleCase monogram).
+      return null;
+    }
   }
 
   async runCarries(host: string): Promise<RunCarriesResult> {

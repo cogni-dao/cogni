@@ -18,16 +18,7 @@
  */
 
 import type { NodeRegistryPort, NodeSummary } from "@/ports";
-import { resolveHref } from "@/shared/node-registry/resolve";
-
-/** Title-case a kebab/snake slug for display (e.g. "node-template" → "Node Template"). */
-function titleFromSlug(slug: string): string {
-  return slug
-    .split(/[-_]/)
-    .filter(Boolean)
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(" ");
-}
+import { resolveHref, titleCaseSlug } from "@/shared/node-registry/resolve";
 
 export interface DbNodeRegistryDeps {
   /** Service-role read of publicly-listed node rows (status='active'). Throwing is tolerated → []. */
@@ -58,7 +49,7 @@ export class DbNodeRegistryAdapter implements NodeRegistryPort {
       (row): NodeSummary => ({
         slug: row.slug,
         nodeId: row.id,
-        title: titleFromSlug(row.slug),
+        title: titleCaseSlug(row.slug),
         tagline: "",
         kind: "full-app",
         repo: {

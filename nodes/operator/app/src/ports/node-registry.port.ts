@@ -31,7 +31,16 @@ export interface NodeSummary {
   readonly slug: string;
   /** Deployment identity when known. Used to join derived ledger metrics. */
   readonly nodeId?: string | undefined;
+  /**
+   * Display title — the node's NAME (`titleCase` of its `intent.name`/slug). NEVER an operator-side
+   * literal, and NEVER the hook (which is the tagline). The mission never renders here.
+   */
   readonly title: string;
+  /**
+   * One-line pitch — the node's own `intent.hook` (≤5 words), read from its `/.well-known/agent.json`
+   * identity. Empty string when undeclared (no operator literal). The 1–3 sentence `intent.mission` is
+   * the cognition north-star and is deliberately NOT surfaced in the gallery.
+   */
   readonly tagline: string;
   readonly kind: NodeKind;
   /** Source repository identity when known. */
@@ -42,8 +51,19 @@ export interface NodeSummary {
   };
   /** Resolved homepage URL (subdomain for full-app; scope-route for agent-scope), or "#". */
   readonly href: string;
-  /** Homepage screenshot/preview; absent for nodes without a shipped thumbnail (tile shows a placeholder). */
+  /**
+   * Absolute, host-resolved homepage thumbnail from the node's own `intent.brand.thumbnail`; undefined
+   * for nodes without a shipped thumbnail (tile shows a brand-tinted monogram placeholder).
+   */
   readonly thumbnailUrl?: string | undefined;
+  /** Monogram-tint brand color from the node's own `intent.brand.color`; undefined falls back to a token. */
+  readonly brandColor?: string | undefined;
+  /**
+   * Production/env liveness from the cached probe. `undefined` when liveness is unknown (e.g. local dev
+   * with no base domain, where the gallery skips probing). The operator OWNS displaying this — down nodes
+   * are NOT hidden.
+   */
+  readonly health?: "live" | "down" | undefined;
   /** True for the node that serves the bare base domain (operator). */
   readonly primary?: boolean | undefined;
 }

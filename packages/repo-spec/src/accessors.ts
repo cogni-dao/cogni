@@ -121,6 +121,21 @@ export function extractNodeMission(spec: RepoSpec): string | null {
   return spec.intent?.mission ?? null;
 }
 
+/** Punchy ~5-word gallery/heading hook from `intent.hook`, or null when undeclared. */
+export function extractNodeHook(spec: RepoSpec): string | null {
+  return spec.intent?.hook ?? null;
+}
+
+/** Node's self-hosted brand thumbnail URL (e.g. its OG image) from `intent.brand.thumbnail`. */
+export function extractNodeThumbnail(spec: RepoSpec): string | null {
+  return spec.intent?.brand?.thumbnail ?? null;
+}
+
+/** Monogram-tint brand color from `intent.brand.color`, or null when undeclared. */
+export function extractNodeBrandColor(spec: RepoSpec): string | null {
+  return spec.intent?.brand?.color ?? null;
+}
+
 /**
  * Extract scope_id from parsed repo-spec.
  * Throws if scope_id is not present (required for ledger scope gating).

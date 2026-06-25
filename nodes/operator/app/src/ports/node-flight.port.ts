@@ -54,12 +54,47 @@ export interface NodeFlightStatus {
   readonly allEnvsCarry: boolean;
 }
 
+/**
+ * A node's SELF-DESCRIBED display identity, read from its public
+ * `/.well-known/agent.json` `identity` block (a projection of its own repo-spec
+ * `intent`). The operator holds ZERO per-node identity literals — every gallery
+ * card's title/tagline/thumbnail/color comes from THIS, so a node customizes
+ * itself by editing its repo-spec, never operator code.
+ *
+ * `brand.thumbnail` is the ABSOLUTE URL the prober resolved (the node publishes a
+ * host-relative path like `/showcase/x.png`; the prober joins it against the
+ * node's own host so it loads per-env). `null` for any field a node has not yet
+ * declared — a fork that has not projected identity yields no `identity` block at
+ * all (the prober returns `null` for the whole identity, and the gallery falls
+ * back to a titleCase(slug) monogram).
+ */
+export interface NodeIdentity {
+  // 1-1 with repo-spec `intent.name` — the field is `name` in repo-spec, in the well-known projection,
+  // and here (NO split-brain). It is the node's canonical handle (== the addressing slug).
+  readonly name: string;
+  readonly hook: string | null;
+  readonly mission: string | null;
+  readonly brand: {
+    /** Absolute, host-resolved thumbnail URL, or null when undeclared. */
+    readonly thumbnail: string | null;
+    readonly color: string | null;
+  };
+}
+
 /** Injected I/O. The adapter exercises a node's PUBLIC surface only — no cluster/GH/Grafana auth. */
 export interface NodeProber {
   /** GET https://<host>/readyz + /version. */
   serving(host: string): Promise<ServingResult>;
   /** Register a throwaway agent, run the free `poet` graph, read back the run count. */
   runCarries(host: string): Promise<RunCarriesResult>;
+  /**
+   * GET https://<host>/.well-known/agent.json and return its `identity` block,
+   * Zod-parsed defensively. Returns `null` when the host is unreachable OR when the
+   * document carries no (valid) `identity` block — e.g. a fork that has not yet
+   * projected its repo-spec intent. `brand.thumbnail` is resolved to an absolute URL
+   * against `https://<host>`.
+   */
+  identity(host: string): Promise<NodeIdentity | null>;
 }
 
 /** The two PUBLIC live rungs for one node in one env. */

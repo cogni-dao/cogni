@@ -143,7 +143,7 @@ import {
   createMetricsCapability,
   derivePrometheusQueryUrl,
 } from "@/bootstrap/capabilities/metrics";
-import { createLiveSlugsAccessor } from "@/bootstrap/capabilities/node-registry";
+import { createLivenessAccessor } from "@/bootstrap/capabilities/node-registry";
 import { createRepoCapability } from "@/bootstrap/capabilities/repo";
 import { createScheduleCapability } from "@/bootstrap/capabilities/schedule";
 import { createVcsCapability } from "@/bootstrap/capabilities/vcs";
@@ -1091,31 +1091,32 @@ export function resolveServiceDb(): Database {
 }
 
 /**
- * Module-singleton cached prod-liveness accessor for the public gallery. Built once (not per request)
+ * Module-singleton cached liveness+identity accessor for the public gallery. Built once (not per request)
  * so the short-TTL single-flight cache is shared across all homepage renders — concurrent/repeat
  * callers share one refresh and NEVER probe the network inline. `undefined` when no base domain is
- * configured, in which case the gallery skips the liveness filter rather than blanking.
+ * configured, in which case the gallery skips the liveness+identity enrichment rather than blanking.
  */
-let cachedLiveSlugsAccessor:
-  | ReturnType<typeof createLiveSlugsAccessor>
+let cachedLivenessAccessor:
+  | ReturnType<typeof createLivenessAccessor>
   | undefined;
-let liveSlugsAccessorBuilt = false;
+let livenessAccessorBuilt = false;
 
-function getLiveSlugsAccessor(): ReturnType<typeof createLiveSlugsAccessor> {
-  if (!liveSlugsAccessorBuilt) {
-    cachedLiveSlugsAccessor = createLiveSlugsAccessor(serverEnv());
-    liveSlugsAccessorBuilt = true;
+function getLivenessAccessor(): ReturnType<typeof createLivenessAccessor> {
+  if (!livenessAccessorBuilt) {
+    cachedLivenessAccessor = createLivenessAccessor(serverEnv());
+    livenessAccessorBuilt = true;
   }
-  return cachedLiveSlugsAccessor;
+  return cachedLivenessAccessor;
 }
 
 /**
- * Resolve the public node registry: the HONEST gallery. The candidate set (operator's bundled catalog
- * nodes + the DB wizard projection, `status='active'`) is INTERSECTED with a CACHED prod-liveness
- * snapshot, so the gallery shows exactly the nodes whose PRODUCTION host is verified-live — a
- * decommissioned/never-promoted node is filtered out without a gallery code edit. Service-role
- * (non-RLS) DB read; both the DB adapter and the liveness filter degrade gracefully so the homepage
- * never breaks on a transient infra blip.
+ * Resolve the public node registry: the SELF-DESCRIBED gallery. The candidate roster (operator's bundled
+ * catalog nodes + the DB wizard projection, `status='active'`) is ENRICHED from a CACHED per-slug probe
+ * that reads each node's liveness (`/readyz`) AND self-described identity (`/.well-known/agent.json`). So
+ * the gallery shows the full roster, each card's title/tagline/thumbnail/color coming from the node's OWN
+ * repo-spec projection (zero operator-side identity literals) plus an honest live/down health badge.
+ * Service-role (non-RLS) DB read; both the DB adapter and the enrichment degrade gracefully so the
+ * homepage never breaks on a transient infra blip.
  */
 export function resolveNodeRegistry(): NodeRegistryPort {
   const domain = baseDomain(serverEnv());
@@ -1146,8 +1147,8 @@ export function resolveNodeRegistry(): NodeRegistryPort {
     }),
   ]);
 
-  const liveSlugs = getLiveSlugsAccessor();
-  if (!liveSlugs) return inner; // No base domain ⇒ no liveness filter (dev/local).
+  const getLiveness = getLivenessAccessor();
+  if (!getLiveness) return inner; // No base domain ⇒ no liveness/identity enrichment (dev/local).
 
-  return new LiveNodeRegistryAdapter({ inner, getLiveSlugs: liveSlugs });
+  return new LiveNodeRegistryAdapter({ inner, getLiveness });
 }
