@@ -452,6 +452,19 @@ OWN repo entirely through the operator GitHub App — no human, no `gh` privileg
 > Every contributor path, operator and spawned nodes alike, is node-scoped by `nodeId`;
 > `NODE_SCOPED_NEVER_RETARGETS` keeps a typo'd or unknown slug a hard 404.
 
+#### Planned: collapse the in-repo exception
+
+The operator resolves by `{nodeId}` via an in-repo branch currently duplicated across three routes —
+`merge`, `run-ci`, and `developers` each short-circuit `slug === "operator"` to
+`NODE_SUBMODULE_PARENT_*` — plus a transitional no-`nodeId` merge lane. That duplication exists
+because catalog `source_repo`-PRESENCE is overloaded: it drives BOTH promote addressing
+(present ⇒ node sha; absent ⇒ `source_sha`) AND whether a `nodeId` resolves to a repo. The durable
+fix splits the bit into two independent signals: an explicit node `kind` (`in-repo` | `remote-source`)
+for promote semantics, and a `resolveNodeRepo` that resolves in-repo nodes to the parent repo by
+construction. Then the three route special-cases and the no-`nodeId` lane all delete with no behavior
+change: operator/poly stay `source_sha`-addressed, forks stay `node_source_sha`-addressed, and
+`NODE_SCOPED_NEVER_RETARGETS` still 404s an unknown slug.
+
 ---
 
 ## Node-owned packages
