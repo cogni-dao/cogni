@@ -60,7 +60,6 @@ function buildFullSpec(): RepoSpec {
     node_id: TEST_NODE_ID,
     scope_id: TEST_SCOPE_ID,
     scope_key: "default",
-    governance: { chain_id: String(TEST_CHAIN_ID) },
     payments_in: {
       credits_topup: {
         provider: "cogni-usdc-backend-v1",
@@ -79,6 +78,7 @@ function buildFullSpec(): RepoSpec {
       },
     },
     governance: {
+      chain_id: String(TEST_CHAIN_ID),
       schedules: [
         {
           charter: "HEARTBEAT",
@@ -289,7 +289,6 @@ describe("extractGovernanceConfig", () => {
       node_id: TEST_NODE_ID,
       scope_id: TEST_SCOPE_ID,
       scope_key: "default",
-      governance: { chain_id: String(TEST_CHAIN_ID) },
       payments_in: {
         credits_topup: {
           provider: "cogni-usdc-backend-v1",
@@ -307,6 +306,7 @@ describe("extractGovernanceConfig", () => {
         },
       },
       governance: {
+        chain_id: String(TEST_CHAIN_ID),
         schedules: [
           {
             charter: "LEDGER_INGEST",
