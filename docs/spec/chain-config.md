@@ -84,13 +84,13 @@ Misalignment throws: `"Chain mismatch: repo-spec declares X, app requires Y"`
 
 ### File Pointers
 
-| File                                   | Role                                        | Owns                                                                |
-| -------------------------------------- | ------------------------------------------- | ------------------------------------------------------------------- |
+| File                                   | Role                                        | Owns                                                                 |
+| -------------------------------------- | ------------------------------------------- | -------------------------------------------------------------------- |
 | `.cogni/repo-spec.yaml`                | DAO governance (source of truth)            | `governance.chain_id`, `payments_in.credits_topup.receiving_address` |
-| `src/shared/web3/chain.ts`             | Deployment constants (must match repo-spec) | `CHAIN`, `CHAIN_ID`, `USDC_TOKEN_ADDRESS`, `MIN_CONFIRMATIONS`      |
-| `src/shared/config/repoSpec.schema.ts` | Structure validation                        | Zod schemas for repo-spec YAML                                      |
-| `src/shared/config/repoSpec.server.ts` | Loader + alignment check                    | `getPaymentConfig()` validates `chain_id` === `CHAIN_ID`            |
-| `.env`                                 | Runtime RPC endpoint                        | `EVM_RPC_URL`                                                       |
+| `src/shared/web3/chain.ts`             | Deployment constants (must match repo-spec) | `CHAIN`, `CHAIN_ID`, `USDC_TOKEN_ADDRESS`, `MIN_CONFIRMATIONS`       |
+| `src/shared/config/repoSpec.schema.ts` | Structure validation                        | Zod schemas for repo-spec YAML                                       |
+| `src/shared/config/repoSpec.server.ts` | Loader + alignment check                    | `getPaymentConfig()` validates `chain_id` === `CHAIN_ID`             |
+| `.env`                                 | Runtime RPC endpoint                        | `EVM_RPC_URL`                                                        |
 
 ## Acceptance Checks
 

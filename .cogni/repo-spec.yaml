@@ -156,5 +156,4 @@ gates:
   # - type: ai-rule
   #   with:
   #     rule_file: ai-rule-template.yaml
-
 # (governance.schedules merged into the unified `governance` section above)
