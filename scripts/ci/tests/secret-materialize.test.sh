@@ -36,19 +36,22 @@ put_secret() {
 }
 
 # Blind-ancestor-scan shared values a node legitimately inherits (transitional).
-# These are source:human shared substrate (required:true) with no minting owner —
-# they MUST be present in the env bank or materialize now fails-fast (bug.5087:
+# POSTHOG_* are source:human shared substrate (required:true) with no canonical
+# owner — they MUST be present in an ancestor or materialize fails-fast (bug.5087:
 # the silent-skip that shipped a half-provisioned node). Seeding them proves the
-# happy path; the negative case (a required key missing → loud fail) is asserted
-# at the end of this file.
+# happy path; the negative case (a required source:human key missing → loud fail)
+# is asserted at the end of this file.
 put_secret node-template POSTHOG_API_KEY phc_existing
 put_secret node-template POSTHOG_HOST https://us.i.posthog.com
-put_secret node-template EVM_RPC_URL https://base-mainnet.example/v2/key
-# Canonical-custody (inheritFrom: operator) value: seeded at the OPERATOR path
+# Canonical-custody (inheritFrom: operator) values: seeded at the OPERATOR path
 # only. A divergent node-template copy must be IGNORED — the node inherits the
 # operator value (overwrite-on-drift), killing the split-brain bug.5021/429 class.
+# EVM_RPC_URL joined this class (was blind-scan shared): the operator holds the one
+# billed Base RPC and every node inherits it.
 put_secret operator OPENROUTER_API_KEY sk-or-operator-canonical
 put_secret node-template OPENROUTER_API_KEY sk-or-stale-divergent
+put_secret operator EVM_RPC_URL https://base-mainnet.example/v2/operator-key
+put_secret node-template EVM_RPC_URL https://base-mainnet.example/v2/stale-divergent
 
 cat > "$FAKEBIN/ssh" <<'EOF'
 #!/usr/bin/env bash
@@ -137,20 +140,20 @@ env \
 # source:agent app key generated per-node
 test -f "$BAO_ROOT/cogni/candidate-a/oss/AUTH_SECRET" \
   || { echo "materialize did not seed AUTH_SECRET" >&2; exit 1; }
-# shared substrate values inherited from env bank (blind ancestor scan). All three
-# are required:true source:human — a node MUST receive them or the new fail-fast
-# guard trips (bug.5087). EVM_RPC_URL is the chain substrate the operator must
-# provision per env (node-baas-architecture.md: node declares shape).
-for k in POSTHOG_API_KEY POSTHOG_HOST EVM_RPC_URL; do
+# source:human shared substrate inherited via blind ancestor scan (POSTHOG_*).
+# required:true — a node MUST receive them or the fail-fast guard trips (bug.5087).
+for k in POSTHOG_API_KEY POSTHOG_HOST; do
   test -f "$BAO_ROOT/cogni/candidate-a/oss/$k" \
     || { echo "materialize did not inherit required shared substrate $k" >&2; exit 1; }
 done
-# canonical-custody key: must be the OPERATOR value, NOT the stale node-template
-# copy — proves inheritFrom: operator overwrites the per-node split-brain.
-test -f "$BAO_ROOT/cogni/candidate-a/oss/OPENROUTER_API_KEY" \
-  || { echo "materialize did not inherit OPENROUTER_API_KEY" >&2; exit 1; }
+# canonical-custody keys (inheritFrom: operator): must be the OPERATOR value, NOT a
+# stale node-template copy — proves inheritFrom overwrites the per-node split-brain.
+# OPENROUTER_API_KEY (bug.5021/429) and EVM_RPC_URL (bug.5087 chain substrate) share
+# this shape: the operator holds the one billed value and every node inherits it.
 test "$(cat "$BAO_ROOT/cogni/candidate-a/oss/OPENROUTER_API_KEY")" = sk-or-operator-canonical \
   || { echo "OPENROUTER_API_KEY must inherit the operator-canonical value, not the stale node-template copy" >&2; exit 1; }
+test "$(cat "$BAO_ROOT/cogni/candidate-a/oss/EVM_RPC_URL")" = https://base-mainnet.example/v2/operator-key \
+  || { echo "EVM_RPC_URL must inherit the operator value (inheritFrom: operator), not the stale node-template copy" >&2; exit 1; }
 # per-node DB creds generated (source:agent), not inherited from any shared bank
 for k in APP_DB_PASSWORD APP_DB_SERVICE_PASSWORD; do
   test -f "$BAO_ROOT/cogni/candidate-a/oss/$k" \
@@ -203,12 +206,13 @@ if grep -qE '^\[secret-materialize\]   created ' "$TMPROOT/out2.txt"; then
   exit 1
 fi
 
-# ── Negative path (bug.5087): a required source:human shared substrate value
-# missing from the env bank must FAIL LOUD, not silently skip a half-provisioned
-# node. Remove EVM_RPC_URL (the chain substrate) and materialize a FRESH node;
+# ── Negative path (bug.5087): a required source:human SHARED value (POSTHOG_HOST,
+# a blind-ancestor-scan key — EVM_RPC_URL is now inheritFrom:operator and self-heals
+# instead) missing from every ancestor must FAIL LOUD, not silently skip a half-
+# provisioned node. Remove POSTHOG_HOST's lone copy and materialize a FRESH node;
 # assert a non-zero exit whose message names the key + the bank path to repair.
-# POSTHOG_*/OPENROUTER stay seeded so EVM_RPC_URL is the first key to trip the guard.
-rm -f "$BAO_ROOT/cogni/candidate-a/node-template/EVM_RPC_URL"
+# POSTHOG_API_KEY/OPENROUTER/EVM_RPC_URL stay seeded so POSTHOG_HOST is the trip key.
+rm -f "$BAO_ROOT/cogni/candidate-a/node-template/POSTHOG_HOST"
 set +e
 env \
   VM_HOST=fake \
@@ -221,10 +225,10 @@ env \
 rc=$?
 set -e
 [ "$rc" -ne 0 ] \
-  || { echo "materialize must fail-fast when required EVM_RPC_URL is unseeded (bug.5087)" >&2; cat "$TMPROOT/out3.txt" >&2; exit 1; }
-grep -q 'EVM_RPC_URL' "$TMPROOT/out3.txt" \
-  || { echo "fail-fast message must name the missing key EVM_RPC_URL" >&2; cat "$TMPROOT/out3.txt" >&2; exit 1; }
-grep -q '_shared/EVM_RPC_URL' "$TMPROOT/out3.txt" \
+  || { echo "materialize must fail-fast when required POSTHOG_HOST is unseeded (bug.5087)" >&2; cat "$TMPROOT/out3.txt" >&2; exit 1; }
+grep -q 'POSTHOG_HOST' "$TMPROOT/out3.txt" \
+  || { echo "fail-fast message must name the missing key POSTHOG_HOST" >&2; cat "$TMPROOT/out3.txt" >&2; exit 1; }
+grep -q '_shared/POSTHOG_HOST' "$TMPROOT/out3.txt" \
   || { echo "fail-fast message must point at the env-bank path to repair" >&2; cat "$TMPROOT/out3.txt" >&2; exit 1; }
 # A fresh node that fails-fast must NOT have been half-written (fail exits before flush_batch).
 test ! -e "$BAO_ROOT/cogni/candidate-a/blue" \
