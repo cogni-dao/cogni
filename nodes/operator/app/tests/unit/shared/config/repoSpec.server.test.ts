@@ -363,7 +363,7 @@ describe("getGovernanceConfig (repo-spec)", () => {
   it("returns schedules when governance section is provided", async () => {
     const yaml = [
       BASE_YAML,
-            "  schedules:",
+      "  schedules:",
       "    - charter: COMMUNITY",
       '      cron: "0 */6 * * *"',
       "      timezone: UTC",
@@ -416,7 +416,7 @@ describe("getGovernanceConfig (repo-spec)", () => {
   it("defaults timezone to UTC when omitted", async () => {
     const yaml = [
       BASE_YAML,
-            "  schedules:",
+      "  schedules:",
       "    - charter: ENGINEERING",
       '      cron: "0 */4 * * *"',
       "      entrypoint: ENGINEERING",
@@ -438,7 +438,7 @@ describe("getGovernanceConfig (repo-spec)", () => {
   it("rejects schedule with empty charter", async () => {
     const yaml = [
       BASE_YAML,
-            "  schedules:",
+      "  schedules:",
       '    - charter: ""',
       '      cron: "0 * * * *"',
       "      entrypoint: GOVERN",
@@ -460,7 +460,7 @@ describe("getGovernanceConfig (repo-spec)", () => {
   it("rejects schedule with cron too short", async () => {
     const yaml = [
       BASE_YAML,
-            "  schedules:",
+      "  schedules:",
       "    - charter: GOVERN",
       '      cron: "* *"',
       "      entrypoint: GOVERN",
