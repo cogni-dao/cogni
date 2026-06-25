@@ -142,8 +142,8 @@ export function StewardTopUpCard({
         ) : null}
 
         {phase === "success" && txHash ? (
-          <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm">
-            <p className="font-medium text-emerald-400">Transfer broadcast.</p>
+          <div className="rounded-lg border border-success/30 bg-success/10 p-3 text-sm">
+            <p className="font-medium text-success">Transfer broadcast.</p>
             <a
               href={`https://basescan.org/tx/${txHash}`}
               target="_blank"
@@ -157,7 +157,7 @@ export function StewardTopUpCard({
         ) : null}
 
         {phase === "error" && error ? (
-          <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-red-400 text-sm">
+          <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-destructive text-sm">
             {error}
           </div>
         ) : null}
