@@ -204,22 +204,17 @@ Watch required checks (`unit`, `component`, `static`, `manifest`) on the PR head
 
 ### 6. Request candidate-a flight
 
-Use the flight lever that matches the artifact being deployed.
-
-For an in-repo operator app PR, dispatch the workflow directly:
-
-```bash
-gh workflow run candidate-flight.yml -f pr_number=$PR_NUMBER
-```
-
-For an externally built node artifact, call the operator API with the node's
-source identity:
+Every artifact — the in-repo operator app and externally built node artifacts alike — flights through
+the **same operator-API call, addressed by `nodeRef` (never a PR number, never personal `gh`)**:
 
 ```bash
 curl -s -X POST $BASE/api/v1/vcs/flight \
   -H "Authorization: Bearer $API_KEY" -H "content-type: application/json" \
-  -d '{"nodeRef":{"nodeId":"<node_id>","sourceSha":"<child_repo_main_sha>"}}'
+  -d '{"nodeRef":{"nodeId":"<node_id>","sourceSha":"<head_sha>"}}'
 ```
+
+For the operator's own monorepo PR, `nodeId` is the operator node — it is the one IN-REPO node, so it
+resolves to the monorepo as its own repo; `sourceSha` is the PR head SHA.
 
 The API response includes workflow dispatch metadata. The endpoint is a thin
 gate: it authenticates the caller, checks node flight authorization when RBAC is
@@ -238,7 +233,7 @@ This is the **real** validation gate (`SELF_VALIDATE` invariant). `status: done`
 
 The contributor does **not** self-merge. Reaching `deploy_verified: true` (the posted `/validate-candidate` scorecard) is the contributor's _request_; the **operator** authorizes and enqueues the merge. See [Merge Authority](./merge-authority.md) for the full policy router and authorization classes.
 
-> **As-built today (interim — do not strand the loop).** The operator-merge path is being built incrementally: the **node-formation** class ships first (deterministic, operator-authored — the lowest-hanging fruit and the seed of operator-run gitops), then the routine work-item class. **Until the routine merge path is wired, a routine contributor still self-merges on `allGreen` + `deploy_verified`** (the prior `gh pr merge`/admin path) — that is the current reality, not a violation. This step describes the target state the operator converges to; an agent following the loop today should self-merge only after `deploy_verified`, and never a node-formation PR (those await the operator).
+> **As-built today.** The operator-merge path is **live**: once CI is green and the `/validate-candidate` scorecard is posted, request the merge via `POST /api/v1/vcs/merge { nodeId, prNumber }` — the operator GitHub App enqueues the squash merge (returns `{enqueued:true}`; poll the PR to `MERGED`). Every node, the operator included, is addressed by `nodeId`. You never self-merge with personal `gh`. The deterministic-policy gates below (separation of duties, governance override) are the target the authorizer converges to.
 
 - The operator authorizes a routine work-item PR only when CI is `allGreen` **and** `deploy_verified: true`, and the authorizer differs from the claiming contributor (`MERGE_SEPARATION_OF_DUTIES`). The decision is deterministic policy, not LLM judgment.
 - The operator enqueues; **GitHub Merge Queue** rebases onto current `main`, re-runs required checks, and merges deterministically. No one rebases by hand (`NO_AGENTIC_REBASE`).

@@ -103,9 +103,11 @@ carries the `workflow_dispatch` trigger + fork-head resolve (nt #57), so fork PR
 flightable image the same way they do on the monorepo. A node also self-builds on `push:main` →
 `sha-<sha>`, so every merge is deployable.
 
-**LEGACY (monorepo PR-number lane, kept):** `POST /api/v1/vcs/merge { prNumber }` WITHOUT `nodeId`
-(operator-node RBAC + monorepo `NODE_SUBMODULE_PARENT_*` repo) and `POST /api/v1/vcs/flight { codePr }`
-remain for operator-monorepo PRs.
+**The operator is addressed like every node.** `POST /api/v1/vcs/merge { nodeId: "operator", prNumber }`
+(slug or UUID) resolves to the monorepo — the operator is the one IN-REPO node, so its `nodeId` resolves
+to `NODE_SUBMODULE_PARENT_*`, uniform with `run-ci` and `flight` (`{ nodeRef: { nodeId, sourceSha } }`).
+There is no PR-number-only / `nodeId`-less merge lane and no `codePr` flight; `NODE_SCOPED_NEVER_RETARGETS`
+keeps a typo'd slug a hard 404.
 
 ### Workflows (`.github/workflows/`) — pipeline entry points
 
