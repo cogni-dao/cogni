@@ -341,7 +341,7 @@ copy_to_remote "$REPO_ROOT/scripts/ci/reconcile-edge-caddy.remote.sh" "/tmp/reco
 # (Axiom 22) closes that gap with no new workflow / bespoke script (bug.5041).
 # Idempotent: the hash-gate makes an unchanged config a no-op, and N per-node
 # invocations of one env-global config collapse to one push + restart.
-copy_to_remote "$REPO_ROOT/infra/compose/runtime/configs/alloy-config.metrics.alloy" "/tmp/alloy-config.metrics.alloy"
+copy_to_remote "$REPO_ROOT/infra/compose/runtime/configs/alloy-config.metrics.alloy" "/tmp/alloy-config.metrics.${DEPLOY_ENVIRONMENT}.${TARGET_NODE}.alloy"
 copy_to_remote "$REPO_ROOT/scripts/ci/reconcile-alloy-config.remote.sh" "/tmp/reconcile-alloy-config.remote.sh"
 
 CURRENT_ROW="remote_reconcile"
@@ -394,7 +394,7 @@ remote "set -euo pipefail
   # half) then the SAME hash-gated restart deploy-infra runs. Born-observable on
   # the normal flow even when deploy-infra is skipped (bug.5041). Idempotent.
   mkdir -p /opt/cogni-template-runtime/configs
-  mv /tmp/alloy-config.metrics.alloy /opt/cogni-template-runtime/configs/alloy-config.metrics.alloy
+  mv '/tmp/alloy-config.metrics.${DEPLOY_ENVIRONMENT}.${TARGET_NODE}.alloy' /opt/cogni-template-runtime/configs/alloy-config.metrics.alloy
   RUNTIME_COMPOSE_BIN=\"docker compose --project-name cogni-runtime --env-file \$runtime_env -f /opt/cogni-template-runtime/docker-compose.yml\" \\
   ALLOY_CONFIG=/opt/cogni-template-runtime/configs/alloy-config.metrics.alloy \\
   HASH_DIR=/var/lib/cogni \\
