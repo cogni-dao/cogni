@@ -115,9 +115,11 @@ export {
   type LiveNodeRegistryDeps,
 } from "./node-registry/live-node-registry.adapter";
 export {
+  type LivenessRollup,
+  type NodeLiveness,
   type ProdLivenessConfig,
   type ProdLivenessDeps,
-  resolveLiveProdSlugs,
+  resolveNodeLiveness,
 } from "./node-registry/prod-liveness";
 export { HttpLokiReader } from "./observability/loki-reader.adapter";
 export { ViemEvmOnchainClient } from "./onchain/viem-evm-onchain-client.adapter";

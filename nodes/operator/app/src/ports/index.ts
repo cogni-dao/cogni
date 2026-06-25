@@ -141,6 +141,7 @@ export type {
   FlightEnv,
   LiveProbes,
   NodeFlightStatus,
+  NodeIdentity,
   NodeProber,
   RunCarriesResult,
   RungStatus,

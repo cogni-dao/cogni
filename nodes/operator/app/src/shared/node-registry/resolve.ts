@@ -58,6 +58,19 @@ export function resolveHref(
   return `https://${hostForNode(node.name, node.primary ?? false, domain)}`;
 }
 
+/**
+ * TitleCase a slug for the gallery FALLBACK title when a node has not yet projected an `intent.hook`
+ * (e.g. `node-template` → "Node Template", `oss` → "Oss"). The real title is always the node's own hook;
+ * this only fills the gap so an un-projected node reads cleanly instead of showing a raw slug.
+ */
+export function titleCaseSlug(slug: string): string {
+  return slug
+    .split(/[-_]/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+}
+
 /** Merge slug-keyed lists, keeping the first occurrence per slug (curated/bundled entries win). */
 export function mergeBySlug<T extends { readonly slug: string }>(
   ...lists: readonly (readonly T[])[]

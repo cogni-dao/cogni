@@ -3,55 +3,90 @@
 
 /**
  * Module: `@adapters/server/node-registry/live-node-registry.adapter`
- * Purpose: The HONESTY filter for the public gallery — a NodeRegistryPort decorator that wraps an inner
- *   registry (the bundled-catalog ∪ DB projection) and returns ONLY the nodes whose PRODUCTION host is
- *   verified-live, per a CACHED prod-liveness snapshot. This is what kills the "ships a dead node" bug:
- *   a node the registry claims exists but whose prod deploy is gone (decommissioned, never promoted) is
- *   filtered out, so adding/removing a node never needs a gallery code edit.
- * Scope: Pure composition over an injected `getLiveSlugs` (the cached rollup) + the inner port. No IO of
- *   its own — the liveness probing + its TTL cache are wired at bootstrap and injected as a closure.
+ * Purpose: The IDENTITY + HEALTH decorator for the public gallery — a NodeRegistryPort decorator that
+ *   wraps an inner registry (the bundled-catalog ∪ DB projection skeleton) and ENRICHES each node with
+ *   its self-described identity (title=hook, tagline=mission, thumbnail, brandColor) and liveness
+ *   (live/down), read from a CACHED per-slug probe. The operator holds ZERO per-node identity literals:
+ *   every gallery card's display data comes from the node's OWN well-known projection, merged here.
+ *   Decision: down nodes are NOT hidden — the operator OWNS displaying health, so a decommissioned node
+ *   reads `down` honestly rather than vanishing.
+ * Scope: Pure composition over an injected `getLiveness` (the cached rollup) + the inner port. No IO of
+ *   its own — the probing + its TTL cache are wired at bootstrap and injected as a closure.
  * Invariants:
- *   - NEVER_PROBES_ON_RENDER: `getLiveSlugs` is the cached snapshot accessor; this adapter NEVER probes
+ *   - NEVER_PROBES_ON_RENDER: `getLiveness` is the cached snapshot accessor; this adapter NEVER probes
  *     inline. The homepage (highest-traffic public page) pays at most a cache lookup.
- *   - INTERSECTION_IS_HONEST: output = inner registry ∩ live-prod slugs. Empty live set ⇒ empty gallery
- *     (honest), never a hardcoded fallback.
- *   - DEGRADE_TO_INNER: if the cached snapshot accessor itself throws (cold-cache total failure), fall
- *     back to the inner list so a transient infra blip never blanks the homepage; the next refresh heals.
+ *   - IDENTITY_OVERWRITES_SKELETON: when a node projects identity, its hook/mission/brand REPLACE the
+ *     skeleton's titleCase(slug)/empty fallbacks. A node with no identity keeps the fallbacks (clean
+ *     degradation until forks project identity).
+ *   - ROSTER_NOT_FILTERED: output is the full inner roster, each annotated with `health`. Nothing is
+ *     dropped — honesty is shown, not hidden.
+ *   - DEGRADE_TO_INNER: if the cached accessor itself throws (cold-cache total failure), fall back to the
+ *     inner list unannotated so a transient infra blip never blanks the homepage; the next refresh heals.
  * Side-effects: none here (IO is in the injected accessor).
  * Links: src/ports/node-registry.port.ts, src/adapters/server/node-registry/prod-liveness.ts,
  *   src/shared/cache/ttl-single-flight.ts, src/bootstrap/container.ts (resolveNodeRegistry)
  * @public
  */
 
+import type {
+  LivenessRollup,
+  NodeLiveness,
+} from "@/adapters/server/node-registry/prod-liveness";
 import type { NodeRegistryPort, NodeSummary } from "@/ports";
 
 export interface LiveNodeRegistryDeps {
-  /** The inner registry to filter (bundled catalog ∪ DB projection). */
+  /** The inner registry to enrich (bundled catalog ∪ DB projection skeleton). */
   readonly inner: NodeRegistryPort;
   /**
-   * Cached accessor: given the candidate slugs, return the subset whose PRODUCTION host is
-   * verified-live. MUST be backed by a short-TTL single-flight cache — the homepage calls this on
-   * every render, so it NEVER probes the network inline on the hot path.
+   * Cached accessor: given the candidate slugs, return a slug→{health, identity} snapshot. MUST be backed
+   * by a short-TTL single-flight cache — the homepage calls this on every render, so it NEVER probes the
+   * network inline on the hot path.
    */
-  readonly getLiveSlugs: (
+  readonly getLiveness: (
     candidateSlugs: readonly string[]
-  ) => Promise<ReadonlySet<string>>;
+  ) => Promise<LivenessRollup>;
 }
 
-/** Filters an inner NodeRegistryPort down to nodes with a verified-live production deployment. */
+/** Enriches an inner NodeRegistryPort's nodes with self-described identity + liveness from a cached probe. */
 export class LiveNodeRegistryAdapter implements NodeRegistryPort {
   constructor(private readonly deps: LiveNodeRegistryDeps) {}
 
   async listPublic(): Promise<readonly NodeSummary[]> {
     const all = await this.deps.inner.listPublic();
-    let live: ReadonlySet<string>;
+    let rollup: LivenessRollup;
     try {
-      live = await this.deps.getLiveSlugs(all.map((node) => node.slug));
+      rollup = await this.deps.getLiveness(all.map((node) => node.slug));
     } catch {
-      // DEGRADE_TO_INNER: a cold-cache rollup failure must not blank the homepage; the next TTL
-      // refresh restores the honest intersection.
+      // DEGRADE_TO_INNER: a cold-cache rollup failure must not blank the homepage; the next TTL refresh
+      // restores identity + health. Until then the skeleton (titleCase/empty/no health) renders cleanly.
       return all;
     }
-    return all.filter((node) => live.has(node.slug));
+    return all.map((node) => enrich(node, rollup.get(node.slug)));
   }
+}
+
+/**
+ * Merge one node's cached liveness snapshot onto its skeleton summary. Identity fields (hook→title,
+ * mission→tagline, brand) OVERWRITE the skeleton only when the node actually projected them; a node with
+ * no identity keeps the skeleton's titleCase(slug)/empty fallbacks. `health` is always annotated.
+ */
+function enrich(
+  node: NodeSummary,
+  snapshot: NodeLiveness | undefined
+): NodeSummary {
+  if (!snapshot) return node;
+  const { health, identity } = snapshot;
+  if (!identity) return { ...node, health };
+  // Conditional spreads (exactOptionalPropertyTypes): only OVERWRITE a field the node actually declared;
+  // an undeclared field leaves the skeleton fallback (titleCase title / empty tagline / monogram) intact.
+  return {
+    ...node,
+    health,
+    ...(identity.hook !== null && { title: identity.hook }),
+    ...(identity.mission !== null && { tagline: identity.mission }),
+    ...(identity.brand.thumbnail !== null && {
+      thumbnailUrl: identity.brand.thumbnail,
+    }),
+    ...(identity.brand.color !== null && { brandColor: identity.brand.color }),
+  };
 }

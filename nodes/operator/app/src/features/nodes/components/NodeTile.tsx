@@ -5,11 +5,14 @@
  * Module: `@features/nodes/components/NodeTile`
  * Purpose: Shared node tile — one clickable card used by the public homepage showcase AND the
  *   authed node-setup list. Handles live nodes (homepage screenshot, external link) and in-formation
- *   nodes (gradient placeholder, status badge, internal setup link) via one view model.
+ *   nodes (gradient placeholder, status badge, internal setup link) via one view model. The card's
+ *   identity (title/tagline/thumbnail/color) is the NODE's own self-description — callers pass it through;
+ *   this component never names a node.
  * Scope: Presentational. Callers map their own data (NodeSummary / wizard rows) to NodeTileView.
  * Invariants: token-only styling; the entire tile is one link; a node without a committed screenshot
- *   falls back to a branded monogram placeholder (never a broken image); external links open in a new
- *   tab.
+ *   falls back to a brand-tinted monogram placeholder (never a broken image); external links open in a new
+ *   tab. The brand-color monogram tint is the ONLY arbitrary value (a per-node token from the node's own
+ *   repo-spec) — applied via an inline CSS custom property, not Tailwind arbitrary classes.
  * Side-effects: none
  * Links: src/features/home/components/NodeShowcase.tsx, src/app/(app)/nodes/page.tsx
  * @public
@@ -17,7 +20,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import type { ReactElement } from "react";
+import type { CSSProperties, ReactElement } from "react";
 
 import { Badge, Card } from "@/components";
 
@@ -26,6 +29,8 @@ export interface NodeTileView {
   readonly tagline?: string | null | undefined;
   /** Homepage screenshot; when absent a gradient placeholder is shown. */
   readonly thumbnailUrl?: string | null | undefined;
+  /** Node-self-described brand color (CSS color) tinting the monogram placeholder; falls back to a token. */
+  readonly brandColor?: string | null | undefined;
   readonly href: string;
   /** External homepage (new tab) vs internal route (same tab). */
   readonly external?: boolean;
@@ -34,14 +39,25 @@ export interface NodeTileView {
     readonly label: string;
     readonly intent: "default" | "secondary" | "destructive" | "outline";
   } | null;
+  /** Live/down probe verdict. When set, a health dot is shown next to the title. */
+  readonly health?: "live" | "down" | null | undefined;
+}
+
+/** A brand-tinted CSS variable for the monogram wash — only set when the node declared a color. */
+function brandStyle(brandColor?: string | null): CSSProperties | undefined {
+  return brandColor
+    ? ({ "--node-brand": brandColor } as CSSProperties)
+    : undefined;
 }
 
 function Banner({
   thumbnailUrl,
   title,
+  brandColor,
 }: {
   thumbnailUrl?: string | null | undefined;
   title: string;
+  brandColor?: string | null | undefined;
 }): ReactElement {
   if (thumbnailUrl) {
     return (
@@ -54,16 +70,41 @@ function Banner({
       />
     );
   }
-  // No committed screenshot → a branded monogram placeholder. Intentional, not a gap: a diagonal token
-  // gradient wash with the node's initial set in a ringed, frosted chip, so a mixed gallery of
-  // screenshot-cards and placeholder-cards reads as deliberate rather than broken. Token utilities only
-  // (no arbitrary literals, no inline styles) to satisfy ui-governance.
+  // No committed screenshot → a brand-tinted monogram placeholder. Intentional, not a gap: a diagonal
+  // wash with the node's initial set in a ringed, frosted chip, so a mixed gallery of screenshot-cards
+  // and placeholder-cards reads as deliberate rather than broken. When the node declares a brand color it
+  // tints the wash via the `--node-brand` custom property (the one legit per-node arbitrary value);
+  // otherwise it falls back to the `primary` token.
+  const style = brandStyle(brandColor);
+  const wash = style
+    ? "from-[var(--node-brand)]/25 via-[var(--node-brand)]/10 to-background"
+    : "from-primary/25 via-primary/10 to-background";
+  const ring = style ? "border-[var(--node-brand)]/30" : "border-primary/30";
   return (
-    <div className="relative flex h-full w-full items-center justify-center overflow-hidden bg-gradient-to-br from-primary/25 via-primary/10 to-background">
-      <span className="flex h-16 w-16 items-center justify-center rounded-full border border-primary/30 bg-background/60 font-bold text-3xl text-foreground/80 uppercase shadow-sm backdrop-blur-sm">
+    <div
+      className={`relative flex h-full w-full items-center justify-center overflow-hidden bg-gradient-to-br ${wash}`}
+      style={style}
+    >
+      <span
+        className={`flex h-16 w-16 items-center justify-center rounded-full border ${ring} bg-background/60 font-bold text-3xl text-foreground/80 uppercase shadow-sm backdrop-blur-sm`}
+      >
         {title.charAt(0)}
       </span>
     </div>
+  );
+}
+
+/** Health dot: success token for live, muted for down. */
+function HealthBadge({ health }: { health: "live" | "down" }): ReactElement {
+  const live = health === "live";
+  return (
+    <span className="flex shrink-0 items-center gap-1.5 text-muted-foreground text-xs">
+      <span
+        className={`inline-block h-2 w-2 rounded-full ${live ? "bg-success" : "bg-muted-foreground/50"}`}
+        aria-hidden="true"
+      />
+      {live ? "live" : "down"}
+    </span>
   );
 }
 
@@ -75,7 +116,11 @@ export function NodeTile({ node }: { node: NodeTileView }): ReactElement {
     <Link href={node.href} className="group block rounded-lg" {...linkProps}>
       <Card className="h-full overflow-hidden transition-colors group-hover:border-primary">
         <div className="relative aspect-video w-full overflow-hidden border-border border-b bg-muted">
-          <Banner thumbnailUrl={node.thumbnailUrl} title={node.title} />
+          <Banner
+            thumbnailUrl={node.thumbnailUrl}
+            title={node.title}
+            brandColor={node.brandColor}
+          />
         </div>
         <div className="space-y-2 p-6">
           <div className="flex items-center justify-between gap-2">
@@ -86,6 +131,8 @@ export function NodeTile({ node }: { node: NodeTileView }): ReactElement {
               <Badge intent={node.status.intent} size="sm">
                 {node.status.label}
               </Badge>
+            ) : node.health ? (
+              <HealthBadge health={node.health} />
             ) : null}
           </div>
           {node.tagline ? (

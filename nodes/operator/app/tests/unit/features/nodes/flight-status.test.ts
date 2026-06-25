@@ -30,6 +30,7 @@ function makeProber(o: Partial<NodeProber> = {}): NodeProber {
       runs: 1,
       detail: "poem",
     }),
+    identity: async () => null,
     ...o,
   };
 }
