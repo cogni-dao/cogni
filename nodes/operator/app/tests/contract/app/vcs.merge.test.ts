@@ -306,6 +306,47 @@ describe("POST /api/v1/vcs/merge", () => {
     });
   });
 
+  it("operator by nodeId (slug): catalog_missing retargets to the monorepo and merges", async () => {
+    grant(OPERATOR_NODE_ID);
+    // The operator is the IN-REPO node — its catalog row has no `source_repo`, so
+    // resolveNodeRepo 404s. Unlike a fork node, this retargets to the monorepo (uniform
+    // with the run-ci + flight routes), so `{nodeId:operator}` is addressable like any node.
+    mockResolveNodeRepo.mockRejectedValue(
+      Object.assign(new Error("not found"), { code: "catalog_missing" })
+    );
+    const res = await post({ prNumber: 42, nodeId: "operator" });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(mergeOperation.output.safeParse(body).success).toBe(true);
+    // Resolution was attempted with the operator slug, then retargeted to the monorepo.
+    expect(mockResolveNodeRepo).toHaveBeenCalledWith({
+      parentOwner: "cogni-test-org",
+      parentRepo: "cogni-monorepo",
+      slug: "operator",
+    });
+    expect(fakeVcs.mergePr).toHaveBeenCalledWith({
+      owner: "cogni-test-org",
+      repo: "cogni-monorepo",
+      prNumber: 42,
+      method: "squash",
+    });
+  });
+
+  it("operator by nodeId (UUID): catalog_missing retargets to the monorepo and merges", async () => {
+    grant(OPERATOR_NODE_ID);
+    mockResolveNodeRepo.mockRejectedValue(
+      Object.assign(new Error("not found"), { code: "catalog_missing" })
+    );
+    const res = await post({ prNumber: 42, nodeId: OPERATOR_NODE_ID });
+    expect(res.status).toBe(200);
+    expect(fakeVcs.mergePr).toHaveBeenCalledWith({
+      owner: "cogni-test-org",
+      repo: "cogni-monorepo",
+      prNumber: 42,
+      method: "squash",
+    });
+  });
+
   it("returns 404 node_not_found for an unknown node", async () => {
     const res = await post({ prNumber: 42, nodeId: "ghost" });
     expect(res.status).toBe(404);
