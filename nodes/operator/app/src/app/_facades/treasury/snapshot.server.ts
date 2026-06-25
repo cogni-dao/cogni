@@ -100,14 +100,24 @@ export async function getTreasurySnapshotFacade(
       timestamp: snapshot.timestamp,
       staleWarning: false,
     };
-  } catch {
+  } catch (err) {
     const durationMs = performance.now() - start;
 
+    // Capture the ACTUAL error. The treasury read throws synchronously for
+    // several distinct upstream reasons BEFORE any network call — "Payment rails
+    // not activated" (getPaymentConfig null), "Chain mismatch", and
+    // "EVM_RPC_URL is required" — all funnelled here. The prior bare `catch {}`
+    // swallowed the message and logged only errorCode "TREASURY_RPC_FAILURE",
+    // which mislabels a payments/config failure as an RPC failure and made the
+    // real cause undiagnosable (a sub-millisecond durationMs is the tell: it threw
+    // before touching the network). Log the message + name so the cause is visible.
     ctx.log.warn(
       {
         event: EVENT_NAMES.TREASURY_SNAPSHOT_COMPLETE,
         outcome: "error",
         errorCode: "TREASURY_RPC_FAILURE",
+        errorName: err instanceof Error ? err.name : typeof err,
+        errorMessage: err instanceof Error ? err.message : String(err),
         chainId: CHAIN_ID,
         treasuryAddress,
         durationMs,
