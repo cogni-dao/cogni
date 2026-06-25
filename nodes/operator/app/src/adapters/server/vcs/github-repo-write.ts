@@ -58,6 +58,7 @@ import {
   renderNodeExternalSecret,
   renderNodeExternalSecretKustomization,
   renderOverlay,
+  renderPaymentsActivationSpec,
   renderRepoSpec,
 } from "@/shared/node-app-scaffold/gens";
 import type { NodeKnowledgeRemote } from "@/shared/node-app-scaffold/knowledge-remote";
@@ -1532,6 +1533,89 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       message: `feat(node): register ${slug}`,
       branch: `cogni-operator/node-register-${slug}`,
     });
+  }
+
+  /**
+   * Payment-activation write-back into the NODE'S OWN repo (not the operator monorepo): read the
+   * node repo's `.cogni/repo-spec.yaml` on `main`, splice in `node_wallet.address` +
+   * `payments_in.credits_topup.*` (95/5 at-cost) + `payments.status: active`, and open (or reuse)
+   * a PR carrying that one-file change. The {owner, repo} here is the node's OWN repo identity
+   * (`NODE_MINT_OWNER`/slug), built by the route exactly like `publish` builds it — never
+   * `getGithubRepo()` (hardcoded to the operator monorepo).
+   *
+   * SINGLE_HOME: writes ONLY `.cogni/repo-spec.yaml` at the repo root. Idempotent: an already-spliced
+   * spec produces an identical tree (no commit, returns the existing open PR or `no_changes`).
+   */
+  async openPaymentsActivationPr(input: {
+    owner: string;
+    repo: string;
+    slug: string;
+    nodeWalletAddress: string;
+    splitAddress: string;
+  }): Promise<
+    | { status: "pr_opened"; prNumber: number; prUrl: string }
+    | { status: "no_changes" }
+  > {
+    const { owner, repo, slug } = input;
+    const octokit = await this.getOctokit(owner, repo);
+
+    const currentSpec = await this.fetchFileText({
+      owner,
+      repo,
+      path: ".cogni/repo-spec.yaml",
+      ref: "main",
+    });
+    if (currentSpec === null) {
+      throw deployPlaneError(
+        "repo_spec_missing",
+        `node repo-spec not found at ${owner}/${repo}:.cogni/repo-spec.yaml`,
+        422
+      );
+    }
+
+    const nextSpec = renderPaymentsActivationSpec(currentSpec, {
+      nodeWalletAddress: input.nodeWalletAddress,
+      splitAddress: input.splitAddress,
+    });
+    if (nextSpec === currentSpec) {
+      return { status: "no_changes" };
+    }
+
+    const { baseCommitSha, baseTreeSha } = await this.resolveMainBase(
+      octokit,
+      owner,
+      repo
+    );
+    const blobSha = await this.createBlob(octokit, owner, repo, nextSpec);
+    const branch = `cogni-operator/activate-payments-${slug}`;
+    const title = `feat(payments): activate ${slug} payment rails`;
+    const body =
+      `Activates \`${slug}\`'s payment loop. Writes the node's own wallet + Split into ` +
+      "`.cogni/repo-spec.yaml`:\n\n" +
+      `- \`node_wallet.address\` = \`${input.nodeWalletAddress}\`\n` +
+      `- \`payments_in.credits_topup.receiving_address\` (Split) = \`${input.splitAddress}\`\n` +
+      `- \`payments.status: active\` (95/5 at-cost economics)\n\n` +
+      "Inbound USDC routes to this node's own Split → its node wallet → OpenRouter top-up. " +
+      "The operator never holds the node's keys.\n\n" +
+      "_Authored automatically by cogni-operator on payment activation._";
+
+    const result = await this.commitTreeAndOpenPr(octokit, owner, repo, slug, {
+      baseCommitSha,
+      baseTreeSha,
+      entries: [
+        {
+          path: ".cogni/repo-spec.yaml",
+          mode: "100644",
+          type: "blob",
+          sha: blobSha,
+        },
+      ],
+      message: `feat(payments): activate ${slug} payment rails`,
+      branch,
+      pr: { title, body },
+    });
+    await this.updatePrBody(octokit, owner, repo, result.prNumber, title, body);
+    return { status: "pr_opened", ...result };
   }
 
   async packageImageTagExists(

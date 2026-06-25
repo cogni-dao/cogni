@@ -68,6 +68,8 @@ function makeNode(overrides: Partial<WizardNode> = {}): WizardNode {
       "https://www.dolthub.com/repositories/cogni-dao/knowledge-atlas",
     daoUrl:
       "https://app.aragon.org/dao/base-mainnet/0x1111111111111111111111111111111111111111",
+    repoSpecUrl:
+      "https://github.com/cogni-test-org/atlas/blob/main/.cogni/repo-spec.yaml",
     ...overrides,
   };
 }

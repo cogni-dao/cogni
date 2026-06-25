@@ -4,13 +4,15 @@
 /**
  * Module: `@features/nodes/wizard/steps/SimpleSteps`
  * Purpose: Copy-only wizard steps for the long-tail / terminal statuses.
- * Scope: Presentational placeholders for not-yet-built activation stages (wallet, payments)
- *   plus active/failed terminals. Carry `available:false` semantics — designed "coming soon".
+ * Scope: Presentational steps — the wallet step (deploy the revenue Split) plus active/failed
+ *   terminals. The Split-deploy itself lives on the wagmi activation page (`/nodes/payments`).
  * Side-effects: none
- * Links: src/features/nodes/wizard/step-registry.tsx, ../StepSection.tsx
+ * Links: src/features/nodes/wizard/step-registry.tsx, src/app/(app)/nodes/payments/page.tsx
  * @public
  */
 
+import { ArrowRight } from "lucide-react";
+import Link from "next/link";
 import type { ReactElement } from "react";
 
 import { Button } from "@/components";
@@ -21,28 +23,23 @@ import type { WizardStepProps } from "../types";
 
 export function WalletStep({ node }: WizardStepProps): ReactElement {
   return (
-    <StepSection title="Operator wallet">
+    <StepSection title="Deploy your revenue Split">
       <div className="space-y-3 text-sm">
         <p className="text-muted-foreground">
-          Operator wallet is ready. Activating payment rails is the next stage —
-          coming soon.
+          Your node wallet is ready. Next, deploy a revenue Split on Base — your
+          connected wallet signs the transaction and becomes its controller.
+          Then you'll activate payments.
         </p>
-        <div className="flex items-center gap-2">
-          <Button disabled>Activate payments</Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button asChild>
+            <Link href={`/nodes/payments?nodeId=${node.id}`}>
+              Deploy revenue Split
+              <ArrowRight className="size-4" />
+            </Link>
+          </Button>
           <LaunchPackCopyButton nodeId={node.id} />
         </div>
       </div>
-    </StepSection>
-  );
-}
-
-export function PaymentsStep(): ReactElement {
-  return (
-    <StepSection title="Payments">
-      <p className="text-muted-foreground text-sm">
-        Payments configured. Opening the activation PR is the final step before
-        this node goes live — coming soon.
-      </p>
     </StepSection>
   );
 }

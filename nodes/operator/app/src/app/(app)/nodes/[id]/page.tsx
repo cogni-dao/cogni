@@ -92,6 +92,11 @@ export default async function NodeDashboardPage({
     node.daoAddress && node.chainId
       ? getDaoUrl(node.chainId, node.daoAddress)
       : null;
+  // Provenance: direct link to the node's own repo-spec on GitHub (the file payment activation
+  // writes back to). Derived from the same node-own-repo URL the launch pack uses.
+  const repoSpecUrl = nodeRepoUrl
+    ? `${nodeRepoUrl}/blob/main/.cogni/repo-spec.yaml`
+    : null;
 
   // Owner-only Developers section, mounted once the node is handed off to an AI dev. Ownership is
   // already proven by the scoped node read above, so the service-role request read is safe.
@@ -141,6 +146,7 @@ export default async function NodeDashboardPage({
           nodeRepoUrl,
           knowledgeRepoUrl,
           daoUrl,
+          repoSpecUrl,
         }}
       />
 

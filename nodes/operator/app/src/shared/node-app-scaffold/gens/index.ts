@@ -22,5 +22,11 @@ export {
 } from "./external-secret";
 export { nextFreeNodePort } from "./node-port";
 export { renderOverlay } from "./overlay";
+export {
+  ACTIVATION_MARKUP_FACTOR,
+  ACTIVATION_REVENUE_SHARE,
+  type RenderPaymentsActivationInput,
+  renderPaymentsActivationSpec,
+} from "./payments-activation";
 export { type RenderRepoSpecInput, renderRepoSpec } from "./repo-spec";
 export { insertSchedulerEndpoint } from "./scheduler-endpoints";

@@ -15,16 +15,19 @@
 
 import { withTenantScope } from "@cogni/db-client";
 import { type UserId, userActor } from "@cogni/ids";
+import { getDaoUrl } from "@cogni/node-shared";
 import { and, eq } from "drizzle-orm";
 import type { ReactElement } from "react";
 
 import { resolveAppDb } from "@/bootstrap/container";
+import { nodeRepoUrlForSlug } from "@/features/nodes/launch-pack";
 import { getServerSessionUser } from "@/lib/auth/server";
 import {
   getDaoTreasuryAddress,
   getOperatorWalletConfig,
 } from "@/shared/config";
 import { nodes } from "@/shared/db/nodes";
+import { serverEnv } from "@/shared/env";
 
 import { PaymentActivationPageClient } from "./PaymentActivationPage.client";
 
@@ -57,11 +60,26 @@ export default async function PaymentActivationPage({
       );
       const node = rows[0];
       if (node) {
+        const env = serverEnv();
+        const nodeRepoUrl = nodeRepoUrlForSlug({
+          slug: node.slug,
+          mintOwner: env.NODE_MINT_OWNER,
+          publishPrUrl: node.publishPrUrl,
+        });
+        const repoSpecUrl = nodeRepoUrl
+          ? `${nodeRepoUrl}/blob/main/.cogni/repo-spec.yaml`
+          : null;
+        const daoUrl =
+          node.daoAddress && node.chainId
+            ? getDaoUrl(node.chainId, node.daoAddress)
+            : null;
         return (
           <PaymentActivationPageClient
             operatorWalletAddress={node.operatorWalletAddress ?? null}
             daoTreasuryAddress={node.daoAddress ?? null}
             nodeId={nodeId}
+            repoSpecUrl={repoSpecUrl}
+            daoUrl={daoUrl}
           />
         );
       }

@@ -24,6 +24,7 @@ import {
 import {
   AlertTriangle,
   CheckCircle,
+  ExternalLink,
   Info,
   Loader2,
   XCircle,
@@ -59,18 +60,23 @@ interface Props {
   daoTreasuryAddress: string | null;
   /** When invoked via the external-node wizard (`?nodeId=...`), persist the Split address back to the node row on success. */
   nodeId?: string | null;
+  /** Provenance: direct GitHub link to the node's own `.cogni/repo-spec.yaml` (wizard flow). */
+  repoSpecUrl?: string | null;
+  /** Provenance: Aragon DAO link (base network) — reuses the wizard's `getDaoUrl` pattern. */
+  daoUrl?: string | null;
 }
 
 export function PaymentActivationPageClient({
   operatorWalletAddress,
   daoTreasuryAddress,
   nodeId,
+  repoSpecUrl,
+  daoUrl,
 }: Props): ReactElement {
   const { address: walletAddress } = useAccount();
   const router = useRouter();
   const patchedRef = useRef(false);
 
-  const [confirmed, setConfirmed] = useState(false);
   const [phase, setPhase] = useState<ActivationPhase>("IDLE");
   const [splitAddress, setSplitAddress] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -91,7 +97,7 @@ export function PaymentActivationPageClient({
   const hasOperator = !!operatorWalletAddress;
   const hasTreasury = !!daoTreasuryAddress;
   const isReady = hasOperator && hasTreasury;
-  const canSubmit = isReady && confirmed && phase === "IDLE" && !!walletAddress;
+  const canSubmit = isReady && phase === "IDLE" && !!walletAddress;
 
   // Derive allocations
   const { operatorAllocation, treasuryAllocation } = calculateSplitAllocations(
@@ -232,7 +238,6 @@ export function PaymentActivationPageClient({
     setPhase("IDLE");
     setSplitAddress(null);
     setErrorMessage(null);
-    setConfirmed(false);
   };
 
   const repoSpecFragment = splitAddress
@@ -316,21 +321,46 @@ payments:
           </p>
         </div>
 
-        {/* Confirmation checkbox */}
+        {/* Provenance — verify, don't vouch. Direct links to where each address comes from. */}
         {phase === "IDLE" && (
           <>
-            <label className="flex cursor-pointer items-start gap-3">
-              <input
-                type="checkbox"
-                checked={confirmed}
-                onChange={(e) => setConfirmed(e.target.checked)}
-                className="mt-1 h-4 w-4 rounded border-border"
-              />
-              <span className="text-muted-foreground text-sm">
-                I am deploying this for my new node&apos;s codebase. The
-                addresses above are correct.
-              </span>
-            </label>
+            {(repoSpecUrl || daoUrl) && (
+              <div className="space-y-2">
+                <p className="font-medium text-foreground text-sm">
+                  Where these addresses come from
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {repoSpecUrl && (
+                    <Button asChild variant="outline" size="sm">
+                      <a
+                        href={repoSpecUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        Node repo-spec
+                        <ExternalLink className="size-4" />
+                      </a>
+                    </Button>
+                  )}
+                  {daoUrl && (
+                    <Button asChild variant="outline" size="sm">
+                      <a
+                        href={daoUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        Aragon DAO
+                        <ExternalLink className="size-4" />
+                      </a>
+                    </Button>
+                  )}
+                </div>
+                <p className="text-muted-foreground text-xs">
+                  The node wallet receives the provider share and tops up your
+                  node&apos;s AI credits; the DAO treasury receives the margin.
+                </p>
+              </div>
+            )}
 
             <Button
               onClick={handleDeploy}
