@@ -32,8 +32,8 @@ import type {
 
 import { ProbeDeployAdapter } from "@/adapters/server";
 import {
-  ttlSingleFlight,
   type TtlSingleFlight,
+  ttlSingleFlight,
 } from "@/shared/cache/ttl-single-flight";
 import type { ServerEnv } from "@/shared/env";
 import { rootDomain } from "@/shared/node-registry/deploy-hosts";
