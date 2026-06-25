@@ -135,7 +135,27 @@ card layout. Add a **"Provider Top-Ups"** card that:
    #1844 to avoid conflict).
 4. **vNext**: x402 per-call to remove the human inch (the autonomous rung).
 
-## Open reconciliation
+## Works for ALL nodes (propagation)
 
-- The deployed 0xSplits address in code (`0xd92E…f9C`) differs from a value cited in
-  an earlier handoff (`0x4C4e…C294`). Confirm the live Split before activating.
+The steward wallet is a **per-node** capability, not operator-only:
+
+- The capability lives in **shared packages** (`repo-spec` schema, `operator-wallet`
+  port/adapter, `node-shared` event). These are the source every node inherits — so
+  the seam is node-generic by construction. node-template + forks pick it up via
+  `node-sync-prs` after this merges.
+- The **app surfaces** (container wiring, `POST /steward-withdrawal` route, Admin-tab
+  "Provider Top-Ups" card) are per-app. This PR wires the **operator** app (operator is
+  itself a node). The same surfaces must be added to **node-template's app** so every
+  fork gets them — node-template is the fork base, and its DAO Admin tab is where the
+  card lands. The shared capability MUST originate here in `cogni-template/packages`
+  (node-template consumes these); you cannot author the seam "in node-template" first.
+- Each node sets its own `payments_out.steward_wallet` in its repo-spec. MVP: reuse the
+  governance approver/admin wallet (operator uses `0x070075F1…0c949`).
+
+## Activation state
+
+- `payments_out.steward_wallet` is set in the operator repo-spec (root + `nodes/operator`)
+  to the governance approver wallet `0x070075F1389Ae1182aBac722B36CA12285d0c949`.
+- Live operator inbound Split = `0x4C4e…C294` (repo-spec `receiving_address`, splitHash
+  `0xe620…2943`). The `0xd92E…f9C` seen earlier was only a unit-test fixture, not the
+  deployed Split — no discrepancy.

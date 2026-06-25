@@ -50,3 +50,12 @@ payments_in:
     # Activation must point receiving_address at a Split whose on-chain splitHash matches these values.
     markup_factor: 1.10803324099723
     revenue_share: 0
+
+# Outbound: human-custodied steward wallet that settles vendor invoices
+# (OpenRouter, Cherry) via manual USDC crypto checkout. The operator wallet funds
+# this one pinned address via withdrawToSteward; a human completes each checkout.
+# MVP: reuse the existing governance approver/admin wallet (0x0700…c949).
+# See docs/design/node-steward-wallet.md.
+payments_out:
+  steward_wallet:
+    address: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
