@@ -5,261 +5,99 @@
 # Purpose: Model routing configuration for LiteLLM proxy.
 # Scope: Defines model aliases, provider routing, and database settings.
 #
-# PROVIDER SPLIT (OpenRouter → Hyperbolic cutover, Tier-1):
-#   - OSS / open-weight models (DeepSeek, Kimi/Moonshot, MiniMax, Qwen, Llama)
-#     route to Hyperbolic via the `hyperbolic/` prefix + HYPERBOLIC_API_KEY.
-#   - Proprietary models (GPT, Claude, Gemini, Grok) + embeddings have NO
-#     Hyperbolic equivalent (Hyperbolic is OSS-only, no embeddings endpoint) and
-#     STAY on OpenRouter via the `openrouter/` prefix + OPENROUTER_API_KEY.
+# PROVIDER: Hyperbolic ONLY (clean cut, no OpenRouter fallback).
+#   Every route below maps to a model Hyperbolic ACTUALLY serves, verified
+#   against `GET https://api.hyperbolic.xyz/v1/models` (2026-06-25). The full
+#   served list is exactly these 5 chat models — there is no pagination, no
+#   embeddings endpoint, and no proprietary (GPT/Claude/Gemini/Grok) models.
 #
-# ⚠️ DO-NOT-PROMOTE-UNTIL-KEY-SET: the hyperbolic/ routes 401 in any env that
-#    lacks HYPERBOLIC_API_KEY. Merging this file is safe (catalog entry is
+#   Served models (id · supports_tools · supports_image_input · ctx):
+#     deepseek-ai/DeepSeek-V3-0324           · tools:false · image:false · 163840
+#     meta-llama/Llama-3.3-70B-Instruct      · tools:false · image:false · 131072
+#     deepseek-ai/DeepSeek-R1                 · tools:false · image:false · 163840
+#     deepseek-ai/DeepSeek-R1-0528            · tools:false · image:false · 163840
+#     Qwen/Qwen3-Coder-480B-A35B-Instruct     · tools:TRUE  · image:false · 262144
+#
+#   TOOL USE: only Qwen3-Coder-480B advertises native tools. The agent/ReAct
+#   default (tool-calling graphs) MUST point at `qwen3-coder` (tagged
+#   default_tools below). The other 4 are text/reasoning only.
+#
+#   NO EMBEDDINGS: Hyperbolic has no embeddings endpoint. `text-embedding-3-small`
+#   was REMOVED. OpenClaw memory_search (semantic vector search) has NO embeddings
+#   route until a separate embeddings provider is chosen (self-hosted BGE, etc.).
+#   See PR body "EMBEDDINGS — REQUIRED SEPARATE DECISION".
+#
+# ⚠️ DO-NOT-PROMOTE-UNTIL-KEY-SET: every route here 401s in any env that lacks
+#    HYPERBOLIC_API_KEY. Merging this file is safe (catalog entry is
 #    required:false), but PROMOTING it to an env requires that env's
 #    HYPERBOLIC_API_KEY set FIRST. See infra/secrets-catalog.yaml.
 #
-# ⚠️ VERIFY-MODEL-IDS: the exact hyperbolic/<org>/<model> identifiers below are
-#    best-effort (Hyperbolic hosts these model FAMILIES; the precise versioned
-#    IDs could not be confirmed from public docs without the live key). Before
-#    promoting, confirm each against `GET https://api.hyperbolic.xyz/v1/models`
-#    with the key set, and adjust the `model:` value to the exact returned ID.
-#
-# Links: https://docs.litellm.ai/docs/providers/hyperbolic
-#        https://docs.litellm.ai/docs/providers/openrouter
+# Link: https://docs.litellm.ai/docs/providers/hyperbolic
 
 model_list:
-  # ===== FREE MODEL =====
-  # gpt-4o-mini designated as the default free model for cost control
-  # Note: 4o-mini is NOT actually free... we are making it available, so free tier users can use it.
-  # All other models are paid and require explicit selection
-  - model_name: gpt-4o-mini
+  # ===== FREE / DEFAULT =====
+  # Smallest Hyperbolic chat model -> designated default_free for cost control.
+  # (gpt-4o-mini was the previous default_free; dropped — proprietary, not on Hyperbolic.)
+  - model_name: llama-3.3-70b
     litellm_params:
-      model: openrouter/openai/gpt-4o-mini-2024-07-18
-      api_key: "os.environ/OPENROUTER_API_KEY"
+      model: hyperbolic/meta-llama/Llama-3.3-70B-Instruct
+      api_key: "os.environ/HYPERBOLIC_API_KEY"
     model_info:
-      display_name: "GPT-4o Mini"
+      display_name: "Llama 3.3 70B"
       is_free: true
-      provider_key: "openai"
+      provider_key: "meta"
       metadata:
         cogni:
           default_free: true
+          default_flash: true
 
   # ===== PAID MODELS =====
-  # DeepSeek
-  - model_name: deepseek-v3.2
+  # DeepSeek V3 (general chat / coding, no native tools)
+  - model_name: deepseek-v3
     litellm_params:
-      # OSS → Hyperbolic. VERIFY-MODEL-ID against /v1/models (DeepSeek-V3 family).
-      model: hyperbolic/deepseek-ai/DeepSeek-V3.2
+      model: hyperbolic/deepseek-ai/DeepSeek-V3-0324
       api_key: "os.environ/HYPERBOLIC_API_KEY"
     model_info:
-      display_name: "DeepSeek V3.2"
+      display_name: "DeepSeek V3 (0324)"
+      is_free: false
+      provider_key: "deepseek"
+
+  # DeepSeek R1 (reasoning)
+  - model_name: deepseek-r1
+    litellm_params:
+      model: hyperbolic/deepseek-ai/DeepSeek-R1
+      api_key: "os.environ/HYPERBOLIC_API_KEY"
+    model_info:
+      display_name: "DeepSeek R1"
+      is_free: false
+      provider_key: "deepseek"
+
+  # DeepSeek R1 (0528 refresh) — designated thinking default
+  - model_name: deepseek-r1-0528
+    litellm_params:
+      model: hyperbolic/deepseek-ai/DeepSeek-R1-0528
+      api_key: "os.environ/HYPERBOLIC_API_KEY"
+    model_info:
+      display_name: "DeepSeek R1 (0528)"
       is_free: false
       provider_key: "deepseek"
       metadata:
         cogni:
           default_thinking: true
 
-  - model_name: kimi-k2.5
+  # Qwen3-Coder 480B — the ONLY Hyperbolic model with native tool support.
+  # Agent / ReAct / tool-calling graphs MUST default here (default_tools).
+  - model_name: qwen3-coder
     litellm_params:
-      # OSS → Hyperbolic. VERIFY-MODEL-ID against /v1/models (Moonshot Kimi K2 family).
-      model: hyperbolic/moonshotai/Kimi-K2.5
+      model: hyperbolic/Qwen/Qwen3-Coder-480B-A35B-Instruct
       api_key: "os.environ/HYPERBOLIC_API_KEY"
     model_info:
-      display_name: "Kimi K2.5"
-      is_free: false
-      provider_key: "kimi"
-      metadata:
-        cogni:
-          fallback_thinking: true
-
-  # Minimax
-  - model_name: minimax-m2
-    litellm_params:
-      # OSS → Hyperbolic. VERIFY-MODEL-ID against /v1/models (MiniMax M2 family).
-      model: hyperbolic/MiniMaxAI/MiniMax-M2
-      api_key: "os.environ/HYPERBOLIC_API_KEY"
-    model_info:
-      display_name: "Minimax M2"
-      is_free: false
-      provider_key: "minimax"
-
-  - model_name: gpt-5.2
-    litellm_params:
-      model: openrouter/openai/gpt-5.2
-      api_key: "os.environ/OPENROUTER_API_KEY"
-    model_info:
-      display_name: "GPT-5.2"
-      is_free: false
-      provider_key: "openai"
-
-  - model_name: gpt-5
-    litellm_params:
-      model: openrouter/openai/gpt-5
-      api_key: "os.environ/OPENROUTER_API_KEY"
-    model_info:
-      display_name: "GPT-5"
-      is_free: false
-      provider_key: "openai"
-
-  # Anthropic (ZDR-enabled: Zero Data Retention - provider won't log/train on data)
-  - model_name: claude-sonnet-4.5
-    litellm_params:
-      model: openrouter/anthropic/claude-sonnet-4.5
-      api_key: "os.environ/OPENROUTER_API_KEY"
-      extra_body:
-        provider:
-          zdr: true
-      # OpenRouter prompt caching (Anthropic): requires cache_control breakpoints.
-      # Inject markers automatically so callers (e.g. OpenClaw) don’t need to emit
-      # multipart content blocks explicitly.
-      #
-      # NOTE: This injects `{cache_control:{type:"ephemeral"}}` (OpenRouter default TTL ~5m).
-      # For 1h TTL, the caller must send `ttl:"1h"` in cache_control.
-      cache_control_injection_points:
-        - location: message
-          role: system
-    model_info:
-      display_name: "Claude Sonnet 4.5"
-      is_free: false
-      is_zdr: true
-      provider_key: "anthropic"
-
-  - model_name: claude-opus-4.5
-    litellm_params:
-      model: openrouter/anthropic/claude-opus-4.5
-      api_key: "os.environ/OPENROUTER_API_KEY"
-      extra_body:
-        provider:
-          zdr: true
-      # OpenRouter prompt caching (Anthropic): auto-inject cache_control breakpoints.
-      cache_control_injection_points:
-        - location: message
-          role: system
-    model_info:
-      display_name: "Claude Opus 4.5"
-      is_free: false
-      is_zdr: true
-      provider_key: "anthropic"
-
-  - model_name: deepseek-v3.1
-    litellm_params:
-      # OSS → Hyperbolic. VERIFY-MODEL-ID against /v1/models (DeepSeek-V3 family).
-      model: hyperbolic/deepseek-ai/DeepSeek-V3.1
-      api_key: "os.environ/HYPERBOLIC_API_KEY"
-    model_info:
-      display_name: "DeepSeek V3.1"
-      is_free: false
-      provider_key: "deepseek"
-
-  # Google (ZDR-enabled: Zero Data Retention)
-  - model_name: gemini-2.5-flash
-    litellm_params:
-      model: openrouter/google/gemini-2.5-flash
-      api_key: "os.environ/OPENROUTER_API_KEY"
-      extra_body:
-        provider:
-          zdr: true
-      # OpenRouter prompt caching (Gemini/OpenRouter): cache_control breakpoints can
-      # increase cache hit rate when the prefix is stable.
-      cache_control_injection_points:
-        - location: message
-          role: system
-    model_info:
-      display_name: "Gemini 2.5 Flash"
-      is_free: false
-      is_zdr: true
-      provider_key: "google"
-
-  - model_name: gemini-3-pro
-    litellm_params:
-      model: openrouter/google/gemini-3-pro-preview
-      api_key: "os.environ/OPENROUTER_API_KEY"
-      extra_body:
-        provider:
-          zdr: true
-      cache_control_injection_points:
-        - location: message
-          role: system
-    model_info:
-      display_name: "Gemini 3 Pro"
-      is_free: false
-      is_zdr: true
-      provider_key: "google"
-
-  - model_name: gemini-3-flash
-    litellm_params:
-      model: openrouter/google/gemini-3-flash-preview
-      api_key: "os.environ/OPENROUTER_API_KEY"
-      extra_body:
-        provider:
-          zdr: true
-      cache_control_injection_points:
-        - location: message
-          role: system
-    model_info:
-      display_name: "Gemini 3 Flash"
-      is_free: false
-      is_zdr: true
-      provider_key: "google"
-
-  # Kimi (MoonshotAI)
-  - model_name: kimi-k2-thinking
-    litellm_params:
-      # OSS → Hyperbolic. VERIFY-MODEL-ID against /v1/models (Moonshot Kimi K2 family).
-      model: hyperbolic/moonshotai/Kimi-K2-Thinking
-      api_key: "os.environ/HYPERBOLIC_API_KEY"
-    model_info:
-      display_name: "Kimi K2 Thinking"
-      is_free: false
-      provider_key: "kimi"
-
-  # Qwen
-  - model_name: qwen3-vl-8b
-    litellm_params:
-      # OSS → Hyperbolic. VERIFY-MODEL-ID against /v1/models (Qwen3 family;
-      # confirm the VL/-Thinking variant is hosted — may need a non-VL fallback).
-      model: hyperbolic/Qwen/Qwen3-VL-8B-Thinking
-      api_key: "os.environ/HYPERBOLIC_API_KEY"
-    model_info:
-      display_name: "Qwen 3 VL 8B"
+      display_name: "Qwen3 Coder 480B"
       is_free: false
       provider_key: "qwen"
-
-  # XAI (Grok)
-  - model_name: grok-4.1-fast
-    litellm_params:
-      model: openrouter/x-ai/grok-4.1-fast
-      api_key: "os.environ/OPENROUTER_API_KEY"
-    model_info:
-      display_name: "Grok 4.1 Fast"
-      is_free: false
-      provider_key: "xai"
-
-  # Meta (Llama)
-  - model_name: llama-3.3-70b
-    litellm_params:
-      # OSS → Hyperbolic. VERIFY-MODEL-ID against /v1/models (confirmed family: Llama 3.3 70B).
-      model: hyperbolic/meta-llama/Llama-3.3-70B-Instruct
-      api_key: "os.environ/HYPERBOLIC_API_KEY"
-    model_info:
-      display_name: "Llama 3.3 70B"
-      is_free: false
-      provider_key: "meta"
       metadata:
         cogni:
-          default_flash: true
-
-  # ===== EMBEDDING MODELS =====
-  # Used by OpenClaw memory_search for semantic vector search
-  # Uses openai/ prefix + api_base to avoid openrouter/ embedding routing bugs (BerriAI/litellm#19016)
-  - model_name: text-embedding-3-small
-    litellm_params:
-      model: openai/text-embedding-3-small
-      api_base: https://openrouter.ai/api/v1
-      api_key: "os.environ/OPENROUTER_API_KEY"
-    model_info:
-      display_name: "Text Embedding 3 Small"
-      is_free: false
-      provider_key: "openrouter"
+          default_tools: true
 
 litellm_settings:
   drop_params: true
