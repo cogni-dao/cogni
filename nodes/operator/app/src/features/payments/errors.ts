@@ -14,7 +14,9 @@
 
 import {
   isPaymentAttemptNotFoundPortError,
+  isPaymentRailMisconfiguredPortError,
   isTxHashAlreadyBoundPortError,
+  type PaymentRailMisconfigurationCode,
 } from "@/ports";
 
 // ============================================================================
@@ -57,6 +59,20 @@ export class PaymentNotFoundError extends Error {
   }
 }
 
+/**
+ * Thrown when live payment rails cannot be proven ready for the configured repo-spec economics.
+ * Maps to 503 at HTTP layer.
+ */
+export class PaymentRailNotReadyError extends Error {
+  constructor(
+    public readonly code: PaymentRailMisconfigurationCode,
+    message = "Payment rails are not ready"
+  ) {
+    super(message);
+    this.name = "PaymentRailNotReadyError";
+  }
+}
+
 // ============================================================================
 // Discriminated Union (for service layer)
 // ============================================================================
@@ -79,6 +95,7 @@ export type PaymentsFeatureError =
       chainId: number;
     }
   | { kind: "INVALID_AMOUNT"; min: number; max: number; actual: number }
+  | { kind: "PAYMENT_RAIL_NOT_READY"; code: PaymentRailMisconfigurationCode }
   | { kind: "GENERIC"; message?: string };
 
 /**
@@ -99,6 +116,7 @@ export function isPaymentsFeatureError(
       "PAYMENT_EXPIRED",
       "TX_HASH_CONFLICT",
       "INVALID_AMOUNT",
+      "PAYMENT_RAIL_NOT_READY",
       "GENERIC",
     ].includes(error.kind)
   );
@@ -133,6 +151,14 @@ export function mapPaymentPortErrorToFeature(
       txHash: error.txHash,
       existingAttemptId: error.existingAttemptId,
       chainId: error.chainId,
+    };
+  }
+
+  // Port error: PaymentRailMisconfiguredPortError → PAYMENT_RAIL_NOT_READY
+  if (isPaymentRailMisconfiguredPortError(error)) {
+    return {
+      kind: "PAYMENT_RAIL_NOT_READY",
+      code: error.code,
     };
   }
 

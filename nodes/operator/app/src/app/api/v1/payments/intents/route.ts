@@ -19,6 +19,7 @@ import { getSessionUser } from "@/app/_lib/auth/session";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import {
   AuthUserNotFoundError,
+  PaymentRailNotReadyError,
   WalletRequiredError,
 } from "@/features/payments/errors";
 import { logRequestWarn, type RequestContext } from "@/shared/observability";
@@ -56,6 +57,18 @@ function handleRouteError(
     return NextResponse.json(
       { error: "Wallet address required for payment operations" },
       { status: 403 }
+    );
+  }
+
+  if (error instanceof PaymentRailNotReadyError) {
+    logRequestWarn(ctx.log, error, error.code);
+    return NextResponse.json(
+      {
+        error:
+          "Payment rails are not ready. Activation must update the Split before accepting payments.",
+        code: error.code,
+      },
+      { status: 503 }
     );
   }
 

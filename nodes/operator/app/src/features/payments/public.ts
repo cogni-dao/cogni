@@ -20,6 +20,7 @@ export {
   isPaymentsFeatureError,
   mapPaymentPortErrorToFeature,
   PaymentNotFoundError,
+  PaymentRailNotReadyError,
 } from "./errors";
 export {
   type UseCreditsSummaryOptions,

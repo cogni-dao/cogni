@@ -38,7 +38,7 @@ payments_in:
     allowed_tokens:
       - USDC
     # Purchase-side economics (governance config; replaces env USER_PRICE_MARKUP_FACTOR / SYSTEM_TENANT_REVENUE_SHARE).
-    # revenue_share: 0 → no system-account credit increase (DAO earns USDC margin via the Split).
-    # markup_factor stays 2.0; the at-cost markup flip also needs an on-chain 0xSplits allocation update.
-    markup_factor: 2.0
+    # Target default: 95% provider top-up / 5% DAO Split margin, no system-account credit increase.
+    # Activation must point receiving_address at a Split whose on-chain splitHash matches these values.
+    markup_factor: 1.10803324099723
     revenue_share: 0

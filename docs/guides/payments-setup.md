@@ -37,7 +37,7 @@ You need to configure or test the USDC-based credit top-up payment system. This 
 - `payments_in.credits_topup.receiving_address` — DAO wallet receiving address
 - `payments_in.credits_topup.allowed_chains` — Chain names (e.g., `["Sepolia"]`)
 - `payments_in.credits_topup.allowed_tokens` — Token names (e.g., `["USDC"]`)
-- `payments_in.credits_topup.markup_factor` — Purchase-side price markup (default `2.0`); governance config, was the env `USER_PRICE_MARKUP_FACTOR`. Drives the OpenRouter top-up + the 0xSplits allocation. Distinct from the spend-side LLM markup (still env).
+- `payments_in.credits_topup.markup_factor` — Purchase-side funding multiplier (default `1.10803324099723`, tuned for 95% provider top-up / 5% DAO Split margin after the 5% provider fee); governance config, was the env `USER_PRICE_MARKUP_FACTOR`. Drives the OpenRouter top-up + the 0xSplits allocation. Distinct from the spend-side LLM markup.
 - `payments_in.credits_topup.revenue_share` — System-tenant (DAO) bonus-credit fraction `0–1` (**default `0`**); was env `SYSTEM_TENANT_REVENUE_SHARE`. `0` = no system-account credit increase — the DAO earns USDC margin via the Split, not free minted AI credits. A node opts back in by setting it explicitly. **Note:** changing the actual on-chain DAO margin (the at-cost markup flip) additionally requires a matching 0xSplits allocation update — config alone does not move the deployed Split.
 
 **`src/shared/web3/chain.ts`** (hardcoded constants):

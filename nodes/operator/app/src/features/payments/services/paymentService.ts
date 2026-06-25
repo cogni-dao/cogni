@@ -35,14 +35,16 @@ import type {
   OnChainVerifier,
   PaymentAttemptServiceRepository,
   PaymentAttemptUserRepository,
+  PaymentRailGuardPort,
   ServiceAccountService,
 } from "@/ports";
+import { isPaymentRailMisconfiguredPortError } from "@/ports";
 import { getPaymentConfig } from "@/shared/config/repoSpec.server";
 import type { Logger } from "@/shared/observability";
 import { USDC_TOKEN_ADDRESS, VERIFY_THROTTLE_SECONDS } from "@/shared/web3";
 import type { PostCreditFundingDeps } from "../application/confirmCreditsPurchase";
 import { runPostCreditFunding } from "../application/confirmCreditsPurchase";
-import { PaymentNotFoundError } from "../errors";
+import { PaymentNotFoundError, PaymentRailNotReadyError } from "../errors";
 import { confirmCreditsPayment } from "./creditsConfirm";
 
 // ============================================================================
@@ -115,6 +117,7 @@ export interface GetStatusResult {
 export async function createIntent(
   userRepo: PaymentAttemptUserRepository,
   clock: Clock,
+  paymentRailGuard: PaymentRailGuardPort,
   input: CreateIntentInput
 ): Promise<CreateIntentResult> {
   if (!isValidPaymentAmount(input.amountUsdCents)) {
@@ -132,6 +135,15 @@ export async function createIntent(
   const { chainId, receivingAddress } = paymentConfig;
   const token = USDC_TOKEN_ADDRESS;
   const amountRaw = usdCentsToRawUsdc(input.amountUsdCents);
+
+  try {
+    await paymentRailGuard.assertReady(paymentConfig);
+  } catch (error) {
+    if (isPaymentRailMisconfiguredPortError(error)) {
+      throw new PaymentRailNotReadyError(error.code, error.message);
+    }
+    throw error;
+  }
 
   const now = new Date(clock.now());
   const expiresAt = new Date(now.getTime() + PAYMENT_INTENT_TTL_MS);

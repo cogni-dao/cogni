@@ -105,7 +105,7 @@ export async function createPaymentIntentFacade(
   const userRepo = container.paymentAttemptsForUser(
     toUserId(params.sessionUser.id)
   );
-  const { clock } = container;
+  const { clock, paymentRailGuard } = container;
 
   let billingAccount: Awaited<
     ReturnType<typeof getOrCreateBillingAccountForUser>
@@ -146,7 +146,7 @@ export async function createPaymentIntentFacade(
   }
   const fromAddress = getAddress(params.sessionUser.walletAddress);
 
-  const result = await createIntent(userRepo, clock, {
+  const result = await createIntent(userRepo, clock, paymentRailGuard, {
     billingAccountId: billingAccount.id,
     fromAddress,
     amountUsdCents: params.amountUsdCents,

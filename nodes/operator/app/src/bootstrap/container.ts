@@ -96,6 +96,7 @@ import {
   type MimirAdapterConfig,
   MimirMetricsAdapter,
   RedisRunStreamAdapter,
+  SplitPaymentRailGuardAdapter,
   SystemClock,
   TemporalScheduleControlAdapter,
   UserDrizzleAccountService,
@@ -168,6 +169,7 @@ import type {
   OperatorWalletPort,
   PaymentAttemptServiceRepository,
   PaymentAttemptUserRepository,
+  PaymentRailGuardPort,
   ProviderFundingPort,
   RunStreamPort,
   ServiceAccountService,
@@ -176,6 +178,7 @@ import type {
   TreasurySettlementPort,
   WorkItemSessionPort,
 } from "@/ports";
+import { PaymentRailMisconfiguredPortError } from "@/ports";
 import type {
   ExecutionGrantUserPort,
   ExecutionGrantWorkerPort,
@@ -223,6 +226,8 @@ export interface Container {
   evmOnchainClient: EvmOnchainClient;
   /** True when repo-spec has payments_in config (receiving address + chain). False for nodes pending activation. */
   paymentRailsActive: boolean;
+  /** Fail-closed guard for live payment rail activation before issuing payment intents. */
+  paymentRailGuard: PaymentRailGuardPort;
   metricsQuery: MetricsQueryPort;
   treasuryReadPort: TreasuryReadPort;
   /** AI telemetry DB writer - always wired */
@@ -812,6 +817,52 @@ function createContainer(): Container {
         });
       })();
 
+  const paymentRailGuard: PaymentRailGuardPort = (() => {
+    if (env.isTestMode) {
+      return { assertReady: async () => undefined };
+    }
+
+    const paymentConfig = getPaymentConfig();
+    if (!paymentConfig) {
+      return {
+        assertReady: async () => {
+          throw new PaymentRailMisconfiguredPortError(
+            "PAYMENT_RAIL_UNCONFIGURED",
+            "Payment rails not activated. Run `pnpm node:activate-payments` first."
+          );
+        },
+      };
+    }
+
+    if (!operatorWalletConfig) {
+      return {
+        assertReady: async () => {
+          throw new PaymentRailMisconfiguredPortError(
+            "PAYMENT_RAIL_UNCONFIGURED",
+            "Payment rails misconfigured: operator_wallet missing from repo-spec"
+          );
+        },
+      };
+    }
+
+    const treasuryAddress = getDaoTreasuryAddress();
+    if (!treasuryAddress) {
+      return {
+        assertReady: async () => {
+          throw new PaymentRailMisconfiguredPortError(
+            "PAYMENT_RAIL_UNCONFIGURED",
+            "Payment rails misconfigured: cogni_dao.dao_contract missing from repo-spec"
+          );
+        },
+      };
+    }
+
+    return new SplitPaymentRailGuardAdapter(evmOnchainClient, {
+      operatorAddress: operatorWalletConfig.address,
+      treasuryAddress,
+    });
+  })();
+
   // ProviderFunding: optional — only when OPENROUTER_API_KEY is configured + operator wallet available
   // Per MARGIN_PRESERVED: fail fast if pricing constants don't preserve positive margin
   const providerFunding: ProviderFundingPort | undefined = (() => {
@@ -908,6 +959,7 @@ function createContainer(): Container {
     onChainVerifier,
     evmOnchainClient,
     paymentRailsActive: !!getPaymentConfig(),
+    paymentRailGuard,
     metricsQuery,
     treasuryReadPort,
     aiTelemetry,

@@ -17,6 +17,7 @@ import { PUSH_SPLIT_V2o2_FACTORY_ADDRESS } from "@0xsplits/splits-sdk/constants"
 import { splitV2o2FactoryAbi } from "@0xsplits/splits-sdk/constants/abi";
 import {
   calculateSplitAllocations,
+  numberToPpm,
   OPENROUTER_CRYPTO_FEE_PPM,
   SPLIT_TOTAL_ALLOCATION,
 } from "@cogni/operator-wallet";
@@ -40,9 +41,9 @@ import {
 
 import { Button, HintText, PageContainer, SectionCard } from "@/components";
 
-/** Default billing constants (PPM). */
-const DEFAULT_MARKUP_PPM = 2_000_000n;
-const DEFAULT_REVENUE_SHARE_PPM = 750_000n;
+/** Default payment activation economics: 95% provider top-up / 5% DAO margin. */
+const DEFAULT_MARKUP_FACTOR = 1.10803324099723;
+const DEFAULT_REVENUE_SHARE = 0;
 
 type ActivationPhase =
   | "IDLE"
@@ -94,8 +95,8 @@ export function PaymentActivationPageClient({
 
   // Derive allocations
   const { operatorAllocation, treasuryAllocation } = calculateSplitAllocations(
-    DEFAULT_MARKUP_PPM,
-    DEFAULT_REVENUE_SHARE_PPM,
+    numberToPpm(DEFAULT_MARKUP_FACTOR),
+    numberToPpm(DEFAULT_REVENUE_SHARE),
     OPENROUTER_CRYPTO_FEE_PPM
   );
 
@@ -243,6 +244,8 @@ export function PaymentActivationPageClient({
       - Base
     allowed_tokens:
       - USDC
+    markup_factor: ${DEFAULT_MARKUP_FACTOR}
+    revenue_share: ${DEFAULT_REVENUE_SHARE}
 
 payments:
   status: active`

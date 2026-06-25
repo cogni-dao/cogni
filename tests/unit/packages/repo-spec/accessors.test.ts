@@ -180,7 +180,7 @@ describe("extractPaymentConfig", () => {
       chainId: TEST_CHAIN_ID,
       receivingAddress: "0x1111111111111111111111111111111111111111",
       provider: "cogni-usdc-backend-v1",
-      markupFactor: 2.0,
+      markupFactor: 1.10803324099723,
       revenueShare: 0,
     });
   });
