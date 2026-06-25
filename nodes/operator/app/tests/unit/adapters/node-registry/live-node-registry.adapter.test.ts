@@ -36,7 +36,7 @@ const rollup = (m: Record<string, NodeLiveness>): LivenessRollup =>
   new Map(Object.entries(m));
 
 describe("adapters/node-registry/live-node-registry.adapter", () => {
-  it("overwrites the skeleton with the node's own identity (hook→title, mission→tagline, brand)", async () => {
+  it("enriches the skeleton: title stays the NAME, tagline=hook, brand applied, mission NOT shown", async () => {
     const reg = new LiveNodeRegistryAdapter({
       inner: innerOf([skeleton("beacon", "Beacon")]),
       getLiveness: async () =>
@@ -44,7 +44,7 @@ describe("adapters/node-registry/live-node-registry.adapter", () => {
           beacon: {
             health: "live",
             identity: {
-              slug: "beacon",
+              name: "beacon",
               hook: "Signal in the noise",
               mission: "A community-owned beacon node",
               brand: {
@@ -58,12 +58,14 @@ describe("adapters/node-registry/live-node-registry.adapter", () => {
     const [out] = await reg.listPublic();
     expect(out).toMatchObject({
       slug: "beacon",
-      title: "Signal in the noise",
-      tagline: "A community-owned beacon node",
+      title: "Beacon", // the NAME (skeleton titleCase), NOT the hook
+      tagline: "Signal in the noise", // the HOOK is the tagline
       thumbnailUrl: "https://beacon.cognidao.org/showcase/x.png",
       brandColor: "#0af",
       health: "live",
     });
+    // The mission is the cognition north-star — it must NEVER leak into the gallery card.
+    expect(out.tagline).not.toContain("community-owned beacon node");
   });
 
   it("keeps the skeleton fallbacks when a node projects no identity (graceful degradation)", async () => {

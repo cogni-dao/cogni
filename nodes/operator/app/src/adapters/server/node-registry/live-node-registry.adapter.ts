@@ -77,13 +77,15 @@ function enrich(
   if (!snapshot) return node;
   const { health, identity } = snapshot;
   if (!identity) return { ...node, health };
-  // Conditional spreads (exactOptionalPropertyTypes): only OVERWRITE a field the node actually declared;
-  // an undeclared field leaves the skeleton fallback (titleCase title / empty tagline / monogram) intact.
+  // Card model: title = the node NAME (skeleton's titleCase(slug) — never the hook), tagline = the
+  // short HOOK (≤5 words). The MISSION is the cognition-bootstrap north-star and is deliberately NOT
+  // rendered in the gallery. Conditional spreads (exactOptionalPropertyTypes) only overwrite a field
+  // the node actually declared; an undeclared field keeps the skeleton fallback (titleCase title /
+  // empty tagline / monogram).
   return {
     ...node,
     health,
-    ...(identity.hook !== null && { title: identity.hook }),
-    ...(identity.mission !== null && { tagline: identity.mission }),
+    ...(identity.hook !== null && { tagline: identity.hook }),
     ...(identity.brand.thumbnail !== null && {
       thumbnailUrl: identity.brand.thumbnail,
     }),

@@ -32,7 +32,7 @@ const CONFIG = {
 
 function identityFor(host: string): NodeIdentity {
   return {
-    slug: host.split(".")[0] ?? host,
+    name: host.split(".")[0] ?? host,
     hook: `${host} hook`,
     mission: `${host} mission`,
     brand: { thumbnail: `https://${host}/showcase/x.png`, color: "#abc" },

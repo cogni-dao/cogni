@@ -60,7 +60,7 @@ export async function GET(request: Request) {
     // `intent` (never hardcoded). The operator reads THIS to render gallery cards — no operator-side
     // per-node literals. A node customizes itself by editing repo-spec, not operator code.
     identity: {
-      slug: getNodeName(),
+      name: getNodeName(),
       hook: getNodeHook(),
       mission: getNodeMission(),
       brand: { thumbnail: getNodeThumbnail(), color: getNodeBrandColor() },

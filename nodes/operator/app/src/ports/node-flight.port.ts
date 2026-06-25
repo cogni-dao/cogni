@@ -69,7 +69,9 @@ export interface NodeFlightStatus {
  * back to a titleCase(slug) monogram).
  */
 export interface NodeIdentity {
-  readonly slug: string;
+  // 1-1 with repo-spec `intent.name` — the field is `name` in repo-spec, in the well-known projection,
+  // and here (NO split-brain). It is the node's canonical handle (== the addressing slug).
+  readonly name: string;
   readonly hook: string | null;
   readonly mission: string | null;
   readonly brand: {

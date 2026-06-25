@@ -66,6 +66,10 @@ function Banner({
         alt={`${title} homepage`}
         fill
         sizes="(min-width: 1024px) 33vw, (min-width: 640px) 50vw, 100vw"
+        // Node thumbnails are SELF-HOSTED on each node's own (often cross-origin, sovereign) domain —
+        // not operator-bundled assets. `unoptimized` loads any node domain without a next/image
+        // remotePatterns allowlist, so the gallery works for any node host with no per-domain config.
+        unoptimized
         className="object-cover object-top transition-transform group-hover:scale-105"
       />
     );

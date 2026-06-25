@@ -22,14 +22,14 @@ describe("parseWellKnownIdentity", () => {
     const body = {
       name: "Cogni Node API",
       identity: {
-        slug: "beacon",
+        name: "beacon",
         hook: "Signal in the noise",
         mission: "A community-owned beacon node",
         brand: { thumbnail: "/showcase/beacon.png", color: "#0af" },
       },
     };
     expect(parseWellKnownIdentity(body, HOST)).toEqual({
-      slug: "beacon",
+      name: "beacon",
       hook: "Signal in the noise",
       mission: "A community-owned beacon node",
       brand: {
@@ -42,7 +42,7 @@ describe("parseWellKnownIdentity", () => {
   it("leaves an already-absolute thumbnail URL intact", () => {
     const body = {
       identity: {
-        slug: "beacon",
+        name: "beacon",
         brand: { thumbnail: "https://cdn.example.com/x.png" },
       },
     };
@@ -57,17 +57,17 @@ describe("parseWellKnownIdentity", () => {
   });
 
   it("collapses undeclared fields to null (partial identity)", () => {
-    const body = { identity: { slug: "blue" } };
+    const body = { identity: { name: "blue" } };
     expect(parseWellKnownIdentity(body, HOST)).toEqual({
-      slug: "blue",
+      name: "blue",
       hook: null,
       mission: null,
       brand: { thumbnail: null, color: null },
     });
   });
 
-  it("returns null on a malformed identity block (missing required slug)", () => {
-    const body = { identity: { hook: "no slug here" } };
+  it("returns null on a malformed identity block (missing required name)", () => {
+    const body = { identity: { hook: "no name here" } };
     expect(parseWellKnownIdentity(body, HOST)).toBeNull();
   });
 

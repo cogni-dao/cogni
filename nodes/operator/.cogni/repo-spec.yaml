@@ -13,7 +13,7 @@ intent:
   # hook: punchy ~5-word gallery/heading line. mission: 1–3 sentence north-star surfaced by the cognition
   # substrate at session start. brand: self-hosted thumbnail + monogram tint. All projected to
   # /.well-known/agent.json so the operator gallery reads identity from repo-spec, never hardcodes it.
-  hook: "The AI git-manager for community-owned nodes"
+  hook: "Optimizing the tooling + CICD for node-template spawns"
   mission: "Cogni's first node — empowering AI-powered, web3-governed nodes with streamlined CI/CD, knowledge syntropy, and shared infrastructure, so each builds its mission, not its plumbing. An open-source, gitops-native substrate aligning DAO ownership, code, and knowledge into one verifiable lineage; strongest within the network, forkable to run fully sovereign."
   brand:
     # Relative to THIS node's own host (served from app public/) → operator resolves it per-env.

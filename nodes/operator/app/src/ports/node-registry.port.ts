@@ -32,11 +32,15 @@ export interface NodeSummary {
   /** Deployment identity when known. Used to join derived ledger metrics. */
   readonly nodeId?: string | undefined;
   /**
-   * Display title — the node's own `intent.hook`, read from its `/.well-known/agent.json` identity. NEVER
-   * an operator-side literal. Falls back to `titleCase(slug)` when a node has not yet projected a hook.
+   * Display title — the node's NAME (`titleCase` of its `intent.name`/slug). NEVER an operator-side
+   * literal, and NEVER the hook (which is the tagline). The mission never renders here.
    */
   readonly title: string;
-  /** One-line pitch — the node's own `intent.mission`. Empty string when undeclared (no operator literal). */
+  /**
+   * One-line pitch — the node's own `intent.hook` (≤5 words), read from its `/.well-known/agent.json`
+   * identity. Empty string when undeclared (no operator literal). The 1–3 sentence `intent.mission` is
+   * the cognition north-star and is deliberately NOT surfaced in the gallery.
+   */
   readonly tagline: string;
   readonly kind: NodeKind;
   /** Source repository identity when known. */

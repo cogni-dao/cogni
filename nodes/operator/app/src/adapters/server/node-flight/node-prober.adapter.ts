@@ -41,7 +41,7 @@ const RUN_CARRIES_TIMEOUT_MS = 70_000;
  * ignored — this only pins the shape the gallery consumes.
  */
 const wellKnownIdentitySchema = z.object({
-  slug: z.string(),
+  name: z.string(),
   hook: z.string().nullable().optional(),
   mission: z.string().nullable().optional(),
   brand: z
@@ -82,7 +82,7 @@ export function parseWellKnownIdentity(
   if (!parsed.success) return null;
   const id = parsed.data;
   return {
-    slug: id.slug,
+    name: id.name,
     hook: id.hook ?? null,
     mission: id.mission ?? null,
     brand: {
