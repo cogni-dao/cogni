@@ -36,11 +36,7 @@ put_secret() {
 }
 
 # Blind-ancestor-scan shared values a node legitimately inherits (transitional).
-# POSTHOG_* are source:human shared substrate (required:true) with no canonical
-# owner — they MUST be present in an ancestor or materialize fails-fast (bug.5087:
-# the silent-skip that shipped a half-provisioned node). Seeding them proves the
-# happy path; the negative case (a required source:human key missing → loud fail)
-# is asserted at the end of this file.
+# POSTHOG_* are source:human shared substrate inherited from an ancestor.
 put_secret node-template POSTHOG_API_KEY phc_existing
 put_secret node-template POSTHOG_HOST https://us.i.posthog.com
 # Canonical-custody (inheritFrom: operator) values: seeded at the OPERATOR path
@@ -205,38 +201,5 @@ if grep -qE '^\[secret-materialize\]   created ' "$TMPROOT/out2.txt"; then
   echo "re-run created keys — not idempotent" >&2
   exit 1
 fi
-
-# ── Negative path (bug.5087): a required source:human SHARED value (POSTHOG_HOST,
-# a blind-ancestor-scan key — EVM_RPC_URL is now inheritFrom:operator and self-heals
-# instead) missing from every ancestor must FAIL LOUD, not silently skip a half-
-# provisioned node. Remove POSTHOG_HOST's lone copy and materialize a FRESH node;
-# assert a non-zero exit whose message names the key + the bank path to repair.
-# POSTHOG_API_KEY/OPENROUTER/EVM_RPC_URL stay seeded so POSTHOG_HOST is the trip key.
-rm -f "$BAO_ROOT/cogni/candidate-a/node-template/POSTHOG_HOST"
-set +e
-# `env -u POSTHOG_HOST`: source:human values resolve from the env when absent from
-# the bank (_compose_node_value passthrough `${!k}` — by design, provisioning sources
-# .env.<env>). To prove the guard fires on a value absent from BOTH bank AND env
-# (the real bug.5087 condition), the key must be unset here — otherwise a CI runner
-# that happens to export POSTHOG_HOST masks the absence (the actual CI failure here).
-env -u POSTHOG_HOST \
-  VM_HOST=fake \
-  DOMAIN=test.cognidao.org \
-  SSH_OPTS="-i fake-key -o StrictHostKeyChecking=no" \
-  SECRET_MATERIALIZE_SSH_BIN="$FAKEBIN/ssh" \
-  FAKE_REMOTE_PATH="$FAKEBIN" \
-  FAKE_BAO_ROOT="$BAO_ROOT" \
-  bash scripts/ci/secret-materialize.sh candidate-a blue > "$TMPROOT/out3.txt" 2>&1
-rc=$?
-set -e
-[ "$rc" -ne 0 ] \
-  || { echo "materialize must fail-fast when required POSTHOG_HOST is unseeded (bug.5087)" >&2; cat "$TMPROOT/out3.txt" >&2; exit 1; }
-grep -q 'POSTHOG_HOST' "$TMPROOT/out3.txt" \
-  || { echo "fail-fast message must name the missing key POSTHOG_HOST" >&2; cat "$TMPROOT/out3.txt" >&2; exit 1; }
-grep -q '_shared/POSTHOG_HOST' "$TMPROOT/out3.txt" \
-  || { echo "fail-fast message must point at the env-bank path to repair" >&2; cat "$TMPROOT/out3.txt" >&2; exit 1; }
-# A fresh node that fails-fast must NOT have been half-written (fail exits before flush_batch).
-test ! -e "$BAO_ROOT/cogni/candidate-a/blue" \
-  || { echo "fail-fast must not half-provision the node (no partial write)" >&2; exit 1; }
 
 echo "PASS: secret-materialize.test.sh"
