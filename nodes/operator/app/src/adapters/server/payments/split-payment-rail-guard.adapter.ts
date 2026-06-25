@@ -12,14 +12,20 @@
  */
 
 import { splitV2ABI } from "@0xsplits/splits-sdk/constants/abi";
-import { hashSplitV2 } from "@0xsplits/splits-sdk/utils";
 import {
   calculateSplitAllocations,
   numberToPpm,
   OPENROUTER_CRYPTO_FEE_PPM,
   SPLIT_TOTAL_ALLOCATION,
 } from "@cogni/operator-wallet";
-import { type Address, getAddress, type Hex } from "viem";
+import {
+  type Address,
+  encodeAbiParameters,
+  getAddress,
+  type Hex,
+  keccak256,
+  parseAbiParameters,
+} from "viem";
 import {
   type PaymentRailGuardConfig,
   type PaymentRailGuardPort,
@@ -29,6 +35,15 @@ import { CHAIN_ID } from "@/shared/web3";
 import type { EvmOnchainClient } from "@/shared/web3/onchain/evm-onchain-client.interface";
 
 const DISTRIBUTION_INCENTIVE = 0;
+
+/**
+ * ABI shape of the Push Split V2o2 `SplitV2` struct whose `keccak256(abi.encode(...))`
+ * reproduces the on-chain `splitHash()`. The SDK's `hashSplitV2` does NOT match this,
+ * so we encode/hash the struct directly with viem.
+ */
+const SPLIT_V2_STRUCT_PARAMS = parseAbiParameters(
+  "(address[] recipients, uint256[] allocations, uint256 totalAllocation, uint16 distributionIncentive)"
+);
 
 export interface SplitPaymentRailGuardConfig {
   operatorAddress: string;
@@ -119,11 +134,15 @@ export class SplitPaymentRailGuardAdapter implements PaymentRailGuardPort {
       a.address.toLowerCase().localeCompare(b.address.toLowerCase())
     );
 
-    return hashSplitV2(
-      entries.map((entry) => entry.address as Address),
-      entries.map((entry) => entry.allocation),
-      SPLIT_TOTAL_ALLOCATION,
-      DISTRIBUTION_INCENTIVE
-    ) as Hex;
+    return keccak256(
+      encodeAbiParameters(SPLIT_V2_STRUCT_PARAMS, [
+        {
+          recipients: entries.map((entry) => entry.address as Address),
+          allocations: entries.map((entry) => entry.allocation),
+          totalAllocation: SPLIT_TOTAL_ALLOCATION,
+          distributionIncentive: DISTRIBUTION_INCENTIVE,
+        },
+      ])
+    );
   }
 }
