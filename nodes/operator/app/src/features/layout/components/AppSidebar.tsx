@@ -20,6 +20,7 @@ import {
   CreditCard,
   Github,
   LayoutDashboard,
+  Shield,
   Vote,
 } from "lucide-react";
 import Image from "next/image";
@@ -48,6 +49,8 @@ const NAV_ITEMS = [
   { href: "/nodes", label: "Nodes", icon: Boxes },
   { href: "/gov", label: "Gov", icon: Vote },
   { href: "/credits", label: "Credits", icon: CreditCard },
+  // Admin tab — server-gated by (admin)/layout.tsx (isDaoAdmin); non-admins redirect to /dashboard.
+  { href: "/admin", label: "Admin", icon: Shield },
 ] as const;
 
 const EXTERNAL_LINKS = [

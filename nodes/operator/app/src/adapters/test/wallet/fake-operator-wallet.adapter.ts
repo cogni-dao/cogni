@@ -23,11 +23,14 @@ export class FakeOperatorWalletAdapter implements OperatorWalletPort {
   private splitAddress = FAKE_SPLIT_ADDRESS;
   private distributeSplitResult = FAKE_TX_HASH;
   private fundTopUpResult = FAKE_TX_HASH;
+  private withdrawToStewardResult = FAKE_TX_HASH;
 
   /** Last params passed to distributeSplit */
   public lastDistributeSplitToken: string | undefined;
   /** Last params passed to fundOpenRouterTopUp */
   public lastFundTopUpIntent: TransferIntent | undefined;
+  /** Last amount passed to withdrawToSteward */
+  public lastWithdrawToStewardAmount: bigint | undefined;
 
   async getAddress(): Promise<string> {
     return this.address;
@@ -45,6 +48,11 @@ export class FakeOperatorWalletAdapter implements OperatorWalletPort {
   async fundOpenRouterTopUp(intent: TransferIntent): Promise<string> {
     this.lastFundTopUpIntent = intent;
     return this.fundTopUpResult;
+  }
+
+  async withdrawToSteward(amountUsdcAtomic: bigint): Promise<string> {
+    this.lastWithdrawToStewardAmount = amountUsdcAtomic;
+    return this.withdrawToStewardResult;
   }
 
   // ── Test helpers ──
@@ -65,13 +73,19 @@ export class FakeOperatorWalletAdapter implements OperatorWalletPort {
     this.fundTopUpResult = txHash;
   }
 
+  setWithdrawToStewardResult(txHash: string): void {
+    this.withdrawToStewardResult = txHash;
+  }
+
   reset(): void {
     this.address = FAKE_OPERATOR_ADDRESS;
     this.splitAddress = FAKE_SPLIT_ADDRESS;
     this.distributeSplitResult = FAKE_TX_HASH;
     this.fundTopUpResult = FAKE_TX_HASH;
+    this.withdrawToStewardResult = FAKE_TX_HASH;
     this.lastDistributeSplitToken = undefined;
     this.lastFundTopUpIntent = undefined;
+    this.lastWithdrawToStewardAmount = undefined;
   }
 }
 

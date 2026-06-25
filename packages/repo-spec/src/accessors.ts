@@ -17,6 +17,7 @@ import type {
   NodeRegistryEntry,
   OperatorWalletSpec,
   RepoSpec,
+  StewardWalletSpec,
 } from "./schema.js";
 
 // ---------------------------------------------------------------------------
@@ -394,6 +395,18 @@ export function extractOperatorWalletConfig(
  */
 export function extractDaoTreasuryAddress(spec: RepoSpec): string | undefined {
   return spec.cogni_dao.dao_contract;
+}
+
+/**
+ * Extract steward wallet config (payments_out.steward_wallet) from repo-spec.
+ * The steward wallet is the human-custodied address the operator wallet funds
+ * (via withdrawToSteward) so a human can settle vendor invoices in USDC.
+ * Returns undefined if payments_out is not present.
+ */
+export function extractStewardWalletConfig(
+  spec: RepoSpec
+): StewardWalletSpec | undefined {
+  return spec.payments_out?.steward_wallet;
 }
 
 /**

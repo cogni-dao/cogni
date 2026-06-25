@@ -47,6 +47,7 @@ export const EVENT_NAMES = {
   PAYMENTS_CONFIRMED: "payments.confirmed",
   PAYMENTS_STATUS_READ: "payments.status_read",
   PAYMENTS_FUNDING_COMPLETE: "payments.funding_complete",
+  PAYMENTS_STEWARD_WITHDRAWAL: "payments.steward_withdrawal",
 
   // Payments Domain - Client
   CLIENT_PAYMENTS_CREDITS_SUMMARY_HTTP_ERROR:

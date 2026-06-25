@@ -194,6 +194,7 @@ import {
   getOperatorWalletConfig,
   getPaymentConfig,
   getScopeId,
+  getStewardWalletConfig,
 } from "@/shared/config";
 import { nodes } from "@/shared/db/nodes";
 import { serverEnv } from "@/shared/env/server-env";
@@ -803,6 +804,9 @@ function createContainer(): Container {
           );
           return undefined;
         }
+        // Steward wallet is optional — when payments_out is absent the adapter
+        // fails closed on withdrawToSteward but inbound/distribute still work.
+        const stewardWalletConfig = getStewardWalletConfig();
         return new PrivyOperatorWalletAdapter({
           appId: env.PRIVY_APP_ID,
           appSecret: env.PRIVY_APP_SECRET,
@@ -814,6 +818,9 @@ function createContainer(): Container {
           revenueSharePpm: numberToPpm(paymentConfig.revenueShare),
           maxTopUpUsd: env.OPERATOR_MAX_TOPUP_USD,
           rpcUrl: env.EVM_RPC_URL,
+          ...(stewardWalletConfig
+            ? { stewardAddress: stewardWalletConfig.address }
+            : {}),
         });
       })();
 

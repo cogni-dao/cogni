@@ -83,6 +83,14 @@ payments_in:
     markup_factor: 1.10803324099723
     revenue_share: 0
 
+# Outbound: human-custodied steward wallet that settles vendor invoices
+# (OpenRouter, Cherry) via manual USDC crypto checkout. Mirrors
+# nodes/operator/.cogni/repo-spec.yaml. MVP: reuse the governance approver wallet.
+# See docs/design/node-steward-wallet.md.
+payments_out:
+  steward_wallet:
+    address: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
+
 providers:
   openrouter:
     api_host: https://openrouter.ai/api/v1

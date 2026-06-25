@@ -89,6 +89,28 @@ export interface OperatorWalletPort {
    * @param intent - TransferIntent from OpenRouter's /api/v1/credits/coinbase
    * @returns txHash on successful broadcast
    * @throws if contract not allowlisted, sender mismatch, or value exceeds cap
+   *
+   * @deprecated OpenRouter removed the Coinbase Commerce charge API (returns 410
+   * Gone). Outbound vendor funding now flows through `withdrawToSteward` + a manual
+   * human checkout — see docs/design/node-steward-wallet.md. Retained until the
+   * dead funding chain is removed.
    */
   fundOpenRouterTopUp(intent: TransferIntent): Promise<string>;
+
+  /**
+   * Fund the human-custodied steward wallet with a single USDC transfer.
+   *
+   * The destination is PINNED to the repo-spec `payments_out.steward_wallet`
+   * address (the caller controls only the amount, never the recipient). This is
+   * the operator wallet's only generic-value outbound, and it stays within
+   * NO_GENERIC_SIGNING because the method encodes a fixed ERC-20
+   * `transfer(stewardAddress, amount)` to a config-pinned recipient — not
+   * arbitrary calldata. A human then settles vendor invoices (OpenRouter, Cherry)
+   * in USDC from that wallet via each vendor's hosted crypto checkout.
+   *
+   * @param amountUsdcAtomic - USDC atomic units (6 decimals) to transfer
+   * @returns txHash on successful broadcast
+   * @throws if the steward wallet is not configured or the amount exceeds the per-tx cap
+   */
+  withdrawToSteward(amountUsdcAtomic: bigint): Promise<string>;
 }

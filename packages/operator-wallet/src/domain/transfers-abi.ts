@@ -59,3 +59,21 @@ export const ERC20_APPROVE_ABI = [
     outputs: [{ name: "", type: "bool" }],
   },
 ] as const;
+
+/**
+ * Minimal ERC-20 ABI — transfer only.
+ * Used by withdrawToSteward to move USDC from the operator wallet to the
+ * config-pinned steward wallet (a plain transfer, not a contract checkout).
+ */
+export const ERC20_TRANSFER_ABI = [
+  {
+    name: "transfer",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "to", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [{ name: "", type: "bool" }],
+  },
+] as const;

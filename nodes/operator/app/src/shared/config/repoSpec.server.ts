@@ -29,12 +29,14 @@ import {
   extractNodeThumbnail,
   extractOperatorWalletConfig,
   extractPaymentConfig,
+  extractStewardWalletConfig,
   type GovernanceConfig,
   type InboundPaymentConfig,
   type KnowledgeConfig,
   type OperatorWalletSpec,
   parseRepoSpec,
   type RepoSpec,
+  type StewardWalletSpec,
 } from "@cogni/repo-spec";
 import { serverEnv } from "@/shared/env";
 
@@ -197,6 +199,31 @@ export function getLedgerApprovers(): string[] {
   return cachedLedgerApprovers;
 }
 
+/**
+ * True when the wallet is a repo-spec ledger approver (activity_ledger.approvers).
+ * Mirrors node-template's gate. Empty allowlist → always false.
+ */
+export function isLedgerApprover(wallet: string | null | undefined): boolean {
+  if (!wallet) return false;
+  return getLedgerApprovers().includes(wallet.toLowerCase());
+}
+
+/**
+ * DAO-admin gate for the `(admin)` route group. A wallet is an admin when it is a
+ * ledger approver OR the configured steward wallet (payments_out.steward_wallet).
+ *
+ * The steward-wallet clause lets the operator node gate its admin tab on the
+ * governance approver/admin wallet WITHOUT requiring a full `activity_ledger` block
+ * in its runtime repo-spec (which would synthesize a LEDGER_INGEST schedule as a
+ * side effect). At MVP steward == approver == admin (the same wallet).
+ */
+export function isDaoAdmin(wallet: string | null | undefined): boolean {
+  if (!wallet) return false;
+  if (isLedgerApprover(wallet)) return true;
+  const steward = getStewardWalletConfig();
+  return !!steward && steward.address.toLowerCase() === wallet.toLowerCase();
+}
+
 let cachedOperatorWalletConfig: OperatorWalletSpec | undefined | null = null;
 
 /**
@@ -223,6 +250,21 @@ export function getDaoTreasuryAddress(): string | undefined {
   const spec = loadRepoSpec();
   cachedDaoTreasuryAddress = extractDaoTreasuryAddress(spec);
   return cachedDaoTreasuryAddress;
+}
+
+let cachedStewardWalletConfig: StewardWalletSpec | undefined | null = null;
+
+/**
+ * Steward wallet configuration from repo-spec (payments_out.steward_wallet).
+ * The human-custodied address the operator wallet funds via withdrawToSteward.
+ * Returns undefined if payments_out is not present.
+ */
+export function getStewardWalletConfig(): StewardWalletSpec | undefined {
+  if (cachedStewardWalletConfig !== null) return cachedStewardWalletConfig;
+
+  const spec = loadRepoSpec();
+  cachedStewardWalletConfig = extractStewardWalletConfig(spec);
+  return cachedStewardWalletConfig;
 }
 
 let cachedKnowledgeConfig: KnowledgeConfig | undefined | null = null;

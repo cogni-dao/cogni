@@ -24,6 +24,7 @@ import {
 } from "../../domain/split-allocation.js";
 import {
   ERC20_APPROVE_ABI,
+  ERC20_TRANSFER_ABI,
   TRANSFERS_ABI,
 } from "../../domain/transfers-abi.js";
 import type {
@@ -70,6 +71,12 @@ export interface PrivyOperatorWalletConfig {
   splitAddress: string;
   /** DAO treasury address from repo-spec (cogni_dao.dao_contract) */
   treasuryAddress: string;
+  /**
+   * Human-custodied steward wallet address (repo-spec payments_out.steward_wallet).
+   * Optional — when absent, withdrawToSteward fails closed. Pinned destination
+   * for outbound vendor funding; the caller can never choose the recipient.
+   */
+  stewardAddress?: string;
   /** Billing markup factor in PPM (e.g., 2_000_000n for 2.0x) */
   markupPpm: bigint;
   /** Revenue share in PPM (e.g., 750_000n for 75%) */
@@ -91,6 +98,7 @@ export class PrivyOperatorWalletAdapter implements OperatorWalletPort {
   private readonly expectedAddress: string;
   private readonly splitAddress: string;
   private readonly treasuryAddress: string;
+  private readonly stewardAddress: string | undefined;
   private readonly markupPpm: bigint;
   private readonly revenueSharePpm: bigint;
   private readonly maxTopUpUsd: number;
@@ -109,6 +117,9 @@ export class PrivyOperatorWalletAdapter implements OperatorWalletPort {
     this.expectedAddress = getAddress(config.expectedAddress);
     this.splitAddress = getAddress(config.splitAddress);
     this.treasuryAddress = getAddress(config.treasuryAddress);
+    this.stewardAddress = config.stewardAddress
+      ? getAddress(config.stewardAddress)
+      : undefined;
     this.markupPpm = config.markupPpm;
     this.revenueSharePpm = config.revenueSharePpm;
     this.maxTopUpUsd = config.maxTopUpUsd;
@@ -342,6 +353,62 @@ export class PrivyOperatorWalletAdapter implements OperatorWalletPort {
         },
         authorization_context: this.authContext,
       });
+
+    return result.hash;
+  }
+
+  async withdrawToSteward(amountUsdcAtomic: bigint): Promise<string> {
+    await this.verify();
+
+    // Gate 1: STEWARD_CONFIGURED — fail closed when no destination is pinned
+    if (!this.stewardAddress) {
+      throw new Error(
+        "[OperatorWallet] STEWARD_NOT_CONFIGURED: payments_out.steward_wallet " +
+          "missing from repo-spec — cannot fund the steward wallet"
+      );
+    }
+
+    // Gate 2: POSITIVE_AMOUNT
+    if (amountUsdcAtomic <= 0n) {
+      throw new Error(
+        `[OperatorWallet] INVALID_AMOUNT: ${amountUsdcAtomic} must be > 0`
+      );
+    }
+
+    // Gate 3: MAX_TOPUP_CAP — reuse the per-tx USD cap that bounds top-ups
+    const capUsdc = BigInt(this.maxTopUpUsd) * 10n ** USDC_DECIMALS;
+    if (amountUsdcAtomic > capUsdc) {
+      throw new Error(
+        `[OperatorWallet] MAX_TOPUP_CAP: ${amountUsdcAtomic} exceeds cap ${capUsdc} ` +
+          `(${this.maxTopUpUsd} USD)`
+      );
+    }
+
+    // Fixed ERC-20 transfer to the config-pinned steward address. The caller
+    // controls only the amount, never the recipient (NO_GENERIC_SIGNING).
+    const data = encodeFunctionData({
+      abi: ERC20_TRANSFER_ABI,
+      functionName: "transfer",
+      args: [this.stewardAddress as Address, amountUsdcAtomic],
+    });
+
+    const result = await this.client
+      .wallets()
+      .ethereum()
+      .sendTransaction(this.getWalletId(), {
+        caip2: BASE_CAIP2,
+        params: {
+          transaction: { to: USDC_ADDRESS, data, value: 0 },
+        },
+        authorization_context: this.authContext,
+      });
+
+    // Wait for confirmation so the steward wallet balance is settled before
+    // a human is told to proceed with the vendor checkout.
+    await this.rpcClient.waitForTransactionReceipt({
+      hash: result.hash as Hex,
+      confirmations: 1,
+    });
 
     return result.hash;
   }

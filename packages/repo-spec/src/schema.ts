@@ -268,6 +268,30 @@ export const operatorWalletSpecSchema = z.object({
 
 export type OperatorWalletSpec = z.infer<typeof operatorWalletSpecSchema>;
 
+/**
+ * Schema for payments_out.steward_wallet configuration.
+ *
+ * The steward wallet is a HUMAN-CUSTODIED wallet (EOA / hardware wallet) that
+ * settles vendor invoices the operator wallet cannot pay programmatically —
+ * vendors whose crypto checkout is a per-session / per-invoice hosted flow
+ * (OpenRouter Coinbase Business Checkout; Cherry → Coingate). The operator
+ * Privy wallet funds this one pinned address via a single constrained transfer
+ * (OperatorWalletPort.withdrawToSteward); a human then completes each vendor
+ * checkout in USDC. Deliberately node-generic and NOT named "operator" to avoid
+ * overloading the operator node / operator wallet. See docs/design/node-steward-wallet.md.
+ */
+export const stewardWalletSpecSchema = z.object({
+  /** Checksummed EVM address of the human-custodied steward wallet (USDC on Base). */
+  address: z
+    .string()
+    .regex(
+      /^0x[a-fA-F0-9]{40}$/,
+      "Steward wallet address must be a valid EVM address (0x + 40 hex chars)"
+    ),
+});
+
+export type StewardWalletSpec = z.infer<typeof stewardWalletSpecSchema>;
+
 function isDoltHubRemoteUrl(value: string): boolean {
   try {
     const url = new URL(value);
@@ -542,6 +566,19 @@ export const repoSpecSchema = z
       .object({
         /** Inbound payment configuration for USDC credits top-up */
         credits_topup: creditsTopupSpecSchema,
+      })
+      .optional(),
+
+    /**
+     * Outbound payment configuration (optional). Declares the human-custodied
+     * steward wallet that settles vendor invoices via manual crypto checkout.
+     * Besides the 0xSplits distribute, this is the operator wallet's only
+     * outbound destination (a single pinned address, funded by withdrawToSteward).
+     */
+    payments_out: z
+      .object({
+        /** Human-custodied wallet that settles vendor invoices (OpenRouter, Cherry). */
+        steward_wallet: stewardWalletSpecSchema,
       })
       .optional(),
 
