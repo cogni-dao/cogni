@@ -1145,11 +1145,11 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
     // Same-org cross-fork PRs can't disambiguate by `owner:branch`, so materialize the upstream commit
     // as a branch IN the fork (reachable via the shared fork network) + a SAME-repo PR head→base.
     const octokit = await this.getOctokit(forkOwner, forkRepo);
-    // Tier-3 carve-out: rewrite the upstream tip so node-local (identity/presentation) paths match the
-    // FORK's main, then point the branch at that commit. The PR diff then carries Tier-2 substrate only,
-    // so node-template's starter presentation never lands and the merge stops conflicting on node-local
-    // UI/branding (THREE_TIER_CARVE_OUT, spec.repo-sync-contract). Empty list ⇒ legacy whole-repo merge.
-    const branchSha = await this.carveOutNodeLocalPaths(
+    // Build the always-mergeable Tier-2 merge commit: base on the fork tip, overlay node-template's
+    // shared (non-node-local) blobs so node-template wins Tier-2, leave Tier-3 (node_local) the fork's,
+    // and parent on the fork tip so the upstream branch is a descendant of fork main → the PR is always
+    // conflict-free (TIER2_IS_ALWAYS_MERGEABLE, spec.repo-sync-contract). No fork-owner conflict resolution.
+    const branchSha = await this.buildUpstreamMergeCommit(
       octokit,
       forkOwner,
       forkRepo,
@@ -1213,11 +1213,12 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
           .join("\n")
       : "_(no commits — see the Commits tab)_";
     const body =
-      `Merges node-template upstream into this fork, preserving your customizations ` +
-      `(a merge, not an overwrite). One PR, force-updated as node-template advances.\n\n` +
+      `Merges node-template's Tier-2 substrate into this fork. node-template is authoritative for ` +
+      `shared substrate (Tier-2, auto-updated); your node identity/presentation (Tier-3, \`node_local\`) ` +
+      `and fork-unique files are preserved. Always conflict-free — safe to merge as-is. ` +
+      `One PR, force-updated as node-template advances.\n\n` +
       `Up to \`${templateOwner}/${templateRepo}@${templateSha.slice(0, 8)}\` — node-template changes:\n` +
       `${log}\n\n` +
-      `Review + resolve conflicts as the fork owner. Optional — close to skip.\n` +
       `_Maintained automatically by cogni-operator._`;
     await this.updatePrBody(
       octokit,
@@ -1628,17 +1629,25 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
   }
 
   /**
-   * Tier-3 carve-out. Build a commit atop `templateSha` whose node-local (identity/presentation) paths
-   * are restored to the FORK's `forkBranch` version, returning that commit SHA (or `templateSha`
-   * unchanged when nothing diverges / no globs declared). The upstream branch then points here, so a
-   * SAME-repo PR head=branch → base=forkBranch shows only Tier-2 substrate deltas — node-template's
-   * starter presentation is never in the diff. Uses recursive trees on both sides:
-   *   - a node-local path present on the fork → override the upstream blob with the fork's blob;
-   *   - a node-local path that exists on upstream but NOT the fork → delete it from the branch tip
-   *     (so an upstream-introduced presentation file can't ride in).
-   * @returns the carved commit SHA, or `templateSha` if there is nothing to carve.
+   * Build the always-mergeable Tier-2 sync commit, realizing the three-tier model
+   * (spec.repo-sync-contract): **node-template is AUTHORITATIVE for Tier-2** ("foundational
+   * substrate, auto-updated") while the **fork OWNS Tier-3** (`node_local` identity/presentation,
+   * never touched). Construction:
+   *   - start from the FORK's `forkBranch` tree as the base, so fork-unique files survive;
+   *   - overlay node-template's blob (preserving its mode — scripts stay executable) for every
+   *     NON-node-local path that differs → node-template wins shared files
+   *     (`TIER2_NODE_TEMPLATE_AUTHORITATIVE`). This is what resolves the recurring conflict class:
+   *     a fork that drifted in a shared path (e.g. a hand-ported fix re-authored with a different
+   *     comment — `ONE_FIX_ONE_LINEAGE`) is simply overwritten with node-template's version;
+   *   - leave node-local paths as the fork's (`TIER3_NEVER_SYNCED`);
+   *   - parent the commit on BOTH the fork tip AND `templateSha`, so the upstream branch is a
+   *     descendant of fork `main`. The same-repo PR head=branch → base=forkBranch is therefore
+   *     ALWAYS conflict-free (`TIER2_IS_ALWAYS_MERGEABLE`), no fork-owner conflict resolution.
+   * Limitation: node-template's *deletions* of shared files do not propagate (a fork keeps a shared
+   * file node-template removed) — we never delete from the fork tree here, to protect fork-unique files.
+   * @returns the merge commit SHA, or the fork tip SHA when nothing in Tier-2 differs (PR no-ops → up_to_date).
    */
-  private async carveOutNodeLocalPaths(
+  private async buildUpstreamMergeCommit(
     octokit: Octokit,
     owner: string,
     repo: string,
@@ -1646,41 +1655,49 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
     templateSha: string,
     nodeLocalPaths: readonly string[]
   ): Promise<string> {
-    if (nodeLocalPaths.length === 0) return templateSha;
-    const isNodeLocal = makeNodeLocalMatcher(nodeLocalPaths);
+    const isNodeLocal = nodeLocalPaths.length
+      ? makeNodeLocalMatcher(nodeLocalPaths)
+      : () => false;
 
-    // Fork main tip → its tree (the source of restored blobs); upstream tip → its tree (the base we edit).
-    const forkBlobs = await this.listTreeBlobs(
+    // Fork tip → base tree (fork-unique files + Tier-3 ride along untouched).
+    const forkMainSha = await this.resolveCommitSha(
       octokit,
       owner,
       repo,
-      `heads/${forkBranch}`
+      forkBranch
     );
-    const { tipTreeSha: upstreamTreeSha, blobs: upstreamBlobs } =
-      await this.listTreeBlobsAtCommit(octokit, owner, repo, templateSha);
+    const { tipTreeSha: forkTreeSha, blobs: forkBlobs } =
+      await this.listTreeBlobsAtCommit(octokit, owner, repo, forkMainSha);
+
+    // Upstream tip → recursive tree WITH modes (overlay source; node-template wins Tier-2).
+    const { data: upstreamCommit } = await octokit.request(
+      "GET /repos/{owner}/{repo}/git/commits/{commit_sha}",
+      { owner, repo, commit_sha: templateSha }
+    );
+    const { data: upstreamTree } = await octokit.request(
+      "GET /repos/{owner}/{repo}/git/trees/{tree_sha}",
+      { owner, repo, tree_sha: upstreamCommit.tree.sha, recursive: "1" }
+    );
 
     const entries: GitTreeEntry[] = [];
-    const seen = new Set<string>();
-    // Restore every node-local path the fork carries to the fork's blob.
-    for (const [path, sha] of forkBlobs) {
-      if (!isNodeLocal(path)) continue;
-      seen.add(path);
-      // Unchanged on both sides → no tree entry needed.
-      if (upstreamBlobs.get(path) === sha) continue;
-      entries.push({ path, mode: "100644", type: "blob", sha });
-    }
-    // Delete node-local paths upstream introduced that the fork does NOT have.
-    for (const [path] of upstreamBlobs) {
-      if (seen.has(path) || !isNodeLocal(path)) continue;
-      if (forkBlobs.has(path)) continue;
-      entries.push({ path, mode: "100644", type: "blob", sha: null });
+    for (const e of upstreamTree.tree) {
+      if (e.type !== "blob" || !e.path || !e.sha || !e.mode) continue;
+      if (isNodeLocal(e.path)) continue; // Tier-3 stays the fork's.
+      if (forkBlobs.get(e.path) === e.sha) continue; // already identical.
+      entries.push({
+        path: e.path,
+        mode: e.mode as GitTreeEntry["mode"],
+        type: "blob",
+        sha: e.sha,
+      });
     }
 
-    if (entries.length === 0) return templateSha;
+    // Nothing in Tier-2 differs → fork already current; caller's PR-open no-ops to up_to_date.
+    if (entries.length === 0) return forkMainSha;
 
     const { data: tree } = await octokit.request(
       "POST /repos/{owner}/{repo}/git/trees",
-      { owner, repo, base_tree: upstreamTreeSha, tree: entries }
+      { owner, repo, base_tree: forkTreeSha, tree: entries }
     );
     const { data: commit } = await octokit.request(
       "POST /repos/{owner}/{repo}/git/commits",
@@ -1688,28 +1705,12 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
         owner,
         repo,
         message:
-          "chore: merge node-template upstream (node-local presentation preserved)",
+          "chore: merge node-template upstream (Tier-2 substrate; Tier-3 identity preserved)",
         tree: tree.sha,
-        parents: [templateSha],
+        parents: [forkMainSha, templateSha],
       }
     );
     return commit.sha;
-  }
-
-  /** Resolve a ref's commit → its recursive blob map (`path → blob sha`). */
-  private async listTreeBlobs(
-    octokit: Octokit,
-    owner: string,
-    repo: string,
-    ref: string
-  ): Promise<Map<string, string>> {
-    const { data: refData } = await octokit.request(
-      "GET /repos/{owner}/{repo}/git/ref/{ref}",
-      { owner, repo, ref }
-    );
-    return (
-      await this.listTreeBlobsAtCommit(octokit, owner, repo, refData.object.sha)
-    ).blobs;
   }
 
   /** Resolve a commit SHA → its tip tree SHA + recursive blob map (`path → blob sha`). */

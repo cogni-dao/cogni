@@ -1748,15 +1748,63 @@ describe("GitHubRepoWriter.syncTemplateUpstreamToFork", () => {
     forkBranch: "main",
   });
 
-  it("force-updates the stable branch and refreshes the PR body with the commit changelog", async () => {
+  // Mock the tree-walk buildUpstreamMergeCommit performs: fork tip → fork tree, upstream tip → upstream tree.
+  const treeWalk = (
+    forkTree: Array<{ path: string; sha: string; mode?: string }>,
+    upstreamTree: Array<{ path: string; sha: string; mode?: string }>
+  ) => ({
+    "GET /repos/{owner}/{repo}/git/ref/{ref}": (params: { ref: string }) => {
+      expect(params.ref).toBe("heads/main");
+      return { object: { sha: "fork-main-commit" } };
+    },
+    "GET /repos/{owner}/{repo}/git/commits/{commit_sha}": (params: {
+      commit_sha: string;
+    }) =>
+      params.commit_sha === "fork-main-commit"
+        ? { tree: { sha: "fork-tree" } }
+        : { tree: { sha: "upstream-tree" } },
+    "GET /repos/{owner}/{repo}/git/trees/{tree_sha}": (params: {
+      tree_sha: string;
+      recursive: string;
+    }) => {
+      expect(params.recursive).toBe("1");
+      const src = params.tree_sha === "fork-tree" ? forkTree : upstreamTree;
+      return { tree: src.map((e) => ({ ...e, mode: e.mode ?? "100644", type: "blob" })) };
+    },
+  });
+
+  it("node-template wins Tier-2: overlays differing shared blobs (mode preserved), force-updates the branch, refreshes the PR changelog", async () => {
+    let treeEntries: Array<{ path: string; mode: string; sha: string }> = [];
     routeHandlers = {
-      // upsertRef: branch exists → PATCH force
+      ...treeWalk(
+        [{ path: "app/src/app/api/x/route.ts", sha: "fork-x" }],
+        [
+          // shared file the fork drifted on → node-template wins
+          { path: "app/src/app/api/x/route.ts", sha: "tmpl-x" },
+          // new executable script → overlaid with its mode preserved
+          { path: "scripts/provision.sh", sha: "tmpl-prov", mode: "100755" },
+        ]
+      ),
+      "POST /repos/{owner}/{repo}/git/trees": (params) => {
+        // Base is the FORK tree (fork-unique files ride along), overlay is node-template's.
+        expect(params.base_tree).toBe("fork-tree");
+        treeEntries = params.tree as typeof treeEntries;
+        return { sha: "merged-tree" };
+      },
+      "POST /repos/{owner}/{repo}/git/commits": (params) => {
+        // Parented on BOTH fork tip + template → branch is a descendant of fork main (always mergeable).
+        expect(params).toMatchObject({
+          tree: "merged-tree",
+          parents: ["fork-main-commit", SHA],
+        });
+        return { sha: "merge-commit" };
+      },
       "POST /repos/{owner}/{repo}/git/refs": () =>
         Promise.reject(statusError(422, "Reference already exists")),
       "PATCH /repos/{owner}/{repo}/git/refs/{ref}": (params) => {
         expect(params).toMatchObject({
           ref: `heads/${UPSTREAM_BRANCH}`,
-          sha: SHA,
+          sha: "merge-commit",
           force: true,
         });
         return {};
@@ -1796,187 +1844,51 @@ describe("GitHubRepoWriter.syncTemplateUpstreamToFork", () => {
       prNumber: 5,
       prUrl: "https://github.com/cogni-test-org/blue/pull/5",
     });
-  });
-
-  it("returns up_to_date when no commits separate the fork from upstream and no PR exists", async () => {
-    routeHandlers = {
-      "POST /repos/{owner}/{repo}/git/refs": () => ({}),
-      "POST /repos/{owner}/{repo}/pulls": () =>
-        Promise.reject(statusError(422, "No commits between main and main")),
-      "GET /repos/{owner}/{repo}/pulls": () => [],
-    };
-    const result = await makeWriter().syncTemplateUpstreamToFork(
-      upstreamInput()
-    );
-    expect(result).toEqual({ status: "up_to_date" });
-  });
-
-  it("Tier-3 carve-out: restores the fork's node-local paths + deletes upstream-only ones, then points the branch at the carved commit", async () => {
-    const FORK_TREE = "fork-tree";
-    const UPSTREAM_TREE = "upstream-tree";
-    const CARVED_COMMIT = "carved-commit-sha";
-    let treeEntries: Array<{ path: string; sha: string | null }> = [];
-
-    routeHandlers = {
-      "GET /repos/{owner}/{repo}/git/ref/{ref}": (params) => {
-        // listTreeBlobs(heads/main) resolves the fork tip.
-        expect(params.ref).toBe("heads/main");
-        return { object: { sha: "fork-main-commit" } };
-      },
-      "GET /repos/{owner}/{repo}/git/commits/{commit_sha}": (params) => {
-        if (params.commit_sha === "fork-main-commit") {
-          return { tree: { sha: FORK_TREE } };
-        }
-        expect(params.commit_sha).toBe(SHA); // upstream tip
-        return { tree: { sha: UPSTREAM_TREE } };
-      },
-      "GET /repos/{owner}/{repo}/git/trees/{tree_sha}": (params) => {
-        expect(params.recursive).toBe("1");
-        if (params.tree_sha === FORK_TREE) {
-          return {
-            tree: [
-              // node-local, fork-customized → must be restored to fork blob
-              {
-                path: "app/src/app/(public)/page.tsx",
-                type: "blob",
-                sha: "fork-home",
-              },
-              {
-                path: ".cogni/repo-spec.yaml",
-                type: "blob",
-                sha: "fork-spec",
-              },
-              // substrate → must NOT appear in carve entries
-              {
-                path: "packages/knowledge-base/src/seeds/base.ts",
-                type: "blob",
-                sha: "fork-sub",
-              },
-            ],
-          };
-        }
-        expect(params.tree_sha).toBe(UPSTREAM_TREE);
-        return {
-          tree: [
-            {
-              path: "app/src/app/(public)/page.tsx",
-              type: "blob",
-              sha: "tmpl-home",
-            },
-            { path: ".cogni/repo-spec.yaml", type: "blob", sha: "tmpl-spec" },
-            // upstream-introduced node-local file the fork lacks → must be deleted
-            {
-              path: "app/src/app/(public)/about/page.tsx",
-              type: "blob",
-              sha: "tmpl-about",
-            },
-            {
-              path: "packages/knowledge-base/src/seeds/base.ts",
-              type: "blob",
-              sha: "tmpl-sub",
-            },
-          ],
-        };
-      },
-      "POST /repos/{owner}/{repo}/git/trees": (params) => {
-        expect(params.base_tree).toBe(UPSTREAM_TREE);
-        treeEntries = params.tree as typeof treeEntries;
-        return { sha: "carved-tree" };
-      },
-      "POST /repos/{owner}/{repo}/git/commits": (params) => {
-        expect(params).toMatchObject({
-          tree: "carved-tree",
-          parents: [SHA],
-        });
-        return { sha: CARVED_COMMIT };
-      },
-      // upsertRef points UPSTREAM_BRANCH at the CARVED commit, not the raw template sha.
-      "POST /repos/{owner}/{repo}/git/refs": () =>
-        Promise.reject(statusError(422, "Reference already exists")),
-      "PATCH /repos/{owner}/{repo}/git/refs/{ref}": (params) => {
-        expect(params).toMatchObject({
-          ref: `heads/${UPSTREAM_BRANCH}`,
-          sha: CARVED_COMMIT,
-          force: true,
-        });
-        return {};
-      },
-      "POST /repos/{owner}/{repo}/pulls": () => ({
-        number: 5,
-        html_url: "https://github.com/cogni-test-org/blue/pull/5",
-      }),
-      "GET /repos/{owner}/{repo}/pulls/{pull_number}/commits": () => [],
-      "PATCH /repos/{owner}/{repo}/pulls/{pull_number}": () => ({}),
-    };
-
-    const result = await makeWriter().syncTemplateUpstreamToFork({
-      ...upstreamInput(),
-      nodeLocalPaths: ["app/src/app/(public)/**", ".cogni/repo-spec.yaml"],
-    });
-
-    expect(result).toMatchObject({ status: "pr_opened", prNumber: 5 });
-
-    // home + repo-spec restored to FORK blobs; the upstream-only about page deleted; substrate untouched.
     expect(treeEntries).toEqual(
       expect.arrayContaining([
         {
-          path: "app/src/app/(public)/page.tsx",
+          path: "app/src/app/api/x/route.ts",
           mode: "100644",
           type: "blob",
-          sha: "fork-home",
+          sha: "tmpl-x",
         },
+        // mode 100755 preserved — overlaid scripts stay executable.
         {
-          path: ".cogni/repo-spec.yaml",
-          mode: "100644",
+          path: "scripts/provision.sh",
+          mode: "100755",
           type: "blob",
-          sha: "fork-spec",
-        },
-        {
-          path: "app/src/app/(public)/about/page.tsx",
-          mode: "100644",
-          type: "blob",
-          sha: null,
+          sha: "tmpl-prov",
         },
       ])
     );
-    expect(
-      treeEntries.some((e) => e.path.startsWith("packages/knowledge-base"))
-    ).toBe(false);
   });
 
-  it("skips the carve commit entirely when no node-local path diverges (branch stays at template sha)", async () => {
+  it("Tier-3 + fork-unique files are preserved (never overlaid), and the PR is built on the fork tip", async () => {
+    let treeEntries: Array<{ path: string; sha: string }> = [];
     routeHandlers = {
-      "GET /repos/{owner}/{repo}/git/ref/{ref}": () => ({
-        object: { sha: "fork-main-commit" },
-      }),
-      "GET /repos/{owner}/{repo}/git/commits/{commit_sha}": (params) =>
-        params.commit_sha === "fork-main-commit"
-          ? { tree: { sha: "fork-tree" } }
-          : { tree: { sha: "upstream-tree" } },
-      "GET /repos/{owner}/{repo}/git/trees/{tree_sha}": () => ({
-        // Identical node-local blob on both sides → no override needed.
-        tree: [
-          {
-            path: "app/src/app/(public)/page.tsx",
-            type: "blob",
-            sha: "same-home",
-          },
+      ...treeWalk(
+        [
+          { path: "app/src/adapters/onchain.ts", sha: "fork-onchain" }, // shared, drifted
+          { path: "app/src/app/(public)/page.tsx", sha: "fork-home" }, // node_local
+          { path: "app/src/features/fork-only.ts", sha: "fork-only" }, // fork-unique
         ],
-      }),
+        [
+          { path: "app/src/adapters/onchain.ts", sha: "tmpl-onchain" }, // → node-template wins
+          { path: "app/src/app/(public)/page.tsx", sha: "tmpl-home" }, // node_local → skipped
+        ]
+      ),
+      "POST /repos/{owner}/{repo}/git/trees": (params) => {
+        expect(params.base_tree).toBe("fork-tree");
+        treeEntries = params.tree as typeof treeEntries;
+        return { sha: "merged-tree" };
+      },
+      "POST /repos/{owner}/{repo}/git/commits": () => ({ sha: "merge-commit" }),
       "POST /repos/{owner}/{repo}/git/refs": () =>
         Promise.reject(statusError(422, "Reference already exists")),
-      "PATCH /repos/{owner}/{repo}/git/refs/{ref}": (params) => {
-        // No carve commit → branch points at the raw template sha.
-        expect(params).toMatchObject({
-          ref: `heads/${UPSTREAM_BRANCH}`,
-          sha: SHA,
-          force: true,
-        });
-        return {};
-      },
+      "PATCH /repos/{owner}/{repo}/git/refs/{ref}": () => ({}),
       "POST /repos/{owner}/{repo}/pulls": () => ({
-        number: 6,
-        html_url: "https://github.com/cogni-test-org/blue/pull/6",
+        number: 7,
+        html_url: "https://github.com/cogni-test-org/blue/pull/7",
       }),
       "GET /repos/{owner}/{repo}/pulls/{pull_number}/commits": () => [],
       "PATCH /repos/{owner}/{repo}/pulls/{pull_number}": () => ({}),
@@ -1987,7 +1899,37 @@ describe("GitHubRepoWriter.syncTemplateUpstreamToFork", () => {
       nodeLocalPaths: ["app/src/app/(public)/**"],
     });
 
-    expect(result).toMatchObject({ status: "pr_opened", prNumber: 6 });
+    expect(result).toMatchObject({ status: "pr_opened", prNumber: 7 });
+    // Only the drifted shared file is overlaid with node-template's blob.
+    expect(treeEntries).toEqual([
+      {
+        path: "app/src/adapters/onchain.ts",
+        mode: "100644",
+        type: "blob",
+        sha: "tmpl-onchain",
+      },
+    ]);
+    // node_local (page.tsx) and fork-unique (fork-only.ts) never appear in the overlay.
+    expect(treeEntries.some((e) => e.path.endsWith("page.tsx"))).toBe(false);
+    expect(treeEntries.some((e) => e.path.endsWith("fork-only.ts"))).toBe(false);
+  });
+
+  it("returns up_to_date when no Tier-2 path differs (no merge commit, no PR)", async () => {
+    routeHandlers = {
+      ...treeWalk(
+        [{ path: "app/src/app/api/x/route.ts", sha: "same" }],
+        [{ path: "app/src/app/api/x/route.ts", sha: "same" }]
+      ),
+      // entries empty → branch points at fork tip → PR open no-ops (no commits).
+      "POST /repos/{owner}/{repo}/git/refs": () => ({}),
+      "POST /repos/{owner}/{repo}/pulls": () =>
+        Promise.reject(statusError(422, "No commits between main and main")),
+      "GET /repos/{owner}/{repo}/pulls": () => [],
+    };
+    const result = await makeWriter().syncTemplateUpstreamToFork(
+      upstreamInput()
+    );
+    expect(result).toEqual({ status: "up_to_date" });
     expect(requests.map((r) => r.route)).not.toContain(
       "POST /repos/{owner}/{repo}/git/commits"
     );
