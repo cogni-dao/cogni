@@ -3,24 +3,28 @@
 
 /**
  * Module: `@features/fleet/FleetInfraCard`
- * Purpose: The dashboard's lead card (story.5013 v0) — a personal Fleet/Infra view that replaces the
- *   old live-stream `process_health` card. SERVERS sub-card = compute-provider balances; NODES grid =
- *   the viewer's own nodes with per-env (Test / Preview / Production) health, buildSha, replicas, and a
- *   live-envs rollup. Current-state only; no charts / uptime bars (vFuture).
- * Scope: Client island. Renders from the fleet react-query hooks; handles loading (Skeleton),
- *   empty, and error states gracefully. No business logic, no metric emit.
- * Invariants: PERSONAL_SCOPE (own nodes only — no all-nodes/fleet read), ON_DEMAND_READ (poll, never
- *   a gauge), REUSE_ONLY (existing shadcn primitives, no new dep), FULL_SHAPE (consumes the whole
- *   deploy-state cell so null-today fields enrich with zero UI change).
- * Side-effects: IO (via React Query hooks)
- * Links: ./use-fleet.ts, ./fleet-schemas.ts, GET /api/v1/compute/balances,
- *   GET /api/v1/nodes/[id]/deploy-state, story.5013
+ * Purpose: The dashboard's lead card (story.5013 v0) — a Fleet/Infra view that replaces the old
+ *   live-stream `process_health` card. SERVERS sub-card = compute-provider balances (client poll).
+ *   NODES table = the REAL live network, sourced server-side from `NodeRegistryPort.listPublic()` (the
+ *   same honest, cached, prod-live ∩ registry list the homepage/gallery render) and passed in as a
+ *   prop — NOT a client per-node deploy-state fan-out (that was RBAC-403'd and rendered "live nowhere"
+ *   for everything). Current-state only; no charts / uptime bars (vFuture).
+ * Scope: Client island. SERVERS renders from a react-query hook (Skeleton/empty/error states). NODES
+ *   is presentational over the injected, already-filtered list. No business logic, no metric emit.
+ * Invariants: LIVE_ONLY (listPublic() = registry ∩ verified-live prod, so every row is live — no
+ *   "live nowhere", no junk wizard nodes), PRIMARY_FIRST (operator/primary nodes sort first),
+ *   REUSE_ONLY (existing shadcn Table + Badge primitives, no new dep), NO_RBAC_FANOUT (the registry is
+ *   public + cached server-side, never per-node 403'd).
+ * Side-effects: IO (SERVERS via the React Query hook only).
+ * Links: ./use-fleet.ts, ./fleet-schemas.ts, src/ports/node-registry.port.ts (NodeSummary),
+ *   GET /api/v1/compute/balances, story.5013
  * @public
  */
 
 "use client";
 
 import { Server } from "lucide-react";
+import Link from "next/link";
 import type { ReactElement } from "react";
 
 import {
@@ -37,12 +41,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components";
-import type {
-  ComputeBalanceVM,
-  DeployEnvVM,
-  NodeFleetVM,
-} from "./fleet-schemas";
-import { useComputeBalances, useFleetNodes } from "./use-fleet";
+import type { NodeSummary } from "@/ports";
+import type { ComputeBalanceVM } from "./fleet-schemas";
+import { useComputeBalances } from "./use-fleet";
 
 /* ─── helpers ─── */
 
@@ -59,52 +60,17 @@ function relativeTime(iso: string): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
-// User-facing TIER (role), not the backend deploy-lane id: candidate-a → Test. Matches NodeDeployments.
-const ENV_TIER: Record<string, string> = {
-  "candidate-a": "Test",
-  preview: "Preview",
-  production: "Production",
-};
-
-const ENV_ORDER = ["candidate-a", "preview", "production"];
-
-function tierLabel(env: string): string {
-  return ENV_TIER[env] ?? env;
-}
-
-function sortEnvs(envs: readonly DeployEnvVM[]): readonly DeployEnvVM[] {
-  return [...envs].sort((a, b) => {
-    const ai = ENV_ORDER.indexOf(a.env);
-    const bi = ENV_ORDER.indexOf(b.env);
-    return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+// listPublic() returns ONLY nodes whose PRODUCTION host is verified-live (registry ∩ live-prod), so
+// "live" here is the coarsest honest signal the registry carries: a live production deployment. Primary
+// nodes (the one serving the bare apex, i.e. operator) sort first, then alphabetical by title.
+function sortNodes(nodes: readonly NodeSummary[]): readonly NodeSummary[] {
+  return [...nodes].sort((a, b) => {
+    const ap = a.primary ? 0 : 1;
+    const bp = b.primary ? 0 : 1;
+    if (ap !== bp) return ap - bp;
+    return a.title.localeCompare(b.title);
   });
 }
-
-// Badge intents available: default | secondary | destructive | outline (no success/warn). Pair a
-// colored dot (true green via bg-success, matching the runs table) with the label badge.
-const HEALTH_DOT: Record<DeployEnvVM["health"], string> = {
-  healthy: "bg-success",
-  degraded: "bg-destructive",
-  provisioning: "bg-muted-foreground animate-pulse",
-  unknown: "bg-muted-foreground",
-};
-
-const HEALTH_INTENT: Record<
-  DeployEnvVM["health"],
-  "default" | "secondary" | "destructive"
-> = {
-  healthy: "default",
-  degraded: "destructive",
-  provisioning: "secondary",
-  unknown: "secondary",
-};
-
-const HEALTH_LABEL: Record<DeployEnvVM["health"], string> = {
-  healthy: "Healthy",
-  degraded: "Degraded",
-  provisioning: "Provisioning",
-  unknown: "Unknown",
-};
 
 /* ─── SERVERS sub-card ─── */
 
@@ -174,105 +140,69 @@ function ServersSection(): ReactElement {
   );
 }
 
-/* ─── NODES grid ─── */
+/* ─── NODES table ─── */
 
-function NodeEnvRow({ env }: { env: DeployEnvVM }): ReactElement {
+function NodeRow({ node }: { node: NodeSummary }): ReactElement {
   return (
     <TableRow>
       <TableCell className="font-medium text-sm">
         <span className="inline-flex items-center gap-2">
-          <span
-            className={`inline-block size-2 rounded-full ${HEALTH_DOT[env.health]}`}
-          />
-          {tierLabel(env.env)}
+          <span className="inline-block size-2 rounded-full bg-success" />
+          <Link
+            href={node.href}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hover:underline"
+          >
+            {node.title}
+          </Link>
+          {node.primary ? (
+            <Badge intent="secondary" size="sm">
+              Primary
+            </Badge>
+          ) : null}
         </span>
       </TableCell>
-      <TableCell>
-        <Badge intent={HEALTH_INTENT[env.health]} size="sm">
-          {HEALTH_LABEL[env.health]}
+      <TableCell className="text-right">
+        <Badge intent="default" size="sm">
+          Production
         </Badge>
-      </TableCell>
-      <TableCell className="font-mono text-muted-foreground text-xs">
-        {env.buildSha ? env.buildSha.slice(0, 7) : "—"}
-      </TableCell>
-      <TableCell className="text-right text-muted-foreground text-sm tabular-nums">
-        {env.replicas.ready}/{env.replicas.desired}
       </TableCell>
     </TableRow>
   );
 }
 
-function NodeBlock({ node }: { node: NodeFleetVM }): ReactElement {
-  const liveEnvs = node.deployState?.liveEnvs ?? [];
-  return (
-    <div className="rounded-lg border">
-      <div className="flex items-center justify-between gap-3 px-4 py-2.5">
-        <p className="truncate font-semibold text-sm">{node.slug}</p>
-        {liveEnvs.length > 0 ? (
-          <span className="shrink-0 text-muted-foreground text-xs">
-            Live: {liveEnvs.map(tierLabel).join(", ")}
-          </span>
-        ) : (
-          <span className="shrink-0 text-muted-foreground text-xs">
-            Live nowhere
-          </span>
-        )}
-      </div>
-      {node.error ? (
-        <p className="px-4 pb-3 text-muted-foreground text-xs">
-          Deploy state unavailable ({node.error}).
-        </p>
-      ) : node.deployState && node.deployState.envs.length > 0 ? (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Environment</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Build</TableHead>
-              <TableHead className="text-right">Replicas</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {sortEnvs(node.deployState.envs).map((env) => (
-              <NodeEnvRow key={env.env} env={env} />
-            ))}
-          </TableBody>
-        </Table>
-      ) : (
-        <p className="px-4 pb-3 text-muted-foreground text-xs">
-          No deploy environments yet.
-        </p>
-      )}
-    </div>
-  );
-}
-
-function NodesSection(): ReactElement {
-  const { data, isLoading, isError } = useFleetNodes();
+function NodesSection({
+  nodes,
+}: {
+  nodes: readonly NodeSummary[];
+}): ReactElement {
+  const sorted = sortNodes(nodes);
 
   return (
     <div>
       <h3 className="px-5 pb-2 font-semibold text-muted-foreground text-xs uppercase tracking-wider">
         Nodes
       </h3>
-      {isLoading ? (
-        <div className="grid gap-3 px-5 sm:grid-cols-2">
-          <Skeleton className="h-32 w-full" />
-          <Skeleton className="h-32 w-full" />
-        </div>
-      ) : isError ? (
+      {sorted.length === 0 ? (
         <p className="px-5 py-4 text-muted-foreground text-sm">
-          Could not load your nodes.
-        </p>
-      ) : !data || data.length === 0 ? (
-        <p className="px-5 py-4 text-muted-foreground text-sm">
-          You have no nodes yet.
+          No live nodes yet.
         </p>
       ) : (
-        <div className="grid gap-3 px-5 sm:grid-cols-2">
-          {data.map((node) => (
-            <NodeBlock key={node.id} node={node} />
-          ))}
+        <div className="px-5">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Node</TableHead>
+                <TableHead className="text-right">Live</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {sorted.map((node) => (
+                <NodeRow key={node.slug} node={node} />
+              ))}
+            </TableBody>
+          </Table>
         </div>
       )}
     </div>
@@ -281,7 +211,12 @@ function NodesSection(): ReactElement {
 
 /* ─── lead card ─── */
 
-export function FleetInfraCard(): ReactElement {
+export function FleetInfraCard({
+  nodes,
+}: {
+  /** Live network from `NodeRegistryPort.listPublic()`, resolved server-side (cached, junk-filtered). */
+  nodes: readonly NodeSummary[];
+}): ReactElement {
   return (
     <Card>
       <CardHeader className="px-5 py-3">
@@ -292,7 +227,7 @@ export function FleetInfraCard(): ReactElement {
       </CardHeader>
       <CardContent className="flex flex-col gap-5 px-0 pb-5">
         <ServersSection />
-        <NodesSection />
+        <NodesSection nodes={nodes} />
       </CardContent>
     </Card>
   );

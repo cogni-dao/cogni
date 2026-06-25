@@ -51,6 +51,7 @@ import {
 } from "@/components/kit/data-display/activity-chart-utils";
 import type { RunCardData } from "@/components/kit/data-display/RunCard";
 import { FleetInfraCard } from "@/features/fleet";
+import type { NodeSummary } from "@/ports";
 import { fetchActivity } from "../activity/_api/fetchActivity";
 import { WorkItemDetail } from "../work/_components/WorkItemDetail";
 import { StatusPill, TypeIcon } from "../work/_components/work-item-icons";
@@ -166,7 +167,12 @@ async function fetchWorkItems(): Promise<{ items: WorkItemDto[] }> {
 
 /* ─── main view ─── */
 
-export function DashboardView(): ReactElement {
+export function DashboardView({
+  nodes,
+}: {
+  /** Live network resolved server-side from `NodeRegistryPort.listPublic()` (page.tsx). */
+  nodes: readonly NodeSummary[];
+}): ReactElement {
   const [tab, setTab] = useState<Tab>("user");
   const [activityRange, setActivityRange] = useState<TimeRange>("1d");
   const [activityGroupBy, setActivityGroupBy] = useState<
@@ -282,8 +288,8 @@ export function DashboardView(): ReactElement {
         </ToggleGroup>
       </div>
 
-      {/* Fleet & infrastructure — personal-scope servers + nodes (story.5013 v0) */}
-      <FleetInfraCard />
+      {/* Fleet & infrastructure — compute servers + the live node network (story.5013 v0) */}
+      <FleetInfraCard nodes={nodes} />
 
       {/* Two-column top section: Agents + Work */}
       <div className="grid gap-6 lg:grid-cols-2">

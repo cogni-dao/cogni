@@ -3,11 +3,12 @@
 
 /**
  * Module: `@features/fleet/use-fleet`
- * Purpose: React Query hooks for the dashboard Fleet/Infra view (story.5013 v0) — compute balances
- *   and the viewer's own nodes + deploy state.
- * Scope: Thin react-query wrappers over the fetchers; owns polling cadence + stale/gc windows. No
- *   rendering, no validation (validation lives in the fetchers).
- * Invariants: ON_DEMAND_READ (poll, never a metric/gauge emit), PERSONAL_SCOPE.
+ * Purpose: React Query hook for the dashboard Fleet/Infra SERVERS sub-card (story.5013 v0) — the
+ *   compute-provider balances. (The NODES table is server-rendered from the node registry; it has no
+ *   client hook.)
+ * Scope: Thin react-query wrapper over the fetcher; owns polling cadence + stale/gc windows. No
+ *   rendering, no validation (validation lives in the fetcher).
+ * Invariants: ON_DEMAND_READ (poll, never a metric/gauge emit).
  * Side-effects: IO (via React Query)
  * Links: ./fetch-fleet.ts
  * @public
@@ -15,8 +16,8 @@
 
 import { type UseQueryResult, useQuery } from "@tanstack/react-query";
 
-import { fetchComputeBalances, fetchFleetNodes } from "./fetch-fleet";
-import type { ComputeBalanceVM, NodeFleetVM } from "./fleet-schemas";
+import { fetchComputeBalances } from "./fetch-fleet";
+import type { ComputeBalanceVM } from "./fleet-schemas";
 
 export function useComputeBalances(): UseQueryResult<
   readonly ComputeBalanceVM[]
@@ -24,18 +25,6 @@ export function useComputeBalances(): UseQueryResult<
   return useQuery({
     queryKey: ["fleet-balances"],
     queryFn: fetchComputeBalances,
-    refetchInterval: 60_000,
-    staleTime: 30_000,
-    gcTime: 5 * 60_000,
-  });
-}
-
-export function useFleetNodes(): UseQueryResult<readonly NodeFleetVM[]> {
-  return useQuery({
-    queryKey: ["fleet-nodes"],
-    queryFn: fetchFleetNodes,
-    // 60s client cadence halves per-viewer churn; the server-side per-cell single-flight cache
-    // (createDeployCapability) is what actually bounds upstream probes regardless of viewers.
     refetchInterval: 60_000,
     staleTime: 30_000,
     gcTime: 5 * 60_000,
