@@ -4,15 +4,13 @@
 /**
  * Module: `@features/home/components/NodeShowcase`
  * Purpose: Homepage section showcasing the node roster as clickable tiles, each rendered from the node's
- *   OWN self-described identity (title=hook, tagline=mission, thumbnail, brand color) + an honest
- *   live/down health badge. Plus a SEPARATE static "Launch your own" CTA tile — operator chrome, NOT a
- *   roster node (not probed, no health badge), pointing at node formation.
+ *   OWN self-described identity (title=name, tagline=hook, thumbnail, brand color) + an honest live/down
+ *   health badge. node-template IS the fork target (shown as its own "Node Template" card), so there is
+ *   no separate "launch your own" tile — that would duplicate it.
  * Scope: Presentational. Maps resolved NodeSummary → the shared NodeTile. Does not fetch data.
  * Invariants:
  *   - NO_OPERATOR_IDENTITY_LITERALS: roster tiles carry zero hardcoded node identity — every display
  *     field is passed through from the NodeSummary (the node's own well-known projection).
- *   - CTA_IS_CHROME: the "Launch your own" tile is operator chrome appended to the grid; it is not a
- *     roster entry and gets no health badge.
  *   - Inherits the homepage background (no surface tint); roster tiles link out in a new tab. Token-only
  *     styling (the brand-color tint is a per-node value the node itself supplies). Responsive grid.
  * Side-effects: none
@@ -24,14 +22,6 @@ import type { ReactElement } from "react";
 
 import { NodeTile } from "@/features/nodes/components/NodeTile";
 import type { NodeSummary } from "@/ports";
-
-/** Static "launch your own" call-to-action tile — operator chrome, not a roster node. */
-const LAUNCH_CTA = {
-  title: "Launch your own",
-  tagline: "Fork this starter to spin up your own community-owned AI app.",
-  href: "/nodes",
-  external: false,
-} as const;
 
 export function NodeShowcase({
   nodes,
@@ -67,8 +57,6 @@ export function NodeShowcase({
               }}
             />
           ))}
-          {/* CTA_IS_CHROME: a static operator tile, not a probed roster node. */}
-          <NodeTile node={LAUNCH_CTA} />
         </div>
       </div>
     </section>
