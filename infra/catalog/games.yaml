@@ -1,0 +1,20 @@
+name: games
+type: node
+port: 3200
+node_port: 31500
+dockerfile: nodes/games/app/Dockerfile
+image_tag_suffix: "-games"
+migrator_tag_suffix: "-games-migrate"
+source_repo: https://github.com/cogni-dao/games.git
+image_repository: ghcr.io/cogni-dao/games
+source_sha: e7a607c064605420969c3733933e8a57ec34d701
+candidate_a_branch: deploy/candidate-a-games
+preview_branch: deploy/preview-games
+production_branch: deploy/production-games
+# task.5017 — per-env node-set (deploy ⊆ provisioned). A wizard birth enters all
+# NODE_FORMATION_ENVS; this list is the catalog twin so render-node-appset.sh
+# renders exactly the births appset.ts generates. Trimming a node's reach is a
+# later catalog edit (drop an env here) once its envs are provisioned.
+envs: [candidate-a, preview, production]
+path_prefix: nodes/games/
+node_id: baa9148e-3245-4f7d-976b-292fd049ca38
