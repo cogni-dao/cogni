@@ -1286,9 +1286,6 @@ importers:
       '@cogni/knowledge-store':
         specifier: workspace:*
         version: link:../knowledge-store
-      '@cogni/node-contracts':
-        specifier: workspace:*
-        version: link:../node-contracts
       '@cogni/repo-spec':
         specifier: workspace:*
         version: link:../repo-spec

@@ -2,6 +2,7 @@ id: example-cogni-rules
 schema_version: "0.3"
 blocking: true
 workflow_id: goal-evaluations
+model: gpt-4o-mini
 
 # MVP test of our goal evaluation structure
 evaluations:

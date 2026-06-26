@@ -142,6 +142,7 @@ export function buildTestRule(overrides: Record<string, unknown> = {}): Rule {
     id: "test-rule",
     schema_version: "0.3",
     blocking: true,
+    model: "gpt-4o-mini",
     evaluations: [{ foo: "Evaluate metric foo on a 0-1 scale." }],
     success_criteria: {
       neutral_on_missing_metrics: false,
@@ -156,6 +157,7 @@ export function buildTestRuleYaml(): string {
   return `id: test-rule
 schema_version: "0.3"
 blocking: true
+model: gpt-4o-mini
 evaluations:
   - foo: Evaluate metric foo on a 0-1 scale.
 success_criteria:

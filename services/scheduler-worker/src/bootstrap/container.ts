@@ -39,7 +39,6 @@ import {
   GitHubSourceAdapter,
 } from "../adapters/ingestion/index.js";
 import { createSharedTokenNodePrincipalResolver } from "../adapters/node-principal.js";
-import { createReviewHttpClient } from "../adapters/review-http.js";
 import {
   createHttpExecutionGrantValidator,
   createHttpGraphRunWriter,
@@ -53,7 +52,6 @@ import type {
   ExecutionGrantHttpValidator,
   GraphRunHttpWriter,
   NodePrincipalResolver,
-  ReviewHttpClient,
 } from "../ports/index.js";
 import type { Env } from "./env.js";
 
@@ -66,8 +64,6 @@ export interface ServiceContainer {
   runAdapter: GraphRunHttpWriter;
   /** Per-node dispatch principal (task.5034) — MVP resolves the shared SCHEDULER_API_TOKEN, identical to graph dispatch; per-node credential is the hardening for both paths. */
   nodePrincipalResolver: NodePrincipalResolver;
-  /** HTTP client for the operator's review GitHub plane (bug.5000). */
-  reviewClient: ReviewHttpClient;
   config: {
     nodeEndpoints: Map<string, string>;
     schedulerApiToken: string;
@@ -188,13 +184,6 @@ export function createContainer(config: Env, logger: Logger): ServiceContainer {
     nodePrincipalResolver: createSharedTokenNodePrincipalResolver(
       config.SCHEDULER_API_TOKEN
     ),
-    // Review GitHub I/O is HTTP-delegated to the operator (bug.5000); the worker
-    // holds no GitHub credential. Always targets the "operator" node endpoint.
-    reviewClient: createReviewHttpClient({
-      nodeEndpoints,
-      schedulerApiToken: config.SCHEDULER_API_TOKEN,
-      logger: logger.child?.({ component: "review-http" }) ?? logger,
-    }),
     config: {
       nodeEndpoints,
       schedulerApiToken: config.SCHEDULER_API_TOKEN,

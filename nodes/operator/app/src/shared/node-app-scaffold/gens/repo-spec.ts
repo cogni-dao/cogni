@@ -12,8 +12,9 @@
  * Invariants: REPO_SPEC_IS_IDENTITY_SSOT — `node_id` is the single identity authority. SCOPE_ID_IS_DERIVED
  *   — `scope_id = uuidv5("default", node_id)`, matching `features/nodes/repo-spec-builder`. FORMATION_IS_GOVERNANCE_ONLY.
  *   TEMPLATE_SPEC_SHAPE — minting should be value substitution against the node-template repo-spec,
- *   not a thinner generated replacement. BORN_REVIEWABLE — the template's default review `gates:`
- *   MUST remain. EPOCH_ACTIVE_BY_DEFAULT — the template's `activity_ledger:` block MUST remain so
+ *   not a thinner generated replacement. REVIEW_DISABLED_BY_DEFAULT — minted nodes omit `gates:`
+ *   so Cogni Git PR Review creates no check, comment, or AI spend until explicitly enabled.
+ *   EPOCH_ACTIVE_BY_DEFAULT — the template's `activity_ledger:` block MUST remain so
  *   ledger ingest schedules are synthesized by @cogni/repo-spec.
  * Side-effects: none — pure function, no IO, no env.
  * Links: Cogni-DAO/node-template:.cogni/repo-spec.yaml, src/features/nodes/repo-spec-builder.ts, docs/spec/node-ci-cd-contract.md, task.5092
@@ -121,26 +122,8 @@ activity_ledger:
 payments:
   status: pending_activation
 
-# Born-reviewable default gates. When this node is minted as a single-node fork
-# (node-at-root, no \`nodes:\` registry) the operator's review path runs these gates
-# against the repo-root \`.cogni/rules/\` below. The mint (\`renderRepoSpec\`) re-emits
-# this same block onto the minted repo's identity spec — keep the two in lockstep.
-# Gate set coordinated with the operator review path (Lane A). Tune per node.
-gates:
-  - type: review-limits
-    id: review_limits
-    with:
-      max_changed_files: 50
-      max_total_diff_kb: 1500
-  - type: ai-rule
-    with:
-      rule_file: pr-syntropy-coherence.yaml
-  - type: ai-rule
-    with:
-      rule_file: patterns-and-docs.yaml
-  - type: ai-rule
-    with:
-      rule_file: repo-goal-alignment.yaml
+# Cogni Git PR Review is disabled by default. A node opts in by adding explicit
+# review gates to this repo-spec.
 `;
 }
 

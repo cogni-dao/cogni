@@ -14,22 +14,18 @@
 
 import { randomUUID } from "node:crypto";
 import { EVENT_NAMES, logEvent } from "@cogni/node-shared";
-import type { Rule } from "@cogni/repo-spec";
-import {
-  extractDaoConfig,
-  extractGatesConfig,
-  parseRepoSpec,
-  parseRule,
-} from "@cogni/repo-spec";
+import { extractDaoConfig, parseRepoSpec } from "@cogni/repo-spec";
 import type { Logger } from "pino";
 import type { GraphExecutorPort } from "@/ports";
 
 import { runGates } from "../gate-orchestrator";
-import { formatCheckRunSummary, formatPrComment } from "../summary-formatter";
-import type { EvidenceBundle, ReviewContext } from "../types";
-
-/** Default model for PR review. */
-const DEFAULT_REVIEW_MODEL = "gpt-4o-mini";
+import {
+  formatCheckRunSummary,
+  formatCrossDomainRefusal,
+  formatNoScopeNeutral,
+  formatPrComment,
+} from "../summary-formatter";
+import type { ReviewContext, ReviewRunContext } from "../types";
 
 /**
  * Dependencies for the review handler.
@@ -40,7 +36,6 @@ export interface ReviewHandlerDeps {
   readonly log: Logger;
   /** System tenant's default virtual key ID (looked up from DB). */
   readonly virtualKeyId: string;
-  readonly reviewModel?: string;
 
   // --- Injected adapter functions (facade provides concrete implementations) ---
 
@@ -56,11 +51,12 @@ export interface ReviewHandlerDeps {
     conclusion: string,
     summary: string
   ) => Promise<void>;
-  readonly gatherEvidence: (
+  readonly loadReviewContext: (
     owner: string,
     repo: string,
-    prNumber: number
-  ) => Promise<EvidenceBundle>;
+    prNumber: number,
+    installationId: number
+  ) => Promise<ReviewRunContext>;
   readonly postPrComment: (
     owner: string,
     repo: string,
@@ -68,8 +64,6 @@ export interface ReviewHandlerDeps {
     expectedHeadSha: string,
     body: string
   ) => Promise<boolean>;
-  readonly readRepoSpec: () => string;
-  readonly readRuleFile: (ruleFile: string) => string;
 }
 
 /**
@@ -92,43 +86,25 @@ export async function handlePrReview(
   });
   const start = performance.now();
 
-  // 1. Create Check Run (in_progress)
   let checkRunId: number | undefined;
-  try {
-    checkRunId = await deps.createCheckRun(owner, repo, headSha);
-  } catch {
-    logEvent(log, EVENT_NAMES.ADAPTER_GITHUB_REVIEW_ERROR, {
-      reqId,
-      dep: "github",
-      reasonCode: "check_run_create_failed",
-      durationMs: Math.round(performance.now() - start),
-    });
-    // Continue without check run
-  }
 
   try {
-    // 2. Gather evidence
-    const evidence = await deps.gatherEvidence(owner, repo, prNumber);
+    // 1. Gather evidence + node-owned review config from the target repo.
+    const reviewContext = await deps.loadReviewContext(
+      owner,
+      repo,
+      prNumber,
+      ctx.installationId
+    );
+    const { evidence, gatesConfig, owningNode } = reviewContext;
 
-    // 3. Load gates config from local repo-spec
-    const repoSpecYaml = deps.readRepoSpec();
-    const repoSpec = parseRepoSpec(repoSpecYaml);
-    const gatesConfig = extractGatesConfig(repoSpec);
-
-    if (gatesConfig.gates.length === 0) {
-      if (checkRunId) {
-        await deps.updateCheckRun(
-          owner,
-          repo,
-          checkRunId,
-          "pass",
-          "No review gates configured."
-        );
-      }
+    // Single-node repos opt into review by declaring gates. No gates means no
+    // Check Run, no comment, and no graph execution.
+    if (owningNode.kind === "single" && gatesConfig.gates.length === 0) {
       logEvent(log, EVENT_NAMES.REVIEW_COMPLETE, {
         reqId,
-        outcome: "success",
-        conclusion: "pass",
+        outcome: "skipped",
+        conclusion: "neutral",
         gateCount: 0,
         changedFiles: evidence.changedFiles,
         durationMs: Math.round(performance.now() - start),
@@ -136,31 +112,66 @@ export async function handlePrReview(
       return;
     }
 
-    // 4. Build run identity
-    const model = deps.reviewModel ?? DEFAULT_REVIEW_MODEL;
+    // 2. Create Check Run (in_progress) only after review is known to be on.
+    try {
+      checkRunId = await deps.createCheckRun(owner, repo, headSha);
+    } catch {
+      logEvent(log, EVENT_NAMES.ADAPTER_GITHUB_REVIEW_ERROR, {
+        reqId,
+        dep: "github",
+        reasonCode: "check_run_create_failed",
+        durationMs: Math.round(performance.now() - start),
+      });
+      // Continue without check run
+    }
 
-    // 5. Rule loader
-    const ruleCache = new Map<string, Rule>();
-    const loadRule = (ruleFile: string): Rule => {
-      let rule = ruleCache.get(ruleFile);
+    // Routing diagnostics still report when the PR cannot map to exactly one
+    // node. The silent-off path is reserved for a single node with no gates.
+    if (owningNode.kind !== "single") {
+      const body =
+        owningNode.kind === "conflict"
+          ? formatCrossDomainRefusal(owningNode)
+          : formatNoScopeNeutral();
+      if (checkRunId) {
+        await deps.updateCheckRun(owner, repo, checkRunId, "neutral", body);
+      }
+      await deps.postPrComment(owner, repo, prNumber, headSha, body);
+      logEvent(log, EVENT_NAMES.REVIEW_COMPLETE, {
+        reqId,
+        outcome: "success",
+        conclusion: "neutral",
+        gateCount: 0,
+        changedFiles: evidence.changedFiles,
+        durationMs: Math.round(performance.now() - start),
+      });
+      return;
+    }
+
+    // 3. Rule loader
+    const loadRule = (ruleFile: string) => {
+      const rule = reviewContext.rules[ruleFile];
       if (!rule) {
-        const ruleYaml = deps.readRuleFile(ruleFile);
-        rule = parseRule(ruleYaml);
-        ruleCache.set(ruleFile, rule);
+        throw new Error(`Missing rule file: ${ruleFile}`);
       }
       return rule;
     };
 
-    // 6. Run gate orchestrator
+    // 4. Run gate orchestrator
     const result = await runGates(gatesConfig.gates, evidence, {
       executor: deps.executor,
-      model,
       log,
       loadRule,
     });
 
-    // 7. Build DAO deep link (for Check Run "View Details" page)
+    // 5. Build DAO deep link (for Check Run "View Details" page)
     const daoBaseUrl = (() => {
+      if (!reviewContext.repoSpecYaml) return undefined;
+      let repoSpec: ReturnType<typeof parseRepoSpec>;
+      try {
+        repoSpec = parseRepoSpec(reviewContext.repoSpecYaml);
+      } catch {
+        return undefined;
+      }
       const dao = extractDaoConfig(repoSpec);
       if (!dao?.base_url) return undefined;
 
@@ -180,7 +191,7 @@ export async function handlePrReview(
       }
     })();
 
-    // 8. Update Check Run (with proposal link on View Details page)
+    // 6. Update Check Run (with proposal link on View Details page)
     if (checkRunId) {
       const summary = formatCheckRunSummary(result, {
         ...(daoBaseUrl !== undefined && { daoBaseUrl }),
@@ -194,7 +205,7 @@ export async function handlePrReview(
       );
     }
 
-    // 9. Post PR Comment (with staleness guard)
+    // 7. Post PR Comment (with staleness guard)
     const checkRunUrl = checkRunId
       ? `https://github.com/${owner}/${repo}/runs/${checkRunId}`
       : undefined;

@@ -2,6 +2,7 @@ id: operator-mission-alignment
 schema_version: "0.3"
 blocking: true
 workflow_id: goal-evaluations
+model: gpt-4o-mini
 
 # Goal-alignment for the Cogni operator node — the AI control plane that runs and
 # manages the node network: its code, deploys, knowledge, governance, and the web3

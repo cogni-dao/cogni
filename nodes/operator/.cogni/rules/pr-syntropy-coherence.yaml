@@ -2,6 +2,7 @@ id: strict-pr-mapping
 schema_version: "0.3"
 blocking: true
 workflow_id: goal-evaluations
+model: gpt-4o-mini
 
 evaluations:
   - strict-pr-mapping: PR summary has strict 1:1 mapping with the Code changes in this PR. No extra code, no overstatements.

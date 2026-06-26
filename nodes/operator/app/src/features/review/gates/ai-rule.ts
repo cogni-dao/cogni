@@ -57,9 +57,8 @@ export async function evaluateAiRule(params: {
   readonly rule: Rule;
   readonly evidence: EvidenceBundle;
   readonly executor: GraphExecutorPort;
-  readonly model: string;
 }): Promise<GateResult> {
-  const { rule, evidence, executor, model } = params;
+  const { rule, evidence, executor } = params;
   const evaluations = extractEvaluations(rule);
   const metricNames = evaluations.map((e) => e.metric);
 
@@ -81,7 +80,8 @@ export async function evaluateAiRule(params: {
     runId,
     graphId: LANGGRAPH_GRAPH_IDS["pr-review"],
     messages: [{ role: "user", content: userMessage }],
-    modelRef: { providerKey: "platform", modelId: model },
+    // Per-rule model — each AI rule is its own graph run with its own model.
+    modelRef: { providerKey: "platform", modelId: rule.model },
     responseFormat: {
       prompt:
         "Respond with a JSON object containing a `metrics` array and a `summary` string. " +

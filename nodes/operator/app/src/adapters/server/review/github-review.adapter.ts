@@ -8,8 +8,8 @@
  *   orchestration). The scheduler-worker's review activities HTTP-delegate here
  *   so the worker holds no GitHub credential (bug.5000).
  * Scope: All GitHub I/O (Octokit) + repo-spec parsing for review live here. Thin
- *   internal routes call these methods; the GitHub App private key never leaves
- *   the operator.
+ *   app review facade calls these methods; the GitHub App private key never
+ *   leaves the operator.
  * Invariants:
  *   - AUTH_VIA_APP: installation token via createInstallationOctokit (JWT exchange).
  *   - TOKEN_SHORT_LIVED: tokens are never persisted.
@@ -17,7 +17,7 @@
  *     and `miss` short-circuit upstream in the workflow.
  * Side-effects: IO (GitHub REST API)
  * Links: bug.5000, docs/spec/node-ci-cd-contract.md#single-domain-scope,
- *   services/scheduler-worker/src/adapters/review-http.ts, github-auth.ts
+ *   github-auth.ts
  * @internal
  */
 
@@ -31,7 +31,6 @@ import type {
 import {
   extractGatesConfig,
   extractOwningNode,
-  extractReviewConfig,
   type GateConfig,
   type GatesConfig,
   type OwningNode,
@@ -41,10 +40,6 @@ import {
   type Rule,
   resolveRulePath,
 } from "@cogni/repo-spec";
-import {
-  buildReviewUserMessage,
-  type EvidenceBundle,
-} from "@cogni/temporal-workflows";
 import type { Octokit } from "@octokit/core";
 import type { Logger } from "pino";
 import { parse as parseYaml } from "yaml";
@@ -55,10 +50,6 @@ import { createInstallationOctokit } from "./github-auth";
 // ---------------------------------------------------------------------------
 
 const CHECK_RUN_NAME = "Cogni Git PR Review";
-const DEFAULT_REVIEW_MODELREF = {
-  providerKey: "platform",
-  modelId: "gpt-4o-mini",
-} as const;
 const MAX_PATCH_BYTES_PER_FILE = 100_000;
 const MAX_TOTAL_PATCH_BYTES = 500_000;
 const MAX_FILES_WITH_PATCHES = 30;
@@ -78,16 +69,27 @@ export interface GithubReviewAdapterDeps {
 /** Full review context returned to the worker. JSON-serializable. */
 export interface PrReviewContext {
   evidence: EvidenceBundle;
-  /** Whether this node opts into PR review (repo-spec `review.enabled`, default true). */
-  reviewEnabled: boolean;
   gatesConfig: GatesConfig;
   rules: Record<string, Rule>;
-  graphMessages: Array<{ role: string; content: string }>;
-  responseFormat: { prompt: string; schemaId: string };
-  modelRef: { providerKey: string; modelId: string; connectionId?: string };
   repoSpecYaml?: string;
   changedFiles: string[];
   owningNode: OwningNode;
+}
+
+interface EvidenceBundle {
+  readonly prNumber: number;
+  readonly prTitle: string;
+  readonly prBody: string;
+  readonly headSha: string;
+  readonly baseBranch: string;
+  readonly changedFiles: number;
+  readonly additions: number;
+  readonly deletions: number;
+  readonly patches: ReadonlyArray<{
+    readonly filename: string;
+    readonly patch: string;
+  }>;
+  readonly totalDiffBytes: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -276,10 +278,11 @@ export function createGithubReviewAdapter(deps: GithubReviewAdapterDeps) {
 
     const changedFiles = files.map((f) => f.filename);
 
-    // Fetch repo-spec from target repo (base branch)
-    let repoSpecYaml: string;
+    // Fetch root repo-spec from target repo (base branch). In the monorepo it
+    // owns routing; for node-at-root repos it is also the node spec.
+    let rootRepoSpecYaml: string;
     try {
-      repoSpecYaml = await fetchRepoFile(
+      rootRepoSpecYaml = await fetchRepoFile(
         octokit,
         owner,
         repo,
@@ -290,48 +293,20 @@ export function createGithubReviewAdapter(deps: GithubReviewAdapterDeps) {
       // No repo-spec — empty gates; routing no-ops (miss).
       return {
         evidence,
-        reviewEnabled: true,
         gatesConfig: { gates: [], failOnError: false },
         rules: {},
-        graphMessages: [],
-        responseFormat: { prompt: "", schemaId: "" },
-        modelRef: DEFAULT_REVIEW_MODELREF,
         changedFiles,
         owningNode: { kind: "miss" },
       };
     }
 
-    // Parse leniently — target repo may not have full node_id/scope_id fields.
-    let gatesConfig: GatesConfig;
+    // Parse the root spec for routing. Target repos should parse strictly; when
+    // they do not, review degrades to miss rather than spending tokens.
     let parsedSpec: RepoSpec | null = null;
-    // Review on/off + model is node-controlled via repo-spec `review:` block.
-    // Default: enabled, operator default model (backward-compat with always-on).
-    let reviewEnabled = true;
-    let modelRef: PrReviewContext["modelRef"] = DEFAULT_REVIEW_MODELREF;
     try {
-      parsedSpec = parseRepoSpec(repoSpecYaml);
-      gatesConfig = extractGatesConfig(parsedSpec);
-      const reviewConfig = extractReviewConfig(parsedSpec);
-      reviewEnabled = reviewConfig.enabled;
-      if (reviewConfig.model) {
-        modelRef = { providerKey: "platform", modelId: reviewConfig.model };
-      }
+      parsedSpec = parseRepoSpec(rootRepoSpecYaml);
     } catch {
-      const raw = parseYaml(repoSpecYaml) as Record<string, unknown>;
-      const gates = Array.isArray(raw.gates) ? raw.gates : [];
-      gatesConfig = {
-        gates: gates as GateConfig[],
-        failOnError: raw.fail_on_error === true,
-      };
-      // Mirror the typed path for repos whose spec fails strict parse.
-      const review = (raw.review ?? {}) as {
-        enabled?: unknown;
-        model?: unknown;
-      };
-      reviewEnabled = review.enabled !== false;
-      if (typeof review.model === "string" && review.model.length > 0) {
-        modelRef = { providerKey: "platform", modelId: review.model };
-      }
+      parsedSpec = null;
     }
 
     // Owning-domain resolution. The structured `review.routed` log is emitted by
@@ -372,6 +347,32 @@ export function createGithubReviewAdapter(deps: GithubReviewAdapterDeps) {
     // Single-node forks review against repo-root `.cogni/rules`; monorepo nodes use
     // their per-node rule dir. `resolveRulePath` would emit `./.cogni/rules` for the
     // root sentinel, so resolve the constant directly for that case.
+    const nodeSpecPath =
+      owningNode.kind === "single" && owningNode.path !== ROOT_NODE_PATH
+        ? `${owningNode.path}/.cogni/repo-spec.yaml`
+        : ".cogni/repo-spec.yaml";
+
+    let nodeRepoSpecYaml = rootRepoSpecYaml;
+    if (nodeSpecPath !== ".cogni/repo-spec.yaml") {
+      try {
+        nodeRepoSpecYaml = await fetchRepoFile(
+          octokit,
+          owner,
+          repo,
+          nodeSpecPath,
+          pr.base.ref
+        );
+      } catch (error) {
+        logger.warn(
+          { nodeSpecPath, error: String(error) },
+          "Failed to fetch node-owned repo-spec; review gates disabled"
+        );
+        nodeRepoSpecYaml = "";
+      }
+    }
+
+    const gatesConfig = extractNodeGatesConfig(nodeRepoSpecYaml);
+
     const ruleBasePath =
       owningNode.kind === "single" && owningNode.path !== ROOT_NODE_PATH
         ? resolveRulePath(owningNode)
@@ -401,52 +402,11 @@ export function createGithubReviewAdapter(deps: GithubReviewAdapterDeps) {
       }
     }
 
-    const allEvaluations: Array<{ metric: string; prompt: string }> = [];
-    for (const gate of gatesConfig.gates) {
-      if (gate.type === "ai-rule" && gate.with?.rule_file) {
-        const rule = rules[gate.with.rule_file as string];
-        if (rule?.evaluations) {
-          for (const entry of rule.evaluations) {
-            const entries = Object.entries(entry);
-            const [metric, prompt] = entries[0] as [string, string];
-            allEvaluations.push({ metric, prompt });
-          }
-        }
-      }
-    }
-
-    const diffSummary = evidence.patches
-      .map((p) => `### ${p.filename}\n${p.patch}`)
-      .join("\n\n");
-
-    const userMessage =
-      allEvaluations.length > 0
-        ? buildReviewUserMessage({
-            prTitle: evidence.prTitle,
-            prBody: evidence.prBody,
-            diffSummary,
-            evaluations: allEvaluations,
-          })
-        : "";
-
-    const responseFormat = {
-      prompt:
-        "Respond with a JSON object containing a `metrics` array and a `summary` string. " +
-        "Each metric entry must have: `metric` (name), `value` (0.0-1.0), `observations` (string array).",
-      schemaId: "evaluation-output",
-    };
-
     return {
       evidence,
-      reviewEnabled,
       gatesConfig,
       rules,
-      graphMessages: userMessage
-        ? [{ role: "user", content: userMessage }]
-        : [],
-      responseFormat,
-      modelRef,
-      repoSpecYaml,
+      repoSpecYaml: nodeRepoSpecYaml,
       changedFiles,
       owningNode,
     };
@@ -456,3 +416,20 @@ export function createGithubReviewAdapter(deps: GithubReviewAdapterDeps) {
 }
 
 export type GithubReviewAdapter = ReturnType<typeof createGithubReviewAdapter>;
+
+function extractNodeGatesConfig(repoSpecYaml: string): GatesConfig {
+  if (!repoSpecYaml) {
+    return { gates: [], failOnError: false };
+  }
+
+  try {
+    return extractGatesConfig(parseRepoSpec(repoSpecYaml));
+  } catch {
+    const raw = parseYaml(repoSpecYaml) as Record<string, unknown>;
+    const gates = Array.isArray(raw.gates) ? raw.gates : [];
+    return {
+      gates: gates as GateConfig[],
+      failOnError: raw.fail_on_error === true,
+    };
+  }
+}

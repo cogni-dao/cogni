@@ -11,7 +11,11 @@
  * @public
  */
 
+import type { OwningNode } from "@cogni/repo-spec";
 import type { GateResult, GateStatus, ReviewResult } from "./types";
+
+// Relative path so each fork's PR comments link to its own spec copy.
+const SPEC_LINK = "docs/spec/node-ci-cd-contract.md#single-domain-scope";
 
 /**
  * Format the Check Run summary (markdown for the "output" field).
@@ -97,6 +101,68 @@ export function formatPrComment(
   }
 
   return lines.join("\n");
+}
+
+/** Format the PR comment body for a cross-domain PR refusal. */
+export function formatCrossDomainRefusal(
+  owningNode: Extract<OwningNode, { kind: "conflict" }>
+): string {
+  const domains = owningNode.nodes.map((n) => n.nodeId);
+  const { operatorPaths, operatorNodeId } = owningNode;
+  const operatorInvolved = operatorNodeId !== undefined;
+
+  const lines: string[] = [];
+  lines.push("## Cogni Review - Cross-Domain PR refused");
+  lines.push("");
+  lines.push(
+    `This PR touches **${domains.length} domains**: \`${domains.join("`, `")}\`.`
+  );
+  lines.push("");
+  lines.push(
+    "Per the single-node-scope contract, each PR must own exactly one domain. The reviewer cannot apply per-node rules to a multi-domain change."
+  );
+  lines.push("");
+
+  if (operatorInvolved && operatorPaths.length > 0) {
+    lines.push("**Operator-territory paths in this PR:**");
+    lines.push("");
+    for (const p of operatorPaths.slice(0, 20)) {
+      lines.push(`- \`${p}\``);
+    }
+    if (operatorPaths.length > 20) {
+      lines.push(`- ... and ${operatorPaths.length - 20} more`);
+    }
+    lines.push("");
+  }
+
+  lines.push("**How to resolve:**");
+  lines.push("");
+  if (operatorInvolved) {
+    const others = domains.filter((d) => d !== operatorNodeId);
+    lines.push(
+      "1. File an operator PR with the operator-territory paths above."
+    );
+    lines.push(`2. Rebase your \`${others.join("`, `")}\` change on it.`);
+  } else {
+    lines.push(
+      `Split this PR into ${domains.length} separate PRs - one per domain (\`${domains.join("`, `")}\`).`
+    );
+  }
+  lines.push("");
+  lines.push(`See [single-node-scope spec](${SPEC_LINK}) for rationale.`);
+
+  return lines.join("\n");
+}
+
+/** Format the PR comment body for an unrecognized-scope outcome. */
+export function formatNoScopeNeutral(): string {
+  return [
+    "## Cogni Review - No recognizable scope",
+    "",
+    "This PR has no changed files matching any registered domain. Skipping review.",
+    "",
+    `See [single-node-scope spec](${SPEC_LINK}).`,
+  ].join("\n");
 }
 
 // ---------------------------------------------------------------------------

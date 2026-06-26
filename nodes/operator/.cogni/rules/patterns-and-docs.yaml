@@ -2,6 +2,7 @@ id: patterns-and-docs
 schema_version: "0.3"
 blocking: true
 workflow_id: goal-evaluations
+model: gpt-4o-mini
 
 evaluations:
   - follows-patterns: >

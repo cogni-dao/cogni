@@ -34,7 +34,6 @@ export {
   extractOperatorWalletConfig,
   extractOwningNode,
   extractPaymentConfig,
-  extractReviewConfig,
   extractScopeId,
   extractStewardWalletConfig,
   type GatesConfig,
@@ -46,7 +45,6 @@ export {
   type LedgerPoolConfig,
   type NodeScheduleConfig,
   type OwningNode,
-  type ReviewConfig,
   resolveRulePath,
 } from "./accessors.js";
 export { parseRepoSpec } from "./parse.js";
@@ -81,10 +79,8 @@ export {
   type PoolConfigSpec,
   poolConfigSpecSchema,
   type RepoSpec,
-  type ReviewConfig as ReviewConfigSpec,
   type Rule,
   repoSpecSchema,
-  reviewConfigSchema,
   reviewLimitsGateSchema,
   ruleSchema,
   type StewardWalletSpec,

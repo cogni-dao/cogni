@@ -27,7 +27,6 @@ import {
 } from "@temporalio/worker";
 import { createGoalLoopActivities } from "./activities/goal-loop.js";
 import { createActivities } from "./activities/index.js";
-import { createReviewActivities } from "./activities/review.js";
 import { createSweepActivities } from "./activities/sweep.js";
 import { createContainer } from "./bootstrap/container.js";
 import type { Env } from "./bootstrap/env.js";
@@ -104,22 +103,11 @@ export async function startSchedulerWorker(
       container.logger.child?.({ component: "activities" }) ?? container.logger,
   });
 
-  // Review activities register unconditionally (bug.5000): they hold no GitHub
-  // credential — every GitHub call is HTTP-delegated to the operator's review
-  // plane via container.reviewClient (operator endpoint + SCHEDULER_API_TOKEN,
-  // which the worker already has).
-  const reviewActivities = createReviewActivities({
-    reviewClient: container.reviewClient,
-    logger:
-      container.logger.child?.({ component: "review-activities" }) ??
-      container.logger,
-  });
-
   // Sweep activities poll the operator's work-items API, so they only apply
   // when the formation includes an operator node. Catalog/formation-driven:
   // if COGNI_NODE_ENDPOINTS has no "operator" entry (e.g. a candidate slot
   // scoped to a node subset like canary + node-template), skip sweep and boot
-  // with graph + review activities only — do NOT hard-fail. A fatal throw here
+  // with graph activities only — do NOT hard-fail. A fatal throw here
   // made any operator-less formation impossible, contra the catalog model.
   const operatorBaseUrl = container.config.nodeEndpoints.get("operator");
   const sweepActivities = operatorBaseUrl
@@ -153,7 +141,6 @@ export async function startSchedulerWorker(
 
   const allActivities = {
     ...graphActivities,
-    ...reviewActivities,
     ...sweepActivities,
     ...goalLoopActivities,
   };

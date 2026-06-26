@@ -11,6 +11,8 @@
  * @public
  */
 
+import type { GatesConfig, OwningNode, Rule } from "@cogni/repo-spec";
+
 /** Gate evaluation status. */
 export type GateStatus = "pass" | "fail" | "neutral";
 
@@ -62,4 +64,14 @@ export interface ReviewContext {
   readonly prNumber: number;
   readonly headSha: string;
   readonly installationId: number;
+}
+
+/** Parsed review inputs loaded from the target repo's node-owned `.cogni`. */
+export interface ReviewRunContext {
+  readonly evidence: EvidenceBundle;
+  readonly gatesConfig: GatesConfig;
+  readonly rules: Readonly<Record<string, Rule>>;
+  readonly repoSpecYaml?: string;
+  readonly changedFiles: readonly string[];
+  readonly owningNode: OwningNode;
 }

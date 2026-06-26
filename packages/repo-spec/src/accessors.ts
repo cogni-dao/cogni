@@ -348,25 +348,6 @@ export function extractGatesConfig(spec: RepoSpec): GatesConfig {
   };
 }
 
-export interface ReviewConfig {
-  /** Whether the operator runs PR review for this node. */
-  enabled: boolean;
-  /** Platform model id for the pr-review graph; undefined → operator default. */
-  model?: string;
-}
-
-/**
- * Extract PR review on/off + model from parsed repo-spec.
- * Backward-compatible: a spec with no `review:` block defaults to enabled (review
- * was historically always-on), with no model override (operator default applies).
- */
-export function extractReviewConfig(spec: RepoSpec): ReviewConfig {
-  return {
-    enabled: spec.review?.enabled ?? true,
-    ...(spec.review?.model ? { model: spec.review.model } : {}),
-  };
-}
-
 // ---------------------------------------------------------------------------
 // DAO config
 // ---------------------------------------------------------------------------

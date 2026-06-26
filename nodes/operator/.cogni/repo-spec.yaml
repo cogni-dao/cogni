@@ -62,3 +62,5 @@ payments_in:
 payments_out:
   steward_wallet:
     address: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
+# Cogni Git PR Review is disabled by default. Add explicit gates here only when
+# this node intentionally opts back in.

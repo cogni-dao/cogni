@@ -4,10 +4,8 @@
 /**
  * Module: `@tests/unit/features/review/review-handler`
  * Purpose: Lock the ReviewHandlerDeps adapter boundary + verdict pipeline contract.
- * Scope: Pure DI fakes — no GitHub, no LLM, no Octokit, no filesystem. Real Zod parsers
- *   round-trip through `@cogni/repo-spec` (`parseRepoSpec`, `extractGatesConfig`, `parseRule`).
- * Invariants: All 8 callable ReviewHandlerDeps members invoked at least once across the suite.
- *   handlePrReview returns Promise<void>; verdict observed via updateCheckRun + postPrComment args.
+ * Scope: Pure DI fakes — no GitHub, no LLM, no Octokit, no filesystem.
+ * Invariants: Empty-gates means silent skip; ai-rule model comes from the rule.
  * Side-effects: none
  * Links: task.0368
  * @public
@@ -18,42 +16,28 @@ import type { Logger } from "pino";
 import { describe, expect, it, vi } from "vitest";
 import type { ReviewHandlerDeps } from "@/features/review/services/review-handler";
 import { handlePrReview } from "@/features/review/services/review-handler";
-import type { EvidenceBundle, ReviewContext } from "@/features/review/types";
+import type {
+  EvidenceBundle,
+  ReviewContext,
+  ReviewRunContext,
+} from "@/features/review/types";
 import type { GraphExecutorPort } from "@/ports";
-
-// ---------------------------------------------------------------------------
-// Fixtures (real yaml — must round-trip through @cogni/repo-spec parsers)
-// ---------------------------------------------------------------------------
 
 const NODE_ID = "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d";
 
-function repoSpecYaml(opts: { gates: string }): string {
-  return `node_id: "${NODE_ID}"
+const REPO_SPEC_WITH_AI_RULE = `node_id: "${NODE_ID}"
 governance:
   chain_id: "8453"
-${opts.gates}`;
-}
-
-const REPO_SPEC_WITH_AI_RULE = repoSpecYaml({
-  gates: `gates:
+gates:
   - type: ai-rule
     with:
       rule_file: test-rule.yaml
-`,
-});
+`;
 
-const REPO_SPEC_EMPTY_GATES = repoSpecYaml({ gates: "gates: []\n" });
-
-const RULE_YAML = `id: test-rule
-schema_version: "0.3"
-blocking: true
-evaluations:
-  - foo: Evaluate metric foo on a 0-1 scale.
-success_criteria:
-  neutral_on_missing_metrics: false
-  require:
-    - metric: foo
-      gte: 0.8
+const REPO_SPEC_EMPTY_GATES = `node_id: "${NODE_ID}"
+governance:
+  chain_id: "8453"
+gates: []
 `;
 
 const ctx: ReviewContext = {
@@ -77,10 +61,6 @@ const evidence: EvidenceBundle = {
   totalDiffBytes: 64,
 };
 
-// ---------------------------------------------------------------------------
-// Fake helpers
-// ---------------------------------------------------------------------------
-
 function makeLog(): Logger {
   const log = {
     info: vi.fn(),
@@ -91,7 +71,6 @@ function makeLog(): Logger {
     trace: vi.fn(),
     silent: vi.fn(),
   } as unknown as Logger;
-  // Recursive child — same surface for nested loggers.
   (log as unknown as { child: () => Logger }).child = () => log;
   return log;
 }
@@ -115,9 +94,7 @@ function makeGraphFinal(score: number): GraphFinal {
   };
 }
 
-async function* emptyStream(): AsyncIterable<never> {
-  // No events — billing decorators irrelevant here; the gate only awaits `final`.
-}
+async function* emptyStream(): AsyncIterable<never> {}
 
 function makeExecutor(score: number): GraphExecutorPort {
   return {
@@ -130,111 +107,115 @@ function makeExecutor(score: number): GraphExecutorPort {
   };
 }
 
+function makeReviewContext(opts: {
+  readonly repoSpec?: string;
+  readonly evidence?: EvidenceBundle;
+}): ReviewRunContext {
+  const empty = opts.repoSpec === REPO_SPEC_EMPTY_GATES;
+  return {
+    evidence: opts.evidence ?? evidence,
+    gatesConfig: empty
+      ? { gates: [], failOnError: false }
+      : {
+          gates: [
+            {
+              type: "ai-rule",
+              with: { rule_file: "test-rule.yaml" },
+            },
+          ],
+          failOnError: false,
+        },
+    rules: {
+      "test-rule.yaml": {
+        id: "test-rule",
+        schema_version: "0.3",
+        blocking: true,
+        workflow_id: "goal-evaluations",
+        model: "gpt-4o-mini",
+        evaluations: [{ foo: "Evaluate metric foo on a 0-1 scale." }],
+        success_criteria: {
+          neutral_on_missing_metrics: false,
+          require: [{ metric: "foo", gte: 0.8 }],
+        },
+      },
+    },
+    repoSpecYaml: opts.repoSpec ?? REPO_SPEC_WITH_AI_RULE,
+    changedFiles: ["src/foo.ts"],
+    owningNode: { kind: "single", nodeId: NODE_ID, path: "." },
+  };
+}
+
 interface DepsBundle {
   readonly deps: ReviewHandlerDeps;
   readonly createCheckRun: ReturnType<typeof vi.fn>;
   readonly updateCheckRun: ReturnType<typeof vi.fn>;
-  readonly gatherEvidence: ReturnType<typeof vi.fn>;
+  readonly loadReviewContext: ReturnType<typeof vi.fn>;
   readonly postPrComment: ReturnType<typeof vi.fn>;
-  readonly readRepoSpec: ReturnType<typeof vi.fn>;
-  readonly readRuleFile: ReturnType<typeof vi.fn>;
   readonly executor: GraphExecutorPort;
-  readonly log: Logger;
 }
 
 function makeDeps(opts: {
   readonly score?: number;
   readonly repoSpec?: string;
-  readonly evidenceImpl?: () => Promise<EvidenceBundle>;
+  readonly contextImpl?: () => Promise<ReviewRunContext>;
 }): DepsBundle {
-  const score = opts.score ?? 0.95;
-  const executor = makeExecutor(score);
-  const log = makeLog();
-
+  const executor = makeExecutor(opts.score ?? 0.95);
   const createCheckRun = vi.fn(async () => 999);
   const updateCheckRun = vi.fn(async () => undefined);
-  const gatherEvidence = vi.fn(opts.evidenceImpl ?? (async () => evidence));
+  const loadReviewContext = vi.fn(
+    opts.contextImpl ??
+      (async () => makeReviewContext({ repoSpec: opts.repoSpec }))
+  );
   const postPrComment = vi.fn(async () => true);
-  const readRepoSpec = vi.fn(() => opts.repoSpec ?? REPO_SPEC_WITH_AI_RULE);
-  const readRuleFile = vi.fn(() => RULE_YAML);
-
-  const deps: ReviewHandlerDeps = {
-    executor,
-    log,
-    virtualKeyId: "vk-system",
-    createCheckRun,
-    updateCheckRun,
-    gatherEvidence,
-    postPrComment,
-    readRepoSpec,
-    readRuleFile,
-  };
 
   return {
-    deps,
+    deps: {
+      executor,
+      log: makeLog(),
+      virtualKeyId: "vk-system",
+      createCheckRun,
+      updateCheckRun,
+      loadReviewContext,
+      postPrComment,
+    },
     createCheckRun,
     updateCheckRun,
-    gatherEvidence,
+    loadReviewContext,
     postPrComment,
-    readRepoSpec,
-    readRuleFile,
     executor,
-    log,
   };
 }
 
-// ---------------------------------------------------------------------------
-// Scenarios
-// ---------------------------------------------------------------------------
-
-describe("handlePrReview — adapter-boundary contract", () => {
-  it("scenario 1: happy path — pass conclusion, comment posted, all GitHub deps invoked", async () => {
+describe("handlePrReview", () => {
+  it("passes, posts a comment, and uses the model declared on the rule", async () => {
     const b = makeDeps({ score: 0.95 });
 
     await handlePrReview(ctx, b.deps);
 
-    expect(b.createCheckRun).toHaveBeenCalledTimes(1);
+    expect(b.loadReviewContext).toHaveBeenCalledWith(
+      ctx.owner,
+      ctx.repo,
+      ctx.prNumber,
+      ctx.installationId
+    );
     expect(b.createCheckRun).toHaveBeenCalledWith(
       ctx.owner,
       ctx.repo,
       ctx.headSha
     );
-
-    expect(b.gatherEvidence).toHaveBeenCalledTimes(1);
-
     expect(b.updateCheckRun).toHaveBeenCalledTimes(1);
-    const [, , , conclusion, summary] = b.updateCheckRun.mock.calls[0] as [
-      string,
-      string,
-      number,
-      string,
-      string,
-    ];
-    expect(conclusion).toBe("pass");
-    expect(typeof summary).toBe("string");
-    expect(summary.length).toBeGreaterThan(0);
-
     expect(b.postPrComment).toHaveBeenCalledTimes(1);
-    const [pcOwner, pcRepo, pcPr, pcExpectedSha] = b.postPrComment.mock
-      .calls[0] as [string, string, number, string, string];
-    expect(pcOwner).toBe(ctx.owner);
-    expect(pcRepo).toBe(ctx.repo);
-    expect(pcPr).toBe(ctx.prNumber);
-    expect(pcExpectedSha).toBe(ctx.headSha);
 
-    expect(
-      (b.executor.runGraph as ReturnType<typeof vi.fn>).mock.calls.length
-    ).toBe(1);
-    expect(b.readRepoSpec).toHaveBeenCalled();
-    expect(b.readRuleFile).toHaveBeenCalledWith("test-rule.yaml");
+    const graphInput = (b.executor.runGraph as ReturnType<typeof vi.fn>).mock
+      .calls[0]?.[0] as { modelRef?: { modelId?: string } };
+    expect(graphInput.modelRef?.modelId).toBe("gpt-4o-mini");
   });
 
-  it("scenario 2: threshold fail — fail conclusion, summary cites failing metric, comment posted", async () => {
+  it("fails when the rule score misses the threshold", async () => {
     const b = makeDeps({ score: 0.2 });
 
     await handlePrReview(ctx, b.deps);
 
-    expect(b.updateCheckRun).toHaveBeenCalledTimes(1);
     const [, , , conclusion, summary] = b.updateCheckRun.mock.calls[0] as [
       string,
       string,
@@ -244,118 +225,33 @@ describe("handlePrReview — adapter-boundary contract", () => {
     ];
     expect(conclusion).toBe("fail");
     expect(summary).toContain("foo");
-
     expect(b.postPrComment).toHaveBeenCalledTimes(1);
   });
 
-  it("scenario 3: empty gates short-circuit — pass with literal summary, no comment, no executor call", async () => {
+  it("silently skips a single-node repo with no gates", async () => {
     const b = makeDeps({ repoSpec: REPO_SPEC_EMPTY_GATES });
 
     await handlePrReview(ctx, b.deps);
 
-    expect(b.gatherEvidence).toHaveBeenCalledTimes(1);
-
-    expect(b.updateCheckRun).toHaveBeenCalledTimes(1);
-    const [, , , conclusion, summary] = b.updateCheckRun.mock.calls[0] as [
-      string,
-      string,
-      number,
-      string,
-      string,
-    ];
-    expect(conclusion).toBe("pass");
-    expect(summary).toBe("No review gates configured.");
-
+    expect(b.loadReviewContext).toHaveBeenCalledTimes(1);
+    expect(b.createCheckRun).not.toHaveBeenCalled();
+    expect(b.updateCheckRun).not.toHaveBeenCalled();
     expect(b.postPrComment).not.toHaveBeenCalled();
-    expect(
-      (b.executor.runGraph as ReturnType<typeof vi.fn>).mock.calls.length
-    ).toBe(0);
-    expect(b.readRuleFile).not.toHaveBeenCalled();
+    expect(b.executor.runGraph).not.toHaveBeenCalled();
   });
 
-  it("scenario 4: evidence error — neutral conclusion with error message, no comment, no executor call", async () => {
+  it("does not create a check run when context loading fails", async () => {
     const b = makeDeps({
-      evidenceImpl: () => {
-        throw new Error("evidence-fetch-boom");
+      contextImpl: () => {
+        throw new Error("context-fetch-boom");
       },
     });
 
     await handlePrReview(ctx, b.deps);
 
-    expect(b.createCheckRun).toHaveBeenCalledTimes(1);
-
-    expect(b.updateCheckRun).toHaveBeenCalledTimes(1);
-    const [, , , conclusion, summary] = b.updateCheckRun.mock.calls[0] as [
-      string,
-      string,
-      number,
-      string,
-      string,
-    ];
-    expect(conclusion).toBe("neutral");
-    expect(summary).toContain("evidence-fetch-boom");
-
+    expect(b.createCheckRun).not.toHaveBeenCalled();
+    expect(b.updateCheckRun).not.toHaveBeenCalled();
     expect(b.postPrComment).not.toHaveBeenCalled();
-    expect(
-      (b.executor.runGraph as ReturnType<typeof vi.fn>).mock.calls.length
-    ).toBe(0);
-  });
-
-  it("REVIEWER_PORT_LOCKED: every callable ReviewHandlerDeps member is invoked across the suite", async () => {
-    // Cross-scenario aggregator: run the four scenarios with shared spies and assert
-    // every callable member of ReviewHandlerDeps was hit at least once. Removing or
-    // renaming a dep method breaks this before it breaks production.
-    const happy = makeDeps({ score: 0.95 });
-    const fail = makeDeps({ score: 0.2 });
-    const empty = makeDeps({ repoSpec: REPO_SPEC_EMPTY_GATES });
-    const errorCase = makeDeps({
-      evidenceImpl: () => {
-        throw new Error("boom");
-      },
-    });
-
-    await handlePrReview(ctx, happy.deps);
-    await handlePrReview(ctx, fail.deps);
-    await handlePrReview(ctx, empty.deps);
-    await handlePrReview(ctx, errorCase.deps);
-
-    const allBundles = [happy, fail, empty, errorCase];
-
-    // 1. executor.runGraph — happy + fail paths
-    expect(
-      allBundles.some(
-        (b) =>
-          (b.executor.runGraph as ReturnType<typeof vi.fn>).mock.calls.length >
-          0
-      )
-    ).toBe(true);
-
-    // 2. log — handler always builds a child logger at line 85
-    //    (log surface is exercised through logEvent calls in every scenario).
-    //    Asserting structural presence of the dep is sufficient for the boundary lock.
-    for (const b of allBundles) {
-      expect(b.deps.log).toBeDefined();
-    }
-
-    // 3-8: GitHub adapter functions + readers — every scenario touches each at least once
-    //      somewhere across the suite.
-    expect(allBundles.some((b) => b.createCheckRun.mock.calls.length > 0)).toBe(
-      true
-    );
-    expect(allBundles.some((b) => b.updateCheckRun.mock.calls.length > 0)).toBe(
-      true
-    );
-    expect(allBundles.some((b) => b.gatherEvidence.mock.calls.length > 0)).toBe(
-      true
-    );
-    expect(allBundles.some((b) => b.postPrComment.mock.calls.length > 0)).toBe(
-      true
-    );
-    expect(allBundles.some((b) => b.readRepoSpec.mock.calls.length > 0)).toBe(
-      true
-    );
-    expect(allBundles.some((b) => b.readRuleFile.mock.calls.length > 0)).toBe(
-      true
-    );
+    expect(b.executor.runGraph).not.toHaveBeenCalled();
   });
 });

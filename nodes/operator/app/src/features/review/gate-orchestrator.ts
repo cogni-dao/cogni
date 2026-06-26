@@ -31,9 +31,8 @@ const DEFAULT_GATE_TIMEOUT_MS = 120_000;
 /** Dependencies injected into the orchestrator. */
 export interface OrchestratorDeps {
   readonly executor: GraphExecutorPort;
-  readonly model: string;
   readonly log: Logger;
-  /** Resolves a rule_file name to a parsed Rule. */
+  /** Resolves a rule_file name to a parsed Rule (each rule carries its own model). */
   readonly loadRule: (ruleFile: string) => Rule;
   readonly gateTimeoutMs?: number;
 }
@@ -116,7 +115,6 @@ async function executeGate(
         rule,
         evidence,
         executor: deps.executor,
-        model: deps.model,
       });
     }
   }

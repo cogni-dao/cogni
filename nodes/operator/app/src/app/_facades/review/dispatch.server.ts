@@ -3,36 +3,41 @@
 
 /**
  * Module: `@app/_facades/review/dispatch.server`
- * Purpose: App-layer facade for dispatching PR reviews via Temporal workflow.
- * Scope: Extracts webhook payload, resolves billing context, validates the workflow input via the source-of-truth Zod schema, then starts PrReviewWorkflow. Fire-and-forget.
+ * Purpose: App-layer facade for dispatching PR reviews in the operator app.
+ * Scope: Extracts webhook payload, resolves billing context, wires adapters, and calls the review feature. Fire-and-forget.
  * Invariants:
- *   - Per NORMATIVE_WEBHOOK_PATTERN: starts Temporal workflow and exits immediately
- *   - Per ACTIVITY_IDEMPOTENCY: workflowId = pr-review:{owner}/{repo}/{prNumber}/{headSha}, built from the parsed input (post-validation), not raw ctx
- *   - Per DISPATCH_FAIL_FAST (task.0419): payload is parsed through `PrReviewWorkflowInputSchema` before `workflowClient.start(...)`; misshapen payloads fail with structured ZodError logged distinctly from infra failures
- *   - No inline graph execution — all AI runs through GraphRunWorkflow child
- *   - No secrets in workflow input — only installationId (public)
- * Side-effects: IO (starts Temporal workflow)
+ *   - Review-specific orchestration lives in the operator app image, not the shared Temporal worker.
+ *   - Graph execution still flows through GraphExecutorPort with the system billing decorators.
+ * Side-effects: IO (GitHub API via adapter, LLM via graph executor)
  * Links: task.0191, task.0419, docs/spec/temporal-patterns.md
  * @public
  */
 
+import { toUserId } from "@cogni/ids";
 import {
   COGNI_SYSTEM_BILLING_ACCOUNT_ID,
   COGNI_SYSTEM_PRINCIPAL_USER_ID,
 } from "@cogni/node-shared";
-import { PrReviewWorkflowInputSchema } from "@cogni/temporal-workflows";
-import { WorkflowExecutionAlreadyStartedError } from "@temporalio/client";
 import type { Logger } from "pino";
-import { ZodError } from "zod";
-import { getContainer, getTemporalWorkflowClient } from "@/bootstrap/container";
-import { getNodeId } from "@/shared/config";
+import { getContainer } from "@/bootstrap/container";
+import {
+  createGraphExecutor,
+  createScopedGraphExecutor,
+} from "@/bootstrap/graph-executor.factory";
+import { resolveGithubReviewAdapter } from "@/bootstrap/review/resolve-review-route";
+import { executeStream } from "@/features/ai/public.server";
+import { commitUsageFact } from "@/features/ai/services/billing";
+import { preflightCreditCheck } from "@/features/ai/services/preflight-credit-check";
+import { handlePrReview } from "@/features/review/public.server";
+import type { GateStatus } from "@/features/review/types";
+import type { PreflightCreditCheckFn } from "@/ports";
 
 /** PR actions that trigger review. */
 const REVIEW_ACTIONS = new Set(["opened", "synchronize", "reopened"]);
 
 /**
  * Dispatch a PR review from a GitHub pull_request webhook payload.
- * Fire-and-forget: starts Temporal PrReviewWorkflow and exits.
+ * Fire-and-forget: runs the review handler and exits.
  * Errors are logged, never thrown.
  */
 export function dispatchPrReview(
@@ -47,7 +52,7 @@ export function dispatchPrReview(
   const action = payload.action as string | undefined;
   if (!action || !REVIEW_ACTIONS.has(action)) return;
 
-  // Check credentials are configured (worker needs them in its env too)
+  // Check credentials are configured.
   if (!env.GH_REVIEW_APP_ID || !env.GH_REVIEW_APP_PRIVATE_KEY_BASE64) {
     log.debug(
       "PR review skipped — GH_REVIEW_APP_ID/PRIVATE_KEY not configured"
@@ -76,18 +81,18 @@ export function dispatchPrReview(
   const headSha = head.sha as string;
   const installationId = installation.id as number;
 
-  // Fire-and-forget: start Temporal workflow
-  void startPrReviewWorkflow(
+  // Fire-and-forget: run review in the operator app image.
+  void runPrReview(
     { owner: repoOwner, repo: repoName, prNumber, headSha, installationId },
     log
   );
 }
 
 /**
- * Resolve billing context and start PrReviewWorkflow via Temporal.
+ * Resolve billing context and run PR review via the feature handler.
  * All errors caught and logged — never blocks webhook response.
  */
-async function startPrReviewWorkflow(
+async function runPrReview(
   ctx: {
     owner: string;
     repo: string;
@@ -99,6 +104,8 @@ async function startPrReviewWorkflow(
 ): Promise<void> {
   try {
     const container = getContainer();
+    const adapter = resolveGithubReviewAdapter(log);
+    if (!adapter) return;
 
     // Resolve system tenant billing account for virtual key
     const billingAccount =
@@ -110,58 +117,103 @@ async function startPrReviewWorkflow(
       return;
     }
 
-    const { client: workflowClient, taskQueue } =
-      await getTemporalWorkflowClient();
+    const actorUserId = COGNI_SYSTEM_PRINCIPAL_USER_ID;
+    const accountService = container.accountsForUser(toUserId(actorUserId));
+    const preflightCheckFn: PreflightCreditCheckFn = (
+      billingAccountId,
+      model,
+      messages
+    ) =>
+      preflightCreditCheck({
+        billingAccountId,
+        messages: [...messages],
+        model,
+        accountService,
+      });
 
-    // Per DISPATCH_FAIL_FAST (task.0419): parse the input through the source-of-
-    // truth schema before starting the workflow. Misshapen payloads fail loudly
-    // here with a structured Zod error instead of becoming an Activity-side 400
-    // (the modelRef-shape regression class — PR #1067).
-    const workflowInput = PrReviewWorkflowInputSchema.parse({
-      nodeId: getNodeId(),
-      owner: ctx.owner,
-      repo: ctx.repo,
-      prNumber: ctx.prNumber,
-      headSha: ctx.headSha,
-      installationId: ctx.installationId,
-      actorUserId: COGNI_SYSTEM_PRINCIPAL_USER_ID,
-      billingAccountId: COGNI_SYSTEM_BILLING_ACCOUNT_ID,
-      virtualKeyId: billingAccount.defaultVirtualKeyId,
+    const executor = createScopedGraphExecutor({
+      executor: createGraphExecutor(executeStream, toUserId(actorUserId)),
+      preflightCheckFn,
+      commitByoUsage: async (fact, usageLog) => {
+        await commitUsageFact(
+          fact,
+          {
+            runId: fact.runId,
+            attempt: fact.attempt,
+            ingressRequestId: fact.runId,
+          },
+          accountService,
+          usageLog as Logger
+        );
+      },
+      billing: {
+        billingAccountId: COGNI_SYSTEM_BILLING_ACCOUNT_ID,
+        virtualKeyId: billingAccount.defaultVirtualKeyId,
+      },
+      resolver: container.providerResolver,
+      actorId: actorUserId,
+      ...(container.connectionBroker
+        ? { broker: container.connectionBroker }
+        : {}),
     });
 
-    // Stable business key for idempotency — retries on same headSha are no-ops.
-    // Build from parsed input so a future shape drift in `ctx` cannot bypass
-    // validation by influencing the workflowId template.
-    const workflowId = `pr-review:${workflowInput.owner}/${workflowInput.repo}/${workflowInput.prNumber}/${workflowInput.headSha}`;
+    const mapConclusion = (status: GateStatus) =>
+      status === "pass" ? "success" : status === "fail" ? "failure" : "neutral";
 
-    await workflowClient.start("PrReviewWorkflow", {
-      taskQueue,
-      workflowId,
-      args: [workflowInput],
-    });
-
-    log.info(
-      { workflowId, prNumber: ctx.prNumber },
-      "PrReviewWorkflow started"
+    await handlePrReview(
+      {
+        owner: ctx.owner,
+        repo: ctx.repo,
+        prNumber: ctx.prNumber,
+        headSha: ctx.headSha,
+        installationId: ctx.installationId,
+      },
+      {
+        executor,
+        log,
+        virtualKeyId: billingAccount.defaultVirtualKeyId,
+        createCheckRun: (owner, repo, headSha) =>
+          adapter.createCheckRun({
+            owner,
+            repo,
+            headSha,
+            installationId: ctx.installationId,
+          }),
+        updateCheckRun: async (
+          owner,
+          repo,
+          checkRunId,
+          conclusion,
+          summary
+        ) => {
+          await adapter.updateCheckRun({
+            owner,
+            repo,
+            installationId: ctx.installationId,
+            checkRunId,
+            conclusion: mapConclusion(conclusion as GateStatus),
+            title: `PR Review: ${conclusion.toUpperCase()}`,
+            summary,
+          });
+        },
+        loadReviewContext: (owner, repo, prNumber, installationId) =>
+          adapter.fetchPrContext({ owner, repo, prNumber, installationId }),
+        postPrComment: async (owner, repo, prNumber, expectedHeadSha, body) => {
+          const result = await adapter.postPrComment({
+            owner,
+            repo,
+            installationId: ctx.installationId,
+            prNumber,
+            body,
+            expectedHeadSha,
+          });
+          return result.posted;
+        },
+      }
     );
+
+    log.info({ prNumber: ctx.prNumber }, "PR review completed");
   } catch (error) {
-    if (error instanceof WorkflowExecutionAlreadyStartedError) {
-      log.info(
-        { prNumber: ctx.prNumber, headSha: ctx.headSha },
-        "PR review workflow already running — idempotent skip"
-      );
-      return;
-    }
-    // Per DISPATCH_FAIL_FAST: Zod parse failures emit structured `issues`,
-    // not opaque error strings. Logging them as a distinct event makes
-    // shape-drift bugs queryable in Loki separately from infra failures.
-    if (error instanceof ZodError) {
-      log.error(
-        { issues: error.issues, prNumber: ctx.prNumber, headSha: ctx.headSha },
-        "PR review dispatch input invalid — schema parse failed"
-      );
-      return;
-    }
     log.error(
       { error: String(error), prNumber: ctx.prNumber },
       "PR review dispatch failed"

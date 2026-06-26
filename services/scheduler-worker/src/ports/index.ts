@@ -31,14 +31,6 @@ export type {
 // @cogni/scheduler-core for node-app use.
 
 import type { ActorId } from "@cogni/ids";
-import type {
-  InternalReviewCreateCheckRunInput,
-  InternalReviewPostPrCommentInput,
-  InternalReviewPostPrCommentOutput,
-  InternalReviewPrContextInput,
-  InternalReviewPrContextOutput,
-  InternalReviewUpdateCheckRunInput,
-} from "@cogni/node-contracts";
 import type { ExecutionGrant, GraphRunKind } from "@cogni/scheduler-core";
 
 /** Write subset of graph_runs persistence, routed by nodeId. */
@@ -74,22 +66,6 @@ export interface GraphRunHttpWriter {
     errorMessage?: string,
     errorCode?: string
   ) => Promise<void>;
-}
-
-/**
- * GitHub-plane client for PR review, HTTP-delegated to the operator's internal
- * review API (bug.5000). The worker holds no GitHub credential; every call
- * routes to the operator with Bearer SCHEDULER_API_TOKEN.
- */
-export interface ReviewHttpClient {
-  createCheckRun: (input: InternalReviewCreateCheckRunInput) => Promise<number>;
-  updateCheckRun: (input: InternalReviewUpdateCheckRunInput) => Promise<void>;
-  postPrComment: (
-    input: InternalReviewPostPrCommentInput
-  ) => Promise<InternalReviewPostPrCommentOutput>;
-  fetchPrContext: (
-    input: InternalReviewPrContextInput
-  ) => Promise<InternalReviewPrContextOutput>;
 }
 
 /**

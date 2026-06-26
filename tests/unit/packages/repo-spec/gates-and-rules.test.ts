@@ -29,7 +29,13 @@ import { describe, expect, it } from "vitest";
 
 // Per task.0410, rule files moved from root .cogni/rules/ → nodes/operator/.cogni/rules/.
 const RULES_DIR = join(process.cwd(), "nodes", "operator", ".cogni", "rules");
-const REPO_SPEC_PATH = join(process.cwd(), ".cogni", "repo-spec.yaml");
+const REPO_SPEC_PATH = join(
+  process.cwd(),
+  "nodes",
+  "operator",
+  ".cogni",
+  "repo-spec.yaml"
+);
 
 function readRuleFixture(filename: string): string {
   return readFileSync(join(RULES_DIR, filename), "utf-8");
@@ -43,6 +49,7 @@ describe("ruleSchema", () => {
   it("validates a minimal rule", () => {
     const result = ruleSchema.safeParse({
       id: "test-rule",
+      model: "gpt-4o-mini",
       evaluations: [{ "test-metric": "Does this work?" }],
       success_criteria: {
         require: [{ metric: "test-metric", gte: 0.8 }],
@@ -54,6 +61,7 @@ describe("ruleSchema", () => {
   it("rejects rule without evaluations", () => {
     const result = ruleSchema.safeParse({
       id: "test-rule",
+      model: "gpt-4o-mini",
       evaluations: [],
       success_criteria: {},
     });
@@ -63,6 +71,7 @@ describe("ruleSchema", () => {
   it("rejects evaluation entry with multiple keys", () => {
     const result = ruleSchema.safeParse({
       id: "test-rule",
+      model: "gpt-4o-mini",
       evaluations: [{ "metric-a": "prompt a", "metric-b": "prompt b" }],
       success_criteria: {},
     });
@@ -72,6 +81,7 @@ describe("ruleSchema", () => {
   it("defaults blocking to true", () => {
     const result = ruleSchema.parse({
       id: "test-rule",
+      model: "gpt-4o-mini",
       evaluations: [{ "test-metric": "Does this work?" }],
       success_criteria: {},
     });
@@ -177,6 +187,7 @@ describe("parseRule", () => {
   it("parses pre-parsed object", () => {
     const rule = parseRule({
       id: "test",
+      model: "gpt-4o-mini",
       evaluations: [{ "test-metric": "Does it work?" }],
       success_criteria: { require: [{ metric: "test-metric", gte: 0.5 }] },
     });
@@ -199,14 +210,13 @@ describe("parseRule", () => {
 // ---------------------------------------------------------------------------
 
 describe("extractGatesConfig", () => {
-  it("extracts gates from full repo-spec", () => {
+  it("returns no gates for the operator node repo-spec by default", () => {
     const yaml = readFileSync(REPO_SPEC_PATH, "utf-8");
     const spec = parseRepoSpec(yaml);
     const config = extractGatesConfig(spec);
 
-    expect(config.gates.length).toBeGreaterThanOrEqual(4);
-    expect(config.gates[0]?.type).toBe("review-limits");
-    expect(config.failOnError).toBe(true);
+    expect(config.gates).toEqual([]);
+    expect(config.failOnError).toBe(false);
   });
 
   it("returns empty gates array when none configured", () => {

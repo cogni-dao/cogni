@@ -26,31 +26,10 @@ export type {
   GoalWire,
   LedgerActivities,
   LoopBudgetWire,
-  ReviewActivities,
   SchedulerActivities,
   SweepActivities,
   SweepWorkItem,
 } from "./activity-types.js";
-// Domain types (review)
-export type {
-  EvaluationOutput,
-  EvidenceBundle,
-  GateResult,
-  GateStatus,
-  ReviewResult,
-} from "./domain/review.js";
-// Domain functions (review — pure, deterministic)
-export {
-  aggregateGateStatuses,
-  buildReviewUserMessage,
-  evaluateCriteria,
-  findRequirement,
-  formatCheckRunSummary,
-  formatCrossDomainRefusal,
-  formatNoScopeNeutral,
-  formatPrComment,
-  formatThreshold,
-} from "./domain/review.js";
 export type { AttributionIngestRunV1 } from "./workflows/collect-epoch.workflow.js";
 export type { FinalizeEpochWorkflowInput } from "./workflows/finalize-epoch.workflow.js";
 // Workflow input/output types
@@ -70,9 +49,5 @@ export {
   NodeTaskInputSchema,
 } from "./workflows/node-task.schema.js";
 export type { NodeTaskResult } from "./workflows/node-task.workflow.js";
-export {
-  type PrReviewWorkflowInput,
-  PrReviewWorkflowInputSchema,
-} from "./workflows/pr-review.schema.js";
 export type { CollectSourcesInput } from "./workflows/stages/collect-sources.workflow.js";
 export type { EnrichAndAllocateInput } from "./workflows/stages/enrich-and-allocate.workflow.js";

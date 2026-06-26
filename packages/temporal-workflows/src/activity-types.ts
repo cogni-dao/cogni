@@ -94,54 +94,6 @@ export interface SchedulerActivities {
 }
 
 // ---------------------------------------------------------------------------
-// Review Activities (GitHub I/O for PR review workflow)
-// ---------------------------------------------------------------------------
-
-import type { InternalReviewPrContextOutput } from "@cogni/node-contracts";
-import type { OwningNode } from "@cogni/repo-spec";
-
-export interface ReviewActivities {
-  createCheckRunActivity(input: {
-    owner: string;
-    repo: string;
-    headSha: string;
-    installationId: number;
-  }): Promise<number>;
-
-  /**
-   * Returns the worker↔operator review wire contract verbatim — the SSOT lives
-   * in `@cogni/node-contracts` (review.internal.v1), NOT re-typed here. The
-   * output carries `reviewEnabled` (repo-spec `review.enabled` on/off), the
-   * node-selected `modelRef`, gates/rules, evidence, and the resolved
-   * `owningNode` the workflow dispatches on.
-   */
-  fetchPrContextActivity(input: {
-    owner: string;
-    repo: string;
-    prNumber: number;
-    installationId: number;
-  }): Promise<InternalReviewPrContextOutput>;
-
-  postReviewResultActivity(input: Record<string, unknown>): Promise<void>;
-
-  /**
-   * Post a routing-diagnostic outcome to GitHub: PR comment + neutral check run.
-   * Used for `conflict` (cross-domain PR) and `miss` (no recognizable scope).
-   * Spends zero AI tokens — formatter is pure, no GraphRunWorkflow child.
-   */
-  postRoutingDiagnosticActivity(input: {
-    owner: string;
-    repo: string;
-    prNumber: number;
-    headSha: string;
-    installationId: number;
-    checkRunId?: number;
-    owningNode: OwningNode;
-    changedFiles: readonly string[];
-  }): Promise<void>;
-}
-
-// ---------------------------------------------------------------------------
 // Sweep Activities (queue-sweeping agent roles)
 // ---------------------------------------------------------------------------
 

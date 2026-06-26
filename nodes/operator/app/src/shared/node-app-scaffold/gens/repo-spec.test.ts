@@ -3,11 +3,10 @@
 
 /**
  * Module: `@shared/node-app-scaffold/gens/repo-spec`
- * Purpose: Pin BORN_REVIEWABLE — the minted `.cogni/repo-spec.yaml` must carry the default review
- *   gates, and the ai-rule filenames must match the external node-template's inherited rules.
+ * Purpose: Pin REVIEW_DISABLED_BY_DEFAULT — minted `.cogni/repo-spec.yaml` must omit default
+ *   review gates so new nodes do not create AI review checks or spend tokens until explicitly enabled.
  * Scope: Pure unit test over `renderRepoSpec` output; does not exercise the mint network path.
- * Invariants: minted spec has gates, has no `nodes:` registry (single-node-fork signal), and its
- *   ai-rule `rule_file`s match the template contract.
+ * Invariants: minted spec has no gates and no `nodes:` registry (single-node-fork signal).
  * Side-effects: none.
  * Links: src/shared/node-app-scaffold/gens/repo-spec, infra/catalog/node-template.yaml
  * @public
@@ -18,12 +17,6 @@ import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 
 import { renderRepoSpec } from "./repo-spec";
-
-const TEMPLATE_RULE_FILES = [
-  "pr-syntropy-coherence.yaml",
-  "patterns-and-docs.yaml",
-  "repo-goal-alignment.yaml",
-];
 
 const rendered = renderRepoSpec({
   slug: "my-node",
@@ -41,10 +34,6 @@ const rendered = renderRepoSpec({
   },
 });
 
-interface ParsedGate {
-  type: string;
-  with?: { rule_file?: string };
-}
 interface ParsedSpec {
   node_id: string;
   intent?: { name: string; mission?: string };
@@ -69,13 +58,12 @@ interface ParsedSpec {
     };
   };
   payments: { status: string };
-  gates?: ParsedGate[];
+  gates?: unknown[];
   nodes?: unknown;
 }
 
-describe("renderRepoSpec — BORN_REVIEWABLE", () => {
+describe("renderRepoSpec — REVIEW_DISABLED_BY_DEFAULT", () => {
   const spec = parseYaml(rendered) as ParsedSpec;
-  const gates = spec.gates ?? [];
 
   it("is parseable identity + governance YAML", () => {
     expect(spec.node_id).toBe("11111111-2222-4333-8444-555555555555");
@@ -118,12 +106,8 @@ describe("renderRepoSpec — BORN_REVIEWABLE", () => {
     );
   });
 
-  it("emits the default review gates so minted nodes are born-reviewable", () => {
-    const types = gates.map((g) => g.type);
-    expect(types).toContain("review-limits");
-    expect(types.filter((t) => t === "ai-rule").length).toBeGreaterThanOrEqual(
-      1
-    );
+  it("omits default review gates so minted nodes start with AI review disabled", () => {
+    expect(spec.gates).toBeUndefined();
   });
 
   it("emits a parseable Cogni-owned DoltHub knowledge remote", () => {
@@ -142,13 +126,5 @@ describe("renderRepoSpec — BORN_REVIEWABLE", () => {
 
   it("has NO `nodes:` registry — resolves as a single-node fork", () => {
     expect(spec.nodes).toBeUndefined();
-  });
-
-  it("references the external node-template ai-rule set", () => {
-    const ruleFiles = gates
-      .filter((g) => g.type === "ai-rule")
-      .map((g) => g.with?.rule_file)
-      .filter((rf): rf is string => typeof rf === "string");
-    expect(ruleFiles).toEqual(TEMPLATE_RULE_FILES);
   });
 });

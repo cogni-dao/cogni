@@ -69,9 +69,9 @@ The simplification target is one artifact contract and one promotion primitive. 
 
 ## Single-Domain Scope
 
-Every path in the operator control-plane repo belongs to **exactly one review domain**. A PR may touch exactly one domain unless a migration work item explicitly declares a broader scope. This invariant is enforced statically by the `single-node-scope` job in `ci.yaml` (task.0381), and at review-time by `PrReviewWorkflow` via `extractOwningNode` (resolver: task.0382; consumer: task.0410). The reviewer fetches per-domain rule files from the owning repo/path (resolved via `resolveRulePath` — single source of truth in `@cogni/repo-spec`), refuses accidental cross-domain PRs with a diagnostic comment + neutral check (no AI tokens spent), and emits a structured `review.routed` log. Both implementations consume the same set of fixtures and must agree.
+Every path in the operator control-plane repo belongs to **exactly one review domain**. A PR may touch exactly one domain unless a migration work item explicitly declares a broader scope. This invariant is enforced statically by the `single-node-scope` job in `ci.yaml` (task.0381), and at review-time by the operator app review facade via `extractOwningNode` (resolver: task.0382; consumer: task.0410). When a node explicitly opts into review with repo-spec `gates:`, the reviewer fetches per-domain rule files from the owning repo/path (resolved via `resolveRulePath` — single source of truth in `@cogni/repo-spec`), refuses accidental cross-domain PRs with a diagnostic comment + neutral check (no AI tokens spent), and emits a structured `review.routed` log. Missing or empty `gates:` means no Check Run, no comment, and no AI tokens.
 
-> **Routing-vs-policy principle.** Review **routing** is shared infrastructure (`packages/temporal-workflows`, `@cogni/repo-spec`). Review **policy** — rules, prompts, model selection — is per-node (`nodes/<X>/.cogni/`). Routing code never special-cases a particular node by string compare; the operator domain ships its rules at `nodes/operator/.cogni/rules/` like every other node. New review knobs land per-node first; promotions to shared infra require a spec update.
+> **Routing-vs-policy principle.** Review **routing** is shared infrastructure (`@cogni/repo-spec` plus the operator app facade). Review **policy** — gates, rules, prompts, and model selection — is per-node (`nodes/<X>/.cogni/`). Routing code never special-cases a particular node by string compare; the operator domain ships inert rule assets at `nodes/operator/.cogni/rules/` like every other node. New review knobs land per-node first; promotions to shared infra require a spec update.
 
 ### Transitional domains
 
@@ -384,14 +384,14 @@ All three repos carry the node **app + its merge-gate CI + image build**. They d
 
 **What `node-template` carries vs. omits:**
 
-| Carries (node-level, sovereign)                                                                                                  | Omits (the operator owns these)                                                                   |
-| -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `app/ graphs/ packages/` + `k8s/` **base** manifests (the node's own Deployment/Service)                                         | per-env **overlays + AppSets + catalog row** — generated into the operator monorepo by the pin-PR |
-| `.github/workflows/ci.yaml` (merge gate) + the build→GHCR workflow                                                               | `provision-env`, `deploy-infra`, `candidate-flight`, Argo, OpenBao/ESO substrate                  |
-| **`.cogni/rules/` + the review gate** (so a PR in the node repo routes + reviews via the node's own rules — **born-reviewable**) | the operator app, `infra/catalog`, root monorepo tooling                                          |
-| `biome/ tsconfig/ Dockerfile / .dependency-cruiser.cjs` + `setup-main-branch.sh` (`POLICY_STAYS_LOCAL`)                          | —                                                                                                 |
+| Carries (node-level, sovereign)                                                                                      | Omits (the operator owns these)                                                                   |
+| -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `app/ graphs/ packages/` + `k8s/` **base** manifests (the node's own Deployment/Service)                             | per-env **overlays + AppSets + catalog row** — generated into the operator monorepo by the pin-PR |
+| `.github/workflows/ci.yaml` (merge gate) + the build→GHCR workflow                                                   | `provision-env`, `deploy-infra`, `candidate-flight`, Argo, OpenBao/ESO substrate                  |
+| Optional `.cogni/rules/` assets; review gates are omitted by default and added only when the node explicitly opts in | the operator app, `infra/catalog`, root monorepo tooling                                          |
+| `biome/ tsconfig/ Dockerfile / .dependency-cruiser.cjs` + `setup-main-branch.sh` (`POLICY_STAYS_LOCAL`)              | —                                                                                                 |
 
-> **Born-reviewable (the `ay` gap).** A minted node must ship its own `.cogni/rules/` + review gate, or a PR in it routes to _nothing_ — the failure observed on the first mint (`cogni-test-org/ay`), where the review bot triggered but had no node-local rules to apply. The P1 projection must carry these from the canonical node, not just `app/`.
+> **Review disabled by default.** A minted node must not create a misleading AI review check by default. A node can still ship `.cogni/rules/` assets for future opt-in, but PR review runs only after the node adds explicit `gates:` to `.cogni/repo-spec.yaml`.
 
 **Derivation (this is P1).** `node-template` is the canonical node-at-root source repo. It carries the node-level app, graphs, package layer, CI, and policy that were ported from the retired in-tree template shape, **minus the deploy/infra plane**. Future template changes land in `Cogni-DAO/node-template`; the operator repo carries only the catalog/deploy wiring and gitlink pin for approval.
 

@@ -38,7 +38,7 @@ src/
 └── health.ts        # HTTP readiness probe
 ```
 
-**Note:** Workflow definitions, activity type interfaces, activity profiles, and review domain logic live in `@cogni/temporal-workflows`. This service is the composition root that wires activities and starts workers.
+**Note:** Workflow definitions, activity type interfaces, and activity profiles live in `@cogni/temporal-workflows`. This service is the composition root that wires generic activities and starts workers.
 
 ### Hard rules (enforced by dep-cruiser)
 
@@ -88,7 +88,7 @@ src/
 
 ## Responsibilities
 
-- This directory **does**: Connect to Temporal; start one Worker per canonical nodeId (plus a legacy-queue drain Worker); register workflows from `@cogni/temporal-workflows` (GraphRunWorkflow, PrReviewWorkflow, CollectEpochWorkflow, FinalizeEpochWorkflow, CollectSourcesWorkflow, EnrichAndAllocateWorkflow); HTTP-delegate run/grant persistence to the owning node's internal API; dispatch enrichment and allocation via `@cogni/attribution-pipeline-plugins` registries.
+- This directory **does**: Connect to Temporal; start one Worker per canonical nodeId (plus a legacy-queue drain Worker); register workflows from `@cogni/temporal-workflows` (GraphRunWorkflow, NodeTaskWorkflow, CollectEpochWorkflow, FinalizeEpochWorkflow, CollectSourcesWorkflow, EnrichAndAllocateWorkflow); HTTP-delegate run/grant persistence to the owning node's internal API; dispatch enrichment and allocation via `@cogni/attribution-pipeline-plugins` registries.
 - This directory **does not**: Define workflow logic (that's in `@cogni/temporal-workflows`); import from src/; hold any per-node DB credentials on the scheduler path; create/modify/delete schedules (CRUD is authority); define port interfaces that cross packages (those live in `@cogni/scheduler-core`).
 
 ## Dependencies

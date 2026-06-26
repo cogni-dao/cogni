@@ -4,10 +4,9 @@
 /**
  * Module: `@contracts/review.internal.v1.contract`
  * Purpose: Wire contracts for the operator's internal PR-review GitHub plane.
- * Scope: Zod request/response shapes for POST /api/internal/review/* (worker→operator review delegation, bug.5000); does not implement the routes or business logic.
+ * Scope: Zod request/response shapes for review GitHub-plane DTOs; does not implement business logic.
  * Invariants:
- *   - Bearer SCHEDULER_API_TOKEN required on every endpoint.
- *   - WORKER_HOLDS_NO_GITHUB_CRED: the App private key lives only in the operator.
+ *   - REVIEW_APP_KEY_OPERATOR_OWNED: the App private key lives only in the operator.
  *   - Self-contained zod4 schemas — repo-spec is zod3 and must NOT be composed in
  *     (cross-package zod version hazard, see zod-version-cross-package.spec.ts).
  *     The gate/rule/owningNode shapes mirror @cogni/repo-spec structurally; the
@@ -15,8 +14,8 @@
  *     permissive and only the envelope is strict.
  *   - All consumers use z.infer types.
  * Side-effects: none
- * Links: docs/spec/unified-graph-launch.md, docs/spec/scheduler.md, bug.5000,
- *   nodes/operator/app/src/app/api/internal/review/*, services/scheduler-worker/src/adapters/review-http.ts
+ * Links: docs/spec/vcs-integration.md,
+ *   nodes/operator/app/src/adapters/server/review/github-review.adapter.ts
  * @internal
  */
 
@@ -145,25 +144,14 @@ const GatesConfigSchema = z.object({
 
 const RuleSchema = z.looseObject({
   id: z.string(),
+  model: z.string(),
   evaluations: z.array(z.record(z.string(), z.string())),
 });
 
 export const InternalReviewPrContextOutputSchema = z.object({
   evidence: EvidenceBundleSchema,
-  /**
-   * Node-controlled PR review on/off (repo-spec `review.enabled`). Defaults to
-   * true so older operators that don't send it are treated as enabled.
-   */
-  reviewEnabled: z.boolean().optional().default(true),
   gatesConfig: GatesConfigSchema,
   rules: z.record(z.string(), RuleSchema),
-  graphMessages: z.array(z.object({ role: z.string(), content: z.string() })),
-  responseFormat: z.object({ prompt: z.string(), schemaId: z.string() }),
-  modelRef: z.object({
-    providerKey: z.string(),
-    modelId: z.string(),
-    connectionId: z.string().optional(),
-  }),
   repoSpecYaml: z.string().optional(),
   changedFiles: z.array(z.string()),
   owningNode: OwningNodeSchema,

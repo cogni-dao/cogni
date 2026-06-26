@@ -9,7 +9,7 @@
 
 ## Purpose
 
-**TEMPORAL_WORKFLOWS_PACKAGE:** Shared Temporal workflow definitions, activity type interfaces, activity retry profiles, and PR review domain logic. Consumed by the scheduler-worker service (via `workflowsPath`) and the web app (for type-safe workflow input construction). Contains zero I/O — pure deterministic code only.
+**TEMPORAL_WORKFLOWS_PACKAGE:** Shared Temporal workflow definitions, activity type interfaces, and activity retry profiles. Consumed by the scheduler-worker service (via `workflowsPath`) and app code for type-safe generic workflow inputs. Contains zero I/O — pure deterministic code only.
 
 ## Pointers
 
@@ -22,16 +22,13 @@
 ```
 src/
 ├── index.ts                # Public type exports ONLY (safe to import anywhere)
-├── scheduler.ts            # Barrel: GraphRunWorkflow, PrReviewWorkflow (workflowsPath)
+├── scheduler.ts            # Barrel: GraphRunWorkflow, NodeTaskWorkflow, generic scheduler workflows
 ├── ledger.ts               # Barrel: CollectEpoch, Finalize, stages (workflowsPath)
 ├── activity-types.ts       # Explicit activity interfaces for proxyActivities<T>()
 ├── activity-profiles.ts    # Shared timeout/retry configs
 ├── domain/
-│   └── review.ts           # Pure domain logic: criteria eval + markdown formatting
 └── workflows/
     ├── graph-run.workflow.ts
-    ├── pr-review.workflow.ts
-    ├── pr-review.schema.ts    # Zod source-of-truth for PrReviewWorkflowInput
     ├── collect-epoch.workflow.ts
     ├── finalize-epoch.workflow.ts
     └── stages/
@@ -68,20 +65,19 @@ src/
 
 ## Public Surface
 
-- **Types:** `GraphRunResult`, `GraphRunWorkflowInput`, `PrReviewWorkflowInput` (`z.infer<typeof PrReviewWorkflowInputSchema>` from `./pr-review.schema.ts`), `FinalizeEpochWorkflowInput`, `AttributionIngestRunV1`, `CollectSourcesInput`, `EnrichAndAllocateInput`
-- **Schemas:** `PrReviewWorkflowInputSchema` (Zod, `.strict()`) — single source of truth for `PrReviewWorkflow`'s input. Producers parse with this before `workflowClient.start(...)` per SINGLE_INPUT_CONTRACT (task.0419).
-- **Activity interfaces:** `SchedulerActivities`, `ReviewActivities`, `LedgerActivities`, `EnrichmentActivities`. Per task.0280, `validateGrantActivity` / `createGraphRunActivity` / `updateGraphRunActivity` inputs include `nodeId: string` so the worker can route each HTTP call to the owning node's internal API. Per task.0410, `fetchPrContextActivity` returns `{ changedFiles, owningNode }` and `postRoutingDiagnosticActivity` handles cross-domain refusal + miss-neutral outcomes.
+- **Types:** `GraphRunResult`, `GraphRunWorkflowInput`, `FinalizeEpochWorkflowInput`, `AttributionIngestRunV1`, `CollectSourcesInput`, `EnrichAndAllocateInput`
+- **Activity interfaces:** `SchedulerActivities`, `LedgerActivities`, `EnrichmentActivities`. Per task.0280, `validateGrantActivity` / `createGraphRunActivity` / `updateGraphRunActivity` inputs include `nodeId: string` so the worker can route each HTTP call to the owning node's internal API.
 - **Domain exports:** `evaluateCriteria`, `aggregateGateStatuses`, `formatCheckRunSummary`, `formatPrComment`, `formatCrossDomainRefusal`, `formatNoScopeNeutral`, `buildReviewUserMessage`, `findRequirement`, `formatThreshold`
 - **Config:** `STANDARD_ACTIVITY_OPTIONS`, `EXTERNAL_API_ACTIVITY_OPTIONS`, `GRAPH_EXECUTION_ACTIVITY_OPTIONS`. Metadata activities (grant + run CRUD) use `maximumAttempts: 6` (~2 min budget) to absorb parallel-rollout race windows.
 
 ## Responsibilities
 
-- This directory **does**: Define Temporal workflow orchestration functions, declare activity type interfaces, export shared retry/timeout profiles, export PR review domain logic (pure)
+- This directory **does**: Define generic Temporal workflow orchestration functions, declare activity type interfaces, export shared retry/timeout profiles
 - This directory **does not**: Contain activity implementations, perform I/O, import from services/ or src/, define process lifecycle
 
 ## Dependencies
 
-- **Internal:** `@cogni/attribution-ledger` (epoch window computation), `@cogni/ingestion-core` (ActivityEvent type), `@cogni/repo-spec` (SuccessCriteria types for review domain)
+- **Internal:** `@cogni/attribution-ledger` (epoch window computation), `@cogni/ingestion-core` (ActivityEvent type), `@cogni/repo-spec` (repo-spec identity/types)
 - **External:** `@temporalio/workflow`
 
 ## Change Protocol
