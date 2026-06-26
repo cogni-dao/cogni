@@ -73,6 +73,8 @@ const ruleYaml = stringifyYaml({
 interface FetchPrFakes {
   changedFiles: string[];
   ruleAvailableAt?: string;
+  /** Override the served repo-spec YAML (defaults to minimalRepoSpecYaml). */
+  repoSpecYaml?: string;
 }
 
 function setFetchPrHandlers(fakes: FetchPrFakes): void {
@@ -91,7 +93,8 @@ function setFetchPrHandlers(fakes: FetchPrFakes): void {
       fakes.changedFiles.map((f) => ({ filename: f, patch: "+x" })),
     "GET /repos/{owner}/{repo}/contents/{path}": (params: unknown) => {
       const { path } = params as { path: string };
-      if (path === ".cogni/repo-spec.yaml") return minimalRepoSpecYaml;
+      if (path === ".cogni/repo-spec.yaml")
+        return fakes.repoSpecYaml ?? minimalRepoSpecYaml;
       if (fakes.ruleAvailableAt && path === fakes.ruleAvailableAt)
         return ruleYaml;
       const err = new Error(`Not Found: ${path}`) as Error & {
@@ -215,5 +218,79 @@ describe("fetchPrContext — owning-node routing", () => {
       expect(result.owningNode.nodeId).toBe(TEST_NODE_IDS.poly);
       expect(result.owningNode.rideAlongApplied).toBe(true);
     }
+  });
+});
+
+describe("fetchPrContext — review on/off + model (repo-spec driven)", () => {
+  /** Builds a repo-spec yaml carrying an optional review block. */
+  function specWithReview(review?: Record<string, unknown>): string {
+    return stringifyYaml({
+      node_id: TEST_NODE_IDS.operator,
+      scope_id: "00000000-0000-4000-8000-000000000002",
+      cogni_dao: { chain_id: "8453" },
+      payments_in: {
+        credits_topup: {
+          provider: "cogni-usdc-backend-v1",
+          receiving_address: "0x1111111111111111111111111111111111111111",
+        },
+      },
+      nodes: [TEST_NODE_ENTRIES.operator],
+      ...(review ? { review } : {}),
+      gates: [{ type: "ai-rule", with: { rule_file: "quality.rule.yaml" } }],
+    });
+  }
+
+  it("defaults to reviewEnabled=true + operator default model when no review block", async () => {
+    setFetchPrHandlers({ changedFiles: ["packages/repo-spec/src/x.ts"] });
+
+    const result = await makeAdapter().fetchPrContext({
+      owner: "org",
+      repo: "repo",
+      prNumber: 123,
+      installationId: 1,
+    });
+
+    expect(result.reviewEnabled).toBe(true);
+    expect(result.modelRef.modelId).toBe("gpt-4o-mini");
+  });
+
+  it("propagates review.enabled=false (node opts out)", async () => {
+    setFetchPrHandlers({
+      changedFiles: ["packages/repo-spec/src/x.ts"],
+      repoSpecYaml: specWithReview({ enabled: false }),
+    });
+
+    const result = await makeAdapter().fetchPrContext({
+      owner: "org",
+      repo: "repo",
+      prNumber: 123,
+      installationId: 1,
+    });
+
+    expect(result.reviewEnabled).toBe(false);
+  });
+
+  it("uses the node-selected review.model", async () => {
+    setFetchPrHandlers({
+      changedFiles: ["packages/repo-spec/src/x.ts"],
+      ruleAvailableAt: "nodes/operator/.cogni/rules/quality.rule.yaml",
+      repoSpecYaml: specWithReview({
+        enabled: true,
+        model: "claude-haiku-4-5",
+      }),
+    });
+
+    const result = await makeAdapter().fetchPrContext({
+      owner: "org",
+      repo: "repo",
+      prNumber: 123,
+      installationId: 1,
+    });
+
+    expect(result.reviewEnabled).toBe(true);
+    expect(result.modelRef).toEqual({
+      providerKey: "platform",
+      modelId: "claude-haiku-4-5",
+    });
   });
 });

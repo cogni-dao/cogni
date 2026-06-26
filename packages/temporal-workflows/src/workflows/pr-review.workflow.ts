@@ -8,6 +8,10 @@
  * Invariants:
  *   - Per TEMPORAL_DETERMINISM: No I/O in workflow code
  *   - Per NORMATIVE_WEBHOOK_PATTERN: webhook starts workflow, exits immediately
+ *   - Per NODE_REVIEW_OPT_OUT: context is fetched BEFORE the Check Run so a node
+ *     that sets repo-spec `review.enabled: false` gets a fully silent skip (no
+ *     Check Run, no comment, no AI tokens). Model is node-selected via
+ *     `review.model` → `context.modelRef` (no operator-side model hardcode).
  *   - Per ACTIVITY_IDEMPOTENCY: GitHub writes use stable business keys (repo/pr/headSha)
  *   - Per WORKFLOW_TOP_LEVEL_VISIBILITY: parent workflow is primary UI object; graph run is drill-down
  *   - Per SINGLE_DOMAIN_HARD_FAIL: workflow short-circuits cross-domain (`conflict`) and
@@ -75,7 +79,25 @@ export async function PrReviewWorkflow(
     virtualKeyId,
   } = input;
 
-  // 1. Create Check Run immediately for UX feedback
+  // 1. Fetch PR context from GitHub API FIRST. The activity reads the target
+  //    repo's own repo-spec, so it tells us whether this node even opts into
+  //    review (`review.enabled`) and resolves the owning domain
+  //    (extractOwningNode) so the workflow can dispatch on it without I/O.
+  const context = await fetchPrContextActivity({
+    owner,
+    repo,
+    prNumber,
+    installationId,
+  });
+
+  // 1a. Review opt-out — when the node disables review in its repo-spec, the
+  //     operator stays out entirely: no Check Run, no comment, no AI tokens.
+  //     Fetching context before creating the Check Run is what makes "off" silent.
+  if (context.reviewEnabled === false) {
+    return;
+  }
+
+  // 2. Create Check Run for UX feedback (review is enabled for this node).
   let checkRunId: number | undefined;
   try {
     checkRunId = await createCheckRunActivity({
@@ -87,16 +109,6 @@ export async function PrReviewWorkflow(
   } catch {
     // Continue without check run — non-fatal
   }
-
-  // 2. Fetch PR context from GitHub API. The activity also resolves the
-  //    owning domain (extractOwningNode) so the workflow can dispatch on it
-  //    without doing I/O itself.
-  const context = await fetchPrContextActivity({
-    owner,
-    repo,
-    prNumber,
-    installationId,
-  });
 
   // 2a. Routing — short-circuit conflict / miss without spending AI tokens.
   //     Per docs/spec/node-ci-cd-contract.md § Single-Domain Scope, cross-domain

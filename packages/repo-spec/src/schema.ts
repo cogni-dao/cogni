@@ -444,6 +444,23 @@ export type GateConfig = z.infer<typeof gateConfigSchema>;
 /** Gates array schema. */
 export const gatesArraySchema = z.array(gateConfigSchema);
 
+/**
+ * PR review configuration — the node-author-facing on/off + model toggle.
+ *
+ * The operator reviews a PR by reading the TARGET repo's own repo-spec, so this
+ * block makes git PR review 100% node-controlled (no operator-side hardcode):
+ *   - `enabled` — when `false`, the operator skips review entirely (no Check Run,
+ *     no comment). Defaults to `true` for backward-compat (review was always-on).
+ *   - `model` — platform model id (LiteLLM-resolvable, e.g. `gpt-4o-mini`) the
+ *     `pr-review` graph runs with. Omitted → operator default.
+ */
+export const reviewConfigSchema = z.object({
+  enabled: z.boolean().optional().default(true),
+  model: z.string().min(1).optional(),
+});
+
+export type ReviewConfig = z.infer<typeof reviewConfigSchema>;
+
 // ---------------------------------------------------------------------------
 // Scope identity primitives
 // ---------------------------------------------------------------------------
@@ -597,6 +614,9 @@ export const repoSpecSchema = z
      * node-author-facing contract (route XOR graph; no operator vocab leak).
      */
     schedules: nodeSchedulesSchema.optional().default([]),
+
+    /** PR review on/off + model selection (optional — defaults to enabled). */
+    review: reviewConfigSchema.optional(),
 
     /** PR review gate configuration (optional — gates run in declared order). */
     gates: gatesArraySchema.optional(),

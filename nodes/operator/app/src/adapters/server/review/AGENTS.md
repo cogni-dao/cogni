@@ -50,6 +50,7 @@ evidence + repo-spec/owning-node context, and GitHub App installation tokens.
   - Manage GitHub App JWT signing and installation token exchange
   - Create/finalize GitHub Check Runs (maps internal pass/fail/neutral → GitHub success/failure/neutral)
   - Fetch PR metadata + diff + repo-spec + rule files; resolve the owning domain (`extractOwningNode`)
+  - Resolve node-controlled review config from the target repo-spec (`extractReviewConfig`): `reviewEnabled` on/off + `modelRef` model selection (no operator-side model hardcode)
   - Apply budget-aware truncation to large diffs
   - Post PR comments with HEAD-SHA staleness guard (skip if SHA changed)
 - This directory **does not:**

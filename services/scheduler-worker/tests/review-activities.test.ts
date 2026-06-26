@@ -48,6 +48,7 @@ function makeContext(
       patches: [],
       totalDiffBytes: 0,
     },
+    reviewEnabled: true,
     gatesConfig: { gates: [], failOnError: false },
     rules: {},
     graphMessages: [],

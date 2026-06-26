@@ -150,6 +150,11 @@ const RuleSchema = z.looseObject({
 
 export const InternalReviewPrContextOutputSchema = z.object({
   evidence: EvidenceBundleSchema,
+  /**
+   * Node-controlled PR review on/off (repo-spec `review.enabled`). Defaults to
+   * true so older operators that don't send it are treated as enabled.
+   */
+  reviewEnabled: z.boolean().optional().default(true),
   gatesConfig: GatesConfigSchema,
   rules: z.record(z.string(), RuleSchema),
   graphMessages: z.array(z.object({ role: z.string(), content: z.string() })),

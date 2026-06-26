@@ -22,6 +22,7 @@ import {
   extractNodePath,
   extractOwningNode,
   extractPaymentConfig,
+  extractReviewConfig,
   extractScopeId,
   parseRepoSpec,
   type RepoSpec,
@@ -93,6 +94,27 @@ function buildFullSpec(): RepoSpec {
 describe("extractNodeId", () => {
   it("returns node_id from spec", () => {
     expect(extractNodeId(buildSpec())).toBe(TEST_NODE_ID);
+  });
+});
+
+describe("extractReviewConfig", () => {
+  it("defaults to enabled with no model when review block is absent", () => {
+    const cfg = extractReviewConfig(buildSpec());
+    expect(cfg.enabled).toBe(true);
+    expect(cfg.model).toBeUndefined();
+  });
+
+  it("honors review.enabled=false (node opts out of PR review)", () => {
+    const cfg = extractReviewConfig(buildSpec({ review: { enabled: false } }));
+    expect(cfg.enabled).toBe(false);
+  });
+
+  it("returns the node-selected model", () => {
+    const cfg = extractReviewConfig(
+      buildSpec({ review: { enabled: true, model: "claude-haiku-4-5" } })
+    );
+    expect(cfg.enabled).toBe(true);
+    expect(cfg.model).toBe("claude-haiku-4-5");
   });
 });
 

@@ -31,6 +31,7 @@ import type {
 import {
   extractGatesConfig,
   extractOwningNode,
+  extractReviewConfig,
   type GateConfig,
   type GatesConfig,
   type OwningNode,
@@ -77,6 +78,8 @@ export interface GithubReviewAdapterDeps {
 /** Full review context returned to the worker. JSON-serializable. */
 export interface PrReviewContext {
   evidence: EvidenceBundle;
+  /** Whether this node opts into PR review (repo-spec `review.enabled`, default true). */
+  reviewEnabled: boolean;
   gatesConfig: GatesConfig;
   rules: Record<string, Rule>;
   graphMessages: Array<{ role: string; content: string }>;
@@ -287,6 +290,7 @@ export function createGithubReviewAdapter(deps: GithubReviewAdapterDeps) {
       // No repo-spec — empty gates; routing no-ops (miss).
       return {
         evidence,
+        reviewEnabled: true,
         gatesConfig: { gates: [], failOnError: false },
         rules: {},
         graphMessages: [],
@@ -300,9 +304,18 @@ export function createGithubReviewAdapter(deps: GithubReviewAdapterDeps) {
     // Parse leniently — target repo may not have full node_id/scope_id fields.
     let gatesConfig: GatesConfig;
     let parsedSpec: RepoSpec | null = null;
+    // Review on/off + model is node-controlled via repo-spec `review:` block.
+    // Default: enabled, operator default model (backward-compat with always-on).
+    let reviewEnabled = true;
+    let modelRef: PrReviewContext["modelRef"] = DEFAULT_REVIEW_MODELREF;
     try {
       parsedSpec = parseRepoSpec(repoSpecYaml);
       gatesConfig = extractGatesConfig(parsedSpec);
+      const reviewConfig = extractReviewConfig(parsedSpec);
+      reviewEnabled = reviewConfig.enabled;
+      if (reviewConfig.model) {
+        modelRef = { providerKey: "platform", modelId: reviewConfig.model };
+      }
     } catch {
       const raw = parseYaml(repoSpecYaml) as Record<string, unknown>;
       const gates = Array.isArray(raw.gates) ? raw.gates : [];
@@ -310,6 +323,15 @@ export function createGithubReviewAdapter(deps: GithubReviewAdapterDeps) {
         gates: gates as GateConfig[],
         failOnError: raw.fail_on_error === true,
       };
+      // Mirror the typed path for repos whose spec fails strict parse.
+      const review = (raw.review ?? {}) as {
+        enabled?: unknown;
+        model?: unknown;
+      };
+      reviewEnabled = review.enabled !== false;
+      if (typeof review.model === "string" && review.model.length > 0) {
+        modelRef = { providerKey: "platform", modelId: review.model };
+      }
     }
 
     // Owning-domain resolution. The structured `review.routed` log is emitted by
@@ -416,13 +438,14 @@ export function createGithubReviewAdapter(deps: GithubReviewAdapterDeps) {
 
     return {
       evidence,
+      reviewEnabled,
       gatesConfig,
       rules,
       graphMessages: userMessage
         ? [{ role: "user", content: userMessage }]
         : [],
       responseFormat,
-      modelRef: DEFAULT_REVIEW_MODELREF,
+      modelRef,
       repoSpecYaml,
       changedFiles,
       owningNode,

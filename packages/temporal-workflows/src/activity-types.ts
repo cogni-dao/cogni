@@ -97,6 +97,7 @@ export interface SchedulerActivities {
 // Review Activities (GitHub I/O for PR review workflow)
 // ---------------------------------------------------------------------------
 
+import type { InternalReviewPrContextOutput } from "@cogni/node-contracts";
 import type { OwningNode } from "@cogni/repo-spec";
 
 export interface ReviewActivities {
@@ -107,28 +108,19 @@ export interface ReviewActivities {
     installationId: number;
   }): Promise<number>;
 
+  /**
+   * Returns the worker↔operator review wire contract verbatim — the SSOT lives
+   * in `@cogni/node-contracts` (review.internal.v1), NOT re-typed here. The
+   * output carries `reviewEnabled` (repo-spec `review.enabled` on/off), the
+   * node-selected `modelRef`, gates/rules, evidence, and the resolved
+   * `owningNode` the workflow dispatches on.
+   */
   fetchPrContextActivity(input: {
     owner: string;
     repo: string;
     prNumber: number;
     installationId: number;
-  }): Promise<{
-    evidence: Record<string, unknown>;
-    gatesConfig: { gates: unknown[]; failOnError: boolean };
-    rules: Record<string, unknown>;
-    graphMessages: Array<{ role: string; content: string }>;
-    responseFormat: { prompt: string; schemaId: string };
-    modelRef: { providerKey: string; modelId: string; connectionId?: string };
-    repoSpecYaml?: string;
-    /** Filenames from GitHub `pulls.listFiles`. Used for owning-domain resolution. */
-    changedFiles: string[];
-    /**
-     * Owning domain resolved via `extractOwningNode(rootSpec, changedFiles)`.
-     * Workflow dispatches on `kind`: `single` continues review; `conflict` and
-     * `miss` short-circuit through `postRoutingDiagnosticActivity`.
-     */
-    owningNode: OwningNode;
-  }>;
+  }): Promise<InternalReviewPrContextOutput>;
 
   postReviewResultActivity(input: Record<string, unknown>): Promise<void>;
 
