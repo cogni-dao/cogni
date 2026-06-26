@@ -305,6 +305,16 @@ if [[ -f "$external_secret_file" ]]; then
   remote "kubectl -n 'cogni-${DEPLOY_ENVIRONMENT}' apply -f '/tmp/${DEPLOY_ENVIRONMENT}-${TARGET_NODE}-external-secret.yaml' >/dev/null && rm -f '/tmp/${DEPLOY_ENVIRONMENT}-${TARGET_NODE}-external-secret.yaml'"
   log "applied ExternalSecret ${TARGET_NODE}-env-secrets"
   mark_row externalsecret updated "applied ExternalSecret ${TARGET_NODE}-env-secrets"
+  remote "set -euo pipefail
+    ns='cogni-${DEPLOY_ENVIRONMENT}'
+    es='${expected_secret_name}'
+    marker=\$(date +%s)
+    kubectl -n \"\$ns\" annotate externalsecret \"\$es\" force-sync=\"\$marker\" --overwrite >/dev/null
+    kubectl -n \"\$ns\" wait --for=condition=Ready \"externalsecret/\$es\" --timeout=120s >/dev/null
+    kubectl -n \"\$ns\" get secret \"\$es\" >/dev/null
+    sleep 5"
+  log "force-refreshed ExternalSecret ${TARGET_NODE}-env-secrets"
+  mark_row externalsecret_refresh refreshed "force-refreshed ExternalSecret ${TARGET_NODE}-env-secrets"
 else
   fail "missing node ExternalSecret leaf: $external_secret_file"
 fi

@@ -141,6 +141,18 @@ fi
 if [ "${1:-}" = "-n" ] && [ "${3:-}" = "apply" ]; then
   exit 0
 fi
+if [ "${1:-}" = "-n" ] && [ "${3:-}" = "annotate" ] && [ "${4:-}" = "externalsecret" ]; then
+  printf '%s\n' "$*" >> "${FAKE_REMOTE_ROOT}/kubectl.log"
+  exit 0
+fi
+if [ "${1:-}" = "-n" ] && [ "${3:-}" = "wait" ]; then
+  printf '%s\n' "$*" >> "${FAKE_REMOTE_ROOT}/kubectl.log"
+  exit 0
+fi
+if [ "${1:-}" = "-n" ] && [ "${3:-}" = "get" ] && [ "${4:-}" = "secret" ]; then
+  printf '%s\n' "$*" >> "${FAKE_REMOTE_ROOT}/kubectl.log"
+  exit 0
+fi
 if [ "${1:-}" = "exec" ]; then
   args=("$@")
   last_index=$((${#args[@]} - 1))
@@ -226,6 +238,9 @@ env \
 grep -q "substrate ready inputs reconciled for operator" "$TMPROOT/out.txt"
 grep -q "deleted legacy ExternalSecret env-secrets targeting operator-env-secrets" "$TMPROOT/out.txt"
 grep -q -- "-n cogni-candidate-a delete externalsecret env-secrets" "$REMOTE_ROOT/kubectl.log"
+grep -q -- "-n cogni-candidate-a annotate externalsecret operator-env-secrets force-sync=" "$REMOTE_ROOT/kubectl.log"
+grep -q -- "-n cogni-candidate-a wait --for=condition=Ready externalsecret/operator-env-secrets --timeout=120s" "$REMOTE_ROOT/kubectl.log"
+grep -q -- "-n cogni-candidate-a get secret operator-env-secrets" "$REMOTE_ROOT/kubectl.log"
 # READ-ONLY on OpenBao: secret-materialize is the sole writer. After reconcile the
 # node bank must hold ONLY the per-node creds we pre-seeded — reconcile writes
 # nothing (no source:agent app keys, no DSNs). This locks the zero-write posture.
@@ -276,7 +291,7 @@ assert s["target"] == "operator", s["target"]
 assert s["target_type"] == "node", s["target_type"]
 assert s["failed_row_count"] == 0, s["failed_rows"]
 rows = {r["row"] for r in s["rows"]}
-expected = {"reader_token", "db_creds", "externalsecret", "caddyfile", "remote_reconcile"}
+expected = {"reader_token", "db_creds", "externalsecret", "externalsecret_refresh", "caddyfile", "remote_reconcile"}
 assert expected <= rows, (expected - rows, rows)
 PY
 if grep -qE 'pernode-app-pw-sentinel|pernode-svc-pw-sentinel|writer-token' "$TMPROOT/summary.json"; then
