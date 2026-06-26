@@ -3,30 +3,15 @@
 
 /**
  * Module: `@app/(app)/nodes/payments/page`
- * Purpose: Server entrypoint for payment activation. Sources the operator-wallet + DAO addresses
- *   from either (a) the `nodes` registry row when invoked with `?nodeId=...` (external-node wizard),
- *   or (b) the local `.cogni/repo-spec.yaml` (legacy monorepo flow).
- * Scope: Reads input source; delegates wallet interaction to the client component.
- * Invariants: REPO_SPEC_FALLBACK — legacy flow without `?nodeId` keeps its original behavior.
- * Side-effects: IO (filesystem read of repo-spec OR Postgres read of nodes row)
- * Links: docs/spec/node-formation.md, task.5083
+ * Purpose: Compatibility redirect for old payment activation links.
+ * Scope: Redirect only. Node payment activation is owned by `/nodes/[id]/payments`.
+ * Invariants: NO_OPERATOR_PAYMENT_FALLBACK — a missing node id does not activate operator repo-spec.
+ * Side-effects: redirect
+ * Links: src/app/(app)/nodes/[id]/payments/page.tsx, task.5083
  * @public
  */
 
-import { withTenantScope } from "@cogni/db-client";
-import { type UserId, userActor } from "@cogni/ids";
-import { and, eq } from "drizzle-orm";
-import type { ReactElement } from "react";
-
-import { resolveAppDb } from "@/bootstrap/container";
-import { getServerSessionUser } from "@/lib/auth/server";
-import {
-  getDaoTreasuryAddress,
-  getOperatorWalletConfig,
-} from "@/shared/config";
-import { nodes } from "@/shared/db/nodes";
-
-import { PaymentActivationPageClient } from "./PaymentActivationPage.client";
+import { redirect } from "next/navigation";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -37,44 +22,13 @@ interface PageProps {
 
 export default async function PaymentActivationPage({
   searchParams,
-}: PageProps): Promise<ReactElement> {
+}: PageProps): Promise<never> {
   const sp = await searchParams;
   const nodeId = sp.nodeId ?? null;
 
   if (nodeId) {
-    const session = await getServerSessionUser();
-    if (session) {
-      const db = resolveAppDb();
-      const rows = await withTenantScope(
-        db,
-        userActor(session.id as UserId),
-        async (tx) =>
-          tx
-            .select()
-            .from(nodes)
-            .where(and(eq(nodes.id, nodeId), eq(nodes.ownerUserId, session.id)))
-            .limit(1)
-      );
-      const node = rows[0];
-      if (node) {
-        return (
-          <PaymentActivationPageClient
-            operatorWalletAddress={node.operatorWalletAddress ?? null}
-            daoTreasuryAddress={node.daoAddress ?? null}
-            nodeId={nodeId}
-          />
-        );
-      }
-    }
+    redirect(`/nodes/${encodeURIComponent(nodeId)}/payments`);
   }
 
-  const operatorWallet = getOperatorWalletConfig();
-  const daoTreasury = getDaoTreasuryAddress();
-
-  return (
-    <PaymentActivationPageClient
-      operatorWalletAddress={operatorWallet?.address ?? null}
-      daoTreasuryAddress={daoTreasury ?? null}
-    />
-  );
+  redirect("/nodes");
 }

@@ -3,10 +3,10 @@
 
 /**
  * Module: `@app/(app)/setup/dao/payments/page`
- * Purpose: Legacy payment activation URL. Redirects to the canonical nodes payment route.
+ * Purpose: Legacy payment activation URL. Redirects old node-scoped links into the node route.
  * Scope: Server redirect only.
  * Side-effects: redirect
- * Links: src/app/(app)/nodes/payments/page.tsx
+ * Links: src/app/(app)/nodes/[id]/payments/page.tsx
  * @public
  */
 
@@ -20,6 +20,8 @@ export default async function LegacyPaymentActivationPage({
   searchParams,
 }: PageProps): Promise<never> {
   const { nodeId } = await searchParams;
-  const suffix = nodeId ? `?nodeId=${encodeURIComponent(nodeId)}` : "";
-  redirect(`/nodes/payments${suffix}`);
+  if (nodeId) {
+    redirect(`/nodes/${encodeURIComponent(nodeId)}/payments`);
+  }
+  redirect("/nodes");
 }

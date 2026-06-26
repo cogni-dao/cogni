@@ -14,8 +14,11 @@
 "use client";
 
 import { ExternalLink } from "lucide-react";
+import Link from "next/link";
 import type { ReactElement } from "react";
+
 import { Button } from "@/components";
+
 import { LaunchPackCopyButton } from "../LaunchPackCopyButton.client";
 import { StepSection } from "../StepSection";
 import type { WizardStepProps } from "../types";
@@ -97,6 +100,12 @@ export function HandoffStep({ node }: WizardStepProps): ReactElement {
               </a>
             </Button>
           ))}
+        </div>
+
+        <div className="flex justify-center pt-2">
+          <Button asChild variant="outline" size="xl">
+            <Link href={`/nodes/${node.id}/payments`}>Activate payments</Link>
+          </Button>
         </div>
       </div>
     </StepSection>
