@@ -25,7 +25,11 @@ describe("parseWellKnownIdentity", () => {
         name: "beacon",
         hook: "Signal in the noise",
         mission: "A community-owned beacon node",
-        brand: { thumbnail: "/showcase/beacon.png", color: "#0af" },
+        brand: {
+          icon: "RadioTower",
+          thumbnail: "/showcase/beacon.png",
+          color: "#0af",
+        },
       },
     };
     expect(parseWellKnownIdentity(body, HOST)).toEqual({
@@ -33,6 +37,7 @@ describe("parseWellKnownIdentity", () => {
       hook: "Signal in the noise",
       mission: "A community-owned beacon node",
       brand: {
+        icon: "RadioTower",
         thumbnail: "https://beacon.cognidao.org/showcase/beacon.png",
         color: "#0af",
       },
@@ -62,7 +67,7 @@ describe("parseWellKnownIdentity", () => {
       name: "blue",
       hook: null,
       mission: null,
-      brand: { thumbnail: null, color: null },
+      brand: { icon: null, thumbnail: null, color: null },
     });
   });
 

@@ -18,6 +18,7 @@ import type { ReactElement } from "react";
 
 import { Button, Card } from "@/components";
 import type { NodeSummary } from "@/ports";
+import { resolveBrandIcon } from "@/shared/brand/brandIcons";
 
 interface NodeCardMetrics {
   readonly devActivity30d: number;
@@ -77,6 +78,7 @@ export function NodeNetworkCard({
     metrics.aiUsage.state === "available"
       ? `${formatNumber(metrics.aiUsage.requests30d)} / 30d`
       : "Pending";
+  const BrandIcon = node.icon ? resolveBrandIcon(node.icon) : null;
 
   return (
     <Card className="flex h-full flex-col overflow-hidden transition-colors hover:border-primary">
@@ -86,7 +88,19 @@ export function NodeNetworkCard({
         className="group flex flex-1 flex-col focus-visible:outline-2 focus-visible:outline-ring"
       >
         <div className="relative aspect-video border-border border-b bg-muted">
-          {node.thumbnailUrl ? (
+          {BrandIcon ? (
+            // IDENTITY_IS_REPO_SPEC_PROJECTION: the card mark is the node's own
+            // `intent.brand.icon` (Lucide), rendered big + brand-tinted. Preferred
+            // over a thumbnail image; falls back to a monogram when unset.
+            <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-muted via-background to-background">
+              <BrandIcon
+                className="size-24 transition-transform group-hover:scale-105"
+                color={node.brandColor}
+                strokeWidth={1.5}
+                aria-hidden="true"
+              />
+            </div>
+          ) : node.thumbnailUrl ? (
             <Image
               src={node.thumbnailUrl}
               alt={`${node.title} homepage`}

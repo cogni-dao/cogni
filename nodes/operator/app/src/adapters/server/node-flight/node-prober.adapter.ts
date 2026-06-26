@@ -46,6 +46,7 @@ const wellKnownIdentitySchema = z.object({
   mission: z.string().nullable().optional(),
   brand: z
     .object({
+      icon: z.string().nullable().optional(),
       thumbnail: z.string().nullable().optional(),
       color: z.string().nullable().optional(),
     })
@@ -86,6 +87,7 @@ export function parseWellKnownIdentity(
     hook: id.hook ?? null,
     mission: id.mission ?? null,
     brand: {
+      icon: id.brand?.icon ?? null,
       thumbnail: resolveThumbnail(id.brand?.thumbnail, host),
       color: id.brand?.color ?? null,
     },

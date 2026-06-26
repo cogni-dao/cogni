@@ -86,6 +86,7 @@ function enrich(
     ...node,
     health,
     ...(identity.hook !== null && { tagline: identity.hook }),
+    ...(identity.brand.icon !== null && { icon: identity.brand.icon }),
     ...(identity.brand.thumbnail !== null && {
       thumbnailUrl: identity.brand.thumbnail,
     }),

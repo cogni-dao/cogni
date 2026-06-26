@@ -49,6 +49,7 @@ export function NodeShowcase({
               node={{
                 title: node.title,
                 tagline: node.tagline,
+                icon: node.icon,
                 thumbnailUrl: node.thumbnailUrl,
                 brandColor: node.brandColor,
                 href: node.href,

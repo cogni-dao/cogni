@@ -23,10 +23,13 @@ import Link from "next/link";
 import type { CSSProperties, ReactElement } from "react";
 
 import { Badge, Card } from "@/components";
+import { resolveBrandIcon } from "@/shared/brand/brandIcons";
 
 export interface NodeTileView {
   readonly title: string;
   readonly tagline?: string | null | undefined;
+  /** Lucide icon NAME from the node's own `intent.brand.icon` — the card mark, rendered big + tinted. */
+  readonly icon?: string | null | undefined;
   /** Homepage screenshot; when absent a gradient placeholder is shown. */
   readonly thumbnailUrl?: string | null | undefined;
   /** Node-self-described brand color (CSS color) tinting the monogram placeholder; falls back to a token. */
@@ -54,11 +57,35 @@ function Banner({
   thumbnailUrl,
   title,
   brandColor,
+  icon,
 }: {
   thumbnailUrl?: string | null | undefined;
   title: string;
   brandColor?: string | null | undefined;
+  icon?: string | null | undefined;
 }): ReactElement {
+  // IDENTITY_IS_REPO_SPEC_PROJECTION: prefer the node's own `intent.brand.icon`
+  // (Lucide), rendered big + brand-tinted, over a thumbnail or monogram.
+  if (icon) {
+    const BrandIcon = resolveBrandIcon(icon);
+    const iconStyle = brandStyle(brandColor);
+    const wash = iconStyle
+      ? "from-[var(--node-brand)]/20 via-background to-background"
+      : "from-primary/15 via-background to-background";
+    return (
+      <div
+        className={`relative flex h-full w-full items-center justify-center overflow-hidden bg-gradient-to-br ${wash}`}
+        style={iconStyle}
+      >
+        <BrandIcon
+          className="size-20 transition-transform group-hover:scale-105"
+          color={brandColor ?? undefined}
+          strokeWidth={1.5}
+          aria-hidden="true"
+        />
+      </div>
+    );
+  }
   if (thumbnailUrl) {
     return (
       <Image
@@ -124,6 +151,7 @@ export function NodeTile({ node }: { node: NodeTileView }): ReactElement {
             thumbnailUrl={node.thumbnailUrl}
             title={node.title}
             brandColor={node.brandColor}
+            icon={node.icon}
           />
         </div>
         <div className="space-y-2 p-6">

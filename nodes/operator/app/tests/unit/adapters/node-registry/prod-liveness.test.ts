@@ -35,7 +35,11 @@ function identityFor(host: string): NodeIdentity {
     name: host.split(".")[0] ?? host,
     hook: `${host} hook`,
     mission: `${host} mission`,
-    brand: { thumbnail: `https://${host}/showcase/x.png`, color: "#abc" },
+    brand: {
+      icon: null,
+      thumbnail: `https://${host}/showcase/x.png`,
+      color: "#abc",
+    },
   };
 }
 

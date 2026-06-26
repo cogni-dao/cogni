@@ -56,6 +56,11 @@ export interface NodeSummary {
    * for nodes without a shipped thumbnail (tile shows a brand-tinted monogram placeholder).
    */
   readonly thumbnailUrl?: string | undefined;
+  /**
+   * Lucide icon NAME (PascalCase) from the node's own `intent.brand.icon` — the SSOT for the card mark.
+   * The gallery renders this big + brand-tinted, in preference to a thumbnail. Undefined → monogram.
+   */
+  readonly icon?: string | undefined;
   /** Monogram-tint brand color from the node's own `intent.brand.color`; undefined falls back to a token. */
   readonly brandColor?: string | undefined;
   /**

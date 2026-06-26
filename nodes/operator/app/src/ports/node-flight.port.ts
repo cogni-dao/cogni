@@ -75,6 +75,8 @@ export interface NodeIdentity {
   readonly hook: string | null;
   readonly mission: string | null;
   readonly brand: {
+    /** Lucide icon NAME (PascalCase) — the SSOT for the node's gallery mark, or null. */
+    readonly icon: string | null;
     /** Absolute, host-resolved thumbnail URL, or null when undeclared. */
     readonly thumbnail: string | null;
     readonly color: string | null;
