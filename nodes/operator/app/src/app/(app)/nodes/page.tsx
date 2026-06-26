@@ -18,7 +18,9 @@ import type { ReactElement } from "react";
 import { resolveAppDb, resolveNodeRegistry } from "@/bootstrap/container";
 import { PageContainer, SectionCard } from "@/components";
 import { NodeTile } from "@/features/nodes/components/NodeTile";
+import { nodeSummaryToTileView } from "@/features/nodes/components/nodeTileView";
 import { getServerSessionUser } from "@/lib/auth/server";
+import type { NodeSummary } from "@/ports";
 import { type NodeStatus, nodes } from "@/shared/db/nodes";
 import { titleCaseSlug } from "@/shared/node-registry/resolve";
 
@@ -68,16 +70,20 @@ export default async function SetupNodesPage(): Promise<ReactElement> {
           <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
             {rows.map((n) => {
               const display = NODE_STATUS_DISPLAY[n.status as NodeStatus];
-              const publicNode = publicNodeBySlug.get(n.slug);
+              const publicNode =
+                publicNodeBySlug.get(n.slug) ??
+                ({
+                  slug: n.slug,
+                  nodeId: n.id,
+                  title: titleCaseSlug(n.slug),
+                  tagline: "",
+                  kind: "full-app",
+                  href: `/nodes/${n.id}`,
+                } satisfies NodeSummary);
               return (
                 <NodeTile
                   key={n.id}
-                  node={{
-                    title: publicNode?.title ?? titleCaseSlug(n.slug),
-                    tagline: publicNode?.tagline,
-                    icon: publicNode?.icon,
-                    thumbnailUrl: publicNode?.thumbnailUrl,
-                    brandColor: publicNode?.brandColor,
+                  node={nodeSummaryToTileView(publicNode, {
                     href: `/nodes/${n.id}`,
                     status: {
                       label: display.label,
@@ -85,7 +91,7 @@ export default async function SetupNodesPage(): Promise<ReactElement> {
                       presentation: "dot",
                     },
                     density: "compact",
-                  }}
+                  })}
                 />
               );
             })}

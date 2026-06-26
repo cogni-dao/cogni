@@ -5,7 +5,7 @@
  * Module: `@adapters/server/node-registry/live-node-registry.adapter`
  * Purpose: The IDENTITY + HEALTH decorator for the public gallery — a NodeRegistryPort decorator that
  *   wraps an inner registry (the bundled-catalog ∪ DB projection skeleton) and ENRICHES each node with
- *   its self-described identity (title=hook, tagline=mission, thumbnail, brandColor) and liveness
+ *   its self-described identity (hook, mission, thumbnail, brandColor) and liveness
  *   (live/down), read from a CACHED per-slug probe. The operator holds ZERO per-node identity literals:
  *   every gallery card's display data comes from the node's OWN well-known projection, merged here.
  *   Decision: down nodes are NOT hidden — the operator OWNS displaying health, so a decommissioned node
@@ -15,7 +15,7 @@
  * Invariants:
  *   - NEVER_PROBES_ON_RENDER: `getLiveness` is the cached snapshot accessor; this adapter NEVER probes
  *     inline. The homepage (highest-traffic public page) pays at most a cache lookup.
- *   - IDENTITY_OVERWRITES_SKELETON: when a node projects identity, its hook/mission/brand REPLACE the
+ *   - IDENTITY_OVERWRITES_SKELETON: when a node projects identity, its hook/mission/brand enrich the
  *     skeleton's titleCase(slug)/empty fallbacks. A node with no identity keeps the fallbacks (clean
  *     degradation until forks project identity).
  *   - ROSTER_NOT_FILTERED: output is the full inner roster, each annotated with `health`. Nothing is
@@ -66,9 +66,9 @@ export class LiveNodeRegistryAdapter implements NodeRegistryPort {
 }
 
 /**
- * Merge one node's cached liveness snapshot onto its skeleton summary. Identity fields (hook→title,
- * mission→tagline, brand) OVERWRITE the skeleton only when the node actually projected them; a node with
- * no identity keeps the skeleton's titleCase(slug)/empty fallbacks. `health` is always annotated.
+ * Merge one node's cached liveness snapshot onto its skeleton summary. Identity fields (hook, mission,
+ * brand) OVERWRITE the skeleton only when the node actually projected them; a node with no identity keeps
+ * the skeleton's titleCase(slug)/empty fallbacks. `health` is always annotated.
  */
 function enrich(
   node: NodeSummary,
@@ -78,14 +78,14 @@ function enrich(
   const { health, identity } = snapshot;
   if (!identity) return { ...node, health };
   // Card model: title = the node NAME (skeleton's titleCase(slug) — never the hook), tagline = the
-  // short HOOK (≤5 words). The MISSION is the cognition-bootstrap north-star and is deliberately NOT
-  // rendered in the gallery. Conditional spreads (exactOptionalPropertyTypes) only overwrite a field
-  // the node actually declared; an undeclared field keeps the skeleton fallback (titleCase title /
-  // empty tagline / monogram).
+  // short HOOK, mission = the longer repo-spec blurb. Conditional spreads (exactOptionalPropertyTypes)
+  // only overwrite a field the node actually declared; an undeclared field keeps the skeleton fallback
+  // (titleCase title / empty tagline / monogram).
   return {
     ...node,
     health,
     ...(identity.hook !== null && { tagline: identity.hook }),
+    ...(identity.mission !== null && { mission: identity.mission }),
     ...(identity.brand.icon !== null && { icon: identity.brand.icon }),
     ...(identity.brand.thumbnail !== null && {
       thumbnailUrl: identity.brand.thumbnail,

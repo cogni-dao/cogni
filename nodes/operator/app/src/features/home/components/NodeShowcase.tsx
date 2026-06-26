@@ -4,7 +4,7 @@
 /**
  * Module: `@features/home/components/NodeShowcase`
  * Purpose: Homepage section showcasing the node roster as clickable tiles, each rendered from the node's
- *   OWN self-described identity (title=name, tagline=hook, thumbnail, brand color) + an honest live/down
+ *   OWN self-described identity (title=name, blurb=mission/hook, thumbnail, brand color) + an honest live/down
  *   health badge. node-template IS the fork target (shown as its own "Node Template" card), so there is
  *   no separate "launch your own" tile — that would duplicate it.
  * Scope: Presentational. Maps resolved NodeSummary → the shared NodeTile. Does not fetch data.
@@ -21,6 +21,7 @@
 import type { ReactElement } from "react";
 
 import { NodeTile } from "@/features/nodes/components/NodeTile";
+import { nodeSummaryToTileView } from "@/features/nodes/components/nodeTileView";
 import type { NodeSummary } from "@/ports";
 
 export function NodeShowcase({
@@ -46,17 +47,10 @@ export function NodeShowcase({
           {nodes.map((node) => (
             <NodeTile
               key={node.slug}
-              node={{
-                title: node.title,
-                tagline: node.tagline,
-                icon: node.icon,
-                thumbnailUrl: node.thumbnailUrl,
-                brandColor: node.brandColor,
-                href: node.href,
+              node={nodeSummaryToTileView(node, {
                 external: true,
-                health: node.health,
                 density: "compact",
-              }}
+              })}
             />
           ))}
         </div>
