@@ -8,9 +8,10 @@
 # docs/spec/secrets-management.md Invariants 15/16 and
 # docs/design/node-wizard-secret-setting.md, AS BUILT today:
 #   - input is the secrets catalog ONLY; it never reads the VM runtime .env;
-#   - read-once → diff → write-missing-only: one prefetch of the node + ancestor
+#   - read-once → diff → write-missing-mostly: one prefetch of the node + ancestor
 #     paths, a single batched write of just the absent keys, O(1) ssh per node.
-#     A re-flight of a born node writes NOTHING (created=0; 0 pod churn);
+#     Canonical composed values overwrite only on drift. A re-flight of a born,
+#     converged node writes NOTHING (created=0; 0 pod churn);
 #   - shared/human values are inherited transitionally (see inherit_shared_value);
 #   - it logs key NAMES only, never values.
 #
@@ -216,22 +217,16 @@ key_is_agent_generated() {
 DSN_DEFER_KEYS=" "
 
 # The per-node Postgres DSNs are COMPOSED from the per-node app_<node>/service_<node>
-# role (#1584). They are recomposed authoritatively every run and overwritten ONLY
-# on drift — e.g. a pre-#1584 DATABASE_URL still naming the legacy shared `app_user`
-# instead of `app_<node>`. Compare-then-write keeps a correct DSN byte-stable, so
-# healthy nodes see zero churn while a half-migrated node self-heals; the embedded
-# passwords stay write-missing (generate-once).
+# role (#1584). DOLTGRES_URL is composed from the operator-canonical Doltgres
+# superuser (cogni/<env>/operator/DOLTGRES_PASSWORD), which is shared env-wide and
+# immutable post-init (Doltgres 0.56.3 can't ALTER it; databases.md §5.2).
 #
-# DOLTGRES_URL is deliberately EXCLUDED: its password is the env Doltgres SUPERUSER
-# (immutable post-init — Doltgres 0.56.3 can't ALTER it; databases.md §5.2), NOT a
-# per-node app role, so it is not a #1584 victim. The superuser is the operator-
-# canonical stored SSOT (cogni/<env>/operator/DOLTGRES_PASSWORD); a drifted volume is
-# reconciled by writing that one field (`pnpm secrets:set <env> operator
-# DOLTGRES_PASSWORD`; secrets-rotate.md), after which every node's DOLTGRES_URL
-# recomposes from it on the next materialize. Recompose stays write-once here so an
-# unreconciled field can't clobber a healthy per-node URL mid-flight (the 2026-06-10
-# prod 28P01 was a re-derive, not a recompose).
-COMPOSED_DSN_KEYS=" DATABASE_URL DATABASE_SERVICE_URL "
+# All three DSNs are recomposed authoritatively every run and overwritten ONLY on
+# drift. Compare-then-write keeps a correct DSN byte-stable, so healthy nodes see
+# zero churn while a half-migrated node self-heals. This includes stale per-node
+# DOLTGRES_URL copies: node-substrate provisions with the operator SSOT, so the pod
+# must receive a URL derived from that same SSOT or the migrator 28P01s.
+COMPOSED_DSN_KEYS=" DATABASE_URL DATABASE_SERVICE_URL DOLTGRES_URL "
 
 # Transitional shared/human inheritance — the blind ancestor scan the north star
 # replaces with explicit catalog `inheritFrom` (catalog-custody lane). Now serves

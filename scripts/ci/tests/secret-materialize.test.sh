@@ -183,9 +183,33 @@ if grep -q 'sk-or-operator-canonical\|sk-or-stale-divergent\|writer-token' "$TMP
   exit 1
 fi
 
-# Idempotence: a re-run of an already-materialized node must create NOTHING
-# (read-once → diff → write-missing-only). This is the regression guard against
-# re-materializing already-materialized secrets.
+# Drift repair: a stale per-node DOLTGRES_URL must recompose from the operator
+# canonical superuser, matching DATABASE_URL/_SERVICE_URL behavior. This is the
+# prod oss 28P01 class: node-substrate provisions Doltgres with the operator SSOT
+# while the pod migrator reads this node-local URL.
+printf '%s' 'postgresql://postgres:stale@10.0.0.1:5435/knowledge_oss?sslmode=disable' \
+  > "$BAO_ROOT/cogni/candidate-a/oss/DOLTGRES_URL"
+env \
+  VM_HOST=fake \
+  DOMAIN=test.cognidao.org \
+  SSH_OPTS="-i fake-key -o StrictHostKeyChecking=no" \
+  SECRET_MATERIALIZE_SSH_BIN="$FAKEBIN/ssh" \
+  FAKE_REMOTE_PATH="$FAKEBIN" \
+  FAKE_BAO_ROOT="$BAO_ROOT" \
+  bash scripts/ci/secret-materialize.sh candidate-a oss > "$TMPROOT/out-drift.txt"
+
+grep -q 'recomposed DOLTGRES_URL (drift corrected)' "$TMPROOT/out-drift.txt" \
+  || { echo "stale DOLTGRES_URL was not reported as recomposed" >&2; cat "$TMPROOT/out-drift.txt" >&2; exit 1; }
+grep -qE '://postgres:[^@]+@[^/]+/knowledge_oss\?' "$BAO_ROOT/cogni/candidate-a/oss/DOLTGRES_URL" \
+  || { echo "DOLTGRES_URL must still reach knowledge_oss as postgres after drift correction" >&2; exit 1; }
+if grep -q ':stale@' "$BAO_ROOT/cogni/candidate-a/oss/DOLTGRES_URL"; then
+  echo "DOLTGRES_URL still contains stale password after materialize" >&2
+  exit 1
+fi
+
+# Idempotence: a re-run of an already-materialized and converged node must create
+# NOTHING. This is the regression guard against re-materializing already-correct
+# secrets.
 env \
   VM_HOST=fake \
   DOMAIN=test.cognidao.org \
