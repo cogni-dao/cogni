@@ -34,6 +34,7 @@
     "gen:node-overlays": "bash scripts/ci/render-node-overlays.sh --write",
     "workflow:check": "node scripts/ci/workflow-check.mjs",
     "conductor:setup": "bash scripts/conductor-worktree-setup.sh",
+    "codex:cognition:install": "bash scripts/agent/install-codex-cognition-hook.sh",
     "worktree:check": "bash scripts/worktree-check.sh",
     "work:next-id": "node scripts/next-work-id.mjs",
     "arch:check": "depcruise nodes/operator/app/src packages services --config .dependency-cruiser.cjs --include-only '^(nodes/operator/app/src|packages|services)' --exclude '__arch_probes__' --output-type err-long",

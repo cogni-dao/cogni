@@ -31,11 +31,11 @@ import type {
  * domain expertise) is delivered live from the knowledge hub on top of this.
  */
 export const SESSION_BOOTSTRAP_INVARIANTS: readonly string[] = [
-  "ONE production work item + ONE node per session (single-node-scope is a CI gate). Claim/heartbeat/link-PR via /api/v1/work/items/{id}/*; coordination.nextAction is authoritative.",
-  "RECALL_BEFORE_WRITE: the merged hub (/api/v1/knowledge?domain=) AND your own open contribution branch (/contributions/{id}/diff).",
-  "Ship every code change through the operator via the `cicd-e2e-required-sequence` guide: fork+PR → run-checks → CI green → flight + validate-candidate → merge → promote. Read-only on GitHub; never personal `gh`.",
-  "Clean architecture: strict types (no `any`), Zod boundaries, hexagonal layering, Pino→Loki, idempotent ops; purge legacy, no compat shims unless asked.",
-  "Durable learning refines the hub in place (recall→refine over write-new) and cites an existing entry; never inline comments or doc sprawl.",
+  "Adopt exactly ONE work item and ONE node per session (single-node-scope is a CI gate); claim + heartbeat + link the PR via /api/v1/work/items/{id}/{claims,heartbeat,pr}; coordination.nextAction is authoritative.",
+  "RECALL the node knowledge hub before designing, researching, or coding — both merged (/api/v1/knowledge?domain=) and your own open contribution branch — and refine in place over creating new.",
+  "Git path: push a same-repo feature branch, open a PR, and let CI verify the exact head (gh pr checks). Flight that PR head to candidate-a before merge. The operator is the deploy plane only — flight, logs, secrets — not where code, work items, or knowledge live.",
+  "Definition of Done = validated on candidate-a, not merely merged: flight the PR, exercise the live deployed surface, read your own request back from Loki at the deployed SHA, and post a /validate-candidate scorecard — that posted scorecard is the merge gate.",
+  "Recall this node's <slug>-agent-orientation entry for the operating map — architecture and observability standards, what's safe to run, what can break prod/candidate, and what to recall next — and refine it in the hub as the node changes.",
 ];
 
 const COGNITION_ENTRY_TYPES: ReadonlySet<string> = new Set([
@@ -194,8 +194,11 @@ export function renderBundleMarkdown(input: RenderBundleInput): string {
     "",
     "## Recall + contribute",
     "",
-    `- Recall: \`GET ${origin}/api/v1/knowledge?domain=<domain>\` · entry \`/{id}\` · discovery \`/.well-known/agent.json\``,
-    "- Contribute durable knowledge via `/contribute-knowledge-to-cogni` (refine in place > write new; cite an existing entry).",
+    `- Browse a domain: \`GET ${origin}/api/v1/knowledge?domain=<domain>\``,
+    `- Full entry body: \`GET ${origin}/api/v1/knowledge/{id}\``,
+    `- Discovery doc: \`GET ${origin}/.well-known/agent.json\``,
+    "- Contribute durable knowledge: `/contribute-knowledge-to-cogni` (refine in place > write new).",
+    `- Cite an existing entry in your edit: \`POST ${origin}/api/v1/knowledge/contributions/{id}/commits\` with \`{op:"cite", citingId, citedId, citationType}\` — cross-plane cites (target on main) resolve and stay valid post-merge.`,
     "",
   ].join("\n");
 }

@@ -1,23 +1,13 @@
 #!/usr/bin/env bash
-# Session-start cognition substrate loader — shared by the Claude Code
-# (.claude/settings.json) and Codex (.codex/config.toml) SessionStart hooks.
-# Pulls the node's kickstart bundle and prints it to stdout; both runtimes inject
-# SessionStart stdout into agent context. Non-fatal by design: any failure
-# degrades to a one-line self-serve hint so a session never blocks on the network.
+# Session-start cognition loader — shared by the Claude Code (.claude/settings.json)
+# and Codex (.codex/config.toml) SessionStart hooks. Pulls THIS node's own
+# cognition bundle and prints it to stdout; both runtimes inject it into context.
+# Non-fatal by design: any failure degrades to a loud self-serve prompt.
 #
-# URL resolution is repo-spec only (no per-node env override):
-#   1. this node's own hub, derived from .cogni/repo-spec.yaml `intent.name`
-#      (operator -> apex cognidao.org; any other slug -> <slug>.cognidao.org)
-#   2. operator fallback, so a node whose own hub isn't deployed yet still gets
-#      the shared Cogni contract instead of nothing.
-#
-# Credentials load from the environment first, then ./.env.cogni. Conductor
-# worktree setup symlinks .env.cogni from the primary checkout, so future
-# sessions need only the one-time bootstrap that registers the agent and saves
-# its key there.
+# .env.cogni holds two accounts (see .env.cogni.example): the NODE account
+# (this node's own hub — the bearer used here) and the OPERATOR account
+# (cognidao.org — CI/CD only: flight, deploy, secrets; never used by this loader).
 set -u
-
-OPERATOR_URL="https://cognidao.org/api/v1/cognition"
 
 read_env_file_value() {
   var_name="$1"
@@ -34,27 +24,7 @@ read_env_file_value() {
   ' "$env_file" 2>/dev/null
 }
 
-agent_key() {
-  if [ -n "${COGNI_API_KEY:-}" ]; then
-    printf '%s\n' "$COGNI_API_KEY"
-    return
-  fi
-
-  key="$(read_env_file_value COGNI_API_KEY)"
-  if [ -n "$key" ]; then
-    printf '%s\n' "$key"
-    return
-  fi
-
-  # Current local Cogni worktrees keep env-scoped keys in .env.cogni. The
-  # session-start loader targets production URLs, so use the production key.
-  key="$(read_env_file_value COGNI_API_KEY_PROD)"
-  if [ -n "$key" ]; then
-    printf '%s\n' "$key"
-  fi
-}
-
-# node slug from repo-spec intent.name (root .cogni/repo-spec.yaml in any node repo)
+# Node hub URL from repo-spec intent.name (root .cogni/repo-spec.yaml).
 node_slug=""
 if [ -f .cogni/repo-spec.yaml ]; then
   node_slug="$(awk '
@@ -66,36 +36,40 @@ if [ -f .cogni/repo-spec.yaml ]; then
   ' .cogni/repo-spec.yaml 2>/dev/null)"
 fi
 
-# operator is the apex (cognidao.org); the operator monorepo's root repo-spec
-# carries the repo slug `cogni-template`, which is the same apex node.
+# operator is the apex (cognidao.org); its monorepo root repo-spec carries the
+# slug `cogni-template`, the same apex node. Every other slug is its own hub.
 case "$node_slug" in
-  operator | cogni-template | "") node_url="$OPERATOR_URL" ;;
-  *) node_url="https://${node_slug}.cognidao.org/api/v1/cognition" ;;
+  operator | cogni-template | "") URL="https://cognidao.org/api/v1/cognition" ;;
+  *) URL="https://${node_slug}.cognidao.org/api/v1/cognition" ;;
 esac
 
-URL="$node_url"
-AGENT_KEY="$(agent_key)"
+# Bearer = this node's NODE account key (environment first, then ./.env.cogni).
+AGENT_KEY="${COGNI_NODE_API_KEY:-$(read_env_file_value COGNI_NODE_API_KEY)}"
 
-# Pass the agent key as a bearer when present; without it, auth-gated cognition
-# requests 401 and fall through to the self-serve hint below.
-fetch() {
-  if [ -n "$AGENT_KEY" ]; then
-    curl -fsS --max-time 6 -H "Authorization: Bearer ${AGENT_KEY}" "$1" 2>/dev/null | jq -r '.markdown // empty' 2>/dev/null
-  else
-    curl -fsS --max-time 6 "$1" 2>/dev/null | jq -r '.markdown // empty' 2>/dev/null
-  fi
-}
-
-bundle="$(fetch "$URL")"
-
-# Pre-deploy node: its own hub isn't live yet — fall back to the operator's.
-if [ -z "$bundle" ] && [ "$URL" != "$OPERATOR_URL" ]; then
-  bundle="$(fetch "$OPERATOR_URL")"
-  [ -n "$bundle" ] && URL="$OPERATOR_URL"
+if [ -n "$AGENT_KEY" ]; then
+  bundle="$(curl -fsS --max-time 6 -H "Authorization: Bearer ${AGENT_KEY}" "$URL" 2>/dev/null | jq -r '.markdown // empty' 2>/dev/null)"
+else
+  bundle="$(curl -fsS --max-time 6 "$URL" 2>/dev/null | jq -r '.markdown // empty' 2>/dev/null)"
 fi
 
 if [ -n "$bundle" ]; then
   printf '%s\n' "$bundle"
 else
-  printf '(cognition substrate unreachable at %s — self-serve: register via /api/v1/agent/register, save COGNI_API_KEY in .env.cogni, then retry)\n' "$URL"
+  cat <<EOF
+COGNI COGNITION BOOTSTRAP BLOCKED
+
+The SessionStart hook ran, but it could not fetch the cognition bundle from:
+  $URL
+
+Do not continue silently. Tell the user that session cognition did not load and
+ask them to bootstrap the node credentials, then restart or resume the agent.
+
+Most common fixes:
+- register a NODE agent via /api/v1/agent/register
+- save COGNI_NODE_API_KEY in the clone-root .env.cogni
+- for Codex, run pnpm codex:cognition:install once and trust the user-level hook with /hooks
+
+If the agent received no bootstrap message at all, the hook probably did not run
+(for Codex, missing hook trust is the usual cause).
+EOF
 fi
