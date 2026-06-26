@@ -5,7 +5,7 @@
  * Module: `@features/nodes/components/NodeTile`
  * Purpose: Shared node tile — one clickable card used by the public homepage showcase AND the
  *   authed node-setup list. Handles live nodes (homepage screenshot, external link) and in-formation
- *   nodes (gradient placeholder, status badge, internal setup link) via one view model. The card's
+ *   nodes (gradient placeholder, status marker, internal setup link) via one view model. The card's
  *   identity (title/tagline/thumbnail/color) is the NODE's own self-description — callers pass it through;
  *   this component never names a node.
  * Scope: Presentational. Callers map their own data (NodeSummary / wizard rows) to NodeTileView.
@@ -18,6 +18,15 @@
  * @public
  */
 
+import {
+  CheckCircle2,
+  CircleAlert,
+  CircleDashed,
+  CreditCard,
+  GitPullRequest,
+  Landmark,
+  WalletCards,
+} from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import type { CSSProperties, ReactElement } from "react";
@@ -41,9 +50,12 @@ export interface NodeTileView {
   readonly status?: {
     readonly label: string;
     readonly intent: "default" | "secondary" | "destructive" | "outline";
+    readonly presentation?: "badge" | "dot";
   } | null;
   /** Live/down probe verdict. When set, a health dot is shown next to the title. */
   readonly health?: "live" | "down" | null | undefined;
+  /** Compact tiles keep gallery surfaces dense when cards only carry icon + tagline. */
+  readonly density?: "default" | "compact";
 }
 
 /** A brand-tinted CSS variable for the monogram wash — only set when the node declared a color. */
@@ -58,11 +70,13 @@ function Banner({
   title,
   brandColor,
   icon,
+  compact,
 }: {
   thumbnailUrl?: string | null | undefined;
   title: string;
   brandColor?: string | null | undefined;
   icon?: string | null | undefined;
+  compact?: boolean;
 }): ReactElement {
   // IDENTITY_IS_REPO_SPEC_PROJECTION: prefer the node's own `intent.brand.icon` —
   // a hosted logo image (e.g. the Cogni brain) OR a Lucide NAME — over a thumbnail
@@ -131,7 +145,7 @@ function Banner({
       style={style}
     >
       <span
-        className={`flex h-16 w-16 items-center justify-center rounded-full border ${ring} bg-background/60 font-bold text-3xl text-foreground/80 uppercase shadow-sm backdrop-blur-sm`}
+        className={`flex ${compact ? "h-12 w-12 text-2xl" : "h-16 w-16 text-3xl"} items-center justify-center rounded-full border ${ring} bg-background/60 font-bold text-foreground/80 uppercase shadow-sm backdrop-blur-sm`}
       >
         {title.charAt(0)}
       </span>
@@ -153,27 +167,69 @@ function HealthBadge({ health }: { health: "live" | "down" }): ReactElement {
   );
 }
 
+function StatusDot({
+  status,
+}: {
+  status: NonNullable<NodeTileView["status"]>;
+}): ReactElement {
+  const statusIcon = {
+    Active: CheckCircle2,
+    "DAO formed": Landmark,
+    Failed: CircleAlert,
+    "Forming DAO": Landmark,
+    "Payments ready": CreditCard,
+    "Repo PR opened": GitPullRequest,
+    "Wallet ready": WalletCards,
+  }[status.label];
+  const Icon = statusIcon ?? CircleDashed;
+  const iconClass = {
+    default: "border-primary/30 bg-primary/10 text-primary",
+    secondary:
+      "border-muted-foreground/25 bg-muted-foreground/10 text-muted-foreground",
+    destructive: "border-destructive/35 bg-destructive/10 text-destructive",
+    outline: "border-border bg-muted/40 text-muted-foreground",
+  }[status.intent];
+
+  return (
+    <span
+      className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border ${iconClass}`}
+      title={status.label}
+    >
+      <Icon className="size-3.5" aria-hidden />
+      <span className="sr-only">Activation status: {status.label}</span>
+    </span>
+  );
+}
+
 export function NodeTile({ node }: { node: NodeTileView }): ReactElement {
   const linkProps = node.external
     ? { target: "_blank", rel: "noopener noreferrer" }
     : {};
+  const compact = node.density === "compact";
   return (
     <Link href={node.href} className="group block rounded-lg" {...linkProps}>
       <Card className="h-full overflow-hidden transition-colors group-hover:border-primary">
-        <div className="relative aspect-video w-full overflow-hidden border-border border-b bg-muted">
+        <div
+          className={`relative w-full overflow-hidden border-border border-b bg-muted ${compact ? "aspect-[2.2/1]" : "aspect-video"}`}
+        >
           <Banner
             thumbnailUrl={node.thumbnailUrl}
             title={node.title}
             brandColor={node.brandColor}
             icon={node.icon}
+            compact={compact}
           />
         </div>
-        <div className="space-y-2 p-6">
+        <div className={compact ? "space-y-1.5 p-4" : "space-y-2 p-6"}>
           <div className="flex items-center justify-between gap-2">
-            <h3 className="font-semibold text-foreground text-lg">
+            <h3
+              className={`font-semibold text-foreground ${compact ? "text-base" : "text-lg"}`}
+            >
               {node.title}
             </h3>
-            {node.status ? (
+            {node.status?.presentation === "dot" ? (
+              <StatusDot status={node.status} />
+            ) : node.status ? (
               <Badge intent={node.status.intent} size="sm">
                 {node.status.label}
               </Badge>
@@ -182,7 +238,11 @@ export function NodeTile({ node }: { node: NodeTileView }): ReactElement {
             ) : null}
           </div>
           {node.tagline ? (
-            <p className="text-muted-foreground text-sm">{node.tagline}</p>
+            <p
+              className={`text-muted-foreground text-sm ${compact ? "line-clamp-2" : ""}`}
+            >
+              {node.tagline}
+            </p>
           ) : null}
         </div>
       </Card>

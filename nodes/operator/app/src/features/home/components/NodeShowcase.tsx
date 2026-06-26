@@ -55,6 +55,7 @@ export function NodeShowcase({
                 href: node.href,
                 external: true,
                 health: node.health,
+                density: "compact",
               }}
             />
           ))}
