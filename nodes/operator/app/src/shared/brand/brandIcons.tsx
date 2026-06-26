@@ -53,5 +53,7 @@ export const FALLBACK_BRAND_ICON: LucideIcon = Hexagon;
 /** Resolve a repo-spec `brand.icon` name to its Lucide component, or the neutral fallback. */
 export function resolveBrandIcon(name: string | null | undefined): LucideIcon {
   if (!name) return FALLBACK_BRAND_ICON;
-  return (BRAND_ICONS as Record<string, LucideIcon>)[name] ?? FALLBACK_BRAND_ICON;
+  return (
+    (BRAND_ICONS as Record<string, LucideIcon>)[name] ?? FALLBACK_BRAND_ICON
+  );
 }
