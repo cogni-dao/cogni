@@ -168,6 +168,8 @@ export function createScopedGraphExecutor(params: {
       getTraceId: () =>
         trace.getActiveSpan()?.spanContext().traceId ??
         "00000000000000000000000000000000",
+      // Per LANGFUSE_NODE_ATTRIBUTION: stamp this node's identity on every trace.
+      nodeId: container.nodeId,
     },
     container.log,
     params.billing.billingAccountId

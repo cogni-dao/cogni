@@ -56,7 +56,18 @@ export interface ObservabilityDecoratorConfig {
   finalizationTimeoutMs?: number;
   /** Callback to retrieve the current OTel trace ID. Injected to avoid @opentelemetry/api dep. */
   getTraceId?: GetTraceIdFn;
+  /**
+   * Node identity (= repo-spec `node_id`) stamped onto every trace as a tag + metadata field.
+   * Per LANGFUSE_NODE_ATTRIBUTION (OBSERVABILITY.md): makes traces filterable to a single node so a
+   * node developer can read only their traces. Resolved app-side (e.g. `container.nodeId`) and injected
+   * here — the PURE_LIBRARY package never reads repo-spec/env itself. Optional for non-breaking rollout;
+   * a warn-once fires when absent so a mis-wired node is detectable.
+   */
+  nodeId?: string;
 }
+
+/** Process-local guard so the missing-nodeId warning fires once, not per run. */
+let warnedMissingNodeId = false;
 
 /**
  * Decorator that wraps GraphExecutorPort with Langfuse observability.
@@ -72,6 +83,7 @@ export interface ObservabilityDecoratorConfig {
 export class ObservabilityGraphExecutorDecorator implements GraphExecutorPort {
   private readonly finalizationTimeoutMs: number;
   private readonly getTraceId: GetTraceIdFn;
+  private readonly nodeId: string | undefined;
 
   constructor(
     private readonly inner: GraphExecutorPort,
@@ -82,6 +94,17 @@ export class ObservabilityGraphExecutorDecorator implements GraphExecutorPort {
   ) {
     this.finalizationTimeoutMs = config.finalizationTimeoutMs ?? 15_000;
     this.getTraceId = config.getTraceId ?? (() => DEFAULT_TRACE_ID);
+    this.nodeId = config.nodeId;
+
+    // Per LANGFUSE_NODE_ATTRIBUTION: a node with no nodeId emits node-less traces with no error,
+    // silently defeating per-node trace isolation. Warn once per process so a mis-wired node is visible.
+    if (!this.nodeId && !warnedMissingNodeId) {
+      warnedMissingNodeId = true;
+      this.log.warn(
+        {},
+        "Langfuse trace nodeId not wired — traces will not be node-attributable (LANGFUSE_NODE_ATTRIBUTION)"
+      );
+    }
   }
 
   /**
@@ -128,7 +151,11 @@ export class ObservabilityGraphExecutorDecorator implements GraphExecutorPort {
           ...(sessionId && { sessionId }),
           ...(ctx?.actorUserId && { userId: ctx.actorUserId }),
           input: finalInput,
-          tags: [providerId, graphId],
+          // Per LANGFUSE_NODE_ATTRIBUTION: nodeId is the per-node read filter (the dev-read proxy
+          // AND-s on this tag); also in metadata for correlation. Omitted when unwired (warn-once above).
+          tags: this.nodeId
+            ? [providerId, graphId, this.nodeId]
+            : [providerId, graphId],
           metadata: {
             runId,
             reqId: requestId,
@@ -136,6 +163,7 @@ export class ObservabilityGraphExecutorDecorator implements GraphExecutorPort {
             providerId,
             model,
             billingAccountId: this.billingAccountId,
+            ...(this.nodeId && { nodeId: this.nodeId }),
             ...(otelTraceIdForMetadata && {
               otelTraceId: otelTraceIdForMetadata,
             }),
