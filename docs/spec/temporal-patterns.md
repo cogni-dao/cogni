@@ -473,12 +473,45 @@ queues, not separate namespaces.
 
 #### Task Queues
 
-Per `QUEUE_PER_NODE_ISOLATION` (task.0280): one Worker per `nodeId` polls `scheduler-tasks-<nodeId>`,
-so a failing node's queue backlog cannot starve other nodes.
+**Rule: tenancy lives in the workflow payload, not in the queue topology.** The shape is
+**ONE shared worker** (a fixed, horizontally-scaled pod set — not one pod per node) polling a
+**bounded set of workload-typed queues**, with `nodeId` carried in the workflow input
+(`NodeTaskWorkflow` / `GraphRunWorkflow` already carry it). Queue count is `O(workload classes)`,
+**never** `O(nodes)`. This is what [substrate-temporal.md](./substrate-temporal.md) §19/§94 means
+by "ONE shared worker, no per-node worker"; a queue (or worker) **per node** is reserved for the
+opt-in **sovereign escape hatch** ([substrate-temporal.md](./substrate-temporal.md) § escape hatch),
+never the default.
 
-| Queue                      | Worker                                   | Workflows                                                                                                                                |
-| -------------------------- | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `scheduler-tasks-<nodeId>` | shared `scheduler-worker` (one per node) | `NodeTaskWorkflow` / `GraphRunWorkflow` for that node; `scheduler-tasks-operator` also carries the operator's governance/epoch workflows |
+Noisy-neighbor isolation comes from **workload-class queues + per-worker concurrency limits**, not
+from one-queue-per-tenant. Pre-sharding a queue per node is the anti-pattern that produced the
+2026-06-25 fleet-wide prod-502 (the shared worker webpack-built one ~3MB bundle _per per-node queue_
+at startup → event-loop block → liveness SIGKILL → crashloop; fixed by PR #1860 + #1862).
+
+| Queue (target)                      | Worker                         | Workflows                                                    |
+| ----------------------------------- | ------------------------------ | ------------------------------------------------------------ |
+| `dispatch` (light HTTP fan-out)     | shared `scheduler-worker` pool | `NodeTaskWorkflow` (nodeId in payload)                       |
+| `graph-exec` (heavy LLM)            | shared `scheduler-worker` pool | `GraphRunWorkflow` (nodeId in payload)                       |
+| `governance`                        | shared `scheduler-worker` pool | operator governance workflows                                |
+| `ledger-tasks`                      | dedicated `ledger-worker`      | `CollectEpochWorkflow` / epoch pipeline (already this shape) |
+| `scheduler-tasks-<nodeId>` (escape) | a node's **own** opt-in worker | custom durable workflows for that sovereign node only        |
+
+> **As-built today (divergence — `ci-cd.md` treats spec-vs-workflow divergence as a bug to close).**
+> The shared `scheduler-worker` pod currently runs one Temporal **poller per per-node queue**
+> (`scheduler-tasks-<nodeId>`, derived from `COGNI_NODE_ENDPOINTS`) plus a legacy `scheduler-tasks`
+> drain queue — `O(nodes)` pollers. After PR #1860 they all **share one pre-built workflow bundle**,
+> so the pollers are now cheap (the storm is gone); this is an efficiency/clarity wart, no longer a
+> reliability risk. Epochs already run correctly on the dedicated **`ledger-tasks`** queue via a
+> separate always-on `ledger-worker` — they do **not** ride `scheduler-tasks-operator` (the old
+> table claim was wrong) and are **out of scope** of the collapse.
+>
+> **Migration to the target is staged, not a single cutover** — a naive rename orphans every live
+> schedule, including `chat.completions` (which rides `scheduler-tasks-<nodeId>` via
+> `GraphRunWorkflow`). Prerequisite + phases: **(P0)** leave `ledger-tasks`/epochs untouched;
+> **(P1)** worker dual-polls new workload queues _and_ existing per-node queues; **(P2)** re-point
+> producers to workload queues **and fix the drift detector** — `syncGovernanceSchedules` /
+> `syncNodeSchedules` currently never compare `action.taskQueue` and `describeSchedule` does not even
+> surface it, so a reconcile silently skips and leaves schedules on the dead queue — then run the
+> reconcile on deploy; **(P3)** drop per-node polling only once zero schedules point at the old queues.
 
 #### Search Attributes
 
