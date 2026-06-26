@@ -7,7 +7,7 @@
  * Scope: Server-only facade. Handles billing account resolution from session user, builds PostCreditFundingDeps from container, maps Date to ISO string for contract compliance; does not perform direct persistence or HTTP handling.
  * Invariants: Billing account from session only; state transition events include chainId and errorCode; post-credit funding deps threaded to service layer (not invoked in facade).
  * Side-effects: IO (via PaymentAttemptUserRepository, PaymentAttemptServiceRepository, AccountService, ServiceAccountService, OnChainVerifier, PostCreditFundingDeps ports).
- * Notes: Facades own DTO mapping. Emits payments.verified on CREDITED transitions. buildPostCreditFundingDeps() constructs funding deps from container when at least one downstream port is available.
+ * Notes: Facades own DTO mapping. Emits payments.verified on CREDITED transitions. buildPostCreditFundingDeps() constructs settlement deps (treasury + ledger) from container when at least one downstream port is available. Provider top-up was retired (OpenRouter 410'd programmatic crypto top-up).
  * Links: docs/spec/payments-design.md, src/contracts/AGENTS.md
  * @public
  */
@@ -32,8 +32,6 @@ import {
   submitTxHash,
 } from "@/features/payments/services/paymentService";
 import { getOrCreateBillingAccountForUser } from "@/lib/auth/mapping";
-import { getPaymentConfig } from "@/shared/config";
-import { serverEnv } from "@/shared/env/server-env";
 import type {
   PaymentsIntentCreatedEvent,
   PaymentsStateTransitionEvent,
@@ -44,40 +42,21 @@ import type {
 
 /**
  * Build PostCreditFundingDeps from the container.
- * Returns undefined when provider funding is not configured (no-op at service layer).
+ * Returns undefined when no downstream settlement port is available (no-op at service layer).
  */
 function buildPostCreditFundingDeps(
   container: Container,
   log: PostCreditFundingDeps["log"]
 ): PostCreditFundingDeps | undefined {
   // Only build deps when at least one downstream port is available
-  if (
-    !container.treasurySettlement &&
-    !container.financialLedger &&
-    !container.providerFunding
-  ) {
+  if (!container.treasurySettlement && !container.financialLedger) {
     return undefined;
   }
-
-  const pricingConfig = (() => {
-    if (!container.providerFunding) return undefined;
-    // Purchase-side markup + revenue share are governance config (repo-spec payments_in);
-    // only the crypto provider fee is an external-rail env constant.
-    const paymentConfig = getPaymentConfig();
-    if (!paymentConfig) return undefined;
-    return {
-      markupFactor: paymentConfig.markupFactor,
-      revenueShare: paymentConfig.revenueShare,
-      cryptoFee: serverEnv().OPENROUTER_CRYPTO_FEE,
-    };
-  })();
 
   return {
     treasurySettlement: container.treasurySettlement,
     financialLedger: container.financialLedger,
-    providerFunding: container.providerFunding,
     log,
-    pricingConfig,
   };
 }
 

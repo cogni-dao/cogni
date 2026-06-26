@@ -3,9 +3,9 @@
 
 /**
  * Module: `@features/payments/application/confirmCreditsPurchase`
- * Purpose: Verifies the application orchestrator composes credit confirmation with treasury settlement, TB co-writes, and provider funding correctly.
- * Scope: Covers orchestration logic: delegation to creditsConfirm, treasury settlement, provider funding, graceful degradation on failure, skip on idempotent replay; does not test creditsConfirm internals or adapter implementations.
- * Invariants: Credit confirmation always succeeds independently of downstream steps; settlement and funding skipped when creditsApplied=0; all post-settlement steps non-blocking.
+ * Purpose: Verifies the application orchestrator composes credit confirmation with treasury settlement and the Split-distribute TB co-write correctly.
+ * Scope: Covers orchestration: delegation to creditsConfirm, treasury settlement, the Treasury→OperatorFloat TB co-write, graceful degradation on failure, skip on idempotent replay. Provider top-up was retired (OpenRouter 410'd programmatic crypto top-up) — no provider-funding cases.
+ * Invariants: Credit confirmation always succeeds independently of downstream steps; settlement skipped when creditsApplied=0; all post-settlement steps non-blocking.
  * Side-effects: none
  * Links: src/features/payments/application/confirmCreditsPurchase.ts, task.0086
  * @public
@@ -14,7 +14,6 @@
 import {
   createMockAccountService,
   createMockFinancialLedger,
-  createMockProviderFunding,
   createMockServiceAccountService,
   createMockTreasurySettlement,
 } from "@tests/_fakes";
@@ -57,34 +56,19 @@ describe("features/payments/application/confirmCreditsPurchase", () => {
   let accountService: ReturnType<typeof createMockAccountService>;
   let serviceAccountService: ServiceAccountService;
 
-  const defaultPricingConfig = {
-    markupFactor: 2.0,
-    revenueShare: 0.75,
-    cryptoFee: 0.05,
-  };
-
   function makeDeps(
     overrides: Partial<ConfirmCreditsPurchaseDeps> = {}
   ): ConfirmCreditsPurchaseDeps {
-    const merged = {
+    return {
       accountService,
       serviceAccountService,
       treasurySettlement: undefined as TreasurySettlementPort | undefined,
       financialLedger: undefined as
         | ConfirmCreditsPurchaseDeps["financialLedger"]
         | undefined,
-      providerFunding: undefined as ProviderFundingPort | undefined,
       log: mockLog,
-      pricingConfig: undefined as
-        | ConfirmCreditsPurchaseDeps["pricingConfig"]
-        | undefined,
       ...overrides,
     };
-    // Auto-set pricingConfig when providerFunding is provided
-    if (merged.providerFunding && !merged.pricingConfig) {
-      merged.pricingConfig = defaultPricingConfig;
-    }
-    return merged;
   }
 
   beforeEach(() => {
@@ -180,57 +164,13 @@ describe("features/payments/application/confirmCreditsPurchase", () => {
       input
     );
 
+    // Exactly one TB transfer now: Split distribute (provider top-up co-write retired).
     expect(ledger.transfer).toHaveBeenCalledTimes(1);
     const call = ledger.transfer.mock.calls[0][0];
     expect(call.debitAccountId).toBe(2001n); // ASSETS_TREASURY
     expect(call.creditAccountId).toBe(2002n); // ASSETS_OPERATOR_FLOAT
     expect(call.ledger).toBe(2); // USDC
     expect(call.code).toBe(3); // SPLIT_DISTRIBUTE
-  });
-
-  it("calls provider funding after settlement", async () => {
-    const treasury = createMockTreasurySettlement();
-    const funding = createMockProviderFunding();
-
-    await confirmCreditsPurchase(
-      makeDeps({ treasurySettlement: treasury, providerFunding: funding }),
-      input
-    );
-
-    expect(funding.fundAfterCreditPurchase).toHaveBeenCalledWith(
-      expect.objectContaining({
-        paymentIntentId: "payment-1",
-        amountUsdCents: 1000,
-      })
-    );
-    // Verify topUpUsd was calculated and passed
-    const callArg = funding.fundAfterCreditPurchase.mock.calls[0][0];
-    expect(callArg.topUpUsd).toBeGreaterThan(0);
-    expect(callArg.topUpUsd).toBeLessThan(10); // $10 purchase → < $10 top-up
-  });
-
-  it("records TB co-write for provider top-up after funding", async () => {
-    const treasury = createMockTreasurySettlement();
-    const ledger = createMockFinancialLedger();
-    const funding = createMockProviderFunding();
-
-    await confirmCreditsPurchase(
-      makeDeps({
-        treasurySettlement: treasury,
-        financialLedger: ledger,
-        providerFunding: funding,
-      }),
-      input
-    );
-
-    // Should have 2 TB transfers: Split distribute + provider top-up
-    expect(ledger.transfer).toHaveBeenCalledTimes(2);
-
-    const topUpCall = ledger.transfer.mock.calls[1][0];
-    expect(topUpCall.debitAccountId).toBe(2002n); // ASSETS_OPERATOR_FLOAT
-    expect(topUpCall.creditAccountId).toBe(2003n); // ASSETS_PROVIDER_FLOAT
-    expect(topUpCall.ledger).toBe(2); // USDC
-    expect(topUpCall.code).toBe(4); // PROVIDER_TOPUP
   });
 
   it("continues when TB co-write fails (non-blocking)", async () => {
@@ -247,35 +187,12 @@ describe("features/payments/application/confirmCreditsPurchase", () => {
     expect(result.creditsApplied).toBe(100_000_000);
     expect(result.settlement).toEqual({ txHash: "0xfake-settlement-tx" });
   });
-
-  it("continues when provider funding fails (non-blocking)", async () => {
-    const treasury = createMockTreasurySettlement();
-    const funding = createMockProviderFunding();
-    funding.fundAfterCreditPurchase.mockRejectedValue(
-      new Error("charge creation failed")
-    );
-
-    const result = await confirmCreditsPurchase(
-      makeDeps({ treasurySettlement: treasury, providerFunding: funding }),
-      input
-    );
-
-    // Credits confirmed, settlement succeeded, funding error logged but not thrown
-    expect(result.creditsApplied).toBe(100_000_000);
-    expect(result.settlement).toEqual({ txHash: "0xfake-settlement-tx" });
-  });
 });
 
-describe("runPostCreditFunding (extracted steps 3-6)", () => {
+describe("runPostCreditFunding (extracted steps 3-4)", () => {
   const fundingInput = {
     paymentIntentId: "8453:0xabc123",
     amountUsdCents: 1000,
-  };
-
-  const pricingConfig = {
-    markupFactor: 2.0,
-    revenueShare: 0.75,
-    cryptoFee: 0.05,
   };
 
   const mockLog = {
@@ -291,9 +208,7 @@ describe("runPostCreditFunding (extracted steps 3-6)", () => {
     return {
       treasurySettlement: undefined,
       financialLedger: undefined,
-      providerFunding: undefined,
       log: mockLog,
-      pricingConfig: undefined,
       ...overrides,
     };
   }
@@ -302,17 +217,14 @@ describe("runPostCreditFunding (extracted steps 3-6)", () => {
     vi.clearAllMocks();
   });
 
-  it("runs treasury settlement and provider funding", async () => {
+  it("runs treasury settlement and records the Split-distribute co-write", async () => {
     const treasury = createMockTreasurySettlement();
-    const funding = createMockProviderFunding();
     const ledger = createMockFinancialLedger();
 
     const result = await runPostCreditFunding(
       makeFundingDeps({
         treasurySettlement: treasury,
-        providerFunding: funding,
         financialLedger: ledger,
-        pricingConfig,
       }),
       fundingInput
     );
@@ -320,8 +232,7 @@ describe("runPostCreditFunding (extracted steps 3-6)", () => {
     expect(treasury.settleConfirmedCreditPurchase).toHaveBeenCalledWith({
       paymentIntentId: "8453:0xabc123",
     });
-    expect(funding.fundAfterCreditPurchase).toHaveBeenCalled();
-    expect(ledger.transfer).toHaveBeenCalledTimes(2); // Split distribute + provider top-up
+    expect(ledger.transfer).toHaveBeenCalledTimes(1); // Split distribute only
     expect(result.settlement).toBeDefined();
   });
 

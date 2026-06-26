@@ -7,7 +7,7 @@
  * Scope: Feature-layer orchestration for payment attempts; validates state transitions, enforces TTLs, triggers post-credit funding on CREDITED; does not expose HTTP handling.
  * Invariants: State transitions via core/rules; atomic settlement via confirmCreditsPayment; post-credit funding via runPostCreditFunding (fires exactly once on CREDITED transition); RPC_ERROR is transient (retried on next poll).
  * Side-effects: IO (via AccountService, ServiceAccountService, PaymentAttemptUserRepository, PaymentAttemptServiceRepository, OnChainVerifier, PostCreditFundingDeps ports)
- * Notes: RPC_ERROR from OnChainVerifier leaves attempt in PENDING_UNVERIFIED for automatic retry via getStatus polling. Post-credit funding (treasury settlement, TB co-writes, provider top-up) runs inline after CREDITED but never throws — all steps catch internally.
+ * Notes: RPC_ERROR from OnChainVerifier leaves attempt in PENDING_UNVERIFIED for automatic retry via getStatus polling. Post-credit settlement (treasury Split distribute + TB co-write) runs inline after CREDITED but never throws — all steps catch internally. The OpenRouter/Coinbase provider top-up was retired; outbound vendor funding now flows through the operator wallet's withdrawToSteward + a manual human checkout.
  * Links: docs/spec/payments-design.md
  * @public
  */
@@ -482,9 +482,11 @@ async function verifyAndSettle(
           defaultVirtualKeyId,
           amountUsdCents: attempt.amountUsdCents,
           clientPaymentId,
-          // revenueShare is governance config from repo-spec (payments_in), carried via
-          // pricingConfig. 0 when post-credit funding is unconfigured (no provider → no bonus).
-          revenueShare: postCreditFundingDeps?.pricingConfig?.revenueShare ?? 0,
+          // revenueShare is governance config from repo-spec (payments_in) — drives the
+          // system-tenant bonus on inbound crediting. Read directly from repo-spec (cached)
+          // so inbound crediting is independent of outbound-settlement wiring. 0 when payments
+          // are not activated. (Previously carried via the now-removed provider pricingConfig.)
+          revenueShare: getPaymentConfig()?.revenueShare ?? 0,
           metadata: {
             paymentAttemptId: attempt.id,
             txHash: attempt.txHash,
@@ -518,26 +520,30 @@ async function verifyAndSettle(
           "CREDITED"
         );
 
-        // Post-credit funding: treasury settlement + TB co-writes + provider top-up
+        // Post-credit settlement: treasury Split distribute + TB co-write.
         // Runs inline (not fire-and-forget) but never throws (all steps catch internally).
-        // Uses chainId:txHash as canonical funding key (matches clientPaymentId used for crediting).
+        // Uses chainId:txHash as canonical key (matches clientPaymentId used for crediting).
+        // NOTE: the OpenRouter/Coinbase provider top-up (old steps 5-6) was retired —
+        // OpenRouter 410'd programmatic crypto top-up; outbound vendor funding now flows
+        // through the operator wallet's withdrawToSteward + a manual human checkout. The
+        // outbound half here is now just Split distribute (operator + DAO shares).
         if (postCreditFundingDeps) {
           await runPostCreditFunding(postCreditFundingDeps, {
             paymentIntentId: clientPaymentId,
             amountUsdCents: attempt.amountUsdCents,
           });
         } else {
-          // Outbound (Split distribute + OpenRouter top-up) is unconfigured in this
-          // env (operator wallet / treasury / provider ports absent). Credits were
-          // minted inbound, but USDC stays in the Split and OpenRouter is NOT topped
-          // up. Logged so this is never a silent gap again (bug.5087).
+          // Outbound Split distribute is unconfigured in this env (operator wallet /
+          // treasury ports absent). Credits were minted inbound, but USDC stays in the
+          // Split — logged loudly so this is never a silent gap (bug.5087). Do NOT
+          // reintroduce a silent skip.
           log.warn(
             {
               event: "payments.settlement_skipped",
               attemptId: attempt.id,
               paymentIntentId: clientPaymentId,
             },
-            "post-credit funding skipped — operator wallet / treasury / provider ports not configured in this env"
+            "post-credit settlement skipped — operator wallet / treasury ports not configured in this env"
           );
         }
       }

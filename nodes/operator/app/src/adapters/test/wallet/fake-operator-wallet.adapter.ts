@@ -11,7 +11,7 @@
  * @public
  */
 
-import type { OperatorWalletPort, TransferIntent } from "@/ports";
+import type { OperatorWalletPort } from "@/ports";
 
 const FAKE_OPERATOR_ADDRESS = "0x1111111111111111111111111111111111111111";
 const FAKE_SPLIT_ADDRESS = "0x2222222222222222222222222222222222222222";
@@ -22,13 +22,10 @@ export class FakeOperatorWalletAdapter implements OperatorWalletPort {
   private address = FAKE_OPERATOR_ADDRESS;
   private splitAddress = FAKE_SPLIT_ADDRESS;
   private distributeSplitResult = FAKE_TX_HASH;
-  private fundTopUpResult = FAKE_TX_HASH;
   private withdrawToStewardResult = FAKE_TX_HASH;
 
   /** Last params passed to distributeSplit */
   public lastDistributeSplitToken: string | undefined;
-  /** Last params passed to fundOpenRouterTopUp */
-  public lastFundTopUpIntent: TransferIntent | undefined;
   /** Last amount passed to withdrawToSteward */
   public lastWithdrawToStewardAmount: bigint | undefined;
 
@@ -43,11 +40,6 @@ export class FakeOperatorWalletAdapter implements OperatorWalletPort {
   async distributeSplit(token: string): Promise<string> {
     this.lastDistributeSplitToken = token;
     return this.distributeSplitResult;
-  }
-
-  async fundOpenRouterTopUp(intent: TransferIntent): Promise<string> {
-    this.lastFundTopUpIntent = intent;
-    return this.fundTopUpResult;
   }
 
   async withdrawToSteward(amountUsdcAtomic: bigint): Promise<string> {
@@ -69,10 +61,6 @@ export class FakeOperatorWalletAdapter implements OperatorWalletPort {
     this.distributeSplitResult = txHash;
   }
 
-  setFundTopUpResult(txHash: string): void {
-    this.fundTopUpResult = txHash;
-  }
-
   setWithdrawToStewardResult(txHash: string): void {
     this.withdrawToStewardResult = txHash;
   }
@@ -81,10 +69,8 @@ export class FakeOperatorWalletAdapter implements OperatorWalletPort {
     this.address = FAKE_OPERATOR_ADDRESS;
     this.splitAddress = FAKE_SPLIT_ADDRESS;
     this.distributeSplitResult = FAKE_TX_HASH;
-    this.fundTopUpResult = FAKE_TX_HASH;
     this.withdrawToStewardResult = FAKE_TX_HASH;
     this.lastDistributeSplitToken = undefined;
-    this.lastFundTopUpIntent = undefined;
     this.lastWithdrawToStewardAmount = undefined;
   }
 }
