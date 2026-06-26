@@ -854,7 +854,7 @@ function createContainer(): Container {
         assertReady: async () => {
           throw new PaymentRailMisconfiguredPortError(
             "PAYMENT_RAIL_UNCONFIGURED",
-            "Payment rails misconfigured: cogni_dao.dao_contract missing from repo-spec"
+            "Payment rails misconfigured: governance.dao_contract missing from repo-spec"
           );
         },
       };
