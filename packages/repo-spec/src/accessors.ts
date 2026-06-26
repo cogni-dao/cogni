@@ -137,6 +137,11 @@ export function extractNodeBrandColor(spec: RepoSpec): string | null {
   return spec.intent?.brand?.color ?? null;
 }
 
+/** Lucide icon NAME (PascalCase, e.g. `Gamepad2`) for the node's brand mark from `intent.brand.icon`. */
+export function extractNodeBrandIcon(spec: RepoSpec): string | null {
+  return spec.intent?.brand?.icon ?? null;
+}
+
 /**
  * Extract scope_id from parsed repo-spec.
  * Throws if scope_id is not present (required for ledger scope gating).

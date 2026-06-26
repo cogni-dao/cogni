@@ -23,6 +23,7 @@ import {
   extractKnowledgeConfig,
   extractLedgerApprovers,
   extractNodeBrandColor,
+  extractNodeBrandIcon,
   extractNodeHook,
   extractNodeMission,
   extractNodeName,
@@ -133,6 +134,11 @@ export function getNodeThumbnail(): string | null {
 /** Monogram-tint brand color from repo-spec `intent.brand.color`, or null. */
 export function getNodeBrandColor(): string | null {
   return extractNodeBrandColor(loadRepoSpec());
+}
+
+/** Lucide icon NAME (PascalCase) for the node's brand mark from repo-spec `intent.brand.icon`, or null. */
+export function getNodeBrandIcon(): string | null {
+  return extractNodeBrandIcon(loadRepoSpec());
 }
 
 let cachedScopeId: string | null = null;

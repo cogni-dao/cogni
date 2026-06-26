@@ -502,11 +502,15 @@ export const repoSpecSchema = z
         mission: z.string().min(1).optional(),
         brand: z
           .object({
-            // Relative PATH the node serves from its OWN app `public/` (e.g. `/showcase/foo.png`), NOT
-            // an absolute URL — the operator resolves it against the node's env-host so it's correct on
-            // test/preview/prod with no CDN and no operator asset-hosting. Absolute URLs allowed too.
-            thumbnail: z.string().optional(),
+            // SSOT for the node's visual mark: a Lucide icon NAME (PascalCase, e.g. `Gamepad2`).
+            // ONE field, every surface reads it — app header, gallery card, og:image, favicon — so
+            // the icon is never hand-coded per-fork in AppHeader JSX again (that was the split-brain).
+            icon: z.string().optional(),
+            // `color` tints the brand mark (icon + monogram fallback).
             color: z.string().optional(),
+            // Deprecated: a node-hosted image URL/path. Superseded by `icon` (which the node's
+            // /opengraph-image route renders to a PNG). Kept optional for back-compat during migration.
+            thumbnail: z.string().optional(),
           })
           .optional(),
       })
