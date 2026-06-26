@@ -3,12 +3,12 @@
 
 /**
  * Module: `@app/(admin)/admin/payments/funding.server`
- * Purpose: Read-only snapshot of the AI-funding pipeline — the three balances that decide
- *   whether the node's AI is funded: OpenRouter runway, operator-wallet working capital,
- *   and steward-wallet balance. Each read is resilient (null on failure) so the panel
- *   degrades gracefully when a credential/RPC is missing in an environment.
- * Scope: Server-only. HTTPS read to OpenRouter + on-chain USDC balanceOf via EVM_RPC_URL.
- *   Does not move funds or write anything.
+ * Purpose: Read-only snapshot of the provider-funding pipeline — the balances that decide
+ *   whether the node is funded: OpenRouter inference runway, Cherry compute runway,
+ *   operator-wallet working capital, and steward-wallet balance. Each read is resilient
+ *   (null on failure) so the panel degrades gracefully when a credential/RPC is missing.
+ * Scope: Server-only. HTTPS read to OpenRouter + on-chain USDC balanceOf via EVM_RPC_URL
+ *   + Cherry compute balance via the injected ComputeResourcePort. Does not move funds.
  * Invariants: NEVER throws — every read is try/caught to null; the panel must always render.
  * Side-effects: IO (OpenRouter HTTPS GET, Base RPC reads).
  * Links: src/app/(admin)/admin/payments/AiFundingPanel.client.tsx, docs/design/node-steward-wallet.md
@@ -17,7 +17,9 @@
 
 import "server-only";
 
+import type { ComputeBalance } from "@cogni/ai-tools";
 import { createPublicClient, erc20Abi, getAddress, http } from "viem";
+import { getContainer } from "@/bootstrap/container";
 import {
   getOperatorWalletConfig,
   getStewardWalletConfig,
@@ -30,12 +32,33 @@ const USDC_DECIMALS = 6;
 export interface AiFunding {
   /** OpenRouter remaining credits (USD) = total_credits − total_usage. */
   openRouterRemainingUsd: number | null;
+  /** Cherry compute remaining balance in `cherryCurrency` major units. */
+  cherryRemaining: number | null;
+  /** ISO 4217 currency of `cherryRemaining`, e.g. "EUR". */
+  cherryCurrency: string | null;
   /** Operator (Privy) wallet USDC — DAO working capital (95% of user payments). */
   operatorWalletUsdc: number | null;
   /** Steward wallet USDC — human-custodied, pays vendors. */
   stewardWalletUsdc: number | null;
   operatorWalletAddress: string | null;
   stewardWalletAddress: string | null;
+}
+
+/** Cherry compute balance, mapped from the injected ComputeResourcePort. */
+async function fetchCherryBalance(): Promise<{
+  remaining: number | null;
+  currency: string | null;
+}> {
+  try {
+    const balances = await getContainer().computeCapability.balances();
+    const cherry = balances.find(
+      (b: ComputeBalance) => b.provider === "cherry"
+    );
+    if (!cherry) return { remaining: null, currency: null };
+    return { remaining: cherry.remaining, currency: cherry.currency };
+  } catch {
+    return { remaining: null, currency: null };
+  }
 }
 
 async function fetchOpenRouterRemaining(
@@ -83,17 +106,24 @@ export async function getAiFunding(): Promise<AiFunding> {
   const steward = getStewardWalletConfig()?.address ?? null;
   const rpc = env.EVM_RPC_URL;
 
-  const [openRouterRemainingUsd, operatorWalletUsdc, stewardWalletUsdc] =
-    await Promise.all([
-      env.OPENROUTER_API_KEY
-        ? fetchOpenRouterRemaining(env.OPENROUTER_API_KEY)
-        : Promise.resolve(null),
-      rpc && operator ? usdcBalance(operator, rpc) : Promise.resolve(null),
-      rpc && steward ? usdcBalance(steward, rpc) : Promise.resolve(null),
-    ]);
+  const [
+    openRouterRemainingUsd,
+    cherry,
+    operatorWalletUsdc,
+    stewardWalletUsdc,
+  ] = await Promise.all([
+    env.OPENROUTER_API_KEY
+      ? fetchOpenRouterRemaining(env.OPENROUTER_API_KEY)
+      : Promise.resolve(null),
+    fetchCherryBalance(),
+    rpc && operator ? usdcBalance(operator, rpc) : Promise.resolve(null),
+    rpc && steward ? usdcBalance(steward, rpc) : Promise.resolve(null),
+  ]);
 
   return {
     openRouterRemainingUsd,
+    cherryRemaining: cherry.remaining,
+    cherryCurrency: cherry.currency,
     operatorWalletUsdc,
     stewardWalletUsdc,
     operatorWalletAddress: operator,
