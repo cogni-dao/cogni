@@ -79,3 +79,24 @@ describe("makeNodeLocalMatcher", () => {
     expect(matches("app/src/features/home")).toBe(false);
   });
 });
+
+describe("DEFAULT_NODE_LOCAL_PATHS boundary — node owns its face, not the shell", () => {
+  const matches = makeNodeLocalMatcher(DEFAULT_NODE_LOCAL_PATHS);
+
+  it("keeps the node's homepage + home feature + branding/identity node-local", () => {
+    expect(matches("app/src/app/(public)/page.tsx")).toBe(true);
+    expect(matches("app/src/features/home/components/Pitch.tsx")).toBe(true);
+    expect(matches(".cogni/repo-spec.yaml")).toBe(true);
+  });
+
+  it("does NOT strand generic (public) shell or platform routes — they must sync to track shared contracts", () => {
+    // Regression guard: carving these out as node-local strands forks at stale
+    // versions and breaks them against changed shared components (e.g. AppHeader's
+    // brandMark prop). The node owns its homepage, NOT the app shell.
+    expect(matches("app/src/app/(public)/layout.tsx")).toBe(false);
+    expect(matches("app/src/app/(public)/error.tsx")).toBe(false);
+    expect(matches("app/src/app/(public)/loading.tsx")).toBe(false);
+    expect(matches("app/src/app/(public)/AuthRedirect.tsx")).toBe(false);
+    expect(matches("app/src/app/(public)/propose/merge/page.tsx")).toBe(false);
+  });
+});
