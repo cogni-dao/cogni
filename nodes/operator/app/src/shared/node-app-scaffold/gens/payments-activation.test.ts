@@ -60,7 +60,7 @@ describe("renderPaymentsActivationSpec", () => {
     );
     const topup = (
       parsed.payments_in as Record<string, Record<string, unknown>>
-    ).credits_topup;
+    ).credits_topup as Record<string, unknown>;
     expect(topup.receiving_address).toBe(SPLIT);
     expect(topup.markup_factor).toBe(ACTIVATION_MARKUP_FACTOR);
     expect(topup.revenue_share).toBe(ACTIVATION_REVENUE_SHARE);
@@ -96,7 +96,7 @@ describe("renderPaymentsActivationSpec", () => {
     const parsed = parseYaml(next) as Record<string, unknown>;
     const topup = (
       parsed.payments_in as Record<string, Record<string, unknown>>
-    ).credits_topup;
+    ).credits_topup as Record<string, unknown>;
     expect(topup.receiving_address).toBe(newSplit);
     expect((parsed.payments as Record<string, unknown>).status).toBe("active");
   });
