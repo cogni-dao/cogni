@@ -18,7 +18,7 @@ import type { ReactElement } from "react";
 
 import { Button, Card } from "@/components";
 import type { NodeSummary } from "@/ports";
-import { resolveBrandIcon } from "@/shared/brand/brandIcons";
+import { isBrandImageMark, resolveBrandIcon } from "@/shared/brand/brandIcons";
 
 interface NodeCardMetrics {
   readonly devActivity30d: number;
@@ -78,7 +78,11 @@ export function NodeNetworkCard({
     metrics.aiUsage.state === "available"
       ? `${formatNumber(metrics.aiUsage.requests30d)} / 30d`
       : "Pending";
-  const BrandIcon = node.icon ? resolveBrandIcon(node.icon) : null;
+  // brand.icon is polymorphic: a hosted image (the node's real logo, e.g. the Cogni brain) or a Lucide
+  // NAME. Image marks arrive host-resolved (http URL); names resolve to a Lucide component.
+  const brandImage = isBrandImageMark(node.icon) ? node.icon : null;
+  const BrandIcon =
+    node.icon && !brandImage ? resolveBrandIcon(node.icon) : null;
 
   return (
     <Card className="flex h-full flex-col overflow-hidden transition-colors hover:border-primary">
@@ -88,10 +92,24 @@ export function NodeNetworkCard({
         className="group flex flex-1 flex-col focus-visible:outline-2 focus-visible:outline-ring"
       >
         <div className="relative aspect-video border-border border-b bg-muted">
-          {BrandIcon ? (
+          {brandImage ? (
             // IDENTITY_IS_REPO_SPEC_PROJECTION: the card mark is the node's own
-            // `intent.brand.icon` (Lucide), rendered big + brand-tinted. Preferred
-            // over a thumbnail image; falls back to a monogram when unset.
+            // `intent.brand.icon` — here a real hosted logo (e.g. the Cogni brain),
+            // shown centered + contained (NOT a cover screenshot).
+            <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-muted via-background to-background">
+              <div className="relative h-3/5 w-3/5 transition-transform group-hover:scale-105">
+                <Image
+                  src={brandImage}
+                  alt={`${node.title} logo`}
+                  fill
+                  unoptimized
+                  sizes="(min-width: 1024px) 22vw, (min-width: 640px) 33vw, 60vw"
+                  className="object-contain"
+                />
+              </div>
+            </div>
+          ) : BrandIcon ? (
+            // A Lucide NAME mark, rendered big + brand-tinted.
             <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-muted via-background to-background">
               <BrandIcon
                 className="size-24 transition-transform group-hover:scale-105"

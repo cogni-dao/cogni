@@ -44,6 +44,24 @@ describe("parseWellKnownIdentity", () => {
     });
   });
 
+  it("host-resolves an image-path brand.icon, but leaves a Lucide NAME verbatim", () => {
+    const imagePath = {
+      identity: {
+        name: "operator",
+        brand: { icon: "/TransparentBrainOnly.png" },
+      },
+    };
+    expect(parseWellKnownIdentity(imagePath, HOST)?.brand.icon).toBe(
+      "https://beacon.cognidao.org/TransparentBrainOnly.png"
+    );
+    const lucideName = {
+      identity: { name: "games", brand: { icon: "Gamepad2" } },
+    };
+    expect(parseWellKnownIdentity(lucideName, HOST)?.brand.icon).toBe(
+      "Gamepad2"
+    );
+  });
+
   it("leaves an already-absolute thumbnail URL intact", () => {
     const body = {
       identity: {

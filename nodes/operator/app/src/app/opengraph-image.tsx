@@ -20,6 +20,8 @@
 // CSS files — so the no-inline-styles rule cannot apply to this image route.
 /* eslint-disable no-inline-styles/no-inline-styles */
 
+import fs from "node:fs";
+import path from "node:path";
 import { ImageResponse } from "next/og";
 import { resolveBrandIcon } from "@/shared/brand/brandIcons";
 import {
@@ -51,12 +53,40 @@ function titleCase(slug: string): string {
     .join(" ");
 }
 
+/**
+ * `brand.icon` can be a hosted image asset (the node's real logo, e.g. `/TransparentBrainOnly.png`).
+ * satori has no network/fs loader, so inline the bytes as a data URI read from the node's own `public/`.
+ * Returns null (→ Lucide fallback) when the value isn't a local path or the file can't be found.
+ */
+function brandImageDataUri(icon: string | null): string | null {
+  if (!icon || !icon.startsWith("/")) return null;
+  const rel = icon.replace(/^\/+/, "");
+  const candidates = [
+    path.join(process.cwd(), "app", "public", rel),
+    path.join(process.cwd(), "public", rel),
+    path.join(process.cwd(), "nodes", "operator", "app", "public", rel),
+  ];
+  for (const file of candidates) {
+    try {
+      if (!fs.existsSync(file)) continue;
+      const ext = path.extname(file).slice(1).toLowerCase();
+      const mime = ext === "svg" ? "image/svg+xml" : `image/${ext}`;
+      return `data:${mime};base64,${fs.readFileSync(file).toString("base64")}`;
+    } catch {
+      // try the next candidate
+    }
+  }
+  return null;
+}
+
 export default function OpengraphImage(): ImageResponse {
   const name = titleCase(getNodeName());
   const hook = getNodeHook();
   const color = getNodeBrandColor() ?? FALLBACK_COLOR;
-  // Same brand-icon registry the app header + gallery read — one source, every surface.
-  const BrandIcon = resolveBrandIcon(getNodeBrandIcon());
+  // brand.icon is a hosted logo image (rendered from the node's own public/) OR a Lucide NAME.
+  const rawIcon = getNodeBrandIcon();
+  const iconImageUri = brandImageDataUri(rawIcon);
+  const BrandIcon = iconImageUri ? null : resolveBrandIcon(rawIcon);
 
   return new ImageResponse(
     <div
@@ -102,7 +132,17 @@ export default function OpengraphImage(): ImageResponse {
         }}
       >
         <div style={{ display: "flex", color, marginBottom: "20px" }}>
-          <BrandIcon width={200} height={200} strokeWidth={1.5} />
+          {iconImageUri ? (
+            <img
+              src={iconImageUri}
+              width={200}
+              height={200}
+              style={{ objectFit: "contain" }}
+              alt=""
+            />
+          ) : BrandIcon ? (
+            <BrandIcon width={200} height={200} strokeWidth={1.5} />
+          ) : null}
         </div>
         <div
           style={{

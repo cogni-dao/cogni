@@ -23,7 +23,7 @@ import Link from "next/link";
 import type { CSSProperties, ReactElement } from "react";
 
 import { Badge, Card } from "@/components";
-import { resolveBrandIcon } from "@/shared/brand/brandIcons";
+import { isBrandImageMark, resolveBrandIcon } from "@/shared/brand/brandIcons";
 
 export interface NodeTileView {
   readonly title: string;
@@ -64,25 +64,39 @@ function Banner({
   brandColor?: string | null | undefined;
   icon?: string | null | undefined;
 }): ReactElement {
-  // IDENTITY_IS_REPO_SPEC_PROJECTION: prefer the node's own `intent.brand.icon`
-  // (Lucide), rendered big + brand-tinted, over a thumbnail or monogram.
+  // IDENTITY_IS_REPO_SPEC_PROJECTION: prefer the node's own `intent.brand.icon` —
+  // a hosted logo image (e.g. the Cogni brain) OR a Lucide NAME — over a thumbnail
+  // or monogram. Both render centered + brand-tinted.
   if (icon) {
-    const BrandIcon = resolveBrandIcon(icon);
     const iconStyle = brandStyle(brandColor);
     const wash = iconStyle
       ? "from-[var(--node-brand)]/20 via-background to-background"
       : "from-primary/15 via-background to-background";
+    const BrandIcon = isBrandImageMark(icon) ? null : resolveBrandIcon(icon);
     return (
       <div
         className={`relative flex h-full w-full items-center justify-center overflow-hidden bg-gradient-to-br ${wash}`}
         style={iconStyle}
       >
-        <BrandIcon
-          className="size-20 transition-transform group-hover:scale-105"
-          color={brandColor ?? undefined}
-          strokeWidth={1.5}
-          aria-hidden="true"
-        />
+        {BrandIcon ? (
+          <BrandIcon
+            className="size-20 transition-transform group-hover:scale-105"
+            color={brandColor ?? undefined}
+            strokeWidth={1.5}
+            aria-hidden="true"
+          />
+        ) : (
+          <div className="relative h-3/5 w-3/5 transition-transform group-hover:scale-105">
+            <Image
+              src={icon}
+              alt={`${title} logo`}
+              fill
+              unoptimized
+              sizes="(min-width: 1024px) 22vw, (min-width: 640px) 33vw, 60vw"
+              className="object-contain"
+            />
+          </div>
+        )}
       </div>
     );
   }

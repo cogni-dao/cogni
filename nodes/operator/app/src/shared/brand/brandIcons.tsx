@@ -57,3 +57,14 @@ export function resolveBrandIcon(name: string | null | undefined): LucideIcon {
     (BRAND_ICONS as Record<string, LucideIcon>)[name] ?? FALLBACK_BRAND_ICON
   );
 }
+
+/**
+ * `brand.icon` is polymorphic: a Lucide NAME or an image asset (a node's real logo, e.g. the Cogni
+ * brain). The prober host-resolves image paths to absolute URLs, so by the time the gallery reads it an
+ * image mark is an `http(s)` URL — render those via `<img>`, names via {@link resolveBrandIcon}.
+ */
+export function isBrandImageMark(
+  icon: string | null | undefined
+): icon is string {
+  return typeof icon === "string" && /^https?:\/\//.test(icon);
+}
