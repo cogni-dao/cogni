@@ -71,6 +71,8 @@ export const EVENT_NAMES = {
     "feature.node_publish.secret_shape_generated",
   NODE_DEVELOPER_DECISION_COMPLETE: "feature.node_developer_decision.complete",
   NODE_OBSERVABILITY_LOGS_COMPLETE: "feature.node_observability_logs.complete",
+  NODE_OBSERVABILITY_TRACES_COMPLETE:
+    "feature.node_observability_traces.complete",
   NODE_DEPLOY_STATE_COMPLETE: "feature.node_deploy_state.complete",
   VCS_FLIGHT_REQUEST_COMPLETE: "feature.vcs_flight.request_complete",
   VCS_MERGE_REQUEST_COMPLETE: "feature.vcs_merge.request_complete",

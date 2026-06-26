@@ -121,6 +121,7 @@ export {
   type ProdLivenessDeps,
   resolveNodeLiveness,
 } from "./node-registry/prod-liveness";
+export { HttpLangfuseReader } from "./observability/langfuse-reader.adapter";
 export { HttpLokiReader } from "./observability/loki-reader.adapter";
 export { ViemEvmOnchainClient } from "./onchain/viem-evm-onchain-client.adapter";
 export { ViemTreasuryAdapter } from "./onchain/viem-treasury.adapter";

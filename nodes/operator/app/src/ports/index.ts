@@ -84,6 +84,11 @@ export type {
   GovernanceStatusPort,
   UpcomingRun,
 } from "./governance-status.port";
+export type {
+  LangfuseReaderPort,
+  LangfuseTraceQuery,
+  LangfuseTraceSummary,
+} from "./langfuse-reader.port";
 // LlmError types re-exported for adapters (adapters can only import from ports)
 // Features should import directly from @/core
 export {

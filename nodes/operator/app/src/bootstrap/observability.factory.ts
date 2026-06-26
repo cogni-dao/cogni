@@ -3,19 +3,19 @@
 
 /**
  * Module: `@bootstrap/observability.factory`
- * Purpose: Runtime wiring for the node-pinned log-read proxy — builds a `LokiReaderPort` from the
- *   operator's own Grafana read credential (`GRAFANA_URL` + `GRAFANA_SERVICE_ACCOUNT_TOKEN`). Lives in
+ * Purpose: Runtime wiring for the node-pinned observability-read proxies — builds a `LokiReaderPort`
+ *   (Grafana read credential) and a `LangfuseReaderPort` (the operator's own Langfuse key). Lives in
  *   bootstrap so the app/route layer never imports adapters directly (no-restricted-imports).
  * Scope: Reads serverEnv; returns the adapter or `null` when the read credential is not wired (the
  *   route then fails graceful with 503 `observability_unwired`). No app logic here.
- * Invariants: NULL_WHEN_UNWIRED (both env values required); the operator holds the read token, never the dev.
+ * Invariants: NULL_WHEN_UNWIRED (read creds required); the operator holds the read credential, never the dev.
  * Side-effects: none beyond reading serverEnv
- * Links: src/adapters/server/observability/loki-reader.adapter.ts, src/ports/loki-reader.port.ts
+ * Links: src/adapters/server/observability/{loki-reader,langfuse-reader}.adapter.ts, src/ports/{loki-reader,langfuse-reader}.port.ts
  * @public
  */
 
-import { HttpLokiReader } from "@/adapters/server";
-import type { LokiReaderPort } from "@/ports";
+import { HttpLangfuseReader, HttpLokiReader } from "@/adapters/server";
+import type { LangfuseReaderPort, LokiReaderPort } from "@/ports";
 import { serverEnv } from "@/shared/env";
 
 /** The operator's Loki reader, or null when `GRAFANA_URL`/`GRAFANA_SERVICE_ACCOUNT_TOKEN` are unset. */
@@ -27,5 +27,25 @@ export function createLokiReader(): LokiReaderPort | null {
   return new HttpLokiReader({
     grafanaUrl: env.GRAFANA_URL,
     token: env.GRAFANA_SERVICE_ACCOUNT_TOKEN,
+  });
+}
+
+/**
+ * The operator's Langfuse reader, or null when `LANGFUSE_{BASE_URL,PUBLIC_KEY,SECRET_KEY}` are unset.
+ * Same key the trace-writing decorator uses — the operator holds it; the dev never does.
+ */
+export function createLangfuseReader(): LangfuseReaderPort | null {
+  const env = serverEnv();
+  if (
+    !env.LANGFUSE_BASE_URL ||
+    !env.LANGFUSE_PUBLIC_KEY ||
+    !env.LANGFUSE_SECRET_KEY
+  ) {
+    return null;
+  }
+  return new HttpLangfuseReader({
+    baseUrl: env.LANGFUSE_BASE_URL,
+    publicKey: env.LANGFUSE_PUBLIC_KEY,
+    secretKey: env.LANGFUSE_SECRET_KEY,
   });
 }
