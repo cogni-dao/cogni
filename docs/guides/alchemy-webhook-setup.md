@@ -20,8 +20,8 @@ Alchemy monitors a CogniSignal contract for `CogniAction` events. When a DAO pro
 
 1. [Alchemy Dashboard](https://dashboard.alchemy.com) → **Data** → **Webhooks** → **+ Create webhook**
 2. Type: **Custom**
-3. Chain: match `cogni_dao.chain_id` in your repo-spec (e.g. Base = 8453)
-4. GraphQL query — paste this, replacing `SIGNAL_CONTRACT` with your `cogni_dao.signal_contract` address:
+3. Chain: match `governance.chain_id` in your repo-spec (e.g. Base = 8453)
+4. GraphQL query — paste this, replacing `SIGNAL_CONTRACT` with your `governance.signal_contract` address:
    ```graphql
    {
      block {

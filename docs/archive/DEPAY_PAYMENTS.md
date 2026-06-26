@@ -140,7 +140,7 @@ We keep a **hard separation**:
 ### 3.1 Prerequisites
 
 - [x] SIWE-authenticated session (Auth.js) working with JWT cookies.
-- [x] `.cogni/repo-spec.yaml` declares `payments_in.widget.receiving_address` and `cogni_dao.chain_id` (governance, no env override).
+- [x] `.cogni/repo-spec.yaml` declares `payments_in.widget.receiving_address` and `governance.chain_id` (governance, no env override).
 - [x] Chain hardcoded to Base mainnet (8453); validated against repo-spec by `scripts/validate-chain-config.ts`.
 - [x] Shared chain config lives at `src/shared/web3/chain.ts` (current values: `DEPAY_BLOCKCHAIN = "base"`, USDC on Base mainnet).
 

@@ -29,7 +29,7 @@ const NODE_ID = "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d";
 
 function repoSpecYaml(opts: { gates: string }): string {
   return `node_id: "${NODE_ID}"
-cogni_dao:
+governance:
   chain_id: "8453"
 ${opts.gates}`;
 }

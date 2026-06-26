@@ -22,7 +22,7 @@ You need to configure or test the USDC-based credit top-up payment system. This 
 
 ## Preconditions
 
-- [ ] `.cogni/repo-spec.yaml` configured with `cogni_dao.chain_id` and `payments_in.credits_topup.receiving_address`
+- [ ] `.cogni/repo-spec.yaml` configured with `governance.chain_id` and `payments_in.credits_topup.receiving_address`
 - [ ] `src/shared/web3/chain.ts` constants match repo-spec (`CHAIN_ID`, `USDC_TOKEN_ADDRESS`, `MIN_CONFIRMATIONS`)
 - [ ] Database migrations applied (`pnpm db:migrate`)
 - [ ] Wallet connected via RainbowKit to a supported chain (Sepolia for testing, Base mainnet for production)
@@ -33,7 +33,7 @@ You need to configure or test the USDC-based credit top-up payment system. This 
 
 **`.cogni/repo-spec.yaml`** (governance-managed):
 
-- `cogni_dao.chain_id` — Chain ID as string (e.g., `"11155111"` for Sepolia, `"8453"` for Base)
+- `governance.chain_id` — Chain ID as string (e.g., `"11155111"` for Sepolia, `"8453"` for Base)
 - `payments_in.credits_topup.receiving_address` — DAO wallet receiving address
 - `payments_in.credits_topup.allowed_chains` — Chain names (e.g., `["Sepolia"]`)
 - `payments_in.credits_topup.allowed_tokens` — Token names (e.g., `["USDC"]`)
@@ -42,7 +42,7 @@ You need to configure or test the USDC-based credit top-up payment system. This 
 
 **`src/shared/web3/chain.ts`** (hardcoded constants):
 
-- `CHAIN_ID` — Must match `cogni_dao.chain_id` from repo-spec
+- `CHAIN_ID` — Must match `governance.chain_id` from repo-spec
 - `USDC_TOKEN_ADDRESS` — Token contract address for configured chain
 - `MIN_CONFIRMATIONS` — Required block confirmations
 - `VERIFY_THROTTLE_SECONDS` — GET polling throttle (default 10s)

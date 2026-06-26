@@ -286,7 +286,7 @@ In V0 (single-project nodes), most keys resolve to a single value:
 
 `scope_id` is a deterministic UUID derived from `uuidv5(node_id, scope_key)`. The UUID is declared in `repo-spec.yaml` (V0) or `.cogni/projects/*.yaml` (multi-scope). `scope_key` is the human-readable slug used for display, logging, and as the derivation input.
 
-**Inline-until-second-scope:** V0 inlines the default scope's governance fields (`cogni_dao`, `operator_wallet`, `payments`, `activity_ledger.approvers`, weight policy) directly in the node-spec. A `.cogni/projects/<scope_key>.yaml` file materializes only when a second scope is declared — until then it would merely duplicate the inline default. Adding the first non-default scope moves **all** scopes, including `default`, into per-scope manifests.
+**Inline-until-second-scope:** V0 inlines the default scope's governance fields (`governance`, `operator_wallet`, `payments`, `activity_ledger.approvers`, weight policy) directly in the node-spec. A `.cogni/projects/<scope_key>.yaml` file materializes only when a second scope is declared — until then it would merely duplicate the inline default. Adding the first non-default scope moves **all** scopes, including `default`, into per-scope manifests.
 
 ## Spec File Layering
 
@@ -296,7 +296,7 @@ Three altitudes, one file per altitude. Closest file wins; a higher tier never r
 | ----------------- | ----------------------------------------------- | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Repo manifest** | `.cogni/repo-spec.yaml` (repo root)             | 1 per repo   | Monorepo-wide concerns only: review `gates`, `fail_on_error`. Node registry SSOT is `infra/catalog/*.yaml` (`CATALOG_IS_SSOT`); any `nodes:[]` here is a derived convenience carrying runtime endpoints, never a second authority. |
 | **Node-spec**     | `nodes/<node>/.cogni/repo-spec.yaml`            | 1 per node   | Deployment identity: `node_id`, `providers`, `llm_proxy`, `secrets`. Loaded at runtime via `COGNI_REPO_PATH`.                                                                                                                      |
-| **Scope-spec**    | `nodes/<node>/.cogni/projects/<scope_key>.yaml` | 1:N per node | Governance + money + permissions: `scope_id`, `cogni_dao`, `operator_wallet`, `payments`, `activity_ledger.approvers`, weight policy. Inlined into the node-spec while a node has only the `default` scope.                        |
+| **Scope-spec**    | `nodes/<node>/.cogni/projects/<scope_key>.yaml` | 1:N per node | Governance + money + permissions: `scope_id`, `governance`, `operator_wallet`, `payments`, `activity_ledger.approvers`, weight policy. Inlined into the node-spec while a node has only the `default` scope.                       |
 
 **SINGLE_HOME:** a node's identity and governance fields live in exactly one tier. The operator is both the hub (repo manifest) and a node (node-spec); its `node_id` and governance fields belong to its node-spec — never duplicated at the repo root.
 

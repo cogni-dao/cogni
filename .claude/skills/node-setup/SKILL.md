@@ -36,7 +36,7 @@ Check `payments.status` in `.cogni/repo-spec.yaml` to determine current state.
 1. Direct user to https://cognidao.org/setup/dao
 2. User copies generated YAML into `.cogni/repo-spec.yaml`
 3. Follow [Node Formation Guide](../../../docs/guides/node-formation-guide.md) for details
-4. **Gate:** `.cogni/repo-spec.yaml` has valid `cogni_dao.chain_id` and `payments.status: pending_activation`
+4. **Gate:** `.cogni/repo-spec.yaml` has valid `governance.chain_id` and `payments.status: pending_activation`
 
 ### Phase 1: Repo Identity
 

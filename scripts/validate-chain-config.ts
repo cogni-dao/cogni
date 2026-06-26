@@ -31,13 +31,13 @@ function main(): void {
 
   const content = fs.readFileSync(repoSpecPath, "utf8");
   const spec = parse(content) as {
-    cogni_dao?: { chain_id?: unknown };
+    governance?: { chain_id?: unknown };
   };
-  const declared = Number(spec?.cogni_dao?.chain_id);
+  const declared = Number(spec?.governance?.chain_id);
 
   if (!Number.isFinite(declared)) {
     console.error(
-      "[chain-config] Invalid or missing cogni_dao.chain_id in repo-spec; expected Base mainnet (8453)"
+      "[chain-config] Invalid or missing governance.chain_id in repo-spec; expected Base mainnet (8453)"
     );
     process.exit(1);
   }

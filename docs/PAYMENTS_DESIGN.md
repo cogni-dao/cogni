@@ -137,7 +137,7 @@
 - [x] Create `adapters/server/payments/evm-rpc-onchain-verifier.adapter.ts` implementing OnChainVerifier port
 - [x] Inject `EvmOnchainClient` dependency (see [ONCHAIN_READERS.md](ONCHAIN_READERS.md#shared-evm-infrastructure))
 - [x] Read canonical config:
-  - `chainId` from `getPaymentConfig().chainId` (sourced from `.cogni/repo-spec.yaml` `cogni_dao.chain_id`, validated against `CHAIN_ID` constant)
+  - `chainId` from `getPaymentConfig().chainId` (sourced from `.cogni/repo-spec.yaml` `governance.chain_id`, validated against `CHAIN_ID` constant)
   - `receivingAddress` from `getPaymentConfig().receivingAddress` (sourced from `.cogni/repo-spec.yaml` `payments_in.credits_topup.receiving_address`)
   - `tokenAddress` from `USDC_TOKEN_ADDRESS` constant (`@/shared/web3/chain`)
 - [x] Assert caller params match canonical config (immediate failure if mismatch)
@@ -168,7 +168,7 @@
 - [ ] Create `adapters/server/payments/evm-rpc-onchain-verifier.adapter.ts` implementing OnChainVerifier port
 - [ ] Inject `EvmOnchainClient` dependency (see [ONCHAIN_READERS.md](ONCHAIN_READERS.md#shared-evm-infrastructure))
 - [ ] Read canonical config:
-  - `chainId` from `getWidgetConfig().chainId` (sourced from `.cogni/repo-spec.yaml` `cogni_dao.chain_id`, validated against `CHAIN_ID` constant)
+  - `chainId` from `getWidgetConfig().chainId` (sourced from `.cogni/repo-spec.yaml` `governance.chain_id`, validated against `CHAIN_ID` constant)
   - `receivingAddress` from `getWidgetConfig().receivingAddress` (sourced from `.cogni/repo-spec.yaml` `payments_in.widget.receiving_address`)
   - `tokenAddress` from `USDC_TOKEN_ADDRESS` constant (`@/shared/web3/chain`)
 - [ ] Assert caller params match canonical config (immediate failure if mismatch)
@@ -507,14 +507,14 @@ WHERE reason = 'widget_payment';
 **Key Config:**
 
 - `.cogni/repo-spec.yaml` - Governance-managed configuration:
-  - `cogni_dao.chain_id` - Chain ID as string (e.g., "11155111" for Ethereum Sepolia, "8453" for Base mainnet)
+  - `governance.chain_id` - Chain ID as string (e.g., "11155111" for Ethereum Sepolia, "8453" for Base mainnet)
   - `payments_in.credits_topup.receiving_address` - DAO wallet receiving address
   - `payments_in.credits_topup.allowed_chains` - Chain names (e.g., ["Sepolia"])
   - `payments_in.credits_topup.allowed_tokens` - Token names (e.g., ["USDC"])
   - `payments_in.credits_topup.provider` - Payment provider identifier
 - `src/shared/config/repoSpec.server.ts` - Server-side reader: `getPaymentConfig()` returns `{ chainId, receivingAddress, provider }`
 - `src/shared/web3/chain.ts` - Hardcoded constants:
-  - `CHAIN_ID` - Must match `cogni_dao.chain_id` from repo-spec
+  - `CHAIN_ID` - Must match `governance.chain_id` from repo-spec
   - `USDC_TOKEN_ADDRESS` - Token contract address for configured chain
   - `MIN_CONFIRMATIONS`, `VERIFY_THROTTLE_SECONDS` - Payment constants
 

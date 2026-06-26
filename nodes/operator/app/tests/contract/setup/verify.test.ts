@@ -185,7 +185,7 @@ describe("setupVerifyOperation contract", () => {
           plugin: "0x9876543210987654321098765432109876543210",
           signal: "0xfedcbafedcbafedcbafedcbafedcbafedcbafedc",
         },
-        repoSpecYaml: 'cogni_dao:\n  chain_id: "8453"\n',
+        repoSpecYaml: 'governance:\n  chain_id: "8453"\n',
       };
 
       const result = setupVerifyOperation.output.safeParse(success);

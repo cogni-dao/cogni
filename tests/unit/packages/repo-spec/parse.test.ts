@@ -20,7 +20,7 @@ const TEST_SCOPE_ID = "00000000-0000-4000-8000-000000000002";
 /** Minimal valid YAML for parse tests */
 const VALID_YAML = [
   `node_id: "${TEST_NODE_ID}"`,
-  "cogni_dao:",
+  "governance:",
   '  chain_id: "8453"',
   "payments_in:",
   "  credits_topup:",
@@ -31,7 +31,7 @@ const VALID_YAML = [
 /** Minimal valid object for parse tests */
 const VALID_OBJECT = {
   node_id: TEST_NODE_ID,
-  cogni_dao: { chain_id: "8453" },
+  governance: { chain_id: "8453" },
   payments_in: {
     credits_topup: {
       provider: "cogni-usdc-backend-v1",
@@ -45,7 +45,7 @@ describe("parseRepoSpec", () => {
     it("parses valid YAML string", () => {
       const result = parseRepoSpec(VALID_YAML);
       expect(result.node_id).toBe(TEST_NODE_ID);
-      expect(result.cogni_dao.chain_id).toBe("8453");
+      expect(result.governance.chain_id).toBe("8453");
       expect(result.payments_in.credits_topup.provider).toBe(
         "cogni-usdc-backend-v1"
       );
@@ -53,7 +53,7 @@ describe("parseRepoSpec", () => {
 
     it("applies Zod defaults (governance.schedules = [])", () => {
       const result = parseRepoSpec(VALID_YAML);
-      expect(result.governance).toEqual({ schedules: [] });
+      expect(result.governance).toEqual({ chain_id: "8453", schedules: [] });
     });
 
     it("throws on invalid YAML syntax", () => {
@@ -89,8 +89,8 @@ describe("parseRepoSpec", () => {
       ).toThrow(/Invalid repo-spec structure/);
     });
 
-    it("rejects missing cogni_dao", () => {
-      const { cogni_dao: _, ...rest } = VALID_OBJECT;
+    it("rejects missing governance", () => {
+      const { governance: _, ...rest } = VALID_OBJECT;
       expect(() => parseRepoSpec(rest)).toThrow(/Invalid repo-spec structure/);
     });
 
@@ -116,9 +116,9 @@ describe("parseRepoSpec", () => {
     it("accepts chain_id as number", () => {
       const result = parseRepoSpec({
         ...VALID_OBJECT,
-        cogni_dao: { chain_id: 8453 },
+        governance: { chain_id: 8453 },
       });
-      expect(result.cogni_dao.chain_id).toBe("8453");
+      expect(result.governance.chain_id).toBe("8453");
     });
 
     it("accepts Cogni-owned DoltHub knowledge remote config", () => {
@@ -237,18 +237,17 @@ describe("parseRepoSpec", () => {
         "    github:",
         "      attribution_pipeline: cogni-v0.0",
         '      source_refs: ["cogni-dao/cogni-template"]',
-        "cogni_dao:",
-        '  chain_id: "8453"',
-        "payments_in:",
-        "  credits_topup:",
-        "    provider: cogni-usdc-backend-v1",
-        '    receiving_address: "0x1111111111111111111111111111111111111111"',
         "governance:",
+        '  chain_id: "8453"',
         "  schedules:",
         "    - charter: HEARTBEAT",
         '      cron: "0 * * * *"',
         "      timezone: UTC",
         "      entrypoint: HEARTBEAT",
+        "payments_in:",
+        "  credits_topup:",
+        "    provider: cogni-usdc-backend-v1",
+        '    receiving_address: "0x1111111111111111111111111111111111111111"',
       ].join("\n");
 
       const result = parseRepoSpec(fullYaml);

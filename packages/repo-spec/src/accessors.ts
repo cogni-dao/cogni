@@ -156,16 +156,21 @@ export function extractScopeId(spec: RepoSpec): string {
 }
 
 /**
- * Extract numeric chain_id from cogni_dao section.
+ * Extract numeric chain_id from governance section.
  * Handles both string and number representations from YAML.
  */
 export function extractChainId(spec: RepoSpec): number {
-  const raw = spec.cogni_dao.chain_id;
+  const raw = spec.governance?.chain_id;
+  if (raw === undefined) {
+    throw new Error(
+      "[repo-spec] Missing governance.chain_id — required for on-chain operations"
+    );
+  }
   const chainId = typeof raw === "string" ? Number(raw) : raw;
 
   if (!Number.isFinite(chainId)) {
     throw new Error(
-      "[repo-spec] Invalid cogni_dao.chain_id; expected numeric chain ID"
+      "[repo-spec] Invalid governance.chain_id; expected numeric chain ID"
     );
   }
 
@@ -384,7 +389,7 @@ export interface DaoConfig {
  * required here (see review-handler / treasury, which never read it).
  */
 export function extractDaoConfig(spec: RepoSpec): DaoConfig | null {
-  const dao = spec.cogni_dao;
+  const dao = spec.governance;
   if (
     !dao?.dao_contract ||
     !dao.plugin_contract ||
@@ -415,10 +420,10 @@ export function extractOperatorWalletConfig(
 
 /**
  * Extract DAO treasury address from repo-spec.
- * Returns undefined if cogni_dao.dao_contract is not present.
+ * Returns undefined if governance.dao_contract is not present.
  */
 export function extractDaoTreasuryAddress(spec: RepoSpec): string | undefined {
-  return spec.cogni_dao.dao_contract;
+  return spec.governance.dao_contract;
 }
 
 /**

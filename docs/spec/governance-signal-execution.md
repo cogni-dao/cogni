@@ -151,7 +151,7 @@ Enable the DAO to execute governance decisions (merge PRs, manage collaborators)
 | repoUrl      | string? | Repository URL                         |
 | changeNumber | number? | PR number                              |
 
-**Repo-spec: `cogni_dao` section**
+**Repo-spec: `governance` section**
 
 | Field           | Type   | Validation                     | Description                        |
 | --------------- | ------ | ------------------------------ | ---------------------------------- |
@@ -171,21 +171,21 @@ Enable the DAO to execute governance decisions (merge PRs, manage collaborators)
 
 ### File Pointers
 
-| File                                                                | Purpose                                                |
-| ------------------------------------------------------------------- | ------------------------------------------------------ |
-| `apps/operator/src/adapters/server/ingestion/alchemy-webhook.ts`    | Alchemy HMAC verify + normalize to ActivityEvent[]     |
-| `apps/operator/src/features/governance/signal-types.ts`             | Zod schemas: Signal, ActionResult, RepoRef             |
-| `apps/operator/src/features/governance/signal-parser.ts`            | Decode CogniAction from tx receipt logs (viem + Zod)   |
-| `apps/operator/src/features/governance/actions.ts`                  | GitHub action handlers (merge, grant, revoke)          |
-| `apps/operator/src/features/governance/services/signal-handler.ts`  | Orchestrator: RPC → decode → validate → execute        |
-| `apps/operator/src/features/governance/services/signal-dispatch.ts` | Fire-and-forget entry point from webhook route         |
-| `apps/operator/src/features/governance/lib/proposal-abis.ts`        | CogniSignal + TokenVoting contract ABIs                |
-| `apps/operator/src/features/governance/lib/proposal-utils.ts`       | Deeplink param validation + gas estimation             |
-| `apps/operator/src/app/(public)/propose/merge/`                     | Public proposal creation page (wallet connect → tx)    |
-| `apps/operator/src/features/review/services/review-handler.ts`      | Builds deep link URL via `extractDaoConfig()`          |
-| `packages/repo-spec/src/accessors.ts`                               | `extractDaoConfig()` — canonical DAO config extractor  |
-| `packages/repo-spec/src/schema.ts`                                  | Zod schema for `cogni_dao` with EVM address validation |
-| `.cogni/repo-spec.yaml`                                             | DAO contract addresses, chain ID, base URL             |
+| File                                                                | Purpose                                                 |
+| ------------------------------------------------------------------- | ------------------------------------------------------- |
+| `apps/operator/src/adapters/server/ingestion/alchemy-webhook.ts`    | Alchemy HMAC verify + normalize to ActivityEvent[]      |
+| `apps/operator/src/features/governance/signal-types.ts`             | Zod schemas: Signal, ActionResult, RepoRef              |
+| `apps/operator/src/features/governance/signal-parser.ts`            | Decode CogniAction from tx receipt logs (viem + Zod)    |
+| `apps/operator/src/features/governance/actions.ts`                  | GitHub action handlers (merge, grant, revoke)           |
+| `apps/operator/src/features/governance/services/signal-handler.ts`  | Orchestrator: RPC → decode → validate → execute         |
+| `apps/operator/src/features/governance/services/signal-dispatch.ts` | Fire-and-forget entry point from webhook route          |
+| `apps/operator/src/features/governance/lib/proposal-abis.ts`        | CogniSignal + TokenVoting contract ABIs                 |
+| `apps/operator/src/features/governance/lib/proposal-utils.ts`       | Deeplink param validation + gas estimation              |
+| `apps/operator/src/app/(public)/propose/merge/`                     | Public proposal creation page (wallet connect → tx)     |
+| `apps/operator/src/features/review/services/review-handler.ts`      | Builds deep link URL via `extractDaoConfig()`           |
+| `packages/repo-spec/src/accessors.ts`                               | `extractDaoConfig()` — canonical DAO config extractor   |
+| `packages/repo-spec/src/schema.ts`                                  | Zod schema for `governance` with EVM address validation |
+| `.cogni/repo-spec.yaml`                                             | DAO contract addresses, chain ID, base URL              |
 
 ## Acceptance Checks
 

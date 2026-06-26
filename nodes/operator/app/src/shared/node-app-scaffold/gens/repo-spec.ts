@@ -100,7 +100,7 @@ intent:
   name: ${input.slug}
   mission: "${mission}"
 
-cogni_dao:
+governance:
 ${daoLines}
 
 ${input.knowledgeRemote ? renderKnowledgeBlock(input.knowledgeRemote) : ""}

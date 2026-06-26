@@ -1144,7 +1144,7 @@ source_sha: ${sourceSha}
             type: "file",
             encoding: "base64",
             content: encode(`node_id: "${nodeId}"
-cogni_dao:
+governance:
   chain_id: "8453"
 payments_in:
   credits_topup:
@@ -1263,7 +1263,7 @@ image_repository: ghcr.io/cogni-test-org/ghcr
             type: "file",
             encoding: "base64",
             content: encode(`node_id: "${nodeId}"
-cogni_dao:
+governance:
   chain_id: "8453"
 payments_in:
   credits_topup:

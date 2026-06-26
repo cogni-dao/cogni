@@ -79,10 +79,36 @@ export const governanceScheduleSchema = z.object({
 export type GovernanceScheduleSpec = z.infer<typeof governanceScheduleSchema>;
 
 /**
- * Schema for the governance section of repo-spec.
- * Optional — existing deployments without this section continue to work.
+ * Schema for the unified `governance` section of repo-spec — the node/scope's
+ * on-chain DAO identity (contracts + chain) AND its governance schedules.
+ * (identity-model.md `scope_id (1)──(1) dao_address`: each scope has one DAO; this
+ * is its governance binding.) All fields optional — a node without on-chain
+ * governance still validates; the DAO accessors return null when identity is incomplete.
  */
 export const governanceSpecSchema = z.object({
+  /** Chain ID as string or number (YAML flexibility); normalized to string. */
+  chain_id: z
+    .union([z.string(), z.number()])
+    .transform((v) => String(v))
+    .optional(),
+  /** DAO contract address (EVM 0x-prefixed, 40 hex chars) */
+  dao_contract: z
+    .string()
+    .regex(/^0x[0-9a-fA-F]{40}$/, "Invalid EVM address")
+    .optional(),
+  /** Aragon voting plugin contract address */
+  plugin_contract: z
+    .string()
+    .regex(/^0x[0-9a-fA-F]{40}$/, "Invalid EVM address")
+    .optional(),
+  /** CogniSignal contract address */
+  signal_contract: z
+    .string()
+    .regex(/^0x[0-9a-fA-F]{40}$/, "Invalid EVM address")
+    .optional(),
+  /** Proposal launcher base URL (for deep links) */
+  base_url: z.string().url().optional(),
+  /** Governance council schedules (cron-triggered charters) */
   schedules: z
     .array(governanceScheduleSchema)
     .default([])
@@ -549,32 +575,6 @@ export const repoSpecSchema = z
     /** Node-local knowledge plane declaration (optional for pre-knowledge nodes) */
     knowledge: knowledgeSpecSchema.optional(),
 
-    /** DAO governance configuration */
-    cogni_dao: z.object({
-      /**
-       * Chain ID as string or number (YAML flexibility).
-       * Normalized to string at extraction time.
-       */
-      chain_id: z.union([z.string(), z.number()]).transform((v) => String(v)),
-      /** DAO contract address (EVM 0x-prefixed, 40 hex chars) */
-      dao_contract: z
-        .string()
-        .regex(/^0x[0-9a-fA-F]{40}$/, "Invalid EVM address")
-        .optional(),
-      /** Aragon voting plugin contract address */
-      plugin_contract: z
-        .string()
-        .regex(/^0x[0-9a-fA-F]{40}$/, "Invalid EVM address")
-        .optional(),
-      /** CogniSignal contract address */
-      signal_contract: z
-        .string()
-        .regex(/^0x[0-9a-fA-F]{40}$/, "Invalid EVM address")
-        .optional(),
-      /** Proposal launcher base URL (for deep links) */
-      base_url: z.string().url().optional(),
-    }),
-
     /** Payment activation status — pending_activation until node:activate-payments completes */
     payments: z
       .object({
@@ -604,7 +604,13 @@ export const repoSpecSchema = z
       .optional(),
 
     /** Governance schedule configuration (optional — defaults to empty schedules) */
-    governance: governanceSpecSchema.optional().default({ schedules: [] }),
+    /**
+     * Unified governance section — DAO identity (contracts + chain) + council
+     * schedules. Required (every node declares its governance binding); inner
+     * fields optional so DAO identity can be incomplete pre-activation, and
+     * `schedules` defaults to [].
+     */
+    governance: governanceSpecSchema,
 
     /**
      * Node-facing recurring-work schedules (story.5008). The node declares

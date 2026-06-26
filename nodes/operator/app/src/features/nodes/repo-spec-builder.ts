@@ -43,7 +43,7 @@ node_id: "${input.nodeId}"
 scope_id: "${scopeId}"
 scope_key: "default"
 
-cogni_dao:
+governance:
   dao_contract: "${input.daoAddress}"
   plugin_contract: "${input.pluginAddress}"
   signal_contract: "${input.signalAddress}"

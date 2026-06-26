@@ -155,7 +155,7 @@ sequenceDiagram
 
 ```
 .cogni/repo-spec.yaml          ← DAO-governed, committed to git
-├── cogni_dao:
+├── governance:
 │   ├── dao_contract:    0x...  ← Aragon DAO address
 │   ├── plugin_contract: 0x...  ← TokenVoting plugin address
 │   ├── signal_contract: 0x...  ← CogniSignal address

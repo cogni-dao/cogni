@@ -16,7 +16,7 @@ Activate payment rails for a Cogni node. This runs in your own fork after DAO fo
 
 ## Prerequisites
 
-- DAO formation complete (`.cogni/repo-spec.yaml` has `cogni_dao` section)
+- DAO formation complete (`.cogni/repo-spec.yaml` has `governance` section)
 - Privy account at [privy.io](https://privy.io)
 - A funded wallet on Base (~$0.02 ETH for Split deployment gas)
 

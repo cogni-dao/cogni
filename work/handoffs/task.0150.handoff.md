@@ -48,7 +48,7 @@ last_commit: 2418b237
 
 ## Risks / Gotchas
 
-- **Container wiring is all-or-nothing:** requires `PRIVY_APP_ID` + `PRIVY_APP_SECRET` + `PRIVY_SIGNING_KEY` + valid `operator_wallet.address` in repo-spec + `cogni_dao.dao_contract`. Any missing → adapter is `undefined`, settlement silently no-ops
+- **Container wiring is all-or-nothing:** requires `PRIVY_APP_ID` + `PRIVY_APP_SECRET` + `PRIVY_SIGNING_KEY` + valid `operator_wallet.address` in repo-spec + `governance.dao_contract`. Any missing → adapter is `undefined`, settlement silently no-ops
 - **IPv6 timeout:** Privy API (Cloudflare-fronted) times out on IPv6. External tests handle this via vitest config. Scripts may need `node --dns-result-order=ipv4first`
 - **Gas costs:** each `distributeSplit()` call costs gas on Base mainnet (~$0.0003). The Privy wallet has limited ETH
 - **`deploy-split.ts` requires `pnpm packages:build` first** — imports from built `@cogni/operator-wallet`

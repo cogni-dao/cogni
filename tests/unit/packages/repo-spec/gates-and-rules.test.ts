@@ -212,7 +212,7 @@ describe("extractGatesConfig", () => {
   it("returns empty gates array when none configured", () => {
     const spec = parseRepoSpec({
       node_id: "00000000-0000-4000-8000-000000000001",
-      cogni_dao: { chain_id: "8453" },
+      governance: { chain_id: "8453" },
       payments_in: {
         credits_topup: {
           provider: "test",

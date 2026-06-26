@@ -26,7 +26,7 @@ Success is when a founder forms a DAO through the operator-hosted wizard, runs *
 
 1. Founder opens `cognidao.org/setup/dao` — `nodes/operator/app/src/app/(app)/setup/dao/` (`DAOFormationPage.client.tsx`, `features/setup/daoFormation/txBuilders.ts`).
 2. Founder signs **2 txs** from their own wallet: `createDao` (Aragon DAO + GovernanceERC20) and `deployCogniSignal`.
-3. `POST /api/setup/verify` derives DAO/plugin/token/signal addresses from the receipts (never trusts client) → returns a repo-spec fragment with `cogni_dao.*` + `payments.status: pending_activation`.
+3. `POST /api/setup/verify` derives DAO/plugin/token/signal addresses from the receipts (never trusts client) → returns a repo-spec fragment with `governance.*` + `payments.status: pending_activation`.
 
 **Activation (today, manual):** `setup/dao/payments` page + `scripts/provision-operator-wallet.ts` + `scripts/deploy-split.ts` + a hand-edit of repo-spec.
 
@@ -66,7 +66,7 @@ The test already exists and spends **$2** (`MIN_PAYMENT_CENTS`): `nodes/<node>/a
 
 ### Steps to run the FULL flow against a deployment
 
-1. **Form** the test node's DAO via the operator wizard → commit `cogni_dao.*` to `nodes/<x>/.cogni/repo-spec.yaml`.
+1. **Form** the test node's DAO via the operator wizard → commit `governance.*` to `nodes/<x>/.cogni/repo-spec.yaml`.
 2. **Activate** via `activate(nodeId)` → wallet + Split + `payments.status: active` → deploy the build.
 3. **Fund** `TEST_WALLET_PRIVATE_KEY` with ~$2 USDC + a little ETH for gas on Base.
 4. Set env: `TEST_BASE_URL=https://<deployed-node-url>`, `OPENROUTER_API_KEY`, `EVM_RPC_URL`, plus `DATABASE_SERVICE_URL` + `TIGERBEETLE_ADDRESS` reachable for assertions (see blocker below).

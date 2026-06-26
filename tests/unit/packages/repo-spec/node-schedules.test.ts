@@ -25,7 +25,7 @@ const NODE_B = "00000000-0000-4000-8000-00000000000b";
 function specWithSchedules(nodeId: string, schedules: unknown[]) {
   return {
     node_id: nodeId,
-    cogni_dao: { chain_id: "8453" },
+    governance: { chain_id: "8453" },
     schedules,
   };
 }
@@ -189,7 +189,7 @@ describe("extractNodeSchedules — M8 node pinning", () => {
   it("defaults to empty schedules when absent", () => {
     const spec = parseRepoSpec({
       node_id: NODE_A,
-      cogni_dao: { chain_id: "8453" },
+      governance: { chain_id: "8453" },
     });
     expect(extractNodeSchedules(spec)).toEqual([]);
   });

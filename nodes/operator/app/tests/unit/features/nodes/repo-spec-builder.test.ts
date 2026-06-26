@@ -39,13 +39,13 @@ describe("buildPendingActivationRepoSpecYaml", () => {
     expect(yaml).toContain(`schema_version: "0.1.4"`);
   });
 
-  it("emits the full cogni_dao block", () => {
+  it("emits the full governance block", () => {
     const yaml = buildPendingActivationRepoSpecYaml(FIXTURE);
     expect(yaml).toContain(`dao_contract: "${FIXTURE.daoAddress}"`);
     expect(yaml).toContain(`plugin_contract: "${FIXTURE.pluginAddress}"`);
     expect(yaml).toContain(`signal_contract: "${FIXTURE.signalAddress}"`);
     expect(yaml).toContain(`chain_id: "8453"`);
-    expect(parseYaml(yaml).cogni_dao).toMatchObject({
+    expect(parseYaml(yaml).governance).toMatchObject({
       dao_contract: FIXTURE.daoAddress,
       plugin_contract: FIXTURE.pluginAddress,
       signal_contract: FIXTURE.signalAddress,

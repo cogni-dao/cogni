@@ -5,7 +5,7 @@
  * Module: `@shared/config/repoSpec.server`
  * Purpose: Server-only thin wrapper — file I/O, caching, and accessor functions for repo-spec config including DAO governance and VCS identity.
  * Scope: Reads and caches repo-spec on first access; does not define schemas, validation logic, or perform network I/O.
- * Invariants: Chain ID must match CHAIN_ID; ledger config requires scope_id + scope_key; DaoConfig requires the four on-chain cogni_dao identity fields (base_url optional).
+ * Invariants: Chain ID must match CHAIN_ID; ledger config requires scope_id + scope_key; DaoConfig requires the four on-chain governance identity fields (base_url optional).
  *   getGithubRepo() is a v0 single-tenant hardcode (OPERATOR_GITHUB_REPO const) — task.0122 wires it to NodeRegistryPort for multi-tenant.
  * Side-effects: IO (reads repo-spec from disk) on first call only. getGithubRepo() has no IO.
  * Links: packages/repo-spec/src/index.ts, .cogni/repo-spec.yaml, docs/spec/vcs-integration.md
@@ -171,7 +171,7 @@ export function getGovernanceConfig(): GovernanceConfig {
 }
 
 // ---------------------------------------------------------------------------
-// DAO config — cogni_dao section (for governance signal execution + review deep links)
+// DAO config — governance section (for governance signal execution + review deep links)
 // ---------------------------------------------------------------------------
 
 let cachedDaoConfig: DaoConfig | null | undefined;
@@ -247,7 +247,7 @@ export function getOperatorWalletConfig(): OperatorWalletSpec | undefined {
 let cachedDaoTreasuryAddress: string | undefined | null = null;
 
 /**
- * DAO treasury address from repo-spec (cogni_dao.dao_contract).
+ * DAO treasury address from repo-spec (governance.dao_contract).
  * Returns undefined if not present.
  */
 export function getDaoTreasuryAddress(): string | undefined {

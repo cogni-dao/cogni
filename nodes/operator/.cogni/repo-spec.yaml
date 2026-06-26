@@ -30,7 +30,7 @@ intent:
 operator_wallet:
   address: "0xdCCa8D85603C2CC47dc6974a790dF846f8695056"
 
-cogni_dao:
+governance:
   dao_contract: "0xF61c3fafD4D34b4568e7a500d92b28Ac175e83C6"
   plugin_contract: "0x609B427f04C1C42De3e28898cb7b9Bad329e6b77"
   signal_contract: "0x590FC79B9c925C377fA63F4AaF54cdbF4Ee273A1"

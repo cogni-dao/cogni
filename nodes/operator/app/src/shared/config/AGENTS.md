@@ -75,5 +75,5 @@ Server-only thin wrapper over `@cogni/repo-spec`. Handles file I/O, caching, and
 ## Notes
 
 - Repo-spec changes require an image rebuild + deploy to take effect (baked at build time).
-- Chain alignment: `cogni_dao.chain_id` must match `CHAIN_ID` from `@/shared/web3/chain` or startup fails.
+- Chain alignment: `governance.chain_id` must match `CHAIN_ID` from `@/shared/web3/chain` or startup fails.
 - Schema and type definitions live in `@cogni/repo-spec`; this directory re-exports for stable `@/shared/config` import paths.

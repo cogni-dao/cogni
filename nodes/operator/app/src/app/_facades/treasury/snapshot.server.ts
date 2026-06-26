@@ -54,9 +54,9 @@ export async function getTreasurySnapshotFacade(
         event: EVENT_NAMES.TREASURY_CONFIG_MISSING,
         errorCode: "TREASURY_NO_DAO_CONFIG",
       },
-      "cogni_dao section missing or incomplete in repo-spec"
+      "governance section missing or incomplete in repo-spec"
     );
-    throw new Error("cogni_dao config missing from repo-spec");
+    throw new Error("governance config missing from repo-spec");
   }
 
   const treasuryAddress = daoConfig.dao_contract;

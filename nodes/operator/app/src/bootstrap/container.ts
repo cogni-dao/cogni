@@ -783,7 +783,7 @@ function createContainer(): Container {
         const treasuryAddress = getDaoTreasuryAddress();
         if (!treasuryAddress) {
           log.warn(
-            "operator_wallet configured but cogni_dao.dao_contract missing — skipping operator wallet"
+            "operator_wallet configured but governance.dao_contract missing — skipping operator wallet"
           );
           return undefined;
         }
@@ -854,7 +854,7 @@ function createContainer(): Container {
         assertReady: async () => {
           throw new PaymentRailMisconfiguredPortError(
             "PAYMENT_RAIL_UNCONFIGURED",
-            "Payment rails misconfigured: cogni_dao.dao_contract missing from repo-spec"
+            "Payment rails misconfigured: governance.dao_contract missing from repo-spec"
           );
         },
       };
