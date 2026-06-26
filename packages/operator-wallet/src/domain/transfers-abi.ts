@@ -7,6 +7,7 @@
  * Scope: Typed ABI arrays for viem encodeFunctionData. Does not perform I/O.
  * Invariants: ABIs match deployed contract interfaces on Base mainnet.
  * Side-effects: none
+ * Links: privy-operator-wallet.adapter.ts, docs/spec/operator-wallet.md
  * @internal
  */
 
