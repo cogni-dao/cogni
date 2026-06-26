@@ -15,11 +15,12 @@ import { type UserId, userActor } from "@cogni/ids";
 import { desc, eq } from "drizzle-orm";
 import { redirect } from "next/navigation";
 import type { ReactElement } from "react";
-import { resolveAppDb } from "@/bootstrap/container";
+import { resolveAppDb, resolveNodeRegistry } from "@/bootstrap/container";
 import { PageContainer, SectionCard } from "@/components";
 import { NodeTile } from "@/features/nodes/components/NodeTile";
 import { getServerSessionUser } from "@/lib/auth/server";
 import { type NodeStatus, nodes } from "@/shared/db/nodes";
+import { titleCaseSlug } from "@/shared/node-registry/resolve";
 
 import { NewNodeForm } from "./NewNodeForm.client";
 import { NODE_STATUS_DISPLAY } from "./node-display";
@@ -34,48 +35,63 @@ export default async function SetupNodesPage(): Promise<ReactElement> {
   }
 
   const db = resolveAppDb();
-  const rows = await withTenantScope(
-    db,
-    userActor(session.id as UserId),
-    async (tx) =>
+  const [rows, publicNodes] = await Promise.all([
+    withTenantScope(db, userActor(session.id as UserId), async (tx) =>
       tx
         .select()
         .from(nodes)
         .where(eq(nodes.ownerUserId, session.id))
         .orderBy(desc(nodes.createdAt))
         .limit(50)
+    ),
+    resolveNodeRegistry().listPublic(),
+  ]);
+  const publicNodeBySlug = new Map(
+    publicNodes.map((node) => [node.slug, node])
   );
 
   return (
-    <PageContainer maxWidth="3xl">
-      <SectionCard title="Register a node">
+    <PageContainer maxWidth="full" className="max-w-7xl">
+      <SectionCard title="Register a node" className="mx-auto w-full max-w-3xl">
         <NewNodeForm />
       </SectionCard>
 
-      <SectionCard title="Your nodes">
+      <section className="space-y-4">
+        <h1 className="font-bold text-3xl text-foreground tracking-tight">
+          Your nodes
+        </h1>
         {rows.length === 0 ? (
           <p className="text-muted-foreground text-sm">
             No nodes yet — register one above to get started.
           </p>
         ) : (
-          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
             {rows.map((n) => {
               const display = NODE_STATUS_DISPLAY[n.status as NodeStatus];
+              const publicNode = publicNodeBySlug.get(n.slug);
               return (
                 <NodeTile
                   key={n.id}
                   node={{
-                    title: n.slug,
-                    tagline: display.description,
+                    title: publicNode?.title ?? titleCaseSlug(n.slug),
+                    tagline: publicNode?.tagline,
+                    icon: publicNode?.icon,
+                    thumbnailUrl: publicNode?.thumbnailUrl,
+                    brandColor: publicNode?.brandColor,
                     href: `/nodes/${n.id}`,
-                    status: { label: display.label, intent: display.intent },
+                    status: {
+                      label: display.label,
+                      intent: display.intent,
+                      presentation: "dot",
+                    },
+                    density: "compact",
                   }}
                 />
               );
             })}
           </div>
         )}
-      </SectionCard>
+      </section>
     </PageContainer>
   );
 }
