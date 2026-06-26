@@ -3,13 +3,13 @@
 
 /**
  * Module: `@app/(admin)/admin/payments/AiFundingPanel.client`
- * Purpose: The AI-funding pipeline view. Shows the three balances that decide AI runway and
- *   the two human actions that move money along the chain:
- *     user USDC → operator wallet (95%) → [Fund steward] → steward wallet → [Top up OpenRouter] → OpenRouter.
+ * Purpose: The provider-funding pipeline view. Shows the balances that decide node runway and
+ *   the human actions that move money along the chain:
+ *     user USDC → operator wallet (95%) → [Fund steward] → steward wallet → vendors (OpenRouter inference + Cherry compute).
  *   `withdrawToSteward` is the load-bearing hop: the operator (Privy) wallet holds user-paid USDC
- *   but cannot complete OpenRouter's wallet-connect checkout, so a human pays from the steward wallet.
+ *   but cannot complete a vendor checkout, so a human pays both vendors from the steward wallet.
  * Scope: Client component. Reads balances from server props; the only write is the Fund-steward POST.
- *   The OpenRouter top-up itself is an external human checkout (we only link to it).
+ *   The vendor top-ups themselves are external human checkouts (we only link to them).
  * Invariants: AMOUNT_ONLY (destination pinned server-side); semantic color tokens only.
  * Side-effects: IO (fetch POST → on-chain transfer).
  * Links: src/app/api/v1/payments/steward-withdrawal/route.ts, funding.server.ts, docs/design/node-steward-wallet.md
@@ -22,6 +22,7 @@ import {
   ArrowDown,
   ExternalLink,
   Loader2,
+  Server,
   Sparkles,
   Wallet,
 } from "lucide-react";
@@ -32,11 +33,17 @@ import { Button, Card, CardContent, HintText, Input } from "@/components";
 import type { AiFunding } from "./funding.server";
 
 const OPENROUTER_CREDITS_URL = "https://openrouter.ai/settings/credits";
+const CHERRY_PORTAL_URL = "https://portal.cherryservers.com/";
 
 type Phase = "idle" | "submitting" | "success" | "error";
 
 function fmtUsd(n: number | null): string {
   return n === null ? "—" : `$${n.toFixed(2)}`;
+}
+
+function fmtCurrency(n: number | null, currency: string | null): string {
+  if (n === null) return "—";
+  return currency ? `${n.toFixed(2)} ${currency}` : n.toFixed(2);
 }
 
 function shortAddr(a: string | null): string {
@@ -201,15 +208,15 @@ export function AiFundingPanel({
 
       <Arrow label="withdrawToSteward — moves DAO funds to a wallet a human can pay from" />
 
-      {/* Stage 2 — steward wallet (human-custodied) */}
+      {/* Stage 2 — steward wallet (shared hop that funds both vendors) */}
       <StageCard
         icon={Wallet}
         label="Steward wallet"
-        sub="Human-custodied. Pay OpenRouter from here via its USDC checkout."
+        sub="Human-custodied. Pays both vendors in USDC from here."
         amount={`${fmtUsd(funding.stewardWalletUsdc)} USDC`}
         address={funding.stewardWalletAddress}
       >
-        <div className="border-border border-t pt-3">
+        <div className="flex flex-wrap gap-2 border-border border-t pt-3">
           <Button asChild>
             <a
               href={OPENROUTER_CREDITS_URL}
@@ -220,22 +227,36 @@ export function AiFundingPanel({
               <ExternalLink className="ml-2 h-4 w-4" />
             </a>
           </Button>
-          <HintText>
-            Opens openrouter.ai/settings/credits — pay in USDC on Base from the
-            steward wallet.
-          </HintText>
+          <Button asChild variant="outline">
+            <a
+              href={CHERRY_PORTAL_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Top up Cherry
+              <ExternalLink className="ml-2 h-4 w-4" />
+            </a>
+          </Button>
         </div>
       </StageCard>
 
-      <Arrow label="human completes OpenRouter's USDC checkout" />
+      <Arrow label="human completes each vendor's USDC checkout from the steward wallet" />
 
-      {/* Stage 3 — OpenRouter runway */}
-      <StageCard
-        icon={Sparkles}
-        label="OpenRouter balance"
-        sub="AI runway. When this hits zero, inference 402s."
-        amount={fmtUsd(funding.openRouterRemainingUsd)}
-      />
+      {/* Stage 3 — vendor runway (two vendors fed by the steward wallet) */}
+      <div className="grid gap-1 sm:grid-cols-2">
+        <StageCard
+          icon={Sparkles}
+          label="OpenRouter balance"
+          sub="Inference runway. When this hits zero, inference 402s. Pay via openrouter.ai/settings/credits (USDC on Base)."
+          amount={fmtUsd(funding.openRouterRemainingUsd)}
+        />
+        <StageCard
+          icon={Server}
+          label="Cherry balance"
+          sub="Compute runway. Pay via Coingate (USDC on Base) from the steward wallet."
+          amount={fmtCurrency(funding.cherryRemaining, funding.cherryCurrency)}
+        />
+      </div>
     </div>
   );
 }
