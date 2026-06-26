@@ -28,8 +28,13 @@ import { z } from "zod";
  * keep this in sync with the manifest's documented default but never let it be the only declaration.
  */
 export const DEFAULT_NODE_LOCAL_PATHS: readonly string[] = [
-  // Public-facing pages (homepage, landing, marketing routes) — the node's face.
-  "app/src/app/(public)/**",
+  // The node's homepage — its face. Deliberately NOT the whole `(public)/` group:
+  // generic app shell (`layout.tsx`, `error.tsx`, `loading.tsx`, `AuthRedirect.tsx`)
+  // and platform routes (`propose/merge/**`) MUST stay synced so they track shared
+  // contracts — carving them out as node-local strands them at stale versions and
+  // breaks them against changed shared components (e.g. `AppHeader`'s `brandMark` prop).
+  // A node owns its homepage + the home feature; it does NOT own the shell.
+  "app/src/app/(public)/page.tsx",
   // Home/landing feature surface (components, copy, hero).
   "app/src/features/home/**",
   // Branding / theme / visual identity.

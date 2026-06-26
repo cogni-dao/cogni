@@ -1989,8 +1989,9 @@ node_local:
       sourceRepo: "node-template",
       sourceRef: "feedsha",
     });
-    // Default floor is non-empty and includes the public route + repo-spec.
-    expect(result).toContain("app/src/app/(public)/**");
+    // Default floor is non-empty and includes the node's homepage + repo-spec.
+    // (Scope is the node's face, NOT the whole (public)/ shell — see node-local-paths.ts.)
+    expect(result).toContain("app/src/app/(public)/page.tsx");
     expect(result).toContain(".cogni/repo-spec.yaml");
   });
 });
