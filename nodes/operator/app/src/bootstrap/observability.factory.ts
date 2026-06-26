@@ -30,21 +30,21 @@ export function createLokiReader(): LokiReaderPort | null {
   });
 }
 
+/** Langfuse Cloud default — the writer (LangfuseAdapter/SDK) falls back here when LANGFUSE_BASE_URL is unset. */
+const LANGFUSE_DEFAULT_BASE_URL = "https://cloud.langfuse.com";
+
 /**
- * The operator's Langfuse reader, or null when `LANGFUSE_{BASE_URL,PUBLIC_KEY,SECRET_KEY}` are unset.
- * Same key the trace-writing decorator uses — the operator holds it; the dev never does.
+ * The operator's Langfuse reader, or null when the Langfuse keys are unset. The base URL defaults to
+ * Langfuse Cloud exactly as the trace-writing SDK does — so the reader is wired wherever the writer is
+ * (the pod sets the keys but not always LANGFUSE_BASE_URL). The operator holds the key; the dev never does.
  */
 export function createLangfuseReader(): LangfuseReaderPort | null {
   const env = serverEnv();
-  if (
-    !env.LANGFUSE_BASE_URL ||
-    !env.LANGFUSE_PUBLIC_KEY ||
-    !env.LANGFUSE_SECRET_KEY
-  ) {
+  if (!env.LANGFUSE_PUBLIC_KEY || !env.LANGFUSE_SECRET_KEY) {
     return null;
   }
   return new HttpLangfuseReader({
-    baseUrl: env.LANGFUSE_BASE_URL,
+    baseUrl: env.LANGFUSE_BASE_URL ?? LANGFUSE_DEFAULT_BASE_URL,
     publicKey: env.LANGFUSE_PUBLIC_KEY,
     secretKey: env.LANGFUSE_SECRET_KEY,
   });
