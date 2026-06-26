@@ -16,7 +16,14 @@ metadata:
     # See infra/k8s/argocd/reloader/ + infra/k8s/base/node-app/deployment.yaml.
     reloader.stakater.com/auto: "true"
 spec:
-  replicas: 1
+  # 2 replicas: kill the single-pod SPOF. A scheduler-worker outage previously
+  # took the whole public fleet to 502 (2026-06-25) because every node-app
+  # readiness depended on it; even with that coupling removed, the worker is
+  # shared substrate and must not be a single point of failure. Temporal workers
+  # polling the same task queue scale horizontally by design — no leader election
+  # needed; schedule lifecycle (create/update/reconcile) lives in the operator
+  # app + advisory-locked endpoints, not here, so 2 pollers do not double-fire.
+  replicas: 2
   selector:
     matchLabels:
       app.kubernetes.io/name: scheduler-worker
@@ -41,6 +48,20 @@ spec:
             - containerPort: 9000
               name: health
               protocol: TCP
+          # startupProbe gives slow boots room before liveness arms. The worker
+          # webpack-builds its Temporal workflow bundle at startup (bundleWorkflowCode);
+          # under the per-node-queue model that was N serial ~3MB builds → event-loop
+          # block → liveness SIGKILL → crashloop → fleet 502 (2026-06-25 incident).
+          # 60 × 5s = 300s grace covers the build storm; liveness/readiness stay
+          # disabled until the first /livez success. A genuine steady-state hang is
+          # still caught fast by the tight livenessProbe below once startup passes.
+          startupProbe:
+            httpGet:
+              path: /livez
+              port: health
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 60
           livenessProbe:
             httpGet:
               path: /livez
@@ -64,8 +85,10 @@ spec:
                 name: scheduler-worker-config
           resources:
             requests:
-              memory: "128Mi"
-              cpu: "100m"
+              memory: "256Mi"
+              cpu: "250m"
             limits:
-              memory: "512Mi"
-              cpu: "500m"
+              # Headroom for the startup Temporal workflow-bundle build (webpack).
+              # 512Mi/500m starved it under the per-node-queue storm → SIGKILL loop.
+              memory: "1Gi"
+              cpu: "2"
