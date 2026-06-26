@@ -4,8 +4,10 @@
 /**
  * Module: `@app/_facades/deploy/canonical-fork-sync.server`
  * Purpose: node-template merge→main → fork sync. On a push to node-template's default branch, push
- *   THREE tiers to every active child fork: (1) surgical CI/contract-file overwrite (required, always
- *   applies); (2) an upstream-merge PR carrying foundational substrate (app/graphs/runtime/packages),
+ *   THREE tiers to every active child fork: (1) surgical overwrite of the CI/contract files AND the
+ *   node-template-authoritative IDENTITY SUBSTRATE (repo-spec parser + agent.json/header/og projection),
+ *   required + always applies (never blocked by an app merge conflict); (2) an upstream-merge PR carrying
+ *   the remaining foundational substrate (app/graphs/runtime/packages),
  *   with Tier 3 carved OUT so it is conflict-free + always auto-mergeable; (3) node identity/presentation
  *   (homepage, branding, repo-spec, persona) — NEVER synced, node-template is a starter only.
  * Scope: Webhook-triggered facade (sibling of dispatchNodePreviewPromote). Resolves spawned-node forks from
@@ -49,6 +51,26 @@ export const CI_CONTRACT_PATHS = [
   ".github/workflows/pr-build.yml",
   ".github/workflows/pr-lint.yaml",
   "scripts/check-node-ci-workflow.mjs",
+] as const;
+
+/**
+ * Tier 1b — the node-template-authoritative IDENTITY SUBSTRATE: the repo-spec parser + the projection
+ * that turns a node's `intent.brand.{icon,color}` into its `/.well-known/agent.json` (which the operator
+ * gallery reads) and its own header/og mark. This code is identical across every node (it carries NO
+ * node-specific content — a node customizes via its Tier-3 `repo-spec.yaml`, never this), so it ships in
+ * the SURGICAL overwrite set, not the fragile Tier-2 app merge. Without this, a fork can set `brand.icon`
+ * but never PROJECT it → the gallery shows a monogram forever. CI-gated like the rest of Tier 1.
+ */
+export const IDENTITY_SUBSTRATE_PATHS = [
+  "packages/repo-spec/src/schema.ts",
+  "packages/repo-spec/src/accessors.ts",
+  "packages/repo-spec/src/index.ts",
+  "app/src/shared/config/repoSpec.server.ts",
+  "app/src/shared/brand/brandIcons.tsx",
+  "app/src/app/.well-known/agent.json/route.ts",
+  "app/src/app/opengraph-image.tsx",
+  "app/src/features/layout/components/AppHeader.tsx",
+  "app/src/app/(public)/layout.tsx",
 ] as const;
 
 export interface TemplateMainPush {
@@ -131,7 +153,7 @@ export async function fanOutForkSync(
         targetOwner: t.owner,
         targetRepo: t.name,
         slug: t.slug,
-        canonicalPaths: [...CI_CONTRACT_PATHS],
+        canonicalPaths: [...CI_CONTRACT_PATHS, ...IDENTITY_SUBSTRATE_PATHS],
       });
       ci = r.status;
       if (r.status === "pr_opened") ciPrUrl = r.prUrl;
