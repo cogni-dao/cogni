@@ -67,6 +67,25 @@ function resolveThumbnail(
   }
 }
 
+/** True when a `brand.icon` value is an image asset (path/URL) rather than a Lucide icon NAME. */
+function isAssetPath(icon: string): boolean {
+  return /^(https?:\/\/|\/)/.test(icon);
+}
+
+/**
+ * `brand.icon` is polymorphic: a Lucide icon NAME (e.g. `Gamepad2`) OR an image asset the node hosts
+ * (e.g. `/TransparentBrainOnly.png` — a real logo). Names pass through verbatim; image paths are
+ * host-resolved to an absolute URL so the gallery loads them per-env. The consumer renders a name via
+ * the Lucide registry and a URL via `<img>`.
+ */
+function resolveIcon(
+  icon: string | null | undefined,
+  host: string
+): string | null {
+  if (!icon) return null;
+  return isAssetPath(icon) ? resolveThumbnail(icon, host) : icon;
+}
+
 /**
  * Pure parser for a well-known document → NodeIdentity (exported for unit tests). Returns `null` when
  * the document has no valid `identity` block. `brand.thumbnail` is resolved to an absolute URL against
@@ -87,7 +106,7 @@ export function parseWellKnownIdentity(
     hook: id.hook ?? null,
     mission: id.mission ?? null,
     brand: {
-      icon: id.brand?.icon ?? null,
+      icon: resolveIcon(id.brand?.icon, host),
       thumbnail: resolveThumbnail(id.brand?.thumbnail, host),
       color: id.brand?.color ?? null,
     },
