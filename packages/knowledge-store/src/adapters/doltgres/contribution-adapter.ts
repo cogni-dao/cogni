@@ -409,6 +409,23 @@ async function recomputeConfidenceOnConn(
   return next;
 }
 
+/**
+ * FK-ORDERING: a single contribution may `register_domain` AND `insert` rows
+ * into that new domain. `assertDomainRegistered` runs against the branch, so
+ * the domain must already exist on the branch when the `insert` is applied.
+ * Stable-sort `register_domain` edits to the front (preserving relative order
+ * within each group) so domains are registered before any entry references
+ * them. Genuinely-unregistered domains still fail — nothing registers them.
+ */
+function orderEditsForFk(
+  edits: readonly KnowledgeContributionEdit[]
+): KnowledgeContributionEdit[] {
+  return [
+    ...edits.filter((e) => e.op === "register_domain"),
+    ...edits.filter((e) => e.op !== "register_domain"),
+  ];
+}
+
 async function applyEdit(input: {
   conn: ReservedSql;
   mainSql: Sql;
@@ -420,6 +437,24 @@ async function applyEdit(input: {
   const { conn, mainSql, contributionId, principal, seq, edit } = input;
   const ref = sourceRef(contributionId, seq);
   const sourceNode = principal.id;
+  if (edit.op === "register_domain") {
+    // Agent-proposable domain: idempotently INSERT into the branch's `domains`
+    // table so any sibling `insert` edit into this domain passes the
+    // DOMAIN_FK_ENFORCED_AT_WRITE check on the same branch, and the reviewer
+    // sees the proposed domain in the diff before merge. ON CONFLICT EXCLUDED
+    // is broken on Doltgres — SELECT-then-INSERT, tolerate already-registered
+    // as a no-op (DOMAIN_REGISTRATION_IS_STICKY). No new RBAC: the contrib
+    // branch + human merge IS the anti-spam gate.
+    const existing = await conn.unsafe(
+      `SELECT 1 FROM domains WHERE id = ${escapeValue(edit.id)} LIMIT 1`
+    );
+    if (existing.length === 0) {
+      await conn.unsafe(
+        `INSERT INTO domains (id, name, description) VALUES (${escapeValue(edit.id)}, ${escapeValue(edit.name)}, ${escapeValue(edit.description ?? null)})`
+      );
+    }
+    return;
+  }
   if (edit.op === "delete") {
     // DELETE_IS_CLEAN: dead knowledge is removed from the live table, not
     // soft-flagged. Dolt's version history preserves the row's content, every
@@ -549,7 +584,7 @@ export class DoltgresKnowledgeContributionAdapter
 
       let headCommit: string | null = null;
       if (edits.length > 0) {
-        for (const edit of edits) {
+        for (const edit of orderEditsForFk(edits)) {
           await applyEdit({
             conn,
             mainSql: this.sql,
@@ -811,7 +846,7 @@ export class DoltgresKnowledgeContributionAdapter
           );
         }
 
-        for (const edit of input.edits) {
+        for (const edit of orderEditsForFk(input.edits)) {
           await applyEdit({
             conn,
             mainSql: this.sql,
@@ -1118,11 +1153,12 @@ export class DoltgresKnowledgeContributionAdapter
   async diff(contributionId: string): Promise<ContributionDiffEntry[]> {
     const rec = await this.getById(contributionId);
     if (!rec) throw new ContributionNotFoundError(contributionId);
-    const toRef = rec.headCommit ?? rec.baseCommit;
+    const fromRef = normalizeDoltCommitRef(rec.baseCommit);
+    const toRef = normalizeDoltCommitRef(rec.headCommit ?? rec.baseCommit);
     const rows = await this.sql.unsafe(
-      `SELECT * FROM dolt_diff(${escapeRef(rec.baseCommit)}, ${escapeRef(toRef)}, 'knowledge')`
+      `SELECT * FROM dolt_diff(${escapeRef(fromRef)}, ${escapeRef(toRef)}, 'knowledge')`
     );
-    return rows.map((r) => {
+    const knowledgeDiff = rows.map((r) => {
       const row = r as Record<string, unknown>;
       const diffType = String(row.diff_type ?? "modified");
       const before: Record<string, unknown> | null = row.from_id
@@ -1151,6 +1187,41 @@ export class DoltgresKnowledgeContributionAdapter
         after,
       };
     });
+
+    // Surface `register_domain` ops: a proposed domain is a row added to the
+    // `domains` table on the branch, so reviewers see it before merge.
+    const domainRows = await this.sql.unsafe(
+      `SELECT * FROM dolt_diff(${escapeRef(fromRef)}, ${escapeRef(toRef)}, 'domains')`
+    );
+    const domainDiff = domainRows.map((r) => {
+      const row = r as Record<string, unknown>;
+      const diffType = String(row.diff_type ?? "modified");
+      const before: Record<string, unknown> | null = row.from_id
+        ? {
+            id: row.from_id,
+            name: row.from_name ?? null,
+            description: row.from_description ?? null,
+            kind: "domain",
+          }
+        : null;
+      const after: Record<string, unknown> | null = row.to_id
+        ? {
+            id: row.to_id,
+            name: row.to_name ?? null,
+            description: row.to_description ?? null,
+            kind: "domain",
+          }
+        : null;
+      const rowId = String(row.to_id ?? row.from_id ?? "");
+      return {
+        changeType: diffType as ContributionDiffEntry["changeType"],
+        rowId,
+        before,
+        after,
+      };
+    });
+
+    return [...domainDiff, ...knowledgeDiff];
   }
 
   async merge(input: {
