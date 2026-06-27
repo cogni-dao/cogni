@@ -98,15 +98,17 @@ export async function handlePrReview(
     );
     const { evidence, gatesConfig, owningNode } = reviewContext;
 
-    // Single-node repos opt into review by declaring gates. No gates means no
-    // Check Run, no comment, and no graph execution.
-    if (owningNode.kind === "single" && gatesConfig.gates.length === 0) {
+    // Repos opt into review by declaring gates. No gates means no Check Run,
+    // no comment, and no graph execution, even when routing cannot resolve a
+    // node. Disabled review must be invisible to developers.
+    if (gatesConfig.gates.length === 0) {
       logEvent(log, EVENT_NAMES.REVIEW_COMPLETE, {
         reqId,
         outcome: "skipped",
         conclusion: "neutral",
         gateCount: 0,
         changedFiles: evidence.changedFiles,
+        owningNodeKind: owningNode.kind,
         durationMs: Math.round(performance.now() - start),
       });
       return;
@@ -125,8 +127,7 @@ export async function handlePrReview(
       // Continue without check run
     }
 
-    // Routing diagnostics still report when the PR cannot map to exactly one
-    // node. The silent-off path is reserved for a single node with no gates.
+    // Routing diagnostics report only after review is explicitly enabled.
     if (owningNode.kind !== "single") {
       const body =
         owningNode.kind === "conflict"

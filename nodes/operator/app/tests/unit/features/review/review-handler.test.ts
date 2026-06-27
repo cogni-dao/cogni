@@ -110,6 +110,7 @@ function makeExecutor(score: number): GraphExecutorPort {
 function makeReviewContext(opts: {
   readonly repoSpec?: string;
   readonly evidence?: EvidenceBundle;
+  readonly owningNode?: ReviewRunContext["owningNode"];
 }): ReviewRunContext {
   const empty = opts.repoSpec === REPO_SPEC_EMPTY_GATES;
   return {
@@ -141,7 +142,11 @@ function makeReviewContext(opts: {
     },
     repoSpecYaml: opts.repoSpec ?? REPO_SPEC_WITH_AI_RULE,
     changedFiles: ["src/foo.ts"],
-    owningNode: { kind: "single", nodeId: NODE_ID, path: "." },
+    owningNode: opts.owningNode ?? {
+      kind: "single",
+      nodeId: NODE_ID,
+      path: ".",
+    },
   };
 }
 
@@ -237,6 +242,53 @@ describe("handlePrReview", () => {
     expect(b.createCheckRun).not.toHaveBeenCalled();
     expect(b.updateCheckRun).not.toHaveBeenCalled();
     expect(b.postPrComment).not.toHaveBeenCalled();
+    expect(b.executor.runGraph).not.toHaveBeenCalled();
+  });
+
+  it("silently skips an unrecognized-scope repo with no gates", async () => {
+    const b = makeDeps({
+      contextImpl: async () =>
+        makeReviewContext({
+          repoSpec: REPO_SPEC_EMPTY_GATES,
+          owningNode: { kind: "miss" },
+        }),
+    });
+
+    await handlePrReview(ctx, b.deps);
+
+    expect(b.loadReviewContext).toHaveBeenCalledTimes(1);
+    expect(b.createCheckRun).not.toHaveBeenCalled();
+    expect(b.updateCheckRun).not.toHaveBeenCalled();
+    expect(b.postPrComment).not.toHaveBeenCalled();
+    expect(b.executor.runGraph).not.toHaveBeenCalled();
+  });
+
+  it("posts an unrecognized-scope diagnostic only when review gates are enabled", async () => {
+    const b = makeDeps({
+      contextImpl: async () =>
+        makeReviewContext({
+          repoSpec: REPO_SPEC_WITH_AI_RULE,
+          owningNode: { kind: "miss" },
+        }),
+    });
+
+    await handlePrReview(ctx, b.deps);
+
+    expect(b.createCheckRun).toHaveBeenCalledWith(
+      ctx.owner,
+      ctx.repo,
+      ctx.headSha
+    );
+    expect(b.updateCheckRun).toHaveBeenCalledTimes(1);
+    expect(b.postPrComment).toHaveBeenCalledTimes(1);
+    const [, , , , body] = b.postPrComment.mock.calls[0] as [
+      string,
+      string,
+      number,
+      string,
+      string,
+    ];
+    expect(body).toContain("No recognizable scope");
     expect(b.executor.runGraph).not.toHaveBeenCalled();
   });
 
