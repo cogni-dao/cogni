@@ -24,9 +24,9 @@ import {
 import {
   AlertTriangle,
   CheckCircle,
+  Circle,
   Clipboard,
   ExternalLink,
-  Info,
   Loader2,
   Wallet,
   XCircle,
@@ -41,7 +41,7 @@ import {
   useWriteContract,
 } from "wagmi";
 
-import { Button, HintText } from "@/components";
+import { Button } from "@/components";
 
 import { LaunchPackCopyButton } from "../LaunchPackCopyButton.client";
 import { StepSection } from "../StepSection";
@@ -59,6 +59,7 @@ type SplitPhase =
   | "ERROR";
 
 type RepoActivationPhase = "IDLE" | "OPENING" | "DONE" | "ERROR";
+type ChecklistState = "done" | "working" | "todo" | "error";
 
 interface ActivationResult {
   readonly status: "pr_opened" | "no_changes";
@@ -98,6 +99,78 @@ AI dev steps:
 6. Run the required checks and flight, then send the human back to the node dashboard.
 
 Never log, commit, or paste secret values.`;
+}
+
+function buildActivationHandoffPrompt(input: {
+  readonly nodeId: string;
+  readonly nodeSlug: string;
+  readonly nodeRepoUrl: string | null;
+  readonly repoSpecUrl: string | null;
+  readonly activationPrUrl: string | null;
+}): string {
+  return `Finish payment activation for this Cogni node.
+
+Node: ${input.nodeSlug}
+Node id: ${input.nodeId}
+Node repo: ${input.nodeRepoUrl ?? "open the node dashboard for the repo link"}
+Repo spec: ${input.repoSpecUrl ?? ".cogni/repo-spec.yaml in the node repo"}
+Activation PR: ${input.activationPrUrl ?? "open the node repo and find the payment activation PR"}
+
+Goal: merge the activation PR, promote the resulting node build to production, and verify the production /version build serves the activated repo-spec.
+
+Read first:
+- docs/guides/payments-setup.md
+- docs/guides/multi-node-deploy.md
+- docs/runbooks/dolthub-remote-bootstrap.md if DoltHub or knowledge mirror config appears in the diff
+
+Do:
+1. Review the activation PR and confirm .cogni/repo-spec.yaml contains the Split receiving address and operator wallet.
+2. Merge the PR only after checks are green.
+3. Promote/deploy the merged main build to production using the standard operator deploy flow.
+4. Verify production /version and the node payment page.
+5. Report the PR URL, production build SHA, and verification result.
+
+Do not mark payments ready unless repo-spec main and the production build both match the activated payment rail.`;
+}
+
+function ChecklistIcon({ state }: { readonly state: ChecklistState }) {
+  if (state === "done") {
+    return <CheckCircle className="mt-0.5 size-5 shrink-0 text-primary" />;
+  }
+  if (state === "working") {
+    return (
+      <Loader2 className="mt-0.5 size-5 shrink-0 animate-spin text-warning" />
+    );
+  }
+  if (state === "error") {
+    return <XCircle className="mt-0.5 size-5 shrink-0 text-destructive" />;
+  }
+  return <Circle className="mt-1 size-4 shrink-0 text-muted-foreground/70" />;
+}
+
+function ChecklistRow({
+  state,
+  title,
+  detail,
+  children,
+}: {
+  readonly state: ChecklistState;
+  readonly title: string;
+  readonly detail?: string;
+  readonly children?: ReactElement | null;
+}): ReactElement {
+  return (
+    <li className="flex items-start gap-3">
+      <ChecklistIcon state={state} />
+      <div className="min-w-0 flex-1">
+        <p className="font-medium">{title}</p>
+        {detail ? (
+          <p className="mt-0.5 text-muted-foreground text-sm">{detail}</p>
+        ) : null}
+        {children ? <div className="mt-2">{children}</div> : null}
+      </div>
+    </li>
+  );
 }
 
 function AddressRows({
@@ -166,6 +239,8 @@ export function PaymentActivationStep({ node }: WizardStepProps): ReactElement {
   const splitIsDeployed = !!effectiveSplitAddress;
   const repoWriteIsDone = repoPhase === "DONE" || node.status === "active";
   const activationIsReady = node.status === "active";
+  const activationPrIsStarted =
+    repoPhase === "OPENING" || repoWriteIsDone || !!activationResult;
   const canDeploySplit =
     isReady &&
     splitPhase === "IDLE" &&
@@ -187,6 +262,24 @@ export function PaymentActivationStep({ node }: WizardStepProps): ReactElement {
         repoSpecUrl: node.repoSpecUrl,
       }),
     [node.id, node.slug, node.nodeRepoUrl, node.repoSpecUrl]
+  );
+
+  const activationHandoffPrompt = useMemo(
+    () =>
+      buildActivationHandoffPrompt({
+        nodeId: node.id,
+        nodeSlug: node.slug,
+        nodeRepoUrl: node.nodeRepoUrl,
+        repoSpecUrl: node.repoSpecUrl,
+        activationPrUrl: activationResult?.prUrl ?? null,
+      }),
+    [
+      activationResult?.prUrl,
+      node.id,
+      node.nodeRepoUrl,
+      node.repoSpecUrl,
+      node.slug,
+    ]
   );
 
   const openActivationPr = useCallback(async () => {
@@ -394,6 +487,29 @@ export function PaymentActivationStep({ node }: WizardStepProps): ReactElement {
     window.setTimeout(() => setCopied(null), 2000);
   };
 
+  const prereqState: ChecklistState = isReady ? "done" : "todo";
+  const splitState: ChecklistState =
+    splitPhase === "ERROR"
+      ? "error"
+      : splitIsDeployed
+        ? "done"
+        : isInFlight
+          ? "working"
+          : "todo";
+  const prState: ChecklistState =
+    repoPhase === "ERROR"
+      ? "error"
+      : activationIsReady
+        ? "done"
+        : activationPrIsStarted
+          ? "working"
+          : "todo";
+  const productionState: ChecklistState = activationIsReady
+    ? "done"
+    : activationPrIsStarted
+      ? "working"
+      : "todo";
+
   const handleReset = () => {
     resetWrite();
     patchedRef.current = false;
@@ -416,44 +532,95 @@ export function PaymentActivationStep({ node }: WizardStepProps): ReactElement {
       }
     >
       <div className="space-y-5 text-sm">
-        <div className="grid gap-2 rounded-md border border-border bg-muted/30 p-4 sm:grid-cols-2">
-          <p>
-            <span className="block text-muted-foreground text-xs">Node</span>
-            <span className="font-medium">{node.slug}</span>
-          </p>
-          <p>
-            <span className="block text-muted-foreground text-xs">Node ID</span>
-            <code className="break-all text-xs">{node.id}</code>
-          </p>
-          {node.nodeRepoUrl ? (
-            <a
-              href={node.nodeRepoUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 text-primary hover:underline"
-            >
-              Node repo
-              <ExternalLink className="size-3.5" />
-            </a>
-          ) : (
-            <span className="text-muted-foreground">Node repo unavailable</span>
-          )}
-          {node.repoSpecUrl ? (
-            <a
-              href={node.repoSpecUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 text-primary hover:underline"
-            >
-              .cogni/repo-spec.yaml
-              <ExternalLink className="size-3.5" />
-            </a>
-          ) : (
-            <span className="text-muted-foreground">
-              Repo-spec link unavailable
-            </span>
-          )}
+        <div className="flex flex-col gap-2 rounded-md border border-border bg-muted/30 p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="font-medium">{node.slug}</p>
+            <code className="break-all text-muted-foreground text-xs">
+              {node.id}
+            </code>
+          </div>
+          <div className="flex flex-wrap gap-3">
+            {node.nodeRepoUrl ? (
+              <a
+                href={node.nodeRepoUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 text-primary hover:underline"
+              >
+                Node repo
+                <ExternalLink className="size-3.5" />
+              </a>
+            ) : null}
+            {node.repoSpecUrl ? (
+              <a
+                href={node.repoSpecUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 text-primary hover:underline"
+              >
+                Repo spec
+                <ExternalLink className="size-3.5" />
+              </a>
+            ) : null}
+          </div>
         </div>
+
+        <ol className="space-y-4 rounded-md border border-border bg-muted/20 p-4">
+          <ChecklistRow
+            state={prereqState}
+            title="Operator wallet ready"
+            detail={
+              isReady
+                ? "Wallet, DAO treasury, and repo-spec are available."
+                : "Set wallet secrets and write the operator address first."
+            }
+          />
+          <ChecklistRow
+            state={splitState}
+            title="Payment contract deployed"
+            detail={
+              splitIsDeployed
+                ? "Split receiving address is recorded."
+                : isInFlight
+                  ? "Waiting on the Base transaction."
+                  : "Deploy the Split from this wizard."
+            }
+          />
+          <ChecklistRow
+            state={prState}
+            title="Activation PR finished"
+            detail={
+              activationIsReady
+                ? "Repo-spec main has the payment rail."
+                : activationPrIsStarted
+                  ? "Operator is driving the repo-spec PR."
+                  : "Starts automatically after the Split deploy."
+            }
+          >
+            {activationResult?.prUrl ? (
+              <a
+                href={activationResult.prUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 text-primary hover:underline"
+              >
+                View PR
+                <ExternalLink className="size-3.5" />
+              </a>
+            ) : null}
+          </ChecklistRow>
+          <ChecklistRow
+            state={productionState}
+            title="Production build deployed"
+            detail={
+              activationIsReady
+                ? "The live node is serving the activated repo-spec."
+                : activationPrIsStarted
+                  ? "Waiting for merge, promotion, and /version verification."
+                  : "Runs after the activation PR lands."
+            }
+          />
+        </ol>
 
         {!isReady ? (
           <div className="space-y-4">
@@ -498,12 +665,6 @@ export function PaymentActivationStep({ node }: WizardStepProps): ReactElement {
 
         {isReady && !splitIsDeployed ? (
           <div className="space-y-4">
-            <HintText icon={<Info size={16} />}>
-              The operator resolved these addresses from this node's registry
-              row. The repo-spec link above is the audit trail; the user does
-              not need to manually validate address text.
-            </HintText>
-
             <AddressRows
               operatorWalletAddress={node.operatorWalletAddress}
               daoTreasuryAddress={node.daoAddress}
@@ -553,20 +714,7 @@ export function PaymentActivationStep({ node }: WizardStepProps): ReactElement {
 
         {splitIsDeployed ? (
           <div className="space-y-4">
-            <div className="flex items-start gap-2">
-              <CheckCircle className="mt-0.5 size-5 shrink-0 text-primary" />
-              <div>
-                <p className="font-medium">Payment Split is deployed</p>
-                <p className="text-muted-foreground">
-                  The wizard is asking cogni-operator to write the Split and
-                  node wallet into <code>.cogni/repo-spec.yaml</code>. This node
-                  is not marked ready until the repo main branch and production
-                  deploy match that payment rail.
-                </p>
-              </div>
-            </div>
-
-            <div className="space-y-2 rounded-md border border-border bg-muted/40 p-4">
+            <div className="space-y-2 rounded-md border border-border bg-muted/40 p-4 text-sm">
               <p>
                 <span className="font-medium">Split receiving address:</span>{" "}
                 <code className="break-all text-xs">
@@ -591,30 +739,27 @@ export function PaymentActivationStep({ node }: WizardStepProps): ReactElement {
             ) : null}
 
             {repoWriteIsDone ? (
-              <div className="space-y-3 rounded-md border border-border bg-muted/40 p-4">
+              <div className="flex flex-col gap-3 rounded-md border border-border bg-muted/40 p-4 sm:flex-row sm:items-center sm:justify-between">
                 <p className="font-medium">
                   {activationIsReady
-                    ? "Repo-spec and production deploy are verified"
-                    : activationResult?.status === "pr_opened"
-                      ? "Activation PR opened automatically"
-                      : "Payment repo-spec write-back is already handled"}
+                    ? "Payments are live"
+                    : "Final handoff ready"}
                 </p>
-                {activationResult?.prUrl ? (
-                  <Button asChild className="w-full sm:w-auto">
-                    <a
-                      href={activationResult.prUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >
-                      View activation PR
-                      <ExternalLink className="size-4" />
-                    </a>
+                {!activationIsReady ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => copyText(activationHandoffPrompt, "handoff")}
+                    className="gap-2"
+                  >
+                    {copied === "handoff" ? (
+                      <CheckCircle className="size-4" />
+                    ) : (
+                      <Clipboard className="size-4" />
+                    )}
+                    {copied === "handoff" ? "Copied" : "Copy agent handoff"}
                   </Button>
                 ) : null}
-                <HintText icon={<Info size={16} />}>
-                  The node remains in activation until the write-back lands on
-                  main and the production build serves the activated repo-spec.
-                </HintText>
               </div>
             ) : null}
           </div>
