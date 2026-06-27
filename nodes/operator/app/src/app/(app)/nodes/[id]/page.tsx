@@ -93,9 +93,15 @@ export default async function NodeDashboardPage({
       ? getDaoUrl(node.chainId, node.daoAddress)
       : null;
 
-  // Owner-only Developers section, mounted once the node is handed off to an AI dev. Ownership is
-  // already proven by the scoped node read above, so the service-role request read is safe.
-  const showDevelopers = status === "published" || status === "active";
+  // Owner-only developer/deploy dashboard, mounted once the node is handed off to an AI dev.
+  // Wallet/payments statuses are still handoff/dashboard states; payments activation is an action,
+  // not a replacement for the RBAC approval and environment visibility surface.
+  const showDevelopers = [
+    "published",
+    "wallet_ready",
+    "payments_ready",
+    "active",
+  ].includes(status);
   const accessRequests = showDevelopers
     ? await listAccessRequests(resolveServiceDb(), node.id)
     : [];
