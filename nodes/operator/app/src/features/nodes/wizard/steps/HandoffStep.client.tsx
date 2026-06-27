@@ -13,8 +13,7 @@
 
 "use client";
 
-import { CreditCard, ExternalLink } from "lucide-react";
-import Link from "next/link";
+import { ExternalLink } from "lucide-react";
 import type { ReactElement } from "react";
 import { Button } from "@/components";
 import { LaunchPackCopyButton } from "../LaunchPackCopyButton.client";
@@ -27,8 +26,6 @@ interface LinkSpec {
 }
 
 export function HandoffStep({ node }: WizardStepProps): ReactElement {
-  const showPaymentsLink =
-    node.status === "wallet_ready" || node.status === "payments_ready";
   const links: LinkSpec[] = [
     ...(node.nodeRepoUrl
       ? [{ label: "Node repo", href: node.nodeRepoUrl }]
@@ -79,28 +76,6 @@ export function HandoffStep({ node }: WizardStepProps): ReactElement {
           </span>{" "}
           (a few steps).
         </p>
-
-        {showPaymentsLink ? (
-          <div className="rounded-lg border border-border bg-muted/30 p-4">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <p className="font-medium text-foreground">
-                  Operator wallet ready
-                </p>
-                <p className="mt-1 text-muted-foreground">
-                  Activate payment rails next: create/copy the Privy values, add
-                  node secrets, and deploy the payment split.
-                </p>
-              </div>
-              <Button asChild className="shrink-0 gap-2">
-                <Link href={`/nodes/${node.id}/payments`}>
-                  <CreditCard className="size-4" />
-                  Activate payments
-                </Link>
-              </Button>
-            </div>
-          </div>
-        ) : null}
 
         <p className="text-muted-foreground">
           Everything below is what you just created — all useful, but you don't

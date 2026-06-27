@@ -76,8 +76,8 @@ export function progressIndexForStatus(status: NodeStatus): number {
     case "dao_formed":
       return 2;
     case "published":
-    case "wallet_ready":
       return 3;
+    case "wallet_ready":
     case "payments_ready":
       return 4;
     case "active":

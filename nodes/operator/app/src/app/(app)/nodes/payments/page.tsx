@@ -4,7 +4,7 @@
 /**
  * Module: `@app/(app)/nodes/payments/page`
  * Purpose: Compatibility redirect for old payment activation links.
- * Scope: Redirect only. Node payment activation is owned by `/nodes/[id]/payments`.
+ * Scope: Redirect only. Node payment activation is owned by `/nodes/[id]`.
  * Invariants: NO_OPERATOR_PAYMENT_FALLBACK — a missing node id does not activate operator repo-spec.
  * Side-effects: redirect
  * Links: src/app/(app)/nodes/[id]/payments/page.tsx, task.5083
@@ -27,7 +27,7 @@ export default async function PaymentActivationPage({
   const nodeId = sp.nodeId ?? null;
 
   if (nodeId) {
-    redirect(`/nodes/${encodeURIComponent(nodeId)}/payments`);
+    redirect(`/nodes/${encodeURIComponent(nodeId)}`);
   }
 
   redirect("/nodes");

@@ -3,12 +3,11 @@
 
 /**
  * Module: `@app/(app)/nodes/[id]/payments/page`
- * Purpose: Node-scoped payment activation entrypoint. Loads the owner-scoped node row and passes
- *   its operator wallet + DAO addresses into the Split deployment client.
- * Scope: DB read + render only. The client component owns wallet signing and node PATCH on success.
- * Invariants: NODE_PAYMENT_ACTIVATION_IS_NODE_SCOPED — no repo-spec fallback or operator activation.
+ * Purpose: Compatibility entrypoint for old node-scoped payment activation links.
+ * Scope: Owner-scoped DB read, then redirect to the canonical wizard shell.
+ * Invariants: NODE_PAYMENT_ACTIVATION_STAYS_IN_WIZARD — activation is the Payments step at /nodes/[id].
  * Side-effects: IO (Postgres read)
- * Links: src/features/nodes/wizard/steps/SimpleSteps.tsx, task.5083
+ * Links: src/features/nodes/wizard/steps/PaymentActivationStep.client.tsx, task.5083
  * @public
  */
 
@@ -16,13 +15,10 @@ import { withTenantScope } from "@cogni/db-client";
 import { type UserId, userActor } from "@cogni/ids";
 import { and, eq } from "drizzle-orm";
 import { notFound, redirect } from "next/navigation";
-import type { ReactElement } from "react";
 
 import { resolveAppDb } from "@/bootstrap/container";
 import { getServerSessionUser } from "@/lib/auth/server";
 import { nodes } from "@/shared/db/nodes";
-
-import { PaymentActivationPageClient } from "../../payments/PaymentActivationPage.client";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -33,7 +29,7 @@ interface PageProps {
 
 export default async function NodePaymentActivationPage({
   params,
-}: PageProps): Promise<ReactElement> {
+}: PageProps): Promise<never> {
   const session = await getServerSessionUser();
   if (!session) {
     redirect("/");
@@ -57,11 +53,5 @@ export default async function NodePaymentActivationPage({
     notFound();
   }
 
-  return (
-    <PaymentActivationPageClient
-      operatorWalletAddress={node.operatorWalletAddress ?? null}
-      daoTreasuryAddress={node.daoAddress ?? null}
-      nodeId={node.id}
-    />
-  );
+  redirect(`/nodes/${node.id}`);
 }

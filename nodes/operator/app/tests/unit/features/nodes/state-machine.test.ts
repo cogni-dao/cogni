@@ -97,7 +97,7 @@ describe("transition — totality", () => {
 });
 
 describe("progress display", () => {
-  it("shows published and wallet_ready as the handoff step", () => {
+  it("shows wallet_ready and payments_ready as the payments step", () => {
     expect(NODE_PROGRESS_STEPS.map((step) => step.label)).toEqual([
       "Register",
       "DAO",
@@ -110,7 +110,10 @@ describe("progress display", () => {
     ).toBe("Handoff");
     expect(
       NODE_PROGRESS_STEPS[progressIndexForStatus("wallet_ready")]?.label
-    ).toBe("Handoff");
+    ).toBe("Payments");
+    expect(
+      NODE_PROGRESS_STEPS[progressIndexForStatus("payments_ready")]?.label
+    ).toBe("Payments");
   });
 });
 
