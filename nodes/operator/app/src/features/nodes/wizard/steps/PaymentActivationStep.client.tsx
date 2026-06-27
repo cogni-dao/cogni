@@ -67,6 +67,32 @@ interface ActivationResult {
   readonly prUrl?: string;
 }
 
+interface ActivationResponseBody {
+  readonly activation?: ActivationResult;
+  readonly reason?: unknown;
+  readonly error?: unknown;
+  readonly rawText?: string;
+}
+
+async function readActivationResponse(
+  response: Response
+): Promise<ActivationResponseBody> {
+  const text = await response.text();
+  if (!text) return {};
+
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as ActivationResponseBody;
+    }
+  } catch {
+    // Fall through to a plain-text body. The user should see the server reason,
+    // not a JSON parser exception.
+  }
+
+  return { rawText: text };
+}
+
 function formatPercent(allocation: bigint): string {
   return `${Number(allocation) / 1e4}%`;
 }
@@ -294,14 +320,16 @@ export function PaymentActivationStep({ node }: WizardStepProps): ReactElement {
         `/api/v1/nodes/${node.id}/activate-payments`,
         { method: "POST" }
       );
-      const body = await response.json().catch(() => ({}));
+      const body = await readActivationResponse(response);
       if (!response.ok) {
         const reason =
           typeof body.reason === "string"
             ? body.reason
             : typeof body.error === "string"
               ? body.error
-              : `HTTP ${response.status}`;
+              : typeof body.rawText === "string" && body.rawText.trim() !== ""
+                ? body.rawText
+                : `HTTP ${response.status}`;
         throw new Error(reason);
       }
 

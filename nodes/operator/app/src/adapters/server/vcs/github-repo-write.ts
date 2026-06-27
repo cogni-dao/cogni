@@ -1572,6 +1572,17 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
   > {
     const { owner, repo, slug } = input;
     const octokit = await this.getOctokit(owner, repo);
+    const branch = `cogni-operator/activate-payments-${slug}`;
+    const title = `feat(payments): activate ${slug} payment rails`;
+    const body =
+      `Activates \`${slug}\`'s payment loop. Writes the node's own wallet + Split into ` +
+      "`.cogni/repo-spec.yaml`:\n\n" +
+      `- \`node_wallet.address\` = \`${input.nodeWalletAddress}\`\n` +
+      `- \`payments_in.credits_topup.receiving_address\` (Split) = \`${input.splitAddress}\`\n` +
+      `- \`payments.status: active\` (95/5 at-cost economics)\n\n` +
+      "Inbound USDC routes to this node's own Split, then funds its AI credits. " +
+      "The operator never holds the node's keys.\n\n" +
+      "_Authored automatically by cogni-operator on payment activation._";
 
     const currentSpec = await this.fetchFileText({
       owner,
@@ -1595,23 +1606,38 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       return { status: "no_changes" };
     }
 
+    const existingPr = await this.findOpenPrForBranch(
+      octokit,
+      owner,
+      repo,
+      branch
+    );
+    if (existingPr) {
+      const pendingSpec = await this.fetchFileText({
+        owner,
+        repo,
+        path: ".cogni/repo-spec.yaml",
+        ref: branch,
+      });
+      if (pendingSpec === nextSpec) {
+        await this.updatePrBody(
+          octokit,
+          owner,
+          repo,
+          existingPr.prNumber,
+          title,
+          body
+        );
+        return { status: "pr_opened", ...existingPr };
+      }
+    }
+
     const { baseCommitSha, baseTreeSha } = await this.resolveMainBase(
       octokit,
       owner,
       repo
     );
     const blobSha = await this.createBlob(octokit, owner, repo, nextSpec);
-    const branch = `cogni-operator/activate-payments-${slug}`;
-    const title = `feat(payments): activate ${slug} payment rails`;
-    const body =
-      `Activates \`${slug}\`'s payment loop. Writes the node's own wallet + Split into ` +
-      "`.cogni/repo-spec.yaml`:\n\n" +
-      `- \`node_wallet.address\` = \`${input.nodeWalletAddress}\`\n` +
-      `- \`payments_in.credits_topup.receiving_address\` (Split) = \`${input.splitAddress}\`\n` +
-      `- \`payments.status: active\` (95/5 at-cost economics)\n\n` +
-      "Inbound USDC routes to this node's own Split, then funds its AI credits. " +
-      "The operator never holds the node's keys.\n\n" +
-      "_Authored automatically by cogni-operator on payment activation._";
 
     const result = await this.commitTreeAndOpenPr(octokit, owner, repo, slug, {
       baseCommitSha,
@@ -2183,6 +2209,20 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
     }
   }
 
+  private async findOpenPrForBranch(
+    octokit: Octokit,
+    owner: string,
+    repo: string,
+    branch: string
+  ): Promise<OpenNodeAppPrResult | null> {
+    const { data: existing } = await octokit.request(
+      "GET /repos/{owner}/{repo}/pulls",
+      { owner, repo, state: "open", head: `${owner}:${branch}`, per_page: 1 }
+    );
+    const pr = existing[0];
+    return pr ? { prNumber: pr.number, prUrl: pr.html_url } : null;
+  }
+
   /**
    * Copy the monorepo's `main` branch-protection VERBATIM onto the new node repo.
    * PROTECTION_HAS_ONE_SSOT: the node inherits the EXACT required-status-check set
@@ -2437,17 +2477,13 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
     } catch (err) {
       const status = (err as { status?: number })?.status;
       if (status !== 422) throw err;
-      const { data: existing } = await octokit.request(
-        "GET /repos/{owner}/{repo}/pulls",
-        { owner, repo, state: "open", head: `${owner}:${branch}`, per_page: 1 }
-      );
-      const pr = existing[0];
+      const pr = await this.findOpenPrForBranch(octokit, owner, repo, branch);
       if (!pr) {
         throw new Error(
           `Failed to open node-app PR and no open PR found for head ${branch}`
         );
       }
-      return { prNumber: pr.number, prUrl: pr.html_url };
+      return pr;
     }
   }
 
