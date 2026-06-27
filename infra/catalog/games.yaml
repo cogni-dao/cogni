@@ -7,7 +7,7 @@ image_tag_suffix: "-games"
 migrator_tag_suffix: "-games-migrate"
 source_repo: https://github.com/cogni-dao/games.git
 image_repository: ghcr.io/cogni-dao/games
-source_sha: e7a607c064605420969c3733933e8a57ec34d701
+source_sha: 8144ef525e71683632b3746bc2c2bc6e5fa6c4f8
 candidate_a_branch: deploy/candidate-a-games
 preview_branch: deploy/preview-games
 production_branch: deploy/production-games
