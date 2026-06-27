@@ -151,9 +151,15 @@ export function createContributionService(
     if (!edits || edits.length === 0 || gates.length === 0) return edits;
     const out: KnowledgeContributionEdit[] = [];
     for (const edit of edits) {
-      // delete + cite carry no entry payload — nothing for the write gates
-      // (shape/provenance) to validate; forward unchanged.
-      if (edit.op === "delete" || edit.op === "cite") {
+      // delete + cite + register_domain carry no entry payload — nothing for
+      // the write gates (shape/provenance) to validate; forward unchanged.
+      // register_domain is validated by its own schema (slug + name/desc
+      // lengths) at the wire boundary.
+      if (
+        edit.op === "delete" ||
+        edit.op === "cite" ||
+        edit.op === "register_domain"
+      ) {
         out.push(edit);
         continue;
       }

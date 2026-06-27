@@ -15,8 +15,14 @@ import type { ReservedSql, Sql } from "postgres";
 import { describe, expect, it } from "vitest";
 
 import { DoltgresKnowledgeContributionAdapter } from "../src/adapters/doltgres/contribution-adapter.js";
-import type { Principal } from "../src/domain/contribution-schemas.js";
-import { CitationTargetNotFoundError } from "../src/port/knowledge-store.port.js";
+import {
+  KnowledgeContributionEditSchema,
+  type Principal,
+} from "../src/domain/contribution-schemas.js";
+import {
+  CitationTargetNotFoundError,
+  DomainNotRegisteredError,
+} from "../src/port/knowledge-store.port.js";
 
 const record = {
   id: "contrib-agent-1-abc123",
@@ -133,14 +139,48 @@ function adapterFor(fake: FakeSql): DoltgresKnowledgeContributionAdapter {
   });
 }
 
+describe("KnowledgeContributionEditSchema register_domain op", () => {
+  it("accepts a well-formed register_domain edit", () => {
+    const parsed = KnowledgeContributionEditSchema.safeParse({
+      op: "register_domain",
+      id: "agent-ops",
+      name: "Agent Ops",
+      description: "Operational knowledge for agents",
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it("accepts register_domain without a description", () => {
+    const parsed = KnowledgeContributionEditSchema.safeParse({
+      op: "register_domain",
+      id: "agent-ops",
+      name: "Agent Ops",
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it("rejects a register_domain id that violates the slug shape", () => {
+    const parsed = KnowledgeContributionEditSchema.safeParse({
+      op: "register_domain",
+      id: "Agent Ops", // space + uppercase not allowed
+      name: "Agent Ops",
+    });
+    expect(parsed.success).toBe(false);
+  });
+});
+
 describe("DoltgresKnowledgeContributionAdapter", () => {
   it("anchors contribution diff to the recorded base and head commits", async () => {
     const fake = new FakeSql();
 
     await adapterFor(fake).diff("contrib-agent-1-abc123");
 
-    expect(fake.queries.at(-1)).toContain(
-      "dolt_diff('base123', 'head123', 'knowledge')"
+    // diff anchors knowledge + domains to the same base/head pair.
+    expect(fake.queries).toContain(
+      "SELECT * FROM dolt_diff('base123', 'head123', 'knowledge')"
+    );
+    expect(fake.queries).toContain(
+      "SELECT * FROM dolt_diff('base123', 'head123', 'domains')"
     );
   });
 
@@ -149,8 +189,8 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
 
     await adapterFor(fake).diff("contrib-agent-1-abc123");
 
-    expect(fake.queries.at(-1)).toContain(
-      "dolt_diff('base123', 'base123', 'knowledge')"
+    expect(fake.queries).toContain(
+      "SELECT * FROM dolt_diff('base123', 'base123', 'knowledge')"
     );
   });
 
@@ -163,8 +203,8 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
 
     await adapterFor(fake).diff("contrib-agent-1-abc123");
 
-    expect(fake.queries.at(-1)).toContain(
-      "dolt_diff('base123', 'head123', 'knowledge')"
+    expect(fake.queries).toContain(
+      "SELECT * FROM dolt_diff('base123', 'head123', 'knowledge')"
     );
   });
 
@@ -461,6 +501,134 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
       })
     ).rejects.toBeInstanceOf(CitationTargetNotFoundError);
   });
+
+  it("registers a proposed domain idempotently on the contrib branch", async () => {
+    const fake = new DomainAwareFakeSql({ registered: new Set() });
+
+    await adapterFor(fake as unknown as FakeSql).appendCommit({
+      contributionId: "contrib-agent-1-abc123",
+      principal: { id: "agent-1", kind: "agent" },
+      message: "propose a domain",
+      edits: [
+        {
+          op: "register_domain",
+          id: "agent-ops",
+          name: "Agent Ops",
+          description: "Operational knowledge for agents",
+        },
+      ],
+    });
+
+    expect(
+      fake.conn.queries.some(
+        (q) =>
+          q.includes("INSERT INTO domains") &&
+          q.includes("'agent-ops'") &&
+          q.includes("'Agent Ops'")
+      )
+    ).toBe(true);
+  });
+
+  it("treats register_domain as a no-op when the domain already exists", async () => {
+    const fake = new DomainAwareFakeSql({ registered: new Set(["agent-ops"]) });
+
+    await adapterFor(fake as unknown as FakeSql).appendCommit({
+      contributionId: "contrib-agent-1-abc123",
+      principal: { id: "agent-1", kind: "agent" },
+      message: "re-propose an existing domain",
+      edits: [{ op: "register_domain", id: "agent-ops", name: "Agent Ops" }],
+    });
+
+    // SELECT-then-INSERT: existing domain ⇒ no INSERT (DOMAIN_REGISTRATION_IS_STICKY).
+    expect(
+      fake.conn.queries.some((q) => q.includes("INSERT INTO domains"))
+    ).toBe(false);
+  });
+
+  it("FK-ordering: register_domain THEN insert into that domain in one contribution succeeds", async () => {
+    const fake = new DomainAwareFakeSql({ registered: new Set() });
+
+    await adapterFor(fake as unknown as FakeSql).appendCommit({
+      contributionId: "contrib-agent-1-abc123",
+      principal: { id: "agent-1", kind: "agent" },
+      message: "new domain + first entry",
+      edits: [
+        // Deliberately list insert BEFORE register to prove the adapter
+        // reorders register_domain to the front so the FK check passes.
+        {
+          op: "insert",
+          entry: {
+            id: "agent-ops-runbook",
+            domain: "agent-ops",
+            title: "Runbook",
+            content: "content",
+          },
+        },
+        { op: "register_domain", id: "agent-ops", name: "Agent Ops" },
+      ],
+    });
+
+    const registerIdx = fake.conn.queries.findIndex((q) =>
+      q.includes("INSERT INTO domains")
+    );
+    const insertIdx = fake.conn.queries.findIndex((q) =>
+      q.includes("INSERT INTO knowledge")
+    );
+    expect(registerIdx).toBeGreaterThan(-1);
+    expect(insertIdx).toBeGreaterThan(-1);
+    // register applied first, satisfying the branch FK check for the insert.
+    expect(registerIdx).toBeLessThan(insertIdx);
+  });
+
+  it("still rejects an insert into a genuinely-unregistered domain", async () => {
+    const fake = new DomainAwareFakeSql({ registered: new Set() });
+
+    await expect(
+      adapterFor(fake as unknown as FakeSql).appendCommit({
+        contributionId: "contrib-agent-1-abc123",
+        principal: { id: "agent-1", kind: "agent" },
+        message: "insert into nowhere",
+        edits: [
+          {
+            op: "insert",
+            entry: {
+              id: "orphan-entry",
+              domain: "never-registered",
+              title: "Orphan",
+              content: "content",
+            },
+          },
+        ],
+      })
+    ).rejects.toBeInstanceOf(DomainNotRegisteredError);
+  });
+
+  it("surfaces register_domain as an added domain row in the diff", async () => {
+    const fake = new DomainAwareFakeSql({
+      registered: new Set(),
+      domainDiff: [
+        {
+          diff_type: "added",
+          to_id: "agent-ops",
+          to_name: "Agent Ops",
+          to_description: "Operational knowledge for agents",
+        },
+      ],
+    });
+
+    const diff = await adapterFor(fake as unknown as FakeSql).diff(
+      "contrib-agent-1-abc123"
+    );
+
+    const domainRow = diff.find((d) => d.rowId === "agent-ops");
+    expect(domainRow).toBeDefined();
+    expect(domainRow?.changeType).toBe("added");
+    expect(domainRow?.after).toMatchObject({
+      id: "agent-ops",
+      name: "Agent Ops",
+      kind: "domain",
+    });
+  });
 });
 
 /**
@@ -550,6 +718,98 @@ class CrossPlaneFakeSql {
       const t = this.mainEntryTypes.get(idFromQuery(query) ?? "");
       return t ? [{ entry_type: t }] : [];
     }
+    if (query.includes("dolt_diff")) return [];
+    return [];
+  }
+
+  async reserve(): Promise<ReservedSql> {
+    return this.conn as unknown as ReservedSql;
+  }
+}
+
+/**
+ * Fake that models the branch `domains` table as a mutable set, so the
+ * register_domain → assertDomainRegistered FK chain can be exercised within a
+ * single contribution: an `INSERT INTO domains` adds to the set, and the
+ * subsequent `SELECT 1 FROM domains` (both the register pre-check and the
+ * knowledge FK gate) reads that same set. `INSERT INTO knowledge` is accepted
+ * once its domain is registered. All other branch lifecycle queries reuse the
+ * happy-path stubs from `FakeReservedSql`.
+ */
+class DomainAwareFakeReservedSql {
+  readonly queries: string[] = [];
+
+  constructor(private readonly registered: Set<string>) {}
+
+  async unsafe(
+    query: string
+  ): Promise<Record<string, unknown>[] & { count?: number }> {
+    this.queries.push(query);
+    if (query.includes("dolt_hashof")) return [{ dolt_hashof: "head123" }];
+    if (query.includes("dolt_commit")) return [{ dolt_commit: ["{next456}"] }];
+    if (query.includes("SELECT 1 FROM domains WHERE id")) {
+      const id = idFromQuery(query) ?? "";
+      return this.registered.has(id) ? [{ "?column?": 1 }] : [];
+    }
+    if (query.includes("INSERT INTO domains")) {
+      const id = idFromQuery(query) ?? query.match(/VALUES \('([^']+)'/)?.[1];
+      if (id) this.registered.add(id);
+      const rows: Record<string, unknown>[] & { count?: number } = [];
+      rows.count = 1;
+      return rows;
+    }
+    if (query.includes("INSERT INTO knowledge")) {
+      const rows: Record<string, unknown>[] & { count?: number } = [];
+      rows.count = 1;
+      return rows;
+    }
+    if (query.includes("UPDATE knowledge_contributions")) {
+      const rows: Record<string, unknown>[] & { count?: number } = [];
+      rows.count = 1;
+      return rows;
+    }
+    if (query.includes("FROM knowledge_contribution_commits")) {
+      return [
+        {
+          contribution_id: "contrib-agent-1-abc123",
+          seq: 4,
+          commit_hash: "next456",
+          principal_kind: "agent",
+          principal_id: "agent-1",
+          auth_source: "bearer",
+          message: "append",
+          edit_count: 1,
+          source_ref: "contribution:contrib-agent-1-abc123:4",
+          created_at: new Date("2026-05-19T00:00:00.000Z"),
+        },
+      ];
+    }
+    return [];
+  }
+
+  release(): void {
+    this.queries.push("release");
+  }
+}
+
+class DomainAwareFakeSql {
+  readonly queries: string[] = [];
+  readonly conn: DomainAwareFakeReservedSql;
+  private readonly domainDiff: Record<string, unknown>[];
+
+  constructor(opts: {
+    registered: Set<string>;
+    domainDiff?: Record<string, unknown>[];
+  }) {
+    this.conn = new DomainAwareFakeReservedSql(opts.registered);
+    this.domainDiff = opts.domainDiff ?? [];
+  }
+
+  async unsafe(query: string): Promise<Record<string, unknown>[]> {
+    this.queries.push(query);
+    if (query.includes("FROM knowledge_contributions")) return [record];
+    if (query.includes("dolt_diff") && query.includes("'domains'"))
+      return this.domainDiff;
     if (query.includes("dolt_diff")) return [];
     return [];
   }

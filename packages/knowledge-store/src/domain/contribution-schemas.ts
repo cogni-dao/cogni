@@ -56,9 +56,30 @@ export type ContributionCitationType = z.infer<
   typeof ContributionCitationTypeSchema
 >;
 
+/**
+ * Domain id slug shape. Kept identical to `DomainIdSchema` in the
+ * `knowledge.domains.v1` contract so a domain proposed inside a contribution
+ * (`register_domain` op) is constrained the same way as one created via the
+ * direct `POST /api/v1/knowledge/domains` endpoint — one validation shape, two
+ * write paths.
+ */
+export const ContributionDomainIdSchema = z
+  .string()
+  .min(2)
+  .max(64)
+  .regex(/^[a-z0-9][a-z0-9_-]*$/, {
+    message: "domain id must start with [a-z0-9] and contain only [a-z0-9_-]",
+  });
+
 export const KnowledgeContributionEditSchema = z
   .discriminatedUnion("op", [
     z.object({ op: z.literal("insert"), entry: KnowledgeEntryInputSchema }),
+    z.object({
+      op: z.literal("register_domain"),
+      id: ContributionDomainIdSchema,
+      name: z.string().min(1).max(128),
+      description: z.string().max(512).optional(),
+    }),
     z.object({
       op: z.literal("update"),
       targetRowId: z.string().min(1).max(256),
