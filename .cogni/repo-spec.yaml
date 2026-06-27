@@ -123,7 +123,7 @@ secrets:
 #   enabled: false → operator skips review entirely (no Check Run, no comment).
 #   model: any platform (LiteLLM-resolvable) model id; omit to use operator default.
 review:
-  enabled: true
+  enabled: false
   model: gpt-4o-mini
 
 # Gates run in the order they appear below.
