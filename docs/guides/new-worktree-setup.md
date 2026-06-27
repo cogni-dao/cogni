@@ -34,9 +34,9 @@ git -C "$COGNI_TEMPLATE_ROOT" checkout main
 git -C "$COGNI_TEMPLATE_ROOT" pull --ff-only origin main
 ```
 
-Then create the workspace in Conductor and let setup run. The setup script fetches `origin/main`, symlinks `.env.cogni` and `.local-auth` from the primary checkout, installs dependencies, emits package declarations, and runs `pnpm worktree:check`.
+Then create the workspace in Conductor and let setup run. The setup script fetches `origin/main`, ensures the primary checkout has a cognition bearer key, symlinks `.env.cogni` and `.local-auth` from the primary checkout, installs dependencies, emits package declarations, and runs `pnpm worktree:check`.
 
-Secrets and captured auth are symlinked, not copied, so rotations and refreshed storage states propagate to active worktrees. Session-start cognition reads `.env.cogni` directly and derives the node URL from `.cogni/repo-spec.yaml`, so no per-worktree environment export is needed after the one-time agent registration bootstrap saves a key there.
+Secrets and captured auth are symlinked, not copied, so rotations and refreshed storage states propagate to active worktrees. Session-start cognition reads `.env.cogni` directly and derives the node URL from `.cogni/repo-spec.yaml`, so no per-worktree environment export is needed after the one-time agent registration bootstrap saves `COGNI_NODE_API_KEY` there. Operator keys such as `COGNI_API_KEY_PROD` are for CI/CD authority and do not satisfy session cognition.
 
 ### Manual Git Worktree
 

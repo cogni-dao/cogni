@@ -83,7 +83,7 @@ pnpm check:agentsmd             # Validate all AGENTS.md files
 
 - Scripts must be idempotent and safe to re-run
 - AGENTS.md validator enforces hexagonal import standards for AGENTS.md
-- `conductor-worktree-setup.sh` is the Conductor setup entrypoint. It symlinks `.env.cogni` and `.local-auth` from the primary checkout so secrets and captured auth do not drift across worktrees.
+- `conductor-worktree-setup.sh` is the Conductor setup entrypoint. It ensures the primary checkout has `COGNI_NODE_API_KEY`, then symlinks `.env.cogni` and `.local-auth` from the primary checkout so secrets and captured auth do not drift across worktrees.
 - `run-scoped-package-build.mjs` scopes local package declaration refreshes against `origin/main` by default, falls back to all declaration refs when global build inputs change, and emits a warning so developers notice the scope expansion. JavaScript package artifacts belong to explicit `pnpm packages:build`, not `check:fast`.
 - `worktree-check.sh` is non-mutating and checks whether a fresh worktree has the minimum local state needed before an agent runs expensive gates.
 - For PR verification, push and monitor GitHub checks. `check-fast.sh` and `check-all.sh` exist for explicit local repro or human-requested local validation; they run `workspace:lint` via `run-turbo-checks.sh` so local checks catch the same per-workspace Biome/ESLint failures that CI's workspace runs would catch.
