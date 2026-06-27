@@ -11,7 +11,7 @@ source_repo: https://github.com/Cogni-DAO/node-template.git
 image_repository: ghcr.io/cogni-dao/node-template
 # Accepted deploy SHA — the catalog pin that replaces the nodes/<slug> gitlink
 # (spec.node-submodule-retirement, CATALOG_SOURCE_SHA_IS_THE_DEPLOY_PIN).
-source_sha: eefab8f82bd3f3074a22b9a7263ca7db0a7a374c
+source_sha: a679c4af24ce6edf1886aebd47da482ef7356253
 # task.0320 — per-env deploy branches (see operator.yaml).
 candidate_a_branch: deploy/candidate-a-node-template
 preview_branch: deploy/preview-node-template
