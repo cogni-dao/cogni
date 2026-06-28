@@ -1,0 +1,20 @@
+name: poly
+type: node
+port: 3200
+node_port: 31600
+dockerfile: nodes/poly/app/Dockerfile
+image_tag_suffix: "-poly"
+migrator_tag_suffix: "-poly-migrate"
+source_repo: https://github.com/cogni-dao/poly.git
+image_repository: ghcr.io/cogni-dao/poly
+source_sha: bbf0a1915b127e025d0c72e262a5029672482c6b
+candidate_a_branch: deploy/candidate-a-poly
+preview_branch: deploy/preview-poly
+production_branch: deploy/production-poly
+# task.5017 — per-env node-set (deploy ⊆ provisioned). A wizard birth enters all
+# NODE_FORMATION_ENVS; this list is the catalog twin so render-node-appset.sh
+# renders exactly the births appset.ts generates. Trimming a node's reach is a
+# later catalog edit (drop an env here) once its envs are provisioned.
+envs: [candidate-a, preview, production]
+path_prefix: nodes/poly/
+node_id: 4b06359a-a859-4399-888e-a8c7a6696f7e
