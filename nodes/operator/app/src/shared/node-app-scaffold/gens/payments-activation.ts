@@ -22,6 +22,8 @@
  * @public
  */
 
+import { parse as parseYaml } from "yaml";
+
 /** Default payment activation economics: ~95% provider top-up / ~5% DAO margin (at-cost). */
 export const ACTIVATION_MARKUP_FACTOR = 1.10803324099723;
 export const ACTIVATION_REVENUE_SHARE = 0;
@@ -80,6 +82,55 @@ export function renderPaymentsActivationSpec(
   out = upsertPaymentsStatus(out);
 
   return out.replace(/\n*$/, "\n");
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function sameAddress(a: unknown, b: string): boolean {
+  return typeof a === "string" && a.toLowerCase() === b.toLowerCase();
+}
+
+/**
+ * Semantic guard for existing activation PR branches. Rendering from `main` is deterministic, but
+ * older already-open PRs may carry the correct payment fields with non-byte-identical whitespace or
+ * block placement. Treat those as reusable instead of force-updating the branch every retry.
+ */
+export function hasPaymentsActivationSpec(
+  spec: string,
+  input: RenderPaymentsActivationInput
+): boolean {
+  let parsed: unknown;
+  try {
+    parsed = parseYaml(spec);
+  } catch {
+    return false;
+  }
+
+  const root = asRecord(parsed);
+  const payments = asRecord(root?.payments);
+  const nodeWallet = asRecord(root?.node_wallet);
+  const paymentsIn = asRecord(root?.payments_in);
+  const topup = asRecord(paymentsIn?.credits_topup);
+  if (!root || !payments || !nodeWallet || !topup) return false;
+
+  const allowedChains = topup.allowed_chains;
+  const allowedTokens = topup.allowed_tokens;
+  return (
+    payments.status === "active" &&
+    sameAddress(nodeWallet.address, input.nodeWalletAddress) &&
+    topup.provider === "cogni-usdc-backend-v1" &&
+    sameAddress(topup.receiving_address, input.splitAddress) &&
+    Array.isArray(allowedChains) &&
+    allowedChains.includes("Base") &&
+    Array.isArray(allowedTokens) &&
+    allowedTokens.includes("USDC") &&
+    Number(topup.markup_factor) === ACTIVATION_MARKUP_FACTOR &&
+    Number(topup.revenue_share) === ACTIVATION_REVENUE_SHARE
+  );
 }
 
 /**

@@ -18,6 +18,7 @@ import { parse as parseYaml } from "yaml";
 import {
   ACTIVATION_MARKUP_FACTOR,
   ACTIVATION_REVENUE_SHARE,
+  hasPaymentsActivationSpec,
   renderPaymentsActivationSpec,
 } from "./payments-activation";
 
@@ -85,6 +86,38 @@ describe("renderPaymentsActivationSpec", () => {
       splitAddress: SPLIT,
     });
     expect(twice).toBe(activated);
+    expect(
+      hasPaymentsActivationSpec(twice, {
+        nodeWalletAddress: NODE_WALLET,
+        splitAddress: SPLIT,
+      })
+    ).toBe(true);
+  });
+
+  it("recognizes semantically active specs even when block placement differs", () => {
+    const reordered = `${PENDING_SPEC.replace("  status: pending_activation", "  status: active")}
+
+payments_in:
+  credits_topup:
+    provider: cogni-usdc-backend-v1
+    receiving_address: "${SPLIT.toUpperCase()}"
+    allowed_chains:
+      - Base
+    allowed_tokens:
+      - USDC
+    markup_factor: ${ACTIVATION_MARKUP_FACTOR}
+    revenue_share: ${ACTIVATION_REVENUE_SHARE}
+
+node_wallet:
+  address: "${NODE_WALLET.toUpperCase()}"
+`;
+
+    expect(
+      hasPaymentsActivationSpec(reordered, {
+        nodeWalletAddress: NODE_WALLET,
+        splitAddress: SPLIT,
+      })
+    ).toBe(true);
   });
 
   it("re-splices new values onto an already-activated spec", () => {

@@ -48,6 +48,7 @@ import type {
   SyncTemplateUpstreamResult,
 } from "@/ports";
 import {
+  hasPaymentsActivationSpec,
   insertAppsetKustomization,
   insertCaddyBlock,
   insertSchedulerEndpoint,
@@ -1602,7 +1603,13 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       nodeWalletAddress: input.nodeWalletAddress,
       splitAddress: input.splitAddress,
     });
-    if (nextSpec === currentSpec) {
+    if (
+      nextSpec === currentSpec ||
+      hasPaymentsActivationSpec(currentSpec, {
+        nodeWalletAddress: input.nodeWalletAddress,
+        splitAddress: input.splitAddress,
+      })
+    ) {
       return { status: "no_changes" };
     }
 
@@ -1619,7 +1626,14 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
         path: ".cogni/repo-spec.yaml",
         ref: branch,
       });
-      if (pendingSpec === nextSpec) {
+      if (
+        pendingSpec === nextSpec ||
+        (pendingSpec !== null &&
+          hasPaymentsActivationSpec(pendingSpec, {
+            nodeWalletAddress: input.nodeWalletAddress,
+            splitAddress: input.splitAddress,
+          }))
+      ) {
         await this.updatePrBody(
           octokit,
           owner,

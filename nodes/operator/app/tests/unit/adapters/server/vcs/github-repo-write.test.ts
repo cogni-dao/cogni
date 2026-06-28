@@ -340,6 +340,73 @@ describe("GitHubRepoWriter.openPaymentsActivationPr", () => {
       "PATCH /repos/{owner}/{repo}/pulls/{pull_number}",
     ]);
   });
+
+  it("reuses an existing activation PR when its branch is semantically active but not byte-identical", async () => {
+    const nodeWalletAddress = "0xdCCa8D85603C2CC47dc6974a790dF846f8695056";
+    const splitAddress = "0xec9add7DF66E0481E87C8fB04F22f9813F3B0894";
+    const branch = "cogni-operator/activate-payments-test-cog";
+    const pendingSpec = PAYMENT_PENDING_SPEC;
+    const branchSpec = `${PAYMENT_PENDING_SPEC.replace("  status: pending_activation", "  status: active")}
+
+payments_in:
+  credits_topup:
+    provider: cogni-usdc-backend-v1
+    receiving_address: "${splitAddress}"
+    allowed_chains:
+      - Base
+    allowed_tokens:
+      - USDC
+    markup_factor: 1.10803324099723
+    revenue_share: 0
+
+node_wallet:
+  address: "${nodeWalletAddress}"
+`;
+    const renderedFromMain = renderPaymentsActivationSpec(pendingSpec, {
+      nodeWalletAddress,
+      splitAddress,
+    });
+    expect(branchSpec).not.toBe(renderedFromMain);
+    const encode = (content: string) =>
+      Buffer.from(content, "utf-8").toString("base64");
+
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": (params) => ({
+        type: "file",
+        encoding: "base64",
+        content: encode(params.ref === branch ? branchSpec : pendingSpec),
+        sha: "repo-spec-sha",
+      }),
+      "GET /repos/{owner}/{repo}/pulls": () => [
+        {
+          number: 11,
+          html_url: "https://github.com/cogni-test-org/test-cog/pull/11",
+        },
+      ],
+      "PATCH /repos/{owner}/{repo}/pulls/{pull_number}": () => ({}),
+    };
+
+    await expect(
+      makeWriter().openPaymentsActivationPr({
+        owner: "cogni-test-org",
+        repo: "test-cog",
+        slug: "test-cog",
+        nodeWalletAddress,
+        splitAddress,
+      })
+    ).resolves.toEqual({
+      status: "pr_opened",
+      prNumber: 11,
+      prUrl: "https://github.com/cogni-test-org/test-cog/pull/11",
+    });
+
+    expect(requests.map((request) => request.route)).toEqual([
+      "GET /repos/{owner}/{repo}/contents/{path}",
+      "GET /repos/{owner}/{repo}/pulls",
+      "GET /repos/{owner}/{repo}/contents/{path}",
+      "PATCH /repos/{owner}/{repo}/pulls/{pull_number}",
+    ]);
+  });
 });
 
 describe("GitHubRepoWriter.forkFromTemplate", () => {

@@ -41,6 +41,17 @@ interface RouteParams {
   params: Promise<{ id: string }>;
 }
 
+function activationNodePayload(node: typeof nodes.$inferSelect) {
+  return {
+    id: node.id,
+    slug: node.slug,
+    status: node.status,
+    operatorWalletAddress: node.operatorWalletAddress,
+    splitAddress: node.splitAddress,
+    repoUrl: node.repoUrl,
+  };
+}
+
 export async function POST(_request: Request, routeArgs: RouteParams) {
   const sessionUser = await getSessionUser();
   if (!sessionUser) {
@@ -104,7 +115,10 @@ export async function POST(_request: Request, routeArgs: RouteParams) {
 
   // Idempotent: already active means return without re-opening (mirror publish's already-published short).
   if (node.status === "active") {
-    return NextResponse.json({ node, alreadyActive: true });
+    return NextResponse.json({
+      node: activationNodePayload(node),
+      alreadyActive: true,
+    });
   }
 
   if (node.status !== "wallet_ready" && node.status !== "payments_ready") {
@@ -151,5 +165,8 @@ export async function POST(_request: Request, routeArgs: RouteParams) {
     );
   }
 
-  return NextResponse.json({ node, activation: result });
+  return NextResponse.json({
+    node: activationNodePayload(node),
+    activation: result,
+  });
 }

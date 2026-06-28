@@ -25,6 +25,7 @@ export { renderOverlay } from "./overlay";
 export {
   ACTIVATION_MARKUP_FACTOR,
   ACTIVATION_REVENUE_SHARE,
+  hasPaymentsActivationSpec,
   type RenderPaymentsActivationInput,
   renderPaymentsActivationSpec,
 } from "./payments-activation";
