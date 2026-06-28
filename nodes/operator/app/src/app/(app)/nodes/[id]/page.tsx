@@ -19,6 +19,7 @@ import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import type { ReactElement } from "react";
+import { createNodeRepoWriter } from "@/bootstrap/capabilities/node-repo-write";
 import {
   getContainer,
   resolveAppDb,
@@ -31,6 +32,7 @@ import { NodeDeployments } from "@/features/nodes/deployments/NodeDeployments";
 import { FLIGHT_ENVS } from "@/features/nodes/flight-status";
 import { nodeRepoUrlForSlug } from "@/features/nodes/launch-pack";
 import { NodeWizard } from "@/features/nodes/wizard/NodeWizard.client";
+import type { WizardNode } from "@/features/nodes/wizard/types";
 import { getServerSessionUser } from "@/lib/auth/server";
 import { type NodeStatus, nodes } from "@/shared/db/nodes";
 import { serverEnv } from "@/shared/env";
@@ -76,10 +78,6 @@ export default async function NodeDashboardPage({
 
   const status = node.status as NodeStatus;
   const display = NODE_STATUS_DISPLAY[status];
-  const statusLabel =
-    node.splitAddress && status !== "active"
-      ? "Activating payments"
-      : display.label;
   const env = serverEnv();
   const nodeRepoUrl = nodeRepoUrlForSlug({
     slug: node.slug,
@@ -128,6 +126,44 @@ export default async function NodeDashboardPage({
           )
         )
       : null;
+  let paymentActivation: WizardNode["paymentActivation"] = null;
+  if (node.operatorWalletAddress && node.splitAddress && env.NODE_MINT_OWNER) {
+    try {
+      const status = await createNodeRepoWriter(
+        env
+      ).getPaymentsActivationStatus({
+        owner: env.NODE_MINT_OWNER,
+        repo: node.slug,
+        slug: node.slug,
+        nodeWalletAddress: node.operatorWalletAddress,
+        splitAddress: node.splitAddress,
+      });
+      const production = deployEnvs?.find(
+        (deployEnv) => deployEnv.env === "production"
+      );
+      const productionMatchesSource =
+        status.repoSpecActive &&
+        status.mainSha !== null &&
+        production?.buildSha === status.mainSha;
+      paymentActivation = {
+        repoSpecActive: status.repoSpecActive,
+        sourceSha: status.mainSha,
+        activationPrUrl: status.activationPr?.url ?? null,
+        activationPrState: status.activationPr?.state ?? null,
+        productionBuildSha: production?.buildSha ?? null,
+        productionMatchesSource,
+      };
+    } catch {
+      // Best-effort activation projection: a GitHub/App hiccup must not break the dashboard.
+      paymentActivation = null;
+    }
+  }
+  const statusLabel =
+    paymentActivation?.productionMatchesSource === true
+      ? NODE_STATUS_DISPLAY.active.label
+      : node.splitAddress && status !== "active"
+        ? "Activating payments"
+        : display.label;
 
   return (
     <PageContainer maxWidth="3xl">
@@ -155,6 +191,7 @@ export default async function NodeDashboardPage({
           knowledgeRepoUrl,
           daoUrl,
           repoSpecUrl,
+          paymentActivation,
         }}
       />
 

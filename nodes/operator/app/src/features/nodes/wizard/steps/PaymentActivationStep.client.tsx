@@ -263,10 +263,24 @@ export function PaymentActivationStep({ node }: WizardStepProps): ReactElement {
     splitPhase === "DEPLOYING" || splitPhase === "AWAITING_CONFIRMATION";
   const effectiveSplitAddress = splitAddress ?? node.splitAddress;
   const splitIsDeployed = !!effectiveSplitAddress;
-  const repoWriteIsDone = repoPhase === "DONE" || node.status === "active";
-  const activationIsReady = node.status === "active";
+  const activationPrUrl =
+    activationResult?.prUrl ?? node.paymentActivation?.activationPrUrl ?? null;
+  const activationPrIsMerged =
+    node.status === "active" ||
+    node.paymentActivation?.repoSpecActive === true ||
+    node.paymentActivation?.activationPrState === "merged";
+  const activationIsReady =
+    node.status === "active" ||
+    node.paymentActivation?.productionMatchesSource === true;
+  const repoWriteIsDone =
+    repoPhase === "DONE" ||
+    activationPrIsMerged ||
+    node.paymentActivation?.activationPrState === "open";
   const activationPrIsStarted =
-    repoPhase === "OPENING" || repoWriteIsDone || !!activationResult;
+    repoPhase === "OPENING" ||
+    repoWriteIsDone ||
+    !!activationResult ||
+    node.paymentActivation?.activationPrState != null;
   const canDeploySplit =
     isReady &&
     splitPhase === "IDLE" &&
@@ -297,15 +311,9 @@ export function PaymentActivationStep({ node }: WizardStepProps): ReactElement {
         nodeSlug: node.slug,
         nodeRepoUrl: node.nodeRepoUrl,
         repoSpecUrl: node.repoSpecUrl,
-        activationPrUrl: activationResult?.prUrl ?? null,
+        activationPrUrl,
       }),
-    [
-      activationResult?.prUrl,
-      node.id,
-      node.nodeRepoUrl,
-      node.repoSpecUrl,
-      node.slug,
-    ]
+    [activationPrUrl, node.id, node.nodeRepoUrl, node.repoSpecUrl, node.slug]
   );
 
   const openActivationPr = useCallback(async () => {
@@ -529,14 +537,31 @@ export function PaymentActivationStep({ node }: WizardStepProps): ReactElement {
       ? "error"
       : activationIsReady
         ? "done"
-        : activationPrIsStarted
-          ? "working"
-          : "todo";
+        : activationPrIsMerged
+          ? "done"
+          : activationPrIsStarted
+            ? "working"
+            : "todo";
   const productionState: ChecklistState = activationIsReady
     ? "done"
-    : activationPrIsStarted
+    : activationPrIsMerged
       ? "working"
       : "todo";
+  const productionDetail = activationIsReady
+    ? "The live node is serving the activated repo-spec."
+    : activationPrIsMerged
+      ? "Waiting for production promotion and /version verification."
+      : activationPrIsStarted
+        ? "Runs after the activation PR lands."
+        : "Runs after the activation PR lands.";
+
+  const prDetail = activationIsReady
+    ? "Repo-spec main and production both match."
+    : activationPrIsMerged
+      ? "Repo-spec main has the payment rail."
+      : activationPrIsStarted
+        ? "Operator is driving the repo-spec PR."
+        : "Starts automatically after the Split deploy.";
 
   const handleReset = () => {
     resetWrite();
@@ -617,17 +642,11 @@ export function PaymentActivationStep({ node }: WizardStepProps): ReactElement {
           <ChecklistRow
             state={prState}
             title="Activation PR finished"
-            detail={
-              activationIsReady
-                ? "Repo-spec main has the payment rail."
-                : activationPrIsStarted
-                  ? "Operator is driving the repo-spec PR."
-                  : "Starts automatically after the Split deploy."
-            }
+            detail={prDetail}
           >
-            {activationResult?.prUrl ? (
+            {activationPrUrl ? (
               <a
-                href={activationResult.prUrl}
+                href={activationPrUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1.5 text-primary hover:underline"
@@ -640,13 +659,7 @@ export function PaymentActivationStep({ node }: WizardStepProps): ReactElement {
           <ChecklistRow
             state={productionState}
             title="Production build deployed"
-            detail={
-              activationIsReady
-                ? "The live node is serving the activated repo-spec."
-                : activationPrIsStarted
-                  ? "Waiting for merge, promotion, and /version verification."
-                  : "Runs after the activation PR lands."
-            }
+            detail={productionDetail}
           />
         </ol>
 

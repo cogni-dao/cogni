@@ -94,12 +94,35 @@ interface GitHubPullRequestSummary {
   readonly number: number;
   readonly html_url: string;
   readonly title?: string;
+  readonly state?: string;
+  readonly merged_at?: string | null;
+  readonly merge_commit_sha?: string | null;
   readonly head?: {
     readonly ref?: string;
     readonly repo?: {
       readonly full_name?: string;
     };
   };
+}
+
+export interface PaymentsActivationStatusInput {
+  readonly owner: string;
+  readonly repo: string;
+  readonly slug: string;
+  readonly nodeWalletAddress: string;
+  readonly splitAddress: string;
+}
+
+export interface PaymentsActivationStatus {
+  readonly mainSha: string | null;
+  readonly repoSpecActive: boolean;
+  readonly activationPr: {
+    readonly number: number;
+    readonly url: string;
+    readonly state: "open" | "merged";
+    readonly mergedAt: string | null;
+    readonly mergeCommitSha: string | null;
+  } | null;
 }
 
 /**
@@ -1682,6 +1705,63 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
     return { status: "pr_opened", ...result };
   }
 
+  async getPaymentsActivationStatus(
+    input: PaymentsActivationStatusInput
+  ): Promise<PaymentsActivationStatus> {
+    const { owner, repo, slug } = input;
+    const octokit = await this.getOctokit(owner, repo);
+    const branch = `cogni-operator/activate-payments-${slug}`;
+    const title = `feat(payments): activate ${slug} payment rails`;
+
+    const currentSpec = await this.fetchFileText({
+      owner,
+      repo,
+      path: ".cogni/repo-spec.yaml",
+      ref: "main",
+    });
+    const repoSpecActive =
+      currentSpec !== null &&
+      hasPaymentsActivationSpec(currentSpec, {
+        nodeWalletAddress: input.nodeWalletAddress,
+        splitAddress: input.splitAddress,
+      });
+
+    let mainSha: string | null = null;
+    try {
+      mainSha = await this.resolveCommitSha(octokit, owner, repo, "main");
+    } catch (error) {
+      if ((error as { status?: number })?.status !== 404) throw error;
+    }
+
+    const openPr = await this.findOpenPrForBranch(octokit, owner, repo, {
+      branch,
+      title,
+    });
+    if (openPr) {
+      return {
+        mainSha,
+        repoSpecActive,
+        activationPr: {
+          number: openPr.prNumber,
+          url: openPr.prUrl,
+          state: "open",
+          mergedAt: null,
+          mergeCommitSha: null,
+        },
+      };
+    }
+
+    const mergedPr = await this.findMergedPrForBranch(octokit, owner, repo, {
+      branch,
+      title,
+    });
+    return {
+      mainSha,
+      repoSpecActive,
+      activationPr: mergedPr,
+    };
+  }
+
   async packageImageTagExists(
     input: PackageImageTagExistsInput
   ): Promise<boolean> {
@@ -2274,6 +2354,50 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
     );
     return fallback
       ? { prNumber: fallback.number, prUrl: fallback.html_url }
+      : null;
+  }
+
+  private async findMergedPrForBranch(
+    octokit: Octokit,
+    owner: string,
+    repo: string,
+    input: {
+      readonly branch: string;
+      readonly title?: string;
+    }
+  ): Promise<PaymentsActivationStatus["activationPr"]> {
+    const { data: closedPrs } = await octokit.request(
+      "GET /repos/{owner}/{repo}/pulls",
+      {
+        owner,
+        repo,
+        state: "closed",
+        sort: "updated",
+        direction: "desc",
+        per_page: 50,
+      }
+    );
+    const expectedRepo = `${owner}/${repo}`.toLowerCase();
+    const pr = (closedPrs as GitHubPullRequestSummary[]).find((candidate) => {
+      if (!candidate.merged_at) return false;
+      const headRepo = candidate.head?.repo?.full_name?.toLowerCase();
+      const branchMatches = candidate.head?.ref === input.branch;
+      const sameRepoOrUnknown =
+        headRepo === undefined || headRepo === expectedRepo;
+      return (
+        (branchMatches && sameRepoOrUnknown) ||
+        (input.title !== undefined && candidate.title === input.title)
+      );
+    });
+
+    return pr
+      ? {
+          number: pr.number,
+          url: pr.html_url,
+          state: "merged",
+          mergedAt: pr.merged_at ?? null,
+          mergeCommitSha: pr.merge_commit_sha ?? null,
+        }
       : null;
   }
 

@@ -32,6 +32,14 @@ export interface WizardNode {
   readonly daoUrl: string | null;
   /** Direct GitHub link to the node's own `.cogni/repo-spec.yaml` — provenance for activation. */
   readonly repoSpecUrl: string | null;
+  readonly paymentActivation: {
+    readonly repoSpecActive: boolean;
+    readonly sourceSha: string | null;
+    readonly activationPrUrl: string | null;
+    readonly activationPrState: "open" | "merged" | null;
+    readonly productionBuildSha: string | null;
+    readonly productionMatchesSource: boolean;
+  } | null;
 }
 
 export interface WizardStepProps {
