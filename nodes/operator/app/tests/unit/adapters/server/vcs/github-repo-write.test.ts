@@ -741,6 +741,20 @@ patches:
 `),
           };
         }
+        if (
+          path ===
+          "nodes/operator/app/src/adapters/server/node-registry/network-nodes.data.ts"
+        ) {
+          return {
+            type: "file",
+            encoding: "base64",
+            content: encode(`export const NETWORK_NODES = [
+  { name: "operator", nodeId: "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d", primary: true },
+  { name: "red", nodeId: "895147d5-2ad9-4b2b-aeaa-f2669999fdce" },
+];
+`),
+          };
+        }
         throw statusError(404, `not found: ${path}`);
       },
       "GET /repos/{owner}/{repo}/git/trees/{tree_sha}": (params) => {
@@ -800,6 +814,15 @@ node_port: 30200
           expect(content).toContain("value: 30300");
           expect(content).not.toContain("atlas-node-app-secrets");
         }
+        const rosterEntry = tree.find(
+          (item) =>
+            item.path ===
+            "nodes/operator/app/src/adapters/server/node-registry/network-nodes.data.ts"
+        );
+        expect(rosterEntry).toBeDefined();
+        expect(blobs.get(rosterEntry?.sha ?? "")).toContain(
+          `{ name: "atlas", nodeId: "11111111-1111-4111-8111-111111111111" },`
+        );
         return { sha: "birth-tree" };
       },
       "POST /repos/{owner}/{repo}/git/commits": (params) => {

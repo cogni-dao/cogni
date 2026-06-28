@@ -50,6 +50,7 @@ import type {
 import {
   insertAppsetKustomization,
   insertCaddyBlock,
+  insertNetworkNode,
   insertSchedulerEndpoint,
   NODE_FORMATION_ENVS,
   nextFreeNodePort,
@@ -156,6 +157,8 @@ const FOOTPRINT = {
   caddyfile: "infra/compose/edge/configs/Caddyfile.tmpl",
   ciYaml: ".github/workflows/ci.yaml",
   argocdKustomization: "infra/k8s/argocd/kustomization.yaml",
+  networkNodes:
+    "nodes/operator/app/src/adapters/server/node-registry/network-nodes.data.ts",
 } as const;
 
 /**
@@ -1950,6 +1953,17 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
     await addBlob(
       FOOTPRINT.caddyfile,
       insertCaddyBlock(caddyfile, slug, nodePort)
+    );
+
+    const networkNodes = await this.readFileOnMain(
+      octokit,
+      owner,
+      repo,
+      FOOTPRINT.networkNodes
+    );
+    await addBlob(
+      FOOTPRINT.networkNodes,
+      insertNetworkNode(networkNodes, slug, input.nodeId)
     );
 
     // No ci.yaml scope-filter splice: a submodule node carries NO single-node-scope
