@@ -90,6 +90,18 @@ export interface OpenNodeAppPrResult {
   readonly prUrl: string;
 }
 
+interface GitHubPullRequestSummary {
+  readonly number: number;
+  readonly html_url: string;
+  readonly title?: string;
+  readonly head?: {
+    readonly ref?: string;
+    readonly repo?: {
+      readonly full_name?: string;
+    };
+  };
+}
+
 /**
  * Remote-source node registration variant of {@link OpenNodeAppPrInput}: the node's files live in an
  * already-minted standalone repo, not inline in the operator tree. The operator PR registers it via
@@ -1613,12 +1625,10 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       return { status: "no_changes" };
     }
 
-    const existingPr = await this.findOpenPrForBranch(
-      octokit,
-      owner,
-      repo,
-      branch
-    );
+    const existingPr = await this.findOpenPrForBranch(octokit, owner, repo, {
+      branch,
+      title,
+    });
     if (existingPr) {
       const pendingSpec = await this.fetchFileText({
         owner,
@@ -2227,14 +2237,44 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
     octokit: Octokit,
     owner: string,
     repo: string,
-    branch: string
+    input: {
+      readonly branch: string;
+      readonly title?: string;
+    }
   ): Promise<OpenNodeAppPrResult | null> {
     const { data: existing } = await octokit.request(
       "GET /repos/{owner}/{repo}/pulls",
-      { owner, repo, state: "open", head: `${owner}:${branch}`, per_page: 1 }
+      {
+        owner,
+        repo,
+        state: "open",
+        head: `${owner}:${input.branch}`,
+        per_page: 1,
+      }
     );
-    const pr = existing[0];
-    return pr ? { prNumber: pr.number, prUrl: pr.html_url } : null;
+    const pr = (existing as GitHubPullRequestSummary[])[0];
+    if (pr) return { prNumber: pr.number, prUrl: pr.html_url };
+
+    const { data: openPrs } = await octokit.request(
+      "GET /repos/{owner}/{repo}/pulls",
+      { owner, repo, state: "open", per_page: 100 }
+    );
+    const expectedRepo = `${owner}/${repo}`.toLowerCase();
+    const fallback = (openPrs as GitHubPullRequestSummary[]).find(
+      (candidate) => {
+        const headRepo = candidate.head?.repo?.full_name?.toLowerCase();
+        const branchMatches = candidate.head?.ref === input.branch;
+        const sameRepoOrUnknown =
+          headRepo === undefined || headRepo === expectedRepo;
+        return (
+          (branchMatches && sameRepoOrUnknown) ||
+          (input.title !== undefined && candidate.title === input.title)
+        );
+      }
+    );
+    return fallback
+      ? { prNumber: fallback.number, prUrl: fallback.html_url }
+      : null;
   }
 
   /**
@@ -2491,7 +2531,10 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
     } catch (err) {
       const status = (err as { status?: number })?.status;
       if (status !== 422) throw err;
-      const pr = await this.findOpenPrForBranch(octokit, owner, repo, branch);
+      const pr = await this.findOpenPrForBranch(octokit, owner, repo, {
+        branch,
+        title,
+      });
       if (!pr) {
         throw new Error(
           `Failed to open node-app PR and no open PR found for head ${branch}`

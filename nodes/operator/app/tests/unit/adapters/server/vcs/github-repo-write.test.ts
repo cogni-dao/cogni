@@ -341,6 +341,75 @@ describe("GitHubRepoWriter.openPaymentsActivationPr", () => {
     ]);
   });
 
+  it("finds an existing activation PR when GitHub's head filter misses it", async () => {
+    const nodeWalletAddress = "0xdCCa8D85603C2CC47dc6974a790dF846f8695056";
+    const splitAddress = "0xec9add7DF66E0481E87C8fB04F22f9813F3B0894";
+    const branch = "cogni-operator/activate-payments-test-cog";
+    const desiredSpec = renderPaymentsActivationSpec(PAYMENT_PENDING_SPEC, {
+      nodeWalletAddress,
+      splitAddress,
+    });
+    const encode = (content: string) =>
+      Buffer.from(content, "utf-8").toString("base64");
+
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": (params) => ({
+        type: "file",
+        encoding: "base64",
+        content: encode(
+          params.ref === branch ? desiredSpec : PAYMENT_PENDING_SPEC
+        ),
+        sha: "repo-spec-sha",
+      }),
+      "GET /repos/{owner}/{repo}/pulls": (params) => {
+        if (params.head !== undefined) return [];
+        expect(params).toMatchObject({
+          owner: "cogni-test-org",
+          repo: "test-cog",
+          state: "open",
+          per_page: 100,
+        });
+        return [
+          {
+            number: 11,
+            html_url: "https://github.com/cogni-test-org/test-cog/pull/11",
+            title: "feat(payments): activate test-cog payment rails",
+            head: {
+              ref: branch,
+              repo: { full_name: "cogni-test-org/test-cog" },
+            },
+          },
+        ];
+      },
+      "PATCH /repos/{owner}/{repo}/pulls/{pull_number}": () => ({}),
+    };
+
+    await expect(
+      makeWriter().openPaymentsActivationPr({
+        owner: "cogni-test-org",
+        repo: "test-cog",
+        slug: "test-cog",
+        nodeWalletAddress,
+        splitAddress,
+      })
+    ).resolves.toEqual({
+      status: "pr_opened",
+      prNumber: 11,
+      prUrl: "https://github.com/cogni-test-org/test-cog/pull/11",
+    });
+
+    expect(requests.map((request) => request.route)).toEqual([
+      "GET /repos/{owner}/{repo}/contents/{path}",
+      "GET /repos/{owner}/{repo}/pulls",
+      "GET /repos/{owner}/{repo}/pulls",
+      "GET /repos/{owner}/{repo}/contents/{path}",
+      "PATCH /repos/{owner}/{repo}/pulls/{pull_number}",
+    ]);
+    expect(requests.map((request) => request.route)).not.toContain(
+      "POST /repos/{owner}/{repo}/git/commits"
+    );
+  });
+
   it("reuses an existing activation PR when its branch is semantically active but not byte-identical", async () => {
     const nodeWalletAddress = "0xdCCa8D85603C2CC47dc6974a790dF846f8695056";
     const splitAddress = "0xec9add7DF66E0481E87C8fB04F22f9813F3B0894";
