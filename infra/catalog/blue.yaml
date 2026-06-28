@@ -8,7 +8,7 @@ migrator_tag_suffix: "-blue-migrate"
 source_repo: https://github.com/Cogni-DAO/blue.git
 image_repository: ghcr.io/cogni-dao/blue
 # Accepted deploy SHA — catalog pin replacing the gitlink (CATALOG_SOURCE_SHA_IS_THE_DEPLOY_PIN).
-source_sha: ab14e4aad4e57cc02d6dbd90a6be4453759f6a77
+source_sha: 3f8395c169ec04b2f31d4b5f63cdc26da76ffee1
 candidate_a_branch: deploy/candidate-a-blue
 preview_branch: deploy/preview-blue
 production_branch: deploy/production-blue
