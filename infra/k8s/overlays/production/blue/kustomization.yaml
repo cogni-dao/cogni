@@ -13,7 +13,7 @@ namePrefix: blue-
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/blue
-    digest: "sha256:d1aa6b331c2fa2f20672a00404b9d7f8974e2915da1ac3ae151545ce2e9226f3"
+    digest: "sha256:7d361d41323dd963b85c9b8512aa8b885cad0405463e990817eeaa3acfb4971b"
 
 patches:
   - target:
