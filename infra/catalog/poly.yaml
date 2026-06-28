@@ -8,6 +8,10 @@ migrator_tag_suffix: "-poly-migrate"
 source_repo: https://github.com/cogni-dao/poly.git
 image_repository: ghcr.io/cogni-dao/poly
 source_sha: bbf0a1915b127e025d0c72e262a5029672482c6b
+# poly does not currently ship the node-template Doltgres migration runner.
+# Keep this catalog projection explicit so overlay regeneration does not re-add
+# the stale migrate-doltgres initContainer.
+doltgres_migrator: false
 candidate_a_branch: deploy/candidate-a-poly
 preview_branch: deploy/preview-poly
 production_branch: deploy/production-poly
