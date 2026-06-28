@@ -31,7 +31,8 @@ Authenticated node management and formation wizard routes. `/nodes` is the app-o
 - **Routes:**
   - `/nodes` [GET] - DB-backed node registration + formation wizard
   - `/nodes/[id]` [GET] - canonical per-node setup wizard
-  - `/nodes/payments` [GET] - payment activation page
+  - `/nodes/[id]/payments` [GET] - node-scoped payment activation page
+  - `/nodes/payments` [GET] - compatibility redirect for old node payment links
 - **Exports:** none (page components only)
 
 ## Responsibilities

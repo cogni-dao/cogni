@@ -46,6 +46,7 @@ import {
   protectionGetToPutPayload,
   rulesetGetToPutPayload,
 } from "@/adapters/server/vcs/github-repo-write";
+import { renderPaymentsActivationSpec } from "@/shared/node-app-scaffold/gens";
 
 function statusError(
   status: number,
@@ -243,11 +244,238 @@ function makeWriter(): GitHubRepoWriter {
   });
 }
 
+const PAYMENT_PENDING_SPEC = `schema_version: "0.1.4"
+node_id: "abc"
+scope_id: "def"
+scope_key: "default"
+intent:
+  name: test-cog
+  mission: "test payments"
+cogni_dao:
+  dao_contract: "0xDA0"
+  chain_id: "8453"
+payments:
+  status: pending_activation
+`;
+
 beforeEach(() => {
   vi.clearAllMocks();
   requests.length = 0;
   routeHandlers = {};
   installFetchMock();
+});
+
+describe("GitHubRepoWriter.openPaymentsActivationPr", () => {
+  it("reuses an existing activation PR when its branch already has the desired repo-spec", async () => {
+    const nodeWalletAddress = "0xdCCa8D85603C2CC47dc6974a790dF846f8695056";
+    const splitAddress = "0xec9add7DF66E0481E87C8fB04F22f9813F3B0894";
+    const branch = "cogni-operator/activate-payments-test-cog";
+    const desiredSpec = renderPaymentsActivationSpec(PAYMENT_PENDING_SPEC, {
+      nodeWalletAddress,
+      splitAddress,
+    });
+    const encode = (content: string) =>
+      Buffer.from(content, "utf-8").toString("base64");
+
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": (params) => {
+        expect(params).toMatchObject({
+          owner: "cogni-test-org",
+          repo: "test-cog",
+          path: ".cogni/repo-spec.yaml",
+        });
+        return {
+          type: "file",
+          encoding: "base64",
+          content: encode(
+            params.ref === branch ? desiredSpec : PAYMENT_PENDING_SPEC
+          ),
+          sha: "repo-spec-sha",
+        };
+      },
+      "GET /repos/{owner}/{repo}/pulls": (params) => {
+        expect(params).toMatchObject({
+          owner: "cogni-test-org",
+          repo: "test-cog",
+          state: "open",
+          head: `cogni-test-org:${branch}`,
+          per_page: 1,
+        });
+        return [
+          {
+            number: 11,
+            html_url: "https://github.com/cogni-test-org/test-cog/pull/11",
+          },
+        ];
+      },
+      "PATCH /repos/{owner}/{repo}/pulls/{pull_number}": (params) => {
+        expect(params).toMatchObject({
+          owner: "cogni-test-org",
+          repo: "test-cog",
+          pull_number: 11,
+          title: "feat(payments): activate test-cog payment rails",
+        });
+        return {};
+      },
+    };
+
+    await expect(
+      makeWriter().openPaymentsActivationPr({
+        owner: "cogni-test-org",
+        repo: "test-cog",
+        slug: "test-cog",
+        nodeWalletAddress,
+        splitAddress,
+      })
+    ).resolves.toEqual({
+      status: "pr_opened",
+      prNumber: 11,
+      prUrl: "https://github.com/cogni-test-org/test-cog/pull/11",
+    });
+
+    expect(requests.map((request) => request.route)).toEqual([
+      "GET /repos/{owner}/{repo}/contents/{path}",
+      "GET /repos/{owner}/{repo}/pulls",
+      "GET /repos/{owner}/{repo}/contents/{path}",
+      "PATCH /repos/{owner}/{repo}/pulls/{pull_number}",
+    ]);
+  });
+
+  it("finds an existing activation PR when GitHub's head filter misses it", async () => {
+    const nodeWalletAddress = "0xdCCa8D85603C2CC47dc6974a790dF846f8695056";
+    const splitAddress = "0xec9add7DF66E0481E87C8fB04F22f9813F3B0894";
+    const branch = "cogni-operator/activate-payments-test-cog";
+    const desiredSpec = renderPaymentsActivationSpec(PAYMENT_PENDING_SPEC, {
+      nodeWalletAddress,
+      splitAddress,
+    });
+    const encode = (content: string) =>
+      Buffer.from(content, "utf-8").toString("base64");
+
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": (params) => ({
+        type: "file",
+        encoding: "base64",
+        content: encode(
+          params.ref === branch ? desiredSpec : PAYMENT_PENDING_SPEC
+        ),
+        sha: "repo-spec-sha",
+      }),
+      "GET /repos/{owner}/{repo}/pulls": (params) => {
+        if (params.head !== undefined) return [];
+        expect(params).toMatchObject({
+          owner: "cogni-test-org",
+          repo: "test-cog",
+          state: "open",
+          per_page: 100,
+        });
+        return [
+          {
+            number: 11,
+            html_url: "https://github.com/cogni-test-org/test-cog/pull/11",
+            title: "feat(payments): activate test-cog payment rails",
+            head: {
+              ref: branch,
+              repo: { full_name: "cogni-test-org/test-cog" },
+            },
+          },
+        ];
+      },
+      "PATCH /repos/{owner}/{repo}/pulls/{pull_number}": () => ({}),
+    };
+
+    await expect(
+      makeWriter().openPaymentsActivationPr({
+        owner: "cogni-test-org",
+        repo: "test-cog",
+        slug: "test-cog",
+        nodeWalletAddress,
+        splitAddress,
+      })
+    ).resolves.toEqual({
+      status: "pr_opened",
+      prNumber: 11,
+      prUrl: "https://github.com/cogni-test-org/test-cog/pull/11",
+    });
+
+    expect(requests.map((request) => request.route)).toEqual([
+      "GET /repos/{owner}/{repo}/contents/{path}",
+      "GET /repos/{owner}/{repo}/pulls",
+      "GET /repos/{owner}/{repo}/pulls",
+      "GET /repos/{owner}/{repo}/contents/{path}",
+      "PATCH /repos/{owner}/{repo}/pulls/{pull_number}",
+    ]);
+    expect(requests.map((request) => request.route)).not.toContain(
+      "POST /repos/{owner}/{repo}/git/commits"
+    );
+  });
+
+  it("reuses an existing activation PR when its branch is semantically active but not byte-identical", async () => {
+    const nodeWalletAddress = "0xdCCa8D85603C2CC47dc6974a790dF846f8695056";
+    const splitAddress = "0xec9add7DF66E0481E87C8fB04F22f9813F3B0894";
+    const branch = "cogni-operator/activate-payments-test-cog";
+    const pendingSpec = PAYMENT_PENDING_SPEC;
+    const branchSpec = `${PAYMENT_PENDING_SPEC.replace("  status: pending_activation", "  status: active")}
+
+payments_in:
+  credits_topup:
+    provider: cogni-usdc-backend-v1
+    receiving_address: "${splitAddress}"
+    allowed_chains:
+      - Base
+    allowed_tokens:
+      - USDC
+    markup_factor: 1.10803324099723
+    revenue_share: 0
+
+node_wallet:
+  address: "${nodeWalletAddress}"
+`;
+    const renderedFromMain = renderPaymentsActivationSpec(pendingSpec, {
+      nodeWalletAddress,
+      splitAddress,
+    });
+    expect(branchSpec).not.toBe(renderedFromMain);
+    const encode = (content: string) =>
+      Buffer.from(content, "utf-8").toString("base64");
+
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": (params) => ({
+        type: "file",
+        encoding: "base64",
+        content: encode(params.ref === branch ? branchSpec : pendingSpec),
+        sha: "repo-spec-sha",
+      }),
+      "GET /repos/{owner}/{repo}/pulls": () => [
+        {
+          number: 11,
+          html_url: "https://github.com/cogni-test-org/test-cog/pull/11",
+        },
+      ],
+      "PATCH /repos/{owner}/{repo}/pulls/{pull_number}": () => ({}),
+    };
+
+    await expect(
+      makeWriter().openPaymentsActivationPr({
+        owner: "cogni-test-org",
+        repo: "test-cog",
+        slug: "test-cog",
+        nodeWalletAddress,
+        splitAddress,
+      })
+    ).resolves.toEqual({
+      status: "pr_opened",
+      prNumber: 11,
+      prUrl: "https://github.com/cogni-test-org/test-cog/pull/11",
+    });
+
+    expect(requests.map((request) => request.route)).toEqual([
+      "GET /repos/{owner}/{repo}/contents/{path}",
+      "GET /repos/{owner}/{repo}/pulls",
+      "GET /repos/{owner}/{repo}/contents/{path}",
+      "PATCH /repos/{owner}/{repo}/pulls/{pull_number}",
+    ]);
+  });
 });
 
 describe("GitHubRepoWriter.forkFromTemplate", () => {

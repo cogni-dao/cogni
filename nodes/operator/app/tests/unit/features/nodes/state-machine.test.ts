@@ -21,13 +21,12 @@ import {
 import { NODE_STATUSES, type NodeStatus } from "@/shared/db/nodes";
 
 describe("transition — happy path", () => {
-  it("walks dao_pending → dao_formed → published → wallet_ready → payments_ready → active", () => {
+  it("walks dao_pending to wallet_ready, then verified activation to active", () => {
     let s: NodeStatus = "dao_pending";
     for (const ev of [
       "dao_verified",
       "spec_published",
       "wallet_provisioned",
-      "payments_configured",
       "activation_published",
     ] as const) {
       const r = transition(s, { type: ev });
@@ -83,7 +82,6 @@ describe("transition — totality", () => {
       { type: "dao_verified" },
       { type: "spec_published" },
       { type: "wallet_provisioned" },
-      { type: "payments_configured" },
       { type: "activation_published" },
       { type: "fail", reason: "test" },
     ];
@@ -97,7 +95,7 @@ describe("transition — totality", () => {
 });
 
 describe("progress display", () => {
-  it("shows published as the handoff step", () => {
+  it("shows wallet_ready and legacy payments_ready as the payments step", () => {
     expect(NODE_PROGRESS_STEPS.map((step) => step.label)).toEqual([
       "Register",
       "DAO",
@@ -108,6 +106,12 @@ describe("progress display", () => {
     expect(
       NODE_PROGRESS_STEPS[progressIndexForStatus("published")]?.label
     ).toBe("Handoff");
+    expect(
+      NODE_PROGRESS_STEPS[progressIndexForStatus("wallet_ready")]?.label
+    ).toBe("Payments");
+    expect(
+      NODE_PROGRESS_STEPS[progressIndexForStatus("payments_ready")]?.label
+    ).toBe("Payments");
   });
 });
 

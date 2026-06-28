@@ -11,6 +11,7 @@
  * @public
  */
 
+import Link from "next/link";
 import type { ReactElement } from "react";
 
 import { Button } from "@/components";
@@ -24,11 +25,12 @@ export function WalletStep({ node }: WizardStepProps): ReactElement {
     <StepSection title="Operator wallet">
       <div className="space-y-3 text-sm">
         <p className="text-muted-foreground">
-          Operator wallet is ready. Activating payment rails is the next stage —
-          coming soon.
+          Operator wallet is ready. Activate payment rails for this node next.
         </p>
         <div className="flex items-center gap-2">
-          <Button disabled>Activate payments</Button>
+          <Button asChild>
+            <Link href={`/nodes/${node.id}/payments`}>Activate payments</Link>
+          </Button>
           <LaunchPackCopyButton nodeId={node.id} />
         </div>
       </div>

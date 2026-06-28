@@ -48,6 +48,7 @@ import type {
   SyncTemplateUpstreamResult,
 } from "@/ports";
 import {
+  hasPaymentsActivationSpec,
   insertAppsetKustomization,
   insertCaddyBlock,
   insertSchedulerEndpoint,
@@ -58,6 +59,7 @@ import {
   renderNodeExternalSecret,
   renderNodeExternalSecretKustomization,
   renderOverlay,
+  renderPaymentsActivationSpec,
   renderRepoSpec,
 } from "@/shared/node-app-scaffold/gens";
 import type { NodeKnowledgeRemote } from "@/shared/node-app-scaffold/knowledge-remote";
@@ -86,6 +88,18 @@ export interface OpenNodeAppPrInput {
 export interface OpenNodeAppPrResult {
   readonly prNumber: number;
   readonly prUrl: string;
+}
+
+interface GitHubPullRequestSummary {
+  readonly number: number;
+  readonly html_url: string;
+  readonly title?: string;
+  readonly head?: {
+    readonly ref?: string;
+    readonly repo?: {
+      readonly full_name?: string;
+    };
+  };
 }
 
 /**
@@ -1549,6 +1563,125 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
     });
   }
 
+  /**
+   * Payment-activation write-back into the NODE'S OWN repo (not the operator monorepo): read the
+   * node repo's `.cogni/repo-spec.yaml` on `main`, splice in `node_wallet.address` +
+   * `payments_in.credits_topup.*` (95/5 at-cost) + `payments.status: active`, and open (or reuse)
+   * a PR carrying that one-file change. The {owner, repo} here is the node's OWN repo identity
+   * (`NODE_MINT_OWNER`/slug), built by the route exactly like `publish` builds it.
+   *
+   * SINGLE_HOME: writes ONLY `.cogni/repo-spec.yaml` at the repo root. Idempotent: an already-spliced
+   * spec produces an identical tree (no commit, returns `no_changes`).
+   */
+  async openPaymentsActivationPr(input: {
+    owner: string;
+    repo: string;
+    slug: string;
+    nodeWalletAddress: string;
+    splitAddress: string;
+  }): Promise<
+    | { status: "pr_opened"; prNumber: number; prUrl: string }
+    | { status: "no_changes" }
+  > {
+    const { owner, repo, slug } = input;
+    const octokit = await this.getOctokit(owner, repo);
+    const branch = `cogni-operator/activate-payments-${slug}`;
+    const title = `feat(payments): activate ${slug} payment rails`;
+    const body =
+      `Activates \`${slug}\`'s payment loop. Writes the node's own wallet + Split into ` +
+      "`.cogni/repo-spec.yaml`:\n\n" +
+      `- \`node_wallet.address\` = \`${input.nodeWalletAddress}\`\n` +
+      `- \`payments_in.credits_topup.receiving_address\` (Split) = \`${input.splitAddress}\`\n` +
+      `- \`payments.status: active\` (95/5 at-cost economics)\n\n` +
+      "Inbound USDC routes to this node's own Split, then funds its AI credits. " +
+      "The operator never holds the node's keys.\n\n" +
+      "_Authored automatically by cogni-operator on payment activation._";
+
+    const currentSpec = await this.fetchFileText({
+      owner,
+      repo,
+      path: ".cogni/repo-spec.yaml",
+      ref: "main",
+    });
+    if (currentSpec === null) {
+      throw deployPlaneError(
+        "repo_spec_missing",
+        `node repo-spec not found at ${owner}/${repo}:.cogni/repo-spec.yaml`,
+        422
+      );
+    }
+
+    const nextSpec = renderPaymentsActivationSpec(currentSpec, {
+      nodeWalletAddress: input.nodeWalletAddress,
+      splitAddress: input.splitAddress,
+    });
+    if (
+      nextSpec === currentSpec ||
+      hasPaymentsActivationSpec(currentSpec, {
+        nodeWalletAddress: input.nodeWalletAddress,
+        splitAddress: input.splitAddress,
+      })
+    ) {
+      return { status: "no_changes" };
+    }
+
+    const existingPr = await this.findOpenPrForBranch(octokit, owner, repo, {
+      branch,
+      title,
+    });
+    if (existingPr) {
+      const pendingSpec = await this.fetchFileText({
+        owner,
+        repo,
+        path: ".cogni/repo-spec.yaml",
+        ref: branch,
+      });
+      if (
+        pendingSpec === nextSpec ||
+        (pendingSpec !== null &&
+          hasPaymentsActivationSpec(pendingSpec, {
+            nodeWalletAddress: input.nodeWalletAddress,
+            splitAddress: input.splitAddress,
+          }))
+      ) {
+        await this.updatePrBody(
+          octokit,
+          owner,
+          repo,
+          existingPr.prNumber,
+          title,
+          body
+        );
+        return { status: "pr_opened", ...existingPr };
+      }
+    }
+
+    const { baseCommitSha, baseTreeSha } = await this.resolveMainBase(
+      octokit,
+      owner,
+      repo
+    );
+    const blobSha = await this.createBlob(octokit, owner, repo, nextSpec);
+
+    const result = await this.commitTreeAndOpenPr(octokit, owner, repo, slug, {
+      baseCommitSha,
+      baseTreeSha,
+      entries: [
+        {
+          path: ".cogni/repo-spec.yaml",
+          mode: "100644",
+          type: "blob",
+          sha: blobSha,
+        },
+      ],
+      message: `feat(payments): activate ${slug} payment rails`,
+      branch,
+      pr: { title, body },
+    });
+    await this.updatePrBody(octokit, owner, repo, result.prNumber, title, body);
+    return { status: "pr_opened", ...result };
+  }
+
   async packageImageTagExists(
     input: PackageImageTagExistsInput
   ): Promise<boolean> {
@@ -2100,6 +2233,50 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
     }
   }
 
+  private async findOpenPrForBranch(
+    octokit: Octokit,
+    owner: string,
+    repo: string,
+    input: {
+      readonly branch: string;
+      readonly title?: string;
+    }
+  ): Promise<OpenNodeAppPrResult | null> {
+    const { data: existing } = await octokit.request(
+      "GET /repos/{owner}/{repo}/pulls",
+      {
+        owner,
+        repo,
+        state: "open",
+        head: `${owner}:${input.branch}`,
+        per_page: 1,
+      }
+    );
+    const pr = (existing as GitHubPullRequestSummary[])[0];
+    if (pr) return { prNumber: pr.number, prUrl: pr.html_url };
+
+    const { data: openPrs } = await octokit.request(
+      "GET /repos/{owner}/{repo}/pulls",
+      { owner, repo, state: "open", per_page: 100 }
+    );
+    const expectedRepo = `${owner}/${repo}`.toLowerCase();
+    const fallback = (openPrs as GitHubPullRequestSummary[]).find(
+      (candidate) => {
+        const headRepo = candidate.head?.repo?.full_name?.toLowerCase();
+        const branchMatches = candidate.head?.ref === input.branch;
+        const sameRepoOrUnknown =
+          headRepo === undefined || headRepo === expectedRepo;
+        return (
+          (branchMatches && sameRepoOrUnknown) ||
+          (input.title !== undefined && candidate.title === input.title)
+        );
+      }
+    );
+    return fallback
+      ? { prNumber: fallback.number, prUrl: fallback.html_url }
+      : null;
+  }
+
   /**
    * Copy the monorepo's `main` branch-protection VERBATIM onto the new node repo.
    * PROTECTION_HAS_ONE_SSOT: the node inherits the EXACT required-status-check set
@@ -2354,17 +2531,16 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
     } catch (err) {
       const status = (err as { status?: number })?.status;
       if (status !== 422) throw err;
-      const { data: existing } = await octokit.request(
-        "GET /repos/{owner}/{repo}/pulls",
-        { owner, repo, state: "open", head: `${owner}:${branch}`, per_page: 1 }
-      );
-      const pr = existing[0];
+      const pr = await this.findOpenPrForBranch(octokit, owner, repo, {
+        branch,
+        title,
+      });
       if (!pr) {
         throw new Error(
           `Failed to open node-app PR and no open PR found for head ${branch}`
         );
       }
-      return { prNumber: pr.number, prUrl: pr.html_url };
+      return pr;
     }
   }
 

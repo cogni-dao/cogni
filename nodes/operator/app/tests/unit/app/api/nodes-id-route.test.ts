@@ -92,8 +92,6 @@ describe("PATCH /api/v1/nodes/[id]", () => {
 
   it.each([
     ["published", "wallet_provisioned", "wallet_ready"],
-    ["wallet_ready", "payments_configured", "payments_ready"],
-    ["payments_ready", "activation_published", "active"],
   ] as const)("accepts %s + %s and advances to %s", async (currentStatus, eventType, nextStatus) => {
     if (dbState.current) dbState.current.status = currentStatus;
 
@@ -105,5 +103,19 @@ describe("PATCH /api/v1/nodes/[id]", () => {
     expect(response.status).toBe(200);
     expect(dbState.patch?.status).toBe(nextStatus);
     expect(body.node.status).toBe(nextStatus);
+  });
+
+  it.each([
+    "payments_configured",
+    "activation_published",
+  ] as const)("rejects browser-declared %s readiness events", async (eventType) => {
+    if (dbState.current) dbState.current.status = "wallet_ready";
+
+    const response = await PATCH(patchRequest(eventType), {
+      params: Promise.resolve({ id: "node-1" }),
+    });
+
+    expect(response.status).toBe(400);
+    expect(dbState.patch).toBeUndefined();
   });
 });

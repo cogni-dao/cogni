@@ -3,135 +3,72 @@ id: task.5083.handoff
 type: handoff
 work_item_id: task.5083
 status: active
-created: 2026-05-30
-updated: 2026-05-30
-branch: derekg1729/operator-node-registry-v0
-last_commit: d88c4d721
-pr: 1381
+created: 2026-06-24
+updated: 2026-06-24
+branch: derekg1729/payments-pricing-repospec-seam
+last_commit: adc2f8ff5b
+pr: 1823
 ---
 
-# Handoff: Operator node-registry v0 — finish E2E wizard
+# Handoff: Payment activation after repo-spec economics guard
 
-## Read First
+## Mission
 
-- User explicitly paused flighting after `d88c4d721`. Do **not** dispatch candidate flight until Derek resumes.
-- PR #1381 head is `d88c4d721 fix(operator): align node setup wizard flow`.
-- GitHub Actions are green except external `SonarCloud Code Analysis`, which Derek said to ignore for now. The in-repo `sonar` Actions job passed.
-- Legacy `/setup/dao` and `/setup/dao/payments` routes must stay as-is in this PR. Any cleanup of those old surfaces belongs in a later isolated PR.
+Pickup: take over the payment activation path after PR #1823. Own the post-merge work that turns repo-spec at-cost economics into a live, guarded payment rail: deploy the matching Split, update the repo-spec receiving address, prove the guard fails closed before activation and passes after activation, then validate one real prod payment.
 
-## Correct Knowledge Block
+## Goal
 
-```text
-v3 PRD corrects v2 errors: SoT is .cogni/repo-spec.yaml (not infra/catalog), Dolthub restored as first-class node attribute, columns aligned to identity-model.md primitives, two-PR publish, published/active split, and v0 monorepo nodes may use operator-custodial wallet provisioning only as an explicit design exception/blocker, not by accident (task.5083)
-contrib-derek-claude-curitiba-85a9d305
-```
+- All nodes, including fresh node spawns, default to repo-spec-defined payment economics: `markup_factor: 1.10803324099723` and `revenue_share: 0`.
+- Live payment intent creation must be guarded against Split/config mismatch. A wrong, missing, unreadable, or wrong-chain Split returns 503 before transfer params are shown.
+- Activation deploys a 95/5 Split and writes the resulting Split address into `payments_in.credits_topup.receiving_address`.
+- E2E validation signal: candidate-a serves the merged SHA/ref, `/api/v1/payments/intents` returns 503 `SPLIT_CONFIG_MISMATCH` before the repo-spec pointer matches the live Split, then succeeds after activation updates the pointer. Prod proof requires one small real USDC purchase showing system bonus `0`, provider top-up about `95%`, and DAO margin about `5%`.
 
-Follow-up task requested by Derek: add Dolthub address to node attributes + repo-spec, and create a new Dolthub in the wizard.
+## Start By Reading
 
-## End Goal
+- PR #1823: https://github.com/cogni-dao/cogni/pull/1823
+- `docs/guides/payments-setup.md`
+- `docs/guides/operator-wallet-setup.md`
+- `docs/guides/node-formation-guide.md`
+- `docs/spec/node-formation.md`
+- `docs/spec/operator-wallet.md`
+- `docs/spec/web3-openrouter-payments.md`
+- `.cogni/repo-spec.yaml`
+- `nodes/operator/.cogni/repo-spec.yaml`
+- `nodes/operator/app/src/ports/payment-rail-guard.port.ts`
+- `nodes/operator/app/src/adapters/server/payments/split-payment-rail-guard.adapter.ts`
+- `nodes/operator/app/src/app/(app)/nodes/payments/PaymentActivationPage.client.tsx`
+- `nodes/operator/app/src/features/payments/services/paymentService.ts`
+- `.agents/skills/node-sync-prs/SKILL.md`
 
-One E2E-testable node setup wizard for v0 monorepo-internal nodes:
+## Current State
 
-1. Register node identity.
-2. Form DAO with founder wallet signatures.
-3. Publish initial `.cogni/repo-spec.yaml` PR with governance and `payments.status: pending_activation`.
-4. Provision/confirm operator wallet.
-5. Configure payments.
-6. Publish activation/update PR and reach `active`.
+- #1823 is open, mergeable, and merge queued per Derek. Head SHA: `adc2f8ff5b09fef024523590f796b47b479bab63`.
+- #1823 CI is green at that head: PR review, title, static, unit, component, single-node-scope, and sonar-disabled passed; PR Build jobs are skipped as expected.
+- #1823 PR body is accurate. It states the activation requirement and the prod payment validation requirement.
+- The old bad economics were corrected. `markup_factor: 2.0` plus `revenue_share: 0` would have implied about 52.63% provider top-up and a silent mismatch. The new default is `1 / (0.95 * 0.95) = 1.10803324099723`, targeting 95% provider top-up with the current 5% provider fee.
+- #1823 does not deploy the new Split and does not make payments live by itself. It makes the config and live guard correct, then fails closed until activation updates the Split pointer.
+- Existing candidate/preview payment testing may still be limited by `bug.5087`: no fully funded operator wallet/outbound settlement path. Do not claim payment behavior is fully validated from startup or `/readyz` proof.
+- The repo no longer has `work/items/`; canonical work item state lives in prod Doltgres, so this handoff link was not appended to a local work item file.
 
-The user-facing flow should be canonical under `/setup/nodes` and `/setup/nodes/:id`. The older `/setup/dao` pages remain pre-existing legacy surfaces, but do not make them the main node-registry wizard.
+## Design / Implementation Target
 
-## Current Code State
+1. Keep repo-spec as the source of truth for `payments_in.credits_topup.markup_factor`, `revenue_share`, `receiving_address`, and chain/provider fields.
+2. Keep payment intent creation fail-closed: no transfer params when the configured Split cannot be read or does not match repo-spec economics plus operator wallet plus DAO treasury.
+3. Activation must deploy a 0xSplits V2 Split whose allocations match repo-spec economics: provider/operator side about 95%, DAO treasury about 5%, distribution incentive 0.
+4. Activation must update both relevant repo-spec paths through the normal PR/activation flow, especially `payments_in.credits_topup.receiving_address`.
+5. Fresh node spawn defaults must receive the same economics, not an env-only override.
+6. Do not use startup health as money-rail proof. The proof is live payment-intent guard behavior plus one real prod payment after activation.
+7. After #1823 merges, propagate the merged standard to `Cogni-DAO/node-template` and active spawned node repos that carry copied repo-spec/package/payment activation code.
 
-Implemented and pushed:
+## Next Actions / Risks
 
-- Node identity UI now leads with node slug, `node_id`, `scope default`, and target path. Repo URL is no longer the primary human identifier.
-- Duplicate slug creation now returns `409` instead of silently reopening an old row. This fixed the confusing “active without signing” path when a reused slug landed on an old node.
-- State machine restored to the five-stage workflow shape plus terminal `active`:
-  - `dao_pending -> dao_formed -> published -> wallet_ready -> payments_ready -> active`
-  - Events: `dao_verified`, `spec_published`, `wallet_provisioned`, `payments_configured`, `activation_published`, `fail`
-- `published` was added as a distinct DB status via migration `0030_nodes_published_status.sql`.
-- Publish route now advances `dao_formed -> published`, not `dao_formed -> active`.
-- Node detail page embeds the DAO formation panel on `/setup/nodes/:id` for `dao_pending`.
-- Node detail page shows the wallet stage as an explicit blocker after `published`.
-- Legacy `/setup/dao` and `/setup/dao/payments` were restored from the pre-cleanup state and should not be touched in this PR unless absolutely necessary.
-
-Local checks passed before push:
-
-- `pnpm typecheck` in `nodes/operator/app`
-- `pnpm lint` in `nodes/operator/app`
-- `pnpm test tests/unit/features/nodes/state-machine.test.ts tests/unit/features/nodes/repo-spec-builder.test.ts`
-- pre-push `scripts/check-fast.sh`
-
-Remote checks after push:
-
-- `build (operator)`, `static`, `unit`, `component`, `manifest`, CodeQL, title, single-node-scope all passed.
-- External SonarCloud failed on quality gate/coverage; Derek said to ignore Sonar for now.
-
-## Known Design Tension
-
-`docs/spec/node-formation.md` still says formation is governance-only and child-owned wallet activation lives outside the shared operator. Derek clarified that for **v0 monorepo-internal nodes**, operator custody of wallet provisioning may be acceptable.
-
-Do not silently reintroduce the deleted wallet provisioning path as if the old architecture were fine. Treat it as a conscious v0 design exception:
-
-- shared operator may provision wallet for monorepo-internal nodes only if the decision is explicit;
-- custody/blast-radius/fork-away tradeoff must be reflected in spec/PRD or at least the PR description;
-- UI should make wallet provisioning the blocker until that decision is implemented cleanly.
-
-## Next Dev Todo
-
-1. Re-open PR #1381 and inspect the current diff from `origin/main`, not old handoffs.
-2. Re-read:
-   - `docs/spec/identity-model.md`
-   - `docs/spec/node-formation.md`
-   - this handoff
-   - current `features/nodes/state-machine.ts`
-3. Decide the v0 wallet path with Derek:
-   - Option A: implement operator-custodial wallet provisioning only for monorepo-internal nodes.
-   - Option B: keep wallet step as explicit blocker and publish PR with wizard working through DAO + publish.
-4. If implementing wallet provisioning:
-   - recover/rebuild the deleted wallet route/capability from older branch history only after updating the design contract;
-   - transition `published -> wallet_ready`;
-   - write `operator_wallet.address` into the node row and the activation repo-spec path;
-   - do not use broad external-node custody.
-5. Implement payments stage:
-   - `wallet_ready -> payments_ready` after split/payment config is proven;
-   - preserve existing payment activation code where possible;
-   - do not mark `payments.status: active` without proof.
-6. Implement final activation publish:
-   - two-PR model: initial governance repo-spec PR, then activation/update PR;
-   - `payments_ready -> active` only after activation PR is opened or merged, per final decision.
-7. Add Dolthub follow-up if in scope:
-   - node attribute;
-   - repo-spec field;
-   - wizard creation step.
-8. Run local checks, push, wait for CI.
-9. Only after Derek resumes: dispatch `Candidate Flight` for PR #1381 at the then-current head SHA.
-10. Validate E2E on candidate:
-    - register a fresh unique slug;
-    - form DAO with actual wallet signatures;
-    - publish initial PR;
-    - observe wallet blocker or wallet provisioning;
-    - continue payments if implemented;
-    - confirm Loki evidence for own requests.
-
-## Files To Inspect
-
-- `nodes/operator/app/src/features/nodes/state-machine.ts`
-- `nodes/operator/app/src/shared/db/nodes.ts`
-- `nodes/operator/app/src/app/(app)/setup/nodes/page.tsx`
-- `nodes/operator/app/src/app/(app)/setup/nodes/[id]/page.tsx`
-- `nodes/operator/app/src/app/(app)/setup/nodes/[id]/NodeActionPanel.client.tsx`
-- `nodes/operator/app/src/app/(app)/setup/nodes/[id]/NodeDaoFormationPanel.client.tsx`
-- `nodes/operator/app/src/app/api/v1/nodes/route.ts`
-- `nodes/operator/app/src/app/api/v1/nodes/[id]/route.ts`
-- `nodes/operator/app/src/app/api/v1/nodes/[id]/publish/route.ts`
-- `nodes/operator/app/src/features/nodes/repo-spec-builder.ts`
-- `nodes/operator/app/src/adapters/server/db/migrations/0030_nodes_published_status.sql`
-
-## Important Caveats
-
-- Authed UI E2E needs Derek’s browser or captured `.local-auth/candidate-a-operator.storageState.json`; currently only `candidate-a-poly.storageState.json` was present during this session.
-- Candidate-a was previously flighted successfully at older head `1d36f7f1...`; that is obsolete after `d88c4d721`.
-- PR #1390 was opened during manual testing for slug `hi`; it came from a reused/old node row. Do not use that as clean E2E evidence.
-- Do not rename the branch.
+- [ ] Confirm #1823 has merged to `main`; record the merge SHA.
+- [ ] Flight the merged SHA to candidate-a and verify candidate `/version` reports the expected SHA/ref.
+- [ ] Exercise payment intent creation before Split activation; expect 503 `SPLIT_CONFIG_MISMATCH` or a specific fail-closed payment-rail code, not transfer params.
+- [ ] Use `/nodes/payments` or the equivalent activation path to deploy the 95/5 Split on Base using the operator wallet and DAO treasury.
+- [ ] Update `.cogni/repo-spec.yaml` and `nodes/operator/.cogni/repo-spec.yaml` to point `payments_in.credits_topup.receiving_address` at the new Split address.
+- [ ] Reflight and recheck payment intent creation; a matching Split should pass the guard.
+- [ ] Promote only after the guard proof is clean, then run one small real USDC prod purchase and verify logs/ledger/top-up economics.
+- [ ] Use the `node-sync-prs` skill to port the merged standard to node-template first, then relevant spawned nodes.
+- [ ] Open a docs follow-up for stale old-economics text in `docs/spec/operator-wallet.md`, `docs/spec/web3-openrouter-payments.md`, and `work/projects/proj.ai-operator-wallet.md`.
+- Risk: candidate may prove the guard but still not fully prove outbound settlement if wallet/funding credentials are absent. Prod real-payment validation is the final money-loop proof.

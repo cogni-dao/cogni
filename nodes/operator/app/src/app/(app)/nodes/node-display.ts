@@ -44,14 +44,16 @@ export const NODE_STATUS_DISPLAY: Record<NodeStatus, StatusDisplay> = {
     description: "Operator wallet is ready. Configure payments next.",
   },
   payments_ready: {
-    label: "Payments ready",
+    label: "Activating payments",
     intent: "secondary",
-    description: "Payments configured. Open the activation PR to go live.",
+    description:
+      "Payment Split is deployed; repo-spec and production deploy still need verification.",
   },
   active: {
-    label: "Active",
+    label: "Payments ready",
     intent: "default",
-    description: "This node is live.",
+    description:
+      "Repo-spec is live on main and the production build is promoted.",
   },
   failed: {
     label: "Failed",

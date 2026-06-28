@@ -17,7 +17,6 @@ export type NodeEvent =
   | { type: "dao_verified" }
   | { type: "spec_published" }
   | { type: "wallet_provisioned" }
-  | { type: "payments_configured" }
   | { type: "activation_published" }
   | { type: "fail"; reason: string };
 
@@ -32,7 +31,7 @@ const TRANSITIONS: Record<
   dao_pending: { dao_verified: "dao_formed", fail: "failed" },
   dao_formed: { spec_published: "published", fail: "failed" },
   published: { wallet_provisioned: "wallet_ready", fail: "failed" },
-  wallet_ready: { payments_configured: "payments_ready", fail: "failed" },
+  wallet_ready: { activation_published: "active", fail: "failed" },
   payments_ready: { activation_published: "active", fail: "failed" },
   active: {},
   failed: {},
@@ -78,7 +77,6 @@ export function progressIndexForStatus(status: NodeStatus): number {
     case "published":
       return 3;
     case "wallet_ready":
-      return 4;
     case "payments_ready":
       return 4;
     case "active":

@@ -76,12 +76,19 @@ export default async function NodeDashboardPage({
 
   const status = node.status as NodeStatus;
   const display = NODE_STATUS_DISPLAY[status];
+  const statusLabel =
+    node.splitAddress && status !== "active"
+      ? "Activating payments"
+      : display.label;
   const env = serverEnv();
   const nodeRepoUrl = nodeRepoUrlForSlug({
     slug: node.slug,
     mintOwner: env.NODE_MINT_OWNER,
     publishPrUrl: node.publishPrUrl,
   });
+  const repoSpecUrl = nodeRepoUrl
+    ? `${nodeRepoUrl.replace(/\/$/, "")}/blob/main/.cogni/repo-spec.yaml`
+    : null;
   const knowledgeRemote = env.DOLTHUB_OWNER
     ? buildNodeKnowledgeRemote(node.slug, env.DOLTHUB_OWNER)
     : null;
@@ -93,9 +100,15 @@ export default async function NodeDashboardPage({
       ? getDaoUrl(node.chainId, node.daoAddress)
       : null;
 
-  // Owner-only Developers section, mounted once the node is handed off to an AI dev. Ownership is
-  // already proven by the scoped node read above, so the service-role request read is safe.
-  const showDevelopers = status === "published" || status === "active";
+  // Owner-only developer/deploy dashboard, mounted once the node is handed off to an AI dev.
+  // Wallet/payments statuses are still handoff/dashboard states; payments activation is an action,
+  // not a replacement for the RBAC approval and environment visibility surface.
+  const showDevelopers = [
+    "published",
+    "wallet_ready",
+    "payments_ready",
+    "active",
+  ].includes(status);
   const accessRequests = showDevelopers
     ? await listAccessRequests(resolveServiceDb(), node.id)
     : [];
@@ -127,7 +140,7 @@ export default async function NodeDashboardPage({
       </Link>
 
       <NodeWizard
-        statusLabel={display.label}
+        statusLabel={statusLabel}
         node={{
           id: node.id,
           slug: node.slug,
@@ -141,6 +154,7 @@ export default async function NodeDashboardPage({
           nodeRepoUrl,
           knowledgeRepoUrl,
           daoUrl,
+          repoSpecUrl,
         }}
       />
 
