@@ -61,6 +61,9 @@ patches:
       name: node-app
     patch: |
       - op: replace
+        path: /spec/replicas
+        value: 0
+      - op: replace
         path: /spec/template/spec/containers/0/envFrom/1/secretRef/name
         value: "oss-env-secrets"
       - op: replace
