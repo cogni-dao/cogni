@@ -7,15 +7,12 @@
 #      catalog (the drift gate that makes a stale migrate path fail CI before flight).
 #   2. The renderer is byte-exact to the operator mint path (gens/overlay.ts): a
 #      node minted from current main reproduces verbatim.
-#   3. poly's catalog opts out of the template Doltgres initContainer, and the
-#      renderer removes it instead of re-adding stale node-at-root Doltgres paths.
-#   4. The node-template template overlay carries the node-at-root image layout
+#   3. The node-template template overlay carries the node-at-root image layout
 #      (/app/app) and the ESO secret target (<slug>-env-secrets) directly; the
 #      renderer only slug/port-renames it (no path/secret rewrite).
-#   5. FALSIFYING GATE: a hand-staled overlay (monorepo migrate path or poly's
-#      stale extra Doltgres initContainer) makes --check
+#   4. FALSIFYING GATE: a hand-staled overlay (monorepo migrate path) makes --check
 #      red. Without this, the gate could be a no-op.
-#   6. Fail-closed: a node-template overlay missing the node-at-root migrate command
+#   5. Fail-closed: a node-template overlay missing the node-at-root migrate command
 #      aborts the render instead of emitting a silently-crash-looping overlay.
 #
 # Run: bash scripts/ci/tests/render-node-overlays.test.sh
@@ -48,29 +45,17 @@ stash() {
   BACKUPS+=("$path::$bak")
 }
 
-echo "[1/6] committed wizard overlays ↔ node-template + catalog drift gate"
+echo "[1/5] committed wizard overlays ↔ node-template + catalog drift gate"
 bash "$RENDER" --check >/dev/null \
   || fail "$RENDER --check: a committed wizard overlay is stale (run: pnpm gen:node-overlays)"
 pass "all wizard-born overlays match the renderer"
 
-echo "[2/6] renderer is byte-exact to the committed mint output"
+echo "[2/5] renderer is byte-exact to the committed mint output"
 diff <(bash "$RENDER" candidate-a oss) infra/k8s/overlays/candidate-a/oss/kustomization.yaml >/dev/null \
   || fail "render candidate-a oss != committed overlay (renderer drifted from gens/overlay.ts)"
 pass "candidate-a/oss render is byte-identical to committed"
 
-echo "[3/6] poly catalog opt-out strips the stale Doltgres initContainer"
-OUT="$(bash "$RENDER" candidate-a poly)"
-diff <(printf '%s\n' "$OUT") infra/k8s/overlays/candidate-a/poly/kustomization.yaml >/dev/null \
-  || fail "render candidate-a poly != committed overlay (poly catalog opt-out drifted)"
-grep -q 'exec node /app/app/migrate.mjs /app/app/migrations' <<<"$OUT" \
-  || fail "poly render missing the node-at-root Postgres migrate override"
-grep -q 'migrate-doltgres' <<<"$OUT" \
-  && fail "poly render still carries the stale extra Doltgres initContainer"
-grep -q '/app/nodes/$(NODE_NAME)/app' <<<"$OUT" \
-  && fail "poly render still carries a monorepo /app/nodes/<slug>/app migrate path"
-pass "poly render is catalog-opted-out of Doltgres and keeps the Postgres node-at-root path"
-
-echo "[4/6] render targets node-at-root layout + ESO secret"
+echo "[3/5] render targets node-at-root layout + ESO secret"
 OUT="$(bash "$RENDER" candidate-a oss)"
 grep -q 'exec node /app/app/migrate.mjs /app/app/migrations' <<<"$OUT" \
   || fail "oss render missing the node-at-root Postgres migrate override"
@@ -84,7 +69,7 @@ grep -q 'oss-node-app-secrets' <<<"$OUT" \
   && fail "oss render still references the legacy oss-node-app-secrets target"
 pass "oss render is node-at-root + ESO-targeted"
 
-echo "[5/6] FALSIFYING: a hand-staled overlay turns --check red"
+echo "[4/5] FALSIFYING: a hand-staled overlay turns --check red"
 STALE="infra/k8s/overlays/candidate-a/oss/kustomization.yaml"
 stash "$STALE"
 # Revert the migrate runner to the monorepo path the stale operator shipped.
@@ -95,16 +80,7 @@ fi
 pass "--check correctly fails on a staled migrate path"
 restore; BACKUPS=()
 
-STALE="infra/k8s/overlays/candidate-a/poly/kustomization.yaml"
-stash "$STALE"
-perl -0pi -e 's{(\n  # bug\.0295: VM discovery)}{\n  - target:\n      kind: Deployment\n      name: node-app\n    patch: |\n      - op: add\n        path: /spec/template/spec/initContainers/-\n        value:\n          name: migrate-doltgres\n$1}' "$STALE"
-if bash "$RENDER" --check >/dev/null 2>&1; then
-  fail "--check passed with poly's stale extra Doltgres initContainer"
-fi
-pass "--check correctly fails when poly carries the stale extra Doltgres initContainer"
-restore; BACKUPS=()
-
-echo "[6/6] fail-closed: a template missing the node-at-root migrate command aborts the render"
+echo "[5/5] fail-closed: a template missing the node-at-root migrate command aborts the render"
 TPL="infra/k8s/overlays/candidate-a/node-template/kustomization.yaml"
 stash "$TPL"
 # Drop the node-at-root Postgres migrate override op (the guard's anchor).

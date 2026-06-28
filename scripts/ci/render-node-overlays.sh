@@ -16,16 +16,13 @@
 #
 # The node-template template overlay is itself node-at-root (/app/app migrate paths) and
 #   carries the ESO `<slug>-env-secrets` target directly — so rendering a child is a pure
-#   slug + port rename, with no path or secret rewrite. Nodes may opt out of the template
-#   Doltgres initContainer with catalog `doltgres_migrator: false`. node-template thus
-#   deploys with the exact default shape it hands to every spawn (no split-brain
-#   template-vs-deployable).
+#   slug + port rename, with no path or secret rewrite. node-template thus deploys with the
+#   exact shape it hands to every spawn (no split-brain template-vs-deployable).
 #
 # Byte-exact twins: gens/overlay.ts `renderOverlay` (operator mint path) and
 #   scaffold-node.sh step 5 (manual CLI) MUST emit identical output — all three consume the
 #   same node-template overlay and apply only the slug rename + the two well-known port
-#   literals (30200→node_port, 3200→port), plus the catalog Doltgres opt-out. Drift between
-#   the twins fails CI, not a pod.
+#   literals (30200→node_port, 3200→port). Drift between the twins fails CI, not a pod.
 #
 # Node set: catalog rows that declare a `source_repo` (externally built, node-at-root
 #   image layout) EXCEPT node-template itself (the template). Monorepo nodes
@@ -61,22 +58,6 @@ wizard_nodes() {
 }
 
 node_field() { yq -r ".$2 // \"\"" "$CATALOG_DIR/$1.yaml"; }
-node_doltgres_migrator_enabled() {
-  local v
-  if [ "$(yq -r 'has("doltgres_migrator")' "$CATALOG_DIR/$1.yaml")" = "true" ]; then
-    v="$(yq -r '.doltgres_migrator' "$CATALOG_DIR/$1.yaml")"
-  else
-    v=true
-  fi
-  case "$v" in
-    true) return 0 ;;
-    false) return 1 ;;
-    *)
-      echo "[ERROR] $1: catalog doltgres_migrator must be true or false" >&2
-      return 2
-      ;;
-  esac
-}
 
 template_path() { printf '%s/%s/%s/kustomization.yaml\n' "$OVERLAYS_DIR" "$1" "$TEMPLATE_SLUG"; }
 overlay_path() { printf '%s/%s/%s/kustomization.yaml\n' "$OVERLAYS_DIR" "$1" "$2"; }
@@ -87,39 +68,22 @@ overlay_path() { printf '%s/%s/%s/kustomization.yaml\n' "$OVERLAYS_DIR" "$1" "$2
 # override didn't inject — a node-at-root node whose Postgres migrate still runs the
 # monorepo path crash-loops silently (the exact bug.5008 failure).
 render_one() {
-  local env="$1" node="$2" tpl np port tmp include_doltgres=1
+  local env="$1" node="$2" tpl np port tmp
   tpl="$(template_path "$env")"
   [ -f "$tpl" ] || { echo "[ERROR] missing template overlay $tpl" >&2; return 1; }
   np="$(node_field "$node" node_port)"
   port="$(node_field "$node" port)"
   [ -n "$np" ] && [ -n "$port" ] \
     || { echo "[ERROR] $node: catalog has no node_port/port" >&2; return 1; }
-  if ! node_doltgres_migrator_enabled "$node"; then
-    include_doltgres=0
-  fi
   tmp="$(mktemp)"
-  SLUG="$node" NODEPORT="$np" PORT="$port" INCLUDE_DOLTGRES="$include_doltgres" perl -0777 -pe '
+  SLUG="$node" NODEPORT="$np" PORT="$port" perl -0777 -pe '
     s/node-template/$ENV{SLUG}/g;
     s/\b30200\b/$ENV{NODEPORT}/g;
     s/\b3200\b/$ENV{PORT}/g;
-    if ($ENV{INCLUDE_DOLTGRES} eq "0") {
-      s/\n  # task\.5077:[^\n]*\n(?:  # [^\n]*\n)*  - target:\n      kind: Deployment\n      name: node-app\n    patch: \|\n[\s\S]*?(?=\n  (?:#|- target:))//s;
-    }
   ' "$tpl" > "$tmp"
   if ! grep -q 'exec node /app/app/migrate.mjs /app/app/migrations' "$tmp"; then
     rm -f "$tmp"
     echo "[ERROR] $env/$node: node-at-root migrate path missing (NODE_AT_ROOT_MIGRATE_PATH); the node-template template overlay must carry /app/app migrate commands." >&2
-    return 1
-  fi
-  if [ "$include_doltgres" -eq 1 ] \
-    && ! grep -q 'exec node /app/app/migrate-doltgres.mjs /app/app/doltgres-migrations' "$tmp"; then
-    rm -f "$tmp"
-    echo "[ERROR] $env/$node: catalog enables doltgres_migrator but the node-template Doltgres initContainer is missing." >&2
-    return 1
-  fi
-  if [ "$include_doltgres" -eq 0 ] && grep -q 'migrate-doltgres' "$tmp"; then
-    rm -f "$tmp"
-    echo "[ERROR] $env/$node: catalog disables doltgres_migrator but the rendered overlay still contains migrate-doltgres." >&2
     return 1
   fi
   cat "$tmp"

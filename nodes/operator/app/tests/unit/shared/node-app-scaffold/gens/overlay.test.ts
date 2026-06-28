@@ -25,27 +25,14 @@ patches:
       - op: replace
         path: /spec/template/spec/containers/0/ports/0/containerPort
         value: 3200
-
-  # task.5077: Doltgres knowledge-plane migrator runs as a second initContainer
-  # on the node-template Deployment. DATABASE_URL maps to DOLTGRES_URL (separate
-  # from the Postgres DATABASE_URL the main container + first initContainer use).
-  # Mirrors operator's pattern verbatim.
-  - target:
-      kind: Deployment
-      name: node-app
-    patch: |
       - op: add
         path: /spec/template/spec/initContainers/-
         value:
           name: migrate-doltgres
-          image: ghcr.io/cogni-dao/cogni-template:placeholder
           command:
             - /bin/sh
             - -c
             - exec node /app/app/migrate-doltgres.mjs /app/app/doltgres-migrations
-          envFrom:
-            - configMapRef:
-                name: node-template-node-app-config
           env:
             - name: DATABASE_URL
               valueFrom:
@@ -95,18 +82,6 @@ describe("renderOverlay", () => {
     expect(out).not.toContain("/app/nodes/");
   });
 
-  it("honors the catalog Doltgres migrator opt-out", () => {
-    const out = renderOverlay(TEMPLATE, "poly", 31600, 3200, {
-      includeDoltgresMigrator: false,
-    });
-
-    expect(out).toContain(
-      "value: exec node /app/app/migrate.mjs /app/app/migrations"
-    );
-    expect(out).not.toContain("migrate-doltgres");
-    expect(out).not.toContain("/app/nodes/");
-  });
-
   it("fails closed when the node-at-root migrate command is absent", () => {
     const noMigrate = `namePrefix: node-template-
 patches:
@@ -121,19 +96,5 @@ patches:
     expect(() => renderOverlay(noMigrate, "coulditbe", 30500, 3500)).toThrow(
       /NODE_AT_ROOT_MIGRATE_PATH/
     );
-  });
-
-  it("fails closed when the default Doltgres migrator command is absent", () => {
-    expect(() =>
-      renderOverlay(
-        TEMPLATE.replace(
-          "exec node /app/app/migrate-doltgres.mjs /app/app/doltgres-migrations",
-          "exec node /app/nodes/$(NODE_NAME)/app/migrate-doltgres.mjs /app/nodes/$(NODE_NAME)/app/doltgres-migrations"
-        ),
-        "coulditbe",
-        30500,
-        3500
-      )
-    ).toThrow(/DOLTGRES_MIGRATOR/);
   });
 });
