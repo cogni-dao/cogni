@@ -54,10 +54,31 @@ hash_file() {
 # Split the compose invocation into an argv array so quoting is correct.
 read -r -a EDGE_COMPOSE <<<"$EDGE_COMPOSE_BIN"
 
+wait_for_caddy_admin() {
+  local attempts="${CADDY_ADMIN_WAIT_ATTEMPTS:-30}"
+  local sleep_seconds="${CADDY_ADMIN_WAIT_SLEEP_SECONDS:-2}"
+  local attempt
+
+  log_info "Waiting for Caddy admin API..."
+  for attempt in $(seq 1 "$attempts"); do
+    if "${EDGE_COMPOSE[@]}" exec -T caddy wget -qO- http://127.0.0.1:2019/config/ >/dev/null 2>&1; then
+      log_info "Caddy admin API is ready"
+      return 0
+    fi
+    if [[ "$attempt" -lt "$attempts" ]]; then
+      sleep "$sleep_seconds"
+    fi
+  done
+
+  log_warn "Caddy admin API did not become ready after ${attempts} attempts; config hash NOT persisted"
+  return 1
+}
+
 log_info "Ensuring edge stack (Caddy) is running..."
 if ! "${EDGE_COMPOSE[@]}" ps -q caddy 2>/dev/null | grep -q .; then
   log_info "Starting edge stack..."
   "${EDGE_COMPOSE[@]}" up -d
+  wait_for_caddy_admin
 else
   log_info "Edge stack already running"
 
@@ -87,6 +108,7 @@ else
     log_info "Edge stack config changed (caddyfile=${caddyfile_changed} env=${edge_env_changed}), recreating Caddy..."
     "${EDGE_COMPOSE[@]}" up -d --force-recreate caddy
     log_info "Caddy recreated; new env_file values + Caddyfile loaded"
+    wait_for_caddy_admin
 
     # Re-sync the on-disk Caddyfile into the running config, THEN verify, THEN
     # persist the hash. The force-recreate above loads the frozen env (the new
