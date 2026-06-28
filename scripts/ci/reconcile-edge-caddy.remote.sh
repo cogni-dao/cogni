@@ -128,12 +128,10 @@ else
     # flight surfaces the failure instead of silently half-deploying.
     # (task.5078 edge-routing; healed by hand on candidate-a 2026-06-16 — a reload
     # took beacon-test from external 000 → 200 with no other change.)
-    # `caddy reload` validates + atomically swaps the running config; rc 0 means
-    # the new on-disk Caddyfile (incl. the new node's site block) is now live. It
-    # is the reliable gate — persist the hash ONLY on its success. (A per-node
-    # admin-API verify-and-heal — reusing assert-target-substrate.sh's :2019 probe
-    # — is the stronger follow-up; left out here to keep this a minimal bug-fix and
-    # avoid a hard dependency on a probe tool inside the caddy image.)
+    # `wait_for_caddy_admin` gates reload on the admin endpoint becoming ready;
+    # `caddy reload` then validates + atomically swaps the running config. rc 0
+    # means the new on-disk Caddyfile (incl. the new node's site block) is now
+    # live. Persist the hash ONLY on that success.
     if ! "${EDGE_COMPOSE[@]}" exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile; then
       log_warn "caddy reload FAILED — config hash NOT persisted; next reconcile will retry"
       exit 1
