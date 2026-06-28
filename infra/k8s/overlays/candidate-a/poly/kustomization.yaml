@@ -79,39 +79,6 @@ patches:
         path: /spec/template/metadata/labels/app.kubernetes.io~1instance
         value: "poly"
 
-  # task.5077: Doltgres knowledge-plane migrator runs as a second initContainer
-  # on the poly Deployment. DATABASE_URL maps to DOLTGRES_URL (separate
-  # from the Postgres DATABASE_URL the main container + first initContainer use).
-  # Mirrors operator's pattern verbatim.
-  - target:
-      kind: Deployment
-      name: node-app
-    patch: |
-      - op: add
-        path: /spec/template/spec/initContainers/-
-        value:
-          name: migrate-doltgres
-          image: ghcr.io/cogni-dao/cogni-template:placeholder
-          command:
-            - /bin/sh
-            - -c
-            - exec node /app/app/migrate-doltgres.mjs /app/app/doltgres-migrations
-          envFrom:
-            - configMapRef:
-                name: poly-node-app-config
-          env:
-            - name: DATABASE_URL
-              valueFrom:
-                secretKeyRef:
-                  name: poly-env-secrets
-                  key: DOLTGRES_URL
-          resources:
-            requests:
-              memory: "384Mi"
-              cpu: "200m"
-            limits:
-              memory: "1Gi"
-              cpu: "1000m"
   # bug.0295: VM discovery via DNS (cogni-candidate-a.vm.cognidao.org).
   # Convert base headless Services → ExternalName; delete EndpointSlices.
   - target: { kind: Service, name: postgres-external }
