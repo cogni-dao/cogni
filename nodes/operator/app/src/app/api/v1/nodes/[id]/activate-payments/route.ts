@@ -6,15 +6,16 @@
  * Purpose: Open the payment-activation PR into the NODE'S OWN repo - write `node_wallet.address` +
  *   `payments_in.credits_topup.*` (95/5 at-cost) + `payments.status: active` into that repo's
  *   `.cogni/repo-spec.yaml` via the cogni-operator GitHub App.
- * Scope: Owner-gated. The Split is deployed client-side (wagmi) and its address PATCHed onto the
- *   node row BEFORE this call; this route is the missing write-back path - the wizard previously
- *   only hand-pasted YAML and never committed it to the node's repo (the gap this closes).
+ * Scope: Bearer/session auth + node developer RBAC. The Split is deployed client-side (wagmi) and
+ *   its address PATCHed onto the node row BEFORE this call; this route is the missing write-back
+ *   path - the wizard previously only hand-pasted YAML and never committed it to the node's repo
+ *   (the gap this closes).
  * Invariants:
  *   - GH_APP_INSTALL_REQUIRED, NODE_SOVEREIGNTY (PR only; never force-push to node main).
  *   - SINGLE_HOME: targets the node's OWN repo (`NODE_MINT_OWNER`/slug, built like `publish` - never
  *     `getGithubRepo()` which is hardcoded to the operator monorepo), writes ONLY `.cogni/repo-spec.yaml`.
  *   - WALLET_CUSTODY: operator never holds node keys; this only records addresses.
- *   - OWNER_GATING.
+ *   - DEVELOPER_GATING: `node.flight` on the node authorizes the approved AI developer path.
  *   - IDEMPOTENT: re-running detects an already-active spec (`no_changes`) and returns the existing PR.
  *   - NO_FALSE_READY: opening a PR is not readiness. Status advances only after repo-spec main and
  *     production deployment are verified by a server-side follow-up.
@@ -23,14 +24,13 @@
  * @public
  */
 
-import { withTenantScope } from "@cogni/db-client";
-import { type UserId, userActor } from "@cogni/ids";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
+import { getSessionUser } from "@/app/_lib/auth/session";
+import { resolveNodeAndAuthorize } from "@/app/_lib/node-rbac";
 import { createNodeRepoWriter } from "@/bootstrap/capabilities/node-repo-write";
-import { resolveAppDb } from "@/bootstrap/container";
-import { getServerSessionUser } from "@/lib/auth/server";
+import { resolveServiceDb } from "@/bootstrap/container";
 import { nodes } from "@/shared/db/nodes";
 import { serverEnv } from "@/shared/env";
 
@@ -42,8 +42,8 @@ interface RouteParams {
 }
 
 export async function POST(_request: Request, routeArgs: RouteParams) {
-  const session = await getServerSessionUser();
-  if (!session) {
+  const sessionUser = await getSessionUser();
+  if (!sessionUser) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
@@ -73,17 +73,30 @@ export async function POST(_request: Request, routeArgs: RouteParams) {
     );
   }
 
-  const db = resolveAppDb();
-  const existing = await withTenantScope(
-    db,
-    userActor(session.id as UserId),
-    async (tx) =>
-      tx
-        .select()
-        .from(nodes)
-        .where(and(eq(nodes.id, id), eq(nodes.ownerUserId, session.id)))
-        .limit(1)
-  );
+  const gate = await resolveNodeAndAuthorize({
+    id,
+    userId: sessionUser.id,
+    action: "node.flight",
+  });
+  if (!gate.ok) {
+    const body =
+      gate.errorCode === "node_not_found"
+        ? { error: "not found" }
+        : gate.errorCode === "authz_unavailable"
+          ? {
+              error: "authorization not configured",
+              errorCode: gate.errorCode,
+            }
+          : { error: "not authorized", errorCode: gate.errorCode };
+    return NextResponse.json(body, { status: gate.status });
+  }
+
+  const db = resolveServiceDb();
+  const existing = await db
+    .select()
+    .from(nodes)
+    .where(eq(nodes.id, gate.node.nodeId))
+    .limit(1);
   const node = existing[0];
   if (!node) {
     return NextResponse.json({ error: "not found" }, { status: 404 });
