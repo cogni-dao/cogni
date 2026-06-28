@@ -27,8 +27,9 @@ hash_file() {
   else shasum -a 256 "$1" | awk '{print $1}'; fi
 }
 
-# Fake `docker compose …`: report caddy running, succeed on up/exec reload,
-# and optionally fail the Caddy admin probe a fixed number of times.
+# Fake `docker compose …`: report caddy running by default, succeed on
+# up/exec reload by default, and optionally fail readiness/reload for regression
+# cases.
 FAKE_COMPOSE="$TMPROOT/fake-compose.sh"
 cat > "$FAKE_COMPOSE" <<'EOF'
 #!/usr/bin/env bash
@@ -36,6 +37,9 @@ args="$*"
 log_file="${FAKE_COMPOSE_LOG:?FAKE_COMPOSE_LOG required}"
 case "$args" in
   *" ps "*|*" ps")
+    if [[ "${FAKE_CADDY_RUNNING:-1}" == "0" ]]; then
+      exit 0
+    fi
     echo "fakecaddyid"
     exit 0
     ;;
@@ -53,10 +57,17 @@ case "$args" in
     ;;
   *" exec -T caddy caddy reload "*)
     echo "reload" >> "$log_file"
+    if [[ "${FAKE_RELOAD_FAIL:-0}" == "1" ]]; then
+      exit 1
+    fi
     exit 0
     ;;
   *" up -d --force-recreate caddy"*)
     echo "recreate" >> "$log_file"
+    exit 0
+    ;;
+  *" up -d"*)
+    echo "start" >> "$log_file"
     exit 0
     ;;
 esac
@@ -128,6 +139,107 @@ fi
 
 if ! grep -q '^reload$' "$TMPROOT/fake-compose-delayed.log"; then
   echo "FAIL: caddy reload did not run after delayed admin readiness succeeded" >&2
+  exit 1
+fi
+
+echo "stale-caddy-hash-timeout" > "$HASH_DIR/caddyfile.sha256"
+rm -f "$TMPROOT/admin-count" "$TMPROOT/fake-compose-timeout.log"
+
+set +e
+FAKE_COMPOSE_LOG="$TMPROOT/fake-compose-timeout.log" \
+FAKE_ADMIN_COUNT_FILE="$TMPROOT/admin-count" \
+FAKE_ADMIN_FAILS=99 \
+CADDY_ADMIN_WAIT_ATTEMPTS=3 \
+CADDY_ADMIN_WAIT_SLEEP_SECONDS=0 \
+EDGE_COMPOSE_BIN="$FAKE_COMPOSE compose --project-name cogni-edge" \
+CADDYFILE="$CADDYFILE" \
+EDGE_ENV_FILE="$EDGE_ENV" \
+HASH_DIR="$HASH_DIR" \
+  bash "$SCRIPT_UNDER_TEST" >/dev/null 2>&1
+rc=$?
+set -e
+
+if [[ "$rc" -eq 0 ]]; then
+  echo "FAIL: reconcile-edge-caddy succeeded even though Caddy admin never became ready" >&2
+  exit 1
+fi
+
+if [[ "$(cat "$TMPROOT/admin-count")" -ne 3 ]]; then
+  echo "FAIL: expected admin readiness timeout after 3 attempts; got $(cat "$TMPROOT/admin-count") attempts" >&2
+  exit 1
+fi
+
+if grep -q '^reload$' "$TMPROOT/fake-compose-timeout.log"; then
+  echo "FAIL: caddy reload ran before admin readiness was proven" >&2
+  exit 1
+fi
+
+if [[ "$(cat "$HASH_DIR/caddyfile.sha256")" != "stale-caddy-hash-timeout" ]]; then
+  echo "FAIL: caddyfile hash was persisted despite admin readiness timeout" >&2
+  exit 1
+fi
+
+echo "stale-caddy-hash-bad-config" > "$HASH_DIR/caddyfile.sha256"
+rm -f "$TMPROOT/admin-count" "$TMPROOT/fake-compose-bad-config.log"
+
+set +e
+FAKE_COMPOSE_LOG="$TMPROOT/fake-compose-bad-config.log" \
+FAKE_ADMIN_COUNT_FILE="$TMPROOT/admin-count" \
+FAKE_RELOAD_FAIL=1 \
+CADDY_ADMIN_WAIT_ATTEMPTS=3 \
+CADDY_ADMIN_WAIT_SLEEP_SECONDS=0 \
+EDGE_COMPOSE_BIN="$FAKE_COMPOSE compose --project-name cogni-edge" \
+CADDYFILE="$CADDYFILE" \
+EDGE_ENV_FILE="$EDGE_ENV" \
+HASH_DIR="$HASH_DIR" \
+  bash "$SCRIPT_UNDER_TEST" >/dev/null 2>&1
+rc=$?
+set -e
+
+if [[ "$rc" -eq 0 ]]; then
+  echo "FAIL: reconcile-edge-caddy succeeded even though caddy reload rejected the config" >&2
+  exit 1
+fi
+
+if ! grep -q '^reload$' "$TMPROOT/fake-compose-bad-config.log"; then
+  echo "FAIL: caddy reload was not attempted after admin readiness succeeded" >&2
+  exit 1
+fi
+
+if [[ "$(cat "$HASH_DIR/caddyfile.sha256")" != "stale-caddy-hash-bad-config" ]]; then
+  echo "FAIL: caddyfile hash was persisted despite failed caddy reload" >&2
+  exit 1
+fi
+
+rm -f "$TMPROOT/admin-count" "$TMPROOT/fake-compose-start.log"
+
+set +e
+FAKE_COMPOSE_LOG="$TMPROOT/fake-compose-start.log" \
+FAKE_ADMIN_COUNT_FILE="$TMPROOT/admin-count" \
+FAKE_CADDY_RUNNING=0 \
+FAKE_ADMIN_FAILS=2 \
+CADDY_ADMIN_WAIT_ATTEMPTS=5 \
+CADDY_ADMIN_WAIT_SLEEP_SECONDS=0 \
+EDGE_COMPOSE_BIN="$FAKE_COMPOSE compose --project-name cogni-edge" \
+CADDYFILE="$CADDYFILE" \
+EDGE_ENV_FILE="$EDGE_ENV" \
+HASH_DIR="$HASH_DIR" \
+  bash "$SCRIPT_UNDER_TEST" >/dev/null 2>&1
+rc=$?
+set -e
+
+if [[ "$rc" -ne 0 ]]; then
+  echo "FAIL: reconcile-edge-caddy exited $rc instead of retrying admin readiness after starting edge stack" >&2
+  exit 1
+fi
+
+if ! grep -q '^start$' "$TMPROOT/fake-compose-start.log"; then
+  echo "FAIL: edge stack was not started when caddy was absent" >&2
+  exit 1
+fi
+
+if [[ "$(cat "$TMPROOT/admin-count")" -ne 3 ]]; then
+  echo "FAIL: expected start path to retry admin readiness until third attempt; got $(cat "$TMPROOT/admin-count") attempts" >&2
   exit 1
 fi
 
