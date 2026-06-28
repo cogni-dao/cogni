@@ -49,6 +49,12 @@ vi.mock("@/components", () => ({
   ),
 }));
 
+vi.mock("@/features/nodes/wizard/steps/PaymentActivationStep.client", () => ({
+  PaymentActivationStep: ({ node }: { readonly node: WizardNode }) => (
+    <section>Payments panel for {node.slug}</section>
+  ),
+}));
+
 import { HandoffStep } from "@/features/nodes/wizard/steps/HandoffStep.client";
 import type { WizardNode } from "@/features/nodes/wizard/types";
 
@@ -68,6 +74,9 @@ function makeNode(overrides: Partial<WizardNode> = {}): WizardNode {
       "https://www.dolthub.com/repositories/cogni-dao/knowledge-atlas",
     daoUrl:
       "https://app.aragon.org/dao/base-mainnet/0x1111111111111111111111111111111111111111",
+    repoSpecUrl:
+      "https://github.com/cogni-test-org/atlas/blob/main/.cogni/repo-spec.yaml",
+    paymentActivation: null,
     ...overrides,
   };
 }
@@ -116,6 +125,9 @@ describe("HandoffStep", () => {
         screen.getByRole("link", { name: /Node repo/ })
       )
     ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(
+      screen.getByRole("button", { name: /Continue to payments/ })
+    ).toBeVisible();
   });
 
   it("keeps the launch prompt available when artifact links are missing", () => {
@@ -151,5 +163,34 @@ describe("HandoffStep", () => {
         "launch prompt"
       );
     });
+  });
+
+  it("opens the payments panel from the handoff CTA", () => {
+    render(<HandoffStep node={makeNode()} />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /Continue to payments/ })
+    );
+
+    expect(screen.getByText("Payments panel for atlas")).toBeVisible();
+  });
+
+  it("resumes the payments panel when activation already started", () => {
+    render(
+      <HandoffStep
+        node={makeNode({
+          paymentActivation: {
+            repoSpecActive: false,
+            sourceSha: "abc123",
+            activationPrUrl: "https://github.com/cogni-test-org/atlas/pull/1",
+            activationPrState: "open",
+            productionBuildSha: null,
+            productionMatchesSource: false,
+          },
+        })}
+      />
+    );
+
+    expect(screen.getByText("Payments panel for atlas")).toBeVisible();
   });
 });

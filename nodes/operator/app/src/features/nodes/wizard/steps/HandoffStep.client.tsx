@@ -13,12 +13,14 @@
 
 "use client";
 
-import { ExternalLink } from "lucide-react";
+import { CreditCard, ExternalLink } from "lucide-react";
 import type { ReactElement } from "react";
+import { useState } from "react";
 import { Button } from "@/components";
 import { LaunchPackCopyButton } from "../LaunchPackCopyButton.client";
 import { StepSection } from "../StepSection";
 import type { WizardStepProps } from "../types";
+import { PaymentActivationStep } from "./PaymentActivationStep.client";
 
 interface LinkSpec {
   readonly label: string;
@@ -26,6 +28,8 @@ interface LinkSpec {
 }
 
 export function HandoffStep({ node }: WizardStepProps): ReactElement {
+  const [showPayments, setShowPayments] = useState(false);
+  const shouldShowPayments = showPayments || node.paymentActivation !== null;
   const links: LinkSpec[] = [
     ...(node.nodeRepoUrl
       ? [{ label: "Node repo", href: node.nodeRepoUrl }]
@@ -38,6 +42,10 @@ export function HandoffStep({ node }: WizardStepProps): ReactElement {
       : []),
     ...(node.daoUrl ? [{ label: "Aragon DAO", href: node.daoUrl }] : []),
   ];
+
+  if (shouldShowPayments) {
+    return <PaymentActivationStep node={node} />;
+  }
 
   return (
     <StepSection title="Ready for your AI developer">
@@ -97,6 +105,18 @@ export function HandoffStep({ node }: WizardStepProps): ReactElement {
               </a>
             </Button>
           ))}
+        </div>
+
+        <div className="border-border border-t pt-6">
+          <Button
+            type="button"
+            size="xl"
+            className="w-full gap-2"
+            onClick={() => setShowPayments(true)}
+          >
+            <CreditCard className="size-4" />
+            Continue to payments
+          </Button>
         </div>
       </div>
     </StepSection>

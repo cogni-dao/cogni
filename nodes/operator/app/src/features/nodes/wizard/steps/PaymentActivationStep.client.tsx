@@ -284,7 +284,7 @@ export function PaymentActivationStep({ node }: WizardStepProps): ReactElement {
   const canDeploySplit =
     isReady &&
     splitPhase === "IDLE" &&
-    node.status === "wallet_ready" &&
+    (node.status === "published" || node.status === "wallet_ready") &&
     !!walletAddress;
 
   const { operatorAllocation, treasuryAllocation } = calculateSplitAllocations(
