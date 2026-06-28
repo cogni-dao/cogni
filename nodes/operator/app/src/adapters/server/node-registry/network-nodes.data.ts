@@ -62,4 +62,5 @@ export const NETWORK_NODES: readonly NetworkNode[] = [
   { name: "oss", nodeId: "4d7ffb44-fc26-4a55-864f-eff9fbc8aba1" },
   { name: "red", nodeId: "895147d5-2ad9-4b2b-aeaa-f2669999fdce" },
   { name: "games", nodeId: "baa9148e-3245-4f7d-976b-292fd049ca38" },
+  { name: "poly", nodeId: "4b06359a-a859-4399-888e-a8c7a6696f7e" },
 ];
