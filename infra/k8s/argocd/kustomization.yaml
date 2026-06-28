@@ -30,6 +30,7 @@ resources:
   - candidate-a-node-template-applicationset.yaml
   - candidate-a-operator-applicationset.yaml
   - candidate-a-oss-applicationset.yaml
+  - candidate-a-poly-applicationset.yaml
   - candidate-a-red-applicationset.yaml
   - candidate-a-scheduler-worker-applicationset.yaml
   - preview-beacon-applicationset.yaml
@@ -39,6 +40,7 @@ resources:
   - preview-node-template-applicationset.yaml
   - preview-operator-applicationset.yaml
   - preview-oss-applicationset.yaml
+  - preview-poly-applicationset.yaml
   - preview-red-applicationset.yaml
   - preview-scheduler-worker-applicationset.yaml
   - production-beacon-applicationset.yaml
@@ -48,6 +50,7 @@ resources:
   - production-node-template-applicationset.yaml
   - production-operator-applicationset.yaml
   - production-oss-applicationset.yaml
+  - production-poly-applicationset.yaml
   - production-red-applicationset.yaml
   - production-scheduler-worker-applicationset.yaml
   # <<< GENERATED node-appsets
