@@ -13,8 +13,10 @@
 
 export {
   type DaoConfig,
+  type DaoTokenDistributionConfig,
   extractChainId,
   extractDaoConfig,
+  extractDaoTokenDistributionConfig,
   extractDaoTreasuryAddress,
   extractGatesConfig,
   extractGovernanceConfig,

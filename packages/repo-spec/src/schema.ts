@@ -53,6 +53,10 @@ export const creditsTopupSpecSchema = z.object({
 
 export type CreditsTopupSpec = z.infer<typeof creditsTopupSpecSchema>;
 
+const evmAddressSchema = z
+  .string()
+  .regex(/^0x[0-9a-fA-F]{40}$/, "Invalid EVM address");
+
 /**
  * Schema for a single governance schedule entry.
  * Each schedule triggers a sandbox agent run with a 1-word entrypoint.
@@ -102,10 +106,11 @@ export const governanceSpecSchema = z.object({
     .regex(/^0x[0-9a-fA-F]{40}$/, "Invalid EVM address")
     .optional(),
   /** CogniSignal contract address */
-  signal_contract: z
-    .string()
-    .regex(/^0x[0-9a-fA-F]{40}$/, "Invalid EVM address")
-    .optional(),
+  signal_contract: evmAddressSchema.optional(),
+  /** Aragon GovernanceERC20 token address used for contributor distributions */
+  token_contract: evmAddressSchema.optional(),
+  /** DAO-controlled holder/vault containing minted token inventory for emissions */
+  emissions_holder: evmAddressSchema.optional(),
   /** Proposal launcher base URL (for deep links) */
   base_url: z.string().url().optional(),
   /** Governance council schedules (cron-triggered charters) */
@@ -579,6 +584,16 @@ export const repoSpecSchema = z
     payments: z
       .object({
         status: z.enum(["pending_activation", "active"]),
+      })
+      .optional(),
+
+    /** Token distribution activation status — active only after DAO-controlled minted inventory is verified */
+    distributions: z
+      .object({
+        status: z.enum(["pending_activation", "active"]),
+        claim_contract_pattern: z
+          .enum(["uniswap.merkle-distributor.v1"])
+          .optional(),
       })
       .optional(),
 

@@ -21,6 +21,7 @@ const FIXTURE = {
   daoAddress: "0xdao0000000000000000000000000000000000dao",
   pluginAddress: "0xplugin000000000000000000000000000plugin0",
   signalAddress: "0xsignal000000000000000000000000000signal0",
+  tokenAddress: "0xtoken000000000000000000000000000000token",
 };
 
 const KNOWLEDGE_REMOTE = {
@@ -49,13 +50,15 @@ describe("buildPendingActivationRepoSpecYaml", () => {
       dao_contract: FIXTURE.daoAddress,
       plugin_contract: FIXTURE.pluginAddress,
       signal_contract: FIXTURE.signalAddress,
+      token_contract: FIXTURE.tokenAddress,
       chain_id: "8453",
     });
   });
 
-  it("emits payments.status: pending_activation", () => {
+  it("emits payments and distributions as pending activation", () => {
     const yaml = buildPendingActivationRepoSpecYaml(FIXTURE);
     expect(yaml).toMatch(/payments:\s*\n\s*status: pending_activation/);
+    expect(yaml).toMatch(/distributions:\s*\n\s*status: pending_activation/);
   });
 
   it("emits the Cogni-owned DoltHub knowledge remote when provided", () => {

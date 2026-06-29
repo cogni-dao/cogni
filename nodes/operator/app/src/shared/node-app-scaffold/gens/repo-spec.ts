@@ -32,6 +32,7 @@ export interface RenderRepoSpecInput {
   readonly daoContract?: string | undefined;
   readonly pluginContract?: string | undefined;
   readonly signalContract?: string | undefined;
+  readonly tokenContract?: string | undefined;
   readonly knowledgeRemote?: NodeKnowledgeRemote | undefined;
   /**
    * One-line node mission (`intent.mission`) — the north-star the cognition
@@ -66,6 +67,7 @@ export function renderRepoSpec(input: RenderRepoSpecInput): string {
     input.signalContract
       ? `  signal_contract: "${input.signalContract}"`
       : undefined,
+    input.tokenContract ? `  token_contract: "${input.tokenContract}"` : undefined,
     `  chain_id: "${input.chainId}"`,
     // Governance proposal-UI host for the PR-review `/propose/merge` deep-link.
     // Shared, env-agnostic — NOT the node's own app URL.
@@ -119,6 +121,10 @@ activity_ledger:
       source_refs: ["${sourceRef}"]
 
 payments:
+  status: pending_activation
+
+# Token distributions — activate after verifying DAO-controlled minted inventory.
+distributions:
   status: pending_activation
 
 # Born-reviewable default gates. When this node is minted as a single-node fork

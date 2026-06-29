@@ -13,6 +13,7 @@
 
 import {
   extractChainId,
+  extractDaoTokenDistributionConfig,
   extractGovernanceConfig,
   extractKnowledgeConfig,
   extractLedgerApprovers,
@@ -199,6 +200,54 @@ describe("extractPaymentConfig", () => {
     });
     const config = extractPaymentConfig(spec, TEST_CHAIN_ID);
     expect(config.provider).toBe("cogni-usdc-backend-v1");
+  });
+});
+
+describe("extractDaoTokenDistributionConfig", () => {
+  it("returns undefined while distributions are pending", () => {
+    const spec = buildSpec({
+      distributions: { status: "pending_activation" },
+      governance: {
+        chain_id: String(TEST_CHAIN_ID),
+        token_contract: "0x2222222222222222222222222222222222222222",
+      },
+    });
+
+    expect(
+      extractDaoTokenDistributionConfig(spec, TEST_CHAIN_ID)
+    ).toBeUndefined();
+  });
+
+  it("returns active token distribution config when inventory holder is present", () => {
+    const spec = buildSpec({
+      distributions: { status: "active" },
+      governance: {
+        chain_id: String(TEST_CHAIN_ID),
+        token_contract: "0x2222222222222222222222222222222222222222",
+        emissions_holder: "0x3333333333333333333333333333333333333333",
+      },
+    });
+
+    expect(extractDaoTokenDistributionConfig(spec, TEST_CHAIN_ID)).toEqual({
+      chainId: TEST_CHAIN_ID,
+      tokenAddress: "0x2222222222222222222222222222222222222222",
+      emissionsHolderAddress: "0x3333333333333333333333333333333333333333",
+      claimContractPattern: "uniswap.merkle-distributor.v1",
+    });
+  });
+
+  it("throws when distributions are active without an emissions holder", () => {
+    const spec = buildSpec({
+      distributions: { status: "active" },
+      governance: {
+        chain_id: String(TEST_CHAIN_ID),
+        token_contract: "0x2222222222222222222222222222222222222222",
+      },
+    });
+
+    expect(() => extractDaoTokenDistributionConfig(spec, TEST_CHAIN_ID)).toThrow(
+      /governance\.token_contract or governance\.emissions_holder/
+    );
   });
 });
 

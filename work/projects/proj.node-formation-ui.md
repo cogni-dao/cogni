@@ -20,7 +20,7 @@ labels: [web3, setup, cli, legal]
 
 ## Goal
 
-Full node lifecycle: DAO formation (done) -> zero-touch provisioning (this project's primary gap). Extend formation to cover rewards-ready tokens and legal entity, then build the provisionNode workflow that eliminates all manual post-formation steps.
+Full node lifecycle: DAO formation (done) -> zero-touch provisioning (this project's primary gap). Add distribution activation and legal entity steps without forcing existing DAOs through formation again, then build the provisionNode workflow that eliminates all manual post-formation steps.
 
 **North star:** Founder clicks "Launch Node" -> node is live. Shared cluster, namespace per node, Akash-forward.
 
@@ -34,7 +34,7 @@ Full node lifecycle: DAO formation (done) -> zero-touch provisioning (this proje
 
 | Deliverable                                                                                                                                                                                                                                         | Status      | Est | Work Item   |
 | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- | --- | ----------- |
-| Rewards-ready mint mode — fixed `GovernanceERC20` supply minted to a DAO-controlled emissions holder, with server verification of holder + total supply                                                                                             | Not Started | 2   | `task.0135` |
+| Distribution activation capability — verify the `GovernanceERC20` token and DAO-controlled emissions holder, then publish `distributions.status: active` for new or already-deployed DAOs                                                            | Not Started | 2   | `task.0135` |
 | Automated e2e testing (DAO formation flow with testnet)                                                                                                                                                                                             | Not Started | 2   | —           |
 | Encoding parity test: TokenVoting setup encoding must match Foundry exactly (`packages/aragon-osx/src/__tests__/encoding.parity.test.ts`). Fixture generation: Run Foundry script with known inputs, capture encoded bytes, commit as test fixture. | Not Started | 2   | —           |
 
@@ -97,7 +97,7 @@ Full node lifecycle: DAO formation (done) -> zero-touch provisioning (this proje
 - Node Formation is Node-owned tooling — no Operator dependencies
 - No private key env vars — all transactions signed via wallet UI
 - Server derives ALL addresses from tx receipts (never trusts client)
-- Rewards-ready formation must reuse the same `GovernanceERC20` later used for distributions; do not introduce a throwaway bootstrap token path
+- Distribution activation must reuse the same `GovernanceERC20` later used for claims; do not introduce a throwaway bootstrap token path
 - Package isolation: `aragon-osx` cannot import `src/`, `services/`, or browser/node-specific APIs
 - Import boundaries: `packages/setup-cli` → `packages/aragon-osx` allowed; → `src/*`, `services/*` forbidden
 - **Do NOT build npx flow preemptively** — evaluate after P1 adoption
@@ -106,7 +106,7 @@ Full node lifecycle: DAO formation (done) -> zero-touch provisioning (this proje
 
 - [ ] Foundry fixtures for encoding parity test
 - [ ] Testnet infrastructure for automated e2e
-- [ ] `task.0135` — rewards-ready token formation governance decisions + implementation
+- [ ] `task.0135` — distribution activation governance decisions + implementation
 - [ ] `spike.0146` — OtoCo testnet validation (P1 entity formation depends on this)
 - [ ] P1 adoption metrics before building npx flow
 
@@ -212,7 +212,7 @@ Full node lifecycle: DAO formation (done) -> zero-touch provisioning (this proje
 - **ENTITY_IN_REPO_SPEC**: Entity details recorded in `repo-spec.yaml` under `legal_entity` key.
 - **NO_CUSTOM_CONTRACTS**: We call OtoCo's deployed contracts, not deploy our own.
 
-**Financial Ledger interaction:** OtoCo's `attachToken()` reads GovernanceERC20 holders for LLC membership mirroring. After `task.0135` (rewards-ready mint), the emissions holder address will appear as a "member." This is cosmetic — OtoCo membership is informational, not governance-binding. Token distribution via MerkleDistributor (`proj.financial-ledger`) is unaffected.
+**Financial Ledger interaction:** OtoCo's `attachToken()` reads GovernanceERC20 holders for LLC membership mirroring. After `task.0135` (distribution activation), the emissions holder address will appear as a "member." This is cosmetic — OtoCo membership is informational, not governance-binding. Token distribution via MerkleDistributor (`proj.financial-ledger`) is unaffected.
 
 **Pricing:** $99/year Delaware LLC, $99/year Wyoming LLC. Annual fee for registered agent service.
 

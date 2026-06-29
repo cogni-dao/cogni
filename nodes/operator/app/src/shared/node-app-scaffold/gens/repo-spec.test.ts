@@ -33,6 +33,7 @@ const rendered = renderRepoSpec({
   daoContract: "0x1111111111111111111111111111111111111111",
   pluginContract: "0x2222222222222222222222222222222222222222",
   signalContract: "0x3333333333333333333333333333333333333333",
+  tokenContract: "0x4444444444444444444444444444444444444444",
   knowledgeRemote: {
     database: "knowledge_my_node",
     owner: "cogni-dao-test",
@@ -69,6 +70,7 @@ interface ParsedSpec {
     };
   };
   payments: { status: string };
+  distributions: { status: string };
   gates?: ParsedGate[];
   nodes?: unknown;
 }
@@ -81,6 +83,7 @@ describe("renderRepoSpec — BORN_REVIEWABLE", () => {
     expect(spec.node_id).toBe("11111111-2222-4333-8444-555555555555");
     expect(spec.intent?.name).toBe("my-node");
     expect(spec.payments.status).toBe("pending_activation");
+    expect(spec.distributions.status).toBe("pending_activation");
   });
 
   it("emits a starter intent.mission seed for the launch agent to refine", () => {

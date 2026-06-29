@@ -49,13 +49,13 @@ TigerBeetle is the transaction engine enforcing double-entry at the database lev
 
 ### Crawl (P0) — Rewards-Ready Formation + Settlement Artifacts
 
-**Goal:** Make the token and artifact model trustworthy before any live claims. Reuse the Aragon `GovernanceERC20` as the rewards token, update node formation to mint a fixed supply to a DAO-controlled emissions holder, and produce auditable settlement artifacts from finalized statements.
+**Goal:** Make the token and artifact model trustworthy before any live claims. Reuse the Aragon `GovernanceERC20` as the rewards token, add a distribution-activation path that verifies DAO-controlled emissions inventory for new or existing DAOs, and produce auditable settlement artifacts from finalized statements.
 
 | Deliverable                                                                                                                                                                                          | Status      | Est | Work Item         |
 | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- | --- | ----------------- |
 | **BUG: TB unreachable all envs — native client floods ~72M garbage lines/day to Grafana Cloud**                                                                                                      | In Progress | 3   | `bug.0195`        |
 | TigerBeetle ledger + FinancialLedgerPort — 5-account MVP (credits + USDC), co-writes for AI spend + credit deposits                                                                                  | In Review   | 3   | `task.0145`       |
-| Node formation update: mint fixed `GovernanceERC20` supply to a DAO-controlled emissions holder instead of founder bootstrap mint                                                                    | Not Started | 2   | `task.0135`       |
+| Distribution activation: verify `GovernanceERC20` token + DAO-controlled emissions holder, write `governance.emissions_holder`, and flip `distributions.status: active` for new or existing DAOs     | Not Started | 2   | `task.0135`       |
 | OSS-backed Merkle manifest builder — takes finalized statement `credit_amount` entitlements + settlement policy → root + proofs per claimant, with parity vectors for the selected stock distributor | Not Started | 2   | (create at start) |
 | Settlement manifest store/view — persist `epochId`, `statementHash`, `merkleRoot`, `totalAmount`, `fundingTxHash`, `publisher`, `publishedAt`                                                        | Not Started | 2   | (create at start) |
 | Recipient resolution gate — unresolved claimants block settlement eligibility                                                                                                                        | Not Started | 2   | (create at start) |
@@ -130,7 +130,7 @@ TigerBeetle is the transaction engine enforcing double-entry at the database lev
 - [ ] task.0142 (epoch pool value stabilization) — minimum activity threshold + carry-over prevents quiet-week windfalls before credits map to tokens
 - [ ] spike.0140 (multi-source category pool design) — informs credit:token ratio and settlement policy shape
 - [ ] Operator Port operational (signing + policy boundary for treasury actions)
-- [ ] `task.0135` — rewards-ready token formation decisions and implementation completed
+- [ ] `task.0135` — distribution activation decisions and implementation completed
 - [ ] Stock per-epoch MerkleDistributor path selected and deployed on Base
 - [ ] TigerBeetle deployed + LedgerPort wired (task.0145)
 
@@ -182,7 +182,7 @@ An attribution statement says: "User A earned 40%, User B earned 35%, User C ear
 
 ### Equity token = governance + ownership
 
-The rewards token IS the Aragon `GovernanceERC20` created at node formation. Single-token model in V0. Contributors earn governance power and ownership claim through the same token. For settlement, the fixed supply is minted to a DAO-controlled emissions holder, and epoch budgets determine how much of that supply becomes claimable over time. Governance can vote to:
+The rewards token IS the node's Aragon `GovernanceERC20`. Single-token model in V0. Contributors earn governance power and ownership claim through the same token. For settlement, DAO-controlled minted inventory sits in an emissions holder, and epoch budgets determine how much of that supply becomes claimable over time. Governance can vote to:
 
 - Distribute USDC from treasury to token holders
 - Modify settlement policy for future epochs

@@ -82,6 +82,7 @@ export interface OpenNodeAppPrInput {
   readonly daoContract?: string;
   readonly pluginContract?: string;
   readonly signalContract?: string;
+  readonly tokenContract?: string;
   readonly knowledgeRemote?: NodeKnowledgeRemote;
 }
 
@@ -163,6 +164,7 @@ export interface ForkFromTemplateInput {
   readonly daoContract?: string;
   readonly pluginContract?: string;
   readonly signalContract?: string;
+  readonly tokenContract?: string;
   readonly knowledgeRemote?: NodeKnowledgeRemote;
   /** One-line node mission (`intent.mission`); a starter seed is emitted when omitted. */
   readonly mission?: string;
@@ -1440,6 +1442,7 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
         daoContract: input.daoContract,
         pluginContract: input.pluginContract,
         signalContract: input.signalContract,
+        tokenContract: input.tokenContract,
         knowledgeRemote: input.knowledgeRemote,
         mission: input.mission,
       })

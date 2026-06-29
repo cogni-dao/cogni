@@ -80,6 +80,8 @@ Enable any founder to register a node, form a fully-verified Cogni DAO via walle
 
    The wizard distinguishes long-run policy supply from genesis mint. P0 mints only the enabled template's concrete genesis amount to an explicit holder. The remaining policy supply is future supply that is not minted yet; concrete contributor, reserve, or ecosystem allocation rules are not implied by the formation UI and are not represented as current on-chain inventory. Before live contributor distributions, the system must add a DAO-controlled emissions holder or funded MerkleDistributor claim path and verify that on-chain holder/distributor state.
 
+   Distribution readiness is non-linear with formation. A newly formed node and an already-deployed DAO both publish the same repo-spec lifecycle: `governance.token_contract` identifies the Aragon `GovernanceERC20` when known, while `distributions.status: pending_activation` remains separate from `payments.status`. The node becomes distribution-active only after a later verifier records a DAO-controlled `governance.emissions_holder` and flips `distributions.status: active`; existing DAO nodes do not need to replay formation.
+
 3. **NO_PRIVATE_KEY_ENV_VARS**: Formation transactions are signed via wallet UI (wagmi/rainbowkit), never by script-loaded secrets. Payment activation (child node CLI) uses `DEPLOYER_PRIVATE_KEY` for Split deployment — this is acceptable because it runs in the child node's own environment, not the shared operator repo.
 
 4. **SERVER_VERIFICATION_BOUNDARY**: Browser is untrusted. Server derives ALL addresses from tx receipts. Request contains only transaction coordinates, the expected holder, the expected genesis mint, and an optional node id for log correlation: `{ chainId, daoTxHash, signalTxHash, signalBlockNumber, nodeId?, initialHolder, expectedTokenSupplyUnits }`.
@@ -319,6 +321,8 @@ registry row:
 - `scope_id` - deterministic from `node_id`
 - `governance.dao_contract`, `plugin_contract`, `signal_contract`, `chain_id`
 - `payments.status: pending_activation`
+- `distributions.status: pending_activation`
+- `governance.token_contract` when the setup verifier resolved the Aragon voting token
 
 Populated later by `pnpm node:activate-payments` (child node CLI):
 
@@ -332,6 +336,8 @@ Populated later by `pnpm node:activate-payments` (child node CLI):
 - `chain_id` is string (e.g., `"8453"` not `8453`)
 - Canonical path: `.cogni/repo-spec.yaml`
 - `payments.status` is explicit - never inferred from field presence
+- `distributions.status` is explicit - never inferred from token address presence
+- `distributions.status: active` requires verified `governance.token_contract` and `governance.emissions_holder`
 
 > Current schema: [.cogni/repo-spec.yaml](../../.cogni/repo-spec.yaml)
 

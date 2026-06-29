@@ -381,6 +381,13 @@ export interface DaoConfig {
   readonly base_url?: string;
 }
 
+export interface DaoTokenDistributionConfig {
+  readonly chainId: number;
+  readonly tokenAddress: string;
+  readonly emissionsHolderAddress: string;
+  readonly claimContractPattern: "uniswap.merkle-distributor.v1";
+}
+
 /**
  * Extract DAO governance configuration from parsed repo-spec.
  * Returns null only if the on-chain identity (dao_contract, plugin_contract,
@@ -405,6 +412,42 @@ export function extractDaoConfig(spec: RepoSpec): DaoConfig | null {
     signal_contract: dao.signal_contract,
     chain_id: String(dao.chain_id),
     ...(dao.base_url ? { base_url: dao.base_url } : {}),
+  };
+}
+
+/**
+ * Extract active DAO token distribution config from repo-spec.
+ * Returns undefined until the node has explicitly activated distributions and
+ * published the token + DAO-controlled emissions holder addresses.
+ */
+export function extractDaoTokenDistributionConfig(
+  spec: RepoSpec,
+  expectedChainId?: number
+): DaoTokenDistributionConfig | undefined {
+  if (spec.distributions?.status !== "active") return undefined;
+
+  const chainId = extractChainId(spec);
+  if (expectedChainId !== undefined && chainId !== expectedChainId) {
+    throw new Error(
+      `[repo-spec] Chain mismatch: repo-spec declares ${chainId}, app requires ${expectedChainId}`
+    );
+  }
+
+  const tokenAddress = spec.governance.token_contract;
+  const emissionsHolderAddress = spec.governance.emissions_holder;
+  if (!tokenAddress || !emissionsHolderAddress) {
+    throw new Error(
+      "[repo-spec] distributions.status is active but governance.token_contract or governance.emissions_holder is missing"
+    );
+  }
+
+  return {
+    chainId,
+    tokenAddress,
+    emissionsHolderAddress,
+    claimContractPattern:
+      spec.distributions.claim_contract_pattern ??
+      "uniswap.merkle-distributor.v1",
   };
 }
 
