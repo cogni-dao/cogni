@@ -238,8 +238,6 @@
         "packages/financial-ledger/vitest.config.ts",
         "packages/temporal-workflows/tsup.config.ts",
         "packages/temporal-workflows/vitest.config.ts",
-        "packages/deploy-policy/tsup.config.ts",
-        "packages/deploy-policy/vitest.config.ts",
         "packages/work-items/tsup.config.ts",
         "packages/work-items/vitest.config.ts",
         "packages/node-core/tsup.config.ts",

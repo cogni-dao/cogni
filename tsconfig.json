@@ -15,7 +15,6 @@
     { "path": "./packages/db-client" },
     { "path": "./packages/ids" },
     { "path": "./packages/db-schema" },
-    { "path": "./packages/deploy-policy" },
     { "path": "./packages/financial-ledger" },
     { "path": "./packages/ingestion-core" },
     { "path": "./packages/attribution-ledger" },
