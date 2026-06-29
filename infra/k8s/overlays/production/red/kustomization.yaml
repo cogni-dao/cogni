@@ -13,7 +13,7 @@ namePrefix: red-
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/red
-    digest: "sha256:0f8d8f51ac5f6e9f0759b6294353f08121e26f8828cbe5164992c39170dbb0ec"
+    digest: "sha256:d829167832af641b79cebe2f1703a82e1c5829ae7011155adbdeff39e0a73425"
 
 patches:
   - target:
