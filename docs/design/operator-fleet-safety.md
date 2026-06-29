@@ -43,12 +43,12 @@ formation).
 
 These are **live in the base manifests and provisioning today** — not vNext:
 
-| Mechanism | Where | Value |
-| --- | --- | --- |
-| App container requests | `infra/k8s/base/node-app/deployment.yaml` | `memory: 384Mi`, `cpu: 200m` |
-| Migrate init-container requests | `infra/k8s/base/node-app/deployment.yaml` | `memory: 256Mi`, `cpu: 100m` |
-| kubelet `system-reserved` | `infra/provision/cherry/base/{bootstrap.yaml,variables.tf}` | `memory=2900Mi` |
-| kubelet `eviction-hard` | `infra/provision/cherry/base/{bootstrap.yaml,variables.tf}` | `memory.available<350Mi` |
+| Mechanism                       | Where                                                       | Value                        |
+| ------------------------------- | ----------------------------------------------------------- | ---------------------------- |
+| App container requests          | `infra/k8s/base/node-app/deployment.yaml`                   | `memory: 384Mi`, `cpu: 200m` |
+| Migrate init-container requests | `infra/k8s/base/node-app/deployment.yaml`                   | `memory: 256Mi`, `cpu: 100m` |
+| kubelet `system-reserved`       | `infra/provision/cherry/base/{bootstrap.yaml,variables.tf}` | `memory=2900Mi`              |
+| kubelet `eviction-hard`         | `infra/provision/cherry/base/{bootstrap.yaml,variables.tf}` | `memory.available<350Mi`     |
 
 Because every workload declares `resources.requests`, over-commit surfaces as an
 honest **`Pending`** pod the scheduler refuses to place — not an OOM kill of a
@@ -85,13 +85,13 @@ authoritative, fail-closed, and loud (over-budget applies surface as Argo
 
 ### Map need → primitive
 
-| Need | Preferred OSS primitive |
-| --- | --- |
-| Manifest is valid k8s | `kubeconform` |
-| Every container declares requests | `LimitRange` (runtime) + `kube-linter` (CI) |
-| Aggregate per-env budget is enforced | `ResourceQuota` |
-| Runtime backstop under pressure | kubelet `system-reserved` + `eviction-hard` |
-| Live scheduling / bin-packing | the **kube-scheduler** (already running) |
+| Need                                 | Preferred OSS primitive                     |
+| ------------------------------------ | ------------------------------------------- |
+| Manifest is valid k8s                | `kubeconform`                               |
+| Every container declares requests    | `LimitRange` (runtime) + `kube-linter` (CI) |
+| Aggregate per-env budget is enforced | `ResourceQuota`                             |
+| Runtime backstop under pressure      | kubelet `system-reserved` + `eviction-hard` |
+| Live scheduling / bin-packing        | the **kube-scheduler** (already running)    |
 
 ### Explicitly rejected (from #1886)
 
@@ -116,10 +116,10 @@ bug, not the feature.
 A **`LimitRange`** and a **`ResourceQuota`** for candidate-a, both in
 `infra/k8s/env/candidate-a/`, synced by a **dedicated Argo Application**:
 
-| Object | Setting | Intent |
-| --- | --- | --- |
-| `LimitRange` | `defaultRequest` `memory: 256Mi`, `cpu: 100m`; low `min` | Guarantee **every** container has requests (closes the gap a stray manifest could open) |
-| `ResourceQuota` | `~5600Mi` memory / `~5500m` cpu | **Generous runaway-ceiling**, NOT the honest target |
+| Object          | Setting                                                  | Intent                                                                                  |
+| --------------- | -------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `LimitRange`    | `defaultRequest` `memory: 256Mi`, `cpu: 100m`; low `min` | Guarantee **every** container has requests (closes the gap a stray manifest could open) |
+| `ResourceQuota` | `~5600Mi` memory / `~5500m` cpu                          | **Generous runaway-ceiling**, NOT the honest target                                     |
 
 The quota is deliberately a **runaway ceiling, not the honest cap (~3000Mi)**:
 candidate-a is already over-subscribed (§2), so an honest quota today would
@@ -131,12 +131,12 @@ right-sizing land. **preview/prod env-apps are deferred** follow-ups.
 
 Three legs. Only ADMISSION lands in this PR.
 
-### (a) ADMISSION — `ResourceQuota` blocks over-budget applies *(this PR)*
+### (a) ADMISSION — `ResourceQuota` blocks over-budget applies _(this PR)_
 
 The quota refuses applies that would exceed the env budget; Argo reports
 `Degraded`. Cluster-authoritative and fail-closed.
 
-### (b) REMEDIATION — atomic per-env decommission frees budget *(next task)*
+### (b) REMEDIATION — atomic per-env decommission frees budget _(next task)_
 
 This is the `OperatorDeployPlanePort.remove` **"Phase 1"** already specified in
 [operator-managed-deployments.md](./operator-managed-deployments.md) — see that doc
@@ -152,7 +152,7 @@ The **gap** (the next task) is:
 - a **per-env UI action** in
   `nodes/operator/app/src/features/nodes/deployments/NodeDeployments.tsx`.
 
-### (c) OBSERVATION — operator fleet UI *(story.5013)*
+### (c) OBSERVATION — operator fleet UI _(story.5013)_
 
 The fleet read model is deferred to story.5013. The **per-node deploy-state read
 panel already ships** (`NodeDeployments.tsx` → `GET /api/v1/nodes/{id}/deploy-state`).
@@ -174,14 +174,14 @@ build the auto-funding planner later.
 
 The fleet UI (story.5013) is mostly an **aggregation** over seams that already ship:
 
-| Seam | Surface |
-| --- | --- |
-| `ComputeResourcePort.balances()` | `GET /api/v1/compute/balances` |
-| `DeployCapability.getDeployState` | `GET /api/v1/nodes/{id}/deploy-state` |
-| Node inventory | `nodes` table + `GET /api/v1/nodes` |
-| Per-env intent | catalog `envs[]` + overlays |
-| Live mem/cpu/OOM | Alloy → cAdvisor + node-exporter → Grafana Cloud Mimir |
-| Per-env headroom | the new `ResourceQuota` (used vs hard) *(this PR)* |
+| Seam                              | Surface                                                |
+| --------------------------------- | ------------------------------------------------------ |
+| `ComputeResourcePort.balances()`  | `GET /api/v1/compute/balances`                         |
+| `DeployCapability.getDeployState` | `GET /api/v1/nodes/{id}/deploy-state`                  |
+| Node inventory                    | `nodes` table + `GET /api/v1/nodes`                    |
+| Per-env intent                    | catalog `envs[]` + overlays                            |
+| Live mem/cpu/OOM                  | Alloy → cAdvisor + node-exporter → Grafana Cloud Mimir |
+| Per-env headroom                  | the new `ResourceQuota` (used vs hard) _(this PR)_     |
 
 **Missing** = a **per-env / per-VM aggregation read model** + the **fleet page**
 itself. Those are story.5013, not this PR.
@@ -196,15 +196,15 @@ itself. Those are story.5013, not this PR.
 
 ## 10. Pareto sequence
 
-| # | Step | State |
-| --- | --- | --- |
-| 1 | Revert #1886 to baseline | ✅ done |
-| 2 | This design doc | ◀ this PR |
-| 3 | candidate-a `LimitRange` + ceiling `ResourceQuota` via Argo app | ◀ this PR |
-| 4 | `decommission-env` (typed verb + DNS/Caddy + OpenFGA + UI) | ⏳ next task |
-| 5 | Apply kubelet reservation to running nodes + right-size fleet | ⏳ provisioning follow-up |
-| 6 | preview/prod env quotas | ⏳ follow-up |
-| 7 | Fleet UI v0 | ⏳ story.5013 |
+| #   | Step                                                            | State                     |
+| --- | --------------------------------------------------------------- | ------------------------- |
+| 1   | Revert #1886 to baseline                                        | ✅ done                   |
+| 2   | This design doc                                                 | ◀ this PR                |
+| 3   | candidate-a `LimitRange` + ceiling `ResourceQuota` via Argo app | ◀ this PR                |
+| 4   | `decommission-env` (typed verb + DNS/Caddy + OpenFGA + UI)      | ⏳ next task              |
+| 5   | Apply kubelet reservation to running nodes + right-size fleet   | ⏳ provisioning follow-up |
+| 6   | preview/prod env quotas                                         | ⏳ follow-up              |
+| 7   | Fleet UI v0                                                     | ⏳ story.5013             |
 
 ## Related
 
