@@ -514,8 +514,8 @@ export async function POST(request: Request, routeArgs: RouteParams) {
           daoContract: node.daoAddress,
           pluginContract: node.pluginAddress,
           signalContract: node.signalAddress,
-          tokenContract: node.tokenAddress ?? undefined,
           knowledgeRemote,
+          ...(node.tokenAddress ? { tokenContract: node.tokenAddress } : {}),
         };
         let pr: { prNumber: number; prUrl: string };
         try {
