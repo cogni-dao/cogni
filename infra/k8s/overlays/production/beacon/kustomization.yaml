@@ -13,7 +13,7 @@ namePrefix: beacon-
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/beacon
-    digest: "sha256:61abe76cef595206df0b32eaaab6cc8c425c5271f2d536e9b9061a11a9e6b742"
+    digest: "sha256:118e8f70b27abd25a4f3b09e5e89182cf581bf8bbeba54e61f874e26a42b7c12"
 
 patches:
   - target:
