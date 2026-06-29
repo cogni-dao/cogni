@@ -13,7 +13,7 @@ namePrefix: oss-
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/oss
-    digest: "sha256:1afa3e4be35eeace264466c1d5f03f82d71e605393f98380bd624abb7ffd134c"
+    digest: "sha256:0f158ff3d96f6bc201fdbc7031443201e16d3d5fad298629a191942593820d87"
 
 patches:
   - target:
@@ -60,9 +60,6 @@ patches:
       kind: Deployment
       name: node-app
     patch: |
-      - op: replace
-        path: /spec/replicas
-        value: 0
       - op: replace
         path: /spec/template/spec/containers/0/envFrom/1/secretRef/name
         value: "oss-env-secrets"
