@@ -67,7 +67,9 @@ export function renderRepoSpec(input: RenderRepoSpecInput): string {
     input.signalContract
       ? `  signal_contract: "${input.signalContract}"`
       : undefined,
-    input.tokenContract ? `  token_contract: "${input.tokenContract}"` : undefined,
+    input.tokenContract
+      ? `  token_contract: "${input.tokenContract}"`
+      : undefined,
     `  chain_id: "${input.chainId}"`,
     // Governance proposal-UI host for the PR-review `/propose/merge` deep-link.
     // Shared, env-agnostic — NOT the node's own app URL.
