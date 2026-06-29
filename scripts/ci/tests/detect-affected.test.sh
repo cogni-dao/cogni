@@ -114,4 +114,16 @@ echo "$substrate_output" | grep -q "Targets: ${expected_substrate_targets}"
 # beyond the node set; deploy-infra / litellm etc. stay out).
 echo "$substrate_output" | grep -q 'Flight targets:'
 
+# Edge Caddy reconcile is substrate behavior too: the script mutates VM edge
+# routing during node-substrate, so a change must not produce a no-op flight.
+printf '%s\n' 'scripts/ci/reconcile-edge-caddy.remote.sh' > "$tmpdir/edge-caddy-paths.txt"
+edge_caddy_output=$(
+  TURBO_SCM_BASE=origin/main \
+  TURBO_SCM_HEAD=HEAD \
+  CHANGED_PATHS_FILE="$tmpdir/edge-caddy-paths.txt" \
+  bash scripts/ci/detect-affected.sh
+)
+echo "$edge_caddy_output" | grep -q 'Selection reason: substrate-machinery:scripts/ci/reconcile-edge-caddy.remote.sh'
+echo "$edge_caddy_output" | grep -q "Targets: ${expected_substrate_targets}"
+
 echo "detect-affected.test.sh OK"

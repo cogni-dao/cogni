@@ -210,6 +210,7 @@ is_substrate_machinery_input() {
   local path="$1"
 
   case "$path" in
+    scripts/ci/reconcile-edge-caddy.remote.sh | \
     scripts/ci/run-node-substrate.sh | \
     scripts/ci/secret-materialize.sh | \
     scripts/ci/reconcile-node-substrate.sh | \
