@@ -13,6 +13,7 @@
 
 import {
   buildDaoTokenMerkleDistribution,
+  buildDaoTokenSettlementModel,
   DAO_TOKEN_SUPPLY_DEFAULT_WHOLE,
   DAO_TOKEN_SUPPLY_MAX_WHOLE,
   DAO_TOKEN_SUPPLY_MIN_WHOLE,
@@ -28,6 +29,7 @@ const TOKEN = "0x00000000000000000000000000000000000000aa" as const;
 const ALICE = "0x00000000000000000000000000000000000000a1" as const;
 const BOB = "0x00000000000000000000000000000000000000b2" as const;
 const CAROL = "0x00000000000000000000000000000000000000c3" as const;
+const DISTRIBUTOR = "0x00000000000000000000000000000000000000d4" as const;
 const MANIFEST_IDENTITY = {
   nodeId: "00000000-0000-4000-8000-000000000001",
   scopeId: "00000000-0000-4000-8000-000000000002",
@@ -282,5 +284,111 @@ describe("resolveDaoTokenomics", () => {
     expect(council.genesisMintWholeTokens).toBe(3);
     expect(openPool.ownerCount).toBe(12);
     expect(openPool.genesisMintWholeTokens).toBe(100_000);
+  });
+});
+
+describe("buildDaoTokenSettlementModel", () => {
+  it("classifies current genesis-holder minting as a formation probe only", () => {
+    const model = buildDaoTokenSettlementModel({
+      inventory: {
+        kind: "genesis_holder",
+        holder: ALICE,
+        amount: 1n * 10n ** 18n,
+        daoControlled: false,
+      },
+    });
+
+    expect(model.phase).toBe("formation_probe_only");
+    expect(model.claimable).toBe(false);
+    expect(model.blockers.map((blocker) => blocker.code)).toContain(
+      "inventory_not_dao_controlled"
+    );
+    expect(model.blockers.map((blocker) => blocker.code)).toContain(
+      "statement_missing"
+    );
+  });
+
+  it("marks a signed statement distribution as claimable only after matching funding", () => {
+    const distribution = buildDaoTokenMerkleDistribution({
+      distributionId: "epoch-1",
+      ...MANIFEST_IDENTITY,
+      chainId: 8453,
+      tokenAddress: TOKEN,
+      distributionAmount: 100n,
+      allocations: [
+        { claimantKey: "user:alice", account: ALICE, creditAmount: 70n },
+        { claimantKey: "user:bob", account: BOB, creditAmount: 30n },
+      ],
+    });
+
+    const model = buildDaoTokenSettlementModel({
+      inventory: {
+        kind: "funded_distributor",
+        holder: DISTRIBUTOR,
+        amount: distribution.distributionAmount,
+        daoControlled: true,
+      },
+      signedStatement: {
+        epochId: "1",
+        ...MANIFEST_IDENTITY,
+        finalized: true,
+        signatureHash:
+          "0x00000000000000000000000000000000000000000000000000000000000000ee",
+        signer: ALICE,
+        unresolvedClaimantCount: 0,
+      },
+      distribution,
+      funding: {
+        distributor: DISTRIBUTOR,
+        merkleRoot: distribution.merkleRoot,
+        amount: distribution.distributionAmount,
+        fundingTxHash:
+          "0x00000000000000000000000000000000000000000000000000000000000000ff",
+        publisher: ALICE,
+        publishedAt: "2026-06-29T00:00:00.000Z",
+      },
+    });
+
+    expect(model.phase).toBe("claimable");
+    expect(model.claimable).toBe(true);
+    expect(model.blockers).toEqual([]);
+  });
+
+  it("blocks settlement when the manifest is not bound to the signed statement", () => {
+    const distribution = buildDaoTokenMerkleDistribution({
+      distributionId: "epoch-1",
+      ...MANIFEST_IDENTITY,
+      chainId: 8453,
+      tokenAddress: TOKEN,
+      distributionAmount: 100n,
+      allocations: [
+        { claimantKey: "user:alice", account: ALICE, creditAmount: 1n },
+      ],
+    });
+
+    const model = buildDaoTokenSettlementModel({
+      inventory: {
+        kind: "emissions_holder",
+        holder: DISTRIBUTOR,
+        amount: parseDaoTokenSupplyUnits(1_000_000),
+        daoControlled: true,
+      },
+      signedStatement: {
+        epochId: "1",
+        nodeId: MANIFEST_IDENTITY.nodeId,
+        scopeId: MANIFEST_IDENTITY.scopeId,
+        statementHash:
+          "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+        finalized: true,
+        unresolvedClaimantCount: 0,
+      },
+      distribution,
+    });
+
+    expect(model.phase).toBe("manifest_ready");
+    expect(model.claimable).toBe(false);
+    expect(model.blockers.map((blocker) => blocker.code)).toContain(
+      "statement_hash_mismatch"
+    );
   });
 });

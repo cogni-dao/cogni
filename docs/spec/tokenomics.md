@@ -219,6 +219,7 @@ Attribution credits (off-chain)
 
 - The settlement token is the Aragon `GovernanceERC20` created at node formation.
 - Current P0 formation mints only a template-computed genesis amount to the explicit initial holder and models the rest as unminted policy budget. That proves Aragon formation and verification without pretending a distribution rail exists.
+- The typed handoff model lives in `@cogni/aragon-osx` as `buildDaoTokenSettlementModel()`: it classifies current genesis-holder minting as `formation_probe_only` and only reaches `claimable` once DAO-controlled inventory, a finalized signed statement, a matching Merkle manifest, and matching distributor funding are all present.
 - Before Walk settlement can go live, node formation must move from founder bootstrap minting to a fixed-supply mint into a DAO-controlled emissions holder or an equivalent funded distributor path.
 - Crawl budget policy remains off-chain accounting and governance policy. It is not the hard security boundary for token release.
 - In Walk, the source of truth for remaining supply is `emissionsHolder.balanceOf(token)` on-chain, not Postgres. Off-chain `remaining` becomes a reconciliation check.

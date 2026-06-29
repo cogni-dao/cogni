@@ -15,5 +15,6 @@ export * from "./aragon";
 export * from "./encoding";
 export * from "./osx";
 export * from "./token-distribution";
+export * from "./token-settlement";
 export * from "./tokenomics";
 export * from "./types";
