@@ -653,14 +653,20 @@ function isNodeWiring(path: string, node: string): boolean {
     return slash > 0 && rest.slice(slash + 1).startsWith(`${node}/`);
   }
   if (path.startsWith(argocdPrefix)) {
-    const file = path.slice(argocdPrefix.length);
-    // Per-node AppSet `<env>-<node>-applicationset.yaml` belongs to THIS node
-    // only (LANE_ISOLATION). Node-scoped, so a node PR cannot ride another
-    // lane's AppSet — closes the shared-appset residual flagged in classify.ts.
+    // Per-(env, node) AppSet now lives at appsets/<env>/<env>-<node>-applicationset.yaml
+    // (story.5020 per-env app-of-apps). Node-scoped (LANE_ISOLATION): belongs to THIS
+    // node only, so a node PR cannot ride another lane's AppSet.
+    const appsetsPrefix = "appsets/";
+    const rest = path.slice(argocdPrefix.length);
+    if (!rest.startsWith(appsetsPrefix)) return false;
+    const afterEnv = rest.slice(appsetsPrefix.length);
+    const slash = afterEnv.indexOf("/");
+    if (slash <= 0) return false;
+    const name = afterEnv.slice(slash + 1);
     return (
-      !file.includes("/") &&
-      (file.endsWith(`-${node}-applicationset.yaml`) ||
-        file.endsWith(`-${node}-applicationset.yml`))
+      !name.includes("/") &&
+      (name.endsWith(`-${node}-applicationset.yaml`) ||
+        name.endsWith(`-${node}-applicationset.yml`))
     );
   }
   return (

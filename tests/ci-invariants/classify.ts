@@ -115,11 +115,19 @@ function isNodeWiring(path: string, node: string): boolean {
     return slash > 0 && rest.slice(slash + 1).startsWith(`${node}/`);
   }
   if (path.startsWith(argocdPrefix)) {
-    const file = path.slice(argocdPrefix.length);
+    // Per-(env, node) AppSet now lives at appsets/<env>/<env>-<node>-applicationset.yaml
+    // (story.5020 per-env app-of-apps). Node-scoped — a node PR may only touch its lane.
+    const appsetsPrefix = "appsets/";
+    const rest = path.slice(argocdPrefix.length);
+    if (!rest.startsWith(appsetsPrefix)) return false;
+    const afterEnv = rest.slice(appsetsPrefix.length);
+    const slash = afterEnv.indexOf("/");
+    if (slash <= 0) return false;
+    const name = afterEnv.slice(slash + 1);
     return (
-      !file.includes("/") &&
-      (file.endsWith(`-${node}-applicationset.yaml`) ||
-        file.endsWith(`-${node}-applicationset.yml`))
+      !name.includes("/") &&
+      (name.endsWith(`-${node}-applicationset.yaml`) ||
+        name.endsWith(`-${node}-applicationset.yml`))
     );
   }
   // scheduler-worker configmap + edge Caddyfile.tmpl are both catalog-derived
