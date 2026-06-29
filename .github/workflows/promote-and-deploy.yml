@@ -273,6 +273,7 @@ jobs:
           NODE: ${{ matrix.node }}
           HEAD_SHA: ${{ needs.decide.outputs.head_sha }}
           BUILD_SHA: ${{ needs.decide.outputs.build_sha }}
+          OVERLAY_ENV: ${{ needs.decide.outputs.environment }}
           PREVIEW_FORWARD: ${{ needs.decide.outputs.preview_forward }}
           NODE_SOURCE_SHA: ${{ inputs.node_source_sha }}
         run: |
@@ -301,12 +302,6 @@ jobs:
               exit 1
             fi
           elif is_remote_source_artifact_target "$NODE"; then
-            catalog="app-src/infra/catalog/${NODE}.yaml"
-            image_repository="$(yq -N '.image_repository // ""' "$catalog")"
-            if [ -z "$image_repository" ]; then
-              echo "::error::remote-source artifact ${NODE} missing image_repository"
-              exit 1
-            fi
             # Source-addressed ONLY (ONE_PROMOTION_PRIMITIVE, like candidate-flight): a
             # remote-source node MUST carry node_source_sha on the dispatch — every rung
             # (candidate/preview/production) source-addresses via the operator (`promoteNode`).
@@ -320,18 +315,10 @@ jobs:
               exit 1
             fi
             APP_SOURCE_SHA="$NODE_SOURCE_SHA"
-            full_tag="${image_repository}:sha-${APP_SOURCE_SHA}"
-            digest_only=$(docker buildx imagetools inspect "$full_tag" --raw 2>/dev/null \
-              | python3 -c "import json,sys; print(json.load(sys.stdin).get('digest',''))" 2>/dev/null || true)
-            if [ -z "$digest_only" ]; then
-              digest_only=$(docker buildx imagetools inspect "$full_tag" 2>/dev/null \
-                | grep -oP 'Digest:\s+\Ksha256:[a-f0-9]+' | head -1 || true)
-            fi
-            if [ -z "$digest_only" ]; then
-              echo "::error::remote-source artifact image not found: $full_tag"
-              exit 1
-            fi
-            DIGEST="${full_tag%%:*}@${digest_only}"
+            payload_file="${RUNNER_TEMP:-/tmp}/resolved-node-ref-image-${NODE}.json"
+            NODE="$NODE" SOURCE_SHA="$APP_SOURCE_SHA" OVERLAY_ENV="$OVERLAY_ENV" OUTPUT_FILE="$payload_file" \
+              bash app-src/scripts/ci/resolve-node-ref-image.sh
+            echo "payload_file=$payload_file" >> "$GITHUB_OUTPUT"
           else
             # In-repo artifact (operator, scheduler-worker): ONE identity —
             # `<image>:sha-<sourceSha>{suffix}` (SOURCE_SHA_IS_DEPLOY_IDENTITY).
@@ -354,7 +341,7 @@ jobs:
             DIGEST="${full_tag%%:*}@${digest_only}"
             APP_SOURCE_SHA="$BUILD_SHA"
           fi
-          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "digest=${DIGEST:-}" >> "$GITHUB_OUTPUT"
           echo "source_sha=$APP_SOURCE_SHA" >> "$GITHUB_OUTPUT"
           echo "promoted=true" >> "$GITHUB_OUTPUT"
 
@@ -413,12 +400,20 @@ jobs:
           NODE: ${{ matrix.node }}
           DIGEST: ${{ steps.digest.outputs.digest }}
           SOURCE_SHA: ${{ steps.digest.outputs.source_sha }}
+          PAYLOAD_FILE: ${{ steps.digest.outputs.payload_file }}
         run: |
           set -euo pipefail
-          ../app-src/scripts/ci/promote-k8s-image.sh --no-commit \
-            --env "$OVERLAY_ENV" --app "$NODE" --digest "$DIGEST"
-          APP="$NODE" SOURCE_SHA="$SOURCE_SHA" \
-            bash ../app-src/scripts/ci/update-source-sha-map.sh
+          if [ -n "${PAYLOAD_FILE:-}" ]; then
+            NODES="$NODE" PAYLOAD_FILE="$PAYLOAD_FILE" OVERLAY_ENV="$OVERLAY_ENV" \
+              PROMOTE_SCRIPT="../app-src/scripts/ci/promote-k8s-image.sh" \
+              MAP_SCRIPT="../app-src/scripts/ci/update-source-sha-map.sh" \
+              bash ../app-src/scripts/ci/promote-build-payload.sh
+          else
+            ../app-src/scripts/ci/promote-k8s-image.sh --no-commit \
+              --env "$OVERLAY_ENV" --app "$NODE" --digest "$DIGEST"
+            APP="$NODE" SOURCE_SHA="$SOURCE_SHA" \
+              bash ../app-src/scripts/ci/update-source-sha-map.sh
+          fi
 
       - name: Commit and push
         id: push

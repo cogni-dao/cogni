@@ -250,6 +250,7 @@ jobs:
           SOURCE_SHA: ${{ steps.meta.outputs.head_sha }}
           NODE: ${{ steps.meta.outputs.node_slug }}
           NODE_SOURCE_SHA: ${{ steps.meta.outputs.node_source_sha }}
+          OVERLAY_ENV: candidate-a
           COGNI_CATALOG_ROOT: infra/catalog
           REMOTE_SOURCE_ARTIFACT_TARGETS_FILE: ${{ steps.remote-source-artifact-targets.outputs.targets_file }}
           OUTPUT_FILE: ${{ runner.temp }}/resolved-pr-images.json
