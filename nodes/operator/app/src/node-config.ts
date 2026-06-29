@@ -1,5 +1,6 @@
 import type { NodeAppConfig } from "@cogni/node-app/extensions";
 import {
+  Boxes,
   Briefcase,
   CreditCard,
   Github,
@@ -13,6 +14,7 @@ export const nodeConfig: NodeAppConfig = {
   navItems: [
     { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
     { href: "/work", label: "Work", icon: Briefcase },
+    { href: "/nodes", label: "Nodes", icon: Boxes },
     { href: "/gov", label: "Gov", icon: Vote },
     { href: "/credits", label: "Credits", icon: CreditCard },
   ],
