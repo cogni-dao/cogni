@@ -31,6 +31,7 @@ import { listAccessRequests } from "@/features/nodes/access-requests";
 import { NodeDeployments } from "@/features/nodes/deployments/NodeDeployments";
 import { FLIGHT_ENVS } from "@/features/nodes/flight-status";
 import { nodeRepoUrlForSlug } from "@/features/nodes/launch-pack";
+import { ResetDaoDangerZone } from "@/features/nodes/ResetDaoDangerZone.client";
 import { NodeWizard } from "@/features/nodes/wizard/NodeWizard.client";
 import type { WizardNode } from "@/features/nodes/wizard/types";
 import { getServerSessionUser } from "@/lib/auth/server";
@@ -199,6 +200,13 @@ export default async function NodeDashboardPage({
 
       {showDevelopers ? (
         <NodeAccess nodeId={node.id} requests={accessRequests} />
+      ) : null}
+
+      {/* Owner-only destructive control. The page query already scopes to the owner
+          (eq(nodes.ownerUserId, session.id)), so reaching this page IS the owner gate.
+          Only surface it when there is actually a DAO to reset (mirrors the route's 409). */}
+      {node.daoAddress != null || status !== "dao_pending" ? (
+        <ResetDaoDangerZone nodeId={node.id} slug={node.slug} />
       ) : null}
     </PageContainer>
   );
