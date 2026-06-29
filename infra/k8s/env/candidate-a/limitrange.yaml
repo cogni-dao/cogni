@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2025 Cogni-DAO
+#
+# LimitRange — candidate-a default container requests/limits.
+#
+# Ensures EVERY container has a resource request (the native fix for the
+# MISSING_REQUESTS class — request-less containers are invisible to the
+# scheduler and to the ResourceQuota accounting). Kubernetes injects
+# defaultRequest ONLY into containers that omit a request; it never overrides
+# an existing one. Every current pod already sets explicit requests, so this is
+# non-wedging — it only backstops new/request-less containers.
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: cogni-candidate-a-defaults
+  namespace: cogni-candidate-a
+spec:
+  limits:
+    - type: Container
+      defaultRequest:
+        memory: 256Mi
+        cpu: 100m
+      default:
+        memory: 512Mi
+        cpu: 500m
+      min:
+        memory: 16Mi
+        cpu: 10m

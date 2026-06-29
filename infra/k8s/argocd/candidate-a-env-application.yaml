@@ -1,0 +1,47 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2025 Cogni-DAO
+#
+# Argo CD Application — candidate-a env-scoped governance.
+#
+# Owns ONLY the namespace-wide guardrails (ResourceQuota + LimitRange) for
+# cogni-candidate-a. It deliberately does NOT own the Namespace object — that is
+# created by the per-node ApplicationSets (CreateNamespace=true). Keeping the
+# Namespace out of this app's source avoids an Argo ownership conflict with
+# those AppSets.
+#
+# Registered in infra/k8s/argocd/kustomization.yaml alongside the per-(env,node)
+# ApplicationSets, so it uses the same LITERAL repoURL those AppSets use. The
+# bootstrap-kustomization path (kubectl kustomize | kubectl apply) does NOT do
+# ${FORK_REPO} envsubst — that substitution is only the register-substrate-apps.sh
+# path for the helm-wrapped openbao/ESO/reloader apps.
+#
+# targetRevision: main — these are shared SOURCE manifests with zero per-env
+# templating; tracking main makes a reviewed governance change actually deploy.
+#
+# SyncPolicy mirrors reloader-application.yaml.
+#   - prune: false. Removing a quota/limit must be operator-driven, never a
+#     cascade-delete from a manifest move.
+#   - selfHeal: true. Drift correction is the point — a hand-loosened quota
+#     gets reconciled back to git.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cogni-candidate-a-env
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/cogni-dao/cogni.git
+    targetRevision: main
+    path: infra/k8s/env/candidate-a
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: cogni-candidate-a
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true

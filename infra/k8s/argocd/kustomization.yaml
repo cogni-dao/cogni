@@ -20,6 +20,8 @@ resources:
   - https://raw.githubusercontent.com/argoproj/argo-cd/v2.13.4/manifests/install.yaml
   # ksops CMP plugin ConfigMap
   - ksops-cmp.yaml
+  # Env-scoped governance: ResourceQuota + LimitRange for cogni-candidate-a.
+  - candidate-a-env-application.yaml
   # ApplicationSets — one per (env, node) for structural LANE_ISOLATION (axiom 18).
   # candidate-b is provisioned separately (provision-env.yml) and not listed here.
   # >>> GENERATED node-appsets (scripts/ci/render-node-appset.sh) — DO NOT EDIT BY HAND

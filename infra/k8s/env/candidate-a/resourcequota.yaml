@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2025 Cogni-DAO
+#
+# ResourceQuota — candidate-a namespace runaway-ceiling.
+#
+# This is a GENEROUS runaway-ceiling, NOT the honest target. It exists to catch
+# a pathological blowup (a crashlooping pod requesting GiBs, an unbounded
+# fan-out), not to enforce right-sized requests. The numbers are deliberately
+# above current usage so it never wedges a live rollout.
+#
+# Why not the honest ~2400Mi target yet:
+#   - The candidate-a node currently reports allocatable == capacity (~5921Mi);
+#     kubelet system-reserved has NOT been applied, so the scheduler still
+#     believes the whole box is available.
+#   - The namespace already requests ~2816Mi steady-state (init-peak ~3456Mi)
+#     across 11 pods. An honest ~2400Mi cap would reject the next rollout's
+#     surge pod and wedge deploys.
+#
+# SSOT for the real numbers (system_reserved_memory, eviction_hard_memory) is:
+#   infra/provision/cherry/base/variables.tf
+# Ratchet these caps DOWN as kubelet honesty (system-reserved applied) and
+# per-workload right-sizing land. Ref: docs/design/operator-fleet-safety.md
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: cogni-candidate-a-budget
+  namespace: cogni-candidate-a
+spec:
+  hard:
+    requests.memory: 5600Mi
+    requests.cpu: "5500m"

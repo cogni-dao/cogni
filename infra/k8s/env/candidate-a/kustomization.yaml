@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2025 Cogni-DAO
+#
+# Env-scoped governance kustomization for cogni-candidate-a.
+#
+# Owns ONLY the namespace-wide guardrails (ResourceQuota + LimitRange). It does
+# NOT declare a Namespace object — cogni-candidate-a is created by the per-node
+# ApplicationSets (CreateNamespace=true). Declaring it here would fight Argo
+# ownership.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: cogni-candidate-a
+
+resources:
+  - resourcequota.yaml
+  - limitrange.yaml
