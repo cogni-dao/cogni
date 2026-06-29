@@ -13,7 +13,7 @@ namePrefix: poly-
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/poly
-    digest: "sha256:250958b51a20459a98f3cdac7be99b367a3fcccc8b808e3407d3858b3337bb44"
+    digest: "sha256:f945f2a85737f63548ec9f9c3ce69f0698cf420374a4172aa21db4075ef9a11f"
 
 patches:
   - target:
@@ -78,6 +78,40 @@ patches:
       - op: add
         path: /spec/template/metadata/labels/app.kubernetes.io~1instance
         value: "poly"
+
+  # task.5077: Doltgres knowledge-plane migrator runs as a second initContainer
+  # on the poly Deployment. DATABASE_URL maps to DOLTGRES_URL (separate
+  # from the Postgres DATABASE_URL the main container + first initContainer use).
+  # Mirrors operator's pattern verbatim.
+  - target:
+      kind: Deployment
+      name: node-app
+    patch: |
+      - op: add
+        path: /spec/template/spec/initContainers/-
+        value:
+          name: migrate-doltgres
+          image: ghcr.io/cogni-dao/cogni-template:placeholder
+          command:
+            - /bin/sh
+            - -c
+            - exec node /app/app/migrate-doltgres.mjs /app/app/doltgres-migrations
+          envFrom:
+            - configMapRef:
+                name: poly-node-app-config
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: poly-env-secrets
+                  key: DOLTGRES_URL
+          resources:
+            requests:
+              memory: "384Mi"
+              cpu: "200m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
   # bug.0295: VM discovery via DNS (cogni.vm.cognidao.org).
   # Convert base headless Services → ExternalName; delete EndpointSlices.
   - target: { kind: Service, name: postgres-external }
