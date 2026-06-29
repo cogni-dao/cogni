@@ -13,7 +13,7 @@ namePrefix: habitat-
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/habitat
-    digest: "sha256:d5eb0751da6f06f8923386dde20793b746d7973a4aa81c9546c4dd55a1f3f9fa"
+    digest: "sha256:57fd9c7da9315976c40651e9761e7976ce32f52c646090081ee3858ec49d28a7"
 
 patches:
   - target:
@@ -60,9 +60,6 @@ patches:
       kind: Deployment
       name: node-app
     patch: |
-      - op: replace
-        path: /spec/replicas
-        value: 0
       - op: replace
         path: /spec/template/spec/containers/0/envFrom/1/secretRef/name
         value: "habitat-env-secrets"
