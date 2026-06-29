@@ -944,16 +944,19 @@ patches:
             content: encode("appset __ENV__ __NODE__\n"),
           };
         }
-        if (path === "infra/k8s/argocd/kustomization.yaml") {
+        if (path === "infra/k8s/argocd/appsets/kustomization.yaml") {
           return {
             type: "file",
             encoding: "base64",
-            content: encode(`resources:
-  # >>> GENERATED node-appsets (scripts/ci/render-node-appset.sh) — DO NOT EDIT BY HAND
+            content: encode(`apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: argocd
+
+resources:
   - candidate-a-node-template-applicationset.yaml
   - preview-node-template-applicationset.yaml
   - production-node-template-applicationset.yaml
-  # <<< GENERATED node-appsets
 `),
           };
         }

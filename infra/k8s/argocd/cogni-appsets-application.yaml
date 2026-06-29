@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2025 Cogni-DAO
+#
+# Argo CD Application — cogni-appsets (the per-(env, node) ApplicationSet app-of-apps).
+#
+# Continuously reconciles infra/k8s/argocd/appsets/ — the directory of GENERATED
+# per-(env, node) ApplicationSet objects (one per deployable node × env, see
+# scripts/ci/render-node-appset.sh). The bootstrap kustomization applies THIS
+# Application once; from then on Argo owns the AppSet layer.
+#
+# Why this exists (the decommission prune-gap it closes):
+#   The per-node AppSets used to be listed directly in the bootstrap
+#   kustomization, which is applied ONCE at cluster bootstrap. Removing a node
+#   from a catalog `envs[]` deletes its AppSet FILE from git, but nothing
+#   re-applied the bootstrap kustomization — so the live AppSet (and its pods)
+#   orphaned and never pruned. With prune: true on a dir-sourced Application,
+#   Argo sees the file vanish from git and prunes the AppSet automatically.
+#
+# Scope: this app-of-apps owns ONLY the per-(env, node) AppSets under appsets/.
+#   It NEVER manages Argo's own install (install.yaml / ksops / substrate apps) —
+#   those stay in the bootstrap kustomization, applied out-of-band.
+#
+# repoURL is the LITERAL upstream — the bootstrap apply path does NO envsubst,
+# so (unlike the substrate Applications) this cannot use ${FORK_REPO}.
+#
+# targetRevision: main — the AppSets are shared SOURCE with zero per-env
+# templating, mirroring the substrate Applications' main-tracking rationale.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cogni-appsets
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/cogni-dao/cogni.git
+    targetRevision: main
+    path: infra/k8s/argocd/appsets
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true
