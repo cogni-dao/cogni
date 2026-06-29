@@ -31,6 +31,13 @@ export {
   INCLUDE_ALL_SELECTION_POLICY,
   INCLUDE_ALL_SELECTION_POLICY_REF,
 } from "./plugins/include-all-selection/descriptor";
+export type { MainMergeSelectionConfig } from "./plugins/main-merge-selection/descriptor";
+// Main-merge selection policy (direct-to-main: a PR merged to main is the contribution)
+export {
+  createMainMergeSelectionPolicy,
+  MAIN_MERGE_SELECTION_POLICY,
+  MAIN_MERGE_SELECTION_POLICY_REF,
+} from "./plugins/main-merge-selection/descriptor";
 export type { PromotionSelectionConfig } from "./plugins/promotion-selection/descriptor";
 // Promotion selection policy
 export {
@@ -47,6 +54,7 @@ export {
 
 // Profiles
 export { COGNI_V0_PROFILE } from "./profiles/cogni-v0.0";
+export { COGNI_V0_1_PROFILE } from "./profiles/cogni-v0.1";
 
 // Registry
 export {

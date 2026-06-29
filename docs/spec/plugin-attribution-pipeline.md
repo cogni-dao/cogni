@@ -194,9 +194,12 @@ function resolveProfile(
 
 **Built-in profiles (defined in `@cogni/attribution-pipeline-plugins`):**
 
-| Profile ID   | enricherRefs      | allocatorRef    | epochKind  |
-| ------------ | ----------------- | --------------- | ---------- |
-| `cogni-v0.0` | `[cogni.echo.v0]` | `weight-sum-v0` | `activity` |
+| Profile ID   | enricherRefs      | allocatorRef    | selectionPolicyRef              | epochKind  |
+| ------------ | ----------------- | --------------- | ------------------------------- | ---------- |
+| `cogni-v0.0` | `[cogni.echo.v0]` | `weight-sum-v0` | `cogni.promotion-selection.v0`  | `activity` |
+| `cogni-v0.1` | `[cogni.echo.v0]` | `weight-sum-v0` | `cogni.main-merge-selection.v0` | `activity` |
+
+`cogni-v0.1` is the active profile. It differs from `v0.0` only in selection: `promotion-selection.v0` models a staging→main promotion flow and treats a direct-to-`main` PR as a "release PR" (reference data, **excluded**) — which yields zero claimants on a repo that merges directly to `main`. `main-merge-selection.v0` inverts that: a PR merged to `main` **is** the contribution (reviews on those PRs included for visibility; bots excluded). Switching profiles is the documented upgrade path — publish new, bump `attribution_pipeline` in `repo-spec.yaml`; `v0.0` stays registered for provenance of any epoch created under it.
 
 Future profiles add enricher refs (e.g., `cogni.work_item_links.v0`, `cogni.ai_scores.v0`) and select different allocators (e.g., `work-item-budget-v0`, `eval-scored-v0`). No code changes to the framework or dispatch layer — only new plugin implementations and profile data in the plugins package.
 
