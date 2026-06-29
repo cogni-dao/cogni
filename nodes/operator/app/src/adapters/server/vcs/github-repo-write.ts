@@ -48,6 +48,7 @@ import type {
   SyncTemplateUpstreamResult,
 } from "@/ports";
 import {
+  hasDistributionActivationSpec,
   hasPaymentsActivationSpec,
   insertAppsetKustomization,
   insertCaddyBlock,
@@ -55,6 +56,7 @@ import {
   NODE_FORMATION_ENVS,
   nextFreeNodePort,
   renderCatalog,
+  renderDistributionActivationSpec,
   renderNodeAppset,
   renderNodeExternalSecret,
   renderNodeExternalSecretKustomization,
@@ -106,6 +108,14 @@ interface GitHubPullRequestSummary {
   };
 }
 
+type ActivationPrStatus = {
+  readonly number: number;
+  readonly url: string;
+  readonly state: "open" | "merged";
+  readonly mergedAt: string | null;
+  readonly mergeCommitSha: string | null;
+} | null;
+
 export interface PaymentsActivationStatusInput {
   readonly owner: string;
   readonly repo: string;
@@ -117,13 +127,21 @@ export interface PaymentsActivationStatusInput {
 export interface PaymentsActivationStatus {
   readonly mainSha: string | null;
   readonly repoSpecActive: boolean;
-  readonly activationPr: {
-    readonly number: number;
-    readonly url: string;
-    readonly state: "open" | "merged";
-    readonly mergedAt: string | null;
-    readonly mergeCommitSha: string | null;
-  } | null;
+  readonly activationPr: ActivationPrStatus;
+}
+
+export interface DistributionActivationInput {
+  readonly owner: string;
+  readonly repo: string;
+  readonly slug: string;
+  readonly tokenAddress: string;
+  readonly emissionsHolderAddress: string;
+}
+
+export interface DistributionActivationStatus {
+  readonly mainSha: string | null;
+  readonly repoSpecActive: boolean;
+  readonly activationPr: ActivationPrStatus;
 }
 
 /**
@@ -1708,6 +1726,175 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
     return { status: "pr_opened", ...result };
   }
 
+  /**
+   * Distribution-activation write-back into the NODE'S OWN repo: read `.cogni/repo-spec.yaml` on
+   * `main`, splice in the Aragon GovernanceERC20 token, DAO-controlled emissions holder, and active
+   * distribution status with the stock Uniswap MerkleDistributor claim pattern, then open or reuse a
+   * one-file PR. This is intentionally independent from formation and payments activation.
+   */
+  async openDistributionActivationPr(
+    input: DistributionActivationInput
+  ): Promise<
+    | { status: "pr_opened"; prNumber: number; prUrl: string }
+    | { status: "no_changes" }
+  > {
+    const { owner, repo, slug } = input;
+    const octokit = await this.getOctokit(owner, repo);
+    const branch = `cogni-operator/activate-distributions-${slug}`;
+    const title = `feat(distributions): activate ${slug} token distributions`;
+    const body =
+      `Activates \`${slug}\`'s token distribution lifecycle. Writes the verified ` +
+      "GovernanceERC20 token + DAO-controlled emissions holder into `.cogni/repo-spec.yaml`:\n\n" +
+      `- \`governance.token_contract\` = \`${input.tokenAddress}\`\n` +
+      `- \`governance.emissions_holder\` = \`${input.emissionsHolderAddress}\`\n` +
+      "- `distributions.status: active`\n" +
+      "- `distributions.claim_contract_pattern: uniswap.merkle-distributor.v1`\n\n" +
+      "This only records verified distribution readiness. Per-epoch claims still use the OSS " +
+      "MerkleDistributor path and require a separately funded epoch distributor.\n\n" +
+      "_Authored automatically by cogni-operator on distribution activation._";
+
+    const currentSpec = await this.fetchFileText({
+      owner,
+      repo,
+      path: ".cogni/repo-spec.yaml",
+      ref: "main",
+    });
+    if (currentSpec === null) {
+      throw deployPlaneError(
+        "repo_spec_missing",
+        `node repo-spec not found at ${owner}/${repo}:.cogni/repo-spec.yaml`,
+        422
+      );
+    }
+
+    const nextSpec = renderDistributionActivationSpec(currentSpec, {
+      tokenAddress: input.tokenAddress,
+      emissionsHolderAddress: input.emissionsHolderAddress,
+    });
+    if (
+      nextSpec === currentSpec ||
+      hasDistributionActivationSpec(currentSpec, {
+        tokenAddress: input.tokenAddress,
+        emissionsHolderAddress: input.emissionsHolderAddress,
+      })
+    ) {
+      return { status: "no_changes" };
+    }
+
+    const existingPr = await this.findOpenPrForBranch(octokit, owner, repo, {
+      branch,
+      title,
+    });
+    if (existingPr) {
+      const pendingSpec = await this.fetchFileText({
+        owner,
+        repo,
+        path: ".cogni/repo-spec.yaml",
+        ref: branch,
+      });
+      if (
+        pendingSpec === nextSpec ||
+        (pendingSpec !== null &&
+          hasDistributionActivationSpec(pendingSpec, {
+            tokenAddress: input.tokenAddress,
+            emissionsHolderAddress: input.emissionsHolderAddress,
+          }))
+      ) {
+        await this.updatePrBody(
+          octokit,
+          owner,
+          repo,
+          existingPr.prNumber,
+          title,
+          body
+        );
+        return { status: "pr_opened", ...existingPr };
+      }
+    }
+
+    const { baseCommitSha, baseTreeSha } = await this.resolveMainBase(
+      octokit,
+      owner,
+      repo
+    );
+    const blobSha = await this.createBlob(octokit, owner, repo, nextSpec);
+
+    const result = await this.commitTreeAndOpenPr(octokit, owner, repo, slug, {
+      baseCommitSha,
+      baseTreeSha,
+      entries: [
+        {
+          path: ".cogni/repo-spec.yaml",
+          mode: "100644",
+          type: "blob",
+          sha: blobSha,
+        },
+      ],
+      message: `feat(distributions): activate ${slug} token distributions`,
+      branch,
+      pr: { title, body },
+    });
+    await this.updatePrBody(octokit, owner, repo, result.prNumber, title, body);
+    return { status: "pr_opened", ...result };
+  }
+
+  async getDistributionActivationStatus(
+    input: DistributionActivationInput
+  ): Promise<DistributionActivationStatus> {
+    const { owner, repo, slug } = input;
+    const octokit = await this.getOctokit(owner, repo);
+    const branch = `cogni-operator/activate-distributions-${slug}`;
+    const title = `feat(distributions): activate ${slug} token distributions`;
+
+    const currentSpec = await this.fetchFileText({
+      owner,
+      repo,
+      path: ".cogni/repo-spec.yaml",
+      ref: "main",
+    });
+    const repoSpecActive =
+      currentSpec !== null &&
+      hasDistributionActivationSpec(currentSpec, {
+        tokenAddress: input.tokenAddress,
+        emissionsHolderAddress: input.emissionsHolderAddress,
+      });
+
+    let mainSha: string | null = null;
+    try {
+      mainSha = await this.resolveCommitSha(octokit, owner, repo, "main");
+    } catch (error) {
+      if ((error as { status?: number })?.status !== 404) throw error;
+    }
+
+    const openPr = await this.findOpenPrForBranch(octokit, owner, repo, {
+      branch,
+      title,
+    });
+    if (openPr) {
+      return {
+        mainSha,
+        repoSpecActive,
+        activationPr: {
+          number: openPr.prNumber,
+          url: openPr.prUrl,
+          state: "open",
+          mergedAt: null,
+          mergeCommitSha: null,
+        },
+      };
+    }
+
+    const mergedPr = await this.findMergedPrForBranch(octokit, owner, repo, {
+      branch,
+      title,
+    });
+    return {
+      mainSha,
+      repoSpecActive,
+      activationPr: mergedPr,
+    };
+  }
+
   async getPaymentsActivationStatus(
     input: PaymentsActivationStatusInput
   ): Promise<PaymentsActivationStatus> {
@@ -2368,7 +2555,7 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       readonly branch: string;
       readonly title?: string;
     }
-  ): Promise<PaymentsActivationStatus["activationPr"]> {
+  ): Promise<ActivationPrStatus> {
     const { data: closedPrs } = await octokit.request(
       "GET /repos/{owner}/{repo}/pulls",
       {

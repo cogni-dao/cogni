@@ -15,6 +15,12 @@
 export { insertAppsetKustomization, renderNodeAppset } from "./appset";
 export { insertCaddyBlock } from "./caddyfile";
 export { type RenderCatalogInput, renderCatalog } from "./catalog";
+export {
+  DISTRIBUTION_CLAIM_CONTRACT_PATTERN,
+  hasDistributionActivationSpec,
+  type RenderDistributionActivationInput,
+  renderDistributionActivationSpec,
+} from "./distribution-activation";
 export { NODE_FORMATION_ENVS, type NodeFormationEnv } from "./envs";
 export {
   renderNodeExternalSecret,
