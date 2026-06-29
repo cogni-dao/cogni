@@ -70,7 +70,8 @@ Enable any founder to register a node, form a fully-verified Cogni DAO via walle
 1. **MINIMAL_USER_INPUT**: Form collects only:
    - `tokenName` (string) - e.g., "Cogni Governance"
    - `tokenSymbol` (string) - e.g., "COGNI"
-   - `initialHolder` (address) - single founder, receives 1e18 tokens
+   - `tokenSupply` (whole-token integer) - fixed initial ownership supply
+   - `initialHolder` (address) - single founder or emissions holder receiving the initial supply
 
    User wallet signs 2 transactions: `createDao` + `deployCogniSignal`.
 
@@ -80,7 +81,7 @@ Enable any founder to register a node, form a fully-verified Cogni DAO via walle
 
 3. **NO_PRIVATE_KEY_ENV_VARS**: Formation transactions are signed via wallet UI (wagmi/rainbowkit), never by script-loaded secrets. Payment activation (child node CLI) uses `DEPLOYER_PRIVATE_KEY` for Split deployment — this is acceptable because it runs in the child node's own environment, not the shared operator repo.
 
-4. **SERVER_VERIFICATION_BOUNDARY**: Browser is untrusted. Server derives ALL addresses from tx receipts. Request contains only `{ chainId, daoTxHash, signalTxHash, initialHolder }`.
+4. **SERVER_VERIFICATION_BOUNDARY**: Browser is untrusted. Server derives ALL addresses from tx receipts. Request contains only transaction coordinates, the expected holder, and the expected token supply: `{ chainId, daoTxHash, signalTxHash, signalBlockNumber, initialHolder, expectedTokenSupplyUnits }`.
 
 5. **PACKAGE_ISOLATION**: `aragon-osx` cannot import `src/`, `services/`, or browser/node-specific APIs.
 
@@ -96,11 +97,12 @@ Enable any founder to register a node, form a fully-verified Cogni DAO via walle
 
 ## Schema
 
-**User Input (P0 form - 3 fields):**
+**User Input (P0 form):**
 
 - `tokenName` (string, required) - e.g., "Cogni Governance"
 - `tokenSymbol` (string, required) - e.g., "COGNI"
-- `initialHolder` (address, required) - Single founder, receives 1e18 tokens
+- `tokenSupply` (integer, required) - Whole-token supply minted at formation
+- `initialHolder` (address, required) - Single founder or emissions holder receiving the initial supply
 
 **Derived (not user input):**
 
@@ -108,13 +110,12 @@ Enable any founder to register a node, form a fully-verified Cogni DAO via walle
 
 **Verify Request (to server):**
 
-- `chainId`, `daoTxHash`, `signalTxHash`, `initialHolder`
+- `chainId`, `daoTxHash`, `signalTxHash`, `signalBlockNumber`, `initialHolder`, `expectedTokenSupplyUnits`
 - No addresses - server derives all from receipts
 
 **Verify Response (from server):**
 
 - `addresses.dao`, `addresses.token`, `addresses.plugin`, `addresses.signal`
-- `repoSpecYaml` - Ready to write, `chain_id` as string per existing schema
 
 **Forbidden:**
 
@@ -183,8 +184,8 @@ Server derives addresses from receipts (never trusts client):
 1. Decode `daoTxHash` → extract DAO + plugin addresses from events (DAORegistered, InstallationApplied)
 2. Call `TokenVoting(plugin).getVotingToken()` → token address
 3. Decode `signalTxHash` → extract CogniSignal address from contractAddress
-4. Verify `balanceOf(initialHolder) == 1e18` and `CogniSignal.DAO() == dao`
-5. Return verified addresses + repo-spec YAML
+4. Verify `balanceOf(initialHolder) == expectedTokenSupplyUnits`, `totalSupply() == expectedTokenSupplyUnits`, and `CogniSignal.DAO() == dao`
+5. Return verified addresses
 
 ### viem Encoding (TokenVoting Setup with Mint)
 
@@ -224,7 +225,7 @@ Hardcoded per chainId. Server enforces `chainId in SUPPORTED_CHAIN_IDS` before a
 │ ────────────────────────────────                                    │
 │ - DAOFactory.createDao(daoSettings, pluginSettings)                 │
 │ - TokenVoting plugin + GovernanceERC20 deployed by Aragon           │
-│ - MintSettings mints 1e18 to initialHolder                          │
+│ - MintSettings mints expectedTokenSupplyUnits to initialHolder       │
 │ - Capture daoTxHash                                                 │
 └─────────────────────────────────────────────────────────────────────┘
                               │
@@ -241,10 +242,10 @@ Hardcoded per chainId. Server enforces `chainId in SUPPORTED_CHAIN_IDS` before a
 ┌─────────────────────────────────────────────────────────────────────┐
 │ SERVER VERIFICATION (server-side)                                   │
 │ ─────────────────────────────────                                   │
-│ - POST { chainId, daoTxHash, signalTxHash, initialHolder }          │
+│ - POST { chainId, tx hashes, signal block, holder, expected supply }│
 │ - Server derives ALL addresses from receipts (never trusts client)  │
-│ - Server verifies balanceOf + CogniSignal.DAO()                     │
-│ - Returns addresses + repo-spec YAML                                │
+│ - Server verifies balanceOf + totalSupply + CogniSignal.DAO()       │
+│ - Returns verified addresses                                        │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -281,8 +282,8 @@ Hardcoded per chainId. Server enforces `chainId in SUPPORTED_CHAIN_IDS` before a
 
 1. Validate `chainId` against SUPPORTED_CHAIN_IDS (BASE + SEPOLIA only)
 2. Derive all addresses from receipts using strict decoders
-3. Verify on-chain state: `balanceOf(initialHolder) == 1e18`, `CogniSignal.DAO() == dao`
-4. Return repo-spec YAML
+3. Verify on-chain state: `balanceOf(initialHolder) == expectedTokenSupplyUnits`, `totalSupply() == expectedTokenSupplyUnits`, `CogniSignal.DAO() == dao`
+4. Return verified addresses
 
 **Security:** No fallback heuristics. Missing events throw errors.
 
@@ -302,12 +303,15 @@ Hardcoded per chainId. Server enforces `chainId in SUPPORTED_CHAIN_IDS` before a
 
 #### 6. Repo-Spec Output
 
-**YAML Builder:** → `src/app/api/setup/verify/route.ts` (`buildRepoSpecYaml`)
+`POST /api/setup/verify` does not emit repo-spec YAML. It returns only verified
+addresses derived from receipts. The per-node wizard persists those addresses to
+the operator node registry row with `PATCH /api/v1/nodes/<id>`.
 
-Populates at formation time:
+Publish later builds the child repo's `.cogni/repo-spec.yaml` from the verified
+registry row:
 
-- `node_id` — random UUID
-- `scope_id` — deterministic from node_id
+- `node_id` - existing DB-backed node identity
+- `scope_id` - deterministic from `node_id`
 - `governance.dao_contract`, `plugin_contract`, `signal_contract`, `chain_id`
 - `payments.status: pending_activation`
 
@@ -322,7 +326,7 @@ Populated later by `pnpm node:activate-payments` (child node CLI):
 - Server derives DAO/plugin/signal addresses from receipts, not client input
 - `chain_id` is string (e.g., `"8453"` not `8453`)
 - Canonical path: `.cogni/repo-spec.yaml`
-- `payments.status` is explicit — never inferred from field presence
+- `payments.status` is explicit - never inferred from field presence
 
 > Current schema: [.cogni/repo-spec.yaml](../../.cogni/repo-spec.yaml)
 
@@ -429,9 +433,9 @@ OSx v1.4.0 deployments. Hardcoded addresses from [cogni-signal-evm-contracts](ht
 
 1. Successfully deployed DAOs on Base mainnet, verified via Aragon app
 2. Server derives all addresses from receipts without client-provided addresses
-3. `balanceOf(initialHolder) == 1e18` verified on-chain
+3. `balanceOf(initialHolder)` and `totalSupply()` both equal `expectedTokenSupplyUnits` on-chain
 4. Observability event `SETUP_DAO_VERIFY_COMPLETE` emitted with outcome, chainId, duration
-5. Repo-spec output includes `payments.status: pending_activation`
+5. Publish output includes `payments.status: pending_activation`
 
 **Payment Activation (manual):**
 

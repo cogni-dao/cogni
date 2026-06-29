@@ -59,7 +59,8 @@ Open `/nodes` in the application, choose a slug, and create the node row. The ca
 | --------------- | ------------------- | -------------------------------------------- |
 | `tokenName`     | "Cogni Governance"  | Human-readable name for the governance token |
 | `tokenSymbol`   | "COGNI"             | Short ticker symbol                          |
-| `initialHolder` | Your wallet address | Founder address — receives 1e18 tokens       |
+| `tokenSupply`   | 1,000,000           | Whole ownership tokens minted at formation   |
+| `initialHolder` | Your wallet address | Founder address receiving the initial supply |
 
 ### 3. Preflight Validation (Automatic)
 
@@ -76,7 +77,7 @@ If any check fails, the wizard shows an error and blocks deployment.
 The wizard calls `DAOFactory.createDao()` with TokenVoting plugin and MintSettings. Your wallet signs the transaction. This deploys:
 
 - DAO contract
-- GovernanceERC20 token (mints 1e18 to `initialHolder`)
+- GovernanceERC20 token (mints the selected 18-decimal supply to `initialHolder`)
 - TokenVoting plugin
 
 ### 5. Sign Transaction 2: Deploy CogniSignal
@@ -85,12 +86,13 @@ After TX 1 confirms, the wizard deploys `CogniSignal(daoAddress)`. The DAO addre
 
 ### 6. Server Verification (Automatic)
 
-The wizard submits `{ chainId, daoTxHash, signalTxHash, initialHolder }` to the server endpoint (`POST /api/setup/verify`). The server:
+The wizard submits `{ chainId, daoTxHash, signalTxHash, signalBlockNumber, initialHolder, expectedTokenSupplyUnits }` to the server endpoint (`POST /api/setup/verify`). The server:
 
 1. Derives ALL addresses from transaction receipts (never trusts client)
-2. Verifies `balanceOf(initialHolder) == 1e18`
-3. Verifies `CogniSignal.DAO() == daoAddress`
-4. Returns verified addresses
+2. Verifies `balanceOf(initialHolder) == expectedTokenSupplyUnits`
+3. Verifies `totalSupply() == expectedTokenSupplyUnits`
+4. Verifies `CogniSignal.DAO() == daoAddress`
+5. Returns verified addresses
 
 ### 7. Persist Verified Addresses
 
@@ -123,7 +125,7 @@ After formation completes successfully:
 
 1. Check that the node row has `dao_address`, `plugin_address`, `signal_address`, `token_address`, `dao_tx_hash`, and `signal_tx_hash`
 2. Verify the DAO exists on the Aragon app for your chain
-3. Confirm token balance: `balanceOf(initialHolder)` should return `1000000000000000000` (1e18)
+3. Confirm token balance and total supply both equal the selected whole-token supply multiplied by `1e18`
 
 ## Troubleshooting
 
