@@ -16,8 +16,10 @@ import {
   DAO_TOKEN_SUPPLY_DEFAULT_WHOLE,
   DAO_TOKEN_SUPPLY_MAX_WHOLE,
   DAO_TOKEN_SUPPLY_MIN_WHOLE,
+  DEFAULT_DAO_TOKENOMICS_TEMPLATE_ID,
   hashDaoTokenClaimLeaf,
   parseDaoTokenSupplyUnits,
+  resolveDaoTokenomics,
   verifyDaoTokenMerkleProof,
 } from "@cogni/aragon-osx";
 import { describe, expect, it } from "vitest";
@@ -228,5 +230,57 @@ describe("buildDaoTokenMerkleDistribution", () => {
         ],
       })
     ).toThrow(/invalid claim account/);
+  });
+});
+
+describe("resolveDaoTokenomics", () => {
+  it("distinguishes policy supply from a one-token genesis mint", () => {
+    const tokenomics = resolveDaoTokenomics({
+      templateId: DEFAULT_DAO_TOKENOMICS_TEMPLATE_ID,
+      policySupplyWholeTokens: 1_000_000,
+    });
+
+    expect(tokenomics.genesisMintWholeTokens).toBe(1);
+    expect(tokenomics.unmintedPolicyBudgetWholeTokens).toBe(999_999);
+    expect(tokenomics.slices[0]).toMatchObject({
+      label: "Genesis steward",
+      wholeTokens: 1,
+      mintedAtFormation: true,
+    });
+    expect(
+      tokenomics.slices
+        .filter((slice) => !slice.mintedAtFormation)
+        .reduce((sum, slice) => sum + slice.wholeTokens, 0)
+    ).toBe(999_999);
+  });
+
+  it("computes the 20% founder float template from policy supply", () => {
+    const tokenomics = resolveDaoTokenomics({
+      templateId: "solo_20_percent",
+      policySupplyWholeTokens: 1_000_000,
+    });
+
+    expect(tokenomics.genesisMintWholeTokens).toBe(200_000);
+    expect(tokenomics.unmintedPolicyBudgetWholeTokens).toBe(800_000);
+    expect(tokenomics.slices.map((slice) => slice.wholeTokens)).toEqual([
+      200_000, 500_000, 200_000, 100_000,
+    ]);
+  });
+
+  it("models future multi-owner templates without enabling them in the P0 wizard", () => {
+    const council = resolveDaoTokenomics({
+      templateId: "council_three_equal",
+      policySupplyWholeTokens: 1_000_000,
+    });
+    const openPool = resolveDaoTokenomics({
+      templateId: "open_contributor_pool",
+      policySupplyWholeTokens: 1_000_000,
+      ownerCount: 12,
+    });
+
+    expect(council.ownerCount).toBe(3);
+    expect(council.genesisMintWholeTokens).toBe(3);
+    expect(openPool.ownerCount).toBe(12);
+    expect(openPool.genesisMintWholeTokens).toBe(100_000);
   });
 });

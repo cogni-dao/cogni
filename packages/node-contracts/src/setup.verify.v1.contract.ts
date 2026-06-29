@@ -21,7 +21,7 @@ export const setupVerifyOperation = {
   id: "setup.verify.v1",
   summary: "Verify DAO formation transactions",
   description:
-    "Server derives addresses from tx receipts and verifies on-chain state (minted balance, CogniSignal.DAO())",
+    "Server derives addresses from tx receipts and verifies on-chain state (genesis mint balance, CogniSignal.DAO())",
   input: z
     .object({
       chainId: z
@@ -45,7 +45,7 @@ export const setupVerifyOperation = {
       expectedTokenSupplyUnits: z
         .string()
         .regex(/^[1-9][0-9]*$/, "Invalid token supply units")
-        .describe("Expected 18-decimal token supply minted to initialHolder"),
+        .describe("Expected 18-decimal genesis mint to initialHolder"),
     })
     .strict(), // SECURITY: Reject any client-supplied addresses (must derive from receipts)
   output: z.discriminatedUnion("verified", [

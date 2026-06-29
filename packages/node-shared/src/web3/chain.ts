@@ -39,7 +39,7 @@ export interface ChainConfig {
  * Chain configurations for all supported chains.
  * Currently EVM-only; add new chains here; do not create separate parallel maps.
  */
-export const CHAINS: Record<ChainKey, ChainConfig> = {
+export const CHAINS = {
   SEPOLIA: {
     key: "SEPOLIA",
     chainId: 11155111,
@@ -54,7 +54,23 @@ export const CHAINS: Record<ChainKey, ChainConfig> = {
     usdcTokenAddress: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
     minConfirmations: 2,
   },
-};
+} as const satisfies Record<ChainKey, ChainConfig>;
+
+export type SupportedEvmChainId = (typeof CHAINS)[ChainKey]["chainId"];
+
+export function isSupportedEvmChainId(
+  chainId: number
+): chainId is SupportedEvmChainId {
+  return Object.values(CHAINS).some((chain) => chain.chainId === chainId);
+}
+
+export function getChainConfigById(chainId: SupportedEvmChainId): ChainConfig;
+export function getChainConfigById(chainId: number): ChainConfig | null;
+export function getChainConfigById(chainId: number): ChainConfig | null {
+  return (
+    Object.values(CHAINS).find((chain) => chain.chainId === chainId) ?? null
+  );
+}
 
 /**
  * Active chain for this deployment.

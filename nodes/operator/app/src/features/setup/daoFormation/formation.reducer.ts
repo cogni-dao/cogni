@@ -11,7 +11,11 @@
  * @public
  */
 
-import type { Hex, HexAddress } from "@cogni/aragon-osx";
+import type {
+  DaoTokenomicsTemplateId,
+  Hex,
+  HexAddress,
+} from "@cogni/aragon-osx";
 
 export type TxHash = Hex;
 
@@ -22,7 +26,9 @@ export type TxHash = Hex;
 export interface DAOFormationConfig {
   tokenName: string;
   tokenSymbol: string;
-  tokenSupplyUnits: bigint;
+  tokenomicsTemplateId: DaoTokenomicsTemplateId;
+  policySupplyUnits: bigint;
+  genesisMintUnits: bigint;
   initialHolder: HexAddress;
 }
 

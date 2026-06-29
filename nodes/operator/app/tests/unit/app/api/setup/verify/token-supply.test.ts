@@ -37,7 +37,7 @@ describe("collectTokenSupplyVerificationErrors", () => {
         totalSupply: 2n,
       })
     ).toEqual([
-      `Initial holder balance mismatch: expected ${expectedSupply.toString()}, got 1`,
+      `Genesis holder balance mismatch: expected ${expectedSupply.toString()}, got 1`,
       `Token totalSupply mismatch: expected ${expectedSupply.toString()}, got 2`,
     ]);
   });

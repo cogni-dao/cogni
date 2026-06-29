@@ -218,7 +218,8 @@ Attribution credits (off-chain)
 **Settlement contracts:**
 
 - The settlement token is the Aragon `GovernanceERC20` created at node formation.
-- Node formation must move from founder bootstrap minting to a fixed-supply mint into a DAO-controlled emissions holder.
+- Current P0 formation mints only a template-computed genesis amount to the explicit initial holder and models the rest as unminted policy budget. That proves Aragon formation and verification without pretending a distribution rail exists.
+- Before Walk settlement can go live, node formation must move from founder bootstrap minting to a fixed-supply mint into a DAO-controlled emissions holder or an equivalent funded distributor path.
 - Crawl budget policy remains off-chain accounting and governance policy. It is not the hard security boundary for token release.
 - In Walk, the source of truth for remaining supply is `emissionsHolder.balanceOf(token)` on-chain, not Postgres. Off-chain `remaining` becomes a reconciliation check.
 - Walk should prefer stock audited per-epoch Merkle claims. Bespoke on-chain release enforcement is a later hardening step.

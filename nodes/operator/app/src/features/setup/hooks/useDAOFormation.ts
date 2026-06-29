@@ -235,7 +235,7 @@ export function useDAOFormation(): UseDAOFormationReturn {
         signalTxHash,
         signalBlockNumber,
         initialHolder: config.initialHolder,
-        expectedTokenSupplyUnits: config.tokenSupplyUnits,
+        expectedGenesisMintUnits: config.genesisMintUnits,
       });
 
       if (attemptIdRef.current !== currentAttempt) return;

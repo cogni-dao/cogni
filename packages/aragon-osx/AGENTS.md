@@ -42,6 +42,7 @@ Pure TypeScript package for Node Formation P0. Provides Aragon OSx encoding, add
   - `parseDaoTokenSupplyUnits()` - validate whole-token supplies and convert to 18-decimal base units
   - `buildDaoTokenMerkleDistribution()` - build deterministic EVM-compatible token claim manifests
   - `hashDaoTokenClaimLeaf()`, `verifyDaoTokenMerkleProof()` - claim leaf/proof helpers
+  - `DAO_TOKENOMICS_TEMPLATES`, `resolveDaoTokenomics()` - typed DAO ownership token templates
   - `ARAGON_OSX_ADDRESSES` - Hardcoded OSx addresses per chainId
   - `getAragonAddresses()` - Lookup helper
   - `osx/events` - Event ABIs and topic constants

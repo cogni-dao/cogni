@@ -24,11 +24,15 @@ Provide a single document that explains the full attribution pipeline end-to-end
 
 ## DAO Ownership Token Distribution
 
-The first crypto-distribution primitive is an ownership token merkle manifest, not
-an automatic payout executor. DAO formation mints the node's selected whole-token
-supply to the initial holder. After attribution epochs produce signed claimant
-allocations, those signed credit entitlements can be transformed into a deterministic token
-claim manifest:
+The first crypto-distribution primitive is an ownership token merkle manifest,
+not an automatic payout executor. It does not deploy or fund a MerkleDistributor
+contract yet. DAO formation now separates the DAO's long-run policy supply from
+the concrete genesis mint. Current P0 templates mint only a small, explicit
+genesis amount to a known holder; the remaining policy supply is an unminted
+policy budget for later DAO-controlled emissions, contributor claims, and
+ecosystem programs. After attribution epochs produce signed claimant
+allocations, those signed credit entitlements can be transformed into a
+deterministic token claim manifest:
 
 1. Group finalized claimant allocations by claimant key and resolved claim
    address.
@@ -43,6 +47,9 @@ claim manifest:
 
 This keeps today's ledger signing flow unchanged while giving the next iteration
 a stable bridge from signed attribution statements to token ownership claims.
+Until the distributor contract, funding transaction, and claim UI/API exist,
+`/gov/holdings` remains attribution-ledger ownership with placeholders for
+actual token distribution and attributed-vs-claimed diffs.
 
 ## Non-Goals
 

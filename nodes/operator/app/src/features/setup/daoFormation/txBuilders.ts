@@ -90,7 +90,7 @@ export function buildCreateDaoArgs(
     },
     mintSettings: {
       receivers: [config.initialHolder],
-      amounts: [config.tokenSupplyUnits],
+      amounts: [config.genesisMintUnits],
     },
     targetConfig: {
       target: DEPLOY_NEW_TOKEN_ADDRESS,

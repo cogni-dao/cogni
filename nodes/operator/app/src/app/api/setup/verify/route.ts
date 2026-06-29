@@ -417,7 +417,7 @@ export function collectTokenSupplyVerificationErrors(params: {
   const errors: string[] = [];
   if (params.balance !== params.expectedSupply) {
     errors.push(
-      `Initial holder balance mismatch: expected ${params.expectedSupply.toString()}, got ${params.balance.toString()}`
+      `Genesis holder balance mismatch: expected ${params.expectedSupply.toString()}, got ${params.balance.toString()}`
     );
   }
   if (params.totalSupply !== params.expectedSupply) {

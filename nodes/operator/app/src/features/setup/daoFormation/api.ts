@@ -48,7 +48,7 @@ export async function verifyFormation(params: {
   signalTxHash: TxHash;
   signalBlockNumber: number;
   initialHolder: HexAddress;
-  expectedTokenSupplyUnits: bigint;
+  expectedGenesisMintUnits: bigint;
 }): Promise<VerifyResult> {
   try {
     const body: SetupVerifyInput = {
@@ -57,7 +57,7 @@ export async function verifyFormation(params: {
       signalTxHash: params.signalTxHash,
       signalBlockNumber: params.signalBlockNumber,
       initialHolder: params.initialHolder,
-      expectedTokenSupplyUnits: params.expectedTokenSupplyUnits.toString(),
+      expectedTokenSupplyUnits: params.expectedGenesisMintUnits.toString(),
     };
 
     const response = await fetch("/api/setup/verify", {

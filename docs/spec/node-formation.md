@@ -52,36 +52,37 @@ Enable any founder to register a node, form a fully-verified Cogni DAO via walle
 
 ## Non-Goals
 
-| Item                                | Reason                                                          |
-| ----------------------------------- | --------------------------------------------------------------- |
-| Multiple initial holders            | P1 scope (reduces P0 to 2 wallet txs)                           |
-| Custom NonTransferableVotes token   | Aragon GovernanceERC20 sufficient for P0                        |
-| Anti-vote-buying (non-transferable) | Not a P0 invariant; revisit if needed                           |
-| Terraform provisioning              | CLI scope (P1)                                                  |
-| GitHub secrets automation           | CLI scope (P1)                                                  |
-| Repo clone/patch/write              | Now the **Publish** phase — operator App authors it (task.5092) |
-| CLI wallet signing                  | Web is simpler; add if proven needed                            |
-| Contract verification (Etherscan)   | Nice-to-have, not blocking                                      |
-| Payment activation in formation     | Wrong trust domain — child node owns its Privy wallet           |
-| Split deployment in formation       | Requires operator wallet that doesn't exist at formation time   |
+| Item                                | Reason                                                               |
+| ----------------------------------- | -------------------------------------------------------------------- |
+| Multiple genesis mint receivers     | P1 scope (requires multi-wallet collection + receiver/amount arrays) |
+| Custom NonTransferableVotes token   | Aragon GovernanceERC20 sufficient for P0                             |
+| Anti-vote-buying (non-transferable) | Not a P0 invariant; revisit if needed                                |
+| Terraform provisioning              | CLI scope (P1)                                                       |
+| GitHub secrets automation           | CLI scope (P1)                                                       |
+| Repo clone/patch/write              | Now the **Publish** phase — operator App authors it (task.5092)      |
+| CLI wallet signing                  | Web is simpler; add if proven needed                                 |
+| Contract verification (Etherscan)   | Nice-to-have, not blocking                                           |
+| Payment activation in formation     | Wrong trust domain — child node owns its Privy wallet                |
+| Split deployment in formation       | Requires operator wallet that doesn't exist at formation time        |
 
 ## Core Invariants
 
 1. **MINIMAL_USER_INPUT**: Form collects only:
    - `tokenName` (string) - e.g., "Cogni Governance"
    - `tokenSymbol` (string) - e.g., "COGNI"
-   - `tokenSupply` (whole-token integer) - fixed initial ownership supply
-   - `initialHolder` (address) - single founder or emissions holder receiving the initial supply
+   - `tokenomicsTemplate` - typed ownership template (P0 enables one concrete receiver; P1 adds 3/N receiver arrays)
+   - `policySupply` (whole-token integer) - long-run ownership policy supply
+   - `initialHolder` (address) - concrete genesis mint recipient for enabled single-receiver templates
 
    User wallet signs 2 transactions: `createDao` + `deployCogniSignal`.
 
 2. **ARAGON_MINTED_TOKEN**: Use Aragon's GovernanceERC20 minted during DAO creation. No custom NonTransferableVotes deployment. Tokens are transferable.
 
-   Forward note: the Financial Ledger reward-distribution path reuses this same `GovernanceERC20` as the rewards token. The current founder bootstrap mint is acceptable for formation testing, but it is NOT the final rewards-ready setup. Before live contributor distributions, formation must mint a fixed supply to a DAO-controlled emissions holder and the server verification path must validate that holder and total supply.
+   The wizard distinguishes long-run policy supply from genesis mint. P0 mints only the enabled template's concrete genesis amount to an explicit holder. The remaining policy supply is an unminted policy budget for future contributor claims, DAO reserve, and ecosystem programs; it is not represented as current on-chain inventory. Before live contributor distributions, the system must add a DAO-controlled emissions holder or MerkleDistributor claim path and verify that on-chain holder/distributor state.
 
 3. **NO_PRIVATE_KEY_ENV_VARS**: Formation transactions are signed via wallet UI (wagmi/rainbowkit), never by script-loaded secrets. Payment activation (child node CLI) uses `DEPLOYER_PRIVATE_KEY` for Split deployment — this is acceptable because it runs in the child node's own environment, not the shared operator repo.
 
-4. **SERVER_VERIFICATION_BOUNDARY**: Browser is untrusted. Server derives ALL addresses from tx receipts. Request contains only transaction coordinates, the expected holder, and the expected token supply: `{ chainId, daoTxHash, signalTxHash, signalBlockNumber, initialHolder, expectedTokenSupplyUnits }`.
+4. **SERVER_VERIFICATION_BOUNDARY**: Browser is untrusted. Server derives ALL addresses from tx receipts. Request contains only transaction coordinates, the expected holder, and the expected genesis mint: `{ chainId, daoTxHash, signalTxHash, signalBlockNumber, initialHolder, expectedTokenSupplyUnits }`.
 
 5. **PACKAGE_ISOLATION**: `aragon-osx` cannot import `src/`, `services/`, or browser/node-specific APIs.
 
@@ -101,12 +102,14 @@ Enable any founder to register a node, form a fully-verified Cogni DAO via walle
 
 - `tokenName` (string, required) - e.g., "Cogni Governance"
 - `tokenSymbol` (string, required) - e.g., "COGNI"
-- `tokenSupply` (integer, required) - Whole-token supply minted at formation
-- `initialHolder` (address, required) - Single founder or emissions holder receiving the initial supply
+- `tokenomicsTemplate` (string, required) - e.g., `solo_one_token` or `solo_20_percent`
+- `policySupply` (integer, required) - Whole-token policy supply for the DAO's ownership model
+- `initialHolder` (address, required) - Single concrete holder receiving the computed genesis mint
 
 **Derived (not user input):**
 
 - `chainId` - From connected wallet (must be in `SUPPORTED_CHAIN_IDS`)
+- `genesisMint` - Whole-token amount computed from the selected template
 
 **Verify Request (to server):**
 
@@ -187,6 +190,8 @@ Server derives addresses from receipts (never trusts client):
 4. Verify `balanceOf(initialHolder) == expectedTokenSupplyUnits`, `totalSupply() == expectedTokenSupplyUnits`, and `CogniSignal.DAO() == dao`
 5. Return verified addresses
 
+`expectedTokenSupplyUnits` is the computed genesis mint amount, not necessarily the long-run policy supply. Any unminted policy budget is not an on-chain reserve until a later distributor/emissions-holder flow exists.
+
 ### viem Encoding (TokenVoting Setup with Mint)
 
 **Encoder:** → `packages/aragon-osx/src/encoding.ts` (`encodeTokenVotingSetup`)
@@ -225,7 +230,7 @@ Hardcoded per chainId. Server enforces `chainId in SUPPORTED_CHAIN_IDS` before a
 │ ────────────────────────────────                                    │
 │ - DAOFactory.createDao(daoSettings, pluginSettings)                 │
 │ - TokenVoting plugin + GovernanceERC20 deployed by Aragon           │
-│ - MintSettings mints expectedTokenSupplyUnits to initialHolder       │
+│ - MintSettings mints computed genesisMintUnits to initialHolder      │
 │ - Capture daoTxHash                                                 │
 └─────────────────────────────────────────────────────────────────────┘
                               │
@@ -242,7 +247,7 @@ Hardcoded per chainId. Server enforces `chainId in SUPPORTED_CHAIN_IDS` before a
 ┌─────────────────────────────────────────────────────────────────────┐
 │ SERVER VERIFICATION (server-side)                                   │
 │ ─────────────────────────────────                                   │
-│ - POST { chainId, tx hashes, signal block, holder, expected supply }│
+│ - POST { chainId, tx hashes, signal block, holder, genesis mint }    │
 │ - Server derives ALL addresses from receipts (never trusts client)  │
 │ - Server verifies balanceOf + totalSupply + CogniSignal.DAO()       │
 │ - Returns verified addresses                                        │
