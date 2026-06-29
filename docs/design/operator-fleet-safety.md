@@ -111,10 +111,18 @@ Capacity numbers derive from **Terraform** (`system_reserved_memory` /
 deleted in the revert and must not return. Two sources of truth for capacity is the
 bug, not the feature.
 
-## 5. This PR's slice (candidate-a)
+## 5. This slice (candidate-a) — REVERTED after the 2026-06-29 incident
 
-A **`LimitRange`** and a **`ResourceQuota`** for candidate-a, both in
-`infra/k8s/env/candidate-a/`, synced by a **dedicated Argo Application**:
+> ⛔ **REVERTED.** The candidate-a `ResourceQuota`/`LimitRange` below was shipped,
+> then **reverted** the same day. Enforcing a memory ceiling on an **already
+> over-subscribed** env (§2) is unsafe: a flight's rolling-update **surge pod** was
+> **rejected by the quota** → scheduler-worker rollout wedged → `/readyz` coupling
+> cascaded the whole candidate-a fleet to **502**. It was also applied **manually**
+> (anti-pattern). **Lesson: never enforce a capacity ceiling before the env is
+> right-sized and the kubelet reservation is honest.** Admission enforcement is
+> re-sequenced to AFTER §2 (honest allocatable) + decommission-driven right-sizing.
+
+The (now reverted) shape, kept for the record:
 
 | Object          | Setting                                                  | Intent                                                                                  |
 | --------------- | -------------------------------------------------------- | --------------------------------------------------------------------------------------- |
@@ -138,17 +146,29 @@ The quota refuses applies that would exceed the env budget; Argo reports
 
 ### (b) REMEDIATION — atomic per-env decommission frees budget _(next task)_
 
-This is the `OperatorDeployPlanePort.remove` **"Phase 1"** already specified in
-[operator-managed-deployments.md](./operator-managed-deployments.md) — see that doc
-for the full design; it is **not re-specified here**. The teardown **mechanism
-already works**: drop an env from the catalog `envs[]` → the per-node AppSet stops
-rendering → Argo `prune:true` removes the pods → reversible by re-adding the env.
+This is the `OperatorDeployPlanePort.remove` **"Phase 1"** referenced in
+[operator-managed-deployments.md](./operator-managed-deployments.md).
 
-The **gap** (the next task) is:
+> ⚠️ **The teardown does NOT actually work today** — `operator-managed-deployments.md`'s
+> claim that dropping `envs[]` makes "Argo prune the pods" is **aspirational, not real**
+> (verified 2026-06-29). `render-node-appset.sh` deletes the per-node AppSet **file**
+> from git, but **nothing re-applies the bootstrap `infra/k8s/argocd/kustomization.yaml`**
+> after a catalog edit — flight/promote apply only the _current_ node's AppSet, never the
+> aggregate. Plain `kubectl apply` never deletes absent resources, so the orphaned
+> AppSet + its Application **linger and keep the pods running**. DNS/Caddy reconcile is
+> **forward-only** (no delete). So decommission has a **delivery gap**.
 
-- the **typed verb** (`OperatorDeployPlanePort.remove`),
-- **reverse DNS / Caddy de-reconcile** so the apex/edge stops routing the dead env,
-- a **`node.decommission_env` OpenFGA relation**, and
+The **prerequisite** (the keystone task — see §10) is to make the AppSet layer
+**continuously reconciled**: an **app-of-apps Argo Application** over
+`infra/k8s/argocd/` so a removed AppSet is **auto-pruned**. This _also_ makes deploys
+more reliable — today AppSet changes only land at bootstrap. **Only after** the
+prune-gap closes is decommission real; then the **gap** is:
+
+- the **app-of-apps prune fix** (keystone — makes any teardown actually prune),
+- the **typed verb** (`OperatorDeployPlanePort.remove`) that commits the `envs[]` edit
+  via the operator GitHub App,
+- **reverse DNS / Caddy de-reconcile** (both are forward-only today),
+- a **`node.decommission_env` OpenFGA relation** (needs OpenFGA re-bootstrap), and
 - a **per-env UI action** in
   `nodes/operator/app/src/features/nodes/deployments/NodeDeployments.tsx`.
 
@@ -194,17 +214,22 @@ itself. Those are story.5013, not this PR.
 - No parallel capacity file (capacity SSOT = Terraform or measured allocatable).
 - No publish hard-block.
 
-## 10. Pareto sequence
+## 10. Pareto sequence (re-ordered after the 2026-06-29 incident)
 
-| #   | Step                                                            | State                     |
-| --- | --------------------------------------------------------------- | ------------------------- |
-| 1   | Revert #1886 to baseline                                        | ✅ done                   |
-| 2   | This design doc                                                 | ◀ this PR                |
-| 3   | candidate-a `LimitRange` + ceiling `ResourceQuota` via Argo app | ◀ this PR                |
-| 4   | `decommission-env` (typed verb + DNS/Caddy + OpenFGA + UI)      | ⏳ next task              |
-| 5   | Apply kubelet reservation to running nodes + right-size fleet   | ⏳ provisioning follow-up |
-| 6   | preview/prod env quotas                                         | ⏳ follow-up              |
-| 7   | Fleet UI v0                                                     | ⏳ story.5013             |
+Reliability-first. The keystone is closing the **AppSet prune-gap** (§6b): it is what
+makes the deploy layer self-healing AND makes any teardown actually prune — without it,
+decommission is fiction and capacity can never be reclaimed.
+
+| #   | Step                                                                              | State                |
+| --- | --------------------------------------------------------------------------------- | -------------------- |
+| 1   | Revert #1886 bespoke predictor to baseline                                        | ✅ done              |
+| 2   | Revert the premature candidate-a quota slice (incident landmine) + this doc       | ◀ this PR           |
+| 3   | **app-of-apps over `infra/k8s/argocd/`** — continuous reconcile + AppSet prune    | 🎯 keystone, next PR |
+| 4   | `decommission-env` (typed verb + reverse DNS/Caddy + OpenFGA + UI) — needs #3     | ⏳ then              |
+| 5   | Right-size candidate-a (decommission non-essential nodes) + apply kubelet reserve | ⏳ then (uses #3/#4) |
+| 6   | Re-introduce admission (`ResourceQuota`) — ONLY after #5 makes the env honest     | ⏳ after right-size  |
+| 7   | preview/prod env quotas                                                           | ⏳ follow-up         |
+| 8   | Fleet UI v0                                                                       | ⏳ story.5013        |
 
 ## Related
 
