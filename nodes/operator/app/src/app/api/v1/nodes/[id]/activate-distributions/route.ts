@@ -25,19 +25,41 @@
  */
 
 import { NextResponse } from "next/server";
-import { type Address, getAddress } from "viem";
+import { type Address, createPublicClient, getAddress, http } from "viem";
+import { base, sepolia } from "viem/chains";
 import { z } from "zod";
 
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { resolveNodeAndAuthorize } from "@/app/_lib/node-rbac";
 import { createNodeRepoWriter } from "@/bootstrap/capabilities/node-repo-write";
-import { getContainer, resolveServiceDb } from "@/bootstrap/container";
+import { resolveServiceDb } from "@/bootstrap/container";
+import { withRootSpan } from "@/bootstrap/otel";
 import { nodeIdOrSlug } from "@/features/nodes/node-lookup";
 import { type NodeStatus, nodes } from "@/shared/db/nodes";
 import { serverEnv } from "@/shared/env";
+import {
+  createRequestContext,
+  EVENT_NAMES,
+  makeLogger,
+} from "@/shared/observability";
+import { ERC20_ABI } from "@/shared/web3";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+const ROUTE_ID = "v1.nodes.activate-distributions";
+
+const baseLog = makeLogger();
+const clock = { now: () => new Date().toISOString() };
+
+// Map a NODE's chain id to its viem chain object. Distribution activation
+// verifies an ARBITRARY node's token/DAO, so the chain is selected from the
+// node row — NOT the operator's own governance config. Only BASE (8453) and
+// SEPOLIA (11155111) are supported on-chain.
+const VIEM_CHAINS_BY_ID: Record<number, typeof base | typeof sepolia> = {
+  8453: base,
+  11155111: sepolia,
+};
 
 const ActivateDistributionsInput = z.object({
   tokenAddress: z.string().optional(),
@@ -72,7 +94,28 @@ function canWriteDistributionActivation(status: NodeStatus): boolean {
   );
 }
 
-export async function POST(request: Request, routeArgs: RouteParams) {
+export async function POST(
+  request: Request,
+  routeArgs: RouteParams
+): Promise<NextResponse> {
+  return withRootSpan(
+    "POST nodes.activate-distributions",
+    { route_id: ROUTE_ID },
+    async ({ traceId }) => {
+      const ctx = createRequestContext({ baseLog, clock }, request, {
+        routeId: ROUTE_ID,
+        traceId,
+      });
+      return handleActivateDistributions(request, routeArgs, ctx);
+    }
+  );
+}
+
+async function handleActivateDistributions(
+  request: Request,
+  routeArgs: RouteParams,
+  ctx: ReturnType<typeof createRequestContext>
+): Promise<NextResponse> {
   const sessionUser = await getSessionUser();
   if (!sessionUser) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
@@ -222,16 +265,65 @@ export async function POST(request: Request, routeArgs: RouteParams) {
     );
   }
 
+  // Verify the ARBITRARY node's token/DAO against ITS OWN chain — not the
+  // operator's governance config. Select the viem chain from node.chainId.
+  const viemChain =
+    node.chainId == null ? null : VIEM_CHAINS_BY_ID[node.chainId];
+  if (!viemChain) {
+    return NextResponse.json(
+      {
+        error: "unsupported chain for distribution verification",
+        reason:
+          "node.chainId is null or not a supported chain (8453 base, 11155111 sepolia)",
+        chainId: node.chainId,
+      },
+      { status: 409 }
+    );
+  }
+
+  ctx.log.info(
+    {
+      event: "node.distribution_activation.requested",
+      reqId: ctx.reqId,
+      routeId: ctx.routeId,
+      nodeId: node.id,
+      slug: node.slug,
+      tokenAddress,
+      emissionsHolderAddress,
+      chainId: node.chainId,
+    },
+    "activate-distributions: activation requested"
+  );
+
   try {
-    const evm = getContainer().evmOnchainClient;
+    const client = createPublicClient({
+      chain: viemChain,
+      transport: http(env.EVM_RPC_URL),
+    });
     const [tokenCode, holderCode, holderBalance] = await Promise.all([
-      evm.getBytecode(tokenAddress),
-      evm.getBytecode(emissionsHolderAddress),
-      evm.getErc20Balance({
-        tokenAddress,
-        holderAddress: emissionsHolderAddress,
-      }),
+      client.getBytecode({ address: tokenAddress }),
+      client.getBytecode({ address: emissionsHolderAddress }),
+      client.readContract({
+        address: tokenAddress,
+        abi: ERC20_ABI,
+        functionName: "balanceOf",
+        args: [emissionsHolderAddress],
+      }) as Promise<bigint>,
     ]);
+    ctx.log.info(
+      {
+        event: "node.distribution_activation.verified",
+        reqId: ctx.reqId,
+        routeId: ctx.routeId,
+        nodeId: node.id,
+        slug: node.slug,
+        chainId: node.chainId,
+        hasTokenCode: Boolean(tokenCode && tokenCode !== "0x"),
+        hasHolderCode: Boolean(holderCode && holderCode !== "0x"),
+        holderBalance: holderBalance.toString(),
+      },
+      "activate-distributions: verification result"
+    );
     if (!tokenCode || tokenCode === "0x") {
       return NextResponse.json(
         { error: "token contract missing", tokenAddress },
@@ -256,6 +348,21 @@ export async function POST(request: Request, routeArgs: RouteParams) {
     }
   } catch (err) {
     const reason = err instanceof Error ? err.message : "unknown";
+    ctx.log.error(
+      {
+        event: "node.distribution_activation.verify_failed",
+        reqId: ctx.reqId,
+        routeId: ctx.routeId,
+        nodeId: node.id,
+        slug: node.slug,
+        chainId: node.chainId,
+        tokenAddress,
+        emissionsHolderAddress,
+        err: reason,
+        stack: err instanceof Error ? err.stack : undefined,
+      },
+      "activate-distributions: on-chain verification failed"
+    );
     return NextResponse.json(
       { error: "distribution activation verification failed", reason },
       { status: 502 }
@@ -275,11 +382,37 @@ export async function POST(request: Request, routeArgs: RouteParams) {
   } catch (err) {
     const status = (err as { status?: number })?.status;
     const reason = err instanceof Error ? err.message : "unknown";
+    ctx.log.error(
+      {
+        event: "node.distribution_activation.write_failed",
+        reqId: ctx.reqId,
+        routeId: ctx.routeId,
+        nodeId: node.id,
+        slug: node.slug,
+        err: reason,
+        stack: err instanceof Error ? err.stack : undefined,
+      },
+      "activate-distributions: write-back failed"
+    );
     return NextResponse.json(
       { error: "distribution activation write-back failed", reason },
       { status: typeof status === "number" ? status : 502 }
     );
   }
+
+  ctx.log.info(
+    {
+      event: EVENT_NAMES.NODE_DISTRIBUTION_ACTIVATION_COMPLETE,
+      reqId: ctx.reqId,
+      routeId: ctx.routeId,
+      nodeId: node.id,
+      slug: node.slug,
+      chainId: node.chainId,
+      status: result.status,
+      prNumber: "prNumber" in result ? result.prNumber : undefined,
+    },
+    "activate-distributions: write result"
+  );
 
   return NextResponse.json({
     node: activationNodePayload(node),
