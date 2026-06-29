@@ -426,6 +426,15 @@ jobs:
       - name: node overlay renderer tests
         run: bash scripts/ci/tests/render-node-overlays.test.sh
 
+      - name: production resource-fit ratchet
+        run: |
+          pnpm tsx scripts/ci/check-resource-fit.ts \
+            --env production \
+            --baseline-ref origin/main \
+            --json-out .context/resource-fit/production.json \
+            --markdown-out .context/resource-fit/production.md \
+            --github-step-summary true
+
       - name: scheduler runtime routing tests
         run: bash scripts/ci/tests/scheduler-runtime-routing.test.sh
 

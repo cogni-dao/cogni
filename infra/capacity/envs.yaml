@@ -1,0 +1,60 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2025 Cogni-DAO
+
+# Git-owned environment capacity budgets for rendered Kubernetes resource-fit
+# admission. This file declares budgets and enforcement mode only; catalog rows
+# and rendered overlays own env membership.
+
+candidate-a:
+  mode: ratchet
+  allocatable:
+    memoryMi: 6040
+    cpuMilli: 4000
+  reservations:
+    composeMemoryMi: 2867
+    kubeMemoryMi: 700
+    edgeMemoryMi: 128
+    requiredHeadroomMi: 300
+    reservedCpuMilli: 250
+    requiredCpuHeadroomMilli: 250
+  rollout:
+    includeMaxSurge: true
+  measurement:
+    source: docs/research/2026-06-10-node-app-scaling-architecture.md
+    measuredAt: "2026-06-10"
+
+preview:
+  mode: ratchet
+  allocatable:
+    memoryMi: 6040
+    cpuMilli: 4000
+  reservations:
+    composeMemoryMi: 2867
+    kubeMemoryMi: 700
+    edgeMemoryMi: 128
+    requiredHeadroomMi: 300
+    reservedCpuMilli: 250
+    requiredCpuHeadroomMilli: 250
+  rollout:
+    includeMaxSurge: true
+  measurement:
+    source: docs/research/2026-06-10-node-app-scaling-architecture.md
+    measuredAt: "2026-06-10"
+
+production:
+  mode: ratchet
+  allocatable:
+    memoryMi: 6040
+    cpuMilli: 4000
+  reservations:
+    composeMemoryMi: 2867
+    kubeMemoryMi: 700
+    edgeMemoryMi: 128
+    requiredHeadroomMi: 300
+    reservedCpuMilli: 250
+    requiredCpuHeadroomMilli: 250
+  rollout:
+    includeMaxSurge: true
+  measurement:
+    source: docs/research/2026-06-10-node-app-scaling-architecture.md
+    measuredAt: "2026-06-10"
