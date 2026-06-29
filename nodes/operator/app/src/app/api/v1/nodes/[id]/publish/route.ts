@@ -13,11 +13,7 @@
  * @public
  */
 
-import { readFileSync } from "node:fs";
-import path from "node:path";
-
 import { withTenantScope } from "@cogni/db-client";
-import { loadEnvBudgetsFromYaml } from "@cogni/deploy-policy";
 import { type UserId, userActor } from "@cogni/ids";
 import { and, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
@@ -25,10 +21,7 @@ import { NextResponse } from "next/server";
 import { createNodeRepoWriter } from "@/bootstrap/capabilities/node-repo-write";
 import { resolveAppDb } from "@/bootstrap/container";
 import { withRootSpan } from "@/bootstrap/otel";
-import {
-  evaluateNodeCapacity,
-  evaluateNodePublishResourceFit,
-} from "@/features/nodes/capacity";
+import { evaluateNodeCapacity } from "@/features/nodes/capacity";
 import { createDoltHubDatabaseEnsurer } from "@/features/nodes/dolthub-database";
 import { transition } from "@/features/nodes/state-machine";
 import { getServerSessionUser } from "@/lib/auth/server";
@@ -50,7 +43,6 @@ export const dynamic = "force-dynamic";
 
 const baseLog = makeLogger();
 const clock = { now: () => new Date().toISOString() };
-const PUBLISH_RESOURCE_FIT_ENV = "production";
 
 /**
  * Classify a node-repo-write mint failure into a stable, low-cardinality code.
@@ -146,17 +138,6 @@ function statusForMintError(errorCode: MintErrorCode): number {
     default:
       return 424;
   }
-}
-
-function loadPublishCapacityBudget() {
-  const repoRoot = serverEnv().COGNI_REPO_ROOT ?? process.cwd();
-  const budgetPath = path.join(repoRoot, "infra/capacity/envs.yaml");
-  const budgets = loadEnvBudgetsFromYaml(readFileSync(budgetPath, "utf8"));
-  const budget = budgets[PUBLISH_RESOURCE_FIT_ENV];
-  if (!budget) {
-    throw new Error(`capacity budget missing for ${PUBLISH_RESOURCE_FIT_ENV}`);
-  }
-  return budget;
 }
 
 type PublishStep =
@@ -470,83 +451,10 @@ export async function POST(request: Request, routeArgs: RouteParams) {
             { status: 409 }
           );
         }
-        let resourceFit: ReturnType<typeof evaluateNodePublishResourceFit>;
-        try {
-          resourceFit = evaluateNodePublishResourceFit({
-            env: PUBLISH_RESOURCE_FIT_ENV,
-            budget: loadPublishCapacityBudget(),
-            deployedWizardNodeCount: capacity.deployedNodeCount,
-            projectedNodeSlug: node.slug,
-          });
-        } catch (err) {
-          const reason =
-            err instanceof Error ? err.message : "resource-fit unavailable";
-          logStep("check_capacity", "error", {
-            slug: node.slug,
-            errorCode: "resource_fit_unavailable",
-            reason,
-          });
-          logTerminal("error", {
-            outcome: "error",
-            errorCode: "resource_fit_unavailable",
-            status: 503,
-            slug: node.slug,
-            nodeStatus: node.status,
-          });
-          logRequestEnd(ctx.log, { status: 503, durationMs: durationMs() });
-          return NextResponse.json(
-            {
-              error: "resource-fit capacity budget unavailable",
-              reason,
-            },
-            { status: 503 }
-          );
-        }
-        if (!resourceFit.allowed) {
-          logStep("check_capacity", "error", {
-            slug: node.slug,
-            errorCode: "resource_fit_denied",
-            env: resourceFit.env,
-            reason: resourceFit.reason,
-            requestedMemoryMi: resourceFit.report.totals.requestedMemoryMi,
-            availableMemoryMi: resourceFit.report.totals.availableMemoryMi,
-            requestedCpuMilli: resourceFit.report.totals.requestedCpuMilli,
-            availableCpuMilli: resourceFit.report.totals.availableCpuMilli,
-          });
-          logTerminal("warn", {
-            outcome: "error",
-            errorCode: "resource_fit_denied",
-            status: 409,
-            slug: node.slug,
-            nodeStatus: node.status,
-            env: resourceFit.env,
-            reason: resourceFit.reason,
-          });
-          logRequestEnd(ctx.log, { status: 409, durationMs: durationMs() });
-          return NextResponse.json(
-            {
-              error: "node publish would exceed resource budget",
-              reason: resourceFit.reason,
-              env: resourceFit.env,
-              projectedNodeSlug: resourceFit.projectedNodeSlug,
-              requestedMemoryMi: resourceFit.report.totals.requestedMemoryMi,
-              availableMemoryMi: resourceFit.report.totals.availableMemoryMi,
-              requestedCpuMilli: resourceFit.report.totals.requestedCpuMilli,
-              availableCpuMilli: resourceFit.report.totals.availableCpuMilli,
-              memoryOverageMi: resourceFit.report.totals.memoryOverageMi,
-              cpuOverageMilli: resourceFit.report.totals.cpuOverageMilli,
-              suggestedNextAction:
-                "Reduce rendered requests or add/resize environment capacity before publishing this node.",
-            },
-            { status: 409 }
-          );
-        }
         logStep("check_capacity", "success", {
           slug: node.slug,
           deployedNodeCount: capacity.deployedNodeCount,
           ceiling: capacity.ceiling,
-          resourceFitEnv: resourceFit.env,
-          resourceFitReason: resourceFit.reason,
         });
 
         const knowledgeRemote = buildNodeKnowledgeRemote(

@@ -83,9 +83,6 @@ COPY --from=builder --chown=nextjs:nodejs /app/nodes/operator/app/public ./nodes
 # Each node MUST copy its own .cogni — NOT root (which is operator's identity).
 COPY --from=builder --chown=nextjs:nodejs /app/nodes/operator/.cogni ./.cogni
 
-# Runtime policy data for operator-local admission gates.
-COPY --from=builder --chown=nextjs:nodejs /app/infra/capacity ./infra/capacity
-
 # Codex CLI for BYO-AI ChatGPT execution.
 # Standalone output tracing can't detect spawned binaries.
 # Install globally so pnpm resolves platform-specific optional deps (@openai/codex-linux-x64).

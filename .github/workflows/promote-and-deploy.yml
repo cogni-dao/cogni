@@ -378,18 +378,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Snapshot resource-fit baseline
-        if: steps.digest.outputs.promoted == 'true'
-        working-directory: deploy-branch
-        env:
-          BASELINE_ROOT: ${{ runner.temp }}/resource-fit-baseline
-        run: |
-          set -euo pipefail
-          rm -rf "$BASELINE_ROOT"
-          mkdir -p "$BASELINE_ROOT/infra"
-          cp -a infra/k8s "$BASELINE_ROOT/infra/k8s"
-          echo "BASELINE_OVERLAY_ROOT=$BASELINE_ROOT/infra/k8s/overlays" >> "$GITHUB_ENV"
-
       - name: Sync infra/k8s + per-node catalog from app-src
         if: steps.digest.outputs.promoted == 'true'
         env:
@@ -431,32 +419,6 @@ jobs:
             --env "$OVERLAY_ENV" --app "$NODE" --digest "$DIGEST"
           APP="$NODE" SOURCE_SHA="$SOURCE_SHA" \
             bash ../app-src/scripts/ci/update-source-sha-map.sh
-
-      - name: Setup Node for resource-fit guard
-        if: steps.digest.outputs.promoted == 'true'
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Setup pnpm for resource-fit guard
-        if: steps.digest.outputs.promoted == 'true'
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9.12.2
-
-      - name: Install resource-fit guard dependencies
-        if: steps.digest.outputs.promoted == 'true'
-        run: pnpm --dir app-src install --frozen-lockfile --ignore-scripts
-
-      - name: Resource-fit pre-deploy guard
-        if: steps.digest.outputs.promoted == 'true'
-        working-directory: deploy-branch
-        env:
-          RESOURCE_FIT_ENV: ${{ needs.decide.outputs.environment }}
-          APP_SOURCE_DIR: ../app-src
-          CURRENT_OVERLAY_ROOT: infra/k8s/overlays
-          REPORT_DIR: ${{ runner.temp }}/resource-fit
-        run: bash ../app-src/scripts/ci/resource-fit-guard.sh
 
       - name: Commit and push
         id: push

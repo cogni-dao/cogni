@@ -18,13 +18,6 @@
  * @public
  */
 
-import {
-  type EnvCapacityBudget,
-  evaluateResourceFit,
-  type ResourceFitReport,
-  type WorkloadDemand,
-} from "@cogni/deploy-policy";
-
 /** Outcome of the node-capacity gate. */
 export interface NodeCapacityDecision {
   readonly allowed: boolean;
@@ -52,89 +45,5 @@ export function evaluateNodeCapacity(input: {
     reason: allowed
       ? `under capacity (${deployedNodeCount}/${ceiling} nodes)`
       : `network at node capacity (${deployedNodeCount}/${ceiling}) — needs compute/VM planning before adding nodes`,
-  };
-}
-
-export interface NodePublishResourceFitDecision {
-  readonly allowed: boolean;
-  readonly env: string;
-  readonly reason: string;
-  readonly projectedNodeSlug: string;
-  readonly report: ResourceFitReport;
-}
-
-const STANDARD_NODE_APP_POD = {
-  memoryMi: 384,
-  cpuMilli: 200,
-} as const;
-
-const STANDARD_ROLLOUT_EXTRA_REPLICAS = 1;
-
-const SCHEDULER_WORKER_WORKLOAD: WorkloadDemand = {
-  kind: "Deployment",
-  name: "scheduler-worker",
-  replicas: 2,
-  rolloutExtraReplicas: 1,
-  podRequestMemoryMi: 256,
-  podRequestCpuMilli: 250,
-  effectiveMemoryMi: 768,
-  effectiveCpuMilli: 750,
-  missingRequests: [],
-};
-
-/**
- * Resource-fit projection for the node wizard publish seam.
- *
- * This deliberately mirrors the current node-template rendered footprint instead
- * of calling kustomize from the web route: one node-app Deployment, one rollout
- * surge replica, and max(initContainers, containers) = 384Mi/200m per pod.
- * The CI/flight guard remains the rendered-manifest authority; this publish
- * check is the early refusal before GitHub/DoltHub writes.
- */
-export function evaluateNodePublishResourceFit(input: {
-  readonly env: string;
-  readonly budget: EnvCapacityBudget;
-  readonly deployedWizardNodeCount: number;
-  readonly projectedNodeSlug: string;
-}): NodePublishResourceFitDecision {
-  const existingNodeAppCount = input.deployedWizardNodeCount + 1;
-  const baselineWorkloads = [
-    SCHEDULER_WORKER_WORKLOAD,
-    ...Array.from({ length: existingNodeAppCount }, (_, index) =>
-      standardNodeAppWorkload(`existing-node-app-${index + 1}`)
-    ),
-  ];
-  const workloads = [
-    ...baselineWorkloads,
-    standardNodeAppWorkload(input.projectedNodeSlug),
-  ];
-  const report = evaluateResourceFit({
-    env: input.env,
-    budget: input.budget,
-    workloads,
-    baselineWorkloads,
-  });
-
-  return {
-    allowed: report.allowed,
-    env: input.env,
-    reason: report.reason,
-    projectedNodeSlug: input.projectedNodeSlug,
-    report,
-  };
-}
-
-function standardNodeAppWorkload(name: string): WorkloadDemand {
-  const effectiveReplicas = 1 + STANDARD_ROLLOUT_EXTRA_REPLICAS;
-  return {
-    kind: "Deployment",
-    name,
-    replicas: 1,
-    rolloutExtraReplicas: STANDARD_ROLLOUT_EXTRA_REPLICAS,
-    podRequestMemoryMi: STANDARD_NODE_APP_POD.memoryMi,
-    podRequestCpuMilli: STANDARD_NODE_APP_POD.cpuMilli,
-    effectiveMemoryMi: STANDARD_NODE_APP_POD.memoryMi * effectiveReplicas,
-    effectiveCpuMilli: STANDARD_NODE_APP_POD.cpuMilli * effectiveReplicas,
-    missingRequests: [],
   };
 }

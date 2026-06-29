@@ -30,7 +30,6 @@
     "@cogni/cogni-contracts": "workspace:*",
     "@cogni/db-client": "workspace:*",
     "@cogni/db-schema": "workspace:*",
-    "@cogni/deploy-policy": "workspace:*",
     "@cogni/financial-ledger": "workspace:*",
     "@cogni/ids": "workspace:*",
     "@cogni/ingestion-core": "workspace:*",

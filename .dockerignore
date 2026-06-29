@@ -73,10 +73,6 @@ eslint/
 
 # Infra / IaC (not needed in app images)
 infra
-!infra/
-infra/*
-!infra/capacity/
-!infra/capacity/**
 scripts/ci
 scripts/bootstrap
 
