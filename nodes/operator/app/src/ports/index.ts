@@ -85,7 +85,10 @@ export type {
   UpcomingRun,
 } from "./governance-status.port";
 export type {
+  LangfuseJsonValue,
   LangfuseReaderPort,
+  LangfuseTraceDetail,
+  LangfuseTraceDetailQuery,
   LangfuseTraceQuery,
   LangfuseTraceSummary,
 } from "./langfuse-reader.port";
