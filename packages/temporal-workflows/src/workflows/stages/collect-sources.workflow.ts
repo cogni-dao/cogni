@@ -34,12 +34,7 @@ export interface CollectSourcesInput {
   readonly epochId: string;
   readonly sources: Record<
     string,
-    {
-      attributionPipeline: string;
-      sourceRefs: string[];
-      /** Ingest mode (WEBHOOK_ONLY_SOURCE); `webhook` → skip polling this source. */
-      ingest?: "poll" | "webhook" | "both";
-    }
+    { attributionPipeline: string; sourceRefs: string[] }
   >;
   readonly periodStart: string;
   readonly periodEnd: string;
@@ -57,12 +52,6 @@ export async function CollectSourcesWorkflow(
   input: CollectSourcesInput
 ): Promise<void> {
   for (const [source, sourceConfig] of Object.entries(input.sources)) {
-    // WEBHOOK_ONLY_SOURCE: receipts arrive via the webhook receiver only — skip the
-    // poll plane entirely (no poll adapter required, no SOURCE_NO_ADAPTER). Selection
-    // downstream still picks up the webhook-deposited receipts for this source.
-    if (sourceConfig.ingest === "webhook") {
-      continue;
-    }
     const { streams } = await resolveStreams({ source });
     for (const sourceRef of sourceConfig.sourceRefs) {
       for (const stream of streams) {

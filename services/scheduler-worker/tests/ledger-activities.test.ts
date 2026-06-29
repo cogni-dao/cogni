@@ -534,6 +534,27 @@ describe("loadCursor", () => {
   });
 });
 
+// ── resolveStreams ──────────────────────────────────────────────
+
+describe("resolveStreams", () => {
+  it("skips gracefully (no throw, empty streams) when the source has no poll adapter — reverts the #519 fatal-throw regression so webhook-only sources don't kill CollectEpoch", async () => {
+    const { resolveStreams } = createAttributionActivities({
+      attributionStore: makeMockStore(),
+      // webhook-only reality: github receipts arrive via the operator webhook
+      // receiver; the scheduler-worker registers no github poll adapter.
+      sourceRegistrations: new Map(),
+      registries,
+      nodeId: NODE_ID,
+      scopeId: SCOPE_ID,
+      chainId: 8453,
+      logger: mockLogger,
+    });
+
+    const result = await resolveStreams({ source: "github" });
+    expect(result.streams).toEqual([]);
+  });
+});
+
 // ── collectFromSource ───────────────────────────────────────────
 
 describe("collectFromSource", () => {

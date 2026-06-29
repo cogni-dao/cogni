@@ -1319,9 +1319,21 @@ export function createAttributionActivities(deps: AttributionActivityDeps) {
   ): Promise<ResolveStreamsOutput> {
     const registration = sourceRegistrations.get(input.source);
     if (!registration?.poll) {
-      throw new Error(
-        `[SOURCE_NO_ADAPTER] No poll adapter registered for source "${input.source}" — check env vars (GH_REVIEW_APP_ID, GH_REVIEW_APP_PRIVATE_KEY_BASE64, GH_REPOS)`
+      // No poll adapter for this source. The common case is a webhook-only source
+      // (e.g. github: receipts arrive via the operator's GitHub App webhook receiver,
+      // and the scheduler-worker holds no GH App key by design). Skip the poll plane
+      // gracefully — returning no streams means CollectSources contributes nothing for
+      // this source and the epoch proceeds to SELECT the webhook-deposited receipts.
+      //
+      // This is NOT silent: bootstrap cross-checks repo-spec activity_sources against
+      // registered adapters and logs CONFIG_SOURCE_NO_ADAPTER at error level for true
+      // coverage gaps. Reverts the fatal-throw regression from #519, which made a
+      // missing poll adapter kill CollectEpoch before selection ever ran.
+      logger.warn(
+        { source: input.source, event: "attribution.poll_skipped_no_adapter" },
+        `No poll adapter for source "${input.source}" — skipping poll (webhook-only ingestion, or a coverage gap flagged at bootstrap as CONFIG_SOURCE_NO_ADAPTER)`
       );
+      return { streams: [] };
     }
     const streams = registration.poll.streams().map((s) => s.id);
     logger.info(

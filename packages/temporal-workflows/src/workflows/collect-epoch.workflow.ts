@@ -60,14 +60,12 @@ export interface AttributionIngestRunV1 {
   readonly scopeId: string;
   readonly scopeKey: string;
   readonly epochLengthDays: number;
-  /** Map of source → { attributionPipeline, sourceRefs, ingest } */
+  /** Map of source → { attributionPipeline, sourceRefs } */
   readonly activitySources: Record<
     string,
     {
       attributionPipeline: string;
       sourceRefs: string[];
-      /** Ingest mode (WEBHOOK_ONLY_SOURCE); `webhook` → CollectSources skips polling. */
-      ingest?: "poll" | "webhook" | "both";
     }
   >;
   /** Pool budget config — base_issuance_credits as string (bigint serialized). Optional for backward compat. */

@@ -121,6 +121,30 @@ export async function POST(
       "webhook processed"
     );
 
+    // Ingestion telemetry: makes attribution receipts observable in Loki. Without
+    // this, "are git contributions reaching the ledger?" was unanswerable from logs
+    // (only the raw normalized count was logged, never which contributors/event types
+    // were persisted). Idempotent — ON CONFLICT DO NOTHING may no-op on replay.
+    if (result.receipts.length > 0) {
+      log.info(
+        {
+          event: "attribution.receipt_ingested",
+          source,
+          receiptCount: result.receipts.length,
+          eventTypes: [...new Set(result.receipts.map((r) => r.eventType))],
+          logins: [
+            ...new Set(
+              result.receipts
+                .map((r) => r.platformLogin)
+                .filter((l): l is string => l !== null)
+            ),
+          ],
+          receiptIds: result.receipts.map((r) => r.receiptId),
+        },
+        "attribution receipts ingested"
+      );
+    }
+
     // 5. Fire-and-forget dispatches after successful verification.
     // Runs async — errors logged, never block webhook response.
     if (source === "github" && eventType === "pull_request") {

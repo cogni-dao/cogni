@@ -28,12 +28,6 @@ activity_ledger:
       attribution_pipeline: cogni-v0.0
       source_refs: ["cogni-dao/standalone-node"]
       excluded_logins: ["Cogni-1729"]
-      # WEBHOOK_ONLY_SOURCE: the operator GitHub App webhook is the live ingest path;
-      # the scheduler-worker holds no GH App key by design, so CollectSources must NOT
-      # poll github (would SOURCE_NO_ADAPTER and kill CollectEpoch before selection).
-      # vNext restores reconciliation via an operator-hosted poll (operator-minted
-      # per-repo tokens), at which point this flips to `both`.
-      ingest: webhook
 
 intent:
   name: cogni-template

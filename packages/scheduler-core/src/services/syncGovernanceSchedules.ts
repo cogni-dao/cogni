@@ -65,8 +65,6 @@ export interface LedgerScheduleConfig {
     {
       attributionPipeline: string;
       sourceRefs: string[];
-      /** Ingest mode (WEBHOOK_ONLY_SOURCE); `webhook` → CollectSources skips polling. */
-      ingest?: "poll" | "webhook" | "both";
     }
   >;
   /** Pool budget: base_issuance_credits as string (bigint serialized). */

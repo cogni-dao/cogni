@@ -28,10 +28,21 @@ export interface WebhookReceiverDeps {
 
 /**
  * Result from processing a webhook.
+ *
+ * `receipts` summarizes the normalized ActivityEvents persisted on this call
+ * (idempotent via ON CONFLICT DO NOTHING). Surfaced so the route can emit
+ * ingestion telemetry — without it, attribution ingestion was unobservable
+ * (the route only logged the raw normalized count, never which contributors /
+ * event types actually reached the ledger).
  */
 export interface WebhookReceiveResult {
   readonly eventCount: number;
   readonly source: string;
+  readonly receipts: ReadonlyArray<{
+    readonly receiptId: string;
+    readonly eventType: string;
+    readonly platformLogin: string | null;
+  }>;
 }
 
 /**
@@ -74,7 +85,7 @@ export async function receiveWebhook(
   const events = await registration.webhook.normalize(headers, parsed);
 
   if (events.length === 0) {
-    return { eventCount: 0, source };
+    return { eventCount: 0, source, receipts: [] };
   }
 
   // 4. Insert receipts (RECEIPT_IDEMPOTENT via ON CONFLICT DO NOTHING)
@@ -96,7 +107,15 @@ export async function receiveWebhook(
     }))
   );
 
-  return { eventCount: events.length, source };
+  return {
+    eventCount: events.length,
+    source,
+    receipts: events.map((e) => ({
+      receiptId: e.id,
+      eventType: e.eventType,
+      platformLogin: e.platformLogin ?? null,
+    })),
+  };
 }
 
 /**

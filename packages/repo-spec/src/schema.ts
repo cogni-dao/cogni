@@ -243,16 +243,6 @@ export const activitySourceSpecSchema = z.object({
   source_refs: z.array(z.string().min(1)).min(1),
   /** Platform logins to exclude from attribution (e.g., automation bots) */
   excluded_logins: z.array(z.string().min(1)).optional(),
-  /**
-   * How receipts for this source reach the ledger (WEBHOOK_ONLY_SOURCE).
-   * - `poll` / `both` (default when omitted): CollectEpoch polls the source; a poll
-   *   adapter MUST be registered or SOURCE_NO_ADAPTER fails loud.
-   * - `webhook`: receipts arrive via the webhook receiver only; CollectSources SKIPS
-   *   polling this source and never requires a poll adapter. Use when the poll plane
-   *   has no credentials (e.g. git: the operator GitHub App webhook is the live path,
-   *   the scheduler-worker holds no GH App key by design).
-   */
-  ingest: z.enum(["poll", "webhook", "both"]).optional(),
 });
 
 export type ActivitySourceSpec = z.infer<typeof activitySourceSpecSchema>;
