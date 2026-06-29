@@ -245,9 +245,9 @@ describe("extractDaoTokenDistributionConfig", () => {
       },
     });
 
-    expect(() => extractDaoTokenDistributionConfig(spec, TEST_CHAIN_ID)).toThrow(
-      /governance\.token_contract or governance\.emissions_holder/
-    );
+    expect(() =>
+      extractDaoTokenDistributionConfig(spec, TEST_CHAIN_ID)
+    ).toThrow(/governance\.token_contract or governance\.emissions_holder/);
   });
 });
 
