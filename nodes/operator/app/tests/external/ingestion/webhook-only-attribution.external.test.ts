@@ -103,7 +103,14 @@ describeWithAuth("Webhook-only attribution (external)", () => {
   const seedActivities = createAttributionActivities({
     attributionStore: ledger,
     sourceRegistrations: new Map<string, DataSourceRegistration>([
-      ["github", { source: "github", version: githubAdapter.version, poll: githubAdapter }],
+      [
+        "github",
+        {
+          source: "github",
+          version: githubAdapter.version,
+          poll: githubAdapter,
+        },
+      ],
     ]),
     nodeId: TEST_NODE_ID,
     scopeId: WEBHOOK_SCOPE_ID,
@@ -177,7 +184,8 @@ describeWithAuth("Webhook-only attribution (external)", () => {
     // 4. The merged staging PR is selected into the epoch → a claimant exists.
     const selections = await ledger.getSelectionForEpoch(BigInt(epoch.epochId));
     const stagingSelection = selections.find(
-      (s) => s.receiptId === `github:pr:${TEST_REPO}:${fixtures.stagingPrNumber}`
+      (s) =>
+        s.receiptId === `github:pr:${TEST_REPO}:${fixtures.stagingPrNumber}`
     );
     expect(stagingSelection).toBeDefined();
     expect(stagingSelection?.included).toBe(true);
