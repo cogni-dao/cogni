@@ -6,11 +6,19 @@
  * Purpose: Open the distribution-activation PR into the NODE'S OWN repo: write the Aragon
  *   GovernanceERC20 token, DAO-controlled emissions holder, and `distributions.status: active` into
  *   `.cogni/repo-spec.yaml` through the cogni-operator GitHub App.
- * Scope: Bearer/session auth + owner-or-developer gating. The caller supplies on-chain addresses;
- *   this route verifies the V0 path (emissions holder is the DAO contract and it holds token
- *   inventory), then records the activation in git. Existing DAO nodes can activate without
- *   replaying formation because tokenAddress may be supplied when the operator row lacks one.
+ * Scope: Bearer/session auth + owner-or-developer gating. Activation is METADATA-ONLY: it records
+ *   that the node is ready to distribute. The DAO is the GovernanceERC20 minter and mints per-epoch
+ *   into a Merkle distributor later, so NO token supply is pre-minted and NO human transfers tokens.
+ *   This route derives the emissions holder from the node's DAO, verifies the token + DAO contracts
+ *   merely exist on-chain (bytecode present), then records the activation in git. Existing DAO nodes
+ *   can activate without replaying formation because tokenAddress may be supplied when the operator
+ *   row lacks one.
  * Invariants:
+ *   - METADATA_ONLY: activation records distribution readiness; it does NOT move tokens.
+ *   - DAO_IS_EMISSIONS_HOLDER: the emissions holder is the DAO contract unconditionally (the DAO is
+ *     the GovernanceERC20 minter; it mints per-epoch into the distributor).
+ *   - NO_BALANCE_GATE: activation never checks token inventory — nothing is pre-minted, so a zero
+ *     balance is expected and correct.
  *   - GH_APP_INSTALL_REQUIRED, NODE_SOVEREIGNTY (PR only; never force-push to node main).
  *   - SINGLE_HOME: targets the node's OWN repo (`NODE_MINT_OWNER`/slug), writes ONLY
  *     `.cogni/repo-spec.yaml`.
@@ -43,7 +51,6 @@ import {
   EVENT_NAMES,
   makeLogger,
 } from "@/shared/observability";
-import { ERC20_ABI } from "@/shared/web3";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -65,7 +72,9 @@ const VIEM_CHAINS_BY_ID: Record<number, typeof base | typeof sepolia> = {
 
 const ActivateDistributionsInput = z.object({
   tokenAddress: z.string().optional(),
-  emissionsHolderAddress: z.string(),
+  // Optional: the emissions holder is the DAO unconditionally. If supplied it
+  // must equal the DAO; otherwise it defaults to node.daoAddress.
+  emissionsHolderAddress: z.string().optional(),
 });
 
 interface RouteParams {
@@ -206,28 +215,27 @@ async function handleActivateDistributions(
   const tokenAddress = checksummedAddress(
     parsed.data.tokenAddress ?? node.tokenAddress ?? ""
   );
-  const emissionsHolderAddress = checksummedAddress(
-    parsed.data.emissionsHolderAddress
-  );
   const daoAddress = checksummedAddress(node.daoAddress ?? "");
-  if (!tokenAddress || !emissionsHolderAddress) {
-    return NextResponse.json(
-      {
-        error: "invalid distribution activation address",
-        hasTokenAddress: Boolean(tokenAddress),
-        hasEmissionsHolder: Boolean(emissionsHolderAddress),
-      },
-      { status: 400 }
-    );
-  }
   if (!daoAddress) {
     return NextResponse.json(
       {
         error: "node missing DAO address for distribution activation",
         reason:
-          "V0 distribution activation requires the DAO contract as the emissions holder",
+          "distribution activation requires the DAO contract as the emissions holder",
       },
       { status: 409 }
+    );
+  }
+  // The emissions holder is the DAO unconditionally (the DAO is the minter). If
+  // the caller supplied one it must equal the DAO; otherwise default to the DAO.
+  const emissionsHolderAddress = daoAddress;
+  if (!tokenAddress) {
+    return NextResponse.json(
+      {
+        error: "invalid distribution activation address",
+        hasTokenAddress: false,
+      },
+      { status: 400 }
     );
   }
   if (
@@ -245,23 +253,30 @@ async function handleActivateDistributions(
       { status: 409 }
     );
   }
-  if (emissionsHolderAddress.toLowerCase() !== daoAddress.toLowerCase()) {
-    return NextResponse.json(
-      {
-        error: "unsupported emissions holder",
-        reason:
-          "V0 distribution activation uses the DAO contract itself as the DAO-controlled emissions holder",
-        expectedEmissionsHolder: daoAddress,
-      },
-      { status: 409 }
+  if (parsed.data.emissionsHolderAddress) {
+    const requestedHolder = checksummedAddress(
+      parsed.data.emissionsHolderAddress
     );
+    if (
+      !requestedHolder ||
+      requestedHolder.toLowerCase() !== daoAddress.toLowerCase()
+    ) {
+      return NextResponse.json(
+        {
+          error: "unsupported emissions holder",
+          reason:
+            "the emissions holder must be the DAO contract itself (the DAO is the GovernanceERC20 minter)",
+          expectedEmissionsHolder: daoAddress,
+        },
+        { status: 409 }
+      );
+    }
   }
   if (!env.EVM_RPC_URL) {
     return NextResponse.json(
       {
         error: "operator not configured for distribution verification",
-        reason:
-          "EVM_RPC_URL required for on-chain token inventory verification",
+        reason: "EVM_RPC_URL required for on-chain contract existence checks",
       },
       { status: 503 }
     );
@@ -302,15 +317,12 @@ async function handleActivateDistributions(
       chain: viemChain,
       transport: http(env.EVM_RPC_URL),
     });
-    const [tokenCode, holderCode, holderBalance] = await Promise.all([
+    // METADATA_ONLY / NO_BALANCE_GATE: verify the token + DAO contracts merely
+    // exist on-chain. Nothing is pre-minted (the DAO mints per-epoch into the
+    // distributor), so a zero token balance is expected — never gate on it.
+    const [tokenCode, holderCode] = await Promise.all([
       client.getBytecode({ address: tokenAddress }),
       client.getBytecode({ address: emissionsHolderAddress }),
-      client.readContract({
-        address: tokenAddress,
-        abi: ERC20_ABI,
-        functionName: "balanceOf",
-        args: [emissionsHolderAddress],
-      }) as Promise<bigint>,
     ]);
     ctx.log.info(
       {
@@ -322,7 +334,7 @@ async function handleActivateDistributions(
         chainId: node.chainId,
         hasTokenCode: Boolean(tokenCode && tokenCode !== "0x"),
         hasHolderCode: Boolean(holderCode && holderCode !== "0x"),
-        holderBalance: holderBalance.toString(),
+        daoIsEmissionsHolder: true,
       },
       "activate-distributions: verification result"
     );
@@ -335,16 +347,6 @@ async function handleActivateDistributions(
     if (!holderCode || holderCode === "0x") {
       return NextResponse.json(
         { error: "emissions holder contract missing", emissionsHolderAddress },
-        { status: 409 }
-      );
-    }
-    if (holderBalance <= 0n) {
-      return NextResponse.json(
-        {
-          error: "emissions holder has no token inventory",
-          tokenAddress,
-          emissionsHolderAddress,
-        },
         { status: 409 }
       );
     }
