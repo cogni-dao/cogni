@@ -4,7 +4,7 @@
 /**
  * Module: `@app/api/setup/verify`
  * Purpose: Server-side verification of DAO formation transactions.
- * Scope: Derives addresses from tx receipts, verifies on-chain state, returns repo-spec YAML; does not modify blockchain state.
+ * Scope: Derives addresses from tx receipts and verifies on-chain state; does not modify blockchain state.
  * Invariants: NEVER trusts client-provided addresses; all addresses derived from receipts.
  * Side-effects: IO (RPC reads via viem)
  * Links: docs/spec/node-formation.md, work/projects/proj.chain-deployment-refactor.md
@@ -31,7 +31,6 @@ import { NextResponse } from "next/server";
 import { createPublicClient, http } from "viem";
 import { base, sepolia } from "viem/chains";
 import { withRootSpan } from "@/bootstrap/otel";
-import { buildPendingActivationRepoSpecYaml } from "@/features/nodes/repo-spec-builder";
 import { serverEnv } from "@/shared/env";
 import {
   createRequestContext,
@@ -113,8 +112,10 @@ export async function POST(request: Request): Promise<NextResponse> {
           signalTxHash,
           signalBlockNumber,
           initialHolder,
+          expectedTokenSupplyUnits,
         } = parseResult.data;
         const errors: string[] = [];
+        const expectedSupply = BigInt(expectedTokenSupplyUnits);
 
         const client = getPublicClient(chainId as SupportedChainId);
         const aragonAddresses = getAragonAddresses(chainId);
@@ -205,21 +206,30 @@ export async function POST(request: Request): Promise<NextResponse> {
           }
         }
 
-        // 3. Verify initial holder balance
+        // 3. Verify minted token supply
         if (tokenAddress) {
           try {
-            const balance = await client.readContract({
-              address: tokenAddress,
-              abi: GOVERNANCE_ERC20_ABI,
-              functionName: "balanceOf",
-              args: [initialHolder as `0x${string}`],
-            });
+            const [balance, totalSupply] = await Promise.all([
+              client.readContract({
+                address: tokenAddress,
+                abi: GOVERNANCE_ERC20_ABI,
+                functionName: "balanceOf",
+                args: [initialHolder as `0x${string}`],
+              }),
+              client.readContract({
+                address: tokenAddress,
+                abi: GOVERNANCE_ERC20_ABI,
+                functionName: "totalSupply",
+              }),
+            ]);
 
-            if (balance !== 10n ** 18n) {
-              errors.push(
-                `Initial holder balance mismatch: expected 1e18, got ${balance.toString()}`
-              );
-            }
+            errors.push(
+              ...collectTokenSupplyVerificationErrors({
+                expectedSupply,
+                balance,
+                totalSupply,
+              })
+            );
           } catch (err) {
             errors.push(
               `Failed to check balance: ${err instanceof Error ? err.message : "unknown"}`
@@ -342,13 +352,6 @@ export async function POST(request: Request): Promise<NextResponse> {
           pluginAddress &&
           signalAddress
         ) {
-          const repoSpecYaml = buildRepoSpecYaml({
-            chainId,
-            daoAddress,
-            pluginAddress,
-            signalAddress,
-          });
-
           const response: SetupVerifyOutput = {
             verified: true,
             addresses: {
@@ -357,7 +360,6 @@ export async function POST(request: Request): Promise<NextResponse> {
               plugin: pluginAddress,
               signal: signalAddress,
             },
-            repoSpecYaml,
           };
 
           logEvent(ctx.log, EVENT_NAMES.SETUP_DAO_VERIFY_COMPLETE, {
@@ -407,17 +409,21 @@ export async function POST(request: Request): Promise<NextResponse> {
   );
 }
 
-function buildRepoSpecYaml(params: {
-  chainId: number;
-  daoAddress: string;
-  pluginAddress: string;
-  signalAddress: string;
-}): string {
-  return buildPendingActivationRepoSpecYaml({
-    nodeId: crypto.randomUUID(),
-    chainId: params.chainId,
-    daoAddress: params.daoAddress,
-    pluginAddress: params.pluginAddress,
-    signalAddress: params.signalAddress,
-  });
+export function collectTokenSupplyVerificationErrors(params: {
+  expectedSupply: bigint;
+  balance: bigint;
+  totalSupply: bigint;
+}): string[] {
+  const errors: string[] = [];
+  if (params.balance !== params.expectedSupply) {
+    errors.push(
+      `Initial holder balance mismatch: expected ${params.expectedSupply.toString()}, got ${params.balance.toString()}`
+    );
+  }
+  if (params.totalSupply !== params.expectedSupply) {
+    errors.push(
+      `Token totalSupply mismatch: expected ${params.expectedSupply.toString()}, got ${params.totalSupply.toString()}`
+    );
+  }
+  return errors;
 }

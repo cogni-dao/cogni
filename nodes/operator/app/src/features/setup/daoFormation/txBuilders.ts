@@ -17,7 +17,6 @@ import {
   encodeTokenVotingSetup,
   getAragonAddresses,
   type HexAddress,
-  INITIAL_TOKEN_AMOUNT,
   MINT_SETTINGS_VERSION,
   type SupportedChainId,
   TOKEN_VOTING_VERSION_TAG,
@@ -91,7 +90,7 @@ export function buildCreateDaoArgs(
     },
     mintSettings: {
       receivers: [config.initialHolder],
-      amounts: [INITIAL_TOKEN_AMOUNT],
+      amounts: [config.tokenSupplyUnits],
     },
     targetConfig: {
       target: DEPLOY_NEW_TOKEN_ADDRESS,

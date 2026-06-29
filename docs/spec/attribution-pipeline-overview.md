@@ -22,6 +22,28 @@ tags: [governance, attribution, overview]
 
 Provide a single document that explains the full attribution pipeline end-to-end: from `repo-spec.yaml` configuration through activity ingestion, enrichment, allocation, admin review, and EIP-712 signed credit statements. Serve as the entry point for onboarding and for deciding where a change belongs.
 
+## DAO Ownership Token Distribution
+
+The first crypto-distribution primitive is an ownership token merkle manifest, not
+an automatic payout executor. DAO formation mints the node's selected whole-token
+supply to the initial holder. After attribution epochs produce signed claimant
+allocations, those signed credit entitlements can be transformed into a deterministic token
+claim manifest:
+
+1. Group finalized claimant allocations by claimant key and resolved claim
+   address.
+2. Convert signed `credit_amount` entitlements into ERC20 base-unit amounts
+   against the distribution amount using integer largest-remainder rounding.
+3. Hash each claim as packed `(index, account, amount)` and build a sorted-pair
+   keccak merkle tree.
+4. Publish a scope-bound settlement manifest with `node_id`, `scope_id`,
+   `epochId`, `statementHash`, `merkleRoot`, `totalAmount`, funding metadata,
+   and per-claim proofs for a future MerkleDistributor contract or
+   operator-mediated claim route.
+
+This keeps today's ledger signing flow unchanged while giving the next iteration
+a stable bridge from signed attribution statements to token ownership claims.
+
 ## Non-Goals
 
 - Schema definitions — see [attribution-ledger](./attribution-ledger.md)

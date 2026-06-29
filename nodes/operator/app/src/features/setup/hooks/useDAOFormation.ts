@@ -235,6 +235,7 @@ export function useDAOFormation(): UseDAOFormationReturn {
         signalTxHash,
         signalBlockNumber,
         initialHolder: config.initialHolder,
+        expectedTokenSupplyUnits: config.tokenSupplyUnits,
       });
 
       if (attemptIdRef.current !== currentAttempt) return;
@@ -243,7 +244,6 @@ export function useDAOFormation(): UseDAOFormationReturn {
         dispatch({
           type: "VERIFY_SUCCESS",
           addresses: result.addresses,
-          repoSpecYaml: result.repoSpecYaml,
         });
       } else {
         dispatch({ type: "VERIFY_FAILED", errors: result.errors });

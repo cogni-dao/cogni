@@ -18,7 +18,7 @@ import type {
   SetupVerifyOutput,
 } from "@cogni/node-contracts";
 
-import type { VerifiedAddresses } from "./formation.reducer";
+import type { TxHash, VerifiedAddresses } from "./formation.reducer";
 
 // ============================================================================
 // Types
@@ -28,7 +28,6 @@ export type VerifyResult =
   | {
       ok: true;
       addresses: VerifiedAddresses;
-      repoSpecYaml: string;
     }
   | {
       ok: false;
@@ -45,10 +44,11 @@ export type VerifyResult =
  */
 export async function verifyFormation(params: {
   chainId: number;
-  daoTxHash: HexAddress;
-  signalTxHash: HexAddress;
+  daoTxHash: TxHash;
+  signalTxHash: TxHash;
   signalBlockNumber: number;
   initialHolder: HexAddress;
+  expectedTokenSupplyUnits: bigint;
 }): Promise<VerifyResult> {
   try {
     const body: SetupVerifyInput = {
@@ -57,6 +57,7 @@ export async function verifyFormation(params: {
       signalTxHash: params.signalTxHash,
       signalBlockNumber: params.signalBlockNumber,
       initialHolder: params.initialHolder,
+      expectedTokenSupplyUnits: params.expectedTokenSupplyUnits.toString(),
     };
 
     const response = await fetch("/api/setup/verify", {
@@ -71,7 +72,6 @@ export async function verifyFormation(params: {
       return {
         ok: true,
         addresses: data.addresses as VerifiedAddresses,
-        repoSpecYaml: data.repoSpecYaml,
       };
     }
 

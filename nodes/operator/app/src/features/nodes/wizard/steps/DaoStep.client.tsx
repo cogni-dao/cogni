@@ -15,6 +15,12 @@
 
 "use client";
 
+import {
+  DAO_TOKEN_SUPPLY_DEFAULT_WHOLE,
+  DAO_TOKEN_SUPPLY_MAX_WHOLE,
+  DAO_TOKEN_SUPPLY_MIN_WHOLE,
+  parseDaoTokenSupplyUnits,
+} from "@cogni/aragon-osx";
 import { getTransactionExplorerUrl, toUiError } from "@cogni/node-shared";
 import { CheckCircle2, ExternalLink, Info, Loader2 } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -50,6 +56,7 @@ const DAO_PHASES: ReadonlyArray<{ key: string; label: string }> = [
 ];
 
 const PHASE_ORDER = DAO_PHASES.map((p) => p.key);
+const TOKEN_SUPPLY_FORMATTER = new Intl.NumberFormat("en-US");
 
 function phaseStateFor(currentPhase: string, phaseKey: string): PhaseState {
   const currentIdx =
@@ -72,6 +79,9 @@ export function DaoStep({ node }: WizardStepProps): ReactElement {
 
   const [tokenName, setTokenName] = useState(node.slug);
   const [tokenSymbol, setTokenSymbol] = useState(symbolFromSlug(node.slug));
+  const [tokenSupply, setTokenSupply] = useState(
+    DAO_TOKEN_SUPPLY_DEFAULT_WHOLE
+  );
   const [initialHolder, setInitialHolder] = useState("");
   const [patchError, setPatchError] = useState<string | null>(null);
   const [advancing, setAdvancing] = useState(false);
@@ -82,13 +92,22 @@ export function DaoStep({ node }: WizardStepProps): ReactElement {
     tokenSymbol.length >= 1 &&
     tokenSymbol.length <= 10 &&
     /^[A-Z0-9]+$/.test(tokenSymbol);
+  const isValidSupply =
+    Number.isSafeInteger(tokenSupply) &&
+    tokenSupply >= DAO_TOKEN_SUPPLY_MIN_WHOLE &&
+    tokenSupply <= DAO_TOKEN_SUPPLY_MAX_WHOLE;
   const isValidHolder = isAddress(effectiveHolder);
   const canSubmit =
-    isValidName && isValidSymbol && isValidHolder && formation.isSupported;
+    isValidName &&
+    isValidSymbol &&
+    isValidSupply &&
+    isValidHolder &&
+    formation.isSupported;
 
   const phase = formation.state.phase;
   const isIdle = phase === "IDLE";
   const isError = phase === "ERROR";
+  const canRetry = isError && formation.state.recoverable;
   const isInFlight = !isIdle && phase !== "SUCCESS" && phase !== "ERROR";
 
   const displayTxHash =
@@ -98,11 +117,15 @@ export function DaoStep({ node }: WizardStepProps): ReactElement {
     : null;
 
   const handleSubmit = () => {
-    if (!canSubmit || !isIdle) return;
+    if (!canSubmit || (!isIdle && !canRetry)) return;
     setPatchError(null);
+    if (canRetry) {
+      resetFormation();
+    }
     formation.startFormation({
       tokenName,
       tokenSymbol,
+      tokenSupplyUnits: parseDaoTokenSupplyUnits(tokenSupply),
       initialHolder: effectiveHolder as `0x${string}`,
     });
   };
@@ -239,6 +262,40 @@ export function DaoStep({ node }: WizardStepProps): ReactElement {
         )}
       </div>
 
+      <div className="space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <label
+            htmlFor="tokenSupply"
+            className="font-medium text-foreground text-sm"
+          >
+            Token Supply
+          </label>
+          <span className="font-mono text-muted-foreground text-sm tabular-nums">
+            {TOKEN_SUPPLY_FORMATTER.format(tokenSupply)}
+          </span>
+        </div>
+        <input
+          id="tokenSupply"
+          type="range"
+          min={DAO_TOKEN_SUPPLY_MIN_WHOLE}
+          max={DAO_TOKEN_SUPPLY_MAX_WHOLE}
+          step={1_000}
+          value={tokenSupply}
+          onChange={(e) => setTokenSupply(e.currentTarget.valueAsNumber)}
+          className="w-full accent-primary"
+        />
+        <p className="text-muted-foreground text-sm">
+          Whole ownership tokens minted to the initial holder at DAO creation.
+        </p>
+        {!isValidSupply && (
+          <p className="text-destructive text-sm">
+            Supply must be between{" "}
+            {TOKEN_SUPPLY_FORMATTER.format(DAO_TOKEN_SUPPLY_MIN_WHOLE)} and{" "}
+            {TOKEN_SUPPLY_FORMATTER.format(DAO_TOKEN_SUPPLY_MAX_WHOLE)} tokens
+          </p>
+        )}
+      </div>
+
       <div className="space-y-2">
         <label
           htmlFor="initialHolder"
@@ -266,8 +323,12 @@ export function DaoStep({ node }: WizardStepProps): ReactElement {
         </p>
       ) : null}
 
-      <Button onClick={handleSubmit} disabled={!canSubmit} className="w-full">
-        {isError ? "Try again" : "Create DAO"}
+      <Button
+        onClick={handleSubmit}
+        disabled={!canSubmit || (!isIdle && !canRetry)}
+        className="w-full"
+      >
+        {canRetry ? "Try again" : "Create DAO"}
       </Button>
 
       {!formation.isSupported && (

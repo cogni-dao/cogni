@@ -1,0 +1,232 @@
+// SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
+
+/**
+ * Module: `@cogni/aragon-osx/tests/token-distribution`
+ * Purpose: Unit tests for DAO ownership token supply parsing and merkle distribution manifests.
+ * Scope: Pure domain tests; does not test chain, wallet, database, or filesystem I/O.
+ * Invariants: TOKEN_DISTRIBUTION_DETERMINISTIC, TOKEN_DISTRIBUTION_CONSERVES_AMOUNT.
+ * Side-effects: none
+ * Links: packages/aragon-osx/src/token-distribution.ts
+ * @internal
+ */
+
+import {
+  buildDaoTokenMerkleDistribution,
+  DAO_TOKEN_SUPPLY_DEFAULT_WHOLE,
+  DAO_TOKEN_SUPPLY_MAX_WHOLE,
+  DAO_TOKEN_SUPPLY_MIN_WHOLE,
+  hashDaoTokenClaimLeaf,
+  parseDaoTokenSupplyUnits,
+  verifyDaoTokenMerkleProof,
+} from "@cogni/aragon-osx";
+import { describe, expect, it } from "vitest";
+
+const TOKEN = "0x00000000000000000000000000000000000000aa" as const;
+const ALICE = "0x00000000000000000000000000000000000000a1" as const;
+const BOB = "0x00000000000000000000000000000000000000b2" as const;
+const CAROL = "0x00000000000000000000000000000000000000c3" as const;
+const MANIFEST_IDENTITY = {
+  nodeId: "00000000-0000-4000-8000-000000000001",
+  scopeId: "00000000-0000-4000-8000-000000000002",
+  statementHash:
+    "sha256:0000000000000000000000000000000000000000000000000000000000000003",
+} as const;
+
+describe("parseDaoTokenSupplyUnits", () => {
+  it("converts whole tokens to 18-decimal base units", () => {
+    expect(parseDaoTokenSupplyUnits(DAO_TOKEN_SUPPLY_DEFAULT_WHOLE)).toBe(
+      1_000_000n * 10n ** 18n
+    );
+  });
+
+  it("enforces configured slider bounds", () => {
+    expect(() =>
+      parseDaoTokenSupplyUnits(DAO_TOKEN_SUPPLY_MIN_WHOLE - 1)
+    ).toThrow(RangeError);
+    expect(() =>
+      parseDaoTokenSupplyUnits(DAO_TOKEN_SUPPLY_MAX_WHOLE + 1)
+    ).toThrow(RangeError);
+    expect(() => parseDaoTokenSupplyUnits(1.5)).toThrow(RangeError);
+  });
+});
+
+describe("buildDaoTokenMerkleDistribution", () => {
+  it("allocates exact distributionAmount with deterministic largest-remainder rounding", () => {
+    const distribution = buildDaoTokenMerkleDistribution({
+      distributionId: "epoch-1",
+      ...MANIFEST_IDENTITY,
+      chainId: 8453,
+      tokenAddress: TOKEN,
+      distributionAmount: 10n,
+      allocations: [
+        { claimantKey: "user:carol", account: CAROL, creditAmount: 1n },
+        { claimantKey: "user:alice", account: ALICE, creditAmount: 1n },
+        { claimantKey: "user:bob", account: BOB, creditAmount: 1n },
+      ],
+    });
+
+    expect(distribution.totalAllocated).toBe(10n);
+    expect(distribution.leaves.map((leaf) => leaf.claimantKey)).toEqual([
+      "user:alice",
+      "user:bob",
+      "user:carol",
+    ]);
+    expect(distribution.leaves.map((leaf) => leaf.amount)).toEqual([
+      4n,
+      3n,
+      3n,
+    ]);
+  });
+
+  it("builds proofs that verify against the merkle root", () => {
+    const distribution = buildDaoTokenMerkleDistribution({
+      distributionId: "epoch-2",
+      ...MANIFEST_IDENTITY,
+      chainId: 8453,
+      tokenAddress: TOKEN,
+      distributionAmount: parseDaoTokenSupplyUnits(DAO_TOKEN_SUPPLY_MIN_WHOLE),
+      allocations: [
+        { claimantKey: "user:alice", account: ALICE, creditAmount: 7n },
+        { claimantKey: "user:bob", account: BOB, creditAmount: 3n },
+      ],
+    });
+
+    for (const leaf of distribution.leaves) {
+      expect(
+        verifyDaoTokenMerkleProof(
+          leaf.leafHash,
+          leaf.proof,
+          distribution.merkleRoot
+        )
+      ).toBe(true);
+      expect(leaf.leafHash).toBe(
+        hashDaoTokenClaimLeaf(leaf.index, leaf.account, leaf.amount)
+      );
+    }
+  });
+
+  it("matches the fixed EVM leaf and sorted-pair merkle vector", () => {
+    const distribution = buildDaoTokenMerkleDistribution({
+      distributionId: "epoch-vector",
+      ...MANIFEST_IDENTITY,
+      chainId: 8453,
+      tokenAddress: TOKEN,
+      distributionAmount: 100n,
+      allocations: [
+        { claimantKey: "user:alice", account: ALICE, creditAmount: 70n },
+        { claimantKey: "user:bob", account: BOB, creditAmount: 30n },
+      ],
+    });
+
+    expect(distribution.leaves).toHaveLength(2);
+    expect(distribution.leaves[0]?.leafHash).toBe(
+      "0x69f9cb1515ec48568483268117987a5bb1ee111146cceb05ab953c591553b5c9"
+    );
+    expect(distribution.leaves[1]?.leafHash).toBe(
+      "0x4e61e809c8698c87957d2ed326955e91f76a564f5b31d00e50a2ebb6f1e60b53"
+    );
+    expect(distribution.merkleRoot).toBe(
+      "0x642fd2a30e3c0a14d8bc871a26aca1ef3498eb5ebcea8b6a5be02fe0b1b3dc4d"
+    );
+    expect(distribution.leaves[0]?.proof).toEqual([
+      "0x4e61e809c8698c87957d2ed326955e91f76a564f5b31d00e50a2ebb6f1e60b53",
+    ]);
+    expect(distribution.leaves[1]?.proof).toEqual([
+      "0x69f9cb1515ec48568483268117987a5bb1ee111146cceb05ab953c591553b5c9",
+    ]);
+  });
+
+  it("groups duplicate claimant rows without allowing account ambiguity", () => {
+    const distribution = buildDaoTokenMerkleDistribution({
+      distributionId: "epoch-3",
+      ...MANIFEST_IDENTITY,
+      chainId: 8453,
+      tokenAddress: TOKEN,
+      distributionAmount: 100n,
+      allocations: [
+        {
+          claimantKey: "user:alice",
+          account: ALICE,
+          creditAmount: 25n,
+          receiptIds: ["r2"],
+        },
+        {
+          claimantKey: "user:alice",
+          account: ALICE,
+          creditAmount: 25n,
+          receiptIds: ["r1"],
+        },
+        { claimantKey: "user:bob", account: BOB, creditAmount: 50n },
+      ],
+    });
+
+    expect(distribution.leaves[0]?.amount).toBe(50n);
+    expect(distribution.leaves[0]?.receiptIds).toEqual(["r1", "r2"]);
+
+    expect(() =>
+      buildDaoTokenMerkleDistribution({
+        distributionId: "epoch-4",
+        ...MANIFEST_IDENTITY,
+        chainId: 8453,
+        tokenAddress: TOKEN,
+        distributionAmount: 100n,
+        allocations: [
+          { claimantKey: "user:alice", account: ALICE, creditAmount: 1n },
+          { claimantKey: "user:alice", account: BOB, creditAmount: 1n },
+        ],
+      })
+    ).toThrow(/multiple claim accounts/);
+  });
+
+  it("binds manifest metadata to node, scope, and signed statement lineage", () => {
+    const distribution = buildDaoTokenMerkleDistribution({
+      distributionId: "epoch-5",
+      ...MANIFEST_IDENTITY,
+      chainId: 8453,
+      tokenAddress: TOKEN,
+      distributionAmount: 100n,
+      allocations: [
+        { claimantKey: "user:alice", account: ALICE, creditAmount: 1n },
+      ],
+    });
+
+    expect(distribution.nodeId).toBe(MANIFEST_IDENTITY.nodeId);
+    expect(distribution.scopeId).toBe(MANIFEST_IDENTITY.scopeId);
+    expect(distribution.statementHash).toBe(MANIFEST_IDENTITY.statementHash);
+    expect(distribution.leaves[0]?.creditAmount).toBe(1n);
+  });
+
+  it("rejects manifests without scope lineage or valid EVM addresses", () => {
+    expect(() =>
+      buildDaoTokenMerkleDistribution({
+        distributionId: "epoch-6",
+        ...MANIFEST_IDENTITY,
+        statementHash: "",
+        chainId: 8453,
+        tokenAddress: TOKEN,
+        distributionAmount: 100n,
+        allocations: [
+          { claimantKey: "user:alice", account: ALICE, creditAmount: 1n },
+        ],
+      })
+    ).toThrow(/statementHash/);
+
+    expect(() =>
+      buildDaoTokenMerkleDistribution({
+        distributionId: "epoch-7",
+        ...MANIFEST_IDENTITY,
+        chainId: 8453,
+        tokenAddress: TOKEN,
+        distributionAmount: 100n,
+        allocations: [
+          {
+            claimantKey: "user:alice",
+            account: "0xnot-an-address",
+            creditAmount: 1n,
+          },
+        ],
+      })
+    ).toThrow(/invalid claim account/);
+  });
+});

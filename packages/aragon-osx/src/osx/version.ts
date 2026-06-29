@@ -54,6 +54,16 @@ export const DEFAULT_VOTING_SETTINGS = {
 export const INITIAL_TOKEN_AMOUNT = 10n ** 18n;
 
 /**
+ * DAO ownership token supply slider bounds, expressed in whole tokens.
+ *
+ * The UI mints whole-token supplies only; contract arguments use 18-decimal base
+ * units derived by parseDaoTokenSupplyUnits().
+ */
+export const DAO_TOKEN_SUPPLY_MIN_WHOLE = 1_000;
+export const DAO_TOKEN_SUPPLY_MAX_WHOLE = 1_000_000_000;
+export const DAO_TOKEN_SUPPLY_DEFAULT_WHOLE = 1_000_000;
+
+/**
  * Zero address used for "deploy new token" in TokenSettings.
  */
 export const DEPLOY_NEW_TOKEN_ADDRESS =

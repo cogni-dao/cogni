@@ -21,6 +21,8 @@ describe("@cogni/aragon-osx exports enforcement", () => {
 
     expect(mod.encodeTokenVotingSetup).toBeTypeOf("function");
     expect(mod.getAragonAddresses).toBeTypeOf("function");
+    expect(mod.buildDaoTokenMerkleDistribution).toBeTypeOf("function");
+    expect(mod.parseDaoTokenSupplyUnits).toBeTypeOf("function");
   });
 
   it("blocks subpath import @cogni/aragon-osx/encoding", async () => {
