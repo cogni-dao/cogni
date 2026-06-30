@@ -203,7 +203,7 @@ jobs:
                     or . == "infra/k8s/base/scheduler-worker/configmap.yaml"
                     or . == "infra/compose/edge/configs/Caddyfile.tmpl"
                     or test("^infra/k8s/overlays/[^/]+/" + $node + "/")
-                    or test("^infra/k8s/argocd/[^/]*applicationset[^/]*\\.ya?ml$")
+                    or test("^infra/k8s/argocd/appsets/[^/]+/[^/]*applicationset[^/]*\\.ya?ml$")
                   ))
              )' <<<"$OPERATOR_FILES" >/dev/null; then
             report "✅ scope: ${NODE} (+ operator ride-along)"

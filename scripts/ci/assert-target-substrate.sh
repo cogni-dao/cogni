@@ -53,7 +53,7 @@ done
 "$contains_node" || fail "target '$node' is not a type=node catalog target"
 
 overlay_dir="${APP_SOURCE_DIR}/infra/k8s/overlays/${DEPLOY_ENVIRONMENT}/${node}"
-appset_file="${APP_SOURCE_DIR}/infra/k8s/argocd/${DEPLOY_ENVIRONMENT}-${node}-applicationset.yaml"
+appset_file="${APP_SOURCE_DIR}/infra/k8s/argocd/appsets/${DEPLOY_ENVIRONMENT}/${DEPLOY_ENVIRONMENT}-${node}-applicationset.yaml"
 
 [ -d "$overlay_dir" ] || fail "missing overlay dir: $overlay_dir"
 [ -f "$appset_file" ] || fail "missing per-target AppSet file: $appset_file"

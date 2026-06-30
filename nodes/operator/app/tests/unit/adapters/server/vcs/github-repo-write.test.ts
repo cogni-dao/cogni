@@ -944,16 +944,22 @@ patches:
             content: encode("appset __ENV__ __NODE__\n"),
           };
         }
-        if (path === "infra/k8s/argocd/kustomization.yaml") {
+        // PER-ENV appsets kustomization: appsets/<env>/kustomization.yaml lists ONLY that
+        // env's nodes (full <env>- filename prefix kept, file nested under <env>/).
+        const appsetsEnv = path.match(
+          /^infra\/k8s\/argocd\/appsets\/([^/]+)\/kustomization\.yaml$/
+        )?.[1];
+        if (appsetsEnv !== undefined) {
           return {
             type: "file",
             encoding: "base64",
-            content: encode(`resources:
-  # >>> GENERATED node-appsets (scripts/ci/render-node-appset.sh) — DO NOT EDIT BY HAND
-  - candidate-a-node-template-applicationset.yaml
-  - preview-node-template-applicationset.yaml
-  - production-node-template-applicationset.yaml
-  # <<< GENERATED node-appsets
+            content: encode(`apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: argocd
+
+resources:
+  - ${appsetsEnv}-node-template-applicationset.yaml
 `),
           };
         }
@@ -1027,6 +1033,27 @@ node_port: 30200
           expect(content).toContain(`namespace: cogni-${env}`);
           expect(content).toContain("value: 30300");
           expect(content).not.toContain("atlas-node-app-secrets");
+
+          // PER-ENV AppSet lands under appsets/<env>/<env>-atlas-applicationset.yaml.
+          const appsetEntry = tree.find(
+            (item) =>
+              item.path ===
+              `infra/k8s/argocd/appsets/${env}/${env}-atlas-applicationset.yaml`
+          );
+          expect(appsetEntry).toBeDefined();
+          expect(blobs.get(appsetEntry?.sha ?? "")).toBe(
+            `appset ${env} atlas\n`
+          );
+
+          // The slug folds into THAT env's own appsets/<env>/kustomization.yaml only.
+          const kustEntry = tree.find(
+            (item) =>
+              item.path === `infra/k8s/argocd/appsets/${env}/kustomization.yaml`
+          );
+          expect(kustEntry).toBeDefined();
+          const kust = blobs.get(kustEntry?.sha ?? "");
+          expect(kust).toContain(`${env}-atlas-applicationset.yaml`);
+          expect(kust).toContain(`${env}-node-template-applicationset.yaml`);
         }
         return { sha: "birth-tree" };
       },

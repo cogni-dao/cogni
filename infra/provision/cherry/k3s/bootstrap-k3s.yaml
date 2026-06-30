@@ -125,17 +125,16 @@ write_files:
       git clone --depth=1 --branch "${git_branch:-main}" \
         "https://github.com/cogni-dao/cogni.git" "$REPO_DIR"
 
-      # Per-node AppSets: one `<env>-<node>-applicationset.yaml` object per node
-      # (LANE_ISOLATION, axiom 18). Apply every per-node file for the envs this
-      # VM hosts (preview + production); candidate slots live on separate VMs.
-      echo "Applying per-node ApplicationSets..."
-      shopt -s nullglob
-      for appset in "$REPO_DIR"/infra/k8s/argocd/preview-*-applicationset.yaml \
-                    "$REPO_DIR"/infra/k8s/argocd/production-*-applicationset.yaml; do
-        kubectl apply -f "$appset" -n argocd
-        echo "  Applied $(basename "$appset")"
+      # Per-env app-of-apps (story.5020): apply the `cogni-<env>-appsets`
+      # Application for the envs this VM hosts (preview + production); it
+      # continuously reconciles infra/k8s/argocd/appsets/<env>/ with prune, so a
+      # catalog-removed node's per-node AppSet is auto-pruned (no apply-once
+      # orphan). candidate slots live on separate VMs and apply their own.
+      echo "Applying per-env ApplicationSet app-of-apps..."
+      for env in preview production; do
+        kubectl apply -f "$REPO_DIR/infra/k8s/argocd/${env}-appsets-application.yaml" -n argocd
+        echo "  Applied cogni-${env}-appsets app-of-apps"
       done
-      shopt -u nullglob
       rm -rf "$REPO_DIR"
 
       # Create app namespaces (Argo CreateNamespace=true handles this too, belt+suspenders)

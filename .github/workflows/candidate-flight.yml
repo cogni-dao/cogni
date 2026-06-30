@@ -435,7 +435,7 @@ jobs:
           set -euo pipefail
           # shellcheck source=ci-src/scripts/ci/lib/ssh-retry.sh
           . ci-src/scripts/ci/lib/ssh-retry.sh
-          APPSET_FILE="app-src/infra/k8s/argocd/candidate-a-${NODE}-applicationset.yaml"
+          APPSET_FILE="app-src/infra/k8s/argocd/appsets/candidate-a/candidate-a-${NODE}-applicationset.yaml"
           if [ ! -f "$APPSET_FILE" ]; then
             echo "::error::$APPSET_FILE missing at head_sha — run 'pnpm gen:node-appset' (CATALOG_IS_SSOT)"
             exit 1

@@ -5,7 +5,7 @@
     "infra/catalog/legacy-alpha.yaml",
     "infra/k8s/overlays/candidate-a/legacy-alpha/kustomization.yaml",
     "infra/k8s/overlays/preview/legacy-alpha/kustomization.yaml",
-    "infra/k8s/argocd/candidate-a-legacy-alpha-applicationset.yaml"
+    "infra/k8s/argocd/appsets/candidate-a/candidate-a-legacy-alpha-applicationset.yaml"
   ],
   "expected": {
     "domains": ["legacy-alpha"],

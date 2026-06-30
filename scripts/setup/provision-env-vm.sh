@@ -1896,27 +1896,32 @@ log_step "Phase 7: Apply ApplicationSets (triggers Argo sync)"
 # operator's local checkout is the source of truth — it has the files they intend to deploy.
 # This also avoids the chicken-and-egg: you can provision preview before the files are
 # promoted to staging.
-# Per-node AppSets (bug.0378 / #1465) replaced the monolithic
-# ${DEPLOY_ENV}-applicationset.yaml with one ${DEPLOY_ENV}-<node>-applicationset.yaml
-# per node (operator/node-template/resy/canary/scheduler-worker). Discover all
-# of them; fall back to the monolith (candidate-b still ships one) for envs not
-# yet migrated. Applying a single ${DEPLOY_ENV}-applicationset.yaml was the
-# Phase-7 break that orphaned the first candidate-a re-provision.
+# PER-ENV app-of-apps (story.5020): each env applies ONLY its own
+# cogni-${DEPLOY_ENV}-appsets Application, whose source path is the env-scoped
+# appsets/${DEPLOY_ENV}/ dir. From then on Argo continuously reconciles that
+# dir with prune — so a catalog-removed node's AppSet auto-prunes, and (crucially)
+# NO foreign env's AppSets are ever fanned onto THIS cluster.
+#
+# This replaces the prior loop that applied each per-node ${DEPLOY_ENV}-<node>-
+# applicationset.yaml directly (apply-once → orphaned AppSets never pruned, and
+# nothing stopped a future all-env source from fanning out). candidate-b still
+# ships its own monolithic ${APPSET_FILE} (not yet migrated to the app-of-apps).
 APPSET_DIR="$REPO_ROOT/infra/k8s/argocd"
+APP_OF_APPS="$APPSET_DIR/${DEPLOY_ENV}-appsets-application.yaml"
 APPSET_LOCALS=()
-for f in "$APPSET_DIR/${DEPLOY_ENV}"-*-applicationset.yaml; do
-  [ -f "$f" ] && APPSET_LOCALS+=("$f")
-done
-if [ ${#APPSET_LOCALS[@]} -eq 0 ] && [ -f "$APPSET_DIR/${APPSET_FILE}" ]; then
+if [ -f "$APP_OF_APPS" ]; then
+  APPSET_LOCALS+=("$APP_OF_APPS")
+elif [ -f "$APPSET_DIR/${APPSET_FILE}" ]; then
+  # Pre-app-of-apps env (e.g. candidate-b) still ships a monolithic AppSet.
   APPSET_LOCALS+=("$APPSET_DIR/${APPSET_FILE}")
 fi
 if [ ${#APPSET_LOCALS[@]} -eq 0 ]; then
-  log_error "No ApplicationSet files for ${DEPLOY_ENV} in $APPSET_DIR"
-  log_error "Expected per-node ${DEPLOY_ENV}-<node>-applicationset.yaml or monolithic ${APPSET_FILE}."
+  log_error "No app-of-apps for ${DEPLOY_ENV} in $APPSET_DIR"
+  log_error "Expected ${DEPLOY_ENV}-appsets-application.yaml or monolithic ${APPSET_FILE}."
   log_error "Run this script from the repo root on a branch that has infra/k8s/argocd/."
   exit 1
 fi
-log_info "Applying ${#APPSET_LOCALS[@]} ApplicationSet(s) for ${DEPLOY_ENV}: $(printf '%s ' "${APPSET_LOCALS[@]##*/}")"
+log_info "Applying ${#APPSET_LOCALS[@]} app-of-apps for ${DEPLOY_ENV}: $(printf '%s ' "${APPSET_LOCALS[@]##*/}")"
 
 # B1 (deploy machinery) — substitute repoURL to point at the FORK, not the
 # upstream. AppSet files commit with the canonical cogni-dao/standalone-node

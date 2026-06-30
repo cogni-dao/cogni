@@ -20,40 +20,16 @@ resources:
   - https://raw.githubusercontent.com/argoproj/argo-cd/v2.13.4/manifests/install.yaml
   # ksops CMP plugin ConfigMap
   - ksops-cmp.yaml
-  # ApplicationSets — one per (env, node) for structural LANE_ISOLATION (axiom 18).
-  # candidate-b is provisioned separately (provision-env.yml) and not listed here.
-  # >>> GENERATED node-appsets (scripts/ci/render-node-appset.sh) — DO NOT EDIT BY HAND
-  - candidate-a-beacon-applicationset.yaml
-  - candidate-a-blue-applicationset.yaml
-  - candidate-a-games-applicationset.yaml
-  - candidate-a-habitat-applicationset.yaml
-  - candidate-a-node-template-applicationset.yaml
-  - candidate-a-operator-applicationset.yaml
-  - candidate-a-oss-applicationset.yaml
-  - candidate-a-poly-applicationset.yaml
-  - candidate-a-red-applicationset.yaml
-  - candidate-a-scheduler-worker-applicationset.yaml
-  - preview-beacon-applicationset.yaml
-  - preview-blue-applicationset.yaml
-  - preview-games-applicationset.yaml
-  - preview-habitat-applicationset.yaml
-  - preview-node-template-applicationset.yaml
-  - preview-operator-applicationset.yaml
-  - preview-oss-applicationset.yaml
-  - preview-poly-applicationset.yaml
-  - preview-red-applicationset.yaml
-  - preview-scheduler-worker-applicationset.yaml
-  - production-beacon-applicationset.yaml
-  - production-blue-applicationset.yaml
-  - production-games-applicationset.yaml
-  - production-habitat-applicationset.yaml
-  - production-node-template-applicationset.yaml
-  - production-operator-applicationset.yaml
-  - production-oss-applicationset.yaml
-  - production-poly-applicationset.yaml
-  - production-red-applicationset.yaml
-  - production-scheduler-worker-applicationset.yaml
-  # <<< GENERATED node-appsets
+  # PER-ENV app-of-apps: each continuously reconciles the per-node ApplicationSets
+  # under appsets/<env>/ with prune, so a catalog-removed node's AppSet is auto-pruned.
+  # All three are listed here for drift/completeness (mirroring how the per-(env, node)
+  # AppSets were once all listed), BUT each env's CLUSTER must only get ITS OWN
+  # app-of-apps — a single cluster running all three would fan every env's AppSets
+  # onto it. provision-env-vm.sh therefore applies only cogni-${DEPLOY_ENV}-appsets.
+  # candidate-b is provisioned separately (provision-env.yml) and not included.
+  - candidate-a-appsets-application.yaml
+  - preview-appsets-application.yaml
+  - production-appsets-application.yaml
 
 patches:
   # Add ksops sidecar to repo-server for SOPS/age secret decryption

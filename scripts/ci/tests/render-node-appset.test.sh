@@ -23,14 +23,18 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 cd "$REPO_ROOT"
 
 RENDER="scripts/ci/render-node-appset.sh"
-ARGOCD_DIR="infra/k8s/argocd"
+# Per-(env, node) AppSets live in PER-ENV subdirs appsets/<env>/, each reconciled
+# with prune by its OWN cogni-<env>-appsets app-of-apps (story.5020); candidate-b +
+# substrate apps stay elsewhere, out of scope here.
+APPSETS_DIR="infra/k8s/argocd/appsets"
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "  ok — $*"; }
 
-# Slugs rendered for $1 (env), sorted, from the committed AppSet files.
+# Slugs rendered for $1 (env), sorted, from the committed AppSet files in appsets/<env>/.
+# The full <env>- filename prefix is kept on disk even though the file is nested under <env>/.
 appsets_for_env() {
   local env="$1" f base
-  for f in "$ARGOCD_DIR/$env"-*-applicationset.yaml; do
+  for f in "$APPSETS_DIR/$env/$env"-*-applicationset.yaml; do
     [ -e "$f" ] || continue
     base="$(basename "$f")"
     base="${base#"$env"-}"

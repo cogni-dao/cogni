@@ -15,16 +15,18 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-APPSET_DIR="$ROOT_DIR/infra/k8s/argocd"
+APPSET_DIR="$ROOT_DIR/infra/k8s/argocd/appsets"
 
 # Files permitted to carry argocd-image-updater annotations (empty = none).
 ALLOWLIST=()
 
-# Every ApplicationSet file in the tree. Glob expands literally when no
-# matches exist, so the [[ -f ]] guard handles an empty tree gracefully.
-shopt -s nullglob
-all_appsets=("$APPSET_DIR"/*-applicationset.yaml)
-shopt -u nullglob
+# Every ApplicationSet file in the tree. The AppSets now live in PER-ENV subdirs
+# (appsets/<env>/<env>-<node>-applicationset.yaml, story.5020), so scan RECURSIVELY
+# with find rather than a flat glob. NUL-delimited to survive any path quirk.
+all_appsets=()
+while IFS= read -r -d '' f; do
+  all_appsets+=("$f")
+done < <(find "$APPSET_DIR" -type f -name '*-applicationset.yaml' -print0 | sort -z)
 
 if [[ ${#all_appsets[@]} -eq 0 ]]; then
   echo "::error::bug.0344 image-updater-scope check: no *-applicationset.yaml files under $APPSET_DIR" >&2

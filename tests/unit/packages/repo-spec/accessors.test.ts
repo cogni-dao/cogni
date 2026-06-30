@@ -823,7 +823,7 @@ describe("extractOwningNode", () => {
       "infra/compose/edge/configs/Caddyfile.tmpl",
       "infra/k8s/overlays/candidate-a/sample-node/kustomization.yaml",
       "infra/k8s/overlays/preview/sample-node/kustomization.yaml",
-      "infra/k8s/argocd/candidate-a-sample-node-applicationset.yaml",
+      "infra/k8s/argocd/appsets/candidate-a/candidate-a-sample-node-applicationset.yaml",
     ]);
     expect(result).toEqual({
       kind: "single",

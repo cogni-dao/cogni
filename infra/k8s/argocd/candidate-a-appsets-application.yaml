@@ -1,0 +1,59 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2025 Cogni-DAO
+#
+# Argo CD Application — cogni-candidate-a-appsets (the candidate-a per-node ApplicationSet app-of-apps).
+#
+# Continuously reconciles infra/k8s/argocd/appsets/candidate-a/ — the directory of
+# GENERATED per-node ApplicationSet objects for the candidate-a env only (one per
+# deployable node, see scripts/ci/render-node-appset.sh). The candidate-a cluster's
+# bootstrap kustomization applies THIS Application once; from then on Argo owns
+# the candidate-a AppSet layer.
+#
+# Why PER-ENV (the foreign-env fan-out it prevents):
+#   A single all-envs app-of-apps sourced from appsets/ would fan EVERY env's
+#   AppSets (candidate-a + preview + production) onto whichever cluster ran it —
+#   each cluster would then materialize the other envs' Applications/pods. By
+#   scoping the source path to appsets/candidate-a/, this app-of-apps owns ONLY the
+#   candidate-a AppSets and can never fan a foreign env's AppSets onto the candidate-a
+#   cluster. The bootstrap apply (provision-env-vm.sh) installs only the matching
+#   cogni-${DEPLOY_ENV}-appsets, mirroring the prior per-(env, node) env-scoping.
+#
+# Why this exists (the decommission prune-gap it closes):
+#   The per-node AppSets used to be listed directly in the bootstrap
+#   kustomization, which is applied ONCE at cluster bootstrap. Removing a node
+#   from a catalog `envs[]` deletes its AppSet FILE from git, but nothing
+#   re-applied the bootstrap kustomization — so the live AppSet (and its pods)
+#   orphaned and never pruned. With prune: true on a dir-sourced Application,
+#   Argo sees the file vanish from git and prunes the AppSet automatically.
+#
+# Scope: this app-of-apps owns ONLY the per-node AppSets under appsets/candidate-a/.
+#   It NEVER manages Argo's own install (install.yaml / ksops / substrate apps) —
+#   those stay in the bootstrap kustomization, applied out-of-band.
+#
+# repoURL is the LITERAL upstream — the bootstrap apply path does NO envsubst,
+# so (unlike the substrate Applications) this cannot use ${FORK_REPO}.
+#
+# targetRevision: main — the AppSets are shared SOURCE with zero per-env
+# templating, mirroring the substrate Applications' main-tracking rationale.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cogni-candidate-a-appsets
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/cogni-dao/cogni.git
+    targetRevision: main
+    path: infra/k8s/argocd/appsets/candidate-a
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true
