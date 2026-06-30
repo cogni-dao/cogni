@@ -32,6 +32,8 @@ import { DistributionsCard } from "@/features/nodes/DistributionsCard.client";
 import { NodeDeployments } from "@/features/nodes/deployments/NodeDeployments";
 import { FLIGHT_ENVS } from "@/features/nodes/flight-status";
 import { nodeRepoUrlForSlug } from "@/features/nodes/launch-pack";
+import { NodeDecommissionDangerZone } from "@/features/nodes/NodeDecommissionDangerZone.client";
+import { NodeEnvMembership } from "@/features/nodes/NodeEnvMembership.client";
 import { ResetDaoDangerZone } from "@/features/nodes/ResetDaoDangerZone.client";
 import { NodeWizard } from "@/features/nodes/wizard/NodeWizard.client";
 import type { WizardNode } from "@/features/nodes/wizard/types";
@@ -199,6 +201,20 @@ export default async function NodeDashboardPage({
 
       {deployEnvs ? <NodeDeployments envs={deployEnvs} /> : null}
 
+      {/* Owner-driven env-membership controls (story.5020 W4) — add/remove preview & production,
+          candidate-a is mandatory. Current membership is derived from the live deploy state the page
+          already fetched: an env this node is serving (health=healthy) is in its reach. No new fetch.
+          Only surface alongside the developer/deploy dashboard (same status gate). */}
+      {deployEnvs && showDevelopers ? (
+        <NodeEnvMembership
+          nodeId={node.id}
+          slug={node.slug}
+          memberEnvs={deployEnvs
+            .filter((deployEnv) => deployEnv.health === "healthy")
+            .map((deployEnv) => deployEnv.env)}
+        />
+      ) : null}
+
       {showDevelopers ? (
         <NodeAccess nodeId={node.id} requests={accessRequests} />
       ) : null}
@@ -219,6 +235,13 @@ export default async function NodeDashboardPage({
           Only surface it when there is actually a DAO to reset (mirrors the route's 409). */}
       {node.daoAddress != null || status !== "dao_pending" ? (
         <ResetDaoDangerZone nodeId={node.id} slug={node.slug} />
+      ) : null}
+
+      {/* Owner-only full decommission (story.5020 W4) — drops the node from candidate-a/preview/production.
+          Gated by the same developer/deploy dashboard status as the env-membership controls (the page
+          query already scopes to the owner; the endpoint re-checks can_manage_envs). */}
+      {showDevelopers ? (
+        <NodeDecommissionDangerZone nodeId={node.id} slug={node.slug} />
       ) : null}
     </PageContainer>
   );
