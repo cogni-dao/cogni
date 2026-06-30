@@ -12,12 +12,7 @@ namespace: argocd
 
 resources:
   - production-beacon-applicationset.yaml
-  - production-blue-applicationset.yaml
-  - production-games-applicationset.yaml
-  - production-habitat-applicationset.yaml
   - production-node-template-applicationset.yaml
   - production-operator-applicationset.yaml
-  - production-oss-applicationset.yaml
   - production-poly-applicationset.yaml
-  - production-red-applicationset.yaml
   - production-scheduler-worker-applicationset.yaml

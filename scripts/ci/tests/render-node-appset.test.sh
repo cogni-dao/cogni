@@ -105,11 +105,17 @@ done
 pass "--check deterministic across 5 runs"
 
 # 5. FAIL-CLOSED — a deployable row missing `envs:` aborts the env-set render
-# (no silent all-env fallback). Point the renderer at a fixture catalog whose
-# oss row has had `envs:` stripped.
+# (no silent all-env fallback). Point the renderer at a fixture catalog and
+# strip `envs:` from the first deployable row (one with a candidate_a_branch);
+# derived dynamically so the test survives catalog membership changes.
 tmp_catalog="$(mktemp -d)"
 cp infra/catalog/*.yaml "$tmp_catalog/"
-yq -i 'del(.envs)' "$tmp_catalog/oss.yaml"
+victim=""
+for f in "$tmp_catalog"/*.yaml; do
+  [ "$(yq -r '.candidate_a_branch // ""' "$f")" != "" ] && { victim="$f"; break; }
+done
+[ -n "$victim" ] || fail "no deployable catalog row to strip envs from"
+yq -i 'del(.envs)' "$victim"
 set +e
 out="$(CATALOG_DIR="$tmp_catalog" bash "$RENDER" --check 2>&1)"
 rc=$?
