@@ -1,0 +1,81 @@
+======================================================================
+ WALK RIG — CUMULATIVE distributor e2e (1inch CumulativeMerkleDrop)
+======================================================================
+ Forked Base mainnet @ block 48035966 (chain 8453)
+ RPC          http://127.0.0.1:8545  (writes go ONLY here — the fork)
+ DAO          0x717a747df71111a678202BfCD2E3B0081A9aeB56
+ Token        0x0166Db3d42603E790Fb685059DcAa37087B032c8 (GovernanceERC20)
+ Plugin       0x6b8f7c9f18b33b8ad4e8b0710dd64a27388de6c9 (TokenVoting)
+ Holder       0x070075f1389ae1182abac722b36ca12285d0c949 (100% voting power)
+ Account A    0xc0ffee0000000000000000000000000000000001
+ Account B    0xc0ffee0000000000000000000000000000000002
+
+STEP 1 — deploy REAL 1inch CumulativeMerkleDrop(token)
+  [ok] distributor deployed @ 0x7d5f7a74cd0c1af9bd1204ba3f56ee6a379fb16c
+     deploy tx 0x971d7482e0c0b3b6f88e6f9952bc227ae8ed76baf51446cd318625d8ae097054
+  [ok] distributor.token() == GovernanceERC20
+  [ok] deployer is initial owner
+
+STEP 2 — transferOwnership(distributor) -> DAO
+  [ok] distributor.owner() == DAO
+     transferOwnership tx 0xe9bace48e8b968036856b92847e443f3403da95301fce2b3474c2d2a3333cb2e
+
+================== EPOCH 1 ==================
+
+EPOCH1 a — DAO early-execute mint(distributor, 100000000000000000000) [DELTA]
+     mint proposal #37445500391076886831859749694011528855815112783865770592735592642789017492312 early-executed in tx 0x6a1245b1817988cad7639b747b6b5ad894dbb84f8e6246dbd9e381f11dd6a1bc
+  [ok] distributor funded with delta1 = 100000000000000000000 (mint straight in, no wallet hop)
+  [ok] totalSupply grew by exactly delta1 (fresh mint)
+
+EPOCH1 b — build cumulative tree (A,B) + setMerkleRoot(root1) as DAO
+     root1 = 0xb5ab674a651839997f4c7b724a2f457c0ca69f94c2cb6e56da7f7f1304c0a0ba
+  [ok] off-chain proof verifies for 0xc0ffee0000000000000000000000000000000001 (cum=60000000000000000000)
+  [ok] off-chain proof verifies for 0xc0ffee0000000000000000000000000000000002 (cum=40000000000000000000)
+  [ok] on-chain merkleRoot == root1
+     setMerkleRoot tx 0x35a02b4ae7d7d30d21292c45102e10486da32407bab57f85214943ec87e23f23
+
+EPOCH1 c — A claims cumulative1, then B claims cumulative1
+  [ok] A balance += cumulative1 (60000000000000000000): 0 -> 60000000000000000000
+  [ok] cumulativeClaimed[A] == A_CUM_1
+     A claim1 tx 0x4043aa11b45f22fa80f3cb6eb07d0a263ce433b4278f7cf2c3e4da1f3e68dda8
+  [ok] B balance == cumulative1 (40000000000000000000)
+     B claim1 tx 0xf4887f137412ea8cfc227f40e9ea10ac95f372388117699708ce8585daf7f638
+
+EPOCH1 d — A re-claims cumulative1 (must REVERT NothingToClaim)
+  [ok] 2nd claim of same cumulative REVERTS (The contract function "claim" reverted.)
+  [ok] A balance unchanged after reverted double-claim (no second payout)
+
+================== EPOCH 2 ==================
+ (A earned 40 more; B earned nothing. ONE distributor, NEW root, DELTA mint.)
+
+EPOCH2 a — DAO.execute(mint(distributor, 40000000000000000000)) via plugin (see RIG.md)
+     DAO.execute mint tx 0xdb9a39e7d72a35c97aec6a1c2fee581f0f6c19702e88f01adb197aa10c8e591f
+  [ok] distributor funded with delta2 = 40000000000000000000 only (not the full cumulative)
+
+EPOCH2 b — setMerkleRoot(root2) on the SAME distributor (mutable root)
+     root2 = 0x2d0367dfd34d47dd41b1fb910eee8620d7c320b9e477ff10616128163e40f433
+  [ok] root2 != root1 (root is mutable)
+     setMerkleRoot tx 0xa3b1da1e96a53205cd27c54e8df9d5ad22c0009e6d78d6e2900fa0ed02e85dce
+
+EPOCH2 c — A claims cumulative2; receives ONLY the DELTA (cum2 - claimed)
+  [ok] A received ONLY the delta = 40000000000000000000 (= cum2 100000000000000000000 - already-claimed 60000000000000000000)
+  [ok] A total balance now == full cumulative2 = 100000000000000000000 (60000000000000000000 + 40000000000000000000)
+  [ok] cumulativeClaimed[A] advanced to A_CUM_2
+     A claim2 tx 0xc93c91a1d20d31e1157f001ee3b6b061cbbf004f77260e38fc7bbd37e7c8a9ef
+
+EPOCH2 d — B claims unchanged cumulative (must REVERT NothingToClaim)
+  [ok] B claim with no new earnings REVERTS (The contract function "claim" reverted.)
+  [ok] B balance unchanged (still cumulative1)
+
+======================================================================
+ SUMMARY (final balances)
+   Account A : 100000000000000000000   (cumulative2 = 100000000000000000000)
+   Account B : 40000000000000000000   (cumulative  = 40000000000000000000)
+   distributor leftover : 0
+======================================================================
+
+ RESULT: PASS — ONE 1inch CumulativeMerkleDrop served TWO epochs:
+   • root is mutable (setMerkleRoot per epoch, owner=DAO),
+   • DAO minted only the DELTA each epoch (no central wallet/pre-mint),
+   • epoch-2 claim paid out ONLY (cumulative − alreadyClaimed),
+   • stale/no-new-earnings claims revert. This is the cumulative loop.
