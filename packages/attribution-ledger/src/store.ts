@@ -640,6 +640,13 @@ export interface SelectionWriter {
     receiptId: string,
     userId: string
   ): Promise<void>;
+
+  /** Update ONLY the policy-owned `included` flag on an existing selection row. Never touches userId/weight/note (SELECTION_AUTO_POPULATE). No-op if no row exists. */
+  updateSelectionIncluded(
+    epochId: bigint,
+    receiptId: string,
+    included: boolean
+  ): Promise<void>;
 }
 
 /** Full selection surface — combines read and write. */

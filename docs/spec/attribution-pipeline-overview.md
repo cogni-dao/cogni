@@ -87,7 +87,8 @@ This spec introduces no new invariants. All behavioral guarantees are defined in
  │  │   activity_sources:                                                │  │
  │  │     github:                                                        │  │
  │  │       attribution_pipeline: cogni-v0.0  ◄── selects profile        │  │
- │  │       source_refs: ["org/repo"]                                    │  │
+ │  │       source_refs: ["org/repo"]  ◄── selection-time repo allowlist  │  │
+ │  │                                      (fail-open when empty/missing)  │  │
  │  └────────────────────────────────────────────────────────────────────┘  │
  │                                     │                                    │
  └─────────────────────────────────────┼────────────────────────────────────┘
@@ -200,6 +201,22 @@ This spec introduces no new invariants. All behavioral guarantees are defined in
  └─────────────────────────────────────────────────────────────────────────┘
 ```
 
+### `source_refs` — selection-time repo allowlist (fail-open)
+
+`activity_sources.github.source_refs` is **not** a poll-only declaration. With git ingested webhook-only (the operator GitHub App is the live ingest path; the scheduler-worker holds no GH App key), `source_refs` is consumed at the **selection** layer by the `main-merge-selection.v0` policy: a receipt whose `metadata.repo` is not in the list is excluded — but **only when the list is non-empty**. An empty or missing `source_refs` applies no repo filter (fail-open), so a misconfigured allowlist cannot silently zero out claimants. The repo-spec is the SSOT for which repos' merged PRs earn attribution (candidate-a: `cogni-test-org/test-cog`; prod: `cogni-dao/cogni`, kept as a commented swap line in the runtime repo-spec). Because `included` is re-synced every pass (SELECTION_INCLUDED_IDEMPOTENT), editing `source_refs` propagates to already-materialized receipts on the next collect.
+
+### Contributor visibility — GitHub identity, no linked account required
+
+A receipt that the selection policy **selects** shows up as a contributor regardless of whether its GitHub identity is linked to a Cogni user account. Unresolved identities surface as identity-claimants (`identity:github:<id>`) and appear in the open epoch's contributor list — even at 0 points. Linking a GitHub identity to a Cogni user account is only required **later, to claim distributions**, not to be visible as a contributor.
+
+There is an agent-first read surface (all accept a bearer token):
+
+| Method | Route                                          | Purpose                                                               |
+| ------ | ---------------------------------------------- | --------------------------------------------------------------------- |
+| GET    | `/api/v1/attribution/epochs`                   | List epochs (including the open one)                                  |
+| GET    | `/api/v1/attribution/epochs/[id]/activity`     | Ingestion receipts + selection join for the epoch                     |
+| GET    | `/api/v1/attribution/epochs/[id]/contributors` | Epoch #, window, active policy, and contributions grouped by identity |
+
 ## Epoch State Machine
 
 ```
@@ -309,6 +326,14 @@ No changes to the framework, scheduler-worker, or core ledger code.
 ```
 
 Dependency direction is strict: `plugins → contracts → ledger`. Never reverse.
+
+## Roadmap (vNext)
+
+Forward direction (not yet specced — captured here so the next step is obvious):
+
+- **Single operator repo-spec.** Collapse the operator's split repo-spec into one file. Today root `/.cogni/repo-spec.yaml` carries monorepo identity, while the runtime attribution spec lives at `nodes/operator/.cogni/repo-spec.yaml` (where `source_refs` is read). One file per node removes the "which repo-spec is authoritative" footgun.
+- **GitHub → Cogni identity-link + claim flow.** A self-serve path for a contributor to link their GitHub identity to a Cogni user account, converting visible identity-claimants (`identity:github:<id>`) into claimable user-claimants. Visibility already works without this; claiming does not.
+- **Distribution / signing over identity-claimants.** Extend the signed-statement + distribution path to settle to identity-claimants directly (or resolve them at claim time), so attribution can pay out even before every contributor has linked an account.
 
 ## Key Code Paths
 

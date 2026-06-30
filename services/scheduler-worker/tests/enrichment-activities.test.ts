@@ -94,6 +94,7 @@ function makeMockStore(
     finalizeEpochAtomic: vi.fn(),
     getSelectionCandidates: vi.fn().mockResolvedValue([]),
     updateSelectionUserId: vi.fn(),
+    updateSelectionIncluded: vi.fn(),
     ...overrides,
   } as AttributionStore;
 }

@@ -280,6 +280,7 @@ Attribution statements produced by this project are **governance truth** — who
 ## PR / Links
 
 - Handoff: [handoff](../handoffs/proj.transparent-credit-payouts.handoff.md)
+- Handoff (multi-node git-attribution passthrough): [handoff](../handoffs/proj.multi-node-git-attribution.handoff.md)
 
 ### Known issues
 

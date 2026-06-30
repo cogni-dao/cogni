@@ -90,28 +90,48 @@ function decideInclusion(
  */
 export interface MainMergeSelectionConfig {
   readonly excludedLogins?: readonly string[];
+  /**
+   * Repo allowlist e.g. ['cogni-dao/cogni']. Empty/undefined → no repo
+   * filtering (fail-open).
+   */
+  readonly sourceRefs?: readonly string[];
 }
 
 /**
- * Factory: create a main-merge-selection policy with optional bot exclusion.
+ * Factory: create a main-merge-selection policy with optional bot exclusion
+ * and an optional fail-open repo allowlist (`sourceRefs`). When `sourceRefs`
+ * is non-empty, a receipt whose `metadata.repo` is not in the allowlist is
+ * excluded; an empty/undefined allowlist means no repo filtering.
  * Receipts from excluded logins are always `included: false`.
  */
 export function createMainMergeSelectionPolicy(
   config?: MainMergeSelectionConfig
 ): SelectionPolicyDescriptor {
   const excludedLogins = new Set(config?.excludedLogins ?? []);
+  const allowedRepos = new Set(config?.sourceRefs ?? []);
   return {
     policyRef: MAIN_MERGE_SELECTION_POLICY_REF,
     select(context: SelectionContext): SelectionDecision[] {
       const mergedMainPrNumbers = buildMergedMainPrNumbers(context.allReceipts);
 
-      return context.receiptsToSelect.map((receipt) => ({
-        receiptId: receipt.receiptId,
-        included:
-          receipt.platformLogin && excludedLogins.has(receipt.platformLogin)
-            ? false
-            : decideInclusion(receipt, mergedMainPrNumbers),
-      }));
+      return context.receiptsToSelect.map((receipt) => {
+        // Fail-open repo allowlist: only filter when sourceRefs is non-empty.
+        const repo = (receipt.metadata as Record<string, unknown> | null)?.repo;
+        if (
+          allowedRepos.size > 0 &&
+          (typeof repo !== "string" || !allowedRepos.has(repo))
+        ) {
+          return { receiptId: receipt.receiptId, included: false };
+        }
+
+        return {
+          receiptId: receipt.receiptId,
+          included:
+            receipt.platformLogin && excludedLogins.has(receipt.platformLogin)
+              ? false
+              : decideInclusion(receipt, mergedMainPrNumbers),
+        };
+      });
     },
   };
 }
