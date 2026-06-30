@@ -10,7 +10,7 @@ read_when: Understanding the full attribution pipeline, onboarding to the credit
 implements: proj.transparent-credit-payouts
 owner: derekg1729
 created: 2026-03-02
-verified: 2026-03-03
+verified: 2026-06-30
 tags: [governance, attribution, overview]
 ---
 
@@ -24,34 +24,61 @@ Provide a single document that explains the full attribution pipeline end-to-end
 
 ## DAO Ownership Token Distribution
 
-The first crypto-distribution primitive is an ownership token merkle manifest,
-not an automatic payout executor. It does not deploy or fund a MerkleDistributor
-contract yet. DAO formation now separates the DAO's long-run policy supply from
-the concrete genesis mint. Current P0 templates mint only a small, explicit
-genesis amount to a known holder; the remaining policy supply is future supply,
-not minted inventory, and cannot fund claims until a DAO-controlled emissions
-holder or funded distributor exists. It does not yet encode contributor,
-reserve, or ecosystem sub-allocations. After attribution epochs produce signed
-claimant allocations, those signed credit entitlements can be transformed into a
-deterministic token claim manifest:
+> **Status: in flight (story.5021, Walk R1–R4). NOT yet merged to main and NOT
+> yet proven on-chain.** The corrected target architecture below supersedes the
+> earlier "merkle manifest, not an executor / fresh distributor per epoch /
+> `/gov/holdings` placeholders" design. The contract is vendored on branch
+> `derekg1729/walk-r1-cumulative-distributor` (R1); deploy-at-activation (R2),
+> cumulative math + finalization-fold + publish-epoch deletion (R3), and
+> claim-from-holdings (R4) are in progress on `derekg1729/walk-integration`. The
+> proof gate is a live sign→mint→claim on an isolated anvil Base-fork or
+> candidate-a — until that passes, treat the on-chain surfaces as designed, not
+> built.
 
-1. Group finalized claimant allocations by claimant key and resolved claim
-   address.
-2. Convert signed `credit_amount` entitlements into ERC20 base-unit amounts
-   against the distribution amount using integer largest-remainder rounding.
-3. Hash each claim in the selected distributor's claim shape and build proofs
-   with pinned OSS Merkle tooling; do not introduce custom distributor
-   contracts in the MVP path.
-4. Publish a scope-bound settlement manifest with `node_id`, `scope_id`,
-   `epochId`, `statementHash`, `merkleRoot`, `totalAmount`, funding metadata,
-   and per-claim proofs for a future MerkleDistributor contract or
-   operator-mediated claim route.
+The distribution primitive is **one cumulative Merkle distributor per node**,
+deployed once and owned by the DAO. It is the stock 1inch `CumulativeMerkleDrop`
+(vendored at `packages/cogni-contracts/src/cumulative-merkle-distributor/`),
+chosen because its **mutable, owner-set root** plus **cumulative leaves** let a
+single contract serve every epoch — replacing the rejected "deploy a fresh
+Uniswap-style distributor per epoch" pattern (N contracts/node, ~550k gas each).
 
-This keeps today's ledger signing flow unchanged while giving the next iteration
-a stable bridge from signed attribution statements to token ownership claims.
-Until the distributor contract, funding transaction, and claim UI/API exist,
-`/gov/holdings` remains attribution-ledger ownership with placeholders for
-actual token distribution and attributed-vs-claimed diffs.
+**Leaf and claim math:**
+
+- Leaf = `keccak256(abi.encodePacked(address account, uint256 cumulativeAmount))`
+  — **no `index`** — with sorted-sibling proofs.
+- `claim` transfers `cumulativeAmount − cumulativeClaimed[account]`, so re-running
+  an epoch's claim is idempotent and a contributor's running total is one leaf,
+  not one-leaf-per-epoch.
+- Per-epoch the DAO calls `setMerkleRoot(newCumulativeRoot)` and mints only the
+  **delta**. Per-epoch mint amount = `poolTotalCredits × 10^18`.
+
+**Three on-chain surfaces only:**
+
+1. **One-time distributor deploy at distributions activation.** Activation is a
+   node-page owner action (the same shape as payments activation), backed by
+   `POST /api/v1/nodes/[id]/activate-distributions`. It deploys the one
+   `CumulativeMerkleDrop`, `transferOwnership` to the DAO so DAO governance owns
+   `setMerkleRoot`, and records the distributor address in repo-spec. This is a
+   visible owner checkpoint, not a hidden API.
+2. **Per-epoch `mint(delta) + setMerkleRoot(cumulativeRoot)` folded into the
+   existing `/admin` epoch finalization.** There is **ONE** admin EIP-712
+   signature per epoch — the distribution mint+root publish ride the same
+   finalization signature. There is **no** separate `/propose/publish-epoch`
+   page or `…/publish-epoch` API route; that surface is being deleted in R3.
+3. **Claim of `cumulative − claimed` from `/gov/holdings`** (and/or a
+   `/claim/[epoch]` route). This replaces the placeholder ownership view.
+
+**Mint authority:** the app holds **no mint key**. The DAO is the
+`GovernanceERC20` minter; the admin's wallet (DAO voting majority,
+self-delegated, with early-execute) makes the DAO mint the per-epoch delta into
+the distributor. No human moves tokens directly and no float is pre-minted into a
+vault.
+
+Signed `credit_amount` entitlements from the finalized statement (not internal
+`finalUnits`) are converted to ERC20 base units and folded into the cumulative
+total per claimant, hashed into the new root with pinned OSS Merkle tooling. This
+keeps today's ledger signing flow unchanged while giving a stable bridge from
+signed attribution statements to token ownership claims.
 
 ## Non-Goals
 
