@@ -15,7 +15,10 @@
 
 import { describe, expect, it } from "vitest";
 
-import { insertSchedulerEndpoint } from "./scheduler-endpoints";
+import {
+  insertSchedulerEndpoint,
+  removeSchedulerEndpoint,
+} from "./scheduler-endpoints";
 
 // The committed `infra/k8s/base/scheduler-worker/configmap.yaml`: in-tree runtime
 // nodes only. Remote-source artifacts such as node-template are skipped until
@@ -69,6 +72,37 @@ describe("insertSchedulerEndpoint", () => {
   it("throws when the configmap has no endpoints line", () => {
     expect(() =>
       insertSchedulerEndpoint('data:\n  LOG_LEVEL: "info"\n', "ztest", NODE_ID)
+    ).toThrow(/missing a quoted/);
+  });
+});
+
+describe("removeSchedulerEndpoint", () => {
+  it("drops a node's slug + uuid alias pair, byte-exact to the catalog regen", () => {
+    // GOLDEN has ztest appended last; removing it must restore BEFORE exactly.
+    expect(removeSchedulerEndpoint(GOLDEN, "ztest")).toBe(BEFORE);
+  });
+
+  it("round-trips with insertSchedulerEndpoint (byte-identity on add→remove)", () => {
+    const added = insertSchedulerEndpoint(BEFORE, "ztest", NODE_ID);
+    expect(removeSchedulerEndpoint(added, "ztest")).toBe(BEFORE);
+  });
+
+  it("removes a middle node, keeping the surrounding pairs in order", () => {
+    // Drop `canary` (first pair) — `operator` + `resy` and their aliases stay, in order.
+    const out = removeSchedulerEndpoint(BEFORE, "canary");
+    expect(out).toContain(
+      'COGNI_NODE_ENDPOINTS: "operator=http://operator-node-app:3000,4ff8eac1-4eba-4ed0-931b-b1fe4f64713d=http://operator-node-app:3000,resy=http://resy-node-app:3000,f6d2a17d-b7f6-4ad1-a86b-f0ad2380999e=http://resy-node-app:3000"'
+    );
+    expect(out).not.toContain("canary");
+  });
+
+  it("is idempotent when the node is not listed", () => {
+    expect(removeSchedulerEndpoint(BEFORE, "absent")).toBe(BEFORE);
+  });
+
+  it("throws when the configmap has no endpoints line", () => {
+    expect(() =>
+      removeSchedulerEndpoint('data:\n  LOG_LEVEL: "info"\n', "ztest")
     ).toThrow(/missing a quoted/);
   });
 });

@@ -12,8 +12,12 @@
  * @public
  */
 
-export { insertAppsetKustomization, renderNodeAppset } from "./appset";
-export { insertCaddyBlock } from "./caddyfile";
+export {
+  insertAppsetKustomization,
+  removeFromAppsetsKustomization,
+  renderNodeAppset,
+} from "./appset";
+export { insertCaddyBlock, removeCaddyBlock } from "./caddyfile";
 export { type RenderCatalogInput, renderCatalog } from "./catalog";
 export {
   DISTRIBUTION_CLAIM_CONTRACT_PATTERN,
@@ -36,4 +40,7 @@ export {
   renderPaymentsActivationSpec,
 } from "./payments-activation";
 export { type RenderRepoSpecInput, renderRepoSpec } from "./repo-spec";
-export { insertSchedulerEndpoint } from "./scheduler-endpoints";
+export {
+  insertSchedulerEndpoint,
+  removeSchedulerEndpoint,
+} from "./scheduler-endpoints";
