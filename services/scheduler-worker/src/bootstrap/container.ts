@@ -20,15 +20,20 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import type { ClaimantWalletResolver } from "@cogni/aragon-osx";
 import { createValidatedAttributionStore } from "@cogni/attribution-ledger";
 import {
   createDefaultRegistries,
   type DefaultRegistries,
 } from "@cogni/attribution-pipeline-plugins";
-import { DrizzleAttributionAdapter } from "@cogni/db-client";
+import {
+  DrizzleAttributionAdapter,
+  DrizzleClaimantWalletResolver,
+} from "@cogni/db-client";
 import { createServiceDbClient } from "@cogni/db-client/service";
 import {
   extractChainId,
+  extractDaoTokenDistributionConfig,
   extractLedgerConfig,
   extractNodeId,
   extractScopeId,
@@ -105,6 +110,7 @@ function loadRepoSpecIdentity(): {
   nodeId: string;
   scopeId: string;
   chainId: number;
+  tokenAddress: string | null;
   configuredSources: string[];
   excludedLogins: string[];
   sourceRefs: string[];
@@ -131,6 +137,11 @@ function loadRepoSpecIdentity(): {
 
   const spec = parseRepoSpec(content);
   const ledgerConfig = extractLedgerConfig(spec);
+  // GovernanceERC20 token address — present only once the node has activated
+  // distributions (distributions.status: active). Null otherwise; the cumulative
+  // root build is skipped until activation (off-chain finalize still runs).
+  const distributionConfig = extractDaoTokenDistributionConfig(spec);
+  const tokenAddress = distributionConfig?.tokenAddress ?? null;
   // Collect excluded logins from all activity sources
   const excludedLogins = ledgerConfig
     ? Object.values(ledgerConfig.activitySources).flatMap(
@@ -148,6 +159,7 @@ function loadRepoSpecIdentity(): {
     nodeId: extractNodeId(spec),
     scopeId: extractScopeId(spec),
     chainId: extractChainId(spec),
+    tokenAddress,
     configuredSources: ledgerConfig
       ? Object.keys(ledgerConfig.activitySources)
       : [],
@@ -167,6 +179,10 @@ export interface AttributionContainer {
   nodeId: string;
   scopeId: string;
   chainId: number;
+  /** GovernanceERC20 token address from repo-spec; null until distributions activated. */
+  tokenAddress: string | null;
+  /** Claimant key → contributor wallet resolver (R3 cumulative root build). */
+  walletResolver: ClaimantWalletResolver | null;
   logger: Logger;
 }
 
@@ -232,6 +248,7 @@ export function createAttributionContainer(
     nodeId,
     scopeId,
     chainId,
+    tokenAddress,
     configuredSources,
     excludedLogins,
     sourceRefs,
@@ -251,6 +268,13 @@ export function createAttributionContainer(
   const attributionStore = createValidatedAttributionStore(
     new DrizzleAttributionAdapter(db, scopeId)
   );
+
+  // R3: read-only claimant→wallet resolver, used at finalize to fold this epoch's
+  // deltas into the cumulative root. Built only when distributions are active
+  // (tokenAddress present); otherwise null and the cumulative build is skipped.
+  const walletResolver: ClaimantWalletResolver | null = tokenAddress
+    ? new DrizzleClaimantWalletResolver(db)
+    : null;
 
   // Build source registrations (CAPABILITY_REQUIRED: at least one of poll/webhook)
   const registrations = new Map<string, DataSourceRegistration>();
@@ -319,6 +343,8 @@ export function createAttributionContainer(
     nodeId,
     scopeId,
     chainId,
+    tokenAddress,
+    walletResolver,
     logger: attributionLogger,
   };
 }
