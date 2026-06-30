@@ -123,7 +123,7 @@ export interface OpenNodeEnvPrInput {
    * whole node (removing candidate-a, or the last env) — without it such a remove is refused
    * (422 `decommission_requires_intent`), so a per-env "remove" can never destroy prod by accident.
    */
-  readonly decommission?: boolean;
+  readonly decommission?: boolean | undefined;
 }
 
 /** Result of {@link GitHubRepoWriter.openNodeEnvPr}: a PR (opened or reused), or no-op when idempotent. */

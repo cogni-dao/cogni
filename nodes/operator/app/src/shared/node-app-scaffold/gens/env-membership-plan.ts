@@ -81,16 +81,16 @@ export interface EnvPlanCurrent {
   /** The `node-template` overlay for an env being ADDED (source to clone). Keyed by env. */
   readonly templateOverlayByEnv: Readonly<Record<string, string>>;
   /** The shared `node-applicationset.yaml.tmpl` (only needed on ADD). */
-  readonly appsetTemplate?: string;
+  readonly appsetTemplate?: string | undefined;
   /** Current `appsets/<env>/kustomization.yaml` per env. Keyed by env. */
   readonly appsetsKustomizationByEnv: Readonly<Record<string, string>>;
   /** Container port + node_port for the overlay render (only needed on ADD). */
-  readonly port?: number;
-  readonly nodePort?: number;
+  readonly port?: number | undefined;
+  readonly nodePort?: number | undefined;
   /** Current Caddyfile.tmpl (only consulted on full decommission). */
-  readonly caddyfile?: string;
+  readonly caddyfile?: string | undefined;
   /** Current scheduler-worker configmap (only consulted on full decommission). */
-  readonly schedulerConfigmap?: string;
+  readonly schedulerConfigmap?: string | undefined;
 }
 
 export type EnvDeltaResult =
@@ -139,7 +139,7 @@ export function buildEnvDeltaPlan(input: {
    * candidate-a, or removing the last env. Without it such a remove is REFUSED (422 `decommission_requires_intent`)
    * rather than silently destroying every env. Ignored on add / partial remove.
    */
-  readonly decommission?: boolean;
+  readonly decommission?: boolean | undefined;
   readonly current: EnvPlanCurrent;
 }): EnvDeltaResult {
   const { slug, env, present, decommission, current } = input;
