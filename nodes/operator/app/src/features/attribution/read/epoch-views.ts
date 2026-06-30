@@ -26,7 +26,7 @@ import {
   toEpochDto,
   toIngestionReceiptDto,
   toSelectionDto,
-} from "@/app/api/v1/public/attribution/_lib/attribution-dto";
+} from "@/features/attribution/read/attribution-dto";
 import { composeEpochView } from "@/features/governance/lib/compose-epoch";
 
 /**
