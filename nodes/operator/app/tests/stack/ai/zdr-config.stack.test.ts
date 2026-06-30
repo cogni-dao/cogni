@@ -3,12 +3,15 @@
 
 /**
  * Module: `@tests/stack/ai/zdr-config.stack`
- * Purpose: Verify ZDR (Zero Data Retention) configuration in litellm.config.yaml
- * Scope: Config smoke test - parses YAML and asserts ZDR flag presence. Does not test runtime behavior or adapter wiring.
- * Invariants: ZDR-enabled models must have extra_body.provider.zdr === true in config.
+ * Purpose: Verify the LiteLLM prod config is a clean Hyperbolic-only cut.
+ * Scope: Config smoke test - parses YAML and asserts provider invariants. Does not test runtime behavior or adapter wiring.
+ * Invariants:
+ *   - Every route maps to Hyperbolic (`hyperbolic/` prefix + HYPERBOLIC_API_KEY).
+ *   - No ZDR routes remain: ZDR was OpenRouter-specific; the OpenRouter provider
+ *     was dropped, so no model may carry extra_body.provider.zdr or is_zdr.
  * Side-effects: none (reads config file only)
  * Notes: Runs in APP_ENV=test (no docker/adapters needed). Guards against config regressions.
- * Links: infra/compose/runtime/configs/litellm.config.yaml, https://openrouter.ai/docs/guides/features/zdr#per-request-zdr-enforcement
+ * Links: infra/compose/runtime/configs/litellm.config.yaml, https://docs.litellm.ai/docs/providers/hyperbolic
  * @public
  */
 
@@ -22,72 +25,52 @@ const LITELLM_CONFIG_PATH = path.join(
   "infra/compose/runtime/configs/litellm.config.yaml"
 );
 
-describe("ZDR Configuration", () => {
-  it("ZDR-enabled models have provider.zdr=true in config", () => {
-    // Read and parse litellm config
-    const configContent = fs.readFileSync(LITELLM_CONFIG_PATH, "utf-8");
-    const config = yaml.parse(configContent);
+type Route = {
+  model_name: string;
+  litellm_params?: {
+    model?: string;
+    api_key?: string;
+    extra_body?: { provider?: { zdr?: boolean } };
+  };
+  model_info?: { is_zdr?: boolean };
+};
 
-    expect(config).toHaveProperty("model_list");
-    expect(Array.isArray(config.model_list)).toBe(true);
+function loadRoutes(): Route[] {
+  const configContent = fs.readFileSync(LITELLM_CONFIG_PATH, "utf-8");
+  const config = yaml.parse(configContent) as { model_list: Route[] };
+  expect(Array.isArray(config.model_list)).toBe(true);
+  return config.model_list;
+}
 
-    // Find ZDR-enabled models (Anthropic Claude + Google Gemini)
-    const claudeSonnet = config.model_list.find(
-      (m: { model_name: string }) => m.model_name === "claude-sonnet-4.5"
-    );
-    const claudeOpus = config.model_list.find(
-      (m: { model_name: string }) => m.model_name === "claude-opus-4.5"
-    );
-    const geminiFlash = config.model_list.find(
-      (m: { model_name: string }) => m.model_name === "gemini-2.5-flash"
-    );
-    const geminiPro = config.model_list.find(
-      (m: { model_name: string }) => m.model_name === "gemini-3-pro"
-    );
+describe("LiteLLM config — Hyperbolic-only clean cut", () => {
+  it("every route targets Hyperbolic via the hyperbolic/ prefix + HYPERBOLIC_API_KEY", () => {
+    const routes = loadRoutes();
+    expect(routes.length).toBeGreaterThan(0);
 
-    // Assert all ZDR models exist
-    expect(claudeSonnet).toBeDefined();
-    expect(claudeOpus).toBeDefined();
-    expect(geminiFlash).toBeDefined();
-    expect(geminiPro).toBeDefined();
-
-    // Assert ZDR flag is present and true
-    expect(claudeSonnet?.litellm_params?.extra_body?.provider?.zdr).toBe(true);
-    expect(claudeOpus?.litellm_params?.extra_body?.provider?.zdr).toBe(true);
-    expect(geminiFlash?.litellm_params?.extra_body?.provider?.zdr).toBe(true);
-    expect(geminiPro?.litellm_params?.extra_body?.provider?.zdr).toBe(true);
-
-    // Assert is_zdr metadata is also set
-    expect(claudeSonnet?.model_info?.is_zdr).toBe(true);
-    expect(claudeOpus?.model_info?.is_zdr).toBe(true);
-    expect(geminiFlash?.model_info?.is_zdr).toBe(true);
-    expect(geminiPro?.model_info?.is_zdr).toBe(true);
+    for (const route of routes) {
+      expect(
+        route.litellm_params?.model,
+        `${route.model_name} must use the hyperbolic/ prefix`
+      ).toMatch(/^hyperbolic\//);
+      expect(
+        route.litellm_params?.api_key,
+        `${route.model_name} must use HYPERBOLIC_API_KEY`
+      ).toBe("os.environ/HYPERBOLIC_API_KEY");
+    }
   });
 
-  it("Non-ZDR models do NOT have provider.zdr flag", () => {
-    // Read and parse litellm config
-    const configContent = fs.readFileSync(LITELLM_CONFIG_PATH, "utf-8");
-    const config = yaml.parse(configContent);
+  it("no ZDR routes remain (OpenRouter provider was dropped)", () => {
+    const routes = loadRoutes();
 
-    // Find non-ZDR models (OpenAI, DeepSeek, etc.)
-    const gpt4oMini = config.model_list.find(
-      (m: { model_name: string }) => m.model_name === "gpt-4o-mini"
-    );
-    const deepseek = config.model_list.find(
-      (m: { model_name: string }) => m.model_name === "deepseek-v3.1"
-    );
-
-    expect(gpt4oMini).toBeDefined();
-    expect(deepseek).toBeDefined();
-
-    // Assert ZDR flag is NOT present
-    expect(
-      gpt4oMini?.litellm_params?.extra_body?.provider?.zdr
-    ).toBeUndefined();
-    expect(deepseek?.litellm_params?.extra_body?.provider?.zdr).toBeUndefined();
-
-    // Assert is_zdr metadata is NOT set or false
-    expect(gpt4oMini?.model_info?.is_zdr).toBeUndefined();
-    expect(deepseek?.model_info?.is_zdr).toBeUndefined();
+    for (const route of routes) {
+      expect(
+        route.litellm_params?.extra_body?.provider?.zdr,
+        `${route.model_name} must not carry a zdr flag`
+      ).toBeUndefined();
+      expect(
+        route.model_info?.is_zdr,
+        `${route.model_name} must not carry is_zdr`
+      ).toBeUndefined();
+    }
   });
 });
