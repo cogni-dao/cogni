@@ -21,6 +21,34 @@ work_items:
 > This is the refined roadmap that **replaces** the reverted #1886 bespoke
 > resource-fit predictor. It supersedes the earlier version of this file.
 
+## Status — live (2026-06-30) — THIS is the doc tracking the fleet-reliability work
+
+The keystone (a continuously-reconciled + **prunable** AppSet layer — the prerequisite
+for safe per-env decommission and load-shedding) is **merged and validated**. Capacity
+_enforcement_ (`ResourceQuota`) stays deferred until the env is right-sized — see
+[pm.candidate-a-quota-wedge](../postmortems/pm.candidate-a-quota-wedge.2026-06-29.md).
+
+| Rung                                                                                         | What                      | State                                                                                                                                                                               |
+| -------------------------------------------------------------------------------------------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Keystone — per-env app-of-apps** (closes the decommission prune-gap; continuous reconcile) | #1893 (merged `9235e102`) | 🟢 **MERGED** · validated candidate-a (live app-of-apps, Synced/Healthy) **+ preview** (reconcile-appset operator+scheduler-worker succeeded via new path) · prod promote in flight |
+| CI/CD spec DRY (12→3 SSOT, −2k lines)                                                        | #1894                     | 🟡 open                                                                                                                                                                             |
+| SLA #1 — honest capacity (kubelet `system-reserved` on RUNNING nodes)                        | provisioning              | 🔴 not applied (`alloc==cap`)                                                                                                                                                       |
+| SLA #2 — deterministic admission (`ResourceQuota` after right-size)                          | —                         | 🟡 deferred (would wedge an over-subscribed env)                                                                                                                                    |
+| SLA #4 — failure isolation (`/readyz` decoupled from scheduler-worker)                       | —                         | 🔴 still coupled — caused the 06-29 cascade AND the only preview-promote failure                                                                                                    |
+| SLA #5 — one-action remediation (`OperatorDeployPlanePort.remove` verb)                      | next task                 | ⚪ unblocked by the keystone; not built                                                                                                                                             |
+| SLA #6 — GitOps + observable (operator fleet UI, story.5013)                                 | —                         | ⚪ data plane exists (deploy-state, balances, Mimir); no aggregate page                                                                                                             |
+
+### The deployment-reliability contract (the SLA we are building toward)
+
+1. **Honest capacity** — each env VM's allocatable reflects real headroom (kubelet reservation applied; infra eventually split off the node VM).
+2. **Deterministic admission** — a deploy lands only if its rendered requests fit the honest budget; fail-closed, loud.
+3. **Existing deploys protected** — a new/oversized deploy can never starve a running one.
+4. **Failure isolation** — one node/service degrading cannot cascade the fleet.
+5. **One-action remediation** — load shed via operator-app per-env decommission (GitOps prune).
+6. **GitOps + observable** — no manual kubectl; capacity/health visible in the operator UI.
+
+**Critical path:** keystone ✅ → decommission verb → right-size candidate-a → kubelet honesty → `ResourceQuota` → `/readyz` decouple → fleet UI.
+
 ## Outcome
 
 A node/deploy spec **cannot starve an env's capacity unnoticed**. Enforcement is
