@@ -209,7 +209,7 @@ There is **no review lease**. Preview tracks the **latest merged SHA** (latest-w
 
 > Removed 2026-06-16 (`kill-preview-review-lease`): the former `review-state` (`unlocked | dispatching | reviewing`) lease plus its `candidate-sha` high-water mark held preview on a SHA pending a human review that, in practice, never happened — a single shared lock that froze promotion for **all** nodes until someone manually unlocked it. Production-promotion authorization is unaffected: it is enforced separately by OpenFGA `can_promote_production` (`/api/v1/deploy/promote`) and the `workflow_dispatch environment=production` gate, neither of which ever depended on `.promote-state/`.
 
-**Direct pushes to main are not a supported preview trigger.** Preview promotion needs a resolved artifact digest plus the `sourceSha` that produced it. The legacy in-repo preview workflow may re-tag `mq-{N}-{sha}` / accepted build outputs into a `preview-*` namespace while migration is in progress, but that is a lookup implementation detail, not the deployment contract. Node preview/prod promotion carries the already-resolved digest and its `sourceSha`. Maintenance commits on `main` that carry no deployable artifact change should not dispatch preview; `flight-preview.yml` skips its flight job for CI-owned maintenance prefixes such as `chore(deps): argocd-image-updater` and `chore(preview):`. Keying is **message-prefix**, not author identity (`github-actions[bot]` is shared).
+**Direct pushes to main are not a supported preview trigger.** Preview promotion needs a resolved artifact digest plus the `sourceSha` that produced it. There is **no re-tag step**: `flight-preview.yml` resolves the merge's `sha-<mainSha>` images (published by `pr-build.yml` on merge_group AND push:main) and re-dispatches that merged SHA; `promote-and-deploy.yml` resolves the same `sha-<mainSha>` digest directly (`SOURCE_SHA_IS_DEPLOY_IDENTITY` — no `pr-`/`mq-`/`preview-` namespace). Node preview/prod promotion carries the already-resolved digest and its `sourceSha`. Maintenance commits on `main` that carry no deployable artifact change should not dispatch preview; `flight-preview.yml` skips its flight job for CI-owned maintenance prefixes such as `chore(deps): argocd-image-updater` and `chore(preview):`. Keying is **message-prefix**, not author identity (`github-actions[bot]` is shared).
 
 ## Workflow Design Targets
 
@@ -330,8 +330,7 @@ This spec does not require:
 
 - [CI/CD Platform Boundary & Freeze Policy](cicd-platform-boundary.md) — where new deployment/platform work goes and what stops growing; surface classification + request→home routing for new work (operationalizes the line-29 "divergence is a bug" contract)
 - [Legacy CI/CD To Remove](legacy-cicd-to-remove.md) — artifact-identity legacy inventory with removal conditions
-- [CD Pipeline E2E](cd-pipeline-e2e.md) — trunk-alignment guide mapping legacy multi-node GitOps design to the target workflow and code-task changes
-- [Candidate Slot Controller](candidate-slot-controller.md) — v0 design for lease, TTL, superseding-push handling, and aggregate candidate-flight status
+- [CD Pipeline E2E](cd-pipeline-e2e.md) — reference for the k3s+Compose two-runtime architecture, selectorless-Service/EndpointSlice/NodePort networking, and PreSync migration ordering
 - [Node CI/CD Contract](node-ci-cd-contract.md) — CI/CD sovereignty invariants, file ownership
 - [Application Architecture](architecture.md) — Hexagonal design and code organization
 - [Deployment Architecture](../runbooks/DEPLOYMENT_ARCHITECTURE.md) — Infrastructure details

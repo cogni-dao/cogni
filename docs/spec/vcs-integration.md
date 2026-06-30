@@ -1,11 +1,11 @@
 ---
 id: vcs-integration
 type: spec
-title: VCS Integration Architecture
+title: VCS Integration Architecture (ASPIRATIONAL)
 status: draft
 spec_state: draft
 trust: draft
-summary: GitHub App authentication, permission tiering, webhook routing, and VCS adapter contracts for integrating git platform operations (ingestion, code review, admin actions) into the Node template.
+summary: ASPIRATIONAL — NOT as-built. Describes a two-GitHub-App + git-daemon target architecture. As-built today, PR review runs in-process within the Next.js app (no services/git-daemon/, no packages/github-core/). GitHub App authentication, permission tiering, webhook routing, and VCS adapter contracts for integrating git platform operations (ingestion, code review, admin actions) into the Node template.
 read_when: Adding a VCS integration, working on GitHub/GitLab auth, wiring webhook handlers, or understanding the git-daemon service.
 implements: proj.vcs-integration
 owner: derekg1729
@@ -15,6 +15,8 @@ tags: [infra, github, auth, services]
 ---
 
 # VCS Integration Architecture
+
+> ⚠️ **ASPIRATIONAL — NOT the live contract.** This document describes a **target** two-GitHub-App + `services/git-daemon/` architecture that is **not built**. As-built today, PR review runs **in-process** within the Next.js app — there is no `services/git-daemon/` and no `packages/github-core/` (see § Current Implementation below). For the live merge/flight/promote contract, read [development-lifecycle.md §8](./development-lifecycle.md#8-request-merge--the-operator-is-the-merge-authority), [ci-cd.md](./ci-cd.md), and [node-ci-cd-contract.md](./node-ci-cd-contract.md). Do not mistake the Walk-target architecture below for what ships.
 
 > The Node template integrates with GitHub (and future GitLab/Radicle) through **two GitHub Apps** with distinct permission tiers — a read/review app and an admin app — served by a **single backend service** (`services/git-daemon/`). A shared `packages/github-core/` package provides auth primitives. PAT fallback remains for self-hosted Nodes that don't need App-based auth.
 

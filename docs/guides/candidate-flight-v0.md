@@ -79,6 +79,5 @@ tags: [ci-cd, gitops, candidate-flight, agents]
 
 ## Primary References
 
-- [`docs/spec/ci-cd.md`](../spec/ci-cd.md)
+- [`docs/spec/ci-cd.md`](../spec/ci-cd.md) — branch model, slot lease semantics (Axiom 18, `BRANCH_HEAD_IS_LEASE`)
 - [`docs/spec/cd-pipeline-e2e.md`](../spec/cd-pipeline-e2e.md)
-- [`docs/spec/candidate-slot-controller.md`](../spec/candidate-slot-controller.md)

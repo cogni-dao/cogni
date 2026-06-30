@@ -26,7 +26,7 @@ Pickup: you own the **node-merge → preview** tie. Today a wizard-born node rea
 - `docs/spec/ci-cd.md` — North Star + axioms. Axiom 4 (build-once-promote-digest), Axiom 6 (Argo owns reconciliation). **Everything here is policy on top of the one primitive.**
 - `docs/spec/legacy-cicd-to-remove.md` — "One artifact contract. One promotion primitive."
 - `docs/spec/node-submodule-retirement.md` (#1647, MERGED) — **the pin is now `infra/catalog/<node>.yaml: source_sha` (`CATALOG_SOURCE_SHA_IS_THE_DEPLOY_PIN`)**, not a gitlink.
-- `docs/spec/merge-authority.md` (#1640, open) — operator-as-merge-authority via `VcsCapability.mergePr`; this is the shell the trigger lives in.
+- `docs/spec/development-lifecycle.md` §8 — Operator Merge Authority (#1640, open) — operator-as-merge-authority via `VcsCapability.mergePr`; this is the shell the trigger lives in. [merged into development-lifecycle.md; was `docs/spec/merge-authority.md`]
 - `docs/spec/cicd-platform-boundary.md` + `nodes/operator/app/src/ports/operator-deploy-plane.port.ts` — `OperatorDeployPlanePort.dispatchNodePromote` is the home for the dispatch (operator-local, App-auth, OpenFGA-gated, not bash). `DeployCapability` (`@cogni/ai-tools`) is read-only — never put writes there.
 - `.github/workflows/promote-and-deploy.yml` (`decide` job) + `flight-preview.yml` — the existing promote primitive + the **monorepo** on-merge trigger (push:main).
 
@@ -64,5 +64,5 @@ Pickup: you own the **node-merge → preview** tie. Today a wizard-born node rea
 | `.github/workflows/promote-and-deploy.yml` (`decide`) | The one promote primitive. Dispatch `-f environment=preview -f nodes=<node>`, no `source_sha`.             |
 | `.github/workflows/flight-preview.yml`                | The monorepo's on-merge→preview trigger — the pattern to mirror for nodes (but operator-driven, not push). |
 | `packages/ai-tools/src/capabilities/deploy.ts`        | `DeployCapability` — add `deployNode` here; adapter dispatches via the App.                                |
-| `docs/spec/merge-authority.md` (#1640)                | Where the on-merge hook lives.                                                                             |
+| `docs/spec/development-lifecycle.md` §8 (#1640)       | Operator Merge Authority — where the on-merge hook lives.                                                  |
 | `docs/spec/node-submodule-retirement.md` (#1647)      | Why the pin is a catalog field now.                                                                        |
