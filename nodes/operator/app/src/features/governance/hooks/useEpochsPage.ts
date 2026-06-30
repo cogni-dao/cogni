@@ -17,7 +17,6 @@ import type {
   ApiIngestionReceipt,
   EpochClaimantsDto,
   EpochDto,
-  UserProjectionDto,
 } from "@/features/governance/lib/compose-epoch";
 import {
   composeEpochView,
@@ -46,21 +45,16 @@ async function fetchJson<T>(url: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-/** Compose an open/review epoch using user-projections (live data). */
+/**
+ * Compose an open/review epoch from /activity alone.
+ * ONE_SSOT: contributor units derive entirely from selection + weightConfig —
+ * no user-projections fetch (that path double-counted resolved users).
+ */
 async function composeCurrentEpoch(epoch: EpochDto): Promise<EpochView> {
-  const [userProjectionsRes, activityRes] = await Promise.all([
-    fetchJson<{ userProjections: UserProjectionDto[] }>(
-      `/api/v1/attribution/epochs/${epoch.id}/user-projections`
-    ),
-    fetchJson<{ events: ApiIngestionReceipt[] }>(
-      `/api/v1/attribution/epochs/${epoch.id}/activity?limit=200`
-    ),
-  ]);
-  return composeEpochView(
-    epoch,
-    userProjectionsRes.userProjections,
-    activityRes.events
+  const activityRes = await fetchJson<{ events: ApiIngestionReceipt[] }>(
+    `/api/v1/attribution/epochs/${epoch.id}/activity?limit=200`
   );
+  return composeEpochView(epoch, activityRes.events);
 }
 
 /** Compose a finalized epoch using claimant-based attribution (frozen data). */

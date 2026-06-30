@@ -173,6 +173,73 @@ describe("createMainMergeSelectionPolicy", () => {
     expect(decisions[0].included).toBe(true);
   });
 
+  it("sourceRefs allowlist EXCLUDES a main merge whose repo is not in the list", () => {
+    const policy = createMainMergeSelectionPolicy({
+      sourceRefs: ["cogni-test-org/test-cog"],
+    });
+    const otherRepoPr = makeReceipt({
+      receiptId: "github:pr:cogni-test-org/other:100",
+      platformLogin: "derekg1729",
+      metadata: { baseBranch: "main", repo: "cogni-test-org/other" },
+    });
+
+    const decisions = policy.select({
+      receiptsToSelect: [otherRepoPr],
+      allReceipts: [otherRepoPr],
+    });
+
+    expect(decisions[0].included).toBe(false);
+  });
+
+  it("sourceRefs allowlist INCLUDES a main merge whose repo matches", () => {
+    const policy = createMainMergeSelectionPolicy({
+      sourceRefs: ["cogni-test-org/test-cog"],
+    });
+    const allowedPr = makeReceipt({
+      receiptId: "github:pr:cogni-test-org/test-cog:101",
+      platformLogin: "derekg1729",
+      metadata: { baseBranch: "main", repo: "cogni-test-org/test-cog" },
+    });
+
+    const decisions = policy.select({
+      receiptsToSelect: [allowedPr],
+      allReceipts: [allowedPr],
+    });
+
+    expect(decisions[0].included).toBe(true);
+  });
+
+  it("empty/undefined sourceRefs is fail-open: both repos are included", () => {
+    const otherRepoPr = makeReceipt({
+      receiptId: "github:pr:cogni-test-org/other:102",
+      platformLogin: "derekg1729",
+      metadata: { baseBranch: "main", repo: "cogni-test-org/other" },
+    });
+    const allowedRepoPr = makeReceipt({
+      receiptId: "github:pr:cogni-test-org/test-cog:103",
+      platformLogin: "derekg1729",
+      metadata: { baseBranch: "main", repo: "cogni-test-org/test-cog" },
+    });
+
+    // undefined sourceRefs
+    const defaultPolicy = createMainMergeSelectionPolicy();
+    const defaultDecisions = defaultPolicy.select({
+      receiptsToSelect: [otherRepoPr, allowedRepoPr],
+      allReceipts: [otherRepoPr, allowedRepoPr],
+    });
+    expect(defaultDecisions[0].included).toBe(true);
+    expect(defaultDecisions[1].included).toBe(true);
+
+    // explicit empty sourceRefs
+    const emptyPolicy = createMainMergeSelectionPolicy({ sourceRefs: [] });
+    const emptyDecisions = emptyPolicy.select({
+      receiptsToSelect: [otherRepoPr, allowedRepoPr],
+      allReceipts: [otherRepoPr, allowedRepoPr],
+    });
+    expect(emptyDecisions[0].included).toBe(true);
+    expect(emptyDecisions[1].included).toBe(true);
+  });
+
   it("factory default behaves identically to MAIN_MERGE_SELECTION_POLICY constant", () => {
     const defaultPolicy = createMainMergeSelectionPolicy();
     const mainPr = makeReceipt({

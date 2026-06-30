@@ -107,6 +107,7 @@ function loadRepoSpecIdentity(): {
   chainId: number;
   configuredSources: string[];
   excludedLogins: string[];
+  sourceRefs: string[];
 } {
   // Try /app/.cogni first (Docker), then cwd (dev)
   const candidates = [
@@ -136,6 +137,13 @@ function loadRepoSpecIdentity(): {
         (s) => s.excludedLogins ?? []
       )
     : [];
+  // Collect the selection-time repo allowlist from all activity sources
+  // (fail-open: empty → no filtering).
+  const sourceRefs = ledgerConfig
+    ? Object.values(ledgerConfig.activitySources).flatMap(
+        (s) => s.sourceRefs ?? []
+      )
+    : [];
   return {
     nodeId: extractNodeId(spec),
     scopeId: extractScopeId(spec),
@@ -144,6 +152,7 @@ function loadRepoSpecIdentity(): {
       ? Object.keys(ledgerConfig.activitySources)
       : [],
     excludedLogins,
+    sourceRefs,
   };
 }
 
@@ -219,8 +228,14 @@ export function createAttributionContainer(
     return null;
   }
 
-  const { nodeId, scopeId, chainId, configuredSources, excludedLogins } =
-    loadRepoSpecIdentity();
+  const {
+    nodeId,
+    scopeId,
+    chainId,
+    configuredSources,
+    excludedLogins,
+    sourceRefs,
+  } = loadRepoSpecIdentity();
 
   logWorkerEvent(logger, WORKER_EVENT_NAMES.LIFECYCLE_STARTING, {
     phase: "ledger_container",
@@ -300,7 +315,7 @@ export function createAttributionContainer(
   return {
     attributionStore,
     sourceRegistrations: registrations,
-    registries: createDefaultRegistries({ excludedLogins }),
+    registries: createDefaultRegistries({ excludedLogins, sourceRefs }),
     nodeId,
     scopeId,
     chainId,

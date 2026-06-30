@@ -661,12 +661,21 @@ export function createAttributionActivities(deps: AttributionActivityDeps) {
           },
         ]);
         newSelections++;
-      } else if (resolvedUserId) {
-        await attributionStore.updateSelectionUserId(
+      } else {
+        // Existing rows re-sync the policy-owned `included` flag each pass
+        // (idempotency); admin-owned weight/note are preserved.
+        await attributionStore.updateSelectionIncluded(
           epochId,
           receipt.receiptId,
-          resolvedUserId
+          included
         );
+        if (resolvedUserId) {
+          await attributionStore.updateSelectionUserId(
+            epochId,
+            receipt.receiptId,
+            resolvedUserId
+          );
+        }
       }
 
       if (resolvedUserId) {

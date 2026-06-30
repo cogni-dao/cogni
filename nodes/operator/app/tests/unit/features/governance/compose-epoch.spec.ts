@@ -38,13 +38,6 @@ describe("composeEpochView", () => {
       },
       [
         {
-          userId: "d0000000-0000-4000-a000-000058641509",
-          projectedUnits: "8000",
-          receiptCount: 1,
-        },
-      ],
-      [
-        {
           receiptId: "r1",
           source: "github",
           eventType: "pr_merged",
@@ -101,7 +94,6 @@ describe("composeEpochView", () => {
         },
         poolTotalCredits: null,
       },
-      [],
       [
         {
           receiptId: "r-included",
@@ -137,6 +129,76 @@ describe("composeEpochView", () => {
     expect(view.contributors[0].displayName).toBe("derekg1729");
     // Unresolved count should only include the included receipt (no userId)
     expect(view.unresolvedCount).toBe(1);
+  });
+
+  it("keeps weight-0 selected receipts as 0-point contributors (production weight config)", () => {
+    // PRODUCTION weight config: only pr_merged carries weight; reviews and
+    // issue closes are weight 0. SELECTION_IS_THE_GATE — a selected weight-0
+    // review must still surface as a contributor (at 0 points), not be dropped.
+    const view = composeEpochView(
+      {
+        id: "42",
+        status: "open",
+        periodStart: "2026-03-02T00:00:00.000Z",
+        periodEnd: "2026-03-09T00:00:00.000Z",
+        weightConfig: {
+          "github:pr_merged": 1000,
+          "github:review_submitted": 0,
+          "github:issue_closed": 0,
+        },
+        poolTotalCredits: null,
+      },
+      [
+        {
+          receiptId: "r-pr",
+          source: "github",
+          eventType: "pr_merged",
+          platformUserId: "58641509",
+          platformLogin: "derekg1729",
+          artifactUrl: null,
+          metadata: null,
+          eventTime: "2026-03-03T00:00:00.000Z",
+          selection: {
+            userId: null,
+            included: true,
+            weightOverrideMilli: null,
+          },
+        },
+        {
+          receiptId: "r-review",
+          source: "github",
+          eventType: "review_submitted",
+          platformUserId: "90000103",
+          platformLogin: "mira-stone",
+          artifactUrl: null,
+          metadata: null,
+          eventTime: "2026-03-04T00:00:00.000Z",
+          selection: {
+            userId: null,
+            included: true,
+            weightOverrideMilli: null,
+          },
+        },
+      ]
+    );
+
+    // BOTH receipts surface as contributors — the weight-0 review is NOT dropped.
+    expect(view.contributors).toHaveLength(2);
+
+    const byKey = new Map(view.contributors.map((c) => [c.claimantKey, c]));
+
+    // pr_merged → full points by identity key
+    const pr = byKey.get("identity:github:58641509");
+    expect(pr).toBeDefined();
+    expect(pr?.units).toBe("1000");
+    expect(pr?.displayName).toBe("derekg1729");
+
+    // review_submitted → 0-point contributor by identity key (still shown)
+    const review = byKey.get("identity:github:90000103");
+    expect(review).toBeDefined();
+    expect(review?.units).toBe("0");
+    expect(review?.displayName).toBe("mira-stone");
+    expect(review?.creditShare).toBe(0);
   });
 });
 

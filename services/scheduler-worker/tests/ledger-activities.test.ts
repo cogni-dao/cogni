@@ -96,6 +96,7 @@ function makeMockStore(
     finalizeEpochAtomic: vi.fn(),
     getSelectionCandidates: vi.fn().mockResolvedValue([]),
     updateSelectionUserId: vi.fn(),
+    updateSelectionIncluded: vi.fn(),
     upsertReviewSubjectOverride: vi.fn(),
     batchUpsertReviewSubjectOverrides: vi.fn().mockResolvedValue([]),
     deleteReviewSubjectOverride: vi.fn(),
@@ -985,6 +986,39 @@ describe("materializeSelection", () => {
       "user-aaa"
     );
     // insertSelectionDoNothing (which overwrites all fields) is NOT called for existing rows
+    expect(store.insertSelectionDoNothing).not.toHaveBeenCalled();
+  });
+
+  it("re-syncs policy-owned `included` flag on existing rows (idempotency)", async () => {
+    // Regression for the candidate-a bug: an existing selection row persisted
+    // included=false under the old policy must be re-synced to the CURRENT
+    // policy decision (main-merge → included=true) without touching weight/note.
+    const unselected = [
+      makeUnselectedReceipt({
+        receiptId: "ev1",
+        platformUserId: "111",
+        hasExistingSelection: true,
+        metadata: {
+          title: "PR 1",
+          baseBranch: "main",
+          repo: "test/repo",
+        },
+      }),
+    ];
+    const identityMap = new Map([["111", "user-aaa"]]);
+    const { store, materializeSelection } = makeDeps({
+      getSelectionCandidates: vi.fn().mockResolvedValue(unselected),
+      resolveIdentities: vi.fn().mockResolvedValue(identityMap),
+    });
+
+    await materializeSelection({
+      epochId: "1",
+      attributionPipeline: "cogni-v0.0",
+    });
+
+    // Existing row → policy-owned included flag is re-persisted (=true now)
+    expect(store.updateSelectionIncluded).toHaveBeenCalledWith(1n, "ev1", true);
+    // No re-insert; admin weight/note untouched (only `included` is written)
     expect(store.insertSelectionDoNothing).not.toHaveBeenCalled();
   });
 

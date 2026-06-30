@@ -42,6 +42,11 @@ export interface DefaultRegistries {
  */
 export interface RegistryConfig {
   readonly excludedLogins?: readonly string[];
+  /**
+   * Repo allowlist for selection-time filtering (fail-open). Empty/undefined →
+   * no repo filtering. Passed through to the main-merge-selection policy.
+   */
+  readonly sourceRefs?: readonly string[];
 }
 
 /**
@@ -70,6 +75,7 @@ export function createDefaultRegistries(
   });
   const mainMergePolicy = createMainMergeSelectionPolicy({
     excludedLogins: config?.excludedLogins,
+    sourceRefs: config?.sourceRefs,
   });
   const selectionPolicies: SelectionPolicyRegistry = new Map([
     [promotionPolicy.policyRef, promotionPolicy],
