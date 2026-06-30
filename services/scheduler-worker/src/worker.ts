@@ -102,8 +102,17 @@ export function isTransientConnectError(err: unknown): boolean {
   );
 }
 
-const sleep = (ms: number): Promise<void> =>
+const defaultSleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Tunables + injectable timer for connectWithRetry (test seam). */
+export interface ConnectWithRetryOptions {
+  maxAttempts?: number;
+  baseDelayMs?: number;
+  factor?: number;
+  maxDelayMs?: number;
+  sleep?: (ms: number) => Promise<void>;
+}
 
 /**
  * Connect to Temporal with exponential backoff on transient
@@ -113,37 +122,44 @@ const sleep = (ms: number): Promise<void> =>
  * (non-transient) failures rethrow immediately; transient failures rethrow only
  * after attempts are exhausted, so k8s still restarts on genuinely-down
  * Temporal — same outer behavior as before, but only after a real outage.
+ *
+ * The connect function, sleep timer, and tunables are injected so the retry
+ * loop is deterministically unit-testable without a real Temporal or real
+ * timers (the candidate-a flight booted first-try, so the loop was otherwise
+ * never exercised).
  */
-async function connectWithRetry(
-  opts: Parameters<typeof NativeConnection.connect>[0],
-  logger: Logger
+export async function connectWithRetry(
+  connect: () => Promise<NativeConnection>,
+  logger: Logger,
+  opts?: ConnectWithRetryOptions
 ): Promise<NativeConnection> {
-  const MAX_ATTEMPTS = 8;
-  const BASE_DELAY_MS = 2_000;
-  const FACTOR = 2;
-  const MAX_DELAY_MS = 15_000;
+  const maxAttempts = opts?.maxAttempts ?? 8;
+  const baseDelayMs = opts?.baseDelayMs ?? 2_000;
+  const factor = opts?.factor ?? 2;
+  const maxDelayMs = opts?.maxDelayMs ?? 15_000;
+  const sleep = opts?.sleep ?? defaultSleep;
 
   let lastErr: unknown;
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      return await NativeConnection.connect(opts);
+      return await connect();
     } catch (err) {
       lastErr = err;
-      if (!isTransientConnectError(err) || attempt === MAX_ATTEMPTS) break;
+      if (!isTransientConnectError(err) || attempt === maxAttempts) break;
       const delayMs = Math.min(
-        BASE_DELAY_MS * FACTOR ** (attempt - 1),
-        MAX_DELAY_MS
+        baseDelayMs * factor ** (attempt - 1),
+        maxDelayMs
       );
       logger.warn(
         {
           event: WORKER_EVENT_NAMES.LIFECYCLE_STARTING,
           phase: "temporal_connect_retry",
           attempt,
-          maxAttempts: MAX_ATTEMPTS,
+          maxAttempts,
           delayMs,
           err: (err as Error)?.message ?? String(err),
         },
-        `Temporal connect failed (transient) — retrying in ${delayMs}ms (attempt ${attempt}/${MAX_ATTEMPTS})`
+        `Temporal connect failed (transient) — retrying in ${delayMs}ms (attempt ${attempt}/${maxAttempts})`
       );
       await sleep(delayMs);
     }
@@ -152,7 +168,7 @@ async function connectWithRetry(
     {
       event: WORKER_EVENT_NAMES.LIFECYCLE_STARTING,
       phase: "temporal_connect_exhausted",
-      maxAttempts: MAX_ATTEMPTS,
+      maxAttempts,
       err: (lastErr as Error)?.message ?? String(lastErr),
     },
     "Exhausted Temporal connect retries — rethrowing (k8s will restart)"
@@ -184,7 +200,7 @@ export async function startSchedulerWorker(
   // the Temporal ExternalName at boot must not crashloop the pod (incident
   // 2026-06-30). See connectWithRetry / isTransientConnectError above.
   const connection = await connectWithRetry(
-    { address: env.TEMPORAL_ADDRESS },
+    () => NativeConnection.connect({ address: env.TEMPORAL_ADDRESS }),
     logger
   );
 
