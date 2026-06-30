@@ -1,11 +1,35 @@
 ---
 work_item_id: task.5066
-status: blocked
+status: ready-to-validate
 branch: derekg1729/attribution-main-merge-selection
 last_commit: a3969ff37d
 ---
 
 # Attribution → claimants e2e (operator)
+
+## RESOLUTION (2026-06-29) — collapsed v0.1 into v0.0 in place
+
+The blocker was: the live candidate-a schedule carries input `attributionPipeline:"cogni-v0.0"`,
+and nothing reliably flipped it to `cogni-v0.1` (the in-place `handle.update` path didn't apply the
+new `action.args`). Publishing a _new_ profile only to flip that input was pure ceremony — and worse,
+it was a latent landmine: `deriveAllocationAlgoRef()` (allocation.ts) only knows `"cogni-v0.0"` and
+`review/route.ts` hardcodes `deriveAllocationAlgoRef("cogni-v0.0")`, so a `cogni-v0.1` epoch would
+crash at review.
+
+Fix (Derek-authorized — v0.0 was unused by any node, zero claimants): **repoint `cogni-v0.0`'s
+`selectionPolicyRef` from `promotion-selection` → `main-merge-selection` in place.** The live schedule
+already carries `cogni-v0.0`, so the next `CollectEpoch` resolves the new policy with **zero schedule-input
+flip** — the entire update-path blocker is sidestepped. Deleted `cogni-v0.1` + its registry/index/repo-spec
+references; reverted repo-spec `attribution_pipeline` back to `cogni-v0.0` (kept the `nodes/operator/.cogni`
+`activity_ledger` block — that's the legit bug.5087-class fix). `main-merge-selection` plugin + tests kept.
+
+Boot-sync note: the handoff's "boot-sync already exists, remove the startup-reconcile dup" was wrong.
+Empirically the sync _job_ (PR #785) had only ONE trigger — the `INTERNAL_OPS_TOKEN`-gated ops route.
+`startup-reconcile.ts` is the **only** automatic boot trigger and removes that token dependency, so it
+stays. No duplication exists.
+
+Remaining: flight #1892 head → candidate-a → `/validate-candidate`. Goal log is now
+`profileId="cogni-v0.0"` + `included>0` (NOT v0.1).
 
 ## Mission
 

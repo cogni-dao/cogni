@@ -828,9 +828,25 @@ describe("materializeSelection", () => {
   });
 
   it("creates new selection rows with resolved userId", async () => {
+    // cogni-v0.0 now uses main-merge-selection: a PR merged to `main` IS the
+    // contribution (included: true). Give the fixtures baseBranch=main so they are
+    // included; metadata is replaced wholesale by the override (not merged).
+    const mainMergeMeta = (title: string) => ({
+      title,
+      baseBranch: "main",
+      repo: "test/repo",
+    });
     const unselected = [
-      makeUnselectedReceipt({ receiptId: "ev1", platformUserId: "111" }),
-      makeUnselectedReceipt({ receiptId: "ev2", platformUserId: "222" }),
+      makeUnselectedReceipt({
+        receiptId: "ev1",
+        platformUserId: "111",
+        metadata: mainMergeMeta("PR 1"),
+      }),
+      makeUnselectedReceipt({
+        receiptId: "ev2",
+        platformUserId: "222",
+        metadata: mainMergeMeta("PR 2"),
+      }),
     ];
     const identityMap = new Map([["111", "user-aaa"]]);
     const { store, materializeSelection } = makeDeps({

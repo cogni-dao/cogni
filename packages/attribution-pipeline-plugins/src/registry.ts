@@ -26,7 +26,6 @@ import { createMainMergeSelectionPolicy } from "./plugins/main-merge-selection/d
 import { createPromotionSelectionPolicy } from "./plugins/promotion-selection/descriptor";
 import { WEIGHT_SUM_ALLOCATOR } from "./plugins/weight-sum/descriptor";
 import { COGNI_V0_PROFILE } from "./profiles/cogni-v0.0";
-import { COGNI_V0_1_PROFILE } from "./profiles/cogni-v0.1";
 
 /**
  * Result from createDefaultRegistries.
@@ -56,7 +55,6 @@ export function createDefaultRegistries(
 
   const profiles: ProfileRegistry = new Map([
     [COGNI_V0_PROFILE.profileId, COGNI_V0_PROFILE],
-    [COGNI_V0_1_PROFILE.profileId, COGNI_V0_1_PROFILE],
   ]);
 
   const enrichers: EnricherAdapterRegistry = new Map([

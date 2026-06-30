@@ -54,7 +54,6 @@ export {
 
 // Profiles
 export { COGNI_V0_PROFILE } from "./profiles/cogni-v0.0";
-export { COGNI_V0_1_PROFILE } from "./profiles/cogni-v0.1";
 
 // Registry
 export {
