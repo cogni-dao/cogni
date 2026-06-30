@@ -10,7 +10,7 @@ read_when: Understanding credit economics, pool sizing, emission schedules, or s
 implements: proj.transparent-credit-payouts
 owner: derekg1729
 created: 2026-03-02
-verified: 2026-03-03
+verified: 2026-06-30
 tags: [governance, tokenomics, attribution]
 ---
 
@@ -18,7 +18,7 @@ tags: [governance, tokenomics, attribution]
 
 > The attribution pipeline answers "who did what." This spec answers "how much is the pool, where does it come from, and what do the numbers mean to the user."
 >
-> **SSOT for the distribution goal + cohesive e2e flow:** operator hub entry `node-tokenomics-distribution-goal` (domain `governance`) — recall before touching `txBuilders`, the wizard, `activate-distributions`, or distributor work. The locked goal: _a DAO, with a token supply, distributed by a Merkle distributor based on signed epoch ledgers_ — DAO-is-minter, mint-per-epoch, metadata-only activation as a visible owner checkpoint, no human token moves.
+> **SSOT for the distribution goal + cohesive e2e flow:** the operator hub entry `node-tokenomics-distribution-goal` (domain `governance`) is the intended SSOT, but that governance contribution is **currently unmerged — it 404s on the merged hub** as of 2026-06-30. Until it merges, treat _this doc_ + the [attribution-pipeline-overview § DAO Ownership Token Distribution](./attribution-pipeline-overview.md#dao-ownership-token-distribution) as the working SSOT, and recall before touching `txBuilders`, the wizard, `activate-distributions`, or distributor work. The locked goal: _a DAO, with a token supply, distributed by **one cumulative Merkle distributor** based on signed epoch ledgers_ — DAO-is-minter, mint-per-epoch (mint the delta + `setMerkleRoot`), distributor deployed once at activation as a visible owner checkpoint, no human token moves.
 
 ## Goal
 
@@ -223,34 +223,35 @@ Attribution credits (off-chain)
 - Current P0 formation mints only a template-computed genesis amount to the explicit initial holder and models the rest as future supply that is not yet minted. That proves Aragon formation and verification without pretending a distribution rail exists.
 - The DAO is the GovernanceERC20 **minter**, not a pre-minted treasury. Aragon's `TokenVotingSetup` grants the DAO `MINT_PERMISSION` on the token at formation, so emissions supply is **minted per-epoch by the DAO into the distributor** — never a fixed pile parked in a vault, and never a human-moved float. Future, unissued supply is policy math (a cap), realized only when the DAO mints it under a signed root.
 - The typed handoff model lives in `@cogni/aragon-osx` as `buildDaoTokenSettlementModel()`. NOTE (Walk reconciliation): its inventory readiness still models a pre-minted DAO balance (`formation_probe_only` → `inventory_ready`); under the mint-per-epoch model, "inventory ready" is **DAO mint authority + a finalized signed statement + an executed mint-into-distributor**, not a parked balance. Reconcile in Walk P0.
-- Before Walk settlement can go live, repo-spec must carry `distributions.status: active`, `governance.token_contract`, `governance.emissions_holder`, and the selected OSS claim pattern. Activation is a git-governed node repo-spec PR, surfaced as a **visible owner-driven node checkpoint** (not a hidden API, not a formation-only checkbox): new nodes and existing DAO nodes both use the same update flow. Activation is **metadata-only** — it verifies the token + DAO contracts **exist on-chain (bytecode present)** and records `emissions_holder = the DAO contract` (the minter); it **never checks token balance and never moves tokens**, because nothing is pre-minted.
+- Before Walk settlement can go live, repo-spec must carry `distributions.status: active`, `governance.token_contract`, the **single distributor address**, and the selected OSS claim pattern. Activation deploys the **one** cumulative distributor and `transferOwnership` to the DAO; it is a **visible owner-driven node checkpoint** (a node-page action like payments activation, backed by `POST /api/v1/nodes/[id]/activate-distributions`), not a hidden API or formation-only checkbox. New nodes and existing DAO nodes both use the same flow. Activation verifies the token + DAO contracts **exist on-chain (bytecode present)**, deploys the distributor, and records its address; it **never pre-mints and never moves tokens**, because supply is minted per-epoch.
 - Crawl budget policy remains off-chain accounting and governance policy. It is not the hard security boundary for token release.
-- In Walk, the source of truth for remaining supply is `emissionsHolder.balanceOf(token)` on-chain, not Postgres. Off-chain `remaining` becomes a reconciliation check.
-- Walk uses OSS primitives: OpenZeppelin Merkle Tree tooling for manifest/proof generation and a stock audited per-epoch distributor such as Uniswap MerkleDistributor for claims. Bespoke on-chain release or mint-on-claim contracts are out of scope unless a separate contract-selection spike proves they are required.
+- In Walk under the mint-per-epoch model, the hard cap is **policy supply minus total minted**, enforced when the DAO authorizes each `mint(distributor, delta)` under a signed root — not a pre-minted balance parked in an emissions holder. Off-chain `remaining` becomes a reconciliation check.
+- Walk uses OSS primitives: OpenZeppelin Merkle Tree tooling for proof generation and **one stock audited 1inch `CumulativeMerkleDrop` per node** for claims — deployed once, mutable owner-set root, cumulative leaves. This **replaces** the earlier "fresh Uniswap-style per-epoch distributor" plan (N contracts/node). Bespoke on-chain release or mint-on-claim contracts are out of scope unless a separate contract-selection spike proves they are required.
+- **Status: in flight (story.5021 Walk R1–R4), not yet merged to main, not yet proven on-chain.** Contract vendored at `packages/cogni-contracts/src/cumulative-merkle-distributor/` on branch `derekg1729/walk-r1-cumulative-distributor`; deploy-at-activation, cumulative finalization-fold, and claim-from-holdings are in progress on `derekg1729/walk-integration`. Proof gate = live sign→mint→claim on an isolated anvil Base-fork or candidate-a.
 - Merkle settlement consumes signed `creditAmount` entitlements from the finalized statement, not internal `finalUnits`.
 - USDC distributions remain a separate, governance-voted financial action.
 
 #### Edge Cases
 
-| Edge Case               | Resolution                                                                                                                                                                             |
-| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `total_points = 0`      | Epoch pool = 0. No statement produced. Quiet epochs do not create larger future distributions in the prototype policy.                                                                 |
-| Unresolved claimants    | Already handled by `IdentityClaimant` type. Claimant key is stable (`identity:github:12345`). Statement finalization can proceed, but on-chain settlement waits for wallet resolution. |
-| Address changes         | Wallet binding layer (existing `user_bindings`). Statement references `claimantKey`, not wallet address. Claim address resolved at settlement time.                                    |
-| Forked scopes           | Each scope has its own budget policy and budget cap. Fork = new scope = new supply budget. No cross-contamination.                                                                     |
-| Root rotation authority | Walk: Safe/manual or equivalent trusted governance execution publishes roots and funding. Run: Governor/Timelock or stronger on-chain authorization gates it.                          |
-| Unclaimed tokens        | `sweep(epochId)` after claim window → treasury. Swept amounts are NOT re-emitted.                                                                                                      |
+| Edge Case               | Resolution                                                                                                                                                                                                                                                                                                  |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `total_points = 0`      | Epoch pool = 0. No statement produced. Quiet epochs do not create larger future distributions in the prototype policy.                                                                                                                                                                                      |
+| Unresolved claimants    | Already handled by `IdentityClaimant` type. Claimant key is stable (`identity:github:12345`). Statement finalization can proceed, but on-chain settlement waits for wallet resolution.                                                                                                                      |
+| Address changes         | Wallet binding layer (existing `user_bindings`). Statement references `claimantKey`, not wallet address. Claim address resolved at settlement time.                                                                                                                                                         |
+| Forked scopes           | Each scope has its own budget policy and budget cap. Fork = new scope = new supply budget. No cross-contamination.                                                                                                                                                                                          |
+| Root rotation authority | Walk: the DAO owns `setMerkleRoot` (distributor ownership transferred to the DAO at activation); the admin's DAO-majority wallet executes the per-epoch `mint(delta) + setMerkleRoot` via the existing `/admin` finalization signature. Run: Governor/Timelock or stronger on-chain authorization gates it. |
+| Unclaimed tokens        | No per-epoch sweep. With a cumulative distributor, leaves accumulate and an unclaimed balance simply stays claimable as part of the contributor's running `cumulativeAmount` — there is no per-epoch claim window to expire.                                                                                |
 
 ## OSS Building Blocks
 
-| Need                | OSS                                              | Status                           |
-| ------------------- | ------------------------------------------------ | -------------------------------- |
-| Governance token    | Aragon GovernanceERC20 (from node formation)     | Walk                             |
-| Merkle tooling      | OpenZeppelin Merkle Tree                         | Crawl/Walk                       |
-| Merkle claims       | Uniswap MerkleDistributor (per-epoch, preferred) | Walk                             |
-| Governance          | OpenZeppelin Governor + TimelockController       | Run                              |
-| Streaming (alt)     | Sablier Lockup / Superfluid                      | Run (optional)                   |
-| Double-entry ledger | Beancount                                        | Walk (via proj.financial-ledger) |
+| Need                | OSS                                          | Status                           |
+| ------------------- | -------------------------------------------- | -------------------------------- |
+| Governance token    | Aragon GovernanceERC20 (from node formation) | Walk                             |
+| Merkle tooling      | OpenZeppelin Merkle Tree                     | Crawl/Walk                       |
+| Merkle claims       | 1inch CumulativeMerkleDrop (ONE per node)    | Walk (in flight, story.5021)     |
+| Governance          | OpenZeppelin Governor + TimelockController   | Run                              |
+| Streaming (alt)     | Sablier Lockup / Superfluid                  | Run (optional)                   |
+| Double-entry ledger | Beancount                                    | Walk (via proj.financial-ledger) |
 
 ## What Does NOT Change
 
