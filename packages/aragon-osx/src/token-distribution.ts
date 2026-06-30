@@ -605,9 +605,13 @@ function allocateTokenAmounts(
   }));
 }
 
-function validateManifestIdentity(
-  input: DaoTokenMerkleDistributionInput
-): void {
+function validateManifestIdentity(input: {
+  readonly distributionId: string;
+  readonly nodeId: string;
+  readonly scopeId: string;
+  readonly statementHash: string;
+  readonly tokenAddress: HexAddress;
+}): void {
   if (input.distributionId.trim().length === 0) {
     throw new RangeError("distributionId must be non-empty");
   }
