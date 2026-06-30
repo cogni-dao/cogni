@@ -133,6 +133,7 @@ export default function OpengraphImage(): ImageResponse {
       >
         <div style={{ display: "flex", color, marginBottom: "20px" }}>
           {iconImageUri ? (
+            // biome-ignore lint/performance/noImgElement: rendered by next/og ImageResponse (Satori) where next/image is unavailable; raw <img> is required
             <img
               src={iconImageUri}
               width={200}
