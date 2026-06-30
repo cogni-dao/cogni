@@ -1832,6 +1832,23 @@ export class DrizzleAttributionAdapter implements AttributionStore {
       );
   }
 
+  async updateSelectionIncluded(
+    epochId: bigint,
+    receiptId: string,
+    included: boolean
+  ): Promise<void> {
+    await this.validateEpochIds([epochId]);
+    await this.db
+      .update(epochSelection)
+      .set({ included, updatedAt: new Date() })
+      .where(
+        and(
+          eq(epochSelection.epochId, epochId),
+          eq(epochSelection.receiptId, receiptId)
+        )
+      );
+  }
+
   // -------------------------------------------------------------------------
   // Receipt claimants
   // -------------------------------------------------------------------------

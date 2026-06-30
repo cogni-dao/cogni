@@ -15,7 +15,6 @@ import { type UseQueryResult, useQuery } from "@tanstack/react-query";
 import type {
   ApiIngestionReceipt,
   EpochDto,
-  UserProjectionDto,
 } from "@/features/governance/lib/compose-epoch";
 import { composeEpochView } from "@/features/governance/lib/compose-epoch";
 import type { EpochView } from "@/features/governance/types";
@@ -41,22 +40,14 @@ async function fetchReviewEpochs(): Promise<readonly EpochView[]> {
   const reviewRaw = epochs.filter((e) => e.status === "review");
   if (reviewRaw.length === 0) return [];
 
-  // Fetch user projections + activity for each review epoch (same as useCurrentEpoch)
+  // ONE_SSOT: review-epoch view derives entirely from /activity (selection +
+  // weightConfig) — no user-projections fetch (that path double-counted users).
   return Promise.all(
     reviewRaw.map(async (epoch) => {
-      const [userProjectionsRes, activityRes] = await Promise.all([
-        fetchJson<{ userProjections: UserProjectionDto[] }>(
-          `/api/v1/attribution/epochs/${epoch.id}/user-projections`
-        ),
-        fetchJson<{ events: ApiIngestionReceipt[] }>(
-          `/api/v1/attribution/epochs/${epoch.id}/activity?limit=200`
-        ),
-      ]);
-      return composeEpochView(
-        epoch,
-        userProjectionsRes.userProjections,
-        activityRes.events
+      const activityRes = await fetchJson<{ events: ApiIngestionReceipt[] }>(
+        `/api/v1/attribution/epochs/${epoch.id}/activity?limit=200`
       );
+      return composeEpochView(epoch, activityRes.events);
     })
   );
 }

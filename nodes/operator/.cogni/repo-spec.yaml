@@ -8,6 +8,30 @@ node_id: "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d"
 scope_id: "a28a8b1e-1f9d-5cd5-9329-569e4819feda"
 scope_key: "default"
 
+# Activity ledger ingestion configuration.
+# The runtime container reads THIS file as /app/.cogni/repo-spec.yaml (Dockerfile
+# copies nodes/operator/.cogni, NOT root), so activity_ledger must live here too or
+# getGovernanceConfig() sees no ledger and pauses governance:ledger_ingest as
+# "removed from repo-spec" — leaving CollectEpoch on a stale schedule. Same class as
+# operator_wallet (bug.5087). Mirrors /.cogni/repo-spec.yaml.
+activity_ledger:
+  epoch_length_days: 7
+  approvers:
+    - "0x070075F1389Ae1182aBac722B36CA12285d0c949" # derekg1729.eth operator wallet
+  pool_config:
+    base_issuance_credits: "10000"
+  activity_sources:
+    github:
+      # cogni-v0.0 selects via main-merge-selection: a PR merged to main IS the
+      # contribution. (The profile was repointed from the old promotion-selection,
+      # which excluded every direct-to-main PR → zero claimants on this repo.)
+      attribution_pipeline: cogni-v0.0
+      # source_refs is a selection-time, fail-open repo allowlist (SSOT for the
+      # repos whose merged PRs earn attribution). Empty/missing → no filtering.
+      source_refs: ["cogni-dao/cogni"]
+      # source_refs: ["cogni-test-org/test-cog"]   # candidate-a test value — swap back for candidate-a attribution testing
+      excluded_logins: ["Cogni-1729"]
+
 intent:
   name: operator
   # hook: punchy ~5-word gallery/heading line. mission: 1–3 sentence north-star surfaced by the cognition

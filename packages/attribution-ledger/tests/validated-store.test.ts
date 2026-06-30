@@ -156,6 +156,7 @@ class MockAttributionStore {
     return [];
   }
   async updateSelectionUserId() {}
+  async updateSelectionIncluded() {}
 }
 
 describe("createValidatedAttributionStore", () => {

@@ -87,6 +87,7 @@ function makeStore(
     finalizeEpochAtomic: vi.fn(),
     getSelectionCandidates: vi.fn(),
     updateSelectionUserId: vi.fn(),
+    updateSelectionIncluded: vi.fn(),
     upsertReviewSubjectOverride: vi.fn(),
     batchUpsertReviewSubjectOverrides: vi.fn(),
     deleteReviewSubjectOverride: vi.fn(),

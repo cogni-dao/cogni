@@ -96,6 +96,7 @@ function makeMockStore(
     finalizeEpochAtomic: vi.fn(),
     getSelectionCandidates: vi.fn().mockResolvedValue([]),
     updateSelectionUserId: vi.fn(),
+    updateSelectionIncluded: vi.fn(),
     upsertReviewSubjectOverride: vi.fn(),
     batchUpsertReviewSubjectOverrides: vi.fn().mockResolvedValue([]),
     deleteReviewSubjectOverride: vi.fn(),
@@ -828,9 +829,25 @@ describe("materializeSelection", () => {
   });
 
   it("creates new selection rows with resolved userId", async () => {
+    // cogni-v0.0 now uses main-merge-selection: a PR merged to `main` IS the
+    // contribution (included: true). Give the fixtures baseBranch=main so they are
+    // included; metadata is replaced wholesale by the override (not merged).
+    const mainMergeMeta = (title: string) => ({
+      title,
+      baseBranch: "main",
+      repo: "test/repo",
+    });
     const unselected = [
-      makeUnselectedReceipt({ receiptId: "ev1", platformUserId: "111" }),
-      makeUnselectedReceipt({ receiptId: "ev2", platformUserId: "222" }),
+      makeUnselectedReceipt({
+        receiptId: "ev1",
+        platformUserId: "111",
+        metadata: mainMergeMeta("PR 1"),
+      }),
+      makeUnselectedReceipt({
+        receiptId: "ev2",
+        platformUserId: "222",
+        metadata: mainMergeMeta("PR 2"),
+      }),
     ];
     const identityMap = new Map([["111", "user-aaa"]]);
     const { store, materializeSelection } = makeDeps({
@@ -969,6 +986,39 @@ describe("materializeSelection", () => {
       "user-aaa"
     );
     // insertSelectionDoNothing (which overwrites all fields) is NOT called for existing rows
+    expect(store.insertSelectionDoNothing).not.toHaveBeenCalled();
+  });
+
+  it("re-syncs policy-owned `included` flag on existing rows (idempotency)", async () => {
+    // Regression for the candidate-a bug: an existing selection row persisted
+    // included=false under the old policy must be re-synced to the CURRENT
+    // policy decision (main-merge → included=true) without touching weight/note.
+    const unselected = [
+      makeUnselectedReceipt({
+        receiptId: "ev1",
+        platformUserId: "111",
+        hasExistingSelection: true,
+        metadata: {
+          title: "PR 1",
+          baseBranch: "main",
+          repo: "test/repo",
+        },
+      }),
+    ];
+    const identityMap = new Map([["111", "user-aaa"]]);
+    const { store, materializeSelection } = makeDeps({
+      getSelectionCandidates: vi.fn().mockResolvedValue(unselected),
+      resolveIdentities: vi.fn().mockResolvedValue(identityMap),
+    });
+
+    await materializeSelection({
+      epochId: "1",
+      attributionPipeline: "cogni-v0.0",
+    });
+
+    // Existing row → policy-owned included flag is re-persisted (=true now)
+    expect(store.updateSelectionIncluded).toHaveBeenCalledWith(1n, "ev1", true);
+    // No re-insert; admin weight/note untouched (only `included` is written)
     expect(store.insertSelectionDoNothing).not.toHaveBeenCalled();
   });
 
