@@ -19,6 +19,7 @@ import {
   DAO_TOKEN_SUPPLY_MIN_WHOLE,
   DEFAULT_DAO_TOKENOMICS_TEMPLATE_ID,
   hashDaoTokenClaimLeaf,
+  parseDaoGenesisMintUnits,
   parseDaoTokenSupplyUnits,
   resolveDaoTokenomics,
   verifyDaoTokenMerkleProof,
@@ -52,6 +53,27 @@ describe("parseDaoTokenSupplyUnits", () => {
       parseDaoTokenSupplyUnits(DAO_TOKEN_SUPPLY_MAX_WHOLE + 1)
     ).toThrow(RangeError);
     expect(() => parseDaoTokenSupplyUnits(1.5)).toThrow(RangeError);
+  });
+});
+
+describe("parseDaoGenesisMintUnits", () => {
+  it("allows a 1-token genesis mint (solo_one_token) below the supply floor", () => {
+    // Regression: parseDaoTokenSupplyUnits rejected this (1 < 1000 floor),
+    // making the default Create-DAO click throw an uncaught RangeError.
+    expect(parseDaoGenesisMintUnits(1)).toBe(10n ** 18n);
+    expect(() => parseDaoGenesisMintUnits(1)).not.toThrow();
+  });
+
+  it("converts larger genesis mints to 18-decimal base units", () => {
+    expect(parseDaoGenesisMintUnits(200_000)).toBe(200_000n * 10n ** 18n);
+  });
+
+  it("rejects non-positive, non-integer, or over-ceiling amounts", () => {
+    expect(() => parseDaoGenesisMintUnits(0)).toThrow(RangeError);
+    expect(() => parseDaoGenesisMintUnits(1.5)).toThrow(RangeError);
+    expect(() =>
+      parseDaoGenesisMintUnits(DAO_TOKEN_SUPPLY_MAX_WHOLE + 1)
+    ).toThrow(RangeError);
   });
 });
 

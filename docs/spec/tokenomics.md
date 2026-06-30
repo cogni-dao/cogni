@@ -17,6 +17,8 @@ tags: [governance, tokenomics, attribution]
 # Tokenomics: Budget Policy + Settlement Handoff
 
 > The attribution pipeline answers "who did what." This spec answers "how much is the pool, where does it come from, and what do the numbers mean to the user."
+>
+> **SSOT for the distribution goal + cohesive e2e flow:** operator hub entry `node-tokenomics-distribution-goal` (domain `governance`) — recall before touching `txBuilders`, the wizard, `activate-distributions`, or distributor work. The locked goal: _a DAO, with a token supply, distributed by a Merkle distributor based on signed epoch ledgers_ — DAO-is-minter, mint-per-epoch, metadata-only activation as a visible owner checkpoint, no human token moves.
 
 ## Goal
 
@@ -199,7 +201,7 @@ The attribution pipeline can produce a signed statement with any `poolTotalCredi
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Key insight:** Once the emissions holder exists on-chain (Walk), `budget_total` and `remaining` in Postgres are redundant with the on-chain token balance. The `budget_bank_ledger` is Crawl scaffolding that gets progressively replaced by on-chain state. It remains useful for off-chain auditability but is never the security boundary.
+**Key insight:** the on-chain state — not Postgres — is the security boundary once the DAO is minting (Walk). The `budget_bank_ledger` is Crawl scaffolding, progressively replaced by on-chain state; it remains useful for off-chain auditability but is never the boundary. Under the mint-per-epoch model the hard cap is **policy supply minus total minted**, enforced when the DAO authorizes each `mint(distributor, amount)` under a signed root — not a pre-minted balance parked in an emissions holder. (Where this section reads `emissionsHolder.balanceOf` above, treat it as the general "on-chain supply state" until the Walk P0 reconciliation lands.)
 
 ---
 
@@ -219,9 +221,9 @@ Attribution credits (off-chain)
 
 - The settlement token is the Aragon `GovernanceERC20` created at node formation.
 - Current P0 formation mints only a template-computed genesis amount to the explicit initial holder and models the rest as future supply that is not yet minted. That proves Aragon formation and verification without pretending a distribution rail exists.
-- Future, unissued supply is not distributable inventory. The first live claim path must create DAO-controlled minted inventory first: either a fixed supply minted into an emissions holder/vault during formation or a later distribution-activation flow for nodes whose DAOs already exist.
-- The typed handoff model lives in `@cogni/aragon-osx` as `buildDaoTokenSettlementModel()`: it classifies current genesis-holder minting as `formation_probe_only` and only reaches `claimable` once DAO-controlled inventory, a finalized signed statement, a matching Merkle manifest, and matching distributor funding are all present.
-- Before Walk settlement can go live, repo-spec must carry `distributions.status: active`, `governance.token_contract`, and `governance.emissions_holder`. New nodes may get there during formation; existing DAO nodes get there through a separate activation/update flow.
+- The DAO is the GovernanceERC20 **minter**, not a pre-minted treasury. Aragon's `TokenVotingSetup` grants the DAO `MINT_PERMISSION` on the token at formation, so emissions supply is **minted per-epoch by the DAO into the distributor** — never a fixed pile parked in a vault, and never a human-moved float. Future, unissued supply is policy math (a cap), realized only when the DAO mints it under a signed root.
+- The typed handoff model lives in `@cogni/aragon-osx` as `buildDaoTokenSettlementModel()`. NOTE (Walk reconciliation): its inventory readiness still models a pre-minted DAO balance (`formation_probe_only` → `inventory_ready`); under the mint-per-epoch model, "inventory ready" is **DAO mint authority + a finalized signed statement + an executed mint-into-distributor**, not a parked balance. Reconcile in Walk P0.
+- Before Walk settlement can go live, repo-spec must carry `distributions.status: active`, `governance.token_contract`, `governance.emissions_holder`, and the selected OSS claim pattern. Activation is a git-governed node repo-spec PR, surfaced as a **visible owner-driven node checkpoint** (not a hidden API, not a formation-only checkbox): new nodes and existing DAO nodes both use the same update flow. Activation is **metadata-only** — it verifies the token + DAO contracts **exist on-chain (bytecode present)** and records `emissions_holder = the DAO contract` (the minter); it **never checks token balance and never moves tokens**, because nothing is pre-minted.
 - Crawl budget policy remains off-chain accounting and governance policy. It is not the hard security boundary for token release.
 - In Walk, the source of truth for remaining supply is `emissionsHolder.balanceOf(token)` on-chain, not Postgres. Off-chain `remaining` becomes a reconciliation check.
 - Walk uses OSS primitives: OpenZeppelin Merkle Tree tooling for manifest/proof generation and a stock audited per-epoch distributor such as Uniswap MerkleDistributor for claims. Bespoke on-chain release or mint-on-claim contracts are out of scope unless a separate contract-selection spike proves they are required.

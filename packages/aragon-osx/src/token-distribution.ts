@@ -101,6 +101,29 @@ export function parseDaoTokenSupplyUnits(wholeTokens: number): bigint {
   return BigInt(wholeTokens) * TOKEN_BASE_UNITS;
 }
 
+/**
+ * Convert a GENESIS MINT amount (whole tokens) to base units.
+ *
+ * Distinct from {@link parseDaoTokenSupplyUnits}: the genesis mint is NOT the
+ * policy supply, so the policy-supply floor (`DAO_TOKEN_SUPPLY_MIN_WHOLE`, 1000)
+ * does NOT apply. The "solo_one_token" template mints exactly 1 token as a
+ * formation probe — a legitimate mint that `parseDaoTokenSupplyUnits` wrongly
+ * rejected (RangeError in the Create-DAO click). The genesis amount is already
+ * bounded by `resolveDaoTokenomics` (> 0 and <= policy supply); here we only
+ * require a positive safe integer not exceeding the absolute supply ceiling.
+ */
+export function parseDaoGenesisMintUnits(wholeTokens: number): bigint {
+  if (!Number.isSafeInteger(wholeTokens) || wholeTokens < 1) {
+    throw new RangeError("DAO genesis mint must be a positive whole number");
+  }
+  if (wholeTokens > DAO_TOKEN_SUPPLY_MAX_WHOLE) {
+    throw new RangeError(
+      `DAO genesis mint cannot exceed ${DAO_TOKEN_SUPPLY_MAX_WHOLE} whole tokens`
+    );
+  }
+  return BigInt(wholeTokens) * TOKEN_BASE_UNITS;
+}
+
 export function buildDaoTokenMerkleDistribution(
   input: DaoTokenMerkleDistributionInput
 ): DaoTokenMerkleDistribution {

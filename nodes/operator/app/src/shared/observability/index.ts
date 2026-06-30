@@ -21,6 +21,9 @@ export const EVENT_NAMES = {
   NODE_SECRET_WRITE_COMPLETE: "feature.node_secret_write.complete",
   NODE_PREVIEW_PROMOTE_COMPLETE: "feature.node_preview_promote.complete",
   NODE_SCHEDULES_SYNC_COMPLETE: "feature.node_schedules_sync.complete",
+  NODE_DISTRIBUTION_ACTIVATION_COMPLETE:
+    "feature.node_distribution_activation.complete",
+  NODE_DAO_RESET_COMPLETE: "feature.node_dao_reset.complete",
   // defineScheduledJob dispatcher: one cron fire of a registered scheduled job.
   SCHEDULED_JOB_DISPATCH_RECEIVED: "feature.scheduled_job.dispatch_received",
   SCHEDULED_JOB_DISPATCH_COMPLETE: "feature.scheduled_job.dispatch_complete",

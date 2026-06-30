@@ -46,7 +46,10 @@ import {
   protectionGetToPutPayload,
   rulesetGetToPutPayload,
 } from "@/adapters/server/vcs/github-repo-write";
-import { renderPaymentsActivationSpec } from "@/shared/node-app-scaffold/gens";
+import {
+  renderDistributionActivationSpec,
+  renderPaymentsActivationSpec,
+} from "@/shared/node-app-scaffold/gens";
 
 function statusError(
   status: number,
@@ -255,6 +258,23 @@ cogni_dao:
   dao_contract: "0xDA0"
   chain_id: "8453"
 payments:
+  status: pending_activation
+`;
+
+const DISTRIBUTION_PENDING_SPEC = `schema_version: "0.1.4"
+node_id: "abc"
+scope_id: "def"
+scope_key: "default"
+intent:
+  name: test-cog
+  mission: "test distributions"
+governance:
+  dao_contract: "0x1111111111111111111111111111111111111111"
+  plugin_contract: "0x2222222222222222222222222222222222222222"
+  signal_contract: "0x3333333333333333333333333333333333333333"
+  token_contract: "0x4444444444444444444444444444444444444444"
+  chain_id: "8453"
+distributions:
   status: pending_activation
 `;
 
@@ -473,6 +493,193 @@ node_wallet:
       "GET /repos/{owner}/{repo}/contents/{path}",
       "GET /repos/{owner}/{repo}/pulls",
       "GET /repos/{owner}/{repo}/contents/{path}",
+      "PATCH /repos/{owner}/{repo}/pulls/{pull_number}",
+    ]);
+  });
+});
+
+describe("GitHubRepoWriter.openDistributionActivationPr", () => {
+  it("returns no_changes when main already has active distribution config", async () => {
+    const tokenAddress = "0x4444444444444444444444444444444444444444";
+    const emissionsHolderAddress = "0x5555555555555555555555555555555555555555";
+    const activeSpec = renderDistributionActivationSpec(
+      DISTRIBUTION_PENDING_SPEC,
+      {
+        tokenAddress,
+        emissionsHolderAddress,
+      }
+    );
+    const encode = (content: string) =>
+      Buffer.from(content, "utf-8").toString("base64");
+
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": (params) => {
+        expect(params).toMatchObject({
+          owner: "cogni-test-org",
+          repo: "test-cog",
+          path: ".cogni/repo-spec.yaml",
+          ref: "main",
+        });
+        return {
+          type: "file",
+          encoding: "base64",
+          content: encode(activeSpec),
+          sha: "repo-spec-sha",
+        };
+      },
+    };
+
+    await expect(
+      makeWriter().openDistributionActivationPr({
+        owner: "cogni-test-org",
+        repo: "test-cog",
+        slug: "test-cog",
+        tokenAddress,
+        emissionsHolderAddress,
+      })
+    ).resolves.toEqual({ status: "no_changes" });
+
+    expect(requests.map((request) => request.route)).toEqual([
+      "GET /repos/{owner}/{repo}/contents/{path}",
+    ]);
+  });
+
+  it("opens a one-file activation PR from a pending repo-spec", async () => {
+    const tokenAddress = "0x4444444444444444444444444444444444444444";
+    const emissionsHolderAddress = "0x5555555555555555555555555555555555555555";
+    const branch = "cogni-operator/activate-distributions-test-cog";
+    const desiredSpec = renderDistributionActivationSpec(
+      DISTRIBUTION_PENDING_SPEC,
+      {
+        tokenAddress,
+        emissionsHolderAddress,
+      }
+    );
+    const encode = (content: string) =>
+      Buffer.from(content, "utf-8").toString("base64");
+
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": (params) => {
+        expect(params).toMatchObject({
+          owner: "cogni-test-org",
+          repo: "test-cog",
+          path: ".cogni/repo-spec.yaml",
+        });
+        return {
+          type: "file",
+          encoding: "base64",
+          content: encode(DISTRIBUTION_PENDING_SPEC),
+          sha: "repo-spec-sha",
+        };
+      },
+      "GET /repos/{owner}/{repo}/pulls": () => [],
+      "GET /repos/{owner}/{repo}/git/ref/{ref}": (params) => {
+        expect(params).toMatchObject({
+          owner: "cogni-test-org",
+          repo: "test-cog",
+          ref: "heads/main",
+        });
+        return { object: { sha: "main-sha" } };
+      },
+      "GET /repos/{owner}/{repo}/git/commits/{commit_sha}": (params) => {
+        expect(params).toMatchObject({
+          owner: "cogni-test-org",
+          repo: "test-cog",
+          commit_sha: "main-sha",
+        });
+        return { tree: { sha: "main-tree" } };
+      },
+      "POST /repos/{owner}/{repo}/git/blobs": (params) => {
+        const content = Buffer.from(String(params.content), "base64").toString(
+          "utf-8"
+        );
+        expect(content).toBe(desiredSpec);
+        return { sha: "repo-spec-blob" };
+      },
+      "POST /repos/{owner}/{repo}/git/trees": (params) => {
+        expect(params).toMatchObject({
+          owner: "cogni-test-org",
+          repo: "test-cog",
+          base_tree: "main-tree",
+        });
+        expect(params.tree).toEqual([
+          {
+            path: ".cogni/repo-spec.yaml",
+            mode: "100644",
+            type: "blob",
+            sha: "repo-spec-blob",
+          },
+        ]);
+        return { sha: "activation-tree" };
+      },
+      "POST /repos/{owner}/{repo}/git/commits": (params) => {
+        expect(params).toMatchObject({
+          owner: "cogni-test-org",
+          repo: "test-cog",
+          message: "feat(distributions): activate test-cog token distributions",
+          tree: "activation-tree",
+          parents: ["main-sha"],
+        });
+        return { sha: "activation-commit" };
+      },
+      "POST /repos/{owner}/{repo}/git/refs": (params) => {
+        expect(params).toMatchObject({
+          owner: "cogni-test-org",
+          repo: "test-cog",
+          ref: `refs/heads/${branch}`,
+          sha: "activation-commit",
+        });
+        return {};
+      },
+      "POST /repos/{owner}/{repo}/pulls": (params) => {
+        expect(params).toMatchObject({
+          owner: "cogni-test-org",
+          repo: "test-cog",
+          title: "feat(distributions): activate test-cog token distributions",
+          head: branch,
+          base: "main",
+        });
+        return {
+          number: 22,
+          html_url: "https://github.com/cogni-test-org/test-cog/pull/22",
+        };
+      },
+      "PATCH /repos/{owner}/{repo}/pulls/{pull_number}": (params) => {
+        expect(params).toMatchObject({
+          owner: "cogni-test-org",
+          repo: "test-cog",
+          pull_number: 22,
+          title: "feat(distributions): activate test-cog token distributions",
+        });
+        return {};
+      },
+    };
+
+    await expect(
+      makeWriter().openDistributionActivationPr({
+        owner: "cogni-test-org",
+        repo: "test-cog",
+        slug: "test-cog",
+        tokenAddress,
+        emissionsHolderAddress,
+      })
+    ).resolves.toEqual({
+      status: "pr_opened",
+      prNumber: 22,
+      prUrl: "https://github.com/cogni-test-org/test-cog/pull/22",
+    });
+
+    expect(requests.map((request) => request.route)).toEqual([
+      "GET /repos/{owner}/{repo}/contents/{path}",
+      "GET /repos/{owner}/{repo}/pulls",
+      "GET /repos/{owner}/{repo}/pulls",
+      "GET /repos/{owner}/{repo}/git/ref/{ref}",
+      "GET /repos/{owner}/{repo}/git/commits/{commit_sha}",
+      "POST /repos/{owner}/{repo}/git/blobs",
+      "POST /repos/{owner}/{repo}/git/trees",
+      "POST /repos/{owner}/{repo}/git/commits",
+      "POST /repos/{owner}/{repo}/git/refs",
+      "POST /repos/{owner}/{repo}/pulls",
       "PATCH /repos/{owner}/{repo}/pulls/{pull_number}",
     ]);
   });

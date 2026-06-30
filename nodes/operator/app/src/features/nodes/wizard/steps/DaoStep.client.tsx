@@ -24,6 +24,7 @@ import {
   DAO_TOKENOMICS_TEMPLATES,
   type DaoTokenomicsTemplateId,
   DEFAULT_DAO_TOKENOMICS_TEMPLATE_ID,
+  parseDaoGenesisMintUnits,
   parseDaoTokenSupplyUnits,
   resolveDaoTokenomics,
 } from "@cogni/aragon-osx";
@@ -185,17 +186,29 @@ export function DaoStep({ node }: WizardStepProps): ReactElement {
       resetFormation();
     }
     if (!resolvedTokenomics) return;
-    formation.startFormation({
-      nodeId: node.id,
-      tokenName,
-      tokenSymbol,
-      tokenomicsTemplateId,
-      policySupplyUnits: parseDaoTokenSupplyUnits(tokenPolicySupply),
-      genesisMintUnits: parseDaoTokenSupplyUnits(
-        resolvedTokenomics.genesisMintWholeTokens
-      ),
-      initialHolder: effectiveHolder as `0x${string}`,
-    });
+    try {
+      formation.startFormation({
+        nodeId: node.id,
+        tokenName,
+        tokenSymbol,
+        tokenomicsTemplateId,
+        // Policy supply uses the supply parser (1000-token floor); the genesis
+        // MINT amount uses its own parser — the "solo_one_token" template mints
+        // exactly 1 token, which the supply floor wrongly rejected.
+        policySupplyUnits: parseDaoTokenSupplyUnits(tokenPolicySupply),
+        genesisMintUnits: parseDaoGenesisMintUnits(
+          resolvedTokenomics.genesisMintWholeTokens
+        ),
+        initialHolder: effectiveHolder as `0x${string}`,
+      });
+    } catch (err) {
+      // Never let a config/parse error become an uncaught onClick throw —
+      // surface it in the wizard instead (client logs are console-only per the
+      // observability spec; the visible error is the user-facing signal).
+      setPatchError(
+        err instanceof Error ? err.message : "Could not start DAO formation"
+      );
+    }
   };
 
   // On success: persist the verified result, stop wagmi receipt polling, then

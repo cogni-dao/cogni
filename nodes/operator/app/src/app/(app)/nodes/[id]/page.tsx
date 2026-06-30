@@ -28,9 +28,11 @@ import {
 import { PageContainer } from "@/components";
 import { NodeAccess } from "@/features/nodes/access/NodeAccess";
 import { listAccessRequests } from "@/features/nodes/access-requests";
+import { DistributionsCard } from "@/features/nodes/DistributionsCard.client";
 import { NodeDeployments } from "@/features/nodes/deployments/NodeDeployments";
 import { FLIGHT_ENVS } from "@/features/nodes/flight-status";
 import { nodeRepoUrlForSlug } from "@/features/nodes/launch-pack";
+import { ResetDaoDangerZone } from "@/features/nodes/ResetDaoDangerZone.client";
 import { NodeWizard } from "@/features/nodes/wizard/NodeWizard.client";
 import type { WizardNode } from "@/features/nodes/wizard/types";
 import { getServerSessionUser } from "@/lib/auth/server";
@@ -199,6 +201,24 @@ export default async function NodeDashboardPage({
 
       {showDevelopers ? (
         <NodeAccess nodeId={node.id} requests={accessRequests} />
+      ) : null}
+
+      {/* Visible, owner-driven distribution activation — NOT a hidden API. The page query already
+          scopes to the owner, so reaching this page IS the owner gate. Surface it only when there
+          is a DAO and the node is far enough along to activate (mirrors the route's status gate). */}
+      {node.daoAddress != null && showDevelopers ? (
+        <DistributionsCard
+          nodeId={node.id}
+          slug={node.slug}
+          repoSpecUrl={repoSpecUrl}
+        />
+      ) : null}
+
+      {/* Owner-only destructive control. The page query already scopes to the owner
+          (eq(nodes.ownerUserId, session.id)), so reaching this page IS the owner gate.
+          Only surface it when there is actually a DAO to reset (mirrors the route's 409). */}
+      {node.daoAddress != null || status !== "dao_pending" ? (
+        <ResetDaoDangerZone nodeId={node.id} slug={node.slug} />
       ) : null}
     </PageContainer>
   );
