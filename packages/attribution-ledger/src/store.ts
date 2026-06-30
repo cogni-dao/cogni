@@ -379,6 +379,102 @@ export interface InsertReceiptClaimantsParams {
 }
 
 // ---------------------------------------------------------------------------
+// Distribution manifest types (DAO token merkle claim persistence)
+// ---------------------------------------------------------------------------
+
+/**
+ * A single persisted merkle leaf + proof for one claimant account.
+ * Mirrors the claim-relevant subset of `DaoTokenMerkleLeaf` from
+ * `@cogni/aragon-osx/token-distribution` — index, account, amount, proof.
+ */
+export interface DistributionLeafRecord {
+  readonly index: number;
+  readonly claimantKey: string;
+  readonly account: string;
+  readonly amount: bigint;
+  readonly leafHash: string;
+  readonly proof: readonly string[];
+}
+
+/**
+ * Persisted `DaoTokenMerkleDistribution` header — the manifest minus the leaves.
+ * `distributorAddress` is null until the on-chain MerkleDistributor is deployed.
+ */
+export interface DistributionManifestRecord {
+  readonly id: string;
+  readonly nodeId: string;
+  readonly scopeId: string;
+  readonly epochId: bigint;
+  readonly distributionId: string;
+  readonly statementHash: string;
+  readonly merkleRoot: string;
+  readonly chainId: number;
+  readonly tokenAddress: string;
+  readonly distributionAmount: bigint;
+  readonly totalAllocated: bigint;
+  readonly distributorAddress: string | null;
+  readonly createdAt: Date;
+  readonly updatedAt: Date;
+}
+
+/** A single claimant's leaf joined with its manifest's claim parameters. */
+export interface DistributionClaimRecord {
+  readonly epochId: bigint;
+  readonly merkleRoot: string;
+  readonly distributorAddress: string | null;
+  readonly chainId: number;
+  readonly tokenAddress: string;
+  readonly leaf: DistributionLeafRecord;
+}
+
+export interface InsertDistributionManifestParams {
+  readonly nodeId: string;
+  readonly scopeId: string;
+  readonly epochId: bigint;
+  readonly distributionId: string;
+  readonly statementHash: string;
+  readonly merkleRoot: string;
+  readonly chainId: number;
+  readonly tokenAddress: string;
+  readonly distributionAmount: bigint;
+  readonly totalAllocated: bigint;
+  readonly distributorAddress?: string | null;
+  readonly leaves: readonly DistributionLeafRecord[];
+}
+
+/**
+ * Persistence + read surface for the DAO token merkle distribution manifest.
+ * Write the manifest (header + leaves) and read one claimant's leaf+proof.
+ * DISTRIBUTION_READ_WRITE_ONLY: this store only persists and serves the
+ * manifest — it never builds the merkle tree (that is the distribution service).
+ */
+export interface DistributionManifestStore {
+  /**
+   * Upsert a manifest + its leaves atomically (ON CONFLICT on the
+   * (node_id, scope_id, epoch_id) unique key — replaces existing leaves).
+   * Returns the persisted manifest header.
+   */
+  upsertDistributionManifest(
+    params: InsertDistributionManifestParams
+  ): Promise<DistributionManifestRecord>;
+
+  /** Read the manifest header for an epoch (null if none persisted). */
+  getDistributionManifestForEpoch(
+    epochId: bigint
+  ): Promise<DistributionManifestRecord | null>;
+
+  /**
+   * Read one claimant's leaf + proof for an epoch, by account address
+   * (case-insensitive). Returns null if the epoch has no manifest or the
+   * account has no leaf in it.
+   */
+  getDistributionClaimForAccount(
+    epochId: bigint,
+    account: string
+  ): Promise<DistributionClaimRecord | null>;
+}
+
+// ---------------------------------------------------------------------------
 // Identity resolution types
 // ---------------------------------------------------------------------------
 
@@ -712,4 +808,5 @@ export interface AttributionStore
     StatementStore,
     OverrideStore,
     FinalAllocationStore,
+    DistributionManifestStore,
     IdentityResolver {}

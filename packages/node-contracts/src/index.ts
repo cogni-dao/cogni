@@ -37,6 +37,7 @@ export * from "./analytics.summary.v1.contract";
 export * from "./attribution.collect-trigger.v1.contract";
 export * from "./attribution.epoch-activity.v1.contract";
 export * from "./attribution.epoch-claimants.v1.contract";
+export * from "./attribution.epoch-distribution.v1.contract";
 export * from "./attribution.epoch-statement.v1.contract";
 export * from "./attribution.epoch-user-projections.v1.contract";
 export * from "./attribution.finalize-epoch.v1.contract";

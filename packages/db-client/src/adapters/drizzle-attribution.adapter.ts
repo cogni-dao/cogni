@@ -34,10 +34,14 @@ import type {
   AttributionStatementSignature,
   AttributionStore,
   CloseIngestionWithEvaluationsParams,
+  DistributionClaimRecord,
+  DistributionLeafRecord,
+  DistributionManifestRecord,
   EpochUserProjection,
   FinalClaimantAllocationRecord,
   IngestionCursor,
   IngestionReceipt,
+  InsertDistributionManifestParams,
   InsertFinalClaimantAllocationParams,
   InsertPoolComponentParams,
   InsertReceiptClaimantsParams,
@@ -66,6 +70,8 @@ import {
   type EpochStatus,
 } from "@cogni/attribution-ledger";
 import {
+  epochDistributionLeaves,
+  epochDistributionManifests,
   epochEvaluations,
   epochFinalClaimantAllocations,
   epochPoolComponents,
@@ -228,6 +234,40 @@ function toStatement(
     reviewOverrides: row.reviewOverridesJson ?? null,
     supersedesStatementId: row.supersedesStatementId,
     createdAt: row.createdAt,
+  };
+}
+
+function toDistributionManifest(
+  row: typeof epochDistributionManifests.$inferSelect
+): DistributionManifestRecord {
+  return {
+    id: row.id,
+    nodeId: row.nodeId,
+    scopeId: row.scopeId,
+    epochId: row.epochId,
+    distributionId: row.distributionId,
+    statementHash: row.statementHash,
+    merkleRoot: row.merkleRoot,
+    chainId: Number(row.chainId),
+    tokenAddress: row.tokenAddress,
+    distributionAmount: row.distributionAmount,
+    totalAllocated: row.totalAllocated,
+    distributorAddress: row.distributorAddress,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+function toDistributionLeaf(
+  row: typeof epochDistributionLeaves.$inferSelect
+): DistributionLeafRecord {
+  return {
+    index: row.leafIndex,
+    claimantKey: row.claimantKey,
+    account: row.account,
+    amount: row.amount,
+    leafHash: row.leafHash,
+    proof: row.proofJson,
   };
 }
 
@@ -1334,6 +1374,130 @@ export class DrizzleAttributionAdapter implements AttributionStore {
       .where(eq(epochStatements.epochId, epochId))
       .limit(1);
     return rows[0] ? toStatement(rows[0]) : null;
+  }
+
+  // ── Distribution manifest ─────────────────────────────────
+
+  /**
+   * Upsert the merkle distribution manifest + its leaves for an epoch.
+   * Atomic: replaces the manifest header and all leaf rows in one transaction
+   * (idempotent re-runs overwrite). Scope-gated via the epoch.
+   * DISTRIBUTION_READ_WRITE_ONLY: persists a prebuilt manifest; never builds the tree.
+   */
+  async upsertDistributionManifest(
+    params: InsertDistributionManifestParams
+  ): Promise<DistributionManifestRecord> {
+    await this.resolveEpochScoped(params.epochId);
+    return await this.db.transaction(async (tx) => {
+      const [manifest] = await tx
+        .insert(epochDistributionManifests)
+        .values({
+          nodeId: params.nodeId,
+          scopeId: params.scopeId,
+          epochId: params.epochId,
+          distributionId: params.distributionId,
+          statementHash: params.statementHash,
+          merkleRoot: params.merkleRoot,
+          chainId: BigInt(params.chainId),
+          tokenAddress: params.tokenAddress,
+          distributionAmount: params.distributionAmount,
+          totalAllocated: params.totalAllocated,
+          distributorAddress: params.distributorAddress ?? null,
+          updatedAt: new Date(),
+        })
+        .onConflictDoUpdate({
+          target: [
+            epochDistributionManifests.nodeId,
+            epochDistributionManifests.scopeId,
+            epochDistributionManifests.epochId,
+          ],
+          set: {
+            distributionId: params.distributionId,
+            statementHash: params.statementHash,
+            merkleRoot: params.merkleRoot,
+            chainId: BigInt(params.chainId),
+            tokenAddress: params.tokenAddress,
+            distributionAmount: params.distributionAmount,
+            totalAllocated: params.totalAllocated,
+            distributorAddress: params.distributorAddress ?? null,
+            updatedAt: new Date(),
+          },
+        })
+        .returning();
+      if (!manifest) {
+        throw new Error("upsertDistributionManifest: UPSERT returned no rows");
+      }
+
+      // Replace leaves wholesale — manifest is the unit of idempotency.
+      await tx
+        .delete(epochDistributionLeaves)
+        .where(eq(epochDistributionLeaves.manifestId, manifest.id));
+
+      if (params.leaves.length > 0) {
+        await tx.insert(epochDistributionLeaves).values(
+          params.leaves.map((leaf) => ({
+            nodeId: params.nodeId,
+            manifestId: manifest.id,
+            epochId: params.epochId,
+            leafIndex: leaf.index,
+            claimantKey: leaf.claimantKey,
+            account: leaf.account,
+            accountLower: leaf.account.toLowerCase(),
+            amount: leaf.amount,
+            leafHash: leaf.leafHash,
+            proofJson: [...leaf.proof],
+          }))
+        );
+      }
+
+      return toDistributionManifest(manifest);
+    });
+  }
+
+  async getDistributionManifestForEpoch(
+    epochId: bigint
+  ): Promise<DistributionManifestRecord | null> {
+    await this.resolveEpochScoped(epochId);
+    const rows = await this.db
+      .select()
+      .from(epochDistributionManifests)
+      .where(eq(epochDistributionManifests.epochId, epochId))
+      .limit(1);
+    return rows[0] ? toDistributionManifest(rows[0]) : null;
+  }
+
+  async getDistributionClaimForAccount(
+    epochId: bigint,
+    account: string
+  ): Promise<DistributionClaimRecord | null> {
+    await this.resolveEpochScoped(epochId);
+    const [manifestRow] = await this.db
+      .select()
+      .from(epochDistributionManifests)
+      .where(eq(epochDistributionManifests.epochId, epochId))
+      .limit(1);
+    if (!manifestRow) return null;
+
+    const [leafRow] = await this.db
+      .select()
+      .from(epochDistributionLeaves)
+      .where(
+        and(
+          eq(epochDistributionLeaves.manifestId, manifestRow.id),
+          eq(epochDistributionLeaves.accountLower, account.toLowerCase())
+        )
+      )
+      .limit(1);
+    if (!leafRow) return null;
+
+    return {
+      epochId: manifestRow.epochId,
+      merkleRoot: manifestRow.merkleRoot,
+      distributorAddress: manifestRow.distributorAddress,
+      chainId: Number(manifestRow.chainId),
+      tokenAddress: manifestRow.tokenAddress,
+      leaf: toDistributionLeaf(leafRow),
+    };
   }
 
   // ── Atomic finalize ────────────────────────────────────────

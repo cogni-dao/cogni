@@ -34,7 +34,8 @@ Public (unauthenticated) HTTP endpoints for finalized attribution data. Exposes 
   - `GET /api/v1/public/attribution/epochs/[id]/user-projections` — user projections for a finalized epoch
   - `GET /api/v1/public/attribution/epochs/[id]/claimants` — claimant-aware finalized attribution for a finalized epoch
   - `GET /api/v1/public/attribution/epochs/[id]/statement` — payout statement (null if none)
-- **Files considered API:** `epochs/route.ts`, `epochs/[id]/user-projections/route.ts`, `epochs/[id]/claimants/route.ts`, `epochs/[id]/statement/route.ts`
+  - `GET /api/v1/public/attribution/epochs/[id]/distribution?account=0x…` — one claimant's DAO token merkle claim (leaf + proof); 404 if no leaf
+- **Files considered API:** `epochs/route.ts`, `epochs/[id]/user-projections/route.ts`, `epochs/[id]/claimants/route.ts`, `epochs/[id]/statement/route.ts`, `epochs/[id]/distribution/route.ts`
 
 ## Ports
 
@@ -53,6 +54,7 @@ curl http://localhost:3000/api/v1/public/attribution/epochs
 curl http://localhost:3000/api/v1/public/attribution/epochs/1/user-projections
 curl http://localhost:3000/api/v1/public/attribution/epochs/1/claimants
 curl http://localhost:3000/api/v1/public/attribution/epochs/1/statement
+curl "http://localhost:3000/api/v1/public/attribution/epochs/1/distribution?account=0xabc..."
 ```
 
 ## Standards
