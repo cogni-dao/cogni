@@ -15,7 +15,6 @@
  */
 
 import { NextResponse } from "next/server";
-import { repoFullName } from "@/adapters/server/ingestion/github-webhook";
 import { dispatchCanonicalForkSync } from "@/app/_facades/deploy/canonical-fork-sync.server";
 import { dispatchNodePreviewPromote } from "@/app/_facades/deploy/node-preview-promote.server";
 import { dispatchPrReview } from "@/app/_facades/review/dispatch.server";
@@ -88,11 +87,13 @@ export async function resolveTargetNode(
 
   let repo: string | null = null;
   try {
-    const payload = JSON.parse(body.toString("utf-8")) as Record<
-      string,
-      unknown
-    >;
-    repo = repoFullName(payload);
+    const payload = JSON.parse(body.toString("utf-8")) as {
+      repository?: { full_name?: string };
+    };
+    // Read the routing key straight off the verified-by-secret webhook payload (the route already
+    // parses the body for its dispatches). Avoids importing the ingestion adapter into the app layer
+    // (no-restricted-imports); the adapter still owns normalization for the receipt itself.
+    repo = payload.repository?.full_name ?? null;
   } catch {
     // Malformed body: receiveWebhook re-parses and raises WebhookPayloadParseError.
     // Stay fail-safe on the operator ledger here.

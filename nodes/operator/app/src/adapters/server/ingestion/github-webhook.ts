@@ -50,12 +50,7 @@ function extractActor(
   return { id: String(typed.id), login: typed.login };
 }
 
-/**
- * Extract the GitHub `repository.full_name` ("owner/name", raw GitHub casing) from a webhook payload.
- * Exported so the webhook route can resolve the OWNING node for ingestion-receipt routing without
- * re-walking the payload (REUSE over re-extract). Returns null when the payload carries no repository.
- */
-export function repoFullName(payload: Record<string, unknown>): string | null {
+function repoFullName(payload: Record<string, unknown>): string | null {
   const repo = payload.repository as Record<string, unknown> | undefined;
   return (repo?.full_name as string) ?? null;
 }
