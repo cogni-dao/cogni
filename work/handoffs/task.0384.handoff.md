@@ -29,7 +29,7 @@ last_commit: "218903946"
 
 ## Decisions Made
 
-- No Postgres lease table — the `candidate-slot-controller.md` spec owns the lease on the deploy branch; a parallel DB lease would create split-brain. See `docs/spec/candidate-slot-controller-v0.md` and the work item Design section.
+- No Postgres lease table — the deploy branch owns the lease (the per-`(env, node)` branch head IS the lease, `ci-cd.md` Axiom 18 `BRANCH_HEAD_IS_LEASE`); a parallel DB lease would create split-brain. See `docs/spec/ci-cd.md` Axiom 18 and the work item Design section.
 - No post-dispatch GitHub run ID polling — GitHub returns 204 with no body. Agent observes the resulting check via `getCiStatus`. See [work item](../items/task.0370.vcs-flight-endpoint.md#approach).
 - CI gate checks `allGreen && !pending` for the exact PR head SHA, not the base branch.
 - `/.well-known/agent.json` now has `"flight"` key instead of `"contribute"`.

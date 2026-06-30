@@ -48,7 +48,7 @@ promoter  → can_promote_production  (production)      [node.promote_production
 - `docs/spec/legacy-cicd-to-remove.md` — North Star: **one artifact contract, one promotion primitive.**
 - `docs/spec/ci-cd.md` — 22 axioms (4 build-once-promote-digest, 6 Argo-owns-reconciliation, 16 CATALOG_IS_SSOT, 22 substrate-reconciled-before-promote).
 - `docs/spec/node-submodule-retirement.md` (#1647) — the pin is now **catalog `source_sha`** (`CATALOG_SOURCE_SHA_IS_THE_DEPLOY_PIN`), not a gitlink.
-- `docs/spec/merge-authority.md` (#1640) — operator-as-merge-authority + capacity gate (the preview-promote trigger home).
+- `docs/spec/development-lifecycle.md` §8 — Operator Merge Authority (#1640) — operator-as-merge-authority + capacity gate (the preview-promote trigger home). [merged into development-lifecycle.md; was `docs/spec/merge-authority.md`]
 - `docs/design/operator-managed-deployments.md` — human-simple SEE/DEPLOY/REMOVE (needs port correction, below).
 
 **Guides:** `docs/guides/agent-api-validation.md` · `docs/guides/candidate-flight-v0.md`.
