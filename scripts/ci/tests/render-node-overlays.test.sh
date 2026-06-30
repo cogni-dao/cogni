@@ -14,6 +14,10 @@
 #      red. Without this, the gate could be a no-op.
 #   5. Fail-closed: a node-template overlay missing the node-at-root migrate command
 #      aborts the render instead of emitting a silently-crash-looping overlay.
+#   6. Declarative decommission (story.5020 W3): a renderer-owned overlay dir whose
+#      catalog row has left turns --check red, and --write prunes it — while the
+#      hand-authored (operator/node-template/scheduler-worker) overlays are never
+#      touched. Without this, a decommissioned node leaks orphan overlay config.
 #
 # Run: bash scripts/ci/tests/render-node-overlays.test.sh
 set -euo pipefail
@@ -90,5 +94,46 @@ if bash "$RENDER" candidate-a oss >/dev/null 2>&1; then
 fi
 pass "render aborts fail-closed when the migrate command is absent"
 restore; BACKUPS=()
+
+echo "[6/6] declarative decommission: orphan overlay dir → --check red, --write prunes it"
+# Pick a disposable wizard-born node and simulate its catalog row leaving by
+# moving the catalog yaml aside. Its committed overlay dirs become orphans.
+# Restore the catalog row AND any pruned overlay dirs from git afterward so the
+# tree is left pristine regardless of assertion outcome.
+DISPOSABLE="games"
+DCAT="infra/catalog/$DISPOSABLE.yaml"
+[ -f "$DCAT" ] || fail "test fixture: $DCAT not found (pick another disposable wizard node)"
+DTMP="$(mktemp)"
+decommission_restore() {
+  [ -f "$DCAT" ] || { [ -f "$DTMP" ] && mv "$DTMP" "$DCAT"; }
+  # Any overlay dirs --write pruned (or catalog yaml) come back from the index.
+  git checkout -q -- "$DCAT" infra/k8s/overlays 2>/dev/null || true
+}
+trap 'decommission_restore; restore' EXIT
+cp "$DCAT" "$DTMP"
+mv "$DCAT" "$DCAT.decommissioned"  # row leaves the catalog
+# Sub-assertion a: orphan overlay dirs make --check red (drift gate catches it).
+if bash "$RENDER" --check >/dev/null 2>&1; then
+  mv "$DCAT.decommissioned" "$DCAT"
+  fail "--check passed with orphan overlay dirs for a decommissioned node — prune gate is a no-op"
+fi
+# Sub-assertion b: --write prunes the orphan dirs and leaves protected dirs intact.
+bash "$RENDER" --write >/dev/null
+mv "$DCAT.decommissioned" "$DCAT"  # the row never really left; this was a sim
+for env in candidate-a preview production; do
+  [ ! -d "infra/k8s/overlays/$env/$DISPOSABLE" ] \
+    || fail "--write did not prune the orphan overlay dir infra/k8s/overlays/$env/$DISPOSABLE"
+done
+for prot in operator node-template scheduler-worker; do
+  [ -d "infra/k8s/overlays/candidate-a/$prot" ] \
+    || fail "--write WRONGLY pruned the protected hand-authored overlay $prot"
+done
+pass "orphan overlay dirs are flagged by --check and pruned by --write; protected overlays untouched"
+# Restore the catalog yaml + pruned overlay dirs from git so the tree is pristine.
+decommission_restore
+bash "$RENDER" --check >/dev/null \
+  || fail "tree not pristine after decommission test (restore failed)"
+trap restore EXIT
+pass "tree restored pristine after decommission test"
 
 echo "PASS: render-node-overlays.test.sh"

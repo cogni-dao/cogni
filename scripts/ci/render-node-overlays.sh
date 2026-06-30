@@ -28,9 +28,16 @@
 #   image layout) EXCEPT node-template itself (the template). Monorepo nodes
 #   (operator/resy/canary) have hand-authored overlays and no source_repo.
 #
+# Declarative decommission (story.5020 W3): --write also PRUNES the overlay dir of
+#   any node that has left the catalog (or dropped source_repo), and --check fails on
+#   such an orphan — so a decommissioned node leaves no dead overlay config behind.
+#   Twin of render-node-appset.sh's per-env prune. Only renderer-owned overlays are
+#   touched; the hand-authored operator/node-template/scheduler-worker overlays are
+#   protected (derived from the catalog, never hardcoded).
+#
 # Usage: render-node-overlays.sh <env> <node>   # emit one overlay to stdout
-#        render-node-overlays.sh --write         # (re)write all wizard-born overlays
-#        render-node-overlays.sh --check          # fail if any committed overlay is stale
+#        render-node-overlays.sh --write         # (re)write wizard-born overlays + prune orphans
+#        render-node-overlays.sh --check          # fail if any committed overlay is stale or orphaned
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -55,6 +62,28 @@ wizard_nodes() {
     [ "$name" != "$TEMPLATE_SLUG" ] || continue
     printf '%s\n' "$name"
   done | LC_ALL=C sort
+}
+
+# Overlay dirs under overlays/<env>/ the renderer must NEVER prune: the
+# node-template template itself, plus the hand-authored monorepo overlays
+# (operator, scheduler-worker, …) — deployable catalog rows that carry a
+# `candidate_a_branch` but NO `source_repo`. Derived from the catalog (not a
+# hardcoded list) so a new monorepo node can't be mistaken for a stale orphan
+# and pruned. Anything under overlays/<env>/ outside this set AND outside the
+# current wizard-born set is a renderer-owned orphan (its catalog row left), so
+# it is safe to prune — mirroring render-node-appset.sh's per-env prune loop.
+protected_overlay_dirs() {
+  local f name src cab
+  printf '%s\n' "$TEMPLATE_SLUG"
+  for f in "$CATALOG_DIR"/*.yaml; do
+    [ -e "$f" ] || continue
+    src="$(yq -r '.source_repo // ""' "$f")"
+    [ -z "$src" ] || continue            # source_repo ⇒ wizard-born, not protected
+    cab="$(yq -r '.candidate_a_branch // ""' "$f")"
+    [ -n "$cab" ] || continue            # no candidate_a_branch ⇒ not a deployable overlay
+    name="$(yq -r '.name' "$f")"
+    printf '%s\n' "$name"
+  done | LC_ALL=C sort -u
 }
 
 node_field() { yq -r ".$2 // \"\"" "$CATALOG_DIR/$1.yaml"; }
@@ -91,23 +120,45 @@ render_one() {
 }
 
 write() {
-  local env node count=0 tmp
+  local env node count=0 pruned=0 tmp expected protected envdir d base
+  protected="$(protected_overlay_dirs)"
   for env in "${ENVS[@]}"; do
+    expected=""
     for node in $(wizard_nodes); do
       tmp="$(mktemp)"
       render_one "$env" "$node" > "$tmp"
       mkdir -p "$(dirname "$(overlay_path "$env" "$node")")"
       mv "$tmp" "$(overlay_path "$env" "$node")"
+      expected="$expected$node"$'\n'
       count=$((count + 1))
     done
+    # Prune renderer-owned overlay dirs a node no longer claims (its catalog row
+    # left, or dropped source_repo) so `pnpm gen:node-overlays` is self-healing
+    # and a decommissioned node leaves no orphan overlay config behind. Only
+    # touch dirs OUTSIDE the protected (hand-authored / template) set — never the
+    # operator/node-template/scheduler-worker overlays. Twin of the appset
+    # renderer's per-env prune loop.
+    envdir="$OVERLAYS_DIR/$env"
+    [ -d "$envdir" ] || continue
+    for d in "$envdir"/*/; do
+      [ -d "$d" ] || continue
+      base="$(basename "$d")"
+      grep -qxF "$base" <<<"$protected" && continue
+      grep -qxF "$base" <<<"$expected" && continue
+      rm -rf "$d"
+      pruned=$((pruned + 1))
+    done
   done
-  echo "Wrote $count wizard-born node overlays."
+  echo "Wrote $count wizard-born node overlays (pruned $pruned stale)."
 }
 
 check() {
-  local env node path stale=0
+  local env node path stale=0 expected protected envdir d base
+  protected="$(protected_overlay_dirs)"
   for env in "${ENVS[@]}"; do
+    expected=""
     for node in $(wizard_nodes); do
+      expected="$expected$node"$'\n'
       path="$(overlay_path "$env" "$node")"
       if [ ! -f "$path" ]; then
         echo "[ERROR] missing $path — run: pnpm gen:node-overlays" >&2
@@ -120,10 +171,24 @@ check() {
         stale=1
       fi
     done
+    # A renderer-owned overlay dir for a node no longer in the catalog (its row
+    # left, or dropped source_repo) is a stale orphan — fail so the drift gate
+    # catches un-regenerated state. Protected (hand-authored / template) dirs are
+    # exempt: they are not renderer-owned.
+    envdir="$OVERLAYS_DIR/$env"
+    [ -d "$envdir" ] || continue
+    for d in "$envdir"/*/; do
+      [ -d "$d" ] || continue
+      base="$(basename "$d")"
+      grep -qxF "$base" <<<"$protected" && continue
+      grep -qxF "$base" <<<"$expected" && continue
+      echo "[ERROR] $d has no catalog row — stale node overlay; run: pnpm gen:node-overlays" >&2
+      stale=1
+    done
   done
   if [ "$stale" -ne 0 ]; then
-    echo "        A wizard-born overlay was hand-edited or minted by a stale operator" >&2
-    echo "        without regenerating it (pnpm gen:node-overlays)." >&2
+    echo "        A wizard-born overlay was hand-edited, minted by a stale operator, or" >&2
+    echo "        left orphaned after decommission without regenerating (pnpm gen:node-overlays)." >&2
     exit 1
   fi
   echo "wizard-born node overlays are in sync with the node-template overlay + catalog."
