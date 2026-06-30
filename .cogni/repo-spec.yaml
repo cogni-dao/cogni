@@ -25,6 +25,9 @@ activity_ledger:
     base_issuance_credits: "10000"
   activity_sources:
     github:
+      # cogni-v0.0 selects via main-merge-selection: a PR merged to main IS the
+      # contribution. (The profile was repointed from the old promotion-selection,
+      # which excluded every direct-to-main PR → zero claimants on this repo.)
       attribution_pipeline: cogni-v0.0
       source_refs: ["cogni-dao/standalone-node"]
       excluded_logins: ["Cogni-1729"]

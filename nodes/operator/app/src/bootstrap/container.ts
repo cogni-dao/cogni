@@ -151,6 +151,7 @@ import { createWorkItemCapability } from "@/bootstrap/capabilities/work-item";
 import type { RateLimitBypassConfig } from "@/bootstrap/http/wrapPublicRoute";
 import { resolveKnowledgeMirrorRemoteUrl } from "@/bootstrap/knowledge-mirror";
 import { startProcessHealthPublisher } from "@/bootstrap/publishers";
+import { startGovernanceSyncOnBoot } from "@/bootstrap/startup-reconcile";
 import type {
   AccountService,
   AiTelemetryPort,
@@ -331,6 +332,11 @@ let _workflowClientPromise: Promise<{
 export function getContainer(): Container {
   if (!_container) {
     _container = createContainer();
+    // First container init (e.g. the readyz probe) is the earliest in-bootstrap seam
+    // to self-activate this deploy's governance schedules from repo-spec
+    // (SELF_RECONCILE_ON_BOOT) — instrumentation.ts cannot import bootstrap. Detached,
+    // fire-once, retry-until-Temporal-ready; never blocks the caller.
+    startGovernanceSyncOnBoot();
   }
   return _container;
 }

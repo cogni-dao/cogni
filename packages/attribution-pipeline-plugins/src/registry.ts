@@ -22,6 +22,7 @@ import type {
 
 import { createEchoAdapter } from "./plugins/echo/adapter";
 import { INCLUDE_ALL_SELECTION_POLICY } from "./plugins/include-all-selection/descriptor";
+import { createMainMergeSelectionPolicy } from "./plugins/main-merge-selection/descriptor";
 import { createPromotionSelectionPolicy } from "./plugins/promotion-selection/descriptor";
 import { WEIGHT_SUM_ALLOCATOR } from "./plugins/weight-sum/descriptor";
 import { COGNI_V0_PROFILE } from "./profiles/cogni-v0.0";
@@ -67,8 +68,12 @@ export function createDefaultRegistries(
   const promotionPolicy = createPromotionSelectionPolicy({
     excludedLogins: config?.excludedLogins,
   });
+  const mainMergePolicy = createMainMergeSelectionPolicy({
+    excludedLogins: config?.excludedLogins,
+  });
   const selectionPolicies: SelectionPolicyRegistry = new Map([
     [promotionPolicy.policyRef, promotionPolicy],
+    [mainMergePolicy.policyRef, mainMergePolicy],
     [INCLUDE_ALL_SELECTION_POLICY.policyRef, INCLUDE_ALL_SELECTION_POLICY],
   ]);
 
