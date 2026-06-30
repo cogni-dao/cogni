@@ -128,6 +128,10 @@ const ALLOWED_ROOT_ENTRIES = new Set<string>([
   "services",
   "skills-lock.json",
   "sonar-project.properties",
+  // Walk spike harnesses (introduced by R1's walk-p4 anvil-fork rig). The R3
+  // unit job is the first stacked PR to trigger check:root-layout, so this
+  // allowlist entry lands here; it owns no spike contents (DO-NOT-TOUCH spikes/*).
+  "spikes",
   "tests",
   "tsconfig.base.json",
   "tsconfig.eslint.json",

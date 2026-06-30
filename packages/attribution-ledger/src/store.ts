@@ -472,6 +472,15 @@ export interface DistributionManifestStore {
     epochId: bigint,
     account: string
   ): Promise<DistributionClaimRecord | null>;
+
+  /**
+   * Read ALL persisted leaves for an epoch's manifest (empty if no manifest).
+   * Used to read the prior cumulative balances (per-account `amount`) when
+   * folding the next epoch's deltas into a new cumulative root (R3).
+   */
+  getDistributionLeavesForEpoch(
+    epochId: bigint
+  ): Promise<readonly DistributionLeafRecord[]>;
 }
 
 // ---------------------------------------------------------------------------

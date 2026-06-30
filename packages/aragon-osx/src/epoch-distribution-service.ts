@@ -18,9 +18,13 @@
  */
 
 import {
+  buildDaoTokenCumulativeDistribution,
   buildDaoTokenMerkleDistribution,
+  type DaoTokenCumulativeDistribution,
   type DaoTokenDistributionAllocation,
   type DaoTokenMerkleDistribution,
+  type PriorCumulativeBalance,
+  splitEpochDeltaByCredits,
 } from "./token-distribution";
 import type {
   DaoTokenSettlementBlocker,
@@ -179,6 +183,151 @@ export async function buildEpochDistribution(
     tokenAddress: statement.tokenAddress,
     distributionAmount: epochTokenBudget,
     allocations,
+  });
+
+  return {
+    distribution,
+    blockers,
+    unresolvedClaimantKeys: [...unresolvedClaimantKeys].sort(),
+  };
+}
+
+/**
+ * Result of building the CUMULATIVE distribution for a finalized epoch.
+ * `distribution` is null when no wallet-backed positive cumulative balance
+ * remains (same semantics as {@link EpochDistributionResult}).
+ */
+export interface CumulativeEpochDistributionResult {
+  readonly distribution: DaoTokenCumulativeDistribution | null;
+  readonly blockers: readonly DaoTokenSettlementBlocker[];
+  readonly unresolvedClaimantKeys: readonly string[];
+}
+
+/**
+ * Build the CUMULATIVE distribution for a finalized epoch — the R3 root math.
+ *
+ * Resolves THIS epoch's claimant credit lines to contributor wallets, splits the
+ * per-epoch `mintDelta` (= this epoch's poolTotal in base units) across them by
+ * signed credit weight (largest-remainder), folds those deltas onto the prior
+ * per-account cumulative balances, and delegates to the FROZEN cumulative builder
+ * for leaf/root math.
+ *
+ * The result carries `merkleRoot` (for `setMerkleRoot` on the existing per-node
+ * distributor) and `mintDelta` (the DAO mints exactly this into the distributor).
+ * One claim against the new root settles ALL of a claimant's unclaimed epochs.
+ *
+ * Unresolved claimants are EXCLUDED (never invented) and surface as a single
+ * `claimants_unresolved` blocker. Prior cumulative balances are supplied by the
+ * caller (read from the most-recent persisted cumulative manifest) and remain in
+ * the new root even when an account has no delta this epoch.
+ */
+export async function buildCumulativeEpochDistribution(
+  statement: FinalizedEpochStatement,
+  mintDelta: bigint,
+  priorCumulative: readonly PriorCumulativeBalance[],
+  walletResolver: ClaimantWalletResolver
+): Promise<CumulativeEpochDistributionResult> {
+  const blockers: DaoTokenSettlementBlocker[] = [];
+
+  if (mintDelta < 0n) {
+    return {
+      distribution: null,
+      blockers: [
+        blocker(
+          "funding_amount_mismatch",
+          "mintDelta must be non-negative to build a cumulative distribution."
+        ),
+      ],
+      unresolvedClaimantKeys: [],
+    };
+  }
+
+  // A zero-delta epoch with prior balances re-publishes the prior cumulative
+  // root unchanged (no new mint). With no prior either, there is nothing to do.
+  if (mintDelta === 0n && priorCumulative.length === 0) {
+    return {
+      distribution: null,
+      blockers: [
+        blocker(
+          "manifest_missing",
+          "No mint delta and no prior cumulative balance to build a cumulative distribution."
+        ),
+      ],
+      unresolvedClaimantKeys: [],
+    };
+  }
+
+  // Resolve every distinct claimant key in THIS epoch to its contributor wallet.
+  const distinctKeys = [...new Set(statement.lines.map((l) => l.claimantKey))];
+  const resolutions = await walletResolver.resolveWallets(distinctKeys);
+  const walletByKey = new Map<string, HexAddress | null>();
+  for (const r of resolutions) {
+    walletByKey.set(r.claimantKey, r.wallet);
+  }
+
+  const allocations: DaoTokenDistributionAllocation[] = [];
+  const unresolvedClaimantKeys = new Set<string>();
+
+  for (const line of statement.lines) {
+    if (line.creditAmount <= 0n) {
+      continue;
+    }
+    const wallet = walletByKey.get(line.claimantKey) ?? null;
+    if (wallet === null) {
+      unresolvedClaimantKeys.add(line.claimantKey);
+      continue;
+    }
+    allocations.push({
+      claimantKey: line.claimantKey,
+      account: wallet,
+      creditAmount: line.creditAmount,
+      receiptIds: line.receiptIds,
+    });
+  }
+
+  if (unresolvedClaimantKeys.size > 0) {
+    blockers.push(
+      blocker(
+        "claimants_unresolved",
+        `${unresolvedClaimantKeys.size} claimant(s) have no resolved EVM wallet binding; they are excluded from this epoch's delta until a wallet is bound.`
+      )
+    );
+  }
+
+  // No wallet-backed delta AND no prior cumulative balance ⇒ nothing to settle.
+  if (allocations.length === 0 && priorCumulative.length === 0) {
+    if (!blockers.some((b) => b.code === "claimants_unresolved")) {
+      blockers.push(
+        blocker(
+          "manifest_missing",
+          "No positive, wallet-resolved allocation and no prior cumulative balance to build a cumulative distribution."
+        )
+      );
+    }
+    return {
+      distribution: null,
+      blockers,
+      unresolvedClaimantKeys: [...unresolvedClaimantKeys].sort(),
+    };
+  }
+
+  // Split this epoch's mint delta across the resolved allocations by credit
+  // weight (largest-remainder). With no resolved allocations the delta is zero;
+  // the new root still re-publishes the prior cumulative balances unchanged.
+  const epochDeltas =
+    allocations.length > 0
+      ? splitEpochDeltaByCredits(allocations, mintDelta)
+      : [];
+
+  const distribution = buildDaoTokenCumulativeDistribution({
+    distributionId: statement.distributionId,
+    nodeId: statement.nodeId,
+    scopeId: statement.scopeId,
+    statementHash: statement.statementHash,
+    chainId: statement.chainId,
+    tokenAddress: statement.tokenAddress,
+    priorCumulative,
+    epochDeltas,
   });
 
   return {

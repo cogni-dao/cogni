@@ -1334,6 +1334,9 @@ importers:
 
   services/scheduler-worker:
     dependencies:
+      '@cogni/aragon-osx':
+        specifier: workspace:*
+        version: link:../../packages/aragon-osx
       '@cogni/attribution-ledger':
         specifier: workspace:*
         version: link:../../packages/attribution-ledger

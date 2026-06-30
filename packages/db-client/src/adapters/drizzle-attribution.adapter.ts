@@ -1500,6 +1500,24 @@ export class DrizzleAttributionAdapter implements AttributionStore {
     };
   }
 
+  async getDistributionLeavesForEpoch(
+    epochId: bigint
+  ): Promise<readonly DistributionLeafRecord[]> {
+    await this.resolveEpochScoped(epochId);
+    const [manifestRow] = await this.db
+      .select()
+      .from(epochDistributionManifests)
+      .where(eq(epochDistributionManifests.epochId, epochId))
+      .limit(1);
+    if (!manifestRow) return [];
+
+    const leafRows = await this.db
+      .select()
+      .from(epochDistributionLeaves)
+      .where(eq(epochDistributionLeaves.manifestId, manifestRow.id));
+    return leafRows.map(toDistributionLeaf);
+  }
+
   // ── Atomic finalize ────────────────────────────────────────
 
   async finalizeEpochAtomic(params: {
