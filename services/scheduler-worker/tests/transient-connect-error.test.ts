@@ -19,9 +19,12 @@ import { isTransientConnectError } from "../src/worker.js";
 describe("isTransientConnectError", () => {
   it("retries the prod fleet-502 transient DNS failure", () => {
     // The exact shape that took the fleet down on 2026-06-30.
-    const err = Object.assign(new Error('dns error", "Temporary failure in name resolution'), {
-      name: "TransportError",
-    });
+    const err = Object.assign(
+      new Error('dns error", "Temporary failure in name resolution'),
+      {
+        name: "TransportError",
+      }
+    );
     expect(isTransientConnectError(err)).toBe(true);
   });
 
