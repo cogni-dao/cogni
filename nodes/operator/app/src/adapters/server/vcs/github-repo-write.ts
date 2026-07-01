@@ -142,8 +142,6 @@ export interface DistributionActivationInput {
   readonly emissionsHolderAddress: string;
   /** The ONE cumulative distributor deployed at activation (DAO-owned). */
   readonly distributorAddress: string;
-  /** Chain the distributor was deployed on. */
-  readonly distributorChainId: number;
   /** Deploy transaction hash (provenance). */
   readonly distributorDeployTx: string;
 }
@@ -1764,7 +1762,6 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       "- `distributions.status: active`\n" +
       "- `distributions.claim_contract_pattern: 1inch.cumulative-merkle-drop.v1`\n" +
       `- \`distributions.distributor_address\` = \`${input.distributorAddress}\` (DAO-owned)\n` +
-      `- \`distributions.distributor_chain_id\` = \`${input.distributorChainId}\`\n` +
       `- \`distributions.distributor_deploy_tx\` = \`${input.distributorDeployTx}\`\n\n` +
       "The distributor is the stock, vendored 1inch CumulativeMerkleDrop — ONE per node, DAO-owned. " +
       "Epoch finalization reuses it every epoch (setMerkleRoot + delta mint); no per-epoch redeploy.\n\n" +
@@ -1788,7 +1785,6 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       tokenAddress: input.tokenAddress,
       emissionsHolderAddress: input.emissionsHolderAddress,
       distributorAddress: input.distributorAddress,
-      distributorChainId: input.distributorChainId,
       distributorDeployTx: input.distributorDeployTx,
     };
     const nextSpec = renderDistributionActivationSpec(currentSpec, renderInput);
@@ -1873,7 +1869,6 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
         tokenAddress: input.tokenAddress,
         emissionsHolderAddress: input.emissionsHolderAddress,
         distributorAddress: input.distributorAddress,
-        distributorChainId: input.distributorChainId,
         distributorDeployTx: input.distributorDeployTx,
       });
 

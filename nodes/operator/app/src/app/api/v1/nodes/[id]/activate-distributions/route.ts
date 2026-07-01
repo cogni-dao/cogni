@@ -516,7 +516,6 @@ async function handleActivateDistributions(
       tokenAddress,
       emissionsHolderAddress,
       distributorAddress,
-      distributorChainId: nodeChainId,
       distributorDeployTx: parsed.data.distributorDeployTx,
     });
   } catch (err) {

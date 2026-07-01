@@ -37,8 +37,6 @@ export interface RenderDistributionActivationInput {
   readonly emissionsHolderAddress: string;
   /** The ONE cumulative distributor deployed at activation (DAO-owned). */
   readonly distributorAddress: string;
-  /** Chain the distributor was deployed on. */
-  readonly distributorChainId: number;
   /** Deploy transaction hash (provenance). */
   readonly distributorDeployTx: string;
 }
@@ -147,7 +145,6 @@ function distributionsBlock(input: RenderDistributionActivationInput): string {
   status: active
   claim_contract_pattern: ${DISTRIBUTION_CLAIM_CONTRACT_PATTERN}
   distributor_address: "${input.distributorAddress}"
-  distributor_chain_id: ${input.distributorChainId}
   distributor_deploy_tx: "${input.distributorDeployTx}"`;
 }
 
@@ -173,11 +170,6 @@ function upsertDistributionsBlock(
     body,
     "distributor_address",
     `"${input.distributorAddress}"`
-  );
-  body = upsertDistributionField(
-    body,
-    "distributor_chain_id",
-    String(input.distributorChainId)
   );
   body = upsertDistributionField(
     body,

@@ -26,13 +26,11 @@ const TOKEN = "0x2222222222222222222222222222222222222222";
 const EMISSIONS_HOLDER = "0x3333333333333333333333333333333333333333";
 const DISTRIBUTOR = "0x6666666666666666666666666666666666666666";
 const DEPLOY_TX = `0x${"ab".repeat(32)}`;
-const CHAIN_ID = 8453;
 
 const INPUT = {
   tokenAddress: TOKEN,
   emissionsHolderAddress: EMISSIONS_HOLDER,
   distributorAddress: DISTRIBUTOR,
-  distributorChainId: CHAIN_ID,
   distributorDeployTx: DEPLOY_TX,
 };
 
@@ -76,7 +74,6 @@ describe("renderDistributionActivationSpec", () => {
       DISTRIBUTION_CLAIM_CONTRACT_PATTERN
     );
     expect(distributions.distributor_address).toBe(DISTRIBUTOR);
-    expect(String(distributions.distributor_chain_id)).toBe(String(CHAIN_ID));
     expect(distributions.distributor_deploy_tx).toBe(DEPLOY_TX);
   });
 
@@ -107,7 +104,6 @@ distributions:
   status: active
   claim_contract_pattern: ${DISTRIBUTION_CLAIM_CONTRACT_PATTERN}
   distributor_address: "${DISTRIBUTOR.toUpperCase()}"
-  distributor_chain_id: ${CHAIN_ID}
   distributor_deploy_tx: "${DEPLOY_TX}"
 
 governance:
@@ -127,7 +123,6 @@ governance:
       tokenAddress: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       emissionsHolderAddress: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       distributorAddress: "0xcccccccccccccccccccccccccccccccccccccccc",
-      distributorChainId: CHAIN_ID,
       distributorDeployTx: `0x${"cd".repeat(32)}`,
     });
     const next = renderDistributionActivationSpec(old, INPUT);

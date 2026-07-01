@@ -605,11 +605,6 @@ export const repoSpecSchema = z
          * there is no per-epoch redeploy. Recorded once and treated as immutable.
          */
         distributor_address: evmAddressSchema.optional(),
-        /** Chain the distributor was deployed on (matches governance.chain_id). */
-        distributor_chain_id: z
-          .union([z.string(), z.number()])
-          .transform((v) => String(v))
-          .optional(),
         /** Deploy transaction hash for the distributor (audit/provenance). */
         distributor_deploy_tx: z
           .string()
