@@ -4,8 +4,7 @@
 /**
  * Module: `@cogni/aragon-osx/wallet-resolver`
  * Purpose: Read-only port that resolves an attribution claimant key to the CONTRIBUTOR's own EVM wallet.
- * Scope: Defines the ClaimantWalletResolver port + result types only. Contains NO I/O — the
- *   Postgres adapter that reads user_bindings / users lives in @cogni/db-client.
+ * Scope: Defines the ClaimantWalletResolver port + result types only; does not perform I/O — the Postgres adapter that reads user_bindings / users lives in @cogni/db-client.
  * Invariants:
  * - RESOLVER_READ_ONLY: the port never writes a binding; an unresolved claimant returns null, never a synthesized address.
  * - RESOLVER_CONTRIBUTOR_WALLET: it resolves to the contributor's OWN wallet, never an operator/treasury wallet (no-central-custody).

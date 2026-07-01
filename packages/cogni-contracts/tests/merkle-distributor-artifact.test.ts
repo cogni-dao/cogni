@@ -3,10 +3,8 @@
 
 /**
  * Module: `@cogni/cogni-contracts/tests/merkle-distributor-artifact`
- * Purpose: Gate the vendored Uniswap MerkleDistributor v1 artifact — assert the
- *   ABI exposes the canonical claim interface and that OUR distribution leaf
- *   encoding is exactly what this distributor's `claim` verifies against.
- * Scope: Integrity + leaf-format conformance only; no on-chain behavior.
+ * Purpose: Gate the vendored Uniswap MerkleDistributor v1 artifact — assert the ABI exposes the canonical claim interface and that OUR distribution leaf encoding is exactly what this distributor's `claim` verifies against.
+ * Scope: Integrity + leaf-format conformance only; does not exercise on-chain behavior.
  * Invariants:
  *   - ABI selectors match keccak256 of the canonical Solidity signatures.
  *   - hashDaoTokenClaimLeaf == keccak256(abi.encodePacked(uint256,address,uint256)),

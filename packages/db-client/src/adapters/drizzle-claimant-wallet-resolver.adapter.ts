@@ -3,10 +3,8 @@
 
 /**
  * Module: `@cogni/db-client/adapters/drizzle-claimant-wallet-resolver`
- * Purpose: Read-only Postgres implementation of the ClaimantWalletResolver port — resolves an
- *   attribution claimant key to the CONTRIBUTOR's own EVM wallet for epoch distribution.
- * Scope: SELECT-only over `user_bindings` and `users`. Implements the @cogni/aragon-osx port.
- *   Does NOT write bindings, mint, or move tokens.
+ * Purpose: Read-only Postgres implementation of the ClaimantWalletResolver port — resolves an attribution claimant key to the CONTRIBUTOR's own EVM wallet for epoch distribution.
+ * Scope: SELECT-only over `user_bindings` and `users`; implements the @cogni/aragon-osx port. Does NOT write bindings, mint, or move tokens.
  * Invariants:
  * - RESOLVER_READ_ONLY: only SELECT statements; never inserts/updates a binding (no binding-write flow).
  * - RESOLVER_NULL_IS_UNRESOLVED: a claimant with no wallet resolves to `wallet: null` — never a synthesized address.

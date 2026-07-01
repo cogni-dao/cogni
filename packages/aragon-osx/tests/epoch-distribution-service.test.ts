@@ -4,7 +4,7 @@
 /**
  * Module: `@cogni/aragon-osx/tests/epoch-distribution-service`
  * Purpose: Unit tests for buildEpochDistribution — claimant→wallet resolution, frozen-root delegation, unresolved-claimant blockers.
- * Scope: Pure domain tests with an in-memory ClaimantWalletResolver; no chain, DB, or filesystem I/O.
+ * Scope: Pure domain tests with an in-memory ClaimantWalletResolver; does not touch chain, DB, or filesystem I/O.
  * Invariants: EPOCH_DISTRIBUTION_FROZEN_ROOT, EPOCH_DISTRIBUTION_CREDIT_INPUT, EPOCH_DISTRIBUTION_NO_INVENTED_WALLET.
  * Side-effects: none
  * Links: packages/aragon-osx/src/epoch-distribution-service.ts

@@ -3,10 +3,8 @@
 
 /**
  * Module: `@cogni/aragon-osx/epoch-distribution-service`
- * Purpose: Turn a FINALIZED signed attribution epoch statement into a DaoTokenMerkleDistribution
- *   (Merkle root + manifest), resolving each claimant to its own EVM wallet via a read-only port.
- * Scope: Orchestration over the FROZEN buildDaoTokenMerkleDistribution leaf/root math + a wallet
- *   resolver port. Does NOT read chain state, persist manifests, move tokens, or fork the root math.
+ * Purpose: Turn a FINALIZED signed attribution epoch statement into a DaoTokenMerkleDistribution (Merkle root + manifest), resolving each claimant to its own EVM wallet via a read-only port.
+ * Scope: Orchestration over the FROZEN buildDaoTokenMerkleDistribution leaf/root math + a wallet resolver port. Does NOT read chain state, persist manifests, move tokens, or fork the root math.
  * Invariants:
  * - EPOCH_DISTRIBUTION_FROZEN_ROOT: leaf/root computation is delegated unchanged to buildDaoTokenMerkleDistribution.
  * - EPOCH_DISTRIBUTION_CREDIT_INPUT: each statement line's signed `credit_amount` is the allocation weight (never finalUnits).

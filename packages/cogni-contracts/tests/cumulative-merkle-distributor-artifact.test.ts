@@ -3,10 +3,8 @@
 
 /**
  * Module: `@cogni/cogni-contracts/tests/cumulative-merkle-distributor-artifact`
- * Purpose: Gate the vendored 1inch CumulativeMerkleDrop artifact — assert the ABI
- *   exposes the canonical cumulative claim/setRoot interface and pin the EXACT
- *   leaf preimage this distributor's `claim` verifies against (cumulative, NO index).
- * Scope: Integrity + leaf-format conformance only; no on-chain behavior.
+ * Purpose: Gate the vendored 1inch CumulativeMerkleDrop artifact — assert the ABI exposes the canonical cumulative claim/setRoot interface and pin the EXACT leaf preimage this distributor's `claim` verifies against (cumulative, NO index).
+ * Scope: Integrity + leaf-format conformance only; does not exercise on-chain behavior.
  * Invariants:
  *   - ABI selectors match keccak256 of the canonical Solidity signatures.
  *   - The cumulative leaf == keccak256(abi.encodePacked(address, uint256)) — a

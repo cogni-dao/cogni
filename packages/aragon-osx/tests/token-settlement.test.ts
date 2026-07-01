@@ -4,7 +4,7 @@
 /**
  * Module: `@cogni/aragon-osx/tests/token-settlement`
  * Purpose: Unit tests for the mint-per-epoch reconciliation of isSettlementInventoryReady.
- * Scope: Pure readiness tests; no chain, DB, or filesystem I/O.
+ * Scope: Pure readiness tests; does not touch chain, DB, or filesystem I/O.
  * Invariants: TOKEN_SETTLEMENT_MINT_AUTHORITY_IS_READINESS.
  * Side-effects: none
  * Links: packages/aragon-osx/src/token-settlement.ts, docs/spec/tokenomics.md

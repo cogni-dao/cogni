@@ -2,11 +2,9 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `tests/packages/db-client/drizzle-claimant-wallet-resolver`
- * Purpose: Unit tests for DrizzleClaimantWalletResolver — claimant-key parsing + the
- *   user_bindings/users resolution chain — using a fake Drizzle query builder.
- * Scope: No real database; a FIFO fake returns canned result sets in the adapter's
- *   deterministic query order. Asserts mapping logic + read-only behavior.
+ * Module: `@tests/packages/db-client/drizzle-claimant-wallet-resolver`
+ * Purpose: Unit tests for DrizzleClaimantWalletResolver — claimant-key parsing + the user_bindings/users resolution chain — using a fake Drizzle query builder.
+ * Scope: Does not touch a real database; a FIFO fake returns canned result sets in the adapter's deterministic query order, asserting mapping logic + read-only behavior.
  * Invariants: RESOLVER_READ_ONLY, RESOLVER_NULL_IS_UNRESOLVED, RESOLVER_GITHUB_VIA_BINDING.
  * Side-effects: none
  * Links: packages/db-client/src/adapters/drizzle-claimant-wallet-resolver.adapter.ts
