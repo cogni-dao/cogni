@@ -4,7 +4,7 @@
 /**
  * Module: `@cogni/db-schema/attribution`
  * Purpose: Five-stage epoch ledger schema for auditable activity-based credit distribution.
- * Scope: Defines all ledger tables (epochs, ingestion_receipts, epoch_selection, epoch_user_projections, epoch_evaluations, ingestion_cursors, epoch_pool_components, epoch_review_subject_overrides, epoch_final_claimant_allocations, epoch_statements, epoch_statement_signatures). Does not contain queries, business logic, or I/O.
+ * Scope: Defines all ledger tables (epochs, ingestion_receipts, epoch_selection, epoch_user_projections, epoch_evaluations, ingestion_cursors, epoch_pool_components, epoch_review_subject_overrides, epoch_final_claimant_allocations, epoch_statements, epoch_statement_signatures, epoch_distribution_manifests, epoch_distribution_leaves). Does not contain queries, business logic, or I/O.
  * Invariants:
  * - All credit/unit columns use BIGINT (ALL_MATH_BIGINT).
  * - Ingestion layer (ingestion_receipts, epoch_pool_components) are append-only (DB triggers in migration).
@@ -586,5 +586,101 @@ export const epochStatementSignatures = pgTable(
       table.statementId,
       table.signerWallet
     ),
+  ]
+);
+
+// ---------------------------------------------------------------------------
+// Distribution Layer: Merkle distribution manifest + leaves (DAO token claims)
+// ---------------------------------------------------------------------------
+
+/**
+ * Epoch distribution manifests — persisted `DaoTokenMerkleDistribution` headers.
+ * One per epoch (scoped to node+scope), keyed (node_id, scope_id, epoch_id).
+ * Stores the merkle root, the on-chain claim parameters (chain_id, token_address,
+ * distribution_amount), and the statement_hash lineage that the manifest was built
+ * from (DISTRIBUTION_STATEMENT_LINEAGE). distributor_address is NULL until the
+ * MerkleDistributor contract is deployed for this epoch.
+ * Per-leaf {index, account, amount, proof[]} rows live in epoch_distribution_leaves.
+ * No FK to users — leaves are keyed by EVM account address, not a user UUID.
+ */
+export const epochDistributionManifests = pgTable(
+  "epoch_distribution_manifests",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    nodeId: uuid("node_id").notNull(),
+    scopeId: uuid("scope_id").notNull(),
+    epochId: bigint("epoch_id", { mode: "bigint" })
+      .notNull()
+      .references(() => epochs.id),
+    distributionId: text("distribution_id").notNull(),
+    statementHash: text("statement_hash").notNull(),
+    merkleRoot: text("merkle_root").notNull(),
+    chainId: bigint("chain_id", { mode: "bigint" }).notNull(),
+    tokenAddress: text("token_address").notNull(),
+    distributionAmount: bigint("distribution_amount", {
+      mode: "bigint",
+    }).notNull(),
+    totalAllocated: bigint("total_allocated", { mode: "bigint" }).notNull(),
+    // NULL until the on-chain MerkleDistributor contract is deployed for this epoch.
+    distributorAddress: text("distributor_address"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    // One manifest per epoch per tenant scope (DISTRIBUTION_ONE_PER_EPOCH).
+    uniqueIndex("epoch_distribution_manifests_node_scope_epoch_unique").on(
+      table.nodeId,
+      table.scopeId,
+      table.epochId
+    ),
+    index("epoch_distribution_manifests_epoch_idx").on(table.epochId),
+  ]
+);
+
+/**
+ * Epoch distribution leaves — per-claimant merkle leaf + proof.
+ * One row per leaf in the manifest's merkle tree. account is an EVM address
+ * (lowercased into account_lower for case-insensitive claimant lookup). amount is
+ * the ERC20 base-unit claim amount; proof_json is the ordered sibling-hash array
+ * the claim contract verifies against merkle_root.
+ */
+export const epochDistributionLeaves = pgTable(
+  "epoch_distribution_leaves",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    nodeId: uuid("node_id").notNull(),
+    manifestId: uuid("manifest_id")
+      .notNull()
+      .references(() => epochDistributionManifests.id, { onDelete: "cascade" }),
+    epochId: bigint("epoch_id", { mode: "bigint" })
+      .notNull()
+      .references(() => epochs.id),
+    leafIndex: integer("leaf_index").notNull(),
+    claimantKey: text("claimant_key").notNull(),
+    account: text("account").notNull(),
+    accountLower: text("account_lower").notNull(),
+    amount: bigint("amount", { mode: "bigint" }).notNull(),
+    leafHash: text("leaf_hash").notNull(),
+    proofJson: jsonb("proof_json").$type<string[]>().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    // One leaf per index per manifest.
+    uniqueIndex("epoch_distribution_leaves_manifest_index_unique").on(
+      table.manifestId,
+      table.leafIndex
+    ),
+    // Claimant proof lookup by (manifest, lowercased account).
+    uniqueIndex("epoch_distribution_leaves_manifest_account_unique").on(
+      table.manifestId,
+      table.accountLower
+    ),
+    index("epoch_distribution_leaves_epoch_idx").on(table.epochId),
   ]
 );

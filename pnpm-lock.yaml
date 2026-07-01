@@ -835,6 +835,9 @@ importers:
       '@cogni/ai-core':
         specifier: workspace:*
         version: link:../ai-core
+      '@cogni/aragon-osx':
+        specifier: workspace:*
+        version: link:../aragon-osx
       '@cogni/attribution-ledger':
         specifier: workspace:*
         version: link:../attribution-ledger

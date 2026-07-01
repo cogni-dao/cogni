@@ -3,7 +3,7 @@
 
 /**
  * Module: `@cogni/cogni-contracts`
- * Purpose: Cogni-owned smart contract artifacts (ABI, bytecode, types).
+ * Purpose: Smart contract artifacts (ABI, bytecode, types) — Cogni-owned and vendored OSS.
  * Scope: Constants only; does not include addresses, tx builders, or RPC logic.
  * Invariants: No runtime dependencies; pure constants.
  * Side-effects: none
@@ -13,3 +13,9 @@
 
 // CogniSignal
 export { COGNI_SIGNAL_ABI, COGNI_SIGNAL_BYTECODE } from "./cogni-signal";
+
+// Uniswap MerkleDistributor v1 (vendored, not authored)
+export {
+  MERKLE_DISTRIBUTOR_ABI,
+  MERKLE_DISTRIBUTOR_BYTECODE,
+} from "./merkle-distributor";

@@ -1,0 +1,3 @@
+# Local-only runtime artifacts for the spike
+node_modules
+anvil.log
