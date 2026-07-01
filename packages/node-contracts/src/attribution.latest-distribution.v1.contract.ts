@@ -6,7 +6,8 @@
  * Purpose: Operation contract for serving an account's CUMULATIVE merkle claim from the latest finalized epoch's manifest.
  * Scope: Zod schemas + types for the cumulative claim wire format. Does not contain business logic.
  * Invariants:
- *   - CUMULATIVE_MODEL: `amount` is the account's cumulativeAmount in the latest manifest (NOT a per-epoch delta). The on-chain CumulativeMerkleDrop pays out `cumulativeAmount − cumulativeClaimed(account)`.
+ *   - CUMULATIVE_MODEL: `amount` is the account's cumulativeAmount in the latest manifest (NOT a per-epoch delta).
+ *   - PAYS_DELTA: on-chain CumulativeMerkleDrop pays out `cumulativeAmount − cumulativeClaimed(account)`.
  *   - ALL_MATH_BIGINT: amount serialized as a decimal string (base ERC20 units).
  *   - PROOF_HEX_ARRAY: proof is an ordered array of 0x-prefixed sibling hashes (sorted-pair OZ proofs).
  *   - DISTRIBUTOR_NULLABLE: distributor is null until the on-chain contract is recorded.
