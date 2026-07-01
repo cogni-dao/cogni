@@ -26,6 +26,9 @@
 # Env:
 #   PAYLOAD_FILE    (required) path to resolved-pr-images.json
 #   OVERLAY_ENV     (required) candidate-a | preview | production
+#   NODES           (optional) CSV of catalog nodes to promote. Payload
+#                   entries whose overlay_target matches a listed node are
+#                   promoted too, so Shape B sidecars move with the app pod.
 #   MAP_FILE        (optional) .promote-state/source-sha-by-app.json path
 #   PROMOTE_SCRIPT  (optional) path to promote-k8s-image.sh
 #   MAP_SCRIPT      (optional) path to update-source-sha-map.sh
@@ -114,9 +117,61 @@ for item in payload["targets"]:
 PY
 }
 
+extract_overlay_target() {
+  local target="$1"
+  python3 - "$PAYLOAD_FILE" "$target" <<'PY'
+import json
+import sys
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    payload = json.load(handle)
+for item in payload["targets"]:
+    if item["target"] == sys.argv[2]:
+        print(item.get("overlay_target") or item["target"])
+        break
+PY
+}
+
+extract_kustomize_image() {
+  local target="$1"
+  python3 - "$PAYLOAD_FILE" "$target" <<'PY'
+import json
+import sys
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    payload = json.load(handle)
+for item in payload["targets"]:
+    if item["target"] == sys.argv[2]:
+        print(item.get("kustomize_image") or "")
+        break
+PY
+}
+
+payload_targets_for_nodes() {
+  python3 - "$PAYLOAD_FILE" "${NODES:-}" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    payload = json.load(handle)
+nodes = {node for node in sys.argv[2].split(",") if node}
+targets = []
+for item in payload.get("targets", []):
+    target = item["target"]
+    overlay_target = item.get("overlay_target") or target
+    if nodes:
+        if target not in nodes and overlay_target not in nodes:
+            continue
+    elif overlay_target == target:
+        # NODES unset historically meant catalog ALL_TARGETS. Preserve that
+        # below, then append only explicit overlay-owned artifact targets here.
+        continue
+    targets.append(target)
+print("\n".join(targets))
+PY
+}
+
 promote_target() {
   local target="$1"
-  local digest item_source_sha
+  local digest item_source_sha overlay_target kustomize_image
 
   # type:infra (e.g. litellm) deploys via Compose-on-VM, not k8s overlays —
   # there is no overlay digest to promote. deploy-infra resolves its content-
@@ -126,7 +181,13 @@ promote_target() {
   digest=$(extract_digest "$target")
   [ -z "$digest" ] && return 0
 
-  bash "$PROMOTE_SCRIPT" --no-commit --env "$OVERLAY_ENV" --app "$target" --digest "$digest"
+  overlay_target="$(extract_overlay_target "$target")"
+  kustomize_image="$(extract_kustomize_image "$target")"
+  args=(--no-commit --env "$OVERLAY_ENV" --app "$target" --overlay-app "$overlay_target" --digest "$digest")
+  if [ -n "$kustomize_image" ]; then
+    args+=(--kustomize-image "$kustomize_image")
+  fi
+  bash "$PROMOTE_SCRIPT" "${args[@]}"
 
   PROMOTED+=("$target")
   item_source_sha="$(extract_source_sha "$target")"
@@ -166,11 +227,20 @@ update_source_sha_map() {
 # digest isn't in the payload (extract_digest returns empty), so iterating
 # all targets is safe even on affected-only PR builds.
 if [ -n "${NODES:-}" ]; then
-  IFS=',' read -r -a _to_promote <<<"$NODES"
+  mapfile -t _to_promote < <(payload_targets_for_nodes)
 else
   _to_promote=("${ALL_TARGETS[@]}")
+  mapfile -t _artifact_targets < <(payload_targets_for_nodes)
+  for _artifact_target in "${_artifact_targets[@]}"; do
+    [ -n "$_artifact_target" ] || continue
+    if printf '%s\n' "${_to_promote[@]}" | grep -qx "$_artifact_target"; then
+      continue
+    fi
+    _to_promote+=("$_artifact_target")
+  done
 fi
 for target in "${_to_promote[@]}"; do
+  [ -n "$target" ] || continue
   promote_target "$target"
 done
 

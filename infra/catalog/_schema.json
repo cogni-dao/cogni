@@ -114,6 +114,52 @@
       "pattern": "^ghcr\\.io/[a-z0-9][a-z0-9_.-]*/[a-z0-9][a-z0-9_.-]*$",
       "description": "Required with source_repo. GHCR repository for the deployable artifact, resolved at sha-<sourceSha>. Prefer ghcr.io/<owner>/<repo> for a single primary artifact or deployable-shaped suffixes such as -app/-worker when the repo publishes multiple artifacts."
     },
+    "artifacts": {
+      "type": "array",
+      "description": "Optional multi-image contract for remote-source nodes that publish more than one deployable image from the same source_repo/source_sha. Each artifact resolves image_repository:sha-<sourceSha>; overlay_target says which kustomize overlay owns the digest. Shape B sidecars use role=sidecar, overlay_target=<node>, and kustomize_image=<sidecar image name> so they are injected into the app pod without a Service/Ingress.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["target", "role", "image_repository"],
+        "properties": {
+          "target": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$",
+            "description": "Stable deploy artifact key. Used in resolved payloads and .promote-state/source-sha-by-app.json. The primary app artifact normally matches the catalog name; sidecars/workers use a distinct key such as poly-paper-trader."
+          },
+          "role": {
+            "type": "string",
+            "enum": ["app", "sidecar", "worker", "migrator"],
+            "description": "Artifact role. role=sidecar means pod co-location only; it must not imply a Kubernetes Service or Ingress."
+          },
+          "image_repository": {
+            "type": "string",
+            "pattern": "^ghcr\\.io/[a-z0-9][a-z0-9_.-]*/[a-z0-9][a-z0-9_.-]*$"
+          },
+          "overlay_target": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$",
+            "description": "Catalog target whose infra/k8s/overlays/<env>/<overlay_target>/kustomization.yaml owns this image. Defaults to the parent catalog name."
+          },
+          "kustomize_image": {
+            "type": "string",
+            "pattern": "^ghcr\\.io/[a-z0-9][a-z0-9_.-]*/[a-z0-9][a-z0-9_.-]*$",
+            "description": "images[].name/newName selector to update for this artifact. Required for sidecars that are not the primary first image in the overlay; defaults to image_repository."
+          },
+          "envs": {
+            "type": "array",
+            "description": "Optional environment allowlist for this artifact. Omit for all catalog envs. Shape B paper/live-risk sidecars should list candidate-a and preview, leaving production omitted until explicitly approved.",
+            "items": {
+              "type": "string",
+              "enum": ["candidate-a", "preview", "production"]
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          }
+        }
+      },
+      "minItems": 1
+    },
     "candidate_a_branch": {
       "type": "string",
       "pattern": "^deploy/candidate-a-[a-z0-9-]+$"
