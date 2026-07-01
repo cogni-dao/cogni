@@ -1,0 +1,67 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# Argo CD Application — cogni-candidate-a-control-plane (the candidate-a ROOT app-of-apps).
+#
+# Continuously reconciles infra/k8s/argocd/control-plane/candidate-a/ — the directory
+# holding THIS env's per-node-AppSet app-of-apps (cogni-candidate-a-appsets). This is the
+# recursive completion of the keystone (story.5020): the keystone made Argo own the AppSet
+# layer (appsets/<env>/); this makes Argo own the LAYER THAT REGISTERS those app-of-apps.
+#
+# Why this exists (the apply-once control-plane gap it closes):
+#   The per-env app-of-apps (cogni-<env>-appsets) used to be applied ONCE at provision
+#   (bootstrap-k3s.yaml / provision-env-vm.sh) and never reconciled again. So merging a
+#   change to that layer — a new app-of-apps, a tweaked source path — did NOT reach a live
+#   cluster until a full re-provision (proven 2026-06-30: the keystone merged to main but
+#   only went live on candidate-a via a manual kubectl apply; preview/production never
+#   activated). With prune+selfHeal on this root, Argo owns the app-of-apps layer: a merged
+#   change to control-plane/<env>/ reaches the cluster on the next sync, no re-provision.
+#
+# THE SEED IS THE ONLY APPLY-ONCE SURFACE. provision applies THIS one tiny, stable
+# Application; from then on everything below it (the app-of-apps, and any future per-env
+# control-plane app) is continuously reconciled. The apply-once surface shrinks from "the
+# whole control-plane layer (changes often)" to "one seed (essentially never changes)".
+#
+# Why PER-ENV (the foreign-env fan-out it prevents):
+#   Exactly the keystone's reasoning, one layer up. The shared bootstrap kustomization lists
+#   ALL THREE app-of-apps; a single root sourced from a shared dir would fan every env's
+#   app-of-apps (and thus every env's AppSets/pods) onto whichever cluster ran it. By scoping
+#   this root's source path to control-plane/candidate-a/, it owns ONLY candidate-a's
+#   app-of-apps and can never fan a foreign env onto the candidate-a cluster. provision
+#   applies ONLY the matching cogni-${DEPLOY_ENV}-control-plane seed.
+#
+# Scope: this root owns ONLY the app-of-apps under control-plane/candidate-a/. It NEVER
+#   manages Argo's own install (install.yaml / ksops / repo-server + cm patches) — those stay
+#   in the bootstrap kustomization, applied out-of-band (self-management hazard). The
+#   ${FORK_REPO}-templated substrate apps (openbao / external-secrets / reloader) are
+#   deliberately NOT included: their repoURL is shell-substituted at provision time and Argo
+#   cannot do that substitution, so they remain apply-once until that templating is solved.
+#
+# directory.recurse: false — apply only the manifests directly in control-plane/candidate-a/,
+#   never descend. repoURL is the LITERAL upstream (the bootstrap apply path does NO envsubst,
+#   matching the app-of-apps it seeds). targetRevision: main — shared source, zero per-env
+#   templating.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cogni-candidate-a-control-plane
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/cogni-dao/cogni.git
+    targetRevision: main
+    path: infra/k8s/argocd/control-plane/candidate-a
+    directory:
+      recurse: false
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true

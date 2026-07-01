@@ -1896,28 +1896,31 @@ log_step "Phase 7: Apply ApplicationSets (triggers Argo sync)"
 # operator's local checkout is the source of truth — it has the files they intend to deploy.
 # This also avoids the chicken-and-egg: you can provision preview before the files are
 # promoted to staging.
-# PER-ENV app-of-apps (story.5020): each env applies ONLY its own
-# cogni-${DEPLOY_ENV}-appsets Application, whose source path is the env-scoped
-# appsets/${DEPLOY_ENV}/ dir. From then on Argo continuously reconciles that
-# dir with prune — so a catalog-removed node's AppSet auto-prunes, and (crucially)
-# NO foreign env's AppSets are ever fanned onto THIS cluster.
+# PER-ENV ROOT app-of-apps (story.5020): each env applies ONLY its own
+# cogni-${DEPLOY_ENV}-control-plane SEED, whose source path is the env-scoped
+# control-plane/${DEPLOY_ENV}/ dir (holding that env's cogni-${DEPLOY_ENV}-appsets
+# app-of-apps). The seed is the ONLY apply-once surface; from it Argo continuously
+# reconciles the app-of-apps layer, which reconciles appsets/${DEPLOY_ENV}/ with
+# prune — so a merged change to the app-of-apps reaches the cluster WITHOUT a
+# re-provision, a catalog-removed node's AppSet auto-prunes, and (crucially) NO
+# foreign env's app-of-apps is ever fanned onto THIS cluster.
 #
-# This replaces the prior loop that applied each per-node ${DEPLOY_ENV}-<node>-
-# applicationset.yaml directly (apply-once → orphaned AppSets never pruned, and
-# nothing stopped a future all-env source from fanning out). candidate-b still
-# ships its own monolithic ${APPSET_FILE} (not yet migrated to the app-of-apps).
+# This replaces the prior step that applied the cogni-${DEPLOY_ENV}-appsets
+# app-of-apps DIRECTLY (itself apply-once → a merged control-plane change never
+# reached a live cluster until re-provision; proven 2026-06-30). candidate-b still
+# ships its own monolithic ${APPSET_FILE} (not yet migrated to the seed).
 APPSET_DIR="$REPO_ROOT/infra/k8s/argocd"
-APP_OF_APPS="$APPSET_DIR/${DEPLOY_ENV}-appsets-application.yaml"
+APP_OF_APPS="$APPSET_DIR/control-plane/roots/${DEPLOY_ENV}-control-plane-application.yaml"
 APPSET_LOCALS=()
 if [ -f "$APP_OF_APPS" ]; then
   APPSET_LOCALS+=("$APP_OF_APPS")
 elif [ -f "$APPSET_DIR/${APPSET_FILE}" ]; then
-  # Pre-app-of-apps env (e.g. candidate-b) still ships a monolithic AppSet.
+  # Pre-seed env (e.g. candidate-b) still ships a monolithic AppSet.
   APPSET_LOCALS+=("$APPSET_DIR/${APPSET_FILE}")
 fi
 if [ ${#APPSET_LOCALS[@]} -eq 0 ]; then
-  log_error "No app-of-apps for ${DEPLOY_ENV} in $APPSET_DIR"
-  log_error "Expected ${DEPLOY_ENV}-appsets-application.yaml or monolithic ${APPSET_FILE}."
+  log_error "No control-plane root seed for ${DEPLOY_ENV} in $APPSET_DIR"
+  log_error "Expected control-plane/roots/${DEPLOY_ENV}-control-plane-application.yaml or monolithic ${APPSET_FILE}."
   log_error "Run this script from the repo root on a branch that has infra/k8s/argocd/."
   exit 1
 fi
