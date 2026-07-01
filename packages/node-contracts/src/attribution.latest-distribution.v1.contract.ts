@@ -50,7 +50,8 @@ export const LatestDistributionOutputSchema = z.object({
 
 export const latestDistributionOperation = {
   id: "ledger.latest-distribution.v1",
-  summary: "Get an account's cumulative DAO token merkle claim (latest manifest)",
+  summary:
+    "Get an account's cumulative DAO token merkle claim (latest manifest)",
   description:
     "Returns the account's cumulative merkle leaf + proof from the latest finalized epoch that has a distribution manifest. A single cumulative claim covers ALL unclaimed epochs. claim is null when no finalized manifest exists or the account has no leaf in the latest manifest. Public endpoint; serves only public claim data.",
   input: z.object({

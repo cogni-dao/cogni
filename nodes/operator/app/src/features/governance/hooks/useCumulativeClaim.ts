@@ -15,16 +15,13 @@
  */
 
 import { CUMULATIVE_MERKLE_DISTRIBUTOR_ABI } from "@cogni/cogni-contracts";
+import type { LatestDistributionClaimDto } from "@cogni/node-contracts";
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { useReadContract } from "wagmi";
 
-import type { LatestDistributionClaimDto } from "@cogni/node-contracts";
-
 /** Endpoint variant: latest cumulative manifest, or a specific epoch's manifest. */
-type ClaimSource =
-  | { kind: "latest" }
-  | { kind: "epoch"; epochId: string };
+type ClaimSource = { kind: "latest" } | { kind: "epoch"; epochId: string };
 
 function claimUrl(source: ClaimSource, account: string): string {
   if (source.kind === "epoch") {

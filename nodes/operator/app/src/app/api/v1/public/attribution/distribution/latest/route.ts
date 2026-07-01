@@ -12,8 +12,8 @@
  */
 
 import {
-  latestDistributionOperation,
   epochDistributionOperation,
+  latestDistributionOperation,
 } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
 import { getContainer } from "@/bootstrap/container";
@@ -54,8 +54,7 @@ export const GET = wrapPublicRoute(
       .sort((a, b) => (a > b ? -1 : a < b ? 1 : 0));
 
     for (const epochId of finalizedDesc) {
-      const manifest =
-        await store.getDistributionManifestForEpoch(epochId);
+      const manifest = await store.getDistributionManifestForEpoch(epochId);
       if (!manifest) continue;
 
       // Latest manifest found. Serve this account's cumulative leaf from it.
