@@ -14,9 +14,9 @@
 import { listEpochsOperation } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/app/_lib/auth/session";
-import { toEpochDto } from "@/app/api/v1/public/attribution/_lib/attribution-dto";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
+import { listEpochsForNode } from "@/features/attribution/read/epoch-views";
 import { getNodeId } from "@/shared/config";
 
 export const dynamic = "force-dynamic";
@@ -35,14 +35,11 @@ export const GET = wrapRouteHandlerWithLogging(
     });
 
     const store = getContainer().attributionStore;
-    const allEpochs = await store.listEpochs(getNodeId());
-    const page = allEpochs.slice(offset, offset + limit);
+    const result = await listEpochsForNode(store, getNodeId(), {
+      limit,
+      offset,
+    });
 
-    return NextResponse.json(
-      listEpochsOperation.output.parse({
-        epochs: page.map(toEpochDto),
-        total: allEpochs.length,
-      })
-    );
+    return NextResponse.json(listEpochsOperation.output.parse(result));
   }
 );
