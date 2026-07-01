@@ -244,6 +244,19 @@ export interface DeployPlanePort {
   resolveNodeRepo(input: ResolveNodeRepoInput): Promise<ResolvedNodeRepo>;
 
   /**
+   * Read a text file from a repo via the operator App (contents:read). Returns null when the file is
+   * absent. Used by the attribution-profile resolver to read each node's `.cogni/repo-spec.yaml`
+   * (`source_refs`) — the same App-auth catalog/spec read path resolveNodeRepo uses; the file is
+   * absent on the operator's runtime disk, so this App path is the only runtime source.
+   */
+  fetchFileText(input: {
+    owner: string;
+    repo: string;
+    path: string;
+    ref?: string;
+  }): Promise<string | null>;
+
+  /**
    * Grant a GitHub identity branch-push (Write) on a node repo — the operator App as the privilege
    * bridge for the contributor golden path (rbac.md §6a, TRUST_BOUNDARY_IS_MERGE_NOT_PUSH). The App
    * holds `administration: write`; the agent never holds standing GitHub admin. Idempotent (re-granting
