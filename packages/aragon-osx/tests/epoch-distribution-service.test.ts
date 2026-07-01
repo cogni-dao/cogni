@@ -12,6 +12,7 @@
  */
 
 import {
+  buildCumulativeEpochDistribution,
   buildDaoTokenMerkleDistribution,
   buildEpochDistribution,
   type ClaimantWalletResolver,
@@ -232,5 +233,48 @@ describe("buildEpochDistribution", () => {
     expect(result.unresolvedClaimantKeys).toEqual([]);
     expect(result.blockers).toEqual([]);
     expect(assertDistribution(result.distribution).totalAllocated).toBe(1_000n);
+  });
+});
+
+describe("buildCumulativeEpochDistribution — mint/claim conservation", () => {
+  // CONSERVATION_MINT_EQUALS_CLAIMABLE: mintDelta arrives scaled for the FULL
+  // pool (all contributors), but wallet-UNLINKED contributors are excluded from
+  // the root. The mint must cover ONLY the resolved subset — never redistribute
+  // the unlinked share to linked contributors (that over-pays and breaks
+  // minted==claimable). Regression guard for the identity→wallet seam.
+  it("mints ONLY resolved-wallet credits — never over-pays the linked subset the unlinked share", async () => {
+    const UNLINKED = "identity:github:999";
+    const resolver = fakeResolver({
+      [ALICE_USER]: { userId: "u-alice", wallet: ALICE },
+      [BOB_IDENTITY]: { userId: "u-bob", wallet: BOB },
+      [UNLINKED]: { userId: null, wallet: null },
+    });
+    // ALICE 30 + BOB 20 linked, UNLINKED 50 → totalCredits 100.
+    // Full-pool mintDelta = 100 (scale 1 for the test). Correct mint = 50 (A+B).
+    const result = await buildCumulativeEpochDistribution(
+      statement([
+        { claimantKey: ALICE_USER, creditAmount: 30n, receiptIds: ["r1"] },
+        { claimantKey: BOB_IDENTITY, creditAmount: 20n, receiptIds: ["r2"] },
+        { claimantKey: UNLINKED, creditAmount: 50n, receiptIds: ["r3"] },
+      ]),
+      100n,
+      [],
+      resolver
+    );
+    const dist = result.distribution;
+    expect(dist).not.toBeNull();
+    if (dist === null) throw new Error("expected a distribution");
+    // Mint == claimable == resolved credits only (NOT the full 100 pool).
+    expect(dist.mintDelta).toBe(50n);
+    expect(dist.cumulativeTotal).toBe(50n);
+    const byAcct = new Map(
+      dist.leaves.map((l) => [l.account.toLowerCase(), l])
+    );
+    // ALICE gets her OWN 30 — not 60 (would be the over-pay bug).
+    expect(byAcct.get(ALICE.toLowerCase())?.cumulativeAmount).toBe(30n);
+    expect(byAcct.get(BOB.toLowerCase())?.cumulativeAmount).toBe(20n);
+    expect(dist.leaves.length).toBe(2);
+    // The unlinked contributor is a pending liability, not lost or paid to others.
+    expect(result.unresolvedClaimantKeys).toContain(UNLINKED);
   });
 });

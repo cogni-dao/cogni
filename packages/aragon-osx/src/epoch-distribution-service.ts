@@ -309,12 +309,34 @@ export async function buildCumulativeEpochDistribution(
     };
   }
 
-  // Split this epoch's mint delta across the resolved allocations by credit
+  // CONSERVATION (minted == claimable): `mintDelta` arrives scaled for the FULL
+  // pool (poolTotalCredits(ALL) × base-units), but unresolved (wallet-unlinked)
+  // contributors are excluded from the root above. Splitting the full pool across
+  // only the resolved subset would OVER-PAY linked contributors the unlinked
+  // share and break minted==claimable. So mint ONLY the resolved credits' worth:
+  // resolvedMintDelta = mintDelta × resolvedCredits / totalEpochCredits (multiply
+  // -first, exact — mintDelta is an exact multiple of totalEpochCredits). Unlinked
+  // credits stay a pending off-chain liability the cumulative root absorbs when
+  // the contributor later links a wallet (a future epoch resolves + mints them).
+  const totalEpochCredits = statement.lines.reduce(
+    (sum, line) => sum + (line.creditAmount > 0n ? line.creditAmount : 0n),
+    0n
+  );
+  const resolvedCredits = allocations.reduce(
+    (sum, allocation) => sum + allocation.creditAmount,
+    0n
+  );
+  const resolvedMintDelta =
+    totalEpochCredits > 0n
+      ? (mintDelta * resolvedCredits) / totalEpochCredits
+      : 0n;
+
+  // Split the RESOLVED mint delta across the resolved allocations by credit
   // weight (largest-remainder). With no resolved allocations the delta is zero;
   // the new root still re-publishes the prior cumulative balances unchanged.
   const epochDeltas =
-    allocations.length > 0
-      ? splitEpochDeltaByCredits(allocations, mintDelta)
+    allocations.length > 0 && resolvedMintDelta > 0n
+      ? splitEpochDeltaByCredits(allocations, resolvedMintDelta)
       : [];
 
   const distribution = buildDaoTokenCumulativeDistribution({
