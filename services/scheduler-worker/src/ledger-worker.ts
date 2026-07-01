@@ -65,6 +65,7 @@ export async function startAttributionWorker(
     scopeId: container.scopeId,
     chainId: container.chainId,
     tokenAddress: container.tokenAddress,
+    distributorAddress: container.distributorAddress,
     walletResolver: container.walletResolver,
     logger: container.logger,
   });

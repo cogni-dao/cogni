@@ -26,7 +26,11 @@
  * @internal
  */
 
-import { extractNodeId, parseRepoSpec } from "@cogni/repo-spec";
+import {
+  extractDistributorAddress,
+  extractNodeId,
+  parseRepoSpec,
+} from "@cogni/repo-spec";
 import { createAppAuth } from "@octokit/auth-app";
 import { Octokit } from "@octokit/core";
 import { parse as parseYaml } from "yaml";
@@ -136,6 +140,10 @@ export interface DistributionActivationInput {
   readonly slug: string;
   readonly tokenAddress: string;
   readonly emissionsHolderAddress: string;
+  /** The ONE cumulative distributor deployed at activation (DAO-owned). */
+  readonly distributorAddress: string;
+  /** Deploy transaction hash (provenance). */
+  readonly distributorDeployTx: string;
 }
 
 export interface DistributionActivationStatus {
@@ -1746,14 +1754,17 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
     const branch = `cogni-operator/activate-distributions-${slug}`;
     const title = `feat(distributions): activate ${slug} token distributions`;
     const body =
-      `Activates \`${slug}\`'s token distribution lifecycle. Writes the verified ` +
-      "GovernanceERC20 token + DAO-controlled emissions holder into `.cogni/repo-spec.yaml`:\n\n" +
+      `Activates \`${slug}\`'s token distribution lifecycle. Records the verified ` +
+      "GovernanceERC20 token, DAO-controlled emissions holder, and the ONE deployed cumulative " +
+      "distributor into `.cogni/repo-spec.yaml`:\n\n" +
       `- \`governance.token_contract\` = \`${input.tokenAddress}\`\n` +
       `- \`governance.emissions_holder\` = \`${input.emissionsHolderAddress}\`\n` +
       "- `distributions.status: active`\n" +
-      "- `distributions.claim_contract_pattern: uniswap.merkle-distributor.v1`\n\n" +
-      "This only records verified distribution readiness. Per-epoch claims still use the OSS " +
-      "MerkleDistributor path and require a separately funded epoch distributor.\n\n" +
+      "- `distributions.claim_contract_pattern: 1inch.cumulative-merkle-drop.v1`\n" +
+      `- \`distributions.distributor_address\` = \`${input.distributorAddress}\` (DAO-owned)\n` +
+      `- \`distributions.distributor_deploy_tx\` = \`${input.distributorDeployTx}\`\n\n` +
+      "The distributor is the stock, vendored 1inch CumulativeMerkleDrop — ONE per node, DAO-owned. " +
+      "Epoch finalization reuses it every epoch (setMerkleRoot + delta mint); no per-epoch redeploy.\n\n" +
       "_Authored automatically by cogni-operator on distribution activation._";
 
     const currentSpec = await this.fetchFileText({
@@ -1770,16 +1781,16 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       );
     }
 
-    const nextSpec = renderDistributionActivationSpec(currentSpec, {
+    const renderInput = {
       tokenAddress: input.tokenAddress,
       emissionsHolderAddress: input.emissionsHolderAddress,
-    });
+      distributorAddress: input.distributorAddress,
+      distributorDeployTx: input.distributorDeployTx,
+    };
+    const nextSpec = renderDistributionActivationSpec(currentSpec, renderInput);
     if (
       nextSpec === currentSpec ||
-      hasDistributionActivationSpec(currentSpec, {
-        tokenAddress: input.tokenAddress,
-        emissionsHolderAddress: input.emissionsHolderAddress,
-      })
+      hasDistributionActivationSpec(currentSpec, renderInput)
     ) {
       return { status: "no_changes" };
     }
@@ -1798,10 +1809,7 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       if (
         pendingSpec === nextSpec ||
         (pendingSpec !== null &&
-          hasDistributionActivationSpec(pendingSpec, {
-            tokenAddress: input.tokenAddress,
-            emissionsHolderAddress: input.emissionsHolderAddress,
-          }))
+          hasDistributionActivationSpec(pendingSpec, renderInput))
       ) {
         await this.updatePrBody(
           octokit,
@@ -1860,6 +1868,8 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       hasDistributionActivationSpec(currentSpec, {
         tokenAddress: input.tokenAddress,
         emissionsHolderAddress: input.emissionsHolderAddress,
+        distributorAddress: input.distributorAddress,
+        distributorDeployTx: input.distributorDeployTx,
       });
 
     let mainSha: string | null = null;
@@ -1896,6 +1906,31 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       repoSpecActive,
       activationPr: mergedPr,
     };
+  }
+
+  /**
+   * Read the ONE distributor address already recorded in the node's repo-spec on
+   * `main` (R2 idempotency). Returns null if none is recorded yet. This is the
+   * source of truth the activation route consults BEFORE asking the client to
+   * deploy — a recorded address means "already deployed; surface it, do NOT
+   * redeploy".
+   */
+  async getRecordedDistributorAddress(input: {
+    readonly owner: string;
+    readonly repo: string;
+  }): Promise<string | null> {
+    const currentSpec = await this.fetchFileText({
+      owner: input.owner,
+      repo: input.repo,
+      path: ".cogni/repo-spec.yaml",
+      ref: "main",
+    });
+    if (currentSpec === null) return null;
+    try {
+      return extractDistributorAddress(parseRepoSpec(currentSpec)) ?? null;
+    } catch {
+      return null;
+    }
   }
 
   async getPaymentsActivationStatus(

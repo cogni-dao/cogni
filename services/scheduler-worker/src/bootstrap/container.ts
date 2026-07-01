@@ -34,6 +34,7 @@ import { createServiceDbClient } from "@cogni/db-client/service";
 import {
   extractChainId,
   extractDaoTokenDistributionConfig,
+  extractDistributorAddress,
   extractLedgerConfig,
   extractNodeId,
   extractScopeId,
@@ -111,6 +112,7 @@ function loadRepoSpecIdentity(): {
   scopeId: string;
   chainId: number;
   tokenAddress: string | null;
+  distributorAddress: string | null;
   configuredSources: string[];
   excludedLogins: string[];
   sourceRefs: string[];
@@ -142,6 +144,11 @@ function loadRepoSpecIdentity(): {
   // root build is skipped until activation (off-chain finalize still runs).
   const distributionConfig = extractDaoTokenDistributionConfig(spec);
   const tokenAddress = distributionConfig?.tokenAddress ?? null;
+  // The ONE per-node cumulative distributor recorded at R2 activation. Read
+  // directly from repo-spec (NOT gated on distributions.status) so the FIRST
+  // epoch — which has no prior/current manifest — can still resolve the contract
+  // in ledger.ts's finalize fallback chain. Null until R2 records it.
+  const distributorAddress = extractDistributorAddress(spec) ?? null;
   // Collect excluded logins from all activity sources
   const excludedLogins = ledgerConfig
     ? Object.values(ledgerConfig.activitySources).flatMap(
@@ -160,6 +167,7 @@ function loadRepoSpecIdentity(): {
     scopeId: extractScopeId(spec),
     chainId: extractChainId(spec),
     tokenAddress,
+    distributorAddress,
     configuredSources: ledgerConfig
       ? Object.keys(ledgerConfig.activitySources)
       : [],
@@ -181,6 +189,11 @@ export interface AttributionContainer {
   chainId: number;
   /** GovernanceERC20 token address from repo-spec; null until distributions activated. */
   tokenAddress: string | null;
+  /**
+   * The ONE per-node cumulative distributor recorded at R2 activation; null until
+   * recorded. Terminal fallback for ledger.ts finalize distributor resolution.
+   */
+  distributorAddress: string | null;
   /** Claimant key → contributor wallet resolver (R3 cumulative root build). */
   walletResolver: ClaimantWalletResolver | null;
   logger: Logger;
@@ -249,6 +262,7 @@ export function createAttributionContainer(
     scopeId,
     chainId,
     tokenAddress,
+    distributorAddress,
     configuredSources,
     excludedLogins,
     sourceRefs,
@@ -344,6 +358,7 @@ export function createAttributionContainer(
     scopeId,
     chainId,
     tokenAddress,
+    distributorAddress,
     walletResolver,
     logger: attributionLogger,
   };

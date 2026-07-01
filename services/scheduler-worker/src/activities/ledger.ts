@@ -92,6 +92,14 @@ export interface AttributionActivityDeps {
    */
   readonly tokenAddress: string | null;
   /**
+   * The ONE per-node cumulative distributor recorded in repo-spec at R2
+   * activation. Terminal fallback for distributor resolution at finalize: the
+   * FIRST epoch has no prior/current manifest, so this repo-spec-sourced address
+   * is what makes the first manifest carry a distributor. Null until R2 records
+   * it (off-chain finalize still runs).
+   */
+  readonly distributorAddress: string | null;
+  /**
    * Read-only resolver: attribution claimant key → contributor wallet. Used at
    * finalize to map this epoch's claimant credit lines onto EVM wallets for the
    * cumulative root. Null disables cumulative-root building (off-chain ledger
@@ -348,6 +356,7 @@ export function createAttributionActivities(deps: AttributionActivityDeps) {
     scopeId,
     chainId,
     tokenAddress,
+    distributorAddress: repoSpecDistributorAddress,
     walletResolver,
     logger,
   } = deps;
@@ -422,6 +431,9 @@ export function createAttributionActivities(deps: AttributionActivityDeps) {
       priorManifest?.distributorAddress ??
       (await attributionStore.getDistributionManifestForEpoch(args.epochId))
         ?.distributorAddress ??
+      // R2↔R3 seam: the FIRST epoch has no prior/current manifest, so fall back to
+      // the ONE per-node distributor R2 recorded in repo-spec at activation.
+      repoSpecDistributorAddress ??
       null;
 
     // The per-epoch mint delta is THIS epoch's poolTotal in base units

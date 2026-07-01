@@ -592,7 +592,23 @@ export const repoSpecSchema = z
       .object({
         status: z.enum(["pending_activation", "active"]),
         claim_contract_pattern: z
-          .enum(["uniswap.merkle-distributor.v1"])
+          .enum([
+            "uniswap.merkle-distributor.v1",
+            "1inch.cumulative-merkle-drop.v1",
+          ])
+          .optional(),
+        /**
+         * The ONE cumulative Merkle distributor deployed for this node at
+         * distributions activation (R2). DAO-owned (ownership transferred to
+         * `governance.dao_contract` post-deploy). Epoch finalization (R3) resolves
+         * this address, calls `setMerkleRoot` per epoch, and mints only the delta —
+         * there is no per-epoch redeploy. Recorded once and treated as immutable.
+         */
+        distributor_address: evmAddressSchema.optional(),
+        /** Deploy transaction hash for the distributor (audit/provenance). */
+        distributor_deploy_tx: z
+          .string()
+          .regex(/^0x[0-9a-fA-F]{64}$/, "Invalid tx hash")
           .optional(),
       })
       .optional(),

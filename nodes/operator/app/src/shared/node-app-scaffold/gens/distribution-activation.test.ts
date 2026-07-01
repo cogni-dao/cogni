@@ -4,8 +4,8 @@
 /**
  * Module: `@shared/node-app-scaffold/gens/distribution-activation`
  * Purpose: Pin the distribution-activation repo-spec splice: token + emissions holder are written,
- *   distributions become active, the OSS claim pattern is explicit, comments survive, and re-splice
- *   is a no-op.
+ *   distributions become active, the OSS claim pattern is explicit, the ONE deployed distributor
+ *   (address + chain + deploy tx) is recorded, comments survive, and re-splice is a no-op.
  * Scope: Pure unit test over `renderDistributionActivationSpec`. No IO.
  * Invariants: OSS_CLAIM_PATH, NON_LINEAR_ACTIVATION, SINGLE_HOME, IDEMPOTENT_SPLICE.
  * Side-effects: none.
@@ -24,6 +24,15 @@ import {
 
 const TOKEN = "0x2222222222222222222222222222222222222222";
 const EMISSIONS_HOLDER = "0x3333333333333333333333333333333333333333";
+const DISTRIBUTOR = "0x6666666666666666666666666666666666666666";
+const DEPLOY_TX = `0x${"ab".repeat(32)}`;
+
+const INPUT = {
+  tokenAddress: TOKEN,
+  emissionsHolderAddress: EMISSIONS_HOLDER,
+  distributorAddress: DISTRIBUTOR,
+  distributorDeployTx: DEPLOY_TX,
+};
 
 const PENDING_SPEC = `# Node Template - repo-spec
 schema_version: "0.1.4"
@@ -51,12 +60,9 @@ gates:
 `;
 
 describe("renderDistributionActivationSpec", () => {
-  const activated = renderDistributionActivationSpec(PENDING_SPEC, {
-    tokenAddress: TOKEN,
-    emissionsHolderAddress: EMISSIONS_HOLDER,
-  });
+  const activated = renderDistributionActivationSpec(PENDING_SPEC, INPUT);
 
-  it("writes token, emissions holder, active status, and the OSS claim pattern", () => {
+  it("writes token, emissions holder, active status, the OSS claim pattern, and the distributor", () => {
     const parsed = parseYaml(activated) as Record<string, unknown>;
     const governance = parsed.governance as Record<string, unknown>;
     const distributions = parsed.distributions as Record<string, unknown>;
@@ -67,6 +73,8 @@ describe("renderDistributionActivationSpec", () => {
     expect(distributions.claim_contract_pattern).toBe(
       DISTRIBUTION_CLAIM_CONTRACT_PATTERN
     );
+    expect(distributions.distributor_address).toBe(DISTRIBUTOR);
+    expect(distributions.distributor_deploy_tx).toBe(DEPLOY_TX);
   });
 
   it("preserves existing governance identity and comments", () => {
@@ -79,17 +87,9 @@ describe("renderDistributionActivationSpec", () => {
   });
 
   it("is idempotent when re-splicing an activated spec", () => {
-    const twice = renderDistributionActivationSpec(activated, {
-      tokenAddress: TOKEN,
-      emissionsHolderAddress: EMISSIONS_HOLDER,
-    });
+    const twice = renderDistributionActivationSpec(activated, INPUT);
     expect(twice).toBe(activated);
-    expect(
-      hasDistributionActivationSpec(twice, {
-        tokenAddress: TOKEN,
-        emissionsHolderAddress: EMISSIONS_HOLDER,
-      })
-    ).toBe(true);
+    expect(hasDistributionActivationSpec(twice, INPUT)).toBe(true);
   });
 
   it("recognizes semantically active specs even when block placement differs", () => {
@@ -103,6 +103,8 @@ scope_key: "default"
 distributions:
   status: active
   claim_contract_pattern: ${DISTRIBUTION_CLAIM_CONTRACT_PATTERN}
+  distributor_address: "${DISTRIBUTOR.toUpperCase()}"
+  distributor_deploy_tx: "${DEPLOY_TX}"
 
 governance:
   dao_contract: "0x1111111111111111111111111111111111111111"
@@ -113,26 +115,23 @@ governance:
   emissions_holder: "${EMISSIONS_HOLDER.toUpperCase()}"
 `;
 
-    expect(
-      hasDistributionActivationSpec(reordered, {
-        tokenAddress: TOKEN,
-        emissionsHolderAddress: EMISSIONS_HOLDER,
-      })
-    ).toBe(true);
+    expect(hasDistributionActivationSpec(reordered, INPUT)).toBe(true);
   });
 
   it("updates already-present distribution addresses", () => {
     const old = renderDistributionActivationSpec(PENDING_SPEC, {
       tokenAddress: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       emissionsHolderAddress: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      distributorAddress: "0xcccccccccccccccccccccccccccccccccccccccc",
+      distributorDeployTx: `0x${"cd".repeat(32)}`,
     });
-    const next = renderDistributionActivationSpec(old, {
-      tokenAddress: TOKEN,
-      emissionsHolderAddress: EMISSIONS_HOLDER,
-    });
+    const next = renderDistributionActivationSpec(old, INPUT);
     const parsed = parseYaml(next) as Record<string, unknown>;
     const governance = parsed.governance as Record<string, unknown>;
+    const distributions = parsed.distributions as Record<string, unknown>;
     expect(governance.token_contract).toBe(TOKEN);
     expect(governance.emissions_holder).toBe(EMISSIONS_HOLDER);
+    expect(distributions.distributor_address).toBe(DISTRIBUTOR);
+    expect(distributions.distributor_deploy_tx).toBe(DEPLOY_TX);
   });
 });

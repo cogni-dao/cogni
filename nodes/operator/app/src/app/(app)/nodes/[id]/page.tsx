@@ -211,6 +211,9 @@ export default async function NodeDashboardPage({
           nodeId={node.id}
           slug={node.slug}
           repoSpecUrl={repoSpecUrl}
+          tokenAddress={node.tokenAddress}
+          daoAddress={node.daoAddress}
+          chainId={node.chainId}
         />
       ) : null}
 

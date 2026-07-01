@@ -12,18 +12,19 @@ via a governance early-execute proposal, and can a contributor then claim?
 
 ## THE ANSWER: YES — proven end-to-end.
 
-| step | result | evidence |
-|---|---|---|
-| No pre-mint exists | PASS | live `token.totalSupply()` == `1e18` (the lone genesis "solo_one_token") |
-| Deploy stock distributor `(token, root)` | PASS | `distributor.token()` == GovernanceERC20, `distributor.merkleRoot()` == our 1-leaf root, balance 0 |
-| Early-execute mints into distributor | PASS | proposal `executed=true` in the **same tx**; `totalSupply` 1e18 -> 101e18; distributor balance 0 -> 100e18 |
-| Mint was a real MINT (not a transfer) | PASS | `Transfer(from=0x0, to=distributor, 100e18)` in the createProposal receipt; supply delta == amount |
-| Contributor claims | PASS | `claim(0, contributor, 100e18, [])` -> contributor balance == 100e18, `isClaimed(0)` == true, double-claim now blocked |
+| step                                     | result | evidence                                                                                                               |
+| ---------------------------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------- |
+| No pre-mint exists                       | PASS   | live `token.totalSupply()` == `1e18` (the lone genesis "solo_one_token")                                               |
+| Deploy stock distributor `(token, root)` | PASS   | `distributor.token()` == GovernanceERC20, `distributor.merkleRoot()` == our 1-leaf root, balance 0                     |
+| Early-execute mints into distributor     | PASS   | proposal `executed=true` in the **same tx**; `totalSupply` 1e18 -> 101e18; distributor balance 0 -> 100e18             |
+| Mint was a real MINT (not a transfer)    | PASS   | `Transfer(from=0x0, to=distributor, 100e18)` in the createProposal receipt; supply delta == amount                     |
+| Contributor claims                       | PASS   | `claim(0, contributor, 100e18, [])` -> contributor balance == 100e18, `isClaimed(0)` == true, double-claim now blocked |
 
 ### Did early-execute actually mint into the distributor?
 
 **YES.** In a single `createProposal(..., voteOption=Yes, tryEarlyExecution=true)`
 transaction sent by the genesis holder, the receipt contains, in order:
+
 - `ProposalCreated(proposalId, creator=holder, ...)`
 - `Transfer(from=0x0, to=distributor, 100e18)` on the GovernanceERC20 — the **mint**
 - DAO `Executed(plugin)` event — the DAO ran the action

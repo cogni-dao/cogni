@@ -3,27 +3,34 @@
 
 /**
  * Module: `@app/api/v1/nodes/[id]/activate-distributions`
- * Purpose: Open the distribution-activation PR into the NODE'S OWN repo: write the Aragon
- *   GovernanceERC20 token, DAO-controlled emissions holder, and `distributions.status: active` into
- *   `.cogni/repo-spec.yaml` through the cogni-operator GitHub App.
- * Scope: Bearer/session auth + owner-or-developer gating. Activation is METADATA-ONLY: it records
- *   that the node is ready to distribute. The DAO is the GovernanceERC20 minter and mints per-epoch
- *   into a Merkle distributor later, so NO token supply is pre-minted and NO human transfers tokens.
- *   This route derives the emissions holder from the node's DAO, verifies the token + DAO contracts
- *   merely exist on-chain (bytecode present), then records the activation in git. Existing DAO nodes
- *   can activate without replaying formation because tokenAddress may be supplied when the operator
- *   row lacks one.
+ * Purpose: Record distribution activation into the NODE'S OWN repo: write the Aragon GovernanceERC20
+ *   token, DAO-controlled emissions holder, `distributions.status: active`, AND the ONE deployed
+ *   cumulative Merkle distributor (address + chain + deploy tx) into `.cogni/repo-spec.yaml` through
+ *   the cogni-operator GitHub App.
+ * Scope: Bearer/session auth + owner-or-developer gating. The DISTRIBUTOR DEPLOY happens client-side
+ *   (admin wallet, like payments activation) — see DistributionsCard.client.tsx: the wallet deploys
+ *   the stock 1inch CumulativeMerkleDrop(token), transfers ownership to the DAO, then POSTs the
+ *   deployed address + deploy tx here. This route VERIFIES on-chain that the distributor's token() is
+ *   the node token and owner() is the DAO, verifies the token + DAO contracts exist, then records the
+ *   activation in git. The DAO remains the GovernanceERC20 minter and owns setMerkleRoot; NO token
+ *   supply is pre-minted and NO human custodies tokens. Existing DAO nodes can activate without
+ *   replaying formation because tokenAddress may be supplied when the operator row lacks one.
  * Invariants:
- *   - METADATA_ONLY: activation records distribution readiness; it does NOT move tokens.
+ *   - CLIENT_DEPLOYS_DISTRIBUTOR: the ONE distributor is deployed by the admin wallet client-side;
+ *     the server NEVER fires an on-chain tx — it only verifies + records the resulting address.
+ *   - DAO_OWNS_DISTRIBUTOR: the recorded distributor's owner() MUST equal the DAO (ownership is
+ *     transferred to the DAO right after deploy), and its token() MUST equal the node token.
  *   - DAO_IS_EMISSIONS_HOLDER: the emissions holder is the DAO contract unconditionally (the DAO is
  *     the GovernanceERC20 minter; it mints per-epoch into the distributor).
  *   - NO_BALANCE_GATE: activation never checks token inventory — nothing is pre-minted, so a zero
  *     balance is expected and correct.
+ *   - IDEMPOTENT: if repo-spec already records a distributor address, the route surfaces it and does
+ *     NOT require or expect a redeploy.
  *   - GH_APP_INSTALL_REQUIRED, NODE_SOVEREIGNTY (PR only; never force-push to node main).
  *   - SINGLE_HOME: targets the node's OWN repo (`NODE_MINT_OWNER`/slug), writes ONLY
  *     `.cogni/repo-spec.yaml`.
- *   - NO_BESPOKE_CONTRACTS: pins Uniswap MerkleDistributor v1 claim pattern; does not deploy a
- *     custom distributor.
+ *   - NO_BESPOKE_CONTRACTS: deploys the STOCK, vendored 1inch CumulativeMerkleDrop (ONE per node) —
+ *     no custom contract is authored; pins the `1inch.cumulative-merkle-drop.v1` claim pattern.
  *   - OWNER_OR_DEVELOPER: node owner session OR `node.flight` authorizes activation.
  *   - NON_LINEAR_ACTIVATION: does not depend on payment activation and can run for already-active
  *     existing DAOs with a node repo.
@@ -36,6 +43,7 @@
  * @public
  */
 
+import { CUMULATIVE_MERKLE_DISTRIBUTOR_ABI } from "@cogni/cogni-contracts";
 import { CHAINS } from "@cogni/node-shared";
 import { NextResponse } from "next/server";
 import { type Address, createPublicClient, getAddress, http } from "viem";
@@ -79,6 +87,16 @@ const ActivateDistributionsInput = z.object({
   // Optional: the emissions holder is the DAO unconditionally. If supplied it
   // must equal the DAO; otherwise it defaults to node.daoAddress.
   emissionsHolderAddress: z.string().optional(),
+  // R2: the client (admin wallet) deploys the ONE CumulativeMerkleDrop(token),
+  // transfers ownership to the DAO, then POSTs the deployed address + deploy tx
+  // here. The server VERIFIES token()==token & owner()==DAO on-chain, then
+  // records it into repo-spec. Required for a fresh activation; on an idempotent
+  // re-activation (address already in repo-spec) these may be omitted.
+  distributorAddress: z.string().optional(),
+  distributorDeployTx: z
+    .string()
+    .regex(/^0x[0-9a-fA-F]{64}$/, "invalid tx hash")
+    .optional(),
 });
 
 interface RouteParams {
@@ -288,9 +306,9 @@ async function handleActivateDistributions(
 
   // Verify the ARBITRARY node's token/DAO against ITS OWN chain — not the
   // operator's governance config. Select the viem chain from node.chainId.
-  const viemChain =
-    node.chainId == null ? null : VIEM_CHAINS_BY_ID[node.chainId];
-  if (!viemChain) {
+  const nodeChainId = node.chainId;
+  const viemChain = nodeChainId == null ? null : VIEM_CHAINS_BY_ID[nodeChainId];
+  if (nodeChainId == null || !viemChain) {
     return NextResponse.json(
       {
         error: "unsupported chain for distribution verification",
@@ -316,6 +334,63 @@ async function handleActivateDistributions(
     "activate-distributions: activation requested"
   );
 
+  const writer = createNodeRepoWriter(env);
+
+  // IDEMPOTENT: if repo-spec already records a distributor, surface it and do NOT
+  // ask the client to redeploy. The ONE distributor is deployed once per node.
+  let recordedDistributor: string | null;
+  try {
+    recordedDistributor = await writer.getRecordedDistributorAddress({
+      owner: mintOwner,
+      repo: node.slug,
+    });
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : "unknown";
+    return NextResponse.json(
+      { error: "failed to read recorded distributor", reason },
+      { status: 502 }
+    );
+  }
+  if (recordedDistributor) {
+    ctx.log.info(
+      {
+        event: "node.distribution_activation.already_deployed",
+        reqId: ctx.reqId,
+        routeId: ctx.routeId,
+        nodeId: node.id,
+        slug: node.slug,
+        distributorAddress: recordedDistributor,
+      },
+      "activate-distributions: distributor already recorded — no redeploy"
+    );
+    return NextResponse.json({
+      node: activationNodePayload(node),
+      activation: { status: "already_deployed" },
+      distributorAddress: recordedDistributor,
+    });
+  }
+
+  // A fresh activation REQUIRES the client to have deployed the distributor and
+  // transferred ownership to the DAO (client-side admin-wallet tx). The server
+  // never deploys; it only verifies + records. Signal "deploy first" via 428.
+  const distributorAddress = checksummedAddress(
+    parsed.data.distributorAddress ?? ""
+  );
+  if (!distributorAddress || !parsed.data.distributorDeployTx) {
+    return NextResponse.json(
+      {
+        error: "distributor deploy required",
+        reason:
+          "no distributor recorded yet; deploy CumulativeMerkleDrop(token) client-side, transferOwnership to the DAO, then resubmit with distributorAddress + distributorDeployTx",
+        needsDeploy: true,
+        tokenAddress,
+        daoAddress,
+        chainId: node.chainId,
+      },
+      { status: 428 }
+    );
+  }
+
   try {
     const client = createPublicClient({
       chain: viemChain,
@@ -324,9 +399,42 @@ async function handleActivateDistributions(
     // METADATA_ONLY / NO_BALANCE_GATE: verify the token + DAO contracts merely
     // exist on-chain. Nothing is pre-minted (the DAO mints per-epoch into the
     // distributor), so a zero token balance is expected — never gate on it.
-    const [tokenCode, holderCode] = await Promise.all([
+    const [tokenCode, holderCode, distributorCode] = await Promise.all([
       client.getBytecode({ address: tokenAddress }),
       client.getBytecode({ address: emissionsHolderAddress }),
+      client.getBytecode({ address: distributorAddress }),
+    ]);
+    if (!tokenCode || tokenCode === "0x") {
+      return NextResponse.json(
+        { error: "token contract missing", tokenAddress },
+        { status: 409 }
+      );
+    }
+    if (!holderCode || holderCode === "0x") {
+      return NextResponse.json(
+        { error: "emissions holder contract missing", emissionsHolderAddress },
+        { status: 409 }
+      );
+    }
+    if (!distributorCode || distributorCode === "0x") {
+      return NextResponse.json(
+        { error: "distributor contract missing", distributorAddress },
+        { status: 409 }
+      );
+    }
+    // DAO_OWNS_DISTRIBUTOR: the deployed distributor must be bound to the node
+    // token and owned by the DAO (ownership transferred right after deploy).
+    const [distributorToken, distributorOwner] = await Promise.all([
+      client.readContract({
+        address: distributorAddress,
+        abi: CUMULATIVE_MERKLE_DISTRIBUTOR_ABI,
+        functionName: "token",
+      }),
+      client.readContract({
+        address: distributorAddress,
+        abi: CUMULATIVE_MERKLE_DISTRIBUTOR_ABI,
+        functionName: "owner",
+      }),
     ]);
     ctx.log.info(
       {
@@ -338,19 +446,40 @@ async function handleActivateDistributions(
         chainId: node.chainId,
         hasTokenCode: Boolean(tokenCode && tokenCode !== "0x"),
         hasHolderCode: Boolean(holderCode && holderCode !== "0x"),
+        hasDistributorCode: Boolean(
+          distributorCode && distributorCode !== "0x"
+        ),
+        distributorToken,
+        distributorOwner,
         daoIsEmissionsHolder: true,
       },
       "activate-distributions: verification result"
     );
-    if (!tokenCode || tokenCode === "0x") {
+    if (
+      (distributorToken as string).toLowerCase() !== tokenAddress.toLowerCase()
+    ) {
       return NextResponse.json(
-        { error: "token contract missing", tokenAddress },
+        {
+          error: "distributor token mismatch",
+          reason:
+            "distributor.token() does not equal the node's GovernanceERC20 token",
+          distributorToken,
+          expected: tokenAddress,
+        },
         { status: 409 }
       );
     }
-    if (!holderCode || holderCode === "0x") {
+    if (
+      (distributorOwner as string).toLowerCase() !== daoAddress.toLowerCase()
+    ) {
       return NextResponse.json(
-        { error: "emissions holder contract missing", emissionsHolderAddress },
+        {
+          error: "distributor not owned by DAO",
+          reason:
+            "distributor.owner() must equal the DAO — transferOwnership to the DAO before recording",
+          distributorOwner,
+          expectedOwner: daoAddress,
+        },
         { status: 409 }
       );
     }
@@ -366,6 +495,7 @@ async function handleActivateDistributions(
         chainId: node.chainId,
         tokenAddress,
         emissionsHolderAddress,
+        distributorAddress,
         err: reason,
         stack: err instanceof Error ? err.stack : undefined,
       },
@@ -377,7 +507,6 @@ async function handleActivateDistributions(
     );
   }
 
-  const writer = createNodeRepoWriter(env);
   let result: Awaited<ReturnType<typeof writer.openDistributionActivationPr>>;
   try {
     result = await writer.openDistributionActivationPr({
@@ -386,6 +515,8 @@ async function handleActivateDistributions(
       slug: node.slug,
       tokenAddress,
       emissionsHolderAddress,
+      distributorAddress,
+      distributorDeployTx: parsed.data.distributorDeployTx,
     });
   } catch (err) {
     const status = (err as { status?: number })?.status;
@@ -425,5 +556,6 @@ async function handleActivateDistributions(
   return NextResponse.json({
     node: activationNodePayload(node),
     activation: result,
+    distributorAddress,
   });
 }
