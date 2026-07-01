@@ -177,6 +177,55 @@ jobs:
           # shellcheck disable=SC2086
           ssh $SSH_OPTS root@"$VM_HOST" "kubectl delete applicationset cogni-${DEPLOY_ENVIRONMENT} -n argocd --cascade=orphan --ignore-not-found && kubectl apply -f /tmp/appset-${DEPLOY_ENVIRONMENT}-${NODE}.yaml -n argocd && rm -f /tmp/appset-${DEPLOY_ENVIRONMENT}-${NODE}.yaml"
 
+  # Ensure the per-env Argo root app-of-apps seed (cogni-<env>-control-plane) on
+  # ALREADY-provisioned preview/production. New envs get the seed at provision
+  # (bootstrap-k3s.yaml / provision-env-vm.sh); existing envs won't re-provision,
+  # so #1913's root app-of-apps (story.5020) only reaches them via GitOps if this
+  # step applies it. Idempotent (no-op when the root already matches), SINGLE run
+  # per env (env-scoped seed — NO matrix, unlike reconcile-appset). ADDITIVE +
+  # NON-BLOCKING: nothing else `needs:` this job, so a seed-ensure failure never
+  # blocks the promote — it rides alongside reconcile-appset/reconcile-dns.
+  ensure-control-plane:
+    needs: decide
+    if: needs.decide.outputs.has_targets == 'true'
+    concurrency:
+      group: ensure-control-plane-${{ needs.decide.outputs.environment }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    environment: ${{ needs.decide.outputs.environment }}
+    steps:
+      # Checkout the head ref — the seed manifest is catalog-derived control plane
+      # (CATALOG_IS_SSOT); a pre-#1913 head may lack it, in which case the script
+      # warns + exits 0.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.decide.outputs.head_sha }}
+
+      - name: Setup SSH
+        id: ssh-setup
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          SSH_DEPLOY_KEY: ${{ secrets.SSH_DEPLOY_KEY }}
+        run: |
+          if [ -z "$VM_HOST" ]; then
+            echo "⚠️ No VM_HOST — skipping control-plane seed"
+            echo "has_vm=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "has_vm=true" >> "$GITHUB_OUTPUT"
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          echo "$SSH_DEPLOY_KEY" | tr -d '\r' > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -T 10 -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Ensure cogni-${{ needs.decide.outputs.environment }}-control-plane seed
+        if: steps.ssh-setup.outputs.has_vm == 'true'
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          SSH_OPTS: "-i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6"
+          DEPLOY_ENVIRONMENT: ${{ needs.decide.outputs.environment }}
+        run: bash scripts/ci/ensure-control-plane-seed.sh
+
   # Per-node public DNS for preview + production — mirrors candidate-flight.yml's
   # reconcile-dns. DNS is env-level + idempotent (no-op for existing nodes); a node
   # newly added to the catalog gets its `<node>-<env host>` A record on its FIRST
