@@ -3,32 +3,26 @@
 
 /**
  * Module: `@app/(public)/claim/[epoch]/page`
- * Purpose: Public page for contributors to claim their DAO tokens for a finalized epoch.
- * Scope: Server component wrapper — resolves the epoch route param and renders the client claim flow. No auth required.
- * Invariants: Public read; claim proof fetched client-side from the public distribution route for the connected wallet.
- * Side-effects: none (server component)
- * Links: nodes/operator/app/src/app/api/v1/public/attribution/epochs/[id]/distribution/route.ts
+ * Purpose: Legacy per-epoch claim URL — redirects to the cumulative claim on /gov/holdings.
+ * Scope: Server component. The token model is CUMULATIVE: a single claim against the latest
+ *        merkle root pays out ALL unclaimed epochs, so per-epoch claiming no longer exists.
+ *        This route is kept only to preserve old links; it forwards to the holdings claim panel.
+ * Invariants:
+ *   - CUMULATIVE_MODEL: there is no per-epoch claim; one cumulative claim covers every unclaimed epoch.
+ *   - NO_BROKEN_CLAIM: never render a stale stock-MerkleDistributor per-epoch flow.
+ * Side-effects: HTTP redirect.
+ * Links: nodes/operator/app/src/app/(app)/gov/holdings/view.tsx, nodes/operator/app/src/features/governance/components/CumulativeClaimPanel.tsx
  * @public
  */
 
-import { Suspense } from "react";
-
-import { PageContainer } from "@/components/kit/layout/PageContainer";
-
-import { ClaimTokens } from "./claim-tokens.client";
+import { redirect } from "next/navigation";
 
 export default async function ClaimPage({
   params,
 }: {
   params: Promise<{ epoch: string }>;
 }) {
-  const { epoch } = await params;
-
-  return (
-    <PageContainer maxWidth="2xl">
-      <Suspense>
-        <ClaimTokens epoch={epoch} />
-      </Suspense>
-    </PageContainer>
-  );
+  // Resolve the param so Next doesn't warn, then forward to the cumulative claim.
+  await params;
+  redirect("/gov/holdings");
 }
