@@ -42,6 +42,7 @@ export * from "./attribution.epoch-distribution.v1.contract";
 export * from "./attribution.epoch-statement.v1.contract";
 export * from "./attribution.epoch-user-projections.v1.contract";
 export * from "./attribution.finalize-epoch.v1.contract";
+export * from "./attribution.latest-distribution.v1.contract";
 export * from "./attribution.list-epochs.v1.contract";
 export * from "./attribution.record-pool-component.v1.contract";
 export * from "./attribution.review-epoch.v1.contract";
