@@ -5,11 +5,13 @@
  * Module: `@tests/contract/app/nodes.attribution.epochs`
  * Purpose: Contract tests for the node-addressable attribution read routes
  *   (`/api/v1/nodes/[id]/attribution/epochs{,/[eid]/contributors,/[eid]/activity}`) — PR C,
- *   story.5023. Proves: a known node resolves and returns the same contract shape as the
- *   operator-self twin; an unknown node id → 404; auth is required (401).
- * Scope: Mocks auth + the service-db node resolution + the attribution store; exercises the
- *   real route handlers + shared `epoch-views` helper + Zod output contracts. Does not hit a DB.
- * Invariants: AUTH_REQUIRED, NODE_RESOLVED_OR_404, SAME_SHAPE_AS_OPERATOR_SELF.
+ *   story.5023. Proves: a known node the caller is authorized on resolves and returns the same
+ *   contract shape as the operator-self twin; an unknown node id → 404; a resolvable node the
+ *   caller is NOT authorized on → 403 (cross-node hard-reject); auth is required (401).
+ * Scope: Mocks auth + the OpenFGA authorization port + the service-db node resolution + the
+ *   attribution store; exercises the real route handlers + shared `epoch-views` helper + Zod
+ *   output contracts + the `resolveNodeAndAuthorize` seam. Does not hit a DB.
+ * Invariants: AUTH_REQUIRED, NODE_RESOLVED_OR_404, AUTHORIZED_OR_403, SAME_SHAPE_AS_OPERATOR_SELF.
  * Side-effects: none
  * Links: src/app/api/v1/nodes/[id]/attribution/epochs/**,
  *   src/features/attribution/read/epoch-views.ts
@@ -31,6 +33,14 @@ const EPOCH_ID = "7";
 const dbState = vi.hoisted(() => ({
   // The single node row resolveNodeRef selects; null → resolver returns null → 404.
   node: null as { id: string; slug: string } | null,
+}));
+
+// OpenFGA authorization port. `resolveNodeAndAuthorize` runs `authorization.check` for
+// `node.flight` on the resolved node; `undefined` → 503 authz_unavailable, a non-"allow"
+// decision → 403 authz_denied (the cross-node hard-reject). Set `.decision` per test.
+const authzState = vi.hoisted(() => ({
+  decision: "allow" as "allow" | "deny" | "unavailable",
+  check: vi.fn(),
 }));
 
 const mockStore = vi.hoisted(() => ({
@@ -68,6 +78,12 @@ vi.mock("@/bootstrap/container", () => ({
     clock: { now: () => "2026-06-30T00:00:00.000Z" },
     config: { unhandledErrorPolicy: "respond_500" },
     log: mockLogger,
+    // `undefined` when the test wants the no-authority 503 path; otherwise the port whose
+    // `.check` returns the configured decision.
+    authorization:
+      authzState.decision === "unavailable"
+        ? undefined
+        : { check: authzState.check },
   }),
   resolveServiceDb: () => mockServiceDb,
 }));
@@ -97,6 +113,15 @@ beforeEach(() => {
   mockLogger.child.mockReturnValue(mockLogger);
   mockGetSessionUser.mockResolvedValue(TEST_SESSION_USER_1);
   dbState.node = { id: NODE_ID, slug: NODE_SLUG };
+
+  // Happy path: the caller is authorized (`node.flight`) on the resolved node. Individual
+  // tests flip `authzState.decision` to "deny" to assert the cross-node 403 hard-reject.
+  authzState.decision = "allow";
+  authzState.check.mockImplementation(async () =>
+    authzState.decision === "allow"
+      ? { decision: "allow", code: "authz_allowed", checks: [] }
+      : { decision: "deny", code: "authz_denied", checks: [] }
+  );
 
   mockStore.listEpochs.mockResolvedValue([FINALIZED_EPOCH]);
   mockStore.getEpoch.mockResolvedValue(FINALIZED_EPOCH);
@@ -129,6 +154,29 @@ describe("GET /api/v1/nodes/[id]/attribution/epochs", () => {
         const res = await fetch({ method: "GET" });
         expect(res.status).toBe(404);
         expect(await res.json()).toEqual({ error: "node_not_found" });
+        expect(mockStore.listEpochs).not.toHaveBeenCalled();
+      },
+    });
+  });
+
+  it("returns 403 when the caller is not authorized on the node (cross-node hard-reject)", async () => {
+    // The whole point of PR C's per-node RBAC: a resolvable node the principal has no
+    // `node.flight` relation on must NOT leak its epochs. Deny → 403 authz_denied, no store read.
+    authzState.decision = "deny";
+    await testApiHandler({
+      appHandler: epochsHandler,
+      params: { id: NODE_SLUG },
+      async test({ fetch }) {
+        const res = await fetch({ method: "GET" });
+        expect(res.status).toBe(403);
+        expect(await res.json()).toEqual({ error: "authz_denied" });
+        // Authorized on the RESOLVED nodeId (the OpenFGA authority), never the raw slug param.
+        expect(authzState.check).toHaveBeenCalledWith(
+          expect.objectContaining({
+            action: "node.flight",
+            resource: `node:${NODE_ID}`,
+          })
+        );
         expect(mockStore.listEpochs).not.toHaveBeenCalled();
       },
     });
