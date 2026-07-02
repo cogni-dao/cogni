@@ -124,6 +124,13 @@ jobs:
     # Structural fix for the shared-appset clobber — mirrors candidate-flight.yml.
     strategy:
       fail-fast: false
+      # Every matrix leg SSHes the SAME env VM. Un-capped, a full-fleet promote
+      # fires ~11 parallel SSH sessions at one sshd in the same second and trips
+      # MaxStartups (default 10:30:100) → the overflow legs get `kex_exchange_
+      # identification: Connection reset by peer` → exit 255 (NOT auth/VM-down;
+      # 8/11 succeed, ~3 random victims). Cap concurrency well under MaxStartups
+      # so the herd never forms. (Retry below covers any residual transient.)
+      max-parallel: 3
       matrix:
         node: ${{ fromJson(needs.decide.outputs.targets_json) }}
     concurrency:
@@ -170,12 +177,28 @@ jobs:
             echo "::error::$APPSET_FILE missing at head — run 'pnpm gen:node-appset' (CATALOG_IS_SSOT)"
             exit 1
           fi
+          # Retry transient SSH failures (e.g. a MaxStartups "Connection reset"
+          # that slips past the max-parallel cap) with backoff. Idempotent target,
+          # so a retried apply is safe.
+          retry() {
+            local n=0 max=5 delay=5
+            until "$@"; do
+              n=$((n + 1))
+              if [ "$n" -ge "$max" ]; then
+                echo "::error::SSH step failed after ${max} attempts"
+                return 1
+              fi
+              echo "::warning::attempt ${n} failed (transient SSH?) — retrying in ${delay}s"
+              sleep "$delay"
+              delay=$((delay * 2))
+            done
+          }
           # shellcheck disable=SC2086
-          scp $SSH_OPTS "$APPSET_FILE" root@"$VM_HOST":/tmp/appset-${DEPLOY_ENVIRONMENT}-${NODE}.yaml
+          retry scp $SSH_OPTS "$APPSET_FILE" root@"$VM_HOST":/tmp/appset-${DEPLOY_ENVIRONMENT}-${NODE}.yaml
           # Anti-resurrection: orphan-delete the retired shared `cogni-<env>` AppSet
           # (keeps its live Applications), then apply the per-node object.
           # shellcheck disable=SC2086
-          ssh $SSH_OPTS root@"$VM_HOST" "kubectl delete applicationset cogni-${DEPLOY_ENVIRONMENT} -n argocd --cascade=orphan --ignore-not-found && kubectl apply -f /tmp/appset-${DEPLOY_ENVIRONMENT}-${NODE}.yaml -n argocd && rm -f /tmp/appset-${DEPLOY_ENVIRONMENT}-${NODE}.yaml"
+          retry ssh $SSH_OPTS root@"$VM_HOST" "kubectl delete applicationset cogni-${DEPLOY_ENVIRONMENT} -n argocd --cascade=orphan --ignore-not-found && kubectl apply -f /tmp/appset-${DEPLOY_ENVIRONMENT}-${NODE}.yaml -n argocd && rm -f /tmp/appset-${DEPLOY_ENVIRONMENT}-${NODE}.yaml"
 
   # Per-node public DNS for preview + production — mirrors candidate-flight.yml's
   # reconcile-dns. DNS is env-level + idempotent (no-op for existing nodes); a node
@@ -476,6 +499,10 @@ jobs:
       needs.reconcile-dns.result == 'success'
     strategy:
       fail-fast: false
+      # Same shared-VM SSH fan-out as reconcile-appset (run-node-substrate.sh
+      # SSHes the one env VM). Cap concurrency so a full-fleet promote can't
+      # trip sshd MaxStartups (see reconcile-appset above).
+      max-parallel: 3
       matrix:
         node: ${{ fromJson(needs.decide.outputs.node_targets_json) }}
     concurrency:
