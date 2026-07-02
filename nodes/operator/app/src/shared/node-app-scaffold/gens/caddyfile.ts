@@ -123,36 +123,3 @@ export function insertCaddyBlock(
     ...lines.slice(insertLine),
   ].join("\n");
 }
-
-/**
- * Remove a non-primary node's reverse-proxy block from the rendered Caddyfile.tmpl — the inverse of
- * {@link insertCaddyBlock}. Used on full node decommission (story.5020); byte-identical to
- * `bash scripts/ci/render-caddyfile.sh` once that node leaves the catalog.
- *
- * Each rendered block is `<leading blank line>` + `# ── <slug> node → …` comment … closing `}`. The
- * block spans from its own leading blank up to (but excluding) the next block's leading blank, or — when
- * it is the last block — up to the trailing "" that `split` leaves for the final newline. Removing that
- * span keeps exactly one blank line between the surviving adjacent blocks, matching the bash separators.
- * Idempotent + never touches the primary (operator) block.
- */
-export function removeCaddyBlock(
-  currentCaddyfile: string,
-  slug: string
-): string {
-  const lines = currentCaddyfile.split("\n");
-  const blocks = findBlocks(lines);
-  const target = blocks.find((b) => b.node === slug && !b.isPrimary);
-  if (!target) {
-    return currentCaddyfile;
-  }
-
-  // The block owns the blank line that precedes its comment (the bash `echo` separator).
-  const start = target.index - 1;
-  // End at the NEXT block's leading blank (its comment index − 1), else the trailing "" at EOF.
-  const successor = blocks
-    .filter((b) => b.index > target.index)
-    .sort((a, b) => a.index - b.index)[0];
-  const end = successor ? successor.index - 1 : lines.length - 1;
-
-  return [...lines.slice(0, start), ...lines.slice(end)].join("\n");
-}

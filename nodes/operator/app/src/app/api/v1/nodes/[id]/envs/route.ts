@@ -8,14 +8,15 @@
  *   (`infra/catalog/<slug>.yaml` `envs:` line + the matching overlay / ApplicationSet / appsets
  *   kustomization). Every env is an INDEPENDENT, atomic toggle (ATOMIC_PER_ENV) — candidate-a is no
  *   different from preview/production; removing the last env leaves a valid `envs: []` row.
- * Scope: Session auth + a PER-ENV authz-gate on the resolved node. Resolves the monorepo owner/repo
- *   exactly like `publish` / `activate-payments` (env-scoped, FAIL CLOSED), then delegates the byte-exact
- *   catalog/overlay/appset edit to `GitHubRepoWriter.openNodeEnvPr`.
+ * Scope: Session auth + a single MANAGE_ENVS authz-gate on the resolved node. Resolves the monorepo
+ *   owner/repo exactly like `publish` / `activate-payments` (env-scoped, FAIL CLOSED), then delegates the
+ *   byte-exact catalog/overlay/appset edit to `GitHubRepoWriter.openNodeEnvPr`.
  * Invariants:
  *   - GH_APP_INSTALL_REQUIRED, PR_AGAINST_MAIN (never force-push to monorepo main).
- *   - PER_ENV_GATED: mutating `production` requires `node.promote_production` (can_promote_production);
- *     any other env (candidate-a / preview) requires `node.flight` (can_flight). Fail-closed with a
- *     distinct code (503 authz_unavailable / 403 authz_denied).
+ *   - MANAGE_ENVS_GATED: ANY env change (add OR remove, candidate-a / preview / production alike) requires
+ *     `node.manage_envs` (can_manage_envs — env_manager / admin). Managing deploy topology is a distinct,
+ *     narrow governance scope, NOT can_flight or can_promote_production. Fail-closed with a distinct code
+ *     (503 authz_unavailable / 403 authz_denied).
  *   - IDEMPOTENT: requesting the already-holding state returns `no_changes` (no PR opened).
  *   - CATALOG_IS_SSOT: the env-set edit is a catalog change; deploy reconcilers consume it.
  * Side-effects: IO (GitHub REST API, Postgres read)
@@ -100,14 +101,13 @@ export async function POST(request: Request, routeArgs: RouteParams) {
     return NextResponse.json({ error: "not found" }, { status: 404 });
   }
 
-  // PER_ENV_GATED: mutating production requires production-promote authority; any other env
-  // (candidate-a / preview) requires flight authority. Fail-closed (503 if no authority configured).
-  const gateAction =
-    targetEnv === "production" ? "node.promote_production" : "node.flight";
+  // MANAGE_ENVS_GATED: any env change (add OR remove, ANY env including production) requires
+  // env-management authority — a distinct governance scope, not flight/promote. Fail-closed
+  // (503 if no authority configured).
   const gate = await resolveNodeAndAuthorize({
     id: node.id,
     userId: sessionUser.id,
-    action: gateAction,
+    action: "node.manage_envs",
   });
   if (!gate.ok) {
     const payload =

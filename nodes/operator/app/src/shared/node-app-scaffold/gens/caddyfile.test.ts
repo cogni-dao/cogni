@@ -3,11 +3,10 @@
 
 /**
  * Module: `@shared/node-app-scaffold/gens/caddyfile`
- * Purpose: Pin `insertCaddyBlock` / `removeCaddyBlock` to a byte-exact round-trip so the operator's
- *   add/decommission emit can't skew against `bash scripts/ci/render-caddyfile.sh` (story.5020).
- * Scope: Pure unit tests — the inverse property (remove ∘ insert == identity) proves the decommission
- *   path restores the file byte-for-byte without hand-writing block internals.
- * Invariants: CATALOG_IS_SSOT — removing a node's block matches the renderer once it leaves the catalog;
+ * Purpose: Pin `insertCaddyBlock` to a byte-exact emit so the operator's node-formation add can't skew
+ *   against `bash scripts/ci/render-caddyfile.sh` (story.5020).
+ * Scope: Pure unit tests — sorted splice, idempotent-reject, and the untouched primary block.
+ * Invariants: CATALOG_IS_SSOT — the inserted block matches the renderer once the node joins the catalog;
  *   the primary (operator) block is never touched; exactly one blank line stays between adjacent blocks.
  * Side-effects: none
  * Links: src/shared/node-app-scaffold/gens/caddyfile, scripts/ci/render-caddyfile.sh
@@ -16,7 +15,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { insertCaddyBlock, removeCaddyBlock } from "./caddyfile";
+import { insertCaddyBlock } from "./caddyfile";
 
 // Minimal seed: a global block + the primary (operator) site block. Non-primary blocks are built by
 // insertCaddyBlock so the fixtures stay byte-exact to the real emitter.
@@ -30,36 +29,40 @@ operator.localhost {
 }
 `;
 
-describe("removeCaddyBlock", () => {
-  it("is the exact inverse of insertCaddyBlock for the only non-primary node", () => {
-    const withZebra = insertCaddyBlock(SEED, "zebra", 32000);
-    expect(removeCaddyBlock(withZebra, "zebra")).toBe(SEED);
+describe("insertCaddyBlock", () => {
+  it("inserts a non-primary block with its own leading blank line", () => {
+    const out = insertCaddyBlock(SEED, "zebra", 32000);
+    expect(out).toContain(
+      "# ── zebra node → k3s NodePort 32000 ──────────────────────────────────"
+    );
+    // The block carries exactly one blank line before its comment.
+    expect(out).toContain("}\n\n# ── zebra node");
+    // The primary (operator) block is left intact.
+    expect(out).toContain(
+      "# ── operator (primary domain) → k3s NodePort 30100"
+    );
   });
 
-  it("removes a middle non-primary block, leaving neighbors + primary intact", () => {
-    // Build a file with three non-primary nodes in sorted order.
+  it("splices non-primary nodes into slug-sorted order", () => {
     const withAlpha = insertCaddyBlock(SEED, "alpha", 31000);
-    const withAlphaMid = insertCaddyBlock(withAlpha, "mid", 31500);
-    const all = insertCaddyBlock(withAlphaMid, "zebra", 32000);
-    // Dropping the middle one must equal the file built without it.
-    expect(removeCaddyBlock(all, "mid")).toBe(withAlpha2(SEED));
+    const all = insertCaddyBlock(withAlpha, "zebra", 32000);
+    expect(all.indexOf("# ── alpha node")).toBeLessThan(
+      all.indexOf("# ── zebra node")
+    );
+    // `mid` sorts between alpha and zebra.
+    const withMid = insertCaddyBlock(all, "mid", 31500);
+    expect(withMid.indexOf("# ── alpha node")).toBeLessThan(
+      withMid.indexOf("# ── mid node")
+    );
+    expect(withMid.indexOf("# ── mid node")).toBeLessThan(
+      withMid.indexOf("# ── zebra node")
+    );
   });
 
-  it("is idempotent when the node has no block", () => {
+  it("rejects a node whose block already exists", () => {
     const withZebra = insertCaddyBlock(SEED, "zebra", 32000);
-    expect(removeCaddyBlock(withZebra, "absent")).toBe(withZebra);
-  });
-
-  it("never removes the primary (operator) block", () => {
-    expect(removeCaddyBlock(SEED, "operator")).toBe(SEED);
+    expect(() => insertCaddyBlock(withZebra, "zebra", 32000)).toThrow(
+      /already contains/
+    );
   });
 });
-
-// Helper: a file with just alpha + zebra (no mid), built via insert so it's byte-exact.
-function withAlpha2(seed: string): string {
-  return insertCaddyBlock(
-    insertCaddyBlock(seed, "alpha", 31000),
-    "zebra",
-    32000
-  );
-}
