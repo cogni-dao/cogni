@@ -12,7 +12,11 @@
  * @public
  */
 
-export { insertAppsetKustomization, renderNodeAppset } from "./appset";
+export {
+  insertAppsetKustomization,
+  removeFromAppsetsKustomization,
+  renderNodeAppset,
+} from "./appset";
 export { insertCaddyBlock } from "./caddyfile";
 export { type RenderCatalogInput, renderCatalog } from "./catalog";
 export {
@@ -21,6 +25,23 @@ export {
   type RenderDistributionActivationInput,
   renderDistributionActivationSpec,
 } from "./distribution-activation";
+export {
+  addCatalogEnv,
+  dropCatalogEnv,
+  parseCatalogEnvs,
+  setCatalogEnvs,
+} from "./env-membership";
+export {
+  appsetPath,
+  appsetsKustomizationPath,
+  buildEnvDeltaPlan,
+  CATALOG_PATH,
+  type EnvDeltaResult,
+  type EnvPlanCurrent,
+  EnvPlanError,
+  type EnvPlanOp,
+  overlayPath,
+} from "./env-membership-plan";
 export { NODE_FORMATION_ENVS, type NodeFormationEnv } from "./envs";
 export {
   renderNodeExternalSecret,

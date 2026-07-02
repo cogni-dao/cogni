@@ -113,3 +113,32 @@ export function insertAppsetKustomization(
 
   return renderKustomization(env, nodes);
 }
+
+/**
+ * Drop `<slug>` from ONE env's `appsets/<env>/kustomization.yaml`, then re-render the WHOLE file
+ * node-sorted — the inverse of {@link insertAppsetKustomization}. Because it re-runs the same
+ * {@link renderKustomization} over the reduced node-set, the output is byte-exact to what
+ * `render-node-appset.sh` emits for that reduced catalog, so the `--check` drift gate stays green on
+ * a decommission (story.5020). Idempotent: a kustomization that does not list the slug is unchanged.
+ */
+export function removeFromAppsetsKustomization(
+  currentKustomization: string,
+  slug: string,
+  env: string
+): string {
+  const lines = currentKustomization.split("\n");
+  const resourcesIdx = lines.indexOf("resources:");
+  if (resourcesIdx === -1) {
+    throw new Error(
+      `infra/k8s/argocd/appsets/${env}/kustomization.yaml is missing a 'resources:' list; cannot drop the slug.`
+    );
+  }
+
+  const nodes = existingNodes(lines.slice(resourcesIdx + 1), env);
+  if (!nodes.has(slug)) {
+    return currentKustomization;
+  }
+  nodes.delete(slug);
+
+  return renderKustomization(env, nodes);
+}

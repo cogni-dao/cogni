@@ -16,7 +16,11 @@
 
 import { describe, expect, it } from "vitest";
 
-import { insertAppsetKustomization, renderNodeAppset } from "./appset";
+import {
+  insertAppsetKustomization,
+  removeFromAppsetsKustomization,
+  renderNodeAppset,
+} from "./appset";
 
 // Minimal template carrying both tokens + an Argo goTemplate marker that must survive untouched.
 const TEMPLATE = `metadata:
@@ -114,5 +118,55 @@ describe("insertAppsetKustomization", () => {
   - preview-operator-applicationset.yaml
 `
     );
+  });
+});
+
+describe("removeFromAppsetsKustomization", () => {
+  // The decommission inverse re-renders the WHOLE file over the reduced node-set, so its output is
+  // byte-exact to render-node-appset.sh on the reduced catalog (story.5020). A node listed between
+  // 'canary' and 'node-template' is dropped, leaving the surrounding entries untouched + node-sorted.
+  const WITH_FOO = `${HEADER}
+  - candidate-a-canary-applicationset.yaml
+  - candidate-a-foo-applicationset.yaml
+  - candidate-a-node-template-applicationset.yaml
+  - candidate-a-operator-applicationset.yaml
+`;
+
+  it("drops the slug and re-renders the whole file node-sorted", () => {
+    expect(removeFromAppsetsKustomization(WITH_FOO, "foo", "candidate-a")).toBe(
+      BEFORE
+    );
+  });
+
+  it("round-trips with insertAppsetKustomization (byte-identity on add→remove)", () => {
+    const added = insertAppsetKustomization(BEFORE, "foo", "candidate-a");
+    expect(removeFromAppsetsKustomization(added, "foo", "candidate-a")).toBe(
+      BEFORE
+    );
+  });
+
+  it("is idempotent when the slug is not listed", () => {
+    expect(
+      removeFromAppsetsKustomization(BEFORE, "absent", "candidate-a")
+    ).toBe(BEFORE);
+  });
+
+  it("can empty an env's resources list down to the bare header", () => {
+    const SINGLETON = `${HEADER}
+  - candidate-a-onlynode-applicationset.yaml
+`;
+    expect(
+      removeFromAppsetsKustomization(SINGLETON, "onlynode", "candidate-a")
+    ).toBe(`${HEADER}\n`);
+  });
+
+  it("throws when the resources list is missing", () => {
+    expect(() =>
+      removeFromAppsetsKustomization(
+        "kind: Kustomization\n",
+        "foo",
+        "candidate-a"
+      )
+    ).toThrow(/resources/);
   });
 });

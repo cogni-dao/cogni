@@ -274,6 +274,13 @@
       "when": 1782259221356,
       "tag": "0038_salty_karen_page",
       "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1782951526052,
+      "tag": "0039_salty_maggott",
+      "breakpoints": true
     }
   ]
 }

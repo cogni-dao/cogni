@@ -2,17 +2,16 @@
 # SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 # SPDX-FileCopyrightText: 2025 Cogni-DAO
 #
-# Unit tests for the per-env node-set gate (task.5017):
-#   1. deploy ⊆ provisioned: each env renders only the nodes whose catalog
-#      `envs:` list includes it. preview is the minimal backbone
-#      (operator + scheduler-worker); candidate-a + production carry every
-#      deployable node.
+# Unit tests for the per-env node-set gate (task.5017, story.5020 W4):
+#   1. ATOMIC_PER_ENV: for each env, the rendered AppSet set == exactly the
+#      deployable nodes whose catalog `envs:` includes that env — no cross-env
+#      constraint. Every env is an independent toggle (candidate-a is no
+#      different from preview/production).
 #   2. SCHEDULER_WITH_OPERATOR: any env that deploys operator also deploys
 #      scheduler-worker (operator /readyz hard-depends on :9000).
-#   3. CANDIDATE_A_ALWAYS: every deployable node lists candidate-a.
-#   4. DETERMINISM: repeated --check is stable (guards the `yq | grep -q`
+#   3. DETERMINISM: repeated --check is stable (guards the `yq | grep -q`
 #      SIGPIPE-under-pipefail bug that silently dropped matching nodes).
-#   5. FAIL-CLOSED: a deployable row missing `envs:` aborts the render rather
+#   4. FAIL-CLOSED: a deployable row missing `envs:` aborts the render rather
 #      than silently fanning the node out to every env.
 #
 # Run: bash scripts/ci/tests/render-node-appset.test.sh
@@ -42,12 +41,15 @@ appsets_for_env() {
   done | LC_ALL=C sort
 }
 
-# All deployable node slugs (catalog rows with a candidate_a_branch), sorted.
-all_deployable() {
-  local f
+# Deployable node slugs whose catalog `envs:` lists $1 (env), sorted. This is the
+# expected AppSet set for that env under ATOMIC_PER_ENV — no cross-env constraint.
+deployable_for_env() {
+  local env="$1" f
   for f in infra/catalog/*.yaml; do
     [ "$(yq -r '.candidate_a_branch // ""' "$f")" != "" ] || continue
-    yq -r '.name' "$f"
+    if E="$env" yq -e '(.envs // []) | contains([strenv(E)])' "$f" >/dev/null 2>&1; then
+      yq -r '.name' "$f"
+    fi
   done | LC_ALL=C sort
 }
 
@@ -55,30 +57,18 @@ all_deployable() {
 bash "$RENDER" --check >/dev/null || fail "committed AppSets are out of sync with the catalog"
 pass "committed AppSets in sync (--check green)"
 
-# Promotion-ladder invariant (NOT hardcoded per-env lists — that brittleness
-# red-mained the queue when #1626 expanded preview without editing this test).
-# Relations hold regardless of which nodes opt into an env via the catalog:
-#   candidate-a == all deployable   (the full pre-merge slot, CANDIDATE_A_ALWAYS)
-#   preview     ⊆ candidate-a       (a node previews only once candidate-flightable)
-#   production  ⊆ preview           (a node graduates to prod only after preview)
-# Adding a node to an env's catalog `envs` preserves the ladder — no test edit.
-candidatea="$(appsets_for_env candidate-a | sort -u)"
-deployable="$(all_deployable | sort -u)"
-[ "$candidatea" = "$deployable" ] \
-  || fail "candidate-a must equal all deployable nodes — got '$(echo $candidatea | tr ' ' ,)', expected '$(echo $deployable | tr ' ' ,)'"
-pass "candidate-a is the full test slot ($(echo $candidatea | tr ' ' ,))"
-
-preview="$(appsets_for_env preview | sort -u)"
-not_flightable="$(comm -23 <(echo "$preview") <(echo "$candidatea"))"
-[ -z "$not_flightable" ] \
-  || fail "preview node-set must be ⊆ candidate-a (candidate-proven first); offenders: $(echo $not_flightable | tr ' ' ,)"
-pass "preview ⊆ candidate-a ($(echo $preview | tr ' ' ,))"
-
-production="$(appsets_for_env production | sort -u)"
-not_in_preview="$(comm -23 <(echo "$production") <(echo "$preview"))"
-[ -z "$not_in_preview" ] \
-  || fail "production node-set must be ⊆ preview (promote through preview first); offenders: $(echo $not_in_preview | tr ' ' ,)"
-pass "production ⊆ preview ($(echo $production | tr ' ' ,))"
+# 1. ATOMIC_PER_ENV — each env renders EXACTLY the deployable nodes whose catalog
+# `envs:` lists that env. No cross-env constraint (no ladder): candidate-a is no
+# different from preview/production. Adding a node to an env's catalog `envs`
+# preserves this — no test edit; the equality is derived from the catalog, not
+# hardcoded per-env lists.
+for env in candidate-a preview production; do
+  rendered="$(appsets_for_env "$env" | sort -u)"
+  expected="$(deployable_for_env "$env" | sort -u)"
+  [ "$rendered" = "$expected" ] \
+    || fail "$env AppSet set must equal deployable nodes listing '$env' — got '$(echo $rendered | tr ' ' ,)', expected '$(echo $expected | tr ' ' ,)'"
+  pass "$env renders exactly its catalog opt-ins ($(echo $rendered | tr ' ' ,))"
+done
 
 # 2. SCHEDULER_WITH_OPERATOR for every env.
 for env in candidate-a preview production; do
@@ -89,22 +79,13 @@ for env in candidate-a preview production; do
 done
 pass "SCHEDULER_WITH_OPERATOR holds for all envs"
 
-# 3. CANDIDATE_A_ALWAYS — every deployable node is candidate-flightable (in candidate-a's set),
-# the pre-merge validation gate. (Schema enforces contains:candidate-a; this asserts the render.)
-while read -r node; do
-  [ -n "$node" ] || continue
-  grep -qx "$node" <<<"$(appsets_for_env candidate-a)" \
-    || fail "$node is deployable but absent from candidate-a (CANDIDATE_A_ALWAYS)"
-done <<<"$(all_deployable)"
-pass "every deployable node is candidate-flightable (candidate-a)"
-
-# 4. DETERMINISM — --check is stable across repeats.
+# 3. DETERMINISM — --check is stable across repeats.
 for _ in 1 2 3 4 5; do
   bash "$RENDER" --check >/dev/null || fail "--check is non-deterministic (SIGPIPE regression?)"
 done
 pass "--check deterministic across 5 runs"
 
-# 5. FAIL-CLOSED — a deployable row missing `envs:` aborts the env-set render
+# 4. FAIL-CLOSED — a deployable row missing `envs:` aborts the env-set render
 # (no silent all-env fallback). Point the renderer at a fixture catalog whose
 # oss row has had `envs:` stripped.
 tmp_catalog="$(mktemp -d)"
