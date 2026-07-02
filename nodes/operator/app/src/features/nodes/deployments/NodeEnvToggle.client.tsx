@@ -134,7 +134,8 @@ export function NodeEnvToggle({ nodeId, env, inReach }: Props): ReactElement {
       ) : null}
       {result?.kind === "no_changes" ? (
         <span className="text-muted-foreground text-xs">
-          Already {inReach ? "deployed" : "not deployed"}.
+          {/* no_changes means the env already held the ATTEMPTED state (present = !inReach). */}
+          Already {inReach ? "not deployed" : "deployed"}.
         </span>
       ) : null}
       {error ? <span className="text-destructive text-xs">{error}</span> : null}
