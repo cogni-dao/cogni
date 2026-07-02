@@ -14,5 +14,6 @@ resources:
   - preview-beacon-applicationset.yaml
   - preview-node-template-applicationset.yaml
   - preview-operator-applicationset.yaml
+  - preview-oss-applicationset.yaml
   - preview-poly-applicationset.yaml
   - preview-scheduler-worker-applicationset.yaml
