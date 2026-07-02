@@ -60,7 +60,6 @@ import {
   NODE_FORMATION_ENVS,
   type NodeFormationEnv,
   nextFreeNodePort,
-  parseCatalogEnvs,
   renderCatalog,
   renderDistributionActivationSpec,
   renderNodeAppset,
@@ -116,21 +115,15 @@ export interface OpenNodeEnvPrInput {
   readonly slug: string;
   /** The env to add (`present:true`) or remove (`present:false`). */
   readonly env: NodeFormationEnv;
-  /** true = add the env to the node's reach; false = remove it. */
+  /** true = add the env to the node's reach; false = remove it. Atomic per-env (candidate-a included). */
   readonly present: boolean;
-  /**
-   * Explicit confirmation of a FULL node decommission. Required when a remove resolves to dropping the
-   * whole node (removing candidate-a, or the last env) — without it such a remove is refused
-   * (422 `decommission_requires_intent`), so a per-env "remove" can never destroy prod by accident.
-   */
-  readonly decommission?: boolean | undefined;
 }
 
 /** Result of {@link GitHubRepoWriter.openNodeEnvPr}: a PR (opened or reused), or no-op when idempotent. */
 export type OpenNodeEnvPrResult =
   | {
       readonly status: "pr_opened";
-      readonly action: "add" | "remove" | "decommission";
+      readonly action: "add" | "remove";
       readonly prNumber: number;
       readonly prUrl: string;
     }
@@ -1674,22 +1667,20 @@ export class GitHubRepoWriter implements DeployPlanePort {
   /**
    * Node env-membership verb (story.5020 W4): add OR remove ONE env from a node's deploy reach by editing
    * the OPERATOR monorepo catalog (owner/repo = the monorepo, exactly like {@link openNodeSubmodulePr}).
+   * Every env is an INDEPENDENT, atomic toggle (ATOMIC_PER_ENV) — candidate-a is no different from
+   * preview/production.
    *
    * - ADD (`present:true`): fold `env` into `infra/catalog/<slug>.yaml`'s `envs:` line, render the per-env
    *   overlay + AppSet, and fold the slug into that env's appsets kustomization.
-   * - REMOVE (`present:false`, env ≠ candidate-a, others remain): drop `env` from the catalog `envs:` line,
-   *   DELETE the overlay + AppSet (sha:null), regenerate that env's kustomization without the slug.
-   * - FULL DECOMMISSION (remove candidate-a, or remove the last env): DELETE the catalog row, and for EVERY
-   *   env DELETE its overlay + AppSet and regenerate its kustomization; regenerate the Caddyfile + scheduler
-   *   configmap (env-independent edge/routing, only touched on full removal).
+   * - REMOVE (`present:false`): drop `env` from the catalog `envs:` line, DELETE the overlay + AppSet
+   *   (sha:null), regenerate that env's kustomization without the slug. Applies to candidate-a too;
+   *   removing the last env leaves a valid `envs: []` row (the catalog row + Caddy/scheduler entries stay).
    *
-   * CANDIDATE_A_ALWAYS is enforced in {@link buildEnvDeltaPlan}: a PARTIAL remove of candidate-a (others
-   * remaining) is refused (422). Idempotent: the already-holding state opens no PR (`no_changes`). The
-   * DNS reverse/forward reconcile is a flag-gated v0 seam (DNS_REVERSE_RECONCILE, default off) — see the
-   * `dnsSeam` call below.
+   * Idempotent: the already-holding state opens no PR (`no_changes`). The DNS reverse/forward reconcile is
+   * a flag-gated v0 seam (DNS_REVERSE_RECONCILE, default off) — see the `dnsSeam` call below.
    */
   async openNodeEnvPr(input: OpenNodeEnvPrInput): Promise<OpenNodeEnvPrResult> {
-    const { owner, repo, slug, env, present, decommission } = input;
+    const { owner, repo, slug, env, present } = input;
     const octokit = await this.getOctokit(owner, repo);
     const { baseCommitSha, baseTreeSha } = await this.resolveMainBase(
       octokit,
@@ -1724,7 +1715,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
 
     let plan: ReturnType<typeof buildEnvDeltaPlan>;
     try {
-      plan = buildEnvDeltaPlan({ slug, env, present, decommission, current });
+      plan = buildEnvDeltaPlan({ slug, env, present, current });
     } catch (err) {
       if (err instanceof EnvPlanError) {
         throw deployPlaneError(err.code, err.message, err.status);
@@ -1747,10 +1738,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
       plan.ops
     );
 
-    const message =
-      plan.kind === "decommission"
-        ? `feat(node): decommission ${slug}`
-        : `feat(node): ${present ? "add" : "remove"} ${slug} ${present ? "to" : "from"} ${env}`;
+    const message = `feat(node): ${present ? "add" : "remove"} ${slug} ${present ? "to" : "from"} ${env}`;
     const branch = `cogni-operator/node-env-${slug}-${env}`;
     const title = message;
     const body = this.envPrBody(plan.kind, slug, env, plan.nextEnvs);
@@ -1816,38 +1804,19 @@ export class GitHubRepoWriter implements DeployPlanePort {
       };
     }
 
-    // REMOVE / DECOMMISSION: the planner regenerates each affected env's kustomization, so fetch the
-    // appsets kustomization for EVERY env the node currently lists (a partial remove uses just `env`'s,
-    // a full decommission needs all of them — fetching all is correct + idempotent).
-    const currentEnvs = parseCatalogEnvs(catalog);
-    for (const e of currentEnvs) {
-      appsetsKustomizationByEnv[e] = await this.readFileOnMain(
-        octokit,
-        owner,
-        repo,
-        appsetsKustomizationPath(e)
-      );
-    }
-    // Caddyfile + scheduler configmap are env-independent; the planner only consults them on a full
-    // decommission, but fetching them unconditionally on any remove is cheap + keeps the planner pure.
-    const caddyfile = await this.readFileOnMain(
+    // REMOVE (atomic per-env): the planner regenerates the removed env's kustomization, so fetch the
+    // appsets kustomization for that env. (Caddy/scheduler are per-node env-independent state and are
+    // NOT touched by an env remove — a node with `envs:[]` keeps them.)
+    appsetsKustomizationByEnv[env] = await this.readFileOnMain(
       octokit,
       owner,
       repo,
-      FOOTPRINT.caddyfile
+      appsetsKustomizationPath(env)
     );
-    const schedulerConfigmap = await this.fetchFileText({
-      owner,
-      repo,
-      path: "infra/k8s/base/scheduler-worker/configmap.yaml",
-      ref: "main",
-    });
     return {
       catalog,
       templateOverlayByEnv,
       appsetsKustomizationByEnv,
-      caddyfile,
-      schedulerConfigmap: schedulerConfigmap ?? undefined,
     };
   }
 
@@ -1919,9 +1888,9 @@ export class GitHubRepoWriter implements DeployPlanePort {
     );
   }
 
-  /** PR body for the env-membership verb. */
+  /** PR body for the env-membership verb (atomic per-env add/remove). */
   private envPrBody(
-    kind: "add" | "remove" | "decommission",
+    kind: "add" | "remove",
     slug: string,
     env: NodeFormationEnv,
     nextEnvs: readonly NodeFormationEnv[]
@@ -1929,16 +1898,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
     const envsList =
       nextEnvs.length > 0
         ? `\`[${nextEnvs.join(", ")}]\``
-        : "_(none — removed)_";
-    if (kind === "decommission") {
-      return (
-        `Decommissions \`${slug}\` — removes its catalog row, all per-env overlays + ApplicationSets, ` +
-        "and its Caddy + scheduler-worker entries. The node leaves every environment's deploy reach.\n\n" +
-        "DNS reverse-reconcile is a flag-gated v0 seam (DNS_REVERSE_RECONCILE off): the per-node A " +
-        "record lingers until TTL — see docs/design/operator-fleet-safety.md (W3b).\n\n" +
-        "_Authored automatically by cogni-operator (node env-membership verb, story.5020 W4)._"
-      );
-    }
+        : "_(none — deployed nowhere)_";
     const verb = kind === "add" ? "Adds" : "Removes";
     const dir = kind === "add" ? "to" : "from";
     return (

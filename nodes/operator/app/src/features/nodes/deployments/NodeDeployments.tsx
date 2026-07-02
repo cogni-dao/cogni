@@ -3,14 +3,18 @@
 
 /**
  * Module: `@features/nodes/deployments/NodeDeployments`
- * Purpose: Owner-facing "Deployments" section under the node page — the read-only SEE flow surface.
- *   Shows, per env, whether THIS node is live (serving) and at what buildSha, so a wizard-test junk
- *   node (live nowhere) is visibly distinct from a real one. Mirrors the `<NodeAccess>` section shape.
+ * Purpose: Owner-facing "Deployments" section under the node page — the SEE flow surface PLUS the
+ *   owner-driven per-env Deploy / Undeploy control (story.5020 W4). Shows, per env, whether THIS node is
+ *   live (serving) and at what buildSha, and a Deploy/Undeploy action to add/remove the node from that
+ *   env's reach. ATOMIC_PER_ENV: every env (Test / Preview / Production) is an independent toggle —
+ *   candidate-a is no different. Mirrors the `<NodeAccess>` section shape.
  * Scope: Server-rendered layout (SectionCard + Table primitives) from a pre-fetched per-env deploy
- *   state list. No client islands, no I/O — the page fetches the state via the DeployCapability.
- * Side-effects: none
+ *   state list; the action cell is a small client island ({@link NodeEnvToggle}) that POSTs the env verb.
+ * Side-effects: none (the client action cell owns the POST)
  * Links: src/adapters/server/deploy/probe-deploy.adapter.ts (NodeDeployState source),
- *   src/features/nodes/access/NodeAccess.tsx (mirrored shape), docs/design/operator-managed-deployments.md § SEE
+ *   src/features/nodes/deployments/NodeEnvToggle.client.tsx (action cell),
+ *   src/app/api/v1/nodes/[id]/envs/route.ts, src/features/nodes/access/NodeAccess.tsx (mirrored shape),
+ *   docs/design/operator-managed-deployments.md § SEE
  * @public
  */
 
@@ -27,6 +31,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components";
+
+import { NodeEnvToggle } from "./NodeEnvToggle.client";
 
 // Label each env by its user-facing TIER (its role), not the backend deploy-lane id: candidate-a → Test.
 // The VM PLACEMENT (which slot serves a tier) is deliberately NOT surfaced yet — with one test VM it adds
@@ -48,12 +54,15 @@ function isLive(state: NodeDeployState): boolean {
 }
 
 interface Props {
+  readonly nodeId: string;
   readonly envs: ReadonlyArray<NodeDeployState>;
 }
 
 function DeployRow({
+  nodeId,
   state,
 }: {
+  readonly nodeId: string;
   readonly state: NodeDeployState;
 }): ReactElement {
   const live = isLive(state);
@@ -78,17 +87,21 @@ function DeployRow({
       <TableCell className="text-right font-mono text-muted-foreground text-xs">
         {state.buildSha ? state.buildSha.slice(0, 7) : "—"}
       </TableCell>
+      <TableCell className="text-right">
+        <NodeEnvToggle nodeId={nodeId} env={state.env} inReach={live} />
+      </TableCell>
     </TableRow>
   );
 }
 
-export function NodeDeployments({ envs }: Props): ReactElement {
+export function NodeDeployments({ nodeId, envs }: Props): ReactElement {
   return (
     <SectionCard title="Deployments" className="mx-auto mt-4 w-full max-w-2xl">
       <p className="text-muted-foreground text-sm">
         Where this node is live across the deploy environments, read directly
-        from each env's public surface. A node live nowhere is still being set
-        up (or junk); a real node serves at least one env.
+        from each env's public surface. Deploy or undeploy this node in any env
+        — each toggle opens a one-file operator pull request; the change lands
+        once that PR merges. Every environment is independent.
       </p>
 
       <div className="rounded-md border">
@@ -98,11 +111,12 @@ export function NodeDeployments({ envs }: Props): ReactElement {
               <TableHead>Environment</TableHead>
               <TableHead>Status</TableHead>
               <TableHead className="text-right">Build</TableHead>
+              <TableHead className="text-right">Reach</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {envs.map((state) => (
-              <DeployRow key={state.env} state={state} />
+              <DeployRow key={state.env} nodeId={nodeId} state={state} />
             ))}
           </TableBody>
         </Table>

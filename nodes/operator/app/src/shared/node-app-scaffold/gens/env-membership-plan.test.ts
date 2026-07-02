@@ -4,10 +4,11 @@
 /**
  * Module: `@shared/node-app-scaffold/gens/env-membership-plan`
  * Purpose: Pin the pure env-delta planner — add-env inserts, remove-env sha:null deletions +
- *   regenerated kustomization, full-decommission (catalog + caddy + scheduler) deletes, and the
- *   CANDIDATE_A_ALWAYS refusal + idempotency.
+ *   regenerated kustomization, and the ATOMIC_PER_ENV + idempotency invariants. Every env is an
+ *   independent toggle (candidate-a is no different from preview/production); removing the last env
+ *   yields a valid empty `envs: []` set.
  * Scope: Pure unit tests over hand-built control-plane fixtures (no Octokit).
- * Invariants: CANDIDATE_A_ALWAYS, IDEMPOTENT, DELETE_VIA_SHA_NULL.
+ * Invariants: ATOMIC_PER_ENV, IDEMPOTENT, DELETE_VIA_SHA_NULL.
  * Side-effects: none
  * Links: src/shared/node-app-scaffold/gens/env-membership-plan
  * @public
@@ -19,13 +20,10 @@ import {
   appsetPath,
   appsetsKustomizationPath,
   buildEnvDeltaPlan,
-  CADDYFILE_PATH,
   CATALOG_PATH,
   type EnvPlanCurrent,
-  EnvPlanError,
   type EnvPlanOp,
   overlayPath,
-  SCHEDULER_CONFIGMAP_PATH,
 } from "./env-membership-plan";
 
 const SLUG = "blue";
@@ -75,46 +73,6 @@ spec:
           - path: "infra/catalog/__NODE__.yaml"
 `;
 
-const CADDYFILE = `# ── operator (primary domain) → k3s NodePort 30000 ──
-{$DOMAIN} {
-  reverse_proxy host.docker.internal:30000
-}
-
-# ── blue node → k3s NodePort 31100 ──────────────────────────────────
-{$BLUE_DOMAIN:blue.localhost} {
-  encode zstd gzip
-
-  @public path /api/v1/public/*
-  handle @public {
-    reverse_proxy {$BLUE_UPSTREAM:host.docker.internal:31100} {
-      header_up X-Real-IP {remote_host}
-      transport http {
-        response_header_timeout 10s
-      }
-    }
-  }
-
-  reverse_proxy {$BLUE_UPSTREAM:host.docker.internal:31100}
-
-  log {
-    format json
-    output file /data/logs/caddy/access-blue.log {
-      roll_size 10MB
-      roll_keep 7
-      roll_keep_for 168h
-    }
-  }
-}
-`;
-
-const SCHEDULER_CONFIGMAP = `apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: scheduler-worker
-data:
-  COGNI_NODE_ENDPOINTS: "blue=http://blue-node-app:3000,11111111-1111-1111-1111-111111111111=http://blue-node-app:3000,operator=http://operator-node-app:3000,22222222-2222-2222-2222-222222222222=http://operator-node-app:3000"
-`;
-
 const catalogWith = (envs: readonly string[]): string =>
   `name: ${SLUG}
 type: node
@@ -137,7 +95,7 @@ function baseCurrent(envs: readonly string[]): EnvPlanCurrent {
     appsetsKustomizationByEnv[e] = kustWith(e, ["blue", "operator"]);
     templateOverlayByEnv[e] = TEMPLATE_OVERLAY;
   }
-  // preview is the env we ADD in tests, so make its template overlay + kustomization available.
+  // preview is an env we ADD in tests, so make its template overlay + kustomization available.
   appsetsKustomizationByEnv.preview ??= kustWith("preview", ["operator"]);
   templateOverlayByEnv.preview ??= TEMPLATE_OVERLAY;
   return {
@@ -147,8 +105,6 @@ function baseCurrent(envs: readonly string[]): EnvPlanCurrent {
     appsetsKustomizationByEnv,
     port: 3200,
     nodePort: 31100,
-    caddyfile: CADDYFILE,
-    schedulerConfigmap: SCHEDULER_CONFIGMAP,
   };
 }
 
@@ -211,7 +167,7 @@ describe("buildEnvDeltaPlan — ADD env", () => {
   });
 });
 
-describe("buildEnvDeltaPlan — REMOVE env (partial, non-candidate-a)", () => {
+describe("buildEnvDeltaPlan — REMOVE env (partial)", () => {
   it("drops the env line + sha:null deletes overlay+appset + regenerates kustomization", () => {
     const res = buildEnvDeltaPlan({
       slug: SLUG,
@@ -240,7 +196,7 @@ describe("buildEnvDeltaPlan — REMOVE env (partial, non-candidate-a)", () => {
         "production-blue-applicationset.yaml"
       );
     }
-    // The catalog row itself is NOT deleted on a partial remove.
+    // The catalog row itself is NEVER deleted on a remove (per-node state stays).
     expect(deletes(res.ops)).not.toContain(CATALOG_PATH(SLUG));
   });
 
@@ -255,104 +211,71 @@ describe("buildEnvDeltaPlan — REMOVE env (partial, non-candidate-a)", () => {
   });
 });
 
-describe("buildEnvDeltaPlan — FULL DECOMMISSION", () => {
-  it("requires explicit decommission intent — a bare candidate-a remove is refused (422)", () => {
-    try {
+describe("buildEnvDeltaPlan — ATOMIC_PER_ENV (candidate-a is not special)", () => {
+  it("removing candidate-a is a normal atomic remove (not a decommission) — others survive", () => {
+    const res = buildEnvDeltaPlan({
+      slug: SLUG,
+      env: "candidate-a",
+      present: false,
+      current: baseCurrent(["candidate-a", "preview", "production"]),
+    });
+    expect(res.kind).toBe("remove");
+    if (res.kind === "no_changes") throw new Error("unexpected no_changes");
+
+    // Just candidate-a's env is dropped; preview + production remain.
+    expect(res.nextEnvs).toEqual(["preview", "production"]);
+    // Only candidate-a's overlay + appset are deleted; the catalog row survives.
+    expect(deletes(res.ops).sort()).toEqual(
+      [overlayPath("candidate-a", SLUG), appsetPath("candidate-a", SLUG)].sort()
+    );
+    expect(deletes(res.ops)).not.toContain(CATALOG_PATH(SLUG));
+    const catalogOp = res.ops.find((o) => o.path === CATALOG_PATH(SLUG));
+    if (catalogOp?.op === "upsert") {
+      expect(catalogOp.content).toContain("envs: [preview, production]");
+    }
+  });
+
+  it("removing the LAST remaining env yields a valid empty `envs: []` set (deployed nowhere)", () => {
+    const res = buildEnvDeltaPlan({
+      slug: SLUG,
+      env: "candidate-a",
+      present: false,
+      current: baseCurrent(["candidate-a"]),
+    });
+    expect(res.kind).toBe("remove");
+    if (res.kind === "no_changes") throw new Error("unexpected no_changes");
+
+    expect(res.nextEnvs).toEqual([]);
+    // The catalog row is NOT deleted — the node keeps its row (+ caddy/scheduler), just deploys nowhere.
+    expect(deletes(res.ops)).not.toContain(CATALOG_PATH(SLUG));
+    const catalogOp = res.ops.find((o) => o.path === CATALOG_PATH(SLUG));
+    if (catalogOp?.op === "upsert") {
+      expect(catalogOp.content).toContain("envs: []");
+    }
+    // candidate-a's overlay + appset ARE deleted.
+    expect(deletes(res.ops).sort()).toEqual(
+      [overlayPath("candidate-a", SLUG), appsetPath("candidate-a", SLUG)].sort()
+    );
+  });
+
+  it("is idempotent both directions on candidate-a (add already-present / remove already-absent)", () => {
+    // add candidate-a when already present → no_changes
+    expect(
       buildEnvDeltaPlan({
         slug: SLUG,
         env: "candidate-a",
-        present: false, // no decommission:true → must NOT silently destroy the node
-        current: baseCurrent(["candidate-a", "preview", "production"]),
-      });
-      throw new Error("expected EnvPlanError");
-    } catch (err) {
-      expect(err).toBeInstanceOf(EnvPlanError);
-      const e = err as EnvPlanError;
-      expect(e.code).toBe("decommission_requires_intent");
-      expect(e.status).toBe(422);
-    }
-  });
-
-  it("removing candidate-a (decommission:true) deletes catalog + all overlays/appsets + caddy + scheduler", () => {
-    const res = buildEnvDeltaPlan({
-      slug: SLUG,
-      env: "candidate-a",
-      present: false,
-      decommission: true,
-      current: baseCurrent(["candidate-a", "preview", "production"]),
-    });
-    expect(res.kind).toBe("decommission");
-    if (res.kind === "no_changes") throw new Error("unexpected no_changes");
-    expect(res.nextEnvs).toEqual([]);
-
-    // Catalog row + every env's overlay + appset are deleted.
-    const del = deletes(res.ops);
-    expect(del).toContain(CATALOG_PATH(SLUG));
-    for (const env of ["candidate-a", "preview", "production"]) {
-      expect(del).toContain(overlayPath(env, SLUG));
-      expect(del).toContain(appsetPath(env, SLUG));
-    }
-    // Caddy + scheduler regenerated WITHOUT blue (env-independent, only on full removal).
-    const caddyOp = res.ops.find((o) => o.path === CADDYFILE_PATH);
-    if (caddyOp?.op === "upsert") {
-      expect(caddyOp.content).not.toContain("blue node");
-    }
-    const schedOp = res.ops.find((o) => o.path === SCHEDULER_CONFIGMAP_PATH);
-    if (schedOp?.op === "upsert") {
-      expect(schedOp.content).not.toContain("blue=http://blue-node-app");
-      expect(schedOp.content).toContain("operator=http://operator-node-app");
-    }
-  });
-
-  it("removing the LAST remaining env (decommission:true) is also a full decommission", () => {
-    const res = buildEnvDeltaPlan({
-      slug: SLUG,
-      env: "candidate-a",
-      present: false,
-      decommission: true,
-      current: baseCurrent(["candidate-a"]),
-    });
-    expect(res.kind).toBe("decommission");
-  });
-});
-
-describe("CANDIDATE_A_ALWAYS", () => {
-  // Per the verb's contract, removing candidate-a is NEVER a partial trim — it is the full-decommission
-  // path (the node leaves the catalog, taking preview/production with it). It therefore requires explicit
-  // `decommission:true` intent (the bare-remove refusal is covered above); WITH intent it decommissions to
-  // an empty set. This pins that the node can never end up with envs-but-no-candidate-a.
-  it("removing candidate-a (with intent) decommissions to an empty set (never a candidate-a-less node)", () => {
-    const res = buildEnvDeltaPlan({
-      slug: SLUG,
-      env: "candidate-a",
-      present: false,
-      decommission: true,
-      current: baseCurrent(["candidate-a", "preview", "production"]),
-    });
-    expect(res.kind).toBe("decommission");
-    if (res.kind === "decommission") {
-      // The surviving env-set is empty — there is no candidate-a-less node.
-      expect(res.nextEnvs).toEqual([]);
-    }
-  });
-
-  // The defensive 422 guard fires only on a corrupt input: a current row that already lacks candidate-a,
-  // where a partial non-candidate-a remove would leave a candidate-a-less (still non-empty) set.
-  it("refuses (422 candidate_a_always) a partial remove that would leave a candidate-a-less set", () => {
-    const corrupt: EnvPlanCurrent = baseCurrent(["preview", "production"]);
-    try {
+        present: true,
+        current: baseCurrent(["candidate-a", "preview"]),
+      }).kind
+    ).toBe("no_changes");
+    // remove candidate-a when already absent → no_changes
+    expect(
       buildEnvDeltaPlan({
         slug: SLUG,
-        env: "production",
+        env: "candidate-a",
         present: false,
-        current: corrupt,
-      });
-      throw new Error("expected EnvPlanError");
-    } catch (err) {
-      expect(err).toBeInstanceOf(EnvPlanError);
-      const e = err as EnvPlanError;
-      expect(e.code).toBe("candidate_a_always");
-      expect(e.status).toBe(422);
-    }
+        current: baseCurrent(["preview"]),
+      }).kind
+    ).toBe("no_changes");
   });
 });

@@ -6,14 +6,16 @@
  * Purpose: Node env-membership verb (story.5020 W4) — add OR remove ONE environment from a node's
  *   deploy reach by opening an operator-authored PR that edits the OPERATOR monorepo catalog
  *   (`infra/catalog/<slug>.yaml` `envs:` line + the matching overlay / ApplicationSet / appsets
- *   kustomization). Removing `candidate-a` is a FULL decommission (the node leaves the catalog).
- * Scope: Session auth + `can_manage_envs` authz-gate on the resolved node. Resolves the monorepo
- *   owner/repo exactly like `publish` / `activate-payments` (env-scoped, FAIL CLOSED), then delegates
- *   the byte-exact catalog/overlay/appset edit to `GitHubRepoWriter.openNodeEnvPr`.
+ *   kustomization). Every env is an INDEPENDENT, atomic toggle (ATOMIC_PER_ENV) — candidate-a is no
+ *   different from preview/production; removing the last env leaves a valid `envs: []` row.
+ * Scope: Session auth + a PER-ENV authz-gate on the resolved node. Resolves the monorepo owner/repo
+ *   exactly like `publish` / `activate-payments` (env-scoped, FAIL CLOSED), then delegates the byte-exact
+ *   catalog/overlay/appset edit to `GitHubRepoWriter.openNodeEnvPr`.
  * Invariants:
  *   - GH_APP_INSTALL_REQUIRED, PR_AGAINST_MAIN (never force-push to monorepo main).
- *   - CANDIDATE_A_ALWAYS: a partial remove of candidate-a is refused (422) by the writer/planner.
- *   - MANAGE_ENVS_GATED: only `can_manage_envs` (env_manager / admin) may mutate a node's env-set.
+ *   - PER_ENV_GATED: mutating `production` requires `node.promote_production` (can_promote_production);
+ *     any other env (candidate-a / preview) requires `node.flight` (can_flight). Fail-closed with a
+ *     distinct code (503 authz_unavailable / 403 authz_denied).
  *   - IDEMPOTENT: requesting the already-holding state returns `no_changes` (no PR opened).
  *   - CATALOG_IS_SSOT: the env-set edit is a catalog change; deploy reconcilers consume it.
  * Side-effects: IO (GitHub REST API, Postgres read)
@@ -67,14 +69,9 @@ export async function POST(request: Request, routeArgs: RouteParams) {
   } catch {
     return NextResponse.json({ error: "invalid JSON body" }, { status: 400 });
   }
-  const {
-    env: targetEnv,
-    present,
-    decommission,
-  } = (body ?? {}) as {
+  const { env: targetEnv, present } = (body ?? {}) as {
     env?: unknown;
     present?: unknown;
-    decommission?: unknown;
   };
   if (typeof targetEnv !== "string" || !VALID_ENVS.has(targetEnv)) {
     return NextResponse.json(
@@ -91,15 +88,6 @@ export async function POST(request: Request, routeArgs: RouteParams) {
       { status: 400 }
     );
   }
-  if (decommission !== undefined && typeof decommission !== "boolean") {
-    return NextResponse.json(
-      {
-        error: "invalid decommission",
-        reason: "decommission must be a boolean",
-      },
-      { status: 400 }
-    );
-  }
 
   const db = resolveServiceDb();
   const existing = await db
@@ -112,11 +100,14 @@ export async function POST(request: Request, routeArgs: RouteParams) {
     return NextResponse.json({ error: "not found" }, { status: 404 });
   }
 
-  // can_manage_envs (env_manager / admin) gates the env-set mutation — fail-closed (503 if no authority).
+  // PER_ENV_GATED: mutating production requires production-promote authority; any other env
+  // (candidate-a / preview) requires flight authority. Fail-closed (503 if no authority configured).
+  const gateAction =
+    targetEnv === "production" ? "node.promote_production" : "node.flight";
   const gate = await resolveNodeAndAuthorize({
     id: node.id,
     userId: sessionUser.id,
-    action: "node.manage_envs",
+    action: gateAction,
   });
   if (!gate.ok) {
     const payload =
@@ -151,7 +142,6 @@ export async function POST(request: Request, routeArgs: RouteParams) {
       slug: node.slug,
       env: targetEnv as (typeof NODE_FORMATION_ENVS)[number],
       present,
-      decommission: decommission as boolean | undefined,
     });
   } catch (err) {
     const status = (err as { status?: number })?.status;

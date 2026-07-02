@@ -11,9 +11,9 @@
  * Scope: `parseCatalogEnvs` reads the flow-sequence `envs: [a, b, c]` line; `setCatalogEnvs` re-emits
  *   that single line with a new, canonically-ordered env-set, leaving the rest of the file untouched.
  * Invariants:
- *   - CANDIDATE_A_ALWAYS — the schema's `contains: candidate-a` is enforced by the caller; this module
- *     is a mechanical line-editor and does NOT itself police the env-set (an empty/candidate-a-less set
- *     is rejected upstream by the verb, never silently emitted here).
+ *   - ATOMIC_PER_ENV — the env-set is an independent per-env set; ANY subset is valid, including the
+ *     empty set (`envs: []`, the node deployed nowhere). This module is a mechanical line-editor and
+ *     does NOT police the env-set — no mandatory env, no candidate-a special-casing.
  *   - ENV_ORDER_CANONICAL — emitted in the fixed `candidate-a < preview < production` order so the
  *     catalog row stays byte-stable against `render-node-appset.sh` / the catalog goldens regardless
  *     of the order the caller supplies.

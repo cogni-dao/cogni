@@ -35,14 +35,12 @@ export {
   appsetPath,
   appsetsKustomizationPath,
   buildEnvDeltaPlan,
-  CADDYFILE_PATH,
   CATALOG_PATH,
   type EnvDeltaResult,
   type EnvPlanCurrent,
   EnvPlanError,
   type EnvPlanOp,
   overlayPath,
-  SCHEDULER_CONFIGMAP_PATH,
 } from "./env-membership-plan";
 export { NODE_FORMATION_ENVS, type NodeFormationEnv } from "./envs";
 export {

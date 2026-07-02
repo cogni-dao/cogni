@@ -88,6 +88,22 @@ describe("setCatalogEnvs", () => {
     );
     expect(restored).toBe(CATALOG);
   });
+
+  it("emits an empty flow-sequence `envs: []` for the empty set (ATOMIC_PER_ENV — deployed nowhere)", () => {
+    const emptied = setCatalogEnvs(CATALOG, []);
+    expect(emptied).toContain("envs: []");
+    // Round-trips: an emptied row parses back to [] and only the envs: line changed.
+    expect(parseCatalogEnvs(emptied)).toEqual([]);
+    const before = CATALOG.split("\n").filter((l) => !l.startsWith("envs:"));
+    const after = emptied.split("\n").filter((l) => !l.startsWith("envs:"));
+    expect(after).toEqual(before);
+  });
+
+  it("accepts a candidate-a-absent subset (no candidate-a special-casing)", () => {
+    const next = setCatalogEnvs(CATALOG, ["production", "preview"]);
+    expect(next).toContain("envs: [preview, production]");
+    expect(parseCatalogEnvs(next)).toEqual(["preview", "production"]);
+  });
 });
 
 describe("addCatalogEnv / dropCatalogEnv", () => {
