@@ -111,7 +111,7 @@ export function NodeDeployments({ nodeId, envs }: Props): ReactElement {
               <TableHead>Environment</TableHead>
               <TableHead>Status</TableHead>
               <TableHead className="text-right">Build</TableHead>
-              <TableHead className="text-right">Reach</TableHead>
+              <TableHead className="text-right">Action</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
