@@ -12,12 +12,7 @@ namespace: argocd
 
 resources:
   - preview-beacon-applicationset.yaml
-  - preview-blue-applicationset.yaml
-  - preview-games-applicationset.yaml
-  - preview-habitat-applicationset.yaml
   - preview-node-template-applicationset.yaml
   - preview-operator-applicationset.yaml
-  - preview-oss-applicationset.yaml
   - preview-poly-applicationset.yaml
-  - preview-red-applicationset.yaml
   - preview-scheduler-worker-applicationset.yaml
