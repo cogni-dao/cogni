@@ -1529,22 +1529,40 @@ log_info "Applied ClusterSecretStore openbao-backend"
 # ══════════════════════════════════════════════════════════════
 # seed_kv: <service> <KEY> <value> → cogni/${DEPLOY_ENV}/<service>
 # File-scope helper used by Phase 5c (app secrets) AND Phase 5e (auto-mint).
-# No-op when value is empty. First write creates the path (put); later writes
-# patch so existing keys are preserved. Requires ROOT_TOKEN to be set by the
-# caller (read from $OPENBAO_ROOT_TOKEN_LOCAL after Phase 5b.2 produces it).
+# No-op when value is empty. Requires ROOT_TOKEN to be set by the caller (read
+# from $OPENBAO_ROOT_TOKEN_LOCAL after Phase 5b.2 produces it).
+#
+# bug.5068: `cogni/<env>/<service>` is a SHARED bucket (~35 keys for operator) and
+# `bao kv put` REPLACES every key at the path. The old shape chose put/patch off a
+# `kv metadata get` precheck — a TRANSIENT precheck failure (this helper runs many
+# times over ssh during provision) against an already-seeded path would `put` one
+# key and wipe every sibling. Fix: `patch` FIRST (merges — never clobbers), and only
+# fall back to a destructive `put` on a POSITIVE "does not exist" signal in patch's
+# OWN output. Any other failure returns non-zero without clobbering.
 seed_kv() {
   local svc="$1" k="$2" v="$3"
   [[ -z "$v" ]] && return 0
-  local path="cogni/${DEPLOY_ENV}/${svc}"
-  local op="patch"
-  if ! ssh $SSH_OPTS root@"$VM_IP" \
-    "kubectl exec -n openbao openbao-0 -- env BAO_TOKEN='${ROOT_TOKEN}' BAO_ADDR=http://127.0.0.1:8200 bao kv metadata get '${path}'" \
-    >/dev/null 2>&1; then
-    op="put"
+  local path="cogni/${DEPLOY_ENV}/${svc}" out rc
+  set +e
+  out="$(printf '%s' "$v" | ssh $SSH_OPTS root@"$VM_IP" \
+    "kubectl exec -i -n openbao openbao-0 -- env BAO_TOKEN='${ROOT_TOKEN}' BAO_ADDR=http://127.0.0.1:8200 bao kv patch '${path}' '${k}=-'" \
+    2>&1)"
+  rc=$?
+  set -e
+  if [[ $rc -eq 0 ]]; then
+    return 0
   fi
-  printf '%s' "$v" | ssh $SSH_OPTS root@"$VM_IP" \
-    "kubectl exec -i -n openbao openbao-0 -- env BAO_TOKEN='${ROOT_TOKEN}' BAO_ADDR=http://127.0.0.1:8200 bao kv ${op} '${path}' '${k}=-'" \
-    >/dev/null
+  if printf '%s' "$out" | grep -qiE 'no value found|does not exist|not found'; then
+    # Genuinely absent — safe to create; no siblings to clobber.
+    printf '%s' "$v" | ssh $SSH_OPTS root@"$VM_IP" \
+      "kubectl exec -i -n openbao openbao-0 -- env BAO_TOKEN='${ROOT_TOKEN}' BAO_ADDR=http://127.0.0.1:8200 bao kv put '${path}' '${k}=-'" \
+      >/dev/null
+    return $?
+  fi
+  # Transient/unknown failure — NEVER put (would wipe siblings at this shared path).
+  printf 'seed_kv: bao kv patch on %s failed (rc=%s) without a positive "absent" signal; refusing to put (would clobber siblings): %s\n' \
+    "$path" "$rc" "$out" >&2
+  return 1
 }
 
 # ══════════════════════════════════════════════════════════════

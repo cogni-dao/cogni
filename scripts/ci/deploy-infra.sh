@@ -1344,7 +1344,7 @@ patch_operator_openfga_config() {
     return 1
   fi
 
-  local jwt tok op
+  local jwt tok path patch_out patch_rc
   jwt=$(timeout 10 kubectl create token openbao-operator -n default 2>/dev/null) || {
     log_warn "could not mint openbao-operator token"
     return 1
@@ -1356,17 +1356,49 @@ patch_operator_openfga_config() {
     return 1
   }
 
-  op="patch"
-  if ! timeout 10 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="${tok}" \
-      bao kv metadata get "cogni/${DEPLOY_ENVIRONMENT}/operator" >/dev/null 2>&1; then
-    op="put"
-  fi
-
-  timeout 20 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="${tok}" \
-    bao kv "$op" "cogni/${DEPLOY_ENVIRONMENT}/operator" \
+  # bug.5068 (prod outage 2026-07-02): `cogni/<env>/operator` is a SHARED bucket
+  # holding ~35 keys (DATABASE_URL, AUTH_SECRET, LITELLM_MASTER_KEY, …). `bao kv put`
+  # REPLACES the whole bucket, so a `put` here must only ever run when the bucket is
+  # genuinely absent. The old guard (`kv metadata get` fails → put) conflated a
+  # TRANSIENT failure (docker network recreation, exec flake) with "absent" and
+  # clobbered all 35 keys → ESO synced the emptied bucket → operator crashloop →
+  # ~1h prod 502.
+  #
+  # Fix: `patch` FIRST (merges siblings; the writer role has patch on this path).
+  # Only fall back to a destructive `put` on a POSITIVE "does not exist" signal in
+  # patch's OWN output. Any other (transient) failure returns 1 without touching the
+  # bucket — the caller hard-fails and deploy-infra retries next run against an
+  # intact bucket. `put` is now unreachable except on proven absence.
+  path="cogni/${DEPLOY_ENVIRONMENT}/operator"
+  set +e
+  patch_out=$(timeout 20 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="${tok}" \
+    bao kv patch "$path" \
       "OPENFGA_STORE_ID=${OPENFGA_STORE_ID}" \
       "OPENFGA_AUTHORIZATION_MODEL_ID=${OPENFGA_AUTHORIZATION_MODEL_ID}" \
-      "OPENFGA_AUTHORIZATION_MODEL_HASH=${OPENFGA_AUTHORIZATION_MODEL_HASH}" >/dev/null || return 1
+      "OPENFGA_AUTHORIZATION_MODEL_HASH=${OPENFGA_AUTHORIZATION_MODEL_HASH}" 2>&1)
+  patch_rc=$?
+  set -e
+  if [[ $patch_rc -eq 0 ]]; then
+    return 0
+  fi
+
+  # Positive "the secret does not exist" is the ONLY case where a `put` (create) is
+  # safe: there are no sibling keys to clobber. Match the phrasings OpenBao/Vault
+  # `kv patch` emits for a missing path. Anything else is treated as transient.
+  if printf '%s' "$patch_out" | grep -qiE 'no value found|does not exist|not found'; then
+    log_warn "operator bucket ${path} absent — creating it with a fresh put"
+    timeout 20 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="${tok}" \
+      bao kv put "$path" \
+        "OPENFGA_STORE_ID=${OPENFGA_STORE_ID}" \
+        "OPENFGA_AUTHORIZATION_MODEL_ID=${OPENFGA_AUTHORIZATION_MODEL_ID}" \
+        "OPENFGA_AUTHORIZATION_MODEL_HASH=${OPENFGA_AUTHORIZATION_MODEL_HASH}" >/dev/null || return 1
+    return 0
+  fi
+
+  # Transient/unknown failure — NEVER `put` (would wipe ~35 sibling keys). Fail
+  # closed; deploy-infra retries on the next run against an intact bucket.
+  log_warn "bao kv patch on ${path} failed (rc=${patch_rc}) without a positive 'absent' signal; refusing to put (would clobber siblings): ${patch_out}"
+  return 1
 }
 
 refresh_operator_openfga_secret() {
