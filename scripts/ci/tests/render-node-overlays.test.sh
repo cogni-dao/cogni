@@ -136,4 +136,40 @@ bash "$RENDER" --check >/dev/null \
 trap restore EXIT
 pass "tree restored pristine after decommission test"
 
+echo "[7/7] ATOMIC_PER_ENV: a node dropping ONE env prunes only that env's overlay; --check green"
+# Regression for story.5020 W4: render-node-overlays used to loop wizard_nodes ×
+# ENVS unconditionally (CANDIDATE_A_ALWAYS), so the env-membership verb removing a
+# node from ONE env left --check demanding the (correctly-deleted) overlay. The
+# fix filters by per-node `envs:` (wizard_nodes_for_env).
+PERENV="games"
+PCAT="infra/catalog/$PERENV.yaml"
+[ -f "$PCAT" ] || fail "test fixture: $PCAT not found (pick another disposable wizard node)"
+perenv_restore() { git checkout -q -- "$PCAT" infra/k8s/overlays 2>/dev/null || true; }
+trap 'perenv_restore; restore' EXIT
+# Drop candidate-a from games' envs (it stays in preview + production).
+perl -0pi -e 's/^(envs:\s*\[)\s*candidate-a\s*,\s*/$1/m' "$PCAT"
+grep -qE '^envs:\s*\[\s*preview\s*,\s*production\s*\]' "$PCAT" \
+  || fail "test setup: failed to drop candidate-a from games' envs (unexpected envs shape)"
+# a: games still carries a committed candidate-a overlay it no longer claims → orphan → --check red.
+if bash "$RENDER" --check >/dev/null 2>&1; then
+  fail "--check passed while games carried a candidate-a overlay it no longer claims (orphan not caught)"
+fi
+# b: --write prunes ONLY the dropped env's overlay; the retained envs keep theirs.
+bash "$RENDER" --write >/dev/null
+[ ! -d "infra/k8s/overlays/candidate-a/$PERENV" ] \
+  || fail "--write did not prune games' dropped candidate-a overlay"
+[ -d "infra/k8s/overlays/preview/$PERENV" ] \
+  || fail "--write wrongly pruned games' preview overlay (still a member)"
+[ -d "infra/k8s/overlays/production/$PERENV" ] \
+  || fail "--write wrongly pruned games' production overlay (still a member)"
+# c: with games out of candidate-a and its overlay gone, --check is GREEN — the
+#    old wizard_nodes × ENVS cartesian would fail here with "missing overlay".
+bash "$RENDER" --check >/dev/null \
+  || fail "--check red after a clean per-env removal (the wizard_nodes × ENVS cartesian bug)"
+pass "per-env removal prunes only the dropped env's overlay; retained envs kept; --check green"
+perenv_restore
+trap restore EXIT
+bash "$RENDER" --check >/dev/null || fail "tree not pristine after per-env test"
+pass "tree restored pristine after per-env test"
+
 echo "PASS: render-node-overlays.test.sh"
