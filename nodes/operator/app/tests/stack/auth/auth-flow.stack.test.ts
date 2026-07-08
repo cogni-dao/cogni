@@ -122,6 +122,9 @@ describe("Auth Flow Stack Test", () => {
     // Assert
     expect(response.status).toBe(401);
     const json = await response.json();
+    // No credential presented → session-required semantics preserved, plus a
+    // bare RFC 6750 §3 `WWW-Authenticate: Bearer` challenge (no error param).
     expect(json).toEqual({ error: "Session required" });
+    expect(response.headers.get("www-authenticate")).toBe("Bearer");
   });
 });

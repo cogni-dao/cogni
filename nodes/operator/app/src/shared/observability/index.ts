@@ -30,6 +30,11 @@ export const EVENT_NAMES = {
   // Auth perimeter (proxy): request rejected before reaching any route handler,
   // so the request-scoped logger never sees it — emitted directly from the proxy.
   AUTH_PERIMETER_DENIED: "auth.perimeter.denied",
+  // Node env-membership verb (story.5020 W4): the flag-gated DNS reverse-reconcile seam. v0 ships
+  // DNS_REVERSE_RECONCILE off, so a node-env REMOVE only logs the intended Cloudflare prune (the
+  // record lingers until TTL) and a node-env ADD only logs the intended upsert. See W3b.
+  DNS_REVERSE_RECONCILE_SKIPPED: "dns.reverse_reconcile.skipped",
+  DNS_FORWARD_RECONCILE_SKIPPED: "dns.forward_reconcile.skipped",
 } as const;
 
 export type EventName = (typeof EVENT_NAMES)[keyof typeof EVENT_NAMES];

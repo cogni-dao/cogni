@@ -28,20 +28,30 @@ has_node_targets="$(awk -F= '$1 == "has_node_targets" {print $2}' "$out")"
 [[ "$has_node_targets" == "true" ]]
 grep -q "Skipping targets not in the preview node-set" "$TMPROOT/stdout"
 
-# task.5017 falsifying gate: oss's catalog envs: is [candidate-a, preview] — deploy
-# ⊆ provisioned must SKIP it for production (not in that set), yet KEEP it for
-# candidate-a. Without the envs gate this regresses to selecting oss and
-# hard-failing the (absent) production AppSet apply.
+# task.5017 falsifying gate: deploy ⊆ provisioned must SKIP a node for an env
+# outside its catalog `envs:` node-set, yet KEEP it for an env that is in-set.
+# Every real catalog node is now all-envs (node-template opted into production in
+# story.5009), so this guard is exercised against a SYNTHETIC catalog where
+# node-template is restricted to [candidate-a, preview] — testing the enforcement
+# logic with controlled input, decoupled from any real node's live envs.
+RESTRICTED_CATALOG="$TMPROOT/restricted-catalog"
+cp -r infra/catalog "$RESTRICTED_CATALOG"
+yq -i '.envs = ["candidate-a", "preview"]' "$RESTRICTED_CATALOG/node-template.yaml"
+
+# production is NOT in node-template's restricted node-set → must be skipped.
 : > "$out"
-GITHUB_OUTPUT="$out" OVERLAY_ENV=production NODES_INPUT="oss" \
+GITHUB_OUTPUT="$out" OVERLAY_ENV=production NODES_INPUT="node-template" \
+  COGNI_CATALOG_ROOT="$RESTRICTED_CATALOG" \
   bash scripts/ci/resolve-promote-targets.sh > "$TMPROOT/offset-stdout"
 [[ "$(awk -F= '$1 == "has_targets" {print $2}' "$out")" == "false" ]]
 grep -q "Skipping targets not in the production node-set" "$TMPROOT/offset-stdout"
 
+# candidate-a IS in the restricted node-set → must be kept.
 : > "$out"
-GITHUB_OUTPUT="$out" OVERLAY_ENV=candidate-a NODES_INPUT="oss" \
+GITHUB_OUTPUT="$out" OVERLAY_ENV=candidate-a NODES_INPUT="node-template" \
+  COGNI_CATALOG_ROOT="$RESTRICTED_CATALOG" \
   bash scripts/ci/resolve-promote-targets.sh > "$TMPROOT/canda-stdout"
-[[ "$(awk -F= '$1 == "targets_json" {print substr($0, length($1) + 2)}' "$out")" == '["oss"]' ]]
+[[ "$(awk -F= '$1 == "targets_json" {print substr($0, length($1) + 2)}' "$out")" == '["node-template"]' ]]
 
 : > "$out"
 GITHUB_OUTPUT="$out" OVERLAY_ENV=preview NODES_INPUT="scheduler-worker" \

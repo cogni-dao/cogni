@@ -149,6 +149,15 @@ export const serverSchema = z.object({
     .default("true")
     .transform((v) => v === "true"),
 
+  // Node env-membership verb (story.5020 W4): flag-gated DNS reverse/forward reconcile seam.
+  // v0 ships OFF — a node-env add/remove only LOGS the intended Cloudflare change (a removed node's
+  // A record lingers until TTL). vNext (W3b) wires the live CloudflareAdapter prune/upsert.
+  // Default: false. See docs/design/operator-fleet-safety.md.
+  DNS_REVERSE_RECONCILE: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
+
   // GitHub webhook secret - HMAC-SHA256 verification for incoming GitHub webhook payloads.
   // Required when GitHub webhook ingestion is enabled. Per WEBHOOK_SECRET_NOT_IN_CODE.
   GH_WEBHOOK_SECRET: optionalString,

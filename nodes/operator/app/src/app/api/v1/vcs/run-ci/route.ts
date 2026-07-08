@@ -10,7 +10,7 @@
  *   push the deployable). The operator GitHub App is the sole GitHub-privilege bridge, so the PR
  *   becomes flightable/mergeable with zero privileged human action.
  * Scope: Auth → RBAC (node-scoped) → resolve repo → approve held gate runs → dispatch pr-build.
- *   Wraps `VcsCapability.approveWorkflowRuns` + `OperatorDeployPlanePort.dispatchPrBuild`; adds NO
+ *   Wraps `VcsCapability.approveWorkflowRuns` + `DeployPlanePort.dispatchPrBuild`; adds NO
  *   bespoke deploy-brain / new workflow (reuses the SAME pr-build.yml).
  * Invariants:
  *   - AUTH_REQUIRED: Bearer token (machine agents) or SIWE session.

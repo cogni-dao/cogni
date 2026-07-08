@@ -28,14 +28,14 @@
  *     node-template's sync-manifest) is restored to the fork's own version inside Tier 2's merge — never
  *     overwritten. Carving it OUT is exactly what makes Tier 1 + Tier 2 always auto-mergeable.
  * Side-effects: IO (DB read via service db, GitHub Git Data API writes via the deploy plane). Fire-and-forget.
- * Links: src/ports/operator-deploy-plane.port.ts, src/adapters/server/vcs/github-repo-write.ts,
+ * Links: src/ports/deploy-plane.port.ts, src/adapters/server/vcs/github-repo-write.ts,
  *   src/app/api/internal/webhooks/[source]/route.ts, docs/spec/node-ci-cd-contract.md, docs/spec/repo-sync-contract.md
  * @public
  */
 
 import type { Logger } from "pino";
 import { createOperatorDeployPlane } from "@/bootstrap/capabilities/operator-deploy-plane";
-import type { OperatorDeployPlanePort } from "@/ports";
+import type { DeployPlanePort } from "@/ports";
 import type { ServerEnv } from "@/shared/env";
 
 const TEMPLATE_REPO = "node-template";
@@ -133,7 +133,7 @@ export function extractTemplateMainPush(
  * is threaded into every fork's Tier-2 merge so the upstream PR carries substrate only.
  */
 export async function fanOutForkSync(
-  deployPlane: OperatorDeployPlanePort,
+  deployPlane: DeployPlanePort,
   ctx: TemplateMainPush,
   targets: readonly ForkSyncTarget[],
   nodeLocalPaths: readonly string[]

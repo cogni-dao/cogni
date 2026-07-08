@@ -80,6 +80,21 @@ export type {
   ResolvedConnection,
 } from "./connection-broker.port";
 export type {
+  CandidateFlightDispatchResult,
+  CatalogForkTarget,
+  DeployPlanePort,
+  MirrorCanonicalFilesInput,
+  MirrorCanonicalFilesResult,
+  NodePromoteResult,
+  PreparedNodeRefCandidateFlight,
+  PrepareNodeRefCandidateFlightInput,
+  PromoteNodeInput,
+  ResolvedNodeRepo,
+  ResolveNodeRepoInput,
+  SyncTemplateUpstreamInput,
+  SyncTemplateUpstreamResult,
+} from "./deploy-plane.port";
+export type {
   GovernanceRun,
   GovernanceStatusPort,
   UpcomingRun,
@@ -162,21 +177,6 @@ export type {
   VerificationResult,
   VerificationStatus,
 } from "./onchain-verifier.port";
-export type {
-  CandidateFlightDispatchResult,
-  CatalogForkTarget,
-  MirrorCanonicalFilesInput,
-  MirrorCanonicalFilesResult,
-  NodePromoteResult,
-  OperatorDeployPlanePort,
-  PreparedNodeRefCandidateFlight,
-  PrepareNodeRefCandidateFlightInput,
-  PromoteNodeInput,
-  ResolvedNodeRepo,
-  ResolveNodeRepoInput,
-  SyncTemplateUpstreamInput,
-  SyncTemplateUpstreamResult,
-} from "./operator-deploy-plane.port";
 export type {
   OperatorSecretsPlanePort,
   SecretWriteOp,

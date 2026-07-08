@@ -21,9 +21,9 @@
  *     node's main has no guaranteed image.
  *   - V0_NO_RBAC: a node cleared auth to reach candidate-a; preview-on-merge rides that grant.
  *     A `node.promote` gate is vNext if a node can earn preview without candidate-a.
- * Side-effects: IO (DB read, GitHub REST/GraphQL via OperatorDeployPlanePort). Fire-and-forget.
+ * Side-effects: IO (DB read, GitHub REST/GraphQL via DeployPlanePort). Fire-and-forget.
  * Links: docs/spec/ci-cd.md, docs/spec/node-ci-cd-contract.md,
- *   src/ports/operator-deploy-plane.port.ts, .github/workflows/promote-and-deploy.yml
+ *   src/ports/deploy-plane.port.ts, .github/workflows/promote-and-deploy.yml
  * @public
  */
 

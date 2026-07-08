@@ -35,12 +35,12 @@ REST API routes for VCS operations — artifact-gated candidate-a flight dispatc
 
 ## Ports
 
-- **Uses ports:** `OperatorDeployPlanePort` (via operator-local factory)
+- **Uses ports:** `DeployPlanePort` (via operator-local factory)
 - **Implements ports:** none
 
 ## Responsibilities
 
-- This directory **does:** verify node flight authorization, verify nodeRef source/image preflight via `OperatorDeployPlanePort`, dispatch `candidate-flight.yml`, return dispatch metadata.
+- This directory **does:** verify node flight authorization, verify nodeRef source/image preflight via `DeployPlanePort`, dispatch `candidate-flight.yml`, return dispatch metadata.
 - This directory **does not:** own the slot lease (workflow owns it), poll for run ID, write any DB state.
 
 ## Standards
@@ -48,7 +48,7 @@ REST API routes for VCS operations — artifact-gated candidate-a flight dispatc
 - All routes auth-protected (Bearer token or SIWE session required)
 - OpenFGA-configured flight routes fail closed before GitHub prepare/dispatch unless `node.flight` allows the caller on the target node
 - Input/output validated via `flightOperation` Zod contract
-- No direct Octokit — hosted deploy-plane calls go through `OperatorDeployPlanePort`
+- No direct Octokit — hosted deploy-plane calls go through `DeployPlanePort`
 
 ## Dependencies
 

@@ -21,10 +21,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { GitHubRepoWriter } from "@/adapters/server";
-import type {
-  MirrorCanonicalFilesResult,
-  OperatorDeployPlanePort,
-} from "@/ports";
+import type { DeployPlanePort, MirrorCanonicalFilesResult } from "@/ports";
 
 // --- Config (overridable; defaults target the disposable test org) ---------
 const SOURCE_OWNER = process.env.SYNC_E2E_SOURCE_OWNER ?? "cogni-test-org";
@@ -50,7 +47,7 @@ const describeIfReady = hasCreds ? describe : describe.skip;
 describeIfReady(
   "syncCanonicalFilesToFork · node-template → fork (external e2e)",
   () => {
-    let plane: OperatorDeployPlanePort;
+    let plane: DeployPlanePort;
 
     beforeAll(() => {
       const privateKey = Buffer.from(

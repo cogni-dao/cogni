@@ -70,6 +70,113 @@ export function isCanonicalNodeId(nodeId: string): boolean {
 }
 
 /**
+ * True if an error thrown by `NativeConnection.connect` looks transient — a
+ * DNS / transport / reachability blip that a retry could clear — rather than a
+ * permanent misconfiguration. Matches broadly on error type/name and message:
+ * a single transient name-resolution failure resolving the Temporal
+ * ExternalName at boot must NOT be fatal (it crashlooped the pod and, on the
+ * shared k3s VM, storm-degraded co-located node-apps → fleet 502, incident
+ * 2026-06-30). When unsure, prefer retrying: transient transport errors at
+ * boot should retry rather than crashloop.
+ */
+export function isTransientConnectError(err: unknown): boolean {
+  const e = err as { name?: unknown; message?: unknown; code?: unknown } | null;
+  const name = typeof e?.name === "string" ? e.name : "";
+  const code = typeof e?.code === "string" ? e.code : "";
+  const message = typeof e?.message === "string" ? e.message : "";
+  // Temporal's native transport surfaces these as `TransportError`.
+  if (name === "TransportError") return true;
+  const haystack = `${name} ${code} ${message}`;
+  const TRANSIENT_MARKERS = [
+    "name resolution",
+    "dns error",
+    "ENOTFOUND",
+    "EAI_AGAIN",
+    "Temporary failure",
+    "ConnectError",
+    "Connection refused",
+    "UNAVAILABLE",
+  ];
+  return TRANSIENT_MARKERS.some((marker) =>
+    haystack.toLowerCase().includes(marker.toLowerCase())
+  );
+}
+
+const defaultSleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Tunables + injectable timer for connectWithRetry (test seam). */
+export interface ConnectWithRetryOptions {
+  maxAttempts?: number;
+  baseDelayMs?: number;
+  factor?: number;
+  maxDelayMs?: number;
+  sleep?: (ms: number) => Promise<void>;
+}
+
+/**
+ * Connect to Temporal with exponential backoff on transient
+ * connection/transport/DNS errors. A single transient name-resolution blip at
+ * boot must not be fatal — without this the pod crashloops on the same blip
+ * (~every 60s) and storms the shared k3s VM (incident 2026-06-30). Persistent
+ * (non-transient) failures rethrow immediately; transient failures rethrow only
+ * after attempts are exhausted, so k8s still restarts on genuinely-down
+ * Temporal — same outer behavior as before, but only after a real outage.
+ *
+ * The connect function, sleep timer, and tunables are injected so the retry
+ * loop is deterministically unit-testable without a real Temporal or real
+ * timers (the candidate-a flight booted first-try, so the loop was otherwise
+ * never exercised).
+ */
+export async function connectWithRetry(
+  connect: () => Promise<NativeConnection>,
+  logger: Logger,
+  opts?: ConnectWithRetryOptions
+): Promise<NativeConnection> {
+  const maxAttempts = opts?.maxAttempts ?? 8;
+  const baseDelayMs = opts?.baseDelayMs ?? 2_000;
+  const factor = opts?.factor ?? 2;
+  const maxDelayMs = opts?.maxDelayMs ?? 15_000;
+  const sleep = opts?.sleep ?? defaultSleep;
+
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await connect();
+    } catch (err) {
+      lastErr = err;
+      if (!isTransientConnectError(err) || attempt === maxAttempts) break;
+      const delayMs = Math.min(
+        baseDelayMs * factor ** (attempt - 1),
+        maxDelayMs
+      );
+      logger.warn(
+        {
+          event: WORKER_EVENT_NAMES.LIFECYCLE_STARTING,
+          phase: "temporal_connect_retry",
+          attempt,
+          maxAttempts,
+          delayMs,
+          err: (err as Error)?.message ?? String(err),
+        },
+        `Temporal connect failed (transient) — retrying in ${delayMs}ms (attempt ${attempt}/${maxAttempts})`
+      );
+      await sleep(delayMs);
+    }
+  }
+  logger.warn(
+    {
+      event: WORKER_EVENT_NAMES.LIFECYCLE_STARTING,
+      phase: "temporal_connect_exhausted",
+      maxAttempts,
+      err: (lastErr as Error)?.message ?? String(lastErr),
+    },
+    "Exhausted Temporal connect retries — rethrowing (k8s will restart)"
+  );
+  throw lastErr;
+}
+
+/**
  * Starts one Temporal Worker per canonical nodeId in COGNI_NODE_ENDPOINTS,
  * plus one drain Worker on the legacy `env.TEMPORAL_TASK_QUEUE` for any
  * schedules that have not yet been rewritten to a per-node queue.
@@ -89,9 +196,13 @@ export async function startSchedulerWorker(
     phase: "temporal_connect",
   });
 
-  const connection = await NativeConnection.connect({
-    address: env.TEMPORAL_ADDRESS,
-  });
+  // Wrap connect in retry-with-backoff: a single transient DNS blip resolving
+  // the Temporal ExternalName at boot must not crashloop the pod (incident
+  // 2026-06-30). See connectWithRetry / isTransientConnectError above.
+  const connection = await connectWithRetry(
+    () => NativeConnection.connect({ address: env.TEMPORAL_ADDRESS }),
+    logger
+  );
 
   const container = createContainer(env, logger);
 

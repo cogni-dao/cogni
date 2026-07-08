@@ -40,8 +40,9 @@ put_secret() {
 put_secret node-template POSTHOG_API_KEY phc_existing
 put_secret node-template POSTHOG_HOST https://us.i.posthog.com
 # Canonical-custody (inheritFrom: operator) values: seeded at the OPERATOR path
-# only. A divergent node-template copy must be IGNORED — the node inherits the
-# operator value (overwrite-on-drift), killing the split-brain bug.5021/429 class.
+# only, with a divergent copy at the TARGET node (node-template). That divergent
+# per-node copy must be IGNORED — the node inherits the operator value
+# (overwrite-on-drift), killing the split-brain bug.5021/429 class.
 # EVM_RPC_URL joined this class (was blind-scan shared): the operator holds the one
 # billed Base RPC and every node inherits it.
 put_secret operator OPENROUTER_API_KEY sk-or-operator-canonical
@@ -131,52 +132,52 @@ env \
   SECRET_MATERIALIZE_SSH_BIN="$FAKEBIN/ssh" \
   FAKE_REMOTE_PATH="$FAKEBIN" \
   FAKE_BAO_ROOT="$BAO_ROOT" \
-  bash scripts/ci/secret-materialize.sh candidate-a oss > "$TMPROOT/out.txt"
+  bash scripts/ci/secret-materialize.sh candidate-a node-template > "$TMPROOT/out.txt"
 
 # source:agent app key generated per-node
-test -f "$BAO_ROOT/cogni/candidate-a/oss/AUTH_SECRET" \
+test -f "$BAO_ROOT/cogni/candidate-a/node-template/AUTH_SECRET" \
   || { echo "materialize did not seed AUTH_SECRET" >&2; exit 1; }
 # source:human shared substrate inherited via blind ancestor scan (POSTHOG_*).
 # required:true — a node MUST receive them or the fail-fast guard trips (bug.5087).
 for k in POSTHOG_API_KEY POSTHOG_HOST; do
-  test -f "$BAO_ROOT/cogni/candidate-a/oss/$k" \
+  test -f "$BAO_ROOT/cogni/candidate-a/node-template/$k" \
     || { echo "materialize did not inherit required shared substrate $k" >&2; exit 1; }
 done
 # canonical-custody keys (inheritFrom: operator): must be the OPERATOR value, NOT a
-# stale node-template copy — proves inheritFrom overwrites the per-node split-brain.
+# stale per-node copy — proves inheritFrom overwrites the per-node split-brain.
 # OPENROUTER_API_KEY (bug.5021/429) and EVM_RPC_URL (bug.5087 chain substrate) share
 # this shape: the operator holds the one billed value and every node inherits it.
-test "$(cat "$BAO_ROOT/cogni/candidate-a/oss/OPENROUTER_API_KEY")" = sk-or-operator-canonical \
-  || { echo "OPENROUTER_API_KEY must inherit the operator-canonical value, not the stale node-template copy" >&2; exit 1; }
-test "$(cat "$BAO_ROOT/cogni/candidate-a/oss/EVM_RPC_URL")" = https://base-mainnet.example/v2/operator-key \
-  || { echo "EVM_RPC_URL must inherit the operator value (inheritFrom: operator), not the stale node-template copy" >&2; exit 1; }
+test "$(cat "$BAO_ROOT/cogni/candidate-a/node-template/OPENROUTER_API_KEY")" = sk-or-operator-canonical \
+  || { echo "OPENROUTER_API_KEY must inherit the operator-canonical value, not the stale per-node copy" >&2; exit 1; }
+test "$(cat "$BAO_ROOT/cogni/candidate-a/node-template/EVM_RPC_URL")" = https://base-mainnet.example/v2/operator-key \
+  || { echo "EVM_RPC_URL must inherit the operator value (inheritFrom: operator), not the stale per-node copy" >&2; exit 1; }
 # per-node DB creds generated (source:agent), not inherited from any shared bank
 for k in APP_DB_PASSWORD APP_DB_SERVICE_PASSWORD; do
-  test -f "$BAO_ROOT/cogni/candidate-a/oss/$k" \
+  test -f "$BAO_ROOT/cogni/candidate-a/node-template/$k" \
     || { echo "materialize did not generate per-node $k" >&2; exit 1; }
 done
 # Postgres DSNs composed sole-source here, embedding the per-node app_<node> role
 # (regression guard: a shared app_user DSN is the bug.5002 split-brain we killed)
-test -f "$BAO_ROOT/cogni/candidate-a/oss/DATABASE_URL" \
+test -f "$BAO_ROOT/cogni/candidate-a/node-template/DATABASE_URL" \
   || { echo "materialize did not compose DATABASE_URL" >&2; exit 1; }
-test -f "$BAO_ROOT/cogni/candidate-a/oss/DATABASE_SERVICE_URL" \
+test -f "$BAO_ROOT/cogni/candidate-a/node-template/DATABASE_SERVICE_URL" \
   || { echo "materialize did not compose DATABASE_SERVICE_URL" >&2; exit 1; }
-grep -q '://app_oss:' "$BAO_ROOT/cogni/candidate-a/oss/DATABASE_URL" \
-  || { echo "DATABASE_URL must embed per-node role app_oss, not shared app_user" >&2; exit 1; }
-grep -q '://service_oss:' "$BAO_ROOT/cogni/candidate-a/oss/DATABASE_SERVICE_URL" \
-  || { echo "DATABASE_SERVICE_URL must embed per-node role service_oss" >&2; exit 1; }
+grep -q '://app_node_template:' "$BAO_ROOT/cogni/candidate-a/node-template/DATABASE_URL" \
+  || { echo "DATABASE_URL must embed per-node role app_node_template, not shared app_user" >&2; exit 1; }
+grep -q '://service_node_template:' "$BAO_ROOT/cogni/candidate-a/node-template/DATABASE_SERVICE_URL" \
+  || { echo "DATABASE_SERVICE_URL must embed per-node role service_node_template" >&2; exit 1; }
 # Doltgres half of the cutover: the env superuser is the operator-canonical SSOT
 # (cogni/<env>/operator/DOLTGRES_PASSWORD); with operator unseeded in this isolated
 # materialize the composer falls back to the deterministic genesis derive, and
 # DOLTGRES_URL is composed sole-source from it (non-empty superuser pw). The pod
 # reaches its own knowledge_<node> DB as the `postgres` superuser — Doltgres 0.56.3
 # RBAC is table-DML-only (databases.md §5.2), so a per-node role is not yet possible.
-test -f "$BAO_ROOT/cogni/candidate-a/oss/DOLTGRES_PASSWORD" \
+test -f "$BAO_ROOT/cogni/candidate-a/node-template/DOLTGRES_PASSWORD" \
   || { echo "materialize did not materialize per-node DOLTGRES_PASSWORD" >&2; exit 1; }
-test -f "$BAO_ROOT/cogni/candidate-a/oss/DOLTGRES_URL" \
+test -f "$BAO_ROOT/cogni/candidate-a/node-template/DOLTGRES_URL" \
   || { echo "materialize did not compose DOLTGRES_URL" >&2; exit 1; }
-grep -qE '://postgres:[^@]+@[^/]+/knowledge_oss\?' "$BAO_ROOT/cogni/candidate-a/oss/DOLTGRES_URL" \
-  || { echo "DOLTGRES_URL must reach knowledge_oss as the postgres superuser (non-empty pw)" >&2; exit 1; }
+grep -qE '://postgres:[^@]+@[^/]+/knowledge_node_template\?' "$BAO_ROOT/cogni/candidate-a/node-template/DOLTGRES_URL" \
+  || { echo "DOLTGRES_URL must reach knowledge_node_template as the postgres superuser (non-empty pw)" >&2; exit 1; }
 # no secret value leaked to output
 if grep -q 'sk-or-operator-canonical\|sk-or-stale-divergent\|writer-token' "$TMPROOT/out.txt"; then
   echo "secret value leaked to output" >&2
@@ -187,8 +188,8 @@ fi
 # canonical superuser, matching DATABASE_URL/_SERVICE_URL behavior. This is the
 # prod oss 28P01 class: node-substrate provisions Doltgres with the operator SSOT
 # while the pod migrator reads this node-local URL.
-printf '%s' 'postgresql://postgres:stale@10.0.0.1:5435/knowledge_oss?sslmode=disable' \
-  > "$BAO_ROOT/cogni/candidate-a/oss/DOLTGRES_URL"
+printf '%s' 'postgresql://postgres:stale@10.0.0.1:5435/knowledge_node_template?sslmode=disable' \
+  > "$BAO_ROOT/cogni/candidate-a/node-template/DOLTGRES_URL"
 env \
   VM_HOST=fake \
   DOMAIN=test.cognidao.org \
@@ -196,13 +197,13 @@ env \
   SECRET_MATERIALIZE_SSH_BIN="$FAKEBIN/ssh" \
   FAKE_REMOTE_PATH="$FAKEBIN" \
   FAKE_BAO_ROOT="$BAO_ROOT" \
-  bash scripts/ci/secret-materialize.sh candidate-a oss > "$TMPROOT/out-drift.txt"
+  bash scripts/ci/secret-materialize.sh candidate-a node-template > "$TMPROOT/out-drift.txt"
 
 grep -q 'recomposed DOLTGRES_URL (drift corrected)' "$TMPROOT/out-drift.txt" \
   || { echo "stale DOLTGRES_URL was not reported as recomposed" >&2; cat "$TMPROOT/out-drift.txt" >&2; exit 1; }
-grep -qE '://postgres:[^@]+@[^/]+/knowledge_oss\?' "$BAO_ROOT/cogni/candidate-a/oss/DOLTGRES_URL" \
-  || { echo "DOLTGRES_URL must still reach knowledge_oss as postgres after drift correction" >&2; exit 1; }
-if grep -q ':stale@' "$BAO_ROOT/cogni/candidate-a/oss/DOLTGRES_URL"; then
+grep -qE '://postgres:[^@]+@[^/]+/knowledge_node_template\?' "$BAO_ROOT/cogni/candidate-a/node-template/DOLTGRES_URL" \
+  || { echo "DOLTGRES_URL must still reach knowledge_node_template as postgres after drift correction" >&2; exit 1; }
+if grep -q ':stale@' "$BAO_ROOT/cogni/candidate-a/node-template/DOLTGRES_URL"; then
   echo "DOLTGRES_URL still contains stale password after materialize" >&2
   exit 1
 fi
@@ -217,7 +218,7 @@ env \
   SECRET_MATERIALIZE_SSH_BIN="$FAKEBIN/ssh" \
   FAKE_REMOTE_PATH="$FAKEBIN" \
   FAKE_BAO_ROOT="$BAO_ROOT" \
-  bash scripts/ci/secret-materialize.sh candidate-a oss > "$TMPROOT/out2.txt"
+  bash scripts/ci/secret-materialize.sh candidate-a node-template > "$TMPROOT/out2.txt"
 
 grep -q 'created=0 ' "$TMPROOT/out2.txt" \
   || { echo "re-run must create 0 keys (idempotent); got:" >&2; grep 'materialize complete' "$TMPROOT/out2.txt" >&2; exit 1; }

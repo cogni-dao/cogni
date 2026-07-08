@@ -19,8 +19,8 @@ import {
   type TemplateMainPush,
 } from "@/app/_facades/deploy/canonical-fork-sync.server";
 import type {
+  DeployPlanePort,
   MirrorCanonicalFilesResult,
-  OperatorDeployPlanePort,
   SyncTemplateUpstreamInput,
   SyncTemplateUpstreamResult,
 } from "@/ports";
@@ -93,7 +93,7 @@ function fakePlane(over: {
   upstream?: (
     i: SyncTemplateUpstreamInput
   ) => Promise<SyncTemplateUpstreamResult>;
-}): OperatorDeployPlanePort {
+}): DeployPlanePort {
   return {
     syncCanonicalFilesToFork: vi.fn((i: { targetRepo: string }) =>
       (
@@ -104,7 +104,7 @@ function fakePlane(over: {
     syncTemplateUpstreamToFork: vi.fn((i: SyncTemplateUpstreamInput) =>
       (over.upstream ?? (async () => ({ status: "up_to_date" })))(i)
     ),
-  } as unknown as OperatorDeployPlanePort;
+  } as unknown as DeployPlanePort;
 }
 
 describe("fanOutForkSync — three tiers, per-tier per-fork isolation", () => {

@@ -39,10 +39,10 @@ import { z } from "zod";
 import type {
   CandidateFlightDispatchResult,
   CatalogForkTarget,
+  DeployPlanePort,
   MirrorCanonicalFilesInput,
   MirrorCanonicalFilesResult,
   NodePromoteResult,
-  OperatorDeployPlanePort,
   PreparedNodeRefCandidateFlight,
   PrepareNodeRefCandidateFlightInput,
   PromoteNodeInput,
@@ -52,12 +52,17 @@ import type {
   SyncTemplateUpstreamResult,
 } from "@/ports";
 import {
+  buildEnvDeltaPlan,
+  type EnvPlanCurrent,
+  EnvPlanError,
+  type EnvPlanOp,
   hasDistributionActivationSpec,
   hasPaymentsActivationSpec,
   insertAppsetKustomization,
   insertCaddyBlock,
   insertSchedulerEndpoint,
   NODE_FORMATION_ENVS,
+  type NodeFormationEnv,
   nextFreeNodePort,
   renderCatalog,
   renderDistributionActivationSpec,
@@ -73,10 +78,17 @@ import {
   makeNodeLocalMatcher,
   parseNodeLocalPaths,
 } from "@/shared/node-app-scaffold/node-local-paths";
+import { EVENT_NAMES, makeLogger } from "@/shared/observability";
 
 export interface GitHubRepoWriterConfig {
   readonly appId: string;
   readonly privateKey: string;
+  /**
+   * Flag-gated DNS reverse/forward reconcile (story.5020 W4). v0 ships false — the env-membership verb
+   * only LOGS the intended Cloudflare change. When true, the live CloudflareAdapter prune/upsert path is
+   * exercised (NOT wired with creds in this PR — vNext/W3b). Defaults false.
+   */
+  readonly dnsReverseReconcile?: boolean;
 }
 
 export interface OpenNodeAppPrInput {
@@ -96,6 +108,30 @@ export interface OpenNodeAppPrResult {
   readonly prNumber: number;
   readonly prUrl: string;
 }
+
+/** Input to {@link GitHubRepoWriter.openNodeEnvPr}: add/remove ONE env from a node's catalog reach. */
+export interface OpenNodeEnvPrInput {
+  /** Owner of the OPERATOR monorepo (the catalog lives here, exactly like `openNodeSubmodulePr`). */
+  readonly owner: string;
+  /** The OPERATOR monorepo name. */
+  readonly repo: string;
+  /** Node slug whose `infra/catalog/<slug>.yaml` env-set is edited. */
+  readonly slug: string;
+  /** The env to add (`present:true`) or remove (`present:false`). */
+  readonly env: NodeFormationEnv;
+  /** true = add the env to the node's reach; false = remove it. Atomic per-env (candidate-a included). */
+  readonly present: boolean;
+}
+
+/** Result of {@link GitHubRepoWriter.openNodeEnvPr}: a PR (opened or reused), or no-op when idempotent. */
+export type OpenNodeEnvPrResult =
+  | {
+      readonly status: "pr_opened";
+      readonly action: "add" | "remove";
+      readonly prNumber: number;
+      readonly prUrl: string;
+    }
+  | { readonly status: "no_changes" };
 
 interface GitHubPullRequestSummary {
   readonly number: number;
@@ -310,6 +346,23 @@ function deployPlaneError(
   return Object.assign(new Error(message), { code, status });
 }
 
+/** Read a node's container `port` + `node_port` from its catalog row (for the env-add overlay render). */
+function parseCatalogPorts(
+  catalogYaml: string,
+  slug: string
+): { port: number; nodePort: number } {
+  const portMatch = /^port:\s*(\d+)\s*$/m.exec(catalogYaml);
+  const nodePortMatch = /^node_port:\s*(\d+)\s*$/m.exec(catalogYaml);
+  if (!portMatch || !nodePortMatch) {
+    throw deployPlaneError(
+      "catalog_ports_missing",
+      `infra/catalog/${slug}.yaml is missing a port/node_port line; cannot render the env overlay.`,
+      422
+    );
+  }
+  return { port: Number(portMatch[1]), nodePort: Number(nodePortMatch[1]) };
+}
+
 /** Slugs that are catalog `type: node` but are never fork-sync targets. */
 const FORK_SYNC_EXCLUDED_SLUGS = new Set(["node-template", "operator"]);
 
@@ -509,9 +562,10 @@ export function rulesetGetToPutPayload(
   };
 }
 
-export class GitHubRepoWriter implements OperatorDeployPlanePort {
+export class GitHubRepoWriter implements DeployPlanePort {
   private readonly config: GitHubRepoWriterConfig;
   private readonly appAuth: ReturnType<typeof createAppAuth>;
+  private readonly log = makeLogger({ component: "GitHubRepoWriter" });
 
   constructor(config: GitHubRepoWriterConfig) {
     this.config = config;
@@ -1616,6 +1670,250 @@ export class GitHubRepoWriter implements OperatorDeployPlanePort {
       message: `feat(node): register ${slug}`,
       branch: `cogni-operator/node-register-${slug}`,
     });
+  }
+
+  /**
+   * Node env-membership verb (story.5020 W4): add OR remove ONE env from a node's deploy reach by editing
+   * the OPERATOR monorepo catalog (owner/repo = the monorepo, exactly like {@link openNodeSubmodulePr}).
+   * Every env is an INDEPENDENT, atomic toggle (ATOMIC_PER_ENV) — candidate-a is no different from
+   * preview/production.
+   *
+   * - ADD (`present:true`): fold `env` into `infra/catalog/<slug>.yaml`'s `envs:` line, render the per-env
+   *   overlay + AppSet, and fold the slug into that env's appsets kustomization.
+   * - REMOVE (`present:false`): drop `env` from the catalog `envs:` line, DELETE the overlay + AppSet
+   *   (sha:null), regenerate that env's kustomization without the slug. Applies to candidate-a too;
+   *   removing the last env leaves a valid `envs: []` row (the catalog row + Caddy/scheduler entries stay).
+   *
+   * Idempotent: the already-holding state opens no PR (`no_changes`). The DNS reverse/forward reconcile is
+   * a flag-gated v0 seam (DNS_REVERSE_RECONCILE, default off) — see the `dnsSeam` call below.
+   */
+  async openNodeEnvPr(input: OpenNodeEnvPrInput): Promise<OpenNodeEnvPrResult> {
+    const { owner, repo, slug, env, present } = input;
+    const octokit = await this.getOctokit(owner, repo);
+    const { baseCommitSha, baseTreeSha } = await this.resolveMainBase(
+      octokit,
+      owner,
+      repo
+    );
+
+    // The catalog row is the existence gate: a node absent from the catalog can't have its env-set edited.
+    const catalog = await this.fetchFileText({
+      owner,
+      repo,
+      path: `infra/catalog/${slug}.yaml`,
+      ref: "main",
+    });
+    if (catalog === null) {
+      throw deployPlaneError(
+        "node_not_in_catalog",
+        `infra/catalog/${slug}.yaml not found on main; '${slug}' is not a registered node.`,
+        404
+      );
+    }
+
+    const current = await this.collectEnvPlanCurrent(
+      octokit,
+      owner,
+      repo,
+      slug,
+      env,
+      present,
+      catalog
+    );
+
+    let plan: ReturnType<typeof buildEnvDeltaPlan>;
+    try {
+      plan = buildEnvDeltaPlan({ slug, env, present, current });
+    } catch (err) {
+      if (err instanceof EnvPlanError) {
+        throw deployPlaneError(err.code, err.message, err.status);
+      }
+      throw err;
+    }
+
+    if (plan.kind === "no_changes") {
+      return { status: "no_changes" };
+    }
+
+    // DNS seam — flag-gated v0 (DNS_REVERSE_RECONCILE, default off). ADD ⇒ forward upsert; REMOVE /
+    // DECOMMISSION ⇒ reverse prune. v0 ships flag-off so we only LOG the intended change.
+    await this.dnsSeam(slug, env, present);
+
+    const entries = await this.planOpsToTreeEntries(
+      octokit,
+      owner,
+      repo,
+      plan.ops
+    );
+
+    const message = `feat(node): ${present ? "add" : "remove"} ${slug} ${present ? "to" : "from"} ${env}`;
+    const branch = `cogni-operator/node-env-${slug}-${env}`;
+    const title = message;
+    const body = this.envPrBody(plan.kind, slug, env, plan.nextEnvs);
+
+    const result = await this.commitTreeAndOpenPr(octokit, owner, repo, slug, {
+      baseCommitSha,
+      baseTreeSha,
+      entries,
+      message,
+      branch,
+      pr: { title, body },
+    });
+    await this.updatePrBody(octokit, owner, repo, result.prNumber, title, body);
+    return {
+      status: "pr_opened",
+      action: plan.kind,
+      prNumber: result.prNumber,
+      prUrl: result.prUrl,
+    };
+  }
+
+  /** Fetch the current control-plane files the env-delta planner reads. Only fetches what the op needs. */
+  private async collectEnvPlanCurrent(
+    octokit: Octokit,
+    owner: string,
+    repo: string,
+    slug: string,
+    env: NodeFormationEnv,
+    present: boolean,
+    catalog: string
+  ): Promise<EnvPlanCurrent> {
+    const appsetsKustomizationByEnv: Record<string, string> = {};
+    const templateOverlayByEnv: Record<string, string> = {};
+
+    if (present) {
+      // ADD touches only the one env: its template overlay, appset template, and appsets kustomization.
+      templateOverlayByEnv[env] = await this.readFileOnMain(
+        octokit,
+        owner,
+        repo,
+        `infra/k8s/overlays/${env}/${TEMPLATE_SLUG}/kustomization.yaml`
+      );
+      appsetsKustomizationByEnv[env] = await this.readFileOnMain(
+        octokit,
+        owner,
+        repo,
+        appsetsKustomizationPath(env)
+      );
+      const appsetTemplate = await this.readFileOnMain(
+        octokit,
+        owner,
+        repo,
+        APPSET_TEMPLATE_PATH
+      );
+      const { port, nodePort } = parseCatalogPorts(catalog, slug);
+      return {
+        catalog,
+        templateOverlayByEnv,
+        appsetTemplate,
+        appsetsKustomizationByEnv,
+        port,
+        nodePort,
+      };
+    }
+
+    // REMOVE (atomic per-env): the planner regenerates the removed env's kustomization, so fetch the
+    // appsets kustomization for that env. (Caddy/scheduler are per-node env-independent state and are
+    // NOT touched by an env remove — a node with `envs:[]` keeps them.)
+    appsetsKustomizationByEnv[env] = await this.readFileOnMain(
+      octokit,
+      owner,
+      repo,
+      appsetsKustomizationPath(env)
+    );
+    return {
+      catalog,
+      templateOverlayByEnv,
+      appsetsKustomizationByEnv,
+    };
+  }
+
+  /** Turn the pure plan ops into a `POST /git/trees` payload: upsert ⇒ new blob, delete ⇒ `sha:null`. */
+  private async planOpsToTreeEntries(
+    octokit: Octokit,
+    owner: string,
+    repo: string,
+    ops: readonly EnvPlanOp[]
+  ): Promise<GitTreeEntry[]> {
+    const entries: GitTreeEntry[] = [];
+    for (const op of ops) {
+      if (op.op === "delete") {
+        entries.push({
+          path: op.path,
+          mode: "100644",
+          type: "blob",
+          sha: null,
+        });
+      } else {
+        const sha = await this.createBlob(octokit, owner, repo, op.content);
+        entries.push({ path: op.path, mode: "100644", type: "blob", sha });
+      }
+    }
+    return entries;
+  }
+
+  /**
+   * Flag-gated DNS reconcile seam (story.5020 W4 v0). `DNS_REVERSE_RECONCILE` defaults OFF, so v0 only
+   * LOGS the intended Cloudflare change (the per-node A record lingers until TTL on a remove). On ADD the
+   * symmetric forward upsert is logged. The node's intended host mirrors `host_for_node()` — a non-primary
+   * node is reached at `<slug>-<env-domain>` (the env's domain encodes the env), so the host is recorded
+   * as `<slug>` scoped to `env` here.
+   *
+   * vNext: enable DNS_REVERSE_RECONCILE + reconcile-node-dns.sh prune — story.5020 W3b, see
+   * docs/design/operator-fleet-safety.md. When ON, this path constructs a CloudflareAdapter and calls
+   * `@cogni/dns-ops` `removeDnsRecord` / `upsertDnsRecord`; we do NOT wire live Cloudflare creds in this PR.
+   */
+  private async dnsSeam(
+    slug: string,
+    env: NodeFormationEnv,
+    present: boolean
+  ): Promise<void> {
+    const enabled = this.config.dnsReverseReconcile === true;
+    const intendedHost = `${slug} (${env})`;
+    if (!enabled) {
+      this.log.info(
+        {
+          event: present
+            ? EVENT_NAMES.DNS_FORWARD_RECONCILE_SKIPPED
+            : EVENT_NAMES.DNS_REVERSE_RECONCILE_SKIPPED,
+          slug,
+          env,
+          intendedHost,
+        },
+        present
+          ? "DNS forward reconcile skipped (DNS_REVERSE_RECONCILE off) — A record not upserted (v0)"
+          : "DNS reverse reconcile skipped (DNS_REVERSE_RECONCILE off) — A record lingers until TTL (v0)"
+      );
+      return;
+    }
+    // vNext: enable DNS_REVERSE_RECONCILE + reconcile-node-dns.sh prune — story.5020 W3b, see
+    // docs/design/operator-fleet-safety.md. The flag-on path constructs a CloudflareAdapter and calls
+    // `@cogni/dns-ops` removeDnsRecord/upsertDnsRecord; live creds are deliberately NOT wired in this PR.
+    throw deployPlaneError(
+      "dns_reconcile_not_wired",
+      "DNS_REVERSE_RECONCILE is on but live Cloudflare reconcile is not wired in this PR (story.5020 W3b).",
+      501
+    );
+  }
+
+  /** PR body for the env-membership verb (atomic per-env add/remove). */
+  private envPrBody(
+    kind: "add" | "remove",
+    slug: string,
+    env: NodeFormationEnv,
+    nextEnvs: readonly NodeFormationEnv[]
+  ): string {
+    const envsList =
+      nextEnvs.length > 0
+        ? `\`[${nextEnvs.join(", ")}]\``
+        : "_(none — deployed nowhere)_";
+    const verb = kind === "add" ? "Adds" : "Removes";
+    const dir = kind === "add" ? "to" : "from";
+    return (
+      `${verb} \`${slug}\` ${dir} the \`${env}\` environment by editing \`infra/catalog/${slug}.yaml\`'s ` +
+      `\`envs:\` line (now ${envsList}) and the matching overlay + ApplicationSet + appsets kustomization.\n\n` +
+      "_Authored automatically by cogni-operator (node env-membership verb, story.5020 W4)._"
+    );
   }
 
   /**

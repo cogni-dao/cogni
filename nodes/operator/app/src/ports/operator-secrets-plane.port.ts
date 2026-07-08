@@ -15,7 +15,7 @@
  *   - NO_SECRETS_IN_CONTEXT: the writer token never leaves the adapter; values never logged.
  * Side-effects: none (interface)
  * Links: docs/design/node-self-serve-secrets.md, src/app/api/v1/nodes/[id]/secrets/route.ts,
- *   src/ports/operator-deploy-plane.port.ts (the deploy-plane sibling this mirrors)
+ *   src/ports/deploy-plane.port.ts (the deploy-plane sibling this mirrors)
  * @public
  */
 

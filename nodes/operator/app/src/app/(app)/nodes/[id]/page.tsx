@@ -197,7 +197,12 @@ export default async function NodeDashboardPage({
         }}
       />
 
-      {deployEnvs ? <NodeDeployments envs={deployEnvs} /> : null}
+      {/* Deployments table + owner-driven per-env Deploy/Undeploy control (story.5020 W4). Every env is
+          an independent atomic toggle. Current reach is derived from the live deploy state the page
+          already fetched (health=healthy ⇒ in reach) — no new fetch. */}
+      {deployEnvs ? (
+        <NodeDeployments nodeId={node.id} envs={deployEnvs} />
+      ) : null}
 
       {showDevelopers ? (
         <NodeAccess nodeId={node.id} requests={accessRequests} />

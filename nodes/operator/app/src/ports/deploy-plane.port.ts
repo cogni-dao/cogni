@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `@ports/operator-deploy-plane`
+ * Module: `@ports/deploy-plane`
  * Purpose: Operator-local deploy control plane for candidate flight dispatch.
  * Scope: Interface only. Keeps hosted deploy operations out of shared AI-tool capabilities.
  * Invariants:
@@ -165,7 +165,7 @@ export interface ResolvedNodeRepo {
   readonly repo: string;
 }
 
-export interface OperatorDeployPlanePort {
+export interface DeployPlanePort {
   prepareNodeRefCandidateFlight(
     input: PrepareNodeRefCandidateFlightInput
   ): Promise<PreparedNodeRefCandidateFlight>;

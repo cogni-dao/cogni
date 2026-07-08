@@ -20,16 +20,17 @@ resources:
   - https://raw.githubusercontent.com/argoproj/argo-cd/v2.13.4/manifests/install.yaml
   # ksops CMP plugin ConfigMap
   - ksops-cmp.yaml
-  # PER-ENV app-of-apps: each continuously reconciles the per-node ApplicationSets
-  # under appsets/<env>/ with prune, so a catalog-removed node's AppSet is auto-pruned.
-  # All three are listed here for drift/completeness (mirroring how the per-(env, node)
-  # AppSets were once all listed), BUT each env's CLUSTER must only get ITS OWN
-  # app-of-apps — a single cluster running all three would fan every env's AppSets
-  # onto it. provision-env-vm.sh therefore applies only cogni-${DEPLOY_ENV}-appsets.
-  # candidate-b is provisioned separately (provision-env.yml) and not included.
-  - candidate-a-appsets-application.yaml
-  - preview-appsets-application.yaml
-  - production-appsets-application.yaml
+  #
+  # NOTE: the per-env app-of-apps (cogni-<env>-appsets) are NO LONGER listed here.
+  # They moved under control-plane/<env>/ and are now reconciled by a per-env ROOT
+  # app-of-apps (control-plane/roots/<env>-control-plane-application.yaml, story.5020).
+  # provision applies ONLY the matching cogni-${DEPLOY_ENV}-control-plane seed — the
+  # one apply-once surface — and Argo owns the app-of-apps layer from there. They are
+  # deliberately NOT bootstrap-listed for the SAME per-env-scoping reason that kept them
+  # out of a shared source before: a single cluster rendering all three would fan every
+  # env's app-of-apps (and pods) onto it. This bootstrap kustomization now installs ONLY
+  # Argo itself (install + ksops + patches) — the self-managed control-plane boundary the
+  # roots must never cross. candidate-b is provisioned separately (provision-env.yml).
 
 patches:
   # Add ksops sidecar to repo-server for SOPS/age secret decryption

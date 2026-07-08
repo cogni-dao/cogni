@@ -131,6 +131,25 @@
           "computedUserset": {
             "relation": "production_promoter"
           }
+        },
+        "env_manager": {
+          "union": {
+            "child": [
+              {
+                "this": {}
+              },
+              {
+                "computedUserset": {
+                  "relation": "admin"
+                }
+              }
+            ]
+          }
+        },
+        "can_manage_envs": {
+          "computedUserset": {
+            "relation": "env_manager"
+          }
         }
       },
       "metadata": {
@@ -163,6 +182,16 @@
             ]
           },
           "production_promoter": {
+            "directly_related_user_types": [
+              {
+                "type": "user"
+              },
+              {
+                "type": "agent"
+              }
+            ]
+          },
+          "env_manager": {
             "directly_related_user_types": [
               {
                 "type": "user"

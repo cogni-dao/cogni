@@ -125,15 +125,17 @@ write_files:
       git clone --depth=1 --branch "${git_branch:-main}" \
         "https://github.com/cogni-dao/cogni.git" "$REPO_DIR"
 
-      # Per-env app-of-apps (story.5020): apply the `cogni-<env>-appsets`
-      # Application for the envs this VM hosts (preview + production); it
-      # continuously reconciles infra/k8s/argocd/appsets/<env>/ with prune, so a
-      # catalog-removed node's per-node AppSet is auto-pruned (no apply-once
-      # orphan). candidate slots live on separate VMs and apply their own.
-      echo "Applying per-env ApplicationSet app-of-apps..."
+      # Per-env ROOT app-of-apps (story.5020): apply the `cogni-<env>-control-plane`
+      # SEED for the envs this VM hosts (preview + production). The seed is the ONLY
+      # apply-once surface; from it Argo continuously reconciles control-plane/<env>/
+      # (the cogni-<env>-appsets app-of-apps) which in turn reconciles appsets/<env>/
+      # with prune. So a merged change to the app-of-apps layer reaches the cluster
+      # without a re-provision, and a catalog-removed node's AppSet auto-prunes.
+      # candidate slots live on separate VMs and apply their own seed.
+      echo "Applying per-env control-plane root app-of-apps..."
       for env in preview production; do
-        kubectl apply -f "$REPO_DIR/infra/k8s/argocd/${env}-appsets-application.yaml" -n argocd
-        echo "  Applied cogni-${env}-appsets app-of-apps"
+        kubectl apply -f "$REPO_DIR/infra/k8s/argocd/control-plane/roots/${env}-control-plane-application.yaml" -n argocd
+        echo "  Applied cogni-${env}-control-plane seed"
       done
       rm -rf "$REPO_DIR"
 
