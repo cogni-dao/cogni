@@ -21,6 +21,7 @@
  */
 
 import type { SessionUser } from "@cogni/node-shared";
+import { headers } from "next/headers";
 import { type NextRequest, NextResponse } from "next/server";
 import { withRootSpan } from "@/bootstrap/otel";
 import {
@@ -33,6 +34,74 @@ import {
   type RequestContext,
   statusBucket,
 } from "@/shared/observability";
+
+// Agent bearer token prefix (kept in sync with the auth layer's issuer). Used
+// ONLY to decode a rejected token's expiry for a human-readable challenge
+// description — never to verify it. Duplicated here (not imported from
+// `@/app/_lib/auth`) so the bootstrap layer stays free of an app dependency
+// (dependency-cruiser layer boundary: bootstrap → bootstrap/ports/adapters/shared/types).
+const AGENT_TOKEN_PREFIX = "cogni_ag_sk_v1_";
+
+type AuthChallenge = {
+  wwwAuthenticate: string;
+  body:
+    | { error: "invalid_token"; error_description: string }
+    | { error: "Session required" };
+};
+
+/**
+ * Refine the RFC 6750 §3 challenge description for a rejected bearer. Decode-only
+ * (no HMAC verify): an invalid signature and an expired token are BOTH
+ * `invalid_token` per the spec — we only surface expiry as the actionable case
+ * (bug.5069: an aged-out key was masked as a session outage).
+ */
+function bearerRejectionDescription(token: string): string {
+  if (token.startsWith(AGENT_TOKEN_PREFIX)) {
+    const payloadB64 = token.slice(AGENT_TOKEN_PREFIX.length).split(".")[0];
+    if (payloadB64) {
+      try {
+        const parsed = JSON.parse(
+          Buffer.from(payloadB64, "base64url").toString("utf8")
+        ) as { exp?: number };
+        if (
+          typeof parsed.exp === "number" &&
+          parsed.exp < Math.floor(Date.now() / 1000)
+        ) {
+          return "The access token expired";
+        }
+      } catch {
+        // Undecodable payload → fall through to the generic description.
+      }
+    }
+  }
+  return "The access token is invalid";
+}
+
+/**
+ * Build the 401 challenge for a `required` route that resolved a null identity.
+ * Header-only (reads the SAME `next/headers` source the identity resolver uses;
+ * no session/DB IO): distinguishes a presented-but-invalid bearer (RFC 6750 §3
+ * `invalid_token`, expiry surfaced) from a missing credential (bare `Bearer`
+ * challenge, session-required semantics preserved). Lives in the bootstrap layer
+ * so the wrapper never imports from `@/app/_lib/auth`.
+ */
+async function buildAuthChallenge(): Promise<AuthChallenge> {
+  let authHeader: string | null = null;
+  try {
+    authHeader = (await headers()).get("authorization");
+  } catch {
+    authHeader = null;
+  }
+  if (!authHeader || !authHeader.toLowerCase().startsWith("bearer ")) {
+    return { wwwAuthenticate: "Bearer", body: { error: "Session required" } };
+  }
+  const token = authHeader.slice(7).trimStart();
+  const description = bearerRejectionDescription(token);
+  return {
+    wwwAuthenticate: `Bearer error="invalid_token", error_description="${description}"`,
+    body: { error: "invalid_token", error_description: description },
+  };
+}
 
 type AuthRequiredHandler<TContext = unknown> = (
   ctx: RequestContext,
@@ -171,21 +240,10 @@ export function wrapRouteHandlerWithLogging<TContext = unknown>(
             // Distinguish "presented-but-invalid credential" (e.g. an expired
             // bearer → RFC 6750 §3 `invalid_token`) from "no credential at all"
             // (bare `Bearer` challenge, session-required semantics preserved).
-            // describeMissingIdentity is header-only (no session/DB IO).
-            const { describeMissingIdentity, toWwwAuthenticateHeader } =
-              await import("@/app/_lib/auth/request-identity");
-            const challenge = await describeMissingIdentity();
-            const wwwAuthenticate = toWwwAuthenticateHeader(challenge);
-            const body =
-              challenge.error === "invalid_token"
-                ? {
-                    error: "invalid_token" as const,
-                    error_description: challenge.errorDescription,
-                  }
-                : { error: "Session required" as const };
-            response = NextResponse.json(body, {
+            const challenge = await buildAuthChallenge();
+            response = NextResponse.json(challenge.body, {
               status: responseStatus,
-              headers: { "WWW-Authenticate": wwwAuthenticate },
+              headers: { "WWW-Authenticate": challenge.wwwAuthenticate },
             });
             return response;
           }
