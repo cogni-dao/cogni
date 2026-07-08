@@ -9,6 +9,10 @@
  * Side-effects: IO (creates request context, emits structured log entries, records Prometheus metrics). Container loaded via dynamic import to avoid Turbopack per-route module duplication.
  * Notes: Use this wrapper for all instrumented routes. Domain events go in facades/features, not here.
  *        logRequestEnd runs exactly once in the finally block for all paths (success, 401, 5xx).
+ *        401 on required routes emits a RFC 6750 §3 `WWW-Authenticate` header: a
+ *        presented-but-invalid bearer (e.g. expired) → `Bearer error="invalid_token", ...`
+ *        + body `{error:"invalid_token", error_description}`; a missing credential →
+ *        bare `Bearer` + body `{error:"Session required"}`.
  *        For unhandled errors: logs error, then rethrows in dev/test (APP_ENV != production) for diagnosis.
  *        In production, converts to 500 for safety.
  *        Metrics are recorded in a finally block to ensure all paths are captured.
@@ -164,10 +168,25 @@ export function wrapRouteHandlerWithLogging<TContext = unknown>(
           // Check session requirement before calling handler
           if (options.auth?.mode === "required" && !sessionUser) {
             responseStatus = 401;
-            response = NextResponse.json(
-              { error: "Session required" },
-              { status: responseStatus }
-            );
+            // Distinguish "presented-but-invalid credential" (e.g. an expired
+            // bearer → RFC 6750 §3 `invalid_token`) from "no credential at all"
+            // (bare `Bearer` challenge, session-required semantics preserved).
+            // describeMissingIdentity is header-only (no session/DB IO).
+            const { describeMissingIdentity, toWwwAuthenticateHeader } =
+              await import("@/app/_lib/auth/request-identity");
+            const challenge = await describeMissingIdentity();
+            const wwwAuthenticate = toWwwAuthenticateHeader(challenge);
+            const body =
+              challenge.error === "invalid_token"
+                ? {
+                    error: "invalid_token" as const,
+                    error_description: challenge.errorDescription,
+                  }
+                : { error: "Session required" as const };
+            response = NextResponse.json(body, {
+              status: responseStatus,
+              headers: { "WWW-Authenticate": wwwAuthenticate },
+            });
             return response;
           }
 

@@ -15,13 +15,18 @@
  * Invariants:
  *   - Valid bearer → handler runs, returns 400 for invalid body (NOT 401).
  *   - Session getter is never called when a bearer is present (bearer exclusive).
- *   - Missing credentials → 401 "Session required" from the wrapper.
+ *   - Missing credentials → 401 body {error:"Session required"} + bare
+ *     `WWW-Authenticate: Bearer` (RFC 6750 §3, missing-credential challenge).
+ *   - Expired/invalid bearer → 401 body {error:"invalid_token", error_description}
+ *     + `WWW-Authenticate: Bearer error="invalid_token", ...` (RFC 6750 §3);
+ *     NEVER falls back to the session cookie (BEARER_CLAIMS_EXCLUSIVE).
  * Side-effects: none (all IO mocked).
  * Links: src/app/api/v1/chat/completions/route.ts,
  *        src/app/_lib/auth/request-identity.ts
  * @public
  */
 
+import { createHmac } from "node:crypto";
 import { TEST_USER_ID_1 } from "@tests/_fakes/ids";
 import { testApiHandler } from "next-test-api-route-handler";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -74,10 +79,35 @@ function headersFromRecord(record: Record<string, string>) {
   return { get: (name: string) => normalized.get(name.toLowerCase()) ?? null };
 }
 
+const TEST_AUTH_SECRET = "test-auth-secret-for-unit-tests";
+
 const VALID_AGENT_TOKEN = issueAgentApiKey({
   userId: TEST_USER_ID_1,
   displayName: "Bearer Test",
 });
+
+/**
+ * Mint a token with an `exp` in the past using the SAME HMAC-SHA256 scheme as
+ * issueAgentApiKey (prefix + base64url(payload) + "." + HMAC(payload)). The
+ * signature is VALID; only the expiry is stale — this is the exact shape that
+ * previously masked as "Session required" (bug.5069).
+ */
+function mintExpiredAgentToken(): string {
+  const nowSec = Math.floor(Date.now() / 1000);
+  const payload = {
+    sub: TEST_USER_ID_1,
+    displayName: "Expired Bearer Test",
+    iat: nowSec - 7200,
+    exp: nowSec - 3600, // expired an hour ago
+  };
+  const payloadB64 = Buffer.from(JSON.stringify(payload), "utf8").toString(
+    "base64url"
+  );
+  const signature = createHmac("sha256", TEST_AUTH_SECRET)
+    .update(payloadB64)
+    .digest("base64url");
+  return `cogni_ag_sk_v1_${payloadB64}.${signature}`;
+}
 
 describe("POST /api/v1/chat/completions — bearer auth via real resolver", () => {
   beforeEach(() => {
@@ -126,8 +156,46 @@ describe("POST /api/v1/chat/completions — bearer auth via real resolver", () =
         });
 
         expect(res.status).toBe(401);
+        // Missing-credential challenge: bare `Bearer`, session-required body.
+        expect(res.headers.get("www-authenticate")).toBe("Bearer");
+        expect(await res.json()).toEqual({ error: "Session required" });
         // Real resolver chain must have delegated to the leaf session getter.
         expect(mockGetServerSessionUser).toHaveBeenCalledTimes(1);
+      },
+    });
+  });
+
+  it("returns 401 invalid_token + WWW-Authenticate for an EXPIRED bearer (bug.5069)", async () => {
+    const expiredToken = mintExpiredAgentToken();
+    mockHeaders.mockResolvedValue(
+      headersFromRecord({ authorization: `Bearer ${expiredToken}` })
+    );
+
+    await testApiHandler({
+      appHandler,
+      url: "/api/v1/chat/completions",
+      async test({ fetch }) {
+        const res = await fetch({
+          method: "POST",
+          body: JSON.stringify({}),
+          headers: { "content-type": "application/json" },
+        });
+
+        expect(res.status).toBe(401);
+
+        // RFC 6750 §3: presented-but-invalid credential → machine-readable
+        // `invalid_token` code + a description that distinguishes expiry.
+        const wwwAuth = res.headers.get("www-authenticate");
+        expect(wwwAuth).toContain('error="invalid_token"');
+        expect(wwwAuth).toContain("expired");
+
+        const json = await res.json();
+        expect(json.error).toBe("invalid_token");
+        expect(json.error_description).toBe("The access token expired");
+
+        // BEARER_CLAIMS_EXCLUSIVE: an invalid bearer never falls back to the
+        // session cookie, so the leaf session getter is never consulted.
+        expect(mockGetServerSessionUser).not.toHaveBeenCalled();
       },
     });
   });
