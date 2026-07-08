@@ -153,6 +153,17 @@ const COGNI = unlinkedContributor({
   name: "Cogni (AI Agent)",
 });
 
+// flock-leader (Cogni's external agent account). Seeded UNLINKED so the walk
+// distribution e2e demonstrates conservation: a contributor with no
+// wallet-resolved binding is recorded + visible but excluded from this epoch's
+// mint (pending until a wallet is linked) — vs derekg1729, who links a wallet
+// in-app and claims.
+const FLOCK = unlinkedContributor({
+  platformUserId: "295942454",
+  login: "flock-leader",
+  name: "Flock Leader (Agent)",
+});
+
 const LINKED_CONTRIBUTORS = [ALICE, BEN] as const;
 
 // ── Helpers ─────────────────────────────────────────────────────
@@ -455,6 +466,12 @@ const EPOCH_3: SeedEpochDef = {
       reviewDatabaseId: 3811406373,
       title: "Review: approve PR #435",
       contributor: DEREK,
+      eventTime: daysBefore(WINDOW_3.periodEnd, 1),
+    }),
+    prEvent({
+      number: 489,
+      title: "feat(walk): cumulative distributor claim path (flock-leader)",
+      contributor: FLOCK,
       eventTime: daysBefore(WINDOW_3.periodEnd, 1),
     }),
   ],
