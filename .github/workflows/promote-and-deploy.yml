@@ -790,7 +790,7 @@ jobs:
           token: ${{ secrets.ACTIONS_AUTOMATION_BOT_PAT }}
 
       - name: Download per-cell artifact
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.1.8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4.1.8
         with:
           name: cell-${{ matrix.node }}
           path: ${{ runner.temp }}/
@@ -1003,7 +1003,7 @@ jobs:
 
       - name: Download all per-cell artifacts
         if: always()
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.1.8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4.1.8
         with:
           pattern: cell-*
           path: ${{ runner.temp }}/cells/
@@ -1063,7 +1063,7 @@ jobs:
           token: ${{ secrets.ACTIONS_AUTOMATION_BOT_PAT }}
 
       - name: Download all per-cell artifacts
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.1.8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4.1.8
         with:
           pattern: cell-*
           path: ${{ runner.temp }}/cells/
