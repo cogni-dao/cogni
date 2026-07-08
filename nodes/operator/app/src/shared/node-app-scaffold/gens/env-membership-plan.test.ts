@@ -22,6 +22,7 @@ import {
   buildEnvDeltaPlan,
   CATALOG_PATH,
   type EnvPlanCurrent,
+  EnvPlanError,
   type EnvPlanOp,
   overlayPath,
 } from "./env-membership-plan";
@@ -275,6 +276,38 @@ describe("buildEnvDeltaPlan — ATOMIC_PER_ENV (candidate-a is not special)", ()
         env: "candidate-a",
         present: false,
         current: baseCurrent(["preview"]),
+      }).kind
+    ).toBe("no_changes");
+  });
+});
+
+describe("buildEnvDeltaPlan — TEMPLATE_NODE_IMMUTABLE", () => {
+  it("refuses to remove node-template from an env (it is the per-env overlay template)", () => {
+    const call = () =>
+      buildEnvDeltaPlan({
+        slug: "node-template",
+        env: "candidate-a",
+        present: false,
+        current: baseCurrent(["candidate-a", "preview", "production"]),
+      });
+    expect(call).toThrow(EnvPlanError);
+    try {
+      call();
+      throw new Error("expected EnvPlanError");
+    } catch (e) {
+      expect(e).toBeInstanceOf(EnvPlanError);
+      expect((e as EnvPlanError).code).toBe("template_node_immutable");
+      expect((e as EnvPlanError).status).toBe(422);
+    }
+  });
+
+  it("does NOT block adding node-template (idempotent — it already lives in every env)", () => {
+    expect(
+      buildEnvDeltaPlan({
+        slug: "node-template",
+        env: "candidate-a",
+        present: true,
+        current: baseCurrent(["candidate-a", "preview"]),
       }).kind
     ).toBe("no_changes");
   });

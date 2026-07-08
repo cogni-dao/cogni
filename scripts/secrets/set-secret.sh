@@ -128,10 +128,31 @@ fi
 
 command -v bao >/dev/null 2>&1 || die "bao CLI not found on PATH (https://openbao.org/docs/install/)."
 
-op="patch"
-if ! BAO_ADDR="$BAO_ADDR" BAO_TOKEN="$BAO_TOKEN" bao kv metadata get "$bao_path" >/dev/null 2>&1; then
-  op="put"
+# bug.5068: `cogni/<env>/<service>` is a SHARED multi-key bucket, and `bao kv put`
+# REPLACES every key at the path. The old guard (`kv metadata get` fails → put)
+# conflated a TRANSIENT metadata-get failure (network churn, token flake) with an
+# absent path — a transient failure against a populated bucket would `put` this one
+# key and wipe every sibling (the deploy-infra bug.5068 class). Fix: `patch` FIRST
+# (merges siblings), and only fall back to a destructive `put` on a POSITIVE
+# "does not exist" signal in patch's OWN output. Any other failure exits non-zero
+# without clobbering. `bao kv <op> <path> KEY=- reads value from stdin (OpenBao 2.x+).
+set +e
+patch_out="$(printf '%s' "$value" | BAO_ADDR="$BAO_ADDR" BAO_TOKEN="$BAO_TOKEN" \
+  bao kv patch "$bao_path" "${key}=-" 2>&1)"
+patch_rc=$?
+set -e
+if [[ $patch_rc -eq 0 ]]; then
+  printf '%s\n' "$patch_out"
+  exit 0
 fi
-# bao kv <op> <path> KEY=- reads value from stdin (OpenBao 2.x+).
-printf '%s' "$value" | BAO_ADDR="$BAO_ADDR" BAO_TOKEN="$BAO_TOKEN" \
-  bao kv "$op" "$bao_path" "${key}=-"
+
+if printf '%s' "$patch_out" | grep -qiE 'no value found|does not exist|not found'; then
+  # Genuinely absent — safe to create; no siblings to clobber.
+  printf '%s' "$value" | BAO_ADDR="$BAO_ADDR" BAO_TOKEN="$BAO_TOKEN" \
+    bao kv put "$bao_path" "${key}=-"
+  exit $?
+fi
+
+# Transient/unknown failure — NEVER put (would wipe siblings at this shared path).
+printf '%s\n' "$patch_out" >&2
+die "bao kv patch on ${bao_path} failed (rc=${patch_rc}) without a positive 'absent' signal; refusing to put (would clobber sibling keys). Retry once OpenBao is reachable."

@@ -37,8 +37,12 @@ fi
 # catalog `envs:` node-set lists it (the same SSOT render-node-appset.sh gates on).
 # This is what stops promote-to-preview from selecting a node whose preview
 # AppSet was never rendered (which would hard-fail the appset-apply step).
+# CATALOG_IS_SSOT: read the catalog from COGNI_CATALOG_ROOT (the same root
+# image-tags.sh sourced ALL_TARGETS/NODE_TARGETS from), not a hardcoded path, so
+# a pre-merge birth flow / test fixture pointing at a checkout is honored here too.
+CATALOG_ROOT="${COGNI_CATALOG_ROOT:-$REPO_ROOT/infra/catalog}"
 target_in_env() {
-  local target="$1" catalog_file="$REPO_ROOT/infra/catalog/${target}.yaml" envs
+  local target="$1" catalog_file="$CATALOG_ROOT/${target}.yaml" envs
   [[ -f "$catalog_file" ]] || return 0  # non-catalog target: leave to overlay gate
   [[ "$(yq -r 'has("envs")' "$catalog_file")" == "true" ]] || return 0
   envs="$(yq -r '.envs[]' "$catalog_file")"

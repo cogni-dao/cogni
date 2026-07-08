@@ -43,7 +43,7 @@ SLEEP=0 \
   bash scripts/ci/verify-deployment.sh >"$TMPROOT/operator.out"
 
 grep -q "operator healthy" "$TMPROOT/operator.out"
-grep -q "oss readyz — not in PROMOTED_APPS=operator" "$TMPROOT/operator.out"
+grep -q "node-template readyz — not in PROMOTED_APPS=operator" "$TMPROOT/operator.out"
 [[ "$(wc -l <"$VERIFY_CURL_LOG" | tr -d ' ')" == "2" ]]
 grep -qx "https://preview.cognidao.org/readyz" "$VERIFY_CURL_LOG"
 grep -qx "https://preview.cognidao.org/livez" "$VERIFY_CURL_LOG"

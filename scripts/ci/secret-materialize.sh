@@ -134,7 +134,6 @@ CACHE_DIR="$(mktemp -d -t materialize-cache.XXXXXX)"
 BATCH_DIR="${CACHE_DIR}/.batch"
 mkdir -p "$BATCH_DIR"
 trap 'rm -rf "$CACHE_DIR"' EXIT
-NODE_PATH_EXISTS=false
 
 bao_exec() {
   remote "kubectl exec ${1} -n openbao openbao-0 -- env BAO_TOKEN='${BAO_TOKEN}' BAO_ADDR=http://127.0.0.1:8200 bao ${2}"
@@ -176,19 +175,41 @@ seed_kv() {
   printf '%s' "$v" > "${CACHE_DIR}/${TARGET_NODE}/${k}"
 }
 
-# One write for all missing keys. put when the node path is new, patch (merge —
-# never clobbers sibling keys) when it exists. JSON is built locally via jq
-# --rawfile so no secret value ever lands on a command line.
+# One write for all missing keys. JSON is built locally via jq --rawfile so no
+# secret value ever lands on a command line.
+#
+# bug.5068: `cogni/<env>/<node>` is a SHARED bucket (baseline keys + any self-serve
+# secrets a node-owner set via the operator API). `bao kv put` REPLACES the whole
+# bucket. The old shape chose put/patch off NODE_PATH_EXISTS, which is set from a
+# `kv metadata get` precheck — a TRANSIENT failure of that precheck against a
+# populated bucket flipped it to `put` and clobbered every key not in this batch.
+# Fix: `patch` FIRST (merges — never clobbers siblings) regardless of the precheck,
+# and only fall back to a destructive `put` on a POSITIVE "does not exist" signal in
+# patch's OWN output. Any other failure returns non-zero without clobbering.
 flush_batch() {
   local files=( "$BATCH_DIR"/* )
   [[ -e "${files[0]}" ]] || return 0
-  local op="patch"; "$NODE_PATH_EXISTS" || op="put"
-  local json='{}' f k
+  local json='{}' f k out rc
   for f in "${files[@]}"; do
     k="$(basename "$f")"
     json="$(jq --arg k "$k" --rawfile v "$f" '.[$k]=$v' <<<"$json")"
   done
-  printf '%s' "$json" | bao_exec "-i" "kv ${op} 'cogni/${DEPLOY_ENVIRONMENT}/${TARGET_NODE}' -" >/dev/null
+  set +e
+  out="$(printf '%s' "$json" | bao_exec "-i" "kv patch 'cogni/${DEPLOY_ENVIRONMENT}/${TARGET_NODE}' -" 2>&1)"
+  rc=$?
+  set -e
+  if [[ $rc -eq 0 ]]; then
+    return 0
+  fi
+  if printf '%s' "$out" | grep -qiE 'no value found|does not exist|not found'; then
+    # Genuinely absent — safe to create; no siblings to clobber.
+    printf '%s' "$json" | bao_exec "-i" "kv put 'cogni/${DEPLOY_ENVIRONMENT}/${TARGET_NODE}' -" >/dev/null
+    return $?
+  fi
+  # Transient/unknown failure — NEVER put (would wipe sibling keys at this shared
+  # node path). Fail loud so materialize is retried against an intact bucket.
+  printf '%s\n' "$out" >&2
+  fail "bao kv patch on cogni/${DEPLOY_ENVIRONMENT}/${TARGET_NODE} failed (rc=${rc}) without a positive 'absent' signal; refusing to put (would clobber sibling keys)"
 }
 
 # Is this key minted fresh per-node (source:agent random)? Such keys are NEVER
@@ -251,12 +272,12 @@ inherit_shared_value() {
   return 0
 }
 
-# One prefetch: node-path existence + node/ancestor key maps (O(1) ssh).
-# operator is the inheritFrom source for SCHEDULER_API_TOKEN (bug.5021) and is
-# already in the prefetch set below, so bao_get_field (cache-only) resolves it.
-if bao_exec "" "kv metadata get 'cogni/${DEPLOY_ENVIRONMENT}/${TARGET_NODE}'" >/dev/null 2>&1; then
-  NODE_PATH_EXISTS=true
-fi
+# One prefetch: node/ancestor key maps (O(1) ssh). operator is the inheritFrom
+# source for SCHEDULER_API_TOKEN (bug.5021) and is already in the prefetch set
+# below, so bao_get_field (cache-only) resolves it.
+# (bug.5068: the old `kv metadata get` node-path-existence precheck was removed —
+# flush_batch now derives create-vs-merge from patch's own output, so a transient
+# precheck failure can no longer flip a merge into a bucket-clobbering put.)
 for svc in "$TARGET_NODE" node-template operator _shared; do
   prefetch_path "$svc"
 done

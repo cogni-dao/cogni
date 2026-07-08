@@ -333,6 +333,14 @@ jobs:
       - name: secrets:set CLI tests (task.0284)
         run: bash scripts/ci/tests/set-secret.test.sh
 
+      # bug.5068 — OpenBao shared-bucket clobber proof. A transient `bao kv patch`
+      # failure must NEVER fall back to a destructive `put` (which replaces the whole
+      # multi-key bucket). Drives set-secret.sh's real bao codepath with a stub bao
+      # that injects a transient fault; proves patch-merges / transient-no-put /
+      # absent-creates. The 2026-07-02 prod 502 was this exact clobber.
+      - name: OpenBao clobber-proof tests (bug.5068)
+        run: bash scripts/ci/tests/openbao-clobber-proof.test.sh
+
       # task.5094 — per-node secret fan-out (seed_node_app_secrets). Drives the
       # catalog-gated fan-out against the real infra/secrets-catalog.yaml with
       # stubbed runtime deps; proves distinct-value-per-node + custody gating.

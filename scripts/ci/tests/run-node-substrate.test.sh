@@ -33,10 +33,10 @@ mk_stub "$TMPROOT/rec.sh" reconcile 0
 : > "$ORDER"
 RUN_NODE_SUBSTRATE_MATERIALIZE_BIN="$TMPROOT/mat.sh" \
 RUN_NODE_SUBSTRATE_RECONCILE_BIN="$TMPROOT/rec.sh" \
-  bash "$RUNNER" candidate-a oss >/dev/null
+  bash "$RUNNER" candidate-a node-template >/dev/null
 
 got="$(paste -sd'|' - < "$ORDER")"
-want="materialize candidate-a oss|reconcile candidate-a oss"
+want="materialize candidate-a node-template|reconcile candidate-a node-template"
 [ "$got" = "$want" ] || { echo "order/args mismatch:
   got:  $got
   want: $want" >&2; exit 1; }
@@ -78,7 +78,7 @@ chmod +x "$TMPROOT/catpath.sh"
   COGNI_CATALOG_ROOT="infra/catalog" APP_SOURCE_DIR="$APPDIR" \
   RUN_NODE_SUBSTRATE_MATERIALIZE_BIN="$TMPROOT/catpath.sh" \
   RUN_NODE_SUBSTRATE_RECONCILE_BIN="$TMPROOT/catpath.sh" \
-    bash "$RUNNER" candidate-a oss >/dev/null )
+    bash "$RUNNER" candidate-a node-template >/dev/null )
 seen_root="$(head -1 "$ORDER")"
 case "$seen_root" in
   /*) [ -d "$seen_root" ] || { echo "normalized COGNI_CATALOG_ROOT not a real dir: $seen_root" >&2; exit 1; } ;;

@@ -62,18 +62,18 @@ make_payload() {
 JSON
 }
 
+# Node-agnostic fixture: the only `type:node` target referenced is node-template,
+# the PERMANENT canonical node (story.5020 W2 — decoupled from disposable `oss`).
 FULL_TARGETS='[
   {"target":"operator","digest":"sha256:aa01"},
   {"target":"operator-migrator","digest":"sha256:aa02"},
-  {"target":"oss","digest":"sha256:bb01"},
-  {"target":"oss-migrator","digest":"sha256:bb02"},
   {"target":"node-template","digest":"sha256:ee01"},
   {"target":"node-template-migrator","digest":"sha256:ee02"},
   {"target":"scheduler-worker","digest":"sha256:dd01"}
 ]'
 MIXED_SOURCE_TARGETS='[
   {"target":"operator","digest":"sha256:aa01","source_sha":"1111111111111111111111111111111111111111"},
-  {"target":"oss","digest":"sha256:cc01","source_sha":"2222222222222222222222222222222222222222"}
+  {"target":"node-template","digest":"sha256:cc01","source_sha":"2222222222222222222222222222222222222222"}
 ]'
 EMPTY_TARGETS='[]'
 
@@ -130,7 +130,7 @@ import sys
 with open(sys.argv[1], "r", encoding="utf-8") as handle:
     data = json.load(handle)
 assert data["operator"] == "1111111111111111111111111111111111111111", data
-assert data["oss"] == "2222222222222222222222222222222222222222", data
+assert data["node-template"] == "2222222222222222222222222222222222222222", data
 PY
   fi
 
@@ -147,13 +147,13 @@ PY
 }
 
 # Case 1 — happy path. Real update-source-sha-map.sh, full payload.
-run_case "happy" "$UPDATE_MAP" "$FULL_TARGETS" "node-template,operator,oss,scheduler-worker" "yes" 0
+run_case "happy" "$UPDATE_MAP" "$FULL_TARGETS" "node-template,operator,scheduler-worker" "yes" 0
 
 # Case 2 — MAP_SCRIPT fails for EVERY app (provenance side-car dead).
 # promoted_apps must still reflect every overlay write (verify-candidate
 # must still run), but the script exits non-zero so the flight job turns
 # red — total provenance loss is a hard break, not silent decay.
-run_case "map-script-failing" "/bin/false" "$FULL_TARGETS" "node-template,operator,oss,scheduler-worker" "no" 1
+run_case "map-script-failing" "/bin/false" "$FULL_TARGETS" "node-template,operator,scheduler-worker" "no" 1
 
 # Case 3 — genuine no-op (empty payload). promoted_apps must be empty so
 # verify-candidate's job-level gate skips legitimately and release-slot
@@ -162,7 +162,7 @@ run_case "empty-payload" "$UPDATE_MAP" "$EMPTY_TARGETS" "" "no" 0
 
 # Case 4 — payload item source_sha overrides the envelope source_sha, so a
 # mixed parent/child flight writes per-artifact provenance.
-run_case "mixed-source-sha" "$UPDATE_MAP" "$MIXED_SOURCE_TARGETS" "operator,oss" "yes" 0
+run_case "mixed-source-sha" "$UPDATE_MAP" "$MIXED_SOURCE_TARGETS" "node-template,operator" "yes" 0
 
 cd "$REPO_ROOT"
 if [ "$FAILED" -gt 0 ]; then
