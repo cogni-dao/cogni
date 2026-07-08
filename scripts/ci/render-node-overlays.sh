@@ -64,6 +64,34 @@ wizard_nodes() {
   done | LC_ALL=C sort
 }
 
+# Wizard-born node slugs whose per-env node-set (`envs:`) includes $1, sorted.
+# ATOMIC_PER_ENV (story.5020 W4): a node only carries an overlay in the envs it
+# claims. Mirrors render-node-appset.sh's deployable_nodes_for_env — the earlier
+# `wizard_nodes` × ENVS cartesian assumed every node lived in every env
+# (CANDIDATE_A_ALWAYS), so the env-membership verb removing a node from one env
+# left check()/write() still demanding the (correctly-deleted) overlay.
+# A wizard-born row that omits `envs` (schema-required) is a hard error, not a
+# silent all-env fallback.
+wizard_nodes_for_env() {
+  local env="$1" f name src envs
+  for f in "$CATALOG_DIR"/*.yaml; do
+    [ -e "$f" ] || continue
+    src="$(yq -r '.source_repo // ""' "$f")"
+    [ -n "$src" ] || continue
+    name="$(yq -r '.name' "$f")"
+    [ "$name" != "$TEMPLATE_SLUG" ] || continue
+    if [ "$(yq -r 'has("envs")' "$f")" != "true" ]; then
+      echo "[ERROR] $f is wizard-born but has no 'envs' node-set (CATALOG_IS_SSOT)." >&2
+      exit 1
+    fi
+    # here-string first: `yq | grep -q` SIGPIPEs yq → pipefail 141 would silently
+    # skip the very nodes that DO claim the env (twin of render-node-appset.sh).
+    envs="$(yq -r '.envs[]' "$f")"
+    grep -qxF "$env" <<<"$envs" || continue
+    printf '%s\n' "$name"
+  done | LC_ALL=C sort
+}
+
 # Overlay dirs under overlays/<env>/ the renderer must NEVER prune: the
 # node-template template itself, plus the hand-authored monorepo overlays
 # (operator, scheduler-worker, …) — deployable catalog rows that carry a
@@ -124,7 +152,7 @@ write() {
   protected="$(protected_overlay_dirs)"
   for env in "${ENVS[@]}"; do
     expected=""
-    for node in $(wizard_nodes); do
+    for node in $(wizard_nodes_for_env "$env"); do
       tmp="$(mktemp)"
       render_one "$env" "$node" > "$tmp"
       mkdir -p "$(dirname "$(overlay_path "$env" "$node")")"
@@ -157,7 +185,7 @@ check() {
   protected="$(protected_overlay_dirs)"
   for env in "${ENVS[@]}"; do
     expected=""
-    for node in $(wizard_nodes); do
+    for node in $(wizard_nodes_for_env "$env"); do
       expected="$expected$node"$'\n'
       path="$(overlay_path "$env" "$node")"
       if [ ! -f "$path" ]; then
