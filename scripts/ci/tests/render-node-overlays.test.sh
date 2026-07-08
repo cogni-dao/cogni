@@ -55,26 +55,26 @@ bash "$RENDER" --check >/dev/null \
 pass "all wizard-born overlays match the renderer"
 
 echo "[2/5] renderer is byte-exact to the committed mint output"
-diff <(bash "$RENDER" candidate-a oss) infra/k8s/overlays/candidate-a/oss/kustomization.yaml >/dev/null \
-  || fail "render candidate-a oss != committed overlay (renderer drifted from gens/overlay.ts)"
-pass "candidate-a/oss render is byte-identical to committed"
+diff <(bash "$RENDER" candidate-a poly) infra/k8s/overlays/candidate-a/poly/kustomization.yaml >/dev/null \
+  || fail "render candidate-a poly != committed overlay (renderer drifted from gens/overlay.ts)"
+pass "candidate-a/poly render is byte-identical to committed"
 
 echo "[3/5] render targets node-at-root layout + ESO secret"
-OUT="$(bash "$RENDER" candidate-a oss)"
+OUT="$(bash "$RENDER" candidate-a poly)"
 grep -q 'exec node /app/app/migrate.mjs /app/app/migrations' <<<"$OUT" \
-  || fail "oss render missing the node-at-root Postgres migrate override"
+  || fail "poly render missing the node-at-root Postgres migrate override"
 grep -q 'exec node /app/app/migrate-doltgres.mjs /app/app/doltgres-migrations' <<<"$OUT" \
-  || fail "oss render missing the node-at-root Doltgres migrate path"
+  || fail "poly render missing the node-at-root Doltgres migrate path"
 grep -q '/app/nodes/$(NODE_NAME)/app' <<<"$OUT" \
-  && fail "oss render still carries a monorepo /app/nodes/<slug>/app migrate path"
-grep -q 'oss-env-secrets' <<<"$OUT" \
-  || fail "oss render missing the ESO secret target oss-env-secrets"
-grep -q 'oss-node-app-secrets' <<<"$OUT" \
-  && fail "oss render still references the legacy oss-node-app-secrets target"
-pass "oss render is node-at-root + ESO-targeted"
+  && fail "poly render still carries a monorepo /app/nodes/<slug>/app migrate path"
+grep -q 'poly-env-secrets' <<<"$OUT" \
+  || fail "poly render missing the ESO secret target poly-env-secrets"
+grep -q 'poly-node-app-secrets' <<<"$OUT" \
+  && fail "poly render still references the legacy poly-node-app-secrets target"
+pass "poly render is node-at-root + ESO-targeted"
 
 echo "[4/5] FALSIFYING: a hand-staled overlay turns --check red"
-STALE="infra/k8s/overlays/candidate-a/oss/kustomization.yaml"
+STALE="infra/k8s/overlays/candidate-a/poly/kustomization.yaml"
 stash "$STALE"
 # Revert the migrate runner to the monorepo path the stale operator shipped.
 perl -0pi -e 's{/app/app/migrate-doltgres\.mjs}{/app/nodes/$(NODE_NAME)/app/migrate-doltgres.mjs}g' "$STALE"
@@ -89,7 +89,7 @@ TPL="infra/k8s/overlays/candidate-a/node-template/kustomization.yaml"
 stash "$TPL"
 # Drop the node-at-root Postgres migrate override op (the guard's anchor).
 perl -0pi -e 's{ {6}- op: replace\n {8}path: /spec/template/spec/initContainers/0/command/2\n {8}value: exec node /app/app/migrate\.mjs /app/app/migrations\n}{}' "$TPL"
-if bash "$RENDER" candidate-a oss >/dev/null 2>&1; then
+if bash "$RENDER" candidate-a poly >/dev/null 2>&1; then
   fail "render emitted an overlay despite the missing node-at-root migrate command (would crash-loop)"
 fi
 pass "render aborts fail-closed when the migrate command is absent"
