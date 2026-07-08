@@ -100,6 +100,9 @@ export class EnvPlanError extends Error {
   }
 }
 
+/** The scaffold template node whose per-env overlay every wizard node clones; its env-set is verb-immutable. */
+const TEMPLATE_SLUG = "node-template";
+
 /**
  * Pure: compute the file-delta for `{ slug, env, present }` over the node's current control-plane files.
  * Every env is an INDEPENDENT, atomic toggle (ATOMIC_PER_ENV) — candidate-a is no different from
@@ -120,6 +123,19 @@ export function buildEnvDeltaPlan(input: {
   readonly current: EnvPlanCurrent;
 }): EnvDeltaResult {
   const { slug, env, present, current } = input;
+
+  // TEMPLATE_NODE_IMMUTABLE — node-template is the per-env overlay TEMPLATE every wizard node clones
+  // (render-node-overlays.sh template_path). Removing it from an env deletes that template, so every other
+  // node in that env can no longer render. Its env membership is immutable via this verb — fail closed
+  // (422). Adds are unaffected: it already lives in every env, so an add is an idempotent no_changes.
+  if (!present && slug === TEMPLATE_SLUG) {
+    throw new EnvPlanError(
+      "template_node_immutable",
+      `'${TEMPLATE_SLUG}' is the per-env overlay template every wizard node clones; it cannot be removed from an env.`,
+      422
+    );
+  }
+
   const currentEnvs = parseCatalogEnvs(current.catalog);
 
   if (present) {
