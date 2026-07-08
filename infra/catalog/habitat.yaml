@@ -16,6 +16,6 @@ production_branch: deploy/production-habitat
 # NODE_FORMATION_ENVS; this list is the catalog twin so render-node-appset.sh
 # renders exactly the births appset.ts generates. Trimming a node's reach is a
 # later catalog edit (drop an env here) once its envs are provisioned.
-envs: [candidate-a, preview, production]
+envs: [preview, production]
 path_prefix: nodes/habitat/
 node_id: dbf1eeb7-85d4-4fd5-a4fe-da85c668bb03

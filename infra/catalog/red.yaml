@@ -15,6 +15,6 @@ production_branch: deploy/production-red
 # NODE_FORMATION_ENVS; this list is the catalog twin so render-node-appset.sh
 # renders exactly the births appset.ts generates. Trimming a node's reach is a
 # later catalog edit (drop an env here) once its envs are provisioned.
-envs: [candidate-a, preview, production]
+envs: [preview, production]
 path_prefix: nodes/red/
 node_id: 895147d5-2ad9-4b2b-aeaa-f2669999fdce
