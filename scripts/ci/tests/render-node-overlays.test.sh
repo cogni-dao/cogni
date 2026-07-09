@@ -100,7 +100,7 @@ echo "[6/6] declarative decommission: orphan overlay dir → --check red, --writ
 # moving the catalog yaml aside. Its committed overlay dirs become orphans.
 # Restore the catalog row AND any pruned overlay dirs from git afterward so the
 # tree is left pristine regardless of assertion outcome.
-DISPOSABLE="games"
+DISPOSABLE="poly"
 DCAT="infra/catalog/$DISPOSABLE.yaml"
 [ -f "$DCAT" ] || fail "test fixture: $DCAT not found (pick another disposable wizard node)"
 DTMP="$(mktemp)"
@@ -141,28 +141,28 @@ echo "[7/7] ATOMIC_PER_ENV: a node dropping ONE env prunes only that env's overl
 # ENVS unconditionally (CANDIDATE_A_ALWAYS), so the env-membership verb removing a
 # node from ONE env left --check demanding the (correctly-deleted) overlay. The
 # fix filters by per-node `envs:` (wizard_nodes_for_env).
-PERENV="games"
+PERENV="poly"
 PCAT="infra/catalog/$PERENV.yaml"
 [ -f "$PCAT" ] || fail "test fixture: $PCAT not found (pick another disposable wizard node)"
 perenv_restore() { git checkout -q -- "$PCAT" infra/k8s/overlays 2>/dev/null || true; }
 trap 'perenv_restore; restore' EXIT
-# Drop candidate-a from games' envs (it stays in preview + production).
+# Drop candidate-a from poly' envs (it stays in preview + production).
 perl -0pi -e 's/^(envs:\s*\[)\s*candidate-a\s*,\s*/$1/m' "$PCAT"
 grep -qE '^envs:\s*\[\s*preview\s*,\s*production\s*\]' "$PCAT" \
-  || fail "test setup: failed to drop candidate-a from games' envs (unexpected envs shape)"
+  || fail "test setup: failed to drop candidate-a from poly' envs (unexpected envs shape)"
 # a: games still carries a committed candidate-a overlay it no longer claims → orphan → --check red.
 if bash "$RENDER" --check >/dev/null 2>&1; then
-  fail "--check passed while games carried a candidate-a overlay it no longer claims (orphan not caught)"
+  fail "--check passed while poly carried a candidate-a overlay it no longer claims (orphan not caught)"
 fi
 # b: --write prunes ONLY the dropped env's overlay; the retained envs keep theirs.
 bash "$RENDER" --write >/dev/null
 [ ! -d "infra/k8s/overlays/candidate-a/$PERENV" ] \
-  || fail "--write did not prune games' dropped candidate-a overlay"
+  || fail "--write did not prune poly' dropped candidate-a overlay"
 [ -d "infra/k8s/overlays/preview/$PERENV" ] \
-  || fail "--write wrongly pruned games' preview overlay (still a member)"
+  || fail "--write wrongly pruned poly' preview overlay (still a member)"
 [ -d "infra/k8s/overlays/production/$PERENV" ] \
-  || fail "--write wrongly pruned games' production overlay (still a member)"
-# c: with games out of candidate-a and its overlay gone, --check is GREEN — the
+  || fail "--write wrongly pruned poly' production overlay (still a member)"
+# c: with poly out of candidate-a and its overlay gone, --check is GREEN — the
 #    old wizard_nodes × ENVS cartesian would fail here with "missing overlay".
 bash "$RENDER" --check >/dev/null \
   || fail "--check red after a clean per-env removal (the wizard_nodes × ENVS cartesian bug)"
