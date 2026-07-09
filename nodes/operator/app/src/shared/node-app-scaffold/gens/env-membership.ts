@@ -28,8 +28,14 @@ import { NODE_FORMATION_ENVS, type NodeFormationEnv } from "./envs";
 /** Canonical env order (candidate-a < preview < production) — the order the catalog row is emitted in. */
 const ENV_ORDER = NODE_FORMATION_ENVS;
 
-/** Matches the catalog row's flow-sequence `envs:` line, e.g. `envs: [candidate-a, preview, production]`. */
-const ENVS_LINE_RE = /^envs:\s*\[([^\]]*)\]\s*$/m;
+/**
+ * Matches the catalog row's flow-sequence `envs:` line, e.g. `envs: [candidate-a, preview, production]`.
+ * The trailing class is `[^\S\r\n]*` (horizontal whitespace only), NOT `\s*` — `\s` includes `\n`, so a
+ * greedy `\s*$` on a file whose LAST line is the `envs:` row consumes the file's final newline, and
+ * `setCatalogEnvs`'s replacement (which has no newline) then strips it → the verb's catalog PR fails
+ * prettier's require-final-newline (bug.5073). Matching only horizontal whitespace leaves `\n` intact.
+ */
+const ENVS_LINE_RE = /^envs:\s*\[([^\]]*)\][^\S\r\n]*$/m;
 
 /** Read the catalog row's `envs:` flow-sequence into its env-set, in file order. Throws if absent. */
 export function parseCatalogEnvs(catalogYaml: string): NodeFormationEnv[] {
