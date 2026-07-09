@@ -109,7 +109,8 @@ describe("setCatalogEnvs", () => {
     // A real catalog row can END on the envs: line. The old `\s*$` (whose `\s` includes `\n`)
     // greedily ate the file's final newline, and the replacement has none → the verb's catalog
     // PR failed prettier's require-final-newline. The env-set edit must leave `\n` intact.
-    const lastLine = "name: blue\ntype: node\nenvs: [candidate-a, preview, production]\n";
+    const lastLine =
+      "name: blue\ntype: node\nenvs: [candidate-a, preview, production]\n";
     const next = setCatalogEnvs(lastLine, ["preview", "production"]);
     expect(next).toBe("name: blue\ntype: node\nenvs: [preview, production]\n");
     expect(next.endsWith("]\n")).toBe(true);
