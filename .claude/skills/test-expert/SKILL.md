@@ -101,6 +101,8 @@ When the user's question is "does the machine-agent API actually work end-to-end
 
 This is the production-like lane for questions such as "can the operator really birth a node and flight it?" It is not covered by local vitest, stack tests, or Playwright. Treat it as a disposable mini-prod environment driven by the same deploy code.
 
+> **Status 2026-07-09 — `cogni-test-org/cogni-monorepo` is now production-shaped** (PR #47). It previously **404'd the env-membership verb at catalog fetch** because `infra/k8s/argocd/appsets/<env>/` never existed there, its `render-node-{overlays,appset}.sh` had drifted from `cogni-dao/cogni` (pre-#1934, not envs-aware), and the preview/production `node-template` overlay templates were absent. PR #47 synced the #1934 node-deploy tooling + 3-env node-template overlays, added `envs:` to the deployable rows, and generated the appsets tree (6 ApplicationSets) + 15 overlays — all drift gates green. **`anotha` + `brother` are now fully shaped (overlay + appset in all 3 envs) → verb-targetable** for the story.5020 add→merge→reconcile e2e. Keeping the test-org tooling in sync with `cogni-dao/cogni` is an ongoing requirement — the verb emits `cogni-dao/cogni`-shaped output, so the test-org drift gates must match or the verb's PR won't merge.
+
 Current test topology:
 
 | Boundary              | Value / rule                                                                                                                                                  | Source                                                                                                                  |
