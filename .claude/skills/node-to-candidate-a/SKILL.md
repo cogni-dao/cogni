@@ -134,7 +134,7 @@ the matrix + Loki-evidence format). That posted scorecard is your definition of 
 - **ATOMIC_PER_ENV / IDEMPOTENT** — every env is an independent toggle; the already-holding
   state returns `no_changes` and opens no PR.
 - **VERIFY_THE_DEPLOY** — a merged PR is not a deployed node. Confirm Application + endpoint
-  + Loki before claiming done.
+  - Loki before claiming done.
 
 ## Proven
 
