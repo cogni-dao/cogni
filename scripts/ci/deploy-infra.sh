@@ -1261,18 +1261,80 @@ else
   log_warn "Grafana PDC agent not started: GRAFANA_PDC_SIGNING_TOKEN, GRAFANA_PDC_HOSTED_GRAFANA_ID, or GRAFANA_PDC_CLUSTER is unset"
 fi
 
+# ── Idempotent runtime reconcile (task.5049) ─────────────────────────────────
+# Root cause of the whole-stack bounce: every runtime service shares one
+# `--env-file /opt/cogni-template-runtime/.env` via `env_file:`, so when a SINGLE
+# volatile value in that .env changes (e.g. OPENFGA_AUTHORIZATION_MODEL_ID, which
+# deploy-infra appends each run), docker compose's config-delta detector marks
+# EVERY service dirty and `up -d` recreates the entire prod stack + recreates the
+# shared docker network — an unnecessary fleet bounce for a one-key change that
+# only the operator/app actually consumes. Creds are OpenBao-SSOT (stable), so the
+# runtime config is stable run-to-run except for a few volatile values.
+#
+# Fix (mirrors scripts/ci/reconcile-edge-caddy.remote.sh "start-if-down +
+# hash-gated force-recreate"): hash-gate the reconcile over the compose file, the
+# resolved config (image tags), and the shared .env. When the hash is unchanged
+# AND the stack is already running, use `up -d --no-recreate` so unchanged
+# services are NEVER restarted (start-if-down only). When the hash changed (real
+# config/image/.env delta), do a full `up -d` that permits recreates. Persist the
+# stamp only after a successful reconcile so a failed run retries next time.
+RUNTIME_HASH_DIR="/var/lib/cogni"
+RUNTIME_HASH_FILE="$RUNTIME_HASH_DIR/runtime-compose.sha256"
+RUNTIME_COMPOSE_FILE="/opt/cogni-template-runtime/docker-compose.yml"
+# RUNTIME_RECONCILE_FLAGS is consumed by runtime_compose_up_with_retry below.
+# Default to a full recreate-capable up; only downgrade to --no-recreate when the
+# hash proves nothing changed and the stack is already running.
+RUNTIME_RECONCILE_FLAGS="--remove-orphans"
+NEW_RUNTIME_HASH="unavailable"
+compute_runtime_hash() {
+  # Combine the compose file + shared .env + resolved config (image tags/digests)
+  # into one sha256. `config --resolve-image-digests` folds pinned image tags in
+  # so a new build SHA still forces a recreate; fall back to plain `config` (then
+  # the raw files) if the resolve flag is unsupported by this compose version.
+  local resolved
+  resolved="$($RUNTIME_COMPOSE config --resolve-image-digests 2>/dev/null \
+    || $RUNTIME_COMPOSE config 2>/dev/null || true)"
+  {
+    printf '%s\n' "$resolved"
+    [[ -f "$RUNTIME_COMPOSE_FILE" ]] && cat "$RUNTIME_COMPOSE_FILE"
+    [[ -f "$RUNTIME_ENV" ]] && cat "$RUNTIME_ENV"
+  } | {
+    if command -v sha256sum >/dev/null 2>&1; then sha256sum | awk '{print $1}';
+    elif command -v shasum >/dev/null 2>&1; then shasum -a 256 | awk '{print $1}';
+    else echo "no-hash-tool"; fi
+  }
+}
+runtime_stack_running() {
+  # Any managed runtime container present ⇒ the stack is up (start-if-down check).
+  [[ -n "$($RUNTIME_COMPOSE ps -q 2>/dev/null)" ]]
+}
+NEW_RUNTIME_HASH="$(compute_runtime_hash)"
+OLD_RUNTIME_HASH="$(cat "$RUNTIME_HASH_FILE" 2>/dev/null || echo none)"
+if runtime_stack_running \
+  && [[ "$NEW_RUNTIME_HASH" == "$OLD_RUNTIME_HASH" \
+     && "$NEW_RUNTIME_HASH" != "no-hash-tool" && "$NEW_RUNTIME_HASH" != "unavailable" ]]; then
+  # Nothing changed and the stack is up → do NOT recreate anything. --no-recreate
+  # leaves running containers (and the shared network) untouched, only starting
+  # any that happen to be down. This is the no-op path that prevents the bounce.
+  RUNTIME_RECONCILE_FLAGS="--no-recreate"
+  log_info "Runtime config unchanged (hash: ${NEW_RUNTIME_HASH:0:12}...) and stack running → start-if-down only (no recreate)"
+else
+  log_info "Runtime reconcile: full up -d (hash: ${NEW_RUNTIME_HASH:0:12}..., prev: ${OLD_RUNTIME_HASH:0:12}...) — config/image/.env changed or stack not fully up"
+fi
+
 runtime_compose_up_with_retry() {
   local profile="$1"
   shift
   local max_attempts=3
   local attempt output
+  # shellcheck disable=SC2086 -- RUNTIME_RECONCILE_FLAGS is an intentional word list.
   for attempt in $(seq 1 "$max_attempts"); do
     if [[ -n "$profile" ]]; then
-      if output="$(COMPOSE_PROFILES="$profile" $RUNTIME_COMPOSE up -d --remove-orphans "$@" 2>&1)"; then
+      if output="$(COMPOSE_PROFILES="$profile" $RUNTIME_COMPOSE up -d $RUNTIME_RECONCILE_FLAGS "$@" 2>&1)"; then
         printf '%s\n' "$output"
         return 0
       fi
-    elif output="$($RUNTIME_COMPOSE up -d --remove-orphans "$@" 2>&1)"; then
+    elif output="$($RUNTIME_COMPOSE up -d $RUNTIME_RECONCILE_FLAGS "$@" 2>&1)"; then
       printf '%s\n' "$output"
       return 0
     fi
@@ -1287,8 +1349,18 @@ runtime_compose_up_with_retry() {
   done
 }
 
+persist_runtime_hash() {
+  # Stamp the hash ONLY after a successful reconcile so a failed run retries next
+  # time (same ordering discipline as reconcile-edge-caddy.remote.sh).
+  if [[ "$NEW_RUNTIME_HASH" != "no-hash-tool" && "$NEW_RUNTIME_HASH" != "unavailable" ]]; then
+    mkdir -p "$RUNTIME_HASH_DIR"
+    printf '%s\n' "$NEW_RUNTIME_HASH" > "$RUNTIME_HASH_FILE"
+  fi
+}
+
 if $pdc_enabled; then
   runtime_compose_up_with_retry pdc $INFRA_SERVICES
+  persist_runtime_hash
   sleep 5
   if ! $RUNTIME_COMPOSE ps --status running pdc-agent 2>/dev/null | grep -q 'pdc-agent'; then
     log_warn "Grafana PDC agent is not running after compose up; recent logs follow"
@@ -1303,6 +1375,7 @@ if $pdc_enabled; then
   $RUNTIME_COMPOSE logs --tail=40 pdc-agent || true
 else
   runtime_compose_up_with_retry "" $INFRA_SERVICES
+  persist_runtime_hash
 fi
 
 # Sandbox-openclaw disabled — removed from k8s catalog and compose deploy path.
