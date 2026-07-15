@@ -23,6 +23,57 @@ A node-owner sets a secret with only an API key — `POST <env-host>/api/v1/node
 
 [`proj.agentic-fork-bootstrap`](../../../work/projects/proj.agentic-fork-bootstrap.md) — easy-start guide for a forking dev that uses OpenBao. Every PR is measured against the **forker's manual-command count**. If your change adds a manual step to `fork-quickstart.md`, that's debt — try a workflow first.
 
+## Current permission truth — do not blur these
+
+As-built on `main`, there are **three different permissions** that people keep
+collapsing into "secrets":
+
+| Action                                                 | Who is allowed today                                                           | Credential that does the write                                                            | Status                                      |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------- | ------------------------------------------- |
+| Declare that a node/service needs key `KEY_X`          | Whoever can merge the node/operator repo PR under repo protections             | Git only; no secret value exists yet                                                      | Shipped                                     |
+| Generate safe node-local values (`source: agent`)      | Flight/promote CI for that env                                                 | Short-lived OpenBao `<env>-writer` token minted from the in-cluster `openbao-operator` SA | Shipped via `secret-materialize`            |
+| Set a human/vendor value (`source: human`)             | Operator/admin day-2 path today                                                | `pnpm secrets:set` with an env writer token; still requires kube/OpenBao custody          | Shipped only as operator/admin CLI          |
+| Let a node developer/agent set its own A2 value by API | Node actor with OpenFGA `developer → can_manage_secrets` on exactly that node  | Operator-held OpenBao node-secrets writer role; caller never gets kube/Bao                | **Prototype only: PR #1627, not on `main`** |
+| Promote a node to production                           | Actor with OpenFGA `production_promoter → can_promote_production` on that node | Operator GitHub App dispatches `promote-and-deploy.yml`; no Derek PAT                     | Shipped                                     |
+
+Human-simple trust model:
+
+```
+PR says: "this node needs KEY_X"
+  -> repo merge authority approves only the key shape
+  -> no secret value is in git
+
+If source: agent
+  -> CI materializer proves it is running for env X
+  -> OpenBao grants a short-lived env writer token
+  -> CI writes cogni/<env>/<node>/<KEY_X> if missing
+
+If source: human/vendor on main today
+  -> env operator/admin stages the value with the CLI writer lane
+  -> this is NOT node self-serve yet
+
+If source: human/vendor in the target design
+  -> node actor authenticates to the operator
+  -> OpenFGA proves actor can manage secrets for node N only
+  -> operator uses its own narrow writer role to write cogni/<env>/<node>/<KEY_X>
+  -> actor never receives kubeconfig, Bao token, Derek's GitHub creds, or fleet-wide write scope
+```
+
+Active implementation pointer: **PR #1627**
+(`feat(secrets): node self-serve secret values — operator-mediated,
+OpenFGA-authorized (prototype)`) is the current work for node-scoped secret
+value writes. It creates `docs/design/node-self-serve-secrets.md`,
+`POST /api/v1/nodes/[id]/secrets`, `node.manage_secrets`, and an operator-held
+node-secrets writer role. Its last recorded state: CI green and candidate-a
+route smoke-tested, but full OpenBao write proof still pending; the PR is open
+and currently conflicting. Until #1627 or its successor lands, do **not** tell a
+node developer they can self-serve human/vendor secret values without operator
+custody.
+
+Important distinction: PR #1665 only GitOps-owned the **operator's own legacy
+ExternalSecret** in each env overlay and hardened rollout gates. It was a prod
+rollout unblocker, not the self-serve node-secret API.
+
 ## Load-bearing invariants — gate every secrets decision
 
 Load-bearing subset — canonical numbering is [`docs/spec/secrets-management.md`](../../../docs/spec/secrets-management.md) Invariants 1–16; the rows below are the ones that gate day-to-day secrets work (7, 10–12, 14 omitted — read the spec for the full set):
