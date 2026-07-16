@@ -39,7 +39,7 @@ export const InternalReceiptSchema = z.object({
   platformUserId: z.string(),
   platformLogin: z.string().nullish(),
   artifactUrl: z.string().nullish(),
-  metadata: z.record(z.unknown()).nullish(),
+  metadata: z.record(z.string(), z.unknown()).nullish(),
   payloadHash: z.string().min(1),
   producer: z.string().min(1),
   producerVersion: z.string().min(1),
