@@ -71,7 +71,7 @@ import {
   Connection as TemporalConnection,
   type WorkflowClient,
 } from "@temporalio/client";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import Redis from "ioredis";
 import type { Logger } from "pino";
 import {
@@ -143,6 +143,7 @@ import {
   derivePrometheusQueryUrl,
 } from "@/bootstrap/capabilities/metrics";
 import { createLivenessAccessor } from "@/bootstrap/capabilities/node-registry";
+import { createOperatorDeployPlane } from "@/bootstrap/capabilities/operator-deploy-plane";
 import { createRepoCapability } from "@/bootstrap/capabilities/repo";
 import { createScheduleCapability } from "@/bootstrap/capabilities/schedule";
 import { createVcsCapability } from "@/bootstrap/capabilities/vcs";
@@ -152,6 +153,10 @@ import type { RateLimitBypassConfig } from "@/bootstrap/http/wrapPublicRoute";
 import { resolveKnowledgeMirrorRemoteUrl } from "@/bootstrap/knowledge-mirror";
 import { startProcessHealthPublisher } from "@/bootstrap/publishers";
 import { startGovernanceSyncOnBoot } from "@/bootstrap/startup-reconcile";
+import {
+  type AttributionProfileResolver,
+  createAttributionProfileResolver,
+} from "@/features/nodes/attribution-profile-resolver";
 import type {
   AccountService,
   AiTelemetryPort,
@@ -1136,4 +1141,60 @@ export function resolveNodeRegistry(): NodeRegistryPort {
   if (!getLiveness) return inner; // No base domain ⇒ no liveness/identity enrichment (dev/local).
 
   return new LiveNodeRegistryAdapter({ inner, getLiveness });
+}
+
+/**
+ * Statuses a node must be in to route git-attribution webhooks: a node dev's node is `published`
+ * (repo-spec + catalog exist) well before it is promoted to `active`, and both should attribute
+ * receipts from their declared repos. Narrower than the gallery's `active`-only projection.
+ */
+const ROUTABLE_NODE_STATUSES = ["published", "active"] as const;
+
+/**
+ * List every node eligible for git-attribution routing — service-role (non-RLS) read of `{id, slug}`
+ * for nodes in `('published','active')`. Sibling to the gallery's `listListedNodes` (active-only);
+ * kept separate because routing must include pre-activation `published` nodes.
+ */
+async function listRoutableNodes(): Promise<{ id: string; slug: string }[]> {
+  return resolveServiceDb()
+    .select({ id: nodes.id, slug: nodes.slug })
+    .from(nodes)
+    .where(inArray(nodes.status, [...ROUTABLE_NODE_STATUSES]));
+}
+
+/**
+ * Module-singleton attribution-profile resolver. Built once so its short-TTL single-flight index
+ * cache is shared across all concurrent webhook requests (never a per-request rebuild). Wires the
+ * real deploy plane (App-reads `infra/catalog/<slug>.yaml` + each node's repo-spec) to the pure
+ * `buildRepoIndex`; the deployment parent monorepo comes from the env-scoped submodule-parent vars.
+ */
+let cachedAttributionProfileResolver: AttributionProfileResolver | undefined;
+
+export function resolveAttributionProfileResolver(): AttributionProfileResolver {
+  if (cachedAttributionProfileResolver) return cachedAttributionProfileResolver;
+  const env = serverEnv();
+  const plane = createOperatorDeployPlane(env);
+  // The env-scoped deployment parent (Cogni-DAO/cogni in prod; cogni-test-org/cogni-monorepo in test).
+  const parentOwner = env.NODE_SUBMODULE_PARENT_OWNER ?? "";
+  const parentRepo = env.NODE_SUBMODULE_PARENT_REPO ?? "";
+
+  cachedAttributionProfileResolver = createAttributionProfileResolver({
+    listRoutableNodes,
+    resolveNodeRepo: (slug) =>
+      plane.resolveNodeRepo({ parentOwner, parentRepo, slug }),
+    // In-repo node → `nodes/<slug>/.cogni/repo-spec.yaml` under the parent monorepo;
+    // fork → `.cogni/repo-spec.yaml` at the fork root. Mirrors prepareNodeRefCandidateFlight.
+    fetchRepoSpecText: ({ owner, repo, isInRepo, slug }) =>
+      plane.fetchFileText({
+        owner,
+        repo,
+        path: isInRepo
+          ? `nodes/${slug}/.cogni/repo-spec.yaml`
+          : ".cogni/repo-spec.yaml",
+        ref: "main",
+      }),
+    parentOwner,
+    parentRepo,
+  });
+  return cachedAttributionProfileResolver;
 }

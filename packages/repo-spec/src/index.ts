@@ -52,6 +52,12 @@ export {
   resolveRulePath,
 } from "./accessors.js";
 export { parseRepoSpec } from "./parse.js";
+export {
+  type BuildRepoIndexResult,
+  buildRepoIndex,
+  type RepoIndexCollision,
+  type RepoIndexEntry,
+} from "./repo-index.js";
 export { parseRule } from "./rules.js";
 export {
   type ActivityLedgerSpec,

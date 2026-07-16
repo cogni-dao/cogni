@@ -18,7 +18,10 @@ import { NextResponse } from "next/server";
 import { dispatchCanonicalForkSync } from "@/app/_facades/deploy/canonical-fork-sync.server";
 import { dispatchNodePreviewPromote } from "@/app/_facades/deploy/node-preview-promote.server";
 import { dispatchPrReview } from "@/app/_facades/review/dispatch.server";
-import { getContainer } from "@/bootstrap/container";
+import {
+  getContainer,
+  resolveAttributionProfileResolver,
+} from "@/bootstrap/container";
 import { dispatchSignalExecution } from "@/features/governance/services/signal-dispatch";
 import {
   receiveWebhook,
@@ -58,6 +61,67 @@ function resolveWebhookSecret(
 
 interface RouteParams {
   params: Promise<{ source: string }>;
+}
+
+/**
+ * The node that OWNS this webhook's receipts.
+ *
+ * ATTRIBUTION_ROUTE_BY_SOURCE_REFS: for GitHub, read `repository.full_name` off the parsed body and
+ * ask the attribution-profile resolver which sovereign node declared that `owner/repo` in its
+ * `activity_ledger.activity_sources.github.source_refs`. Unclaimed repos (and every non-github
+ * source) fall back to the operator node (`getNodeId()`), preserving prior behavior. Parsing here is
+ * only to READ the repo full-name for routing — signature verification still happens inside
+ * `receiveWebhook` BEFORE any insert (WEBHOOK_VERIFY_BEFORE_NORMALIZE is unchanged).
+ */
+async function resolveTargetNode(
+  source: string,
+  body: Buffer
+): Promise<{
+  nodeId: string;
+  repo: string | null;
+  fallbackToOperator: boolean;
+}> {
+  const operatorNodeId = getNodeId();
+  if (source !== "github") {
+    return { nodeId: operatorNodeId, repo: null, fallbackToOperator: true };
+  }
+
+  let fullName: string | null = null;
+  try {
+    const parsed = JSON.parse(body.toString("utf-8")) as {
+      repository?: { full_name?: string };
+    };
+    fullName = parsed.repository?.full_name ?? null;
+  } catch {
+    // Unparseable body → let receiveWebhook reject it; route to operator meanwhile.
+    return { nodeId: operatorNodeId, repo: null, fallbackToOperator: true };
+  }
+
+  if (!fullName) {
+    return { nodeId: operatorNodeId, repo: null, fallbackToOperator: true };
+  }
+
+  let resolved: string | null = null;
+  try {
+    resolved =
+      await resolveAttributionProfileResolver().resolveNodeForRepo(fullName);
+  } catch (err) {
+    // Never let a routing failure drop the webhook — fall back to the operator node.
+    log.warn(
+      {
+        event: "attribution.route_resolve_failed",
+        repo: fullName,
+        err: String(err),
+      },
+      "attribution route resolve failed — falling back to operator"
+    );
+  }
+
+  return {
+    nodeId: resolved ?? operatorNodeId,
+    repo: fullName,
+    fallbackToOperator: resolved === null,
+  };
 }
 
 /**
@@ -107,17 +171,30 @@ export async function POST(
   try {
     const container = getContainer();
 
+    // Route receipts to the node whose declared source_refs profile owns this repo (GitHub);
+    // non-github + unclaimed repos fall back to the operator node. Signature verification still
+    // happens inside receiveWebhook BEFORE any insert.
+    const target = await resolveTargetNode(source, bodyBuffer);
+
     const result = await receiveWebhook(
       {
         attributionStore: container.attributionStore,
         sourceRegistrations: container.webhookRegistrations,
-        nodeId: getNodeId(),
+        nodeId: target.nodeId,
       },
       { source, headers, body: bodyBuffer, secret }
     );
 
     log.info(
-      { source, eventType, eventCount: result.eventCount },
+      {
+        event: "attribution.webhook_routed",
+        source,
+        eventType,
+        eventCount: result.eventCount,
+        nodeId: target.nodeId,
+        repo: target.repo,
+        fallbackToOperator: target.fallbackToOperator,
+      },
       "webhook processed"
     );
 
@@ -130,6 +207,9 @@ export async function POST(
         {
           event: "attribution.receipt_ingested",
           source,
+          nodeId: target.nodeId,
+          repo: target.repo,
+          fallbackToOperator: target.fallbackToOperator,
           receiptCount: result.receipts.length,
           eventTypes: [...new Set(result.receipts.map((r) => r.eventType))],
           logins: [

@@ -184,7 +184,9 @@ module.exports = {
       to: { path: [layers.shared, layers.types] },
     },
 
-    // bootstrap → bootstrap, ports, adapters, shared, types
+    // bootstrap → bootstrap, ports, adapters, shared, types, features
+    // (container.ts composes feature-level services — e.g. the attribution-profile
+    //  resolver — from injected adapters; the feature layer itself stays adapter-free.)
     {
       from: { path: layers.bootstrap },
       to: {
@@ -194,6 +196,7 @@ module.exports = {
           layers.adapters,
           layers.shared,
           layers.types,
+          layers.features,
         ],
       },
     },
