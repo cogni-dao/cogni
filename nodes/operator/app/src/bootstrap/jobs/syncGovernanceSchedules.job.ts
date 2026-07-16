@@ -178,7 +178,13 @@ export async function runGovernanceSchedulesSyncJob(): Promise<GovernanceSchedul
         log,
       });
 
-    const totals = { created: 0, updated: 0, resumed: 0, skipped: 0, paused: 0 };
+    const totals = {
+      created: 0,
+      updated: 0,
+      resumed: 0,
+      skipped: 0,
+      paused: 0,
+    };
     const add = (
       r: Awaited<ReturnType<typeof syncGovernanceSchedules>>
     ): void => {

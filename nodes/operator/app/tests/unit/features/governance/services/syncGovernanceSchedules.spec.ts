@@ -337,7 +337,10 @@ describe("syncGovernanceSchedules", () => {
     deps = makeMockDeps({
       listGovernanceScheduleIds: vi
         .fn()
-        .mockResolvedValue(["governance:node-test:community", "governance:node-test:old-charter"]),
+        .mockResolvedValue([
+          "governance:node-test:community",
+          "governance:node-test:old-charter",
+        ]),
     });
 
     const config = makeConfig([
@@ -392,9 +395,14 @@ describe("syncGovernanceSchedules", () => {
         new ScheduleControlConflictError("governance:node-test:community")
       );
     deps.scheduleControl.describeSchedule = vi.fn().mockResolvedValue(
-      makeMatchingDesc("governance:node-test:community", "0 */6 * * *", "COMMUNITY", {
-        dbScheduleId: stableDbId,
-      })
+      makeMatchingDesc(
+        "governance:node-test:community",
+        "0 */6 * * *",
+        "COMMUNITY",
+        {
+          dbScheduleId: stableDbId,
+        }
+      )
     );
 
     const result2 = await syncGovernanceSchedules(config, deps);
