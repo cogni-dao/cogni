@@ -1761,11 +1761,74 @@ async function seedOpenEpoch(
   );
 }
 
+/**
+ * Fail-closed prod-safety guard. This seed writes FABRICATED attribution data
+ * (fake contributors, epochs, receipts) — it must NEVER touch a production
+ * ledger, where the same tables drive real token distribution to real people.
+ *
+ * The dangerous signal is a NON-LOCAL database (a deployed ledger). The operator
+ * node_id is used BOTH locally (dev DB, safe) and on prod (prod DB, dangerous),
+ * so the guard keys on the DB host, not the node identity alone.
+ *
+ * Rules (deny by default):
+ *  - LOCAL database (localhost / 127.0.0.1 / postgres) → allowed freely, any
+ *    node identity. The normal dev loop (and the finalize→mint→claim harness).
+ *  - NON-LOCAL database + a PRODUCTION node identity → refused UNCONDITIONALLY.
+ *    No env, no flag. Fabricating into a real prod ledger is never valid.
+ *  - NON-LOCAL database + any other node → refused unless the caller EXPLICITLY
+ *    acknowledges the exact target by setting `SEED_TARGET_NODE_ID` to the
+ *    resolved node_id. You cannot fat-finger a prod DB URL and corrupt it, and
+ *    the ack must match the repo-spec node_id at cwd (can't point boop's ack at
+ *    the wrong DB).
+ *
+ * candidate-a validation of a THROWAWAY test node (e.g. boop, cogni-test-org)
+ * takes the ack path: run with that node's repo-spec at cwd + its service DB URL
+ * + `SEED_TARGET_NODE_ID=<that node_id>`.
+ */
+const PRODUCTION_NODE_IDS = new Set<string>([
+  // operator (cogni-template) — the live prod control plane
+  "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d",
+]);
+
+function assertSeedTargetIsSafe(dbUrl: string): void {
+  let host = "";
+  try {
+    host = new URL(dbUrl).hostname;
+  } catch {
+    throw new Error("REFUSING TO SEED: unparseable DATABASE_SERVICE_URL host");
+  }
+  const isLocal = ["localhost", "127.0.0.1", "::1", "postgres"].includes(host);
+  if (isLocal) return; // normal dev loop — any node identity is fine locally
+
+  // NON-LOCAL (deployed) database from here — deny by default.
+  if (PRODUCTION_NODE_IDS.has(NODE_ID)) {
+    throw new Error(
+      `REFUSING TO SEED: host '${host}' is a deployed DB and node_id ${NODE_ID} ` +
+        "is a PRODUCTION node. This seed writes fabricated attribution data and " +
+        "must never touch a prod ledger — no override exists."
+    );
+  }
+  const ack = process.env.SEED_TARGET_NODE_ID;
+  if (ack !== NODE_ID) {
+    throw new Error(
+      `REFUSING TO SEED: database host '${host}' is NON-LOCAL. Seeding a ` +
+        "deployed DB requires an explicit, node-pinned acknowledgement: set " +
+        `SEED_TARGET_NODE_ID=${NODE_ID} (must equal the repo-spec node_id at ` +
+        `cwd). Got SEED_TARGET_NODE_ID=${ack ?? "<unset>"}.`
+    );
+  }
+  console.log(
+    `⚠️  Seeding NON-LOCAL host '${host}' for node ${NODE_ID} (ack present).`
+  );
+}
+
 async function main(): Promise<void> {
   const dbUrl = process.env.DATABASE_SERVICE_URL;
   if (!dbUrl) {
     throw new Error("DATABASE_SERVICE_URL not set in .env.local");
   }
+
+  assertSeedTargetIsSafe(dbUrl);
 
   console.log("🌱 Dev Seed: Claimant-Aware Attribution Data");
   console.log(`   Node: ${NODE_ID}`);
