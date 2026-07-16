@@ -118,9 +118,57 @@ Derek scans many agents. Every status update is a tight matrix (inherits `/tldr`
 
 Lead with 🔴/🟡; 🟢 is earned (merged + proven live), never aspirational.
 
+## Recursive portfolio cards
+
+Use this when the story is really a portfolio of related investment areas
+(roadmap refresh, PR/link mapping, multi-week substrate work). Keep the same
+matrix discipline, but add one top-level card and at most one drilldown card per
+area that needs attention.
+
+**Top-level shape:**
+
+```markdown
+## ROADMAP: <human outcome> · <date>
+
+| status | investment area                  | current state | linked proof       | gap             | next Pareto move |
+| ------ | -------------------------------- | ------------- | ------------------ | --------------- | ---------------- |
+| 🔴🟡🟢 | <capability users/operators get> | <fact now>    | <PR/doc/run links> | <missing proof> | <one action>     |
+```
+
+**Drilldown shape:**
+
+```markdown
+### CARD: <investment area>
+
+| status | workstream | owner | PR / entry | proof | next |
+| ------ | ---------- | ----- | ---------- | ----- | ---- |
+```
+
+Rules:
+
+- Every drilldown row rolls up to exactly one top-level area.
+- Use exact links: PR, run, deployed URL, knowledge entry, or doc path.
+- Distinguish `current`, `this PR`, and `vnext`; do not blur them into one row.
+- A knowledge/skill workstream names both the filesystem wrapper and the hub row
+  or contribution branch when they diverge.
+- If a row's next move is "research," name the research graph/skill loop and the
+  durable write target (`scorecard`, `skill`, EDO, or silence).
+
 ## Eventual home
 
-This is the human-driven v0. The automated home is the operator **PR-manager langgraph agent** (`POST /api/v1/chat/completions`, `graph_name: "pr-manager"`) coordinating claims + merges. Until that carries the loop, run it here.
+This is the human-driven v0. The automated home is the operator **PR-manager /
+dev-manager LangGraph loop** coordinating claims, PR state, recursive status
+cards, and merges. The first graph-useful unit is not "manage everything"; it is
+the status-card reducer:
+
+1. recall hub skills/roadmap,
+2. read work items + PR/check state,
+3. emit the top-level portfolio card,
+4. drill into red/yellow areas only,
+5. write durable knowledge only when the card becomes a reusable scorecard,
+   skill, or EDO beat.
+
+Until the graph carries that loop, run it here.
 
 ## Reference — the proven cycle (2026-06-16)
 
