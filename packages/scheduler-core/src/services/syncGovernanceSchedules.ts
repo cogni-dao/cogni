@@ -136,11 +136,36 @@ export interface GovernanceScheduleSyncResult {
 }
 
 /**
- * Derives the Temporal schedule ID from a charter name.
- * Format: `governance:{charter_lowercase}`
+ * Derives the Temporal schedule ID from an owning node + charter name.
+ * Format: `governance:{nodeId}:{charter_lowercase}`.
+ *
+ * MULTI_NODE_SCHEDULE_ID: the schedule ID MUST be node-scoped. Without the
+ * `{nodeId}` segment every node's `LEDGER_INGEST` charter collapses onto the same
+ * Temporal schedule ID (`governance:ledger_ingest`), so an operator loop over N
+ * nodes clobbers all but the last (last-writer-wins) and only one node ever
+ * collects. Mirrors `nodeScheduleId` (`node-task:{nodeId}:{id}`) in
+ * syncNodeSchedules — same cross-tenant isolation rule for governance charters.
  */
-export function governanceScheduleId(charter: string): string {
-  return `governance:${charter.toLowerCase()}`;
+export function governanceScheduleId(nodeId: string, charter: string): string {
+  return `governance:${nodeId}:${charter.toLowerCase()}`;
+}
+
+/** Per-node prune prefix — pairs with {@link governanceScheduleId}. A node's sync
+ * prunes only ITS OWN schedules, never a sibling node's. */
+export function governancePrunePrefix(nodeId: string): string {
+  return `governance:${nodeId}:`;
+}
+
+/**
+ * True for a legacy pre-multi-node schedule ID (`governance:{charter}`, two
+ * colon-segments, no `{nodeId}`). These predate MULTI_NODE_SCHEDULE_ID and must be
+ * paused once so the operator's own collection never runs twice (old flat ID +
+ * new node-scoped ID both firing). New IDs have three colon-segments.
+ */
+export function isLegacyGovernanceScheduleId(scheduleId: string): boolean {
+  return (
+    scheduleId.startsWith("governance:") && scheduleId.split(":").length === 2
+  );
 }
 
 /**
@@ -200,7 +225,7 @@ export async function syncGovernanceSchedules(
   const configScheduleIds = new Set<string>();
 
   for (const schedule of config.schedules) {
-    const scheduleId = governanceScheduleId(schedule.charter);
+    const scheduleId = governanceScheduleId(deps.nodeId, schedule.charter);
     configScheduleIds.add(scheduleId);
 
     // Determine if this is a LEDGER_INGEST schedule (different workflow + queue)

@@ -63,6 +63,11 @@ import {
 } from "@cogni/node-streams";
 import { numberToPpm } from "@cogni/operator-wallet";
 import { PrivyOperatorWalletAdapter } from "@cogni/operator-wallet/adapters/privy";
+import {
+  extractGovernanceConfig,
+  type GovernanceConfig,
+  parseRepoSpec,
+} from "@cogni/repo-spec";
 import type { ScheduleControlPort } from "@cogni/scheduler-core";
 import type { WorkItemQueryPort } from "@cogni/work-items";
 import { MarkdownWorkItemAdapter } from "@cogni/work-items/markdown";
@@ -1197,4 +1202,69 @@ export function resolveAttributionProfileResolver(): AttributionProfileResolver 
     parentRepo,
   });
   return cachedAttributionProfileResolver;
+}
+
+/**
+ * MULTI_NODE_GOVERNANCE: read every routable node's git-authoritative governance
+ * config (its OWN `.cogni/repo-spec.yaml`, App-read via the deploy plane — the
+ * repo-spec is SPECS_GIT_AUTHORITATIVE, never a DB projection). Mirrors the
+ * attribution-profile resolver's per-node read (same `listRoutableNodes` + plane),
+ * but extracts the full {@link GovernanceConfig} (schedules + synthesized
+ * LEDGER_INGEST) instead of only `source_refs` — so the operator can sync each
+ * node's collect schedule, not merely route its receipts. A node with neither an
+ * `activity_ledger` nor declared schedules yields nothing and is skipped. Every
+ * per-node failure is swallowed to a warn (a bad node never blocks a sibling).
+ */
+export async function resolveRoutableNodeGovernanceConfigs(): Promise<
+  { nodeId: string; slug: string; config: GovernanceConfig }[]
+> {
+  const env = serverEnv();
+  const plane = createOperatorDeployPlane(env);
+  const parentOwner = env.NODE_SUBMODULE_PARENT_OWNER ?? "";
+  const parentRepo = env.NODE_SUBMODULE_PARENT_REPO ?? "";
+  const { log } = getContainer();
+
+  const routable = await listRoutableNodes();
+  const settled = await Promise.allSettled(
+    routable.map(async (node) => {
+      const repo = await plane.resolveNodeRepo({
+        parentOwner,
+        parentRepo,
+        slug: node.slug,
+      });
+      const isInRepo =
+        repo.owner.toLowerCase() === parentOwner.toLowerCase() &&
+        repo.repo.toLowerCase() === parentRepo.toLowerCase();
+      const specText = await plane.fetchFileText({
+        owner: repo.owner,
+        repo: repo.repo,
+        path: isInRepo
+          ? `nodes/${node.slug}/.cogni/repo-spec.yaml`
+          : ".cogni/repo-spec.yaml",
+        ref: "main",
+      });
+      if (specText === null) return null;
+      const config = extractGovernanceConfig(parseRepoSpec(specText));
+      // Only nodes that actually declare epochs (ledger) or governance schedules
+      // get synced — skip the rest so we never create empty schedule shells.
+      if (!config.ledger && config.schedules.length === 0) return null;
+      return { nodeId: node.id, slug: node.slug, config };
+    })
+  );
+
+  const out: { nodeId: string; slug: string; config: GovernanceConfig }[] = [];
+  for (const r of settled) {
+    if (r.status === "fulfilled" && r.value !== null) {
+      out.push(r.value);
+    } else if (r.status === "rejected") {
+      log.warn(
+        {
+          event: "governance.node_config_skipped",
+          err: String(r.reason),
+        },
+        "skipped a routable node's governance config (read/parse failed)"
+      );
+    }
+  }
+  return out;
 }

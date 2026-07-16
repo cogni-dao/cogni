@@ -26,6 +26,7 @@ import type { GovernanceConfig } from "@/shared/config";
 
 const GRANT_ID = "test-grant-id-001";
 const SYSTEM_USER_ID = "00000000-0000-4000-a000-000000000001";
+const TEST_NODE_ID = "node-test";
 const MOCK_DB_SCHEDULE_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
 
 /** Counter-based mock to return unique dbScheduleIds per call */
@@ -42,6 +43,7 @@ function makeMockDeps(
       return Promise.resolve(`${MOCK_DB_SCHEDULE_ID}-${upsertCallCount}`);
     }),
     systemUserId: SYSTEM_USER_ID,
+    nodeId: TEST_NODE_ID,
     scheduleControl: {
       createSchedule: vi.fn().mockResolvedValue(undefined),
       updateSchedule: vi.fn().mockResolvedValue(undefined),
@@ -137,14 +139,14 @@ describe("syncGovernanceSchedules", () => {
     const result = await syncGovernanceSchedules(config, deps);
 
     expect(result.created).toEqual([
-      "governance:community",
-      "governance:govern",
+      "governance:node-test:community",
+      "governance:node-test:govern",
     ]);
     // Upsert called for each schedule before Temporal creation
     expect(deps.upsertGovernanceScheduleRow).toHaveBeenCalledTimes(2);
     expect(deps.upsertGovernanceScheduleRow).toHaveBeenCalledWith(
       expect.objectContaining({
-        temporalScheduleId: "governance:community",
+        temporalScheduleId: "governance:node-test:community",
         ownerUserId: SYSTEM_USER_ID,
         graphId: "sandbox:openclaw",
       })
@@ -152,7 +154,7 @@ describe("syncGovernanceSchedules", () => {
     expect(deps.scheduleControl.createSchedule).toHaveBeenCalledTimes(2);
     expect(deps.scheduleControl.createSchedule).toHaveBeenCalledWith(
       expect.objectContaining({
-        scheduleId: "governance:community",
+        scheduleId: "governance:node-test:community",
         dbScheduleId: `${MOCK_DB_SCHEDULE_ID}-1`,
         cron: "0 */6 * * *",
         timezone: "UTC",
@@ -177,7 +179,7 @@ describe("syncGovernanceSchedules", () => {
 
   it("skips when schedule exists, is running, and config matches", async () => {
     const matchingDesc = makeMatchingDesc(
-      "governance:community",
+      "governance:node-test:community",
       "0 */6 * * *",
       "COMMUNITY"
     );
@@ -185,7 +187,7 @@ describe("syncGovernanceSchedules", () => {
     deps.scheduleControl.createSchedule = vi
       .fn()
       .mockRejectedValue(
-        new ScheduleControlConflictError("governance:community")
+        new ScheduleControlConflictError("governance:node-test:community")
       );
     deps.scheduleControl.describeSchedule = vi
       .fn()
@@ -197,7 +199,7 @@ describe("syncGovernanceSchedules", () => {
 
     const result = await syncGovernanceSchedules(config, deps);
 
-    expect(result.skipped).toEqual(["governance:community"]);
+    expect(result.skipped).toEqual(["governance:node-test:community"]);
     expect(result.created).toEqual([]);
     expect(result.updated).toEqual([]);
     expect(deps.scheduleControl.updateSchedule).not.toHaveBeenCalled();
@@ -206,7 +208,7 @@ describe("syncGovernanceSchedules", () => {
 
   it("updates schedule when config has changed (model drift)", async () => {
     const driftedDesc = makeDriftedDesc(
-      "governance:community",
+      "governance:node-test:community",
       "0 */6 * * *",
       "COMMUNITY"
     );
@@ -214,7 +216,7 @@ describe("syncGovernanceSchedules", () => {
     deps.scheduleControl.createSchedule = vi
       .fn()
       .mockRejectedValue(
-        new ScheduleControlConflictError("governance:community")
+        new ScheduleControlConflictError("governance:node-test:community")
       );
     deps.scheduleControl.describeSchedule = vi
       .fn()
@@ -226,10 +228,10 @@ describe("syncGovernanceSchedules", () => {
 
     const result = await syncGovernanceSchedules(config, deps);
 
-    expect(result.updated).toEqual(["governance:community"]);
+    expect(result.updated).toEqual(["governance:node-test:community"]);
     expect(result.skipped).toEqual([]);
     expect(deps.scheduleControl.updateSchedule).toHaveBeenCalledWith(
-      "governance:community",
+      "governance:node-test:community",
       expect.objectContaining({
         input: { message: "COMMUNITY", model: "kimi-k2.5" },
       })
@@ -241,7 +243,7 @@ describe("syncGovernanceSchedules", () => {
   it("updates schedule when dbScheduleId link drift detected", async () => {
     // Temporal schedule has dbScheduleId: null (legacy), DB row returns a UUID
     const descWithNullLink = makeMatchingDesc(
-      "governance:community",
+      "governance:node-test:community",
       "0 */6 * * *",
       "COMMUNITY",
       { dbScheduleId: null }
@@ -250,7 +252,7 @@ describe("syncGovernanceSchedules", () => {
     deps.scheduleControl.createSchedule = vi
       .fn()
       .mockRejectedValue(
-        new ScheduleControlConflictError("governance:community")
+        new ScheduleControlConflictError("governance:node-test:community")
       );
     deps.scheduleControl.describeSchedule = vi
       .fn()
@@ -262,9 +264,9 @@ describe("syncGovernanceSchedules", () => {
 
     const result = await syncGovernanceSchedules(config, deps);
 
-    expect(result.updated).toEqual(["governance:community"]);
+    expect(result.updated).toEqual(["governance:node-test:community"]);
     expect(deps.scheduleControl.updateSchedule).toHaveBeenCalledWith(
-      "governance:community",
+      "governance:node-test:community",
       expect.objectContaining({
         dbScheduleId: `${MOCK_DB_SCHEDULE_ID}-1`,
       })
@@ -273,7 +275,7 @@ describe("syncGovernanceSchedules", () => {
 
   it("updates and resumes a paused schedule with changed config", async () => {
     const driftedPaused = makeDriftedDesc(
-      "governance:community",
+      "governance:node-test:community",
       "0 */6 * * *",
       "COMMUNITY",
       { isPaused: true }
@@ -282,7 +284,7 @@ describe("syncGovernanceSchedules", () => {
     deps.scheduleControl.createSchedule = vi
       .fn()
       .mockRejectedValue(
-        new ScheduleControlConflictError("governance:community")
+        new ScheduleControlConflictError("governance:node-test:community")
       );
     deps.scheduleControl.describeSchedule = vi
       .fn()
@@ -294,16 +296,16 @@ describe("syncGovernanceSchedules", () => {
 
     const result = await syncGovernanceSchedules(config, deps);
 
-    expect(result.updated).toEqual(["governance:community"]);
+    expect(result.updated).toEqual(["governance:node-test:community"]);
     expect(deps.scheduleControl.updateSchedule).toHaveBeenCalledOnce();
     expect(deps.scheduleControl.resumeSchedule).toHaveBeenCalledWith(
-      "governance:community"
+      "governance:node-test:community"
     );
   });
 
   it("resumes paused schedule when config matches", async () => {
     const pausedDesc = makeMatchingDesc(
-      "governance:community",
+      "governance:node-test:community",
       "0 */6 * * *",
       "COMMUNITY",
       { isPaused: true }
@@ -312,7 +314,7 @@ describe("syncGovernanceSchedules", () => {
     deps.scheduleControl.createSchedule = vi
       .fn()
       .mockRejectedValue(
-        new ScheduleControlConflictError("governance:community")
+        new ScheduleControlConflictError("governance:node-test:community")
       );
     deps.scheduleControl.describeSchedule = vi
       .fn()
@@ -324,9 +326,9 @@ describe("syncGovernanceSchedules", () => {
 
     const result = await syncGovernanceSchedules(config, deps);
 
-    expect(result.resumed).toEqual(["governance:community"]);
+    expect(result.resumed).toEqual(["governance:node-test:community"]);
     expect(deps.scheduleControl.resumeSchedule).toHaveBeenCalledWith(
-      "governance:community"
+      "governance:node-test:community"
     );
     expect(deps.scheduleControl.updateSchedule).not.toHaveBeenCalled();
   });
@@ -335,7 +337,7 @@ describe("syncGovernanceSchedules", () => {
     deps = makeMockDeps({
       listGovernanceScheduleIds: vi
         .fn()
-        .mockResolvedValue(["governance:community", "governance:old-charter"]),
+        .mockResolvedValue(["governance:node-test:community", "governance:node-test:old-charter"]),
     });
 
     const config = makeConfig([
@@ -344,9 +346,9 @@ describe("syncGovernanceSchedules", () => {
 
     const result = await syncGovernanceSchedules(config, deps);
 
-    expect(result.paused).toEqual(["governance:old-charter"]);
+    expect(result.paused).toEqual(["governance:node-test:old-charter"]);
     expect(deps.scheduleControl.pauseSchedule).toHaveBeenCalledWith(
-      "governance:old-charter"
+      "governance:node-test:old-charter"
     );
   });
 
@@ -354,12 +356,12 @@ describe("syncGovernanceSchedules", () => {
     deps = makeMockDeps({
       listGovernanceScheduleIds: vi
         .fn()
-        .mockResolvedValue(["governance:deleted-charter"]),
+        .mockResolvedValue(["governance:node-test:deleted-charter"]),
     });
     deps.scheduleControl.pauseSchedule = vi
       .fn()
       .mockRejectedValue(
-        new ScheduleControlNotFoundError("governance:deleted-charter")
+        new ScheduleControlNotFoundError("governance:node-test:deleted-charter")
       );
 
     const config = makeConfig([]);
@@ -381,22 +383,22 @@ describe("syncGovernanceSchedules", () => {
     ]);
 
     const result1 = await syncGovernanceSchedules(config, deps);
-    expect(result1.created).toEqual(["governance:community"]);
+    expect(result1.created).toEqual(["governance:node-test:community"]);
 
     // Second call: schedule exists now with matching config + same dbScheduleId
     deps.scheduleControl.createSchedule = vi
       .fn()
       .mockRejectedValue(
-        new ScheduleControlConflictError("governance:community")
+        new ScheduleControlConflictError("governance:node-test:community")
       );
     deps.scheduleControl.describeSchedule = vi.fn().mockResolvedValue(
-      makeMatchingDesc("governance:community", "0 */6 * * *", "COMMUNITY", {
+      makeMatchingDesc("governance:node-test:community", "0 */6 * * *", "COMMUNITY", {
         dbScheduleId: stableDbId,
       })
     );
 
     const result2 = await syncGovernanceSchedules(config, deps);
-    expect(result2.skipped).toEqual(["governance:community"]);
+    expect(result2.skipped).toEqual(["governance:node-test:community"]);
     expect(result2.created).toEqual([]);
     expect(result2.updated).toEqual([]);
   });
@@ -415,9 +417,21 @@ describe("syncGovernanceSchedules", () => {
 });
 
 describe("governanceScheduleId", () => {
-  it("lowercases charter name", () => {
-    expect(governanceScheduleId("COMMUNITY")).toBe("governance:community");
-    expect(governanceScheduleId("ENGINEERING")).toBe("governance:engineering");
-    expect(governanceScheduleId("GOVERN")).toBe("governance:govern");
+  it("node-scopes and lowercases the charter name (MULTI_NODE_SCHEDULE_ID)", () => {
+    expect(governanceScheduleId("node-1", "COMMUNITY")).toBe(
+      "governance:node-1:community"
+    );
+    expect(governanceScheduleId("node-1", "ENGINEERING")).toBe(
+      "governance:node-1:engineering"
+    );
+    expect(governanceScheduleId("node-2", "LEDGER_INGEST")).toBe(
+      "governance:node-2:ledger_ingest"
+    );
+  });
+
+  it("two nodes never collide on the same charter", () => {
+    expect(governanceScheduleId("a", "LEDGER_INGEST")).not.toBe(
+      governanceScheduleId("b", "LEDGER_INGEST")
+    );
   });
 });
