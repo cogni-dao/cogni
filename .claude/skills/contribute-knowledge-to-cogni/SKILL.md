@@ -1,6 +1,6 @@
 ---
 name: contribute-knowledge-to-cogni
-description: Umbrella skill for contributing durable knowledge to a Cogni node hub. Triggers when an agent has — or is about to research — context worth compounding for future agents/humans, AND the knowledge is durable enough to survive the syntropy bar. Routes to the right sub-skill by content shape (falsifiable prediction → `edo-loop`; visual for humans → `dolt-human-visuals`; AI-readable text → direct contribution). Use whenever you'd otherwise drop a research finding into a chat log or PR description that should outlive the session. RARE by design — most agent context dies with the session; only what compounds earns an entry.
+description: Umbrella skill for contributing durable knowledge to a Cogni node hub. Triggers when an agent has — or is about to research — context worth compounding for future agents/humans, including reusable status scorecards and `entryType: skill` procedure rows for future agents. Routes by content shape (falsifiable prediction → `edo-loop`; visual for humans → `dolt-human-visuals`; AI-readable text/status/skill → direct contribution). Use whenever you'd otherwise drop a reusable finding, PR/link map, status card, or runbook into a chat log or PR description. RARE by design — most agent context dies with the session; only what compounds earns an entry.
 ---
 
 # contribute-knowledge-to-cogni — route any knowledge contribution
@@ -40,6 +40,47 @@ Walk top-to-bottom. **Most agent work stops at step 1.**
 5. **WRITE ATOMIC.** No existing atom fits AND the claim earns its keep → file new entry. See routing below for which entry type / sub-skill. **Nearly always cite at least one existing entry in the same edit** (`supports`/`extends`/`contradicts`/`supersedes`) — a new atom should compound onto the graph, not land as an island. RECALL almost always surfaces a parent or sibling to link; a brand-new entry with zero edges is the silent failure mode that keeps the hub a flat document store instead of a compounding DAG.
 6. **EXTEND.** Anti-pattern. Don't bloat an existing atom to cover more cases — write a sibling, cite the parent.
 
+## Research and status-card loop
+
+Use this when the human asks for a roadmap refresh, PR/link mapping, investment
+matrix, or recursive status cards. This is the manual version of the
+LangGraph-style loop: **recall → prove current state → group → judge → archive**.
+
+1. **Recall.** Read merged hub entries plus your open contribution diff. For
+   skill/procedure work, include `knowledge-hub-model`, `dolt-knowledge-model`,
+   and `skill-library-model`.
+2. **Prove current state.** Inspect local docs/specs and live PR/check state.
+   Use exact PR URLs, run URLs, merged dates, and SHAs when CI/CD status matters.
+3. **Group.** Use 3-6 human-visible investment areas. Avoid implementation-only
+   buckets.
+4. **Judge.** Mark each row as current fact, active PR, gap, or vnext. Green CI
+   is not live proof unless candidate/preview/prod validation evidence exists.
+5. **Archive or stay silent.** Write to Dolt only when the output is durable: a
+   reusable `scorecard`, a reusable `skill`, an EDO beat, or a correction to a
+   stale entry.
+
+Status-card template:
+
+```markdown
+| status   | area               | current state      | linked proof       | gap             | next Pareto move |
+| -------- | ------------------ | ------------------ | ------------------ | --------------- | ---------------- |
+| 🟢/🟡/🔴 | <human capability> | <what is true now> | <PR/run/doc links> | <missing proof> | <one action>     |
+```
+
+## Skill rows
+
+Skills are knowledge. A reusable agent procedure belongs in
+`entryType: "skill"` when it should survive forks, guide LangGraph behavior, or
+be discoverable by remote agents. A local `.claude/skills/*/SKILL.md` file may
+remain as the runtime wrapper/cache, but the durable form is the hub row.
+
+Before adding or changing a skill, recall existing hub rows and filesystem
+wrappers. Prefer refining the existing skill. Make the row executable for
+agents: strong use-when line, tool order, output shape, and failure conditions.
+Do not claim LangGraph agents can use a skill until it is either injected into
+their prompt, reachable through knowledge search/read, or exposed through a
+first-class `list_skills/get_skill` tool/MCP surface.
+
 ## Routing by content shape
 
 After RECALL confirms a new write is genuinely needed, pick exactly one path:
@@ -48,7 +89,7 @@ After RECALL confirms a new write is genuinely needed, pick exactly one path:
 | ---------------------------------------------------------------------------------------- | -------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------ |
 | Falsifiable prediction that resolves in a later session and shapes future agent action   | agent    | `hypothesis` / `decision` / `outcome` (atomic chain)                                | [`edo-loop`](../edo-loop/SKILL.md)                     |
 | Visual artifact (diagram, scorecard, roadmap, status grid, design diff) for human review | human    | `html` (sandboxed iframe)                                                           | [`dolt-human-visuals`](../dolt-human-visuals/SKILL.md) |
-| Atomic factual claim with provenance, recallable by future agent search                  | agent    | `observation` / `finding` / `conclusion` / `rule` / `scorecard` / `skill` / `guide` | direct (this skill)                                    |
+| Atomic factual claim, reusable status card, or skill/procedure with provenance           | agent    | `observation` / `finding` / `conclusion` / `rule` / `scorecard` / `skill` / `guide` | direct (this skill)                                    |
 
 **One entry, one shape.** Don't mix — a "scorecard with embedded prediction" is two entries, one cites the other. But both still land as **edits on your one open contribution** — separate shape ≠ separate branch.
 
@@ -91,9 +132,12 @@ If a claim is genuinely cross-node (e.g. "Doltgres `WITH RECURSIVE` works at 1k 
 
 `domain` is a registered FK on every entry (DOMAIN_FK_ENFORCED_AT_WRITE). Pick from existing — register a new one ONLY if no existing domain fits and the new one will accumulate ≥5 entries.
 
-Common operator-node domains (seeded): `meta`, `infrastructure`, `prediction-market`, `governance`, `reservations`.
-
-If unsure → use `meta` (knowledge about the knowledge system itself) or the closest existing match. Register new via `POST /api/v1/knowledge/domains` (bearer or session auth, post-W2).
+Canonical operator domains are converging on `meta`, `mission`, and `strategy`.
+Older domains such as `infrastructure`, `governance`, and `oss-ai` still exist;
+use them when refining existing rows. For new operator knowledge, prefer
+`meta` for knowledge/skill mechanics, `mission` for durable roadmap claims, and
+`strategy` for investment/status cards. Register a new domain only when no
+existing domain fits and it will accumulate at least five entries.
 
 ## Mechanics — direct text path
 
@@ -114,7 +158,8 @@ CID=$(curl -sS "$BASE/api/v1/knowledge/contributions?state=open&limit=20" \
 # NOT in /knowledge?domain= (merged-main only) — skip this and you'll re-author
 # or deny knowledge you wrote this session. Cite/refine these siblings.
 [ -n "$CID" ] && curl -sS "$BASE/api/v1/knowledge/contributions/$CID/diff" \
-  -H "Authorization: Bearer $KEY" | jq -r '.entries[] | "\(.rowId): \((.after // .before).title)"'
+  -H "Authorization: Bearer $KEY" \
+  | jq -r '(.entries // .items // [])[] | "\(.rowId // .id): \((.after // .before // .).title)"'
 ```
 
 **Step 2 — only if you have none open, create ONCE and capture the id:**
@@ -224,7 +269,9 @@ A `scorecard` entry is a markdown table of `dimension | us | optimal | gap` rows
 
 ## Confidence — what you set vs what the system computes
 
-Don't set `confidencePct` on the request unless you have a defensible reason. Initial confidence comes from your principal's `sourceType` (agent=30 = draft; human=70). Recompute raises it as citation evidence lands. Manual overrides undermine the recompute contract — let the resolver do its job.
+Do not set `confidencePct` on the request. Confidence is policy-initialized from
+the principal/source type and recomputed as citation evidence lands. Manual
+author overrides undermine the recompute contract.
 
 ## When to invoke this skill
 
@@ -246,7 +293,7 @@ Don't set `confidencePct` on the request unless you have a defensible reason. In
 - Filing a falsifiable prediction as `finding` to avoid EDO overhead — use `edo-loop` or stay silent
 - Authoring a genuinely visual artifact (diagram, chart) as plain text (loses the styling contract from `knowledge-html-style.md`)
 - Putting a one-off learning in `docs/spec/*` — specs are durable as-built contracts, not findings
-- Setting `confidencePct` manually because the draft (30) looked low
+- Setting `confidencePct` manually
 - Duplicating cross-node — file once, cite from other nodes
 
 ## Cross-references
