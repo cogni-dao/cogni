@@ -206,6 +206,7 @@ export {
   type PaymentRailMisconfigurationCode,
   PaymentRailMisconfiguredPortError,
 } from "./payment-rail-guard.port";
+export type { ReceiptDelivery } from "./receipt-delivery.port";
 export type {
   ProxyBillingEntry,
   SandboxErrorCode,

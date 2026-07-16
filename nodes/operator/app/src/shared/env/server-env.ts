@@ -135,7 +135,16 @@ export const serverSchema = z.object({
   // Per SCHEDULER_SPEC.md: scheduler worker authenticates via shared secret to call
   // POST /api/internal/graphs/{graphId}/runs. Min 32 chars to reduce weak-token risk.
   // Required: Internal execution API will not function without this token.
+  // Also the Bearer for operator-gateway → owning-node attribution receipt delivery
+  // (POST {nodeUrl}/api/internal/attribution/receipts), mirroring the graph-dispatch identity.
   SCHEDULER_API_TOKEN: z.string().min(32),
+
+  // Node endpoints map — `nodeId=baseUrl` pairs (comma-separated), e.g.
+  // "operator=http://operator-app:3000,poly=http://poly-app:3100". Mirrors the scheduler-worker's
+  // COGNI_NODE_ENDPOINTS. Used by the attribution operator-gateway to resolve a FOREIGN owning
+  // node's base URL for receipt delivery. Optional: unset → the gateway can only serve the
+  // operator's OWN repos (foreign-node delivery throws "unknown nodeId" at call time).
+  COGNI_NODE_ENDPOINTS: optionalString,
 
   // Internal ops token - Bearer auth for deploy-time internal operations endpoints
   // Optional in schema to avoid breaking environments that do not use ops endpoints.

@@ -121,6 +121,7 @@ import {
 } from "@/adapters/server/db/doltgres/client";
 import { getServiceDb } from "@/adapters/server/db/drizzle.service-client";
 import { DrizzleWorkItemSessionAdapter } from "@/adapters/server/db/work-item-session.adapter";
+import { createHttpReceiptDelivery } from "@/adapters/server/ingestion/http-receipt-delivery";
 import { CompositeNodeRegistryAdapter } from "@/adapters/server/node-registry/composite-node-registry.adapter";
 import { DbNodeRegistryAdapter } from "@/adapters/server/node-registry/db-node-registry.adapter";
 import { LiveNodeRegistryAdapter } from "@/adapters/server/node-registry/live-node-registry.adapter";
@@ -175,6 +176,7 @@ import type {
   PaymentAttemptServiceRepository,
   PaymentAttemptUserRepository,
   PaymentRailGuardPort,
+  ReceiptDelivery,
   RunStreamPort,
   ServiceAccountService,
   ThreadPersistencePort,
@@ -285,6 +287,11 @@ export interface Container {
   nodeStream: NodeStreamPort | undefined;
   /** Webhook source registrations — normalizers for webhook ingestion */
   webhookRegistrations: ReadonlyMap<string, DataSourceRegistration>;
+  /**
+   * HTTP delivery of attribution receipts to a FOREIGN owning node's own ledger
+   * (operator-as-gateway; #1924 routing). The operator's OWN repos never route here.
+   */
+  receiptDelivery: ReceiptDelivery;
   /** Financial ledger — undefined when TIGERBEETLE_ADDRESS not set */
   financialLedger: FinancialLedgerPort | undefined;
   /** Operator wallet — undefined when PRIVY_APP_ID not set */
@@ -421,6 +428,25 @@ function getWebhookRegistrations(): ReadonlyMap<
     _webhookRegistrations = registrations;
   }
   return _webhookRegistrations;
+}
+
+/**
+ * Parse COGNI_NODE_ENDPOINTS into a `nodeId → baseUrl` map. Mirrors the scheduler-worker parser
+ * (`services/scheduler-worker/src/bootstrap/container.ts`): comma-separated `key=url` pairs, `=`
+ * preserved inside URLs. Unset/empty → empty map (foreign-node delivery then throws at call time;
+ * the operator's own repos are unaffected).
+ */
+function parseNodeEndpoints(raw: string | undefined): Map<string, string> {
+  const map = new Map<string, string>();
+  if (!raw) return map;
+  for (const pair of raw.split(",")) {
+    const [key, ...rest] = pair.trim().split("=");
+    const value = rest.join("="); // Handle URLs with = in them
+    if (key && value) {
+      map.set(key.trim(), value.trim());
+    }
+  }
+  return map;
 }
 
 function createContainer(): Container {
@@ -924,6 +950,14 @@ function createContainer(): Container {
   const runStream = new RedisRunStreamAdapter(redisClient);
   const nodeStream = new RedisNodeStreamAdapter(redisClient);
 
+  // Attribution operator-gateway: HTTP delivery of receipts to FOREIGN owning nodes' own ledgers
+  // (#1924 routing). Resolves nodeId → baseUrl from COGNI_NODE_ENDPOINTS; Bearer SCHEDULER_API_TOKEN.
+  const receiptDelivery = createHttpReceiptDelivery({
+    nodeEndpoints: parseNodeEndpoints(env.COGNI_NODE_ENDPOINTS),
+    schedulerApiToken: env.SCHEDULER_API_TOKEN,
+    logger: log.child({ component: "http-receipt-delivery" }),
+  });
+
   // Process health publisher (node-local metrics only — external sources use Temporal)
   const publisherAbort = new AbortController();
   process.on("SIGTERM", () => publisherAbort.abort());
@@ -987,6 +1021,7 @@ function createContainer(): Container {
     get webhookRegistrations() {
       return getWebhookRegistrations();
     },
+    receiptDelivery,
     financialLedger,
     operatorWallet,
     treasurySettlement: operatorWallet
