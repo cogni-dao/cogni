@@ -7,10 +7,10 @@
  *   OWNING node's own ledger (`POST {nodeUrl}/api/internal/attribution/receipts`). Mirrors the
  *   scheduler-worker's `run-http` adapter (nodeId → nodeUrl lookup, Bearer SCHEDULER_API_TOKEN,
  *   retryable-vs-permanent status classification, structured error logging).
- * Scope: One factory (`createHttpReceiptDelivery`) → a `deliverReceipts(nodeId, source, receipts)`
- *   client for FOREIGN (remote) owning nodes. Does not touch a DB — the operator's own-node write
- *   stays a local write in `receiveWebhook`; remote nodes persist receipts in their OWN ledger
- *   (NODE_WRITES_OWN_LEDGER). Receipt `Date` fields are serialized to ISO strings for the wire.
+ * Scope: HTTP delivery client for FOREIGN (remote) owning nodes; does not touch a DB. The
+ *   operator's own-node write stays a local write in `receiveWebhook`; remote nodes persist
+ *   receipts in their OWN ledger (NODE_WRITES_OWN_LEDGER). Receipt `Date` fields are serialized
+ *   to ISO strings for the wire.
  * Invariants:
  *   - NO_DB_IN_DELIVERY: only fetch(); the owning node stamps its own node_id.
  *   - nodeId is resolved against COGNI_NODE_ENDPOINTS at call time; unknown → throw (fail fast).

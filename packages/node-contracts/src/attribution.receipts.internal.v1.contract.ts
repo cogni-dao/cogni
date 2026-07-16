@@ -4,10 +4,10 @@
 /**
  * Module: `@contracts/attribution.receipts.internal.v1.contract`
  * Purpose: Wire format for internal attribution receipt delivery (operator gateway -> owning node app).
- * Scope: Wire format only for POST /api/internal/attribution/receipts (operator gateway ->
- *   owning node). Does not implement the route, the delivery client, or business logic; the
- *   operator resolves repo -> owning node_id (source_refs, #1924) and the node persists receipts
- *   in its OWN ledger. Mirrors graph-runs.create.internal.v1.
+ * Scope: Wire format only; does not implement the route, delivery client, or business logic.
+ *   For POST /api/internal/attribution/receipts (operator gateway -> owning node): the operator
+ *   resolves repo -> owning node_id (source_refs, #1924) and the node persists receipts in its OWN
+ *   ledger. Mirrors graph-runs.create.internal.v1.
  * Invariants:
  *   - Bearer SCHEDULER_API_TOKEN required (MVP dispatch identity, same as graph dispatch;
  *     the per-node dispatch principal is the hardening — task.5033).
