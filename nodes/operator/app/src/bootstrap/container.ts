@@ -121,10 +121,7 @@ import {
 } from "@/adapters/server/db/doltgres/client";
 import { getServiceDb } from "@/adapters/server/db/drizzle.service-client";
 import { DrizzleWorkItemSessionAdapter } from "@/adapters/server/db/work-item-session.adapter";
-import {
-  createHttpReceiptDelivery,
-  type ReceiptDelivery,
-} from "@/adapters/server/ingestion/http-receipt-delivery";
+import { createHttpReceiptDelivery } from "@/adapters/server/ingestion/http-receipt-delivery";
 import { CompositeNodeRegistryAdapter } from "@/adapters/server/node-registry/composite-node-registry.adapter";
 import { DbNodeRegistryAdapter } from "@/adapters/server/node-registry/db-node-registry.adapter";
 import { LiveNodeRegistryAdapter } from "@/adapters/server/node-registry/live-node-registry.adapter";
@@ -179,6 +176,7 @@ import type {
   PaymentAttemptServiceRepository,
   PaymentAttemptUserRepository,
   PaymentRailGuardPort,
+  ReceiptDelivery,
   RunStreamPort,
   ServiceAccountService,
   ThreadPersistencePort,

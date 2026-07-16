@@ -33,25 +33,10 @@ import {
   type InternalReceipt,
   internalDeliverReceiptsOperation,
 } from "@cogni/node-contracts";
+import type { ReceiptDelivery } from "@/ports";
 import type { Logger } from "@/shared/observability";
 
-/**
- * Delivers normalized ingestion receipts for a FOREIGN owning node over HTTP.
- * The operator's OWN-node receipts never route here — they stay a local DB write in `receiveWebhook`.
- */
-export interface ReceiptDelivery {
-  /**
-   * POST the given receipts to the owning node's `/api/internal/attribution/receipts`.
-   * Resolves on 2xx; throws (classified retryable-vs-permanent) otherwise, or if `nodeId` is
-   * not present in COGNI_NODE_ENDPOINTS. Receipts carry a `Date` `eventTime`/`retrievedAt`; the
-   * wire format converts them to ISO-8601 strings.
-   */
-  deliverReceipts(
-    nodeId: string,
-    source: string,
-    receipts: readonly InsertReceiptParams[]
-  ): Promise<void>;
-}
+// ReceiptDelivery port lives in @/ports/receipt-delivery.port; this adapter implements it.
 
 export interface HttpReceiptDeliveryDeps {
   /** nodeId → base URL, parsed from COGNI_NODE_ENDPOINTS. */

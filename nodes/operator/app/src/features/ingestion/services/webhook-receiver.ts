@@ -21,8 +21,11 @@
  */
 
 import type { InsertReceiptParams } from "@cogni/attribution-ledger";
-import type { ReceiptDelivery } from "@/adapters/server/ingestion/http-receipt-delivery";
-import type { AttributionStore, DataSourceRegistration } from "@/ports";
+import type {
+  AttributionStore,
+  DataSourceRegistration,
+  ReceiptDelivery,
+} from "@/ports";
 import type { Logger } from "@/shared/observability";
 
 /**
