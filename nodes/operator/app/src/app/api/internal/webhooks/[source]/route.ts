@@ -181,6 +181,11 @@ export async function POST(
         attributionStore: container.attributionStore,
         sourceRegistrations: container.webhookRegistrations,
         nodeId: target.nodeId,
+        // The operator's OWN node_id — when it equals the owning nodeId the receiver keeps the
+        // local store write (no regression); a FOREIGN owner is delivered over HTTP instead.
+        operatorNodeId: getNodeId(),
+        receiptDelivery: container.receiptDelivery,
+        logger: log,
       },
       { source, headers, body: bodyBuffer, secret }
     );
