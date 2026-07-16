@@ -83,15 +83,24 @@ variable "sops_age_private_key" {
 # can't see Compose's RAM, so it over-commits node-app pods → OOM. system-reserved
 # subtracts the Compose+OS footprint from allocatable so the scheduler stops
 # over-committing. Co-resident default; an infra-split app VM overrides it low.
+# Sizing (measured 2026-07-16 on prod + candidate-a, 6GB shared VM):
+# the co-resident Compose stack actually uses ~600MiB (temporal/doltgres/litellm/
+# postgres/alloy/...), NOT the ~2.8GB the old 2900Mi default assumed. The minimal
+# fleet (operator + poly/beacon/node-template + scheduler-worker×2 + argocd/openbao/
+# ESO/coredns) requests ~2732Mi. The old 2900Mi reservation drove allocatable to
+# 2671Mi < 2732Mi → the operator went Pending and cognidao.org 502'd. Reserve 1800Mi
+# (3× measured Compose + OS + growth headroom) → allocatable ~3921Mi > fleet 2732Mi
+# with ~1.2GB surge headroom, and still honest so the box can't over-commit into the
+# Compose working set (the 2026-07-16 fleet-502 mode).
 variable "system_reserved_memory" {
-  description = "kubelet system-reserved memory: non-k8s RAM on the box (Compose + OS) subtracted from allocatable. Co-resident default; ~256Mi for an infra-split app VM."
+  description = "kubelet system-reserved memory: non-k8s RAM on the box (Compose + OS) subtracted from allocatable. Co-resident default sized to measured Compose+OS; ~256Mi for an infra-split app VM."
   type        = string
-  default     = "2900Mi"
+  default     = "1800Mi"
 }
 
 variable "eviction_hard_memory" {
   description = "kubelet eviction-hard memory.available threshold: headroom before the kubelet evicts, a safety net above system-reserved."
   type        = string
-  default     = "350Mi"
+  default     = "200Mi"
 }
 
