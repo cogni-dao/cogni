@@ -2,12 +2,12 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `scripts/e2e/cumulative-merkle`
+ * Module: `@scripts/e2e/cumulative-merkle`
  * Purpose: 1inch CumulativeMerkleDrop-compatible leaf hash + proof verifier — used by the finalize→mint→claim harness to independently re-verify the REAL persisted manifest's proofs against its root before spending gas on-chain.
  * Scope: Pure functions (keccak256 leaf + sorted-pair proof verify). Does NOT build trees — the R3 distribution service is the authoritative builder; this only checks what it persisted. No network I/O, no secrets.
  * Invariants:
- * - LEAF_FORMAT: leaf = keccak256(abi.encodePacked(address account, uint256 cumulativeAmount)) — byte-identical to the vendored 1inch CumulativeMerkleDrop.
- * - SORTED_PAIR_PROOF: proof folds via keccak256 of ascending-ordered sibling pairs (OpenZeppelin MerkleProof-compatible).
+ * - LEAF_FORMAT: keccak256(abi.encodePacked(account, cumulativeAmount))
+ * - SORTED_PAIR_PROOF: keccak256 of ascending sibling pairs (OZ-compatible)
  * Side-effects: none
  * Links: packages/cogni-contracts/src/cumulative-merkle-distributor/abi.ts, spikes/walk-rig-cumulative-fork/cumulative-merkle.ts
  * @public

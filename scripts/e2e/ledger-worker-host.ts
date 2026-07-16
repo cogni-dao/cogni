@@ -2,9 +2,9 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `scripts/e2e/ledger-worker-host`
+ * Module: `@scripts/e2e/ledger-worker-host`
  * Purpose: Run the REAL ledger Temporal worker (ledger-tasks) on the HOST for the finalize→mint→claim harness, reading an off-tree AUGMENTED repo-spec (distributions activated) so the R3 cumulative-root build runs instead of silently skipping.
- * Scope: Thin entrypoint. Reuses the production container + worker verbatim (createAttributionContainer + startAttributionWorker). The ONLY difference vs services/scheduler-worker/src/main.ts is (1) it starts ONLY the ledger worker (no scheduler worker → no node-endpoint noise) and (2) it chdir's to HARNESS_SPEC_DIR so loadRepoSpecIdentity() reads the augmented spec at that cwd. Never sends an on-chain tx (the fold only BUILDS + persists the manifest).
+ * Scope: Thin entrypoint. Reuses the production container + worker verbatim (createAttributionContainer + startAttributionWorker). The ONLY difference vs services/scheduler-worker/src/main.ts is (1) it starts ONLY the ledger worker (no scheduler worker → no node-endpoint noise) and (2) it chdir's to HARNESS_SPEC_DIR so loadRepoSpecIdentity() reads the augmented spec at that cwd. Does not fork the finalize logic and does not send any on-chain tx (the fold only BUILDS + persists the manifest).
  * Invariants:
  * - REUSES_PROD_CODE: no forked finalize logic — the same createAttributionActivities the docker worker registers.
  * - READS_AUGMENTED_SPEC: HARNESS_SPEC_DIR must contain .cogni/repo-spec.yaml with distributions.status:active + governance.token_contract/emissions_holder.

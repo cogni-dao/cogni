@@ -1,6 +1,18 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
-//
+
+/**
+ * Module: `@scripts/e2e/finalize-mint-claim`
+ * Purpose: Local-dev harness proving the full token-distribution DoD — admin signs an epoch, the DAO mints the per-epoch delta into the cumulative distributor, and contributors claim — against an anvil Base-fork with hard prod-safety guards.
+ * Scope: Orchestration only (spawns anvil + the real host ledger worker, drives FinalizeEpochWorkflow via Temporal, reads the persisted manifest, mints + claims on the fork, asserts conservation); every finalize/fold call is real. Does not modify product code and does not touch any prod system (fork + local DB only).
+ * Invariants:
+ * - WRITES_TO_FORK_ONLY: on-chain writes target 127.0.0.1:8545
+ * - RPC_FORK_SOURCE_ONLY: real EVM_RPC_URL never a client target
+ * - LOCAL_DB_ONLY: hard-abort unless DATABASE_URL host is local
+ * Side-effects: IO (spawns anvil + worker, DB reads/writes, fork txs)
+ * Links: scripts/e2e/README.md, services/scheduler-worker/src/activities/ledger.ts
+ */
+
 // WALK E2E — full distribution proof in LOCAL DEV: sign → finalize → mint → claim.
 //
 // Proves Derek's Definition of Done end to end with ZERO prod risk and ZERO human
