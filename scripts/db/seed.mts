@@ -79,7 +79,19 @@ const WEIGHT_CONFIG: Record<string, number> = {
   "github:review_submitted": 0,
   "github:issue_closed": 0,
 };
-const SEED_APPROVERS = ["0x070075F1389Ae1182aBac722B36CA12285d0c949"];
+// The pinned approver set for seeded review epochs. Overridable via the
+// SEED_APPROVERS env var (comma-separated addresses) so the local finalize→
+// mint→claim harness (scripts/e2e/finalize-mint-claim.ts) can pin an anvil
+// account whose key it holds and sign the EIP-712 finalize statement with no
+// MetaMask. The approverSetHash the seed pins is computed from THIS list, so an
+// override stays internally consistent. Defaults to the historical seed wallet.
+const SEED_APPROVERS = (process.env.SEED_APPROVERS ?? "")
+  .split(",")
+  .map((a) => a.trim())
+  .filter(Boolean);
+if (SEED_APPROVERS.length === 0) {
+  SEED_APPROVERS.push("0x070075F1389Ae1182aBac722B36CA12285d0c949");
+}
 const ALLOCATION_ALGO_REF = deriveAllocationAlgoRef("cogni-v0.0");
 const CLAIMANT_RESOLVER_REF = "cogni.default-author.v0";
 const CLAIMANT_ALGO_REF = "default-author-v0";

@@ -288,6 +288,13 @@
       "when": 1782951526053,
       "tag": "0040_strong_post",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1784179645492,
+      "tag": "0041_slow_mastermind",
+      "breakpoints": true
     }
   ]
 }

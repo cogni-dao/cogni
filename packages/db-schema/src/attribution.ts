@@ -32,6 +32,7 @@ import {
   index,
   integer,
   jsonb,
+  numeric,
   pgTable,
   primaryKey,
   text,
@@ -617,10 +618,13 @@ export const epochDistributionManifests = pgTable(
     merkleRoot: text("merkle_root").notNull(),
     chainId: bigint("chain_id", { mode: "bigint" }).notNull(),
     tokenAddress: text("token_address").notNull(),
-    distributionAmount: bigint("distribution_amount", {
+    // ERC20 base-unit (wei) token amounts — uint256-scale. MUST be numeric, not
+    // bigint: cumulativeTotal = credits × 10^18 overflows int64 for any pool ≥ ~9
+    // credits (bigint max ≈ 9.2×10^18). numeric(mode:bigint) round-trips as bigint.
+    distributionAmount: numeric("distribution_amount", {
       mode: "bigint",
     }).notNull(),
-    totalAllocated: bigint("total_allocated", { mode: "bigint" }).notNull(),
+    totalAllocated: numeric("total_allocated", { mode: "bigint" }).notNull(),
     // NULL until the on-chain MerkleDistributor contract is deployed for this epoch.
     distributorAddress: text("distributor_address"),
     createdAt: timestamp("created_at", { withTimezone: true })
@@ -663,7 +667,10 @@ export const epochDistributionLeaves = pgTable(
     claimantKey: text("claimant_key").notNull(),
     account: text("account").notNull(),
     accountLower: text("account_lower").notNull(),
-    amount: bigint("amount", { mode: "bigint" }).notNull(),
+    // ERC20 base-unit (wei) claim amount — uint256-scale; MUST be numeric (int64
+    // overflows: a single claimant's cumulative = credits × 10^18). numeric with
+    // mode:bigint round-trips as a JS bigint, so the adapter mapping is unchanged.
+    amount: numeric("amount", { mode: "bigint" }).notNull(),
     leafHash: text("leaf_hash").notNull(),
     proofJson: jsonb("proof_json").$type<string[]>().notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
