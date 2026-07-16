@@ -19,6 +19,14 @@
 #      hand-authored (operator/node-template/scheduler-worker) overlays are never
 #      touched. Without this, a decommissioned node leaks orphan overlay config.
 #
+# FIXTURE NODE — these tests need a concrete wizard-born node as the render example,
+# but must NOT hard-couple to one specific slug: env-membership (manage-node-envs)
+# can move ANY real node in or out of an env, and a hardcoded example (historically
+# `poly`) turned every such move CI-red because the example's committed overlay was
+# (correctly) deleted. So the example is DISCOVERED at runtime — the first renderer-
+# owned node that is a member of all three envs — and the tree carries ≥1 such node.
+# Removing any single node no longer breaks these gates.
+#
 # Run: bash scripts/ci/tests/render-node-overlays.test.sh
 set -euo pipefail
 
@@ -29,6 +37,29 @@ cd "$REPO_ROOT"
 RENDER="scripts/ci/render-node-overlays.sh"
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "  ok — $*"; }
+
+# Hand-authored (non-renderer-owned) overlays — never a fixture, never pruned.
+PROTECTED_NODES="operator node-template scheduler-worker"
+
+# Discover a wizard-born render example: renderer-owned (not PROTECTED), has a
+# catalog row, and is a member of all three envs (tests [6]/[7] simulate dropping
+# candidate-a and assert preview+production survive). Runtime-discovered so no test
+# couples to one slug.
+pick_fixture_node() {
+  local n
+  for n in $(ls infra/k8s/overlays/candidate-a/ 2>/dev/null); do
+    case " $PROTECTED_NODES " in *" $n "*) continue ;; esac
+    [ -f "infra/catalog/$n.yaml" ] || continue
+    [ -d "infra/k8s/overlays/preview/$n" ] && [ -d "infra/k8s/overlays/production/$n" ] || continue
+    echo "$n"
+    return 0
+  done
+  return 1
+}
+FIXTURE_NODE="$(pick_fixture_node)" \
+  || fail "no wizard-born all-three-env node found to use as the render fixture"
+echo "  (render fixture node: $FIXTURE_NODE)"
+FN="$FIXTURE_NODE"
 
 # Restore any file we mutate in-place, even on a failed assertion.
 BACKUPS=()
@@ -49,32 +80,32 @@ stash() {
   BACKUPS+=("$path::$bak")
 }
 
-echo "[1/5] committed wizard overlays ↔ node-template + catalog drift gate"
+echo "[1/7] committed wizard overlays ↔ node-template + catalog drift gate"
 bash "$RENDER" --check >/dev/null \
   || fail "$RENDER --check: a committed wizard overlay is stale (run: pnpm gen:node-overlays)"
 pass "all wizard-born overlays match the renderer"
 
-echo "[2/5] renderer is byte-exact to the committed mint output"
-diff <(bash "$RENDER" candidate-a poly) infra/k8s/overlays/candidate-a/poly/kustomization.yaml >/dev/null \
-  || fail "render candidate-a poly != committed overlay (renderer drifted from gens/overlay.ts)"
-pass "candidate-a/poly render is byte-identical to committed"
+echo "[2/7] renderer is byte-exact to the committed mint output"
+diff <(bash "$RENDER" candidate-a "$FN") "infra/k8s/overlays/candidate-a/$FN/kustomization.yaml" >/dev/null \
+  || fail "render candidate-a $FN != committed overlay (renderer drifted from gens/overlay.ts)"
+pass "candidate-a/$FN render is byte-identical to committed"
 
-echo "[3/5] render targets node-at-root layout + ESO secret"
-OUT="$(bash "$RENDER" candidate-a poly)"
+echo "[3/7] render targets node-at-root layout + ESO secret"
+OUT="$(bash "$RENDER" candidate-a "$FN")"
 grep -q 'exec node /app/app/migrate.mjs /app/app/migrations' <<<"$OUT" \
-  || fail "poly render missing the node-at-root Postgres migrate override"
+  || fail "$FN render missing the node-at-root Postgres migrate override"
 grep -q 'exec node /app/app/migrate-doltgres.mjs /app/app/doltgres-migrations' <<<"$OUT" \
-  || fail "poly render missing the node-at-root Doltgres migrate path"
+  || fail "$FN render missing the node-at-root Doltgres migrate path"
 grep -q '/app/nodes/$(NODE_NAME)/app' <<<"$OUT" \
-  && fail "poly render still carries a monorepo /app/nodes/<slug>/app migrate path"
-grep -q 'poly-env-secrets' <<<"$OUT" \
-  || fail "poly render missing the ESO secret target poly-env-secrets"
-grep -q 'poly-node-app-secrets' <<<"$OUT" \
-  && fail "poly render still references the legacy poly-node-app-secrets target"
-pass "poly render is node-at-root + ESO-targeted"
+  && fail "$FN render still carries a monorepo /app/nodes/<slug>/app migrate path"
+grep -q "$FN-env-secrets" <<<"$OUT" \
+  || fail "$FN render missing the ESO secret target $FN-env-secrets"
+grep -q "$FN-node-app-secrets" <<<"$OUT" \
+  && fail "$FN render still references the legacy $FN-node-app-secrets target"
+pass "$FN render is node-at-root + ESO-targeted"
 
-echo "[4/5] FALSIFYING: a hand-staled overlay turns --check red"
-STALE="infra/k8s/overlays/candidate-a/poly/kustomization.yaml"
+echo "[4/7] FALSIFYING: a hand-staled overlay turns --check red"
+STALE="infra/k8s/overlays/candidate-a/$FN/kustomization.yaml"
 stash "$STALE"
 # Revert the migrate runner to the monorepo path the stale operator shipped.
 perl -0pi -e 's{/app/app/migrate-doltgres\.mjs}{/app/nodes/$(NODE_NAME)/app/migrate-doltgres.mjs}g' "$STALE"
@@ -84,25 +115,24 @@ fi
 pass "--check correctly fails on a staled migrate path"
 restore; BACKUPS=()
 
-echo "[5/5] fail-closed: a template missing the node-at-root migrate command aborts the render"
+echo "[5/7] fail-closed: a template missing the node-at-root migrate command aborts the render"
 TPL="infra/k8s/overlays/candidate-a/node-template/kustomization.yaml"
 stash "$TPL"
 # Drop the node-at-root Postgres migrate override op (the guard's anchor).
 perl -0pi -e 's{ {6}- op: replace\n {8}path: /spec/template/spec/initContainers/0/command/2\n {8}value: exec node /app/app/migrate\.mjs /app/app/migrations\n}{}' "$TPL"
-if bash "$RENDER" candidate-a poly >/dev/null 2>&1; then
+if bash "$RENDER" candidate-a "$FN" >/dev/null 2>&1; then
   fail "render emitted an overlay despite the missing node-at-root migrate command (would crash-loop)"
 fi
 pass "render aborts fail-closed when the migrate command is absent"
 restore; BACKUPS=()
 
-echo "[6/6] declarative decommission: orphan overlay dir → --check red, --write prunes it"
-# Pick a disposable wizard-born node and simulate its catalog row leaving by
-# moving the catalog yaml aside. Its committed overlay dirs become orphans.
-# Restore the catalog row AND any pruned overlay dirs from git afterward so the
-# tree is left pristine regardless of assertion outcome.
-DISPOSABLE="poly"
+echo "[6/7] declarative decommission: orphan overlay dir → --check red, --write prunes it"
+# Simulate the fixture node's catalog row leaving by moving its catalog yaml aside;
+# its committed overlay dirs become orphans. Restore the row AND any pruned overlay
+# dirs from git afterward so the tree is left pristine regardless of assertion outcome.
+DISPOSABLE="$FN"
 DCAT="infra/catalog/$DISPOSABLE.yaml"
-[ -f "$DCAT" ] || fail "test fixture: $DCAT not found (pick another disposable wizard node)"
+[ -f "$DCAT" ] || fail "test fixture: $DCAT not found"
 DTMP="$(mktemp)"
 decommission_restore() {
   [ -f "$DCAT" ] || { [ -f "$DTMP" ] && mv "$DTMP" "$DCAT"; }
@@ -124,7 +154,7 @@ for env in candidate-a preview production; do
   [ ! -d "infra/k8s/overlays/$env/$DISPOSABLE" ] \
     || fail "--write did not prune the orphan overlay dir infra/k8s/overlays/$env/$DISPOSABLE"
 done
-for prot in operator node-template scheduler-worker; do
+for prot in $PROTECTED_NODES; do
   [ -d "infra/k8s/overlays/candidate-a/$prot" ] \
     || fail "--write WRONGLY pruned the protected hand-authored overlay $prot"
 done
@@ -141,28 +171,28 @@ echo "[7/7] ATOMIC_PER_ENV: a node dropping ONE env prunes only that env's overl
 # ENVS unconditionally (CANDIDATE_A_ALWAYS), so the env-membership verb removing a
 # node from ONE env left --check demanding the (correctly-deleted) overlay. The
 # fix filters by per-node `envs:` (wizard_nodes_for_env).
-PERENV="poly"
+PERENV="$FN"
 PCAT="infra/catalog/$PERENV.yaml"
-[ -f "$PCAT" ] || fail "test fixture: $PCAT not found (pick another disposable wizard node)"
+[ -f "$PCAT" ] || fail "test fixture: $PCAT not found"
 perenv_restore() { git checkout -q -- "$PCAT" infra/k8s/overlays 2>/dev/null || true; }
 trap 'perenv_restore; restore' EXIT
-# Drop candidate-a from poly' envs (it stays in preview + production).
+# Drop candidate-a from the fixture's envs (it stays in preview + production).
 perl -0pi -e 's/^(envs:\s*\[)\s*candidate-a\s*,\s*/$1/m' "$PCAT"
-grep -qE '^envs:\s*\[\s*preview\s*,\s*production\s*\]' "$PCAT" \
-  || fail "test setup: failed to drop candidate-a from poly' envs (unexpected envs shape)"
-# a: games still carries a committed candidate-a overlay it no longer claims → orphan → --check red.
+grep -qE '^envs:.*candidate-a' "$PCAT" \
+  && fail "test setup: failed to drop candidate-a from $PERENV envs"
+# a: the node still carries a committed candidate-a overlay it no longer claims → orphan → --check red.
 if bash "$RENDER" --check >/dev/null 2>&1; then
-  fail "--check passed while poly carried a candidate-a overlay it no longer claims (orphan not caught)"
+  fail "--check passed while $PERENV carried a candidate-a overlay it no longer claims (orphan not caught)"
 fi
 # b: --write prunes ONLY the dropped env's overlay; the retained envs keep theirs.
 bash "$RENDER" --write >/dev/null
 [ ! -d "infra/k8s/overlays/candidate-a/$PERENV" ] \
-  || fail "--write did not prune poly' dropped candidate-a overlay"
+  || fail "--write did not prune $PERENV's dropped candidate-a overlay"
 [ -d "infra/k8s/overlays/preview/$PERENV" ] \
-  || fail "--write wrongly pruned poly' preview overlay (still a member)"
+  || fail "--write wrongly pruned $PERENV's preview overlay (still a member)"
 [ -d "infra/k8s/overlays/production/$PERENV" ] \
-  || fail "--write wrongly pruned poly' production overlay (still a member)"
-# c: with poly out of candidate-a and its overlay gone, --check is GREEN — the
+  || fail "--write wrongly pruned $PERENV's production overlay (still a member)"
+# c: with the node out of candidate-a and its overlay gone, --check is GREEN — the
 #    old wizard_nodes × ENVS cartesian would fail here with "missing overlay".
 bash "$RENDER" --check >/dev/null \
   || fail "--check red after a clean per-env removal (the wizard_nodes × ENVS cartesian bug)"
