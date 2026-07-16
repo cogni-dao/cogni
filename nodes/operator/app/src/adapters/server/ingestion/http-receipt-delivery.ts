@@ -8,8 +8,8 @@
  *   scheduler-worker's `run-http` adapter (nodeId → nodeUrl lookup, Bearer SCHEDULER_API_TOKEN,
  *   retryable-vs-permanent status classification, structured error logging).
  * Scope: One factory (`createHttpReceiptDelivery`) → a `deliverReceipts(nodeId, source, receipts)`
- *   client. No DB here — the operator's own-node write stays in `receiveWebhook`; this adapter is
- *   ONLY for foreign (remote) nodes, which persist receipts in their OWN ledger
+ *   client for FOREIGN (remote) owning nodes. Does not touch a DB — the operator's own-node write
+ *   stays a local write in `receiveWebhook`; remote nodes persist receipts in their OWN ledger
  *   (NODE_WRITES_OWN_LEDGER). Receipt `Date` fields are serialized to ISO strings for the wire.
  * Invariants:
  *   - NO_DB_IN_DELIVERY: only fetch(); the owning node stamps its own node_id.

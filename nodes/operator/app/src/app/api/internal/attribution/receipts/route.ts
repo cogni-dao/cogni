@@ -5,9 +5,9 @@
  * Module: `@app/api/internal/attribution/receipts`
  * Purpose: Internal endpoint the operator gateway delivers normalized git/activity receipts to;
  *   the owning node persists them in its OWN attribution ledger.
- * Scope: Auth-protected POST — the operator's GitHub App observes git for all node repos, resolves
- *   repo -> owning node_id, normalizes the webhook to receipts, and DELIVERS them here. This is the
- *   node's only inbound write path for foreign-produced receipts. Mirrors graph-runs.create.internal.v1.
+ * Scope: Auth-protected POST that persists delivered receipts in this node's OWN ledger. Does not
+ *   run collection, selection, or identity resolution — persistence only; the operator resolves the
+ *   owning node and normalizes receipts upstream. Mirrors graph-runs.create.internal.v1.
  * Invariants:
  *   - INTERNAL_API_SHARED_SECRET: Requires Bearer SCHEDULER_API_TOKEN
  *   - NODE_WRITES_OWN_LEDGER: envelope `nodeId` MUST equal this node's own node_id; the node stamps

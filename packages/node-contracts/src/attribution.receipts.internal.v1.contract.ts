@@ -4,11 +4,10 @@
 /**
  * Module: `@contracts/attribution.receipts.internal.v1.contract`
  * Purpose: Wire format for internal attribution receipt delivery (operator gateway -> owning node app).
- * Scope: The operator's GitHub App observes git for all node repos, resolves repo -> owning
- *   node_id (source_refs profile, #1924), normalizes the webhook to receipts, and DELIVERS them
- *   to that node's `POST /api/internal/attribution/receipts`. The node persists them in its OWN
- *   ledger. Mirrors graph-runs.create.internal.v1 (scheduler-worker -> node). This module is the
- *   wire contract only; it does not implement the route, the delivery client, or business logic.
+ * Scope: Wire format only for POST /api/internal/attribution/receipts (operator gateway ->
+ *   owning node). Does not implement the route, the delivery client, or business logic; the
+ *   operator resolves repo -> owning node_id (source_refs, #1924) and the node persists receipts
+ *   in its OWN ledger. Mirrors graph-runs.create.internal.v1.
  * Invariants:
  *   - Bearer SCHEDULER_API_TOKEN required (MVP dispatch identity, same as graph dispatch;
  *     the per-node dispatch principal is the hardening — task.5033).
