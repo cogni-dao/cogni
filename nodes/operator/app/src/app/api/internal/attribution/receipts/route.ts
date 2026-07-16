@@ -90,9 +90,11 @@ export const POST = wrapRouteHandlerWithLogging(
       source: receipt.source,
       eventType: receipt.eventType,
       platformUserId: receipt.platformUserId,
-      platformLogin: receipt.platformLogin,
-      artifactUrl: receipt.artifactUrl,
-      metadata: receipt.metadata,
+      // wire fields are nullish (null | undefined); InsertReceiptParams is string | null
+      // under exactOptionalPropertyTypes — coerce undefined -> null.
+      platformLogin: receipt.platformLogin ?? null,
+      artifactUrl: receipt.artifactUrl ?? null,
+      metadata: receipt.metadata ?? null,
       payloadHash: receipt.payloadHash,
       producer: receipt.producer,
       producerVersion: receipt.producerVersion,
