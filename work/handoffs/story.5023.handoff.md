@@ -32,7 +32,7 @@ last_commit: 2248d770f0
 ## Current State
 
 - **Merged to main:** #1924 (route webhooks to owning node by `source_refs`), #1916 (node-addressable `/api/v1/nodes/[id]/attribution/*` reads).
-- **Phase 1 — #1946 (this branch, `derekg1729/attribution-operator-gateway-p1`):** node internal receipt seam + operator HTTP delivery + design doc. CI green; validated on candidate-a (🟡 scorecard on the PR); **enqueued to the merge queue** at handoff time — confirm it landed on `main`.
+- **Phase 1 — #1946 MERGED to `main`** (commit `6471076b`, 2026-07-16): node internal receipt seam + operator HTTP delivery + design doc. CI green; validated on candidate-a (🟡 scorecard on the PR — own-node no-regression + route live/gated proven; positive remote delivery deferred).
 - **PR #1944 (old "step-2") is CLOSED/superseded** — it extended the operator boot-time governance-sync to schedule each node's `CollectEpochWorkflow` on the shared `ledger-worker`. Wrong model: that worker writes to ONE `DATABASE_URL`, so a foreign node's epochs land in the operator's DB, not the node's. Do not revive it.
 - **Verified truth:** collect is currently Temporal-worker-bound (`services/scheduler-worker/src/ledger-worker.ts`); the node app is Next.js-only (`attributionStore` read-only). Operator epochs work; other nodes' don't — because nothing writes to *their* DB.
 - **Known gap (Phase 1):** positive *remote* delivery (operator sender → a foreign node's receiver → that node's DB) is UNPROVEN on candidate-a — no deployed foreign node exists in the operator app's `COGNI_NODE_ENDPOINTS` (an env this PR adds; unset on candidate-a). Own-node path is unchanged (no prod regression).
@@ -51,7 +51,7 @@ Invariant (must hold across all phases): **the node app is the SOLE writer of it
 
 ## Next Actions / Risks
 
-- [ ] Confirm #1946 landed on `main`; if it bounced the queue, re-check `gh pr checks 1946`.
+- [x] #1946 merged to main (commit 6471076b, 2026-07-16).
 - [ ] Provision `COGNI_NODE_ENDPOINTS` for the operator app + confirm a reachable foreign node, then prove positive remote delivery (the Phase-1 🟡 → 🟢).
 - [ ] Build R1 (steps above) as its own PR off `main`; validate on candidate-a → node's own `/gov/epoch` shows an epoch.
 - **Gotcha:** to prove routing/delivery, trigger a **real** GitHub-App webhook (a PR on a `cogni-test-org` repo) — never sign with the webhook secret yourself. candidate-a only receives webhooks from `cogni-test-org` (via `cogni-operator-test` App).
