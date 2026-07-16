@@ -169,6 +169,24 @@ write_files:
       k3s --version
       kubectl get nodes
 
+      # ── HONEST_ALLOCATABLE gate ──────────────────────────────
+      # The kubelet system-reserved arg (config.yaml written by write_files above)
+      # must actually be in effect — else k3s reports raw VM RAM as allocatable and
+      # over-commits node-app pods on this Compose-co-resident box, which is the
+      # fleet-502 readiness-cascade failure mode (2026-07-16; a legacy node that
+      # predated this arg ran with allocatable==capacity). A fresh node MUST boot
+      # honest; fail the bootstrap loudly rather than ship a node that lies about
+      # capacity. See docs/design/operator-fleet-safety.md SLA#1.
+      echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Asserting honest allocatable (system-reserved in effect)..."
+      CAP_MEM=$(kubectl get node -o jsonpath='{.items[0].status.capacity.memory}')
+      ALLOC_MEM=$(kubectl get node -o jsonpath='{.items[0].status.allocatable.memory}')
+      echo "  capacity.memory=$CAP_MEM allocatable.memory=$ALLOC_MEM (expect allocatable < capacity by ~${system_reserved_memory})"
+      if [ -z "$CAP_MEM" ] || [ "$CAP_MEM" = "$ALLOC_MEM" ]; then
+        echo "FATAL: allocatable.memory ($ALLOC_MEM) == capacity.memory ($CAP_MEM) — kubelet system-reserved NOT in effect."
+        echo "  The node would over-commit and cascade to a fleet-502. Check /etc/rancher/k3s/config.yaml kubelet-arg and that k3s read it at start."
+        exit 1
+      fi
+
       # ── Argo CD + ksops ──────────────────────────────────────
       echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Cloning repo for Argo CD manifests..."
       apt-get install -y git

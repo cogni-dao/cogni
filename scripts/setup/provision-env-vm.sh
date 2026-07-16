@@ -1963,22 +1963,44 @@ for APPSET_LOCAL in "${APPSET_LOCALS[@]}"; do
 done
 log_info "All ApplicationSets applied — Argo syncing from deploy/* branches"
 
-# Poll for apps to sync (up to 5 min)
-log_info "Waiting for Argo to sync apps..."
+# ── Provision health GATES (assert-or-fail, not apply-and-hope) ──────────────
+# A fresh provision must PROVE it is honest + self-pruning, else fail loudly. The
+# prior "≥3 apps Healthy" poll silently passed a control plane with no prune loop
+# (the 2026-07-16 fleet-502: a node born dishonest + a control plane with no root
+# app-of-apps → zombie pods that never pruned). These two gates would have caught it.
+
+# Gate 1 — honest allocatable: the kubelet system-reserved reservation must be in
+# effect on the fresh node (bootstrap.sh asserts it inline at first boot; re-assert
+# here from the provisioner so the gate is explicit, not only a bootstrap.ok
+# side-channel). See docs/design/operator-fleet-safety.md SLA#1.
+log_info "Gate 1: honest allocatable (system-reserved in effect)..."
+scp $SSH_OPTS "$REPO_ROOT/scripts/ci/assert-honest-allocatable.sh" root@"$VM_IP":/tmp/assert-honest-allocatable.sh
+if ! ssh $SSH_OPTS root@"$VM_IP" 'rc=0; bash /tmp/assert-honest-allocatable.sh || rc=$?; rm -f /tmp/assert-honest-allocatable.sh; exit $rc'; then
+  log_error "GATE FAILED: allocatable == capacity — kubelet system-reserved NOT in effect."
+  log_error "A fresh node must boot honest or it over-commits and cascades to a fleet-502."
+  log_error "Fix /etc/rancher/k3s/config.yaml kubelet-arg (system_reserved_memory) and reprovision."
+  exit 1
+fi
+
+# Gate 2 — control-plane root app-of-apps: the per-env seed
+# (cogni-${DEPLOY_ENV}-control-plane) is what continuously reconciles the AppSet
+# layer WITH PRUNE. Without it Synced/Healthy, decommissions never prune. Assert it
+# explicitly (up to 5 min) — no "some apps healthy" fallback.
+ROOT_APP="cogni-${DEPLOY_ENV}-control-plane"
+log_info "Gate 2: control-plane root app-of-apps (${ROOT_APP}) Synced/Healthy..."
+ROOT_STATE=""
 for attempt in $(seq 1 30); do
-  HEALTHY=$(ssh $SSH_OPTS root@"$VM_IP" 'kubectl -n argocd get applications -o jsonpath="{range .items[*]}{.status.health.status}{\" \"}{end}"' 2>/dev/null)
-  HEALTHY_COUNT=$(echo "$HEALTHY" | tr ' ' '\n' | grep -c "Healthy" || true)
-  TOTAL=$(echo "$HEALTHY" | tr ' ' '\n' | grep -c '.' || true)
-  log_info "  Apps healthy: ${HEALTHY_COUNT}/${TOTAL} (${attempt}0s)"
-  if [[ "$HEALTHY_COUNT" -ge 3 ]]; then
-    log_info "Core apps healthy!"
-    break
-  fi
-  if [[ $attempt -eq 30 ]]; then
-    log_warn "Timeout waiting for apps — check scorecard for details"
-  fi
+  ROOT_STATE=$(ssh $SSH_OPTS root@"$VM_IP" "kubectl -n argocd get application ${ROOT_APP} -o jsonpath='{.status.sync.status}/{.status.health.status}'" 2>/dev/null || true)
+  log_info "  ${ROOT_APP}: ${ROOT_STATE:-<absent>} (${attempt}0s)"
+  [[ "$ROOT_STATE" == "Synced/Healthy" ]] && break
   sleep 10
 done
+if [[ "$ROOT_STATE" != "Synced/Healthy" ]]; then
+  log_error "GATE FAILED: ${ROOT_APP} is '${ROOT_STATE:-absent}', not Synced/Healthy."
+  log_error "The env would have no continuous prune loop — decommissions leave orphaned pods."
+  exit 1
+fi
+log_info "Both gates PASS — node is honest and the control-plane prune loop is live."
 
 # ══════════════════════════════════════════════════════════════
 # Phase 8: Deployment Status Report
