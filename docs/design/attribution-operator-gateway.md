@@ -59,11 +59,11 @@ The receipt seam makes source placement an **infra decision, never an attributio
 
 Same `ingestion_receipts` shape, same downstream pipeline. New source = one ingestion adapter → posts to the seam.
 
-| source | initial placement | status |
-| ------ | ----------------- | ------ |
-| **git** (source 1) | operator-gatewayed (the one signal a node cannot self-observe) | this design |
-| dolt | node-local **or** operator-gatewayed (undecided) | roadmap |
-| slack / notion / linear | likely operator-gatewayed (consolidate creds) **or** node-local | roadmap |
+| source                  | initial placement                                               | status      |
+| ----------------------- | --------------------------------------------------------------- | ----------- |
+| **git** (source 1)      | operator-gatewayed (the one signal a node cannot self-observe)  | this design |
+| dolt                    | node-local **or** operator-gatewayed (undecided)                | roadmap     |
+| slack / notion / linear | likely operator-gatewayed (consolidate creds) **or** node-local | roadmap     |
 
 ## Profile is the ingestion SSOT (partial today)
 
