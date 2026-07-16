@@ -1762,35 +1762,22 @@ async function seedOpenEpoch(
 }
 
 /**
- * Fail-closed prod-safety guard. This seed writes FABRICATED attribution data
- * (fake contributors, epochs, receipts) — it must NEVER touch a production
- * ledger, where the same tables drive real token distribution to real people.
+ * Prod-safety: this seed writes FABRICATED attribution data (fake contributors,
+ * epochs, receipts) that on a real ledger would drive token distribution to real
+ * people. It is a LOCAL-DEV tool ONLY.
  *
- * The dangerous signal is a NON-LOCAL database (a deployed ledger). The operator
- * node_id is used BOTH locally (dev DB, safe) and on prod (prod DB, dangerous),
- * so the guard keys on the DB host, not the node identity alone.
+ * It refuses any non-local database with NO escape hatch — deliberately no env
+ * override, no ack flag, no allowlist. That absence is the point: there is no
+ * code path anywhere that can point this seed at a deployed ledger (candidate-a,
+ * preview, prod), so no laptop, CI job, or future agent can misuse it. Seeding a
+ * deployed test node for validation is a rare, human-driven act done by hand over
+ * SSH — never encoded here.
  *
- * Rules (deny by default):
- *  - LOCAL database (localhost / 127.0.0.1 / postgres) → allowed freely, any
- *    node identity. The normal dev loop (and the finalize→mint→claim harness).
- *  - NON-LOCAL database + a PRODUCTION node identity → refused UNCONDITIONALLY.
- *    No env, no flag. Fabricating into a real prod ledger is never valid.
- *  - NON-LOCAL database + any other node → refused unless the caller EXPLICITLY
- *    acknowledges the exact target by setting `SEED_TARGET_NODE_ID` to the
- *    resolved node_id. You cannot fat-finger a prod DB URL and corrupt it, and
- *    the ack must match the repo-spec node_id at cwd (can't point boop's ack at
- *    the wrong DB).
- *
- * candidate-a validation of a THROWAWAY test node (e.g. boop, cogni-test-org)
- * takes the ack path: run with that node's repo-spec at cwd + its service DB URL
- * + `SEED_TARGET_NODE_ID=<that node_id>`.
+ * (In-cluster execution sees the DB as `postgres`/localhost, so a human on the VM
+ * can still run it manually; the guard blocks the remote/automated vector — a
+ * deployed DB URL supplied from outside.)
  */
-const PRODUCTION_NODE_IDS = new Set<string>([
-  // operator (cogni-template) — the live prod control plane
-  "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d",
-]);
-
-function assertSeedTargetIsSafe(dbUrl: string): void {
+function assertLocalDbOnly(dbUrl: string): void {
   let host = "";
   try {
     host = new URL(dbUrl).hostname;
@@ -1798,28 +1785,13 @@ function assertSeedTargetIsSafe(dbUrl: string): void {
     throw new Error("REFUSING TO SEED: unparseable DATABASE_SERVICE_URL host");
   }
   const isLocal = ["localhost", "127.0.0.1", "::1", "postgres"].includes(host);
-  if (isLocal) return; // normal dev loop — any node identity is fine locally
-
-  // NON-LOCAL (deployed) database from here — deny by default.
-  if (PRODUCTION_NODE_IDS.has(NODE_ID)) {
+  if (!isLocal) {
     throw new Error(
-      `REFUSING TO SEED: host '${host}' is a deployed DB and node_id ${NODE_ID} ` +
-        "is a PRODUCTION node. This seed writes fabricated attribution data and " +
-        "must never touch a prod ledger — no override exists."
+      `REFUSING TO SEED: host '${host}' is not local. This seed is a LOCAL-DEV ` +
+        "tool only and never runs against a deployed ledger — there is no " +
+        "override by design. Seed a deployed test node manually over SSH."
     );
   }
-  const ack = process.env.SEED_TARGET_NODE_ID;
-  if (ack !== NODE_ID) {
-    throw new Error(
-      `REFUSING TO SEED: database host '${host}' is NON-LOCAL. Seeding a ` +
-        "deployed DB requires an explicit, node-pinned acknowledgement: set " +
-        `SEED_TARGET_NODE_ID=${NODE_ID} (must equal the repo-spec node_id at ` +
-        `cwd). Got SEED_TARGET_NODE_ID=${ack ?? "<unset>"}.`
-    );
-  }
-  console.log(
-    `⚠️  Seeding NON-LOCAL host '${host}' for node ${NODE_ID} (ack present).`
-  );
 }
 
 async function main(): Promise<void> {
@@ -1828,7 +1800,7 @@ async function main(): Promise<void> {
     throw new Error("DATABASE_SERVICE_URL not set in .env.local");
   }
 
-  assertSeedTargetIsSafe(dbUrl);
+  assertLocalDbOnly(dbUrl);
 
   console.log("🌱 Dev Seed: Claimant-Aware Attribution Data");
   console.log(`   Node: ${NODE_ID}`);
