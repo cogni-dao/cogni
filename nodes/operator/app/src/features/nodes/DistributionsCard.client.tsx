@@ -31,7 +31,7 @@ import {
   CUMULATIVE_MERKLE_DISTRIBUTOR_ABI,
   CUMULATIVE_MERKLE_DISTRIBUTOR_BYTECODE,
 } from "@cogni/cogni-contracts";
-import { ExternalLink, Loader2 } from "lucide-react";
+import { CheckCircle2, ExternalLink, Info, Loader2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { type ReactElement, useState } from "react";
 import {
@@ -42,7 +42,14 @@ import {
   useWalletClient,
 } from "wagmi";
 
-import { Button, SectionCard, WalletConnectButton } from "@/components";
+import {
+  Alert,
+  AlertDescription,
+  AlertTitle,
+  Button,
+  SectionCard,
+  WalletConnectButton,
+} from "@/components";
 
 interface Props {
   readonly nodeId: string;
@@ -105,6 +112,13 @@ export function DistributionsCard({
 
   const busy = phase !== "idle" && phase !== "done";
   const onCorrectChain = chainId != null && walletChainId === chainId;
+  // Activation succeeded: the distributor is deployed + owned by the DAO. What
+  // remains is a human/CI step (merge the repo-spec PR, re-flight), so we swap
+  // the "Activate" primary CTA for a "View activation PR" CTA. Cover both the
+  // fresh pr_opened path and the idempotent already_deployed replay.
+  const activationPrUrl = result?.kind === "pr_opened" ? result.prUrl : null;
+  const isActivated =
+    result?.kind === "pr_opened" || result?.kind === "already_deployed";
 
   const recordActivation = async (body: Record<string, unknown>) => {
     const response = await fetch(
@@ -238,22 +252,40 @@ export function DistributionsCard({
         finalization reuses this ONE distributor for every epoch.
       </p>
 
-      {result?.kind === "pr_opened" ? (
-        <a
-          href={result.prUrl}
-          target="_blank"
-          rel="noreferrer"
-          className="inline-flex items-center gap-1.5 text-primary text-sm hover:underline"
-        >
-          Activation PR opened
-          <ExternalLink className="size-3.5" />
-        </a>
-      ) : null}
-      {result?.kind === "already_deployed" ? (
-        <p className="text-muted-foreground text-sm">
-          Distributor already deployed: <code>{result.distributorAddress}</code>{" "}
-          — nothing to do.
-        </p>
+      <p className="flex items-start gap-1.5 text-muted-foreground text-xs">
+        <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+        <span>
+          The deploy and ownership-transfer steps are contract calls, not
+          payments — your wallet may show{" "}
+          <span className="font-medium">&ldquo;Sending 0 ETH&rdquo;</span> or
+          &ldquo;No changes,&rdquo; which is expected. No tokens or ETH leave
+          your wallet; you only pay gas.
+        </span>
+      </p>
+
+      {isActivated ? (
+        <Alert variant="success">
+          <CheckCircle2 className="size-4" />
+          <AlertTitle>Distributor deployed & owned by the DAO</AlertTitle>
+          <AlertDescription>
+            {result?.kind === "already_deployed" ? (
+              <p>
+                Distributor recorded at <code>{result.distributorAddress}</code>
+                .
+              </p>
+            ) : null}
+            <p>
+              One step left to make it live:{" "}
+              <span className="font-medium">
+                merge the activation PR, then re-flight the node.
+              </span>{" "}
+              The scheduler-worker reads the distributor address from the baked{" "}
+              <code>.cogni/repo-spec.yaml</code>, so epoch finalization won't
+              see this distributor until the PR is merged and the node is
+              re-flighted.
+            </p>
+          </AlertDescription>
+        </Alert>
       ) : null}
       {result?.kind === "no_changes" ? (
         <p className="text-muted-foreground text-sm">
@@ -273,15 +305,31 @@ export function DistributionsCard({
             Switch to chain {chainId}
           </Button>
         ) : null}
-        <Button
-          type="button"
-          onClick={handleActivate}
-          disabled={busy || !isConnected || !onCorrectChain}
-          className="gap-2"
-        >
-          {busy ? <Loader2 className="size-4 animate-spin" /> : null}
-          {phaseLabel[phase]}
-        </Button>
+        {isActivated ? (
+          activationPrUrl ? (
+            <Button asChild rightIcon={<ExternalLink />}>
+              <a href={activationPrUrl} target="_blank" rel="noreferrer">
+                View activation PR
+              </a>
+            </Button>
+          ) : repoSpecUrl ? (
+            <Button asChild rightIcon={<ExternalLink />}>
+              <a href={repoSpecUrl} target="_blank" rel="noreferrer">
+                View recorded distributor
+              </a>
+            </Button>
+          ) : null
+        ) : (
+          <Button
+            type="button"
+            onClick={handleActivate}
+            disabled={busy || !isConnected || !onCorrectChain}
+            className="gap-2"
+          >
+            {busy ? <Loader2 className="size-4 animate-spin" /> : null}
+            {phaseLabel[phase]}
+          </Button>
+        )}
         {repoSpecUrl ? (
           <a
             href={repoSpecUrl}
