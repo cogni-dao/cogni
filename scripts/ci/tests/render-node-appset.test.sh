@@ -87,10 +87,10 @@ pass "--check deterministic across 5 runs"
 
 # 4. FAIL-CLOSED — a deployable row missing `envs:` aborts the env-set render
 # (no silent all-env fallback). Point the renderer at a fixture catalog whose
-# oss row has had `envs:` stripped.
+# poly row has had `envs:` stripped.
 tmp_catalog="$(mktemp -d)"
 cp infra/catalog/*.yaml "$tmp_catalog/"
-yq -i 'del(.envs)' "$tmp_catalog/oss.yaml"
+yq -i 'del(.envs)' "$tmp_catalog/poly.yaml"
 set +e
 out="$(CATALOG_DIR="$tmp_catalog" bash "$RENDER" --check 2>&1)"
 rc=$?

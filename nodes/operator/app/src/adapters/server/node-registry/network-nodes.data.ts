@@ -57,10 +57,5 @@ export const NETWORK_NODES: readonly NetworkNode[] = [
   },
   { name: "node-template", nodeId: "b927a9dd-6132-4fc9-a51e-e3cee2568e3c" },
   { name: "beacon", nodeId: "f97f68f2-8406-4a3b-b5a9-d579b779f19d" },
-  { name: "blue", nodeId: "da3777a6-1f33-463a-a73c-70924806da50" },
-  { name: "habitat", nodeId: "dbf1eeb7-85d4-4fd5-a4fe-da85c668bb03" },
-  { name: "oss", nodeId: "4d7ffb44-fc26-4a55-864f-eff9fbc8aba1" },
-  { name: "red", nodeId: "895147d5-2ad9-4b2b-aeaa-f2669999fdce" },
-  { name: "games", nodeId: "baa9148e-3245-4f7d-976b-292fd049ca38" },
   { name: "poly", nodeId: "4b06359a-a859-4399-888e-a8c7a6696f7e" },
 ];
