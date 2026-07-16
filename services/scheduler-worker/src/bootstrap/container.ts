@@ -103,6 +103,18 @@ function parseNodeEndpoints(raw: string): Map<string, string> {
 }
 
 /**
+ * Read a public EVM address from env for the env-scoped distributions activation
+ * seam. Returns a 0x-prefixed 40-hex address, or null when unset OR malformed —
+ * a bad value fails to the baked repo-spec rather than activating a garbage
+ * address. Checksum-agnostic (the on-chain/read paths lowercase as needed).
+ */
+function envEvmAddress(name: string): string | null {
+  const raw = process.env[name]?.trim();
+  if (!raw) return null;
+  return /^0x[0-9a-fA-F]{40}$/.test(raw) ? raw : null;
+}
+
+/**
  * Read and parse .cogni/repo-spec.yaml from the baked-in location.
  * In Docker: /app/.cogni/repo-spec.yaml (COPY'd in Dockerfile).
  * In dev: resolved relative to process.cwd() (repo root).
@@ -142,13 +154,28 @@ function loadRepoSpecIdentity(): {
   // GovernanceERC20 token address — present only once the node has activated
   // distributions (distributions.status: active). Null otherwise; the cumulative
   // root build is skipped until activation (off-chain finalize still runs).
+  //
+  // Env-scoped activation seam: the distribution config is otherwise baked into
+  // the image's repo-spec, so activating on a deployed env means a repo-spec
+  // commit + re-flight (the worker never sees a distributor until then). An env
+  // override lets a deployed env activate the R3 build as CONFIG, not a rebuild —
+  // candidate-a points at throwaway test contracts, prod at the real DAO, from
+  // the same image. Both addresses are public (no secret). Falls back to the
+  // baked repo-spec when unset; a malformed address is ignored (fail to spec).
   const distributionConfig = extractDaoTokenDistributionConfig(spec);
-  const tokenAddress = distributionConfig?.tokenAddress ?? null;
+  const tokenAddress =
+    envEvmAddress("DISTRIBUTIONS_TOKEN_CONTRACT") ??
+    distributionConfig?.tokenAddress ??
+    null;
   // The ONE per-node cumulative distributor recorded at R2 activation. Read
   // directly from repo-spec (NOT gated on distributions.status) so the FIRST
   // epoch — which has no prior/current manifest — can still resolve the contract
-  // in ledger.ts's finalize fallback chain. Null until R2 records it.
-  const distributorAddress = extractDistributorAddress(spec) ?? null;
+  // in ledger.ts's finalize fallback chain. Null until R2 records it (or the env
+  // seam supplies it for a deployed rehearsal).
+  const distributorAddress =
+    envEvmAddress("DISTRIBUTIONS_DISTRIBUTOR_ADDRESS") ??
+    extractDistributorAddress(spec) ??
+    null;
   // Collect excluded logins from all activity sources
   const excludedLogins = ledgerConfig
     ? Object.values(ledgerConfig.activitySources).flatMap(
