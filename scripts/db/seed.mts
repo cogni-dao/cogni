@@ -79,7 +79,19 @@ const WEIGHT_CONFIG: Record<string, number> = {
   "github:review_submitted": 0,
   "github:issue_closed": 0,
 };
-const SEED_APPROVERS = ["0x070075F1389Ae1182aBac722B36CA12285d0c949"];
+// The pinned approver set for seeded review epochs. Overridable via the
+// SEED_APPROVERS env var (comma-separated addresses) so the local finalize→
+// mint→claim harness (scripts/e2e/finalize-mint-claim.ts) can pin an anvil
+// account whose key it holds and sign the EIP-712 finalize statement with no
+// MetaMask. The approverSetHash the seed pins is computed from THIS list, so an
+// override stays internally consistent. Defaults to the historical seed wallet.
+const SEED_APPROVERS = (process.env.SEED_APPROVERS ?? "")
+  .split(",")
+  .map((a) => a.trim())
+  .filter(Boolean);
+if (SEED_APPROVERS.length === 0) {
+  SEED_APPROVERS.push("0x070075F1389Ae1182aBac722B36CA12285d0c949");
+}
 const ALLOCATION_ALGO_REF = deriveAllocationAlgoRef("cogni-v0.0");
 const CLAIMANT_RESOLVER_REF = "cogni.default-author.v0";
 const CLAIMANT_ALGO_REF = "default-author-v0";
@@ -151,6 +163,17 @@ const COGNI = unlinkedContributor({
   platformUserId: "207977700",
   login: "Cogni-1729",
   name: "Cogni (AI Agent)",
+});
+
+// flock-leader (Cogni's external agent account). Seeded UNLINKED so the walk
+// distribution e2e demonstrates conservation: a contributor with no
+// wallet-resolved binding is recorded + visible but excluded from this epoch's
+// mint (pending until a wallet is linked) — vs derekg1729, who links a wallet
+// in-app and claims.
+const FLOCK = unlinkedContributor({
+  platformUserId: "295942454",
+  login: "flock-leader",
+  name: "Flock Leader (Agent)",
 });
 
 const LINKED_CONTRIBUTORS = [ALICE, BEN] as const;
@@ -455,6 +478,12 @@ const EPOCH_3: SeedEpochDef = {
       reviewDatabaseId: 3811406373,
       title: "Review: approve PR #435",
       contributor: DEREK,
+      eventTime: daysBefore(WINDOW_3.periodEnd, 1),
+    }),
+    prEvent({
+      number: 489,
+      title: "feat(walk): cumulative distributor claim path (flock-leader)",
+      contributor: FLOCK,
       eventTime: daysBefore(WINDOW_3.periodEnd, 1),
     }),
   ],
@@ -1732,11 +1761,46 @@ async function seedOpenEpoch(
   );
 }
 
+/**
+ * Prod-safety: this seed writes FABRICATED attribution data (fake contributors,
+ * epochs, receipts) that on a real ledger would drive token distribution to real
+ * people. It is a LOCAL-DEV tool ONLY.
+ *
+ * It refuses any non-local database with NO escape hatch — deliberately no env
+ * override, no ack flag, no allowlist. That absence is the point: there is no
+ * code path anywhere that can point this seed at a deployed ledger (candidate-a,
+ * preview, prod), so no laptop, CI job, or future agent can misuse it. Seeding a
+ * deployed test node for validation is a rare, human-driven act done by hand over
+ * SSH — never encoded here.
+ *
+ * (In-cluster execution sees the DB as `postgres`/localhost, so a human on the VM
+ * can still run it manually; the guard blocks the remote/automated vector — a
+ * deployed DB URL supplied from outside.)
+ */
+function assertLocalDbOnly(dbUrl: string): void {
+  let host = "";
+  try {
+    host = new URL(dbUrl).hostname;
+  } catch {
+    throw new Error("REFUSING TO SEED: unparseable DATABASE_SERVICE_URL host");
+  }
+  const isLocal = ["localhost", "127.0.0.1", "::1", "postgres"].includes(host);
+  if (!isLocal) {
+    throw new Error(
+      `REFUSING TO SEED: host '${host}' is not local. This seed is a LOCAL-DEV ` +
+        "tool only and never runs against a deployed ledger — there is no " +
+        "override by design. Seed a deployed test node manually over SSH."
+    );
+  }
+}
+
 async function main(): Promise<void> {
   const dbUrl = process.env.DATABASE_SERVICE_URL;
   if (!dbUrl) {
     throw new Error("DATABASE_SERVICE_URL not set in .env.local");
   }
+
+  assertLocalDbOnly(dbUrl);
 
   console.log("🌱 Dev Seed: Claimant-Aware Attribution Data");
   console.log(`   Node: ${NODE_ID}`);

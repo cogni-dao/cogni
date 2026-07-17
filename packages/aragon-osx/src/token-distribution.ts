@@ -10,8 +10,10 @@
  * - TOKEN_DISTRIBUTION_DETERMINISTIC: same inputs produce identical leaves, proofs, and root.
  * - TOKEN_DISTRIBUTION_CONSERVES_AMOUNT: all positive-token distributions allocate exactly distributionAmount.
  * - TOKEN_DISTRIBUTION_SCOPE_BOUND: manifests carry node, scope, and statement hash lineage.
+ * - CUMULATIVE_LEAF_NO_INDEX: cumulative leaves are keccak256(abi.encodePacked(address, uint256 cumulativeAmount)) — NO index, matching the vendored 1inch CumulativeMerkleDrop.
+ * - CUMULATIVE_CONSERVES_SUPPLY: a cumulative distribution's leaves sum to the TOTAL supply distributed to date (prior cumulative + this epoch's delta), not just this epoch.
  * Side-effects: none
- * Links: docs/spec/attribution-pipeline-overview.md
+ * Links: docs/spec/attribution-pipeline-overview.md, packages/cogni-contracts/src/cumulative-merkle-distributor/
  * @public
  */
 
@@ -206,6 +208,308 @@ export function verifyDaoTokenMerkleProof(
   return SimpleMerkleTree.verify(merkleRoot, leafHash, [...proof]);
 }
 
+// ---------------------------------------------------------------------------
+// Cumulative distribution (1inch CumulativeMerkleDrop shape — R3)
+//
+// ONE distributor per node, deployed once, mutable owner-set root, cumulative
+// leaves. Per epoch the DAO mints only the DELTA into the existing distributor
+// and calls setMerkleRoot(newCumulativeRoot). A claimant's leaf carries their
+// cumulative-earned-to-date so a single claim covers all unclaimed epochs.
+// ---------------------------------------------------------------------------
+
+/**
+ * Prior cumulative balance for one account — the sum of all token amounts the
+ * account has been allocated across every FINALIZED epoch BEFORE the current one.
+ * Sourced from the most-recent persisted cumulative manifest's leaves.
+ */
+export interface PriorCumulativeBalance {
+  readonly account: HexAddress;
+  /** Cumulative tokens (base units) allocated to this account through prior epochs. */
+  readonly cumulativeAmount: bigint;
+}
+
+/**
+ * One account's NEW token delta for THIS epoch (base units), already
+ * wallet-resolved. Deltas come from exploding the signed statement lines to
+ * claimant wallets and largest-remainder rounding against the epoch's mint
+ * delta (the per-epoch poolTotal in base units).
+ */
+export interface CumulativeEpochDelta {
+  readonly claimantKey: string;
+  readonly account: HexAddress;
+  /** Token amount NEWLY earned this epoch (base units, may be 0 → no-op). */
+  readonly deltaAmount: bigint;
+  readonly receiptIds?: readonly string[];
+}
+
+export interface DaoTokenCumulativeDistributionInput {
+  readonly distributionId: string;
+  readonly nodeId: string;
+  readonly scopeId: string;
+  readonly statementHash: string;
+  readonly chainId: number;
+  readonly tokenAddress: HexAddress;
+  /** Per-account cumulative balances through all PRIOR finalized epochs. */
+  readonly priorCumulative: readonly PriorCumulativeBalance[];
+  /** This epoch's per-account NEW deltas (wallet-resolved, base units). */
+  readonly epochDeltas: readonly CumulativeEpochDelta[];
+}
+
+export interface DaoTokenCumulativeLeaf {
+  /**
+   * Stable per-account index in the (sorted) leaf set. The 1inch leaf preimage
+   * does NOT include this — it exists only for persistence/UI ordering.
+   */
+  readonly index: number;
+  readonly claimantKey: string;
+  readonly account: HexAddress;
+  /** Cumulative tokens (base units) earned through THIS epoch = prior + delta. */
+  readonly cumulativeAmount: bigint;
+  /** Tokens newly earned in THIS epoch (base units). */
+  readonly deltaAmount: bigint;
+  readonly receiptIds: readonly string[];
+  readonly leafHash: Hex;
+  readonly proof: readonly Hex[];
+}
+
+export interface DaoTokenCumulativeDistribution {
+  readonly kind: "cogni.dao_ownership_token_distribution.cumulative.v0";
+  readonly merkleTreeLibrary: "openzeppelin/merkle-tree@1";
+  readonly claimContractPattern: "1inch.cumulative-merkle-drop.v1";
+  readonly distributionId: string;
+  readonly nodeId: string;
+  readonly scopeId: string;
+  readonly statementHash: string;
+  readonly chainId: number;
+  readonly tokenAddress: HexAddress;
+  /**
+   * The new cumulative merkle root to pass to `setMerkleRoot` on the existing
+   * per-node distributor.
+   */
+  readonly merkleRoot: Hex;
+  /**
+   * Per-epoch MINT delta (base units) = sum of every account's deltaAmount =
+   * this epoch's poolTotal in base units. The DAO mints exactly this into the
+   * existing distributor; the cumulative root then governs the larger claim set.
+   */
+  readonly mintDelta: bigint;
+  /**
+   * Total supply distributed to date (base units) = sum of every leaf's
+   * cumulativeAmount = prior cumulative supply + mintDelta. CUMULATIVE_CONSERVES_SUPPLY.
+   */
+  readonly cumulativeTotal: bigint;
+  readonly leaves: readonly DaoTokenCumulativeLeaf[];
+}
+
+/**
+ * Cumulative leaf preimage — `keccak256(abi.encodePacked(address, uint256))`.
+ *
+ * This is the 1inch CumulativeMerkleDrop leaf: NO index (the differentiator vs
+ * the Uniswap-v1 leaf `keccak256(index, account, amount)`). Proof verification
+ * uses sorted sibling pairs (OZ-compatible), identical to the legacy tree.
+ */
+export function hashCumulativeClaimLeaf(
+  account: HexAddress,
+  cumulativeAmount: bigint
+): Hex {
+  if (!isAddress(account)) {
+    throw new RangeError("cumulative leaf account must be a valid EVM address");
+  }
+  if (cumulativeAmount < 0n) {
+    throw new RangeError("cumulative amount must be non-negative");
+  }
+  return keccak256(
+    encodePacked(["address", "uint256"], [account, cumulativeAmount])
+  );
+}
+
+/**
+ * Build the cumulative DAO-token distribution for one epoch finalization.
+ *
+ * Folds prior per-account cumulative balances with THIS epoch's per-account
+ * deltas, emits cumulative leaves (`prior + delta`), the new cumulative merkle
+ * root for `setMerkleRoot`, and the per-epoch `mintDelta` the DAO mints into the
+ * existing distributor.
+ *
+ * - Accounts with zero cumulative-to-date (no prior balance AND zero delta) are
+ *   dropped (no leaf).
+ * - `mintDelta` is the sum of all positive deltas; callers MUST mint exactly
+ *   this into the distributor before/with the `setMerkleRoot` call so the
+ *   distributor can cover the new claims.
+ * - CUMULATIVE_CONSERVES_SUPPLY: `cumulativeTotal === priorCumulativeTotal + mintDelta`.
+ */
+export function buildDaoTokenCumulativeDistribution(
+  input: DaoTokenCumulativeDistributionInput
+): DaoTokenCumulativeDistribution {
+  validateManifestIdentity(input);
+
+  // Fold prior + delta per account (lowercased address key for case-insensitive
+  // matching; the checksummed/first-seen address is preserved for the leaf).
+  const byAccount = new Map<
+    string,
+    {
+      account: HexAddress;
+      claimantKey: string;
+      prior: bigint;
+      delta: bigint;
+      receiptIds: Set<string>;
+    }
+  >();
+
+  let priorCumulativeTotal = 0n;
+  for (const prior of input.priorCumulative) {
+    if (!isAddress(prior.account)) {
+      throw new RangeError(`invalid prior cumulative account ${prior.account}`);
+    }
+    if (prior.cumulativeAmount < 0n) {
+      throw new RangeError("prior cumulativeAmount must be non-negative");
+    }
+    priorCumulativeTotal += prior.cumulativeAmount;
+    const key = prior.account.toLowerCase();
+    const existing = byAccount.get(key);
+    if (existing) {
+      existing.prior += prior.cumulativeAmount;
+    } else {
+      byAccount.set(key, {
+        account: prior.account,
+        claimantKey: "",
+        prior: prior.cumulativeAmount,
+        delta: 0n,
+        receiptIds: new Set(),
+      });
+    }
+  }
+
+  let mintDelta = 0n;
+  for (const epochDelta of input.epochDeltas) {
+    if (!isAddress(epochDelta.account)) {
+      throw new RangeError(
+        `invalid epoch delta account for claimant ${epochDelta.claimantKey}`
+      );
+    }
+    if (epochDelta.deltaAmount < 0n) {
+      throw new RangeError(
+        `negative deltaAmount for claimant ${epochDelta.claimantKey}`
+      );
+    }
+    if (epochDelta.deltaAmount === 0n) {
+      continue;
+    }
+    mintDelta += epochDelta.deltaAmount;
+    const key = epochDelta.account.toLowerCase();
+    const existing = byAccount.get(key);
+    if (existing) {
+      existing.delta += epochDelta.deltaAmount;
+      if (existing.claimantKey === "") {
+        existing.claimantKey = epochDelta.claimantKey;
+      }
+      for (const receiptId of epochDelta.receiptIds ?? []) {
+        existing.receiptIds.add(receiptId);
+      }
+    } else {
+      byAccount.set(key, {
+        account: epochDelta.account,
+        claimantKey: epochDelta.claimantKey,
+        prior: 0n,
+        delta: epochDelta.deltaAmount,
+        receiptIds: new Set(epochDelta.receiptIds ?? []),
+      });
+    }
+  }
+
+  // Cumulative = prior + delta; drop accounts that net to zero.
+  const folded = [...byAccount.values()]
+    .map((entry) => ({
+      account: entry.account,
+      claimantKey:
+        entry.claimantKey || `account:${entry.account.toLowerCase()}`,
+      cumulativeAmount: entry.prior + entry.delta,
+      deltaAmount: entry.delta,
+      receiptIds: [...entry.receiptIds].sort(),
+    }))
+    .filter((entry) => entry.cumulativeAmount > 0n)
+    .sort((a, b) =>
+      a.account.toLowerCase().localeCompare(b.account.toLowerCase())
+    );
+
+  if (folded.length === 0) {
+    throw new RangeError(
+      "cumulative distribution requires at least one account with positive cumulative balance"
+    );
+  }
+
+  const leavesWithoutProof = folded.map((entry, index) => ({
+    index,
+    claimantKey: entry.claimantKey,
+    account: entry.account,
+    cumulativeAmount: entry.cumulativeAmount,
+    deltaAmount: entry.deltaAmount,
+    receiptIds: entry.receiptIds,
+    leafHash: hashCumulativeClaimLeaf(entry.account, entry.cumulativeAmount),
+  }));
+
+  const tree = SimpleMerkleTree.of(
+    leavesWithoutProof.map((leaf) => leaf.leafHash)
+  );
+  const leaves = leavesWithoutProof.map((leaf, index) => ({
+    ...leaf,
+    proof: tree.getProof(index) as Hex[],
+  }));
+
+  const cumulativeTotal = leaves.reduce(
+    (sum, leaf) => sum + leaf.cumulativeAmount,
+    0n
+  );
+
+  // CUMULATIVE_CONSERVES_SUPPLY: prior supply + this epoch's mint delta.
+  if (cumulativeTotal !== priorCumulativeTotal + mintDelta) {
+    throw new Error(
+      `cumulative supply invariant violated: cumulativeTotal=${cumulativeTotal} !== priorCumulativeTotal=${priorCumulativeTotal} + mintDelta=${mintDelta}`
+    );
+  }
+
+  return {
+    kind: "cogni.dao_ownership_token_distribution.cumulative.v0",
+    merkleTreeLibrary: "openzeppelin/merkle-tree@1",
+    claimContractPattern: "1inch.cumulative-merkle-drop.v1",
+    distributionId: input.distributionId,
+    nodeId: input.nodeId,
+    scopeId: input.scopeId,
+    statementHash: input.statementHash,
+    chainId: input.chainId,
+    tokenAddress: input.tokenAddress,
+    merkleRoot: (tree.root ?? ZERO_ROOT) as Hex,
+    mintDelta,
+    cumulativeTotal,
+    leaves,
+  };
+}
+
+/**
+ * Largest-remainder split of this epoch's mint delta (base units) across
+ * wallet-resolved allocations weighted by signed credit amounts — the cumulative
+ * analogue of `allocateTokenAmounts`. Returns per-account epoch deltas suitable
+ * for {@link buildDaoTokenCumulativeDistribution}. Sums to exactly `mintDelta`.
+ */
+export function splitEpochDeltaByCredits(
+  allocations: readonly DaoTokenDistributionAllocation[],
+  mintDelta: bigint
+): CumulativeEpochDelta[] {
+  if (mintDelta <= 0n) {
+    throw new RangeError("mintDelta must be positive");
+  }
+  const grouped = groupAllocations(allocations);
+  if (grouped.length === 0) {
+    throw new RangeError("at least one positive allocation is required");
+  }
+  return allocateTokenAmounts(grouped, mintDelta).map((allocation) => ({
+    claimantKey: allocation.claimantKey,
+    account: allocation.account,
+    deltaAmount: allocation.amountFloor,
+    receiptIds: [...allocation.receiptIds].sort(),
+  }));
+}
+
 function groupAllocations(
   allocations: readonly DaoTokenDistributionAllocation[]
 ): GroupedAllocation[] {
@@ -301,9 +605,13 @@ function allocateTokenAmounts(
   }));
 }
 
-function validateManifestIdentity(
-  input: DaoTokenMerkleDistributionInput
-): void {
+function validateManifestIdentity(input: {
+  readonly distributionId: string;
+  readonly nodeId: string;
+  readonly scopeId: string;
+  readonly statementHash: string;
+  readonly tokenAddress: HexAddress;
+}): void {
   if (input.distributionId.trim().length === 0) {
     throw new RangeError("distributionId must be non-empty");
   }

@@ -20,15 +20,21 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import type { ClaimantWalletResolver } from "@cogni/aragon-osx";
 import { createValidatedAttributionStore } from "@cogni/attribution-ledger";
 import {
   createDefaultRegistries,
   type DefaultRegistries,
 } from "@cogni/attribution-pipeline-plugins";
-import { DrizzleAttributionAdapter } from "@cogni/db-client";
+import {
+  DrizzleAttributionAdapter,
+  DrizzleClaimantWalletResolver,
+} from "@cogni/db-client";
 import { createServiceDbClient } from "@cogni/db-client/service";
 import {
   extractChainId,
+  extractDaoTokenDistributionConfig,
+  extractDistributorAddress,
   extractLedgerConfig,
   extractNodeId,
   extractScopeId,
@@ -105,6 +111,8 @@ function loadRepoSpecIdentity(): {
   nodeId: string;
   scopeId: string;
   chainId: number;
+  tokenAddress: string | null;
+  distributorAddress: string | null;
   configuredSources: string[];
   excludedLogins: string[];
   sourceRefs: string[];
@@ -131,6 +139,16 @@ function loadRepoSpecIdentity(): {
 
   const spec = parseRepoSpec(content);
   const ledgerConfig = extractLedgerConfig(spec);
+  // GovernanceERC20 token address — present only once the node has activated
+  // distributions (distributions.status: active). Null otherwise; the cumulative
+  // root build is skipped until activation (off-chain finalize still runs).
+  const distributionConfig = extractDaoTokenDistributionConfig(spec);
+  const tokenAddress = distributionConfig?.tokenAddress ?? null;
+  // The ONE per-node cumulative distributor recorded at R2 activation. Read
+  // directly from repo-spec (NOT gated on distributions.status) so the FIRST
+  // epoch — which has no prior/current manifest — can still resolve the contract
+  // in ledger.ts's finalize fallback chain. Null until R2 records it.
+  const distributorAddress = extractDistributorAddress(spec) ?? null;
   // Collect excluded logins from all activity sources
   const excludedLogins = ledgerConfig
     ? Object.values(ledgerConfig.activitySources).flatMap(
@@ -148,6 +166,8 @@ function loadRepoSpecIdentity(): {
     nodeId: extractNodeId(spec),
     scopeId: extractScopeId(spec),
     chainId: extractChainId(spec),
+    tokenAddress,
+    distributorAddress,
     configuredSources: ledgerConfig
       ? Object.keys(ledgerConfig.activitySources)
       : [],
@@ -167,6 +187,15 @@ export interface AttributionContainer {
   nodeId: string;
   scopeId: string;
   chainId: number;
+  /** GovernanceERC20 token address from repo-spec; null until distributions activated. */
+  tokenAddress: string | null;
+  /**
+   * The ONE per-node cumulative distributor recorded at R2 activation; null until
+   * recorded. Terminal fallback for ledger.ts finalize distributor resolution.
+   */
+  distributorAddress: string | null;
+  /** Claimant key → contributor wallet resolver (R3 cumulative root build). */
+  walletResolver: ClaimantWalletResolver | null;
   logger: Logger;
 }
 
@@ -232,6 +261,8 @@ export function createAttributionContainer(
     nodeId,
     scopeId,
     chainId,
+    tokenAddress,
+    distributorAddress,
     configuredSources,
     excludedLogins,
     sourceRefs,
@@ -251,6 +282,13 @@ export function createAttributionContainer(
   const attributionStore = createValidatedAttributionStore(
     new DrizzleAttributionAdapter(db, scopeId)
   );
+
+  // R3: read-only claimant→wallet resolver, used at finalize to fold this epoch's
+  // deltas into the cumulative root. Built only when distributions are active
+  // (tokenAddress present); otherwise null and the cumulative build is skipped.
+  const walletResolver: ClaimantWalletResolver | null = tokenAddress
+    ? new DrizzleClaimantWalletResolver(db)
+    : null;
 
   // Build source registrations (CAPABILITY_REQUIRED: at least one of poll/webhook)
   const registrations = new Map<string, DataSourceRegistration>();
@@ -319,6 +357,9 @@ export function createAttributionContainer(
     nodeId,
     scopeId,
     chainId,
+    tokenAddress,
+    distributorAddress,
+    walletResolver,
     logger: attributionLogger,
   };
 }
