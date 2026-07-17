@@ -139,7 +139,7 @@ if ! grep -Fq 'BEGIN COGNI CODEX COGNITION HOOK' "$CONFIG_PATH"; then
 
 # BEGIN COGNI CODEX COGNITION HOOK
 [[hooks.SessionStart]]
-matcher = "startup|resume"
+matcher = "startup|resume|clear|compact"
 
 [[hooks.SessionStart.hooks]]
 type = "command"
