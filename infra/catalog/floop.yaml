@@ -1,0 +1,20 @@
+name: floop
+type: node
+port: 3200
+node_port: 31700
+dockerfile: nodes/floop/app/Dockerfile
+image_tag_suffix: "-floop"
+migrator_tag_suffix: "-floop-migrate"
+source_repo: https://github.com/cogni-dao/floop.git
+image_repository: ghcr.io/cogni-dao/floop
+source_sha: f11ace65448a7172e3dbafb085d66f24341bf339
+candidate_a_branch: deploy/candidate-a-floop
+preview_branch: deploy/preview-floop
+production_branch: deploy/production-floop
+# task.5017 — per-env node-set (deploy ⊆ provisioned). A wizard birth enters all
+# NODE_FORMATION_ENVS; this list is the catalog twin so render-node-appset.sh
+# renders exactly the births appset.ts generates. Trimming a node's reach is a
+# later catalog edit (drop an env here) once its envs are provisioned.
+envs: [candidate-a, preview, production]
+path_prefix: nodes/floop/
+node_id: 2c7374e5-8f02-4643-9da1-4663e34974a2
