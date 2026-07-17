@@ -12,6 +12,7 @@ namespace: argocd
 
 resources:
   - production-beacon-applicationset.yaml
+  - production-floop-applicationset.yaml
   - production-node-template-applicationset.yaml
   - production-operator-applicationset.yaml
   - production-poly-applicationset.yaml

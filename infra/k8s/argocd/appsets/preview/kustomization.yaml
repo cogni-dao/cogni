@@ -12,6 +12,7 @@ namespace: argocd
 
 resources:
   - preview-beacon-applicationset.yaml
+  - preview-floop-applicationset.yaml
   - preview-node-template-applicationset.yaml
   - preview-operator-applicationset.yaml
   - preview-poly-applicationset.yaml

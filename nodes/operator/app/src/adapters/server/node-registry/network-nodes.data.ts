@@ -58,4 +58,5 @@ export const NETWORK_NODES: readonly NetworkNode[] = [
   { name: "node-template", nodeId: "b927a9dd-6132-4fc9-a51e-e3cee2568e3c" },
   { name: "beacon", nodeId: "f97f68f2-8406-4a3b-b5a9-d579b779f19d" },
   { name: "poly", nodeId: "4b06359a-a859-4399-888e-a8c7a6696f7e" },
+  { name: "floop", nodeId: "2c7374e5-8f02-4643-9da1-4663e34974a2" },
 ];
