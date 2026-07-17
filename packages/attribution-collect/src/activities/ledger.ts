@@ -6,7 +6,7 @@
  * Purpose: Temporal Activities for the full ledger pipeline — ingestion, selection, allocation, pool, epoch transition, and finalization.
  * Scope: Plain async functions that perform I/O (DB, GitHub API, EIP-712 verification). Called by CollectEpochWorkflow and FinalizeEpochWorkflow. Does not contain deterministic orchestration logic.
  * Invariants:
- *   - NO_DOMAIN_LOGIC_HERE: this file must never contain selection policies, allocation formulas, enrichment logic, or source-specific branching (e.g. `if eventType === "pr_merged"`). It loads data, dispatches to contracts/plugins, and writes results.
+ *   - NO_DOMAIN_LOGIC_HERE: no selection/allocation/enrichment or source-specific logic; only load, dispatch to plugins, and write.
  *   - Per RECEIPT_IDEMPOTENT: All activities idempotent via PK constraints or upsert
  *   - Per CURSOR_STATE_PERSISTED: Cursors saved after each collect() call
  *   - Per NODE_SCOPED: All operations pass nodeId + scopeId from deps

@@ -4,7 +4,7 @@
 /**
  * Module: `@cogni/attribution-collect/activities/enrichment`
  * Purpose: Temporal Activities for epoch enrichment — draft evaluation creation and final evaluation building.
- * Scope: Profile-driven enricher dispatch via @cogni/attribution-pipeline-plugins registries. No enricher logic lives here.
+ * Scope: Profile-driven enricher dispatch via @cogni/attribution-pipeline-plugins registries; does not contain enricher logic itself.
  * Invariants:
  * - ENRICHER_IDEMPOTENT: Same receipts → same hashes → same evaluation.
  * - ENRICHER_SKIP_UNCHANGED: evaluateEpochDraft pre-computes inputsHash and skips adapter call if existing draft matches (saves LLM tokens for future AI enrichers).

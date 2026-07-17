@@ -6,7 +6,7 @@
  * Purpose: In-process orchestrator for one epoch collect pass — the plain-async twin of CollectEpochWorkflow, run by a node against its OWN ledger DB.
  * Scope: Composes the ledger + enrichment activity factories directly (no Temporal). Does not change the operator's Temporal collect path; the worker still runs CollectEpochWorkflow byte-identically. Does not compute the epoch window's asOf — the caller supplies asOfIso (the workflow reads it from the schedule search attribute; the node reads it from the request).
  * Invariants:
- *   - SEQUENCE_MIRRORS_WORKFLOW: derive weights → find stale → transition|ensure → (if open) per-source collect → materialize → evaluate → allocate → ensure pool. Same order as CollectEpochWorkflow + its two stage children.
+ *   - SEQUENCE_MIRRORS_WORKFLOW: same activity order as CollectEpochWorkflow and its two stage children.
  *   - WEBHOOK_ONLY_SKIPS_POLL: a source with no poll adapter (webhook-only, the spawned-node shape) is skipped for polling; its receipts already arrived via the Phase-1 receipt seam, so the pass proceeds to select/enrich/allocate over receipts already in the DB. Never throws on a missing poll adapter.
  *   - NODE_SCOPED: nodeId + scopeId flow from deps into the activity factories.
  * Side-effects: IO (database, GitHub API when a poll adapter is present)
