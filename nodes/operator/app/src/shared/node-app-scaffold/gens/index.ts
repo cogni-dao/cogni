@@ -47,6 +47,7 @@ export {
   renderNodeExternalSecret,
   renderNodeExternalSecretKustomization,
 } from "./external-secret";
+export { insertNetworkNode } from "./network-nodes";
 export { nextFreeNodePort } from "./node-port";
 export { renderOverlay } from "./overlay";
 export {
