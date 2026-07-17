@@ -2,6 +2,11 @@ It's time to collect and analyze logs for the problem at hand.
 
 Use current context to infer the environment, or get user input: #$PROBLEM
 
+> **Logs vs traces.** This skill reads **Loki** (infra + app request logs). For
+> AI graph runs — LLM/tool calls, token cost, bad-but-not-crashed answers — use
+> [`/traces`](traces.md) (Langfuse). A request rejected before the graph runs
+> (auth, Zod 400) is here in Loki; a graph that ran but answered wrong is there.
+
 Follow this systematic approach:
 
 ## 1. Identify the Environment
