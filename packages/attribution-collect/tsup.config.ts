@@ -22,4 +22,5 @@ export const tsupConfig = defineConfig({
   platform: "neutral",
 });
 
+// biome-ignore lint/style/noDefaultExport: tsup loads its config from the module's default export
 export default tsupConfig;
