@@ -15,6 +15,6 @@ production_branch: deploy/production-poly
 # NODE_FORMATION_ENVS; this list is the catalog twin so render-node-appset.sh
 # renders exactly the births appset.ts generates. Trimming a node's reach is a
 # later catalog edit (drop an env here) once its envs are provisioned.
-envs: [preview, production]
+envs: [candidate-a, preview, production]
 path_prefix: nodes/poly/
 node_id: 4b06359a-a859-4399-888e-a8c7a6696f7e
