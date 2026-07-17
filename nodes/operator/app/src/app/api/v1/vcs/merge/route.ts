@@ -93,7 +93,8 @@ export const POST = wrapRouteHandlerWithLogging(
     if (!parsed.success) {
       return fail(400, "validation_error", "Invalid request");
     }
-    const { prNumber, method, nodeId } = parsed.data;
+    const { prNumber, nodeId } = parsed.data;
+    const method = parsed.data.method ?? "squash";
 
     // 2. RBAC — the ONE node-authz seam, reusing can_flight, against the named node (the operator is
     //    addressed by its own `nodeId` like any node — see NODE_SCOPED). Fails closed (503) when no
