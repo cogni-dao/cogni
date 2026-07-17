@@ -15,7 +15,7 @@
  * Invariants: WEBHOOK_ONLY_SOURCE, SOURCE_NO_ADAPTER (loud-at-bootstrap, graceful-at-runtime),
  *   SELECTION_AUTO_POPULATE.
  * Side-effects: IO (GitHub GraphQL, git push, testcontainers PostgreSQL)
- * Links: services/scheduler-worker/src/activities/ledger.ts (resolveStreams), docs/spec/attribution-ledger.md
+ * Links: packages/attribution-collect/src/activities/ledger.ts (resolveStreams), docs/spec/attribution-ledger.md
  * @internal
  */
 
@@ -35,7 +35,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   type AttributionActivityDeps,
   createAttributionActivities,
-} from "../../../../../../services/scheduler-worker/src/activities/ledger";
+} from "@cogni/attribution-collect";
 import { GitHubSourceAdapter } from "../../../../../../services/scheduler-worker/src/adapters/ingestion/github";
 import { GitHubAppTokenProvider } from "../../../../../../services/scheduler-worker/src/adapters/ingestion/github-auth";
 import {

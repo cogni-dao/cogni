@@ -17,6 +17,7 @@
     { "path": "./packages/db-schema" },
     { "path": "./packages/financial-ledger" },
     { "path": "./packages/ingestion-core" },
+    { "path": "./packages/attribution-collect" },
     { "path": "./packages/attribution-ledger" },
     { "path": "./packages/attribution-pipeline-contracts" },
     { "path": "./packages/attribution-pipeline-plugins" },

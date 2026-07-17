@@ -32,7 +32,7 @@ vi.mock("viem", () => ({
   verifyTypedData: vi.fn(),
 }));
 
-import { createAttributionActivities } from "../src/activities/ledger.js";
+import { createAttributionActivities } from "@cogni/attribution-collect";
 
 const NODE_ID = "aaaaaaaa-0000-0000-0000-000000000001";
 const SCOPE_ID = "bbbbbbbb-0000-0000-0000-000000000001";

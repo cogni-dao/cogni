@@ -9,7 +9,7 @@
  * - PROFILE_SELECTS_ALLOCATOR: worker resolves allocators via registries, not deriveAllocationAlgoRef().
  * - EXECUTOR_IS_GENERIC: worker does not call computeReceiptWeights() directly.
  * Side-effects: filesystem reads
- * Links: [services/scheduler-worker/src/activities/ledger.ts, services/scheduler-worker/src/workflows/collect-epoch.workflow.ts, docs/spec/plugin-attribution-pipeline.md]
+ * Links: [packages/attribution-collect/src/activities/ledger.ts, packages/temporal-workflows/src/workflows/collect-epoch.workflow.ts, docs/spec/plugin-attribution-pipeline.md]
  * @internal
  */
 
@@ -18,7 +18,7 @@ import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const ledgerActivityPath = new URL(
-  "../src/activities/ledger.ts",
+  "../../../packages/attribution-collect/src/activities/ledger.ts",
   import.meta.url
 );
 const collectWorkflowPath = new URL(

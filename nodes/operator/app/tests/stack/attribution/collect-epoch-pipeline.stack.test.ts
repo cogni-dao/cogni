@@ -34,8 +34,10 @@ import {
 } from "@tests/_fixtures/attribution/seed-attribution";
 import { getSeedDb } from "@tests/_fixtures/db/seed-client";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createEnrichmentActivities } from "../../../../../../services/scheduler-worker/src/activities/enrichment";
-import { createAttributionActivities } from "../../../../../../services/scheduler-worker/src/activities/ledger";
+import {
+  createAttributionActivities,
+  createEnrichmentActivities,
+} from "@cogni/attribution-collect";
 
 // ---------------------------------------------------------------------------
 // Constants

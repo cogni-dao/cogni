@@ -10,7 +10,7 @@
  * - BIGINT_WIRE_SAFE: buildLockedEvaluations output survives JSON.stringify (no BigInt in wire format).
  * - PROFILE_DISPATCH: enrichers are dispatched via attributionPipeline → profile → enricherRefs.
  * Side-effects: none (mocked store)
- * Links: services/scheduler-worker/src/activities/enrichment.ts
+ * Links: packages/attribution-collect/src/activities/enrichment.ts
  * @internal
  */
 
@@ -26,7 +26,7 @@ import {
 } from "@cogni/attribution-pipeline-plugins";
 import { describe, expect, it, vi } from "vitest";
 
-import { createEnrichmentActivities } from "../src/activities/enrichment.js";
+import { createEnrichmentActivities } from "@cogni/attribution-collect";
 
 const NODE_ID = "aaaaaaaa-0000-0000-0000-000000000001";
 const ATTRIBUTION_PIPELINE = "cogni-v0.0";

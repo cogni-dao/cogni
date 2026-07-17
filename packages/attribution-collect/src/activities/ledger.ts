@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `@cogni/scheduler-worker-service/activities/ledger`
+ * Module: `@cogni/attribution-collect/activities/ledger`
  * Purpose: Temporal Activities for the full ledger pipeline — ingestion, selection, allocation, pool, epoch transition, and finalization.
  * Scope: Plain async functions that perform I/O (DB, GitHub API, EIP-712 verification). Called by CollectEpochWorkflow and FinalizeEpochWorkflow. Does not contain deterministic orchestration logic.
  * Invariants:
@@ -26,6 +26,7 @@
  */
 
 import type {
+  AttributionStore,
   CloseIngestionWithEvaluationsParams,
   UnselectedReceipt,
 } from "@cogni/attribution-ledger";
@@ -50,15 +51,13 @@ import {
   resolveProfile,
 } from "@cogni/attribution-pipeline-contracts";
 import type { DefaultRegistries } from "@cogni/attribution-pipeline-plugins";
-import type { ActivityEvent } from "@cogni/ingestion-core";
-
-import { verifyTypedData } from "viem";
-
-import type { Logger } from "../observability/logger.js";
 import type {
-  AttributionStore,
+  ActivityEvent,
   DataSourceRegistration,
-} from "../ports/index.js";
+} from "@cogni/ingestion-core";
+
+import type { Logger } from "pino";
+import { verifyTypedData } from "viem";
 
 /**
  * Dependencies injected into ledger activities at worker creation.
