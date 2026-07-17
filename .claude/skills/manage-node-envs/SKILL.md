@@ -16,8 +16,20 @@ The whole loop is three operator API calls plus one wait-on-a-human step:
 1. **Request** the `env_manager` role (agent bearer).
 2. **Block** until the node OWNER approves it. You cannot skip or self-serve this.
 3. **Call the verb** (`POST .../envs`) — opens a catalog-edit PR.
-4. **Merge** that PR (`POST /api/v1/vcs/merge`) — enqueues; poll to `MERGED`.
-5. **Verify** the per-env keystone app-of-apps reconciled the node in/out.
+4. **Wait for CI green, then merge** (`POST /api/v1/vcs/merge`) — the route
+   hard-rejects `422 not_green` if required checks are still pending; once green it
+   enqueues, so poll the PR to `MERGED`.
+5. **Verify** the reconcile with ground truth — the node's pod actually
+   terminates/starts and its `/readyz` flips — not just the PR merge.
+
+> **Pick a non-template node.** `node-template` (and `operator`) is
+> **un-undeployable**: `infra/k8s/overlays/<env>/node-template/kustomization.yaml`
+> is the per-env render TEMPLATE every other node's overlay is diffed against, so a
+> remove-PR that deletes it fails the `unit` `per-node overlay drift`
+> (`NODE_AT_ROOT_MIGRATE_PATH`) gate — CI blocks the merge. The verb opens the PR
+> anyway (it does not guard this upfront — a known footgun), so you end up with a
+> dead PR. Demo/toggle on a real leaf node (poly, beacon, a disposable), never the
+> template. (Verified 2026-07-16.)
 
 ## When to use
 
@@ -87,9 +99,11 @@ POST /api/v1/nodes/{id}/envs
 
 - `present: true` adds the env; `present: false` removes it.
 - **Idempotent:** requesting the state that already holds returns
-  `{ ... result: { kind: "no_changes" } }` and opens **no PR**. Adding an env the node
-  already has, or removing one it doesn't, is a safe no-op — lean on this instead of
-  pre-checking.
+  `{ ... result: { status: "no_changes" } }` and opens **no PR**. Adding an env the
+  node already has, or removing one it doesn't, is a safe no-op — lean on this both to
+  pre-check your grant (a `200 no_changes` proves you hold `can_manage_envs`) and to
+  avoid churn. A real change returns
+  `{ ... result: { status: "pr_opened", action: "add"|"remove", prNumber, prUrl } }`.
 - Auth: `503 authz_unavailable` means the env's OpenFGA model doesn't carry the
   `can_manage_envs` relation yet (model drift — the env needs a re-bootstrap, not a
   retry); `403 authz_denied` means you simply aren't granted (go back to §A).
@@ -130,10 +144,17 @@ POST /api/v1/vcs/merge
   seam is one node-authz check; see the route's `NODE_SCOPED` note). `nodeId` is
   required and addresses the node whose PR this is; the operator's own monorepo PRs are
   addressed as `nodeId: "operator"`.
-- **It ENQUEUES.** When the base branch requires a merge queue, `mergePr` returns
-  `{ enqueued: true }` with no `sha` — the merge completes asynchronously on the rebased
-  candidate. Treat a successful response as "queued", then **poll the PR until it reads
-  `MERGED`** (e.g. `gh pr view <n> --json state,mergedAt`). Do not assume merged on the 200.
+- **It merges WHEN GREEN — it does not wait for CI.** Call it too early and it
+  hard-rejects `422 { errorCode: "not_green" }`. So first poll the PR's checks
+  (`gh pr checks <n>` — every required check `pass`/skip, none `pending`/`fail`), THEN
+  call `vcs/merge`. A catalog-edit PR runs the normal monorepo gates (`static`,
+  `unit`, `manifest`, `single-node-scope`, …); `unit` is where the overlay-drift gate
+  lives, so a template-node remove-PR fails here (see §B warning).
+- **On green it ENQUEUES.** When the base branch requires a merge queue, `mergePr`
+  returns `{ enqueued: true }` with no `sha` — the merge completes asynchronously on
+  the rebased candidate. Treat a successful response as "queued", then **poll the PR
+  until it reads `MERGED`** (`gh pr view <n> --json state,mergedAt`). Do not assume
+  merged on the 200.
 
 ## D) Verify the reconcile
 
@@ -147,9 +168,24 @@ merge to `main`, the per-env **keystone app-of-apps** `cogni-<env>-appsets`
 - **Remove:** the file vanishes from git → `prune: true` deletes the node's
   Application → the node stops being deployed there.
 
-That reconcile is the ground truth that the node moved. Confirm via Argo (the
-`cogni-<env>-<slug>` Application appears / is gone) rather than trusting the PR merge
-alone.
+That reconcile is the ground truth that the node moved. Confirm it three ways, not by
+trusting the PR merge:
+
+- **Argo:** the `cogni-<env>-<slug>` Application appears / is pruned.
+- **Pod:** `kubectl -n cogni-<env> get pods | grep <slug>` — the `<slug>-node-app`
+  pod is `Running` (add) or gone (remove).
+- **Public surface:** the node's `/readyz` flips — reuse the deploy READ port,
+  `GET /api/v1/nodes/<id>/deploy-state`, and watch that env's row go
+  `health: healthy ⇄ unknown` / `replicas 1/1 ⇄ 0/0`.
+
+### UI caveat — the toggle button can lie
+
+On the node page's **Deployments** card, the Deploy/Undeploy button's _visibility_ is
+not gated on `can_manage_envs` — a viewer on the owner / implicit-admin plane sees the
+button, clicks it, and gets `403 "not authorized"` from the verb (the verb is the real
+gate, `node.manage_envs`). Button-shown ≠ permitted. If you hit that, you lack the
+grant — go to §A; don't treat it as a transient error. (The right long-term fix is to
+gate button visibility on the same `can_manage_envs` the verb enforces.)
 
 **Observability:** the verb emits a DNS-seam log in Loki, slug+env scoped:
 `dns.forward_reconcile.skipped` on add, `dns.reverse_reconcile.skipped` on remove
@@ -183,5 +219,9 @@ provision / lingers to TTL; the live reconcile is a flagged vNext seam).
 - **ATOMIC_PER_ENV** — every env (candidate-a included) is an independent toggle;
   removing the last env yields a valid `envs: []`. No candidate-a special case.
 - **IDEMPOTENT** — the already-holding state returns `no_changes` and opens no PR.
-- **MERGE_ENQUEUES** — `vcs/merge` returns `enqueued`; poll to `MERGED`. The node moves
+- **MERGE_WHEN_GREEN** — `vcs/merge` rejects `422 not_green` until required checks
+  pass; wait for green, THEN merge → it enqueues → poll to `MERGED`. The node moves
   only after the keystone app-of-apps reconciles, not on PR merge alone.
+- **TEMPLATE_NODE_UNDEPLOYABLE** — `node-template` / `operator` cannot be removed from
+  an env: the template's per-env overlay is the render reference for all nodes, so the
+  remove-PR fails the `unit` overlay-drift gate. Toggle leaf nodes only.
