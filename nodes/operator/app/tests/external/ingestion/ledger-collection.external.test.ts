@@ -13,6 +13,10 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import {
+  type AttributionActivityDeps,
+  createAttributionActivities,
+} from "@cogni/attribution-collect";
 import { createDefaultRegistries } from "@cogni/attribution-pipeline-plugins";
 import { DrizzleAttributionAdapter } from "@cogni/db-client";
 import type { DataSourceRegistration } from "@cogni/ingestion-core";
@@ -26,10 +30,6 @@ import {
 import { getSeedDb } from "@tests/_fixtures/db/seed-client";
 import { seedTestActor } from "@tests/_fixtures/stack/seed";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import {
-  type AttributionActivityDeps,
-  createAttributionActivities,
-} from "@cogni/attribution-collect";
 import { GitHubSourceAdapter } from "../../../../../../services/scheduler-worker/src/adapters/ingestion/github";
 import { GitHubAppTokenProvider } from "../../../../../../services/scheduler-worker/src/adapters/ingestion/github-auth";
 import {

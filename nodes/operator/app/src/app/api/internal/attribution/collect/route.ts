@@ -114,7 +114,10 @@ export const POST = wrapRouteHandlerWithLogging(
       activitySources: Object.fromEntries(
         Object.entries(ledgerConfig.activitySources).map(([source, s]) => [
           source,
-          { attributionPipeline: s.attributionPipeline, sourceRefs: s.sourceRefs },
+          {
+            attributionPipeline: s.attributionPipeline,
+            sourceRefs: s.sourceRefs,
+          },
         ])
       ),
       ...(ledgerConfig.baseIssuanceCredits !== undefined && {

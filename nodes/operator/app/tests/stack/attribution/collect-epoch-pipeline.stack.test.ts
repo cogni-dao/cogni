@@ -15,6 +15,10 @@
  */
 
 import { randomUUID } from "node:crypto";
+import {
+  createAttributionActivities,
+  createEnrichmentActivities,
+} from "@cogni/attribution-collect";
 import { createDefaultRegistries } from "@cogni/attribution-pipeline-plugins";
 import { DrizzleAttributionAdapter } from "@cogni/db-client";
 import type { DataSourceRegistration } from "@cogni/ingestion-core";
@@ -34,10 +38,6 @@ import {
 } from "@tests/_fixtures/attribution/seed-attribution";
 import { getSeedDb } from "@tests/_fixtures/db/seed-client";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import {
-  createAttributionActivities,
-  createEnrichmentActivities,
-} from "@cogni/attribution-collect";
 
 // ---------------------------------------------------------------------------
 // Constants

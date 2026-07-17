@@ -17,7 +17,6 @@
  * @internal
  */
 
-import { randomUUID } from "node:crypto";
 import { runCollectPass } from "@cogni/attribution-collect";
 import { createValidatedAttributionStore } from "@cogni/attribution-ledger";
 import { createDefaultRegistries } from "@cogni/attribution-pipeline-plugins";
@@ -122,7 +121,10 @@ describe("[attribution] runCollectPass over webhook-only receipts (stack)", () =
 
     // Selections materialized over the delivered receipts (proves selection ran
     // without any poll adapter). No user_bindings seeded → hasExistingSelection true.
-    const unselected = await store.getSelectionCandidates(TEST_NODE_ID, epoch.id);
+    const unselected = await store.getSelectionCandidates(
+      TEST_NODE_ID,
+      epoch.id
+    );
     for (const u of unselected) {
       expect(u.hasExistingSelection).toBe(true);
     }

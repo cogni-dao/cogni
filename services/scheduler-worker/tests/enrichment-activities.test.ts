@@ -14,6 +14,7 @@
  * @internal
  */
 
+import { createEnrichmentActivities } from "@cogni/attribution-collect";
 import type {
   AttributionStore,
   SelectedReceiptForAttribution,
@@ -25,8 +26,6 @@ import {
   ECHO_EVALUATION_REF,
 } from "@cogni/attribution-pipeline-plugins";
 import { describe, expect, it, vi } from "vitest";
-
-import { createEnrichmentActivities } from "@cogni/attribution-collect";
 
 const NODE_ID = "aaaaaaaa-0000-0000-0000-000000000001";
 const ATTRIBUTION_PIPELINE = "cogni-v0.0";

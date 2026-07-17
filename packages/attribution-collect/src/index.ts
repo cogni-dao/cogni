@@ -14,11 +14,23 @@
  */
 
 export type {
+  BuildLockedEvaluationsInput,
+  BuildLockedEvaluationsOutput,
+  DeriveWeightConfigInput,
+  DeriveWeightConfigOutput,
+  EnrichmentActivities,
+  EnrichmentActivityDeps,
+  EvaluateEpochDraftInput,
+  EvaluateEpochDraftOutput,
+  UpsertEvaluationParamsWire,
+} from "./activities/enrichment.js";
+export { createEnrichmentActivities } from "./activities/enrichment.js";
+export type {
   AttributionActivityDeps,
-  ComputeAllocationsInput,
-  ComputeAllocationsOutput,
   CollectFromSourceInput,
   CollectFromSourceOutput,
+  ComputeAllocationsInput,
+  ComputeAllocationsOutput,
   EnsureEpochInput,
   EnsureEpochOutput,
   EnsurePoolComponentsInput,
@@ -39,19 +51,6 @@ export type {
   TransitionEpochForWindowOutput,
 } from "./activities/ledger.js";
 export { createAttributionActivities } from "./activities/ledger.js";
-
-export type {
-  BuildLockedEvaluationsInput,
-  BuildLockedEvaluationsOutput,
-  DeriveWeightConfigInput,
-  DeriveWeightConfigOutput,
-  EnrichmentActivities,
-  EnrichmentActivityDeps,
-  EvaluateEpochDraftInput,
-  EvaluateEpochDraftOutput,
-  UpsertEvaluationParamsWire,
-} from "./activities/enrichment.js";
-export { createEnrichmentActivities } from "./activities/enrichment.js";
 
 export type { AttributionIngestRunV1 } from "./contract.js";
 
