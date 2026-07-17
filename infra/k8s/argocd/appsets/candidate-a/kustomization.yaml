@@ -14,4 +14,5 @@ resources:
   - candidate-a-beacon-applicationset.yaml
   - candidate-a-node-template-applicationset.yaml
   - candidate-a-operator-applicationset.yaml
+  - candidate-a-poly-applicationset.yaml
   - candidate-a-scheduler-worker-applicationset.yaml
