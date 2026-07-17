@@ -15,9 +15,11 @@
  */
 
 import { createRequire } from "node:module";
+import {
+  createAttributionActivities,
+  createEnrichmentActivities,
+} from "@cogni/attribution-collect";
 import { NativeConnection, Worker } from "@temporalio/worker";
-import { createEnrichmentActivities } from "./activities/enrichment.js";
-import { createAttributionActivities } from "./activities/ledger.js";
 import type { AttributionContainer } from "./bootstrap/container.js";
 import type { Env } from "./bootstrap/env.js";
 import type { Logger } from "./observability/logger.js";

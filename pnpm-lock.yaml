@@ -352,9 +352,15 @@ importers:
       '@cogni/aragon-osx':
         specifier: workspace:*
         version: link:../../../packages/aragon-osx
+      '@cogni/attribution-collect':
+        specifier: workspace:*
+        version: link:../../../packages/attribution-collect
       '@cogni/attribution-ledger':
         specifier: workspace:*
         version: link:../../../packages/attribution-ledger
+      '@cogni/attribution-pipeline-plugins':
+        specifier: workspace:*
+        version: link:../../../packages/attribution-pipeline-plugins
       '@cogni/authorization-core':
         specifier: workspace:*
         version: link:../../../packages/authorization-core
@@ -742,6 +748,40 @@ importers:
       viem:
         specifier: ^2.0.0
         version: 2.39.3(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6)
+
+  packages/attribution-collect:
+    dependencies:
+      '@cogni/attribution-ledger':
+        specifier: workspace:*
+        version: link:../attribution-ledger
+      '@cogni/attribution-pipeline-contracts':
+        specifier: workspace:*
+        version: link:../attribution-pipeline-contracts
+      '@cogni/attribution-pipeline-plugins':
+        specifier: workspace:*
+        version: link:../attribution-pipeline-plugins
+      '@cogni/ingestion-core':
+        specifier: workspace:*
+        version: link:../ingestion-core
+      viem:
+        specifier: ^2.21.0
+        version: 2.39.3(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6)
+    devDependencies:
+      pino:
+        specifier: ^9.6.0
+        version: 9.14.0
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(@swc/core@1.15.10)(jiti@2.6.1)(postcss@8.5.6)(tsx@4.20.6)(typescript@5.9.3)(yaml@2.8.3)
+      typescript:
+        specifier: ^5
+        version: 5.9.3
+      vite-tsconfig-paths:
+        specifier: ^4.3.1
+        version: 4.3.2(typescript@5.9.3)(vite@7.2.1(@types/node@25.2.3)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.3))
+      vitest:
+        specifier: ^3.0.5
+        version: 3.2.4(@types/debug@4.1.12)(@types/node@25.2.3)(happy-dom@20.9.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(jiti@2.6.1)(jsdom@16.7.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(lightningcss@1.30.2)(msw@2.12.1(@types/node@25.2.3)(typescript@5.9.3))(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.3)
 
   packages/attribution-ledger:
     devDependencies:
@@ -1331,6 +1371,9 @@ importers:
 
   services/scheduler-worker:
     dependencies:
+      '@cogni/attribution-collect':
+        specifier: workspace:*
+        version: link:../../packages/attribution-collect
       '@cogni/attribution-ledger':
         specifier: workspace:*
         version: link:../../packages/attribution-ledger

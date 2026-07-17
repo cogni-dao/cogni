@@ -2,9 +2,9 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `@cogni/scheduler-worker-service/activities/enrichment`
+ * Module: `@cogni/attribution-collect/activities/enrichment`
  * Purpose: Temporal Activities for epoch enrichment — draft evaluation creation and final evaluation building.
- * Scope: Profile-driven enricher dispatch via @cogni/attribution-pipeline-plugins registries. No enricher logic lives here.
+ * Scope: Profile-driven enricher dispatch via @cogni/attribution-pipeline-plugins registries; does not contain enricher logic itself.
  * Invariants:
  * - ENRICHER_IDEMPOTENT: Same receipts → same hashes → same evaluation.
  * - ENRICHER_SKIP_UNCHANGED: evaluateEpochDraft pre-computes inputsHash and skips adapter call if existing draft matches (saves LLM tokens for future AI enrichers).
@@ -16,6 +16,7 @@
  */
 
 import {
+  type AttributionStore,
   computeArtifactsHash,
   computeEnricherInputsHash,
 } from "@cogni/attribution-ledger";
@@ -26,8 +27,7 @@ import {
 } from "@cogni/attribution-pipeline-contracts";
 import type { DefaultRegistries } from "@cogni/attribution-pipeline-plugins";
 
-import type { Logger } from "../observability/logger.js";
-import type { AttributionStore } from "../ports/index.js";
+import type { Logger } from "pino";
 
 /**
  * Dependencies injected into enrichment activities.
