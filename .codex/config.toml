@@ -7,8 +7,11 @@
 # ONE-TIME TRUST: project-local hooks run only after you trust the .codex/ layer —
 # approve once with `/hooks` in Codex (or `--dangerously-bypass-hook-trust` for CI).
 
+# Fire on all four SessionStart sources (startup, resume, clear, compact) so the
+# cognition substrate re-injects after a /clear or context compaction, matching the
+# Claude Code hook's all-sources behavior. See node-template #83.
 [[hooks.SessionStart]]
-matcher = "startup|resume"
+matcher = "startup|resume|clear|compact"
 
 [[hooks.SessionStart.hooks]]
 type = "command"
