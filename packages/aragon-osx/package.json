@@ -21,12 +21,12 @@
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
-    "viem": "^2.0.0"
+    "viem": "^2.55.4"
   },
   "devDependencies": {
     "tsup": "^8.5.1",
     "typescript": "^5",
-    "viem": "^2.0.0"
+    "viem": "^2.55.4"
   },
   "dependencies": {
     "@openzeppelin/merkle-tree": "^1.0.8"
