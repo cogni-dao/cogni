@@ -11,7 +11,7 @@
  *   - SIGNATURE_SCOPE_BOUND: signature must be valid for the exact typed data
  *   - CONFIG_LOCKED_AT_REVIEW: allocationAlgoRef + weightConfigHash must be set
  * Side-effects: none
- * Links: services/scheduler-worker/src/activities/ledger.ts,
+ * Links: packages/attribution-collect/src/activities/ledger.ts,
  *         packages/attribution-ledger/src/signing.ts
  * @internal
  */

@@ -21,6 +21,7 @@ export {
   getGovernanceConfig,
   getKnowledgeConfig,
   getLedgerApprovers,
+  getLedgerConfig,
   getNodeId,
   getNodeMission,
   getNodeName,
@@ -32,4 +33,5 @@ export {
   isDaoAdmin,
   isLedgerApprover,
   type KnowledgeConfig,
+  type LedgerConfig,
 } from "./repoSpec.server";

@@ -7,12 +7,16 @@
  * Scope: Creates its own fixtures, exercises createAttributionActivities pipeline. Cleans up after. Does not run in CI.
  * Invariants: Requires GH_REVIEW_APP_ID + GH_REVIEW_APP_PRIVATE_KEY_BASE64 in env. Skips gracefully if missing.
  * Side-effects: IO (GitHub GraphQL, git push, testcontainers PostgreSQL)
- * Links: services/scheduler-worker/src/activities/ledger.ts, docs/spec/attribution-ledger.md
+ * Links: packages/attribution-collect/src/activities/ledger.ts, docs/spec/attribution-ledger.md
  * @internal
  */
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import {
+  type AttributionActivityDeps,
+  createAttributionActivities,
+} from "@cogni/attribution-collect";
 import { createDefaultRegistries } from "@cogni/attribution-pipeline-plugins";
 import { DrizzleAttributionAdapter } from "@cogni/db-client";
 import type { DataSourceRegistration } from "@cogni/ingestion-core";
@@ -26,10 +30,6 @@ import {
 import { getSeedDb } from "@tests/_fixtures/db/seed-client";
 import { seedTestActor } from "@tests/_fixtures/stack/seed";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import {
-  type AttributionActivityDeps,
-  createAttributionActivities,
-} from "../../../../../../services/scheduler-worker/src/activities/ledger";
 import { GitHubSourceAdapter } from "../../../../../../services/scheduler-worker/src/adapters/ingestion/github";
 import { GitHubAppTokenProvider } from "../../../../../../services/scheduler-worker/src/adapters/ingestion/github-auth";
 import {

@@ -1,0 +1,32 @@
+{
+  "name": "@cogni/attribution-collect",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@cogni/attribution-ledger": "workspace:*",
+    "@cogni/attribution-pipeline-contracts": "workspace:*",
+    "@cogni/attribution-pipeline-plugins": "workspace:*",
+    "@cogni/ingestion-core": "workspace:*",
+    "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "pino": "^9.6.0",
+    "tsup": "^8.5.1",
+    "typescript": "^5",
+    "vitest": "^3.0.5",
+    "vite-tsconfig-paths": "^4.3.1"
+  }
+}

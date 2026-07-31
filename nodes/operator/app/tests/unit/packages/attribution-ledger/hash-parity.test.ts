@@ -10,7 +10,7 @@
  *   - DETERMINISTIC: same inputs always produce same hash
  * Side-effects: none
  * Links: src/app/api/v1/attribution/epochs/[id]/sign-data/route.ts,
- *         services/scheduler-worker/src/activities/ledger.ts,
+ *         packages/attribution-collect/src/activities/ledger.ts,
  *         packages/attribution-ledger/src/claimant-shares.ts,
  *         packages/attribution-ledger/src/hashing.ts
  * @internal

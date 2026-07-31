@@ -11,7 +11,7 @@
  *   Release PRs (baseBranch=main) are reference data only (included=false).
  *   Reviews on promoted PRs are included for visibility.
  * Side-effects: none
- * Links: services/scheduler-worker/src/activities/ledger.ts
+ * Links: packages/attribution-collect/src/activities/ledger.ts
  * @public
  */
 

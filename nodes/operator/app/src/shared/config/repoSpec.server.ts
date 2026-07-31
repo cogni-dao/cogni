@@ -22,6 +22,7 @@ import {
   extractGovernanceConfig,
   extractKnowledgeConfig,
   extractLedgerApprovers,
+  extractLedgerConfig,
   extractNodeBrandColor,
   extractNodeBrandIcon,
   extractNodeHook,
@@ -34,6 +35,7 @@ import {
   type GovernanceConfig,
   type InboundPaymentConfig,
   type KnowledgeConfig,
+  type LedgerConfig,
   type OperatorWalletSpec,
   parseRepoSpec,
   type RepoSpec,
@@ -188,6 +190,23 @@ export function getDaoConfig(): DaoConfig | null {
   const spec = loadRepoSpec();
   cachedDaoConfig = extractDaoConfig(spec);
   return cachedDaoConfig;
+}
+
+let cachedLedgerConfig: LedgerConfig | undefined | null = null;
+
+/**
+ * Full ledger config from repo-spec (activity_ledger section).
+ * Mirrors the scheduler-worker's extractLedgerConfig read — supplies scopeKey,
+ * epochLengthDays, activitySources (with per-source attributionPipeline/sourceRefs/
+ * excludedLogins), and baseIssuanceCredits to the in-process collect pass.
+ * Returns undefined for nodes without an activity_ledger block.
+ */
+export function getLedgerConfig(): LedgerConfig | undefined {
+  if (cachedLedgerConfig !== null) return cachedLedgerConfig;
+
+  const spec = loadRepoSpec();
+  cachedLedgerConfig = extractLedgerConfig(spec) ?? undefined;
+  return cachedLedgerConfig;
 }
 
 let cachedLedgerApprovers: string[] | null = null;
