@@ -1,0 +1,52 @@
+======================================================================
+ P4 SPIKE - mint epoch tokens into stock distributor via early-execute
+======================================================================
+ Forked Base mainnet @ block 47997774
+ DAO          0x717a747df71111a678202BfCD2E3B0081A9aeB56
+ Token        0x0166Db3d42603E790Fb685059DcAa37087B032c8
+ Plugin       0x6b8f7c9f18b33b8ad4e8b0710dd64a27388de6c9
+ Holder       0x070075f1389ae1182abac722b36ca12285d0c949
+
+STEP 0 - pre-state
+  token.totalSupply BEFORE = 1000000000000000000 (== 1e18, the lone genesis token)
+  [ok] no pre-minted pile exists (supply is exactly the 1 genesis token)
+
+STEP 1 - build 1-leaf merkle root (Cogni frozen leaf format)
+  leaf  = 0xf58f4a25180f4941d8b4c344b728ea118b9fdc1a98c79a701310b51429ab1df7
+  root  = 0xf58f4a25180f4941d8b4c344b728ea118b9fdc1a98c79a701310b51429ab1df7
+  proof = [] (empty for single leaf)
+
+STEP 2 - deploy stock Uniswap MerkleDistributor(token, root)
+  [ok] distributor deployed @ 0x7d5f7a74cd0c1af9bd1204ba3f56ee6a379fb16c
+  [ok] distributor.token() == GovernanceERC20 (constructor binding)
+  [ok] distributor.merkleRoot() == our 1-leaf root
+  [ok] distributor token balance BEFORE mint == 0 (empty, no pre-funding)
+
+STEP 3 - build the DAO action: token.mint(distributor, amount)
+  action.to   = 0x0166Db3d42603E790Fb685059DcAa37087B032c8 (GovernanceERC20)
+  action.data = mint(0x7d5f7a74cd0c1af9bd1204ba3f56ee6a379fb16c, 100000000000000000000)
+
+STEP 4 - createProposal(...) as the holder, voteYes + tryEarlyExecution=true
+  [ok] createProposal tx mined: 0xddd233b1716b06314d10560edef4b5cc264cc0d4e49c9a079f975e94abfae74c
+  [ok] parsed real proposalId from ProposalCreated event: 84865939113339263402799252008991667477154809303858191521843623556777850189275
+
+STEP 5 - assert early-execute minted straight into the distributor
+  proposal.executed = true
+  tally yes/no/abstain = 1000000000000000000/0/0
+  [ok] proposal EARLY-EXECUTED in the same tx (no separate execute call)
+  token.totalSupply AFTER  = 101000000000000000000 (was 1000000000000000000)
+  distributor balance AFTER = 100000000000000000000
+  [ok] totalSupply increased by exactly the distribution amount (fresh MINT, not a transfer)
+  [ok] tokens were minted STRAIGHT INTO the distributor (no central wallet hop)
+
+STEP 6 - contributor claims from the distributor
+  [ok] isClaimed(0) == false before claim
+  [ok] claim tx mined: 0xdfb10eea78eba9229c42f73da10ec235b6a5462653d321621916e68bc2ff629b
+  [ok] contributor received exactly 100000000000000000000 tokens
+  [ok] isClaimed(0) == true after claim (double-claim blocked)
+
+======================================================================
+ RESULT: YES. The DAO minted an epoch's tokens directly into a stock
+ Uniswap MerkleDistributor via a governance early-execute proposal -
+ no central wallet, no pre-mint - and the contributor claimed them.
+======================================================================

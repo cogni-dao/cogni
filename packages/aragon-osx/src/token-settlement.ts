@@ -6,7 +6,10 @@
  * Purpose: Pure DAO ownership-token settlement data model from formation inventory to Merkle claims.
  * Scope: Defines typed lifecycle/readiness helpers only; does not deploy contracts, read chain state, or persist manifests.
  * Invariants:
- * - TOKEN_SETTLEMENT_REQUIRES_CONTROLLED_INVENTORY: unissued future supply is not distributable inventory.
+ * - TOKEN_SETTLEMENT_MINT_AUTHORITY_IS_READINESS: under the mint-per-epoch model, inventory
+ *   readiness is DAO mint authority (MINT_PERMISSION on the GovernanceERC20) + an executed
+ *   mint into the distributor — NOT a pre-minted balance parked in a vault. A genesis-holder
+ *   mint is only a formation probe (tokenomics.md Walk reconciliation).
  * - TOKEN_SETTLEMENT_STATEMENT_BOUND: claim manifests must bind to a finalized signed attribution statement.
  * - TOKEN_SETTLEMENT_FUNDING_MATCHES_ROOT: funding must match the manifest amount and root.
  * Side-effects: none
@@ -22,7 +25,11 @@ import type { Hex, HexAddress } from "./types";
 export type DaoTokenInventoryKind =
   | "genesis_holder"
   | "emissions_holder"
-  | "funded_distributor";
+  | "funded_distributor"
+  // Mint-per-epoch model: the DAO holds MINT_PERMISSION on the GovernanceERC20 and
+  // mints supply per-epoch into the distributor. The DAO contract is the
+  // `emissions_holder` (the minter) itself, NOT a vault parking a pre-minted balance.
+  | "dao_minter";
 
 export type DaoTokenSettlementPhase =
   | "formation_probe_only"
@@ -46,8 +53,26 @@ export type DaoTokenSettlementBlockerCode =
 export interface DaoTokenInventoryRef {
   readonly kind: DaoTokenInventoryKind;
   readonly holder: HexAddress;
+  /**
+   * On-chain balance held by `holder`. Under the legacy parked-balance kinds
+   * (`emissions_holder` / `funded_distributor`) this gates readiness. Under
+   * `dao_minter` it is informational only — readiness is mint authority + an
+   * executed mint, NOT this balance (nothing is pre-minted).
+   */
   readonly amount: bigint;
   readonly daoControlled: boolean;
+  /**
+   * `dao_minter` only: the DAO holds MINT_PERMISSION on the GovernanceERC20
+   * (granted by Aragon's TokenVotingSetup at formation). The minting authority,
+   * not a balance, is what makes per-epoch emissions possible.
+   */
+  readonly daoHoldsMintPermission?: boolean;
+  /**
+   * `dao_minter` only: the per-epoch `mint(distributor, amount)` under a signed
+   * root has executed on-chain. This — not a parked balance — is what makes the
+   * epoch's inventory distributable.
+   */
+  readonly mintExecuted?: boolean;
 }
 
 export interface SignedAttributionStatementRef {
@@ -120,8 +145,20 @@ export function isSettlementInventoryReady(
   inventory: DaoTokenInventoryRef
 ): boolean {
   validateInventory(inventory);
+  if (!inventory.daoControlled) return false;
+
+  // Mint-per-epoch (Walk): readiness is DAO mint authority + an executed mint
+  // into the distributor — NOT a pre-minted parked balance. The DAO contract is
+  // the emissions holder (the minter); `amount` is informational, never gating.
+  if (inventory.kind === "dao_minter") {
+    return (
+      inventory.daoHoldsMintPermission === true &&
+      inventory.mintExecuted === true
+    );
+  }
+
+  // Legacy parked-balance kinds: a real, DAO-controlled balance is required.
   return (
-    inventory.daoControlled &&
     inventory.amount > 0n &&
     (inventory.kind === "emissions_holder" ||
       inventory.kind === "funded_distributor")
@@ -136,7 +173,9 @@ function addInventoryBlockers(
     blockers.push({
       code: "inventory_not_dao_controlled",
       message:
-        "Settlement requires DAO-controlled emissions inventory or a funded distributor; a genesis holder mint is only a formation probe.",
+        inventory.kind === "dao_minter"
+          ? "Settlement requires the DAO to hold MINT_PERMISSION on the GovernanceERC20 and to have executed the per-epoch mint into the distributor; nothing is pre-minted."
+          : "Settlement requires DAO-controlled emissions inventory or a funded distributor; a genesis holder mint is only a formation probe.",
     });
   }
 }

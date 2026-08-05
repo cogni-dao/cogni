@@ -13,8 +13,10 @@
 
 export * from "./aragon";
 export * from "./encoding";
+export * from "./epoch-distribution-service";
 export * from "./osx";
 export * from "./token-distribution";
 export * from "./token-settlement";
 export * from "./tokenomics";
 export * from "./types";
+export * from "./wallet-resolver";

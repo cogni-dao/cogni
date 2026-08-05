@@ -12,18 +12,22 @@
  */
 
 import {
+  buildDaoTokenCumulativeDistribution,
   buildDaoTokenMerkleDistribution,
   buildDaoTokenSettlementModel,
   DAO_TOKEN_SUPPLY_DEFAULT_WHOLE,
   DAO_TOKEN_SUPPLY_MAX_WHOLE,
   DAO_TOKEN_SUPPLY_MIN_WHOLE,
   DEFAULT_DAO_TOKENOMICS_TEMPLATE_ID,
+  hashCumulativeClaimLeaf,
   hashDaoTokenClaimLeaf,
   parseDaoGenesisMintUnits,
   parseDaoTokenSupplyUnits,
   resolveDaoTokenomics,
+  splitEpochDeltaByCredits,
   verifyDaoTokenMerkleProof,
 } from "@cogni/aragon-osx";
+import { encodePacked, keccak256 } from "viem";
 import { describe, expect, it } from "vitest";
 
 const TOKEN = "0x00000000000000000000000000000000000000aa" as const;
@@ -427,5 +431,157 @@ describe("buildDaoTokenSettlementModel", () => {
     expect(model.blockers.map((blocker) => blocker.code)).toContain(
       "statement_hash_mismatch"
     );
+  });
+});
+
+describe("hashCumulativeClaimLeaf (1inch shape — NO index)", () => {
+  it("matches keccak256(abi.encodePacked(address, uint256)) with no index", () => {
+    const cumulativeAmount = 12_345n;
+    const expected = keccak256(
+      encodePacked(["address", "uint256"], [ALICE, cumulativeAmount])
+    );
+    expect(hashCumulativeClaimLeaf(ALICE, cumulativeAmount)).toBe(expected);
+  });
+
+  it("differs from the Uniswap-v1 (indexed) leaf for the same account+amount", () => {
+    const amount = 999n;
+    expect(hashCumulativeClaimLeaf(ALICE, amount)).not.toBe(
+      hashDaoTokenClaimLeaf(0, ALICE, amount)
+    );
+  });
+
+  it("rejects negative amounts and non-addresses", () => {
+    expect(() => hashCumulativeClaimLeaf(ALICE, -1n)).toThrow(RangeError);
+    expect(() => hashCumulativeClaimLeaf("0xnope" as typeof ALICE, 1n)).toThrow(
+      RangeError
+    );
+  });
+});
+
+describe("buildDaoTokenCumulativeDistribution", () => {
+  it("folds prior cumulative + this epoch's delta into cumulative leaves", () => {
+    const distribution = buildDaoTokenCumulativeDistribution({
+      distributionId: "epoch-2",
+      ...MANIFEST_IDENTITY,
+      chainId: 8453,
+      tokenAddress: TOKEN,
+      priorCumulative: [
+        { account: ALICE, cumulativeAmount: 100n },
+        { account: BOB, cumulativeAmount: 50n },
+      ],
+      epochDeltas: [
+        { claimantKey: "user:alice", account: ALICE, deltaAmount: 25n },
+        { claimantKey: "user:carol", account: CAROL, deltaAmount: 10n },
+      ],
+    });
+
+    // Alice = 100 + 25; Bob = 50 + 0 (carried forward); Carol = 0 + 10.
+    const byAccount = new Map(
+      distribution.leaves.map((l) => [l.account.toLowerCase(), l])
+    );
+    expect(byAccount.get(ALICE.toLowerCase())?.cumulativeAmount).toBe(125n);
+    expect(byAccount.get(BOB.toLowerCase())?.cumulativeAmount).toBe(50n);
+    expect(byAccount.get(CAROL.toLowerCase())?.cumulativeAmount).toBe(10n);
+
+    // mintDelta = only NEW tokens this epoch = 25 + 10.
+    expect(distribution.mintDelta).toBe(35n);
+    // cumulativeTotal = supply distributed to date = prior(150) + delta(35).
+    expect(distribution.cumulativeTotal).toBe(185n);
+    expect(distribution.claimContractPattern).toBe(
+      "1inch.cumulative-merkle-drop.v1"
+    );
+  });
+
+  it("emits index-free 1inch leaves and proofs that verify", () => {
+    const distribution = buildDaoTokenCumulativeDistribution({
+      distributionId: "epoch-3",
+      ...MANIFEST_IDENTITY,
+      chainId: 8453,
+      tokenAddress: TOKEN,
+      priorCumulative: [],
+      epochDeltas: [
+        { claimantKey: "user:alice", account: ALICE, deltaAmount: 70n },
+        { claimantKey: "user:bob", account: BOB, deltaAmount: 30n },
+      ],
+    });
+
+    for (const leaf of distribution.leaves) {
+      expect(leaf.leafHash).toBe(
+        hashCumulativeClaimLeaf(leaf.account, leaf.cumulativeAmount)
+      );
+      expect(
+        verifyDaoTokenMerkleProof(
+          leaf.leafHash,
+          leaf.proof,
+          distribution.merkleRoot
+        )
+      ).toBe(true);
+    }
+    expect(distribution.mintDelta).toBe(100n);
+    expect(distribution.cumulativeTotal).toBe(100n);
+  });
+
+  it("carries prior balances forward when an account has no delta this epoch", () => {
+    const distribution = buildDaoTokenCumulativeDistribution({
+      distributionId: "epoch-4",
+      ...MANIFEST_IDENTITY,
+      chainId: 8453,
+      tokenAddress: TOKEN,
+      priorCumulative: [{ account: BOB, cumulativeAmount: 42n }],
+      epochDeltas: [
+        { claimantKey: "user:alice", account: ALICE, deltaAmount: 8n },
+      ],
+    });
+    expect(distribution.mintDelta).toBe(8n);
+    expect(distribution.cumulativeTotal).toBe(50n);
+    expect(distribution.leaves).toHaveLength(2);
+  });
+
+  it("drops accounts that net to zero cumulative", () => {
+    const distribution = buildDaoTokenCumulativeDistribution({
+      distributionId: "epoch-5",
+      ...MANIFEST_IDENTITY,
+      chainId: 8453,
+      tokenAddress: TOKEN,
+      priorCumulative: [{ account: BOB, cumulativeAmount: 0n }],
+      epochDeltas: [
+        { claimantKey: "user:alice", account: ALICE, deltaAmount: 5n },
+        { claimantKey: "user:carol", account: CAROL, deltaAmount: 0n },
+      ],
+    });
+    expect(distribution.leaves.map((l) => l.account.toLowerCase())).toEqual([
+      ALICE.toLowerCase(),
+    ]);
+  });
+
+  it("throws when no account has a positive cumulative balance", () => {
+    expect(() =>
+      buildDaoTokenCumulativeDistribution({
+        distributionId: "epoch-6",
+        ...MANIFEST_IDENTITY,
+        chainId: 8453,
+        tokenAddress: TOKEN,
+        priorCumulative: [],
+        epochDeltas: [
+          { claimantKey: "user:alice", account: ALICE, deltaAmount: 0n },
+        ],
+      })
+    ).toThrow(/positive cumulative balance/);
+  });
+});
+
+describe("splitEpochDeltaByCredits", () => {
+  it("splits the mint delta by credit weight summing to exactly mintDelta", () => {
+    const deltas = splitEpochDeltaByCredits(
+      [
+        { claimantKey: "user:alice", account: ALICE, creditAmount: 1n },
+        { claimantKey: "user:bob", account: BOB, creditAmount: 1n },
+        { claimantKey: "user:carol", account: CAROL, creditAmount: 1n },
+      ],
+      10n
+    );
+    expect(deltas.reduce((sum, d) => sum + d.deltaAmount, 0n)).toBe(10n);
+    // Deterministic largest-remainder: same shape as legacy allocateTokenAmounts.
+    expect(deltas.map((d) => d.deltaAmount)).toEqual([4n, 3n, 3n]);
   });
 });

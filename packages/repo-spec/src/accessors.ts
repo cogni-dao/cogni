@@ -385,7 +385,15 @@ export interface DaoTokenDistributionConfig {
   readonly chainId: number;
   readonly tokenAddress: string;
   readonly emissionsHolderAddress: string;
-  readonly claimContractPattern: "uniswap.merkle-distributor.v1";
+  readonly claimContractPattern:
+    | "uniswap.merkle-distributor.v1"
+    | "1inch.cumulative-merkle-drop.v1";
+  /**
+   * The ONE cumulative Merkle distributor for this node (R2 deploy).
+   * Undefined until distributions activation records it. Epoch finalization (R3)
+   * resolves this as the terminal fallback when no manifest yet exists.
+   */
+  readonly distributorAddress?: string;
 }
 
 /**
@@ -448,7 +456,23 @@ export function extractDaoTokenDistributionConfig(
     claimContractPattern:
       spec.distributions.claim_contract_pattern ??
       "uniswap.merkle-distributor.v1",
+    ...(spec.distributions.distributor_address
+      ? { distributorAddress: spec.distributions.distributor_address }
+      : {}),
   };
+}
+
+/**
+ * Extract the ONE cumulative distributor address recorded at distributions
+ * activation (R2). Returns undefined until an address is recorded. This is the
+ * terminal fallback for epoch-finalization distributor resolution (R3): the
+ * FIRST epoch has no prior/current manifest, so it reads the address from here.
+ * Does NOT require `distributions.status: active` — the address is recorded at
+ * the same moment activation flips to active, but reading it should not couple
+ * to status so a partially-recorded spec still resolves the contract.
+ */
+export function extractDistributorAddress(spec: RepoSpec): string | undefined {
+  return spec.distributions?.distributor_address ?? undefined;
 }
 
 /**

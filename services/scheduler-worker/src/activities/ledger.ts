@@ -20,11 +20,19 @@
  *   - Per EVALUATION_FINAL_ATOMIC: transitionEpochForWindow passes evaluations to store.transitionEpochForWindow for atomic close + create
  *   - Per EPOCH_FINALIZE_IDEMPOTENT: finalizeEpoch returns existing statement if already finalized
  *   - Per FINALIZE_CLAIMANT_AWARE: finalizeEpoch loads locked claimant rows from epoch_receipt_claimants, dispatches the pinned allocator, explodes to claimant allocations, and stores claimant metadata in attribution statement lines
+ *   - Per FINALIZE_BUILDS_CUMULATIVE_ROOT (R3): on a successful finalize, finalizeEpoch resolves this epoch's claimant deltas to wallets, folds them onto the prior persisted cumulative manifest, and persists the new cumulative merkle root + per-epoch mint delta. The admin's SINGLE finalize signature drives this — there is no second signing flow. The DAO.mint(delta) + distributor.setMerkleRoot(root) transaction is BUILT from the persisted cumulative manifest (root + delta + distributorAddress); this activity never sends an on-chain tx.
  * Side-effects: IO (database, GitHub API, viem EIP-712 verification)
- * Links: docs/spec/attribution-ledger.md, docs/spec/temporal-patterns.md
+ * Links: docs/spec/attribution-ledger.md, docs/spec/temporal-patterns.md, packages/aragon-osx/src/epoch-distribution-service.ts
  * @internal
  */
 
+import {
+  buildCumulativeEpochDistribution,
+  type ClaimantWalletResolver,
+  type FinalizedEpochStatement,
+  type HexAddress,
+  type PriorCumulativeBalance,
+} from "@cogni/aragon-osx";
 import type {
   CloseIngestionWithEvaluationsParams,
   UnselectedReceipt,
@@ -61,6 +69,13 @@ import type {
 } from "../ports/index.js";
 
 /**
+ * 18-decimal base-unit scale for the GovernanceERC20. The per-epoch mint delta
+ * maps 1 signed credit → 1 whole token (× 10^18 base units), matching the V0
+ * Walk mapping previously in features/governance/publish-epoch/build-distribution.
+ */
+const TOKEN_BASE_UNITS = 10n ** 18n;
+
+/**
  * Dependencies injected into ledger activities at worker creation.
  */
 export interface AttributionActivityDeps {
@@ -70,6 +85,27 @@ export interface AttributionActivityDeps {
   readonly nodeId: string;
   readonly scopeId: string;
   readonly chainId: number;
+  /**
+   * The DAO's GovernanceERC20 token address (settlement token). Read from
+   * repo-spec at bootstrap. Required to build the cumulative distribution
+   * manifest at finalize; null until the node activates distributions.
+   */
+  readonly tokenAddress: string | null;
+  /**
+   * The ONE per-node cumulative distributor recorded in repo-spec at R2
+   * activation. Terminal fallback for distributor resolution at finalize: the
+   * FIRST epoch has no prior/current manifest, so this repo-spec-sourced address
+   * is what makes the first manifest carry a distributor. Null until R2 records
+   * it (off-chain finalize still runs).
+   */
+  readonly distributorAddress: string | null;
+  /**
+   * Read-only resolver: attribution claimant key → contributor wallet. Used at
+   * finalize to map this epoch's claimant credit lines onto EVM wallets for the
+   * cumulative root. Null disables cumulative-root building (off-chain ledger
+   * still finalizes).
+   */
+  readonly walletResolver: ClaimantWalletResolver | null;
   readonly logger: Logger;
 }
 
@@ -287,6 +323,24 @@ export interface FinalizeEpochOutput {
   readonly poolTotalCredits: string; // bigint serialized
   readonly finalAllocationSetHash: string;
   readonly statementLineCount: number;
+  /**
+   * Cumulative distribution produced by the SAME finalize signature (R3).
+   * Null when distributions are not activated (no tokenAddress/resolver) or no
+   * wallet-resolved cumulative balance remains. When present, the per-epoch
+   * on-chain action is: DAO.mint(mintDelta) into the existing distributor +
+   * distributor.setMerkleRoot(merkleRoot). This activity BUILDS, never sends it.
+   */
+  readonly cumulativeDistribution: {
+    readonly distributionId: string;
+    readonly merkleRoot: string;
+    readonly mintDelta: string; // bigint serialized — DAO mints exactly this
+    readonly cumulativeTotal: string; // bigint serialized — total supply to date
+    readonly leafCount: number;
+    readonly tokenAddress: string;
+    readonly chainId: number;
+    /** Existing per-node distributor (null until R2 activation records it). */
+    readonly distributorAddress: string | null;
+  } | null;
 }
 
 /**
@@ -301,8 +355,186 @@ export function createAttributionActivities(deps: AttributionActivityDeps) {
     nodeId,
     scopeId,
     chainId,
+    tokenAddress,
+    distributorAddress: repoSpecDistributorAddress,
+    walletResolver,
     logger,
   } = deps;
+
+  /**
+   * R3 — build + persist the cumulative distribution from a just-finalized epoch.
+   *
+   * Resolves this epoch's claimant credit lines to wallets, folds them onto the
+   * prior persisted cumulative manifest (the most-recent finalized epoch's leaves
+   * already carry per-account cumulative balances), and persists the new
+   * cumulative merkle root + per-epoch mint delta. Returns the manifest summary
+   * the finalize output exposes so callers can BUILD the
+   * DAO.mint(delta)+setMerkleRoot(root) transaction. Never sends an on-chain tx.
+   *
+   * No-ops (returns null) when distributions are not activated (no tokenAddress
+   * or resolver) or no wallet-resolved cumulative balance remains — the
+   * off-chain ledger finalize already succeeded and must not be undone.
+   */
+  async function buildAndPersistCumulativeDistribution(args: {
+    readonly epochId: bigint;
+    readonly statementId: string;
+    readonly finalAllocationSetHash: string;
+    readonly statementLines: ReadonlyArray<{
+      readonly claimant_key: string;
+      readonly credit_amount: string;
+      readonly receipt_ids: readonly string[];
+    }>;
+  }): Promise<FinalizeEpochOutput["cumulativeDistribution"]> {
+    if (!tokenAddress || !walletResolver) {
+      logger.info(
+        { epochId: args.epochId.toString() },
+        "Cumulative distribution skipped — distributions not activated (no tokenAddress/walletResolver)"
+      );
+      return null;
+    }
+
+    // Prior cumulative balances = the most-recent persisted cumulative manifest's
+    // per-account leaf amounts (each cumulative leaf carries the account's
+    // cumulative-to-date). We find the highest epoch id BEFORE this one that has a
+    // persisted manifest. No new store method: enumerate epochs and read manifests.
+    const allEpochs = await attributionStore.listEpochs(nodeId);
+    const priorEpochIds = allEpochs
+      .map((e) => e.id)
+      .filter((id) => id < args.epochId)
+      .sort((a, b) => (a > b ? -1 : a < b ? 1 : 0)); // descending
+
+    let priorManifest: Awaited<
+      ReturnType<typeof attributionStore.getDistributionManifestForEpoch>
+    > = null;
+    let priorLeaves: Awaited<
+      ReturnType<typeof attributionStore.getDistributionLeavesForEpoch>
+    > = [];
+    for (const priorEpochId of priorEpochIds) {
+      const manifest =
+        await attributionStore.getDistributionManifestForEpoch(priorEpochId);
+      if (manifest) {
+        priorManifest = manifest;
+        priorLeaves =
+          await attributionStore.getDistributionLeavesForEpoch(priorEpochId);
+        break;
+      }
+    }
+
+    const priorCumulative: PriorCumulativeBalance[] = priorLeaves.map(
+      (leaf) => ({
+        account: leaf.account as HexAddress,
+        cumulativeAmount: leaf.amount,
+      })
+    );
+
+    const distributorAddress =
+      priorManifest?.distributorAddress ??
+      (await attributionStore.getDistributionManifestForEpoch(args.epochId))
+        ?.distributorAddress ??
+      // R2↔R3 seam: the FIRST epoch has no prior/current manifest, so fall back to
+      // the ONE per-node distributor R2 recorded in repo-spec at activation.
+      repoSpecDistributorAddress ??
+      null;
+
+    // The per-epoch mint delta is THIS epoch's poolTotal in base units
+    // (poolTotalCredits × 10^18), mapped 1 credit → 1 whole token.
+    const poolTotalCredits = args.statementLines.reduce(
+      (sum, line) => sum + BigInt(line.credit_amount),
+      0n
+    );
+    const mintDelta = poolTotalCredits * TOKEN_BASE_UNITS;
+
+    const finalized: FinalizedEpochStatement = {
+      distributionId: `epoch-${args.epochId.toString()}`,
+      nodeId,
+      scopeId,
+      statementHash: args.finalAllocationSetHash,
+      chainId,
+      tokenAddress: tokenAddress as HexAddress,
+      lines: args.statementLines.map((line) => ({
+        claimantKey: line.claimant_key,
+        creditAmount: BigInt(line.credit_amount),
+        receiptIds: line.receipt_ids,
+      })),
+    };
+
+    if (mintDelta <= 0n && priorCumulative.length === 0) {
+      logger.info(
+        { epochId: args.epochId.toString() },
+        "Cumulative distribution skipped — zero mint delta and no prior cumulative balance"
+      );
+      return null;
+    }
+
+    const { distribution, blockers, unresolvedClaimantKeys } =
+      await buildCumulativeEpochDistribution(
+        finalized,
+        mintDelta,
+        priorCumulative,
+        walletResolver
+      );
+
+    if (!distribution) {
+      logger.warn(
+        {
+          epochId: args.epochId.toString(),
+          blockers: blockers.map((b) => b.code),
+          unresolvedClaimantKeys,
+        },
+        "Cumulative distribution not built — no wallet-resolved cumulative balance"
+      );
+      return null;
+    }
+
+    // Persist the cumulative manifest (header + cumulative leaves). The
+    // distributionAmount column holds the cumulative supply distributed to date;
+    // totalAllocated holds the same (every leaf is wallet-backed). The
+    // distributorAddress carries forward from the prior manifest (R2 records it).
+    await attributionStore.upsertDistributionManifest({
+      nodeId: distribution.nodeId,
+      scopeId: distribution.scopeId,
+      epochId: args.epochId,
+      distributionId: distribution.distributionId,
+      statementHash: distribution.statementHash,
+      merkleRoot: distribution.merkleRoot,
+      chainId: distribution.chainId,
+      tokenAddress: distribution.tokenAddress,
+      distributionAmount: distribution.cumulativeTotal,
+      totalAllocated: distribution.cumulativeTotal,
+      distributorAddress,
+      leaves: distribution.leaves.map((leaf) => ({
+        index: leaf.index,
+        claimantKey: leaf.claimantKey,
+        account: leaf.account,
+        amount: leaf.cumulativeAmount,
+        leafHash: leaf.leafHash,
+        proof: [...leaf.proof],
+      })),
+    });
+
+    logger.info(
+      {
+        epochId: args.epochId.toString(),
+        merkleRoot: `${distribution.merkleRoot.slice(0, 12)}...`,
+        mintDelta: distribution.mintDelta.toString(),
+        cumulativeTotal: distribution.cumulativeTotal.toString(),
+        leafCount: distribution.leaves.length,
+        unresolvedClaimantKeys,
+      },
+      "Cumulative distribution built + persisted from finalize signature"
+    );
+
+    return {
+      distributionId: distribution.distributionId,
+      merkleRoot: distribution.merkleRoot,
+      mintDelta: distribution.mintDelta.toString(),
+      cumulativeTotal: distribution.cumulativeTotal.toString(),
+      leafCount: distribution.leaves.length,
+      tokenAddress: distribution.tokenAddress,
+      chainId: distribution.chainId,
+      distributorAddress,
+    };
+  }
 
   function toEvaluationPayloadMap(
     evaluations: ReadonlyArray<{
@@ -1117,11 +1349,37 @@ export function createAttributionActivities(deps: AttributionActivityDeps) {
         expectedFinalAllocationSetHash: existing.finalAllocationSetHash,
       });
 
+      // R3: re-build the cumulative manifest on repair too — heals a missing or
+      // stale cumulative root from an earlier finalize that predated this path.
+      let repairCumulative: FinalizeEpochOutput["cumulativeDistribution"] =
+        null;
+      try {
+        repairCumulative = await buildAndPersistCumulativeDistribution({
+          epochId,
+          statementId: existing.id,
+          finalAllocationSetHash: existing.finalAllocationSetHash,
+          statementLines: existing.statementLines.map((line) => ({
+            claimant_key: line.claimant_key,
+            credit_amount: line.credit_amount,
+            receipt_ids: [...line.receipt_ids],
+          })),
+        });
+      } catch (err) {
+        logger.error(
+          {
+            epochId: input.epochId,
+            err: err instanceof Error ? err.message : String(err),
+          },
+          "Cumulative distribution repair failed — epoch stays finalized"
+        );
+      }
+
       return {
         statementId: existing.id,
         poolTotalCredits: existing.poolTotalCredits.toString(),
         finalAllocationSetHash: existing.finalAllocationSetHash,
         statementLineCount: existing.statementLines.length,
+        cumulativeDistribution: repairCumulative,
       };
     }
 
@@ -1312,11 +1570,38 @@ export function createAttributionActivities(deps: AttributionActivityDeps) {
       "Epoch finalized"
     );
 
+    // R3: the SAME finalize signature drives the cumulative root + mint delta.
+    // Built/persisted after the atomic off-chain finalize so a build failure
+    // never undoes the signed statement; the off-chain ledger is authoritative.
+    let cumulativeDistribution: FinalizeEpochOutput["cumulativeDistribution"] =
+      null;
+    try {
+      cumulativeDistribution = await buildAndPersistCumulativeDistribution({
+        epochId,
+        statementId: statement.id,
+        finalAllocationSetHash,
+        statementLines: statementLines.map((line) => ({
+          claimant_key: line.claimantKey,
+          credit_amount: line.creditAmount.toString(),
+          receipt_ids: [...line.receiptIds],
+        })),
+      });
+    } catch (err) {
+      logger.error(
+        {
+          epochId: input.epochId,
+          err: err instanceof Error ? err.message : String(err),
+        },
+        "Cumulative distribution build failed AFTER finalize — epoch stays finalized; retry/repair on next finalize call"
+      );
+    }
+
     return {
       statementId: statement.id,
       poolTotalCredits: poolTotal.toString(),
       finalAllocationSetHash,
       statementLineCount: statementLines.length,
+      cumulativeDistribution,
     };
   }
 

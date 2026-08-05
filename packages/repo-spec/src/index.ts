@@ -18,6 +18,7 @@ export {
   extractDaoConfig,
   extractDaoTokenDistributionConfig,
   extractDaoTreasuryAddress,
+  extractDistributorAddress,
   extractGatesConfig,
   extractGovernanceConfig,
   extractKnowledgeConfig,

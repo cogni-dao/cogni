@@ -17,6 +17,7 @@
 // Re-export full schema (consumers get all tables transitively through db-client)
 export * from "@cogni/db-schema";
 export { DrizzleAttributionAdapter } from "./adapters/drizzle-attribution.adapter";
+export { DrizzleClaimantWalletResolver } from "./adapters/drizzle-claimant-wallet-resolver.adapter";
 // Branded ID types live in @cogni/ids — import directly, not through this barrel.
 export { DrizzleExecutionRequestAdapter } from "./adapters/drizzle-execution-request.adapter";
 // Adapters (split by trust boundary: user = appDb/RLS, worker = serviceDb/BYPASSRLS)

@@ -41,7 +41,9 @@ Pure TypeScript package for Cogni-owned contract ABIs, bytecode, and addresses. 
 - **Exports:**
   - `COGNI_SIGNAL_ABI` - CogniSignal contract ABI
   - `COGNI_SIGNAL_BYTECODE` - CogniSignal deployment bytecode (deployed fresh at setup time)
-- **Files considered API:** `index.ts`, `cogni-signal/abi.ts`, `cogni-signal/bytecode.ts`
+  - `MERKLE_DISTRIBUTOR_ABI` / `MERKLE_DISTRIBUTOR_BYTECODE` - vendored Uniswap MerkleDistributor v1 (one-shot airdrop, immutable root)
+  - `CUMULATIVE_MERKLE_DISTRIBUTOR_ABI` / `CUMULATIVE_MERKLE_DISTRIBUTOR_BYTECODE` - vendored 1inch CumulativeMerkleDrop (ONE per node, mutable owner-set root + cumulative claim)
+- **Files considered API:** `index.ts`, `cogni-signal/abi.ts`, `cogni-signal/bytecode.ts`, `merkle-distributor/*`, `cumulative-merkle-distributor/*`
 
 ## Ports
 

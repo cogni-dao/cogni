@@ -12,6 +12,7 @@
     "start": "node dist/main.js"
   },
   "dependencies": {
+    "@cogni/aragon-osx": "workspace:*",
     "@cogni/attribution-ledger": "workspace:*",
     "@cogni/attribution-pipeline-contracts": "workspace:*",
     "@cogni/attribution-pipeline-plugins": "workspace:*",

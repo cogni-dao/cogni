@@ -61,4 +61,83 @@ export const TOKEN_VOTING_ABI = [
     outputs: [{ name: "proposalId", type: "uint256", internalType: "uint256" }],
     stateMutability: "nonpayable",
   },
+  // ProposalCreated is the AUTHORITATIVE source of the on-chain proposalId.
+  // In OSx 1.4 TokenVoting the id is a hash that does NOT equal the value a
+  // createProposal simulation returns — parse it from this event in the receipt
+  // (proven in spikes/walk-p4-mint-into-distributor/REPORT.md, Surprise #2).
+  {
+    type: "event",
+    name: "ProposalCreated",
+    anonymous: false,
+    inputs: [
+      {
+        name: "proposalId",
+        type: "uint256",
+        indexed: true,
+        internalType: "uint256",
+      },
+      {
+        name: "creator",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      { name: "startDate", type: "uint64", indexed: false },
+      { name: "endDate", type: "uint64", indexed: false },
+      { name: "metadata", type: "bytes", indexed: false },
+      {
+        name: "actions",
+        type: "tuple[]",
+        indexed: false,
+        components: [
+          { name: "to", type: "address" },
+          { name: "value", type: "uint256" },
+          { name: "data", type: "bytes" },
+        ],
+      },
+      { name: "allowFailureMap", type: "uint256", indexed: false },
+    ],
+  },
+  // Read-back to confirm the proposal EARLY-EXECUTED in the same tx (executed=true).
+  {
+    type: "function",
+    name: "getProposal",
+    stateMutability: "view",
+    inputs: [{ name: "_proposalId", type: "uint256" }],
+    outputs: [
+      { name: "open", type: "bool" },
+      { name: "executed", type: "bool" },
+      {
+        name: "parameters",
+        type: "tuple",
+        components: [
+          { name: "votingMode", type: "uint8" },
+          { name: "supportThreshold", type: "uint32" },
+          { name: "startDate", type: "uint64" },
+          { name: "endDate", type: "uint64" },
+          { name: "snapshotBlock", type: "uint64" },
+          { name: "minVotingPower", type: "uint256" },
+        ],
+      },
+      {
+        name: "tally",
+        type: "tuple",
+        components: [
+          { name: "abstain", type: "uint256" },
+          { name: "yes", type: "uint256" },
+          { name: "no", type: "uint256" },
+        ],
+      },
+      {
+        name: "actions",
+        type: "tuple[]",
+        components: [
+          { name: "to", type: "address" },
+          { name: "value", type: "uint256" },
+          { name: "data", type: "bytes" },
+        ],
+      },
+      { name: "allowFailureMap", type: "uint256" },
+    ],
+  },
 ] as const;

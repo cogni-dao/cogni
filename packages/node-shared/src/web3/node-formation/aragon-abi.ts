@@ -110,7 +110,16 @@ export const TOKEN_VOTING_ABI = [
   },
 ] as const;
 
-/** GovernanceERC20 minimal ABI. */
+/**
+ * GovernanceERC20 minimal ABI.
+ *
+ * `mint(to, amount)` is the action the DAO executes to fund an epoch
+ * distribution: the DAO already holds MINT_PERMISSION (granted at formation by
+ * TokenVotingSetup), so a governance proposal whose action is
+ * `token.mint(distributor, amount)` mints the epoch's tokens STRAIGHT INTO the
+ * MerkleDistributor — no central wallet ever custodies them (no-central-custody).
+ * Proven against a live Base-mainnet fork in spikes/walk-p4-mint-into-distributor.
+ */
 export const GOVERNANCE_ERC20_ABI = [
   {
     type: "function",
@@ -125,5 +134,15 @@ export const GOVERNANCE_ERC20_ABI = [
     stateMutability: "view",
     inputs: [],
     outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "mint",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "to", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [],
   },
 ] as const;

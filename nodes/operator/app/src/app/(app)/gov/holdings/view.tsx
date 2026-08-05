@@ -27,6 +27,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components";
+import { CumulativeClaimPanel } from "@/features/governance/components/CumulativeClaimPanel";
 import { HoldingRow } from "@/features/governance/components/HoldingCard";
 import { useHoldings } from "@/features/governance/hooks/useHoldings";
 import { buildPieChartData } from "@/features/governance/lib/build-pie-data";
@@ -86,6 +87,8 @@ export function HoldingsView(): ReactElement {
           Credit attribution and ownership distribution
         </p>
       </div>
+
+      <CumulativeClaimPanel />
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
         <Card className="border-border/50 bg-card/50">
