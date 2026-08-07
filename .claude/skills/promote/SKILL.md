@@ -61,6 +61,8 @@ If preview is stuck, it is **not** healed by a hand-dispatch — it is healed by
 
 `flight-preview` only retags nodes that `pr-build` actually built (`RESOLVED_TARGETS`). Untouched nodes are skipped. If preview-operator is broken and the merging PR was poly-only, the heal flight retags poly only — preview-operator stays broken. **Fix:** open a follow-up PR that touches the broken node's paths (`nodes/<node>/app/` or its dir-local `AGENTS.md`) and merge via merge-queue. The merge_group rebuild produces the missing `mq-*-{node}` image; the auto-flight on the resulting `push:main` heals.
 
+> **Migrations amplify this into a silent-success trap.** To land a **DB migration** (registry seed, RLS, backfill) on preview/prod you must deploy the operator image from the commit that CARRIES it — the migrate initContainer only runs migrations baked into the deployed image. Flighting **main head** to heal fails silently when main head is a non-operator change: affected-only skips operator, buildSha never moves, and BOTH workflows report `completed/success`. Find the real target with `git log --oneline <sha> -- nodes/operator/app` and flight THAT commit; verify in the VM Postgres (`SELECT max(id) FROM drizzle."__drizzle_migrations"`), never by workflow conclusion. Seen 2026-08-07: seed `0040` (#1978/`3c4f256`) reached preview+prod only after flighting `3c4f256`, not main head `a5f63fb` (#1980, provision-only). See `/provision-env` gotcha 21.
+
 ### Admin-merge gotcha (bug.0443)
 
 Admin-merging bypasses `merge_group` → no `mq-*` images → `flight-preview.yml`'s "Hard-fail when no images found for resolved PR" step fires. Same recovery: ship a follow-up PR through merge-queue. Do NOT try to dispatch a deleted `build-multi-node.yml`.
