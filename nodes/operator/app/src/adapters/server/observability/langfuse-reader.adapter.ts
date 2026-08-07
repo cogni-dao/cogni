@@ -14,7 +14,10 @@
  */
 
 import type {
+  LangfuseJsonValue,
   LangfuseReaderPort,
+  LangfuseTraceDetail,
+  LangfuseTraceDetailQuery,
   LangfuseTraceQuery,
   LangfuseTraceSummary,
 } from "@/ports";
@@ -58,24 +61,103 @@ export class HttpLangfuseReader implements LangfuseReaderPort {
     // Defense-in-depth: Langfuse is queried with tags=<nodeId>, but the operator
     // still enforces the node boundary on the response before returning data.
     const rows = (json.data ?? []).filter((t) =>
-      (t.tags ?? []).includes(query.nodeId)
+      traceBelongsToNode(t, query.nodeId)
     );
     return rows.map((t) => ({
       id: t.id,
       name: t.name ?? null,
       timestamp: t.timestamp,
       tags: t.tags ?? [],
-      nodeId: typeof t.metadata?.nodeId === "string" ? t.metadata.nodeId : null,
+      nodeId: metadataNodeId(t.metadata),
     }));
+  }
+
+  async getTrace(
+    query: LangfuseTraceDetailQuery
+  ): Promise<LangfuseTraceDetail | null> {
+    const url = new URL(
+      `${this.base}/api/public/traces/${encodeURIComponent(query.traceId)}`
+    );
+
+    const res = await fetch(url, {
+      headers: { Authorization: this.authHeader },
+      // Bound the call so a hung upstream can't pin the route.
+      signal: AbortSignal.timeout(15_000),
+    });
+
+    if (res.status === 404) {
+      return null;
+    }
+    if (!res.ok) {
+      // Never echo the key; include status + a short body excerpt for diagnosis.
+      const body = (await res.text().catch(() => "")).slice(0, 200);
+      throw new Error(`langfuse get trace failed: HTTP ${res.status} ${body}`);
+    }
+
+    const trace = (await res.json()) as LangfuseTraceResponse;
+    // Defense-in-depth: a direct trace lookup is global within the shared Langfuse
+    // project, so prove node ownership before returning content-bearing fields.
+    if (!traceBelongsToNode(trace, query.nodeId)) {
+      return null;
+    }
+
+    return {
+      id: trace.id,
+      name: trace.name ?? null,
+      timestamp: trace.timestamp,
+      tags: trace.tags ?? [],
+      nodeId: metadataNodeId(trace.metadata) ?? query.nodeId,
+      metadata: toJsonValue(trace.metadata),
+      input: toJsonValue(trace.input),
+      output: toJsonValue(trace.output),
+      userId: typeof trace.userId === "string" ? trace.userId : null,
+      sessionId: typeof trace.sessionId === "string" ? trace.sessionId : null,
+      release: typeof trace.release === "string" ? trace.release : null,
+      version: typeof trace.version === "string" ? trace.version : null,
+    };
   }
 }
 
+function metadataNodeId(metadata: unknown): string | null {
+  if (!metadata || typeof metadata !== "object") {
+    return null;
+  }
+  const nodeId = (metadata as { readonly nodeId?: unknown }).nodeId;
+  return typeof nodeId === "string" ? nodeId : null;
+}
+
+function traceBelongsToNode(
+  trace: LangfuseTraceShape,
+  nodeId: string
+): boolean {
+  const metadataId = metadataNodeId(trace.metadata);
+  if (metadataId !== null && metadataId !== nodeId) {
+    return false;
+  }
+  return (trace.tags ?? []).includes(nodeId) || metadataId === nodeId;
+}
+
+function toJsonValue(value: unknown): LangfuseJsonValue | null {
+  return value === undefined ? null : (value as LangfuseJsonValue);
+}
+
+interface LangfuseTraceShape {
+  readonly id: string;
+  readonly timestamp: string;
+  readonly name?: string | null;
+  readonly tags?: readonly string[];
+  readonly metadata?: unknown;
+}
+
+interface LangfuseTraceResponse extends LangfuseTraceShape {
+  readonly input?: unknown;
+  readonly output?: unknown;
+  readonly userId?: unknown;
+  readonly sessionId?: unknown;
+  readonly release?: unknown;
+  readonly version?: unknown;
+}
+
 interface LangfuseTracesResponse {
-  readonly data?: ReadonlyArray<{
-    readonly id: string;
-    readonly timestamp: string;
-    readonly name?: string | null;
-    readonly tags?: readonly string[];
-    readonly metadata?: { readonly nodeId?: unknown } | null;
-  }>;
+  readonly data?: ReadonlyArray<LangfuseTraceShape>;
 }
