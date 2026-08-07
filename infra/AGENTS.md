@@ -56,7 +56,7 @@ Everything about how the system runs. Split by responsibility, not by tool.
 
 ## Standards
 
-- `catalog/` is the SSoT for nodes (`CATALOG_IS_SSOT`, ci-cd.md axiom 16). Each `catalog/<name>.yaml` declares: `name`, `type` (node/service), `port`, `node_id` (uuid; node only), `dockerfile`, `image_tag_suffix`, `migrator_tag_suffix`, `path_prefix` (consumed by `scripts/ci/detect-affected.sh`), and `{candidate_a,preview,production}_branch`. Schema is `catalog/_schema.json` (validated on every PR by `check-jsonschema`). Do not add runtime container config, image digests, or non-GitOps wiring here.
+- `catalog/` is the SSoT for nodes (`CATALOG_IS_SSOT`, ci-cd.md axiom 16). Each `catalog/<name>.yaml` declares: `name`, `type` (node/service), `port`, `node_id` (uuid; node only), `dockerfile`, `image_tag_suffix`, `migrator_tag_suffix`, `path_prefix` (consumed by `scripts/ci/detect-affected.sh`), and `{candidate_a,preview,production}_branch`. Remote-source nodes may also declare `artifacts[]` when one source repo/SHA publishes multiple deployable images; `overlay_target` and `kustomize_image` describe which GitOps overlay/image entry owns each digest. Schema is `catalog/_schema.json` (validated on every PR by `check-jsonschema`). Do not add runtime container config, image digests, or non-GitOps wiring here.
 - `k8s/` and `akash/` are peer renderers. Both read from `catalog/`.
 - `compose/` is for infra services intentionally kept off-cluster.
 - `images/` contains only Dockerfiles and build contexts, not runtime config.

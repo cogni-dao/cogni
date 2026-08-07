@@ -41,15 +41,25 @@ stub_promote_script() {
 #!/usr/bin/env bash
 set -euo pipefail
 APP=""
+OVERLAY_APP=""
+KUSTOMIZE_IMAGE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --app) APP="$2"; shift 2;;
+    --overlay-app) OVERLAY_APP="$2"; shift 2;;
+    --kustomize-image) KUSTOMIZE_IMAGE="$2"; shift 2;;
     --digest|--migrator-digest|--env) shift 2;;
     --no-commit) shift;;
     *) shift;;
   esac
 done
 echo "[INFO] Promoting $APP image"
+if [ -n "$OVERLAY_APP" ]; then
+  echo "[INFO] Overlay $OVERLAY_APP"
+fi
+if [ -n "$KUSTOMIZE_IMAGE" ]; then
+  echo "[INFO] Kustomize image $KUSTOMIZE_IMAGE"
+fi
 echo "[INFO] Skipping commit (--no-commit)."
 STUB
   chmod +x "$out"
@@ -74,6 +84,10 @@ FULL_TARGETS='[
 MIXED_SOURCE_TARGETS='[
   {"target":"operator","digest":"sha256:aa01","source_sha":"1111111111111111111111111111111111111111"},
   {"target":"node-template","digest":"sha256:cc01","source_sha":"2222222222222222222222222222222222222222"}
+]'
+POLY_SHAPE_B_TARGETS='[
+  {"target":"poly","digest":"sha256:aa01","source_sha":"3333333333333333333333333333333333333333"},
+  {"target":"poly-paper-trader","digest":"sha256:bb01","source_sha":"3333333333333333333333333333333333333333","overlay_target":"poly","kustomize_image":"ghcr.io/cogni-dao/poly-paper-trader","role":"sidecar"}
 ]'
 EMPTY_TARGETS='[]'
 
@@ -134,6 +148,20 @@ assert data["node-template"] == "2222222222222222222222222222222222222222", data
 PY
   fi
 
+  if [ "$name" = "poly-shape-b-sidecar" ]; then
+    grep -q 'Promoting poly-paper-trader image' "$case_dir/stdout.log"
+    grep -q 'Overlay poly' "$case_dir/stdout.log"
+    grep -q 'Kustomize image ghcr.io/cogni-dao/poly-paper-trader' "$case_dir/stdout.log"
+    python3 - "$case_dir/.promote-state/source-sha-by-app.json" <<'PY'
+import json
+import sys
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    data = json.load(handle)
+assert data["poly"] == "3333333333333333333333333333333333333333", data
+assert data["poly-paper-trader"] == "3333333333333333333333333333333333333333", data
+PY
+  fi
+
   if [ "$rc" != "$expect_rc" ]; then
     echo "[FAIL] case=$name expected rc=$expect_rc got=$rc"
     ok=0
@@ -163,6 +191,10 @@ run_case "empty-payload" "$UPDATE_MAP" "$EMPTY_TARGETS" "" "no" 0
 # Case 4 — payload item source_sha overrides the envelope source_sha, so a
 # mixed parent/child flight writes per-artifact provenance.
 run_case "mixed-source-sha" "$UPDATE_MAP" "$MIXED_SOURCE_TARGETS" "node-template,operator" "yes" 0
+
+# Case 5 — Shape B sidecar: one node deploy unit owns multiple images. The
+# sidecar digest is promoted into the node overlay and gets its own provenance key.
+NODES=poly run_case "poly-shape-b-sidecar" "$UPDATE_MAP" "$POLY_SHAPE_B_TARGETS" "poly,poly-paper-trader" "yes" 0
 
 cd "$REPO_ROOT"
 if [ "$FAILED" -gt 0 ]; then
