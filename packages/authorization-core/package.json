@@ -27,6 +27,6 @@
     "tsup": "^8.5.1",
     "typescript": "^5",
     "vite-tsconfig-paths": "^5.1.4",
-    "vitest": "^4.0.7"
+    "vitest": "^3.2.6"
   }
 }
