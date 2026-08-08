@@ -112,12 +112,42 @@ operator-pin -> candidate-flight CI/CD path. Use
 After candidate flight and `/version` match, prove the freshly booted node is
 usable, not just deployed:
 
-| Check                  | Evidence                                                                                                                                                                                                                                           | Status         |
-| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
-| Registration works     | new agent registration succeeds against the candidate node                                                                                                                                                                                         | `pass/blocked` |
-| Agent graph call works | registered agent gets a successful graph/completions response; ask for a haiku. **Known gap:** a fresh node with no LLM/LiteLLM secret provisioned **times out** here (deployed ≠ usable) — report `blocked` with the timeout, don't paper over it | `pass/blocked` |
-| Knowledge is live      | create a knowledge contribution and confirm the node repo-spec exposes a DoltHub `knowledge.remote.url`                                                                                                                                            | `pass/blocked` |
-| Epoch is active        | candidate node reports an active/current epoch or equivalent live epoch state                                                                                                                                                                      | `pass/blocked` |
+| Check                                  | Evidence                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | Status         |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------- |
+| Registration works                     | new agent registration succeeds against the candidate node                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | `pass/blocked` |
+| Agent graph call works                 | registered agent gets a successful graph/completions response; ask for a haiku. **Known gap:** a fresh node with no LLM/LiteLLM secret provisioned **times out** here (deployed ≠ usable) — report `blocked` with the timeout, don't paper over it                                                                                                                                                                                                                                                                                   | `pass/blocked` |
+| Knowledge is live                      | create a knowledge contribution and confirm the node repo-spec exposes a DoltHub `knowledge.remote.url`                                                                                                                                                                                                                                                                                                                                                                                                                              | `pass/blocked` |
+| Knowledge round-trips (sync + recover) | **the load-bearing durability proof, not just "a contribution exists".** Register a domain (bearer, on-demand) → contribute an entry **and** create a work item → human-merge the contribution → `pushMainOnMerge` `dolt_push` lands on the DoltHub remote → recover it by a **fresh clone** and assert the entry + work_item + commit log come back. See "Dolt round-trip recovery" below — this is what proves the node's knowledge actually persists and is recoverable, the gap that silently hid data-loss until it was needed. | `pass/blocked` |
+| Epoch is active                        | candidate node reports an active/current epoch or equivalent live epoch state                                                                                                                                                                                                                                                                                                                                                                                                                                                        | `pass/blocked` |
+
+### Dolt round-trip recovery (how to run the `Knowledge round-trips` check)
+
+Proving "recover" is the non-obvious part — **plain `dolt clone` (Dolt CLI) does NOT
+work on healthy Doltgres data**: it fails `could not find root value: main; table has
+unknown fields`. That is the Dolt engine being unable to read the Doltgres dialect, NOT
+corruption. (When the SAME `table has unknown fields` appears from DoltHub's **web-SQL**
+runner, that IS a corrupted repo — the diagnostic differs by tool.) Recover doltgres-native:
+
+```bash
+# creds: JWK keyid written to the node's OpenBao at cogni/<env>/<node>/DOLT_CREDS_{JWK,KEYID}
+docker run -d --name dolt-recover -p 5433:5432 \
+  -e DOLTGRES_PASSWORD=recoverpw -v "$HOME/.dolt:/root/.dolt:ro" dolthub/doltgresql:0.57.3
+psql "postgresql://doltgres@127.0.0.1:5433/doltgres" \
+  -c "SELECT DOLT_CLONE('<owner>/<repo>');"        # SELECT, not CALL
+psql "postgresql://doltgres@127.0.0.1:5433/<repo>" \
+  -c "SELECT domain,title FROM knowledge WHERE content LIKE '%<marker>%';" \
+  -c "SELECT id,type,title FROM work_items WHERE id='<work-item-id>';" \
+  -c "SELECT LEFT(commit_hash,10),message FROM dolt_log ORDER BY date DESC LIMIT 6;"
+```
+
+Report `blocked` (do NOT paper over) if any of: DoltHub target is the canonical repo
+rather than a throwaway (a fresh spawn must sync to a throwaway, e.g. via the per-env
+`KNOWLEDGE_DOLTHUB_REMOTE_URL` override), `DOLT_CREDS` absent so the push is a silent
+no-op, or the recovered clone is missing the entry / work item / commit. **Known root
+cause (2026-08):** DoltHub is an unsupported Doltgres remote — its Dolt-native GC cannot
+walk Doltgres roots and can prune a live base chunk, silently corrupting a long-lived
+mirror. Prefer a Doltgres-native remote (filesystem/S3) for durable mirrors; back up the
+Doltgres volume (the app `db-backup` job does NOT cover it).
 
 Include these rows in the human-facing scorecard when they are relevant to a
 fresh node spawn. If a row is blocked by missing credentials or absent endpoint
@@ -137,4 +167,8 @@ surface, report the exact blocker instead of substituting a weaker health check.
 7. Request candidate-a flight through the operator API.
 8. Verify candidate `/version`, run agent-first API validation, and complete
    fresh boot health checks.
-9. Present the node formation scorecard to the human.
+9. Run the **Dolt knowledge round-trip health** check (Fresh Boot Health, above):
+   contribute + create a work item → human-merge → confirm `dolt_push` landed →
+   recover by a fresh doltgres-native `SELECT DOLT_CLONE(...)` and assert the
+   entry + work_item + commit log return. Deployed ≠ durable until this passes.
+10. Present the node formation scorecard to the human.
