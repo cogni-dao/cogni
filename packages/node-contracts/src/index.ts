@@ -40,6 +40,7 @@ export * from "./attribution.epoch-claimants.v1.contract";
 export * from "./attribution.epoch-contributors.v1.contract";
 export * from "./attribution.epoch-statement.v1.contract";
 export * from "./attribution.epoch-user-projections.v1.contract";
+export * from "./attribution.epochs.internal.v1.contract";
 export * from "./attribution.finalize-epoch.v1.contract";
 export * from "./attribution.list-epochs.v1.contract";
 export * from "./attribution.receipts.internal.v1.contract";
