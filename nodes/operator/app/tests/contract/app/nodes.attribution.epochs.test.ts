@@ -225,9 +225,7 @@ describe("GET /api/v1/nodes/[id]/attribution/epochs", () => {
         // Store read is scoped to the RESOLVED nodeId, not the raw slug param.
         expect(mockStore.listEpochs).toHaveBeenCalledWith(NODE_ID);
         // Own node → never proxied over HTTP.
-        expect(
-          mockEpochsRead.listEpochsForForeignNode
-        ).not.toHaveBeenCalled();
+        expect(mockEpochsRead.listEpochsForForeignNode).not.toHaveBeenCalled();
       },
     });
   });
@@ -266,9 +264,10 @@ describe("GET /api/v1/nodes/[id]/attribution/epochs", () => {
         expect(body.total).toBe(1);
         expect(body.epochs[0].id).toBe("1");
         // Proxied to the resolved foreign nodeId with the parsed pagination — NOT a local store read.
-        expect(
-          mockEpochsRead.listEpochsForForeignNode
-        ).toHaveBeenCalledWith(FOREIGN_NODE_ID, { limit: 50, offset: 0 });
+        expect(mockEpochsRead.listEpochsForForeignNode).toHaveBeenCalledWith(
+          FOREIGN_NODE_ID,
+          { limit: 50, offset: 0 }
+        );
         expect(mockStore.listEpochs).not.toHaveBeenCalled();
       },
     });

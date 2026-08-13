@@ -94,6 +94,7 @@ export type {
   SyncTemplateUpstreamInput,
   SyncTemplateUpstreamResult,
 } from "./deploy-plane.port";
+export type { EpochsRead } from "./epochs-read.port";
 export type {
   GovernanceRun,
   GovernanceStatusPort,
@@ -206,7 +207,6 @@ export {
   type PaymentRailMisconfigurationCode,
   PaymentRailMisconfiguredPortError,
 } from "./payment-rail-guard.port";
-export type { EpochsRead } from "./epochs-read.port";
 export type { ReceiptDelivery } from "./receipt-delivery.port";
 export type {
   ProxyBillingEntry,
