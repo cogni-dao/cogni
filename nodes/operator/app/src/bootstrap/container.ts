@@ -121,6 +121,7 @@ import {
 } from "@/adapters/server/db/doltgres/client";
 import { getServiceDb } from "@/adapters/server/db/drizzle.service-client";
 import { DrizzleWorkItemSessionAdapter } from "@/adapters/server/db/work-item-session.adapter";
+import { createHttpEpochsRead } from "@/adapters/server/ingestion/http-epochs-read";
 import { createHttpReceiptDelivery } from "@/adapters/server/ingestion/http-receipt-delivery";
 import { CompositeNodeRegistryAdapter } from "@/adapters/server/node-registry/composite-node-registry.adapter";
 import { DbNodeRegistryAdapter } from "@/adapters/server/node-registry/db-node-registry.adapter";
@@ -168,6 +169,7 @@ import type {
   Clock,
   ConnectionBrokerPort,
   DataSourceRegistration,
+  EpochsRead,
   GovernanceStatusPort,
   LangfusePort,
   LlmService,
@@ -297,6 +299,11 @@ export interface Container {
    * (operator-as-gateway; #1924 routing). The operator's OWN repos never route here.
    */
   receiptDelivery: ReceiptDelivery;
+  /**
+   * HTTP read of a FOREIGN owning node's own ledger epochs (operator-as-gateway read twin of
+   * `receiptDelivery`; bug.5008). The operator's OWN node reads its local store, never here.
+   */
+  epochsRead: EpochsRead;
   /** Financial ledger — undefined when TIGERBEETLE_ADDRESS not set */
   financialLedger: FinancialLedgerPort | undefined;
   /** Operator wallet — undefined when PRIVY_APP_ID not set */
@@ -956,6 +963,15 @@ function createContainer(): Container {
     logger: log.child({ component: "http-receipt-delivery" }),
   });
 
+  // Attribution operator-gateway READ twin: HTTP read of a FOREIGN owning node's own epochs
+  // (bug.5008). Same resolution + auth as receipt delivery; the operator holds no cross-node DB
+  // creds, so it derives foreign epoch aggregates over the node's internal HTTP API.
+  const epochsRead = createHttpEpochsRead({
+    nodeEndpoints: parseNodeEndpoints(env.COGNI_NODE_ENDPOINTS),
+    schedulerApiToken: env.SCHEDULER_API_TOKEN,
+    logger: log.child({ component: "http-epochs-read" }),
+  });
+
   // Process health publisher (node-local metrics only — external sources use Temporal)
   const publisherAbort = new AbortController();
   process.on("SIGTERM", () => publisherAbort.abort());
@@ -1020,6 +1036,7 @@ function createContainer(): Container {
       return getWebhookRegistrations();
     },
     receiptDelivery,
+    epochsRead,
     financialLedger,
     operatorWallet,
     treasurySettlement: operatorWallet
