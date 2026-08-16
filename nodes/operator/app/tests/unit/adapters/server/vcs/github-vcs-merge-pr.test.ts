@@ -53,6 +53,13 @@ function adapter(): GitHubVcsAdapter {
 
 const PR_GET_ROUTE = "GET /repos/{owner}/{repo}/pulls/{pull_number}";
 const MERGE_ROUTE = "PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge";
+const CHECK_RUNS_ROUTE = "GET /repos/{owner}/{repo}/commits/{ref}/check-runs";
+const STATUS_ROUTE = "GET /repos/{owner}/{repo}/commits/{ref}/status";
+const REVIEWS_ROUTE = "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews";
+const CLASSIC_REQUIRED_CHECKS_ROUTE =
+  "GET /repos/{owner}/{repo}/branches/{branch}/protection/required_status_checks";
+const ACTIVE_BRANCH_RULES_ROUTE =
+  "GET /repos/{owner}/{repo}/rules/branches/{branch}";
 
 beforeEach(() => {
   requestRoutes.length = 0;
@@ -157,5 +164,89 @@ describe("GitHubVcsAdapter.mergePr — queue-tolerant", () => {
     expect(result.merged).toBe(false);
     expect(result.enqueued).toBe(false);
     expect(result.status).toBe(405);
+  });
+});
+
+describe("GitHubVcsAdapter.getCiStatus — ruleset-required checks", () => {
+  function installCiHandlers(completedContexts: readonly string[]): void {
+    onRequest = (route, params) => {
+      if (route === PR_GET_ROUTE) {
+        return {
+          number: 7,
+          title: "feat: protected change",
+          user: { login: "agent" },
+          base: { ref: "main" },
+          head: { sha: "head-sha" },
+          mergeable: true,
+          labels: [],
+          draft: false,
+        };
+      }
+      if (route === CHECK_RUNS_ROUTE) {
+        return {
+          check_runs: completedContexts.map((name) => ({
+            name,
+            status: "completed",
+            conclusion: "success",
+            app: { slug: "github-actions" },
+          })),
+        };
+      }
+      if (route === STATUS_ROUTE) return { statuses: [] };
+      if (route === REVIEWS_ROUTE) return [];
+      if (route === CLASSIC_REQUIRED_CHECKS_ROUTE) {
+        throw Object.assign(new Error("Branch not protected"), { status: 404 });
+      }
+      if (route === ACTIVE_BRANCH_RULES_ROUTE) {
+        expect(params).toMatchObject({ branch: "main", per_page: 100 });
+        return [
+          {
+            type: "pull_request",
+            ruleset_id: 1,
+          },
+          {
+            type: "required_status_checks",
+            ruleset_id: 1,
+            parameters: {
+              required_status_checks: [
+                { context: "unit" },
+                { context: "component" },
+                { context: "static" },
+                { context: "manifest" },
+              ],
+              strict_required_status_checks_policy: false,
+            },
+          },
+        ];
+      }
+      throw new Error(`Unhandled request route: ${route}`);
+    };
+  }
+
+  it("is not vacuously green when one ruleset-required check never reported", async () => {
+    installCiHandlers(["unit", "component", "static"]);
+
+    const result = await adapter().getCiStatus({
+      owner: "o",
+      repo: "r",
+      prNumber: 7,
+    });
+
+    expect(result.allGreen).toBe(false);
+    expect(result.pending).toBe(true);
+    expect(requestRoutes).toContain(ACTIVE_BRANCH_RULES_ROUTE);
+  });
+
+  it("is green only after every ruleset-required check reports success", async () => {
+    installCiHandlers(["unit", "component", "static", "manifest"]);
+
+    const result = await adapter().getCiStatus({
+      owner: "o",
+      repo: "r",
+      prNumber: 7,
+    });
+
+    expect(result.allGreen).toBe(true);
+    expect(result.pending).toBe(false);
   });
 });

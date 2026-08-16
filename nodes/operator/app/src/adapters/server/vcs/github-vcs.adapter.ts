@@ -196,8 +196,9 @@ export class GitHubVcsAdapter implements VcsCapability {
     }
 
     // REQUIRED_CHECKS_ARE_GITHUB_DEFINED: "green" is GitHub's OWN required-status-
-    // check set for the PR's base branch (from branch protection), never an
-    // operator-invented list. A required context is satisfied iff it completed
+    // check set for the PR's base branch (from classic protection + active
+    // rulesets), never an operator-invented list. A required context is satisfied
+    // iff it completed
     // success|skipped — GitHub's own rule (a required check that legitimately
     // skips, e.g. a fork-guarded build, is passing). An unprotected branch (no
     // required checks) is NOT green: merge-on-green is meaningless without a
@@ -259,11 +260,12 @@ export class GitHubVcsAdapter implements VcsCapability {
   }
 
   /**
-   * The branch's REQUIRED status-check contexts, per GitHub branch protection —
-   * the single source of truth for what "green" means (no operator-invented set).
-   * Returns `[]` when the branch is unprotected or requires no checks (which the
-   * merge gate treats as not-green / fail-closed). Uses the App's `administration`
-   * read (the same privilege it uses to WRITE protection at node formation).
+   * The branch's REQUIRED status-check contexts across both GitHub enforcement
+   * systems: classic branch protection and active rulesets. GitHub's effective
+   * policy is their union; spawned nodes use the rulesets path. Returns `[]` when
+   * neither system requires checks, which the merge gate treats as not-green /
+   * fail-closed. The active-rules endpoint includes repository + organization
+   * rules and needs only metadata:read.
    */
   private async getRequiredContexts(
     octokit: Octokit,
@@ -271,16 +273,33 @@ export class GitHubVcsAdapter implements VcsCapability {
     repo: string,
     branch: string
   ): Promise<string[]> {
+    const contexts = new Set<string>();
     try {
       const { data } = await octokit.request(
         "GET /repos/{owner}/{repo}/branches/{branch}/protection/required_status_checks",
         { owner, repo, branch }
       );
-      return (data.contexts ?? []) as string[];
+      for (const context of data.contexts ?? []) contexts.add(context);
     } catch (error) {
-      if ((error as { status?: number })?.status === 404) return [];
-      throw error;
+      if ((error as { status?: number })?.status !== 404) throw error;
     }
+
+    const { data: activeRules } = await octokit.request(
+      "GET /repos/{owner}/{repo}/rules/branches/{branch}",
+      { owner, repo, branch, per_page: 100 }
+    );
+    for (const rule of activeRules as ReadonlyArray<{
+      type?: string;
+      parameters?: {
+        required_status_checks?: ReadonlyArray<{ context?: string }>;
+      };
+    }>) {
+      if (rule.type !== "required_status_checks") continue;
+      for (const check of rule.parameters?.required_status_checks ?? []) {
+        if (check.context) contexts.add(check.context);
+      }
+    }
+    return [...contexts];
   }
 
   /**

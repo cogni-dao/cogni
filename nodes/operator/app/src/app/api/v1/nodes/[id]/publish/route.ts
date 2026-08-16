@@ -626,10 +626,10 @@ export async function POST(request: Request, routeArgs: RouteParams) {
             templateOwner,
             owner: mintOwner,
             slug: node.slug,
-            // Born protected: inherit the deployment monorepo's EXACT branch
-            // protection (one SSOT; no operator-invented node policy).
-            protectionSourceOwner: parentOwner,
-            protectionSourceRepo: parentRepo,
+            // Born protected: the node gets the standard PR/check policy and
+            // inherits the deployment monorepo's optional merge queue.
+            mergeQueueSourceOwner: parentOwner,
+            mergeQueueSourceRepo: parentRepo,
             ...identity,
           });
           logStep("fork_from_template", "success", {

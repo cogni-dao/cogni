@@ -43,7 +43,9 @@ vi.mock("@octokit/core", () => ({
 import {
   GitHubRepoWriter,
   MERGE_QUEUE_RULESET_NAME,
-  protectionGetToPutPayload,
+  NODE_MAIN_POLICY_RULESET_NAME,
+  NODE_STANDARD_REQUIRED_CHECKS,
+  nodeMainPolicyRulesetPayload,
   rulesetGetToPutPayload,
 } from "@/adapters/server/vcs/github-repo-write";
 import {
@@ -75,9 +77,10 @@ function setHappyForkHandlers(): void {
     // Canonical merge settings (squash-only, auto-merge, delete-on-merge) — applied
     // to the node by ensureCanonicalMergeSettings during forkFromTemplate.
     "PATCH /repos/{owner}/{repo}": () => ({}),
-    // Merge-queue replication source lookup. Default: the monorepo has no queue
-    // ruleset (admin-opt-in), so replicateMergeQueue finds nothing and skips.
+    // Node main-policy upsert + merge-queue source lookup. Default: no rulesets,
+    // so formation creates the required policy and skips the optional queue.
     "GET /repos/{owner}/{repo}/rulesets": () => [],
+    "POST /repos/{owner}/{repo}/rulesets": () => ({ id: 88 }),
     "POST /repos/{owner}/{repo}/forks": (params) => {
       expect(params).toMatchObject({
         owner: "Cogni-DAO",
@@ -722,38 +725,57 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
       "POST /repos/{owner}/{repo}/git/commits",
       "POST /repos/{owner}/{repo}/git/refs",
       "PATCH /repos/{owner}/{repo}/git/refs/{ref}",
+      "PATCH /repos/{owner}/{repo}",
+      "GET /repos/{owner}/{repo}/rulesets",
+      "POST /repos/{owner}/{repo}/rulesets",
     ]);
   });
 
-  it("copies the monorepo's branch protection VERBATIM onto the new node repo", async () => {
+  it("creates the exact default-branch PR + standard-CI ruleset without bypass actors", async () => {
     setHappyForkHandlers();
-    // Source = the deployment monorepo; GET its protection, PUT the same to the node.
-    routeHandlers["GET /repos/{owner}/{repo}/branches/{branch}/protection"] = (
-      params
-    ) => {
-      expect(params).toMatchObject({
-        owner: "Cogni-DAO",
-        repo: "cogni",
-        branch: "main",
-      });
-      return {
-        required_status_checks: {
-          strict: false,
-          contexts: ["unit", "component", "static", "manifest"],
-        },
-        enforce_admins: { enabled: false },
-        required_pull_request_reviews: null,
-        restrictions: null,
-        required_linear_history: { enabled: false },
-        allow_force_pushes: { enabled: false },
-        allow_deletions: { enabled: false },
-        required_conversation_resolution: { enabled: false },
-        lock_branch: { enabled: false },
-        allow_fork_syncing: { enabled: false },
-      };
+    let postParams: Record<string, unknown> | undefined;
+    routeHandlers["POST /repos/{owner}/{repo}/rulesets"] = (params) => {
+      postParams = params;
+      return { id: 88 };
     };
+
+    await makeWriter().forkFromTemplate({
+      templateOwner: "Cogni-DAO",
+      owner: "Cogni-DAO",
+      slug: "atlas",
+      nodeId: "11111111-1111-4111-8111-111111111111",
+      chainId: 8453,
+    });
+
+    expect(postParams).toEqual({
+      owner: "Cogni-DAO",
+      repo: "atlas",
+      ...nodeMainPolicyRulesetPayload(),
+    });
+    expect(postParams).toMatchObject({
+      enforcement: "active",
+      bypass_actors: [],
+      rules: [
+        { type: "pull_request" },
+        {
+          type: "required_status_checks",
+          parameters: {
+            required_status_checks: NODE_STANDARD_REQUIRED_CHECKS.map(
+              (context) => ({ context })
+            ),
+          },
+        },
+      ],
+    });
+  });
+
+  it("repairs a same-named policy ruleset with an exact PUT (idempotent, non-vacuous)", async () => {
+    setHappyForkHandlers();
+    routeHandlers["GET /repos/{owner}/{repo}/rulesets"] = () => [
+      { id: 41, name: NODE_MAIN_POLICY_RULESET_NAME },
+    ];
     let putParams: Record<string, unknown> | undefined;
-    routeHandlers["PUT /repos/{owner}/{repo}/branches/{branch}/protection"] = (
+    routeHandlers["PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}"] = (
       params
     ) => {
       putParams = params;
@@ -766,35 +788,29 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
       slug: "atlas",
       nodeId: "11111111-1111-4111-8111-111111111111",
       chainId: 8453,
-      protectionSourceOwner: "Cogni-DAO",
-      protectionSourceRepo: "cogni",
     });
 
-    // The node's main gets the EXACT monorepo required set + flags (no node-invented policy).
-    expect(putParams).toMatchObject({
+    expect(putParams).toEqual({
       owner: "Cogni-DAO",
       repo: "atlas",
-      branch: "main",
-      required_status_checks: {
-        strict: false,
-        contexts: ["unit", "component", "static", "manifest"],
-      },
-      enforce_admins: false,
-      required_pull_request_reviews: null,
-      restrictions: null,
+      ruleset_id: 41,
+      ...nodeMainPolicyRulesetPayload(),
     });
+    const requiredRule = nodeMainPolicyRulesetPayload().rules.find(
+      (rule) => rule.type === "required_status_checks"
+    );
+    expect(requiredRule?.parameters?.required_status_checks).toHaveLength(4);
+    expect(
+      requests.filter(
+        (request) =>
+          request.route === "POST /repos/{owner}/{repo}/rulesets" &&
+          request.params.name === NODE_MAIN_POLICY_RULESET_NAME
+      )
+    ).toHaveLength(0);
   });
 
   it("replicates the monorepo's merge_queue ruleset onto the node when present", async () => {
     setHappyForkHandlers();
-    routeHandlers["GET /repos/{owner}/{repo}/branches/{branch}/protection"] =
-      () => ({
-        required_status_checks: { strict: false, contexts: ["unit"] },
-        enforce_admins: { enabled: false },
-        required_pull_request_reviews: null,
-      });
-    routeHandlers["PUT /repos/{owner}/{repo}/branches/{branch}/protection"] =
-      () => ({});
     // Source (monorepo) HAS the queue ruleset; target (node) has none → POST.
     routeHandlers["GET /repos/{owner}/{repo}/rulesets"] = (params) =>
       params.repo === "cogni" ? [{ id: 77, name: "main-merge-queue" }] : [];
@@ -813,8 +829,8 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
       slug: "atlas",
       nodeId: "11111111-1111-4111-8111-111111111111",
       chainId: 8453,
-      protectionSourceOwner: "Cogni-DAO",
-      protectionSourceRepo: "cogni",
+      mergeQueueSourceOwner: "Cogni-DAO",
+      mergeQueueSourceRepo: "cogni",
     });
 
     // The node got canonical repo settings (auto-merge ON, NOT a template) + the
@@ -830,7 +846,9 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
       is_template: false,
     });
     const post = requests.find(
-      (r) => r.route === "POST /repos/{owner}/{repo}/rulesets"
+      (r) =>
+        r.route === "POST /repos/{owner}/{repo}/rulesets" &&
+        r.params.name === MERGE_QUEUE_RULESET_NAME
     );
     expect(post?.params).toMatchObject({
       owner: "Cogni-DAO",
@@ -840,19 +858,11 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
     });
   });
 
-  it("does NOT fail formation when the node repo cannot carry a merge queue (422/403)", async () => {
+  it("does NOT fail formation when the node repo plan cannot carry a merge queue (422)", async () => {
     // QUEUE_IS_BEST_EFFORT: the merge_queue ruleset is org/Team-only — a personal-account
-    // node 422s. The queue is an enhancement (branch protection is the backstop), so
+    // node 422s. The queue is an enhancement (the PR/check ruleset is the backstop), so
     // formation must still succeed; the node is born queue-less.
     setHappyForkHandlers();
-    routeHandlers["GET /repos/{owner}/{repo}/branches/{branch}/protection"] =
-      () => ({
-        required_status_checks: { strict: false, contexts: ["unit"] },
-        enforce_admins: { enabled: false },
-        required_pull_request_reviews: null,
-      });
-    routeHandlers["PUT /repos/{owner}/{repo}/branches/{branch}/protection"] =
-      () => ({});
     routeHandlers["GET /repos/{owner}/{repo}/rulesets"] = (params) =>
       params.repo === "cogni" ? [{ id: 77, name: "main-merge-queue" }] : [];
     routeHandlers["GET /repos/{owner}/{repo}/rulesets/{ruleset_id}"] = () => ({
@@ -862,10 +872,15 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
       conditions: { ref_name: { include: ["~DEFAULT_BRANCH"], exclude: [] } },
       rules: [{ type: "merge_queue", parameters: { merge_method: "SQUASH" } }],
     });
-    routeHandlers["POST /repos/{owner}/{repo}/rulesets"] = () =>
-      Promise.reject(
-        statusError(422, "Invalid rule 'merge_queue': unsupported on this plan")
-      );
+    routeHandlers["POST /repos/{owner}/{repo}/rulesets"] = (params) =>
+      params.name === MERGE_QUEUE_RULESET_NAME
+        ? Promise.reject(
+            statusError(
+              422,
+              "Invalid rule 'merge_queue': unsupported on this plan"
+            )
+          )
+        : { id: 88 };
 
     // Resolves (no throw) despite the queue write failing.
     const result = await makeWriter().forkFromTemplate({
@@ -874,16 +889,18 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
       slug: "atlas",
       nodeId: "11111111-1111-4111-8111-111111111111",
       chainId: 8453,
-      protectionSourceOwner: "Cogni-DAO",
-      protectionSourceRepo: "cogni",
+      mergeQueueSourceOwner: "Cogni-DAO",
+      mergeQueueSourceRepo: "cogni",
     });
     expect(result.headSha).toBeTruthy();
   });
 
-  it("fails loud when the monorepo source is unprotected (404)", async () => {
+  it("fails loud when the App lacks administration:write for the required policy", async () => {
     setHappyForkHandlers();
-    routeHandlers["GET /repos/{owner}/{repo}/branches/{branch}/protection"] =
-      () => Promise.reject(statusError(404, "Branch not protected"));
+    routeHandlers["POST /repos/{owner}/{repo}/rulesets"] = () =>
+      Promise.reject(
+        statusError(403, "Resource not accessible by integration")
+      );
 
     await expect(
       makeWriter().forkFromTemplate({
@@ -892,10 +909,41 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
         slug: "atlas",
         nodeId: "11111111-1111-4111-8111-111111111111",
         chainId: 8453,
-        protectionSourceOwner: "Cogni-DAO",
-        protectionSourceRepo: "cogni",
       })
-    ).rejects.toThrow(/unprotected/i);
+    ).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("does not misclassify a merge-queue 403 as an optional plan limitation", async () => {
+    setHappyForkHandlers();
+    routeHandlers["GET /repos/{owner}/{repo}/rulesets"] = (params) =>
+      params.repo === "cogni"
+        ? [{ id: 77, name: MERGE_QUEUE_RULESET_NAME }]
+        : [];
+    routeHandlers["GET /repos/{owner}/{repo}/rulesets/{ruleset_id}"] = () => ({
+      name: MERGE_QUEUE_RULESET_NAME,
+      target: "branch",
+      enforcement: "active",
+      conditions: { ref_name: { include: ["~DEFAULT_BRANCH"], exclude: [] } },
+      rules: [{ type: "merge_queue", parameters: { merge_method: "SQUASH" } }],
+    });
+    routeHandlers["POST /repos/{owner}/{repo}/rulesets"] = (params) =>
+      params.name === MERGE_QUEUE_RULESET_NAME
+        ? Promise.reject(
+            statusError(403, "Resource not accessible by integration")
+          )
+        : { id: 88 };
+
+    await expect(
+      makeWriter().forkFromTemplate({
+        templateOwner: "Cogni-DAO",
+        owner: "Cogni-DAO",
+        slug: "atlas",
+        nodeId: "11111111-1111-4111-8111-111111111111",
+        chainId: 8453,
+        mergeQueueSourceOwner: "Cogni-DAO",
+        mergeQueueSourceRepo: "cogni",
+      })
+    ).rejects.toMatchObject({ status: 403 });
   });
 
   it("does not reuse an existing same-named repo unless it is the template fork", async () => {
@@ -964,6 +1012,9 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
       "POST /repos/{owner}/{repo}/git/commits",
       "POST /repos/{owner}/{repo}/git/refs",
       "PATCH /repos/{owner}/{repo}/git/refs/{ref}",
+      "PATCH /repos/{owner}/{repo}",
+      "GET /repos/{owner}/{repo}/rulesets",
+      "POST /repos/{owner}/{repo}/rulesets",
     ]);
   });
 
@@ -2634,62 +2685,6 @@ node_local:
     // (Scope is the node's face, NOT the whole (public)/ shell — see node-local-paths.ts.)
     expect(result).toContain("app/src/app/(public)/page.tsx");
     expect(result).toContain(".cogni/repo-spec.yaml");
-  });
-});
-
-describe("protectionGetToPutPayload", () => {
-  it("flattens the GET response into the verbatim PUT payload (monorepo fixture shape)", () => {
-    const put = protectionGetToPutPayload({
-      required_status_checks: {
-        strict: false,
-        contexts: ["unit", "component", "static", "manifest"],
-      },
-      enforce_admins: { enabled: false },
-      required_pull_request_reviews: null,
-      required_linear_history: { enabled: false },
-      allow_force_pushes: { enabled: false },
-      allow_deletions: { enabled: false },
-      required_conversation_resolution: { enabled: false },
-      lock_branch: { enabled: false },
-      allow_fork_syncing: { enabled: false },
-    });
-    expect(put).toEqual({
-      required_status_checks: {
-        strict: false,
-        contexts: ["unit", "component", "static", "manifest"],
-      },
-      enforce_admins: false,
-      required_pull_request_reviews: null,
-      restrictions: null,
-      required_linear_history: false,
-      allow_force_pushes: false,
-      allow_deletions: false,
-      required_conversation_resolution: false,
-      lock_branch: false,
-      allow_fork_syncing: false,
-    });
-  });
-
-  it("preserves enforce_admins=true and a present review requirement", () => {
-    const put = protectionGetToPutPayload({
-      required_status_checks: { strict: true, contexts: ["unit"] },
-      enforce_admins: { enabled: true },
-      required_pull_request_reviews: {
-        dismiss_stale_reviews: true,
-        require_code_owner_reviews: false,
-        required_approving_review_count: 2,
-      },
-    });
-    expect(put.enforce_admins).toBe(true);
-    expect(put.required_status_checks).toEqual({
-      strict: true,
-      contexts: ["unit"],
-    });
-    expect(put.required_pull_request_reviews).toEqual({
-      dismiss_stale_reviews: true,
-      require_code_owner_reviews: false,
-      required_approving_review_count: 2,
-    });
   });
 });
 
