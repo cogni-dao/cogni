@@ -43,8 +43,6 @@ vi.mock("@octokit/core", () => ({
 import {
   GitHubRepoWriter,
   MERGE_QUEUE_RULESET_NAME,
-  NODE_MAIN_POLICY_RULESET_NAME,
-  NODE_STANDARD_REQUIRED_CHECKS,
   nodeMainPolicyRulesetPayload,
   rulesetGetToPutPayload,
 } from "@/adapters/server/vcs/github-repo-write";
@@ -52,6 +50,32 @@ import {
   renderDistributionActivationSpec,
   renderPaymentsActivationSpec,
 } from "@/shared/node-app-scaffold/gens";
+import { parseNodeRepoPolicy } from "@/shared/node-repo-policy";
+
+const TEST_NODE_REPO_POLICY_JSON = JSON.stringify({
+  schemaVersion: "cogni.node-repo-policy.v1",
+  ruleset: {
+    name: "main-pr-and-standard-ci",
+    target: "default_branch",
+    enforcement: "active",
+    pullRequest: {
+      allowedMergeMethods: ["squash"],
+      dismissStaleReviewsOnPush: false,
+      requireCodeOwnerReview: false,
+      requireLastPushApproval: false,
+      requiredApprovingReviewCount: 0,
+      requiredReviewThreadResolution: false,
+    },
+    requiredStatusChecks: {
+      doNotEnforceOnCreate: false,
+      strict: false,
+      contexts: ["unit", "component", "static", "manifest"],
+    },
+    bypassActors: [],
+  },
+});
+const TEST_NODE_REPO_POLICY = parseNodeRepoPolicy(TEST_NODE_REPO_POLICY_JSON);
+const NODE_MAIN_POLICY_RULESET_NAME = TEST_NODE_REPO_POLICY.ruleset.name;
 
 function statusError(
   status: number,
@@ -74,6 +98,19 @@ function installFetchMock(): void {
 
 function setHappyForkHandlers(): void {
   routeHandlers = {
+    "GET /repos/{owner}/{repo}/contents/{path}": (params) => {
+      expect(String(params.owner).toLowerCase()).toBe("cogni-dao");
+      expect(params).toMatchObject({
+        repo: "node-template",
+        path: ".cogni/repo-policy.json",
+        ref: "main",
+      });
+      return {
+        type: "file",
+        encoding: "base64",
+        content: Buffer.from(TEST_NODE_REPO_POLICY_JSON).toString("base64"),
+      };
+    },
     // Canonical merge settings (squash-only, auto-merge, delete-on-merge) — applied
     // to the node by ensureCanonicalMergeSettings during forkFromTemplate.
     "PATCH /repos/{owner}/{repo}": () => ({}),
@@ -708,6 +745,7 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
       headSha: "identity-commit",
     });
     expect(requests.map((request) => request.route)).toEqual([
+      "GET /repos/{owner}/{repo}/contents/{path}",
       "POST /repos/{owner}/{repo}/forks",
       "GET /repos/{owner}/{repo}/git/ref/{ref}",
       "GET /repos/{owner}/{repo}/git/commits/{commit_sha}",
@@ -750,7 +788,7 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
     expect(postParams).toEqual({
       owner: "Cogni-DAO",
       repo: "atlas",
-      ...nodeMainPolicyRulesetPayload(),
+      ...nodeMainPolicyRulesetPayload(TEST_NODE_REPO_POLICY),
     });
     expect(postParams).toMatchObject({
       enforcement: "active",
@@ -760,9 +798,10 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
         {
           type: "required_status_checks",
           parameters: {
-            required_status_checks: NODE_STANDARD_REQUIRED_CHECKS.map(
-              (context) => ({ context })
-            ),
+            required_status_checks:
+              TEST_NODE_REPO_POLICY.ruleset.requiredStatusChecks.contexts.map(
+                (context) => ({ context })
+              ),
           },
         },
       ],
@@ -794,11 +833,11 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
       owner: "Cogni-DAO",
       repo: "atlas",
       ruleset_id: 41,
-      ...nodeMainPolicyRulesetPayload(),
+      ...nodeMainPolicyRulesetPayload(TEST_NODE_REPO_POLICY),
     });
-    const requiredRule = nodeMainPolicyRulesetPayload().rules.find(
-      (rule) => rule.type === "required_status_checks"
-    );
+    const requiredRule = nodeMainPolicyRulesetPayload(
+      TEST_NODE_REPO_POLICY
+    ).rules.find((rule) => rule.type === "required_status_checks");
     expect(requiredRule?.parameters?.required_status_checks).toHaveLength(4);
     expect(
       requests.filter(
@@ -947,15 +986,14 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
   });
 
   it("does not reuse an existing same-named repo unless it is the template fork", async () => {
-    routeHandlers = {
-      "POST /repos/{owner}/{repo}/forks": () =>
-        Promise.reject(statusError(422, "Repository creation failed")),
-      "GET /repos/{owner}/{repo}": () => ({
-        full_name: "Cogni-DAO/atlas",
-        fork: false,
-        clone_url: "https://github.com/Cogni-DAO/atlas.git",
-      }),
-    };
+    setHappyForkHandlers();
+    routeHandlers["POST /repos/{owner}/{repo}/forks"] = () =>
+      Promise.reject(statusError(422, "Repository creation failed"));
+    routeHandlers["GET /repos/{owner}/{repo}"] = () => ({
+      full_name: "Cogni-DAO/atlas",
+      fork: false,
+      clone_url: "https://github.com/Cogni-DAO/atlas.git",
+    });
 
     await expect(
       makeWriter().forkFromTemplate({
@@ -994,6 +1032,7 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
       headSha: "identity-commit",
     });
     expect(requests.map((request) => request.route)).toEqual([
+      "GET /repos/{owner}/{repo}/contents/{path}",
       "POST /repos/{owner}/{repo}/forks",
       "GET /repos/{owner}/{repo}",
       "GET /repos/{owner}/{repo}/git/ref/{ref}",
@@ -1016,6 +1055,54 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
       "GET /repos/{owner}/{repo}/rulesets",
       "POST /repos/{owner}/{repo}/rulesets",
     ]);
+  });
+
+  it("fails before repo creation when the template policy is missing", async () => {
+    setHappyForkHandlers();
+    routeHandlers["GET /repos/{owner}/{repo}/contents/{path}"] = () =>
+      Promise.reject(statusError(404, "Not Found"));
+
+    await expect(
+      makeWriter().forkFromTemplate({
+        templateOwner: "Cogni-DAO",
+        owner: "Cogni-DAO",
+        slug: "atlas",
+        nodeId: "11111111-1111-4111-8111-111111111111",
+        chainId: 8453,
+      })
+    ).rejects.toMatchObject({ code: "template_repo_policy_missing" });
+    expect(requests.map((request) => request.route)).not.toContain(
+      "POST /repos/{owner}/{repo}/forks"
+    );
+  });
+
+  it("fails before repo creation when the template policy has bypass actors", async () => {
+    setHappyForkHandlers();
+    const invalidPolicy = JSON.stringify({
+      ...TEST_NODE_REPO_POLICY,
+      ruleset: {
+        ...TEST_NODE_REPO_POLICY.ruleset,
+        bypassActors: [{ actorType: "OrganizationAdmin" }],
+      },
+    });
+    routeHandlers["GET /repos/{owner}/{repo}/contents/{path}"] = () => ({
+      type: "file",
+      encoding: "base64",
+      content: Buffer.from(invalidPolicy).toString("base64"),
+    });
+
+    await expect(
+      makeWriter().forkFromTemplate({
+        templateOwner: "Cogni-DAO",
+        owner: "Cogni-DAO",
+        slug: "atlas",
+        nodeId: "11111111-1111-4111-8111-111111111111",
+        chainId: 8453,
+      })
+    ).rejects.toMatchObject({ code: "template_repo_policy_invalid" });
+    expect(requests.map((request) => request.route)).not.toContain(
+      "POST /repos/{owner}/{repo}/forks"
+    );
   });
 
   it("continues when org policy rejects default workflow write permissions", async () => {

@@ -77,6 +77,11 @@ import {
   makeNodeLocalMatcher,
   parseNodeLocalPaths,
 } from "@/shared/node-app-scaffold/node-local-paths";
+import {
+  NODE_REPO_POLICY_PATH,
+  type NodeRepoPolicy,
+  parseNodeRepoPolicy,
+} from "@/shared/node-repo-policy";
 import { EVENT_NAMES, makeLogger } from "@/shared/observability";
 
 export interface GitHubRepoWriterConfig {
@@ -435,15 +440,6 @@ export function qualifyUpstreamPrRefs(
 /** The canonical name of the merge-queue ruleset (matches infra/github/merge-queue-ruleset.json). */
 export const MERGE_QUEUE_RULESET_NAME = "main-merge-queue";
 
-/** Stable node-default policy. Every context is emitted by pull_request + merge_group CI. */
-export const NODE_MAIN_POLICY_RULESET_NAME = "main-pr-and-standard-ci";
-export const NODE_STANDARD_REQUIRED_CHECKS = [
-  "unit",
-  "component",
-  "static",
-  "manifest",
-] as const;
-
 /** Subset of GET /repos/{owner}/{repo}/rulesets/{id} that we replicate onto a node repo. */
 interface RulesetResponse {
   readonly name?: string;
@@ -489,11 +485,14 @@ export interface RulesetWritePayload {
  * ruleset without deadlocking the queue. Zero bypass actors means neither the
  * operator App nor a repo admin silently escapes node-owner governance.
  */
-export function nodeMainPolicyRulesetPayload(): RulesetWritePayload {
+export function nodeMainPolicyRulesetPayload(
+  policy: NodeRepoPolicy
+): RulesetWritePayload {
+  const { ruleset } = policy;
   return {
-    name: NODE_MAIN_POLICY_RULESET_NAME,
+    name: ruleset.name,
     target: "branch",
-    enforcement: "active",
+    enforcement: ruleset.enforcement,
     conditions: {
       ref_name: { include: ["~DEFAULT_BRANCH"], exclude: [] },
     },
@@ -501,22 +500,28 @@ export function nodeMainPolicyRulesetPayload(): RulesetWritePayload {
       {
         type: "pull_request",
         parameters: {
-          allowed_merge_methods: ["squash"],
-          dismiss_stale_reviews_on_push: false,
-          require_code_owner_review: false,
-          require_last_push_approval: false,
-          required_approving_review_count: 0,
-          required_review_thread_resolution: false,
+          allowed_merge_methods: ruleset.pullRequest.allowedMergeMethods,
+          dismiss_stale_reviews_on_push:
+            ruleset.pullRequest.dismissStaleReviewsOnPush,
+          require_code_owner_review: ruleset.pullRequest.requireCodeOwnerReview,
+          require_last_push_approval:
+            ruleset.pullRequest.requireLastPushApproval,
+          required_approving_review_count:
+            ruleset.pullRequest.requiredApprovingReviewCount,
+          required_review_thread_resolution:
+            ruleset.pullRequest.requiredReviewThreadResolution,
         },
       },
       {
         type: "required_status_checks",
         parameters: {
-          do_not_enforce_on_create: false,
-          required_status_checks: NODE_STANDARD_REQUIRED_CHECKS.map(
+          do_not_enforce_on_create:
+            ruleset.requiredStatusChecks.doNotEnforceOnCreate,
+          required_status_checks: ruleset.requiredStatusChecks.contexts.map(
             (context) => ({ context })
           ),
-          strict_required_status_checks_policy: false,
+          strict_required_status_checks_policy:
+            ruleset.requiredStatusChecks.strict,
         },
       },
     ],
@@ -1457,6 +1462,30 @@ export class GitHubRepoWriter implements DeployPlanePort {
   ): Promise<{ cloneUrl: string; headSha: string }> {
     const { templateOwner, owner, slug } = input;
     const tplOctokit = await this.getOctokit(templateOwner, TEMPLATE_SLUG);
+    const policyText = await this.readFileAtRef(
+      tplOctokit,
+      templateOwner,
+      TEMPLATE_SLUG,
+      NODE_REPO_POLICY_PATH,
+      "main"
+    );
+    if (!policyText) {
+      throw deployPlaneError(
+        "template_repo_policy_missing",
+        `${templateOwner}/${TEMPLATE_SLUG}@main is missing ${NODE_REPO_POLICY_PATH}`,
+        409
+      );
+    }
+    let nodeRepoPolicy: NodeRepoPolicy;
+    try {
+      nodeRepoPolicy = parseNodeRepoPolicy(policyText);
+    } catch (error) {
+      throw deployPlaneError(
+        "template_repo_policy_invalid",
+        `${templateOwner}/${TEMPLATE_SLUG}@main has an invalid ${NODE_REPO_POLICY_PATH}: ${String(error)}`,
+        409
+      );
+    }
 
     // Mint the repo as a named fork — idempotent: a prior partial run (fork created, pin PR failed)
     // re-runs cleanly by reusing the existing matching fork instead of 422-ing on the duplicate name.
@@ -1584,7 +1613,12 @@ export class GitHubRepoWriter implements DeployPlanePort {
     // before any subsequent main update. This policy is unconditional; omitting a
     // queue source must never mint an unprotected node.
     await this.ensureCanonicalRepoSettings(octokit, owner, slug);
-    await this.ensureNodeMainPolicyRuleset(octokit, owner, slug);
+    await this.ensureNodeMainPolicyRuleset(
+      octokit,
+      owner,
+      slug,
+      nodeRepoPolicy
+    );
 
     if (input.mergeQueueSourceOwner && input.mergeQueueSourceRepo) {
       const sourceOctokit = await this.getOctokit(
@@ -2980,7 +3014,8 @@ export class GitHubRepoWriter implements DeployPlanePort {
   private async ensureNodeMainPolicyRuleset(
     octokit: Octokit,
     owner: string,
-    repo: string
+    repo: string,
+    policy: NodeRepoPolicy
   ): Promise<void> {
     const { data: rulesets } = await octokit.request(
       "GET /repos/{owner}/{repo}/rulesets",
@@ -2988,8 +3023,8 @@ export class GitHubRepoWriter implements DeployPlanePort {
     );
     const existing = (
       rulesets as ReadonlyArray<{ id: number; name: string }>
-    ).find((ruleset) => ruleset.name === NODE_MAIN_POLICY_RULESET_NAME);
-    const payload = nodeMainPolicyRulesetPayload();
+    ).find((ruleset) => ruleset.name === policy.ruleset.name);
+    const payload = nodeMainPolicyRulesetPayload(policy);
 
     if (existing) {
       await this.requestRaw(
