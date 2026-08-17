@@ -19,7 +19,7 @@
     "@cogni/attribution-ledger": "workspace:*",
     "@cogni/attribution-pipeline-contracts": "workspace:*",
     "@cogni/aragon-osx": "workspace:*",
-    "viem": "^2.21.0",
+    "viem": "^2.55.16",
     "zod": "^4.1.12"
   },
   "devDependencies": {
