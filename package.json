@@ -273,7 +273,7 @@
     "lint-staged": "^16.2.6",
     "next-test-api-route-handler": "^5.0.3",
     "pino-pretty": "^13.1.2",
-    "postcss": "^8.5.6",
+    "postcss": "^8.5.23",
     "prettier": "^3.6.2",
     "prettier-plugin-tailwindcss": "^0.7.1",
     "shadcn": "^3.5.0",
