@@ -320,9 +320,9 @@ describe("POST /api/v1/nodes/[id]/publish", () => {
         repo: "atlas",
         url: "https://doltremoteapi.dolthub.com/cogni-dao/atlas",
       },
-      // Born protected: copy the deployment monorepo's exact branch protection.
-      protectionSourceOwner: "cogni-test-org",
-      protectionSourceRepo: "cogni-monorepo",
+      // Born protected: standard PR/check policy + deployment repo merge queue.
+      mergeQueueSourceOwner: "cogni-test-org",
+      mergeQueueSourceRepo: "cogni-monorepo",
     });
     expect(mockOpenNodeSubmodulePr).toHaveBeenCalledWith({
       owner: "cogni-test-org",
