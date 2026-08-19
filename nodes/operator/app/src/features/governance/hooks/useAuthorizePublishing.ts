@@ -3,225 +3,405 @@
 
 /**
  * Module: `@features/governance/hooks/useAuthorizePublishing`
- * Purpose: Owner-wallet state machine for the ONE-TIME, SCOPED "Authorize publishing" step of node
- *   distribution setup. It grants the owner's wallet standing (but scoped) authority to publish THIS
- *   node's distributions — and nothing else — so every subsequent per-epoch publish is a single direct
- *   `DAO.execute` with NO vote. Two wallet transactions:
- *     1. DEPLOY `DistributionPublishCondition(token, distributor)` — a tiny per-node permission
- *        condition whose `isGranted` returns true ONLY for an atomic compare-and-swap publish.
- *        Capture its address from the deploy receipt.
- *     2. GOVERNANCE PROPOSAL: `plugin.createProposal([DAO.grantWithCondition(DAO, wallet,
- *        EXECUTE_PERMISSION, condition)], 0, 0, 0, Yes, tryEarlyExecution)`. On a 100%-owner
- *        EarlyExecution DAO this auto-executes, giving the wallet the SCOPED standing grant. This IS
- *        a governance proposal — honest, and labeled as such by the caller; never an unconditional
- *        EXECUTE grant (even a compromised executor key can only publish, never drain the treasury).
- * Scope: Client-side wagmi wiring extracted from `ExecuteDistributionPanel` so BOTH the per-epoch
- *   publish panel and the node-page setup sequence can drive the same authorize flow. Reads no secrets;
- *   the connected wallet signs every transaction. Does NOT declare activation complete — the caller
- *   re-reads paired `hasPermission` probes and only the terminal record route may mark the node active.
+ * Purpose: Refresh-safe, explicit two-transaction ceremony for deploying the scoped distribution
+ *   condition and granting the publisher CAS-native execute permission.
+ * Scope: Connected-wallet writes, recovered receipt reads, condition verification, and bounded
+ *   paired-permission verification. It never records activation or opens a subsequent wallet action.
  * Invariants:
- *   - AUTHORIZE_IS_A_PROPOSAL: the grant is wrapped in createProposal(Yes, tryEarlyExecution); it is a
- *     governance action, never "executed".
- *   - SCOPED_GRANT: always `grantWithCondition` bound to the deployed condition — never a bare `grant`.
- *   - WALLET_SIGNS: deploy + proposal are both signed by the connected wallet, never the operator.
- *   - ADDRESSES_ONLY: no token math — every value is an address/hash/bytes.
- * Side-effects: blockchain writes (condition deploy tx; createProposal-with-grant tx).
- * Links: nodes/operator/app/src/features/governance/lib/proposal-abis.ts,
- *   nodes/operator/app/src/features/governance/components/ExecuteDistributionPanel.tsx,
- *   nodes/operator/app/src/features/nodes/DistributionsCard.client.tsx,
- *   packages/cogni-contracts/src/distribution-publish-condition/{abi,bytecode}.ts
+ *   - WALLET_ACTIONS_ARE_EXPLICIT: receipt effects verify only; they never submit another write.
+ *   - SCOPED_GRANT: grantWithCondition and the createProposal encoding are unchanged.
+ *   - PAIRED_CAS_PROOF: exact atomic publish is allowed and its non-atomic twin is denied.
+ *   - RECOVERY_IS_READ_ONLY: recovered public hashes only reconstruct receipts and chain reads.
+ * Side-effects: connected-wallet transactions and public RPC reads.
+ * Links: src/features/nodes/DistributionsCard.client.tsx,
+ *   src/features/nodes/distribution-activation-recovery.ts
  * @public
  */
 
 "use client";
 
 import {
+  CUMULATIVE_MERKLE_DISTRIBUTOR_ABI,
   DISTRIBUTION_PUBLISH_CONDITION_ABI,
   DISTRIBUTION_PUBLISH_CONDITION_BYTECODE,
 } from "@cogni/cogni-contracts";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { encodeFunctionData } from "viem";
 import {
   useAccount,
   useDeployContract,
+  usePublicClient,
   useWaitForTransactionReceipt,
   useWriteContract,
 } from "wagmi";
 
 import {
+  buildPublishPermissionProbe,
   DAO_ABI,
   EXECUTE_PERMISSION_ID,
   TOKEN_VOTING_ABI,
 } from "@/features/governance/lib/proposal-abis";
 
-/** Aragon IMajorityVoting.VoteOption: None=0, Abstain=1, Yes=2, No=3. */
 const VOTE_OPTION_YES = 2;
+const VERIFY_ATTEMPTS = 4;
+const VERIFY_DELAY_MS = 750;
 
-/** Coarse phase of the deploy-condition → grant-proposal pipeline. */
-export type AuthorizePublishingPhase =
+type AuthorizationTransactionKey = "deployCondition" | "grantPermission";
+type AuthorizationTransactionStatus =
+  | "pending"
+  | "submitted"
+  | "confirming"
+  | "confirmed"
+  | "unknown"
+  | "failed";
+
+interface AuthorizationTransactionState {
+  readonly hash: `0x${string}` | undefined;
+  readonly status: AuthorizationTransactionStatus;
+}
+
+type AuthorizationActionGuard = <T>(
+  action: AuthorizationTransactionKey,
+  execute: () => Promise<T>
+) => Promise<T | undefined>;
+
+export type AuthorizationVerificationStatus =
   | "idle"
-  | "deploying" // condition deploy tx submitted, awaiting receipt (→ condition address)
-  | "granting" // grantWithCondition proposal submitted, awaiting receipt
-  | "done" // grant proposal confirmed (EarlyExecution auto-executed the grant)
-  | "error";
+  | "checking"
+  | "condition_verified"
+  | "verified"
+  | "mismatch"
+  | "unavailable";
 
 export interface AuthorizePublishingInput {
-  /** The node's GovernanceERC20 token (condition ctor arg 0). */
   readonly token: `0x${string}`;
-  /** The CumulativeMerkleDistributor for this node (condition ctor arg 1). */
   readonly distributor: `0x${string}`;
-  /** The node DAO the grant targets (_where AND grant subject). */
   readonly dao: `0x${string}`;
-  /** The node's Aragon TokenVoting plugin — createProposal is sent here. */
   readonly plugin: `0x${string}`;
-  /** The connected owner wallet that signs + receives the scoped grant (_who). */
   readonly wallet: `0x${string}`;
+  readonly chainId: number;
+}
+
+export interface AuthorizePublishingRecovery {
+  readonly hashes: Partial<
+    Readonly<Record<AuthorizationTransactionKey, `0x${string}`>>
+  >;
+  readonly onHash: (
+    key: AuthorizationTransactionKey,
+    hash: `0x${string}`
+  ) => void;
+  readonly runGuarded: AuthorizationActionGuard;
 }
 
 export interface AuthorizePublishingResult {
-  readonly phase: AuthorizePublishingPhase;
-  /** The deployed condition address (from the deploy receipt), once available. */
   readonly conditionAddress: `0x${string}` | null;
-  /** Condition-deploy tx hash (for an explorer link). */
-  readonly deployTx: `0x${string}` | undefined;
-  /** createProposal (grant) tx hash (for an explorer link). */
-  readonly grantTx: `0x${string}` | undefined;
-  readonly error: Error | null;
-  /** Kick off the flow: deploy the scoped condition, then the grant proposal. */
-  readonly authorize: () => void;
-  readonly reset: () => void;
+  readonly conditionTransaction: AuthorizationTransactionState;
+  readonly grantTransaction: AuthorizationTransactionState;
+  readonly verificationStatus: AuthorizationVerificationStatus;
+  readonly error: string | null;
+  readonly deployCondition: () => Promise<void>;
+  readonly grantPermission: () => Promise<void>;
 }
 
-/**
- * Drive the one-time, scoped authorize-publishing flow for one node. `token`/`distributor`/`dao`/
- * `plugin`/`wallet` are all required up front (the caller gates the button on their presence). The
- * caller owns `hasPermission` and should re-read it when `phase === "done"` so its UI advances.
- */
+function transactionStatus(params: {
+  hash: `0x${string}` | undefined;
+  receiptStatus: "success" | "reverted" | undefined;
+  isLoading: boolean;
+  hasError: boolean;
+}): AuthorizationTransactionStatus {
+  if (!params.hash) return "pending";
+  if (params.receiptStatus === "reverted") return "failed";
+  if (params.hasError) return "unknown";
+  if (params.receiptStatus === "success") return "confirmed";
+  return params.isLoading ? "confirming" : "submitted";
+}
+
+function canSubmitTransaction(
+  transaction: AuthorizationTransactionState
+): boolean {
+  return !transaction.hash || transaction.status === "failed";
+}
+
+function addressesMatch(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase();
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+/** Drive condition deploy and scoped grant as two explicit actions. */
 export function useAuthorizePublishing(
-  input: AuthorizePublishingInput
+  input: AuthorizePublishingInput,
+  recovery: AuthorizePublishingRecovery
 ): AuthorizePublishingResult {
-  const { token, distributor, dao, plugin, wallet } = input;
+  const { token, distributor, dao, plugin, wallet, chainId } = input;
   const { address: account } = useAccount();
-  const [phase, setPhase] = useState<AuthorizePublishingPhase>("idle");
+  const publicClient = usePublicClient({ chainId });
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [verificationStatus, setVerificationStatus] =
+    useState<AuthorizationVerificationStatus>("idle");
+  const verificationRun = useRef(0);
 
-  // Step 1: deploy the scoped condition contract from the connected wallet.
-  const {
-    deployContract,
-    data: deployTx,
-    error: deployError,
-    reset: resetDeploy,
-  } = useDeployContract();
-  const { data: deployReceipt, error: deployReceiptError } =
-    useWaitForTransactionReceipt({ hash: deployTx });
-  const conditionAddress = deployReceipt?.contractAddress ?? null;
+  const conditionTx = recovery.hashes.deployCondition;
+  const grantTx = recovery.hashes.grantPermission;
+  const { deployContractAsync, error: conditionError } = useDeployContract();
+  const { writeContractAsync, error: grantError } = useWriteContract();
+  const conditionWait = useWaitForTransactionReceipt({ hash: conditionTx });
+  const grantWait = useWaitForTransactionReceipt({ hash: grantTx });
+  const conditionAddress =
+    conditionWait.data?.status === "success"
+      ? (conditionWait.data.contractAddress ?? null)
+      : null;
 
-  // Step 2: the grantWithCondition governance proposal, bound to the deployed condition.
-  const {
-    writeContract,
-    data: grantTx,
-    error: grantError,
-    reset: resetGrant,
-  } = useWriteContract();
-  const { data: grantReceipt, error: grantReceiptError } =
-    useWaitForTransactionReceipt({ hash: grantTx });
+  const conditionTransaction = useMemo<AuthorizationTransactionState>(
+    () => ({
+      hash: conditionTx,
+      status: transactionStatus({
+        hash: conditionTx,
+        receiptStatus: conditionWait.data?.status,
+        isLoading: conditionWait.isLoading,
+        hasError: Boolean(conditionWait.error),
+      }),
+    }),
+    [
+      conditionTx,
+      conditionWait.data?.status,
+      conditionWait.isLoading,
+      conditionWait.error,
+    ]
+  );
+  const grantTransaction = useMemo<AuthorizationTransactionState>(
+    () => ({
+      hash: grantTx,
+      status: transactionStatus({
+        hash: grantTx,
+        receiptStatus: grantWait.data?.status,
+        isLoading: grantWait.isLoading,
+        hasError: Boolean(grantWait.error),
+      }),
+    }),
+    [grantTx, grantWait.data?.status, grantWait.isLoading, grantWait.error]
+  );
 
-  const authorize = useCallback(() => {
-    if (!account) {
-      setPhase("error");
-      return;
-    }
-    setPhase("deploying");
-    deployContract({
-      abi: DISTRIBUTION_PUBLISH_CONDITION_ABI,
-      bytecode: DISTRIBUTION_PUBLISH_CONDITION_BYTECODE,
-      args: [token, distributor],
-      account,
-    });
-  }, [account, deployContract, token, distributor]);
-
-  // Condition deployed → submit the grantWithCondition proposal. The grant executes AS the DAO
-  // (msg.sender=DAO) inside the proposal: DAO.grantWithCondition(_where=DAO, _who=wallet,
-  // EXECUTE_PERMISSION, _condition=condition), wrapped in createProposal(Yes, tryEarlyExecution).
   useEffect(() => {
-    if (phase !== "deploying" || !deployReceipt) return;
-    // A mined-but-REVERTED condition deploy resolves without throwing — never advance it.
-    if (deployReceipt.status !== "success" || !conditionAddress) {
-      setPhase("error");
+    const run = ++verificationRun.current;
+    if (!conditionTx) {
+      setVerificationStatus("idle");
       return;
     }
-    setPhase("granting");
+    if (conditionTransaction.status === "failed") {
+      setVerificationStatus("mismatch");
+      return;
+    }
+    if (!conditionAddress || !publicClient) {
+      setVerificationStatus("checking");
+      return;
+    }
+    if (grantTx && grantTransaction.status !== "confirmed") {
+      setVerificationStatus(
+        grantTransaction.status === "failed" ? "mismatch" : "checking"
+      );
+      return;
+    }
+
+    setVerificationStatus("checking");
+    const attempts =
+      grantTransaction.status === "confirmed" ? VERIFY_ATTEMPTS : 1;
+    void (async () => {
+      for (let attempt = 0; attempt < attempts; attempt += 1) {
+        try {
+          const [conditionToken, conditionDistributor] = await Promise.all([
+            publicClient.readContract({
+              abi: DISTRIBUTION_PUBLISH_CONDITION_ABI,
+              address: conditionAddress,
+              functionName: "token",
+            }),
+            publicClient.readContract({
+              abi: DISTRIBUTION_PUBLISH_CONDITION_ABI,
+              address: conditionAddress,
+              functionName: "distributor",
+            }),
+          ]);
+          if (run !== verificationRun.current) return;
+          if (
+            !addressesMatch(conditionToken, token) ||
+            !addressesMatch(conditionDistributor, distributor)
+          ) {
+            setVerificationStatus("mismatch");
+            return;
+          }
+          if (!grantTx) {
+            setVerificationStatus("condition_verified");
+            return;
+          }
+
+          const liveRoot = await publicClient.readContract({
+            abi: CUMULATIVE_MERKLE_DISTRIBUTOR_ABI,
+            address: distributor,
+            functionName: "merkleRoot",
+          });
+          const validData = buildPublishPermissionProbe(
+            token,
+            distributor,
+            liveRoot,
+            0n
+          );
+          const nonAtomicData = buildPublishPermissionProbe(
+            token,
+            distributor,
+            liveRoot,
+            1n
+          );
+          const [valid, nonAtomic] = await Promise.all([
+            publicClient.readContract({
+              abi: DAO_ABI,
+              address: dao,
+              functionName: "hasPermission",
+              args: [dao, wallet, EXECUTE_PERMISSION_ID, validData],
+            }),
+            publicClient.readContract({
+              abi: DAO_ABI,
+              address: dao,
+              functionName: "hasPermission",
+              args: [dao, wallet, EXECUTE_PERMISSION_ID, nonAtomicData],
+            }),
+          ]);
+          if (run !== verificationRun.current) return;
+          if (valid === true && nonAtomic === false) {
+            setVerificationStatus("verified");
+            return;
+          }
+          if (attempt === attempts - 1) {
+            setVerificationStatus("mismatch");
+            return;
+          }
+        } catch {
+          if (run !== verificationRun.current) return;
+          if (attempt === attempts - 1) {
+            setVerificationStatus("unavailable");
+            return;
+          }
+        }
+        await wait(VERIFY_DELAY_MS);
+      }
+    })();
+  }, [
+    conditionAddress,
+    conditionTransaction.status,
+    conditionTx,
+    dao,
+    distributor,
+    grantTransaction.status,
+    grantTx,
+    publicClient,
+    token,
+    wallet,
+  ]);
+
+  const deployCondition = useCallback(async () => {
+    if (!account || !canSubmitTransaction(conditionTransaction)) {
+      return;
+    }
+    setActionError(null);
+    try {
+      const hash = await recovery.runGuarded("deployCondition", () =>
+        deployContractAsync({
+          abi: DISTRIBUTION_PUBLISH_CONDITION_ABI,
+          bytecode: DISTRIBUTION_PUBLISH_CONDITION_BYTECODE,
+          args: [token, distributor],
+          account,
+        })
+      );
+      if (!hash) {
+        setActionError("Condition deployment is already open in this browser.");
+        return;
+      }
+      recovery.onHash("deployCondition", hash);
+    } catch (error) {
+      setActionError(
+        error instanceof Error && error.message.includes("User rejected")
+          ? "Transaction cancelled."
+          : error instanceof Error
+            ? error.message
+            : "Condition deployment failed."
+      );
+    }
+  }, [
+    account,
+    conditionTransaction,
+    deployContractAsync,
+    distributor,
+    recovery,
+    token,
+  ]);
+
+  const grantPermission = useCallback(async () => {
+    if (
+      !account ||
+      !conditionAddress ||
+      !canSubmitTransaction(grantTransaction)
+    ) {
+      return;
+    }
+    setActionError(null);
     const grantData = encodeFunctionData({
       abi: DAO_ABI,
       functionName: "grantWithCondition",
       args: [dao, wallet, EXECUTE_PERMISSION_ID, conditionAddress],
     });
     const grantAction = { to: dao, value: 0n, data: grantData } as const;
-    writeContract({
-      abi: TOKEN_VOTING_ABI,
-      address: plugin,
-      functionName: "createProposal",
-      args: [
-        "0x", // _metadata
-        [grantAction], // _actions
-        0n, // _allowFailureMap
-        0n, // _startDate (0 ⇒ plugin derives)
-        0n, // _endDate (0 ⇒ plugin derives; EarlyExecution bypasses minDuration)
-        VOTE_OPTION_YES, // _voteOption
-        true, // _tryEarlyExecution
-      ],
-      account: wallet,
-      // EXPLICIT GAS — do NOT let the wallet gas-estimate this tx. createProposal with
-      // _tryEarlyExecution executes the grant in the SAME tx (a nested DAO.execute); many
-      // wallets' estimators mis-predict that nested call as "likely to fail" and then refuse
-      // to broadcast even when the user confirms (the tx never reaches the chain, UI hangs).
-      // The call is proven to succeed on a Base fork; a fixed generous limit lets it submit.
-      gas: 3_000_000n,
-    });
+    try {
+      const hash = await recovery.runGuarded("grantPermission", () =>
+        writeContractAsync({
+          abi: TOKEN_VOTING_ABI,
+          address: plugin,
+          functionName: "createProposal",
+          args: ["0x", [grantAction], 0n, 0n, 0n, VOTE_OPTION_YES, true],
+          account: wallet,
+          gas: 3_000_000n,
+        })
+      );
+      if (!hash) {
+        setActionError("Permission grant is already open in this browser.");
+        return;
+      }
+      recovery.onHash("grantPermission", hash);
+    } catch (error) {
+      setActionError(
+        error instanceof Error && error.message.includes("User rejected")
+          ? "Transaction cancelled."
+          : error instanceof Error
+            ? error.message
+            : "Permission grant failed."
+      );
+    }
   }, [
-    phase,
-    deployReceipt,
+    account,
     conditionAddress,
     dao,
-    wallet,
+    grantTransaction,
     plugin,
-    writeContract,
+    recovery,
+    wallet,
+    writeContractAsync,
   ]);
 
-  // Grant proposal confirmed → transaction done. This is not activation success: the caller must
-  // still prove the new condition with paired on-chain permission probes before recording active.
-  useEffect(() => {
-    if (phase !== "granting" || !grantReceipt) return;
-    setPhase(grantReceipt.status === "success" ? "done" : "error");
-  }, [phase, grantReceipt]);
-
-  // Surface wallet/receipt errors into the coarse phase.
-  useEffect(() => {
-    const wallet =
-      deployError ?? deployReceiptError ?? grantError ?? grantReceiptError;
-    if (wallet && phase !== "error" && phase !== "done") {
-      setPhase("error");
-    }
-  }, [deployError, deployReceiptError, grantError, grantReceiptError, phase]);
-
-  const reset = useCallback(() => {
-    resetDeploy();
-    resetGrant();
-    setPhase("idle");
-  }, [resetDeploy, resetGrant]);
-
-  const error = (deployError ??
-    deployReceiptError ??
-    grantError ??
-    grantReceiptError ??
-    null) as Error | null;
+  const walletError = conditionError ?? grantError;
+  const receiptError = conditionWait.error ?? grantWait.error;
+  const error =
+    actionError ??
+    (walletError?.message?.includes("User rejected")
+      ? "Transaction cancelled."
+      : (walletError?.message ?? receiptError?.message ?? null));
 
   return {
-    phase,
     conditionAddress,
-    deployTx,
-    grantTx,
+    conditionTransaction,
+    grantTransaction,
+    verificationStatus,
     error,
-    authorize,
-    reset,
+    deployCondition,
+    grantPermission,
   };
 }
