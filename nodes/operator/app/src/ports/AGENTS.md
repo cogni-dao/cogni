@@ -54,6 +54,7 @@ Does NOT re-export packages with `node:` transitive dependencies.
 - ThreadPersistencePort, ThreadConflictError, ThreadSummary
 - OperatorWalletPort
 - ReceiptDelivery + ReceiptDeliveryTarget (catalog-routed operator→child attribution receipts)
+- IdentityAttestationRepositoryPort, IdentityAttestationSignerPort
 - TreasurySettlementPort, TreasurySettlementOutcome
 - Types (ChargeReceiptParams, LlmCaller, BillingAccount, CreditLedgerEntry, etc.)
 

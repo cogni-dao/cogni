@@ -30,7 +30,7 @@ Protected (authenticated) pages wrapped in `SidebarProvider` + `AppSidebar` + `A
 ## Public Surface
 
 - **Exports:** none
-- **Routes:** `/chat`, `/dashboard`, `/work`, `/activity`, `/knowledge`, `/gov`, `/credits`, `/nodes`, `/schedules`, `/setup`
+- **Routes:** `/chat`, `/dashboard`, `/work`, `/activity`, `/knowledge`, `/gov`, `/credits`, `/nodes`, `/schedules`, `/setup`, `/identity/attest`
 - **Files considered API:** `layout.tsx`
 
 ## Responsibilities

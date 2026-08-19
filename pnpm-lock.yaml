@@ -556,6 +556,9 @@ importers:
       ioredis:
         specifier: ^5.6.1
         version: 5.10.0
+      jose:
+        specifier: ^6.1.2
+        version: 6.1.2
       langfuse:
         specifier: ^3.38.6
         version: 3.38.6

@@ -48,10 +48,12 @@ Next.js App Router delivery layer. UI pages and API routes that expose features 
 - **Routes (if any):**
   - Public pages: `/` (homepage via `(public)/page.tsx`)
   - Protected pages: `/chat` (via `(app)/chat/page.tsx`)
+  - Identity broker: `/identity/attest` (authenticated; registered-node canonical return only)
   - Infra: `/health`, `/openapi.json`, `/meta/route-manifest` (via `(infra)/*`)
   - API: `/api/auth/*`, `/api/v1/chat/completions`
   - Internal ops: `/api/internal/ops/governance/schedules/sync` [POST] (deploy-only trigger)
   - Agent discovery: `/.well-known/agent.json` [GET] — public discovery document for machine clients
+  - Attestation JWKS: `/.well-known/jwks.json` [GET] — public keys for verifying operator-signed identity attestations (task.5024)
 - **Files considered API:** layout.tsx, page.tsx, loading.tsx, error.tsx, api/\*\*/route.ts, (infra)/\*\*/route.ts, .well-known/\*\*/route.ts
 - **Suspense / error boundaries:** each route group exposes a
   `loading.tsx` + `error.tsx`. `(app)/loading.tsx` renders a generic

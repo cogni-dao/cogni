@@ -34,14 +34,15 @@ LITELLM_MASTER_KEY="sk-cogni-shared-master"
 OPENROUTER_API_KEY="sk-or-shared"
 GH_WEBHOOK_SECRET="webhook-shared"           # service: _shared — single App plane (bug.5012)
 # External integration passthrough values (human source) — prove routing.
-GH_OAUTH_CLIENT_ID="gh-oauth-id"          # appliesTo: web   → every node
+GH_OAUTH_CLIENT_ID="gh-oauth-id"          # service: operator → central operator only
+GH_OAUTH_CLIENT_SECRET="gh-oauth-secret"  # service: operator → central operator only
 TAVILY_API_KEY="tvly-shared"              # appliesTo: llm   → every node
 PRIVY_APP_ID="privy-app-id"               # appliesTo: payments → poly only
 PRIVY_USER_WALLETS_APP_ID="privy-uw-id"   # service: poly       → poly only
 export DEPLOY_ENV DOMAIN VM_IP POSTGRES_ROOT_PASSWORD APP_DB_USER APP_DB_PASSWORD \
   APP_DB_SERVICE_USER APP_DB_SERVICE_PASSWORD CATALOG_FILE \
   LITELLM_MASTER_KEY OPENROUTER_API_KEY GH_WEBHOOK_SECRET \
-  GH_OAUTH_CLIENT_ID TAVILY_API_KEY PRIVY_APP_ID PRIVY_USER_WALLETS_APP_ID
+  GH_OAUTH_CLIENT_ID GH_OAUTH_CLIENT_SECRET TAVILY_API_KEY PRIVY_APP_ID PRIVY_USER_WALLETS_APP_ID
 # poly drives the payment/custody-gated path.
 PAYMENT_NODES="poly"; export PAYMENT_NODES
 
@@ -73,6 +74,15 @@ seeded()  { grep -qE "^$1\|$2\|" "$SEED_LOG"; }
 : >"$SEED_LOG"
 seed_node_app_secrets node-template
 seed_node_app_secrets poly
+seed_node_app_secrets operator
+
+# Identity-attestation signing material is generated into the operator bank
+# only. Relying nodes receive public JWKS, never the private seed.
+r=0
+seeded operator IDENTITY_ATTESTATION_PRIVATE_KEY || r=1
+seeded node-template IDENTITY_ATTESTATION_PRIVATE_KEY && r=1
+seeded poly IDENTITY_ATTESTATION_PRIVATE_KEY && r=1
+assert "$r" "identity attestation key auto-materializes only to operator"
 
 # 1. AUTH_SECRET distinct per node (the headline isolation invariant).
 nt_auth=$(val_for node-template AUTH_SECRET); cn_auth=$(val_for poly AUTH_SECRET)
@@ -89,6 +99,11 @@ r=0; [[ "$(val_for node-template NEXTAUTH_URL)" == "https://node-template.test.c
    && "$(val_for poly NEXTAUTH_URL)" == "https://poly.test.cognidao.org" ]] || r=1
 assert "$r" "NEXTAUTH_URL binds per-node FQDN"
 
+r=0; [[ "$(val_for node-template DOMAIN)" == "test.cognidao.org" \
+   && "$(val_for poly DOMAIN)" == "test.cognidao.org" \
+   && "$(val_for operator DOMAIN)" == "test.cognidao.org" ]] || r=1
+assert "$r" "DOMAIN shares the environment-local operator/base domain with every node"
+
 # 4. DATABASE_URL binds the per-node database cogni_<node>.
 r=0; [[ "$(val_for node-template DATABASE_URL)" == *"/cogni_node_template?"* \
    && "$(val_for poly DATABASE_URL)" == *"/cogni_poly?"* ]] || r=1
@@ -104,11 +119,17 @@ assert "$r" "POLY_WALLET_AEAD_KEY_HEX excluded from non-poly nodes"
 r=0; seeded node-template POLYGON_RPC_URL && r=1
 assert "$r" "POLYGON_RPC_URL excluded from non-poly nodes"
 
-# 5b. External integrations: web/llm reach every node; payments/service-pinned
-#     reach only poly (the dead-secrets wiring fix).
-r=0; [[ "$(val_for node-template GH_OAUTH_CLIENT_ID)" == "gh-oauth-id" \
-   && "$(val_for poly GH_OAUTH_CLIENT_ID)" == "gh-oauth-id" ]] || r=1
-assert "$r" "GH_OAUTH_CLIENT_ID (appliesTo: web) reaches every node"
+# 5b. Central GitHub OAuth belongs only to the operator; relying nodes import
+#     operator-signed bindings. Other integrations retain their existing scope.
+r=0
+for k in GH_OAUTH_CLIENT_ID GH_OAUTH_CLIENT_SECRET; do
+  seeded operator "$k" || r=1
+  seeded node-template "$k" && r=1
+  seeded poly "$k" && r=1
+done
+[[ "$(val_for operator GH_OAUTH_CLIENT_ID)" == "gh-oauth-id" \
+   && "$(val_for operator GH_OAUTH_CLIENT_SECRET)" == "gh-oauth-secret" ]] || r=1
+assert "$r" "GitHub OAuth credentials materialize only to operator"
 r=0; [[ "$(val_for node-template TAVILY_API_KEY)" == "tvly-shared" \
    && "$(val_for poly TAVILY_API_KEY)" == "tvly-shared" ]] || r=1
 assert "$r" "TAVILY_API_KEY (appliesTo: llm) reaches every node"

@@ -69,6 +69,7 @@ export * from "./graphs.run.internal.v1.contract";
 // ── HTTP (ts-rest router + OpenAPI) ─────────────────────────────────────────
 export * from "./http/openapi.v1";
 export * from "./http/router.v1";
+export * from "./identity.attestation.v1.contract";
 // ── Knowledge ───────────────────────────────────────────────────────────────
 export * from "./knowledge.contributions.v1.contract";
 export * from "./knowledge.domains.v1.contract";

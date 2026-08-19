@@ -63,13 +63,14 @@ System setup installers were moved to `scripts/bootstrap/` and are out of scope 
   - `createScopedGraphExecutor({ executor, billing, preflightCheckFn, resolver, actorId, abortSignal?, broker?, commitByoUsage? })` - Per-run wrapper: resolves LlmService from ModelProviderResolverPort, applies billing/preflight/observability/usage-commit decorators, seeds ALS ExecutionScope
   - `runGraphWithScope({ executor, req, ctx?, billing, llmService, abortSignal? })` - App-local helper that seeds per-run ALS scope with resolved LlmService
   - `createAgentCatalog()`, `listAgentsForApi()` - Discovery factory (from `agent-discovery.ts`)
+  - `resolveIdentityAttestationDependencies(signingKey)` - Identity issuer port composition; policy remains in the feature service
   - `wrapRouteHandlerWithLogging()` - Route logging wrapper with metrics (from `http/`)
   - `wrapPublicRoute()` - Lazy singleton wrapper for public routes with rate limiting (from `http/`)
   - `makeWrapPublicRoute()` - Pure factory for testing (from `http/wrapPublicRoute`)
   - `RateLimitBypassConfig` - Test bypass config type (from `http/wrapPublicRoute`)
   - `TokenBucketRateLimiter`, `publicApiLimiter`, `extractClientIp` - Rate limiting utilities (from `http/`)
 - **Env/Config keys:** none (uses `@/shared/env`)
-- **Files considered API:** `container.ts`, `graph-executor.factory.ts`, `agent-discovery.ts`, `http/index.ts`, `http/wrapPublicRoute.ts`, `http/rateLimiter.ts`
+- **Files considered API:** `container.ts`, `graph-executor.factory.ts`, `agent-discovery.ts`, `identity-attestation.ts`, `http/index.ts`, `http/wrapPublicRoute.ts`, `http/rateLimiter.ts`
 
 **Subdirectories:**
 

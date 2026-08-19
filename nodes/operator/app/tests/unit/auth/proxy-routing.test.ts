@@ -134,6 +134,13 @@ describe("proxy — page-level routing", () => {
     expectSignInRedirectTo(res, "/profile");
   });
 
+  it("protects the identity attestation broker and preserves its query", async () => {
+    mockGetToken.mockResolvedValue(null);
+    const path = `/identity/attest?node_id=node&nonce=nonce&return_to=${encodeURIComponent("https://node.example/profile")}`;
+    const res = await proxy(makeRequest(path));
+    expectSignInRedirectTo(res, path);
+  });
+
   it.each([
     "/dashboard",
     "/knowledge",

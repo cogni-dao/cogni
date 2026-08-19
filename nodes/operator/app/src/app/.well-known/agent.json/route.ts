@@ -72,6 +72,9 @@ export async function GET(request: Request) {
     },
     registrationUrl: `${origin}/api/v1/agent/register`,
     auth: { type: "bearer", keyPrefix: "cogni_ag_sk_v1_" },
+    // Fleet identity (task.5024): public keys nodes use to verify operator-signed
+    // identity attestations (POST /api/v1/identity/attestations, SIWE session).
+    jwks_uri: `${origin}/.well-known/jwks.json`,
     endpoints: {
       completions: `${origin}/api/v1/chat/completions`,
       graphs: `${origin}/api/v1/ai/agents`,

@@ -35,7 +35,7 @@ Thin app-layer wrappers that resolve dependencies, bind request context, map DTO
 
 ## Public Surface
 
-- **Exports:** Feature facade functions for use-case coordination
+- **Exports:** Feature facade functions for use-case coordination, including the authenticated identity attestation browser broker
 - **Files considered API:** \*_/_.server.ts
 
 ## Ports (optional)
