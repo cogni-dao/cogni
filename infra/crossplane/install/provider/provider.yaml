@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# The provider-akash Crossplane package + its runtime config. The package image
+# is built by `infra/crossplane/provider-akash/Makefile` (`make xpkg`) and pushed
+# to the org registry; the tag here is PINNED and bumped via PR.
+apiVersion: pkg.crossplane.io/v1
+kind: Provider
+metadata:
+  name: provider-akash
+spec:
+  package: ghcr.io/cogni-dao/provider-akash:v0.1.0
+  packagePullPolicy: IfNotPresent
+  revisionActivationPolicy: Automatic
+  revisionHistoryLimit: 1
+  runtimeConfigRef:
+    apiVersion: pkg.crossplane.io/v1beta1
+    kind: DeploymentRuntimeConfig
+    name: provider-akash
+---
+apiVersion: pkg.crossplane.io/v1beta1
+kind: DeploymentRuntimeConfig
+metadata:
+  name: provider-akash
+spec:
+  deploymentTemplate:
+    spec:
+      selector: {}
+      template:
+        spec:
+          containers:
+            - name: package-runtime
+              args:
+                # Poll the Console for drift every 2m; sync the informer cache
+                # hourly. Tune per environment.
+                - --poll=2m
+                - --sync=1h

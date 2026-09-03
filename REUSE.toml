@@ -22,6 +22,13 @@ precedence = "closest"
 SPDX-License-Identifier = "MIT"
 SPDX-FileCopyrightText = "Upstream UI component authors"
 
+# Crossplane Akash provider — upstreamable OSS component, Apache-2.0
+[[annotations]]
+path = "infra/crossplane/**"
+precedence = "closest"
+SPDX-FileCopyrightText = "2026 CogniDAO contributors"
+SPDX-License-Identifier = "Apache-2.0"
+
 # Default for everything else
 [[annotations]]
 path = "**"

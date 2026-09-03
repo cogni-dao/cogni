@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# DEMO ProviderConfig — points the provider at the in-cluster MOCK console. The
+# bearer credential comes from a Secret demo.sh creates from $OPERATOR_COMPUTE_TOKEN
+# (never hardcoded). Production's ProviderConfig (install/provider/providerconfig.yaml)
+# points at the real Console and reads an ESO-materialized Secret.
+apiVersion: akash.crossplane.io/v1alpha1
+kind: ProviderConfig
+metadata:
+  name: default
+spec:
+  console: http://mock-console.akash-mock.svc.cluster.local
+  credentials:
+    source: Secret
+    secretRef:
+      namespace: crossplane-system
+      name: akash-console-credentials
+      key: authorization

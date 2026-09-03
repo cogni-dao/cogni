@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# ProviderConfig — tells provider-akash where the Console API is and how to
+# authenticate. The credential is read from the ESO-materialized Secret; it is
+# NEVER hardcoded here.
+apiVersion: akash.crossplane.io/v1alpha1
+kind: ProviderConfig
+metadata:
+  name: default
+spec:
+  console: https://console-api.akash.network
+  credentials:
+    source: Secret
+    secretRef:
+      namespace: crossplane-system
+      name: akash-console-credentials
+      key: authorization

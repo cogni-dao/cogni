@@ -1,0 +1,76 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# DEMO-ONLY RBAC. In production the Crossplane package manager grants the
+# provider's RBAC automatically from the CRDs in its package (see
+# infra/crossplane/install/provider/). For the local kind demo we run the SAME
+# controller image as a plain Deployment, so we grant equivalent RBAC explicitly.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: provider-akash
+  namespace: crossplane-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: provider-akash
+rules:
+  - apiGroups: ["akash.crossplane.io"]
+    resources:
+      [
+        "akashdeployments",
+        "akashdeployments/status",
+        "akashdeployments/finalizers",
+      ]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["akash.crossplane.io"]
+    resources:
+      [
+        "providerconfigs",
+        "providerconfigs/status",
+        "providerconfigs/finalizers",
+      ]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: ["akash.crossplane.io"]
+    resources:
+      [
+        "providerconfigusages",
+        "providerconfigusages/status",
+        "providerconfigusages/finalizers",
+      ]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: provider-akash
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: provider-akash
+subjects:
+  - kind: ServiceAccount
+    name: provider-akash
+    namespace: crossplane-system
+---
+# Crossplane core's composition controller must get/list/watch the composed
+# AkashDeployment MRs. When a provider is installed as a package the rbac-manager
+# grants this automatically; because the demo installs the CRDs directly, we
+# aggregate the grant into Crossplane's ClusterRole via its standard label.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: crossplane-akash-aggregate
+  labels:
+    rbac.crossplane.io/aggregate-to-crossplane: "true"
+rules:
+  - apiGroups: ["akash.crossplane.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
