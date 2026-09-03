@@ -14,7 +14,10 @@
 import type { ReservedSql, Sql } from "postgres";
 import { describe, expect, it } from "vitest";
 
-import { DoltgresKnowledgeContributionAdapter } from "../src/adapters/doltgres/contribution-adapter.js";
+import {
+  DoltgresKnowledgeContributionAdapter,
+  isConfidenceOnlyRecompute,
+} from "../src/adapters/doltgres/contribution-adapter.js";
 import type { Principal } from "../src/domain/contribution-schemas.js";
 import { CitationTargetNotFoundError } from "../src/port/knowledge-store.port.js";
 
@@ -232,6 +235,53 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
         q.includes("dolt_diff('base123', 'head123', 'citations')")
       )
     ).toBe(true);
+  });
+
+  it("KEEPS a real modified (tags-only edit) even when its display fields are identical + a citation is present (bug.5004)", async () => {
+    // A genuine op:update that rewrites only `tags` (title/content/entryType/domain
+    // unchanged) also recomputes confidence — so `confidence_pct` AND `tags` differ. This
+    // must NOT be suppressed: the old display-field whitelist would have hidden it.
+    const fake = new FakeDiffSql(
+      [
+        {
+          diff_type: "modified",
+          from_id: "operator-agent-orientation",
+          to_id: "operator-agent-orientation",
+          from_title: "orientation",
+          to_title: "orientation",
+          from_content: "body",
+          to_content: "body",
+          from_entry_type: "reference",
+          to_entry_type: "reference",
+          from_domain: "operator",
+          to_domain: "operator",
+          from_tags: "a,b",
+          to_tags: "a,b,c",
+          from_confidence_pct: "80",
+          to_confidence_pct: "82",
+          from_updated_at: "2026-01-01",
+          to_updated_at: "2026-01-02",
+        },
+      ],
+      [
+        {
+          diff_type: "added",
+          to_id: "cit-1",
+          to_citing_id: "operator-node-catalog",
+          to_cited_id: "operator-agent-orientation",
+          to_citation_type: "extends",
+        },
+      ]
+    );
+
+    const entries = await adapterFor(fake).diff("contrib-agent-1-abc123");
+
+    // both the real `modified` (kept, not hidden) and the citation link are surfaced
+    expect(entries).toHaveLength(2);
+    expect(entries.map((e) => e.changeType).sort()).toEqual([
+      "citation_added",
+      "modified",
+    ]);
   });
 
   it("normalizes persisted brace-wrapped refs before building diff refs", async () => {
@@ -681,3 +731,62 @@ class CrossPlaneFakeSql {
     return this.conn as unknown as ReservedSql;
   }
 }
+
+describe("isConfidenceOnlyRecompute", () => {
+  const base = {
+    diff_type: "modified",
+    from_id: "e1",
+    to_id: "e1",
+    from_title: "t",
+    to_title: "t",
+    from_content: "c",
+    to_content: "c",
+    from_tags: "a",
+    to_tags: "a",
+    from_entity_id: "x",
+    to_entity_id: "x",
+  };
+
+  it("suppresses when only confidence_pct changed", () => {
+    expect(
+      isConfidenceOnlyRecompute({
+        ...base,
+        from_confidence_pct: "80",
+        to_confidence_pct: "82",
+      })
+    ).toBe(true);
+  });
+
+  it("suppresses when only confidence_pct + DB-managed/metadata columns changed", () => {
+    expect(
+      isConfidenceOnlyRecompute({
+        ...base,
+        from_confidence_pct: "80",
+        to_confidence_pct: "82",
+        from_updated_at: "2026-01-01",
+        to_updated_at: "2026-01-02",
+        from_commit: "aaa",
+        to_commit: "bbb",
+        from_commit_date: "2026-01-01",
+        to_commit_date: "2026-01-02",
+      })
+    ).toBe(true);
+  });
+
+  it("KEEPS when tags changed (display fields identical) — the false-suppression class", () => {
+    expect(
+      isConfidenceOnlyRecompute({
+        ...base,
+        to_tags: "a,b",
+        from_confidence_pct: "80",
+        to_confidence_pct: "82",
+      })
+    ).toBe(false);
+  });
+
+  it("KEEPS when entity_id changed", () => {
+    expect(isConfidenceOnlyRecompute({ ...base, to_entity_id: "y" })).toBe(
+      false
+    );
+  });
+});

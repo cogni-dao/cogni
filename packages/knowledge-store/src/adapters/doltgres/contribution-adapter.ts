@@ -613,6 +613,42 @@ async function applyEdit(input: {
   );
 }
 
+/**
+ * Columns ignored when deciding whether a `knowledge` `modified` row is a pure
+ * confidence recompute (a `cite` side-effect, not an author edit):
+ *  - `confidence_pct` — the ONLY column the recompute writes (see `recomputeConfidence`).
+ *  - `updated_at` — DB-managed write timestamp; changes on any write.
+ *  - `commit` / `commit_date` — dolt_diff's own metadata (from_commit/to_commit/…), never
+ *    a knowledge column.
+ */
+const RECOMPUTE_IGNORED_COLUMNS = new Set([
+  "confidence_pct",
+  "updated_at",
+  "commit",
+  "commit_date",
+]);
+
+/**
+ * True when a `dolt_diff('knowledge')` `modified` row differs ONLY in `confidence_pct`
+ * (ignoring {@link RECOMPUTE_IGNORED_COLUMNS}) — i.e. it is the confidence recompute a
+ * `cite` triggers on its target, not a real author edit. Keys on the tight invariant (only
+ * `confidence_pct` changed) rather than whitelisting a few display fields, so a real
+ * `op:update` that rewrites `tags`/`entity_id`/`source_ref` — even with title/content/
+ * entryType/domain identical — differs in some other column and is NOT suppressed. Errs
+ * toward KEEPING: any unexpected differing column surfaces the row rather than hiding it.
+ */
+export function isConfidenceOnlyRecompute(row: Record<string, unknown>): boolean {
+  for (const key of Object.keys(row)) {
+    if (!key.startsWith("from_")) continue;
+    const column = key.slice("from_".length);
+    if (RECOMPUTE_IGNORED_COLUMNS.has(column)) continue;
+    const toKey = `to_${column}`;
+    if (!(toKey in row)) continue;
+    if (String(row[key] ?? "") !== String(row[toKey] ?? "")) return false;
+  }
+  return true;
+}
+
 // ---------------------------------------------------------------------------
 // Adapter
 // ---------------------------------------------------------------------------
@@ -1248,20 +1284,15 @@ export class DoltgresKnowledgeContributionAdapter
           }
         : null;
       // Suppress phantom `modified`: adding a citation recomputes the CITED entry's
-      // confidence (`UPDATE knowledge SET confidence_pct/updated_at WHERE id=<cited>`),
-      // which dolt_diff flags `modified` even though no DISPLAYED field changed —
-      // presenting a pure `cite` as an empty-delta modification of its target (bug.5004).
-      // The citation itself is surfaced below. Author-set confidence is forbidden, so a
-      // display-identical `modified` is always a recompute side-effect, never a real edit.
-      if (
-        diffType === "modified" &&
-        before &&
-        after &&
-        before.title === after.title &&
-        before.content === after.content &&
-        before.entryType === after.entryType &&
-        before.domain === after.domain
-      ) {
+      // confidence (`UPDATE knowledge SET confidence_pct = … WHERE id=<cited>`, the only
+      // column the recompute writes), which dolt_diff flags `modified` even though nothing
+      // an author changed differs — presenting a pure `cite` as an empty-delta modification
+      // of its target (bug.5004). The citation itself is surfaced below.
+      //
+      // Suppress ONLY when `confidence_pct` is the sole changed knowledge column. A real
+      // `op:update` that rewrites `tags`/`entity_id`/`source_ref` — even with the four
+      // display fields identical — differs in another column and is NOT hidden.
+      if (diffType === "modified" && isConfidenceOnlyRecompute(row)) {
         continue;
       }
       entries.push({
@@ -1282,6 +1313,9 @@ export class DoltgresKnowledgeContributionAdapter
     for (const r of citeRows) {
       const row = r as Record<string, unknown>;
       const diffType = String(row.diff_type ?? "added");
+      // Citations are immutable — insert/delete only, no update path today — so any
+      // non-`removed` diff is an insert. If citations ever gain an update path, this
+      // collapses a `modified` into `citation_added` and must be revisited.
       const changeType: ContributionDiffEntry["changeType"] =
         diffType === "removed" ? "citation_removed" : "citation_added";
       const side = (p: "from" | "to"): Record<string, unknown> => ({
