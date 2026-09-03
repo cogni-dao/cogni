@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+apiVersion: v1
+kind: Service
+metadata:
+  name: compute-workload-controller
+  labels:
+    app.kubernetes.io/name: compute-workload-controller
+    app.kubernetes.io/part-of: cogni
+spec:
+  # Compose Alloy runs on the same VM outside k3s. NodePort is the established
+  # host-to-k3s scrape seam; the host firewall drops public-interface traffic
+  # to this port and Caddy deliberately has no route to it.
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: compute-workload-controller
+  ports:
+    - name: metrics
+      port: 9090
+      targetPort: metrics
+      nodePort: 30901

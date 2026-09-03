@@ -11,6 +11,7 @@
 #   3. catalog node_port == per-env overlay Service nodePort (the one coupling
 #      this design introduces; assert it can't drift into split-brain).
 #   4. The derived node DB inventory includes every catalog node.
+#   5. Controller metrics use the host-only scrape seam and never an edge route.
 #
 # Run: bash scripts/ci/tests/render-caddyfile.test.sh
 set -euo pipefail
@@ -25,12 +26,12 @@ source "$REPO_ROOT/scripts/ci/lib/image-tags.sh"
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "  ok — $*"; }
 
-echo "[1/4] Caddyfile.tmpl ↔ catalog drift gate"
+echo "[1/5] Caddyfile.tmpl ↔ catalog drift gate"
 bash scripts/ci/render-caddyfile.sh --check >/dev/null \
   || fail "render-caddyfile.sh --check: committed Caddyfile.tmpl is stale (run: pnpm gen:caddyfile)"
 pass "committed Caddyfile.tmpl matches the catalog"
 
-echo "[2/4] every type:node has an edge block (catalog-driven, no node special-cased)"
+echo "[2/5] every type:node has an edge block (catalog-driven, no node special-cased)"
 RENDERED="$(bash scripts/ci/render-caddyfile.sh)"
 for node in "${NODE_TARGETS[@]}"; do
   slug="$(printf '%s' "$node" | tr '[:lower:]-' '[:upper:]_')"
@@ -47,7 +48,7 @@ for node in "${NODE_TARGETS[@]}"; do
   fi
 done
 
-echo "[3/4] catalog node_port == overlay Service nodePort (no split-brain)"
+echo "[3/5] catalog node_port == overlay Service nodePort (no split-brain)"
 for node in "${NODE_TARGETS[@]}"; do
   cat_port="$(node_port_for_target "$node")"
   for env in candidate-a candidate-b preview production; do
@@ -62,7 +63,7 @@ for node in "${NODE_TARGETS[@]}"; do
   done
 done
 
-echo "[4/4] catalog node DB inventory includes every type:node"
+echo "[4/5] catalog node DB inventory includes every type:node"
 dbs="$(node_database_csv)"
 for node in "${NODE_TARGETS[@]}"; do
   expected_db="$(node_database_for_target "$node")"
@@ -71,5 +72,39 @@ for node in "${NODE_TARGETS[@]}"; do
     *) fail "derived DB inventory '$dbs' missing $expected_db for node '$node'" ;;
   esac
 done
+
+echo "[5/5] controller metrics are scraped but not edge-routed"
+controller_service="infra/k8s/base/compute-workload-controller/service.yaml"
+controller_kustomization="infra/k8s/base/compute-workload-controller/kustomization.yaml"
+alloy_config="infra/compose/runtime/configs/alloy-config.metrics.alloy"
+firewall="infra/provision/cherry/harden-docker-public-ports.sh"
+compute_allowlist="scripts/ci/render-compute-egress-allowlist.sh"
+
+yq -e '
+  .kind == "Service" and
+  .metadata.name == "compute-workload-controller" and
+  .spec.type == "NodePort"
+' "$controller_service" >/dev/null || fail "controller metrics Service contract drifted"
+metrics_port="$(yq -r '.spec.ports[] | select(.name == "metrics") | [.port, .targetPort, .nodePort] | join(":")' "$controller_service")"
+[ "$metrics_port" = "9090:metrics:30901" ] \
+  || fail "controller metrics port contract drifted: ${metrics_port:-missing}"
+grep -Fq '  - service.yaml' "$controller_kustomization" \
+  || fail "controller metrics Service is absent from the kustomize base"
+grep -Fq 'targets         = [{"__address__" = "host.docker.internal:30901"}]' "$alloy_config" \
+  || fail "Alloy does not scrape controller NodePort 30901"
+grep -Eq '^PUBLIC_DROP_PORTS="\$\{INTERNAL_PORTS\},30901"$' "$firewall" \
+  || fail "controller metrics NodePort 30901 is not denied on the public interface"
+grep -Fq -- '--dports "$PUBLIC_DROP_PORTS"' "$firewall" \
+  || fail "public DROP rule does not consume the controller metrics deny set"
+if grep -Eq '^INTERNAL_PORTS="[0-9,]*30901([,\"]|$)' "$firewall"; then
+  fail "bare external-compute allowlist entries must never inherit metrics port 30901"
+fi
+if grep -Eq '^SUBSTRATE_PORTS="[0-9,]*30901([,\"]|$)' "$compute_allowlist"; then
+  fail "external compute allowlist must not grant controller metrics access"
+fi
+if grep -Eq '(^|[^0-9])30901([^0-9]|$)' <<<"$RENDERED"; then
+  fail "controller metrics NodePort 30901 must never be edge-routed"
+fi
+pass "controller :9090 → NodePort 30901 → Alloy; firewall denied + no Caddy route"
 
 echo "PASS: render-caddyfile.test.sh"

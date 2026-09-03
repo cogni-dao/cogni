@@ -13,7 +13,6 @@ import {
 } from "@kubernetes/client-node";
 import pLimit from "p-limit";
 import pino from "pino";
-import { Counter, Gauge, Histogram, Registry } from "prom-client";
 
 import {
   AkashComputeAdapter,
@@ -27,6 +26,7 @@ import {
   renewLeadershipOrFence,
 } from "@/adapters/server";
 import { reconcileComputeWorkload } from "@/features/compute/compute-workload-reconciler";
+import { createComputeWorkloadControllerMetrics } from "./compute-workload-controller-metrics";
 
 // biome-ignore lint/style/noProcessEnv: dedicated process composition root validates its own minimal env
 const runtimeEnv = process.env;
@@ -48,36 +48,7 @@ if (!namespace || !environment || !deploymentDomain) {
 const controllerEnvironment: string = environment;
 const controllerDeploymentDomain: string = deploymentDomain;
 
-const registry = new Registry();
-const reconcileTotal = new Counter({
-  name: "compute_workload_reconcile_total",
-  help: "ComputeWorkload reconciliation attempts",
-  labelNames: ["result"],
-  registers: [registry],
-});
-const reconcileDuration = new Histogram({
-  name: "compute_workload_reconcile_duration_seconds",
-  help: "ComputeWorkload reconciliation duration",
-  buckets: [0.1, 0.5, 1, 5, 30, 120, 360],
-  registers: [registry],
-});
-const leaderGauge = new Gauge({
-  name: "compute_workload_controller_leader",
-  help: "1 when this controller instance holds the Kubernetes Lease",
-  registers: [registry],
-});
-const workloadStatusGauge = new Gauge({
-  name: "compute_workload_status",
-  help: "Current ComputeWorkload phase (one labeled series with value 1 per resource)",
-  labelNames: ["namespace", "name", "node_id", "environment", "phase"],
-  registers: [registry],
-});
-const generationLagGauge = new Gauge({
-  name: "compute_workload_generation_lag",
-  help: "Desired generation minus the last generation observed by the provider controller",
-  labelNames: ["namespace", "name", "node_id", "environment"],
-  registers: [registry],
-});
+const metrics = createComputeWorkloadControllerMetrics();
 
 const kubeConfig = new KubeConfig();
 kubeConfig.loadFromCluster();
@@ -158,8 +129,8 @@ const reconcileLimit = pLimit(2);
 
 createServer(async (request, response) => {
   if (request.url === "/metrics") {
-    response.writeHead(200, { "content-type": registry.contentType });
-    response.end(await registry.metrics());
+    response.writeHead(200, { "content-type": metrics.registry.contentType });
+    response.end(await metrics.registry.metrics());
     return;
   }
   if (request.url === "/livez") {
@@ -179,7 +150,8 @@ async function renewLeadership(): Promise<void> {
   try {
     await renewLeadershipOrFence(leader, (cause) => {
       kubeReachable = false;
-      leaderGauge.set(0);
+      metrics.setControllerReady(false);
+      metrics.setLeader(false);
       log.fatal(
         {
           reason: "LeadershipLost",
@@ -192,10 +164,12 @@ async function renewLeadership(): Promise<void> {
       process.exit(1);
     });
     kubeReachable = true;
-    leaderGauge.set(leader.isLeader() ? 1 : 0);
+    metrics.setControllerReady(true);
+    metrics.setLeader(leader.isLeader());
   } catch (error) {
     kubeReachable = false;
-    leaderGauge.set(0);
+    metrics.setControllerReady(false);
+    metrics.setLeader(false);
     log.error(
       {
         reason: "LeaderRenewFailed",
@@ -212,28 +186,20 @@ async function reconcileAll(): Promise<void> {
   try {
     const resources = await state.list();
     kubeReachable = true;
-    workloadStatusGauge.reset();
-    generationLagGauge.reset();
-    for (const resource of resources) {
-      const labels = {
+    metrics.setControllerReady(true);
+    metrics.replaceWorkloadStatuses(
+      resources.map((resource) => ({
         namespace: resource.metadata.namespace,
         name: resource.metadata.name,
-        node_id: resource.spec.nodeId,
+        nodeId: resource.spec.nodeId,
         environment: resource.spec.environment,
-      };
-      workloadStatusGauge.set(
-        { ...labels, phase: resource.status?.phase ?? "Unknown" },
-        1
-      );
-      generationLagGauge.set(
-        labels,
-        Math.max(
-          0,
+        phase: resource.status?.phase ?? "Unknown",
+        leaseState: resource.status?.resource?.state ?? "none",
+        generationLag:
           resource.metadata.generation -
-            (resource.status?.observedGeneration ?? 0)
-        )
-      );
-    }
+          (resource.status?.observedGeneration ?? 0),
+      }))
+    );
     await Promise.all(
       resources.map((resource) =>
         reconcileLimit(async () => {
@@ -260,28 +226,48 @@ async function reconcileAll(): Promise<void> {
                 leaderEpoch,
                 assertLeadership: (epoch) => leader.stillHolds(epoch),
                 now: () => new Date(),
-                recordReadinessTransition: (observation) =>
+                recordReadinessTransition: (observation) => {
+                  metrics.recordReadinessTransition(observation);
                   log.info(
                     observation,
                     "compute_workload_readiness_transition"
-                  ),
-                recordRecoveryLimit: (observation) =>
+                  );
+                },
+                recordRecoveryLimit: (observation) => {
+                  metrics.recordRecoveryLimit(observation);
                   log.error(
                     observation,
                     "compute_workload_recovery_limit_exceeded"
-                  ),
-                recordMutationFailure: (observation) =>
-                  log.warn(observation, "compute_workload_mutation_failed"),
+                  );
+                },
+                recordMutationFailure: (observation) => {
+                  metrics.recordMutationFailure(observation);
+                  log.warn(observation, "compute_workload_mutation_failed");
+                },
               },
               resource
             );
-            reconcileTotal.inc({ result: "success" });
+            metrics.recordReconcile(
+              {
+                nodeId: resource.spec.nodeId,
+                environment: resource.spec.environment,
+              },
+              "success",
+              (Date.now() - started) / 1000
+            );
             log.info(
               { ...labels, durationMs: Date.now() - started },
               "compute_workload_reconciled"
             );
           } catch (error) {
-            reconcileTotal.inc({ result: "error" });
+            metrics.recordReconcile(
+              {
+                nodeId: resource.spec.nodeId,
+                environment: resource.spec.environment,
+              },
+              "error",
+              (Date.now() - started) / 1000
+            );
             log.error(
               {
                 reason: "ReconcileFailed",
@@ -291,14 +277,13 @@ async function reconcileAll(): Promise<void> {
               },
               "compute_workload_reconcile_failed"
             );
-          } finally {
-            reconcileDuration.observe((Date.now() - started) / 1000);
           }
         })
       )
     );
   } catch (error) {
     kubeReachable = false;
+    metrics.setControllerReady(false);
     log.error(
       {
         reason: "ListFailed",

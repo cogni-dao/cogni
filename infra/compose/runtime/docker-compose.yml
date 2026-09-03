@@ -512,9 +512,10 @@ services:
       - internal
     # Reach the k3s-pod app + scheduler-worker (via their NodePorts on the host)
     # for prometheus.scrape. Mirrors the edge Caddy pattern — app/worker run in k3s,
-    # not compose, so alloy dials host.docker.internal:<nodePort> (30000 app, 30900
-    # worker) instead of the compose DNS names. Docker on Linux has no built-in
-    # host.docker.internal; host-gateway maps it to the host bridge IP.
+    # not compose, so alloy dials host.docker.internal:<nodePort> (30000 app,
+    # 30900 worker, 30901 compute controller) instead of the compose DNS names.
+    # Docker on Linux has no built-in host.docker.internal; host-gateway maps it
+    # to the host bridge IP.
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:

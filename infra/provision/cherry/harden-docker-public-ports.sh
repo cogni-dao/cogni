@@ -2,13 +2,16 @@
 # SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 # SPDX-FileCopyrightText: 2026 Cogni-DAO
 #
-# Closes Docker-published "internal" ports (postgres, doltgres, redis,
-# litellm, OpenFGA, temporal-grpc) to the public internet on Cogni Cherry VMs.
+# Closes internal Docker-published ports (postgres, doltgres, redis, litellm,
+# OpenFGA, temporal-grpc) and the selected k3s controller-metrics NodePort to
+# the public internet on Cogni Cherry VMs.
 #
 # Why DOCKER-USER and not UFW: Docker publishes ports via DNAT in
 # nat/PREROUTING and forwards via the DOCKER chain, bypassing UFW's INPUT.
 # DOCKER-USER runs before Docker's own forward rules, so a DROP here is the
-# canonical hook (per Docker docs).
+# canonical hook (per Docker docs). Public NodePort traffic is DNATed to a pod
+# and traverses FORWARD too, so the same public-interface DROP protects 30901;
+# same-host Alloy enters from the Docker bridge and does not match that DROP.
 #
 # Why we still allow 10.42/16 + 10.43/16: k3s pods reach host services via
 # the VM's public IP (Cherry has no private NIC; EndpointSlice points at
@@ -30,7 +33,13 @@ mkdir -p "$(dirname "$HARDEN_LOCK_FILE")"
 exec 9>"$HARDEN_LOCK_FILE"
 flock -x 9
 
+# Bare legacy compute-egress entries default only to this pre-existing set.
+# Never add scrape ports here: doing so would silently expand provider access.
 INTERNAL_PORTS="5432,5435,6379,4000,7233,8080"
+# 30901 is the compute-workload-controller metrics NodePort. It is reachable by
+# the co-located Compose Alloy through the Docker bridge, but public-interface
+# traffic is denied below and it is never eligible for compute-egress access.
+PUBLIC_DROP_PORTS="${INTERNAL_PORTS},30901"
 POD_CIDR="10.42.0.0/16"
 SVC_CIDR="10.43.0.0/16"
 TAG="cogni-harden-internal-ports"
@@ -107,7 +116,7 @@ if [ -f "$ALLOWLIST_FILE" ]; then
   done < "$ALLOWLIST_FILE"
 fi
 
-iptables -A DOCKER-USER -i "$PUBLIC_IFACE" -p tcp -m multiport --dports "$INTERNAL_PORTS" -m comment --comment "$TAG:drop-public" -j DROP
+iptables -A DOCKER-USER -i "$PUBLIC_IFACE" -p tcp -m multiport --dports "$PUBLIC_DROP_PORTS" -m comment --comment "$TAG:drop-public" -j DROP
 
 DEBIAN_FRONTEND=noninteractive apt-get install -y iptables-persistent >/dev/null
 netfilter-persistent save >/dev/null

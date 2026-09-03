@@ -333,6 +333,36 @@ prometheus.relabel "worker_metrics" {
 }
 
 // =============================================================================
+// Prometheus Metrics: Compute Workload Controller Scraping
+// =============================================================================
+// The controller runs as a dedicated k3s Deployment. Its scrape-only Service
+// publishes :9090 as host NodePort 30901 for this co-located Compose Alloy.
+// The VM firewall drops public-interface traffic to 30901, and edge Caddy has
+// no route to it; the endpoint is never part of the public HTTP surface.
+
+prometheus.scrape "compute_workload_controller_metrics" {
+  targets         = [{"__address__" = "host.docker.internal:30901"}]
+  forward_to      = [prometheus.relabel.compute_workload_controller_metrics.receiver]
+  scrape_interval = "15s"
+  scrape_timeout  = "10s"
+  metrics_path    = "/metrics"
+}
+
+prometheus.relabel "compute_workload_controller_metrics" {
+  forward_to = [prometheus.remote_write.grafana_cloud.receiver]
+
+  rule {
+    target_label = "env"
+    replacement  = sys.env("DEPLOY_ENVIRONMENT")
+  }
+
+  rule {
+    target_label = "service"
+    replacement  = "compute-workload-controller"
+  }
+}
+
+// =============================================================================
 // Prometheus Metrics: OpenFGA Scraping
 // =============================================================================
 // OpenFGA exposes Prometheus metrics on :2112/metrics. Keep only OpenFGA series
