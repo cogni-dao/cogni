@@ -56,6 +56,7 @@ interface ParsedSpec {
       github?: {
         attribution_pipeline: string;
         source_refs: string[];
+        excluded_logins?: string[];
       };
     };
   };
@@ -113,6 +114,7 @@ describe("renderRepoSpec — BORN_REVIEWABLE", () => {
         github: {
           attribution_pipeline: "cogni-v0.0",
           source_refs: ["cogni-dao-test/my-node"],
+          excluded_logins: ["cogni-operator[bot]"],
         },
       },
     });
