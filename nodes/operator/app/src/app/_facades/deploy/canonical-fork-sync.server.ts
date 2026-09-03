@@ -47,6 +47,7 @@ const TEMPLATE_REPO = "node-template";
  * never blocked by app-level merge conflicts. Tier 2 (app/graphs/runtime) is a separate upstream-merge PR.
  */
 export const CI_CONTRACT_PATHS = [
+  ".cogni/repo-policy.json",
   ".github/workflows/ci.yaml",
   ".github/workflows/pr-build.yml",
   ".github/workflows/pr-lint.yaml",
