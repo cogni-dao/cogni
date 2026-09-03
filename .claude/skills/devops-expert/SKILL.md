@@ -212,18 +212,27 @@ Support:
 
 **Where SSH coordinates live (when you're allowed to use them)**
 
-The sanctioned path — and the only one an agent should rely on — is what [`docs/guides/multi-node-deploy.md`](../../../docs/guides/multi-node-deploy.md) documents: `scripts/setup/provision-test-vm.sh` writes the SSH private key + VM IP to `.local/` (gitignored) at provision time.
+The CURRENT provisioner (`provision-env-vm.sh`, via `provision-env.yml`) writes a **fresh per-env credential set to `.local/provision-creds/{env}/`** at provision time. **Prefer these — they are the live ones.**
 
-| File                          | Purpose                                                       |
-| ----------------------------- | ------------------------------------------------------------- |
-| `.local/{env}-vm-key`         | SSH private key (ed25519) for `root@<VM_IP>`                  |
-| `.local/{env}-vm-ip`          | VM IP address (single line)                                   |
-| `.local/{env}-vm-secrets.env` | Provision-time secrets (Argo bootstrap, sealed-secrets, etc.) |
-| `.local/{env}-vm-age-key`     | age key for sealed-secrets / sops on the VM                   |
+| File (canonical, current)                            | Purpose                                                                          |
+| ---------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `.local/provision-creds/{env}/{env}-kubeconfig.yaml` | **Direct kube** (prefer over SSH). Its `server:` field IS the live VM IP.         |
+| `.local/provision-creds/{env}/{env}-vm-key`          | SSH private key (ed25519) for `root@<VM_IP>` — fallback when the k3s API is firewalled |
+| `.local/provision-creds/{env}/{env}-vm-age-key`      | age key for sealed-secrets / sops on the VM                                       |
 
-`{env}` matches `DEPLOY_ENV` in `provision-test-vm.sh` — currently `candidate-a`, `preview`, `production`, `test`. The provisioner public key is committed at `infra/provision/cherry/base/keys/cogni_{env}_deploy.pub`.
+⚠️ **STALE-POINTER TRAP (cost a full session, 2026-08-13).** The **legacy** top-level `.local/{env}-vm-key` / `.local/{env}-vm-ip` / `.local/{env}-kubeconfig.yaml` are written by the OLD `provision-test-vm.sh` and are **NOT refreshed by the current provisioner** — a reprovision drops fresh creds into `provision-creds/{env}/` while the top-level files rot (prod's stayed on a June VM IP + dead API server for months). **Always read `provision-creds/{env}/` first**; only fall back to top-level after checking its mtime AND that the kubeconfig `server:` matches the live VM. There is no `{env}-vm-ip` file in the current layout — derive the IP from the kubeconfig `server:` line.
 
-Usage (candidate-a only; read-only): `ssh -i .local/candidate-a-vm-key root@$(cat .local/candidate-a-vm-ip) "kubectl -n argocd get applications"`.
+`{env}` ∈ `candidate-a`, `candidate-b`, `preview`, `production`. The provisioner public key is committed at `infra/provision/cherry/base/keys/cogni_{env}_deploy.pub`.
+
+Usage — prefer the kubeconfig (works for any env when the API is reachable):
+```
+KUBECONFIG=.local/provision-creds/production/production-kubeconfig.yaml kubectl -n cogni-production get deploy
+```
+If the k3s API port (`:6443`) is firewalled from outside, SSH to the VM and run kubectl there (drift-free reads always; writes only per the policy rules above):
+```
+IP=$(grep -m1 server .local/provision-creds/{env}/{env}-kubeconfig.yaml | sed -E 's#.*//([0-9.]+):.*#\1#')
+ssh -i .local/provision-creds/{env}/{env}-vm-key root@$IP "kubectl -n argocd get applications"
+```
 
 **`.local/` lives on the provisioner device, not in worktrees.** It's gitignored, so a freshly cloned worktree (anything under a conductor / agent workspace path) will not have it. The canonical copy lives in the dev's primary cogni-template clone — reach for keys there, not in the active worktree. If you don't know your own primary-clone path, ask the human running the device; never hard-code home-directory paths into committed files (this skill is in a public repo).
 
