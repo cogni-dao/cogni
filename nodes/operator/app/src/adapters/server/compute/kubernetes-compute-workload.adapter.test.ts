@@ -21,6 +21,7 @@ import {
   DEFAULT_LEASE_DURATION_SECONDS,
   KubernetesComputeWorkloadStateAdapter,
   KubernetesLeaseLeaderElector,
+  type LeaseRenewError,
   renewLeadershipOrFence,
 } from "./kubernetes-compute-workload.adapter";
 
@@ -573,7 +574,7 @@ describe("KubernetesLeaseLeaderElector", () => {
       // Pinned: these timelines predate the 120s default and assert a 30s window.
       30
     );
-    const fence = vi.fn((): never => {
+    const fence = vi.fn((_cause: LeaseRenewError): never => {
       throw new Error("fenced");
     });
 
@@ -753,7 +754,7 @@ describe("KubernetesLeaseLeaderElector", () => {
       "compute-workload-controller",
       "pod-a"
     );
-    const fence = vi.fn((): never => {
+    const fence = vi.fn((_cause: LeaseRenewError): never => {
       throw new Error("fenced");
     });
 
@@ -782,7 +783,7 @@ describe("KubernetesLeaseLeaderElector", () => {
 describe("renewLeadershipOrFence", () => {
   it("fences immediately when a different identity holds a live lease", async () => {
     const fenced = new Error("process fenced");
-    const onLeadershipLost = vi.fn((): never => {
+    const onLeadershipLost = vi.fn((_cause: LeaseRenewError): never => {
       throw fenced;
     });
     // `foreign_holder` is the one outcome that needs no deadline arithmetic: a replacement
@@ -810,7 +811,7 @@ describe("renewLeadershipOrFence", () => {
     // bug.5110: this is the routine slow-API case. Fencing here crashlooped a
     // single-replica controller and stranded in-flight provider IO as an unresolvable
     // `prepared` attempt.
-    const onLeadershipLost = vi.fn((): never => {
+    const onLeadershipLost = vi.fn((_cause: LeaseRenewError): never => {
       throw new Error("must not fence");
     });
     const lease = {
@@ -833,7 +834,7 @@ describe("renewLeadershipOrFence", () => {
 
   it("fences once the earned deadline lapses with no successful renewal", async () => {
     const fenced = new Error("process fenced");
-    const onLeadershipLost = vi.fn((): never => {
+    const onLeadershipLost = vi.fn((_cause: LeaseRenewError): never => {
       throw fenced;
     });
     const lease = {
@@ -856,7 +857,7 @@ describe("renewLeadershipOrFence", () => {
   it("fences a prior leader when renewal errors past the deadline but not an ordinary follower", async () => {
     const failure = new Error("API unavailable past lease deadline");
     const fenced = new Error("process fenced");
-    const priorLeaderFence = vi.fn((): never => {
+    const priorLeaderFence = vi.fn((_cause: LeaseRenewError): never => {
       throw fenced;
     });
     await expect(
@@ -880,7 +881,7 @@ describe("renewLeadershipOrFence", () => {
       "API unavailable past lease deadline"
     );
 
-    const followerFence = vi.fn((): never => {
+    const followerFence = vi.fn((_cause: LeaseRenewError): never => {
       throw new Error("follower must not be fenced");
     });
     await expect(
@@ -901,7 +902,7 @@ describe("renewLeadershipOrFence", () => {
 
   it("does not fence a transient renewal error inside the unexpired lease window", async () => {
     const failure = new Error("socket hang up");
-    const fence = vi.fn((): never => {
+    const fence = vi.fn((_cause: LeaseRenewError): never => {
       throw new Error("must not fence a lease nobody else can take");
     });
 
