@@ -46,15 +46,23 @@ spec:
               value: replace-in-overlay
             - name: DEPLOYMENT_DOMAIN
               value: replace-in-overlay
-            # bug.5110 — lease deadline. At replicas:1 there is no split-brain to prevent,
-            # so this only bounds how long a slow API server may fail renewals before the
-            # process fences itself. Overridable per-env without a rebuild.
-            - name: COMPUTE_CONTROLLER_LEASE_DURATION_SECONDS
-              value: "120"
             - name: AKASH_ALLOWED_PROVIDERS
               value: ""
             - name: AKASH_CONSOLE_API_KEY_FILE
               value: /var/run/secrets/compute/AKASH_CONSOLE_API_KEY
+            # bug.5110 — lease deadline. At replicas:1 there is no split-brain to
+            # prevent, so this only bounds how long a slow API server may fail
+            # renewals before the process fences itself.
+            #
+            # MUST STAY LAST. Every per-env overlay patches this container's env
+            # POSITIONALLY (`/spec/template/spec/containers/0/env/N/value`), so
+            # inserting a variable anywhere above silently repoints a different
+            # one. Adding it before AKASH_ALLOWED_PROVIDERS blanked that
+            # allowlist fleet-wide — and an empty allowlist rejects every
+            # provider bid, so no node could obtain an Akash lease at all.
+            # Append new variables here, never in the middle.
+            - name: COMPUTE_CONTROLLER_LEASE_DURATION_SECONDS
+              value: "120"
           ports:
             - name: metrics
               containerPort: 9090
