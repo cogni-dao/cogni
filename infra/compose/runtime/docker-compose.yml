@@ -323,6 +323,7 @@ services:
     environment:
       - OPENFGA_DATASTORE_ENGINE=postgres
       - OPENFGA_DATASTORE_URI=postgres://openfga:${OPENFGA_DB_PASSWORD}@postgres:5432/openfga?sslmode=disable
+      - OPENFGA_DATASTORE_METRICS_ENABLED=true
       - OPENFGA_LOG_FORMAT=json
       - OPENFGA_METRICS_ADDR=0.0.0.0:2112
       - OPENFGA_PLAYGROUND_ENABLED=false
