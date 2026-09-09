@@ -11,6 +11,12 @@ metadata:
     app.kubernetes.io/part-of: cogni
 spec:
   replicas: 1
+  # bug.5110 — RollingUpdate surges a second pod that races the SAME coordination Lease,
+  # producing genuine 409 conflicts and a leaseTransitions bump on every redeploy. This
+  # controller is singleton by design (one wallet, one desired-state authority), so the
+  # old pod must be gone before the new one starts.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: compute-workload-controller
@@ -40,6 +46,11 @@ spec:
               value: replace-in-overlay
             - name: DEPLOYMENT_DOMAIN
               value: replace-in-overlay
+            # bug.5110 — lease deadline. At replicas:1 there is no split-brain to prevent,
+            # so this only bounds how long a slow API server may fail renewals before the
+            # process fences itself. Overridable per-env without a rebuild.
+            - name: COMPUTE_CONTROLLER_LEASE_DURATION_SECONDS
+              value: "120"
             - name: AKASH_ALLOWED_PROVIDERS
               value: ""
             - name: AKASH_CONSOLE_API_KEY_FILE
