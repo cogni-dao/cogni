@@ -18,6 +18,7 @@ import { parse, parseDocument } from "yaml";
 import type { ComputeWorkload } from "@/ports";
 
 import {
+  DEFAULT_LEASE_DURATION_SECONDS,
   KubernetesComputeWorkloadStateAdapter,
   KubernetesLeaseLeaderElector,
   renewLeadershipOrFence,
@@ -372,12 +373,14 @@ describe("KubernetesLeaseLeaderElector", () => {
       api,
       "cogni-candidate-a",
       "compute-workload-controller",
-      "pod-a"
+      "pod-a",
+      // Pinned: these timelines predate the 120s default and assert a 30s window.
+      30
     );
 
     await expect(
       elector.acquireOrRenew(new Date("2026-09-01T12:00:00.226Z"))
-    ).resolves.toBe(true);
+    ).resolves.toEqual({ held: true });
     expect(elector.isLeader()).toBe(true);
     expect(createNamespacedLease).toHaveBeenCalledWith(
       "cogni-candidate-a",
@@ -411,12 +414,14 @@ describe("KubernetesLeaseLeaderElector", () => {
       api,
       "cogni-candidate-a",
       "compute-workload-controller",
-      "pod-a"
+      "pod-a",
+      // Pinned: these timelines predate the 120s default and assert a 30s window.
+      30
     );
 
     await expect(
       elector.acquireOrRenew(new Date("2026-09-01T12:00:10.000Z"))
-    ).resolves.toBe(false);
+    ).resolves.toEqual({ held: false, reason: "foreign_holder" });
     expect(replaceNamespacedLease).not.toHaveBeenCalled();
   });
 
@@ -439,12 +444,14 @@ describe("KubernetesLeaseLeaderElector", () => {
       api,
       "cogni-candidate-a",
       "compute-workload-controller",
-      "pod-a"
+      "pod-a",
+      // Pinned: these timelines predate the 120s default and assert a 30s window.
+      30
     );
 
     await expect(
       elector.acquireOrRenew(new Date("2026-09-01T12:00:31.000Z"))
-    ).resolves.toBe(true);
+    ).resolves.toEqual({ held: true });
     expect(replaceNamespacedLease).toHaveBeenCalledWith(
       "compute-workload-controller",
       "cogni-candidate-a",
@@ -477,12 +484,14 @@ describe("KubernetesLeaseLeaderElector", () => {
       api,
       "cogni-candidate-a",
       "compute-workload-controller",
-      "pod-a"
+      "pod-a",
+      // Pinned: these timelines predate the 120s default and assert a 30s window.
+      30
     );
 
     await expect(
       elector.acquireOrRenew(new Date("2026-09-01T12:00:00.000Z"))
-    ).resolves.toBe(true);
+    ).resolves.toEqual({ held: true });
 
     readNamespacedLease.mockRejectedValueOnce(apiError(503));
     await expect(elector.acquireOrRenew()).rejects.toBeTruthy();
@@ -515,7 +524,9 @@ describe("KubernetesLeaseLeaderElector", () => {
       api,
       "cogni-candidate-a",
       "compute-workload-controller",
-      "pod-a"
+      "pod-a",
+      // Pinned: these timelines predate the 120s default and assert a 30s window.
+      30
     );
 
     await elector.acquireOrRenew(new Date("2026-09-01T12:00:00.000Z"));
@@ -533,7 +544,7 @@ describe("KubernetesLeaseLeaderElector", () => {
 
     await expect(
       elector.acquireOrRenew(new Date("2026-09-01T12:00:06.000Z"))
-    ).resolves.toBe(false);
+    ).resolves.toEqual({ held: false, reason: "foreign_holder" });
     expect(elector.leaseHeldThrough(new Date("2026-09-01T12:00:06.000Z"))).toBe(
       false
     );
@@ -558,7 +569,9 @@ describe("KubernetesLeaseLeaderElector", () => {
       api,
       "cogni-candidate-a",
       "compute-workload-controller",
-      "pod-a"
+      "pod-a",
+      // Pinned: these timelines predate the 120s default and assert a 30s window.
+      30
     );
     const fence = vi.fn((): never => {
       throw new Error("fenced");
@@ -605,7 +618,7 @@ describe("KubernetesLeaseLeaderElector", () => {
     // A recovered API renews normally without a lease transition.
     await expect(
       elector.acquireOrRenew(new Date("2026-09-01T12:00:32.000Z"))
-    ).resolves.toBe(true);
+    ).resolves.toEqual({ held: true });
     expect(elector.currentEpoch()).toBe("1:pod-a");
   });
 
@@ -627,7 +640,9 @@ describe("KubernetesLeaseLeaderElector", () => {
       api,
       "cogni-candidate-a",
       "compute-workload-controller",
-      "pod-a"
+      "pod-a",
+      // Pinned: these timelines predate the 120s default and assert a 30s window.
+      30
     );
     await elector.acquireOrRenew(new Date("2026-09-01T12:00:05.000Z"));
     expect(elector.currentEpoch()).toBe("4:pod-a");
@@ -638,74 +653,207 @@ describe("KubernetesLeaseLeaderElector", () => {
       elector.stillHolds("3:pod-a", new Date("2026-09-01T12:00:06.000Z"))
     ).resolves.toBe(false);
   });
+
+  it("holds leadership through a CAS conflict inside the earned window (bug.5110)", async () => {
+    // THE regression. A 409 on replace means our cached resourceVersion went stale on a
+    // loaded API server — not that anyone took the lease. Dropping `leader` here paused
+    // reconciliation AND made the next tick see `previouslyHeld === false`, erasing the
+    // signal a genuine loss would otherwise raise.
+    const mine: V1Lease = {
+      metadata: { resourceVersion: "9" },
+      spec: {
+        holderIdentity: "pod-a",
+        renewTime: new Date("2026-09-01T12:00:00.000Z"),
+        leaseDurationSeconds: 30,
+        leaseTransitions: 1,
+      },
+    };
+    const replaceNamespacedLease = vi.fn(async () => ({ body: mine }));
+    const api = {
+      readNamespacedLease: vi.fn(async () => ({ body: mine })),
+      replaceNamespacedLease,
+    } as unknown as CoordinationV1Api;
+    const elector = new KubernetesLeaseLeaderElector(
+      api,
+      "cogni-candidate-a",
+      "compute-workload-controller",
+      "pod-a",
+      30
+    );
+
+    await elector.acquireOrRenew(new Date("2026-09-01T12:00:00.000Z"));
+    expect(elector.currentEpoch()).toBe("1:pod-a");
+
+    replaceNamespacedLease.mockRejectedValueOnce(apiError(409));
+    await expect(
+      elector.acquireOrRenew(new Date("2026-09-01T12:00:10.000Z"))
+    ).resolves.toEqual({ held: false, reason: "cas_conflict" });
+
+    // Still leader, still dispatchable: `stillHolds()` re-reads the live lease before any
+    // provider mutation, so keeping the epoch cannot let a stale process write.
+    expect(elector.isLeader()).toBe(true);
+    expect(elector.currentEpoch()).toBe("1:pod-a");
+    expect(elector.leaseHeldThrough(new Date("2026-09-01T12:00:29.000Z"))).toBe(
+      true
+    );
+  });
+
+  it("reports a CAS conflict past the deadline as expired, not as a conflict", async () => {
+    const mine: V1Lease = {
+      metadata: { resourceVersion: "9" },
+      spec: {
+        holderIdentity: "pod-a",
+        renewTime: new Date("2026-09-01T12:00:00.000Z"),
+        leaseDurationSeconds: 30,
+        leaseTransitions: 1,
+      },
+    };
+    const replaceNamespacedLease = vi.fn(async () => ({ body: mine }));
+    const api = {
+      readNamespacedLease: vi.fn(async () => ({ body: mine })),
+      replaceNamespacedLease,
+    } as unknown as CoordinationV1Api;
+    const elector = new KubernetesLeaseLeaderElector(
+      api,
+      "cogni-candidate-a",
+      "compute-workload-controller",
+      "pod-a",
+      30
+    );
+
+    await elector.acquireOrRenew(new Date("2026-09-01T12:00:00.000Z"));
+    replaceNamespacedLease.mockRejectedValueOnce(apiError(409));
+    await expect(
+      elector.acquireOrRenew(new Date("2026-09-01T12:00:31.000Z"))
+    ).resolves.toEqual({ held: false, reason: "expired" });
+    expect(elector.isLeader()).toBe(false);
+  });
+
+  it("tolerates a long conflict storm at the default deadline without fencing", async () => {
+    // Production shape: 24 consecutive failed renewals on the 10s derived tick still sit
+    // inside the 120s default deadline. At replicas:1 nobody can take over, so none of
+    // them may fence — the old 30s deadline fenced after six.
+    const mine: V1Lease = {
+      metadata: { resourceVersion: "9" },
+      spec: {
+        holderIdentity: "pod-a",
+        renewTime: new Date("2026-09-01T12:00:00.000Z"),
+        leaseDurationSeconds: DEFAULT_LEASE_DURATION_SECONDS,
+        leaseTransitions: 1,
+      },
+    };
+    const replaceNamespacedLease = vi.fn(async () => ({ body: mine }));
+    const api = {
+      readNamespacedLease: vi.fn(async () => ({ body: mine })),
+      replaceNamespacedLease,
+    } as unknown as CoordinationV1Api;
+    const elector = new KubernetesLeaseLeaderElector(
+      api,
+      "cogni-candidate-a",
+      "compute-workload-controller",
+      "pod-a"
+    );
+    const fence = vi.fn((): never => {
+      throw new Error("fenced");
+    });
+
+    await elector.acquireOrRenew(new Date("2026-09-01T12:00:00.000Z"));
+    for (let tick = 1; tick <= 11; tick += 1) {
+      replaceNamespacedLease.mockRejectedValueOnce(apiError(409));
+      const at = new Date(
+        `2026-09-01T12:0${tick < 6 ? "0" : "1"}:${String((tick * 10) % 60).padStart(2, "0")}.000Z`
+      );
+      await expect(
+        renewLeadershipOrFence(
+          {
+            isLeader: () => elector.isLeader(),
+            acquireOrRenew: () => elector.acquireOrRenew(at),
+            leaseHeldThrough: () => elector.leaseHeldThrough(at),
+          },
+          fence
+        )
+      ).rejects.toMatchObject({ reason: "cas_conflict" });
+      expect(elector.isLeader()).toBe(true);
+    }
+    expect(fence).not.toHaveBeenCalled();
+  });
 });
 
 describe("renewLeadershipOrFence", () => {
-  it("fences a process whose lease was genuinely taken over", async () => {
+  it("fences immediately when a different identity holds a live lease", async () => {
+    const fenced = new Error("process fenced");
+    const onLeadershipLost = vi.fn((): never => {
+      throw fenced;
+    });
+    // `foreign_holder` is the one outcome that needs no deadline arithmetic: a replacement
+    // leader is already reconciling, so this process must stop even if its own earned
+    // window has not lapsed. Waiting out the deadline here would allow two writers.
+    const lease = {
+      isLeader: () => true,
+      acquireOrRenew: vi.fn(async () => ({
+        held: false as const,
+        reason: "foreign_holder" as const,
+      })),
+      leaseHeldThrough: () => true,
+    };
+
+    await expect(renewLeadershipOrFence(lease, onLeadershipLost)).rejects.toBe(
+      fenced
+    );
+    expect(onLeadershipLost).toHaveBeenCalledOnce();
+    expect(onLeadershipLost.mock.calls[0]?.[0]).toMatchObject({
+      reason: "foreign_holder",
+    });
+  });
+
+  it("does not fence a CAS conflict, and names it so the log can discriminate", async () => {
+    // bug.5110: this is the routine slow-API case. Fencing here crashlooped a
+    // single-replica controller and stranded in-flight provider IO as an unresolvable
+    // `prepared` attempt.
+    const onLeadershipLost = vi.fn((): never => {
+      throw new Error("must not fence");
+    });
+    const lease = {
+      isLeader: () => true,
+      acquireOrRenew: vi.fn(async () => ({
+        held: false as const,
+        reason: "cas_conflict" as const,
+      })),
+      leaseHeldThrough: () => true,
+    };
+
+    await expect(
+      renewLeadershipOrFence(lease, onLeadershipLost)
+    ).rejects.toMatchObject({
+      name: "LeaseRenewError",
+      reason: "cas_conflict",
+    });
+    expect(onLeadershipLost).not.toHaveBeenCalled();
+  });
+
+  it("fences once the earned deadline lapses with no successful renewal", async () => {
     const fenced = new Error("process fenced");
     const onLeadershipLost = vi.fn((): never => {
       throw fenced;
     });
     const lease = {
       isLeader: () => true,
-      // KubernetesLeaseLeaderElector zeroes `renewedAtMs` on the genuine-takeover branch
-      // (`holder !== identity && !expired`), so a real loss always presents as
-      // leaseHeldThrough() === false. That is the signal that must fence.
-      acquireOrRenew: vi.fn(async () => false),
+      acquireOrRenew: vi.fn(async () => ({
+        held: false as const,
+        reason: "expired" as const,
+      })),
       leaseHeldThrough: () => false,
     };
 
     await expect(renewLeadershipOrFence(lease, onLeadershipLost)).rejects.toBe(
       fenced
     );
-    expect(onLeadershipLost).toHaveBeenCalledOnce();
-    expect(onLeadershipLost).toHaveBeenCalledWith(expect.any(Error));
-  });
-
-  it("does not fence a CAS conflict while the earned lease window is still live", async () => {
-    // The 409 branch of acquireOrRenew preserves `renewedAtMs`, so an unsuccessful
-    // renewal inside the window is a stale-resourceVersion conflict, not a lost lease.
-    // Fencing here strands in-flight provider IO as an unresolvable `prepared` attempt.
-    const onLeadershipLost = vi.fn((): never => {
-      throw new Error("must not fence");
+    expect(onLeadershipLost.mock.calls[0]?.[0]).toMatchObject({
+      reason: "expired",
     });
-    const lease = {
-      isLeader: () => true,
-      acquireOrRenew: vi.fn(async () => false),
-      leaseHeldThrough: () => true,
-    };
-
-    await expect(
-      renewLeadershipOrFence(lease, onLeadershipLost)
-    ).rejects.toThrow(/held window has not lapsed/);
-    expect(onLeadershipLost).not.toHaveBeenCalled();
   });
 
-  it("fences once a CAS conflict outlives the lease window", async () => {
-    const fenced = new Error("process fenced");
-    const onLeadershipLost = vi.fn((): never => {
-      throw fenced;
-    });
-    let live = true;
-    const lease = {
-      isLeader: () => true,
-      acquireOrRenew: vi.fn(async () => false),
-      leaseHeldThrough: () => live,
-    };
-
-    await expect(
-      renewLeadershipOrFence(lease, onLeadershipLost)
-    ).rejects.toThrow(/held window has not lapsed/);
-    expect(onLeadershipLost).not.toHaveBeenCalled();
-
-    live = false;
-    await expect(renewLeadershipOrFence(lease, onLeadershipLost)).rejects.toBe(
-      fenced
-    );
-    expect(onLeadershipLost).toHaveBeenCalledOnce();
-  });
-
-  it("fences a prior leader when renewal errors past the lease deadline but not an ordinary follower", async () => {
+  it("fences a prior leader when renewal errors past the deadline but not an ordinary follower", async () => {
     const failure = new Error("API unavailable past lease deadline");
     const fenced = new Error("process fenced");
     const priorLeaderFence = vi.fn((): never => {
@@ -723,7 +871,14 @@ describe("renewLeadershipOrFence", () => {
         priorLeaderFence
       )
     ).rejects.toBe(fenced);
-    expect(priorLeaderFence).toHaveBeenCalledWith(failure);
+    // The raw cause is preserved in the message so the fence log stays diagnosable —
+    // a fence carrying only `causeType: "Error"` cost ~40 min of debugging in prod.
+    expect(priorLeaderFence.mock.calls[0]?.[0]).toMatchObject({
+      reason: "expired",
+    });
+    expect(priorLeaderFence.mock.calls[0]?.[0]?.message).toContain(
+      "API unavailable past lease deadline"
+    );
 
     const followerFence = vi.fn((): never => {
       throw new Error("follower must not be fenced");
@@ -732,7 +887,10 @@ describe("renewLeadershipOrFence", () => {
       renewLeadershipOrFence(
         {
           isLeader: () => false,
-          acquireOrRenew: async () => false,
+          acquireOrRenew: async () => ({
+            held: false as const,
+            reason: "foreign_holder" as const,
+          }),
           leaseHeldThrough: () => false,
         },
         followerFence
