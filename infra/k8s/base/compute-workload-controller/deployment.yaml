@@ -17,6 +17,9 @@ spec:
   # old pod must be gone before the new one starts.
   strategy:
     type: Recreate
+    # Explicit tombstone: server-side apply otherwise preserves the live
+    # RollingUpdate fields and Kubernetes rejects the Recreate strategy.
+    rollingUpdate: null
   selector:
     matchLabels:
       app.kubernetes.io/name: compute-workload-controller
