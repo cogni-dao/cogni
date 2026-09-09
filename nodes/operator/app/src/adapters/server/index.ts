@@ -97,8 +97,12 @@ export {
 } from "./compute/compute-workload-lifecycle.adapter";
 export { ComputeWorkloadSecretResolverAdapter } from "./compute/compute-workload-secret-resolver.adapter";
 export {
+  DEFAULT_LEASE_DURATION_SECONDS,
   KubernetesComputeWorkloadStateAdapter,
   KubernetesLeaseLeaderElector,
+  LeaseRenewError,
+  type LeaseRenewFailureReason,
+  type LeaseRenewOutcome,
   renewLeadershipOrFence,
 } from "./compute/kubernetes-compute-workload.adapter";
 export { createDefaultProviderOutcomeStore } from "./compute/provider-outcome-store";

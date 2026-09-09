@@ -20,10 +20,12 @@ import {
   CloudflareComputeWorkloadDnsAdapter,
   ComputeWorkloadLifecycleAdapter,
   ComputeWorkloadSecretResolverAdapter,
+  DEFAULT_LEASE_DURATION_SECONDS,
   DormantComputeWorkloadDnsAdapter,
   DormantComputeWorkloadLifecycleAdapter,
   KubernetesComputeWorkloadStateAdapter,
   KubernetesLeaseLeaderElector,
+  LeaseRenewError,
   renewLeadershipOrFence,
 } from "@/adapters/server";
 import { reconcileComputeWorkload } from "@/features/compute/compute-workload-reconciler";
@@ -66,6 +68,12 @@ const leaderGauge = new Gauge({
   help: "1 when this controller instance holds the Kubernetes Lease",
   registers: [registry],
 });
+const leaderRenewFailureTotal = new Counter({
+  name: "compute_workload_leader_renew_failure_total",
+  help: "Lease renewal attempts that did not end holding the lease, by discriminated reason",
+  labelNames: ["reason"],
+  registers: [registry],
+});
 const workloadStatusGauge = new Gauge({
   name: "compute_workload_status",
   help: "Current ComputeWorkload phase (one labeled series with value 1 per resource)",
@@ -91,11 +99,32 @@ const state = new KubernetesComputeWorkloadStateAdapter(
   namespace,
   identity
 );
+/**
+ * bug.5110 — the lease deadline is the ONLY thing standing between a slow k3s API server
+ * and a self-fenced controller. At `replicas: 1` a longer deadline costs only failover
+ * latency on a redeploy (which `strategy: Recreate` already serializes) and buys
+ * proportionally more tolerance for consecutive failed renewals.
+ */
+const leaseDurationSeconds = (() => {
+  const raw = Number(runtimeEnv.COMPUTE_CONTROLLER_LEASE_DURATION_SECONDS);
+  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_LEASE_DURATION_SECONDS;
+})();
+/**
+ * Renew on a twelfth of the deadline, bounded. Derived rather than a magic 5s so raising
+ * the deadline actually raises tolerance (12 consecutive failures) instead of just
+ * lengthening the window a fixed 6-attempt budget burns through — and so a stressed API
+ * server is not additionally hammered by the controller diagnosing it.
+ */
+const leaderRenewIntervalMs = Math.min(
+  15_000,
+  Math.max(5_000, Math.round((leaseDurationSeconds * 1000) / 12))
+);
 const leader = new KubernetesLeaseLeaderElector(
   coordination,
   namespace,
   "compute-workload-controller",
-  identity
+  identity,
+  leaseDurationSeconds
 );
 
 const apiKey = await readFile(apiKeyFile, "utf8")
@@ -197,8 +226,14 @@ async function renewLeadership(): Promise<void> {
     await renewLeadershipOrFence(leader, (cause) => {
       kubeReachable = false;
       leaderGauge.set(0);
+      leaderRenewFailureTotal.inc({ reason: cause.reason });
       log.fatal(
-        { reason: "LeadershipLost", ...causeFields(cause) },
+        {
+          reason: "LeadershipLost",
+          leaseRenewReason: cause.reason,
+          leaseDurationSeconds,
+          ...causeFields(cause),
+        },
         "compute_workload_leadership_lost_process_fenced"
       );
       // Fencing is reserved for a lease we can no longer prove we hold. In-flight mutations
@@ -209,12 +244,23 @@ async function renewLeadership(): Promise<void> {
     kubeReachable = true;
     leaderGauge.set(leader.isLeader() ? 1 : 0);
   } catch (error) {
-    kubeReachable = false;
-    leaderGauge.set(0);
-    log.error(
+    const renewError = error instanceof LeaseRenewError ? error : undefined;
+    // A 409 conflict means the API server ANSWERED and we are still inside the deadline we
+    // earned, so neither readiness nor the leader gauge may be downgraded — doing so was
+    // half of bug.5110's self-harm (it paused reconciliation on a healthy leader).
+    const tolerated = renewError?.reason === "cas_conflict";
+    if (!tolerated) kubeReachable = false;
+    leaderGauge.set(tolerated && leader.isLeader() ? 1 : 0);
+    leaderRenewFailureTotal.inc({ reason: renewError?.reason ?? "api_error" });
+    // A tolerated conflict is routine noise on a loaded API server; anything else is a
+    // real degradation an operator should see. Same event, honest severity.
+    const emit = tolerated ? log.warn.bind(log) : log.error.bind(log);
+    emit(
       {
         reason: "LeaderRenewFailed",
+        leaseRenewReason: renewError?.reason ?? "api_error",
         leaseHeldThrough: leader.leaseHeldThrough(),
+        leaseDurationSeconds,
         ...causeFields(error),
       },
       "compute_workload_leader_renew_failed"
@@ -327,8 +373,15 @@ async function reconcileAll(): Promise<void> {
   }
 }
 
+log.info(
+  { leaseDurationSeconds, leaderRenewIntervalMs, identity },
+  "compute_workload_controller_leader_election_configured"
+);
 await renewLeadership();
-const leaderTimer = setInterval(() => void renewLeadership(), 5_000);
+const leaderTimer = setInterval(
+  () => void renewLeadership(),
+  leaderRenewIntervalMs
+);
 const reconcileTimer = setInterval(() => void reconcileAll(), 15_000);
 void reconcileAll();
 
