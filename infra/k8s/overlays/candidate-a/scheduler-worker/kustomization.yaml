@@ -14,6 +14,13 @@ images:
     digest: "sha256:400c2bded1b450af42147ce867893243cbe5cdb2957dc5e2c4e9b70252dd1334"
 
 patches:
+  # GENERATED sibling (render-scheduler-worker-endpoints.sh): this env's
+  # PROVIDER-RESOLVED COGNI_NODE_ENDPOINTS. bug.5094 — a node placed on akash has
+  # no in-cluster Service, so its address is env-variant and belongs here, not in
+  # the shared base. Listed first so the base default is replaced before the
+  # env-specific ops below apply.
+  - path: node-endpoints.patch.yaml
+
   - target:
       kind: ConfigMap
       name: scheduler-worker-config

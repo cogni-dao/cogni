@@ -20,6 +20,10 @@
  *     on candidate-a → cogni-test-org forks the App can write; Cogni-DAO/cogni on prod → Cogni-DAO forks).
  *     node-template (source) + operator (hub) excluded. NOT the `nodes` table (wizard-spawn state, may not
  *     hold catalog-declared forks) and NOT the node registry (its repo is the parent monorepo / hardcoded).
+ *   - TIER1_IS_CLOSED (repo-sync-contract): the Tier-1 lists below are ROOTS. The adapter expands them
+ *     to their transitive closure at the source SHA, so a workflow and the scripts it invokes — and a
+ *     contract barrel and the modules it re-exports — always land in the SAME sync. A node-template PR
+ *     that adds a CI script or a repo-spec module needs no operator change.
  *   - TIERS_DECOUPLED (node-ci-cd-contract): Tier 1 surgically overwrites the flight-contract files so a
  *     CI fix lands cleanly even when Tier 2's substrate merge conflicts; Tier 2 preserves fork
  *     customizations (`FORK_FREEDOM`, `POLICY_STAYS_LOCAL`) via the shared merge-base. Per-tier,
@@ -41,10 +45,16 @@ import type { ServerEnv } from "@/shared/env";
 const TEMPLATE_REPO = "node-template";
 
 /**
- * Tier 1 — the required, byte-for-byte-safe CI/contract set. A fork drifting here breaks the operator's
+ * Tier 1 — the required, byte-for-byte-safe CI/contract ROOTS. A fork drifting here breaks the operator's
  * flight contract (`node-ci-cd-contract` §Forward path: the fork must publish `image_repository:sha-<sha>`
  * via its build→GHCR workflow + pass its merge gate). Surgically overwritten so the fix always lands —
  * never blocked by app-level merge conflicts. Tier 2 (app/graphs/runtime) is a separate upstream-merge PR.
+ *
+ * These are ROOTS, not the delivered set: `syncCanonicalFilesToFork` expands them to their transitive
+ * closure at the source SHA (`resolveCanonicalPathClosure`, TIER1_IS_CLOSED) — every `scripts/**` a
+ * canonical workflow invokes, and every module a canonical contract barrel re-exports. Do NOT hand-add
+ * a path that the closure already reaches; a hand-maintained list is exactly what shipped forks a
+ * `pr-build.yml` calling `scripts/ci/*.mjs` it never delivered (task.5078).
  */
 export const CI_CONTRACT_PATHS = [
   ".github/workflows/ci.yaml",
@@ -60,6 +70,11 @@ export const CI_CONTRACT_PATHS = [
  * node-specific content — a node customizes via its Tier-3 `repo-spec.yaml`, never this), so it ships in
  * the SURGICAL overwrite set, not the fragile Tier-2 app merge. Without this, a fork can set `brand.icon`
  * but never PROJECT it → the gallery shows a monogram forever. CI-gated like the rest of Tier 1.
+ *
+ * `packages/repo-spec/src/index.ts` is a ROOT whose siblings (`artifact-bundle.ts`, `parse.ts`, …) arrive
+ * via the closure — the barrel's own re-exports declare them. The `app/**` entries below are hand-listed
+ * on purpose: the closure deliberately never walks the app's `@/…` graph (CLOSURE_IS_BOUNDED), because
+ * that graph is the whole tree and it belongs to Tier 2.
  */
 export const IDENTITY_SUBSTRATE_PATHS = [
   "packages/repo-spec/src/schema.ts",

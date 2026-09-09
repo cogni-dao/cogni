@@ -118,6 +118,7 @@ src="$1"
 dest="$2"
 path="${dest#root@fake:}"
 path="${path/\/tmp\//${FAKE_REMOTE_ROOT}\/tmp\/}"
+printf '%s -> %s\n' "$src" "$path" >> "${FAKE_REMOTE_ROOT}/scp.log"
 mkdir -p "$(dirname "$path")"
 cp "$src" "$path"
 EOF
@@ -313,6 +314,56 @@ if [ "$recreate_before" != "$recreate_after" ]; then
   exit 1
 fi
 grep -q 'substrate ready inputs reconciled for operator' "$TMPROOT/rerun.txt"
+
+# PLACEMENT_DOES_NOT_GATE_PROVISIONING: an Akash-placed node still reconciles
+# its ExternalSecret, Postgres role/database, shared DB inventory, Doltgres DB,
+# and env-global Alloy/Dolt state. Only the k3s Caddy/NodePort edge path is
+# excluded. Slice operation logs at their current line counts so every assertion
+# below belongs to this pass without erasing evidence used by earlier/later gates.
+docker_log_start="$(wc -l < "$REMOTE_ROOT/docker.log" | tr -d ' ')"
+kubectl_log_start="$(wc -l < "$REMOTE_ROOT/kubectl.log" | tr -d ' ')"
+scp_log_start="$(wc -l < "$REMOTE_ROOT/scp.log" | tr -d ' ')"
+cp "$REMOTE_ROOT/opt/cogni-template-edge/.env" "$TMPROOT/edge-env.before-akash"
+env \
+  VM_HOST=fake \
+  DOMAIN=test.cognidao.org \
+  DEPLOYMENT_PROVIDER=akash \
+  SSH_OPTS="-i fake-key -o StrictHostKeyChecking=no" \
+  RECONCILE_NODE_SUBSTRATE_SSH_BIN="$FAKEBIN/ssh" \
+  RECONCILE_NODE_SUBSTRATE_SCP_BIN="$FAKEBIN/scp" \
+  FAKE_REMOTE_ROOT="$REMOTE_ROOT" \
+  FAKE_REMOTE_PATH="$FAKEBIN" \
+  FAKE_BAO_ROOT="$BAO_ROOT" \
+  SUBSTRATE_RECONCILE_SUMMARY_FILE="$TMPROOT/akash-summary.json" \
+  bash scripts/ci/reconcile-node-substrate.sh candidate-a operator > "$TMPROOT/akash.out"
+tail -n "+$((docker_log_start + 1))" "$REMOTE_ROOT/docker.log" > "$TMPROOT/akash-docker.log"
+tail -n "+$((kubectl_log_start + 1))" "$REMOTE_ROOT/kubectl.log" > "$TMPROOT/akash-kubectl.log"
+tail -n "+$((scp_log_start + 1))" "$REMOTE_ROOT/scp.log" > "$TMPROOT/akash-scp.log"
+cmp -s "$TMPROOT/edge-env.before-akash" "$REMOTE_ROOT/opt/cogni-template-edge/.env" \
+  || { echo "Akash reconcile mutated the k3s edge env" >&2; exit 1; }
+grep -q -- "-n cogni-candidate-a annotate externalsecret operator-env-secrets force-sync=" "$TMPROOT/akash-kubectl.log"
+grep -q -- "-e COGNI_NODE_DBS=cogni_operator" "$TMPROOT/akash-docker.log"
+grep -qE -- "--profile bootstrap run --rm .* db-provision" "$TMPROOT/akash-docker.log"
+grep -qE -- "--profile bootstrap run --rm -e COGNI_NODE_DBS=cogni_operator -e DOLTGRES_PASSWORD=.* doltgres-provision" "$TMPROOT/akash-docker.log"
+grep -q "alloy-config.metrics.candidate-a.operator.alloy" "$TMPROOT/akash-scp.log"
+if grep -qE "Caddyfile|reconcile-edge-caddy" "$TMPROOT/akash-scp.log"; then
+  echo "Akash reconcile staged k3s Caddy/NodePort edge inputs" >&2
+  exit 1
+fi
+if grep -q "cogni-edge" "$TMPROOT/akash-docker.log"; then
+  echo "Akash reconcile invoked the k3s edge compose project" >&2
+  exit 1
+fi
+python3 - "$TMPROOT/akash-summary.json" <<'PY'
+import json, sys
+s = json.load(open(sys.argv[1]))
+rows = {r["row"]: r["state"] for r in s["rows"]}
+assert s["status"] == "success", s
+assert rows["externalsecret"] == "updated", rows
+assert rows["externalsecret_refresh"] == "refreshed", rows
+assert rows["caddyfile"] == "skipped", rows
+assert rows["remote_reconcile"] == "updated", rows
+PY
 
 # Born-observable (bug.5041): the Alloy node-label config is staged to the VM and
 # the shared hash-gated restart helper runs — on EVERY substrate-readiness pass,

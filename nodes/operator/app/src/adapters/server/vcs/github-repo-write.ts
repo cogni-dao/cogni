@@ -49,6 +49,7 @@ import type {
   SyncTemplateUpstreamInput,
   SyncTemplateUpstreamResult,
 } from "@/ports";
+import { resolveCanonicalPathClosure } from "@/shared/node-app-scaffold/canonical-path-closure";
 import {
   buildEnvDeltaPlan,
   type EnvPlanCurrent,
@@ -60,6 +61,7 @@ import {
   insertCaddyBlock,
   insertNetworkNode,
   insertSchedulerEndpoint,
+  NODE_DEPLOY_ENVS,
   NODE_FORMATION_ENVS,
   type NodeFormationEnv,
   nextFreeNodePort,
@@ -78,6 +80,7 @@ import {
   makeNodeLocalMatcher,
   parseNodeLocalPaths,
 } from "@/shared/node-app-scaffold/node-local-paths";
+import { NODE_DEPLOYMENT_PROVIDERS } from "@/shared/node-registry/placement";
 import {
   NODE_REPO_POLICY_PATH,
   type NodeRepoPolicy,
@@ -397,6 +400,9 @@ function parseCatalogPorts(
 /** Slugs that are catalog `type: node` but are never fork-sync targets. */
 const FORK_SYNC_EXCLUDED_SLUGS = new Set(["node-template", "operator"]);
 
+/** The declared placement vocabulary — one list, shared with the runtime address resolver. */
+const NODE_DEPLOYMENT_PROVIDER_SCHEMA = z.enum(NODE_DEPLOYMENT_PROVIDERS);
+
 const CatalogRegistryRowSchema = z
   .object({
     name: z.string().min(1),
@@ -407,6 +413,17 @@ const CatalogRegistryRowSchema = z
     envs: z.array(z.enum(["candidate-a", "preview", "production"])),
     activity_env: z.enum(["candidate-a", "preview", "production"]),
     owner_wallet: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
+    // bug.5106 — WHERE this node's app runs, per env. Mirrors `deployment_provider` in
+    // infra/catalog/_schema.json (`additionalProperties: false`, enum k3s|akash), so a row this
+    // parser accepts is exactly a row CI accepts. Absent = every env on k3s (K3S_IS_DEFAULT).
+    deployment_provider: z
+      .object({
+        "candidate-a": NODE_DEPLOYMENT_PROVIDER_SCHEMA.optional(),
+        preview: NODE_DEPLOYMENT_PROVIDER_SCHEMA.optional(),
+        production: NODE_DEPLOYMENT_PROVIDER_SCHEMA.optional(),
+      })
+      .strict()
+      .optional(),
   })
   .superRefine((row, ctx) => {
     if (!row.envs.includes(row.activity_env)) {
@@ -1259,24 +1276,33 @@ export class GitHubRepoWriter implements DeployPlanePort {
     const shortSha = sourceSha.slice(0, 8);
     const branch = SYNC_BRANCH;
 
-    // Read each canonical file from source@sourceSha; diff against the fork's main; keep changed-only.
-    const changedPaths: string[] = [];
-    const entries: GitTreeEntry[] = [];
-    for (const path of canonicalPaths) {
-      const sourceContent = await this.readFileAtRef(
-        srcOctokit,
-        sourceOwner,
-        sourceRepo,
-        path,
-        sourceSha
-      );
-      if (sourceContent === null) {
+    // Expand the DECLARED roots to their transitive Tier-1 closure at source@sourceSha
+    // (TIER1_IS_CLOSED): the scripts a canonical workflow invokes and the modules a canonical
+    // contract barrel re-exports must ship in the SAME sync, or the fork gets a workflow that
+    // calls missing scripts and a barrel that re-exports a missing module (task.5078).
+    const closure = await resolveCanonicalPathClosure({
+      roots: canonicalPaths,
+      read: (path) =>
+        this.readFileAtRef(
+          srcOctokit,
+          sourceOwner,
+          sourceRepo,
+          path,
+          sourceSha
+        ),
+      onMissingRequired: (path) => {
         throw deployPlaneError(
           "canonical_missing",
           `canonical file ${path} not found in ${sourceOwner}/${sourceRepo}@${shortSha}`,
           422
         );
-      }
+      },
+    });
+
+    // Diff each resolved file against the fork's main; keep changed-only.
+    const changedPaths: string[] = [];
+    const entries: GitTreeEntry[] = [];
+    for (const { path, content: sourceContent } of closure) {
       const targetContent = await this.readFileAtRef(
         tgtOctokit,
         targetOwner,
@@ -1497,6 +1523,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
         deployEnvs: row.data.envs,
         activityEnv: row.data.activity_env,
         ownerWallet: row.data.owner_wallet,
+        deploymentProviders: row.data.deployment_provider ?? {},
       });
     }
 
@@ -3107,22 +3134,37 @@ export class GitHubRepoWriter implements DeployPlanePort {
     // Scheduler-worker endpoint splice: the catalog now carries this submodule node's
     // node_id projection (above), and the routing renderer enumerates every catalog
     // type:node (is_built_by_this_repo lifted from the routing CSVs). So splice this node
-    // into the base configmap from the projected node_id — keeping it drift-clean with the
-    // catalog, born-green so chat/completions works on first flight (verify-scheduler-endpoints).
+    // into every rendered routing map from the projected node_id — keeping it drift-clean
+    // with the catalog, born-green so chat/completions works on first flight
+    // (verify-scheduler-endpoints).
     if ("nodeRepoUrl" in input) {
-      const schedulerConfigmapPath =
-        "infra/k8s/base/scheduler-worker/configmap.yaml";
-      const currentConfigmap = await this.fetchFileText({
-        owner,
-        repo,
-        path: schedulerConfigmapPath,
-        ref: "main",
-      });
-      if (currentConfigmap) {
-        await addBlob(
-          schedulerConfigmapPath,
-          insertSchedulerEndpoint(currentConfigmap, slug, input.nodeId)
-        );
+      // bug.5094 — the routing map is rendered twice from one catalog: the
+      // env-invariant placement-DEFAULT in the shared base ConfigMap, and each
+      // deploy env's PROVIDER-RESOLVED map in its overlay patch. A birth is always
+      // k3s (deployment_provider absent → K3S_IS_DEFAULT), so the SAME splice is
+      // byte-identical for every file; splicing base alone would leave every
+      // formation PR drift-red against render-scheduler-worker-endpoints.sh --check
+      // AND unrouted in preview/production.
+      const schedulerEndpointPaths = [
+        "infra/k8s/base/scheduler-worker/configmap.yaml",
+        ...NODE_DEPLOY_ENVS.map(
+          (env) =>
+            `infra/k8s/overlays/${env}/scheduler-worker/node-endpoints.patch.yaml`
+        ),
+      ];
+      for (const schedulerEndpointPath of schedulerEndpointPaths) {
+        const currentConfigmap = await this.fetchFileText({
+          owner,
+          repo,
+          path: schedulerEndpointPath,
+          ref: "main",
+        });
+        if (currentConfigmap) {
+          await addBlob(
+            schedulerEndpointPath,
+            insertSchedulerEndpoint(currentConfigmap, slug, input.nodeId)
+          );
+        }
       }
 
       // network-nodes roster splice: the operator runtime image can't fs-glob infra/catalog,

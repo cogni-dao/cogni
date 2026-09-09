@@ -325,6 +325,100 @@ if env TARGET=node-template DEPLOY_ENVIRONMENT=candidate-a VM_HOST=192.0.2.10 DO
 fi
 grep -q "CLOUDFLARE_API_TOKEN required" "$TMPROOT/missing-dns.out"
 
+# External compute uses the same entrypoint with the provider chosen upstream by
+# the typed planner. It checks declared secret refs + controller/CRD/credentials
+# + the installed egress boundary, without requiring or provisioning k3s app/DB state.
+EXTERNAL_SRC="$TMPROOT/external-src"
+EXTERNAL_BIN="$TMPROOT/external-bin"
+mkdir -p "$EXTERNAL_SRC/infra/catalog" "$EXTERNAL_SRC/nodes/toks4/.cogni" "$EXTERNAL_BIN"
+cat > "$EXTERNAL_SRC/infra/catalog/toks4.yaml" <<'YAML'
+name: toks4
+type: node
+node_id: 72aa130b-f0ad-495a-a061-9ee1f9c9525d
+path_prefix: nodes/toks4/
+compute_egress_cidrs:
+  - cidr: 80.200.246.35/32
+    comment: test provider
+YAML
+cat > "$EXTERNAL_SRC/nodes/toks4/.cogni/repo-spec.yaml" <<'YAML'
+deployment:
+  services:
+    - name: app
+      secret_refs:
+        - { key: AUTH_SECRET }
+        - { key: DATABASE_URL }
+        - { key: LITELLM_VIRTUAL_KEY }
+    - name: echo
+      secret_refs: []
+YAML
+cat > "$EXTERNAL_BIN/kubectl" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+  "get crd computeworkloads.compute.cogni.io") exit 0 ;;
+  *"get deployment operator-compute-workload-controller -o jsonpath="*) echo 1; exit 0 ;;
+  *"exec deployment/operator-compute-workload-controller -c controller"*)
+    [ "${FAKE_MISSING_AKASH_CREDENTIAL:-}" = 1 ] && exit 1
+    exit 0
+    ;;
+  "create token db-provisioner -n default") echo test-jwt; exit 0 ;;
+  *"bao write -field=token auth/kubernetes/login"*) echo test-token; exit 0 ;;
+  *"bao kv get -format=json cogni/candidate-a/toks4"*)
+    if [ "${FAKE_EMPTY_WORKLOAD_SECRET:-}" = 1 ]; then
+      echo '{"data":{"data":{}}}'
+    elif [ "${FAKE_MISSING_WORKLOAD_SECRET:-}" = 1 ]; then
+      echo '{"data":{"data":{"AUTH_SECRET":"present","DATABASE_URL":"present"}}}'
+    else
+      echo '{"data":{"data":{"AUTH_SECRET":"present","DATABASE_URL":"present","LITELLM_VIRTUAL_KEY":"present"}}}'
+    fi
+    exit 0
+    ;;
+esac
+echo "fake external kubectl: unexpected $*" >&2
+exit 1
+EOF
+chmod +x "$EXTERNAL_BIN/kubectl"
+EXTERNAL_ALLOWLIST="$TMPROOT/compute-egress-allowlist"
+# Mirror render-compute-egress-allowlist.sh output exactly: "<cidr>:<ports>".
+# The previous bare-CIDR fixture did not match the renderer, which is how a
+# whole-line `grep -Fx` shipped and failed closed on every real host.
+printf '%s\n' '80.200.246.35/32:5432,5435,6379,4000,7233' > "$EXTERNAL_ALLOWLIST"
+EXTERNAL_ENV=(
+  TARGET=toks4
+  DEPLOYMENT_PROVIDER=akash
+  DEPLOY_ENVIRONMENT=candidate-a
+  VM_HOST=192.0.2.10
+  DOMAIN=test.cognidao.org
+  APP_SOURCE_DIR="$EXTERNAL_SRC"
+  COGNI_CATALOG_ROOT="$EXTERNAL_SRC/infra/catalog"
+  ASSERT_TARGET_SUBSTRATE_SSH_BIN="$FAKEBIN/ssh"
+  ASSERT_TARGET_SUBSTRATE_EGRESS_ALLOWLIST="$EXTERNAL_ALLOWLIST"
+  FAKE_REMOTE_PATH="$EXTERNAL_BIN"
+)
+env "${EXTERNAL_ENV[@]}" bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/external-success.out"
+grep -q "External compute preconditions ready for toks4" "$TMPROOT/external-success.out"
+if env "${EXTERNAL_ENV[@]}" FAKE_MISSING_WORKLOAD_SECRET=1 \
+  bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/external-missing-secret.out" 2>&1; then
+  echo "expected missing declared external workload secret to fail" >&2
+  exit 1
+fi
+grep -q "missing declared key: LITELLM_VIRTUAL_KEY" "$TMPROOT/external-missing-secret.out"
+if env "${EXTERNAL_ENV[@]}" FAKE_MISSING_AKASH_CREDENTIAL=1 \
+  bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/external-missing-credential.out" 2>&1; then
+  echo "expected missing Akash controller credential to fail" >&2
+  exit 1
+fi
+grep -q "controller provider/DNS credentials" "$TMPROOT/external-missing-credential.out"
+
+cat > "$EXTERNAL_SRC/nodes/toks4/.cogni/repo-spec.yaml" <<'YAML'
+deployment:
+  services:
+    - name: echo
+      secret_refs: []
+YAML
+env "${EXTERNAL_ENV[@]}" FAKE_EMPTY_WORKLOAD_SECRET=1 \
+  bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/external-no-secret-refs.out"
+grep -q "all declared workload secret refs are materialized" "$TMPROOT/external-no-secret-refs.out"
+
 if env TARGET=scheduler-worker DEPLOY_ENVIRONMENT=candidate-a APP_SOURCE_DIR=. COGNI_CATALOG_ROOT=infra/catalog bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/service.out" 2>&1; then
   echo "expected service target to fail explicitly" >&2
   exit 1

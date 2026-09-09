@@ -22,6 +22,7 @@ import {
   encodeAttemptReceipt,
 } from "@/ports";
 import { hostForNode } from "@/shared/node-registry/resolve";
+import { COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS } from "./node-services-workload-spec";
 import { buildNodeAppIdentityEnv } from "./node-workload-spec";
 
 const MAX_MUTATION_RETRIES = 3;
@@ -179,15 +180,6 @@ function sharedSubstrateEnv(
   }
 }
 
-const LEGACY_COGNI_APP_REQUIRED_ENV = [
-  "AUTH_SECRET",
-  "DATABASE_URL",
-  "DATABASE_SERVICE_URL",
-  "LITELLM_VIRTUAL_KEY",
-  "SCHEDULER_API_TOKEN",
-  "BILLING_INGEST_TOKEN",
-] as const;
-
 /** Explicit node-app compatibility policy; generic/private services do not inherit it. */
 function legacyCogniAppEnv(input: {
   resource: ComputeWorkload;
@@ -198,7 +190,9 @@ function legacyCogniAppEnv(input: {
   if (input.runtimeProfile !== "cogni-node-app-v1") {
     return { ...input.bindings, ...input.secrets };
   }
-  if (LEGACY_COGNI_APP_REQUIRED_ENV.some((key) => !input.secrets[key])) {
+  if (
+    COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS.some((key) => !input.secrets[key])
+  ) {
     throw new ComputeLifecycleError(
       "terminal",
       "SecretReferenceMissing",
@@ -438,6 +432,23 @@ function blocksSameGenerationRecovery(resource: ComputeWorkload): boolean {
   );
 }
 
+/**
+ * A definitive provider failure that burned the whole per-key mutation budget. The
+ * idempotency key carries `metadata.generation`, so re-asserting the same desired state
+ * recomputes the *same* key and the replay guard refuses it forever. Only a fresh
+ * recovery ordinal can make progress, and only when the receipt proves the provider
+ * definitively failed without ever handing back a handle.
+ */
+function exhaustedRetryBudgetNeedsRecovery(resource: ComputeWorkload): boolean {
+  return (
+    resource.status?.desiredGeneration === resource.metadata.generation &&
+    resource.status?.failure?.reason === "RetryLimitExceeded" &&
+    resource.status?.attempt?.outcome === "known_failure" &&
+    (resource.status.attempt.operation === "create" ||
+      resource.status.attempt.operation === "recover")
+  );
+}
+
 async function recoverBounded(
   deps: ComputeWorkloadReconcileDeps,
   resource: ComputeWorkload
@@ -583,14 +594,16 @@ async function mutate(
   deps: ComputeWorkloadReconcileDeps,
   resource: ComputeWorkload,
   operation: "create" | "update" | "recover",
-  ordinal: number
+  ordinal: number,
+  allowOrphanRiskReplay = false
 ): Promise<void> {
   const previous = resource.status?.attempt;
   const key = computeWorkloadIdempotencyKey({ resource, operation, ordinal });
   if (
     previous?.key === key &&
     previous.outcome === "known_failure" &&
-    resource.status?.failure?.retryable === false
+    resource.status?.failure?.retryable === false &&
+    !(allowOrphanRiskReplay && resource.status.failure.reason === "OrphanRisk")
   )
     return;
   const retryCount = previous?.key === key ? previous.retryCount + 1 : 0;
@@ -1274,6 +1287,20 @@ function attemptFromReceipt(
   };
 }
 
+function isReplaySafeKnownFailure(
+  receipt: ComputeWorkloadAttemptReceipt | undefined
+): receipt is ComputeWorkloadAttemptReceipt & {
+  readonly operation: "create" | "recover";
+  readonly outcome: "known_failure";
+  readonly resource?: undefined;
+} {
+  return (
+    receipt?.outcome === "known_failure" &&
+    receipt.resource === undefined &&
+    (receipt.operation === "create" || receipt.operation === "recover")
+  );
+}
+
 async function recoverUncertainAllocation(
   deps: ComputeWorkloadReconcileDeps,
   resource: ComputeWorkload,
@@ -1496,6 +1523,15 @@ export async function reconcileComputeWorkload(
       await mutate(deps, resource, receipt.operation, receipt.ordinal);
       return;
     }
+    if (isReplaySafeKnownFailure(receipt)) {
+      // Replaying the exhausted key is a guaranteed no-op; escalate the ordinal instead.
+      if (exhaustedRetryBudgetNeedsRecovery(resource)) {
+        await recoverBounded(deps, resource);
+        return;
+      }
+      await mutate(deps, resource, receipt.operation, receipt.ordinal, true);
+      return;
+    }
     if (rawMarker) {
       await writeUnknown(
         deps,
@@ -1504,6 +1540,10 @@ export async function reconcileComputeWorkload(
         resource.status?.attempt ??
           (receipt ? attemptFromReceipt(receipt) : undefined)
       );
+      return;
+    }
+    if (exhaustedRetryBudgetNeedsRecovery(resource)) {
+      await recoverBounded(deps, resource);
       return;
     }
     await mutate(deps, resource, "create", 0);

@@ -241,7 +241,10 @@ services:
     container_name: redis
     restart: unless-stopped
     labels:
-      - "autoheal=true"
+      # bug.5105: stateful stores are never autohealed. autoheal restarting a
+      # database mid-recovery means recovery never finishes — that loop took the
+      # whole prod fleet down for ~28 min on 2026-09-03.
+      - "autoheal=false"
     networks:
       - cogni-edge
     ports:
@@ -259,14 +262,20 @@ services:
       interval: 10s
       timeout: 2s
       retries: 3
-      start_period: 5s
+      # bug.5105: 180s of boot grace for every stateful store. Postgres' data-dir
+      # fsync took 62.87s on an I/O-saturated VM while a 10s start_period called it
+      # unhealthy at ~40s; give each data store the same slow-disk headroom.
+      start_period: 180s
 
   postgres:
     image: postgres:15
     container_name: postgres
     restart: unless-stopped
     labels:
-      - "autoheal=true"
+      # bug.5105: stateful stores are never autohealed. autoheal restarting a
+      # database mid-recovery means recovery never finishes — that loop took the
+      # whole prod fleet down for ~28 min on 2026-09-03.
+      - "autoheal=false"
     networks:
       - cogni-edge
     environment:
@@ -293,7 +302,10 @@ services:
       interval: 10s
       timeout: 2s
       retries: 3
-      start_period: 10s
+      # bug.5105: 180s of boot grace for every stateful store. Postgres' data-dir
+      # fsync took 62.87s on an I/O-saturated VM while a 10s start_period called it
+      # unhealthy at ~40s; give each data store the same slow-disk headroom.
+      start_period: 180s
 
   # =============================================================================
   # Doltgres — versioned knowledge store (per knowledge-data-plane spec)
@@ -306,7 +318,10 @@ services:
     container_name: doltgres
     restart: unless-stopped
     labels:
-      - "autoheal=true"
+      # bug.5105: stateful stores are never autohealed. autoheal restarting a
+      # database mid-recovery means recovery never finishes — that loop took the
+      # whole prod fleet down for ~28 min on 2026-09-03.
+      - "autoheal=false"
     networks:
       - cogni-edge
     environment:
@@ -330,7 +345,10 @@ services:
       interval: 10s
       timeout: 2s
       retries: 5
-      start_period: 15s
+      # bug.5105: 180s of boot grace for every stateful store. Postgres' data-dir
+      # fsync took 62.87s on an I/O-saturated VM while a 10s start_period called it
+      # unhealthy at ~40s; give each data store the same slow-disk headroom.
+      start_period: 180s
 
   doltgres-provision:
     image: postgres:15
@@ -431,7 +449,10 @@ services:
       TEMPORAL_DB_USER: ${TEMPORAL_DB_USER:-temporal}
       TEMPORAL_DB_PASSWORD: ${TEMPORAL_DB_PASSWORD:-temporal}
       DB_BACKUP_INTERVAL_SECONDS: ${DB_BACKUP_INTERVAL_SECONDS:-86400}
-      DB_BACKUP_RETENTION_DAYS: ${DB_BACKUP_RETENTION_DAYS:-14}
+      # bug.5105 follow-up: 14d x ~1.5GB/night filled / to 82% and stalled the k3s API.
+      DB_BACKUP_RETENTION_DAYS: ${DB_BACKUP_RETENTION_DAYS:-5}
+      DB_BACKUP_MIN_FREE_MB: ${DB_BACKUP_MIN_FREE_MB:-15000}
+      DB_BACKUP_MIN_KEEP: ${DB_BACKUP_MIN_KEEP:-2}
       DB_BACKUP_OBSERVABILITY_GRACE_SECONDS: ${DB_BACKUP_OBSERVABILITY_GRACE_SECONDS:-90}
     volumes:
       - ./db-backup/backup.sh:/usr/local/bin/db-backup.sh:ro
@@ -590,7 +611,10 @@ services:
     container_name: temporal-postgres
     restart: unless-stopped
     labels:
-      - "autoheal=true"
+      # bug.5105: stateful stores are never autohealed. autoheal restarting a
+      # database mid-recovery means recovery never finishes — that loop took the
+      # whole prod fleet down for ~28 min on 2026-09-03.
+      - "autoheal=false"
     networks:
       - internal
     environment:
@@ -603,7 +627,10 @@ services:
       interval: 10s
       timeout: 2s
       retries: 3
-      start_period: 10s
+      # bug.5105: 180s of boot grace for every stateful store. Postgres' data-dir
+      # fsync took 62.87s on an I/O-saturated VM while a 10s start_period called it
+      # unhealthy at ~40s; give each data store the same slow-disk headroom.
+      start_period: 180s
 
   temporal:
     # Temporal server with auto-setup (handles schema migrations)
@@ -743,7 +770,10 @@ services:
     security_opt:
       - "seccomp=unconfined"
     labels:
-      - "autoheal=true"
+      # bug.5105: stateful stores are never autohealed. autoheal restarting a
+      # database mid-recovery means recovery never finishes — that loop took the
+      # whole prod fleet down for ~28 min on 2026-09-03.
+      - "autoheal=false"
     networks:
       internal:
         ipv4_address: 10.100.0.100
@@ -765,7 +795,10 @@ services:
       interval: 10s
       timeout: 2s
       retries: 5
-      start_period: 15s
+      # bug.5105: 180s of boot grace for every stateful store. Postgres' data-dir
+      # fsync took 62.87s on an I/O-saturated VM while a 10s start_period called it
+      # unhealthy at ~40s; give each data store the same slow-disk headroom.
+      start_period: 180s
 
   # =============================================================================
   # Playwright MCP Server (Streamable HTTP)

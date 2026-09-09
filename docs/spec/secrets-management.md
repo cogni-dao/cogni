@@ -223,6 +223,31 @@ lane as transitional.
 
 16. **NODE_SECRET_MATERIALIZATION_PRECEDES_SUBSTRATE_RECONCILE.** A new node's first flight/promotion runs a materialization phase before any DB/edge/ExternalSecret substrate reconcile or read-only substrate assertion. In the final form this is a standalone `secret-materialize <env> <node>` primitive: it reads the catalog, preserves existing OpenBao values, generates missing `source: agent` values, derives values only from non-secret inputs plus OpenBao-owned secret inputs, inherits only explicitly granted shared values, and logs key names only. It must not require per-node human values for ordinary wizard nodes; missing shared DAO/org values are environment precondition failures. Candidate flight and promote workflows MUST NOT accept secret values as inputs.
 
+17. **PLACEMENT_DOES_NOT_GATE_PROVISIONING** (bug.5098/bug.5099, proven live 2026-09-03). A node's
+    `deployment_provider.<env>` decides **where its app runs**. It MUST NOT decide **whether the node
+    gets provisioned**. Every `type: node` target is materialized on every flight/promote regardless of
+    provider; only the _steps_ branch. Concretely: the `node-substrate` job must be matrixed over **all**
+    node targets (the typed planner already emits this wider list), never over a k3s-only list, with
+    provider-specific work — the k3s Caddy/NodePort edge reconcile, the external DNS reconcile — selected
+    _inside_ the job. `secret-materialize` runs for everyone.
+
+    **The failure this prevents:** flipping a node to `akash` silently removed it from
+    `k3s_node_targets_json`, so nothing ever created its secrets. It stayed invisible because the first
+    Akash nodes had been k3s nodes first and simply kept the secrets they already had; the defect only
+    surfaced in an environment where that node had never run on k3s (`cogni/production/toks4` was empty —
+    ESO failed at `spec.data[0]`, `cannot find secret data for key: "AUTH_SECRET"`). A node is a node.
+    Where it runs is not who it is.
+
+18. **PROVIDER_SECRET_DELTAS_ARE_DECLARED_NOT_RENAMED.** When a provider genuinely needs a _different_
+    secret from the k3s default, that difference is a **catalog entry**, never an undeclared rename in a
+    runtime profile. The external-workload profile requires a per-node `LITELLM_VIRTUAL_KEY` instead of the
+    fleet-shared `LITELLM_MASTER_KEY` — correct, because a fleet-shared credential must never be shipped to a
+    rented third-party host (see `EXTERNAL_WORKLOAD_DENIED_KEYS`). But the new name was added only as a
+    _consumer_: no catalog entry, no generator, no registration step. Per
+    [`CATALOG_IS_THE_ONE_READER`](#core-invariants), a key a pod consumes but the catalog never declares can
+    never fan out — it will be hand-seeded once and then silently carried forever. Declaration must precede
+    consumption.
+
     The write/read split is a **token boundary**: in the target, only `secret-materialize` holds the `<env>-writer` role; `reconcile-substrate` and `assert-substrate` hold a read-only (`<env>-db-reader`) token and perform zero OpenBao writes (no `bao kv put`/`patch`). **Transitional exception (as-built, PR #1582):** `reconcile-substrate` still mints `<env>-writer` to seed the DB DSNs (`DATABASE_URL`, `DATABASE_SERVICE_URL`, `DOLTGRES_URL`) until the env-repair lane lands per-node DB creds at `cogni/<env>/<node>` (`vm-secrets-repair.md`, #1584). The read-only-reconcile target — and the falsifying gate (delete the VM `.env` `APP_DB_PASSWORD`, prove the node deploys green from OpenBao only) — hold only after that lane completes; #1582 must not claim `deploy_verified` via that gate. The catalog-custody surface (`inheritFrom`, DB-key tiering) is the orthogonal, non-blocking lane.
 
 ---

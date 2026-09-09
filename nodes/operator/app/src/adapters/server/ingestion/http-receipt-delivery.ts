@@ -13,8 +13,13 @@
  *   to ISO strings for the wire.
  * Invariants:
  *   - NO_DB_IN_DELIVERY: only fetch(); the owning node stamps its own node_id.
- *   - The authoritative catalog/profile routing decision supplies nodeId + slug together. The slug
- *     derives the in-cluster URL directly, avoiding a second, stale DB-registry resolution seam.
+ *   - The authoritative catalog/profile routing decision supplies nodeId + slug together — this
+ *     adapter never re-resolves node IDENTITY through a second, potentially stale seam.
+ *   - PLACEMENT_DECIDES_THE_ADDRESS (bug.5106): the base URL comes from the injected
+ *     `NodeAddressPort`, which reads the node's DECLARED placement. Deriving
+ *     `http://<slug>-node-app:3000` here assumed every node is a cluster neighbour, so a node
+ *     placed on decentralized compute silently lost every receipt to `ENOTFOUND`. Placement, not
+ *     the caller, decides the address — and no node name ever appears in this file.
  *   - Bearer SCHEDULER_API_TOKEN attached to every request (MVP dispatch identity, same as graph
  *     dispatch; the per-node principal is the hardening — task.5033).
  *   - Idempotency-Key: `${nodeId}/${firstReceiptId}` — repeat delivery is a no-op on the node
@@ -34,8 +39,7 @@ import {
   type InternalReceipt,
   internalDeliverReceiptsOperation,
 } from "@cogni/node-contracts";
-import type { ReceiptDelivery } from "@/ports";
-import { internalNodeAppUrl } from "@/shared/node-registry/resolve";
+import type { NodeAddressPort, ReceiptDelivery } from "@/ports";
 import type { Logger } from "@/shared/observability";
 
 // ReceiptDelivery port lives in @/ports/receipt-delivery.port; this adapter implements it.
@@ -43,6 +47,8 @@ import type { Logger } from "@/shared/observability";
 export interface HttpReceiptDeliveryDeps {
   /** Bearer token for the internal dispatch identity (SCHEDULER_API_TOKEN). */
   readonly schedulerApiToken: string;
+  /** Placement-aware address resolution — in-cluster for k3s nodes, public host for external ones. */
+  readonly nodeAddress: NodeAddressPort;
   readonly logger: Logger;
 }
 
@@ -114,14 +120,14 @@ function toWireReceipt(r: InsertReceiptParams): InternalReceipt {
 export function createHttpReceiptDelivery(
   deps: HttpReceiptDeliveryDeps
 ): ReceiptDelivery {
-  const { schedulerApiToken, logger } = deps;
+  const { schedulerApiToken, nodeAddress, logger } = deps;
 
   return {
     async deliverReceipts(target, source, receipts): Promise<void> {
       if (receipts.length === 0) return;
 
       const { nodeId, slug } = target;
-      const base = internalNodeAppUrl(slug);
+      const base = await nodeAddress.resolveNodeAppBaseUrl(slug);
       const url = `${base}/api/internal/attribution/receipts`;
 
       const body: InternalDeliverReceiptsInput = {

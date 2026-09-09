@@ -70,8 +70,24 @@ cf_a_record_proxied() {
     | python3 -c 'import json,sys; r=json.load(sys.stdin).get("result",[]); print(("true" if r[0]["proxied"] else "false") if r else "")' 2>/dev/null
 }
 
+# Echo the record TYPE (A / CNAME / …) of the first record named $fqdn across ALL
+# types, or empty when the name is unclaimed. DNS_ONE_WRITER_PER_HOST: a host whose
+# live record is not an A belongs to a different reconciler (an externally-placed
+# node's host is a CNAME written by the operator's ComputeWorkload DNS adapter), so
+# callers need to tell "absent" from "owned by someone else" — a `?type=A` read
+# cannot.
+#   cf_record_type TOKEN ZONE_ID FQDN
+cf_record_type() {
+  local token="$1" zone="$2" fqdn="$3"
+  # shellcheck disable=SC2086
+  $CF_CURL -H "Authorization: Bearer ${token}" \
+    "${_cf_api}/zones/${zone}/dns_records?name=${fqdn}" \
+    | python3 -c 'import json,sys; r=json.load(sys.stdin).get("result",[]); print(r[0]["type"] if r else "")' 2>/dev/null
+}
+
 # Idempotent upsert of a single A record. Echoes "unchanged", "created", or
-# "updated". Returns 2 on a refused PROTECTED record, non-zero on API failure.
+# "updated". Returns 2 on a refused PROTECTED record, 3 when a foreign record type
+# already owns the name, non-zero on API failure.
 #   cf_upsert_a_record TOKEN ZONE_ID FQDN IP PROXIED(true|false)
 cf_upsert_a_record() {
   local token="$1" zone="$2" fqdn="$3" ip="$4" proxied="$5" existing decision keep_id id
@@ -80,19 +96,28 @@ cf_upsert_a_record() {
     echo "[ERROR] Node hosts only. Set CF_ALLOW_PROTECTED=1 only to deliberately provision the apex." >&2
     return 2
   fi
+  # PLACEMENT-CORRECT PROBE: read the name across ALL record types, never `?type=A`.
+  # A live CNAME (what the ComputeWorkload controller writes for an externally
+  # placed node) is invisible to a type-A read, so the old probe decided "create"
+  # and POSTed an A that Cloudflare rejects (81053 — a CNAME is exclusive on its
+  # name), surfacing only as a bare "upsert failed".
   # shellcheck disable=SC2086
   existing=$($CF_CURL -H "Authorization: Bearer ${token}" \
-    "${_cf_api}/zones/${zone}/dns_records?name=${fqdn}&type=A")
+    "${_cf_api}/zones/${zone}/dns_records?name=${fqdn}")
   # Decision:
   #   "noop"                       — exactly one record already matches
   #   "create"                     — no record of this name
   #   "update <keep> [<extra>...]" — update <keep> in place; prune any duplicates
+  #   "conflict <type>"            — a non-A record owns the name (foreign writer)
   decision=$(printf '%s' "$existing" | CF_IP="$ip" CF_PROXIED="$proxied" python3 -c '
 import json, os, sys
 r = json.load(sys.stdin).get("result", [])
 ip = os.environ["CF_IP"]
 proxied = os.environ["CF_PROXIED"] == "true"
-if not r:
+foreign = [x for x in r if x.get("type") != "A"]
+if foreign:
+    print("conflict " + str(foreign[0].get("type", "?")))
+elif not r:
     print("create")
 elif len(r) == 1 and r[0]["content"] == ip and bool(r[0]["proxied"]) == proxied:
     print("noop")
@@ -101,6 +126,11 @@ else:
 ' 2>/dev/null)
 
   case "$decision" in
+    conflict\ *)
+      echo "[ERROR] cloudflare-dns: '${fqdn}' already holds a ${decision#conflict } record — another writer owns this host." >&2
+      echo "[ERROR] An externally-placed node's host is a CNAME owned by the ComputeWorkload controller; refusing to overwrite it with an A record." >&2
+      return 3
+      ;;
     noop)
       printf 'unchanged'
       return 0

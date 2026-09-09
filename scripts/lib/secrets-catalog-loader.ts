@@ -118,6 +118,9 @@ const TransformSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("append-path"), path: z.string() }),
 ]);
 
+const SyncTargetSchema = z.enum(["github-app-webhook", "litellm-virtual-key"]);
+export type SyncTarget = z.infer<typeof SyncTargetSchema>;
+
 const CatalogEntrySchema = z
   .object({
     name: z.string().regex(/^[A-Z_][A-Z0-9_]*$/),
@@ -150,7 +153,7 @@ const CatalogEntrySchema = z
     // must keep in lockstep? A generated value can still need mirroring outward
     // (e.g. the GitHub App webhook secret: source: agent + syncTo: the App).
     // deploy-infra runs the matching push (scripts/secrets/sync-app-webhook-secret.sh).
-    syncTo: z.enum(["github-app-webhook"]).optional(),
+    syncTo: SyncTargetSchema.optional(),
     description: z.string(),
     steps: z.array(z.string()),
     url: z.string().url().optional(),
@@ -183,7 +186,7 @@ export interface Secret {
   category: string;
   description: string;
   source: "agent" | "human";
-  syncTo?: "github-app-webhook";
+  syncTo?: SyncTarget;
   url?: string;
   steps: string[];
   generate?: () => string;
@@ -380,6 +383,7 @@ function catalogEntryToSecret(entry: CatalogEntry): Secret {
     steps: entry.steps,
   };
   if (entry.url !== undefined) secret.url = entry.url;
+  if (entry.syncTo !== undefined) secret.syncTo = entry.syncTo;
   if (entry.perEnv !== undefined) secret.perEnv = entry.perEnv;
   if (entry.repoLevel !== undefined) secret.repoLevel = entry.repoLevel;
   if (entry.generate !== undefined) {

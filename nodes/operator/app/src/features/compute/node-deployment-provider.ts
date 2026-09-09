@@ -16,6 +16,8 @@
 
 import { z } from "zod";
 
+import { NODE_DEPLOYMENT_PROVIDERS } from "@/shared/node-registry/placement";
+
 export const deploymentEnvironmentSchema = z.enum([
   "candidate-a",
   "preview",
@@ -23,7 +25,9 @@ export const deploymentEnvironmentSchema = z.enum([
 ]);
 export type DeploymentEnvironment = z.infer<typeof deploymentEnvironmentSchema>;
 
-export const nodeDeploymentProviderSchema = z.enum(["k3s", "akash"]);
+// PLACEMENT_IS_NOT_A_SECOND_LIST — one provider vocabulary, shared with the runtime address
+// resolver (`@shared/node-registry/placement`) so CI policy and request-time routing cannot drift.
+export const nodeDeploymentProviderSchema = z.enum(NODE_DEPLOYMENT_PROVIDERS);
 export type NodeDeploymentProvider = z.infer<
   typeof nodeDeploymentProviderSchema
 >;

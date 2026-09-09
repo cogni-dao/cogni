@@ -138,6 +138,10 @@ import { CompositeNodeRegistryAdapter } from "@/adapters/server/node-registry/co
 import { DbNodeRegistryAdapter } from "@/adapters/server/node-registry/db-node-registry.adapter";
 import { LiveNodeRegistryAdapter } from "@/adapters/server/node-registry/live-node-registry.adapter";
 import { NETWORK_NODES } from "@/adapters/server/node-registry/network-nodes.data";
+import {
+  createDrizzleNodePlacementLookup,
+  createNodeAddressResolver,
+} from "@/adapters/server/node-registry/node-address.adapter";
 import { StaticNodeRegistryAdapter } from "@/adapters/server/node-registry/static-node-registry.adapter";
 import { ServiceDrizzlePaymentAttemptRepository } from "@/adapters/server/payments/drizzle-payment-attempt.adapter";
 import { SplitTreasurySettlementAdapter } from "@/adapters/server/treasury/split-treasury-settlement.adapter";
@@ -227,6 +231,7 @@ import {
 } from "@/shared/config";
 import { nodes } from "@/shared/db/nodes";
 import { serverEnv } from "@/shared/env/server-env";
+import { envForApex } from "@/shared/node-registry/deploy-hosts";
 import { baseDomain } from "@/shared/node-registry/resolve";
 import { makeLogger } from "@/shared/observability";
 import { USDC_TOKEN_ADDRESS } from "@/shared/web3";
@@ -972,10 +977,27 @@ function createContainer(): Container {
   const runStream = new RedisRunStreamAdapter(redisClient);
   const nodeStream = new RedisNodeStreamAdapter(redisClient);
 
+  // PLACEMENT_DECIDES_THE_ADDRESS (bug.5106): both operator→node internal clients resolve a node's
+  // base URL from the placement that node DECLARED in its catalog row and the reconcile job
+  // projected into `nodes.deployment_providers` — in-cluster Service DNS for a k3s node, the public
+  // host for one placed on decentralized compute. ENV_SCOPED_VIEW: this operator dials its OWN
+  // env's addresses, derived from the apex it serves (same accessor the liveness rollup uses).
+  const nodeApex = baseDomain(env);
+  const nodeAddress = createNodeAddressResolver({
+    loadPlacement: (slug) =>
+      createDrizzleNodePlacementLookup(resolveServiceDb())(slug),
+    // No apex (local dev / tests) ⇒ no public addressing exists at all, so every node resolves
+    // through the k3s branch, which ignores `environment`. `envForApex` stays the one total
+    // apex→env function; an akash-placed node with no domain fails loud rather than guessing.
+    environment: envForApex(nodeApex ?? ""),
+    apexDomain: nodeApex,
+  });
+
   // Attribution operator-gateway: the catalog/profile resolver supplies the authoritative nodeId +
-  // slug pair; delivery derives the in-cluster URL without re-resolving through a stale DB snapshot.
+  // slug pair; delivery resolves that slug's ADDRESS through the placement-aware seam above.
   const receiptDelivery = createHttpReceiptDelivery({
     schedulerApiToken: env.SCHEDULER_API_TOKEN,
+    nodeAddress,
     logger: log.child({ component: "http-receipt-delivery" }),
   });
 
@@ -984,6 +1006,7 @@ function createContainer(): Container {
   // creds, so it derives foreign epoch aggregates over the node's internal HTTP API.
   const epochsRead = createHttpEpochsRead({
     schedulerApiToken: env.SCHEDULER_API_TOKEN,
+    nodeAddress,
     logger: log.child({ component: "http-epochs-read" }),
   });
 

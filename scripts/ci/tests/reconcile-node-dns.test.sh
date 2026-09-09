@@ -81,6 +81,15 @@ if method == "PUT" and m:
 
 if method == "POST" and url and url.endswith("/dns_records"):
     b = json.loads(data)
+    # Real Cloudflare: a CNAME is EXCLUSIVE on its name — creating an A over a
+    # live CNAME (or vice versa) is rejected with error 81053. Model it, so a
+    # probe that misreads a CNAME as "absent" fails here exactly as in prod.
+    for r in s["records"]:
+        if r["name"] == b["name"] and "CNAME" in (r["type"], b.get("type", "A")):
+            print(json.dumps({"success": False, "errors": [
+                {"code": 81053,
+                 "message": "An A, AAAA, or CNAME record with that host already exists."}]}))
+            sys.exit(0)
     rid = "rec%d" % s["next_id"]; s["next_id"] += 1
     s["records"].append({"id": rid, "name": b["name"], "content": b["content"],
                          "proxied": bool(b["proxied"]), "type": b.get("type", "A")})
@@ -234,6 +243,116 @@ if bash scripts/ci/reconcile-node-dns.sh candidate-a --check >/dev/null 2>&1; th
 else
   printf 'OK   --check fails (non-zero) when node records missing\n'; pass=$((pass + 1))
 fi
+
+# ── Placement decides DNS ownership (story.5016) ──────────────────────────────
+# A node the catalog places on an EXTERNAL provider has its public host CNAME'd to
+# the provider by the operator's ComputeWorkload DNS reconciler. This loop maps
+# hosts onto the env VM, so it must not touch that record — two writers on one
+# name is a Cloudflare type conflict that hard-fails the whole env's promote.
+FIXTURE_CATALOG="$TMPROOT/catalog"
+mkdir -p "$FIXTURE_CATALOG"
+cat >"$FIXTURE_CATALOG/k3snode.yaml" <<'YAML'
+name: k3snode
+type: node
+port: 3901
+node_port: 32101
+dockerfile: nodes/k3snode/app/Dockerfile
+image_tag_suffix: "-k3snode"
+migrator_tag_suffix: ""
+path_prefix: nodes/k3snode/
+envs: [candidate-a, production]
+activity_env: candidate-a
+YAML
+# Placement is declared for candidate-a ONLY: production falls back to k3s
+# (K3S_IS_DEFAULT), so this one row proves the skip is per-ENV, not per-node.
+cat >"$FIXTURE_CATALOG/akashnode.yaml" <<'YAML'
+name: akashnode
+type: node
+port: 3902
+node_port: 32102
+dockerfile: nodes/akashnode/app/Dockerfile
+image_tag_suffix: "-akashnode"
+migrator_tag_suffix: ""
+path_prefix: nodes/akashnode/
+envs: [candidate-a, production]
+deployment_provider:
+  candidate-a: akash
+activity_env: candidate-a
+YAML
+
+# Store: apex A + the LIVE CNAME the compute controller owns for the akash node.
+CF_STORE="$CF_STORE" python3 -c '
+import json, os
+json.dump({"records": [
+    {"id": "apex", "name": "test.cognidao.org", "content": "84.32.9.111",
+     "proxied": False, "type": "A"},
+    {"id": "cn1", "name": "akashnode-test.cognidao.org",
+     "content": "provider.zencloud.akash.pub", "proxied": True, "type": "CNAME"},
+], "next_id": 9}, open(os.environ["CF_STORE"], "w"))'
+
+placement_summary="$TMPROOT/placement-summary.json"
+if COGNI_CATALOG_ROOT="$FIXTURE_CATALOG" DNS_RECONCILE_SUMMARY_FILE="$placement_summary" \
+  bash scripts/ci/reconcile-node-dns.sh candidate-a >"$TMPROOT/placement.out" 2>&1; then
+  printf 'OK   reconcile succeeds with an externally-placed node in the catalog\n'; pass=$((pass + 1))
+else
+  printf 'FAIL reconcile must not fail on an externally-placed node\n'; cat "$TMPROOT/placement.out"; fail=$((fail + 1))
+fi
+assert_eq "$(cf_record_type test-token zone123 akashnode-test.cognidao.org)" "CNAME" \
+  "externally-placed host keeps its controller-owned CNAME (never A-clobbered)"
+assert_eq "$(count_name akashnode-test.cognidao.org)" "1" \
+  "no second record was created alongside the CNAME"
+assert_eq "$(cf_a_record_content test-token zone123 k3snode-test.cognidao.org)" "84.32.9.111" \
+  "k3s-placed sibling in the same catalog still reconciles to the VM IP"
+assert_eq "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(next(r["state"] for r in d["records"] if r["node"] == "akashnode"))' "$placement_summary")" \
+  "external" "Grafana DNS summary reports the skipped node as state=external"
+
+# --check must be GREEN, not "MISSING": the record exists, it is just not ours.
+if COGNI_CATALOG_ROOT="$FIXTURE_CATALOG" \
+  bash scripts/ci/reconcile-node-dns.sh candidate-a --check >/dev/null 2>&1; then
+  printf 'OK   --check is green when an externally-placed node holds a CNAME\n'; pass=$((pass + 1))
+else
+  printf 'FAIL --check must not flag an externally-placed node as missing DNS\n'; fail=$((fail + 1))
+fi
+
+# Same row, production env: no placement declared there → K3S_IS_DEFAULT applies
+# and the node IS this loop's to own. (DOMAIN is pinned so only placement varies.)
+CF_STORE="$CF_STORE" python3 -c '
+import json, os
+json.dump({"records": [
+    {"id": "apex", "name": "test.cognidao.org", "content": "84.32.9.111",
+     "proxied": False, "type": "A"},
+], "next_id": 9}, open(os.environ["CF_STORE"], "w"))'
+COGNI_CATALOG_ROOT="$FIXTURE_CATALOG" DOMAIN=test.cognidao.org \
+  bash scripts/ci/reconcile-node-dns.sh production >/dev/null 2>&1
+assert_eq "$(cf_a_record_content test-token zone123 akashnode-test.cognidao.org)" "84.32.9.111" \
+  "an env with NO placement override still reconciles (K3S_IS_DEFAULT)"
+
+# ── Lib: the existence probe is type-aware, so a CNAME is never "absent" ──────
+# Pre-fix the probe pinned ?type=A, read a live CNAME as absent, and POSTed an A
+# that Cloudflare rejects with 81053 — surfacing only as a bare "upsert failed".
+CF_STORE="$CF_STORE" python3 -c '
+import json, os
+json.dump({"records": [
+    {"id": "cn2", "name": "foreign-test.cognidao.org", "content": "provider.example",
+     "proxied": True, "type": "CNAME"},
+], "next_id": 9}, open(os.environ["CF_STORE"], "w"))'
+assert_eq "$(cf_record_type test-token zone123 foreign-test.cognidao.org)" "CNAME" \
+  "cf_record_type sees a record the type-A read cannot"
+assert_eq "$(cf_a_record_content test-token zone123 foreign-test.cognidao.org)" "" \
+  "cf_a_record_content still reports only A records (apex VM-IP read unchanged)"
+set +e
+upsert_out="$(cf_upsert_a_record test-token zone123 foreign-test.cognidao.org 84.32.9.111 true 2>&1)"
+upsert_rc=$?
+set -e
+assert_eq "$upsert_rc" "3" "upsert REFUSES (rc=3) a host already owned by a foreign record type"
+case "$upsert_out" in
+  *"already holds a CNAME record"*)
+    printf 'OK   refusal names the conflicting record type\n'; pass=$((pass + 1)) ;;
+  *)
+    printf 'FAIL refusal must name the conflicting record type — got %q\n' "$upsert_out"; fail=$((fail + 1)) ;;
+esac
+assert_eq "$(cf_record_type test-token zone123 foreign-test.cognidao.org)" "CNAME" \
+  "the foreign record survives the refused upsert"
 
 echo "---"
 echo "pass=$pass fail=$fail"

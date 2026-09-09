@@ -41,6 +41,7 @@ import {
   resolveDeploymentTargets,
   resolvePromoteDeploymentTargets,
 } from "@/features/compute/node-deployment-targets";
+import { assertDeclaredNodeDeployment } from "@/features/compute/node-services-workload-spec";
 import { hostForNode } from "@/shared/node-registry/resolve";
 
 const options = {
@@ -119,6 +120,16 @@ async function main(): Promise<void> {
   const catalogIdentity = parseCatalogIdentity(catalog);
   const sourceSha = required(values["source-sha"], "--source-sha");
   const repoSpecFile = required(values["repo-spec"], "--repo-spec");
+  const spec = parseRepoSpec(await readFile(repoSpecFile, "utf8"));
+  // Earliest operator-owned read of the node's own repo-spec — deliberately before
+  // any OCI pull. A node with no `deployment:` block would otherwise materialize a
+  // valid-looking workload from the legacy no-secrets fallback and die terminally
+  // at reconcile with an error that names nothing the author can act on.
+  assertDeclaredNodeDeployment({
+    spec,
+    slug: catalogIdentity.slug,
+    sourceSha,
+  });
   const bundleInput = await resolveBundleInput({
     bundleFile: values.bundle,
     bundleRef: values["bundle-ref"],
@@ -128,7 +139,6 @@ async function main(): Promise<void> {
   const domain = required(values.domain, "--domain");
   const outputDir = required(values["output-dir"], "--output-dir");
 
-  const spec = parseRepoSpec(await readFile(repoSpecFile, "utf8"));
   const bundle = resolveNodeArtifactBundle(spec, bundleInput.payload, {
     sourceSha,
     repository: catalogIdentity.repository,

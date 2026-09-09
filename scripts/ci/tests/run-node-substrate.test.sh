@@ -4,6 +4,7 @@
 #
 # Proves the per-node substrate runner wires materialize → reconcile uniformly:
 #   - both callees run, in order, with the SAME (env, node) args;
+#   - every provider reconciles placement-neutral state before provider assertion;
 #   - reconcile runs ONLY after materialize succeeds (fail-fast on materialize);
 #   - exit code propagates (a failing callee fails the runner).
 
@@ -84,5 +85,26 @@ case "$seen_root" in
   /*) [ -d "$seen_root" ] || { echo "normalized COGNI_CATALOG_ROOT not a real dir: $seen_root" >&2; exit 1; } ;;
   *) echo "COGNI_CATALOG_ROOT must be exported ABSOLUTE to callees; got: $seen_root" >&2; exit 1 ;;
 esac
+
+# ── Case 5: external compute gets the SAME placement-neutral reconcile/DB
+#    provisioning before its provider assert. Provider is supplied by the typed map. ─
+mk_stub "$TMPROOT/mat.sh" materialize 0
+cat > "$TMPROOT/rec.sh" <<EOF
+#!/usr/bin/env bash
+echo "reconcile \$1 \$2 provider=\${DEPLOYMENT_PROVIDER:-unset}" >> "$ORDER"
+EOF
+chmod +x "$TMPROOT/rec.sh"
+mk_stub "$TMPROOT/assert.sh" assert 0
+: > "$ORDER"
+DEPLOYMENT_PROVIDER=akash \
+RUN_NODE_SUBSTRATE_MATERIALIZE_BIN="$TMPROOT/mat.sh" \
+RUN_NODE_SUBSTRATE_RECONCILE_BIN="$TMPROOT/rec.sh" \
+RUN_NODE_SUBSTRATE_ASSERT_BIN="$TMPROOT/assert.sh" \
+  bash "$RUNNER" production toks4 >/dev/null
+got="$(paste -sd'|' - < "$ORDER")"
+want="materialize production toks4|reconcile production toks4 provider=akash|assert production toks4"
+[ "$got" = "$want" ] || { echo "external phase mismatch:
+  got:  $got
+  want: $want" >&2; exit 1; }
 
 echo "PASS: run-node-substrate.test.sh"

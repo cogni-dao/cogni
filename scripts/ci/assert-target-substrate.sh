@@ -25,9 +25,103 @@ command -v yq >/dev/null 2>&1 || fail "yq is required to read catalog targets"
 catalog_file="${COGNI_CATALOG_ROOT}/${TARGET}.yaml"
 [ -f "$catalog_file" ] || fail "missing catalog file: $catalog_file"
 target_type="$(yq -N '.type // ""' "$catalog_file")"
+deployment_provider="${DEPLOYMENT_PROVIDER:-k3s}"
+case "$deployment_provider" in
+  k3s|akash) ;;
+  *) fail "unsupported DEPLOYMENT_PROVIDER '$deployment_provider' for '$TARGET'" ;;
+esac
 
 # shellcheck disable=SC1091 source=./scripts/ci/lib/image-tags.sh
 source "${SCRIPT_DIR}/lib/image-tags.sh"
+
+assert_external_compute_preconditions() {
+local node="$TARGET"
+local vm_host="${VM_HOST:-}"
+local domain="${DOMAIN:-}"
+local ssh_bin="${ASSERT_TARGET_SUBSTRATE_SSH_BIN:-ssh}"
+local ssh_opts_raw="${SSH_OPTS:--i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6}"
+local repo_spec="${APP_SOURCE_DIR}/nodes/${node}/.cogni/repo-spec.yaml"
+local egress_allowlist="${ASSERT_TARGET_SUBSTRATE_EGRESS_ALLOWLIST:-/etc/cogni/compute-egress-allowlist}"
+
+[ -n "$vm_host" ] || fail "VM_HOST is required for external-compute target '$node'"
+[ -n "$domain" ] || fail "DOMAIN is required for external-compute target '$node'"
+[ -f "$repo_spec" ] || fail "repo-spec missing for external-compute target '$node': $repo_spec"
+
+service_count="$(yq -N '.deployment.services | length' "$repo_spec")"
+[ "$service_count" -gt 0 ] 2>/dev/null \
+  || fail "external-compute target '$node' must declare deployment.services"
+required_keys="$(yq -r '(.deployment.services[]?.secret_refs[]?.key // "") | select(. != "")' "$repo_spec" | sort -u)"
+required_keys_csv="$(paste -sd, - <<<"$required_keys")"
+
+egress_cidrs="$(yq -r '.compute_egress_cidrs[]?.cidr' "$catalog_file" | sort -u)"
+[ -n "$egress_cidrs" ] \
+  || fail "external-compute target '$node' has no compute_egress_cidrs"
+egress_cidrs_csv="$(paste -sd, - <<<"$egress_cidrs")"
+
+local ssh_opts=()
+read -r -a ssh_opts <<< "$ssh_opts_raw"
+"$ssh_bin" "${ssh_opts[@]}" "root@${vm_host}" bash -s -- \
+  "$DEPLOY_ENVIRONMENT" "$node" "$required_keys_csv" "$egress_cidrs_csv" \
+  "$egress_allowlist" <<'REMOTE'
+set -euo pipefail
+env_name="$1"
+node="$2"
+required_keys_csv="$3"
+egress_cidrs_csv="$4"
+egress_allowlist="$5"
+namespace="cogni-${env_name}"
+controller="operator-compute-workload-controller"
+
+fail() { echo "::error::assert-target-substrate: $*" >&2; exit 1; }
+mark_ok() { echo "[OK] $*"; }
+
+kubectl get crd computeworkloads.compute.cogni.io >/dev/null \
+  || fail "ComputeWorkload CRD is missing"
+mark_ok "ComputeWorkload CRD exists"
+
+available="$(kubectl -n "$namespace" get deployment "$controller" -o jsonpath='{.status.availableReplicas}' 2>/dev/null || true)"
+[ "${available:-0}" -ge 1 ] 2>/dev/null \
+  || fail "compute workload controller is not available: ${namespace}/${controller}"
+mark_ok "compute workload controller is available"
+
+kubectl -n "$namespace" exec deployment/"$controller" -c controller -- sh -ceu '
+  test -s /var/run/secrets/compute/AKASH_CONSOLE_API_KEY
+  test -s /var/run/secrets/compute/CLOUDFLARE_API_TOKEN
+  test -s /var/run/secrets/compute/CLOUDFLARE_ZONE_ID
+  test -n "$AKASH_ALLOWED_PROVIDERS"
+' >/dev/null || fail "controller provider/DNS credentials or AKASH_ALLOWED_PROVIDERS are missing"
+mark_ok "controller provider, DNS, and allowlist prerequisites exist"
+
+jwt="$(kubectl create token db-provisioner -n default)"
+token="$(kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
+  bao write -field=token auth/kubernetes/login role="${env_name}-db-reader" jwt="$jwt")"
+[ -n "$token" ] || fail "could not mint ${env_name}-db-reader token"
+secret_json="$(kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="$token" \
+  bao kv get -format=json "cogni/${env_name}/${node}")"
+IFS=',' read -r -a required_keys <<< "$required_keys_csv"
+for key in "${required_keys[@]}"; do
+  [ -n "$key" ] || continue
+  jq -e --arg key "$key" '.data.data[$key] | type == "string" and length > 0' <<<"$secret_json" >/dev/null \
+    || fail "materialized node secret bank is missing declared key: $key"
+done
+mark_ok "all declared workload secret refs are materialized"
+
+[ -s "$egress_allowlist" ] \
+  || fail "installed compute egress allowlist is missing"
+IFS=',' read -r -a egress_cidrs <<< "$egress_cidrs_csv"
+for cidr in "${egress_cidrs[@]}"; do
+  # render-compute-egress-allowlist.sh emits "<cidr>:<ports>" per line, so match the
+  # CIDR anchored at line start followed by its port list (or end of line). Never
+  # `grep -Fx` on the bare CIDR: that can never match a rendered line, so it fails
+  # closed on a correctly configured host.
+  grep -Eq "^${cidr//./\\.}(:|\$)" "$egress_allowlist" \
+    || fail "installed compute egress allowlist is missing catalog CIDR: $cidr"
+done
+mark_ok "catalog compute egress CIDRs are installed"
+
+echo "External compute preconditions ready for ${node} in ${env_name}."
+REMOTE
+}
 
 assert_node_target_substrate() {
 local node="$TARGET"
@@ -320,7 +414,11 @@ return "$ssh_rc"
 
 case "$target_type" in
   node)
-    assert_node_target_substrate
+    if [ "$deployment_provider" = "akash" ]; then
+      assert_external_compute_preconditions
+    else
+      assert_node_target_substrate
+    fi
     ;;
   service)
     fail "type=service substrate assertion is not implemented yet for target '$TARGET'; declare the service k8s/Argo/Secret/ExternalSecret/ConfigMap contract before enabling app-flight substrate assertions for services"

@@ -23,6 +23,7 @@ import type {
 } from "@/ports";
 
 import type { DeploymentEnvironment } from "./node-deployment-provider";
+import { assertRuntimeProfileSecretRefs } from "./node-services-workload-spec";
 
 const DIGEST_PINNED_OCI_REF =
   /^[a-z0-9][a-z0-9._:-]*(?:\/[a-z0-9][a-z0-9._-]*)+@sha256:[0-9a-f]{64}$/;
@@ -58,23 +59,32 @@ export function buildComputeWorkloadManifest(
   }
 
   const services: DeclaredProvisionServiceSpec[] = input.bundle.services.map(
-    ({ artifact, service }) => ({
-      name: service.name,
-      artifact,
-      ...(service.runtimeProfile
-        ? { runtimeProfile: service.runtimeProfile }
-        : {}),
-      ...(service.secretRefs.length > 0
-        ? { secretRefs: service.secretRefs }
-        : {}),
-      ...(service.command ? { command: service.command } : {}),
-      ...(service.args ? { args: service.args } : {}),
-      port: service.port,
-      visibility: service.visibility,
-      bindings: service.bindings,
-      bindHost: service.bindHost,
-      ...service.resources,
-    })
+    ({ artifact, service }) => {
+      assertRuntimeProfileSecretRefs({
+        serviceName: service.name,
+        ...(service.runtimeProfile
+          ? { runtimeProfile: service.runtimeProfile }
+          : {}),
+        secretRefs: service.secretRefs,
+      });
+      return {
+        name: service.name,
+        artifact,
+        ...(service.runtimeProfile
+          ? { runtimeProfile: service.runtimeProfile }
+          : {}),
+        ...(service.secretRefs.length > 0
+          ? { secretRefs: service.secretRefs }
+          : {}),
+        ...(service.command ? { command: service.command } : {}),
+        ...(service.args ? { args: service.args } : {}),
+        port: service.port,
+        visibility: service.visibility,
+        bindings: service.bindings,
+        bindHost: service.bindHost,
+        ...service.resources,
+      };
+    }
   );
 
   const namespace = `cogni-${input.environment}`;

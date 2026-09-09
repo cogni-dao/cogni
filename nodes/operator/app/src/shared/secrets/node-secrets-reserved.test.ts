@@ -22,6 +22,7 @@ describe("node-secrets reserved-key guard (gate 2)", () => {
     expect(isNodeOwnedSecretKey("DATABASE_URL")).toBe(false);
     expect(isNodeOwnedSecretKey("DOLTGRES_URL")).toBe(false);
     expect(isNodeOwnedSecretKey("AUTH_SECRET")).toBe(false);
+    expect(isNodeOwnedSecretKey("LITELLM_VIRTUAL_KEY")).toBe(false);
     expect(isNodeOwnedSecretKey("POSTGRES_ROOT_PASSWORD")).toBe(false);
   });
 

@@ -11,10 +11,10 @@
  * @public
  */
 
+import { LEGACY_DEFAULT_NODE_DEPLOYMENT } from "./node-app-deployment.js";
 import type {
   GateConfig,
   KnowledgeSpec,
-  NodeDeploymentSpec,
   NodeRegistryEntry,
   OperatorWalletSpec,
   RepoSpec,
@@ -125,27 +125,6 @@ export interface NodeServiceConfig {
   };
 }
 
-const LEGACY_DEFAULT_DEPLOYMENT: NodeDeploymentSpec = {
-  services: [
-    {
-      name: "app",
-      artifact: {
-        name: "app",
-        context: ".",
-        dockerfile: "Dockerfile",
-        target: "runner",
-      },
-      port: 3200,
-      visibility: "public",
-      runtime_profile: "cogni-node-app-v1",
-      bindings: {},
-      secret_refs: [],
-      bind_host: "0.0.0.0",
-      resources: { cpu_units: 2, memory_mi: 2048, storage_mi: 4096 },
-    },
-  ],
-};
-
 // ---------------------------------------------------------------------------
 // Identity accessors
 // ---------------------------------------------------------------------------
@@ -164,15 +143,29 @@ export function extractNodeName(spec: RepoSpec): string {
 }
 
 /**
+ * Did this node author its own `deployment:` block, or is it riding the legacy default?
+ *
+ * The two are NOT interchangeable: the default declares no `secret_refs`, which is correct for
+ * the k3s lane (env arrives via the node's ExternalSecret overlay) and fatal for an externally
+ * hosted workload (env arrives only through declared refs). Deploy gates that hand a node to an
+ * external provider MUST require a real declaration instead of silently accepting the default.
+ */
+export function hasDeclaredNodeDeployment(spec: RepoSpec): boolean {
+  return spec.deployment !== undefined;
+}
+
+/**
  * Resolve the node's app-tier service declaration.
  *
  * Existing repo-specs intentionally need no migration: omission produces the
- * same single public Next.js app shape used by node-template today.
+ * same single public Next.js app shape used by node-template today — including
+ * its empty `secret_refs`. See `hasDeclaredNodeDeployment` before using this
+ * result to build external-compute desired state.
  */
 export function extractNodeServices(
   spec: RepoSpec
 ): readonly NodeServiceConfig[] {
-  const deployment = spec.deployment ?? LEGACY_DEFAULT_DEPLOYMENT;
+  const deployment = spec.deployment ?? LEGACY_DEFAULT_NODE_DEPLOYMENT;
   return deployment.services.map((service) => ({
     name: service.name,
     artifact: {

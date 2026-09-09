@@ -9,9 +9,11 @@
 # per-node value, including the per-node DB creds + DSNs at cogni/<env>/<node>.
 # This phase is READ-ONLY on OpenBao: it holds an <env>-db-reader token, reads the
 # node's per-node DB passwords, applies the node-domain ExternalSecret leaf, updates
-# edge/DB inventory, and runs the idempotent per-node DB provisioner (one node per
-# invocation). It performs zero OpenBao writes (no bao kv put/patch), does not
-# promote images, and does not run the broad deploy-infra compose reconcile.
+# DB inventory, and runs the idempotent per-node DB provisioner (one node per
+# invocation) regardless of app placement. Only k3s placement updates the shared
+# Caddy/NodePort edge; external placement leaves that edge untouched. It performs
+# zero OpenBao writes (no bao kv put/patch), does not promote images, and does not
+# run the broad deploy-infra compose reconcile.
 # See docs/guides/vm-secrets-repair.md.
 
 set -euo pipefail
@@ -21,6 +23,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 DEPLOY_ENVIRONMENT="${1:-${DEPLOY_ENVIRONMENT:-}}"
 TARGET_NODE="${2:-${TARGET:-}}"
+DEPLOYMENT_PROVIDER="${DEPLOYMENT_PROVIDER:-k3s}"
 APP_SOURCE_DIR="${APP_SOURCE_DIR:-$REPO_ROOT}"
 COGNI_CATALOG_ROOT="${COGNI_CATALOG_ROOT:-${APP_SOURCE_DIR}/infra/catalog}"
 SSH_BIN="${RECONCILE_NODE_SUBSTRATE_SSH_BIN:-ssh}"
@@ -163,6 +166,10 @@ USAGE
 [[ -n "$DEPLOY_ENVIRONMENT" && -n "$TARGET_NODE" ]] || { usage; exit 2; }
 [[ "$DEPLOY_ENVIRONMENT" =~ ^(candidate-a|preview|production)$ ]] \
   || fail "unsupported env '$DEPLOY_ENVIRONMENT'"
+case "$DEPLOYMENT_PROVIDER" in
+  k3s|akash) ;;
+  *) fail "unsupported DEPLOYMENT_PROVIDER '$DEPLOYMENT_PROVIDER'" ;;
+esac
 [[ -n "${VM_HOST:-}" ]] || fail "VM_HOST is required"
 [[ -n "${DOMAIN:-}" ]] || fail "DOMAIN is required"
 
@@ -211,16 +218,6 @@ grep -qxF "$DEPLOY_ENVIRONMENT" <<<"$node_envs" \
   || fail "'$TARGET_NODE' is not in the '$DEPLOY_ENVIRONMENT' node-set (envs: $(yq -r '.envs | join(",")' "$node_catalog_file")) — add the env to infra/catalog/${TARGET_NODE}.yaml to deploy it here"
 
 node_db="$(node_database_for_target "$TARGET_NODE")"
-node_host="$(host_for_node "$TARGET_NODE" "$DOMAIN")"
-node_port="$(node_port_for_target "$TARGET_NODE")"
-edge_slug="$(printf '%s' "$TARGET_NODE" | tr '[:lower:]-' '[:upper:]_')"
-if is_primary_host "$TARGET_NODE"; then
-  edge_key="${edge_slug}_UPSTREAM"
-  edge_value="host.docker.internal:${node_port}"
-else
-  edge_key="${edge_slug}_DOMAIN"
-  edge_value="$node_host"
-fi
 
 read -r -a SSH_OPTS_ARR <<< "$SSH_OPTS_RAW"
 remote() {
@@ -365,28 +362,64 @@ else
   fail "missing node ExternalSecret leaf: $external_secret_file"
 fi
 
-CURRENT_ROW="caddyfile"
-caddy_tmp="$(mktemp)"
-COGNI_CATALOG_ROOT="$COGNI_CATALOG_ROOT" bash "$REPO_ROOT/scripts/ci/render-caddyfile.sh" > "$caddy_tmp"
-# The primary node (operator) renders as the bare {$DOMAIN} block with a
-# {$<SLUG>_UPSTREAM:app:3000} default — the host.docker.internal:<port> value is
-# the per-env edge .env override, NOT the template default. Only non-primary
-# nodes bake host.docker.internal:<port> into the rendered template, so assert it
-# only for them. (The edge_key block presence covers the primary.)
-caddy_route_ok=true
-grep -Fq "{\$${edge_key}:" "$caddy_tmp" || caddy_route_ok=false
-if ! is_primary_host "$TARGET_NODE"; then
-  grep -Fq "host.docker.internal:${node_port}" "$caddy_tmp" || caddy_route_ok=false
-fi
-if ! "$caddy_route_ok"; then
-  fail "rendered Caddyfile missing route for ${node_host} (edge_key=${edge_key})"
-fi
-copy_to_remote "$caddy_tmp" "/tmp/Caddyfile.${DEPLOY_ENVIRONMENT}.${TARGET_NODE}.tmpl"
-mark_row caddyfile updated "rendered + staged Caddyfile route for ${node_host}"
+edge_reconcile_snippet=""
+if [[ "$DEPLOYMENT_PROVIDER" == "k3s" ]]; then
+  CURRENT_ROW="caddyfile"
+  node_host="$(host_for_node "$TARGET_NODE" "$DOMAIN")"
+  node_port="$(node_port_for_target "$TARGET_NODE")"
+  edge_slug="$(printf '%s' "$TARGET_NODE" | tr '[:lower:]-' '[:upper:]_')"
+  if is_primary_host "$TARGET_NODE"; then
+    edge_key="${edge_slug}_UPSTREAM"
+    edge_value="host.docker.internal:${node_port}"
+  else
+    edge_key="${edge_slug}_DOMAIN"
+    edge_value="$node_host"
+  fi
 
-# Shared VM-side edge-Caddy reconcile helper (same logic deploy-infra runs):
-# start-if-down + hash-gated force-recreate. Staged here, invoked in the heredoc.
-copy_to_remote "$REPO_ROOT/scripts/ci/reconcile-edge-caddy.remote.sh" "/tmp/reconcile-edge-caddy.remote.sh"
+  caddy_tmp="$(mktemp)"
+  COGNI_CATALOG_ROOT="$COGNI_CATALOG_ROOT" bash "$REPO_ROOT/scripts/ci/render-caddyfile.sh" > "$caddy_tmp"
+  # The primary node (operator) renders as the bare {$DOMAIN} block with a
+  # {$<SLUG>_UPSTREAM:app:3000} default — the host.docker.internal:<port> value is
+  # the per-env edge .env override, NOT the template default. Only non-primary
+  # nodes bake host.docker.internal:<port> into the rendered template, so assert it
+  # only for them. (The edge_key block presence covers the primary.)
+  caddy_route_ok=true
+  grep -Fq "{\$${edge_key}:" "$caddy_tmp" || caddy_route_ok=false
+  if ! is_primary_host "$TARGET_NODE"; then
+    grep -Fq "host.docker.internal:${node_port}" "$caddy_tmp" || caddy_route_ok=false
+  fi
+  if ! "$caddy_route_ok"; then
+    fail "rendered Caddyfile missing route for ${node_host} (edge_key=${edge_key})"
+  fi
+  copy_to_remote "$caddy_tmp" "/tmp/Caddyfile.${DEPLOY_ENVIRONMENT}.${TARGET_NODE}.tmpl"
+  mark_row caddyfile updated "rendered + staged Caddyfile route for ${node_host}"
+
+  # Shared VM-side edge-Caddy reconcile helper (same logic deploy-infra runs):
+  # start-if-down + hash-gated force-recreate. Staged here, invoked below.
+  copy_to_remote "$REPO_ROOT/scripts/ci/reconcile-edge-caddy.remote.sh" "/tmp/reconcile-edge-caddy.remote.sh"
+  edge_reconcile_snippet="
+  edge_env=/opt/cogni-template-edge/.env
+  caddyfile=/opt/cogni-template-edge/configs/Caddyfile.tmpl
+  mkdir -p /opt/cogni-template-edge/configs
+  mv '/tmp/Caddyfile.${DEPLOY_ENVIRONMENT}.${TARGET_NODE}.tmpl' \"\$caddyfile\"
+
+  touch \"\$edge_env\"
+  if grep -qE '^${edge_key}=' \"\$edge_env\"; then
+    sed -i.bak 's|^${edge_key}=.*$|${edge_key}=${edge_value}|' \"\$edge_env\"
+  else
+    printf '%s=%s\\n' '${edge_key}' '${edge_value}' >> \"\$edge_env\"
+  fi
+  rm -f \"\$edge_env.bak\"
+
+  EDGE_COMPOSE_BIN=\"docker compose --project-name cogni-edge --env-file \$edge_env -f /opt/cogni-template-edge/docker-compose.yml\" \\
+  CADDYFILE=\"\$caddyfile\" \\
+  EDGE_ENV_FILE=\"\$edge_env\" \\
+  HASH_DIR=/var/lib/cogni \\
+    bash /tmp/reconcile-edge-caddy.remote.sh >/dev/null
+"
+else
+  mark_row caddyfile skipped "external placement: Caddy/NodePort edge mutation not applicable"
+fi
 
 # Born-observable: re-push the Alloy runtime config (the nodeId→`node` Loki
 # stream-label promotion, task.5028) + the shared hash-gated restart helper, so
@@ -441,21 +474,10 @@ fi
 
 CURRENT_ROW="remote_reconcile"
 remote "set -euo pipefail
-  edge_env=/opt/cogni-template-edge/.env
   runtime_env=/opt/cogni-template-runtime/.env
-  caddyfile=/opt/cogni-template-edge/configs/Caddyfile.tmpl
   runtime_compose=(docker compose --project-name cogni-runtime --env-file \"\$runtime_env\" -f /opt/cogni-template-runtime/docker-compose.yml)
 
-  mkdir -p /opt/cogni-template-edge/configs
-  mv '/tmp/Caddyfile.${DEPLOY_ENVIRONMENT}.${TARGET_NODE}.tmpl' \"\$caddyfile\"
-
-  touch \"\$edge_env\"
-  if grep -qE '^${edge_key}=' \"\$edge_env\"; then
-    sed -i.bak 's|^${edge_key}=.*$|${edge_key}=${edge_value}|' \"\$edge_env\"
-  else
-    printf '%s=%s\n' '${edge_key}' '${edge_value}' >> \"\$edge_env\"
-  fi
-  rm -f \"\$edge_env.bak\"
+${edge_reconcile_snippet}
 
   touch \"\$runtime_env\"
   current=\$(awk -F= '/^COGNI_NODE_DBS=/ {print substr(\$0, length(\"COGNI_NODE_DBS=\") + 1)}' \"\$runtime_env\" | tail -1)
@@ -472,18 +494,6 @@ remote "set -euo pipefail
     printf '%s=%s\n' COGNI_NODE_DBS \"\$next\" >> \"\$runtime_env\"
   fi
   rm -f \"\$runtime_env.bak\"
-
-  # Edge reconcile — the SAME shared helper deploy-infra runs: start-if-down on a
-  # fresh substrate (first node, no caddy yet), else hash-gated force-recreate so
-  # a new node's <SLUG>_DOMAIN actually lands (graceful 'caddy reload' resolves it
-  # to empty — Caddy's env is frozen at container start). The hash-gate means an
-  # unchanged Caddyfile + edge .env is a no-op, so per-flight reconciles no longer
-  # bounce the shared edge for every sibling (task.5078 follow-up, now folded).
-  EDGE_COMPOSE_BIN=\"docker compose --project-name cogni-edge --env-file \$edge_env -f /opt/cogni-template-edge/docker-compose.yml\" \\
-  CADDYFILE=\"\$caddyfile\" \\
-  EDGE_ENV_FILE=\"\$edge_env\" \\
-  HASH_DIR=/var/lib/cogni \\
-    bash /tmp/reconcile-edge-caddy.remote.sh >/dev/null
 
   # Alloy node-label reconcile — stage the fresh config (rsync's restart-on-change
   # half) then the SAME hash-gated restart deploy-infra runs. Born-observable on
@@ -518,6 +528,6 @@ remote "set -euo pipefail
       ${dg_pw_env} doltgres-provision >/dev/null
 ${dolt_mirror_reconcile_snippet}  fi"
 
-mark_row remote_reconcile updated "edge route, DB inventory, and DB provisioners reconciled on VM"
+mark_row remote_reconcile updated "${DEPLOYMENT_PROVIDER} placement steps, DB inventory, and DB provisioners reconciled on VM"
 log "substrate ready inputs reconciled for ${TARGET_NODE} (${DEPLOY_ENVIRONMENT})"
 write_summary success

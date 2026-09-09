@@ -452,8 +452,13 @@ log_info "Edge routing (catalog-driven): ${EDGE_ENV_LINES}"
 # target each node's VM NodePort and include both slug + UUID aliases. Compute
 # from catalog on the runner; the remote VM script consumes only the rendered
 # string and does not need catalog helper functions.
+#
+# bug.5094 — LiteLLM is Cherry-resident, so it is a node-addressing consumer like
+# any other: a node whose catalog row places it on akash for THIS env has no
+# NodePort on this VM, and is reached at its public URL instead. Placement comes
+# from the row (deployment_provider.<env>), never a second list of nodes.
 LITELLM_NODE_HOST="${DEPLOY_ENVIRONMENT}.vm.cognidao.org"
-LITELLM_NODE_ENDPOINTS="$(node_billing_endpoint_csv "$LITELLM_NODE_HOST")"
+LITELLM_NODE_ENDPOINTS="$(node_billing_endpoint_csv "$LITELLM_NODE_HOST" "$DEPLOY_ENVIRONMENT" "$DOMAIN")"
 log_info "LiteLLM callback routing (catalog-driven): ${LITELLM_NODE_ENDPOINTS}"
 # LiteLLM image is a type:infra catalog target — content-hash tagged + built in
 # CI (no manual docker build / hand-pin). Resolve the same tag CI pushed.

@@ -6,6 +6,9 @@
  * Purpose: Project merged catalog nodes into one environment's PostgreSQL registry.
  * Scope: Resolves env-local users by wallet and upserts catalog-owned node fields.
  * Invariants:
+ *   - PLACEMENT_IS_CATALOG_OWNED: `deployment_providers` is overwritten from the row on EVERY
+ *     reconcile (bug.5106). Placement is git intent — moving a node between providers is a catalog
+ *     edit that must reach the registry the address resolver reads, including back to `{}` (k3s).
  *   - OWNER_WALLET_IS_STABLE_BINDING: never imports a users.id from another environment.
  *   - NODE_ID_IS_DEPLOYMENT_IDENTITY: an existing slug with another ID fails loud.
  *   - STATUS_NEVER_REGRESSES: status is `published` only on first insert and is omitted on update.
@@ -56,6 +59,7 @@ export class DrizzleCatalogNodeRegistryAdapter
             ownerUserId,
             deployEnvs: [...definition.deployEnvs],
             activityEnv: definition.activityEnv,
+            deploymentProviders: { ...definition.deploymentProviders },
             status: "published",
           })
           .onConflictDoUpdate({
@@ -68,6 +72,7 @@ export class DrizzleCatalogNodeRegistryAdapter
               ownerUserId,
               deployEnvs: [...definition.deployEnvs],
               activityEnv: definition.activityEnv,
+              deploymentProviders: { ...definition.deploymentProviders },
               updatedAt: new Date(),
             },
           })

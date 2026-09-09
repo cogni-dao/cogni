@@ -15,6 +15,13 @@
 # The VM IP is read from the env apex (operator) A record — node records always
 # point exactly where the operator host points. Override with VM_IP=... .
 #
+# PLACEMENT_OWNS_DNS (story.5016): only a node the catalog places on `k3s` for
+# this env lives at the VM IP. A node placed on an external provider (akash) has
+# its host CNAME'd to the provider by the operator's ComputeWorkload DNS
+# reconciler, so this loop SKIPS it — one writer per record. The workflows also
+# hand this script a k3s-only catalog projection; the skip makes the script
+# correct on its own (it is a documented manual lever too).
+#
 # Idempotent: re-running upserts to the same final state (no-op when records
 # already match). --check is the drift gate: assert every type:node already
 # resolves to the VM IP; non-zero exit lists what is missing.
@@ -64,7 +71,7 @@ append_dns_record() {
     DNS_HOST="$host" \
     DNS_STATE="${state:-}" \
     DNS_CONTENT="${content:-}" \
-    DNS_EXPECTED="$VM_IP" \
+    DNS_EXPECTED="${expected:-}" \
     python3 - <<'PY' >>"$records_tmp" || true
 import json
 import os
@@ -197,13 +204,34 @@ for node in "${NODE_TARGETS[@]}"; do
   # a per-node concern — skip it here.
   is_primary_host "$node" && continue
   host="$(host_for_node "$node" "$DOMAIN")"
+  expected="$VM_IP"
+  # PLACEMENT_OWNS_DNS (story.5016): this loop maps a node host onto the env VM,
+  # which is only true for a k3s-placed node. A node the catalog places on an
+  # external provider has its host CNAME'd to the provider by the operator's
+  # ComputeWorkload DNS reconciler — two writers on one record is a Cloudflare
+  # type conflict that hard-fails the whole env's promote. Placement decides the
+  # owner; the same reader the flight/promote planner uses decides placement.
+  if ! is_k3s_placed "$node" "$DEPLOY_ENV"; then
+    provider="$(deployment_provider_for_target "$node" "$DEPLOY_ENV")"
+    echo "  external ${host} (placement=${provider}; DNS owned by the compute workload controller)"
+    state="external"
+    content=""
+    expected=""
+    append_dns_record
+    continue
+  fi
   if $CHECK; then
     content=$(cf_a_record_content "$CLOUDFLARE_API_TOKEN" "$CLOUDFLARE_ZONE_ID" "$host")
     if [ "$content" = "$VM_IP" ]; then
       echo "  ok       ${host} → ${VM_IP}"
       state="ok"
     else
-      echo "  MISSING  ${host} (resolves to '${content:-none}', want ${VM_IP})"
+      # An empty A read is ambiguous: unclaimed, or claimed by a foreign record
+      # type. Name the live type so a mis-placed host reads as a conflict, never
+      # as "just missing" (which would send an operator to run the upsert lane).
+      live_type=""
+      [ -n "$content" ] || live_type=$(cf_record_type "$CLOUDFLARE_API_TOKEN" "$CLOUDFLARE_ZONE_ID" "$host")
+      echo "  MISSING  ${host} (resolves to '${content:-none}'${live_type:+; live ${live_type} record}, want ${VM_IP})"
       state="missing"
       missing+=("$host")
     fi

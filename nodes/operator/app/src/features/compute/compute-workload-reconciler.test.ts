@@ -7,6 +7,7 @@ import {
   COMPUTE_WORKLOAD_FINALIZER,
   ComputeLifecycleError,
   type ComputeWorkload,
+  type ComputeWorkloadAttemptReceipt,
   type ComputeWorkloadDnsPort,
   type ComputeWorkloadLifecyclePort,
   type ComputeWorkloadSecretResolverPort,
@@ -14,6 +15,7 @@ import {
   type ComputeWorkloadStatus,
   computeWorkloadIdempotencyKey,
   decodeAttemptReceipt,
+  encodeAttemptReceipt,
 } from "@/ports";
 import {
   type ComputeWorkloadReconcileDeps,
@@ -680,6 +682,15 @@ describe("reconcileComputeWorkload", () => {
       message: "external compute provider credential is not configured",
       retryable: false,
     });
+
+    await run(state, port);
+
+    expect(port.create).toHaveBeenCalledTimes(1);
+    expect(state.current.status?.failure).toEqual({
+      reason: "ProviderCredentialMissing",
+      message: "external compute provider credential is not configured",
+      retryable: false,
+    });
   });
 
   it("persists and emits a safe known boot failure", async () => {
@@ -857,6 +868,484 @@ describe("reconcileComputeWorkload", () => {
     expect(state.current.status?.failure).toMatchObject({
       reason: "SecretResolverUnavailable",
       retryable: true,
+    });
+  });
+
+  it("retries a definitive pre-allocation failure after its prerequisite recovers", async () => {
+    const state = new MemoryState(workload());
+    const port = lifecycle();
+    await run(state, port, {
+      secretResolver: {
+        resolve: vi.fn(async () => {
+          throw new ComputeLifecycleError(
+            "transient",
+            "SecretResolverUnavailable",
+            true
+          );
+        }),
+      },
+    });
+
+    expect(port.create).not.toHaveBeenCalled();
+    expect(
+      decodeAttemptReceipt(
+        state.current.metadata.annotations?.[
+          COMPUTE_WORKLOAD_ATTEMPT_ANNOTATION
+        ]
+      )
+    ).toMatchObject({
+      operation: "create",
+      outcome: "known_failure",
+      retryCount: 0,
+    });
+
+    await run(state, port);
+
+    expect(port.create).toHaveBeenCalledTimes(1);
+    expect(state.current.status).toMatchObject({
+      phase: "Progressing",
+      resource: { id: "lease-42" },
+      attempt: {
+        operation: "create",
+        outcome: "succeeded",
+        retryCount: 1,
+      },
+    });
+    const completedReceipt = decodeAttemptReceipt(
+      state.current.metadata.annotations?.[COMPUTE_WORKLOAD_ATTEMPT_ANNOTATION]
+    );
+    expect(completedReceipt).toMatchObject({
+      key: state.current.status?.attempt?.key,
+      operation: "create",
+      outcome: "succeeded",
+      resource: { id: "lease-42" },
+    });
+    expect(state.current.status?.failure).toBeUndefined();
+  });
+
+  it("retries a definitive pre-allocation failure already wedged behind OrphanRisk", async () => {
+    const resource = workload();
+    const receipt: ComputeWorkloadAttemptReceipt = {
+      key: computeWorkloadIdempotencyKey({
+        resource,
+        operation: "create",
+        ordinal: 0,
+      }),
+      operation: "create",
+      ordinal: 0,
+      outcome: "known_failure",
+      leaderEpoch: "6:previous-controller",
+      retryCount: 0,
+      startedAt: NOW.toISOString(),
+    };
+    const state = new MemoryState(
+      workload({
+        metadata: {
+          ...resource.metadata,
+          annotations: {
+            [COMPUTE_WORKLOAD_ATTEMPT_ANNOTATION]:
+              encodeAttemptReceipt(receipt),
+          },
+        },
+        status: {
+          phase: "Unknown",
+          desiredGeneration: resource.metadata.generation,
+          attempt: { ...receipt, completedAt: NOW.toISOString() },
+          recoveryCount: 0,
+          failure: {
+            reason: "OrphanRisk",
+            message:
+              "a mutation receipt exists without a durable resource handle; automatic create is blocked",
+            retryable: false,
+          },
+          conditions: [
+            {
+              type: "Ready",
+              status: "Unknown",
+              observedGeneration: resource.metadata.generation,
+              reason: "OrphanRisk",
+              message:
+                "a mutation receipt exists without a durable resource handle; automatic create is blocked",
+              lastTransitionTime: NOW.toISOString(),
+            },
+          ],
+        },
+      })
+    );
+    const port = lifecycle();
+
+    await run(state, port);
+
+    expect(port.create).toHaveBeenCalledTimes(1);
+    expect(state.current.status).toMatchObject({
+      phase: "Progressing",
+      resource: { id: "lease-42" },
+      attempt: {
+        key: receipt.key,
+        operation: "create",
+        outcome: "succeeded",
+        retryCount: 1,
+      },
+    });
+    expect(state.current.status?.failure).toBeUndefined();
+  });
+
+  it("keeps OrphanRisk blocked without a durable replay-safe receipt", async () => {
+    const resource = workload();
+    const attempt: ComputeWorkloadAttemptReceipt = {
+      key: computeWorkloadIdempotencyKey({
+        resource,
+        operation: "create",
+        ordinal: 0,
+      }),
+      operation: "create",
+      ordinal: 0,
+      outcome: "known_failure",
+      leaderEpoch: "6:previous-controller",
+      retryCount: 0,
+      startedAt: NOW.toISOString(),
+    };
+    const state = new MemoryState(
+      workload({
+        status: {
+          phase: "Unknown",
+          desiredGeneration: resource.metadata.generation,
+          attempt: { ...attempt, completedAt: NOW.toISOString() },
+          recoveryCount: 0,
+          failure: {
+            reason: "OrphanRisk",
+            message:
+              "a mutation receipt exists without a durable resource handle; automatic create is blocked",
+            retryable: false,
+          },
+          conditions: [
+            {
+              type: "Ready",
+              status: "Unknown",
+              observedGeneration: resource.metadata.generation,
+              reason: "OrphanRisk",
+              message:
+                "a mutation receipt exists without a durable resource handle; automatic create is blocked",
+              lastTransitionTime: NOW.toISOString(),
+            },
+          ],
+        },
+      })
+    );
+    const port = lifecycle();
+
+    await run(state, port);
+
+    expect(port.create).not.toHaveBeenCalled();
+    expect(state.current.status?.failure).toMatchObject({
+      reason: "OrphanRisk",
+      retryable: false,
+    });
+  });
+
+  it("escalates a re-asserted generation past an exhausted create retry budget", async () => {
+    const resource = workload();
+    const exhaustedKey = computeWorkloadIdempotencyKey({
+      resource,
+      operation: "create",
+      ordinal: 0,
+    });
+    const receipt: ComputeWorkloadAttemptReceipt = {
+      key: exhaustedKey,
+      operation: "create",
+      ordinal: 0,
+      outcome: "known_failure",
+      leaderEpoch: "7:test-controller",
+      retryCount: 2,
+      startedAt: NOW.toISOString(),
+    };
+    const state = new MemoryState(
+      workload({
+        metadata: {
+          ...resource.metadata,
+          annotations: {
+            [COMPUTE_WORKLOAD_ATTEMPT_ANNOTATION]:
+              encodeAttemptReceipt(receipt),
+          },
+        },
+        status: {
+          phase: "Failed",
+          desiredGeneration: resource.metadata.generation,
+          attempt: { ...receipt, completedAt: NOW.toISOString() },
+          recoveryCount: 0,
+          failure: {
+            reason: "RetryLimitExceeded",
+            message: "known-outcome retry limit was exceeded",
+            retryable: false,
+          },
+          conditions: [],
+        },
+      })
+    );
+    const port = lifecycle();
+
+    await run(state, port);
+
+    expect(port.create).toHaveBeenCalledTimes(1);
+    // The exhausted budget belongs to the create key; recovery gets its own namespace.
+    expect(port.create.mock.calls[0]?.[0].idempotencyKey).not.toBe(
+      exhaustedKey
+    );
+    expect(port.create.mock.calls[0]?.[0].idempotencyKey).toBe(
+      computeWorkloadIdempotencyKey({
+        resource,
+        operation: "recover",
+        ordinal: 1,
+      })
+    );
+    expect(state.current.status).toMatchObject({
+      phase: "Progressing",
+      resource: { id: "lease-42" },
+      recoveryCount: 1,
+      attempt: { operation: "recover", ordinal: 1, outcome: "succeeded" },
+    });
+    expect(state.current.status?.failure).toBeUndefined();
+  });
+
+  it("bounds handle-less retry-budget escalation at three recovery allocations", async () => {
+    const resource = workload();
+    const state = new MemoryState(
+      workload({
+        metadata: {
+          ...resource.metadata,
+          annotations: {
+            [COMPUTE_WORKLOAD_ATTEMPT_ANNOTATION]: encodeAttemptReceipt({
+              key: computeWorkloadIdempotencyKey({
+                resource,
+                operation: "create",
+                ordinal: 0,
+              }),
+              operation: "create",
+              ordinal: 0,
+              outcome: "known_failure",
+              leaderEpoch: "7:test-controller",
+              retryCount: 2,
+              startedAt: NOW.toISOString(),
+            }),
+          },
+        },
+        status: {
+          phase: "Failed",
+          desiredGeneration: resource.metadata.generation,
+          attempt: {
+            key: computeWorkloadIdempotencyKey({
+              resource,
+              operation: "create",
+              ordinal: 0,
+            }),
+            operation: "create",
+            ordinal: 0,
+            outcome: "known_failure",
+            retryCount: 2,
+            leaderEpoch: "7:test-controller",
+            startedAt: NOW.toISOString(),
+            completedAt: NOW.toISOString(),
+          },
+          recoveryCount: 0,
+          failure: {
+            reason: "RetryLimitExceeded",
+            message: "known-outcome retry limit was exceeded",
+            retryable: false,
+          },
+          conditions: [],
+        },
+      })
+    );
+    const port = lifecycle();
+    // A retryable known failure is exactly what burns a per-key budget in production.
+    port.create.mockRejectedValue(
+      new ComputeLifecycleError("terminal", "ProviderTransient", true)
+    );
+    const recordRecoveryLimit = vi.fn();
+
+    for (let pass = 0; pass < 24; pass += 1) {
+      await run(state, port, { recordRecoveryLimit });
+    }
+
+    const ordinals = new Set(
+      port.create.mock.calls.map((call) => call[0].idempotencyKey)
+    );
+    expect([...ordinals]).toEqual([
+      computeWorkloadIdempotencyKey({
+        resource,
+        operation: "recover",
+        ordinal: 1,
+      }),
+      computeWorkloadIdempotencyKey({
+        resource,
+        operation: "recover",
+        ordinal: 2,
+      }),
+      computeWorkloadIdempotencyKey({
+        resource,
+        operation: "recover",
+        ordinal: 3,
+      }),
+    ]);
+    expect(state.current.status?.phase).toBe("Failed");
+    expect(state.current.status?.failure?.reason).toBe("RecoveryLimitExceeded");
+    expect(state.current.status?.recoveryCount).toBe(3);
+    expect(recordRecoveryLimit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        recoveryCount: 3,
+        outcomeCode: "RecoveryLimitExceeded",
+      })
+    );
+
+    const createsAtLimit = port.create.mock.calls.length;
+    await run(state, port, { recordRecoveryLimit });
+    expect(port.create.mock.calls.length).toBe(createsAtLimit);
+  });
+
+  it("keeps an exhausted retry budget blocked when the last outcome was not definitive", async () => {
+    const resource = workload();
+    const receipt: ComputeWorkloadAttemptReceipt = {
+      key: computeWorkloadIdempotencyKey({
+        resource,
+        operation: "create",
+        ordinal: 0,
+      }),
+      operation: "create",
+      ordinal: 0,
+      outcome: "unknown",
+      leaderEpoch: "7:test-controller",
+      retryCount: 2,
+      startedAt: NOW.toISOString(),
+    };
+    const state = new MemoryState(
+      workload({
+        metadata: {
+          ...resource.metadata,
+          annotations: {
+            [COMPUTE_WORKLOAD_ATTEMPT_ANNOTATION]:
+              encodeAttemptReceipt(receipt),
+          },
+        },
+        status: {
+          phase: "Failed",
+          desiredGeneration: resource.metadata.generation,
+          attempt: { ...receipt, completedAt: NOW.toISOString() },
+          recoveryCount: 0,
+          failure: {
+            reason: "RetryLimitExceeded",
+            message: "known-outcome retry limit was exceeded",
+            retryable: false,
+          },
+          conditions: [],
+        },
+      })
+    );
+    const port = lifecycle();
+
+    await run(state, port);
+
+    expect(port.create).not.toHaveBeenCalled();
+    expect(state.current.status).toMatchObject({
+      phase: "Unknown",
+      failure: { reason: "OrphanRisk", retryable: false },
+    });
+  });
+
+  it("retries a definitive recover failure when no resource handle exists", async () => {
+    const receipt: ComputeWorkloadAttemptReceipt = {
+      key: "recover-known-failure",
+      operation: "recover",
+      ordinal: 1,
+      outcome: "known_failure",
+      leaderEpoch: "7:test-controller",
+      retryCount: 0,
+      startedAt: NOW.toISOString(),
+    };
+    const state = new MemoryState(
+      workload({
+        metadata: {
+          ...workload().metadata,
+          annotations: {
+            [COMPUTE_WORKLOAD_ATTEMPT_ANNOTATION]:
+              encodeAttemptReceipt(receipt),
+          },
+        },
+      })
+    );
+    const port = lifecycle();
+
+    await run(state, port);
+
+    expect(port.create).toHaveBeenCalledTimes(1);
+    expect(state.current.status).toMatchObject({
+      resource: { id: "lease-42" },
+      recoveryCount: 1,
+      attempt: { operation: "recover", outcome: "succeeded" },
+    });
+  });
+
+  it.each([
+    ["create", "unknown"],
+    ["create", "prepared"],
+    ["create", "allocated"],
+    ["update", "known_failure"],
+    ["delete", "known_failure"],
+  ] as const)("keeps an ambiguous %s/%s receipt behind OrphanRisk", async (operation, outcome) => {
+    const receipt: ComputeWorkloadAttemptReceipt = {
+      key: `${operation}-${outcome}`,
+      operation,
+      ordinal: 0,
+      outcome,
+      leaderEpoch: "7:test-controller",
+      retryCount: 0,
+      startedAt: NOW.toISOString(),
+    };
+    const state = new MemoryState(
+      workload({
+        metadata: {
+          ...workload().metadata,
+          annotations: {
+            [COMPUTE_WORKLOAD_ATTEMPT_ANNOTATION]:
+              encodeAttemptReceipt(receipt),
+          },
+        },
+      })
+    );
+    const port = lifecycle();
+
+    await run(state, port);
+
+    expect(port.create).not.toHaveBeenCalled();
+    expect(port.update).not.toHaveBeenCalled();
+    expect(port.delete).not.toHaveBeenCalled();
+    expect(port.recoverCreate).not.toHaveBeenCalled();
+    expect(state.current.status).toMatchObject({
+      phase: "Unknown",
+      failure: { reason: "OrphanRisk", retryable: false },
+    });
+  });
+
+  it("keeps an undecodable mutation marker behind OrphanRisk", async () => {
+    const state = new MemoryState(
+      workload({
+        metadata: {
+          ...workload().metadata,
+          annotations: {
+            [COMPUTE_WORKLOAD_ATTEMPT_ANNOTATION]: "legacy-marker",
+          },
+        },
+      })
+    );
+    const port = lifecycle();
+
+    await run(state, port);
+
+    expect(port.create).not.toHaveBeenCalled();
+    expect(port.update).not.toHaveBeenCalled();
+    expect(port.delete).not.toHaveBeenCalled();
+    expect(state.current.status).toMatchObject({
+      phase: "Unknown",
+      failure: { reason: "OrphanRisk", retryable: false },
     });
   });
 

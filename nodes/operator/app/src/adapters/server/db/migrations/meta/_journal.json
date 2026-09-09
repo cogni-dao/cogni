@@ -309,6 +309,13 @@
       "when": 1788241554347,
       "tag": "0043_true_richard_fisk",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1788470513866,
+      "tag": "0044_lush_lady_mastermind",
+      "breakpoints": true
     }
   ]
 }

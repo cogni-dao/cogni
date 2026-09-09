@@ -22,8 +22,8 @@ export interface EpochsRead {
   /**
    * GET the given node's epochs from its `/api/internal/attribution/epochs`. Resolves with the
    * node's own epoch page on 2xx; throws (classified retryable-vs-permanent) otherwise, or if
-   * the node's app is unreachable. The in-cluster URL is derived from `slug` by
-   * convention (`internalNodeAppUrl`), mirroring the receipt-delivery write twin.
+   * the node's app is unreachable. The base URL is resolved from the node's DECLARED placement
+   * via `NodeAddressPort`, mirroring the receipt-delivery write twin (bug.5106).
    */
   listEpochsForForeignNode(
     slug: string,

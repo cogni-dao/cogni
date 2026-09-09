@@ -140,7 +140,8 @@ export const serverSchema = z.object({
   SCHEDULER_API_TOKEN: z.string().min(32),
 
   // NOTE: the operator app does NOT read a static COGNI_NODE_ENDPOINTS map. NORTH_STAR — the
-  // operator resolves node URLs from its OWN DB registry (listRoutableNodes → internalNodeAppUrl).
+  // operator resolves nodes from its OWN DB registry (listRoutableNodes) and their ADDRESS from
+  // each node's declared placement (NodeAddressPort → deployment_provider, bug.5106).
   // The static COGNI_NODE_ENDPOINTS configmap is only for the DB-less scheduler-worker.
 
   // Internal ops token - Bearer auth for deploy-time internal operations endpoints

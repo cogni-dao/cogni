@@ -266,9 +266,9 @@ describe("GET /api/v1/nodes/[id]/attribution/epochs", () => {
         expect(() => listEpochsOperation.output.parse(body)).not.toThrow();
         expect(body.total).toBe(1);
         expect(body.epochs[0].id).toBe("1");
-        // Proxied by the resolved foreign node's SLUG — that is what derives the in-cluster
-        // URL (`internalNodeAppUrl`), mirroring the receipt-delivery write twin — with the
-        // parsed pagination, and NOT a local store read.
+        // Proxied by the resolved foreign node's SLUG — the adapter turns that slug into an
+        // address via the node's declared placement (`NodeAddressPort`, bug.5106), mirroring the
+        // receipt-delivery write twin — with the parsed pagination, and NOT a local store read.
         expect(mockEpochsRead.listEpochsForForeignNode).toHaveBeenCalledWith(
           FOREIGN_NODE_SLUG,
           { limit: 50, offset: 0 }

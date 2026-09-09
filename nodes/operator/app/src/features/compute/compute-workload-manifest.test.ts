@@ -5,11 +5,15 @@ import type { ResolvedNodeArtifactBundle } from "@cogni/repo-spec";
 import { describe, expect, it } from "vitest";
 
 import { buildComputeWorkloadManifest } from "./compute-workload-manifest";
+import { COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS } from "./node-services-workload-spec";
 
 const SHA = "a".repeat(40);
 const DIGEST = "b".repeat(64);
 const BUNDLE_DIGEST = "c".repeat(64);
 const NODE_ID = "72aa130b-f0ad-495a-a061-9ee1f9c9525d";
+const REQUIRED_SECRET_REFS = COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS.map(
+  (key) => ({ key })
+);
 
 const bundle: ResolvedNodeArtifactBundle = {
   nodeId: NODE_ID,
@@ -37,7 +41,7 @@ const bundle: ResolvedNodeArtifactBundle = {
         visibility: "public",
         runtimeProfile: "cogni-node-app-v1",
         bindings: { WORKER_URL: "worker" },
-        secretRefs: [{ key: "DATABASE_URL" }, { key: "LITELLM_VIRTUAL_KEY" }],
+        secretRefs: REQUIRED_SECRET_REFS,
         bindHost: "0.0.0.0",
         internalUrl: "http://web:3200",
         resources: { cpuUnits: 0.5, memoryMi: 1024, storageMi: 2048 },
@@ -99,7 +103,7 @@ describe("buildComputeWorkloadManifest", () => {
         runtimeProfile: "cogni-node-app-v1",
         bindings: { WORKER_URL: "worker" },
         bindHost: "0.0.0.0",
-        secretRefs: [{ key: "DATABASE_URL" }, { key: "LITELLM_VIRTUAL_KEY" }],
+        secretRefs: REQUIRED_SECRET_REFS,
       }),
       expect.objectContaining({
         name: "worker",
@@ -126,5 +130,28 @@ describe("buildComputeWorkloadManifest", () => {
         publicHost: "toks4-test.cognidao.org",
       })
     ).toThrow("digest-pinned OCI reference");
+  });
+
+  it("rejects an incomplete runtime profile before rendering desired state", () => {
+    const incompleteBundle: ResolvedNodeArtifactBundle = {
+      ...bundle,
+      services: bundle.services.map(({ service, ...resolved }, index) => ({
+        ...resolved,
+        service:
+          index === 0
+            ? { ...service, secretRefs: [{ key: "AUTH_SECRET" }] }
+            : service,
+      })),
+    };
+
+    expect(() =>
+      buildComputeWorkloadManifest({
+        slug: "toks4",
+        environment: "candidate-a",
+        bundleRef: `ghcr.io/cogni-dao/toks4@sha256:${BUNDLE_DIGEST}`,
+        bundle: incompleteBundle,
+        publicHost: "toks4-test.cognidao.org",
+      })
+    ).toThrow(/cogni-node-app-v1 is missing secret_refs/);
   });
 });

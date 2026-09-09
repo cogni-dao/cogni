@@ -1429,6 +1429,39 @@ patches:
         if (path === ".gitmodules") {
           return Promise.reject(statusError(404, "not found"));
         }
+        // bug.5094 — the GENERATED per-env scheduler-worker routing patch. A birth
+        // must splice the new node into EVERY deploy env's map (and the shared base
+        // default), else the PR is drift-red vs render-scheduler-worker-endpoints.sh
+        // AND the node is unrouted wherever it later deploys.
+        const endpointsEnv = path.match(
+          /^infra\/k8s\/overlays\/([^/]+)\/scheduler-worker\/node-endpoints\.patch\.yaml$/
+        )?.[1];
+        if (endpointsEnv !== undefined) {
+          return {
+            type: "file",
+            encoding: "base64",
+            content: encode(`apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: scheduler-worker-config
+data:
+  COGNI_NODE_ENDPOINTS: "node-template=http://node-template-node-app:3000,b927a9dd-6132-4fc9-a51e-e3cee2568e3c=http://node-template-node-app:3000"
+`),
+          };
+        }
+        if (path === "infra/k8s/base/scheduler-worker/configmap.yaml") {
+          return {
+            type: "file",
+            encoding: "base64",
+            content: encode(`apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: scheduler-worker-config
+data:
+  COGNI_NODE_ENDPOINTS: "node-template=http://node-template-node-app:3000,b927a9dd-6132-4fc9-a51e-e3cee2568e3c=http://node-template-node-app:3000"
+`),
+          };
+        }
         if (path.startsWith("infra/k8s/overlays/")) {
           const env = path.split("/")[3];
           return {
@@ -1587,6 +1620,27 @@ node_port: 30200
           )
         ).toBe(false);
 
+        // ROUTING DRIFT-GREEN PROOF (bug.5094): the publish PR MUST splice the new node into
+        // the shared base default AND every deploy env's provider-resolved map. Splicing base
+        // alone leaves the PR drift-red (render-scheduler-worker-endpoints.sh --check) and the
+        // node unrouted in preview/production. A birth is always k3s → in-cluster convention.
+        for (const routingPath of [
+          "infra/k8s/base/scheduler-worker/configmap.yaml",
+          "infra/k8s/overlays/candidate-a/scheduler-worker/node-endpoints.patch.yaml",
+          "infra/k8s/overlays/preview/scheduler-worker/node-endpoints.patch.yaml",
+          "infra/k8s/overlays/production/scheduler-worker/node-endpoints.patch.yaml",
+        ]) {
+          const routingEntry = tree.find((item) => item.path === routingPath);
+          expect(routingEntry, routingPath).toBeDefined();
+          const routing = blobs.get(routingEntry?.sha ?? "");
+          expect(routing, routingPath).toContain(
+            "atlas=http://atlas-node-app:3000,11111111-1111-4111-8111-111111111111=http://atlas-node-app:3000"
+          );
+          expect(routing, routingPath).toContain(
+            "node-template=http://node-template-node-app:3000"
+          );
+        }
+
         // ROSTER DRIFT-GREEN PROOF (#1957): the publish PR MUST splice the new node into the
         // committed web-node roster in the SAME tree as the catalog row it adds — else the
         // network-nodes-catalog-drift gate fails `unit` and the auto-PR is un-mergeable. Assert
@@ -1677,6 +1731,8 @@ source_repo: https://github.com/Cogni-DAO/atlas.git
 path_prefix: nodes/atlas/
 envs: [candidate-a]
 activity_env: candidate-a
+deployment_provider:
+  candidate-a: akash
 owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
 `,
           "infra/catalog/operator.yaml": `name: operator
@@ -1710,6 +1766,9 @@ owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
         repoName: "atlas",
         deployEnvs: ["candidate-a"],
         activityEnv: "candidate-a",
+        // bug.5106 — declared placement is projected so the operator can resolve WHERE this
+        // node runs without reading the catalog on the hot path.
+        deploymentProviders: { "candidate-a": "akash" },
         ownerWallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949",
       },
       {
@@ -1720,9 +1779,47 @@ owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
         repoName: "cogni",
         deployEnvs: ["candidate-a", "preview", "production"],
         activityEnv: "production",
+        // No `deployment_provider` row ⇒ empty map ⇒ K3S_IS_DEFAULT everywhere.
+        deploymentProviders: {},
         ownerWallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949",
       },
     ]);
+  });
+
+  it("fails loud on a deployment_provider outside the declared vocabulary (bug.5106)", async () => {
+    const sourceRef = "0123456789012345678901234567890123456789";
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": (params) => {
+        if (params.path === "infra/catalog") {
+          return [{ name: "atlas.yaml", type: "file" }];
+        }
+        return {
+          type: "file",
+          encoding: "base64",
+          content: encode(`name: atlas
+type: node
+node_id: 11111111-1111-4111-8111-111111111111
+source_repo: https://github.com/Cogni-DAO/atlas.git
+path_prefix: nodes/atlas/
+envs: [candidate-a]
+activity_env: candidate-a
+deployment_provider:
+  candidate-a: fly-io
+owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
+`),
+        };
+      },
+    };
+
+    // A placement the address resolver cannot honour must never reach the registry as a silent
+    // k3s default — one bad row fails the whole reconcile, like every other malformed field.
+    await expect(
+      makeWriter().listCatalogNodes({
+        parentOwner: "Cogni-DAO",
+        parentRepo: "cogni",
+        sourceRef,
+      })
+    ).rejects.toMatchObject({ code: "invalid_catalog", status: 409 });
   });
 
   it("rejects an invalid in-repo node identity", async () => {
@@ -2822,6 +2919,79 @@ describe("GitHubRepoWriter.syncCanonicalFilesToFork", () => {
       branch: BRANCH,
       prNumber: 9,
     });
+  });
+
+  // task.5078 — the Tier-1 lists are ROOTS, not the delivered set. A workflow that invokes a script,
+  // and a contract barrel that re-exports a module, must carry those files in the SAME sync or the
+  // fork receives a build that cannot run (no fork but node-template could publish an Akash bundle).
+  it("delivers the transitive closure of the declared roots (TIER1_IS_CLOSED)", async () => {
+    const source = {
+      ".github/workflows/pr-build.yml":
+        'jobs:\n  manifest:\n    steps:\n      - run: node "$GITHUB_WORKSPACE/scripts/ci/record-node-bundle-publication.mjs"\n',
+      "scripts/ci/record-node-bundle-publication.mjs":
+        'import { readFileSync } from "node:fs";\n',
+      "packages/repo-spec/src/index.ts":
+        'export { buildNodeArtifactBundle } from "./artifact-bundle.js";\n',
+      "packages/repo-spec/src/artifact-bundle.ts": 'import { z } from "zod";\n',
+      "packages/repo-spec/package.json": '{ "name": "@cogni/repo-spec" }\n',
+    };
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": contentsHandler(source, {}),
+      "POST /repos/{owner}/{repo}/git/blobs": () => ({ sha: "blob" }),
+      "GET /repos/{owner}/{repo}/git/ref/{ref}": () => ({
+        object: { sha: "fork-main" },
+      }),
+      "GET /repos/{owner}/{repo}/git/commits/{commit_sha}": () => ({
+        tree: { sha: "fork-tree" },
+      }),
+      "POST /repos/{owner}/{repo}/git/trees": () => ({ sha: "mirror-tree" }),
+      "POST /repos/{owner}/{repo}/git/commits": () => ({
+        sha: "mirror-commit",
+      }),
+      "POST /repos/{owner}/{repo}/git/refs": () => ({}),
+      "POST /repos/{owner}/{repo}/pulls": () => ({
+        number: 11,
+        html_url: "https://github.com/cogni-test-org/test-cog/pull/11",
+      }),
+      "PATCH /repos/{owner}/{repo}/pulls/{pull_number}": () => ({}),
+    };
+
+    const result = await makeWriter().syncCanonicalFilesToFork({
+      ...syncInput(),
+      canonicalPaths: [
+        ".github/workflows/pr-build.yml",
+        "packages/repo-spec/src/index.ts",
+      ],
+    });
+
+    expect(result.status).toBe("pr_opened");
+    expect(result.changedPaths).toEqual([
+      ".github/workflows/pr-build.yml",
+      "packages/repo-spec/src/index.ts",
+      // Derived — never hand-listed, and exactly what the forks were missing.
+      "scripts/ci/record-node-bundle-publication.mjs",
+      "packages/repo-spec/src/artifact-bundle.ts",
+      "packages/repo-spec/package.json",
+    ]);
+  });
+
+  it("fails closed when a re-exported contract module is absent at the source", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": contentsHandler(
+        {
+          "packages/repo-spec/src/index.ts":
+            'export { buildNodeArtifactBundle } from "./artifact-bundle.js";\n',
+        },
+        {}
+      ),
+    };
+
+    await expect(
+      makeWriter().syncCanonicalFilesToFork({
+        ...syncInput(),
+        canonicalPaths: ["packages/repo-spec/src/index.ts"],
+      })
+    ).rejects.toThrow(/packages\/repo-spec\/src\/artifact-bundle\.ts/);
   });
 });
 

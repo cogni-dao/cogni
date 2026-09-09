@@ -359,6 +359,12 @@ jobs:
       - name: per-node substrate runner tests
         run: bash scripts/ci/tests/run-node-substrate.test.sh
 
+      - name: target substrate assertion tests
+        run: bash scripts/ci/tests/assert-target-substrate.test.sh
+
+      - name: remote-source promotion SHA resolver tests
+        run: bash scripts/ci/tests/resolve-remote-source-sha.test.sh
+
       # task.5078 — catalog-driven edge routing. Asserts the committed Caddyfile
       # is in sync with the catalog (drift gate that makes "add a node = 1
       # catalog PR" enforceable), every type:node has an edge block (canary

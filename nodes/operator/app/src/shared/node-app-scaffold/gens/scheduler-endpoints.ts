@@ -4,12 +4,15 @@
 /**
  * Module: `@shared/node-app-scaffold/gens/scheduler-endpoints`
  * Purpose: Pure port of `scripts/ci/render-scheduler-worker-endpoints.sh`'s per-node insert, so
- *   the operator can author a node-formation PR's `scheduler-worker/configmap.yaml` edit without a
- *   repo checkout or running bash + yq.
- * Scope: Given the CURRENT committed `infra/k8s/base/scheduler-worker/configmap.yaml` and a new
- *   node's slug + node_id (uuid), return the new configmap byte-identical to what
+ *   the operator can author a node-formation PR's scheduler-worker routing edits without a repo
+ *   checkout or running bash + yq.
+ * Scope: Given ANY currently-committed ConfigMap document carrying a quoted `COGNI_NODE_ENDPOINTS`
+ *   line — the shared base `infra/k8s/base/scheduler-worker/configmap.yaml` AND each deploy env's
+ *   generated `infra/k8s/overlays/<env>/scheduler-worker/node-endpoints.patch.yaml` (bug.5094) —
+ *   plus a new node's slug + node_id (uuid), return the new document byte-identical to what
  *   `pnpm gen:scheduler-worker-endpoints` produces once that node joins the catalog with that
- *   node_id in its repo-spec.
+ *   node_id in its repo-spec. A birth is always k3s (`deployment_provider` absent →
+ *   K3S_IS_DEFAULT), so the in-cluster URL below is the correct insert for every one of them.
  * Invariants: CATALOG_IS_SSOT + REPO_SPEC_IS_IDENTITY_SSOT — the rendered CSV mirrors
  *   `node_internal_service_endpoint_csv` exactly: per node, a `<slug>=<url>` entry immediately
  *   followed by a `<node_id>=<url>` alias, ordered by NODE_TARGETS (catalog `*.yaml` glob ==

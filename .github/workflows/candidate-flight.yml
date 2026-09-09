@@ -54,6 +54,8 @@ jobs:
       has_image_inputs: ${{ steps.flight-targets.outputs.has_image_inputs }}
       substrate_node_targets_json: ${{ steps.substrate-targets.outputs.k3s_node_targets_json }}
       has_substrate_node_targets: ${{ steps.substrate-targets.outputs.has_k3s_node_targets }}
+      preflight_node_targets_json: ${{ steps.substrate-targets.outputs.substrate_node_targets_json }}
+      has_preflight_node_targets: ${{ steps.substrate-targets.outputs.has_substrate_node_targets }}
       deployment_node_targets_json: ${{ steps.substrate-targets.outputs.deployment_node_targets_json }}
       has_deployment_node_targets: ${{ steps.substrate-targets.outputs.has_deployment_node_targets }}
       external_compute_node_targets_json: ${{ steps.substrate-targets.outputs.external_compute_node_targets_json }}
@@ -307,7 +309,7 @@ jobs:
           ssh_deploy_key: ${{ secrets.SSH_DEPLOY_KEY }}
 
   prepare-substrate-deploy-branch:
-    needs: [decide, reconcile-compute-egress]
+    needs: [decide, reconcile-compute-egress, external-node-preflight]
     if: |
       always() &&
       needs.decide.result == 'success' &&
@@ -331,6 +333,23 @@ jobs:
           ref: ${{ needs.decide.outputs.head_sha }}
           fetch-depth: 0
           path: app-src
+
+      # External compute must materialize its secrets and prove Akash prerequisites
+      # before this job writes a ComputeWorkload to its watched branch. k3s targets
+      # are absent from EXPECTED_JSON and retain their established post-prepare flow.
+      - name: Download this node's external preflight marker
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.1.8
+        with:
+          name: external-preflight-ok-${{ matrix.node }}
+          path: ${{ runner.temp }}/external-preflight-marker
+      - name: Gate external compute before deploy-branch mutation
+        env:
+          NODE: ${{ matrix.node }}
+          KIND: external-preflight-ok
+          EXPECTED_JSON: ${{ needs.decide.outputs.external_compute_node_targets_json }}
+          MARKER_DIR: ${{ runner.temp }}/external-preflight-marker
+        run: bash app-src/scripts/ci/resolve-substrate-gate.sh
 
       - name: Materialize node source at its catalog pin
         env:
@@ -647,6 +666,118 @@ jobs:
           path: marker-out/assert-ok-${{ matrix.node }}.txt
           retention-days: 1
 
+  external-node-preflight:
+    needs: [decide, reconcile-compute-egress]
+    if: |
+      always() &&
+      needs.decide.outputs.has_external_compute_node_targets == 'true' &&
+      needs.reconcile-compute-egress.result == 'success'
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ${{ fromJson(needs.decide.outputs.external_compute_node_targets_json) }}
+    concurrency:
+      group: external-node-preflight-candidate-a-${{ matrix.node }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    environment: candidate-a
+    env:
+      DEPLOYMENT_PROVIDER: ${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] }}
+    steps:
+      - name: Checkout workflow source
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          path: ci-src
+
+      - name: Checkout app source
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          ref: ${{ needs.decide.outputs.head_sha }}
+          fetch-depth: 0
+          path: app-src
+
+      - name: Materialize node source at its catalog pin
+        env:
+          GH_TOKEN: ${{ secrets.GIT_READ_TOKEN }}
+          NODE: ${{ matrix.node }}
+          NODE_SOURCE_SHA: ${{ needs.decide.outputs.node_source_sha }}
+        run: |
+          set -euo pipefail
+          # Remote-source node: fetch its tree at the catalog source_sha pin into
+          # nodes/<NODE> — no submodule, no gitlink, private-safe (GIT_READ_TOKEN).
+          # In-repo nodes carry no source_repo and are already in app-src.
+          # spec.node-submodule-retirement.
+          catalog="app-src/infra/catalog/${NODE}.yaml"
+          [ -f "$catalog" ] || exit 0
+          src_repo="$(yq -N '.source_repo // ""' "$catalog")"
+          [ -n "$src_repo" ] || exit 0
+          src_sha="${NODE_SOURCE_SHA:-$(yq -N '.source_sha // ""' "$catalog")}"
+          [ -n "$src_sha" ] || { echo "::error::no source_sha for remote-source node ${NODE}"; exit 1; }
+          repo_path="${src_repo#https://github.com/}"; repo_path="${repo_path%.git}"
+          rm -rf "app-src/nodes/${NODE}"
+          git init -q "app-src/nodes/${NODE}"
+          git -C "app-src/nodes/${NODE}" remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${repo_path}.git"
+          git -C "app-src/nodes/${NODE}" fetch -q --depth 1 origin "$src_sha"
+          git -C "app-src/nodes/${NODE}" checkout -q --detach FETCH_HEAD
+
+      - name: Setup SSH to candidate-a VM
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          SSH_DEPLOY_KEY: ${{ secrets.SSH_DEPLOY_KEY }}
+          NODE_SOURCE_SHA: ${{ needs.decide.outputs.node_source_sha }}
+          DEPLOY_ENVIRONMENT: candidate-a
+        run: |
+          set -euo pipefail
+          bash ci-src/scripts/ci/require-node-ref-vm.sh
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          echo "$SSH_DEPLOY_KEY" | tr -d '\r' > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -T 10 -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Provision node state and assert Akash prerequisites
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          SSH_OPTS: "-i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6"
+          DEPLOY_ENVIRONMENT: candidate-a
+          DOMAIN: ${{ vars.DOMAIN }}
+          APP_SOURCE_DIR: app-src
+          COGNI_CATALOG_ROOT: infra/catalog
+          HEAD_SHA: ${{ needs.decide.outputs.head_sha }}
+          NODE_SOURCE_SHA: ${{ needs.decide.outputs.node_source_sha }}
+          STATUS_URL: ${{ needs.decide.outputs.status_url }}
+        run: bash ci-src/scripts/ci/run-node-substrate.sh candidate-a "${{ matrix.node }}"
+
+      # The deploy-branch preparation cell gates on this marker before mutating
+      # the watched branch, independently of sibling matrix results.
+      - name: Emit per-node external preflight marker
+        env:
+          NODE: ${{ matrix.node }}
+        run: |
+          set -euo pipefail
+          mkdir -p marker-out
+          printf 'ok' > "marker-out/external-preflight-ok-${NODE}.txt"
+      - name: Upload per-node external preflight marker
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: external-preflight-ok-${{ matrix.node }}
+          path: marker-out/external-preflight-ok-${{ matrix.node }}.txt
+          retention-days: 1
+
+      # The Akash assert already ran inside run-node-substrate. Publish the common
+      # assert marker consumed by flight and verify-candidate.
+      - name: Emit external-compute assert marker
+        env:
+          NODE: ${{ matrix.node }}
+        run: |
+          mkdir -p assert-marker-out
+          printf 'ok' > "assert-marker-out/assert-ok-${NODE}.txt"
+      - name: Upload external-compute assert marker
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: assert-ok-${{ matrix.node }}
+          path: assert-marker-out/assert-ok-${{ matrix.node }}.txt
+          retention-days: 1
+
   node-substrate:
     needs:
       [decide, reconcile-appset, reconcile-dns, prepare-substrate-deploy-branch]
@@ -811,7 +942,7 @@ jobs:
         env:
           NODE: ${{ matrix.node }}
           KIND: assert-ok
-          EXPECTED_JSON: ${{ needs.decide.outputs.substrate_node_targets_json }}
+          EXPECTED_JSON: ${{ needs.decide.outputs.preflight_node_targets_json }}
           MARKER_DIR: ${{ runner.temp }}/assert-marker
         run: bash ci-src/scripts/ci/resolve-substrate-gate.sh
 
@@ -1221,7 +1352,7 @@ jobs:
         env:
           NODE: ${{ matrix.node }}
           KIND: assert-ok
-          EXPECTED_JSON: ${{ needs.decide.outputs.substrate_node_targets_json }}
+          EXPECTED_JSON: ${{ needs.decide.outputs.preflight_node_targets_json }}
           MARKER_DIR: ${{ runner.temp }}/assert-marker
         run: bash ci-src/scripts/ci/resolve-substrate-gate.sh
 

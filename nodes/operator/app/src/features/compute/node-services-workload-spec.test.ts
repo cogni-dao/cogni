@@ -7,12 +7,16 @@ import { describe, expect, it } from "vitest";
 import {
   buildLegacyCogniAppWorkloadSpec,
   buildNodeServicesWorkloadSpec,
+  COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS,
 } from "./node-services-workload-spec";
 
 const NODE_ID = "00000000-0000-4000-8000-000000000001";
 const SOURCE_SHA = "a".repeat(40);
 const APP_IMAGE = `ghcr.io/example/node@sha256:${"1".repeat(64)}`;
 const WORKER_IMAGE = `ghcr.io/example/node-worker@sha256:${"2".repeat(64)}`;
+const REQUIRED_SECRET_REFS = COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS.map(
+  (key) => ({ key })
+);
 
 const spec = parseRepoSpec({
   node_id: NODE_ID,
@@ -26,7 +30,7 @@ const spec = parseRepoSpec({
         visibility: "public",
         runtime_profile: "cogni-node-app-v1",
         bindings: { WORKER_URL: "worker" },
-        secret_refs: [{ key: "APP_TOKEN" }],
+        secret_refs: REQUIRED_SECRET_REFS,
         resources: { cpu_units: 1, memory_mi: 2048, storage_mi: 4096 },
       },
       {
@@ -84,7 +88,7 @@ describe("buildNodeServicesWorkloadSpec", () => {
         },
       ],
       env: { WORKER_URL: "http://worker:9100" },
-      secretRefs: [{ key: "APP_TOKEN" }],
+      secretRefs: REQUIRED_SECRET_REFS,
       runtimeProfile: "cogni-node-app-v1",
     });
     expect(workload.services[1]).toMatchObject({
@@ -156,5 +160,25 @@ describe("buildNodeServicesWorkloadSpec", () => {
         publicUrl: "https://generic-node.example.org",
       })
     ).toThrow(/exactly one public cogni-node-app-v1 service/);
+  });
+
+  it("rejects an incomplete explicit Cogni runtime profile", () => {
+    const incompleteBundle = {
+      ...bundle,
+      services: bundle.services.map(({ service, ...resolved }, index) => ({
+        ...resolved,
+        service:
+          index === 0
+            ? { ...service, secretRefs: [{ key: "AUTH_SECRET" }] }
+            : service,
+      })),
+    };
+
+    expect(() =>
+      buildNodeServicesWorkloadSpec({
+        slug: "incomplete-node",
+        bundle: incompleteBundle,
+      })
+    ).toThrow(/cogni-node-app-v1 is missing secret_refs/);
   });
 });

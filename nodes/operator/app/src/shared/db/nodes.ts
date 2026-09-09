@@ -14,8 +14,8 @@
  *   is the act of minting that `node_id` — `publish` writes the same value into the minted repo-spec.
  *   An externally-formed node MUST be inserted with `id = <child repo-spec node_id>`, never a fresh UUID,
  *   so identity can never fork. `slug` is the human/agent addressing handle (see node-lookup.ts).
- *   CATALOG_ENVS_ARE_PROJECTED — `deploy_envs` + singleton `activity_env` are projections of merged
- *   catalog intent. A node may deploy to many envs, but exactly one environment ingests activity and
+ *   CATALOG_ENVS_ARE_PROJECTED — `deploy_envs` + singleton `activity_env` + `deployment_providers`
+ *   are projections of merged catalog intent. A node may deploy to many envs, but exactly one environment ingests activity and
  *   runs epoch schedules; the DB check requires that activity env to be in the deploy set.
  * Side-effects: none
  * Links: docs/spec/identity-model.md, docs/spec/node-formation.md, work/projects/proj.node-formation-ui.md, task.5083
@@ -29,11 +29,13 @@ import {
   check,
   index,
   integer,
+  jsonb,
   pgTable,
   text,
   timestamp,
   uuid,
 } from "drizzle-orm/pg-core";
+import type { NodeDeploymentPlacement } from "@/shared/node-registry/placement";
 
 export const NODE_STATUSES = [
   "dao_pending",
@@ -73,6 +75,15 @@ export const nodes = pgTable(
       .notNull()
       .default(sql`ARRAY['candidate-a']::text[]`),
     activityEnv: text("activity_env").notNull().default("candidate-a"),
+    // CATALOG_PLACEMENT_IS_PROJECTED (bug.5106) — the node's declared per-env `deployment_provider`
+    // from `infra/catalog/<slug>.yaml`, projected here so the operator can resolve WHERE a node runs
+    // without reading the catalog at request time. `{}` = every env on k3s (K3S_IS_DEFAULT), so an
+    // un-reconciled row keeps the historical in-cluster lane. Shape is validated on read by
+    // `toNodeDeploymentPlacement` (shared/node-registry/placement.ts) — never trusted raw.
+    deploymentProviders: jsonb("deployment_providers")
+      .$type<NodeDeploymentPlacement>()
+      .notNull()
+      .default(sql`'{}'::jsonb`),
     status: text("status").notNull().default("dao_pending"),
     chainId: integer("chain_id"),
     daoAddress: text("dao_address"),

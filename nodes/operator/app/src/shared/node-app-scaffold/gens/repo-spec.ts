@@ -14,12 +14,15 @@
  *   TEMPLATE_SPEC_SHAPE — minting should be value substitution against the node-template repo-spec,
  *   not a thinner generated replacement. BORN_REVIEWABLE — the template's default review `gates:`
  *   MUST remain. EPOCH_ACTIVE_BY_DEFAULT — the template's `activity_ledger:` block MUST remain so
- *   ledger ingest schedules are synthesized by @cogni/repo-spec.
+ *   ledger ingest schedules are synthesized by @cogni/repo-spec. BORN_DEPLOYABLE — the minted spec
+ *   MUST carry a complete `deployment:` block (rendered from @cogni/repo-spec's single source of
+ *   truth) so a fresh node is external-compute capable with zero hand-editing.
  * Side-effects: none — pure function, no IO, no env.
- * Links: Cogni-DAO/node-template:.cogni/repo-spec.yaml, src/features/nodes/repo-spec-builder.ts, docs/spec/node-ci-cd-contract.md, task.5092
+ * Links: Cogni-DAO/node-template:.cogni/repo-spec.yaml, src/features/nodes/repo-spec-builder.ts, docs/spec/node-ci-cd-contract.md, task.5092, task.5079
  * @public
  */
 
+import { renderNodeDeploymentYaml } from "@cogni/repo-spec";
 import { v5 as uuidv5 } from "uuid";
 
 import type { NodeKnowledgeRemote } from "../knowledge-remote";
@@ -108,6 +111,15 @@ governance:
 ${daoLines}
 
 ${input.knowledgeRemote ? renderKnowledgeBlock(input.knowledgeRemote) : ""}
+
+# App-tier workload this node runs, in the node's own words: services, ports,
+# resources, exactly one \`public\` service, and the value-free logical secret
+# names its runtime needs. This is provider-neutral — the parent catalog, not
+# this file, decides whether an environment lands on k3s or external compute.
+# The \`cogni-node-app-v1\` runtime_profile pins the Cogni Next.js app contract;
+# a service that declares it MUST declare every secret_ref listed below.
+# Add sibling services here (private by default) as this node grows.
+${renderNodeDeploymentYaml().trimEnd()}
 
 # Activity ledger ingestion + approver allowlist.
 # \`approvers\` gates the \`(admin)/\` route group and write routes under

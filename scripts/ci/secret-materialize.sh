@@ -14,6 +14,9 @@
 #     converged node writes NOTHING (created=0; 0 pod churn);
 #   - shared/human values are inherited transitionally (see inherit_shared_value);
 #   - it logs key NAMES only, never values.
+#   - catalog `syncTo: litellm-virtual-key` entries are registered with LiteLLM
+#     only after the OpenBao batch is durable; registration is idempotent and
+#     fail-closed.
 #
 # SOLE WRITER: this script composes + writes all per-node DB DSNs (DATABASE_URL,
 # DATABASE_SERVICE_URL, DOLTGRES_URL) to cogni/<env>/<node> from OpenBao-owned
@@ -113,11 +116,31 @@ export PAYMENT_NODES="${PAYMENT_NODES:-poly}"
 export DOMAIN
 
 # shellcheck source=../setup/lib/reconcile-secrets.sh
-# Provides NODE_BASELINE_KEYS, derive_secret, _resolve_node_value (preserve-
-# existing + per-node generate; no blind ancestor scan), and seed_node_app_secrets.
+# Provides NODE_BASELINE_KEYS, derive_secret, and _resolve_node_value
+# (preserve-existing + per-node generate; no blind ancestor scan). External
+# mirrors are discovered separately from catalog syncTo declarations below;
+# they do not extend the legacy NODE_BASELINE_KEYS list.
 # Sourced FIRST so the token-bound bao_get_field/seed_kv below override the lib's
 # ROOT_TOKEN/ssh variants.
 source "$REPO_ROOT/scripts/setup/lib/reconcile-secrets.sh"
+
+TARGET_CATALOG_FILE="${APP_SOURCE_DIR}/nodes/${TARGET_NODE}/.cogni/secrets-catalog.yaml"
+CATALOG_FILES=("$CATALOG_FILE")
+[[ -f "$TARGET_CATALOG_FILE" ]] && CATALOG_FILES+=("$TARGET_CATALOG_FILE")
+
+# Read a field from the operator catalog or this target node's sovereign catalog.
+# The typed loader rejects cross-file name collisions in CI; this shell reader
+# intentionally consumes the same two declaration surfaces during the flight.
+_cat_field() {
+  local name="$1" field="$2" file value
+  for file in "${CATALOG_FILES[@]}"; do
+    value="$(yq -N "(.secrets[] | select(.name == \"${name}\") | ${field}) // \"\"" "$file" 2>/dev/null | head -1)"
+    if [[ -n "$value" ]]; then
+      printf '%s' "$value"
+      return 0
+    fi
+  done
+}
 
 # Batched, idempotent OpenBao I/O (read-once → diff → write-missing-only).
 #
@@ -338,5 +361,196 @@ for k in "${NODE_BASELINE_KEYS[@]}"; do
   log "  created ${k}"
   created=$((created + 1))
 done
+
+# External mirror keys are declared by catalog syncTo, not a second baseline
+# array. Materialize their OpenBao value before the batch is flushed so the
+# registration phase below always reads the exact durable value.
+mapfile -t LITELLM_SYNC_KEYS < <(
+  yq -N '.secrets[] | select(.syncTo == "litellm-virtual-key") | .name' \
+    "${CATALOG_FILES[@]}" | LC_ALL=C sort -u
+)
+for k in "${LITELLM_SYNC_KEYS[@]}"; do
+  _node_gets_key "$TARGET_NODE" "$k" || continue
+  if [[ -f "${CACHE_DIR}/${TARGET_NODE}/${k}" ]]; then
+    unchanged=$((unchanged + 1))
+    continue
+  fi
+  key_is_agent_generated "$k" \
+    || fail "catalog sync target ${k} must be a per-node source:agent random key"
+  v="$(_resolve_node_value "$TARGET_NODE" "$k")"
+  [[ -n "$v" ]] || fail "catalog sync target ${k} produced an empty value"
+  seed_kv "$TARGET_NODE" "$k" "$v"
+  log "  created ${k}"
+  created=$((created + 1))
+done
 flush_batch
+
+# A LiteLLM virtual key is a dual-plane generated secret: OpenBao owns its
+# bytes, while LiteLLM must store the same explicit key for authentication.
+# Key lookups use POST /v2/key/info with the token SHA-256 in a 0600 body file;
+# the plaintext key never appears in a URL, argv, log, or error. The pinned
+# LiteLLM build ignores key_aliases on that endpoint, so alias uniqueness uses
+# its exact-filter /key/list contract (the non-secret alias is URL-encoded from
+# a file, and only the matching page is returned). A missing key is created only
+# when the desired alias is also unused. Any transport, auth, collision, or
+# response mismatch aborts the substrate lane.
+LITELLM_REGISTER_REMOTE="$(cat <<'REMOTE_SCRIPT'
+set -euo pipefail
+umask 077
+work_dir=$(mktemp -d -t cogni-litellm-key.XXXXXX)
+trap 'rm -rf "$work_dir"' EXIT
+
+IFS= read -r master_key
+IFS= read -r virtual_key
+IFS= read -r key_alias
+printf '%s' "$master_key" > "$work_dir/master"
+printf '%s' "$virtual_key" > "$work_dir/key"
+printf '%s' "$key_alias" > "$work_dir/alias"
+unset master_key virtual_key key_alias
+
+key_hash=$(sha256sum "$work_dir/key" | awk '{print $1}')
+printf '%s' "$key_hash" > "$work_dir/hash"
+unset key_hash
+
+cat > "$work_dir/request.conf" <<EOF
+url = "http://127.0.0.1:4000/v2/key/info"
+request = "POST"
+header = "Authorization: Bearer $(cat "$work_dir/master")"
+header = "Content-Type: application/json"
+connect-timeout = 10
+max-time = 30
+silent
+show-error
+EOF
+
+post_json() {
+  local body_file="$1" response_file="$2" code
+  if ! code=$(curl --config "$work_dir/request.conf" --data-binary "@$body_file" \
+      --output "$response_file" --write-out '%{http_code}'); then
+    echo transport-error
+    return 1
+  fi
+  if [[ "$code" != "200" ]]; then
+    echo "lookup-http-${code}"
+    return 1
+  fi
+}
+
+jq -n --rawfile hash "$work_dir/hash" '{keys: [$hash]}' > "$work_dir/by-hash.json"
+post_json "$work_dir/by-hash.json" "$work_dir/by-hash-response.json" || exit 1
+hash_count=$(jq -er '.info | arrays | length' "$work_dir/by-hash-response.json") || { echo lookup-invalid-json; exit 1; }
+if [[ "$hash_count" -gt 1 ]]; then echo key-hash-collision; exit 1; fi
+if [[ "$hash_count" -eq 1 ]] && ! jq -e --rawfile alias "$work_dir/alias" \
+    '.info[0].key_alias == $alias' "$work_dir/by-hash-response.json" >/dev/null; then
+  echo key-alias-mismatch
+  exit 1
+fi
+
+cat > "$work_dir/alias-list.conf" <<EOF
+url = "http://127.0.0.1:4000/key/list"
+header = "Authorization: Bearer $(cat "$work_dir/master")"
+connect-timeout = 10
+max-time = 30
+silent
+show-error
+EOF
+if ! alias_code=$(curl --config "$work_dir/alias-list.conf" --get \
+    --data-urlencode "key_alias@$work_dir/alias" --data-urlencode "size=2" \
+    --data-urlencode "return_full_object=true" \
+    --output "$work_dir/by-alias-response.json" --write-out '%{http_code}'); then
+  echo transport-error
+  exit 1
+fi
+if [[ "$alias_code" != "200" ]]; then
+  echo "lookup-http-${alias_code}"
+  exit 1
+fi
+alias_count=$(jq -er '
+  select((.keys | type) == "array") |
+  .total_count |
+  select(type == "number" and . >= 0 and floor == .)
+' "$work_dir/by-alias-response.json") || { echo lookup-invalid-json; exit 1; }
+if [[ "$alias_count" -gt 1 ]]; then echo alias-collision; exit 1; fi
+if [[ "$alias_count" -eq 1 ]] && ! jq -e --rawfile alias "$work_dir/alias" '
+      (.keys | length) == 1 and
+      .keys[0].key_alias == $alias and
+      (.keys[0].token | type == "string" and test("^[0-9a-f]{64}$"))
+    ' "$work_dir/by-alias-response.json" >/dev/null; then
+  echo alias-lookup-mismatch
+  exit 1
+fi
+
+if [[ "$hash_count" -eq 1 ]]; then
+  [[ "$alias_count" -eq 1 ]] || { echo alias-index-missing; exit 1; }
+  jq -e --rawfile hash "$work_dir/hash" '.keys[0].token == $hash' \
+    "$work_dir/by-alias-response.json" >/dev/null \
+    || { echo alias-key-mismatch; exit 1; }
+  echo unchanged
+  exit 0
+fi
+[[ "$alias_count" -eq 0 ]] || { echo alias-owned-by-different-key; exit 1; }
+
+jq -n --rawfile key "$work_dir/key" --rawfile alias "$work_dir/alias" \
+  '{key: $key, key_alias: $alias}' > "$work_dir/generate.json"
+cat > "$work_dir/generate.conf" <<EOF
+url = "http://127.0.0.1:4000/key/generate"
+request = "POST"
+header = "Authorization: Bearer $(cat "$work_dir/master")"
+header = "Content-Type: application/json"
+connect-timeout = 10
+max-time = 30
+silent
+show-error
+EOF
+if ! generate_code=$(curl --config "$work_dir/generate.conf" \
+    --data-binary "@$work_dir/generate.json" --output "$work_dir/generate-response.json" \
+    --write-out '%{http_code}'); then
+  echo transport-error
+  exit 1
+fi
+if [[ "$generate_code" != "200" && "$generate_code" != "201" ]]; then
+  echo "generate-http-${generate_code}"
+  exit 1
+fi
+if ! jq -e --rawfile key "$work_dir/key" --rawfile alias "$work_dir/alias" \
+    '.key == $key and .key_alias == $alias' "$work_dir/generate-response.json" >/dev/null; then
+  echo generate-response-mismatch
+  exit 1
+fi
+echo registered
+REMOTE_SCRIPT
+)"
+
+register_litellm_virtual_key() {
+  local key_name="$1" value master node_id alias result rc
+  value="$(bao_get_field "$TARGET_NODE" "$key_name")"
+  [[ -n "$value" ]] || fail "catalog sync target ${key_name} was not materialized for ${TARGET_NODE}"
+  [[ "$value" =~ ^sk-cogni-[0-9a-f]{48}$ ]] \
+    || fail "catalog sync target ${key_name} has invalid format (expected sk-cogni-<48 lowercase hex>)"
+  master="$(bao_get_field operator LITELLM_MASTER_KEY)"
+  [[ -n "$master" ]] \
+    || fail "cannot register ${key_name}: operator LITELLM_MASTER_KEY is absent"
+  node_id="$(node_id_for_target "$TARGET_NODE")" \
+    || fail "cannot register ${key_name}: node_id is unresolved for ${TARGET_NODE}"
+  alias="cogni:${DEPLOY_ENVIRONMENT}:${node_id}:app:v1"
+
+  set +e
+  result="$(printf '%s\n%s\n%s\n' "$master" "$value" "$alias" | remote "$LITELLM_REGISTER_REMOTE")"
+  rc=$?
+  set -e
+  unset value master
+  [[ $rc -eq 0 ]] \
+    || fail "LiteLLM registration failed for ${key_name} (${result:-redacted-error}); alias=${alias}"
+  case "$result" in
+    registered) log "  registered ${key_name} with LiteLLM (alias ${alias})" ;;
+    unchanged) log "  ${key_name} already registered with LiteLLM (alias ${alias})" ;;
+    *) fail "LiteLLM registration returned an invalid redacted result for ${key_name}; alias=${alias}" ;;
+  esac
+}
+
+for k in "${LITELLM_SYNC_KEYS[@]}"; do
+  _node_gets_key "$TARGET_NODE" "$k" || continue
+  register_litellm_virtual_key "$k"
+done
+
 log "materialize complete for ${TARGET_NODE} (${DEPLOY_ENVIRONMENT}): created=${created} unchanged=${unchanged}"

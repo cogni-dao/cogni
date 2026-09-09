@@ -19,14 +19,22 @@
 # Env-singleton (substrate-registry: scheduler-worker-routing): desired state is a
 # function of the whole node SET, so it is re-reconciled on EVERY node flight
 # (affected-only governs image builds, never substrate routing). The source of
-# truth is the PR-head app checkout's base/scheduler-worker — env-invariant,
-# already gated against the catalog by render-scheduler-worker-endpoints.sh
-# --check. We copy it (never re-render here: the deploy branch carries only the
-# flighted node's catalog file, so re-rendering would drop sibling nodes).
+# truth is the PR-head app checkout's base/scheduler-worker plus this env's
+# GENERATED node-endpoints.patch.yaml — both already gated against the catalog by
+# render-scheduler-worker-endpoints.sh --check. We copy them (never re-render
+# here: the deploy branch carries only the flighted node's catalog file, so
+# re-rendering would drop sibling nodes).
 #
-# The env overlay (infra/k8s/overlays/<env>/scheduler-worker) — which pins the
-# image digest + patches TEMPORAL_NAMESPACE — is NEVER touched, so promotion
-# state is preserved. Only infra/k8s/base/scheduler-worker/ is propagated.
+# bug.5094 — the routing map is now rendered TWICE from one catalog: an
+# env-invariant placement-DEFAULT (all-k3s) in base/scheduler-worker/configmap.yaml,
+# and this env's PROVIDER-RESOLVED map in
+# infra/k8s/overlays/<env>/scheduler-worker/node-endpoints.patch.yaml (a node placed
+# on akash has no in-cluster Service, and its public host is per-env). Both must
+# reach the deploy branch or a node-add would only half-arrive.
+#
+# The overlay's kustomization.yaml — which pins the image digest + patches
+# TEMPORAL_NAMESPACE — is NEVER touched, so promotion state is preserved. Only
+# base/scheduler-worker/ and the GENERATED node-endpoints patch travel.
 #
 # Idempotent: re-running with an unchanged catalog produces no diff → no commit
 # (status "noop"). The single per-env CI concurrency group serializes flights so
@@ -64,6 +72,10 @@ BRANCH="deploy/${DEPLOY_ENV}-scheduler-worker"
 BOOTSTRAP_BRANCH="deploy/${DEPLOY_ENV}"
 SUBPATH="infra/k8s/base/scheduler-worker"
 SRC_DIR="${APP_SOURCE_DIR}/${SUBPATH}"
+# GENERATED, non-promotion file. Copied on its own so the overlay's
+# kustomization.yaml (promotion state) is never rewritten from main.
+ENDPOINTS_SUBPATH="infra/k8s/overlays/${DEPLOY_ENV}/scheduler-worker/node-endpoints.patch.yaml"
+ENDPOINTS_SRC="${APP_SOURCE_DIR}/${ENDPOINTS_SUBPATH}"
 
 ENDPOINTS_COUNT=0
 NODE_COUNT=0
@@ -164,7 +176,13 @@ fi
 # yq must never block the reconcile.
 ENDPOINTS_CSV=""
 if command -v yq >/dev/null 2>&1; then
-  ENDPOINTS_CSV="$(yq -N '.data.COGNI_NODE_ENDPOINTS // ""' "$SRC_DIR/configmap.yaml" 2>/dev/null || true)"
+  # Prefer the env-resolved map (what reaches the cluster); fall back to the base default.
+  if [ -f "$ENDPOINTS_SRC" ]; then
+    ENDPOINTS_CSV="$(yq -N '.data.COGNI_NODE_ENDPOINTS // ""' "$ENDPOINTS_SRC" 2>/dev/null || true)"
+  fi
+  if [ -z "$ENDPOINTS_CSV" ]; then
+    ENDPOINTS_CSV="$(yq -N '.data.COGNI_NODE_ENDPOINTS // ""' "$SRC_DIR/configmap.yaml" 2>/dev/null || true)"
+  fi
 fi
 if [ -n "$ENDPOINTS_CSV" ]; then
   ENDPOINTS_COUNT="$(awk -F',' '{print NF}' <<<"$ENDPOINTS_CSV")"
@@ -205,6 +223,17 @@ mkdir -p "$DST_DIR"
 # annotated deployment + services). --delete keeps it byte-identical to main so a
 # pre-#1609 deploy branch also gains the Reloader annotation.
 rsync -a --delete "$SRC_DIR/" "$DST_DIR/"
+
+# Propagate this env's GENERATED provider-resolved endpoints patch. Absent at an
+# older ref → warn + skip (mirrors the renderer-absent path above) rather than
+# hard-fail a flight on a file the PR head predates.
+if [ -f "$ENDPOINTS_SRC" ]; then
+  mkdir -p "$(dirname "${WORKDIR}/${ENDPOINTS_SUBPATH}")"
+  cp "$ENDPOINTS_SRC" "${WORKDIR}/${ENDPOINTS_SUBPATH}"
+  git -C "$WORKDIR" add -A "$ENDPOINTS_SUBPATH"
+else
+  echo "::warning::${ENDPOINTS_SUBPATH} absent at this ref — propagating base routing only"
+fi
 
 git -C "$WORKDIR" config user.name "github-actions[bot]"
 git -C "$WORKDIR" config user.email "github-actions[bot]@users.noreply.github.com"

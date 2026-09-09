@@ -11,9 +11,22 @@
  * @public
  */
 
-import { extractNodeServices, parseRepoSpec } from "@cogni/repo-spec";
-import { buildTestRepoSpec } from "@cogni/repo-spec/testing";
+import {
+  COGNI_NODE_APP_V1_DEPLOYMENT,
+  COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS,
+  extractNodeServices,
+  hasDeclaredNodeDeployment,
+  LEGACY_DEFAULT_NODE_DEPLOYMENT,
+  missingRuntimeProfileSecretKeys,
+  parseRepoSpec,
+  renderNodeDeploymentYaml,
+} from "@cogni/repo-spec";
+import {
+  buildTestRepoSpec,
+  buildTestRepoSpecYaml,
+} from "@cogni/repo-spec/testing";
 import { describe, expect, it } from "vitest";
+import { parse as parseYaml } from "yaml";
 
 const APP = {
   name: "app",
@@ -343,5 +356,54 @@ describe("node deployment repo-spec", () => {
         },
       })
     ).toThrow(/Invalid repo-spec structure/);
+  });
+});
+
+describe("cogni-node-app-v1 deployment contract", () => {
+  it("distinguishes a declared block from the legacy fallback", () => {
+    expect(hasDeclaredNodeDeployment(buildTestRepoSpec())).toBe(false);
+    expect(
+      hasDeclaredNodeDeployment(
+        buildTestRepoSpec({ deployment: COGNI_NODE_APP_V1_DEPLOYMENT })
+      )
+    ).toBe(true);
+  });
+
+  it("keeps the legacy fallback secret-free so k3s nodes are untouched", () => {
+    expect(LEGACY_DEFAULT_NODE_DEPLOYMENT.services[0]?.secret_refs).toEqual([]);
+    expect(extractNodeServices(buildTestRepoSpec())[0]?.secretRefs).toEqual([]);
+  });
+
+  it("declares every key the runtime profile requires", () => {
+    expect(
+      COGNI_NODE_APP_V1_DEPLOYMENT.services[0]?.secret_refs.map(
+        (ref) => ref.key
+      )
+    ).toEqual([...COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS]);
+    expect(
+      missingRuntimeProfileSecretKeys({
+        runtimeProfile: "cogni-node-app-v1",
+        secretRefs: COGNI_NODE_APP_V1_DEPLOYMENT.services[0]?.secret_refs ?? [],
+      })
+    ).toEqual([]);
+    expect(
+      missingRuntimeProfileSecretKeys({
+        runtimeProfile: "cogni-node-app-v1",
+        secretRefs:
+          LEGACY_DEFAULT_NODE_DEPLOYMENT.services[0]?.secret_refs ?? [],
+      })
+    ).toEqual([...COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS]);
+    // A service without the profile owes nothing — the contract is capability-scoped.
+    expect(missingRuntimeProfileSecretKeys({ secretRefs: [] })).toEqual([]);
+  });
+
+  it("renders a YAML block that round-trips through the schema", () => {
+    const rendered = renderNodeDeploymentYaml();
+    expect(parseYaml(rendered)).toEqual({
+      deployment: COGNI_NODE_APP_V1_DEPLOYMENT,
+    });
+    // Authored as a node repo would: raw YAML text through the real parser.
+    const spec = parseRepoSpec(buildTestRepoSpecYaml({ extra: rendered }));
+    expect(spec.deployment).toEqual(COGNI_NODE_APP_V1_DEPLOYMENT);
   });
 });

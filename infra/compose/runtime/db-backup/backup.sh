@@ -6,7 +6,16 @@ set -euo pipefail
 
 BACKUP_ROOT="${DB_BACKUP_ROOT:-/backups}"
 INTERVAL_SECONDS="${DB_BACKUP_INTERVAL_SECONDS:-86400}"
-RETENTION_DAYS="${DB_BACKUP_RETENTION_DAYS:-14}"
+# bug: 2026-09-03 production disk saturation. 14 days x ~1.5 GB/night of full
+# custom-format dumps reached 21 GB on a 97 GB disk shared with k3s (sqlite/kine),
+# postgres, doltgres and temporal. `/` hit 82%, iowait ran 28-35%, jbd2/vda1-8 and
+# postgres sat in uninterruptible D state, and the k3s API server stalled hard enough
+# that the compute-workload controller lost its leader Lease and crash-looped.
+# Age alone does not bound size: dumps grow, so a fixed day count silently grows the
+# footprint. Bound BOTH: a shorter age window AND a hard free-space floor.
+RETENTION_DAYS="${DB_BACKUP_RETENTION_DAYS:-5}"
+MIN_FREE_MB="${DB_BACKUP_MIN_FREE_MB:-15000}"
+MIN_KEEP="${DB_BACKUP_MIN_KEEP:-2}"
 OBSERVABILITY_GRACE_SECONDS="${DB_BACKUP_OBSERVABILITY_GRACE_SECONDS:-90}"
 
 json_escape() {
@@ -64,9 +73,39 @@ write_manifest() {
   )
 }
 
+free_mb() {
+  df -Pm "$1" 2>/dev/null | awk 'NR==2 {print $4}'
+}
+
+# Age-based prune, then a headroom prune that removes oldest-first until the backup
+# filesystem has MIN_FREE_MB available. Never prunes below MIN_KEEP backups for a
+# cluster: a full disk is an outage, but zero recoverable backups is worse, so the
+# floor wins and we log loudly instead.
 prune_old_backups() {
-  local cluster_dir="$1"
+  local cluster_dir="$1" cluster free oldest remaining
+  cluster="$(basename "$cluster_dir")"
+
   find "$cluster_dir" -mindepth 1 -maxdepth 1 -type d -mtime +"$RETENTION_DAYS" -exec rm -rf {} +
+
+  while :; do
+    free="$(free_mb "$cluster_dir")"
+    [ -n "$free" ] || break
+    [ "$free" -ge "$MIN_FREE_MB" ] && break
+
+    remaining="$(find "$cluster_dir" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d "[:space:]")"
+    if [ "$remaining" -le "$MIN_KEEP" ]; then
+      log_json error db_backup.headroom_floor "$cluster" \
+        "only ${free}MB free but ${remaining} backups is the retention floor; not pruning further" \
+        "$cluster_dir"
+      break
+    fi
+
+    oldest="$(find "$cluster_dir" -mindepth 1 -maxdepth 1 -type d | sort | head -1)"
+    [ -n "$oldest" ] || break
+    log_json warn db_backup.headroom_prune "$cluster" \
+      "only ${free}MB free (floor ${MIN_FREE_MB}MB); pruning oldest backup" "$oldest"
+    rm -rf "$oldest"
+  done
 }
 
 backup_cluster() {
@@ -144,6 +183,8 @@ run_once() {
 main() {
   require_positive_int DB_BACKUP_INTERVAL_SECONDS "$INTERVAL_SECONDS"
   require_positive_int DB_BACKUP_RETENTION_DAYS "$RETENTION_DAYS"
+  require_positive_int DB_BACKUP_MIN_FREE_MB "$MIN_FREE_MB"
+  require_positive_int DB_BACKUP_MIN_KEEP "$MIN_KEEP"
   require_nonnegative_int DB_BACKUP_OBSERVABILITY_GRACE_SECONDS "$OBSERVABILITY_GRACE_SECONDS"
   mkdir -p "$BACKUP_ROOT"
 

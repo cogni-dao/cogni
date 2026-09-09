@@ -5,14 +5,21 @@
  * Module: `@features/compute/node-services-workload-spec`
  * Purpose: Assemble an atomically resolved node artifact bundle into one provider-neutral workload.
  * Scope: Pure declaration+digest mapping; no registry, secret, provider, or lifecycle I/O.
- * Invariants: DIGEST_PINNED, ONE_PUBLIC_SERVICE, PRIVATE_IS_NON_GLOBAL, BIND_ALL_INTERFACES, NO_RAW_ENV_INPUT.
+ * Invariants: DIGEST_PINNED, ONE_PUBLIC_SERVICE, PRIVATE_IS_NON_GLOBAL, BIND_ALL_INTERFACES, NO_RAW_ENV_INPUT,
+ *   DECLARED_NOT_DEFAULTED — external compute refuses the legacy no-secrets fallback and says what to add.
  * Side-effects: none
- * Links: story.5016, task.5065, @cogni/repo-spec artifact bundle
+ * Links: story.5016, task.5065, task.5079, @cogni/repo-spec artifact bundle
  * @internal
  */
 
 import type { ProvisionServiceSpec, ProvisionSpec } from "@cogni/ai-tools";
-import type { ResolvedNodeArtifactBundle } from "@cogni/repo-spec";
+import {
+  hasDeclaredNodeDeployment,
+  missingRuntimeProfileSecretKeys,
+  type RepoSpec,
+  type ResolvedNodeArtifactBundle,
+  renderNodeDeploymentYaml,
+} from "@cogni/repo-spec";
 
 export interface NodeServicesWorkloadInput {
   /** Node slug used as the provider-neutral workload label. */
@@ -41,6 +48,59 @@ export interface NodeServicesWorkloadSpec
   readonly services: readonly NodeServicesProvisionServiceSpec[];
 }
 
+/**
+ * Secret contract required by the explicit legacy Cogni application profile.
+ * Re-exported from `@cogni/repo-spec`, where the profile itself is declared, so the node
+ * scaffold that MINTS the block and the gate that REJECTS an incomplete one share one list.
+ */
+export { COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS } from "@cogni/repo-spec";
+
+/**
+ * Gate 1 — the earliest operator-owned read of a node's own repo-spec.
+ *
+ * A node with no `deployment:` block silently inherits the legacy default, whose `secret_refs`
+ * are empty by design (the k3s lane injects env through its ExternalSecret overlay instead).
+ * That default cannot boot an externally hosted workload, and accepting it here converts a
+ * one-line repo-spec omission into a terminal reconcile failure hours later. So: refuse now,
+ * and hand the author the exact block to paste. Capability-scoped — no node is named.
+ */
+export function assertDeclaredNodeDeployment(input: {
+  readonly spec: RepoSpec;
+  readonly slug: string;
+  readonly sourceSha?: string | undefined;
+}): void {
+  if (hasDeclaredNodeDeployment(input.spec)) return;
+  const at = input.sourceSha ? ` at ${input.sourceSha}` : "";
+  throw new Error(
+    [
+      `[node-workload] ${input.slug}: external compute requires a \`deployment:\` block in the node's own .cogni/repo-spec.yaml${at}, and none is declared.`,
+      "Without it the node falls back to a legacy default that declares NO secret_refs, so the workload would be created with no runtime environment and fail terminally at reconcile.",
+      "Add this block to .cogni/repo-spec.yaml (this is exactly what the node scaffold emits for a new node) and re-run:",
+      "",
+      renderNodeDeploymentYaml().trimEnd(),
+    ].join("\n")
+  );
+}
+
+/** Gate 2 — fail before desired-state mutation when the declared profile omits a requirement. */
+export function assertRuntimeProfileSecretRefs(input: {
+  readonly serviceName?: string | undefined;
+  readonly runtimeProfile?: "cogni-node-app-v1" | undefined;
+  readonly secretRefs: readonly { readonly key: string }[];
+}): void {
+  const missing = missingRuntimeProfileSecretKeys(input);
+  if (missing.length === 0) return;
+  const path = `deployment.services[name=${input.serviceName ?? "app"}].secret_refs`;
+  throw new Error(
+    [
+      `[node-workload] cogni-node-app-v1 is missing secret_refs: ${missing.join(", ")}`,
+      `Declare them in the node's .cogni/repo-spec.yaml under ${path}:`,
+      "",
+      ...missing.map((key) => `  - key: ${key}`),
+    ].join("\n")
+  );
+}
+
 /** Build one generic co-located workload from the validated complete bundle. */
 export function buildNodeServicesWorkloadSpec(
   input: NodeServicesWorkloadInput
@@ -48,6 +108,13 @@ export function buildNodeServicesWorkloadSpec(
   return {
     name: input.slug,
     services: input.bundle.services.map(({ service, image }) => {
+      assertRuntimeProfileSecretRefs({
+        serviceName: service.name,
+        ...(service.runtimeProfile
+          ? { runtimeProfile: service.runtimeProfile }
+          : {}),
+        secretRefs: service.secretRefs,
+      });
       const isPublic = service.visibility === "public";
       const bindingEnv = Object.fromEntries(
         Object.entries(service.bindings).map(([envName, targetName]) => {

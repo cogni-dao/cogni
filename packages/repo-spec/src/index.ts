@@ -44,6 +44,7 @@ export {
   type GatesConfig,
   type GovernanceConfig,
   type GovernanceSchedule,
+  hasDeclaredNodeDeployment,
   type InboundPaymentConfig,
   type KnowledgeConfig,
   type LedgerConfig,
@@ -71,6 +72,13 @@ export {
   type ResolvedNodeServiceArtifact,
   resolveNodeArtifactBundle,
 } from "./artifact-bundle.js";
+export {
+  COGNI_NODE_APP_V1_DEPLOYMENT,
+  COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS,
+  LEGACY_DEFAULT_NODE_DEPLOYMENT,
+  missingRuntimeProfileSecretKeys,
+  renderNodeDeploymentYaml,
+} from "./node-app-deployment.js";
 export { parseRepoSpec } from "./parse.js";
 export {
   type BuildRepoIndexResult,

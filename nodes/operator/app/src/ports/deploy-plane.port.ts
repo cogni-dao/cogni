@@ -88,9 +88,11 @@ export interface MirrorCanonicalFilesInput {
   /** Target node slug — used only for the mirror PR title/labelling. */
   readonly slug: string;
   /**
-   * Canonical paths to mirror byte-for-byte. Any operator-scope node-template content the caller
-   * declares — CI workflows, scripts, package manifests, configs. The set is a caller concern
-   * (P2 sources it from the sync manifest); this method mirrors whatever it is given.
+   * Canonical ROOTS to mirror byte-for-byte. Any operator-scope node-template content the caller
+   * declares — CI workflows, scripts, package manifests, configs. The DELIVERED set is these roots
+   * plus their transitive closure at `sourceRef` (TIER1_IS_CLOSED): the scripts a canonical workflow
+   * invokes and the modules a canonical contract barrel re-exports ship in the same commit, so a
+   * caller never has to hand-track them.
    */
   readonly canonicalPaths: readonly string[];
 }
@@ -162,6 +164,21 @@ export interface CatalogNodeDefinition {
   readonly deployEnvs: readonly ("candidate-a" | "preview" | "production")[];
   readonly activityEnv: "candidate-a" | "preview" | "production";
   readonly ownerWallet: string;
+  /**
+   * The row's `deployment_provider` — WHERE this node's app runs, per environment. Projected into
+   * the registry so the operator can resolve a node's address from declared placement instead of
+   * assuming every node is a cluster neighbour (bug.5106). An omitted environment is `k3s`
+   * (K3S_IS_DEFAULT). The union is mirrored (not imported) from
+   * `@shared/node-registry/placement` — `ports` may not import `shared`.
+   */
+  readonly deploymentProviders: Readonly<
+    Partial<
+      Record<
+        "candidate-a" | "preview" | "production",
+        "k3s" | "akash" | undefined
+      >
+    >
+  >;
 }
 
 export interface ResolveNodeRepoInput {
@@ -243,6 +260,9 @@ export interface DeployPlanePort {
    *   - BRANCH_IS_IDEMPOTENCY_KEY: the head branch is derived from the resolved source SHA, so a
    *     re-run on the same canonical version updates the same PR instead of opening a second one.
    *   - CHANGED_ONLY: byte-identical files produce no tree entry; an all-identical fork is `no_changes`.
+   *   - TIER1_IS_CLOSED: `canonicalPaths` are ROOTS. The implementation expands them to a fixpoint at
+   *     `sourceRef` so the mirrored set is self-consistent — a delivered workflow's scripts and a
+   *     delivered barrel's re-exports are delivered too (task.5078).
    */
   syncCanonicalFilesToFork(
     input: MirrorCanonicalFilesInput

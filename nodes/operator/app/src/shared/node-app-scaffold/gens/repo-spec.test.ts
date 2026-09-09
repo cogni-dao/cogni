@@ -4,7 +4,9 @@
 /**
  * Module: `@shared/node-app-scaffold/gens/repo-spec`
  * Purpose: Pin BORN_REVIEWABLE — the minted `.cogni/repo-spec.yaml` must carry the default review
- *   gates, and the ai-rule filenames must match the external node-template's inherited rules.
+ *   gates, and the ai-rule filenames must match the external node-template's inherited rules — and
+ *   BORN_DEPLOYABLE: the minted spec must declare a complete `deployment:` block so a fresh node is
+ *   external-compute capable with zero hand-editing (task.5079).
  * Scope: Pure unit test over `renderRepoSpec` output; does not exercise the mint network path.
  * Invariants: minted spec has gates, has no `nodes:` registry (single-node-fork signal), and its
  *   ai-rule `rule_file`s match the template contract.
@@ -13,7 +15,13 @@
  * @public
  */
 
-import { parseRepoSpec } from "@cogni/repo-spec";
+import {
+  COGNI_NODE_APP_V1_DEPLOYMENT,
+  COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS,
+  extractNodeServices,
+  hasDeclaredNodeDeployment,
+  parseRepoSpec,
+} from "@cogni/repo-spec";
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 
@@ -153,5 +161,34 @@ describe("renderRepoSpec — BORN_REVIEWABLE", () => {
       .map((g) => g.with?.rule_file)
       .filter((rf): rf is string => typeof rf === "string");
     expect(ruleFiles).toEqual(TEMPLATE_RULE_FILES);
+  });
+});
+
+describe("renderRepoSpec — BORN_DEPLOYABLE", () => {
+  const parsed = parseRepoSpec(rendered);
+
+  it("declares its own deployment instead of inheriting the legacy fallback", () => {
+    expect(hasDeclaredNodeDeployment(parsed)).toBe(true);
+    expect(parsed.deployment).toEqual(COGNI_NODE_APP_V1_DEPLOYMENT);
+  });
+
+  it("declares exactly one public service with complete resources", () => {
+    const services = extractNodeServices(parsed);
+    expect(
+      services.filter((service) => service.visibility === "public")
+    ).toHaveLength(1);
+    for (const service of services) {
+      expect(service.resources.cpuUnits).toBeGreaterThan(0);
+      expect(service.resources.memoryMi).toBeGreaterThan(0);
+      expect(service.resources.storageMi).toBeGreaterThan(0);
+    }
+  });
+
+  it("declares every secret_ref the cogni-node-app-v1 runtime profile requires", () => {
+    const [app] = extractNodeServices(parsed);
+    expect(app?.runtimeProfile).toBe("cogni-node-app-v1");
+    expect(app?.secretRefs.map((ref) => ref.key)).toEqual([
+      ...COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS,
+    ]);
   });
 });

@@ -5,7 +5,8 @@
  * Module: `@tests/unit/adapters/server/db/drizzle-catalog-node-registry.adapter`
  * Purpose: Prove catalog projection uses env-local ownership and preserves lifecycle state on update.
  * Scope: Mocked Drizzle transaction only; no PostgreSQL process.
- * Invariants: USER_IDS_ARE_ENV_LOCAL, STATUS_NEVER_REGRESSES, NODE_ID_IS_DEPLOYMENT_IDENTITY.
+ * Invariants: USER_IDS_ARE_ENV_LOCAL, STATUS_NEVER_REGRESSES, NODE_ID_IS_DEPLOYMENT_IDENTITY,
+ *   PLACEMENT_IS_CATALOG_OWNED.
  * Side-effects: none
  * Links: src/adapters/server/db/drizzle-catalog-node-registry.adapter.ts
  * @internal
@@ -26,6 +27,7 @@ const DEFINITION: CatalogNodeDefinition = {
   deployEnvs: ["candidate-a"],
   activityEnv: "candidate-a",
   ownerWallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949",
+  deploymentProviders: { "candidate-a": "akash" },
 };
 
 function makeSelectChain(rows: readonly { id: string }[]) {
@@ -70,6 +72,9 @@ describe("DrizzleCatalogNodeRegistryAdapter", () => {
         ownerUserId: "env-local-user",
         deployEnvs: ["candidate-a"],
         activityEnv: "candidate-a",
+        // PLACEMENT_IS_CATALOG_OWNED (bug.5106): the row's declared placement lands in the
+        // registry, so the runtime address resolver can read WHERE this node runs.
+        deploymentProviders: { "candidate-a": "akash" },
         status: "published",
       })
     );
@@ -78,6 +83,11 @@ describe("DrizzleCatalogNodeRegistryAdapter", () => {
     };
     expect(conflict.set).not.toHaveProperty("status");
     expect(conflict.set).not.toHaveProperty("id");
+    // Placement is git intent — an existing row is re-stamped on every reconcile, so moving a
+    // node between providers (or back to k3s) reaches the address resolver.
+    expect(conflict.set.deploymentProviders).toEqual({
+      "candidate-a": "akash",
+    });
     expect(result).toEqual({
       projected: 1,
       owners: [{ nodeId: DEFINITION.nodeId, ownerUserId: "env-local-user" }],

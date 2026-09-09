@@ -177,6 +177,40 @@ Three defense-in-depth gates in #1627: OpenFGA `can_manage_secrets` (fail-closed
 
 **Validation status + the road to a proper e2e:** [`docs/design/node-self-serve-secrets-validation-roadmap.md`](../../../docs/design/node-self-serve-secrets-validation-roadmap.md) — the layered proof (L1 candidate-a authz **done**; L2 full write needs the allowlist codegen + the OpenBao writer-role DRY fix; L3 human-in-loop deployed e2e). **Load-bearing gotcha:** the write env is operator-stamped (`deployEnv = env.DEPLOY_ENVIRONMENT`), so `cogni/<operator-env>/<node>/*` is the only path it can write — a prod operator **cannot** write a candidate-a node's secret. Any cross-env "set my candidate-a secret from the prod operator" needs an explicit authz-scoped `targetEnv` param (not in #1627).
 
+## Placement is not provisioning — the empty-node-path class (READ THIS)
+
+**Symptom:** a node deploys fine in one environment and its ExternalSecret fails in another with
+`could not get secret data from provider` / `cannot find secret data for key: "AUTH_SECRET"` — failing at
+`spec.data[0]`, i.e. the node's OpenBao path is **empty**, not one key short.
+
+**Cause:** the node was moved to external compute (`deployment_provider.<env>: akash`) and thereby dropped
+out of the job that provisions it. `node-substrate` — which runs `secret-materialize` — is matrixed on
+`k3s_node_targets_json` in both `candidate-flight.yml` and `promote-and-deploy.yml`. Flip a node's provider
+and it silently leaves the population that gets served. Nothing errors; nobody creates its secrets.
+
+**Why it hides:** the first external nodes were k3s nodes _first_. They kept the secrets they already had,
+so test and preview looked healthy while inheriting from a k3s past. The defect only surfaces in an
+environment where that node never ran on k3s. Do not treat a green lower environment as evidence.
+
+**Two rules:**
+
+1. **Branch the steps, never the population.** Every `type: node` target gets materialized regardless of
+   provider; only provider-specific work (k3s Caddy/NodePort edge reconcile vs external DNS reconcile) is
+   selected inside the job. The typed planner already emits the correct wider node list — prefer it over the
+   k3s-only one.
+2. **A provider that needs a different secret needs a catalog entry, not a rename.** External compute must
+   not receive fleet-shared credentials (they would reach a rented third-party host), so it consumes a
+   node-scoped equivalent — e.g. `LITELLM_VIRTUAL_KEY` in place of the shared `LITELLM_MASTER_KEY`. That is
+   correct, but it is only real once the catalog declares it with a generator. A key that has a consumer and
+   no declaration gets hand-seeded once and silently carried forever (`CATALOG_IS_THE_ONE_READER`).
+
+**Fast triage:** read key NAMES only, never values —
+`bao kv get -format=json cogni/<env>/<node>` and compare the environment that works against the one that
+does not. If the failing path is empty rather than short, this is your class.
+
+Spec: `docs/spec/secrets-management.md` invariants 17-18; `docs/spec/node-baas-architecture.md`
+§ Placement vs Provisioning.
+
 ## Dual-plane secrets — the silent-webhook-fail class (READ THIS)
 
 Some secrets must **byte-equal a value held by an external system**, not merely exist. The operator's `GH_WEBHOOK_SECRET` must equal the **GitHub App's webhook secret**; an OAuth `*_CLIENT_SECRET` must equal the provider's app config. These are **dual-plane**: one copy in our pod, one on the external plane — they only work if identical.

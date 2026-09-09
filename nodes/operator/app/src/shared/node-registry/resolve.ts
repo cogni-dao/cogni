@@ -39,9 +39,12 @@ export function baseDomain(env: {
 
 /**
  * In-cluster internal Service DNS for a node app, by slug: `http://<slug>-node-app:3000`.
- * The single canonical convention for operator→node internal calls (receipt delivery, etc.),
- * mirroring the CSV the DB-less scheduler-worker consumes via COGNI_NODE_ENDPOINTS. The operator
- * derives it live from its DB registry slug — it does NOT read the static map.
+ * The canonical address for a node whose app is placed IN the cluster, mirroring the CSV the
+ * DB-less scheduler-worker consumes via COGNI_NODE_ENDPOINTS.
+ *
+ * NOT a general answer to "where is node X". A node placed on decentralized compute has no such
+ * Service (bug.5106) — callers must go through `nodeAppBaseUrl` (./placement.ts) or, at runtime,
+ * `NodeAddressPort`, which pick this convention only when the node's DECLARED placement is k3s.
  */
 export function internalNodeAppUrl(slug: string): string {
   return `http://${slug}-node-app:3000`;
