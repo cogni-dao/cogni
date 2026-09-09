@@ -18,7 +18,7 @@ namePrefix: operator-
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/cogni-template
-    digest: "sha256:6cb176fbfc866963931aa8ba69dda1f457d91e6f6b71ceddb4ad69d482732dd3"
+    digest: "sha256:0250cc2e6c01a80172d19b00583b65c50990b27849ca16815e75d2d899511b53"
 
 replacements:
   - source:
@@ -30,6 +30,19 @@ replacements:
         fieldPaths: [metadata.namespace]
 
 patches:
+  # bug.5100: candidate-a is a one-replica validation slot on a fixed-size host.
+  # Replace-before-create keeps an operator rollout within declared capacity;
+  # preview and production continue to inherit the base zero-downtime 0/1 policy.
+  - target:
+      kind: Deployment
+      name: node-app
+    patch: |
+      - op: replace
+        path: /spec/strategy/rollingUpdate/maxUnavailable
+        value: 1
+      - op: replace
+        path: /spec/strategy/rollingUpdate/maxSurge
+        value: 0
   - target:
       kind: Deployment
       name: compute-workload-controller
