@@ -67,4 +67,32 @@ describe("assessComputeWorkloadReadiness", () => {
       assessComputeWorkloadReadiness({ expected, live: live(overrides) })
     ).toEqual({ ready: false, reason });
   });
+
+  it("names the controller failure reason when the phase is not Ready (bug.5116)", () => {
+    expect(
+      assessComputeWorkloadReadiness({
+        expected,
+        live: live({
+          status: {
+            ...live().status,
+            phase: "Failed",
+            failure: {
+              reason: "MigrationFailed",
+              message: "node database migration for the desired bundle failed",
+              retryable: false,
+            },
+          },
+        }),
+      })
+    ).toEqual({ ready: false, reason: "phase_not_ready:MigrationFailed" });
+  });
+
+  it("keeps the bare phase_not_ready reason when no failure is recorded", () => {
+    expect(
+      assessComputeWorkloadReadiness({
+        expected,
+        live: live({ status: { ...live().status, phase: "Progressing" } }),
+      })
+    ).toEqual({ ready: false, reason: "phase_not_ready" });
+  });
 });

@@ -105,6 +105,11 @@ export {
   type LeaseRenewOutcome,
   renewLeadershipOrFence,
 } from "./compute/kubernetes-compute-workload.adapter";
+export {
+  DormantComputeWorkloadMigrationAdapter,
+  KubernetesMigrationJobAdapter,
+  migrationJobName,
+} from "./compute/kubernetes-migration-job.adapter";
 export { createDefaultProviderOutcomeStore } from "./compute/provider-outcome-store";
 // Connection broker adapter
 export {

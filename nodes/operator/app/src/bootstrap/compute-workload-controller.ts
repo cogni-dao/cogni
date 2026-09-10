@@ -6,6 +6,7 @@ import { createServer } from "node:http";
 import { hostname } from "node:os";
 
 import {
+  BatchV1Api,
   CoordinationV1Api,
   CoreV1Api,
   CustomObjectsApi,
@@ -23,8 +24,10 @@ import {
   DEFAULT_LEASE_DURATION_SECONDS,
   DormantComputeWorkloadDnsAdapter,
   DormantComputeWorkloadLifecycleAdapter,
+  DormantComputeWorkloadMigrationAdapter,
   KubernetesComputeWorkloadStateAdapter,
   KubernetesLeaseLeaderElector,
+  KubernetesMigrationJobAdapter,
   LeaseRenewError,
   renewLeadershipOrFence,
 } from "@/adapters/server";
@@ -173,6 +176,16 @@ const secretResolver = new ComputeWorkloadSecretResolverAdapter(
   core,
   namespace
 );
+// bug.5116 — externally placed workloads have no k3s initContainer; the migration
+// gate proves per-digest DB migrations via a Job on the operator substrate before
+// any lease mutation. A dormant (credential-less) controller must keep surfacing
+// ProviderCredentialMissing instead of spending migration Jobs it cannot act on.
+const migration = apiKey
+  ? new KubernetesMigrationJobAdapter(
+      kubeConfig.makeApiClient(BatchV1Api),
+      namespace
+    )
+  : new DormantComputeWorkloadMigrationAdapter();
 if (!apiKey) {
   log.error(
     { reason: "ProviderCredentialMissing" },
@@ -317,6 +330,7 @@ async function reconcileAll(): Promise<void> {
                 state,
                 dns,
                 secretResolver,
+                migration,
                 environment: controllerEnvironment,
                 deploymentDomain: controllerDeploymentDomain,
                 leaderEpoch,
@@ -334,6 +348,8 @@ async function reconcileAll(): Promise<void> {
                   ),
                 recordMutationFailure: (observation) =>
                   log.warn(observation, "compute_workload_mutation_failed"),
+                recordMigrationFailure: (observation) =>
+                  log.error(observation, "compute_workload_migration_failed"),
               },
               resource
             );
