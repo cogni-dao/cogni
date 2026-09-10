@@ -36,6 +36,10 @@
  *     remove) yields an EMPTY op list (`{ kind: "no_changes" }`), so the adapter opens no PR.
  *   - DELETE_VIA_SHA_NULL — file removals are emitted as `{ op: "delete", path }`; the adapter maps these
  *     to `{ sha: null }` tree entries (delete-from-base_tree).
+ *   - PLACEMENT_IS_A_LANE_SWITCH (story.5016 T5) — `buildPlacementPlan` flips WHICH lane serves an
+ *     env the node already deploys to: akash upserts `deployment_provider.<env>` and emits the SAME
+ *     k3s-lane deletes an env remove does (the ComputeWorkload CR lane takes over); k3s drops the
+ *     entry and restores planAdd's render set. `envs:` and `compute_egress_cidrs` are untouched.
  * Side-effects: none — pure string transforms.
  * Links: src/adapters/server/vcs/github-repo-write.ts (openNodeEnvPr), docs/design/operator-fleet-safety.md, story.5020
  * @public
@@ -51,10 +55,13 @@ import {
   dropCatalogEnv,
   envRank,
   envRemovalViolation,
+  hasCatalogSourceRepo,
+  type PlacementProvider,
   parseCatalogActivityEnv,
   parseCatalogEnvs,
   setCatalogActivityEnv,
   setCatalogEnvs,
+  setCatalogPlacement,
 } from "./env-membership";
 import type { NodeFormationEnv } from "./envs";
 import { renderOverlay, renderOverlayFile } from "./overlay";
@@ -327,4 +334,183 @@ function planRemove(args: {
     },
   ];
   return { kind: "remove", ops, nextEnvs: remaining };
+}
+
+export type PlacementDeltaResult =
+  | { readonly kind: "no_changes" }
+  | {
+      readonly kind: "place_akash" | "place_k3s";
+      readonly ops: readonly EnvPlanOp[];
+    };
+
+/**
+ * Pure: compute the file-delta for placing `{ slug, env }` on `placement` (story.5016 T5) — the
+ * placement lever on the env verb. Placement is a property of an env the node is ALREADY deployed
+ * to (`envs:` is untouched); it decides WHICH lane serves that deployment:
+ *
+ * - `akash`: upsert `deployment_provider.<env>: akash` in the catalog and DELETE the k3s lane's
+ *   overlay/external-secret/AppSet + drop the slug from that env's appsets kustomization — the SAME
+ *   deletes an env remove emits. The external ComputeWorkload reconciler (CR lane) takes over at the
+ *   next flight/promote. `compute_egress_cidrs` is untouched pass-through — it belongs to the
+ *   workload's row and is rendered independently.
+ * - `k3s`: drop the env's `deployment_provider` entry (k3s is the schema default) and RESTORE the
+ *   k3s lane by re-rendering the overlay/external-secret/AppSet + folding the slug back into the
+ *   kustomization — planAdd's render set, minus the `envs:` edit.
+ *
+ * Deletes are emitted ONLY for paths listed in `existingK3sPaths` — the trees API 422s on a
+ * `sha:null` entry whose path is absent from the base tree, and an already-akash node (toks4) may
+ * or may not still carry its k3s overlays. This makes the akash flip double as the NORMALIZATION
+ * verb: an already-akash catalog whose overlays still exist emits just the cleanup ops (no catalog
+ * change); an already-akash catalog with no residue is `no_changes`. IDEMPOTENT + per-env atomic.
+ */
+export function buildPlacementPlan(input: {
+  readonly slug: string;
+  readonly env: NodeFormationEnv;
+  readonly placement: PlacementProvider;
+  readonly current: EnvPlanCurrent;
+  /** k3s-lane paths for (env, slug) that exist on main; akash deletes are limited to these. */
+  readonly existingK3sPaths?: readonly string[];
+}): PlacementDeltaResult {
+  const { slug, env, placement, current, existingK3sPaths } = input;
+
+  // TEMPLATE_NODE_IMMUTABLE — moving node-template off k3s would delete the per-env overlay
+  // TEMPLATE every wizard node clones. Fail closed.
+  if (placement === "akash" && slug === TEMPLATE_SLUG) {
+    throw new EnvPlanError(
+      "template_node_immutable",
+      `'${TEMPLATE_SLUG}' is the per-env overlay template every wizard node clones; it cannot be placed off k3s.`,
+      422
+    );
+  }
+
+  const currentEnvs = parseCatalogEnvs(current.catalog);
+  if (!currentEnvs.includes(env)) {
+    throw new EnvPlanError(
+      "env_not_deployed",
+      `cannot set placement for '${env}' on '${slug}': the node is not deployed to that environment. Add the env first (present:true).`,
+      422
+    );
+  }
+
+  // AKASH_NEEDS_BUILD_PLANE — the CR lane resolves image_repository:sha-<sourceSha> from an
+  // external source_repo; an in-repo node has no such artifact plane and CANNOT run on akash.
+  if (placement === "akash" && !hasCatalogSourceRepo(current.catalog)) {
+    throw new EnvPlanError(
+      "akash_requires_source_repo",
+      `cannot place '${slug}' on akash: the catalog row has no source_repo (external build plane). Only externally-built nodes can run on decentralized compute.`,
+      422
+    );
+  }
+
+  const nextCatalog = setCatalogPlacement(current.catalog, env, placement);
+
+  if (placement === "k3s") {
+    // Idempotent: already on the k3s default → no restore render, no PR.
+    if (nextCatalog === current.catalog) {
+      return { kind: "no_changes" };
+    }
+    return {
+      kind: "place_k3s",
+      ops: [
+        { op: "upsert", path: CATALOG_PATH(slug), content: nextCatalog },
+        ...renderK3sLaneOps(slug, env, current),
+      ],
+    };
+  }
+
+  const appsetsKustomization = current.appsetsKustomizationByEnv[env];
+  if (appsetsKustomization === undefined) {
+    throw new EnvPlanError(
+      "env_render_inputs_missing",
+      `cannot plan akash placement of '${env}' for '${slug}': missing appsets kustomization.`,
+      422
+    );
+  }
+  const existing = new Set(existingK3sPaths ?? []);
+  const ops: EnvPlanOp[] = [];
+  if (nextCatalog !== current.catalog) {
+    ops.push({ op: "upsert", path: CATALOG_PATH(slug), content: nextCatalog });
+  }
+  for (const path of [
+    overlayPath(env, slug),
+    externalSecretPath(env, slug),
+    appsetPath(env, slug),
+  ]) {
+    if (existing.has(path)) {
+      ops.push({ op: "delete", path });
+    }
+  }
+  const cleanedKustomization = removeFromAppsetsKustomization(
+    appsetsKustomization,
+    slug,
+    env
+  );
+  if (cleanedKustomization !== appsetsKustomization) {
+    ops.push({
+      op: "upsert",
+      path: appsetsKustomizationPath(env),
+      content: cleanedKustomization,
+    });
+  }
+  if (ops.length === 0) {
+    return { kind: "no_changes" };
+  }
+  return { kind: "place_akash", ops };
+}
+
+/** planAdd's k3s render set (overlay + external-secret + AppSet + kustomization fold), sans catalog. */
+function renderK3sLaneOps(
+  slug: string,
+  env: NodeFormationEnv,
+  current: EnvPlanCurrent
+): EnvPlanOp[] {
+  const templateOverlay = current.templateOverlayByEnv[env];
+  const templateExternalSecret = current.templateExternalSecretByEnv?.[env];
+  const appsetsKustomization = current.appsetsKustomizationByEnv[env];
+  if (
+    templateOverlay === undefined ||
+    templateExternalSecret === undefined ||
+    appsetsKustomization === undefined ||
+    current.appsetTemplate === undefined ||
+    current.port === undefined ||
+    current.nodePort === undefined
+  ) {
+    throw new EnvPlanError(
+      "env_render_inputs_missing",
+      `cannot render k3s restore of '${env}' for '${slug}': missing template overlay, external-secret, appset template, kustomization, or ports.`,
+      422
+    );
+  }
+  return [
+    {
+      op: "upsert",
+      path: overlayPath(env, slug),
+      content: renderOverlay(
+        templateOverlay,
+        slug,
+        current.nodePort,
+        current.port
+      ),
+    },
+    {
+      op: "upsert",
+      path: externalSecretPath(env, slug),
+      content: renderOverlayFile(
+        templateExternalSecret,
+        slug,
+        current.nodePort,
+        current.port
+      ),
+    },
+    {
+      op: "upsert",
+      path: appsetPath(env, slug),
+      content: renderNodeAppset(current.appsetTemplate, slug, env),
+    },
+    {
+      op: "upsert",
+      path: appsetsKustomizationPath(env),
+      content: insertAppsetKustomization(appsetsKustomization, slug, env),
+    },
+  ];
 }

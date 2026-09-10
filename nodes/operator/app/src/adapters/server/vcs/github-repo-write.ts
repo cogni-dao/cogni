@@ -52,6 +52,7 @@ import type {
 import { resolveCanonicalPathClosure } from "@/shared/node-app-scaffold/canonical-path-closure";
 import {
   buildEnvDeltaPlan,
+  buildPlacementPlan,
   type EnvPlanCurrent,
   EnvPlanError,
   type EnvPlanOp,
@@ -65,6 +66,10 @@ import {
   NODE_FORMATION_ENVS,
   type NodeFormationEnv,
   nextFreeNodePort,
+  appsetPath as nodeAppsetPath,
+  externalSecretPath as nodeExternalSecretPath,
+  overlayPath as nodeOverlayPath,
+  type PlacementProvider,
   renderCatalog,
   renderDistributionActivationSpec,
   renderNodeAppset,
@@ -138,6 +143,30 @@ export type OpenNodeEnvPrResult =
   | {
       readonly status: "pr_opened";
       readonly action: "add" | "remove";
+      readonly prNumber: number;
+      readonly prUrl: string;
+    }
+  | { readonly status: "no_changes" };
+
+/** Input to {@link GitHubRepoWriter.openNodePlacementPr}: place ONE env's workload on k3s or akash. */
+export interface OpenNodePlacementPrInput {
+  /** Owner of the OPERATOR monorepo (the catalog lives here, exactly like `openNodeEnvPr`). */
+  readonly owner: string;
+  /** The OPERATOR monorepo name. */
+  readonly repo: string;
+  /** Node slug whose `infra/catalog/<slug>.yaml` `deployment_provider` map is edited. */
+  readonly slug: string;
+  /** The env whose placement is set. Must already be in the node's deploy reach. */
+  readonly env: NodeFormationEnv;
+  /** Target placement lane: `akash` = ComputeWorkload CR lane; `k3s` = the overlay/AppSet default. */
+  readonly placement: PlacementProvider;
+}
+
+/** Result of {@link GitHubRepoWriter.openNodePlacementPr}: a PR (opened or reused), or idempotent no-op. */
+export type OpenNodePlacementPrResult =
+  | {
+      readonly status: "pr_opened";
+      readonly action: "place_akash" | "place_k3s";
       readonly prNumber: number;
       readonly prUrl: string;
     }
@@ -2110,6 +2139,138 @@ export class GitHubRepoWriter implements DeployPlanePort {
       prNumber: result.prNumber,
       prUrl: result.prUrl,
     };
+  }
+
+  /**
+   * Placement lever on the env verb (story.5016 T5): place ONE env's workload on `k3s` or `akash`
+   * by editing the OPERATOR monorepo catalog's `deployment_provider` map — plus the k3s-lane file
+   * consequences ({@link buildPlacementPlan}):
+   *
+   * - `akash`: upsert `deployment_provider.<env>: akash`, DELETE the k3s overlay/external-secret/
+   *   AppSet (sha:null, only those that exist on main) and drop the slug from that env's appsets
+   *   kustomization. The external ComputeWorkload reconciler serves the env from then on.
+   * - `k3s`: drop the map entry (k3s is the schema default) and restore the overlay/AppSet render.
+   *
+   * `envs:` membership is untouched — placement requires the env to already be in reach. Idempotent:
+   * the already-holding state (map + no k3s residue) opens no PR. An already-akash catalog whose k3s
+   * overlays still linger emits just the cleanup ops, so the verb doubles as normalization.
+   */
+  async openNodePlacementPr(
+    input: OpenNodePlacementPrInput
+  ): Promise<OpenNodePlacementPrResult> {
+    const { owner, repo, slug, env, placement } = input;
+    const octokit = await this.getOctokit(owner, repo);
+    const { baseCommitSha, baseTreeSha } = await this.resolveMainBase(
+      octokit,
+      owner,
+      repo
+    );
+
+    const catalog = await this.fetchFileText({
+      owner,
+      repo,
+      path: `infra/catalog/${slug}.yaml`,
+      ref: "main",
+    });
+    if (catalog === null) {
+      throw deployPlaneError(
+        "node_not_in_catalog",
+        `infra/catalog/${slug}.yaml not found on main; '${slug}' is not a registered node.`,
+        404
+      );
+    }
+
+    // Reuse the env verb's collect: k3s restore needs planAdd's render inputs (present:true shape);
+    // akash needs only the env's appsets kustomization (present:false shape).
+    const current = await this.collectEnvPlanCurrent(
+      octokit,
+      owner,
+      repo,
+      slug,
+      env,
+      placement === "k3s",
+      catalog
+    );
+
+    // The trees API 422s on a sha:null entry whose path is absent from the base tree, and an
+    // already-akash node may or may not still carry k3s residue — probe what actually exists.
+    let existingK3sPaths: string[] = [];
+    if (placement === "akash") {
+      const probes = [
+        nodeOverlayPath(env, slug),
+        nodeExternalSecretPath(env, slug),
+        nodeAppsetPath(env, slug),
+      ];
+      const found = await Promise.all(
+        probes.map((path) => this.fetchFileText({ owner, repo, path }))
+      );
+      existingK3sPaths = probes.filter((_, i) => found[i] !== null);
+    }
+
+    let plan: ReturnType<typeof buildPlacementPlan>;
+    try {
+      plan = buildPlacementPlan({
+        slug,
+        env,
+        placement,
+        current,
+        existingK3sPaths,
+      });
+    } catch (err) {
+      if (err instanceof EnvPlanError) {
+        throw deployPlaneError(err.code, err.message, err.status);
+      }
+      throw err;
+    }
+
+    if (plan.kind === "no_changes") {
+      return { status: "no_changes" };
+    }
+
+    const entries = await this.planOpsToTreeEntries(
+      octokit,
+      owner,
+      repo,
+      plan.ops
+    );
+
+    const message = `feat(node): place ${slug} ${env} on ${placement}`;
+    const branch = `cogni-operator/node-placement-${slug}-${env}`;
+    const title = message;
+    const body = this.placementPrBody(plan.kind, slug, env);
+
+    const result = await this.commitTreeAndOpenPr(octokit, owner, repo, slug, {
+      baseCommitSha,
+      baseTreeSha,
+      entries,
+      message,
+      branch,
+      pr: { title, body },
+    });
+    await this.updatePrBody(octokit, owner, repo, result.prNumber, title, body);
+    return {
+      status: "pr_opened",
+      action: plan.kind,
+      prNumber: result.prNumber,
+      prUrl: result.prUrl,
+    };
+  }
+
+  /** PR body for the placement lever (story.5016 T5). */
+  private placementPrBody(
+    kind: "place_akash" | "place_k3s",
+    slug: string,
+    env: NodeFormationEnv
+  ): string {
+    const lane =
+      kind === "place_akash"
+        ? "the external ComputeWorkload (akash) lane — the k3s overlay/AppSet for this env is removed"
+        : "the k3s overlay/AppSet lane — its `deployment_provider` entry is dropped (k3s is the default) and the overlay/AppSet re-rendered";
+    return (
+      `Places \`${slug}\`'s \`${env}\` workload on ${lane}, by editing ` +
+      `\`infra/catalog/${slug}.yaml\`'s \`deployment_provider:\` map. Deploy reach (\`envs:\`) is unchanged.\n\n` +
+      "_Authored automatically by cogni-operator (node placement verb, story.5016 T5)._"
+    );
   }
 
   /** Fetch the current control-plane files the env-delta planner reads. Only fetches what the op needs. */
