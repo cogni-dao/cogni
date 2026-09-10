@@ -87,6 +87,30 @@ describe("candidate-a manifest source", () => {
     );
   });
 
+  it("preserves the deployed digest until shape and artifact can promote atomically", () => {
+    const prepare = namedStep(
+      "prepare-substrate-deploy-branch",
+      "Prepare deploy branch shape"
+    ).run;
+
+    expect(prepare).toBeTypeOf("string");
+    const snapshot = prepare?.indexOf("PRESERVED_IMAGE_REF=$(\n");
+    const overlaySync = prepare?.indexOf(
+      '"../app-src/infra/k8s/overlays/candidate-a/${NODE}/"'
+    );
+    const restore = prepare?.indexOf("promote-k8s-image.sh --no-commit");
+    const commit = prepare?.indexOf(
+      'git commit -m "candidate-flight ${NODE}: prepare substrate shape"'
+    );
+
+    expect(snapshot).toBeGreaterThanOrEqual(0);
+    expect(overlaySync).toBeGreaterThan(snapshot ?? -1);
+    expect(restore).toBeGreaterThan(overlaySync ?? -1);
+    expect(commit).toBeGreaterThan(restore ?? -1);
+    expect(prepare).toContain('[[ "$PRESERVED_IMAGE_REF" == *"@sha256:"* ]]');
+    expect(prepare).toContain('--digest "$PRESERVED_IMAGE_REF"');
+  });
+
   it("reports commit status on the parent source SHA only when it owns that SHA", () => {
     const decide = parsed.jobs.decide;
     const meta = namedStep("decide", "Resolve PR metadata").run;
