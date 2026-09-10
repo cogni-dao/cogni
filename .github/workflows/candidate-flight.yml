@@ -441,11 +441,26 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+          PRESERVED_IMAGE_REF=""
+          if [ "$DEPLOYMENT_PROVIDER" = "k3s" ]; then
+            PRESERVED_IMAGE_REF=$(
+              OVERLAY_ENV=candidate-a bash ../app-src/scripts/ci/snapshot-overlay-digests.sh \
+                | awk -F $'\t' -v app="$NODE" '$1 == app { print $2; exit }'
+            )
+          fi
+
           rsync -a --delete ../app-src/infra/k8s/base/ infra/k8s/base/
           mkdir -p "infra/k8s/overlays/candidate-a/${NODE}"
           rsync -a --delete \
             "../app-src/infra/k8s/overlays/candidate-a/${NODE}/" \
             "infra/k8s/overlays/candidate-a/${NODE}/"
+          if [[ "$PRESERVED_IMAGE_REF" == *"@sha256:"* ]]; then
+            # Shape preparation may update manifests, but artifact promotion is
+            # owned by the later flight commit. Keep the currently deployed
+            # digest until that commit can replace shape + digest atomically.
+            bash ../app-src/scripts/ci/promote-k8s-image.sh --no-commit \
+              --env candidate-a --app "$NODE" --digest "$PRESERVED_IMAGE_REF"
+          fi
           mkdir -p infra/catalog
           cp "../app-src/infra/catalog/${NODE}.yaml" "infra/catalog/${NODE}.yaml"
           if [ "$DEPLOYMENT_PROVIDER" = "k3s" ]; then
