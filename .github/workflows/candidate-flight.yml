@@ -42,6 +42,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       head_sha: ${{ steps.meta.outputs.head_sha }}
+      commit_status_sha: ${{ steps.meta.outputs.commit_status_sha }}
       node_slug: ${{ steps.meta.outputs.node_slug }}
       node_source_sha: ${{ steps.meta.outputs.node_source_sha }}
       image_tag: ${{ steps.meta.outputs.image_tag }}
@@ -78,6 +79,7 @@ jobs:
           PR_NUMBER="${{ inputs.pr_number }}"
           NODE_SLUG="${{ inputs.node_slug }}"
           NODE_SOURCE_SHA="${{ inputs.source_sha }}"
+          COMMIT_STATUS_SHA=""
           if [ -n "$NODE_SLUG" ] || [ -n "$NODE_SOURCE_SHA" ]; then
             if [ -n "$PR_NUMBER" ]; then
               echo "::error::candidate-flight accepts either pr_number or node_slug/source_sha, not both"
@@ -92,7 +94,22 @@ jobs:
               exit 1
             fi
             BASE_REF=main
-            HEAD_SHA="${{ github.sha }}"
+            CATALOG="infra/catalog/${NODE_SLUG}.yaml"
+            if [ ! -f "$CATALOG" ]; then
+              echo "::error::node-ref catalog row missing: $CATALOG"
+              exit 1
+            fi
+            SOURCE_REPO=$(yq -N '.source_repo // ""' "$CATALOG")
+            if [ -z "$SOURCE_REPO" ]; then
+              # In-repo node: source_sha identifies both the image and the
+              # infra/k8s manifest tree candidate-a must prove pre-merge.
+              HEAD_SHA="$NODE_SOURCE_SHA"
+              COMMIT_STATUS_SHA="$NODE_SOURCE_SHA"
+            else
+              # Remote node: source_sha belongs to the child repo; parent
+              # manifests stay on the trusted workflow revision.
+              HEAD_SHA="${{ github.sha }}"
+            fi
             IMAGE_TAG="sha-${NODE_SOURCE_SHA}"
           else
             if [ -z "$PR_NUMBER" ]; then
@@ -106,6 +123,7 @@ jobs:
             else
               HEAD_SHA=$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.head.sha')
             fi
+            COMMIT_STATUS_SHA="$HEAD_SHA"
             # ONE identity (SOURCE_SHA_IS_DEPLOY_IDENTITY): the in-repo PR lane
             # resolves the same `sha-<headSha>` image pr-build publishes — the
             # legacy pr-{N}-{X} namespace is purged. (The node_slug+source_sha
@@ -115,6 +133,7 @@ jobs:
           fi
           echo "base_ref=$BASE_REF" >> "$GITHUB_OUTPUT"
           echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+          echo "commit_status_sha=$COMMIT_STATUS_SHA" >> "$GITHUB_OUTPUT"
           echo "node_slug=$NODE_SLUG" >> "$GITHUB_OUTPUT"
           echo "node_source_sha=$NODE_SOURCE_SHA" >> "$GITHUB_OUTPUT"
           echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
@@ -128,11 +147,11 @@ jobs:
           path: app-src
 
       - name: Report pending candidate-flight status
-        if: inputs.pr_number != ''
+        if: steps.meta.outputs.commit_status_sha != ''
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
-          SHA: ${{ steps.meta.outputs.head_sha }}
+          SHA: ${{ steps.meta.outputs.commit_status_sha }}
           STATE: pending
           DESCRIPTION: Candidate flight in progress
           TARGET_URL: ${{ steps.meta.outputs.status_url }}
@@ -1534,11 +1553,11 @@ jobs:
           echo "description=${DESC}" >> "$GITHUB_OUTPUT"
 
       - name: Report terminal candidate-flight status
-        if: inputs.pr_number != ''
+        if: needs.decide.outputs.commit_status_sha != ''
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
-          SHA: ${{ needs.decide.outputs.head_sha }}
+          SHA: ${{ needs.decide.outputs.commit_status_sha }}
           STATE: ${{ steps.decide.outputs.state }}
           DESCRIPTION: ${{ steps.decide.outputs.description }}
           TARGET_URL: ${{ needs.decide.outputs.status_url }}
