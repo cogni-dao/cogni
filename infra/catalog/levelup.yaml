@@ -13,7 +13,7 @@ preview_branch: deploy/preview-levelup
 production_branch: deploy/production-levelup
 # task.5017/5025 — per-env node-set (deploy ⊆ provisioned). A wizard birth enters
 # candidate-a only; preview/production are explicit post-validation transitions.
-envs: [candidate-a, preview, production]
+envs: [preview, production]
 # bug.5079 — activity_env is the SINGLETON env allowed to ingest Git receipts. GitHub
 # App webhooks are delivered to production only (one App, one webhook URL), and the
 # production operator's route index filters to `activityEnv === DEPLOY_ENVIRONMENT`
