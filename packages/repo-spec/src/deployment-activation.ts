@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@cogni/repo-spec/deployment-activation`
- * Purpose: Pure splice of the stock `cogni-node-app-v1` `deployment:` declaration into an EXISTING
- *   node repo-spec YAML text. Existing nodes predate the deployment contract and ride the legacy
- *   secret-free default, which external-compute placement refuses (`assertDeclaredNodeDeployment`);
- *   the operator mints this block back into the node's OWN repo — never hand-edited YAML.
- * Scope: Pure string transform over the current `.cogni/repo-spec.yaml` text. No IO, no env, no
- *   YAML round-trip of the existing content (a string append, so the spec's comments + ordering are
- *   preserved byte-exact). The route layer reads the current file via the App and persists the
- *   result via a PR.
+ * Purpose: Pure splice of the stock `cogni-node-app-v1` `deployment:` block into an existing spec.
+ *   Existing nodes predate the deployment contract and ride the legacy secret-free default, which
+ *   external-compute placement refuses (`assertDeclaredNodeDeployment`); the operator mints this
+ *   block back into the node's OWN repo — never hand-edited YAML.
+ * Scope: Pure string transform over the current `.cogni/repo-spec.yaml` text; does not perform IO,
+ *   read env, or YAML-round-trip the existing content (a string append, so the spec's comments +
+ *   ordering are preserved byte-exact). The route layer reads the current file via the App and
+ *   persists the result via a PR.
  * Invariants:
  *   - SCAFFOLD_AND_GATE_SHARE_ONE_VALUE: the appended block is `renderNodeDeploymentYaml()` — the
  *     SAME constant the node scaffold emits and the external-compute gate requires, so they cannot
