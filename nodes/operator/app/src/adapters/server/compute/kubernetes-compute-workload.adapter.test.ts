@@ -96,19 +96,38 @@ function declaredWorkload(): ComputeWorkload {
 }
 
 describe("ComputeWorkload Kubernetes contract", () => {
-  it("pins the controller env order the per-env overlays patch positionally", async () => {
-    // bug.5110 follow-up. Every infra/k8s/overlays/<env>/operator/kustomization.yaml
-    // patches this container's env by INDEX
+  it("forbids positional env JSON-pointer patches in the operator overlays", async () => {
+    // bug.5110 / story.5016 Gate 0b. The per-env operator overlays once patched
+    // this container's env by INDEX
     // (`/spec/template/spec/containers/0/env/N/value`), so inserting a variable
-    // above an existing one silently repoints a DIFFERENT variable. Adding the
+    // above an existing one silently repointed a DIFFERENT variable. Adding the
     // lease knob ahead of AKASH_ALLOWED_PROVIDERS blanked that allowlist in all
-    // three envs, and an empty allowlist rejects every provider bid -- no node
-    // could obtain an Akash lease. Nothing else failed loudly, so pin the order:
-    // append new variables, never insert.
+    // three envs (d69e5c29), and an empty allowlist rejects every provider bid
+    // -- no node could obtain an Akash lease. Overlays now set env values BY
+    // NAME via strategic merge; the invariant is that no overlay ever reverts
+    // to a positional env pointer.
+    const repoRoot = join(
+      fileURLToPath(new URL(".", import.meta.url)),
+      "../../../../../../.."
+    );
+    for (const overlayEnv of ["candidate-a", "preview", "production"]) {
+      const kustomizationYaml = await readFile(
+        join(
+          repoRoot,
+          "infra/k8s/overlays",
+          overlayEnv,
+          "operator/kustomization.yaml"
+        ),
+        "utf8"
+      );
+      // Matches JSON-pointer segments like `/env/3/value` (positional), but not
+      // name-keyed strategic-merge entries.
+      expect(kustomizationYaml).not.toMatch(/\/env\/\d+(\/|$)/m);
+    }
     const deploymentYaml = await readFile(
       join(
-        fileURLToPath(new URL(".", import.meta.url)),
-        "../../../../../../../infra/k8s/base/compute-workload-controller/deployment.yaml"
+        repoRoot,
+        "infra/k8s/base/compute-workload-controller/deployment.yaml"
       ),
       "utf8"
     );
@@ -123,13 +142,6 @@ describe("ComputeWorkload Kubernetes contract", () => {
         };
       };
     };
-    const env = deployment.spec.template.spec.containers[0]?.env ?? [];
-    expect(env.slice(0, 4).map((entry) => entry.name)).toEqual([
-      "POD_NAMESPACE",
-      "CONTROLLER_ENVIRONMENT",
-      "DEPLOYMENT_DOMAIN",
-      "AKASH_ALLOWED_PROVIDERS",
-    ]);
     // Singleton by design: a surge would run two pods against one coordination
     // Lease and manufacture the CAS conflicts this controller then has to
     // survive — so maxSurge must stay 0. But the type must be RollingUpdate,
