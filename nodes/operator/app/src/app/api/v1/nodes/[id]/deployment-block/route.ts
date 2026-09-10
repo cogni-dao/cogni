@@ -21,6 +21,12 @@
  *   - IDEMPOTENT: a node whose repo-spec already declares ANY `deployment:` block returns
  *     `no_changes` (a node's own hand-authored declaration is never overwritten).
  *   - SINGLE_HOME: writes ONLY the node's own `.cogni/repo-spec.yaml`, never a `nodes/<x>/` path.
+ *   - REMOTE_SOURCE_ONLY: an IN-REPO node (catalog row with no `source_repo`, e.g. operator/poly —
+ *     `resolveNodeRepo` collapses it to `{parentOwner, parentRepo}`) fails closed with a typed 422
+ *     `in_repo_node_unsupported` BEFORE any Octokit call. This verb's root-path splice is only
+ *     correct for a remote-source node's OWN repo; an in-repo node's runtime spec lives at
+ *     `nodes/<slug>/.cogni/repo-spec.yaml` in the parent (see `prepareNodeRefCandidateFlight`'s
+ *     IN-REPO branch for that pattern, not wired here).
  * Side-effects: IO (GitHub REST API, Postgres read)
  * Links: src/adapters/server/vcs/github-repo-write.ts (openNodeDeploymentBlockPr),
  *   packages/repo-spec/src/deployment-activation.ts, task.5083, story.5016
@@ -103,10 +109,15 @@ export async function POST(_request: Request, routeArgs: RouteParams) {
       parentRepo,
       slug: node.slug,
     });
+    // resolveNodeRepo's IN-REPO shortcut returns exactly {owner: parentOwner, repo: parentRepo}
+    // for a catalog row with no `source_repo` (operator/poly) — the writer only supports
+    // remote-source (forked) node repos, see REMOTE_SOURCE_ONLY on openNodeDeploymentBlockPr.
+    const isInRepoNode = owner === parentOwner && repo === parentRepo;
     result = await writer.openNodeDeploymentBlockPr({
       owner,
       repo,
       slug: node.slug,
+      isInRepoNode,
     });
   } catch (err) {
     const status = (err as { status?: number })?.status;

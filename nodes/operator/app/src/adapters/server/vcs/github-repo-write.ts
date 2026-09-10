@@ -2402,16 +2402,42 @@ export class GitHubRepoWriter implements DeployPlanePort {
    * SINGLE_HOME: writes ONLY `.cogni/repo-spec.yaml` at the repo root. Idempotent: a spec that
    * already declares ANY `deployment:` block (a node's own hand-authored declaration included)
    * splices to itself — returns `no_changes`, never overwrites.
+   *
+   * REMOTE_SOURCE_ONLY: `resolveNodeRepo`'s IN-REPO shortcut collapses an in-repo node (operator,
+   * poly — no catalog `source_repo`) to `{owner: parentOwner, repo: parentRepo}`, i.e. the PARENT
+   * monorepo. A root `.cogni/repo-spec.yaml` splice there would be wrong for those nodes — their
+   * runtime spec lives at `nodes/<slug>/.cogni/repo-spec.yaml` (see `prepareNodeRefCandidateFlight`'s
+   * IN-REPO branch above, which reads that path). This verb only supports REMOTE-SOURCE (forked)
+   * node repos; callers must pass `isInRepoNode` so we can fail closed before touching Octokit. If
+   * in-repo support is ever wired here, follow the `prepareNodeRefCandidateFlight` pattern (path =
+   * `nodes/${slug}/.cogni/repo-spec.yaml`, read via the parent repo) instead of the root path.
    */
   async openNodeDeploymentBlockPr(input: {
     owner: string;
     repo: string;
     slug: string;
+    /**
+     * `true` when the resolved `{owner, repo}` is the IN-REPO shortcut (catalog row has no
+     * `source_repo` — operator/poly), i.e. `resolveNodeRepo` returned the PARENT monorepo rather
+     * than the node's own repo. Callers derive this the same way `resolveNodeRepo` does internally
+     * (catalog `source_repo` PRESENCE) — see the route for the concrete check.
+     */
+    isInRepoNode: boolean;
   }): Promise<
     | { status: "pr_opened"; prNumber: number; prUrl: string }
     | { status: "no_changes" }
   > {
-    const { owner, repo, slug } = input;
+    const { owner, repo, slug, isInRepoNode } = input;
+    if (isInRepoNode) {
+      throw deployPlaneError(
+        "in_repo_node_unsupported",
+        `node '${slug}' is an in-repo node (no catalog source_repo); ` +
+          "openNodeDeploymentBlockPr only supports remote-source (forked) node repos — " +
+          "an in-repo node's runtime spec lives at nodes/<slug>/.cogni/repo-spec.yaml in the " +
+          "parent monorepo, not a root .cogni/repo-spec.yaml in its own repo",
+        422
+      );
+    }
     const octokit = await this.getOctokit(owner, repo);
     const branch = `cogni-operator/declare-deployment-${slug}`;
     const title = `feat(deploy): declare ${slug} node deployment`;
@@ -2438,8 +2464,11 @@ export class GitHubRepoWriter implements DeployPlanePort {
       );
     }
 
+    // renderDeploymentActivationSpec already checks hasDeploymentActivationSpec internally and
+    // returns `currentSpec` unchanged when a `deployment:` block exists, so `nextSpec ===
+    // currentSpec` alone covers that case — no separate hasDeploymentActivationSpec check needed.
     const nextSpec = renderDeploymentActivationSpec(currentSpec);
-    if (nextSpec === currentSpec || hasDeploymentActivationSpec(currentSpec)) {
+    if (nextSpec === currentSpec) {
       return { status: "no_changes" };
     }
 

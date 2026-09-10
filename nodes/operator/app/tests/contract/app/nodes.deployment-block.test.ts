@@ -192,6 +192,46 @@ describe("POST /api/v1/nodes/[id]/deployment-block", () => {
       owner: "cogni-test-org",
       repo: NODE_SLUG,
       slug: NODE_SLUG,
+      isInRepoNode: false,
+    });
+  });
+
+  it("surfaces the writer's in_repo_node_unsupported 422 when resolveNodeRepo returns the parent monorepo", async () => {
+    // resolveNodeRepo's IN-REPO shortcut (catalog row with no source_repo, e.g. operator/poly)
+    // returns exactly {owner: parentOwner, repo: parentRepo} — the route must detect that and
+    // pass isInRepoNode: true so the writer fails closed instead of splicing the wrong file.
+    writer.resolveNodeRepo.mockResolvedValue({
+      owner: "cogni-test-org",
+      repo: "cogni-monorepo",
+    });
+    writer.openNodeDeploymentBlockPr.mockRejectedValue(
+      Object.assign(
+        new Error(
+          "node 'operator' is an in-repo node (no catalog source_repo)"
+        ),
+        { code: "in_repo_node_unsupported", status: 422 }
+      )
+    );
+
+    await testApiHandler({
+      appHandler,
+      params: { id: NODE_ID },
+      async test({ fetch }) {
+        const res = await fetch({ method: "POST" });
+        expect(res.status).toBe(422);
+        expect(await res.json()).toEqual({
+          error: "node deployment-block write failed",
+          errorCode: "in_repo_node_unsupported",
+          reason: "node 'operator' is an in-repo node (no catalog source_repo)",
+        });
+      },
+    });
+
+    expect(writer.openNodeDeploymentBlockPr).toHaveBeenCalledWith({
+      owner: "cogni-test-org",
+      repo: "cogni-monorepo",
+      slug: NODE_SLUG,
+      isInRepoNode: true,
     });
   });
 

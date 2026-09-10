@@ -788,6 +788,7 @@ governance:
         owner: "cogni-test-org",
         repo: "test-cog",
         slug: "test-cog",
+        isInRepoNode: false,
       })
     ).resolves.toEqual({ status: "no_changes" });
 
@@ -885,6 +886,7 @@ governance:
         owner: "cogni-test-org",
         repo: "test-cog",
         slug: "test-cog",
+        isInRepoNode: false,
       })
     ).resolves.toEqual({
       status: "pr_opened",
@@ -947,6 +949,7 @@ governance:
         owner: "cogni-test-org",
         repo: "test-cog",
         slug: "test-cog",
+        isInRepoNode: false,
       })
     ).resolves.toEqual({
       status: "pr_opened",
@@ -957,6 +960,32 @@ governance:
     expect(requests.map((request) => request.route)).not.toContain(
       "POST /repos/{owner}/{repo}/git/commits"
     );
+  });
+
+  it("rejects an in-repo node (no catalog source_repo) with a typed 422 before any Octokit call", async () => {
+    // resolveNodeRepo's IN-REPO shortcut collapses operator/poly to {owner: parentOwner, repo:
+    // parentRepo} — the parent monorepo. A root .cogni/repo-spec.yaml splice there would target
+    // the WRONG file (the runtime spec lives at nodes/<slug>/.cogni/repo-spec.yaml). The writer
+    // must fail closed on the `isInRepoNode` flag before touching the App at all.
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": () => {
+        throw new Error("must not fetch any file for an in-repo node");
+      },
+    };
+
+    await expect(
+      makeWriter().openNodeDeploymentBlockPr({
+        owner: "cogni-test-org",
+        repo: "cogni-monorepo",
+        slug: "operator",
+        isInRepoNode: true,
+      })
+    ).rejects.toMatchObject({
+      code: "in_repo_node_unsupported",
+      status: 422,
+    });
+
+    expect(requests).toEqual([]);
   });
 });
 
