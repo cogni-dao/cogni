@@ -30,8 +30,10 @@
 import {
   extractNodeId,
   hasDeclaredNodeDeployment,
+  hasDeploymentActivationSpec,
   parseRepoSpec,
   type RepoSpec,
+  renderDeploymentActivationSpec,
 } from "@cogni/repo-spec";
 import { createAppAuth } from "@octokit/auth-app";
 import { Octokit } from "@octokit/core";
@@ -2610,6 +2612,141 @@ export class GitHubRepoWriter implements DeployPlanePort {
         },
       ],
       message: `feat(payments): activate ${slug} payment rails`,
+      branch,
+      pr: { title, body },
+    });
+    await this.updatePrBody(octokit, owner, repo, result.prNumber, title, body);
+    return { status: "pr_opened", ...result };
+  }
+
+  /**
+   * Deployment-declaration write-back into the NODE'S OWN repo (story.5016 T6): read the node
+   * repo's `.cogni/repo-spec.yaml` on `main` and, when the node predates the `deployment:`
+   * contract, append the stock `cogni-node-app-v1` declaration (`renderNodeDeploymentYaml`) via a
+   * one-file PR. External-compute placement (`assertDeclaredNodeDeployment`) refuses a node that
+   * still rides the legacy secret-free default, so existing nodes get this block minted by the
+   * operator — zero hand-edited YAML. The {owner, repo} here is the node's OWN repo identity,
+   * resolved by the route via `resolveNodeRepo` (catalog `source_repo`).
+   *
+   * SINGLE_HOME: writes ONLY `.cogni/repo-spec.yaml` at the repo root. Idempotent: a spec that
+   * already declares ANY `deployment:` block (a node's own hand-authored declaration included)
+   * splices to itself — returns `no_changes`, never overwrites.
+   *
+   * REMOTE_SOURCE_ONLY: `resolveNodeRepo`'s IN-REPO shortcut collapses an in-repo node (operator,
+   * poly — no catalog `source_repo`) to `{owner: parentOwner, repo: parentRepo}`, i.e. the PARENT
+   * monorepo. A root `.cogni/repo-spec.yaml` splice there would be wrong for those nodes — their
+   * runtime spec lives at `nodes/<slug>/.cogni/repo-spec.yaml` (see `prepareNodeRefCandidateFlight`'s
+   * IN-REPO branch above, which reads that path). This verb only supports REMOTE-SOURCE (forked)
+   * node repos; callers must pass `isInRepoNode` so we can fail closed before touching Octokit. If
+   * in-repo support is ever wired here, follow the `prepareNodeRefCandidateFlight` pattern (path =
+   * `nodes/${slug}/.cogni/repo-spec.yaml`, read via the parent repo) instead of the root path.
+   */
+  async openNodeDeploymentBlockPr(input: {
+    owner: string;
+    repo: string;
+    slug: string;
+    /**
+     * `true` when the resolved `{owner, repo}` is the IN-REPO shortcut (catalog row has no
+     * `source_repo` — operator/poly), i.e. `resolveNodeRepo` returned the PARENT monorepo rather
+     * than the node's own repo. Callers derive this the same way `resolveNodeRepo` does internally
+     * (catalog `source_repo` PRESENCE) — see the route for the concrete check.
+     */
+    isInRepoNode: boolean;
+  }): Promise<
+    | { status: "pr_opened"; prNumber: number; prUrl: string }
+    | { status: "no_changes" }
+  > {
+    const { owner, repo, slug, isInRepoNode } = input;
+    if (isInRepoNode) {
+      throw deployPlaneError(
+        "in_repo_node_unsupported",
+        `node '${slug}' is an in-repo node (no catalog source_repo); ` +
+          "openNodeDeploymentBlockPr only supports remote-source (forked) node repos — " +
+          "an in-repo node's runtime spec lives at nodes/<slug>/.cogni/repo-spec.yaml in the " +
+          "parent monorepo, not a root .cogni/repo-spec.yaml in its own repo",
+        422
+      );
+    }
+    const octokit = await this.getOctokit(owner, repo);
+    const branch = `cogni-operator/declare-deployment-${slug}`;
+    const title = `feat(deploy): declare ${slug} node deployment`;
+    const body =
+      `Declares \`${slug}\`'s \`deployment:\` block in \`.cogni/repo-spec.yaml\` — the stock ` +
+      "`cogni-node-app-v1` service (one public Next.js app) with the runtime profile's full " +
+      "secret contract (`secret_refs`).\n\n" +
+      "Existing nodes predate the deployment contract and ride the legacy secret-free default, " +
+      "which external-compute placement refuses (`assertDeclaredNodeDeployment`). Merging this " +
+      "makes the node placeable without changing its current k3s behavior.\n\n" +
+      "_Authored automatically by cogni-operator (node deployment-block verb, story.5016 T6)._";
+
+    const currentSpec = await this.fetchFileText({
+      owner,
+      repo,
+      path: ".cogni/repo-spec.yaml",
+      ref: "main",
+    });
+    if (currentSpec === null) {
+      throw deployPlaneError(
+        "repo_spec_missing",
+        `node repo-spec not found at ${owner}/${repo}:.cogni/repo-spec.yaml`,
+        422
+      );
+    }
+
+    // renderDeploymentActivationSpec already checks hasDeploymentActivationSpec internally and
+    // returns `currentSpec` unchanged when a `deployment:` block exists, so `nextSpec ===
+    // currentSpec` alone covers that case — no separate hasDeploymentActivationSpec check needed.
+    const nextSpec = renderDeploymentActivationSpec(currentSpec);
+    if (nextSpec === currentSpec) {
+      return { status: "no_changes" };
+    }
+
+    const existingPr = await this.findOpenPrForBranch(octokit, owner, repo, {
+      branch,
+      title,
+    });
+    if (existingPr) {
+      const pendingSpec = await this.fetchFileText({
+        owner,
+        repo,
+        path: ".cogni/repo-spec.yaml",
+        ref: branch,
+      });
+      if (
+        pendingSpec === nextSpec ||
+        (pendingSpec !== null && hasDeploymentActivationSpec(pendingSpec))
+      ) {
+        await this.updatePrBody(
+          octokit,
+          owner,
+          repo,
+          existingPr.prNumber,
+          title,
+          body
+        );
+        return { status: "pr_opened", ...existingPr };
+      }
+    }
+
+    const { baseCommitSha, baseTreeSha } = await this.resolveMainBase(
+      octokit,
+      owner,
+      repo
+    );
+    const blobSha = await this.createBlob(octokit, owner, repo, nextSpec);
+
+    const result = await this.commitTreeAndOpenPr(octokit, owner, repo, slug, {
+      baseCommitSha,
+      baseTreeSha,
+      entries: [
+        {
+          path: ".cogni/repo-spec.yaml",
+          mode: "100644",
+          type: "blob",
+          sha: blobSha,
+        },
+      ],
+      message: `feat(deploy): declare ${slug} node deployment`,
       branch,
       pr: { title, body },
     });
