@@ -66,13 +66,13 @@ spec:
             # prevent, so this only bounds how long a slow API server may fail
             # renewals before the process fences itself.
             #
-            # MUST STAY LAST. Every per-env overlay patches this container's env
-            # POSITIONALLY (`/spec/template/spec/containers/0/env/N/value`), so
-            # inserting a variable anywhere above silently repoints a different
-            # one. Adding it before AKASH_ALLOWED_PROVIDERS blanked that
-            # allowlist fleet-wide — and an empty allowlist rejects every
-            # provider bid, so no node could obtain an Akash lease at all.
-            # Append new variables here, never in the middle.
+            # History (story.5016 Gate 0b): per-env overlays once patched this
+            # env list POSITIONALLY (`/spec/template/spec/containers/0/env/N/value`),
+            # so inserting a variable mid-list silently repointed a different
+            # one — adding this knob before AKASH_ALLOWED_PROVIDERS blanked
+            # that allowlist fleet-wide (d69e5c29), and an empty allowlist
+            # rejects every provider bid. Overlays now patch by NAME (strategic
+            # merge), so ordering here no longer matters.
             - name: COMPUTE_CONTROLLER_LEASE_DURATION_SECONDS
               value: "120"
           ports:
