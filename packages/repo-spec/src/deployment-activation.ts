@@ -75,5 +75,11 @@ export function renderDeploymentActivationSpec(current: string): string {
   ) {
     return current;
   }
-  return `${current.replace(/\n*$/, "\n")}\n${renderNodeDeploymentYaml()}`;
+  // Trim trailing newlines without a regex (js/polynomial-redos), then separate the appended
+  // block from the existing content with exactly one blank line.
+  let end = current.length;
+  while (end > 0 && current.charCodeAt(end - 1) === 10 /* \n */) {
+    end -= 1;
+  }
+  return `${current.slice(0, end)}\n\n${renderNodeDeploymentYaml()}`;
 }
