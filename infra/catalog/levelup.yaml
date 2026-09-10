@@ -13,9 +13,15 @@ preview_branch: deploy/preview-levelup
 production_branch: deploy/production-levelup
 # task.5017/5025 — per-env node-set (deploy ⊆ provisioned). A wizard birth enters
 # candidate-a only; preview/production are explicit post-validation transitions.
-envs: [candidate-a, preview, production]
-# task.5025 generation 1 — candidate-a is the fixed activity authority; v1 has no cutover verb.
-activity_env: candidate-a
+envs: [preview, production]
+# bug.5079 — activity_env is the SINGLETON env allowed to ingest Git receipts. GitHub
+# App webhooks are delivered to production only (one App, one webhook URL), and the
+# production operator's route index filters to `activityEnv === DEPLOY_ENVIRONMENT`
+# (attribution-profile-resolver.ts selectLocalAttributionNodes). A node left on
+# candidate-a is therefore structurally unable to receive a receipt: its webhooks
+# arrive in production and are dropped `unclaimed`, fail-closed and silent.
+# levelup is deployed to production, so production is its activity authority.
+activity_env: production
 # Stable binding only; the reconciler resolves an env-local users.id by wallet.
 owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
 path_prefix: nodes/levelup/
