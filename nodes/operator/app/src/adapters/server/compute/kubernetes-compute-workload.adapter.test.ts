@@ -370,6 +370,41 @@ describe("ComputeWorkload Kubernetes contract", () => {
     ).resolves.toEqual({ state: "claimed" });
   });
 
+  it("fails closed when preparing against an absent wallet slot yet settles complete idempotently", async () => {
+    const ledger = {
+      metadata: {
+        name: "compute-workload-allocation-ledger",
+        namespace: "cogni-candidate-a",
+        resourceVersion: "1",
+      },
+      data: {} as Record<string, string>,
+    };
+    const core = {
+      readNamespacedConfigMap: vi.fn(async () => ({
+        body: structuredClone(ledger),
+      })),
+      replaceNamespacedConfigMap: vi.fn(async () => ({
+        body: structuredClone(ledger),
+      })),
+    } as unknown as CoreV1Api;
+    const state = new KubernetesComputeWorkloadStateAdapter(
+      {} as unknown as CustomObjectsApi,
+      core,
+      "cogni-candidate-a",
+      "test-controller"
+    );
+
+    // A resumed zombie inside the clear-then-claim window must not reach POST
+    // with no slot recorded (bug.5108 review): absence is never legitimate for
+    // a preparing attempt.
+    await expect(
+      state.prepareWalletAllocation({ attemptKey: "a", allocationCursor: "41" })
+    ).rejects.toThrow(/no active slot/);
+    await expect(
+      state.completeWalletAllocation({ attemptKey: "a" })
+    ).resolves.toBeUndefined();
+  });
+
   // bug.5115 fixture: a ledger ConfigMap seeded with an `active` slot, plus a cluster
   // whose ComputeWorkload uids decide whether that slot's owner is alive or an orphan.
   function seededWalletLedger(input: {

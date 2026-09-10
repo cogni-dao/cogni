@@ -1625,6 +1625,273 @@ describe("reconcileComputeWorkload", () => {
     expect(port.create).not.toHaveBeenCalled();
   });
 
+  describe("dead-epoch claimed recovery (bug.5108)", () => {
+    const DEAD_EPOCH = "6:previous-controller";
+
+    function claimedWedge(input: {
+      resource: ComputeWorkload;
+      operation: "create" | "recover";
+      ordinal: number;
+      leaderEpoch: string;
+      retryCount: number;
+      recoveryCount: number;
+    }): MemoryState {
+      const receipt: ComputeWorkloadAttemptReceipt = {
+        key: computeWorkloadIdempotencyKey({
+          resource: input.resource,
+          operation: input.operation,
+          ordinal: input.ordinal,
+        }),
+        operation: input.operation,
+        ordinal: input.ordinal,
+        outcome: "claimed",
+        leaderEpoch: input.leaderEpoch,
+        retryCount: input.retryCount,
+        startedAt: NOW.toISOString(),
+      };
+      return new MemoryState(
+        workload({
+          metadata: {
+            ...input.resource.metadata,
+            annotations: {
+              [COMPUTE_WORKLOAD_ATTEMPT_ANNOTATION]:
+                encodeAttemptReceipt(receipt),
+            },
+          },
+          status: {
+            phase: "Failed",
+            desiredGeneration: input.resource.metadata.generation,
+            attempt: { ...receipt },
+            recoveryCount: input.recoveryCount,
+            failure: {
+              reason: "RetryLimitExceeded",
+              message: "known-outcome retry limit was exceeded",
+              retryable: false,
+            },
+            conditions: [],
+          },
+        })
+      );
+    }
+
+    it("escalates a dead-epoch claimed wedge to a fresh recovery allocation when no baseline exists", async () => {
+      const resource = workload();
+      const state = claimedWedge({
+        resource,
+        operation: "create",
+        ordinal: 0,
+        leaderEpoch: DEAD_EPOCH,
+        retryCount: 2,
+        recoveryCount: 0,
+      });
+      const port = lifecycle();
+
+      await run(state, port);
+
+      // No cursor anywhere proves the dead claimant never started provider I/O.
+      expect(port.recoverCreate).not.toHaveBeenCalled();
+      expect(port.create).toHaveBeenCalledTimes(1);
+      expect(port.create.mock.calls[0]?.[0].idempotencyKey).toBe(
+        computeWorkloadIdempotencyKey({
+          resource,
+          operation: "recover",
+          ordinal: 1,
+        })
+      );
+      expect(state.current.status).toMatchObject({
+        phase: "Progressing",
+        resource: { id: "lease-42" },
+        recoveryCount: 1,
+        attempt: { operation: "recover", ordinal: 1, outcome: "succeeded" },
+      });
+      expect(state.current.status?.failure).toBeUndefined();
+      expect(state.wallet).toBeUndefined();
+    });
+
+    it("adopts the provider resource behind a dead-epoch claim whose wallet baseline survived", async () => {
+      const resource = workload();
+      const state = claimedWedge({
+        resource,
+        operation: "create",
+        ordinal: 0,
+        leaderEpoch: DEAD_EPOCH,
+        retryCount: 2,
+        recoveryCount: 0,
+      });
+      state.wallet = {
+        attemptKey: computeWorkloadIdempotencyKey({
+          resource,
+          operation: "create",
+          ordinal: 0,
+        }),
+        workloadUid: resource.metadata.uid,
+        allocationCursor: "41",
+      };
+      const port = lifecycle();
+      port.recoverCreate.mockResolvedValueOnce({
+        provider: "external",
+        leaseId: "42",
+        state: "active",
+        endpoints: ["https://sample-node.example"],
+      });
+      port.observe.mockResolvedValueOnce({
+        provider: "external",
+        leaseId: "42",
+        state: "active",
+        endpoints: ["https://sample-node.example"],
+      });
+
+      await run(state, port);
+
+      // A surviving pre-POST baseline means a lease may exist: observe, never re-create.
+      expect(port.create).not.toHaveBeenCalled();
+      expect(port.recoverCreate).toHaveBeenCalledWith({
+        allocationCursor: "41",
+      });
+      expect(state.current.status?.resource?.id).toBe("42");
+      expect(state.wallet).toBeUndefined();
+    });
+
+    it("keeps a live-epoch claimed attempt blocked without any recovery", async () => {
+      const resource = workload();
+      const state = claimedWedge({
+        resource,
+        operation: "create",
+        ordinal: 0,
+        leaderEpoch: "7:test-controller",
+        retryCount: 2,
+        recoveryCount: 0,
+      });
+      const port = lifecycle();
+
+      await run(state, port);
+      await run(state, port);
+
+      expect(port.create).not.toHaveBeenCalled();
+      expect(port.recoverCreate).not.toHaveBeenCalled();
+      expect(state.current.status).toMatchObject({
+        phase: "Failed",
+        failure: { reason: "RetryLimitExceeded", retryable: false },
+        attempt: { outcome: "claimed" },
+      });
+    });
+
+    it("bounds dead-epoch claim recovery at three generation-scoped allocations and settles the dead slot", async () => {
+      const resource = workload();
+      const state = claimedWedge({
+        resource,
+        operation: "recover",
+        ordinal: 3,
+        leaderEpoch: DEAD_EPOCH,
+        retryCount: 0,
+        recoveryCount: 3,
+      });
+      // The dead recover/3 claim still holds the wallet-wide slot: hitting the
+      // recovery limit must settle it, or every other workload's create is
+      // deadlocked forever (the CR still exists, so bug.5115 reclaim refuses).
+      state.wallet = {
+        attemptKey: computeWorkloadIdempotencyKey({
+          resource,
+          operation: "recover",
+          ordinal: 3,
+        }),
+        workloadUid: resource.metadata.uid,
+      };
+      const port = lifecycle();
+      const recordRecoveryLimit = vi.fn();
+
+      await run(state, port, { recordRecoveryLimit });
+
+      expect(port.create).not.toHaveBeenCalled();
+      expect(port.recoverCreate).not.toHaveBeenCalled();
+      expect(state.current.status?.phase).toBe("Failed");
+      expect(state.current.status?.failure?.reason).toBe(
+        "RecoveryLimitExceeded"
+      );
+      expect(state.current.status?.recoveryCount).toBe(3);
+      expect(recordRecoveryLimit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          recoveryCount: 3,
+          outcomeCode: "RecoveryLimitExceeded",
+        })
+      );
+      expect(state.wallet).toBeUndefined();
+
+      // Terminal steady state is write-free: no wallet churn, no status rewrite.
+      const patchStatus = vi.spyOn(state, "patchStatus");
+      await run(state, port, { recordRecoveryLimit });
+      expect(port.create).not.toHaveBeenCalled();
+      expect(recordRecoveryLimit).toHaveBeenCalledTimes(1);
+      expect(patchStatus).not.toHaveBeenCalled();
+      expect(state.wallet).toBeUndefined();
+    });
+
+    it("holds ProviderOutcomeUnknown without creating when the adopted baseline has zero candidates", async () => {
+      const resource = workload();
+      const state = claimedWedge({
+        resource,
+        operation: "create",
+        ordinal: 0,
+        leaderEpoch: DEAD_EPOCH,
+        retryCount: 2,
+        recoveryCount: 0,
+      });
+      state.wallet = {
+        attemptKey: computeWorkloadIdempotencyKey({
+          resource,
+          operation: "create",
+          ordinal: 0,
+        }),
+        workloadUid: resource.metadata.uid,
+        allocationCursor: "41",
+      };
+      const port = lifecycle();
+      // Default recoverCreate resolves null: zero adoption candidates cannot
+      // distinguish "POST never sent" from a delayed provider commit.
+
+      await run(state, port);
+
+      expect(port.recoverCreate).toHaveBeenCalledWith({
+        allocationCursor: "41",
+      });
+      expect(port.create).not.toHaveBeenCalled();
+      expect(state.current.status).toMatchObject({
+        phase: "Unknown",
+        failure: { reason: "ProviderOutcomeUnknown", retryable: false },
+      });
+    });
+
+    it("holds a dead-epoch claim behind a wallet slot owned by a different attempt", async () => {
+      const resource = workload();
+      const state = claimedWedge({
+        resource,
+        operation: "create",
+        ordinal: 0,
+        leaderEpoch: DEAD_EPOCH,
+        retryCount: 2,
+        recoveryCount: 0,
+      });
+      state.wallet = {
+        attemptKey: "some-other-workload-attempt",
+        workloadUid: "323e4567-e89b-12d3-a456-426614174000",
+      };
+      const port = lifecycle();
+
+      await run(state, port);
+
+      expect(port.create).not.toHaveBeenCalled();
+      expect(port.recoverCreate).not.toHaveBeenCalled();
+      expect(state.current.status).toMatchObject({
+        phase: "Progressing",
+        failure: { reason: "WalletAllocationBlocked", retryable: true },
+      });
+      // The foreign slot is untouched; only its owner may settle it.
+      expect(state.wallet).toMatchObject({
+        attemptKey: "some-other-workload-attempt",
+      });
+    });
+  });
+
   describe("migration gate (bug.5116)", () => {
     const BUNDLE_DIGEST = `sha256:${"c".repeat(64)}`;
 
