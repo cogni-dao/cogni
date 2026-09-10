@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
+import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { hostname } from "node:os";
@@ -95,7 +96,17 @@ kubeConfig.loadFromCluster();
 const custom = kubeConfig.makeApiClient(CustomObjectsApi);
 const core = kubeConfig.makeApiClient(CoreV1Api);
 const coordination = kubeConfig.makeApiClient(CoordinationV1Api);
-const identity = `${hostname()}-${process.pid}`;
+/**
+ * bug.5108 — the lease epoch is `${leaseTransitions}:${identity}`, and an in-place
+ * container restart preserves BOTH parts: the pod hostname is stable, Node is
+ * always PID 1 in-container, and re-acquiring a lease we already hold does not
+ * bump leaseTransitions. Dead-claim recovery keys off "the receipt's epoch is not
+ * ours", so identity carries a per-process nonce to mint a distinct epoch on
+ * every process start. Cost: after an in-place restart the new process waits out
+ * the lease deadline instead of re-acquiring instantly — bounded failover
+ * latency, already serialized by the surge-free rollout.
+ */
+const identity = `${hostname()}-${process.pid}-${randomUUID().slice(0, 8)}`;
 const state = new KubernetesComputeWorkloadStateAdapter(
   custom,
   core,

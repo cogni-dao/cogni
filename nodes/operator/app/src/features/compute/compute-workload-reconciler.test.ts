@@ -1776,7 +1776,7 @@ describe("reconcileComputeWorkload", () => {
       });
     });
 
-    it("bounds dead-epoch claim recovery at three generation-scoped allocations", async () => {
+    it("bounds dead-epoch claim recovery at three generation-scoped allocations and settles the dead slot", async () => {
       const resource = workload();
       const state = claimedWedge({
         resource,
@@ -1786,6 +1786,17 @@ describe("reconcileComputeWorkload", () => {
         retryCount: 0,
         recoveryCount: 3,
       });
+      // The dead recover/3 claim still holds the wallet-wide slot: hitting the
+      // recovery limit must settle it, or every other workload's create is
+      // deadlocked forever (the CR still exists, so bug.5115 reclaim refuses).
+      state.wallet = {
+        attemptKey: computeWorkloadIdempotencyKey({
+          resource,
+          operation: "recover",
+          ordinal: 3,
+        }),
+        workloadUid: resource.metadata.uid,
+      };
       const port = lifecycle();
       const recordRecoveryLimit = vi.fn();
 
@@ -1806,9 +1817,78 @@ describe("reconcileComputeWorkload", () => {
       );
       expect(state.wallet).toBeUndefined();
 
+      // Terminal steady state is write-free: no wallet churn, no status rewrite.
+      const patchStatus = vi.spyOn(state, "patchStatus");
       await run(state, port, { recordRecoveryLimit });
       expect(port.create).not.toHaveBeenCalled();
       expect(recordRecoveryLimit).toHaveBeenCalledTimes(1);
+      expect(patchStatus).not.toHaveBeenCalled();
+      expect(state.wallet).toBeUndefined();
+    });
+
+    it("holds ProviderOutcomeUnknown without creating when the adopted baseline has zero candidates", async () => {
+      const resource = workload();
+      const state = claimedWedge({
+        resource,
+        operation: "create",
+        ordinal: 0,
+        leaderEpoch: DEAD_EPOCH,
+        retryCount: 2,
+        recoveryCount: 0,
+      });
+      state.wallet = {
+        attemptKey: computeWorkloadIdempotencyKey({
+          resource,
+          operation: "create",
+          ordinal: 0,
+        }),
+        workloadUid: resource.metadata.uid,
+        allocationCursor: "41",
+      };
+      const port = lifecycle();
+      // Default recoverCreate resolves null: zero adoption candidates cannot
+      // distinguish "POST never sent" from a delayed provider commit.
+
+      await run(state, port);
+
+      expect(port.recoverCreate).toHaveBeenCalledWith({
+        allocationCursor: "41",
+      });
+      expect(port.create).not.toHaveBeenCalled();
+      expect(state.current.status).toMatchObject({
+        phase: "Unknown",
+        failure: { reason: "ProviderOutcomeUnknown", retryable: false },
+      });
+    });
+
+    it("holds a dead-epoch claim behind a wallet slot owned by a different attempt", async () => {
+      const resource = workload();
+      const state = claimedWedge({
+        resource,
+        operation: "create",
+        ordinal: 0,
+        leaderEpoch: DEAD_EPOCH,
+        retryCount: 2,
+        recoveryCount: 0,
+      });
+      state.wallet = {
+        attemptKey: "some-other-workload-attempt",
+        workloadUid: "323e4567-e89b-12d3-a456-426614174000",
+      };
+      const port = lifecycle();
+
+      await run(state, port);
+
+      expect(port.create).not.toHaveBeenCalled();
+      expect(port.recoverCreate).not.toHaveBeenCalled();
+      expect(state.current.status).toMatchObject({
+        phase: "Progressing",
+        failure: { reason: "WalletAllocationBlocked", retryable: true },
+      });
+      // The foreign slot is untouched; only its owner may settle it.
+      expect(state.wallet).toMatchObject({
+        attemptKey: "some-other-workload-attempt",
+      });
     });
   });
 

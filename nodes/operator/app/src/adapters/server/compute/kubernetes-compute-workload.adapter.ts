@@ -262,14 +262,27 @@ export class KubernetesComputeWorkloadStateAdapter
     mutate: (
       active: WalletAllocationRecord
     ) => WalletAllocationRecord | undefined,
-    ignoreDifferentOwner = false
+    /**
+     * `completeWalletAllocation` settles idempotently: an absent or
+     * foreign-owned slot means the work is already done. `prepareWalletAllocation`
+     * must NOT tolerate either — a preparing attempt owns a live slot by
+     * construction (claim precedes create), so an absent slot means another
+     * writer settled it in the clear-then-claim window and a resumed zombie
+     * would otherwise proceed to POST with no slot recorded (bug.5108 review).
+     */
+    settleTolerant = false
   ): Promise<void> {
     for (let attempt = 0; attempt < 3; attempt++) {
       const current = await this.readWalletLedger(false);
       const active = parseWalletAllocation(current.data?.active);
-      if (!active) return;
+      if (!active) {
+        if (settleTolerant) return;
+        throw new Error(
+          "wallet allocation ledger has no active slot for a preparing attempt"
+        );
+      }
       if (active.attemptKey !== attemptKey) {
-        if (ignoreDifferentOwner) return;
+        if (settleTolerant) return;
         throw new Error("wallet allocation ledger ownership mismatch");
       }
       const next = mutate(active);
