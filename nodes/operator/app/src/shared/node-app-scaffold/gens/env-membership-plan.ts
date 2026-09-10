@@ -36,6 +36,11 @@
  *     remove) yields an EMPTY op list (`{ kind: "no_changes" }`), so the adapter opens no PR.
  *   - DELETE_VIA_SHA_NULL — file removals are emitted as `{ op: "delete", path }`; the adapter maps these
  *     to `{ sha: null }` tree entries (delete-from-base_tree).
+ *   - TEMPLATE_OVERLAY_IS_RENDER_SOURCE — node-template's overlay FILES are the per-env render template
+ *     every wizard node clones; its DEPLOYMENT is not special. A node-template remove deletes only the
+ *     appset (+ kustomization entry + catalog env) and keeps the overlay files in the tree.
+ *   - OPERATOR_SELF_HOSTS_THE_VERB — the operator control plane cannot remove its own deployment from
+ *     an env; fail closed (422).
  * Side-effects: none — pure string transforms.
  * Links: src/adapters/server/vcs/github-repo-write.ts (openNodeEnvPr), docs/design/operator-fleet-safety.md, story.5020
  * @public
@@ -124,8 +129,24 @@ export class EnvPlanError extends Error {
   }
 }
 
-/** The scaffold template node whose per-env overlay every wizard node clones; its env-set is verb-immutable. */
+/**
+ * TEMPLATE_OVERLAY_IS_RENDER_SOURCE — `node-template`'s per-env overlay FILES
+ * (`infra/k8s/overlays/<env>/node-template/{kustomization,external-secret}.yaml`) are the render
+ * template every wizard node's overlay is cloned from (gens/overlay.ts, render-node-overlays.sh).
+ * The FILES are load-bearing; the DEPLOYMENT is not special. So node-template's env membership is
+ * an ordinary toggle, except a remove emits a REDUCED delete set: the appset leaves git (Argo
+ * prunes the workload) while the overlay files STAY in the tree as pure render-template artifacts.
+ * No Application references an overlay dir that has no appset, so keeping the files is inert.
+ */
 const TEMPLATE_SLUG = "node-template";
+
+/**
+ * OPERATOR_SELF_HOSTS_THE_VERB — the operator app IS the control plane serving this verb; removing
+ * its deployment from an env destroys that env's ability to manage itself (and everything else).
+ * Its env membership is verb-immutable — fail closed (422). Previously this was only enforced
+ * de facto; node-template's guard relaxation makes it explicit.
+ */
+const OPERATOR_SLUG = "operator";
 
 /**
  * Pure: compute the file-delta for `{ slug, env, present }` over the node's current control-plane files.
@@ -137,6 +158,9 @@ const TEMPLATE_SLUG = "node-template";
  * - REMOVE (¬present, env present): catalog `envs:` −= env, DELETE the overlay + appset, regenerate that
  *   env's appsets kustomization without the slug. Applies to candidate-a exactly like any other env.
  *   Removing the final env or the current activity authority is rejected with a typed 422.
+ *   `node-template` removes emit a REDUCED delete set (TEMPLATE_OVERLAY_IS_RENDER_SOURCE): its overlay
+ *   files stay in the tree as the render template; only the appset + kustomization entry + catalog env
+ *   leave. `operator` removes are rejected (OPERATOR_SELF_HOSTS_THE_VERB).
  * - Idempotent: the already-holding state returns `{ kind: "no_changes" }`.
  */
 export function buildEnvDeltaPlan(input: {
@@ -147,14 +171,11 @@ export function buildEnvDeltaPlan(input: {
 }): EnvDeltaResult {
   const { slug, env, present, current } = input;
 
-  // TEMPLATE_NODE_IMMUTABLE — node-template is the per-env overlay TEMPLATE every wizard node clones
-  // (render-node-overlays.sh template_path). Removing it from an env deletes that template, so every other
-  // node in that env can no longer render. Its env membership is immutable via this verb — fail closed
-  // (422). Adds are unaffected: it already lives in every env, so an add is an idempotent no_changes.
-  if (!present && slug === TEMPLATE_SLUG) {
+  // OPERATOR_SELF_HOSTS_THE_VERB — the control plane cannot remove its own deployment.
+  if (!present && slug === OPERATOR_SLUG) {
     throw new EnvPlanError(
-      "template_node_immutable",
-      `'${TEMPLATE_SLUG}' is the per-env overlay template every wizard node clones; it cannot be removed from an env.`,
+      "operator_node_immutable",
+      `'${OPERATOR_SLUG}' is the control plane serving this verb; it cannot remove its own deployment from an env.`,
       422
     );
   }
@@ -311,14 +332,23 @@ function planRemove(args: {
       422
     );
   }
+  // TEMPLATE_OVERLAY_IS_RENDER_SOURCE — node-template's overlay files are the render template every
+  // wizard node clones, so its remove keeps them in the tree and deletes only the deployment (appset
+  // + kustomization entry + catalog env). With no appset, no Application references the files: Argo
+  // prunes the workload and the files become pure render-source artifacts.
+  const keepOverlayFiles = slug === TEMPLATE_SLUG;
   const ops: EnvPlanOp[] = [
     {
       op: "upsert",
       path: CATALOG_PATH(slug),
       content: setCatalogEnvs(current.catalog, remaining),
     },
-    { op: "delete", path: overlayPath(env, slug) },
-    { op: "delete", path: externalSecretPath(env, slug) },
+    ...(keepOverlayFiles
+      ? []
+      : ([
+          { op: "delete", path: overlayPath(env, slug) },
+          { op: "delete", path: externalSecretPath(env, slug) },
+        ] as const)),
     { op: "delete", path: appsetPath(env, slug) },
     {
       op: "upsert",
