@@ -59,8 +59,12 @@ pass "committed AppSets in sync (--check green)"
 
 # The child Application opts into server-side diff so Argo compares structural
 # custom resources through the API server rather than its static type schema.
+# Fixture: the operator appset — the ONE deployment guaranteed present in every env
+# (OPERATOR_SELF_HOSTS_THE_VERB). node-template is NOT a safe fixture: its env
+# membership is an ordinary toggle (TEMPLATE_OVERLAY_IS_RENDER_SOURCE), so its
+# appset may legitimately leave an env.
 yq -e '.spec.template.metadata.annotations."argocd.argoproj.io/compare-options" == "ServerSideDiff=true,IncludeMutationWebhook=true"' \
-  "$APPSETS_DIR/candidate-a/candidate-a-node-template-applicationset.yaml" >/dev/null \
+  "$APPSETS_DIR/candidate-a/candidate-a-operator-applicationset.yaml" >/dev/null \
   || fail "rendered child Application is missing server-side diff with mutation-webhook inclusion"
 pass "child Application enables server-side diff with mutation-webhook inclusion"
 
