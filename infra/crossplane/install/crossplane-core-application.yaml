@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# Argo CD Application — Crossplane core (the OSS reconcile engine).
+#
+# Pinned to a Crossplane 2.x chart because the XRD uses
+# apiextensions.crossplane.io/v2. Sync wave -2: core + its CRDs (Provider,
+# Function, CompositeResourceDefinition, Composition) must be Established before
+# the provider Application (wave -1) or any XAkashWorkload is applied.
+#
+# Substitution at apply time mirrors the repo's other substrate Applications:
+#   ${FORK_REPO} is unused here (upstream helm chart); kept for parity if this
+#   is later converted to a kustomize-with-helm wrapper.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: crossplane-core
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://charts.crossplane.io/stable
+    chart: crossplane
+    targetRevision: 2.4.0 # PINNED. bump deliberately, PR-reviewed.
+    helm:
+      releaseName: crossplane
+      values: |
+        # Crossplane core; providers/functions are installed declaratively by
+        # the crossplane-provider-akash Application, not via provider.packages.
+        args:
+          - --enable-usages
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: crossplane-system
+  syncPolicy:
+    automated:
+      prune: false # never cascade-delete the engine and orphan MRs
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

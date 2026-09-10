@@ -1,0 +1,84 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# XRD — the spawn-facing composite API. XAkashWorkload exposes the operator's
+# compute provision fields (mirrors DeclaredProvisionSpec / ProvisionSpec) and is
+# mapped by the Composition to a single crash-safe AkashDeployment managed
+# resource. This XRD + the Composition are the ONLY net-new YAML the operator
+# authors; the reconcile engine (Crossplane) and the provider are OSS/upstreamable.
+apiVersion: apiextensions.crossplane.io/v2
+kind: CompositeResourceDefinition
+metadata:
+  name: xakashworkloads.compute.cogni.io
+spec:
+  scope: Cluster
+  group: compute.cogni.io
+  names:
+    kind: XAkashWorkload
+    plural: xakashworkloads
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [nodeId, publicHost, services]
+              properties:
+                # Stable logical workload identity (uuid in the operator CRD). The
+                # provider dedupes/adopts on this key — the crash-safety anchor.
+                nodeId:
+                  type: string
+                publicHost:
+                  type: string
+                # ProviderConfig carrying the Akash Console credentials.
+                providerConfigName:
+                  type: string
+                  default: default
+                services:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: object
+                    required:
+                      [
+                        name,
+                        image,
+                        cpuUnits,
+                        memoryMi,
+                        storageMi,
+                        port,
+                        visibility,
+                      ]
+                    properties:
+                      name:
+                        type: string
+                      image:
+                        type: string
+                        description: Fully-qualified OCI ref (digest-pinned in prod).
+                      cpuUnits:
+                        type: number
+                      memoryMi:
+                        type: integer
+                      storageMi:
+                        type: integer
+                      port:
+                        type: integer
+                      visibility:
+                        type: string
+                        enum: [public, private]
+            status:
+              type: object
+              properties:
+                leaseId:
+                  type: string
+                  description: Opaque on-chain lease handle (dseq) captured by the provider.
+                state:
+                  type: string
+                endpoints:
+                  type: array
+                  items:
+                    type: string

@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# Crossplane provider package metadata. `crossplane xpkg build` bundles this with
+# the CRDs under package/crds and the controller runtime image into an OCI xpkg
+# that a `pkg.crossplane.io/v1 Provider` installs.
+apiVersion: meta.pkg.crossplane.io/v1
+kind: Provider
+metadata:
+  name: provider-akash
+  annotations:
+    meta.crossplane.io/maintainer: Cogni-DAO
+    meta.crossplane.io/source: github.com/cogni-dao/cogni/tree/main/infra/crossplane/provider-akash
+    meta.crossplane.io/license: Apache-2.0
+    meta.crossplane.io/description: |
+      A thin, crash-safe Crossplane provider that reconciles Akash Network
+      deployments directly against the Akash Console API. Captures lease identity
+      eagerly and adopts existing deployments by a deterministic key so a crash
+      between broadcast and external-name persist can never double-spend escrow.
+spec:
+  crossplane:
+    version: ">=v1.16.0-0"

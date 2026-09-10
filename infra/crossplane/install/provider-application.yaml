@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# Argo CD Application — provider-akash + composition functions + ProviderConfig.
+#
+# Sync wave -1: after crossplane-core (wave -2), before the XRD/Composition and
+# any XAkashWorkload (wave 0). Wraps install/provider (kustomize).
+#
+# Substitution at apply time (provision-env):
+#   ${FORK_REPO} → https://github.com/${GH_REPO}.git
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: crossplane-provider-akash
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: ${FORK_REPO}
+    targetRevision: main
+    path: infra/crossplane/install/provider
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: crossplane-system
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

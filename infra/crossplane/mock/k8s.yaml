@@ -1,0 +1,65 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# Runs the mock Akash Console compute API inside kind for the demo. server.js is
+# injected via a ConfigMap (mock-console-src) that demo.sh creates with
+#   kubectl create configmap mock-console-src --from-file=server.js
+# so the source is never duplicated in git. Bare node image; ZERO npm deps.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: akash-mock
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-console
+  namespace: akash-mock
+  labels:
+    app: mock-console
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mock-console
+  template:
+    metadata:
+      labels:
+        app: mock-console
+    spec:
+      containers:
+        - name: mock
+          image: node:22-alpine
+          command: ["node", "/app/server.js"]
+          env:
+            - name: PORT
+              value: "8080"
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 1
+            periodSeconds: 2
+          volumeMounts:
+            - name: src
+              mountPath: /app
+      volumes:
+        - name: src
+          configMap:
+            name: mock-console-src
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mock-console
+  namespace: akash-mock
+spec:
+  selector:
+    app: mock-console
+  ports:
+    - port: 80
+      targetPort: 8080
+# In-cluster base URL the ProviderConfig points at:
+#   http://mock-console.akash-mock.svc.cluster.local

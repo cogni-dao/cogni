@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# DEMO-ONLY Deployment of the provider-akash controller image (kind-loaded). This
+# runs the EXACT same binary the production Crossplane package embeds; it just
+# skips the package-manager wrapper so the demo is deterministic and needs no
+# registry. Production installs the Provider package (install/provider/).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: provider-akash
+  namespace: crossplane-system
+  labels:
+    app: provider-akash
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: provider-akash
+  template:
+    metadata:
+      labels:
+        app: provider-akash
+    spec:
+      serviceAccountName: provider-akash
+      containers:
+        - name: provider
+          image: provider-akash:demo
+          imagePullPolicy: IfNotPresent
+          args:
+            - --debug
+            - --poll=15s # fast drift polling for the demo
+          env:
+            - name: LEADER_ELECTION
+              value: "false"

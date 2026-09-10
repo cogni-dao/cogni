@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# Single-node kind cluster for the provider-akash demo. Crossplane core, the
+# custom provider, and the mock Console all run inside — candidate-independent,
+# ZERO real escrow.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: crossplane-akash-provider
+nodes:
+  - role: control-plane

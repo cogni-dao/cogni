@@ -1,0 +1,70 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# Composition — maps one XAkashWorkload to one crash-safe AkashDeployment managed
+# resource (the custom provider's MR). Unlike the spike (which drove a generic
+# provider-http Request), this composes a real typed MR: the provider owns
+# Observe/Create/Update/Delete, eager external-name capture, and by-key adoption.
+#
+# The Composition is pure field mapping — no reconcile logic lives here. Drift,
+# retry, finalizer/delete, and crash-safe identity are the provider's job.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xakashworkload-akash
+spec:
+  compositeTypeRef:
+    apiVersion: compute.cogni.io/v1alpha1
+    kind: XAkashWorkload
+  mode: Pipeline
+  pipeline:
+    - step: render-akashdeployment
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource }}
+            {{- $spec := $xr.spec }}
+            ---
+            apiVersion: akash.crossplane.io/v1alpha1
+            kind: AkashDeployment
+            metadata:
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: deployment
+                # The MR name IS the workload name; its external-name (the lease)
+                # is managed by the provider, not here.
+            spec:
+              providerConfigRef:
+                name: {{ $spec.providerConfigName | default "default" }}
+              forProvider:
+                nodeId: {{ $spec.nodeId | quote }}
+                publicHost: {{ $spec.publicHost | quote }}
+                services: {{ $spec.services | toJson }}
+            {{/* Reflect the provider's observed lease/state back onto the XR
+                 status once the composed MR reports it. */}}
+            {{- $dep := "" }}
+            {{- if .observed.resources }}
+              {{- $dep = index .observed.resources "deployment" }}
+            {{- end }}
+            {{- if $dep }}
+              {{- $at := "" }}
+              {{- if and $dep.resource.status $dep.resource.status.atProvider }}
+                {{- $at = $dep.resource.status.atProvider }}
+              {{- end }}
+              {{- if $at }}
+            ---
+            apiVersion: compute.cogni.io/v1alpha1
+            kind: XAkashWorkload
+            status:
+              leaseId: {{ $at.leaseId | default "" | quote }}
+              state: {{ $at.state | default "unknown" | quote }}
+              endpoints: {{ $at.endpoints | default (list) | toJson }}
+              {{- end }}
+            {{- end }}
+    - step: ready
+      functionRef:
+        name: function-auto-ready
