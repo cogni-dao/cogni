@@ -3,13 +3,15 @@
 
 /**
  * Module: `@shared/node-app-scaffold/gens/scheduler-endpoints`
- * Purpose: Pin `insertSchedulerEndpoint` to a byte-exact before→after case for BOTH routing
- *   documents a formation PR splices: the shared base configmap.yaml and a generated per-env
- *   node-endpoints.patch.yaml (bug.5094).
+ * Purpose: Pin `insertSchedulerEndpoint` (formation) and `updateSchedulerEndpointHost` (placement,
+ *   story.5016 T5) to byte-exact before→after cases for BOTH routing documents a plan splices: the
+ *   shared base configmap.yaml and a generated per-env node-endpoints.patch.yaml (bug.5094).
  * Scope: Pure unit test — the golden mirrors `pnpm gen:scheduler-worker-endpoints` output after
  *   scaffolding `ztest` (node_id 8138ed59-…) into the catalog.
  * Invariants: NODE_TARGETS == slug-lexicographic; per node a `<slug>=<url>` cell immediately
- *   trailed by its `<node_id>=<url>` alias; committed 2-space indent + double-quoted value.
+ *   trailed by its `<node_id>=<url>` alias; committed 2-space indent + double-quoted value; the
+ *   file's final newline survives an edit even when the endpoints line is the file's LAST line
+ *   (bug.5073-class regression — see `LINE_RE`'s doc comment).
  * Side-effects: none
  * Links: src/shared/node-app-scaffold/gens/scheduler-endpoints, scripts/ci/render-scheduler-worker-endpoints.sh
  * @public
@@ -17,7 +19,10 @@
 
 import { describe, expect, it } from "vitest";
 
-import { insertSchedulerEndpoint } from "./scheduler-endpoints";
+import {
+  insertSchedulerEndpoint,
+  updateSchedulerEndpointHost,
+} from "./scheduler-endpoints";
 
 // The committed `infra/k8s/base/scheduler-worker/configmap.yaml`: in-tree runtime
 // nodes only. Remote-source artifacts such as node-template are skipped until
@@ -96,6 +101,100 @@ data:
   it("throws when the configmap has no endpoints line", () => {
     expect(() =>
       insertSchedulerEndpoint('data:\n  LOG_LEVEL: "info"\n', "ztest", NODE_ID)
+    ).toThrow(/missing a quoted/);
+  });
+
+  // bug.5073-class: every REAL per-env node-endpoints.patch.yaml ends with the
+  // COGNI_NODE_ENDPOINTS line as its LAST line before EOF (render-scheduler-worker-endpoints.sh's
+  // write_patch heredoc). A greedy `\s*$` in LINE_RE would swallow that trailing newline into the
+  // match, so `.replace(line, lineOut)` silently drops the file's terminator on every edit.
+  it("preserves the file's final newline when the endpoints line is the last line (bug.5073-class)", () => {
+    const eofPatch = `apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: scheduler-worker-config
+data:
+  COGNI_NODE_ENDPOINTS: "canary=http://canary-node-app:3000,89612f02-114d-460d-87a5-c2ab212ccf6f=http://canary-node-app:3000"
+`;
+    expect(
+      insertSchedulerEndpoint(eofPatch, "ztest", NODE_ID).endsWith("\n")
+    ).toBe(true);
+  });
+});
+
+describe("updateSchedulerEndpointHost", () => {
+  const EOF_PATCH = `apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: scheduler-worker-config
+data:
+  COGNI_NODE_ENDPOINTS: "canary=http://canary-node-app:3000,89612f02-114d-460d-87a5-c2ab212ccf6f=http://canary-node-app:3000,levelup=http://levelup-node-app:3000,557d8b59-8e3b-42f0-9aeb-a5c171296556=http://levelup-node-app:3000"
+`;
+  const LEVELUP_ID = "557d8b59-8e3b-42f0-9aeb-a5c171296556";
+
+  // story.5016 T5 — the placement flip's own case: levelup moves off the in-cluster convention
+  // onto its public preview host, in place, order + every sibling entry untouched.
+  it("rewrites BOTH the slug cell and its node_id alias in place (placement flip)", () => {
+    const out = updateSchedulerEndpointHost(
+      EOF_PATCH,
+      "levelup",
+      LEVELUP_ID,
+      "https://levelup-preview.cognidao.org"
+    );
+    expect(out).toContain(
+      `levelup=https://levelup-preview.cognidao.org,${LEVELUP_ID}=https://levelup-preview.cognidao.org`
+    );
+    // The sibling entry is untouched, and it stays LAST (no reordering).
+    expect(out).toContain(
+      'COGNI_NODE_ENDPOINTS: "canary=http://canary-node-app:3000,89612f02-114d-460d-87a5-c2ab212ccf6f=http://canary-node-app:3000,levelup='
+    );
+  });
+
+  it("preserves the file's final newline (bug.5073-class)", () => {
+    const out = updateSchedulerEndpointHost(
+      EOF_PATCH,
+      "levelup",
+      LEVELUP_ID,
+      "https://levelup-preview.cognidao.org"
+    );
+    expect(out.endsWith("\n")).toBe(true);
+  });
+
+  it("is a true no-op when the URL already matches (idempotent)", () => {
+    const out = updateSchedulerEndpointHost(
+      EOF_PATCH,
+      "levelup",
+      LEVELUP_ID,
+      "http://levelup-node-app:3000"
+    );
+    expect(out).toBe(EOF_PATCH);
+  });
+
+  it("rejects a node not present in the CSV", () => {
+    expect(() =>
+      updateSchedulerEndpointHost(EOF_PATCH, "ztest", NODE_ID, "http://x:3000")
+    ).toThrow(/does not contain node/);
+  });
+
+  it("fails loud on a node_id mismatch rather than rewriting under the wrong identity", () => {
+    expect(() =>
+      updateSchedulerEndpointHost(
+        EOF_PATCH,
+        "levelup",
+        "00000000-0000-0000-0000-000000000000",
+        "https://levelup-preview.cognidao.org"
+      )
+    ).toThrow(/node_id/);
+  });
+
+  it("throws when the configmap has no endpoints line", () => {
+    expect(() =>
+      updateSchedulerEndpointHost(
+        'data:\n  LOG_LEVEL: "info"\n',
+        "levelup",
+        LEVELUP_ID,
+        "https://levelup-preview.cognidao.org"
+      )
     ).toThrow(/missing a quoted/);
   });
 });

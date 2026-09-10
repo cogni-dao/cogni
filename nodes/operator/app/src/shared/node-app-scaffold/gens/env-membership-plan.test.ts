@@ -28,6 +28,7 @@ import {
   type EnvPlanOp,
   externalSecretPath,
   overlayPath,
+  schedulerEndpointPatchPath,
 } from "./env-membership-plan";
 
 const SLUG = "blue";
@@ -93,6 +94,10 @@ spec:
           - path: "infra/catalog/__NODE__.yaml"
 `;
 
+// Fixture node_id (REPO_SPEC_IS_IDENTITY_SSOT) — the UUID alias buildSchedulerEndpointOp asserts
+// against the scheduler patch's existing entry (bug.5094 twin at the placement lever).
+const NODE_ID = "11111111-1111-4111-8111-111111111111";
+
 const catalogWith = (envs: readonly string[]): string =>
   `name: ${SLUG}
 type: node
@@ -107,21 +112,40 @@ production_branch: deploy/production-${SLUG}
 envs: [${envs.join(", ")}]
 activity_env: ${envs[0] ?? "candidate-a"}
 path_prefix: nodes/${SLUG}/
+node_id: ${NODE_ID}
+`;
+
+// A bare scheduler-worker node-endpoints patch fixture carrying just SLUG's own pair — the shape
+// `updateSchedulerEndpointHost` reads/rewrites. `url` is the routed address BEFORE a placement flip.
+const schedulerPatchFixture = (url: string): string =>
+  `apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: scheduler-worker-config
+data:
+  COGNI_NODE_ENDPOINTS: "${SLUG}=${url},${NODE_ID}=${url}"
 `;
 
 function baseCurrent(envs: readonly string[]): EnvPlanCurrent {
   const appsetsKustomizationByEnv: Record<string, string> = {};
   const templateOverlayByEnv: Record<string, string> = {};
   const templateExternalSecretByEnv: Record<string, string> = {};
+  const schedulerEndpointPatchByEnv: Record<string, string> = {};
   for (const e of envs) {
     appsetsKustomizationByEnv[e] = kustWith(e, ["blue", "operator"]);
     templateOverlayByEnv[e] = TEMPLATE_OVERLAY;
     templateExternalSecretByEnv[e] = TEMPLATE_EXTERNAL_SECRET;
+    schedulerEndpointPatchByEnv[e] = schedulerPatchFixture(
+      `http://${SLUG}-node-app:3000`
+    );
   }
   // preview is an env we ADD in tests, so make its template overlay + kustomization available.
   appsetsKustomizationByEnv.preview ??= kustWith("preview", ["operator"]);
   templateOverlayByEnv.preview ??= TEMPLATE_OVERLAY;
   templateExternalSecretByEnv.preview ??= TEMPLATE_EXTERNAL_SECRET;
+  schedulerEndpointPatchByEnv.preview ??= schedulerPatchFixture(
+    `http://${SLUG}-node-app:3000`
+  );
   return {
     catalog: catalogWith(envs),
     templateOverlayByEnv,
@@ -130,6 +154,7 @@ function baseCurrent(envs: readonly string[]): EnvPlanCurrent {
     appsetsKustomizationByEnv,
     port: 3200,
     nodePort: 31100,
+    schedulerEndpointPatchByEnv,
   };
 }
 
@@ -572,6 +597,14 @@ describe("ACTIVITY_FOLLOWS_INGEST (bug.5079)", () => {
 });
 
 // ── Placement lever (story.5016 T5) ─────────────────────────────────────────────────────────────
+//
+// NO_DELETE_ON_PLACEMENT: a placement flip NEVER touches the overlay, external-secret, AppSet, or
+// appsets kustomization — Argo delivers BOTH the k3s Deployment and the akash ComputeWorkload CR
+// through the SAME per-node Application (proof: toks4's candidate-a/preview/production AppSets
+// all exist today, fully akash-placed); the overlay's CONTENT differs per placement, but that swap
+// is the materializer's job on the deploy branch at the next flight/promote, not this plan's. An
+// earlier revision of this verb wrongly copied `planRemove`'s delete set here — these tests pin
+// the fix: ops are ONLY ever a catalog upsert and/or a scheduler-endpoint upsert.
 
 /** baseCurrent with an external build plane (source_repo) — akash's eligibility precondition. */
 const externallyBuilt = (envs: readonly string[]): EnvPlanCurrent => {
@@ -585,25 +618,23 @@ const externallyBuilt = (envs: readonly string[]): EnvPlanCurrent => {
   };
 };
 
-const K3S_LANE_PATHS = (env: string): string[] => [
-  overlayPath(env, SLUG),
-  externalSecretPath(env, SLUG),
-  appsetPath(env, SLUG),
-];
-
 describe("buildPlacementPlan — akash", () => {
-  it("upserts deployment_provider + emits the SAME k3s-lane deletes an env remove does", () => {
+  it("upserts deployment_provider and moves the scheduler-worker route — NOTHING else", () => {
     const res = buildPlacementPlan({
       slug: SLUG,
       env: "preview",
       placement: "akash",
       current: externallyBuilt(["candidate-a", "preview"]),
-      existingK3sPaths: K3S_LANE_PATHS("preview"),
     });
     expect(res.kind).toBe("place_akash");
     if (res.kind === "no_changes") throw new Error("unexpected no_changes");
 
-    expect(deletes(res.ops).sort()).toEqual(K3S_LANE_PATHS("preview").sort());
+    // NO_DELETE_ON_PLACEMENT — no deletes, no appset/overlay/kustomization ops at all.
+    expect(deletes(res.ops)).toEqual([]);
+    expect(paths(res.ops).sort()).toEqual(
+      [CATALOG_PATH(SLUG), schedulerEndpointPatchPath("preview")].sort()
+    );
+
     const catalogOp = res.ops.find((o) => o.path === CATALOG_PATH(SLUG));
     expect(catalogOp?.op).toBe("upsert");
     if (catalogOp?.op === "upsert") {
@@ -615,60 +646,91 @@ describe("buildPlacementPlan — akash", () => {
       // compute_egress_cidrs (absent here) and every other line pass through unchanged.
       expect(catalogOp.content).toContain("source_repo:");
     }
-    const kustOp = res.ops.find(
-      (o) => o.path === appsetsKustomizationPath("preview")
+
+    // PLACEMENT_DECIDES_THE_ADDRESS (bug.5094) — the scheduler-worker's routed URL moves
+    // with the flip, to the SAME public host the ComputeWorkload reconciler serves.
+    const schedulerOp = res.ops.find(
+      (o) => o.path === schedulerEndpointPatchPath("preview")
     );
-    expect(kustOp?.op).toBe("upsert");
-    if (kustOp?.op === "upsert") {
-      expect(kustOp.content).not.toContain("preview-blue-applicationset.yaml");
+    expect(schedulerOp?.op).toBe("upsert");
+    if (schedulerOp?.op === "upsert") {
+      expect(schedulerOp.content).toContain(
+        `${SLUG}=https://${SLUG}-preview.cognidao.org,${NODE_ID}=https://${SLUG}-preview.cognidao.org`
+      );
     }
   });
 
-  it("limits deletes to paths that exist on main (trees API 422s on sha:null for a missing path)", () => {
-    const res = buildPlacementPlan({
-      slug: SLUG,
-      env: "preview",
-      placement: "akash",
-      current: externallyBuilt(["candidate-a", "preview"]),
-      existingK3sPaths: [overlayPath("preview", SLUG)],
-    });
-    if (res.kind === "no_changes") throw new Error("unexpected no_changes");
-    expect(deletes(res.ops)).toEqual([overlayPath("preview", SLUG)]);
-  });
-
-  it("already-akash with lingering overlays emits JUST the cleanup (toks4 normalization path)", () => {
-    const base = externallyBuilt(["candidate-a", "preview"]);
-    const current = {
-      ...base,
-      catalog: base.catalog.replace(
-        "envs: [candidate-a, preview]\n",
-        "envs: [candidate-a, preview]\ndeployment_provider:\n  preview: akash\n"
-      ),
+  // story.5016: the levelup/preview→akash placement PR (#2162) that motivated this fix — merged
+  // with NO scheduler-routing op at all, leaving the preview scheduler-worker dialing
+  // `http://levelup-node-app:3000` after the earlier (now-superseded) k3s-lane deletes landed. This
+  // pins the fix: the plan MUST carry the updated preview node-endpoints patch with the
+  // public-host route, and MUST NOT touch the appset/overlay lane at all.
+  it("levelup preview→akash: plan carries the updated preview node-endpoints patch with the public-host route", () => {
+    const levelupNodeId = "557d8b59-8e3b-42f0-9aeb-a5c171296556";
+    const current: EnvPlanCurrent = {
+      catalog: `name: levelup
+type: node
+port: 3200
+node_port: 31800
+dockerfile: nodes/levelup/app/Dockerfile
+source_repo: https://github.com/cogni-dao/levelup.git
+image_repository: ghcr.io/cogni-dao/levelup
+envs: [preview, production]
+activity_env: production
+path_prefix: nodes/levelup/
+node_id: ${levelupNodeId}
+`,
+      templateOverlayByEnv: {},
+      appsetsKustomizationByEnv: {
+        preview: kustWith("preview", ["levelup", "operator"]),
+      },
+      schedulerEndpointPatchByEnv: {
+        preview: `apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: scheduler-worker-config
+data:
+  COGNI_NODE_ENDPOINTS: "levelup=http://levelup-node-app:3000,${levelupNodeId}=http://levelup-node-app:3000"
+`,
+      },
     };
+
     const res = buildPlacementPlan({
-      slug: SLUG,
+      slug: "levelup",
       env: "preview",
       placement: "akash",
       current,
-      existingK3sPaths: K3S_LANE_PATHS("preview"),
     });
+    expect(res.kind).toBe("place_akash");
     if (res.kind === "no_changes") throw new Error("unexpected no_changes");
-    // No catalog op — the map already says akash; only the residue is removed.
-    expect(res.ops.find((o) => o.path === CATALOG_PATH(SLUG))).toBeUndefined();
-    expect(deletes(res.ops).sort()).toEqual(K3S_LANE_PATHS("preview").sort());
+
+    // The appset/overlay/kustomization lane is UNTOUCHED — only catalog + scheduler routing.
+    expect(paths(res.ops).sort()).toEqual(
+      [CATALOG_PATH("levelup"), schedulerEndpointPatchPath("preview")].sort()
+    );
+
+    const schedulerOp = res.ops.find(
+      (o) => o.path === schedulerEndpointPatchPath("preview")
+    );
+    expect(schedulerOp?.op).toBe("upsert");
+    if (schedulerOp?.op === "upsert") {
+      expect(schedulerOp.content).toContain(
+        `levelup=https://levelup-preview.cognidao.org,${levelupNodeId}=https://levelup-preview.cognidao.org`
+      );
+    }
   });
 
-  it("is idempotent: already-akash with NO residue → no_changes", () => {
+  it("already-akash with the route already public → no_changes (pure catalog re-application is a no-op too)", () => {
     const base = externallyBuilt(["candidate-a", "preview"]);
-    const current = {
+    const current: EnvPlanCurrent = {
       ...base,
       catalog: base.catalog.replace(
         "envs: [candidate-a, preview]\n",
         "envs: [candidate-a, preview]\ndeployment_provider:\n  preview: akash\n"
       ),
-      appsetsKustomizationByEnv: {
-        ...base.appsetsKustomizationByEnv,
-        preview: kustWith("preview", ["operator"]), // slug already absent
+      schedulerEndpointPatchByEnv: {
+        ...base.schedulerEndpointPatchByEnv,
+        preview: schedulerPatchFixture(`https://${SLUG}-preview.cognidao.org`),
       },
     };
     expect(
@@ -677,7 +739,6 @@ describe("buildPlacementPlan — akash", () => {
         env: "preview",
         placement: "akash",
         current,
-        existingK3sPaths: [],
       }).kind
     ).toBe("no_changes");
   });
@@ -689,7 +750,6 @@ describe("buildPlacementPlan — akash", () => {
         env: "preview",
         placement: "akash",
         current: baseCurrent(["candidate-a", "preview"]),
-        existingK3sPaths: K3S_LANE_PATHS("preview"),
       });
     expect(call).toThrowError(
       expect.objectContaining({
@@ -706,7 +766,6 @@ describe("buildPlacementPlan — akash", () => {
         env: "production",
         placement: "akash",
         current: externallyBuilt(["candidate-a"]),
-        existingK3sPaths: [],
       });
     expect(call).toThrowError(
       expect.objectContaining({ code: "env_not_deployed", status: 422 })
@@ -720,15 +779,15 @@ describe("buildPlacementPlan — akash", () => {
         env: "candidate-a",
         placement: "akash",
         current: externallyBuilt(["candidate-a"]),
-        existingK3sPaths: [],
       });
     expect(call).toThrowError(
       expect.objectContaining({ code: "operator_node_immutable", status: 422 })
     );
   });
 
-  it("places node-template on akash like an ordinary node, but with the REDUCED delete set (only the appset leaves)", () => {
+  it("places node-template on akash like an ordinary node — NO_DELETE_ON_PLACEMENT applies to it too", () => {
     // node-template's real catalog row + an external build plane (akash's eligibility precondition).
+    const TEMPLATE_NODE_ID = "22222222-2222-4222-8222-222222222222";
     const templateCatalogWith = (envs: readonly string[]): string =>
       `name: node-template
 type: node
@@ -740,6 +799,7 @@ image_repository: ghcr.io/cogni-dao/node-template
 envs: [${envs.join(", ")}]
 activity_env: production
 path_prefix: nodes/node-template/
+node_id: ${TEMPLATE_NODE_ID}
 `;
     const current: EnvPlanCurrent = {
       catalog: templateCatalogWith(["candidate-a"]),
@@ -751,32 +811,34 @@ path_prefix: nodes/node-template/
       },
       port: 3200,
       nodePort: 30200,
+      schedulerEndpointPatchByEnv: {
+        "candidate-a": `apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: scheduler-worker-config
+data:
+  COGNI_NODE_ENDPOINTS: "node-template=http://node-template-node-app:3000,${TEMPLATE_NODE_ID}=http://node-template-node-app:3000"
+`,
+      },
     };
     const res = buildPlacementPlan({
       slug: "node-template",
       env: "candidate-a",
       placement: "akash",
       current,
-      existingK3sPaths: [
-        overlayPath("candidate-a", "node-template"),
-        externalSecretPath("candidate-a", "node-template"),
-        appsetPath("candidate-a", "node-template"),
-      ],
     });
     expect(res.kind).toBe("place_akash");
     if (res.kind === "no_changes") throw new Error("unexpected no_changes");
 
-    // REDUCED delete set: only the appset leaves git — same as an env remove.
-    expect(deletes(res.ops)).toEqual([
-      appsetPath("candidate-a", "node-template"),
-    ]);
-    // The overlay + external-secret files are NOT touched (no delete, no upsert) — they stay in
-    // the tree as the render template.
-    expect(paths(res.ops)).not.toContain(
-      overlayPath("candidate-a", "node-template")
-    );
-    expect(paths(res.ops)).not.toContain(
-      externalSecretPath("candidate-a", "node-template")
+    // NO_DELETE_ON_PLACEMENT — node-template's overlay/external-secret/appset are ALL untouched:
+    // TEMPLATE_OVERLAY_IS_RENDER_SOURCE's special-case no longer applies to placement (nothing to
+    // special-case once placement deletes nothing).
+    expect(deletes(res.ops)).toEqual([]);
+    expect(paths(res.ops).sort()).toEqual(
+      [
+        CATALOG_PATH("node-template"),
+        schedulerEndpointPatchPath("candidate-a"),
+      ].sort()
     );
     const catalogOp = res.ops.find(
       (o) => o.path === CATALOG_PATH("node-template")
@@ -787,6 +849,18 @@ path_prefix: nodes/node-template/
         "deployment_provider:\n  candidate-a: akash"
       );
       expect(catalogOp.content).toContain("envs: [candidate-a]");
+    }
+    // PLACEMENT_DECIDES_THE_ADDRESS (bug.5094) — the scheduler-worker's routed URL for
+    // node-template moves with the flip, to the SAME public host the ComputeWorkload
+    // reconciler serves (host_for_node convention: candidate-a → `<slug>-test.<root>`).
+    const schedulerOp = res.ops.find(
+      (o) => o.path === schedulerEndpointPatchPath("candidate-a")
+    );
+    expect(schedulerOp?.op).toBe("upsert");
+    if (schedulerOp?.op === "upsert") {
+      expect(schedulerOp.content).toContain(
+        `node-template=https://node-template-test.cognidao.org,${TEMPLATE_NODE_ID}=https://node-template-test.cognidao.org`
+      );
     }
   });
 });
@@ -800,14 +874,15 @@ describe("buildPlacementPlan — k3s restore", () => {
         "envs: [candidate-a, preview]\n",
         "envs: [candidate-a, preview]\ndeployment_provider:\n  preview: akash\n"
       ),
-      appsetsKustomizationByEnv: {
-        ...base.appsetsKustomizationByEnv,
-        preview: kustWith("preview", ["operator"]), // akash lane: slug absent from kustomization
+      // Currently routed to the public host — the restore must move it back in-cluster.
+      schedulerEndpointPatchByEnv: {
+        ...base.schedulerEndpointPatchByEnv,
+        preview: schedulerPatchFixture(`https://${SLUG}-preview.cognidao.org`),
       },
     };
   };
 
-  it("drops the map entry and restores planAdd's render set (overlay+ES+appset+kustomization)", () => {
+  it("drops the map entry and moves the scheduler-worker route back in-cluster — NOTHING else", () => {
     const res = buildPlacementPlan({
       slug: SLUG,
       env: "preview",
@@ -817,27 +892,29 @@ describe("buildPlacementPlan — k3s restore", () => {
     expect(res.kind).toBe("place_k3s");
     if (res.kind === "no_changes") throw new Error("unexpected no_changes");
 
+    // NO_DELETE_ON_PLACEMENT — no appset/overlay/kustomization RESTORE render either: those files
+    // were never touched by the akash flip, so there is nothing to restore.
     expect(deletes(res.ops)).toEqual([]);
     expect(paths(res.ops).sort()).toEqual(
-      [
-        CATALOG_PATH(SLUG),
-        overlayPath("preview", SLUG),
-        externalSecretPath("preview", SLUG),
-        appsetPath("preview", SLUG),
-        appsetsKustomizationPath("preview"),
-      ].sort()
+      [CATALOG_PATH(SLUG), schedulerEndpointPatchPath("preview")].sort()
     );
+
     const catalogOp = res.ops.find((o) => o.path === CATALOG_PATH(SLUG));
     if (catalogOp?.op === "upsert") {
       // The emptied block is dropped entirely (k3s is the schema default).
       expect(catalogOp.content).not.toContain("deployment_provider");
       expect(catalogOp.content).toContain("envs: [candidate-a, preview]");
     }
-    const kustOp = res.ops.find(
-      (o) => o.path === appsetsKustomizationPath("preview")
+    // PLACEMENT_DECIDES_THE_ADDRESS (bug.5094) — the restore moves the scheduler-worker's
+    // routed URL back to the in-cluster Service DNS convention.
+    const schedulerOp = res.ops.find(
+      (o) => o.path === schedulerEndpointPatchPath("preview")
     );
-    if (kustOp?.op === "upsert") {
-      expect(kustOp.content).toContain("preview-blue-applicationset.yaml");
+    expect(schedulerOp?.op).toBe("upsert");
+    if (schedulerOp?.op === "upsert") {
+      expect(schedulerOp.content).toContain(
+        `${SLUG}=http://${SLUG}-node-app:3000,${NODE_ID}=http://${SLUG}-node-app:3000`
+      );
     }
   });
 

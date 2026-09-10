@@ -73,9 +73,6 @@ import {
   NODE_FORMATION_ENVS,
   type NodeFormationEnv,
   nextFreeNodePort,
-  appsetPath as nodeAppsetPath,
-  externalSecretPath as nodeExternalSecretPath,
-  overlayPath as nodeOverlayPath,
   type PlacementProvider,
   renderCatalog,
   renderDistributionActivationSpec,
@@ -86,6 +83,7 @@ import {
   renderOverlayFile,
   renderPaymentsActivationSpec,
   renderRepoSpec,
+  schedulerEndpointPatchPath,
 } from "@/shared/node-app-scaffold/gens";
 import type { NodeKnowledgeRemote } from "@/shared/node-app-scaffold/knowledge-remote";
 import {
@@ -2150,17 +2148,26 @@ export class GitHubRepoWriter implements DeployPlanePort {
 
   /**
    * Placement lever on the env verb (story.5016 T5): place ONE env's workload on `k3s` or `akash`
-   * by editing the OPERATOR monorepo catalog's `deployment_provider` map — plus the k3s-lane file
-   * consequences ({@link buildPlacementPlan}):
+   * by editing ONLY the OPERATOR monorepo catalog's `deployment_provider` map + the scheduler-
+   * worker routing patch for that env ({@link buildPlacementPlan}):
    *
-   * - `akash`: upsert `deployment_provider.<env>: akash`, DELETE the k3s overlay/external-secret/
-   *   AppSet (sha:null, only those that exist on main) and drop the slug from that env's appsets
-   *   kustomization. The external ComputeWorkload reconciler serves the env from then on.
-   * - `k3s`: drop the map entry (k3s is the schema default) and restore the overlay/AppSet render.
+   * - `akash`: upsert `deployment_provider.<env>: akash`.
+   * - `k3s`: drop the map entry (k3s is the schema default).
    *
-   * `envs:` membership is untouched — placement requires the env to already be in reach. Idempotent:
-   * the already-holding state (map + no k3s residue) opens no PR. An already-akash catalog whose k3s
-   * overlays still linger emits just the cleanup ops, so the verb doubles as normalization.
+   * NO_DELETE_ON_PLACEMENT: the overlay, external-secret, AppSet, and appsets kustomization are
+   * NEVER touched here — Argo delivers BOTH the k3s Deployment and the akash ComputeWorkload CR
+   * through the SAME per-node Application; the overlay's content differs per placement, but that
+   * swap happens in the materializer on the deploy branch at the next flight/promote, not in this
+   * PR (an earlier revision of this verb wrongly deleted those files, orphaning the very
+   * Application Argo needs to deliver the CR — see `buildPlacementPlan`'s doc comment).
+   *
+   * PLACEMENT_DECIDES_THE_ADDRESS (bug.5094) IS a real file consequence though: the
+   * scheduler-worker's routed URL for `slug` in `env` moves with the flip, so the generated
+   * `node-endpoints.patch.yaml` for `env` is upserted alongside the catalog line.
+   *
+   * `envs:` membership is untouched — placement requires the env to already be in reach.
+   * Idempotent: the already-holding state (catalog already says `placement`, routing already
+   * resolved) opens no PR.
    */
   async openNodePlacementPr(
     input: OpenNodePlacementPrInput
@@ -2194,32 +2201,23 @@ export class GitHubRepoWriter implements DeployPlanePort {
       await this.assertAkashDeploymentBlock(catalog, slug);
     }
 
-    // Reuse the env verb's collect: k3s restore needs planAdd's render inputs (present:true shape);
-    // akash needs only the env's appsets kustomization (present:false shape).
-    const current = await this.collectEnvPlanCurrent(
-      octokit,
-      owner,
-      repo,
-      slug,
-      env,
-      placement === "k3s",
-      catalog
-    );
-
-    // The trees API 422s on a sha:null entry whose path is absent from the base tree, and an
-    // already-akash node may or may not still carry k3s residue — probe what actually exists.
-    let existingK3sPaths: string[] = [];
-    if (placement === "akash") {
-      const probes = [
-        nodeOverlayPath(env, slug),
-        nodeExternalSecretPath(env, slug),
-        nodeAppsetPath(env, slug),
-      ];
-      const found = await Promise.all(
-        probes.map((path) => this.fetchFileText({ owner, repo, path }))
-      );
-      existingK3sPaths = probes.filter((_, i) => found[i] !== null);
-    }
+    // PLACEMENT_DECIDES_THE_ADDRESS (bug.5094) — the ONE control-plane file this verb reads besides
+    // the catalog: the env's generated scheduler-worker routing patch, so buildPlacementPlan can
+    // move the routed URL with the flip. NO_DELETE_ON_PLACEMENT means nothing else is needed —
+    // overlay/appset/kustomization are untouched, so those EnvPlanCurrent fields stay empty.
+    const current: EnvPlanCurrent = {
+      catalog,
+      templateOverlayByEnv: {},
+      appsetsKustomizationByEnv: {},
+      schedulerEndpointPatchByEnv: {
+        [env]: await this.readFileOnMain(
+          octokit,
+          owner,
+          repo,
+          schedulerEndpointPatchPath(env)
+        ),
+      },
+    };
 
     let plan: ReturnType<typeof buildPlacementPlan>;
     try {
@@ -2228,7 +2226,6 @@ export class GitHubRepoWriter implements DeployPlanePort {
         env,
         placement,
         current,
-        existingK3sPaths,
       });
     } catch (err) {
       if (err instanceof EnvPlanError) {
@@ -2337,11 +2334,15 @@ export class GitHubRepoWriter implements DeployPlanePort {
   ): string {
     const lane =
       kind === "place_akash"
-        ? "the external ComputeWorkload (akash) lane — the k3s overlay/AppSet for this env is removed"
-        : "the k3s overlay/AppSet lane — its `deployment_provider` entry is dropped (k3s is the default) and the overlay/AppSet re-rendered";
+        ? "the external ComputeWorkload (akash) lane"
+        : "the k3s lane — its `deployment_provider` entry is dropped (k3s is the default)";
     return (
       `Places \`${slug}\`'s \`${env}\` workload on ${lane}, by editing ` +
-      `\`infra/catalog/${slug}.yaml\`'s \`deployment_provider:\` map. Deploy reach (\`envs:\`) is unchanged.\n\n` +
+      `\`infra/catalog/${slug}.yaml\`'s \`deployment_provider:\` map and moving the ` +
+      `scheduler-worker's routed URL for this env (bug.5094). Deploy reach (\`envs:\`) is unchanged, ` +
+      "and so is the overlay/external-secret/AppSet — Argo delivers both the k3s Deployment and the " +
+      "akash ComputeWorkload CR through the SAME per-node Application; the overlay's CONTENT is " +
+      "swapped by the materializer on the deploy branch at the next flight/promote, not by this PR.\n\n" +
       "_Authored automatically by cogni-operator (node placement verb, story.5016 T5)._"
     );
   }

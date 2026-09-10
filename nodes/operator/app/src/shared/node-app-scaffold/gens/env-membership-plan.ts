@@ -37,9 +37,17 @@
  *   - DELETE_VIA_SHA_NULL — file removals are emitted as `{ op: "delete", path }`; the adapter maps these
  *     to `{ sha: null }` tree entries (delete-from-base_tree).
  *   - PLACEMENT_IS_A_LANE_SWITCH (story.5016 T5) — `buildPlacementPlan` flips WHICH lane serves an
- *     env the node already deploys to: akash upserts `deployment_provider.<env>` and emits the SAME
- *     k3s-lane deletes an env remove does (the ComputeWorkload CR lane takes over); k3s drops the
- *     entry and restores planAdd's render set. `envs:` and `compute_egress_cidrs` are untouched.
+ *     env the node already deploys to: it edits ONLY `deployment_provider.<env>` in the catalog
+ *     (+ the scheduler-worker routing patch, PLACEMENT_DECIDES_THE_ADDRESS below). The overlay,
+ *     external-secret, AppSet, and appsets kustomization are ALL untouched — Argo delivers BOTH the
+ *     k3s Deployment AND the akash ComputeWorkload CR through the SAME per-node Application; only
+ *     the overlay's CONTENT differs, and that swap happens in the materializer on the deploy
+ *     branch at the next flight/promote, not in this plan. `envs:` and `compute_egress_cidrs` are
+ *     untouched too — placement is a lane switch, not an undeploy (an earlier revision of this
+ *     verb copied the env-removal delete ops here; that was wrong — see `buildPlacementPlan`).
+ *   - PLACEMENT_DECIDES_THE_ADDRESS (bug.5094) applies to the placement lever too — the
+ *     scheduler-worker's routed URL for `slug` must move with the flip (in-cluster Service DNS ⇄
+ *     the node's public host), or the routing map keeps dialing the lane the node just left.
  *   - TEMPLATE_OVERLAY_IS_RENDER_SOURCE — node-template's overlay FILES are the per-env render template
  *     every wizard node clones; its DEPLOYMENT is not special. A node-template remove deletes only the
  *     appset (+ kustomization entry + catalog env) and keeps the overlay files in the tree.
@@ -49,6 +57,8 @@
  * Links: src/adapters/server/vcs/github-repo-write.ts (openNodeEnvPr), docs/design/operator-fleet-safety.md, story.5020
  * @public
  */
+
+import { nodeAppBaseUrl } from "@/shared/node-registry/placement";
 
 import {
   insertAppsetKustomization,
@@ -64,12 +74,14 @@ import {
   type PlacementProvider,
   parseCatalogActivityEnv,
   parseCatalogEnvs,
+  parseCatalogNodeId,
   setCatalogActivityEnv,
   setCatalogEnvs,
   setCatalogPlacement,
 } from "./env-membership";
 import type { NodeFormationEnv } from "./envs";
 import { renderOverlay, renderOverlayFile } from "./overlay";
+import { updateSchedulerEndpointHost } from "./scheduler-endpoints";
 
 /** Repo-relative path of a node's per-env overlay kustomization. */
 export const overlayPath = (env: string, slug: string): string =>
@@ -89,6 +101,22 @@ export const appsetsKustomizationPath = (env: string): string =>
 
 export const CATALOG_PATH = (slug: string): string =>
   `infra/catalog/${slug}.yaml`;
+
+/**
+ * Repo-relative path of ONE env's generated scheduler-worker node-endpoints patch (bug.5094) — the
+ * PROVIDER-RESOLVED routing map the placement lever must keep in sync (story.5016 T5 follow-up).
+ * Env-invariant across nodes: every placement flip on `env` edits this ONE file.
+ */
+export const schedulerEndpointPatchPath = (env: string): string =>
+  `infra/k8s/overlays/${env}/scheduler-worker/node-endpoints.patch.yaml`;
+
+/**
+ * The canonical zone this repo's public hosts hang off, matching the bash renderer's own default
+ * (`FORK_DOMAIN_ROOT:-cognidao.org` in scripts/ci/render-scheduler-worker-endpoints.sh). This
+ * generator family stays pure (no env access, LAYER_NEUTRAL) — a fork that renamed its zone
+ * regenerates this file locally with its own `FORK_DOMAIN_ROOT` export, exactly like the bash twin.
+ */
+const CANONICAL_DOMAIN_ROOT = "cognidao.org";
 
 /** A single file mutation in the plan. `upsert` carries content; `delete` removes the path. */
 export type EnvPlanOp =
@@ -113,6 +141,11 @@ export interface EnvPlanCurrent {
   /** Container port + node_port for the overlay render (only needed on ADD). */
   readonly port?: number | undefined;
   readonly nodePort?: number | undefined;
+  /**
+   * Current per-env scheduler-worker node-endpoints patch (only needed for the placement lever,
+   * {@link buildPlacementPlan}). Keyed by env — only the env being placed is ever read.
+   */
+  readonly schedulerEndpointPatchByEnv?: Readonly<Record<string, string>>;
 }
 
 export type EnvDeltaResult =
@@ -378,43 +411,39 @@ export type PlacementDeltaResult =
  * placement lever on the env verb. Placement is a property of an env the node is ALREADY deployed
  * to (`envs:` is untouched); it decides WHICH lane serves that deployment:
  *
- * - `akash`: upsert `deployment_provider.<env>: akash` in the catalog and DELETE the k3s lane's
- *   overlay/external-secret/AppSet + drop the slug from that env's appsets kustomization — the SAME
- *   deletes an env remove emits. The external ComputeWorkload reconciler (CR lane) takes over at the
- *   next flight/promote. `compute_egress_cidrs` is untouched pass-through — it belongs to the
- *   workload's row and is rendered independently.
- * - `k3s`: drop the env's `deployment_provider` entry (k3s is the schema default) and RESTORE the
- *   k3s lane by re-rendering the overlay/external-secret/AppSet + folding the slug back into the
- *   kustomization — planAdd's render set, minus the `envs:` edit.
+ * - `akash`: upsert `deployment_provider.<env>: akash` in the catalog.
+ * - `k3s`: drop the env's `deployment_provider` entry (k3s is the schema default).
  *
- * TEMPLATE_OVERLAY_IS_RENDER_SOURCE applies here too (story.5016 follow-up, bug found live in
- * prod): `node-template` is an ORDINARY node for placement purposes — it may move to akash like
- * any other externally-built node. Only its overlay FILES are special, so an akash flip for
- * `node-template` emits the SAME reduced delete set `planRemove` does (appset + kustomization
- * entry only; the overlay/external-secret files stay in the tree as the render template).
- * `operator` remains placement-immutable (OPERATOR_SELF_HOSTS_THE_VERB) — the control plane
- * cannot move its own deployment off the lane serving this verb.
+ * NO_DELETE_ON_PLACEMENT (story.5016 T5 correction — an earlier revision of this verb wrongly
+ * copied `planRemove`'s delete set here): the overlay, external-secret, AppSet, and appsets
+ * kustomization are NEVER touched by a placement flip. Argo delivers BOTH the k3s Deployment and
+ * the akash ComputeWorkload CR through the SAME per-node Application (proof: toks4's candidate-a/
+ * preview/production AppSets all exist today, fully akash-placed) — the overlay's CONTENT differs
+ * per placement, but that swap is the materializer's job on the deploy branch at the next
+ * flight/promote, not this plan's. Deleting the AppSet here (the earlier revision's bug) orphaned
+ * the Application Argo needs to deliver the ComputeWorkload CR in the first place, and deleting the
+ * overlay/external-secret left nothing for the materializer to swap content INTO.
  *
- * Deletes are emitted ONLY for paths listed in `existingK3sPaths` — the trees API 422s on a
- * `sha:null` entry whose path is absent from the base tree, and an already-akash node (toks4) may
- * or may not still carry its k3s overlays. This makes the akash flip double as the NORMALIZATION
- * verb: an already-akash catalog whose overlays still exist emits just the cleanup ops (no catalog
- * change); an already-akash catalog with no residue is `no_changes`. IDEMPOTENT + per-env atomic.
+ * `operator` remains placement-immutable (OPERATOR_SELF_HOSTS_THE_VERB) — the control plane cannot
+ * move its own deployment off the lane serving this verb. `node-template` places like any ordinary
+ * externally-built node; TEMPLATE_OVERLAY_IS_RENDER_SOURCE has nothing to special-case here now
+ * that placement deletes nothing.
+ *
+ * {@link buildSchedulerEndpointOp} is the ONE real side effect beyond the catalog line
+ * (PLACEMENT_DECIDES_THE_ADDRESS, bug.5094): the scheduler-worker's routed URL for `slug` in `env`
+ * moves with the flip. IDEMPOTENT + per-env atomic — the already-holding state (catalog already
+ * says `placement`, routing already resolved) is `no_changes`.
  */
 export function buildPlacementPlan(input: {
   readonly slug: string;
   readonly env: NodeFormationEnv;
   readonly placement: PlacementProvider;
   readonly current: EnvPlanCurrent;
-  /** k3s-lane paths for (env, slug) that exist on main; akash deletes are limited to these. */
-  readonly existingK3sPaths?: readonly string[];
 }): PlacementDeltaResult {
-  const { slug, env, placement, current, existingK3sPaths } = input;
+  const { slug, env, placement, current } = input;
 
   // OPERATOR_SELF_HOSTS_THE_VERB — the control plane cannot move its own deployment off the lane
-  // serving this verb. Fail closed. `node-template` has NO such guard: TEMPLATE_OVERLAY_IS_RENDER_SOURCE
-  // means only its overlay FILES are special, not its deployment — it places like any ordinary node,
-  // with the reduced delete set applied below.
+  // serving this verb. Fail closed.
   if (placement === "akash" && slug === OPERATOR_SLUG) {
     throw new EnvPlanError(
       "operator_node_immutable",
@@ -444,120 +473,57 @@ export function buildPlacementPlan(input: {
 
   const nextCatalog = setCatalogPlacement(current.catalog, env, placement);
 
-  if (placement === "k3s") {
-    // Idempotent: already on the k3s default → no restore render, no PR.
-    if (nextCatalog === current.catalog) {
-      return { kind: "no_changes" };
-    }
-    return {
-      kind: "place_k3s",
-      ops: [
-        { op: "upsert", path: CATALOG_PATH(slug), content: nextCatalog },
-        ...renderK3sLaneOps(slug, env, current),
-      ],
-    };
-  }
-
-  const appsetsKustomization = current.appsetsKustomizationByEnv[env];
-  if (appsetsKustomization === undefined) {
-    throw new EnvPlanError(
-      "env_render_inputs_missing",
-      `cannot plan akash placement of '${env}' for '${slug}': missing appsets kustomization.`,
-      422
-    );
-  }
-  const existing = new Set(existingK3sPaths ?? []);
   const ops: EnvPlanOp[] = [];
   if (nextCatalog !== current.catalog) {
     ops.push({ op: "upsert", path: CATALOG_PATH(slug), content: nextCatalog });
   }
-  // TEMPLATE_OVERLAY_IS_RENDER_SOURCE — node-template's overlay files stay in the tree as the
-  // render template every wizard node clones; only the appset leaves. Reuses planRemove's reduced
-  // delete set rather than duplicating the slug check at the call site.
-  const k3sPathsToDelete =
-    slug === TEMPLATE_SLUG
-      ? [appsetPath(env, slug)]
-      : [
-          overlayPath(env, slug),
-          externalSecretPath(env, slug),
-          appsetPath(env, slug),
-        ];
-  for (const path of k3sPathsToDelete) {
-    if (existing.has(path)) {
-      ops.push({ op: "delete", path });
-    }
-  }
-  const cleanedKustomization = removeFromAppsetsKustomization(
-    appsetsKustomization,
-    slug,
-    env
-  );
-  if (cleanedKustomization !== appsetsKustomization) {
-    ops.push({
-      op: "upsert",
-      path: appsetsKustomizationPath(env),
-      content: cleanedKustomization,
-    });
-  }
+  const schedulerOp = buildSchedulerEndpointOp(slug, env, placement, current);
+  if (schedulerOp) ops.push(schedulerOp);
+
   if (ops.length === 0) {
     return { kind: "no_changes" };
   }
-  return { kind: "place_akash", ops };
+  return { kind: placement === "akash" ? "place_akash" : "place_k3s", ops };
 }
 
-/** planAdd's k3s render set (overlay + external-secret + AppSet + kustomization fold), sans catalog. */
-function renderK3sLaneOps(
+/**
+ * PLACEMENT_DECIDES_THE_ADDRESS (bug.5094) applies to the placement lever too: a flip changes WHICH
+ * address the scheduler-worker must dial for `slug` in `env`, so the env's generated
+ * node-endpoints patch has to move with it — else the routing map keeps pointing at the LANE THE
+ * NODE JUST LEFT. Returns `null` when the routed URL already matches (idempotent — a catalog-only
+ * normalization, or an already-correct restore, opens no scheduler-routing hunk).
+ */
+function buildSchedulerEndpointOp(
   slug: string,
   env: NodeFormationEnv,
+  placement: PlacementProvider,
   current: EnvPlanCurrent
-): EnvPlanOp[] {
-  const templateOverlay = current.templateOverlayByEnv[env];
-  const templateExternalSecret = current.templateExternalSecretByEnv?.[env];
-  const appsetsKustomization = current.appsetsKustomizationByEnv[env];
-  if (
-    templateOverlay === undefined ||
-    templateExternalSecret === undefined ||
-    appsetsKustomization === undefined ||
-    current.appsetTemplate === undefined ||
-    current.port === undefined ||
-    current.nodePort === undefined
-  ) {
+): EnvPlanOp | null {
+  const currentPatch = current.schedulerEndpointPatchByEnv?.[env];
+  if (currentPatch === undefined) {
     throw new EnvPlanError(
       "env_render_inputs_missing",
-      `cannot render k3s restore of '${env}' for '${slug}': missing template overlay, external-secret, appset template, kustomization, or ports.`,
+      `cannot plan scheduler routing for '${env}'/'${slug}': missing the current node-endpoints patch.`,
       422
     );
   }
-  return [
-    {
-      op: "upsert",
-      path: overlayPath(env, slug),
-      content: renderOverlay(
-        templateOverlay,
-        slug,
-        current.nodePort,
-        current.port
-      ),
-    },
-    {
-      op: "upsert",
-      path: externalSecretPath(env, slug),
-      content: renderOverlayFile(
-        templateExternalSecret,
-        slug,
-        current.nodePort,
-        current.port
-      ),
-    },
-    {
-      op: "upsert",
-      path: appsetPath(env, slug),
-      content: renderNodeAppset(current.appsetTemplate, slug, env),
-    },
-    {
-      op: "upsert",
-      path: appsetsKustomizationPath(env),
-      content: insertAppsetKustomization(appsetsKustomization, slug, env),
-    },
-  ];
+  const nodeId = parseCatalogNodeId(current.catalog);
+  const url = nodeAppBaseUrl({
+    slug,
+    provider: placement,
+    environment: env,
+    apexDomain: CANONICAL_DOMAIN_ROOT,
+  });
+  const nextPatch = updateSchedulerEndpointHost(
+    currentPatch,
+    slug,
+    nodeId,
+    url
+  );
+  if (nextPatch === currentPatch) return null;
+  return {
+    op: "upsert",
+    path: schedulerEndpointPatchPath(env),
+    content: nextPatch,
+  };
 }
