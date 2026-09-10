@@ -183,15 +183,48 @@ assert_eq "$(CF_ALLOW_PROTECTED=1 cf_upsert_a_record test-token zone123 cognidao
   "created" "CF_ALLOW_PROTECTED=1 permits deliberate apex provisioning"
 
 # ── Script: reconcile fans one record per non-primary node ────────────────────
+# Isolated fixture catalog (COGNI_CATALOG_ROOT), NOT the live infra/catalog/ —
+# a synthetic primary + non-primary node so this section's expectations can
+# never drift when a real catalog row's placement/env-set changes (this exact
+# class of break: node-template's candidate-a flipped to akash, story.5016).
+EARLY_FIXTURE_CATALOG="$TMPROOT/catalog-early"
+mkdir -p "$EARLY_FIXTURE_CATALOG"
+cat >"$EARLY_FIXTURE_CATALOG/primarynode.yaml" <<'YAML'
+name: primarynode
+type: node
+port: 3900
+node_port: 32100
+dockerfile: nodes/primarynode/app/Dockerfile
+image_tag_suffix: "-primarynode"
+migrator_tag_suffix: ""
+path_prefix: nodes/primarynode/
+envs: [candidate-a, production]
+activity_env: candidate-a
+is_primary_host: true
+YAML
+cat >"$EARLY_FIXTURE_CATALOG/k3snode.yaml" <<'YAML'
+name: k3snode
+type: node
+port: 3901
+node_port: 32101
+dockerfile: nodes/k3snode/app/Dockerfile
+image_tag_suffix: "-k3snode"
+migrator_tag_suffix: ""
+path_prefix: nodes/k3snode/
+envs: [candidate-a, production]
+activity_env: candidate-a
+YAML
+
 printf '{"records":[],"next_id":1}' >"$CF_STORE"
 cf_upsert_a_record test-token zone123 test.cognidao.org "$VM_IP_FIXTURE" true >/dev/null
 
 summary_file="$TMPROOT/dns-reconcile-summary.json"
+COGNI_CATALOG_ROOT="$EARLY_FIXTURE_CATALOG" \
 DNS_RECONCILE_SUMMARY_FILE="$summary_file" \
 DNS_RECONCILE_CANDIDATE_SHA="0123456789abcdef0123456789abcdef01234567" \
 DNS_RECONCILE_HEAD_SHA="abcdef0123456789abcdef0123456789abcdef01" \
 DNS_RECONCILE_NODE_SOURCE_SHA="0123456789abcdef0123456789abcdef01234567" \
-DNS_RECONCILE_NODE_SLUG="node-template" \
+DNS_RECONCILE_NODE_SLUG="k3snode" \
 GITHUB_RUN_ID="12345" \
 GITHUB_RUN_ATTEMPT="2" \
 GITHUB_REF_NAME="main" \
@@ -199,7 +232,7 @@ bash scripts/ci/reconcile-node-dns.sh candidate-a >/dev/null \
   || { echo "FAIL reconcile exited non-zero"; fail=$((fail + 1)); }
 
 # host_for_node(node, test.cognidao.org) → <node>-test.cognidao.org for non-primary.
-for host in node-template-test.cognidao.org; do
+for host in k3snode-test.cognidao.org; do
   assert_eq "$(cf_a_record_content test-token zone123 "$host")" "$VM_IP_FIXTURE" \
     "reconcile created $host → VM IP"
 done
@@ -207,29 +240,29 @@ assert_eq "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["ty
   "dns_reconcile_summary" "reconcile writes Grafana DNS summary type"
 assert_eq "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["states"].get("created", 0) > 0)' "$summary_file")" \
   "True" "Grafana DNS summary records created states"
-assert_eq "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(any(r.get("host") == "node-template-test.cognidao.org" and r.get("state") == "created" for r in d["records"]))' "$summary_file")" \
+assert_eq "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(any(r.get("host") == "k3snode-test.cognidao.org" and r.get("state") == "created" for r in d["records"]))' "$summary_file")" \
   "True" "Grafana DNS summary includes per-host state"
 assert_eq "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["candidate_sha8"])' "$summary_file")" \
   "01234567" "Grafana DNS summary carries candidate SHA correlation in JSON"
 assert_eq "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["run_id"])' "$summary_file")" \
   "12345" "Grafana DNS summary carries run correlation in JSON"
-# operator is is_primary_host (apex) — it must NOT get an operator-test record.
-assert_eq "$(count_name operator-test.cognidao.org)" "0" "primary node skipped (no operator-test record)"
+# primarynode is is_primary_host (apex) — it must NOT get a primarynode-test record.
+assert_eq "$(count_name primarynode-test.cognidao.org)" "0" "primary node skipped (no primarynode-test record)"
 
 # Re-run is idempotent (no growth).
-bash scripts/ci/reconcile-node-dns.sh candidate-a >/dev/null
-assert_eq "$(count_name node-template-test.cognidao.org)" "1" "second reconcile is idempotent"
+COGNI_CATALOG_ROOT="$EARLY_FIXTURE_CATALOG" bash scripts/ci/reconcile-node-dns.sh candidate-a >/dev/null
+assert_eq "$(count_name k3snode-test.cognidao.org)" "1" "second reconcile is idempotent"
 # Node records mirror the apex proxy state (apex seeded proxied=true above).
-assert_eq "$(proxied_of node-template-test.cognidao.org)" "true" "node record mirrors proxied apex"
+assert_eq "$(proxied_of k3snode-test.cognidao.org)" "true" "node record mirrors proxied apex"
 
 # Apex unproxied (candidate-a today) → node records created unproxied, not flipped.
 printf '{"records":[],"next_id":1}' >"$CF_STORE"
 cf_upsert_a_record test-token zone123 test.cognidao.org "$VM_IP_FIXTURE" false >/dev/null
-bash scripts/ci/reconcile-node-dns.sh candidate-a >/dev/null
-assert_eq "$(proxied_of node-template-test.cognidao.org)" "false" "node record mirrors UNPROXIED apex (no flip)"
+COGNI_CATALOG_ROOT="$EARLY_FIXTURE_CATALOG" bash scripts/ci/reconcile-node-dns.sh candidate-a >/dev/null
+assert_eq "$(proxied_of k3snode-test.cognidao.org)" "false" "node record mirrors UNPROXIED apex (no flip)"
 
 # ── Script: --check drift gate ────────────────────────────────────────────────
-if bash scripts/ci/reconcile-node-dns.sh candidate-a --check >/dev/null 2>&1; then
+if COGNI_CATALOG_ROOT="$EARLY_FIXTURE_CATALOG" bash scripts/ci/reconcile-node-dns.sh candidate-a --check >/dev/null 2>&1; then
   printf 'OK   --check passes when all node records present\n'; pass=$((pass + 1))
 else
   printf 'FAIL --check should pass when all present\n'; fail=$((fail + 1))
@@ -238,7 +271,7 @@ fi
 # Drop one node record → --check must fail.
 printf '{"records":[],"next_id":1}' >"$CF_STORE"
 cf_upsert_a_record test-token zone123 test.cognidao.org "$VM_IP_FIXTURE" true >/dev/null
-if bash scripts/ci/reconcile-node-dns.sh candidate-a --check >/dev/null 2>&1; then
+if COGNI_CATALOG_ROOT="$EARLY_FIXTURE_CATALOG" bash scripts/ci/reconcile-node-dns.sh candidate-a --check >/dev/null 2>&1; then
   printf 'FAIL --check should fail when node records missing\n'; fail=$((fail + 1))
 else
   printf 'OK   --check fails (non-zero) when node records missing\n'; pass=$((pass + 1))
