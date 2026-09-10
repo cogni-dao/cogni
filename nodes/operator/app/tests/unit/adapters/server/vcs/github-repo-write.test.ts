@@ -40,6 +40,7 @@ vi.mock("@octokit/core", () => ({
   },
 }));
 
+import { renderDeploymentActivationSpec } from "@cogni/repo-spec";
 import {
   diffRulesetAgainstPolicy,
   GitHubRepoWriter,
@@ -743,6 +744,248 @@ describe("GitHubRepoWriter.openDistributionActivationPr", () => {
       "POST /repos/{owner}/{repo}/pulls",
       "PATCH /repos/{owner}/{repo}/pulls/{pull_number}",
     ]);
+  });
+});
+
+describe("GitHubRepoWriter.openNodeDeploymentBlockPr", () => {
+  // A pre-deployment-contract node spec (the shape existing nodes carry on main).
+  const LEGACY_NODE_SPEC = `schema_version: "0.1.4"
+node_id: "abc"
+scope_id: "def"
+scope_key: "default"
+intent:
+  name: test-cog
+  mission: "test deployment block"
+governance:
+  dao_contract: "0xDA0"
+  chain_id: "8453"
+`;
+  const encode = (content: string) =>
+    Buffer.from(content, "utf-8").toString("base64");
+
+  it("returns no_changes when main already declares a deployment block", async () => {
+    const declaredSpec = renderDeploymentActivationSpec(LEGACY_NODE_SPEC);
+
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": (params) => {
+        expect(params).toMatchObject({
+          owner: "cogni-test-org",
+          repo: "test-cog",
+          path: ".cogni/repo-spec.yaml",
+          ref: "main",
+        });
+        return {
+          type: "file",
+          encoding: "base64",
+          content: encode(declaredSpec),
+          sha: "repo-spec-sha",
+        };
+      },
+    };
+
+    await expect(
+      makeWriter().openNodeDeploymentBlockPr({
+        owner: "cogni-test-org",
+        repo: "test-cog",
+        slug: "test-cog",
+        isInRepoNode: false,
+      })
+    ).resolves.toEqual({ status: "no_changes" });
+
+    expect(requests.map((request) => request.route)).toEqual([
+      "GET /repos/{owner}/{repo}/contents/{path}",
+    ]);
+  });
+
+  it("opens a one-file PR appending the stock deployment block to a legacy repo-spec", async () => {
+    const branch = "cogni-operator/declare-deployment-test-cog";
+    const desiredSpec = renderDeploymentActivationSpec(LEGACY_NODE_SPEC);
+    expect(desiredSpec).not.toBe(LEGACY_NODE_SPEC);
+
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": (params) => {
+        expect(params).toMatchObject({
+          owner: "cogni-test-org",
+          repo: "test-cog",
+          path: ".cogni/repo-spec.yaml",
+        });
+        return {
+          type: "file",
+          encoding: "base64",
+          content: encode(LEGACY_NODE_SPEC),
+          sha: "repo-spec-sha",
+        };
+      },
+      "GET /repos/{owner}/{repo}/pulls": () => [],
+      "GET /repos/{owner}/{repo}/git/ref/{ref}": (params) => {
+        expect(params).toMatchObject({
+          owner: "cogni-test-org",
+          repo: "test-cog",
+          ref: "heads/main",
+        });
+        return { object: { sha: "main-sha" } };
+      },
+      "GET /repos/{owner}/{repo}/git/commits/{commit_sha}": () => ({
+        tree: { sha: "main-tree" },
+      }),
+      "POST /repos/{owner}/{repo}/git/blobs": (params) => {
+        const content = Buffer.from(String(params.content), "base64").toString(
+          "utf-8"
+        );
+        expect(content).toBe(desiredSpec);
+        return { sha: "repo-spec-blob" };
+      },
+      "POST /repos/{owner}/{repo}/git/trees": (params) => {
+        expect(params.tree).toEqual([
+          {
+            path: ".cogni/repo-spec.yaml",
+            mode: "100644",
+            type: "blob",
+            sha: "repo-spec-blob",
+          },
+        ]);
+        return { sha: "deployment-tree" };
+      },
+      "POST /repos/{owner}/{repo}/git/commits": (params) => {
+        expect(params).toMatchObject({
+          message: "feat(deploy): declare test-cog node deployment",
+          tree: "deployment-tree",
+          parents: ["main-sha"],
+        });
+        return { sha: "deployment-commit" };
+      },
+      "POST /repos/{owner}/{repo}/git/refs": (params) => {
+        expect(params).toMatchObject({
+          ref: `refs/heads/${branch}`,
+          sha: "deployment-commit",
+        });
+        return {};
+      },
+      "POST /repos/{owner}/{repo}/pulls": (params) => {
+        expect(params).toMatchObject({
+          title: "feat(deploy): declare test-cog node deployment",
+          head: branch,
+          base: "main",
+        });
+        return {
+          number: 33,
+          html_url: "https://github.com/cogni-test-org/test-cog/pull/33",
+        };
+      },
+      "PATCH /repos/{owner}/{repo}/pulls/{pull_number}": (params) => {
+        expect(params).toMatchObject({
+          pull_number: 33,
+          title: "feat(deploy): declare test-cog node deployment",
+        });
+        return {};
+      },
+    };
+
+    await expect(
+      makeWriter().openNodeDeploymentBlockPr({
+        owner: "cogni-test-org",
+        repo: "test-cog",
+        slug: "test-cog",
+        isInRepoNode: false,
+      })
+    ).resolves.toEqual({
+      status: "pr_opened",
+      prNumber: 33,
+      prUrl: "https://github.com/cogni-test-org/test-cog/pull/33",
+    });
+
+    expect(requests.map((request) => request.route)).toEqual([
+      "GET /repos/{owner}/{repo}/contents/{path}",
+      "GET /repos/{owner}/{repo}/pulls",
+      "GET /repos/{owner}/{repo}/pulls",
+      "GET /repos/{owner}/{repo}/git/ref/{ref}",
+      "GET /repos/{owner}/{repo}/git/commits/{commit_sha}",
+      "POST /repos/{owner}/{repo}/git/blobs",
+      "POST /repos/{owner}/{repo}/git/trees",
+      "POST /repos/{owner}/{repo}/git/commits",
+      "POST /repos/{owner}/{repo}/git/refs",
+      "POST /repos/{owner}/{repo}/pulls",
+      "PATCH /repos/{owner}/{repo}/pulls/{pull_number}",
+    ]);
+  });
+
+  it("reuses an existing declaration PR when its branch already carries the block", async () => {
+    const branch = "cogni-operator/declare-deployment-test-cog";
+    const desiredSpec = renderDeploymentActivationSpec(LEGACY_NODE_SPEC);
+
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": (params) => ({
+        type: "file",
+        encoding: "base64",
+        content: encode(params.ref === branch ? desiredSpec : LEGACY_NODE_SPEC),
+        sha: "repo-spec-sha",
+      }),
+      "GET /repos/{owner}/{repo}/pulls": (params) => {
+        expect(params).toMatchObject({
+          owner: "cogni-test-org",
+          repo: "test-cog",
+          state: "open",
+          head: `cogni-test-org:${branch}`,
+          per_page: 1,
+        });
+        return [
+          {
+            number: 44,
+            html_url: "https://github.com/cogni-test-org/test-cog/pull/44",
+          },
+        ];
+      },
+      "PATCH /repos/{owner}/{repo}/pulls/{pull_number}": (params) => {
+        expect(params).toMatchObject({
+          pull_number: 44,
+          title: "feat(deploy): declare test-cog node deployment",
+        });
+        return {};
+      },
+    };
+
+    await expect(
+      makeWriter().openNodeDeploymentBlockPr({
+        owner: "cogni-test-org",
+        repo: "test-cog",
+        slug: "test-cog",
+        isInRepoNode: false,
+      })
+    ).resolves.toEqual({
+      status: "pr_opened",
+      prNumber: 44,
+      prUrl: "https://github.com/cogni-test-org/test-cog/pull/44",
+    });
+
+    expect(requests.map((request) => request.route)).not.toContain(
+      "POST /repos/{owner}/{repo}/git/commits"
+    );
+  });
+
+  it("rejects an in-repo node (no catalog source_repo) with a typed 422 before any Octokit call", async () => {
+    // resolveNodeRepo's IN-REPO shortcut collapses operator/poly to {owner: parentOwner, repo:
+    // parentRepo} — the parent monorepo. A root .cogni/repo-spec.yaml splice there would target
+    // the WRONG file (the runtime spec lives at nodes/<slug>/.cogni/repo-spec.yaml). The writer
+    // must fail closed on the `isInRepoNode` flag before touching the App at all.
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": () => {
+        throw new Error("must not fetch any file for an in-repo node");
+      },
+    };
+
+    await expect(
+      makeWriter().openNodeDeploymentBlockPr({
+        owner: "cogni-test-org",
+        repo: "cogni-monorepo",
+        slug: "operator",
+        isInRepoNode: true,
+      })
+    ).rejects.toMatchObject({
+      code: "in_repo_node_unsupported",
+      status: 422,
+    });
+
+    expect(requests).toEqual([]);
   });
 });
 
