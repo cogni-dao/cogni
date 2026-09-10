@@ -343,10 +343,11 @@ describe("ComputeWorkload Kubernetes contract", () => {
         }
       ),
     };
+    const listWorkloads = vi.fn(async () => ({
+      body: { items: input.liveUids.map((uid) => ({ metadata: { uid } })) },
+    }));
     const custom = {
-      listNamespacedCustomObject: vi.fn(async () => ({
-        body: { items: input.liveUids.map((uid) => ({ metadata: { uid } })) },
-      })),
+      listNamespacedCustomObject: listWorkloads,
     } as unknown as CustomObjectsApi;
     const log = { warn: vi.fn() };
     const state = new KubernetesComputeWorkloadStateAdapter(
@@ -356,7 +357,13 @@ describe("ComputeWorkload Kubernetes contract", () => {
       "test-controller",
       log
     );
-    return { state, core, log, readActive: () => ledger.data.active };
+    return {
+      state,
+      core,
+      log,
+      listWorkloads,
+      readActive: () => ledger.data.active,
+    };
   }
 
   it("reclaims a foreign slot whose recorded workload CR is gone (bug.5115)", async () => {
@@ -403,30 +410,65 @@ describe("ComputeWorkload Kubernetes contract", () => {
     expect(log.warn).not.toHaveBeenCalled();
   });
 
-  it("preserves an orphan's uncertain allocationCursor in the reclaim log", async () => {
-    // A cursor on an orphaned slot marks an in-flight provider mutation that no
-    // reconciler will ever resolve (the CR is gone). Reclaim anyway; the cursor
-    // survives only in the log line for forensics.
-    const { state, log } = seededWalletLedger({
-      active: {
-        attemptKey: "dead",
-        workloadUid: "uid-gone",
-        allocationCursor: "77",
-      },
-      liveUids: ["uid-b"],
+  it("propagates a failed liveness probe without ever writing the ledger", async () => {
+    // Fail toward blocked: if the LIST that decides orphan-vs-alive errors, the
+    // claim must reject as-is — never fall through to a reclaim write.
+    const { state, core, log, listWorkloads } = seededWalletLedger({
+      active: { attemptKey: "dead", workloadUid: "uid-gone" },
+      liveUids: [],
     });
+    listWorkloads.mockRejectedValueOnce(apiError(503));
 
     await expect(
       state.claimWalletAllocation({ attemptKey: "b", workloadUid: "uid-b" })
-    ).resolves.toEqual({ state: "claimed" });
-    expect(log.warn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        orphanedAttemptKey: "dead",
-        orphanedWorkloadUid: "uid-gone",
-        orphanedAllocationCursor: "77",
-      }),
-      "compute_wallet_allocation_orphan_reclaimed"
-    );
+    ).rejects.toMatchObject({ statusCode: 503 });
+    expect(core.replaceNamespacedConfigMap).not.toHaveBeenCalled();
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("reclaims a cursor-bearing orphan only on a second sighting a full tick later", async () => {
+    // A cursor plus a deleted CR can mean a human force-deleted the CR while a
+    // zombie process's provider POST was still in flight. First sighting arms a
+    // one-tick grace window; only the same record seen again past it is reclaimed,
+    // with the cursor preserved in the log line for forensics.
+    vi.useFakeTimers();
+    try {
+      const { state, log } = seededWalletLedger({
+        active: {
+          attemptKey: "dead",
+          workloadUid: "uid-gone",
+          allocationCursor: "77",
+        },
+        liveUids: ["uid-b"],
+      });
+      const claim = () =>
+        state.claimWalletAllocation({ attemptKey: "b", workloadUid: "uid-b" });
+
+      await expect(claim()).resolves.toEqual({
+        state: "blocked",
+        ownerAttemptKey: "dead",
+      });
+      // Still inside the grace window: an in-flight POST lasts seconds.
+      vi.advanceTimersByTime(1_000);
+      await expect(claim()).resolves.toEqual({
+        state: "blocked",
+        ownerAttemptKey: "dead",
+      });
+      expect(log.warn).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(15_000);
+      await expect(claim()).resolves.toEqual({ state: "claimed" });
+      expect(log.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          orphanedAttemptKey: "dead",
+          orphanedWorkloadUid: "uid-gone",
+          orphanedAllocationCursor: "77",
+        }),
+        "compute_wallet_allocation_orphan_reclaimed"
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("loses a reclaim CAS race cleanly: re-reads and defers to the live winner", async () => {

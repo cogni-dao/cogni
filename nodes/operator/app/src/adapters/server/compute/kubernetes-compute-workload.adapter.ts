@@ -20,6 +20,15 @@ const GROUP = "compute.cogni.io";
 const VERSION = "v1alpha1";
 const PLURAL = "computeworkloads";
 const ALLOCATION_LEDGER = "compute-workload-allocation-ledger";
+/**
+ * Grace before reclaiming a cursor-bearing orphaned slot, sized to the controller's
+ * reconcile tick (15s in the bootstrap). A cursor marks an in-flight provider POST:
+ * if a human force-deletes the CR (finalizer stripped) while a zombie process is
+ * mid-create, an immediate reclaim could double-allocate. The POST itself lasts
+ * seconds, so one full tick closes that window; a controller restart merely resets
+ * the sighting map and delays the reclaim by one more tick.
+ */
+const CURSOR_ORPHAN_RECLAIM_GRACE_MS = 15_000;
 const PATCH_HEADERS = {
   headers: { "content-type": PatchUtils.PATCH_FORMAT_JSON_MERGE_PATCH },
 };
@@ -68,6 +77,14 @@ function parseWalletAllocation(
 export class KubernetesComputeWorkloadStateAdapter
   implements ComputeWorkloadStatePort
 {
+  /**
+   * First-sighting times of cursor-bearing orphaned slot records (keyed by the raw
+   * ledger JSON, so any change to the record restarts the grace window). In-process
+   * on purpose: persisting it would recreate the very never-cleared state bug.5115
+   * is about, and losing it on restart only delays a reclaim by one tick.
+   */
+  private readonly cursorOrphanSeenAtMs = new Map<string, number>();
+
   constructor(
     private readonly custom: CustomObjectsApi,
     private readonly core: CoreV1Api,
@@ -154,7 +171,31 @@ export class KubernetesComputeWorkloadStateAdapter
         if (await this.workloadExists(active.workloadUid)) {
           return { state: "blocked", ownerAttemptKey: active.attemptKey };
         }
+        if (active.allocationCursor) {
+          // Force-delete-mid-POST window: a cursor plus a deleted CR can also mean a
+          // human stripped the finalizer while a zombie process's provider POST was
+          // still in flight. Reclaim only on a second sighting of the SAME record at
+          // least one reconcile tick later (see CURSOR_ORPHAN_RECLAIM_GRACE_MS).
+          const sightingKey = current.data?.active ?? "";
+          const firstSeenAtMs = this.cursorOrphanSeenAtMs.get(sightingKey);
+          const nowMs = Date.now();
+          if (firstSeenAtMs === undefined) {
+            this.cursorOrphanSeenAtMs.set(sightingKey, nowMs);
+            return { state: "blocked", ownerAttemptKey: active.attemptKey };
+          }
+          if (nowMs - firstSeenAtMs < CURSOR_ORPHAN_RECLAIM_GRACE_MS) {
+            return { state: "blocked", ownerAttemptKey: active.attemptKey };
+          }
+        }
         orphan = active;
+      }
+      // Never write blind: omitting a missing resourceVersion would turn this CAS
+      // into an unconditional overwrite and let two concurrent claimants both win.
+      const resourceVersion = current.metadata?.resourceVersion;
+      if (!resourceVersion) {
+        throw new Error(
+          "wallet allocation ledger metadata.resourceVersion is required for CAS"
+        );
       }
       try {
         await this.core.replaceNamespacedConfigMap(
@@ -164,9 +205,7 @@ export class KubernetesComputeWorkloadStateAdapter
             metadata: {
               name: ALLOCATION_LEDGER,
               namespace: this.namespace,
-              ...(current.metadata?.resourceVersion
-                ? { resourceVersion: current.metadata.resourceVersion }
-                : {}),
+              resourceVersion,
             },
             data: {
               ...(current.data ?? {}),
@@ -174,6 +213,9 @@ export class KubernetesComputeWorkloadStateAdapter
             },
           }
         );
+        // The slot is ours: any recorded orphan sightings are about a record that no
+        // longer exists, so drop them (also bounds the map).
+        this.cursorOrphanSeenAtMs.clear();
         if (orphan) {
           // This event replaces a human hand-clearing the ledger; it must be loud in
           // Loki. The orphan's cursor (an unresolved provider mutation nobody will ever
@@ -263,8 +305,23 @@ export class KubernetesComputeWorkloadStateAdapter
    * read) rather than a GET by name, because the ledger records only the uid.
    */
   private async workloadExists(uid: string): Promise<boolean> {
-    const items = await this.list();
-    return items.some((item) => item.metadata.uid === uid);
+    const response = await this.custom.listNamespacedCustomObject(
+      GROUP,
+      VERSION,
+      this.namespace,
+      PLURAL
+    );
+    const items = (response.body as { items?: unknown }).items;
+    // Not `list()`: its lenient `?? []` would read a malformed 200 as "zero
+    // workloads" and fail OPEN — reclaiming a slot whose owner may be alive.
+    if (!Array.isArray(items)) {
+      throw new Error(
+        "ComputeWorkload list response has no items array; refusing to treat it as an empty cluster"
+      );
+    }
+    return items.some(
+      (item) => (item as ComputeWorkload | undefined)?.metadata?.uid === uid
+    );
   }
 
   private async readWalletLedger(
