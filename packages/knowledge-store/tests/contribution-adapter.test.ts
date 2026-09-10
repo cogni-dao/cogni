@@ -151,8 +151,61 @@ class FakeDiffSql {
   }
 }
 
+// A ReservedSql whose dolt_merge() returns the full Doltgres
+// (hash, fast_forward, conflicts, message) record — the real shape a merge of a
+// non-trivial branch produces — parameterized so tests can drive both a clean
+// merge and a conflicted one. Abort returns its own benign record.
+class FakeMergeReservedSql {
+  readonly queries: string[] = [];
+
+  constructor(private readonly mergeRow: unknown[]) {}
+
+  async unsafe(
+    query: string
+  ): Promise<Record<string, unknown>[] & { count?: number }> {
+    this.queries.push(query);
+    if (query.includes("dolt_merge('--abort')")) {
+      return [{ dolt_merge: ["", "0", "0", "aborted"] }];
+    }
+    if (query.includes("dolt_merge(")) {
+      return [{ dolt_merge: this.mergeRow }];
+    }
+    if (query.includes("dolt_commit")) {
+      return [{ dolt_commit: ["{next456}"] }];
+    }
+    if (query.includes("UPDATE knowledge_contributions")) {
+      const rows: Record<string, unknown>[] & { count?: number } = [];
+      rows.count = 1;
+      return rows;
+    }
+    return [];
+  }
+
+  release(): void {
+    this.queries.push("release");
+  }
+}
+
+class FakeMergeSql {
+  readonly queries: string[] = [];
+
+  constructor(readonly conn: FakeMergeReservedSql) {}
+
+  async unsafe(query: string): Promise<Record<string, unknown>[]> {
+    this.queries.push(query);
+    if (query.includes("FROM knowledge_contributions")) {
+      return [record];
+    }
+    return [];
+  }
+
+  async reserve(): Promise<ReservedSql> {
+    return this.conn as unknown as ReservedSql;
+  }
+}
+
 function adapterFor(
-  fake: FakeSql | FakeDiffSql
+  fake: FakeSql | FakeDiffSql | FakeMergeSql
 ): DoltgresKnowledgeContributionAdapter {
   return new DoltgresKnowledgeContributionAdapter({
     sql: fake as unknown as Sql,
@@ -271,6 +324,61 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
     expect(updateIndex).toBeGreaterThan(-1);
     expect(commitIndex).toBeGreaterThan(updateIndex);
     expect(deleteIndex).toBeGreaterThan(commitIndex);
+  });
+
+  it("surfaces a merge conflict as a typed error and aborts, leaving the branch open (bug.5120)", async () => {
+    // Doltgres reports a data conflict as a non-zero `conflicts` field in the
+    // dolt_merge record WITHOUT throwing. The adapter must detect it, abort the
+    // half-applied merge, and raise a typed ContributionConflictError rather
+    // than blindly marking the contribution merged and letting the later
+    // dolt_commit throw an opaque 500.
+    const conn = new FakeMergeReservedSql(["", "0", "2", "conflicts found"]);
+    const fake = new FakeMergeSql(conn);
+
+    await expect(
+      adapterFor(fake).merge({
+        contributionId: "contrib-agent-1-abc123",
+        principal: reviewer,
+      })
+    ).rejects.toThrow(/unresolved conflict/i);
+
+    // it aborted the conflicted merge so the working set is clean for next time
+    expect(
+      conn.queries.some((q) => q.includes("dolt_merge('--abort')"))
+    ).toBe(true);
+    // and it never marked the contribution merged or deleted the branch
+    expect(
+      conn.queries.some((q) => q.includes("SET state = 'merged'"))
+    ).toBe(false);
+    expect(conn.queries.some((q) => q.includes("dolt_branch('-D'"))).toBe(false);
+  });
+
+  it("merges a branch whose dolt_merge returns the full clean record (no false conflict on intra-branch citations)", async () => {
+    // A real branch carrying entries plus intra-branch citation edges produces
+    // the full (hash, fast_forward, conflicts=0, message) record. The new
+    // conflict parsing must treat conflicts=0 as success — not misread a later
+    // field as a conflict — and complete the merge without aborting.
+    const conn = new FakeMergeReservedSql([
+      "merge999",
+      "0",
+      "0",
+      "merge successful",
+    ]);
+    const fake = new FakeMergeSql(conn);
+
+    const result = await adapterFor(fake).merge({
+      contributionId: "contrib-agent-1-abc123",
+      principal: reviewer,
+    });
+
+    expect(result.commitHash).toBe("merge999");
+    expect(conn.queries.some((q) => q.includes("dolt_merge('--abort')"))).toBe(
+      false
+    );
+    expect(conn.queries.some((q) => q.includes("SET state = 'merged'"))).toBe(
+      true
+    );
+    expect(conn.queries.some((q) => q.includes("dolt_branch('-D'"))).toBe(true);
   });
 
   it("commits close metadata before deleting the contribution branch", async () => {
