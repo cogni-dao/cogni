@@ -10,6 +10,7 @@ import {
   type ComputeWorkloadAttemptReceipt,
   type ComputeWorkloadDnsPort,
   type ComputeWorkloadLifecyclePort,
+  type ComputeWorkloadMigrationPort,
   type ComputeWorkloadSecretResolverPort,
   type ComputeWorkloadStatePort,
   type ComputeWorkloadStatus,
@@ -268,15 +269,23 @@ async function run(
   overrides: {
     dns?: ComputeWorkloadDnsPort;
     secretResolver?: ComputeWorkloadSecretResolverPort;
+    migration?: ComputeWorkloadMigrationPort;
     recordReadinessTransition?: ComputeWorkloadReconcileDeps["recordReadinessTransition"];
     recordRecoveryLimit?: ComputeWorkloadReconcileDeps["recordRecoveryLimit"];
     recordMutationFailure?: ComputeWorkloadReconcileDeps["recordMutationFailure"];
+    recordMigrationFailure?: ComputeWorkloadReconcileDeps["recordMigrationFailure"];
+    recordMigrationHold?: ComputeWorkloadReconcileDeps["recordMigrationHold"];
   } = {}
 ) {
   const dns = overrides.dns ?? {
     reconcile: vi.fn<ComputeWorkloadDnsPort["reconcile"]>(async () => {}),
     deleteOwned: vi.fn<ComputeWorkloadDnsPort["deleteOwned"]>(
       async () => "deleted" as const
+    ),
+  };
+  const migration = overrides.migration ?? {
+    ensure: vi.fn<ComputeWorkloadMigrationPort["ensure"]>(
+      async () => "succeeded" as const
     ),
   };
   const secretResolver = overrides.secretResolver ?? {
@@ -292,6 +301,7 @@ async function run(
       state,
       dns,
       secretResolver,
+      migration,
       environment: "candidate-a",
       deploymentDomain: "test.cognidao.org",
       leaderEpoch: "7:test-controller",
@@ -300,10 +310,12 @@ async function run(
       recordReadinessTransition,
       recordRecoveryLimit: overrides.recordRecoveryLimit ?? vi.fn(),
       recordMutationFailure: overrides.recordMutationFailure ?? vi.fn(),
+      recordMigrationFailure: overrides.recordMigrationFailure ?? vi.fn(),
+      recordMigrationHold: overrides.recordMigrationHold ?? vi.fn(),
     },
     state.current
   );
-  return { dns, secretResolver, recordReadinessTransition };
+  return { dns, secretResolver, migration, recordReadinessTransition };
 }
 
 describe("reconcileComputeWorkload", () => {
@@ -1611,5 +1623,315 @@ describe("reconcileComputeWorkload", () => {
     await run(state, port);
     expect(state.current.status?.failure?.reason).toBe("OwnershipMismatch");
     expect(port.create).not.toHaveBeenCalled();
+  });
+
+  describe("migration gate (bug.5116)", () => {
+    const BUNDLE_DIGEST = `sha256:${"c".repeat(64)}`;
+
+    function migrationPort(outcome: "succeeded" | "running" | "failed") {
+      return {
+        ensure: vi.fn<ComputeWorkloadMigrationPort["ensure"]>(
+          async () => outcome
+        ),
+      };
+    }
+
+    it("blocks create behind a running migration and creates once it succeeds", async () => {
+      const state = new MemoryState(workload());
+      const port = lifecycle();
+      const migration = migrationPort("running");
+      await run(state, port, { migration });
+      expect(port.create).not.toHaveBeenCalled();
+      expect(state.current.status?.phase).toBe("Progressing");
+      expect(state.current.status?.conditions[0]).toMatchObject({
+        status: "False",
+        reason: "MigrationInProgress",
+      });
+      expect(migration.ensure).toHaveBeenCalledWith({
+        nodeSlug: "sample-node",
+        environment: "candidate-a",
+        bundleDigest: BUNDLE_DIGEST,
+        image: IMAGE,
+        secretName: "sample-node-compute-env-secrets",
+        phases: [
+          {
+            name: "migrate",
+            command: [
+              "/bin/sh",
+              "-c",
+              "exec node /app/app/migrate.mjs /app/app/migrations",
+            ],
+            databaseUrlSecretKey: "DATABASE_URL",
+          },
+        ],
+      });
+
+      migration.ensure.mockResolvedValue("succeeded");
+      await run(state, port, { migration });
+      expect(port.create).toHaveBeenCalledTimes(1);
+    });
+
+    it("adds the doltgres phase only when the service declares DOLTGRES_URL", async () => {
+      const base = workload();
+      const service = base.spec.workload.services[0];
+      if (!service) throw new Error("test workload must declare a service");
+      const state = new MemoryState(
+        workload({
+          spec: {
+            ...base.spec,
+            workload: {
+              ...base.spec.workload,
+              services: [
+                {
+                  ...service,
+                  secretRefs: [
+                    ...(service.secretRefs ?? []),
+                    { key: "DOLTGRES_URL" },
+                  ],
+                },
+              ],
+            },
+          },
+        })
+      );
+      const migration = migrationPort("running");
+      await run(state, lifecycle(), { migration });
+      expect(migration.ensure).toHaveBeenCalledWith(
+        expect.objectContaining({
+          phases: [
+            expect.objectContaining({
+              name: "migrate",
+              databaseUrlSecretKey: "DATABASE_URL",
+            }),
+            {
+              name: "migrate-doltgres",
+              command: [
+                "/bin/sh",
+                "-c",
+                "exec node /app/app/migrate-doltgres.mjs /app/app/doltgres-migrations",
+              ],
+              databaseUrlSecretKey: "DOLTGRES_URL",
+            },
+          ],
+        })
+      );
+    });
+
+    it("blocks a new-generation update behind a running migration", async () => {
+      const state = new MemoryState(
+        workload({
+          metadata: { ...workload().metadata, generation: 2 },
+          status: status(1),
+        })
+      );
+      const port = lifecycle();
+      await run(state, port, { migration: migrationPort("running") });
+      expect(port.update).not.toHaveBeenCalled();
+      expect(port.create).not.toHaveBeenCalled();
+      expect(state.current.status?.conditions[0]).toMatchObject({
+        reason: "MigrationInProgress",
+      });
+    });
+
+    it("blocks closed-resource recovery behind a running migration", async () => {
+      const state = new MemoryState(workload({ status: status(1, "closed") }));
+      const port = lifecycle();
+      await run(state, port, { migration: migrationPort("running") });
+      expect(port.create).not.toHaveBeenCalled();
+      expect(port.recoverCreate).not.toHaveBeenCalled();
+    });
+
+    it("fails terminally on migration failure without any lease mutation or recovery", async () => {
+      const state = new MemoryState(
+        workload({
+          metadata: { ...workload().metadata, generation: 2 },
+          status: status(1),
+        })
+      );
+      const port = lifecycle();
+      const recordMigrationFailure = vi.fn();
+      const migration = migrationPort("failed");
+      await run(state, port, { migration, recordMigrationFailure });
+
+      expect(port.create).not.toHaveBeenCalled();
+      expect(port.update).not.toHaveBeenCalled();
+      expect(port.delete).not.toHaveBeenCalled();
+      expect(state.current.status?.phase).toBe("Failed");
+      expect(state.current.status?.failure).toMatchObject({
+        reason: "MigrationFailed",
+        retryable: false,
+      });
+      // The old lease keeps serving the old sha; the handle is preserved untouched.
+      expect(state.current.status?.resource?.id).toBe("lease-42");
+      expect(recordMigrationFailure).toHaveBeenCalledWith({
+        nodeId: NODE_ID,
+        environment: "candidate-a",
+        sourceSha: SHA,
+        leaseId: "lease-42",
+        outcomeCode: "MigrationFailed",
+      });
+      expect(state.events.at(-1)).toMatchObject({
+        type: "Warning",
+        reason: "MigrationFailed",
+      });
+
+      // Level-triggered re-check stays blocked without re-emitting the transition.
+      await run(state, port, { migration, recordMigrationFailure });
+      expect(recordMigrationFailure).toHaveBeenCalledTimes(1);
+      expect(port.update).not.toHaveBeenCalled();
+    });
+
+    it("does not churn recovery allocations for a closed resource after migration failure", async () => {
+      const state = new MemoryState(workload({ status: status(1, "closed") }));
+      const port = lifecycle();
+      const migration = migrationPort("failed");
+      await run(state, port, { migration });
+      expect(state.current.status?.failure?.reason).toBe("MigrationFailed");
+      await run(state, port, { migration });
+      expect(port.create).not.toHaveBeenCalled();
+      expect(port.recoverCreate).not.toHaveBeenCalled();
+    });
+
+    it("holds a throwing migration port with ZERO status writes", async () => {
+      // A hard-blocked CR must keep its failure record across an API blip: the
+      // merge patch deletes absent fields, so ANY write here would erase it and
+      // resume same-generation allocation churn.
+      const blocked: ComputeWorkloadStatus = {
+        ...status(1, "closed"),
+        phase: "Failed",
+        failure: {
+          reason: "BootSourceMismatch",
+          message:
+            "external workload did not serve the declared source revision",
+          retryable: false,
+        },
+      };
+      const state = new MemoryState(workload({ status: blocked }));
+      const patchStatus = vi.spyOn(state, "patchStatus");
+      const port = lifecycle();
+      const recordMigrationHold = vi.fn();
+      const migration = {
+        ensure: vi.fn<ComputeWorkloadMigrationPort["ensure"]>(async () => {
+          throw new Error("kubernetes api unavailable");
+        }),
+      };
+      await run(state, port, { migration, recordMigrationHold });
+      expect(port.create).not.toHaveBeenCalled();
+      expect(port.recoverCreate).not.toHaveBeenCalled();
+      expect(patchStatus).not.toHaveBeenCalled();
+      expect(state.current.status).toEqual(blocked);
+      expect(recordMigrationHold).toHaveBeenCalledWith({
+        nodeId: NODE_ID,
+        environment: "candidate-a",
+        nodeSlug: "sample-node",
+        bundleDigest: BUNDLE_DIGEST,
+        causeMessage: "kubernetes api unavailable",
+      });
+    });
+
+    it("classifies a terminal lifecycle error from the port as failed, not held", async () => {
+      const state = new MemoryState(workload());
+      const port = lifecycle();
+      const recordMigrationHold = vi.fn();
+      const migration = {
+        ensure: vi.fn<ComputeWorkloadMigrationPort["ensure"]>(async () => {
+          throw new ComputeLifecycleError(
+            "terminal",
+            "ProviderRejected",
+            false
+          );
+        }),
+      };
+      await run(state, port, { migration, recordMigrationHold });
+      expect(port.create).not.toHaveBeenCalled();
+      expect(recordMigrationHold).not.toHaveBeenCalled();
+      expect(state.current.status?.phase).toBe("Failed");
+      expect(state.current.status?.failure?.reason).toBe("MigrationFailed");
+    });
+
+    it("names MigrationSpecInvalid for a bundle without a resolvable digest", async () => {
+      const base = workload();
+      const state = new MemoryState(
+        workload({
+          spec: {
+            ...base.spec,
+            bundle: { ...base.spec.bundle, ref: "ghcr.io/cogni-dao/x:latest" },
+          },
+        })
+      );
+      const port = lifecycle();
+      const recordMigrationFailure = vi.fn();
+      const migration = migrationPort("succeeded");
+      await run(state, port, { migration, recordMigrationFailure });
+      expect(migration.ensure).not.toHaveBeenCalled();
+      expect(port.create).not.toHaveBeenCalled();
+      expect(state.current.status?.failure?.reason).toBe(
+        "MigrationSpecInvalid"
+      );
+      expect(recordMigrationFailure).toHaveBeenCalledWith(
+        expect.objectContaining({ outcomeCode: "MigrationSpecInvalid" })
+      );
+    });
+
+    it("does not rewrite an unchanged Failed or Progressing migration status", async () => {
+      const state = new MemoryState(workload());
+      const port = lifecycle();
+      const migration = migrationPort("failed");
+      await run(state, port, { migration });
+      expect(state.current.status?.failure?.reason).toBe("MigrationFailed");
+      const patchAfterFailed = vi.spyOn(state, "patchStatus");
+      await run(state, port, { migration });
+      expect(patchAfterFailed).not.toHaveBeenCalled();
+
+      const running = new MemoryState(workload());
+      const holdPort = migrationPort("running");
+      await run(running, lifecycle(), { migration: holdPort });
+      expect(running.current.status?.conditions[0]?.reason).toBe(
+        "MigrationInProgress"
+      );
+      const patchAfterRunning = vi.spyOn(running, "patchStatus");
+      await run(running, lifecycle(), { migration: holdPort });
+      expect(patchAfterRunning).not.toHaveBeenCalled();
+    });
+
+    it("preserves an existing failure record while a migration is observed running", async () => {
+      const blocked: ComputeWorkloadStatus = {
+        ...status(1),
+        phase: "Failed",
+        failure: {
+          reason: "BootReadinessUnavailable",
+          message:
+            "external workload did not pass the fixed readiness endpoint",
+          retryable: false,
+        },
+      };
+      const state = new MemoryState(workload({ status: blocked }));
+      await run(state, lifecycle(), { migration: migrationPort("running") });
+      expect(state.current.status?.conditions[0]?.reason).toBe(
+        "MigrationInProgress"
+      );
+      expect(state.current.status?.failure).toEqual(blocked.failure);
+    });
+
+    it("skips the gate entirely for workloads without the node-app profile", async () => {
+      const base = workload();
+      const service = base.spec.workload.services[0];
+      if (!service) throw new Error("test workload must declare a service");
+      const { runtimeProfile: _profile, ...generic } = service;
+      const state = new MemoryState(
+        workload({
+          spec: {
+            ...base.spec,
+            workload: {
+              ...base.spec.workload,
+              services: [{ ...generic, secretRefs: [] }],
+            },
+          },
+        })
+      );
+      const migration = migrationPort("failed");
+      await run(state, lifecycle(), { migration });
+      expect(migration.ensure).not.toHaveBeenCalled();
+    });
   });
 });

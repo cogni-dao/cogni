@@ -30,6 +30,10 @@ import type { NodeDeploymentSpec, NodeServiceSpec } from "./schema.js";
  * This is a CAPABILITY contract, not a node list: any service that opts into the profile owes
  * these refs, and no node is named. The values themselves live only in the node's own
  * `cogni/<env>/<node>/*` scope and are resolved at the provider-I/O boundary.
+ *
+ * The profile also implies the fork-image migration layout — `/app/app/migrate.mjs` +
+ * `/app/app/migrations` (plus `migrate-doltgres.mjs` when `DOLTGRES_URL` is declared) — which
+ * the operator's external-compute migration gate runs before any placement (bug.5116).
  */
 export const COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS = [
   "AUTH_SECRET",

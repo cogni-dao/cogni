@@ -14,6 +14,8 @@ import {
   type ComputeWorkloadAttemptReceipt,
   type ComputeWorkloadDnsPort,
   type ComputeWorkloadLifecyclePort,
+  type ComputeWorkloadMigrationPhase,
+  type ComputeWorkloadMigrationPort,
   type ComputeWorkloadSecretResolverPort,
   type ComputeWorkloadStatePort,
   type ComputeWorkloadStatus,
@@ -33,6 +35,7 @@ export interface ComputeWorkloadReconcileDeps {
   readonly state: ComputeWorkloadStatePort;
   readonly dns: ComputeWorkloadDnsPort;
   readonly secretResolver: ComputeWorkloadSecretResolverPort;
+  readonly migration: ComputeWorkloadMigrationPort;
   readonly environment: string;
   readonly deploymentDomain: string;
   readonly leaderEpoch: string;
@@ -61,6 +64,26 @@ export interface ComputeWorkloadReconcileDeps {
     leaseId: string;
     operation: "create" | "update" | "recover";
     outcomeCode: ComputeLifecycleFailureReason;
+  }) => void;
+  readonly recordMigrationFailure: (input: {
+    nodeId: string;
+    environment: string;
+    sourceSha: string;
+    leaseId: string;
+    outcomeCode: "MigrationFailed" | "MigrationSpecInvalid";
+  }) => void;
+  /**
+   * A migration probe that threw (API blip, RBAC not yet synced) is HELD, not
+   * failed — and held passes write no status. This warn-level record is the only
+   * signal, so a persistently held fleet is visible instead of silently
+   * Progressing forever.
+   */
+  readonly recordMigrationHold: (input: {
+    nodeId: string;
+    environment: string;
+    nodeSlug: string;
+    bundleDigest: string;
+    causeMessage: string;
   }) => void;
 }
 
@@ -101,6 +124,11 @@ const SAFE_MESSAGES: Readonly<Record<string, string>> = {
   OwnershipMismatch: "resource ownership does not match this controller",
   PublicHostOwnershipMismatch:
     "public host does not match the operator-owned node hostname",
+  MigrationInProgress:
+    "node database migration for the desired bundle is still running",
+  MigrationFailed: "node database migration for the desired bundle failed",
+  MigrationSpecInvalid:
+    "desired bundle does not declare a resolvable digest and app artifact for migration",
   RetryLimitExceeded: "known-outcome retry limit was exceeded",
   RecoveryLimitExceeded:
     "generation recovery limit was reached; further allocation is blocked",
@@ -222,6 +250,185 @@ function legacyCogniAppEnv(input: {
       LITELLM_MASTER_KEY: virtualKey,
     },
   });
+}
+
+/**
+ * Migration command policy implied by the `cogni-node-app-v1` runtime profile
+ * (bug.5116). Fork images bundle the migrator at `/app/app/...` — the same
+ * contract the k3s lane's `migrate` initContainer exercises. Policy lives here
+ * with `legacyCogniAppEnv`; the Kubernetes Job adapter renders phases blindly.
+ */
+function cogniNodeAppMigrationPhases(input: {
+  doltgres: boolean;
+}): readonly ComputeWorkloadMigrationPhase[] {
+  return [
+    {
+      name: "migrate",
+      command: [
+        "/bin/sh",
+        "-c",
+        "exec node /app/app/migrate.mjs /app/app/migrations",
+      ],
+      databaseUrlSecretKey: "DATABASE_URL",
+    },
+    ...(input.doltgres
+      ? [
+          {
+            name: "migrate-doltgres",
+            command: [
+              "/bin/sh",
+              "-c",
+              "exec node /app/app/migrate-doltgres.mjs /app/app/doltgres-migrations",
+            ],
+            databaseUrlSecretKey: "DOLTGRES_URL",
+          },
+        ]
+      : []),
+  ];
+}
+
+function bundleDigest(ref: string): string | undefined {
+  return /@(sha256:[0-9a-f]{64})$/.exec(ref)?.[1];
+}
+
+/**
+ * Level-triggered migration gate (bug.5116). Every reconcile of a
+ * `cogni-node-app-v1` workload re-proves that the desired bundle digest's DB
+ * migrations completed before any provider mutation or recovery is attempted.
+ * An already-migrated digest passes instantly, so steady-state and recover
+ * replays cost one Job read. `failed` is terminal for the generation and never
+ * mutates the lease: the old lease keeps serving the old sha.
+ */
+async function migrationGate(
+  deps: ComputeWorkloadReconcileDeps,
+  resource: ComputeWorkload
+): Promise<"passed" | "blocked"> {
+  const appService = resource.spec.workload.services.find(
+    (service) => service.runtimeProfile === "cogni-node-app-v1"
+  );
+  if (!appService) return "passed";
+  const image = resource.spec.bundle.artifacts.find(
+    (artifact) => artifact.name === appService.artifact
+  )?.image;
+  const digest = bundleDigest(resource.spec.bundle.ref);
+  let outcome: "succeeded" | "running" | "failed";
+  let failureReason: "MigrationFailed" | "MigrationSpecInvalid" =
+    "MigrationFailed";
+  if (!image || !digest) {
+    // A bundle that cannot name its digest or app image cannot prove migration
+    // currency; the distinct reason points operators at the bundle, not the DB.
+    outcome = "failed";
+    failureReason = "MigrationSpecInvalid";
+  } else {
+    try {
+      outcome = await deps.migration.ensure({
+        nodeSlug: resource.spec.workload.name,
+        environment: resource.spec.environment,
+        bundleDigest: digest,
+        image,
+        secretName: `${resource.spec.workload.name}-compute-env-secrets`,
+        phases: cogniNodeAppMigrationPhases({
+          doltgres: (appService.secretRefs ?? []).some(
+            (ref) => ref.key === "DOLTGRES_URL"
+          ),
+        }),
+      });
+    } catch (error) {
+      if (error instanceof ComputeLifecycleError && error.kind === "terminal") {
+        outcome = "failed";
+      } else {
+        // We could not find out. Write NOTHING: the status merge patch deletes
+        // absent fields, so a Progressing write here would erase a hard-block
+        // failure (BootSourceMismatch / MigrationFailed) and resume the exact
+        // allocation churn blocksSameGenerationRecovery exists to stop. Hold
+        // this level pass; the warn record keeps a persistent hold visible.
+        deps.recordMigrationHold({
+          nodeId: resource.spec.nodeId,
+          environment: resource.spec.environment,
+          nodeSlug: resource.spec.workload.name,
+          bundleDigest: digest,
+          causeMessage:
+            error instanceof Error ? error.message : "unknown cause",
+        });
+        return "blocked";
+      }
+    }
+  }
+  if (outcome === "succeeded") return "passed";
+  const now = deps.now().toISOString();
+  const currentCondition = resource.status?.conditions?.[0];
+  const preserved = {
+    ...(resource.status?.observedGeneration !== undefined
+      ? { observedGeneration: resource.status.observedGeneration }
+      : {}),
+    ...(resource.status?.observedBundle
+      ? { observedBundle: resource.status.observedBundle }
+      : {}),
+    ...(resource.status?.resource
+      ? { resource: resource.status.resource }
+      : {}),
+    ...(resource.status?.attempt ? { attempt: resource.status.attempt } : {}),
+    recoveryCount: resource.status?.recoveryCount ?? 0,
+  };
+  if (outcome === "running") {
+    // Level-triggered no-op: a migration Job runs for minutes against a 15s
+    // reconcile loop; rewriting an identical status every pass only bloats kine.
+    const alreadyHeld =
+      resource.status?.phase === "Progressing" &&
+      currentCondition?.reason === "MigrationInProgress" &&
+      currentCondition.observedGeneration === resource.metadata.generation;
+    if (!alreadyHeld) {
+      await deps.state.patchStatus({
+        resource,
+        status: {
+          ...baseStatus(resource),
+          phase: "Progressing",
+          ...preserved,
+          // Absent fields are deleted by the merge patch; an existing failure
+          // record must survive an in-flight migration observation.
+          ...(resource.status?.failure
+            ? { failure: resource.status.failure }
+            : {}),
+          conditions: [
+            condition(resource, now, "False", "MigrationInProgress"),
+          ],
+        },
+      });
+    }
+    return "blocked";
+  }
+  const alreadyFailed =
+    resource.status?.phase === "Failed" &&
+    resource.status.failure?.reason === failureReason &&
+    currentCondition?.reason === failureReason &&
+    currentCondition.observedGeneration === resource.metadata.generation;
+  if (!alreadyFailed) {
+    await deps.state.patchStatus({
+      resource,
+      status: {
+        ...baseStatus(resource),
+        phase: "Failed",
+        ...preserved,
+        failure: {
+          reason: failureReason,
+          message: safeMessage(failureReason),
+          retryable: false,
+        },
+        conditions: [condition(resource, now, "False", failureReason)],
+      },
+    });
+  }
+  if (resource.status?.failure?.reason !== failureReason) {
+    deps.recordMigrationFailure({
+      nodeId: resource.spec.nodeId,
+      environment: resource.spec.environment,
+      sourceSha: resource.spec.bundle.source.sha,
+      leaseId: resource.status?.resource?.id ?? "unallocated",
+      outcomeCode: failureReason,
+    });
+    await emit(deps, resource, "Warning", failureReason);
+  }
+  return "blocked";
 }
 
 async function toProvisionSpec(
@@ -428,7 +635,9 @@ function blocksSameGenerationRecovery(resource: ComputeWorkload): boolean {
   return (
     resource.status?.desiredGeneration === resource.metadata.generation &&
     (resource.status?.failure?.reason === "BootSourceMismatch" ||
-      resource.status?.failure?.reason === "BootReadinessUnavailable")
+      resource.status?.failure?.reason === "BootReadinessUnavailable" ||
+      resource.status?.failure?.reason === "MigrationFailed" ||
+      resource.status?.failure?.reason === "MigrationSpecInvalid")
   );
 }
 
@@ -1503,6 +1712,8 @@ export async function reconcileComputeWorkload(
     });
     return;
   }
+
+  if ((await migrationGate(deps, resource)) === "blocked") return;
 
   if (!current) {
     if (
