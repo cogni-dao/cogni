@@ -16,6 +16,11 @@
  *     transit the controller.
  *   - RECONCILER_OWNS_POLICY: bounded in-Job retries (backoffLimit 2, safe because the
  *     migrator is idempotent + advisory-locked); terminality decisions belong to the caller.
+ *   - SCRIPT_FAILURE_IS_TERMINAL: only a migrate container that actually ran and exited
+ *     non-zero makes a Failed Job terminal for its digest. A Job that failed without any
+ *     such exit (DeadlineExceeded while Pending on a packed node, eviction) is an
+ *     infrastructure failure: it is deleted and reported "running" so the next pass
+ *     recreates it — a scheduling problem must never masquerade as a migration failure.
  *   - GC_SUPERSEDED: when a newer digest succeeds, older FINISHED `migrate-<slug>-*` Jobs are
  *     deleted best-effort so the namespace holds one marker per node; running Jobs are never
  *     collected.
@@ -24,7 +29,13 @@
  * @internal
  */
 
-import type { BatchV1Api, V1Container, V1Job } from "@kubernetes/client-node";
+import type {
+  BatchV1Api,
+  CoreV1Api,
+  V1Container,
+  V1Job,
+  V1Pod,
+} from "@kubernetes/client-node";
 import {
   ComputeLifecycleError,
   type ComputeWorkloadMigrationInput,
@@ -80,9 +91,13 @@ function phaseContainer(
         },
       },
     ],
-    // Mirrors the k3s lane's migrate initContainer sizing verbatim.
+    // Requests are deliberately tiny (NOT the k3s initContainer's 384Mi mirror):
+    // a migration is a brief single-connection process, and on a packed
+    // single-node environment a 384Mi request left the Job Pending —
+    // "Insufficient memory" — until activeDeadlineSeconds failed it (bug.5116
+    // follow-up, candidate-a). The 1Gi/1000m limits still bound actual usage.
     resources: {
-      requests: { memory: "384Mi", cpu: "200m" },
+      requests: { memory: "128Mi", cpu: "50m" },
       limits: { memory: "1Gi", cpu: "1000m" },
     },
   };
@@ -149,12 +164,38 @@ type BatchApi = Pick<
   | "deleteNamespacedJob"
 >;
 
+type PodsApi = Pick<CoreV1Api, "listNamespacedPod">;
+
+/** Structural pino subset: infra-retry decisions must be visible, not silent. */
+export interface MigrationJobLogger {
+  warn(obj: Record<string, unknown>, msg: string): void;
+}
+
+/**
+ * True only when some migrate/migrate-doltgres container in the pod actually ran
+ * and exited non-zero — the one signal that the migration SCRIPT failed. Every
+ * container in the Job (init phases + main) is a migration phase, so any
+ * terminated non-zero exit counts.
+ */
+function podHasScriptFailure(pod: V1Pod): boolean {
+  const statuses = [
+    ...(pod.status?.initContainerStatuses ?? []),
+    ...(pod.status?.containerStatuses ?? []),
+  ];
+  return statuses.some((status) => {
+    const terminated = status.state?.terminated ?? status.lastState?.terminated;
+    return terminated !== undefined && terminated.exitCode !== 0;
+  });
+}
+
 export class KubernetesMigrationJobAdapter
   implements ComputeWorkloadMigrationPort
 {
   constructor(
     private readonly batch: BatchApi,
-    private readonly namespace: string
+    private readonly pods: PodsApi,
+    private readonly namespace: string,
+    private readonly log?: MigrationJobLogger
   ) {}
 
   async ensure(
@@ -184,7 +225,80 @@ export class KubernetesMigrationJobAdapter
       await this.collectSuperseded(input, name);
       return "succeeded";
     }
-    if (jobCondition(job, "Failed")) return "failed";
+    if (jobCondition(job, "Failed")) {
+      return this.classifyFailedJob(input, job, name);
+    }
+    return "running";
+  }
+
+  /**
+   * A Failed Job is terminal for its digest ONLY if the migration script
+   * provably ran and exited non-zero. Failure without any such container exit
+   * (activeDeadlineSeconds elapsing while the pod sat Pending on a packed node,
+   * node-pressure eviction) is infrastructure, not migration: delete the Job and
+   * report "running" so the next reconcile pass recreates it.
+   *
+   * Tradeoff: an environment that stays unschedulable retries indefinitely —
+   * each round implicitly bounded by activeDeadlineSeconds and made visible by
+   * the warn log below every cycle — rather than poisoning the digest, which
+   * only a new build could otherwise escape.
+   */
+  private async classifyFailedJob(
+    input: ComputeWorkloadMigrationInput,
+    job: V1Job,
+    name: string
+  ): Promise<"failed" | "running"> {
+    let pods: V1Pod[];
+    try {
+      const list = await this.pods.listNamespacedPod(
+        this.namespace,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        `job-name=${name}`
+      );
+      pods = list.body.items ?? [];
+    } catch {
+      // Cannot prove either way without the pods; neither a terminal verdict
+      // nor a delete is safe. Retry the observation.
+      throw transient();
+    }
+    // A pod whose migrate container ran and failed wins over any later
+    // infra-failure pod: the script failure is the terminal fact.
+    if (pods.some(podHasScriptFailure)) return "failed";
+    const failureReason =
+      (job.status?.conditions ?? []).find(
+        (condition) =>
+          condition.type === "Failed" && condition.status === "True"
+      )?.reason ?? "Unknown";
+    this.log?.warn(
+      {
+        job: name,
+        node: input.nodeSlug,
+        environment: input.environment,
+        failureReason,
+        podCount: pods.length,
+        decision:
+          "no pod has a terminated migrate container with a non-zero exitCode; " +
+          "classifying as infrastructure failure and retrying",
+      },
+      "compute_workload_migration_job_infra_retry"
+    );
+    try {
+      await this.batch.deleteNamespacedJob(
+        name,
+        this.namespace,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        "Background"
+      );
+    } catch (error) {
+      // 404: another pass already deleted it — same outcome (recreate next pass).
+      if (statusCode(error) !== 404) throw transient();
+    }
     return "running";
   }
 
