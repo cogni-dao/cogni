@@ -21,7 +21,7 @@ rules:
   # A completed Job is the durable skip marker; delete is for superseded-digest GC.
   - apiGroups: [batch]
     resources: [jobs]
-    verbs: [get, list, watch, create, delete]
+    verbs: [get, list, create, delete]
   - apiGroups: [""]
     resources: [configmaps]
     resourceNames: [compute-workload-allocation-ledger]

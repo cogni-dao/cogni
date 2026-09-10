@@ -70,7 +70,20 @@ export interface ComputeWorkloadReconcileDeps {
     environment: string;
     sourceSha: string;
     leaseId: string;
-    outcomeCode: "MigrationFailed";
+    outcomeCode: "MigrationFailed" | "MigrationSpecInvalid";
+  }) => void;
+  /**
+   * A migration probe that threw (API blip, RBAC not yet synced) is HELD, not
+   * failed — and held passes write no status. This warn-level record is the only
+   * signal, so a persistently held fleet is visible instead of silently
+   * Progressing forever.
+   */
+  readonly recordMigrationHold: (input: {
+    nodeId: string;
+    environment: string;
+    nodeSlug: string;
+    bundleDigest: string;
+    causeMessage: string;
   }) => void;
 }
 
@@ -114,6 +127,8 @@ const SAFE_MESSAGES: Readonly<Record<string, string>> = {
   MigrationInProgress:
     "node database migration for the desired bundle is still running",
   MigrationFailed: "node database migration for the desired bundle failed",
+  MigrationSpecInvalid:
+    "desired bundle does not declare a resolvable digest and app artifact for migration",
   RetryLimitExceeded: "known-outcome retry limit was exceeded",
   RecoveryLimitExceeded:
     "generation recovery limit was reached; further allocation is blocked",
@@ -297,10 +312,13 @@ async function migrationGate(
   )?.image;
   const digest = bundleDigest(resource.spec.bundle.ref);
   let outcome: "succeeded" | "running" | "failed";
+  let failureReason: "MigrationFailed" | "MigrationSpecInvalid" =
+    "MigrationFailed";
   if (!image || !digest) {
     // A bundle that cannot name its digest or app image cannot prove migration
-    // currency; refusing is the only honest terminal answer.
+    // currency; the distinct reason points operators at the bundle, not the DB.
     outcome = "failed";
+    failureReason = "MigrationSpecInvalid";
   } else {
     try {
       outcome = await deps.migration.ensure({
@@ -315,13 +333,30 @@ async function migrationGate(
           ),
         }),
       });
-    } catch {
-      // Transient adapter/API failure holds this level pass; the next re-checks.
-      outcome = "running";
+    } catch (error) {
+      if (error instanceof ComputeLifecycleError && error.kind === "terminal") {
+        outcome = "failed";
+      } else {
+        // We could not find out. Write NOTHING: the status merge patch deletes
+        // absent fields, so a Progressing write here would erase a hard-block
+        // failure (BootSourceMismatch / MigrationFailed) and resume the exact
+        // allocation churn blocksSameGenerationRecovery exists to stop. Hold
+        // this level pass; the warn record keeps a persistent hold visible.
+        deps.recordMigrationHold({
+          nodeId: resource.spec.nodeId,
+          environment: resource.spec.environment,
+          nodeSlug: resource.spec.workload.name,
+          bundleDigest: digest,
+          causeMessage:
+            error instanceof Error ? error.message : "unknown cause",
+        });
+        return "blocked";
+      }
     }
   }
   if (outcome === "succeeded") return "passed";
   const now = deps.now().toISOString();
+  const currentCondition = resource.status?.conditions?.[0];
   const preserved = {
     ...(resource.status?.observedGeneration !== undefined
       ? { observedGeneration: resource.status.observedGeneration }
@@ -336,40 +371,62 @@ async function migrationGate(
     recoveryCount: resource.status?.recoveryCount ?? 0,
   };
   if (outcome === "running") {
+    // Level-triggered no-op: a migration Job runs for minutes against a 15s
+    // reconcile loop; rewriting an identical status every pass only bloats kine.
+    const alreadyHeld =
+      resource.status?.phase === "Progressing" &&
+      currentCondition?.reason === "MigrationInProgress" &&
+      currentCondition.observedGeneration === resource.metadata.generation;
+    if (!alreadyHeld) {
+      await deps.state.patchStatus({
+        resource,
+        status: {
+          ...baseStatus(resource),
+          phase: "Progressing",
+          ...preserved,
+          // Absent fields are deleted by the merge patch; an existing failure
+          // record must survive an in-flight migration observation.
+          ...(resource.status?.failure
+            ? { failure: resource.status.failure }
+            : {}),
+          conditions: [
+            condition(resource, now, "False", "MigrationInProgress"),
+          ],
+        },
+      });
+    }
+    return "blocked";
+  }
+  const alreadyFailed =
+    resource.status?.phase === "Failed" &&
+    resource.status.failure?.reason === failureReason &&
+    currentCondition?.reason === failureReason &&
+    currentCondition.observedGeneration === resource.metadata.generation;
+  if (!alreadyFailed) {
     await deps.state.patchStatus({
       resource,
       status: {
         ...baseStatus(resource),
-        phase: "Progressing",
+        phase: "Failed",
         ...preserved,
-        conditions: [condition(resource, now, "False", "MigrationInProgress")],
+        failure: {
+          reason: failureReason,
+          message: safeMessage(failureReason),
+          retryable: false,
+        },
+        conditions: [condition(resource, now, "False", failureReason)],
       },
     });
-    return "blocked";
   }
-  await deps.state.patchStatus({
-    resource,
-    status: {
-      ...baseStatus(resource),
-      phase: "Failed",
-      ...preserved,
-      failure: {
-        reason: "MigrationFailed",
-        message: safeMessage("MigrationFailed"),
-        retryable: false,
-      },
-      conditions: [condition(resource, now, "False", "MigrationFailed")],
-    },
-  });
-  if (resource.status?.failure?.reason !== "MigrationFailed") {
+  if (resource.status?.failure?.reason !== failureReason) {
     deps.recordMigrationFailure({
       nodeId: resource.spec.nodeId,
       environment: resource.spec.environment,
       sourceSha: resource.spec.bundle.source.sha,
       leaseId: resource.status?.resource?.id ?? "unallocated",
-      outcomeCode: "MigrationFailed",
+      outcomeCode: failureReason,
     });
-    await emit(deps, resource, "Warning", "MigrationFailed");
+    await emit(deps, resource, "Warning", failureReason);
   }
   return "blocked";
 }
@@ -579,7 +636,8 @@ function blocksSameGenerationRecovery(resource: ComputeWorkload): boolean {
     resource.status?.desiredGeneration === resource.metadata.generation &&
     (resource.status?.failure?.reason === "BootSourceMismatch" ||
       resource.status?.failure?.reason === "BootReadinessUnavailable" ||
-      resource.status?.failure?.reason === "MigrationFailed")
+      resource.status?.failure?.reason === "MigrationFailed" ||
+      resource.status?.failure?.reason === "MigrationSpecInvalid")
   );
 }
 

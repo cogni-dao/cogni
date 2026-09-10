@@ -350,6 +350,8 @@ async function reconcileAll(): Promise<void> {
                   log.warn(observation, "compute_workload_mutation_failed"),
                 recordMigrationFailure: (observation) =>
                   log.error(observation, "compute_workload_migration_failed"),
+                recordMigrationHold: (observation) =>
+                  log.warn(observation, "compute_workload_migration_hold"),
               },
               resource
             );

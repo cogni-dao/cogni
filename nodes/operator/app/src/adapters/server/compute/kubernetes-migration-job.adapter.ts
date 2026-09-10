@@ -14,9 +14,11 @@
  *     durable skip marker (deliberately no ttlSecondsAfterFinished).
  *   - VALUE_FREE: DATABASE_URL reaches the Job only as a secretKeyRef; secret values never
  *     transit the controller.
- *   - RECONCILER_OWNS_POLICY: backoffLimit 0; retry/terminality decisions belong to the caller.
- *   - GC_SUPERSEDED: when a newer digest succeeds, older `migrate-<slug>-*` Jobs are deleted
- *     best-effort so the namespace holds one marker per node.
+ *   - RECONCILER_OWNS_POLICY: bounded in-Job retries (backoffLimit 2, safe because the
+ *     migrator is idempotent + advisory-locked); terminality decisions belong to the caller.
+ *   - GC_SUPERSEDED: when a newer digest succeeds, older FINISHED `migrate-<slug>-*` Jobs are
+ *     deleted best-effort so the namespace holds one marker per node; running Jobs are never
+ *     collected.
  * Side-effects: Kubernetes Job create/list/delete in one namespace.
  * Links: bug.5116, story.5016, infra/k8s/base/node-app/deployment.yaml (k3s initContainer)
  * @internal
@@ -104,8 +106,11 @@ function buildJob(input: ComputeWorkloadMigrationInput, name: string): V1Job {
       },
     },
     spec: {
-      // The reconciler owns retry policy; a failed Job is terminal for its digest.
-      backoffLimit: 0,
+      // migrate.mjs is idempotent (drizzle journal) and single-writer
+      // (pg_advisory_lock), so a couple of in-Job retries absorb transient DB
+      // blips without poisoning the digest. A Job that still ends Failed is
+      // terminal for its digest — the reconciler owns that policy.
+      backoffLimit: 2,
       activeDeadlineSeconds: ACTIVE_DEADLINE_SECONDS,
       template: {
         metadata: {
@@ -200,6 +205,12 @@ export class KubernetesMigrationJobAdapter
       const prefix = `migrate-${input.nodeSlug}-`;
       await Promise.all(
         (list.body.items ?? [])
+          // Only finished Jobs (Complete or Failed) are collectible: a rollback
+          // race must never kill another digest's migration mid-flight.
+          .filter(
+            (item) =>
+              jobCondition(item, "Complete") || jobCondition(item, "Failed")
+          )
           .map((item) => item.metadata?.name)
           .filter(
             (candidate): candidate is string =>

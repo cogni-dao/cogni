@@ -62,7 +62,7 @@ function batch(job?: V1Job, jobs: V1Job[] = []) {
       body,
     })),
     listNamespacedJob: vi.fn(async () => ({ body: { items: jobs } })),
-    deleteNamespacedJob: vi.fn(async () => ({ body: {} })),
+    deleteNamespacedJob: vi.fn(async (..._args: unknown[]) => ({ body: {} })),
   };
 }
 
@@ -106,7 +106,9 @@ describe("KubernetesMigrationJobAdapter", () => {
     expect(job?.metadata?.name).toBe(`migrate-toks4-${"a".repeat(12)}`);
     expect(job?.metadata?.labels).toMatchObject({ "cogni.io/node": "toks4" });
     expect(job?.spec).toMatchObject({
-      backoffLimit: 0,
+      // Bounded in-Job retries: the migrator is idempotent + advisory-locked,
+      // so transient DB blips must not terminally poison the digest.
+      backoffLimit: 2,
       activeDeadlineSeconds: 600,
     });
     // Deliberately no TTL: the completed Job IS the durable skip marker.
@@ -206,20 +208,33 @@ describe("KubernetesMigrationJobAdapter", () => {
     expect(api.deleteNamespacedJob).not.toHaveBeenCalled();
   });
 
-  it("garbage-collects superseded digests once the current digest succeeds", async () => {
+  it("garbage-collects only FINISHED superseded digests once the current digest succeeds", async () => {
     const keep = migrationJobName("toks4", DIGEST);
-    const stale = `migrate-toks4-${"9".repeat(12)}`;
-    const api = batch(namedJob(keep, { succeeded: 1 }), [
-      namedJob(keep, { succeeded: 1 }),
-      namedJob(stale, { succeeded: 1 }),
-      namedJob("migrate-other-node-abcdefabcdef"),
+    const staleComplete = `migrate-toks4-${"9".repeat(12)}`;
+    const staleFailed = `migrate-toks4-${"8".repeat(12)}`;
+    const staleRunning = `migrate-toks4-${"7".repeat(12)}`;
+    const complete = {
+      succeeded: 1,
+      conditions: [{ type: "Complete", status: "True" }],
+    };
+    const api = batch(namedJob(keep, complete), [
+      namedJob(keep, complete),
+      namedJob(staleComplete, complete),
+      namedJob(staleFailed, {
+        failed: 1,
+        conditions: [{ type: "Failed", status: "True" }],
+      }),
+      // A rollback race must never kill another digest's migration mid-flight.
+      namedJob(staleRunning, { active: 1 }),
+      namedJob("migrate-other-node-abcdefabcdef", complete),
     ]);
     const adapter = new KubernetesMigrationJobAdapter(api as never, NAMESPACE);
 
     await expect(adapter.ensure(input())).resolves.toBe("succeeded");
-    expect(api.deleteNamespacedJob).toHaveBeenCalledTimes(1);
+    const deleted = api.deleteNamespacedJob.mock.calls.map((call) => call[0]);
+    expect(deleted.sort()).toEqual([staleFailed, staleComplete].sort());
     expect(api.deleteNamespacedJob).toHaveBeenCalledWith(
-      stale,
+      staleComplete,
       NAMESPACE,
       undefined,
       undefined,
