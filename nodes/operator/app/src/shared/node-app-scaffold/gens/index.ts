@@ -52,6 +52,7 @@ export {
   externalSecretPath,
   overlayPath,
   type PlacementDeltaResult,
+  schedulerEndpointPatchPath,
 } from "./env-membership-plan";
 export {
   NODE_DEPLOY_ENVS,
@@ -74,4 +75,7 @@ export {
   renderPaymentsActivationSpec,
 } from "./payments-activation";
 export { type RenderRepoSpecInput, renderRepoSpec } from "./repo-spec";
-export { insertSchedulerEndpoint } from "./scheduler-endpoints";
+export {
+  insertSchedulerEndpoint,
+  updateSchedulerEndpointHost,
+} from "./scheduler-endpoints";

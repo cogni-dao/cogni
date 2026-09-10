@@ -183,6 +183,23 @@ export function hasCatalogSourceRepo(catalogYaml: string): boolean {
   return SOURCE_REPO_LINE_RE.test(catalogYaml);
 }
 
+const NODE_ID_LINE_RE = /^node_id:[^\S\r\n]*(\S+)[^\S\r\n]*$/m;
+
+/**
+ * Read the catalog row's `node_id:` (REPO_SPEC_IS_IDENTITY_SSOT projection) — the UUID alias the
+ * scheduler-worker routing CSV keys on (bug.5094). Every `source_repo:`-bearing row carries one;
+ * throws if absent so a caller cannot silently render a routing update under no identity.
+ */
+export function parseCatalogNodeId(catalogYaml: string): string {
+  const match = NODE_ID_LINE_RE.exec(catalogYaml);
+  if (!match || match[1] === undefined) {
+    throw new Error(
+      "catalog row is missing a `node_id: <uuid>` line; cannot resolve its scheduler routing identity."
+    );
+  }
+  return match[1];
+}
+
 /**
  * Read the catalog row's `deployment_provider:` per-env placement map. An absent block (or an env
  * absent from it) means the k3s default — callers resolve `map[env] ?? "k3s"`. Throws on unknown
