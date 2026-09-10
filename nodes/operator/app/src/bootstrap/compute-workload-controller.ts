@@ -195,7 +195,9 @@ const secretResolver = new ComputeWorkloadSecretResolverAdapter(
 const migration = apiKey
   ? new KubernetesMigrationJobAdapter(
       kubeConfig.makeApiClient(BatchV1Api),
-      namespace
+      core,
+      namespace,
+      log
     )
   : new DormantComputeWorkloadMigrationAdapter();
 if (!apiKey) {
