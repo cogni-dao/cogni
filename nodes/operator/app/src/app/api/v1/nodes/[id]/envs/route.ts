@@ -8,6 +8,11 @@
  *   (`infra/catalog/<slug>.yaml` `envs:` line + the matching overlay / ApplicationSet / appsets
  *   kustomization). Individual memberships are independently editable, but the final environment and
  *   current `activity_env` cannot be removed. Full decommission and authority transfer are separate flows.
+ *   PLUS the placement lever (story.5016 T5): `{env, placement: "k3s"|"akash"}` picks the serving lane
+ *   for an env ALREADY in reach — akash upserts `deployment_provider.<env>` and removes the k3s
+ *   overlay/AppSet (the ComputeWorkload CR lane takes over); k3s restores them. `present` and
+ *   `placement` are MUTUALLY EXCLUSIVE (exactly one per request); deploy-straight-onto-akash is
+ *   deliberately out of v1 scope — deploy first, then place.
  * Scope: Session auth + a single MANAGE_ENVS authz-gate on the resolved node. Resolves the monorepo
  *   owner/repo exactly like `publish` / `activate-payments` (env-scoped, FAIL CLOSED), then delegates the
  *   byte-exact catalog/overlay/appset edit to `GitHubRepoWriter.openNodeEnvPr`.
@@ -38,6 +43,8 @@ import {
   envRemovalViolation,
   NODE_DEPLOY_ENVS,
   type NodeFormationEnv,
+  PLACEMENT_PROVIDERS,
+  type PlacementProvider,
 } from "@/shared/node-app-scaffold/gens";
 
 export const runtime = "nodejs";
@@ -74,9 +81,14 @@ export async function POST(request: Request, routeArgs: RouteParams) {
   } catch {
     return NextResponse.json({ error: "invalid JSON body" }, { status: 400 });
   }
-  const { env: targetEnv, present } = (body ?? {}) as {
+  const {
+    env: targetEnv,
+    present,
+    placement,
+  } = (body ?? {}) as {
     env?: unknown;
     present?: unknown;
+    placement?: unknown;
   };
   if (typeof targetEnv !== "string" || !VALID_ENVS.has(targetEnv)) {
     return NextResponse.json(
@@ -87,9 +99,36 @@ export async function POST(request: Request, routeArgs: RouteParams) {
       { status: 400 }
     );
   }
-  if (typeof present !== "boolean") {
+  // MUTUALLY_EXCLUSIVE_VERBS: `{env, present}` toggles deploy reach; `{env, placement}` picks the
+  // serving lane for an env ALREADY in reach. Exactly one must be given — composing them (deploy
+  // straight onto akash) is deliberately out of v1 scope; deploy first, then place.
+  const hasPresent = present !== undefined;
+  const hasPlacement = placement !== undefined;
+  if (hasPresent === hasPlacement) {
+    return NextResponse.json(
+      {
+        error: "invalid body",
+        reason:
+          "provide exactly one of `present` (boolean, deploy reach) or `placement` (k3s|akash, serving lane)",
+      },
+      { status: 400 }
+    );
+  }
+  if (hasPresent && typeof present !== "boolean") {
     return NextResponse.json(
       { error: "invalid present", reason: "present must be a boolean" },
+      { status: 400 }
+    );
+  }
+  if (
+    hasPlacement &&
+    !(PLACEMENT_PROVIDERS as readonly unknown[]).includes(placement)
+  ) {
+    return NextResponse.json(
+      {
+        error: "invalid placement",
+        reason: `placement must be one of ${PLACEMENT_PROVIDERS.join(", ")}`,
+      },
       { status: 400 }
     );
   }
@@ -121,7 +160,7 @@ export async function POST(request: Request, routeArgs: RouteParams) {
     return NextResponse.json(payload, { status: gate.status });
   }
 
-  if (!present) {
+  if (hasPresent && present === false) {
     const violation = envRemovalViolation({
       currentEnvs: node.deployEnvs as NodeFormationEnv[],
       activityEnv: node.activityEnv as NodeFormationEnv,
@@ -160,6 +199,35 @@ export async function POST(request: Request, routeArgs: RouteParams) {
   }
 
   const writer = createNodeRepoWriter(env);
+
+  // PLACEMENT verb (story.5016 T5): pick the serving lane for an env already in reach.
+  if (hasPlacement) {
+    let result: Awaited<ReturnType<typeof writer.openNodePlacementPr>>;
+    try {
+      result = await writer.openNodePlacementPr({
+        owner,
+        repo,
+        slug: node.slug,
+        env: targetEnv as NodeFormationEnv,
+        placement: placement as PlacementProvider,
+      });
+    } catch (err) {
+      const status = (err as { status?: number })?.status;
+      const code = (err as { code?: string })?.code;
+      const reason = err instanceof Error ? err.message : "unknown";
+      return NextResponse.json(
+        { error: "node placement write failed", errorCode: code, reason },
+        { status: typeof status === "number" ? status : 502 }
+      );
+    }
+    return NextResponse.json({
+      node: { id: node.id, slug: node.slug },
+      env: targetEnv,
+      placement,
+      result,
+    });
+  }
+
   let result: Awaited<ReturnType<typeof writer.openNodeEnvPr>>;
   try {
     result = await writer.openNodeEnvPr({
@@ -167,7 +235,7 @@ export async function POST(request: Request, routeArgs: RouteParams) {
       repo,
       slug: node.slug,
       env: targetEnv as (typeof NODE_DEPLOY_ENVS)[number],
-      present,
+      present: present as boolean,
     });
   } catch (err) {
     const status = (err as { status?: number })?.status;

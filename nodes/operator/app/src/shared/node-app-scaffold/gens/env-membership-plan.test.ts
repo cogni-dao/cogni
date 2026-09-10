@@ -20,6 +20,7 @@ import {
   appsetPath,
   appsetsKustomizationPath,
   buildEnvDeltaPlan,
+  buildPlacementPlan,
   CATALOG_PATH,
   type EnvDeltaResult,
   type EnvPlanCurrent,
@@ -567,5 +568,235 @@ describe("ACTIVITY_FOLLOWS_INGEST (bug.5079)", () => {
 
     expect(catalogOf(plan)).toContain("activity_env: production");
     expect(catalogOf(plan)).not.toContain("activity_env: preview");
+  });
+});
+
+// ── Placement lever (story.5016 T5) ─────────────────────────────────────────────────────────────
+
+/** baseCurrent with an external build plane (source_repo) — akash's eligibility precondition. */
+const externallyBuilt = (envs: readonly string[]): EnvPlanCurrent => {
+  const base = baseCurrent(envs);
+  return {
+    ...base,
+    catalog: base.catalog.replace(
+      "envs: [",
+      `source_repo: https://github.com/cogni-dao/${SLUG}.git\nimage_repository: ghcr.io/cogni-dao/${SLUG}\nenvs: [`
+    ),
+  };
+};
+
+const K3S_LANE_PATHS = (env: string): string[] => [
+  overlayPath(env, SLUG),
+  externalSecretPath(env, SLUG),
+  appsetPath(env, SLUG),
+];
+
+describe("buildPlacementPlan — akash", () => {
+  it("upserts deployment_provider + emits the SAME k3s-lane deletes an env remove does", () => {
+    const res = buildPlacementPlan({
+      slug: SLUG,
+      env: "preview",
+      placement: "akash",
+      current: externallyBuilt(["candidate-a", "preview"]),
+      existingK3sPaths: K3S_LANE_PATHS("preview"),
+    });
+    expect(res.kind).toBe("place_akash");
+    if (res.kind === "no_changes") throw new Error("unexpected no_changes");
+
+    expect(deletes(res.ops).sort()).toEqual(K3S_LANE_PATHS("preview").sort());
+    const catalogOp = res.ops.find((o) => o.path === CATALOG_PATH(SLUG));
+    expect(catalogOp?.op).toBe("upsert");
+    if (catalogOp?.op === "upsert") {
+      expect(catalogOp.content).toContain(
+        "deployment_provider:\n  preview: akash"
+      );
+      // envs: reach is untouched — placement is a lane switch, not an undeploy.
+      expect(catalogOp.content).toContain("envs: [candidate-a, preview]");
+      // compute_egress_cidrs (absent here) and every other line pass through unchanged.
+      expect(catalogOp.content).toContain("source_repo:");
+    }
+    const kustOp = res.ops.find(
+      (o) => o.path === appsetsKustomizationPath("preview")
+    );
+    expect(kustOp?.op).toBe("upsert");
+    if (kustOp?.op === "upsert") {
+      expect(kustOp.content).not.toContain("preview-blue-applicationset.yaml");
+    }
+  });
+
+  it("limits deletes to paths that exist on main (trees API 422s on sha:null for a missing path)", () => {
+    const res = buildPlacementPlan({
+      slug: SLUG,
+      env: "preview",
+      placement: "akash",
+      current: externallyBuilt(["candidate-a", "preview"]),
+      existingK3sPaths: [overlayPath("preview", SLUG)],
+    });
+    if (res.kind === "no_changes") throw new Error("unexpected no_changes");
+    expect(deletes(res.ops)).toEqual([overlayPath("preview", SLUG)]);
+  });
+
+  it("already-akash with lingering overlays emits JUST the cleanup (toks4 normalization path)", () => {
+    const base = externallyBuilt(["candidate-a", "preview"]);
+    const current = {
+      ...base,
+      catalog: base.catalog.replace(
+        "envs: [candidate-a, preview]\n",
+        "envs: [candidate-a, preview]\ndeployment_provider:\n  preview: akash\n"
+      ),
+    };
+    const res = buildPlacementPlan({
+      slug: SLUG,
+      env: "preview",
+      placement: "akash",
+      current,
+      existingK3sPaths: K3S_LANE_PATHS("preview"),
+    });
+    if (res.kind === "no_changes") throw new Error("unexpected no_changes");
+    // No catalog op — the map already says akash; only the residue is removed.
+    expect(res.ops.find((o) => o.path === CATALOG_PATH(SLUG))).toBeUndefined();
+    expect(deletes(res.ops).sort()).toEqual(K3S_LANE_PATHS("preview").sort());
+  });
+
+  it("is idempotent: already-akash with NO residue → no_changes", () => {
+    const base = externallyBuilt(["candidate-a", "preview"]);
+    const current = {
+      ...base,
+      catalog: base.catalog.replace(
+        "envs: [candidate-a, preview]\n",
+        "envs: [candidate-a, preview]\ndeployment_provider:\n  preview: akash\n"
+      ),
+      appsetsKustomizationByEnv: {
+        ...base.appsetsKustomizationByEnv,
+        preview: kustWith("preview", ["operator"]), // slug already absent
+      },
+    };
+    expect(
+      buildPlacementPlan({
+        slug: SLUG,
+        env: "preview",
+        placement: "akash",
+        current,
+        existingK3sPaths: [],
+      }).kind
+    ).toBe("no_changes");
+  });
+
+  it("refuses akash for a node without source_repo (no external build plane)", () => {
+    const call = () =>
+      buildPlacementPlan({
+        slug: SLUG,
+        env: "preview",
+        placement: "akash",
+        current: baseCurrent(["candidate-a", "preview"]),
+        existingK3sPaths: K3S_LANE_PATHS("preview"),
+      });
+    expect(call).toThrowError(
+      expect.objectContaining({
+        code: "akash_requires_source_repo",
+        status: 422,
+      })
+    );
+  });
+
+  it("refuses placement for an env the node is not deployed to", () => {
+    const call = () =>
+      buildPlacementPlan({
+        slug: SLUG,
+        env: "production",
+        placement: "akash",
+        current: externallyBuilt(["candidate-a"]),
+        existingK3sPaths: [],
+      });
+    expect(call).toThrowError(
+      expect.objectContaining({ code: "env_not_deployed", status: 422 })
+    );
+  });
+
+  it("refuses to move node-template off k3s (it is the per-env overlay template)", () => {
+    const call = () =>
+      buildPlacementPlan({
+        slug: "node-template",
+        env: "candidate-a",
+        placement: "akash",
+        current: externallyBuilt(["candidate-a"]),
+        existingK3sPaths: [],
+      });
+    expect(call).toThrowError(
+      expect.objectContaining({ code: "template_node_immutable", status: 422 })
+    );
+  });
+});
+
+describe("buildPlacementPlan — k3s restore", () => {
+  const akashCurrent = (): EnvPlanCurrent => {
+    const base = externallyBuilt(["candidate-a", "preview"]);
+    return {
+      ...base,
+      catalog: base.catalog.replace(
+        "envs: [candidate-a, preview]\n",
+        "envs: [candidate-a, preview]\ndeployment_provider:\n  preview: akash\n"
+      ),
+      appsetsKustomizationByEnv: {
+        ...base.appsetsKustomizationByEnv,
+        preview: kustWith("preview", ["operator"]), // akash lane: slug absent from kustomization
+      },
+    };
+  };
+
+  it("drops the map entry and restores planAdd's render set (overlay+ES+appset+kustomization)", () => {
+    const res = buildPlacementPlan({
+      slug: SLUG,
+      env: "preview",
+      placement: "k3s",
+      current: akashCurrent(),
+    });
+    expect(res.kind).toBe("place_k3s");
+    if (res.kind === "no_changes") throw new Error("unexpected no_changes");
+
+    expect(deletes(res.ops)).toEqual([]);
+    expect(paths(res.ops).sort()).toEqual(
+      [
+        CATALOG_PATH(SLUG),
+        overlayPath("preview", SLUG),
+        externalSecretPath("preview", SLUG),
+        appsetPath("preview", SLUG),
+        appsetsKustomizationPath("preview"),
+      ].sort()
+    );
+    const catalogOp = res.ops.find((o) => o.path === CATALOG_PATH(SLUG));
+    if (catalogOp?.op === "upsert") {
+      // The emptied block is dropped entirely (k3s is the schema default).
+      expect(catalogOp.content).not.toContain("deployment_provider");
+      expect(catalogOp.content).toContain("envs: [candidate-a, preview]");
+    }
+    const kustOp = res.ops.find(
+      (o) => o.path === appsetsKustomizationPath("preview")
+    );
+    if (kustOp?.op === "upsert") {
+      expect(kustOp.content).toContain("preview-blue-applicationset.yaml");
+    }
+  });
+
+  it("is idempotent: already on the k3s default → no_changes (no restore render)", () => {
+    expect(
+      buildPlacementPlan({
+        slug: SLUG,
+        env: "preview",
+        placement: "k3s",
+        current: externallyBuilt(["candidate-a", "preview"]),
+      }).kind
+    ).toBe("no_changes");
+  });
+
+  it("k3s is allowed WITHOUT source_repo (only akash needs the external build plane)", () => {
+    expect(
+      buildPlacementPlan({
+        slug: SLUG,
+        env: "preview",
+        placement: "k3s",
+        current: baseCurrent(["candidate-a", "preview"]),
+      }).kind
+    ).toBe("no_changes");
   });
 });

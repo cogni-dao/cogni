@@ -30,14 +30,20 @@ export {
   dropCatalogEnv,
   type EnvRemovalViolation,
   envRemovalViolation,
+  hasCatalogSourceRepo,
+  PLACEMENT_PROVIDERS,
+  type PlacementProvider,
   parseCatalogActivityEnv,
   parseCatalogEnvs,
+  parseCatalogPlacement,
   setCatalogEnvs,
+  setCatalogPlacement,
 } from "./env-membership";
 export {
   appsetPath,
   appsetsKustomizationPath,
   buildEnvDeltaPlan,
+  buildPlacementPlan,
   CATALOG_PATH,
   type EnvDeltaResult,
   type EnvPlanCurrent,
@@ -45,6 +51,7 @@ export {
   type EnvPlanOp,
   externalSecretPath,
   overlayPath,
+  type PlacementDeltaResult,
 } from "./env-membership-plan";
 export {
   NODE_DEPLOY_ENVS,

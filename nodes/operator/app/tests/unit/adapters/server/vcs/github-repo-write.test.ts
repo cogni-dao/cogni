@@ -989,6 +989,167 @@ governance:
   });
 });
 
+describe("GitHubRepoWriter.openNodePlacementPr — akash deployment-block gate (story.5016 T5 hardening)", () => {
+  // AKASH_REQUIRES_DEPLOYMENT_BLOCK: before flipping an env onto the external ComputeWorkload
+  // lane, the node's OWN source_repo repo-spec must declare a `deployment:` block — the legacy
+  // fallback carries no secret_refs, which is fatal off the k3s lane. Sibling to
+  // openNodeDeploymentBlockPr above (PR #2150 mints the block this gate requires).
+  const OPERATOR_OWNER = "cogni-dao";
+  const OPERATOR_REPO = "cogni-template";
+  const NODE_OWNER = "cogni-dao";
+  const NODE_REPO = "blue";
+  const SLUG = "blue";
+  const ENV = "preview" as const;
+  const encode = (content: string) =>
+    Buffer.from(content, "utf-8").toString("base64");
+
+  // Already placed on akash for `preview` with a source_repo declared and no lingering k3s
+  // residue — lets buildPlacementPlan resolve straight to `no_changes` once the deployment-block
+  // gate passes, so the "proceeds" case doesn't also have to mock the full commit/PR write path.
+  const CATALOG = `name: blue
+type: node
+port: 3200
+node_port: 31100
+source_repo: https://github.com/${NODE_OWNER}/${NODE_REPO}
+image_repository: ghcr.io/${NODE_OWNER}/${NODE_REPO}
+envs: [candidate-a, preview, production]
+deployment_provider:
+  preview: akash
+activity_env: candidate-a
+path_prefix: nodes/blue/
+`;
+
+  const KUSTOMIZATION = `apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - preview-other-applicationset.yaml
+`;
+
+  const LEGACY_NODE_SPEC = `schema_version: "0.1.4"
+node_id: "11111111-2222-4333-8444-555555555555"
+scope_id: "66666666-7777-4888-8999-aaaaaaaaaaaa"
+scope_key: "default"
+intent:
+  name: blue
+  mission: "test placement gate"
+governance:
+  chain_id: "8453"
+`;
+  const DECLARED_SPEC = renderDeploymentActivationSpec(LEGACY_NODE_SPEC);
+
+  /** `nodeRepoSpec: null` simulates a 404 on the node's own `.cogni/repo-spec.yaml`. */
+  function gateHandlers(
+    nodeRepoSpec: string | null
+  ): Record<string, RouteHandler> {
+    return {
+      "GET /repos/{owner}/{repo}/git/ref/{ref}": () => ({
+        object: { sha: "main-commit-sha" },
+      }),
+      "GET /repos/{owner}/{repo}/git/commits/{commit_sha}": () => ({
+        tree: { sha: "main-tree-sha" },
+      }),
+      "GET /repos/{owner}/{repo}/contents/{path}": (params) => {
+        const owner = String(params.owner).toLowerCase();
+        const repo = String(params.repo).toLowerCase();
+        const path = String(params.path);
+        if (
+          owner === OPERATOR_OWNER &&
+          repo === OPERATOR_REPO &&
+          path === `infra/catalog/${SLUG}.yaml`
+        ) {
+          return {
+            type: "file",
+            encoding: "base64",
+            content: encode(CATALOG),
+            sha: "catalog-sha",
+          };
+        }
+        if (
+          owner === NODE_OWNER &&
+          repo === NODE_REPO &&
+          path === ".cogni/repo-spec.yaml"
+        ) {
+          if (nodeRepoSpec === null) {
+            throw statusError(404, "Not Found");
+          }
+          return {
+            type: "file",
+            encoding: "base64",
+            content: encode(nodeRepoSpec),
+            sha: "repo-spec-sha",
+          };
+        }
+        if (
+          owner === OPERATOR_OWNER &&
+          repo === OPERATOR_REPO &&
+          path === `infra/k8s/argocd/appsets/${ENV}/kustomization.yaml`
+        ) {
+          return {
+            type: "file",
+            encoding: "base64",
+            content: encode(KUSTOMIZATION),
+            sha: "kustomization-sha",
+          };
+        }
+        // overlay/external-secret/appset existence probes: none exist (no k3s residue).
+        throw statusError(404, "Not Found");
+      },
+    };
+  }
+
+  it("rejects 422 akash_requires_deployment_block when the node repo-spec has no declared deployment block, and opens no PR", async () => {
+    routeHandlers = gateHandlers(LEGACY_NODE_SPEC);
+
+    await expect(
+      makeWriter().openNodePlacementPr({
+        owner: OPERATOR_OWNER,
+        repo: OPERATOR_REPO,
+        slug: SLUG,
+        env: ENV,
+        placement: "akash",
+      })
+    ).rejects.toMatchObject({
+      code: "akash_requires_deployment_block",
+      status: 422,
+    });
+
+    const routes = requests.map((request) => request.route);
+    expect(routes).not.toContain("POST /repos/{owner}/{repo}/git/trees");
+    expect(routes).not.toContain("POST /repos/{owner}/{repo}/pulls");
+  });
+
+  it("rejects 422 repo_spec_missing when the node repo-spec cannot be fetched at all", async () => {
+    routeHandlers = gateHandlers(null);
+
+    await expect(
+      makeWriter().openNodePlacementPr({
+        owner: OPERATOR_OWNER,
+        repo: OPERATOR_REPO,
+        slug: SLUG,
+        env: ENV,
+        placement: "akash",
+      })
+    ).rejects.toMatchObject({ code: "repo_spec_missing", status: 422 });
+  });
+
+  it("proceeds past the gate when the node repo-spec DOES declare a deployment block", async () => {
+    routeHandlers = gateHandlers(DECLARED_SPEC);
+
+    // The catalog already places `preview` on akash with no lingering k3s residue, so
+    // buildPlacementPlan resolves `no_changes` — proving the deployment-block gate did NOT
+    // fire, without needing to mock the full commit/PR write path.
+    await expect(
+      makeWriter().openNodePlacementPr({
+        owner: OPERATOR_OWNER,
+        repo: OPERATOR_REPO,
+        slug: SLUG,
+        env: ENV,
+        placement: "akash",
+      })
+    ).resolves.toEqual({ status: "no_changes" });
+  });
+});
+
 describe("GitHubRepoWriter.forkFromTemplate", () => {
   it("allows only the env-local repo identity to differ from canonical", async () => {
     routeHandlers = {

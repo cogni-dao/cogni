@@ -10,6 +10,9 @@
  *   is preserved verbatim.
  * Scope: `parseCatalogEnvs` reads the flow-sequence `envs: [a, b, c]` line; `setCatalogEnvs` re-emits
  *   that single line with a new, canonically-ordered env-set, leaving the rest of the file untouched.
+ *   `parseCatalogPlacement`/`setCatalogPlacement` do the same block-level edit for the per-env
+ *   `deployment_provider:` map (story.5016 T5) — k3s is the schema default, so the canonical form
+ *   omits k3s entries and drops an emptied block.
  * Invariants:
  *   - NONEMPTY_DEPLOY_SET — individual membership is independently editable, but at least one
  *     environment must remain. Full decommission is a separate lifecycle operation.
@@ -157,6 +160,121 @@ export function setCatalogEnvs(
   }
   const ordered = ENV_ORDER.filter((env) => envs.includes(env));
   return catalogYaml.replace(ENVS_LINE_RE, `envs: [${ordered.join(", ")}]`);
+}
+
+/** The two app-placement providers the catalog's `deployment_provider` map admits. */
+export const PLACEMENT_PROVIDERS = ["k3s", "akash"] as const;
+export type PlacementProvider = (typeof PLACEMENT_PROVIDERS)[number];
+
+/**
+ * Matches the catalog row's `deployment_provider:` block — the header line plus every following
+ * indented entry line. Entry lines are `  <env>: <provider>` (two-space indent by convention, any
+ * horizontal indent accepted on read). The capture ends at the first non-indented line, so sibling
+ * top-level keys and their comments are untouched.
+ */
+const PLACEMENT_BLOCK_RE =
+  /^deployment_provider:[^\S\r\n]*\n((?:[ \t]+[^\n]*(?:\n|$))*)/m;
+const PLACEMENT_ENTRY_RE =
+  /^[ \t]+([a-z-]+):[^\S\r\n]*([a-z0-9]+)[^\S\r\n]*(?:#.*)?$/;
+const SOURCE_REPO_LINE_RE = /^source_repo:[^\S\r\n]*\S/m;
+
+/** True when the catalog row declares a `source_repo:` (an external build plane exists). */
+export function hasCatalogSourceRepo(catalogYaml: string): boolean {
+  return SOURCE_REPO_LINE_RE.test(catalogYaml);
+}
+
+/**
+ * Read the catalog row's `deployment_provider:` per-env placement map. An absent block (or an env
+ * absent from it) means the k3s default — callers resolve `map[env] ?? "k3s"`. Throws on unknown
+ * env keys or provider values so a hand-mangled catalog fails loudly, not silently-as-k3s.
+ */
+export function parseCatalogPlacement(
+  catalogYaml: string
+): Partial<Record<NodeFormationEnv, PlacementProvider>> {
+  const match = PLACEMENT_BLOCK_RE.exec(catalogYaml);
+  if (!match || match[1] === undefined) return {};
+  const map: Partial<Record<NodeFormationEnv, PlacementProvider>> = {};
+  for (const line of match[1].split("\n")) {
+    if (line.trim() === "" || line.trim().startsWith("#")) continue;
+    const entry = PLACEMENT_ENTRY_RE.exec(line);
+    if (!entry || entry[1] === undefined || entry[2] === undefined) {
+      throw new Error(
+        `catalog \`deployment_provider:\` has an unparseable entry line: '${line.trim()}'.`
+      );
+    }
+    const [, env, provider] = entry;
+    if (!isNodeFormationEnv(env)) {
+      throw new Error(
+        `catalog \`deployment_provider:\` names an unknown env '${env}'.`
+      );
+    }
+    if (!(PLACEMENT_PROVIDERS as readonly string[]).includes(provider)) {
+      throw new Error(
+        `catalog \`deployment_provider:\` has an unknown provider '${provider}' for '${env}'.`
+      );
+    }
+    map[env] = provider as PlacementProvider;
+  }
+  return map;
+}
+
+/**
+ * Re-emit the catalog row's `deployment_provider:` block with `env` placed on `provider`.
+ *
+ * Canonical form: k3s is the schema DEFAULT (an omitted env means k3s), so setting k3s REMOVES the
+ * env's entry rather than writing `<env>: k3s` — and drops the whole block once it empties, because
+ * the schema's `minProperties: 1` makes an entry-less map invalid. Setting akash upserts the entry.
+ * Entries are emitted in the canonical env order; other envs' parsed values are carried through
+ * verbatim. A block created from scratch is inserted immediately after the `envs:` line (the one
+ * line every catalog row is guaranteed to carry). Like `setCatalogEnvs`, this is a line-level edit,
+ * NOT a YAML round-trip — every other byte of the file (comments included) is preserved.
+ */
+export function setCatalogPlacement(
+  catalogYaml: string,
+  env: NodeFormationEnv,
+  provider: PlacementProvider
+): string {
+  const map = parseCatalogPlacement(catalogYaml);
+  if (provider === "k3s") {
+    delete map[env];
+  } else {
+    map[env] = provider;
+  }
+
+  const entries = ENV_ORDER.filter((e) => map[e] !== undefined).map(
+    (e) => `  ${e}: ${map[e]}`
+  );
+  const block =
+    entries.length > 0 ? `deployment_provider:\n${entries.join("\n")}\n` : "";
+
+  const existing = PLACEMENT_BLOCK_RE.exec(catalogYaml);
+  if (existing) {
+    // Preserve an EOF-without-newline block verbatim minus its missing terminator.
+    const matched = existing[0];
+    const replacement =
+      block !== "" && !matched.endsWith("\n") ? block.slice(0, -1) : block;
+    return (
+      catalogYaml.slice(0, existing.index) +
+      replacement +
+      catalogYaml.slice(existing.index + matched.length)
+    );
+  }
+  if (block === "") {
+    return catalogYaml; // k3s onto a block-less row: already the default form.
+  }
+  const envsLine = ENVS_LINE_RE.exec(catalogYaml);
+  if (!envsLine) {
+    throw new Error(
+      "catalog row is missing a flow-sequence `envs: [...]` line; cannot place the `deployment_provider:` block."
+    );
+  }
+  const afterEnvsLine = envsLine.index + envsLine[0].length;
+  if (catalogYaml[afterEnvsLine] !== "\n") {
+    // envs line ends the file without a newline — append, keeping the block newline-terminated.
+    return `${catalogYaml.slice(0, afterEnvsLine)}\n${block.slice(0, -1)}${catalogYaml.slice(afterEnvsLine)}`;
+  }
+  const insertAt = afterEnvsLine + 1; // past the envs line's newline
+  return catalogYaml.slice(0, insertAt) + block + catalogYaml.slice(insertAt);
 }
 
 /** Convenience: the env-set with `env` folded in (canonically ordered). Idempotent. */
