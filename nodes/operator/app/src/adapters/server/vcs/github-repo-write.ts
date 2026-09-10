@@ -27,7 +27,12 @@
  * @internal
  */
 
-import { extractNodeId, parseRepoSpec } from "@cogni/repo-spec";
+import {
+  extractNodeId,
+  hasDeclaredNodeDeployment,
+  parseRepoSpec,
+  type RepoSpec,
+} from "@cogni/repo-spec";
 import { createAppAuth } from "@octokit/auth-app";
 import { Octokit } from "@octokit/core";
 import { parse as parseYaml } from "yaml";
@@ -2180,6 +2185,13 @@ export class GitHubRepoWriter implements DeployPlanePort {
       );
     }
 
+    // AKASH_REQUIRES_DEPLOYMENT_BLOCK: pre-check the node's OWN repo-spec before opening the PR —
+    // a flip to the external ComputeWorkload lane with no declared `deployment:` block has no
+    // artifact plane to serve env into the workload (the legacy fallback declares no secret_refs).
+    if (placement === "akash") {
+      await this.assertAkashDeploymentBlock(catalog, slug);
+    }
+
     // Reuse the env verb's collect: k3s restore needs planAdd's render inputs (present:true shape);
     // akash needs only the env's appsets kustomization (present:false shape).
     const current = await this.collectEnvPlanCurrent(
@@ -2254,6 +2266,65 @@ export class GitHubRepoWriter implements DeployPlanePort {
       prNumber: result.prNumber,
       prUrl: result.prUrl,
     };
+  }
+
+  /**
+   * AKASH_REQUIRES_DEPLOYMENT_BLOCK: the node's OWN repo-spec (not the operator monorepo catalog)
+   * must have authored a `deployment:` block before its env can flip onto the external
+   * ComputeWorkload lane. The legacy fallback declares no `secret_refs`, which is correct for the
+   * k3s lane (env arrives via the ExternalSecret overlay) and fatal off it (env arrives ONLY through
+   * declared refs) — see `hasDeclaredNodeDeployment`. Fails closed: missing/unfetchable/unparseable
+   * repo-spec is `repo_spec_missing`; a fetched-and-parsed spec with no `deployment:` block is
+   * `akash_requires_deployment_block`, pointing the caller at the verb that mints one (PR #2150).
+   * A catalog row with no `source_repo` is left to `buildPlacementPlan`'s own
+   * `akash_requires_source_repo` guard — this check only fires once an external build plane exists.
+   */
+  private async assertAkashDeploymentBlock(
+    catalog: string,
+    slug: string
+  ): Promise<void> {
+    const discriminator = PromoteDiscriminatorSchema.safeParse(
+      parseYaml(catalog)
+    );
+    const sourceRepoUrl = discriminator.success
+      ? discriminator.data.source_repo
+      : undefined;
+    if (sourceRepoUrl === undefined) return;
+
+    const sourceRepo = parseGithubRepoUrl(sourceRepoUrl);
+    const repoSpecText = await this.fetchFileText({
+      owner: sourceRepo.owner,
+      repo: sourceRepo.repo,
+      path: ".cogni/repo-spec.yaml",
+      ref: "main",
+    });
+    if (repoSpecText === null) {
+      throw deployPlaneError(
+        "repo_spec_missing",
+        `cannot place '${slug}' on akash: node repo-spec not found at ${sourceRepoUrl}:.cogni/repo-spec.yaml on main.`,
+        422
+      );
+    }
+
+    let nodeSpec: RepoSpec;
+    try {
+      nodeSpec = parseRepoSpec(repoSpecText);
+    } catch {
+      throw deployPlaneError(
+        "repo_spec_missing",
+        `cannot place '${slug}' on akash: node repo-spec at ${sourceRepoUrl} could not be parsed.`,
+        422
+      );
+    }
+
+    if (!hasDeclaredNodeDeployment(nodeSpec)) {
+      throw deployPlaneError(
+        "akash_requires_deployment_block",
+        `cannot place '${slug}' on akash: the node repo-spec has no declared \`deployment:\` block. ` +
+          `Mint one via POST /api/v1/nodes/${slug}/deployment-block, then retry.`,
+        422
+      );
+    }
   }
 
   /** PR body for the placement lever (story.5016 T5). */

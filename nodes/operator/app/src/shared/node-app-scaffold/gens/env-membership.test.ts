@@ -193,6 +193,17 @@ describe("parseCatalogPlacement", () => {
       )
     ).toThrow(/unknown provider/);
   });
+
+  it("tolerates a trailing `# comment` after the provider value (mirrors activity_env)", () => {
+    const commented = CATALOG_WITH_PLACEMENT.replace(
+      "  production: akash",
+      "  production: akash  # toks4 normalization pending"
+    );
+    expect(parseCatalogPlacement(commented)).toEqual({
+      "candidate-a": "akash",
+      production: "akash",
+    });
+  });
 });
 
 describe("setCatalogPlacement", () => {

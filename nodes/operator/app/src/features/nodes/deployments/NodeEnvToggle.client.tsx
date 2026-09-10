@@ -45,6 +45,15 @@ interface Props {
   readonly env: string;
   /** True when this node's reach currently includes `env` (→ an Undeploy control). */
   readonly inReach: boolean;
+  /**
+   * Whether the node's catalog row declares a `source_repo` (external build plane) — akash
+   * placement is meaningless without one (`akash_requires_source_repo`, story.5016 T5).
+   * `false` hides the placement select entirely; `undefined` (the caller doesn't have this
+   * data client-side, e.g. `NodeDeployState` is a live-probe read with no catalog fields)
+   * still shows it but disabled, with an explanatory tooltip, rather than optimistically
+   * enabled for a click that would just round-trip a 422.
+   */
+  readonly hasSourceRepo?: boolean;
 }
 
 async function parseError(response: Response): Promise<string> {
@@ -68,7 +77,12 @@ async function parseError(response: Response): Promise<string> {
   return reason;
 }
 
-export function NodeEnvToggle({ nodeId, env, inReach }: Props): ReactElement {
+export function NodeEnvToggle({
+  nodeId,
+  env,
+  inReach,
+  hasSourceRepo,
+}: Props): ReactElement {
   const router = useRouter();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -127,17 +141,29 @@ export function NodeEnvToggle({ nodeId, env, inReach }: Props): ReactElement {
   return (
     <div className="flex flex-col items-end gap-1">
       <div className="flex items-center gap-2">
-        {/* Placement lever (story.5016 T5) — only meaningful for an env already in reach. The
-            catalog is the placement SSOT and is not pre-fetched here; the verb is idempotent, so a
-            re-selected current lane surfaces as "no change". */}
-        {inReach ? (
+        {/* Placement lever (story.5016 T5) — only meaningful for an env already in reach AND a node
+            with a source_repo (external build plane); akash placement 422s without one. `false`
+            hides the control outright; `undefined` (caller has no catalog data, e.g. NodeDeployState
+            is a live-probe read) still shows it but disabled with a tooltip rather than an
+            optimistic control that just round-trips a 422. The catalog is the placement SSOT and is
+            not pre-fetched here otherwise; the verb is idempotent, so a re-selected current lane
+            surfaces as "no change". */}
+        {inReach && hasSourceRepo !== false ? (
           <Select
             onValueChange={(value) =>
               submit({ placement: value as "k3s" | "akash" })
             }
-            disabled={submitting}
+            disabled={submitting || hasSourceRepo === undefined}
           >
-            <SelectTrigger className="h-8 w-28 text-xs" aria-label="Placement">
+            <SelectTrigger
+              className="h-8 w-28 text-xs"
+              aria-label="Placement"
+              title={
+                hasSourceRepo === undefined
+                  ? "requires source_repo (external node repo)"
+                  : undefined
+              }
+            >
               <SelectValue placeholder="Placement" />
             </SelectTrigger>
             <SelectContent>

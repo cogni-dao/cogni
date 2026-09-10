@@ -151,6 +151,20 @@ describe("POST /api/v1/nodes/[id]/envs — schema", () => {
     });
   });
 
+  it("maps a typed writer failure (akash_requires_deployment_block) onto its status + code", async () => {
+    openNodePlacementPr.mockRejectedValue(
+      Object.assign(new Error("no declared deployment block"), {
+        code: "akash_requires_deployment_block",
+        status: 422,
+      })
+    );
+    const res = await post({ env: "preview", placement: "akash" });
+    expect(res.status).toBe(422);
+    await expect(res.json()).resolves.toMatchObject({
+      errorCode: "akash_requires_deployment_block",
+    });
+  });
+
   it("fails closed when authorization is denied — placement included", async () => {
     authorize.mockResolvedValue({
       ok: false,

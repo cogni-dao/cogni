@@ -174,7 +174,8 @@ export type PlacementProvider = (typeof PLACEMENT_PROVIDERS)[number];
  */
 const PLACEMENT_BLOCK_RE =
   /^deployment_provider:[^\S\r\n]*\n((?:[ \t]+[^\n]*(?:\n|$))*)/m;
-const PLACEMENT_ENTRY_RE = /^[ \t]+([a-z-]+):[^\S\r\n]*([a-z0-9]+)[^\S\r\n]*$/;
+const PLACEMENT_ENTRY_RE =
+  /^[ \t]+([a-z-]+):[^\S\r\n]*([a-z0-9]+)[^\S\r\n]*(?:#.*)?$/;
 const SOURCE_REPO_LINE_RE = /^source_repo:[^\S\r\n]*\S/m;
 
 /** True when the catalog row declares a `source_repo:` (an external build plane exists). */
