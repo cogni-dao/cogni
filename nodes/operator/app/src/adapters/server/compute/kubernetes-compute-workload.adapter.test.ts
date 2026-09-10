@@ -96,6 +96,54 @@ function declaredWorkload(): ComputeWorkload {
 }
 
 describe("ComputeWorkload Kubernetes contract", () => {
+  it("pins the controller env order the per-env overlays patch positionally", async () => {
+    // bug.5110 follow-up. Every infra/k8s/overlays/<env>/operator/kustomization.yaml
+    // patches this container's env by INDEX
+    // (`/spec/template/spec/containers/0/env/N/value`), so inserting a variable
+    // above an existing one silently repoints a DIFFERENT variable. Adding the
+    // lease knob ahead of AKASH_ALLOWED_PROVIDERS blanked that allowlist in all
+    // three envs, and an empty allowlist rejects every provider bid -- no node
+    // could obtain an Akash lease. Nothing else failed loudly, so pin the order:
+    // append new variables, never insert.
+    const deploymentYaml = await readFile(
+      join(
+        fileURLToPath(new URL(".", import.meta.url)),
+        "../../../../../../../infra/k8s/base/compute-workload-controller/deployment.yaml"
+      ),
+      "utf8"
+    );
+    const deployment = parse(deploymentYaml) as {
+      spec: {
+        strategy?: {
+          type?: string;
+          rollingUpdate?: { maxSurge?: number; maxUnavailable?: number };
+        };
+        template: {
+          spec: { containers: { env: { name: string }[] }[] };
+        };
+      };
+    };
+    const env = deployment.spec.template.spec.containers[0]?.env ?? [];
+    expect(env.slice(0, 4).map((entry) => entry.name)).toEqual([
+      "POD_NAMESPACE",
+      "CONTROLLER_ENVIRONMENT",
+      "DEPLOYMENT_DOMAIN",
+      "AKASH_ALLOWED_PROVIDERS",
+    ]);
+    // Singleton by design: a surge would run two pods against one coordination
+    // Lease and manufacture the CAS conflicts this controller then has to
+    // survive — so maxSurge must stay 0. But the type must be RollingUpdate,
+    // NOT Recreate: live objects retain spec.strategy.rollingUpdate from prior
+    // field managers, and ArgoCD's server-side-apply dry-run of a Recreate spec
+    // then fails Forbidden, wedging the whole Argo app (blocked candidate
+    // flights + the d69e5c29 production promote on 2026-09-10).
+    expect(deployment.spec.strategy?.type).toBe("RollingUpdate");
+    expect(deployment.spec.strategy?.rollingUpdate).toEqual({
+      maxSurge: 0,
+      maxUnavailable: 1,
+    });
+  });
+
   it("admits bounded topology fields and preserves service bindings over the API wire", async () => {
     // File-relative, never CWD-relative: the unit job and local runs invoke
     // vitest from different working directories.
