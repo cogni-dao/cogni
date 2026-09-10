@@ -646,15 +646,28 @@ function blocksSameGenerationRecovery(resource: ComputeWorkload): boolean {
  * idempotency key carries `metadata.generation`, so re-asserting the same desired state
  * recomputes the *same* key and the replay guard refuses it forever. Only a fresh
  * recovery ordinal can make progress, and only when the receipt proves the provider
- * definitively failed without ever handing back a handle.
+ * definitively failed without ever handing back a handle — or when the attempt is a
+ * claim abandoned by a dead leader epoch (bug.5108): the epoch changes on every
+ * controller restart, so a non-live claimant can never settle its own outcome and
+ * the exhausted key would otherwise replay RetryLimitExceeded forever. A claim held
+ * by the LIVE epoch is never eligible; a concurrent in-process attempt stays blocked.
  */
-function exhaustedRetryBudgetNeedsRecovery(resource: ComputeWorkload): boolean {
+function exhaustedRetryBudgetNeedsRecovery(
+  resource: ComputeWorkload,
+  liveEpoch: string
+): boolean {
+  const attempt = resource.status?.attempt;
+  if (
+    resource.status?.desiredGeneration !== resource.metadata.generation ||
+    resource.status?.failure?.reason !== "RetryLimitExceeded" ||
+    !attempt ||
+    (attempt.operation !== "create" && attempt.operation !== "recover")
+  ) {
+    return false;
+  }
   return (
-    resource.status?.desiredGeneration === resource.metadata.generation &&
-    resource.status?.failure?.reason === "RetryLimitExceeded" &&
-    resource.status?.attempt?.outcome === "known_failure" &&
-    (resource.status.attempt.operation === "create" ||
-      resource.status.attempt.operation === "recover")
+    attempt.outcome === "known_failure" ||
+    (attempt.outcome === "claimed" && attempt.leaderEpoch !== liveEpoch)
   );
 }
 
@@ -1510,6 +1523,31 @@ function isReplaySafeKnownFailure(
   );
 }
 
+async function holdWalletBlocked(
+  deps: ComputeWorkloadReconcileDeps,
+  resource: ComputeWorkload,
+  attempt: ComputeWorkloadAttempt
+): Promise<void> {
+  const now = deps.now().toISOString();
+  await deps.state.patchStatus({
+    resource,
+    status: {
+      ...baseStatus(resource),
+      phase: "Progressing",
+      attempt,
+      recoveryCount: resource.status?.recoveryCount ?? 0,
+      failure: {
+        reason: "WalletAllocationBlocked",
+        message: safeMessage("WalletAllocationBlocked"),
+        retryable: true,
+      },
+      conditions: [
+        condition(resource, now, "False", "WalletAllocationBlocked"),
+      ],
+    },
+  });
+}
+
 async function recoverUncertainAllocation(
   deps: ComputeWorkloadReconcileDeps,
   resource: ComputeWorkload,
@@ -1529,25 +1567,7 @@ async function recoverUncertainAllocation(
     workloadUid: resource.metadata.uid,
   });
   if (wallet.state === "blocked") {
-    const attempt = attemptFromReceipt(receipt);
-    const now = deps.now().toISOString();
-    await deps.state.patchStatus({
-      resource,
-      status: {
-        ...baseStatus(resource),
-        phase: "Progressing",
-        attempt,
-        recoveryCount: resource.status?.recoveryCount ?? 0,
-        failure: {
-          reason: "WalletAllocationBlocked",
-          message: safeMessage("WalletAllocationBlocked"),
-          retryable: true,
-        },
-        conditions: [
-          condition(resource, now, "False", "WalletAllocationBlocked"),
-        ],
-      },
-    });
+    await holdWalletBlocked(deps, resource, attemptFromReceipt(receipt));
     return;
   }
   if (
@@ -1633,6 +1653,56 @@ async function recoverUncertainAllocation(
     );
   }
   // Pending/closed adoption is handled from the durable handle on the next level pass.
+}
+
+/**
+ * A claimed receipt abandoned by a dead leader epoch (bug.5108). The epoch changes
+ * on every controller restart, so a non-live claimant is provably gone and can
+ * never settle its own outcome; blind same-key replay only burns the mutation
+ * budget into a terminal RetryLimitExceeded loop. Fail closed (Axiom 26): observe
+ * the dead attempt's durable trace — its wallet slot — before any new mutation. A
+ * persisted cursor means provider I/O may have happened, so the only legal move is
+ * the existing adopt-or-hold observation path; no cursor anywhere proves the
+ * pre-POST baseline was never written, so the abandoned slot is settled and the
+ * exhausted key escalates through the bounded recovery ladder. Callers must never
+ * route a live-epoch claim here — a concurrent in-process attempt stays blocked.
+ */
+async function recoverAbandonedClaim(
+  deps: ComputeWorkloadReconcileDeps,
+  resource: ComputeWorkload,
+  receipt: ComputeWorkloadAttemptReceipt
+): Promise<void> {
+  if (generationRecoveryCount(resource) >= MAX_RECOVERY_ATTEMPTS) {
+    // Budget already burned: write the terminal RecoveryLimitExceeded record
+    // without touching the wallet ledger.
+    await recoverBounded(deps, resource);
+    return;
+  }
+  const wallet = await deps.state.claimWalletAllocation({
+    attemptKey: receipt.key,
+    workloadUid: resource.metadata.uid,
+  });
+  if (wallet.state === "blocked") {
+    // A different attempt owns the wallet slot; only its owner may settle it.
+    await holdWalletBlocked(deps, resource, attemptFromReceipt(receipt));
+    return;
+  }
+  if (wallet.allocationCursor) {
+    // The dead claimant reached the pre-POST baseline: a provider resource may
+    // exist. Adopt it if the provider confirms one; never re-create.
+    const prepared: ComputeWorkloadAttempt = {
+      ...attemptFromReceipt(receipt),
+      outcome: "prepared",
+      allocationCursor: wallet.allocationCursor,
+    };
+    await patchReceipt(deps, resource, attemptReceipt(prepared));
+    await recoverUncertainAllocation(deps, resource, attemptReceipt(prepared));
+    return;
+  }
+  // The cursor is persisted (receipt first, then ledger) before any POST, so no
+  // cursor in either place proves provider I/O never started under this claim.
+  await deps.state.completeWalletAllocation({ attemptKey: receipt.key });
+  await recoverBounded(deps, resource);
 }
 
 export async function reconcileComputeWorkload(
@@ -1730,13 +1800,19 @@ export async function reconcileComputeWorkload(
       receipt.outcome === "claimed" &&
       !receipt.allocationCursor
     ) {
+      if (receipt.leaderEpoch !== deps.leaderEpoch) {
+        // The claimant died with the mutation outcome unsettled (bug.5108);
+        // observe-and-adopt instead of blindly replaying its key.
+        await recoverAbandonedClaim(deps, resource, receipt);
+        return;
+      }
       // The cursor is persisted before POST, so this state proves provider I/O did not start.
       await mutate(deps, resource, receipt.operation, receipt.ordinal);
       return;
     }
     if (isReplaySafeKnownFailure(receipt)) {
       // Replaying the exhausted key is a guaranteed no-op; escalate the ordinal instead.
-      if (exhaustedRetryBudgetNeedsRecovery(resource)) {
+      if (exhaustedRetryBudgetNeedsRecovery(resource, deps.leaderEpoch)) {
         await recoverBounded(deps, resource);
         return;
       }
@@ -1753,7 +1829,7 @@ export async function reconcileComputeWorkload(
       );
       return;
     }
-    if (exhaustedRetryBudgetNeedsRecovery(resource)) {
+    if (exhaustedRetryBudgetNeedsRecovery(resource, deps.leaderEpoch)) {
       await recoverBounded(deps, resource);
       return;
     }
