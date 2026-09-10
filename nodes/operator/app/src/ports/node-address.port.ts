@@ -35,7 +35,7 @@ export class NodeAddressError extends Error {
 export interface NodeAddressPort {
   /**
    * The base URL of a node's app for THIS environment, derived from that node's declared
-   * placement. In-cluster nodes resolve to Service DNS; externally-placed nodes resolve to the
+   * placement. In-cluster nodes resolve to Service DNS; off-cluster nodes resolve to the
    * public host their workload publishes. Throws {@link NodeAddressError} when placement is
    * declared but no address can be derived — never returns a knowingly-unreachable address.
    */

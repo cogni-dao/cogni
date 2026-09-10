@@ -9,7 +9,7 @@ import {
 } from "./node-deployment-targets";
 
 describe("resolveDeploymentTargets", () => {
-  it("keeps omitted placement on k3s and separates explicit external nodes", () => {
+  it("keeps omitted placement on k3s and separates explicit off-cluster nodes", () => {
     expect(
       resolveDeploymentTargets({
         catalogRows: [
@@ -29,7 +29,7 @@ describe("resolveDeploymentTargets", () => {
     ).toEqual({
       deployment: ["node-template", "toks4"],
       substrate: ["node-template", "toks4"],
-      external: ["toks4"],
+      offCluster: ["toks4"],
       providers: {
         "node-template": "k3s",
         toks4: "akash",
@@ -63,7 +63,7 @@ describe("resolveDeploymentTargets", () => {
     ).toEqual({
       deployment: ["operator"],
       substrate: ["operator"],
-      external: [],
+      offCluster: [],
       providers: { operator: "k3s" },
       k3s: ["operator"],
       k3sNodes: ["operator"],
@@ -79,7 +79,7 @@ describe("resolveDeploymentTargets", () => {
     ).toEqual({
       deployment: ["toks4"],
       substrate: ["toks4"],
-      external: ["toks4"],
+      offCluster: ["toks4"],
       providers: { toks4: "akash" },
       k3s: [],
       k3sNodes: [],
@@ -117,7 +117,7 @@ describe("resolvePromoteDeploymentTargets", () => {
     },
   ];
 
-  it("preserves the legacy k3s list and appends eligible external nodes", () => {
+  it("preserves the legacy k3s list and appends eligible off-cluster nodes", () => {
     expect(
       resolvePromoteDeploymentTargets({
         catalogRows,
@@ -128,7 +128,7 @@ describe("resolvePromoteDeploymentTargets", () => {
     ).toEqual({
       deployment: ["scheduler-worker", "legacy", "external"],
       substrate: ["legacy", "external"],
-      external: ["external"],
+      offCluster: ["external"],
       providers: {
         "scheduler-worker": "k3s",
         legacy: "k3s",
@@ -161,11 +161,11 @@ describe("resolvePromoteDeploymentTargets", () => {
       legacyK3sTargets: [],
     });
 
-    expect(selection.external).toEqual(["toks4"]);
+    expect(selection.offCluster).toEqual(["toks4"]);
     expect(selection.sourceShas).toEqual({ toks4: sourceSha });
   });
 
-  it("does not admit an external node outside the selected environment", () => {
+  it("does not admit an off-cluster node outside the selected environment", () => {
     expect(
       resolvePromoteDeploymentTargets({
         catalogRows,
