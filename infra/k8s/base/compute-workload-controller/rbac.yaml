@@ -17,6 +17,11 @@ rules:
   - apiGroups: [""]
     resources: [events]
     verbs: [create, patch]
+  # bug.5116 — per-bundle-digest DB migration Jobs for externally placed workloads.
+  # A completed Job is the durable skip marker; delete is for superseded-digest GC.
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [get, list, create, delete]
   - apiGroups: [""]
     resources: [configmaps]
     resourceNames: [compute-workload-allocation-ledger]
