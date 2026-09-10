@@ -6,8 +6,10 @@ packages:
   - curl
   - gnupg
   - lsb-release
-  # Required by the weekly kine-vacuum timer below. k3s stores cluster state in
-  # kine (SQLite) and SQLite never returns freed pages to the OS without VACUUM.
+  # Required by the weekly kine-compaction timer below (k3s stores cluster
+  # state in kine, a SQLite revision log). Drift repayment: sqlite3 was
+  # hand-installed on the production VM on 2026-09-09 while diagnosing
+  # bug.5105; declaring it here is what makes a rebuilt VM reproducible.
   - sqlite3
 
 swap:
@@ -57,9 +59,11 @@ write_files:
         - "eviction-hard=memory.available<${eviction_hard_memory}"
       # KINE_WRITES_ARE_THE_COST: every Event create/update is a row in kine's
       # append-only revision history. A flapping probe can emit tens of thousands
-      # of Event updates (2026-09-09: openbao readiness had 20,920), which is what
-      # grew state.db to 9.7 GB and drove the node to 45% iowait. The default 1h
-      # retention is far longer than anyone reads an Event; 30m bounds the storm.
+      # of Event updates (2026-09-09: openbao readiness had 20,920) — a major
+      # feeder of the revision history that grew state.db past 10 GB and drove
+      # the node to 45% iowait. The default 1h retention is far longer than
+      # anyone reads an Event; 30m bounds the storm. Retained-history cleanup
+      # is the kine-compact timer below; this bounds the inflow.
       kube-apiserver-arg:
         - "event-ttl=30m"
 
@@ -254,28 +258,34 @@ write_files:
 
       echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Bootstrap complete!"
 
-  # ── kine (SQLite) reclamation ────────────────────────────────────────────
-  # k3s's default datastore is kine, an append-only revision log in SQLite.
-  # kine compacts old revisions, but SQLite NEVER returns the freed pages to the
-  # OS without VACUUM - so the file only ever grows. On 2026-09-09 production
-  # state.db reached 9.7 GB holding ~2 MB of live state, pushing the node to 45%
-  # iowait and load 18. Every k8s API call is a query against that file, so a
-  # bloated store slows the API server, which times out probes, which emit more
-  # Events, which write more kine. This timer breaks that loop unattended.
-  # Pair with event-ttl above (bounds the write rate) - this bounds the file.
-  - path: /usr/local/sbin/k3s-kine-vacuum.sh
+  # ── kine (SQLite) compaction + page reclamation ──────────────────────────
+  # k3s's default datastore is kine, an append-only revision log in SQLite:
+  # every object update is a NEW row, and superseded revisions are only removed
+  # by kine's own compactor. On 2026-09-09 production state.db reached 10.35 GB
+  # with PRAGMA freelist_count = 0 — ZERO reclaimable free pages. The bloat was
+  # 1,883,352 LIVE rows for only 150,285 distinct keys (~12.5 retained
+  # revisions per key): kine's compaction had failed to keep up. A bare VACUUM
+  # (this timer's first design) would therefore have reclaimed nothing. What
+  # actually fixed production on 2026-09-10 was compaction — delete every
+  # superseded revision, keeping the newest row per name — then VACUUM to
+  # return the freed pages to the OS: 10.35 GB -> 353 MB, disk 91% -> 59%.
+  # Every k8s API call is a query against this file, so a bloated store slows
+  # the API server, which times out probes, which emit Events, which write more
+  # kine. This timer breaks that loop unattended. Pair with event-ttl above
+  # (bounds the write rate) - this bounds the retained history.
+  - path: /usr/local/sbin/k3s-kine-compact.sh
     owner: root:root
     permissions: "0755"
     content: |
       #!/usr/bin/env bash
       set -euo pipefail
       DB=/var/lib/rancher/k3s/server/db/state.db
-      # Below this a VACUUM cannot pay for the API-server restart it costs.
+      # Below this the reclaim cannot pay for the API-server restart it costs.
       MIN_BYTES=536870912
-      [ -f "$DB" ] || { echo "kine-vacuum: no state.db; nothing to do"; exit 0; }
+      [ -f "$DB" ] || { echo "kine-compact: no state.db; nothing to do"; exit 0; }
       SIZE=$(stat -c %s "$DB")
       if [ "$SIZE" -lt "$MIN_BYTES" ]; then
-        echo "kine-vacuum: state.db is $SIZE bytes, under threshold $MIN_BYTES; skipping"
+        echo "kine-compact: state.db is $SIZE bytes, under threshold $MIN_BYTES; skipping"
         exit 0
       fi
       # VACUUM rewrites the entire database, so it needs headroom equal to the
@@ -287,41 +297,51 @@ write_files:
       export SQLITE_TMPDIR=/var/lib/rancher/k3s/server/db
       AVAIL=$(df -PB1 "$SQLITE_TMPDIR" | awk 'NR==2 {print $4}')
       if [ "$AVAIL" -lt "$SIZE" ]; then
-        echo "kine-vacuum: need $SIZE bytes free, have $AVAIL - refusing"
+        echo "kine-compact: need $SIZE bytes free, have $AVAIL - refusing"
         exit 1
       fi
-      echo "kine-vacuum: state.db $SIZE bytes; stopping k3s"
+      echo "kine-compact: state.db $SIZE bytes; stopping k3s"
       # Armed BEFORE the stop: if `systemctl stop` itself fails under `set -e`,
       # an unarmed trap would leave the cluster down with no restart.
       trap 'systemctl start k3s' EXIT
       systemctl stop k3s
+      ROWS_BEFORE=$(sqlite3 "$DB" 'SELECT count(*) FROM kine;')
+      # Compaction: keep only the newest row per name (that row IS current
+      # state — including delete-tombstones — so this can never remove a live
+      # key) and drop every superseded revision. This is the exact operation
+      # that took production from 1,883,352 rows to ~150K on 2026-09-10; do
+      # not get cleverer than what prod proved.
+      sqlite3 "$DB" 'DELETE FROM kine WHERE id NOT IN (SELECT MAX(id) FROM kine GROUP BY name);'
+      # VACUUM only pays AFTER the delete: it returns the freed pages to the
+      # OS. Alone it reclaims ~nothing (prod freelist_count was 0).
       sqlite3 "$DB" 'VACUUM;'
+      ROWS_AFTER=$(sqlite3 "$DB" 'SELECT count(*) FROM kine;')
       NEW=$(stat -c %s "$DB")
-      echo "kine-vacuum: $SIZE -> $NEW bytes (reclaimed $((SIZE - NEW)))"
+      echo "kine-compact: rows $ROWS_BEFORE -> $ROWS_AFTER; $SIZE -> $NEW bytes (reclaimed $((SIZE - NEW)))"
 
-  - path: /etc/systemd/system/k3s-kine-vacuum.service
+  - path: /etc/systemd/system/k3s-kine-compact.service
     owner: root:root
     permissions: "0644"
     content: |
       [Unit]
-      Description=Reclaim free pages from the k3s kine SQLite datastore
+      Description=Compact superseded k3s kine revisions and reclaim SQLite pages
       After=k3s.service
 
       [Service]
       Type=oneshot
-      # A multi-GB VACUUM on a saturated disk runs far past systemd's default
-      # start timeout, and a timeout SIGKILLs the script - which skips the EXIT
-      # trap and would strand k3s stopped. The script bounds its own work
-      # (size threshold + headroom refusal), so let it finish.
+      # A multi-GB compact+VACUUM on a saturated disk runs far past systemd's
+      # default start timeout, and a timeout SIGKILLs the script - which skips
+      # the EXIT trap and would strand k3s stopped. The script bounds its own
+      # work (size threshold + headroom refusal), so let it finish.
       TimeoutStartSec=infinity
-      ExecStart=/usr/local/sbin/k3s-kine-vacuum.sh
+      ExecStart=/usr/local/sbin/k3s-kine-compact.sh
 
-  - path: /etc/systemd/system/k3s-kine-vacuum.timer
+  - path: /etc/systemd/system/k3s-kine-compact.timer
     owner: root:root
     permissions: "0644"
     content: |
       [Unit]
-      Description=Weekly k3s kine VACUUM
+      Description=Weekly k3s kine compaction
 
       [Timer]
       OnCalendar=Sun *-*-* 04:15:00
@@ -334,4 +354,4 @@ write_files:
 runcmd:
   - bash /opt/cogni-bootstrap.sh
   - systemctl daemon-reload
-  - systemctl enable --now k3s-kine-vacuum.timer
+  - systemctl enable --now k3s-kine-compact.timer
