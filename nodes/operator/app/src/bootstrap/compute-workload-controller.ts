@@ -97,7 +97,8 @@ const state = new KubernetesComputeWorkloadStateAdapter(
   custom,
   core,
   namespace,
-  identity
+  identity,
+  log
 );
 /**
  * bug.5110 — the lease deadline is the ONLY thing standing between a slow k3s API server

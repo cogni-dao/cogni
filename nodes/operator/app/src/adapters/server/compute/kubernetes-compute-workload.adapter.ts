@@ -39,6 +39,14 @@ interface WalletAllocationRecord {
   readonly allocationCursor?: string;
 }
 
+/**
+ * Minimal structured-log seam (pino-compatible). An orphan reclaim replaces what used
+ * to be a human hand-clearing the ledger ConfigMap, so it must land in Loki loudly.
+ */
+export interface WalletLedgerLogger {
+  warn(fields: Record<string, unknown>, message: string): void;
+}
+
 function parseWalletAllocation(
   raw: string | undefined
 ): WalletAllocationRecord | undefined {
@@ -64,7 +72,8 @@ export class KubernetesComputeWorkloadStateAdapter
     private readonly custom: CustomObjectsApi,
     private readonly core: CoreV1Api,
     private readonly namespace: string,
-    private readonly instanceIdentity: string
+    private readonly instanceIdentity: string,
+    private readonly log?: WalletLedgerLogger
   ) {}
 
   async list(): Promise<readonly ComputeWorkload[]> {
@@ -134,8 +143,18 @@ export class KubernetesComputeWorkloadStateAdapter
             : {}),
         };
       }
+      let orphan: WalletAllocationRecord | undefined;
       if (active) {
-        return { state: "blocked", ownerAttemptKey: active.attemptKey };
+        // bug.5115: a slot whose recorded ComputeWorkload no longer exists can never be
+        // released — `completeWalletAllocation` and `recoverUncertainAllocation` both
+        // run under the owner's reconcile, and a deleted CR is never reconciled again.
+        // Left alone, one orphaned slot deadlocks every wallet mutation fleet-wide.
+        // Reclaim ONLY when the CR is gone; a live CR (however slow its reconcile, and
+        // even with an uncertain in-flight allocationCursor) legitimately owns the slot.
+        if (await this.workloadExists(active.workloadUid)) {
+          return { state: "blocked", ownerAttemptKey: active.attemptKey };
+        }
+        orphan = active;
       }
       try {
         await this.core.replaceNamespacedConfigMap(
@@ -155,8 +174,27 @@ export class KubernetesComputeWorkloadStateAdapter
             },
           }
         );
+        if (orphan) {
+          // This event replaces a human hand-clearing the ledger; it must be loud in
+          // Loki. The orphan's cursor (an unresolved provider mutation nobody will ever
+          // reconcile) is preserved here for forensics before the record is overwritten.
+          this.log?.warn(
+            {
+              orphanedAttemptKey: orphan.attemptKey,
+              orphanedWorkloadUid: orphan.workloadUid,
+              ...(orphan.allocationCursor
+                ? { orphanedAllocationCursor: orphan.allocationCursor }
+                : {}),
+              claimantAttemptKey: input.attemptKey,
+              claimantWorkloadUid: input.workloadUid,
+            },
+            "compute_wallet_allocation_orphan_reclaimed"
+          );
+        }
         return { state: "claimed" };
       } catch (error) {
+        // 409: the ledger moved under us (possibly a concurrent reclaimer winning the
+        // same orphaned slot) — re-read and re-evaluate; only one CAS write can land.
         if (statusCode(error) !== 409) throw error;
       }
     }
@@ -217,6 +255,16 @@ export class KubernetesComputeWorkloadStateAdapter
       }
     }
     throw new Error("wallet allocation ledger CAS retry limit exceeded");
+  }
+
+  /**
+   * Liveness probe for a wallet-slot owner: does any ComputeWorkload CR in this
+   * namespace still carry the recorded uid? A LIST (already the reconciler's cheapest
+   * read) rather than a GET by name, because the ledger records only the uid.
+   */
+  private async workloadExists(uid: string): Promise<boolean> {
+    const items = await this.list();
+    return items.some((item) => item.metadata.uid === uid);
   }
 
   private async readWalletLedger(

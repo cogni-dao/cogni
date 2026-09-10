@@ -278,8 +278,14 @@ describe("ComputeWorkload Kubernetes contract", () => {
         return { body: structuredClone(ledger) };
       }),
     } as unknown as CoreV1Api;
+    // The blocked path probes owner liveness, so the owner's CR must be listable.
+    const custom = {
+      listNamespacedCustomObject: vi.fn(async () => ({
+        body: { items: [{ metadata: { uid: "uid-a" } }] },
+      })),
+    } as unknown as CustomObjectsApi;
     const state = new KubernetesComputeWorkloadStateAdapter(
-      {} as CustomObjectsApi,
+      custom,
       core,
       "cogni-candidate-a",
       "test-controller"
@@ -302,6 +308,172 @@ describe("ComputeWorkload Kubernetes contract", () => {
     await expect(
       state.claimWalletAllocation({ attemptKey: "b", workloadUid: "uid-b" })
     ).resolves.toEqual({ state: "claimed" });
+  });
+
+  // bug.5115 fixture: a ledger ConfigMap seeded with an `active` slot, plus a cluster
+  // whose ComputeWorkload uids decide whether that slot's owner is alive or an orphan.
+  function seededWalletLedger(input: {
+    active: Record<string, string>;
+    liveUids: readonly string[];
+  }) {
+    let ledger = {
+      metadata: {
+        name: "compute-workload-allocation-ledger",
+        namespace: "cogni-candidate-a",
+        resourceVersion: "1",
+      },
+      data: { active: JSON.stringify(input.active) } as Record<string, string>,
+    };
+    const core = {
+      readNamespacedConfigMap: vi.fn(async () => ({
+        body: structuredClone(ledger),
+      })),
+      replaceNamespacedConfigMap: vi.fn(
+        async (_name: string, _namespace: string, body: V1ConfigMap) => {
+          ledger = {
+            metadata: {
+              ...ledger.metadata,
+              resourceVersion: String(
+                Number(ledger.metadata.resourceVersion) + 1
+              ),
+            },
+            data: { ...(body.data ?? {}) },
+          };
+          return { body: structuredClone(ledger) };
+        }
+      ),
+    };
+    const custom = {
+      listNamespacedCustomObject: vi.fn(async () => ({
+        body: { items: input.liveUids.map((uid) => ({ metadata: { uid } })) },
+      })),
+    } as unknown as CustomObjectsApi;
+    const log = { warn: vi.fn() };
+    const state = new KubernetesComputeWorkloadStateAdapter(
+      custom,
+      core as unknown as CoreV1Api,
+      "cogni-candidate-a",
+      "test-controller",
+      log
+    );
+    return { state, core, log, readActive: () => ledger.data.active };
+  }
+
+  it("reclaims a foreign slot whose recorded workload CR is gone (bug.5115)", async () => {
+    // THE production deadlock: the CR behind the `active` slot was deleted, so no
+    // reconcile can ever release it — every other workload stayed blocked for days
+    // until a human hand-cleared the ConfigMap. The claimant must reclaim instead.
+    const { state, log, readActive } = seededWalletLedger({
+      active: { attemptKey: "dead", workloadUid: "uid-gone" },
+      liveUids: ["uid-b"],
+    });
+
+    await expect(
+      state.claimWalletAllocation({ attemptKey: "b", workloadUid: "uid-b" })
+    ).resolves.toEqual({ state: "claimed" });
+    expect(JSON.parse(readActive() ?? "{}")).toEqual({
+      attemptKey: "b",
+      workloadUid: "uid-b",
+    });
+    // The reclaim replaces a human hand-clear: it must be loud and carry forensics.
+    expect(log.warn).toHaveBeenCalledWith(
+      {
+        orphanedAttemptKey: "dead",
+        orphanedWorkloadUid: "uid-gone",
+        claimantAttemptKey: "b",
+        claimantWorkloadUid: "uid-b",
+      },
+      "compute_wallet_allocation_orphan_reclaimed"
+    );
+  });
+
+  it("stays blocked while the slot's recorded workload CR still exists", async () => {
+    // A live CR legitimately owns the slot — even if its reconcile is merely slow.
+    const { state, log, readActive } = seededWalletLedger({
+      active: { attemptKey: "slow", workloadUid: "uid-a" },
+      liveUids: ["uid-a", "uid-b"],
+    });
+
+    await expect(
+      state.claimWalletAllocation({ attemptKey: "b", workloadUid: "uid-b" })
+    ).resolves.toEqual({ state: "blocked", ownerAttemptKey: "slow" });
+    expect(readActive()).toBe(
+      JSON.stringify({ attemptKey: "slow", workloadUid: "uid-a" })
+    );
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("preserves an orphan's uncertain allocationCursor in the reclaim log", async () => {
+    // A cursor on an orphaned slot marks an in-flight provider mutation that no
+    // reconciler will ever resolve (the CR is gone). Reclaim anyway; the cursor
+    // survives only in the log line for forensics.
+    const { state, log } = seededWalletLedger({
+      active: {
+        attemptKey: "dead",
+        workloadUid: "uid-gone",
+        allocationCursor: "77",
+      },
+      liveUids: ["uid-b"],
+    });
+
+    await expect(
+      state.claimWalletAllocation({ attemptKey: "b", workloadUid: "uid-b" })
+    ).resolves.toEqual({ state: "claimed" });
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        orphanedAttemptKey: "dead",
+        orphanedWorkloadUid: "uid-gone",
+        orphanedAllocationCursor: "77",
+      }),
+      "compute_wallet_allocation_orphan_reclaimed"
+    );
+  });
+
+  it("loses a reclaim CAS race cleanly: re-reads and defers to the live winner", async () => {
+    // Two claimants race for the same orphaned slot. The loser's replace 409s, and
+    // its re-read now shows the winner — whose CR is live — so it must block, not
+    // steal, and must not log a reclaim it never performed.
+    const { state, core, log } = seededWalletLedger({
+      active: { attemptKey: "dead", workloadUid: "uid-gone" },
+      liveUids: ["uid-b", "uid-c"],
+    });
+    core.replaceNamespacedConfigMap.mockRejectedValueOnce(apiError(409));
+    // The re-read after the 409 sees the winner's record; the first read still sees
+    // the seeded orphan via the base implementation queued explicitly ahead of it.
+    core.readNamespacedConfigMap
+      .mockResolvedValueOnce({
+        body: {
+          metadata: {
+            name: "compute-workload-allocation-ledger",
+            namespace: "cogni-candidate-a",
+            resourceVersion: "1",
+          },
+          data: {
+            active: JSON.stringify({
+              attemptKey: "dead",
+              workloadUid: "uid-gone",
+            }),
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        body: {
+          metadata: {
+            name: "compute-workload-allocation-ledger",
+            namespace: "cogni-candidate-a",
+            resourceVersion: "2",
+          },
+          data: {
+            active: JSON.stringify({ attemptKey: "c", workloadUid: "uid-c" }),
+          },
+        },
+      });
+
+    await expect(
+      state.claimWalletAllocation({ attemptKey: "b", workloadUid: "uid-b" })
+    ).resolves.toEqual({ state: "blocked", ownerAttemptKey: "c" });
+    expect(core.replaceNamespacedConfigMap).toHaveBeenCalledOnce();
+    expect(log.warn).not.toHaveBeenCalled();
   });
 
   it("creates the runtime ledger outside Argo ownership before first allocation", async () => {
