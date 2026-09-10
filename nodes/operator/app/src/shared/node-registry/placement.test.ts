@@ -3,10 +3,10 @@
 
 /**
  * Module: `@shared/node-registry/placement` (test)
- * Purpose: Pin PLACEMENT_DECIDES_THE_ADDRESS — an akash-placed node resolves to its EXTERNAL
+ * Purpose: Pin PLACEMENT_DECIDES_THE_ADDRESS — an akash-placed node resolves to its OFF-CLUSTER
  *   public address and a k3s-placed node keeps resolving to in-cluster Service DNS (bug.5106).
  * Scope: Pure unit test; no network, no DB, no env.
- * Invariants: K3S_IS_DEFAULT, EXTERNAL_ADDRESS_IS_THE_PUBLIC_HOST, FAIL_LOUD_WITHOUT_A_DOMAIN.
+ * Invariants: K3S_IS_DEFAULT, OFF_CLUSTER_ADDRESS_IS_THE_PUBLIC_HOST, FAIL_LOUD_WITHOUT_A_DOMAIN.
  * Side-effects: none
  * Links: src/shared/node-registry/placement.ts, bug.5106
  * @public

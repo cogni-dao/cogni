@@ -146,9 +146,9 @@ export function extractNodeName(spec: RepoSpec): string {
  * Did this node author its own `deployment:` block, or is it riding the legacy default?
  *
  * The two are NOT interchangeable: the default declares no `secret_refs`, which is correct for
- * the k3s lane (env arrives via the node's ExternalSecret overlay) and fatal for an externally
- * hosted workload (env arrives only through declared refs). Deploy gates that hand a node to an
- * external provider MUST require a real declaration instead of silently accepting the default.
+ * the k3s lane (env arrives via the node's ExternalSecret overlay) and fatal for an off-cluster
+ * workload (env arrives only through declared refs). Deploy gates that hand a node to an
+ * off-cluster provider MUST require a real declaration instead of silently accepting the default.
  */
 export function hasDeclaredNodeDeployment(spec: RepoSpec): boolean {
   return spec.deployment !== undefined;
@@ -160,7 +160,7 @@ export function hasDeclaredNodeDeployment(spec: RepoSpec): boolean {
  * Existing repo-specs intentionally need no migration: omission produces the
  * same single public Next.js app shape used by node-template today — including
  * its empty `secret_refs`. See `hasDeclaredNodeDeployment` before using this
- * result to build external-compute desired state.
+ * result to build off-cluster-compute desired state.
  */
 export function extractNodeServices(
   spec: RepoSpec

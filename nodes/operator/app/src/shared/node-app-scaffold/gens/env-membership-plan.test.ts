@@ -7,7 +7,8 @@
  *   regenerated kustomization, and the ATOMIC_PER_ENV + idempotency invariants. Every env is an
  *   independent toggle while the non-empty deploy set and singleton activity authority remain valid.
  * Scope: Pure unit tests over hand-built control-plane fixtures (no Octokit).
- * Invariants: ATOMIC_PER_ENV, IDEMPOTENT, DELETE_VIA_SHA_NULL.
+ * Invariants: ATOMIC_PER_ENV, IDEMPOTENT, DELETE_VIA_SHA_NULL, TEMPLATE_OVERLAY_IS_RENDER_SOURCE,
+ *   OPERATOR_SELF_HOSTS_THE_VERB.
  * Side-effects: none
  * Links: src/shared/node-app-scaffold/gens/env-membership-plan
  * @public
@@ -306,11 +307,157 @@ describe("buildEnvDeltaPlan — safe removals", () => {
   });
 });
 
-describe("buildEnvDeltaPlan — TEMPLATE_NODE_IMMUTABLE", () => {
-  it("refuses to remove node-template from an env (it is the per-env overlay template)", () => {
+describe("buildEnvDeltaPlan — TEMPLATE_OVERLAY_IS_RENDER_SOURCE", () => {
+  // node-template's real catalog row: template port literals (3200/30200), production authority.
+  const templateCatalogWith = (envs: readonly string[]): string =>
+    `name: node-template
+type: node
+port: 3200
+node_port: 30200
+dockerfile: nodes/node-template/app/Dockerfile
+envs: [${envs.join(", ")}]
+activity_env: production
+path_prefix: nodes/node-template/
+`;
+
+  const templateCurrent = (envs: readonly string[]): EnvPlanCurrent => {
+    const appsetsKustomizationByEnv: Record<string, string> = {};
+    const templateOverlayByEnv: Record<string, string> = {};
+    const templateExternalSecretByEnv: Record<string, string> = {};
+    for (const e of ["candidate-a", "preview", "production"]) {
+      appsetsKustomizationByEnv[e] = kustWith(e, [
+        "blue",
+        "node-template",
+        "operator",
+      ]);
+      templateOverlayByEnv[e] = TEMPLATE_OVERLAY;
+      templateExternalSecretByEnv[e] = TEMPLATE_EXTERNAL_SECRET;
+    }
+    return {
+      catalog: templateCatalogWith(envs),
+      templateOverlayByEnv,
+      templateExternalSecretByEnv,
+      appsetTemplate: APPSET_TEMPLATE,
+      appsetsKustomizationByEnv,
+      port: 3200,
+      nodePort: 30200,
+    };
+  };
+
+  it("removes node-template's DEPLOYMENT but keeps its overlay files (the render template)", () => {
+    const res = buildEnvDeltaPlan({
+      slug: "node-template",
+      env: "candidate-a",
+      present: false,
+      current: templateCurrent(["candidate-a", "preview", "production"]),
+    });
+    expect(res.kind).toBe("remove");
+    if (res.kind === "no_changes") throw new Error("unexpected no_changes");
+
+    expect(res.nextEnvs).toEqual(["preview", "production"]);
+    // REDUCED delete set: ONLY the appset leaves git.
+    expect(deletes(res.ops)).toEqual([
+      appsetPath("candidate-a", "node-template"),
+    ]);
+    // The overlay files are NOT touched at all (no delete, no upsert).
+    expect(paths(res.ops)).not.toContain(
+      overlayPath("candidate-a", "node-template")
+    );
+    expect(paths(res.ops)).not.toContain(
+      externalSecretPath("candidate-a", "node-template")
+    );
+    // Catalog env dropped + kustomization regenerated without node-template.
+    const catalogOp = res.ops.find(
+      (o) => o.path === CATALOG_PATH("node-template")
+    );
+    expect(catalogOp?.op).toBe("upsert");
+    if (catalogOp?.op === "upsert") {
+      expect(catalogOp.content).toContain("envs: [preview, production]");
+    }
+    const kustOp = res.ops.find(
+      (o) => o.path === appsetsKustomizationPath("candidate-a")
+    );
+    expect(kustOp?.op).toBe("upsert");
+    if (kustOp?.op === "upsert") {
+      expect(kustOp.content).not.toContain(
+        "candidate-a-node-template-applicationset.yaml"
+      );
+      expect(kustOp.content).toContain("candidate-a-blue-applicationset.yaml");
+    }
+  });
+
+  it("still refuses to remove node-template's activity authority (production)", () => {
     const call = () =>
       buildEnvDeltaPlan({
         slug: "node-template",
+        env: "production",
+        present: false,
+        current: templateCurrent(["candidate-a", "preview", "production"]),
+      });
+    expect(call).toThrowError(
+      expect.objectContaining({
+        code: "activity_authority_cutover_required",
+        status: 422,
+      })
+    );
+  });
+
+  it("re-adds node-template as an ordinary add (overlay files already in tree are the source)", () => {
+    const res = buildEnvDeltaPlan({
+      slug: "node-template",
+      env: "candidate-a",
+      present: true,
+      current: templateCurrent(["preview", "production"]),
+    });
+    expect(res.kind).toBe("add");
+    if (res.kind === "no_changes") throw new Error("unexpected no_changes");
+
+    expect(res.nextEnvs).toEqual(["candidate-a", "preview", "production"]);
+    expect(deletes(res.ops)).toEqual([]);
+    expect(paths(res.ops).sort()).toEqual(
+      [
+        CATALOG_PATH("node-template"),
+        overlayPath("candidate-a", "node-template"),
+        externalSecretPath("candidate-a", "node-template"),
+        appsetPath("candidate-a", "node-template"),
+        appsetsKustomizationPath("candidate-a"),
+      ].sort()
+    );
+    // Rendering the template with its own slug + its own port literals is the identity
+    // transform — the re-added overlay is byte-identical to the render source.
+    const overlayOp = res.ops.find(
+      (o) => o.path === overlayPath("candidate-a", "node-template")
+    );
+    expect(overlayOp?.op).toBe("upsert");
+    if (overlayOp?.op === "upsert") {
+      expect(overlayOp.content).toBe(TEMPLATE_OVERLAY);
+    }
+    // Authority stays production (max of nextEnvs) — the add cannot demote it.
+    const catalogOp = res.ops.find(
+      (o) => o.path === CATALOG_PATH("node-template")
+    );
+    if (catalogOp?.op === "upsert") {
+      expect(catalogOp.content).toContain("activity_env: production");
+    }
+  });
+
+  it("is idempotent adding node-template to an env it already claims", () => {
+    expect(
+      buildEnvDeltaPlan({
+        slug: "node-template",
+        env: "candidate-a",
+        present: true,
+        current: templateCurrent(["candidate-a", "preview", "production"]),
+      }).kind
+    ).toBe("no_changes");
+  });
+});
+
+describe("buildEnvDeltaPlan — OPERATOR_SELF_HOSTS_THE_VERB", () => {
+  it("refuses to remove operator from any env (the control plane cannot undeploy itself)", () => {
+    const call = () =>
+      buildEnvDeltaPlan({
+        slug: "operator",
         env: "candidate-a",
         present: false,
         current: baseCurrent(["candidate-a", "preview", "production"]),
@@ -321,20 +468,9 @@ describe("buildEnvDeltaPlan — TEMPLATE_NODE_IMMUTABLE", () => {
       throw new Error("expected EnvPlanError");
     } catch (e) {
       expect(e).toBeInstanceOf(EnvPlanError);
-      expect((e as EnvPlanError).code).toBe("template_node_immutable");
+      expect((e as EnvPlanError).code).toBe("operator_node_immutable");
       expect((e as EnvPlanError).status).toBe(422);
     }
-  });
-
-  it("does NOT block adding node-template (idempotent — it already lives in every env)", () => {
-    expect(
-      buildEnvDeltaPlan({
-        slug: "node-template",
-        env: "candidate-a",
-        present: true,
-        current: baseCurrent(["candidate-a", "preview"]),
-      }).kind
-    ).toBe("no_changes");
   });
 });
 

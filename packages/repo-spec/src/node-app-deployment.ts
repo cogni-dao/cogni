@@ -5,7 +5,7 @@
  * Module: `@cogni/repo-spec/node-app-deployment`
  * Purpose: Holds the one source of truth for the `cogni-node-app-v1` deployment declaration.
  *   It is the block a node carries in its own `.cogni/repo-spec.yaml` — what the node scaffold
- *   emits, what the external-compute gates require, and what a failure message tells you to add.
+ *   emits, what the off-cluster-compute gates require, and what a failure message tells you to add.
  * Scope: Pure data plus YAML rendering over the repo-spec schema; does not perform I/O, select a
  *   provider, resolve secret values, or name any node.
  * Invariants:
@@ -33,7 +33,7 @@ import type { NodeDeploymentSpec, NodeServiceSpec } from "./schema.js";
  *
  * The profile also implies the fork-image migration layout — `/app/app/migrate.mjs` +
  * `/app/app/migrations` (plus `migrate-doltgres.mjs` when `DOLTGRES_URL` is declared) — which
- * the operator's external-compute migration gate runs before any placement (bug.5116).
+ * the operator's off-cluster-compute migration gate runs before any placement (bug.5116).
  */
 export const COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS = [
   "AUTH_SECRET",
@@ -76,7 +76,7 @@ export const COGNI_NODE_APP_V1_DEPLOYMENT: NodeDeploymentSpec = {
  * stripped. k3s nodes resolve their env through their per-node ExternalSecret overlay rather
  * than through `secret_refs`, so their fallback intentionally declares none — the empty list is
  * what makes it *safe* to keep defaulting for that lane, and what makes it *unsafe* to boot an
- * externally hosted workload from.
+ * off-cluster workload from.
  */
 export const LEGACY_DEFAULT_NODE_DEPLOYMENT: NodeDeploymentSpec = {
   services: [{ ...COGNI_NODE_APP_V1_SERVICE, secret_refs: [] }],
