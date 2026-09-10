@@ -1006,6 +1006,7 @@ describe("GitHubRepoWriter.openNodePlacementPr — akash deployment-block gate (
   // Already placed on akash for `preview` with a source_repo declared and no lingering k3s
   // residue — lets buildPlacementPlan resolve straight to `no_changes` once the deployment-block
   // gate passes, so the "proceeds" case doesn't also have to mock the full commit/PR write path.
+  const NODE_ID = "33333333-3333-4333-8333-333333333333";
   const CATALOG = `name: blue
 type: node
 port: 3200
@@ -1017,12 +1018,23 @@ deployment_provider:
   preview: akash
 activity_env: candidate-a
 path_prefix: nodes/blue/
+node_id: ${NODE_ID}
 `;
 
   const KUSTOMIZATION = `apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
   - preview-other-applicationset.yaml
+`;
+
+  // Already resolved to the public host `buildSchedulerEndpointOp` would compute for
+  // preview/akash — so the "proceeds" case's `no_changes` isn't masked by a routing hunk.
+  const SCHEDULER_PATCH = `apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: scheduler-worker-config
+data:
+  COGNI_NODE_ENDPOINTS: "blue=https://blue-preview.cognidao.org,${NODE_ID}=https://blue-preview.cognidao.org"
 `;
 
   const LEGACY_NODE_SPEC = `schema_version: "0.1.4"
@@ -1091,7 +1103,19 @@ governance:
             sha: "kustomization-sha",
           };
         }
-        // overlay/external-secret/appset existence probes: none exist (no k3s residue).
+        if (
+          owner === OPERATOR_OWNER &&
+          repo === OPERATOR_REPO &&
+          path ===
+            `infra/k8s/overlays/${ENV}/scheduler-worker/node-endpoints.patch.yaml`
+        ) {
+          return {
+            type: "file",
+            encoding: "base64",
+            content: encode(SCHEDULER_PATCH),
+            sha: "scheduler-patch-sha",
+          };
+        }
         throw statusError(404, "Not Found");
       },
     };
