@@ -713,18 +713,81 @@ describe("buildPlacementPlan — akash", () => {
     );
   });
 
-  it("refuses to move node-template off k3s (it is the per-env overlay template)", () => {
+  it("refuses to move operator off k3s (it is the control plane serving this verb)", () => {
     const call = () =>
       buildPlacementPlan({
-        slug: "node-template",
+        slug: "operator",
         env: "candidate-a",
         placement: "akash",
         current: externallyBuilt(["candidate-a"]),
         existingK3sPaths: [],
       });
     expect(call).toThrowError(
-      expect.objectContaining({ code: "template_node_immutable", status: 422 })
+      expect.objectContaining({ code: "operator_node_immutable", status: 422 })
     );
+  });
+
+  it("places node-template on akash like an ordinary node, but with the REDUCED delete set (only the appset leaves)", () => {
+    // node-template's real catalog row + an external build plane (akash's eligibility precondition).
+    const templateCatalogWith = (envs: readonly string[]): string =>
+      `name: node-template
+type: node
+port: 3200
+node_port: 30200
+dockerfile: nodes/node-template/app/Dockerfile
+source_repo: https://github.com/cogni-dao/node-template.git
+image_repository: ghcr.io/cogni-dao/node-template
+envs: [${envs.join(", ")}]
+activity_env: production
+path_prefix: nodes/node-template/
+`;
+    const current: EnvPlanCurrent = {
+      catalog: templateCatalogWith(["candidate-a"]),
+      templateOverlayByEnv: { "candidate-a": TEMPLATE_OVERLAY },
+      templateExternalSecretByEnv: { "candidate-a": TEMPLATE_EXTERNAL_SECRET },
+      appsetTemplate: APPSET_TEMPLATE,
+      appsetsKustomizationByEnv: {
+        "candidate-a": kustWith("candidate-a", ["blue", "node-template"]),
+      },
+      port: 3200,
+      nodePort: 30200,
+    };
+    const res = buildPlacementPlan({
+      slug: "node-template",
+      env: "candidate-a",
+      placement: "akash",
+      current,
+      existingK3sPaths: [
+        overlayPath("candidate-a", "node-template"),
+        externalSecretPath("candidate-a", "node-template"),
+        appsetPath("candidate-a", "node-template"),
+      ],
+    });
+    expect(res.kind).toBe("place_akash");
+    if (res.kind === "no_changes") throw new Error("unexpected no_changes");
+
+    // REDUCED delete set: only the appset leaves git — same as an env remove.
+    expect(deletes(res.ops)).toEqual([
+      appsetPath("candidate-a", "node-template"),
+    ]);
+    // The overlay + external-secret files are NOT touched (no delete, no upsert) — they stay in
+    // the tree as the render template.
+    expect(paths(res.ops)).not.toContain(
+      overlayPath("candidate-a", "node-template")
+    );
+    expect(paths(res.ops)).not.toContain(
+      externalSecretPath("candidate-a", "node-template")
+    );
+    const catalogOp = res.ops.find(
+      (o) => o.path === CATALOG_PATH("node-template")
+    );
+    expect(catalogOp?.op).toBe("upsert");
+    if (catalogOp?.op === "upsert") {
+      expect(catalogOp.content).toContain(
+        "deployment_provider:\n  candidate-a: akash"
+      );
+      expect(catalogOp.content).toContain("envs: [candidate-a]");
+    }
   });
 });
 

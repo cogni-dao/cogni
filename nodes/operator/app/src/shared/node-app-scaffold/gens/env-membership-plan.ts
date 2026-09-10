@@ -387,6 +387,14 @@ export type PlacementDeltaResult =
  *   k3s lane by re-rendering the overlay/external-secret/AppSet + folding the slug back into the
  *   kustomization — planAdd's render set, minus the `envs:` edit.
  *
+ * TEMPLATE_OVERLAY_IS_RENDER_SOURCE applies here too (story.5016 follow-up, bug found live in
+ * prod): `node-template` is an ORDINARY node for placement purposes — it may move to akash like
+ * any other externally-built node. Only its overlay FILES are special, so an akash flip for
+ * `node-template` emits the SAME reduced delete set `planRemove` does (appset + kustomization
+ * entry only; the overlay/external-secret files stay in the tree as the render template).
+ * `operator` remains placement-immutable (OPERATOR_SELF_HOSTS_THE_VERB) — the control plane
+ * cannot move its own deployment off the lane serving this verb.
+ *
  * Deletes are emitted ONLY for paths listed in `existingK3sPaths` — the trees API 422s on a
  * `sha:null` entry whose path is absent from the base tree, and an already-akash node (toks4) may
  * or may not still carry its k3s overlays. This makes the akash flip double as the NORMALIZATION
@@ -403,12 +411,14 @@ export function buildPlacementPlan(input: {
 }): PlacementDeltaResult {
   const { slug, env, placement, current, existingK3sPaths } = input;
 
-  // TEMPLATE_NODE_IMMUTABLE — moving node-template off k3s would delete the per-env overlay
-  // TEMPLATE every wizard node clones. Fail closed.
-  if (placement === "akash" && slug === TEMPLATE_SLUG) {
+  // OPERATOR_SELF_HOSTS_THE_VERB — the control plane cannot move its own deployment off the lane
+  // serving this verb. Fail closed. `node-template` has NO such guard: TEMPLATE_OVERLAY_IS_RENDER_SOURCE
+  // means only its overlay FILES are special, not its deployment — it places like any ordinary node,
+  // with the reduced delete set applied below.
+  if (placement === "akash" && slug === OPERATOR_SLUG) {
     throw new EnvPlanError(
-      "template_node_immutable",
-      `'${TEMPLATE_SLUG}' is the per-env overlay template every wizard node clones; it cannot be placed off k3s.`,
+      "operator_node_immutable",
+      `'${OPERATOR_SLUG}' is the control plane serving this verb; it cannot be placed off k3s.`,
       422
     );
   }
@@ -461,11 +471,18 @@ export function buildPlacementPlan(input: {
   if (nextCatalog !== current.catalog) {
     ops.push({ op: "upsert", path: CATALOG_PATH(slug), content: nextCatalog });
   }
-  for (const path of [
-    overlayPath(env, slug),
-    externalSecretPath(env, slug),
-    appsetPath(env, slug),
-  ]) {
+  // TEMPLATE_OVERLAY_IS_RENDER_SOURCE — node-template's overlay files stay in the tree as the
+  // render template every wizard node clones; only the appset leaves. Reuses planRemove's reduced
+  // delete set rather than duplicating the slug check at the call site.
+  const k3sPathsToDelete =
+    slug === TEMPLATE_SLUG
+      ? [appsetPath(env, slug)]
+      : [
+          overlayPath(env, slug),
+          externalSecretPath(env, slug),
+          appsetPath(env, slug),
+        ];
+  for (const path of k3sPathsToDelete) {
     if (existing.has(path)) {
       ops.push({ op: "delete", path });
     }
