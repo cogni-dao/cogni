@@ -13,7 +13,6 @@ namespace: argocd
 resources:
   - preview-beacon-applicationset.yaml
   - preview-levelup-applicationset.yaml
-  - preview-node-template-applicationset.yaml
   - preview-operator-applicationset.yaml
   - preview-poly-applicationset.yaml
   - preview-scheduler-worker-applicationset.yaml
