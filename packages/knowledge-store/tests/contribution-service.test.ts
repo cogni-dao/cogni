@@ -417,7 +417,10 @@ describe("createContributionService", () => {
     });
 
     await expect(
-      service.merge({ principal: agent, contributionId: "contrib-agent-1-abc123" })
+      service.merge({
+        principal: agent,
+        contributionId: "contrib-agent-1-abc123",
+      })
     ).rejects.toBeInstanceOf(ContributionForbiddenError);
     expect(port.lastMerge).toBeNull();
   });

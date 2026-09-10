@@ -343,14 +343,16 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
     ).rejects.toThrow(/unresolved conflict/i);
 
     // it aborted the conflicted merge so the working set is clean for next time
-    expect(
-      conn.queries.some((q) => q.includes("dolt_merge('--abort')"))
-    ).toBe(true);
+    expect(conn.queries.some((q) => q.includes("dolt_merge('--abort')"))).toBe(
+      true
+    );
     // and it never marked the contribution merged or deleted the branch
-    expect(
-      conn.queries.some((q) => q.includes("SET state = 'merged'"))
-    ).toBe(false);
-    expect(conn.queries.some((q) => q.includes("dolt_branch('-D'"))).toBe(false);
+    expect(conn.queries.some((q) => q.includes("SET state = 'merged'"))).toBe(
+      false
+    );
+    expect(conn.queries.some((q) => q.includes("dolt_branch('-D'"))).toBe(
+      false
+    );
   });
 
   it("merges a branch whose dolt_merge returns the full clean record (no false conflict on intra-branch citations)", async () => {

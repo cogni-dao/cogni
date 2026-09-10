@@ -193,10 +193,7 @@ function parseDoltMergeResult(row: Record<string, unknown>): {
   const value = row.dolt_merge;
   const parts: unknown[] = Array.isArray(value)
     ? value
-    : String(value)
-        .replace(/^\{/, "")
-        .replace(/\}$/, "")
-        .split(",");
+    : String(value).replace(/^\{/, "").replace(/\}$/, "").split(",");
   const commitHash = normalizeDoltCommitRef(String(parts[0] ?? ""));
   const rawConflicts = parts.length >= 3 ? Number(parts[2]) : 0;
   return {
