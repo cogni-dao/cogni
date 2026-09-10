@@ -129,8 +129,11 @@ export function buildNodeWorkloadSpec(input: NodeWorkloadInput): ProvisionSpec {
   }
 
   const resources = input.resources ?? {
-    cpuUnits: 0.5,
-    memoryMi: 1024,
+    // Production default: nodes are user-facing website endpoints. 0.5 vCPU/1024Mi
+    // starved Next.js SSR (~2-4s /readyz measured on toks4, bug.5088). Sized for prod;
+    // heavier nodes override via input.resources.
+    cpuUnits: 2,
+    memoryMi: 2048,
     storageMi: 2048,
   };
 
