@@ -114,7 +114,10 @@ describe("ComputeWorkload Kubernetes contract", () => {
     );
     const deployment = parse(deploymentYaml) as {
       spec: {
-        strategy?: { type?: string };
+        strategy?: {
+          type?: string;
+          rollingUpdate?: { maxSurge?: number; maxUnavailable?: number };
+        };
         template: {
           spec: { containers: { env: { name: string }[] }[] };
         };
@@ -127,10 +130,18 @@ describe("ComputeWorkload Kubernetes contract", () => {
       "DEPLOYMENT_DOMAIN",
       "AKASH_ALLOWED_PROVIDERS",
     ]);
-    // Singleton by design: a RollingUpdate surge would run two pods against one
-    // coordination Lease and manufacture the CAS conflicts this controller then
-    // has to survive.
-    expect(deployment.spec.strategy?.type).toBe("Recreate");
+    // Singleton by design: a surge would run two pods against one coordination
+    // Lease and manufacture the CAS conflicts this controller then has to
+    // survive — so maxSurge must stay 0. But the type must be RollingUpdate,
+    // NOT Recreate: live objects retain spec.strategy.rollingUpdate from prior
+    // field managers, and ArgoCD's server-side-apply dry-run of a Recreate spec
+    // then fails Forbidden, wedging the whole Argo app (blocked candidate
+    // flights + the d69e5c29 production promote on 2026-09-10).
+    expect(deployment.spec.strategy?.type).toBe("RollingUpdate");
+    expect(deployment.spec.strategy?.rollingUpdate).toEqual({
+      maxSurge: 0,
+      maxUnavailable: 1,
+    });
   });
 
   it("admits bounded topology fields and preserves service bindings over the API wire", async () => {

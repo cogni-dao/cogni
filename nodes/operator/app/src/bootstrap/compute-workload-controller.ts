@@ -102,7 +102,7 @@ const state = new KubernetesComputeWorkloadStateAdapter(
 /**
  * bug.5110 — the lease deadline is the ONLY thing standing between a slow k3s API server
  * and a self-fenced controller. At `replicas: 1` a longer deadline costs only failover
- * latency on a redeploy (which `strategy: Recreate` already serializes) and buys
+ * latency on a redeploy (which the surge-free `maxSurge: 0` rollout already serializes) and buys
  * proportionally more tolerance for consecutive failed renewals.
  */
 const leaseDurationSeconds = (() => {
