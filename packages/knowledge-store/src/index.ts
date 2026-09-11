@@ -97,6 +97,13 @@ export {
   type MetricResolutionStrategy,
   MetricResolutionStrategySchema,
 } from "./domain/goal-loop.js";
+// Knowledge-graph view model (shared assembly, no N+1)
+export {
+  buildKnowledgeGraph,
+  type KnowledgeGraphEdge,
+  type KnowledgeGraphModel,
+  type KnowledgeGraphNode,
+} from "./domain/knowledge-graph.js";
 export {
   createConfidenceSmokeReader,
   createExternalCountReader,
