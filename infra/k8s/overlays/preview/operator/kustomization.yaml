@@ -27,7 +27,7 @@ replacements:
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/cogni-template
-    digest: "sha256:a8c87c3505720bb0dd41fe87934aca6f6cccd30af7defa9c53af934a4b2d2b9d"
+    digest: "sha256:4a226fecab69de961473e13cf791ff6bc54d2446d0a97d933484a92a3b469f89"
 
 patches:
   # story.5016 Gate 0b: controller env values are set BY NAME via strategic
