@@ -40,6 +40,7 @@ vi.mock("@octokit/core", () => ({
   },
 }));
 
+import { renderDeploymentActivationSpec } from "@cogni/repo-spec";
 import {
   diffRulesetAgainstPolicy,
   GitHubRepoWriter,
@@ -743,6 +744,433 @@ describe("GitHubRepoWriter.openDistributionActivationPr", () => {
       "POST /repos/{owner}/{repo}/pulls",
       "PATCH /repos/{owner}/{repo}/pulls/{pull_number}",
     ]);
+  });
+});
+
+describe("GitHubRepoWriter.openNodeDeploymentBlockPr", () => {
+  // A pre-deployment-contract node spec (the shape existing nodes carry on main).
+  const LEGACY_NODE_SPEC = `schema_version: "0.1.4"
+node_id: "abc"
+scope_id: "def"
+scope_key: "default"
+intent:
+  name: test-cog
+  mission: "test deployment block"
+governance:
+  dao_contract: "0xDA0"
+  chain_id: "8453"
+`;
+  const encode = (content: string) =>
+    Buffer.from(content, "utf-8").toString("base64");
+
+  it("returns no_changes when main already declares a deployment block", async () => {
+    const declaredSpec = renderDeploymentActivationSpec(LEGACY_NODE_SPEC);
+
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": (params) => {
+        expect(params).toMatchObject({
+          owner: "cogni-test-org",
+          repo: "test-cog",
+          path: ".cogni/repo-spec.yaml",
+          ref: "main",
+        });
+        return {
+          type: "file",
+          encoding: "base64",
+          content: encode(declaredSpec),
+          sha: "repo-spec-sha",
+        };
+      },
+    };
+
+    await expect(
+      makeWriter().openNodeDeploymentBlockPr({
+        owner: "cogni-test-org",
+        repo: "test-cog",
+        slug: "test-cog",
+        isInRepoNode: false,
+      })
+    ).resolves.toEqual({ status: "no_changes" });
+
+    expect(requests.map((request) => request.route)).toEqual([
+      "GET /repos/{owner}/{repo}/contents/{path}",
+    ]);
+  });
+
+  it("opens a one-file PR appending the stock deployment block to a legacy repo-spec", async () => {
+    const branch = "cogni-operator/declare-deployment-test-cog";
+    const desiredSpec = renderDeploymentActivationSpec(LEGACY_NODE_SPEC);
+    expect(desiredSpec).not.toBe(LEGACY_NODE_SPEC);
+
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": (params) => {
+        expect(params).toMatchObject({
+          owner: "cogni-test-org",
+          repo: "test-cog",
+          path: ".cogni/repo-spec.yaml",
+        });
+        return {
+          type: "file",
+          encoding: "base64",
+          content: encode(LEGACY_NODE_SPEC),
+          sha: "repo-spec-sha",
+        };
+      },
+      "GET /repos/{owner}/{repo}/pulls": () => [],
+      "GET /repos/{owner}/{repo}/git/ref/{ref}": (params) => {
+        expect(params).toMatchObject({
+          owner: "cogni-test-org",
+          repo: "test-cog",
+          ref: "heads/main",
+        });
+        return { object: { sha: "main-sha" } };
+      },
+      "GET /repos/{owner}/{repo}/git/commits/{commit_sha}": () => ({
+        tree: { sha: "main-tree" },
+      }),
+      "POST /repos/{owner}/{repo}/git/blobs": (params) => {
+        const content = Buffer.from(String(params.content), "base64").toString(
+          "utf-8"
+        );
+        expect(content).toBe(desiredSpec);
+        return { sha: "repo-spec-blob" };
+      },
+      "POST /repos/{owner}/{repo}/git/trees": (params) => {
+        expect(params.tree).toEqual([
+          {
+            path: ".cogni/repo-spec.yaml",
+            mode: "100644",
+            type: "blob",
+            sha: "repo-spec-blob",
+          },
+        ]);
+        return { sha: "deployment-tree" };
+      },
+      "POST /repos/{owner}/{repo}/git/commits": (params) => {
+        expect(params).toMatchObject({
+          message: "feat(deploy): declare test-cog node deployment",
+          tree: "deployment-tree",
+          parents: ["main-sha"],
+        });
+        return { sha: "deployment-commit" };
+      },
+      "POST /repos/{owner}/{repo}/git/refs": (params) => {
+        expect(params).toMatchObject({
+          ref: `refs/heads/${branch}`,
+          sha: "deployment-commit",
+        });
+        return {};
+      },
+      "POST /repos/{owner}/{repo}/pulls": (params) => {
+        expect(params).toMatchObject({
+          title: "feat(deploy): declare test-cog node deployment",
+          head: branch,
+          base: "main",
+        });
+        return {
+          number: 33,
+          html_url: "https://github.com/cogni-test-org/test-cog/pull/33",
+        };
+      },
+      "PATCH /repos/{owner}/{repo}/pulls/{pull_number}": (params) => {
+        expect(params).toMatchObject({
+          pull_number: 33,
+          title: "feat(deploy): declare test-cog node deployment",
+        });
+        return {};
+      },
+    };
+
+    await expect(
+      makeWriter().openNodeDeploymentBlockPr({
+        owner: "cogni-test-org",
+        repo: "test-cog",
+        slug: "test-cog",
+        isInRepoNode: false,
+      })
+    ).resolves.toEqual({
+      status: "pr_opened",
+      prNumber: 33,
+      prUrl: "https://github.com/cogni-test-org/test-cog/pull/33",
+    });
+
+    expect(requests.map((request) => request.route)).toEqual([
+      "GET /repos/{owner}/{repo}/contents/{path}",
+      "GET /repos/{owner}/{repo}/pulls",
+      "GET /repos/{owner}/{repo}/pulls",
+      "GET /repos/{owner}/{repo}/git/ref/{ref}",
+      "GET /repos/{owner}/{repo}/git/commits/{commit_sha}",
+      "POST /repos/{owner}/{repo}/git/blobs",
+      "POST /repos/{owner}/{repo}/git/trees",
+      "POST /repos/{owner}/{repo}/git/commits",
+      "POST /repos/{owner}/{repo}/git/refs",
+      "POST /repos/{owner}/{repo}/pulls",
+      "PATCH /repos/{owner}/{repo}/pulls/{pull_number}",
+    ]);
+  });
+
+  it("reuses an existing declaration PR when its branch already carries the block", async () => {
+    const branch = "cogni-operator/declare-deployment-test-cog";
+    const desiredSpec = renderDeploymentActivationSpec(LEGACY_NODE_SPEC);
+
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": (params) => ({
+        type: "file",
+        encoding: "base64",
+        content: encode(params.ref === branch ? desiredSpec : LEGACY_NODE_SPEC),
+        sha: "repo-spec-sha",
+      }),
+      "GET /repos/{owner}/{repo}/pulls": (params) => {
+        expect(params).toMatchObject({
+          owner: "cogni-test-org",
+          repo: "test-cog",
+          state: "open",
+          head: `cogni-test-org:${branch}`,
+          per_page: 1,
+        });
+        return [
+          {
+            number: 44,
+            html_url: "https://github.com/cogni-test-org/test-cog/pull/44",
+          },
+        ];
+      },
+      "PATCH /repos/{owner}/{repo}/pulls/{pull_number}": (params) => {
+        expect(params).toMatchObject({
+          pull_number: 44,
+          title: "feat(deploy): declare test-cog node deployment",
+        });
+        return {};
+      },
+    };
+
+    await expect(
+      makeWriter().openNodeDeploymentBlockPr({
+        owner: "cogni-test-org",
+        repo: "test-cog",
+        slug: "test-cog",
+        isInRepoNode: false,
+      })
+    ).resolves.toEqual({
+      status: "pr_opened",
+      prNumber: 44,
+      prUrl: "https://github.com/cogni-test-org/test-cog/pull/44",
+    });
+
+    expect(requests.map((request) => request.route)).not.toContain(
+      "POST /repos/{owner}/{repo}/git/commits"
+    );
+  });
+
+  it("rejects an in-repo node (no catalog source_repo) with a typed 422 before any Octokit call", async () => {
+    // resolveNodeRepo's IN-REPO shortcut collapses operator/poly to {owner: parentOwner, repo:
+    // parentRepo} — the parent monorepo. A root .cogni/repo-spec.yaml splice there would target
+    // the WRONG file (the runtime spec lives at nodes/<slug>/.cogni/repo-spec.yaml). The writer
+    // must fail closed on the `isInRepoNode` flag before touching the App at all.
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": () => {
+        throw new Error("must not fetch any file for an in-repo node");
+      },
+    };
+
+    await expect(
+      makeWriter().openNodeDeploymentBlockPr({
+        owner: "cogni-test-org",
+        repo: "cogni-monorepo",
+        slug: "operator",
+        isInRepoNode: true,
+      })
+    ).rejects.toMatchObject({
+      code: "in_repo_node_unsupported",
+      status: 422,
+    });
+
+    expect(requests).toEqual([]);
+  });
+});
+
+describe("GitHubRepoWriter.openNodePlacementPr — akash deployment-block gate (story.5016 T5 hardening)", () => {
+  // AKASH_REQUIRES_DEPLOYMENT_BLOCK: before flipping an env onto the external ComputeWorkload
+  // lane, the node's OWN source_repo repo-spec must declare a `deployment:` block — the legacy
+  // fallback carries no secret_refs, which is fatal off the k3s lane. Sibling to
+  // openNodeDeploymentBlockPr above (PR #2150 mints the block this gate requires).
+  const OPERATOR_OWNER = "cogni-dao";
+  const OPERATOR_REPO = "cogni-template";
+  const NODE_OWNER = "cogni-dao";
+  const NODE_REPO = "blue";
+  const SLUG = "blue";
+  const ENV = "preview" as const;
+  const encode = (content: string) =>
+    Buffer.from(content, "utf-8").toString("base64");
+
+  // Already placed on akash for `preview` with a source_repo declared and no lingering k3s
+  // residue — lets buildPlacementPlan resolve straight to `no_changes` once the deployment-block
+  // gate passes, so the "proceeds" case doesn't also have to mock the full commit/PR write path.
+  const NODE_ID = "33333333-3333-4333-8333-333333333333";
+  const CATALOG = `name: blue
+type: node
+port: 3200
+node_port: 31100
+source_repo: https://github.com/${NODE_OWNER}/${NODE_REPO}
+image_repository: ghcr.io/${NODE_OWNER}/${NODE_REPO}
+envs: [candidate-a, preview, production]
+deployment_provider:
+  preview: akash
+activity_env: candidate-a
+path_prefix: nodes/blue/
+node_id: ${NODE_ID}
+`;
+
+  const KUSTOMIZATION = `apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - preview-other-applicationset.yaml
+`;
+
+  // Already resolved to the public host `buildSchedulerEndpointOp` would compute for
+  // preview/akash — so the "proceeds" case's `no_changes` isn't masked by a routing hunk.
+  const SCHEDULER_PATCH = `apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: scheduler-worker-config
+data:
+  COGNI_NODE_ENDPOINTS: "blue=https://blue-preview.cognidao.org,${NODE_ID}=https://blue-preview.cognidao.org"
+`;
+
+  const LEGACY_NODE_SPEC = `schema_version: "0.1.4"
+node_id: "11111111-2222-4333-8444-555555555555"
+scope_id: "66666666-7777-4888-8999-aaaaaaaaaaaa"
+scope_key: "default"
+intent:
+  name: blue
+  mission: "test placement gate"
+governance:
+  chain_id: "8453"
+`;
+  const DECLARED_SPEC = renderDeploymentActivationSpec(LEGACY_NODE_SPEC);
+
+  /** `nodeRepoSpec: null` simulates a 404 on the node's own `.cogni/repo-spec.yaml`. */
+  function gateHandlers(
+    nodeRepoSpec: string | null
+  ): Record<string, RouteHandler> {
+    return {
+      "GET /repos/{owner}/{repo}/git/ref/{ref}": () => ({
+        object: { sha: "main-commit-sha" },
+      }),
+      "GET /repos/{owner}/{repo}/git/commits/{commit_sha}": () => ({
+        tree: { sha: "main-tree-sha" },
+      }),
+      "GET /repos/{owner}/{repo}/contents/{path}": (params) => {
+        const owner = String(params.owner).toLowerCase();
+        const repo = String(params.repo).toLowerCase();
+        const path = String(params.path);
+        if (
+          owner === OPERATOR_OWNER &&
+          repo === OPERATOR_REPO &&
+          path === `infra/catalog/${SLUG}.yaml`
+        ) {
+          return {
+            type: "file",
+            encoding: "base64",
+            content: encode(CATALOG),
+            sha: "catalog-sha",
+          };
+        }
+        if (
+          owner === NODE_OWNER &&
+          repo === NODE_REPO &&
+          path === ".cogni/repo-spec.yaml"
+        ) {
+          if (nodeRepoSpec === null) {
+            throw statusError(404, "Not Found");
+          }
+          return {
+            type: "file",
+            encoding: "base64",
+            content: encode(nodeRepoSpec),
+            sha: "repo-spec-sha",
+          };
+        }
+        if (
+          owner === OPERATOR_OWNER &&
+          repo === OPERATOR_REPO &&
+          path === `infra/k8s/argocd/appsets/${ENV}/kustomization.yaml`
+        ) {
+          return {
+            type: "file",
+            encoding: "base64",
+            content: encode(KUSTOMIZATION),
+            sha: "kustomization-sha",
+          };
+        }
+        if (
+          owner === OPERATOR_OWNER &&
+          repo === OPERATOR_REPO &&
+          path ===
+            `infra/k8s/overlays/${ENV}/scheduler-worker/node-endpoints.patch.yaml`
+        ) {
+          return {
+            type: "file",
+            encoding: "base64",
+            content: encode(SCHEDULER_PATCH),
+            sha: "scheduler-patch-sha",
+          };
+        }
+        throw statusError(404, "Not Found");
+      },
+    };
+  }
+
+  it("rejects 422 akash_requires_deployment_block when the node repo-spec has no declared deployment block, and opens no PR", async () => {
+    routeHandlers = gateHandlers(LEGACY_NODE_SPEC);
+
+    await expect(
+      makeWriter().openNodePlacementPr({
+        owner: OPERATOR_OWNER,
+        repo: OPERATOR_REPO,
+        slug: SLUG,
+        env: ENV,
+        placement: "akash",
+      })
+    ).rejects.toMatchObject({
+      code: "akash_requires_deployment_block",
+      status: 422,
+    });
+
+    const routes = requests.map((request) => request.route);
+    expect(routes).not.toContain("POST /repos/{owner}/{repo}/git/trees");
+    expect(routes).not.toContain("POST /repos/{owner}/{repo}/pulls");
+  });
+
+  it("rejects 422 repo_spec_missing when the node repo-spec cannot be fetched at all", async () => {
+    routeHandlers = gateHandlers(null);
+
+    await expect(
+      makeWriter().openNodePlacementPr({
+        owner: OPERATOR_OWNER,
+        repo: OPERATOR_REPO,
+        slug: SLUG,
+        env: ENV,
+        placement: "akash",
+      })
+    ).rejects.toMatchObject({ code: "repo_spec_missing", status: 422 });
+  });
+
+  it("proceeds past the gate when the node repo-spec DOES declare a deployment block", async () => {
+    routeHandlers = gateHandlers(DECLARED_SPEC);
+
+    // The catalog already places `preview` on akash with no lingering k3s residue, so
+    // buildPlacementPlan resolves `no_changes` — proving the deployment-block gate did NOT
+    // fire, without needing to mock the full commit/PR write path.
+    await expect(
+      makeWriter().openNodePlacementPr({
+        owner: OPERATOR_OWNER,
+        repo: OPERATOR_REPO,
+        slug: SLUG,
+        env: ENV,
+        placement: "akash",
+      })
+    ).resolves.toEqual({ status: "no_changes" });
   });
 });
 
@@ -3611,5 +4039,243 @@ describe("forkFromTemplate — policy is bound to the inherited tree", () => {
         chainId: 8453,
       })
     ).rejects.toMatchObject({ code: "template_repo_policy_missing" });
+  });
+});
+
+describe("GitHubRepoWriter.reconcileNodeMainProtection (bug.5123)", () => {
+  // The birth-path protection re-applied onto EXISTING node repos: nodes minted before the
+  // #1797/task.5028 backstop carry no required-check ruleset, so the operator merge gate
+  // fail-closes every PR on them (not_green on an empty required-context set). The reconcile
+  // verb must be idempotent (compliant = zero writes), loud when it writes (mismatches), and
+  // must surface App-lacks-admin as a typed `protection_unavailable`, never a generic 500.
+  const OWNER = "cogni-test-org";
+  const REPO = "test-cog";
+  const encode = (content: string) =>
+    Buffer.from(content, "utf-8").toString("base64");
+
+  /** Serve the node repo's own policy file; `nodePolicy: null` = 404 on the node repo. */
+  function policyContentsHandler(nodePolicy: string | null): RouteHandler {
+    return (params) => {
+      expect(params).toMatchObject({
+        path: ".cogni/repo-policy.json",
+        ref: "main",
+      });
+      if (params.repo === REPO) {
+        if (nodePolicy === null) throw statusError(404, "Not Found");
+        return {
+          type: "file",
+          encoding: "base64",
+          content: encode(nodePolicy),
+        };
+      }
+      // Canonical template fallback (TEMPLATE_POLICY_IS_SSOT).
+      expect(params.repo).toBe("node-template");
+      return {
+        type: "file",
+        encoding: "base64",
+        content: encode(TEST_NODE_REPO_POLICY_JSON),
+      };
+    };
+  }
+
+  it("applies the canonical ruleset when the repo has none (POST + readback proof)", async () => {
+    storedRulesets.clear();
+    let postParams: Record<string, unknown> | undefined;
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": policyContentsHandler(
+        TEST_NODE_REPO_POLICY_JSON
+      ),
+      "GET /repos/{owner}/{repo}/rulesets": () => [],
+      "POST /repos/{owner}/{repo}/rulesets": (params) => {
+        postParams = params;
+        return recordRuleset(params, 88);
+      },
+      "GET /repos/{owner}/{repo}/rulesets/{ruleset_id}": (params) =>
+        readStoredRuleset(params),
+    };
+
+    await expect(
+      makeWriter().reconcileNodeMainProtection({
+        owner: OWNER,
+        repo: REPO,
+        slug: REPO,
+        isInRepoNode: false,
+      })
+    ).resolves.toEqual({
+      status: "applied",
+      policySource: "node_repo",
+      rulesetName: NODE_MAIN_POLICY_RULESET_NAME,
+      requiredContexts:
+        TEST_NODE_REPO_POLICY.ruleset.requiredStatusChecks.contexts,
+      mismatches: [`ruleset "${NODE_MAIN_POLICY_RULESET_NAME}" absent`],
+    });
+
+    // The write is the EXACT birth-path payload — one protection SSOT, no second config.
+    expect(postParams).toEqual({
+      owner: OWNER,
+      repo: REPO,
+      ...nodeMainPolicyRulesetPayload(TEST_NODE_REPO_POLICY),
+    });
+    // And it is proven by readback, exactly like formation.
+    expect(requests.map((request) => request.route)).toContain(
+      "GET /repos/{owner}/{repo}/rulesets/{ruleset_id}"
+    );
+  });
+
+  it("is a zero-write no-op when the active ruleset already satisfies the policy", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": policyContentsHandler(
+        TEST_NODE_REPO_POLICY_JSON
+      ),
+      "GET /repos/{owner}/{repo}/rulesets": () => [
+        { id: 41, name: NODE_MAIN_POLICY_RULESET_NAME },
+      ],
+      "GET /repos/{owner}/{repo}/rulesets/{ruleset_id}": () => ({
+        id: 41,
+        source_type: "Repository",
+        ...nodeMainPolicyRulesetPayload(TEST_NODE_REPO_POLICY),
+      }),
+    };
+
+    await expect(
+      makeWriter().reconcileNodeMainProtection({
+        owner: OWNER,
+        repo: REPO,
+        slug: REPO,
+        isInRepoNode: false,
+      })
+    ).resolves.toMatchObject({ status: "compliant", mismatches: [] });
+
+    const routes = requests.map((request) => request.route);
+    expect(routes).not.toContain("POST /repos/{owner}/{repo}/rulesets");
+    expect(routes).not.toContain(
+      "PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}"
+    );
+  });
+
+  it("repairs a drifted same-named ruleset with a PUT and reports the mismatches", async () => {
+    storedRulesets.clear();
+    const drifted = nodeMainPolicyRulesetPayload(TEST_NODE_REPO_POLICY);
+    const driftedChecks = drifted.rules.find(
+      (rule) => rule.type === "required_status_checks"
+    );
+    // Drop `manifest` from the required set — the real-world drift shape (bug.5123).
+    if (driftedChecks?.parameters) {
+      driftedChecks.parameters.required_status_checks = [
+        { context: "unit" },
+        { context: "component" },
+        { context: "static" },
+      ];
+    }
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": policyContentsHandler(
+        TEST_NODE_REPO_POLICY_JSON
+      ),
+      "GET /repos/{owner}/{repo}/rulesets": () => [
+        { id: 41, name: NODE_MAIN_POLICY_RULESET_NAME },
+      ],
+      "PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}": (params) =>
+        recordRuleset(params),
+      // Pre-check sees the DRIFTED active ruleset; the post-write readback sees the repair.
+      "GET /repos/{owner}/{repo}/rulesets/{ruleset_id}": (params) =>
+        storedRulesets.has(41)
+          ? readStoredRuleset(params)
+          : { id: 41, source_type: "Repository", ...drifted },
+    };
+
+    await expect(
+      makeWriter().reconcileNodeMainProtection({
+        owner: OWNER,
+        repo: REPO,
+        slug: REPO,
+        isInRepoNode: false,
+      })
+    ).resolves.toMatchObject({
+      status: "applied",
+      mismatches: ["required contexts missing: manifest"],
+    });
+
+    expect(requests.map((request) => request.route)).toContain(
+      "PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}"
+    );
+  });
+
+  it("falls back to canonical node-template@main when the node repo lacks the policy file", async () => {
+    // poly/toks4 reality: forks minted before task.5028 shipped `.cogni/repo-policy.json`.
+    storedRulesets.clear();
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": policyContentsHandler(null),
+      "GET /repos/{owner}/{repo}/rulesets": () => [],
+      "POST /repos/{owner}/{repo}/rulesets": (params) =>
+        recordRuleset(params, 88),
+      "GET /repos/{owner}/{repo}/rulesets/{ruleset_id}": (params) =>
+        readStoredRuleset(params),
+    };
+
+    await expect(
+      makeWriter().reconcileNodeMainProtection({
+        owner: OWNER,
+        repo: REPO,
+        slug: REPO,
+        isInRepoNode: false,
+      })
+    ).resolves.toMatchObject({ status: "applied", policySource: "template" });
+  });
+
+  it("surfaces App-lacks-admin as a typed protection_unavailable, never a generic 500", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": policyContentsHandler(
+        TEST_NODE_REPO_POLICY_JSON
+      ),
+      "GET /repos/{owner}/{repo}/rulesets": () => [],
+      "POST /repos/{owner}/{repo}/rulesets": () =>
+        Promise.reject(
+          statusError(403, "Resource not accessible by integration")
+        ),
+    };
+
+    await expect(
+      makeWriter().reconcileNodeMainProtection({
+        owner: OWNER,
+        repo: REPO,
+        slug: REPO,
+        isInRepoNode: false,
+      })
+    ).rejects.toMatchObject({ code: "protection_unavailable", status: 502 });
+  });
+
+  it("rejects an in-repo node with a typed 422 before any Octokit call", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": () => {
+        throw new Error("must not touch GitHub for an in-repo node");
+      },
+    };
+
+    await expect(
+      makeWriter().reconcileNodeMainProtection({
+        owner: "cogni-dao",
+        repo: "cogni-template",
+        slug: "operator",
+        isInRepoNode: true,
+      })
+    ).rejects.toMatchObject({ code: "in_repo_node_unsupported", status: 422 });
+
+    expect(requests).toEqual([]);
+  });
+
+  it("fails closed with node_repo_policy_missing when neither the repo nor the template carries a policy", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": () =>
+        Promise.reject(statusError(404, "Not Found")),
+    };
+
+    await expect(
+      makeWriter().reconcileNodeMainProtection({
+        owner: OWNER,
+        repo: REPO,
+        slug: REPO,
+        isInRepoNode: false,
+      })
+    ).rejects.toMatchObject({ code: "node_repo_policy_missing", status: 409 });
   });
 });

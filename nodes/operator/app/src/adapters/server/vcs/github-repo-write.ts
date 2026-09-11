@@ -27,7 +27,14 @@
  * @internal
  */
 
-import { extractNodeId, parseRepoSpec } from "@cogni/repo-spec";
+import {
+  extractNodeId,
+  hasDeclaredNodeDeployment,
+  hasDeploymentActivationSpec,
+  parseRepoSpec,
+  type RepoSpec,
+  renderDeploymentActivationSpec,
+} from "@cogni/repo-spec";
 import { createAppAuth } from "@octokit/auth-app";
 import { Octokit } from "@octokit/core";
 import { parse as parseYaml } from "yaml";
@@ -52,6 +59,7 @@ import type {
 import { resolveCanonicalPathClosure } from "@/shared/node-app-scaffold/canonical-path-closure";
 import {
   buildEnvDeltaPlan,
+  buildPlacementPlan,
   type EnvPlanCurrent,
   EnvPlanError,
   type EnvPlanOp,
@@ -65,6 +73,7 @@ import {
   NODE_FORMATION_ENVS,
   type NodeFormationEnv,
   nextFreeNodePort,
+  type PlacementProvider,
   renderCatalog,
   renderDistributionActivationSpec,
   renderNodeAppset,
@@ -74,6 +83,7 @@ import {
   renderOverlayFile,
   renderPaymentsActivationSpec,
   renderRepoSpec,
+  schedulerEndpointPatchPath,
 } from "@/shared/node-app-scaffold/gens";
 import type { NodeKnowledgeRemote } from "@/shared/node-app-scaffold/knowledge-remote";
 import {
@@ -138,6 +148,30 @@ export type OpenNodeEnvPrResult =
   | {
       readonly status: "pr_opened";
       readonly action: "add" | "remove";
+      readonly prNumber: number;
+      readonly prUrl: string;
+    }
+  | { readonly status: "no_changes" };
+
+/** Input to {@link GitHubRepoWriter.openNodePlacementPr}: place ONE env's workload on k3s or akash. */
+export interface OpenNodePlacementPrInput {
+  /** Owner of the OPERATOR monorepo (the catalog lives here, exactly like `openNodeEnvPr`). */
+  readonly owner: string;
+  /** The OPERATOR monorepo name. */
+  readonly repo: string;
+  /** Node slug whose `infra/catalog/<slug>.yaml` `deployment_provider` map is edited. */
+  readonly slug: string;
+  /** The env whose placement is set. Must already be in the node's deploy reach. */
+  readonly env: NodeFormationEnv;
+  /** Target placement lane: `akash` = ComputeWorkload CR lane; `k3s` = the overlay/AppSet default. */
+  readonly placement: PlacementProvider;
+}
+
+/** Result of {@link GitHubRepoWriter.openNodePlacementPr}: a PR (opened or reused), or idempotent no-op. */
+export type OpenNodePlacementPrResult =
+  | {
+      readonly status: "pr_opened";
+      readonly action: "place_akash" | "place_k3s";
       readonly prNumber: number;
       readonly prUrl: string;
     }
@@ -214,6 +248,22 @@ export interface OpenNodeSubmodulePrInput extends OpenNodeAppPrInput {
   readonly nodeRepoUrl: string;
   /** Default-branch HEAD commit SHA of the minted node repo → catalog `source_sha` pin. */
   readonly nodeRepoHeadSha: string;
+}
+
+/**
+ * Outcome of `reconcileNodeMainProtection` (bug.5123): whether the canonical main-policy
+ * ruleset was already in force (`compliant`, zero writes) or was created/repaired
+ * (`applied`), which policy revision drove it, and — when a write happened — the exact
+ * mismatches that justified it (loud by construction, never a silent mutation).
+ */
+export interface ReconcileNodeProtectionResult {
+  readonly status: "compliant" | "applied";
+  /** Where the policy was read: the node repo's own main, or canonical node-template@main fallback. */
+  readonly policySource: "node_repo" | "template";
+  readonly rulesetName: string;
+  readonly requiredContexts: readonly string[];
+  /** Why a write happened (`applied`), or `[]` (`compliant`). */
+  readonly mismatches: readonly string[];
 }
 
 export interface PackageImageTagExistsInput {
@@ -2112,6 +2162,207 @@ export class GitHubRepoWriter implements DeployPlanePort {
     };
   }
 
+  /**
+   * Placement lever on the env verb (story.5016 T5): place ONE env's workload on `k3s` or `akash`
+   * by editing ONLY the OPERATOR monorepo catalog's `deployment_provider` map + the scheduler-
+   * worker routing patch for that env ({@link buildPlacementPlan}):
+   *
+   * - `akash`: upsert `deployment_provider.<env>: akash`.
+   * - `k3s`: drop the map entry (k3s is the schema default).
+   *
+   * NO_DELETE_ON_PLACEMENT: the overlay, external-secret, AppSet, and appsets kustomization are
+   * NEVER touched here — Argo delivers BOTH the k3s Deployment and the akash ComputeWorkload CR
+   * through the SAME per-node Application; the overlay's content differs per placement, but that
+   * swap happens in the materializer on the deploy branch at the next flight/promote, not in this
+   * PR (an earlier revision of this verb wrongly deleted those files, orphaning the very
+   * Application Argo needs to deliver the CR — see `buildPlacementPlan`'s doc comment).
+   *
+   * PLACEMENT_DECIDES_THE_ADDRESS (bug.5094) IS a real file consequence though: the
+   * scheduler-worker's routed URL for `slug` in `env` moves with the flip, so the generated
+   * `node-endpoints.patch.yaml` for `env` is upserted alongside the catalog line.
+   *
+   * `envs:` membership is untouched — placement requires the env to already be in reach.
+   * Idempotent: the already-holding state (catalog already says `placement`, routing already
+   * resolved) opens no PR.
+   */
+  async openNodePlacementPr(
+    input: OpenNodePlacementPrInput
+  ): Promise<OpenNodePlacementPrResult> {
+    const { owner, repo, slug, env, placement } = input;
+    const octokit = await this.getOctokit(owner, repo);
+    const { baseCommitSha, baseTreeSha } = await this.resolveMainBase(
+      octokit,
+      owner,
+      repo
+    );
+
+    const catalog = await this.fetchFileText({
+      owner,
+      repo,
+      path: `infra/catalog/${slug}.yaml`,
+      ref: "main",
+    });
+    if (catalog === null) {
+      throw deployPlaneError(
+        "node_not_in_catalog",
+        `infra/catalog/${slug}.yaml not found on main; '${slug}' is not a registered node.`,
+        404
+      );
+    }
+
+    // AKASH_REQUIRES_DEPLOYMENT_BLOCK: pre-check the node's OWN repo-spec before opening the PR —
+    // a flip to the external ComputeWorkload lane with no declared `deployment:` block has no
+    // artifact plane to serve env into the workload (the legacy fallback declares no secret_refs).
+    if (placement === "akash") {
+      await this.assertAkashDeploymentBlock(catalog, slug);
+    }
+
+    // PLACEMENT_DECIDES_THE_ADDRESS (bug.5094) — the ONE control-plane file this verb reads besides
+    // the catalog: the env's generated scheduler-worker routing patch, so buildPlacementPlan can
+    // move the routed URL with the flip. NO_DELETE_ON_PLACEMENT means nothing else is needed —
+    // overlay/appset/kustomization are untouched, so those EnvPlanCurrent fields stay empty.
+    const current: EnvPlanCurrent = {
+      catalog,
+      templateOverlayByEnv: {},
+      appsetsKustomizationByEnv: {},
+      schedulerEndpointPatchByEnv: {
+        [env]: await this.readFileOnMain(
+          octokit,
+          owner,
+          repo,
+          schedulerEndpointPatchPath(env)
+        ),
+      },
+    };
+
+    let plan: ReturnType<typeof buildPlacementPlan>;
+    try {
+      plan = buildPlacementPlan({
+        slug,
+        env,
+        placement,
+        current,
+      });
+    } catch (err) {
+      if (err instanceof EnvPlanError) {
+        throw deployPlaneError(err.code, err.message, err.status);
+      }
+      throw err;
+    }
+
+    if (plan.kind === "no_changes") {
+      return { status: "no_changes" };
+    }
+
+    const entries = await this.planOpsToTreeEntries(
+      octokit,
+      owner,
+      repo,
+      plan.ops
+    );
+
+    const message = `feat(node): place ${slug} ${env} on ${placement}`;
+    const branch = `cogni-operator/node-placement-${slug}-${env}`;
+    const title = message;
+    const body = this.placementPrBody(plan.kind, slug, env);
+
+    const result = await this.commitTreeAndOpenPr(octokit, owner, repo, slug, {
+      baseCommitSha,
+      baseTreeSha,
+      entries,
+      message,
+      branch,
+      pr: { title, body },
+    });
+    await this.updatePrBody(octokit, owner, repo, result.prNumber, title, body);
+    return {
+      status: "pr_opened",
+      action: plan.kind,
+      prNumber: result.prNumber,
+      prUrl: result.prUrl,
+    };
+  }
+
+  /**
+   * AKASH_REQUIRES_DEPLOYMENT_BLOCK: the node's OWN repo-spec (not the operator monorepo catalog)
+   * must have authored a `deployment:` block before its env can flip onto the external
+   * ComputeWorkload lane. The legacy fallback declares no `secret_refs`, which is correct for the
+   * k3s lane (env arrives via the ExternalSecret overlay) and fatal off it (env arrives ONLY through
+   * declared refs) — see `hasDeclaredNodeDeployment`. Fails closed: missing/unfetchable/unparseable
+   * repo-spec is `repo_spec_missing`; a fetched-and-parsed spec with no `deployment:` block is
+   * `akash_requires_deployment_block`, pointing the caller at the verb that mints one (PR #2150).
+   * A catalog row with no `source_repo` is left to `buildPlacementPlan`'s own
+   * `akash_requires_source_repo` guard — this check only fires once an external build plane exists.
+   */
+  private async assertAkashDeploymentBlock(
+    catalog: string,
+    slug: string
+  ): Promise<void> {
+    const discriminator = PromoteDiscriminatorSchema.safeParse(
+      parseYaml(catalog)
+    );
+    const sourceRepoUrl = discriminator.success
+      ? discriminator.data.source_repo
+      : undefined;
+    if (sourceRepoUrl === undefined) return;
+
+    const sourceRepo = parseGithubRepoUrl(sourceRepoUrl);
+    const repoSpecText = await this.fetchFileText({
+      owner: sourceRepo.owner,
+      repo: sourceRepo.repo,
+      path: ".cogni/repo-spec.yaml",
+      ref: "main",
+    });
+    if (repoSpecText === null) {
+      throw deployPlaneError(
+        "repo_spec_missing",
+        `cannot place '${slug}' on akash: node repo-spec not found at ${sourceRepoUrl}:.cogni/repo-spec.yaml on main.`,
+        422
+      );
+    }
+
+    let nodeSpec: RepoSpec;
+    try {
+      nodeSpec = parseRepoSpec(repoSpecText);
+    } catch {
+      throw deployPlaneError(
+        "repo_spec_missing",
+        `cannot place '${slug}' on akash: node repo-spec at ${sourceRepoUrl} could not be parsed.`,
+        422
+      );
+    }
+
+    if (!hasDeclaredNodeDeployment(nodeSpec)) {
+      throw deployPlaneError(
+        "akash_requires_deployment_block",
+        `cannot place '${slug}' on akash: the node repo-spec has no declared \`deployment:\` block. ` +
+          `Mint one via POST /api/v1/nodes/${slug}/deployment-block, then retry.`,
+        422
+      );
+    }
+  }
+
+  /** PR body for the placement lever (story.5016 T5). */
+  private placementPrBody(
+    kind: "place_akash" | "place_k3s",
+    slug: string,
+    env: NodeFormationEnv
+  ): string {
+    const lane =
+      kind === "place_akash"
+        ? "the external ComputeWorkload (akash) lane"
+        : "the k3s lane — its `deployment_provider` entry is dropped (k3s is the default)";
+    return (
+      `Places \`${slug}\`'s \`${env}\` workload on ${lane}, by editing ` +
+      `\`infra/catalog/${slug}.yaml\`'s \`deployment_provider:\` map and moving the ` +
+      `scheduler-worker's routed URL for this env (bug.5094). Deploy reach (\`envs:\`) is unchanged, ` +
+      "and so is the overlay/external-secret/AppSet — Argo delivers both the k3s Deployment and the " +
+      "akash ComputeWorkload CR through the SAME per-node Application; the overlay's CONTENT is " +
+      "swapped by the materializer on the deploy branch at the next flight/promote, not by this PR.\n\n" +
+      "_Authored automatically by cogni-operator (node placement verb, story.5016 T5)._"
+    );
+  }
+
   /** Fetch the current control-plane files the env-delta planner reads. Only fetches what the op needs. */
   private async collectEnvPlanCurrent(
     octokit: Octokit,
@@ -2383,6 +2634,294 @@ export class GitHubRepoWriter implements DeployPlanePort {
     });
     await this.updatePrBody(octokit, owner, repo, result.prNumber, title, body);
     return { status: "pr_opened", ...result };
+  }
+
+  /**
+   * Deployment-declaration write-back into the NODE'S OWN repo (story.5016 T6): read the node
+   * repo's `.cogni/repo-spec.yaml` on `main` and, when the node predates the `deployment:`
+   * contract, append the stock `cogni-node-app-v1` declaration (`renderNodeDeploymentYaml`) via a
+   * one-file PR. External-compute placement (`assertDeclaredNodeDeployment`) refuses a node that
+   * still rides the legacy secret-free default, so existing nodes get this block minted by the
+   * operator — zero hand-edited YAML. The {owner, repo} here is the node's OWN repo identity,
+   * resolved by the route via `resolveNodeRepo` (catalog `source_repo`).
+   *
+   * SINGLE_HOME: writes ONLY `.cogni/repo-spec.yaml` at the repo root. Idempotent: a spec that
+   * already declares ANY `deployment:` block (a node's own hand-authored declaration included)
+   * splices to itself — returns `no_changes`, never overwrites.
+   *
+   * REMOTE_SOURCE_ONLY: `resolveNodeRepo`'s IN-REPO shortcut collapses an in-repo node (operator,
+   * poly — no catalog `source_repo`) to `{owner: parentOwner, repo: parentRepo}`, i.e. the PARENT
+   * monorepo. A root `.cogni/repo-spec.yaml` splice there would be wrong for those nodes — their
+   * runtime spec lives at `nodes/<slug>/.cogni/repo-spec.yaml` (see `prepareNodeRefCandidateFlight`'s
+   * IN-REPO branch above, which reads that path). This verb only supports REMOTE-SOURCE (forked)
+   * node repos; callers must pass `isInRepoNode` so we can fail closed before touching Octokit. If
+   * in-repo support is ever wired here, follow the `prepareNodeRefCandidateFlight` pattern (path =
+   * `nodes/${slug}/.cogni/repo-spec.yaml`, read via the parent repo) instead of the root path.
+   */
+  async openNodeDeploymentBlockPr(input: {
+    owner: string;
+    repo: string;
+    slug: string;
+    /**
+     * `true` when the resolved `{owner, repo}` is the IN-REPO shortcut (catalog row has no
+     * `source_repo` — operator/poly), i.e. `resolveNodeRepo` returned the PARENT monorepo rather
+     * than the node's own repo. Callers derive this the same way `resolveNodeRepo` does internally
+     * (catalog `source_repo` PRESENCE) — see the route for the concrete check.
+     */
+    isInRepoNode: boolean;
+  }): Promise<
+    | { status: "pr_opened"; prNumber: number; prUrl: string }
+    | { status: "no_changes" }
+  > {
+    const { owner, repo, slug, isInRepoNode } = input;
+    if (isInRepoNode) {
+      throw deployPlaneError(
+        "in_repo_node_unsupported",
+        `node '${slug}' is an in-repo node (no catalog source_repo); ` +
+          "openNodeDeploymentBlockPr only supports remote-source (forked) node repos — " +
+          "an in-repo node's runtime spec lives at nodes/<slug>/.cogni/repo-spec.yaml in the " +
+          "parent monorepo, not a root .cogni/repo-spec.yaml in its own repo",
+        422
+      );
+    }
+    const octokit = await this.getOctokit(owner, repo);
+    const branch = `cogni-operator/declare-deployment-${slug}`;
+    const title = `feat(deploy): declare ${slug} node deployment`;
+    const body =
+      `Declares \`${slug}\`'s \`deployment:\` block in \`.cogni/repo-spec.yaml\` — the stock ` +
+      "`cogni-node-app-v1` service (one public Next.js app) with the runtime profile's full " +
+      "secret contract (`secret_refs`).\n\n" +
+      "Existing nodes predate the deployment contract and ride the legacy secret-free default, " +
+      "which external-compute placement refuses (`assertDeclaredNodeDeployment`). Merging this " +
+      "makes the node placeable without changing its current k3s behavior.\n\n" +
+      "_Authored automatically by cogni-operator (node deployment-block verb, story.5016 T6)._";
+
+    const currentSpec = await this.fetchFileText({
+      owner,
+      repo,
+      path: ".cogni/repo-spec.yaml",
+      ref: "main",
+    });
+    if (currentSpec === null) {
+      throw deployPlaneError(
+        "repo_spec_missing",
+        `node repo-spec not found at ${owner}/${repo}:.cogni/repo-spec.yaml`,
+        422
+      );
+    }
+
+    // renderDeploymentActivationSpec already checks hasDeploymentActivationSpec internally and
+    // returns `currentSpec` unchanged when a `deployment:` block exists, so `nextSpec ===
+    // currentSpec` alone covers that case — no separate hasDeploymentActivationSpec check needed.
+    const nextSpec = renderDeploymentActivationSpec(currentSpec);
+    if (nextSpec === currentSpec) {
+      return { status: "no_changes" };
+    }
+
+    const existingPr = await this.findOpenPrForBranch(octokit, owner, repo, {
+      branch,
+      title,
+    });
+    if (existingPr) {
+      const pendingSpec = await this.fetchFileText({
+        owner,
+        repo,
+        path: ".cogni/repo-spec.yaml",
+        ref: branch,
+      });
+      if (
+        pendingSpec === nextSpec ||
+        (pendingSpec !== null && hasDeploymentActivationSpec(pendingSpec))
+      ) {
+        await this.updatePrBody(
+          octokit,
+          owner,
+          repo,
+          existingPr.prNumber,
+          title,
+          body
+        );
+        return { status: "pr_opened", ...existingPr };
+      }
+    }
+
+    const { baseCommitSha, baseTreeSha } = await this.resolveMainBase(
+      octokit,
+      owner,
+      repo
+    );
+    const blobSha = await this.createBlob(octokit, owner, repo, nextSpec);
+
+    const result = await this.commitTreeAndOpenPr(octokit, owner, repo, slug, {
+      baseCommitSha,
+      baseTreeSha,
+      entries: [
+        {
+          path: ".cogni/repo-spec.yaml",
+          mode: "100644",
+          type: "blob",
+          sha: blobSha,
+        },
+      ],
+      message: `feat(deploy): declare ${slug} node deployment`,
+      branch,
+      pr: { title, body },
+    });
+    await this.updatePrBody(octokit, owner, repo, result.prNumber, title, body);
+    return { status: "pr_opened", ...result };
+  }
+
+  /**
+   * Reconcile the birth-path `main` protection ruleset onto an EXISTING node repo (bug.5123).
+   * Nodes minted before the #1797/task.5028 backstop (or whose ruleset drifted) carry no
+   * required-status-check protection, so the operator merge gate fail-closes every PR on them
+   * (`not_green` on an empty required-context set). This verb re-applies the SAME canonical
+   * policy `forkFromTemplate` applies at birth, through the SAME `ensureNodeMainPolicyRuleset`
+   * write+readback path — one protection SSOT, no second config.
+   *
+   * POLICY_IS_BOUND_TO_THE_INHERITED_TREE, reconcile flavor: the policy is read from the node
+   * repo's OWN `main` (`.cogni/repo-policy.json`) — the revision whose workflows must emit the
+   * required contexts. Nodes minted before the policy file existed (poly/toks4) fall back to
+   * canonical `<owner>/node-template@main` (TEMPLATE_POLICY_IS_SSOT — the identical pre-flight
+   * source birth uses), which fork-sync keeps their workflows aligned with.
+   *
+   * Idempotent + read-mostly: a repo whose ACTIVE ruleset already satisfies the policy
+   * (`diffRulesetAgainstPolicy` = ∅) returns `compliant` with ZERO writes. Only a missing or
+   * drifted ruleset triggers the create/repair write, and the result carries the mismatches
+   * that justified it — callers log them; this is never a silent mutation.
+   *
+   * PROTECTION_UNAVAILABLE_IS_DISTINCT: a GitHub 403 on any ruleset call means the operator App
+   * lacks `administration:write` on this repo — surfaced as a typed 502 `protection_unavailable`,
+   * never a generic 500, and never by weakening the (independent, fail-closed) merge gate.
+   *
+   * REMOTE_SOURCE_ONLY: like {@link openNodeDeploymentBlockPr}, the monorepo is not a target —
+   * an in-repo node's `{owner, repo}` collapses to the PARENT monorepo, whose protection is
+   * admin-owned, not this node policy. Fail closed before touching Octokit.
+   */
+  async reconcileNodeMainProtection(input: {
+    owner: string;
+    repo: string;
+    slug: string;
+    /** `true` when `resolveNodeRepo` collapsed this node to the parent monorepo (no catalog `source_repo`). */
+    isInRepoNode: boolean;
+  }): Promise<ReconcileNodeProtectionResult> {
+    const { owner, repo, slug, isInRepoNode } = input;
+    if (isInRepoNode) {
+      throw deployPlaneError(
+        "in_repo_node_unsupported",
+        `node '${slug}' is an in-repo node (no catalog source_repo); ` +
+          "reconcileNodeMainProtection only supports remote-source (forked) node repos — " +
+          "the parent monorepo's branch protection is admin-owned, not the node policy ruleset",
+        422
+      );
+    }
+
+    // Policy read: the node's own main first, canonical template as birth-parity fallback.
+    let policySource: "node_repo" | "template" = "node_repo";
+    let policyText = await this.fetchFileText({
+      owner,
+      repo,
+      path: NODE_REPO_POLICY_PATH,
+      ref: "main",
+    });
+    if (policyText === null) {
+      policySource = "template";
+      policyText = await this.fetchFileText({
+        owner,
+        repo: TEMPLATE_SLUG,
+        path: NODE_REPO_POLICY_PATH,
+        ref: "main",
+      });
+    }
+    if (policyText === null) {
+      throw deployPlaneError(
+        "node_repo_policy_missing",
+        `${owner}/${repo}@main and ${owner}/${TEMPLATE_SLUG}@main are both missing ${NODE_REPO_POLICY_PATH}`,
+        409
+      );
+    }
+    let policy: NodeRepoPolicy;
+    try {
+      policy = parseNodeRepoPolicy(policyText);
+    } catch (error) {
+      throw deployPlaneError(
+        "node_repo_policy_invalid",
+        `${policySource === "node_repo" ? `${owner}/${repo}` : `${owner}/${TEMPLATE_SLUG}`}@main has an invalid ${NODE_REPO_POLICY_PATH}: ${String(error)}`,
+        409
+      );
+    }
+
+    const octokit = await this.getOctokit(owner, repo);
+    const payload = nodeMainPolicyRulesetPayload(policy);
+    try {
+      // Pre-check so a compliant repo is a zero-write no-op (and so the write path can
+      // report WHY it wrote — the mismatches, or the ruleset's outright absence).
+      const { data: rulesets } = await octokit.request(
+        "GET /repos/{owner}/{repo}/rulesets",
+        { owner, repo }
+      );
+      const existing = (
+        rulesets as ReadonlyArray<{ id: number; name: string }>
+      ).find((ruleset) => ruleset.name === policy.ruleset.name);
+      let mismatches: readonly string[];
+      if (existing) {
+        const { data: active } = await octokit.request(
+          "GET /repos/{owner}/{repo}/rulesets/{ruleset_id}",
+          { owner, repo, ruleset_id: existing.id }
+        );
+        mismatches = diffRulesetAgainstPolicy(
+          active as RulesetResponse,
+          payload
+        );
+        if (mismatches.length === 0) {
+          this.log.info(
+            { owner, repo, slug, ruleset: policy.ruleset.name, policySource },
+            "node main protection already compliant; no write"
+          );
+          return {
+            status: "compliant",
+            policySource,
+            rulesetName: policy.ruleset.name,
+            requiredContexts: policy.ruleset.requiredStatusChecks.contexts,
+            mismatches: [],
+          };
+        }
+      } else {
+        mismatches = [`ruleset "${policy.ruleset.name}" absent`];
+      }
+
+      // Same create/repair + readback-proof path birth uses (PROTECTION_HAS_ONE_SSOT).
+      await this.ensureNodeMainPolicyRuleset(octokit, owner, repo, policy);
+      this.log.info(
+        {
+          owner,
+          repo,
+          slug,
+          ruleset: policy.ruleset.name,
+          policySource,
+          mismatches,
+        },
+        "node main protection reconciled onto existing repo"
+      );
+      return {
+        status: "applied",
+        policySource,
+        rulesetName: policy.ruleset.name,
+        requiredContexts: policy.ruleset.requiredStatusChecks.contexts,
+        mismatches,
+      };
+    } catch (error) {
+      const status = (error as { status?: number })?.status;
+      if (status === 403) {
+        throw deployPlaneError(
+          "protection_unavailable",
+          `operator GitHub App cannot administer rulesets on ${owner}/${repo} (HTTP 403); ` +
+            "repository `administration: write` permission is required to apply branch protection",
+          502
+        );
+      }
+      throw error;
+    }
   }
 
   /**

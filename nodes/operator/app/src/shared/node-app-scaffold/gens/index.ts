@@ -30,14 +30,20 @@ export {
   dropCatalogEnv,
   type EnvRemovalViolation,
   envRemovalViolation,
+  hasCatalogSourceRepo,
+  PLACEMENT_PROVIDERS,
+  type PlacementProvider,
   parseCatalogActivityEnv,
   parseCatalogEnvs,
+  parseCatalogPlacement,
   setCatalogEnvs,
+  setCatalogPlacement,
 } from "./env-membership";
 export {
   appsetPath,
   appsetsKustomizationPath,
   buildEnvDeltaPlan,
+  buildPlacementPlan,
   CATALOG_PATH,
   type EnvDeltaResult,
   type EnvPlanCurrent,
@@ -45,6 +51,8 @@ export {
   type EnvPlanOp,
   externalSecretPath,
   overlayPath,
+  type PlacementDeltaResult,
+  schedulerEndpointPatchPath,
 } from "./env-membership-plan";
 export {
   NODE_DEPLOY_ENVS,
@@ -67,4 +75,7 @@ export {
   renderPaymentsActivationSpec,
 } from "./payments-activation";
 export { type RenderRepoSpecInput, renderRepoSpec } from "./repo-spec";
-export { insertSchedulerEndpoint } from "./scheduler-endpoints";
+export {
+  insertSchedulerEndpoint,
+  updateSchedulerEndpointHost,
+} from "./scheduler-endpoints";

@@ -14,6 +14,8 @@ import {
   type ComputeWorkloadAttemptReceipt,
   type ComputeWorkloadDnsPort,
   type ComputeWorkloadLifecyclePort,
+  type ComputeWorkloadMigrationPhase,
+  type ComputeWorkloadMigrationPort,
   type ComputeWorkloadSecretResolverPort,
   type ComputeWorkloadStatePort,
   type ComputeWorkloadStatus,
@@ -33,6 +35,7 @@ export interface ComputeWorkloadReconcileDeps {
   readonly state: ComputeWorkloadStatePort;
   readonly dns: ComputeWorkloadDnsPort;
   readonly secretResolver: ComputeWorkloadSecretResolverPort;
+  readonly migration: ComputeWorkloadMigrationPort;
   readonly environment: string;
   readonly deploymentDomain: string;
   readonly leaderEpoch: string;
@@ -61,6 +64,26 @@ export interface ComputeWorkloadReconcileDeps {
     leaseId: string;
     operation: "create" | "update" | "recover";
     outcomeCode: ComputeLifecycleFailureReason;
+  }) => void;
+  readonly recordMigrationFailure: (input: {
+    nodeId: string;
+    environment: string;
+    sourceSha: string;
+    leaseId: string;
+    outcomeCode: "MigrationFailed" | "MigrationSpecInvalid";
+  }) => void;
+  /**
+   * A migration probe that threw (API blip, RBAC not yet synced) is HELD, not
+   * failed — and held passes write no status. This warn-level record is the only
+   * signal, so a persistently held fleet is visible instead of silently
+   * Progressing forever.
+   */
+  readonly recordMigrationHold: (input: {
+    nodeId: string;
+    environment: string;
+    nodeSlug: string;
+    bundleDigest: string;
+    causeMessage: string;
   }) => void;
 }
 
@@ -101,6 +124,11 @@ const SAFE_MESSAGES: Readonly<Record<string, string>> = {
   OwnershipMismatch: "resource ownership does not match this controller",
   PublicHostOwnershipMismatch:
     "public host does not match the operator-owned node hostname",
+  MigrationInProgress:
+    "node database migration for the desired bundle is still running",
+  MigrationFailed: "node database migration for the desired bundle failed",
+  MigrationSpecInvalid:
+    "desired bundle does not declare a resolvable digest and app artifact for migration",
   RetryLimitExceeded: "known-outcome retry limit was exceeded",
   RecoveryLimitExceeded:
     "generation recovery limit was reached; further allocation is blocked",
@@ -222,6 +250,185 @@ function legacyCogniAppEnv(input: {
       LITELLM_MASTER_KEY: virtualKey,
     },
   });
+}
+
+/**
+ * Migration command policy implied by the `cogni-node-app-v1` runtime profile
+ * (bug.5116). Fork images bundle the migrator at `/app/app/...` — the same
+ * contract the k3s lane's `migrate` initContainer exercises. Policy lives here
+ * with `legacyCogniAppEnv`; the Kubernetes Job adapter renders phases blindly.
+ */
+function cogniNodeAppMigrationPhases(input: {
+  doltgres: boolean;
+}): readonly ComputeWorkloadMigrationPhase[] {
+  return [
+    {
+      name: "migrate",
+      command: [
+        "/bin/sh",
+        "-c",
+        "exec node /app/app/migrate.mjs /app/app/migrations",
+      ],
+      databaseUrlSecretKey: "DATABASE_URL",
+    },
+    ...(input.doltgres
+      ? [
+          {
+            name: "migrate-doltgres",
+            command: [
+              "/bin/sh",
+              "-c",
+              "exec node /app/app/migrate-doltgres.mjs /app/app/doltgres-migrations",
+            ],
+            databaseUrlSecretKey: "DOLTGRES_URL",
+          },
+        ]
+      : []),
+  ];
+}
+
+function bundleDigest(ref: string): string | undefined {
+  return /@(sha256:[0-9a-f]{64})$/.exec(ref)?.[1];
+}
+
+/**
+ * Level-triggered migration gate (bug.5116). Every reconcile of a
+ * `cogni-node-app-v1` workload re-proves that the desired bundle digest's DB
+ * migrations completed before any provider mutation or recovery is attempted.
+ * An already-migrated digest passes instantly, so steady-state and recover
+ * replays cost one Job read. `failed` is terminal for the generation and never
+ * mutates the lease: the old lease keeps serving the old sha.
+ */
+async function migrationGate(
+  deps: ComputeWorkloadReconcileDeps,
+  resource: ComputeWorkload
+): Promise<"passed" | "blocked"> {
+  const appService = resource.spec.workload.services.find(
+    (service) => service.runtimeProfile === "cogni-node-app-v1"
+  );
+  if (!appService) return "passed";
+  const image = resource.spec.bundle.artifacts.find(
+    (artifact) => artifact.name === appService.artifact
+  )?.image;
+  const digest = bundleDigest(resource.spec.bundle.ref);
+  let outcome: "succeeded" | "running" | "failed";
+  let failureReason: "MigrationFailed" | "MigrationSpecInvalid" =
+    "MigrationFailed";
+  if (!image || !digest) {
+    // A bundle that cannot name its digest or app image cannot prove migration
+    // currency; the distinct reason points operators at the bundle, not the DB.
+    outcome = "failed";
+    failureReason = "MigrationSpecInvalid";
+  } else {
+    try {
+      outcome = await deps.migration.ensure({
+        nodeSlug: resource.spec.workload.name,
+        environment: resource.spec.environment,
+        bundleDigest: digest,
+        image,
+        secretName: `${resource.spec.workload.name}-compute-env-secrets`,
+        phases: cogniNodeAppMigrationPhases({
+          doltgres: (appService.secretRefs ?? []).some(
+            (ref) => ref.key === "DOLTGRES_URL"
+          ),
+        }),
+      });
+    } catch (error) {
+      if (error instanceof ComputeLifecycleError && error.kind === "terminal") {
+        outcome = "failed";
+      } else {
+        // We could not find out. Write NOTHING: the status merge patch deletes
+        // absent fields, so a Progressing write here would erase a hard-block
+        // failure (BootSourceMismatch / MigrationFailed) and resume the exact
+        // allocation churn blocksSameGenerationRecovery exists to stop. Hold
+        // this level pass; the warn record keeps a persistent hold visible.
+        deps.recordMigrationHold({
+          nodeId: resource.spec.nodeId,
+          environment: resource.spec.environment,
+          nodeSlug: resource.spec.workload.name,
+          bundleDigest: digest,
+          causeMessage:
+            error instanceof Error ? error.message : "unknown cause",
+        });
+        return "blocked";
+      }
+    }
+  }
+  if (outcome === "succeeded") return "passed";
+  const now = deps.now().toISOString();
+  const currentCondition = resource.status?.conditions?.[0];
+  const preserved = {
+    ...(resource.status?.observedGeneration !== undefined
+      ? { observedGeneration: resource.status.observedGeneration }
+      : {}),
+    ...(resource.status?.observedBundle
+      ? { observedBundle: resource.status.observedBundle }
+      : {}),
+    ...(resource.status?.resource
+      ? { resource: resource.status.resource }
+      : {}),
+    ...(resource.status?.attempt ? { attempt: resource.status.attempt } : {}),
+    recoveryCount: resource.status?.recoveryCount ?? 0,
+  };
+  if (outcome === "running") {
+    // Level-triggered no-op: a migration Job runs for minutes against a 15s
+    // reconcile loop; rewriting an identical status every pass only bloats kine.
+    const alreadyHeld =
+      resource.status?.phase === "Progressing" &&
+      currentCondition?.reason === "MigrationInProgress" &&
+      currentCondition.observedGeneration === resource.metadata.generation;
+    if (!alreadyHeld) {
+      await deps.state.patchStatus({
+        resource,
+        status: {
+          ...baseStatus(resource),
+          phase: "Progressing",
+          ...preserved,
+          // Absent fields are deleted by the merge patch; an existing failure
+          // record must survive an in-flight migration observation.
+          ...(resource.status?.failure
+            ? { failure: resource.status.failure }
+            : {}),
+          conditions: [
+            condition(resource, now, "False", "MigrationInProgress"),
+          ],
+        },
+      });
+    }
+    return "blocked";
+  }
+  const alreadyFailed =
+    resource.status?.phase === "Failed" &&
+    resource.status.failure?.reason === failureReason &&
+    currentCondition?.reason === failureReason &&
+    currentCondition.observedGeneration === resource.metadata.generation;
+  if (!alreadyFailed) {
+    await deps.state.patchStatus({
+      resource,
+      status: {
+        ...baseStatus(resource),
+        phase: "Failed",
+        ...preserved,
+        failure: {
+          reason: failureReason,
+          message: safeMessage(failureReason),
+          retryable: false,
+        },
+        conditions: [condition(resource, now, "False", failureReason)],
+      },
+    });
+  }
+  if (resource.status?.failure?.reason !== failureReason) {
+    deps.recordMigrationFailure({
+      nodeId: resource.spec.nodeId,
+      environment: resource.spec.environment,
+      sourceSha: resource.spec.bundle.source.sha,
+      leaseId: resource.status?.resource?.id ?? "unallocated",
+      outcomeCode: failureReason,
+    });
+    await emit(deps, resource, "Warning", failureReason);
+  }
+  return "blocked";
 }
 
 async function toProvisionSpec(
@@ -428,7 +635,9 @@ function blocksSameGenerationRecovery(resource: ComputeWorkload): boolean {
   return (
     resource.status?.desiredGeneration === resource.metadata.generation &&
     (resource.status?.failure?.reason === "BootSourceMismatch" ||
-      resource.status?.failure?.reason === "BootReadinessUnavailable")
+      resource.status?.failure?.reason === "BootReadinessUnavailable" ||
+      resource.status?.failure?.reason === "MigrationFailed" ||
+      resource.status?.failure?.reason === "MigrationSpecInvalid")
   );
 }
 
@@ -437,15 +646,29 @@ function blocksSameGenerationRecovery(resource: ComputeWorkload): boolean {
  * idempotency key carries `metadata.generation`, so re-asserting the same desired state
  * recomputes the *same* key and the replay guard refuses it forever. Only a fresh
  * recovery ordinal can make progress, and only when the receipt proves the provider
- * definitively failed without ever handing back a handle.
+ * definitively failed without ever handing back a handle — or when the attempt is a
+ * claim abandoned by a dead leader epoch (bug.5108): the elector identity carries a
+ * per-process nonce, so every process start mints a distinct epoch and a non-live
+ * claimant can never settle its own outcome — the exhausted key would otherwise
+ * replay RetryLimitExceeded forever. A claim held by the LIVE epoch is never
+ * eligible; a concurrent in-process attempt stays blocked.
  */
-function exhaustedRetryBudgetNeedsRecovery(resource: ComputeWorkload): boolean {
+function exhaustedRetryBudgetNeedsRecovery(
+  resource: ComputeWorkload,
+  liveEpoch: string
+): boolean {
+  const attempt = resource.status?.attempt;
+  if (
+    resource.status?.desiredGeneration !== resource.metadata.generation ||
+    resource.status?.failure?.reason !== "RetryLimitExceeded" ||
+    !attempt ||
+    (attempt.operation !== "create" && attempt.operation !== "recover")
+  ) {
+    return false;
+  }
   return (
-    resource.status?.desiredGeneration === resource.metadata.generation &&
-    resource.status?.failure?.reason === "RetryLimitExceeded" &&
-    resource.status?.attempt?.outcome === "known_failure" &&
-    (resource.status.attempt.operation === "create" ||
-      resource.status.attempt.operation === "recover")
+    attempt.outcome === "known_failure" ||
+    (attempt.outcome === "claimed" && attempt.leaderEpoch !== liveEpoch)
   );
 }
 
@@ -457,28 +680,38 @@ async function recoverBounded(
   if (completed >= MAX_RECOVERY_ATTEMPTS) {
     const now = deps.now().toISOString();
     const current = resource.status?.resource;
-    await deps.state.patchStatus({
-      resource,
-      status: {
-        ...baseStatus(resource),
-        ...observedIdentity(resource),
-        phase: "Failed",
-        observedGeneration: resource.metadata.generation,
-        ...(current ? { resource: current } : {}),
-        ...(resource.status?.attempt
-          ? { attempt: resource.status.attempt }
-          : {}),
-        recoveryCount: completed,
-        failure: {
-          reason: "RecoveryLimitExceeded",
-          message: safeMessage("RecoveryLimitExceeded"),
-          retryable: false,
+    // Level-triggered no-op: a CR terminal for this generation would otherwise
+    // rewrite an identical status every reconcile pass and bloat kine.
+    const currentCondition = resource.status?.conditions?.[0];
+    const alreadyFailed =
+      resource.status?.phase === "Failed" &&
+      resource.status.failure?.reason === "RecoveryLimitExceeded" &&
+      currentCondition?.reason === "RecoveryLimitExceeded" &&
+      currentCondition.observedGeneration === resource.metadata.generation;
+    if (!alreadyFailed) {
+      await deps.state.patchStatus({
+        resource,
+        status: {
+          ...baseStatus(resource),
+          ...observedIdentity(resource),
+          phase: "Failed",
+          observedGeneration: resource.metadata.generation,
+          ...(current ? { resource: current } : {}),
+          ...(resource.status?.attempt
+            ? { attempt: resource.status.attempt }
+            : {}),
+          recoveryCount: completed,
+          failure: {
+            reason: "RecoveryLimitExceeded",
+            message: safeMessage("RecoveryLimitExceeded"),
+            retryable: false,
+          },
+          conditions: [
+            condition(resource, now, "False", "RecoveryLimitExceeded"),
+          ],
         },
-        conditions: [
-          condition(resource, now, "False", "RecoveryLimitExceeded"),
-        ],
-      },
-    });
+      });
+    }
     if (resource.status?.failure?.reason !== "RecoveryLimitExceeded") {
       const fields = {
         nodeId: resource.spec.nodeId,
@@ -1149,7 +1382,10 @@ async function observeAndReport(
   if (observed.state !== "active") return "pending";
   let dnsTarget: string | undefined;
   try {
-    dnsTarget = endpointHostname(observed.endpoints);
+    dnsTarget = endpointHostname(
+      observed.endpoints,
+      resource.spec.workload.publicHost
+    );
     // Persist exact cleanup ownership before the DNS write. A crash can leave a
     // record behind, but never an untracked record the finalizer would ignore.
     await deps.state.patchStatus({
@@ -1256,12 +1492,23 @@ async function observeAndReport(
   return "active";
 }
 
-function endpointHostname(endpoints: readonly string[]): string {
+function endpointHostname(
+  endpoints: readonly string[],
+  publicHost: string
+): string {
+  // Providers can echo the SDL accept host back as a lease endpoint. That is
+  // the workload's own publicHost; using it as the DNS target would create a
+  // self-referential CNAME, so it must never be a candidate (bug.5125).
+  const ownHostname = publicHost.toLowerCase().replace(/\.$/, "");
   for (const endpoint of endpoints) {
     try {
       const value = endpoint.includes("://") ? endpoint : `http://${endpoint}`;
       const hostname = new URL(value).hostname.toLowerCase().replace(/\.$/, "");
-      if (hostname && !/^\d{1,3}(?:\.\d{1,3}){3}$/.test(hostname))
+      if (
+        hostname &&
+        hostname !== ownHostname &&
+        !/^\d{1,3}(?:\.\d{1,3}){3}$/.test(hostname)
+      )
         return hostname;
     } catch {
       // Try the next provider-reported endpoint.
@@ -1301,6 +1548,31 @@ function isReplaySafeKnownFailure(
   );
 }
 
+async function holdWalletBlocked(
+  deps: ComputeWorkloadReconcileDeps,
+  resource: ComputeWorkload,
+  attempt: ComputeWorkloadAttempt
+): Promise<void> {
+  const now = deps.now().toISOString();
+  await deps.state.patchStatus({
+    resource,
+    status: {
+      ...baseStatus(resource),
+      phase: "Progressing",
+      attempt,
+      recoveryCount: resource.status?.recoveryCount ?? 0,
+      failure: {
+        reason: "WalletAllocationBlocked",
+        message: safeMessage("WalletAllocationBlocked"),
+        retryable: true,
+      },
+      conditions: [
+        condition(resource, now, "False", "WalletAllocationBlocked"),
+      ],
+    },
+  });
+}
+
 async function recoverUncertainAllocation(
   deps: ComputeWorkloadReconcileDeps,
   resource: ComputeWorkload,
@@ -1320,25 +1592,7 @@ async function recoverUncertainAllocation(
     workloadUid: resource.metadata.uid,
   });
   if (wallet.state === "blocked") {
-    const attempt = attemptFromReceipt(receipt);
-    const now = deps.now().toISOString();
-    await deps.state.patchStatus({
-      resource,
-      status: {
-        ...baseStatus(resource),
-        phase: "Progressing",
-        attempt,
-        recoveryCount: resource.status?.recoveryCount ?? 0,
-        failure: {
-          reason: "WalletAllocationBlocked",
-          message: safeMessage("WalletAllocationBlocked"),
-          retryable: true,
-        },
-        conditions: [
-          condition(resource, now, "False", "WalletAllocationBlocked"),
-        ],
-      },
-    });
+    await holdWalletBlocked(deps, resource, attemptFromReceipt(receipt));
     return;
   }
   if (
@@ -1426,6 +1680,69 @@ async function recoverUncertainAllocation(
   // Pending/closed adoption is handled from the durable handle on the next level pass.
 }
 
+/**
+ * A claimed receipt abandoned by a dead leader epoch (bug.5108). The elector
+ * identity carries a per-process nonce, so every process start mints a distinct
+ * epoch; a non-live epoch therefore proves the claimant process is gone and can
+ * never settle its own outcome, while blind same-key replay only burns the
+ * mutation budget into a terminal RetryLimitExceeded loop. Fail closed (Axiom
+ * 26): observe the dead attempt's durable trace — its wallet slot — before any
+ * new mutation. A persisted cursor means provider I/O may have happened, so the
+ * only legal move is the existing adopt-or-hold observation path; no cursor
+ * anywhere proves the pre-POST baseline was never written, so the abandoned slot
+ * is settled and the exhausted key escalates through the bounded recovery
+ * ladder. Callers must never route a live-epoch claim here — a concurrent
+ * in-process attempt stays blocked.
+ *
+ * Deliberate tradeoff: every dead-epoch interruption of a claim consumes one
+ * recovery ordinal, so MAX_RECOVERY_ATTEMPTS mid-claim process deaths within a
+ * single generation end in RecoveryLimitExceeded. Bounded-and-visible beats an
+ * unbounded replay loop; a fleet restarting that often has a bigger problem.
+ */
+async function recoverAbandonedClaim(
+  deps: ComputeWorkloadReconcileDeps,
+  resource: ComputeWorkload,
+  receipt: ComputeWorkloadAttemptReceipt
+): Promise<void> {
+  // Settle the dead claim's wallet slot BEFORE the budget gate: the slot is
+  // wallet-wide, so leaving it held at the recovery limit would deadlock every
+  // other workload's create forever (the CR still exists, so the orphan-slot
+  // reclaimer refuses to touch it). The RecoveryLimitExceeded check makes this
+  // a run-once settle — the terminal steady state stays write-free.
+  if (resource.status?.failure?.reason !== "RecoveryLimitExceeded") {
+    const wallet = await deps.state.claimWalletAllocation({
+      attemptKey: receipt.key,
+      workloadUid: resource.metadata.uid,
+    });
+    if (wallet.state === "blocked") {
+      // A different attempt owns the wallet slot; only its owner may settle it.
+      await holdWalletBlocked(deps, resource, attemptFromReceipt(receipt));
+      return;
+    }
+    if (wallet.allocationCursor) {
+      // The dead claimant reached the pre-POST baseline: a provider resource may
+      // exist. Adopt it if the provider confirms one; never re-create.
+      const prepared: ComputeWorkloadAttempt = {
+        ...attemptFromReceipt(receipt),
+        outcome: "prepared",
+        allocationCursor: wallet.allocationCursor,
+      };
+      await patchReceipt(deps, resource, attemptReceipt(prepared));
+      await recoverUncertainAllocation(
+        deps,
+        resource,
+        attemptReceipt(prepared)
+      );
+      return;
+    }
+    // The cursor is persisted (receipt first, then ledger) before any POST, so
+    // no cursor in either place proves provider I/O never started under this
+    // claim.
+    await deps.state.completeWalletAllocation({ attemptKey: receipt.key });
+  }
+  await recoverBounded(deps, resource);
+}
+
 export async function reconcileComputeWorkload(
   deps: ComputeWorkloadReconcileDeps,
   resource: ComputeWorkload
@@ -1504,6 +1821,8 @@ export async function reconcileComputeWorkload(
     return;
   }
 
+  if ((await migrationGate(deps, resource)) === "blocked") return;
+
   if (!current) {
     if (
       receipt &&
@@ -1519,13 +1838,19 @@ export async function reconcileComputeWorkload(
       receipt.outcome === "claimed" &&
       !receipt.allocationCursor
     ) {
+      if (receipt.leaderEpoch !== deps.leaderEpoch) {
+        // The claimant died with the mutation outcome unsettled (bug.5108);
+        // observe-and-adopt instead of blindly replaying its key.
+        await recoverAbandonedClaim(deps, resource, receipt);
+        return;
+      }
       // The cursor is persisted before POST, so this state proves provider I/O did not start.
       await mutate(deps, resource, receipt.operation, receipt.ordinal);
       return;
     }
     if (isReplaySafeKnownFailure(receipt)) {
       // Replaying the exhausted key is a guaranteed no-op; escalate the ordinal instead.
-      if (exhaustedRetryBudgetNeedsRecovery(resource)) {
+      if (exhaustedRetryBudgetNeedsRecovery(resource, deps.leaderEpoch)) {
         await recoverBounded(deps, resource);
         return;
       }
@@ -1542,7 +1867,7 @@ export async function reconcileComputeWorkload(
       );
       return;
     }
-    if (exhaustedRetryBudgetNeedsRecovery(resource)) {
+    if (exhaustedRetryBudgetNeedsRecovery(resource, deps.leaderEpoch)) {
       await recoverBounded(deps, resource);
       return;
     }

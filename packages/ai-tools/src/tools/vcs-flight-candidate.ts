@@ -36,7 +36,7 @@ export const VcsFlightCandidateInputSchema = z.object({
     .string()
     .regex(/^[0-9a-f]{40}$/i)
     .describe(
-      "External node repo source SHA. The child repo must publish image_repository:sha-<sourceSha>."
+      "Off-cluster node repo source SHA. The child repo must publish image_repository:sha-<sourceSha>."
     ),
   workflowRef: z
     .string()
@@ -78,7 +78,7 @@ export const vcsFlightCandidateContract: ToolContract<
 > = {
   name: VCS_FLIGHT_CANDIDATE_NAME,
   description:
-    "Dispatch the `candidate-flight.yml` workflow for an external node source revision. " +
+    "Dispatch the `candidate-flight.yml` workflow for an off-cluster node source revision. " +
     "Promotes the node artifact digest onto `deploy/candidate-a` and waits for " +
     "Argo to roll the candidate-a pods. " +
     "The child repo must already have published image_repository:sha-<sourceSha>; " +

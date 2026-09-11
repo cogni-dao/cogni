@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
+import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { hostname } from "node:os";
 
 import {
+  BatchV1Api,
   CoordinationV1Api,
   CoreV1Api,
   CustomObjectsApi,
@@ -20,10 +22,14 @@ import {
   CloudflareComputeWorkloadDnsAdapter,
   ComputeWorkloadLifecycleAdapter,
   ComputeWorkloadSecretResolverAdapter,
+  DEFAULT_LEASE_DURATION_SECONDS,
   DormantComputeWorkloadDnsAdapter,
   DormantComputeWorkloadLifecycleAdapter,
+  DormantComputeWorkloadMigrationAdapter,
   KubernetesComputeWorkloadStateAdapter,
   KubernetesLeaseLeaderElector,
+  KubernetesMigrationJobAdapter,
+  LeaseRenewError,
   renewLeadershipOrFence,
 } from "@/adapters/server";
 import { reconcileComputeWorkload } from "@/features/compute/compute-workload-reconciler";
@@ -66,6 +72,12 @@ const leaderGauge = new Gauge({
   help: "1 when this controller instance holds the Kubernetes Lease",
   registers: [registry],
 });
+const leaderRenewFailureTotal = new Counter({
+  name: "compute_workload_leader_renew_failure_total",
+  help: "Lease renewal attempts that did not end holding the lease, by discriminated reason",
+  labelNames: ["reason"],
+  registers: [registry],
+});
 const workloadStatusGauge = new Gauge({
   name: "compute_workload_status",
   help: "Current ComputeWorkload phase (one labeled series with value 1 per resource)",
@@ -84,18 +96,50 @@ kubeConfig.loadFromCluster();
 const custom = kubeConfig.makeApiClient(CustomObjectsApi);
 const core = kubeConfig.makeApiClient(CoreV1Api);
 const coordination = kubeConfig.makeApiClient(CoordinationV1Api);
-const identity = `${hostname()}-${process.pid}`;
+/**
+ * bug.5108 — the lease epoch is `${leaseTransitions}:${identity}`, and an in-place
+ * container restart preserves BOTH parts: the pod hostname is stable, Node is
+ * always PID 1 in-container, and re-acquiring a lease we already hold does not
+ * bump leaseTransitions. Dead-claim recovery keys off "the receipt's epoch is not
+ * ours", so identity carries a per-process nonce to mint a distinct epoch on
+ * every process start. Cost: after an in-place restart the new process waits out
+ * the lease deadline instead of re-acquiring instantly — bounded failover
+ * latency, already serialized by the surge-free rollout.
+ */
+const identity = `${hostname()}-${process.pid}-${randomUUID().slice(0, 8)}`;
 const state = new KubernetesComputeWorkloadStateAdapter(
   custom,
   core,
   namespace,
-  identity
+  identity,
+  log
+);
+/**
+ * bug.5110 — the lease deadline is the ONLY thing standing between a slow k3s API server
+ * and a self-fenced controller. At `replicas: 1` a longer deadline costs only failover
+ * latency on a redeploy (which the surge-free `maxSurge: 0` rollout already serializes) and buys
+ * proportionally more tolerance for consecutive failed renewals.
+ */
+const leaseDurationSeconds = (() => {
+  const raw = Number(runtimeEnv.COMPUTE_CONTROLLER_LEASE_DURATION_SECONDS);
+  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_LEASE_DURATION_SECONDS;
+})();
+/**
+ * Renew on a twelfth of the deadline, bounded. Derived rather than a magic 5s so raising
+ * the deadline actually raises tolerance (12 consecutive failures) instead of just
+ * lengthening the window a fixed 6-attempt budget burns through — and so a stressed API
+ * server is not additionally hammered by the controller diagnosing it.
+ */
+const leaderRenewIntervalMs = Math.min(
+  15_000,
+  Math.max(5_000, Math.round((leaseDurationSeconds * 1000) / 12))
 );
 const leader = new KubernetesLeaseLeaderElector(
   coordination,
   namespace,
   "compute-workload-controller",
-  identity
+  identity,
+  leaseDurationSeconds
 );
 
 const apiKey = await readFile(apiKeyFile, "utf8")
@@ -144,6 +188,18 @@ const secretResolver = new ComputeWorkloadSecretResolverAdapter(
   core,
   namespace
 );
+// bug.5116 — externally placed workloads have no k3s initContainer; the migration
+// gate proves per-digest DB migrations via a Job on the operator substrate before
+// any lease mutation. A dormant (credential-less) controller must keep surfacing
+// ProviderCredentialMissing instead of spending migration Jobs it cannot act on.
+const migration = apiKey
+  ? new KubernetesMigrationJobAdapter(
+      kubeConfig.makeApiClient(BatchV1Api),
+      core,
+      namespace,
+      log
+    )
+  : new DormantComputeWorkloadMigrationAdapter();
 if (!apiKey) {
   log.error(
     { reason: "ProviderCredentialMissing" },
@@ -197,8 +253,14 @@ async function renewLeadership(): Promise<void> {
     await renewLeadershipOrFence(leader, (cause) => {
       kubeReachable = false;
       leaderGauge.set(0);
+      leaderRenewFailureTotal.inc({ reason: cause.reason });
       log.fatal(
-        { reason: "LeadershipLost", ...causeFields(cause) },
+        {
+          reason: "LeadershipLost",
+          leaseRenewReason: cause.reason,
+          leaseDurationSeconds,
+          ...causeFields(cause),
+        },
         "compute_workload_leadership_lost_process_fenced"
       );
       // Fencing is reserved for a lease we can no longer prove we hold. In-flight mutations
@@ -209,12 +271,23 @@ async function renewLeadership(): Promise<void> {
     kubeReachable = true;
     leaderGauge.set(leader.isLeader() ? 1 : 0);
   } catch (error) {
-    kubeReachable = false;
-    leaderGauge.set(0);
-    log.error(
+    const renewError = error instanceof LeaseRenewError ? error : undefined;
+    // A 409 conflict means the API server ANSWERED and we are still inside the deadline we
+    // earned, so neither readiness nor the leader gauge may be downgraded — doing so was
+    // half of bug.5110's self-harm (it paused reconciliation on a healthy leader).
+    const tolerated = renewError?.reason === "cas_conflict";
+    if (!tolerated) kubeReachable = false;
+    leaderGauge.set(tolerated && leader.isLeader() ? 1 : 0);
+    leaderRenewFailureTotal.inc({ reason: renewError?.reason ?? "api_error" });
+    // A tolerated conflict is routine noise on a loaded API server; anything else is a
+    // real degradation an operator should see. Same event, honest severity.
+    const emit = tolerated ? log.warn.bind(log) : log.error.bind(log);
+    emit(
       {
         reason: "LeaderRenewFailed",
+        leaseRenewReason: renewError?.reason ?? "api_error",
         leaseHeldThrough: leader.leaseHeldThrough(),
+        leaseDurationSeconds,
         ...causeFields(error),
       },
       "compute_workload_leader_renew_failed"
@@ -271,6 +344,7 @@ async function reconcileAll(): Promise<void> {
                 state,
                 dns,
                 secretResolver,
+                migration,
                 environment: controllerEnvironment,
                 deploymentDomain: controllerDeploymentDomain,
                 leaderEpoch,
@@ -288,6 +362,10 @@ async function reconcileAll(): Promise<void> {
                   ),
                 recordMutationFailure: (observation) =>
                   log.warn(observation, "compute_workload_mutation_failed"),
+                recordMigrationFailure: (observation) =>
+                  log.error(observation, "compute_workload_migration_failed"),
+                recordMigrationHold: (observation) =>
+                  log.warn(observation, "compute_workload_migration_hold"),
               },
               resource
             );
@@ -327,8 +405,15 @@ async function reconcileAll(): Promise<void> {
   }
 }
 
+log.info(
+  { leaseDurationSeconds, leaderRenewIntervalMs, identity },
+  "compute_workload_controller_leader_election_configured"
+);
 await renewLeadership();
-const leaderTimer = setInterval(() => void renewLeadership(), 5_000);
+const leaderTimer = setInterval(
+  () => void renewLeadership(),
+  leaderRenewIntervalMs
+);
 const reconcileTimer = setInterval(() => void reconcileAll(), 15_000);
 void reconcileAll();
 

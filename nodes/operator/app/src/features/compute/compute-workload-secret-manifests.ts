@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
-import { isExternalWorkloadSecretKey } from "@/shared/secrets/node-secrets-reserved.data";
+import { isOffClusterWorkloadSecretKey } from "@/shared/secrets/node-secrets-reserved.data";
 
 export interface ComputeSecretResource {
   readonly file: string;
@@ -18,11 +18,11 @@ export function buildComputeSecretResources(input: {
     ...new Set(input.secretRefs.map((ref) => ref.key)),
   ].sort();
   const rejected = secretKeys.filter(
-    (key) => !isExternalWorkloadSecretKey(key)
+    (key) => !isOffClusterWorkloadSecretKey(key)
   );
   if (rejected.length > 0) {
     throw new Error(
-      `[compute-workload-secret-manifests] external workload secret refs rejected: ${rejected.join(",")}`
+      `[compute-workload-secret-manifests] off-cluster workload secret refs rejected: ${rejected.join(",")}`
     );
   }
   if (secretKeys.length === 0) return [];

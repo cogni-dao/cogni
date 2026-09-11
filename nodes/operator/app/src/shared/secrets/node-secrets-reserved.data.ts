@@ -80,7 +80,7 @@ export function isNodeOwnedSecretKey(key: string): boolean {
 }
 
 /**
- * Gate 3: may a logical secret key cross into an EXTERNALLY HOSTED workload
+ * Gate 3: may a logical secret key cross into an OFF-CLUSTER workload
  * (Akash and friends), where the operator controls neither the host nor the
  * disk? A DENYLIST, keyed on PROVENANCE — never on a node's name.
  *
@@ -107,7 +107,7 @@ export function isNodeOwnedSecretKey(key: string): boolean {
  *   - DENYLIST_NOT_ALLOWLIST: an unknown key is allowed. Adding an entry
  *     requires naming the operator/fleet/substrate owner of its value.
  */
-export const EXTERNAL_WORKLOAD_DENIED_KEYS: ReadonlySet<string> = new Set([
+export const OFF_CLUSTER_WORKLOAD_DENIED_KEYS: ReadonlySet<string> = new Set([
   // Operator control-plane API credentials. The operator mints these against
   // its own vendor accounts; a copy lets the holder drive fleet infrastructure
   // (deploy compute, rewrite DNS, read fleet telemetry) from anywhere.
@@ -145,7 +145,7 @@ export const EXTERNAL_WORKLOAD_DENIED_KEYS: ReadonlySet<string> = new Set([
   // Substrate-owned database role material (secrets-management.md Invariant 15).
   // Minted by the DB provisioners, not by the node; they authorize direct
   // in-cluster Postgres/Doltgres role login, bypassing the node's app layer.
-  // An external workload reaches its data through its own DSN, not these.
+  // An off-cluster workload reaches its data through its own DSN, not these.
   "APP_DB_PASSWORD",
   "APP_DB_SERVICE_PASSWORD",
   "APP_DB_READONLY_PASSWORD",
@@ -169,8 +169,9 @@ const NODE_SECRET_KEY_PATTERN = /^[A-Z_][A-Z0-9_]{0,127}$/;
  * Gate 3: declared key is format-safe and not an operator/fleet/substrate
  * credential. Node-owned keys — including custody and wallet material — pass.
  */
-export function isExternalWorkloadSecretKey(key: string): boolean {
+export function isOffClusterWorkloadSecretKey(key: string): boolean {
   return (
-    NODE_SECRET_KEY_PATTERN.test(key) && !EXTERNAL_WORKLOAD_DENIED_KEYS.has(key)
+    NODE_SECRET_KEY_PATTERN.test(key) &&
+    !OFF_CLUSTER_WORKLOAD_DENIED_KEYS.has(key)
   );
 }

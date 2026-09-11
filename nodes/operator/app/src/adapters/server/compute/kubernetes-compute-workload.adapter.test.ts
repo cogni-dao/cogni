@@ -18,8 +18,10 @@ import { parse, parseDocument } from "yaml";
 import type { ComputeWorkload } from "@/ports";
 
 import {
+  DEFAULT_LEASE_DURATION_SECONDS,
   KubernetesComputeWorkloadStateAdapter,
   KubernetesLeaseLeaderElector,
+  type LeaseRenewError,
   renewLeadershipOrFence,
 } from "./kubernetes-compute-workload.adapter";
 
@@ -94,6 +96,66 @@ function declaredWorkload(): ComputeWorkload {
 }
 
 describe("ComputeWorkload Kubernetes contract", () => {
+  it("forbids positional env JSON-pointer patches in the operator overlays", async () => {
+    // bug.5110 / story.5016 Gate 0b. The per-env operator overlays once patched
+    // this container's env by INDEX
+    // (`/spec/template/spec/containers/0/env/N/value`), so inserting a variable
+    // above an existing one silently repointed a DIFFERENT variable. Adding the
+    // lease knob ahead of AKASH_ALLOWED_PROVIDERS blanked that allowlist in all
+    // three envs (d69e5c29), and an empty allowlist rejects every provider bid
+    // -- no node could obtain an Akash lease. Overlays now set env values BY
+    // NAME via strategic merge; the invariant is that no overlay ever reverts
+    // to a positional env pointer.
+    const repoRoot = join(
+      fileURLToPath(new URL(".", import.meta.url)),
+      "../../../../../../.."
+    );
+    for (const overlayEnv of ["candidate-a", "preview", "production"]) {
+      const kustomizationYaml = await readFile(
+        join(
+          repoRoot,
+          "infra/k8s/overlays",
+          overlayEnv,
+          "operator/kustomization.yaml"
+        ),
+        "utf8"
+      );
+      // Matches JSON-pointer segments like `/env/3/value` (positional), but not
+      // name-keyed strategic-merge entries.
+      expect(kustomizationYaml).not.toMatch(/\/env\/\d+(\/|$)/m);
+    }
+    const deploymentYaml = await readFile(
+      join(
+        repoRoot,
+        "infra/k8s/base/compute-workload-controller/deployment.yaml"
+      ),
+      "utf8"
+    );
+    const deployment = parse(deploymentYaml) as {
+      spec: {
+        strategy?: {
+          type?: string;
+          rollingUpdate?: { maxSurge?: number; maxUnavailable?: number };
+        };
+        template: {
+          spec: { containers: { env: { name: string }[] }[] };
+        };
+      };
+    };
+    // Singleton by design: a surge would run two pods against one coordination
+    // Lease and manufacture the CAS conflicts this controller then has to
+    // survive — so maxSurge must stay 0. But the type must be RollingUpdate,
+    // NOT Recreate: live objects retain spec.strategy.rollingUpdate from prior
+    // field managers, and ArgoCD's server-side-apply dry-run of a Recreate spec
+    // then fails Forbidden, wedging the whole Argo app (blocked candidate
+    // flights + the d69e5c29 production promote on 2026-09-10).
+    expect(deployment.spec.strategy?.type).toBe("RollingUpdate");
+    expect(deployment.spec.strategy?.rollingUpdate).toEqual({
+      maxSurge: 0,
+      maxUnavailable: 1,
+    });
+  });
+
   it("admits bounded topology fields and preserves service bindings over the API wire", async () => {
     // File-relative, never CWD-relative: the unit job and local runs invoke
     // vitest from different working directories.
@@ -276,8 +338,14 @@ describe("ComputeWorkload Kubernetes contract", () => {
         return { body: structuredClone(ledger) };
       }),
     } as unknown as CoreV1Api;
+    // The blocked path probes owner liveness, so the owner's CR must be listable.
+    const custom = {
+      listNamespacedCustomObject: vi.fn(async () => ({
+        body: { items: [{ metadata: { uid: "uid-a" } }] },
+      })),
+    } as unknown as CustomObjectsApi;
     const state = new KubernetesComputeWorkloadStateAdapter(
-      {} as CustomObjectsApi,
+      custom,
       core,
       "cogni-candidate-a",
       "test-controller"
@@ -300,6 +368,249 @@ describe("ComputeWorkload Kubernetes contract", () => {
     await expect(
       state.claimWalletAllocation({ attemptKey: "b", workloadUid: "uid-b" })
     ).resolves.toEqual({ state: "claimed" });
+  });
+
+  it("fails closed when preparing against an absent wallet slot yet settles complete idempotently", async () => {
+    const ledger = {
+      metadata: {
+        name: "compute-workload-allocation-ledger",
+        namespace: "cogni-candidate-a",
+        resourceVersion: "1",
+      },
+      data: {} as Record<string, string>,
+    };
+    const core = {
+      readNamespacedConfigMap: vi.fn(async () => ({
+        body: structuredClone(ledger),
+      })),
+      replaceNamespacedConfigMap: vi.fn(async () => ({
+        body: structuredClone(ledger),
+      })),
+    } as unknown as CoreV1Api;
+    const state = new KubernetesComputeWorkloadStateAdapter(
+      {} as unknown as CustomObjectsApi,
+      core,
+      "cogni-candidate-a",
+      "test-controller"
+    );
+
+    // A resumed zombie inside the clear-then-claim window must not reach POST
+    // with no slot recorded (bug.5108 review): absence is never legitimate for
+    // a preparing attempt.
+    await expect(
+      state.prepareWalletAllocation({ attemptKey: "a", allocationCursor: "41" })
+    ).rejects.toThrow(/no active slot/);
+    await expect(
+      state.completeWalletAllocation({ attemptKey: "a" })
+    ).resolves.toBeUndefined();
+  });
+
+  // bug.5115 fixture: a ledger ConfigMap seeded with an `active` slot, plus a cluster
+  // whose ComputeWorkload uids decide whether that slot's owner is alive or an orphan.
+  function seededWalletLedger(input: {
+    active: Record<string, string>;
+    liveUids: readonly string[];
+  }) {
+    let ledger = {
+      metadata: {
+        name: "compute-workload-allocation-ledger",
+        namespace: "cogni-candidate-a",
+        resourceVersion: "1",
+      },
+      data: { active: JSON.stringify(input.active) } as Record<string, string>,
+    };
+    const core = {
+      readNamespacedConfigMap: vi.fn(async () => ({
+        body: structuredClone(ledger),
+      })),
+      replaceNamespacedConfigMap: vi.fn(
+        async (_name: string, _namespace: string, body: V1ConfigMap) => {
+          ledger = {
+            metadata: {
+              ...ledger.metadata,
+              resourceVersion: String(
+                Number(ledger.metadata.resourceVersion) + 1
+              ),
+            },
+            data: { ...(body.data ?? {}) },
+          };
+          return { body: structuredClone(ledger) };
+        }
+      ),
+    };
+    const listWorkloads = vi.fn(async () => ({
+      body: { items: input.liveUids.map((uid) => ({ metadata: { uid } })) },
+    }));
+    const custom = {
+      listNamespacedCustomObject: listWorkloads,
+    } as unknown as CustomObjectsApi;
+    const log = { warn: vi.fn() };
+    const state = new KubernetesComputeWorkloadStateAdapter(
+      custom,
+      core as unknown as CoreV1Api,
+      "cogni-candidate-a",
+      "test-controller",
+      log
+    );
+    return {
+      state,
+      core,
+      log,
+      listWorkloads,
+      readActive: () => ledger.data.active,
+    };
+  }
+
+  it("reclaims a foreign slot whose recorded workload CR is gone (bug.5115)", async () => {
+    // THE production deadlock: the CR behind the `active` slot was deleted, so no
+    // reconcile can ever release it — every other workload stayed blocked for days
+    // until a human hand-cleared the ConfigMap. The claimant must reclaim instead.
+    const { state, log, readActive } = seededWalletLedger({
+      active: { attemptKey: "dead", workloadUid: "uid-gone" },
+      liveUids: ["uid-b"],
+    });
+
+    await expect(
+      state.claimWalletAllocation({ attemptKey: "b", workloadUid: "uid-b" })
+    ).resolves.toEqual({ state: "claimed" });
+    expect(JSON.parse(readActive() ?? "{}")).toEqual({
+      attemptKey: "b",
+      workloadUid: "uid-b",
+    });
+    // The reclaim replaces a human hand-clear: it must be loud and carry forensics.
+    expect(log.warn).toHaveBeenCalledWith(
+      {
+        orphanedAttemptKey: "dead",
+        orphanedWorkloadUid: "uid-gone",
+        claimantAttemptKey: "b",
+        claimantWorkloadUid: "uid-b",
+      },
+      "compute_wallet_allocation_orphan_reclaimed"
+    );
+  });
+
+  it("stays blocked while the slot's recorded workload CR still exists", async () => {
+    // A live CR legitimately owns the slot — even if its reconcile is merely slow.
+    const { state, log, readActive } = seededWalletLedger({
+      active: { attemptKey: "slow", workloadUid: "uid-a" },
+      liveUids: ["uid-a", "uid-b"],
+    });
+
+    await expect(
+      state.claimWalletAllocation({ attemptKey: "b", workloadUid: "uid-b" })
+    ).resolves.toEqual({ state: "blocked", ownerAttemptKey: "slow" });
+    expect(readActive()).toBe(
+      JSON.stringify({ attemptKey: "slow", workloadUid: "uid-a" })
+    );
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("propagates a failed liveness probe without ever writing the ledger", async () => {
+    // Fail toward blocked: if the LIST that decides orphan-vs-alive errors, the
+    // claim must reject as-is — never fall through to a reclaim write.
+    const { state, core, log, listWorkloads } = seededWalletLedger({
+      active: { attemptKey: "dead", workloadUid: "uid-gone" },
+      liveUids: [],
+    });
+    listWorkloads.mockRejectedValueOnce(apiError(503));
+
+    await expect(
+      state.claimWalletAllocation({ attemptKey: "b", workloadUid: "uid-b" })
+    ).rejects.toMatchObject({ statusCode: 503 });
+    expect(core.replaceNamespacedConfigMap).not.toHaveBeenCalled();
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("reclaims a cursor-bearing orphan only on a second sighting a full tick later", async () => {
+    // A cursor plus a deleted CR can mean a human force-deleted the CR while a
+    // zombie process's provider POST was still in flight. First sighting arms a
+    // one-tick grace window; only the same record seen again past it is reclaimed,
+    // with the cursor preserved in the log line for forensics.
+    vi.useFakeTimers();
+    try {
+      const { state, log } = seededWalletLedger({
+        active: {
+          attemptKey: "dead",
+          workloadUid: "uid-gone",
+          allocationCursor: "77",
+        },
+        liveUids: ["uid-b"],
+      });
+      const claim = () =>
+        state.claimWalletAllocation({ attemptKey: "b", workloadUid: "uid-b" });
+
+      await expect(claim()).resolves.toEqual({
+        state: "blocked",
+        ownerAttemptKey: "dead",
+      });
+      // Still inside the grace window: an in-flight POST lasts seconds.
+      vi.advanceTimersByTime(1_000);
+      await expect(claim()).resolves.toEqual({
+        state: "blocked",
+        ownerAttemptKey: "dead",
+      });
+      expect(log.warn).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(15_000);
+      await expect(claim()).resolves.toEqual({ state: "claimed" });
+      expect(log.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          orphanedAttemptKey: "dead",
+          orphanedWorkloadUid: "uid-gone",
+          orphanedAllocationCursor: "77",
+        }),
+        "compute_wallet_allocation_orphan_reclaimed"
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("loses a reclaim CAS race cleanly: re-reads and defers to the live winner", async () => {
+    // Two claimants race for the same orphaned slot. The loser's replace 409s, and
+    // its re-read now shows the winner — whose CR is live — so it must block, not
+    // steal, and must not log a reclaim it never performed.
+    const { state, core, log } = seededWalletLedger({
+      active: { attemptKey: "dead", workloadUid: "uid-gone" },
+      liveUids: ["uid-b", "uid-c"],
+    });
+    core.replaceNamespacedConfigMap.mockRejectedValueOnce(apiError(409));
+    // The re-read after the 409 sees the winner's record; the first read still sees
+    // the seeded orphan via the base implementation queued explicitly ahead of it.
+    core.readNamespacedConfigMap
+      .mockResolvedValueOnce({
+        body: {
+          metadata: {
+            name: "compute-workload-allocation-ledger",
+            namespace: "cogni-candidate-a",
+            resourceVersion: "1",
+          },
+          data: {
+            active: JSON.stringify({
+              attemptKey: "dead",
+              workloadUid: "uid-gone",
+            }),
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        body: {
+          metadata: {
+            name: "compute-workload-allocation-ledger",
+            namespace: "cogni-candidate-a",
+            resourceVersion: "2",
+          },
+          data: {
+            active: JSON.stringify({ attemptKey: "c", workloadUid: "uid-c" }),
+          },
+        },
+      });
+
+    await expect(
+      state.claimWalletAllocation({ attemptKey: "b", workloadUid: "uid-b" })
+    ).resolves.toEqual({ state: "blocked", ownerAttemptKey: "c" });
+    expect(core.replaceNamespacedConfigMap).toHaveBeenCalledOnce();
+    expect(log.warn).not.toHaveBeenCalled();
   });
 
   it("creates the runtime ledger outside Argo ownership before first allocation", async () => {
@@ -372,12 +683,14 @@ describe("KubernetesLeaseLeaderElector", () => {
       api,
       "cogni-candidate-a",
       "compute-workload-controller",
-      "pod-a"
+      "pod-a",
+      // Pinned: these timelines predate the 120s default and assert a 30s window.
+      30
     );
 
     await expect(
       elector.acquireOrRenew(new Date("2026-09-01T12:00:00.226Z"))
-    ).resolves.toBe(true);
+    ).resolves.toEqual({ held: true });
     expect(elector.isLeader()).toBe(true);
     expect(createNamespacedLease).toHaveBeenCalledWith(
       "cogni-candidate-a",
@@ -411,12 +724,14 @@ describe("KubernetesLeaseLeaderElector", () => {
       api,
       "cogni-candidate-a",
       "compute-workload-controller",
-      "pod-a"
+      "pod-a",
+      // Pinned: these timelines predate the 120s default and assert a 30s window.
+      30
     );
 
     await expect(
       elector.acquireOrRenew(new Date("2026-09-01T12:00:10.000Z"))
-    ).resolves.toBe(false);
+    ).resolves.toEqual({ held: false, reason: "foreign_holder" });
     expect(replaceNamespacedLease).not.toHaveBeenCalled();
   });
 
@@ -439,12 +754,14 @@ describe("KubernetesLeaseLeaderElector", () => {
       api,
       "cogni-candidate-a",
       "compute-workload-controller",
-      "pod-a"
+      "pod-a",
+      // Pinned: these timelines predate the 120s default and assert a 30s window.
+      30
     );
 
     await expect(
       elector.acquireOrRenew(new Date("2026-09-01T12:00:31.000Z"))
-    ).resolves.toBe(true);
+    ).resolves.toEqual({ held: true });
     expect(replaceNamespacedLease).toHaveBeenCalledWith(
       "compute-workload-controller",
       "cogni-candidate-a",
@@ -477,12 +794,14 @@ describe("KubernetesLeaseLeaderElector", () => {
       api,
       "cogni-candidate-a",
       "compute-workload-controller",
-      "pod-a"
+      "pod-a",
+      // Pinned: these timelines predate the 120s default and assert a 30s window.
+      30
     );
 
     await expect(
       elector.acquireOrRenew(new Date("2026-09-01T12:00:00.000Z"))
-    ).resolves.toBe(true);
+    ).resolves.toEqual({ held: true });
 
     readNamespacedLease.mockRejectedValueOnce(apiError(503));
     await expect(elector.acquireOrRenew()).rejects.toBeTruthy();
@@ -515,7 +834,9 @@ describe("KubernetesLeaseLeaderElector", () => {
       api,
       "cogni-candidate-a",
       "compute-workload-controller",
-      "pod-a"
+      "pod-a",
+      // Pinned: these timelines predate the 120s default and assert a 30s window.
+      30
     );
 
     await elector.acquireOrRenew(new Date("2026-09-01T12:00:00.000Z"));
@@ -533,7 +854,7 @@ describe("KubernetesLeaseLeaderElector", () => {
 
     await expect(
       elector.acquireOrRenew(new Date("2026-09-01T12:00:06.000Z"))
-    ).resolves.toBe(false);
+    ).resolves.toEqual({ held: false, reason: "foreign_holder" });
     expect(elector.leaseHeldThrough(new Date("2026-09-01T12:00:06.000Z"))).toBe(
       false
     );
@@ -558,9 +879,11 @@ describe("KubernetesLeaseLeaderElector", () => {
       api,
       "cogni-candidate-a",
       "compute-workload-controller",
-      "pod-a"
+      "pod-a",
+      // Pinned: these timelines predate the 120s default and assert a 30s window.
+      30
     );
-    const fence = vi.fn((): never => {
+    const fence = vi.fn((_cause: LeaseRenewError): never => {
       throw new Error("fenced");
     });
 
@@ -605,7 +928,7 @@ describe("KubernetesLeaseLeaderElector", () => {
     // A recovered API renews normally without a lease transition.
     await expect(
       elector.acquireOrRenew(new Date("2026-09-01T12:00:32.000Z"))
-    ).resolves.toBe(true);
+    ).resolves.toEqual({ held: true });
     expect(elector.currentEpoch()).toBe("1:pod-a");
   });
 
@@ -627,7 +950,9 @@ describe("KubernetesLeaseLeaderElector", () => {
       api,
       "cogni-candidate-a",
       "compute-workload-controller",
-      "pod-a"
+      "pod-a",
+      // Pinned: these timelines predate the 120s default and assert a 30s window.
+      30
     );
     await elector.acquireOrRenew(new Date("2026-09-01T12:00:05.000Z"));
     expect(elector.currentEpoch()).toBe("4:pod-a");
@@ -638,77 +963,210 @@ describe("KubernetesLeaseLeaderElector", () => {
       elector.stillHolds("3:pod-a", new Date("2026-09-01T12:00:06.000Z"))
     ).resolves.toBe(false);
   });
+
+  it("holds leadership through a CAS conflict inside the earned window (bug.5110)", async () => {
+    // THE regression. A 409 on replace means our cached resourceVersion went stale on a
+    // loaded API server — not that anyone took the lease. Dropping `leader` here paused
+    // reconciliation AND made the next tick see `previouslyHeld === false`, erasing the
+    // signal a genuine loss would otherwise raise.
+    const mine: V1Lease = {
+      metadata: { resourceVersion: "9" },
+      spec: {
+        holderIdentity: "pod-a",
+        renewTime: new Date("2026-09-01T12:00:00.000Z"),
+        leaseDurationSeconds: 30,
+        leaseTransitions: 1,
+      },
+    };
+    const replaceNamespacedLease = vi.fn(async () => ({ body: mine }));
+    const api = {
+      readNamespacedLease: vi.fn(async () => ({ body: mine })),
+      replaceNamespacedLease,
+    } as unknown as CoordinationV1Api;
+    const elector = new KubernetesLeaseLeaderElector(
+      api,
+      "cogni-candidate-a",
+      "compute-workload-controller",
+      "pod-a",
+      30
+    );
+
+    await elector.acquireOrRenew(new Date("2026-09-01T12:00:00.000Z"));
+    expect(elector.currentEpoch()).toBe("1:pod-a");
+
+    replaceNamespacedLease.mockRejectedValueOnce(apiError(409));
+    await expect(
+      elector.acquireOrRenew(new Date("2026-09-01T12:00:10.000Z"))
+    ).resolves.toEqual({ held: false, reason: "cas_conflict" });
+
+    // Still leader, still dispatchable: `stillHolds()` re-reads the live lease before any
+    // provider mutation, so keeping the epoch cannot let a stale process write.
+    expect(elector.isLeader()).toBe(true);
+    expect(elector.currentEpoch()).toBe("1:pod-a");
+    expect(elector.leaseHeldThrough(new Date("2026-09-01T12:00:29.000Z"))).toBe(
+      true
+    );
+  });
+
+  it("reports a CAS conflict past the deadline as expired, not as a conflict", async () => {
+    const mine: V1Lease = {
+      metadata: { resourceVersion: "9" },
+      spec: {
+        holderIdentity: "pod-a",
+        renewTime: new Date("2026-09-01T12:00:00.000Z"),
+        leaseDurationSeconds: 30,
+        leaseTransitions: 1,
+      },
+    };
+    const replaceNamespacedLease = vi.fn(async () => ({ body: mine }));
+    const api = {
+      readNamespacedLease: vi.fn(async () => ({ body: mine })),
+      replaceNamespacedLease,
+    } as unknown as CoordinationV1Api;
+    const elector = new KubernetesLeaseLeaderElector(
+      api,
+      "cogni-candidate-a",
+      "compute-workload-controller",
+      "pod-a",
+      30
+    );
+
+    await elector.acquireOrRenew(new Date("2026-09-01T12:00:00.000Z"));
+    replaceNamespacedLease.mockRejectedValueOnce(apiError(409));
+    await expect(
+      elector.acquireOrRenew(new Date("2026-09-01T12:00:31.000Z"))
+    ).resolves.toEqual({ held: false, reason: "expired" });
+    expect(elector.isLeader()).toBe(false);
+  });
+
+  it("tolerates a long conflict storm at the default deadline without fencing", async () => {
+    // Production shape: 24 consecutive failed renewals on the 10s derived tick still sit
+    // inside the 120s default deadline. At replicas:1 nobody can take over, so none of
+    // them may fence — the old 30s deadline fenced after six.
+    const mine: V1Lease = {
+      metadata: { resourceVersion: "9" },
+      spec: {
+        holderIdentity: "pod-a",
+        renewTime: new Date("2026-09-01T12:00:00.000Z"),
+        leaseDurationSeconds: DEFAULT_LEASE_DURATION_SECONDS,
+        leaseTransitions: 1,
+      },
+    };
+    const replaceNamespacedLease = vi.fn(async () => ({ body: mine }));
+    const api = {
+      readNamespacedLease: vi.fn(async () => ({ body: mine })),
+      replaceNamespacedLease,
+    } as unknown as CoordinationV1Api;
+    const elector = new KubernetesLeaseLeaderElector(
+      api,
+      "cogni-candidate-a",
+      "compute-workload-controller",
+      "pod-a"
+    );
+    const fence = vi.fn((_cause: LeaseRenewError): never => {
+      throw new Error("fenced");
+    });
+
+    await elector.acquireOrRenew(new Date("2026-09-01T12:00:00.000Z"));
+    for (let tick = 1; tick <= 11; tick += 1) {
+      replaceNamespacedLease.mockRejectedValueOnce(apiError(409));
+      const at = new Date(
+        `2026-09-01T12:0${tick < 6 ? "0" : "1"}:${String((tick * 10) % 60).padStart(2, "0")}.000Z`
+      );
+      await expect(
+        renewLeadershipOrFence(
+          {
+            isLeader: () => elector.isLeader(),
+            acquireOrRenew: () => elector.acquireOrRenew(at),
+            leaseHeldThrough: () => elector.leaseHeldThrough(at),
+          },
+          fence
+        )
+      ).rejects.toMatchObject({ reason: "cas_conflict" });
+      expect(elector.isLeader()).toBe(true);
+    }
+    expect(fence).not.toHaveBeenCalled();
+  });
 });
 
 describe("renewLeadershipOrFence", () => {
-  it("fences a process whose lease was genuinely taken over", async () => {
+  it("fences immediately when a different identity holds a live lease", async () => {
     const fenced = new Error("process fenced");
-    const onLeadershipLost = vi.fn((): never => {
+    const onLeadershipLost = vi.fn((_cause: LeaseRenewError): never => {
+      throw fenced;
+    });
+    // `foreign_holder` is the one outcome that needs no deadline arithmetic: a replacement
+    // leader is already reconciling, so this process must stop even if its own earned
+    // window has not lapsed. Waiting out the deadline here would allow two writers.
+    const lease = {
+      isLeader: () => true,
+      acquireOrRenew: vi.fn(async () => ({
+        held: false as const,
+        reason: "foreign_holder" as const,
+      })),
+      leaseHeldThrough: () => true,
+    };
+
+    await expect(renewLeadershipOrFence(lease, onLeadershipLost)).rejects.toBe(
+      fenced
+    );
+    expect(onLeadershipLost).toHaveBeenCalledOnce();
+    expect(onLeadershipLost.mock.calls[0]?.[0]).toMatchObject({
+      reason: "foreign_holder",
+    });
+  });
+
+  it("does not fence a CAS conflict, and names it so the log can discriminate", async () => {
+    // bug.5110: this is the routine slow-API case. Fencing here crashlooped a
+    // single-replica controller and stranded in-flight provider IO as an unresolvable
+    // `prepared` attempt.
+    const onLeadershipLost = vi.fn((_cause: LeaseRenewError): never => {
+      throw new Error("must not fence");
+    });
+    const lease = {
+      isLeader: () => true,
+      acquireOrRenew: vi.fn(async () => ({
+        held: false as const,
+        reason: "cas_conflict" as const,
+      })),
+      leaseHeldThrough: () => true,
+    };
+
+    await expect(
+      renewLeadershipOrFence(lease, onLeadershipLost)
+    ).rejects.toMatchObject({
+      name: "LeaseRenewError",
+      reason: "cas_conflict",
+    });
+    expect(onLeadershipLost).not.toHaveBeenCalled();
+  });
+
+  it("fences once the earned deadline lapses with no successful renewal", async () => {
+    const fenced = new Error("process fenced");
+    const onLeadershipLost = vi.fn((_cause: LeaseRenewError): never => {
       throw fenced;
     });
     const lease = {
       isLeader: () => true,
-      // KubernetesLeaseLeaderElector zeroes `renewedAtMs` on the genuine-takeover branch
-      // (`holder !== identity && !expired`), so a real loss always presents as
-      // leaseHeldThrough() === false. That is the signal that must fence.
-      acquireOrRenew: vi.fn(async () => false),
+      acquireOrRenew: vi.fn(async () => ({
+        held: false as const,
+        reason: "expired" as const,
+      })),
       leaseHeldThrough: () => false,
     };
 
     await expect(renewLeadershipOrFence(lease, onLeadershipLost)).rejects.toBe(
       fenced
     );
-    expect(onLeadershipLost).toHaveBeenCalledOnce();
-    expect(onLeadershipLost).toHaveBeenCalledWith(expect.any(Error));
-  });
-
-  it("does not fence a CAS conflict while the earned lease window is still live", async () => {
-    // The 409 branch of acquireOrRenew preserves `renewedAtMs`, so an unsuccessful
-    // renewal inside the window is a stale-resourceVersion conflict, not a lost lease.
-    // Fencing here strands in-flight provider IO as an unresolvable `prepared` attempt.
-    const onLeadershipLost = vi.fn((): never => {
-      throw new Error("must not fence");
+    expect(onLeadershipLost.mock.calls[0]?.[0]).toMatchObject({
+      reason: "expired",
     });
-    const lease = {
-      isLeader: () => true,
-      acquireOrRenew: vi.fn(async () => false),
-      leaseHeldThrough: () => true,
-    };
-
-    await expect(
-      renewLeadershipOrFence(lease, onLeadershipLost)
-    ).rejects.toThrow(/held window has not lapsed/);
-    expect(onLeadershipLost).not.toHaveBeenCalled();
   });
 
-  it("fences once a CAS conflict outlives the lease window", async () => {
-    const fenced = new Error("process fenced");
-    const onLeadershipLost = vi.fn((): never => {
-      throw fenced;
-    });
-    let live = true;
-    const lease = {
-      isLeader: () => true,
-      acquireOrRenew: vi.fn(async () => false),
-      leaseHeldThrough: () => live,
-    };
-
-    await expect(
-      renewLeadershipOrFence(lease, onLeadershipLost)
-    ).rejects.toThrow(/held window has not lapsed/);
-    expect(onLeadershipLost).not.toHaveBeenCalled();
-
-    live = false;
-    await expect(renewLeadershipOrFence(lease, onLeadershipLost)).rejects.toBe(
-      fenced
-    );
-    expect(onLeadershipLost).toHaveBeenCalledOnce();
-  });
-
-  it("fences a prior leader when renewal errors past the lease deadline but not an ordinary follower", async () => {
+  it("fences a prior leader when renewal errors past the deadline but not an ordinary follower", async () => {
     const failure = new Error("API unavailable past lease deadline");
     const fenced = new Error("process fenced");
-    const priorLeaderFence = vi.fn((): never => {
+    const priorLeaderFence = vi.fn((_cause: LeaseRenewError): never => {
       throw fenced;
     });
     await expect(
@@ -723,16 +1181,26 @@ describe("renewLeadershipOrFence", () => {
         priorLeaderFence
       )
     ).rejects.toBe(fenced);
-    expect(priorLeaderFence).toHaveBeenCalledWith(failure);
+    // The raw cause is preserved in the message so the fence log stays diagnosable —
+    // a fence carrying only `causeType: "Error"` cost ~40 min of debugging in prod.
+    expect(priorLeaderFence.mock.calls[0]?.[0]).toMatchObject({
+      reason: "expired",
+    });
+    expect(priorLeaderFence.mock.calls[0]?.[0]?.message).toContain(
+      "API unavailable past lease deadline"
+    );
 
-    const followerFence = vi.fn((): never => {
+    const followerFence = vi.fn((_cause: LeaseRenewError): never => {
       throw new Error("follower must not be fenced");
     });
     await expect(
       renewLeadershipOrFence(
         {
           isLeader: () => false,
-          acquireOrRenew: async () => false,
+          acquireOrRenew: async () => ({
+            held: false as const,
+            reason: "foreign_holder" as const,
+          }),
           leaseHeldThrough: () => false,
         },
         followerFence
@@ -743,7 +1211,7 @@ describe("renewLeadershipOrFence", () => {
 
   it("does not fence a transient renewal error inside the unexpired lease window", async () => {
     const failure = new Error("socket hang up");
-    const fence = vi.fn((): never => {
+    const fence = vi.fn((_cause: LeaseRenewError): never => {
       throw new Error("must not fence a lease nobody else can take");
     });
 
