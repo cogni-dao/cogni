@@ -46,7 +46,7 @@ Per DATABASE_RLS_SPEC.md design decision 7: runtime app uses explicit DSNs, no U
 
 - Schema tables from `@cogni/db-schema` (users, billingAccounts, schedules, etc.)
 - Operator-local schema tables that should not become universal node
-  contracts, currently `workItemSessions`.
+  contracts, currently `nodes`, `workItemSessions`, and `computeCostIntervals`.
 
 **Direct imports (not in barrel):**
 

@@ -79,6 +79,22 @@ export type {
   CatalogNodeRegistryReconcileSummary,
 } from "./catalog-node-registry.port";
 export type { Clock } from "./clock.port";
+export type {
+  ComputeCostAmount,
+  ComputeCostEvidencePort,
+  ComputeCostRate,
+  ComputeResourceCostEvidence,
+  ComputeResourceCostIdentity,
+} from "./compute-cost-evidence.port";
+export {
+  type ComputeCostInterval,
+  type ComputeCostIntervalState,
+  ComputeCostInvariantError,
+  type ComputeCostReport,
+  type ComputeCostReportPort,
+  type ComputeCostStorePort,
+  type ComputeResourceCostContext,
+} from "./compute-cost-store.port";
 export {
   COMPUTE_WORKLOAD_ATTEMPT_ANNOTATION,
   COMPUTE_WORKLOAD_FINALIZER,
