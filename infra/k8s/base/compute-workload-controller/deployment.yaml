@@ -1,0 +1,117 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: compute-workload-controller
+  annotations:
+    reloader.stakater.com/auto: "true"
+  labels:
+    app.kubernetes.io/name: compute-workload-controller
+    app.kubernetes.io/part-of: cogni
+spec:
+  replicas: 1
+  # bug.5110 — two constraints, both load-bearing:
+  # 1. NO SURGE, EVER. A surged second pod races the SAME coordination Lease, producing
+  #    genuine 409 conflicts and a leaseTransitions bump on every redeploy. This
+  #    controller is singleton by design (one wallet, one desired-state authority), so
+  #    the old pod must be gone before the new one starts. maxSurge: 0 +
+  #    maxUnavailable: 1 at replicas: 1 is terminate-then-start — zero overlap,
+  #    behaviorally identical to Recreate.
+  # 2. Must NOT use `type: Recreate`. Live objects retain spec.strategy.rollingUpdate
+  #    owned by prior field managers, and ArgoCD's server-side-apply dry-run then fails
+  #    "rollingUpdate: Forbidden: may not be specified when strategy 'type' is
+  #    'Recreate'", wedging the ENTIRE Argo app in ComparisonError (this exact failure
+  #    blocked candidate flights and the d69e5c29 production promote on 2026-09-10).
+  #    Explicitly owning rollingUpdate here makes SSA merge cleanly with any live object.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: compute-workload-controller
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: compute-workload-controller
+        app.kubernetes.io/part-of: cogni
+    spec:
+      serviceAccountName: compute-workload-controller
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: controller
+          image: ghcr.io/cogni-dao/cogni-template:placeholder
+          imagePullPolicy: IfNotPresent
+          command:
+            [node, /app/nodes/operator/app/compute-workload-controller.mjs]
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef: { fieldPath: metadata.namespace }
+            - name: CONTROLLER_ENVIRONMENT
+              value: replace-in-overlay
+            - name: DEPLOYMENT_DOMAIN
+              value: replace-in-overlay
+            - name: AKASH_ALLOWED_PROVIDERS
+              value: ""
+            - name: AKASH_CONSOLE_API_KEY_FILE
+              value: /var/run/secrets/compute/AKASH_CONSOLE_API_KEY
+            # bug.5110 — lease deadline. At replicas:1 there is no split-brain to
+            # prevent, so this only bounds how long a slow API server may fail
+            # renewals before the process fences itself.
+            #
+            # History (story.5016 Gate 0b): per-env overlays once patched this
+            # env list POSITIONALLY (`/spec/template/spec/containers/0/env/N/value`),
+            # so inserting a variable mid-list silently repointed a different
+            # one — adding this knob before AKASH_ALLOWED_PROVIDERS blanked
+            # that allowlist fleet-wide (d69e5c29), and an empty allowlist
+            # rejects every provider bid. Overlays now patch by NAME (strategic
+            # merge), so ordering here no longer matters.
+            - name: COMPUTE_CONTROLLER_LEASE_DURATION_SECONDS
+              value: "120"
+          ports:
+            - name: metrics
+              containerPort: 9090
+          volumeMounts:
+            - name: compute-provider-credentials
+              mountPath: /var/run/secrets/compute
+              readOnly: true
+          resources:
+            requests: { cpu: 50m, memory: 96Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+            readOnlyRootFilesystem: true
+          livenessProbe:
+            httpGet: { path: /livez, port: metrics }
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet: { path: /readyz, port: metrics }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: compute-provider-credentials
+          projected:
+            sources:
+              - secret:
+                  name: operator-env-secrets
+                  # The shared controller can start without provider credentials so
+                  # k3s-only environments remain ready. Missing credentials log at
+                  # error level, and every catalog-selected Akash preflight fails
+                  # before desired-state mutation until this key is present.
+                  optional: true
+                  items:
+                    - key: AKASH_CONSOLE_API_KEY
+                      path: AKASH_CONSOLE_API_KEY
+                    - key: CLOUDFLARE_API_TOKEN
+                      path: CLOUDFLARE_API_TOKEN
+                    - key: CLOUDFLARE_ZONE_ID
+                      path: CLOUDFLARE_ZONE_ID
