@@ -19,6 +19,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getSessionUser } from "@/app/_lib/auth/session";
+import { loadKnowledgeGraph } from "@/app/(app)/knowledge/_server/loaders";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 
@@ -74,53 +75,20 @@ export const GET = wrapRouteHandlerWithLogging(
       );
     }
 
-    const domains = await port.listDomains();
-    const nodes: z.infer<typeof GraphNodeSchema>[] = [];
-    const nodeIds = new Set<string>();
-    const entryIds: string[] = [];
-    for (const domain of domains) {
-      const rows = await port.listKnowledge(domain, { limit: 10_000 });
-      for (const r of rows) {
-        nodeIds.add(r.id);
-        entryIds.push(r.id);
-        nodes.push({
-          id: r.id,
-          domain: r.domain,
-          title: r.title,
-          entryType: r.entryType ?? "finding",
-          confidencePct: r.confidencePct ?? null,
-          sourceType: r.sourceType,
-        });
-      }
-    }
-
-    // Every citation has exactly one citing node (which is in our set), so
-    // gathering each node's outgoing edges yields the full edge list. Drop
-    // edges whose cited target isn't a node (deprecated/cross-domain dangling
-    // refs) so the client never renders a floating edge.
-    const edgeLists = await Promise.all(
-      entryIds.map((id) => port.listCitationsByCitingId(id))
-    );
-    const edges: z.infer<typeof GraphEdgeSchema>[] = [];
-    for (const list of edgeLists) {
-      for (const c of list) {
-        if (!nodeIds.has(c.citedId)) continue;
-        edges.push({
-          id: c.id,
-          source: c.citingId,
-          target: c.citedId,
-          citationType: c.citationType,
-        });
-      }
-    }
+    // Single-query edge gather + shared assembly (no per-entry N+1). The
+    // builder drops edges whose endpoints aren't both entry nodes, so the
+    // client never renders a floating edge (EDGE_ENDPOINTS_EXIST).
+    const graph = await loadKnowledgeGraph(port);
 
     ctx.log.info(
-      { nodes: nodes.length, edges: edges.length, domains: domains.length },
+      {
+        nodes: graph.nodes.length,
+        edges: graph.edges.length,
+        domains: graph.domains.length,
+      },
       "knowledge.graph_success"
     );
 
-    return NextResponse.json(
-      GraphResponseSchema.parse({ nodes, edges, domains })
-    );
+    return NextResponse.json(GraphResponseSchema.parse(graph));
   }
 );

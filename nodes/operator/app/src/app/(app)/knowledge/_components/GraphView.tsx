@@ -30,7 +30,7 @@ import {
   useState,
 } from "react";
 
-import { fetchGraph } from "../_api/fetchGraph";
+import { fetchGraph, type KnowledgeGraphResponse } from "../_api/fetchGraph";
 import { KnowledgeDetail } from "./KnowledgeDetail";
 
 interface GraphNodeObject {
@@ -150,11 +150,19 @@ function domainColor(domain: string): string {
   return EXTENSION_PALETTE[Math.abs(h) % EXTENSION_PALETTE.length] ?? "#6ea8fe";
 }
 
-export function GraphView({ rows }: { readonly rows: KnowledgeRow[] }) {
+export function GraphView({
+  rows,
+  initialData,
+}: {
+  readonly rows: KnowledgeRow[];
+  /** SSR-seeded graph payload (present on a `?mode=graph` deep-link). */
+  readonly initialData?: KnowledgeGraphResponse | undefined;
+}) {
   const graphQuery = useQuery({
     queryKey: ["knowledge", "graph"],
     queryFn: fetchGraph,
     staleTime: 30_000,
+    initialData,
   });
 
   const [colorMode, setColorMode] = useState<ColorMode>("confidence");
