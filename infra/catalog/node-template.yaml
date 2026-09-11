@@ -20,6 +20,7 @@ production_branch: deploy/production-node-template
 envs: [candidate-a, preview, production]
 deployment_provider:
   candidate-a: akash
+  production: akash
 activity_env: production
 owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
 path_prefix: nodes/node-template/
