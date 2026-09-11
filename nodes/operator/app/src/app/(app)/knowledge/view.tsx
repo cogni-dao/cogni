@@ -56,7 +56,7 @@ import {
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
 
-import { Button, Input } from "@/components";
+import { Alert, AlertDescription, Button, Input } from "@/components";
 
 import { closeContribution } from "./_api/closeContribution";
 import { fetchContributions } from "./_api/fetchContributions";
@@ -88,6 +88,10 @@ function isMode(v: string | null): v is ViewMode {
     v === "chains" ||
     v === "graph"
   );
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "Contribution action failed.";
 }
 
 export function KnowledgeDashboardView() {
@@ -132,19 +136,28 @@ export function KnowledgeDashboardView() {
 
   const openCount = contributionsQuery.data?.contributions.length ?? 0;
 
+  // A failed merge/close throws in the fetch helper; without surfacing it the
+  // button just flips back with zero feedback and the contribution stays open
+  // (bug.5120). Mirror the permalink page: clear on retry, render on error.
+  const [actionError, setActionError] = useState<string | null>(null);
+
   const mergeMutation = useMutation({
     mutationFn: (id: string) => mergeContribution(id),
+    onMutate: () => setActionError(null),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["knowledge"] });
     },
+    onError: (error) => setActionError(errorMessage(error)),
   });
 
   const closeMutation = useMutation({
     mutationFn: (vars: { id: string; reason: string }) =>
       closeContribution(vars.id, vars.reason),
+    onMutate: () => setActionError(null),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["knowledge"] });
     },
+    onError: (error) => setActionError(errorMessage(error)),
   });
 
   const [addDomainOpen, setAddDomainOpen] = useState(false);
@@ -239,6 +252,11 @@ export function KnowledgeDashboardView() {
           error={domainsQuery.error}
           onAddDomain={() => setAddDomainOpen(true)}
         />
+      )}
+      {mode === "inbox" && actionError && (
+        <Alert variant="destructive">
+          <AlertDescription>{actionError}</AlertDescription>
+        </Alert>
       )}
       {mode === "inbox" && (
         <InboxPanel
