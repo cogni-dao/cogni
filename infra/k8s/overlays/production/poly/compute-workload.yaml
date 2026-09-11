@@ -1,0 +1,41 @@
+apiVersion: compute.cogni.io/v1alpha1
+kind: ComputeWorkload
+metadata:
+  name: 4b06359a-a859-4399-888e-a8c7a6696f7e
+  namespace: cogni-production
+  labels:
+    cogni.io/node-id: 4b06359a-a859-4399-888e-a8c7a6696f7e
+    cogni.io/environment: production
+    cogni.io/node: poly
+spec:
+  nodeId: 4b06359a-a859-4399-888e-a8c7a6696f7e
+  environment: production
+  bundle:
+    ref: ghcr.io/cogni-dao/poly@sha256:58207563049dbcd856529e1a80972f8623d1d5743edb9c7f24b74a31ec6912b9
+    source:
+      repository: cogni-dao/poly
+      sha: 1b493abd9ce66e184ac8194c92f97aaee1de50bc
+    artifacts:
+      - name: app
+        image: ghcr.io/cogni-dao/poly@sha256:4291f6d2989ff1b5fb5c30e8a0bbd2755d903016d5cd7123a927f58a6fd366cc
+  workload:
+    name: poly
+    publicHost: poly.cognidao.org
+    services:
+      - name: app
+        artifact: app
+        runtimeProfile: cogni-node-app-v1
+        secretRefs:
+          - key: AUTH_SECRET
+          - key: DATABASE_URL
+          - key: DATABASE_SERVICE_URL
+          - key: LITELLM_VIRTUAL_KEY
+          - key: SCHEDULER_API_TOKEN
+          - key: BILLING_INGEST_TOKEN
+        port: 3200
+        visibility: public
+        bindings: {}
+        bindHost: 0.0.0.0
+        cpuUnits: 2
+        memoryMi: 2048
+        storageMi: 4096
