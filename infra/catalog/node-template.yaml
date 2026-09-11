@@ -26,3 +26,11 @@ activity_env: production
 owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
 path_prefix: nodes/node-template/
 node_id: b927a9dd-6132-4fc9-a51e-e3cee2568e3c
+# task.5052 (story.5016) — this node's workload runs on Akash; these provider
+# egress CIDRs may dial the env VM's substrate ports (5432,5435,6379,4000,7233).
+# Rendered per-env (union over rows deployed to the env) by
+# scripts/ci/render-compute-egress-allowlist.sh and applied by
+# infra/provision/cherry/harden-docker-public-ports.sh. Absent = fail-closed.
+compute_egress_cidrs:
+  - cidr: 80.200.246.35/32
+    comment: shared egress NAT of Akash providers zencloud + digitalfrontier (story.5016)
