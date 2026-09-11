@@ -22,6 +22,8 @@
  *     input, like candidate-flight) and writes ZERO commits to `main`. The pin is recorded on
  *     `deploy/preview`. The App's main-write privilege is reserved for governance/code merges,
  *     never routine deploy pins (task.5022; the prior pin-PR/main-commit stalled or polluted main).
+ *   - INFRA_RECONCILE_PRESERVES_APP: production infra dispatch replays the current deploy-branch
+ *     app pin while the workflow sources merged Compose/edge state from main; callers choose no ref.
  * Side-effects: IO (GitHub REST API)
  * Links: docs/spec/node-formation.md, task.0370, task.5083
  * @internal
@@ -47,10 +49,12 @@ import type {
   DeployPlanePort,
   MirrorCanonicalFilesInput,
   MirrorCanonicalFilesResult,
+  NodeInfraReconcileResult,
   NodePromoteResult,
   PreparedNodeRefCandidateFlight,
   PrepareNodeRefCandidateFlightInput,
   PromoteNodeInput,
+  ReconcileNodeInfraInput,
   ResolvedNodeRepo,
   ResolveNodeRepoInput,
   SyncTemplateUpstreamInput,
@@ -1088,6 +1092,129 @@ export class GitHubRepoWriter implements DeployPlanePort {
       sourceSha,
       sourceAddressing: isRemoteSource ? "remote_source" : "in_repo",
       workflowUrl: dispatch.workflowUrl,
+    };
+  }
+
+  /**
+   * Production infra reconcile with no app advancement. The current deploy-branch pin is resolved
+   * by the operator App and replayed into the existing promote workflow; the caller supplies no SHA
+   * or workflow ref. This keeps the dangerous shared-Compose lever source-addressed and fail-closed.
+   */
+  async reconcileNodeInfra(
+    input: ReconcileNodeInfraInput
+  ): Promise<NodeInfraReconcileResult> {
+    const { env, parentOwner, parentRepo, slug } = input;
+    const sourceMapText = await this.fetchFileText({
+      owner: parentOwner,
+      repo: parentRepo,
+      path: ".promote-state/source-sha-by-app.json",
+      ref: `deploy/${env}-${slug}`,
+    });
+    if (!sourceMapText) {
+      throw deployPlaneError(
+        "deploy_state_missing",
+        `production deploy state not found for ${slug}`,
+        404
+      );
+    }
+
+    let sourceMap: unknown;
+    try {
+      sourceMap = JSON.parse(sourceMapText);
+    } catch {
+      throw deployPlaneError(
+        "invalid_deploy_state",
+        `invalid production deploy state for ${slug}`,
+        409
+      );
+    }
+    const sourceSha =
+      typeof sourceMap === "object" && sourceMap !== null
+        ? (sourceMap as Record<string, unknown>)[slug]
+        : undefined;
+    if (typeof sourceSha !== "string" || !SOURCE_SHA_PATTERN.test(sourceSha)) {
+      throw deployPlaneError(
+        "invalid_deploy_state",
+        `production deploy state has no valid source SHA for ${slug}`,
+        409
+      );
+    }
+
+    const catalogText = await this.fetchFileText({
+      owner: parentOwner,
+      repo: parentRepo,
+      path: `infra/catalog/${slug}.yaml`,
+      ref: "main",
+    });
+    if (!catalogText) {
+      throw deployPlaneError(
+        "catalog_missing",
+        `node catalog entry not found for ${slug}`,
+        404
+      );
+    }
+    const row = PromoteDiscriminatorSchema.safeParse(parseYaml(catalogText));
+    if (!row.success || row.data.name !== slug) {
+      throw deployPlaneError(
+        "invalid_catalog",
+        `invalid node catalog entry for ${slug}`,
+        409
+      );
+    }
+    const isRemoteSource = row.data.source_repo !== undefined;
+
+    const dispatch = await this.dispatchNodeInfraReconcile({
+      owner: parentOwner,
+      repo: parentRepo,
+      env,
+      slug,
+      ...(isRemoteSource ? { nodeSourceSha: sourceSha } : { sourceSha }),
+    });
+    return {
+      status: "dispatched",
+      env,
+      sourceSha,
+      sourceAddressing: isRemoteSource ? "remote_source" : "in_repo",
+      workflowUrl: dispatch.workflowUrl,
+    };
+  }
+
+  private async dispatchNodeInfraReconcile(input: {
+    owner: string;
+    repo: string;
+    env: "production";
+    slug: string;
+    sourceSha?: string;
+    nodeSourceSha?: string;
+  }): Promise<CandidateFlightDispatchResult> {
+    const octokit = await this.getOctokit(input.owner, input.repo);
+    const inputs: Record<string, string> = {
+      environment: input.env,
+      nodes: input.slug,
+      skip_infra: "false",
+      deploy_infra_mode: "full",
+    };
+    if (input.sourceSha) {
+      inputs.source_sha = input.sourceSha;
+      inputs.build_sha = input.sourceSha;
+    }
+    if (input.nodeSourceSha) inputs.node_source_sha = input.nodeSourceSha;
+
+    await octokit.request(
+      "POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches",
+      {
+        owner: input.owner,
+        repo: input.repo,
+        workflow_id: "promote-and-deploy.yml",
+        ref: "main",
+        inputs,
+        request: { signal: AbortSignal.timeout(15_000) },
+      }
+    );
+    return {
+      dispatched: true,
+      workflowUrl: `https://github.com/${input.owner}/${input.repo}/actions/workflows/promote-and-deploy.yml`,
+      message: `Production infra reconcile dispatched for ${input.slug}.`,
     };
   }
 

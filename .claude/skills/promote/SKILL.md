@@ -15,6 +15,7 @@ You are operating the cogni-template release pipeline. The pipeline is multi-lay
 | --------------------- | -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
 | Flight to candidate-a | `POST /api/v1/vcs/flight {nodeRef:{nodeId, sourceSha}}`              | `node.flight` → `can_flight` (`developer`)                                                     | `202` + `candidate-flight.yml` dispatch (candidate-a only) |
 | Promote to production | `POST /api/v1/deploy/promote {nodeId, env:"production", sourceSha?}` | `node.promote_production` → `can_promote_production` (`production_promoter`; `admin` inherits) | `200` dispatched; **app-digest only, `skip_infra=true`**   |
+| Reconcile prod infra  | `POST /api/v1/deploy/infra-reconcile {nodeId, env:"production"}`     | same production action, **operator node only**                                                 | `200` dispatched; current app pin preserved                |
 | Preview               | automatic on node `main`-merge                                       | ungated                                                                                        | no agent endpoint — see Preview below                      |
 
 Need the production grant? Agent files `POST /api/v1/nodes/{id}/access-requests {role:"production_promoter"}`; the node owner approves once with `POST /api/v1/nodes/{id}/developers {agentUserId, decision:"approve", role}`. Result codes: `403 authz_denied` = no grant; `503 authz_unavailable` = the env's OpenFGA store is unbootstrapped (≠ denial); `502 dispatch_failed` = RBAC passed but that env's operator App isn't installed. Full playbook: operator knowledge hub, `infrastructure` domain, entry `cicd-agent-playbook`.
@@ -81,7 +82,15 @@ curl -sS -X POST "$BASE/api/v1/deploy/promote" \
 # 403 authz_denied → request can_promote_production (grant loop, top of file).
 ```
 
-`APP_PROMOTE_IS_NO_INFRA`: the API hard-sets `skip_infra=true` — promotion reconciles the **app digest only**. Per-node ESO `ExternalSecret`s are still materialized by the ungated `node-substrate` lane, so no-infra does **not** skip secret reconciliation. A substrate change (`infra/compose/**`, a VM-materialized OpenBao/ESO bridge secret, or edge/runtime topology) needs the **infra lever** — an operator-internal action, never an app promotion, and never a personal `gh workflow run … -f skip_infra=false`.
+`APP_PROMOTE_IS_NO_INFRA`: the API hard-sets `skip_infra=true` — promotion reconciles the **app digest only**. Per-node ESO `ExternalSecret`s are still materialized by the ungated `node-substrate` lane, so no-infra does **not** skip secret reconciliation. A merged substrate change (`infra/compose/**`, a VM-materialized OpenBao/ESO bridge secret, or edge/runtime topology) uses the separate operator-mediated lever:
+
+```bash
+curl -sS -X POST "$BASE/api/v1/deploy/infra-reconcile" \
+  -H "Authorization: Bearer $COGNI_API_KEY" -H "Content-Type: application/json" \
+  -d '{"nodeId":"<operator-node-uuid>","env":"production"}'
+```
+
+This is production-only and operator-node-only. It accepts no SHA, ref, workflow, or mode: the adapter replays the deployed app pin and the existing workflow consumes the merged infrastructure from `main`. A `403 authz_denied` requires the same one-time production-promoter approval. Never replace it with personal `gh workflow run … -f skip_infra=false` or an SSH mutation. For node app placement/scale, use the Akash compute API instead; this verb owns only the shared state/edge substrate.
 
 After dispatch, **always** confirm production `/version.buildSha` actually advanced — see Monitoring. Discover the dispatched run via the unauthenticated GitHub API (`GET /repos/Cogni-DAO/cogni/actions/workflows/promote-and-deploy.yml/runs`); no personal token required.
 

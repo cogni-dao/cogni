@@ -2532,6 +2532,163 @@ describe("GitHubRepoWriter.promoteNode (env=production)", () => {
   });
 });
 
+describe("GitHubRepoWriter.reconcileNodeInfra", () => {
+  const DISPATCH =
+    "POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches";
+  const deployedSha = "0123456789012345678901234567890123456789";
+  const inRepoCatalog =
+    "name: operator\ntype: node\npath_prefix: nodes/operator/\ndockerfile: nodes/operator/app/Dockerfile\n";
+  const forkCatalog =
+    "name: beacon\ntype: node\npath_prefix: nodes/beacon/\nsource_repo: https://github.com/cogni-dao/beacon.git\nimage_repository: ghcr.io/cogni-dao/beacon\n";
+
+  function contentHandler(catalog: string, slug: string) {
+    return (params: Record<string, unknown>) => {
+      if (params.path === ".promote-state/source-sha-by-app.json") {
+        expect(params.ref).toBe(`deploy/production-${slug}`);
+        return {
+          type: "file",
+          encoding: "base64",
+          content: Buffer.from(
+            JSON.stringify({ [slug]: deployedSha }),
+            "utf-8"
+          ).toString("base64"),
+        };
+      }
+      expect(params).toMatchObject({
+        path: `infra/catalog/${slug}.yaml`,
+        ref: "main",
+      });
+      return {
+        type: "file",
+        encoding: "base64",
+        content: Buffer.from(catalog, "utf-8").toString("base64"),
+      };
+    };
+  }
+
+  it("replays the deployed in-repo pin while forcing the fixed full-infra mode", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": contentHandler(
+        inRepoCatalog,
+        "operator"
+      ),
+      [DISPATCH]: () => ({}),
+    };
+
+    const result = await makeWriter().reconcileNodeInfra({
+      env: "production",
+      parentOwner: "Cogni-DAO",
+      parentRepo: "cogni",
+      slug: "operator",
+    });
+
+    expect(result).toMatchObject({
+      status: "dispatched",
+      env: "production",
+      sourceSha: deployedSha,
+      sourceAddressing: "in_repo",
+    });
+    const dispatch = requests.find((request) => request.route === DISPATCH);
+    expect(dispatch?.params).toMatchObject({
+      owner: "Cogni-DAO",
+      repo: "cogni",
+      workflow_id: "promote-and-deploy.yml",
+      ref: "main",
+      inputs: {
+        environment: "production",
+        nodes: "operator",
+        skip_infra: "false",
+        deploy_infra_mode: "full",
+        source_sha: deployedSha,
+        build_sha: deployedSha,
+      },
+    });
+    expect(
+      (dispatch?.params.inputs as Record<string, string>).node_source_sha
+    ).toBeUndefined();
+  });
+
+  it("replays a remote node pin as node_source_sha", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": contentHandler(
+        forkCatalog,
+        "beacon"
+      ),
+      [DISPATCH]: () => ({}),
+    };
+
+    const result = await makeWriter().reconcileNodeInfra({
+      env: "production",
+      parentOwner: "Cogni-DAO",
+      parentRepo: "cogni",
+      slug: "beacon",
+    });
+
+    expect(result.sourceAddressing).toBe("remote_source");
+    const dispatch = requests.find((request) => request.route === DISPATCH);
+    expect(dispatch?.params).toMatchObject({
+      workflow_id: "promote-and-deploy.yml",
+      ref: "main",
+      inputs: {
+        environment: "production",
+        nodes: "beacon",
+        skip_infra: "false",
+        deploy_infra_mode: "full",
+        node_source_sha: deployedSha,
+      },
+    });
+    expect(
+      (dispatch?.params.inputs as Record<string, string>).source_sha
+    ).toBeUndefined();
+    expect(
+      (dispatch?.params.inputs as Record<string, string>).build_sha
+    ).toBeUndefined();
+  });
+
+  it("fails closed when the production deploy state is missing", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": () => {
+        throw statusError(404, "Not Found");
+      },
+      [DISPATCH]: () => ({}),
+    };
+
+    await expect(
+      makeWriter().reconcileNodeInfra({
+        env: "production",
+        parentOwner: "Cogni-DAO",
+        parentRepo: "cogni",
+        slug: "operator",
+      })
+    ).rejects.toMatchObject({ code: "deploy_state_missing", status: 404 });
+    expect(requests.some((request) => request.route === DISPATCH)).toBe(false);
+  });
+
+  it("fails closed when the production pin is invalid", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": () => ({
+        type: "file",
+        encoding: "base64",
+        content: Buffer.from(
+          JSON.stringify({ operator: "not-a-sha" }),
+          "utf-8"
+        ).toString("base64"),
+      }),
+      [DISPATCH]: () => ({}),
+    };
+
+    await expect(
+      makeWriter().reconcileNodeInfra({
+        env: "production",
+        parentOwner: "Cogni-DAO",
+        parentRepo: "cogni",
+        slug: "operator",
+      })
+    ).rejects.toMatchObject({ code: "invalid_deploy_state", status: 409 });
+    expect(requests.some((request) => request.route === DISPATCH)).toBe(false);
+  });
+});
+
 describe("GitHubRepoWriter.resolveNodeRepo", () => {
   // IN-REPO catalog: NO source_repo (operator/poly shape).
   const inRepoCatalog =

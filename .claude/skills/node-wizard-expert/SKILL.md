@@ -61,6 +61,8 @@ The first real **production** node launch (beacon, 2026-06-16) proved the **cont
 
 Production heal needs prod read/SSH (owner-gated; "never SSH prod" is the default — a one-off prod data fix needs explicit owner authorization and a captured follow-up bug). **Pareto fix: make the substrate lane idempotent + verify-and-heal (DB + edge + secrets) so none of these need a human** — bug.5033 + PR #1697 are the first two. Note: work-item IDs (`bug.503x`) currently collide with in-code bug refs (e.g. `bug.5031` is also the Grafana datasource-drift class in committed docs) — confirm against the work API before citing.
 
+**Current production substrate lever:** after the declarative fix is merged, call `POST /api/v1/deploy/infra-reconcile {nodeId:<operator-node-id>, env:"production"}` with the agent Bearer key. Production-promoter RBAC authorizes the operator GitHub App; the route preserves the deployed app pin and accepts no caller SHA/ref/workflow/mode. This is for the shared state/edge substrate only. Wizard-born node apps remain Akash compute workloads—create/replace/scale them through the compute API, never by extending this shared-VM lever. Do not ask the owner to click GitHub Actions or perform normal production SSH changes; only an RBAC approval may require them.
+
 ## Repo Ancestry Rule
 
 Wizard-minted nodes must be named forks of `node-template`, not GitHub template-generated repos. Template generation copies a snapshot without shared git history, so agents cannot fetch `node-template` and merge future template updates. The publish path should call `GitHubRepoWriter.forkFromTemplate`, wait for the forked `main`, commit only the regenerated `.cogni/repo-spec.yaml` identity on top, and pin that identity commit as the operator submodule gitlink.
