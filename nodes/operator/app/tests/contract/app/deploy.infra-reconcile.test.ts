@@ -9,6 +9,7 @@
  *   - AUTHZ_BEFORE_SIDE_EFFECT: every deny path performs zero deploy-plane calls.
  *   - CALLER_CANNOT_SELECT_SOURCE: SHA, ref, workflow, and infra mode are not API inputs.
  *   - SHARED_INFRA_OPERATOR_ONLY: a promoter for another node cannot reconcile the shared VM.
+ *   - ENV_SCOPED_PARENT: candidate/test and production use their own configured parent repos.
  * Side-effects: none
  * Links: story.5027, src/app/api/v1/deploy/infra-reconcile/route.ts
  * @internal
@@ -41,6 +42,10 @@ const dbState = vi.hoisted(() => ({
   call: 0,
 }));
 const mockGetSessionUser = vi.hoisted(() => vi.fn());
+const envState = vi.hoisted(() => ({
+  parentOwner: "test-owner" as string | undefined,
+  parentRepo: "test-repo" as string | undefined,
+}));
 const mockLog = vi.hoisted(() => ({
   child: vi.fn().mockReturnThis(),
   debug: vi.fn(),
@@ -89,10 +94,12 @@ vi.mock("@/bootstrap/otel", () => ({
     }) => Promise<unknown>
   ) => handler({ traceId: "trace-1", span: { setAttribute: vi.fn() } }),
 }));
-vi.mock("@/shared/config/repoSpec.server", () => ({
-  getGithubRepo: () => ({ owner: "test-owner", repo: "test-repo" }),
+vi.mock("@/shared/env", () => ({
+  serverEnv: () => ({
+    NODE_SUBMODULE_PARENT_OWNER: envState.parentOwner,
+    NODE_SUBMODULE_PARENT_REPO: envState.parentRepo,
+  }),
 }));
-vi.mock("@/shared/env", () => ({ serverEnv: () => ({}) }));
 vi.mock("@/app/_lib/auth/session", () => ({
   getSessionUser: () => mockGetSessionUser(),
 }));
@@ -135,6 +142,8 @@ describe("POST /api/v1/deploy/infra-reconcile", () => {
     dbState.node = { id: NODE_ID, slug: "operator" };
     dbState.billing = { id: "billing-1" };
     dbState.call = 0;
+    envState.parentOwner = "test-owner";
+    envState.parentRepo = "test-repo";
     authzState.decision = "authz_allowed";
     authzState.check.mockImplementation(async () => ({
       decision: authzState.decision === "authz_allowed" ? "allow" : "deny",
@@ -231,6 +240,16 @@ describe("POST /api/v1/deploy/infra-reconcile", () => {
       parentRepo: "test-repo",
       slug: "operator",
     });
+  });
+
+  it("fails closed when the environment-scoped deployment parent is missing", async () => {
+    envState.parentRepo = undefined;
+    const res = await post({ nodeId: NODE_ID, env: "production" });
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({
+      error: "infra_reconcile_target_not_configured",
+    });
+    expect(mockDeployPlane.reconcileNodeInfra).not.toHaveBeenCalled();
   });
 
   it("returns typed 502 when the App dispatch fails", async () => {

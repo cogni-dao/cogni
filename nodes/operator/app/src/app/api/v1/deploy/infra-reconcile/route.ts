@@ -7,10 +7,12 @@
  * Scope: Operator node only; dispatches the existing promote-and-deploy workflow via the operator
  *   GitHub App while replaying the current production app source pin.
  * Invariants:
- *   - AUTHZ_BEFORE_SIDE_EFFECT: `node.promote_production` is checked before dispatch.
+ *   - AUTHZ_BEFORE_SIDE_EFFECT: the temporary bootstrap action `node.promote_production` is
+ *     checked before dispatch; story.5028 splits the dedicated infra permission after model boot.
  *   - PROMOTION_RUNS_AS_THE_OPERATOR: no caller GitHub credential crosses this route.
  *   - SHARED_INFRA_OPERATOR_ONLY: a node-scoped promoter cannot restart another node's shared VM.
  *   - INFRA_RECONCILE_PRESERVES_APP: caller supplies no SHA/ref; the adapter resolves prod state.
+ *   - ENV_SCOPED_PARENT: the environment's App targets only its configured deployment parent.
  * Side-effects: IO (authz check, GitHub workflow dispatch)
  * Links: story.5027, docs/spec/cicd-platform-boundary.md
  * @public
@@ -26,7 +28,6 @@ import { getSessionUser } from "@/app/_lib/auth/session";
 import { createOperatorDeployPlane } from "@/bootstrap/capabilities/operator-deploy-plane";
 import { getContainer, resolveServiceDb } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
-import { getGithubRepo } from "@/shared/config";
 import { nodes } from "@/shared/db/nodes";
 import { serverEnv } from "@/shared/env";
 
@@ -107,14 +108,24 @@ export const POST = wrapRouteHandlerWithLogging(
       );
     }
 
-    const { owner, repo } = getGithubRepo();
+    // The deployment parent is environment-scoped. Candidate-a's test App is installed only on
+    // cogni-test-org and MUST NOT fall back to the production Cogni-DAO/cogni hardcode.
+    const envConfig = serverEnv();
+    const parentOwner = envConfig.NODE_SUBMODULE_PARENT_OWNER;
+    const parentRepo = envConfig.NODE_SUBMODULE_PARENT_REPO;
+    if (!parentOwner || !parentRepo) {
+      return NextResponse.json(
+        { error: "infra_reconcile_target_not_configured" },
+        { status: 503 }
+      );
+    }
     try {
       const result = await createOperatorDeployPlane(
-        serverEnv()
+        envConfig
       ).reconcileNodeInfra({
         env,
-        parentOwner: owner,
-        parentRepo: repo,
+        parentOwner,
+        parentRepo,
         slug: node.slug,
       });
       return NextResponse.json(result, { status: 200 });
