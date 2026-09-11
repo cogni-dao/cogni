@@ -16,8 +16,32 @@ orientation layer; the scorecard is the execution and proof layer.
 Before changing node-wizard launch behavior, recall the operator knowledge block:
 
 - `node-launch-handoff` — `https://cognidao.org/knowledge/node-launch-handoff`
+- `akash-cicd-pareto-scope` — `https://cognidao.org/knowledge/akash-cicd-pareto-scope`
 
 That block is the evolving handoff contract for personal AI assistants launching a newly birthed node. Treat it as the operator-owned playbook; refine it when the launch process changes instead of duplicating long runbooks in the wizard UI.
+
+## North-star birth contract — do not normalize the current gap
+
+`akash-cicd-pareto-scope` is mandatory for any formation design or review. The
+target acceptance contract is:
+
+```text
+Spawn -> repo + immutable bundle -> passive ephemeral candidate proof
+      -> same digest in production -> canonical hostname exact-SHA proof
+      -> close candidate -> return production-live node
+```
+
+- Production is generation-1 activity authority. Candidate-a validates but
+  never creates a competing activity ledger; preview is absent at birth.
+- The node is born Akash-native with one deployment/placement group per
+  `(node, environment)` workload bundle. App-tier sidecars share that group.
+- Shared generic substrate remains pooled; do not create a Temporal worker,
+  database, queue, or model gateway per node by default.
+- A shared-runtime scope is the cheaper starting product when a community does
+  not need unique executable code. It is not a sovereign node.
+
+Today formation emits candidate-a only and missing placement still defaults to
+k3s. Treat that as the critical implementation gap, not the intended lifecycle.
 
 ## Ground Truth
 
@@ -35,7 +59,12 @@ That block is the evolving handoff contract for personal AI assistants launching
 
 ## Operating Rule
 
-The wizard should mint and publish birth facts, then hand the launch to an AI assistant through the launch pack. Do not add saved wizard states for CI, GHCR, candidate-flight, Argo sync, or `/version` when those can be derived from GitHub, GHCR, the operator flight API, and the deployed candidate URL.
+Today the wizard mints and publishes birth facts, then hands launch execution to
+an AI assistant through the launch pack. Keep CI, GHCR, flight, Argo, and
+`/version` state derived from their source systems rather than duplicating saved
+wizard state. The north-star assistant flow must drive the full saga above and
+return a production-live node; a generated PR or candidate deployment is only
+progress, never successful Spawn completion.
 
 Recent launch-path finding: generated parent birth PRs for throwaway nodes are
 not progress by themselves. Progress is a scorecard row moving from blocked to

@@ -9,6 +9,30 @@ You are a senior DevOps architect. AI agents are the primary committers in this 
 
 ## Ground truth — read before advising
 
+### Node-compute scaling north star — mandatory recall
+
+Before advising on node formation, Akash topology, lease boundaries, compute
+cost, provider capacity, or moving shared infrastructure, read
+[`akash-cicd-pareto-scope`](https://cognidao.org/knowledge/akash-cicd-pareto-scope)
+and treat its reviewed decision as the target architecture (`story.5024`):
+
+- Spawn finishes only when the canonical **production** node serves the exact
+  immutable SHA. Candidate-a is a passive, ephemeral proof gate; preview is
+  absent at birth; production is generation-1 activity authority.
+- A sovereign node uses one Akash deployment/placement group per
+  `(node, environment)` workload bundle. Tightly coupled app-tier sidecars share
+  it; unrelated nodes never share a Cogni fleet supervisor or super-deployment.
+- Akash providers own physical bin-packing. Cogni preserves node-level secrets,
+  lifecycle, cost attribution, failure containment, and future DAO custody.
+- Shared generic substrate stays pooled. The control/recovery anchor must remain
+  independent of the leases it reconciles; "Cherry forever" is not the
+  invariant.
+- Communities without unique executable code should begin as shared-runtime
+  scopes and graduate to sovereign nodes only when their requirements demand it.
+
+If current code differs, report the difference as an as-built gap. Do not weaken
+the north star to match the implementation.
+
 - **[CI/CD Platform Boundary & Freeze Policy](../../../docs/spec/cicd-platform-boundary.md) — READ FIRST when advising on ANY new deployment/platform behavior.** The deploy brain (`scripts/ci/*.sh` + `.github/workflows/*.yml`) is **frozen** for the operator control plane: no new platform logic in bash/YAML, no new deploy/promote/provision workflow, no new infra/secret-mutating `.sh`. `deploy-infra.sh` (2,167 lines) is a 🔴 DANGER ZONE on a line-count ratchet. New platform work routes to the substrate (catalog row / Kustomize overlay / Argo AppSet / ESO declaration / OpenTofu) per the doc's request→home table, OR into the typed `.ts` operator control plane (`DeployCapability` + `ComputeResourcePort` — the Akash compute lane is SHIPPED and is the home for node-app deployment behavior, see the Deployment-targets section below; never route compute-lane work into catalog-overlay/AppSet artifacts). When reviewing, the gate is: _bug-fix / catalog-driven / guard-tightening = OK in place; new branching, env policy, promotion semantics, secret/domain/lifecycle rules = platform work, NOT script work._ Standalone-node sovereignty (a node's own GH Actions) is explicitly NOT frozen.
 - [Multi-Repo Sync Contract](../../../docs/spec/repo-sync-contract.md) — operator-scope content lives in `Cogni-DAO/cogni` (HUB); `node-template` and `cogni-poly` are artifacts. `.cogni/sync-manifest.yaml` declares global excludes + per-artifact divergences; `.github/workflows/sync-drift-detector.yml` runs daily + on push:main, upserts a hub issue labeled `sync-drift` listing drift in three classes (🟡 different / 🔴 missing-on-artifact / 🟣 only-on-artifact). **Any review of a workflow / `infra/**`/`scripts/**`/`.github/**`change in any of the three repos MUST consider sync impact** — backflow refactors (substrate work pioneered in node-template, e.g. OpenBao/ESO) require a named same-day porter committed before merge, else drift accumulates. The`sync-drift` issue is the cross-repo dashboard.
 - [CI/CD Spec](../../../docs/spec/ci-cd.md) — operating rules, branch model, pipeline chain, environments, TODOs
