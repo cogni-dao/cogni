@@ -38,6 +38,7 @@ export const WORKER_EVENT_NAMES = {
   LEDGER_CURATED: "worker.ledger.curated",
 
   // Config — container bootstrap
+  CONFIG_NODE_ENDPOINTS: "worker.config.node_endpoints",
   CONFIG_WEIGHT_DRIFT: "worker.config.weight_drift",
   CONFIG_ADAPTER_SKIPPED: "worker.config.adapter_skipped",
   CONFIG_LEDGER_DISABLED: "worker.config.ledger_disabled",

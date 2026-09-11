@@ -278,6 +278,54 @@ describe("HttpExecutionGrantValidator", () => {
   });
 });
 
+// story.5016 / bug.5121: network failures (DNS ENOTFOUND on stale
+// COGNI_NODE_ENDPOINTS) must name the slug + resolved URL and stay retryable.
+describe("network failure diagnostics", () => {
+  it("wraps a fetch rejection with nodeId + resolved URL, retryable, and logs it", async () => {
+    fetchMock.mockRejectedValue(
+      Object.assign(new TypeError("fetch failed"), {
+        cause: { code: "ENOTFOUND" },
+      })
+    );
+    const writer = createHttpGraphRunWriter(deps);
+    await expect(
+      writer.createRun(SYSTEM_ACTOR, "poly", {
+        runId: "11111111-1111-4111-8111-111111111111",
+      })
+    ).rejects.toMatchObject({
+      name: "RunHttpClientError",
+      retryable: true,
+      status: 0,
+      message: expect.stringContaining(
+        'http://poly-node-app:3000/api/internal/graph-runs (nodeId "poly") network failure [ENOTFOUND]'
+      ),
+    });
+    expect(
+      (mockLogger as unknown as { error: ReturnType<typeof vi.fn> }).error
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nodeId: "poly",
+        url: "http://poly-node-app:3000/api/internal/graph-runs",
+        code: "ENOTFOUND",
+      }),
+      "node endpoint unreachable"
+    );
+  });
+
+  it("names the known slugs when the nodeId is missing from the map", async () => {
+    const writer = createHttpGraphRunWriter(deps);
+    await expect(
+      writer.createRun(SYSTEM_ACTOR, "toks4", {
+        runId: "11111111-1111-4111-8111-111111111111",
+      })
+    ).rejects.toMatchObject({
+      name: "RunHttpClientError",
+      retryable: false,
+      message: expect.stringContaining("(known: operator, poly)"),
+    });
+  });
+});
+
 // Keep the exported error classes importable in one smoke spot to catch accidental removal.
 describe("error exports", () => {
   it("RunHttpClientError is a throwable with status + retryable", () => {
