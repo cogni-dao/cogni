@@ -321,10 +321,7 @@ spec:
                     # Stage-specific reason of the last failed attempt when the
                     # terminal reason aggregates it away (bug.5128).
                     lastAttemptReason:
-                      {
-                        type: string,
-                        pattern: "^[A-Za-z][A-Za-z0-9]{0,127}$",
-                      }
+                      { type: string, pattern: "^[A-Za-z][A-Za-z0-9]{0,127}$" }
                 conditions:
                   type: array
                   maxItems: 8
