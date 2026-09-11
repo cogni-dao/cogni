@@ -16,6 +16,7 @@ production_branch: deploy/production-levelup
 envs: [preview, production]
 deployment_provider:
   preview: akash
+  production: akash
 # bug.5079 — activity_env is the SINGLETON env allowed to ingest Git receipts. GitHub
 # App webhooks are delivered to production only (one App, one webhook URL), and the
 # production operator's route index filters to `activityEnv === DEPLOY_ENVIRONMENT`
