@@ -4041,3 +4041,241 @@ describe("forkFromTemplate — policy is bound to the inherited tree", () => {
     ).rejects.toMatchObject({ code: "template_repo_policy_missing" });
   });
 });
+
+describe("GitHubRepoWriter.reconcileNodeMainProtection (bug.5123)", () => {
+  // The birth-path protection re-applied onto EXISTING node repos: nodes minted before the
+  // #1797/task.5028 backstop carry no required-check ruleset, so the operator merge gate
+  // fail-closes every PR on them (not_green on an empty required-context set). The reconcile
+  // verb must be idempotent (compliant = zero writes), loud when it writes (mismatches), and
+  // must surface App-lacks-admin as a typed `protection_unavailable`, never a generic 500.
+  const OWNER = "cogni-test-org";
+  const REPO = "test-cog";
+  const encode = (content: string) =>
+    Buffer.from(content, "utf-8").toString("base64");
+
+  /** Serve the node repo's own policy file; `nodePolicy: null` = 404 on the node repo. */
+  function policyContentsHandler(nodePolicy: string | null): RouteHandler {
+    return (params) => {
+      expect(params).toMatchObject({
+        path: ".cogni/repo-policy.json",
+        ref: "main",
+      });
+      if (params.repo === REPO) {
+        if (nodePolicy === null) throw statusError(404, "Not Found");
+        return {
+          type: "file",
+          encoding: "base64",
+          content: encode(nodePolicy),
+        };
+      }
+      // Canonical template fallback (TEMPLATE_POLICY_IS_SSOT).
+      expect(params.repo).toBe("node-template");
+      return {
+        type: "file",
+        encoding: "base64",
+        content: encode(TEST_NODE_REPO_POLICY_JSON),
+      };
+    };
+  }
+
+  it("applies the canonical ruleset when the repo has none (POST + readback proof)", async () => {
+    storedRulesets.clear();
+    let postParams: Record<string, unknown> | undefined;
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": policyContentsHandler(
+        TEST_NODE_REPO_POLICY_JSON
+      ),
+      "GET /repos/{owner}/{repo}/rulesets": () => [],
+      "POST /repos/{owner}/{repo}/rulesets": (params) => {
+        postParams = params;
+        return recordRuleset(params, 88);
+      },
+      "GET /repos/{owner}/{repo}/rulesets/{ruleset_id}": (params) =>
+        readStoredRuleset(params),
+    };
+
+    await expect(
+      makeWriter().reconcileNodeMainProtection({
+        owner: OWNER,
+        repo: REPO,
+        slug: REPO,
+        isInRepoNode: false,
+      })
+    ).resolves.toEqual({
+      status: "applied",
+      policySource: "node_repo",
+      rulesetName: NODE_MAIN_POLICY_RULESET_NAME,
+      requiredContexts:
+        TEST_NODE_REPO_POLICY.ruleset.requiredStatusChecks.contexts,
+      mismatches: [`ruleset "${NODE_MAIN_POLICY_RULESET_NAME}" absent`],
+    });
+
+    // The write is the EXACT birth-path payload — one protection SSOT, no second config.
+    expect(postParams).toEqual({
+      owner: OWNER,
+      repo: REPO,
+      ...nodeMainPolicyRulesetPayload(TEST_NODE_REPO_POLICY),
+    });
+    // And it is proven by readback, exactly like formation.
+    expect(requests.map((request) => request.route)).toContain(
+      "GET /repos/{owner}/{repo}/rulesets/{ruleset_id}"
+    );
+  });
+
+  it("is a zero-write no-op when the active ruleset already satisfies the policy", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": policyContentsHandler(
+        TEST_NODE_REPO_POLICY_JSON
+      ),
+      "GET /repos/{owner}/{repo}/rulesets": () => [
+        { id: 41, name: NODE_MAIN_POLICY_RULESET_NAME },
+      ],
+      "GET /repos/{owner}/{repo}/rulesets/{ruleset_id}": () => ({
+        id: 41,
+        source_type: "Repository",
+        ...nodeMainPolicyRulesetPayload(TEST_NODE_REPO_POLICY),
+      }),
+    };
+
+    await expect(
+      makeWriter().reconcileNodeMainProtection({
+        owner: OWNER,
+        repo: REPO,
+        slug: REPO,
+        isInRepoNode: false,
+      })
+    ).resolves.toMatchObject({ status: "compliant", mismatches: [] });
+
+    const routes = requests.map((request) => request.route);
+    expect(routes).not.toContain("POST /repos/{owner}/{repo}/rulesets");
+    expect(routes).not.toContain(
+      "PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}"
+    );
+  });
+
+  it("repairs a drifted same-named ruleset with a PUT and reports the mismatches", async () => {
+    storedRulesets.clear();
+    const drifted = nodeMainPolicyRulesetPayload(TEST_NODE_REPO_POLICY);
+    const driftedChecks = drifted.rules.find(
+      (rule) => rule.type === "required_status_checks"
+    );
+    // Drop `manifest` from the required set — the real-world drift shape (bug.5123).
+    if (driftedChecks?.parameters) {
+      driftedChecks.parameters.required_status_checks = [
+        { context: "unit" },
+        { context: "component" },
+        { context: "static" },
+      ];
+    }
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": policyContentsHandler(
+        TEST_NODE_REPO_POLICY_JSON
+      ),
+      "GET /repos/{owner}/{repo}/rulesets": () => [
+        { id: 41, name: NODE_MAIN_POLICY_RULESET_NAME },
+      ],
+      "PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}": (params) =>
+        recordRuleset(params),
+      // Pre-check sees the DRIFTED active ruleset; the post-write readback sees the repair.
+      "GET /repos/{owner}/{repo}/rulesets/{ruleset_id}": (params) =>
+        storedRulesets.has(41)
+          ? readStoredRuleset(params)
+          : { id: 41, source_type: "Repository", ...drifted },
+    };
+
+    await expect(
+      makeWriter().reconcileNodeMainProtection({
+        owner: OWNER,
+        repo: REPO,
+        slug: REPO,
+        isInRepoNode: false,
+      })
+    ).resolves.toMatchObject({
+      status: "applied",
+      mismatches: ["required contexts missing: manifest"],
+    });
+
+    expect(requests.map((request) => request.route)).toContain(
+      "PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}"
+    );
+  });
+
+  it("falls back to canonical node-template@main when the node repo lacks the policy file", async () => {
+    // poly/toks4 reality: forks minted before task.5028 shipped `.cogni/repo-policy.json`.
+    storedRulesets.clear();
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": policyContentsHandler(null),
+      "GET /repos/{owner}/{repo}/rulesets": () => [],
+      "POST /repos/{owner}/{repo}/rulesets": (params) =>
+        recordRuleset(params, 88),
+      "GET /repos/{owner}/{repo}/rulesets/{ruleset_id}": (params) =>
+        readStoredRuleset(params),
+    };
+
+    await expect(
+      makeWriter().reconcileNodeMainProtection({
+        owner: OWNER,
+        repo: REPO,
+        slug: REPO,
+        isInRepoNode: false,
+      })
+    ).resolves.toMatchObject({ status: "applied", policySource: "template" });
+  });
+
+  it("surfaces App-lacks-admin as a typed protection_unavailable, never a generic 500", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": policyContentsHandler(
+        TEST_NODE_REPO_POLICY_JSON
+      ),
+      "GET /repos/{owner}/{repo}/rulesets": () => [],
+      "POST /repos/{owner}/{repo}/rulesets": () =>
+        Promise.reject(
+          statusError(403, "Resource not accessible by integration")
+        ),
+    };
+
+    await expect(
+      makeWriter().reconcileNodeMainProtection({
+        owner: OWNER,
+        repo: REPO,
+        slug: REPO,
+        isInRepoNode: false,
+      })
+    ).rejects.toMatchObject({ code: "protection_unavailable", status: 502 });
+  });
+
+  it("rejects an in-repo node with a typed 422 before any Octokit call", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": () => {
+        throw new Error("must not touch GitHub for an in-repo node");
+      },
+    };
+
+    await expect(
+      makeWriter().reconcileNodeMainProtection({
+        owner: "cogni-dao",
+        repo: "cogni-template",
+        slug: "operator",
+        isInRepoNode: true,
+      })
+    ).rejects.toMatchObject({ code: "in_repo_node_unsupported", status: 422 });
+
+    expect(requests).toEqual([]);
+  });
+
+  it("fails closed with node_repo_policy_missing when neither the repo nor the template carries a policy", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": () =>
+        Promise.reject(statusError(404, "Not Found")),
+    };
+
+    await expect(
+      makeWriter().reconcileNodeMainProtection({
+        owner: OWNER,
+        repo: REPO,
+        slug: REPO,
+        isInRepoNode: false,
+      })
+    ).rejects.toMatchObject({ code: "node_repo_policy_missing", status: 409 });
+  });
+});
