@@ -87,6 +87,7 @@ export {
   CherryComputeError,
   type CherryComputeErrorCode,
 } from "./compute/cherry-compute.adapter";
+export { DrizzleComputeCostStore } from "./compute/compute-cost-store";
 export {
   CloudflareComputeWorkloadDnsAdapter,
   DormantComputeWorkloadDnsAdapter,

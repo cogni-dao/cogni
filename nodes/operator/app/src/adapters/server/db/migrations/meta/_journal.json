@@ -316,6 +316,13 @@
       "when": 1788470513866,
       "tag": "0044_lush_lady_mastermind",
       "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1789154627804,
+      "tag": "0045_tricky_zodiak",
+      "breakpoints": true
     }
   ]
 }
