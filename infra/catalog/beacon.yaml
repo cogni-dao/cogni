@@ -18,7 +18,6 @@ production_branch: deploy/production-beacon
 envs: [preview, production]
 deployment_provider:
   preview: akash
-  production: akash
 activity_env: production
 owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
 path_prefix: nodes/beacon/
