@@ -10,7 +10,9 @@
 #      NODE_TARGETS loop covers every node, so no single node is special-cased.
 #   3. catalog node_port == per-env overlay Service nodePort (the one coupling
 #      this design introduces; assert it can't drift into split-brain).
-#   4. The derived node DB inventory includes every catalog node.
+#   4. Caddy runtime + access logs go to stdout for Alloy Docker collection.
+#   5. The edge-saturation metric set survives Alloy's strict allowlist.
+#   6. The derived node DB inventory includes every catalog node.
 #
 # Run: bash scripts/ci/tests/render-caddyfile.test.sh
 set -euo pipefail
@@ -25,12 +27,12 @@ source "$REPO_ROOT/scripts/ci/lib/image-tags.sh"
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "  ok — $*"; }
 
-echo "[1/4] Caddyfile.tmpl ↔ catalog drift gate"
+echo "[1/6] Caddyfile.tmpl ↔ catalog drift gate"
 bash scripts/ci/render-caddyfile.sh --check >/dev/null \
   || fail "render-caddyfile.sh --check: committed Caddyfile.tmpl is stale (run: pnpm gen:caddyfile)"
 pass "committed Caddyfile.tmpl matches the catalog"
 
-echo "[2/4] every type:node has an edge block (catalog-driven, no node special-cased)"
+echo "[2/6] every type:node has an edge block (catalog-driven, no node special-cased)"
 RENDERED="$(bash scripts/ci/render-caddyfile.sh)"
 for node in "${NODE_TARGETS[@]}"; do
   slug="$(printf '%s' "$node" | tr '[:lower:]-' '[:upper:]_')"
@@ -47,7 +49,7 @@ for node in "${NODE_TARGETS[@]}"; do
   fi
 done
 
-echo "[3/4] catalog node_port == overlay Service nodePort (no split-brain)"
+echo "[3/6] catalog node_port == overlay Service nodePort (no split-brain)"
 for node in "${NODE_TARGETS[@]}"; do
   cat_port="$(node_port_for_target "$node")"
   for env in candidate-a candidate-b preview production; do
@@ -62,7 +64,30 @@ for node in "${NODE_TARGETS[@]}"; do
   done
 done
 
-echo "[4/4] catalog node DB inventory includes every type:node"
+echo "[4/6] Caddy logs are collectible from container stdout"
+stdout_loggers="$(grep -c 'output stdout' <<<"$RENDERED")"
+expected_loggers="$(( ${#NODE_TARGETS[@]} + 1 ))"
+[ "$stdout_loggers" = "$expected_loggers" ] \
+  || fail "expected $expected_loggers stdout loggers (global + one/site), found $stdout_loggers"
+if grep -q 'output file /data/logs/caddy' <<<"$RENDERED"; then
+  fail "Caddy writes logs to its private /data volume; Alloy cannot collect them"
+fi
+pass "global + per-site JSON logs emit to stdout"
+
+echo "[5/6] Alloy keeps edge saturation counters"
+ALLOY_CONFIG="infra/compose/runtime/configs/alloy-config.metrics.alloy"
+for metric in \
+  node_nf_conntrack_entries \
+  node_nf_conntrack_entries_limit \
+  node_netstat_TcpExt_ListenDrops \
+  node_netstat_TcpExt_ListenOverflows \
+  node_netstat_TcpExt_SyncookiesFailed \
+  node_netstat_TcpExt_TCPAbortOnMemory; do
+  grep -q "$metric" "$ALLOY_CONFIG" || fail "$ALLOY_CONFIG drops required edge metric $metric"
+done
+pass "conntrack, listen-overflow, SYN-cookie, and abort-on-memory counters are allowlisted"
+
+echo "[6/6] catalog node DB inventory includes every type:node"
 dbs="$(node_database_csv)"
 for node in "${NODE_TARGETS[@]}"; do
   expected_db="$(node_database_for_target "$node")"

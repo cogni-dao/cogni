@@ -30,9 +30,12 @@ CADDYFILE_PATH="${SCRIPT_DIR}/../../infra/compose/edge/configs/Caddyfile.tmpl"
 
 slug_for_node() { echo "$1" | tr '[:lower:]-' '[:upper:]_'; }
 
-# Emit a reverse-proxy site block. $1=host-expr $2=upstream-expr $3=access-log-file
+# Emit a reverse-proxy site block. Access logs go to container stdout so the
+# existing Alloy Docker source actually ships them. Writing into Caddy's named
+# /data volume made the edge opaque: Alloy discovers the container, not files
+# hidden inside another Compose project's volume (bug.5132).
 emit_site_block() {
-  local host="$1" upstream="$2" logfile="$3"
+  local host="$1" upstream="$2"
   cat <<BLOCK
 ${host} {
   encode zstd gzip
@@ -51,11 +54,7 @@ ${host} {
 
   log {
     format json
-    output file /data/logs/caddy/${logfile} {
-      roll_size 10MB
-      roll_keep 7
-      roll_keep_for 168h
-    }
+    output stdout
   }
 }
 BLOCK
@@ -71,11 +70,7 @@ render() {
   log {
     level INFO
     format json
-    output file /data/logs/caddy/caddy.log {
-      roll_size 10MB
-      roll_keep 7
-      roll_keep_for 168h
-    }
+    output stdout
   }
 }
 
@@ -95,7 +90,7 @@ HEADER
       port="$(node_port_for_target "$node")"
       echo
       echo "# ── ${node} (primary domain) → k3s NodePort ${port} ──────────────────────"
-      emit_site_block '{$DOMAIN}' "{\$${slug}_UPSTREAM:app:3000}" "access.log"
+      emit_site_block '{$DOMAIN}' "{\$${slug}_UPSTREAM:app:3000}"
     fi
   done
 
@@ -111,8 +106,7 @@ HEADER
     echo "# ── ${node} node → k3s NodePort ${port} ──────────────────────────────────"
     emit_site_block \
       "{\$${slug}_DOMAIN:${node}.localhost}" \
-      "{\$${slug}_UPSTREAM:host.docker.internal:${port}}" \
-      "access-${node}.log"
+      "{\$${slug}_UPSTREAM:host.docker.internal:${port}}"
   done
 }
 
