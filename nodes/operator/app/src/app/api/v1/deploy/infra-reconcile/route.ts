@@ -138,6 +138,8 @@ export const POST = wrapRouteHandlerWithLogging(
           routeId: ctx.routeId,
           nodeId: node.id,
           slug: node.slug,
+          parentOwner,
+          parentRepo,
           errorCode: "dispatch_failed",
           err: message,
         },
