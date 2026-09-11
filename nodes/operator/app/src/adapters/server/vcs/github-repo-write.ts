@@ -250,6 +250,22 @@ export interface OpenNodeSubmodulePrInput extends OpenNodeAppPrInput {
   readonly nodeRepoHeadSha: string;
 }
 
+/**
+ * Outcome of `reconcileNodeMainProtection` (bug.5123): whether the canonical main-policy
+ * ruleset was already in force (`compliant`, zero writes) or was created/repaired
+ * (`applied`), which policy revision drove it, and — when a write happened — the exact
+ * mismatches that justified it (loud by construction, never a silent mutation).
+ */
+export interface ReconcileNodeProtectionResult {
+  readonly status: "compliant" | "applied";
+  /** Where the policy was read: the node repo's own main, or canonical node-template@main fallback. */
+  readonly policySource: "node_repo" | "template";
+  readonly rulesetName: string;
+  readonly requiredContexts: readonly string[];
+  /** Why a write happened (`applied`), or `[]` (`compliant`). */
+  readonly mismatches: readonly string[];
+}
+
 export interface PackageImageTagExistsInput {
   readonly owner: string;
   readonly repo: string;
@@ -2753,6 +2769,159 @@ export class GitHubRepoWriter implements DeployPlanePort {
     });
     await this.updatePrBody(octokit, owner, repo, result.prNumber, title, body);
     return { status: "pr_opened", ...result };
+  }
+
+  /**
+   * Reconcile the birth-path `main` protection ruleset onto an EXISTING node repo (bug.5123).
+   * Nodes minted before the #1797/task.5028 backstop (or whose ruleset drifted) carry no
+   * required-status-check protection, so the operator merge gate fail-closes every PR on them
+   * (`not_green` on an empty required-context set). This verb re-applies the SAME canonical
+   * policy `forkFromTemplate` applies at birth, through the SAME `ensureNodeMainPolicyRuleset`
+   * write+readback path — one protection SSOT, no second config.
+   *
+   * POLICY_IS_BOUND_TO_THE_INHERITED_TREE, reconcile flavor: the policy is read from the node
+   * repo's OWN `main` (`.cogni/repo-policy.json`) — the revision whose workflows must emit the
+   * required contexts. Nodes minted before the policy file existed (poly/toks4) fall back to
+   * canonical `<owner>/node-template@main` (TEMPLATE_POLICY_IS_SSOT — the identical pre-flight
+   * source birth uses), which fork-sync keeps their workflows aligned with.
+   *
+   * Idempotent + read-mostly: a repo whose ACTIVE ruleset already satisfies the policy
+   * (`diffRulesetAgainstPolicy` = ∅) returns `compliant` with ZERO writes. Only a missing or
+   * drifted ruleset triggers the create/repair write, and the result carries the mismatches
+   * that justified it — callers log them; this is never a silent mutation.
+   *
+   * PROTECTION_UNAVAILABLE_IS_DISTINCT: a GitHub 403 on any ruleset call means the operator App
+   * lacks `administration:write` on this repo — surfaced as a typed 502 `protection_unavailable`,
+   * never a generic 500, and never by weakening the (independent, fail-closed) merge gate.
+   *
+   * REMOTE_SOURCE_ONLY: like {@link openNodeDeploymentBlockPr}, the monorepo is not a target —
+   * an in-repo node's `{owner, repo}` collapses to the PARENT monorepo, whose protection is
+   * admin-owned, not this node policy. Fail closed before touching Octokit.
+   */
+  async reconcileNodeMainProtection(input: {
+    owner: string;
+    repo: string;
+    slug: string;
+    /** `true` when `resolveNodeRepo` collapsed this node to the parent monorepo (no catalog `source_repo`). */
+    isInRepoNode: boolean;
+  }): Promise<ReconcileNodeProtectionResult> {
+    const { owner, repo, slug, isInRepoNode } = input;
+    if (isInRepoNode) {
+      throw deployPlaneError(
+        "in_repo_node_unsupported",
+        `node '${slug}' is an in-repo node (no catalog source_repo); ` +
+          "reconcileNodeMainProtection only supports remote-source (forked) node repos — " +
+          "the parent monorepo's branch protection is admin-owned, not the node policy ruleset",
+        422
+      );
+    }
+
+    // Policy read: the node's own main first, canonical template as birth-parity fallback.
+    let policySource: "node_repo" | "template" = "node_repo";
+    let policyText = await this.fetchFileText({
+      owner,
+      repo,
+      path: NODE_REPO_POLICY_PATH,
+      ref: "main",
+    });
+    if (policyText === null) {
+      policySource = "template";
+      policyText = await this.fetchFileText({
+        owner,
+        repo: TEMPLATE_SLUG,
+        path: NODE_REPO_POLICY_PATH,
+        ref: "main",
+      });
+    }
+    if (policyText === null) {
+      throw deployPlaneError(
+        "node_repo_policy_missing",
+        `${owner}/${repo}@main and ${owner}/${TEMPLATE_SLUG}@main are both missing ${NODE_REPO_POLICY_PATH}`,
+        409
+      );
+    }
+    let policy: NodeRepoPolicy;
+    try {
+      policy = parseNodeRepoPolicy(policyText);
+    } catch (error) {
+      throw deployPlaneError(
+        "node_repo_policy_invalid",
+        `${policySource === "node_repo" ? `${owner}/${repo}` : `${owner}/${TEMPLATE_SLUG}`}@main has an invalid ${NODE_REPO_POLICY_PATH}: ${String(error)}`,
+        409
+      );
+    }
+
+    const octokit = await this.getOctokit(owner, repo);
+    const payload = nodeMainPolicyRulesetPayload(policy);
+    try {
+      // Pre-check so a compliant repo is a zero-write no-op (and so the write path can
+      // report WHY it wrote — the mismatches, or the ruleset's outright absence).
+      const { data: rulesets } = await octokit.request(
+        "GET /repos/{owner}/{repo}/rulesets",
+        { owner, repo }
+      );
+      const existing = (
+        rulesets as ReadonlyArray<{ id: number; name: string }>
+      ).find((ruleset) => ruleset.name === policy.ruleset.name);
+      let mismatches: readonly string[];
+      if (existing) {
+        const { data: active } = await octokit.request(
+          "GET /repos/{owner}/{repo}/rulesets/{ruleset_id}",
+          { owner, repo, ruleset_id: existing.id }
+        );
+        mismatches = diffRulesetAgainstPolicy(
+          active as RulesetResponse,
+          payload
+        );
+        if (mismatches.length === 0) {
+          this.log.info(
+            { owner, repo, slug, ruleset: policy.ruleset.name, policySource },
+            "node main protection already compliant; no write"
+          );
+          return {
+            status: "compliant",
+            policySource,
+            rulesetName: policy.ruleset.name,
+            requiredContexts: policy.ruleset.requiredStatusChecks.contexts,
+            mismatches: [],
+          };
+        }
+      } else {
+        mismatches = [`ruleset "${policy.ruleset.name}" absent`];
+      }
+
+      // Same create/repair + readback-proof path birth uses (PROTECTION_HAS_ONE_SSOT).
+      await this.ensureNodeMainPolicyRuleset(octokit, owner, repo, policy);
+      this.log.info(
+        {
+          owner,
+          repo,
+          slug,
+          ruleset: policy.ruleset.name,
+          policySource,
+          mismatches,
+        },
+        "node main protection reconciled onto existing repo"
+      );
+      return {
+        status: "applied",
+        policySource,
+        rulesetName: policy.ruleset.name,
+        requiredContexts: policy.ruleset.requiredStatusChecks.contexts,
+        mismatches,
+      };
+    } catch (error) {
+      const status = (error as { status?: number })?.status;
+      if (status === 403) {
+        throw deployPlaneError(
+          "protection_unavailable",
+          `operator GitHub App cannot administer rulesets on ${owner}/${repo} (HTTP 403); ` +
+            "repository `administration: write` permission is required to apply branch protection",
+          502
+        );
+      }
+      throw error;
+    }
   }
 
   /**
