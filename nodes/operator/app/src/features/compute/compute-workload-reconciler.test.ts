@@ -654,6 +654,134 @@ describe("reconcileComputeWorkload", () => {
     expect(recordRecoveryLimit).toHaveBeenCalledTimes(1);
   });
 
+  it("resets the recovery budget on a generation bump even after an intermediate write stamps desiredGeneration (bug.5128)", async () => {
+    // Beacon wedge, reproduced: RecoveryLimitExceeded at generation 1, then a
+    // promote bumps metadata.generation to 2. The migration-gate hold stamps
+    // desiredGeneration=2 while carrying recoveryCount=3 forward — pre-fix the
+    // next pass re-attributed the spent budget to generation 2 and rewrote
+    // RecoveryLimitExceeded with zero provider attempts.
+    const generation1 = workload();
+    const state = new MemoryState(
+      workload({
+        metadata: { ...workload().metadata, generation: 2 },
+        status: {
+          ...status(1, "closed"),
+          phase: "Failed",
+          recoveryCount: 3,
+          attempt: {
+            key: computeWorkloadIdempotencyKey({
+              resource: generation1,
+              operation: "recover",
+              ordinal: 3,
+            }),
+            operation: "recover",
+            ordinal: 3,
+            outcome: "known_failure",
+            retryCount: 0,
+            leaderEpoch: "7:test-controller",
+            startedAt: NOW.toISOString(),
+            completedAt: NOW.toISOString(),
+          },
+          failure: {
+            reason: "RecoveryLimitExceeded",
+            message: "generation recovery limit was reached",
+            retryable: false,
+          },
+        },
+      })
+    );
+    const port = lifecycle();
+    const recordRecoveryLimit = vi.fn();
+    const migration = {
+      ensure: vi
+        .fn<ComputeWorkloadMigrationPort["ensure"]>()
+        .mockResolvedValueOnce("running" as const)
+        .mockResolvedValue("succeeded" as const),
+    };
+
+    // Pass 1: migration for the new bundle is still running; the hold write
+    // stamps desiredGeneration=2 but must keep the count owned by generation 1.
+    await run(state, port, { recordRecoveryLimit, migration });
+    expect(port.create).not.toHaveBeenCalled();
+    expect(state.current.status?.desiredGeneration).toBe(2);
+    expect(state.current.status?.recoveryCount).toBe(3);
+    expect(state.current.status?.recoveryGeneration).toBe(1);
+
+    // Pass 2: migration succeeded; generation 2 gets a FRESH attempt budget.
+    await run(state, port, { recordRecoveryLimit, migration });
+    expect(port.create).toHaveBeenCalledTimes(1);
+    expect(state.current.status?.attempt).toMatchObject({
+      operation: "recover",
+      ordinal: 1,
+      outcome: "succeeded",
+    });
+    expect(state.current.status?.recoveryCount).toBe(1);
+    expect(state.current.status?.recoveryGeneration).toBe(2);
+    expect(state.current.status?.failure).toBeUndefined();
+    expect(recordRecoveryLimit).not.toHaveBeenCalled();
+  });
+
+  it("persists the last attempt's boot stage on the terminal recovery-limit failure (bug.5128)", async () => {
+    const resource = workload();
+    const state = new MemoryState(
+      workload({
+        status: {
+          ...status(1, "closed"),
+          recoveryCount: 3,
+          attempt: {
+            key: computeWorkloadIdempotencyKey({
+              resource,
+              operation: "recover",
+              ordinal: 3,
+            }),
+            operation: "recover",
+            ordinal: 3,
+            outcome: "known_failure",
+            retryCount: 0,
+            leaderEpoch: "7:test-controller",
+            startedAt: NOW.toISOString(),
+            completedAt: NOW.toISOString(),
+          },
+          failure: {
+            reason: "BootVersionUnavailable",
+            message:
+              "external workload version endpoint did not become available",
+            retryable: true,
+          },
+        },
+      })
+    );
+    const port = lifecycle();
+    const recordRecoveryLimit = vi.fn();
+
+    await run(state, port, { recordRecoveryLimit });
+
+    expect(port.create).not.toHaveBeenCalled();
+    expect(state.current.status?.phase).toBe("Failed");
+    expect(state.current.status?.failure).toMatchObject({
+      reason: "RecoveryLimitExceeded",
+      lastAttemptReason: "BootVersionUnavailable",
+      retryable: false,
+    });
+    expect(state.current.status?.failure?.message).toContain(
+      "BootVersionUnavailable"
+    );
+    expect(state.current.status?.recoveryGeneration).toBe(1);
+    expect(recordRecoveryLimit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outcomeCode: "RecoveryLimitExceeded",
+        lastAttemptReason: "BootVersionUnavailable",
+      })
+    );
+
+    // Level-triggered steady state: no rewrite, and the stage survives.
+    await run(state, port, { recordRecoveryLimit });
+    expect(recordRecoveryLimit).toHaveBeenCalledTimes(1);
+    expect(state.current.status?.failure?.lastAttemptReason).toBe(
+      "BootVersionUnavailable"
+    );
+  });
+
   it("blocks every other workload create behind a durable unknown wallet allocation across restart ordering", async () => {
     const state = new MemoryState(workload());
     const firstPort = lifecycle();

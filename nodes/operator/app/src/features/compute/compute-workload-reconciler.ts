@@ -56,6 +56,8 @@ export interface ComputeWorkloadReconcileDeps {
     leaseId: string;
     recoveryCount: number;
     outcomeCode: "RecoveryLimitExceeded";
+    /** Stage-specific reason of the last failed attempt, when known (bug.5128). */
+    lastAttemptReason?: string;
   }) => void;
   readonly recordMutationFailure: (input: {
     nodeId: string;
@@ -368,7 +370,7 @@ async function migrationGate(
       ? { resource: resource.status.resource }
       : {}),
     ...(resource.status?.attempt ? { attempt: resource.status.attempt } : {}),
-    recoveryCount: resource.status?.recoveryCount ?? 0,
+    ...carriedRecovery(resource),
   };
   if (outcome === "running") {
     // Level-triggered no-op: a migration Job runs for minutes against a 15s
@@ -582,7 +584,7 @@ async function writeUnknown(
         : {}),
       ...(current ? { resource: current } : {}),
       ...(attempt ? { attempt } : {}),
-      recoveryCount: resource.status?.recoveryCount ?? 0,
+      ...carriedRecovery(resource),
       failure: { reason, message: safeMessage(reason), retryable: false },
       conditions: [condition(resource, now, "Unknown", reason)],
     },
@@ -612,6 +614,29 @@ export function computeWorkloadPublicHost(
   return hostForNode(slug, false, domain);
 }
 
+/**
+ * The recovery-budget pair every status write carries forward (bug.5128). The
+ * count is only meaningful for the generation it was accrued under, so it is
+ * persisted WITH that generation: intermediate writes after a generation bump
+ * (migration gate, observation passes) stamp `desiredGeneration` to the new
+ * generation but must not re-attribute an old generation's spent budget to it.
+ * Legacy statuses without `recoveryGeneration` attribute the count to the
+ * pre-write `desiredGeneration` — the pre-fix association — so an in-generation
+ * wedge stays wedged (Axiom 26: never unlimited churn) until a real promote.
+ */
+function carriedRecovery(resource: ComputeWorkload): {
+  recoveryCount: number;
+  recoveryGeneration: number;
+} {
+  return {
+    recoveryCount: resource.status?.recoveryCount ?? 0,
+    recoveryGeneration:
+      resource.status?.recoveryGeneration ??
+      resource.status?.desiredGeneration ??
+      resource.metadata.generation,
+  };
+}
+
 function generationRecoveryCount(resource: ComputeWorkload): number {
   const attempt = resource.status?.attempt;
   if (
@@ -625,10 +650,13 @@ function generationRecoveryCount(resource: ComputeWorkload): number {
   ) {
     return attempt.ordinal;
   }
-  if (resource.status?.desiredGeneration !== resource.metadata.generation) {
+  // A count recorded under an older generation never gates this one: a promote
+  // (generation bump) always gets a fresh attempt budget (bug.5128).
+  const carried = carriedRecovery(resource);
+  if (carried.recoveryGeneration !== resource.metadata.generation) {
     return 0;
   }
-  return resource.status.recoveryCount ?? 0;
+  return carried.recoveryCount;
 }
 
 function blocksSameGenerationRecovery(resource: ComputeWorkload): boolean {
@@ -680,6 +708,14 @@ async function recoverBounded(
   if (completed >= MAX_RECOVERY_ATTEMPTS) {
     const now = deps.now().toISOString();
     const current = resource.status?.resource;
+    // Carry the last attempt's stage-specific reason (e.g. BootVersionUnavailable)
+    // into the terminal record: RecoveryLimitExceeded alone says the budget is
+    // spent, not WHY every attempt failed (bug.5128).
+    const lastAttemptReason =
+      resource.status?.failure &&
+      resource.status.failure.reason !== "RecoveryLimitExceeded"
+        ? resource.status.failure.reason
+        : resource.status?.failure?.lastAttemptReason;
     // Level-triggered no-op: a CR terminal for this generation would otherwise
     // rewrite an identical status every reconcile pass and bloat kine.
     const currentCondition = resource.status?.conditions?.[0];
@@ -701,10 +737,14 @@ async function recoverBounded(
             ? { attempt: resource.status.attempt }
             : {}),
           recoveryCount: completed,
+          recoveryGeneration: resource.metadata.generation,
           failure: {
             reason: "RecoveryLimitExceeded",
-            message: safeMessage("RecoveryLimitExceeded"),
+            message: lastAttemptReason
+              ? `${safeMessage("RecoveryLimitExceeded")}; last attempt: ${lastAttemptReason} (${safeMessage(lastAttemptReason)})`
+              : safeMessage("RecoveryLimitExceeded"),
             retryable: false,
+            ...(lastAttemptReason ? { lastAttemptReason } : {}),
           },
           conditions: [
             condition(resource, now, "False", "RecoveryLimitExceeded"),
@@ -720,6 +760,7 @@ async function recoverBounded(
         leaseId: current?.id ?? "unknown",
         recoveryCount: completed,
         outcomeCode: "RecoveryLimitExceeded" as const,
+        ...(lastAttemptReason ? { lastAttemptReason } : {}),
       };
       deps.recordRecoveryLimit(fields);
       await deps.state
@@ -794,7 +835,7 @@ async function beginAttempt(
         ? { resource: resource.status.resource }
         : {}),
       attempt,
-      recoveryCount: resource.status?.recoveryCount ?? 0,
+      ...carriedRecovery(resource),
       ...(preservedFailure ? { failure: preservedFailure } : {}),
       conditions: [
         condition(
@@ -851,7 +892,7 @@ async function mutate(
           ? { resource: resource.status.resource }
           : {}),
         ...(previous ? { attempt: previous } : {}),
-        recoveryCount: resource.status?.recoveryCount ?? 0,
+        ...carriedRecovery(resource),
         failure: {
           reason: "RetryLimitExceeded",
           message: safeMessage("RetryLimitExceeded"),
@@ -892,7 +933,7 @@ async function mutate(
           ...baseStatus(resource),
           phase: "Progressing",
           attempt,
-          recoveryCount: resource.status?.recoveryCount ?? 0,
+          ...carriedRecovery(resource),
           failure: {
             reason: "WalletAllocationBlocked",
             message: safeMessage("WalletAllocationBlocked"),
@@ -953,7 +994,7 @@ async function mutate(
                   ...baseStatus(resource),
                   phase: "Progressing",
                   attempt: activeAttempt,
-                  recoveryCount: resource.status?.recoveryCount ?? 0,
+                  ...carriedRecovery(resource),
                   conditions: [
                     condition(
                       resource,
@@ -987,7 +1028,7 @@ async function mutate(
                   phase: "Progressing",
                   resource: allocated,
                   attempt: allocatedAttempt,
-                  recoveryCount: resource.status?.recoveryCount ?? 0,
+                  ...carriedRecovery(resource),
                   conditions: [
                     condition(
                       resource,
@@ -1031,10 +1072,12 @@ async function mutate(
         observedGeneration: resource.metadata.generation,
         resource: resourceStatus(output),
         attempt: completedAttempt,
-        recoveryCount:
-          operation === "recover"
-            ? ordinal
-            : (resource.status?.recoveryCount ?? 0),
+        ...(operation === "recover"
+          ? {
+              recoveryCount: ordinal,
+              recoveryGeneration: resource.metadata.generation,
+            }
+          : carriedRecovery(resource)),
         conditions: [
           condition(
             resource,
@@ -1101,10 +1144,12 @@ async function mutate(
             ? { resource: resource.status.resource }
             : {}),
         attempt: failedAttempt,
-        recoveryCount:
-          operation === "recover"
-            ? ordinal
-            : (resource.status?.recoveryCount ?? 0),
+        ...(operation === "recover"
+          ? {
+              recoveryCount: ordinal,
+              recoveryGeneration: resource.metadata.generation,
+            }
+          : carriedRecovery(resource)),
         failure: {
           reason: failure.reason,
           message: safeMessage(failure.reason),
@@ -1170,7 +1215,7 @@ async function closeKnown(
         phase: preservedFailure ? "Failed" : "Progressing",
         resource: { ...current, state: "closed", endpoints: [] },
         attempt: completed,
-        recoveryCount: resource.status?.recoveryCount ?? 0,
+        ...carriedRecovery(resource),
         ...(preservedFailure ? { failure: preservedFailure } : {}),
         conditions: [
           condition(
@@ -1277,7 +1322,7 @@ async function observeAndReport(
           observedGeneration: resource.metadata.generation,
           resource: { ...current, state: "closed", endpoints: [] },
           ...(attempt ? { attempt } : {}),
-          recoveryCount: resource.status?.recoveryCount ?? 0,
+          ...carriedRecovery(resource),
           ...(generationBlockingFailure
             ? { failure: generationBlockingFailure }
             : {}),
@@ -1305,7 +1350,7 @@ async function observeAndReport(
             : "Progressing",
         resource: current,
         ...(attempt ? { attempt } : {}),
-        recoveryCount: resource.status?.recoveryCount ?? 0,
+        ...carriedRecovery(resource),
         failure: {
           reason: failure.reason,
           message: safeMessage(failure.reason),
@@ -1338,7 +1383,7 @@ async function observeAndReport(
         observedGeneration: resource.metadata.generation,
         resource: resourceStatus(observed),
         ...(attempt ? { attempt } : {}),
-        recoveryCount: resource.status?.recoveryCount ?? 0,
+        ...carriedRecovery(resource),
         failure: generationBlockingFailure,
         conditions: [
           condition(
@@ -1366,7 +1411,7 @@ async function observeAndReport(
         observedGeneration: resource.metadata.generation,
         resource: resourceStatus(observed),
         ...(attempt ? { attempt } : {}),
-        recoveryCount: resource.status?.recoveryCount ?? 0,
+        ...carriedRecovery(resource),
         conditions: [
           condition(
             resource,
@@ -1405,7 +1450,7 @@ async function observeAndReport(
             }
           : {}),
         ...(attempt ? { attempt } : {}),
-        recoveryCount: resource.status?.recoveryCount ?? 0,
+        ...carriedRecovery(resource),
         conditions: [
           condition(
             resource,
@@ -1440,7 +1485,7 @@ async function observeAndReport(
             }
           : {}),
         ...(attempt ? { attempt } : {}),
-        recoveryCount: resource.status?.recoveryCount ?? 0,
+        ...carriedRecovery(resource),
         failure: {
           reason: failure.reason,
           message: safeMessage(failure.reason),
@@ -1477,7 +1522,7 @@ async function observeAndReport(
               : attempt,
           }
         : {}),
-      recoveryCount: resource.status?.recoveryCount ?? 0,
+      ...carriedRecovery(resource),
       conditions: [
         condition(resource, now, ready ? "True" : "False", readinessOutcome),
       ],
@@ -1560,7 +1605,7 @@ async function holdWalletBlocked(
       ...baseStatus(resource),
       phase: "Progressing",
       attempt,
-      recoveryCount: resource.status?.recoveryCount ?? 0,
+      ...carriedRecovery(resource),
       failure: {
         reason: "WalletAllocationBlocked",
         message: safeMessage("WalletAllocationBlocked"),
@@ -1657,7 +1702,7 @@ async function recoverUncertainAllocation(
       phase: "Progressing",
       resource: resourceStatus(adopted),
       attempt: adoptedAttempt,
-      recoveryCount: resource.status?.recoveryCount ?? 0,
+      ...carriedRecovery(resource),
       conditions: [
         condition(
           resource,
