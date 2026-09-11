@@ -1,0 +1,336 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: computeworkloads.compute.cogni.io
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false
+spec:
+  group: compute.cogni.io
+  scope: Namespaced
+  names:
+    plural: computeworkloads
+    singular: computeworkload
+    kind: ComputeWorkload
+    shortNames: [cwl]
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources: { status: {} }
+      additionalPrinterColumns:
+        - { name: Phase, type: string, jsonPath: .status.phase }
+        - { name: Desired, type: integer, jsonPath: .status.desiredGeneration }
+        - {
+            name: Observed,
+            type: integer,
+            jsonPath: .status.observedGeneration,
+          }
+        - {
+            name: Source,
+            type: string,
+            jsonPath: .status.observedBundle.source.sha,
+          }
+        - { name: Resource, type: string, jsonPath: .status.resource.id }
+        - { name: Age, type: date, jsonPath: .metadata.creationTimestamp }
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: [spec]
+          # CRD CEL exposes only metadata.name/generateName — label↔spec
+          # equality rules do not compile at admission. The typed materializer
+          # is the single writer of both labels and spec (byte-coupled), and
+          # the controller selects by label then verifies spec, so label drift
+          # cannot route work to the wrong node.
+          x-kubernetes-validations:
+            - rule: "self.metadata.name == self.spec.nodeId"
+              message: metadata.name must equal spec.nodeId (one paid workload per node/env namespace)
+          properties:
+            spec:
+              type: object
+              required: [nodeId, environment, bundle, workload]
+              x-kubernetes-validations:
+                - rule: "self.workload.services.all(s, self.bundle.artifacts.exists(a, a.name == s.artifact))"
+                  message: every service must reference a declared bundle artifact
+                - rule: "self.bundle.artifacts.all(a, self.workload.services.exists(s, s.artifact == a.name))"
+                  message: every bundle artifact must be used by at least one service
+              properties:
+                nodeId:
+                  type: string
+                  format: uuid
+                  x-kubernetes-validations:
+                    - { rule: "self == oldSelf", message: nodeId is immutable }
+                environment:
+                  type: string
+                  enum: [candidate-a, preview, production]
+                  x-kubernetes-validations:
+                    - {
+                        rule: "self == oldSelf",
+                        message: environment is immutable,
+                      }
+                bundle:
+                  type: object
+                  required: [ref, source, artifacts]
+                  properties:
+                    ref: &ociRef
+                      type: string
+                      pattern: "^[a-z0-9][a-z0-9._:-]*(/[a-z0-9][a-z0-9._-]*)+@sha256:[0-9a-f]{64}$"
+                      maxLength: 512
+                    source:
+                      type: object
+                      required: [repository, sha]
+                      properties:
+                        repository:
+                          type: string
+                          pattern: "^[a-z0-9_.-]+/[a-z0-9_.-]+$"
+                          maxLength: 201
+                        sha:
+                          type: string
+                          pattern: "^[0-9a-f]{40}$"
+                    artifacts:
+                      type: array
+                      minItems: 1
+                      maxItems: 8
+                      x-kubernetes-list-type: map
+                      x-kubernetes-list-map-keys: [name]
+                      items:
+                        type: object
+                        required: [name, image]
+                        properties:
+                          name: &dnsName
+                            type: string
+                            # maxLength is load-bearing for CEL: the cost
+                            # estimator ignores pattern bounds, and the
+                            # cross-product rules above blow the cost budget
+                            # against unbounded strings.
+                            maxLength: 63
+                            pattern: "^[a-z][a-z0-9-]{0,62}$"
+                          image:
+                            type: string
+                            <<: *ociRef
+                workload:
+                  type: object
+                  required: [name, publicHost, services]
+                  x-kubernetes-validations:
+                    - rule: "self.services.filter(s, s.visibility == 'public').size() == 1"
+                      message: exactly one workload service must be public
+                    - rule: "self.services.all(s, !has(s.runtimeProfile) || s.visibility == 'public')"
+                      message: runtimeProfile is allowed only on the public service
+                    - rule: "self.services.all(s, s.bindings.all(k, s.bindings[k] != s.name && self.services.exists(t, t.name == s.bindings[k])))"
+                      message: every binding must target a different declared sibling service
+                  properties:
+                    name: *dnsName
+                    publicHost:
+                      type: string
+                      format: hostname
+                      minLength: 1
+                      maxLength: 253
+                    services:
+                      type: array
+                      minItems: 1
+                      maxItems: 8
+                      x-kubernetes-list-type: map
+                      x-kubernetes-list-map-keys: [name]
+                      items:
+                        type: object
+                        required:
+                          [
+                            name,
+                            artifact,
+                            port,
+                            visibility,
+                            bindings,
+                            bindHost,
+                            cpuUnits,
+                            memoryMi,
+                            storageMi,
+                          ]
+                        properties:
+                          name: *dnsName
+                          artifact: *dnsName
+                          runtimeProfile:
+                            type: string
+                            enum: [cogni-node-app-v1]
+                          command:
+                            type: array
+                            maxItems: 32
+                            items:
+                              { type: string, minLength: 1, maxLength: 1024 }
+                          args:
+                            type: array
+                            maxItems: 32
+                            items:
+                              { type: string, minLength: 0, maxLength: 1024 }
+                          port: { type: integer, minimum: 1, maximum: 65535 }
+                          visibility: { type: string, enum: [public, private] }
+                          bindings:
+                            type: object
+                            maxProperties: 16
+                            propertyNames:
+                              pattern: "^[A-Z_][A-Z0-9_]{0,63}$"
+                            additionalProperties:
+                              <<: *dnsName
+                          bindHost: { type: string, enum: ["0.0.0.0"] }
+                          secretRefs:
+                            description: Value-free keys resolved from the node/env/service scope immediately before provider I/O.
+                            type: array
+                            maxItems: 32
+                            x-kubernetes-list-type: map
+                            x-kubernetes-list-map-keys: [key]
+                            items:
+                              type: object
+                              required: [key]
+                              properties:
+                                key:
+                                  type: string
+                                  pattern: "^[A-Z_][A-Z0-9_]{0,127}$"
+                          cpuUnits: { type: number, minimum: 0.1, maximum: 64 }
+                          memoryMi:
+                            { type: integer, minimum: 128, maximum: 262144 }
+                          storageMi:
+                            { type: integer, minimum: 128, maximum: 1048576 }
+            status:
+              type: object
+              required: [phase, desiredGeneration, conditions]
+              properties:
+                phase:
+                  { type: string, enum: [Ready, Progressing, Failed, Unknown] }
+                desiredGeneration: { type: integer, minimum: 1 }
+                observedGeneration: { type: integer, minimum: 1 }
+                observedBundle:
+                  type: object
+                  required: [ref, source, artifacts]
+                  properties:
+                    ref: *ociRef
+                    source:
+                      type: object
+                      required: [repository, sha]
+                      properties:
+                        repository: { type: string, maxLength: 201 }
+                        sha: { type: string, pattern: "^[0-9a-f]{40}$" }
+                    artifacts:
+                      type: array
+                      maxItems: 8
+                      x-kubernetes-list-type: map
+                      x-kubernetes-list-map-keys: [name]
+                      items:
+                        type: object
+                        required: [name, image]
+                        properties:
+                          name: *dnsName
+                          image: { type: string, maxLength: 512 }
+                resource:
+                  type: object
+                  required: [provider, id, state, endpoints]
+                  properties:
+                    provider: { type: string, minLength: 1, maxLength: 63 }
+                    id: { type: string, minLength: 1, maxLength: 256 }
+                    state:
+                      { type: string, enum: [pending, active, closed, unknown] }
+                    endpoints:
+                      type: array
+                      maxItems: 32
+                      items: { type: string, maxLength: 2048 }
+                dns:
+                  type: object
+                  required: [hostname, target]
+                  properties:
+                    hostname: { type: string, format: hostname, maxLength: 253 }
+                    target: { type: string, format: hostname, maxLength: 253 }
+                attempt:
+                  type: object
+                  required:
+                    [
+                      key,
+                      operation,
+                      ordinal,
+                      outcome,
+                      retryCount,
+                      leaderEpoch,
+                      startedAt,
+                    ]
+                  properties:
+                    key: { type: string, minLength: 1, maxLength: 512 }
+                    operation:
+                      { type: string, enum: [create, update, recover, delete] }
+                    ordinal: { type: integer, minimum: 0, maximum: 100 }
+                    outcome:
+                      {
+                        type: string,
+                        enum:
+                          [
+                            claimed,
+                            prepared,
+                            allocated,
+                            known_failure,
+                            succeeded,
+                            unknown,
+                          ],
+                      }
+                    retryCount: { type: integer, minimum: 0, maximum: 3 }
+                    leaderEpoch: { type: string, minLength: 1, maxLength: 512 }
+                    allocationCursor:
+                      { type: string, minLength: 1, maxLength: 4096 }
+                    startedAt: { type: string, format: date-time }
+                    completedAt: { type: string, format: date-time }
+                recoveryCount: { type: integer, minimum: 0, maximum: 100 }
+                failure:
+                  type: object
+                  required: [reason, message, retryable]
+                  properties:
+                    reason:
+                      type: string
+                      enum:
+                        [
+                          ProviderCredentialMissing,
+                          ProviderNotFound,
+                          ProviderTransient,
+                          ProviderRejected,
+                          ProviderOutcomeUnknown,
+                          SecretResolverUnavailable,
+                          SecretPolicyRejected,
+                          SecretReferenceMissing,
+                          DnsCredentialMissing,
+                          DnsReconcileFailed,
+                          DnsOwnershipChanged,
+                          EndpointVerificationFailed,
+                          MutationClaimConflict,
+                          WalletAllocationBlocked,
+                          MutationOutcomeUnknown,
+                          OrphanRisk,
+                          OwnershipMismatch,
+                          PublicHostOwnershipMismatch,
+                          RetryLimitExceeded,
+                          RecoveryLimitExceeded,
+                          FinalizationBlocked,
+                        ]
+                    message: { type: string, maxLength: 256 }
+                    retryable: { type: boolean }
+                conditions:
+                  type: array
+                  maxItems: 8
+                  x-kubernetes-list-type: map
+                  x-kubernetes-list-map-keys: [type]
+                  items:
+                    type: object
+                    required:
+                      [
+                        type,
+                        status,
+                        observedGeneration,
+                        reason,
+                        message,
+                        lastTransitionTime,
+                      ]
+                    properties:
+                      type: { type: string, enum: [Ready] }
+                      status: { type: string, enum: ["True", "False", Unknown] }
+                      observedGeneration: { type: integer, minimum: 1 }
+                      reason:
+                        {
+                          type: string,
+                          pattern: "^[A-Za-z][A-Za-z0-9]{0,127}$",
+                        }
+                      message: { type: string, maxLength: 256 }
+                      lastTransitionTime: { type: string, format: date-time }
