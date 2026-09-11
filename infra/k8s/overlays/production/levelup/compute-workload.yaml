@@ -1,0 +1,41 @@
+apiVersion: compute.cogni.io/v1alpha1
+kind: ComputeWorkload
+metadata:
+  name: 557d8b59-8e3b-42f0-9aeb-a5c171296556
+  namespace: cogni-production
+  labels:
+    cogni.io/node-id: 557d8b59-8e3b-42f0-9aeb-a5c171296556
+    cogni.io/environment: production
+    cogni.io/node: levelup
+spec:
+  nodeId: 557d8b59-8e3b-42f0-9aeb-a5c171296556
+  environment: production
+  bundle:
+    ref: ghcr.io/cogni-dao/levelup@sha256:679036ef0947c050c1045aabc1f7393961257ac1ecb1925f5064647343be77d8
+    source:
+      repository: cogni-dao/levelup
+      sha: f1fd69c244d1cbc33b76cefe74264b2c56bb9fcf
+    artifacts:
+      - name: app
+        image: ghcr.io/cogni-dao/levelup@sha256:35edac515ac2bcd79218493bb7912704293156bc6177e8343b053f87eed31b51
+  workload:
+    name: levelup
+    publicHost: levelup.cognidao.org
+    services:
+      - name: app
+        artifact: app
+        runtimeProfile: cogni-node-app-v1
+        secretRefs:
+          - key: AUTH_SECRET
+          - key: DATABASE_URL
+          - key: DATABASE_SERVICE_URL
+          - key: LITELLM_VIRTUAL_KEY
+          - key: SCHEDULER_API_TOKEN
+          - key: BILLING_INGEST_TOKEN
+        port: 3200
+        visibility: public
+        bindings: {}
+        bindHost: 0.0.0.0
+        cpuUnits: 2
+        memoryMi: 2048
+        storageMi: 4096
