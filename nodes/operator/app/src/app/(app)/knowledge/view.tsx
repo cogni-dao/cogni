@@ -22,6 +22,8 @@
 import type {
   ContributionRecord,
   DomainRow,
+  DomainsListResponse,
+  KnowledgeListResponse,
   KnowledgeRow,
 } from "@cogni/node-contracts";
 import {
@@ -31,6 +33,7 @@ import {
 import { DataGridColumnVisibility } from "@cogni/node-ui-kit/reui/data-grid/data-grid-column-visibility";
 import { DataGridPagination } from "@cogni/node-ui-kit/reui/data-grid/data-grid-pagination";
 import { DataGridTable } from "@cogni/node-ui-kit/reui/data-grid/data-grid-table";
+import { Skeleton } from "@cogni/node-ui-kit/shadcn/skeleton";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   type ColumnFiltersState,
@@ -61,6 +64,7 @@ import { Button, Input } from "@/components";
 import { closeContribution } from "./_api/closeContribution";
 import { fetchContributions } from "./_api/fetchContributions";
 import { fetchDomains } from "./_api/fetchDomains";
+import type { KnowledgeGraphResponse } from "./_api/fetchGraph";
 import { fetchKnowledge } from "./_api/fetchKnowledge";
 import { mergeContribution } from "./_api/mergeContribution";
 import { AddDomainSheet } from "./_components/AddDomainSheet";
@@ -90,7 +94,20 @@ function isMode(v: string | null): v is ViewMode {
   );
 }
 
-export function KnowledgeDashboardView() {
+interface KnowledgeDashboardViewProps {
+  /** SSR-seeded browse list — makes the entry count correct on first paint. */
+  readonly initialList?: KnowledgeListResponse | undefined;
+  /** SSR-seeded domain registry. */
+  readonly initialDomains?: DomainsListResponse | undefined;
+  /** SSR-seeded graph — only present on a `?mode=graph` deep-link. */
+  readonly initialGraph?: KnowledgeGraphResponse | undefined;
+}
+
+export function KnowledgeDashboardView({
+  initialList,
+  initialDomains,
+  initialGraph,
+}: KnowledgeDashboardViewProps = {}) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
@@ -116,12 +133,14 @@ export function KnowledgeDashboardView() {
     queryKey: ["knowledge", "list"],
     queryFn: fetchKnowledge,
     staleTime: 30_000,
+    initialData: initialList,
   });
 
   const domainsQuery = useQuery({
     queryKey: ["knowledge", "domains"],
     queryFn: fetchDomains,
     staleTime: 30_000,
+    initialData: initialDomains,
   });
 
   const contributionsQuery = useQuery({
@@ -158,8 +177,14 @@ export function KnowledgeDashboardView() {
           </h1>
           <span className="text-muted-foreground text-xs">
             What this node has learned ·{" "}
-            {knowledgeQuery.data?.items.length ?? 0} entries on{" "}
-            <code className="font-mono">main</code>
+            {knowledgeQuery.data ? (
+              <>
+                {knowledgeQuery.data.items.length} entries on{" "}
+                <code className="font-mono">main</code>
+              </>
+            ) : (
+              <Skeleton className="inline-block h-3 w-28 align-middle" />
+            )}
           </span>
         </div>
 
@@ -230,7 +255,10 @@ export function KnowledgeDashboardView() {
         />
       )}
       {mode === "graph" && (
-        <GraphView rows={knowledgeQuery.data?.items ?? []} />
+        <GraphView
+          rows={knowledgeQuery.data?.items ?? []}
+          initialData={initialGraph}
+        />
       )}
       {mode === "domains" && (
         <DomainsPanel
