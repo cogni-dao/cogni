@@ -330,6 +330,40 @@ describe("AkashComputeAdapter", () => {
     ]);
   });
 
+  it("logs a structured error when the boot-outcome write fails, without failing the provision (bug.5128)", async () => {
+    const h = harness({
+      providers: [providerEntry("akash1cheap")],
+      bids: (dseq) => [bidEntry(dseq, "akash1cheap", "150")],
+    });
+    const logError = vi.fn();
+    const failingStore: ProviderOutcomeStore = {
+      record: async () => {
+        throw new Error("insert into compute_provider_outcomes failed");
+      },
+      stats: async () => new Map(),
+    };
+
+    const out = await makeAdapter(h.fetchImpl, {
+      outcomeStore: failingStore,
+      log: { error: logError },
+    }).provision({ env: "t", spec: SPEC });
+
+    expect(out.state).toBe("active");
+    expect(logError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: "ProviderOutcomeWriteFailed",
+        computeProvider: "akash",
+        providerAccount: "akash1cheap",
+        outcome: "boot_ok",
+        leaseId: "1",
+        workload: "toks4",
+        causeType: "Error",
+        causeMessage: "insert into compute_provider_outcomes failed",
+      }),
+      "compute_provider_outcome_write_failed"
+    );
+  });
+
   it("throws NO_BIDS when the bid window elapses without an open bid", async () => {
     const h = harness();
     await expect(
