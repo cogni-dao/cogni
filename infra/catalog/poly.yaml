@@ -15,6 +15,19 @@ production_branch: deploy/production-poly
 # NODE_FORMATION_ENVS; this list is the catalog twin so render-node-appset.sh
 # renders exactly the births appset.ts generates. Trimming a node's reach is a
 # later catalog edit (drop an env here) once its envs are provisioned.
-envs: [candidate-a, preview, production]
+envs: [preview, production]
+deployment_provider:
+  preview: akash
+  production: akash
+activity_env: production
+owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
 path_prefix: nodes/poly/
 node_id: 4b06359a-a859-4399-888e-a8c7a6696f7e
+# task.5052 (story.5016) — this node's workload runs on Akash; these provider
+# egress CIDRs may dial the env VM's substrate ports (5432,5435,6379,4000,7233).
+# Rendered per-env (union over rows deployed to the env) by
+# scripts/ci/render-compute-egress-allowlist.sh and applied by
+# infra/provision/cherry/harden-docker-public-ports.sh. Absent = fail-closed.
+compute_egress_cidrs:
+  - cidr: 80.200.246.35/32
+    comment: shared egress NAT of Akash providers zencloud + digitalfrontier (story.5016)
