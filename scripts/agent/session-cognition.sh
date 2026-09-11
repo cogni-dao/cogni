@@ -12,8 +12,9 @@
 #   - acquisition is a backgrounded, TTL-gated refresh whose failure is silent,
 #     because a stale-but-present bundle always beats a network stall or a scary
 #     wall. Once a session has ever oriented, a hub outage is invisible here.
-# Only genuine first-boot with no cache surfaces a short, honest notice that
-# distinguishes a transient hub outage from missing credentials.
+# Only genuine first-boot with no cache surfaces a short, honest notice, and it
+# never cries wolf: it separates "no credentials yet" (a setup step) from a
+# key-present failure (hub down/slow, or a key without a principal).
 #
 # Why this matters: this hook runs on every agent session across the whole
 # fleet. Coupling boot to a live cognidao.org fetch made the apex a fleet-wide
@@ -28,7 +29,6 @@ set -u
 CACHE_FILE=".cogni/.cognition-cache.md"
 REFRESH_TTL_SECONDS=900   # only refresh in the background if cache older than this
 FETCH_TIMEOUT=6           # bound the foreground first-boot fetch
-PROBE_TIMEOUT=3           # bound the reachability probe used to classify failures
 
 read_env_file_value() {
   var_name="$1"
@@ -119,8 +119,8 @@ if [ -n "$bundle" ]; then
   exit 0
 fi
 
-# First boot AND fetch failed. Classify honestly instead of crying wolf: is this
-# a missing credential, or a transient hub outage? Probe reachability quickly.
+# First boot AND fetch failed. Be honest, never cry wolf — separate a setup gap
+# (no key) from a key-present failure, without a second network probe.
 if [ -z "$AGENT_KEY" ]; then
   cat <<EOF
 COGNI COGNITION — no node credentials yet (first boot)
@@ -137,32 +137,16 @@ This is a setup step, not an outage. To bootstrap:
 Then restart or resume the agent. (Once it loads once, it is cached locally and
 survives hub outages.)
 EOF
-  exit 0
-fi
-
-hub_status="$(curl -o /dev/null -s -w '%{http_code}' --max-time "$PROBE_TIMEOUT" "$URL" 2>/dev/null)"
-if [ -z "$hub_status" ] || [ "$hub_status" = "000" ] || [ "$hub_status" -ge 500 ] 2>/dev/null; then
-  cat <<EOF
-COGNI COGNITION — hub unreachable, likely a transient outage (first boot, no cache)
-
-The node hub did not respond in time (${URL} → HTTP ${hub_status:-timeout}). A
-credential IS present, so this is almost certainly the hub being down or slow,
-not a setup problem — and there is no local cache yet to fall back on.
-
-Proceed with the repo's own AGENTS.md / skills for now, and check hub health
-(e.g. cognidao.org/version). Cognition will load and cache itself as soon as the
-hub recovers; no action needed on your credentials.
-EOF
 else
   cat <<EOF
 COGNI COGNITION — could not load bundle (first boot, no cache)
 
-The hub responded (${URL} → HTTP ${hub_status}) but no cognition bundle came
-back. A credential is present, so this is not a missing-key problem.
+A credential IS present, so this is NOT a missing-key setup problem. Either the
+hub is down/slow, or the key lacks a principal on this hub (or the node has no
+cognition published yet). There's no local cache to fall back on this first time.
 
-Likely causes: the key lacks a principal/authorization on this hub, or the node
-has no cognition published yet. Verify the key resolves (GET /api/v1/cognition
-with it) and that this node is registered. Proceed with the repo's AGENTS.md +
-skills meanwhile.
+Check hub health (cognidao.org/version) and that GET /api/v1/cognition resolves
+with your key. Proceed with the repo's own AGENTS.md + skills meanwhile —
+cognition caches itself once it loads, and then survives hub outages.
 EOF
 fi
