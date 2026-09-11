@@ -1382,7 +1382,10 @@ async function observeAndReport(
   if (observed.state !== "active") return "pending";
   let dnsTarget: string | undefined;
   try {
-    dnsTarget = endpointHostname(observed.endpoints);
+    dnsTarget = endpointHostname(
+      observed.endpoints,
+      resource.spec.workload.publicHost
+    );
     // Persist exact cleanup ownership before the DNS write. A crash can leave a
     // record behind, but never an untracked record the finalizer would ignore.
     await deps.state.patchStatus({
@@ -1489,12 +1492,23 @@ async function observeAndReport(
   return "active";
 }
 
-function endpointHostname(endpoints: readonly string[]): string {
+function endpointHostname(
+  endpoints: readonly string[],
+  publicHost: string
+): string {
+  // Providers can echo the SDL accept host back as a lease endpoint. That is
+  // the workload's own publicHost; using it as the DNS target would create a
+  // self-referential CNAME, so it must never be a candidate (bug.5125).
+  const ownHostname = publicHost.toLowerCase().replace(/\.$/, "");
   for (const endpoint of endpoints) {
     try {
       const value = endpoint.includes("://") ? endpoint : `http://${endpoint}`;
       const hostname = new URL(value).hostname.toLowerCase().replace(/\.$/, "");
-      if (hostname && !/^\d{1,3}(?:\.\d{1,3}){3}$/.test(hostname))
+      if (
+        hostname &&
+        hostname !== ownHostname &&
+        !/^\d{1,3}(?:\.\d{1,3}){3}$/.test(hostname)
+      )
         return hostname;
     } catch {
       // Try the next provider-reported endpoint.

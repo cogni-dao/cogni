@@ -422,6 +422,50 @@ describe("reconcileComputeWorkload", () => {
     });
   });
 
+  it("skips a provider-echoed publicHost endpoint and targets the provider ingress", async () => {
+    const state = new MemoryState(workload({ status: status(1, "active") }));
+    const port = lifecycle();
+    port.observe.mockResolvedValue({
+      provider: "external",
+      leaseId: "lease-42",
+      state: "active" as const,
+      endpoints: [
+        "https://Sample-Node-Test.cognidao.org.",
+        "https://provider-ingress.example",
+      ],
+    });
+    const deps = await run(state, port);
+    expect(deps.dns.reconcile).toHaveBeenCalledWith({
+      hostname: "sample-node-test.cognidao.org",
+      target: "provider-ingress.example",
+    });
+    expect(state.current.status?.dns).toEqual({
+      hostname: "sample-node-test.cognidao.org",
+      target: "provider-ingress.example",
+    });
+  });
+
+  it("fails transient DnsReconcileFailed when every endpoint is the workload's own hostname", async () => {
+    const state = new MemoryState(workload({ status: status(1, "active") }));
+    const port = lifecycle();
+    port.observe.mockResolvedValue({
+      provider: "external",
+      leaseId: "lease-42",
+      state: "active" as const,
+      endpoints: ["https://sample-node-test.cognidao.org", "203.0.113.7"],
+    });
+    const deps = await run(state, port);
+    expect(deps.dns.reconcile).not.toHaveBeenCalled();
+    expect(state.current.status?.phase).toBe("Progressing");
+    expect(state.current.status?.failure).toMatchObject({
+      reason: "DnsReconcileFailed",
+      retryable: true,
+    });
+    expect(state.current.status?.conditions[0]?.reason).toBe(
+      "DnsReconcileFailed"
+    );
+  });
+
   it("adopts exactly one post-baseline dseq after an unknown POST outcome", async () => {
     const state = new MemoryState(workload());
     const port = lifecycle();
