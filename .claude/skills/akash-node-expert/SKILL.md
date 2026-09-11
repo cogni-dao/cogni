@@ -11,6 +11,30 @@ USE WHEN: any task touching Akash placement, ComputeWorkload CRs, leases, node m
 
 **Fleet status (live-verified 2026-09-11):** toks4 3/3, levelup 2/2, node-template 3/3, poly 2/2 env-slots LIVE on Akash (CR Ready + `/version` sha match + zero k3s `<node>-node-app` pods). beacon both envs DOWN pending its Tier-2 true merge (beacon#58, task.5088). The k3s app lane is **DEPRECATED** — Derek red line: NEVER flip a node back to k3s (`place_k3s` is not a mitigation; fix forward).
 
+## Scaling north star — mandatory recall
+
+Before designing placement, formation, lease lifecycle, capacity, cost, or shared
+substrate, read
+[`akash-cicd-pareto-scope`](https://cognidao.org/knowledge/akash-cicd-pareto-scope)
+(`story.5024`). Its binding decisions are:
+
+- Spawn ends with the canonical production hostname serving the exact immutable
+  SHA. Candidate-a is a passive, ephemeral proof gate; preview is absent at
+  birth; production is generation-1 activity authority.
+- Use one Akash deployment/placement group per `(node, environment)` workload
+  bundle, not one lease per service and not one giant Cogni fleet lease.
+  Tightly coupled app-tier sidecars share the group and internal network.
+- Akash providers perform physical bin-packing. Keep node-level lifecycle,
+  secrets, cost attribution, failure containment, and future DAO custody.
+- Pool generic substrate. Keep the controller's bootstrap/recovery path outside
+  the leases it reconciles; this independence boundary—not one named host—is
+  permanent.
+- Use a shared-runtime scope when unique executable code is unnecessary; only a
+  sovereign node earns its own repo/artifact/lease.
+
+When as-built code differs, name the gap and fix toward this target. Never
+reinterpret the target around a temporary implementation constraint.
+
 ## The lane (how a node reaches Akash)
 
 1. Catalog row `infra/catalog/<slug>.yaml`: `deployment_provider: {candidate-a|preview|production: akash}` (requires `type: node` + `source_repo`; schema `infra/catalog/_schema.json`) + `compute_egress_cidrs` (provider NAT, e.g. 80.200.246.35/32 = zencloud+digitalfrontier shared). `compute_egress_cidrs` is REQUIRED on akash rows (#2175) — currently hand-edited; there is NO TS writer for it yet.
@@ -46,9 +70,15 @@ Node-birth adjacents on main (2026-09-11): `POST /api/v1/nodes/{id}/reconcile-pr
 
 `POST /api/v1/nodes/[id]/envs {env, placement}` writes the catalog (reduced delete set — the per-node overlay + AppSet stay in-tree, `NO_DELETE_ON_PLACEMENT`; Argo delivers the CR through the per-node Application); `POST /api/v1/nodes/[id]/deployment-block` mints the node repo-spec block; UI = NodeEnvToggle. node-template's overlay FILES are additionally the render template (guard `operator` only; PR #2149). Flip PRs touch shared catalog/configmap files — serialize (see traps).
 
-## Stays on Cherry forever
+## Control/state substrate ladder
 
-operator + controller + scheduler-worker + Compose substrate (Postgres/Doltgres/Temporal/LiteLLM/OpenBao/OpenFGA/Caddy). A control plane cannot self-host on leases it manages; catalog schema forbids operator placement.
+Current placement is operator + controller + scheduler-worker + Compose substrate
+(Postgres/Doltgres/Temporal/LiteLLM/OpenBao/OpenFGA/Caddy) on Cherry. Do not
+encode "Cherry forever" as the architecture. The permanent rule is that the
+only controller/recovery path cannot self-host exclusively on leases it manages.
+Move stateless shared services first; move stateful services only after proven
+backup/restore, replication, and cross-provider recovery; preserve an independent
+control anchor throughout.
 
 ## Open edges (check work items before assuming)
 
