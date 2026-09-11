@@ -149,7 +149,16 @@ Do not use this to bypass missing gates. If PR Manager cannot prove eligibility,
 
 3. **Execute graph:**
    - `POST /api/v1/chat/completions` with `graph_name` + `Authorization: Bearer <apiKey>`.
-   - Use `"model": "gpt-4o-mini"` (free, no wallet needed for local dev).
+   - **ALWAYS use the free model, bare id: `"model": "gpt-oss-120b"`** (the
+     LiteLLM `default_free`; zero credits charged, so a fresh self-registered
+     key works — no wallet, no top-up). Never a paid model, never a prefixed id
+     (`openai/gpt-oss-120b` is rejected upstream and, per bug.5130, surfaces as
+     a misleading `insufficient_quota` 429).
+   - **`graph_name` is effectively REQUIRED** (e.g. `"poet"` — any
+     `NODE_LANGGRAPH_CATALOG` entry). The route's default graph does not exist
+     in the catalog (bug.5130), so omitting it 404s with a *model*-blaming
+     error. Do not diagnose model problems until you have passed a valid
+     `graph_name`.
 
 4. **List runs as machine actor:**
    - `GET /api/v1/agent/runs` with `Authorization: Bearer <apiKey>`.
@@ -187,6 +196,34 @@ Do not use this to bypass missing gates. If PR Manager cannot prove eligibility,
    - `insert`s must precede the `cite`s that reference them (both resolve on the
      branch). Agents may equivalently use `core__knowledge_write` with a
      `citations` array to write an atom + its outgoing edges in one call.
+
+## Verification stage — what "success" IS (Derek ruling, 2026-09-11)
+
+A node×env is validated ONLY when all three legs hold, each read back from a
+system of record — a fast structured error (429/404/504) proves routing, **not
+health**; never grade it as a pass:
+
+1. **Successful AI response** — the completion returns real assistant text
+   (`choices[0].message.content` non-empty) using the free model
+   (`gpt-oss-120b`, bare id) + a valid `graph_name`, from a fresh
+   self-registered agent key. ~5–15s is normal; a ~30s edge cut (520) means the
+   execution loop is broken (see the 2026-09-11 stale worker-routing incident,
+   bug.5121) — and note that heavy parallel probing can starve the 2-pod
+   scheduler-worker pool into false 520s, so verify failures sequentially.
+2. **Logs** — the request's own marker is retrievable from Loki for the same
+   exercise window. ⚠️ As of 2026-09-11 Akash-placed node apps ship NO app logs
+   (bug.5127) — until it lands, this leg FAILS fleet-wide and only side-signals
+   exist (`service=litellm`, `service=scheduler-worker`, `service=controller`).
+   Do not paper over it: record the leg as red.
+3. **Langfuse trace** — the completion's trace exists (LiteLLM callbacks →
+   `us.cloud.langfuse.com`, per-node attribution via `cogni_node_router`;
+   query `/api/public/traces` with the platform keys and match your
+   `request_id`/run id). Preflight rejections produce NO trace — absence of a
+   trace plus a fast error means the request died app-side.
+
+North star: all three legs readable **via the operator API** (one validation
+verb returning response + log marker + trace ref) instead of three credential
+planes — track under story.5023/bug.5127.
 
 ## Proof criteria
 
