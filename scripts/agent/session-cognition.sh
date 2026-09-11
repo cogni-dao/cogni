@@ -1,13 +1,34 @@
 #!/usr/bin/env bash
 # Session-start cognition loader — shared by the Claude Code (.claude/settings.json)
-# and Codex (.codex/config.toml) SessionStart hooks. Pulls THIS node's own
-# cognition bundle and prints it to stdout; both runtimes inject it into context.
-# Non-fatal by design: any failure degrades to a loud self-serve prompt.
+# and Codex (.codex/config.toml) SessionStart hooks. Presents THIS node's own
+# cognition bundle on stdout; both runtimes inject it into context.
+#
+# Design: LOCAL-FIRST PRESENT + ASYNC REFRESH. The hook fires on every
+# startup/resume/compact and on every process respawn — so it must NEVER put a
+# live call to the apex hub on the boot path. Acquisition (fetch) and
+# presentation (inject) are separate concerns:
+#   - presentation reads a durable local cache (.cogni/.cognition-cache.md) and
+#     is pure-offline, instant, and deterministic;
+#   - acquisition is a backgrounded, TTL-gated refresh whose failure is silent,
+#     because a stale-but-present bundle always beats a network stall or a scary
+#     wall. Once a session has ever oriented, a hub outage is invisible here.
+# Only genuine first-boot with no cache surfaces a short, honest notice that
+# distinguishes a transient hub outage from missing credentials.
+#
+# Why this matters: this hook runs on every agent session across the whole
+# fleet. Coupling boot to a live cognidao.org fetch made the apex a fleet-wide
+# SPOF and, worst of all, broke the very tooling meant to warn "prod is down"
+# precisely because prod was down (bug.5122 — cognition boot self-dependency).
 #
 # .env.cogni holds two accounts (see .env.cogni.example): the NODE account
 # (this node's own hub — the bearer used here) and the OPERATOR account
 # (cognidao.org — CI/CD only: flight, deploy, secrets; never used by this loader).
 set -u
+
+CACHE_FILE=".cogni/.cognition-cache.md"
+REFRESH_TTL_SECONDS=900   # only refresh in the background if cache older than this
+FETCH_TIMEOUT=6           # bound the foreground first-boot fetch
+PROBE_TIMEOUT=3           # bound the reachability probe used to classify failures
 
 read_env_file_value() {
   var_name="$1"
@@ -46,30 +67,102 @@ esac
 # Bearer = this node's NODE account key (environment first, then ./.env.cogni).
 AGENT_KEY="${COGNI_NODE_API_KEY:-$(read_env_file_value COGNI_NODE_API_KEY)}"
 
-if [ -n "$AGENT_KEY" ]; then
-  bundle="$(curl -fsS --max-time 6 -H "Authorization: Bearer ${AGENT_KEY}" "$URL" 2>/dev/null | jq -r '.markdown // empty' 2>/dev/null)"
-else
-  bundle="$(curl -fsS --max-time 6 "$URL" 2>/dev/null | jq -r '.markdown // empty' 2>/dev/null)"
+# fetch_bundle → prints the .markdown bundle on stdout, or nothing on any failure.
+fetch_bundle() {
+  if [ -n "$AGENT_KEY" ]; then
+    curl -fsS --max-time "$FETCH_TIMEOUT" -H "Authorization: Bearer ${AGENT_KEY}" "$URL" 2>/dev/null \
+      | jq -r '.markdown // empty' 2>/dev/null
+  else
+    curl -fsS --max-time "$FETCH_TIMEOUT" "$URL" 2>/dev/null \
+      | jq -r '.markdown // empty' 2>/dev/null
+  fi
+}
+
+# write_cache_atomic <content> — replace the cache in one rename, never a torn file.
+write_cache_atomic() {
+  mkdir -p "$(dirname "$CACHE_FILE")" 2>/dev/null || return 0
+  tmp="${CACHE_FILE}.tmp.$$"
+  printf '%s\n' "$1" > "$tmp" 2>/dev/null && mv -f "$tmp" "$CACHE_FILE" 2>/dev/null
+  rm -f "$tmp" 2>/dev/null
+}
+
+# cache_is_stale — true if the cache is missing or older than the refresh TTL.
+cache_is_stale() {
+  [ -f "$CACHE_FILE" ] || return 0
+  [ -z "$(find "$CACHE_FILE" -mmin "-$((REFRESH_TTL_SECONDS / 60))" 2>/dev/null)" ]
+}
+
+# refresh_in_background — TTL-gated, fully detached, silent on failure. Its result
+# lands in the cache for the NEXT session; it never blocks or writes to stdout.
+refresh_in_background() {
+  cache_is_stale || return 0
+  (
+    fresh="$(fetch_bundle)"
+    [ -n "$fresh" ] && write_cache_atomic "$fresh"
+  ) >/dev/null 2>&1 &
+}
+
+# PRESENTATION — local-first. If we have ever oriented, boot is offline-safe and
+# a hub outage is invisible; we just refresh in the background for next time.
+if [ -f "$CACHE_FILE" ] && [ -s "$CACHE_FILE" ]; then
+  cat "$CACHE_FILE"
+  refresh_in_background
+  exit 0
 fi
 
+# FIRST BOOT (no cache): this is the only path allowed to touch the network in
+# the foreground, and the only one that can surface a notice. Bounded fetch.
+bundle="$(fetch_bundle)"
 if [ -n "$bundle" ]; then
+  write_cache_atomic "$bundle"
   printf '%s\n' "$bundle"
-else
-  cat <<EOF
-COGNI COGNITION BOOTSTRAP BLOCKED
+  exit 0
+fi
 
-The SessionStart hook ran, but it could not fetch the cognition bundle from:
+# First boot AND fetch failed. Classify honestly instead of crying wolf: is this
+# a missing credential, or a transient hub outage? Probe reachability quickly.
+if [ -z "$AGENT_KEY" ]; then
+  cat <<EOF
+COGNI COGNITION — no node credentials yet (first boot)
+
+No COGNI_NODE_API_KEY was found, so this session could not load its cognition
+bundle from:
   $URL
 
-Do not continue silently. Tell the user that session cognition did not load and
-ask them to bootstrap the node credentials, then restart or resume the agent.
-
-Most common fixes:
+This is a setup step, not an outage. To bootstrap:
 - register a NODE agent via /api/v1/agent/register
 - save COGNI_NODE_API_KEY in the clone-root .env.cogni
-- for Codex, run pnpm codex:cognition:install once and trust the user-level hook with /hooks
+- for Codex, run pnpm codex:cognition:install once and trust the hook via /hooks
 
-If the agent received no bootstrap message at all, the hook probably did not run
-(for Codex, missing hook trust is the usual cause).
+Then restart or resume the agent. (Once it loads once, it is cached locally and
+survives hub outages.)
+EOF
+  exit 0
+fi
+
+hub_status="$(curl -o /dev/null -s -w '%{http_code}' --max-time "$PROBE_TIMEOUT" "$URL" 2>/dev/null)"
+if [ -z "$hub_status" ] || [ "$hub_status" = "000" ] || [ "$hub_status" -ge 500 ] 2>/dev/null; then
+  cat <<EOF
+COGNI COGNITION — hub unreachable, likely a transient outage (first boot, no cache)
+
+The node hub did not respond in time (${URL} → HTTP ${hub_status:-timeout}). A
+credential IS present, so this is almost certainly the hub being down or slow,
+not a setup problem — and there is no local cache yet to fall back on.
+
+Proceed with the repo's own AGENTS.md / skills for now, and check hub health
+(e.g. cognidao.org/version). Cognition will load and cache itself as soon as the
+hub recovers; no action needed on your credentials.
+EOF
+else
+  cat <<EOF
+COGNI COGNITION — could not load bundle (first boot, no cache)
+
+The hub responded (${URL} → HTTP ${hub_status}) but no cognition bundle came
+back. A credential is present, so this is not a missing-key problem.
+
+Likely causes: the key lacks a principal/authorization on this hub, or the node
+has no cognition published yet. Verify the key resolves (GET /api/v1/cognition
+with it) and that this node is registered. Proceed with the repo's AGENTS.md +
+skills meanwhile.
 EOF
 fi

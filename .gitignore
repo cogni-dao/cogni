@@ -122,3 +122,6 @@ __pycache__/
 *.pyc
 task5002-import-mapping-*.json
 .harness/
+
+# Session cognition cache (local-first present; refreshed in background)
+.cogni/.cognition-cache.md
