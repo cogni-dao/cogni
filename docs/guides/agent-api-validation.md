@@ -42,7 +42,7 @@ API_KEY=$(echo $CREDS | jq -r .apiKey)
 curl -s -X POST $BASE/api/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_KEY" \
-  -d '{"model":"gpt-4o-mini","graph_name":"poet","messages":[{"role":"user","content":"Write a haiku about APIs."}]}'
+  -d '{"model":"gpt-oss-120b","graph_name":"poet","messages":[{"role":"user","content":"Write a haiku about APIs."}]}'
 ```
 
 > **Why `graph_name`?** Without it, completions tries a direct LiteLLM call using a per-user
@@ -124,7 +124,7 @@ curl -s -X POST $BASE/api/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_KEY" \
   -d '{
-    "model": "gpt-4o-mini",
+    "model": "gpt-oss-120b",
     "graph_name": "pr-manager",
     "messages": [{
       "role": "user",
@@ -156,7 +156,7 @@ Do not use this to bypass missing gates. If PR Manager cannot prove eligibility,
      a misleading `insufficient_quota` 429).
    - **`graph_name` is effectively REQUIRED** (e.g. `"poet"` — any
      `NODE_LANGGRAPH_CATALOG` entry). The route's default graph does not exist
-     in the catalog (bug.5130), so omitting it 404s with a *model*-blaming
+     in the catalog (bug.5130), so omitting it 404s with a _model_-blaming
      error. Do not diagnose model problems until you have passed a valid
      `graph_name`.
 
