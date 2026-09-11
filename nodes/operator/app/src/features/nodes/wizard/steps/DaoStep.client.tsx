@@ -9,7 +9,8 @@
  *   then refreshes so the shell morphs forward — never parking on a frozen checklist.
  * Invariants: Wallet signing is the only external popup; all wizard progress is inline.
  * Side-effects: IO (useDAOFormation wallet txs, PATCH /api/v1/nodes/:id), React state
- * Links: src/features/setup/hooks/useDAOFormation.ts, src/features/nodes/wizard/PhaseList.tsx
+ * Links: src/features/setup/hooks/useDAOFormation.ts,
+ *   src/components/kit/data-display/PhaseList.tsx
  * @public
  */
 
@@ -35,10 +36,17 @@ import { type ReactElement, useEffect, useMemo, useRef, useState } from "react";
 import { isAddress } from "viem";
 import { useAccount, useChainId } from "wagmi";
 
-import { Button, HintText, Input, PieChart } from "@/components";
+import {
+  Button,
+  HintText,
+  Input,
+  type Phase,
+  PhaseList,
+  type PhaseState,
+  PieChart,
+} from "@/components";
 import { useDAOFormation } from "@/features/setup/hooks/useDAOFormation";
 
-import { type Phase, PhaseList, type PhaseState } from "../PhaseList";
 import { StepSection } from "../StepSection";
 import type { WizardStepProps } from "../types";
 

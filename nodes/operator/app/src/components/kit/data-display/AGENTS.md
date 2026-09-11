@@ -37,7 +37,7 @@ Reusable kit components for displaying data including badges, avatars, scroll ar
 
 ## Public Surface
 
-- **Exports (via ../index.ts):** ActivityChart, Avatar, Badge, DiscordIcon, EthereumIcon, ExpandableTableRow, GitHubIcon, GoogleIcon, GithubButton, ProviderIconProps, ScrollArea, TerminalFrame
+- **Exports (via `@/components`):** ActivityChart, Avatar, Badge, DiscordIcon, EthereumIcon, ExpandableTableRow, GitHubIcon, GoogleIcon, GithubButton, LifecycleProgress, PhaseList, ProviderIconProps, ScrollArea, TerminalFrame
 - **Files considered API:** All \*.tsx files in this directory
 
 ## Responsibilities

@@ -123,6 +123,11 @@ export {
   type LifecycleProgressStep,
 } from "./kit/data-display/LifecycleProgress";
 export {
+  type Phase,
+  PhaseList,
+  type PhaseState,
+} from "./kit/data-display/PhaseList";
+export {
   PieChart,
   type PieChartDatum,
 } from "./kit/data-display/PieChart";
