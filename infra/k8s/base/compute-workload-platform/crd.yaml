@@ -275,6 +275,9 @@ spec:
                     startedAt: { type: string, format: date-time }
                     completedAt: { type: string, format: date-time }
                 recoveryCount: { type: integer, minimum: 0, maximum: 100 }
+                # Generation the recovery budget was accrued under (bug.5128):
+                # a generation bump always mints a fresh attempt budget.
+                recoveryGeneration: { type: integer, minimum: 1 }
                 failure:
                   type: object
                   required: [reason, message, retryable]
@@ -287,6 +290,11 @@ spec:
                           ProviderNotFound,
                           ProviderTransient,
                           ProviderRejected,
+                          BootStatusUnavailable,
+                          BootEndpointUnavailable,
+                          BootVersionUnavailable,
+                          BootSourceMismatch,
+                          BootReadinessUnavailable,
                           ProviderOutcomeUnknown,
                           SecretResolverUnavailable,
                           SecretPolicyRejected,
@@ -301,12 +309,19 @@ spec:
                           OrphanRisk,
                           OwnershipMismatch,
                           PublicHostOwnershipMismatch,
+                          MigrationInProgress,
+                          MigrationFailed,
+                          MigrationSpecInvalid,
                           RetryLimitExceeded,
                           RecoveryLimitExceeded,
                           FinalizationBlocked,
                         ]
                     message: { type: string, maxLength: 256 }
                     retryable: { type: boolean }
+                    # Stage-specific reason of the last failed attempt when the
+                    # terminal reason aggregates it away (bug.5128).
+                    lastAttemptReason:
+                      { type: string, pattern: "^[A-Za-z][A-Za-z0-9]{0,127}$" }
                 conditions:
                   type: array
                   maxItems: 8
