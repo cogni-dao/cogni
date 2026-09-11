@@ -256,7 +256,7 @@ clientLogger.warn(EVENT_NAMES.CLIENT_CHAT_STREAM_ERROR, { messageId });
 
 **Core app metrics:** `http_requests_total`, `http_request_duration_ms`, `ai_chat_stream_duration_ms`, `ai_llm_call_duration_ms`, `ai_llm_tokens_total`, `ai_llm_cost_usd_total`, `ai_llm_errors_total`
 
-**Infra metrics (via Alloy exporters, strict allowlist):** `container_memory_working_set_bytes`, `container_memory_rss`, `container_spec_memory_limit_bytes`, `container_cpu_usage_seconds_total`, `container_oom_events_total`, `container_network_*`, `container_fs_*`, `node_filesystem_avail_bytes` (excl. tmpfs/overlay), `node_memory_MemAvailable_bytes`, `node_cpu_seconds_total`, `node_network_*`, `up`
+**Infra metrics (via Alloy exporters, strict allowlist):** `container_memory_working_set_bytes`, `container_memory_rss`, `container_spec_memory_limit_bytes`, `container_cpu_usage_seconds_total`, `container_oom_events_total`, `container_network_*`, `container_fs_*`, `node_filesystem_avail_bytes` (excl. tmpfs/overlay), `node_memory_MemAvailable_bytes`, `node_cpu_seconds_total`, `node_network_*`, `node_nf_conntrack_*`, selected `node_sockstat_TCP_*`, edge-failure `node_netstat_Tcp*` counters, `up`
 
 **Labels:** All low-cardinality—`route` (routeId), `method`, `status` (2xx/4xx/5xx), `provider`, `model_class` (free/standard/premium), `code` (`AiExecutionErrorCode` — pre-normalized, no heuristics)
 

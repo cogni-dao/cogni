@@ -6,11 +6,7 @@
   log {
     level INFO
     format json
-    output file /data/logs/caddy/caddy.log {
-      roll_size 10MB
-      roll_keep 7
-      roll_keep_for 168h
-    }
+    output stdout
   }
 }
 
@@ -37,11 +33,7 @@ www.{$DOMAIN} {
 
   log {
     format json
-    output file /data/logs/caddy/access.log {
-      roll_size 10MB
-      roll_keep 7
-      roll_keep_for 168h
-    }
+    output stdout
   }
 }
 
@@ -63,11 +55,7 @@ www.{$DOMAIN} {
 
   log {
     format json
-    output file /data/logs/caddy/access-beacon.log {
-      roll_size 10MB
-      roll_keep 7
-      roll_keep_for 168h
-    }
+    output stdout
   }
 }
 
@@ -89,11 +77,7 @@ www.{$DOMAIN} {
 
   log {
     format json
-    output file /data/logs/caddy/access-levelup.log {
-      roll_size 10MB
-      roll_keep 7
-      roll_keep_for 168h
-    }
+    output stdout
   }
 }
 
@@ -115,11 +99,7 @@ www.{$DOMAIN} {
 
   log {
     format json
-    output file /data/logs/caddy/access-node-template.log {
-      roll_size 10MB
-      roll_keep 7
-      roll_keep_for 168h
-    }
+    output stdout
   }
 }
 
@@ -141,11 +121,7 @@ www.{$DOMAIN} {
 
   log {
     format json
-    output file /data/logs/caddy/access-poly.log {
-      roll_size 10MB
-      roll_keep 7
-      roll_keep_for 168h
-    }
+    output stdout
   }
 }
 
@@ -167,10 +143,6 @@ www.{$DOMAIN} {
 
   log {
     format json
-    output file /data/logs/caddy/access-toks4.log {
-      roll_size 10MB
-      roll_keep 7
-      roll_keep_for 168h
-    }
+    output stdout
   }
 }
