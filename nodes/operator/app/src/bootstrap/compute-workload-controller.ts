@@ -418,6 +418,8 @@ async function reconcileAll(): Promise<void> {
                   log.warn(observation, "compute_workload_migration_hold"),
                 recordCostAttributionFailure: (observation) =>
                   log.error(observation, "compute_cost_attribution_failed"),
+                recordCostIntervalTransition: (observation) =>
+                  log.info(observation, "compute_cost_interval_transition"),
               },
               resource
             );

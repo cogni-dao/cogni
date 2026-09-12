@@ -358,6 +358,7 @@ async function run(
     recordMigrationHold?: ComputeWorkloadReconcileDeps["recordMigrationHold"];
     leaseLogPush?: ComputeWorkloadReconcileDeps["leaseLogPush"];
     recordCostAttributionFailure?: ComputeWorkloadReconcileDeps["recordCostAttributionFailure"];
+    recordCostIntervalTransition?: ComputeWorkloadReconcileDeps["recordCostIntervalTransition"];
   } = {}
 ) {
   const dns = overrides.dns ?? {
@@ -378,6 +379,8 @@ async function run(
   };
   const recordReadinessTransition =
     overrides.recordReadinessTransition ?? vi.fn();
+  const recordCostIntervalTransition =
+    overrides.recordCostIntervalTransition ?? vi.fn();
   const accounting = costAccounting();
   await reconcileComputeWorkload(
     {
@@ -403,6 +406,7 @@ async function run(
         : {}),
       recordCostAttributionFailure:
         overrides.recordCostAttributionFailure ?? vi.fn(),
+      recordCostIntervalTransition: recordCostIntervalTransition,
     },
     state.current
   );
@@ -413,6 +417,7 @@ async function run(
     recordReadinessTransition,
     costStore: overrides.costStore ?? accounting.costStore,
     costEvidence: overrides.costEvidence ?? accounting.costEvidence,
+    recordCostIntervalTransition,
   };
 }
 
@@ -700,11 +705,43 @@ describe("reconcileComputeWorkload", () => {
       state: "active",
       endpoints: ["https://sample-node.example"],
     });
-    await run(state, port);
-    await run(state, port);
+    const accounting = costAccounting();
+    const recordCostIntervalTransition = vi.fn();
+    const deps = { ...accounting, recordCostIntervalTransition };
+    await run(state, port, deps);
+    await run(state, port, deps);
     expect(port.create).toHaveBeenCalledTimes(1);
     expect(port.recoverCreate).toHaveBeenCalledWith({ allocationCursor: "41" });
     expect(state.current.status?.resource?.id).toBe("42");
+    expect(recordCostIntervalTransition).toHaveBeenCalledTimes(1);
+    expect(recordCostIntervalTransition).toHaveBeenCalledWith({
+      nodeId: NODE_ID,
+      environment: "candidate-a",
+      sourceSha: SHA,
+      resourceId: "42",
+      attemptKey: expect.any(String),
+      state: "bound",
+    });
+  });
+
+  it("emits one bound transition when backfilling an existing resource", async () => {
+    const state = new MemoryState(workload({ status: status() }));
+    const port = lifecycle();
+    const accounting = costAccounting();
+    const recordCostIntervalTransition = vi.fn();
+    const deps = { ...accounting, recordCostIntervalTransition };
+
+    await run(state, port, deps);
+    await run(state, port, deps);
+
+    expect(recordCostIntervalTransition.mock.calls).toEqual([
+      [
+        expect.objectContaining({
+          resourceId: "lease-42",
+          state: "bound",
+        }),
+      ],
+    ]);
   });
 
   it("persists an adopted handle and releases the wallet before cost backfill failure", async () => {
@@ -725,12 +762,14 @@ describe("reconcileComputeWorkload", () => {
       endpoints: ["https://sample-node.example"],
     });
     const accounting = costAccounting();
+    const recordCostIntervalTransition = vi.fn();
+    const deps = { ...accounting, recordCostIntervalTransition };
     vi.mocked(accounting.costStore.findByResource).mockRejectedValueOnce(
       new Error("ledger down")
     );
 
-    await run(state, port, accounting);
-    await run(state, port, accounting);
+    await run(state, port, deps);
+    await run(state, port, deps);
 
     expect(
       decodeAttemptReceipt(
@@ -1882,11 +1921,13 @@ describe("reconcileComputeWorkload", () => {
     );
     const port = lifecycle();
     const accounting = costAccounting();
-    vi.mocked(accounting.costStore.findByResource).mockRejectedValueOnce(
-      new Error("ledger down")
-    );
+    const recordCostIntervalTransition = vi.fn();
+    const deps = { ...accounting, recordCostIntervalTransition };
+    vi.mocked(accounting.costStore.findByResource)
+      .mockRejectedValueOnce(new Error("ledger down"))
+      .mockRejectedValueOnce(new Error("ledger down"));
 
-    await run(state, port, accounting);
+    await run(state, port, deps);
     expect(port.delete).toHaveBeenCalledTimes(1);
     expect(state.current.metadata.finalizers).toContain(
       COMPUTE_WORKLOAD_FINALIZER
@@ -1899,12 +1940,41 @@ describe("reconcileComputeWorkload", () => {
       state: "closed",
       endpoints: [],
     });
-    await run(state, port, accounting);
+    await run(state, port, deps);
     expect(port.delete).toHaveBeenCalledTimes(1);
     expect(accounting.costStore.close).toHaveBeenCalledOnce();
+    expect(recordCostIntervalTransition.mock.calls).toEqual([
+      [
+        expect.objectContaining({
+          nodeId: NODE_ID,
+          resourceId: "lease-42",
+          state: "bound",
+        }),
+      ],
+      [
+        expect.objectContaining({
+          nodeId: NODE_ID,
+          resourceId: "lease-42",
+          state: "closed",
+        }),
+      ],
+    ]);
+    const closePersistedOrder = vi.mocked(accounting.costStore.close).mock
+      .invocationCallOrder[0];
+    const closeLoggedOrder =
+      recordCostIntervalTransition.mock.invocationCallOrder[1];
+    expect(closePersistedOrder).toBeDefined();
+    expect(closeLoggedOrder).toBeDefined();
+    if (closePersistedOrder === undefined || closeLoggedOrder === undefined) {
+      throw new Error("expected one durable close followed by one close log");
+    }
+    expect(closePersistedOrder).toBeLessThan(closeLoggedOrder);
     expect(state.current.metadata.finalizers).not.toContain(
       COMPUTE_WORKLOAD_FINALIZER
     );
+
+    await run(state, port, deps);
+    expect(recordCostIntervalTransition).toHaveBeenCalledTimes(2);
   });
 
   it("rejects an existing provider resource attributed to another node", async () => {

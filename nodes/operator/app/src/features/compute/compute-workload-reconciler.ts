@@ -114,6 +114,14 @@ export interface ComputeWorkloadReconcileDeps {
     resourceId: string;
     operation: "prepare" | "bind" | "observe" | "close";
   }) => void;
+  readonly recordCostIntervalTransition: (input: {
+    nodeId: string;
+    environment: string;
+    sourceSha: string;
+    resourceId: string;
+    attemptKey: string;
+    state: "bound" | "closed";
+  }) => void;
 }
 
 const SAFE_MESSAGES: Readonly<Record<string, string>> = {
@@ -261,7 +269,11 @@ async function ensureCostBound(
   deps: ComputeWorkloadReconcileDeps,
   context: ComputeResourceCostContext,
   resource: { provider: string; id: string }
-): Promise<string> {
+): Promise<{
+  attemptKey: string;
+  newlyBound: boolean;
+  alreadyClosed: boolean;
+}> {
   const existing = await deps.costStore.findByResource({
     computeProvider: resource.provider,
     resourceId: resource.id,
@@ -276,7 +288,11 @@ async function ensureCostBound(
         "provider resource cost interval conflicts with workload identity"
       );
     }
-    return existing.attemptKey;
+    return {
+      attemptKey: existing.attemptKey,
+      newlyBound: false,
+      alreadyClosed: existing.state === "closed",
+    };
   }
   await deps.costStore.prepare(context);
   const bound = await deps.costStore.bind({
@@ -286,7 +302,28 @@ async function ensureCostBound(
       resourceId: resource.id,
     },
   });
-  return bound.attemptKey;
+  return {
+    attemptKey: bound.attemptKey,
+    newlyBound: true,
+    alreadyClosed: false,
+  };
+}
+
+function recordCostTransition(
+  deps: ComputeWorkloadReconcileDeps,
+  context: ComputeResourceCostContext,
+  resourceId: string,
+  attemptKey: string,
+  state: "bound" | "closed"
+): void {
+  deps.recordCostIntervalTransition({
+    nodeId: context.nodeId,
+    environment: context.environment,
+    sourceSha: context.sourceSha,
+    resourceId,
+    attemptKey,
+    state,
+  });
 }
 
 async function observeCost(
@@ -294,11 +331,62 @@ async function observeCost(
   context: ComputeResourceCostContext,
   resource: { provider: string; id: string }
 ): Promise<void> {
-  const attemptKey = await ensureCostBound(deps, context, resource);
+  const binding = await ensureCostBound(deps, context, resource);
+  if (binding.newlyBound) {
+    recordCostTransition(
+      deps,
+      context,
+      resource.id,
+      binding.attemptKey,
+      "bound"
+    );
+  }
   const evidence = await deps.costEvidence.observeCost({
     resourceId: resource.id,
   });
-  await deps.costStore.observe({ attemptKey, evidence });
+  const observed = await deps.costStore.observe({
+    attemptKey: binding.attemptKey,
+    evidence,
+  });
+  if (!binding.alreadyClosed && observed.state === "closed") {
+    recordCostTransition(
+      deps,
+      context,
+      resource.id,
+      binding.attemptKey,
+      "closed"
+    );
+  }
+}
+
+async function closeCost(
+  deps: ComputeWorkloadReconcileDeps,
+  context: ComputeResourceCostContext,
+  resource: { provider: string; id: string }
+): Promise<void> {
+  const binding = await ensureCostBound(deps, context, resource);
+  if (binding.newlyBound) {
+    recordCostTransition(
+      deps,
+      context,
+      resource.id,
+      binding.attemptKey,
+      "bound"
+    );
+  }
+  const closed = await deps.costStore.close({
+    attemptKey: binding.attemptKey,
+    closedRecordedAt: deps.now(),
+  });
+  if (!binding.alreadyClosed && closed.state === "closed") {
+    recordCostTransition(
+      deps,
+      context,
+      resource.id,
+      binding.attemptKey,
+      "closed"
+    );
+  }
 }
 
 function recordCostFailure(
@@ -1167,10 +1255,19 @@ async function mutate(
       }
     } else if (resource.status?.resource) {
       try {
-        await ensureCostBound(deps, attemptCostContext, {
+        const binding = await ensureCostBound(deps, attemptCostContext, {
           provider: resource.status.resource.provider,
           id: resource.status.resource.id,
         });
+        if (binding.newlyBound) {
+          recordCostTransition(
+            deps,
+            attemptCostContext,
+            resource.status.resource.id,
+            binding.attemptKey,
+            "bound"
+          );
+        }
       } catch (error) {
         costFailureOperation = "bind";
         throw error;
@@ -1222,13 +1319,23 @@ async function mutate(
             onAllocated: async (output) => {
               allocated = resourceStatus(output);
               try {
-                await deps.costStore.bind({
-                  attemptKey: activeAttempt.key,
-                  resource: {
-                    computeProvider: output.provider,
-                    resourceId: output.leaseId,
-                  },
-                });
+                const binding = await ensureCostBound(
+                  deps,
+                  attemptCostContext,
+                  {
+                    provider: output.provider,
+                    id: output.leaseId,
+                  }
+                );
+                if (binding.newlyBound) {
+                  recordCostTransition(
+                    deps,
+                    attemptCostContext,
+                    output.leaseId,
+                    binding.attemptKey,
+                    "bound"
+                  );
+                }
               } catch (error) {
                 costFailureOperation = "bind";
                 throw error;
@@ -1474,19 +1581,12 @@ async function closeKnown(
     );
     const context = existingCostContext(deps, resource, current, attempt);
     try {
-      const attemptKey = await ensureCostBound(deps, context, current);
       try {
-        const evidence = await deps.costEvidence.observeCost({
-          resourceId: current.id,
-        });
-        await deps.costStore.observe({ attemptKey, evidence });
+        await observeCost(deps, context, current);
       } catch {
         recordCostFailure(deps, resource, current.id, "observe");
       }
-      await deps.costStore.close({
-        attemptKey,
-        closedRecordedAt: deps.now(),
-      });
+      await closeCost(deps, context, current);
     } catch {
       await writeCostFailure(
         deps,
@@ -1531,16 +1631,12 @@ async function closeCostAfterProviderClosed(
 ): Promise<boolean> {
   const context = existingCostContext(deps, resource, current);
   try {
-    const attemptKey = await ensureCostBound(deps, context, current);
     try {
       await observeCost(deps, context, current);
     } catch {
       recordCostFailure(deps, resource, current.id, "observe");
     }
-    await deps.costStore.close({
-      attemptKey,
-      closedRecordedAt: deps.now(),
-    });
+    await closeCost(deps, context, current);
     return true;
   } catch {
     await writeCostFailure(
@@ -1639,11 +1735,7 @@ async function observeAndReport(
     if (failure.kind === "not_found") {
       const context = existingCostContext(deps, resource, current, attempt);
       try {
-        const attemptKey = await ensureCostBound(deps, context, current);
-        await deps.costStore.close({
-          attemptKey,
-          closedRecordedAt: deps.now(),
-        });
+        await closeCost(deps, context, current);
       } catch {
         await writeCostFailure(deps, resource, attempt, current, "close");
         return "error";
@@ -1711,15 +1803,7 @@ async function observeAndReport(
   } catch {
     if (observed.state === "closed") {
       try {
-        const attemptKey = await ensureCostBound(
-          deps,
-          context,
-          observedResource
-        );
-        await deps.costStore.close({
-          attemptKey,
-          closedRecordedAt: deps.now(),
-        });
+        await closeCost(deps, context, observedResource);
         recordCostFailure(deps, resource, observedResource.id, "observe");
       } catch {
         await writeCostFailure(
@@ -2102,10 +2186,6 @@ async function recoverUncertainAllocation(
   });
   await deps.state.completeWalletAllocation({ attemptKey: adoptedAttempt.key });
   try {
-    await ensureCostBound(deps, adoptedCostContext, {
-      provider: adopted.provider,
-      id: adopted.leaseId,
-    });
     await observeCost(deps, adoptedCostContext, {
       provider: adopted.provider,
       id: adopted.leaseId,
