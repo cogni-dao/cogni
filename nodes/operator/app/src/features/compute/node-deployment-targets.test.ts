@@ -143,6 +143,39 @@ describe("resolvePromoteDeploymentTargets", () => {
     });
   });
 
+  it("resolves the reviewed catalog source_sha for a remote-source node still on k3s this env (bug: node-template prod promote, story.5016)", () => {
+    const sourceSha = "654e5f2132cdc774a329f24c69340170e4721d2a";
+    const mixedPlacementRows = [
+      {
+        name: "node-template",
+        type: "node",
+        envs: ["candidate-a", "preview", "production"],
+        source_repo: "https://github.com/Cogni-DAO/node-template.git",
+        source_sha: sourceSha,
+        // Off-cluster (akash) only for candidate-a — production/preview
+        // default to k3s (K3S_IS_DEFAULT) but are still remote-source.
+        deployment_provider: { "candidate-a": "akash" },
+      },
+    ];
+
+    const selection = resolvePromoteDeploymentTargets({
+      catalogRows: mixedPlacementRows,
+      environment: "production",
+      requestedTargets: ["node-template"],
+      legacyK3sTargets: ["node-template"],
+    });
+
+    expect(selection.offCluster).toEqual([]);
+    expect(selection.providers).toEqual({ "node-template": "k3s" });
+    // The bug: this map used to stay empty for a k3s-provider remote-source
+    // node, starving resolve_remote_source_sha's "operator source_sha +
+    // reviewed catalog source_sha" branch and hard-failing node-substrate.
+    expect(selection.sourceShas).toEqual({ "node-template": sourceSha });
+    expect(selection.sourceRepositories).toEqual({
+      "node-template": "cogni-dao/node-template",
+    });
+  });
+
   it("projects the reviewed catalog pin for an operator-merge preview", () => {
     const sourceSha = "947c241ffa0cf0e31fb614b81e6837633f891e98";
     const selection = resolvePromoteDeploymentTargets({

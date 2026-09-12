@@ -45,6 +45,7 @@ import type {
   ProvisionSpec,
   ProvisionState,
 } from "@cogni/ai-tools";
+import { makeLogger } from "@/shared/observability";
 import {
   type AkashProviderInfo,
   type ProviderOutcomeStats,
@@ -143,6 +144,12 @@ export interface AkashComputeAdapterConfig {
   maxProviderAttempts?: number;
   /** Injected boot-outcome persistence; composition roots choose durable or no-op storage. */
   outcomeStore: ProviderOutcomeStore;
+  /**
+   * Structural pino subset for advisory-write failures (bug.5128): a
+   * compute_provider_outcomes insert failure never fails a live provision, but
+   * it must land in logs loudly — silent drops gave provider screening amnesia.
+   */
+  log?: { error(fields: Record<string, unknown>, message: string): void };
   /** SDL pricing knobs (max price per block per service). */
   pricing?: AkashSdlOptions;
   /** API base URL; defaults to the public Console API. */
@@ -240,6 +247,9 @@ export class AkashComputeAdapter implements ComputeResourcePort {
   private readonly maxProviderAttempts: number;
   private readonly preferredCountryCodes: readonly string[];
   private readonly outcomeStore: ProviderOutcomeStore;
+  private readonly log: {
+    error(fields: Record<string, unknown>, message: string): void;
+  };
   private readonly sdlOptions: AkashSdlOptions;
 
   constructor(private readonly config: AkashComputeAdapterConfig) {
@@ -261,6 +271,7 @@ export class AkashComputeAdapter implements ComputeResourcePort {
     this.preferredCountryCodes =
       config.preferredCountryCodes ?? DEFAULT_SUBSTRATE_COUNTRY_CODES;
     this.outcomeStore = config.outcomeStore;
+    this.log = config.log ?? makeLogger({ component: "AkashComputeAdapter" });
     // uakt ceiling per block per service; managed wallets escrow USD but bid in chain denom.
     // signedBy anchors audited-only screening on-chain (AUDITED_PROVIDERS_ONLY).
     this.sdlOptions = {
@@ -814,8 +825,24 @@ export class AkashComputeAdapter implements ComputeResourcePort {
   private async recordOutcome(
     rec: Parameters<ProviderOutcomeStore["record"]>[0]
   ): Promise<void> {
-    await this.outcomeStore.record(rec).catch(() => {
-      // advisory: a history-write failure must never fail a live provision
+    await this.outcomeStore.record(rec).catch((error: unknown) => {
+      // advisory: a history-write failure must never fail a live provision —
+      // but it must be visible, or provider screening silently loses its
+      // history and re-leases known-bad providers (bug.5128).
+      this.log.error(
+        {
+          reason: "ProviderOutcomeWriteFailed",
+          computeProvider: rec.computeProvider,
+          providerAccount: rec.providerAccount,
+          outcome: rec.outcome,
+          ...(rec.leaseId ? { leaseId: rec.leaseId } : {}),
+          ...(rec.workload ? { workload: rec.workload } : {}),
+          causeType: error instanceof Error ? error.name : "unknown",
+          causeMessage:
+            error instanceof Error ? error.message : "unknown cause",
+        },
+        "compute_provider_outcome_write_failed"
+      );
     });
   }
 

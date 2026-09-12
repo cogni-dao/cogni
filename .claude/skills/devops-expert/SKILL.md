@@ -9,6 +9,30 @@ You are a senior DevOps architect. AI agents are the primary committers in this 
 
 ## Ground truth — read before advising
 
+### Node-compute scaling north star — mandatory recall
+
+Before advising on node formation, Akash topology, lease boundaries, compute
+cost, provider capacity, or moving shared infrastructure, read
+[`akash-cicd-pareto-scope`](https://cognidao.org/knowledge/akash-cicd-pareto-scope)
+and treat its reviewed decision as the target architecture (`story.5024`):
+
+- Spawn finishes only when the canonical **production** node serves the exact
+  immutable SHA. Candidate-a is a passive, ephemeral proof gate; preview is
+  absent at birth; production is generation-1 activity authority.
+- A sovereign node uses one Akash deployment/placement group per
+  `(node, environment)` workload bundle. Tightly coupled app-tier sidecars share
+  it; unrelated nodes never share a Cogni fleet supervisor or super-deployment.
+- Akash providers own physical bin-packing. Cogni preserves node-level secrets,
+  lifecycle, cost attribution, failure containment, and future DAO custody.
+- Shared generic substrate stays pooled. The control/recovery anchor must remain
+  independent of the leases it reconciles; "Cherry forever" is not the
+  invariant.
+- Communities without unique executable code should begin as shared-runtime
+  scopes and graduate to sovereign nodes only when their requirements demand it.
+
+If current code differs, report the difference as an as-built gap. Do not weaken
+the north star to match the implementation.
+
 - **[CI/CD Platform Boundary & Freeze Policy](../../../docs/spec/cicd-platform-boundary.md) — READ FIRST when advising on ANY new deployment/platform behavior.** The deploy brain (`scripts/ci/*.sh` + `.github/workflows/*.yml`) is **frozen** for the operator control plane: no new platform logic in bash/YAML, no new deploy/promote/provision workflow, no new infra/secret-mutating `.sh`. `deploy-infra.sh` (2,167 lines) is a 🔴 DANGER ZONE on a line-count ratchet. New platform work routes to the substrate (catalog row / Kustomize overlay / Argo AppSet / ESO declaration / OpenTofu) per the doc's request→home table, OR into the typed `.ts` operator control plane (`DeployCapability` + `ComputeResourcePort` — the Akash compute lane is SHIPPED and is the home for node-app deployment behavior, see the Deployment-targets section below; never route compute-lane work into catalog-overlay/AppSet artifacts). When reviewing, the gate is: _bug-fix / catalog-driven / guard-tightening = OK in place; new branching, env policy, promotion semantics, secret/domain/lifecycle rules = platform work, NOT script work._ Standalone-node sovereignty (a node's own GH Actions) is explicitly NOT frozen.
 - [Multi-Repo Sync Contract](../../../docs/spec/repo-sync-contract.md) — operator-scope content lives in `Cogni-DAO/cogni` (HUB); `node-template` and `cogni-poly` are artifacts. `.cogni/sync-manifest.yaml` declares global excludes + per-artifact divergences; `.github/workflows/sync-drift-detector.yml` runs daily + on push:main, upserts a hub issue labeled `sync-drift` listing drift in three classes (🟡 different / 🔴 missing-on-artifact / 🟣 only-on-artifact). **Any review of a workflow / `infra/**`/`scripts/**`/`.github/**`change in any of the three repos MUST consider sync impact** — backflow refactors (substrate work pioneered in node-template, e.g. OpenBao/ESO) require a named same-day porter committed before merge, else drift accumulates. The`sync-drift` issue is the cross-repo dashboard.
 - [CI/CD Spec](../../../docs/spec/ci-cd.md) — operating rules, branch model, pipeline chain, environments, TODOs
@@ -41,7 +65,7 @@ You are a senior DevOps architect. AI agents are the primary committers in this 
 
 ## Deployment targets — Akash app lane vs Cherry state substrate
 
-**The standard (gated north star — `AKASH_IS_NODE_APP_TARGET`, [ci-cd.md](../../../docs/spec/ci-cd.md) Axioms 23–26):** node apps deploy as **app-only Akash workloads** through the operator compute API; the node wizard's default is `deploy_provider: akash` (born-on-Akash). The Cherry VM/k3s cluster is the **state substrate** (postgres/doltgres/redis/temporal/LiteLLM/scheduler-worker) plus the legacy node-app lane. Gate: present-tense once story.5016's S0–S3 land; until then new nodes still birth on k3s — but never advise extending the k3s app lane, and route every new deploy-plane behavior toward the Akash lane.
+**The standard (gated north star — `AKASH_IS_NODE_APP_TARGET`, [ci-cd.md](../../../docs/spec/ci-cd.md) Axioms 23–26):** node apps deploy as **app-only Akash workloads** through the operator compute API; the node wizard's default is `deploy_provider: akash` (born-on-Akash). The Cherry VM/k3s cluster is the **state substrate** (postgres/doltgres/redis/temporal/LiteLLM/scheduler-worker) plus the legacy node-app lane. Gate: the S0–S3 ladder is PROVEN — as of 2026-09-11 four nodes (toks4 3/3, levelup 2/2, node-template 3/3, poly 2/2 env-slots) run live on Akash via the pure API path, so the gate's precondition is met; the wizard default flip to `deploy_provider: akash` is pending as its own story. Until that flip, new nodes still birth on k3s — but the k3s app lane is DEPRECATED (Derek red line: never flip a node back to k3s; `place_k3s` is not a mitigation — fix forward), never advise extending it, and route every new deploy-plane behavior toward the Akash lane.
 
 Mechanism (all shipped, task.5044 / PR #2077):
 
@@ -49,6 +73,7 @@ Mechanism (all shipped, task.5044 / PR #2077):
 - SDL renders internally in `akash-sdl.ts` and never escapes that dir. `INTERNAL_EXPOSE_IS_MESH`: multiple services in one lease reach each other by service name with no public expose — which is why an app-adjacent sidecar image is **an extra SDL service in the same lease**, never k8s pod injection (`SIDECAR_IS_SDL_SERVICE`; the injection lane was closed with PR #1884).
 - Workload spec: `features/compute/node-workload-spec.ts` — `APP_ONLY_NO_INFRA` (no DBs/queues/gateways as workload sidecars) + `SCOPED_CREDS_ONLY` (node-scoped DSNs, budget-capped LiteLLM virtual key, write-only Loki key — never fleet secrets).
 - **Health:** off-k3s there are no probes and no Argo selfHeal — `OPERATOR_OWNS_WORKLOAD_HEALTH` (Axiom 26): the operator plane polls lease + `/readyz` + `/version.buildSha` and replaces dead-provider workloads. Reconcile loop is specified-not-built (story.5016); flag any design that assumes an Akash workload self-heals today.
+- **Do not confuse app compute with shared substrate.** Node app create/replace/scale belongs to the Akash compute API above. Merged production state/edge changes (`infra/compose/**`, Caddy/Alloy, VM-materialized bridge secrets) use `POST /api/v1/deploy/infra-reconcile` against the operator node. That route is temporarily production-promoter-gated as a two-phase OpenFGA bootstrap bridge; story.5028 owns the least-privilege destination `production_infra_promoter → can_reconcile_production_infra`. It is operator-GitHub-App-dispatched, preserves the current app pin, and accepts no caller workflow/ref/SHA/mode. Its repository target MUST come from env-scoped `NODE_SUBMODULE_PARENT_{OWNER,REPO}` so the candidate test App remains inside `cogni-test-org`. Never send an agent to personal `gh workflow run` or SSH for this normal reconcile path.
 - **Seam warning:** `bootstrap/capabilities/compute.ts` (the `COMPUTE_WRITE_PROVIDER` selection point) is owned by the crypto-rail workstream — advise around it, never through it.
 - Living design doc: hub entry `akash-node-deploy-v000` (+ `akash-provider-quality-mandate` for bid screening/boot SLO/blacklist); roadmap + task map: story.5016.
 

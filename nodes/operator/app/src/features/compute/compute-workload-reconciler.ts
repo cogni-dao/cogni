@@ -38,6 +38,20 @@ export interface ComputeWorkloadReconcileDeps {
   readonly migration: ComputeWorkloadMigrationPort;
   readonly environment: string;
   readonly deploymentDomain: string;
+  /**
+   * Write-only Loki push credential injected into every `cogni-node-app-v1`
+   * lease env as `LOKI_PUSH_*` (bug.5127). Off-cluster providers run no
+   * Alloy/daemonset, so the app ships its own logs via the node-template
+   * env-gated transport. Absent → nothing is injected and the app simply does
+   * not ship logs (fail-open; boot is never blocked on observability).
+   * SCOPED_CREDS_ONLY: must be the dedicated logs:write-only lease token
+   * (LOKI_LEASE_PUSH_* in the catalog), never a fleet read/admin credential.
+   */
+  readonly leaseLogPush?: {
+    readonly url: string;
+    readonly username: string;
+    readonly password: string;
+  };
   readonly leaderEpoch: string;
   readonly assertLeadership: (epoch: string) => Promise<boolean>;
   readonly now: () => Date;
@@ -56,6 +70,8 @@ export interface ComputeWorkloadReconcileDeps {
     leaseId: string;
     recoveryCount: number;
     outcomeCode: "RecoveryLimitExceeded";
+    /** Stage-specific reason of the last failed attempt, when known (bug.5128). */
+    lastAttemptReason?: string;
   }) => void;
   readonly recordMutationFailure: (input: {
     nodeId: string;
@@ -214,6 +230,7 @@ function legacyCogniAppEnv(input: {
   runtimeProfile: "cogni-node-app-v1" | undefined;
   bindings: Readonly<Record<string, string>>;
   secrets: Readonly<Record<string, string>>;
+  leaseLogPush?: ComputeWorkloadReconcileDeps["leaseLogPush"];
 }): Record<string, string> {
   if (input.runtimeProfile !== "cogni-node-app-v1") {
     return { ...input.bindings, ...input.secrets };
@@ -245,6 +262,21 @@ function legacyCogniAppEnv(input: {
       ...sharedSubstrateEnv(input.resource.spec.environment, input.secrets),
       ...input.bindings,
       ...legacySecrets,
+      // bug.5127 — env-gated log shipping. Placed AFTER the node's own secrets
+      // so the operator-held write-only credential always wins over a stale
+      // node-seeded copy. The node-template transport activates only when
+      // LOKI_PUSH_URL is present, labels its streams
+      // {service="app", service_name=<slug>, node=<nodeId>, env, source="lease"},
+      // and is fail-open by construction — absent creds cost nothing.
+      ...(input.leaseLogPush
+        ? {
+            LOKI_PUSH_URL: input.leaseLogPush.url,
+            LOKI_PUSH_USER: input.leaseLogPush.username,
+            LOKI_PUSH_PASSWORD: input.leaseLogPush.password,
+            LOKI_PUSH_SOURCE: "lease",
+            COGNI_NODE_ID: input.resource.spec.nodeId,
+          }
+        : {}),
       // Named compatibility only: the value remains the node-scoped virtual
       // key; the operator's LiteLLM master key never enters this process.
       LITELLM_MASTER_KEY: virtualKey,
@@ -368,7 +400,7 @@ async function migrationGate(
       ? { resource: resource.status.resource }
       : {}),
     ...(resource.status?.attempt ? { attempt: resource.status.attempt } : {}),
-    recoveryCount: resource.status?.recoveryCount ?? 0,
+    ...carriedRecovery(resource),
   };
   if (outcome === "running") {
     // Level-triggered no-op: a migration Job runs for minutes against a 15s
@@ -472,6 +504,7 @@ async function toProvisionSpec(
         runtimeProfile: service.runtimeProfile,
         bindings: bindingEnv,
         secrets,
+        ...(deps.leaseLogPush ? { leaseLogPush: deps.leaseLogPush } : {}),
       });
       return {
         name: service.name,
@@ -582,7 +615,7 @@ async function writeUnknown(
         : {}),
       ...(current ? { resource: current } : {}),
       ...(attempt ? { attempt } : {}),
-      recoveryCount: resource.status?.recoveryCount ?? 0,
+      ...carriedRecovery(resource),
       failure: { reason, message: safeMessage(reason), retryable: false },
       conditions: [condition(resource, now, "Unknown", reason)],
     },
@@ -612,6 +645,29 @@ export function computeWorkloadPublicHost(
   return hostForNode(slug, false, domain);
 }
 
+/**
+ * The recovery-budget pair every status write carries forward (bug.5128). The
+ * count is only meaningful for the generation it was accrued under, so it is
+ * persisted WITH that generation: intermediate writes after a generation bump
+ * (migration gate, observation passes) stamp `desiredGeneration` to the new
+ * generation but must not re-attribute an old generation's spent budget to it.
+ * Legacy statuses without `recoveryGeneration` attribute the count to the
+ * pre-write `desiredGeneration` — the pre-fix association — so an in-generation
+ * wedge stays wedged (Axiom 26: never unlimited churn) until a real promote.
+ */
+function carriedRecovery(resource: ComputeWorkload): {
+  recoveryCount: number;
+  recoveryGeneration: number;
+} {
+  return {
+    recoveryCount: resource.status?.recoveryCount ?? 0,
+    recoveryGeneration:
+      resource.status?.recoveryGeneration ??
+      resource.status?.desiredGeneration ??
+      resource.metadata.generation,
+  };
+}
+
 function generationRecoveryCount(resource: ComputeWorkload): number {
   const attempt = resource.status?.attempt;
   if (
@@ -625,10 +681,13 @@ function generationRecoveryCount(resource: ComputeWorkload): number {
   ) {
     return attempt.ordinal;
   }
-  if (resource.status?.desiredGeneration !== resource.metadata.generation) {
+  // A count recorded under an older generation never gates this one: a promote
+  // (generation bump) always gets a fresh attempt budget (bug.5128).
+  const carried = carriedRecovery(resource);
+  if (carried.recoveryGeneration !== resource.metadata.generation) {
     return 0;
   }
-  return resource.status.recoveryCount ?? 0;
+  return carried.recoveryCount;
 }
 
 function blocksSameGenerationRecovery(resource: ComputeWorkload): boolean {
@@ -680,6 +739,14 @@ async function recoverBounded(
   if (completed >= MAX_RECOVERY_ATTEMPTS) {
     const now = deps.now().toISOString();
     const current = resource.status?.resource;
+    // Carry the last attempt's stage-specific reason (e.g. BootVersionUnavailable)
+    // into the terminal record: RecoveryLimitExceeded alone says the budget is
+    // spent, not WHY every attempt failed (bug.5128).
+    const lastAttemptReason =
+      resource.status?.failure &&
+      resource.status.failure.reason !== "RecoveryLimitExceeded"
+        ? resource.status.failure.reason
+        : resource.status?.failure?.lastAttemptReason;
     // Level-triggered no-op: a CR terminal for this generation would otherwise
     // rewrite an identical status every reconcile pass and bloat kine.
     const currentCondition = resource.status?.conditions?.[0];
@@ -701,10 +768,14 @@ async function recoverBounded(
             ? { attempt: resource.status.attempt }
             : {}),
           recoveryCount: completed,
+          recoveryGeneration: resource.metadata.generation,
           failure: {
             reason: "RecoveryLimitExceeded",
-            message: safeMessage("RecoveryLimitExceeded"),
+            message: lastAttemptReason
+              ? `${safeMessage("RecoveryLimitExceeded")}; last attempt: ${lastAttemptReason} (${safeMessage(lastAttemptReason)})`
+              : safeMessage("RecoveryLimitExceeded"),
             retryable: false,
+            ...(lastAttemptReason ? { lastAttemptReason } : {}),
           },
           conditions: [
             condition(resource, now, "False", "RecoveryLimitExceeded"),
@@ -720,6 +791,7 @@ async function recoverBounded(
         leaseId: current?.id ?? "unknown",
         recoveryCount: completed,
         outcomeCode: "RecoveryLimitExceeded" as const,
+        ...(lastAttemptReason ? { lastAttemptReason } : {}),
       };
       deps.recordRecoveryLimit(fields);
       await deps.state
@@ -794,7 +866,7 @@ async function beginAttempt(
         ? { resource: resource.status.resource }
         : {}),
       attempt,
-      recoveryCount: resource.status?.recoveryCount ?? 0,
+      ...carriedRecovery(resource),
       ...(preservedFailure ? { failure: preservedFailure } : {}),
       conditions: [
         condition(
@@ -851,7 +923,7 @@ async function mutate(
           ? { resource: resource.status.resource }
           : {}),
         ...(previous ? { attempt: previous } : {}),
-        recoveryCount: resource.status?.recoveryCount ?? 0,
+        ...carriedRecovery(resource),
         failure: {
           reason: "RetryLimitExceeded",
           message: safeMessage("RetryLimitExceeded"),
@@ -892,7 +964,7 @@ async function mutate(
           ...baseStatus(resource),
           phase: "Progressing",
           attempt,
-          recoveryCount: resource.status?.recoveryCount ?? 0,
+          ...carriedRecovery(resource),
           failure: {
             reason: "WalletAllocationBlocked",
             message: safeMessage("WalletAllocationBlocked"),
@@ -953,7 +1025,7 @@ async function mutate(
                   ...baseStatus(resource),
                   phase: "Progressing",
                   attempt: activeAttempt,
-                  recoveryCount: resource.status?.recoveryCount ?? 0,
+                  ...carriedRecovery(resource),
                   conditions: [
                     condition(
                       resource,
@@ -987,7 +1059,7 @@ async function mutate(
                   phase: "Progressing",
                   resource: allocated,
                   attempt: allocatedAttempt,
-                  recoveryCount: resource.status?.recoveryCount ?? 0,
+                  ...carriedRecovery(resource),
                   conditions: [
                     condition(
                       resource,
@@ -1031,10 +1103,12 @@ async function mutate(
         observedGeneration: resource.metadata.generation,
         resource: resourceStatus(output),
         attempt: completedAttempt,
-        recoveryCount:
-          operation === "recover"
-            ? ordinal
-            : (resource.status?.recoveryCount ?? 0),
+        ...(operation === "recover"
+          ? {
+              recoveryCount: ordinal,
+              recoveryGeneration: resource.metadata.generation,
+            }
+          : carriedRecovery(resource)),
         conditions: [
           condition(
             resource,
@@ -1101,10 +1175,12 @@ async function mutate(
             ? { resource: resource.status.resource }
             : {}),
         attempt: failedAttempt,
-        recoveryCount:
-          operation === "recover"
-            ? ordinal
-            : (resource.status?.recoveryCount ?? 0),
+        ...(operation === "recover"
+          ? {
+              recoveryCount: ordinal,
+              recoveryGeneration: resource.metadata.generation,
+            }
+          : carriedRecovery(resource)),
         failure: {
           reason: failure.reason,
           message: safeMessage(failure.reason),
@@ -1170,7 +1246,7 @@ async function closeKnown(
         phase: preservedFailure ? "Failed" : "Progressing",
         resource: { ...current, state: "closed", endpoints: [] },
         attempt: completed,
-        recoveryCount: resource.status?.recoveryCount ?? 0,
+        ...carriedRecovery(resource),
         ...(preservedFailure ? { failure: preservedFailure } : {}),
         conditions: [
           condition(
@@ -1277,7 +1353,7 @@ async function observeAndReport(
           observedGeneration: resource.metadata.generation,
           resource: { ...current, state: "closed", endpoints: [] },
           ...(attempt ? { attempt } : {}),
-          recoveryCount: resource.status?.recoveryCount ?? 0,
+          ...carriedRecovery(resource),
           ...(generationBlockingFailure
             ? { failure: generationBlockingFailure }
             : {}),
@@ -1305,7 +1381,7 @@ async function observeAndReport(
             : "Progressing",
         resource: current,
         ...(attempt ? { attempt } : {}),
-        recoveryCount: resource.status?.recoveryCount ?? 0,
+        ...carriedRecovery(resource),
         failure: {
           reason: failure.reason,
           message: safeMessage(failure.reason),
@@ -1338,7 +1414,7 @@ async function observeAndReport(
         observedGeneration: resource.metadata.generation,
         resource: resourceStatus(observed),
         ...(attempt ? { attempt } : {}),
-        recoveryCount: resource.status?.recoveryCount ?? 0,
+        ...carriedRecovery(resource),
         failure: generationBlockingFailure,
         conditions: [
           condition(
@@ -1366,7 +1442,7 @@ async function observeAndReport(
         observedGeneration: resource.metadata.generation,
         resource: resourceStatus(observed),
         ...(attempt ? { attempt } : {}),
-        recoveryCount: resource.status?.recoveryCount ?? 0,
+        ...carriedRecovery(resource),
         conditions: [
           condition(
             resource,
@@ -1382,7 +1458,10 @@ async function observeAndReport(
   if (observed.state !== "active") return "pending";
   let dnsTarget: string | undefined;
   try {
-    dnsTarget = endpointHostname(observed.endpoints);
+    dnsTarget = endpointHostname(
+      observed.endpoints,
+      resource.spec.workload.publicHost
+    );
     // Persist exact cleanup ownership before the DNS write. A crash can leave a
     // record behind, but never an untracked record the finalizer would ignore.
     await deps.state.patchStatus({
@@ -1402,7 +1481,7 @@ async function observeAndReport(
             }
           : {}),
         ...(attempt ? { attempt } : {}),
-        recoveryCount: resource.status?.recoveryCount ?? 0,
+        ...carriedRecovery(resource),
         conditions: [
           condition(
             resource,
@@ -1437,7 +1516,7 @@ async function observeAndReport(
             }
           : {}),
         ...(attempt ? { attempt } : {}),
-        recoveryCount: resource.status?.recoveryCount ?? 0,
+        ...carriedRecovery(resource),
         failure: {
           reason: failure.reason,
           message: safeMessage(failure.reason),
@@ -1474,7 +1553,7 @@ async function observeAndReport(
               : attempt,
           }
         : {}),
-      recoveryCount: resource.status?.recoveryCount ?? 0,
+      ...carriedRecovery(resource),
       conditions: [
         condition(resource, now, ready ? "True" : "False", readinessOutcome),
       ],
@@ -1489,12 +1568,23 @@ async function observeAndReport(
   return "active";
 }
 
-function endpointHostname(endpoints: readonly string[]): string {
+function endpointHostname(
+  endpoints: readonly string[],
+  publicHost: string
+): string {
+  // Providers can echo the SDL accept host back as a lease endpoint. That is
+  // the workload's own publicHost; using it as the DNS target would create a
+  // self-referential CNAME, so it must never be a candidate (bug.5125).
+  const ownHostname = publicHost.toLowerCase().replace(/\.$/, "");
   for (const endpoint of endpoints) {
     try {
       const value = endpoint.includes("://") ? endpoint : `http://${endpoint}`;
       const hostname = new URL(value).hostname.toLowerCase().replace(/\.$/, "");
-      if (hostname && !/^\d{1,3}(?:\.\d{1,3}){3}$/.test(hostname))
+      if (
+        hostname &&
+        hostname !== ownHostname &&
+        !/^\d{1,3}(?:\.\d{1,3}){3}$/.test(hostname)
+      )
         return hostname;
     } catch {
       // Try the next provider-reported endpoint.
@@ -1546,7 +1636,7 @@ async function holdWalletBlocked(
       ...baseStatus(resource),
       phase: "Progressing",
       attempt,
-      recoveryCount: resource.status?.recoveryCount ?? 0,
+      ...carriedRecovery(resource),
       failure: {
         reason: "WalletAllocationBlocked",
         message: safeMessage("WalletAllocationBlocked"),
@@ -1643,7 +1733,7 @@ async function recoverUncertainAllocation(
       phase: "Progressing",
       resource: resourceStatus(adopted),
       attempt: adoptedAttempt,
-      recoveryCount: resource.status?.recoveryCount ?? 0,
+      ...carriedRecovery(resource),
       conditions: [
         condition(
           resource,

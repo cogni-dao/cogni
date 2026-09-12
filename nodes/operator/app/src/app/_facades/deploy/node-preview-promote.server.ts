@@ -12,9 +12,12 @@
  *   to the operator deploy plane (ONE_PROMOTION_PRIMITIVE; task.5022 — no main write; the pin
  *   lands on deploy/preview).
  * Invariants:
- *   - SPAWNED_NODES_ONLY: acts only when the merged-PR repo is a registered external node
- *     (the `nodes` table excludes inline operator/resy/node-template), so in-repo + parent
- *     merges never double-process.
+ *   - SPAWNED_NODES_ONLY: acts only when the merged-PR repo resolves to a registered node
+ *     row by slug. The parent monorepo and in-repo nodes are unregistered here, so their
+ *     merges never double-process — flight-preview.yml owns them. Every registered node
+ *     (including node-template, a seeded registry row since story.5009 that deploys via the
+ *     monorepo catalog — task.5087 retired its external-repo carve-out) promotes preview
+ *     through this hook.
  *   - MERGED_ONLY: fires on `pull_request` action=closed with `merged===true`.
  *   - PIN_IS_PR_HEAD_SHA: pins the PR head SHA — the build the node's PR CI published as
  *     `sha-<headSha>` (the SHA candidate-a already flights). The squash-merge commit on the
@@ -31,7 +34,6 @@ import { eq } from "drizzle-orm";
 import type { Logger } from "pino";
 import { createOperatorDeployPlane } from "@/bootstrap/capabilities/operator-deploy-plane";
 import { resolveServiceDb } from "@/bootstrap/container";
-import { getGithubRepo } from "@/shared/config";
 import { nodes } from "@/shared/db/nodes";
 import type { ServerEnv } from "@/shared/env";
 import { EVENT_NAMES } from "@/shared/observability";
@@ -107,36 +109,20 @@ async function promoteNodeToPreview(
       .select({
         id: nodes.id,
         slug: nodes.slug,
-        repoOwner: nodes.repoOwner,
-        repoName: nodes.repoName,
       })
       .from(nodes)
-      // A wizard node's fork is named after its slug (`forkFromTemplate` → `name: slug`), so the
-      // merged-PR repo name == the node slug. `nodes.repoOwner/repoName` is the PARENT deploy
-      // monorepo (`getGithubRepo()`), NOT the node's own source repo — so resolve by slug.
+      // A wizard node's fork is named after its slug (`forkFromTemplate` → `name: slug`), and the
+      // seeded node-template row's repo name == its slug — so the merged-PR repo name == the node
+      // slug. `nodes.repoOwner/repoName` may be the PARENT deploy monorepo, NOT the node's own
+      // source repo — so resolve by slug. Every registered node deploys via the monorepo catalog
+      // (node-template's own-repo carve-out retired by task.5087), so any row that resolves here
+      // gets the same merge→preview promote.
       .where(eq(nodes.slug, ctx.repo))
       .limit(1);
     const node = rows[0];
     // SPAWNED_NODES_ONLY: an unregistered repo (parent monorepo, in-repo node) is handled
     // by flight-preview.yml directly — nothing to do here.
     if (!node) return;
-
-    // SPAWNED_NODES_ONLY (general): the preview tie applies ONLY to nodes deployed via the parent
-    // monorepo submodule pin — exactly the rows whose repoOwner/repoName IS the parent monorepo
-    // (set by the wizard create path). `node-template` is now a seeded registry row (story.5009)
-    // carrying its OWN repo, and its repo name == its slug — so a node-template merge resolves here
-    // and would otherwise spuriously dispatch a preview promotion. It owns its own deploy pipeline.
-    const parentMonorepo = getGithubRepo();
-    const deployedViaParent =
-      node.repoOwner.toLowerCase() === parentMonorepo.owner.toLowerCase() &&
-      node.repoName.toLowerCase() === parentMonorepo.repo.toLowerCase();
-    if (!deployedViaParent) {
-      log.debug(
-        { slug: node.slug, repo: `${node.repoOwner}/${node.repoName}` },
-        "node preview promote skipped — registered external repo (own deploy pipeline)"
-      );
-      return;
-    }
 
     const parentOwner = env.NODE_SUBMODULE_PARENT_OWNER as string;
     const parentRepo = env.NODE_SUBMODULE_PARENT_REPO as string;

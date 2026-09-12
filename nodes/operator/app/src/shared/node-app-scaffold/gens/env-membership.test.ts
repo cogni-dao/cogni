@@ -18,9 +18,12 @@ import {
   addCatalogEnv,
   dropCatalogEnv,
   envRemovalViolation,
+  hasCatalogSourceRepo,
   parseCatalogActivityEnv,
   parseCatalogEnvs,
+  parseCatalogPlacement,
   setCatalogEnvs,
+  setCatalogPlacement,
 } from "./env-membership";
 
 // A realistic catalog row with comments + fields around the envs: line, so the single-line-edit
@@ -137,6 +140,151 @@ describe("activity authority removal", () => {
         removeEnv: "candidate-a",
       })
     ).toBe("activity_authority_cutover_required");
+  });
+});
+
+// toks4-shaped: an external-build row (source_repo) whose block sits after envs:, with a
+// trailing comment block that must survive every placement edit verbatim.
+const CATALOG_WITH_PLACEMENT = `name: toks
+type: node
+port: 3200
+node_port: 31700
+source_repo: https://github.com/cogni-dao/toks.git
+image_repository: ghcr.io/cogni-dao/toks
+envs: [candidate-a, preview, production]
+deployment_provider:
+  candidate-a: akash
+  production: akash
+activity_env: candidate-a
+# trailing comment that must survive verbatim.
+path_prefix: nodes/toks/
+`;
+
+describe("parseCatalogPlacement", () => {
+  it("reads the per-env map; absent envs mean the k3s default", () => {
+    expect(parseCatalogPlacement(CATALOG_WITH_PLACEMENT)).toEqual({
+      "candidate-a": "akash",
+      production: "akash",
+    });
+  });
+
+  it("returns {} when the block is absent", () => {
+    expect(parseCatalogPlacement(CATALOG)).toEqual({});
+  });
+
+  it("throws on an unknown env key", () => {
+    expect(() =>
+      parseCatalogPlacement(
+        CATALOG_WITH_PLACEMENT.replace(
+          "  production: akash",
+          "  staging: akash"
+        )
+      )
+    ).toThrow(/unknown env/);
+  });
+
+  it("throws on an unknown provider value", () => {
+    expect(() =>
+      parseCatalogPlacement(
+        CATALOG_WITH_PLACEMENT.replace(
+          "  production: akash",
+          "  production: fly"
+        )
+      )
+    ).toThrow(/unknown provider/);
+  });
+
+  it("tolerates a trailing `# comment` after the provider value (mirrors activity_env)", () => {
+    const commented = CATALOG_WITH_PLACEMENT.replace(
+      "  production: akash",
+      "  production: akash  # toks4 normalization pending"
+    );
+    expect(parseCatalogPlacement(commented)).toEqual({
+      "candidate-a": "akash",
+      production: "akash",
+    });
+  });
+});
+
+describe("setCatalogPlacement", () => {
+  it("creates the block after the envs: line when absent (akash)", () => {
+    const next = setCatalogPlacement(CATALOG, "preview", "akash");
+    expect(next).toContain(
+      "envs: [candidate-a, preview, production]\ndeployment_provider:\n  preview: akash\nactivity_env: candidate-a"
+    );
+    expect(parseCatalogPlacement(next)).toEqual({ preview: "akash" });
+    // Every pre-existing line is preserved verbatim.
+    for (const line of CATALOG.split("\n")) {
+      expect(next).toContain(line);
+    }
+  });
+
+  it("upserts an env into an existing block in canonical order", () => {
+    const next = setCatalogPlacement(
+      CATALOG_WITH_PLACEMENT,
+      "preview",
+      "akash"
+    );
+    expect(next).toContain(
+      "deployment_provider:\n  candidate-a: akash\n  preview: akash\n  production: akash\n"
+    );
+  });
+
+  it("k3s removes the env's entry (k3s is the schema default), keeping others", () => {
+    const next = setCatalogPlacement(
+      CATALOG_WITH_PLACEMENT,
+      "production",
+      "k3s"
+    );
+    expect(next).toContain("deployment_provider:\n  candidate-a: akash\n");
+    expect(next).not.toContain("production: akash");
+    expect(next).toContain("# trailing comment that must survive verbatim.");
+  });
+
+  it("drops the whole block once it empties (minProperties: 1)", () => {
+    const one = setCatalogPlacement(
+      CATALOG_WITH_PLACEMENT,
+      "production",
+      "k3s"
+    );
+    const none = setCatalogPlacement(one, "candidate-a", "k3s");
+    expect(none).not.toContain("deployment_provider");
+    // Round-trips back to the block-less form byte-exactly.
+    expect(none).toBe(
+      CATALOG_WITH_PLACEMENT.replace(
+        "deployment_provider:\n  candidate-a: akash\n  production: akash\n",
+        ""
+      )
+    );
+  });
+
+  it("k3s onto a block-less row is a byte-exact no-op", () => {
+    expect(setCatalogPlacement(CATALOG, "preview", "k3s")).toBe(CATALOG);
+  });
+
+  it("akash onto an already-akash env is a byte-exact no-op", () => {
+    expect(
+      setCatalogPlacement(CATALOG_WITH_PLACEMENT, "production", "akash")
+    ).toBe(CATALOG_WITH_PLACEMENT);
+  });
+
+  it("preserves the trailing newline when the block ends the file", () => {
+    const tail = `name: toks
+envs: [candidate-a]
+deployment_provider:
+  candidate-a: akash
+`;
+    const next = setCatalogPlacement(tail, "candidate-a", "k3s");
+    expect(next).toBe("name: toks\nenvs: [candidate-a]\n");
+    const back = setCatalogPlacement(next, "candidate-a", "akash");
+    expect(back).toBe(tail);
+  });
+});
+
+describe("hasCatalogSourceRepo", () => {
+  it("detects an external build plane", () => {
+    expect(hasCatalogSourceRepo(CATALOG_WITH_PLACEMENT)).toBe(true);
+    expect(hasCatalogSourceRepo(CATALOG)).toBe(false);
   });
 });
 

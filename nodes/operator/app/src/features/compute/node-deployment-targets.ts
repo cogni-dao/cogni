@@ -104,16 +104,29 @@ export function resolvePromoteDeploymentTargets(input: {
     const row = byName.get(target);
     if (!row || row.type !== "node" || !isInEnvironment(row, input.environment))
       continue;
-    if (
+    // REMOTE_SOURCE_IS_NOT_PLACEMENT (bug: node-template prod promote,
+    // story.5016) — a node whose image is built by its own repo (source_repo
+    // set) needs its reviewed catalog source_sha resolved for image-tag/digest
+    // lookup regardless of WHERE it is placed this env. Off-cluster (akash)
+    // placement is a separate axis: it additionally needs the OCI bundle
+    // materialized. Gating source_sha resolution on akash-only silently broke
+    // resolve_remote_source_sha's "operator source_sha + reviewed catalog
+    // source_sha" fallback for any remote-source node not (yet) opted into
+    // akash for this specific env — e.g. node-template, which is akash-placed
+    // for candidate-a only, still k3s for preview/production.
+    const isRemoteSource = typeof row.source_repo === "string";
+    const isOffCluster =
       resolveNodeDeploymentProvider({
         catalog: row,
         environment: input.environment,
-      }) !== "akash"
-    )
-      continue;
-    offCluster.push(target);
-    sourceRepositories[target] = parseSourceRepository(row, target);
-    sourceShas[target] = parseSourceSha(row, target);
+      }) === "akash";
+    if (isOffCluster) {
+      offCluster.push(target);
+    }
+    if (isOffCluster || isRemoteSource) {
+      sourceRepositories[target] = parseSourceRepository(row, target);
+      sourceShas[target] = parseSourceSha(row, target);
+    }
   }
 
   const k3s = input.legacyK3sTargets.filter((target) => {

@@ -43,8 +43,8 @@ Always-on TLS termination layer (Caddy). Isolated from app deployments to preven
 
 ## Responsibilities
 
-- This directory **does**: TLS termination, HTTP→HTTPS redirect, reverse proxy to app:3000
-- This directory **does not**: Handle app logic, database, observability, or any mutable services
+- This directory **does**: TLS termination, HTTP→HTTPS redirect, reverse proxy to app:3000, emit JSON runtime/access logs to container stdout
+- This directory **does not**: Handle app logic, databases, log shipping, or any mutable services; runtime Alloy owns stdout collection
 
 ## Usage
 
@@ -89,6 +89,7 @@ docker compose --project-name cogni-edge logs -f caddy
 ## Notes
 
 - Edge split from runtime to eliminate ERR_CONNECTION_RESET during deploys
+- Caddy runtime and per-site access logs emit to stdout; file outputs inside `caddy_data` are invisible to runtime Alloy and are forbidden
 - Caddy auto-obtains TLS certs via ACME (Let's Encrypt)
 - App must be on `cogni-edge` network for Caddy to reverse_proxy to it
 - Deploy script handles checksum-gated Caddy reload on Caddyfile changes

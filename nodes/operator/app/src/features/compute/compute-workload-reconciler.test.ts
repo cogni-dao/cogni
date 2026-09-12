@@ -275,6 +275,7 @@ async function run(
     recordMutationFailure?: ComputeWorkloadReconcileDeps["recordMutationFailure"];
     recordMigrationFailure?: ComputeWorkloadReconcileDeps["recordMigrationFailure"];
     recordMigrationHold?: ComputeWorkloadReconcileDeps["recordMigrationHold"];
+    leaseLogPush?: ComputeWorkloadReconcileDeps["leaseLogPush"];
   } = {}
 ) {
   const dns = overrides.dns ?? {
@@ -312,6 +313,9 @@ async function run(
       recordMutationFailure: overrides.recordMutationFailure ?? vi.fn(),
       recordMigrationFailure: overrides.recordMigrationFailure ?? vi.fn(),
       recordMigrationHold: overrides.recordMigrationHold ?? vi.fn(),
+      ...(overrides.leaseLogPush
+        ? { leaseLogPush: overrides.leaseLogPush }
+        : {}),
     },
     state.current
   );
@@ -362,6 +366,45 @@ describe("reconcileComputeWorkload", () => {
       BILLING_INGEST_TOKEN: "billing-token",
     });
     expect(env).not.toHaveProperty("DOLTGRES_URL");
+  });
+
+  it("injects the write-only Loki push env into the lease app when configured (bug.5127)", async () => {
+    const state = new MemoryState(workload());
+    const port = lifecycle();
+    await run(state, port, {
+      leaseLogPush: {
+        url: "https://logs-prod-020.grafana.net/loki/api/v1/push",
+        username: "123456",
+        password: "glc_write_only",
+      },
+      // A stale node-seeded LOKI_PUSH_URL must lose to the operator credential.
+      secretResolver: {
+        resolve: vi.fn(async () => ({
+          ...BOOTABLE_APP_ENV,
+          LOKI_PUSH_URL: "https://stale-node-copy.example/push",
+        })),
+      },
+    });
+    const env = port.create.mock.calls[0]?.[0].spec.services[0]?.env;
+    expect(env).toMatchObject({
+      LOKI_PUSH_URL: "https://logs-prod-020.grafana.net/loki/api/v1/push",
+      LOKI_PUSH_USER: "123456",
+      LOKI_PUSH_PASSWORD: "glc_write_only",
+      LOKI_PUSH_SOURCE: "lease",
+      COGNI_NODE_ID: NODE_ID,
+    });
+  });
+
+  it("omits every LOKI_PUSH_* key when no lease log-push credential is configured", async () => {
+    const state = new MemoryState(workload());
+    const port = lifecycle();
+    await run(state, port);
+    const env = port.create.mock.calls[0]?.[0].spec.services[0]?.env;
+    expect(env).not.toHaveProperty("LOKI_PUSH_URL");
+    expect(env).not.toHaveProperty("LOKI_PUSH_USER");
+    expect(env).not.toHaveProperty("LOKI_PUSH_PASSWORD");
+    expect(env).not.toHaveProperty("LOKI_PUSH_SOURCE");
+    expect(env).not.toHaveProperty("COGNI_NODE_ID");
   });
 
   it("aborts before provider IO when the resourceVersion CAS loses", async () => {
@@ -420,6 +463,50 @@ describe("reconcileComputeWorkload", () => {
       type: "Normal",
       reason: "ReadinessPassed",
     });
+  });
+
+  it("skips a provider-echoed publicHost endpoint and targets the provider ingress", async () => {
+    const state = new MemoryState(workload({ status: status(1, "active") }));
+    const port = lifecycle();
+    port.observe.mockResolvedValue({
+      provider: "external",
+      leaseId: "lease-42",
+      state: "active" as const,
+      endpoints: [
+        "https://Sample-Node-Test.cognidao.org.",
+        "https://provider-ingress.example",
+      ],
+    });
+    const deps = await run(state, port);
+    expect(deps.dns.reconcile).toHaveBeenCalledWith({
+      hostname: "sample-node-test.cognidao.org",
+      target: "provider-ingress.example",
+    });
+    expect(state.current.status?.dns).toEqual({
+      hostname: "sample-node-test.cognidao.org",
+      target: "provider-ingress.example",
+    });
+  });
+
+  it("fails transient DnsReconcileFailed when every endpoint is the workload's own hostname", async () => {
+    const state = new MemoryState(workload({ status: status(1, "active") }));
+    const port = lifecycle();
+    port.observe.mockResolvedValue({
+      provider: "external",
+      leaseId: "lease-42",
+      state: "active" as const,
+      endpoints: ["https://sample-node-test.cognidao.org", "203.0.113.7"],
+    });
+    const deps = await run(state, port);
+    expect(deps.dns.reconcile).not.toHaveBeenCalled();
+    expect(state.current.status?.phase).toBe("Progressing");
+    expect(state.current.status?.failure).toMatchObject({
+      reason: "DnsReconcileFailed",
+      retryable: true,
+    });
+    expect(state.current.status?.conditions[0]?.reason).toBe(
+      "DnsReconcileFailed"
+    );
   });
 
   it("adopts exactly one post-baseline dseq after an unknown POST outcome", async () => {
@@ -608,6 +695,134 @@ describe("reconcileComputeWorkload", () => {
     await run(state, port, { recordRecoveryLimit });
     expect(port.create).not.toHaveBeenCalled();
     expect(recordRecoveryLimit).toHaveBeenCalledTimes(1);
+  });
+
+  it("resets the recovery budget on a generation bump even after an intermediate write stamps desiredGeneration (bug.5128)", async () => {
+    // Beacon wedge, reproduced: RecoveryLimitExceeded at generation 1, then a
+    // promote bumps metadata.generation to 2. The migration-gate hold stamps
+    // desiredGeneration=2 while carrying recoveryCount=3 forward — pre-fix the
+    // next pass re-attributed the spent budget to generation 2 and rewrote
+    // RecoveryLimitExceeded with zero provider attempts.
+    const generation1 = workload();
+    const state = new MemoryState(
+      workload({
+        metadata: { ...workload().metadata, generation: 2 },
+        status: {
+          ...status(1, "closed"),
+          phase: "Failed",
+          recoveryCount: 3,
+          attempt: {
+            key: computeWorkloadIdempotencyKey({
+              resource: generation1,
+              operation: "recover",
+              ordinal: 3,
+            }),
+            operation: "recover",
+            ordinal: 3,
+            outcome: "known_failure",
+            retryCount: 0,
+            leaderEpoch: "7:test-controller",
+            startedAt: NOW.toISOString(),
+            completedAt: NOW.toISOString(),
+          },
+          failure: {
+            reason: "RecoveryLimitExceeded",
+            message: "generation recovery limit was reached",
+            retryable: false,
+          },
+        },
+      })
+    );
+    const port = lifecycle();
+    const recordRecoveryLimit = vi.fn();
+    const migration = {
+      ensure: vi
+        .fn<ComputeWorkloadMigrationPort["ensure"]>()
+        .mockResolvedValueOnce("running" as const)
+        .mockResolvedValue("succeeded" as const),
+    };
+
+    // Pass 1: migration for the new bundle is still running; the hold write
+    // stamps desiredGeneration=2 but must keep the count owned by generation 1.
+    await run(state, port, { recordRecoveryLimit, migration });
+    expect(port.create).not.toHaveBeenCalled();
+    expect(state.current.status?.desiredGeneration).toBe(2);
+    expect(state.current.status?.recoveryCount).toBe(3);
+    expect(state.current.status?.recoveryGeneration).toBe(1);
+
+    // Pass 2: migration succeeded; generation 2 gets a FRESH attempt budget.
+    await run(state, port, { recordRecoveryLimit, migration });
+    expect(port.create).toHaveBeenCalledTimes(1);
+    expect(state.current.status?.attempt).toMatchObject({
+      operation: "recover",
+      ordinal: 1,
+      outcome: "succeeded",
+    });
+    expect(state.current.status?.recoveryCount).toBe(1);
+    expect(state.current.status?.recoveryGeneration).toBe(2);
+    expect(state.current.status?.failure).toBeUndefined();
+    expect(recordRecoveryLimit).not.toHaveBeenCalled();
+  });
+
+  it("persists the last attempt's boot stage on the terminal recovery-limit failure (bug.5128)", async () => {
+    const resource = workload();
+    const state = new MemoryState(
+      workload({
+        status: {
+          ...status(1, "closed"),
+          recoveryCount: 3,
+          attempt: {
+            key: computeWorkloadIdempotencyKey({
+              resource,
+              operation: "recover",
+              ordinal: 3,
+            }),
+            operation: "recover",
+            ordinal: 3,
+            outcome: "known_failure",
+            retryCount: 0,
+            leaderEpoch: "7:test-controller",
+            startedAt: NOW.toISOString(),
+            completedAt: NOW.toISOString(),
+          },
+          failure: {
+            reason: "BootVersionUnavailable",
+            message:
+              "external workload version endpoint did not become available",
+            retryable: true,
+          },
+        },
+      })
+    );
+    const port = lifecycle();
+    const recordRecoveryLimit = vi.fn();
+
+    await run(state, port, { recordRecoveryLimit });
+
+    expect(port.create).not.toHaveBeenCalled();
+    expect(state.current.status?.phase).toBe("Failed");
+    expect(state.current.status?.failure).toMatchObject({
+      reason: "RecoveryLimitExceeded",
+      lastAttemptReason: "BootVersionUnavailable",
+      retryable: false,
+    });
+    expect(state.current.status?.failure?.message).toContain(
+      "BootVersionUnavailable"
+    );
+    expect(state.current.status?.recoveryGeneration).toBe(1);
+    expect(recordRecoveryLimit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outcomeCode: "RecoveryLimitExceeded",
+        lastAttemptReason: "BootVersionUnavailable",
+      })
+    );
+
+    // Level-triggered steady state: no rewrite, and the stage survives.
+    await run(state, port, { recordRecoveryLimit });
+    expect(recordRecoveryLimit).toHaveBeenCalledTimes(1);
+    expect(state.current.status?.failure?.lastAttemptReason).toBe(
+      "BootVersionUnavailable"
+    );
   });
 
   it("blocks every other workload create behind a durable unknown wallet allocation across restart ordering", async () => {

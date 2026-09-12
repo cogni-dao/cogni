@@ -57,6 +57,7 @@ Does NOT re-export packages with `node:` transitive dependencies.
 - NodeAddressPort + NodeAddressError (PLACEMENT_DECIDES_THE_ADDRESS — the one seam every operator→node client uses to turn a slug into a base URL)
 - IdentityAttestationRepositoryPort, IdentityAttestationSignerPort
 - TreasurySettlementPort, TreasurySettlementOutcome
+- DeployPlanePort, including operator App-backed app promotion and the operator-only production infra reconcile contract
 - Types (ChargeReceiptParams, LlmCaller, BillingAccount, CreditLedgerEntry, etc.)
 
 ### `server.ts` — Server-only barrel
