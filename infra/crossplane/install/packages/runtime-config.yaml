@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# One deliberately small runtime envelope for the dormant provider and
+# functions. Later workload evidence may justify distinct profiles; R2.1 does
+# not speculate before any composition exists.
+apiVersion: pkg.crossplane.io/v1beta1
+kind: DeploymentRuntimeConfig
+metadata:
+  name: crossplane-dormant-runtime
+spec:
+  deploymentTemplate:
+    spec:
+      replicas: 1
+      selector: {}
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/part-of: crossplane-dormant-substrate
+        spec:
+          containers:
+            - name: package-runtime
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 250m
+                  memory: 256Mi
