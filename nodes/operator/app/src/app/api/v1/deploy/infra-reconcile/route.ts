@@ -33,7 +33,7 @@ import { getContainer, resolveServiceDb } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { nodes } from "@/shared/db/nodes";
 import { serverEnv } from "@/shared/env";
-import { EVENT_NAMES, logEvent } from "@/shared/observability";
+import { EVENT_NAMES } from "@/shared/observability";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -147,10 +147,11 @@ export const POST = wrapRouteHandlerWithLogging(
               parentRepo,
               slug: node.slug,
             });
-      logEvent(
-        ctx.log,
-        EVENT_NAMES.DEPLOY_INFRA_RECONCILE_COMPLETE,
+      // This event is operator-local rather than part of @cogni/node-shared's
+      // cross-node registry, so emit it through the plain structured logger.
+      ctx.log.info(
         {
+          event: EVENT_NAMES.DEPLOY_INFRA_RECONCILE_COMPLETE,
           reqId: ctx.reqId,
           routeId: ctx.routeId,
           nodeId: node.id,
