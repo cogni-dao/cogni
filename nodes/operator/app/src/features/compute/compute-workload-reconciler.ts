@@ -316,14 +316,19 @@ function recordCostTransition(
   attemptKey: string,
   state: "bound" | "closed"
 ): void {
-  deps.recordCostIntervalTransition({
-    nodeId: context.nodeId,
-    environment: context.environment,
-    sourceSha: context.sourceSha,
-    resourceId,
-    attemptKey,
-    state,
-  });
+  try {
+    deps.recordCostIntervalTransition({
+      nodeId: context.nodeId,
+      environment: context.environment,
+      sourceSha: context.sourceSha,
+      resourceId,
+      attemptKey,
+      state,
+    });
+  } catch {
+    // Observability is strictly best-effort and cannot alter paid-resource lifecycle state.
+    // Do not log the thrown value: an injected reporter may attach secret-bearing context.
+  }
 }
 
 async function observeCost(

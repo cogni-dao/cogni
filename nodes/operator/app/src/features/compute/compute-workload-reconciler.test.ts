@@ -744,6 +744,59 @@ describe("reconcileComputeWorkload", () => {
     ]);
   });
 
+  it("keeps create allocated when the transition reporter throws", async () => {
+    const state = new MemoryState(workload());
+    const port = lifecycle();
+    const compensated = vi.fn();
+    port.create.mockImplementationOnce(async (input) => {
+      await input.onPrepared("41");
+      const output = {
+        provider: "external",
+        leaseId: "lease-42",
+        state: "active" as const,
+        endpoints: ["https://sample-node.example"],
+      };
+      try {
+        await input.onAllocated(output);
+      } catch {
+        compensated();
+      }
+      return output;
+    });
+
+    await run(state, port, {
+      recordCostIntervalTransition: vi.fn(() => {
+        throw new Error("reporter carried secret context");
+      }),
+    });
+
+    expect(compensated).not.toHaveBeenCalled();
+    expect(port.delete).not.toHaveBeenCalled();
+    expect(state.current.status?.resource?.id).toBe("lease-42");
+    expect(state.current.status?.failure).toBeUndefined();
+  });
+
+  it("updates a known resource when the transition reporter throws", async () => {
+    const state = new MemoryState(
+      workload({
+        metadata: { ...workload().metadata, generation: 2 },
+        status: status(1),
+      })
+    );
+    const port = lifecycle();
+
+    await run(state, port, {
+      recordCostIntervalTransition: vi.fn(() => {
+        throw new Error("reporter carried secret context");
+      }),
+    });
+
+    expect(port.update).toHaveBeenCalledWith(
+      expect.objectContaining({ resourceId: "lease-42" })
+    );
+    expect(state.current.status?.failure).toBeUndefined();
+  });
+
   it("persists an adopted handle and releases the wallet before cost backfill failure", async () => {
     const state = new MemoryState(workload());
     const port = lifecycle();
@@ -1975,6 +2028,40 @@ describe("reconcileComputeWorkload", () => {
 
     await run(state, port, deps);
     expect(recordCostIntervalTransition).toHaveBeenCalledTimes(2);
+  });
+
+  it("finalizes a durable close when the transition reporter throws", async () => {
+    const state = new MemoryState(
+      workload({
+        metadata: {
+          ...workload().metadata,
+          deletionTimestamp: NOW.toISOString(),
+        },
+        status: status(),
+      })
+    );
+    const port = lifecycle();
+    const accounting = costAccounting();
+    const deps = {
+      ...accounting,
+      recordCostIntervalTransition: vi.fn(() => {
+        throw new Error("reporter carried secret context");
+      }),
+    };
+
+    await run(state, port, deps);
+    port.observe.mockResolvedValueOnce({
+      provider: "external",
+      leaseId: "lease-42",
+      state: "closed",
+      endpoints: [],
+    });
+    await run(state, port, deps);
+
+    expect(accounting.costStore.close).toHaveBeenCalled();
+    expect(state.current.metadata.finalizers).not.toContain(
+      COMPUTE_WORKLOAD_FINALIZER
+    );
   });
 
   it("rejects an existing provider resource attributed to another node", async () => {
