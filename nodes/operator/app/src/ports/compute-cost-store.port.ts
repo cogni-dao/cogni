@@ -14,6 +14,18 @@ export type ComputeCostIntervalState =
   | "active"
   | "closed";
 
+export interface ComputeCostServiceShape {
+  readonly name: string;
+  readonly cpuUnits: number;
+  readonly memoryMi: number;
+  readonly storageMi: number;
+}
+
+/** Value-free declared capacity only; resolved env, bindings, images, and secret refs cannot fit. */
+export interface ComputeCostResourceShape {
+  readonly services: readonly ComputeCostServiceShape[];
+}
+
 /** Git/Kubernetes resource context known before any provider mutation. */
 export interface ComputeResourceCostContext {
   readonly attemptKey: string;
@@ -23,7 +35,7 @@ export interface ComputeResourceCostContext {
   readonly workloadGeneration: number;
   readonly sourceSha: string;
   /** Value-free resource declaration used to explain cost differences later. */
-  readonly resourceShape: Readonly<Record<string, unknown>>;
+  readonly resourceShape: ComputeCostResourceShape;
   readonly preparedAt: Date;
 }
 

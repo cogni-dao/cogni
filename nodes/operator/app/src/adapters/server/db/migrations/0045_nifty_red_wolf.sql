@@ -100,7 +100,6 @@ CREATE TABLE "compute_cost_intervals" (
         AND ("compute_cost_intervals"."provider_opened_at_position" IS NULL OR "compute_cost_intervals"."provider_closed_at_position" IS NULL OR "compute_cost_intervals"."provider_closed_at_position"::numeric >= "compute_cost_intervals"."provider_opened_at_position"::numeric))
 );
 --> statement-breakpoint
-ALTER TABLE "compute_cost_intervals" ADD CONSTRAINT "compute_cost_intervals_node_id_nodes_id_fk" FOREIGN KEY ("node_id") REFERENCES "public"."nodes"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 CREATE UNIQUE INDEX "compute_cost_intervals_resource_key" ON "compute_cost_intervals" USING btree ("compute_provider","resource_id");--> statement-breakpoint
 CREATE INDEX "compute_cost_intervals_node_state_idx" ON "compute_cost_intervals" USING btree ("node_id","state");--> statement-breakpoint
 CREATE INDEX "compute_cost_intervals_workload_idx" ON "compute_cost_intervals" USING btree ("workload_uid","workload_generation");

@@ -632,6 +632,25 @@ describe("AkashComputeAdapter boot SLO", () => {
     bidEntry(dseq, "akash1third", "300"),
   ];
 
+  it("closes an allocated deployment when its durable handle callback fails", async () => {
+    const h = harness({ providers: [providerEntry("akash1only")] });
+
+    await expect(
+      makeAdapter(h.fetchImpl).provisionWithAllocation(
+        {
+          env: "t",
+          spec: SPEC,
+          expectedSourceSha: SOURCE_SHA,
+          idempotencyKey: "receipt",
+        },
+        async () => {
+          throw new Error("ledger unavailable");
+        }
+      )
+    ).rejects.toMatchObject({ code: "UNEXPECTED_SHAPE" });
+    expect(h.deletes).toEqual([`${BASE}/v1/deployments/1`]);
+  });
+
   it.each([
     ["status_unavailable", { statusAvailable: false }, false],
     ["no_endpoint", { endpoints: () => [] }, true],
@@ -904,5 +923,163 @@ describe("AkashComputeAdapter failure containment", () => {
     expect(msg).toContain("422");
     expect(msg).not.toContain("invalid manifest");
     expect(msg).not.toContain("supersecret");
+  });
+
+  it("maps the exact active Console deployment shape into chain-native cost evidence", async () => {
+    const observedAt = new Date("2026-09-11T18:02:00.000Z");
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      jsonResponse({
+        data: {
+          deployment: {
+            id: { owner: "akash1consumer", dseq: "42" },
+            state: "active",
+            created_at: "100",
+          },
+          leases: [
+            {
+              id: {
+                owner: "akash1consumer",
+                provider: "akash1supplier",
+              },
+              state: "active",
+              price: { amount: "12.5", denom: "uakt" },
+              created_at: "101",
+              closed_on: "",
+            },
+          ],
+          escrow_account: {
+            state: {
+              owner: "akash1consumer",
+              state: "open",
+              settled_at: "0",
+              funds: [{ amount: "500000", denom: "uakt" }],
+              transferred: [{ amount: "120", denom: "uakt" }],
+            },
+          },
+        },
+      })
+    );
+
+    await expect(
+      makeAdapter(fetchImpl, { now: () => observedAt }).observeCost({
+        resourceId: "42",
+      })
+    ).resolves.toEqual({
+      computeProvider: "akash",
+      resourceId: "42",
+      computeProviderAccountId: "akash1consumer",
+      computeSupplierAccountId: "akash1supplier",
+      rate: { amount: "12.5", denom: "uakt", unit: "block" },
+      providerOpenedAtPosition: "101",
+      escrow: {
+        state: "open",
+        funds: [{ amount: "500000", denom: "uakt" }],
+        transferred: [{ amount: "120", denom: "uakt" }],
+      },
+      observedAt,
+    });
+  });
+
+  it("preserves close, settlement, funds, and transferred evidence", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      jsonResponse({
+        data: {
+          deployment: {
+            id: { owner: "akash1consumer", dseq: "42" },
+            state: "closed",
+          },
+          leases: [
+            {
+              id: {
+                owner: "akash1consumer",
+                provider: "akash1supplier",
+              },
+              state: "closed",
+              price: { amount: "12.5", denom: "uakt" },
+              created_at: "101",
+              closed_on: "150",
+            },
+          ],
+          escrow_account: {
+            state: {
+              owner: "akash1consumer",
+              state: "closed",
+              settled_at: "160",
+              funds: [],
+              transferred: [{ amount: "450000", denom: "uakt" }],
+            },
+          },
+        },
+      })
+    );
+
+    const evidence = await makeAdapter(fetchImpl).observeCost({
+      resourceId: "42",
+    });
+    expect(evidence.providerClosedAtPosition).toBe("150");
+    expect(evidence.escrow).toEqual({
+      state: "closed",
+      providerSettledAtPosition: "160",
+      funds: [],
+      transferred: [{ amount: "450000", denom: "uakt" }],
+    });
+  });
+
+  it.each([
+    ["consumer mismatch", { leaseOwner: "akash1other" }],
+    ["supplier missing", { provider: "" }],
+    ["rate missing", { amount: "" }],
+    ["oversized position", { createdAt: "1".repeat(65) }],
+  ] satisfies readonly [
+    string,
+    Partial<{
+      leaseOwner: string;
+      provider: string;
+      amount: string;
+      createdAt: string;
+    }>,
+  ][])("rejects malformed cost evidence: %s", async (_name, mutation) => {
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      jsonResponse({
+        data: {
+          deployment: {
+            id: { owner: "akash1consumer", dseq: "42" },
+            state: "active",
+          },
+          leases: [
+            {
+              id: {
+                owner:
+                  "leaseOwner" in mutation
+                    ? mutation.leaseOwner
+                    : "akash1consumer",
+                provider:
+                  "provider" in mutation ? mutation.provider : "akash1supplier",
+              },
+              state: "active",
+              price: {
+                amount: "amount" in mutation ? mutation.amount : "12.5",
+                denom: "uakt",
+              },
+              created_at: "createdAt" in mutation ? mutation.createdAt : "101",
+              closed_on: "",
+            },
+          ],
+          escrow_account: {
+            state: {
+              owner: "akash1consumer",
+              state: "open",
+              settled_at: "0",
+              funds: [],
+              transferred: [],
+            },
+          },
+        },
+      })
+    );
+
+    await expect(
+      makeAdapter(fetchImpl).observeCost({ resourceId: "42" })
+    ).rejects.toMatchObject({ code: "UNEXPECTED_SHAPE" });
   });
 });

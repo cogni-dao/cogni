@@ -7,8 +7,11 @@ import type { ProvisionOutput, ProvisionSpec } from "@cogni/ai-tools";
 import {
   COMPUTE_WORKLOAD_ATTEMPT_ANNOTATION,
   COMPUTE_WORKLOAD_FINALIZER,
+  type ComputeCostEvidencePort,
+  type ComputeCostStorePort,
   ComputeLifecycleError,
   type ComputeLifecycleFailureReason,
+  type ComputeResourceCostContext,
   type ComputeWorkload,
   type ComputeWorkloadAttempt,
   type ComputeWorkloadAttemptReceipt,
@@ -32,6 +35,9 @@ const MAX_RECOVERY_ATTEMPTS = 3;
 
 export interface ComputeWorkloadReconcileDeps {
   readonly lifecycle: ComputeWorkloadLifecyclePort;
+  /** Independent accounting seam; the frozen workload lifecycle contract stays unchanged. */
+  readonly costStore: ComputeCostStorePort;
+  readonly costEvidence: ComputeCostEvidencePort;
   readonly state: ComputeWorkloadStatePort;
   readonly dns: ComputeWorkloadDnsPort;
   readonly secretResolver: ComputeWorkloadSecretResolverPort;
@@ -87,6 +93,13 @@ export interface ComputeWorkloadReconcileDeps {
     bundleDigest: string;
     causeMessage: string;
   }) => void;
+  readonly recordCostAttributionFailure: (input: {
+    nodeId: string;
+    environment: string;
+    sourceSha: string;
+    resourceId: string;
+    operation: "prepare" | "bind" | "observe" | "close";
+  }) => void;
 }
 
 const SAFE_MESSAGES: Readonly<Record<string, string>> = {
@@ -106,6 +119,8 @@ const SAFE_MESSAGES: Readonly<Record<string, string>> = {
     "external workload did not pass the fixed readiness endpoint",
   ProviderOutcomeUnknown:
     "external provider mutation outcome is unknown; automatic replay is blocked",
+  CostAttributionFailed:
+    "compute cost attribution could not be persisted; workload acceptance is held",
   SecretResolverUnavailable: "declared runtime secrets cannot yet be resolved",
   SecretPolicyRejected:
     "declared runtime secret is not approved for external compute",
@@ -181,6 +196,144 @@ function resourceStatus(output: ProvisionOutput) {
     state: output.state,
     endpoints: output.endpoints,
   };
+}
+
+function costContext(
+  resource: ComputeWorkload,
+  attemptKey: string,
+  preparedAt: Date
+): ComputeResourceCostContext {
+  return {
+    attemptKey,
+    nodeId: resource.spec.nodeId,
+    environment: resource.spec.environment,
+    workloadUid: resource.metadata.uid,
+    workloadGeneration: resource.metadata.generation,
+    sourceSha: resource.spec.bundle.source.sha,
+    resourceShape: {
+      services: resource.spec.workload.services.map((service) => ({
+        name: service.name,
+        cpuUnits: service.cpuUnits,
+        memoryMi: service.memoryMi,
+        storageMi: service.storageMi,
+      })),
+    },
+    preparedAt,
+  };
+}
+
+function existingCostContext(
+  _deps: ComputeWorkloadReconcileDeps,
+  resource: ComputeWorkload,
+  current: NonNullable<ComputeWorkloadStatus["resource"]>,
+  attempt = resource.status?.attempt
+): ComputeResourceCostContext {
+  const attemptKey =
+    attempt?.key ??
+    [
+      resource.metadata.namespace,
+      resource.metadata.uid,
+      "cost",
+      current.provider,
+      current.id,
+    ].join(":");
+  const startedAt = attempt?.startedAt
+    ? new Date(attempt.startedAt)
+    : new Date(0);
+  return costContext(resource, attemptKey, startedAt);
+}
+
+async function ensureCostBound(
+  deps: ComputeWorkloadReconcileDeps,
+  context: ComputeResourceCostContext,
+  resource: { provider: string; id: string }
+): Promise<string> {
+  const existing = await deps.costStore.findByResource({
+    computeProvider: resource.provider,
+    resourceId: resource.id,
+  });
+  if (existing) {
+    if (
+      existing.nodeId !== context.nodeId ||
+      existing.environment !== context.environment ||
+      existing.workloadUid !== context.workloadUid
+    ) {
+      throw new Error(
+        "provider resource cost interval conflicts with workload identity"
+      );
+    }
+    return existing.attemptKey;
+  }
+  await deps.costStore.prepare(context);
+  const bound = await deps.costStore.bind({
+    attemptKey: context.attemptKey,
+    resource: {
+      computeProvider: resource.provider,
+      resourceId: resource.id,
+    },
+  });
+  return bound.attemptKey;
+}
+
+async function observeCost(
+  deps: ComputeWorkloadReconcileDeps,
+  context: ComputeResourceCostContext,
+  resource: { provider: string; id: string }
+): Promise<void> {
+  const attemptKey = await ensureCostBound(deps, context, resource);
+  const evidence = await deps.costEvidence.observeCost({
+    resourceId: resource.id,
+  });
+  await deps.costStore.observe({ attemptKey, evidence });
+}
+
+function recordCostFailure(
+  deps: ComputeWorkloadReconcileDeps,
+  resource: ComputeWorkload,
+  resourceId: string,
+  operation: "prepare" | "bind" | "observe" | "close"
+): void {
+  deps.recordCostAttributionFailure({
+    nodeId: resource.spec.nodeId,
+    environment: resource.spec.environment,
+    sourceSha: resource.spec.bundle.source.sha,
+    resourceId,
+    operation,
+  });
+}
+
+async function writeCostFailure(
+  deps: ComputeWorkloadReconcileDeps,
+  resource: ComputeWorkload,
+  attempt: ComputeWorkloadAttempt | undefined,
+  current: ComputeWorkloadStatus["resource"] | undefined,
+  operation: "prepare" | "bind" | "observe" | "close"
+): Promise<void> {
+  recordCostFailure(deps, resource, current?.id ?? "unallocated", operation);
+  const now = deps.now().toISOString();
+  await deps.state.patchStatus({
+    resource,
+    status: {
+      ...baseStatus(resource),
+      phase: "Progressing",
+      ...(resource.status?.observedGeneration !== undefined
+        ? { observedGeneration: resource.status.observedGeneration }
+        : {}),
+      ...(resource.status?.observedBundle
+        ? { observedBundle: resource.status.observedBundle }
+        : {}),
+      ...(current ? { resource: current } : {}),
+      ...(attempt ? { attempt } : {}),
+      ...carriedRecovery(resource),
+      failure: {
+        reason: "CostAttributionFailed",
+        message: safeMessage("CostAttributionFailed"),
+        retryable: true,
+      },
+      conditions: [condition(resource, now, "False", "CostAttributionFailed")],
+    },
+  });
+  await emit(deps, resource, "Warning", "CostAttributionFailed");
 }
 
 function sharedSubstrateEnv(
@@ -919,6 +1072,12 @@ async function mutate(
 
   let allocated: ComputeWorkloadStatus["resource"] | undefined;
   let activeAttempt = attempt;
+  let costFailureOperation:
+    | "prepare"
+    | "bind"
+    | "observe"
+    | "close"
+    | undefined;
   const walletMutation = operation !== "update";
   if (walletMutation) {
     const wallet = await deps.state.claimWalletAllocation({
@@ -963,6 +1122,29 @@ async function mutate(
   }
   try {
     const spec = await toProvisionSpec(deps, resource);
+    const attemptCostContext = costContext(
+      resource,
+      activeAttempt.key,
+      new Date(activeAttempt.startedAt)
+    );
+    if (walletMutation) {
+      try {
+        await deps.costStore.prepare(attemptCostContext);
+      } catch (error) {
+        costFailureOperation = "prepare";
+        throw error;
+      }
+    } else if (resource.status?.resource) {
+      try {
+        await ensureCostBound(deps, attemptCostContext, {
+          provider: resource.status.resource.provider,
+          id: resource.status.resource.id,
+        });
+      } catch (error) {
+        costFailureOperation = "bind";
+        throw error;
+      }
+    }
     const output =
       operation === "update"
         ? await deps.lifecycle.update({
@@ -1008,6 +1190,18 @@ async function mutate(
             },
             onAllocated: async (output) => {
               allocated = resourceStatus(output);
+              try {
+                await deps.costStore.bind({
+                  attemptKey: activeAttempt.key,
+                  resource: {
+                    computeProvider: output.provider,
+                    resourceId: output.leaseId,
+                  },
+                });
+              } catch (error) {
+                costFailureOperation = "bind";
+                throw error;
+              }
               const allocatedAttempt: ComputeWorkloadAttempt = {
                 ...activeAttempt,
                 outcome: "allocated",
@@ -1044,6 +1238,15 @@ async function mutate(
               });
             },
           });
+    try {
+      await observeCost(deps, attemptCostContext, {
+        provider: output.provider,
+        id: output.leaseId,
+      });
+    } catch (error) {
+      costFailureOperation = "observe";
+      throw error;
+    }
     const completedAt = deps.now().toISOString();
     const completedAttempt: ComputeWorkloadAttempt = {
       ...activeAttempt,
@@ -1095,6 +1298,36 @@ async function mutate(
       operation === "update" ? "Updated" : "Created"
     );
   } catch (error) {
+    if (costFailureOperation) {
+      const failedAttempt: ComputeWorkloadAttempt = {
+        ...activeAttempt,
+        outcome: "known_failure",
+        completedAt: deps.now().toISOString(),
+      };
+      await patchReceipt(
+        deps,
+        resource,
+        attemptReceipt(
+          failedAttempt,
+          allocated
+            ? { provider: allocated.provider, id: allocated.id }
+            : undefined
+        )
+      );
+      if (walletMutation) {
+        await deps.state.completeWalletAllocation({
+          attemptKey: failedAttempt.key,
+        });
+      }
+      await writeCostFailure(
+        deps,
+        resource,
+        failedAttempt,
+        allocated ?? resource.status?.resource,
+        costFailureOperation
+      );
+      return;
+    }
     const failure = lifecycleError(error, true);
     const completedAt = deps.now().toISOString();
     const outcome =
@@ -1208,6 +1441,31 @@ async function closeKnown(
       resource,
       attemptReceipt(completed, { provider: current.provider, id: current.id })
     );
+    const context = existingCostContext(deps, resource, current, attempt);
+    try {
+      const attemptKey = await ensureCostBound(deps, context, current);
+      try {
+        const evidence = await deps.costEvidence.observeCost({
+          resourceId: current.id,
+        });
+        await deps.costStore.observe({ attemptKey, evidence });
+      } catch {
+        recordCostFailure(deps, resource, current.id, "observe");
+      }
+      await deps.costStore.close({
+        attemptKey,
+        closedRecordedAt: deps.now(),
+      });
+    } catch {
+      await writeCostFailure(
+        deps,
+        resource,
+        completed,
+        { ...current, state: "closed", endpoints: [] },
+        "close"
+      );
+      return false;
+    }
     await deps.state.patchStatus({
       resource,
       status: {
@@ -1231,6 +1489,36 @@ async function closeKnown(
   } catch (error) {
     const failure = lifecycleError(error, true);
     await writeUnknown(deps, resource, failure.reason, attempt, current);
+    return false;
+  }
+}
+
+async function closeCostAfterProviderClosed(
+  deps: ComputeWorkloadReconcileDeps,
+  resource: ComputeWorkload,
+  current: NonNullable<ComputeWorkloadStatus["resource"]>
+): Promise<boolean> {
+  const context = existingCostContext(deps, resource, current);
+  try {
+    const attemptKey = await ensureCostBound(deps, context, current);
+    try {
+      await observeCost(deps, context, current);
+    } catch {
+      recordCostFailure(deps, resource, current.id, "observe");
+    }
+    await deps.costStore.close({
+      attemptKey,
+      closedRecordedAt: deps.now(),
+    });
+    return true;
+  } catch {
+    await writeCostFailure(
+      deps,
+      resource,
+      resource.status?.attempt,
+      { ...current, state: "closed", endpoints: [] },
+      "close"
+    );
     return false;
   }
 }
@@ -1275,6 +1563,11 @@ async function finalize(
         !(await closeKnown(deps, resource, current))
       )
         return;
+      if (
+        observed.state === "closed" &&
+        !(await closeCostAfterProviderClosed(deps, resource, current))
+      )
+        return;
     } catch (error) {
       const failure = lifecycleError(error, false);
       if (failure.kind !== "not_found") {
@@ -1285,6 +1578,9 @@ async function finalize(
           resource.status?.attempt,
           current
         );
+        return;
+      }
+      if (!(await closeCostAfterProviderClosed(deps, resource, current))) {
         return;
       }
     }
@@ -1310,6 +1606,17 @@ async function observeAndReport(
   } catch (error) {
     const failure = lifecycleError(error, false);
     if (failure.kind === "not_found") {
+      const context = existingCostContext(deps, resource, current, attempt);
+      try {
+        const attemptKey = await ensureCostBound(deps, context, current);
+        await deps.costStore.close({
+          attemptKey,
+          closedRecordedAt: deps.now(),
+        });
+      } catch {
+        await writeCostFailure(deps, resource, attempt, current, "close");
+        return "error";
+      }
       const generationBlockingFailure = blocksSameGenerationRecovery(resource)
         ? resource.status?.failure
         : undefined;
@@ -1360,6 +1667,49 @@ async function observeAndReport(
       },
     });
     return "error";
+  }
+  const observedResource = resourceStatus(observed);
+  const context = existingCostContext(
+    deps,
+    resource,
+    observedResource,
+    attempt
+  );
+  try {
+    await observeCost(deps, context, observedResource);
+  } catch {
+    if (observed.state === "closed") {
+      try {
+        const attemptKey = await ensureCostBound(
+          deps,
+          context,
+          observedResource
+        );
+        await deps.costStore.close({
+          attemptKey,
+          closedRecordedAt: deps.now(),
+        });
+        recordCostFailure(deps, resource, observedResource.id, "observe");
+      } catch {
+        await writeCostFailure(
+          deps,
+          resource,
+          attempt,
+          observedResource,
+          "close"
+        );
+        return "error";
+      }
+    } else {
+      await writeCostFailure(
+        deps,
+        resource,
+        attempt,
+        observedResource,
+        "observe"
+      );
+      return "error";
+    }
   }
   const generationBlockingFailure = blocksSameGenerationRecovery(resource)
     ? resource.status?.failure
@@ -1687,6 +2037,12 @@ async function recoverUncertainAllocation(
     ...attemptFromReceipt(receipt),
     outcome: "allocated",
   };
+  const adoptedResource = resourceStatus(adopted);
+  const adoptedCostContext = costContext(
+    resource,
+    adoptedAttempt.key,
+    new Date(adoptedAttempt.startedAt)
+  );
   await patchReceipt(
     deps,
     resource,
@@ -1700,7 +2056,7 @@ async function recoverUncertainAllocation(
     status: {
       ...baseStatus(resource),
       phase: "Progressing",
-      resource: resourceStatus(adopted),
+      resource: adoptedResource,
       attempt: adoptedAttempt,
       ...carriedRecovery(resource),
       conditions: [
@@ -1714,6 +2070,25 @@ async function recoverUncertainAllocation(
     },
   });
   await deps.state.completeWalletAllocation({ attemptKey: adoptedAttempt.key });
+  try {
+    await ensureCostBound(deps, adoptedCostContext, {
+      provider: adopted.provider,
+      id: adopted.leaseId,
+    });
+    await observeCost(deps, adoptedCostContext, {
+      provider: adopted.provider,
+      id: adopted.leaseId,
+    });
+  } catch {
+    await writeCostFailure(
+      deps,
+      resource,
+      adoptedAttempt,
+      adoptedResource,
+      "observe"
+    );
+    return;
+  }
   if (adopted.state === "active") {
     await observeAndReport(
       deps,
