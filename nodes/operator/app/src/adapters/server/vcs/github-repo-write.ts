@@ -22,8 +22,14 @@
  *     input, like candidate-flight) and writes ZERO commits to `main`. The pin is recorded on
  *     `deploy/preview`. The App's main-write privilege is reserved for governance/code merges,
  *     never routine deploy pins (task.5022; the prior pin-PR/main-commit stalled or polluted main).
- *   - INFRA_RECONCILE_PRESERVES_APP: production infra dispatch replays the current deploy-branch
- *     app pin while the workflow sources merged Compose/edge state from main; callers choose no ref.
+ *   - INFRA_RECONCILE_PRESERVES_APP: production replays the current app pin; candidate invokes only
+ *     the existing Compose infra workflow or dedicated control-plane GitOps ref.
+ *   - REVIEWED_CANDIDATE_INFRA_SOURCE: candidate operations accept only exact open same-repo PR
+ *     heads with a bounded path class; control-plane trees also require the invariant self-object.
+ *   - ONE_CANDIDATE_INFRA_LANE: reviewed candidate changes classify as Compose OR control-plane;
+ *     mixed/unsupported paths fail before dispatch/ref mutation.
+ *   - BRANCH_HEAD_IS_LEASE: divergent reviewed trees are serialized by a synthetic commit parented
+ *     on the observed deploy-ref head and a non-force ref update; stale writers fail closed.
  * Side-effects: IO (GitHub REST API)
  * Links: docs/spec/node-formation.md, task.0370, task.5083
  * @internal
@@ -190,9 +196,13 @@ interface GitHubPullRequestSummary {
   readonly merge_commit_sha?: string | null;
   readonly head?: {
     readonly ref?: string;
+    readonly sha?: string;
     readonly repo?: {
       readonly full_name?: string;
     };
+  };
+  readonly base?: {
+    readonly ref?: string;
   };
 }
 
@@ -337,6 +347,86 @@ const appsetsKustomizationPath = (env: string): string =>
  */
 const APPSET_TEMPLATE_PATH = "scripts/ci/node-applicationset.yaml.tmpl";
 const SOURCE_SHA_PATTERN = /^[0-9a-fA-F]{40}$/;
+const CANDIDATE_CONTROL_PLANE_REF = "deploy/candidate-a-control-plane" as const;
+const CANDIDATE_CONTROL_PLANE_SELF_PATH =
+  "infra/k8s/argocd/control-plane/candidate-a/candidate-a-control-plane-application.yaml";
+const CANDIDATE_CONTROL_PLANE_SEED_PATH =
+  "infra/k8s/argocd/control-plane/roots/candidate-a-control-plane-application.yaml";
+const CANDIDATE_INFRA_FILES_PAGE_LIMIT = 10;
+
+const CandidateControlPlaneApplicationSchema = z.strictObject({
+  apiVersion: z.literal("argoproj.io/v1alpha1"),
+  kind: z.literal("Application"),
+  metadata: z.strictObject({
+    name: z.literal("cogni-candidate-a-control-plane"),
+    namespace: z.literal("argocd"),
+    finalizers: z.tuple([z.literal("resources-finalizer.argocd.argoproj.io")]),
+  }),
+  spec: z.strictObject({
+    project: z.literal("default"),
+    source: z.strictObject({
+      repoURL: z.literal("https://github.com/cogni-dao/cogni.git"),
+      targetRevision: z.literal(CANDIDATE_CONTROL_PLANE_REF),
+      path: z.literal("infra/k8s/argocd/control-plane/candidate-a"),
+      directory: z.strictObject({ recurse: z.literal(false) }),
+    }),
+    destination: z.strictObject({
+      server: z.literal("https://kubernetes.default.svc"),
+      namespace: z.literal("argocd"),
+    }),
+    syncPolicy: z.strictObject({
+      automated: z.strictObject({
+        prune: z.literal(true),
+        selfHeal: z.literal(true),
+      }),
+      syncOptions: z.tuple([z.literal("ServerSideApply=true")]),
+    }),
+  }),
+});
+
+type CandidateInfraLane = "compose" | "control_plane";
+
+function candidateInfraPathLane(
+  path: string
+): CandidateInfraLane | "collateral" | null {
+  if (
+    path.startsWith("infra/k8s/argocd/control-plane/candidate-a/") ||
+    path === CANDIDATE_CONTROL_PLANE_SEED_PATH ||
+    path.startsWith("infra/crossplane/")
+  ) {
+    return "control_plane";
+  }
+  if (
+    path.startsWith("infra/compose/edge/") ||
+    path.startsWith("infra/compose/runtime/") ||
+    path.startsWith("infra/k8s/argocd/image-updater/") ||
+    path === "scripts/ci/deploy-infra.sh" ||
+    path === "scripts/ci/reconcile-edge-caddy.remote.sh" ||
+    path === "scripts/ci/reconcile-node-substrate.sh" ||
+    path === "scripts/ci/lib/image-tags.sh" ||
+    path === "scripts/ci/render-caddyfile.sh" ||
+    path === "scripts/ci/render-compute-egress-allowlist.sh" ||
+    path === "scripts/ci/ensure-temporal-namespace.sh" ||
+    path === "scripts/ci/bootstrap-openfga.sh" ||
+    path === "scripts/secrets/sync-app-webhook-secret.sh" ||
+    path === "scripts/grafana-pdc-token-preflight.sh" ||
+    path === "scripts/ci/provision-grafana-postgres-datasources.sh" ||
+    path === "scripts/ci/verify-grafana-postgres-datasources.sh" ||
+    path === "scripts/loki-query.sh"
+  ) {
+    return "compose";
+  }
+  if (
+    path === "infra/AGENTS.md" ||
+    path.endsWith("/AGENTS.md") ||
+    path.startsWith("scripts/ci/tests/") ||
+    path.startsWith("tests/ci-invariants/") ||
+    path.startsWith("docs/")
+  ) {
+    return "collateral";
+  }
+  return null;
+}
 const NODE_REPO_REQUIRED_WORKFLOWS = [
   ".github/workflows/ci.yaml",
   ".github/workflows/pr-build.yml",
@@ -1103,6 +1193,10 @@ export class GitHubRepoWriter implements DeployPlanePort {
   async reconcileNodeInfra(
     input: ReconcileNodeInfraInput
   ): Promise<NodeInfraReconcileResult> {
+    if (input.env === "candidate-a") {
+      return this.reconcileCandidateInfra(input);
+    }
+
     const { env, parentOwner, parentRepo, slug } = input;
     const sourceMapText = await this.fetchFileText({
       owner: parentOwner,
@@ -1177,6 +1271,361 @@ export class GitHubRepoWriter implements DeployPlanePort {
       sourceAddressing: isRemoteSource ? "remote_source" : "in_repo",
       workflowUrl: dispatch.workflowUrl,
     };
+  }
+
+  /** Classify one reviewed candidate infra PR, then invoke exactly one existing deploy mechanism. */
+  private async reconcileCandidateInfra(
+    input: Extract<ReconcileNodeInfraInput, { readonly env: "candidate-a" }>
+  ): Promise<
+    Extract<NodeInfraReconcileResult, { readonly env: "candidate-a" }>
+  > {
+    const { parentOwner, parentRepo, slug, sourceSha } = input;
+    if (slug !== "operator") {
+      throw deployPlaneError(
+        "candidate_control_plane_operator_only",
+        "candidate control-plane selection is operator-only",
+        403
+      );
+    }
+    if (!SOURCE_SHA_PATTERN.test(sourceSha)) {
+      throw deployPlaneError(
+        "invalid_source_sha",
+        "sourceSha must be a 40-character hex SHA",
+        400
+      );
+    }
+
+    const octokit = await this.getOctokit(parentOwner, parentRepo);
+    const reviewed = await this.inspectCandidateInfraReview({
+      octokit,
+      owner: parentOwner,
+      repo: parentRepo,
+      sourceSha,
+    });
+    if (reviewed.lane === "compose") {
+      const run = await this.dispatchCandidateInfraWorkflow({
+        octokit,
+        owner: parentOwner,
+        repo: parentRepo,
+        sourceSha,
+      });
+      return {
+        status: "dispatched",
+        env: "candidate-a",
+        lane: "compose",
+        sourceSha,
+        runId: run.runId,
+        runUrl: run.runUrl,
+        runApiUrl: run.runApiUrl,
+        prNumber: reviewed.prNumber,
+        prUrl: reviewed.prUrl,
+      };
+    }
+
+    const selected = await this.updateCandidateControlPlaneRef({
+      octokit,
+      owner: parentOwner,
+      repo: parentRepo,
+      sourceSha,
+      prNumber: reviewed.prNumber,
+    });
+
+    return {
+      status: selected.changed ? "updated" : "unchanged",
+      env: "candidate-a",
+      lane: "control_plane",
+      sourceSha,
+      deploySha: selected.deploySha,
+      deployRef: CANDIDATE_CONTROL_PLANE_REF,
+      refUrl: `https://github.com/${parentOwner}/${parentRepo}/tree/${CANDIDATE_CONTROL_PLANE_REF}`,
+      prNumber: reviewed.prNumber,
+      prUrl: reviewed.prUrl,
+    };
+  }
+
+  private async inspectCandidateInfraReview(input: {
+    readonly octokit: Octokit;
+    readonly owner: string;
+    readonly repo: string;
+    readonly sourceSha: string;
+  }): Promise<{
+    readonly prNumber: number;
+    readonly prUrl: string;
+    readonly lane: CandidateInfraLane;
+  }> {
+    const { octokit, owner, repo, sourceSha } = input;
+    const { data: associatedPulls } = await octokit.request(
+      "GET /repos/{owner}/{repo}/commits/{commit_sha}/pulls",
+      {
+        owner,
+        repo,
+        commit_sha: sourceSha,
+        per_page: 100,
+      }
+    );
+    const expectedRepo = `${owner}/${repo}`.toLowerCase();
+    const reviewedPr = (associatedPulls as GitHubPullRequestSummary[]).find(
+      (pr) =>
+        pr.state === "open" &&
+        pr.base?.ref === "main" &&
+        pr.head?.sha?.toLowerCase() === sourceSha.toLowerCase() &&
+        pr.head.repo?.full_name?.toLowerCase() === expectedRepo
+    );
+    if (!reviewedPr) {
+      throw deployPlaneError(
+        "source_not_open_same_repo_pr_head",
+        "sourceSha must be the exact head of an open same-repo PR to main",
+        422
+      );
+    }
+
+    const changedPaths: string[] = [];
+    for (
+      let page = 1;
+      page <= CANDIDATE_INFRA_FILES_PAGE_LIMIT + 1;
+      page += 1
+    ) {
+      const { data: files } = await octokit.request(
+        "GET /repos/{owner}/{repo}/pulls/{pull_number}/files",
+        {
+          owner,
+          repo,
+          pull_number: reviewedPr.number,
+          per_page: 100,
+          page,
+        }
+      );
+      const pagePaths = (files as { readonly filename: string }[]).map(
+        (file) => file.filename
+      );
+      if (page > CANDIDATE_INFRA_FILES_PAGE_LIMIT) {
+        if (pagePaths.length > 0) {
+          throw deployPlaneError(
+            "candidate_infra_diff_too_large",
+            "candidate infra review exceeds 1000 changed files",
+            422
+          );
+        }
+        break;
+      }
+      changedPaths.push(...pagePaths);
+      if (pagePaths.length < 100) break;
+    }
+
+    const classified = changedPaths.map((path) => ({
+      path,
+      lane: candidateInfraPathLane(path),
+    }));
+    const disallowed = classified
+      .filter(({ lane }) => lane === null)
+      .map(({ path }) => path);
+    if (disallowed.length > 0) {
+      throw deployPlaneError(
+        "candidate_infra_path_rejected",
+        `candidate infra review contains disallowed path(s): ${disallowed.slice(0, 8).join(", ")}`,
+        422
+      );
+    }
+    const lanes = new Set<CandidateInfraLane>();
+    for (const entry of classified) {
+      if (entry.lane === "compose" || entry.lane === "control_plane") {
+        lanes.add(entry.lane);
+      }
+    }
+    if (lanes.size === 0) {
+      throw deployPlaneError(
+        "candidate_infra_change_missing",
+        "candidate infra review has no supported runtime change",
+        422
+      );
+    }
+    if (lanes.size !== 1) {
+      throw deployPlaneError(
+        "candidate_infra_mixed_lanes",
+        "candidate infra review mixes Compose and control-plane changes",
+        422
+      );
+    }
+    const lane = [...lanes][0];
+    if (!lane) {
+      throw deployPlaneError(
+        "candidate_infra_change_missing",
+        "candidate infra review has no supported runtime change",
+        422
+      );
+    }
+
+    if (lane === "control_plane") {
+      await Promise.all(
+        [
+          CANDIDATE_CONTROL_PLANE_SELF_PATH,
+          CANDIDATE_CONTROL_PLANE_SEED_PATH,
+        ].map(async (path) => {
+          const manifest = await this.fetchFileText({
+            owner,
+            repo,
+            path,
+            ref: sourceSha,
+          });
+          let document: unknown;
+          try {
+            document = manifest === null ? null : parseYaml(manifest);
+          } catch {
+            document = null;
+          }
+          if (
+            !CandidateControlPlaneApplicationSchema.safeParse(document).success
+          ) {
+            throw deployPlaneError(
+              "candidate_control_plane_self_object_invalid",
+              `${path} must contain the invariant self-managing candidate-a Application`,
+              422
+            );
+          }
+        })
+      );
+    }
+
+    return {
+      prNumber: reviewedPr.number,
+      prUrl: reviewedPr.html_url,
+      lane,
+    };
+  }
+
+  private async updateCandidateControlPlaneRef(input: {
+    readonly octokit: Octokit;
+    readonly owner: string;
+    readonly repo: string;
+    readonly sourceSha: string;
+    readonly prNumber: number;
+  }): Promise<{ readonly changed: boolean; readonly deploySha: string }> {
+    const { octokit, owner, repo, sourceSha, prNumber } = input;
+    const { data: sourceCommit } = await octokit.request(
+      "GET /repos/{owner}/{repo}/git/commits/{commit_sha}",
+      { owner, repo, commit_sha: sourceSha }
+    );
+
+    let currentSha: string;
+    try {
+      const { data: currentRef } = await octokit.request(
+        "GET /repos/{owner}/{repo}/git/ref/{ref}",
+        { owner, repo, ref: `heads/${CANDIDATE_CONTROL_PLANE_REF}` }
+      );
+      currentSha = currentRef.object.sha;
+    } catch (error) {
+      if ((error as { readonly status?: number }).status !== 404) throw error;
+      try {
+        const { data: created } = await octokit.request(
+          "POST /repos/{owner}/{repo}/git/refs",
+          {
+            owner,
+            repo,
+            ref: `refs/heads/${CANDIDATE_CONTROL_PLANE_REF}`,
+            sha: sourceSha,
+          }
+        );
+        return { changed: true, deploySha: created.object.sha };
+      } catch (createError) {
+        if ((createError as { readonly status?: number }).status === 422) {
+          throw deployPlaneError(
+            "candidate_control_plane_ref_conflict",
+            "candidate control-plane deploy ref changed concurrently; retry the reviewed source",
+            409
+          );
+        }
+        throw createError;
+      }
+    }
+
+    const { data: currentCommit } = await octokit.request(
+      "GET /repos/{owner}/{repo}/git/commits/{commit_sha}",
+      { owner, repo, commit_sha: currentSha }
+    );
+    if (currentCommit.tree.sha === sourceCommit.tree.sha) {
+      return { changed: false, deploySha: currentSha };
+    }
+
+    const { data: deployCommit } = await octokit.request(
+      "POST /repos/{owner}/{repo}/git/commits",
+      {
+        owner,
+        repo,
+        message:
+          `chore(candidate-a): select control-plane ${sourceSha.slice(0, 12)}\n\n` +
+          `Reviewed-PR: #${prNumber}\nReviewed-Source: ${sourceSha}`,
+        tree: sourceCommit.tree.sha,
+        parents: [currentSha],
+      }
+    );
+    try {
+      await octokit.request("PATCH /repos/{owner}/{repo}/git/refs/{ref}", {
+        owner,
+        repo,
+        ref: `heads/${CANDIDATE_CONTROL_PLANE_REF}`,
+        sha: deployCommit.sha,
+        force: false,
+      });
+    } catch (error) {
+      if ((error as { readonly status?: number }).status === 422) {
+        throw deployPlaneError(
+          "candidate_control_plane_ref_conflict",
+          "candidate control-plane deploy ref changed concurrently; retry the reviewed source",
+          409
+        );
+      }
+      throw error;
+    }
+    return { changed: true, deploySha: deployCommit.sha };
+  }
+
+  private async dispatchCandidateInfraWorkflow(input: {
+    readonly octokit: Octokit;
+    readonly owner: string;
+    readonly repo: string;
+    readonly sourceSha: string;
+  }): Promise<{
+    readonly runId: number;
+    readonly runUrl: string;
+    readonly runApiUrl: string;
+  }> {
+    const { octokit, owner, repo, sourceSha } = input;
+    const response = (await octokit.request(
+      "POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches",
+      {
+        owner,
+        repo,
+        workflow_id: "candidate-flight-infra.yml",
+        ref: "main",
+        inputs: { ref: sourceSha },
+        headers: { "X-GitHub-Api-Version": "2026-03-10" },
+        request: { signal: AbortSignal.timeout(15_000) },
+      }
+    )) as unknown as {
+      readonly data: {
+        readonly workflow_run_id?: number;
+        readonly run_url?: string;
+        readonly html_url?: string;
+      };
+    };
+    const runId = response.data.workflow_run_id;
+    const runApiUrl = response.data.run_url;
+    const runUrl = response.data.html_url;
+    if (
+      typeof runId !== "number" ||
+      !Number.isSafeInteger(runId) ||
+      runId <= 0 ||
+      typeof runApiUrl !== "string" ||
+      typeof runUrl !== "string"
+    ) {
+      throw deployPlaneError(
+        "candidate_infra_run_identity_missing",
+        "GitHub did not return the candidate infra workflow run identity",
+        502
+      );
+    }
+
+    return { runId, runUrl, runApiUrl };
   }
 
   private async dispatchNodeInfraReconcile(input: {

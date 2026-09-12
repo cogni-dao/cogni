@@ -2540,6 +2540,62 @@ describe("GitHubRepoWriter.reconcileNodeInfra", () => {
     "name: operator\ntype: node\npath_prefix: nodes/operator/\ndockerfile: nodes/operator/app/Dockerfile\n";
   const forkCatalog =
     "name: beacon\ntype: node\npath_prefix: nodes/beacon/\nsource_repo: https://github.com/cogni-dao/beacon.git\nimage_repository: ghcr.io/cogni-dao/beacon\n";
+  const candidateSourceSha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const candidateSelfManifest = `apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cogni-candidate-a-control-plane
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/cogni-dao/cogni.git
+    targetRevision: deploy/candidate-a-control-plane
+    path: infra/k8s/argocd/control-plane/candidate-a
+    directory:
+      recurse: false
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true
+`;
+
+  function candidateReviewHandlers(
+    changedPaths: readonly string[] = [
+      "infra/k8s/argocd/control-plane/candidate-a/candidate-a-control-plane-application.yaml",
+      "infra/k8s/argocd/control-plane/roots/candidate-a-control-plane-application.yaml",
+    ]
+  ): Record<string, RouteHandler> {
+    return {
+      "GET /repos/{owner}/{repo}/commits/{commit_sha}/pulls": () => [
+        {
+          number: 42,
+          html_url: "https://github.com/Cogni-DAO/cogni/pull/42",
+          state: "open",
+          base: { ref: "main" },
+          head: {
+            ref: "agent/reviewed-infra",
+            sha: candidateSourceSha,
+            repo: { full_name: "Cogni-DAO/cogni" },
+          },
+        },
+      ],
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}/files": () =>
+        changedPaths.map((filename) => ({ filename })),
+      "GET /repos/{owner}/{repo}/contents/{path}": () => ({
+        type: "file",
+        encoding: "base64",
+        content: Buffer.from(candidateSelfManifest, "utf-8").toString("base64"),
+      }),
+    };
+  }
 
   function contentHandler(catalog: string, slug: string) {
     return (params: Record<string, unknown>) => {
@@ -2686,6 +2742,312 @@ describe("GitHubRepoWriter.reconcileNodeInfra", () => {
       })
     ).rejects.toMatchObject({ code: "invalid_deploy_state", status: 409 });
     expect(requests.some((request) => request.route === DISPATCH)).toBe(false);
+  });
+
+  it("bootstraps only the fixed candidate control-plane ref at an exact reviewed PR head", async () => {
+    routeHandlers = {
+      ...candidateReviewHandlers(),
+      "GET /repos/{owner}/{repo}/git/commits/{commit_sha}": () => ({
+        sha: candidateSourceSha,
+        tree: { sha: "candidate-tree" },
+      }),
+      "GET /repos/{owner}/{repo}/git/ref/{ref}": () => {
+        throw statusError(404, "Not Found");
+      },
+      "POST /repos/{owner}/{repo}/git/refs": (params) => {
+        expect(params).toMatchObject({
+          ref: "refs/heads/deploy/candidate-a-control-plane",
+          sha: candidateSourceSha,
+        });
+        return {
+          ref: "refs/heads/deploy/candidate-a-control-plane",
+          object: { sha: candidateSourceSha },
+        };
+      },
+    };
+
+    const result = await makeWriter().reconcileNodeInfra({
+      env: "candidate-a",
+      parentOwner: "Cogni-DAO",
+      parentRepo: "cogni",
+      slug: "operator",
+      sourceSha: candidateSourceSha,
+    });
+
+    expect(result).toEqual({
+      status: "updated",
+      env: "candidate-a",
+      lane: "control_plane",
+      sourceSha: candidateSourceSha,
+      deploySha: candidateSourceSha,
+      deployRef: "deploy/candidate-a-control-plane",
+      refUrl:
+        "https://github.com/Cogni-DAO/cogni/tree/deploy/candidate-a-control-plane",
+      prNumber: 42,
+      prUrl: "https://github.com/Cogni-DAO/cogni/pull/42",
+    });
+    expect(requests.some((request) => request.route === DISPATCH)).toBe(false);
+  });
+
+  it("serializes divergent reviewed trees through the deploy branch head lease", async () => {
+    const oldDeploySha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const nextDeploySha = "cccccccccccccccccccccccccccccccccccccccc";
+    routeHandlers = {
+      ...candidateReviewHandlers([
+        "infra/crossplane/install/packages/provider-http.yaml",
+        "tests/ci-invariants/crossplane-dormant-substrate.spec.ts",
+      ]),
+      "GET /repos/{owner}/{repo}/git/commits/{commit_sha}": (params) =>
+        params.commit_sha === candidateSourceSha
+          ? { sha: candidateSourceSha, tree: { sha: "candidate-tree" } }
+          : { sha: oldDeploySha, tree: { sha: "old-tree" } },
+      "GET /repos/{owner}/{repo}/git/ref/{ref}": (params) => {
+        expect(params.ref).toBe("heads/deploy/candidate-a-control-plane");
+        return { object: { sha: oldDeploySha } };
+      },
+      "POST /repos/{owner}/{repo}/git/commits": (params) => {
+        expect(params).toMatchObject({
+          tree: "candidate-tree",
+          parents: [oldDeploySha],
+        });
+        expect(params.message).toContain(
+          `Reviewed-Source: ${candidateSourceSha}`
+        );
+        return { sha: nextDeploySha };
+      },
+      "PATCH /repos/{owner}/{repo}/git/refs/{ref}": (params) => {
+        expect(params).toMatchObject({
+          ref: "heads/deploy/candidate-a-control-plane",
+          sha: nextDeploySha,
+          force: false,
+        });
+        return {};
+      },
+    };
+
+    const result = await makeWriter().reconcileNodeInfra({
+      env: "candidate-a",
+      parentOwner: "Cogni-DAO",
+      parentRepo: "cogni",
+      slug: "operator",
+      sourceSha: candidateSourceSha,
+    });
+
+    expect(result).toMatchObject({
+      status: "updated",
+      lane: "control_plane",
+      sourceSha: candidateSourceSha,
+      deploySha: nextDeploySha,
+    });
+  });
+
+  it("is idempotent when the selected tree is already on the deploy ref", async () => {
+    const currentDeploySha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    routeHandlers = {
+      ...candidateReviewHandlers(),
+      "GET /repos/{owner}/{repo}/git/commits/{commit_sha}": () => ({
+        tree: { sha: "same-tree" },
+      }),
+      "GET /repos/{owner}/{repo}/git/ref/{ref}": () => ({
+        object: { sha: currentDeploySha },
+      }),
+    };
+
+    const result = await makeWriter().reconcileNodeInfra({
+      env: "candidate-a",
+      parentOwner: "Cogni-DAO",
+      parentRepo: "cogni",
+      slug: "operator",
+      sourceSha: candidateSourceSha,
+    });
+
+    expect(result).toMatchObject({
+      status: "unchanged",
+      lane: "control_plane",
+      deploySha: currentDeploySha,
+    });
+    expect(
+      requests.some(
+        (request) => request.route === "POST /repos/{owner}/{repo}/git/commits"
+      )
+    ).toBe(false);
+  });
+
+  it("rejects source SHAs that are not exact open same-repo PR heads", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/commits/{commit_sha}/pulls": () => [
+        {
+          number: 42,
+          html_url: "https://github.com/Cogni-DAO/cogni/pull/42",
+          state: "open",
+          base: { ref: "main" },
+          head: {
+            sha: candidateSourceSha,
+            repo: { full_name: "attacker/cogni" },
+          },
+        },
+      ],
+    };
+
+    await expect(
+      makeWriter().reconcileNodeInfra({
+        env: "candidate-a",
+        parentOwner: "Cogni-DAO",
+        parentRepo: "cogni",
+        slug: "operator",
+        sourceSha: candidateSourceSha,
+      })
+    ).rejects.toMatchObject({
+      code: "source_not_open_same_repo_pr_head",
+      status: 422,
+    });
+  });
+
+  it("rejects a reviewed PR that crosses the candidate control-plane path boundary", async () => {
+    routeHandlers = candidateReviewHandlers([
+      "infra/k8s/argocd/control-plane/candidate-a/crossplane-core-application.yaml",
+      ".github/workflows/promote-and-deploy.yml",
+    ]);
+
+    await expect(
+      makeWriter().reconcileNodeInfra({
+        env: "candidate-a",
+        parentOwner: "Cogni-DAO",
+        parentRepo: "cogni",
+        slug: "operator",
+        sourceSha: candidateSourceSha,
+      })
+    ).rejects.toMatchObject({
+      code: "candidate_infra_path_rejected",
+      status: 422,
+    });
+    expect(requests.some((request) => request.route.includes("git/ref"))).toBe(
+      false
+    );
+  });
+
+  it("dispatches the existing candidate infra workflow and returns its native run identity", async () => {
+    const runId = 34722512025;
+    routeHandlers = {
+      ...candidateReviewHandlers([
+        "scripts/ci/deploy-infra.sh",
+        "scripts/ci/reconcile-edge-caddy.remote.sh",
+        "scripts/ci/reconcile-node-substrate.sh",
+        "scripts/ci/render-caddyfile.sh",
+        "scripts/ci/tests/reconcile-edge-caddy.test.sh",
+      ]),
+      [DISPATCH]: (params) => {
+        expect(params).toMatchObject({
+          owner: "Cogni-DAO",
+          repo: "cogni",
+          workflow_id: "candidate-flight-infra.yml",
+          ref: "main",
+          inputs: { ref: candidateSourceSha },
+          headers: { "X-GitHub-Api-Version": "2026-03-10" },
+        });
+        return {
+          workflow_run_id: runId,
+          run_url: `https://api.github.com/repos/Cogni-DAO/cogni/actions/runs/${runId}`,
+          html_url: `https://github.com/Cogni-DAO/cogni/actions/runs/${runId}`,
+        };
+      },
+    };
+    const result = await makeWriter().reconcileNodeInfra({
+      env: "candidate-a",
+      parentOwner: "Cogni-DAO",
+      parentRepo: "cogni",
+      slug: "operator",
+      sourceSha: candidateSourceSha,
+    });
+
+    expect(result).toEqual({
+      status: "dispatched",
+      env: "candidate-a",
+      lane: "compose",
+      sourceSha: candidateSourceSha,
+      runId,
+      runUrl: `https://github.com/Cogni-DAO/cogni/actions/runs/${runId}`,
+      runApiUrl: `https://api.github.com/repos/Cogni-DAO/cogni/actions/runs/${runId}`,
+      prNumber: 42,
+      prUrl: "https://github.com/Cogni-DAO/cogni/pull/42",
+    });
+    expect(requests.some((request) => request.route.includes("git/ref"))).toBe(
+      false
+    );
+  });
+
+  it("fails closed when GitHub omits native candidate infra run identity", async () => {
+    routeHandlers = {
+      ...candidateReviewHandlers(["scripts/ci/deploy-infra.sh"]),
+      [DISPATCH]: () => ({}),
+    };
+
+    await expect(
+      makeWriter().reconcileNodeInfra({
+        env: "candidate-a",
+        parentOwner: "Cogni-DAO",
+        parentRepo: "cogni",
+        slug: "operator",
+        sourceSha: candidateSourceSha,
+      })
+    ).rejects.toMatchObject({
+      code: "candidate_infra_run_identity_missing",
+      status: 502,
+    });
+  });
+
+  it("rejects a PR that mixes Compose and control-plane runtime changes", async () => {
+    routeHandlers = candidateReviewHandlers([
+      "scripts/ci/deploy-infra.sh",
+      "infra/k8s/argocd/control-plane/candidate-a/crossplane-core-application.yaml",
+    ]);
+
+    await expect(
+      makeWriter().reconcileNodeInfra({
+        env: "candidate-a",
+        parentOwner: "Cogni-DAO",
+        parentRepo: "cogni",
+        slug: "operator",
+        sourceSha: candidateSourceSha,
+      })
+    ).rejects.toMatchObject({
+      code: "candidate_infra_mixed_lanes",
+      status: 422,
+    });
+    expect(requests.some((request) => request.route === DISPATCH)).toBe(false);
+  });
+
+  it("maps a stale non-force ref update to a retryable typed conflict", async () => {
+    const oldDeploySha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    routeHandlers = {
+      ...candidateReviewHandlers(),
+      "GET /repos/{owner}/{repo}/git/commits/{commit_sha}": (params) =>
+        params.commit_sha === candidateSourceSha
+          ? { tree: { sha: "candidate-tree" } }
+          : { tree: { sha: "old-tree" } },
+      "GET /repos/{owner}/{repo}/git/ref/{ref}": () => ({
+        object: { sha: oldDeploySha },
+      }),
+      "POST /repos/{owner}/{repo}/git/commits": () => ({
+        sha: "cccccccccccccccccccccccccccccccccccccccc",
+      }),
+      "PATCH /repos/{owner}/{repo}/git/refs/{ref}": () => {
+        throw statusError(422, "Update is not a fast forward");
+      },
+    };
+
+    await expect(
+      makeWriter().reconcileNodeInfra({
+        env: "candidate-a",
+        parentOwner: "Cogni-DAO",
+        parentRepo: "cogni",
+        slug: "operator",
+        sourceSha: candidateSourceSha,
+      })
+    ).rejects.toMatchObject({
+      code: "candidate_control_plane_ref_conflict",
+      status: 409,
+    });
   });
 });
 
@@ -3686,9 +4048,8 @@ describe("GitHubRepoWriter.syncTemplateUpstreamToFork", () => {
       },
     };
 
-    const result = await makeWriter().syncTemplateUpstreamToFork(
-      upstreamInput()
-    );
+    const result =
+      await makeWriter().syncTemplateUpstreamToFork(upstreamInput());
     expect(result).toMatchObject({
       status: "pr_opened",
       prNumber: 5,
@@ -3778,9 +4139,8 @@ describe("GitHubRepoWriter.syncTemplateUpstreamToFork", () => {
         Promise.reject(statusError(422, "No commits between main and main")),
       "GET /repos/{owner}/{repo}/pulls": () => [],
     };
-    const result = await makeWriter().syncTemplateUpstreamToFork(
-      upstreamInput()
-    );
+    const result =
+      await makeWriter().syncTemplateUpstreamToFork(upstreamInput());
     expect(result).toEqual({ status: "up_to_date" });
     expect(requests.map((r) => r.route)).not.toContain(
       "POST /repos/{owner}/{repo}/git/commits"

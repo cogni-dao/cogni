@@ -3,11 +3,12 @@
 
 /**
  * Module: `@tests/contract/app/deploy.infra-reconcile`
- * Purpose: Contract tests for the operator-mediated production infrastructure lever.
- * Scope: Auth, strict input, operator-node scope, billing/RBAC gates, and dispatch failures.
+ * Purpose: Contract tests for the operator-mediated shared-infrastructure deploy verb.
+ * Scope: Auth, strict production/candidate inputs, operator-node scope, RBAC, and adapter failures.
  * Invariants:
  *   - AUTHZ_BEFORE_SIDE_EFFECT: every deny path performs zero deploy-plane calls.
  *   - CALLER_CANNOT_SELECT_SOURCE: SHA, ref, workflow, and infra mode are not API inputs.
+ *     Production accepts no source; candidate-a accepts only one exact source SHA.
  *   - SHARED_INFRA_OPERATOR_ONLY: a promoter for another node cannot reconcile the shared VM.
  *   - ENV_SCOPED_PARENT: candidate/test and production use their own configured parent repos.
  * Side-effects: none
@@ -176,6 +177,25 @@ describe("POST /api/v1/deploy/infra-reconcile", () => {
     { nodeId: NODE_ID, env: "production", sourceSha: SOURCE_SHA },
     { nodeId: NODE_ID, env: "production", workflow: "anything.yml" },
     { nodeId: NODE_ID, env: "production", deployInfraMode: "full" },
+    { nodeId: NODE_ID, env: "candidate-a", sourceSha: "main" },
+    {
+      nodeId: NODE_ID,
+      env: "candidate-a",
+      sourceSha: SOURCE_SHA,
+      ref: "refs/heads/main",
+    },
+    {
+      nodeId: NODE_ID,
+      env: "candidate-a",
+      sourceSha: SOURCE_SHA,
+      repo: "other/repo",
+    },
+    {
+      nodeId: NODE_ID,
+      env: "candidate-a",
+      sourceSha: SOURCE_SHA,
+      workflow: "anything.yml",
+    },
   ])("returns 400 for non-contract input %#", async (body) => {
     const res = await post(body);
     expect(res.status).toBe(400);
@@ -242,6 +262,48 @@ describe("POST /api/v1/deploy/infra-reconcile", () => {
     });
   });
 
+  it("uses the same authorized verb to select only candidate-a control-plane source", async () => {
+    mockDeployPlane.reconcileNodeInfra.mockResolvedValue({
+      status: "updated",
+      env: "candidate-a",
+      lane: "control_plane",
+      sourceSha: SOURCE_SHA,
+      deploySha: SOURCE_SHA,
+      deployRef: "deploy/candidate-a-control-plane",
+      refUrl:
+        "https://github.com/test-owner/test-repo/tree/deploy/candidate-a-control-plane",
+      prNumber: 42,
+      prUrl: "https://github.com/test-owner/test-repo/pull/42",
+    });
+
+    const res = await post({
+      nodeId: NODE_ID,
+      env: "candidate-a",
+      sourceSha: SOURCE_SHA,
+    });
+
+    expect(res.status).toBe(200);
+    expect(authzState.check).toHaveBeenCalledWith({
+      actorId: `user:${TEST_SESSION_USER_1.id}`,
+      action: "node.promote_production",
+      resource: `node:${NODE_ID}`,
+      context: { tenantId: "billing-1", nodeId: NODE_ID },
+    });
+    expect(mockDeployPlane.reconcileNodeInfra).toHaveBeenCalledWith({
+      env: "candidate-a",
+      parentOwner: "test-owner",
+      parentRepo: "test-repo",
+      slug: "operator",
+      sourceSha: SOURCE_SHA,
+    });
+    expect(await res.json()).toMatchObject({
+      status: "updated",
+      lane: "control_plane",
+      deployRef: "deploy/candidate-a-control-plane",
+      sourceSha: SOURCE_SHA,
+    });
+  });
+
   it("fails closed when the environment-scoped deployment parent is missing", async () => {
     envState.parentRepo = undefined;
     const res = await post({ nodeId: NODE_ID, env: "production" });
@@ -261,6 +323,25 @@ describe("POST /api/v1/deploy/infra-reconcile", () => {
     expect(await res.json()).toEqual({
       error: "dispatch_failed",
       message: "GitHub App dispatch denied",
+    });
+  });
+
+  it("preserves a typed candidate preflight failure", async () => {
+    mockDeployPlane.reconcileNodeInfra.mockRejectedValue(
+      Object.assign(new Error("source must be an open same-repo PR head"), {
+        code: "source_not_open_same_repo_pr_head",
+        status: 422,
+      })
+    );
+    const res = await post({
+      nodeId: NODE_ID,
+      env: "candidate-a",
+      sourceSha: SOURCE_SHA,
+    });
+    expect(res.status).toBe(422);
+    expect(await res.json()).toEqual({
+      error: "source_not_open_same_repo_pr_head",
+      message: "source must be an open same-repo PR head",
     });
   });
 });
