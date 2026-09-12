@@ -22,6 +22,12 @@ rules:
   - apiGroups: [batch]
     resources: [jobs]
     verbs: [get, list, create, delete]
+  # bug.5118 — classifying a Failed migration Job as script-failure vs never-ran
+  # requires reading its pods (list by job-name label) to find a terminated
+  # migrate container with a non-zero exitCode.
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list]
   - apiGroups: [""]
     resources: [configmaps]
     resourceNames: [compute-workload-allocation-ledger]
