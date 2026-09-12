@@ -74,6 +74,24 @@ export interface NodePromoteResult {
   readonly workflowUrl: string;
 }
 
+export interface ReconcileNodeInfraInput {
+  /** Production only in v0; candidate has its dedicated pre-merge infra flight. */
+  readonly env: "production";
+  readonly parentOwner: string;
+  readonly parentRepo: string;
+  /** Node whose production-promoter grant authorized the shared infra operation. */
+  readonly slug: string;
+}
+
+export interface NodeInfraReconcileResult {
+  readonly status: "dispatched";
+  readonly env: "production";
+  /** Existing deployed source pin reused so the infra reconcile cannot advance the app. */
+  readonly sourceSha: string;
+  readonly sourceAddressing: "remote_source" | "in_repo";
+  readonly workflowUrl: string;
+}
+
 export interface MirrorCanonicalFilesInput {
   /** Canonical source repo owner (the template), e.g. `Cogni-DAO`. */
   readonly sourceOwner: string;
@@ -368,6 +386,17 @@ export interface DeployPlanePort {
    * Writes ZERO commits to `main`. `skip_infra=true` (APP_PROMOTE_IS_NO_INFRA) is set by the dispatch.
    */
   promoteNode(input: PromoteNodeInput): Promise<NodePromoteResult>;
+
+  /**
+   * Reconcile the existing production infra lane through the operator GitHub App while preserving
+   * the node's deployed app digest. The adapter resolves the current source pin from
+   * `deploy/production-<slug>`; callers cannot choose a workflow ref or smuggle a new app SHA.
+   * Authorization is enforced at the route before this method is called. Shared VM infra is
+   * operator-node scoped in v0.
+   */
+  reconcileNodeInfra(
+    input: ReconcileNodeInfraInput
+  ): Promise<NodeInfraReconcileResult>;
 
   /**
    * Promote a node to an environment by dispatching `promote-and-deploy.yml` via the operator App.
