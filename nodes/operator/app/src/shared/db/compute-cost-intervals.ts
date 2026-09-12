@@ -27,11 +27,18 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 
-import { nodes } from "./nodes";
-
 interface NativeAmountJson {
   readonly amount: string;
   readonly denom: string;
+}
+
+interface ComputeCostResourceShapeJson {
+  readonly services: readonly {
+    readonly name: string;
+    readonly cpuUnits: number;
+    readonly memoryMi: number;
+    readonly storageMi: number;
+  }[];
 }
 
 export const COMPUTE_COST_INTERVAL_STATES = [
@@ -46,16 +53,14 @@ export const computeCostIntervals = pgTable(
   {
     /** Controller idempotency key. A prepared receipt exists before provider create I/O. */
     attemptKey: text("attempt_key").primaryKey(),
-    /** Canonical repo-spec/ComputeWorkload node_id. Existence is enforced without reading nodes. */
-    nodeId: uuid("node_id")
-      .notNull()
-      .references(() => nodes.id, { onDelete: "restrict" }),
+    /** Canonical repo-spec/ComputeWorkload node_id; the rebuildable nodes projection is not authority. */
+    nodeId: uuid("node_id").notNull(),
     environment: text("environment").notNull(),
     workloadUid: text("workload_uid").notNull(),
     workloadGeneration: integer("workload_generation").notNull(),
     sourceSha: text("source_sha").notNull(),
     resourceShape: jsonb("resource_shape")
-      .$type<Readonly<Record<string, unknown>>>()
+      .$type<ComputeCostResourceShapeJson>()
       .notNull(),
     state: text("state").notNull().default("prepared"),
 

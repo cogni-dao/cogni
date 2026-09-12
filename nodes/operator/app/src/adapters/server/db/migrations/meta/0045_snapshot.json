@@ -1,5 +1,5 @@
 {
-  "id": "743527c8-4d05-4db8-9bff-115114d0fb85",
+  "id": "60f57a76-6c3d-49dc-b1e3-45ecc5d9a70a",
   "prevId": "9dd44d0d-3f97-4ad0-bc31-f8355cd39c92",
   "version": "7",
   "dialect": "postgresql",
@@ -5300,17 +5300,7 @@
           "with": {}
         }
       },
-      "foreignKeys": {
-        "compute_cost_intervals_node_id_nodes_id_fk": {
-          "name": "compute_cost_intervals_node_id_nodes_id_fk",
-          "tableFrom": "compute_cost_intervals",
-          "tableTo": "nodes",
-          "columnsFrom": ["node_id"],
-          "columnsTo": ["id"],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        }
-      },
+      "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},

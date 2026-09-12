@@ -34,6 +34,19 @@ import { computeCostIntervals } from "@/shared/db/schema";
 type CostRow = typeof computeCostIntervals.$inferSelect;
 
 const DECIMAL_RE = /^(0|[1-9][0-9]*)(\.[0-9]+)?$/;
+const MAX_ID_LENGTH = 512;
+const MAX_NATIVE_VALUE_LENGTH = 128;
+const MAX_CHAIN_POSITION_LENGTH = 64;
+const MAX_NATIVE_AMOUNTS = 32;
+
+function assertBoundedText(
+  value: string,
+  context: string,
+  maxLength: number
+): void {
+  invariant(value.trim().length > 0, `${context} is required`);
+  invariant(value.length <= maxLength, `${context} is too long`);
+}
 
 function invariant(condition: unknown, message: string): asserts condition {
   if (!condition) throw new ComputeCostInvariantError(message);
@@ -55,7 +68,11 @@ function canonicalJson(value: unknown): string {
 }
 
 function assertAmount(value: ComputeCostAmount, context: string): void {
-  invariant(value.denom.trim().length > 0, `${context} denom is required`);
+  assertBoundedText(value.denom, `${context} denom`, MAX_NATIVE_VALUE_LENGTH);
+  invariant(
+    value.amount.length <= MAX_NATIVE_VALUE_LENGTH,
+    `${context} amount is too long`
+  );
   invariant(
     DECIMAL_RE.test(value.amount),
     `${context} amount must be a non-negative plain decimal`
@@ -66,6 +83,10 @@ function assertDistinctAmounts(
   values: readonly ComputeCostAmount[],
   context: string
 ): void {
+  invariant(
+    values.length <= MAX_NATIVE_AMOUNTS,
+    `${context} has too many denominations`
+  );
   const denoms = new Set<string>();
   for (const value of values) {
     assertAmount(value, context);
@@ -141,10 +162,10 @@ function assertTransferredMonotonic(
 }
 
 function assertContext(input: ComputeResourceCostContext): void {
-  invariant(input.attemptKey.trim().length > 0, "attemptKey is required");
-  invariant(input.nodeId.trim().length > 0, "nodeId is required");
-  invariant(input.environment.trim().length > 0, "environment is required");
-  invariant(input.workloadUid.trim().length > 0, "workloadUid is required");
+  assertBoundedText(input.attemptKey, "attemptKey", MAX_ID_LENGTH);
+  assertBoundedText(input.nodeId, "nodeId", MAX_ID_LENGTH);
+  assertBoundedText(input.environment, "environment", MAX_ID_LENGTH);
+  assertBoundedText(input.workloadUid, "workloadUid", MAX_ID_LENGTH);
   invariant(
     Number.isInteger(input.workloadGeneration) && input.workloadGeneration > 0,
     "workloadGeneration must be a positive integer"
@@ -158,24 +179,34 @@ function assertContext(input: ComputeResourceCostContext): void {
 
 function assertEvidence(evidence: ComputeResourceCostEvidence): void {
   assertResourceIdentity(evidence);
-  invariant(
-    evidence.computeProviderAccountId.trim().length > 0,
-    "computeProviderAccountId is required"
+  assertBoundedText(
+    evidence.computeProviderAccountId,
+    "computeProviderAccountId",
+    MAX_ID_LENGTH
   );
-  invariant(
-    evidence.computeSupplierAccountId.trim().length > 0,
-    "computeSupplierAccountId is required"
+  assertBoundedText(
+    evidence.computeSupplierAccountId,
+    "computeSupplierAccountId",
+    MAX_ID_LENGTH
   );
   assertAmount(evidence.rate, "rate");
-  invariant(evidence.rate.unit.trim().length > 0, "rate unit is required");
+  assertBoundedText(evidence.rate.unit, "rate unit", MAX_NATIVE_VALUE_LENGTH);
   invariant(validDate(evidence.observedAt), "observedAt must be a valid Date");
   if (evidence.providerOpenedAtPosition) {
+    invariant(
+      evidence.providerOpenedAtPosition.length <= MAX_CHAIN_POSITION_LENGTH,
+      "providerOpenedAtPosition is too long"
+    );
     invariant(
       /^(0|[1-9][0-9]*)$/.test(evidence.providerOpenedAtPosition),
       "providerOpenedAtPosition must be a non-negative integer string"
     );
   }
   if (evidence.providerClosedAtPosition) {
+    invariant(
+      evidence.providerClosedAtPosition.length <= MAX_CHAIN_POSITION_LENGTH,
+      "providerClosedAtPosition is too long"
+    );
     invariant(
       /^(0|[1-9][0-9]*)$/.test(evidence.providerClosedAtPosition),
       "providerClosedAtPosition must be a non-negative integer string"
@@ -189,11 +220,17 @@ function assertEvidence(evidence: ComputeResourceCostEvidence): void {
     }
   }
   if (evidence.escrow) {
-    invariant(
-      evidence.escrow.state.trim().length > 0,
-      "escrow state is required"
+    assertBoundedText(
+      evidence.escrow.state,
+      "escrow state",
+      MAX_NATIVE_VALUE_LENGTH
     );
     if (evidence.escrow.providerSettledAtPosition) {
+      invariant(
+        evidence.escrow.providerSettledAtPosition.length <=
+          MAX_CHAIN_POSITION_LENGTH,
+        "providerSettledAtPosition is too long"
+      );
       invariant(
         /^(0|[1-9][0-9]*)$/.test(evidence.escrow.providerSettledAtPosition),
         "providerSettledAtPosition must be a non-negative integer string"
@@ -205,11 +242,8 @@ function assertEvidence(evidence: ComputeResourceCostEvidence): void {
 }
 
 function assertResourceIdentity(resource: ComputeResourceCostIdentity): void {
-  invariant(
-    resource.computeProvider.trim().length > 0,
-    "computeProvider is required"
-  );
-  invariant(resource.resourceId.trim().length > 0, "resourceId is required");
+  assertBoundedText(resource.computeProvider, "computeProvider", MAX_ID_LENGTH);
+  assertBoundedText(resource.resourceId, "resourceId", MAX_ID_LENGTH);
 }
 
 function sameEvidence(

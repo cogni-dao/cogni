@@ -5,6 +5,9 @@ import { describe, expect, it, vi } from "vitest";
 import {
   COMPUTE_WORKLOAD_ATTEMPT_ANNOTATION,
   COMPUTE_WORKLOAD_FINALIZER,
+  type ComputeCostEvidencePort,
+  type ComputeCostInterval,
+  type ComputeCostStorePort,
   ComputeLifecycleError,
   type ComputeWorkload,
   type ComputeWorkloadAttemptReceipt,
@@ -263,6 +266,82 @@ function lifecycle(): ComputeWorkloadLifecyclePort &
   };
 }
 
+function costAccounting(): {
+  costStore: ComputeCostStorePort & Record<string, ReturnType<typeof vi.fn>>;
+  costEvidence: ComputeCostEvidencePort &
+    Record<"observeCost", ReturnType<typeof vi.fn>>;
+} {
+  const byAttempt = new Map<string, ComputeCostInterval>();
+  const costStore = {
+    prepare: vi.fn<ComputeCostStorePort["prepare"]>(async (input) => {
+      const current = byAttempt.get(input.attemptKey);
+      if (current) return current;
+      const interval: ComputeCostInterval = { ...input, state: "prepared" };
+      byAttempt.set(input.attemptKey, interval);
+      return interval;
+    }),
+    bind: vi.fn<ComputeCostStorePort["bind"]>(async (input) => {
+      const current = byAttempt.get(input.attemptKey);
+      if (!current) throw new Error("cost interval not prepared");
+      const interval: ComputeCostInterval = {
+        ...current,
+        state: "allocated",
+        resource: input.resource,
+      };
+      byAttempt.set(input.attemptKey, interval);
+      return interval;
+    }),
+    observe: vi.fn<ComputeCostStorePort["observe"]>(async (input) => {
+      const current = byAttempt.get(input.attemptKey);
+      if (!current) throw new Error("cost interval not prepared");
+      const interval: ComputeCostInterval = {
+        ...current,
+        state: input.evidence.providerClosedAtPosition ? "closed" : "active",
+        evidence: input.evidence,
+        ...(input.evidence.providerClosedAtPosition
+          ? { closedRecordedAt: input.evidence.observedAt }
+          : {}),
+      };
+      byAttempt.set(input.attemptKey, interval);
+      return interval;
+    }),
+    close: vi.fn<ComputeCostStorePort["close"]>(async (input) => {
+      const current = byAttempt.get(input.attemptKey);
+      if (!current) throw new Error("cost interval not prepared");
+      const interval: ComputeCostInterval = {
+        ...current,
+        state: "closed",
+        closedRecordedAt: input.closedRecordedAt,
+      };
+      byAttempt.set(input.attemptKey, interval);
+      return interval;
+    }),
+    findByResource: vi.fn<ComputeCostStorePort["findByResource"]>(
+      async (input) =>
+        [...byAttempt.values()].find(
+          (interval) =>
+            interval.resource?.computeProvider === input.computeProvider &&
+            interval.resource.resourceId === input.resourceId
+        ) ?? null
+    ),
+  };
+  const costEvidence = {
+    observeCost: vi.fn<ComputeCostEvidencePort["observeCost"]>(
+      async (input) => ({
+        computeProvider: "external",
+        resourceId: input.resourceId,
+        computeProviderAccountId: "consumer",
+        computeSupplierAccountId: "supplier",
+        rate: { amount: "1", denom: "native", unit: "block" },
+        providerOpenedAtPosition: "1",
+        escrow: { state: "open", funds: [], transferred: [] },
+        observedAt: NOW,
+      })
+    ),
+  };
+  return { costStore, costEvidence };
+}
+
 async function run(
   state: MemoryState,
   port: ComputeWorkloadLifecyclePort,
@@ -270,12 +349,15 @@ async function run(
     dns?: ComputeWorkloadDnsPort;
     secretResolver?: ComputeWorkloadSecretResolverPort;
     migration?: ComputeWorkloadMigrationPort;
+    costStore?: ComputeCostStorePort;
+    costEvidence?: ComputeCostEvidencePort;
     recordReadinessTransition?: ComputeWorkloadReconcileDeps["recordReadinessTransition"];
     recordRecoveryLimit?: ComputeWorkloadReconcileDeps["recordRecoveryLimit"];
     recordMutationFailure?: ComputeWorkloadReconcileDeps["recordMutationFailure"];
     recordMigrationFailure?: ComputeWorkloadReconcileDeps["recordMigrationFailure"];
     recordMigrationHold?: ComputeWorkloadReconcileDeps["recordMigrationHold"];
     leaseLogPush?: ComputeWorkloadReconcileDeps["leaseLogPush"];
+    recordCostAttributionFailure?: ComputeWorkloadReconcileDeps["recordCostAttributionFailure"];
   } = {}
 ) {
   const dns = overrides.dns ?? {
@@ -296,9 +378,12 @@ async function run(
   };
   const recordReadinessTransition =
     overrides.recordReadinessTransition ?? vi.fn();
+  const accounting = costAccounting();
   await reconcileComputeWorkload(
     {
       lifecycle: port,
+      costStore: overrides.costStore ?? accounting.costStore,
+      costEvidence: overrides.costEvidence ?? accounting.costEvidence,
       state,
       dns,
       secretResolver,
@@ -316,10 +401,19 @@ async function run(
       ...(overrides.leaseLogPush
         ? { leaseLogPush: overrides.leaseLogPush }
         : {}),
+      recordCostAttributionFailure:
+        overrides.recordCostAttributionFailure ?? vi.fn(),
     },
     state.current
   );
-  return { dns, secretResolver, migration, recordReadinessTransition };
+  return {
+    dns,
+    secretResolver,
+    migration,
+    recordReadinessTransition,
+    costStore: overrides.costStore ?? accounting.costStore,
+    costEvidence: overrides.costEvidence ?? accounting.costEvidence,
+  };
 }
 
 describe("reconcileComputeWorkload", () => {
@@ -405,6 +499,78 @@ describe("reconcileComputeWorkload", () => {
     expect(env).not.toHaveProperty("LOKI_PUSH_PASSWORD");
     expect(env).not.toHaveProperty("LOKI_PUSH_SOURCE");
     expect(env).not.toHaveProperty("COGNI_NODE_ID");
+  });
+
+  it("prepares value-free node attribution before provider create", async () => {
+    const state = new MemoryState(workload());
+    const port = lifecycle();
+    const accounting = costAccounting();
+    const order: string[] = [];
+    vi.mocked(accounting.costStore.prepare).mockImplementationOnce(
+      async (input) => {
+        order.push("prepare");
+        expect(input.resourceShape).toEqual({
+          services: [
+            { name: "app", cpuUnits: 0.5, memoryMi: 512, storageMi: 1024 },
+          ],
+        });
+        expect(JSON.stringify(input.resourceShape)).not.toContain(
+          "auth-secret"
+        );
+        expect(JSON.stringify(input.resourceShape)).not.toContain(
+          "DATABASE_URL"
+        );
+        return { ...input, state: "prepared" };
+      }
+    );
+    port.create.mockImplementationOnce(async (input) => {
+      order.push("create");
+      await input.onPrepared("41");
+      const output = {
+        provider: "external",
+        leaseId: "lease-42",
+        state: "active" as const,
+        endpoints: ["https://sample-node.example"],
+      };
+      await input.onAllocated(output);
+      return output;
+    });
+
+    await run(state, port, accounting);
+
+    expect(order).toEqual(["prepare", "create"]);
+  });
+
+  it("holds a compensated provider allocation when durable cost binding fails", async () => {
+    const state = new MemoryState(workload());
+    const port = lifecycle();
+    const accounting = costAccounting();
+    vi.mocked(accounting.costStore.bind).mockRejectedValueOnce(
+      new Error("ledger down")
+    );
+    const compensated = vi.fn();
+    port.create.mockImplementationOnce(async (input) => {
+      await input.onPrepared("41");
+      const output = {
+        provider: "external",
+        leaseId: "lease-42",
+        state: "pending" as const,
+        endpoints: [],
+      };
+      try {
+        await input.onAllocated(output);
+      } catch {
+        compensated();
+        throw new ComputeLifecycleError("terminal", "ProviderRejected", false);
+      }
+      return output;
+    });
+
+    await run(state, port, accounting);
+
+    expect(compensated).toHaveBeenCalledOnce();
+    expect(state.wallet).toBeUndefined();
+    expect(state.current.status?.failure?.reason).toBe("CostAttributionFailed");
   });
 
   it("aborts before provider IO when the resourceVersion CAS loses", async () => {
@@ -539,6 +705,43 @@ describe("reconcileComputeWorkload", () => {
     expect(port.create).toHaveBeenCalledTimes(1);
     expect(port.recoverCreate).toHaveBeenCalledWith({ allocationCursor: "41" });
     expect(state.current.status?.resource?.id).toBe("42");
+  });
+
+  it("persists an adopted handle and releases the wallet before cost backfill failure", async () => {
+    const state = new MemoryState(workload());
+    const port = lifecycle();
+    port.create.mockImplementationOnce(async (input) => {
+      await input.onPrepared("41");
+      throw new ComputeLifecycleError(
+        "unknown_outcome",
+        "ProviderOutcomeUnknown",
+        false
+      );
+    });
+    port.recoverCreate.mockResolvedValueOnce({
+      provider: "external",
+      leaseId: "42",
+      state: "active",
+      endpoints: ["https://sample-node.example"],
+    });
+    const accounting = costAccounting();
+    vi.mocked(accounting.costStore.findByResource).mockRejectedValueOnce(
+      new Error("ledger down")
+    );
+
+    await run(state, port, accounting);
+    await run(state, port, accounting);
+
+    expect(
+      decodeAttemptReceipt(
+        state.current.metadata.annotations?.[
+          COMPUTE_WORKLOAD_ATTEMPT_ANNOTATION
+        ]
+      )?.resource
+    ).toEqual({ provider: "external", id: "42" });
+    expect(state.current.status?.resource?.id).toBe("42");
+    expect(state.wallet).toBeUndefined();
+    expect(state.current.status?.failure?.reason).toBe("CostAttributionFailed");
   });
 
   it("does not retry when a prepared POST has zero adoption candidates", async () => {
@@ -1665,6 +1868,87 @@ describe("reconcileComputeWorkload", () => {
     expect(state.current.metadata.finalizers).not.toContain(
       COMPUTE_WORKLOAD_FINALIZER
     );
+  });
+
+  it("keeps the finalizer until local cost closure is durably recorded", async () => {
+    const state = new MemoryState(
+      workload({
+        metadata: {
+          ...workload().metadata,
+          deletionTimestamp: NOW.toISOString(),
+        },
+        status: status(),
+      })
+    );
+    const port = lifecycle();
+    const accounting = costAccounting();
+    vi.mocked(accounting.costStore.findByResource).mockRejectedValueOnce(
+      new Error("ledger down")
+    );
+
+    await run(state, port, accounting);
+    expect(port.delete).toHaveBeenCalledTimes(1);
+    expect(state.current.metadata.finalizers).toContain(
+      COMPUTE_WORKLOAD_FINALIZER
+    );
+    expect(state.current.status?.failure?.reason).toBe("CostAttributionFailed");
+
+    port.observe.mockResolvedValueOnce({
+      provider: "external",
+      leaseId: "lease-42",
+      state: "closed",
+      endpoints: [],
+    });
+    await run(state, port, accounting);
+    expect(port.delete).toHaveBeenCalledTimes(1);
+    expect(accounting.costStore.close).toHaveBeenCalledOnce();
+    expect(state.current.metadata.finalizers).not.toContain(
+      COMPUTE_WORKLOAD_FINALIZER
+    );
+  });
+
+  it("rejects an existing provider resource attributed to another node", async () => {
+    const state = new MemoryState(workload({ status: status() }));
+    const port = lifecycle();
+    const accounting = costAccounting();
+    vi.mocked(accounting.costStore.findByResource).mockResolvedValueOnce({
+      attemptKey: "other-attempt",
+      nodeId: "223e4567-e89b-12d3-a456-426614174001",
+      environment: "candidate-a",
+      workloadUid: workload().metadata.uid,
+      workloadGeneration: 1,
+      sourceSha: SHA,
+      resourceShape: { services: [] },
+      preparedAt: NOW,
+      state: "allocated",
+      resource: { computeProvider: "external", resourceId: "lease-42" },
+    });
+
+    await run(state, port, accounting);
+
+    expect(accounting.costStore.observe).not.toHaveBeenCalled();
+    expect(state.current.status?.phase).not.toBe("Ready");
+    expect(state.current.status?.failure?.reason).toBe("CostAttributionFailed");
+  });
+
+  it("uses a stable synthetic attribution attempt when backfilling an existing lease", async () => {
+    const state = new MemoryState(workload({ status: status() }));
+    const port = lifecycle();
+    const accounting = costAccounting();
+    vi.mocked(accounting.costStore.bind).mockRejectedValueOnce(
+      new Error("ledger down")
+    );
+
+    await run(state, port, accounting);
+    await run(state, port, accounting);
+
+    const prepared = vi
+      .mocked(accounting.costStore.prepare)
+      .mock.calls.map(([input]) => input);
+    expect(prepared).toHaveLength(2);
+    expect(prepared[0]?.attemptKey).toBe(prepared[1]?.attemptKey);
+    expect(prepared[0]?.preparedAt).toEqual(new Date(0));
+    expect(prepared[1]?.preparedAt).toEqual(new Date(0));
   });
 
   it("derives private sibling URLs and keeps resolved values outside durable state", async () => {

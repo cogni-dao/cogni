@@ -24,11 +24,11 @@ Database configuration has historically used a mix of component variables (`APP_
 
 **End State Contract (target):** Three DSNs are the only database secrets:
 
-| Secret                 | Purpose                          | Consumed By               |
-| ---------------------- | -------------------------------- | ------------------------- |
-| `DATABASE_ROOT_URL`    | Admin/superuser for provisioning | `db-provision` only       |
-| `DATABASE_URL`         | App user (RLS enforced)          | `app`, `migrate`          |
-| `DATABASE_SERVICE_URL` | Service user (BYPASSRLS)         | `app`, `scheduler-worker` |
+| Secret                 | Purpose                          | Consumed By                                     |
+| ---------------------- | -------------------------------- | ----------------------------------------------- |
+| `DATABASE_ROOT_URL`    | Admin/superuser for provisioning | `db-provision` only                             |
+| `DATABASE_URL`         | App user (RLS enforced)          | `app`, `migrate`, `compute-workload-controller` |
+| `DATABASE_SERVICE_URL` | Service user (BYPASSRLS)         | `app`, `scheduler-worker`                       |
 
 ## Goal
 
@@ -74,7 +74,7 @@ Establish a clear security boundary between provisioning and runtime database cr
                               │
                               ▼ provisioning complete
 ┌─────────────────────────────────────────────────────────────────────┐
-│ RUNTIME LANE (app, scheduler-worker, migrate)                       │
+│ RUNTIME LANE (app, scheduler-worker, migrate, compute controller)   │
 │ ─────────────────────────────────────────────                       │
 │ Responsibilities:                                                   │
 │   - Serve HTTP traffic                                              │
@@ -89,12 +89,13 @@ Establish a clear security boundary between provisioning and runtime database cr
 
 ### Per-Container Env Contract
 
-| Container          | Receives                                                           |
-| ------------------ | ------------------------------------------------------------------ |
-| `app`              | `DATABASE_URL`, `DATABASE_SERVICE_URL`                             |
-| `scheduler-worker` | `DATABASE_SERVICE_URL`                                             |
-| `migrate`          | `DATABASE_URL`                                                     |
-| `db-provision`     | `POSTGRES_ROOT_*`, `APP_DB_*`, `COGNI_NODE_DBS`, `LITELLM_DB_NAME` |
+| Container                     | Receives                                                           |
+| ----------------------------- | ------------------------------------------------------------------ |
+| `app`                         | `DATABASE_URL`, `DATABASE_SERVICE_URL`                             |
+| `scheduler-worker`            | `DATABASE_SERVICE_URL`                                             |
+| `migrate`                     | `DATABASE_URL`                                                     |
+| `compute-workload-controller` | `DATABASE_URL` only                                                |
+| `db-provision`                | `POSTGRES_ROOT_*`, `APP_DB_*`, `COGNI_NODE_DBS`, `LITELLM_DB_NAME` |
 
 **Forbidden in runtime containers:** `APP_DB_*`, `POSTGRES_ROOT_*`, `COGNI_NODE_DBS`, `LITELLM_DB_NAME`
 

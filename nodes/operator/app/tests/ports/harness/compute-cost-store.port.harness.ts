@@ -14,7 +14,6 @@
 
 import { randomUUID } from "node:crypto";
 
-import { getSeedDb } from "@tests/_fixtures/db/seed-client";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import type {
@@ -24,7 +23,6 @@ import type {
   ComputeResourceCostEvidence,
 } from "@/ports";
 import { ComputeCostInvariantError } from "@/ports";
-import { nodes, users } from "@/shared/db/schema";
 
 const SHA = "a".repeat(40);
 const PREPARED_AT = new Date("2026-09-11T18:00:00.000Z");
@@ -83,20 +81,6 @@ export function registerComputeCostStoreContract(
     beforeEach(async () => {
       store = await makeStore();
       nodeId = randomUUID();
-      const userId = randomUUID();
-      const seedDb = getSeedDb();
-      await seedDb.insert(users).values({
-        id: userId,
-        walletAddress: `0x${randomUUID().replaceAll("-", "").slice(0, 40)}`,
-      });
-      await seedDb.insert(nodes).values({
-        id: nodeId,
-        slug: `cost-${nodeId}`,
-        repoUrl: `https://example.invalid/${nodeId}`,
-        repoOwner: "test",
-        repoName: `cost-${nodeId}`,
-        ownerUserId: userId,
-      });
     });
 
     it("persists node context before allocation and is idempotent only for equivalent input", async () => {
@@ -110,9 +94,11 @@ export function registerComputeCostStoreContract(
       await expect(
         store.prepare({ ...input, environment: "preview" })
       ).rejects.toBeInstanceOf(ComputeCostInvariantError);
-      await expect(
-        store.prepare(context(randomUUID(), randomUUID()))
-      ).rejects.toThrow();
+      const anotherNode = randomUUID();
+      const secondNodeInterval = await store.prepare(
+        context(anotherNode, randomUUID())
+      );
+      expect(secondNodeInterval.nodeId).toBe(anotherNode);
     });
 
     it("binds one provider resource to exactly one prepared attempt", async () => {
@@ -359,6 +345,7 @@ export function registerComputeCostStoreContract(
     });
 
     it("reports exact native spend and active rate grouped only by node_id", async () => {
+      const secondNodeId = randomUUID();
       const activeOne = context(nodeId, randomUUID());
       const activeTwo = context(nodeId, randomUUID());
       const closed = context(nodeId, randomUUID());
@@ -413,10 +400,26 @@ export function registerComputeCostStoreContract(
         attemptKey: closed.attemptKey,
         evidence: closedEvidence,
       });
+      const secondNode = context(secondNodeId, randomUUID());
+      const secondNodeEvidence = evidence(`resource-${randomUUID()}`, {
+        escrow: {
+          state: "open",
+          funds: [{ amount: "10", denom: "utoken" }],
+          transferred: [{ amount: "9", denom: "utoken" }],
+        },
+      });
+      await store.prepare(secondNode);
+      await store.bind({
+        attemptKey: secondNode.attemptKey,
+        resource: secondNodeEvidence,
+      });
+      await store.observe({
+        attemptKey: secondNode.attemptKey,
+        evidence: secondNodeEvidence,
+      });
 
-      const report = (await store.reportByNode()).find(
-        (item) => item.nodeId === nodeId
-      );
+      const reports = await store.reportByNode();
+      const report = reports.find((item) => item.nodeId === nodeId);
       expect(report).toEqual({
         nodeId,
         preparedIntervals: 1,
@@ -432,6 +435,14 @@ export function registerComputeCostStoreContract(
       expect(report).not.toHaveProperty("daoAddress");
       expect(report).not.toHaveProperty("billingAccountId");
       expect(report).not.toHaveProperty("actorId");
+      expect(
+        reports.find((item) => item.nodeId === secondNodeId)
+      ).toMatchObject({
+        nodeId: secondNodeId,
+        activeIntervals: 1,
+        transferred: [{ amount: "9", denom: "utoken" }],
+      });
+      expect(reports).toHaveLength(2);
     });
   });
 }

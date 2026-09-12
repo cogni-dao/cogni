@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { hostname } from "node:os";
-
+import { createAppDbClient } from "@cogni/db-client";
 import {
   BatchV1Api,
   CoordinationV1Api,
@@ -26,6 +26,7 @@ import {
   DormantComputeWorkloadDnsAdapter,
   DormantComputeWorkloadLifecycleAdapter,
   DormantComputeWorkloadMigrationAdapter,
+  DrizzleComputeCostStore,
   KubernetesComputeWorkloadStateAdapter,
   KubernetesLeaseLeaderElector,
   KubernetesMigrationJobAdapter,
@@ -33,6 +34,7 @@ import {
   renewLeadershipOrFence,
 } from "@/adapters/server";
 import { reconcileComputeWorkload } from "@/features/compute/compute-workload-reconciler";
+import { assertComputeCostAppRoleDatabaseUrl } from "./compute-cost-database-url";
 
 // biome-ignore lint/style/noProcessEnv: dedicated process composition root validates its own minimal env
 const runtimeEnv = process.env;
@@ -45,6 +47,8 @@ const deploymentDomain = runtimeEnv.DEPLOYMENT_DOMAIN;
 const apiKeyFile =
   runtimeEnv.AKASH_CONSOLE_API_KEY_FILE ??
   "/var/run/secrets/compute/AKASH_CONSOLE_API_KEY";
+const databaseUrlFile =
+  runtimeEnv.DATABASE_URL_FILE ?? "/var/run/secrets/compute/DATABASE_URL";
 const credentialFile = (name: string) => `/var/run/secrets/compute/${name}`;
 if (!namespace || !environment || !deploymentDomain) {
   throw new Error(
@@ -145,6 +149,16 @@ const leader = new KubernetesLeaseLeaderElector(
 const apiKey = await readFile(apiKeyFile, "utf8")
   .then((value) => value.trim())
   .catch(() => "");
+const databaseUrl = await readFile(databaseUrlFile, "utf8")
+  .then((value) => value.trim())
+  .catch(() => "");
+if (!databaseUrl) {
+  throw new Error(
+    "DATABASE_URL_FILE must contain the operator app-role database URL"
+  );
+}
+assertComputeCostAppRoleDatabaseUrl(databaseUrl);
+const costStore = new DrizzleComputeCostStore(createAppDbClient(databaseUrl));
 const preferredProviders = (runtimeEnv.AKASH_PREFERRED_PROVIDERS ?? "")
   .split(",")
   .map((value) => value.trim())
@@ -153,22 +167,28 @@ const allowedProviders = (runtimeEnv.AKASH_ALLOWED_PROVIDERS ?? "")
   .split(",")
   .map((value) => value.trim())
   .filter(Boolean);
-const lifecycle = apiKey
-  ? new ComputeWorkloadLifecycleAdapter(
-      new AkashComputeAdapter({
-        apiKey,
-        timeoutMs: 15_000,
-        // An empty configured boundary intentionally rejects every provider.
-        // Provider-enabled environments must opt in their reachable accounts.
-        allowedProviders,
-        ...(preferredProviders.length > 0 ? { preferredProviders } : {}),
-        outcomeStore: {
-          record: async () => {},
-          stats: async () => new Map(),
-        },
-      })
-    )
+const akash = apiKey
+  ? new AkashComputeAdapter({
+      apiKey,
+      timeoutMs: 15_000,
+      // An empty configured boundary intentionally rejects every provider.
+      // Provider-enabled environments must opt in their reachable accounts.
+      allowedProviders,
+      ...(preferredProviders.length > 0 ? { preferredProviders } : {}),
+      outcomeStore: {
+        record: async () => {},
+        stats: async () => new Map(),
+      },
+    })
+  : undefined;
+const lifecycle = akash
+  ? new ComputeWorkloadLifecycleAdapter(akash)
   : new DormantComputeWorkloadLifecycleAdapter();
+const costEvidence = akash ?? {
+  observeCost: async () => {
+    throw new Error("compute provider credential is not configured");
+  },
+};
 const readCredential = (name: string) =>
   readFile(credentialFile(name), "utf8")
     .then((value) => value.trim())
@@ -368,6 +388,8 @@ async function reconcileAll(): Promise<void> {
             await reconcileComputeWorkload(
               {
                 lifecycle,
+                costStore,
+                costEvidence,
                 state,
                 dns,
                 secretResolver,
@@ -394,6 +416,8 @@ async function reconcileAll(): Promise<void> {
                   log.error(observation, "compute_workload_migration_failed"),
                 recordMigrationHold: (observation) =>
                   log.warn(observation, "compute_workload_migration_hold"),
+                recordCostAttributionFailure: (observation) =>
+                  log.error(observation, "compute_cost_attribution_failed"),
               },
               resource
             );

@@ -45,6 +45,10 @@ import type {
   ProvisionSpec,
   ProvisionState,
 } from "@cogni/ai-tools";
+import type {
+  ComputeCostEvidencePort,
+  ComputeResourceCostEvidence,
+} from "@/ports";
 import { makeLogger } from "@/shared/observability";
 import {
   type AkashProviderInfo,
@@ -158,6 +162,8 @@ export interface AkashComputeAdapterConfig {
   fetchImpl?: typeof fetch;
   /** Injectable sleep for tests; defaults to setTimeout. */
   sleepImpl?: (ms: number) => Promise<void>;
+  /** Injectable observation clock for exact, deterministic cost evidence tests. */
+  now?: () => Date;
 }
 
 /** Console `GET /v1/user/me` (only the field we read). */
@@ -203,8 +209,11 @@ interface ConsoleProvider {
 }
 
 interface ConsoleLease {
-  id?: ConsoleBidId;
+  id?: ConsoleBidId & { owner?: string };
   state?: string;
+  price?: { denom?: string; amount?: string };
+  created_at?: string;
+  closed_on?: string;
   status?: {
     uris?: string[];
     services?: Record<string, { uris?: string[] }>;
@@ -212,8 +221,21 @@ interface ConsoleLease {
 }
 
 interface ConsoleDeploymentDetail {
-  deployment?: { id?: { dseq?: string | number }; state?: string };
+  deployment?: {
+    id?: { owner?: string; dseq?: string | number };
+    state?: string;
+    created_at?: string;
+  };
   leases?: ConsoleLease[];
+  escrow_account?: {
+    state?: {
+      owner?: string;
+      state?: string;
+      settled_at?: string;
+      funds?: { denom?: string; amount?: string }[];
+      transferred?: { denom?: string; amount?: string }[];
+    };
+  };
 }
 
 interface ConsoleDeploymentList {
@@ -234,7 +256,9 @@ const defaultSleep = (ms: number): Promise<void> =>
  * Akash Console compute adapter — read + write halves of ComputeResourcePort over the
  * managed-wallet Console API. One shared account funds every workload (v0 billing).
  */
-export class AkashComputeAdapter implements ComputeResourcePort {
+export class AkashComputeAdapter
+  implements ComputeResourcePort, ComputeCostEvidencePort
+{
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
   private readonly sleep: (ms: number) => Promise<void>;
@@ -251,6 +275,7 @@ export class AkashComputeAdapter implements ComputeResourcePort {
     error(fields: Record<string, unknown>, message: string): void;
   };
   private readonly sdlOptions: AkashSdlOptions;
+  private readonly now: () => Date;
 
   constructor(private readonly config: AkashComputeAdapterConfig) {
     this.baseUrl = (
@@ -272,6 +297,7 @@ export class AkashComputeAdapter implements ComputeResourcePort {
       config.preferredCountryCodes ?? DEFAULT_SUBSTRATE_COUNTRY_CODES;
     this.outcomeStore = config.outcomeStore;
     this.log = config.log ?? makeLogger({ component: "AkashComputeAdapter" });
+    this.now = config.now ?? (() => new Date());
     // uakt ceiling per block per service; managed wallets escrow USD but bid in chain denom.
     // signedBy anchors audited-only screening on-chain (AUDITED_PROVIDERS_ONLY).
     this.sdlOptions = {
@@ -425,6 +451,17 @@ export class AkashComputeAdapter implements ComputeResourcePort {
       `/v1/deployments/${encodeURIComponent(p.leaseId)}`
     );
     return provisionOutputFromDetail(p.leaseId, detail);
+  }
+
+  /** Exact chain-native cost evidence. No USD conversion or payer inference occurs here. */
+  async observeCost(input: {
+    resourceId: string;
+  }): Promise<ComputeResourceCostEvidence> {
+    const detail = await this.request<ConsoleDeploymentDetail>(
+      "GET",
+      `/v1/deployments/${encodeURIComponent(input.resourceId)}`
+    );
+    return costEvidenceFromDetail(input.resourceId, detail, this.now());
   }
 
   /** Update an existing deployment in place; Console keeps the same opaque resource id. */
@@ -980,5 +1017,191 @@ function provisionOutputFromDetail(
     leaseId: resourceId,
     state: mapState(detail?.deployment?.state, leases),
     endpoints: [...new Set(endpoints)],
+  };
+}
+
+const MAX_PROVIDER_TEXT_LENGTH = 512;
+const MAX_CHAIN_POSITION_LENGTH = 64;
+const MAX_NATIVE_VALUE_LENGTH = 128;
+const MAX_NATIVE_AMOUNTS = 32;
+
+function requiredText(
+  value: unknown,
+  field: string,
+  maxLength = MAX_PROVIDER_TEXT_LENGTH
+): string {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new AkashComputeError(
+      "UNEXPECTED_SHAPE",
+      `Console deployment cost response omitted ${field}`
+    );
+  }
+  if (value.length > maxLength) {
+    throw new AkashComputeError(
+      "UNEXPECTED_SHAPE",
+      `Console deployment cost response returned oversized ${field}`
+    );
+  }
+  return value;
+}
+
+function chainPosition(
+  value: unknown,
+  field: string,
+  zeroMeansAbsent = false
+): string | undefined {
+  if (
+    zeroMeansAbsent &&
+    (value === undefined || value === "" || value === "0")
+  ) {
+    return undefined;
+  }
+  const raw = requiredText(value, field, MAX_CHAIN_POSITION_LENGTH);
+  if (!/^(0|[1-9][0-9]*)$/.test(raw)) {
+    throw new AkashComputeError(
+      "UNEXPECTED_SHAPE",
+      `Console deployment cost response returned invalid ${field}`
+    );
+  }
+  return raw;
+}
+
+function nativeAmounts(
+  values: readonly { denom?: string; amount?: string }[] | undefined,
+  field: string
+): readonly { denom: string; amount: string }[] {
+  if (!values) {
+    throw new AkashComputeError(
+      "UNEXPECTED_SHAPE",
+      `Console deployment cost response omitted ${field}`
+    );
+  }
+  if (values.length > MAX_NATIVE_AMOUNTS) {
+    throw new AkashComputeError(
+      "UNEXPECTED_SHAPE",
+      `Console deployment cost response returned too many ${field}`
+    );
+  }
+  return values.map((value, index) => ({
+    denom: requiredText(
+      value.denom,
+      `${field}[${index}].denom`,
+      MAX_NATIVE_VALUE_LENGTH
+    ),
+    amount: requiredText(
+      value.amount,
+      `${field}[${index}].amount`,
+      MAX_NATIVE_VALUE_LENGTH
+    ),
+  }));
+}
+
+/**
+ * Map Console's current deployment response into the provider-neutral cost seam.
+ * The response is chain-shaped: `created_at`, `closed_on`, and `settled_at` are
+ * heights, while price is the accepted lease rate per block.
+ */
+function costEvidenceFromDetail(
+  resourceId: string,
+  detail: ConsoleDeploymentDetail | undefined,
+  observedAt: Date
+): ComputeResourceCostEvidence {
+  const deployment = detail?.deployment;
+  const deploymentId = String(deployment?.id?.dseq ?? "");
+  if (!deployment || deploymentId !== resourceId) {
+    throw new AkashComputeError(
+      "UNEXPECTED_SHAPE",
+      "Console deployment cost response did not match the requested resource"
+    );
+  }
+
+  const leases = detail.leases ?? [];
+  const active = leases.filter((lease) => lease.state === "active");
+  const lease =
+    active.length === 1
+      ? active[0]
+      : leases.length === 1
+        ? leases[0]
+        : undefined;
+  if (!lease) {
+    throw new AkashComputeError(
+      "UNEXPECTED_SHAPE",
+      "Console deployment cost response did not identify exactly one lease"
+    );
+  }
+
+  const consumer = requiredText(
+    deployment.id?.owner ?? lease.id?.owner,
+    "deployment.id.owner"
+  );
+  const leaseOwner = lease.id?.owner;
+  if (leaseOwner && leaseOwner !== consumer) {
+    throw new AkashComputeError(
+      "UNEXPECTED_SHAPE",
+      "Console deployment and lease consumers disagree"
+    );
+  }
+  const escrow = detail.escrow_account?.state;
+  if (!escrow) {
+    throw new AkashComputeError(
+      "UNEXPECTED_SHAPE",
+      "Console deployment cost response omitted escrow_account.state"
+    );
+  }
+  if (escrow.owner && escrow.owner !== consumer) {
+    throw new AkashComputeError(
+      "UNEXPECTED_SHAPE",
+      "Console deployment and escrow consumers disagree"
+    );
+  }
+
+  const providerOpenedAtPosition = chainPosition(
+    lease.created_at,
+    "leases[0].created_at"
+  );
+  const providerClosedAtPosition = chainPosition(
+    lease.closed_on,
+    "leases[0].closed_on",
+    true
+  );
+  const providerSettledAtPosition = chainPosition(
+    escrow.settled_at,
+    "escrow_account.state.settled_at",
+    true
+  );
+
+  return {
+    computeProvider: PROVIDER,
+    resourceId,
+    computeProviderAccountId: consumer,
+    computeSupplierAccountId: requiredText(
+      lease.id?.provider,
+      "leases[0].id.provider"
+    ),
+    rate: {
+      amount: requiredText(
+        lease.price?.amount,
+        "leases[0].price.amount",
+        MAX_NATIVE_VALUE_LENGTH
+      ),
+      denom: requiredText(
+        lease.price?.denom,
+        "leases[0].price.denom",
+        MAX_NATIVE_VALUE_LENGTH
+      ),
+      unit: "block",
+    },
+    ...(providerOpenedAtPosition ? { providerOpenedAtPosition } : {}),
+    ...(providerClosedAtPosition ? { providerClosedAtPosition } : {}),
+    escrow: {
+      state: requiredText(escrow.state, "escrow_account.state.state"),
+      ...(providerSettledAtPosition ? { providerSettledAtPosition } : {}),
+      funds: nativeAmounts(escrow.funds, "escrow_account.state.funds"),
+      transferred: nativeAmounts(
+        escrow.transferred,
+        "escrow_account.state.transferred"
+      ),
+    },
+    observedAt,
   };
 }
