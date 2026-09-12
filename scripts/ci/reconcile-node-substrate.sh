@@ -377,17 +377,10 @@ if [[ "$DEPLOYMENT_PROVIDER" == "k3s" ]]; then
   fi
 
   caddy_tmp="$(mktemp)"
-  COGNI_CATALOG_ROOT="$COGNI_CATALOG_ROOT" bash "$REPO_ROOT/scripts/ci/render-caddyfile.sh" > "$caddy_tmp"
-  # The primary node (operator) renders as the bare {$DOMAIN} block with a
-  # {$<SLUG>_UPSTREAM:app:3000} default — the host.docker.internal:<port> value is
-  # the per-env edge .env override, NOT the template default. Only non-primary
-  # nodes bake host.docker.internal:<port> into the rendered template, so assert it
-  # only for them. (The edge_key block presence covers the primary.)
+  COGNI_CATALOG_ROOT="$COGNI_CATALOG_ROOT" bash "$REPO_ROOT/scripts/ci/render-caddyfile.sh" --domain "$DOMAIN" > "$caddy_tmp"
   caddy_route_ok=true
-  grep -Fq "{\$${edge_key}:" "$caddy_tmp" || caddy_route_ok=false
-  if ! is_primary_host "$TARGET_NODE"; then
-    grep -Fq "host.docker.internal:${node_port}" "$caddy_tmp" || caddy_route_ok=false
-  fi
+  grep -Fq "${node_host} {" "$caddy_tmp" || caddy_route_ok=false
+  grep -Fq "reverse_proxy host.docker.internal:${node_port}" "$caddy_tmp" || caddy_route_ok=false
   if ! "$caddy_route_ok"; then
     fail "rendered Caddyfile missing route for ${node_host} (edge_key=${edge_key})"
   fi
@@ -395,7 +388,7 @@ if [[ "$DEPLOYMENT_PROVIDER" == "k3s" ]]; then
   mark_row caddyfile updated "rendered + staged Caddyfile route for ${node_host}"
 
   # Shared VM-side edge-Caddy reconcile helper (same logic deploy-infra runs):
-  # start-if-down + hash-gated force-recreate. Staged here, invoked below.
+  # start-if-down + hash-gated atomic reload. Staged here, invoked below.
   copy_to_remote "$REPO_ROOT/scripts/ci/reconcile-edge-caddy.remote.sh" "/tmp/reconcile-edge-caddy.remote.sh"
   edge_reconcile_snippet="
   edge_env=/opt/cogni-template-edge/.env

@@ -6,20 +6,18 @@
 #
 # Runs ON THE VM. Both deploy-infra.sh (env-wide infra deploy) and
 # reconcile-node-substrate.sh (per-node candidate-flight) scp this here and
-# invoke it, so the start-if-down / hash-gated force-recreate logic lives once.
+# invoke it, so the start-if-down / hash-gated atomic-reload logic lives once.
 #
 # Behavior (idempotent):
 #   - caddy not running  → `<compose> up -d` (start the whole edge stack).
 #   - caddy running       → hash-gate the Caddyfile + edge .env against the
-#     stored sha256s in HASH_DIR; recreate caddy ONLY when one changed, then
+#     stored sha256s in HASH_DIR; atomically reload caddy when one changed, then
 #     persist the new hash(es). No change → no-op (no per-flight bounce).
 #
-# `docker compose up -d` (not `caddy reload`) is required for the recreate: a
-# new node always adds a new <SLUG>_DOMAIN to the edge .env, and a graceful
-# reload resolves {$<SLUG>_DOMAIN} to empty because Caddy's env is frozen at
-# container start — silently dropping the new server block + its cert
-# (task.5078). --force-recreate guarantees the bounce even when compose's delta
-# detector doesn't classify env_file content as a change.
+# The callers materialize catalog routes with current per-environment values
+# before invoking this helper. The running Caddy therefore needs no env update:
+# its native reload reads the complete config from stdin and atomically swaps it.
+# Never recreate the sole edge process for a config change (bug.5133).
 #
 # Inputs (env vars):
 #   EDGE_COMPOSE_BIN  Full compose invocation as a string, e.g.
@@ -105,46 +103,35 @@ else
   fi
 
   if [[ "$caddyfile_changed" == "true" || "$edge_env_changed" == "true" ]]; then
-    log_info "Edge stack config changed (caddyfile=${caddyfile_changed} env=${edge_env_changed}), recreating Caddy..."
-    "${EDGE_COMPOSE[@]}" up -d --force-recreate caddy
-    log_info "Caddy recreated; new env_file values + Caddyfile loaded"
-    wait_for_caddy_admin
+    log_info "Edge stack config changed (caddyfile=${caddyfile_changed} env=${edge_env_changed}); atomically reloading Caddy..."
+    wait_for_caddy_admin || exit 1
 
-    # Re-sync the on-disk Caddyfile into the running config, THEN verify, THEN
-    # persist the hash. The force-recreate above loads the frozen env (the new
-    # $<SLUG>_DOMAIN), but it snapshots the Caddyfile at recreate time; a new
-    # node's site block can land in the Caddyfile AFTER that snapshot because the
-    # per-node (reconcile-node-substrate.sh) and env-wide (deploy-infra.sh)
-    # reconciles write the SAME shared Caddyfile with no lock. The reload re-reads
-    # the latest on-disk file into the running config (safe: the recreate already
-    # loaded the env, so {$<SLUG>_DOMAIN} resolves).
+    # Refuse the template here: a running container's environment is stale, so
+    # parsing any {$VAR} would silently omit a newly-added route. Both callers
+    # must stage the current-value output of render-caddyfile.sh --domain.
+    if grep -Fq '{$' "$CADDYFILE"; then
+      log_warn "Caddyfile still contains env placeholders; config hash NOT persisted"
+      exit 1
+    fi
+
+    # Feed the host file over stdin instead of reading the single-file bind mount:
+    # rsync/mv may replace its inode while the running container still sees the
+    # old mount. `caddy reload` validates and atomically swaps through /load.
     #
-    # ORDERING IS LOAD-BEARING: persist the hashes ONLY after the reload AND a
-    # live-config probe both succeed. The prior bug stored the hash right after
-    # the recreate, so a reload/config miss left the new site on disk but absent
-    # from the running config — and every later reconcile then saw "no change",
-    # never retried, and served external 000 behind a GREEN deploy forever. We now
-    # fail loud (exit 1, hash NOT persisted) so the next reconcile retries and the
-    # flight surfaces the failure instead of silently half-deploying.
-    # (task.5078 edge-routing; healed by hand on candidate-a 2026-06-16 — a reload
-    # took beacon-test from external 000 → 200 with no other change.)
-    # `wait_for_caddy_admin` gates reload on the admin endpoint becoming ready;
-    # `caddy reload` then validates + atomically swaps the running config. rc 0
-    # means the new on-disk Caddyfile (incl. the new node's site block) is now
-    # live. Persist the hash ONLY on that success.
-    if ! "${EDGE_COMPOSE[@]}" exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile; then
+    # ORDERING IS LOAD-BEARING: persist hashes ONLY after the native reload
+    # succeeds. Failure leaves the old config serving and the stale hash makes
+    # the next reconcile retry instead of hiding a half-deploy (task.5078).
+    if ! "${EDGE_COMPOSE[@]}" exec -T caddy caddy reload --config - --adapter caddyfile < "$CADDYFILE"; then
       log_warn "caddy reload FAILED — config hash NOT persisted; next reconcile will retry"
       exit 1
     fi
-    log_info "Caddy reloaded; running config re-synced to on-disk Caddyfile; persisting config hash(es)"
+    log_info "Caddy atomically reloaded from materialized config; persisting config hash(es)"
     # Use `if` blocks, NOT `[[ cond ]] && echo`: under `set -e`, a trailing
     # `[[ false ]] && …` leaves the script's exit status at 1, which the caller's
     # `set -e` heredoc reads as a hard failure. That broke EVERY re-flight of an
     # existing node — its <SLUG>_DOMAIN is already in the edge .env so
     # edge_env_changed=false (the final command), while the shared Caddyfile
-    # differs so caddyfile_changed=true and the recreate+reload path runs. The
-    # reload itself succeeded; this idiom turned a successful reconcile into a
-    # red flight (bug.5037).
+    # differs and the reload succeeds (bug.5037).
     if [[ "$caddyfile_changed" == "true" ]]; then echo "$NEW_CADDY_HASH" > "$CADDY_HASH_FILE"; fi
     if [[ "$edge_env_changed" == "true" ]]; then echo "$NEW_EDGE_ENV_HASH" > "$EDGE_ENV_HASH_FILE"; fi
   fi
