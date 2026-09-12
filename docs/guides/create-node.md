@@ -14,7 +14,7 @@ tags: [deployment, infra, node, argo, kustomize]
 
 # Create a New Node (Deploy)
 
-> **⚠️ LEGACY LANE.** This checklist is the k3s birth path (overlays ×3 + AppSets ×3 + deploy branches). The standard is **born-on-Akash** — wizard `deploy_provider: akash`, no k3s footprint — per [ci-cd.md](../spec/ci-cd.md) Axiom 23 (`AKASH_IS_NODE_APP_TARGET`, gated on story.5016). Until that gate lands this guide is still what runs; do not extend it with new machinery.
+> **⚠️ LEGACY LANE.** This checklist is the k3s **app** birth path (overlays ×3 + AppSets ×3 + deploy branches). The standard is **born-on-Akash** — wizard `deploy_provider: akash` — per [ci-cd.md](../spec/ci-cd.md) Axiom 23 (`AKASH_IS_NODE_APP_TARGET`); the fleet runs on Akash as of 2026-09-11 and the k3s **app** lane is deprecated (never flip a node back to k3s). Note that Akash placement does **not** mean "no k3s footprint": the per-node overlay + AppSet remain in-tree — Argo delivers the ComputeWorkload CR through the per-node Application (`NO_DELETE_ON_PLACEMENT`). The wizard still births nodes on k3s until its flip lands as its own story; do not extend this lane with new machinery.
 
 ## When to Use This
 

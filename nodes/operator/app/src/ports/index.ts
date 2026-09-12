@@ -106,6 +106,11 @@ export {
   type ComputeLifecycleFailureReason,
   type ComputeWorkloadLifecyclePort,
 } from "./compute-workload-lifecycle.port";
+export type {
+  ComputeWorkloadMigrationInput,
+  ComputeWorkloadMigrationPhase,
+  ComputeWorkloadMigrationPort,
+} from "./compute-workload-migration.port";
 export type { ComputeWorkloadSecretResolverPort } from "./compute-workload-secret-resolver.port";
 export type { ComputeWorkloadStatePort } from "./compute-workload-state.port";
 export type {
@@ -120,10 +125,12 @@ export type {
   DeployPlanePort,
   MirrorCanonicalFilesInput,
   MirrorCanonicalFilesResult,
+  NodeInfraReconcileResult,
   NodePromoteResult,
   PreparedNodeRefCandidateFlight,
   PrepareNodeRefCandidateFlightInput,
   PromoteNodeInput,
+  ReconcileNodeInfraInput,
   ResolvedNodeRepo,
   ResolveNodeRepoInput,
   SyncTemplateUpstreamInput,

@@ -98,7 +98,7 @@
       "then": { "required": ["envs"] }
     },
     {
-      "$comment": "story.5016 — external placement is operator-owned, node-only policy; source_repo supplies the immutable node artifact lineage.",
+      "$comment": "story.5016 — off-cluster placement is operator-owned, node-only policy; source_repo supplies the immutable node artifact lineage.",
       "if": { "required": ["deployment_provider"] },
       "then": {
         "properties": { "type": { "const": "node" } },
@@ -191,7 +191,7 @@
     },
     "deployment_provider": {
       "type": "object",
-      "description": "Operator-owned per-environment app placement. Omitted environments preserve the k3s default; akash routes only the node app workload through the external ComputeWorkload reconciler.",
+      "description": "Operator-owned per-environment app placement. Omitted environments preserve the k3s default; akash routes only the node app workload through the off-cluster ComputeWorkload reconciler.",
       "additionalProperties": false,
       "properties": {
         "candidate-a": { "enum": ["k3s", "akash"] },
@@ -212,7 +212,7 @@
     },
     "compute_egress_cidrs": {
       "type": "array",
-      "description": "task.5052 (story.5016) — egress CIDRs of the decentralized-compute infrastructure (e.g. Akash provider NAT) that hosts THIS row's workload, allowed to reach the env VM's substrate ports (5432,5435,6379,4000,7233). Lives on the workload's own row — NOT per-env and NOT a shared infra row — because an egress IP is a property of where the workload runs: the per-env allowlist is the union of compute_egress_cidrs across rows whose envs[] contains that env, so decommissioning the workload (or trimming an env from envs[]) closes its holes with it. Rendered by scripts/ci/render-compute-egress-allowlist.sh into the allowlist consumed by infra/provision/cherry/harden-docker-public-ports.sh. Absent/empty = fail-closed: no external compute reaches the substrate ports. Provider egress NATs are multi-tenant — declare the narrowest CIDR (usually /32).",
+      "description": "task.5052 (story.5016) — egress CIDRs of the decentralized-compute infrastructure (e.g. Akash provider NAT) that hosts THIS row's workload, allowed to reach the env VM's substrate ports (5432,5435,6379,4000,7233). Lives on the workload's own row — NOT per-env and NOT a shared infra row — because an egress IP is a property of where the workload runs: the per-env allowlist is the union of compute_egress_cidrs across rows whose envs[] contains that env, so decommissioning the workload (or trimming an env from envs[]) closes its holes with it. Rendered by scripts/ci/render-compute-egress-allowlist.sh into the allowlist consumed by infra/provision/cherry/harden-docker-public-ports.sh. Absent/empty = fail-closed: no off-cluster compute reaches the substrate ports. Provider egress NATs are multi-tenant — declare the narrowest CIDR (usually /32).",
       "items": {
         "type": "object",
         "additionalProperties": false,

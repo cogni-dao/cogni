@@ -126,4 +126,19 @@ edge_caddy_output=$(
 echo "$edge_caddy_output" | grep -q 'Selection reason: substrate-machinery:scripts/ci/reconcile-edge-caddy.remote.sh'
 echo "$edge_caddy_output" | grep -q "Targets: ${expected_substrate_targets}"
 
+# The compute-workload controller is deployed by the operator image. A
+# controller-manifest-only change must therefore build exactly operator at the
+# same source SHA; otherwise candidate flight would pair new manifests with an
+# older image or fail because the exact sha-* artifact does not exist.
+printf '%s\n' 'infra/k8s/base/compute-workload-controller/rbac.yaml' > "$tmpdir/controller-paths.txt"
+controller_output=$(
+  TURBO_SCM_BASE=origin/main \
+  TURBO_SCM_HEAD=HEAD \
+  CHANGED_PATHS_FILE="$tmpdir/controller-paths.txt" \
+  bash scripts/ci/detect-affected.sh
+)
+echo "$controller_output" | grep -q 'Selection reason: operator-image-input:infra/k8s/base/compute-workload-controller/rbac.yaml'
+echo "$controller_output" | grep -q '^Targets: operator$'
+echo "$controller_output" | grep -q '^Flight targets: operator$'
+
 echo "detect-affected.test.sh OK"

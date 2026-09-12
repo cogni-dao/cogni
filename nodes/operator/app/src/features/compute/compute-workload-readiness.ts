@@ -59,7 +59,16 @@ export function assessComputeWorkloadReadiness(input: {
     return { ready: false, reason: "generation_pending" };
   }
   if (status.phase !== "Ready") {
-    return { ready: false, reason: "phase_not_ready" };
+    // Surface the controller's terminal failure reason (e.g. MigrationFailed) so
+    // a promote-gate timeout names the actual blocker instead of a generic phase.
+    const failureReason = asRecord(status.failure)?.reason;
+    return {
+      ready: false,
+      reason:
+        typeof failureReason === "string" && failureReason.length > 0
+          ? `phase_not_ready:${failureReason}`
+          : "phase_not_ready",
+    };
   }
   if (stableJson(status.observedBundle) !== stableJson(expectedBundle)) {
     return { ready: false, reason: "bundle_not_observed" };

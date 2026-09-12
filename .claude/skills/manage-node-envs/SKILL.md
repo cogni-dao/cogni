@@ -22,14 +22,21 @@ The whole loop is three operator API calls plus one wait-on-a-human step:
 5. **Verify** the reconcile with ground truth — the node's pod actually
    terminates/starts and its `/readyz` flips — not just the PR merge.
 
-> **Pick a non-template node.** `node-template` (and `operator`) is
-> **un-undeployable**: `infra/k8s/overlays/<env>/node-template/kustomization.yaml`
-> is the per-env render TEMPLATE every other node's overlay is diffed against, so a
-> remove-PR that deletes it fails the `unit` `per-node overlay drift`
-> (`NODE_AT_ROOT_MIGRATE_PATH`) gate — CI blocks the merge. The verb opens the PR
-> anyway (it does not guard this upfront — a known footgun), so you end up with a
-> dead PR. Demo/toggle on a real leaf node (poly, beacon, a disposable), never the
-> template. (Verified 2026-07-16.)
+> **`operator` is the ONE un-undeployable node.** The operator app is the control
+> plane serving this verb; removing its deployment from an env destroys that env's
+> ability to manage itself. The planner fails closed: a remove for `operator`
+> returns `422 operator_node_immutable` (OPERATOR_SELF_HOSTS_THE_VERB).
+>
+> **`node-template` is an ordinary node with one twist.** Its per-env overlay
+> FILES (`infra/k8s/overlays/<env>/node-template/{kustomization,external-secret}.yaml`)
+> are the render TEMPLATE every wizard node's overlay is cloned from — the files
+> are load-bearing, the deployment is not. So a node-template remove emits a
+> REDUCED delete set (TEMPLATE_OVERLAY_IS_RENDER_SOURCE): the appset + its
+> kustomization entry + the catalog env leave git (Argo prunes the workload), while
+> the overlay files STAY in the tree as pure render-source artifacts. Re-adding the
+> env later is a normal add — rendering the template with its own slug/ports is the
+> identity transform. (Derek's ruling 2026-09-10; supersedes the old
+> TEMPLATE_NODE_UNDEPLOYABLE rule verified 2026-07-16.)
 
 ## When to use
 
@@ -149,7 +156,8 @@ POST /api/v1/vcs/merge
   (`gh pr checks <n>` — every required check `pass`/skip, none `pending`/`fail`), THEN
   call `vcs/merge`. A catalog-edit PR runs the normal monorepo gates (`static`,
   `unit`, `manifest`, `single-node-scope`, …); `unit` is where the overlay-drift gate
-  lives, so a template-node remove-PR fails here (see §B warning).
+  lives (it renders every wizard node's overlay from the node-template overlay files,
+  which a node-template remove deliberately leaves in the tree — see §B).
 - **On green it ENQUEUES.** When the base branch requires a merge queue, `mergePr`
   returns `{ enqueued: true }` with no `sha` — the merge completes asynchronously on
   the rebased candidate. Treat a successful response as "queued", then **poll the PR
@@ -222,6 +230,11 @@ provision / lingers to TTL; the live reconcile is a flagged vNext seam).
 - **MERGE_WHEN_GREEN** — `vcs/merge` rejects `422 not_green` until required checks
   pass; wait for green, THEN merge → it enqueues → poll to `MERGED`. The node moves
   only after the keystone app-of-apps reconciles, not on PR merge alone.
-- **TEMPLATE_NODE_UNDEPLOYABLE** — `node-template` / `operator` cannot be removed from
-  an env: the template's per-env overlay is the render reference for all nodes, so the
-  remove-PR fails the `unit` overlay-drift gate. Toggle leaf nodes only.
+- **TEMPLATE_OVERLAY_IS_RENDER_SOURCE** — `node-template`'s overlay FILES are the
+  per-env render template every wizard node clones; its DEPLOYMENT is not special. A
+  node-template remove deletes only the appset + kustomization entry + catalog env and
+  keeps `infra/k8s/overlays/<env>/node-template/` in the tree as render-source
+  artifacts.
+- **OPERATOR_SELF_HOSTS_THE_VERB** — `operator` cannot be removed from an env: the
+  control plane serving this verb cannot undeploy itself. The planner rejects it with
+  `422 operator_node_immutable`.

@@ -17,14 +17,7 @@ const promoteNode = vi.fn();
 let nodeRows: Array<{
   id: string;
   slug: string;
-  repoOwner: string;
-  repoName: string;
 }> = [];
-
-// The spawned-only guard compares each node's repo coords to the parent monorepo.
-vi.mock("@/shared/config", () => ({
-  getGithubRepo: () => ({ owner: "cogni-dao", repo: "cogni" }),
-}));
 
 vi.mock("@/bootstrap/capabilities/operator-deploy-plane", () => ({
   createOperatorDeployPlane: () => ({ promoteNode }),
@@ -86,14 +79,7 @@ beforeEach(() => {
 
 describe("dispatchNodePreviewPromote", () => {
   it("pins the PR head SHA when a registered node's PR merges (PIN_IS_PR_HEAD_SHA)", async () => {
-    nodeRows = [
-      {
-        id: "node-1",
-        slug: "habitat",
-        repoOwner: "cogni-dao",
-        repoName: "cogni",
-      },
-    ];
+    nodeRows = [{ id: "node-1", slug: "habitat" }];
     promoteNode.mockResolvedValue({
       status: "dispatched",
       env: "preview",
@@ -116,14 +102,7 @@ describe("dispatchNodePreviewPromote", () => {
   });
 
   it("ignores a closed-but-unmerged PR (MERGED_ONLY)", async () => {
-    nodeRows = [
-      {
-        id: "node-1",
-        slug: "habitat",
-        repoOwner: "cogni-dao",
-        repoName: "cogni",
-      },
-    ];
+    nodeRows = [{ id: "node-1", slug: "habitat" }];
     dispatchNodePreviewPromote(
       mergedPayload({
         pull_request: {
@@ -140,14 +119,7 @@ describe("dispatchNodePreviewPromote", () => {
   });
 
   it("ignores a non-closed action", async () => {
-    nodeRows = [
-      {
-        id: "node-1",
-        slug: "habitat",
-        repoOwner: "cogni-dao",
-        repoName: "cogni",
-      },
-    ];
+    nodeRows = [{ id: "node-1", slug: "habitat" }];
     dispatchNodePreviewPromote(mergedPayload({ action: "opened" }), ENV, log);
     await flush();
     expect(promoteNode).not.toHaveBeenCalled();
@@ -160,37 +132,43 @@ describe("dispatchNodePreviewPromote", () => {
     expect(promoteNode).not.toHaveBeenCalled();
   });
 
-  it("skips a registered external-repo node — it owns its own deploy pipeline (SPAWNED_NODES_ONLY)", async () => {
-    // node-template is a seeded registry row carrying its OWN repo; its repo name == its slug, so it
-    // resolves here. The guard must skip it (it is not deployed via the parent monorepo).
-    nodeRows = [
-      {
-        id: "node-nt",
-        slug: "node-template",
-        repoOwner: "cogni-dao",
-        repoName: "node-template",
-      },
-    ];
+  it("dispatches for node-template — the external-repo carve-out is retired (task.5087)", async () => {
+    // node-template is a seeded registry row (story.5009) whose repo name == its slug, so it
+    // resolves here. It deploys via the monorepo catalog like every node, so a merge on its
+    // repo dispatches the same source-addressed preview promote.
+    nodeRows = [{ id: "node-nt", slug: "node-template" }];
+    promoteNode.mockResolvedValue({
+      status: "dispatched",
+      env: "preview",
+      sourceSha: "b".repeat(40),
+      sourceAddressing: "remote_source",
+      workflowUrl:
+        "https://github.com/Cogni-DAO/node-template/actions/workflows/promote-and-deploy.yml",
+    });
     dispatchNodePreviewPromote(
       mergedPayload({
         repository: { name: "node-template", owner: { login: "Cogni-DAO" } },
+        pull_request: {
+          number: 9,
+          merged: true,
+          head: { sha: "b".repeat(40) },
+        },
       }),
       ENV,
       log
     );
     await flush();
-    expect(promoteNode).not.toHaveBeenCalled();
+    expect(promoteNode).toHaveBeenCalledWith({
+      env: "preview",
+      parentOwner: "Cogni-DAO",
+      parentRepo: "node-template",
+      slug: "node-template",
+      sourceSha: "b".repeat(40),
+    });
   });
 
   it("no-ops when the deploy-plane GitHub App is unconfigured", async () => {
-    nodeRows = [
-      {
-        id: "node-1",
-        slug: "habitat",
-        repoOwner: "cogni-dao",
-        repoName: "cogni",
-      },
-    ];
+    nodeRows = [{ id: "node-1", slug: "habitat" }];
     dispatchNodePreviewPromote(
       mergedPayload(),
       { ...ENV, GH_REVIEW_APP_ID: undefined },

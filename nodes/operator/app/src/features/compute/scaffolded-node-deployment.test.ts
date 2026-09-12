@@ -116,7 +116,7 @@ describe("scaffolded node is born Akash-capable", () => {
     ).toEqual([...COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS]);
   });
 
-  it("projects every declared secret ref into an external workload secret", () => {
+  it("projects every declared secret ref into an off-cluster workload secret", () => {
     const resources = buildComputeSecretResources({
       slug: SLUG,
       environment: "candidate-a",
@@ -124,7 +124,7 @@ describe("scaffolded node is born Akash-capable", () => {
         (service) => service.service.secretRefs
       ),
     });
-    // No declared key is rejected by the external-workload provenance denylist.
+    // No declared key is rejected by the off-cluster-workload provenance denylist.
     expect(resources).not.toHaveLength(0);
   });
 });
@@ -139,7 +139,7 @@ describe("a node missing the deployment block fails early, not terminally", () =
         slug: SLUG,
         sourceSha: SOURCE_SHA,
       })
-    ).toThrow(/external compute requires a `deployment:` block/);
+    ).toThrow(/off-cluster compute requires a `deployment:` block/);
   });
 
   it("names the file, the source revision, and the exact block to paste", () => {

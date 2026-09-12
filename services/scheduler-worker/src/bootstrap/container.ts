@@ -180,6 +180,15 @@ export function createContainer(config: Env, logger: Logger): ServiceContainer {
   // authenticated by SCHEDULER_API_TOKEN. nodeId → nodeUrl lookup via the
   // COGNI_NODE_ENDPOINTS map, same one executeGraphActivity already uses.
   const nodeEndpoints = parseNodeEndpoints(config.COGNI_NODE_ENDPOINTS);
+  // One structured line with the FULL parsed routing table (slugs + URLs, not
+  // secrets). COGNI_NODE_ENDPOINTS is injected once at pod start, so a stale
+  // configmap silently routes chat dispatch at dead hosts (story.5016 /
+  // bug.5121); this log makes "what map is this pod actually running with?"
+  // answerable from Loki without exec'ing into the pod.
+  logWorkerEvent(logger, WORKER_EVENT_NAMES.CONFIG_NODE_ENDPOINTS, {
+    nodeCount: nodeEndpoints.size,
+    nodeEndpoints: Object.fromEntries(nodeEndpoints),
+  });
   const deps = {
     nodeEndpoints,
     schedulerApiToken: config.SCHEDULER_API_TOKEN,

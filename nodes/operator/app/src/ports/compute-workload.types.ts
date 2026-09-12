@@ -129,11 +129,24 @@ export interface ComputeWorkloadStatus {
   };
   readonly attempt?: ComputeWorkloadAttempt;
   readonly recoveryCount?: number;
+  /**
+   * The `metadata.generation` the recovery budget (`recoveryCount`) was accrued
+   * under (bug.5128). A generation bump always mints a fresh attempt budget;
+   * absent on legacy statuses, where the count is attributed to
+   * `desiredGeneration` (the pre-fix association).
+   */
+  readonly recoveryGeneration?: number;
   readonly failure?: {
     readonly reason: string;
     /** Stable redacted operator-safe detail; never a provider response body. */
     readonly message: string;
     readonly retryable: boolean;
+    /**
+     * The stage-specific reason of the last provider attempt when the terminal
+     * reason aggregates it away (bug.5128): RecoveryLimitExceeded keeps the
+     * last Boot* stage here so a wedged CR says WHY boot never converged.
+     */
+    readonly lastAttemptReason?: string;
   };
   readonly conditions: readonly ComputeWorkloadCondition[];
 }

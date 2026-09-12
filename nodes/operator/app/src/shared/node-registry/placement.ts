@@ -17,7 +17,7 @@
  *   - PLACEMENT_IS_NOT_A_SECOND_LIST: there is no "the akash nodes" enumeration anywhere in operator
  *     code. Placement is DECLARED DATA (`infra/catalog/<slug>.yaml` `deployment_provider.<env>`,
  *     projected into the node registry), never a node name in a branch.
- *   - EXTERNAL_ADDRESS_IS_THE_PUBLIC_HOST: an off-cluster node is reached at the SAME host its
+ *   - OFF_CLUSTER_ADDRESS_IS_THE_PUBLIC_HOST: an off-cluster node is reached at the SAME host its
  *     ComputeWorkload publishes — `hostForEnv` over the env's ROOT domain — so there is one host
  *     convention for DNS, the workload's ingress, liveness probes, and this resolution.
  *   - FAIL_LOUD_WITHOUT_A_DOMAIN: an off-cluster node with no resolvable base domain throws. Falling

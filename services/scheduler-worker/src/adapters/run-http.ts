@@ -57,12 +57,43 @@ function resolveNodeUrl(
   const url = nodeEndpoints.get(nodeId);
   if (!url) {
     throw new RunHttpClientError(
-      `Unknown nodeId "${nodeId}" — not in COGNI_NODE_ENDPOINTS`,
+      `Unknown nodeId "${nodeId}" — not in COGNI_NODE_ENDPOINTS (known: ${[...nodeEndpoints.keys()].join(", ")})`,
       0,
       false
     );
   }
   return url.replace(/\/$/, "");
+}
+
+/**
+ * fetch() that names its target on network failure. A raw fetch rejection
+ * (DNS ENOTFOUND, ECONNREFUSED, timeout) is a bare "fetch failed" TypeError
+ * that hides WHICH node endpoint died — exactly how stale COGNI_NODE_ENDPOINTS
+ * (story.5016 / bug.5121) manifested. Logs slug + resolved URL and rethrows a
+ * retryable RunHttpClientError (status 0), preserving Temporal retry semantics
+ * (translateHttpError only short-circuits non-retryable errors).
+ */
+async function fetchNode(
+  logger: Logger,
+  nodeId: string,
+  url: string,
+  init: RequestInit
+): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch (err) {
+    const cause = (err as Error & { cause?: { code?: string } }).cause;
+    const code = cause?.code;
+    logger.error(
+      { nodeId, url, err: (err as Error).message, code },
+      "node endpoint unreachable"
+    );
+    throw new RunHttpClientError(
+      `${init.method ?? "GET"} ${url} (nodeId "${nodeId}") network failure${code ? ` [${code}]` : ""}: ${(err as Error).message}`,
+      0,
+      true
+    );
+  }
 }
 
 function authHeaders(token: string): HeadersInit {
@@ -114,7 +145,7 @@ export function createHttpGraphRunWriter(
   ): Promise<void> {
     const base = resolveNodeUrl(nodeEndpoints, nodeId);
     const url = `${base}/api/internal/graph-runs`;
-    const response = await fetch(url, {
+    const response = await fetchNode(logger, nodeId, url, {
       method: "POST",
       headers: authHeaders(schedulerApiToken),
       body: JSON.stringify(body),
@@ -148,7 +179,7 @@ export function createHttpGraphRunWriter(
   ): Promise<void> {
     const base = resolveNodeUrl(nodeEndpoints, nodeId);
     const url = `${base}/api/internal/graph-runs/${encodeURIComponent(runId)}`;
-    const response = await fetch(url, {
+    const response = await fetchNode(logger, nodeId, url, {
       method: "PATCH",
       headers: authHeaders(schedulerApiToken),
       body: JSON.stringify(body),
@@ -238,7 +269,7 @@ export function createHttpExecutionGrantValidator(
   ) {
     const base = resolveNodeUrl(nodeEndpoints, nodeId);
     const url = `${base}/api/internal/grants/${encodeURIComponent(grantId)}/validate`;
-    const response = await fetch(url, {
+    const response = await fetchNode(logger, nodeId, url, {
       method: "POST",
       headers: authHeaders(schedulerApiToken),
       // M1: send the dispatched nodeId so the node asserts the grant↔node

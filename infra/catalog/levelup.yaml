@@ -7,13 +7,16 @@ image_tag_suffix: "-levelup"
 migrator_tag_suffix: "-levelup-migrate"
 source_repo: https://github.com/cogni-dao/levelup.git
 image_repository: ghcr.io/cogni-dao/levelup
-source_sha: 880122832758a3420d23b862213e34862e466974
+source_sha: f1fd69c244d1cbc33b76cefe74264b2c56bb9fcf
 candidate_a_branch: deploy/candidate-a-levelup
 preview_branch: deploy/preview-levelup
 production_branch: deploy/production-levelup
 # task.5017/5025 — per-env node-set (deploy ⊆ provisioned). A wizard birth enters
 # candidate-a only; preview/production are explicit post-validation transitions.
-envs: [candidate-a, preview, production]
+envs: [preview, production]
+deployment_provider:
+  preview: akash
+  production: akash
 # bug.5079 — activity_env is the SINGLETON env allowed to ingest Git receipts. GitHub
 # App webhooks are delivered to production only (one App, one webhook URL), and the
 # production operator's route index filters to `activityEnv === DEPLOY_ENVIRONMENT`
@@ -26,3 +29,11 @@ activity_env: production
 owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
 path_prefix: nodes/levelup/
 node_id: 557d8b59-8e3b-42f0-9aeb-a5c171296556
+# task.5052 (story.5016) — this node's workload runs on Akash; these provider
+# egress CIDRs may dial the env VM's substrate ports (5432,5435,6379,4000,7233).
+# Rendered per-env (union over rows deployed to the env) by
+# scripts/ci/render-compute-egress-allowlist.sh and applied by
+# infra/provision/cherry/harden-docker-public-ports.sh. Absent = fail-closed.
+compute_egress_cidrs:
+  - cidr: 80.200.246.35/32
+    comment: shared egress NAT of Akash providers zencloud + digitalfrontier (story.5016)

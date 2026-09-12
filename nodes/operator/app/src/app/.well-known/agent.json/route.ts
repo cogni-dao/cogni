@@ -92,10 +92,12 @@ export async function GET(request: Request) {
       // flight → candidate-a (node.flight/can_flight); promote → production
       // (node.promote_production/can_promote_production). Both dispatch via the
       // operator GitHub App — never a personal gh credential. Promotion is
-      // app-digest only (no infra). Grant the role via the access-request →
+      // app-digest only; infraReconcile is the separate, operator-node-only
+      // production substrate lever. Grant the role via the access-request →
       // owner-approve loop below.
       flight: `${origin}/api/v1/vcs/flight`,
       promote: `${origin}/api/v1/deploy/promote`,
+      infraReconcile: `${origin}/api/v1/deploy/infra-reconcile`,
       nodeAccessRequest: `${origin}/api/v1/nodes/{id}/access-requests`,
       nodeDevelopers: `${origin}/api/v1/nodes/{id}/developers`,
       // Cognition substrate: the session-start bundle (irreducible invariants +

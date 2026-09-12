@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 /**
- * Provider-neutral external workload lifecycle used by the ComputeWorkload controller.
+ * Provider-neutral off-cluster workload lifecycle used by the ComputeWorkload controller.
  * Provider vocabulary and manifests are adapter-private; resourceId is always opaque.
  */
 

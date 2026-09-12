@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
+import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { hostname } from "node:os";
 
 import {
+  BatchV1Api,
   CoordinationV1Api,
   CoreV1Api,
   CustomObjectsApi,
@@ -23,8 +25,10 @@ import {
   DEFAULT_LEASE_DURATION_SECONDS,
   DormantComputeWorkloadDnsAdapter,
   DormantComputeWorkloadLifecycleAdapter,
+  DormantComputeWorkloadMigrationAdapter,
   KubernetesComputeWorkloadStateAdapter,
   KubernetesLeaseLeaderElector,
+  KubernetesMigrationJobAdapter,
   LeaseRenewError,
   renewLeadershipOrFence,
 } from "@/adapters/server";
@@ -92,17 +96,28 @@ kubeConfig.loadFromCluster();
 const custom = kubeConfig.makeApiClient(CustomObjectsApi);
 const core = kubeConfig.makeApiClient(CoreV1Api);
 const coordination = kubeConfig.makeApiClient(CoordinationV1Api);
-const identity = `${hostname()}-${process.pid}`;
+/**
+ * bug.5108 — the lease epoch is `${leaseTransitions}:${identity}`, and an in-place
+ * container restart preserves BOTH parts: the pod hostname is stable, Node is
+ * always PID 1 in-container, and re-acquiring a lease we already hold does not
+ * bump leaseTransitions. Dead-claim recovery keys off "the receipt's epoch is not
+ * ours", so identity carries a per-process nonce to mint a distinct epoch on
+ * every process start. Cost: after an in-place restart the new process waits out
+ * the lease deadline instead of re-acquiring instantly — bounded failover
+ * latency, already serialized by the surge-free rollout.
+ */
+const identity = `${hostname()}-${process.pid}-${randomUUID().slice(0, 8)}`;
 const state = new KubernetesComputeWorkloadStateAdapter(
   custom,
   core,
   namespace,
-  identity
+  identity,
+  log
 );
 /**
  * bug.5110 — the lease deadline is the ONLY thing standing between a slow k3s API server
  * and a self-fenced controller. At `replicas: 1` a longer deadline costs only failover
- * latency on a redeploy (which `strategy: Recreate` already serializes) and buys
+ * latency on a redeploy (which the surge-free `maxSurge: 0` rollout already serializes) and buys
  * proportionally more tolerance for consecutive failed renewals.
  */
 const leaseDurationSeconds = (() => {
@@ -158,9 +173,18 @@ const readCredential = (name: string) =>
   readFile(credentialFile(name), "utf8")
     .then((value) => value.trim())
     .catch(() => "");
-const [cloudflareToken, cloudflareZoneId] = await Promise.all([
+const [
+  cloudflareToken,
+  cloudflareZoneId,
+  lokiLeasePushUrl,
+  lokiLeasePushUser,
+  lokiLeasePushToken,
+] = await Promise.all([
   readCredential("CLOUDFLARE_API_TOKEN"),
   readCredential("CLOUDFLARE_ZONE_ID"),
+  readCredential("LOKI_LEASE_PUSH_URL"),
+  readCredential("LOKI_LEASE_PUSH_USER"),
+  readCredential("LOKI_LEASE_PUSH_TOKEN"),
 ]);
 const dns =
   cloudflareToken && cloudflareZoneId
@@ -173,6 +197,36 @@ const secretResolver = new ComputeWorkloadSecretResolverAdapter(
   core,
   namespace
 );
+// bug.5127 — write-only Loki push credential for lease workloads. Optional like
+// the provider credentials above: any missing part leaves lease log shipping
+// dormant (the app boots fine, it just ships no logs), surfaced once at startup
+// so a fleet-wide dark lease plane is visible instead of silent.
+const leaseLogPush =
+  lokiLeasePushUrl && lokiLeasePushUser && lokiLeasePushToken
+    ? {
+        url: lokiLeasePushUrl,
+        username: lokiLeasePushUser,
+        password: lokiLeasePushToken,
+      }
+    : undefined;
+if (!leaseLogPush) {
+  log.warn(
+    { reason: "LeaseLogPushCredentialMissing" },
+    "compute_workload_lease_log_push_dormant"
+  );
+}
+// bug.5116 — externally placed workloads have no k3s initContainer; the migration
+// gate proves per-digest DB migrations via a Job on the operator substrate before
+// any lease mutation. A dormant (credential-less) controller must keep surfacing
+// ProviderCredentialMissing instead of spending migration Jobs it cannot act on.
+const migration = apiKey
+  ? new KubernetesMigrationJobAdapter(
+      kubeConfig.makeApiClient(BatchV1Api),
+      core,
+      namespace,
+      log
+    )
+  : new DormantComputeWorkloadMigrationAdapter();
 if (!apiKey) {
   log.error(
     { reason: "ProviderCredentialMissing" },
@@ -317,8 +371,10 @@ async function reconcileAll(): Promise<void> {
                 state,
                 dns,
                 secretResolver,
+                migration,
                 environment: controllerEnvironment,
                 deploymentDomain: controllerDeploymentDomain,
+                ...(leaseLogPush ? { leaseLogPush } : {}),
                 leaderEpoch,
                 assertLeadership: (epoch) => leader.stillHolds(epoch),
                 now: () => new Date(),
@@ -334,6 +390,10 @@ async function reconcileAll(): Promise<void> {
                   ),
                 recordMutationFailure: (observation) =>
                   log.warn(observation, "compute_workload_mutation_failed"),
+                recordMigrationFailure: (observation) =>
+                  log.error(observation, "compute_workload_migration_failed"),
+                recordMigrationHold: (observation) =>
+                  log.warn(observation, "compute_workload_migration_hold"),
               },
               resource
             );

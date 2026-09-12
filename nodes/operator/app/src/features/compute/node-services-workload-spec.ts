@@ -6,7 +6,7 @@
  * Purpose: Assemble an atomically resolved node artifact bundle into one provider-neutral workload.
  * Scope: Pure declaration+digest mapping; no registry, secret, provider, or lifecycle I/O.
  * Invariants: DIGEST_PINNED, ONE_PUBLIC_SERVICE, PRIVATE_IS_NON_GLOBAL, BIND_ALL_INTERFACES, NO_RAW_ENV_INPUT,
- *   DECLARED_NOT_DEFAULTED — external compute refuses the legacy no-secrets fallback and says what to add.
+ *   DECLARED_NOT_DEFAULTED — off-cluster compute refuses the legacy no-secrets fallback and says what to add.
  * Side-effects: none
  * Links: story.5016, task.5065, task.5079, @cogni/repo-spec artifact bundle
  * @internal
@@ -60,7 +60,7 @@ export { COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS } from "@cogni/repo-spec";
  *
  * A node with no `deployment:` block silently inherits the legacy default, whose `secret_refs`
  * are empty by design (the k3s lane injects env through its ExternalSecret overlay instead).
- * That default cannot boot an externally hosted workload, and accepting it here converts a
+ * That default cannot boot an off-cluster workload, and accepting it here converts a
  * one-line repo-spec omission into a terminal reconcile failure hours later. So: refuse now,
  * and hand the author the exact block to paste. Capability-scoped — no node is named.
  */
@@ -73,7 +73,7 @@ export function assertDeclaredNodeDeployment(input: {
   const at = input.sourceSha ? ` at ${input.sourceSha}` : "";
   throw new Error(
     [
-      `[node-workload] ${input.slug}: external compute requires a \`deployment:\` block in the node's own .cogni/repo-spec.yaml${at}, and none is declared.`,
+      `[node-workload] ${input.slug}: off-cluster compute requires a \`deployment:\` block in the node's own .cogni/repo-spec.yaml${at}, and none is declared.`,
       "Without it the node falls back to a legacy default that declares NO secret_refs, so the workload would be created with no runtime environment and fail terminally at reconcile.",
       "Add this block to .cogni/repo-spec.yaml (this is exactly what the node scaffold emits for a new node) and re-run:",
       "",

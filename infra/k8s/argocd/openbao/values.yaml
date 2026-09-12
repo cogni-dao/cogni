@@ -75,6 +75,25 @@ server:
   # Readiness/liveness use OpenBao's /v1/sys/health endpoint. Sealed pods
   # return 503 by default; the chart's standby/sealed code mappings already
   # treat sealed-but-running as "alive" so it doesn't crash-loop pre-unseal.
+  #
+  # ...which was ASPIRATIONAL until 2026-09-09: the chart's default readiness
+  # probe is not an httpGet at all, it is an exec of
+  # `bao status -tls-skip-verify`. Forking a shell and a CLI binary on every
+  # probe is orders of magnitude more sensitive to node I/O than one HTTP GET,
+  # and on an iowait-saturated node it routinely blew the 3s exec timeout — so a
+  # perfectly healthy vault was marked NotReady 20,920 times on production.
+  # Each of those emits a Kubernetes Event, and every Event is a write into
+  # k3s's kine datastore, so the probe became a leading cause of the node
+  # pressure that tripped it.
+  #
+  # Setting `path` makes the chart render an httpGet instead of the exec, which
+  # is what the comment above always claimed. This is deliberately NOT a timeout
+  # bump: a bigger timeout would hide the cost, where this removes it.
+  # `standbyok=true` keeps a standby replica Ready; a SEALED vault still returns
+  # 503 and still goes NotReady, exactly as `bao status` behaved.
+  readinessProbe:
+    enabled: true
+    path: /v1/sys/health?standbyok=true
 
   # Kubernetes auth method config is applied by `provision-env-vm.sh`
   # Phase 5b.3 (auto-init + auto-bind eso-reader) after init/unseal. It is

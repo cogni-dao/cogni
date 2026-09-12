@@ -6,7 +6,7 @@ import {
   ComputeLifecycleError,
   type ComputeWorkloadSecretResolverPort,
 } from "@/ports";
-import { isExternalWorkloadSecretKey } from "@/shared/secrets/node-secrets-reserved.data";
+import { isOffClusterWorkloadSecretKey } from "@/shared/secrets/node-secrets-reserved.data";
 
 function decodeSecretValue(encoded: string): string | undefined {
   if (
@@ -38,7 +38,7 @@ export class ComputeWorkloadSecretResolverAdapter
     refs: readonly { key: string }[];
   }): Promise<Readonly<Record<string, string>>> {
     const keys = [...new Set(input.refs.map((ref) => ref.key))];
-    if (keys.some((key) => !isExternalWorkloadSecretKey(key))) {
+    if (keys.some((key) => !isOffClusterWorkloadSecretKey(key))) {
       throw new ComputeLifecycleError(
         "terminal",
         "SecretPolicyRejected",

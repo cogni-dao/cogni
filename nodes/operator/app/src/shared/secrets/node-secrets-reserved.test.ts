@@ -3,9 +3,9 @@
 
 import { describe, expect, it } from "vitest";
 import {
-  EXTERNAL_WORKLOAD_DENIED_KEYS,
-  isExternalWorkloadSecretKey,
   isNodeOwnedSecretKey,
+  isOffClusterWorkloadSecretKey,
+  OFF_CLUSTER_WORKLOAD_DENIED_KEYS,
   SUBSTRATE_RESERVED_KEYS,
 } from "./node-secrets-reserved.data";
 
@@ -45,12 +45,14 @@ describe("node-secrets reserved-key guard (gate 2)", () => {
   });
 });
 
-describe("external-workload secret boundary (gate 3, provenance-keyed)", () => {
+describe("off-cluster-workload secret boundary (gate 3, provenance-keyed)", () => {
   it("allows format-valid node-owned keys without an operator allowlist", () => {
-    expect(isExternalWorkloadSecretKey("SOME_BRAND_NEW_VENDOR_KEY")).toBe(true);
-    expect(isExternalWorkloadSecretKey("AUTH_SECRET")).toBe(true);
-    expect(isExternalWorkloadSecretKey("DATABASE_URL")).toBe(true);
-    expect(isExternalWorkloadSecretKey("LITELLM_VIRTUAL_KEY")).toBe(true);
+    expect(isOffClusterWorkloadSecretKey("SOME_BRAND_NEW_VENDOR_KEY")).toBe(
+      true
+    );
+    expect(isOffClusterWorkloadSecretKey("AUTH_SECRET")).toBe(true);
+    expect(isOffClusterWorkloadSecretKey("DATABASE_URL")).toBe(true);
+    expect(isOffClusterWorkloadSecretKey("LITELLM_VIRTUAL_KEY")).toBe(true);
   });
 
   it.each([
@@ -70,8 +72,8 @@ describe("external-workload secret boundary (gate 3, provenance-keyed)", () => {
     "PRIVY_USER_WALLETS_SIGNING_KEY",
     "DISCORD_BOT_TOKEN",
   ])("allows node-owned key %s — sensitivity is not provenance", (key) => {
-    expect(isExternalWorkloadSecretKey(key)).toBe(true);
-    expect(EXTERNAL_WORKLOAD_DENIED_KEYS.has(key)).toBe(false);
+    expect(isOffClusterWorkloadSecretKey(key)).toBe(true);
+    expect(OFF_CLUSTER_WORKLOAD_DENIED_KEYS.has(key)).toBe(false);
   });
 
   it("names no NODE: every denied key is operator/fleet/substrate-owned", () => {
@@ -81,7 +83,7 @@ describe("external-workload secret boundary (gate 3, provenance-keyed)", () => {
     // fanned to every node, owned by no node. So this guard bans node-owned
     // prefixes only, and explicitly allow-lists the fleet-shared group.
     const nodeOwnedPrefixes = ["POLY_", "PRIVY_", "DISCORD_"];
-    const offenders = [...EXTERNAL_WORKLOAD_DENIED_KEYS].filter((key) =>
+    const offenders = [...OFF_CLUSTER_WORKLOAD_DENIED_KEYS].filter((key) =>
       nodeOwnedPrefixes.some((prefix) => key.startsWith(prefix))
     );
     expect(offenders).toEqual([]);
@@ -97,12 +99,12 @@ describe("external-workload secret boundary (gate 3, provenance-keyed)", () => {
     "DOLTHUB_OAUTH_CLIENT_ID",
     "DOLTHUB_OAUTH_CLIENT_SECRET",
   ])("denies fleet-shared DoltHub credential %s", (key) => {
-    expect(isExternalWorkloadSecretKey(key)).toBe(false);
+    expect(isOffClusterWorkloadSecretKey(key)).toBe(false);
   });
 
   it("still allows DOLTHUB_OWNER — an org name, not a credential", () => {
     // Deliberately NOT restored: `_shared`, but it carries no authorization.
-    expect(isExternalWorkloadSecretKey("DOLTHUB_OWNER")).toBe(true);
+    expect(isOffClusterWorkloadSecretKey("DOLTHUB_OWNER")).toBe(true);
   });
 
   it.each([
@@ -121,7 +123,7 @@ describe("external-workload secret boundary (gate 3, provenance-keyed)", () => {
     "GHCR_DEPLOY_TOKEN",
     "ACTIONS_AUTOMATION_BOT_PAT",
   ])("denies operator/fleet/substrate-owned key %s", (key) => {
-    expect(isExternalWorkloadSecretKey(key)).toBe(false);
+    expect(isOffClusterWorkloadSecretKey(key)).toBe(false);
   });
 
   it.each([
@@ -130,6 +132,6 @@ describe("external-workload secret boundary (gate 3, provenance-keyed)", () => {
     "NOT-SHELL-SAFE",
     "0_STARTS_WITH_DIGIT",
   ])("denies malformed logical key %s", (key) => {
-    expect(isExternalWorkloadSecretKey(key)).toBe(false);
+    expect(isOffClusterWorkloadSecretKey(key)).toBe(false);
   });
 });

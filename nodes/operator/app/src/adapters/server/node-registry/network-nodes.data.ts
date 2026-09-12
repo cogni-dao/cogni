@@ -65,5 +65,4 @@ export const NETWORK_NODES: readonly NetworkNode[] = [
   { name: "poly", nodeId: "4b06359a-a859-4399-888e-a8c7a6696f7e" },
   { name: "toks4", nodeId: "72aa130b-f0ad-495a-a061-9ee1f9c9525d" },
   { name: "levelup", nodeId: "557d8b59-8e3b-42f0-9aeb-a5c171296556" },
-  { name: "trash", nodeId: "6001e8ff-e9c5-4965-adc8-f5ccc47f36e7" },
 ];

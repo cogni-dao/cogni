@@ -20,12 +20,15 @@ You are setting up or troubleshooting the Alloy log + metrics pipeline that forw
 
 **v0 deploy model: one Alloy per VM, via Docker Compose.** Each env's VM runs a single `alloy` compose service defined in `infra/compose/runtime/docker-compose.yml` with config file `infra/compose/runtime/configs/alloy-config.metrics.alloy`. The config is delivered to the VM by `scripts/ci/deploy-infra.sh`, dispatched via `.github/workflows/promote-and-deploy.yml`. What it ships:
 
-- **Docker container logs** for operator, poly, resy, litellm, temporal, openclaw-gateway, autoheal, caddy — tailed via `/var/run/docker.sock`
+- **Docker container logs** for the runtime allowlist, including Caddy JSON runtime/access logs emitted to stdout — tailed via `/var/run/docker.sock`
 - **K3s pod logs** from `/var/log/pods` for `cogni-*`, `argocd`, and `kube-system` namespaces — so Argo CD sync events and kubelet/coredns/kube-proxy logs are queryable in Loki without SSH
-- **Host `journald`** — every systemd unit (containerd, k3s, docker daemon, sshd, kernel, cron) with a 12h backlog cap
 - **App metrics** — operator and scheduler-worker `/api/metrics` via bearer-token Prometheus scrape
 - **Docker cAdvisor per-container metrics** via `prometheus.exporter.cadvisor`
-- **Host metrics** via `prometheus.exporter.unix` (`/proc`, `/sys`, `/`)
+- **Host metrics** via `prometheus.exporter.unix` (`/proc`, `/sys`, `/`), including conntrack occupancy and TCP listen-overflow/SYN-cookie counters
+
+Host `journald` is not currently shipped. Kernel/network failure diagnosis must use
+the bounded node-exporter counters above until a least-privilege journal reader is
+designed; do not assume `{source="journald"}` exists.
 
 There is no k8s DaemonSet Alloy on v0. A speculative one landed in PR #864 and was reverted in PR #869 because on a single-VM deploy it duplicated the compose pod-log tail at `/var/log/pods`, producing 2× ingest to Grafana Cloud with no added coverage. A multi-node Alloy topology (DaemonSet for node-local collection + singleton Deployment for cluster-scoped scraping like kube-state-metrics and argocd-metrics) is future work, deferred until the k3s cluster splits past a single VM.
 
@@ -210,7 +213,7 @@ Open http://127.0.0.1:12345 in your browser:
    - `{source="k8s", namespace=~"cogni-.*"}` — k3s app pod logs
    - `{source="k8s", namespace="argocd"}` — Argo CD sync/reconcile events
    - `{source="k8s", namespace="kube-system"}` — kubelet / coredns / kube-proxy
-   - `{source="journald"}` — host systemd logs
+   - `{service="caddy"}` — edge runtime + access logs
    - `{service="app"} | json | level="error"` — filter errors
 
 **Validation Checklist:**
@@ -218,7 +221,8 @@ Open http://127.0.0.1:12345 in your browser:
 - [ ] Alloy UI accessible at http://127.0.0.1:12345
 - [ ] Alloy discovers docker containers (check UI targets)
 - [ ] On a k3s host: `local.file_match.k8s_pods` shows >0 targets
-- [ ] Grafana Cloud shows `app="cogni-template"` logs across all three sources (docker, k8s, journald)
+- [ ] Grafana Cloud shows `app="cogni-template"` logs from Docker and k8s sources
+- [ ] `{env="<env>",service="caddy"}` returns an access log after a public probe
 - [ ] `{source="k8s", namespace="argocd"}` returns Argo CD controller/server logs
 - [ ] `{source="k8s", namespace="kube-system"}` returns kubelet/coredns/kube-proxy logs
 - [ ] Existing `{namespace=~"cogni-.*"}` logs still flow (no regression)

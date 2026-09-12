@@ -9,7 +9,7 @@ import {
 export interface DeploymentTargetSelection {
   readonly deployment: readonly string[];
   readonly substrate: readonly string[];
-  readonly external: readonly string[];
+  readonly offCluster: readonly string[];
   readonly providers: Readonly<Record<string, "akash" | "k3s">>;
   readonly k3s: readonly string[];
   readonly k3sNodes: readonly string[];
@@ -31,7 +31,7 @@ export function resolveDeploymentTargets(input: {
   const providers: Record<string, "akash" | "k3s"> = {};
   const deployment: string[] = [];
   const substrate: string[] = [];
-  const external: string[] = [];
+  const offCluster: string[] = [];
   const k3s: string[] = [];
   const k3sNodes: string[] = [];
   const sourceRepositories: Record<string, string> = {};
@@ -51,7 +51,7 @@ export function resolveDeploymentTargets(input: {
     deployment.push(target);
     substrate.push(target);
     if (provider === "akash") {
-      external.push(target);
+      offCluster.push(target);
       sourceRepositories[target] = parseSourceRepository(row, target);
       sourceShas[target] = parseSourceSha(row, target);
     } else {
@@ -62,7 +62,7 @@ export function resolveDeploymentTargets(input: {
   return {
     deployment,
     substrate,
-    external,
+    offCluster,
     providers,
     k3s,
     k3sNodes,
@@ -72,7 +72,7 @@ export function resolveDeploymentTargets(input: {
 }
 
 /**
- * Add catalog-selected external nodes to the mature promote target list without
+ * Add catalog-selected off-cluster nodes to the mature promote target list without
  * reimplementing or widening the legacy k3s resolver. The existing list remains
  * the sole authority for k3s eligibility, ordering, and overlay presence.
  */
@@ -91,29 +91,42 @@ export function resolvePromoteDeploymentTargets(input: {
     }
   }
 
-  const externalCandidates =
+  const offClusterCandidates =
     input.requestedTargets.length > 0
       ? input.requestedTargets
       : input.catalogRows.flatMap((row) =>
           typeof row.name === "string" ? [row.name] : []
         );
-  const external: string[] = [];
+  const offCluster: string[] = [];
   const sourceRepositories: Record<string, string> = {};
   const sourceShas: Record<string, string> = {};
-  for (const target of externalCandidates) {
+  for (const target of offClusterCandidates) {
     const row = byName.get(target);
     if (!row || row.type !== "node" || !isInEnvironment(row, input.environment))
       continue;
-    if (
+    // REMOTE_SOURCE_IS_NOT_PLACEMENT (bug: node-template prod promote,
+    // story.5016) — a node whose image is built by its own repo (source_repo
+    // set) needs its reviewed catalog source_sha resolved for image-tag/digest
+    // lookup regardless of WHERE it is placed this env. Off-cluster (akash)
+    // placement is a separate axis: it additionally needs the OCI bundle
+    // materialized. Gating source_sha resolution on akash-only silently broke
+    // resolve_remote_source_sha's "operator source_sha + reviewed catalog
+    // source_sha" fallback for any remote-source node not (yet) opted into
+    // akash for this specific env — e.g. node-template, which is akash-placed
+    // for candidate-a only, still k3s for preview/production.
+    const isRemoteSource = typeof row.source_repo === "string";
+    const isOffCluster =
       resolveNodeDeploymentProvider({
         catalog: row,
         environment: input.environment,
-      }) !== "akash"
-    )
-      continue;
-    external.push(target);
-    sourceRepositories[target] = parseSourceRepository(row, target);
-    sourceShas[target] = parseSourceSha(row, target);
+      }) === "akash";
+    if (isOffCluster) {
+      offCluster.push(target);
+    }
+    if (isOffCluster || isRemoteSource) {
+      sourceRepositories[target] = parseSourceRepository(row, target);
+      sourceShas[target] = parseSourceSha(row, target);
+    }
   }
 
   const k3s = input.legacyK3sTargets.filter((target) => {
@@ -130,7 +143,7 @@ export function resolvePromoteDeploymentTargets(input: {
   });
   const deployment = [
     ...k3s,
-    ...external.filter((name) => !k3s.includes(name)),
+    ...offCluster.filter((name) => !k3s.includes(name)),
   ];
   const providers: Record<string, "akash" | "k3s"> = {};
   const substrate: string[] = [];
@@ -153,7 +166,7 @@ export function resolvePromoteDeploymentTargets(input: {
   return {
     deployment,
     substrate,
-    external,
+    offCluster,
     providers,
     k3s,
     k3sNodes,
@@ -171,7 +184,7 @@ function parseSourceSha(
     !/^[0-9a-f]{40}$/i.test(row.source_sha)
   ) {
     throw new Error(
-      `[deployment-targets] External target ${target} requires a 40-character source_sha`
+      `[deployment-targets] Off-cluster target ${target} requires a 40-character source_sha`
     );
   }
   return row.source_sha.toLowerCase();
@@ -194,7 +207,7 @@ function parseSourceRepository(
 ): string {
   if (typeof row.source_repo !== "string") {
     throw new Error(
-      `[deployment-targets] External target ${target} requires source_repo`
+      `[deployment-targets] Off-cluster target ${target} requires source_repo`
     );
   }
   const match = row.source_repo.match(
@@ -202,7 +215,7 @@ function parseSourceRepository(
   );
   if (!match) {
     throw new Error(
-      `[deployment-targets] External target ${target} has invalid source_repo`
+      `[deployment-targets] Off-cluster target ${target} has invalid source_repo`
     );
   }
   return `${match[1]}/${match[2]}`.toLowerCase();

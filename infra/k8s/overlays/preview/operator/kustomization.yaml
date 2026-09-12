@@ -30,19 +30,36 @@ images:
     digest: "sha256:be5e99490e9356f70c6af4b38b62cfbd9775f46047202e8c96ead10de35bd1a0"
 
 patches:
+  # story.5016 Gate 0b: controller env values are set BY NAME via strategic
+  # merge (env lists merge on `name`), never by positional JSON-pointer index.
+  # A positional `/env/N/value` patch silently repoints when the base list
+  # shifts — that exact failure (d69e5c29) blanked AKASH_ALLOWED_PROVIDERS
+  # fleet-wide, and an empty allowlist rejects every Akash provider bid.
   - target:
       kind: Deployment
       name: compute-workload-controller
     patch: |
-      - op: replace
-        path: /spec/template/spec/containers/0/env/1/value
-        value: preview
-      - op: replace
-        path: /spec/template/spec/containers/0/env/2/value
-        value: preview.cognidao.org
-      - op: replace
-        path: /spec/template/spec/containers/0/env/3/value
-        value: akash16yr3wxt97ae045a06kr3ycde9srcgpg8syjxxm
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: compute-workload-controller
+      spec:
+        template:
+          spec:
+            containers:
+              - name: controller
+                env:
+                  # Identical to base; listed first only so the merged env keeps
+                  # the base ordering (merge emits patched entries first).
+                  - name: POD_NAMESPACE
+                    valueFrom:
+                      fieldRef: { fieldPath: metadata.namespace }
+                  - name: CONTROLLER_ENVIRONMENT
+                    value: preview
+                  - name: DEPLOYMENT_DOMAIN
+                    value: preview.cognidao.org
+                  - name: AKASH_ALLOWED_PROVIDERS
+                    value: akash16yr3wxt97ae045a06kr3ycde9srcgpg8syjxxm
   # Node-specific ConfigMap values.
   # DNS names must match prefixed Service names (namePrefix applies to all resources).
   - target:

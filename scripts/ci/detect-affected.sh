@@ -299,6 +299,14 @@ else
         selection_reason="workflow-build-change:${path}"
         break
         ;;
+      infra/k8s/base/compute-workload-controller/*)
+        # The controller runs inside the operator image. Its manifests are
+        # candidate inputs too, so build that exact source SHA rather than
+        # flighting new manifests against an older operator artifact.
+        add_target operator
+        selection_reason="operator-image-input:${path}"
+        continue
+        ;;
       packages/*)
         if ! load_turbo_affected_packages; then
           add_all_targets

@@ -213,7 +213,7 @@ async function selectDeploymentTargets(input: {
   const {
     deployment,
     substrate,
-    external,
+    offCluster,
     providers,
     k3s,
     k3sNodes,
@@ -229,8 +229,8 @@ async function selectDeploymentTargets(input: {
     has_deployment_node_targets: String(deployment.length > 0),
     substrate_node_targets_json: JSON.stringify(substrate),
     has_substrate_node_targets: String(substrate.length > 0),
-    external_compute_node_targets_json: JSON.stringify(external),
-    has_external_compute_node_targets: String(external.length > 0),
+    external_compute_node_targets_json: JSON.stringify(offCluster),
+    has_external_compute_node_targets: String(offCluster.length > 0),
     k3s_targets_json: JSON.stringify(k3s),
     k3s_node_targets_json: JSON.stringify(k3sNodes),
     has_k3s_node_targets: String(k3sNodes.length > 0),
@@ -276,8 +276,8 @@ async function selectPromoteTargets(input: {
     has_k3s_targets: String(selection.k3s.length > 0),
     k3s_node_targets_json: JSON.stringify(selection.k3sNodes),
     has_k3s_node_targets: String(selection.k3sNodes.length > 0),
-    external_compute_node_targets_json: JSON.stringify(selection.external),
-    has_external_compute_node_targets: String(selection.external.length > 0),
+    external_compute_node_targets_json: JSON.stringify(selection.offCluster),
+    has_external_compute_node_targets: String(selection.offCluster.length > 0),
     deployment_provider_by_target_json: JSON.stringify(selection.providers),
     source_repository_by_target_json: JSON.stringify(
       selection.sourceRepositories
