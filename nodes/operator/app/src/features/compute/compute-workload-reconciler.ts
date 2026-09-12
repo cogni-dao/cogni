@@ -38,6 +38,20 @@ export interface ComputeWorkloadReconcileDeps {
   readonly migration: ComputeWorkloadMigrationPort;
   readonly environment: string;
   readonly deploymentDomain: string;
+  /**
+   * Write-only Loki push credential injected into every `cogni-node-app-v1`
+   * lease env as `LOKI_PUSH_*` (bug.5127). Off-cluster providers run no
+   * Alloy/daemonset, so the app ships its own logs via the node-template
+   * env-gated transport. Absent → nothing is injected and the app simply does
+   * not ship logs (fail-open; boot is never blocked on observability).
+   * SCOPED_CREDS_ONLY: must be the dedicated logs:write-only lease token
+   * (LOKI_LEASE_PUSH_* in the catalog), never a fleet read/admin credential.
+   */
+  readonly leaseLogPush?: {
+    readonly url: string;
+    readonly username: string;
+    readonly password: string;
+  };
   readonly leaderEpoch: string;
   readonly assertLeadership: (epoch: string) => Promise<boolean>;
   readonly now: () => Date;
@@ -216,6 +230,7 @@ function legacyCogniAppEnv(input: {
   runtimeProfile: "cogni-node-app-v1" | undefined;
   bindings: Readonly<Record<string, string>>;
   secrets: Readonly<Record<string, string>>;
+  leaseLogPush?: ComputeWorkloadReconcileDeps["leaseLogPush"];
 }): Record<string, string> {
   if (input.runtimeProfile !== "cogni-node-app-v1") {
     return { ...input.bindings, ...input.secrets };
@@ -247,6 +262,21 @@ function legacyCogniAppEnv(input: {
       ...sharedSubstrateEnv(input.resource.spec.environment, input.secrets),
       ...input.bindings,
       ...legacySecrets,
+      // bug.5127 — env-gated log shipping. Placed AFTER the node's own secrets
+      // so the operator-held write-only credential always wins over a stale
+      // node-seeded copy. The node-template transport activates only when
+      // LOKI_PUSH_URL is present, labels its streams
+      // {service="app", service_name=<slug>, node=<nodeId>, env, source="lease"},
+      // and is fail-open by construction — absent creds cost nothing.
+      ...(input.leaseLogPush
+        ? {
+            LOKI_PUSH_URL: input.leaseLogPush.url,
+            LOKI_PUSH_USER: input.leaseLogPush.username,
+            LOKI_PUSH_PASSWORD: input.leaseLogPush.password,
+            LOKI_PUSH_SOURCE: "lease",
+            COGNI_NODE_ID: input.resource.spec.nodeId,
+          }
+        : {}),
       // Named compatibility only: the value remains the node-scoped virtual
       // key; the operator's LiteLLM master key never enters this process.
       LITELLM_MASTER_KEY: virtualKey,
@@ -474,6 +504,7 @@ async function toProvisionSpec(
         runtimeProfile: service.runtimeProfile,
         bindings: bindingEnv,
         secrets,
+        ...(deps.leaseLogPush ? { leaseLogPush: deps.leaseLogPush } : {}),
       });
       return {
         name: service.name,

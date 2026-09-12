@@ -173,9 +173,18 @@ const readCredential = (name: string) =>
   readFile(credentialFile(name), "utf8")
     .then((value) => value.trim())
     .catch(() => "");
-const [cloudflareToken, cloudflareZoneId] = await Promise.all([
+const [
+  cloudflareToken,
+  cloudflareZoneId,
+  lokiLeasePushUrl,
+  lokiLeasePushUser,
+  lokiLeasePushToken,
+] = await Promise.all([
   readCredential("CLOUDFLARE_API_TOKEN"),
   readCredential("CLOUDFLARE_ZONE_ID"),
+  readCredential("LOKI_LEASE_PUSH_URL"),
+  readCredential("LOKI_LEASE_PUSH_USER"),
+  readCredential("LOKI_LEASE_PUSH_TOKEN"),
 ]);
 const dns =
   cloudflareToken && cloudflareZoneId
@@ -188,6 +197,24 @@ const secretResolver = new ComputeWorkloadSecretResolverAdapter(
   core,
   namespace
 );
+// bug.5127 — write-only Loki push credential for lease workloads. Optional like
+// the provider credentials above: any missing part leaves lease log shipping
+// dormant (the app boots fine, it just ships no logs), surfaced once at startup
+// so a fleet-wide dark lease plane is visible instead of silent.
+const leaseLogPush =
+  lokiLeasePushUrl && lokiLeasePushUser && lokiLeasePushToken
+    ? {
+        url: lokiLeasePushUrl,
+        username: lokiLeasePushUser,
+        password: lokiLeasePushToken,
+      }
+    : undefined;
+if (!leaseLogPush) {
+  log.warn(
+    { reason: "LeaseLogPushCredentialMissing" },
+    "compute_workload_lease_log_push_dormant"
+  );
+}
 // bug.5116 — externally placed workloads have no k3s initContainer; the migration
 // gate proves per-digest DB migrations via a Job on the operator substrate before
 // any lease mutation. A dormant (credential-less) controller must keep surfacing
@@ -347,6 +374,7 @@ async function reconcileAll(): Promise<void> {
                 migration,
                 environment: controllerEnvironment,
                 deploymentDomain: controllerDeploymentDomain,
+                ...(leaseLogPush ? { leaseLogPush } : {}),
                 leaderEpoch,
                 assertLeadership: (epoch) => leader.stillHolds(epoch),
                 now: () => new Date(),
