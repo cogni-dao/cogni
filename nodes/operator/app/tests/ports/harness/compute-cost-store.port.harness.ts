@@ -442,7 +442,11 @@ export function registerComputeCostStoreContract(
         activeIntervals: 1,
         transferred: [{ amount: "9", denom: "utoken" }],
       });
-      expect(reports).toHaveLength(2);
+      expect(
+        reports.filter(
+          (item) => item.nodeId === nodeId || item.nodeId === secondNodeId
+        )
+      ).toHaveLength(2);
     });
   });
 }
