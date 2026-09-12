@@ -275,6 +275,7 @@ async function run(
     recordMutationFailure?: ComputeWorkloadReconcileDeps["recordMutationFailure"];
     recordMigrationFailure?: ComputeWorkloadReconcileDeps["recordMigrationFailure"];
     recordMigrationHold?: ComputeWorkloadReconcileDeps["recordMigrationHold"];
+    leaseLogPush?: ComputeWorkloadReconcileDeps["leaseLogPush"];
   } = {}
 ) {
   const dns = overrides.dns ?? {
@@ -312,6 +313,9 @@ async function run(
       recordMutationFailure: overrides.recordMutationFailure ?? vi.fn(),
       recordMigrationFailure: overrides.recordMigrationFailure ?? vi.fn(),
       recordMigrationHold: overrides.recordMigrationHold ?? vi.fn(),
+      ...(overrides.leaseLogPush
+        ? { leaseLogPush: overrides.leaseLogPush }
+        : {}),
     },
     state.current
   );
@@ -362,6 +366,45 @@ describe("reconcileComputeWorkload", () => {
       BILLING_INGEST_TOKEN: "billing-token",
     });
     expect(env).not.toHaveProperty("DOLTGRES_URL");
+  });
+
+  it("injects the write-only Loki push env into the lease app when configured (bug.5127)", async () => {
+    const state = new MemoryState(workload());
+    const port = lifecycle();
+    await run(state, port, {
+      leaseLogPush: {
+        url: "https://logs-prod-020.grafana.net/loki/api/v1/push",
+        username: "123456",
+        password: "glc_write_only",
+      },
+      // A stale node-seeded LOKI_PUSH_URL must lose to the operator credential.
+      secretResolver: {
+        resolve: vi.fn(async () => ({
+          ...BOOTABLE_APP_ENV,
+          LOKI_PUSH_URL: "https://stale-node-copy.example/push",
+        })),
+      },
+    });
+    const env = port.create.mock.calls[0]?.[0].spec.services[0]?.env;
+    expect(env).toMatchObject({
+      LOKI_PUSH_URL: "https://logs-prod-020.grafana.net/loki/api/v1/push",
+      LOKI_PUSH_USER: "123456",
+      LOKI_PUSH_PASSWORD: "glc_write_only",
+      LOKI_PUSH_SOURCE: "lease",
+      COGNI_NODE_ID: NODE_ID,
+    });
+  });
+
+  it("omits every LOKI_PUSH_* key when no lease log-push credential is configured", async () => {
+    const state = new MemoryState(workload());
+    const port = lifecycle();
+    await run(state, port);
+    const env = port.create.mock.calls[0]?.[0].spec.services[0]?.env;
+    expect(env).not.toHaveProperty("LOKI_PUSH_URL");
+    expect(env).not.toHaveProperty("LOKI_PUSH_USER");
+    expect(env).not.toHaveProperty("LOKI_PUSH_PASSWORD");
+    expect(env).not.toHaveProperty("LOKI_PUSH_SOURCE");
+    expect(env).not.toHaveProperty("COGNI_NODE_ID");
   });
 
   it("aborts before provider IO when the resourceVersion CAS loses", async () => {
