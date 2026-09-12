@@ -87,7 +87,7 @@ describe("candidate-a manifest source", () => {
     );
   });
 
-  it("preserves the deployed digest until shape and artifact can promote atomically", () => {
+  it("preserves the deployed digest through the preliminary shape commit", () => {
     const prepare = namedStep(
       "prepare-substrate-deploy-branch",
       "Prepare deploy branch shape"

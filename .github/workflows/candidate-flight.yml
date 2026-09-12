@@ -455,9 +455,9 @@ jobs:
             "../app-src/infra/k8s/overlays/candidate-a/${NODE}/" \
             "infra/k8s/overlays/candidate-a/${NODE}/"
           if [[ "$PRESERVED_IMAGE_REF" == *"@sha256:"* ]]; then
-            # Shape preparation may update manifests, but artifact promotion is
+            # Shape preparation may update manifests, but digest promotion is
             # owned by the later flight commit. Keep the currently deployed
-            # digest until that commit can replace shape + digest atomically.
+            # digest unchanged through this preliminary shape commit.
             bash ../app-src/scripts/ci/promote-k8s-image.sh --no-commit \
               --env candidate-a --app "$NODE" --digest "$PRESERVED_IMAGE_REF"
           fi
