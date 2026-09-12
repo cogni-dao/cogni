@@ -62,6 +62,8 @@ spec:
               value: ""
             - name: AKASH_CONSOLE_API_KEY_FILE
               value: /var/run/secrets/compute/AKASH_CONSOLE_API_KEY
+            - name: DATABASE_URL_FILE
+              value: /var/run/secrets/compute/DATABASE_URL
             # bug.5110 — lease deadline. At replicas:1 there is no split-brain to
             # prevent, so this only bounds how long a slow API server may fail
             # renewals before the process fences itself.
@@ -115,3 +117,16 @@ spec:
                       path: CLOUDFLARE_API_TOKEN
                     - key: CLOUDFLARE_ZONE_ID
                       path: CLOUDFLARE_ZONE_ID
+                    # bug.5127 — write-only Loki push credential injected into
+                    # every cogni-node-app-v1 lease env so off-cluster apps ship
+                    # their own logs (no Alloy on a rented provider). Optional
+                    # like the rest: missing keys leave lease log push dormant.
+                    - key: LOKI_LEASE_PUSH_URL
+                      path: LOKI_LEASE_PUSH_URL
+                    - key: LOKI_LEASE_PUSH_USER
+                      path: LOKI_LEASE_PUSH_USER
+                    - key: LOKI_LEASE_PUSH_TOKEN
+                      path: LOKI_LEASE_PUSH_TOKEN
+                    # App-role only. The controller never receives DATABASE_SERVICE_URL.
+                    - key: DATABASE_URL
+                      path: DATABASE_URL
