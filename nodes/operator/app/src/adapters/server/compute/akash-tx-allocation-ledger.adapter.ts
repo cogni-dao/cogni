@@ -20,7 +20,8 @@
  *     pay twice (bug.5115 is fixed by key-addressable resolution, not by expiry).
  * Side-effects: IO (Postgres via the injected app-role Drizzle client)
  * Links: @ports/akash-tx.port, features/compute/akash-tx/akash-tx-actuator.ts,
- *   @cogni/db-schema compute.ts, task.5095
+ *   features/compute/akash-tx/akash-tx-wallet.ts (resolves the wallet scope this serializes),
+ *   @shared/db/akash-tx-allocations (operator-local table, NOT @cogni/db-schema), task.5095
  * @internal
  */
 
@@ -74,7 +75,9 @@ export class DrizzleAkashTxAllocationLedger
   /**
    * @param walletScope opaque identity of the Console wallet this ledger serializes. One
    *   scope = one writer. Two actuators pointed at the SAME Console wallet MUST share a
-   *   scope and a database, or cursor-based recovery is unsound.
+   *   scope and a database, or cursor-based recovery is unsound. Callers MUST obtain this
+   *   from `resolveAkashTxWallet`, which refuses any credential the legacy ComputeWorkload
+   *   controller already spends from (ONE_WALLET_ONE_WRITER).
    */
   constructor(
     private readonly getDb: () => Promise<Database>,

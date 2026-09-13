@@ -316,6 +316,26 @@ Refusals are observable by construction: every refusal emits a structured log ma
 _before_ it answers. Writing a refusal only into CR status is what made a fleet-wide wallet deadlock
 invisible (bug.5115).
 
+**ONE_WALLET_ONE_WRITER is a precondition, not a convention.** Wallet-global serialization only
+recovers a lost response if exactly one process spends from the wallet — a second writer's lease is
+indistinguishable from the actuator's own. The legacy ComputeWorkload controller is frozen but still
+reconciling, so the actuator does not wait for it to be retired: it gets its **own dedicated Akash
+Console account per environment** (`AKASH_ACTUATOR_CONSOLE_API_KEY`, distinct from the controller's
+`AKASH_CONSOLE_API_KEY`). `features/compute/akash-tx/akash-tx-wallet.ts` enforces this at wiring time
+— the dedicated credential is required, never falls back to the legacy one, and resolution fails if
+the two are byte-equal. The ledger scope is `akash-console:<environment>`, derived from the
+environment rather than the secret so rotation cannot orphan in-flight receipts. Per-environment
+Postgres over ONE shared wallet is the unsound shape this rules out.
+
+Custody is OpenBao, projected through the existing ESO/envFrom contract: the catalog declares the key
+`tier: A1, service: operator`, so it lands at `cogni/<env>/operator/AKASH_ACTUATOR_CONSOLE_API_KEY`,
+is extracted into `operator-env-secrets` by the operator ExternalSecret's `dataFrom: extract`, and
+reaches the pod through the `envFrom` it already has. Git, workflows, Crossplane resources, and VM
+`.env` files carry the **name** only — never the value. The receipts table itself
+(`akash_tx_allocations`) is operator-local schema (`@shared/db/akash-tx-allocations`), deliberately
+not in `@cogni/db-schema` and never in Doltgres: it is system-of-record evidence that money may have
+been spent.
+
 **Prior art:** the Argo-GitOps foundation this builds on is [PR #628](https://github.com/Cogni-DAO/cogni/pull/628) (`task.0149`, open since 2026-03-25, superseded piecemeal by per-node flighting). The registry/adapter-swap pattern is proven in [`mcp-control-plane.md`](./mcp-control-plane.md). The decentralized-compute target is `infra/provision/akash/FUTURE_AKASH_INTEGRATION.md`. **Cherry Servers is the explicit MVP stopgap; Akash is the crypto-native end state.**
 
 ## Enforcement

@@ -18,7 +18,9 @@
  *   - RECEIPT_BEFORE_TRANSACTION: the pre-POST cursor is durable before any Console POST, so a
  *     lost response leaves recoverable evidence rather than an orphan paid lease.
  *   - WALLET_SINGLE_WRITER: the ledger slot is held for exactly the unrecoverable window
- *     (cursor read → allocated handle durable) and is wallet-wide, never per-workload.
+ *     (cursor read → allocated handle durable) and is wallet-wide, never per-workload. The
+ *     wallet it serializes is a DEDICATED per-environment Console account resolved by
+ *     ./akash-tx-wallet, which refuses the legacy controller's credential outright.
  *   - FAIL_CLOSED: an allocation that cannot be resolved to exactly one lease raises
  *     allocation_unresolved / allocation_ambiguous. It is NEVER healed by a fresh create.
  *   - REFUSAL_IS_OBSERVABLE: every refusal emits a structured log line before it throws
@@ -27,7 +29,7 @@
  *   one bounded serving probe per observe when asked)
  * Links: @ports/akash-tx.port, adapters/server/compute/akash-compute.adapter (SDL + provider
  *   screening stay there), adapters/server/compute/akash-tx-allocation-ledger.adapter,
- *   ./akash-tx-http, task.5095
+ *   ./akash-tx-wallet, ./akash-tx-http, task.5095
  * @internal
  */
 

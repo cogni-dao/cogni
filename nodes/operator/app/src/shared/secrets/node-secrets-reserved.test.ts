@@ -113,6 +113,7 @@ describe("off-cluster-workload secret boundary (gate 3, provenance-keyed)", () =
     "LITELLM_MASTER_KEY", // one key authenticates the whole fleet to the proxy
     "OPENROUTER_API_KEY",
     "AKASH_CONSOLE_API_KEY",
+    "AKASH_ACTUATOR_CONSOLE_API_KEY", // second dedicated wallet, same operator-owned class
     "CLOUDFLARE_API_TOKEN",
     "GH_REVIEW_APP_PRIVATE_KEY_BASE64",
     "GH_GRAFANA_PARENT_SA_TOKEN",

@@ -252,6 +252,14 @@ export const serverSchema = z.object({
   // account bills every Akash workload in USD (v0). Optional: unset → Akash provider absent
   // from the compute capability (graceful degradation, same contract as CHERRY_AUTH_TOKEN).
   AKASH_CONSOLE_API_KEY: optionalString,
+  // Akash Console API key for the private TRANSACTION ACTUATOR (task.5095) — a SECOND,
+  // dedicated Console account per environment, distinct from AKASH_CONSOLE_API_KEY above.
+  // ONE_WALLET_ONE_WRITER: the actuator's cursor-based recovery is only sound when exactly one
+  // process spends from the wallet it serializes in `akash_tx_allocations`, so it must not share
+  // the legacy ComputeWorkload controller's wallet. `resolveAkashTxWallet` refuses at wiring time
+  // if this is unset or byte-equal to AKASH_CONSOLE_API_KEY — there is deliberately no fallback.
+  // Optional: unset → the actuator simply cannot be wired (its state today; nothing constructs it).
+  AKASH_ACTUATOR_CONSOLE_API_KEY: optionalString,
   // Comma-separated Akash provider addresses whose egress IPs the substrate firewall
   // allowlists (harden-docker-public-ports.sh compute-egress-allowlist). The adapter holds
   // the bid window for these before falling back to the cheapest stranger.
