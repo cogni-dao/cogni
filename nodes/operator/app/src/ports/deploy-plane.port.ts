@@ -74,23 +74,60 @@ export interface NodePromoteResult {
   readonly workflowUrl: string;
 }
 
-export interface ReconcileNodeInfraInput {
-  /** Production only in v0; candidate has its dedicated pre-merge infra flight. */
-  readonly env: "production";
-  readonly parentOwner: string;
-  readonly parentRepo: string;
-  /** Node whose production-promoter grant authorized the shared infra operation. */
-  readonly slug: string;
-}
+export type ReconcileNodeInfraInput =
+  | {
+      /** Existing production full-infra replay; the caller cannot select its source. */
+      readonly env: "production";
+      readonly parentOwner: string;
+      readonly parentRepo: string;
+      /** Node whose production-promoter grant authorized the shared infra operation. */
+      readonly slug: string;
+    }
+  | {
+      /** Candidate control-plane desired-state selection; never dispatches a workflow. */
+      readonly env: "candidate-a";
+      readonly parentOwner: string;
+      readonly parentRepo: string;
+      /** Shared control-plane authority is scoped to the operator node. */
+      readonly slug: "operator";
+      /** Exact head SHA of an open, same-repo PR to main. */
+      readonly sourceSha: string;
+    };
 
-export interface NodeInfraReconcileResult {
-  readonly status: "dispatched";
-  readonly env: "production";
-  /** Existing deployed source pin reused so the infra reconcile cannot advance the app. */
-  readonly sourceSha: string;
-  readonly sourceAddressing: "remote_source" | "in_repo";
-  readonly workflowUrl: string;
-}
+export type NodeInfraReconcileResult =
+  | {
+      readonly status: "dispatched";
+      readonly env: "production";
+      /** Existing deployed source pin reused so the infra reconcile cannot advance the app. */
+      readonly sourceSha: string;
+      readonly sourceAddressing: "remote_source" | "in_repo";
+      readonly workflowUrl: string;
+    }
+  | {
+      readonly status: "updated" | "unchanged";
+      readonly env: "candidate-a";
+      readonly lane: "control_plane";
+      /** Reviewed PR head whose tree is selected as candidate control-plane desired state. */
+      readonly sourceSha: string;
+      /** Commit currently at the control-plane deploy ref (may be a synthetic lease commit). */
+      readonly deploySha: string;
+      readonly deployRef: "deploy/candidate-a-control-plane";
+      readonly refUrl: string;
+      readonly prNumber: number;
+      readonly prUrl: string;
+    }
+  | {
+      readonly status: "dispatched";
+      readonly env: "candidate-a";
+      readonly lane: "compose";
+      readonly sourceSha: string;
+      /** Native identity returned by GitHub's versioned workflow-dispatch API. */
+      readonly runId: number;
+      readonly runUrl: string;
+      readonly runApiUrl: string;
+      readonly prNumber: number;
+      readonly prUrl: string;
+    };
 
 export interface MirrorCanonicalFilesInput {
   /** Canonical source repo owner (the template), e.g. `Cogni-DAO`. */
@@ -388,11 +425,12 @@ export interface DeployPlanePort {
   promoteNode(input: PromoteNodeInput): Promise<NodePromoteResult>;
 
   /**
-   * Reconcile the existing production infra lane through the operator GitHub App while preserving
-   * the node's deployed app digest. The adapter resolves the current source pin from
-   * `deploy/production-<slug>`; callers cannot choose a workflow ref or smuggle a new app SHA.
-   * Authorization is enforced at the route before this method is called. Shared VM infra is
-   * operator-node scoped in v0.
+   * Existing deploy authority for shared infrastructure. Production replays the current app pin
+   * through the full-infra workflow. Candidate-a classifies a reviewed PR into exactly one lane:
+   * Compose/edge dispatches the existing candidate infra workflow, while control-plane changes
+   * select the dedicated `deploy/candidate-a-control-plane` GitOps ref. Both preserve app digests;
+   * callers cannot select a lane, repo, arbitrary ref, workflow, or mode. Authorization is enforced
+   * at the route before this method is called. Shared infra is operator-node scoped in v0.
    */
   reconcileNodeInfra(
     input: ReconcileNodeInfraInput

@@ -20,6 +20,7 @@ export const EVENT_NAMES = {
   NODE_ACCESS_REQUEST_COMPLETE: "feature.node_access_request.complete",
   NODE_SECRET_WRITE_COMPLETE: "feature.node_secret_write.complete",
   NODE_PREVIEW_PROMOTE_COMPLETE: "feature.node_preview_promote.complete",
+  DEPLOY_INFRA_RECONCILE_COMPLETE: "deploy.infra_reconcile.complete",
   NODE_SCHEDULES_SYNC_COMPLETE: "feature.node_schedules_sync.complete",
   NODE_DISTRIBUTION_ACTIVATION_COMPLETE:
     "feature.node_distribution_activation.complete",

@@ -3,17 +3,20 @@
 
 /**
  * Module: `@app/api/v1/deploy/infra-reconcile`
- * Purpose: RBAC-gated production reconcile of the existing shared edge/runtime infrastructure.
- * Scope: Operator node only; dispatches the existing promote-and-deploy workflow via the operator
- *   GitHub App while replaying the current production app source pin.
+ * Purpose: RBAC-gated shared-infrastructure control through the existing deploy verb.
+ * Scope: Operator node only. Production replays the existing full-infra workflow; candidate-a
+ *   classifies one exact reviewed PR as Compose/edge workflow or control-plane GitOps-ref work.
  * Invariants:
  *   - AUTHZ_BEFORE_SIDE_EFFECT: the temporary bootstrap action `node.promote_production` is
  *     checked before dispatch; story.5028 splits the dedicated infra permission after model boot.
  *   - PROMOTION_RUNS_AS_THE_OPERATOR: no caller GitHub credential crosses this route.
  *   - SHARED_INFRA_OPERATOR_ONLY: a node-scoped promoter cannot restart another node's shared VM.
- *   - INFRA_RECONCILE_PRESERVES_APP: caller supplies no SHA/ref; the adapter resolves prod state.
+ *   - INFRA_RECONCILE_PRESERVES_APP: production accepts no SHA/ref and resolves deployed state;
+ *     candidate-a changes only infra workflow/ref state, never the app source map.
+ *   - CANDIDATE_INFRA_IS_TYPED: candidate-a accepts only sourceSha; lane/repo/ref/workflow/mode
+ *     remain server-owned and the adapter validates the PR head plus a single affected-path class.
  *   - ENV_SCOPED_PARENT: the environment's App targets only its configured deployment parent.
- * Side-effects: IO (authz check, GitHub workflow dispatch)
+ * Side-effects: IO (authz check, GitHub workflow dispatch or Git ref update)
  * Links: story.5027, docs/spec/cicd-platform-boundary.md
  * @public
  */
@@ -30,14 +33,22 @@ import { getContainer, resolveServiceDb } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { nodes } from "@/shared/db/nodes";
 import { serverEnv } from "@/shared/env";
+import { EVENT_NAMES } from "@/shared/observability";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const infraReconcileInput = z.strictObject({
-  nodeId: z.string().min(1),
-  env: z.literal("production"),
-});
+const infraReconcileInput = z.discriminatedUnion("env", [
+  z.strictObject({
+    nodeId: z.string().min(1),
+    env: z.literal("production"),
+  }),
+  z.strictObject({
+    nodeId: z.string().min(1),
+    env: z.literal("candidate-a"),
+    sourceSha: z.string().regex(/^[0-9a-fA-F]{40}$/),
+  }),
+]);
 
 export const POST = wrapRouteHandlerWithLogging(
   {
@@ -59,7 +70,7 @@ export const POST = wrapRouteHandlerWithLogging(
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     }
 
-    const { nodeId, env } = parsed.data;
+    const { nodeId } = parsed.data;
     const db = resolveServiceDb();
     const nodeRows = await db
       .select({ id: nodes.id, slug: nodes.slug })
@@ -120,18 +131,53 @@ export const POST = wrapRouteHandlerWithLogging(
       );
     }
     try {
-      const result = await createOperatorDeployPlane(
-        envConfig
-      ).reconcileNodeInfra({
-        env,
-        parentOwner,
-        parentRepo,
-        slug: node.slug,
-      });
+      const deployPlane = createOperatorDeployPlane(envConfig);
+      const result =
+        parsed.data.env === "candidate-a"
+          ? await deployPlane.reconcileNodeInfra({
+              env: "candidate-a",
+              parentOwner,
+              parentRepo,
+              slug: "operator",
+              sourceSha: parsed.data.sourceSha,
+            })
+          : await deployPlane.reconcileNodeInfra({
+              env: "production",
+              parentOwner,
+              parentRepo,
+              slug: node.slug,
+            });
+      // This event is operator-local rather than part of @cogni/node-shared's
+      // cross-node registry, so emit it through the plain structured logger.
+      ctx.log.info(
+        {
+          event: EVENT_NAMES.DEPLOY_INFRA_RECONCILE_COMPLETE,
+          reqId: ctx.reqId,
+          routeId: ctx.routeId,
+          nodeId: node.id,
+          slug: node.slug,
+          env: result.env,
+          status: result.status,
+          sourceSha: result.sourceSha,
+          ...("lane" in result ? { lane: result.lane } : {}),
+          ...("runId" in result ? { runId: result.runId } : {}),
+          ...("deploySha" in result ? { deploySha: result.deploySha } : {}),
+        },
+        EVENT_NAMES.DEPLOY_INFRA_RECONCILE_COMPLETE
+      );
       return NextResponse.json(result, { status: 200 });
     } catch (error) {
       const message =
-        error instanceof Error ? error.message : "dispatch failed";
+        error instanceof Error ? error.message : "infra operation failed";
+      const deployError =
+        error &&
+        typeof error === "object" &&
+        "status" in error &&
+        typeof (error as { status?: unknown }).status === "number" &&
+        "code" in error &&
+        typeof (error as { code?: unknown }).code === "string"
+          ? (error as { status: number; code: string })
+          : null;
       ctx.log.warn(
         {
           reqId: ctx.reqId,
@@ -140,14 +186,14 @@ export const POST = wrapRouteHandlerWithLogging(
           slug: node.slug,
           parentOwner,
           parentRepo,
-          errorCode: "dispatch_failed",
+          errorCode: deployError?.code ?? "dispatch_failed",
           err: message,
         },
-        "deploy.infra_reconcile dispatch failed"
+        "deploy.infra_reconcile operation failed"
       );
       return NextResponse.json(
-        { error: "dispatch_failed", message },
-        { status: 502 }
+        { error: deployError?.code ?? "dispatch_failed", message },
+        { status: deployError?.status ?? 502 }
       );
     }
   }

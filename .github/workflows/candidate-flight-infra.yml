@@ -6,17 +6,17 @@ name: Candidate Flight — Infra
 # healthchecks. It does NOT promote any app digests and does NOT commit to
 # deploy/candidate-a — that's the job of candidate-flight.yml (the APP LEVER).
 #
-# Ref resolution (task.0345 / bug.0344 follow-up): both the scripts checkout
-# AND the rsync source ref resolve to the workflow's dispatch ref by default.
+# Ref resolution (task.0345 / bug.0344 follow-up; task.5100 hardening): both the
+# scripts checkout AND the rsync source resolve to the explicit input when present,
+# otherwise to the workflow dispatch SHA/ref.
 # The fallback lives at env-consumption (`inputs.ref || github.ref_name`)
 # rather than input.default because GitHub does not accept `${{ github.* }}`
 # in `workflow_dispatch.inputs.*.default` — it fails at dispatch-parse time.
 # Dispatch from main is a no-op vs. the original `ref: main` hardcode;
-# `gh workflow run candidate-flight-infra.yml --ref=<branch>` flows that
-# branch's scripts/ci/deploy-infra.sh AND infra/** onto the VM — enabling
-# pre-merge validation of the infra lever itself. An explicit
-# `-f ref=<other>` still overrides the rsync source only; the checkout still
-# tracks the dispatch ref.
+# The operator dispatches the trusted workflow from main with `inputs.ref` set
+# to an exact reviewed PR SHA. That immutable SHA supplies BOTH deploy-infra.sh
+# and infra/**, so a main dispatch cannot silently exercise main's script instead
+# of the reviewed script (the false proof from run 34722512025).
 #
 # The two levers are orthogonal: dispatch either without blocking the other.
 # See docs/spec/ci-cd.md "Argo owns reconciliation" axiom.
@@ -160,7 +160,9 @@ jobs:
       - name: Checkout (for scripts)
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:
-          ref: ${{ github.ref }}
+          # The operator passes an exact reviewed PR SHA; blank/manual dispatches retain the
+          # workflow event SHA. deploy-infra receives the same ref below for its detached worktree.
+          ref: ${{ inputs.ref || github.sha }}
           fetch-depth: 0
 
       - name: Setup SSH
