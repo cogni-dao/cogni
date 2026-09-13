@@ -29,6 +29,7 @@ import { buildNodeAppIdentityEnv } from "./node-workload-spec";
 
 const MAX_MUTATION_RETRIES = 3;
 const MAX_RECOVERY_ATTEMPTS = 3;
+const SCHEDULER_WORKER_HEALTH_PORT = 30900;
 
 export interface ComputeWorkloadReconcileDeps {
   readonly lifecycle: ComputeWorkloadLifecyclePort;
@@ -214,6 +215,7 @@ function sharedSubstrateEnv(
       TEMPORAL_TASK_QUEUE: "scheduler-tasks",
       REDIS_URL: `redis://${host}:6379`,
       LITELLM_BASE_URL: `http://${host}:4000`,
+      SCHEDULER_WORKER_HEALTH_URL: `http://${host}:${SCHEDULER_WORKER_HEALTH_PORT}`,
     };
   } catch {
     throw new ComputeLifecycleError(

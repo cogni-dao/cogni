@@ -1755,6 +1755,7 @@ describe("reconcileComputeWorkload", () => {
       APP_BASE_URL: "https://sample-node-test.cognidao.org",
       TEMPORAL_ADDRESS: "candidate.vm.example:7233",
       LITELLM_BASE_URL: "http://candidate.vm.example:4000",
+      SCHEDULER_WORKER_HEALTH_URL: "http://candidate.vm.example:30900",
     });
     expect(spec.services[1]?.env).not.toHaveProperty("NODE_NAME");
     expect(spec.services[1]?.expose).toEqual([
