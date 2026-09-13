@@ -1,0 +1,76 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# Dormant Crossplane v2 control-plane substrate for candidate-a. This installs
+# only the OSS engine. No XRD, Composition, XR, managed resource, provider
+# credential, or workload is present in this task, so the live ComputeWorkload
+# controller remains the sole deployment authority (story.5016 R2 / task.5094).
+#
+# Chart 2.4.0 archive checksum, verified 2026-09-12:
+# sha256:0900c2d1d01d22129abdedc3ad23621b66f87a87afb56649b95370d099ac70dd
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: crossplane-core
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://charts.crossplane.io/stable
+    chart: crossplane
+    targetRevision: 2.4.0
+    helm:
+      releaseName: crossplane
+      values: |
+        replicas: 1
+        revisionHistoryLimit: 2
+
+        image:
+          repository: xpkg.crossplane.io/crossplane/crossplane@sha256:c5d773aa940041475e2cf6b9adf3512cb382b1a6b889f53ed791192ed8ada75b
+          ignoreTag: true
+          pullPolicy: IfNotPresent
+
+        # Crossplane v2 otherwise activates every managed resource type from an
+        # installed provider. R2.1 keeps the provider package healthy but inert;
+        # the composition task will activate only its required type explicitly.
+        provider:
+          defaultActivations: []
+
+        metrics:
+          enabled: true
+
+        packageCache:
+          medium: Memory
+          sizeLimit: 64Mi
+        functionCache:
+          medium: Memory
+          sizeLimit: 128Mi
+
+        resourcesCrossplane:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 1Gi
+        resourcesRBACManager:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 200m
+            memory: 512Mi
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: crossplane-system
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
