@@ -94,7 +94,9 @@ describe("candidate-a manifest source", () => {
     ).run;
 
     expect(prepare).toBeTypeOf("string");
-    const snapshot = prepare?.indexOf("PRESERVED_IMAGE_REF=$(\n");
+    const snapshot = prepare?.indexOf(
+      'extract_overlay_image_ref candidate-a "$NODE"'
+    );
     const overlaySync = prepare?.indexOf(
       '"../app-src/infra/k8s/overlays/candidate-a/${NODE}/"'
     );
@@ -109,6 +111,11 @@ describe("candidate-a manifest source", () => {
     expect(commit).toBeGreaterThan(restore ?? -1);
     expect(prepare).toContain('[[ "$PRESERVED_IMAGE_REF" == *"@sha256:"* ]]');
     expect(prepare).toContain('--digest "$PRESERVED_IMAGE_REF"');
+    // bug.5139: the read is a single-target lib lookup, never the whole-fleet
+    // snapshot piped into a filter — an early-exiting consumer SIGPIPEs the
+    // producer, which runs `set -euo pipefail`, and the flight dies.
+    expect(prepare).toContain("scripts/ci/lib/overlay-digest.sh");
+    expect(prepare).not.toContain("snapshot-overlay-digests.sh");
   });
 
   it("reports commit status on the parent source SHA only when it owns that SHA", () => {
