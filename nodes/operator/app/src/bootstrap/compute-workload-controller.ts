@@ -36,8 +36,15 @@ import { reconcileComputeWorkload } from "@/features/compute/compute-workload-re
 
 // biome-ignore lint/style/noProcessEnv: dedicated process composition root validates its own minimal env
 const runtimeEnv = process.env;
+// Every controller line carries the image's build sha. The controller is a
+// SEPARATE Deployment from the node app, so a node's `/version.buildSha` says
+// nothing about which reconciler code is running — and without this binding
+// there was NO way to attribute fleet behaviour to a commit (story.5016
+// verification gap). `APP_BUILD_SHA` is already baked into this same image by
+// the Dockerfile's trailing metadata layer; empty means CI forgot the build arg.
 const log = pino({ level: runtimeEnv.LOG_LEVEL ?? "info" }).child({
   component: "compute-workload-controller",
+  buildSha: runtimeEnv.APP_BUILD_SHA ?? "unknown",
 });
 const namespace = runtimeEnv.POD_NAMESPACE;
 const environment = runtimeEnv.CONTROLLER_ENVIRONMENT;
@@ -394,6 +401,11 @@ async function reconcileAll(): Promise<void> {
                   log.error(observation, "compute_workload_migration_failed"),
                 recordMigrationHold: (observation) =>
                   log.warn(observation, "compute_workload_migration_hold"),
+                recordWalletAllocationBlocked: (observation) =>
+                  log.warn(
+                    observation,
+                    "compute_workload_wallet_allocation_blocked"
+                  ),
               },
               resource
             );
