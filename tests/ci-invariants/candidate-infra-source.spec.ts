@@ -6,8 +6,8 @@
  * Purpose: Pin immutable source provenance for operator-dispatched candidate infra flights.
  * Scope: Static assertions over candidate-flight-infra.yml; does not dispatch or deploy.
  * Invariants:
- *   - EXACT_REVIEWED_SOURCE: workflow scripts use the dispatch event SHA and deploy-infra receives
- *     the operator-validated immutable source SHA through the existing ref input.
+ *   - EXACT_REVIEWED_SOURCE: the operator-validated immutable source SHA pins both workflow scripts
+ *     and deploy-infra input; blank manual dispatches fall back to the workflow event SHA/ref.
  * Side-effects: IO (reads .github/workflows/candidate-flight-infra.yml)
  * Links: task.5100, docs/spec/ci-cd.md
  * @public
@@ -45,7 +45,7 @@ function namedStep(name: string): WorkflowStep {
 }
 
 describe("candidate infra source", () => {
-  it("pins workflow scripts to the dispatch event SHA", () => {
+  it("pins workflow scripts to the selected SHA or immutable event SHA", () => {
     expect(namedStep("Checkout (for scripts)").with?.ref).toBe(
       "${{ inputs.ref || github.sha }}"
     );

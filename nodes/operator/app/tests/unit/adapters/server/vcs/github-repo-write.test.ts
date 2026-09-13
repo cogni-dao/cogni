@@ -4048,8 +4048,9 @@ describe("GitHubRepoWriter.syncTemplateUpstreamToFork", () => {
       },
     };
 
-    const result =
-      await makeWriter().syncTemplateUpstreamToFork(upstreamInput());
+    const result = await makeWriter().syncTemplateUpstreamToFork(
+      upstreamInput()
+    );
     expect(result).toMatchObject({
       status: "pr_opened",
       prNumber: 5,
@@ -4139,8 +4140,9 @@ describe("GitHubRepoWriter.syncTemplateUpstreamToFork", () => {
         Promise.reject(statusError(422, "No commits between main and main")),
       "GET /repos/{owner}/{repo}/pulls": () => [],
     };
-    const result =
-      await makeWriter().syncTemplateUpstreamToFork(upstreamInput());
+    const result = await makeWriter().syncTemplateUpstreamToFork(
+      upstreamInput()
+    );
     expect(result).toEqual({ status: "up_to_date" });
     expect(requests.map((r) => r.route)).not.toContain(
       "POST /repos/{owner}/{repo}/git/commits"
