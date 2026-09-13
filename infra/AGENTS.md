@@ -21,6 +21,7 @@ Everything about how the system runs. Split by responsibility, not by tool.
 - [images/](images/): Infra-owned Docker image build contexts
 - [provision/](provision/): Substrate/bootstrap (OpenTofu, cloud-init)
 - [akash/](akash/): Akash pointer README — the SDL renderer SHIPPED as TypeScript (`nodes/operator/app/src/adapters/server/compute/akash-sdl.ts`, task.5044); node apps target Akash per ci-cd.md Axiom 23
+- [crossplane/](crossplane/): Pinned OSS reconciliation substrate installed through Argo; lifecycle APIs/compositions live here as they replace the bespoke compute controller (story.5016 R2)
 
 ## Boundaries
 
@@ -34,7 +35,7 @@ Everything about how the system runs. Split by responsibility, not by tool.
 
 ## Public Surface
 
-- **Exports:** Kustomize overlays (k8s/), Docker Compose stacks (compose/), Terraform modules (provision/)
+- **Exports:** Kustomize overlays (k8s/), Crossplane packages/compositions (crossplane/), Docker Compose stacks (compose/), Terraform modules (provision/)
 - **CLI:** `kubectl kustomize infra/k8s/overlays/{env}/{app}/`, `tofu plan` in `infra/provision/cherry/base/`
 
 ## Responsibilities
@@ -44,20 +45,22 @@ Everything about how the system runs. Split by responsibility, not by tool.
 
 ## Directory Responsibilities
 
-| Directory    | Answers                                 | Changes when...                      |
-| ------------ | --------------------------------------- | ------------------------------------ |
-| `catalog/`   | What apps/nodes exist?                  | A new node is added                  |
-| `k8s/`       | How do apps deploy to Kubernetes?       | Image digests or manifests change    |
-| `grafana/`   | What Grafana dashboards/alerts exist?   | Observability UI or alerting changes |
-| `compose/`   | What infra services run on the VM?      | Infrastructure config changes        |
-| `images/`    | How are infra-owned images built?       | LiteLLM/proxy code changes           |
-| `provision/` | How is the VM created and bootstrapped? | Cloud provider or bootstrap changes  |
-| `akash/`     | How do apps deploy to Akash?            | (Future — SDL renderer)              |
+| Directory     | Answers                                                            | Changes when...                                   |
+| ------------- | ------------------------------------------------------------------ | ------------------------------------------------- |
+| `catalog/`    | What apps/nodes exist?                                             | A new node is added                               |
+| `k8s/`        | How do apps deploy to Kubernetes?                                  | Image digests or manifests change                 |
+| `grafana/`    | What Grafana dashboards/alerts exist?                              | Observability UI or alerting changes              |
+| `compose/`    | What infra services run on the VM?                                 | Infrastructure config changes                     |
+| `images/`     | How are infra-owned images built?                                  | LiteLLM/proxy code changes                        |
+| `provision/`  | How is the VM created and bootstrapped?                            | Cloud provider or bootstrap changes               |
+| `akash/`      | How do apps deploy to Akash?                                       | (Future — SDL renderer)                           |
+| `crossplane/` | Which OSS reconciliation packages and workload APIs are installed? | Crossplane packages, XRDs, or Compositions change |
 
 ## Standards
 
 - `catalog/` is the SSoT for nodes (`CATALOG_IS_SSOT`, ci-cd.md axiom 16). Each `catalog/<name>.yaml` declares: `name`, `type` (node/service), `port`, `node_id` (uuid; node only), `dockerfile`, `image_tag_suffix`, `migrator_tag_suffix`, `path_prefix` (consumed by `scripts/ci/detect-affected.sh`), and `{candidate_a,preview,production}_branch`. Schema is `catalog/_schema.json` (validated on every PR by `check-jsonschema`). Do not add runtime container config, image digests, or non-GitOps wiring here.
 - `k8s/` and `akash/` are peer renderers. Both read from `catalog/`.
+- `crossplane/` owns OSS reconciliation machinery, not provider credentials or environment-specific desired-state instances.
 - `compose/` is for infra services intentionally kept off-cluster.
 - `images/` contains only Dockerfiles and build contexts, not runtime config.
 - `provision/` owns VM lifecycle. Runtime manifests go in renderers.

@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# provider-http is the generic managed-resource bridge for the future private
+# Akash actuator. Installing the package alone cannot call an endpoint: R2.1
+# creates neither a ProviderConfig nor a Request managed resource.
+apiVersion: pkg.crossplane.io/v1
+kind: Provider
+metadata:
+  name: provider-http
+spec:
+  package: xpkg.upbound.io/crossplane-contrib/provider-http:v1.0.15@sha256:53ff679013f4787fcb00c7d36fd4520340543f9ebd35bef581eed42c37d7c5b6
+  packagePullPolicy: IfNotPresent
+  revisionActivationPolicy: Automatic
+  revisionHistoryLimit: 1
+  runtimeConfigRef:
+    name: crossplane-dormant-runtime
