@@ -1,0 +1,194 @@
+// SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
+
+/**
+ * Module: `@ports/akash-tx.port`
+ * Purpose: The irreducible Akash transaction boundary as a typed logical contract —
+ *   observe/create/update/delete plus the two seams it needs (a Console transaction client
+ *   and a durable allocation ledger). This is the actuator's interface, NOT a controller:
+ *   no watches, timers, finalizers, retry policy, or reconciliation live behind it (task.5095).
+ * Scope: Interface + error-code definitions only. Generic reconciliation (retry, backoff,
+ *   readiness gating, deletion policy, composition) belongs to Crossplane and is deliberately
+ *   absent here.
+ * Invariants:
+ *   - KEY_IS_THE_IDEMPOTENCE_BOUNDARY: every mutation carries a caller-owned `cogniKey`;
+ *     replaying a key never mints a second paid lease.
+ *   - RECEIPT_BEFORE_TRANSACTION: the ledger's cursor is written before any Console POST, so a
+ *     lost response is recoverable from durable evidence alone.
+ *   - FAIL_CLOSED: an allocation that cannot be resolved to exactly one lease is reported as
+ *     unresolved/ambiguous and never healed by a fresh create.
+ *   - REFUSAL_IS_OBSERVABLE: every code here is a stable string safe for logs, Events and
+ *     Crossplane conditions — a refusal a caller cannot see is a bug (bug.5115 shape).
+ * Side-effects: none (types only)
+ * Links: features/compute/akash-tx/akash-tx-actuator.ts,
+ *   adapters/server/compute/akash-compute.adapter.ts, packages/db-schema compute.ts,
+ *   story.5016 R2.2, task.5095
+ * @public
+ */
+
+import type {
+  ProvisionOutput,
+  ProvisionSpec,
+  ProvisionState,
+} from "@cogni/ai-tools";
+
+/** Stable, redacted failure codes. Safe for HTTP bodies, logs, and XR conditions. */
+export type AkashTxErrorCode =
+  /** Another Cogni key holds the wallet-wide allocation slot; retry later. */
+  | "wallet_allocation_blocked"
+  /** A paid lease may exist for this key and could not be resolved. Never auto-create. */
+  | "allocation_unresolved"
+  /** More than one post-baseline allocation exists: deterministic adoption impossible. */
+  | "allocation_ambiguous"
+  /** Provider IO failed in a way that leaves the outcome unknown (mutating call). */
+  | "outcome_unknown"
+  /** Provider refused the request terminally (screening, rejected SDL, bad handle). */
+  | "provider_rejected"
+  /** Provider unreachable / timed out on a non-mutating call. */
+  | "provider_unavailable"
+  /** The referenced external resource does not exist at the provider. */
+  | "not_found"
+  /** Durable ledger unavailable — the actuator must refuse to spend without a receipt. */
+  | "ledger_unavailable"
+  /** Caller sent a structurally invalid request. */
+  | "invalid_request"
+  /** Caller is not authorized to reach the actuator. */
+  | "unauthorized";
+
+/** Every refusal the actuator can emit carries one of the codes above. */
+export class AkashTxError extends Error {
+  constructor(
+    public readonly code: AkashTxErrorCode,
+    message: string,
+    /** Owning key when the refusal names another allocation (blocked). */
+    public readonly ownerCogniKey?: string
+  ) {
+    super(message);
+    this.name = "AkashTxError";
+  }
+}
+
+/** Provider-opaque view of one Akash workload. `externalName` is the Crossplane handle. */
+export interface AkashTxResource {
+  readonly externalName: string;
+  readonly state: ProvisionState;
+  readonly endpoints: readonly string[];
+  readonly providerAccount?: string;
+}
+
+/** Result of a logical observe. `found: false` means "safe to create". */
+export interface AkashTxObservation {
+  readonly found: boolean;
+  readonly resource?: AkashTxResource;
+  /**
+   * Single bounded serving probe (exact source SHA + fixed `/readyz`) when the caller asked
+   * for one. Undefined means "not probed". Convergence polling is the caller's job.
+   */
+  readonly serving?: boolean;
+  /** True when the resource was adopted from a durable receipt after a lost response. */
+  readonly recovered?: boolean;
+}
+
+export interface AkashTxCreateResult extends AkashTxResource {
+  /** True when an existing durable allocation satisfied the call and nothing was spent. */
+  readonly replayed: boolean;
+  /** True when the handle came from post-response-loss recovery rather than a new POST. */
+  readonly recovered: boolean;
+}
+
+/**
+ * The private, typed logical contract. Each method is ONE bounded attempt; the caller
+ * (Crossplane) owns retry, backoff, and give-up policy.
+ */
+export interface AkashTxActuatorPort {
+  observe(input: {
+    cogniKey: string;
+    externalName?: string;
+    expectedSourceSha?: string;
+  }): Promise<AkashTxObservation>;
+  create(input: {
+    cogniKey: string;
+    environment: string;
+    spec: ProvisionSpec;
+  }): Promise<AkashTxCreateResult>;
+  update(input: {
+    cogniKey: string;
+    externalName: string;
+    environment: string;
+    spec: ProvisionSpec;
+  }): Promise<AkashTxResource>;
+  delete(input: { cogniKey: string; externalName: string }): Promise<void>;
+}
+
+/**
+ * The Console transaction client the actuator needs. Structurally satisfied by
+ * AkashComputeAdapter — SDL construction, provider screening, and bid/lease mechanics stay
+ * inside that adapter and never cross this seam.
+ */
+export interface AkashTxConsolePort {
+  /** Opaque pre-transaction high-water mark; the recovery scan's baseline. */
+  allocationCursor(): Promise<string>;
+  /** Create + screen + lease in one paid transaction. Returns when the lease exists. */
+  allocateAndLease(input: {
+    spec: ProvisionSpec;
+    onAllocated?: (leaseId: string) => Promise<void>;
+  }): Promise<{ leaseId: string; providerAccount: string }>;
+  /** Adopt the unique post-baseline allocation, or null when none exists. */
+  findAllocationSince(cursor: string): Promise<ProvisionOutput | null>;
+  status(input: { leaseId: string }): Promise<ProvisionOutput>;
+  /** In-place SDL replacement on a known handle. Returns once the provider accepted it. */
+  updateAllocated(input: {
+    resourceId: string;
+    spec: ProvisionSpec;
+  }): Promise<void>;
+  release(input: { leaseId: string }): Promise<void>;
+}
+
+export type AkashTxAllocationState =
+  | "preparing"
+  | "allocated"
+  | "released"
+  | "failed";
+
+export interface AkashTxAllocationRecord {
+  readonly cogniKey: string;
+  readonly state: AkashTxAllocationState;
+  readonly allocationCursor?: string;
+  readonly externalName?: string;
+  readonly providerAccount?: string;
+}
+
+/**
+ * Durable custody of "we may have paid". Deliberately independent of any Kubernetes object:
+ * a deleted XR must never be able to orphan the evidence, and a slot must be resolvable by
+ * whoever holds the key rather than only by the process that opened it.
+ */
+export interface AkashTxAllocationLedgerPort {
+  /** Take the wallet-wide slot for this key, or report the current holder. */
+  claim(input: {
+    cogniKey: string;
+    workload: string;
+    environment: string;
+  }): Promise<
+    | { state: "claimed"; record: AkashTxAllocationRecord }
+    | { state: "owned"; record: AkashTxAllocationRecord }
+    | { state: "settled"; record: AkashTxAllocationRecord }
+    | { state: "blocked"; ownerCogniKey: string }
+  >;
+  /**
+   * Persist the pre-POST baseline. MUST reject when the key does not own a `preparing` slot —
+   * a resumed zombie with no slot must never proceed to spend.
+   */
+  prepare(input: { cogniKey: string; allocationCursor: string }): Promise<void>;
+  /** Record the paid handle and release the wallet slot. Idempotent. */
+  recordAllocation(input: {
+    cogniKey: string;
+    externalName: string;
+    providerAccount?: string;
+  }): Promise<void>;
+  /** Terminal settle with NO resource. Legal only when no allocation can exist. */
+  fail(input: { cogniKey: string; failureCode: string }): Promise<void>;
+  /** Mark a previously allocated key as released after a provider delete. */
+  markReleased(input: { cogniKey: string }): Promise<void>;
+  read(input: { cogniKey: string }): Promise<AkashTxAllocationRecord | null>;
+}

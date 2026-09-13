@@ -906,3 +906,94 @@ describe("AkashComputeAdapter failure containment", () => {
     expect(msg).not.toContain("supersecret");
   });
 });
+
+describe("AkashComputeAdapter transaction boundary (task.5095)", () => {
+  it("allocates, publishes the handle before leasing, and returns without waiting for boot", async () => {
+    const h = harness({
+      providers: [providerEntry("akash1zen")],
+      bids: (dseq) => [bidEntry(dseq, "akash1zen", "100")],
+    });
+    const published: string[] = [];
+
+    const result = await makeAdapter(h.fetchImpl, {
+      // A boot SLO long enough to hang the test if the transaction path waited for it.
+      bootSloMs: 600_000,
+    }).allocateAndLease({
+      spec: SPEC,
+      onAllocated: async (leaseId) => {
+        // The handle must be durable BEFORE the lease call: an unrecorded dseq is a
+        // deployment nobody can find again.
+        expect(h.leased).toEqual([]);
+        published.push(leaseId);
+      },
+    });
+
+    expect(published).toEqual(["1"]);
+    expect(result).toEqual({ leaseId: "1", providerAccount: "akash1zen" });
+    expect(h.leased).toEqual([{ dseq: "1", provider: "akash1zen" }]);
+    // No /version or /readyz probe happened: convergence is the caller's problem.
+    const probed = h.fetchImpl.mock.calls.some((call) =>
+      String(call[0]).includes("/version")
+    );
+    expect(probed).toBe(false);
+  });
+
+  it("screens providers on the transaction path and closes the deployment when none qualify", async () => {
+    const h = harness({
+      providers: [providerEntry("akash1froggy", { isAudited: false })],
+      bids: (dseq) => [bidEntry(dseq, "akash1froggy", "50")],
+    });
+
+    const error = await makeAdapter(h.fetchImpl)
+      .allocateAndLease({ spec: SPEC })
+      .catch((e: unknown) => e);
+
+    expect((error as AkashComputeError).code).toBe("NO_ELIGIBLE_BIDS");
+    expect(h.deletes).toEqual([`${BASE}/v1/deployments/1`]);
+  });
+
+  it("closes the deployment when the caller cannot persist the allocated handle", async () => {
+    const h = harness({
+      providers: [providerEntry("akash1zen")],
+      bids: (dseq) => [bidEntry(dseq, "akash1zen", "100")],
+    });
+
+    const error = await makeAdapter(h.fetchImpl)
+      .allocateAndLease({
+        spec: SPEC,
+        onAllocated: async () => {
+          throw new Error("ledger down");
+        },
+      })
+      .catch((e: unknown) => e);
+
+    expect((error as AkashComputeError).code).toBe("UNEXPECTED_SHAPE");
+    expect(h.deletes).toEqual([`${BASE}/v1/deployments/1`]);
+    expect(h.leased).toEqual([]);
+  });
+
+  it("updates an allocated handle in place without waiting for boot", async () => {
+    const puts: string[] = [];
+    const fetchImpl = vi.fn<typeof fetch>(async (url, init) => {
+      const u = String(url);
+      if (u === `${BASE}/v1/deployments/42` && init?.method === "PUT") {
+        puts.push(
+          String(
+            (JSON.parse(String(init.body)) as { data: { sdl: string } }).data
+              .sdl
+          )
+        );
+        return jsonResponse({ data: {} });
+      }
+      throw new Error(`unhandled ${init?.method} ${u}`);
+    });
+
+    await makeAdapter(fetchImpl, { bootSloMs: 600_000 }).updateAllocated({
+      resourceId: "42",
+      spec: SPEC,
+    });
+
+    expect(puts).toHaveLength(1);
+    expect(puts[0]).toContain("ghcr.io/cogni-dao/toks4:sha-abc");
+  });
+});
