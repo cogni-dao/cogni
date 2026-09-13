@@ -1,46 +1,56 @@
 # SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-# SPDX-FileCopyrightText: 2026 Cogni-DAO
+# SPDX-FileCopyrightText: 2025 Cogni-DAO
 #
-# Argo CD Application — cogni-candidate-a-control-plane (the candidate-a ROOT app-of-apps).
+# Argo CD Application — cogni-candidate-a-control-plane (the APPLY-ONCE SEED for the
+# candidate-a ROOT app-of-apps). Byte-equivalent, once parsed, to the self-managing copy at
+# infra/k8s/argocd/control-plane/candidate-a/candidate-a-control-plane-application.yaml.
 #
-# Continuously reconciles infra/k8s/argocd/control-plane/candidate-a/ — the directory
-# holding THIS env's per-node-AppSet app-of-apps (cogni-candidate-a-appsets). This is the
-# recursive completion of the keystone (story.5020): the keystone made Argo own the AppSet
-# layer (appsets/<env>/); this makes Argo own the LAYER THAT REGISTERS those app-of-apps.
+# Continuously reconciles infra/k8s/argocd/control-plane/candidate-a/ — the directory holding
+# THIS env's per-node-AppSet app-of-apps (cogni-candidate-a-appsets) AND the self-managing
+# copy of this very Application. This is the recursive completion of the keystone
+# (story.5020): the keystone made Argo own the AppSet layer (appsets/<env>/); this makes Argo
+# own the LAYER THAT REGISTERS those app-of-apps, and then own ITSELF.
+#
+# Bootstrap ordering (why the same object is written twice):
+#   1. provision applies THIS file once, out-of-band (kubectl). Nothing else applies it, ever.
+#   2. Argo syncs the directory it points at and finds the self-managing copy — an Application
+#      with the same name/namespace as the live one — and ADOPTS it.
+#   3. From then on the root is self-managed. Editing the self copy (source path, syncPolicy,
+#      tracked ref) reaches the cluster on the next sync; no re-provision, no second apply.
+#   The seed therefore stays frozen: it exists to survive a cold cluster, not to be edited.
 #
 # Why this exists (the apply-once control-plane gap it closes):
 #   The per-env app-of-apps (cogni-<env>-appsets) used to be applied ONCE at provision
-#   (bootstrap-k3s.yaml / provision-env-vm.sh) and never reconciled again. So merging a
-#   change to that layer — a new app-of-apps, a tweaked source path — did NOT reach a live
-#   cluster until a full re-provision (proven 2026-06-30: the keystone merged to main but
-#   only went live on candidate-a via a manual kubectl apply; preview/production never
-#   activated). With prune+selfHeal on this root, Argo owns the app-of-apps layer: a merged
-#   change to control-plane/<env>/ reaches the cluster on the next sync, no re-provision.
-#
-# THE SEED IS THE ONLY APPLY-ONCE SURFACE. provision applies THIS one tiny, stable
-# Application; from then on everything below it (the app-of-apps, and any future per-env
-# control-plane app) is continuously reconciled. The apply-once surface shrinks from "the
-# whole control-plane layer (changes often)" to "one seed (essentially never changes)".
+#   (bootstrap-k3s.yaml / provision-env-vm.sh) and never reconciled again. Merging a change to
+#   that layer did NOT reach a live cluster until a full re-provision. With prune+selfHeal on
+#   this root, a merged change to control-plane/<env>/ reaches the cluster on the next sync.
 #
 # Why PER-ENV (the foreign-env fan-out it prevents):
-#   Exactly the keystone's reasoning, one layer up. The shared bootstrap kustomization lists
-#   ALL THREE app-of-apps; a single root sourced from a shared dir would fan every env's
-#   app-of-apps (and thus every env's AppSets/pods) onto whichever cluster ran it. By scoping
-#   this root's source path to control-plane/candidate-a/, it owns ONLY candidate-a's
-#   app-of-apps and can never fan a foreign env onto the candidate-a cluster. provision
-#   applies ONLY the matching cogni-${DEPLOY_ENV}-control-plane seed.
+#   The shared bootstrap kustomization lists ALL THREE app-of-apps; a single root sourced from
+#   a shared dir would fan every env's app-of-apps (and thus every env's AppSets/pods) onto
+#   whichever cluster ran it. Scoping this root's source path to control-plane/candidate-a/
+#   means it owns ONLY candidate-a's app-of-apps. provision applies ONLY the matching
+#   cogni-${DEPLOY_ENV}-control-plane seed.
 #
-# Scope: this root owns ONLY the app-of-apps under control-plane/candidate-a/. It NEVER
-#   manages Argo's own install (install.yaml / ksops / repo-server + cm patches) — those stay
-#   in the bootstrap kustomization, applied out-of-band (self-management hazard). The
+# Why targetRevision is deploy/candidate-a-control-plane (NOT main):
+#   candidate-a must be able to run a REVIEWED-but-UNMERGED control-plane shape. The production
+#   operator fast-forwards that ref to the exact reviewed head via
+#   POST /api/v1/deploy/infra-reconcile; Argo tracks the ref, never a branch it cannot flight.
+#
+# Scope: this root owns ONLY the app-of-apps under control-plane/candidate-a/ (plus itself). It
+#   NEVER manages Argo's own install (install.yaml / ksops / repo-server + cm patches) — those
+#   stay in the bootstrap kustomization, applied out-of-band (self-management hazard). The
 #   ${FORK_REPO}-templated substrate apps (openbao / external-secrets / reloader) are
 #   deliberately NOT included: their repoURL is shell-substituted at provision time and Argo
 #   cannot do that substitution, so they remain apply-once until that templating is solved.
 #
 # directory.recurse: false — apply only the manifests directly in control-plane/candidate-a/,
-#   never descend. repoURL is the LITERAL upstream (the bootstrap apply path does NO envsubst,
-#   matching the app-of-apps it seeds). targetRevision: main — shared source, zero per-env
-#   templating.
+#   never descend. repoURL is the LITERAL upstream (the bootstrap apply path does NO envsubst).
+#
+# KEEP THE OBJECT BELOW IDENTICAL TO THE SELF-MANAGING COPY. Drift makes Argo fight its own
+# seed. tests/ci-invariants/candidate-control-plane-self-management.spec.ts pins the
+# equivalence; the operator deploy route re-validates both files against a Zod strictObject
+# (422 candidate_control_plane_self_object_invalid).
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -52,7 +62,7 @@ spec:
   project: default
   source:
     repoURL: https://github.com/cogni-dao/cogni.git
-    targetRevision: main
+    targetRevision: deploy/candidate-a-control-plane
     path: infra/k8s/argocd/control-plane/candidate-a
     directory:
       recurse: false

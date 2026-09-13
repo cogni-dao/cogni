@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2025 Cogni-DAO
+#
+# Argo CD Application — cogni-candidate-a-control-plane (the SELF-MANAGING copy of the
+# candidate-a ROOT app-of-apps). Byte-equivalent, once parsed, to the apply-once seed at
+# infra/k8s/argocd/control-plane/roots/candidate-a-control-plane-application.yaml.
+#
+# Why the SAME object exists in TWO places (the adoption handshake):
+#   The seed under roots/ is applied ONCE at provision (out-of-band, by kubectl). It points
+#   Argo at THIS directory — control-plane/candidate-a/ — and this file makes the root a
+#   member of the directory it reconciles. On the first sync Argo reads this object, sees
+#   it already owns a live Application of the same name/namespace, and ADOPTS it. From that
+#   moment the root is self-managed: an edit to this file (source path, syncPolicy, even the
+#   ref it tracks) reaches the cluster on the next sync, with no re-provision and no second
+#   kubectl apply. The apply-once surface shrinks to zero for everything below provision.
+#
+#   The two files MUST therefore parse to the SAME object. If they drift, Argo's self-sync
+#   would fight the seed (OutOfSync forever, or a selfHeal flap). tests/ci-invariants/
+#   candidate-control-plane-self-management.spec.ts pins that equivalence statically, and
+#   the operator deploy route re-validates BOTH files against a Zod strictObject before it
+#   will move the deploy ref (422 candidate_control_plane_self_object_invalid otherwise).
+#
+# Why targetRevision is deploy/candidate-a-control-plane (NOT main):
+#   The candidate-a control plane must be able to run a REVIEWED-but-UNMERGED shape. The
+#   production operator fast-forwards the deploy/candidate-a-control-plane ref to the exact
+#   reviewed head via POST /api/v1/deploy/infra-reconcile; Argo then tracks that ref. main
+#   would make candidate-a un-flightable for control-plane changes — the whole point of a
+#   candidate env is to prove the change BEFORE it is on main.
+#
+# directory.recurse: false — own only the manifests directly in control-plane/candidate-a/,
+#   never descend. repoURL is the LITERAL upstream: the bootstrap apply path does NO envsubst,
+#   so this cannot use ${FORK_REPO}.
+#
+# Scope: this root owns ONLY the app-of-apps under control-plane/candidate-a/ (plus itself).
+#   It NEVER manages Argo's own install (install.yaml / ksops / repo-server + cm patches) —
+#   those stay in the bootstrap kustomization, applied out-of-band.
+#
+# KEEP THE OBJECT BELOW IDENTICAL TO THE SEED. The schema is a strictObject: any extra,
+# missing, or re-valued key (labels, annotations, revisionHistoryLimit, a second finalizer,
+# a second syncOption) fails the gate. Comments are free — they do not survive parsing.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cogni-candidate-a-control-plane
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/cogni-dao/cogni.git
+    targetRevision: deploy/candidate-a-control-plane
+    path: infra/k8s/argocd/control-plane/candidate-a
+    directory:
+      recurse: false
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true
