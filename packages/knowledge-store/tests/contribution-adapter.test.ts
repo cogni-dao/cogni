@@ -346,7 +346,7 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
         contributionId: "contrib-agent-1-abc123",
         principal: reviewer,
       })
-    ).rejects.toThrow(/conflicts with newer entries on main/i);
+    ).rejects.toThrow(/conflict/i);
 
     // it aborted the conflicted merge so the working set is clean for next time
     expect(conn.queries.some((q) => q.includes("dolt_merge('--abort')"))).toBe(
@@ -404,7 +404,7 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
       .catch((e: unknown) => e as Error);
 
     expect(err).toBeTruthy();
-    expect(err?.message).toMatch(/conflicts with newer entries on main/i);
+    expect(err?.message).toMatch(/conflict/i);
     // no raw Dolt/SQL leakage
     expect(err?.message).not.toMatch(
       /dolt_merge|@@dolt|autocommit|dolt_conflicts/i

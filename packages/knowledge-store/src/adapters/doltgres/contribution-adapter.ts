@@ -213,8 +213,8 @@ function normalizeOptionalDoltCommitRef(value: unknown): string | null {
 // @@dolt_allow_commit_conflicts). The remediation for a conflicted contribution
 // is a fresh branch cut from current main, phrased for a human.
 const MERGE_CONFLICT_MESSAGE =
-  "It conflicts with newer entries on main. Ask the author to redo it from the latest main.";
-const MERGE_FAILED_MESSAGE = "Something went wrong. Try again in a moment.";
+  "This contribution conflicts with newer entries already on main.";
+const MERGE_FAILED_MESSAGE = "This contribution couldn't be merged.";
 
 async function withReserved<T>(
   sql: Sql,

@@ -56,13 +56,7 @@ import {
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
 
-import {
-  Alert,
-  AlertDescription,
-  AlertTitle,
-  Button,
-  Input,
-} from "@/components";
+import { Button, Input } from "@/components";
 
 import { closeContribution } from "./_api/closeContribution";
 import { fetchContributions } from "./_api/fetchContributions";
@@ -142,28 +136,30 @@ export function KnowledgeDashboardView() {
 
   const openCount = contributionsQuery.data?.contributions.length ?? 0;
 
-  // A failed merge/close throws in the fetch helper; without surfacing it the
-  // button just flips back with zero feedback and the contribution stays open
-  // (bug.5120). Mirror the permalink page: clear on retry, render on error.
-  const [actionError, setActionError] = useState<string | null>(null);
+  // A failed merge used to be swallowed — the button flipped back with zero
+  // feedback and the contribution stayed open (bug.5120). Surface it INLINE on
+  // the failed row (which id + why), not as a detached page banner, so the
+  // reviewer can hand a fix off to the authoring AI agent right there.
+  const [mergeError, setMergeError] = useState<{
+    id: string;
+    reason: string;
+  } | null>(null);
 
   const mergeMutation = useMutation({
     mutationFn: (id: string) => mergeContribution(id),
-    onMutate: () => setActionError(null),
+    onMutate: () => setMergeError(null),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["knowledge"] });
     },
-    onError: (error) => setActionError(errorMessage(error)),
+    onError: (error, id) => setMergeError({ id, reason: errorMessage(error) }),
   });
 
   const closeMutation = useMutation({
     mutationFn: (vars: { id: string; reason: string }) =>
       closeContribution(vars.id, vars.reason),
-    onMutate: () => setActionError(null),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["knowledge"] });
     },
-    onError: (error) => setActionError(errorMessage(error)),
   });
 
   const [addDomainOpen, setAddDomainOpen] = useState(false);
@@ -259,17 +255,13 @@ export function KnowledgeDashboardView() {
           onAddDomain={() => setAddDomainOpen(true)}
         />
       )}
-      {mode === "inbox" && actionError && (
-        <Alert variant="destructive">
-          <AlertTitle>Couldn't merge</AlertTitle>
-          <AlertDescription>{actionError}</AlertDescription>
-        </Alert>
-      )}
       {mode === "inbox" && (
         <InboxPanel
           rows={contributionsQuery.data?.contributions ?? []}
           isLoading={contributionsQuery.isLoading}
           error={contributionsQuery.error}
+          mergeErrorId={mergeError?.id ?? null}
+          mergeErrorReason={mergeError?.reason ?? null}
           busyId={
             mergeMutation.isPending ? (mergeMutation.variables ?? null) : null
           }
@@ -451,6 +443,8 @@ function InboxPanel({
   error,
   busyId,
   rejectBusyId,
+  mergeErrorId,
+  mergeErrorReason,
   onMerge,
   onReject,
 }: {
@@ -459,6 +453,8 @@ function InboxPanel({
   readonly error: unknown;
   readonly busyId: string | null;
   readonly rejectBusyId: string | null;
+  readonly mergeErrorId: string | null;
+  readonly mergeErrorReason: string | null;
   readonly onMerge: (row: ContributionRecord) => void;
   readonly onReject: (id: string, reason: string) => void;
 }) {
@@ -476,8 +472,10 @@ function InboxPanel({
         onMerge,
         onReject: (r) => setSelected(r),
         busyId,
+        mergeErrorId,
+        mergeErrorReason,
       }),
-    [onMerge, busyId]
+    [onMerge, busyId, mergeErrorId, mergeErrorReason]
   );
 
   const table = useReactTable({
