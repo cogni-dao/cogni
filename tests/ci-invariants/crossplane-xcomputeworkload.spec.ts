@@ -220,7 +220,7 @@ describe("XComputeWorkload Composition (task.5096)", () => {
     // @contracts/compute.akash-tx.v1 accepts EXACTLY {cogniKey, environment, spec}; the spec
     // is `{name, services[]}`. An extra key is a 400 forever, never a partially-honoured call.
     expect(template).toContain(
-      '$payload := dict "cogniKey" $cogniKey "environment" $env "spec" (dict "name" $slug "services" $services)'
+      '$payload := dict "cogniKey" $cogniKey "environment" $env "spec" (dict "name" $slug "services" $services) "migration" $migration'
     );
     // The four bounded ops map 1:1 onto provider-http's four actions — no Cogni code decides
     // WHEN to act.
@@ -311,6 +311,101 @@ describe("XComputeWorkload Composition (task.5096)", () => {
     expect(template).toContain('$_ := set $e "COGNI_NODE_ID" $spec.nodeId');
     // Exactly-one-public-service exposure.
     expect(template).toContain('$public := eq $svc.visibility "public"');
+  });
+});
+
+describe("XComputeWorkload migration precondition (bug.5116 order, bug.5140 gate)", () => {
+  it("states its precondition on every mutation, and only on mutations", () => {
+    // AkashTxCreateInputSchema and AkashTxUpdateInputSchema BOTH require `migration`. An update
+    // mints no lease, but it is still the call that puts a new bundle digest in front of the
+    // node's database — which is exactly what bug.5116 ordered.
+    expect(template).toContain('"migration" $migration');
+    // Scope to the LEASE request: the composition also renders a Cloudflare Request whose
+    // mappings share the same action names, and a regex over the whole template would silently
+    // assert against DNS instead of the thing that spends money.
+    const leaseBlock = template.slice(
+      template.indexOf("composition-resource-name: akash-lease"),
+      template.indexOf("composition-resource-name: dns-record")
+    );
+    expect(leaseBlock.length).toBeGreaterThan(0);
+    const mappings = Object.fromEntries(
+      [
+        ...leaseBlock.matchAll(
+          /- action: (\w+)\n([\s\S]*?)(?=\n\s+- action: |\n\s+expectedResponseCheck:)/g
+        ),
+      ].map((m) => [m[1], m[2]])
+    );
+    expect(Object.keys(mappings).sort()).toEqual([
+      "CREATE",
+      "OBSERVE",
+      "REMOVE",
+      "UPDATE",
+    ]);
+    // CREATE posts the payload verbatim; UPDATE is hand-built and must carry it explicitly.
+    expect(mappings.CREATE).toContain(".payload.body");
+    expect(mappings.UPDATE).toContain("migration: .payload.body.migration");
+    // Observe and delete are strict objects with NO migration field — sending one is a 400.
+    expect(mappings.OBSERVE).not.toContain("migration");
+    expect(mappings.REMOVE).not.toContain("migration");
+  });
+
+  it("builds both branches of the discriminated union, and nothing in between", () => {
+    // `Skip` is the DEFAULT accumulator, so the only way to reach the expensive branch is to
+    // satisfy its condition — a template bug fails toward the gate, never past it.
+    expect(template).toContain('{{- $migration := dict "policy" "Skip" }}');
+    // Reached when the workload declares Skip, OR has no cogni-node-app-v1 service (no app
+    // image accumulated) and therefore no database.
+    expect(template).toContain(
+      '{{- if and (eq $migrationPolicy "RequireBeforeTransaction") (ne $appImage "") }}'
+    );
+    // RequireBeforeTransaction structurally cannot travel without the facts that prove it.
+    expect(template).toContain(
+      '$migration = dict "policy" "RequireBeforeTransaction" "profile" "cogni-node-app-v1" "bundleDigest" $bundleDigest "image" $appImage "doltgres" $appDoltgres'
+    );
+  });
+
+  it("lowers each fact from the one place that owns it", () => {
+    // bundleDigest is the digest of the BUNDLE; image is the app SERVICE's artifact. They are
+    // different fields and are routinely different digests — conflating them would migrate the
+    // wrong image.
+    expect(template).toContain(
+      '$bundleDigest := regexFind "sha256:[0-9a-f]{64}$" $spec.bundle.ref'
+    );
+    expect(template).toContain(
+      "{{- if $isApp }}{{ $appImage = $image }}{{ end }}"
+    );
+    expect(template).toContain(
+      '{{- if and $isApp (eq .key "DOLTGRES_URL") }}{{ $appDoltgres = true }}{{ end }}'
+    );
+    // A ref with no digest fails the render rather than sending a request the gate will 400.
+    expect(template).toContain(
+      "has no sha256 digest to prove a migration against"
+    );
+  });
+
+  it("never puts a migration command on the wire", () => {
+    // `profile` NAMES a command set the actuator owns. A caller-supplied command would let any
+    // caller "prove" a migration with a no-op, which makes an enforcing gate advisory.
+    const unionLiterals = [
+      ...templateCode.matchAll(/\$migration\s*(?::?=)\s*dict ([^}]*)/g),
+    ].map((m) => m[1]);
+    expect(unionLiterals.length).toBe(2);
+    for (const literal of unionLiterals) {
+      const keys = [...literal.matchAll(/"([a-zA-Z]+)"/g)].map((m) => m[1]);
+      for (const key of keys) {
+        expect([
+          "policy",
+          "Skip",
+          "RequireBeforeTransaction",
+          "profile",
+          "cogni-node-app-v1",
+          "bundleDigest",
+          "image",
+          "doltgres",
+        ]).toContain(key);
+      }
+      expect(literal).not.toMatch(/command|args|phases|script/);
+    }
   });
 });
 

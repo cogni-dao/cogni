@@ -273,9 +273,12 @@ spec:
                     behaviour, bug.5116) means a completed per-digest DB migration is a
                     PRECONDITION of every paid transaction, so a fresh node's schemas exist
                     before its lease does. `Skip` is for workloads with no database at all.
-                    ENFORCEMENT IS NOT YET WIRED — see the Composition's MIGRATION GATE block and
-                    infra/crossplane/AGENTS.md; the field is carried so desired state states its
-                    own precondition and so the gate lands without an API change.
+                    ENFORCED at the paid-transaction seam (bug.5140): the Composition lowers this
+                    into the actuator's required `migration` discriminated union, and a
+                    `RequireBeforeTransaction` create or update is REFUSED until the Job for
+                    spec.bundle.ref has succeeded. The migration COMMANDS never travel — the
+                    runtime profile names a command set the actuator owns, so no caller can
+                    "prove" a migration with a no-op.
                   type: object
                   properties:
                     policy:
