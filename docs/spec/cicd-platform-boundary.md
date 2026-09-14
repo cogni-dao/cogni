@@ -299,7 +299,7 @@ responsibilities along one line: _generic lifecycle machinery is bought, the Aka
 
 The actuator is a **service, not a controller**: a private ClusterIP HTTP surface with four typed logical
 operations (`observe` / `create` / `update` / `delete`), each one bounded attempt, and no watch, timer,
-finalizer, retry loop, or leader election. Its four irreducible behaviours are:
+finalizer, retry loop, or leader election. Its irreducible behaviours are:
 
 1. **Wallet-global serialization** — at most one `preparing` allocation per wallet scope, enforced by a
    partial unique index in Postgres (`akash_tx_allocations`), held only for the unrecoverable window
@@ -326,8 +326,20 @@ finalizer, retry loop, or leader election. Its four irreducible behaviours are:
    at the actuator needs no new controller, no new reconciliation loop, and no new package: Crossplane keeps
    owning requeue and backoff, and a refusal is just another bounded answer it retries.
 
+6. **Node-bound spend receipts** — the same receipt that survives a lost response also says WHO consumed
+   the infrastructure (task.5103). `node_id`, `environment`, the composite `uid`/`generation` and the
+   `cogniKey` are NOT NULL columns written by the INSERT that opens the wallet slot, so a paid lease that
+   nothing can attribute is unreachable rather than merely discouraged. Identity arrives **explicitly** on
+   the wire (`identity` is required on `create` and `update`; omitting it is a 400) and is never derived:
+   `cogniKey` is an idempotence token, the workload slug is renameable, and the Console credential says who
+   PAID, not who CONSUMED. Those are separate facts — `node_id` (consumption, the sole cost-grouping key),
+   `wallet_scope` (custody), and the `billing_account_id` / `dao_address` / `user_id` a Cogni-sponsored v0
+   deliberately does not carry. A key whose receipt binds a different node or environment is a terminal
+   `identity_conflict` (422), never a re-binding.
+
 Refusals are observable by construction: every refusal emits a structured log marker
 (`akash_tx_wallet_allocation_blocked`, `akash_tx_allocation_unresolved`, `akash_tx_allocation_recovered`,
+`akash_tx_identity_conflict`, `akash_tx_receipt_absent`,
 `akash_tx_migration_pending`, `akash_tx_migration_failed`, `akash_tx_migration_unavailable`,
 `akash_tx_migration_capability_missing`, and even the `akash_tx_migration_skipped` bypass)
 _before_ it answers. Writing a refusal only into CR status is what made a fleet-wide wallet deadlock

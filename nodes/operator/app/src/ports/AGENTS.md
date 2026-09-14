@@ -58,7 +58,7 @@ Does NOT re-export packages with `node:` transitive dependencies.
 - IdentityAttestationRepositoryPort, IdentityAttestationSignerPort
 - TreasurySettlementPort, TreasurySettlementOutcome
 - DeployPlanePort, including operator App-backed app promotion and the operator-only production infra reconcile contract
-- AkashTxActuatorPort + AkashTxConsolePort + AkashTxAllocationLedgerPort + AkashTxError (private Akash transaction boundary: one bounded attempt per call, key-idempotent, fail-closed on an unresolved allocation — task.5095)
+- AkashTxActuatorPort + AkashTxConsolePort + AkashTxAllocationLedgerPort + AkashTxWorkloadIdentity + AkashTxError (private Akash transaction boundary: one bounded attempt per call, key-idempotent, fail-closed on an unresolved allocation — task.5095; every mutating call states an explicit `AkashTxWorkloadIdentity` that is durable in the receipt before the provider is contacted, and a key bound to another node is an `identity_conflict` — task.5103)
 - AkashTxMigrationRequirement + AkashTxMigrationPort (MIGRATION_BEFORE_TRANSACTION: every mutating actuator call states its migration precondition, and `RequireBeforeTransaction` is proven succeeded before anything is spent — bug.5116 ordering, bug.5140 enforcement)
 - Types (ChargeReceiptParams, LlmCaller, BillingAccount, CreditLedgerEntry, etc.)
 
