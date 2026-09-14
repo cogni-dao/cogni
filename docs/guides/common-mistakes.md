@@ -73,12 +73,39 @@ gh api -X PATCH repos/cogni-dao/cogni/code-scanning/alerts/<N> \
 
 So a first attempt that fails on length, followed by a retry without the comment, leaves a **dismissed alert with no recorded justification** — an artifact that reads as handled with the reasoning invisible. That is the same silently-handled shape this whole section is about, so check the alert with a fresh `GET` afterwards rather than trusting the write response.
 
-That is how every prior instance of `js/insufficient-password-hash` in this repo was resolved (alerts #3, #7, #15, #30 on `accountId.ts`). The inline marker is still worth writing — it puts the reason next to the code so a reader does not have to open the Security tab — but **treat it as a comment, never as a gate-clearing mechanism.**
+Dismissal is how every prior instance of `js/insufficient-password-hash` in this repo was resolved (alerts #3, #7, #15, #30 on `accountId.ts`) — **all dismissed, none suppressed by a comment.** The inline marker is still worth writing, because it puts the reason next to the code so a reader does not have to open the Security tab. But **treat it as a comment, never as a gate-clearing mechanism.**
 
 Two things that follow:
 
 - **A red CodeQL check on your PR is a decision, not a formatting bug.** Dismissing an alert is a security judgement: write the justification down (docblock + PR comment), and only dismiss when the rule's threat model genuinely does not apply. `js/insufficient-password-hash`, for instance, targets _password storage_ — it does not bind on a truncated version tag over a high-entropy API key that never authenticates anything.
 - **CodeQL only fails the check on alerts NEW to your PR.** A pre-existing alert elsewhere in the repo does not block you, which is why an old file can carry the same pattern with no red check — and why you should not conclude from that file that its inline comment is what is holding the line.
+
+### `gh pr checks --watch` exiting 0 is not proof that CI is green
+
+`--watch` only tracks the check set it knew about **when it started**. CodeQL re-queues as a _fresh_ check-run on every push, so the watcher reports "done, exit 0" while `Analyze (javascript-typescript)` is still pending and the `CodeQL` conclusion has not landed. Seen twice on PR #2224.
+
+Two ways to get a false green, both easy to write:
+
+- **Piping it.** `gh pr checks <PR> --watch --fail-fast | tail -20; echo EXIT=$?` reports **`tail`'s** exit status, which is always 0. (`false | tail` → `$?=0`.) Never pipe `--watch`.
+- **Trusting the exit code at all**, for the re-queue reason above.
+
+**Poll the rollup instead** — it reflects the current check set, not a snapshot:
+
+```bash
+gh pr view <PR> --json statusCheckRollup \
+  -q '[.statusCheckRollup[] | select(.conclusion=="FAILURE")] | length'   # 0 = no failures
+gh pr view <PR> --json statusCheckRollup \
+  -q '[.statusCheckRollup[] | select(.status!="COMPLETED" and .state==null)] | length'  # 0 = nothing pending
+```
+
+For one specific gate, read its check-run directly:
+
+```bash
+gh api repos/cogni-dao/cogni/commits/<sha>/check-runs \
+  --jq '[.check_runs[]|select(.name|test("CodeQL"))]|.[0]|"\(.status) \(.conclusion)"'
+```
+
+Whatever you use, **re-read the ground truth before reporting a verdict** — "finished" is not "green".
 
 ## Documentation Mistakes
 
