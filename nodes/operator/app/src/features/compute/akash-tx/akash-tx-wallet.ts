@@ -226,19 +226,27 @@ const FINGERPRINT_LENGTH = 12;
  *
  * ON `js/insufficient-password-hash` (CodeQL flags the `createHash` below): that rule targets
  * PASSWORD STORAGE, where a fast hash is wrong because passwords are low-entropy and a stolen
- * digest can be brute-forced offline into the original. None of that applies here, on three
- * independent counts: the input is a vendor-minted high-entropy API key rather than a
- * human-chosen password; the output is deliberately TRUNCATED to 48 bits, so it has enormous
- * numbers of preimages and cannot identify any single input even in principle; and it is never
- * used to authenticate or verify anything — only to answer "is this the same credential as
- * before?". A slow KDF would add boot latency and a tuning parameter while making the value no
- * less disclosive. Same call and same justification as
+ * digest can be brute-forced offline back into the original.
+ *
+ * The load-bearing refutation is TRUNCATION. 48 bits of output over an effectively unbounded
+ * input space means astronomically many preimages, so this value cannot identify its input even
+ * given unlimited compute — the rule's attack does not merely become expensive, it stops being
+ * defined. Two supporting facts: the input is a vendor-minted high-entropy API key rather than a
+ * human-chosen password, and the digest never authenticates or verifies anything — it answers
+ * only "is this the same credential as before?". A slow KDF would add boot latency and a tuning
+ * parameter while leaving the value exactly as disclosive. Same call and same justification as
  * `packages/node-shared/src/util/accountId.ts`.
  *
- * The alternative designs are worse, which is why this one stands: reading the KV version from
- * the projected Secret's metadata would require giving this pod a ServiceAccount and Secret-read
- * RBAC it deliberately does not have, and logging a substring of the key would be actual partial
- * disclosure instead of none.
+ * WHY NOT READ THE REAL VERSION INSTEAD. The honest alternative is to read the KV version from
+ * the projected Secret's metadata rather than hash anything — and it is rejected because it
+ * would require giving this pod SECRET-READ RBAC. That is the property to protect: the actuator
+ * receives its credentials by PROJECTION (ESO -> volume), never by reading the Kubernetes API,
+ * so a compromised actuator cannot enumerate the Secrets of `cogni-<env>`. Granting it Secret
+ * reads would hand it the same broad blast radius that moving this wallet out of
+ * `cogni/<env>/operator` existed to close. (State it that way and not as "the actuator has no
+ * ServiceAccount": task.5143 gives it a ServiceAccount plus a Role over `jobs`/`pods` so the
+ * migration prover can create and watch Jobs. Having SOME RBAC is fine; having Secret-read RBAC
+ * is not.) Logging a substring of the key would be actual partial disclosure instead of none.
  */
 export function credentialFingerprint(value: string): string {
   if (value === "") return "absent";
