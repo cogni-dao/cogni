@@ -70,6 +70,7 @@ export {
   type AkashTxMigrationRequirement,
   type AkashTxObservation,
   type AkashTxResource,
+  type AkashTxWorkloadIdentity,
 } from "./akash-tx.port";
 export type {
   AttributionEpoch,

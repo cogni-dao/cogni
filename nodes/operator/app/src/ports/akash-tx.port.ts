@@ -15,6 +15,9 @@
  *     replaying a key never mints a second paid lease.
  *   - RECEIPT_BEFORE_TRANSACTION: the ledger's cursor is written before any Console POST, so a
  *     lost response is recoverable from durable evidence alone.
+ *   - IDENTITY_BEFORE_TRANSACTION: every mutating call carries an explicit
+ *     `AkashTxWorkloadIdentity`, and that identity is durable in the SAME receipt before the
+ *     Console is contacted. Identity is never inferred from the key, the slug, or the wallet.
  *   - FAIL_CLOSED: an allocation that cannot be resolved to exactly one lease is reported as
  *     unresolved/ambiguous and never healed by a fresh create.
  *   - MIGRATION_BEFORE_TRANSACTION: every mutating call carries an explicit migration
@@ -24,8 +27,8 @@
  *     Crossplane conditions — a refusal a caller cannot see is a bug (bug.5115 shape).
  * Side-effects: none (types only)
  * Links: features/compute/akash-tx/akash-tx-actuator.ts,
- *   adapters/server/compute/akash-compute.adapter.ts, packages/db-schema compute.ts,
- *   story.5016 R2.2, task.5095
+ *   adapters/server/compute/akash-compute.adapter.ts, @shared/db/akash-tx-allocations,
+ *   story.5016 R2.2, task.5095, task.5103
  * @public
  */
 
@@ -36,6 +39,26 @@ import type {
 } from "@cogni/ai-tools";
 
 import type { ComputeWorkloadMigrationPort } from "./compute-workload-migration.port";
+
+/**
+ * WHICH NODE consumed the infrastructure, stated explicitly by the caller. Never derived.
+ *
+ * Identity is a first-class input rather than something the actuator parses, because every
+ * derivable source is wrong: `cogniKey` is an idempotence token whose composition is the
+ * caller's business, the workload slug is renameable, and the Console credential says who PAID
+ * (custody), not who CONSUMED. These are five distinct facts and none may substitute for
+ * another — `nodeId` (consumption, the cost-grouping key), `walletScope` (custody), and the
+ * future `billingAccountId` / `daoAddress` / `actorId`, which v0 deliberately does not carry
+ * because Cogni sponsors every node.
+ */
+export interface AkashTxWorkloadIdentity {
+  /** Immutable repo-spec node UUID. The sole cost-grouping key. */
+  readonly nodeId: string;
+  /** `metadata.uid` of the composite requesting the mutation. Opaque; bound write-once. */
+  readonly compositeUid: string;
+  /** `metadata.generation` of that composite. Advances; it is a revision, not an owner. */
+  readonly compositeGeneration: number;
+}
 
 /** Stable, redacted failure codes. Safe for HTTP bodies, logs, and XR conditions. */
 export type AkashTxErrorCode =
@@ -64,7 +87,13 @@ export type AkashTxErrorCode =
   /** Caller sent a structurally invalid request. */
   | "invalid_request"
   /** Caller is not authorized to reach the actuator. */
-  | "unauthorized";
+  | "unauthorized"
+  /**
+   * The durable receipt for this key binds a DIFFERENT node/environment, or no receipt binds
+   * it at all. Terminal for this desired state: retrying cannot change who paid for what, and
+   * spending on under it would silently mis-attribute cost.
+   */
+  | "identity_conflict";
 
 /** Every refusal the actuator can emit carries one of the codes above. */
 export class AkashTxError extends Error {
@@ -154,6 +183,7 @@ export interface AkashTxActuatorPort {
   create(input: {
     cogniKey: string;
     environment: string;
+    identity: AkashTxWorkloadIdentity;
     spec: ProvisionSpec;
     migration: AkashTxMigrationRequirement;
   }): Promise<AkashTxCreateResult>;
@@ -161,6 +191,7 @@ export interface AkashTxActuatorPort {
     cogniKey: string;
     externalName: string;
     environment: string;
+    identity: AkashTxWorkloadIdentity;
     spec: ProvisionSpec;
     migration: AkashTxMigrationRequirement;
   }): Promise<AkashTxResource>;
@@ -199,6 +230,9 @@ export type AkashTxAllocationState =
 
 export interface AkashTxAllocationRecord {
   readonly cogniKey: string;
+  /** The identity this receipt is bound to. NOT NULL in the table: it always exists. */
+  readonly identity: AkashTxWorkloadIdentity;
+  readonly environment: string;
   readonly state: AkashTxAllocationState;
   readonly allocationCursor?: string;
   readonly externalName?: string;
@@ -211,16 +245,41 @@ export interface AkashTxAllocationRecord {
  * whoever holds the key rather than only by the process that opened it.
  */
 export interface AkashTxAllocationLedgerPort {
-  /** Take the wallet-wide slot for this key, or report the current holder. */
+  /**
+   * Take the wallet-wide slot for this key, or report the current holder.
+   *
+   * The INSERT that opens the slot is the receipt, and it carries the identity — so the
+   * receipt binding node, environment, composite UID and generation to the key is durable
+   * before the caller has even read an allocation cursor, let alone posted a transaction.
+   */
   claim(input: {
     cogniKey: string;
     workload: string;
     environment: string;
+    identity: AkashTxWorkloadIdentity;
   }): Promise<
     | { state: "claimed"; record: AkashTxAllocationRecord }
     | { state: "owned"; record: AkashTxAllocationRecord }
     | { state: "settled"; record: AkashTxAllocationRecord }
     | { state: "blocked"; ownerCogniKey: string }
+  >;
+  /**
+   * Bind an EXISTING receipt to the identity of the mutation about to be sent, and advance the
+   * observed composite generation monotonically. This is the non-create path onto the SAME
+   * receipt row — an in-place SDL replacement mints no handle, but it still puts a new revision
+   * in front of a paid resource, so it must be attributable before the provider is contacted.
+   *
+   * Reports rather than decides: `absent` (no receipt binds this key) and `conflict` (the
+   * receipt belongs to another node or environment) are both refusals the ACTUATOR raises.
+   */
+  bindIdentity(input: {
+    cogniKey: string;
+    environment: string;
+    identity: AkashTxWorkloadIdentity;
+  }): Promise<
+    | { state: "bound"; record: AkashTxAllocationRecord }
+    | { state: "absent" }
+    | { state: "conflict"; record: AkashTxAllocationRecord }
   >;
   /**
    * Persist the pre-POST baseline. MUST reject when the key does not own a `preparing` slot —

@@ -37,9 +37,16 @@ const MIGRATION = {
   doltgres: false,
 };
 
+const IDENTITY = {
+  nodeId: "2f8b7a10-4c6e-4a7b-9d31-1c2e3f4a5b60",
+  compositeUid: "8e5d4c3b-2a19-4f08-b7c6-5d4e3f2a1b09",
+  compositeGeneration: 3,
+};
+
 const VALID_CREATE = {
   cogniKey: "candidate-a/toks9/1",
   environment: "candidate-a",
+  identity: IDENTITY,
   migration: MIGRATION,
   spec: {
     name: "toks9",
@@ -377,5 +384,68 @@ describe("akash-tx server binding", () => {
       body: JSON.stringify(VALID_CREATE),
     });
     expect(denied.status).toBe(401);
+  });
+});
+
+describe("akash-tx identity on the wire (task.5103)", () => {
+  it("400s a create that will not name the consuming node", async () => {
+    let created = 0;
+    const dispatch = dispatcherFor(
+      stubActuator({
+        create: async () => {
+          created += 1;
+          throw new Error("unreachable");
+        },
+      })
+    );
+    const { identity: _omitted, ...anonymous } = VALID_CREATE;
+
+    const response = await dispatch({
+      method: "POST",
+      path: "/v1/akash/create",
+      authorization: AUTH,
+      body: JSON.stringify(anonymous),
+    });
+
+    expect(response.status).toBe(400);
+    // The refusal happens at the wire; the wallet writer is never reached.
+    expect(created).toBe(0);
+  });
+
+  it("400s an identity whose nodeId is not a uuid", async () => {
+    const dispatch = dispatcherFor(stubActuator());
+    const response = await dispatch({
+      method: "POST",
+      path: "/v1/akash/create",
+      authorization: AUTH,
+      body: JSON.stringify({
+        ...VALID_CREATE,
+        identity: { ...IDENTITY, nodeId: "toks9" },
+      }),
+    });
+    expect(response.status).toBe(400);
+  });
+
+  it("maps an identity conflict to a terminal 422, never a retryable 409", async () => {
+    const dispatch = dispatcherFor(
+      stubActuator({
+        create: async () => {
+          throw new AkashTxError(
+            "identity_conflict",
+            "this cogniKey is bound to a different node"
+          );
+        },
+      })
+    );
+
+    const response = await dispatch({
+      method: "POST",
+      path: "/v1/akash/create",
+      authorization: AUTH,
+      body: JSON.stringify(VALID_CREATE),
+    });
+
+    expect(response.status).toBe(422);
+    expect(response.body).toMatchObject({ code: "identity_conflict" });
   });
 });

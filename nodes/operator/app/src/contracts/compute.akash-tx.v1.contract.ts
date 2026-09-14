@@ -17,8 +17,14 @@
  *     update. A caller that does not state its migration precondition gets a 400 — it can
  *     never accidentally inherit an ungated paid lease (bug.5140). `Skip` is the one explicit,
  *     auditable bypass, and it has to be written down.
+ *   - IDENTITY_IS_REQUIRED_ON_EVERY_MUTATION: `identity` is a REQUIRED field on create and
+ *     update. A caller that will not say WHICH NODE consumes the infrastructure gets a 400 —
+ *     it can never accidentally buy an unattributable lease (task.5103). Identity is stated,
+ *     never derived: the actuator does not parse `cogniKey`, does not read the workload slug,
+ *     and does not infer a node from the Console credential.
  * Side-effects: none (schemas only)
- * Links: src/features/compute/akash-tx/akash-tx-http.ts, @ports/akash-tx.port, task.5095
+ * Links: src/features/compute/akash-tx/akash-tx-http.ts, @ports/akash-tx.port, task.5095,
+ *   task.5103
  * @public
  */
 
@@ -88,6 +94,30 @@ const CogniKeySchema = z
   .max(253)
   .regex(/^[A-Za-z0-9._:/-]+$/, "cogniKey must be url-safe");
 
+/**
+ * WHO CONSUMED the infrastructure, as the Composition must state it. Mirrors XComputeWorkload's
+ * `spec.nodeId` (itself `format: uuid` and immutable) plus the composite's own `metadata.uid`
+ * and `metadata.generation`.
+ *
+ * `nodeId` is a strict UUID because it is the cost-grouping key and the receipt column is
+ * `uuid` — a malformed value must be a 400 at the wire, not a database error mid-transaction.
+ * `compositeUid` is deliberately opaque and only length/charset-bounded: the actuator binds
+ * it, it does not interpret Kubernetes internals.
+ *
+ * NOT here, and deliberately: wallet scope (custody — the actuator resolves its own wallet and
+ * a caller must never be able to name one), billing account, DAO address, and user/actor. v0 is
+ * operator-sponsored; those four are separate facts and none substitutes for `nodeId`.
+ */
+export const AkashTxIdentitySchema = z.strictObject({
+  nodeId: z.string().uuid(),
+  compositeUid: z
+    .string()
+    .min(1)
+    .max(128)
+    .regex(/^[A-Za-z0-9._:-]+$/, "compositeUid must be url-safe"),
+  compositeGeneration: z.number().int().positive(),
+});
+
 const ExternalNameSchema = z.string().min(1).max(128);
 const EnvironmentSchema = z.string().min(1).max(64);
 const SourceShaSchema = z
@@ -103,6 +133,7 @@ export const AkashTxObserveInputSchema = z.strictObject({
 export const AkashTxCreateInputSchema = z.strictObject({
   cogniKey: CogniKeySchema,
   environment: EnvironmentSchema,
+  identity: AkashTxIdentitySchema,
   spec: AkashTxSpecSchema,
   migration: AkashTxMigrationSchema,
 });
@@ -111,11 +142,15 @@ export const AkashTxCreateInputSchema = z.strictObject({
  * An update replaces the SDL in place — it mints no lease — but it is still the call that puts
  * a NEW bundle digest in front of the node's database, which is exactly what bug.5116 ordered.
  * The legacy gate ran before every provider mutation, so this one carries the requirement too.
+ * An update replaces the SDL in place and mints no lease, but it is still a mutation of a PAID
+ * resource — so it states its identity too, and the actuator refuses it when the durable
+ * receipt for the key binds a different node.
  */
 export const AkashTxUpdateInputSchema = z.strictObject({
   cogniKey: CogniKeySchema,
   externalName: ExternalNameSchema,
   environment: EnvironmentSchema,
+  identity: AkashTxIdentitySchema,
   spec: AkashTxSpecSchema,
   migration: AkashTxMigrationSchema,
 });
@@ -151,6 +186,7 @@ export const AkashTxErrorOutputSchema = z.strictObject({
 });
 
 export type AkashTxMigration = z.infer<typeof AkashTxMigrationSchema>;
+export type AkashTxIdentity = z.infer<typeof AkashTxIdentitySchema>;
 export type AkashTxObserveInput = z.infer<typeof AkashTxObserveInputSchema>;
 export type AkashTxCreateInput = z.infer<typeof AkashTxCreateInputSchema>;
 export type AkashTxUpdateInput = z.infer<typeof AkashTxUpdateInputSchema>;
