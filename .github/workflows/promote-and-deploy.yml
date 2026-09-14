@@ -469,6 +469,7 @@ jobs:
           domain: ${{ vars.DOMAIN }}
           ghcr_username: ${{ secrets.GHCR_DEPLOY_USERNAME || github.actor }}
           ghcr_token: ${{ secrets.GHCR_DEPLOY_TOKEN || github.token }}
+          dns_zone_id: ${{ secrets.CLOUDFLARE_ZONE_ID }}
 
       - name: Prepare per-node deploy branch (bootstrap from umbrella if missing)
         if: steps.digest.outputs.promoted == 'true'

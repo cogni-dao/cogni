@@ -44,6 +44,7 @@ export {
   appsetsKustomizationPath,
   buildEnvDeltaPlan,
   buildPlacementPlan,
+  CANONICAL_DOMAIN_ROOT,
   CATALOG_PATH,
   type EnvDeltaResult,
   type EnvPlanCurrent,

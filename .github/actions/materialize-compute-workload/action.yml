@@ -18,6 +18,12 @@ inputs:
   domain: { required: true, description: "Environment domain" }
   ghcr_username: { required: true, description: "GHCR reader username" }
   ghcr_token: { required: true, description: "GHCR reader token" }
+  dns_zone_id:
+    {
+      required: false,
+      default: "",
+      description: "Public Cloudflare zone id (NOT a credential). Carried into the XComputeWorkload's declarative DNS intent; ignored by the legacy ComputeWorkload authority, which resolves its own zone in-cluster. Empty is supported: the composite still publishes the CNAME target it would write.",
+    }
 
 runs:
   using: composite
@@ -72,8 +78,12 @@ runs:
         DOMAIN: ${{ inputs.domain }}
         COMPUTE_OVERLAY: ${{ runner.temp }}/compute-workload-overlay
         COGNI_CATALOG_ROOT: infra/catalog
+        DNS_ZONE_ID: ${{ inputs.dns_zone_id }}
       run: |
         set -euo pipefail
+        # Value passthrough only — WHICH authority renders, and whether DNS intent is carried
+        # at all, are decided by the typed materializer from the catalog row. Nothing here
+        # branches on a node (cicd-platform-boundary.md freeze).
         pnpm --filter operator materialize:compute-workload \
           --catalog "${APP_SOURCE_ROOT}/infra/catalog/${NODE}.yaml" \
           --environment "$DEPLOYMENT_ENVIRONMENT" \
@@ -81,6 +91,7 @@ runs:
           --bundle-repository "$BUNDLE_REPOSITORY" \
           --source-sha "$SOURCE_SHA" \
           --domain "$DOMAIN" \
+          ${DNS_ZONE_ID:+--dns-zone-id "$DNS_ZONE_ID"} \
           --output-dir "$COMPUTE_OVERLAY"
         rsync -a --delete \
           "${COMPUTE_OVERLAY}/" \

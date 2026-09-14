@@ -172,6 +172,7 @@ const mockTx = {
 };
 
 import { POST } from "@/app/api/v1/nodes/[id]/publish/route";
+import { NODE_FORMATION_ENVS } from "@/shared/node-app-scaffold/gens";
 
 const defaultNode = {
   id: "11111111-1111-4111-8111-111111111111",
@@ -399,8 +400,10 @@ describe("POST /api/v1/nodes/[id]/publish", () => {
         childRepoHeadSha: "identity-commit",
         parentPrNumber: 1532,
         secretTargetName: "atlas-env-secrets",
-        externalSecretEnvs: ["candidate-a"],
-        overlayEnvs: ["candidate-a"],
+        // Birth shape follows NODE_FORMATION_ENVS (story.5025): the transient candidate-a
+        // proof slot plus canonical production, and never preview.
+        externalSecretEnvs: [...NODE_FORMATION_ENVS],
+        overlayEnvs: [...NODE_FORMATION_ENVS],
       }),
       "feature.node_publish.secret_shape_generated"
     );
