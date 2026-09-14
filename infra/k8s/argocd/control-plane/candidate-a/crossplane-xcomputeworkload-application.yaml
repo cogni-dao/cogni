@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2025 Cogni-DAO
+#
+# The AUTHORITY HANDOFF (story.5020 gate, task.5096). task.5094's substrate was healthy and
+# dormant; this Application is the object that makes Crossplane able to act at all:
+#
+#   ManagedResourceActivationPolicy  starts a controller for exactly one managed type
+#   ClusterProviderConfig            gives provider-http a config to reference (with NO credential)
+#   CompositeResourceDefinition      publishes compute.cogni.io/v1alpha1 XComputeWorkload
+#   Composition                      maps one XComputeWorkload to Akash transactions
+#
+# It still installs ZERO desired state. No XComputeWorkload is committed anywhere under
+# infra/crossplane/, so after this syncs the cluster can reconcile a paid workload but has none.
+# The first XR arrives from an environment overlay on a deploy branch (task.5097's materializer).
+#
+# targetRevision is deploy/candidate-a-control-plane, NOT main — the same reason the root app
+# tracks it: a control-plane change has to be provable on candidate-a BEFORE it is merged.
+# `prune: false` matches the sibling Crossplane Applications: a deleted manifest must never
+# silently remove an API other resources are reconciled against, and for a paid workload the
+# consequence of an accidental prune is a closed lease.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: crossplane-xcomputeworkload
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/cogni-dao/cogni.git
+    targetRevision: deploy/candidate-a-control-plane
+    path: infra/crossplane/xcomputeworkload
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: crossplane-system
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+      - SkipDryRunOnMissingResource=true
