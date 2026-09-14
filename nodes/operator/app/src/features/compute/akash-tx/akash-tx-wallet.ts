@@ -4,36 +4,44 @@
 /**
  * Module: `@features/compute/akash-tx/akash-tx-wallet`
  * Purpose: The construction-time gate that makes ONE_WALLET_ONE_WRITER structurally true —
- *   resolves the actuator's DEDICATED per-environment Akash Console credential and its ledger
- *   wallet scope, and refuses to hand back anything that could serialize two writers against
- *   one wallet (task.5095).
+ *   resolves the actuator's Akash Console credential plus the NON-SECRET account identity it is
+ *   authorized to spend from, and refuses to hand back anything that could serialize two writers
+ *   against one wallet (task.5095, amended by story.5016).
  * Scope: Pure resolution + refusal over explicitly passed values. Reads no process env, opens no
- *   socket, and starts nothing on import — the caller supplies `serverEnv()` fields at wiring
- *   time (which no code does yet; the actuator is unwired in this PR).
+ *   socket, and starts nothing on import — the caller supplies the projected credential and the
+ *   pinned account id at wiring time, and separately feeds it the Console's own account read.
  * Invariants:
- *   - DEDICATED_CREDENTIAL_OR_NOTHING: `AKASH_ACTUATOR_CONSOLE_API_KEY` is REQUIRED and never
- *     falls back to the legacy controller's `AKASH_CONSOLE_API_KEY`. Omission cannot silently
- *     point the actuator at the wallet the ComputeWorkload controller is already spending from.
- *   - DISTINCT_FROM_LEGACY_WRITER: if the two credentials are byte-equal, resolution FAILS. One
- *     Console wallet with two independent writers makes cursor recovery unsound — the actuator
- *     would adopt a lease the legacy controller paid for.
- *   - SCOPE_IS_PER_ENVIRONMENT: the ledger scope is `akash-console:<environment>` and the
- *     credential is declared per environment in the secrets catalog, so each env's wallet is
- *     serialized by exactly one env's Postgres. Per-env Postgres over ONE shared wallet is the
- *     unsound shape this exists to prevent.
+ *   - THE_ACTUATOR_HOLDS_EXACTLY_ONE_WALLET: there is no input for the legacy ComputeWorkload
+ *     controller's `AKASH_CONSOLE_API_KEY`. It is not projected into the pod and cannot be
+ *     compared, because possessing both credentials is the opposite of isolating them. The
+ *     legacy writer is separated by REVOCATION (story.5016: disable the old writers, revoke its
+ *     key, mint a fresh one on the SAME account), not by a byte comparison at boot.
+ *   - WALLET_IDENTITY_IS_PINNED_AND_ASSERTED: `AKASH_ACTUATOR_ACCOUNT_ID` is REQUIRED, is public
+ *     on-chain data carried as PLAIN CONFIG (never a secret, never an OpenBao key), and
+ *     `assertActuatorWalletAccount` fails closed unless the live Console account set contains it.
+ *     A rotated-to-the-wrong-account credential is caught before the socket opens.
+ *   - DEDICATED_CREDENTIAL_OR_NOTHING: `AKASH_ACTUATOR_CONSOLE_API_KEY` is REQUIRED and has no
+ *     fallback of any kind. Omission cannot silently point the actuator at another wallet.
+ *   - SCOPE_IS_PER_ENVIRONMENT: the ledger scope is `akash-console:<environment>`, so each env's
+ *     wallet is serialized by exactly one env's Postgres. Per-env Postgres over ONE shared wallet
+ *     is the unsound shape this exists to prevent — hence v0 seeds candidate-a ONLY.
  *   - SCOPE_IS_ROTATION_STABLE: the scope is derived from the environment, never from the secret
  *     value, so rotating the credential cannot orphan in-flight allocation receipts.
- *   - NEVER_LOGS_OR_RETURNS_THE_VALUE_IN_AN_ERROR: refusals carry a stable code only.
+ *   - NEVER_LOGS_OR_RETURNS_THE_VALUE_IN_AN_ERROR: refusals carry a stable code and, at most, the
+ *     NON-SECRET account ids. The API key never appears in a message.
  * Side-effects: none
  * Links: @shared/db/akash-tx-allocations, ./akash-tx-actuator,
- *   infra/secrets-catalog.yaml (AKASH_ACTUATOR_CONSOLE_API_KEY), task.5095
+ *   infra/secrets-catalog.yaml (service: akash-tx-actuator),
+ *   infra/k8s/base/akash-tx-actuator/deployment.yaml, task.5095, story.5016
  * @internal
  */
 
 /** Stable refusal reasons. Config failures surface at wiring time, never as a request status. */
 export type AkashTxWalletConfigErrorCode =
   | "actuator_credential_missing"
-  | "actuator_credential_shared_with_legacy_writer"
+  | "actuator_account_id_missing"
+  | "actuator_account_unverifiable"
+  | "actuator_account_mismatch"
   | "environment_missing";
 
 /**
@@ -51,19 +59,29 @@ export class AkashTxWalletConfigError extends Error {
 }
 
 export interface AkashTxWalletInput {
-  /** Deployment environment (`serverEnv().DEPLOY_ENVIRONMENT`). One wallet per environment. */
+  /** Deployment environment (`DEPLOY_ENVIRONMENT`). One wallet per environment. */
   readonly environment?: string | undefined;
-  /** `AKASH_ACTUATOR_CONSOLE_API_KEY` — the actuator's OWN Console account. */
+  /** `AKASH_ACTUATOR_CONSOLE_API_KEY` — the credential of the one active writer. */
   readonly actuatorApiKey?: string | undefined;
-  /** `AKASH_CONSOLE_API_KEY` — the legacy ComputeWorkload controller's wallet. Compared, never used. */
-  readonly legacyControllerApiKey?: string | undefined;
+  /**
+   * `AKASH_ACTUATOR_ACCOUNT_ID` — the PUBLIC Akash account/wallet address this actuator is
+   * authorized to spend from. Plain config from the Deployment env, NOT a secret.
+   */
+  readonly expectedAccountId?: string | undefined;
 }
 
 export interface AkashTxWalletIdentity {
   /** Ledger serialization domain written to `akash_tx_allocations.wallet_scope`. */
   readonly walletScope: string;
-  /** The dedicated actuator credential, proven distinct from the legacy writer's. */
+  /** The actuator's Console credential. */
   readonly apiKey: string;
+  /** The non-secret account id the credential must resolve to. */
+  readonly expectedAccountId: string;
+}
+
+/** The only field of a Console balance read this gate cares about — a public account id. */
+export interface ActuatorAccountObservation {
+  readonly accountId: string;
 }
 
 function clean(value: string | undefined): string {
@@ -73,10 +91,12 @@ function clean(value: string | undefined): string {
 /**
  * Resolve the actuator's wallet identity, or refuse.
  *
- * The only sound v0 of "one wallet, one writer" that does not require retiring the legacy
- * controller first is a SECOND, dedicated Console account per environment. This function is
- * where that stops being a convention and becomes a precondition: there is no code path that
- * yields a usable identity while the legacy controller's wallet is in play.
+ * ONE WALLET, ONE ACTIVE WRITER (story.5016, BINDING). The earlier design gave the actuator a
+ * second Console account and proved separation by requiring BOTH credentials and comparing them
+ * byte-for-byte. That inverted the goal: to prove it was not the legacy writer, the actuator had
+ * to hold the legacy writer's wallet. Now the legacy key is neither projected nor accepted, and
+ * separation is asserted against the pinned, non-secret account identity instead — see
+ * {@link assertActuatorWalletAccount}, which the composition root runs before it listens.
  */
 export function resolveAkashTxWallet(
   input: AkashTxWalletInput
@@ -93,19 +113,70 @@ export function resolveAkashTxWallet(
   if (!apiKey) {
     throw new AkashTxWalletConfigError(
       "actuator_credential_missing",
-      "Akash tx actuator requires a dedicated AKASH_ACTUATOR_CONSOLE_API_KEY. " +
-        "It deliberately does not fall back to AKASH_CONSOLE_API_KEY — that wallet already has a writer."
+      "Akash tx actuator requires AKASH_ACTUATOR_CONSOLE_API_KEY from its own secret plane " +
+        "(cogni/<env>/akash-tx-actuator). There is deliberately no fallback to any other wallet."
     );
   }
 
-  if (apiKey === clean(input.legacyControllerApiKey)) {
+  const expectedAccountId = clean(input.expectedAccountId);
+  if (!expectedAccountId) {
     throw new AkashTxWalletConfigError(
-      "actuator_credential_shared_with_legacy_writer",
-      "AKASH_ACTUATOR_CONSOLE_API_KEY must not equal AKASH_CONSOLE_API_KEY. " +
-        "Two writers on one Console wallet make cursor-based recovery unsound: the actuator " +
-        "could adopt a lease the ComputeWorkload controller paid for."
+      "actuator_account_id_missing",
+      "Akash tx actuator requires AKASH_ACTUATOR_ACCOUNT_ID — the non-secret Akash account " +
+        "address it is authorized to spend from. A wallet writer with no pinned wallet identity " +
+        "cannot prove it is the one active writer, so it must not start."
     );
   }
 
-  return { walletScope: `akash-console:${environment}`, apiKey };
+  return {
+    walletScope: `akash-console:${environment}`,
+    apiKey,
+    expectedAccountId,
+  };
+}
+
+/**
+ * Prove the credential actually opens the wallet we pinned, using the Console's own account read.
+ *
+ * This is what replaced the byte-equality check. A byte comparison only ever said "these two
+ * secrets differ" — it could not say WHICH wallet either one opened, and it required custody of a
+ * credential we are trying to keep out of this process. Comparing the live account set against a
+ * public, git-reviewable address answers the question that actually matters: is this actuator
+ * about to spend from the intended wallet?
+ *
+ * Fail-closed and loud, at boot, exactly like the refusals above: an empty observation is a
+ * refusal (never "assume it is fine"), and a mismatch names only public account ids.
+ */
+export function assertActuatorWalletAccount(
+  expectedAccountId: string,
+  observed: readonly ActuatorAccountObservation[]
+): void {
+  const expected = clean(expectedAccountId);
+  if (!expected) {
+    throw new AkashTxWalletConfigError(
+      "actuator_account_id_missing",
+      "Cannot assert the actuator wallet: AKASH_ACTUATOR_ACCOUNT_ID is empty."
+    );
+  }
+
+  const accountIds = observed
+    .map((entry) => clean(entry.accountId))
+    .filter(Boolean);
+
+  if (accountIds.length === 0) {
+    throw new AkashTxWalletConfigError(
+      "actuator_account_unverifiable",
+      "Akash Console reported no account for AKASH_ACTUATOR_CONSOLE_API_KEY, so the wallet " +
+        `pinned as ${expected} cannot be confirmed. Refusing to spend from an unproven wallet.`
+    );
+  }
+
+  if (!accountIds.includes(expected)) {
+    throw new AkashTxWalletConfigError(
+      "actuator_account_mismatch",
+      `AKASH_ACTUATOR_CONSOLE_API_KEY opens ${accountIds.join(", ")}, not the pinned ` +
+        `AKASH_ACTUATOR_ACCOUNT_ID ${expected}. Either the credential was minted on the wrong ` +
+        "Akash account or the pin is stale; both mean a second writer could be spending here."
+    );
+  }
 }
