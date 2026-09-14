@@ -223,9 +223,27 @@ const FINGERPRINT_LENGTH = 12;
  *
  * NOT FOR THE BEARER TOKEN. `AKASH_TX_ACTUATOR_TOKEN` is the wire credential the Composition
  * presents; it has no rotation-visibility problem and no reason to be fingerprinted.
+ *
+ * ON `js/insufficient-password-hash` (CodeQL flags the `createHash` below): that rule targets
+ * PASSWORD STORAGE, where a fast hash is wrong because passwords are low-entropy and a stolen
+ * digest can be brute-forced offline into the original. None of that applies here, on three
+ * independent counts: the input is a vendor-minted high-entropy API key rather than a
+ * human-chosen password; the output is deliberately TRUNCATED to 48 bits, so it has enormous
+ * numbers of preimages and cannot identify any single input even in principle; and it is never
+ * used to authenticate or verify anything — only to answer "is this the same credential as
+ * before?". A slow KDF would add boot latency and a tuning parameter while making the value no
+ * less disclosive. Same call and same justification as
+ * `packages/node-shared/src/util/accountId.ts`.
+ *
+ * The alternative designs are worse, which is why this one stands: reading the KV version from
+ * the projected Secret's metadata would require giving this pod a ServiceAccount and Secret-read
+ * RBAC it deliberately does not have, and logging a substring of the key would be actual partial
+ * disclosure instead of none.
  */
 export function credentialFingerprint(value: string): string {
   if (value === "") return "absent";
+  // codeql[js/insufficient-password-hash] Not password hashing — truncated, non-reversible
+  // version tag over a high-entropy API key; never used to authenticate. See docblock above.
   return createHash("sha256")
     .update(value, "utf8")
     .digest("hex")
