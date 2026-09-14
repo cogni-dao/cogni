@@ -59,8 +59,19 @@ Verified the hard way on alert #55 (PR #2224, 2026-09-14): the inline marker is 
 
 ```bash
 gh api -X PATCH repos/cogni-dao/cogni/code-scanning/alerts/<N> \
-  -f state=dismissed -f dismissed_reason='false positive'
+  -f state=dismissed -f dismissed_reason='false positive' \
+  -f dismissed_comment='<= 280 chars, says WHY'
 ```
+
+**Put `dismissed_comment` in the SAME call that dismisses.** Three traps here, all hit on alert #55:
+
+| trap                                 | what you get                                                                                          |
+| ------------------------------------ | ----------------------------------------------------------------------------------------------------- |
+| Comment > 280 chars                  | `422 Only 280 characters are allowed; N were supplied` — **and the dismissal does not happen either** |
+| Dismiss first, add the comment after | `400 Alert is already dismissed` — the comment is **not amendable**                                   |
+| Recovering from the above            | Only way back is `-f state=open`, then re-dismiss **with** the comment in one call                    |
+
+So a first attempt that fails on length, followed by a retry without the comment, leaves a **dismissed alert with no recorded justification** — an artifact that reads as handled with the reasoning invisible. That is the same silently-handled shape this whole section is about, so check the alert with a fresh `GET` afterwards rather than trusting the write response.
 
 That is how every prior instance of `js/insufficient-password-hash` in this repo was resolved (alerts #3, #7, #15, #30 on `accountId.ts`). The inline marker is still worth writing — it puts the reason next to the code so a reader does not have to open the Security tab — but **treat it as a comment, never as a gate-clearing mechanism.**
 
