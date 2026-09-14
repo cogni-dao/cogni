@@ -242,10 +242,10 @@ const FINGERPRINT_LENGTH = 12;
  */
 export function credentialFingerprint(value: string): string {
   if (value === "") return "absent";
-  // codeql[js/insufficient-password-hash] Not password hashing — truncated, non-reversible
-  // version tag over a high-entropy API key; never used to authenticate. See docblock above.
-  return createHash("sha256")
-    .update(value, "utf8")
-    .digest("hex")
-    .slice(0, FINGERPRINT_LENGTH);
+  // The whole digest call stays on ONE line on purpose: a `codeql[...]` suppression only
+  // applies to the line the alert is reported on, and the alert lands on the `.update()`
+  // sink. Letting the formatter break this chain silently detaches the suppression — which
+  // is exactly what happened on the first attempt. Mirrors node-shared/src/util/accountId.ts.
+  const digest = createHash("sha256").update(value, "utf8").digest("hex"); // codeql[js/insufficient-password-hash] Not password hashing — truncated, non-reversible version tag over a high-entropy API key; never authenticates. See docblock.
+  return digest.slice(0, FINGERPRINT_LENGTH);
 }
