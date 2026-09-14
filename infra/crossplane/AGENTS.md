@@ -48,6 +48,8 @@ reconciliation semantics.
 - **NO_SECRET_VALUES:** credentials reach the wire only as provider-http `{{ name:namespace:key }}` placeholders resolved from the existing ESO/OpenBao substrate at request time.
 - **WIRE_IS_THE_5095_CONTRACT:** the Composition lowers the full-fidelity XR onto `@contracts/compute.akash-tx.v1`, a zod strictObject. An extra key is a permanent 400, so the lowering is a port of `toProvisionSpec` + `legacyCogniAppEnv`, not a redesign.
 - **KEY_IS_STABLE:** `cogniKey = xcw:<namespace>:<name>:<leaseEpoch>`. Nothing bumps `leaseEpoch` implicitly — a key that varied per reconcile would mint a second paid lease.
+- **MIGRATION_BEFORE_TRANSACTION:** every create and update states its precondition as the actuator's `migration` discriminated union. `Skip` is the default accumulator, so a template bug fails toward the gate. Migration COMMANDS never travel — `profile` names a set the actuator owns, and a caller-supplied command would make the gate advisory.
+- **REFUSAL_IS_OBSERVABLE:** the actuator's stable refusal `code` is surfaced on `status.failure.reason` (bug.5115: a wallet block that reached only provider logs was invisible for hours). Retryability comes from the HTTP status — 409 and 5xx are Progressing, other 4xx are Failed — never from a table of codes, which is why `reason` is a patterned string and not an enum. Surfacing is purely observational: it never stops the lease from being reconciled, unlike a `bootPolicy` spend decision.
 
 ## Change Protocol
 

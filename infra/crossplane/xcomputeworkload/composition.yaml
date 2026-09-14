@@ -246,6 +246,7 @@ spec:
             {{- $refusalCode := dig "code" "" $resp }}
             {{- $refusalMessage := dig "message" "" $resp }}
             {{- $refusalRetryable := or (eq $respStatus 409) (ge $respStatus 500) }}
+            {{- $prevResource := dig "status" "resource" (dict) $xr }}
             {{- $found := dig "found" false $resp }}
             {{- $res := dig "resource" (dict) $resp }}
             {{- $state := dig "state" "unknown" $res }}
@@ -492,6 +493,18 @@ spec:
                 id: {{ $externalName | quote }}
                 state: {{ $state | quote }}
                 endpoints: {{ toJson $endpoints }}
+              {{- else if and (ne $refusalCode "") $prevResource }}
+              {{- /*
+                LATCH THE HANDLE THROUGH A REFUSAL. provider-http overwrites
+                status.response.body with the ERROR body of a failed mutation, so a 4xx on
+                UPDATE leaves this render with no observation at all — and the naive result is
+                that status.resource.id vanishes at the exact moment an operator needs the lease
+                handle to diagnose the failure. A refusal is "we did not get to look", NOT "the
+                lease is gone", so the last observation is carried forward. A genuine
+                `found: false` observation is NOT latched: that one really does mean gone, and
+                advertising a stale handle there would be a lie.
+              */}}
+              resource: {{ toJson $prevResource }}
               {{- end }}
               {{- if ne $dnsTarget "" }}
               dns:
