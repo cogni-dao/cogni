@@ -58,23 +58,97 @@ egress_cidrs="$(yq -r '.compute_egress_cidrs[]?.cidr' "$catalog_file" | sort -u)
   || fail "external-compute target '$node' has no compute_egress_cidrs"
 egress_cidrs_csv="$(paste -sd, - <<<"$egress_cidrs")"
 
+# task.5104 — WHICH AUTHORITY owns this row's workload in this environment.
+# Shell twin of resolveNodeComputeApi() in
+# nodes/operator/app/src/features/compute/node-compute-api.ts, read from the SAME
+# catalog cell (`compute_api.<env>`, infra/catalog/_schema.json). LEGACY_IS_DEFAULT:
+# an absent cell resolves to the bespoke in-cluster compute-workload-controller, so
+# preview/production (which still ship that controller) are untouched by this branch.
+#
+# This is why the preflight is authority-aware at all: story.5016 step 9 deleted
+# base/compute-workload-controller from the candidate-a operator overlay, so asserting
+# that Deployment on a crossplane row fails 100% of the time and kills the flight
+# before the materializer ever runs.
+local compute_api
+compute_api="$(yq -N ".compute_api.\"${DEPLOY_ENVIRONMENT}\" // \"legacy\"" "$catalog_file")"
+[ -n "$compute_api" ] && [ "$compute_api" != "null" ] || compute_api="legacy"
+case "$compute_api" in
+  legacy|crossplane) ;;
+  *) fail "unsupported compute_api '$compute_api' for '$node' in env '$DEPLOY_ENVIRONMENT' (expected legacy|crossplane)" ;;
+esac
+
 local ssh_opts=()
 read -r -a ssh_opts <<< "$ssh_opts_raw"
 "$ssh_bin" "${ssh_opts[@]}" "root@${vm_host}" bash -s -- \
   "$DEPLOY_ENVIRONMENT" "$node" "$required_keys_csv" "$egress_cidrs_csv" \
-  "$egress_allowlist" <<'REMOTE'
+  "$egress_allowlist" "$compute_api" <<'REMOTE'
 set -euo pipefail
 env_name="$1"
 node="$2"
 required_keys_csv="$3"
 egress_cidrs_csv="$4"
 egress_allowlist="$5"
+authority="$6"
 namespace="cogni-${env_name}"
 controller="operator-compute-workload-controller"
+actuator="operator-akash-tx-actuator"
+xcw_crd="xcomputeworkloads.compute.cogni.io"
+xcw_composition="xcomputeworkload-akash"
+xcw_provider_config="cogni-http"
+actuator_auth_secret="akash-tx-actuator-auth"
+actuator_env_secret="akash-tx-actuator-env-secrets"
 
 fail() { echo "::error::assert-target-substrate: $*" >&2; exit 1; }
 mark_ok() { echo "[OK] $*"; }
 
+echo "[INFO] compute authority for ${node} in ${env_name}: compute_api=${authority}"
+
+if [ "$authority" = "crossplane" ]; then
+  # Crossplane owns the workload here. Assert the control plane (XRD + Composition +
+  # ClusterProviderConfig) and the ONE writer it dials (the private Akash transaction
+  # actuator) — never the legacy controller, which this overlay no longer ships.
+  established="$(kubectl get crd "$xcw_crd" -o jsonpath='{.status.conditions[?(@.type=="Established")].status}' 2>/dev/null || true)"
+  [ "$established" = "True" ] \
+    || fail "compute_api=crossplane for ${node} in ${env_name}: XRD-backed CRD ${xcw_crd} is not Established (condition='${established:-absent}'); apply infra/crossplane/xcomputeworkload before flighting this row"
+  mark_ok "crossplane authority: CRD ${xcw_crd} is Established"
+
+  kubectl get composition "$xcw_composition" >/dev/null 2>&1 \
+    || fail "compute_api=crossplane for ${node} in ${env_name}: Composition ${xcw_composition} is missing; nothing would reconcile the XComputeWorkload the materializer renders"
+  mark_ok "crossplane authority: Composition ${xcw_composition} exists"
+
+  kubectl get clusterproviderconfigs.http.m.crossplane.io "$xcw_provider_config" >/dev/null 2>&1 \
+    || fail "compute_api=crossplane for ${node} in ${env_name}: ClusterProviderConfig/${xcw_provider_config} (http.m.crossplane.io/v1alpha2) is missing; provider-http has no config to send actuator requests under"
+  mark_ok "crossplane authority: ClusterProviderConfig/${xcw_provider_config} exists"
+
+  available="$(kubectl -n "$namespace" get deployment "$actuator" -o jsonpath='{.status.availableReplicas}' 2>/dev/null || true)"
+  [ "${available:-0}" -ge 1 ] 2>/dev/null \
+    || fail "compute_api=crossplane for ${node} in ${env_name}: akash transaction actuator is not available: ${namespace}/${actuator} (availableReplicas='${available:-0}'); every OBSERVE would fail connection-refused and no lease can be minted"
+  mark_ok "crossplane authority: ${namespace}/${actuator} is available"
+
+  kubectl -n "$namespace" get secret "$actuator_auth_secret" >/dev/null 2>&1 \
+    || fail "compute_api=crossplane for ${node} in ${env_name}: Secret ${namespace}/${actuator_auth_secret} is missing; the Composition placeholder {{ ${actuator_auth_secret}:${namespace}:token }} cannot resolve"
+  [ -n "$(kubectl -n "$namespace" get secret "$actuator_auth_secret" -o jsonpath='{.data.token}' 2>/dev/null || true)" ] \
+    || fail "compute_api=crossplane for ${node} in ${env_name}: Secret ${namespace}/${actuator_auth_secret} carries no 'token' key; the Composition placeholder {{ ${actuator_auth_secret}:${namespace}:token }} cannot resolve"
+  mark_ok "crossplane authority: Secret ${namespace}/${actuator_auth_secret} carries key 'token'"
+
+  kubectl -n "$namespace" get secret "$actuator_env_secret" >/dev/null 2>&1 \
+    || fail "compute_api=crossplane for ${node} in ${env_name}: Secret ${namespace}/${actuator_env_secret} is missing; the actuator has no wallet credential and refuses to boot"
+  mark_ok "crossplane authority: Secret ${namespace}/${actuator_env_secret} exists"
+
+  # AKASH_ALLOWED_PROVIDERS is NOT a secret and NOT reachable by exec-ing the deleted
+  # controller. The actuator receives it as a plain, by-name env var on its own
+  # Deployment (infra/k8s/base/akash-tx-actuator/deployment.yaml, pinned per overlay),
+  # and nodes/operator/app/src/bootstrap/akash-tx-actuator.ts splits that value into the
+  # provider allowlist — empty rejects EVERY bid. So read it off the pod spec, which is
+  # exactly the value the process will see, and needs no exec at all.
+  allowed_providers="$(kubectl -n "$namespace" get deployment "$actuator" -o jsonpath='{.spec.template.spec.containers[?(@.name=="actuator")].env[?(@.name=="AKASH_ALLOWED_PROVIDERS")].value}' 2>/dev/null || true)"
+  [ -n "$allowed_providers" ] \
+    || fail "compute_api=crossplane for ${node} in ${env_name}: AKASH_ALLOWED_PROVIDERS is empty or unset on ${namespace}/${actuator}; an empty allowlist rejects every Akash provider bid"
+  mark_ok "crossplane authority: AKASH_ALLOWED_PROVIDERS is non-empty on ${namespace}/${actuator}"
+else
+# LEGACY AUTHORITY — the bespoke in-cluster compute-workload-controller. Deliberately
+# left verbatim and un-indented so the diff proves preview/production behaviour is
+# byte-identical; do not reflow it. It is deleted outright by task.5098.
 kubectl get crd computeworkloads.compute.cogni.io >/dev/null \
   || fail "ComputeWorkload CRD is missing"
 mark_ok "ComputeWorkload CRD exists"
@@ -91,7 +165,11 @@ kubectl -n "$namespace" exec deployment/"$controller" -c controller -- sh -ceu '
   test -n "$AKASH_ALLOWED_PROVIDERS"
 ' >/dev/null || fail "controller provider/DNS credentials or AKASH_ALLOWED_PROVIDERS are missing"
 mark_ok "controller provider, DNS, and allowlist prerequisites exist"
+fi
 
+# Everything below is AUTHORITY-INDEPENDENT: the OpenBao secret bank the workload's
+# declared secret refs must be materialized into, and the installed compute-egress
+# boundary. Both hold identically for legacy and crossplane rows.
 jwt="$(kubectl create token db-provisioner -n default)"
 token="$(kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
   bao write -field=token auth/kubernetes/login role="${env_name}-db-reader" jwt="$jwt")"
@@ -119,7 +197,7 @@ for cidr in "${egress_cidrs[@]}"; do
 done
 mark_ok "catalog compute egress CIDRs are installed"
 
-echo "External compute preconditions ready for ${node} in ${env_name}."
+echo "External compute preconditions ready for ${node} in ${env_name} (compute_api=${authority})."
 REMOTE
 }
 
