@@ -141,4 +141,19 @@ echo "$controller_output" | grep -q 'Selection reason: operator-image-input:infr
 echo "$controller_output" | grep -q '^Targets: operator$'
 echo "$controller_output" | grep -q '^Flight targets: operator$'
 
+
+# task.5102 — same coupling for the Akash transaction actuator: it is a second process
+# artifact inside the SAME operator image, so a manifest-only change must build operator
+# at that source SHA rather than flight new manifests against an older artifact.
+printf '%s\n' 'infra/k8s/base/akash-tx-actuator/deployment.yaml' > "$tmpdir/actuator-paths.txt"
+actuator_output=$(
+  TURBO_SCM_BASE=origin/main \
+  TURBO_SCM_HEAD=HEAD \
+  CHANGED_PATHS_FILE="$tmpdir/actuator-paths.txt" \
+  bash scripts/ci/detect-affected.sh
+)
+echo "$actuator_output" | grep -q 'Selection reason: operator-image-input:infra/k8s/base/akash-tx-actuator/deployment.yaml'
+echo "$actuator_output" | grep -q '^Targets: operator$'
+echo "$actuator_output" | grep -q '^Flight targets: operator$'
+
 echo "detect-affected.test.sh OK"

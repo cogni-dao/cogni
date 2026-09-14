@@ -111,7 +111,16 @@ export {
   KubernetesMigrationJobAdapter,
   migrationJobName,
 } from "./compute/kubernetes-migration-job.adapter";
-export { createDefaultProviderOutcomeStore } from "./compute/provider-outcome-store";
+export {
+  createDefaultProviderOutcomeStore,
+  DrizzleProviderOutcomeStore,
+} from "./compute/provider-outcome-store";
+// Bounded, SSRF-safe workload probes. Exported for the dedicated actuator process,
+// which must prove "serving at the expected SHA" without importing an adapter internal.
+export {
+  safeReadyzProbe,
+  safeVersionProbe,
+} from "./compute/safe-version-probe";
 // Connection broker adapter
 export {
   ConnectionDecryptionError,
