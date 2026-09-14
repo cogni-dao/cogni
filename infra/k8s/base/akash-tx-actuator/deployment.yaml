@@ -113,12 +113,33 @@ spec:
               # Least privilege on purpose: an explicit `items:` list rather than an `envFrom`,
               # so this process can only ever see the three values it needs.
               #
-              # NOT optional. resolveAkashTxWallet refuses a missing
-              # AKASH_ACTUATOR_CONSOLE_API_KEY and the process exits rather than open a socket.
-              # A CrashLoopBackOff with a stable reason is the honest surface; a silently
-              # unauthenticated or mis-walleted actuator is not.
+              # `optional: true` is what MAKES the refusal diagnosable — it is not a relaxation.
+              #
+              # The refusal is owned by the process, which already fails closed with a NAMED
+              # first-party reason for each of these three files: a missing wallet credential
+              # logs `akash_tx_actuator_wallet_unresolved` with the resolver's error code, a
+              # missing bearer token logs `akash_tx_actuator_token_missing`, a missing DSN logs
+              # `akash_tx_actuator_ledger_dsn_missing`. Each then exits rather than open a
+              # socket, producing exactly the CrashLoopBackOff-with-a-stable-reason this comment
+              # used to promise.
+              #
+              # A NON-optional source silently defeats all of that. kubelet refuses to mount a
+              # projected Secret whose object -- OR whose listed `key` -- does not exist, so the
+              # pod never leaves ContainerCreating and the CONTAINER NEVER RUNS. The three
+              # log.fatal lines above are unreachable in precisely the scenario they were
+              # written for. The only signal left is a kubelet `FailedMount` event, which is not
+              # in Loki and reads like an infrastructure fault rather than "the operator has not
+              # written the Console key yet" -- it cost ~25 minutes of misdiagnosis during the
+              # candidate-a wallet cutover, where `AKASH_ACTUATOR_CONSOLE_API_KEY` is legitimately
+              # absent until a human mints it.
+              #
+              # Optional therefore changes nothing about SECURITY (the process still refuses,
+              # still never listens, still never spends) and everything about DIAGNOSABILITY:
+              # the failure moves from an invisible kubelet event to a first-party log line that
+              # names which credential is missing. Fail closed loudly, not silently.
               - secret:
                   name: akash-tx-actuator-env-secrets
+                  optional: true
                   items:
                     # The operator sponsor wallet's Console credential — the ONE active writer.
                     # AKASH_CONSOLE_API_KEY (the legacy ComputeWorkload controller's key) is
@@ -137,8 +158,13 @@ spec:
               # This one key legitimately comes from the operator bucket: the receipts table is
               # operator-local schema in the operator's own Postgres. Scoped to exactly DATABASE_URL
               # — the actuator gets the ledger, not the rest of the operator's credentials.
+              #
+              # Optional for the same reason as above, and the refusal is just as strict: a
+              # missing DSN logs `akash_tx_actuator_ledger_dsn_missing` and exits, because the
+              # actuator must not spend without a durable receipt.
               - secret:
                   name: operator-env-secrets
+                  optional: true
                   items:
                     - key: DATABASE_URL
                       path: DATABASE_URL
