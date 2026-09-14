@@ -34,7 +34,7 @@ Pickup: you own the **operator self-serve secrets write plane**. It is now the s
 
 - **#2214 is merged** (`e6f585b125`): the route gained an optional `service` param so it can address a **platform-service** bucket (`cogni/<env>/akash-tx-actuator/*`), constrained to the `PLATFORM_SERVICES` allowlist + owner-node (`operator`) delegation. This was the unblock for the Akash wallet; it also **widened `secrets_manager@node:operator`** to reach platform buckets.
 - **#2217 is OPEN and unmerged** — drops both actuator ExternalSecrets from `refreshInterval: 1h` to `1m`. Correct but was deprioritized as tangential; it is yours now.
-- A real credential (`AKASH_ACTUATOR_CONSOLE_API_KEY`) is live at `cogni/candidate-a/akash-tx-actuator/` v3 and **should be rotated** — it briefly landed in `cogni/candidate-a/operator` (see defect 2), which the public Next.js app reads wholesale via `dataFrom: extract` + `envFrom`.
+- A real credential (`AKASH_ACTUATOR_CONSOLE_API_KEY`) is live at `cogni/candidate-a/akash-tx-actuator/` v3. It briefly landed in `cogni/candidate-a/operator` (defect 2); that copy has been **neutralized with a placeholder (v67)**, so no rotation is required.
 - No kube on dev machines (local `kind` context only) — every fix must be provable through operator APIs, Loki, and Argo events.
 
 ## Design / Implementation Target
@@ -51,7 +51,7 @@ Pickup: you own the **operator self-serve secrets write plane**. It is now the s
 - [ ] Make `WriteSecretInput` strict (defect 2) — highest value per line; it is the one that already caused exposure.
 - [ ] Fix or fail-closed the reconcile revert (defect 1).
 - [ ] Merge #2217; audit `refreshInterval` across credential-bearing ExternalSecrets.
-- [ ] Rotate `AKASH_ACTUATOR_CONSOLE_API_KEY` and coordinate the re-write with the Akash dev-manager (`story.5016`) — the actuator fails closed, so a rotation without a projection is an outage for that component.
+- [ ] No rotation needed: the misfiled copy at `cogni/candidate-a/operator/` was overwritten with a non-credential placeholder (v67) and the operator app never read that key (`serverEnv()` dropped it in #2211). If you ever DO rotate, coordinate with the Akash dev-manager (`story.5016`) — the actuator fails closed, so a rotation without a projection is an outage for that component.
 - [ ] Land the `platform_service` OpenFGA relation and narrow the `secrets_manager@node:operator` widening.
 
 **Gotchas:**
