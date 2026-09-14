@@ -14,9 +14,11 @@
  *   the committed shape.
  * Side-effects: none — pure string transform, no IO, no env.
  * Links: infra/catalog/node-template.yaml, infra/catalog/_schema.json, scripts/setup/scaffold-node.sh,
- *   task.5092, story.5025, task.5097
+ *   task.5092, story.5025, task.5097, task.5104
  * @public
  */
+
+import { hasCrossplaneControlPlane } from "@/shared/node-registry/crossplane-control-plane";
 
 import { NODE_FORMATION_ACTIVITY_ENV, NODE_FORMATION_ENVS } from "./envs";
 
@@ -78,9 +80,19 @@ export function renderCatalog(
   const placementBlock = offCluster
     ? `deployment_provider:\n${envs.map((env) => `  ${env}: akash\n`).join("")}`
     : "";
-  const computeApiBlock = offCluster
-    ? `compute_api:\n${envs.map((env) => `  ${env}: crossplane\n`).join("")}`
-    : "";
+  // AUTHORITY_REQUIRES_AN_INSTALLED_API (task.5104) — placement and compute authority are
+  // DIFFERENT AXES, so they are filtered differently. Every birth env is genuinely `akash`
+  // above; only the envs that carry a Crossplane control plane can name `crossplane` here.
+  // Naming it for production would commit an XComputeWorkload into a cluster with no such CRD
+  // (no crossplane-* Application exists under infra/k8s/argocd/control-plane/production/), so
+  // the promote would render a workload nothing reconciles. The unfiltered envs stay on the
+  // pre-existing `legacy` default until their control plane is installed and
+  // CROSSPLANE_CONTROL_PLANE_ENVS is widened — at which point births pick it up automatically.
+  const crossplaneEnvs = envs.filter((env) => hasCrossplaneControlPlane(env));
+  const computeApiBlock =
+    offCluster && crossplaneEnvs.length > 0
+      ? `compute_api:\n${crossplaneEnvs.map((env) => `  ${env}: crossplane\n`).join("")}`
+      : "";
   const sourceShaLine = input.sourceSha
     ? `source_sha: ${input.sourceSha}\n`
     : "";
@@ -109,7 +121,8 @@ envs: [${envs.join(", ")}]
 ${placementBlock}# task.5097 — WHICH authority reconciles the workload. Crossplane
 # (infra/crossplane/xcomputeworkload) owns every generic concern; the only Cogni-specific
 # piece left is the private Akash transaction actuator. A born node never touches the
-# bespoke controller, so the legacy lane stops growing at task.5097's fence.
+# bespoke controller in any environment whose control plane can reconcile the composite; an
+# environment without one is omitted and stays on the pre-existing legacy default (task.5104).
 ${computeApiBlock}# story.5025 — birth authority is PRODUCTION, the only environment that receives Git
 # webhooks (ACTIVITY_FOLLOWS_INGEST, bug.5079). Born here it is immutable for life: a
 # sub-production authority would have to be moved by every later promote, and generation 1
