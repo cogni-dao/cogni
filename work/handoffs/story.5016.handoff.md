@@ -34,14 +34,14 @@ Pickup: you own landing **one fresh, disposable, Crossplane-owned Akash node**, 
 
 - `main` = `e6f585b125`. **preview** serves it. **production** is deliberately behind at `6bad39af`.
 - **candidate-a serves `512b0995`** (#2215 rebased onto #2214) and has **ZERO Akash writers other than the actuator** — the legacy controller was removed by #2212. Intended cutover state.
-- **The actuator pod is RUNNING** (`operator-akash-tx-actuator`) — first time ever. It CrashLoops on `actuator_account_unverifiable` **only because ESO has not yet projected the credential**; `refreshInterval` is `1h` and it last reconciled ~21:38, so the value lands ~22:38 and the pod self-heals on its next restart. No action required.
+- **STEP 12 IS DONE.** `operator-akash-tx-actuator` is `1/1 Running` and logged `akash_tx_actuator_wallet_verified` (expectedAccountId `akash12eh8xgpeyumar3sk6wp94y0tq9uh62mkezxjmt`) then `akash_tx_actuator_listening` (walletScope `akash-console:candidate-a`, port 8080, allowedProviders 1). It is the ONLY Akash writer on candidate-a. XRD `xcomputeworkloads.compute.cogni.io` ESTABLISHED, Composition `xcomputeworkload-akash` present, **zero XRs — step 13 mints the first**.
 - **The credential is proven good, out-of-band:** `GET /v1/user/me` -> 200 `derekg1729`; `GET /v1/wallets` -> 200 `akash12eh8xgpeyumar3sk6wp94y0tq9uh62mkezxjmt`, 7,675,889 uact funded. That address is exactly what `AKASH_ACTUATOR_ACCOUNT_ID` pins, so the assertion will pass once projected.
 - Secret is at `cogni/candidate-a/akash-tx-actuator/AKASH_ACTUATOR_CONSOLE_API_KEY` v3, written via the operator API with **no kube**.
 - **Open PRs:** #2215 (public account id — CLEAN, flighted, unmerged), #2216 (Akash-aware wizard scorecard — CLEAN), #2217 (ESO `1h -> 1m` on both actuator ExternalSecrets — correct but tangential; merge when convenient, do not block on it).
 - **Merged:** bug.5139 flight-lane fix; #2203 actuator; #2207 XRD+Composition; #2209 runtime; #2208 migration gate; #2210 `node_id` receipts; #2213 Composition identity; #2206 Spawn seam + `substrateHost`; #2212 legacy controller removal; #2211 wallet secret plane; #2214 operator-API platform-service write.
 - **Five merged PRs were never proven on candidate-a** — #2209, #2210, #2211, #2206, #2212 went in on CI-green alone, skipping flight -> validate -> merge. Live on preview, absent from production. An independent validator was asked to cover them. **Treat as unproven.**
 - **Credential hygiene:** the key briefly landed in `cogni/candidate-a/operator` (readable by the public operator app) before the path was corrected. Candidate-a only. **Rotate when convenient.**
-- No kube access on this machine — only a local `kind` context. Every diagnosis must come from operator APIs, `/version`, `/readyz?deep=1`, Loki, and Argo events.
+- **YOU DO HAVE KUBE + SSH.** Validated env credentials are laptop-local at `~/dev/cogni-template/.local/provision-creds/candidate-a/` — `candidate-a-kubeconfig.yaml`, `candidate-a-vm-key`, OpenBao root. That dir's `README.md` status table is the custody SSoT and carries the current VM IP (candidate-a = `84.32.149.0`). Recall the `provision-env` skill; do NOT hunt `~/.ssh` or guess VM hostnames. This cost ~25 minutes of avoidable waiting here.
 
 ## Design / Implementation Target
 
@@ -56,7 +56,6 @@ Pickup: you own landing **one fresh, disposable, Crossplane-owned Akash node**, 
 
 ## Next Actions / Risks
 
-- [ ] Confirm `akash_tx_actuator_wallet_verified` after ESO syncs (~22:38, self-healing). If it still fails, the credential is proven good — suspect projection, not the key.
 - [ ] Step 12: `OBSERVE` returns `{found:false}` rather than connection-refused.
 - [ ] Step 13: mint EXACTLY ONE disposable node. Never spin a second to "retry" without closing the first.
 - [ ] Merge #2215 and #2216 through **flight -> /validate-candidate -> merge**, never CI-green alone.
