@@ -22,8 +22,7 @@
  *   - NEVER_HOLDS_TWO_WALLETS: `AKASH_CONSOLE_API_KEY` is not projected into the actuator at all
  *     (amendment 3); separation is asserted against the non-secret pinned account id.
  *   - ENTRYPOINT_EXISTS: the Deployment's command path is the path the Dockerfile copies.
- * Side-effects: IO (reads infra/k8s/**, infra/secrets-catalog.yaml, the secrets catalog loader +
- *   bash lib, and the operator Dockerfile/package.json)
+ * Side-effects: IO (reads infra/k8s, the secrets catalog, and the operator image manifests)
  * Links: infra/k8s/base/akash-tx-actuator, infra/crossplane/xcomputeworkload/composition.yaml,
  *   nodes/operator/app/src/bootstrap/akash-tx-actuator.ts, task.5102
  * @public
