@@ -3,11 +3,14 @@
 
 /**
  * Module: `@app/api/v1/nodes/[id]/secrets`
- * Purpose: Node-owner self-serve secret VALUE write/rotate. A `developer` on the
+ * Purpose: Node-owner self-serve secret VALUE write/rotate. A `secrets_manager` on the
  *   node sets `cogni/<env>/<node>/<KEY>` through the operator pod's own OpenBao
  *   identity — caller holds only an API key. The value-write sibling of vcs/flight.
- * Scope: auth → OpenFGA gate → substrate-reserved-key guard → env match → secrets plane.
- *   Write/rotate only; key-name listing (GET) is deferred.
+ *   An optional `service` retargets the write to a PLATFORM-SERVICE bucket
+ *   `cogni/<env>/<service>/<KEY>` (a non-node OpenBao path such as the Akash
+ *   transaction actuator's isolated wallet bucket).
+ * Scope: auth → OpenFGA gate → platform-service gate → substrate-reserved-key guard →
+ *   env match → secrets plane. Write/rotate only; key-name listing (GET) is deferred.
  * Invariants:
  *   - AUTH_REQUIRED: Bearer (agents) or SIWE session. No open access.
  *   - OPENFGA_FAIL_CLOSED: undefined authz or `authz_unavailable` → 503; not-allow → 403.
@@ -23,6 +26,17 @@
  *     loud, not a silent stamp. Cross-env delivery = a future swappable adapter.
  *   - PATH_FROM_AUTHORIZED_RESOURCE: node slug from the registry-resolved node;
  *     env from the operator's own serverEnv (validated == the stated env).
+ *   - PLATFORM_SERVICE_IS_OWNER_NODE_DELEGATED: `service` never relaxes or replaces the
+ *     per-node check — it runs AFTER it and can only subtract. A platform service holds
+ *     no OpenFGA tuples, so its bucket is administered by `PLATFORM_SERVICE_OWNER_NODE`,
+ *     the same leg that mints it in secret-materialize.sh; `service` must also be in the
+ *     build-time allowlist mirroring the catalog loader. No other node's grant reaches a
+ *     platform-service path, and omitting `service` leaves the node path untouched.
+ *   - NO_SILENT_FLEET_WIDENING: the narrower end state is a `platform_service` OpenFGA
+ *     type with its own `secrets_manager` relation; it needs an RBAC model rollout
+ *     (bootstrap-openfga.sh runs only inside deploy-infra) and a check against a relation
+ *     an env's model lacks fails closed at 503. Owner-node delegation is therefore the
+ *     narrowest authority expressible today — stated here, not implied.
  *   - NO_SECRETS_IN_LOG: the value never enters a log line; only key + env + KV version.
  * Side-effects: IO (node registry read, OpenBao HTTP write via OperatorSecretsPlanePort).
  * Links: docs/design/node-self-serve-secrets.md (Phase 3 Port alignment),
@@ -41,6 +55,11 @@ import type { OperatorSecretsPlanePort } from "@/ports";
 import { serverEnv } from "@/shared/env";
 import { EVENT_NAMES, type RequestContext } from "@/shared/observability";
 import { isNodeOwnedSecretKey } from "@/shared/secrets/node-secrets-reserved.data";
+import {
+  administersPlatformServices,
+  isPlatformService,
+  PLATFORM_SERVICE_OWNER_NODE,
+} from "@/shared/secrets/platform-services.data";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -60,6 +79,19 @@ const WriteSecretInput = z.object({
   // below) — making a wrong-env write a loud 409, never a silent stamp (the beacon
   // incident). Cross-env delivery is a future swappable adapter; today env must match.
   env: z.string(),
+  // Optional PLATFORM-SERVICE target. Absent → the node's own bucket (the only shape
+  // that existed before). Present → `cogni/<env>/<service>/<KEY>`, gated below on the
+  // build-time allowlist AND on the authorized node being the owner node. The charset
+  // mirrors an OpenBao path segment: no `/`, no `.`, no `_shared`/`_system` reach.
+  service: z
+    .string()
+    .min(1)
+    .max(63)
+    .regex(
+      /^[a-z][a-z0-9-]*$/,
+      "service must be lowercase letters, digits, hyphens; start with a letter"
+    )
+    .optional(),
 });
 
 interface RouteParams {
@@ -71,6 +103,7 @@ interface SecretWriteLogFields {
   readonly status: number;
   readonly nodeId: string;
   readonly slug?: string | undefined;
+  readonly service?: string | undefined;
   readonly key?: string | undefined;
   readonly op?: "set" | "rotate" | undefined;
   readonly env?: string | undefined;
@@ -126,7 +159,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       });
       return NextResponse.json({ error: "invalid input" }, { status: 400 });
     }
-    const { key, value, op, env: requestedEnv } = parsed.data;
+    const { key, value, op, env: requestedEnv, service } = parsed.data;
 
     // Env is an explicit `FLIGHT_ENVS` value (deploy/observability shape), validated here.
     if (!isFlightEnv(requestedEnv)) {
@@ -134,6 +167,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         outcome: "error",
         status: 400,
         nodeId: id,
+        service,
         key,
         op,
         env: requestedEnv,
@@ -162,6 +196,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         outcome: "error",
         status: 503,
         nodeId: id,
+        service,
         key,
         op,
         env: requestedEnv,
@@ -180,6 +215,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         outcome: "error",
         status: 409,
         nodeId: id,
+        service,
         key,
         op,
         env: requestedEnv,
@@ -210,6 +246,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         status: gate.status,
         nodeId: id,
         slug: gate.slug,
+        service,
         key,
         op,
         env: requestedEnv,
@@ -228,6 +265,59 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
     }
     const node = gate.node;
 
+    // Gate 1.5 — platform-service target. Deliberately AFTER Gate 1, so it can only ever
+    // SUBTRACT from an already-granted authority: an unauthorized caller learns nothing
+    // here, and a caller who is `secrets_manager` on some other node can never reach a
+    // platform-service bucket. Both legs must hold.
+    if (service !== undefined) {
+      // (a) Build-time allowlist mirroring scripts/lib/secrets-catalog-loader.ts. An
+      // arbitrary string would otherwise address any OpenBao bucket in this env.
+      if (!isPlatformService(service)) {
+        logTerminal({
+          outcome: "error",
+          status: 403,
+          nodeId: id,
+          slug: node.slug,
+          service,
+          key,
+          op,
+          env: requestedEnv,
+          errorCode: "unknown_platform_service",
+        });
+        return NextResponse.json(
+          {
+            error:
+              "service is not a declared platform service; omit it to write this node's own namespace",
+            errorCode: "unknown_platform_service",
+          },
+          { status: 403 }
+        );
+      }
+      // (b) Owner-node delegation. A platform service has no OpenFGA object of its own,
+      // so its bucket is administered by the node that mints it in secret-materialize.sh.
+      // Any other node's `can_manage_secrets` stops at its own namespace.
+      if (!administersPlatformServices(node.slug)) {
+        logTerminal({
+          outcome: "error",
+          status: 403,
+          nodeId: id,
+          slug: node.slug,
+          service,
+          key,
+          op,
+          env: requestedEnv,
+          errorCode: "platform_service_not_owned",
+        });
+        return NextResponse.json(
+          {
+            error: `platform-service secrets are administered by node '${PLATFORM_SERVICE_OWNER_NODE}'; call that node's route`,
+            errorCode: "platform_service_not_owned",
+          },
+          { status: 403 }
+        );
+      }
+    }
+
     // Gate 2 — substrate-reserved-key guard. The node owns its whole
     // cogni/<env>/<node>/* namespace and may add/set/rotate any key (RBAC +
     // path-scope is the boundary); only refuse substrate-managed keys (DB
@@ -238,6 +328,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         status: 403,
         nodeId: id,
         slug: node.slug,
+        service,
         key,
         op,
         env: requestedEnv,
@@ -261,6 +352,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         status: 503,
         nodeId: id,
         slug: node.slug,
+        service,
         key,
         op,
         env: requestedEnv,
@@ -281,6 +373,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
     try {
       const result = await plane.writeSecret({
         nodeSlug: node.slug,
+        service,
         env: deployEnv,
         key,
         value,
@@ -291,6 +384,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         status: 200,
         nodeId: id,
         slug: node.slug,
+        service,
         key,
         op,
         env: deployEnv,
@@ -311,6 +405,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         status: 502,
         nodeId: id,
         slug: node.slug,
+        service,
         key,
         op,
         env: deployEnv,
