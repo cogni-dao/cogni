@@ -115,3 +115,13 @@ spec:
                       path: CLOUDFLARE_API_TOKEN
                     - key: CLOUDFLARE_ZONE_ID
                       path: CLOUDFLARE_ZONE_ID
+                    # bug.5127 — write-only Loki push credential injected into
+                    # every cogni-node-app-v1 lease env so off-cluster apps ship
+                    # their own logs (no Alloy on a rented provider). Optional
+                    # like the rest: missing keys leave lease log push dormant.
+                    - key: LOKI_LEASE_PUSH_URL
+                      path: LOKI_LEASE_PUSH_URL
+                    - key: LOKI_LEASE_PUSH_USER
+                      path: LOKI_LEASE_PUSH_USER
+                    - key: LOKI_LEASE_PUSH_TOKEN
+                      path: LOKI_LEASE_PUSH_TOKEN
