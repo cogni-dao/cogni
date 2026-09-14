@@ -7,14 +7,20 @@
  *   wallet-global serialization, the pre-transaction receipt, post-response-loss recovery,
  *   observable refusal, the migration-before-transaction precondition (bug.5140), and the
  *   authoritative binding of every paid mutation to the node that consumed it (task.5103) —
- *   plus the absence of any reconciliation (one transaction per call).
- * Scope: Unit tests over fakes. Does NOT touch the Akash Console, a wallet, or a database.
+ *   the absence of any reconciliation (one transaction per call), and the composition root
+ *   actually WIRING the prover that precondition depends on (story.5016).
+ * Scope: Unit tests over fakes, plus one source-level probe of the composition root. Does NOT
+ *   touch the Akash Console, a wallet, a Kubernetes API, or a database.
  * Invariants: no real provider IO; every "lost response" is simulated by a fake that has
  *   already allocated before it throws.
  * Side-effects: none
- * Links: ./akash-tx-actuator, @ports/akash-tx.port, task.5095, task.5103
+ * Links: ./akash-tx-actuator, @bootstrap/akash-tx-actuator, @ports/akash-tx.port, task.5095,
+ *   task.5103, story.5016
  * @internal
  */
+
+import { readFileSync } from "node:fs";
+import path from "node:path";
 
 import type { ProvisionOutput, ProvisionSpec } from "@cogni/ai-tools";
 import { describe, expect, it } from "vitest";
@@ -1031,5 +1037,50 @@ describe("AkashTxActuator identity binding (task.5103)", () => {
       })
     ).rejects.toMatchObject({ code: "identity_conflict" });
     expect(api.updateCalls).toBe(0);
+  });
+});
+
+/**
+ * The migration gate is fail-CLOSED, so an actuator constructed WITHOUT a prover refuses every
+ * `RequireBeforeTransaction` mutation with `migration_unavailable` — and since the Composition
+ * lowers that policy on every create/update of a `cogni-node-app-v1` workload, that is EVERY
+ * paid create. story.5016: the composition root shipped in exactly that shape, and nothing
+ * noticed because no XComputeWorkload had ever existed to be refused.
+ *
+ * Asserted at the SOURCE level on purpose, mirroring akash-tx-wallet.test.ts. The composition
+ * root is a top-level-await process entrypoint — importing it reads projected secret files,
+ * opens a Postgres pool and calls the live Akash Console — so there is no runtime handle to
+ * inspect. `migration` is also an OPTIONAL dep, so omitting it type-checks cleanly; only a
+ * test that reads the wiring can catch this class of regression.
+ */
+describe("composition root wiring (story.5016)", () => {
+  const source = readFileSync(
+    path.join(__dirname, "..", "..", "..", "bootstrap", "akash-tx-actuator.ts"),
+    "utf8"
+  );
+
+  /** The `new AkashTxActuator({ ... })` argument literal, brace-balanced. */
+  function actuatorDepsLiteral(): string {
+    const start = source.indexOf("new AkashTxActuator({");
+    expect(start).toBeGreaterThan(-1);
+    let depth = 0;
+    for (let i = source.indexOf("{", start); i < source.length; i += 1) {
+      if (source[i] === "{") depth += 1;
+      else if (source[i] === "}") {
+        depth -= 1;
+        if (depth === 0) return source.slice(start, i + 1);
+      }
+    }
+    return expect.unreachable("unbalanced AkashTxActuator deps literal");
+  }
+
+  it("wires a migration prover — a fail-closed gate with none refuses every paid create", () => {
+    expect(actuatorDepsLiteral()).toMatch(/\bmigration\s*[,:]/);
+  });
+
+  it("uses the SAME per-digest Job prover the ComputeWorkload controller uses", () => {
+    // Not a second abstraction: the per-digest Job IS the durable proof, and two provers
+    // would mean two answers for one bundle digest.
+    expect(source).toMatch(/new KubernetesMigrationJobAdapter\(/);
   });
 });
