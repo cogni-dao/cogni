@@ -27,9 +27,41 @@ import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  INHERITED_KEY_OWNER,
+  SUBSTRATE_RESERVED_KEYS,
+} from "@/shared/secrets/node-secrets-reserved.data";
+import {
+  PLATFORM_SERVICE_OWNED_KEYS,
   PLATFORM_SERVICE_OWNER_NODE,
   PLATFORM_SERVICES,
 } from "@/shared/secrets/platform-services.data";
+
+/**
+ * Walk the catalog once, yielding `{ name, service, inheritFrom }` per entry. The operator
+ * image ships no catalog, so every app-side mirror of a catalog fact is pinned from here.
+ */
+function catalogEntries(): {
+  name: string;
+  service?: string;
+  inheritFrom?: string;
+}[] {
+  const entries: { name: string; service?: string; inheritFrom?: string }[] =
+    [];
+  for (const line of read("infra/secrets-catalog.yaml").split("\n")) {
+    const name = /^ {2}- name:\s*(\S+)/.exec(line);
+    if (name) {
+      entries.push({ name: name[1] as string });
+      continue;
+    }
+    const current = entries.at(-1);
+    if (!current) continue;
+    const service = /^ {4}service:\s*(\S+)/.exec(line);
+    if (service) current.service = service[1] as string;
+    const inheritFrom = /^ {4}inheritFrom:\s*(\S+)/.exec(line);
+    if (inheritFrom) current.inheritFrom = inheritFrom[1] as string;
+  }
+  return entries;
+}
 
 /** Walk up to the repo root so the test survives being moved. */
 function repoRoot(): string {
@@ -97,5 +129,57 @@ describe("platform-service boundary parity", () => {
       "secret-materialize.sh must declare an owner node"
     ).not.toBeNull();
     expect(PLATFORM_SERVICE_OWNER_NODE).toBe(owner?.[1]);
+  });
+});
+
+describe("key↔service binding parity", () => {
+  it("reads a non-empty catalog", () => {
+    // Guards the guard: a broken scan would make both assertions below vacuous.
+    expect(catalogEntries().length).toBeGreaterThan(0);
+  });
+
+  it("binds exactly the keys the catalog declares under a platform service", () => {
+    // A key the catalog puts in a platform-service bucket but the app does not bind is a
+    // key that can still be misfiled into a node bucket — the wallet-exposure incident.
+    const fromCatalog = catalogEntries()
+      .filter(
+        (e) => e.service !== undefined && PLATFORM_SERVICES.has(e.service)
+      )
+      .map((e) => `${e.name}=${e.service}`)
+      .sort();
+    const fromApp = [...PLATFORM_SERVICE_OWNED_KEYS]
+      .map(([key, service]) => `${key}=${service}`)
+      .sort();
+    expect(fromApp).toEqual(fromCatalog);
+  });
+});
+
+describe("bug.5016 — overwrite-on-drift keys bind to their canonical owner", () => {
+  it("maps every catalog inheritFrom key to exactly the owner the catalog names", () => {
+    // `inheritFrom` makes secret-materialize.sh overwrite-on-drift for that key, so a
+    // self-serve write from a NON-owner node returns 200 and is silently reverted on the
+    // next flight. The binding must stay exact in both directions: a missing key
+    // re-opens the silent-revert hole, and a wrong owner would refuse the one write that
+    // actually persists. Reading the catalog directly is what stops either from drifting.
+    const fromCatalog = catalogEntries()
+      .filter((e) => e.inheritFrom !== undefined)
+      .map((e) => `${e.name}=${e.inheritFrom}`)
+      .sort();
+    const fromApp = [...INHERITED_KEY_OWNER]
+      .map(([key, owner]) => `${key}=${owner}`)
+      .sort();
+    expect(fromCatalog.length).toBeGreaterThan(0);
+    expect(fromApp).toEqual(fromCatalog);
+  });
+
+  it("does not blanket-reserve inherited keys, so the owner can still rotate them", () => {
+    // The regression this guards: reserving OPENROUTER_API_KEY outright would break the
+    // documented clean rotation path (openrouter-api-key-expert), because writing it at
+    // `operator` IS the rotation — that bucket is the source the fan-out reads.
+    // GH_WEBHOOK_SECRET is the deliberate exception: source: agent AND dual-plane.
+    const blanketReserved = [...INHERITED_KEY_OWNER.keys()].filter((key) =>
+      SUBSTRATE_RESERVED_KEYS.has(key)
+    );
+    expect(blanketReserved).toEqual(["GH_WEBHOOK_SECRET"]);
   });
 });

@@ -85,6 +85,47 @@ export function isNodeOwnedSecretKey(key: string): boolean {
 }
 
 /**
+ * bug.5016 — the SILENT-REVERT class. Keys declaring `inheritFrom: <owner>` in
+ * `infra/secrets-catalog.yaml`, mapped to the node that holds the canonical value.
+ *
+ * For these `secret-materialize.sh` is OVERWRITE-ON-DRIFT, not preserve-existing: it
+ * reads the owner's value and re-seeds the node whenever the two differ (deliberate —
+ * the node MUST byte-match the canonical owner, the bug.5021 fix). That branch runs
+ * BEFORE the preserve-existing check, so it beats a hand-set value every time. The
+ * consequence is the bug: a self-serve write to a NON-owner node returns `200` with a
+ * real KV version, and the next flight silently restores the owner's value.
+ *
+ * This is an OWNER BINDING, not a denylist, and the distinction is load-bearing. Writing
+ * `OPENROUTER_API_KEY` at `operator` IS the rotation — it is the canonical source the
+ * fan-out reads, and it is the documented clean path in the `openrouter-api-key-expert`
+ * skill. Blocking the key outright would break the one write that actually works. Only
+ * the non-owner write is refused, because only that one gets reverted.
+ *
+ * `GH_WEBHOOK_SECRET` also appears in `SUBSTRATE_RESERVED_KEYS` above and is therefore
+ * refused everywhere, including at its owner — correct, because it is `source: agent`
+ * AND dual-plane (it must byte-match the GitHub App, so a human must never type it).
+ */
+export const INHERITED_KEY_OWNER: ReadonlyMap<string, string> = new Map<
+  string,
+  string
+>([
+  ["LITELLM_MASTER_KEY", "operator"],
+  ["SCHEDULER_API_TOKEN", "operator"],
+  ["OPENROUTER_API_KEY", "operator"],
+  ["EVM_RPC_URL", "operator"],
+  ["GH_WEBHOOK_SECRET", "operator"],
+]);
+
+/**
+ * The node holding the canonical value for `key`, or `undefined` when the key has no
+ * `inheritFrom` owner. A write from any other node is accepted-then-reverted, so the
+ * route refuses it instead of reporting a success that will not survive the next flight.
+ */
+export function inheritedKeyOwner(key: string): string | undefined {
+  return INHERITED_KEY_OWNER.get(key);
+}
+
+/**
  * Gate 3: may a logical secret key cross into an OFF-CLUSTER workload
  * (Akash and friends), where the operator controls neither the host nor the
  * disk? A DENYLIST, keyed on PROVENANCE — never on a node's name.

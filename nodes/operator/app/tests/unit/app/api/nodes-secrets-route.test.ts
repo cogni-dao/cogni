@@ -198,6 +198,94 @@ describe("POST /api/v1/nodes/[id]/secrets — platform-service target", () => {
     expect(planeState.writeSecret).not.toHaveBeenCalled();
   });
 
+  it("400s an unrecognized field instead of silently dropping it", async () => {
+    // The incident, generalized: a caller sent `service` to an operator build that did
+    // not yet have the parameter. A permissive schema dropped it and wrote the node path
+    // anyway, returning 200. Strictness turns operator/caller version skew into a loud
+    // failure — the caller cannot otherwise tell a honoured field from a discarded one.
+    const res = await post({
+      env: "candidate-a",
+      key: "SOME_KEY",
+      value: VALUE,
+      serviceTypo: "akash-tx-actuator",
+    });
+
+    expect(res.status).toBe(400);
+    expect(planeState.writeSecret).not.toHaveBeenCalled();
+  });
+
+  it("403s a platform-service key written WITHOUT `service` (the misfiling shape)", async () => {
+    // This is the exact write that put an Akash wallet credential into
+    // cogni/<env>/operator — the bucket the internet-facing app reads wholesale.
+    // It must never reach the plane, even though `operator` is a legitimate node and
+    // the caller legitimately administers platform services.
+    const res = await post({
+      env: "candidate-a",
+      key: "AKASH_ACTUATOR_CONSOLE_API_KEY",
+      value: VALUE,
+    });
+
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toMatchObject({
+      errorCode: "key_belongs_to_platform_service",
+    });
+    expect(planeState.writeSecret).not.toHaveBeenCalled();
+  });
+
+  it("still writes a platform-service key to its OWN service", async () => {
+    // The binding must not break the one write that has to work: the vendor-minted
+    // Console key is `source: human`, so this route is its only sanctioned arrival path.
+    const res = await post({
+      env: "candidate-a",
+      key: "AKASH_ACTUATOR_CONSOLE_API_KEY",
+      value: VALUE,
+      service: "akash-tx-actuator",
+    });
+
+    expect(res.status).toBe(200);
+    expect(planeState.writeSecret).toHaveBeenCalledWith(
+      expect.objectContaining({ service: "akash-tx-actuator" })
+    );
+  });
+
+  it("403s an inheritFrom key written by a NON-owner node (bug.5016)", async () => {
+    // poly writes OPENROUTER_API_KEY into its own bank: 200 today, then the next flight
+    // restores operator's value because the key is overwrite-on-drift. Refuse, and name
+    // the owner so the caller is redirected to the write that actually persists.
+    gateState.result = {
+      ok: true,
+      node: { nodeId: "poly-uuid", slug: "poly" },
+    };
+
+    const res = await post(
+      { env: "candidate-a", key: "OPENROUTER_API_KEY", value: VALUE },
+      "poly"
+    );
+
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toMatchObject({
+      errorCode: "key_inherited_from_owner",
+    });
+    expect(planeState.writeSecret).not.toHaveBeenCalled();
+  });
+
+  it("still lets the OWNER node rotate an inheritFrom key", async () => {
+    // The regression guard. `operator` holds the canonical value, so this write IS the
+    // rotation and is the documented clean path (openrouter-api-key-expert). A blanket
+    // denylist would have broken it while claiming to fix bug.5016.
+    const res = await post({
+      env: "candidate-a",
+      key: "OPENROUTER_API_KEY",
+      value: VALUE,
+      op: "rotate",
+    });
+
+    expect(res.status).toBe(200);
+    expect(planeState.writeSecret).toHaveBeenCalledWith(
+      expect.objectContaining({ nodeSlug: "operator", op: "rotate" })
+    );
+  });
+
   it("still refuses a substrate-reserved key on a platform-service path", async () => {
     const res = await post({
       env: "candidate-a",

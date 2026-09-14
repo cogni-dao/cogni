@@ -224,6 +224,47 @@ does not need (`packages-architecture.md`: packages are cross-node, ≥2 consume
   env-path injection). Write/rotate only; a key-name listing (`GET`) is **not** in the
   minimum — defer.
 
+## HONOR_OR_REFUSE — the route must never 200 an intent it will not carry out
+
+Added after a live incident (bug.5016 + the candidate-a wallet misfile). The three
+gates below stop a caller reaching a path they are not entitled to. They do **not**
+stop the opposite failure, which is what actually bit: the route **accepted** a write,
+returned `200` with a real KV version, and then wrote somewhere else — or let something
+else quietly undo it. A caller has no way to detect either, so both read as success.
+
+> **Invariant.** A `200` from this route means _this exact value now lives at the path the
+> caller intended, and the substrate will not silently take it back._ Anything the route
+> cannot promise that for must be a `4xx`, never a write to a plausible-looking neighbour.
+
+Three lanes violated it, each now closed by a guard with a test that fails without it:
+
+| lane                                | how it lied                                                                                                                         | guard                                                        |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| **Unknown field dropped**           | permissive `z.object` discarded `service` when the caller was newer than the operator build; the write fell back to the node bucket | `z.strictObject` → `400`                                     |
+| **Key written to the wrong bucket** | a platform-service key sent without `service` was accepted into a node bucket                                                       | key↔service binding → `403 key_belongs_to_platform_service` |
+| **Write silently reverted**         | `inheritFrom` keys are overwrite-on-drift in `secret-materialize.sh`, so the next flight restored the canonical owner's value       | reserved key → `403 key_reserved`                            |
+
+Two consequences worth stating plainly, because they generalize beyond secrets:
+
+- **Version skew must fail loudly.** The caller and the operator pod deploy
+  independently, so a caller can always be newer than the build answering it. A
+  permissive schema converts that ordinary condition into a silent wrong write. This is
+  why strictness is a _security_ property here, not a style preference: the misfiled
+  credential landed in `cogni/<env>/operator`, which the internet-facing app consumes
+  wholesale via `dataFrom: extract` + `envFrom`.
+- **Guards must be derived from the catalog, not restated.** Both new guards are pinned
+  by parity tests that read `infra/secrets-catalog.yaml` directly, so a newly added
+  `inheritFrom` key or platform-service key cannot silently re-open either hole. The
+  operator image ships no catalog, so a hand-maintained mirror is exactly the drift that
+  let a self-serve write clobber `CONNECTIONS_ENCRYPTION_KEY` on prod beacon.
+
+**Still open (deliberately not bundled):** eight keys declare `service: _shared` without
+`inheritFrom`. Their SSOT is `cogni/<env>/_shared/<KEY>`, which the OpenBao policy denies
+this route. A node-bank write therefore creates a divergent copy that does not rotate the
+credential for anyone else — the same defect class — but refusing outright would also
+forbid a legitimate per-node override, and no clobber was reproduced. It needs a decision
+before code; tracked on `bug.5016`.
+
 ## Security boundary — defense in depth (the #1 risk)
 
 A scoping bug = cross-tenant secret write. Three independent gates, all mandatory:
