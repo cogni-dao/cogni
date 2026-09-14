@@ -439,6 +439,19 @@ export class AkashComputeAdapter implements ComputeResourcePort {
     // and blocks replay on an unknown outcome; known-handle PUT itself is idempotent.
     void p.env;
     void p.idempotencyKey;
+    await this.updateAllocated({ resourceId: p.resourceId, spec: p.spec });
+    return this.awaitBootServing(p.resourceId, p.expectedSourceSha);
+  }
+
+  /**
+   * In-place SDL replacement on a handle we already own. Spends no new escrow and mints no
+   * new handle, so it needs no allocation receipt — the PUT is idempotent by construction.
+   * Returns as soon as Console accepts it; convergence is the caller's level problem.
+   */
+  async updateAllocated(p: {
+    resourceId: string;
+    spec: ProvisionSpec;
+  }): Promise<void> {
     const sdl = buildAkashSdl(p.spec, this.sdlOptions);
     await this.request<ConsoleDeploymentDetail>(
       "PUT",
@@ -446,7 +459,6 @@ export class AkashComputeAdapter implements ComputeResourcePort {
       { data: { sdl } },
       this.writeTimeoutMs
     );
-    return this.awaitBootServing(p.resourceId, p.expectedSourceSha);
   }
 
   async release(p: { leaseId: string }): Promise<void> {
@@ -489,6 +501,99 @@ export class AkashComputeAdapter implements ComputeResourcePort {
     | { kind: "ok"; output: ProvisionOutput }
     | { kind: "slo_failed"; stage: BootFailureStage }
   > {
+    const { dseq, provider } = await this.createAndLease(
+      sdl,
+      screening,
+      tried,
+      onAllocated
+    );
+
+    // Boot SLO: the lease is paying from here — the workload must PROVE registry egress by
+    // serving /version plus fixed /readyz before the deadline, or the lease closes.
+    // Only provider-attributable endpoint/version failures count against the provider.
+    const leasedAt = Date.now();
+    try {
+      const output = await this.awaitBootServing(
+        String(dseq),
+        expectedSourceSha
+      );
+      await this.recordOutcome({
+        computeProvider: PROVIDER,
+        providerAccount: provider,
+        outcome: "boot_ok",
+        leaseId: String(dseq),
+        workload,
+        bootSeconds: Math.round((Date.now() - leasedAt) / 1000),
+      });
+      return { kind: "ok", output };
+    } catch (error) {
+      if (
+        error instanceof AkashComputeError &&
+        error.code === "BOOT_SLO_TIMEOUT"
+      ) {
+        await this.release({ leaseId: String(dseq) }).catch(() => {
+          // best-effort close; the SLO strike below is what must land
+        });
+        const stage = error.bootFailureStage ?? "status_unavailable";
+        if (isProviderAttributableBootFailure(stage)) {
+          await this.recordOutcome({
+            computeProvider: PROVIDER,
+            providerAccount: provider,
+            outcome: "slo_timeout",
+            leaseId: String(dseq),
+            workload,
+            detail: `boot proof incomplete within ${this.bootSloMs}ms`,
+          });
+          tried.add(provider);
+        }
+        return {
+          kind: "slo_failed",
+          stage,
+        };
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * The irreducible paid transaction: create the deployment (escrow opens), publish the
+   * allocated handle through `onAllocated` BEFORE any further IO, screen bids, and lease.
+   * Returns as soon as the lease exists — boot convergence is the caller's level problem
+   * (task.5095: Crossplane owns retry/backoff/readiness; this call owns only the tx).
+   */
+  async allocateAndLease(p: {
+    spec: ProvisionSpec;
+    /**
+     * Durably publish the allocated handle. A throw here closes the deployment: an
+     * unrecorded dseq is a paid lease nobody can ever find.
+     */
+    onAllocated?: (leaseId: string) => Promise<void>;
+  }): Promise<{ leaseId: string; providerAccount: string }> {
+    const sdl = buildAkashSdl(p.spec, this.sdlOptions);
+    const { dseq, provider } = await this.createAndLease(
+      sdl,
+      await this.loadScreeningContext(),
+      new Set<string>(),
+      p.onAllocated
+        ? async (resource) => {
+            await p.onAllocated?.(resource.leaseId);
+          }
+        : undefined
+    );
+    return { leaseId: String(dseq), providerAccount: provider };
+  }
+
+  /**
+   * Create → publish handle → screen → lease. Every failure after the dseq exists closes
+   * the deployment (escrow refunds) and names the dseq; a lost response leaves the
+   * deployment findable from the caller's pre-POST cursor (findAllocationSince).
+   */
+  private async createAndLease(
+    sdl: string,
+    screening: ScreeningContext,
+    tried: Set<string>,
+    onAllocated?: (resource: ProvisionOutput) => Promise<void>
+  ): Promise<{ dseq: string; provider: string }> {
     const created = await this.request<{ dseq?: string; manifest?: unknown }>(
       "POST",
       "/v1/deployments",
@@ -562,51 +667,7 @@ export class AkashComputeAdapter implements ComputeResourcePort {
       throw error;
     }
 
-    // Boot SLO: the lease is paying from here — the workload must PROVE registry egress by
-    // serving /version plus fixed /readyz before the deadline, or the lease closes.
-    // Only provider-attributable endpoint/version failures count against the provider.
-    const leasedAt = Date.now();
-    try {
-      const output = await this.awaitBootServing(
-        String(dseq),
-        expectedSourceSha
-      );
-      await this.recordOutcome({
-        computeProvider: PROVIDER,
-        providerAccount: provider,
-        outcome: "boot_ok",
-        leaseId: String(dseq),
-        workload,
-        bootSeconds: Math.round((Date.now() - leasedAt) / 1000),
-      });
-      return { kind: "ok", output };
-    } catch (error) {
-      if (
-        error instanceof AkashComputeError &&
-        error.code === "BOOT_SLO_TIMEOUT"
-      ) {
-        await this.release({ leaseId: String(dseq) }).catch(() => {
-          // best-effort close; the SLO strike below is what must land
-        });
-        const stage = error.bootFailureStage ?? "status_unavailable";
-        if (isProviderAttributableBootFailure(stage)) {
-          await this.recordOutcome({
-            computeProvider: PROVIDER,
-            providerAccount: provider,
-            outcome: "slo_timeout",
-            leaseId: String(dseq),
-            workload,
-            detail: `boot proof incomplete within ${this.bootSloMs}ms`,
-          });
-          tried.add(provider);
-        }
-        return {
-          kind: "slo_failed",
-          stage,
-        };
-      }
-      throw error;
-    }
+    return { dseq: String(dseq), provider };
   }
 
   /**

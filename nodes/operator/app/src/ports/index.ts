@@ -57,6 +57,18 @@ export type {
   LangfuseSpanHandle,
   RecordInvocationParams,
 } from "./ai-telemetry.port";
+export {
+  type AkashTxActuatorPort,
+  type AkashTxAllocationLedgerPort,
+  type AkashTxAllocationRecord,
+  type AkashTxAllocationState,
+  type AkashTxConsolePort,
+  type AkashTxCreateResult,
+  AkashTxError,
+  type AkashTxErrorCode,
+  type AkashTxObservation,
+  type AkashTxResource,
+} from "./akash-tx.port";
 export type {
   AttributionEpoch,
   AttributionPoolComponent,

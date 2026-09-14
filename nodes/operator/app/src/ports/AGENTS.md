@@ -58,6 +58,7 @@ Does NOT re-export packages with `node:` transitive dependencies.
 - IdentityAttestationRepositoryPort, IdentityAttestationSignerPort
 - TreasurySettlementPort, TreasurySettlementOutcome
 - DeployPlanePort, including operator App-backed app promotion and the operator-only production infra reconcile contract
+- AkashTxActuatorPort + AkashTxConsolePort + AkashTxAllocationLedgerPort + AkashTxError (private Akash transaction boundary: one bounded attempt per call, key-idempotent, fail-closed on an unresolved allocation — task.5095)
 - Types (ChargeReceiptParams, LlmCaller, BillingAccount, CreditLedgerEntry, etc.)
 
 ### `server.ts` — Server-only barrel

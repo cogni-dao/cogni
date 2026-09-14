@@ -287,6 +287,55 @@ The provider seam is a **1:1 adapter swap** in the operator bootstrap — `Cherr
 | **P1**                                   | `OperatorDeployPlanePort` write verbs (`dispatchNodeRefCandidateFlight` ✅ · `dispatchNodePromote` ✅ · later rollback/scale); `compute_resources` registry table (mirrors `mcp_deployments`) as the dashboard read-cache                                                                    | multi-provider                                                           |
 | **P2 — ADAPTER SHIPPED / ROUTE RETIRED** | `ComputeResourcePort` write half + `AkashComputeAdapter` exist, but imperative `POST /api/v1/compute/deployments` is tombstoned. A deploy-branch `ComputeWorkload` is the sole desired-state seam; the dedicated controller owns lifecycle/status/finalization.                              | story.5016 integration renderer + pre-merge candidate E2E proof          |
 
+### P3 — Crossplane owns reconciliation; Cogni owns the transaction (task.5095)
+
+The ComputeWorkload controller is **frozen** and gets no new capabilities. The end state splits its
+responsibilities along one line: _generic lifecycle machinery is bought, the Akash transaction is built._
+
+| Concern                                                                                                              | Owner                                                                             | Why                                                                                                                                                                               |
+| -------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Watches, retries, backoff, status/conditions, finalizers, composition, deletion policy                               | **Crossplane** (provider-http + functions, installed dormant in task.5094)        | Battle-tested OSS reconciliation; nothing Cogni-specific lives here.                                                                                                              |
+| Akash Console transaction mapping, SDL construction, provider screening, wallet custody, durable allocation receipts | **Cogni's private Akash transaction actuator** (`src/features/compute/akash-tx/`) | An Akash transaction can succeed while its response is lost; only a Cogni-owned pre-transaction receipt makes the resulting paid lease recoverable. No OSS controller knows this. |
+
+The actuator is a **service, not a controller**: a private ClusterIP HTTP surface with four typed logical
+operations (`observe` / `create` / `update` / `delete`), each one bounded attempt, and no watch, timer,
+finalizer, retry loop, or leader election. Its four irreducible behaviours are:
+
+1. **Wallet-global serialization** — at most one `preparing` allocation per wallet scope, enforced by a
+   partial unique index in Postgres (`akash_tx_allocations`), held only for the unrecoverable window
+   between reading the pre-transaction cursor and durably recording the allocated handle.
+2. **Provider screening** — audited/online/uptime/blacklist screening stays in `AkashComputeAdapter`; the
+   actuator never sees a bid, a dseq, or an escrow figure.
+3. **SDL construction** — `buildAkashSdl` remains the single place Akash's deployment language exists.
+4. **Post-response-loss recovery** — the cursor is durable _before_ the Console POST, so a lost response is
+   resolved by adopting the unique post-baseline allocation, or it fails closed. It is never healed by a
+   fresh create, and no timer ever releases an unresolved slot.
+
+Refusals are observable by construction: every refusal emits a structured log marker
+(`akash_tx_wallet_allocation_blocked`, `akash_tx_allocation_unresolved`, `akash_tx_allocation_recovered`)
+_before_ it answers. Writing a refusal only into CR status is what made a fleet-wide wallet deadlock
+invisible (bug.5115).
+
+**ONE_WALLET_ONE_WRITER is a precondition, not a convention.** Wallet-global serialization only
+recovers a lost response if exactly one process spends from the wallet — a second writer's lease is
+indistinguishable from the actuator's own. The legacy ComputeWorkload controller is frozen but still
+reconciling, so the actuator does not wait for it to be retired: it gets its **own dedicated Akash
+Console account per environment** (`AKASH_ACTUATOR_CONSOLE_API_KEY`, distinct from the controller's
+`AKASH_CONSOLE_API_KEY`). `features/compute/akash-tx/akash-tx-wallet.ts` enforces this at wiring time
+— the dedicated credential is required, never falls back to the legacy one, and resolution fails if
+the two are byte-equal. The ledger scope is `akash-console:<environment>`, derived from the
+environment rather than the secret so rotation cannot orphan in-flight receipts. Per-environment
+Postgres over ONE shared wallet is the unsound shape this rules out.
+
+Custody is OpenBao, projected through the existing ESO/envFrom contract: the catalog declares the key
+`tier: A1, service: operator`, so it lands at `cogni/<env>/operator/AKASH_ACTUATOR_CONSOLE_API_KEY`,
+is extracted into `operator-env-secrets` by the operator ExternalSecret's `dataFrom: extract`, and
+reaches the pod through the `envFrom` it already has. Git, workflows, Crossplane resources, and VM
+`.env` files carry the **name** only — never the value. The receipts table itself
+(`akash_tx_allocations`) is operator-local schema (`@shared/db/akash-tx-allocations`), deliberately
+not in `@cogni/db-schema` and never in Doltgres: it is system-of-record evidence that money may have
+been spent.
+
 **Prior art:** the Argo-GitOps foundation this builds on is [PR #628](https://github.com/Cogni-DAO/cogni/pull/628) (`task.0149`, open since 2026-03-25, superseded piecemeal by per-node flighting). The registry/adapter-swap pattern is proven in [`mcp-control-plane.md`](./mcp-control-plane.md). The decentralized-compute target is `infra/provision/akash/FUTURE_AKASH_INTEGRATION.md`. **Cherry Servers is the explicit MVP stopgap; Akash is the crypto-native end state.**
 
 ## Enforcement

@@ -81,6 +81,7 @@ export {
   AkashComputeError,
   type AkashComputeErrorCode,
 } from "./compute/akash-compute.adapter";
+export { DrizzleAkashTxAllocationLedger } from "./compute/akash-tx-allocation-ledger.adapter";
 export {
   CherryComputeAdapter,
   type CherryComputeAdapterConfig,
