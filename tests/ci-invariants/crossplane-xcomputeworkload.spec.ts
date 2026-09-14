@@ -226,7 +226,7 @@ describe("XComputeWorkload Composition (task.5096)", () => {
     // @contracts/compute.akash-tx.v1 accepts EXACTLY {cogniKey, environment, spec}; the spec
     // is `{name, services[]}`. An extra key is a 400 forever, never a partially-honoured call.
     expect(template).toContain(
-      '$payload := dict "cogniKey" $cogniKey "environment" $env "spec" (dict "name" $slug "services" $services) "migration" $migration'
+      '$payload := dict "cogniKey" $cogniKey "environment" $env "identity" $identity "spec" (dict "name" $slug "services" $services) "migration" $migration'
     );
     // The four bounded ops map 1:1 onto provider-http's four actions — no Cogni code decides
     // WHEN to act.
@@ -251,7 +251,18 @@ describe("XComputeWorkload Composition (task.5096)", () => {
     expect(template).toContain(
       '$cogniKey := printf "xcw:%s:%s:%d" $ns $name $epoch'
     );
-    expect(templateCode).not.toContain("metadata.generation");
+    // Scoped to the KEY, not the whole template: task.5103 legitimately reads
+    // metadata.generation for the spend receipt's provenance. What must never happen is that
+    // per-reconcile value leaking into the IDEMPOTENCE key, where it would report "no existing
+    // resource" after a promote and mint a SECOND PAID LEASE. The two uses are opposites — one
+    // records which revision asked, the other must not vary at all.
+    const keyInputs = ["$ns", "$name", "$epoch"];
+    const keyLiteral =
+      /\$cogniKey := printf "[^"]*"([^}]*)\}\}/.exec(templateCode)?.[1] ?? "";
+    expect(keyLiteral.trim().split(/\s+/)).toEqual(keyInputs);
+    expect(
+      /\$epoch := int \(dig "leaseEpoch" 0 \$spec\)/.test(templateCode)
+    ).toBe(true);
     expect(templateCode).not.toContain("resourceVersion");
     const epoch = specSchema.leaseEpoch as YamlObject;
     expect(epoch.default).toBe(0);
@@ -412,6 +423,82 @@ describe("XComputeWorkload migration precondition (bug.5116 order, bug.5140 gate
       }
       expect(literal).not.toMatch(/command|args|phases|script/);
     }
+  });
+});
+
+describe("XComputeWorkload spend attribution (task.5103)", () => {
+  it("states who consumes the infrastructure on every mutation", () => {
+    // AkashTxCreateInputSchema and AkashTxUpdateInputSchema BOTH require `identity`. An update
+    // mints no lease, but it still mutates a PAID resource, so it says whose it is.
+    expect(template).toContain('"identity" $identity');
+    const leaseBlock = template.slice(
+      template.indexOf("composition-resource-name: akash-lease"),
+      template.indexOf("composition-resource-name: dns-record")
+    );
+    const mappings = Object.fromEntries(
+      [
+        ...leaseBlock.matchAll(
+          /- action: (\w+)\n([\s\S]*?)(?=\n\s+- action: |\n\s+expectedResponseCheck:)/g
+        ),
+      ].map((m) => [m[1], m[2]])
+    );
+    // CREATE posts the payload verbatim; UPDATE is hand-built and must carry it explicitly.
+    expect(mappings.CREATE).toContain(".payload.body");
+    expect(mappings.UPDATE).toContain("identity: .payload.body.identity");
+    // Observe and delete are strict objects with NO identity field — sending one is a 400.
+    expect(mappings.OBSERVE).not.toContain("identity");
+    expect(mappings.REMOVE).not.toContain("identity");
+  });
+
+  it("sends exactly the three contract keys", () => {
+    // AkashTxIdentitySchema is a strictObject: an extra key is a 400, never a dropped field.
+    // Deliberately NOT here, per the contract: wallet scope (custody — a caller must never be
+    // able to name a wallet), billing account, DAO address, and actor.
+    const literal = /\$identity := dict ([^}]*)/.exec(templateCode)?.[1] ?? "";
+    expect(literal).not.toBe("");
+    const keys = [...literal.matchAll(/"([a-zA-Z]+)"/g)].map((m) => m[1]);
+    expect(keys).toEqual(["nodeId", "compositeUid", "compositeGeneration"]);
+    // nodeId comes from the SPEC, which the identity gate has already proven equal to
+    // metadata.name — so the identity the cluster uses and the one the ledger records cannot
+    // drift. Deriving it from the slug or the cogniKey instead would be exactly the inference
+    // the actuator refuses to do.
+    expect(literal).toContain("$spec.nodeId");
+  });
+
+  it("never fabricates a revision it did not observe", () => {
+    // A defaulted compositeGeneration of 1 would record a revision that never happened, and the
+    // receipt's CHECK (> 0) would happily accept the lie — a fabricated provenance is worse than
+    // a refusal because it is indistinguishable from a real one after the fact.
+    expect(template).toContain('{{- if not (hasKey $meta "generation") }}');
+    expect(template).toContain(
+      "refusing to fabricate a revision that was never observed"
+    );
+    expect(template).toContain("{{- $generation := int $meta.generation }}");
+    expect(template).toContain("{{- if lt $generation 1 }}");
+    // No default anywhere on the generation or the uid: `dig`'s fallback is the defaulting
+    // idiom used elsewhere in this template, and it must not appear for either.
+    expect(templateCode).not.toMatch(/dig "generation"/);
+    expect(templateCode).not.toMatch(/dig "metadata" "generation"/);
+    // The uid fallback exists only to DETECT absence; it is immediately refused, never sent.
+    expect(template).toContain('{{- $compositeUid := dig "uid" "" $meta }}');
+    expect(template).toContain('{{- if eq $compositeUid "" }}');
+  });
+
+  it("treats an identity conflict as terminal, not as something to retry", () => {
+    // The actuator maps identity_conflict to 422, not 409, because no number of retries changes
+    // who consumed a resource. That must fall out of the existing status-driven mapping rather
+    // than need a special case — 422 is neither 409 nor >= 500, so it reports Failed.
+    expect(template).toContain(
+      "$refusalRetryable := or (eq $respStatus 409) (ge $respStatus 500)"
+    );
+    expect("identity_conflict").toMatch(
+      new RegExp(
+        (
+          ((statusSchema.failure as YamlObject).properties as YamlObject)
+            .reason as YamlObject
+        ).pattern as string
+      )
+    );
   });
 });
 
