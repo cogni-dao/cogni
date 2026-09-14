@@ -187,7 +187,7 @@ describe("buildComputeWorkloadManifest", () => {
       publicHost: "toks4.cognidao.org",
       computeApi: "crossplane",
       dns: { provider: "cloudflare", zoneId: "0".repeat(32) },
-      runtime: { substrateHost: "10.0.0.7" },
+      runtime: { substrateHost: "cogni.vm.cognidao.org" },
     });
 
     expect(manifest.kind).toBe("XComputeWorkload");
@@ -197,15 +197,49 @@ describe("buildComputeWorkloadManifest", () => {
       migration: { policy: "RequireBeforeTransaction" },
       bootPolicy: { onDeadline: "Hold" },
       dns: { provider: "cloudflare", zoneId: "0".repeat(32) },
-      runtime: { substrateHost: "10.0.0.7" },
+      runtime: { substrateHost: "cogni.vm.cognidao.org" },
     });
   });
 
   /**
-   * Absent runtime topology is a SUPPORTED state, not an oversight: the substrate address is
-   * the env VM's host, which desired state cannot derive from the public apex. Omitting it
-   * degrades exactly like the legacy controller did on an unparseable DSN; guessing it would
-   * point the node at the wrong substrate.
+   * THE MIS-WIRE GUARD (story.5016 step 8). The substrate answers on 7233/6379/4000; the public
+   * apex is Cloudflare-proxied and drops all three. It is also the other hostname in scope at
+   * every call site, so passing it is the plausible mistake — and one that renders, syncs and
+   * buys a lease before the node fails its first Temporal call. Refuse it at build time.
+   */
+  it("refuses a substrate host that is the node's own public host", () => {
+    expect(() =>
+      buildComputeWorkloadManifest({
+        slug: "toks4",
+        environment: "production",
+        bundleRef: `ghcr.io/cogni-dao/toks4@sha256:${BUNDLE_DIGEST}`,
+        bundle,
+        publicHost: "toks4.cognidao.org",
+        computeApi: "crossplane",
+        runtime: { substrateHost: "toks4.cognidao.org" },
+      })
+    ).toThrow(/environment VM host/);
+  });
+
+  it("refuses a substrate host that is not a hostname", () => {
+    expect(() =>
+      buildComputeWorkloadManifest({
+        slug: "toks4",
+        environment: "production",
+        bundleRef: `ghcr.io/cogni-dao/toks4@sha256:${BUNDLE_DIGEST}`,
+        bundle,
+        publicHost: "toks4.cognidao.org",
+        computeApi: "crossplane",
+        runtime: { substrateHost: "http://cogni.vm.cognidao.org:7233" },
+      })
+    ).toThrow(/RFC-1123 hostname/);
+  });
+
+  /**
+   * Absent runtime topology remains a SUPPORTED state: the composite omits the substrate env
+   * block rather than guessing, degrading exactly like the legacy controller did on an
+   * unparseable DSN. The deploy lane always supplies it (the composite action derives it with
+   * vm_host_for_env), so this covers a caller that genuinely has no substrate to name.
    */
   it("omits runtime topology rather than deriving a substrate host", () => {
     const manifest = buildComputeWorkloadManifest({

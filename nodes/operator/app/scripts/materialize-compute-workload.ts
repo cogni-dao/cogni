@@ -69,11 +69,13 @@ const options = {
   // you WOULD write, but write no record", so a caller without a zone still gets observable
   // intent instead of a hard failure.
   "dns-zone-id": { type: "string" },
-  // Environment VM host serving the shared substrate ports (5432/6379/4000/7233) — the value
-  // the legacy controller read out of the DATABASE_URL secret. NOT derivable from --domain
-  // (that is the public apex; the substrate is the VM, `HOST_IP` in deploy-infra.sh), so it is
-  // an explicit input with no fallback. Absent omits spec.runtime, which degrades exactly like
-  // the legacy path did on an unparseable DSN.
+  // Environment VM host serving the shared substrate ports (5432/5435/6379/4000/7233) — the
+  // value the legacy controller read back out of the DATABASE_URL secret. NOT derivable from
+  // --domain: that is the Cloudflare-PROXIED public apex, which drops every non-HTTP port. The
+  // caller derives it with vm_host_for_env() (scripts/setup/lib/fork-identity.sh), the same
+  // primitive provisioning used to publish the VM's unproxied A record — see
+  // .github/actions/materialize-compute-workload/action.yml. Still optional here: absent omits
+  // spec.runtime, degrading exactly like the legacy path did on an unparseable DSN.
   "substrate-host": { type: "string" },
   "output-dir": { type: "string" },
 } as const;

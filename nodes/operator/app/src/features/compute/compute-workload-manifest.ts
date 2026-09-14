@@ -93,16 +93,35 @@ export interface XComputeWorkloadBootPolicy {
  * derived this from the hostname inside the DATABASE_URL SECRET VALUE, which an engine that
  * never sees a secret structurally cannot do — so the XRD hoisted it into desired state.
  *
- * ABSENT IS SUPPORTED and is the current default here: the composite omits the substrate env
- * block (no Temporal / Redis / LiteLLM wiring) rather than guessing, exactly as the legacy
- * path degraded on an unparseable DSN. It is deliberately NOT derived from `--domain`: the
- * substrate address is the environment VM's host (`HOST_IP` in scripts/ci/deploy-infra.sh),
- * which is not the public apex. Deriving it would silently point a node at the wrong
- * substrate, which is strictly worse than omitting it.
+ * WHAT `substrateHost` MUST BE: the environment VM, the single host that answers the shared
+ * substrate ports (`SUBSTRATE_PORTS="5432,5435,6379,4000,7233"` in
+ * scripts/ci/render-compute-egress-allowlist.sh). The legacy value was that VM's literal IP,
+ * because `scripts/ci/deploy-infra.sh` builds `DATABASE_URL` from `HOST_IP=$(hostname -I …)`
+ * and `sharedSubstrateEnv()` read `new URL(DATABASE_URL).hostname` back out of the secret.
+ *
+ * WHERE THE NON-SECRET FORM COMES FROM: that VM already has a published, UNPROXIED DNS
+ * alias — `vm_host_for_env()` in scripts/setup/lib/fork-identity.sh, e.g.
+ * `cogni-candidate-a.vm.cognidao.org`. `scripts/setup/provision-env-vm.sh` creates it as an A
+ * record pointing at the same `VM_IP`, deliberately `proxied=false` so non-HTTP ports reach the
+ * origin, and rewrites every in-cluster `{postgres,temporal,litellm,redis,doltgres}-external`
+ * Service to that ExternalName. So the alias and the DSN hostname are the same machine by
+ * construction, and only the alias is non-secret. Callers derive it with that primitive; see
+ * `.github/actions/materialize-compute-workload/action.yml`.
+ *
+ * It is deliberately NOT derived from `--domain`: that is the browser-facing, Cloudflare-PROXIED
+ * public apex (`test.cognidao.org`), which terminates 80/443 at the edge and drops 7233/6379/4000
+ * outright. Pointing a node there would fail silently at first Temporal call rather than loudly.
+ *
+ * ABSENT IS STILL SUPPORTED: the composite omits the substrate env block (no Temporal / Redis /
+ * LiteLLM wiring) rather than guessing, exactly as the legacy path degraded on an unparseable DSN.
  */
 export interface XComputeWorkloadRuntime {
   readonly substrateHost: string;
 }
+
+/** RFC-1123 hostname, the `format: hostname` the XRD declares for `spec.runtime.substrateHost`. */
+const SUBSTRATE_HOSTNAME =
+  /^(?=.{1,253}$)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$/;
 
 /**
  * The Crossplane composite's spec. A field-for-field superset of the legacy CR spec: the three
@@ -197,6 +216,24 @@ export function buildComputeWorkloadManifest(
     throw new Error(
       "[compute-workload-manifest] dns and runtime are carried only by the crossplane authority; the legacy controller derives both itself (zone from an in-cluster secret, substrate host from the DATABASE_URL value)"
     );
+  }
+
+  if (input.runtime) {
+    if (!SUBSTRATE_HOSTNAME.test(input.runtime.substrateHost)) {
+      throw new Error(
+        "[compute-workload-manifest] runtime.substrateHost must be a lowercase RFC-1123 hostname"
+      );
+    }
+    // THE MIS-WIRE GUARD. The one wrong value that would still render, still sync, and still
+    // pass every static check is the node's own browser-facing host — the Cloudflare-proxied
+    // apex a caller reaches for by reflex because it is the other hostname in scope. It drops
+    // 7233/6379/4000 at the edge, so the node would boot and then fail its first Temporal call.
+    // Refuse it here, where desired state is built, rather than 20 minutes later on a paid lease.
+    if (input.runtime.substrateHost === input.publicHost) {
+      throw new Error(
+        "[compute-workload-manifest] runtime.substrateHost must be the environment VM host, not the node's public host"
+      );
+    }
   }
 
   const namespace = `cogni-${input.environment}`;
