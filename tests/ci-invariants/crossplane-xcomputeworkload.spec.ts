@@ -466,6 +466,23 @@ describe("XComputeWorkload refusal observability (bug.5115)", () => {
     }
   });
 
+  it("carries the lease handle through a refusal, but never invents one", () => {
+    // provider-http overwrites status.response.body with the ERROR body of a failed mutation,
+    // so a 4xx on UPDATE leaves the render with no observation — and the naive result is that
+    // status.resource.id vanishes at the exact moment an operator needs the lease handle to
+    // diagnose the failure. A refusal is "we did not get to look", not "the lease is gone".
+    expect(template).toContain(
+      '$prevResource := dig "status" "resource" (dict) $xr'
+    );
+    expect(template).toContain(
+      '{{- else if and (ne $refusalCode "") $prevResource }}'
+    );
+    // The latch is guarded on the REFUSAL, not merely on `found == false`: a genuine
+    // `found: false` observation really does mean gone, and advertising a stale handle there
+    // would be a lie.
+    expect(template).not.toContain("{{- else if $prevResource }}");
+  });
+
   it("never lets a refusal mask a spend decision", () => {
     // BOOT_SLO_OR_CLOSE decides whether money keeps being spent. A transient refusal must not
     // displace it, so the refusal branch comes strictly AFTER both deadline branches.
