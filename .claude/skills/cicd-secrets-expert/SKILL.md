@@ -183,14 +183,36 @@ Three defense-in-depth gates in #1627: OpenFGA `can_manage_secrets` (fail-closed
 `could not get secret data from provider` / `cannot find secret data for key: "AUTH_SECRET"` — failing at
 `spec.data[0]`, i.e. the node's OpenBao path is **empty**, not one key short.
 
-**Cause:** the node was moved to external compute (`deployment_provider.<env>: akash`) and thereby dropped
-out of the job that provisions it. `node-substrate` — which runs `secret-materialize` — is matrixed on
-`k3s_node_targets_json` in both `candidate-flight.yml` and `promote-and-deploy.yml`. Flip a node's provider
-and it silently leaves the population that gets served. Nothing errors; nobody creates its secrets.
+> ⚠️ **FIXED — rule 1 below shipped. Do not diagnose a live node from the Historical cause.** An
+> Akash-placed node **is** materialized today; see "As-built" before concluding anything. This section
+> is kept for the invariant and the failure signature, not as a description of current behaviour.
 
-**Why it hides:** the first external nodes were k3s nodes _first_. They kept the secrets they already had,
-so test and preview looked healthy while inheriting from a k3s past. The defect only surfaces in an
-environment where that node never ran on k3s. Do not treat a green lower environment as evidence.
+**Historical cause (superseded):** the node was moved to external compute
+(`deployment_provider.<env>: akash`) and thereby dropped out of the job that provisions it.
+`node-substrate` — which runs `secret-materialize` — was matrixed on `k3s_node_targets_json`, so flipping a
+node's provider silently removed it from the population that got served. Nothing errored; nobody created
+its secrets.
+
+**As-built (verify before you trust either version):** the population was split, not narrowed. Both lanes
+run **the same script** — `scripts/ci/run-node-substrate.sh`, whose header calls itself _"the ONE per-node
+substrate runner"_ and whose `case "$DEPLOYMENT_PROVIDER"` accepts `k3s|akash`. It calls
+`secret-materialize.sh` for either provider.
+
+| lane  | job                           | matrix                               |
+| ----- | ----------------------------- | ------------------------------------ |
+| k3s   | `node-substrate`              | `k3s_node_targets_json`              |
+| Akash | **`external-node-preflight`** | `external_compute_node_targets_json` |
+
+**The trap that outlived the bug:** the JOB `node-substrate` and the SCRIPT `run-node-substrate.sh` share a
+name but serve different populations. Tracing the job alone shows a k3s-only matrix and looks like proof
+that Akash nodes are never materialized — a wrong, confident conclusion. The disconfirming evidence is
+cheap: `node-template` and `toks4` are `deployment_provider.candidate-a: akash` and both carry complete
+buckets including `LITELLM_VIRTUAL_KEY`. If Akash nodes were never materialized, those could not exist.
+**Grep for every `run-node-substrate.sh` call site, not just the obvious job** — there are two.
+
+**Why the original defect hid:** the first external nodes were k3s nodes _first_. They kept the secrets they
+already had, so test and preview looked healthy while inheriting from a k3s past. The defect only surfaced
+in an environment where that node never ran on k3s. Do not treat a green lower environment as evidence.
 
 **Two rules:**
 
