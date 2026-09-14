@@ -54,6 +54,8 @@ Pickup: you own the **operator self-serve secrets write plane**. It is now the s
 - [ ] No rotation needed: the misfiled copy at `cogni/candidate-a/operator/` was overwritten with a non-credential placeholder (v67) and the operator app never read that key (`serverEnv()` dropped it in #2211). If you ever DO rotate, coordinate with the Akash dev-manager (`story.5016`) — the actuator fails closed, so a rotation without a projection is an outage for that component.
 - [ ] Land the `platform_service` OpenFGA relation and narrow the `secrets_manager@node:operator` widening.
 
+**Also yours (surfaced by independent validation, 2026-09-14):** the actuator's only death signal when it cannot mount its credential is a kubelet `FailedMount` event — it emits **zero first-party logs**, so a fail-closed wallet writer cannot report *why* it refused to start. Distinct from bug.5127 (which is about lease logs not reaching Loki). This directly caused ~25 minutes of misdiagnosis: `actuator_account_unverifiable` was read as a bad credential when the volume had simply never mounted.
+
 **Gotchas:**
 - **OpenFGA stores are per-environment.** A grant approved on the production operator does NOT reach candidate-a; the symptom is `403` (tuple missing) vs `503` (relation missing in that env's model) — the distinction tells you which fix applies.
 - The route's authz denies **before** service/key-specific checks, so `unknown_platform_service` and `key_reserved` are currently indistinguishable from generic `authz_denied` externally. Diagnosability gap, not a security one.
