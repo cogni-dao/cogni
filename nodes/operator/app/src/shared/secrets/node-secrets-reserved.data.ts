@@ -112,9 +112,10 @@ export const OFF_CLUSTER_WORKLOAD_DENIED_KEYS: ReadonlySet<string> = new Set([
   // its own vendor accounts; a copy lets the holder drive fleet infrastructure
   // (deploy compute, rewrite DNS, read fleet telemetry) from anywhere.
   "AKASH_CONSOLE_API_KEY",
-  // Same class, second wallet: the private Akash transaction actuator spends from its
-  // OWN per-environment Console account (task.5095). A node workload holding it could
-  // create paid leases AND break ONE_WALLET_ONE_WRITER for the actuator's ledger.
+  // Same class, tighter custody: the private Akash transaction actuator is the ONE active
+  // writer on the operator sponsor wallet (task.5095, story.5016). It lives in its own
+  // `cogni/<env>/akash-tx-actuator` bucket precisely so nothing else can read it; a node
+  // workload holding a copy could create paid leases AND break ONE_WALLET_ONE_WRITER.
   "AKASH_ACTUATOR_CONSOLE_API_KEY",
   // The bearer token that unlocks that second wallet over the wire (task.5102). The
   // actuator is a private ClusterIP wallet writer with no other authentication, so a

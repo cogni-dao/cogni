@@ -13,6 +13,8 @@
 #     (APP_DB_PASSWORD/SERVICE generated; DATABASE_URL/SERVICE_URL embed the
 #     per-node app_<node> role; DOLTGRES_PASSWORD derived per-node + DOLTGRES_URL
 #     composed from it as the postgres superuser — the bug.5002 cutover, both planes);
+#   - non-node PLATFORM_SERVICES get their source:agent keys minted into their OWN
+#     cogni/<env>/<service> bucket, by the OWNER leg only (story.5016 amendment 1);
 #   - catalog-declared LiteLLM virtual keys are explicitly registered under the
 #     canonical node/env alias, without placing the plaintext key in lookup URLs;
 #   - lookup, registration, alias collision, and transport errors fail closed;
@@ -313,6 +315,77 @@ if grep -q 'sk-or-operator-canonical\|sk-or-stale-divergent\|writer-token\|sk-co
   echo "secret value leaked to output" >&2
   exit 1
 fi
+
+# ── Platform-service pass (story.5016 secret-boundary amendments) ────────────
+# AKASH_TX_ACTUATOR_TOKEN is source:agent at `service: akash-tx-actuator`, a NON-node
+# bucket that exists so the credential is unreachable from the operator app's
+# `dataFrom: extract`. Two things must hold: only the OWNER leg writes it (the node
+# matrix is parallel — two minters on a cold bucket would race), and it is MINTED, never
+# hand-seeded (the killer rule: a generated value must never be human-typed).
+
+# 1. A non-owner leg must not touch the platform bucket. The run above was
+#    `node-template` with the default owner (operator), so the path must still be absent.
+if [ -e "$BAO_ROOT/cogni/candidate-a/akash-tx-actuator" ]; then
+  echo "a non-owner node leg wrote the platform-service bucket (parallel-matrix race)" >&2
+  exit 1
+fi
+
+# 2. The owner leg mints it. PLATFORM_SERVICE_OWNER_NODE is overridden so this exercises
+#    the pass without dragging in the whole operator-node materialization.
+env \
+  VM_HOST=fake \
+  DOMAIN=test.cognidao.org \
+  SSH_OPTS="-i fake-key -o StrictHostKeyChecking=no" \
+  SECRET_MATERIALIZE_SSH_BIN="$FAKEBIN/ssh" \
+  FAKE_REMOTE_PATH="$FAKEBIN" \
+  FAKE_BAO_ROOT="$BAO_ROOT" \
+  FAKE_LITELLM_STORE="$LITELLM_STORE" \
+  FAKE_LITELLM_LOG="$LITELLM_LOG" \
+  FAKE_LITELLM_MASTER_KEY=sk-cogni-operator-master \
+  PLATFORM_SERVICE_OWNER_NODE=node-template \
+  bash scripts/ci/secret-materialize.sh candidate-a node-template > "$TMPROOT/out-platform.txt"
+
+PLATFORM_TOKEN_FILE="$BAO_ROOT/cogni/candidate-a/akash-tx-actuator/AKASH_TX_ACTUATOR_TOKEN"
+test -f "$PLATFORM_TOKEN_FILE" \
+  || { echo "owner leg did not mint AKASH_TX_ACTUATOR_TOKEN into cogni/candidate-a/akash-tx-actuator" >&2; exit 1; }
+PLATFORM_TOKEN="$(cat "$PLATFORM_TOKEN_FILE")"
+[[ "$PLATFORM_TOKEN" =~ ^[0-9a-f]{64}$ ]] \
+  || { echo "AKASH_TX_ACTUATOR_TOKEN must be the catalog generator's hex/32 output" >&2; exit 1; }
+
+# 3. source:human keys at a platform path are NEVER generated — a vendor-minted Console
+#    credential must come through the sanctioned write path, not be invented here.
+if [ -e "$BAO_ROOT/cogni/candidate-a/akash-tx-actuator/AKASH_ACTUATOR_CONSOLE_API_KEY" ]; then
+  echo "materialize generated a source:human vendor credential" >&2
+  exit 1
+fi
+
+# 4. The platform key must not also land in the node bucket (that is the leak we moved
+#    it out of), and its value must never be echoed.
+if [ -e "$BAO_ROOT/cogni/candidate-a/node-template/AKASH_TX_ACTUATOR_TOKEN" ]; then
+  echo "platform-service key leaked into a node bucket" >&2
+  exit 1
+fi
+if grep -qF "$PLATFORM_TOKEN" "$TMPROOT/out-platform.txt"; then
+  echo "platform-service secret value leaked to output" >&2
+  exit 1
+fi
+
+# 5. Idempotent: a second owner-leg run must preserve the token (rotating it under a live
+#    Crossplane Composition would break the provider-http placeholder mid-flight).
+env \
+  VM_HOST=fake \
+  DOMAIN=test.cognidao.org \
+  SSH_OPTS="-i fake-key -o StrictHostKeyChecking=no" \
+  SECRET_MATERIALIZE_SSH_BIN="$FAKEBIN/ssh" \
+  FAKE_REMOTE_PATH="$FAKEBIN" \
+  FAKE_BAO_ROOT="$BAO_ROOT" \
+  FAKE_LITELLM_STORE="$LITELLM_STORE" \
+  FAKE_LITELLM_LOG="$LITELLM_LOG" \
+  FAKE_LITELLM_MASTER_KEY=sk-cogni-operator-master \
+  PLATFORM_SERVICE_OWNER_NODE=node-template \
+  bash scripts/ci/secret-materialize.sh candidate-a node-template > "$TMPROOT/out-platform2.txt"
+test "$(cat "$PLATFORM_TOKEN_FILE")" = "$PLATFORM_TOKEN" \
+  || { echo "re-run rotated AKASH_TX_ACTUATOR_TOKEN" >&2; exit 1; }
 
 # Drift repair: a stale per-node DOLTGRES_URL must recompose from the operator
 # canonical superuser, matching DATABASE_URL/_SERVICE_URL behavior. This is the

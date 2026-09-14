@@ -318,23 +318,43 @@ invisible (bug.5115).
 
 **ONE_WALLET_ONE_WRITER is a precondition, not a convention.** Wallet-global serialization only
 recovers a lost response if exactly one process spends from the wallet — a second writer's lease is
-indistinguishable from the actuator's own. The legacy ComputeWorkload controller is frozen but still
-reconciling, so the actuator does not wait for it to be retired: it gets its **own dedicated Akash
-Console account per environment** (`AKASH_ACTUATOR_CONSOLE_API_KEY`, distinct from the controller's
-`AKASH_CONSOLE_API_KEY`). `features/compute/akash-tx/akash-tx-wallet.ts` enforces this at wiring time
-— the dedicated credential is required, never falls back to the legacy one, and resolution fails if
-the two are byte-equal. The ledger scope is `akash-console:<environment>`, derived from the
-environment rather than the secret so rotation cannot orphan in-flight receipts. Per-environment
-Postgres over ONE shared wallet is the unsound shape this rules out.
+indistinguishable from the actuator's own.
 
-Custody is OpenBao, projected through the existing ESO/envFrom contract: the catalog declares the key
-`tier: A1, service: operator`, so it lands at `cogni/<env>/operator/AKASH_ACTUATOR_CONSOLE_API_KEY`,
-is extracted into `operator-env-secrets` by the operator ExternalSecret's `dataFrom: extract`, and
-reaches the pod through the `envFrom` it already has. Git, workflows, Crossplane resources, and VM
-`.env` files carry the **name** only — never the value. The receipts table itself
-(`akash_tx_allocations`) is operator-local schema (`@shared/db/akash-tx-allocations`), deliberately
-not in `@cogni/db-schema` and never in Doltgres: it is system-of-record evidence that money may have
-been spent.
+**One wallet, one ACTIVE writer — same account, hard cutover** (story.5016, BINDING; this SUPERSEDES
+the earlier "second dedicated Console account per environment" design, which was withdrawn). A second
+account would create exactly the split-brain the Crossplane cutover exists to purge. The order is:
+structurally disable every legacy ComputeWorkload controller writer → **revoke** the legacy Console
+API key → mint a **fresh key on the SAME account** → store it only under the actuator's dedicated
+OpenBao path → run exactly one actuator and one durable ledger against that wallet. Separation from
+the retired writer is therefore a **revocation fact**, not a runtime comparison.
+
+`features/compute/akash-tx/akash-tx-wallet.ts` enforces what remains checkable at wiring time:
+`AKASH_ACTUATOR_CONSOLE_API_KEY` is required with no fallback, and the **non-secret** pinned
+`AKASH_ACTUATOR_ACCOUNT_ID` (plain Deployment config — a public on-chain address, never an OpenBao
+key) must be present and must match the account the live Console read reports, or the process exits
+before it listens. **The actuator never possesses `AKASH_CONSOLE_API_KEY`**: task.5095 projected it
+purely to byte-compare, which made the actuator hold the very wallet it claimed isolation from, and
+still only proved "different bytes" rather than "the right wallet". The ledger scope is
+`akash-console:<environment>`, derived from the environment rather than the secret so rotation cannot
+orphan in-flight receipts. Per-environment Postgres over ONE shared wallet is the unsound shape this
+rules out — so **v0 serves candidate-a only**; preview and production are deliberately not wired.
+
+Custody is OpenBao under a **dedicated service boundary**, not the broad operator bucket. The catalog
+declares `tier: A1, service: akash-tx-actuator` for both `AKASH_ACTUATOR_CONSOLE_API_KEY` and
+`AKASH_TX_ACTUATOR_TOKEN`, so they land at `cogni/<env>/akash-tx-actuator/*` and are projected by the
+actuator's **own** ExternalSecret into `akash-tx-actuator-env-secrets`, which only the actuator pod
+mounts (an explicit least-privilege `items:` list, never `envFrom`). This is load-bearing: the public
+operator app consumes the **entire** `cogni/<env>/operator` bucket via `dataFrom: extract` →
+`operator-env-secrets` → `envFrom`, so a credential parked there is readable by the internet-facing
+process and an operator-app compromise would steal the wallet. The operator Deployment has no
+ExternalSecret, `envFrom`, or volume naming the actuator's path or Secret. Only `DATABASE_URL` is
+projected from the operator bucket, because the receipts table lives in the operator's own Postgres.
+`AKASH_TX_ACTUATOR_TOKEN` is `source: agent` with an existing `generate: {kind: hex, bytes: 32}` —
+minted idempotently by `scripts/ci/secret-materialize.sh`, **never hand-typed** (the killer rule).
+Git, workflows, Crossplane resources, and VM `.env` files carry the **name** only — never the value.
+The receipts table itself (`akash_tx_allocations`) is operator-local schema
+(`@shared/db/akash-tx-allocations`), deliberately not in `@cogni/db-schema` and never in Doltgres: it
+is system-of-record evidence that money may have been spent.
 
 **Prior art:** the Argo-GitOps foundation this builds on is [PR #628](https://github.com/Cogni-DAO/cogni/pull/628) (`task.0149`, open since 2026-03-25, superseded piecemeal by per-node flighting). The registry/adapter-swap pattern is proven in [`mcp-control-plane.md`](./mcp-control-plane.md). The decentralized-compute target is `infra/provision/akash/FUTURE_AKASH_INTEGRATION.md`. **Cherry Servers is the explicit MVP stopgap; Akash is the crypto-native end state.**
 

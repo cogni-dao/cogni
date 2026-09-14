@@ -16,6 +16,11 @@ resources:
   # seeded credential would only add a CrashLoopBackOff.
   - ../../../base/akash-tx-actuator
   - external-secret.yaml
+  # story.5016 secret-boundary amendment 2 — the actuator's OWN secret plane
+  # (cogni/candidate-a/akash-tx-actuator -> akash-tx-actuator-env-secrets). Deliberately a
+  # SECOND ExternalSecret rather than more keys in external-secret.yaml above: that one is
+  # extracted wholesale into the public operator app's envFrom.
+  - ./akash-tx-actuator-external-secret.yaml
   - ./akash-tx-actuator-auth-external-secret.yaml
   - ./secrets-writer-sa.yaml
   - ./compute-workload-platform-application.yaml
@@ -98,6 +103,21 @@ patches:
                     value: candidate-a
                   - name: AKASH_ALLOWED_PROVIDERS
                     value: akash16yr3wxt97ae045a06kr3ycde9srcgpg8syjxxm
+                  # HUMAN GATE (story.5016 secret-boundary amendment 3). The PUBLIC Akash
+                  # account/wallet address the actuator is authorized to spend from — pinned
+                  # here as plain config because it is not a secret and must be reviewable in
+                  # git. The actuator asserts the live Console account matches it at boot and
+                  # refuses otherwise, which is what replaced holding the legacy wallet key
+                  # just to byte-compare it.
+                  #
+                  # EMPTY until the cutover: disable every legacy controller writer, revoke the
+                  # legacy Console key, mint a fresh key on the SAME account, then land that
+                  # account's address here in the same change that seeds
+                  # cogni/candidate-a/akash-tx-actuator/AKASH_ACTUATOR_CONSOLE_API_KEY.
+                  # Until then the actuator CrashLoops with `actuator_account_id_missing`,
+                  # which is the correct state for a wallet writer with no proven wallet.
+                  - name: AKASH_ACTUATOR_ACCOUNT_ID
+                    value: ""
   - target:
       kind: ConfigMap
       name: node-app-config

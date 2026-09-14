@@ -176,7 +176,7 @@ lane as transitional.
 
 ## Core Invariants
 
-1. **PATH_CONVENTION_PER_SERVICE_PER_ENV.** Every secret lives at `cogni/<env>/<service>` in OpenBao KV v2, with the secret name as a key at that path. `<env>` ∈ {`candidate-a`, `preview`, `production`}; `<service>` is the catalog name (`node-template`, `scheduler-worker`, …). One path per (service, env). Multiple keys per path.
+1. **PATH_CONVENTION_PER_SERVICE_PER_ENV.** Every secret lives at `cogni/<env>/<service>` in OpenBao KV v2, with the secret name as a key at that path. `<env>` ∈ {`candidate-a`, `preview`, `production`}; `<service>` is the catalog name (`node-template`, `scheduler-worker`, `akash-tx-actuator`, …). One path per (service, env). Multiple keys per path. **`<service>` is a blast-radius boundary, not a naming convenience:** because Invariant 2 extracts an entire path into one k8s Secret and Invariant 3 hands that whole Secret to a pod, anything sharing a path shares a compromise. A credential whose blast radius must be smaller than its owning node's gets its own `<service>` — e.g. `akash-tx-actuator` holds the Akash wallet credential so that a compromise of the public operator app, which consumes all of `cogni/<env>/operator`, cannot reach it.
 
 2. **ONE_EXTERNAL_SECRET_PER_SERVICE_ENV.** Each service-env pair has exactly ONE `ExternalSecret` resource, created at first deploy, never edited when secrets are added. It uses `dataFrom: extract: key: cogni/<env>/<service>` to pull every key at the path into a single k8s `Secret` named `<service>-env-secrets`.
 
