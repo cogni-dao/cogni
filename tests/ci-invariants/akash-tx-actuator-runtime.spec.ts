@@ -22,9 +22,13 @@
  *   - NEVER_HOLDS_TWO_WALLETS: `AKASH_CONSOLE_API_KEY` is not projected into the actuator at all
  *     (amendment 3); separation is asserted against the non-secret pinned account id.
  *   - ENTRYPOINT_EXISTS: the Deployment's command path is the path the Dockerfile copies.
+ *   - LEAST_KUBERNETES_PRIVILEGE: the actuator runs as its OWN ServiceAccount, bound to a
+ *     namespaced Role that grants exactly the migration prover's calls (batch/jobs
+ *     get+list+create+delete, pods list) and NOTHING else — no computeworkloads, no leases, no
+ *     events, no configmaps, no ClusterRole (story.5016).
  * Side-effects: IO (reads infra/k8s, the secrets catalog, and the operator image manifests)
  * Links: infra/k8s/base/akash-tx-actuator, infra/crossplane/xcomputeworkload/composition.yaml,
- *   nodes/operator/app/src/bootstrap/akash-tx-actuator.ts, task.5102
+ *   nodes/operator/app/src/bootstrap/akash-tx-actuator.ts, task.5102, story.5016
  * @public
  */
 
@@ -289,6 +293,68 @@ describe("akash-tx-actuator runtime", () => {
     expect(overlay.resources).toContain(
       "./akash-tx-actuator-auth-external-secret.yaml"
     );
+  });
+
+  it("runs as its OWN ServiceAccount with only the migration prover's rights", () => {
+    // story.5016 gave the actuator a Kubernetes identity so its fail-closed migration gate has a
+    // prover. That identity must stay the SMALLEST one that runs a Job: sharing
+    // compute-workload-controller's SA would have handed a wallet writer ComputeWorkload-patch
+    // and Lease rights for free, and every extra verb here is one an exploit inherits.
+    const podSpec = (
+      deployment.spec as {
+        template: { spec: { serviceAccountName?: string } };
+      }
+    ).template.spec;
+    expect(podSpec.serviceAccountName).toBe(SERVICE_NAME);
+
+    const base = yaml.parse(read(`${BASE}/kustomization.yaml`)) as {
+      resources: readonly string[];
+    };
+    expect(base.resources).toContain("service-account.yaml");
+    expect(base.resources).toContain("rbac.yaml");
+
+    const serviceAccount = parse<K8sObject>(`${BASE}/service-account.yaml`);
+    expect(serviceAccount.kind).toBe("ServiceAccount");
+    expect(serviceAccount.metadata.name).toBe(SERVICE_NAME);
+
+    const rbac = yaml.parseAllDocuments(read(`${BASE}/rbac.yaml`)).map(
+      (document) =>
+        document.toJS() as {
+          kind: string;
+          metadata: { name: string };
+          rules?: {
+            apiGroups: string[];
+            resources: string[];
+            verbs: string[];
+          }[];
+          roleRef?: { kind: string; name: string };
+          subjects?: { kind: string; name: string }[];
+        }
+    );
+    // Namespaced only: a ClusterRole would let one namespace's actuator read another's.
+    expect(rbac.map((document) => document.kind)).toEqual([
+      "Role",
+      "RoleBinding",
+    ]);
+
+    const [role, binding] = rbac;
+    // Exact equality, not `toContain`: the point of this test is what is ABSENT.
+    expect(role?.rules).toEqual([
+      {
+        apiGroups: ["batch"],
+        resources: ["jobs"],
+        verbs: ["get", "list", "create", "delete"],
+      },
+      { apiGroups: [""], resources: ["pods"], verbs: ["list"] },
+    ]);
+    expect(binding?.roleRef).toEqual({
+      apiGroup: "rbac.authorization.k8s.io",
+      kind: "Role",
+      name: SERVICE_NAME,
+    });
+    expect(binding?.subjects).toEqual([
+      { kind: "ServiceAccount", name: SERVICE_NAME },
+    ]);
   });
 
   it("starts an entrypoint the image actually contains", () => {

@@ -33,22 +33,41 @@
  *   - SURGE_IS_SAFE_HERE: unlike the ComputeWorkload controller, correctness does not rest on a
  *     Kubernetes Lease. Two live replicas cannot both spend, because the wallet slot is a
  *     partial unique index in Postgres (`akash_tx_allocations_single_writer_idx`).
- * Side-effects: IO (HTTP listener; Akash Console transactions; Postgres ledger writes)
+ *   - MIGRATION_PROVER_IS_WIRED: the actuator's migration gate is fail-CLOSED, and the
+ *     Composition lowers `RequireBeforeTransaction` on every create/update of a
+ *     `cogni-node-app-v1` workload — so an actuator built without a prover refuses EVERY paid
+ *     transaction with `migration_unavailable` (story.5016). The prover is therefore mandatory
+ *     here, not optional: it is the SAME `KubernetesMigrationJobAdapter` the ComputeWorkload
+ *     controller uses, against the SAME per-digest Job names in this namespace, so the two
+ *     lanes cannot disagree about whether a bundle digest has migrated. There is no dormant
+ *     variant — a wallet-less actuator has already exited above, so "no credential, no Jobs"
+ *     is structurally unreachable at this point.
+ *   - LEAST_KUBERNETES_PRIVILEGE: the ONLY Kubernetes objects this process touches are the
+ *     migration Jobs it creates and the Pods it reads to classify a Failed one. Its Role
+ *     (infra/k8s/base/akash-tx-actuator/rbac.yaml) grants exactly that and nothing else — no
+ *     computeworkloads, no leases, no events, no configmaps. Crossplane still owns every CR.
+ * Side-effects: IO (HTTP listener; Akash Console transactions; Postgres ledger writes;
+ *   Kubernetes migration Job create/read/delete in this namespace)
  * Links: @features/compute/akash-tx/akash-tx-http, @features/compute/akash-tx/akash-tx-actuator,
- *   @features/compute/akash-tx/akash-tx-wallet, infra/k8s/base/akash-tx-actuator,
- *   infra/crossplane/xcomputeworkload/composition.yaml, task.5102
+ *   @features/compute/akash-tx/akash-tx-wallet,
+ *   @features/compute/akash-tx/akash-tx-migration-gate,
+ *   @adapters/server/compute/kubernetes-migration-job.adapter,
+ *   infra/k8s/base/akash-tx-actuator,
+ *   infra/crossplane/xcomputeworkload/composition.yaml, task.5102, story.5016
  * @internal
  */
 
 import { readFile } from "node:fs/promises";
 
 import { createAppDbClient, type Database } from "@cogni/db-client";
+import { BatchV1Api, CoreV1Api, KubeConfig } from "@kubernetes/client-node";
 import pino from "pino";
 
 import {
   AkashComputeAdapter,
   DrizzleAkashTxAllocationLedger,
   DrizzleProviderOutcomeStore,
+  KubernetesMigrationJobAdapter,
   safeReadyzProbe,
   safeVersionProbe,
 } from "@/adapters/server";
@@ -221,11 +240,31 @@ try {
   throw error;
 }
 
+/**
+ * In-cluster identity for the migration prover, constructed only after the env guards above —
+ * `loadFromCluster()` needs the projected ServiceAccount token, and the packaged-artifact smoke
+ * test must still reach the POD_NAMESPACE/DEPLOY_ENVIRONMENT refusal first.
+ */
+const kubeConfig = new KubeConfig();
+kubeConfig.loadFromCluster();
+
 const actuator = new AkashTxActuator({
   console: consoleClient,
   ledger: new DrizzleAkashTxAllocationLedger(getDb, wallet.walletScope),
   log,
   probe,
+  /**
+   * story.5016 — the gate this feeds is fail-CLOSED, so an omitted prover is not "no migration
+   * policy", it is "every paid create is refused". Same adapter, same namespace and therefore
+   * the same `migrate-<slug>-<digest12>` Job names as the ComputeWorkload controller: a digest
+   * already proven by one lane is proven for the other, and neither re-runs it.
+   */
+  migration: new KubernetesMigrationJobAdapter(
+    kubeConfig.makeApiClient(BatchV1Api),
+    kubeConfig.makeApiClient(CoreV1Api),
+    namespace,
+    log
+  ),
 });
 
 const server = createAkashTxActuatorServer({
