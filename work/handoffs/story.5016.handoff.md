@@ -13,56 +13,61 @@ last_commit: e6f585b125
 
 ## Mission
 
-Pickup: you own getting **one fresh, disposable, Crossplane-owned Akash node** born and proven useful. The entire org is blocked on Akash CI/CD flowing; every other Akash workstream is explicitly parked behind this. The substrate is built and merged — XComputeWorkload XRD + Composition, a private Akash transaction actuator, node-bound spend receipts, a migration gate, an isolated wallet secret plane, and a single Spawn seam. What remains is the live proof chain, and it is currently stuck one credential-write away from the actuator's first breath.
+Pickup: you own landing **one fresh, disposable, Crossplane-owned Akash node**, born and proven useful. The whole org is blocked on Akash CI/CD flowing; every other Akash workstream is parked behind this. The substrate is built and merged. The private Akash transaction actuator is **running on candidate-a for the first time** and is one ESO refresh away from verifying its wallet. Your job is to carry it from "wallet verified" to "a node exists that a developer can use", then keep the gate honest.
 
 ## Goal
 
-- **End state:** a brand-new disposable node is created through Crossplane (`create -> observe -> update -> close`), never imported, with cost rows grouped by immutable `node_id`. The 12 legacy zero-user fixtures are NOT repaired or migrated.
-- **The gate before that (story.5016 step 12), and your first real milestone:** on candidate-a, the actuator pod is healthy, ESO projects its credential, and an `OBSERVE` returns `{found:false}` instead of a connection error.
-- **candidate-a flight proof:** flight through the operator (`POST /api/v1/vcs/flight` with the full 40-hex SHA — never a personal `gh` dispatch), then poll `https://test.cognidao.org/version` until `.buildSha` equals the flighted SHA **exactly**. `/version.buildSha` is the only deploy ground truth; CI conclusions and workflow "success" both lie here (proven twice tonight).
+- **End state:** a brand-new disposable node created through Crossplane (`create -> observe -> update -> close`), never imported, with cost rows grouped by immutable `node_id`. The 12 legacy zero-user fixtures are NOT repaired or migrated.
+- **Next milestone (step 12):** actuator logs `akash_tx_actuator_wallet_verified` instead of `..._unverified`, then an `OBSERVE` returns `{found:false}` rather than a connection error.
+- **candidate-a flight proof:** flight through the operator (`POST /api/v1/vcs/flight`, full 40-hex SHA — never a personal `gh` dispatch), then poll `https://test.cognidao.org/version` until `.buildSha` equals the flighted SHA exactly. `/version.buildSha` is the ONLY deploy ground truth; CI conclusions and workflow "success" both lied repeatedly during this work.
 - **Developer-unblock gate (step 14):** exact public SHA, DNS/TLS, deep readiness, empty-birth operational + knowledge schemas, Temporal, one real LLM completion, request-correlated app log, and zero SSH / console clicks / manual deploy scripts.
 
 ## Start By Reading
 
-- **`story.5016` work item `outcome`** — the authoritative numbered checklist (items 1-14) and every binding decision. "Step N" always means that list. Read it before anything else.
-- Knowledge: `akash-actuator-wallet-cutover` (one wallet, one ACTIVE writer), `akash-cicd-pareto-scope` (scaling/lease boundary), `node-substrate-health-checklist` (the canonical 20-row gate).
-- Skills: `akash-node-expert` (Akash runtime canon + live traps), `cicd-secrets-expert` (secret authority model), `node-wizard-scorecard` (being made Akash-aware in #2216).
-- Specs: `docs/spec/cicd-platform-boundary.md` (**the CI/CD freeze — CI does not enforce it, review does**), `docs/spec/secrets-management.md` (the three write entry points).
-- Code: `infra/crossplane/xcomputeworkload/{xrd,composition}.yaml`; `nodes/operator/app/src/features/compute/akash-tx/` (actuator, migration gate, wallet resolver); `nodes/operator/app/src/shared/db/akash-tx-allocations.ts`; `infra/k8s/base/akash-tx-actuator/`.
+- **`story.5016` work item `outcome`** — authoritative numbered checklist (1-14) and every binding decision. "Step N" always means that list. Read before anything else.
+- Knowledge: `akash-actuator-wallet-cutover` (one wallet, one ACTIVE writer), `akash-cicd-pareto-scope`, `node-substrate-health-checklist` (canonical 20-row gate).
+- Skills: `akash-node-expert`, `cicd-secrets-expert`, `devops-expert` (CI/CD boundary router), `node-wizard-scorecard` (made Akash-aware in #2216).
+- Specs: `docs/spec/cicd-platform-boundary.md` (**the freeze — CI does not enforce it, review does**), `docs/spec/secrets-management.md`.
+- Code: `infra/crossplane/xcomputeworkload/{xrd,composition}.yaml`; `nodes/operator/app/src/features/compute/akash-tx/`; `infra/k8s/base/akash-tx-actuator/`; `infra/k8s/overlays/candidate-a/operator/`.
 
 ## Current State
 
-- `main` = `e6f585b125`. **preview** serves it. **production** is far behind at `6bad39af` and deliberately untouched.
-- **Merged:** flight-lane SIGPIPE fix (bug.5139); actuator (#2203); XRD+Composition (#2207); actuator runtime (#2209); migration gate (#2208); `node_id` receipts (#2210); Composition identity (#2213); Spawn seam + `substrateHost` (#2206); legacy controller removed from candidate-a (#2212); wallet secret plane (#2211); operator-API platform-service secret write (#2214).
-- **Open:** #2215 (pins the public `AKASH_ACTUATOR_ACCOUNT_ID`) — CI green, flighted, not merged. #2216 (Akash-aware wizard scorecard) — CLEAN, not merged.
-- **candidate-a** serves `38d3fea5` and currently has **zero Akash writers** — the legacy controller is gone and the actuator has never started. This is the intended cutover window.
-- **BLOCKED — the actuator will not start.** `MountVolume.SetUp failed ... references non-existent secret key: AKASH_ACTUATOR_CONSOLE_API_KEY`. The credential was written successfully (`200`, v2) at 21:05, a flight ran `node-substrate` (materialize) at 21:22, ESO reconciled cleanly at 21:38, and the key was gone. The same volume's `source: agent` keys mount fine — only the human key vanished. **This is `bug.5016` (route silently reverts `source: human` keys on reconcile, returns 200) confirmed live on a platform-service path.**
-- **Unblocking it needs Derek**: re-paste the same Akash Console key into the gitignored `.env.akash-actuator.local` (chmod 600). The value must never enter chat, argv, a log, or a PR.
-- **Five merged PRs were never proven on candidate-a** — #2209, #2210, #2211, #2206, #2212 were merged on CI-green alone, skipping flight -> validate -> merge. They are live on preview, absent from production. An independent reviewer/validator has been asked to cover them. Treat them as unproven.
+- `main` = `e6f585b125`. **preview** serves it. **production** is deliberately behind at `6bad39af`.
+- **candidate-a serves `512b0995`** (#2215 rebased onto #2214) and has **ZERO Akash writers other than the actuator** — the legacy controller was removed by #2212. Intended cutover state.
+- **The actuator pod is RUNNING** (`operator-akash-tx-actuator`) — first time ever. It CrashLoops on `actuator_account_unverifiable` **only because ESO has not yet projected the credential**; `refreshInterval` is `1h` and it last reconciled ~21:38, so the value lands ~22:38 and the pod self-heals on its next restart. No action required.
+- **The credential is proven good, out-of-band:** `GET /v1/user/me` -> 200 `derekg1729`; `GET /v1/wallets` -> 200 `akash12eh8xgpeyumar3sk6wp94y0tq9uh62mkezxjmt`, 7,675,889 uact funded. That address is exactly what `AKASH_ACTUATOR_ACCOUNT_ID` pins, so the assertion will pass once projected.
+- Secret is at `cogni/candidate-a/akash-tx-actuator/AKASH_ACTUATOR_CONSOLE_API_KEY` v3, written via the operator API with **no kube**.
+- **Open PRs:** #2215 (public account id — CLEAN, flighted, unmerged), #2216 (Akash-aware wizard scorecard — CLEAN), #2217 (ESO `1h -> 1m` on both actuator ExternalSecrets — correct but tangential; merge when convenient, do not block on it).
+- **Merged:** bug.5139 flight-lane fix; #2203 actuator; #2207 XRD+Composition; #2209 runtime; #2208 migration gate; #2210 `node_id` receipts; #2213 Composition identity; #2206 Spawn seam + `substrateHost`; #2212 legacy controller removal; #2211 wallet secret plane; #2214 operator-API platform-service write.
+- **Five merged PRs were never proven on candidate-a** — #2209, #2210, #2211, #2206, #2212 went in on CI-green alone, skipping flight -> validate -> merge. Live on preview, absent from production. An independent validator was asked to cover them. **Treat as unproven.**
+- **Credential hygiene:** the key briefly landed in `cogni/candidate-a/operator` (readable by the public operator app) before the path was corrected. Candidate-a only. **Rotate when convenient.**
+- No kube access on this machine — only a local `kind` context. Every diagnosis must come from operator APIs, `/version`, `/readyz?deep=1`, Loki, and Argo events.
 
 ## Design / Implementation Target
 
-1. **One wallet, ONE ACTIVE writer.** Same Akash Console account; the legacy key was revoked and a fresh one minted. A second Console account was proposed and rejected — it recreates the split-brain the cutover removes. v0 is **candidate-a only**: one actuator + one ledger per environment means preview/production would be additional independent writers on the same wallet.
-2. **The actuator never holds two wallet credentials.** Separation is asserted at boot against a non-secret pinned account id, never a byte-comparison requiring both keys.
-3. **The wallet credential never re-enters the broad `cogni/<env>/operator` bucket** — the public operator app consumes that entire bucket via `dataFrom: extract`. It lives at `cogni/<env>/akash-tx-actuator/*` behind its own ExternalSecret.
-4. **Every paid mutation persists `{node_id, env, XR UID/generation, idempotency key}` BEFORE contacting Akash.** Columns are NOT NULL, so an unattributable receipt is unreachable. `node_id` is deliberately not a FK to the registry — spend evidence must outlive a purged node row.
-5. **Crossplane owns generic reconciliation** (watches, retries, backoff, status, finalizers, composition). Cogni owns only Akash transaction mapping, custody, and the typed workload contract. **No new bespoke controller. No dual-writer. No compatibility layer.**
-6. **The legacy ComputeWorkload controller is FROZEN and scheduled for deletion** (tasks 5097/5098). Add no capability to it. `#2197`'s cost work must move to the actuator seam, not merge into the controller.
-7. **CI/CD freeze holds:** no new inline decision logic in `candidate-flight.yml` / `promote-and-deploy.yml` `run:` blocks. Search `scripts/ci/lib/` for an existing primitive before writing any shell.
-8. **Do not repair the legacy 12 fixtures.** Their readiness, logging, and zero-drop rollout are parked unless the fresh Crossplane node reproduces the failure.
+1. **One wallet, ONE ACTIVE writer.** Same Console account; legacy key revoked, fresh key minted. A second account was proposed and rejected — it recreates the split-brain the cutover removes. v0 is **candidate-a only**: one actuator + one ledger per environment means preview/production would be extra writers on the same wallet.
+2. **The actuator never holds two wallet credentials.** Separation is asserted at boot against a non-secret pinned account id, never a byte-comparison requiring both.
+3. **The wallet credential never re-enters `cogni/<env>/operator`** — the public app consumes that whole bucket via `dataFrom: extract`. It lives at `cogni/<env>/akash-tx-actuator/*` behind its own ExternalSecret.
+4. **Every paid mutation persists `{node_id, env, XR UID/generation, idempotency key}` BEFORE contacting Akash.** Columns are NOT NULL, so an unattributable receipt is unreachable. `node_id` is deliberately not a FK — spend evidence must outlive a purged node row.
+5. **Crossplane owns generic reconciliation** (watches, retries, backoff, status, finalizers, composition). Cogni owns only Akash transaction mapping, custody, and the typed workload contract. **No new bespoke controller, no dual-writer, no compatibility layer.**
+6. **The legacy ComputeWorkload controller is FROZEN and scheduled for deletion** (tasks 5097/5098). #2197's cost work moves to the actuator seam; it must not merge into the controller.
+7. **CI/CD freeze holds:** no new inline decision logic in `candidate-flight.yml` / `promote-and-deploy.yml` `run:` blocks; search `scripts/ci/lib/` for an existing primitive before writing shell.
+8. **Do not repair the legacy 12 fixtures** unless the fresh Crossplane node reproduces the failure.
 
 ## Next Actions / Risks
 
-- [ ] **Ask Derek to re-paste the Console key**, then write it via `POST /api/v1/nodes/<operatorId>/secrets {env:"candidate-a", key, value, service:"akash-tx-actuator"}` — **after** the last flight, or materialize erases it again. Shred the file after.
-- [ ] Merge #2215 (account id) and #2216 (scorecard) through **flight -> /validate-candidate -> merge**, not CI-green.
-- [ ] Step 12: actuator healthy -> ESO projection -> `OBSERVE {found:false}`.
-- [ ] Step 13: mint exactly ONE disposable node. Never spin a second to "retry" without closing the first.
-- [ ] Get `bug.5016` fixed (owned by the secrets dev) — until then **every human-value write is provisional** and must be re-verified after any reconcile.
+- [ ] Confirm `akash_tx_actuator_wallet_verified` after ESO syncs (~22:38, self-healing). If it still fails, the credential is proven good — suspect projection, not the key.
+- [ ] Step 12: `OBSERVE` returns `{found:false}` rather than connection-refused.
+- [ ] Step 13: mint EXACTLY ONE disposable node. Never spin a second to "retry" without closing the first.
+- [ ] Merge #2215 and #2216 through **flight -> /validate-candidate -> merge**, never CI-green alone.
+- [ ] Ask the secrets dev to land `bug.5016` (route silently reverts `source: human` keys on reconcile, returns 200).
 
-**Gotchas that cost real time tonight:**
+**Gotchas that cost hours here:**
+- **Rebase a PR onto main before flighting it.** #2215 was branched before #2214 merged; flighting it silently *downgraded* candidate-a's operator, the route dropped the unknown `service` field, and a wallet credential was misfiled into the public bucket. The route **should reject** an unrecognized field rather than strip it — worth fixing.
+- **Always read the `path` in the secret-write response.** A 200 does not mean the intended bucket.
 - **A single negative Loki sweep is NOT evidence of absence.** Two false findings came from this. Confirm with a second, differently-shaped query; prefer `| json | field="value"` over text regexes (`.` matches any char, so `compute.reconcile` never matches `compute_workload_reconciled`).
-- **A promote/flight can report all-green and change nothing** — if the SHA does not move, no lease mutates and env is never rewritten. Verify `/version.buildSha`, never the workflow conclusion.
-- **Manifest-only and trusted-workflow-YAML PRs genuinely cannot self-prove premerge** (no image at that head; `workflow_dispatch` runs YAML from `main`). That exception is real but narrow — it does **not** cover app code. Do not stretch it.
-- **`runtime.logPush` (bug.5127) is carried by the XRD but not emitted**, and Akash app logs do not reach Loki at all. Step 14's request-correlated log cannot pass yet; declare it blocked rather than inferring from silence.
-- Migration `0046` adds NOT NULL columns with no default — it requires `akash_tx_allocations` to be empty. Reasoned, never observed.
-- OpenFGA stores are **per environment**: a grant approved on the production operator does not reach candidate-a.
+- **A promote/flight can report all-green and change nothing** if the SHA does not move. Verify `/version.buildSha`.
+- **Manifest-only and trusted-workflow-YAML PRs genuinely cannot self-prove premerge** — that exception is real but narrow and does NOT cover app code.
+- **`runtime.logPush` (bug.5127) is carried by the XRD but not emitted**, and Akash app logs do not reach Loki at all — step 14's request-correlated log must be declared blocked, not inferred from silence.
+- Migration `0046` adds NOT NULL columns with no default; it requires `akash_tx_allocations` to be empty. Reasoned, never observed.
+- **OpenFGA stores are per-environment** — a grant approved on production does not reach candidate-a.
