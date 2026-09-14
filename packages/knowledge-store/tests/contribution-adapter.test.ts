@@ -158,7 +158,12 @@ class FakeDiffSql {
 class FakeMergeReservedSql {
   readonly queries: string[] = [];
 
-  constructor(private readonly mergeRow: unknown[]) {}
+  constructor(
+    private readonly mergeRow: unknown[],
+    // When set, the branch merge THROWS this raw message (Doltgres @autocommit
+    // rollback behaviour) instead of returning a row — the real prod path.
+    private readonly throwOnMerge?: string
+  ) {}
 
   async unsafe(
     query: string
@@ -168,6 +173,7 @@ class FakeMergeReservedSql {
       return [{ dolt_merge: ["", "0", "0", "aborted"] }];
     }
     if (query.includes("dolt_merge(")) {
+      if (this.throwOnMerge) throw new Error(this.throwOnMerge);
       return [{ dolt_merge: this.mergeRow }];
     }
     if (query.includes("dolt_commit")) {
@@ -340,7 +346,7 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
         contributionId: "contrib-agent-1-abc123",
         principal: reviewer,
       })
-    ).rejects.toThrow(/unresolved conflict/i);
+    ).rejects.toThrow(/conflicts with entries already on main/i);
 
     // it aborted the conflicted merge so the working set is clean for next time
     expect(conn.queries.some((q) => q.includes("dolt_merge('--abort')"))).toBe(
@@ -381,6 +387,33 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
       true
     );
     expect(conn.queries.some((q) => q.includes("dolt_branch('-D'"))).toBe(true);
+  });
+
+  it("maps a thrown Dolt conflict to a clean human message, never the raw SQL (bug.5120)", async () => {
+    // Doltgres throws on a conflicted merge with @autocommit on. The raw text
+    // ("@@dolt_allow_commit_conflicts", branch refs, dolt_conflicts tables) must
+    // NOT reach the admin — only a plain what-happened + how-to-fix message.
+    const raw =
+      "dolt_merge failed for contrib/x: Merge conflict detected, @autocommit transaction rolled back. set @@dolt_allow_commit_conflicts = 1";
+    const conn = new FakeMergeReservedSql([], raw);
+    const fake = new FakeMergeSql(conn);
+
+    const err = await adapterFor(fake)
+      .merge({ contributionId: "contrib-agent-1-abc123", principal: reviewer })
+      .then(() => null)
+      .catch((e: unknown) => e as Error);
+
+    expect(err).toBeTruthy();
+    expect(err?.message).toMatch(/conflicts with entries already on main/i);
+    // no raw Dolt/SQL leakage
+    expect(err?.message).not.toMatch(
+      /dolt_merge|@@dolt|autocommit|dolt_conflicts/i
+    );
+    expect(err?.message).not.toContain("contrib/x");
+    // conflicted branch is never marked merged
+    expect(conn.queries.some((q) => q.includes("SET state = 'merged'"))).toBe(
+      false
+    );
   });
 
   it("commits close metadata before deleting the contribution branch", async () => {

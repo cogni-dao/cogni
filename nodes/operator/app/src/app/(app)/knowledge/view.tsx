@@ -56,7 +56,13 @@ import {
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
 
-import { Alert, AlertDescription, Button, Input } from "@/components";
+import {
+  Alert,
+  AlertDescription,
+  AlertTitle,
+  Button,
+  Input,
+} from "@/components";
 
 import { closeContribution } from "./_api/closeContribution";
 import { fetchContributions } from "./_api/fetchContributions";
@@ -255,6 +261,7 @@ export function KnowledgeDashboardView() {
       )}
       {mode === "inbox" && actionError && (
         <Alert variant="destructive">
+          <AlertTitle>Couldn't merge</AlertTitle>
           <AlertDescription>{actionError}</AlertDescription>
         </Alert>
       )}

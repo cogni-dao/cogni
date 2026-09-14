@@ -207,6 +207,16 @@ function normalizeOptionalDoltCommitRef(value: unknown): string | null {
   return ref ? normalizeDoltCommitRef(ref) : null;
 }
 
+// Human-facing merge failure copy (bug.5120). These reach an admin in the
+// knowledge inbox UI, so they must say what happened + how to fix it in plain
+// language — never leak the raw Dolt/SQL error (branch refs, dolt_conflicts,
+// @@dolt_allow_commit_conflicts). The remediation for a conflicted contribution
+// is a fresh branch cut from current main, phrased for a human.
+const MERGE_CONFLICT_MESSAGE =
+  "This contribution conflicts with entries already on main and can't be merged as-is. Ask the author to re-create it as a new contribution from the current main.";
+const MERGE_FAILED_MESSAGE =
+  "This contribution couldn't be merged. Try again, or ask the author to re-create it as a new contribution from the current main.";
+
 async function withReserved<T>(
   sql: Sql,
   fn: (conn: ReservedSql) => Promise<T>
@@ -1353,9 +1363,11 @@ export class DoltgresKnowledgeContributionAdapter
         mergeCommit = parsed.commitHash;
         conflicts = parsed.conflicts;
       } catch (e: unknown) {
+        // Doltgres throws on a conflicted merge (@autocommit rollback). Map it
+        // to the human conflict message; anything else to the generic failure.
         const msg = e instanceof Error ? e.message : String(e);
         throw new ContributionConflictError(
-          `dolt_merge failed for ${rec.branch}: ${msg}`
+          /conflict/i.test(msg) ? MERGE_CONFLICT_MESSAGE : MERGE_FAILED_MESSAGE
         );
       }
 
@@ -1371,9 +1383,7 @@ export class DoltgresKnowledgeContributionAdapter
         } catch {
           // Best-effort cleanup; the withReserved finally also checks out main.
         }
-        throw new ContributionConflictError(
-          `merge of ${rec.branch} has ${conflicts} unresolved conflict${conflicts === 1 ? "" : "s"} against main; branch was not merged. Re-commit the entries on a fresh branch cut from current main.`
-        );
+        throw new ContributionConflictError(MERGE_CONFLICT_MESSAGE);
       }
 
       await conn.unsafe(

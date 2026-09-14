@@ -19,7 +19,7 @@ import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 
-import { Alert, AlertDescription } from "@/components";
+import { Alert, AlertDescription, AlertTitle } from "@/components";
 import { closeContribution } from "../_api/closeContribution";
 import { fetchContribution } from "../_api/fetchContribution";
 import { mergeContribution } from "../_api/mergeContribution";
@@ -133,6 +133,7 @@ export function ContributionView({ id }: { readonly id: string }) {
 
           {actionError && (
             <Alert variant="destructive">
+              <AlertTitle>Couldn't merge</AlertTitle>
               <AlertDescription>{actionError}</AlertDescription>
             </Alert>
           )}
