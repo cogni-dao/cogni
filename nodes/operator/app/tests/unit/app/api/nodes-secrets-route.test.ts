@@ -248,6 +248,44 @@ describe("POST /api/v1/nodes/[id]/secrets — platform-service target", () => {
     );
   });
 
+  it("403s an inheritFrom key written by a NON-owner node (bug.5016)", async () => {
+    // poly writes OPENROUTER_API_KEY into its own bank: 200 today, then the next flight
+    // restores operator's value because the key is overwrite-on-drift. Refuse, and name
+    // the owner so the caller is redirected to the write that actually persists.
+    gateState.result = {
+      ok: true,
+      node: { nodeId: "poly-uuid", slug: "poly" },
+    };
+
+    const res = await post(
+      { env: "candidate-a", key: "OPENROUTER_API_KEY", value: VALUE },
+      "poly"
+    );
+
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toMatchObject({
+      errorCode: "key_inherited_from_owner",
+    });
+    expect(planeState.writeSecret).not.toHaveBeenCalled();
+  });
+
+  it("still lets the OWNER node rotate an inheritFrom key", async () => {
+    // The regression guard. `operator` holds the canonical value, so this write IS the
+    // rotation and is the documented clean path (openrouter-api-key-expert). A blanket
+    // denylist would have broken it while claiming to fix bug.5016.
+    const res = await post({
+      env: "candidate-a",
+      key: "OPENROUTER_API_KEY",
+      value: VALUE,
+      op: "rotate",
+    });
+
+    expect(res.status).toBe(200);
+    expect(planeState.writeSecret).toHaveBeenCalledWith(
+      expect.objectContaining({ nodeSlug: "operator", op: "rotate" })
+    );
+  });
+
   it("still refuses a substrate-reserved key on a platform-service path", async () => {
     const res = await post({
       env: "candidate-a",

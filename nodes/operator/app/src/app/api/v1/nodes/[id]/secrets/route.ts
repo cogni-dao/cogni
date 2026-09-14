@@ -54,7 +54,10 @@ import { FLIGHT_ENVS, isFlightEnv } from "@/features/nodes/flight-status";
 import type { OperatorSecretsPlanePort } from "@/ports";
 import { serverEnv } from "@/shared/env";
 import { EVENT_NAMES, type RequestContext } from "@/shared/observability";
-import { isNodeOwnedSecretKey } from "@/shared/secrets/node-secrets-reserved.data";
+import {
+  inheritedKeyOwner,
+  isNodeOwnedSecretKey,
+} from "@/shared/secrets/node-secrets-reserved.data";
 import {
   administersPlatformServices,
   isPlatformService,
@@ -349,6 +352,37 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         {
           error: `key is owned by platform service '${owningService}'; write it with service='${owningService}' or not at all`,
           errorCode: "key_belongs_to_platform_service",
+        },
+        { status: 403 }
+      );
+    }
+
+    // Gate 1.7 — bug.5016, the silent-revert guard. A key with a catalog `inheritFrom`
+    // owner is overwrite-on-drift in secret-materialize.sh, so a write from any OTHER
+    // node returns 200 and is restored by the next flight. Refuse it and name the owner,
+    // so the caller is redirected to the write that actually persists rather than being
+    // told "no". The owner's own write is untouched — that IS the rotation.
+    const canonicalOwner = inheritedKeyOwner(key);
+    if (
+      canonicalOwner !== undefined &&
+      service === undefined &&
+      node.slug !== canonicalOwner
+    ) {
+      logTerminal({
+        outcome: "error",
+        status: 403,
+        nodeId: id,
+        slug: node.slug,
+        service,
+        key,
+        op,
+        env: requestedEnv,
+        errorCode: "key_inherited_from_owner",
+      });
+      return NextResponse.json(
+        {
+          error: `key inherits from node '${canonicalOwner}'; a write here is reverted on the next flight — rotate it on '${canonicalOwner}' instead`,
+          errorCode: "key_inherited_from_owner",
         },
         { status: 403 }
       );

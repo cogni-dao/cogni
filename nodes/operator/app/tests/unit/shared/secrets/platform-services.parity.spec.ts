@@ -26,7 +26,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { SUBSTRATE_RESERVED_KEYS } from "@/shared/secrets/node-secrets-reserved.data";
+import {
+  INHERITED_KEY_OWNER,
+  SUBSTRATE_RESERVED_KEYS,
+} from "@/shared/secrets/node-secrets-reserved.data";
 import {
   PLATFORM_SERVICE_OWNED_KEYS,
   PLATFORM_SERVICE_OWNER_NODE,
@@ -151,18 +154,32 @@ describe("key↔service binding parity", () => {
   });
 });
 
-describe("bug.5016 — overwrite-on-drift keys are not self-serve writable", () => {
-  it("reserves every catalog key that declares inheritFrom", () => {
+describe("bug.5016 — overwrite-on-drift keys bind to their canonical owner", () => {
+  it("maps every catalog inheritFrom key to exactly the owner the catalog names", () => {
     // `inheritFrom` makes secret-materialize.sh overwrite-on-drift for that key, so a
-    // self-serve write returns 200 and is silently reverted on the next flight. Refusing
-    // the write is the honest answer; this test stops a new inheritFrom key from
-    // re-opening the silent-revert hole without anyone noticing.
-    const inherited = catalogEntries()
+    // self-serve write from a NON-owner node returns 200 and is silently reverted on the
+    // next flight. The binding must stay exact in both directions: a missing key
+    // re-opens the silent-revert hole, and a wrong owner would refuse the one write that
+    // actually persists. Reading the catalog directly is what stops either from drifting.
+    const fromCatalog = catalogEntries()
       .filter((e) => e.inheritFrom !== undefined)
-      .map((e) => e.name);
-    expect(inherited.length).toBeGreaterThan(0);
-    expect(
-      inherited.filter((key) => !SUBSTRATE_RESERVED_KEYS.has(key))
-    ).toEqual([]);
+      .map((e) => `${e.name}=${e.inheritFrom}`)
+      .sort();
+    const fromApp = [...INHERITED_KEY_OWNER]
+      .map(([key, owner]) => `${key}=${owner}`)
+      .sort();
+    expect(fromCatalog.length).toBeGreaterThan(0);
+    expect(fromApp).toEqual(fromCatalog);
+  });
+
+  it("does not blanket-reserve inherited keys, so the owner can still rotate them", () => {
+    // The regression this guards: reserving OPENROUTER_API_KEY outright would break the
+    // documented clean rotation path (openrouter-api-key-expert), because writing it at
+    // `operator` IS the rotation — that bucket is the source the fan-out reads.
+    // GH_WEBHOOK_SECRET is the deliberate exception: source: agent AND dual-plane.
+    const blanketReserved = [...INHERITED_KEY_OWNER.keys()].filter((key) =>
+      SUBSTRATE_RESERVED_KEYS.has(key)
+    );
+    expect(blanketReserved).toEqual(["GH_WEBHOOK_SECRET"]);
   });
 });
