@@ -21,6 +21,12 @@
  *     object that can reach them (story.5016 secret-boundary amendment 2).
  *   - NEVER_HOLDS_TWO_WALLETS: `AKASH_CONSOLE_API_KEY` is not projected into the actuator at all
  *     (amendment 3); separation is asserted against the non-secret pinned account id.
+ *   - REFUSAL_IS_DIAGNOSABLE: every projected credential source is `optional: true` so the
+ *     PROCESS reaches its own fail-closed refusal and names the missing credential. A
+ *     non-optional source hands the failure to kubelet, which stalls the pod in
+ *     ContainerCreating and emits only a `FailedMount` event that never reaches Loki
+ *     (bug.5142). The security half is pinned separately: each credential still has a
+ *     throwing refusal in the boot path.
  *   - ENTRYPOINT_EXISTS: the Deployment's command path is the path the Dockerfile copies.
  * Side-effects: IO (reads infra/k8s, the secrets catalog, and the operator image manifests)
  * Links: infra/k8s/base/akash-tx-actuator, infra/crossplane/xcomputeworkload/composition.yaml,
@@ -158,11 +164,39 @@ describe("akash-tx-actuator runtime", () => {
       "DATABASE_URL",
     ]);
     expect(sources).toHaveLength(2);
-    // Not `optional: true`: a missing wallet must CrashLoop, never silently start an
-    // unauthenticated or unproven wallet writer (ONE_WALLET_ONE_WRITER).
-    for (const source of sources) {
-      expect(source.secret).not.toHaveProperty("optional");
+  });
+
+  it("makes its refusal diagnosable: optional sources + a named refusal per credential", () => {
+    // INVERTED FROM THE ORIGINAL ASSERTION, deliberately (bug.5142). This used to require
+    // the absence of `optional`, reasoning that "a missing wallet must CrashLoop, never
+    // silently start an unauthenticated writer". The GOAL is right and is kept below; the
+    // MECHANISM was backwards.
+    //
+    // kubelet refuses to mount a projected Secret whose object — or whose listed `key` —
+    // does not exist. A non-optional source therefore does NOT produce a CrashLoop: the
+    // pod never leaves ContainerCreating and the container never runs, so the boot path's
+    // three named refusals never execute. The only signal left is a kubelet `FailedMount`
+    // event, which never reaches Loki and reads like an infrastructure fault rather than
+    // "nobody has written the Console key yet" — the normal state during a wallet cutover,
+    // and ~25 minutes of misdiagnosis on candidate-a.
+    //
+    // So: `optional: true` is what lets the process reach its own refusal.
+    for (const source of projectedSources()) {
+      expect(source.secret).toHaveProperty("optional", true);
     }
+
+    // The security half of the original invariant, now pinned EXPLICITLY rather than
+    // implied by the mount. Optional would be a real regression if the process merely
+    // warned and continued, so assert each projected credential still has a fail-closed
+    // refusal in the boot path. ONE_WALLET_ONE_WRITER is enforced here, not by kubelet.
+    const boot = read("nodes/operator/app/src/bootstrap/akash-tx-actuator.ts");
+    expect(boot).toContain("akash_tx_actuator_wallet_unresolved");
+    expect(boot).toContain("akash_tx_actuator_token_missing");
+    expect(boot).toContain("akash_tx_actuator_ledger_dsn_missing");
+    // Each refusal must THROW — a logged-and-continued wallet writer is the failure mode
+    // this whole seam exists to prevent.
+    expect(boot).toMatch(/refusing to expose an unauthenticated wallet writer/);
+    expect(boot).toMatch(/must not spend without a durable receipt/);
   });
 
   it("NEVER projects the legacy controller wallet — it must not possess both", () => {
