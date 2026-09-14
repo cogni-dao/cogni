@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2025 Cogni-DAO
+#
+# NO_SECRET_VALUES, and no provider-held credential at all.
+#
+# `credentials.source: None` is load-bearing, not a placeholder: provider-http has NO standing
+# authority of its own. Every request it sends carries a per-request `{{ name:namespace:key }}`
+# placeholder resolved from the environment's existing ESO/OpenBao-managed Secret at send time,
+# so the blast radius of this object is exactly zero and rotating any credential is an ESO
+# concern rather than a Crossplane one.
+#
+# One ClusterProviderConfig for both composed Requests (the private Akash actuator and
+# Cloudflare). They differ only by their own Authorization header, which is per-request.
+apiVersion: http.m.crossplane.io/v1alpha2
+kind: ClusterProviderConfig
+metadata:
+  name: cogni-http
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  credentials:
+    source: None

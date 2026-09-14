@@ -3,12 +3,14 @@
 
 /**
  * Module: `@tests/ci-invariants/crossplane-dormant-substrate`
- * Purpose: Pins task.5094's dormant Crossplane install boundary before any workload authority moves.
+ * Purpose: Pins the Crossplane install boundary. task.5094 installed the engine; task.5096
+ *   activated ONE composite API on top of it. What survives that handoff is the part that was
+ *   never about dormancy: no credential and NO DESIRED STATE may live in this directory.
  * Scope: Static YAML checks over the candidate-a Argo Applications and Crossplane package manifests. Does NOT contact a cluster or provider.
- * Invariants: DORMANT_MEANS_ZERO_AUTHORITY, CANDIDATE_FIRST, IMMUTABLE_PACKAGES,
+ * Invariants: NO_DESIRED_STATE_IN_GIT, CANDIDATE_FIRST, IMMUTABLE_PACKAGES,
  *   RESOURCE_BOUNDED, OBSERVABLE_BEFORE_AUTHORITY.
  * Side-effects: IO (reads repo manifests)
- * Links: story.5016 R2, task.5094, knowledge:akash-cicd-pareto-scope
+ * Links: story.5016 R2, task.5094, task.5096, knowledge:akash-cicd-pareto-scope
  * @public
  */
 
@@ -56,6 +58,12 @@ const coreApplication = readYaml(
 const packagesApplication = readYaml(
   path.join(CANDIDATE_CONTROL_PLANE, "crossplane-packages-application.yaml")
 );
+const compositeApplication = readYaml(
+  path.join(
+    CANDIDATE_CONTROL_PLANE,
+    "crossplane-xcomputeworkload-application.yaml"
+  )
+);
 const packageDocuments = yamlFiles(PACKAGE_DIR)
   .filter((file) => path.basename(file) !== "kustomization.yaml")
   .flatMap(readYamlDocuments);
@@ -70,7 +78,7 @@ function packageSpec(document: YamlObject): YamlObject {
   return document.spec as YamlObject;
 }
 
-describe("dormant Crossplane substrate (task.5094)", () => {
+describe("Crossplane substrate boundary (task.5094, task.5096)", () => {
   it("is activated by candidate-a only", () => {
     for (const environment of ["preview", "production"]) {
       const files = readdirSync(
@@ -81,6 +89,9 @@ describe("dormant Crossplane substrate (task.5094)", () => {
 
     expect(metadataName(coreApplication)).toBe("crossplane-core");
     expect(metadataName(packagesApplication)).toBe("crossplane-packages");
+    expect(metadataName(compositeApplication)).toBe(
+      "crossplane-xcomputeworkload"
+    );
   });
 
   it("pins the core chart and runtime image, bounds resources, and exposes metrics", () => {
@@ -164,14 +175,22 @@ describe("dormant Crossplane substrate (task.5094)", () => {
     });
   });
 
-  it("contains no credential, desired-state, or external-write object", () => {
+  /**
+   * task.5096 deliberately ADDED an XRD, a Composition, an activation policy and a
+   * credential-free ClusterProviderConfig here — that is the authority handoff, and it is
+   * reviewed as its own change. What must never appear is the other half: a secret value, or
+   * an INSTANCE. An API cannot spend money; a desired-state object can. `Request` is the
+   * managed resource the Composition composes at runtime and `XComputeWorkload` is the
+   * composite an environment overlay commits — a copy of either one in this directory would
+   * be a paid workload nobody scoped to an environment.
+   */
+  it("contains no credential and no desired-state instance", () => {
     const forbiddenKinds = new Set([
-      "CompositeResourceDefinition",
-      "Composition",
       "ProviderConfig",
       "ExternalSecret",
       "Secret",
       "Request",
+      "DisposableRequest",
       "DNSEndpoint",
       "ComputeWorkload",
       "XComputeWorkload",
@@ -183,8 +202,12 @@ describe("dormant Crossplane substrate (task.5094)", () => {
     ).toEqual([]);
   });
 
-  it("keeps both child Applications self-healing but non-pruning", () => {
-    for (const application of [coreApplication, packagesApplication]) {
+  it("keeps every child Application self-healing but non-pruning", () => {
+    for (const application of [
+      coreApplication,
+      packagesApplication,
+      compositeApplication,
+    ]) {
       const syncPolicy = (application.spec as YamlObject)
         .syncPolicy as YamlObject;
       expect(syncPolicy.automated).toEqual({ prune: false, selfHeal: true });

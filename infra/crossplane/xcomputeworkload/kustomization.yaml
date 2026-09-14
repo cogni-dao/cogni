@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2025 Cogni-DAO
+#
+# API + policy only. NO XComputeWorkload instance is ever committed here:
+# DESIRED_STATE_IS_ENV_SCOPED, so a workload lives in its environment's deploy branch under
+# infra/k8s/overlays/<env>/<node>/, rendered by the operator materializer (task.5097).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - activation-policy.yaml
+  - provider-config.yaml
+  - xrd.yaml
+  - composition.yaml

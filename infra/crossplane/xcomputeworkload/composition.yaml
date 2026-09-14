@@ -1,0 +1,452 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2025 Cogni-DAO
+#
+# Composition for XComputeWorkload (task.5096). Crossplane owns EVERY generic concern —
+# watches, requeue, exponential backoff, finalizers, drift correction, conditions, ownership
+# and garbage collection. The only Cogni-specific things in this file are (a) the SHAPE of the
+# request it sends to the private Akash transaction actuator (task.5095, cogni#2203) and
+# (b) the lowering of the full-fidelity XR onto that actuator's wire contract.
+#
+# HOW CROSSPLANE INVOKES THE ACTUATOR
+#   The actuator's four bounded ops map exactly onto provider-http's four managed-resource
+#   actions, so no Cogni code decides WHEN to act:
+#       OBSERVE -> POST /v1/akash/observe   (also carries the exact-SHA serving probe)
+#       CREATE  -> POST /v1/akash/create    (the ONLY paid transaction)
+#       UPDATE  -> POST /v1/akash/update    (in-place SDL replacement; mints no lease)
+#       REMOVE  -> POST /v1/akash/delete
+#   `isRemovedCheck` turns "no allocation, or a closed one" into Crossplane's "the external
+#   resource does not exist", which is what makes CREATE fire exactly once and what lets a
+#   deleted XR finish deleting. `expectedResponseCheck` is the ONLY thing that triggers UPDATE.
+#
+# THE WIRE IS THE 5095 CONTRACT, NOT THIS API. @contracts/compute.akash-tx.v1 is a zod
+# strictObject: an unknown key is a 400, never a silently ignored field. So the pipeline LOWERS
+# the full-fidelity XR (bundle artifacts, bindings, secret refs, runtime profile, visibility)
+# onto exactly `{cogniKey, environment, spec:{name, services[]}}`. Every lowering rule below is
+# a port of `toProvisionSpec` + `legacyCogniAppEnv` in the bespoke controller, and the two must
+# stay byte-comparable — that equality is what makes this a migration rather than a rewrite.
+#
+# NO SECRET VALUES CROSS THIS FILE. Each `secretRefs[].key` becomes a provider-http
+# `{{ name:namespace:key }}` placeholder. The OSS provider resolves it from the environment's
+# existing ESO-managed Secret at request time and preserves the placeholder form in spec,
+# status.requestDetails and its own logs. The actuator's bearer token is the same mechanism.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xcomputeworkload-akash
+  labels:
+    provider: akash
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  compositeTypeRef:
+    apiVersion: compute.cogni.io/v1alpha1
+    kind: XComputeWorkload
+  mode: Pipeline
+  pipeline:
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource }}
+            {{- $spec := $xr.spec }}
+            {{- $meta := $xr.metadata }}
+            {{- $ns := $meta.namespace }}
+            {{- $name := $meta.name }}
+            {{- $env := $spec.environment }}
+            {{- $wl := $spec.workload }}
+            {{- $slug := $wl.name }}
+            {{- $desiredSha := $spec.bundle.source.sha }}
+            {{- $publicHost := lower (trimSuffix "." $wl.publicHost) }}
+
+            {{- /*
+              IDENTITY GATE. The legacy CRD enforced `metadata.name == spec.nodeId` with a
+              top-level CEL rule; an XRD schema may only describe spec/status, so the rule
+              lives here instead. Failing the render is strictly safer than admitting the
+              object: no managed resource is produced, so NOTHING IS SPENT, and Crossplane
+              surfaces the message on the XR.
+            */ -}}
+            {{- if ne $name $spec.nodeId }}
+            {{- fail (printf "XComputeWorkload %s/%s: metadata.name must equal spec.nodeId (%s) - one paid workload per node per environment namespace" $ns $name $spec.nodeId) }}
+            {{- end }}
+            {{- if ne (printf "cogni-%s" $env) $ns }}
+            {{- fail (printf "XComputeWorkload %s/%s: spec.environment %s must be reconciled in namespace cogni-%s" $ns $name $env $env) }}
+            {{- end }}
+
+            {{- /*
+              KEY_IS_THE_IDEMPOTENCE_BOUNDARY (@ports/akash-tx.port). The actuator's cogniKey is
+              the wallet-wide slot, so here it MUST be stable for the life of the workload. The
+              legacy controller's key embedded metadata.generation, which was safe only because
+              that controller decided observe-then-create itself. Under Crossplane, provider-http
+              asks "does the resource for this key exist?" - a key that changed per generation
+              would answer "no" after every promote and mint a SECOND PAID LEASE. namespace and
+              name are both immutable (name == nodeId), so the only varying component is
+              spec.leaseEpoch, which NOTHING bumps implicitly.
+            */ -}}
+            {{- $epoch := int (dig "leaseEpoch" 0 $spec) }}
+            {{- $cogniKey := printf "xcw:%s:%s:%d" $ns $name $epoch }}
+            {{- $baseUrl := printf "http://akash-tx-actuator.%s.svc.cluster.local:8080" $ns }}
+            {{- $authHeader := printf "Bearer {{ akash-tx-actuator-auth:%s:token }}" $ns }}
+
+            {{- /* ------------------------------------------------------------------
+              LOWERING: full-fidelity XR -> the actuator's ProvisionSpec.
+              Port of toProvisionSpec() + legacyCogniAppEnv() in
+              features/compute/compute-workload-reconciler.ts.
+            ------------------------------------------------------------------ */ -}}
+            {{- $images := dict }}
+            {{- range $spec.bundle.artifacts }}{{ $_ := set $images .name .image }}{{ end }}
+            {{- $ports := dict }}
+            {{- range $wl.services }}{{ $_ := set $ports .name (int .port) }}{{ end }}
+            {{- $substrate := dig "runtime" "substrateHost" "" $spec }}
+            {{- $logPush := dig "runtime" "logPush" false $spec }}
+            {{- $secretName := printf "%s-compute-env-secrets" $slug }}
+
+            {{- $services := list }}
+            {{- range $svc := $wl.services }}
+            {{- $image := index $images $svc.artifact }}
+            {{- $profile := dig "runtimeProfile" "" $svc }}
+            {{- $isApp := eq $profile "cogni-node-app-v1" }}
+            {{- $e := dict }}
+            {{- /* bindHost/port contract - identical to the legacy outer env block. */ -}}
+            {{- $_ := set $e "HOST" $svc.bindHost }}
+            {{- $_ := set $e "HOSTNAME" $svc.bindHost }}
+            {{- $_ := set $e "PORT" (printf "%d" (int $svc.port)) }}
+            {{- if $isApp }}
+            {{- $_ := set $e "APP_ENV" "production" }}
+            {{- $_ := set $e "DEPLOY_ENVIRONMENT" $env }}
+            {{- $_ := set $e "COGNI_REPO_SHA" $desiredSha }}
+            {{- /*
+              sharedSubstrateEnv(). The legacy controller derived this host from the DATABASE_URL
+              SECRET VALUE; an OSS engine that never sees a secret cannot, so it reads the
+              value-free spec.runtime.substrateHost instead. ABSENT degrades exactly like the
+              legacy unparseable-DSN branch: the whole block is omitted rather than guessed.
+            */ -}}
+            {{- if ne $substrate "" }}
+            {{- $_ := set $e "TEMPORAL_ADDRESS" (printf "%s:7233" $substrate) }}
+            {{- $_ := set $e "TEMPORAL_NAMESPACE" (printf "cogni-%s" $env) }}
+            {{- $_ := set $e "TEMPORAL_TASK_QUEUE" "scheduler-tasks" }}
+            {{- $_ := set $e "REDIS_URL" (printf "redis://%s:6379" $substrate) }}
+            {{- $_ := set $e "LITELLM_BASE_URL" (printf "http://%s:4000" $substrate) }}
+            {{- $_ := set $e "SCHEDULER_WORKER_HEALTH_URL" (printf "http://%s:30900" $substrate) }}
+            {{- end }}
+            {{- end }}
+            {{- /* bindings -> sibling service URLs (legacy bindingEnv). */ -}}
+            {{- range $k, $target := $svc.bindings }}
+            {{- $_ := set $e $k (printf "http://%s:%d" $target (int (index $ports $target))) }}
+            {{- end }}
+            {{- /*
+              VALUE-FREE secret refs -> provider-http placeholders. LITELLM_VIRTUAL_KEY is
+              RENAMED to LITELLM_MASTER_KEY for the node-app profile and is not also passed
+              under its own name - byte-identical to legacyCogniAppEnv's destructure.
+            */ -}}
+            {{- range (dig "secretRefs" (list) $svc) }}
+            {{- $ref := printf "{{ %s:%s:%s }}" $secretName $ns .key }}
+            {{- if and $isApp (eq .key "LITELLM_VIRTUAL_KEY") }}
+            {{- $_ := set $e "LITELLM_MASTER_KEY" $ref }}
+            {{- else }}
+            {{- $_ := set $e .key $ref }}
+            {{- end }}
+            {{- end }}
+            {{- if $isApp }}
+            {{- /*
+              APPLICATION-LOG IDENTITY (bug.5127). The node-template transport labels its
+              streams {service="app", service_name=<slug>, node=<nodeId>, env, source="lease"}.
+              OPT-IN, unlike the legacy controller: a provider-http placeholder is FAIL-CLOSED
+              (an absent secret key fails the whole request) where the controller's direct read
+              was fail-open, and LOKI_LEASE_PUSH_* are `required: false` in the secrets catalog.
+              Enable it only where operator-env-secrets actually carries all three keys.
+            */ -}}
+            {{- $_ := set $e "COGNI_NODE_ID" $spec.nodeId }}
+            {{- if $logPush }}
+            {{- $_ := set $e "LOKI_PUSH_URL" (printf "{{ operator-env-secrets:%s:LOKI_LEASE_PUSH_URL }}" $ns) }}
+            {{- $_ := set $e "LOKI_PUSH_USER" (printf "{{ operator-env-secrets:%s:LOKI_LEASE_PUSH_USER }}" $ns) }}
+            {{- $_ := set $e "LOKI_PUSH_PASSWORD" (printf "{{ operator-env-secrets:%s:LOKI_LEASE_PUSH_TOKEN }}" $ns) }}
+            {{- $_ := set $e "LOKI_PUSH_SOURCE" "lease" }}
+            {{- end }}
+            {{- /* buildNodeAppIdentityEnv() - these deliberately win over every key above. */ -}}
+            {{- $_ := set $e "NODE_NAME" $slug }}
+            {{- $_ := set $e "COGNI_REPO_PATH" "/app" }}
+            {{- $_ := set $e "AUTH_TRUST_HOST" "true" }}
+            {{- $_ := set $e "NEXTAUTH_URL" (printf "https://%s" $publicHost) }}
+            {{- $_ := set $e "APP_BASE_URL" (printf "https://%s" $publicHost) }}
+            {{- end }}
+            {{- /* visibility -> expose. Public is the only service that takes the hostname. */ -}}
+            {{- $public := eq $svc.visibility "public" }}
+            {{- $expose := dict "port" (int $svc.port) "as" (ternary 80 (int $svc.port) $public) "global" $public }}
+            {{- if $public }}{{ $_ := set $expose "hosts" (list $publicHost) }}{{ end }}
+            {{- $out := dict "name" $svc.name "image" $image "env" $e "cpuUnits" $svc.cpuUnits "memoryMi" (int $svc.memoryMi) "storageMi" (int $svc.storageMi) "expose" (list $expose) }}
+            {{- if hasKey $svc "command" }}{{ $_ := set $out "command" $svc.command }}{{ end }}
+            {{- if hasKey $svc "args" }}{{ $_ := set $out "args" $svc.args }}{{ end }}
+            {{- $services = append $services $out }}
+            {{- end }}
+            {{- $payload := dict "cogniKey" $cogniKey "environment" $env "spec" (dict "name" $slug "services" $services) }}
+
+            {{- /* ---------- observed state ---------- */ -}}
+            {{- $observedResources := default (dict) .observed.resources }}
+            {{- $leaseObs := index $observedResources "akash-lease" }}
+            {{- $resp := dict }}
+            {{- if $leaseObs }}
+            {{- $raw := dig "status" "response" "body" "" $leaseObs.resource }}
+            {{- if ne $raw "" }}{{ $resp = fromJson $raw }}{{ end }}
+            {{- end }}
+            {{- $found := dig "found" false $resp }}
+            {{- $res := dig "resource" (dict) $resp }}
+            {{- $state := dig "state" "unknown" $res }}
+            {{- $endpoints := dig "endpoints" (list) $res }}
+            {{- $externalName := dig "externalName" "" $res }}
+            {{- $serving := dig "serving" false $resp }}
+            {{- $active := and $found (eq $state "active") }}
+            {{- $closed := and $found (eq $state "closed") }}
+
+            {{- /*
+              LATCHED observed bundle. Only a workload that actually SERVED its exact source sha
+              may claim to have observed that bundle, and once latched a transient probe failure
+              never un-latches it. Both the convergence clause and BOOT_SLO_OR_CLOSE depend on
+              this: the deadline may only close a lease that has NEVER served.
+            */ -}}
+            {{- $prevSha := dig "status" "observedBundle" "source" "sha" "" $xr }}
+            {{- $hasServedDesired := or (and $active $serving) (eq $prevSha $desiredSha) }}
+
+            {{- /* ---------- BOOT_SLO_OR_CLOSE ---------- */ -}}
+            {{- $bootDeadlineSeconds := int (dig "bootPolicy" "bootDeadlineSeconds" 1800 $spec) }}
+            {{- $onDeadline := dig "bootPolicy" "onDeadline" "Hold" $spec }}
+            {{- $createdAt := $meta.creationTimestamp }}
+            {{- $createdTime := toDate "2006-01-02T15:04:05Z07:00" $createdAt }}
+            {{- $ageSeconds := int (sub (now | unixEpoch) ($createdTime | unixEpoch)) }}
+            {{- $bootDeadlineAt := dateInZone "2006-01-02T15:04:05Z07:00" ($createdTime | dateModify (printf "%ds" $bootDeadlineSeconds)) "UTC" }}
+            {{- $neverServed := and (not $serving) (eq $prevSha "") }}
+            {{- $deadlineExceeded := and $neverServed (gt $ageSeconds $bootDeadlineSeconds) }}
+            {{- $closeForBudget := and $deadlineExceeded (eq $onDeadline "Close") }}
+
+            {{- /*
+              A CLOSED lease is TERMINAL for this XR, and the composed Request stops being
+              rendered. Re-creating under the same key would ask the actuator to re-spend a
+              settled key (it refuses by design, FAIL_CLOSED), so hammering it would only burn
+              provider calls. Replacement is an explicit spec.leaseEpoch bump.
+            */ -}}
+            {{- $terminallyClosed := and $closed (not $closeForBudget) }}
+            {{- $renderLease := not (or $closeForBudget $terminallyClosed) }}
+
+            {{- /*
+              BOOT GRACE. `serving` is the convergence signal, so a not-yet-serving workload
+              would otherwise look out-of-date and provoke an SDL UPDATE on every poll -
+              restarting the very container that is trying to boot. A newly leased workload
+              therefore gets BOOT_GRACE_SECONDS of quiet before the convergence clause is armed.
+              A redeploy (prevSha set and different) arms it immediately: that lease is already
+              serving something, so a replacement SDL is the correct action.
+            */ -}}
+            {{- $bootGraceSeconds := 600 }}
+            {{- $armConvergence := or (gt $ageSeconds $bootGraceSeconds) (and (ne $prevSha "") (ne $prevSha $desiredSha)) }}
+            {{- $upToDateLogic := "(.response.body.found == true) and (.response.body.resource.state != \"closed\")" }}
+            {{- if $armConvergence }}
+            {{- $upToDateLogic = "(.response.body.found == true) and (.response.body.resource.state != \"closed\") and (.response.body.serving == true)" }}
+            {{- end }}
+
+            {{- /* ---------- DNS target (bug.5125: never CNAME a host to itself) ---------- */ -}}
+            {{- $dns := dig "dns" (dict) $spec }}
+            {{- $dnsTarget := "" }}
+            {{- range $endpoints }}
+            {{- $h := regexReplaceAll "^[A-Za-z][A-Za-z0-9+.-]*://" . "" | splitList "/" | first | splitList ":" | first | lower | trimSuffix "." }}
+            {{- if and (eq $dnsTarget "") (ne $h "") (ne $h $publicHost) (not (regexMatch "^[0-9]{1,3}([.][0-9]{1,3}){3}$" $h)) }}
+            {{- $dnsTarget = $h }}
+            {{- end }}
+            {{- end }}
+
+            {{- /* ---------- composed: the paid Akash lease ---------- */ -}}
+            {{- if $renderLease }}
+            ---
+            apiVersion: http.m.crossplane.io/v1alpha2
+            kind: Request
+            metadata:
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: akash-lease
+                {{- if and $active $serving }}
+                gotemplating.fn.crossplane.io/ready: "True"
+                {{- end }}
+            spec:
+              providerConfigRef:
+                kind: ClusterProviderConfig
+                name: cogni-http
+              # No deletionPolicy: the NAMESPACED Request has none. managementPolicies defaults
+              # to ["*"], which includes Delete - deleting the XR must close the lease and stop
+              # the burn, so Orphan is never the right default for a resource that costs money.
+              forProvider:
+                # allocateAndLease waits for bids, screens providers and confirms the lease.
+                # A short timeout would abandon a transaction that is already paid for.
+                waitTimeout: 300s
+                headers:
+                  Content-Type: ["application/json"]
+                  Authorization: [{{ $authHeader | quote }}]
+                payload:
+                  baseUrl: {{ $baseUrl | quote }}
+                  body: {{ toJson $payload | quote }}
+                mappings:
+                  - action: OBSERVE
+                    method: POST
+                    url: (.payload.baseUrl + "/v1/akash/observe")
+                    body: |
+                      {
+                        cogniKey: .payload.body.cogniKey,
+                        expectedSourceSha: {{ $desiredSha | quote }}
+                      }
+                  - action: CREATE
+                    method: POST
+                    url: (.payload.baseUrl + "/v1/akash/create")
+                    body: |
+                      .payload.body
+                  - action: UPDATE
+                    method: POST
+                    url: (.payload.baseUrl + "/v1/akash/update")
+                    body: |
+                      {
+                        cogniKey: .payload.body.cogniKey,
+                        externalName: .response.body.resource.externalName,
+                        environment: .payload.body.environment,
+                        spec: .payload.body.spec
+                      }
+                  - action: REMOVE
+                    method: POST
+                    url: (.payload.baseUrl + "/v1/akash/delete")
+                    body: |
+                      {
+                        cogniKey: .payload.body.cogniKey,
+                        externalName: .response.body.resource.externalName
+                      }
+                expectedResponseCheck:
+                  type: CUSTOM
+                  logic: {{ $upToDateLogic | quote }}
+                # A released allocation still resolves to a handle whose provider state is
+                # `closed`, so "found" alone would never go false and the Request could never
+                # finish deleting. Closed IS removed.
+                isRemovedCheck:
+                  type: CUSTOM
+                  logic: '(.response.body.found == false) or (.response.body.resource.state == "closed")'
+            {{- end }}
+
+            {{- /* ---------- composed: DNS intent ---------- */ -}}
+            {{- if and $dns (ne $dnsTarget "") $renderLease }}
+            {{- $cfBase := printf "https://api.cloudflare.com/client/v4/zones/%s/dns_records" $dns.zoneId }}
+            {{- $cfToken := printf "Bearer {{ operator-env-secrets:%s:CLOUDFLARE_API_TOKEN }}" $ns }}
+            {{- $cfPayload := dict "name" $publicHost "content" $dnsTarget }}
+            ---
+            apiVersion: http.m.crossplane.io/v1alpha2
+            kind: Request
+            metadata:
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: dns-record
+            spec:
+              providerConfigRef:
+                kind: ClusterProviderConfig
+                name: cogni-http
+              forProvider:
+                waitTimeout: 30s
+                headers:
+                  Content-Type: ["application/json"]
+                  Authorization: [{{ $cfToken | quote }}]
+                payload:
+                  baseUrl: {{ $cfBase | quote }}
+                  body: {{ toJson $cfPayload | quote }}
+                mappings:
+                  - action: OBSERVE
+                    method: GET
+                    url: (.payload.baseUrl + "?type=CNAME&name=" + .payload.body.name)
+                  - action: CREATE
+                    method: POST
+                    url: .payload.baseUrl
+                    body: |
+                      {
+                        type: "CNAME",
+                        name: .payload.body.name,
+                        content: .payload.body.content,
+                        ttl: 1,
+                        proxied: false
+                      }
+                  - action: UPDATE
+                    method: PUT
+                    url: (.payload.baseUrl + "/" + (.response.body.result | if type == "array" then .[0].id else .id end))
+                    body: |
+                      {
+                        type: "CNAME",
+                        name: .payload.body.name,
+                        content: .payload.body.content,
+                        ttl: 1,
+                        proxied: false
+                      }
+                  - action: REMOVE
+                    method: DELETE
+                    url: (.payload.baseUrl + "/" + (.response.body.result | if type == "array" then .[0].id else .id end))
+                expectedResponseCheck:
+                  type: CUSTOM
+                  logic: |
+                    (.response.body.result
+                      | if type == "array" then (length > 0) else true end)
+                    and
+                    ((.response.body.result | if type == "array" then .[0].content else .content end)
+                      == .payload.body.content)
+                isRemovedCheck:
+                  type: CUSTOM
+                  logic: |
+                    (.response.body.result | if type == "array" then (length == 0) else false end)
+            {{- end }}
+
+            {{- /* ---------- composite status ---------- */ -}}
+            {{- $phase := "Progressing" }}
+            {{- $failReason := "" }}
+            {{- $failMessage := "" }}
+            {{- if and $active $serving }}
+            {{- $phase = "Ready" }}
+            {{- else if $closeForBudget }}
+            {{- $phase = "Failed" }}
+            {{- $failReason = "BootDeadlineClosed" }}
+            {{- $failMessage = printf "workload did not serve %s within %ds; the lease was closed to stop spend" (substr 0 12 $desiredSha) $bootDeadlineSeconds }}
+            {{- else if $deadlineExceeded }}
+            {{- $phase = "Failed" }}
+            {{- $failReason = "BootDeadlineExceeded" }}
+            {{- $failMessage = printf "workload did not serve %s within %ds; spend continues because bootPolicy.onDeadline is Hold" (substr 0 12 $desiredSha) $bootDeadlineSeconds }}
+            {{- else if $terminallyClosed }}
+            {{- $phase = "Failed" }}
+            {{- $failReason = "LeaseClosed" }}
+            {{- $failMessage = printf "lease %s is closed; bump spec.leaseEpoch to mint a replacement (the actuator refuses to re-spend a settled key)" $externalName }}
+            {{- end }}
+            ---
+            apiVersion: {{ $xr.apiVersion }}
+            kind: {{ $xr.kind }}
+            status:
+              phase: {{ $phase | quote }}
+              serving: {{ and $active $serving }}
+              bootDeadlineAt: {{ $bootDeadlineAt | quote }}
+              {{- if $hasServedDesired }}
+              observedBundle:
+                ref: {{ $spec.bundle.ref | quote }}
+                source:
+                  repository: {{ $spec.bundle.source.repository | quote }}
+                  sha: {{ $desiredSha | quote }}
+              {{- else if ne $prevSha "" }}
+              observedBundle: {{ toJson (dig "status" "observedBundle" (dict) $xr) }}
+              {{- end }}
+              {{- if $found }}
+              resource:
+                provider: akash
+                id: {{ $externalName | quote }}
+                state: {{ $state | quote }}
+                endpoints: {{ toJson $endpoints }}
+              {{- end }}
+              {{- if ne $dnsTarget "" }}
+              dns:
+                hostname: {{ $publicHost | quote }}
+                target: {{ $dnsTarget | quote }}
+                published: {{ if $dns }}true{{ else }}false{{ end }}
+              {{- end }}
+              {{- if ne $failReason "" }}
+              failure:
+                reason: {{ $failReason | quote }}
+                message: {{ $failMessage | quote }}
+              {{- end }}
+    - step: ready
+      functionRef:
+        name: function-auto-ready

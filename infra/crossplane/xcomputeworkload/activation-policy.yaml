@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2025 Cogni-DAO
+#
+# The narrowest possible authority handoff (story.5020 gate, task.5096).
+#
+# task.5094 installed provider-http with the core chart's `provider.defaultActivations: []`,
+# which is why the substrate could be healthy AND dormant: Crossplane generated a
+# ManagedResourceDefinition for every type in the package and started a controller for NONE of
+# them. This object activates EXACTLY ONE type — the namespaced Request the Composition
+# composes. No wildcard, no `*.http.crossplane.io`, and deliberately not the cluster-scoped
+# `requests.http.crossplane.io`: desired state for a paid workload is namespaced by
+# construction (DESIRED_STATE_IS_ENV_SCOPED), and a cluster-scoped Request would be a second,
+# unnamespaced way to spend money.
+#
+# `disposablerequests` stays INACTIVE. A DisposableRequest is fire-and-forget with no external
+# resource to observe — precisely the wrong primitive for a lease that must be observed before
+# it is created and closed when it is deleted.
+apiVersion: apiextensions.crossplane.io/v1alpha1
+kind: ManagedResourceActivationPolicy
+metadata:
+  name: cogni-compute-activations
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  activate:
+    - requests.http.m.crossplane.io

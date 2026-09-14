@@ -443,10 +443,13 @@ jobs:
 
           PRESERVED_IMAGE_REF=""
           if [ "$DEPLOYMENT_PROVIDER" = "k3s" ]; then
-            PRESERVED_IMAGE_REF=$(
-              OVERLAY_ENV=candidate-a bash ../app-src/scripts/ci/snapshot-overlay-digests.sh \
-                | awk -F $'\t' -v app="$NODE" '$1 == app { print $2; exit }'
-            )
+            # shellcheck source=scripts/ci/lib/overlay-digest.sh
+            . ../app-src/scripts/ci/lib/overlay-digest.sh
+            # Single-target lookup. A missing overlay is a legitimate cold start,
+            # so absence clears the ref rather than failing the flight.
+            if ! PRESERVED_IMAGE_REF=$(extract_overlay_image_ref candidate-a "$NODE"); then
+              PRESERVED_IMAGE_REF=""
+            fi
           fi
 
           rsync -a --delete ../app-src/infra/k8s/base/ infra/k8s/base/
