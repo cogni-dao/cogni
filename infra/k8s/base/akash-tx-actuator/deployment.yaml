@@ -36,8 +36,14 @@ spec:
         app.kubernetes.io/name: akash-tx-actuator
         app.kubernetes.io/part-of: cogni
     spec:
-      # DIFFERENCE 2: no ServiceAccount of its own and no RBAC. The actuator reads no
-      # Kubernetes objects — Crossplane owns every CR. Default SA, no API access needed.
+      # DIFFERENCE 2: its OWN ServiceAccount, with the NARROWEST possible Role (rbac.yaml).
+      # Crossplane still owns every CR — this process reads no ComputeWorkload, holds no Lease
+      # and writes no events. What it does need (story.5016) is to run the per-digest DB
+      # migration Job its fail-closed migration gate demands before any paid transaction, so
+      # the Role grants batch/jobs [get,list,create,delete] and pods [list] and nothing more.
+      # A shared SA with compute-workload-controller would have handed it that controller's
+      # ComputeWorkload-patch and Lease rights for free; a separate identity is the point.
+      serviceAccountName: akash-tx-actuator
       securityContext:
         runAsNonRoot: true
         runAsUser: 1001
