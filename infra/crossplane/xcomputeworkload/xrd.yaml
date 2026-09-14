@@ -1,0 +1,391 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2025 Cogni-DAO
+#
+# XComputeWorkload — the NAMESPACED, full-fidelity Crossplane composite that replaces the
+# bespoke ComputeWorkload controller's API surface (task.5096, story.5016 R2.3).
+#
+# The spec below is a FIELD-FOR-FIELD port of infra/k8s/base/compute-workload-platform/crd.yaml
+# at current main. Every preserved contract is called out inline so a future reader can prove
+# the port is lossless without diffing two 300-line schemas:
+#
+#   node+environment identity   spec.nodeId (immutable) + spec.environment (immutable)
+#   artifact/digest/source      spec.bundle.ref (digest-pinned) + .source{repository,sha} + .artifacts[]
+#   resources                   spec.workload.services[].{cpuUnits,memoryMi,storageMi}
+#   runtime profile             spec.workload.services[].runtimeProfile (+ spec.runtime.substrateHost)
+#   value-free secret refs      spec.workload.services[].secretRefs[].key  (KEYS ONLY, never values)
+#   command/args                spec.workload.services[].{command,args}
+#   bindings                    spec.workload.services[].bindings
+#   empty-birth migration order spec.migration.policy
+#   exact-SHA readiness         status.serving + Ready condition, proved against spec.bundle.source.sha
+#   DNS intent                  spec.dns + status.dns{hostname,target,published}
+#   application-log identity    spec.workload.name + spec.nodeId + spec.environment as lease
+#                               LOKI_PUSH_* stream labels (bug.5127)
+#
+# DELIBERATE DIVERGENCES from the legacy CRD, each with a reason:
+#   1. The legacy CRD carried `x-kubernetes-validations: self.metadata.name == self.spec.nodeId`
+#      at the TOP level of the schema. An XRD's openAPIV3Schema may only define `spec` and
+#      `status`, so that rule cannot live here. It is enforced instead by the Composition's
+#      first pipeline step, which refuses to render any managed resource when they disagree.
+#   2. `status.attempt` / `status.recoveryCount` / `status.failure.retryable` are GONE. They
+#      encoded the bespoke controller's retry budget and leader-epoch bookkeeping — exactly
+#      the generic reconciliation Crossplane now owns (retries, backoff, conditions,
+#      finalizers). Keeping them would re-create a second controller in a schema.
+#   3. `spec.migration`, `spec.dns`, `spec.bootPolicy`, `spec.runtime` and `spec.leaseEpoch` are
+#      NEW. Each was implicit policy inside the controller binary or, worse, derived from a
+#      SECRET VALUE. A declarative API reconciled by an OSS engine that never sees a secret has
+#      to state them. See each field's own description.
+apiVersion: apiextensions.crossplane.io/v2
+kind: CompositeResourceDefinition
+metadata:
+  name: xcomputeworkloads.compute.cogni.io
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  group: compute.cogni.io
+  # Namespaced by construction: one paid workload per node per environment namespace,
+  # identical to the legacy CR's placement in cogni-<environment>.
+  scope: Namespaced
+  names:
+    kind: XComputeWorkload
+    plural: xcomputeworkloads
+    singular: xcomputeworkload
+    shortNames: [xcwl]
+  defaultCompositionRef:
+    name: xcomputeworkload-akash
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      additionalPrinterColumns:
+        - {
+            name: Ready,
+            type: string,
+            jsonPath: ".status.conditions[?(@.type=='Ready')].status",
+          }
+        - { name: Phase, type: string, jsonPath: .status.phase }
+        - {
+            name: Source,
+            type: string,
+            jsonPath: .status.observedBundle.source.sha,
+          }
+        - { name: Resource, type: string, jsonPath: .status.resource.id }
+        - { name: Serving, type: boolean, jsonPath: .status.serving }
+        - { name: Age, type: date, jsonPath: .metadata.creationTimestamp }
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [nodeId, environment, bundle, workload]
+              x-kubernetes-validations:
+                - rule: "self.workload.services.all(s, self.bundle.artifacts.exists(a, a.name == s.artifact))"
+                  message: every service must reference a declared bundle artifact
+                - rule: "self.bundle.artifacts.all(a, self.workload.services.exists(s, s.artifact == a.name))"
+                  message: every bundle artifact must be used by at least one service
+              properties:
+                nodeId:
+                  type: string
+                  format: uuid
+                  x-kubernetes-validations:
+                    - { rule: "self == oldSelf", message: nodeId is immutable }
+                environment:
+                  type: string
+                  enum: [candidate-a, preview, production]
+                  x-kubernetes-validations:
+                    - {
+                        rule: "self == oldSelf",
+                        message: environment is immutable,
+                      }
+                bundle:
+                  type: object
+                  required: [ref, source, artifacts]
+                  properties:
+                    # BUNDLE_REF_IS_DIGEST — a tag is never desired state.
+                    ref:
+                      type: string
+                      pattern: "^[a-z0-9][a-z0-9._:-]*(/[a-z0-9][a-z0-9._-]*)+@sha256:[0-9a-f]{64}$"
+                      maxLength: 512
+                    source:
+                      type: object
+                      required: [repository, sha]
+                      properties:
+                        repository:
+                          type: string
+                          pattern: "^[a-z0-9_.-]+/[a-z0-9_.-]+$"
+                          maxLength: 201
+                        sha:
+                          type: string
+                          pattern: "^[0-9a-f]{40}$"
+                    artifacts:
+                      type: array
+                      minItems: 1
+                      maxItems: 8
+                      x-kubernetes-list-type: map
+                      x-kubernetes-list-map-keys: [name]
+                      items:
+                        type: object
+                        required: [name, image]
+                        properties:
+                          # maxLength is load-bearing for CEL cost estimation against the
+                          # cross-product rules above; the pattern alone is not a bound.
+                          name:
+                            type: string
+                            maxLength: 63
+                            pattern: "^[a-z][a-z0-9-]{0,62}$"
+                          image:
+                            type: string
+                            pattern: "^[a-z0-9][a-z0-9._:-]*(/[a-z0-9][a-z0-9._-]*)+@sha256:[0-9a-f]{64}$"
+                            maxLength: 512
+                workload:
+                  type: object
+                  required: [name, publicHost, services]
+                  x-kubernetes-validations:
+                    - rule: "self.services.filter(s, s.visibility == 'public').size() == 1"
+                      message: exactly one workload service must be public
+                    - rule: "self.services.all(s, !has(s.runtimeProfile) || s.visibility == 'public')"
+                      message: runtimeProfile is allowed only on the public service
+                    - rule: "self.services.all(s, s.bindings.all(k, s.bindings[k] != s.name && self.services.exists(t, t.name == s.bindings[k])))"
+                      message: every binding must target a different declared sibling service
+                  properties:
+                    name:
+                      type: string
+                      maxLength: 63
+                      pattern: "^[a-z][a-z0-9-]{0,62}$"
+                    publicHost:
+                      type: string
+                      format: hostname
+                      minLength: 1
+                      maxLength: 253
+                    services:
+                      type: array
+                      minItems: 1
+                      maxItems: 8
+                      x-kubernetes-list-type: map
+                      x-kubernetes-list-map-keys: [name]
+                      items:
+                        type: object
+                        required:
+                          [
+                            name,
+                            artifact,
+                            port,
+                            visibility,
+                            bindings,
+                            bindHost,
+                            cpuUnits,
+                            memoryMi,
+                            storageMi,
+                          ]
+                        properties:
+                          name:
+                            type: string
+                            maxLength: 63
+                            pattern: "^[a-z][a-z0-9-]{0,62}$"
+                          artifact:
+                            type: string
+                            maxLength: 63
+                            pattern: "^[a-z][a-z0-9-]{0,62}$"
+                          runtimeProfile:
+                            type: string
+                            enum: [cogni-node-app-v1]
+                          command:
+                            type: array
+                            maxItems: 32
+                            items:
+                              { type: string, minLength: 1, maxLength: 1024 }
+                          args:
+                            type: array
+                            maxItems: 32
+                            items:
+                              { type: string, minLength: 0, maxLength: 1024 }
+                          port: { type: integer, minimum: 1, maximum: 65535 }
+                          visibility: { type: string, enum: [public, private] }
+                          bindings:
+                            type: object
+                            maxProperties: 16
+                            propertyNames:
+                              pattern: "^[A-Z_][A-Z0-9_]{0,63}$"
+                            additionalProperties:
+                              type: string
+                              maxLength: 63
+                              pattern: "^[a-z][a-z0-9-]{0,62}$"
+                          bindHost: { type: string, enum: ["0.0.0.0"] }
+                          secretRefs:
+                            description: >-
+                              VALUE-FREE keys only. The Composition lowers each key to a
+                              provider-http `{{ secret:namespace:key }}` placeholder, which the
+                              OSS provider resolves from the environment's existing ESO-managed
+                              Secret at request time and masks in spec, status and its own logs.
+                              No value enters this object, the Composition, etcd, git, or Argo.
+                            type: array
+                            maxItems: 32
+                            x-kubernetes-list-type: map
+                            x-kubernetes-list-map-keys: [key]
+                            items:
+                              type: object
+                              required: [key]
+                              properties:
+                                key:
+                                  type: string
+                                  pattern: "^[A-Z_][A-Z0-9_]{0,127}$"
+                          cpuUnits: { type: number, minimum: 0.1, maximum: 64 }
+                          memoryMi:
+                            { type: integer, minimum: 128, maximum: 262144 }
+                          storageMi:
+                            { type: integer, minimum: 128, maximum: 1048576 }
+                runtime:
+                  description: >-
+                    Value-free runtime topology for the `cogni-node-app-v1` profile. The legacy
+                    controller DERIVED this from the hostname inside the DATABASE_URL SECRET
+                    VALUE, which an OSS engine that never sees a secret structurally cannot do.
+                    Stating it is therefore not new policy — it is the same policy, moved from a
+                    place only a privileged process could read it to a place desired state can
+                    declare it. A hostname is not a credential; the DSN that contains it is, and
+                    that stays a placeholder. ABSENT is supported and degrades EXACTLY like the
+                    legacy path did on an unparseable DSN: the substrate env block is omitted
+                    (no Temporal / Redis / LiteLLM wiring) rather than guessed.
+                  type: object
+                  required: [substrateHost]
+                  properties:
+                    substrateHost:
+                      type: string
+                      format: hostname
+                      minLength: 1
+                      maxLength: 253
+                    logPush:
+                      description: >-
+                        APPLICATION-LOG IDENTITY (bug.5127). When true the lease receives the
+                        operator's write-only Loki push credential and labels its streams
+                        {service="app", service_name=<slug>, node=<nodeId>, env, source="lease"}.
+                        OPT-IN, unlike the legacy controller: a provider-http placeholder is
+                        FAIL-CLOSED (an absent secret key fails the whole request) where the
+                        controller's direct secret read was fail-open, and LOKI_LEASE_PUSH_* are
+                        `required: false` in the secrets catalog. Enable only where the
+                        environment's `operator-env-secrets` actually carries all three keys —
+                        otherwise this turns "no logs" into "no lease".
+                      type: boolean
+                      default: false
+                migration:
+                  description: >-
+                    Empty-birth ordering. `RequireBeforeTransaction` (the default and the legacy
+                    behaviour, bug.5116) means a completed per-digest DB migration is a
+                    PRECONDITION of every paid transaction, so a fresh node's schemas exist
+                    before its lease does. `Skip` is for workloads with no database at all.
+                    ENFORCED at the paid-transaction seam (bug.5140): the Composition lowers this
+                    into the actuator's required `migration` discriminated union, and a
+                    `RequireBeforeTransaction` create or update is REFUSED until the Job for
+                    spec.bundle.ref has succeeded. The migration COMMANDS never travel — the
+                    runtime profile names a command set the actuator owns, so no caller can
+                    "prove" a migration with a no-op.
+                  type: object
+                  properties:
+                    policy:
+                      type: string
+                      enum: [RequireBeforeTransaction, Skip]
+                      default: RequireBeforeTransaction
+                dns:
+                  description: >-
+                    DNS intent. Absent means "publish status.dns.target but write no record" —
+                    the XR still reports the CNAME it WOULD publish, so intent is observable
+                    even where the write path is not configured.
+                  type: object
+                  required: [provider, zoneId]
+                  properties:
+                    provider: { type: string, enum: [cloudflare] }
+                    # A Cloudflare zone id is a public identifier (it appears in the
+                    # dashboard URL), NOT a credential. The API token stays a secret
+                    # placeholder resolved by provider-http at request time.
+                    zoneId:
+                      type: string
+                      pattern: "^[0-9a-f]{32}$"
+                bootPolicy:
+                  description: >-
+                    BOOT_SLO_OR_CLOSE. task.5095 explicitly left give-up policy unowned, so a
+                    lease that never serves its exact SHA kept paying forever. This is where
+                    that policy now lives.
+                  type: object
+                  properties:
+                    bootDeadlineSeconds:
+                      description: Seconds from XR creation within which status.serving must become true.
+                      type: integer
+                      minimum: 60
+                      maximum: 86400
+                      default: 1800
+                    onDeadline:
+                      description: >-
+                        `Hold` (default) stops at a BootDeadlineExceeded condition and keeps
+                        the lease for forensics — safe, but it keeps spending. `Close` stops
+                        rendering the lease managed resource, which garbage-collects it and
+                        drives the actuator's delete, closing the lease and stopping the burn.
+                        Disposable/candidate workloads should choose Close.
+                      type: string
+                      enum: [Hold, Close]
+                      default: Hold
+                leaseEpoch:
+                  description: >-
+                    Operator-driven replacement counter, and the ONLY varying component of the
+                    actuator's wallet-wide idempotence key (`xcw:<namespace>:<name>:<epoch>`).
+                    A key that changed on its own — per generation, per resourceVersion, per
+                    retry — would answer "no existing resource" after a promote and mint a
+                    SECOND PAID LEASE, so nothing in this system is allowed to bump it
+                    implicitly. A human or the materializer bumps it exactly when a terminally
+                    closed lease must be REPLACED (the actuator refuses to re-spend a settled
+                    key by design, which is what makes a stuck workload loud instead of
+                    expensive).
+                  type: integer
+                  minimum: 0
+                  maximum: 1000000
+                  default: 0
+            status:
+              type: object
+              properties:
+                phase:
+                  { type: string, enum: [Ready, Progressing, Failed, Unknown] }
+                observedBundle:
+                  type: object
+                  properties:
+                    ref: { type: string, maxLength: 512 }
+                    source:
+                      type: object
+                      properties:
+                        repository: { type: string, maxLength: 201 }
+                        sha: { type: string, pattern: "^[0-9a-f]{40}$" }
+                resource:
+                  type: object
+                  properties:
+                    provider: { type: string, maxLength: 63 }
+                    id: { type: string, maxLength: 256 }
+                    state:
+                      { type: string, enum: [pending, active, closed, unknown] }
+                    endpoints:
+                      type: array
+                      maxItems: 32
+                      items: { type: string, maxLength: 2048 }
+                # EXACT-SHA READINESS. True only when the workload's own /readyz reports the
+                # commit in spec.bundle.source.sha. The actuator performs the single bounded
+                # probe; this field is the composite's observable copy of that proof.
+                serving: { type: boolean }
+                dns:
+                  type: object
+                  properties:
+                    hostname: { type: string, maxLength: 253 }
+                    target: { type: string, maxLength: 253 }
+                    published: { type: boolean }
+                failure:
+                  type: object
+                  properties:
+                    # Stable actuator refusal code (@ports/akash-tx.port AkashTxErrorCode) or
+                    # a composition-level reason. Deliberately a patterned free string rather
+                    # than the legacy 30-value enum: an enum forces a schema change every time
+                    # the actuator learns a new refusal, and an unknown code would be silently
+                    # DROPPED by the CRD — the worst possible failure mode for a field whose
+                    # only job is to explain a refusal.
+                    reason:
+                      {
+                        type: string,
+                        pattern: "^[A-Za-z_][A-Za-z0-9_]{0,127}$",
+                      }
+                    message: { type: string, maxLength: 256 }
+                bootDeadlineAt: { type: string, format: date-time }
