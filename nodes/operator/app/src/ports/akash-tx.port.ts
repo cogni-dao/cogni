@@ -17,6 +17,9 @@
  *     lost response is recoverable from durable evidence alone.
  *   - FAIL_CLOSED: an allocation that cannot be resolved to exactly one lease is reported as
  *     unresolved/ambiguous and never healed by a fresh create.
+ *   - MIGRATION_BEFORE_TRANSACTION: every mutating call carries an explicit migration
+ *     requirement, and a `RequireBeforeTransaction` requirement that is not PROVEN complete is
+ *     a refusal, never a pass (bug.5116 precondition, bug.5140 enforcement).
  *   - REFUSAL_IS_OBSERVABLE: every code here is a stable string safe for logs, Events and
  *     Crossplane conditions — a refusal a caller cannot see is a bug (bug.5115 shape).
  * Side-effects: none (types only)
@@ -31,6 +34,8 @@ import type {
   ProvisionSpec,
   ProvisionState,
 } from "@cogni/ai-tools";
+
+import type { ComputeWorkloadMigrationPort } from "./compute-workload-migration.port";
 
 /** Stable, redacted failure codes. Safe for HTTP bodies, logs, and XR conditions. */
 export type AkashTxErrorCode =
@@ -50,6 +55,12 @@ export type AkashTxErrorCode =
   | "not_found"
   /** Durable ledger unavailable — the actuator must refuse to spend without a receipt. */
   | "ledger_unavailable"
+  /** The bundle digest's DB migration has not completed yet. Retry with the SAME key. */
+  | "migration_pending"
+  /** The bundle digest's DB migration ran and failed. Terminal until a new digest. */
+  | "migration_failed"
+  /** The migration precondition could not be PROVEN either way; never assume success. */
+  | "migration_unavailable"
   /** Caller sent a structurally invalid request. */
   | "invalid_request"
   /** Caller is not authorized to reach the actuator. */
@@ -67,6 +78,40 @@ export class AkashTxError extends Error {
     this.name = "AkashTxError";
   }
 }
+
+/**
+ * The migration precondition the CALLER states with every mutation (bug.5140, XRD
+ * `spec.migration.policy`). Desired state names its own precondition; the actuator PROVES it
+ * before it spends. Modelled as a discriminated union on purpose: there is no way to ask for
+ * `RequireBeforeTransaction` without naming the digest that must be proven, so an
+ * under-specified request is a schema error rather than a silently ungated paid lease.
+ *
+ * Deliberately NOT on this wire: the migration COMMANDS. A caller-supplied command would make
+ * the gate advisory — anyone who can call the actuator could pass `true` and "prove" a
+ * migration. The `profile` selects a command set the actuator owns.
+ */
+export type AkashTxMigrationRequirement =
+  /** The workload has no database. The ONLY way to legitimately bypass the gate. */
+  | { readonly policy: "Skip" }
+  | {
+      readonly policy: "RequireBeforeTransaction";
+      /** Which migration contract must be proven; selects the actuator-owned phases. */
+      readonly profile: "cogni-node-app-v1";
+      /** `sha256:<64 hex>` from the workload's digest-pinned bundle ref. */
+      readonly bundleDigest: string;
+      /** Digest-pinned app artifact image — the same image the k3s initContainer runs. */
+      readonly image: string;
+      /** True when the app service declares a `DOLTGRES_URL` secret ref. */
+      readonly doltgres: boolean;
+    };
+
+/**
+ * The proof seam. Structurally satisfied by `ComputeWorkloadMigrationPort`
+ * (`KubernetesMigrationJobAdapter`), so the actuator and the frozen controller prove migration
+ * currency with ONE implementation — including its `compute_workload_migration_job_infra_retry`
+ * reclassification of a `DeadlineExceeded` Job with no failed migrate container.
+ */
+export type AkashTxMigrationPort = ComputeWorkloadMigrationPort;
 
 /** Provider-opaque view of one Akash workload. `externalName` is the Crossplane handle. */
 export interface AkashTxResource {
@@ -110,12 +155,14 @@ export interface AkashTxActuatorPort {
     cogniKey: string;
     environment: string;
     spec: ProvisionSpec;
+    migration: AkashTxMigrationRequirement;
   }): Promise<AkashTxCreateResult>;
   update(input: {
     cogniKey: string;
     externalName: string;
     environment: string;
     spec: ProvisionSpec;
+    migration: AkashTxMigrationRequirement;
   }): Promise<AkashTxResource>;
   delete(input: { cogniKey: string; externalName: string }): Promise<void>;
 }

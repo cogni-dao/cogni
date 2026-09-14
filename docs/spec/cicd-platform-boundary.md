@@ -310,9 +310,26 @@ finalizer, retry loop, or leader election. Its four irreducible behaviours are:
 4. **Post-response-loss recovery** — the cursor is durable _before_ the Console POST, so a lost response is
    resolved by adopting the unique post-baseline allocation, or it fails closed. It is never healed by a
    fresh create, and no timer ever releases an unresolved slot.
+5. **Migration before transaction** — bug.5116 made a completed per-digest DB migration a precondition of
+   every paid transaction, so a freshly born node has its schemas before it has a lease. The actuator is the
+   single chokepoint every paid transaction already passes through, so that precondition is enforced there
+   (bug.5140): `migration` is a REQUIRED field on `create`/`update`, a `RequireBeforeTransaction` requirement
+   is PROVEN before the wallet slot is even claimed, and `running` / `failed` / unprovable / no-prover all
+   REFUSE (`migration_pending` 409, `migration_failed` 422, `migration_unavailable` 503). `Skip` is the one
+   explicit, logged bypass. The proof runs through the same `ComputeWorkloadMigrationPort` the frozen
+   controller used, so the Kubernetes Job adapter — including its reclassification of a `DeadlineExceeded`
+   Job with no failed migrate container as an infrastructure retry — is shared, not reimplemented.
+
+   _Why here and not in the Composition:_ a Composition cannot compose the migration Job. The installed
+   package set is provider-http + go-templating + auto-ready, and `provider-kubernetes` v0.18.0 still ships
+   no namespaced `.m.crossplane.io` types, so there is nothing for a render-time gate to gate on. Enforcing
+   at the actuator needs no new controller, no new reconciliation loop, and no new package: Crossplane keeps
+   owning requeue and backoff, and a refusal is just another bounded answer it retries.
 
 Refusals are observable by construction: every refusal emits a structured log marker
-(`akash_tx_wallet_allocation_blocked`, `akash_tx_allocation_unresolved`, `akash_tx_allocation_recovered`)
+(`akash_tx_wallet_allocation_blocked`, `akash_tx_allocation_unresolved`, `akash_tx_allocation_recovered`,
+`akash_tx_migration_pending`, `akash_tx_migration_failed`, `akash_tx_migration_unavailable`,
+`akash_tx_migration_capability_missing`, and even the `akash_tx_migration_skipped` bypass)
 _before_ it answers. Writing a refusal only into CR status is what made a fleet-wide wallet deadlock
 invisible (bug.5115).
 

@@ -66,6 +66,8 @@ export {
   type AkashTxCreateResult,
   AkashTxError,
   type AkashTxErrorCode,
+  type AkashTxMigrationPort,
+  type AkashTxMigrationRequirement,
   type AkashTxObservation,
   type AkashTxResource,
 } from "./akash-tx.port";

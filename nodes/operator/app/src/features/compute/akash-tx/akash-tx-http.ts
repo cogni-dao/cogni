@@ -13,6 +13,8 @@
  *   - PRIVATE_BY_CONSTRUCTION: a bearer token is REQUIRED at construction; there is no
  *     unauthenticated mode and no public mount. Public compute mutation routes stay tombstoned.
  *   - STRICT_INPUT: strict zod objects — an unknown key is a 400, never a silently ignored field.
+ *   - MIGRATION_IS_REQUIRED: `migration` is required on create and update, so a caller that
+ *     forgets its precondition gets a 400 instead of an ungated paid lease (bug.5140).
  *   - REFUSAL_IS_OBSERVABLE: every non-2xx answer carries a stable `code` the caller can put
  *     in an XR condition, and the actuator has already logged the reason.
  *   - NO_LOOPS: one request = at most one provider transaction. Retry/backoff is the caller's.
@@ -30,6 +32,7 @@ import {
   type AkashTxCreateInput,
   AkashTxCreateInputSchema,
   AkashTxDeleteInputSchema,
+  type AkashTxMigration,
   type AkashTxObserveInput,
   AkashTxObserveInputSchema,
   AkashTxUpdateInputSchema,
@@ -38,6 +41,7 @@ import {
   type AkashTxActuatorPort,
   AkashTxError,
   type AkashTxErrorCode,
+  type AkashTxMigrationRequirement,
 } from "@/ports";
 
 import type { AkashTxLogger } from "./akash-tx-actuator";
@@ -55,6 +59,12 @@ const STATUS_BY_CODE: Readonly<Record<AkashTxErrorCode, number>> = {
   allocation_ambiguous: 409,
   provider_rejected: 422,
   provider_unavailable: 502,
+  // Conflict, not failure: the digest's migration is still running. Same key, later.
+  migration_pending: 409,
+  // Terminal for this digest — retrying cannot help until a new bundle is built.
+  migration_failed: 422,
+  // Unproven, not proven-false. Never downgraded to a pass.
+  migration_unavailable: 503,
   // Idempotent by key: a retry resolves the uncertainty from the durable receipt.
   outcome_unknown: 502,
   ledger_unavailable: 503,
@@ -108,6 +118,22 @@ function toSpec(parsed: AkashTxCreateInput["spec"]): ProvisionSpec {
         : {}),
     })),
   };
+}
+
+/**
+ * The wire union and the port union are structurally identical by design; this is the one
+ * place that fact is asserted, so a drift in either becomes a typecheck failure here.
+ */
+function toMigration(parsed: AkashTxMigration): AkashTxMigrationRequirement {
+  return parsed.policy === "Skip"
+    ? { policy: "Skip" }
+    : {
+        policy: "RequireBeforeTransaction",
+        profile: parsed.profile,
+        bundleDigest: parsed.bundleDigest,
+        image: parsed.image,
+        doltgres: parsed.doltgres,
+      };
 }
 
 function toObserveInput(parsed: AkashTxObserveInput) {
@@ -195,6 +221,7 @@ export function createAkashTxDispatcher(
               cogniKey: input.cogniKey,
               environment: input.environment,
               spec: toSpec(input.spec),
+              migration: toMigration(input.migration),
             }),
           };
         }
@@ -207,6 +234,7 @@ export function createAkashTxDispatcher(
               externalName: input.externalName,
               environment: input.environment,
               spec: toSpec(input.spec),
+              migration: toMigration(input.migration),
             }),
           };
         }

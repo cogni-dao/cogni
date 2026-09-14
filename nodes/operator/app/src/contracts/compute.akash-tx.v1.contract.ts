@@ -13,6 +13,10 @@
  *   - STRICT_INPUT: every object is strict — an unexpected key is a 400, never a silent drop
  *     of a field the caller believed was honoured.
  *   - KEY_IS_REQUIRED_ON_EVERY_MUTATION: there is no anonymous create.
+ *   - MIGRATION_IS_REQUIRED_ON_EVERY_MUTATION: `migration` is a REQUIRED field on create and
+ *     update. A caller that does not state its migration precondition gets a 400 — it can
+ *     never accidentally inherit an ungated paid lease (bug.5140). `Skip` is the one explicit,
+ *     auditable bypass, and it has to be written down.
  * Side-effects: none (schemas only)
  * Links: src/features/compute/akash-tx/akash-tx-http.ts, @ports/akash-tx.port, task.5095
  * @public
@@ -46,6 +50,31 @@ export const AkashTxServiceSpecSchema = z.strictObject({
   expose: z.array(AkashTxExposeSchema).optional(),
 });
 
+/**
+ * The caller's migration precondition (bug.5116 order, bug.5140 enforcement). Mirrors the
+ * XRD's `spec.migration.policy` plus the facts the actuator needs to PROVE it.
+ *
+ * A discriminated union, not an object with optional fields: `RequireBeforeTransaction`
+ * structurally cannot be sent without the digest and image whose migration must be proven, so
+ * an under-specified request is a 400 rather than a silently ungated paid lease. The migration
+ * COMMANDS are deliberately absent — a caller-supplied command would let any caller "prove" a
+ * migration by passing a no-op; `profile` selects a command set the actuator owns.
+ */
+export const AkashTxMigrationSchema = z.discriminatedUnion("policy", [
+  /** The workload has no database. The only legitimate bypass, and it is explicit. */
+  z.strictObject({ policy: z.literal("Skip") }),
+  z.strictObject({
+    policy: z.literal("RequireBeforeTransaction"),
+    profile: z.literal("cogni-node-app-v1"),
+    bundleDigest: z
+      .string()
+      .regex(/^sha256:[0-9a-f]{64}$/, "expected a sha256 bundle digest"),
+    image: z.string().min(1).max(512),
+    /** True when the app service declares a `DOLTGRES_URL` secret ref. */
+    doltgres: z.boolean(),
+  }),
+]);
+
 /** The provider-agnostic workload contract (mirrors ProvisionSpec). */
 export const AkashTxSpecSchema = z.strictObject({
   name: ServiceNameSchema,
@@ -75,13 +104,20 @@ export const AkashTxCreateInputSchema = z.strictObject({
   cogniKey: CogniKeySchema,
   environment: EnvironmentSchema,
   spec: AkashTxSpecSchema,
+  migration: AkashTxMigrationSchema,
 });
 
+/**
+ * An update replaces the SDL in place — it mints no lease — but it is still the call that puts
+ * a NEW bundle digest in front of the node's database, which is exactly what bug.5116 ordered.
+ * The legacy gate ran before every provider mutation, so this one carries the requirement too.
+ */
 export const AkashTxUpdateInputSchema = z.strictObject({
   cogniKey: CogniKeySchema,
   externalName: ExternalNameSchema,
   environment: EnvironmentSchema,
   spec: AkashTxSpecSchema,
+  migration: AkashTxMigrationSchema,
 });
 
 export const AkashTxDeleteInputSchema = z.strictObject({
@@ -114,6 +150,7 @@ export const AkashTxErrorOutputSchema = z.strictObject({
   ownerCogniKey: z.string().optional(),
 });
 
+export type AkashTxMigration = z.infer<typeof AkashTxMigrationSchema>;
 export type AkashTxObserveInput = z.infer<typeof AkashTxObserveInputSchema>;
 export type AkashTxCreateInput = z.infer<typeof AkashTxCreateInputSchema>;
 export type AkashTxUpdateInput = z.infer<typeof AkashTxUpdateInputSchema>;
