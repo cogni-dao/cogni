@@ -250,10 +250,13 @@ const FINGERPRINT_LENGTH = 12;
  */
 export function credentialFingerprint(value: string): string {
   if (value === "") return "absent";
-  // The whole digest call stays on ONE line on purpose: a `codeql[...]` suppression only
-  // applies to the line the alert is reported on, and the alert lands on the `.update()`
-  // sink. Letting the formatter break this chain silently detaches the suppression — which
-  // is exactly what happened on the first attempt. Mirrors node-shared/src/util/accountId.ts.
+  // The `codeql[...]` marker below is DOCUMENTATION, not a suppression. Verified on this very
+  // alert (#55): GitHub code scanning does not honour inline markers here — the check stayed red
+  // through two attempts at "fixing" the comment's placement. What actually clears the gate is
+  // DISMISSING the alert in GitHub as a false positive, which is how every prior instance of this
+  // rule was resolved (alerts #3/#7/#15/#30 on accountId.ts). The marker is still worth keeping:
+  // it puts the reason where the code is, so a reader does not have to find the security tab.
+  // Do not "fix" a red CodeQL check by reformatting around this comment — it will not work.
   const digest = createHash("sha256").update(value, "utf8").digest("hex"); // codeql[js/insufficient-password-hash] Not password hashing — truncated, non-reversible version tag over a high-entropy API key; never authenticates. See docblock.
   return digest.slice(0, FINGERPRINT_LENGTH);
 }

@@ -51,6 +51,24 @@ Run `pnpm check` as a final gate before commit — not after every edit.
 
 **Do not run `pnpm check:full`** — it requires Docker and full stack infrastructure. Agents should use `pnpm check` only. CI handles the full validation.
 
+### A `// codeql[...]` comment does NOT clear a red CodeQL check
+
+Verified the hard way on alert #55 (PR #2224, 2026-09-14): the inline marker is **documentation, not suppression**. GitHub code scanning does not honour it here, and no amount of moving or reformatting the comment turns the check green.
+
+**What actually clears it** is dismissing the alert in GitHub — Security → Code scanning → _Dismiss_ → "False positive", or:
+
+```bash
+gh api -X PATCH repos/cogni-dao/cogni/code-scanning/alerts/<N> \
+  -f state=dismissed -f dismissed_reason='false positive'
+```
+
+That is how every prior instance of `js/insufficient-password-hash` in this repo was resolved (alerts #3, #7, #15, #30 on `accountId.ts`). The inline marker is still worth writing — it puts the reason next to the code so a reader does not have to open the Security tab — but **treat it as a comment, never as a gate-clearing mechanism.**
+
+Two things that follow:
+
+- **A red CodeQL check on your PR is a decision, not a formatting bug.** Dismissing an alert is a security judgement: write the justification down (docblock + PR comment), and only dismiss when the rule's threat model genuinely does not apply. `js/insufficient-password-hash`, for instance, targets _password storage_ — it does not bind on a truncated version tag over a high-entropy API key that never authenticates anything.
+- **CodeQL only fails the check on alerts NEW to your PR.** A pre-existing alert elsewhere in the repo does not block you, which is why an old file can carry the same pattern with no red check — and why you should not conclude from that file that its inline comment is what is holding the line.
+
 ## Documentation Mistakes
 
 - Restate root AGENTS.md policies in subdirectory files
