@@ -106,11 +106,22 @@ spec:
             {{- $logPush := dig "runtime" "logPush" false $spec }}
             {{- $secretName := printf "%s-compute-env-secrets" $slug }}
 
+            {{- /*
+              MIGRATION GATE FACTS (bug.5116 order, bug.5140 enforcement). Accumulated while
+              lowering the services below, because the only service that can owe a migration is
+              the one carrying the `cogni-node-app-v1` profile, and the XRD already guarantees
+              there is at most one of those.
+            */ -}}
+            {{- $migrationPolicy := dig "migration" "policy" "RequireBeforeTransaction" $spec }}
+            {{- $appImage := "" }}
+            {{- $appDoltgres := false }}
+
             {{- $services := list }}
             {{- range $svc := $wl.services }}
             {{- $image := index $images $svc.artifact }}
             {{- $profile := dig "runtimeProfile" "" $svc }}
             {{- $isApp := eq $profile "cogni-node-app-v1" }}
+            {{- if $isApp }}{{ $appImage = $image }}{{ end }}
             {{- $e := dict }}
             {{- /* bindHost/port contract - identical to the legacy outer env block. */ -}}
             {{- $_ := set $e "HOST" $svc.bindHost }}
@@ -146,6 +157,7 @@ spec:
             */ -}}
             {{- range (dig "secretRefs" (list) $svc) }}
             {{- $ref := printf "{{ %s:%s:%s }}" $secretName $ns .key }}
+            {{- if and $isApp (eq .key "DOLTGRES_URL") }}{{ $appDoltgres = true }}{{ end }}
             {{- if and $isApp (eq .key "LITELLM_VIRTUAL_KEY") }}
             {{- $_ := set $e "LITELLM_MASTER_KEY" $ref }}
             {{- else }}
@@ -184,7 +196,29 @@ spec:
             {{- if hasKey $svc "args" }}{{ $_ := set $out "args" $svc.args }}{{ end }}
             {{- $services = append $services $out }}
             {{- end }}
-            {{- $payload := dict "cogniKey" $cogniKey "environment" $env "spec" (dict "name" $slug "services" $services) }}
+            {{- /*
+              THE MIGRATION PRECONDITION, as @contracts/compute.akash-tx.v1 demands it: a
+              DISCRIMINATED UNION on `policy`, required on every create AND update (an update is
+              still the call that puts a new bundle digest in front of the node's database).
+              `RequireBeforeTransaction` structurally cannot travel without the digest and image
+              whose migration must be proven, so an under-specified request is a 400 rather than
+              a silently ungated paid lease. `Skip` carries NOTHING else — the one explicit,
+              auditable bypass, and it is reached in exactly two ways: the workload declared
+              `policy: Skip`, or it has no `cogni-node-app-v1` service and therefore no database.
+
+              NO COMMANDS ON THE WIRE. `profile` NAMES a command set the actuator owns. A
+              caller-supplied migration command would let any caller "prove" a migration with a
+              no-op, which would make this gate advisory instead of enforcing.
+            */ -}}
+            {{- $migration := dict "policy" "Skip" }}
+            {{- if and (eq $migrationPolicy "RequireBeforeTransaction") (ne $appImage "") }}
+            {{- $bundleDigest := regexFind "sha256:[0-9a-f]{64}$" $spec.bundle.ref }}
+            {{- if eq $bundleDigest "" }}
+            {{- fail (printf "XComputeWorkload %s/%s: spec.bundle.ref %q has no sha256 digest to prove a migration against" $ns $name $spec.bundle.ref) }}
+            {{- end }}
+            {{- $migration = dict "policy" "RequireBeforeTransaction" "profile" "cogni-node-app-v1" "bundleDigest" $bundleDigest "image" $appImage "doltgres" $appDoltgres }}
+            {{- end }}
+            {{- $payload := dict "cogniKey" $cogniKey "environment" $env "spec" (dict "name" $slug "services" $services) "migration" $migration }}
 
             {{- /* ---------- observed state ---------- */ -}}
             {{- $observedResources := default (dict) .observed.resources }}
@@ -307,7 +341,8 @@ spec:
                         cogniKey: .payload.body.cogniKey,
                         externalName: .response.body.resource.externalName,
                         environment: .payload.body.environment,
-                        spec: .payload.body.spec
+                        spec: .payload.body.spec,
+                        migration: .payload.body.migration
                       }
                   - action: REMOVE
                     method: POST
