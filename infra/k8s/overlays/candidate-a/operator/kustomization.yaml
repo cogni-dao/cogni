@@ -8,7 +8,12 @@ namespace: cogni-candidate-a
 resources:
   - ../../../base/node-app
   - ../../../base/openfga-external
-  - ../../../base/compute-workload-controller
+  # story.5016 step 9 — the legacy ComputeWorkload controller is REMOVED from
+  # candidate-a so exactly ONE writer reaches the Akash wallet here: the private
+  # transaction actuator below, driven by Crossplane. ONE_WALLET_ONE_ACTIVE_WRITER.
+  # preview/production deliberately keep the controller until their fixtures are
+  # retired (task.5097) and it is deleted outright (task.5098). There is no
+  # compatibility layer and no dual-writer period.
   # task.5102 — the private Akash transaction actuator Crossplane calls. Candidate-a
   # only for now: the XComputeWorkload control plane exists only here
   # (infra/k8s/argocd/control-plane/candidate-a), and the actuator refuses to start
