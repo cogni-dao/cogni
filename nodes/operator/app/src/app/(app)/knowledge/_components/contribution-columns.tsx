@@ -15,10 +15,11 @@ import type { ContributionRecord } from "@cogni/node-contracts";
 import { HeaderFilter } from "@cogni/node-ui-kit/header-filter";
 import { DataGridColumnHeader } from "@cogni/node-ui-kit/reui/data-grid/data-grid-column-header";
 import { createColumnHelper } from "@tanstack/react-table";
-import { GitMerge, X } from "lucide-react";
+import { GitMerge, TriangleAlert, X } from "lucide-react";
 import type { ReactElement } from "react";
 import { Button } from "@/components";
 
+import { CopyForAiButton } from "./CopyForAiButton";
 import { CopyLinkButton } from "./CopyLinkButton";
 import { RelativeTime } from "./RelativeTime";
 
@@ -28,6 +29,9 @@ export interface ContributionColumnsDeps {
   onMerge: (row: ContributionRecord) => void;
   onReject: (row: ContributionRecord) => void;
   busyId: string | null;
+  /** contributionId whose last merge failed, + the reason — surfaced inline on that row. */
+  mergeErrorId: string | null;
+  mergeErrorReason: string | null;
 }
 
 export function buildContributionColumns(deps: ContributionColumnsDeps) {
@@ -148,6 +152,25 @@ export function buildContributionColumns(deps: ContributionColumnsDeps) {
         const r = row.original;
         const busy = deps.busyId === r.contributionId;
         const disabled = r.state !== "open" || busy;
+        // A failed merge on this row surfaces right here — a compact conflict
+        // marker + a Copy-for-AI handoff — instead of a detached page banner.
+        if (deps.mergeErrorId === r.contributionId && !busy) {
+          return (
+            <div className="flex items-center justify-end gap-1.5">
+              <span
+                className="inline-flex items-center gap-1 text-destructive text-xs"
+                title={deps.mergeErrorReason ?? "Merge conflict"}
+              >
+                <TriangleAlert className="size-3.5" />
+                Conflict
+              </span>
+              <CopyForAiButton
+                item={r}
+                reason={deps.mergeErrorReason ?? "Merge conflict with main."}
+              />
+            </div>
+          );
+        }
         return (
           <div className="flex justify-end gap-1.5">
             <Button

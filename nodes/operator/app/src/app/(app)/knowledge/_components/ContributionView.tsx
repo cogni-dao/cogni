@@ -19,12 +19,13 @@ import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 
-import { Alert, AlertDescription } from "@/components";
+import { Alert, AlertDescription, AlertTitle } from "@/components";
 import { closeContribution } from "../_api/closeContribution";
 import { fetchContribution } from "../_api/fetchContribution";
 import { mergeContribution } from "../_api/mergeContribution";
 import { ContributionActions } from "./ContributionActions";
 import { ContributionDiff } from "./ContributionDiff";
+import { CopyForAiButton } from "./CopyForAiButton";
 import { CopyLinkButton } from "./CopyLinkButton";
 import { RelativeTime } from "./RelativeTime";
 
@@ -133,7 +134,11 @@ export function ContributionView({ id }: { readonly id: string }) {
 
           {actionError && (
             <Alert variant="destructive">
-              <AlertDescription>{actionError}</AlertDescription>
+              <AlertTitle>Couldn't merge</AlertTitle>
+              <AlertDescription className="flex flex-col items-start gap-2">
+                <span>{actionError}</span>
+                <CopyForAiButton item={query.data} reason={actionError} />
+              </AlertDescription>
             </Alert>
           )}
 

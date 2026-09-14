@@ -176,10 +176,45 @@ function normalizeDoltCommitRef(ref: string): string {
   return ref.startsWith("{") && ref.endsWith("}") ? ref.slice(1, -1) : ref;
 }
 
+/**
+ * Parse a `SELECT dolt_merge(<branch>)` result into its commit hash and
+ * conflict count. Doltgres returns the merge as the record
+ * `(hash, fast_forward, conflicts, message)`; postgres.js surfaces it as a JS
+ * array on the single `dolt_merge` column. Critically, a data conflict does
+ * NOT throw — Dolt reports it as a non-zero `conflicts` count while leaving the
+ * working set in an uncommittable, conflicted state (bug.5120). Reading only
+ * element [0] as the hash silently drops that signal, so the caller must also
+ * inspect `conflicts` before it commits.
+ */
+function parseDoltMergeResult(row: Record<string, unknown>): {
+  commitHash: string;
+  conflicts: number;
+} {
+  const value = row.dolt_merge;
+  const parts: unknown[] = Array.isArray(value)
+    ? value
+    : String(value).replace(/^\{/, "").replace(/\}$/, "").split(",");
+  const commitHash = normalizeDoltCommitRef(String(parts[0] ?? ""));
+  const rawConflicts = parts.length >= 3 ? Number(parts[2]) : 0;
+  return {
+    commitHash,
+    conflicts: Number.isFinite(rawConflicts) ? rawConflicts : 0,
+  };
+}
+
 function normalizeOptionalDoltCommitRef(value: unknown): string | null {
   const ref = optionalString(value);
   return ref ? normalizeDoltCommitRef(ref) : null;
 }
+
+// Human-facing merge failure copy (bug.5120). These reach an admin in the
+// knowledge inbox UI, so they must say what happened + how to fix it in plain
+// language — never leak the raw Dolt/SQL error (branch refs, dolt_conflicts,
+// @@dolt_allow_commit_conflicts). The remediation for a conflicted contribution
+// is a fresh branch cut from current main, phrased for a human.
+const MERGE_CONFLICT_MESSAGE =
+  "This contribution conflicts with newer entries already on main.";
+const MERGE_FAILED_MESSAGE = "This contribution couldn't be merged.";
 
 async function withReserved<T>(
   sql: Sql,
@@ -1316,19 +1351,38 @@ export class DoltgresKnowledgeContributionAdapter
       await conn.unsafe(`SELECT dolt_checkout('main')`);
 
       let mergeCommit: string;
+      let conflicts: number;
       try {
         const mergeRes = await conn.unsafe(
           `SELECT dolt_merge(${escapeRef(rec.branch)})`
         );
-        const mergeField = (mergeRes[0] as Record<string, unknown>).dolt_merge;
-        mergeCommit = Array.isArray(mergeField)
-          ? String(mergeField[0])
-          : String(mergeField);
+        const parsed = parseDoltMergeResult(
+          mergeRes[0] as Record<string, unknown>
+        );
+        mergeCommit = parsed.commitHash;
+        conflicts = parsed.conflicts;
       } catch (e: unknown) {
+        // Doltgres throws on a conflicted merge (@autocommit rollback). Map it
+        // to the human conflict message; anything else to the generic failure.
         const msg = e instanceof Error ? e.message : String(e);
         throw new ContributionConflictError(
-          `dolt_merge failed for ${rec.branch}: ${msg}`
+          /conflict/i.test(msg) ? MERGE_CONFLICT_MESSAGE : MERGE_FAILED_MESSAGE
         );
+      }
+
+      // dolt_merge does NOT throw on data conflicts (bug.5120): it returns a
+      // non-zero conflict count and leaves the working set conflicted and
+      // uncommittable. If we proceeded, the later dolt_commit would throw an
+      // untyped error that surfaces as an opaque 500 the inbox UI drops
+      // silently, and the branch would linger as `open`. Abort so the working
+      // set is clean for the next merge, then surface a typed 409.
+      if (conflicts > 0) {
+        try {
+          await conn.unsafe(`SELECT dolt_merge('--abort')`);
+        } catch {
+          // Best-effort cleanup; the withReserved finally also checks out main.
+        }
+        throw new ContributionConflictError(MERGE_CONFLICT_MESSAGE);
       }
 
       await conn.unsafe(
