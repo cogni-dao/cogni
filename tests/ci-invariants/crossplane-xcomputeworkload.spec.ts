@@ -79,6 +79,12 @@ const specSchema = (
       .properties as YamlObject
   ).spec as YamlObject
 ).properties as YamlObject;
+const statusSchema = (
+  (
+    ((version.schema as YamlObject).openAPIV3Schema as YamlObject)
+      .properties as YamlObject
+  ).status as YamlObject
+).properties as YamlObject;
 
 describe("XComputeWorkload composite API (task.5096)", () => {
   it("publishes a namespaced composite bound to its Composition", () => {
@@ -406,6 +412,73 @@ describe("XComputeWorkload migration precondition (bug.5116 order, bug.5140 gate
       }
       expect(literal).not.toMatch(/command|args|phases|script/);
     }
+  });
+});
+
+describe("XComputeWorkload refusal observability (bug.5115)", () => {
+  const failureProps = (statusSchema.failure as YamlObject)
+    .properties as YamlObject;
+  const reasonPattern = new RegExp(
+    (failureProps.reason as YamlObject).pattern as string
+  );
+
+  it("surfaces the actuator's stable refusal code on the composite", () => {
+    // A refusal a caller cannot see is a bug: a wallet block that only reached provider logs
+    // was invisible for hours. A non-2xx actuator body carries `code`; an observation body
+    // never does, so the two can never be confused.
+    expect(template).toContain('$refusalCode := dig "code" "" $resp');
+    expect(template).toContain("{{- $failReason = $refusalCode }}");
+    // status.failure.message is maxLength 256; an over-long message is rejected by the API
+    // server and takes the whole status write — and the refusal — down with it.
+    expect(failureProps.message).toMatchObject({ maxLength: 256 });
+    expect(template).toContain("$failMessage = substr 0 256 $refusalMessage");
+  });
+
+  it("derives retryability from the HTTP status, not a table of codes", () => {
+    // The actuator documents 409 as "conflict, come back later with the same key" and 5xx as
+    // unproven; every other 4xx is terminal for this desired state. A code table here would
+    // need editing every time the actuator learns a refusal — the exact coupling that
+    // status.failure.reason is a patterned string rather than an enum to avoid.
+    expect(template).toContain(
+      "$refusalRetryable := or (eq $respStatus 409) (ge $respStatus 500)"
+    );
+    expect(template).toContain(
+      '$phase = ternary "Progressing" "Failed" $refusalRetryable'
+    );
+    // Every code the actuator can emit must satisfy the XRD's reason pattern, or the status
+    // write is rejected and the refusal is invisible again.
+    for (const code of [
+      "migration_pending",
+      "migration_failed",
+      "migration_unavailable",
+      "wallet_allocation_blocked",
+      "allocation_unresolved",
+      "allocation_ambiguous",
+      "outcome_unknown",
+      "provider_rejected",
+      "provider_unavailable",
+      "ledger_unavailable",
+      "not_found",
+      "invalid_request",
+      "unauthorized",
+    ]) {
+      expect(code).toMatch(reasonPattern);
+    }
+  });
+
+  it("never lets a refusal mask a spend decision", () => {
+    // BOOT_SLO_OR_CLOSE decides whether money keeps being spent. A transient refusal must not
+    // displace it, so the refusal branch comes strictly AFTER both deadline branches.
+    const chain = template.slice(
+      template.lastIndexOf('{{- $phase := "Progressing" }}')
+    );
+    const order = [
+      "BootDeadlineClosed",
+      "BootDeadlineExceeded",
+      "$refusalCode",
+    ].map((marker) => chain.indexOf(marker));
+    expect(order.every((index) => index > 0)).toBe(true);
+    expect(order).toEqual([...order].sort((a, b) => a - b));
   });
 });
 

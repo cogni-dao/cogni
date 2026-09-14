@@ -224,10 +224,28 @@ spec:
             {{- $observedResources := default (dict) .observed.resources }}
             {{- $leaseObs := index $observedResources "akash-lease" }}
             {{- $resp := dict }}
+            {{- $respStatus := 0 }}
             {{- if $leaseObs }}
             {{- $raw := dig "status" "response" "body" "" $leaseObs.resource }}
             {{- if ne $raw "" }}{{ $resp = fromJson $raw }}{{ end }}
+            {{- $respStatus = int (dig "status" "response" "statusCode" 0 $leaseObs.resource) }}
             {{- end }}
+            {{- /*
+              REFUSAL_IS_OBSERVABLE (bug.5115: a wallet block that only reached provider logs was
+              invisible for hours). A non-2xx answer carries the actuator's stable `code`, and the
+              same body field an observation uses, so the refusal that is currently blocking this
+              workload reaches the XR instead of only the provider's logs. An observation has no
+              `code`, so the two can never be confused.
+
+              Retryability is read from the HTTP STATUS, not from a table of codes: the actuator
+              documents 409 as "conflict, come back later with the same key" and 5xx as unproven,
+              while every other 4xx is terminal for this desired state. A code table here would
+              have to be edited every time the actuator learns a refusal — the exact coupling
+              status.failure.reason is a patterned string rather than an enum to avoid.
+            */ -}}
+            {{- $refusalCode := dig "code" "" $resp }}
+            {{- $refusalMessage := dig "message" "" $resp }}
+            {{- $refusalRetryable := or (eq $respStatus 409) (ge $respStatus 500) }}
             {{- $found := dig "found" false $resp }}
             {{- $res := dig "resource" (dict) $resp }}
             {{- $state := dig "state" "unknown" $res }}
@@ -443,6 +461,10 @@ spec:
             {{- $phase = "Failed" }}
             {{- $failReason = "BootDeadlineExceeded" }}
             {{- $failMessage = printf "workload did not serve %s within %ds; spend continues because bootPolicy.onDeadline is Hold" (substr 0 12 $desiredSha) $bootDeadlineSeconds }}
+            {{- else if ne $refusalCode "" }}
+            {{- $phase = ternary "Progressing" "Failed" $refusalRetryable }}
+            {{- $failReason = $refusalCode }}
+            {{- $failMessage = substr 0 256 $refusalMessage }}
             {{- else if $terminallyClosed }}
             {{- $phase = "Failed" }}
             {{- $failReason = "LeaseClosed" }}
