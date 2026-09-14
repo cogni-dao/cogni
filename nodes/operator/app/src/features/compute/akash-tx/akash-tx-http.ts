@@ -15,11 +15,16 @@
  *   - STRICT_INPUT: strict zod objects — an unknown key is a 400, never a silently ignored field.
  *   - MIGRATION_IS_REQUIRED: `migration` is required on create and update, so a caller that
  *     forgets its precondition gets a 400 instead of an ungated paid lease (bug.5140).
+ *   - IDENTITY_IS_REQUIRED_ON_EVERY_MUTATION: create and update carry `identity`, so a caller
+ *     that will not name the consuming node is a 400 before the actuator is even reached
+ *     (task.5103). `identity_conflict` is 422 — terminal, because a retry cannot change who
+ *     consumed the resource; the Composition reads retryability from the status, not a code
+ *     table, so it surfaces as a Failed composite rather than an endless requeue.
  *   - REFUSAL_IS_OBSERVABLE: every non-2xx answer carries a stable `code` the caller can put
  *     in an XR condition, and the actuator has already logged the reason.
  *   - NO_LOOPS: one request = at most one provider transaction. Retry/backoff is the caller's.
  * Side-effects: IO (HTTP request handling; delegates provider + ledger IO to the actuator)
- * Links: ./akash-tx-actuator, @contracts/compute.akash-tx.v1, task.5095
+ * Links: ./akash-tx-actuator, @contracts/compute.akash-tx.v1, task.5095, task.5103
  * @internal
  */
 
@@ -58,6 +63,8 @@ const STATUS_BY_CODE: Readonly<Record<AkashTxErrorCode, number>> = {
   allocation_unresolved: 409,
   allocation_ambiguous: 409,
   provider_rejected: 422,
+  // Terminal, NOT a conflict to retry: no number of retries changes who consumed the resource.
+  identity_conflict: 422,
   provider_unavailable: 502,
   // Conflict, not failure: the digest's migration is still running. Same key, later.
   migration_pending: 409,
@@ -220,6 +227,7 @@ export function createAkashTxDispatcher(
             body: await deps.actuator.create({
               cogniKey: input.cogniKey,
               environment: input.environment,
+              identity: input.identity,
               spec: toSpec(input.spec),
               migration: toMigration(input.migration),
             }),
@@ -233,6 +241,7 @@ export function createAkashTxDispatcher(
               cogniKey: input.cogniKey,
               externalName: input.externalName,
               environment: input.environment,
+              identity: input.identity,
               spec: toSpec(input.spec),
               migration: toMigration(input.migration),
             }),

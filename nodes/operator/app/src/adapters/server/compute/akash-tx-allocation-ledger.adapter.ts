@@ -15,13 +15,17 @@
  *     never be overwritten by a later attempt under the same key.
  *   - PREPARE_REQUIRES_OWNERSHIP: writing the cursor fails when the key does not hold a
  *     `preparing` slot, so a resumed zombie can never proceed to spend.
+ *   - IDENTITY_IS_WRITE_ONCE: node_id and composite_uid are written only by the claiming
+ *     INSERT and appear in no UPDATE, so a receipt can never be re-pointed at another node.
+ *     composite_generation advances with `greatest`, never backwards (task.5103).
  *   - NO_TIME_BASED_RELEASE: nothing here releases a slot on a timer. An unresolved
  *     allocation stays held and loudly blocks, because releasing without evidence is how you
  *     pay twice (bug.5115 is fixed by key-addressable resolution, not by expiry).
  * Side-effects: IO (Postgres via the injected app-role Drizzle client)
  * Links: @ports/akash-tx.port, features/compute/akash-tx/akash-tx-actuator.ts,
  *   features/compute/akash-tx/akash-tx-wallet.ts (resolves the wallet scope this serializes),
- *   @shared/db/akash-tx-allocations (operator-local table, NOT @cogni/db-schema), task.5095
+ *   @shared/db/akash-tx-allocations (operator-local table, NOT @cogni/db-schema), task.5095,
+ *   task.5103
  * @internal
  */
 
@@ -32,11 +36,16 @@ import type {
   AkashTxAllocationLedgerPort,
   AkashTxAllocationRecord,
   AkashTxAllocationState,
+  AkashTxWorkloadIdentity,
 } from "@/ports";
 import { akashTxAllocations } from "@/shared/db/schema";
 
 interface AllocationRow {
   cogniKey: string;
+  nodeId: string;
+  compositeUid: string;
+  compositeGeneration: number;
+  environment: string;
   state: string;
   allocationCursor: string | null;
   externalName: string | null;
@@ -45,6 +54,10 @@ interface AllocationRow {
 
 const SELECTION = {
   cogniKey: akashTxAllocations.cogniKey,
+  nodeId: akashTxAllocations.nodeId,
+  compositeUid: akashTxAllocations.compositeUid,
+  compositeGeneration: akashTxAllocations.compositeGeneration,
+  environment: akashTxAllocations.environment,
   state: akashTxAllocations.state,
   allocationCursor: akashTxAllocations.allocationCursor,
   externalName: akashTxAllocations.externalName,
@@ -54,6 +67,12 @@ const SELECTION = {
 function toRecord(row: AllocationRow): AkashTxAllocationRecord {
   return {
     cogniKey: row.cogniKey,
+    identity: {
+      nodeId: row.nodeId,
+      compositeUid: row.compositeUid,
+      compositeGeneration: row.compositeGeneration,
+    },
+    environment: row.environment,
     state: row.state as AkashTxAllocationState,
     ...(row.allocationCursor ? { allocationCursor: row.allocationCursor } : {}),
     ...(row.externalName ? { externalName: row.externalName } : {}),
@@ -88,6 +107,7 @@ export class DrizzleAkashTxAllocationLedger
     cogniKey: string;
     workload: string;
     environment: string;
+    identity: AkashTxWorkloadIdentity;
   }): Promise<
     | { state: "claimed"; record: AkashTxAllocationRecord }
     | { state: "owned"; record: AkashTxAllocationRecord }
@@ -108,6 +128,7 @@ export class DrizzleAkashTxAllocationLedger
     cogniKey: string;
     workload: string;
     environment: string;
+    identity: AkashTxWorkloadIdentity;
   }): Promise<
     | { state: "claimed"; record: AkashTxAllocationRecord }
     | { state: "owned"; record: AkashTxAllocationRecord }
@@ -152,6 +173,11 @@ export class DrizzleAkashTxAllocationLedger
         .values({
           walletScope: this.walletScope,
           cogniKey: input.cogniKey,
+          // IDENTITY_BEFORE_TRANSACTION — the columns are NOT NULL, so the row that opens the
+          // wallet slot physically cannot exist without saying which node it is for.
+          nodeId: input.identity.nodeId,
+          compositeUid: input.identity.compositeUid,
+          compositeGeneration: input.identity.compositeGeneration,
           workload: input.workload,
           environment: input.environment,
           state: "preparing",
@@ -161,6 +187,63 @@ export class DrizzleAkashTxAllocationLedger
         throw new Error("akash_tx_allocations insert returned no row");
       }
       return { state: "claimed" as const, record: toRecord(inserted) };
+    });
+  }
+
+  /**
+   * Bind an existing receipt to the identity of a non-create mutation. Reads under a row lock,
+   * reports a mismatch rather than healing it, and advances the observed generation with
+   * `greatest` so a delayed retry can never walk the receipt backwards.
+   *
+   * node_id and composite_uid are deliberately absent from the UPDATE: IDENTITY_IS_WRITE_ONCE.
+   */
+  async bindIdentity(input: {
+    cogniKey: string;
+    environment: string;
+    identity: AkashTxWorkloadIdentity;
+  }): Promise<
+    | { state: "bound"; record: AkashTxAllocationRecord }
+    | { state: "absent" }
+    | { state: "conflict"; record: AkashTxAllocationRecord }
+  > {
+    const db = await this.getDb();
+    return db.transaction(async (tx) => {
+      const [existing] = await tx
+        .select(SELECTION)
+        .from(akashTxAllocations)
+        .where(
+          and(
+            eq(akashTxAllocations.walletScope, this.walletScope),
+            eq(akashTxAllocations.cogniKey, input.cogniKey)
+          )
+        )
+        .for("update")
+        .limit(1);
+      if (!existing) return { state: "absent" as const };
+      if (
+        existing.nodeId !== input.identity.nodeId ||
+        existing.environment !== input.environment
+      ) {
+        return { state: "conflict" as const, record: toRecord(existing) };
+      }
+
+      const [updated] = await tx
+        .update(akashTxAllocations)
+        .set({
+          compositeGeneration: sql`greatest(${akashTxAllocations.compositeGeneration}, ${input.identity.compositeGeneration}::int)`,
+          updatedAt: sql`now()`,
+        })
+        .where(
+          and(
+            eq(akashTxAllocations.walletScope, this.walletScope),
+            eq(akashTxAllocations.cogniKey, input.cogniKey)
+          )
+        )
+        .returning(SELECTION);
+      if (!updated) {
+        throw new Error("akash_tx_allocations identity bind returned no row");
+      }
+      return { state: "bound" as const, record: toRecord(updated) };
     });
   }
 

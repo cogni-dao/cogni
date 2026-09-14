@@ -5,13 +5,14 @@
  * Module: `@features/compute/akash-tx/akash-tx-actuator.test`
  * Purpose: Prove the behaviours that make this actuator irreplaceable by generic OSS —
  *   wallet-global serialization, the pre-transaction receipt, post-response-loss recovery,
- *   observable refusal, and the migration-before-transaction precondition (bug.5140) — plus
- *   the absence of any reconciliation (one transaction per call).
+ *   observable refusal, the migration-before-transaction precondition (bug.5140), and the
+ *   authoritative binding of every paid mutation to the node that consumed it (task.5103) —
+ *   plus the absence of any reconciliation (one transaction per call).
  * Scope: Unit tests over fakes. Does NOT touch the Akash Console, a wallet, or a database.
  * Invariants: no real provider IO; every "lost response" is simulated by a fake that has
  *   already allocated before it throws.
  * Side-effects: none
- * Links: ./akash-tx-actuator, @ports/akash-tx.port, task.5095
+ * Links: ./akash-tx-actuator, @ports/akash-tx.port, task.5095, task.5103
  * @internal
  */
 
@@ -24,6 +25,7 @@ import type {
   AkashTxConsolePort,
   AkashTxMigrationPort,
   AkashTxMigrationRequirement,
+  AkashTxWorkloadIdentity,
   ComputeWorkloadMigrationInput,
 } from "@/ports";
 import { AkashTxError } from "@/ports";
@@ -42,6 +44,19 @@ const SPEC: ProvisionSpec = {
       expose: [{ port: 3000, as: 80, global: true }],
     },
   ],
+};
+
+/** WHO consumed — stated by the Composition on every mutating call, never derived. */
+const IDENTITY: AkashTxWorkloadIdentity = {
+  nodeId: "2f8b7a10-4c6e-4a7b-9d31-1c2e3f4a5b60",
+  compositeUid: "8e5d4c3b-2a19-4f08-b7c6-5d4e3f2a1b09",
+  compositeGeneration: 3,
+};
+
+/** A DIFFERENT node asking to spend under the same idempotency key. */
+const OTHER_IDENTITY: AkashTxWorkloadIdentity = {
+  ...IDENTITY,
+  nodeId: "9a1b2c3d-4e5f-4061-8273-8495a6b7c8d9",
 };
 
 /** The precondition every mutating call must state (bug.5140). */
@@ -86,6 +101,7 @@ class FakeLedger implements AkashTxAllocationLedgerPort {
     cogniKey: string;
     workload: string;
     environment: string;
+    identity: AkashTxWorkloadIdentity;
   }) {
     if (this.failReads) throw new Error("ledger down");
     const existing = this.rows.get(input.cogniKey);
@@ -100,10 +116,40 @@ class FakeLedger implements AkashTxAllocationLedgerPort {
     }
     const record: AkashTxAllocationRecord = {
       cogniKey: input.cogniKey,
+      identity: input.identity,
+      environment: input.environment,
       state: "preparing",
     };
     this.rows.set(input.cogniKey, record);
     return { state: "claimed", record } as const;
+  }
+
+  async bindIdentity(input: {
+    cogniKey: string;
+    environment: string;
+    identity: AkashTxWorkloadIdentity;
+  }) {
+    if (this.failReads) throw new Error("ledger down");
+    const row = this.rows.get(input.cogniKey);
+    if (!row) return { state: "absent" } as const;
+    if (
+      row.identity.nodeId !== input.identity.nodeId ||
+      row.environment !== input.environment
+    ) {
+      return { state: "conflict", record: row } as const;
+    }
+    const record: AkashTxAllocationRecord = {
+      ...row,
+      identity: {
+        ...row.identity,
+        compositeGeneration: Math.max(
+          row.identity.compositeGeneration,
+          input.identity.compositeGeneration
+        ),
+      },
+    };
+    this.rows.set(input.cogniKey, record);
+    return { state: "bound", record } as const;
   }
 
   async prepare(input: { cogniKey: string; allocationCursor: string }) {
@@ -266,6 +312,7 @@ describe("AkashTxActuator.create", () => {
     const result = await actuator.create({
       cogniKey: "candidate-a/toks9/1",
       environment: "candidate-a",
+      identity: IDENTITY,
       spec: SPEC,
       migration: REQUIRE,
     });
@@ -286,6 +333,7 @@ describe("AkashTxActuator.create", () => {
     await actuator.create({
       cogniKey: "k1",
       environment: "candidate-a",
+      identity: IDENTITY,
       spec: SPEC,
       migration: REQUIRE,
     });
@@ -308,6 +356,7 @@ describe("AkashTxActuator.create", () => {
       actuator.create({
         cogniKey: "k1",
         environment: "candidate-a",
+        identity: IDENTITY,
         spec: SPEC,
         migration: REQUIRE,
       })
@@ -324,6 +373,7 @@ describe("AkashTxActuator.create", () => {
     const retried = await actuator.create({
       cogniKey: "k1",
       environment: "candidate-a",
+      identity: IDENTITY,
       spec: SPEC,
       migration: REQUIRE,
     });
@@ -351,6 +401,7 @@ describe("AkashTxActuator.create", () => {
       actuator.create({
         cogniKey: "k1",
         environment: "candidate-a",
+        identity: IDENTITY,
         spec: SPEC,
         migration: REQUIRE,
       })
@@ -360,6 +411,7 @@ describe("AkashTxActuator.create", () => {
       actuator.create({
         cogniKey: "k1",
         environment: "candidate-a",
+        identity: IDENTITY,
         spec: SPEC,
         migration: REQUIRE,
       })
@@ -381,6 +433,7 @@ describe("AkashTxActuator.create", () => {
       actuator.create({
         cogniKey: "k1",
         environment: "candidate-a",
+        identity: IDENTITY,
         spec: SPEC,
         migration: REQUIRE,
       })
@@ -389,6 +442,7 @@ describe("AkashTxActuator.create", () => {
       actuator.create({
         cogniKey: "k1",
         environment: "candidate-a",
+        identity: IDENTITY,
         spec: SPEC,
         migration: REQUIRE,
       })
@@ -405,6 +459,7 @@ describe("AkashTxActuator.create", () => {
       actuator.create({
         cogniKey: "k1",
         environment: "candidate-a",
+        identity: IDENTITY,
         spec: SPEC,
         migration: REQUIRE,
       })
@@ -414,6 +469,7 @@ describe("AkashTxActuator.create", () => {
       .create({
         cogniKey: "k2",
         environment: "candidate-a",
+        identity: IDENTITY,
         spec: SPEC,
         migration: REQUIRE,
       })
@@ -439,6 +495,7 @@ describe("AkashTxActuator.create", () => {
     await actuator.create({
       cogniKey: "k1",
       environment: "candidate-a",
+      identity: IDENTITY,
       spec: SPEC,
       migration: REQUIRE,
     });
@@ -447,6 +504,7 @@ describe("AkashTxActuator.create", () => {
     const second = await actuator.create({
       cogniKey: "k2",
       environment: "candidate-a",
+      identity: IDENTITY,
       spec: SPEC,
       migration: REQUIRE,
     });
@@ -458,12 +516,14 @@ describe("AkashTxActuator.create", () => {
     const first = await actuator.create({
       cogniKey: "k1",
       environment: "candidate-a",
+      identity: IDENTITY,
       spec: SPEC,
       migration: REQUIRE,
     });
     const replay = await actuator.create({
       cogniKey: "k1",
       environment: "candidate-a",
+      identity: IDENTITY,
       spec: SPEC,
       migration: REQUIRE,
     });
@@ -482,6 +542,7 @@ describe("AkashTxActuator.create", () => {
       actuator.create({
         cogniKey: "k1",
         environment: "candidate-a",
+        identity: IDENTITY,
         spec: SPEC,
         migration: REQUIRE,
       })
@@ -498,6 +559,7 @@ describe("AkashTxActuator.create", () => {
       actuator.create({
         cogniKey: "k1",
         environment: "candidate-a",
+        identity: IDENTITY,
         spec: SPEC,
         migration: REQUIRE,
       })
@@ -541,6 +603,7 @@ describe("AkashTxActuator.observe", () => {
       actuator.create({
         cogniKey: "k1",
         environment: "candidate-a",
+        identity: IDENTITY,
         spec: SPEC,
         migration: REQUIRE,
       })
@@ -602,18 +665,31 @@ describe("AkashTxActuator.observe", () => {
 describe("AkashTxActuator.update / delete", () => {
   it("updates in place without opening a new allocation", async () => {
     const { actuator, api, ledger } = build();
+    await actuator.create({
+      cogniKey: "k1",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec: SPEC,
+      migration: REQUIRE,
+    });
+    const spent = { cursor: api.cursorCalls, allocate: api.allocateCalls };
+
     const resource = await actuator.update({
       cogniKey: "k1",
       externalName: "7001",
       environment: "candidate-a",
+      identity: IDENTITY,
       spec: SPEC,
       migration: REQUIRE,
     });
+
     expect(resource.externalName).toBe("7001");
     expect(api.updateCalls).toBe(1);
-    expect(api.cursorCalls).toBe(0);
-    expect(api.allocateCalls).toBe(0);
-    expect(ledger.rows.size).toBe(0);
+    // No new wallet slot, no cursor, no transaction — an SDL replacement mints nothing.
+    expect(api.cursorCalls).toBe(spent.cursor);
+    expect(api.allocateCalls).toBe(spent.allocate);
+    // And no second receipt: the identity re-bind lands on the SAME row the create opened.
+    expect(ledger.rows.size).toBe(1);
   });
 
   it("releases the provider resource and settles the key", async () => {
@@ -621,6 +697,7 @@ describe("AkashTxActuator.update / delete", () => {
     await actuator.create({
       cogniKey: "k1",
       environment: "candidate-a",
+      identity: IDENTITY,
       spec: SPEC,
       migration: REQUIRE,
     });
@@ -656,6 +733,7 @@ describe("AkashTxActuator migration gate (bug.5140)", () => {
       actuator.create({
         cogniKey: "k1",
         environment: "candidate-a",
+        identity: IDENTITY,
         spec: SPEC,
         migration: REQUIRE,
       })
@@ -689,6 +767,7 @@ describe("AkashTxActuator migration gate (bug.5140)", () => {
     await actuator.create({
       cogniKey: "k1",
       environment: "candidate-a",
+      identity: IDENTITY,
       spec: SPEC,
       migration: REQUIRE,
     });
@@ -704,6 +783,7 @@ describe("AkashTxActuator migration gate (bug.5140)", () => {
       actuator.create({
         cogniKey: "k1",
         environment: "candidate-a",
+        identity: IDENTITY,
         spec: SPEC,
         migration: REQUIRE,
       })
@@ -722,6 +802,7 @@ describe("AkashTxActuator migration gate (bug.5140)", () => {
       actuator.create({
         cogniKey: "k1",
         environment: "candidate-a",
+        identity: IDENTITY,
         spec: SPEC,
         migration: REQUIRE,
       })
@@ -738,6 +819,7 @@ describe("AkashTxActuator migration gate (bug.5140)", () => {
     const result = await actuator.create({
       cogniKey: "k1",
       environment: "candidate-a",
+      identity: IDENTITY,
       spec: SPEC,
       migration: REQUIRE,
     });
@@ -756,6 +838,7 @@ describe("AkashTxActuator migration gate (bug.5140)", () => {
     await actuator.create({
       cogniKey: "k1",
       environment: "candidate-a",
+      identity: IDENTITY,
       spec: SPEC,
       migration: { policy: "Skip" },
     });
@@ -773,6 +856,7 @@ describe("AkashTxActuator migration gate (bug.5140)", () => {
         cogniKey: "k1",
         externalName: "7001",
         environment: "candidate-a",
+        identity: IDENTITY,
         spec: SPEC,
         migration: REQUIRE,
       })
@@ -789,5 +873,163 @@ describe("AkashTxActuator migration gate (bug.5140)", () => {
     });
     await actuator.delete({ cogniKey: "k1", externalName: "7001" });
     expect(api.releaseCalls).toEqual(["7001"]);
+  });
+});
+
+describe("AkashTxActuator identity binding (task.5103)", () => {
+  it("makes the receipt name the consuming node BEFORE it reads a cursor or spends", async () => {
+    // THE outcome task.5103 is about: identity is durable strictly before provider contact,
+    // so there is no window in which a paid lease exists that nothing can attribute.
+    const order: string[] = [];
+    const { actuator, ledger, api, log } = build();
+    const claim = ledger.claim.bind(ledger);
+    ledger.claim = async (input) => {
+      order.push("receipt");
+      return claim(input);
+    };
+    const cursor = api.allocationCursor.bind(api);
+    api.allocationCursor = async () => {
+      order.push("cursor");
+      return cursor();
+    };
+    const allocate = api.allocateAndLease.bind(api);
+    api.allocateAndLease = async (input) => {
+      order.push("allocate");
+      return allocate(input);
+    };
+
+    await actuator.create({
+      cogniKey: "k1",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec: SPEC,
+      migration: REQUIRE,
+    });
+
+    expect(order).toEqual(["receipt", "cursor", "allocate"]);
+    expect(api.allocateCalls).toBe(1);
+    const row = ledger.rows.get("k1");
+    expect(row?.identity).toEqual(IDENTITY);
+    expect(row?.environment).toBe("candidate-a");
+    // bug.5115: the binding is observable, not just persisted.
+    expect(log.lines.map((line) => line.marker)).toContain(
+      "akash_tx_receipt_bound"
+    );
+  });
+
+  it("refuses to spend under a key whose receipt binds a different node", async () => {
+    const { actuator, api, ledger, log } = build();
+    await actuator.create({
+      cogniKey: "k1",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec: SPEC,
+      migration: REQUIRE,
+    });
+    const spent = api.allocateCalls;
+
+    await expect(
+      actuator.create({
+        cogniKey: "k1",
+        environment: "candidate-a",
+        identity: OTHER_IDENTITY,
+        spec: SPEC,
+        migration: REQUIRE,
+      })
+    ).rejects.toMatchObject({ code: "identity_conflict" });
+
+    // Nothing spent, and the receipt still names the node that actually consumed.
+    expect(api.allocateCalls).toBe(spent);
+    expect(ledger.rows.get("k1")?.identity.nodeId).toBe(IDENTITY.nodeId);
+    const conflict = log.lines.find(
+      (line) => line.marker === "akash_tx_identity_conflict"
+    );
+    expect(conflict?.fields).toMatchObject({
+      nodeId: OTHER_IDENTITY.nodeId,
+      boundNodeId: IDENTITY.nodeId,
+      operation: "create",
+    });
+  });
+
+  it("re-binds the receipt and advances the generation before an SDL replacement", async () => {
+    const { actuator, api, ledger, log } = build();
+    await actuator.create({
+      cogniKey: "k1",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec: SPEC,
+      migration: REQUIRE,
+    });
+    const order: string[] = [];
+    const bind = ledger.bindIdentity.bind(ledger);
+    ledger.bindIdentity = async (input) => {
+      order.push("rebind");
+      return bind(input);
+    };
+    const update = api.updateAllocated.bind(api);
+    api.updateAllocated = async () => {
+      order.push("update");
+      return update();
+    };
+
+    await actuator.update({
+      cogniKey: "k1",
+      externalName: "7001",
+      environment: "candidate-a",
+      identity: { ...IDENTITY, compositeGeneration: 9 },
+      spec: SPEC,
+      migration: REQUIRE,
+    });
+
+    expect(order).toEqual(["rebind", "update"]);
+    expect(ledger.rows.get("k1")?.identity.compositeGeneration).toBe(9);
+    // IDENTITY_IS_WRITE_ONCE — an update advances the revision, never the owner.
+    expect(ledger.rows.get("k1")?.identity.nodeId).toBe(IDENTITY.nodeId);
+    expect(log.lines.map((line) => line.marker)).toContain(
+      "akash_tx_receipt_rebound"
+    );
+  });
+
+  it("refuses an update on a paid handle that no receipt attributes", async () => {
+    const { actuator, api, log } = build();
+
+    await expect(
+      actuator.update({
+        cogniKey: "orphan",
+        externalName: "7001",
+        environment: "candidate-a",
+        identity: IDENTITY,
+        spec: SPEC,
+        migration: REQUIRE,
+      })
+    ).rejects.toMatchObject({ code: "identity_conflict" });
+
+    expect(api.updateCalls).toBe(0);
+    expect(log.lines.map((line) => line.marker)).toContain(
+      "akash_tx_receipt_absent"
+    );
+  });
+
+  it("refuses an update whose receipt belongs to another environment", async () => {
+    const { actuator, api } = build();
+    await actuator.create({
+      cogniKey: "k1",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec: SPEC,
+      migration: REQUIRE,
+    });
+
+    await expect(
+      actuator.update({
+        cogniKey: "k1",
+        externalName: "7001",
+        environment: "production",
+        identity: IDENTITY,
+        spec: SPEC,
+        migration: REQUIRE,
+      })
+    ).rejects.toMatchObject({ code: "identity_conflict" });
+    expect(api.updateCalls).toBe(0);
   });
 });

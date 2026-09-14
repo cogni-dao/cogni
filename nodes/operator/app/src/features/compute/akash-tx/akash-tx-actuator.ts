@@ -17,6 +17,12 @@
  *     that wants a second attempt makes a second call.
  *   - RECEIPT_BEFORE_TRANSACTION: the pre-POST cursor is durable before any Console POST, so a
  *     lost response leaves recoverable evidence rather than an orphan paid lease.
+ *   - IDENTITY_BEFORE_TRANSACTION: the SAME receipt binds {nodeId, environment, composite
+ *     uid/generation, cogniKey}, and it is bound by the claiming INSERT — before the allocation
+ *     cursor is even read, let alone posted. Identity arrives EXPLICITLY on the wire from the
+ *     Composition; this actuator never parses it out of the key, the slug, or the credential
+ *     (task.5103). A key whose receipt binds a different node is refused, never re-bound:
+ *     mis-attributed spend is unrecoverable in a way a retry is not.
  *   - WALLET_SINGLE_WRITER: the ledger slot is held for exactly the unrecoverable window
  *     (cursor read → allocated handle durable) and is wallet-wide, never per-workload. The
  *     wallet it serializes is a DEDICATED per-environment Console account resolved by
@@ -44,6 +50,7 @@ import type { ProvisionOutput, ProvisionSpec } from "@cogni/ai-tools";
 import {
   type AkashTxActuatorPort,
   type AkashTxAllocationLedgerPort,
+  type AkashTxAllocationRecord,
   type AkashTxConsolePort,
   type AkashTxCreateResult,
   AkashTxError,
@@ -52,6 +59,7 @@ import {
   type AkashTxMigrationRequirement,
   type AkashTxObservation,
   type AkashTxResource,
+  type AkashTxWorkloadIdentity,
 } from "@/ports";
 
 import {
@@ -136,6 +144,31 @@ export function mapConsoleFailure(
   );
 }
 
+/** Flat, stable log fields for a receipt binding. Every identity log line uses exactly these. */
+function identityFields(
+  identity: AkashTxWorkloadIdentity,
+  environment: string
+): Record<string, unknown> {
+  return {
+    nodeId: identity.nodeId,
+    environment,
+    compositeUid: identity.compositeUid,
+    compositeGeneration: identity.compositeGeneration,
+  };
+}
+
+/** True when a receipt already binds a DIFFERENT consumer than the one now asking to spend. */
+function identityDiffers(
+  record: AkashTxAllocationRecord,
+  identity: AkashTxWorkloadIdentity,
+  environment: string
+): boolean {
+  return (
+    record.identity.nodeId !== identity.nodeId ||
+    record.environment !== environment
+  );
+}
+
 function resourceFrom(
   output: ProvisionOutput,
   providerAccount?: string
@@ -211,6 +244,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
   async create(input: {
     cogniKey: string;
     environment: string;
+    identity: AkashTxWorkloadIdentity;
     spec: ProvisionSpec;
     migration: AkashTxMigrationRequirement;
   }): Promise<AkashTxCreateResult> {
@@ -219,6 +253,10 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     // a multi-minute migration never occupies the wallet-global slot.
     await this.gateMigration(input, "create");
 
+    // The claim IS the receipt: its INSERT carries {nodeId, environment, compositeUid,
+    // compositeGeneration, cogniKey}. Everything below this line — the cursor read and the
+    // paid POST — happens strictly after that row is durable. The migration gate above
+    // touches no wallet and no Console, so identity is still bound before any provider IO.
     const claim = await this.claim(input);
 
     if (claim.state === "blocked") {
@@ -237,6 +275,29 @@ export class AkashTxActuator implements AkashTxActuatorPort {
         "wallet_allocation_blocked",
         "another allocation holds the wallet slot",
         claim.ownerCogniKey
+      );
+    }
+
+    if (claim.state !== "claimed") {
+      // A receipt is custody of WHO consumed. Re-pointing one at another node would make the
+      // cost grouping a lie, so a mismatch is terminal rather than something to heal.
+      if (identityDiffers(claim.record, input.identity, input.environment)) {
+        throw this.identityConflict({
+          cogniKey: input.cogniKey,
+          operation: "create",
+          identity: input.identity,
+          environment: input.environment,
+          record: claim.record,
+        });
+      }
+    } else {
+      this.log.info(
+        {
+          cogniKey: input.cogniKey,
+          workload: input.spec.name,
+          ...identityFields(input.identity, input.environment),
+        },
+        "akash_tx_receipt_bound"
       );
     }
 
@@ -347,6 +408,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     cogniKey: string;
     externalName: string;
     environment: string;
+    identity: AkashTxWorkloadIdentity;
     spec: ProvisionSpec;
     migration: AkashTxMigrationRequirement;
   }): Promise<AkashTxResource> {
@@ -355,8 +417,30 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     // every provider mutation; so does this one.
     await this.gateMigration(input, "update");
 
-    // An in-place SDL replacement mints no handle and opens no escrow, so it needs no
-    // wallet slot: PUT on a handle we already own is idempotent by construction.
+    // An update mints no handle and opens no escrow, so it needs no wallet slot — but it does
+    // put a new revision in front of a resource that is already burning money, so it must be
+    // attributable BEFORE the provider is contacted. This writes the advancing generation onto
+    // the SAME receipt row the create opened; there is no second ledger and no second table.
+    const bound = await this.bindIdentity(input);
+    if (bound.state !== "bound") {
+      throw this.identityConflict({
+        cogniKey: input.cogniKey,
+        operation: "update",
+        identity: input.identity,
+        environment: input.environment,
+        ...(bound.state === "conflict" ? { record: bound.record } : {}),
+      });
+    }
+    this.log.info(
+      {
+        cogniKey: input.cogniKey,
+        externalName: input.externalName,
+        ...identityFields(input.identity, input.environment),
+      },
+      "akash_tx_receipt_rebound"
+    );
+
+    // PUT on a handle we already own is idempotent by construction.
     try {
       await this.console.updateAllocated({
         resourceId: input.externalName,
@@ -513,6 +597,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
   private async claim(input: {
     cogniKey: string;
     environment: string;
+    identity: AkashTxWorkloadIdentity;
     spec: ProvisionSpec;
   }): Promise<Awaited<ReturnType<AkashTxAllocationLedgerPort["claim"]>>> {
     try {
@@ -520,10 +605,66 @@ export class AkashTxActuator implements AkashTxActuatorPort {
         cogniKey: input.cogniKey,
         workload: input.spec.name,
         environment: input.environment,
+        identity: input.identity,
       });
     } catch (error) {
       throw this.ledgerUnavailable(error, input.cogniKey, "claim");
     }
+  }
+
+  private async bindIdentity(input: {
+    cogniKey: string;
+    environment: string;
+    identity: AkashTxWorkloadIdentity;
+  }): Promise<
+    Awaited<ReturnType<AkashTxAllocationLedgerPort["bindIdentity"]>>
+  > {
+    try {
+      return await this.ledger.bindIdentity({
+        cogniKey: input.cogniKey,
+        environment: input.environment,
+        identity: input.identity,
+      });
+    } catch (error) {
+      throw this.ledgerUnavailable(error, input.cogniKey, "bindIdentity");
+    }
+  }
+
+  /**
+   * bug.5115 shape: a refusal that exists only in a status field is invisible. This one is a
+   * structured log line FIRST — carrying both the claimed and the bound identity, which is the
+   * only pair that explains the refusal — and a stable `identity_conflict` code second.
+   */
+  private identityConflict(input: {
+    cogniKey: string;
+    operation: "create" | "update";
+    identity: AkashTxWorkloadIdentity;
+    environment: string;
+    record?: AkashTxAllocationRecord;
+  }): AkashTxError {
+    const absent = input.record === undefined;
+    this.log.error(
+      {
+        cogniKey: input.cogniKey,
+        operation: input.operation,
+        ...identityFields(input.identity, input.environment),
+        ...(input.record
+          ? {
+              boundNodeId: input.record.identity.nodeId,
+              boundEnvironment: input.record.environment,
+              boundCompositeUid: input.record.identity.compositeUid,
+              ledgerState: input.record.state,
+            }
+          : {}),
+      },
+      absent ? "akash_tx_receipt_absent" : "akash_tx_identity_conflict"
+    );
+    return new AkashTxError(
+      "identity_conflict",
+      absent
+        ? "no durable receipt binds this cogniKey; refusing to mutate a paid resource that cannot be attributed"
+        : "this cogniKey is bound to a different node or environment; refusing to mis-attribute spend"
+    );
   }
 
   private async prepare(cogniKey: string, cursor: string): Promise<void> {
