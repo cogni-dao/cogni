@@ -79,6 +79,36 @@ spec:
             {{- end }}
 
             {{- /*
+              WHO CONSUMES THE INFRASTRUCTURE (task.5103). Every spend receipt is bound to a node
+              id, a composite uid and the composite generation that asked for it, so a paid lease
+              is attributable to a node rather than to a wallet. Identity is STATED, never
+              derived: the actuator deliberately does not parse `cogniKey`, read the workload
+              slug, or infer a node from its Console credential, and this block is the only place
+              that says it.
+
+              NOTHING HERE IS DEFAULTED. A defaulted `compositeGeneration` of 1 would record a
+              revision that was never observed, and the receipt's CHECK (> 0) would happily
+              accept the lie — a fabricated provenance is worse than a refusal, because it is
+              indistinguishable from a real one after the fact. Same posture as a bundle.ref with
+              no digest: fail the render, produce no managed resource, spend nothing.
+
+              `nodeId` is taken from the SPEC, which the gate above has already proven equal to
+              metadata.name — so the two identities the cluster and the ledger use cannot drift.
+            */ -}}
+            {{- if not (hasKey $meta "generation") }}
+            {{- fail (printf "XComputeWorkload %s/%s: metadata.generation is absent; refusing to fabricate a revision that was never observed" $ns $name) }}
+            {{- end }}
+            {{- $generation := int $meta.generation }}
+            {{- if lt $generation 1 }}
+            {{- fail (printf "XComputeWorkload %s/%s: metadata.generation %d is not a positive revision" $ns $name $generation) }}
+            {{- end }}
+            {{- $compositeUid := dig "uid" "" $meta }}
+            {{- if eq $compositeUid "" }}
+            {{- fail (printf "XComputeWorkload %s/%s: metadata.uid is absent; a receipt that cannot name the object it paid for is unattributable" $ns $name) }}
+            {{- end }}
+            {{- $identity := dict "nodeId" $spec.nodeId "compositeUid" $compositeUid "compositeGeneration" $generation }}
+
+            {{- /*
               KEY_IS_THE_IDEMPOTENCE_BOUNDARY (@ports/akash-tx.port). The actuator's cogniKey is
               the wallet-wide slot, so here it MUST be stable for the life of the workload. The
               legacy controller's key embedded metadata.generation, which was safe only because
@@ -218,7 +248,7 @@ spec:
             {{- end }}
             {{- $migration = dict "policy" "RequireBeforeTransaction" "profile" "cogni-node-app-v1" "bundleDigest" $bundleDigest "image" $appImage "doltgres" $appDoltgres }}
             {{- end }}
-            {{- $payload := dict "cogniKey" $cogniKey "environment" $env "spec" (dict "name" $slug "services" $services) "migration" $migration }}
+            {{- $payload := dict "cogniKey" $cogniKey "environment" $env "identity" $identity "spec" (dict "name" $slug "services" $services) "migration" $migration }}
 
             {{- /* ---------- observed state ---------- */ -}}
             {{- $observedResources := default (dict) .observed.resources }}
@@ -360,6 +390,7 @@ spec:
                         cogniKey: .payload.body.cogniKey,
                         externalName: .response.body.resource.externalName,
                         environment: .payload.body.environment,
+                        identity: .payload.body.identity,
                         spec: .payload.body.spec,
                         migration: .payload.body.migration
                       }
