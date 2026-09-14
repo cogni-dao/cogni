@@ -23,6 +23,12 @@
  *     ./akash-tx-wallet, which refuses the legacy controller's credential outright.
  *   - FAIL_CLOSED: an allocation that cannot be resolved to exactly one lease raises
  *     allocation_unresolved / allocation_ambiguous. It is NEVER healed by a fresh create.
+ *   - MIGRATION_BEFORE_TRANSACTION: every mutating call states a migration requirement, and a
+ *     `RequireBeforeTransaction` requirement is PROVEN complete before the wallet slot is even
+ *     claimed. bug.5116 made a completed per-digest migration a precondition of every paid
+ *     transaction; this is where a Crossplane-reconciled workload meets that precondition
+ *     (bug.5140). The proof runs before the claim on purpose: a migration Job takes minutes,
+ *     and holding the wallet-global slot across it would deadlock the whole fleet.
  *   - REFUSAL_IS_OBSERVABLE: every refusal emits a structured log line before it throws
  *     (bug.5115: a wallet block that only reached CR status was invisible for hours).
  * Side-effects: IO (Akash Console transactions via the injected client; durable ledger writes;
@@ -42,9 +48,16 @@ import {
   type AkashTxCreateResult,
   AkashTxError,
   type AkashTxErrorCode,
+  type AkashTxMigrationPort,
+  type AkashTxMigrationRequirement,
   type AkashTxObservation,
   type AkashTxResource,
 } from "@/ports";
+
+import {
+  type AkashTxMigrationOperation,
+  enforceMigrationGate,
+} from "./akash-tx-migration-gate";
 
 /** Structural pino subset. Fields first, stable marker second. */
 export interface AkashTxLogger {
@@ -65,6 +78,12 @@ export interface AkashTxActuatorDeps {
   readonly log: AkashTxLogger;
   /** Omitted → observe never reports `serving` and never touches the workload's ingress. */
   readonly probe?: AkashTxServingProbe;
+  /**
+   * The per-digest migration prover. Omitted → every `RequireBeforeTransaction` mutation is
+   * REFUSED (`migration_unavailable`), never silently passed: an actuator that cannot prove a
+   * migration must not spend against a database it knows nothing about.
+   */
+  readonly migration?: AkashTxMigrationPort;
 }
 
 const NOOP_LOGGER: AkashTxLogger = {
@@ -138,12 +157,14 @@ export class AkashTxActuator implements AkashTxActuatorPort {
   private readonly ledger: AkashTxAllocationLedgerPort;
   private readonly log: AkashTxLogger;
   private readonly probe?: AkashTxServingProbe;
+  private readonly migration?: AkashTxMigrationPort;
 
   constructor(deps: AkashTxActuatorDeps) {
     this.console = deps.console;
     this.ledger = deps.ledger;
     this.log = deps.log ?? NOOP_LOGGER;
     if (deps.probe) this.probe = deps.probe;
+    if (deps.migration) this.migration = deps.migration;
   }
 
   async observe(input: {
@@ -191,7 +212,13 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     cogniKey: string;
     environment: string;
     spec: ProvisionSpec;
+    migration: AkashTxMigrationRequirement;
   }): Promise<AkashTxCreateResult> {
+    // BEFORE the claim, and before anything can be spent: an unmigrated database must never
+    // acquire a paid lease (bug.5116 ordering, bug.5140 enforcement). Refusing here also means
+    // a multi-minute migration never occupies the wallet-global slot.
+    await this.gateMigration(input, "create");
+
     const claim = await this.claim(input);
 
     if (claim.state === "blocked") {
@@ -321,7 +348,13 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     externalName: string;
     environment: string;
     spec: ProvisionSpec;
+    migration: AkashTxMigrationRequirement;
   }): Promise<AkashTxResource> {
+    // An update mints no lease, but it IS the call that puts a new bundle digest in front of
+    // the node's database — the exact ordering bug.5116 fixed. The legacy gate ran before
+    // every provider mutation; so does this one.
+    await this.gateMigration(input, "update");
+
     // An in-place SDL replacement mints no handle and opens no escrow, so it needs no
     // wallet slot: PUT on a handle we already own is idempotent by construction.
     try {
@@ -373,6 +406,34 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     this.log.info(
       { cogniKey: input.cogniKey, externalName: input.externalName },
       "akash_tx_released"
+    );
+  }
+
+  /**
+   * One bounded migration proof. Throws the caller-visible refusal (`migration_pending` /
+   * `migration_failed` / `migration_unavailable`) after the gate has logged it.
+   */
+  private async gateMigration(
+    input: {
+      cogniKey: string;
+      environment: string;
+      spec: ProvisionSpec;
+      migration: AkashTxMigrationRequirement;
+    },
+    operation: AkashTxMigrationOperation
+  ): Promise<void> {
+    await enforceMigrationGate(
+      {
+        log: this.log,
+        ...(this.migration ? { migration: this.migration } : {}),
+      },
+      {
+        requirement: input.migration,
+        operation,
+        cogniKey: input.cogniKey,
+        environment: input.environment,
+        workload: input.spec.name,
+      }
     );
   }
 

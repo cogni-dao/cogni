@@ -59,6 +59,7 @@ Does NOT re-export packages with `node:` transitive dependencies.
 - TreasurySettlementPort, TreasurySettlementOutcome
 - DeployPlanePort, including operator App-backed app promotion and the operator-only production infra reconcile contract
 - AkashTxActuatorPort + AkashTxConsolePort + AkashTxAllocationLedgerPort + AkashTxError (private Akash transaction boundary: one bounded attempt per call, key-idempotent, fail-closed on an unresolved allocation — task.5095)
+- AkashTxMigrationRequirement + AkashTxMigrationPort (MIGRATION_BEFORE_TRANSACTION: every mutating actuator call states its migration precondition, and `RequireBeforeTransaction` is proven succeeded before anything is spent — bug.5116 ordering, bug.5140 enforcement)
 - Types (ChargeReceiptParams, LlmCaller, BillingAccount, CreditLedgerEntry, etc.)
 
 ### `server.ts` — Server-only barrel
