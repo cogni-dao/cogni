@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2025 Cogni-DAO
+#
+# A kustomize builtin PatchTransformer, referenced from each operator overlay's
+# `transformers:` list. Transformers listed there run AFTER the built-in namePrefix
+# transformer, which is the only supported way to keep ONE object out of the overlay's
+# `operator-` prefix.
+#
+# Why this must exist: the Crossplane Composition derives the actuator URL as
+# `http://akash-tx-actuator.<ns>.svc.cluster.local:8080` from the XR's namespace alone. It
+# cannot know a per-node kustomize prefix, and it lives in the control-plane lane
+# (infra/crossplane/**), which cannot ship in the same PR as this app-lane tree. So the
+# Service name is a fixed wire contract and the prefix is what has to give.
+#
+# Scoped by label, not by the prefixed name, so it stays correct if the prefix ever changes.
+# It is a no-op in any kustomization that does not contain this Service.
+apiVersion: builtin
+kind: PatchTransformer
+metadata:
+  name: akash-tx-actuator-service-name
+patch: '[{"op": "replace", "path": "/metadata/name", "value": "akash-tx-actuator"}]'
+target:
+  kind: Service
+  labelSelector: app.kubernetes.io/name=akash-tx-actuator

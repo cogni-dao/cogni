@@ -116,6 +116,10 @@ export const OFF_CLUSTER_WORKLOAD_DENIED_KEYS: ReadonlySet<string> = new Set([
   // OWN per-environment Console account (task.5095). A node workload holding it could
   // create paid leases AND break ONE_WALLET_ONE_WRITER for the actuator's ledger.
   "AKASH_ACTUATOR_CONSOLE_API_KEY",
+  // The bearer token that unlocks that second wallet over the wire (task.5102). The
+  // actuator is a private ClusterIP wallet writer with no other authentication, so a
+  // copy on a rented multi-tenant provider is equivalent to holding the key itself.
+  "AKASH_TX_ACTUATOR_TOKEN",
   "CLOUDFLARE_API_TOKEN",
   "CLOUDFLARE_ZONE_ID",
   "GH_GRAFANA_PARENT_SA_TOKEN",

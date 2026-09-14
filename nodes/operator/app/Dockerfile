@@ -62,6 +62,12 @@ RUN --mount=type=cache,id=next-cache,target=/app/nodes/operator/app/.next/cache,
 RUN pnpm --filter operator build:compute-controller \
     && pnpm --filter operator smoke:compute-controller-artifact
 
+# task.5102 — the Akash transaction actuator. Same shape as the controller above:
+# a dedicated process artifact riding in the shared operator image, started by its own
+# Deployment (infra/k8s/base/akash-tx-actuator) rather than by the web entrypoint.
+RUN pnpm --filter operator build:akash-tx-actuator \
+    && pnpm --filter operator smoke:akash-tx-actuator-artifact
+
 # Runner – lean production image
 FROM node:22-alpine AS runner
 WORKDIR /app
@@ -84,6 +90,7 @@ COPY --from=builder --chown=nextjs:nodejs /app/nodes/operator/app/.next/standalo
 COPY --from=builder --chown=nextjs:nodejs /app/nodes/operator/app/.next/static ./nodes/operator/app/.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/nodes/operator/app/public ./nodes/operator/app/public
 COPY --from=builder --chown=nextjs:nodejs /app/nodes/operator/app/dist-controller/compute-workload-controller.mjs ./nodes/operator/app/compute-workload-controller.mjs
+COPY --from=builder --chown=nextjs:nodejs /app/nodes/operator/app/dist-akash-tx-actuator/akash-tx-actuator.mjs ./nodes/operator/app/akash-tx-actuator.mjs
 
 # Repo-spec: node-specific DAO config (node_id, chain, governance).
 # Each node MUST copy its own .cogni — NOT root (which is operator's identity).

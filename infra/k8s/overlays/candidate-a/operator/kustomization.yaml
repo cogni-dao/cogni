@@ -9,11 +9,24 @@ resources:
   - ../../../base/node-app
   - ../../../base/openfga-external
   - ../../../base/compute-workload-controller
+  # task.5102 — the private Akash transaction actuator Crossplane calls. Candidate-a
+  # only for now: the XComputeWorkload control plane exists only here
+  # (infra/k8s/argocd/control-plane/candidate-a), and the actuator refuses to start
+  # without its dedicated wallet, so shipping it to an env with no Crossplane and no
+  # seeded credential would only add a CrashLoopBackOff.
+  - ../../../base/akash-tx-actuator
   - external-secret.yaml
+  - ./akash-tx-actuator-auth-external-secret.yaml
   - ./secrets-writer-sa.yaml
   - ./compute-workload-platform-application.yaml
 
 namePrefix: operator-
+
+# Runs AFTER the built-in namePrefix transformer and restores the actuator Service's
+# name to the bare `akash-tx-actuator` the Crossplane Composition dials. See
+# ../../../base/akash-tx-actuator-service-name for why the prefix is what gives.
+transformers:
+  - ../../../base/akash-tx-actuator-service-name
 
 images:
   - name: ghcr.io/cogni-dao/cogni-template
@@ -58,6 +71,31 @@ patches:
                     value: candidate-a
                   - name: DEPLOYMENT_DOMAIN
                     value: test.cognidao.org
+                  - name: AKASH_ALLOWED_PROVIDERS
+                    value: akash16yr3wxt97ae045a06kr3ycde9srcgpg8syjxxm
+  # Same BY-NAME strategic merge as the controller above (story.5016 Gate 0b). The
+  # actuator's wallet scope is `akash-console:<DEPLOY_ENVIRONMENT>`, which MUST equal the
+  # `environment` the Composition sends — the Composition pins that to `cogni-<env>` == the
+  # namespace, so these two values are one invariant expressed in two places.
+  - target:
+      kind: Deployment
+      name: akash-tx-actuator
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: akash-tx-actuator
+      spec:
+        template:
+          spec:
+            containers:
+              - name: actuator
+                env:
+                  - name: POD_NAMESPACE
+                    valueFrom:
+                      fieldRef: { fieldPath: metadata.namespace }
+                  - name: DEPLOY_ENVIRONMENT
+                    value: candidate-a
                   - name: AKASH_ALLOWED_PROVIDERS
                     value: akash16yr3wxt97ae045a06kr3ycde9srcgpg8syjxxm
   - target:
