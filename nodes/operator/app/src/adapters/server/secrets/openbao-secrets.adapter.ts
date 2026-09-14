@@ -7,7 +7,8 @@
  *   in-cluster identity — Kubernetes-auth self-login over ClusterIP, then KV-v2
  *   put (new node path) / patch (existing). Realizes the in-cluster north star
  *   named in scripts/ci/secret-materialize.sh — zero SSH, zero `kubectl create token`.
- * Scope: One write per call. No catalog read (gate 2 is upstream), no node scope
+ * Scope: One write per call. The bucket is the node's namespace, or a platform-service
+ *   bucket the route already authorized. No catalog read (gate 2 is upstream), no node scope
  *   in the token (that is the app's job — see route + design §Security boundary).
  * Invariants:
  *   - SELF_LOGIN: the pod authenticates with its projected SA token; no caller creds.
@@ -57,13 +58,16 @@ export class OpenBaoSecretsAdapter implements OperatorSecretsPlanePort {
   async writeSecret(
     input: WriteNodeSecretInput
   ): Promise<WriteNodeSecretResult> {
-    const path = `cogni/${input.env}/${input.nodeSlug}/${input.key}`;
+    // The bucket is the node's own namespace unless the route resolved (and authorized)
+    // a platform-service bucket. Absent `service` → the pre-existing path, unchanged.
+    const bucket = input.service ?? input.nodeSlug;
+    const path = `cogni/${input.env}/${bucket}/${input.key}`;
     const token = await this.login();
     // KV v2 data endpoint requires the `data/` infix: <mount>/data/<path>.
     // (metadata uses <mount>/metadata/<path>; the put/patch policy grants
     // `cogni/data/<env>/*`.) The returned `path` above stays logical for display.
-    const dataPath = `cogni/data/${input.env}/${input.nodeSlug}`;
-    const exists = await this.nodePathExists(token, input.env, input.nodeSlug);
+    const dataPath = `cogni/data/${input.env}/${bucket}`;
+    const exists = await this.bucketExists(token, input.env, bucket);
     const version = exists
       ? await this.patch(token, dataPath, input.key, input.value)
       : await this.put(token, dataPath, input.key, input.value);
@@ -90,13 +94,13 @@ export class OpenBaoSecretsAdapter implements OperatorSecretsPlanePort {
   }
 
   /** Put-vs-patch gate (mirrors set-secret.sh): metadata 200 → patch, 404 → put. */
-  private async nodePathExists(
+  private async bucketExists(
     token: string,
     env: string,
-    nodeSlug: string
+    bucket: string
   ): Promise<boolean> {
     const res = await this.fetchImpl(
-      `${this.addr}/v1/cogni/metadata/${env}/${nodeSlug}`,
+      `${this.addr}/v1/cogni/metadata/${env}/${bucket}`,
       { method: "GET", headers: { "x-vault-token": token } }
     );
     if (res.status === 404) return false;

@@ -457,8 +457,8 @@ through GitHub Environment protection rules.
 
 ```
 POST /api/v1/nodes/<id>/secrets
-Body: { env, key, value, op: "set" | "rotate" }   # env is a REQUIRED FLIGHT_ENVS value
-Response: 200 { written, version, path }   # path = cogni/<env>/<node>/<KEY>, no value
+Body: { env, key, value, op: "set" | "rotate", service? }  # env is a REQUIRED FLIGHT_ENVS value
+Response: 200 { written, version, path }   # path = cogni/<env>/<node|service>/<KEY>, no value
 ```
 
 A node-owner granted OpenFGA `secrets_manager` on the node sets/rotates a node-scoped
@@ -477,6 +477,40 @@ Per-node isolation is **tuple-based** (OpenFGA), not a shared writer token. **Li
 per-env readiness is not snapshotted here** (it drifts) — recall the hub guide
 `node-self-serve-secrets` (`GET /api/v1/knowledge/node-self-serve-secrets`). Spec +
 roadmap: [`docs/design/node-self-serve-secrets.md`](../design/node-self-serve-secrets.md).
+
+##### Optional `service` — writing a PLATFORM-SERVICE bucket
+
+Invariant 1 makes `<service>` a blast-radius boundary, so a credential whose reach must
+be smaller than its owning node's lives at `cogni/<env>/<service>/<KEY>` rather than in
+the node's bucket (`akash-tx-actuator` is the first). Those paths are not nodes: they
+carry no DNS, no DB, and no OpenFGA tuples — so before this field the only way to seed a
+vendor-minted value there was the CLI (kube port-forward + a writer JWT), which is the
+legacy custody path this route exists to retire.
+
+The optional `service` field retargets the write. It does **not** relax the check:
+
+| Leg                   | Rule                                                                                                                                                                                 |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Absent (default)      | Behaviour is unchanged — `cogni/<env>/<node>/<KEY>`, per-node `can_manage_secrets`.                                                                                                  |
+| Allowlist             | `service` must be in the build-time mirror of `PLATFORM_SERVICES` (`scripts/lib/secrets-catalog-loader.ts`, mirrored in `reconcile-secrets.sh` and in the operator image). Else 403. |
+| Owner-node delegation | The caller must already hold `can_manage_secrets` on the node that administers platform services — `PLATFORM_SERVICE_OWNER_NODE` in `scripts/ci/secret-materialize.sh`. Else 403.    |
+| Every other gate      | Env match (409), substrate-reserved-key denylist (403 — `source: agent` keys stay unreachable), `_system`/`_shared` OpenBao deny, operator-pod-own writer identity: all unchanged.   |
+
+The gate runs **after** the OpenFGA check, so it can only subtract: no principal gains
+reach that `can_manage_secrets` on the owner node did not already imply, and no other
+node's grant touches a platform-service path. No OpenBao policy change is needed — the
+`<env>-node-secrets-writer` policy already covers `cogni/data/<env>/*` minus the two
+denied pseudo-services.
+
+**Stated widening, not a silent one.** The correct end state is a `platform_service`
+OpenFGA type carrying its own `secrets_manager` relation, so a platform-service bucket is
+granted independently of the operator node. That needs an RBAC model rollout, and a model
+only reaches an environment through `bootstrap-openfga.sh` inside `deploy-infra`; a check
+against a relation an env's model lacks fails closed at `503 authz_unavailable`. Until
+that lands, owner-node delegation is the narrowest authority expressible, and it means
+`secrets_manager` on the owner node reaches platform-service buckets in addition to the
+owner node's own. The read-plane isolation that motivated the split is untouched: the
+operator app still has no ExternalSecret, `envFrom`, or volume that can read those paths.
 
 > Supersedes the prior shape-only `secrets/declare` sketch (agent declares shape,
 > human fills value). The node-self-serve spike (#1627) deliberately closed that
