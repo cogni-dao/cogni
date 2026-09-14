@@ -419,6 +419,219 @@ env "${EXTERNAL_ENV[@]}" FAKE_EMPTY_WORKLOAD_SECRET=1 \
   bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/external-no-secret-refs.out"
 grep -q "all declared workload secret refs are materialized" "$TMPROOT/external-no-secret-refs.out"
 
+# ---------------------------------------------------------------------------
+# task.5104 — compute_api selects WHICH authority the preflight asserts.
+#
+# The rows above carry no compute_api cell at all, so everything asserted so far
+# already proves LEGACY_IS_DEFAULT: the fake kubectl below hard-fails on any
+# crossplane object, and the legacy fake hard-fails on anything that is not the
+# bespoke controller, so each branch's fixture is itself the "did not drift" proof.
+# ---------------------------------------------------------------------------
+
+# The legacy fixture must still take the controller path, and must never reach for
+# the Crossplane control plane.
+grep -q "compute_api=legacy" "$TMPROOT/external-success.out"
+grep -q "compute workload controller is available" "$TMPROOT/external-success.out"
+if grep -q "crossplane authority" "$TMPROOT/external-success.out"; then
+  echo "expected the legacy branch to assert no crossplane objects" >&2
+  exit 1
+fi
+
+# An EXPLICIT `compute_api.candidate-a: legacy` must be byte-identical to the absent
+# cell: same asserts, same fake, same output.
+LEGACY_SRC="$TMPROOT/legacy-src"
+mkdir -p "$LEGACY_SRC/infra/catalog" "$LEGACY_SRC/nodes/toks4/.cogni"
+cat > "$LEGACY_SRC/infra/catalog/toks4.yaml" <<'YAML'
+name: toks4
+type: node
+node_id: 72aa130b-f0ad-495a-a061-9ee1f9c9525d
+path_prefix: nodes/toks4/
+compute_api:
+  candidate-a: legacy
+compute_egress_cidrs:
+  - cidr: 80.200.246.35/32
+    comment: test provider
+YAML
+cat > "$LEGACY_SRC/nodes/toks4/.cogni/repo-spec.yaml" <<'YAML'
+deployment:
+  services:
+    - name: app
+      secret_refs:
+        - { key: AUTH_SECRET }
+        - { key: DATABASE_URL }
+        - { key: LITELLM_VIRTUAL_KEY }
+YAML
+env "${EXTERNAL_ENV[@]}" APP_SOURCE_DIR="$LEGACY_SRC" COGNI_CATALOG_ROOT="$LEGACY_SRC/infra/catalog" \
+  bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/explicit-legacy.out"
+grep -q "compute_api=legacy" "$TMPROOT/explicit-legacy.out"
+grep -q "compute workload controller is available" "$TMPROOT/explicit-legacy.out"
+grep -q "External compute preconditions ready for toks4" "$TMPROOT/explicit-legacy.out"
+if grep -q "crossplane authority" "$TMPROOT/explicit-legacy.out"; then
+  echo "expected explicit compute_api=legacy to be identical to the absent cell" >&2
+  exit 1
+fi
+
+# A crossplane row asserts the Crossplane control plane + the private Akash tx
+# actuator instead. Its fake kubectl refuses every legacy-controller call, which is
+# exactly the defect this branch fixes: story.5016 step 9 deleted that Deployment
+# from the candidate-a operator overlay, so asserting it killed every akash flight.
+XCW_SRC="$TMPROOT/xcw-src"
+XCW_BIN="$TMPROOT/xcw-bin"
+mkdir -p "$XCW_SRC/infra/catalog" "$XCW_SRC/nodes/toks5/.cogni" "$XCW_BIN"
+cat > "$XCW_SRC/infra/catalog/toks5.yaml" <<'YAML'
+name: toks5
+type: node
+node_id: 4d2a5f3b-9c1e-4a77-bd62-1f0c7e8a4411
+path_prefix: nodes/toks5/
+compute_api:
+  candidate-a: crossplane
+compute_egress_cidrs:
+  - cidr: 80.200.246.35/32
+    comment: test provider
+YAML
+cat > "$XCW_SRC/nodes/toks5/.cogni/repo-spec.yaml" <<'YAML'
+deployment:
+  services:
+    - name: app
+      secret_refs:
+        - { key: AUTH_SECRET }
+        - { key: DATABASE_URL }
+        - { key: LITELLM_VIRTUAL_KEY }
+YAML
+cat > "$XCW_BIN/kubectl" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+  *compute-workload-controller*)
+    echo "fake xcw kubectl: legacy controller must never be touched on a crossplane row: $*" >&2
+    exit 1
+    ;;
+  *"get crd computeworkloads.compute.cogni.io"*)
+    echo "fake xcw kubectl: legacy CRD must never be asserted on a crossplane row: $*" >&2
+    exit 1
+    ;;
+  *"get crd xcomputeworkloads.compute.cogni.io"*)
+    [ "${FAKE_MISSING_XRD:-}" = 1 ] && exit 1
+    [ "${FAKE_XRD_NOT_ESTABLISHED:-}" = 1 ] && { echo False; exit 0; }
+    echo True
+    exit 0
+    ;;
+  *"get composition xcomputeworkload-akash"*)
+    [ "${FAKE_MISSING_COMPOSITION:-}" = 1 ] && exit 1
+    exit 0
+    ;;
+  *"get clusterproviderconfigs.http.m.crossplane.io cogni-http"*)
+    [ "${FAKE_MISSING_PROVIDER_CONFIG:-}" = 1 ] && exit 1
+    exit 0
+    ;;
+  *"get deployment operator-akash-tx-actuator"*status.availableReplicas*)
+    [ "${FAKE_ACTUATOR_UNAVAILABLE:-}" = 1 ] && exit 0
+    echo 1
+    exit 0
+    ;;
+  *"get deployment operator-akash-tx-actuator"*AKASH_ALLOWED_PROVIDERS*)
+    [ "${FAKE_EMPTY_ALLOWED_PROVIDERS:-}" = 1 ] && exit 0
+    echo akash16yr3wxt97ae045a06kr3ycde9srcgpg8syjxxm
+    exit 0
+    ;;
+  *"get secret akash-tx-actuator-auth"*.data.token*)
+    [ "${FAKE_MISSING_AUTH_TOKEN_KEY:-}" = 1 ] && exit 0
+    echo dG9rZW4=
+    exit 0
+    ;;
+  *"get secret akash-tx-actuator-auth"*)
+    [ "${FAKE_MISSING_AUTH_SECRET:-}" = 1 ] && exit 1
+    exit 0
+    ;;
+  *"get secret akash-tx-actuator-env-secrets"*)
+    [ "${FAKE_MISSING_ACTUATOR_ENV_SECRET:-}" = 1 ] && exit 1
+    exit 0
+    ;;
+  "create token db-provisioner -n default") echo test-jwt; exit 0 ;;
+  *"bao write -field=token auth/kubernetes/login"*) echo test-token; exit 0 ;;
+  *"bao kv get -format=json cogni/candidate-a/toks5"*)
+    echo '{"data":{"data":{"AUTH_SECRET":"present","DATABASE_URL":"present","LITELLM_VIRTUAL_KEY":"present"}}}'
+    exit 0
+    ;;
+esac
+echo "fake xcw kubectl: unexpected $*" >&2
+exit 1
+EOF
+chmod +x "$XCW_BIN/kubectl"
+
+XCW_ENV=(
+  TARGET=toks5
+  DEPLOYMENT_PROVIDER=akash
+  DEPLOY_ENVIRONMENT=candidate-a
+  VM_HOST=192.0.2.10
+  DOMAIN=test.cognidao.org
+  APP_SOURCE_DIR="$XCW_SRC"
+  COGNI_CATALOG_ROOT="$XCW_SRC/infra/catalog"
+  ASSERT_TARGET_SUBSTRATE_SSH_BIN="$FAKEBIN/ssh"
+  ASSERT_TARGET_SUBSTRATE_EGRESS_ALLOWLIST="$EXTERNAL_ALLOWLIST"
+  FAKE_REMOTE_PATH="$XCW_BIN"
+)
+
+env "${XCW_ENV[@]}" bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/xcw-success.out"
+grep -q "compute_api=crossplane" "$TMPROOT/xcw-success.out"
+grep -q "CRD xcomputeworkloads.compute.cogni.io is Established" "$TMPROOT/xcw-success.out"
+grep -q "Composition xcomputeworkload-akash exists" "$TMPROOT/xcw-success.out"
+grep -q "ClusterProviderConfig/cogni-http exists" "$TMPROOT/xcw-success.out"
+grep -q "cogni-candidate-a/operator-akash-tx-actuator is available" "$TMPROOT/xcw-success.out"
+grep -q "Secret cogni-candidate-a/akash-tx-actuator-auth carries key 'token'" "$TMPROOT/xcw-success.out"
+grep -q "Secret cogni-candidate-a/akash-tx-actuator-env-secrets exists" "$TMPROOT/xcw-success.out"
+grep -q "AKASH_ALLOWED_PROVIDERS is non-empty" "$TMPROOT/xcw-success.out"
+# Authority-independent checks still run on the crossplane path.
+grep -q "all declared workload secret refs are materialized" "$TMPROOT/xcw-success.out"
+grep -q "catalog compute egress CIDRs are installed" "$TMPROOT/xcw-success.out"
+grep -q "External compute preconditions ready for toks5" "$TMPROOT/xcw-success.out"
+if grep -q "compute workload controller" "$TMPROOT/xcw-success.out"; then
+  echo "expected the crossplane branch to assert no legacy controller" >&2
+  exit 1
+fi
+
+xcw_expect_fail() {
+  local label="$1" needle="$2"
+  shift 2
+  if env "${XCW_ENV[@]}" "$@" bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/xcw-${label}.out" 2>&1; then
+    echo "expected ${label} to fail" >&2
+    exit 1
+  fi
+  grep -q "$needle" "$TMPROOT/xcw-${label}.out" || {
+    echo "expected ${label} failure to name '${needle}'" >&2
+    cat "$TMPROOT/xcw-${label}.out" >&2
+    exit 1
+  }
+  # Every crossplane failure must name the authority it expected, in the error line
+  # itself — an ambiguous preflight failure is how B1/B2 stayed invisible.
+  grep -q "::error::assert-target-substrate: compute_api=crossplane" "$TMPROOT/xcw-${label}.out" || {
+    echo "expected ${label} error line to name the expected authority" >&2
+    cat "$TMPROOT/xcw-${label}.out" >&2
+    exit 1
+  }
+}
+
+xcw_expect_fail missing-xrd "XRD-backed CRD xcomputeworkloads.compute.cogni.io is not Established (condition='absent')" FAKE_MISSING_XRD=1
+xcw_expect_fail xrd-not-established "is not Established (condition='False')" FAKE_XRD_NOT_ESTABLISHED=1
+xcw_expect_fail missing-composition "Composition xcomputeworkload-akash is missing" FAKE_MISSING_COMPOSITION=1
+xcw_expect_fail missing-provider-config "ClusterProviderConfig/cogni-http (http.m.crossplane.io/v1alpha2) is missing" FAKE_MISSING_PROVIDER_CONFIG=1
+xcw_expect_fail actuator-unavailable "akash transaction actuator is not available: cogni-candidate-a/operator-akash-tx-actuator" FAKE_ACTUATOR_UNAVAILABLE=1
+xcw_expect_fail missing-auth-secret "Secret cogni-candidate-a/akash-tx-actuator-auth is missing" FAKE_MISSING_AUTH_SECRET=1
+xcw_expect_fail missing-auth-token-key "carries no 'token' key" FAKE_MISSING_AUTH_TOKEN_KEY=1
+xcw_expect_fail missing-actuator-env-secret "Secret cogni-candidate-a/akash-tx-actuator-env-secrets is missing" FAKE_MISSING_ACTUATOR_ENV_SECRET=1
+xcw_expect_fail empty-allowed-providers "AKASH_ALLOWED_PROVIDERS is empty or unset on cogni-candidate-a/operator-akash-tx-actuator" FAKE_EMPTY_ALLOWED_PROVIDERS=1
+
+# An unknown authority is a loud stop, never a silent fall-through to legacy.
+BAD_SRC="$TMPROOT/bad-authority-src"
+mkdir -p "$BAD_SRC/infra/catalog" "$BAD_SRC/nodes/toks5/.cogni"
+sed 's/crossplane/terraform/' "$XCW_SRC/infra/catalog/toks5.yaml" > "$BAD_SRC/infra/catalog/toks5.yaml"
+cp "$XCW_SRC/nodes/toks5/.cogni/repo-spec.yaml" "$BAD_SRC/nodes/toks5/.cogni/repo-spec.yaml"
+if env "${XCW_ENV[@]}" APP_SOURCE_DIR="$BAD_SRC" COGNI_CATALOG_ROOT="$BAD_SRC/infra/catalog" \
+  bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/xcw-bad-authority.out" 2>&1; then
+  echo "expected an unsupported compute_api to fail" >&2
+  exit 1
+fi
+grep -q "unsupported compute_api 'terraform'" "$TMPROOT/xcw-bad-authority.out"
+
 if env TARGET=scheduler-worker DEPLOY_ENVIRONMENT=candidate-a APP_SOURCE_DIR=. COGNI_CATALOG_ROOT=infra/catalog bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/service.out" 2>&1; then
   echo "expected service target to fail explicitly" >&2
   exit 1
