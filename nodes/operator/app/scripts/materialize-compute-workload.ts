@@ -26,13 +26,17 @@ import { parseArgs, promisify } from "node:util";
 import { parseRepoSpec, resolveNodeArtifactBundle } from "@cogni/repo-spec";
 import { parse, stringify } from "yaml";
 
-import { buildComputeWorkloadManifest } from "@/features/compute/compute-workload-manifest";
+import {
+  buildComputeWorkloadManifest,
+  computeWorkloadManifestFile,
+} from "@/features/compute/compute-workload-manifest";
 import { buildComputeSecretResources } from "@/features/compute/compute-workload-secret-manifests";
 import {
   buildNodeBundleTagRef,
   NODE_BUNDLE_PAYLOAD_FILE,
   verifyNodeBundleManifest,
 } from "@/features/compute/node-artifact-bundle-oci";
+import { resolveNodeComputeApi } from "@/features/compute/node-compute-api";
 import {
   deploymentEnvironmentSchema,
   resolveNodeDeploymentProvider,
@@ -60,8 +64,23 @@ const options = {
   "bundle-repository": { type: "string" },
   "source-sha": { type: "string" },
   domain: { type: "string" },
+  // Public Cloudflare zone identifier (NOT a credential — it appears in the dashboard URL).
+  // Optional: the Crossplane composite treats absent DNS intent as "publish the CNAME target
+  // you WOULD write, but write no record", so a caller without a zone still gets observable
+  // intent instead of a hard failure.
+  "dns-zone-id": { type: "string" },
+  // Environment VM host serving the shared substrate ports (5432/5435/6379/4000/7233) — the
+  // value the legacy controller read back out of the DATABASE_URL secret. NOT derivable from
+  // --domain: that is the Cloudflare-PROXIED public apex, which drops every non-HTTP port. The
+  // caller derives it with vm_host_for_env() (scripts/setup/lib/fork-identity.sh), the same
+  // primitive provisioning used to publish the VM's unproxied A record — see
+  // .github/actions/materialize-compute-workload/action.yml. Still optional here: absent omits
+  // spec.runtime, degrading exactly like the legacy path did on an unparseable DSN.
+  "substrate-host": { type: "string" },
   "output-dir": { type: "string" },
 } as const;
+
+const CLOUDFLARE_ZONE_ID = /^[0-9a-f]{32}$/;
 
 const execFileAsync = promisify(execFile);
 
@@ -149,6 +168,16 @@ async function main(): Promise<void> {
     );
   }
 
+  // WHICH authority reconciles this (node, environment) — one catalog cell, LEGACY_IS_DEFAULT.
+  // Resolved here, next to placement, because both are operator-owned policy read from the
+  // same row: a node never selects its own reconciler.
+  const computeApi = resolveNodeComputeApi({ catalog, environment });
+  const dnsZoneId = values["dns-zone-id"]?.trim();
+  if (dnsZoneId && !CLOUDFLARE_ZONE_ID.test(dnsZoneId)) {
+    throw new Error(
+      "[materialize-compute-workload] --dns-zone-id must be a 32-character hex Cloudflare zone id"
+    );
+  }
   const manifest = buildComputeWorkloadManifest({
     slug: catalogIdentity.slug,
     environment,
@@ -159,6 +188,14 @@ async function main(): Promise<void> {
       catalogIdentity.isPrimaryHost,
       domain
     ),
+    computeApi,
+    // DNS intent is Crossplane-only: the legacy controller resolves its own zone in-cluster.
+    ...(computeApi === "crossplane" && dnsZoneId
+      ? { dns: { provider: "cloudflare" as const, zoneId: dnsZoneId } }
+      : {}),
+    ...(computeApi === "crossplane" && values["substrate-host"]?.trim()
+      ? { runtime: { substrateHost: values["substrate-host"].trim() } }
+      : {}),
   });
   const secretResources = buildComputeSecretResources({
     slug: catalogIdentity.slug,
@@ -167,19 +204,25 @@ async function main(): Promise<void> {
       (service) => service.service.secretRefs
     ),
   });
+  // ONE_AUTHORITY_PER_WORKLOAD (task.5097). The kustomization lists exactly one compute
+  // resource, and the deploy-branch writer rsyncs this directory with `--delete`, so the
+  // authority NOT selected leaves git in the very commit that introduces the one that was.
+  // The two authorities key their Akash idempotence differently and would therefore buy TWO
+  // leases rather than collide safely — so this is a hard invariant, not a tidiness rule.
+  const workloadFile = computeWorkloadManifestFile(computeApi);
   const kustomization = {
     apiVersion: "kustomize.config.k8s.io/v1beta1",
     kind: "Kustomization",
     namespace: `cogni-${environment}`,
     resources: [
-      "compute-workload.yaml",
+      workloadFile,
       ...secretResources.map((resource) => resource.file),
     ],
   };
 
   await mkdir(outputDir, { recursive: true });
   await writeAtomically(
-    `${outputDir}/compute-workload.yaml`,
+    `${outputDir}/${workloadFile}`,
     stringify(manifest, { lineWidth: 0 })
   );
   await Promise.all(
@@ -195,7 +238,7 @@ async function main(): Promise<void> {
     stringify(kustomization, { lineWidth: 0 })
   );
   process.stdout.write(
-    `${JSON.stringify({ provider, node: catalogIdentity.slug, outputDir })}\n`
+    `${JSON.stringify({ provider, computeApi, node: catalogIdentity.slug, outputDir })}\n`
   );
 }
 

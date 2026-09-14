@@ -4,7 +4,11 @@
 import type { ResolvedNodeArtifactBundle } from "@cogni/repo-spec";
 import { describe, expect, it } from "vitest";
 
-import { buildComputeWorkloadManifest } from "./compute-workload-manifest";
+import {
+  bootPolicyForEnvironment,
+  buildComputeWorkloadManifest,
+  computeWorkloadManifestFile,
+} from "./compute-workload-manifest";
 import { COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS } from "./node-services-workload-spec";
 
 const SHA = "a".repeat(40);
@@ -78,6 +82,7 @@ describe("buildComputeWorkloadManifest", () => {
       bundleRef: `ghcr.io/cogni-dao/toks4@sha256:${BUNDLE_DIGEST}`,
       bundle,
       publicHost: "toks4-test.cognidao.org",
+      computeApi: "legacy",
     });
 
     expect(manifest.metadata).toEqual({
@@ -128,6 +133,7 @@ describe("buildComputeWorkloadManifest", () => {
         bundleRef: `ghcr.io/cogni-dao/toks4:bundle-sha-${SHA}`,
         bundle,
         publicHost: "toks4-test.cognidao.org",
+        computeApi: "legacy",
       })
     ).toThrow("digest-pinned OCI reference");
   });
@@ -151,7 +157,181 @@ describe("buildComputeWorkloadManifest", () => {
         bundleRef: `ghcr.io/cogni-dao/toks4@sha256:${BUNDLE_DIGEST}`,
         bundle: incompleteBundle,
         publicHost: "toks4-test.cognidao.org",
+        computeApi: "legacy",
       })
     ).toThrow(/cogni-node-app-v1 is missing secret_refs/);
+  });
+
+  it("emits the legacy kind with no Crossplane-only policy fields", () => {
+    const manifest = buildComputeWorkloadManifest({
+      slug: "toks4",
+      environment: "candidate-a",
+      bundleRef: `ghcr.io/cogni-dao/toks4@sha256:${BUNDLE_DIGEST}`,
+      bundle,
+      publicHost: "toks4-test.cognidao.org",
+      computeApi: "legacy",
+    });
+
+    expect(manifest.kind).toBe("ComputeWorkload");
+    expect(manifest.spec).not.toHaveProperty("migration");
+    expect(manifest.spec).not.toHaveProperty("bootPolicy");
+    expect(manifest.spec).not.toHaveProperty("dns");
+  });
+
+  it("emits the Crossplane composite with the policies the XRD made declarative", () => {
+    const manifest = buildComputeWorkloadManifest({
+      slug: "toks4",
+      environment: "production",
+      bundleRef: `ghcr.io/cogni-dao/toks4@sha256:${BUNDLE_DIGEST}`,
+      bundle,
+      publicHost: "toks4.cognidao.org",
+      computeApi: "crossplane",
+      dns: { provider: "cloudflare", zoneId: "0".repeat(32) },
+      runtime: { substrateHost: "cogni.vm.cognidao.org" },
+    });
+
+    expect(manifest.kind).toBe("XComputeWorkload");
+    expect(manifest.apiVersion).toBe("compute.cogni.io/v1alpha1");
+    // Empty-birth ordering is stated, not inherited from the XRD default (bug.5116).
+    expect(manifest.spec).toMatchObject({
+      migration: { policy: "RequireBeforeTransaction" },
+      bootPolicy: { onDeadline: "Hold" },
+      dns: { provider: "cloudflare", zoneId: "0".repeat(32) },
+      runtime: { substrateHost: "cogni.vm.cognidao.org" },
+    });
+  });
+
+  /**
+   * THE MIS-WIRE GUARD (story.5016 step 8). The substrate answers on 7233/6379/4000; the public
+   * apex is Cloudflare-proxied and drops all three. It is also the other hostname in scope at
+   * every call site, so passing it is the plausible mistake — and one that renders, syncs and
+   * buys a lease before the node fails its first Temporal call. Refuse it at build time.
+   */
+  it("refuses a substrate host that is the node's own public host", () => {
+    expect(() =>
+      buildComputeWorkloadManifest({
+        slug: "toks4",
+        environment: "production",
+        bundleRef: `ghcr.io/cogni-dao/toks4@sha256:${BUNDLE_DIGEST}`,
+        bundle,
+        publicHost: "toks4.cognidao.org",
+        computeApi: "crossplane",
+        runtime: { substrateHost: "toks4.cognidao.org" },
+      })
+    ).toThrow(/environment VM host/);
+  });
+
+  it("refuses a substrate host that is not a hostname", () => {
+    expect(() =>
+      buildComputeWorkloadManifest({
+        slug: "toks4",
+        environment: "production",
+        bundleRef: `ghcr.io/cogni-dao/toks4@sha256:${BUNDLE_DIGEST}`,
+        bundle,
+        publicHost: "toks4.cognidao.org",
+        computeApi: "crossplane",
+        runtime: { substrateHost: "http://cogni.vm.cognidao.org:7233" },
+      })
+    ).toThrow(/RFC-1123 hostname/);
+  });
+
+  /**
+   * Absent runtime topology remains a SUPPORTED state: the composite omits the substrate env
+   * block rather than guessing, degrading exactly like the legacy controller did on an
+   * unparseable DSN. The deploy lane always supplies it (the composite action derives it with
+   * vm_host_for_env), so this covers a caller that genuinely has no substrate to name.
+   */
+  it("omits runtime topology rather than deriving a substrate host", () => {
+    const manifest = buildComputeWorkloadManifest({
+      slug: "toks4",
+      environment: "production",
+      bundleRef: `ghcr.io/cogni-dao/toks4@sha256:${BUNDLE_DIGEST}`,
+      bundle,
+      publicHost: "toks4.cognidao.org",
+      computeApi: "crossplane",
+    });
+
+    expect(manifest.spec).not.toHaveProperty("runtime");
+    expect(manifest.spec).not.toHaveProperty("dns");
+  });
+
+  /**
+   * ONE_SEAM_TWO_CALLERS. The entire point of the seam is that flipping the authority changes
+   * WHO reconciles and nothing about WHAT is deployed. A drift here — a differently-shaped
+   * bundle, host, or service list on one arm — would make the Crossplane cutover a silent
+   * redeploy of something else.
+   */
+  it("renders byte-identical identity, bundle, and topology across both authorities", () => {
+    const base = {
+      slug: "toks4",
+      environment: "production",
+      bundleRef: `ghcr.io/cogni-dao/toks4@sha256:${BUNDLE_DIGEST}`,
+      bundle,
+      publicHost: "toks4.cognidao.org",
+    } as const;
+    const legacy = buildComputeWorkloadManifest({
+      ...base,
+      computeApi: "legacy",
+    });
+    const crossplane = buildComputeWorkloadManifest({
+      ...base,
+      computeApi: "crossplane",
+    });
+
+    expect(crossplane.metadata).toEqual(legacy.metadata);
+    const { migration, bootPolicy, ...shared } =
+      crossplane.spec as unknown as Record<string, unknown>;
+    expect(shared).toEqual(legacy.spec);
+    expect(migration).toBeDefined();
+    expect(bootPolicy).toBeDefined();
+  });
+
+  it("refuses DNS intent on the legacy authority, which resolves its own zone", () => {
+    expect(() =>
+      buildComputeWorkloadManifest({
+        slug: "toks4",
+        environment: "production",
+        bundleRef: `ghcr.io/cogni-dao/toks4@sha256:${BUNDLE_DIGEST}`,
+        bundle,
+        publicHost: "toks4.cognidao.org",
+        computeApi: "legacy",
+        dns: { provider: "cloudflare", zoneId: "0".repeat(32) },
+      })
+    ).toThrow(/carried only by the crossplane authority/);
+  });
+});
+
+describe("bootPolicyForEnvironment", () => {
+  /**
+   * BOOT_SLO_OR_CLOSE. A candidate that never serves its exact SHA has no forensic value
+   * worth renting; a live environment that stops serving is an incident to inspect. This is
+   * the whole reason story.5025's transient candidate cannot leak spend.
+   */
+  it("closes a never-served candidate lease and holds every live environment", () => {
+    expect(bootPolicyForEnvironment("candidate-a")).toEqual({
+      onDeadline: "Close",
+    });
+    expect(bootPolicyForEnvironment("preview")).toEqual({ onDeadline: "Hold" });
+    expect(bootPolicyForEnvironment("production")).toEqual({
+      onDeadline: "Hold",
+    });
+  });
+});
+
+describe("computeWorkloadManifestFile", () => {
+  /**
+   * ONE_AUTHORITY_PER_WORKLOAD, structural half. The deploy-branch writer rsyncs the
+   * materializer's output with `--delete`, so distinct filenames mean the authority not
+   * selected leaves git in the same commit the selected one arrives in. Identical filenames
+   * would make a half-applied cutover indistinguishable from a complete one.
+   */
+  it("gives each authority its own file so the other cannot survive the rsync", () => {
+    expect(computeWorkloadManifestFile("legacy")).toBe("compute-workload.yaml");
+    expect(computeWorkloadManifestFile("crossplane")).toBe(
+      "xcomputeworkload.yaml"
+    );
+    expect(computeWorkloadManifestFile("legacy")).not.toBe(
+      computeWorkloadManifestFile("crossplane")
+    );
   });
 });

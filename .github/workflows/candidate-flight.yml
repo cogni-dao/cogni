@@ -407,6 +407,8 @@ jobs:
           domain: ${{ vars.DOMAIN }}
           ghcr_username: ${{ secrets.GHCR_DEPLOY_USERNAME || github.actor }}
           ghcr_token: ${{ secrets.GHCR_DEPLOY_TOKEN || github.token }}
+          dns_zone_id: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          domain_root: ${{ vars.FORK_DOMAIN_ROOT || 'cognidao.org' }}
 
       - name: Prepare deploy branch shape
         env:

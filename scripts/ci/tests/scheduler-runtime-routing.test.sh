@@ -27,7 +27,7 @@ source "$REPO_ROOT/scripts/ci/lib/image-tags.sh"
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "  ok - $*"; }
 
-echo "[1/4] committed base + per-env overlay endpoint maps are catalog-derived"
+echo "[1/5] committed base + per-env overlay endpoint maps are catalog-derived"
 bash scripts/ci/render-scheduler-worker-endpoints.sh --check >/dev/null \
   || fail "render-scheduler-worker-endpoints.sh --check failed"
 
@@ -86,7 +86,7 @@ for env in "${DEPLOY_ENVS[@]}"; do
   done
 done
 
-echo "[2/4] submodule catalog nodes route via the node_id projection; a missing projection fails loud"
+echo "[2/5] submodule catalog nodes route via the node_id projection; a missing projection fails loud"
 TMP_TREE="$(mktemp -d)"
 trap 'rm -rf "$TMP_TREE"' EXIT
 TMP_CATALOG="$TMP_TREE/infra/catalog"
@@ -132,7 +132,7 @@ else
   pass "submodule node without node_id projection fails loud"
 fi
 
-echo "[3/4] placement decides the address: k3s -> in-cluster Service, akash -> public URL (bug.5094)"
+echo "[3/5] placement decides the address: k3s -> in-cluster Service, akash -> public URL (bug.5094)"
 # Synthetic two-node catalog so this bites regardless of which real nodes are on
 # akash today. `zk` is k3s everywhere (no deployment_provider block at all);
 # `za` is akash in candidate-a + production but k3s in preview — proving the
@@ -199,7 +199,7 @@ else
   pass "unsupported deployment_provider fails loud"
 fi
 
-echo "[4/4] scheduler off-cluster Services use env VM aliases"
+echo "[4/5] scheduler off-cluster Services use env VM aliases"
 check_scheduler_vm_alias() {
   local env="$1" expected="$2"
   local file="infra/k8s/overlays/$env/scheduler-worker/kustomization.yaml"
@@ -220,5 +220,33 @@ check_scheduler_vm_alias candidate-a cogni-candidate-a.vm.cognidao.org
 # (cogni.vm.cognidao.org → 84.32.25.152, the live prod VM).
 check_scheduler_vm_alias preview cogni-preview.vm.cognidao.org
 check_scheduler_vm_alias production cogni.vm.cognidao.org
+
+echo "[5/5] the Crossplane materializer's substrate host IS that same env VM alias"
+# story.5016 step 8. `spec.runtime.substrateHost` is the one value the Crossplane authority
+# cannot recover the way the bespoke controller did — that read `new URL(DATABASE_URL).hostname`
+# out of a SECRET VALUE. The composite action re-derives it from non-secret config with
+# vm_host_for_env(), the SAME primitive scripts/setup/bootstrap.sh used to publish the VM's
+# unproxied A record. This asserts the derivation lands on the host the cluster already dials,
+# because the failure it prevents is silent: a plausible-but-wrong hostname renders, syncs, and
+# buys a lease before anything notices the node has no Temporal.
+ACTION_YML=".github/actions/materialize-compute-workload/action.yml"
+grep -q -- '--substrate-host' "$ACTION_YML" \
+  || fail "$ACTION_YML stopped passing --substrate-host; a Crossplane-born node would get no Temporal/Redis/LiteLLM env"
+SUBSTRATE_SLUG="$(fork_identity_slug "$REPO_ROOT")"
+for env in "${DEPLOY_ENVS[@]}"; do
+  file="infra/k8s/overlays/$env/scheduler-worker/kustomization.yaml"
+  [ -f "$file" ] || { echo "  skip - $env scheduler-worker overlay missing"; continue; }
+  expected="$(vm_host_for_env "$env" "$FORK_ROOT" "$SUBSTRATE_SLUG")"
+  apex="$(domain_for_env "$env" "$FORK_ROOT" || true)"
+  [ "$expected" != "$apex" ] \
+    || fail "$env substrate host resolved to the Cloudflare-proxied public apex '$apex', which drops 7233/6379/4000"
+  mapfile -t external_names < <(grep -oE 'externalName: [^ ]+' "$file" | awk '{print $2}' | sort -u)
+  [ "${#external_names[@]}" -gt 0 ] || fail "$file has no ExternalName entries"
+  for name in "${external_names[@]}"; do
+    [ "$name" = "$expected" ] \
+      || fail "vm_host_for_env($env) = $expected but $file dials $name — a Crossplane node would be wired to a different substrate than the cluster uses"
+  done
+  pass "$env materializer substrate host -> $expected"
+done
 
 echo "PASS: scheduler-runtime-routing.test.sh"

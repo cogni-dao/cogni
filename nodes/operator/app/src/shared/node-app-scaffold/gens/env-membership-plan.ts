@@ -116,7 +116,7 @@ export const schedulerEndpointPatchPath = (env: string): string =>
  * generator family stays pure (no env access, LAYER_NEUTRAL) — a fork that renamed its zone
  * regenerates this file locally with its own `FORK_DOMAIN_ROOT` export, exactly like the bash twin.
  */
-const CANONICAL_DOMAIN_ROOT = "cognidao.org";
+export const CANONICAL_DOMAIN_ROOT = "cognidao.org";
 
 /** A single file mutation in the plan. `upsert` carries content; `delete` removes the path. */
 export type EnvPlanOp =

@@ -70,6 +70,7 @@ import { resolveCanonicalPathClosure } from "@/shared/node-app-scaffold/canonica
 import {
   buildEnvDeltaPlan,
   buildPlacementPlan,
+  CANONICAL_DOMAIN_ROOT,
   type EnvPlanCurrent,
   EnvPlanError,
   type EnvPlanOp,
@@ -94,13 +95,17 @@ import {
   renderPaymentsActivationSpec,
   renderRepoSpec,
   schedulerEndpointPatchPath,
+  updateSchedulerEndpointHost,
 } from "@/shared/node-app-scaffold/gens";
 import type { NodeKnowledgeRemote } from "@/shared/node-app-scaffold/knowledge-remote";
 import {
   makeNodeLocalMatcher,
   parseNodeLocalPaths,
 } from "@/shared/node-app-scaffold/node-local-paths";
-import { NODE_DEPLOYMENT_PROVIDERS } from "@/shared/node-registry/placement";
+import {
+  NODE_DEPLOYMENT_PROVIDERS,
+  nodeAppBaseUrl,
+} from "@/shared/node-registry/placement";
 import {
   NODE_REPO_POLICY_PATH,
   type NodeRepoPolicy,
@@ -4255,11 +4260,17 @@ export class GitHubRepoWriter implements DeployPlanePort {
     if ("nodeRepoUrl" in input) {
       // bug.5094 — the routing map is rendered twice from one catalog: the
       // env-invariant placement-DEFAULT in the shared base ConfigMap, and each
-      // deploy env's PROVIDER-RESOLVED map in its overlay patch. A birth is always
-      // k3s (deployment_provider absent → K3S_IS_DEFAULT), so the SAME splice is
-      // byte-identical for every file; splicing base alone would leave every
-      // formation PR drift-red against render-scheduler-worker-endpoints.sh --check
-      // AND unrouted in preview/production.
+      // deploy env's PROVIDER-RESOLVED map in its overlay patch. Splicing base alone
+      // leaves every formation PR drift-red against
+      // render-scheduler-worker-endpoints.sh --check AND the node unrouted wherever
+      // it deploys.
+      //
+      // PLACEMENT_DECIDES_THE_ADDRESS at BIRTH (story.5025). This used to be one
+      // byte-identical splice for every file, because a birth was always k3s. A node
+      // is now born on Akash in its birth environments (`renderCatalog`), so those
+      // envs' maps must carry the node's PUBLIC host — a fresh node has no
+      // `<slug>-node-app` Service for the worker to dial. Base keeps the k3s default:
+      // it is the placement-agnostic fallback, exactly as the shell renderer emits it.
       const schedulerEndpointPaths = [
         "infra/k8s/base/scheduler-worker/configmap.yaml",
         ...NODE_DEPLOY_ENVS.map(
@@ -4267,6 +4278,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
             `infra/k8s/overlays/${env}/scheduler-worker/node-endpoints.patch.yaml`
         ),
       ];
+      const bornEnvs = new Set<string>(NODE_FORMATION_ENVS);
       for (const schedulerEndpointPath of schedulerEndpointPaths) {
         const currentConfigmap = await this.fetchFileText({
           owner,
@@ -4274,12 +4286,31 @@ export class GitHubRepoWriter implements DeployPlanePort {
           path: schedulerEndpointPath,
           ref: "main",
         });
-        if (currentConfigmap) {
-          await addBlob(
-            schedulerEndpointPath,
-            insertSchedulerEndpoint(currentConfigmap, slug, input.nodeId)
-          );
-        }
+        if (!currentConfigmap) continue;
+        const spliced = insertSchedulerEndpoint(
+          currentConfigmap,
+          slug,
+          input.nodeId
+        );
+        const patchEnv = schedulerEndpointPath.match(
+          /^infra\/k8s\/overlays\/([^/]+)\/scheduler-worker\/node-endpoints\.patch\.yaml$/
+        )?.[1];
+        await addBlob(
+          schedulerEndpointPath,
+          patchEnv && bornEnvs.has(patchEnv)
+            ? updateSchedulerEndpointHost(
+                spliced,
+                slug,
+                input.nodeId,
+                nodeAppBaseUrl({
+                  slug,
+                  provider: "akash",
+                  environment: patchEnv as NodeFormationEnv,
+                  apexDomain: CANONICAL_DOMAIN_ROOT,
+                })
+              )
+            : spliced
+        );
       }
 
       // network-nodes roster splice: the operator runtime image can't fs-glob infra/catalog,
