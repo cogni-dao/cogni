@@ -63,3 +63,38 @@ export function isPlatformService(service: string): boolean {
 export function administersPlatformServices(nodeSlug: string): boolean {
   return nodeSlug === PLATFORM_SERVICE_OWNER_NODE;
 }
+
+/**
+ * Keys the catalog declares under a PLATFORM SERVICE, mapped to the service that owns
+ * them. Mirror of the `service:` field on those catalog entries; pinned by the parity
+ * test alongside `PLATFORM_SERVICES`.
+ *
+ * Why a key→service BINDING and not another denylist: these keys have exactly one
+ * legitimate home. `AKASH_ACTUATOR_CONSOLE_API_KEY` must be writable to
+ * `cogni/<env>/akash-tx-actuator` (it is `source: human`, so the sanctioned write path is
+ * the ONLY way it can ever arrive) and must be unwritable to any node bucket. A flat
+ * reserved-key denylist cannot express that — it would block the legitimate write too.
+ *
+ * The incident this closes: a caller sent `service: "akash-tx-actuator"` to an operator
+ * build that predated the `service` parameter. The permissive schema dropped the unknown
+ * field and the write fell back to the node path, landing an Akash wallet credential in
+ * `cogni/<env>/operator` — the bucket the internet-facing app consumes wholesale via
+ * `dataFrom: extract`, which is precisely the exposure the dedicated bucket exists to
+ * prevent. The write returned `200`. Binding the key to its service makes that
+ * misfiling unrepresentable rather than merely discouraged.
+ */
+export const PLATFORM_SERVICE_OWNED_KEYS: ReadonlyMap<string, string> = new Map<
+  string,
+  string
+>([
+  ["AKASH_ACTUATOR_CONSOLE_API_KEY", "akash-tx-actuator"],
+  ["AKASH_TX_ACTUATOR_TOKEN", "akash-tx-actuator"],
+]);
+
+/**
+ * The platform service that owns `key`, or `undefined` when the key is node-ownable.
+ * A caller targeting anything other than the returned service is misfiling.
+ */
+export function platformServiceOwningKey(key: string): string | undefined {
+  return PLATFORM_SERVICE_OWNED_KEYS.get(key);
+}

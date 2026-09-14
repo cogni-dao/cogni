@@ -59,12 +59,20 @@ import {
   administersPlatformServices,
   isPlatformService,
   PLATFORM_SERVICE_OWNER_NODE,
+  platformServiceOwningKey,
 } from "@/shared/secrets/platform-services.data";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const WriteSecretInput = z.object({
+// `strictObject`, not `object`: an unrecognized field is a 400, never a silent drop.
+// A permissive schema let `service` be stripped by an operator build that predated the
+// parameter, so the write silently fell back to the node bucket and misfiled a wallet
+// credential into the publicly-consumed `cogni/<env>/operator` path — with a 200. A
+// caller cannot detect a dropped field, so the server must refuse what it cannot honor;
+// this makes operator/caller version skew a loud failure instead of a wrong write.
+// Mirrors the deploy lane, whose `strictObject` already keeps lane/repo/ref server-owned.
+const WriteSecretInput = z.strictObject({
   key: z
     .string()
     .regex(
@@ -316,6 +324,34 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
           { status: 403 }
         );
       }
+    }
+
+    // Gate 1.6 — key↔service binding. Runs whether or not `service` was supplied, which
+    // is the whole point: a platform-service key sent WITHOUT `service` is the misfiling
+    // shape, and it is the one that silently succeeded. These keys have exactly one
+    // legitimate bucket, so anything else is refused rather than written somewhere
+    // plausible. This is the durable complement to the strict schema above: strictness
+    // catches a field the server cannot honor, this catches a target it must not honor.
+    const owningService = platformServiceOwningKey(key);
+    if (owningService !== undefined && service !== owningService) {
+      logTerminal({
+        outcome: "error",
+        status: 403,
+        nodeId: id,
+        slug: node.slug,
+        service,
+        key,
+        op,
+        env: requestedEnv,
+        errorCode: "key_belongs_to_platform_service",
+      });
+      return NextResponse.json(
+        {
+          error: `key is owned by platform service '${owningService}'; write it with service='${owningService}' or not at all`,
+          errorCode: "key_belongs_to_platform_service",
+        },
+        { status: 403 }
+      );
     }
 
     // Gate 2 — substrate-reserved-key guard. The node owns its whole

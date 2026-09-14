@@ -198,6 +198,56 @@ describe("POST /api/v1/nodes/[id]/secrets — platform-service target", () => {
     expect(planeState.writeSecret).not.toHaveBeenCalled();
   });
 
+  it("400s an unrecognized field instead of silently dropping it", async () => {
+    // The incident, generalized: a caller sent `service` to an operator build that did
+    // not yet have the parameter. A permissive schema dropped it and wrote the node path
+    // anyway, returning 200. Strictness turns operator/caller version skew into a loud
+    // failure — the caller cannot otherwise tell a honoured field from a discarded one.
+    const res = await post({
+      env: "candidate-a",
+      key: "SOME_KEY",
+      value: VALUE,
+      serviceTypo: "akash-tx-actuator",
+    });
+
+    expect(res.status).toBe(400);
+    expect(planeState.writeSecret).not.toHaveBeenCalled();
+  });
+
+  it("403s a platform-service key written WITHOUT `service` (the misfiling shape)", async () => {
+    // This is the exact write that put an Akash wallet credential into
+    // cogni/<env>/operator — the bucket the internet-facing app reads wholesale.
+    // It must never reach the plane, even though `operator` is a legitimate node and
+    // the caller legitimately administers platform services.
+    const res = await post({
+      env: "candidate-a",
+      key: "AKASH_ACTUATOR_CONSOLE_API_KEY",
+      value: VALUE,
+    });
+
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toMatchObject({
+      errorCode: "key_belongs_to_platform_service",
+    });
+    expect(planeState.writeSecret).not.toHaveBeenCalled();
+  });
+
+  it("still writes a platform-service key to its OWN service", async () => {
+    // The binding must not break the one write that has to work: the vendor-minted
+    // Console key is `source: human`, so this route is its only sanctioned arrival path.
+    const res = await post({
+      env: "candidate-a",
+      key: "AKASH_ACTUATOR_CONSOLE_API_KEY",
+      value: VALUE,
+      service: "akash-tx-actuator",
+    });
+
+    expect(res.status).toBe(200);
+    expect(planeState.writeSecret).toHaveBeenCalledWith(
+      expect.objectContaining({ service: "akash-tx-actuator" })
+    );
+  });
+
   it("still refuses a substrate-reserved key on a platform-service path", async () => {
     const res = await post({
       env: "candidate-a",

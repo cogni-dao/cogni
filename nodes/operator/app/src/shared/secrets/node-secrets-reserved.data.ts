@@ -72,6 +72,22 @@ export const SUBSTRATE_RESERVED_KEYS: ReadonlySet<string> = new Set<string>([
   // relying node, so a self-serve write does not fail loudly — it silently
   // invalidates every attestation on every node at once (task.5024).
   "IDENTITY_ATTESTATION_PRIVATE_KEY",
+  // ── bug.5016: catalog `inheritFrom` keys — the SILENT-REVERT class ──────────
+  // These five declare `inheritFrom: operator` in infra/secrets-catalog.yaml. For them
+  // `secret-materialize.sh` is OVERWRITE-ON-DRIFT, not preserve-existing: it reads the
+  // operator's value and re-seeds the node whenever the two differ (deliberate — the
+  // node MUST byte-match the canonical owner, the bug.5021 fix). That runs BEFORE the
+  // preserve-existing branch, so it beats a hand-set value every time.
+  //
+  // The consequence is the bug: a self-serve write returns `200` with a real KV version,
+  // and the next flight silently restores the operator's value. Nothing errors, so the
+  // node owner believes a rotation landed when it did not. Refusing the write is honest
+  // — the value has a canonical owner, and the way to change it is to change that owner.
+  // `GH_WEBHOOK_SECRET` is already listed above for its dual-plane reason.
+  "LITELLM_MASTER_KEY",
+  "SCHEDULER_API_TOKEN",
+  "OPENROUTER_API_KEY",
+  "EVM_RPC_URL",
 ]);
 
 /**
