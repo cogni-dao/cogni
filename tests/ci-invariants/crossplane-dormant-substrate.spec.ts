@@ -8,9 +8,10 @@
  *   never about dormancy: no credential and NO DESIRED STATE may live in this directory.
  * Scope: Static YAML checks over the candidate-a Argo Applications and Crossplane package manifests. Does NOT contact a cluster or provider.
  * Invariants: NO_DESIRED_STATE_IN_GIT, CANDIDATE_FIRST, IMMUTABLE_PACKAGES,
- *   RESOURCE_BOUNDED, OBSERVABLE_BEFORE_AUTHORITY.
+ *   RESOURCE_BOUNDED, OBSERVABLE_BEFORE_AUTHORITY, CONSTANT_TRACKS_INSTALLED_REALITY.
  * Side-effects: IO (reads repo manifests)
- * Links: story.5016 R2, task.5094, task.5096, knowledge:akash-cicd-pareto-scope
+ * Links: story.5016 R2, task.5094, task.5096, task.5104,
+ *   src/shared/node-registry/crossplane-control-plane.ts, knowledge:akash-cicd-pareto-scope
  * @public
  */
 
@@ -18,6 +19,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse, parseAllDocuments } from "yaml";
+import { CROSSPLANE_CONTROL_PLANE_ENVS } from "@/shared/node-registry/crossplane-control-plane";
 
 const REPO_ROOT = path.resolve(__dirname, "../..");
 const CANDIDATE_CONTROL_PLANE = path.join(
@@ -26,6 +28,13 @@ const CANDIDATE_CONTROL_PLANE = path.join(
 );
 const PACKAGE_DIR = path.join(REPO_ROOT, "infra/crossplane/install/packages");
 const CROSSPLANE_DIR = path.join(REPO_ROOT, "infra/crossplane");
+const CONTROL_PLANE_ROOT = path.join(
+  REPO_ROOT,
+  "infra/k8s/argocd/control-plane"
+);
+/** The Application whose presence MEANS "XComputeWorkload is an installed API in this env". */
+const COMPOSITE_APPLICATION_FILE =
+  "crossplane-xcomputeworkload-application.yaml";
 
 type YamlObject = Record<string, unknown>;
 
@@ -81,9 +90,7 @@ function packageSpec(document: YamlObject): YamlObject {
 describe("Crossplane substrate boundary (task.5094, task.5096)", () => {
   it("is activated by candidate-a only", () => {
     for (const environment of ["preview", "production"]) {
-      const files = readdirSync(
-        path.join(REPO_ROOT, "infra/k8s/argocd/control-plane", environment)
-      );
+      const files = readdirSync(path.join(CONTROL_PLANE_ROOT, environment));
       expect(files.filter((file) => file.includes("crossplane"))).toEqual([]);
     }
 
@@ -92,6 +99,34 @@ describe("Crossplane substrate boundary (task.5094, task.5096)", () => {
     expect(metadataName(compositeApplication)).toBe(
       "crossplane-xcomputeworkload"
     );
+  });
+
+  /**
+   * CONSTANT_TRACKS_INSTALLED_REALITY (task.5104). `CROSSPLANE_CONTROL_PLANE_ENVS` is what the
+   * operator's TypeScript believes about where an `XComputeWorkload` can be reconciled — the
+   * node-formation generator filters a birth's `compute_api` through it, and
+   * `resolveNodeComputeApi` throws on any row that names `crossplane` outside it. Belief and
+   * git must be the same set in BOTH directions:
+   *   - an env in the constant with no control plane → the wizard mints a row whose promote
+   *     renders a composite into a cluster with no such CRD, reconciled by nobody;
+   *   - an env with a control plane missing from the constant → the guard rejects a legitimate
+   *     row and blocks the very cutover the install was for.
+   * So installing Crossplane on preview/production is DELIBERATELY a red build until this
+   * constant is widened in the same PR.
+   */
+  it("names exactly the environments whose control plane installs the composite API", () => {
+    const installed = readdirSync(CONTROL_PLANE_ROOT, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .filter((environment) =>
+        readdirSync(path.join(CONTROL_PLANE_ROOT, environment)).includes(
+          COMPOSITE_APPLICATION_FILE
+        )
+      )
+      .sort();
+
+    expect(installed).toEqual(["candidate-a"]);
+    expect([...CROSSPLANE_CONTROL_PLANE_ENVS].sort()).toEqual(installed);
   });
 
   it("pins the core chart and runtime image, bounds resources, and exposes metrics", () => {

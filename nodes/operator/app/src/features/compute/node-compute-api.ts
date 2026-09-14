@@ -12,12 +12,21 @@
  *     (node, environment) pair can never name two authorities. The materializer renders the kind
  *     this resolves to and nothing else; see `computeWorkloadManifestFile`.
  *   - AUTHORITY_IS_NOT_CALLER_INPUT: REST callers never select a reconciler.
+ *   - AUTHORITY_REQUIRES_AN_INSTALLED_API: `crossplane` is only resolvable in an environment
+ *     that actually carries a Crossplane control plane (CROSSPLANE_CONTROL_PLANE_ENVS). A row
+ *     naming it elsewhere THROWS — it never degrades to `legacy`.
  * Side-effects: none
  * Links: task.5097, story.5016, infra/catalog/_schema.json, infra/crossplane/xcomputeworkload/
  * @internal
  */
 
 import { z } from "zod";
+
+import {
+  CROSSPLANE_CONTROL_PLANE_ENVS,
+  crossplaneCompositeApplicationPath,
+  hasCrossplaneControlPlane,
+} from "@/shared/node-registry/crossplane-control-plane";
 
 import type { DeploymentEnvironment } from "./node-deployment-provider";
 
@@ -39,6 +48,15 @@ import type { DeploymentEnvironment } from "./node-deployment-provider";
  */
 export const NODE_COMPUTE_APIS = ["legacy", "crossplane"] as const;
 
+/**
+ * The environments that can legally resolve to `crossplane`, re-exported here so the compute
+ * feature has one import site for the whole authority vocabulary. It is DEFINED in `shared`
+ * because the node-formation catalog generator must filter on the same set and `shared` may not
+ * import `features`. `tests/ci-invariants/crossplane-dormant-substrate.spec.ts` pins it to the
+ * control-plane directories that actually install the composite API.
+ */
+export { CROSSPLANE_CONTROL_PLANE_ENVS };
+
 export const nodeComputeApiSchema = z.enum(NODE_COMPUTE_APIS);
 export type NodeComputeApi = z.infer<typeof nodeComputeApiSchema>;
 
@@ -58,6 +76,13 @@ const catalogComputeApiSchema = z
 /**
  * Resolve one env's compute authority. Missing policy is deliberately the pre-existing
  * bespoke controller, so this field is inert for every row that has not opted in.
+ *
+ * AUTHORITY_REQUIRES_AN_INSTALLED_API. A row that names `crossplane` for an environment with no
+ * Crossplane control plane is a MISCONFIGURATION, not a fallback case: the materializer would
+ * render an `XComputeWorkload` into a cluster where that CRD does not exist, so nothing
+ * reconciles it. This throws instead of degrading to `legacy`, because the two authorities mint
+ * Akash leases under disjoint idempotence keys — a silent downgrade buys a second paid lease
+ * rather than colliding safely (see the module header).
  */
 export function resolveNodeComputeApi(input: {
   readonly catalog: unknown;
@@ -69,5 +94,14 @@ export function resolveNodeComputeApi(input: {
       `[compute-api] Invalid catalog compute_api: ${parsed.error.message}`
     );
   }
-  return parsed.data.compute_api?.[input.environment] ?? "legacy";
+  const resolved = parsed.data.compute_api?.[input.environment] ?? "legacy";
+  if (
+    resolved === "crossplane" &&
+    !hasCrossplaneControlPlane(input.environment)
+  ) {
+    throw new Error(
+      `[compute-api] compute_api.${input.environment}=crossplane, but '${input.environment}' has no Crossplane control plane — ${crossplaneCompositeApplicationPath(input.environment)} does not exist, so XComputeWorkload is not an installed API there. Install the control plane for '${input.environment}' (mirror infra/k8s/argocd/control-plane/candidate-a/crossplane-*-application.yaml) and add it to CROSSPLANE_CONTROL_PLANE_ENVS, currently [${CROSSPLANE_CONTROL_PLANE_ENVS.join(", ")}]. Refusing to fall back to 'legacy': the two authorities mint Akash leases under disjoint idempotence keys, so a silent downgrade buys a SECOND PAID LEASE.`
+    );
+  }
+  return resolved;
 }
