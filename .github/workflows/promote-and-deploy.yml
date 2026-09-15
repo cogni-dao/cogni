@@ -944,12 +944,28 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: bash app-src/scripts/ci/wait-for-argocd.sh
 
+      # bug.5148 — resolve the rendered manifest's filename from the catalog authority in a
+      # prior step, because a composite-action input cannot call a primitive. No decision here:
+      # the lib is the single shell reader of `compute_api`.
+      - name: Resolve rendered ComputeWorkload manifest
+        id: workload-manifest
+        if: steps.cell.outputs.promoted == 'true' && env.DEPLOYMENT_PROVIDER != 'k3s'
+        env:
+          NODE: ${{ matrix.node }}
+          ENVIRONMENT: ${{ needs.decide.outputs.environment }}
+        run: |
+          set -euo pipefail
+          # shellcheck source=scripts/ci/lib/image-tags.sh
+          . app-src/scripts/ci/lib/image-tags.sh
+          WORKLOAD_FILE="$(compute_workload_manifest_file "$NODE" "$ENVIRONMENT")"
+          echo "path=${GITHUB_WORKSPACE}/deploy-branch/infra/k8s/overlays/${ENVIRONMENT}/${NODE}/${WORKLOAD_FILE}" >> "$GITHUB_OUTPUT"
+
       - name: Wait for external ComputeWorkload readiness
         if: steps.cell.outputs.promoted == 'true' && env.DEPLOYMENT_PROVIDER != 'k3s'
         uses: ./.github/actions/wait-for-compute-workload
         with:
           app_source_root: ${{ github.workspace }}/app-src
-          manifest: ${{ github.workspace }}/deploy-branch/infra/k8s/overlays/${{ needs.decide.outputs.environment }}/${{ matrix.node }}/compute-workload.yaml
+          manifest: ${{ steps.workload-manifest.outputs.path }}
           vm_host: ${{ secrets.VM_HOST }}
           ssh_identity: /home/runner/.ssh/deploy_key
 

@@ -365,6 +365,15 @@ jobs:
       - name: remote-source promotion SHA resolver tests
         run: bash scripts/ci/tests/resolve-remote-source-sha.test.sh
 
+      # bug.5148 — ONE_AUTHORITY_PER_WORKLOAD in the deploy lane. A `compute_api:
+      # crossplane` cell renders xcomputeworkload.yaml and NOT compute-workload.yaml,
+      # so any lane that hardcodes the legacy filename can never pass for the new
+      # authority. Pins the shell twin of resolveNodeComputeApi() +
+      # computeWorkloadManifestFile(), incl. LEGACY_IS_DEFAULT and fail-closed on an
+      # unknown value (a silent downgrade would buy a SECOND PAID Akash lease).
+      - name: compute workload manifest filename tests (bug.5148)
+        run: bash scripts/ci/tests/compute-workload-manifest-file.test.sh
+
       # task.5078 — catalog-driven edge routing. Asserts the committed Caddyfile
       # is in sync with the catalog (drift gate that makes "add a node = 1
       # catalog PR" enforceable), every type:node has an edge block (canary
