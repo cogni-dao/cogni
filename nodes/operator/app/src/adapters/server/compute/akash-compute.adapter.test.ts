@@ -274,6 +274,26 @@ describe("AkashComputeAdapter.observeCost", () => {
     ).rejects.toMatchObject({
       code: "UNEXPECTED_SHAPE",
     });
+
+    const wrongLease = makeAdapter(
+      costFetch({
+        leases: [
+          {
+            id: {
+              owner: "akash1consumer",
+              provider: "akash1provider",
+              dseq: "7002",
+            },
+            state: "active",
+            price: { amount: "7.5", denom: "uakt" },
+            created_at: "100",
+          },
+        ],
+      })
+    );
+    await expect(
+      wrongLease.observeCost({ resourceId: "7001" })
+    ).rejects.toMatchObject({ code: "UNEXPECTED_SHAPE" });
   });
 
   it("requires one consumer identity across deployment, lease, and escrow", async () => {

@@ -1228,6 +1228,12 @@ function costEvidenceFromDetail(
       "Console deployment cost response did not identify exactly one lease"
     );
   }
+  if (String(lease.id?.dseq ?? "") !== resourceId) {
+    throw new AkashComputeError(
+      "UNEXPECTED_SHAPE",
+      "Console lease cost response did not match the requested resource"
+    );
+  }
   const consumer = requiredText(deployment.id?.owner, "deployment.id.owner");
   const leaseConsumer = requiredText(lease.id?.owner, "leases[0].id.owner");
   if (leaseConsumer !== consumer) {
