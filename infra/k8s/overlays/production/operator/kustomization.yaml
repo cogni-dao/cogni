@@ -8,7 +8,11 @@ namespace: cogni-production
 resources:
   - ../../../base/node-app
   - ../../../base/openfga-external
-  - ../../../base/compute-workload-controller
+  # story.5016 step 9, production (mirror of #2212 on candidate-a): the legacy
+  # compute-workload-controller is structurally removed so exactly ONE writer — the
+  # Crossplane transaction actuator below — can reach an Akash wallet from this env.
+  # Its old-account leases are closed (all 12 retired 2026-09-15) and its Console key
+  # is dead; the pod was pure reconcile-churn + memory on a full box.
   - external-secret.yaml
   - ./secrets-writer-sa.yaml
   - ./compute-workload-platform-application.yaml
@@ -42,41 +46,14 @@ replacements:
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/cogni-template
-    digest: "sha256:850d73e3115faaf6152dd5952a63f8cc48c43eac67c7c638601998b8df883266"
+    digest: "sha256:55e446645ae7f895a05eada66f63f4a0c806fa206a3acbb744208be83b967177"
 
 patches:
-  # story.5016 Gate 0b: controller env values are set BY NAME via strategic
-  # merge (env lists merge on `name`), never by positional JSON-pointer index.
-  # A positional `/env/N/value` patch silently repoints when the base list
-  # shifts — that exact failure (d69e5c29) blanked AKASH_ALLOWED_PROVIDERS
-  # fleet-wide, and an empty allowlist rejects every Akash provider bid.
-  - target:
-      kind: Deployment
-      name: compute-workload-controller
-    patch: |
-      apiVersion: apps/v1
-      kind: Deployment
-      metadata:
-        name: compute-workload-controller
-      spec:
-        template:
-          spec:
-            containers:
-              - name: controller
-                env:
-                  # Identical to base; listed first only so the merged env keeps
-                  # the base ordering (merge emits patched entries first).
-                  - name: POD_NAMESPACE
-                    valueFrom:
-                      fieldRef: { fieldPath: metadata.namespace }
-                  - name: CONTROLLER_ENVIRONMENT
-                    value: production
-                  - name: DEPLOYMENT_DOMAIN
-                    value: cognidao.org
-                  - name: AKASH_ALLOWED_PROVIDERS
-                    value: akash16yr3wxt97ae045a06kr3ycde9srcgpg8syjxxm
-  # story.5016 Gate 0b applies here too: actuator env values are set BY NAME via
-  # strategic merge, never by positional index (see the controller patch above).
+  # story.5016 Gate 0b: env values are set BY NAME via strategic merge (env lists
+  # merge on `name`), never by positional JSON-pointer index. A positional
+  # `/env/N/value` patch silently repoints when the base list shifts — that exact
+  # failure (d69e5c29) blanked AKASH_ALLOWED_PROVIDERS fleet-wide, and an empty
+  # allowlist rejects every Akash provider bid.
   - target:
       kind: Deployment
       name: akash-tx-actuator
