@@ -80,8 +80,24 @@ function controlPlaneApplications(
   };
 }
 
+/**
+ * Environments whose control plane installs the composite API, derived from GIT rather than from
+ * the constant. Deriving it this way (not from `CROSSPLANE_CONTROL_PLANE_ENVS`) is deliberate: a
+ * constant naming an env with no manifests must fail as a readable assertion below, not as an
+ * ENOENT at module collection time that never reaches the assertion at all.
+ */
+const INSTALLED_ENVS = readdirSync(CONTROL_PLANE_ROOT, { withFileTypes: true })
+  .filter((entry) => entry.isDirectory())
+  .map((entry) => entry.name)
+  .filter((environment) =>
+    readdirSync(path.join(CONTROL_PLANE_ROOT, environment)).includes(
+      COMPOSITE_APPLICATION_FILE
+    )
+  )
+  .sort();
+
 const APPLICATIONS_BY_ENV = new Map<string, ControlPlaneApplications>(
-  CROSSPLANE_CONTROL_PLANE_ENVS.map((environment) => [
+  INSTALLED_ENVS.map((environment) => [
     environment,
     controlPlaneApplications(environment),
   ])
@@ -213,17 +229,7 @@ describe("Crossplane substrate boundary (task.5094, task.5096, task.5097)", () =
    * gain or lose a control plane still cannot drift from what the operator believes.
    */
   it("names exactly the environments whose control plane installs the composite API", () => {
-    const installed = readdirSync(CONTROL_PLANE_ROOT, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name)
-      .filter((environment) =>
-        readdirSync(path.join(CONTROL_PLANE_ROOT, environment)).includes(
-          COMPOSITE_APPLICATION_FILE
-        )
-      )
-      .sort();
-
-    expect([...CROSSPLANE_CONTROL_PLANE_ENVS].sort()).toEqual(installed);
+    expect([...CROSSPLANE_CONTROL_PLANE_ENVS].sort()).toEqual(INSTALLED_ENVS);
   });
 
   /**
@@ -239,9 +245,9 @@ describe("Crossplane substrate boundary (task.5094, task.5096, task.5097)", () =
    * strictly worse than not paying.
    */
   it("names exactly the environments whose actuator pins a wallet account", () => {
-    const pinned = [...CROSSPLANE_CONTROL_PLANE_ENVS]
-      .filter((environment) => actuatorAccountId(environment).length > 0)
-      .sort();
+    const pinned = INSTALLED_ENVS.filter(
+      (environment) => actuatorAccountId(environment).length > 0
+    ).sort();
 
     expect([...CROSSPLANE_ACTUATOR_WALLET_ENVS].sort()).toEqual(pinned);
     for (const environment of CROSSPLANE_ACTUATOR_WALLET_ENVS) {
