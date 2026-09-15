@@ -565,7 +565,37 @@ if [[ "$hash_count" -eq 1 ]]; then
   echo unchanged
   exit 0
 fi
-[[ "$alias_count" -eq 0 ]] || { echo alias-owned-by-different-key; exit 1; }
+# OpenBao is custody SSOT (secrets-management Invariant 5); the LiteLLM registration is
+# a PROJECTION of it. An alias owned by a different key means the projection is stale
+# (e.g. a transport-flaky run re-minted the OpenBao value after registering) — reconcile
+# it like ESO would: delete the stale alias and fall through to re-register the SSOT
+# value. Failing here instead turned one stale projection into a permanent red that only
+# a hand-op could clear (story.5016 levelup, 3 occurrences).
+if [[ "$alias_count" -eq 1 ]]; then
+  jq -n --rawfile alias "$work_dir/alias" '{key_aliases: [$alias]}' \
+    > "$work_dir/alias-delete.json"
+  cat > "$work_dir/alias-delete.conf" <<EOF
+url = "http://127.0.0.1:4000/key/delete"
+request = "POST"
+header = "Authorization: Bearer $(cat "$work_dir/master")"
+header = "Content-Type: application/json"
+connect-timeout = 10
+max-time = 30
+silent
+show-error
+EOF
+  if ! delete_code=$(curl --config "$work_dir/alias-delete.conf" \
+      --data-binary "@$work_dir/alias-delete.json" --output "$work_dir/alias-delete-response.json" \
+      --write-out '%{http_code}'); then
+    echo transport-error
+    exit 1
+  fi
+  if [[ "$delete_code" != "200" ]]; then
+    echo "stale-alias-delete-http-${delete_code}"
+    exit 1
+  fi
+  echo "reconciled stale alias (owned by a different key) — re-registering" >&2
+fi
 
 jq -n --rawfile key "$work_dir/key" --rawfile alias "$work_dir/alias" \
   '{key: $key, key_alias: $alias}' > "$work_dir/generate.json"

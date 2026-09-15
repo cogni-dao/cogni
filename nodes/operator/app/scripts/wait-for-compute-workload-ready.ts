@@ -49,6 +49,12 @@ async function main(): Promise<void> {
   );
   validateResourceName(name);
   validateNamespace(namespace);
+  // ONE_AUTHORITY_PER_WORKLOAD: the manifest's kind names the resource to poll —
+  // Crossplane composites are `xcomputeworkload`, the legacy CR `computeworkload`.
+  const resource =
+    record(expected)?.kind === "XComputeWorkload"
+      ? "xcomputeworkload"
+      : "computeworkload";
   const deadline = Date.now() + timeoutSeconds * 1_000;
   let lastReason = "not_observed";
 
@@ -58,6 +64,7 @@ async function main(): Promise<void> {
       identity,
       namespace,
       name,
+      resource,
     });
     if (observation.ok) {
       const assessment = assessComputeWorkloadReadiness({
@@ -89,6 +96,7 @@ async function readLiveWorkload(input: {
   readonly identity: string;
   readonly namespace: string;
   readonly name: string;
+  readonly resource: string;
 }): Promise<
   | { readonly ok: true; readonly resource: unknown }
   | { readonly ok: false; readonly reason: string }
@@ -108,7 +116,7 @@ async function readLiveWorkload(input: {
         "-n",
         input.namespace,
         "get",
-        "computeworkload",
+        input.resource,
         input.name,
         "--request-timeout=20s",
         "-o",

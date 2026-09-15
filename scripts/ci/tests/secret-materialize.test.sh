@@ -202,6 +202,14 @@ case "$url" in
     respond 200 "$(jq -cn --argjson keys "$keys" --argjson count "$count" \
       '{keys: $keys, total_count: $count, current_page: 1, total_pages: (if $count == 0 then 0 else 1 end)}')"
     ;;
+  */key/delete)
+    [[ -f "$body_file" ]] || exit 2
+    del_alias="$(jq -r '.key_aliases[0]' "$body_file")"
+    awk -F '\t' -v alias="$del_alias" '$2 != alias' "$FAKE_LITELLM_STORE" > "$FAKE_LITELLM_STORE.tmp"
+    mv "$FAKE_LITELLM_STORE.tmp" "$FAKE_LITELLM_STORE"
+    printf 'delete %s\n' "$del_alias" >> "$FAKE_LITELLM_LOG"
+    respond 200 "$(jq -cn --arg alias "$del_alias" '{deleted_keys: [$alias]}')"
+    ;;
   */key/generate)
     [[ -f "$body_file" ]] || exit 2
     key="$(jq -r '.key' "$body_file")"
@@ -447,11 +455,11 @@ grep -q 'LITELLM_VIRTUAL_KEY already registered with LiteLLM' "$TMPROOT/out2.txt
 test "$(cat "$VK_FILE")" = "$VK" \
   || { echo "re-run rotated LITELLM_VIRTUAL_KEY" >&2; exit 1; }
 
-# An alias already owned by a different key is a hard failure. The attempted
-# replacement must not reach /key/generate and neither key may appear in output.
+# A stale alias (owned by a different key) is RECONCILED to the OpenBao SSOT
+# (secrets-management Invariant 5): delete the stale alias, re-register the current
+# value. Neither key may appear in output (story.5016 levelup, 3 hand-op incidents).
 COLLIDING_KEY="sk-cogni-$(printf 'b%.0s' {1..48})"
 printf '%s' "$COLLIDING_KEY" > "$VK_FILE"
-set +e
 env \
   VM_HOST=fake \
   DOMAIN=test.cognidao.org \
@@ -462,19 +470,20 @@ env \
   FAKE_LITELLM_STORE="$LITELLM_STORE" \
   FAKE_LITELLM_LOG="$LITELLM_LOG" \
   FAKE_LITELLM_MASTER_KEY=sk-cogni-operator-master \
-  bash scripts/ci/secret-materialize.sh candidate-a node-template > "$TMPROOT/out-collision.txt" 2>&1
-COLLISION_RC=$?
-set -e
-test "$COLLISION_RC" -ne 0 \
-  || { echo "alias collision must fail materialization" >&2; exit 1; }
-grep -q 'alias-owned-by-different-key' "$TMPROOT/out-collision.txt" \
-  || { echo "alias collision did not return the redacted collision reason" >&2; exit 1; }
-test "$(grep -c '^generate ' "$LITELLM_LOG")" = 1 \
-  || { echo "alias collision must not call /key/generate" >&2; exit 1; }
-if grep -qF "$VK" "$TMPROOT/out-collision.txt" || grep -qF "$COLLIDING_KEY" "$TMPROOT/out-collision.txt"; then
-  echo "LiteLLM key leaked in collision failure" >&2
+  bash scripts/ci/secret-materialize.sh candidate-a node-template > "$TMPROOT/out-reconcile.txt" 2>&1 \
+  || { echo "stale-alias reconcile must succeed"; cat "$TMPROOT/out-reconcile.txt" >&2; exit 1; }
+grep -q '^delete ' "$LITELLM_LOG" \
+  || { echo "stale alias was not deleted before re-registration" >&2; exit 1; }
+test "$(grep -c '^generate ' "$LITELLM_LOG")" = 2 \
+  || { echo "reconcile must re-register the SSOT value exactly once" >&2; exit 1; }
+NEW_HASH="$(printf '%s' "$COLLIDING_KEY" | sha256sum | awk '{print $1}')"
+grep -q "$NEW_HASH" "$LITELLM_STORE" \
+  || { echo "alias not re-owned by the SSOT key after reconcile" >&2; exit 1; }
+if grep -qF "$VK" "$TMPROOT/out-reconcile.txt" || grep -qF "$COLLIDING_KEY" "$TMPROOT/out-reconcile.txt"; then
+  echo "LiteLLM key leaked in reconcile output" >&2
   exit 1
 fi
+
 
 # A LiteLLM lookup outage also fails closed instead of painting the substrate
 # green with an unverified key registration.
@@ -524,7 +533,7 @@ test "$INVALID_INFO_RC" -ne 0 \
   || { echo "malformed LiteLLM lookup must fail materialization" >&2; exit 1; }
 grep -q 'lookup-invalid-json' "$TMPROOT/out-invalid-info.txt" \
   || { echo "malformed LiteLLM lookup did not return a redacted error" >&2; exit 1; }
-test "$(grep -c '^generate ' "$LITELLM_LOG")" = 1 \
+test "$(grep -c '^generate ' "$LITELLM_LOG")" = 2 \
   || { echo "malformed LiteLLM lookup must not call /key/generate" >&2; exit 1; }
 if grep -qF "$VK" "$TMPROOT/out-invalid-info.txt" || grep -qF "$COLLIDING_KEY" "$TMPROOT/out-invalid-info.txt"; then
   echo "LiteLLM key leaked in malformed lookup failure" >&2
@@ -552,7 +561,7 @@ test "$INVALID_ALIAS_LIST_RC" -ne 0 \
   || { echo "malformed LiteLLM alias list must fail materialization" >&2; exit 1; }
 grep -q 'lookup-invalid-json' "$TMPROOT/out-invalid-alias-list.txt" \
   || { echo "malformed LiteLLM alias list did not return a redacted error" >&2; exit 1; }
-test "$(grep -c '^generate ' "$LITELLM_LOG")" = 1 \
+test "$(grep -c '^generate ' "$LITELLM_LOG")" = 2 \
   || { echo "malformed LiteLLM alias list must not call /key/generate" >&2; exit 1; }
 if grep -qF "$VK" "$TMPROOT/out-invalid-alias-list.txt" || grep -qF "$COLLIDING_KEY" "$TMPROOT/out-invalid-alias-list.txt"; then
   echo "LiteLLM key leaked in malformed alias-list failure" >&2
