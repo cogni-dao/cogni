@@ -83,7 +83,7 @@ describe("buildComputeWorkloadManifest", () => {
       bundle,
       publicHost: "toks4-test.cognidao.org",
       computeApi: "legacy",
-      leaseEpoch: 0,
+      leaseGeneration: 0,
     });
 
     expect(manifest.metadata).toEqual({
@@ -135,7 +135,7 @@ describe("buildComputeWorkloadManifest", () => {
         bundle,
         publicHost: "toks4-test.cognidao.org",
         computeApi: "legacy",
-        leaseEpoch: 0,
+        leaseGeneration: 0,
       })
     ).toThrow("digest-pinned OCI reference");
   });
@@ -160,7 +160,7 @@ describe("buildComputeWorkloadManifest", () => {
         bundle: incompleteBundle,
         publicHost: "toks4-test.cognidao.org",
         computeApi: "legacy",
-        leaseEpoch: 0,
+        leaseGeneration: 0,
       })
     ).toThrow(/cogni-node-app-v1 is missing secret_refs/);
   });
@@ -173,7 +173,7 @@ describe("buildComputeWorkloadManifest", () => {
       bundle,
       publicHost: "toks4-test.cognidao.org",
       computeApi: "legacy",
-      leaseEpoch: 0,
+      leaseGeneration: 0,
     });
 
     expect(manifest.kind).toBe("ComputeWorkload");
@@ -191,7 +191,7 @@ describe("buildComputeWorkloadManifest", () => {
       bundle,
       publicHost: "toks4.cognidao.org",
       computeApi: "crossplane",
-      leaseEpoch: 2,
+      leaseGeneration: 2,
       dns: { provider: "cloudflare", zoneId: "0".repeat(32) },
       runtime: { substrateHost: "cogni.vm.cognidao.org" },
     });
@@ -202,7 +202,7 @@ describe("buildComputeWorkloadManifest", () => {
     expect(manifest.spec).toMatchObject({
       migration: { policy: "RequireBeforeTransaction" },
       bootPolicy: { onDeadline: "Hold" },
-      leaseEpoch: 2,
+      leaseGeneration: 2,
       dns: { provider: "cloudflare", zoneId: "0".repeat(32) },
       runtime: { substrateHost: "cogni.vm.cognidao.org" },
     });
@@ -223,7 +223,7 @@ describe("buildComputeWorkloadManifest", () => {
       bundle,
       publicHost: "toks4.cognidao.org",
       computeApi: "crossplane",
-      leaseEpoch: 0,
+      leaseGeneration: 0,
     });
 
     expect(manifest.spec).toHaveProperty("leaseEpoch", 0);
@@ -238,7 +238,7 @@ describe("buildComputeWorkloadManifest", () => {
         bundle,
         publicHost: "toks4.cognidao.org",
         computeApi: "legacy",
-        leaseEpoch: 1,
+        leaseGeneration: 1,
       })
     ).toThrow(/carried only by the crossplane authority/);
   });
@@ -258,7 +258,7 @@ describe("buildComputeWorkloadManifest", () => {
         bundle,
         publicHost: "toks4.cognidao.org",
         computeApi: "crossplane",
-        leaseEpoch: 0,
+        leaseGeneration: 0,
         runtime: { substrateHost: "toks4.cognidao.org" },
       })
     ).toThrow(/environment VM host/);
@@ -273,7 +273,7 @@ describe("buildComputeWorkloadManifest", () => {
         bundle,
         publicHost: "toks4.cognidao.org",
         computeApi: "crossplane",
-        leaseEpoch: 0,
+        leaseGeneration: 0,
         runtime: { substrateHost: "http://cogni.vm.cognidao.org:7233" },
       })
     ).toThrow(/RFC-1123 hostname/);
@@ -293,7 +293,7 @@ describe("buildComputeWorkloadManifest", () => {
       bundle,
       publicHost: "toks4.cognidao.org",
       computeApi: "crossplane",
-      leaseEpoch: 0,
+      leaseGeneration: 0,
     });
 
     expect(manifest.spec).not.toHaveProperty("runtime");
@@ -313,7 +313,7 @@ describe("buildComputeWorkloadManifest", () => {
       bundleRef: `ghcr.io/cogni-dao/toks4@sha256:${BUNDLE_DIGEST}`,
       bundle,
       publicHost: "toks4.cognidao.org",
-      leaseEpoch: 0,
+      leaseGeneration: 0,
     } as const;
     const legacy = buildComputeWorkloadManifest({
       ...base,
@@ -342,7 +342,7 @@ describe("buildComputeWorkloadManifest", () => {
         bundle,
         publicHost: "toks4.cognidao.org",
         computeApi: "legacy",
-        leaseEpoch: 0,
+        leaseGeneration: 0,
         dns: { provider: "cloudflare", zoneId: "0".repeat(32) },
       })
     ).toThrow(/carried only by the crossplane authority/);

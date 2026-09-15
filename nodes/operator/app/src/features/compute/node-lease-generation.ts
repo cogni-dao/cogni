@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 /**
- * Module: `@features/compute/node-lease-epoch`
+ * Module: `@features/compute/node-lease-generation`
  * Purpose: Resolve one (node, environment)'s explicit Akash lease replacement counter.
  * Scope: Pure catalog policy parsing. No workflow, git, provider, or cluster I/O.
  * Invariants:
@@ -25,15 +25,15 @@ import { z } from "zod";
 import type { DeploymentEnvironment } from "./node-deployment-provider";
 
 /** Bounds mirror the XRD's `spec.leaseEpoch` (integer, minimum 0, maximum 1000000). */
-const leaseEpochCellSchema = z.number().int().min(0).max(1000000);
+const leaseGenerationCellSchema = z.number().int().min(0).max(1000000);
 
 const catalogLeaseEpochSchema = z
   .object({
-    lease_epoch: z
+    lease_generation: z
       .object({
-        "candidate-a": leaseEpochCellSchema.optional(),
-        preview: leaseEpochCellSchema.optional(),
-        production: leaseEpochCellSchema.optional(),
+        "candidate-a": leaseGenerationCellSchema.optional(),
+        preview: leaseGenerationCellSchema.optional(),
+        production: leaseGenerationCellSchema.optional(),
       })
       .strict()
       .optional(),
@@ -50,15 +50,15 @@ const catalogLeaseEpochSchema = z
  * key is spent forever, so recreating that (node, environment) REQUIRES a bumped epoch, and
  * the bump must be an explicit human commit to the catalog row — never automation.
  */
-export function resolveNodeLeaseEpoch(input: {
+export function resolveNodeLeaseGeneration(input: {
   readonly catalog: unknown;
   readonly environment: DeploymentEnvironment;
 }): number {
   const parsed = catalogLeaseEpochSchema.safeParse(input.catalog);
   if (!parsed.success) {
     throw new Error(
-      `[lease-epoch] Invalid catalog lease_epoch: ${parsed.error.message}`
+      `[lease-epoch] Invalid catalog lease_generation: ${parsed.error.message}`
     );
   }
-  return parsed.data.lease_epoch?.[input.environment] ?? 0;
+  return parsed.data.lease_generation?.[input.environment] ?? 0;
 }

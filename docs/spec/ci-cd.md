@@ -112,6 +112,22 @@ The legacy Akash exceptions in Axioms 18, 21, and 23 are superseded by Axiom 26:
 - Every flight/promotion has one narrow substrate precondition, even when its current target set is empty: it renders the **complete** env allowlist from catalog `compute_egress_cidrs` and invokes the existing VM hardener through the environment's existing SSH identity. Running on empty/removal transitions is what closes stale Akash access. It accepts no caller CIDRs, converges additions, removals, and live rule drift idempotently, and must succeed before a `ComputeWorkload` or k3s app update is written. The sole hardener holds a host-local writer lock inherited by every invocation path, while staged files are run-unique, so workflow queue replacement or concurrent infra reconciliation cannot race firewall state. This reuses the infra/provision renderer and hardener without running broad `deploy-infra` or introducing a second firewall writer.
 - Ad-hoc cluster writes (`kubectl apply/patch/edit`, direct Argo mutation, or SSH config edits) invalidate deployment proof. Recovery is committed to Git and reconciled through existing workflows/Argo. `provision-env` remains the sole auditable bootstrap authority, not a normal reconciliation path.
 
+27. **`LEASE_GENERATION_IS_THE_REPLACEMENT_COUNTER`** (story.5016 / task.5105). Every paid
+    Akash mutation on the Crossplane authority is serialized under the idempotence key
+    `xcw:<namespace>:<node-id>:<lease_generation>`. A key whose outcome is settled or
+    unresolvable is refused forever — that refusal IS the double-pay guard, and it is never
+    bypassed by hand (ledger edits and `kubectl patch` are reverted/forbidden). The ONLY
+    replacement path for a terminally closed, refused, or boot-deadline-expired lease is
+    incrementing the per-`(node, env)` catalog cell `lease_generation` (resolved by
+    `resolveNodeLeaseGeneration`, emitted by the materializer), which mints a fresh key and a
+    fresh XR generation with a fresh boot budget. The counter advances ONLY at replacement
+    events — it is deliberately NOT coupled to attribution epochs, which advance on a global
+    schedule; coupling them would force a paid lease churn per epoch rollover (design-rejected
+    2026-09-15). Wire note: the XRD v1alpha1 spec field is still named `leaseEpoch`; the field
+    rename is deferred to v1alpha2 because renaming a served CRD field is schema surgery on
+    live composites. Everything caller-facing (catalog, resolver, docs) says
+    `lease_generation`.
+
 ## Branch And Deploy-State Model
 
 ```text
