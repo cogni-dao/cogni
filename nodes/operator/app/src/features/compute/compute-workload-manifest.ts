@@ -131,7 +131,9 @@ const SUBSTRATE_HOSTNAME =
 export interface XComputeWorkloadSpec extends ComputeWorkloadSpec {
   readonly migration: { readonly policy: typeof MIGRATION_POLICY };
   readonly bootPolicy: XComputeWorkloadBootPolicy;
-  readonly leaseGeneration: number;
+  // Wire name (v1alpha1 XRD field) — callers speak lease_generation; the emission seam
+  // maps it here. Field rename deferred to v1alpha2 (task.5105).
+  readonly leaseEpoch: number;
   readonly dns?: XComputeWorkloadDns;
   readonly runtime?: XComputeWorkloadRuntime;
 }
