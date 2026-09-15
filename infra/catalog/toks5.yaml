@@ -1,0 +1,48 @@
+name: toks5
+type: node
+port: 3200
+node_port: 31900
+dockerfile: nodes/toks5/app/Dockerfile
+image_tag_suffix: "-toks5"
+migrator_tag_suffix: "-toks5-migrate"
+source_repo: https://github.com/cogni-dao/toks5.git
+image_repository: ghcr.io/cogni-dao/toks5
+source_sha: 33606e83d84acc18971370f901d0c5c978c240bc
+candidate_a_branch: deploy/candidate-a-toks5
+preview_branch: deploy/preview-toks5
+production_branch: deploy/production-toks5
+# story.5025 — per-env node-set (deploy ⊆ provisioned). A wizard birth renders the transient
+# candidate-a proof slot and canonical production; PREVIEW_IS_ABSENT_AT_BIRTH. Closing the
+# candidate after the proof is the ordinary env verb ({env:candidate-a, present:false}).
+envs: [candidate-a, production]
+# story.5025 — BORN_ON_AKASH. Placement is stated at birth, never inherited from the k3s
+# fallback that exists for rows minted before decentralized compute did.
+deployment_provider:
+  candidate-a: akash
+  production: akash
+# task.5097 — WHICH authority reconciles the workload. Crossplane
+# (infra/crossplane/xcomputeworkload) owns every generic concern; the only Cogni-specific
+# piece left is the private Akash transaction actuator. A born node never touches the
+# bespoke controller in any environment that can BOTH reconcile the composite (an installed
+# control plane) and pay for its lease (a pinned actuator wallet); an environment missing
+# either is omitted and stays on the pre-existing legacy default (task.5104, task.5097).
+compute_api:
+  candidate-a: crossplane
+  production: crossplane
+# story.5025 — birth authority is PRODUCTION, the only environment that receives Git
+# webhooks (ACTIVITY_FOLLOWS_INGEST, bug.5079). Born here it is immutable for life: a
+# sub-production authority would have to be moved by every later promote, and generation 1
+# has no fenced cross-environment cutover. candidate-a stays passive — it never ingests, so
+# it can never run a competing activity ledger.
+activity_env: production
+# Stable binding only; the reconciler resolves an env-local users.id by wallet.
+owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
+path_prefix: nodes/toks5/
+node_id: f66b260b-4633-41e2-8711-b7c1b8449cc1
+# task.5052 (story.5016) — this node's workload runs on Akash; these provider
+# egress CIDRs may dial the env VM's substrate ports (5432,5435,6379,4000,7233).
+# NOTE: the node-birth generator does not yet mint this block (filed at birth of
+# toks5); added by hand-PR pending the generator fix.
+compute_egress_cidrs:
+  - cidr: 80.200.246.35/32
+    comment: shared egress NAT of Akash providers zencloud + digitalfrontier (story.5016)
