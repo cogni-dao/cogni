@@ -625,3 +625,52 @@ describe("XComputeWorkload authority handoff (task.5096)", () => {
     });
   });
 });
+
+describe("XComputeWorkload public reachability (bug.5152)", () => {
+  // Everything from the Cloudflare Request to the end of the template. Sliced from the
+  // prose-stripped source because the assertions below are mostly negative, and the comments
+  // that justify them necessarily name the thing they forbid.
+  const dnsBlock = templateCode.slice(
+    templateCode.indexOf("composition-resource-name: dns-record")
+  );
+
+  it("adopts the host by NAME, never by record type", () => {
+    expect(dnsBlock.length).toBeGreaterThan(0);
+    // Cloudflare's list API FILTERS, it does not merge: `?type=CNAME&name=<host>` over a host
+    // held by a legacy A record answers with an EMPTY array, isRemovedCheck reads that as "the
+    // record does not exist", and CREATE then loops forever on the 400 Cloudflare returns for a
+    // second record on an exclusive name — while the stale record keeps serving 502.
+    expect(dnsBlock).toContain('"?name=" + .payload.body.name');
+    expect(dnsBlock).not.toMatch(/\?type=/);
+  });
+
+  it("adopts only the address types it is allowed to own", () => {
+    expect(templateCode).toContain(
+      'map(select(.type == "A" or .type == "AAAA" or .type == "CNAME"))'
+    );
+    // A name held by anything else filters to an empty set, so the request fails LOUDLY on
+    // CREATE rather than silently converting a record this composite never owned — the same
+    // line the bespoke adapter draws with DnsOwnershipChanged.
+    expect(templateCode).not.toMatch(/select\(\.type == "(MX|TXT|NS|SRV|CAA)"/);
+  });
+
+  it("publishes a PROXIED CNAME, because the provider's certificate is not ours", () => {
+    // The Akash provider ingress serves `*.ingress.zencloud.eu`. A grey-cloud CNAME from the
+    // cogni name to it fails TLS on a subject-name mismatch before a byte of HTTP is exchanged,
+    // so an unproxied record resolves and STILL cannot be reached.
+    expect(dnsBlock).not.toContain("proxied: false");
+    // CREATE body + UPDATE body.
+    expect(dnsBlock.match(/proxied: true/g)?.length).toBe(2);
+    // ...and drift back to grey-cloud is not "up to date".
+    expect(dnsBlock).toContain("| .[0].proxied) == true");
+  });
+
+  it("reports published as an observation, never as an echo of the intent", () => {
+    // `published` used to restate that spec.dns was set, so an XR whose Cloudflare write had
+    // failed since birth still claimed its hostname was published. The one field an operator
+    // reads to answer "is this node reachable by NAME?" must be able to say no.
+    expect(templateCode).toContain("published: {{ $dnsPublished }}");
+    expect(templateCode).not.toContain("published: {{ if $dns }}");
+    expect(templateCode).toContain('index $observedResources "dns-record"');
+  });
+});
