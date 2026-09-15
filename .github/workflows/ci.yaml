@@ -247,6 +247,39 @@ jobs:
           echo "::error::PR spans $count node domains: ${SCOPE}. Each node owns its directory; operator owns nodes/operator + repo infra. Split into $count PRs, one per domain."
           exit 1
 
+  # bug.5150 — DEPLOY_REF_SOURCE_IS_REACHABLE_FROM_MAIN. Every GitOps ref Argo tracks
+  # resolves to a monorepo source commit; that commit must still be reachable from main.
+  # A ref left on an abandoned commit is content-identical until the next merge touches
+  # its path, then silently diverges while Argo reports OutOfSync + Healthy — which reads
+  # as cosmetic and is not. That is how a stale XComputeWorkload Composition with no
+  # identity block answered every Crossplane CREATE with 400 invalid_request.
+  #
+  # Its OWN job, not a step in `unit`: this is the only gate that reads REMOTE ref state,
+  # so its result must be legible on its own and a network blip must not mask a unit
+  # regression. No decision logic here — the invariant, its jurisdiction table and the
+  # named fix verb all live in scripts/ci/ (CI/CD freeze).
+  deploy-ref-ancestry:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          # fetch-depth: 0 — the check asserts ancestry against origin/main. A shallow
+          # main makes every `git merge-base --is-ancestor` answer a lie, so the script
+          # refuses to run against one rather than passing vacuously.
+          fetch-depth: 0
+
+      - name: Deploy ref ancestry (bug.5150)
+        run: bash scripts/ci/check-deploy-ref-ancestry.sh
+
+      - name: CI Telemetry
+        if: always()
+        uses: ./.github/actions/loki-ci-telemetry
+        with:
+          loki_url: ${{ secrets.GRAFANA_CLOUD_LOKI_URL }}
+          loki_user: ${{ secrets.GRAFANA_CLOUD_LOKI_USER }}
+          loki_token: ${{ secrets.GRAFANA_CLOUD_LOKI_API_KEY }}
+          job_status: ${{ job.status }}
+
   unit:
     runs-on: ubuntu-latest
     needs: static
@@ -393,6 +426,13 @@ jobs:
       # flight → secrets all auto-fan, but the public host never resolved).
       - name: node DNS reconcile tests
         run: bash scripts/ci/tests/reconcile-node-dns.test.sh
+
+      # bug.5150 — unit proof for the deploy-ref ancestry invariant that the
+      # `deploy-ref-ancestry` job enforces against the real fleet. Hermetic: a throwaway
+      # origin repo over a local path, no network. Includes the RED case (a ref pinned to a
+      # commit main abandoned) — a green-only suite would have passed on incident day.
+      - name: deploy ref ancestry tests (bug.5150)
+        run: bash scripts/ci/tests/check-deploy-ref-ancestry.test.sh
 
       - name: aggregate deploy outcome tests
         run: bash scripts/ci/tests/aggregate-decide-outcome.test.sh
