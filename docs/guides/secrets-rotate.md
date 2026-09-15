@@ -418,3 +418,31 @@ Both chart versions are pinned in `infra/k8s/argocd/{openbao,external-secrets}/k
 - [NIST SP 800-57 Part 1 Rev 5 §8 Key States](https://csrc.nist.gov/publications/detail/sp/800-57-part-1/rev-5/final)
 - [OpenBao KV v2 versioned secrets](https://openbao.org/docs/secrets/kv/kv-v2/)
 - [Stakater Reloader docs](https://github.com/stakater/Reloader#how-it-works)
+
+## Rotating a projected secret: force the sync, do not shorten the interval
+
+A rotation is **two facts** — written to OpenBao, and projected into the pod — with an ExternalSecret's `refreshInterval` between them. Closing that gap by lowering the interval is the wrong trade, and was rejected twice:
+
+| option                                 | why not                                                                                                                                                                                                                                |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `refreshInterval: 1m`                  | 60× the OpenBao reads **forever** to shorten a gap that matters a few times a year. OpenBao is Shamir 1-of-1 with no auto-unseal and has already been OOMKilled once (`bug.5011`); it also multiplies audit volume by the same factor. |
+| Operator pushes the sync after a write | The operator pod has **no ServiceAccount and no k8s identity**. Granting the internet-facing app RBAC to patch ExternalSecrets is a far larger blast radius than the gap it closes.                                                    |
+
+**Do this instead.** A rotation always has an operator or agent in the loop, so make the sync part of the rotation rather than a property of the cluster:
+
+```bash
+export KUBECONFIG=<env kubeconfig>
+TS=$(date +%s)
+kubectl -n cogni-<env> annotate externalsecret <name> force-sync=$TS --overwrite
+kubectl -n cogni-<env> delete pod -l app.kubernetes.io/name=<app>   # pods read envFrom once, at start
+```
+
+Propagation is seconds, the steady-state cost is zero, and no component gains a permission it did not need.
+
+**Then prove it landed** — do not assume. Read the consumer back:
+
+```bash
+kubectl -n cogni-<env> logs -l app.kubernetes.io/name=<app> --tail=30 | grep wallet_verified
+```
+
+`bug.5142`'s credential fingerprint exists for exactly this: a pod holding a **revoked** credential looks identical to a healthy one, because the wallet is verified only at boot. Compare the fingerprint across two log lines and you know whether the rotation was picked up — no OpenBao access required.
