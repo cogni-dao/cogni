@@ -29,6 +29,12 @@ resources:
   - ./akash-tx-actuator-auth-external-secret.yaml
   - ./secrets-writer-sa.yaml
   - ./compute-workload-platform-application.yaml
+  # task.5071 H1-only proof fixture. This child Application keeps the disposable
+  # XComputeWorkload outside this operator overlay's namePrefix, so metadata.name
+  # can remain byte-equal to spec.nodeId. The final task.5071 tree removes this
+  # Application and its nested cost-proof/ overlay; Argo's resources finalizer then
+  # prunes the XR and drives the provider/receipt/cost-interval close proof.
+  - ./cost-proof-application.yaml
 
 namePrefix: operator-
 
@@ -37,6 +43,10 @@ namePrefix: operator-
 # ../../../base/akash-tx-actuator-service-name for why the prefix is what gives.
 transformers:
   - ../../../base/akash-tx-actuator-service-name
+  # Like the actuator Service-name exception above, this H1-only child Application
+  # must escape one built-in transform: Argo Applications live in argocd even though
+  # their destination workload is cogni-candidate-a.
+  - ./cost-proof-application-namespace.yaml
 
 images:
   - name: ghcr.io/cogni-dao/cogni-template
@@ -51,7 +61,6 @@ replacements:
     targets:
       - select: { kind: Application, name: compute-workload-platform }
         fieldPaths: [metadata.namespace]
-
 patches:
   # story.5016 Gate 0b: controller env values are set BY NAME via strategic
   # merge (env lists merge on `name`), never by positional JSON-pointer index.
