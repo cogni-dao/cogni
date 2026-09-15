@@ -91,6 +91,39 @@ is_infra_target() {
   [ "${_image_tags_type_cache[$1]:-}" = "infra" ]
 }
 
+# The environments that own a catalog-declared GitOps deploy branch. Deliberately
+# the FIELD SET the catalog declares (candidate_a_branch / preview_branch /
+# production_branch), not the per-row `envs:` membership list — a row's reach is a
+# separate axis (task.5017) and a branch may exist for an env a row has left.
+# shellcheck disable=SC2034
+DEPLOY_BRANCH_ENVS=(candidate-a preview production)
+
+# Resolve the GitOps deploy branch (the ref Argo's per-node Application tracks) for
+# one (target, env) cell, from the ONE place the catalog declares it
+# (CATALOG_IS_SSOT, infra/catalog/_schema.json). Empty — success, not an error —
+# when the row declares no branch for that env: type:infra rows deploy via
+# Compose-on-VM and own no Argo ref at all.
+#   deploy_branch_for_target TARGET ENV   # → deploy/<env>-<target> | ""
+deploy_branch_for_target() {
+  local target="$1" env="${2:-}" field value
+  if [ -z "${_image_tags_primary_cache[$target]+x}" ]; then
+    echo "[ERROR] image-tags: unknown target: $target" >&2
+    return 1
+  fi
+  case "$env" in
+    candidate-a) field="candidate_a_branch" ;;
+    preview) field="preview_branch" ;;
+    production) field="production_branch" ;;
+    *)
+      echo "[ERROR] image-tags: deploy_branch_for_target: unsupported env '${env}' (expected ${DEPLOY_BRANCH_ENVS[*]})" >&2
+      return 1
+      ;;
+  esac
+  value=$(yq -N ".${field} // \"\"" "${_image_tags_catalog_root}/${target}.yaml")
+  [ "$value" = "null" ] && value=""
+  printf '%s' "$value"
+}
+
 # Resolve a target's operator-owned placement for one environment (story.5016).
 # Shell twin of resolveNodeDeploymentProvider() in
 # nodes/operator/app/src/features/compute/node-deployment-provider.ts — ONE
