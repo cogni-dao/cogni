@@ -485,14 +485,32 @@ spec:
             {{- $failMessage := "" }}
             {{- if and $active $serving }}
             {{- $phase = "Ready" }}
+            {{- /*
+              REFUSAL_SURVIVES_THE_DEADLINE (bug.5150). The branch ORDER below is deliberate and
+              invariant-tested: a transient refusal must never DISPLACE a spend decision, so
+              `reason` stays the budget verdict. But the deadline is a CONSEQUENCE, and the
+              refusal is the CAUSE - a workload that was being refused never had a chance to
+              serve. Erasing the cause is exactly the bug.5115 failure mode, and it cost hours
+              on the first real mint: the actuator answered every CREATE with
+              `invalid_request: request failed schema validation` (the Composition was omitting
+              `identity`), that reason sat on the XR for 30 minutes, and then
+              BootDeadlineClosed overwrote it - leaving a budget message and no way to learn
+              why. So the cause is APPENDED to the message while `reason` is left alone.
+            */ -}}
             {{- else if $closeForBudget }}
             {{- $phase = "Failed" }}
             {{- $failReason = "BootDeadlineClosed" }}
             {{- $failMessage = printf "workload did not serve %s within %ds; the lease was closed to stop spend" (substr 0 12 $desiredSha) $bootDeadlineSeconds }}
+            {{- if ne $refusalCode "" }}
+            {{- $failMessage = printf "%s; last refusal %s: %s" $failMessage $refusalCode (substr 0 160 $refusalMessage) }}
+            {{- end }}
             {{- else if $deadlineExceeded }}
             {{- $phase = "Failed" }}
             {{- $failReason = "BootDeadlineExceeded" }}
             {{- $failMessage = printf "workload did not serve %s within %ds; spend continues because bootPolicy.onDeadline is Hold" (substr 0 12 $desiredSha) $bootDeadlineSeconds }}
+            {{- if ne $refusalCode "" }}
+            {{- $failMessage = printf "%s; last refusal %s: %s" $failMessage $refusalCode (substr 0 160 $refusalMessage) }}
+            {{- end }}
             {{- else if ne $refusalCode "" }}
             {{- $phase = ternary "Progressing" "Failed" $refusalRetryable }}
             {{- $failReason = $refusalCode }}
