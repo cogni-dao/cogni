@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# H1-only post-built-in transformer. The operator overlay's namespace applies to
+# workload resources; this one labelled child Application itself belongs to Argo.
+apiVersion: builtin
+kind: PatchTransformer
+metadata:
+  name: task-5071-cost-proof-application-namespace
+patch: '[{"op":"replace","path":"/metadata/namespace","value":"argocd"}]'
+target:
+  kind: Application
+  labelSelector: cogni.io/proof=task-5071-child-application
