@@ -6,8 +6,7 @@
  * Purpose: Pins the Crossplane install boundary. task.5094 installed the engine; task.5096
  *   activated ONE composite API on top of it. What survives that handoff is the part that was
  *   never about dormancy: no credential and NO DESIRED STATE may live in this directory.
- * Scope: Static YAML checks over every environment's Argo Applications and the shared Crossplane
- *   package manifests. Does NOT contact a cluster or provider.
+ * Scope: Static YAML checks over every environment's Argo Applications plus the shared Crossplane package manifests. Does NOT contact a cluster, a provider, or a wallet.
  * Invariants: NO_DESIRED_STATE_IN_GIT, ENGINE_IS_UNIFORM_ACROSS_ENVS, IMMUTABLE_PACKAGES,
  *   RESOURCE_BOUNDED, OBSERVABLE_BEFORE_AUTHORITY, CONSTANT_TRACKS_INSTALLED_REALITY,
  *   INSTALLED_IS_NOT_FUNDED.
