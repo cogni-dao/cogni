@@ -174,6 +174,19 @@ describe("DrizzleComputeCostStore (Component)", () => {
       },
     });
     await store.observe({ allocationReceiptId, evidence: current });
+    await expect(
+      store.observe({
+        allocationReceiptId,
+        evidence: evidence({
+          observedAt: new Date("2026-09-15T00:02:30.000Z"),
+          escrow: {
+            state: "overdrawn",
+            funds: [{ amount: "-6344.131225000000000000", denom: "uakt" }],
+            transferred: [{ amount: "-1.0", denom: "uakt" }],
+          },
+        }),
+      })
+    ).rejects.toThrow(/non-negative plain decimal/);
     await store.observe({
       allocationReceiptId,
       evidence: evidence({ observedAt: new Date("2026-09-15T00:01:00.000Z") }),
@@ -194,9 +207,9 @@ describe("DrizzleComputeCostStore (Component)", () => {
         observedAt: new Date("2026-09-15T00:03:00.000Z"),
         providerClosedAtPosition: "150",
         escrow: {
-          state: "closed",
+          state: "overdrawn",
           providerSettledAtPosition: "151",
-          funds: [{ amount: "500000", denom: "uakt" }],
+          funds: [{ amount: "-6344.131225000000000000", denom: "uakt" }],
           transferred: [{ amount: "21", denom: "uakt" }],
         },
       }),
@@ -206,9 +219,9 @@ describe("DrizzleComputeCostStore (Component)", () => {
       evidence: evidence({
         observedAt: new Date("2026-09-15T00:04:00.000Z"),
         escrow: {
-          state: "closed",
+          state: "overdrawn",
           providerSettledAtPosition: "152",
-          funds: [{ amount: "500000", denom: "uakt" }],
+          funds: [{ amount: "-6344.131225000000000000", denom: "uakt" }],
           transferred: [{ amount: "22", denom: "uakt" }],
         },
       }),
@@ -218,6 +231,7 @@ describe("DrizzleComputeCostStore (Component)", () => {
       state: "closed",
       providerClosedAtPosition: "150",
       providerSettledAtPosition: "152",
+      escrowFunds: [{ amount: "-6344.131225000000000000", denom: "uakt" }],
       cumulativeTransferred: [{ amount: "22", denom: "uakt" }],
     });
   });

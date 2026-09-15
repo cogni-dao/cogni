@@ -25,6 +25,7 @@ import { akashTxAllocations, computeCostIntervals } from "@/shared/db/schema";
 type CostRow = typeof computeCostIntervals.$inferSelect;
 
 const DECIMAL_RE = /^(0|[1-9][0-9]*)(\.[0-9]+)?$/;
+const SIGNED_DECIMAL_RE = /^-?(0|[1-9][0-9]*)(\.[0-9]+)?$/;
 const POSITION_RE = /^(0|[1-9][0-9]*)$/;
 const MAX_ID_LENGTH = 512;
 const MAX_NATIVE_VALUE_LENGTH = 128;
@@ -49,21 +50,26 @@ function assertText(value: string, field: string, maxLength: number): void {
   invariant(!hasAsciiControl(value), `${field} has control characters`);
 }
 
-function assertAmount(value: ComputeCostAmount, field: string): void {
+function assertAmount(
+  value: ComputeCostAmount,
+  field: string,
+  allowNegative = false
+): void {
   assertText(value.denom, `${field} denom`, MAX_NATIVE_VALUE_LENGTH);
   invariant(
     value.amount.length <= MAX_NATIVE_VALUE_LENGTH,
     `${field} amount is too long`
   );
   invariant(
-    DECIMAL_RE.test(value.amount),
-    `${field} amount must be a non-negative plain decimal`
+    (allowNegative ? SIGNED_DECIMAL_RE : DECIMAL_RE).test(value.amount),
+    `${field} amount must be a ${allowNegative ? "signed" : "non-negative"} plain decimal`
   );
 }
 
 function assertAmounts(
   values: readonly ComputeCostAmount[],
-  field: string
+  field: string,
+  allowNegative = false
 ): void {
   invariant(
     values.length <= MAX_NATIVE_AMOUNTS,
@@ -71,7 +77,7 @@ function assertAmounts(
   );
   const denoms = new Set<string>();
   for (const value of values) {
-    assertAmount(value, field);
+    assertAmount(value, field, allowNegative);
     invariant(
       !denoms.has(value.denom),
       `${field} contains duplicate denominations`
@@ -127,7 +133,7 @@ function assertEvidence(evidence: ComputeResourceCostEvidence): void {
     );
   }
   assertText(evidence.escrow.state, "escrow state", MAX_NATIVE_VALUE_LENGTH);
-  assertAmounts(evidence.escrow.funds, "escrow funds");
+  assertAmounts(evidence.escrow.funds, "escrow funds", true);
   assertAmounts(evidence.escrow.transferred, "escrow transferred");
 }
 

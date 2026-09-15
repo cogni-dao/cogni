@@ -1130,9 +1130,16 @@ function requiredText(
   return raw;
 }
 
-function requiredNativeDecimal(value: unknown, field: string): string {
+function requiredNativeDecimal(
+  value: unknown,
+  field: string,
+  allowNegative = false
+): string {
   const raw = requiredText(value, field, MAX_NATIVE_VALUE_LENGTH);
-  if (!/^(0|[1-9][0-9]*)(\.[0-9]+)?$/.test(raw)) {
+  const pattern = allowNegative
+    ? /^-?(0|[1-9][0-9]*)(\.[0-9]+)?$/
+    : /^(0|[1-9][0-9]*)(\.[0-9]+)?$/;
+  if (!pattern.test(raw)) {
     throw new AkashComputeError(
       "UNEXPECTED_SHAPE",
       `Console deployment cost response returned invalid ${field}`
@@ -1175,7 +1182,8 @@ function chainPosition(
 
 function nativeAmounts(
   values: readonly { denom?: string; amount?: string }[] | undefined,
-  field: string
+  field: string,
+  allowNegative = false
 ): readonly { denom: string; amount: string }[] {
   if (!values) {
     throw new AkashComputeError(
@@ -1201,14 +1209,9 @@ function nativeAmounts(
     seen.add(denom);
     const amount = requiredNativeDecimal(
       value.amount,
-      `${field}[${index}].amount`
+      `${field}[${index}].amount`,
+      allowNegative
     );
-    if (amount.includes(".")) {
-      throw new AkashComputeError(
-        "UNEXPECTED_SHAPE",
-        `Console deployment cost response returned fractional ${field} amount`
-      );
-    }
     return { denom, amount };
   });
 }
@@ -1318,7 +1321,7 @@ function costEvidenceFromDetail(
     escrow: {
       state: requiredText(escrow.state, "escrow_account.state.state"),
       ...(providerSettledAtPosition ? { providerSettledAtPosition } : {}),
-      funds: nativeAmounts(escrow.funds, "escrow_account.state.funds"),
+      funds: nativeAmounts(escrow.funds, "escrow_account.state.funds", true),
       transferred: nativeAmounts(
         escrow.transferred,
         "escrow_account.state.transferred"

@@ -280,12 +280,87 @@ describe("AkashComputeAdapter.observeCost", () => {
             closed_on: "",
           },
         ],
+        escrow_account: {
+          state: {
+            owner: "akash1consumer",
+            state: "open",
+            settled_at: "",
+            funds: [{ amount: "500000.000000000000000000", denom: "uakt" }],
+            transferred: [{ amount: "12.250000000000000000", denom: "uakt" }],
+          },
+        },
       }),
       { now: () => observedAt }
     );
 
     const evidence = await adapter.observeCost({ resourceId: "7001" });
     expect(evidence).not.toHaveProperty("providerClosedAtPosition");
+    expect(evidence.escrow).toEqual({
+      state: "open",
+      funds: [{ amount: "500000.000000000000000000", denom: "uakt" }],
+      transferred: [{ amount: "12.250000000000000000", denom: "uakt" }],
+    });
+  });
+
+  it("preserves signed overdrawn funds but rejects negative transferred cost", async () => {
+    const overdrawn = {
+      deployment: {
+        id: { owner: "akash1consumer", dseq: "7001" },
+        state: "closed",
+      },
+      leases: [
+        {
+          id: {
+            owner: "akash1consumer",
+            provider: "akash1provider",
+            dseq: "7001",
+          },
+          state: "closed",
+          price: { amount: "7.500000000000000000", denom: "uakt" },
+          created_at: "100",
+          closed_on: "150",
+        },
+      ],
+      escrow_account: {
+        state: {
+          owner: "akash1consumer",
+          state: "overdrawn",
+          settled_at: "151",
+          funds: [{ amount: "-6344.131225000000000000", denom: "uakt" }],
+          transferred: [{ amount: "500000.000000000000000000", denom: "uakt" }],
+        },
+      },
+    };
+    const adapter = makeAdapter(costFetch(overdrawn), {
+      now: () => observedAt,
+    });
+
+    await expect(adapter.observeCost({ resourceId: "7001" })).resolves.toEqual(
+      expect.objectContaining({
+        providerClosedAtPosition: "150",
+        escrow: {
+          state: "overdrawn",
+          providerSettledAtPosition: "151",
+          funds: [{ amount: "-6344.131225000000000000", denom: "uakt" }],
+          transferred: [{ amount: "500000.000000000000000000", denom: "uakt" }],
+        },
+      })
+    );
+
+    const negativeTransferred = makeAdapter(
+      costFetch({
+        ...overdrawn,
+        escrow_account: {
+          state: {
+            ...overdrawn.escrow_account.state,
+            transferred: [{ amount: "-1.0", denom: "uakt" }],
+          },
+        },
+      })
+    );
+    await expect(
+      negativeTransferred.observeCost({ resourceId: "7001" })
+    ).rejects.toMatchObject({ code: "UNEXPECTED_SHAPE" });
   });
 
   it("rejects a response for another deployment", async () => {
