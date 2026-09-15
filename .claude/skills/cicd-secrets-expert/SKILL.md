@@ -153,6 +153,18 @@ or node-DB assumptions.
 | Candidate-a experimentation                           | `pnpm secrets:set <env> <service> <KEY>` via port-forward + writer-role JWT                                             | Shipped — see [`secrets-add-new.md`](../../../docs/guides/secrets-add-new.md)                                                                                                                                                                                      |
 | Dynamic DB credentials                                | OpenBao DB engine, no human in loop                                                                                     | Future (Crawl row 3 of `proj.security-hardening`)                                                                                                                                                                                                                  |
 
+**Rotation is not done when the write returns `200`.** "Written to OpenBao" and "the consumer holds it" are two facts with an ExternalSecret `refreshInterval` between them. A pod that reads its credential once at start is **indistinguishable from healthy while holding a revoked one** — proven live 2026-09-15: a rotated Akash key sat in OpenBao while the actuator ran `1/1 Running` on a dead credential.
+
+Rotate in four steps, never three:
+
+```
+write -> kubectl annotate externalsecret <name> force-sync=$(date +%s) --overwrite
+      -> Reloader restarts the consumer (already automatic, Invariant 11)
+      -> VERIFY the consumer (read it back; bug.5142 credential fingerprint)
+```
+
+**Do NOT shorten `refreshInterval` to compensate.** The class table in [`secrets-management.md`](../../../docs/spec/secrets-management.md) is the sanctioned set (`1h` routine / `24h` external API / `15m` dynamic DB / `5m` critical+wallet). `1m` was proposed twice and reverted: 60x the OpenBao reads forever, against a Shamir 1-of-1 OpenBao that has already OOMKilled (`bug.5011`). And do **not** make the operator push the sync — it has no ServiceAccount and no k8s identity, so that means giving the internet-facing app RBAC to patch ExternalSecrets.
+
 The killer rule: **no human types a secret VALUE into a UI in production.** Auto-generated, vendor-minted via operator-app, or dynamic. Form-input is the anti-pattern.
 
 ## Who holds secret-write authority — TODAY vs TARGET (READ THIS)

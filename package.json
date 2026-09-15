@@ -82,6 +82,7 @@
     "bootstrap": "bash scripts/setup/bootstrap.sh",
     "setup:secrets": "tsx scripts/setup-secrets.ts",
     "secrets:set": "bash scripts/secrets/set-secret.sh",
+    "secrets:sync": "bash scripts/secrets/sync-secret.sh",
     "db:setup:test": "pnpm db:provision:test && pnpm db:migrate:test",
     "db:drop:test": "pnpm tsx --tsconfig tsconfig.scripts.json scripts/db/drop-test-db.ts",
     "db:reset:test": "pnpm db:drop:test || true && pnpm db:setup:test",
