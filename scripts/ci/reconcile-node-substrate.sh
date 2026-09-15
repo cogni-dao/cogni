@@ -220,11 +220,19 @@ grep -qxF "$DEPLOY_ENVIRONMENT" <<<"$node_envs" \
 node_db="$(node_database_for_target "$TARGET_NODE")"
 
 read -r -a SSH_OPTS_ARR <<< "$SSH_OPTS_RAW"
+# bug.5159 — multiplex every remote call over ONE ssh connection. Each remote() used to
+# open a fresh handshake (~20-40 per run); sshd/edge admission control drops bursts of
+# new connections at kex (MaxStartups-class), which killed 8 promotes. One master
+# connection removes the burst entirely; ControlPersist outlives the run harmlessly on
+# an ephemeral runner.
+SSH_OPTS_ARR+=(-o ControlMaster=auto -o "ControlPath=${TMPDIR:-/tmp}/cogni-ssh-%r@%h-%p" -o ControlPersist=180)
+# shellcheck source=lib/ssh-retry.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/ssh-retry.sh"
 remote() {
-  "$SSH_BIN" "${SSH_OPTS_ARR[@]}" "root@${VM_HOST}" "$@"
+  cogni_ssh_transport_retry "$SSH_BIN" "${SSH_OPTS_ARR[@]}" "root@${VM_HOST}" "$@"
 }
 copy_to_remote() {
-  "$SCP_BIN" "${SSH_OPTS_ARR[@]}" "$1" "root@${VM_HOST}:$2"
+  cogni_ssh_transport_retry "$SCP_BIN" "${SSH_OPTS_ARR[@]}" "$1" "root@${VM_HOST}:$2"
 }
 
 init_summary
