@@ -249,11 +249,23 @@ export REPO_ROOT APP_SOURCE_DIR COGNI_CATALOG_ROOT DOMAIN
 # the db-reader token — NEVER from VM .env. The superuser (POSTGRES_ROOT) stays in
 # the VM .env the compose db-provision service already reads. APP_DB_USER is no
 # longer threaded: provision.sh computes app_<node>/service_<node> from the node.
+# bug.5159 — a transport failure (ssh drop, exec hiccup, OpenBao down) must never read
+# as "key absent": the swallowed-error shape produced lying "per-node DB creds absent"
+# failures on paths that demonstrably held 35 keys. Only "No value found" (an unborn
+# path) is a legitimate empty; anything else retries and then fails naming the transport.
 bao_get_field() {
-  local svc="$1" k="$2"
-  remote "kubectl exec -n openbao openbao-0 -- env BAO_TOKEN='${BAO_TOKEN}' BAO_ADDR=http://127.0.0.1:8200 \
-    bao kv get -format=json 'cogni/${DEPLOY_ENVIRONMENT}/${svc}'" \
-    2>/dev/null | jq -r --arg k "$k" '.data.data[$k] // empty' 2>/dev/null || true
+  local svc="$1" k="$2" raw attempt
+  for attempt in 1 2 3; do
+    if raw="$(remote "kubectl exec -n openbao openbao-0 -- env BAO_TOKEN='${BAO_TOKEN}' BAO_ADDR=http://127.0.0.1:8200 \
+      bao kv get -format=json 'cogni/${DEPLOY_ENVIRONMENT}/${svc}'" 2>&1)"; then
+      printf '%s' "$raw" | jq -r --arg k "$k" '.data.data[$k] // empty' 2>/dev/null || true
+      return 0
+    fi
+    case "$raw" in *"No value found"*) return 0 ;; esac
+    echo "[reconcile-node-substrate] OpenBao read cogni/${DEPLOY_ENVIRONMENT}/${svc} attempt ${attempt}/3 failed: $(printf '%s' "$raw" | tail -1)" >&2
+    sleep $((attempt * 5))
+  done
+  fail "OpenBao TRANSPORT failure reading cogni/${DEPLOY_ENVIRONMENT}/${svc} after 3 attempts — not an absent key (bug.5159)"
 }
 
 # Read THIS node's app + service DB passwords from OpenBao (materialize wrote them

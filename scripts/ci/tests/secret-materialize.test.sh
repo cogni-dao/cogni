@@ -86,7 +86,9 @@ if [ "${1:-}" = "exec" ]; then
   fi
   if printf '%s\n' "$*" | grep -q 'bao kv get -format=json'; then
     dir="${FAKE_BAO_ROOT}/${path}"
-    if [ ! -d "$dir" ]; then exit 2; fi
+    # Real bao prints this on an unborn path (exit 2); bug.5159's transport-vs-absent
+    # distinction keys on the text, so the fake must speak it too.
+    if [ ! -d "$dir" ]; then echo "No value found at ${path}" >&2; exit 2; fi
     data="{}"
     for f in "$dir"/*; do
       [ -f "$f" ] || continue
