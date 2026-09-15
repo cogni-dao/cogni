@@ -13,6 +13,12 @@ export function assessComputeWorkloadReadiness(input: {
   readonly live: unknown;
 }): ComputeWorkloadReadiness {
   const expected = asRecord(input.expected);
+  // ONE_AUTHORITY_PER_WORKLOAD (bug.5148's verify twin): the deploy branch renders
+  // exactly one kind per (node, env); the verify gate must speak BOTH kinds or every
+  // Crossplane-node promote ends verify-red while the node serves (story.5016 toks4).
+  if (expected?.kind === "XComputeWorkload") {
+    return assessXComputeWorkloadReadiness(input);
+  }
   const live = asRecord(input.live);
   const expectedMetadata = asRecord(expected?.metadata);
   const liveMetadata = asRecord(live?.metadata);
@@ -86,6 +92,81 @@ export function assessComputeWorkloadReadiness(input: {
   return ready
     ? { ready: true }
     : { ready: false, reason: "ready_condition_pending" };
+}
+
+/**
+ * XComputeWorkload readiness. Differences from the legacy CR, both load-bearing:
+ * - Crossplane MUTATES the composite's spec (compositionRef, resourceRefs, defaulted
+ *   fields), so strict spec equality would never converge — instead every key the
+ *   rendered manifest declares must deep-equal the live value (expected ⊆ live).
+ * - Serving truth is the composite's own contract: status.phase === "Ready" AND
+ *   status.serving === true, plus the crossplane Ready/Synced conditions.
+ */
+function assessXComputeWorkloadReadiness(input: {
+  readonly expected: unknown;
+  readonly live: unknown;
+}): ComputeWorkloadReadiness {
+  const expected = asRecord(input.expected);
+  const live = asRecord(input.live);
+  const expectedMetadata = asRecord(expected?.metadata);
+  const liveMetadata = asRecord(live?.metadata);
+  const expectedSpec = asRecord(expected?.spec);
+  const liveSpec = asRecord(live?.spec);
+  const status = asRecord(live?.status);
+
+  if (
+    !expected ||
+    !live ||
+    expected.apiVersion !== "compute.cogni.io/v1alpha1" ||
+    live.apiVersion !== expected.apiVersion ||
+    live.kind !== "XComputeWorkload" ||
+    !expectedMetadata ||
+    !liveMetadata ||
+    !expectedSpec ||
+    !liveSpec
+  ) {
+    return { ready: false, reason: "invalid_resource_shape" };
+  }
+  if (
+    liveMetadata.name !== expectedMetadata.name ||
+    liveMetadata.namespace !== expectedMetadata.namespace
+  ) {
+    return { ready: false, reason: "identity_mismatch" };
+  }
+  if (liveMetadata.deletionTimestamp !== undefined) {
+    return { ready: false, reason: "deletion_pending" };
+  }
+  for (const [key, value] of Object.entries(expectedSpec)) {
+    if (stableJson(liveSpec[key]) !== stableJson(value)) {
+      return { ready: false, reason: "desired_spec_pending" };
+    }
+  }
+  if (!status) {
+    return { ready: false, reason: "status_pending" };
+  }
+  if (status.phase !== "Ready") {
+    const failureReason = asRecord(status.failure)?.reason;
+    return {
+      ready: false,
+      reason:
+        typeof failureReason === "string" && failureReason.length > 0
+          ? `phase_not_ready:${failureReason}`
+          : "phase_not_ready",
+    };
+  }
+  if (status.serving !== true) {
+    return { ready: false, reason: "not_serving" };
+  }
+  const conditions = Array.isArray(status.conditions) ? status.conditions : [];
+  const conditionTrue = (type: string): boolean =>
+    conditions.some((value) => {
+      const condition = asRecord(value);
+      return condition?.type === type && condition.status === "True";
+    });
+  if (!conditionTrue("Synced") || !conditionTrue("Ready")) {
+    return { ready: false, reason: "ready_condition_pending" };
+  }
+  return { ready: true };
 }
 
 function asRecord(value: unknown): JsonRecord | undefined {
