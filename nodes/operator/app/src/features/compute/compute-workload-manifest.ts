@@ -131,6 +131,7 @@ const SUBSTRATE_HOSTNAME =
 export interface XComputeWorkloadSpec extends ComputeWorkloadSpec {
   readonly migration: { readonly policy: typeof MIGRATION_POLICY };
   readonly bootPolicy: XComputeWorkloadBootPolicy;
+  readonly leaseEpoch: number;
   readonly dns?: XComputeWorkloadDns;
   readonly runtime?: XComputeWorkloadRuntime;
 }
@@ -155,6 +156,13 @@ export interface BuildComputeWorkloadManifestInput {
   readonly publicHost: string;
   /** Which reconciliation authority owns this (node, environment). Catalog-resolved. */
   readonly computeApi: NodeComputeApi;
+  /**
+   * Explicit lease replacement counter, catalog-resolved (`resolveNodeLeaseEpoch`, absent
+   * cell = 0). Required rather than defaulted here so a new caller cannot silently fall back
+   * to an epoch that differs from the catalog's — the epoch IS the idempotence key's only
+   * varying component, and a divergence mints a SECOND PAID LEASE.
+   */
+  readonly leaseEpoch: number;
   /**
    * DNS intent for the Crossplane authority only — the legacy controller resolves its own zone
    * from an in-cluster secret, so passing it there would be desired state nothing reads.
@@ -218,6 +226,15 @@ export function buildComputeWorkloadManifest(
     );
   }
 
+  // A nonzero epoch on the legacy authority would be desired state nothing reads — its
+  // idempotence key embeds metadata.generation, not an epoch — so an operator who bumped
+  // it to replace a closed lease would see nothing happen. Refuse rather than ignore.
+  if (input.computeApi !== "crossplane" && input.leaseEpoch !== 0) {
+    throw new Error(
+      "[compute-workload-manifest] leaseEpoch is carried only by the crossplane authority; the legacy controller keys its lease per-generation and reads no epoch"
+    );
+  }
+
   if (input.runtime) {
     if (!SUBSTRATE_HOSTNAME.test(input.runtime.substrateHost)) {
       throw new Error(
@@ -273,6 +290,10 @@ export function buildComputeWorkloadManifest(
             ...spec,
             migration: { policy: MIGRATION_POLICY },
             bootPolicy: bootPolicyForEnvironment(input.environment),
+            // Emitted even at 0, like migration.policy (bug.5116): the committed desired
+            // state states its own idempotence-key epoch rather than inheriting the XRD
+            // default, so a catalog bump is a visible one-line git diff on the deploy branch.
+            leaseEpoch: input.leaseEpoch,
             ...(input.dns ? { dns: input.dns } : {}),
             ...(input.runtime ? { runtime: input.runtime } : {}),
           }
