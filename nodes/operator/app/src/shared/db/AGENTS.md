@@ -46,9 +46,11 @@ Per DATABASE_RLS_SPEC.md design decision 7: runtime app uses explicit DSNs, no U
 
 - Schema tables from `@cogni/db-schema` (users, billingAccounts, schedules, etc.)
 - Operator-local schema tables that should not become universal node
-  contracts, currently `workItemSessions` and `akashTxAllocations`
-  (+ `AKASH_TX_ALLOCATION_STATES`). Operator operational Postgres only —
-  never `@cogni/db-schema`, never Doltgres.
+  contracts, currently `workItemSessions`, `akashTxAllocations`
+  (+ `AKASH_TX_ALLOCATION_STATES`), and receipt-keyed `computeCostIntervals`
+  (+ `COMPUTE_COST_INTERVAL_STATES`). Operator operational Postgres only —
+  never `@cogni/db-schema`, never Doltgres. Cost rows join the allocation receipt
+  for their sole grouping identity, `node_id`; they do not duplicate billing identity.
 
 **Direct imports (not in barrel):**
 

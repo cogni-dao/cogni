@@ -66,6 +66,7 @@ import pino from "pino";
 import {
   AkashComputeAdapter,
   DrizzleAkashTxAllocationLedger,
+  DrizzleComputeCostStore,
   DrizzleProviderOutcomeStore,
   KubernetesMigrationJobAdapter,
   safeReadyzProbe,
@@ -206,6 +207,7 @@ const allowedProviders = (runtimeEnv.AKASH_ALLOWED_PROVIDERS ?? "")
 
 const consoleClient = new AkashComputeAdapter({
   apiKey: wallet.apiKey,
+  expectedCostConsumerAccountId: wallet.expectedAccountId,
   timeoutMs: 15_000,
   allowedProviders,
   ...(preferredProviders.length > 0 ? { preferredProviders } : {}),
@@ -266,6 +268,9 @@ kubeConfig.loadFromCluster();
 const actuator = new AkashTxActuator({
   console: consoleClient,
   ledger: new DrizzleAkashTxAllocationLedger(getDb, wallet.walletScope),
+  costEvidence: consoleClient,
+  costStore: new DrizzleComputeCostStore(getDb),
+  providerConsumerAccountId: wallet.expectedAccountId,
   log,
   probe,
   /**

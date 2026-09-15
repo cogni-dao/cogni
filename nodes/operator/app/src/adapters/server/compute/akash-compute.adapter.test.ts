@@ -167,6 +167,7 @@ function makeAdapter(
 ): AkashComputeAdapter {
   return new AkashComputeAdapter({
     apiKey: "console-key",
+    expectedCostConsumerAccountId: "akash1consumer",
     timeoutMs: 1000,
     bidTimeoutMs: 0,
     bidPollIntervalMs: 0,
@@ -205,6 +206,293 @@ const SPEC = {
     },
   ],
 } as const;
+
+describe("AkashComputeAdapter.observeCost", () => {
+  const observedAt = new Date("2026-09-15T12:00:00.000Z");
+
+  function costFetch(overrides: Record<string, unknown> = {}): typeof fetch {
+    return vi.fn<typeof fetch>(async () =>
+      jsonResponse({
+        data: {
+          deployment: {
+            id: { owner: "akash1consumer", dseq: "7001" },
+            state: "active",
+          },
+          leases: [
+            {
+              id: {
+                owner: "akash1consumer",
+                provider: "akash1provider",
+                dseq: "7001",
+              },
+              state: "active",
+              price: { amount: "7.5", denom: "uakt" },
+              created_at: "100",
+              closed_on: "0",
+            },
+          ],
+          escrow_account: {
+            state: {
+              owner: "akash1consumer",
+              state: "open",
+              settled_at: "0",
+              funds: [{ amount: "500000", denom: "uakt" }],
+              transferred: [{ amount: "12", denom: "uakt" }],
+            },
+          },
+          ...overrides,
+        },
+      })
+    );
+  }
+
+  it("preserves exact provider-native rate, positions, and cumulative transfer", async () => {
+    const adapter = makeAdapter(costFetch(), { now: () => observedAt });
+    await expect(adapter.observeCost({ resourceId: "7001" })).resolves.toEqual({
+      computeProvider: "akash",
+      resourceId: "7001",
+      providerConsumerAccountId: "akash1consumer",
+      providerSupplierAccountId: "akash1provider",
+      rate: { amount: "7.5", denom: "uakt", unit: "block" },
+      providerOpenedAtPosition: "100",
+      escrow: {
+        state: "open",
+        funds: [{ amount: "500000", denom: "uakt" }],
+        transferred: [{ amount: "12", denom: "uakt" }],
+      },
+      observedAt,
+    });
+  });
+
+  it("accepts the official active-lease empty closed_on as not closed", async () => {
+    const adapter = makeAdapter(
+      costFetch({
+        leases: [
+          {
+            id: {
+              owner: "akash1consumer",
+              provider: "akash1provider",
+              dseq: "7001",
+            },
+            state: "active",
+            price: { amount: "7.5", denom: "uakt" },
+            created_at: "100",
+            closed_on: "",
+          },
+        ],
+        escrow_account: {
+          state: {
+            owner: "akash1consumer",
+            state: "open",
+            settled_at: "",
+            funds: [{ amount: "500000.000000000000000000", denom: "uakt" }],
+            transferred: [{ amount: "12.250000000000000000", denom: "uakt" }],
+          },
+        },
+      }),
+      { now: () => observedAt }
+    );
+
+    const evidence = await adapter.observeCost({ resourceId: "7001" });
+    expect(evidence).not.toHaveProperty("providerClosedAtPosition");
+    expect(evidence.escrow).toEqual({
+      state: "open",
+      funds: [{ amount: "500000.000000000000000000", denom: "uakt" }],
+      transferred: [{ amount: "12.250000000000000000", denom: "uakt" }],
+    });
+  });
+
+  it("preserves signed overdrawn funds but rejects negative transferred cost", async () => {
+    const overdrawn = {
+      deployment: {
+        id: { owner: "akash1consumer", dseq: "7001" },
+        state: "closed",
+      },
+      leases: [
+        {
+          id: {
+            owner: "akash1consumer",
+            provider: "akash1provider",
+            dseq: "7001",
+          },
+          state: "closed",
+          price: { amount: "7.500000000000000000", denom: "uakt" },
+          created_at: "100",
+          closed_on: "150",
+        },
+      ],
+      escrow_account: {
+        state: {
+          owner: "akash1consumer",
+          state: "overdrawn",
+          settled_at: "151",
+          funds: [{ amount: "-6344.131225000000000000", denom: "uakt" }],
+          transferred: [{ amount: "500000.000000000000000000", denom: "uakt" }],
+        },
+      },
+    };
+    const adapter = makeAdapter(costFetch(overdrawn), {
+      now: () => observedAt,
+    });
+
+    await expect(adapter.observeCost({ resourceId: "7001" })).resolves.toEqual(
+      expect.objectContaining({
+        providerClosedAtPosition: "150",
+        escrow: {
+          state: "overdrawn",
+          providerSettledAtPosition: "151",
+          funds: [{ amount: "-6344.131225000000000000", denom: "uakt" }],
+          transferred: [{ amount: "500000.000000000000000000", denom: "uakt" }],
+        },
+      })
+    );
+
+    const negativeTransferred = makeAdapter(
+      costFetch({
+        ...overdrawn,
+        escrow_account: {
+          state: {
+            ...overdrawn.escrow_account.state,
+            transferred: [{ amount: "-1.0", denom: "uakt" }],
+          },
+        },
+      })
+    );
+    await expect(
+      negativeTransferred.observeCost({ resourceId: "7001" })
+    ).rejects.toMatchObject({ code: "UNEXPECTED_SHAPE" });
+  });
+
+  it("rejects a response for another deployment", async () => {
+    const adapter = makeAdapter(
+      costFetch({
+        deployment: { id: { owner: "akash1consumer", dseq: "7002" } },
+      })
+    );
+    await expect(
+      adapter.observeCost({ resourceId: "7001" })
+    ).rejects.toMatchObject({
+      code: "UNEXPECTED_SHAPE",
+    });
+
+    const wrongLease = makeAdapter(
+      costFetch({
+        leases: [
+          {
+            id: {
+              owner: "akash1consumer",
+              provider: "akash1provider",
+              dseq: "7002",
+            },
+            state: "active",
+            price: { amount: "7.5", denom: "uakt" },
+            created_at: "100",
+          },
+        ],
+      })
+    );
+    await expect(
+      wrongLease.observeCost({ resourceId: "7001" })
+    ).rejects.toMatchObject({ code: "UNEXPECTED_SHAPE" });
+  });
+
+  it("requires one consumer identity across deployment, lease, and escrow", async () => {
+    const adapter = makeAdapter(
+      costFetch({
+        leases: [
+          {
+            id: {
+              owner: "akash1other",
+              provider: "akash1provider",
+              dseq: "7001",
+            },
+            state: "active",
+            price: { amount: "7.5", denom: "uakt" },
+            created_at: "100",
+          },
+        ],
+      })
+    );
+    await expect(
+      adapter.observeCost({ resourceId: "7001" })
+    ).rejects.toMatchObject({ code: "UNEXPECTED_SHAPE" });
+
+    const wrongPinnedConsumer = makeAdapter(
+      costFetch({
+        deployment: {
+          id: { owner: "akash1other", dseq: "7001" },
+          state: "active",
+        },
+        leases: [
+          {
+            id: {
+              owner: "akash1other",
+              provider: "akash1provider",
+              dseq: "7001",
+            },
+            state: "active",
+            price: { amount: "7.5", denom: "uakt" },
+            created_at: "100",
+          },
+        ],
+        escrow_account: {
+          state: {
+            owner: "akash1other",
+            state: "open",
+            settled_at: "0",
+            funds: [{ amount: "500000", denom: "uakt" }],
+            transferred: [{ amount: "12", denom: "uakt" }],
+          },
+        },
+      })
+    );
+    await expect(
+      wrongPinnedConsumer.observeCost({ resourceId: "7001" })
+    ).rejects.toMatchObject({ code: "UNEXPECTED_SHAPE" });
+
+    const invalidPin = makeAdapter(costFetch(), {
+      expectedCostConsumerAccountId: "",
+    });
+    await expect(
+      invalidPin.observeCost({ resourceId: "7001" })
+    ).rejects.toMatchObject({ code: "UNEXPECTED_SHAPE" });
+  });
+
+  it("rejects precision-losing numeric native amounts and log-splitting identifiers", async () => {
+    const numeric = makeAdapter(
+      costFetch({
+        leases: [
+          {
+            id: {
+              owner: "akash1consumer",
+              provider: "akash1provider",
+              dseq: "7001",
+            },
+            state: "active",
+            price: { amount: 9007199254740992, denom: "uakt" },
+            created_at: "100",
+          },
+        ],
+      })
+    );
+    await expect(
+      numeric.observeCost({ resourceId: "7001" })
+    ).rejects.toMatchObject({
+      code: "UNEXPECTED_SHAPE",
+    });
+
+    const unsafe = makeAdapter(
+      costFetch({
+        deployment: { id: { owner: "akash1consumer\nforged", dseq: "7001" } },
+      })
+    );
+    await expect(
+      unsafe.observeCost({ resourceId: "7001" })
+    ).rejects.toMatchObject({
+      code: "UNEXPECTED_SHAPE",
+    });
+  });
+});
 
 describe("buildAkashSdl", () => {
   it("renders services, profiles, placement pricing, and deployment sections", () => {
