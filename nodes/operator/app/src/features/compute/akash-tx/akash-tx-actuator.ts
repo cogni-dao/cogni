@@ -481,7 +481,9 @@ export class AkashTxActuator implements AkashTxActuatorPort {
         record: bound.record,
       });
     }
-    await this.bindCost(bound.record, input.externalName);
+    // Refresh durable native evidence before replacing a paid workload. A failed cost read/write
+    // holds the update retryably and must leave the provider untouched.
+    await this.observeCost(bound.record, input.externalName);
     this.log.info(
       {
         cogniKey: input.cogniKey,

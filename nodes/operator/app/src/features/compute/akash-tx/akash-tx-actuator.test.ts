@@ -254,12 +254,13 @@ class FakeCost implements ComputeCostEvidencePort, ComputeCostStorePort {
   observations: { allocationReceiptId: string; resourceId: string }[] = [];
   closes: string[] = [];
   failBind = false;
+  failEvidence = false;
   failObserve = false;
   failClose = false;
   failureMessage = "cost dependency down";
 
   async observeCost(input: { resourceId: string }) {
-    if (this.failObserve) throw new Error(this.failureMessage);
+    if (this.failEvidence) throw new Error(this.failureMessage);
     return { ...COST_EVIDENCE, resourceId: input.resourceId };
   }
 
@@ -1232,8 +1233,8 @@ describe("AkashTxActuator identity binding (task.5103)", () => {
     expect(api.updateCalls).toBe(0);
   });
 
-  it("re-binds the receipt and advances the generation before an SDL replacement", async () => {
-    const { actuator, api, ledger, log } = build();
+  it("re-binds and records cost evidence before an SDL replacement", async () => {
+    const { actuator, api, ledger, log, cost } = build();
     await actuator.create({
       cogniKey: "k1",
       environment: "candidate-a",
@@ -1246,6 +1247,16 @@ describe("AkashTxActuator identity binding (task.5103)", () => {
     ledger.bindIdentity = async (input) => {
       order.push("rebind");
       return bind(input);
+    };
+    const observeEvidence = cost.observeCost.bind(cost);
+    cost.observeCost = async (input) => {
+      order.push("cost_evidence");
+      return observeEvidence(input);
+    };
+    const observeStore = cost.observe.bind(cost);
+    cost.observe = async (input) => {
+      order.push("cost_store");
+      return observeStore(input);
     };
     const update = api.updateAllocated.bind(api);
     api.updateAllocated = async () => {
@@ -1262,13 +1273,60 @@ describe("AkashTxActuator identity binding (task.5103)", () => {
       migration: REQUIRE,
     });
 
-    expect(order).toEqual(["rebind", "update"]);
+    expect(order).toEqual([
+      "rebind",
+      "cost_evidence",
+      "cost_store",
+      "update",
+      "cost_evidence",
+      "cost_store",
+    ]);
     expect(ledger.rows.get("k1")?.identity.compositeGeneration).toBe(9);
     // IDENTITY_IS_WRITE_ONCE — an update advances the revision, never the owner.
     expect(ledger.rows.get("k1")?.identity.nodeId).toBe(IDENTITY.nodeId);
     expect(log.lines.map((line) => line.marker)).toContain(
       "akash_tx_receipt_rebound"
     );
+  });
+
+  it.each([
+    "evidence",
+    "store",
+  ] as const)("holds an update before provider IO when pre-update cost %s fails", async (failure) => {
+    const { actuator, api, ledger, cost } = build();
+    await actuator.create({
+      cogniKey: "k1",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec: SPEC,
+      migration: REQUIRE,
+    });
+    const before = ledger.rows.get("k1");
+    const spent = { cursor: api.cursorCalls, allocate: api.allocateCalls };
+    if (failure === "evidence") cost.failEvidence = true;
+    else cost.failObserve = true;
+
+    await expect(
+      actuator.update({
+        cogniKey: "k1",
+        externalName: "7001",
+        environment: "candidate-a",
+        identity: { ...IDENTITY, compositeGeneration: 9 },
+        spec: SPEC,
+        migration: REQUIRE,
+      })
+    ).rejects.toMatchObject({ code: "ledger_unavailable" });
+
+    expect(api.updateCalls).toBe(0);
+    expect(api.cursorCalls).toBe(spent.cursor);
+    expect(api.allocateCalls).toBe(spent.allocate);
+    expect(api.releaseCalls).toEqual([]);
+    expect(ledger.rows.size).toBe(1);
+    expect(ledger.rows.get("k1")).toMatchObject({
+      receiptId: before?.receiptId,
+      externalName: before?.externalName,
+      state: "allocated",
+    });
   });
 
   it("refuses an update on a paid handle that no receipt attributes", async () => {
