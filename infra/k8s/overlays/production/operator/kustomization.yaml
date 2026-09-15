@@ -12,8 +12,23 @@ resources:
   - external-secret.yaml
   - ./secrets-writer-sa.yaml
   - ./compute-workload-platform-application.yaml
+  # story.5016 production cutover — the private Akash transaction actuator Crossplane calls.
+  # #2234 shipped the two ExternalSecrets deliberately WITHOUT this Deployment because a
+  # projected Secret source whose key is absent makes kubelet refuse the mount (FailedMount,
+  # Argo app Degraded, invisible to Loki — bug.5142). That ordering constraint is satisfied:
+  # the production credential is written and verified at cogni/production/akash-tx-actuator,
+  # so the Deployment can land and mount it.
+  - ../../../base/akash-tx-actuator
+  - ./akash-tx-actuator-external-secret.yaml
+  - ./akash-tx-actuator-auth-external-secret.yaml
 
 namePrefix: operator-
+
+# Runs AFTER the built-in namePrefix transformer and restores the actuator Service's
+# name to the bare `akash-tx-actuator` the Crossplane Composition dials. See
+# ../../../base/akash-tx-actuator-service-name for why the prefix is what gives.
+transformers:
+  - ../../../base/akash-tx-actuator-service-name
 
 replacements:
   - source:
@@ -27,7 +42,7 @@ replacements:
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/cogni-template
-    digest: "sha256:859db2664fb58ba15169a514fcf767e0ac6462ea4e943b0b513f9953fc05d77a"
+    digest: "sha256:850d73e3115faaf6152dd5952a63f8cc48c43eac67c7c638601998b8df883266"
 
 patches:
   # story.5016 Gate 0b: controller env values are set BY NAME via strategic
@@ -60,6 +75,41 @@ patches:
                     value: cognidao.org
                   - name: AKASH_ALLOWED_PROVIDERS
                     value: akash16yr3wxt97ae045a06kr3ycde9srcgpg8syjxxm
+  # story.5016 Gate 0b applies here too: actuator env values are set BY NAME via
+  # strategic merge, never by positional index (see the controller patch above).
+  - target:
+      kind: Deployment
+      name: akash-tx-actuator
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: akash-tx-actuator
+      spec:
+        template:
+          spec:
+            containers:
+              - name: actuator
+                env:
+                  - name: POD_NAMESPACE
+                    valueFrom:
+                      fieldRef: { fieldPath: metadata.namespace }
+                  - name: DEPLOY_ENVIRONMENT
+                    value: production
+                  # Same allowlist as the legacy controller above and as candidate-a's proven
+                  # lease: the zencloud provider that already hosts every production slot.
+                  - name: AKASH_ALLOWED_PROVIDERS
+                    value: akash16yr3wxt97ae045a06kr3ycde9srcgpg8syjxxm
+                  - name: AKASH_ACTUATOR_ACCOUNT_ID
+                    # PUBLIC, non-secret Akash account address of the operator sponsor wallet.
+                    # Asserted at boot by assertActuatorWalletAccount() against Console
+                    # /v1/wallets, so the actuator refuses to start if its credential resolves
+                    # to any other account. Unlike candidate-a (which kept the original shared
+                    # account), production spends from its own DEDICATED funded account —
+                    # ONE_WALLET_ONE_ACTIVE_WRITER is per environment, and this pin is the
+                    # non-secret half of that proof (the credential lives only at
+                    # cogni/production/akash-tx-actuator, never in the operator bucket).
+                    value: "akash10auj6u6wr7aqjawuxurgue9w7wfnca50t8cr4l"
   # Node-specific ConfigMap values.
   # DNS names must match prefixed Service names (namePrefix applies to all resources).
   - target:
