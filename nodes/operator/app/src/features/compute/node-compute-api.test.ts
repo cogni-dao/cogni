@@ -93,19 +93,28 @@ describe("resolveNodeComputeApi", () => {
    * NO_SILENT_DOWNGRADE, restated for the post-task.5097 world. The refusal in
    * `resolveNodeComputeApi` — throw, never degrade to `legacy`, because the two authorities mint
    * Akash leases under disjoint idempotence keys and a quiet downgrade buys a SECOND PAID LEASE —
-   * is now UNREACHABLE from any catalog row, because every environment
-   * `deploymentEnvironmentSchema` admits has a control plane. The test that used to drive it with
-   * `{production: "crossplane"}` was therefore deleted rather than weakened: that input is now
-   * legitimately `crossplane`, so the old assertion asserted the opposite of the truth.
+   * is REACHABLE from exactly one admitted environment: preview, which deliberately gets no
+   * control plane (story.5016 — preview has no funded Akash account, gets no actuator, and its
+   * node slots are retired; installing an API nothing can ever pay for would only stage a trap).
+   * The test that used to drive the refusal with `{production: "crossplane"}` was deleted rather
+   * than weakened: that input is now legitimately `crossplane`.
    *
-   * What replaces it is the invariant that MAKES it unreachable, plus proof the guard still fires
-   * for an environment outside the set. If a fourth environment is ever added to the schema, this
-   * is the assertion that breaks first — before a row can render a composite nothing reconciles.
+   * The refusal is proven live for preview and for an environment outside the schema. If a
+   * fourth environment is ever added, this is the assertion that breaks first — before a row can
+   * render a composite nothing reconciles.
    */
   it("keeps the refusal armed for an environment with no control plane", () => {
     for (const environment of deploymentEnvironmentSchema.options) {
-      expect(hasCrossplaneControlPlane(environment), environment).toBe(true);
+      expect(hasCrossplaneControlPlane(environment), environment).toBe(
+        environment !== "preview"
+      );
     }
+    expect(() =>
+      resolveNodeComputeApi({
+        catalog: { compute_api: { preview: "crossplane" } },
+        environment: "preview",
+      })
+    ).toThrow(/control plane/i);
     expect(hasCrossplaneControlPlane("canary")).toBe(false);
     expect(crossplaneCompositeApplicationPath("canary")).toBe(
       "infra/k8s/argocd/control-plane/canary/crossplane-xcomputeworkload-application.yaml"
