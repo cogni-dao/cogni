@@ -254,7 +254,7 @@ describe("DrizzleAkashTxAllocationLedger (Component)", () => {
     });
   });
 
-  it("reports a conflict instead of re-pointing a receipt at another node or environment", async () => {
+  it("reports a conflict instead of re-pointing a receipt at another immutable identity", async () => {
     await ledger.claim({
       cogniKey: "k1",
       workload: "toks9",
@@ -267,6 +267,16 @@ describe("DrizzleAkashTxAllocationLedger (Component)", () => {
         cogniKey: "k1",
         environment: "candidate-a",
         identity: { ...IDENTITY, nodeId: OTHER_NODE_ID },
+      })
+    ).toMatchObject({ state: "conflict" });
+    expect(
+      await ledger.bindIdentity({
+        cogniKey: "k1",
+        environment: "candidate-a",
+        identity: {
+          ...IDENTITY,
+          compositeUid: "1aa11111-2222-4333-8444-555555555555",
+        },
       })
     ).toMatchObject({ state: "conflict" });
     expect(

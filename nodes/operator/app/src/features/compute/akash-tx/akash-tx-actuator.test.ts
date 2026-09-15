@@ -32,6 +32,9 @@ import type {
   AkashTxMigrationPort,
   AkashTxMigrationRequirement,
   AkashTxWorkloadIdentity,
+  ComputeCostEvidencePort,
+  ComputeCostStorePort,
+  ComputeResourceCostEvidence,
   ComputeWorkloadMigrationInput,
 } from "@/ports";
 import { AkashTxError } from "@/ports";
@@ -63,6 +66,11 @@ const IDENTITY: AkashTxWorkloadIdentity = {
 const OTHER_IDENTITY: AkashTxWorkloadIdentity = {
   ...IDENTITY,
   nodeId: "9a1b2c3d-4e5f-4061-8273-8495a6b7c8d9",
+};
+
+const OTHER_COMPOSITE_IDENTITY: AkashTxWorkloadIdentity = {
+  ...IDENTITY,
+  compositeUid: "4d3c2b1a-9876-4321-baaa-010203040506",
 };
 
 /** The precondition every mutating call must state (bug.5140). */
@@ -121,6 +129,7 @@ class FakeLedger implements AkashTxAllocationLedgerPort {
       return { state: "blocked", ownerCogniKey: holder.cogniKey } as const;
     }
     const record: AkashTxAllocationRecord = {
+      receiptId: `receipt-${input.cogniKey}`,
       cogniKey: input.cogniKey,
       identity: input.identity,
       environment: input.environment,
@@ -140,7 +149,8 @@ class FakeLedger implements AkashTxAllocationLedgerPort {
     if (!row) return { state: "absent" } as const;
     if (
       row.identity.nodeId !== input.identity.nodeId ||
-      row.environment !== input.environment
+      row.environment !== input.environment ||
+      row.identity.compositeUid !== input.identity.compositeUid
     ) {
       return { state: "conflict", record: row } as const;
     }
@@ -202,6 +212,86 @@ class FakeLedger implements AkashTxAllocationLedgerPort {
     if (this.failReads) throw new Error("ledger down");
     return this.rows.get(input.cogniKey) ?? null;
   }
+}
+
+function seedAllocated(
+  ledger: FakeLedger,
+  cogniKey = "k1",
+  externalName = "7001"
+): void {
+  ledger.rows.set(cogniKey, {
+    receiptId: `receipt-${cogniKey}`,
+    cogniKey,
+    identity: IDENTITY,
+    environment: "candidate-a",
+    state: "allocated",
+    externalName,
+    providerAccount: "akash1provider",
+  });
+}
+
+const COST_EVIDENCE: ComputeResourceCostEvidence = {
+  computeProvider: "akash",
+  resourceId: "7001",
+  computeProviderAccountId: "akash1consumer",
+  computeSupplierAccountId: "akash1provider",
+  rate: { amount: "7.5", denom: "uakt", unit: "block" },
+  providerOpenedAtPosition: "100",
+  escrow: {
+    state: "open",
+    funds: [{ amount: "500000", denom: "uakt" }],
+    transferred: [{ amount: "10", denom: "uakt" }],
+  },
+  observedAt: new Date("2026-09-15T00:00:00.000Z"),
+};
+
+class FakeCost implements ComputeCostEvidencePort, ComputeCostStorePort {
+  binds: { allocationReceiptId: string; resourceId: string }[] = [];
+  observations: { allocationReceiptId: string; resourceId: string }[] = [];
+  closes: string[] = [];
+  failBind = false;
+  failObserve = false;
+  failClose = false;
+
+  async observeCost(input: { resourceId: string }) {
+    if (this.failObserve) throw new Error("cost evidence down");
+    return { ...COST_EVIDENCE, resourceId: input.resourceId };
+  }
+
+  async bind(input: {
+    allocationReceiptId: string;
+    resource: { computeProvider: string; resourceId: string };
+  }) {
+    if (this.failBind) throw new Error("cost store down");
+    this.binds.push({
+      allocationReceiptId: input.allocationReceiptId,
+      resourceId: input.resource.resourceId,
+    });
+  }
+
+  async observe(input: {
+    allocationReceiptId: string;
+    evidence: ComputeResourceCostEvidence;
+  }) {
+    if (this.failObserve) throw new Error("cost store down");
+    this.observations.push({
+      allocationReceiptId: input.allocationReceiptId,
+      resourceId: input.evidence.resourceId,
+    });
+  }
+
+  async close(input: { allocationReceiptId: string }) {
+    if (this.failClose) throw new Error("cost store down");
+    this.closes.push(input.allocationReceiptId);
+  }
+
+  async reportByNode() {
+    return [];
+  }
+}
+
+function costDeps(cost = new FakeCost()) {
+  return { cost, costEvidence: cost, costStore: cost };
 }
 
 interface FakeConsoleOptions {
@@ -291,13 +381,16 @@ function build(consoleOptions: FakeConsoleOptions = {}) {
   const api = new FakeConsole(consoleOptions);
   const log = recordingLogger();
   const migration = new FakeMigration();
+  const costs = costDeps();
   const actuator = new AkashTxActuator({
     console: api,
     ledger,
     log,
     migration,
+    costEvidence: costs.costEvidence,
+    costStore: costs.costStore,
   });
-  return { actuator, ledger, api, log, migration };
+  return { actuator, ledger, api, log, migration, cost: costs.cost };
 }
 
 describe("AkashTxActuator.create", () => {
@@ -574,8 +667,9 @@ describe("AkashTxActuator.create", () => {
 });
 
 describe("AkashTxActuator.observe", () => {
-  it("reads a known handle without touching the ledger", async () => {
-    const { actuator, api } = build();
+  it("reads a known handle only after matching it to the durable receipt", async () => {
+    const { actuator, api, ledger } = build();
+    seedAllocated(ledger);
     const observation = await actuator.observe({
       cogniKey: "k1",
       externalName: "7001",
@@ -632,11 +726,13 @@ describe("AkashTxActuator.observe", () => {
       console: api,
       ledger,
       log: recordingLogger(),
+      ...costDeps(),
       probe: async () => {
         probes += 1;
         return true;
       },
     });
+    seedAllocated(ledger);
     const observation = await actuator.observe({
       cogniKey: "k1",
       externalName: "7001",
@@ -654,11 +750,13 @@ describe("AkashTxActuator.observe", () => {
       console: api,
       ledger,
       log: recordingLogger(),
+      ...costDeps(),
       probe: async () => {
         probes += 1;
         return true;
       },
     });
+    seedAllocated(ledger);
     const observation = await actuator.observe({
       cogniKey: "k1",
       externalName: "7001",
@@ -722,10 +820,132 @@ describe("AkashTxActuator.update / delete", () => {
       console: api,
       ledger,
       log: recordingLogger(),
+      ...costDeps(),
     });
+    seedAllocated(ledger);
     await expect(
       actuator.delete({ cogniKey: "k1", externalName: "7001" })
     ).resolves.toBeUndefined();
+  });
+
+  it("refuses a mismatched update handle before provider IO", async () => {
+    const { actuator, api } = build();
+    await actuator.create({
+      cogniKey: "k1",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec: SPEC,
+      migration: REQUIRE,
+    });
+    await expect(
+      actuator.update({
+        cogniKey: "k1",
+        externalName: "7999",
+        environment: "candidate-a",
+        identity: IDENTITY,
+        spec: SPEC,
+        migration: REQUIRE,
+      })
+    ).rejects.toMatchObject({ code: "identity_conflict" });
+    expect(api.updateCalls).toBe(0);
+  });
+
+  it("refuses a mismatched delete handle before provider IO", async () => {
+    const { actuator, api } = build();
+    await actuator.create({
+      cogniKey: "k1",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec: SPEC,
+      migration: REQUIRE,
+    });
+    await expect(
+      actuator.delete({ cogniKey: "k1", externalName: "7999" })
+    ).rejects.toMatchObject({ code: "identity_conflict" });
+    expect(api.releaseCalls).toEqual([]);
+  });
+
+  it("retries cost close after provider release without creating another lease", async () => {
+    const { actuator, api, ledger, cost } = build();
+    await actuator.create({
+      cogniKey: "k1",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec: SPEC,
+      migration: REQUIRE,
+    });
+    cost.failClose = true;
+    await expect(
+      actuator.delete({ cogniKey: "k1", externalName: "7001" })
+    ).rejects.toMatchObject({ code: "ledger_unavailable" });
+    expect(ledger.rows.get("k1")?.state).toBe("released");
+    expect(api.allocateCalls).toBe(1);
+
+    cost.failClose = false;
+    api.release = async () => {
+      throw consoleError("HTTP_ERROR", 404);
+    };
+    await expect(
+      actuator.delete({ cogniKey: "k1", externalName: "7001" })
+    ).resolves.toBeUndefined();
+    expect(api.allocateCalls).toBe(1);
+    expect(cost.closes).toEqual(["receipt-k1"]);
+  });
+});
+
+describe("AkashTxActuator cost attribution (task.5071)", () => {
+  it("binds and observes the paid handle against the allocation receipt", async () => {
+    const { actuator, cost } = build();
+    await actuator.create({
+      cogniKey: "k1",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec: SPEC,
+      migration: REQUIRE,
+    });
+    expect(cost.binds).toContainEqual({
+      allocationReceiptId: "receipt-k1",
+      resourceId: "7001",
+    });
+    expect(cost.observations).toContainEqual({
+      allocationReceiptId: "receipt-k1",
+      resourceId: "7001",
+    });
+  });
+
+  it("holds acceptance on a cost failure and repairs by replay without re-spending", async () => {
+    const { actuator, api, ledger, cost, log } = build();
+    cost.failBind = true;
+    await expect(
+      actuator.create({
+        cogniKey: "k1",
+        environment: "candidate-a",
+        identity: IDENTITY,
+        spec: SPEC,
+        migration: REQUIRE,
+      })
+    ).rejects.toMatchObject({ code: "ledger_unavailable" });
+    expect(api.allocateCalls).toBe(1);
+    expect(api.releaseCalls).toEqual([]);
+    expect(ledger.rows.get("k1")).toMatchObject({
+      state: "allocated",
+      externalName: "7001",
+    });
+
+    cost.failBind = false;
+    await expect(
+      actuator.create({
+        cogniKey: "k1",
+        environment: "candidate-a",
+        identity: IDENTITY,
+        spec: SPEC,
+        migration: REQUIRE,
+      })
+    ).resolves.toMatchObject({ externalName: "7001", replayed: true });
+    expect(api.allocateCalls).toBe(1);
+    expect(log.lines.map((line) => line.marker)).toContain(
+      "compute_cost_unavailable"
+    );
   });
 });
 
@@ -802,7 +1022,12 @@ describe("AkashTxActuator migration gate (bug.5140)", () => {
     const api = new FakeConsole();
     const log = recordingLogger();
     // An actuator wired WITHOUT a prover: fail closed, never assume migrated.
-    const actuator = new AkashTxActuator({ console: api, ledger, log });
+    const actuator = new AkashTxActuator({
+      console: api,
+      ledger,
+      log,
+      ...costDeps(),
+    });
 
     await expect(
       actuator.create({
@@ -876,6 +1101,13 @@ describe("AkashTxActuator migration gate (bug.5140)", () => {
 
     await expect(actuator.observe({ cogniKey: "k1" })).resolves.toMatchObject({
       found: false,
+    });
+    await actuator.create({
+      cogniKey: "k1",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec: SPEC,
+      migration: { policy: "Skip" },
     });
     await actuator.delete({ cogniKey: "k1", externalName: "7001" });
     expect(api.releaseCalls).toEqual(["7001"]);
@@ -955,6 +1187,28 @@ describe("AkashTxActuator identity binding (task.5103)", () => {
       boundNodeId: IDENTITY.nodeId,
       operation: "create",
     });
+  });
+
+  it("refuses an SDL update from another composite before provider IO", async () => {
+    const { actuator, api } = build();
+    await actuator.create({
+      cogniKey: "k1",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec: SPEC,
+      migration: REQUIRE,
+    });
+    await expect(
+      actuator.update({
+        cogniKey: "k1",
+        externalName: "7001",
+        environment: "candidate-a",
+        identity: OTHER_COMPOSITE_IDENTITY,
+        spec: SPEC,
+        migration: REQUIRE,
+      })
+    ).rejects.toMatchObject({ code: "identity_conflict" });
+    expect(api.updateCalls).toBe(0);
   });
 
   it("re-binds the receipt and advances the generation before an SDL replacement", async () => {
@@ -1076,6 +1330,13 @@ describe("composition root wiring (story.5016)", () => {
 
   it("wires a migration prover — a fail-closed gate with none refuses every paid create", () => {
     expect(actuatorDepsLiteral()).toMatch(/\bmigration\s*[,:]/);
+  });
+
+  it("wires receipt-linked cost evidence and storage as required actuator dependencies", () => {
+    const deps = actuatorDepsLiteral();
+    expect(deps).toMatch(/\bcostEvidence\s*:/);
+    expect(deps).toMatch(/\bcostStore\s*:/);
+    expect(source).toMatch(/new DrizzleComputeCostStore\(getDb\)/);
   });
 
   it("uses the SAME per-digest Job prover the ComputeWorkload controller uses", () => {

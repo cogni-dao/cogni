@@ -41,6 +41,7 @@ import type {
 import { akashTxAllocations } from "@/shared/db/schema";
 
 interface AllocationRow {
+  id: string;
   cogniKey: string;
   nodeId: string;
   compositeUid: string;
@@ -53,6 +54,7 @@ interface AllocationRow {
 }
 
 const SELECTION = {
+  id: akashTxAllocations.id,
   cogniKey: akashTxAllocations.cogniKey,
   nodeId: akashTxAllocations.nodeId,
   compositeUid: akashTxAllocations.compositeUid,
@@ -66,6 +68,7 @@ const SELECTION = {
 
 function toRecord(row: AllocationRow): AkashTxAllocationRecord {
   return {
+    receiptId: row.id,
     cogniKey: row.cogniKey,
     identity: {
       nodeId: row.nodeId,
@@ -222,7 +225,8 @@ export class DrizzleAkashTxAllocationLedger
       if (!existing) return { state: "absent" as const };
       if (
         existing.nodeId !== input.identity.nodeId ||
-        existing.environment !== input.environment
+        existing.environment !== input.environment ||
+        existing.compositeUid !== input.identity.compositeUid
       ) {
         return { state: "conflict" as const, record: toRecord(existing) };
       }

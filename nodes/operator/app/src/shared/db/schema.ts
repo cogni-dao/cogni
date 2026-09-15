@@ -25,5 +25,6 @@ export * from "@cogni/db-schema/profile";
 export * from "@cogni/db-schema/refs";
 export * from "@cogni/db-schema/scheduling";
 export * from "./akash-tx-allocations";
+export * from "./compute-cost-intervals";
 export * from "./nodes";
 export * from "./work-item-sessions";

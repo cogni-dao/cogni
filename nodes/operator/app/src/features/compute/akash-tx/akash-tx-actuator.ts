@@ -37,8 +37,8 @@
  *     and holding the wallet-global slot across it would deadlock the whole fleet.
  *   - REFUSAL_IS_OBSERVABLE: every refusal emits a structured log line before it throws
  *     (bug.5115: a wallet block that only reached CR status was invisible for hours).
- * Side-effects: IO (Akash Console transactions via the injected client; durable ledger writes;
- *   one bounded serving probe per observe when asked)
+ * Side-effects: IO (Akash Console transactions via the injected client; durable allocation and
+ *   receipt-linked cost writes; one bounded serving probe per observe when asked)
  * Links: @ports/akash-tx.port, adapters/server/compute/akash-compute.adapter (SDL + provider
  *   screening stay there), adapters/server/compute/akash-tx-allocation-ledger.adapter,
  *   ./akash-tx-wallet, ./akash-tx-http, task.5095
@@ -60,6 +60,8 @@ import {
   type AkashTxObservation,
   type AkashTxResource,
   type AkashTxWorkloadIdentity,
+  type ComputeCostEvidencePort,
+  type ComputeCostStorePort,
 } from "@/ports";
 
 import {
@@ -92,6 +94,9 @@ export interface AkashTxActuatorDeps {
    * migration must not spend against a database it knows nothing about.
    */
   readonly migration?: AkashTxMigrationPort;
+  /** Paired, receipt-linked cost seams. Production wiring supplies both or startup fails. */
+  readonly costEvidence: ComputeCostEvidencePort;
+  readonly costStore: ComputeCostStorePort;
 }
 
 const NOOP_LOGGER: AkashTxLogger = {
@@ -165,7 +170,8 @@ function identityDiffers(
 ): boolean {
   return (
     record.identity.nodeId !== identity.nodeId ||
-    record.environment !== environment
+    record.environment !== environment ||
+    record.identity.compositeUid !== identity.compositeUid
   );
 }
 
@@ -191,6 +197,8 @@ export class AkashTxActuator implements AkashTxActuatorPort {
   private readonly log: AkashTxLogger;
   private readonly probe?: AkashTxServingProbe;
   private readonly migration?: AkashTxMigrationPort;
+  private readonly costEvidence: ComputeCostEvidencePort;
+  private readonly costStore: ComputeCostStorePort;
 
   constructor(deps: AkashTxActuatorDeps) {
     this.console = deps.console;
@@ -198,6 +206,8 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     this.log = deps.log ?? NOOP_LOGGER;
     if (deps.probe) this.probe = deps.probe;
     if (deps.migration) this.migration = deps.migration;
+    this.costEvidence = deps.costEvidence;
+    this.costStore = deps.costStore;
   }
 
   async observe(input: {
@@ -206,7 +216,16 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     expectedSourceSha?: string;
   }): Promise<AkashTxObservation> {
     if (input.externalName) {
-      const resource = await this.describe(input.externalName);
+      const record = await this.requireStoredHandle(
+        input.cogniKey,
+        input.externalName,
+        "observe"
+      );
+      const resource = await this.describe(
+        input.externalName,
+        record.providerAccount,
+        record
+      );
       return this.withServing(
         { found: true, resource },
         input.expectedSourceSha
@@ -217,7 +236,8 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     if (record.externalName) {
       const resource = await this.describe(
         record.externalName,
-        record.providerAccount
+        record.providerAccount,
+        record
       );
       return this.withServing(
         { found: true, resource },
@@ -312,7 +332,8 @@ export class AkashTxActuator implements AkashTxActuatorPort {
         );
         const resource = await this.describe(
           claim.record.externalName,
-          claim.record.providerAccount
+          claim.record.providerAccount,
+          claim.record
         );
         return { ...resource, replayed: true, recovered: false };
       }
@@ -388,9 +409,16 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       externalName: allocated.leaseId,
       providerAccount: allocated.providerAccount,
     });
+    const allocationRecord = await this.requireStoredHandle(
+      input.cogniKey,
+      allocated.leaseId,
+      "create"
+    );
+    await this.bindCost(allocationRecord, allocated.leaseId);
     const resource = await this.describe(
       allocated.leaseId,
-      allocated.providerAccount
+      allocated.providerAccount,
+      allocationRecord
     );
     this.log.info(
       {
@@ -431,6 +459,16 @@ export class AkashTxActuator implements AkashTxActuatorPort {
         ...(bound.state === "conflict" ? { record: bound.record } : {}),
       });
     }
+    if (bound.record.externalName !== input.externalName) {
+      throw this.identityConflict({
+        cogniKey: input.cogniKey,
+        operation: "update",
+        identity: input.identity,
+        environment: input.environment,
+        record: bound.record,
+      });
+    }
+    await this.bindCost(bound.record, input.externalName);
     this.log.info(
       {
         cogniKey: input.cogniKey,
@@ -463,13 +501,35 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       { cogniKey: input.cogniKey, externalName: input.externalName },
       "akash_tx_updated"
     );
-    return this.describe(input.externalName);
+    return this.describe(
+      input.externalName,
+      bound.record.providerAccount,
+      bound.record
+    );
   }
 
   async delete(input: {
     cogniKey: string;
     externalName: string;
   }): Promise<void> {
+    const record = await this.requireStoredHandle(
+      input.cogniKey,
+      input.externalName,
+      "delete"
+    );
+    await this.observeCost(record, input.externalName).catch(
+      (error: unknown) => {
+        this.log.warn(
+          {
+            cogniKey: input.cogniKey,
+            externalName: input.externalName,
+            causeMessage:
+              error instanceof Error ? error.message : "unknown cause",
+          },
+          "compute_cost_preclose_observation_failed"
+        );
+      }
+    );
     try {
       await this.console.release({ leaseId: input.externalName });
     } catch (error) {
@@ -487,6 +547,20 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       }
     }
     await this.ledger.markReleased({ cogniKey: input.cogniKey });
+    await this.observeCost(record, input.externalName).catch(
+      (error: unknown) => {
+        this.log.warn(
+          {
+            cogniKey: input.cogniKey,
+            externalName: input.externalName,
+            causeMessage:
+              error instanceof Error ? error.message : "unknown cause",
+          },
+          "compute_cost_final_observation_failed"
+        );
+      }
+    );
+    await this.closeCost(record);
     this.log.info(
       { cogniKey: input.cogniKey, externalName: input.externalName },
       "akash_tx_released"
@@ -555,6 +629,13 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       cogniKey,
       externalName: adopted.leaseId,
     });
+    const record = await this.requireStoredHandle(
+      cogniKey,
+      adopted.leaseId,
+      "create"
+    );
+    await this.bindCost(record, adopted.leaseId);
+    await this.observeCost(record, adopted.leaseId);
     this.log.warn(
       { cogniKey, allocationCursor, externalName: adopted.leaseId },
       "akash_tx_allocation_recovered"
@@ -564,10 +645,12 @@ export class AkashTxActuator implements AkashTxActuatorPort {
 
   private async describe(
     externalName: string,
-    providerAccount?: string
+    providerAccount?: string,
+    record?: AkashTxAllocationRecord
   ): Promise<AkashTxResource> {
     try {
       const output = await this.console.status({ leaseId: externalName });
+      if (record) await this.observeCost(record, externalName);
       return resourceFrom(output, providerAccount);
     } catch (error) {
       throw mapConsoleFailure(error, { mutating: false });
@@ -628,6 +711,104 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     } catch (error) {
       throw this.ledgerUnavailable(error, input.cogniKey, "bindIdentity");
     }
+  }
+
+  private async requireStoredHandle(
+    cogniKey: string,
+    externalName: string,
+    operation: "observe" | "create" | "update" | "delete"
+  ): Promise<AkashTxAllocationRecord> {
+    const record = await this.readLedger(cogniKey);
+    if (!record || record.externalName !== externalName) {
+      this.log.error(
+        {
+          cogniKey,
+          operation,
+          requestedExternalName: externalName,
+          ...(record?.externalName
+            ? { boundExternalName: record.externalName }
+            : {}),
+        },
+        record
+          ? "akash_tx_resource_identity_conflict"
+          : "akash_tx_receipt_absent"
+      );
+      throw new AkashTxError(
+        "identity_conflict",
+        "durable receipt does not bind this cogniKey to the requested resource"
+      );
+    }
+    return record;
+  }
+
+  private async bindCost(
+    record: AkashTxAllocationRecord,
+    externalName: string
+  ): Promise<void> {
+    try {
+      await this.costStore.bind({
+        allocationReceiptId: record.receiptId,
+        resource: { computeProvider: "akash", resourceId: externalName },
+      });
+    } catch (error) {
+      throw this.costUnavailable(error, record.cogniKey, "bind");
+    }
+  }
+
+  private async observeCost(
+    record: AkashTxAllocationRecord,
+    externalName: string
+  ): Promise<void> {
+    await this.bindCost(record, externalName);
+    try {
+      const evidence = await this.costEvidence.observeCost({
+        resourceId: externalName,
+      });
+      await this.costStore.observe({
+        allocationReceiptId: record.receiptId,
+        evidence,
+      });
+      this.log.info(
+        {
+          cogniKey: record.cogniKey,
+          nodeId: record.identity.nodeId,
+          externalName,
+          rateAmount: evidence.rate.amount,
+          rateDenom: evidence.rate.denom,
+          rateUnit: evidence.rate.unit,
+        },
+        "compute_cost_observed"
+      );
+    } catch (error) {
+      throw this.costUnavailable(error, record.cogniKey, "observe");
+    }
+  }
+
+  private async closeCost(record: AkashTxAllocationRecord): Promise<void> {
+    try {
+      await this.costStore.close({ allocationReceiptId: record.receiptId });
+    } catch (error) {
+      throw this.costUnavailable(error, record.cogniKey, "close");
+    }
+  }
+
+  private costUnavailable(
+    error: unknown,
+    cogniKey: string,
+    operation: string
+  ): AkashTxError {
+    this.log.error(
+      {
+        cogniKey,
+        operation,
+        causeMessage: error instanceof Error ? error.message : "unknown cause",
+      },
+      "compute_cost_unavailable"
+    );
+    return new AkashTxError(
+      "ledger_unavailable",
+      "receipt-linked compute cost state unavailable; retry with the same key"
+    );
   }
 
   /**

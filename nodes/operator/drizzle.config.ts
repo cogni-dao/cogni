@@ -19,7 +19,7 @@ function requireDatabaseUrl(): string {
   if (!url) {
     throw new Error(
       "DATABASE_URL is required for drizzle-kit (nodes/operator/drizzle.config.ts). " +
-        "Invoke via pnpm db:migrate:dev / db:migrate:operator:container which set it from .env.local / container env.",
+        "Invoke via pnpm db:migrate:dev / db:migrate:operator:container which set it from .env.local / container env."
     );
   }
   return url;
@@ -32,6 +32,7 @@ export default defineConfig({
     "./nodes/operator/app/src/shared/db/node-access-requests.ts",
     "./nodes/operator/app/src/shared/db/work-item-sessions.ts",
     "./nodes/operator/app/src/shared/db/akash-tx-allocations.ts",
+    "./nodes/operator/app/src/shared/db/compute-cost-intervals.ts",
   ],
   out: "./nodes/operator/app/src/adapters/server/db/migrations",
   dialect: "postgresql",
