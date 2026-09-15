@@ -51,8 +51,7 @@ images:
 patches:
   # 2026-09-15 operator heap OOM (V8 'Ineffective mark-compacts near heap limit' at the
   # 384MB cap, exit 139, ~hourly): raise heap + container limit on PRODUCTION while the
-  # registry-reconcile leak (bug pending) is root-caused. Paired with scheduler-worker
-  # replicas 2->1 so host memory nets roughly flat on the full box.
+  # registry-reconcile leak (bug.5164) is root-caused (#2254).
   - target:
       kind: Deployment
       name: node-app
