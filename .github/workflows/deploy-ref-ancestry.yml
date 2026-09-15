@@ -50,6 +50,10 @@ jobs:
 
       - name: Deploy ref ancestry (bug.5150)
         id: check
+        # A real violation is surfaced as the deploy-ref-drift tracking issue below, NOT as a
+        # recurring red scheduled job — matches sync-drift-detector.yml (green job, issue is the
+        # signal). continue-on-error keeps steps.check.outcome == 'failure' for the upsert to read.
+        continue-on-error: true
         run: |
           set -o pipefail
           bash scripts/ci/check-deploy-ref-ancestry.sh 2>&1 | tee /tmp/deploy-ref-report.txt
