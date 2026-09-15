@@ -51,6 +51,7 @@ spec:
   migration:
     policy: RequireBeforeTransaction
   bootPolicy:
+    bootDeadlineSeconds: 86400
     onDeadline: Close
   leaseEpoch: 1
   dns:
