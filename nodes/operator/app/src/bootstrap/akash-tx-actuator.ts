@@ -79,6 +79,7 @@ import { createAkashTxActuatorServer } from "@/features/compute/akash-tx/akash-t
 import {
   AkashTxWalletConfigError,
   assertActuatorWalletAccount,
+  credentialFingerprint,
   resolveAkashTxWallet,
 } from "@/features/compute/akash-tx/akash-tx-wallet";
 
@@ -116,6 +117,14 @@ const [actuatorApiKey, bearerToken, databaseUrl] = await Promise.all([
 ]);
 
 /**
+ * WHICH Console credential this pod booted with (bug.5142). Computed once, over the exact
+ * string every consumer below uses, and attached to both the wallet refusals and the healthy
+ * lines — so "did the pod pick up the rotation?" is answerable by comparing two pod log lines,
+ * with no OpenBao access. Deliberately NOT computed for the bearer token.
+ */
+const consoleKeyFingerprint = credentialFingerprint(actuatorApiKey);
+
+/**
  * The wallet identity pin. Public on-chain data, so it is plain env config rather than a
  * projected secret — routing it through OpenBao would re-couple the actuator to a secret plane
  * it does not need, and a value that must be reviewable in git does not belong in a vault.
@@ -137,7 +146,7 @@ const wallet = (() => {
   } catch (error) {
     if (error instanceof AkashTxWalletConfigError) {
       log.fatal(
-        { reason: error.code, environment, namespace },
+        { reason: error.code, environment, namespace, consoleKeyFingerprint },
         "akash_tx_actuator_wallet_unresolved"
       );
     }
@@ -221,7 +230,12 @@ try {
     await consoleClient.balances()
   );
   log.info(
-    { environment, namespace, expectedAccountId: wallet.expectedAccountId },
+    {
+      environment,
+      namespace,
+      expectedAccountId: wallet.expectedAccountId,
+      consoleKeyFingerprint,
+    },
     "akash_tx_actuator_wallet_verified"
   );
 } catch (error) {
@@ -234,6 +248,7 @@ try {
       environment,
       namespace,
       expectedAccountId: wallet.expectedAccountId,
+      consoleKeyFingerprint,
     },
     "akash_tx_actuator_wallet_unverified"
   );
@@ -279,6 +294,7 @@ server.listen(LISTEN_PORT, "0.0.0.0", () => {
       namespace,
       environment,
       walletScope: wallet.walletScope,
+      consoleKeyFingerprint,
       port: LISTEN_PORT,
       allowedProviders: allowedProviders.length,
       preferredProviders: preferredProviders.length,
