@@ -24,7 +24,9 @@
  *     fallback of any kind. Omission cannot silently point the actuator at another wallet.
  *   - SCOPE_IS_PER_ENVIRONMENT: the ledger scope is `akash-console:<environment>`, so each env's
  *     wallet is serialized by exactly one env's Postgres. Per-env Postgres over ONE shared wallet
- *     is the unsound shape this exists to prevent — hence v0 seeds candidate-a ONLY.
+ *     is the unsound shape this exists to prevent. The constraint is therefore the WALLET, not
+ *     the environment: seed an env only once it has its OWN funded Console account. As-built
+ *     2026-09-15 — production on akash10auj..., candidate-a on akash12eh8..., preview unseeded.
  *   - SCOPE_IS_ROTATION_STABLE: the scope is derived from the environment, never from the secret
  *     value, so rotating the credential cannot orphan in-flight allocation receipts.
  *   - NEVER_LOGS_OR_RETURNS_THE_VALUE_IN_AN_ERROR: refusals carry a stable code and, at most, the
