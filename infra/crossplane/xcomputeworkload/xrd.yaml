@@ -372,6 +372,10 @@ spec:
                   properties:
                     hostname: { type: string, maxLength: 253 }
                     target: { type: string, maxLength: 253 }
+                    # OBSERVED, not intended (bug.5152). True only when the provider's zone
+                    # actually holds this hostname as the proxied CNAME to `target`. It used to
+                    # restate `spec.dns is set`, which made a node whose DNS write had been
+                    # failing since birth indistinguishable from a reachable one.
                     published: { type: boolean }
                 failure:
                   type: object
