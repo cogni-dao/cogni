@@ -1,0 +1,84 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# Crossplane v2 control-plane substrate for PREVIEW (story.5016 / task.5097). The object below
+# is a deliberate COPY of ../candidate-a/crossplane-core-application.yaml — same chart version,
+# same runtime-image digest, same `provider.defaultActivations: []`, same resource bounds.
+# Nothing here is re-derived: a control plane whose engine differs per environment is a control
+# plane whose candidate-a proof means nothing.
+#
+# THIS GRANTS NO AUTHORITY. It installs the OSS engine and stops. There is no XRD, Composition,
+# XR, managed resource, or provider credential in this file, and no `infra/catalog/*.yaml` row
+# names `compute_api.preview: crossplane` — `resolveNodeComputeApi` resolves an absent cell to
+# `legacy` (LEGACY_IS_DEFAULT), so preview's deployment authority remains the bespoke
+# ComputeWorkload controller until Derek flips a catalog row. Staging the engine ahead of that
+# flip only removes the manifest lead time from the cutover; it does not perform any part of it.
+#
+# Chart 2.4.0 archive checksum, verified 2026-09-12:
+# sha256:0900c2d1d01d22129abdedc3ad23621b66f87a87afb56649b95370d099ac70dd
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: crossplane-core
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://charts.crossplane.io/stable
+    chart: crossplane
+    targetRevision: 2.4.0
+    helm:
+      releaseName: crossplane
+      values: |
+        replicas: 1
+        revisionHistoryLimit: 2
+
+        image:
+          repository: xpkg.crossplane.io/crossplane/crossplane@sha256:c5d773aa940041475e2cf6b9adf3512cb382b1a6b889f53ed791192ed8ada75b
+          ignoreTag: true
+          pullPolicy: IfNotPresent
+
+        # Crossplane v2 otherwise activates every managed resource type from an
+        # installed provider. Keep the provider package healthy but inert; the
+        # composite Application activates only its required type explicitly.
+        provider:
+          defaultActivations: []
+
+        metrics:
+          enabled: true
+
+        packageCache:
+          medium: Memory
+          sizeLimit: 64Mi
+        functionCache:
+          medium: Memory
+          sizeLimit: 128Mi
+
+        resourcesCrossplane:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 1Gi
+        resourcesRBACManager:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 200m
+            memory: 512Mi
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: crossplane-system
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

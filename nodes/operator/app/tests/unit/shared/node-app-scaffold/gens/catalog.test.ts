@@ -4,7 +4,11 @@
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { renderCatalog } from "@/shared/node-app-scaffold/gens/catalog";
-import { CROSSPLANE_CONTROL_PLANE_ENVS } from "@/shared/node-registry/crossplane-control-plane";
+import {
+  CROSSPLANE_ACTUATOR_WALLET_ENVS,
+  CROSSPLANE_CONTROL_PLANE_ENVS,
+  canBirthOnCrossplane,
+} from "@/shared/node-registry/crossplane-control-plane";
 
 describe("renderCatalog", () => {
   const ownerWallet = "0x070075F1389Ae1182aBac722B36CA12285d0c949";
@@ -51,13 +55,18 @@ describe("renderCatalog", () => {
    * production, both off-cluster, with PRODUCTION holding the generation-1 activity authority.
    * Preview is absent — a birth must not buy a third lease.
    *
-   * AUTHORITY_REQUIRES_AN_INSTALLED_API (task.5104): only candidate-a is declared `crossplane`,
-   * because only candidate-a has a Crossplane control plane. Production is deliberately SILENT,
-   * which the catalog schema reads as the pre-existing `legacy` default — the bespoke
-   * controller that is actually installed there. Emitting `production: crossplane` would mint a
-   * row whose promote renders an XComputeWorkload into a cluster with no such CRD.
+   * AUTHORITY_REQUIRES_AN_INSTALLED_API (task.5104) + INSTALLED_IS_NOT_FUNDED (task.5097): only
+   * candidate-a is declared `crossplane`. Production now HAS a Crossplane control plane —
+   * task.5097 staged it — but its actuator has no pinned wallet
+   * (`AKASH_ACTUATOR_ACCOUNT_ID: ""`), so a birth there would render a composite whose every
+   * paid transaction is refused with `actuator_account_id_missing`. Production stays SILENT,
+   * which the catalog schema reads as the pre-existing `legacy` default — the bespoke controller
+   * that is actually reconciling there.
+   *
+   * THIS TEST IS THE INERTNESS PROOF for task.5097: staging preview/production control planes
+   * changed what a wizard birth renders by exactly nothing.
    */
-  it("mints a wizard birth on Akash, crossplane only where its control plane exists", () => {
+  it("mints a wizard birth on Akash, crossplane only where a wallet is pinned", () => {
     const out = renderCatalog("ay", 3200, 30400, {
       ownerWallet,
       sourceRepo: "https://github.com/cogni-test-org/ay.git",
@@ -74,17 +83,21 @@ describe("renderCatalog", () => {
     });
     expect(row.compute_api).toEqual({ "candidate-a": "crossplane" });
     expect(out).not.toContain("production: crossplane");
+    // The control plane IS installed in production — the wallet is what is missing.
+    expect(CROSSPLANE_CONTROL_PLANE_ENVS).toContain("production");
+    expect(CROSSPLANE_ACTUATOR_WALLET_ENVS).not.toContain("production");
   });
 
   /**
    * PLACEMENT_AND_AUTHORITY_ARE_DIFFERENT_AXES (task.5104). Placement is declared for exactly
    * the environments the node is born into — every birth env is genuinely off-cluster. Compute
-   * authority is a strict SUBSET of those: it may only name an environment whose control plane
-   * can reconcile the composite, and an omitted env is `legacy` rather than unreconciled.
-   * A `compute_api` cell for an env outside `envs` would still be an authority pointed at a
-   * workload that does not exist, so the subset relation is asserted in both directions.
+   * authority is a strict SUBSET of those: it may only name an environment that can BOTH
+   * reconcile the composite (installed control plane) and pay for its lease (pinned actuator
+   * wallet), and an omitted env is `legacy` rather than unreconciled. A `compute_api` cell for
+   * an env outside `envs` would still be an authority pointed at a workload that does not exist,
+   * so the subset relation is asserted in both directions.
    */
-  it("declares placement for every birth env and authority only where it is installed", () => {
+  it("declares placement for every birth env and authority only where it is payable", () => {
     const row = parse(
       renderCatalog("ay", 3200, 30400, {
         ownerWallet,
@@ -99,11 +112,7 @@ describe("renderCatalog", () => {
 
     const authorityEnvs = Object.keys(row.compute_api ?? {}).sort();
     expect(authorityEnvs.length).toBeGreaterThan(0);
-    expect(authorityEnvs).toEqual(
-      [...CROSSPLANE_CONTROL_PLANE_ENVS].filter((env) =>
-        birthEnvs.includes(env)
-      )
-    );
+    expect(authorityEnvs).toEqual(birthEnvs.filter(canBirthOnCrossplane));
     for (const env of authorityEnvs) {
       expect(birthEnvs).toContain(env);
     }

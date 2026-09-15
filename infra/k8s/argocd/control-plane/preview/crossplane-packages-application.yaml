@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# Installs only the pinned provider/function packages the XComputeWorkload Composition uses,
+# on PREVIEW (story.5016 / task.5097).
+#
+# PACKAGES_ARE_IMMUTABLE — every Provider/Function reference under
+# infra/crossplane/install/packages carries BOTH a semantic version and an OCI digest
+# (`:vX.Y.Z@sha256:...`, asserted by tests/ci-invariants/crossplane-dormant-substrate.spec.ts).
+# This Application points at that SHARED path rather than restating the refs, so candidate-a,
+# preview and production resolve the SAME BYTES by construction — there is no second copy of a
+# digest that could drift away from the one candidate-a proved.
+#
+# There is deliberately no ProviderConfig and no managed resource here: provider-http has no
+# request to send and therefore no external write path.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: crossplane-packages
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/cogni-dao/cogni.git
+    targetRevision: main
+    path: infra/crossplane/install/packages
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: crossplane-system
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+      - SkipDryRunOnMissingResource=true

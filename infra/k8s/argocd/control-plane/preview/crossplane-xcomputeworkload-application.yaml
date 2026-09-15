@@ -1,0 +1,57 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# Publishes the XComputeWorkload composite API on PREVIEW (story.5016 / task.5097). Mirrors
+# ../candidate-a/crossplane-xcomputeworkload-application.yaml, which is the shape candidate-a
+# proved by minting a real, paid, Crossplane-owned Akash lease. It installs, from the SHARED
+# infra/crossplane/xcomputeworkload directory:
+#
+#   ManagedResourceActivationPolicy  starts a controller for exactly one managed type
+#   ClusterProviderConfig            gives provider-http a config to reference (with NO credential)
+#   CompositeResourceDefinition      publishes compute.cogni.io/v1alpha1 XComputeWorkload
+#   Composition                      maps one XComputeWorkload to Akash transactions
+#
+# STILL ZERO DESIRED STATE, exactly as on candidate-a. No XComputeWorkload is committed anywhere
+# under infra/crossplane/, and no `infra/catalog/*.yaml` row names `compute_api.preview:
+# crossplane`. `resolveNodeComputeApi` resolves an absent cell to `legacy` (LEGACY_IS_DEFAULT),
+# so after this syncs preview CAN reconcile a paid workload and HAS none. Making it own one is a
+# catalog flip that Derek owns, not something this file performs.
+#
+# WHY targetRevision IS `main` AND NOT A deploy/ REF — the one deliberate difference from
+# candidate-a. candidate-a tracks `deploy/candidate-a-control-plane` precisely because it is the
+# PROOF SLOT: it must be able to run a REVIEWED-but-UNMERGED control-plane tree, which the
+# production operator fast-forwards via POST /api/v1/deploy/infra-reconcile. preview and
+# production are the downstream side of that proof and must never run an unmerged control plane,
+# so they track `main` — the same rule their root app
+# (../roots/preview-control-plane-application.yaml) and ./preview-appsets-application.yaml
+# already follow.
+#
+# `prune: false` matches the sibling Crossplane Applications: a deleted manifest must never
+# silently remove an API other resources are reconciled against, and for a paid workload the
+# consequence of an accidental prune is a closed lease.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: crossplane-xcomputeworkload
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/cogni-dao/cogni.git
+    targetRevision: main
+    path: infra/crossplane/xcomputeworkload
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: crossplane-system
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+      - SkipDryRunOnMissingResource=true

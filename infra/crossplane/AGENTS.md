@@ -18,6 +18,7 @@ reconciliation semantics.
 - [CI/CD Platform Boundary](../../docs/spec/cicd-platform-boundary.md)
 - [CI/CD Axioms](../../docs/spec/ci-cd.md)
 - [Candidate Argo control plane](../k8s/argocd/control-plane/candidate-a/)
+- Per-env Argo control planes: [preview](../k8s/argocd/control-plane/preview/) · [production](../k8s/argocd/control-plane/production/)
 
 ## Boundaries
 
@@ -44,6 +45,7 @@ reconciliation semantics.
 - **OSS_OWNS_GENERIC_RECONCILIATION:** watches, retries, backoff, finalizers, adoption, and drift correction belong to Crossplane.
 - **PACKAGES_ARE_IMMUTABLE:** provider and function references include a semantic version and OCI digest.
 - **DESIRED_STATE_IS_ENV_SCOPED:** workload instances are namespaced and never committed under `install/`.
+- **INSTALLED_IS_NOT_FUNDED (task.5097):** an installed control plane can RECONCILE a composite; only a pinned actuator wallet can PAY for one. They are two constants in `@shared/node-registry/crossplane-control-plane` (`CROSSPLANE_CONTROL_PLANE_ENVS` vs `CROSSPLANE_ACTUATOR_WALLET_ENVS`), each asserted against git in both directions. Every env now installs the control plane; only candidate-a pins a wallet, which is why staging preview/production activated nothing.
 - **AUTHORITY_MOVES_EXPLICITLY:** adding an XR or mutating managed resource requires the story.5020 handoff gate; package installation alone has no deployment authority.
 - **NO_SECRET_VALUES:** credentials reach the wire only as provider-http `{{ name:namespace:key }}` placeholders resolved from the existing ESO/OpenBao substrate at request time.
 - **WIRE_IS_THE_5095_CONTRACT:** the Composition lowers the full-fidelity XR onto `@contracts/compute.akash-tx.v1`, a zod strictObject. An extra key is a permanent 400, so the lowering is a port of `toProvisionSpec` + `legacyCogniAppEnv`, not a redesign.
@@ -72,3 +74,12 @@ reconciliation semantics.
   `POST /api/v1/deploy/infra-reconcile {nodeId, env:"candidate-a", sourceSha}` from the production operator
   (task.5100's control-plane lane). This PR exists to carry that tree; installation is proven by Crossplane
   pods/packages healthy in `cogni-candidate-a` with zero XRs, zero credentials, and zero Akash writes.
+- Activation record (task.5097): preview and production now carry the same three Applications
+  (`crossplane-{core,packages,xcomputeworkload}-application.yaml`). Their delivery path differs from
+  candidate-a's: those roots track `main` with prune+selfHeal, so merging IS the install — there is no
+  `deploy/<env>-control-plane` ref, deliberately, because a downstream env must never run an unmerged
+  control plane. Installing grants no authority: every `infra/catalog` row still omits
+  `compute_api.{preview,production}`, both envs keep the legacy `compute-workload-controller`, and each
+  env's actuator is fail-closed twice over (unseeded `cogni/<env>/akash-tx-actuator` + empty
+  `AKASH_ACTUATOR_ACCOUNT_ID`). Cutting an env over is: seed its bucket, pin the account id, add the env
+  to `CROSSPLANE_ACTUATOR_WALLET_ENVS`, flip the catalog rows.
