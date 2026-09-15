@@ -18,6 +18,10 @@
  */
 
 const FALLBACK_INTERVAL_MS = 10 * 60 * 1000;
+// Before the FIRST success, retry fast: readiness (and thus the public origin during a
+// rollout that overlaps a pod death) waits on this. A transient OpenFGA/App hiccup must
+// cost seconds, not a 10-minute tick (bug.5164 second finding, 2026-09-15 502 window).
+const PRE_SUCCESS_RETRY_MS = 15 * 1000;
 
 let _started = false;
 let _running: Promise<void> | null = null;
@@ -66,7 +70,15 @@ export function triggerCatalogRegistryReconcile(): void {
 
   _running = runReconcile()
     .catch(() => {
-      // The job records the error. The interval (or another trigger) retries.
+      // The job records the error. Until first success, retry fast — readiness waits on
+      // us; after first success the (self-clearing) fallback interval is the only driver.
+      if (_resolveFirstSuccess) {
+        const t = setTimeout(
+          triggerCatalogRegistryReconcile,
+          PRE_SUCCESS_RETRY_MS
+        );
+        t.unref();
+      }
     })
     .finally(() => {
       _running = null;
