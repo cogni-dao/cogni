@@ -51,7 +51,10 @@
  * and `resolveNodeComputeApi` resolves an absent cell to `legacy` (LEGACY_IS_DEFAULT). Every
  * fleet row omits the cell, so every fleet row is untouched by this constant's value.
  */
-export const CROSSPLANE_CONTROL_PLANE_ENVS = ["candidate-a", "production"] as const;
+export const CROSSPLANE_CONTROL_PLANE_ENVS = [
+  "candidate-a",
+  "production",
+] as const;
 
 export type CrossplaneControlPlaneEnv =
   (typeof CROSSPLANE_CONTROL_PLANE_ENVS)[number];
