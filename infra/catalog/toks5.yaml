@@ -39,3 +39,10 @@ activity_env: production
 owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
 path_prefix: nodes/toks5/
 node_id: f66b260b-4633-41e2-8711-b7c1b8449cc1
+# task.5052 (story.5016) — this node's workload runs on Akash; these provider
+# egress CIDRs may dial the env VM's substrate ports (5432,5435,6379,4000,7233).
+# NOTE: the node-birth generator does not yet mint this block (filed at birth of
+# toks5); added by hand-PR pending the generator fix.
+compute_egress_cidrs:
+  - cidr: 80.200.246.35/32
+    comment: shared egress NAT of Akash providers zencloud + digitalfrontier (story.5016)
