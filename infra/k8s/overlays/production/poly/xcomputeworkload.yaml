@@ -1,5 +1,5 @@
 apiVersion: compute.cogni.io/v1alpha1
-kind: ComputeWorkload
+kind: XComputeWorkload
 metadata:
   name: 4b06359a-a859-4399-888e-a8c7a6696f7e
   namespace: cogni-production
@@ -11,13 +11,13 @@ spec:
   nodeId: 4b06359a-a859-4399-888e-a8c7a6696f7e
   environment: production
   bundle:
-    ref: ghcr.io/cogni-dao/poly@sha256:22402e414a60d6f1ac3b6f58909992bf8c8360c525909c5caca0c3c6d93e6e75
+    ref: ghcr.io/cogni-dao/poly@sha256:d6cd43a33fdee046454bf4d44f157a24cf639ff50924916942892768b463deeb
     source:
       repository: cogni-dao/poly
-      sha: 400494a523baf671672c06bfcc957a980f63b37d
+      sha: 016febf33710f930e2bef0fd9fae4d749726a2ff
     artifacts:
       - name: app
-        image: ghcr.io/cogni-dao/poly@sha256:b9b8273e1005806b31067bdf6547cef4f5d7a2601c147baaed5fe45f4f813f24
+        image: ghcr.io/cogni-dao/poly@sha256:6d5fd35468e8e5c51ccc996cee8f32ee0731a5877ccca7a9b343b8c155dff2ad
   workload:
     name: poly
     publicHost: poly.cognidao.org
@@ -39,3 +39,13 @@ spec:
         cpuUnits: 2
         memoryMi: 2048
         storageMi: 4096
+  migration:
+    policy: RequireBeforeTransaction
+  bootPolicy:
+    onDeadline: Hold
+  leaseEpoch: 0
+  dns:
+    provider: cloudflare
+    zoneId: 23220356c352c5831c6af57887b11a27
+  runtime:
+    substrateHost: cogni.vm.cognidao.org
