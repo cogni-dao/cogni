@@ -8,7 +8,8 @@
  * Scope: POSTs the unchanged publish endpoint; while pending, shows one labeled phase checklist
  *   that advances optimistically and reconciles to the real result on completion.
  * Side-effects: IO (POST /api/v1/nodes/:id/publish), React state, router.refresh
- * Links: src/app/api/v1/nodes/[id]/publish/route.ts, src/features/nodes/wizard/PhaseList.tsx
+ * Links: src/app/api/v1/nodes/[id]/publish/route.ts,
+ *   src/components/kit/data-display/PhaseList.tsx
  * @public
  */
 
@@ -18,9 +19,7 @@ import { BookOpen, Package, Rocket } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { type ReactElement, useEffect, useState } from "react";
 
-import { Button } from "@/components";
-
-import { type Phase, PhaseList } from "../PhaseList";
+import { Button, type Phase, PhaseList } from "@/components";
 import { StepSection } from "../StepSection";
 import type { WizardStepProps } from "../types";
 
