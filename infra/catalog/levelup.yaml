@@ -11,31 +11,14 @@ source_sha: f1fd69c244d1cbc33b76cefe74264b2c56bb9fcf
 candidate_a_branch: deploy/candidate-a-levelup
 preview_branch: deploy/preview-levelup
 production_branch: deploy/production-levelup
-# task.5017/5025 — per-env node-set (deploy ⊆ provisioned). A wizard birth enters
-# candidate-a only; preview/production are explicit post-validation transitions.
-envs: [preview, production]
+# task.5017/5025 — per-env node-set (deploy ⊆ provisioned). story.5016 production
+# cutover: preview slots are retired fleet-wide (preview has no funded Akash account
+# and gets no actuator), and levelup's candidate-a proof slot was already closed —
+# its lease released (#2233, dseq 1789435347755) — so the stale candidate-a cells
+# are dropped with it. Production is this node's only slot.
+envs: [production]
 deployment_provider:
-  candidate-a: akash
-  preview: akash
   production: akash
-# story.5016 step 13 — FIRST Crossplane-owned Akash workload in the fleet.
-# `crossplane` renders an XComputeWorkload composite reconciled by Crossplane
-# (infra/crossplane/xcomputeworkload) via the private Akash transaction actuator,
-# instead of the bespoke ComputeWorkload CR. ONE_AUTHORITY_PER_WORKLOAD: the
-# materializer emits exactly one kind per (node, environment) and the deploy-branch
-# `rsync --delete` removes the other in the same commit.
-#
-# CANDIDATE-A ONLY, and deliberately so. levelup has NEVER existed in
-# cogni-candidate-a, so there is no legacy ComputeWorkload CR carrying the
-# `compute.cogni.io/external-resource` finalizer there — Crossplane CREATEs rather
-# than adopts, and no lease is orphaned. The two existing candidate-a fixtures
-# (node-template, toks4) DO carry that finalizer with no controller left to remove
-# it, so flipping either of them would hang the Argo app in Terminating AND mint a
-# second paid lease. Do not add this cell to preview/production: one actuator and
-# one ledger per environment means each additional env is another independent
-# writer on the same Akash Console wallet.
-compute_api:
-  candidate-a: crossplane
 # bug.5079 — activity_env is the SINGLETON env allowed to ingest Git receipts. GitHub
 # App webhooks are delivered to production only (one App, one webhook URL), and the
 # production operator's route index filters to `activityEnv === DEPLOY_ENVIRONMENT`

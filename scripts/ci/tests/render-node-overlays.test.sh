@@ -24,7 +24,7 @@
 # can move ANY real node in or out of an env, and a hardcoded example (historically
 # `poly`) turned every such move CI-red because the example's committed overlay was
 # (correctly) deleted. So the example is DISCOVERED at runtime — the first renderer-
-# owned node that is a member of all three envs — and the tree carries ≥1 such node.
+# owned node that is a member of candidate-a and production — and the tree carries ≥1 such node.
 # Removing any single node no longer breaks these gates.
 #
 # Run: bash scripts/ci/tests/render-node-overlays.test.sh
@@ -42,22 +42,23 @@ pass() { echo "  ok — $*"; }
 PROTECTED_NODES="operator node-template scheduler-worker"
 
 # Discover a wizard-born render example: renderer-owned (not PROTECTED), has a
-# catalog row, and is a member of all three envs (tests [6]/[7] simulate dropping
-# candidate-a and assert preview+production survive). Runtime-discovered so no test
-# couples to one slug.
+# catalog row, and is a member of candidate-a AND production (tests [6]/[7] simulate
+# dropping candidate-a and assert production survives). Preview is no longer required:
+# the fleet's preview slots were retired (story.5016), so no node has all three envs.
+# Runtime-discovered so no test couples to one slug.
 pick_fixture_node() {
   local n
   for n in $(ls infra/k8s/overlays/candidate-a/ 2>/dev/null); do
     case " $PROTECTED_NODES " in *" $n "*) continue ;; esac
     [ -f "infra/catalog/$n.yaml" ] || continue
-    [ -d "infra/k8s/overlays/preview/$n" ] && [ -d "infra/k8s/overlays/production/$n" ] || continue
+    [ -d "infra/k8s/overlays/production/$n" ] || continue
     echo "$n"
     return 0
   done
   return 1
 }
 FIXTURE_NODE="$(pick_fixture_node)" \
-  || fail "no wizard-born all-three-env node found to use as the render fixture"
+  || fail "no wizard-born candidate-a+production node found to use as the render fixture"
 echo "  (render fixture node: $FIXTURE_NODE)"
 FN="$FIXTURE_NODE"
 
@@ -188,7 +189,7 @@ PCAT="infra/catalog/$PERENV.yaml"
 [ -f "$PCAT" ] || fail "test fixture: $PCAT not found"
 perenv_restore() { git checkout -q -- "$PCAT" infra/k8s/overlays 2>/dev/null || true; }
 trap 'perenv_restore; restore' EXIT
-# Drop candidate-a from the fixture's envs (it stays in preview + production).
+# Drop candidate-a from the fixture's envs (it stays in production).
 perl -0pi -e 's/^(envs:\s*\[)\s*candidate-a\s*,\s*/$1/m' "$PCAT"
 grep -qE '^envs:.*candidate-a' "$PCAT" \
   && fail "test setup: failed to drop candidate-a from $PERENV envs"
@@ -200,8 +201,6 @@ fi
 bash "$RENDER" --write >/dev/null
 [ ! -d "infra/k8s/overlays/candidate-a/$PERENV" ] \
   || fail "--write did not prune $PERENV's dropped candidate-a overlay"
-[ -d "infra/k8s/overlays/preview/$PERENV" ] \
-  || fail "--write wrongly pruned $PERENV's preview overlay (still a member)"
 [ -d "infra/k8s/overlays/production/$PERENV" ] \
   || fail "--write wrongly pruned $PERENV's production overlay (still a member)"
 # c: with the node out of candidate-a and its overlay gone, --check is GREEN — the
