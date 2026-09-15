@@ -3,9 +3,14 @@
 
 import { describe, expect, it } from "vitest";
 
-import { CROSSPLANE_CONTROL_PLANE_ENVS } from "@/shared/node-registry/crossplane-control-plane";
+import {
+  CROSSPLANE_CONTROL_PLANE_ENVS,
+  crossplaneCompositeApplicationPath,
+  hasCrossplaneControlPlane,
+} from "@/shared/node-registry/crossplane-control-plane";
 
 import { resolveNodeComputeApi } from "./node-compute-api";
+import { deploymentEnvironmentSchema } from "./node-deployment-provider";
 
 describe("resolveNodeComputeApi", () => {
   /**
@@ -63,54 +68,47 @@ describe("resolveNodeComputeApi", () => {
   });
 
   /**
-   * AUTHORITY_REQUIRES_AN_INSTALLED_API (task.5104). Crossplane is installed on candidate-a
-   * ONLY — there is no `crossplane-*-application.yaml` under
-   * infra/k8s/argocd/control-plane/{preview,production}/ — so `crossplane` is resolvable there
-   * and nowhere else. Without this, a wizard-born row's production promote renders an
-   * XComputeWorkload into a cluster where that CRD does not exist, and nothing reconciles it.
+   * AUTHORITY_REQUIRES_AN_INSTALLED_API (task.5104). `crossplane` is resolvable exactly where a
+   * `crossplane-xcomputeworkload-application.yaml` exists under
+   * infra/k8s/argocd/control-plane/<env>/ — task.5097 staged that for preview and production, so
+   * all three now resolve. Without this guard, a row naming an env with no control plane renders
+   * an XComputeWorkload into a cluster where that CRD does not exist, reconciled by nobody.
+   *
+   * RESOLVABLE IS NOT SELECTED. Widening the constant did not flip a single row: the selector is
+   * the per-row `compute_api.<env>` cell, and the very first test above proves an absent cell
+   * still resolves `legacy` in every environment.
    */
-  it("resolves crossplane only where a control plane is installed", () => {
-    expect(CROSSPLANE_CONTROL_PLANE_ENVS).toEqual(["candidate-a"]);
-    expect(
-      resolveNodeComputeApi({
-        catalog: { compute_api: { "candidate-a": "crossplane" } },
-        environment: "candidate-a",
-      })
-    ).toBe("crossplane");
-
-    for (const environment of ["preview", "production"] as const) {
-      expect(() =>
+  it("resolves crossplane in every environment whose control plane is installed", () => {
+    for (const environment of CROSSPLANE_CONTROL_PLANE_ENVS) {
+      expect(
         resolveNodeComputeApi({
           catalog: { compute_api: { [environment]: "crossplane" } },
           environment,
         })
-      ).toThrow(
-        `infra/k8s/argocd/control-plane/${environment}/crossplane-xcomputeworkload-application.yaml`
-      );
+      ).toBe("crossplane");
     }
   });
 
   /**
-   * NO_SILENT_DOWNGRADE. Degrading an un-installable `crossplane` cell to `legacy` would hand
-   * the row to the retiring bespoke controller, whose Akash idempotence key is DISJOINT from
-   * the Crossplane one — that buys a SECOND PAID LEASE rather than colliding safely. The guard
-   * must throw, and the message must say why a fallback is not on the table.
+   * NO_SILENT_DOWNGRADE, restated for the post-task.5097 world. The refusal in
+   * `resolveNodeComputeApi` — throw, never degrade to `legacy`, because the two authorities mint
+   * Akash leases under disjoint idempotence keys and a quiet downgrade buys a SECOND PAID LEASE —
+   * is now UNREACHABLE from any catalog row, because every environment
+   * `deploymentEnvironmentSchema` admits has a control plane. The test that used to drive it with
+   * `{production: "crossplane"}` was therefore deleted rather than weakened: that input is now
+   * legitimately `crossplane`, so the old assertion asserted the opposite of the truth.
+   *
+   * What replaces it is the invariant that MAKES it unreachable, plus proof the guard still fires
+   * for an environment outside the set. If a fourth environment is ever added to the schema, this
+   * is the assertion that breaks first — before a row can render a composite nothing reconciles.
    */
-  it("throws rather than degrading an uninstallable authority to legacy", () => {
-    let thrown: unknown;
-    try {
-      resolveNodeComputeApi({
-        catalog: { compute_api: { production: "crossplane" } },
-        environment: "production",
-      });
-    } catch (error) {
-      thrown = error;
+  it("keeps the refusal armed for an environment with no control plane", () => {
+    for (const environment of deploymentEnvironmentSchema.options) {
+      expect(hasCrossplaneControlPlane(environment), environment).toBe(true);
     }
-
-    expect(thrown).toBeInstanceOf(Error);
-    expect((thrown as Error).message).toContain("SECOND PAID LEASE");
-    expect((thrown as Error).message).toContain(
-      "Refusing to fall back to 'legacy'"
+    expect(hasCrossplaneControlPlane("canary")).toBe(false);
+    expect(crossplaneCompositeApplicationPath("canary")).toBe(
+      "infra/k8s/argocd/control-plane/canary/crossplane-xcomputeworkload-application.yaml"
     );
   });
 

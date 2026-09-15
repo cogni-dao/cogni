@@ -18,7 +18,7 @@
  * @public
  */
 
-import { hasCrossplaneControlPlane } from "@/shared/node-registry/crossplane-control-plane";
+import { canBirthOnCrossplane } from "@/shared/node-registry/crossplane-control-plane";
 
 import { NODE_FORMATION_ACTIVITY_ENV, NODE_FORMATION_ENVS } from "./envs";
 
@@ -80,15 +80,18 @@ export function renderCatalog(
   const placementBlock = offCluster
     ? `deployment_provider:\n${envs.map((env) => `  ${env}: akash\n`).join("")}`
     : "";
-  // AUTHORITY_REQUIRES_AN_INSTALLED_API (task.5104) — placement and compute authority are
-  // DIFFERENT AXES, so they are filtered differently. Every birth env is genuinely `akash`
-  // above; only the envs that carry a Crossplane control plane can name `crossplane` here.
-  // Naming it for production would commit an XComputeWorkload into a cluster with no such CRD
-  // (no crossplane-* Application exists under infra/k8s/argocd/control-plane/production/), so
-  // the promote would render a workload nothing reconciles. The unfiltered envs stay on the
-  // pre-existing `legacy` default until their control plane is installed and
-  // CROSSPLANE_CONTROL_PLANE_ENVS is widened — at which point births pick it up automatically.
-  const crossplaneEnvs = envs.filter((env) => hasCrossplaneControlPlane(env));
+  // AUTHORITY_REQUIRES_AN_INSTALLED_API (task.5104) + INSTALLED_IS_NOT_FUNDED (task.5097) —
+  // placement and compute authority are DIFFERENT AXES, so they are filtered differently. Every
+  // birth env is genuinely `akash` above; an env may name `crossplane` here only if it BOTH
+  // carries a Crossplane control plane AND pins an actuator wallet (`canBirthOnCrossplane`).
+  // Either fact alone is not enough: no control plane means the promote renders an
+  // XComputeWorkload into a cluster with no such CRD, and no pinned wallet means the actuator
+  // refuses every paid transaction with `actuator_account_id_missing`. Both produce a node that
+  // never comes up. task.5097 installed the control plane on preview/production while
+  // deliberately leaving their wallets unpinned, so births still mint candidate-a only and the
+  // unfiltered envs stay on the pre-existing `legacy` default — the bespoke controller that is
+  // actually reconciling there. Pinning an env's wallet is what makes births pick it up.
+  const crossplaneEnvs = envs.filter((env) => canBirthOnCrossplane(env));
   const computeApiBlock =
     offCluster && crossplaneEnvs.length > 0
       ? `compute_api:\n${crossplaneEnvs.map((env) => `  ${env}: crossplane\n`).join("")}`
@@ -121,8 +124,9 @@ envs: [${envs.join(", ")}]
 ${placementBlock}# task.5097 — WHICH authority reconciles the workload. Crossplane
 # (infra/crossplane/xcomputeworkload) owns every generic concern; the only Cogni-specific
 # piece left is the private Akash transaction actuator. A born node never touches the
-# bespoke controller in any environment whose control plane can reconcile the composite; an
-# environment without one is omitted and stays on the pre-existing legacy default (task.5104).
+# bespoke controller in any environment that can BOTH reconcile the composite (an installed
+# control plane) and pay for its lease (a pinned actuator wallet); an environment missing
+# either is omitted and stays on the pre-existing legacy default (task.5104, task.5097).
 ${computeApiBlock}# story.5025 — birth authority is PRODUCTION, the only environment that receives Git
 # webhooks (ACTIVITY_FOLLOWS_INGEST, bug.5079). Born here it is immutable for life: a
 # sub-production authority would have to be moved by every later promote, and generation 1
