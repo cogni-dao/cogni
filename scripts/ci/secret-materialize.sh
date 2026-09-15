@@ -171,10 +171,27 @@ bao_exec() {
 
 # Prefetch one path's full key/value map into the cache (one ssh). Runner-side jq
 # extracts; the remote only runs the proven `bao kv get -format=json` shape.
+#
+# bug.5159 — a TRANSPORT failure (ssh drop, exec hiccup, OpenBao down) must never read
+# as an EMPTY BUCKET: that lie cascades into "key absent" errors downstream, and worse,
+# a false-empty cache would let materialize re-mint values that already exist. Only the
+# explicit "No value found" answer (a genuinely unborn path) maps to {}; anything else
+# is retried and then fatal, naming the transport.
 prefetch_path() {
-  local svc="$1" json
-  json="$(bao_exec "" "kv get -format=json 'cogni/${DEPLOY_ENVIRONMENT}/${svc}'" 2>/dev/null \
-    | jq -c '.data.data // {}' 2>/dev/null || true)"
+  local svc="$1" json raw attempt
+  raw=""
+  for attempt in 1 2 3; do
+    if raw="$(bao_exec "" "kv get -format=json 'cogni/${DEPLOY_ENVIRONMENT}/${svc}'" 2>&1)"; then
+      break
+    fi
+    case "$raw" in
+      *"No value found"*) raw='{}'; break ;;
+    esac
+    echo "[secret-materialize] OpenBao read cogni/${DEPLOY_ENVIRONMENT}/${svc} attempt ${attempt}/3 failed: $(printf '%s' "$raw" | tail -1)" >&2
+    [[ "$attempt" == 3 ]] && { echo "::error::secret-materialize: transport failure reading cogni/${DEPLOY_ENVIRONMENT}/${svc} after 3 attempts — NOT an absent path (bug.5159)" >&2; exit 1; }
+    sleep $((attempt * 5))
+  done
+  json="$(printf '%s' "$raw" | jq -c '.data.data // {}' 2>/dev/null || true)"
   [[ -z "$json" ]] && json='{}'
   mkdir -p "${CACHE_DIR}/${svc}"
   while IFS=$'\t' read -r key val; do
