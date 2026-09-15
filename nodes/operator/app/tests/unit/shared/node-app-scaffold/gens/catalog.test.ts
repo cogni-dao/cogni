@@ -55,16 +55,15 @@ describe("renderCatalog", () => {
    * production, both off-cluster, with PRODUCTION holding the generation-1 activity authority.
    * Preview is absent — a birth must not buy a third lease.
    *
-   * AUTHORITY_REQUIRES_AN_INSTALLED_API (task.5104) + INSTALLED_IS_NOT_FUNDED (task.5097): only
-   * candidate-a is declared `crossplane`. Production now HAS a Crossplane control plane —
-   * task.5097 staged it — but its actuator has no pinned wallet
-   * (`AKASH_ACTUATOR_ACCOUNT_ID: ""`), so a birth there would render a composite whose every
-   * paid transaction is refused with `actuator_account_id_missing`. Production stays SILENT,
-   * which the catalog schema reads as the pre-existing `legacy` default — the bespoke controller
-   * that is actually reconciling there.
+   * AUTHORITY_REQUIRES_AN_INSTALLED_API (task.5104) + INSTALLED_IS_NOT_FUNDED (task.5097):
+   * candidate-a AND production are declared `crossplane` — both carry a control plane and both
+   * pin a funded actuator wallet (production's is its own dedicated account, `akash10auj…`).
+   * Preview remains silent on BOTH axes: no wallet, no actuator, no birth lease — a birth must
+   * not buy a third lease, and an unfunded env would refuse every paid transaction with
+   * `actuator_account_id_missing`.
    *
-   * THIS TEST IS THE INERTNESS PROOF for task.5097: staging preview/production control planes
-   * changed what a wizard birth renders by exactly nothing.
+   * PRODUCTION_GOVERNS_SPAWN (Derek, story.5016): a birth's canonical slot is production on the
+   * Crossplane rail from generation 1 — never "candidate-a first, then a faked catalog cutover".
    */
   it("mints a wizard birth on Akash, crossplane only where a wallet is pinned", () => {
     const out = renderCatalog("ay", 3200, 30400, {
@@ -81,11 +80,14 @@ describe("renderCatalog", () => {
       "candidate-a": "akash",
       production: "akash",
     });
-    expect(row.compute_api).toEqual({ "candidate-a": "crossplane" });
-    expect(out).not.toContain("production: crossplane");
-    // The control plane IS installed in production — the wallet is what is missing.
+    expect(row.compute_api).toEqual({
+      "candidate-a": "crossplane",
+      production: "crossplane",
+    });
+    // Both facts hold for production: installed control plane AND pinned dedicated wallet.
     expect(CROSSPLANE_CONTROL_PLANE_ENVS).toContain("production");
-    expect(CROSSPLANE_ACTUATOR_WALLET_ENVS).not.toContain("production");
+    expect(CROSSPLANE_ACTUATOR_WALLET_ENVS).toContain("production");
+    expect(CROSSPLANE_ACTUATOR_WALLET_ENVS).not.toContain("preview");
   });
 
   /**

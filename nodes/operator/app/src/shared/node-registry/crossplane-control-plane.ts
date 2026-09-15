@@ -67,10 +67,11 @@ export type CrossplaneControlPlaneEnv =
  *
  * Why it is NOT the same list as {@link CROSSPLANE_CONTROL_PLANE_ENVS}: an installed control
  * plane can RECONCILE a composite, but only a funded, revocation-proven Console account can PAY
- * for the lease it asks for. task.5097 staged preview/production with `AKASH_ACTUATOR_ACCOUNT_ID`
- * deliberately `""` and their OpenBao buckets unseeded, so their actuators fail closed
- * (`actuator_account_id_missing`) and the legacy controller remains each env's ONE active writer
- * on the shared sponsor wallet — ONE_WALLET_ONE_ACTIVE_WRITER.
+ * for the lease it asks for. Production pins its own DEDICATED funded account
+ * (`akash10auj…`, credential at `cogni/production/akash-tx-actuator`) — each environment is one
+ * wallet with ONE active writer, so candidate-a and production never share an account. Preview
+ * stays unlisted: its actuator has no account, so it fails closed
+ * (`actuator_account_id_missing`) and gets no actuator at birth.
  *
  * This is the set a node BIRTH may mint `compute_api.<env>: crossplane` into: a birth row
  * pointed at an env with no wallet would render a composite whose every paid transaction is
@@ -78,7 +79,10 @@ export type CrossplaneControlPlaneEnv =
  * `resolveNodeComputeApi` — a human flipping an existing row is making an explicit cutover
  * decision, and that guard's question is only "does the CRD exist there".
  */
-export const CROSSPLANE_ACTUATOR_WALLET_ENVS = ["candidate-a"] as const;
+export const CROSSPLANE_ACTUATOR_WALLET_ENVS = [
+  "candidate-a",
+  "production",
+] as const;
 
 /**
  * The Argo Application that installs the `XComputeWorkload` composite API in `environment`.
