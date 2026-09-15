@@ -15,8 +15,7 @@ images:
     newTag: "production-placeholder-scheduler-worker"
 
 patches:
-  # 2026-09-15: single replica on production — zero users, HA buys nothing; frees ~415Mi
-  # on a host at 109% memory to offset the operator heap-limit raise above (same PR).
+  # 2026-09-15: single replica on production — zero users, HA buys nothing yet.
   - target:
       kind: Deployment
       name: scheduler-worker
