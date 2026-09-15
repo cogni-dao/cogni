@@ -19,6 +19,23 @@ production_branch: deploy/production-levelup
 envs: [production]
 deployment_provider:
   production: akash
+# story.5016 production cutover — levelup is the FIRST fleet row on the production
+# Crossplane authority, the same node that proved the full create→observe→update→close
+# rung on candidate-a. `crossplane` renders an XComputeWorkload reconciled via the
+# private Akash transaction actuator paying from production's DEDICATED account
+# (akash10auj…). ONE_AUTHORITY_PER_WORKLOAD: the materializer emits exactly one kind
+# per (node, environment) and the deploy-branch `rsync --delete` evicts the legacy
+# ComputeWorkload manifest in the same commit. PRECONDITION (Derek cutover plan):
+# the node's old lease is closed and its legacy CR's finalizer cleared BEFORE the
+# promote that materializes this cell — flipping over a live legacy CR would hang
+# the Argo app Terminating AND mint a second paid lease.
+compute_api:
+  production: crossplane
+# Explicit replacement counter for a terminally closed lease (the actuator refuses to
+# re-spend a settled idempotence key). Bumping this is the ONLY redeploy-after-close
+# path — kubectl patch is reverted by Argo selfHeal.
+lease_epoch:
+  production: 0
 # bug.5079 — activity_env is the SINGLETON env allowed to ingest Git receipts. GitHub
 # App webhooks are delivered to production only (one App, one webhook URL), and the
 # production operator's route index filters to `activityEnv === DEPLOY_ENVIRONMENT`
