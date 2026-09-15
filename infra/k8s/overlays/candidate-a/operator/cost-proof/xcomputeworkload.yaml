@@ -18,13 +18,13 @@ spec:
   nodeId: 557d8b59-8e3b-42f0-9aeb-a5c171296556
   environment: candidate-a
   bundle:
-    ref: ghcr.io/cogni-dao/levelup@sha256:679036ef0947c050c1045aabc1f7393961257ac1ecb1925f5064647343be77d8
+    ref: ghcr.io/cogni-dao/levelup@sha256:b9d8b63a4d8e0fea340d85afa591fc7dcc6a135511eb9b170e870455d368a340
     source:
       repository: cogni-dao/levelup
-      sha: f1fd69c244d1cbc33b76cefe74264b2c56bb9fcf
+      sha: bebc875dafee60f1ecb0e584f6c52283d6b3bd82
     artifacts:
       - name: app
-        image: ghcr.io/cogni-dao/levelup@sha256:35edac515ac2bcd79218493bb7912704293156bc6177e8343b053f87eed31b51
+        image: ghcr.io/cogni-dao/levelup@sha256:4230afc1b07eeb3161aebdc3d3dc7e487a91d577d60e919dc4f4f6b73a40ebc9
   workload:
     # Must stay byte-equal to the existing ESO target prefix: the Composition
     # resolves value-free refs from <workload.name>-compute-env-secrets.
