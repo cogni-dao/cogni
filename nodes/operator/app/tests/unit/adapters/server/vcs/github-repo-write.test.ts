@@ -2122,17 +2122,17 @@ node_port: 30200
         expect(catalog).toContain("type: node");
         // BORN_ON_AKASH, production-authoritative, preview absent (story.5025). The catalog row
         // the PR commits is the SAME row the ordinary deploy lane reads, so this is where the
-        // wizard path and the per-node deploy path meet. AUTHORITY_REQUIRES_AN_INSTALLED_API
-        // (task.5104): every birth env is off-cluster, but only candidate-a has a Crossplane
-        // control plane, so production is omitted here and stays on the legacy default it can
-        // actually reconcile.
+        // wizard path and the per-node deploy path meet. Both birth envs carry a Crossplane
+        // control plane AND a pinned actuator wallet (story.5016 cutover), so a birth mints
+        // crossplane authority for candidate-a and production alike — PRODUCTION_GOVERNS_SPAWN.
         expect(catalog).toContain("envs: [candidate-a, production]");
         expect(catalog).toContain("activity_env: production");
         expect(catalog).toContain(
           "deployment_provider:\n  candidate-a: akash\n  production: akash\n"
         );
-        expect(catalog).toContain("compute_api:\n  candidate-a: crossplane\n");
-        expect(catalog).not.toContain("production: crossplane");
+        expect(catalog).toContain(
+          "compute_api:\n  candidate-a: crossplane\n  production: crossplane\n"
+        );
         expect(catalog).toContain(
           'owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"'
         );
