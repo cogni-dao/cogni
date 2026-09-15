@@ -44,8 +44,8 @@ trap 'rm -rf "$TMP_CATALOG"' EXIT
 cp "$REPO_ROOT"/infra/catalog/*.yaml "$TMP_CATALOG/"
 cp "$REPO_ROOT"/infra/catalog/_schema.json "$TMP_CATALOG/" 2>/dev/null || true
 
-# The fixture row. `node-template` is a real type:node with no compute_api cell on main, so
-# case 1 reads the committed shape and the later cases mutate only the copy.
+# The fixture row. `node-template` is a real type:node; case 1 strips its compute_api from
+# the throwaway copy to synthesize the absent-cell shape; later cases mutate only the copy.
 FIXTURE_NODE="node-template"
 FIXTURE_FILE="$TMP_CATALOG/${FIXTURE_NODE}.yaml"
 
@@ -64,9 +64,9 @@ resolve() {
 }
 
 echo "[1/6] absent compute_api cell → legacy → compute-workload.yaml (LEGACY_IS_DEFAULT)"
-if yq -N -e '.compute_api' "$FIXTURE_FILE" >/dev/null 2>&1; then
-  fail "fixture precondition: ${FIXTURE_NODE}.yaml already declares compute_api"
-fi
+# The committed row may legitimately declare compute_api (the fleet is on Crossplane since
+# story.5016); the ABSENT-cell shape is synthesized by deleting it from the throwaway copy.
+yq -i 'del(.compute_api)' "$FIXTURE_FILE"
 [ "$(resolve "$FIXTURE_NODE" candidate-a api)" = "legacy" ] ||
   fail "absent cell must resolve to legacy"
 [ "$(resolve "$FIXTURE_NODE" candidate-a file)" = "compute-workload.yaml" ] ||
