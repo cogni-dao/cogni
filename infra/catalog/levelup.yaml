@@ -13,7 +13,7 @@ preview_branch: deploy/preview-levelup
 production_branch: deploy/production-levelup
 # task.5017/5025 — per-env node-set (deploy ⊆ provisioned). A wizard birth enters
 # candidate-a only; preview/production are explicit post-validation transitions.
-envs: [candidate-a, preview, production]
+envs: [preview, production]
 deployment_provider:
   candidate-a: akash
   preview: akash
