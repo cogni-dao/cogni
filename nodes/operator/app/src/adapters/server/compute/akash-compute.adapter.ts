@@ -1157,7 +1157,10 @@ function chainPosition(
   field: string,
   zeroMeansAbsent = false
 ): string | undefined {
-  if (zeroMeansAbsent && (value === undefined || value === "0")) {
+  if (
+    zeroMeansAbsent &&
+    (value === undefined || value === "" || value === "0")
+  ) {
     return undefined;
   }
   const raw = requiredText(value, field, MAX_CHAIN_POSITION_LENGTH);

@@ -264,6 +264,30 @@ describe("AkashComputeAdapter.observeCost", () => {
     });
   });
 
+  it("accepts the official active-lease empty closed_on as not closed", async () => {
+    const adapter = makeAdapter(
+      costFetch({
+        leases: [
+          {
+            id: {
+              owner: "akash1consumer",
+              provider: "akash1provider",
+              dseq: "7001",
+            },
+            state: "active",
+            price: { amount: "7.5", denom: "uakt" },
+            created_at: "100",
+            closed_on: "",
+          },
+        ],
+      }),
+      { now: () => observedAt }
+    );
+
+    const evidence = await adapter.observeCost({ resourceId: "7001" });
+    expect(evidence).not.toHaveProperty("providerClosedAtPosition");
+  });
+
   it("rejects a response for another deployment", async () => {
     const adapter = makeAdapter(
       costFetch({
