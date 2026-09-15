@@ -1026,6 +1026,7 @@ jobs:
       - name: Sync base + per-node overlay + per-node catalog to deploy branch
         env:
           NODE: ${{ matrix.node }}
+          COGNI_CATALOG_ROOT: app-src/infra/catalog
         run: |
           set -euo pipefail
           # Node source already materialized at app-src/nodes/${NODE} by the
@@ -1036,9 +1037,18 @@ jobs:
             rsync -a --delete \
               "app-src/infra/k8s/overlays/candidate-a/${NODE}/" \
               "deploy-branch/infra/k8s/overlays/candidate-a/${NODE}/"
-          elif [ ! -f "deploy-branch/infra/k8s/overlays/candidate-a/${NODE}/compute-workload.yaml" ]; then
-            echo "::error::Prepared external ComputeWorkload missing from deploy/candidate-a-${NODE}"
-            exit 1
+          else
+            # bug.5148 — WHICH file the materializer rendered is a catalog fact, not a
+            # constant: ONE_AUTHORITY_PER_WORKLOAD means a crossplane cell emits
+            # xcomputeworkload.yaml and deliberately does NOT emit compute-workload.yaml.
+            # shellcheck source=scripts/ci/lib/image-tags.sh
+            . ci-src/scripts/ci/lib/image-tags.sh
+            COMPUTE_API="$(compute_api_for_target "$NODE" candidate-a)"
+            WORKLOAD_FILE="$(compute_workload_manifest_file_for_api "$COMPUTE_API")"
+            if [ ! -f "deploy-branch/infra/k8s/overlays/candidate-a/${NODE}/${WORKLOAD_FILE}" ]; then
+              echo "::error::${NODE} resolves to compute_api=${COMPUTE_API} for candidate-a, which renders ${WORKLOAD_FILE}, but deploy/candidate-a-${NODE} carries no infra/k8s/overlays/candidate-a/${NODE}/${WORKLOAD_FILE}"
+              exit 1
+            fi
           fi
           mkdir -p deploy-branch/infra/catalog
           cp "app-src/infra/catalog/${NODE}.yaml" "deploy-branch/infra/catalog/${NODE}.yaml"
@@ -1454,12 +1464,28 @@ jobs:
           COGNI_CATALOG_ROOT: app-src/infra/catalog
         run: bash ci-src/scripts/ci/wait-for-argocd.sh
 
+      # bug.5148 — resolve the rendered manifest's filename from the catalog authority in a
+      # prior step, because a composite-action input cannot call a primitive. No decision here:
+      # the lib is the single shell reader of `compute_api`.
+      - name: Resolve rendered ComputeWorkload manifest
+        id: workload-manifest
+        if: steps.ssh-setup.outputs.has_vm == 'true' && env.DEPLOYMENT_PROVIDER != 'k3s'
+        env:
+          NODE: ${{ matrix.node }}
+          COGNI_CATALOG_ROOT: app-src/infra/catalog
+        run: |
+          set -euo pipefail
+          # shellcheck source=scripts/ci/lib/image-tags.sh
+          . ci-src/scripts/ci/lib/image-tags.sh
+          WORKLOAD_FILE="$(compute_workload_manifest_file "$NODE" candidate-a)"
+          echo "path=${GITHUB_WORKSPACE}/deploy-branch/infra/k8s/overlays/candidate-a/${NODE}/${WORKLOAD_FILE}" >> "$GITHUB_OUTPUT"
+
       - name: Wait for external ComputeWorkload readiness
         if: steps.ssh-setup.outputs.has_vm == 'true' && env.DEPLOYMENT_PROVIDER != 'k3s'
         uses: ./ci-src/.github/actions/wait-for-compute-workload
         with:
           app_source_root: ${{ github.workspace }}/app-src
-          manifest: ${{ github.workspace }}/deploy-branch/infra/k8s/overlays/candidate-a/${{ matrix.node }}/compute-workload.yaml
+          manifest: ${{ steps.workload-manifest.outputs.path }}
           vm_host: ${{ secrets.VM_HOST }}
           ssh_identity: /home/runner/.ssh/deploy_key
 

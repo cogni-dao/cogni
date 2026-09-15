@@ -378,6 +378,68 @@ deployment_provider_for_target() {
   esac
 }
 
+# Operator-owned per-environment RECONCILIATION AUTHORITY, read from the ONE place the catalog
+# already declares it (`compute_api.<env>`, infra/catalog/_schema.json). Shell twin of
+# resolveNodeComputeApi() in nodes/operator/app/src/features/compute/node-compute-api.ts —
+# ONE authority reader per language, same semantics, so the deploy lane can never disagree with
+# the typed materializer that RENDERS the manifest.
+#
+# LEGACY_IS_DEFAULT: an absent per-env cell resolves to `legacy`, the pre-existing bespoke
+# `compute-workload-controller`. Byte-for-byte the same default as the typed resolver, and the
+# same shape as K3S_IS_DEFAULT above — adding the field changed nothing until a row opted in.
+#
+# AUTHORITY_REQUIRES_AN_INSTALLED_API IS NOT RESTATED HERE: the typed resolver additionally
+# refuses a `crossplane` row in an environment with no Crossplane control plane, rather than
+# degrading it to `legacy`. That check belongs where desired state is BUILT — by the time this
+# lane runs, the materializer has already rendered or already failed. This reader's only job is
+# to name the file that render produced.
+#   compute_api_for_target NODE ENV   # → legacy | crossplane
+compute_api_for_target() {
+  local node="$1" env="${2:-}" api
+  if [ -z "${_image_tags_primary_cache[$node]+x}" ]; then
+    echo "[ERROR] image-tags: unknown target: $node" >&2
+    return 1
+  fi
+  [ -n "$env" ] || { echo "[ERROR] image-tags: compute_api_for_target needs an env" >&2; return 1; }
+  api=$(yq -N ".compute_api.\"${env}\" // \"legacy\"" "${_image_tags_catalog_root}/${node}.yaml")
+  [ -n "$api" ] && [ "$api" != "null" ] || api="legacy"
+  case "$api" in
+    legacy | crossplane) printf '%s' "$api" ;;
+    *)
+      echo "[ERROR] image-tags: unsupported compute_api '$api' for '$node' in env '$env' (expected legacy|crossplane; see infra/catalog/${node}.yaml)" >&2
+      return 1
+      ;;
+  esac
+}
+
+# ONE_AUTHORITY_PER_WORKLOAD (bug.5148), structural half. Shell twin of
+# computeWorkloadManifestFile() in
+# nodes/operator/app/src/features/compute/compute-workload-manifest.ts: each authority renders
+# into its OWN filename, and the materializer's `rsync --delete` means the kind NOT selected is
+# ABSENT from the overlay. So a lane that hardcodes `compute-workload.yaml` is silently
+# asserting the legacy authority — which is why the first real `crossplane` mint failed its
+# flight with the manifest correctly rendered as `xcomputeworkload.yaml` right beside the check.
+#   compute_workload_manifest_file_for_api API   # → the file that authority renders
+compute_workload_manifest_file_for_api() {
+  case "${1:-}" in
+    crossplane) printf 'xcomputeworkload.yaml' ;;
+    legacy) printf 'compute-workload.yaml' ;;
+    *)
+      echo "[ERROR] image-tags: unsupported compute_api '${1:-}' (expected legacy|crossplane)" >&2
+      return 1
+      ;;
+  esac
+}
+
+# The manifest filename a (node, env) cell's rendered desired state is committed under — the
+# one call sites should use. Deploy lanes RESOLVE the name; they never choose it.
+#   compute_workload_manifest_file NODE ENV   # → compute-workload.yaml | xcomputeworkload.yaml
+compute_workload_manifest_file() {
+  local api
+  api="$(compute_api_for_target "$1" "${2:-}")" || return 1
+  compute_workload_manifest_file_for_api "$api"
+}
+
 # bug.5094 — the address a CHERRY-RESIDENT caller must dial to reach a node's app.
 # Placement decides the address, not the caller:
 #   k3s   → the in-cluster Service DNS convention (unchanged; do not regress the fleet)
