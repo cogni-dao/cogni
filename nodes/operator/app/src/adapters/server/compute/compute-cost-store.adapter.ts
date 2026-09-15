@@ -468,7 +468,11 @@ export class DrizzleComputeCostStore implements ComputeCostStorePort {
             firstObservedAt: row.firstObservedAt ?? input.evidence.observedAt,
             lastObservedAt: input.evidence.observedAt,
             closedRecordedAt,
-            updatedAt: sql`greatest(${computeCostIntervals.updatedAt}, now(), ${input.evidence.observedAt})`,
+            updatedAt: sql`greatest(
+              ${computeCostIntervals.updatedAt},
+              now(),
+              ${sql.param(input.evidence.observedAt, computeCostIntervals.updatedAt)}
+            )`,
           })
           .where(
             eq(
