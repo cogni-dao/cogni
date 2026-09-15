@@ -12,6 +12,15 @@ resources:
   - external-secret.yaml
   - ./secrets-writer-sa.yaml
   - ./compute-workload-platform-application.yaml
+  # PRODUCTION actuator SECRET PLANE ONLY — the two ExternalSecrets, deliberately WITHOUT
+  # ../../../base/akash-tx-actuator. The Deployment lands in a follow-up, after the credential
+  # is written and projected, because a projected Secret source whose key is absent makes kubelet
+  # refuse the mount: the pod would sit in ContainerCreating and leave the production operator's
+  # Argo app Degraded, with only a FailedMount event that never reaches Loki (bug.5142). Creating
+  # the ExternalSecrets first is inert by comparison — nothing consumes them until the Deployment
+  # exists, so a not-yet-populated bucket costs an ESO NotReady and nothing else.
+  - ./akash-tx-actuator-external-secret.yaml
+  - ./akash-tx-actuator-auth-external-secret.yaml
 
 namePrefix: operator-
 
