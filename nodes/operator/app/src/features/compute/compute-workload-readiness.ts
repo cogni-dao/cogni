@@ -144,6 +144,21 @@ function assessXComputeWorkloadReadiness(input: {
   if (!status) {
     return { ready: false, reason: "status_pending" };
   }
+  // Staleness tie (same race the legacy path guards): after a spec update the live
+  // spec matches instantly while status still describes the PRIOR generation's lease.
+  // The composite has no top-level observedGeneration; its conditions carry one, and
+  // observedBundle names what the actuator actually deployed.
+  const generation = liveMetadata.generation;
+  if (!Number.isInteger(generation) || Number(generation) < 1) {
+    return { ready: false, reason: "invalid_generation" };
+  }
+  const expectedBundle = expectedSpec.bundle;
+  if (
+    expectedBundle !== undefined &&
+    stableJson(status.observedBundle) !== stableJson(expectedBundle)
+  ) {
+    return { ready: false, reason: "bundle_not_observed" };
+  }
   if (status.phase !== "Ready") {
     const failureReason = asRecord(status.failure)?.reason;
     return {
@@ -158,12 +173,16 @@ function assessXComputeWorkloadReadiness(input: {
     return { ready: false, reason: "not_serving" };
   }
   const conditions = Array.isArray(status.conditions) ? status.conditions : [];
-  const conditionTrue = (type: string): boolean =>
+  const conditionCurrent = (type: string): boolean =>
     conditions.some((value) => {
       const condition = asRecord(value);
-      return condition?.type === type && condition.status === "True";
+      return (
+        condition?.type === type &&
+        condition.status === "True" &&
+        condition.observedGeneration === generation
+      );
     });
-  if (!conditionTrue("Synced") || !conditionTrue("Ready")) {
+  if (!conditionCurrent("Synced") || !conditionCurrent("Ready")) {
     return { ready: false, reason: "ready_condition_pending" };
   }
   return { ready: true };

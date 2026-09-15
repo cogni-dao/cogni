@@ -107,7 +107,11 @@ describe("assessComputeWorkloadReadiness — XComputeWorkload (story.5016)", () 
   const xLive = (over: Record<string, unknown> = {}) => ({
     apiVersion: "compute.cogni.io/v1alpha1",
     kind: "XComputeWorkload",
-    metadata: { name: "72aa130b", namespace: "cogni-production" },
+    metadata: {
+      name: "72aa130b",
+      namespace: "cogni-production",
+      generation: 4,
+    },
     spec: {
       migration: { mode: "Skip" },
       bootPolicy: { onDeadline: "Hold" },
@@ -118,8 +122,8 @@ describe("assessComputeWorkloadReadiness — XComputeWorkload (story.5016)", () 
       phase: "Ready",
       serving: true,
       conditions: [
-        { type: "Synced", status: "True" },
-        { type: "Ready", status: "True" },
+        { type: "Synced", status: "True", observedGeneration: 4 },
+        { type: "Ready", status: "True", observedGeneration: 4 },
       ],
     },
     ...over,
@@ -147,6 +151,14 @@ describe("assessComputeWorkloadReadiness — XComputeWorkload (story.5016)", () 
     expect(
       assessComputeWorkloadReadiness({ expected: xExpected, live: notServing })
     ).toEqual({ ready: false, reason: "not_serving" });
+  });
+
+  it("refuses Ready conditions observed at a PRIOR generation (update staleness)", () => {
+    const stale = xLive();
+    (stale.metadata as Record<string, unknown>).generation = 5;
+    expect(
+      assessComputeWorkloadReadiness({ expected: xExpected, live: stale })
+    ).toEqual({ ready: false, reason: "ready_condition_pending" });
   });
 
   it("surfaces the composite failure reason when the phase is not Ready", () => {
