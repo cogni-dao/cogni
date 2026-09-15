@@ -15,10 +15,11 @@ production_branch: deploy/production-toks4
 # NODE_FORMATION_ENVS; this list is the catalog twin so render-node-appset.sh
 # renders exactly the births appset.ts generates. Trimming a node's reach is a
 # later catalog edit (drop an env here) once its envs are provisioned.
-envs: [candidate-a, preview, production]
+# story.5016 production cutover: preview slot retired (preview has no funded Akash
+# account and gets no actuator; its lease on the shared account was closed).
+envs: [candidate-a, production]
 deployment_provider:
   candidate-a: akash
-  preview: akash
   production: akash
 activity_env: candidate-a
 owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
