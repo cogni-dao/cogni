@@ -1,5 +1,5 @@
 apiVersion: compute.cogni.io/v1alpha1
-kind: ComputeWorkload
+kind: XComputeWorkload
 metadata:
   name: 72aa130b-f0ad-495a-a061-9ee1f9c9525d
   namespace: cogni-production
@@ -51,3 +51,13 @@ spec:
         cpuUnits: 0.1
         memoryMi: 128
         storageMi: 128
+  migration:
+    policy: RequireBeforeTransaction
+  bootPolicy:
+    onDeadline: Hold
+  leaseEpoch: 0
+  dns:
+    provider: cloudflare
+    zoneId: 23220356c352c5831c6af57887b11a27
+  runtime:
+    substrateHost: cogni.vm.cognidao.org
