@@ -25,7 +25,9 @@ cogni_ssh_transport_retry() {
     if [ "$_rc" -ne 0 ] && grep -qiE 'kex_exchange_identification|connection (reset|closed|refused|timed out)|broken pipe|banner exchange' "$_err"; then
       cat "$_err" >&2
       echo "[ssh-retry] transport failure (attempt ${_attempt}/3) — retrying" >&2
-      sleep $((_attempt * 5))
+      # Jittered backoff: lockstep retries from parallel cells would re-collide at the
+      # admission limit at the same instant.
+      sleep $((_attempt * 5 + RANDOM % 5))
       continue
     fi
     break
