@@ -1,5 +1,5 @@
 apiVersion: compute.cogni.io/v1alpha1
-kind: ComputeWorkload
+kind: XComputeWorkload
 metadata:
   name: 557d8b59-8e3b-42f0-9aeb-a5c171296556
   namespace: cogni-production
@@ -11,13 +11,13 @@ spec:
   nodeId: 557d8b59-8e3b-42f0-9aeb-a5c171296556
   environment: production
   bundle:
-    ref: ghcr.io/cogni-dao/levelup@sha256:679036ef0947c050c1045aabc1f7393961257ac1ecb1925f5064647343be77d8
+    ref: ghcr.io/cogni-dao/levelup@sha256:5cae8cc0f040676b7202db39ba0bd75298f13d9704ece4890553a07b10e4b75e
     source:
       repository: cogni-dao/levelup
-      sha: f1fd69c244d1cbc33b76cefe74264b2c56bb9fcf
+      sha: 43bd76fec7aad58a2df022d425cdeaf0f87f7026
     artifacts:
       - name: app
-        image: ghcr.io/cogni-dao/levelup@sha256:35edac515ac2bcd79218493bb7912704293156bc6177e8343b053f87eed31b51
+        image: ghcr.io/cogni-dao/levelup@sha256:ef82696155d16709fc09b9e12d0ced4c7285c234d5b307ebd72555a4c4eed542
   workload:
     name: levelup
     publicHost: levelup.cognidao.org
@@ -39,3 +39,13 @@ spec:
         cpuUnits: 2
         memoryMi: 2048
         storageMi: 4096
+  migration:
+    policy: RequireBeforeTransaction
+  bootPolicy:
+    onDeadline: Hold
+  leaseEpoch: 0
+  dns:
+    provider: cloudflare
+    zoneId: 23220356c352c5831c6af57887b11a27
+  runtime:
+    substrateHost: cogni.vm.cognidao.org
