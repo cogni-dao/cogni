@@ -18,7 +18,9 @@ model_list:
   # ===== FLASH / FAST TIER (default picks) =====
 
   # OpenAI gpt-oss 120B — OpenAI's open-weight model. Effectively free-cost, reasoning-capable.
-  # Designated default_free: capable OSS reasoning at ~$0.04/1M in.  ($0.037 → $0.17, 131K)
+  # Reasoning-tier: high latency (long reasoning traces before the answer) — kept as a selectable
+  # free model, NOT the default. The zero-credit default is a flash model (deepseek-v4-flash) so
+  # first-token latency is fast for every unpaid user across the fleet.  ($0.037 → $0.17, 131K)
   - model_name: gpt-oss-120b
     litellm_params:
       model: openrouter/openai/gpt-oss-120b
@@ -27,22 +29,23 @@ model_list:
       display_name: "GPT-OSS 120B"
       is_free: true
       provider_key: "openai"
-      metadata:
-        cogni:
-          default_free: true
 
   # DeepSeek V4 Flash — cheapest 1M-context flash in the fleet.  ($0.078 → $0.156, 1M)
+  # Zero-credit DEFAULT: fast first-token flash model. is_free MUST stay true — pickDefaultModel
+  # gives zero-credit users the default_free model, and a non-is_free default would bill them and
+  # 402 the chat. Swapped in from the slow reasoning gpt-oss-120b so the free AI feels fast.
   - model_name: deepseek-v4-flash
     litellm_params:
       model: openrouter/deepseek/deepseek-v4-flash
       api_key: "os.environ/OPENROUTER_API_KEY"
     model_info:
       display_name: "DeepSeek V4 Flash"
-      is_free: false
+      is_free: true
       provider_key: "deepseek"
       metadata:
         cogni:
           default_flash: true
+          default_free: true
 
   # NVIDIA Nemotron 3.5 Lightning — ultra-low-latency OSS, 1M context.  ($0.08 → $0.20, 262K)
   - model_name: nemotron-lightning
