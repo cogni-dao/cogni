@@ -90,6 +90,10 @@ function isMode(v: string | null): v is ViewMode {
   );
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "Contribution action failed.";
+}
+
 export function KnowledgeDashboardView() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -132,11 +136,22 @@ export function KnowledgeDashboardView() {
 
   const openCount = contributionsQuery.data?.contributions.length ?? 0;
 
+  // A failed merge used to be swallowed — the button flipped back with zero
+  // feedback and the contribution stayed open (bug.5120). Surface it INLINE on
+  // the failed row (which id + why), not as a detached page banner, so the
+  // reviewer can hand a fix off to the authoring AI agent right there.
+  const [mergeError, setMergeError] = useState<{
+    id: string;
+    reason: string;
+  } | null>(null);
+
   const mergeMutation = useMutation({
     mutationFn: (id: string) => mergeContribution(id),
+    onMutate: () => setMergeError(null),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["knowledge"] });
     },
+    onError: (error, id) => setMergeError({ id, reason: errorMessage(error) }),
   });
 
   const closeMutation = useMutation({
@@ -245,6 +260,8 @@ export function KnowledgeDashboardView() {
           rows={contributionsQuery.data?.contributions ?? []}
           isLoading={contributionsQuery.isLoading}
           error={contributionsQuery.error}
+          mergeErrorId={mergeError?.id ?? null}
+          mergeErrorReason={mergeError?.reason ?? null}
           busyId={
             mergeMutation.isPending ? (mergeMutation.variables ?? null) : null
           }
@@ -426,6 +443,8 @@ function InboxPanel({
   error,
   busyId,
   rejectBusyId,
+  mergeErrorId,
+  mergeErrorReason,
   onMerge,
   onReject,
 }: {
@@ -434,6 +453,8 @@ function InboxPanel({
   readonly error: unknown;
   readonly busyId: string | null;
   readonly rejectBusyId: string | null;
+  readonly mergeErrorId: string | null;
+  readonly mergeErrorReason: string | null;
   readonly onMerge: (row: ContributionRecord) => void;
   readonly onReject: (id: string, reason: string) => void;
 }) {
@@ -451,8 +472,10 @@ function InboxPanel({
         onMerge,
         onReject: (r) => setSelected(r),
         busyId,
+        mergeErrorId,
+        mergeErrorReason,
       }),
-    [onMerge, busyId]
+    [onMerge, busyId, mergeErrorId, mergeErrorReason]
   );
 
   const table = useReactTable({

@@ -104,6 +104,11 @@
         "properties": { "type": { "const": "node" } },
         "required": ["source_repo"]
       }
+    },
+    {
+      "$comment": "task.5097 — the compute API is a property of an off-cluster workload, so it is only meaningful where deployment_provider already routes the row off-cluster. Declaring it without placement would be an authority with nothing to reconcile.",
+      "if": { "required": ["compute_api"] },
+      "then": { "required": ["deployment_provider"] }
     }
   ],
   "properties": {
@@ -200,10 +205,21 @@
       },
       "minProperties": 1
     },
+    "compute_api": {
+      "type": "object",
+      "description": "task.5097 — per-environment WHICH-AUTHORITY selector for an akash-placed row. `legacy` (the default for an omitted environment) renders the bespoke ComputeWorkload CR reconciled by the in-cluster compute-workload-controller; `crossplane` renders the XComputeWorkload composite reconciled by Crossplane (infra/crossplane/xcomputeworkload). ONE_AUTHORITY_PER_WORKLOAD: the materializer emits exactly one of the two kinds per (node, environment), and the deploy-branch rsync --delete removes the other in the same commit, so no resource is ever reconciled by both. Flipping this cell is a full re-create, never an import: the legacy CR's finalizer closes its lease on prune and Crossplane mints a fresh one.",
+      "additionalProperties": false,
+      "properties": {
+        "candidate-a": { "enum": ["legacy", "crossplane"] },
+        "preview": { "enum": ["legacy", "crossplane"] },
+        "production": { "enum": ["legacy", "crossplane"] }
+      },
+      "minProperties": 1
+    },
     "activity_env": {
       "type": "string",
       "enum": ["candidate-a", "preview", "production"],
-      "description": "task.5025 — singleton environment that owns activity ingestion and epoch scheduling for this node. Must also be present in envs. V1 wizard births are fixed to candidate-a authority generation 1; changing authority is unsupported until a fenced quiesce/activate protocol exists. Deploying a node in multiple envs never permits multiple activity ledgers."
+      "description": "story.5025 — singleton environment that owns activity ingestion and epoch scheduling for this node. Must also be present in envs. Wizard births are stamped `production` (generation 1), because production is the only environment that receives Git webhooks: a sub-production authority is structurally unable to earn a receipt (bug.5079). Born at the top, the authority never has to move, which is what generation 1 can safely offer — there is no fenced quiesce/activate cutover. Deploying a node in multiple envs never permits multiple activity ledgers; the extra envs are passive."
     },
     "owner_wallet": {
       "type": "string",

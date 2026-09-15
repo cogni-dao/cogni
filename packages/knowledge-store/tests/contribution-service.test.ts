@@ -27,12 +27,21 @@ import {
   type CreateEdoOutcomeInput,
   type KnowledgeContributionPort,
 } from "../src/port/contribution.port.js";
-import { createContributionService } from "../src/service/contribution-service.js";
+import {
+  createContributionService,
+  defaultCanMergeKnowledge,
+} from "../src/service/contribution-service.js";
 
 const agent: Principal = {
   id: "agent-1",
   kind: "agent",
   name: "agent-one",
+};
+
+const adminUser: Principal = {
+  id: "user-1",
+  kind: "user",
+  role: "admin",
 };
 
 function contribution(
@@ -329,7 +338,12 @@ class FakeContributionPort implements KnowledgeContributionPort {
     return this.commits;
   }
 
-  async merge(): Promise<{ commitHash: string }> {
+  lastMerge: Parameters<KnowledgeContributionPort["merge"]>[0] | null = null;
+
+  async merge(
+    input: Parameters<KnowledgeContributionPort["merge"]>[0]
+  ): Promise<{ commitHash: string }> {
+    this.lastMerge = input;
     return { commitHash: "merge123" };
   }
 
@@ -365,6 +379,50 @@ describe("createContributionService", () => {
       })
     ).rejects.toBeInstanceOf(KnowledgeGateError);
     expect(port.lastCreate).toBeNull();
+  });
+
+  it("lets an admin session merge an agent-authored contribution (cross-principal is allowed, bug.5120)", async () => {
+    // The merge gate keys on the ACTING principal being a cookie-session user,
+    // never on matching the branch author. An admin merging an agent's branch
+    // is the normal inbox flow — it must not be the silent-failure cause.
+    const port = new FakeContributionPort();
+    port.records = [
+      contribution({ principalKind: "agent", principalId: "agent-1" }),
+    ];
+    const service = createContributionService({
+      port,
+      canMergeKnowledge: defaultCanMergeKnowledge,
+      rateLimit: { maxOpenPerPrincipal: 5 },
+      gates: [shapeGate],
+    });
+
+    const result = await service.merge({
+      principal: adminUser,
+      contributionId: "contrib-agent-1-abc123",
+    });
+
+    expect(result.commitHash).toBe("merge123");
+    expect(port.lastMerge?.contributionId).toBe("contrib-agent-1-abc123");
+    expect(port.lastMerge?.principal).toEqual(adminUser);
+  });
+
+  it("forbids a bearer/agent principal from merging (no silent no-op)", async () => {
+    const port = new FakeContributionPort();
+    port.records = [contribution()];
+    const service = createContributionService({
+      port,
+      canMergeKnowledge: defaultCanMergeKnowledge,
+      rateLimit: { maxOpenPerPrincipal: 5 },
+      gates: [shapeGate],
+    });
+
+    await expect(
+      service.merge({
+        principal: agent,
+        contributionId: "contrib-agent-1-abc123",
+      })
+    ).rejects.toBeInstanceOf(ContributionForbiddenError);
+    expect(port.lastMerge).toBeNull();
   });
 
   it("passes sanitized (trimmed) entries through to the port on append", async () => {

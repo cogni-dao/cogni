@@ -60,6 +60,7 @@ packages/*/dist
 nodes/*/packages/*/dist
 nodes/*/graphs/dist
 nodes/*/app/dist-controller
+nodes/*/app/dist-akash-tx-actuator
 
 # Terraform
 *.tfstate

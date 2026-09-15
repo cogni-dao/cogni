@@ -84,6 +84,7 @@ describe("buildComputeSecretResources", () => {
   it.each([
     "LITELLM_MASTER_KEY",
     "AKASH_CONSOLE_API_KEY",
+    "AKASH_ACTUATOR_CONSOLE_API_KEY",
     "IDENTITY_ATTESTATION_PRIVATE_KEY",
     "APP_DB_PASSWORD",
     "GHCR_DEPLOY_TOKEN",

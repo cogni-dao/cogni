@@ -8,12 +8,35 @@ namespace: cogni-candidate-a
 resources:
   - ../../../base/node-app
   - ../../../base/openfga-external
-  - ../../../base/compute-workload-controller
+  # story.5016 step 9 — the legacy ComputeWorkload controller is REMOVED from
+  # candidate-a so exactly ONE writer reaches the Akash wallet here: the private
+  # transaction actuator below, driven by Crossplane. ONE_WALLET_ONE_ACTIVE_WRITER.
+  # preview/production deliberately keep the controller until their fixtures are
+  # retired (task.5097) and it is deleted outright (task.5098). There is no
+  # compatibility layer and no dual-writer period.
+  # task.5102 — the private Akash transaction actuator Crossplane calls. Candidate-a
+  # only for now: the XComputeWorkload control plane exists only here
+  # (infra/k8s/argocd/control-plane/candidate-a), and the actuator refuses to start
+  # without its dedicated wallet, so shipping it to an env with no Crossplane and no
+  # seeded credential would only add a CrashLoopBackOff.
+  - ../../../base/akash-tx-actuator
   - external-secret.yaml
+  # story.5016 secret-boundary amendment 2 — the actuator's OWN secret plane
+  # (cogni/candidate-a/akash-tx-actuator -> akash-tx-actuator-env-secrets). Deliberately a
+  # SECOND ExternalSecret rather than more keys in external-secret.yaml above: that one is
+  # extracted wholesale into the public operator app's envFrom.
+  - ./akash-tx-actuator-external-secret.yaml
+  - ./akash-tx-actuator-auth-external-secret.yaml
   - ./secrets-writer-sa.yaml
   - ./compute-workload-platform-application.yaml
 
 namePrefix: operator-
+
+# Runs AFTER the built-in namePrefix transformer and restores the actuator Service's
+# name to the bare `akash-tx-actuator` the Crossplane Composition dials. See
+# ../../../base/akash-tx-actuator-service-name for why the prefix is what gives.
+transformers:
+  - ../../../base/akash-tx-actuator-service-name
 
 images:
   - name: ghcr.io/cogni-dao/cogni-template
@@ -60,6 +83,52 @@ patches:
                     value: test.cognidao.org
                   - name: AKASH_ALLOWED_PROVIDERS
                     value: akash16yr3wxt97ae045a06kr3ycde9srcgpg8syjxxm
+  # Same BY-NAME strategic merge as the controller above (story.5016 Gate 0b). The
+  # actuator's wallet scope is `akash-console:<DEPLOY_ENVIRONMENT>`, which MUST equal the
+  # `environment` the Composition sends — the Composition pins that to `cogni-<env>` == the
+  # namespace, so these two values are one invariant expressed in two places.
+  - target:
+      kind: Deployment
+      name: akash-tx-actuator
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: akash-tx-actuator
+      spec:
+        template:
+          spec:
+            containers:
+              - name: actuator
+                env:
+                  - name: POD_NAMESPACE
+                    valueFrom:
+                      fieldRef: { fieldPath: metadata.namespace }
+                  - name: DEPLOY_ENVIRONMENT
+                    value: candidate-a
+                  - name: AKASH_ALLOWED_PROVIDERS
+                    value: akash16yr3wxt97ae045a06kr3ycde9srcgpg8syjxxm
+                  # HUMAN GATE (story.5016 secret-boundary amendment 3). The PUBLIC Akash
+                  # account/wallet address the actuator is authorized to spend from — pinned
+                  # here as plain config because it is not a secret and must be reviewable in
+                  # git. The actuator asserts the live Console account matches it at boot and
+                  # refuses otherwise, which is what replaced holding the legacy wallet key
+                  # just to byte-compare it.
+                  #
+                  # EMPTY until the cutover: disable every legacy controller writer, revoke the
+                  # legacy Console key, mint a fresh key on the SAME account, then land that
+                  # account's address here in the same change that seeds
+                  # cogni/candidate-a/akash-tx-actuator/AKASH_ACTUATOR_CONSOLE_API_KEY.
+                  # Until then the actuator CrashLoops with `actuator_account_id_missing`,
+                  # which is the correct state for a wallet writer with no proven wallet.
+                  - name: AKASH_ACTUATOR_ACCOUNT_ID
+                    # PUBLIC, non-secret Akash account address of the operator sponsor wallet.
+                    # Asserted at boot by assertActuatorWalletAccount() against Console
+                    # /v1/wallets, so the actuator refuses to start if its credential resolves
+                    # to any other account. This is the same account the legacy controller used:
+                    # story.5016's cutover is one wallet with ONE ACTIVE WRITER, achieved by
+                    # revoking the legacy key and minting a fresh one, not by a second account.
+                    value: "akash12eh8xgpeyumar3sk6wp94y0tq9uh62mkezxjmt"
   - target:
       kind: ConfigMap
       name: node-app-config

@@ -115,4 +115,38 @@ describe("OpenBaoSecretsAdapter", () => {
       })
     ).rejects.toMatchObject({ code: "openbao_login_failed", status: 403 });
   });
+
+  it("targets the platform-service bucket when `service` is set, not the node's", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async (url) => {
+      const u = String(url);
+      if (u.endsWith("/auth/kubernetes/login")) {
+        return jsonResponse({ auth: { client_token: "s.client" } });
+      }
+      if (u.includes("/cogni/metadata/")) {
+        // The put-vs-patch probe must follow the SERVICE bucket too; probing the
+        // node's path would patch a brand-new bucket (or clobber an existing one).
+        expect(u).toBe(
+          `${ADDR}/v1/cogni/metadata/candidate-a/akash-tx-actuator`
+        );
+        return jsonResponse({}, 200);
+      }
+      expect(u).toBe(`${ADDR}/v1/cogni/data/candidate-a/akash-tx-actuator`);
+      return jsonResponse({ data: { version: 2 } });
+    });
+
+    const result = await makeAdapter(fetchImpl).writeSecret({
+      nodeSlug: "operator",
+      service: "akash-tx-actuator",
+      env: "candidate-a",
+      key: "AKASH_ACTUATOR_CONSOLE_API_KEY",
+      value: "vendor-minted",
+      op: "set",
+    });
+
+    expect(result).toEqual({
+      written: true,
+      version: 2,
+      path: "cogni/candidate-a/akash-tx-actuator/AKASH_ACTUATOR_CONSOLE_API_KEY",
+    });
+  });
 });

@@ -79,6 +79,21 @@ declare -ga SCHEDULER_WORKER_KEYS=(
   DATABASE_SERVICE_URL SCHEDULER_API_TOKEN
   INTERNAL_OPS_TOKEN
 )
+# ── Non-node PLATFORM SERVICES (mirror of scripts/lib/secrets-catalog-loader.ts) ─
+# Services that own their OWN OpenBao bucket `cogni/<env>/<service>/*` + their own
+# ExternalSecret, because their blast radius must NOT be the owning node's. The
+# operator app consumes the WHOLE `cogni/<env>/operator` bucket via `dataFrom: extract`,
+# so a credential parked there is readable by the public app — Invariant 1 gives these
+# their own `<service>` instead. Membership is a SECURITY BOUNDARY: a new name here
+# needs a dedicated ExternalSecret and a least-privilege pod projection.
+#
+# These are NOT nodes: no node DNS, no node DB, no NODE_BASELINE_KEYS fan-out.
+# Drift against the TS constant is asserted by tests/ci-invariants/akash-tx-actuator-runtime.spec.ts.
+# shellcheck disable=SC2034  # consumed by the sourcing script (scripts/ci/secret-materialize.sh)
+declare -ga PLATFORM_SERVICES=(
+  akash-tx-actuator   # private Akash transaction actuator wallet + bearer token (task.5102)
+)
+
 # Compose-tier secrets — bootstrap postgres/temporal directly via runtime/.env,
 # never seeded to OpenBao. Truth lives on the VM after first provision.
 declare -ga COMPOSE_ONLY_KEYS=(

@@ -252,6 +252,12 @@ export const serverSchema = z.object({
   // account bills every Akash workload in USD (v0). Optional: unset → Akash provider absent
   // from the compute capability (graceful degradation, same contract as CHERRY_AUTH_TOKEN).
   AKASH_CONSOLE_API_KEY: optionalString,
+  // NOTE: AKASH_ACTUATOR_CONSOLE_API_KEY is deliberately ABSENT from this schema (story.5016
+  // secret-boundary amendment 2). It is the operator sponsor wallet's Console credential and it
+  // now lives at cogni/<env>/akash-tx-actuator/*, projected ONLY into the private actuator pod
+  // by its own ExternalSecret. serverEnv() is the PUBLIC operator app's env contract — declaring
+  // the key here would invite a future wiring that reads a wallet the app must never hold.
+  // The actuator reads it as a file in @bootstrap/akash-tx-actuator, not through serverEnv.
   // Comma-separated Akash provider addresses whose egress IPs the substrate firewall
   // allowlists (harden-docker-public-ports.sh compute-egress-allowlist). The adapter holds
   // the bid window for these before falling back to the cheapest stranger.

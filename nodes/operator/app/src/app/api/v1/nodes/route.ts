@@ -27,6 +27,10 @@ import { getServerSessionUser } from "@/lib/auth/server";
 import { getGithubRepo } from "@/shared/config";
 import { nodes } from "@/shared/db/nodes";
 import {
+  NODE_FORMATION_ACTIVITY_ENV,
+  NODE_FORMATION_ENVS,
+} from "@/shared/node-app-scaffold/gens/envs";
+import {
   createRequestContext,
   EVENT_NAMES,
   logEvent,
@@ -140,8 +144,11 @@ export async function POST(request: Request) {
           repoName: monorepo.repo,
           repoVisibility: "public",
           ownerUserId: session.id,
-          deployEnvs: ["candidate-a"],
-          activityEnv: "candidate-a",
+          // BORN_PRODUCTION (story.5025) — the registry row mirrors what the formation PR
+          // will actually render, read from the ONE birth-set constant rather than a second
+          // hardcoded literal that can drift from `gens/catalog.ts`.
+          deployEnvs: [...NODE_FORMATION_ENVS],
+          activityEnv: NODE_FORMATION_ACTIVITY_ENV,
           chainId: parsed.data.chainId,
           status: "dao_pending",
         })

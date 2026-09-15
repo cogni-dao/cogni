@@ -49,6 +49,7 @@ import {
   rulesetGetToPutPayload,
 } from "@/adapters/server/vcs/github-repo-write";
 import {
+  NODE_FORMATION_ENVS,
   renderDistributionActivationSpec,
   renderPaymentsActivationSpec,
 } from "@/shared/node-app-scaffold/gens";
@@ -255,6 +256,9 @@ function setHappyForkHandlers(): void {
         repo: "atlas",
         base_tree: "template-tree",
       });
+      // The child's ESO leaves follow the birth set itself (story.5025), not a second
+      // hardcoded list — a node born into production must carry a production leaf or its
+      // pod has no envFrom secret to mount.
       expect(params.tree).toEqual([
         {
           path: ".cogni/repo-spec.yaml",
@@ -262,18 +266,20 @@ function setHappyForkHandlers(): void {
           type: "blob",
           sha: "repo-spec-blob",
         },
-        {
-          path: "k8s/external-secrets/candidate-a/external-secret.yaml",
-          mode: "100644",
-          type: "blob",
-          sha: "external-secret-blob",
-        },
-        {
-          path: "k8s/external-secrets/candidate-a/kustomization.yaml",
-          mode: "100644",
-          type: "blob",
-          sha: "external-secret-kustomization-blob",
-        },
+        ...NODE_FORMATION_ENVS.flatMap((env) => [
+          {
+            path: `k8s/external-secrets/${env}/external-secret.yaml`,
+            mode: "100644",
+            type: "blob",
+            sha: "external-secret-blob",
+          },
+          {
+            path: `k8s/external-secrets/${env}/kustomization.yaml`,
+            mode: "100644",
+            type: "blob",
+            sha: "external-secret-kustomization-blob",
+          },
+        ]),
       ]);
       return { sha: "identity-tree" };
     },
@@ -1313,9 +1319,12 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
       // Policy re-read from the FORK at its base commit — the revision whose
       // workflows must satisfy the contexts we are about to require.
       "GET /repos/{owner}/{repo}/contents/{path}",
-      "POST /repos/{owner}/{repo}/git/blobs",
-      "POST /repos/{owner}/{repo}/git/blobs",
-      "POST /repos/{owner}/{repo}/git/blobs",
+      // One repo-spec blob + one external-secret pair per BIRTH env (story.5025), so this
+      // sequence tracks the birth set instead of pinning a count that silently goes stale.
+      ...Array.from(
+        { length: 1 + 2 * NODE_FORMATION_ENVS.length },
+        () => "POST /repos/{owner}/{repo}/git/blobs"
+      ),
       "POST /repos/{owner}/{repo}/git/trees",
       "POST /repos/{owner}/{repo}/git/commits",
       "POST /repos/{owner}/{repo}/git/refs",
@@ -1626,9 +1635,12 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
       // Policy re-read from the FORK at its base commit — the revision whose
       // workflows must satisfy the contexts we are about to require.
       "GET /repos/{owner}/{repo}/contents/{path}",
-      "POST /repos/{owner}/{repo}/git/blobs",
-      "POST /repos/{owner}/{repo}/git/blobs",
-      "POST /repos/{owner}/{repo}/git/blobs",
+      // One repo-spec blob + one external-secret pair per BIRTH env (story.5025), so this
+      // sequence tracks the birth set instead of pinning a count that silently goes stale.
+      ...Array.from(
+        { length: 1 + 2 * NODE_FORMATION_ENVS.length },
+        () => "POST /repos/{owner}/{repo}/git/blobs"
+      ),
       "POST /repos/{owner}/{repo}/git/trees",
       "POST /repos/{owner}/{repo}/git/commits",
       "POST /repos/{owner}/{repo}/git/refs",
@@ -2004,7 +2016,7 @@ node_port: 30200
           readonly path: string;
           readonly sha: string;
         }>;
-        for (const env of ["candidate-a"]) {
+        for (const env of NODE_FORMATION_ENVS) {
           const entry = tree.find(
             (item) =>
               item.path === `infra/k8s/overlays/${env}/atlas/kustomization.yaml`
@@ -2037,6 +2049,9 @@ node_port: 30200
           expect(kust).toContain(`${env}-atlas-applicationset.yaml`);
           expect(kust).toContain(`${env}-node-template-applicationset.yaml`);
         }
+        // PREVIEW_IS_ABSENT_AT_BIRTH (story.5025). Production IS rendered — a Spawn is born
+        // with canonical production as its generation-1 activity authority — but preview is
+        // not, so a birth never buys a third lease or creates an ownerless middle env.
         expect(
           tree.some((item) =>
             item.path.startsWith("infra/k8s/overlays/preview/atlas/")
@@ -2044,25 +2059,38 @@ node_port: 30200
         ).toBe(false);
         expect(
           tree.some((item) =>
-            item.path.startsWith("infra/k8s/overlays/production/atlas/")
+            item.path.startsWith(
+              "infra/k8s/argocd/appsets/preview/preview-atlas"
+            )
           )
         ).toBe(false);
 
         // ROUTING DRIFT-GREEN PROOF (bug.5094): the publish PR MUST splice the new node into
         // the shared base default AND every deploy env's provider-resolved map. Splicing base
         // alone leaves the PR drift-red (render-scheduler-worker-endpoints.sh --check) and the
-        // node unrouted in preview/production. A birth is always k3s → in-cluster convention.
-        for (const routingPath of [
-          "infra/k8s/base/scheduler-worker/configmap.yaml",
-          "infra/k8s/overlays/candidate-a/scheduler-worker/node-endpoints.patch.yaml",
-          "infra/k8s/overlays/preview/scheduler-worker/node-endpoints.patch.yaml",
-          "infra/k8s/overlays/production/scheduler-worker/node-endpoints.patch.yaml",
-        ]) {
+        // node unrouted wherever it deploys.
+        //
+        // PLACEMENT_DECIDES_THE_ADDRESS at birth (story.5025): a node born on Akash has no
+        // `<slug>-node-app` Service, so its birth envs must route to the PUBLIC host. The base
+        // default stays the placement-agnostic in-cluster convention, matching what the shell
+        // renderer emits for base. Getting this wrong is silent — the worker dials a Service
+        // that does not exist and chat/completions fails on first flight.
+        const bornRouting: Record<string, string> = {
+          "infra/k8s/base/scheduler-worker/configmap.yaml":
+            "http://atlas-node-app:3000",
+          "infra/k8s/overlays/candidate-a/scheduler-worker/node-endpoints.patch.yaml":
+            "https://atlas-test.cognidao.org",
+          "infra/k8s/overlays/preview/scheduler-worker/node-endpoints.patch.yaml":
+            "http://atlas-node-app:3000",
+          "infra/k8s/overlays/production/scheduler-worker/node-endpoints.patch.yaml":
+            "https://atlas.cognidao.org",
+        };
+        for (const [routingPath, url] of Object.entries(bornRouting)) {
           const routingEntry = tree.find((item) => item.path === routingPath);
           expect(routingEntry, routingPath).toBeDefined();
           const routing = blobs.get(routingEntry?.sha ?? "");
           expect(routing, routingPath).toContain(
-            "atlas=http://atlas-node-app:3000,11111111-1111-4111-8111-111111111111=http://atlas-node-app:3000"
+            `atlas=${url},11111111-1111-4111-8111-111111111111=${url}`
           );
           expect(routing, routingPath).toContain(
             "node-template=http://node-template-node-app:3000"
@@ -2092,8 +2120,19 @@ node_port: 30200
         expect(catalogEntry).toBeDefined();
         const catalog = blobs.get(catalogEntry?.sha ?? "");
         expect(catalog).toContain("type: node");
-        expect(catalog).toContain("envs: [candidate-a]");
-        expect(catalog).toContain("activity_env: candidate-a");
+        // BORN_ON_AKASH, production-authoritative, preview absent (story.5025). The catalog row
+        // the PR commits is the SAME row the ordinary deploy lane reads, so this is where the
+        // wizard path and the per-node deploy path meet. AUTHORITY_REQUIRES_AN_INSTALLED_API
+        // (task.5104): every birth env is off-cluster, but only candidate-a has a Crossplane
+        // control plane, so production is omitted here and stays on the legacy default it can
+        // actually reconcile.
+        expect(catalog).toContain("envs: [candidate-a, production]");
+        expect(catalog).toContain("activity_env: production");
+        expect(catalog).toContain(
+          "deployment_provider:\n  candidate-a: akash\n  production: akash\n"
+        );
+        expect(catalog).toContain("compute_api:\n  candidate-a: crossplane\n");
+        expect(catalog).not.toContain("production: crossplane");
         expect(catalog).toContain(
           'owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"'
         );

@@ -299,10 +299,11 @@ else
         selection_reason="workflow-build-change:${path}"
         break
         ;;
-      infra/k8s/base/compute-workload-controller/*)
-        # The controller runs inside the operator image. Its manifests are
-        # candidate inputs too, so build that exact source SHA rather than
-        # flighting new manifests against an older operator artifact.
+      infra/k8s/base/compute-workload-controller/* | infra/k8s/base/akash-tx-actuator/*)
+        # Both run inside the operator image (the ComputeWorkload controller and the
+        # Akash transaction actuator). Their manifests are candidate inputs too, so
+        # build that exact source SHA rather than flighting new manifests against an
+        # older operator artifact.
         add_target operator
         selection_reason="operator-image-input:${path}"
         continue

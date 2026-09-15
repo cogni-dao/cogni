@@ -13,9 +13,14 @@
  *   generates both from one node_id, so they cannot drift at birth. CATALOG_IS_SSOT — fields mirror
  *   the committed shape.
  * Side-effects: none — pure string transform, no IO, no env.
- * Links: infra/catalog/node-template.yaml, infra/catalog/_schema.json, scripts/setup/scaffold-node.sh, task.5092
+ * Links: infra/catalog/node-template.yaml, infra/catalog/_schema.json, scripts/setup/scaffold-node.sh,
+ *   task.5092, story.5025, task.5097, task.5104
  * @public
  */
+
+import { hasCrossplaneControlPlane } from "@/shared/node-registry/crossplane-control-plane";
+
+import { NODE_FORMATION_ACTIVITY_ENV, NODE_FORMATION_ENVS } from "./envs";
 
 /**
  * Render `infra/catalog/<slug>.yaml` for a new `type:node` entry. `port` is the container port (3200
@@ -63,6 +68,31 @@ export function renderCatalog(
   nodePort: number,
   input: RenderCatalogInput
 ): string {
+  // BORN_ON_AKASH (story.5025) — placement is stated, never defaulted. The pre-existing
+  // `?? "k3s"` fallback is for rows minted before decentralized compute existed; a node born
+  // today is off-cluster in every environment it is born into, and says so in git.
+  // AKASH_NEEDS_BUILD_PLANE — both keys are schema-gated on `source_repo`, because the
+  // off-cluster lane resolves an immutable artifact from an external build plane. An in-repo
+  // row has none, so it stays on the pre-existing k3s/legacy default rather than emitting a
+  // catalog the schema would reject. Every wizard birth is a fork, so every birth is akash.
+  const offCluster = Boolean(input.sourceRepo);
+  const envs = NODE_FORMATION_ENVS;
+  const placementBlock = offCluster
+    ? `deployment_provider:\n${envs.map((env) => `  ${env}: akash\n`).join("")}`
+    : "";
+  // AUTHORITY_REQUIRES_AN_INSTALLED_API (task.5104) — placement and compute authority are
+  // DIFFERENT AXES, so they are filtered differently. Every birth env is genuinely `akash`
+  // above; only the envs that carry a Crossplane control plane can name `crossplane` here.
+  // Naming it for production would commit an XComputeWorkload into a cluster with no such CRD
+  // (no crossplane-* Application exists under infra/k8s/argocd/control-plane/production/), so
+  // the promote would render a workload nothing reconciles. The unfiltered envs stay on the
+  // pre-existing `legacy` default until their control plane is installed and
+  // CROSSPLANE_CONTROL_PLANE_ENVS is widened — at which point births pick it up automatically.
+  const crossplaneEnvs = envs.filter((env) => hasCrossplaneControlPlane(env));
+  const computeApiBlock =
+    offCluster && crossplaneEnvs.length > 0
+      ? `compute_api:\n${crossplaneEnvs.map((env) => `  ${env}: crossplane\n`).join("")}`
+      : "";
   const sourceShaLine = input.sourceSha
     ? `source_sha: ${input.sourceSha}\n`
     : "";
@@ -82,13 +112,23 @@ migrator_tag_suffix: "-${slug}-migrate"
 ${sourceLines}candidate_a_branch: deploy/candidate-a-${slug}
 preview_branch: deploy/preview-${slug}
 production_branch: deploy/production-${slug}
-# task.5017/5025 — per-env node-set (deploy ⊆ provisioned). A wizard birth enters
-# candidate-a only; preview/production are explicit post-validation transitions.
-envs: [candidate-a]
-# Birth authority. A node is born into candidate-a only, so this is the only valid value
-# here. It is NOT fixed for life: promoting the node moves it (ACTIVITY_FOLLOWS_INGEST in
-# env-membership-plan.ts), because production is the only env that receives webhooks.
-activity_env: candidate-a
+# story.5025 — per-env node-set (deploy ⊆ provisioned). A wizard birth renders the transient
+# candidate-a proof slot and canonical production; PREVIEW_IS_ABSENT_AT_BIRTH. Closing the
+# candidate after the proof is the ordinary env verb ({env:candidate-a, present:false}).
+envs: [${envs.join(", ")}]
+# story.5025 — BORN_ON_AKASH. Placement is stated at birth, never inherited from the k3s
+# fallback that exists for rows minted before decentralized compute did.
+${placementBlock}# task.5097 — WHICH authority reconciles the workload. Crossplane
+# (infra/crossplane/xcomputeworkload) owns every generic concern; the only Cogni-specific
+# piece left is the private Akash transaction actuator. A born node never touches the
+# bespoke controller in any environment whose control plane can reconcile the composite; an
+# environment without one is omitted and stays on the pre-existing legacy default (task.5104).
+${computeApiBlock}# story.5025 — birth authority is PRODUCTION, the only environment that receives Git
+# webhooks (ACTIVITY_FOLLOWS_INGEST, bug.5079). Born here it is immutable for life: a
+# sub-production authority would have to be moved by every later promote, and generation 1
+# has no fenced cross-environment cutover. candidate-a stays passive — it never ingests, so
+# it can never run a competing activity ledger.
+activity_env: ${NODE_FORMATION_ACTIVITY_ENV}
 # Stable binding only; the reconciler resolves an env-local users.id by wallet.
 owner_wallet: "${input.ownerWallet}"
 path_prefix: nodes/${slug}/

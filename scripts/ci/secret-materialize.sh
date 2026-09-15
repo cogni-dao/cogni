@@ -17,6 +17,10 @@
 #   - catalog `syncTo: litellm-virtual-key` entries are registered with LiteLLM
 #     only after the OpenBao batch is durable; registration is idempotent and
 #     fail-closed.
+#   - after the node batch, the OWNER leg (operator) mints the `source: agent` keys of
+#     the non-node PLATFORM_SERVICES into their own `cogni/<env>/<service>/*` buckets.
+#     Those services exist precisely so a credential is NOT reachable from the operator
+#     app's `dataFrom: extract` bucket (story.5016 secret-boundary amendments).
 #
 # SOLE WRITER: this script composes + writes all per-node DB DSNs (DATABASE_URL,
 # DATABASE_SERVICE_URL, DOLTGRES_URL) to cogni/<env>/<node> from OpenBao-owned
@@ -154,8 +158,11 @@ _cat_field() {
 # (North star: move this into an in-cluster Job that talks to OpenBao over
 # ClusterIP and drop ssh entirely — docs/design/node-wizard-secret-setting.md.)
 CACHE_DIR="$(mktemp -d -t materialize-cache.XXXXXX)"
-BATCH_DIR="${CACHE_DIR}/.batch"
-mkdir -p "$BATCH_DIR"
+# One batch dir PER OpenBao service path. The node path is the common case; a platform
+# service (see PLATFORM_SERVICES below) accumulates into its own dir so one flush can
+# never patch another service's bucket.
+BATCH_ROOT="${CACHE_DIR}/.batch"
+mkdir -p "${BATCH_ROOT}/${TARGET_NODE}"
 trap 'rm -rf "$CACHE_DIR"' EXIT
 
 bao_exec() {
@@ -183,19 +190,20 @@ bao_get_field() {
   [[ -f "$f" ]] && cat "$f" || true
 }
 
-# Writes accumulate into BATCH_DIR; an already-present node key is a no-op
+# Writes accumulate into BATCH_ROOT/<service>; an already-present key is a no-op
 # (idempotent — preserve existing, 0 pod churn). flush_batch writes once.
 seed_kv() {
-  local k="$2" v="$3"
+  local svc="$1" k="$2" v="$3"
   [[ -z "$v" ]] && return 0
-  [[ -f "${CACHE_DIR}/${TARGET_NODE}/${k}" ]] && return 0
-  printf '%s' "$v" > "${BATCH_DIR}/${k}"
+  [[ -f "${CACHE_DIR}/${svc}/${k}" ]] && return 0
+  mkdir -p "${BATCH_ROOT}/${svc}"
+  printf '%s' "$v" > "${BATCH_ROOT}/${svc}/${k}"
   # Reflect the just-written value in the cache so intra-run compositions resolve
   # within the same pass — e.g. DATABASE_URL (composed later in the loop) reads the
   # APP_DB_PASSWORD generated a few keys earlier via bao_get_field. flush_batch still
   # does the single OpenBao write; this only affects in-run reads.
-  mkdir -p "${CACHE_DIR}/${TARGET_NODE}"
-  printf '%s' "$v" > "${CACHE_DIR}/${TARGET_NODE}/${k}"
+  mkdir -p "${CACHE_DIR}/${svc}"
+  printf '%s' "$v" > "${CACHE_DIR}/${svc}/${k}"
 }
 
 # One write for all missing keys. JSON is built locally via jq --rawfile so no
@@ -210,7 +218,10 @@ seed_kv() {
 # and only fall back to a destructive `put` on a POSITIVE "does not exist" signal in
 # patch's OWN output. Any other failure returns non-zero without clobbering.
 flush_batch() {
-  local files=( "$BATCH_DIR"/* )
+  local svc="${1:-$TARGET_NODE}"
+  local batch_dir="${BATCH_ROOT}/${svc}"
+  [[ -d "$batch_dir" ]] || return 0
+  local files=( "$batch_dir"/* )
   [[ -e "${files[0]}" ]] || return 0
   local json='{}' f k out rc
   for f in "${files[@]}"; do
@@ -218,7 +229,7 @@ flush_batch() {
     json="$(jq --arg k "$k" --rawfile v "$f" '.[$k]=$v' <<<"$json")"
   done
   set +e
-  out="$(printf '%s' "$json" | bao_exec "-i" "kv patch 'cogni/${DEPLOY_ENVIRONMENT}/${TARGET_NODE}' -" 2>&1)"
+  out="$(printf '%s' "$json" | bao_exec "-i" "kv patch 'cogni/${DEPLOY_ENVIRONMENT}/${svc}' -" 2>&1)"
   rc=$?
   set -e
   if [[ $rc -eq 0 ]]; then
@@ -229,13 +240,13 @@ flush_batch() {
   # cannot clobber siblings (mirrors provision seed_kv fix a54f24809b).
   if printf '%s' "$out" | grep -qiE 'no value found|does not exist|not found|code: 404'; then
     # Genuinely absent — safe to create; no siblings to clobber.
-    printf '%s' "$json" | bao_exec "-i" "kv put 'cogni/${DEPLOY_ENVIRONMENT}/${TARGET_NODE}' -" >/dev/null
+    printf '%s' "$json" | bao_exec "-i" "kv put 'cogni/${DEPLOY_ENVIRONMENT}/${svc}' -" >/dev/null
     return $?
   fi
   # Transient/unknown failure — NEVER put (would wipe sibling keys at this shared
   # node path). Fail loud so materialize is retried against an intact bucket.
   printf '%s\n' "$out" >&2
-  fail "bao kv patch on cogni/${DEPLOY_ENVIRONMENT}/${TARGET_NODE} failed (rc=${rc}) without a positive 'absent' signal; refusing to put (would clobber sibling keys)"
+  fail "bao kv patch on cogni/${DEPLOY_ENVIRONMENT}/${svc} failed (rc=${rc}) without a positive 'absent' signal; refusing to put (would clobber sibling keys)"
 }
 
 # Is this key minted fresh per-node (source:agent random)? Such keys are NEVER
@@ -384,6 +395,47 @@ for k in "${LITELLM_SYNC_KEYS[@]}"; do
   created=$((created + 1))
 done
 flush_batch
+
+# ── Platform-service agent secrets (non-node OpenBao buckets) ─────────────────
+# PLATFORM_SERVICES (reconcile-secrets.sh) own `cogni/<env>/<service>/*` instead of
+# borrowing a node's bucket, because the operator app consumes the WHOLE operator bucket
+# via `dataFrom: extract` — parking a wallet credential there hands it to the public app.
+# Their `source: agent` keys still have to be MINTED, and the killer rule (cicd-secrets-expert)
+# forbids a human typing a generated value, so this lane mints them exactly like node keys:
+# catalog-declared generator, idempotent read-once → diff → write-missing, key NAMES only.
+# `source: human` keys here are untouched — a vendor-minted value is seeded through the
+# sanctioned write path (`pnpm secrets:set <env> <service> <KEY>`), never generated.
+#
+# SINGLE WRITER, NOT PER-MATRIX-NODE. node-substrate is a PARALLEL matrix over nodes; if
+# every leg wrote these paths, two legs could each mint a fresh token on a cold bucket and
+# the loser's value would already be projected somewhere. The owner node runs the pass once.
+# `infra/k8s/base/akash-tx-actuator/*` maps to the operator target in detect-affected.sh, so
+# any change to a platform service's manifests already brings its owner leg along.
+PLATFORM_SERVICE_OWNER_NODE="${PLATFORM_SERVICE_OWNER_NODE:-operator}"
+if [[ "$TARGET_NODE" == "$PLATFORM_SERVICE_OWNER_NODE" ]]; then
+  for svc in "${PLATFORM_SERVICES[@]}"; do
+    prefetch_path "$svc"
+    mapfile -t svc_keys < <(
+      yq -N ".secrets[] | select(.service == \"${svc}\" and .source == \"agent\") | .name" \
+        "${CATALOG_FILES[@]}" | LC_ALL=C sort -u
+    )
+    for k in "${svc_keys[@]}"; do
+      [[ -n "$k" ]] || continue
+      if [[ -f "${CACHE_DIR}/${svc}/${k}" ]]; then
+        unchanged=$((unchanged + 1))
+        continue
+      fi
+      key_is_agent_generated "$k" \
+        || fail "platform-service key ${svc}/${k} declares source: agent but no random generator; a generated secret must never need a human"
+      v="$(_compose_node_value "$svc" "$k")"
+      [[ -n "$v" ]] || fail "platform-service key ${svc}/${k} produced an empty value"
+      seed_kv "$svc" "$k" "$v"
+      log "  created ${k} → cogni/${DEPLOY_ENVIRONMENT}/${svc}"
+      created=$((created + 1))
+    done
+    flush_batch "$svc"
+  done
+fi
 
 # A LiteLLM virtual key is a dual-plane generated secret: OpenBao owns its
 # bytes, while LiteLLM must store the same explicit key for authentication.
