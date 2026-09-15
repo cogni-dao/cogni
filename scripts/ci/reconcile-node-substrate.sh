@@ -220,11 +220,13 @@ grep -qxF "$DEPLOY_ENVIRONMENT" <<<"$node_envs" \
 node_db="$(node_database_for_target "$TARGET_NODE")"
 
 read -r -a SSH_OPTS_ARR <<< "$SSH_OPTS_RAW"
+# shellcheck source=lib/ssh-retry.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/ssh-retry.sh"
 remote() {
-  "$SSH_BIN" "${SSH_OPTS_ARR[@]}" "root@${VM_HOST}" "$@"
+  cogni_ssh_transport_retry "$SSH_BIN" "${SSH_OPTS_ARR[@]}" "root@${VM_HOST}" "$@"
 }
 copy_to_remote() {
-  "$SCP_BIN" "${SSH_OPTS_ARR[@]}" "$1" "root@${VM_HOST}:$2"
+  cogni_ssh_transport_retry "$SCP_BIN" "${SSH_OPTS_ARR[@]}" "$1" "root@${VM_HOST}:$2"
 }
 
 init_summary

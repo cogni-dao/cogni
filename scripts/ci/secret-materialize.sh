@@ -93,8 +93,10 @@ done
 "$node_known" || fail "target '$TARGET_NODE' is not a type=node catalog target"
 
 read -r -a SSH_OPTS_ARR <<< "$SSH_OPTS_RAW"
+# shellcheck source=lib/ssh-retry.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/ssh-retry.sh"
 remote() {
-  "$SSH_BIN" "${SSH_OPTS_ARR[@]}" "root@${VM_HOST}" "$@"
+  cogni_ssh_transport_retry "$SSH_BIN" "${SSH_OPTS_ARR[@]}" "root@${VM_HOST}" "$@"
 }
 
 # Mint the <env>-writer token via the sanctioned k8s-auth seam. Target: this is
