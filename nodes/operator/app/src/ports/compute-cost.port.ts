@@ -15,6 +15,8 @@ export interface ComputeCostRate extends ComputeCostAmount {
 /** Opaque identity for one paid resource. */
 export interface ComputeResourceCostIdentity {
   readonly computeProvider: string;
+  /** Raw account at that provider which owns/consumes this resource; never Cogni identity. */
+  readonly providerConsumerAccountId: string;
   readonly resourceId: string;
 }
 
@@ -26,8 +28,8 @@ export interface ComputeResourceCostIdentity {
  */
 export interface ComputeResourceCostEvidence
   extends ComputeResourceCostIdentity {
-  readonly computeProviderAccountId: string;
-  readonly computeSupplierAccountId: string;
+  /** Raw host/provider account which supplies this provider-native resource. */
+  readonly providerSupplierAccountId: string;
   readonly rate: ComputeCostRate;
   /** Provider-native chain height/meter position, not a wall-clock timestamp. */
   readonly providerOpenedAtPosition?: string;

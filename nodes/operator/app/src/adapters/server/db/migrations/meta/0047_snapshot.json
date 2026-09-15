@@ -1,5 +1,5 @@
 {
-  "id": "98690b7b-f82f-4f58-900d-a23da4197bfd",
+  "id": "c11b4873-4e8f-48b9-b500-85e4ebfd1675",
   "prevId": "c3e76b2d-a404-4f2f-8bae-740a467f27da",
   "version": "7",
   "dialect": "postgresql",
@@ -5287,14 +5287,14 @@
           "primaryKey": false,
           "notNull": true
         },
-        "compute_provider_account_id": {
-          "name": "compute_provider_account_id",
+        "provider_consumer_account_id": {
+          "name": "provider_consumer_account_id",
           "type": "text",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
-        "compute_supplier_account_id": {
-          "name": "compute_supplier_account_id",
+        "provider_supplier_account_id": {
+          "name": "provider_supplier_account_id",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -5399,6 +5399,12 @@
               "nulls": "last"
             },
             {
+              "expression": "provider_consumer_account_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
               "expression": "resource_id",
               "isExpression": false,
               "asc": true,
@@ -5432,7 +5438,7 @@
         },
         "compute_cost_intervals_evidence_check": {
           "name": "compute_cost_intervals_evidence_check",
-          "value": "(\n        \"compute_cost_intervals\".\"state\" = 'allocated'\n        AND \"compute_cost_intervals\".\"closed_recorded_at\" IS NULL\n        AND \"compute_cost_intervals\".\"compute_provider_account_id\" IS NULL\n        AND \"compute_cost_intervals\".\"compute_supplier_account_id\" IS NULL\n        AND \"compute_cost_intervals\".\"rate_amount\" IS NULL\n        AND \"compute_cost_intervals\".\"rate_denom\" IS NULL\n        AND \"compute_cost_intervals\".\"rate_unit\" IS NULL\n        AND \"compute_cost_intervals\".\"provider_opened_at_position\" IS NULL\n        AND \"compute_cost_intervals\".\"provider_closed_at_position\" IS NULL\n        AND \"compute_cost_intervals\".\"escrow_state\" IS NULL\n        AND \"compute_cost_intervals\".\"provider_settled_at_position\" IS NULL\n        AND \"compute_cost_intervals\".\"escrow_funds\" = '[]'::jsonb\n        AND \"compute_cost_intervals\".\"cumulative_transferred\" = '[]'::jsonb\n        AND \"compute_cost_intervals\".\"first_observed_at\" IS NULL\n        AND \"compute_cost_intervals\".\"last_observed_at\" IS NULL\n      ) OR (\n        \"compute_cost_intervals\".\"state\" = 'active'\n        AND \"compute_cost_intervals\".\"provider_closed_at_position\" IS NULL\n        AND \"compute_cost_intervals\".\"closed_recorded_at\" IS NULL\n        AND \"compute_cost_intervals\".\"compute_provider_account_id\" IS NOT NULL\n        AND \"compute_cost_intervals\".\"compute_supplier_account_id\" IS NOT NULL\n        AND \"compute_cost_intervals\".\"rate_amount\" IS NOT NULL\n        AND \"compute_cost_intervals\".\"rate_denom\" IS NOT NULL\n        AND \"compute_cost_intervals\".\"rate_unit\" IS NOT NULL\n        AND \"compute_cost_intervals\".\"escrow_state\" IS NOT NULL\n        AND \"compute_cost_intervals\".\"first_observed_at\" IS NOT NULL\n        AND \"compute_cost_intervals\".\"last_observed_at\" IS NOT NULL\n      ) OR (\n        \"compute_cost_intervals\".\"state\" = 'closed'\n        AND \"compute_cost_intervals\".\"closed_recorded_at\" IS NOT NULL\n        AND (\n          (\n            \"compute_cost_intervals\".\"compute_provider_account_id\" IS NULL\n            AND \"compute_cost_intervals\".\"compute_supplier_account_id\" IS NULL\n            AND \"compute_cost_intervals\".\"rate_amount\" IS NULL\n            AND \"compute_cost_intervals\".\"rate_denom\" IS NULL\n            AND \"compute_cost_intervals\".\"rate_unit\" IS NULL\n            AND \"compute_cost_intervals\".\"provider_opened_at_position\" IS NULL\n            AND \"compute_cost_intervals\".\"provider_closed_at_position\" IS NULL\n            AND \"compute_cost_intervals\".\"escrow_state\" IS NULL\n            AND \"compute_cost_intervals\".\"provider_settled_at_position\" IS NULL\n            AND \"compute_cost_intervals\".\"escrow_funds\" = '[]'::jsonb\n            AND \"compute_cost_intervals\".\"cumulative_transferred\" = '[]'::jsonb\n            AND \"compute_cost_intervals\".\"first_observed_at\" IS NULL\n            AND \"compute_cost_intervals\".\"last_observed_at\" IS NULL\n          ) OR (\n            \"compute_cost_intervals\".\"compute_provider_account_id\" IS NOT NULL\n            AND \"compute_cost_intervals\".\"compute_supplier_account_id\" IS NOT NULL\n            AND \"compute_cost_intervals\".\"rate_amount\" IS NOT NULL\n            AND \"compute_cost_intervals\".\"rate_denom\" IS NOT NULL\n            AND \"compute_cost_intervals\".\"rate_unit\" IS NOT NULL\n            AND \"compute_cost_intervals\".\"escrow_state\" IS NOT NULL\n            AND \"compute_cost_intervals\".\"first_observed_at\" IS NOT NULL\n            AND \"compute_cost_intervals\".\"last_observed_at\" IS NOT NULL\n          )\n        )\n      )"
+          "value": "(\n        \"compute_cost_intervals\".\"state\" = 'allocated'\n        AND \"compute_cost_intervals\".\"closed_recorded_at\" IS NULL\n        AND \"compute_cost_intervals\".\"provider_supplier_account_id\" IS NULL\n        AND \"compute_cost_intervals\".\"rate_amount\" IS NULL\n        AND \"compute_cost_intervals\".\"rate_denom\" IS NULL\n        AND \"compute_cost_intervals\".\"rate_unit\" IS NULL\n        AND \"compute_cost_intervals\".\"provider_opened_at_position\" IS NULL\n        AND \"compute_cost_intervals\".\"provider_closed_at_position\" IS NULL\n        AND \"compute_cost_intervals\".\"escrow_state\" IS NULL\n        AND \"compute_cost_intervals\".\"provider_settled_at_position\" IS NULL\n        AND \"compute_cost_intervals\".\"escrow_funds\" = '[]'::jsonb\n        AND \"compute_cost_intervals\".\"cumulative_transferred\" = '[]'::jsonb\n        AND \"compute_cost_intervals\".\"first_observed_at\" IS NULL\n        AND \"compute_cost_intervals\".\"last_observed_at\" IS NULL\n      ) OR (\n        \"compute_cost_intervals\".\"state\" = 'active'\n        AND \"compute_cost_intervals\".\"provider_closed_at_position\" IS NULL\n        AND \"compute_cost_intervals\".\"closed_recorded_at\" IS NULL\n        AND \"compute_cost_intervals\".\"provider_supplier_account_id\" IS NOT NULL\n        AND \"compute_cost_intervals\".\"rate_amount\" IS NOT NULL\n        AND \"compute_cost_intervals\".\"rate_denom\" IS NOT NULL\n        AND \"compute_cost_intervals\".\"rate_unit\" IS NOT NULL\n        AND \"compute_cost_intervals\".\"escrow_state\" IS NOT NULL\n        AND \"compute_cost_intervals\".\"first_observed_at\" IS NOT NULL\n        AND \"compute_cost_intervals\".\"last_observed_at\" IS NOT NULL\n      ) OR (\n        \"compute_cost_intervals\".\"state\" = 'closed'\n        AND \"compute_cost_intervals\".\"closed_recorded_at\" IS NOT NULL\n        AND (\n          (\n            \"compute_cost_intervals\".\"provider_supplier_account_id\" IS NULL\n            AND \"compute_cost_intervals\".\"rate_amount\" IS NULL\n            AND \"compute_cost_intervals\".\"rate_denom\" IS NULL\n            AND \"compute_cost_intervals\".\"rate_unit\" IS NULL\n            AND \"compute_cost_intervals\".\"provider_opened_at_position\" IS NULL\n            AND \"compute_cost_intervals\".\"provider_closed_at_position\" IS NULL\n            AND \"compute_cost_intervals\".\"escrow_state\" IS NULL\n            AND \"compute_cost_intervals\".\"provider_settled_at_position\" IS NULL\n            AND \"compute_cost_intervals\".\"escrow_funds\" = '[]'::jsonb\n            AND \"compute_cost_intervals\".\"cumulative_transferred\" = '[]'::jsonb\n            AND \"compute_cost_intervals\".\"first_observed_at\" IS NULL\n            AND \"compute_cost_intervals\".\"last_observed_at\" IS NULL\n          ) OR (\n            \"compute_cost_intervals\".\"provider_supplier_account_id\" IS NOT NULL\n            AND \"compute_cost_intervals\".\"rate_amount\" IS NOT NULL\n            AND \"compute_cost_intervals\".\"rate_denom\" IS NOT NULL\n            AND \"compute_cost_intervals\".\"rate_unit\" IS NOT NULL\n            AND \"compute_cost_intervals\".\"escrow_state\" IS NOT NULL\n            AND \"compute_cost_intervals\".\"first_observed_at\" IS NOT NULL\n            AND \"compute_cost_intervals\".\"last_observed_at\" IS NOT NULL\n          )\n        )\n      )"
         },
         "compute_cost_intervals_rate_amount_check": {
           "name": "compute_cost_intervals_rate_amount_check",

@@ -167,6 +167,7 @@ function makeAdapter(
 ): AkashComputeAdapter {
   return new AkashComputeAdapter({
     apiKey: "console-key",
+    expectedCostConsumerAccountId: "akash1consumer",
     timeoutMs: 1000,
     bidTimeoutMs: 0,
     bidPollIntervalMs: 0,
@@ -250,8 +251,8 @@ describe("AkashComputeAdapter.observeCost", () => {
     await expect(adapter.observeCost({ resourceId: "7001" })).resolves.toEqual({
       computeProvider: "akash",
       resourceId: "7001",
-      computeProviderAccountId: "akash1consumer",
-      computeSupplierAccountId: "akash1provider",
+      providerConsumerAccountId: "akash1consumer",
+      providerSupplierAccountId: "akash1provider",
       rate: { amount: "7.5", denom: "uakt", unit: "block" },
       providerOpenedAtPosition: "100",
       escrow: {
@@ -315,6 +316,46 @@ describe("AkashComputeAdapter.observeCost", () => {
     );
     await expect(
       adapter.observeCost({ resourceId: "7001" })
+    ).rejects.toMatchObject({ code: "UNEXPECTED_SHAPE" });
+
+    const wrongPinnedConsumer = makeAdapter(
+      costFetch({
+        deployment: {
+          id: { owner: "akash1other", dseq: "7001" },
+          state: "active",
+        },
+        leases: [
+          {
+            id: {
+              owner: "akash1other",
+              provider: "akash1provider",
+              dseq: "7001",
+            },
+            state: "active",
+            price: { amount: "7.5", denom: "uakt" },
+            created_at: "100",
+          },
+        ],
+        escrow_account: {
+          state: {
+            owner: "akash1other",
+            state: "open",
+            settled_at: "0",
+            funds: [{ amount: "500000", denom: "uakt" }],
+            transferred: [{ amount: "12", denom: "uakt" }],
+          },
+        },
+      })
+    );
+    await expect(
+      wrongPinnedConsumer.observeCost({ resourceId: "7001" })
+    ).rejects.toMatchObject({ code: "UNEXPECTED_SHAPE" });
+
+    const invalidPin = makeAdapter(costFetch(), {
+      expectedCostConsumerAccountId: "",
+    });
+    await expect(
+      invalidPin.observeCost({ resourceId: "7001" })
     ).rejects.toMatchObject({ code: "UNEXPECTED_SHAPE" });
   });
 

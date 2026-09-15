@@ -91,19 +91,19 @@ function assertPosition(value: string | undefined, field: string): void {
 
 function assertResource(resource: ComputeResourceCostIdentity): void {
   assertText(resource.computeProvider, "computeProvider", MAX_ID_LENGTH);
+  assertText(
+    resource.providerConsumerAccountId,
+    "providerConsumerAccountId",
+    MAX_ID_LENGTH
+  );
   assertText(resource.resourceId, "resourceId", MAX_ID_LENGTH);
 }
 
 function assertEvidence(evidence: ComputeResourceCostEvidence): void {
   assertResource(evidence);
   assertText(
-    evidence.computeProviderAccountId,
-    "computeProviderAccountId",
-    MAX_ID_LENGTH
-  );
-  assertText(
-    evidence.computeSupplierAccountId,
-    "computeSupplierAccountId",
+    evidence.providerSupplierAccountId,
+    "providerSupplierAccountId",
     MAX_ID_LENGTH
   );
   assertAmount(evidence.rate, "rate");
@@ -189,8 +189,8 @@ function assertTransferredMonotonic(
 
 function rowEvidence(row: CostRow): ComputeResourceCostEvidence | undefined {
   if (
-    !row.computeProviderAccountId ||
-    !row.computeSupplierAccountId ||
+    !row.providerConsumerAccountId ||
+    !row.providerSupplierAccountId ||
     !row.rateAmount ||
     !row.rateDenom ||
     !row.rateUnit ||
@@ -201,8 +201,8 @@ function rowEvidence(row: CostRow): ComputeResourceCostEvidence | undefined {
   return {
     computeProvider: row.computeProvider,
     resourceId: row.resourceId,
-    computeProviderAccountId: row.computeProviderAccountId,
-    computeSupplierAccountId: row.computeSupplierAccountId,
+    providerConsumerAccountId: row.providerConsumerAccountId,
+    providerSupplierAccountId: row.providerSupplierAccountId,
     rate: { amount: row.rateAmount, denom: row.rateDenom, unit: row.rateUnit },
     ...(row.providerOpenedAtPosition
       ? { providerOpenedAtPosition: row.providerOpenedAtPosition }
@@ -229,8 +229,8 @@ function sameEvidence(
   return (
     left.computeProvider === right.computeProvider &&
     left.resourceId === right.resourceId &&
-    left.computeProviderAccountId === right.computeProviderAccountId &&
-    left.computeSupplierAccountId === right.computeSupplierAccountId &&
+    left.providerConsumerAccountId === right.providerConsumerAccountId &&
+    left.providerSupplierAccountId === right.providerSupplierAccountId &&
     compareDecimal(left.rate.amount, right.rate.amount) === 0 &&
     left.rate.denom === right.rate.denom &&
     left.rate.unit === right.rate.unit &&
@@ -258,12 +258,12 @@ function assertImmutableEvidence(
     "resourceId cannot change"
   );
   invariant(
-    existing.computeProviderAccountId === next.computeProviderAccountId,
-    "computeProviderAccountId cannot change"
+    existing.providerConsumerAccountId === next.providerConsumerAccountId,
+    "providerConsumerAccountId cannot change"
   );
   invariant(
-    existing.computeSupplierAccountId === next.computeSupplierAccountId,
-    "computeSupplierAccountId cannot change"
+    existing.providerSupplierAccountId === next.providerSupplierAccountId,
+    "providerSupplierAccountId cannot change"
   );
   invariant(
     existing.rate.denom === next.rate.denom,
@@ -339,6 +339,8 @@ export class DrizzleComputeCostStore implements ComputeCostStorePort {
         if (existing) {
           invariant(
             existing.computeProvider === input.resource.computeProvider &&
+              existing.providerConsumerAccountId ===
+                input.resource.providerConsumerAccountId &&
               existing.resourceId === input.resource.resourceId,
             "allocation receipt is already bound to another compute resource"
           );
@@ -348,6 +350,7 @@ export class DrizzleComputeCostStore implements ComputeCostStorePort {
           allocationReceiptId: input.allocationReceiptId,
           state: "allocated",
           computeProvider: input.resource.computeProvider,
+          providerConsumerAccountId: input.resource.providerConsumerAccountId,
           resourceId: input.resource.resourceId,
         });
       });
@@ -368,108 +371,121 @@ export class DrizzleComputeCostStore implements ComputeCostStorePort {
   }): Promise<void> {
     assertEvidence(input.evidence);
     const db = await this.getDb();
-    await db.transaction(async (tx) => {
-      const [receipt] = await tx
-        .select({ providerAccount: akashTxAllocations.providerAccount })
-        .from(akashTxAllocations)
-        .where(eq(akashTxAllocations.id, input.allocationReceiptId))
-        .limit(1);
-      invariant(receipt, "allocation receipt does not exist");
-      if (receipt.providerAccount) {
-        invariant(
-          receipt.providerAccount === input.evidence.computeSupplierAccountId,
-          "cost supplier does not match the durable allocation receipt"
-        );
-      }
-      const [row] = await tx
-        .select()
-        .from(computeCostIntervals)
-        .where(
-          eq(
-            computeCostIntervals.allocationReceiptId,
-            input.allocationReceiptId
-          )
-        )
-        .for("update")
-        .limit(1);
-      invariant(row, "cost interval is not bound");
-      invariant(
-        row.computeProvider === input.evidence.computeProvider &&
-          row.resourceId === input.evidence.resourceId,
-        "evidence does not match the allocated compute resource"
-      );
-      const existing = rowEvidence(row);
-      if (existing) {
-        assertImmutableEvidence(existing, input.evidence);
-        if (input.evidence.observedAt < existing.observedAt) return;
-        if (
-          input.evidence.observedAt.getTime() === existing.observedAt.getTime()
-        ) {
+    try {
+      await db.transaction(async (tx) => {
+        const [receipt] = await tx
+          .select({ providerAccount: akashTxAllocations.providerAccount })
+          .from(akashTxAllocations)
+          .where(eq(akashTxAllocations.id, input.allocationReceiptId))
+          .limit(1);
+        invariant(receipt, "allocation receipt does not exist");
+        if (receipt.providerAccount) {
           invariant(
-            sameEvidence(existing, input.evidence),
-            "same observedAt carries different evidence"
+            receipt.providerAccount ===
+              input.evidence.providerSupplierAccountId,
+            "cost supplier does not match the durable allocation receipt"
           );
-          return;
         }
-        assertTransferredMonotonic(
-          existing.escrow.transferred,
-          input.evidence.escrow.transferred
-        );
-      }
-      const opened =
-        row.providerOpenedAtPosition ??
-        input.evidence.providerOpenedAtPosition ??
-        null;
-      const closed =
-        row.providerClosedAtPosition ??
-        input.evidence.providerClosedAtPosition ??
-        null;
-      if (opened && closed) {
-        invariant(
-          BigInt(closed) >= BigInt(opened),
-          "provider close cannot precede open"
-        );
-      }
-      const observedSettled = input.evidence.escrow.providerSettledAtPosition;
-      const settled = observedSettled
-        ? row.providerSettledAtPosition &&
-          BigInt(row.providerSettledAtPosition) > BigInt(observedSettled)
-          ? row.providerSettledAtPosition
-          : observedSettled
-        : row.providerSettledAtPosition;
-      const closedRecordedAt =
-        row.closedRecordedAt ??
-        (input.evidence.providerClosedAtPosition
-          ? input.evidence.observedAt
-          : null);
-      await tx
-        .update(computeCostIntervals)
-        .set({
-          state:
-            row.state === "closed" || closedRecordedAt ? "closed" : "active",
-          computeProviderAccountId: input.evidence.computeProviderAccountId,
-          computeSupplierAccountId: input.evidence.computeSupplierAccountId,
-          rateAmount: row.rateAmount ?? input.evidence.rate.amount,
-          rateDenom: row.rateDenom ?? input.evidence.rate.denom,
-          rateUnit: row.rateUnit ?? input.evidence.rate.unit,
-          providerOpenedAtPosition: opened,
-          providerClosedAtPosition: closed,
-          escrowState: input.evidence.escrow.state,
-          providerSettledAtPosition: settled,
-          escrowFunds: input.evidence.escrow.funds,
-          cumulativeTransferred: input.evidence.escrow.transferred,
-          firstObservedAt: row.firstObservedAt ?? input.evidence.observedAt,
-          lastObservedAt: input.evidence.observedAt,
-          closedRecordedAt,
-          updatedAt: input.evidence.observedAt,
-        })
-        .where(
-          eq(
-            computeCostIntervals.allocationReceiptId,
-            input.allocationReceiptId
+        const [row] = await tx
+          .select()
+          .from(computeCostIntervals)
+          .where(
+            eq(
+              computeCostIntervals.allocationReceiptId,
+              input.allocationReceiptId
+            )
           )
+          .for("update")
+          .limit(1);
+        invariant(row, "cost interval is not bound");
+        invariant(
+          row.computeProvider === input.evidence.computeProvider &&
+            row.providerConsumerAccountId ===
+              input.evidence.providerConsumerAccountId &&
+            row.resourceId === input.evidence.resourceId,
+          "evidence does not match the allocated compute resource"
         );
-    });
+        const existing = rowEvidence(row);
+        if (existing) {
+          assertImmutableEvidence(existing, input.evidence);
+          if (input.evidence.observedAt < existing.observedAt) return;
+          if (
+            input.evidence.observedAt.getTime() ===
+            existing.observedAt.getTime()
+          ) {
+            invariant(
+              sameEvidence(existing, input.evidence),
+              "same observedAt carries different evidence"
+            );
+            return;
+          }
+          assertTransferredMonotonic(
+            existing.escrow.transferred,
+            input.evidence.escrow.transferred
+          );
+        }
+        const opened =
+          row.providerOpenedAtPosition ??
+          input.evidence.providerOpenedAtPosition ??
+          null;
+        const closed =
+          row.providerClosedAtPosition ??
+          input.evidence.providerClosedAtPosition ??
+          null;
+        if (opened && closed) {
+          invariant(
+            BigInt(closed) >= BigInt(opened),
+            "provider close cannot precede open"
+          );
+        }
+        const observedSettled = input.evidence.escrow.providerSettledAtPosition;
+        const settled = observedSettled
+          ? row.providerSettledAtPosition &&
+            BigInt(row.providerSettledAtPosition) > BigInt(observedSettled)
+            ? row.providerSettledAtPosition
+            : observedSettled
+          : row.providerSettledAtPosition;
+        const closedRecordedAt =
+          row.closedRecordedAt ??
+          (input.evidence.providerClosedAtPosition
+            ? input.evidence.observedAt
+            : null);
+        await tx
+          .update(computeCostIntervals)
+          .set({
+            state:
+              row.state === "closed" || closedRecordedAt ? "closed" : "active",
+            providerSupplierAccountId: input.evidence.providerSupplierAccountId,
+            rateAmount: row.rateAmount ?? input.evidence.rate.amount,
+            rateDenom: row.rateDenom ?? input.evidence.rate.denom,
+            rateUnit: row.rateUnit ?? input.evidence.rate.unit,
+            providerOpenedAtPosition: opened,
+            providerClosedAtPosition: closed,
+            escrowState: input.evidence.escrow.state,
+            providerSettledAtPosition: settled,
+            escrowFunds: input.evidence.escrow.funds,
+            cumulativeTransferred: input.evidence.escrow.transferred,
+            firstObservedAt: row.firstObservedAt ?? input.evidence.observedAt,
+            lastObservedAt: input.evidence.observedAt,
+            closedRecordedAt,
+            updatedAt: sql`greatest(${computeCostIntervals.updatedAt}, now(), ${input.evidence.observedAt})`,
+          })
+          .where(
+            eq(
+              computeCostIntervals.allocationReceiptId,
+              input.allocationReceiptId
+            )
+          );
+      });
+    } catch (error) {
+      if (error instanceof ComputeCostInvariantError) throw error;
+      if (isUniqueViolation(error)) {
+        throw new ComputeCostInvariantError(
+          "compute resource is already bound to another receipt for this consumer"
+        );
+      }
+      throw error;
+    }
   }
 
   async close(input: { allocationReceiptId: string }): Promise<void> {
@@ -479,7 +495,7 @@ export class DrizzleComputeCostStore implements ComputeCostStorePort {
       .set({
         state: "closed",
         closedRecordedAt: sql`coalesce(${computeCostIntervals.closedRecordedAt}, now())`,
-        updatedAt: sql`now()`,
+        updatedAt: sql`greatest(${computeCostIntervals.updatedAt}, now())`,
       })
       .where(
         eq(computeCostIntervals.allocationReceiptId, input.allocationReceiptId)

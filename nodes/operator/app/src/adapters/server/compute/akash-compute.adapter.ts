@@ -108,6 +108,11 @@ export type BootFailureStage =
 export interface AkashComputeAdapterConfig {
   /** Akash Console API key (Settings → API Keys), sent as `x-api-key`. */
   apiKey: string;
+  /**
+   * Non-secret Akash deployment/escrow consumer pin used only by `observeCost`.
+   * Omission keeps legacy read/write compatibility but makes cost evidence fail closed.
+   */
+  expectedCostConsumerAccountId?: string;
   /** Per-request timeout for reads, in milliseconds. */
   timeoutMs: number;
   /**
@@ -461,7 +466,12 @@ export class AkashComputeAdapter
       "GET",
       `/v1/deployments/${encodeURIComponent(input.resourceId)}`
     );
-    return costEvidenceFromDetail(input.resourceId, detail, this.now());
+    return costEvidenceFromDetail(
+      input.resourceId,
+      detail,
+      this.now(),
+      this.config.expectedCostConsumerAccountId
+    );
   }
 
   /** Update an existing deployment in place; Console keeps the same opaque resource id. */
@@ -1204,7 +1214,8 @@ function nativeAmounts(
 function costEvidenceFromDetail(
   resourceId: string,
   detail: ConsoleDeploymentDetail | undefined,
-  observedAt: Date
+  observedAt: Date,
+  expectedConsumerAccountId: string | undefined
 ): ComputeResourceCostEvidence {
   const deployment = detail?.deployment;
   const deploymentId = String(deployment?.id?.dseq ?? "");
@@ -1235,6 +1246,16 @@ function costEvidenceFromDetail(
     );
   }
   const consumer = requiredText(deployment.id?.owner, "deployment.id.owner");
+  const expectedConsumer = requiredText(
+    expectedConsumerAccountId,
+    "expected cost consumer account"
+  );
+  if (consumer !== expectedConsumer) {
+    throw new AkashComputeError(
+      "UNEXPECTED_SHAPE",
+      "Console deployment cost consumer did not match the pinned actuator account"
+    );
+  }
   const leaseConsumer = requiredText(lease.id?.owner, "leases[0].id.owner");
   if (leaseConsumer !== consumer) {
     throw new AkashComputeError(
@@ -1276,8 +1297,8 @@ function costEvidenceFromDetail(
   return {
     computeProvider: PROVIDER,
     resourceId,
-    computeProviderAccountId: consumer,
-    computeSupplierAccountId: requiredText(
+    providerConsumerAccountId: consumer,
+    providerSupplierAccountId: requiredText(
       lease.id?.provider,
       "leases[0].id.provider"
     ),

@@ -46,8 +46,8 @@ export const computeCostIntervals = pgTable(
     state: text("state").notNull().default("allocated"),
     computeProvider: text("compute_provider").notNull(),
     resourceId: text("resource_id").notNull(),
-    computeProviderAccountId: text("compute_provider_account_id"),
-    computeSupplierAccountId: text("compute_supplier_account_id"),
+    providerConsumerAccountId: text("provider_consumer_account_id").notNull(),
+    providerSupplierAccountId: text("provider_supplier_account_id"),
     rateAmount: text("rate_amount"),
     rateDenom: text("rate_denom"),
     rateUnit: text("rate_unit"),
@@ -76,6 +76,7 @@ export const computeCostIntervals = pgTable(
   (table) => [
     uniqueIndex("compute_cost_intervals_resource_idx").on(
       table.computeProvider,
+      table.providerConsumerAccountId,
       table.resourceId
     ),
     check(
@@ -87,8 +88,7 @@ export const computeCostIntervals = pgTable(
       sql`(
         ${table.state} = 'allocated'
         AND ${table.closedRecordedAt} IS NULL
-        AND ${table.computeProviderAccountId} IS NULL
-        AND ${table.computeSupplierAccountId} IS NULL
+        AND ${table.providerSupplierAccountId} IS NULL
         AND ${table.rateAmount} IS NULL
         AND ${table.rateDenom} IS NULL
         AND ${table.rateUnit} IS NULL
@@ -104,8 +104,7 @@ export const computeCostIntervals = pgTable(
         ${table.state} = 'active'
         AND ${table.providerClosedAtPosition} IS NULL
         AND ${table.closedRecordedAt} IS NULL
-        AND ${table.computeProviderAccountId} IS NOT NULL
-        AND ${table.computeSupplierAccountId} IS NOT NULL
+        AND ${table.providerSupplierAccountId} IS NOT NULL
         AND ${table.rateAmount} IS NOT NULL
         AND ${table.rateDenom} IS NOT NULL
         AND ${table.rateUnit} IS NOT NULL
@@ -117,8 +116,7 @@ export const computeCostIntervals = pgTable(
         AND ${table.closedRecordedAt} IS NOT NULL
         AND (
           (
-            ${table.computeProviderAccountId} IS NULL
-            AND ${table.computeSupplierAccountId} IS NULL
+            ${table.providerSupplierAccountId} IS NULL
             AND ${table.rateAmount} IS NULL
             AND ${table.rateDenom} IS NULL
             AND ${table.rateUnit} IS NULL
@@ -131,8 +129,7 @@ export const computeCostIntervals = pgTable(
             AND ${table.firstObservedAt} IS NULL
             AND ${table.lastObservedAt} IS NULL
           ) OR (
-            ${table.computeProviderAccountId} IS NOT NULL
-            AND ${table.computeSupplierAccountId} IS NOT NULL
+            ${table.providerSupplierAccountId} IS NOT NULL
             AND ${table.rateAmount} IS NOT NULL
             AND ${table.rateDenom} IS NOT NULL
             AND ${table.rateUnit} IS NOT NULL

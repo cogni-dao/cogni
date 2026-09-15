@@ -97,6 +97,8 @@ export interface AkashTxActuatorDeps {
   /** Paired, receipt-linked cost seams. Production wiring supplies both or startup fails. */
   readonly costEvidence: ComputeCostEvidencePort;
   readonly costStore: ComputeCostStorePort;
+  /** Pinned raw Akash deployment/escrow owner; not a Cogni user/DAO/payer identity. */
+  readonly providerConsumerAccountId: string;
 }
 
 const NOOP_LOGGER: AkashTxLogger = {
@@ -187,6 +189,15 @@ function resourceFrom(
   };
 }
 
+/** Stable, non-secret classification for arbitrary provider/store failures. */
+function costFailureType(error: unknown): string {
+  const name = (error as { name?: unknown })?.name;
+  if (name === "ComputeCostInvariantError") return "cost_invariant";
+  if (name === "AkashComputeError") return "provider_evidence_error";
+  if (error instanceof AkashTxError) return "actuator_cost_unavailable";
+  return error instanceof Error ? "cost_dependency_error" : "unknown";
+}
+
 /**
  * The actuator. Construct one per process; it holds no timers, no queues, and no state
  * beyond its injected seams.
@@ -199,6 +210,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
   private readonly migration?: AkashTxMigrationPort;
   private readonly costEvidence: ComputeCostEvidencePort;
   private readonly costStore: ComputeCostStorePort;
+  private readonly providerConsumerAccountId: string;
 
   constructor(deps: AkashTxActuatorDeps) {
     this.console = deps.console;
@@ -208,6 +220,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     if (deps.migration) this.migration = deps.migration;
     this.costEvidence = deps.costEvidence;
     this.costStore = deps.costStore;
+    this.providerConsumerAccountId = deps.providerConsumerAccountId;
   }
 
   async observe(input: {
@@ -523,8 +536,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
           {
             cogniKey: input.cogniKey,
             externalName: input.externalName,
-            causeMessage:
-              error instanceof Error ? error.message : "unknown cause",
+            causeType: costFailureType(error),
           },
           "compute_cost_preclose_observation_failed"
         );
@@ -553,8 +565,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
           {
             cogniKey: input.cogniKey,
             externalName: input.externalName,
-            causeMessage:
-              error instanceof Error ? error.message : "unknown cause",
+            causeType: costFailureType(error),
           },
           "compute_cost_final_observation_failed"
         );
@@ -748,7 +759,11 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     try {
       await this.costStore.bind({
         allocationReceiptId: record.receiptId,
-        resource: { computeProvider: "akash", resourceId: externalName },
+        resource: {
+          computeProvider: "akash",
+          providerConsumerAccountId: this.providerConsumerAccountId,
+          resourceId: externalName,
+        },
       });
     } catch (error) {
       throw this.costUnavailable(error, record.cogniKey, "bind");
@@ -801,7 +816,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       {
         cogniKey,
         operation,
-        causeMessage: error instanceof Error ? error.message : "unknown cause",
+        causeType: costFailureType(error),
       },
       "compute_cost_unavailable"
     );

@@ -25,8 +25,8 @@ function evidence(
   return {
     computeProvider: "akash",
     resourceId: "7001",
-    computeProviderAccountId: "akash1consumer",
-    computeSupplierAccountId: "akash1provider",
+    providerConsumerAccountId: "akash1consumer",
+    providerSupplierAccountId: "akash1provider",
     rate: { amount: "7.5", denom: "uakt", unit: "block" },
     providerOpenedAtPosition: "100",
     escrow: {
@@ -37,6 +37,13 @@ function evidence(
     observedAt: new Date("2026-09-15T00:00:00.000Z"),
     ...over,
   };
+}
+
+function resource(
+  resourceId: string,
+  providerConsumerAccountId = "akash1consumer"
+) {
+  return { computeProvider: "akash", providerConsumerAccountId, resourceId };
 }
 
 describe("DrizzleComputeCostStore (Component)", () => {
@@ -72,19 +79,20 @@ describe("DrizzleComputeCostStore (Component)", () => {
     await expect(
       store.bind({
         allocationReceiptId,
-        resource: { computeProvider: "akash", resourceId: "7999" },
+        resource: resource("7999"),
       })
     ).rejects.toThrow(/durable allocation receipt/);
 
     await store.bind({
       allocationReceiptId,
-      resource: { computeProvider: "akash", resourceId: "7001" },
+      resource: resource("7001"),
     });
     const [row] = await db.select().from(computeCostIntervals);
     expect(row).toMatchObject({
       allocationReceiptId,
       state: "allocated",
       computeProvider: "akash",
+      providerConsumerAccountId: "akash1consumer",
       resourceId: "7001",
     });
   });
@@ -93,7 +101,7 @@ describe("DrizzleComputeCostStore (Component)", () => {
     const allocationReceiptId = await allocated();
     await store.bind({
       allocationReceiptId,
-      resource: { computeProvider: "akash", resourceId: "7001" },
+      resource: resource("7001"),
     });
     await store.observe({ allocationReceiptId, evidence: evidence() });
     await store.observe({
@@ -110,7 +118,7 @@ describe("DrizzleComputeCostStore (Component)", () => {
     const secondReceiptId = await allocated("k2", "7002");
     await store.bind({
       allocationReceiptId: secondReceiptId,
-      resource: { computeProvider: "akash", resourceId: "7002" },
+      resource: resource("7002"),
     });
     await store.observe({
       allocationReceiptId: secondReceiptId,
@@ -155,7 +163,7 @@ describe("DrizzleComputeCostStore (Component)", () => {
     const allocationReceiptId = await allocated();
     await store.bind({
       allocationReceiptId,
-      resource: { computeProvider: "akash", resourceId: "7001" },
+      resource: resource("7001"),
     });
     const current = evidence({
       observedAt: new Date("2026-09-15T00:02:00.000Z"),
@@ -214,18 +222,51 @@ describe("DrizzleComputeCostStore (Component)", () => {
     });
   });
 
-  it("rejects another receipt claiming the same provider resource", async () => {
+  it("scopes provider resource identity by raw consumer account", async () => {
     const first = await allocated("k1", "7001");
     await store.bind({
       allocationReceiptId: first,
-      resource: { computeProvider: "akash", resourceId: "7001" },
+      resource: resource("7001"),
     });
+    await store.observe({ allocationReceiptId: first, evidence: evidence() });
+
     const second = await allocated("k2", "7001");
     await expect(
       store.bind({
         allocationReceiptId: second,
-        resource: { computeProvider: "akash", resourceId: "7001" },
+        resource: resource("7001"),
       })
     ).rejects.toThrow(/another receipt/);
+
+    const third = await allocated("k3", "7001");
+    await store.bind({
+      allocationReceiptId: third,
+      resource: resource("7001", "akash1consumer-two"),
+    });
+    await expect(
+      store.observe({
+        allocationReceiptId: third,
+        evidence: evidence({
+          providerConsumerAccountId: "akash1consumer-two",
+        }),
+      })
+    ).resolves.toBeUndefined();
+  });
+
+  it("never regresses updatedAt when evidence or a later local close crosses DB time", async () => {
+    const allocationReceiptId = await allocated();
+    await store.bind({
+      allocationReceiptId,
+      resource: resource("7001"),
+    });
+    const future = new Date("2099-01-01T00:00:00.000Z");
+    await store.observe({
+      allocationReceiptId,
+      evidence: evidence({ observedAt: future }),
+    });
+    await store.close({ allocationReceiptId });
+
+    const [row] = await db.select().from(computeCostIntervals);
+    expect(row?.updatedAt.getTime()).toBeGreaterThanOrEqual(future.getTime());
   });
 });

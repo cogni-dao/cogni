@@ -233,8 +233,8 @@ function seedAllocated(
 const COST_EVIDENCE: ComputeResourceCostEvidence = {
   computeProvider: "akash",
   resourceId: "7001",
-  computeProviderAccountId: "akash1consumer",
-  computeSupplierAccountId: "akash1provider",
+  providerConsumerAccountId: "akash1consumer",
+  providerSupplierAccountId: "akash1provider",
   rate: { amount: "7.5", denom: "uakt", unit: "block" },
   providerOpenedAtPosition: "100",
   escrow: {
@@ -246,25 +246,35 @@ const COST_EVIDENCE: ComputeResourceCostEvidence = {
 };
 
 class FakeCost implements ComputeCostEvidencePort, ComputeCostStorePort {
-  binds: { allocationReceiptId: string; resourceId: string }[] = [];
+  binds: {
+    allocationReceiptId: string;
+    providerConsumerAccountId: string;
+    resourceId: string;
+  }[] = [];
   observations: { allocationReceiptId: string; resourceId: string }[] = [];
   closes: string[] = [];
   failBind = false;
   failObserve = false;
   failClose = false;
+  failureMessage = "cost dependency down";
 
   async observeCost(input: { resourceId: string }) {
-    if (this.failObserve) throw new Error("cost evidence down");
+    if (this.failObserve) throw new Error(this.failureMessage);
     return { ...COST_EVIDENCE, resourceId: input.resourceId };
   }
 
   async bind(input: {
     allocationReceiptId: string;
-    resource: { computeProvider: string; resourceId: string };
+    resource: {
+      computeProvider: string;
+      providerConsumerAccountId: string;
+      resourceId: string;
+    };
   }) {
-    if (this.failBind) throw new Error("cost store down");
+    if (this.failBind) throw new Error(this.failureMessage);
     this.binds.push({
       allocationReceiptId: input.allocationReceiptId,
+      providerConsumerAccountId: input.resource.providerConsumerAccountId,
       resourceId: input.resource.resourceId,
     });
   }
@@ -273,7 +283,7 @@ class FakeCost implements ComputeCostEvidencePort, ComputeCostStorePort {
     allocationReceiptId: string;
     evidence: ComputeResourceCostEvidence;
   }) {
-    if (this.failObserve) throw new Error("cost store down");
+    if (this.failObserve) throw new Error(this.failureMessage);
     this.observations.push({
       allocationReceiptId: input.allocationReceiptId,
       resourceId: input.evidence.resourceId,
@@ -281,7 +291,7 @@ class FakeCost implements ComputeCostEvidencePort, ComputeCostStorePort {
   }
 
   async close(input: { allocationReceiptId: string }) {
-    if (this.failClose) throw new Error("cost store down");
+    if (this.failClose) throw new Error(this.failureMessage);
     this.closes.push(input.allocationReceiptId);
   }
 
@@ -291,7 +301,12 @@ class FakeCost implements ComputeCostEvidencePort, ComputeCostStorePort {
 }
 
 function costDeps(cost = new FakeCost()) {
-  return { cost, costEvidence: cost, costStore: cost };
+  return {
+    cost,
+    costEvidence: cost,
+    costStore: cost,
+    providerConsumerAccountId: "akash1consumer",
+  };
 }
 
 interface FakeConsoleOptions {
@@ -389,6 +404,7 @@ function build(consoleOptions: FakeConsoleOptions = {}) {
     migration,
     costEvidence: costs.costEvidence,
     costStore: costs.costStore,
+    providerConsumerAccountId: costs.providerConsumerAccountId,
   });
   return { actuator, ledger, api, log, migration, cost: costs.cost };
 }
@@ -905,6 +921,7 @@ describe("AkashTxActuator cost attribution (task.5071)", () => {
     });
     expect(cost.binds).toContainEqual({
       allocationReceiptId: "receipt-k1",
+      providerConsumerAccountId: "akash1consumer",
       resourceId: "7001",
     });
     expect(cost.observations).toContainEqual({
@@ -915,6 +932,7 @@ describe("AkashTxActuator cost attribution (task.5071)", () => {
 
   it("holds acceptance on a cost failure and repairs by replay without re-spending", async () => {
     const { actuator, api, ledger, cost, log } = build();
+    cost.failureMessage = "secret-like-provider-body";
     cost.failBind = true;
     await expect(
       actuator.create({
@@ -945,6 +963,9 @@ describe("AkashTxActuator cost attribution (task.5071)", () => {
     expect(api.allocateCalls).toBe(1);
     expect(log.lines.map((line) => line.marker)).toContain(
       "compute_cost_unavailable"
+    );
+    expect(JSON.stringify(log.lines)).not.toContain(
+      "secret-like-provider-body"
     );
   });
 });
@@ -1336,6 +1357,9 @@ describe("composition root wiring (story.5016)", () => {
     const deps = actuatorDepsLiteral();
     expect(deps).toMatch(/\bcostEvidence\s*:/);
     expect(deps).toMatch(/\bcostStore\s*:/);
+    expect(deps).toMatch(
+      /\bproviderConsumerAccountId\s*:\s*wallet\.expectedAccountId/
+    );
     expect(source).toMatch(/new DrizzleComputeCostStore\(getDb\)/);
   });
 
