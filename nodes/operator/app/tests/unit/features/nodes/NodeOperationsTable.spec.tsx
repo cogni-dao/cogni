@@ -5,7 +5,7 @@
 // @vitest-environment jsdom
 
 import type { NodeOperationsOverview } from "@cogni/node-contracts";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
@@ -141,6 +141,53 @@ describe("NodeOperationsTable", () => {
     expect(screen.getAllByText("Beta").length).toBeGreaterThan(0);
   });
 
+  it("sorts the Node column without entering a render loop", async () => {
+    const user = userEvent.setup();
+    const beta = {
+      ...node,
+      id: "22222222-2222-4222-8222-222222222222",
+      slug: "beta-community",
+      title: "Beta",
+      detailUrl: "/nodes/22222222-2222-4222-8222-222222222222",
+    };
+    const { container } = render(<NodeOperationsTable nodes={[node, beta]} />);
+
+    await user.click(screen.getByRole("button", { name: "Node" }));
+
+    const desktopBody = container.querySelector(
+      '[data-slot="data-grid"] tbody'
+    );
+    expect(desktopBody).not.toBeNull();
+    const rows = within(desktopBody as HTMLElement).getAllByRole("row");
+    expect(rows[0]).toHaveTextContent("Beta");
+    expect(rows[1]).toHaveTextContent("Alpha");
+  });
+
+  it("filters Status without entering a render loop", async () => {
+    const user = userEvent.setup();
+    const beta = {
+      ...node,
+      id: "22222222-2222-4222-8222-222222222222",
+      slug: "beta-community",
+      title: "Beta",
+      detailUrl: "/nodes/22222222-2222-4222-8222-222222222222",
+      modules: {
+        ...node.modules,
+        deployment: {
+          ...node.modules.deployment,
+          status: "needs_attention" as const,
+        },
+      },
+    };
+    render(<NodeOperationsTable nodes={[node, beta]} />);
+
+    await user.click(screen.getByRole("button", { name: "Status" }));
+    await user.click(screen.getByRole("button", { name: /Healthy/ }));
+
+    expect(screen.getAllByText("Alpha").length).toBeGreaterThan(0);
+    expect(screen.queryAllByText("Beta")).toHaveLength(0);
+  });
+
   it("associates sponsored compute only with its observed environment", async () => {
     const user = userEvent.setup();
     const multiEnv = {
@@ -196,11 +243,11 @@ describe("NodeOperationsTable", () => {
       modules: { ...node.modules, compute: { state: "unavailable" as const } },
     };
     render(<NodeOperationsTable nodes={[unavailable]} />);
-    expect(screen.getByText(/Compute unavailable/)).toBeVisible();
+    expect(screen.getAllByText("Unavailable").length).toBeGreaterThan(0);
     expect(screen.queryByText("$0 sponsored")).not.toBeInTheDocument();
   });
 
-  it("labels a mixed-evidence sponsored total as partial", () => {
+  it("does not add dynamic summary copy above the self-explanatory table", () => {
     const unavailable = {
       ...node,
       id: "22222222-2222-4222-8222-222222222222",
@@ -210,9 +257,9 @@ describe("NodeOperationsTable", () => {
       modules: { ...node.modules, compute: { state: "unavailable" as const } },
     };
     render(<NodeOperationsTable nodes={[node, unavailable]} />);
-    expect(
-      screen.getByText(/\$0\.34 sponsored in Production · partial/)
-    ).toBeVisible();
+    expect(screen.queryByText(/2 nodes/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/healthy ·/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/partial/)).not.toBeInTheDocument();
   });
 
   it("does not offer an Open node link when production is undeclared", async () => {

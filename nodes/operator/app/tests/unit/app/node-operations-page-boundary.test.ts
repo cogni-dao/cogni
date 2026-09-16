@@ -18,7 +18,11 @@ function source(relative: string): string {
 describe("node operations page boundary", () => {
   it("keeps personal AI activity separate and removes internal operations panels", () => {
     const dashboard = source("app/(app)/dashboard/view.tsx");
+    expect(dashboard).toContain(">Dashboard</h1>");
+    expect(dashboard).toContain("<span>Nodes</span>");
     expect(dashboard).toContain("Your AI usage");
+    expect(dashboard.match(/<details/g)).toHaveLength(2);
+    expect(dashboard).not.toContain("Your nodes");
     expect(dashboard).not.toContain("ProcessHealthEventContent");
     expect(dashboard).not.toContain("System Runs");
     expect(dashboard).not.toContain("Active Work");
