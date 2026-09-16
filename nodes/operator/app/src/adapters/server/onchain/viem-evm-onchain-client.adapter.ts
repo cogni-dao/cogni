@@ -36,33 +36,13 @@ import type { EvmOnchainClient } from "@/shared/web3/onchain/evm-onchain-client.
 export class ViemEvmOnchainClient implements EvmOnchainClient {
   private client: PublicClient | null = null;
 
-  private getClient(): PublicClient {
+  /** RPC transport health depends only on the configured chain endpoint. */
+  private getRpcClient(): PublicClient {
     if (this.client) {
       return this.client;
     }
 
     const env = serverEnv();
-    // On-chain READS (treasury balance, block number, logs) need only the chain
-    // identity + an RPC endpoint — NOT payment activation. Source the chain from the
-    // node's DAO config (governance.chain_id), not getPaymentConfig: a balance read
-    // must work for any node with a DAO identity, whether or not its payment rails
-    // (operator wallet / Split) are activated. The previous getPaymentConfig() gate
-    // threw "Payment rails not activated" for every non-activated node → fleet-wide
-    // "Treasury --" (the read died synchronously before ever touching the chain).
-    const dao = getDaoConfig();
-    if (!dao) {
-      throw new Error(
-        "[ViemEvmOnchainClient] Node DAO identity not configured (governance section incomplete)"
-      );
-    }
-
-    // Validate the node's declared chain matches the compiled CHAIN constant
-    if (Number(dao.chain_id) !== CHAIN.id) {
-      throw new Error(
-        `[ViemEvmOnchainClient] Chain mismatch: repo-spec governance.chain_id declares ${dao.chain_id}, CHAIN constant is ${CHAIN.id}`
-      );
-    }
-
     // Require EVM_RPC_URL in production/preview/dev
     if (!env.EVM_RPC_URL) {
       throw new Error(
@@ -77,6 +57,24 @@ export class ViemEvmOnchainClient implements EvmOnchainClient {
     });
 
     return this.client;
+  }
+
+  /** Business reads additionally require the node's declared DAO chain identity. */
+  private getClient(): PublicClient {
+    const dao = getDaoConfig();
+    if (!dao) {
+      throw new Error(
+        "[ViemEvmOnchainClient] Node DAO identity not configured (governance section incomplete)"
+      );
+    }
+
+    if (Number(dao.chain_id) !== CHAIN.id) {
+      throw new Error(
+        `[ViemEvmOnchainClient] Chain mismatch: repo-spec governance.chain_id declares ${dao.chain_id}, CHAIN constant is ${CHAIN.id}`
+      );
+    }
+
+    return this.getRpcClient();
   }
 
   async getTransaction(txHash: `0x${string}`): Promise<Transaction | null> {
@@ -116,7 +114,8 @@ export class ViemEvmOnchainClient implements EvmOnchainClient {
   }
 
   async getBlockNumber(): Promise<bigint> {
-    const client = this.getClient();
+    // Baseline RPC reachability must be provable before optional DAO formation.
+    const client = this.getRpcClient();
     return client.getBlockNumber();
   }
 
