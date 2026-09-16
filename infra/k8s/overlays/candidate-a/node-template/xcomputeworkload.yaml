@@ -11,13 +11,13 @@ spec:
   nodeId: b927a9dd-6132-4fc9-a51e-e3cee2568e3c
   environment: candidate-a
   bundle:
-    ref: ghcr.io/cogni-dao/node-template@sha256:5f2bdb5c1839ec8b80b9d49a6d65e4ad2c0fc46077978a3b22bfcae66dcc4503
+    ref: ghcr.io/cogni-dao/node-template@sha256:b1e1116480e9b1d6dad225603d4692a8e62b376bad44947c36a5bd8d7a51fd46
     source:
       repository: cogni-dao/node-template
-      sha: 9de3856ae35bde7ba7d0d9dd763a3b713ecabc0c
+      sha: db4ddf829b90a683614bd6f57a2273a047049b1c
     artifacts:
       - name: app
-        image: ghcr.io/cogni-dao/node-template@sha256:1201458cd6ef913a1da53b80d82d3ab6b63bde0f228654b86f186d94f98c14e9
+        image: ghcr.io/cogni-dao/node-template@sha256:03b27b6f46dcbb85acf07d9f612a20cee7c12d0d37d7b54aa32f4d634ce1d007
   workload:
     name: node-template
     publicHost: node-template-test.cognidao.org
@@ -29,6 +29,7 @@ spec:
           - key: AUTH_SECRET
           - key: DATABASE_URL
           - key: DATABASE_SERVICE_URL
+          - key: EVM_RPC_URL
           - key: LITELLM_VIRTUAL_KEY
           - key: SCHEDULER_API_TOKEN
           - key: BILLING_INGEST_TOKEN
