@@ -24,11 +24,12 @@
  *     (task.5103). A key whose receipt binds a different node is refused, never re-bound:
  *     mis-attributed spend is unrecoverable in a way a retry is not.
  *   - WALLET_SINGLE_WRITER: the ledger slot is held for exactly the unrecoverable window
- *     (cursor read → allocated handle durable) and is wallet-wide, never per-workload. The
- *     local writer is the environment's sole actuator; its legacy controller is absent and
- *     Console/manual writes are forbidden. Centralized v0 pins the managed test account on
- *     candidate-a ONLY (preview pins no wallet — one active writer per test wallet), while
- *     production remains isolated on a dedicated account (ci-cd.md Axiom 26).
+ *     (cursor read → allocated handle durable) and is ACCOUNT-wide, never per-workload — the
+ *     scope is `akash-console:<account id>` since bug.5187, so one Console account is one slot
+ *     however many environments this writer mints for. The account's sole writer is this
+ *     actuator; its legacy controller is absent and Console/manual writes are forbidden.
+ *     candidate-a holds the managed test account and production a dedicated one; preview hosts
+ *     no writer (ci-cd.md Axiom 26).
  *   - FAIL_CLOSED: an allocation that cannot be resolved to exactly one lease raises
  *     allocation_unresolved / allocation_ambiguous. It is NEVER healed by a fresh create.
  *   - MIGRATION_IS_NOT_A_PAYMENT_PRECONDITION: NO mutating call states, proves, or can be

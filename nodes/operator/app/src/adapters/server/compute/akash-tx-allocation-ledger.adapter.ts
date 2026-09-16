@@ -10,7 +10,14 @@
  *   no reconciliation — the actuator decides, the database enforces.
  * Invariants:
  *   - WALLET_SINGLE_WRITER: at most one row per wallet scope may be `preparing`. Enforced by
- *     the partial unique index, not by an in-process lock a crash can drop.
+ *     the partial unique index, not by an in-process lock a crash can drop. The scope is the
+ *     Console ACCOUNT (bug.5187), so the index serializes everything that can spend from one
+ *     account rather than everything that happens to share a DEPLOY_ENVIRONMENT.
+ *   - SCOPE_IS_HALF_THE_LOOKUP_KEY: `claimOnce` finds a prior receipt by
+ *     `(wallet_scope, cogni_key)`. The scope this adapter is constructed with is therefore part
+ *     of receipt IDENTITY — construct it with a value the stored rows do not carry and every
+ *     existing receipt goes invisible, which reads as "nothing was ever created" and buys a
+ *     second paid lease. Migration 0048 and the actuator's boot gate exist for exactly that.
  *   - HANDLE_IS_WRITE_ONCE: external_name is set with COALESCE — a recorded paid handle can
  *     never be overwritten by a later attempt under the same key.
  *   - PREPARE_REQUIRES_OWNERSHIP: writing the cursor fails when the key does not hold a

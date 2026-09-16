@@ -18,6 +18,13 @@
  *     LIVE Console account read that the credential opens the pinned wallet — before anything
  *     listens. A refusal exits non-zero; there is no degraded mode that spends from a wallet a
  *     second writer already owns.
+ *   - LEDGER_SCOPE_IS_MIGRATED (bug.5187): the ledger scope is keyed on the pinned Console
+ *     ACCOUNT, never on `DEPLOY_ENVIRONMENT`, and `wallet_scope` is half the key `claimOnce`
+ *     uses to find a prior receipt. So this root also counts env-keyed rows once at boot and
+ *     REFUSES to serve while any remain — a pod that beats its migrator would otherwise look
+ *     straight past still-billing leases and mint a second one beside each. The reverse order
+ *     is covered by the database: `akash_tx_allocations_wallet_scope_account_check` makes the
+ *     legacy form unwritable, so an old pod that outlives the migration fails loudly instead.
  *   - NEVER_HOLDS_TWO_WALLETS: the legacy ComputeWorkload controller's `AKASH_CONSOLE_API_KEY`
  *     is NOT projected here and is never read. Holding it to byte-compare it (task.5095) was
  *     the opposite of isolation; separation is a revocation fact plus the pinned account
@@ -32,7 +39,9 @@
  *     The pinned account id is NOT a secret and correctly arrives as plain env config.
  *   - SURGE_IS_SAFE_HERE: unlike the ComputeWorkload controller, correctness does not rest on a
  *     Kubernetes Lease. Two live replicas cannot both spend, because the wallet slot is a
- *     partial unique index in Postgres (`akash_tx_allocations_single_writer_idx`).
+ *     partial unique index in Postgres (`akash_tx_allocations_single_writer_idx`) — and since
+ *     bug.5187 that slot is keyed on the ACCOUNT, so it serializes the replicas of a writer
+ *     that serves several environments just as it serializes two replicas serving one.
  *   - MIGRATION_RUNNER_IS_WIRED_BUT_NEVER_GATES (task.5135): the same
  *     `KubernetesMigrationJobAdapter` the ComputeWorkload controller uses is still wired here,
  *     against the SAME per-digest Job names in this namespace, so the two lanes cannot disagree
@@ -61,6 +70,7 @@ import { readFile } from "node:fs/promises";
 
 import { createAppDbClient, type Database } from "@cogni/db-client";
 import { BatchV1Api, CoreV1Api, KubeConfig } from "@kubernetes/client-node";
+import { sql } from "drizzle-orm";
 import pino from "pino";
 
 import {
@@ -80,9 +90,14 @@ import { createAkashTxActuatorServer } from "@/features/compute/akash-tx/akash-t
 import {
   AkashTxWalletConfigError,
   assertActuatorWalletAccount,
+  assertLedgerIsAccountScoped,
   credentialFingerprint,
   resolveAkashTxWallet,
 } from "@/features/compute/akash-tx/akash-tx-wallet";
+import {
+  ACCOUNT_WALLET_SCOPE_PATTERN,
+  akashTxAllocations,
+} from "@/shared/db/akash-tx-allocations";
 
 /**
  * The port the XComputeWorkload Composition hard-codes in
@@ -140,7 +155,6 @@ const expectedAccountId = runtimeEnv.AKASH_ACTUATOR_ACCOUNT_ID;
 const wallet = (() => {
   try {
     return resolveAkashTxWallet({
-      environment,
       actuatorApiKey,
       expectedAccountId,
     });
@@ -176,6 +190,44 @@ if (!databaseUrl) {
 
 const db: Database = createAppDbClient(databaseUrl);
 const getDb = async (): Promise<Database> => db;
+
+/**
+ * LEDGER_SCOPE_IS_MIGRATED (bug.5187). `claimOnce` finds a prior receipt by
+ * `(wallet_scope, cogni_key)`, so an account-keyed writer against an environment-keyed ledger
+ * cannot SEE the receipts of leases that are still billing — and a lookup that finds nothing is
+ * how you mint a second paid lease. Migration 0048 moves the rows and then makes the legacy form
+ * unwritable; this is the other direction, the one a CHECK constraint cannot cover: a pod that
+ * starts before its migrator has run refuses to serve instead of spending.
+ *
+ * Counted, not sampled, and read once at boot: the table is a few rows per environment, and the
+ * answer is permanently 0 the moment 0048 has applied (the constraint makes any other value
+ * impossible), so this costs one query and then nothing.
+ */
+const legacyScopedReceipts = await db
+  .select({ count: sql<number>`count(*)::int` })
+  .from(akashTxAllocations)
+  .where(
+    sql`${akashTxAllocations.walletScope} !~ ${ACCOUNT_WALLET_SCOPE_PATTERN}`
+  )
+  .then(([row]) => row?.count ?? 0);
+
+try {
+  assertLedgerIsAccountScoped(legacyScopedReceipts);
+} catch (error) {
+  log.fatal(
+    {
+      reason:
+        error instanceof AkashTxWalletConfigError
+          ? error.code
+          : "ledger_scope_unmigrated",
+      environment,
+      namespace,
+      legacyScopedReceipts,
+    },
+    "akash_tx_actuator_ledger_scope_unmigrated"
+  );
+  throw error;
+}
 
 /**
  * One bounded serving proof per observe: exact source SHA on `/version` AND a 2xx `/readyz`,

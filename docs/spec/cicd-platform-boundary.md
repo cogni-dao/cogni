@@ -361,12 +361,17 @@ indistinguishable from the actuator's own.
 
 **Centralized managed account, one ACTIVE writer per wallet — v0** (story.5016, BINDING;
 supersedes the earlier dedicated-Console-account-per-environment activation prerequisite).
-candidate-a pins the managed test account/credential; preview pins NO wallet (its control plane is
+candidate-a pins the managed test account/credential; preview hosts NO writer (its control plane is
 installed but dormant/unfunded, so it lands no ComputeWorkload and never actuates); production
-remains on its isolated dedicated account. Each wallet therefore has exactly one active writer —
-because the single-writer index is per-database, two envs sharing one wallet could not be
+remains on its isolated dedicated account. Each account therefore has exactly one active WRITER —
+because the single-writer index is per-database, two writers sharing one account could not be
 serialized, so preview deliberately stays unfunded rather than becoming a second writer on the
-candidate-a test wallet. Every writing environment structurally disables its legacy ComputeWorkload
+candidate-a test account. Note the axis: the invariant is `account -> at most one writer`, and
+`writer -> envs` is deliberately one-to-many, because a lease is minted off-cluster and one writer
+may legitimately mint for several environments. The reviewed map is `CROSSPLANE_ACTUATOR_WRITERS`
+in `@shared/node-registry/crossplane-control-plane`, asserted against git (account injectivity, one
+Console-key `remoteRef` per account, one writer per crossplane-selected environment) by
+`tests/ci-invariants/crossplane-dormant-substrate.spec.ts`. Every writing environment structurally disables its legacy ComputeWorkload
 controller before enabling its actuator, stores the credential only under that environment's
 dedicated actuator OpenBao path, and forbids Console/manual writes. A manual or second writer on a
 wallet invalidates cursor recovery. Distinct funded accounts per funded environment remain later
@@ -380,10 +385,16 @@ key) must be present and must match the account the live Console read reports, o
 before it listens. **The actuator never possesses `AKASH_CONSOLE_API_KEY`**: task.5095 projected it
 purely to byte-compare, which made the actuator hold the very wallet it claimed isolation from, and
 still only proved "different bytes" rather than "the right wallet". The ledger scope is
-`akash-console:<environment>`, derived from the environment rather than the secret so rotation cannot
-orphan in-flight receipts. Each environment's durable ledger serializes its local actuator and
-recovers its own lost responses; the shared-account v0 depends on the no-manual-write and
-one-local-actuator rules above. `docs/spec/ci-cd.md` Axiom 26 is the authority for the current
+`akash-console:<AKASH_ACTUATOR_ACCOUNT_ID>` (bug.5187), derived from the public pinned account rather
+than from the environment or the secret, so rotation cannot orphan in-flight receipts AND one Console
+account is exactly one single-writer slot. Keyed on the environment the slot was inert for the case
+it exists to catch: two writers on one account in two environments produced two scope strings and
+could never collide. `wallet_scope` is also half the key `claimOnce` looks a prior receipt up by, so
+re-deriving it is a DATA migration, not a rename — migration `0048` backfills the rows in the same
+change (preparing rows refused, row counts asserted), a CHECK constraint makes the legacy env-keyed
+form unwritable afterwards, and the actuator refuses to boot against a ledger the backfill has not
+reached. The durable ledger serializes its writer and recovers its own lost responses; the
+shared-account model depends on the no-manual-write and one-writer-per-account rules above. `docs/spec/ci-cd.md` Axiom 26 is the authority for the current
 cross-environment account model.
 
 Custody is OpenBao under a **dedicated service boundary**, not the broad operator bucket. The catalog
