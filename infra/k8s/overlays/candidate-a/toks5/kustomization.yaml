@@ -3,18 +3,18 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
-namespace: cogni-preview
+namespace: cogni-candidate-a
 
 resources:
   - ../../../base/node-app
   - external-secret.yaml
 
-namePrefix: poly-
+namePrefix: toks5-
 
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/cogni-template
-    digest: "sha256:cfd0f2335e03e181248f8e4b640aba28c8138d0d70e1ca8cc6f153b48993a027"
+    digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
 
 patches:
   - target:
@@ -23,50 +23,50 @@ patches:
     patch: |
       - op: replace
         path: /data/NODE_NAME
-        value: "poly"
+        value: "toks5"
       # Per-env runtime env-name the app stamps onto OpenBao paths + observability
       # labels (metrics/logger read DEPLOY_ENVIRONMENT; absent → silent "local").
       - op: add
         path: /data/DEPLOY_ENVIRONMENT
-        value: "preview"
+        value: "candidate-a"
       - op: replace
         path: /data/TEMPORAL_NAMESPACE
-        value: "cogni-preview"
+        value: "cogni-candidate-a"
       - op: replace
         path: /data/LITELLM_BASE_URL
-        value: "http://poly-litellm-external:4000"
+        value: "http://toks5-litellm-external:4000"
       - op: replace
         path: /data/TEMPORAL_ADDRESS
-        value: "poly-temporal-external:7233"
+        value: "toks5-temporal-external:7233"
       - op: replace
         path: /data/REDIS_URL
-        value: "redis://poly-redis-external:6379"
+        value: "redis://toks5-redis-external:6379"
       - op: add
         path: /data/NEXTAUTH_URL
-        value: "https://poly-preview.cognidao.org"
+        value: "https://toks5-test.cognidao.org"
   - target:
       kind: Service
       name: node-app
     patch: |
       - op: add
         path: /spec/ports/0/nodePort
-        value: 31600
+        value: 31900
       - op: replace
         path: /spec/ports/0/targetPort
         value: 3200
       - op: add
         path: /spec/selector/app.kubernetes.io~1instance
-        value: "poly"
+        value: "toks5"
   - target:
       kind: Deployment
       name: node-app
     patch: |
       - op: replace
         path: /spec/template/spec/containers/0/envFrom/1/secretRef/name
-        value: "poly-env-secrets"
+        value: "toks5-env-secrets"
       - op: replace
         path: /spec/template/spec/initContainers/0/envFrom/1/secretRef/name
-        value: "poly-env-secrets"
+        value: "toks5-env-secrets"
       - op: replace
         path: /spec/template/spec/initContainers/0/command/2
         value: exec node /app/app/migrate.mjs /app/app/migrations
@@ -75,13 +75,13 @@ patches:
         value: 3200
       - op: add
         path: /spec/selector/matchLabels/app.kubernetes.io~1instance
-        value: "poly"
+        value: "toks5"
       - op: add
         path: /spec/template/metadata/labels/app.kubernetes.io~1instance
-        value: "poly"
+        value: "toks5"
 
   # task.5077: Doltgres knowledge-plane migrator runs as a second initContainer
-  # on the poly Deployment. DATABASE_URL maps to DOLTGRES_URL (separate
+  # on the toks5 Deployment. DATABASE_URL maps to DOLTGRES_URL (separate
   # from the Postgres DATABASE_URL the main container + first initContainer use).
   # Mirrors operator's pattern verbatim.
   - target:
@@ -99,12 +99,12 @@ patches:
             - exec node /app/app/migrate-doltgres.mjs /app/app/doltgres-migrations
           envFrom:
             - configMapRef:
-                name: poly-node-app-config
+                name: toks5-node-app-config
           env:
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
-                  name: poly-env-secrets
+                  name: toks5-env-secrets
                   key: DOLTGRES_URL
           resources:
             requests:
@@ -113,7 +113,7 @@ patches:
             limits:
               memory: "1Gi"
               cpu: "1000m"
-  # bug.0295: VM discovery via DNS (cogni-preview.vm.cognidao.org).
+  # bug.0295: VM discovery via DNS (cogni-candidate-a.vm.cognidao.org).
   # Convert base headless Services → ExternalName; delete EndpointSlices.
   - target: { kind: Service, name: postgres-external }
     patch: |
@@ -123,7 +123,7 @@ patches:
         name: postgres-external
       spec:
         type: ExternalName
-        externalName: cogni-preview.vm.cognidao.org
+        externalName: cogni-candidate-a.vm.cognidao.org
         clusterIP: null
   - target: { kind: Service, name: temporal-external }
     patch: |
@@ -133,7 +133,7 @@ patches:
         name: temporal-external
       spec:
         type: ExternalName
-        externalName: cogni-preview.vm.cognidao.org
+        externalName: cogni-candidate-a.vm.cognidao.org
         clusterIP: null
   - target: { kind: Service, name: litellm-external }
     patch: |
@@ -143,7 +143,7 @@ patches:
         name: litellm-external
       spec:
         type: ExternalName
-        externalName: cogni-preview.vm.cognidao.org
+        externalName: cogni-candidate-a.vm.cognidao.org
         clusterIP: null
   - target: { kind: Service, name: redis-external }
     patch: |
@@ -153,7 +153,7 @@ patches:
         name: redis-external
       spec:
         type: ExternalName
-        externalName: cogni-preview.vm.cognidao.org
+        externalName: cogni-candidate-a.vm.cognidao.org
         clusterIP: null
   - target: { kind: Service, name: doltgres-external }
     patch: |
@@ -163,7 +163,7 @@ patches:
         name: doltgres-external
       spec:
         type: ExternalName
-        externalName: cogni-preview.vm.cognidao.org
+        externalName: cogni-candidate-a.vm.cognidao.org
         clusterIP: null
   - target: { kind: EndpointSlice, name: postgres-external-1 }
     patch: |

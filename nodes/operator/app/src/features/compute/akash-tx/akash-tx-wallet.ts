@@ -24,17 +24,25 @@
  *     fallback of any kind. Omission cannot silently point the actuator at another wallet.
  *   - SCOPE_IS_PER_ENVIRONMENT: the ledger scope is `akash-console:<environment>`, so each env's
  *     wallet is serialized by exactly one env's Postgres. Per-env Postgres over ONE shared wallet
- *     is the unsound shape this exists to prevent — hence v0 seeds candidate-a ONLY.
+ *     is the unsound shape this exists to prevent. The constraint is therefore the WALLET, not
+ *     the environment: seed an env only once it has its OWN funded Console account. As-built
+ *     2026-09-15 — production on akash10auj..., candidate-a on akash12eh8..., preview unseeded.
  *   - SCOPE_IS_ROTATION_STABLE: the scope is derived from the environment, never from the secret
  *     value, so rotating the credential cannot orphan in-flight allocation receipts.
  *   - NEVER_LOGS_OR_RETURNS_THE_VALUE_IN_AN_ERROR: refusals carry a stable code and, at most, the
  *     NON-SECRET account ids. The API key never appears in a message.
+ *   - CREDENTIAL_VERSION_IS_OBSERVABLE_WITHOUT_THE_VALUE: `credentialFingerprint` publishes a
+ *     truncated, non-reversible digest so an operator can answer "did the pod pick up the
+ *     rotation?" from pod logs alone — no OpenBao access, no root token. It is consistent with
+ *     the invariant above: a 12-hex prefix identifies WHICH credential, never what it is.
  * Side-effects: none
  * Links: @shared/db/akash-tx-allocations, ./akash-tx-actuator,
  *   infra/secrets-catalog.yaml (service: akash-tx-actuator),
  *   infra/k8s/base/akash-tx-actuator/deployment.yaml, task.5095, story.5016
  * @internal
  */
+
+import { createHash } from "node:crypto";
 
 /** Stable refusal reasons. Config failures surface at wiring time, never as a request status. */
 export type AkashTxWalletConfigErrorCode =
@@ -179,4 +187,78 @@ export function assertActuatorWalletAccount(
         "Akash account or the pin is stale; both mean a second writer could be spending here."
     );
   }
+}
+
+/** Hex characters kept from the digest. Enough to distinguish credential versions, short
+ *  enough that the log line reads as a fingerprint and never as something secret-shaped. */
+const FINGERPRINT_LENGTH = 12;
+
+/**
+ * WHICH Console credential does this process hold? A truncated, non-reversible digest —
+ * never the value, and never enough of a digest to be treated as one.
+ *
+ * WHY THIS EXISTS (bug.5142, and it cost real time): a rotation is two separate facts —
+ * "written to OpenBao" and "projected into the pod" — with an ExternalSecret and its
+ * `refreshInterval` in between. The actuator verifies its wallet only at BOOT, so a pod
+ * holding a REVOKED credential looks identical to a healthy one until the first paid call
+ * discovers it. On 2026-09-14 the only way to tell v3 from v4 was root-token access to
+ * OpenBao plus a hand-rolled hash compare; the pod itself said nothing.
+ *
+ * The real win is that this needs NO OpenBao access at all: compare this field across two
+ * pod log lines over time and you know whether the rotation was picked up.
+ *
+ * VERIFYING AGAINST OPENBAO — use this recipe literally:
+ *
+ *   bao kv get -field=AKASH_ACTUATOR_CONSOLE_API_KEY cogni/<env>/akash-tx-actuator \
+ *     | tr -d '\r\n' | shasum -a 256 | cut -c1-12
+ *
+ * Two traps, both hit for real:
+ *   1. `-format=json -field=` emits a JSON-QUOTED string. Hashing that matches NOTHING,
+ *      because the process holds raw bytes. Use the bare `-field=` form above.
+ *   2. `readCredential` in the actuator's composition root TRIMS what it reads, so the
+ *      fingerprint covers the TRIMMED value. `tr -d '\r\n'` is what makes the recipe agree;
+ *      a plain `shasum` of the file would include the trailing newline and disagree.
+ *
+ * An empty credential returns `"absent"` rather than the digest of the empty string. That
+ * digest is a fixed, real-looking constant (`e3b0c442...`), and publishing it would invite
+ * exactly the false match this function exists to prevent.
+ *
+ * NOT FOR THE BEARER TOKEN. `AKASH_TX_ACTUATOR_TOKEN` is the wire credential the Composition
+ * presents; it has no rotation-visibility problem and no reason to be fingerprinted.
+ *
+ * ON `js/insufficient-password-hash` (CodeQL flags the `createHash` below): that rule targets
+ * PASSWORD STORAGE, where a fast hash is wrong because passwords are low-entropy and a stolen
+ * digest can be brute-forced offline back into the original.
+ *
+ * The load-bearing refutation is TRUNCATION. 48 bits of output over an effectively unbounded
+ * input space means astronomically many preimages, so this value cannot identify its input even
+ * given unlimited compute — the rule's attack does not merely become expensive, it stops being
+ * defined. Two supporting facts: the input is a vendor-minted high-entropy API key rather than a
+ * human-chosen password, and the digest never authenticates or verifies anything — it answers
+ * only "is this the same credential as before?". A slow KDF would add boot latency and a tuning
+ * parameter while leaving the value exactly as disclosive. Same call and same justification as
+ * `packages/node-shared/src/util/accountId.ts`.
+ *
+ * WHY NOT READ THE REAL VERSION INSTEAD. The honest alternative is to read the KV version from
+ * the projected Secret's metadata rather than hash anything — and it is rejected because it
+ * would require giving this pod SECRET-READ RBAC. That is the property to protect: the actuator
+ * receives its credentials by PROJECTION (ESO -> volume), never by reading the Kubernetes API,
+ * so a compromised actuator cannot enumerate the Secrets of `cogni-<env>`. Granting it Secret
+ * reads would hand it the same broad blast radius that moving this wallet out of
+ * `cogni/<env>/operator` existed to close. (State it that way and not as "the actuator has no
+ * ServiceAccount": task.5143 gives it a ServiceAccount plus a Role over `jobs`/`pods` so the
+ * migration prover can create and watch Jobs. Having SOME RBAC is fine; having Secret-read RBAC
+ * is not.) Logging a substring of the key would be actual partial disclosure instead of none.
+ */
+export function credentialFingerprint(value: string): string {
+  if (value === "") return "absent";
+  // The `codeql[...]` marker below is DOCUMENTATION, not a suppression. Verified on this very
+  // alert (#55): GitHub code scanning does not honour inline markers here — the check stayed red
+  // through two attempts at "fixing" the comment's placement. What actually clears the gate is
+  // DISMISSING the alert in GitHub as a false positive, which is how every prior instance of this
+  // rule was resolved (alerts #3/#7/#15/#30 on accountId.ts). The marker is still worth keeping:
+  // it puts the reason where the code is, so a reader does not have to find the security tab.
+  // Do not "fix" a red CodeQL check by reformatting around this comment — it will not work.
+  const digest = createHash("sha256").update(value, "utf8").digest("hex"); // codeql[js/insufficient-password-hash] Not password hashing — truncated, non-reversible version tag over a high-entropy API key; never authenticates. See docblock.
+  return digest.slice(0, FINGERPRINT_LENGTH);
 }

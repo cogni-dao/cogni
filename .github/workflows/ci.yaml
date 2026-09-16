@@ -247,6 +247,13 @@ jobs:
           echo "::error::PR spans $count node domains: ${SCOPE}. Each node owns its directory; operator owns nodes/operator + repo infra. Split into $count PRs, one per domain."
           exit 1
 
+  # bug.5150 — the live-fleet DEPLOY_REF_SOURCE_IS_REACHABLE_FROM_MAIN check moved OUT of
+  # per-PR CI to its own scheduled workflow (.github/workflows/deploy-ref-ancestry.yml).
+  # It is a fleet-state invariant, not a property of any PR's diff: running it per-PR bought
+  # zero incremental protection (drift comes from ref/main movement, not the diff) while
+  # painting a permanent unrelated red on every open PR — the exact "trained blindness" it
+  # exists to prevent. The hermetic UNIT proof stays here on PR CI (see the shell-tests job).
+
   unit:
     runs-on: ubuntu-latest
     needs: static
@@ -393,6 +400,13 @@ jobs:
       # flight → secrets all auto-fan, but the public host never resolved).
       - name: node DNS reconcile tests
         run: bash scripts/ci/tests/reconcile-node-dns.test.sh
+
+      # bug.5150 — unit proof for the deploy-ref ancestry invariant that the
+      # `deploy-ref-ancestry` job enforces against the real fleet. Hermetic: a throwaway
+      # origin repo over a local path, no network. Includes the RED case (a ref pinned to a
+      # commit main abandoned) — a green-only suite would have passed on incident day.
+      - name: deploy ref ancestry tests (bug.5150)
+        run: bash scripts/ci/tests/check-deploy-ref-ancestry.test.sh
 
       - name: aggregate deploy outcome tests
         run: bash scripts/ci/tests/aggregate-decide-outcome.test.sh

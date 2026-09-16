@@ -301,14 +301,26 @@ This is created ONCE per (service, env) at service-creation time. It is NOT edit
 
 **Refresh intervals (per-class defaults):**
 
-| Class                    | refreshInterval | Rationale                                                                                            |
-| ------------------------ | --------------- | ---------------------------------------------------------------------------------------------------- |
-| Routine app secrets      | `1h`            | Balance between rotation latency and OpenBao read pressure                                           |
-| External API keys        | `24h`           | Rotation is rare; reduce upstream rate-limit pressure                                                |
-| DB credentials (dynamic) | `15m`           | OpenBao DB engine issues short-lived creds; refresh before TTL                                       |
-| Critical (e.g., AEAD)    | `5m`            | Tight rotation window for financial-state material; pair with explicit force-sync hook for emergency |
+| Class                                     | refreshInterval | Rationale                                                                                            |
+| ----------------------------------------- | --------------- | ---------------------------------------------------------------------------------------------------- |
+| Routine app secrets                       | `1h`            | Balance between rotation latency and OpenBao read pressure                                           |
+| External API keys                         | `24h`           | Rotation is rare; reduce upstream rate-limit pressure                                                |
+| DB credentials (dynamic)                  | `15m`           | OpenBao DB engine issues short-lived creds; refresh before TTL                                       |
+| Critical (e.g., AEAD, wallet credentials) | `5m`            | Tight rotation window for financial-state material; pair with explicit force-sync hook for emergency |
 
-Emergency force-sync: `kubectl annotate externalsecret <name> force-sync=$(date +%s) --overwrite`. Documented in `docs/guides/secrets-rotate.md`.
+**This table is the sanctioned set — do not invent an interval below it.** `1m` was proposed twice (PR #2217, and shipped to production in #2234 before being reverted) to shorten rotation latency. It is the wrong trade: 60x the OpenBao reads _forever_ to close a gap that matters a few times a year, against an OpenBao that is Shamir 1-of-1 with no auto-unseal and has already been OOMKilled (`bug.5011`), multiplying audit volume by the same factor. Shortening the interval is a poll-harder fix for a push problem.
+
+**Rotation pushes; it does not poll.** The interval bounds _unplanned_ drift only. A deliberate rotation always has an operator or agent in the loop, so the propagation is part of the rotation:
+
+```
+write to OpenBao -> force-sync annotation -> Reloader restarts the consumer (Invariant 11) -> VERIFY the consumer
+```
+
+Emergency/rotation force-sync: `kubectl annotate externalsecret <name> force-sync=$(date +%s) --overwrite`. Documented in `docs/guides/secrets-rotate.md`.
+
+The verify step is not optional. A consumer that reads its credential once at start — as `envFrom` guarantees, and as the Akash actuator does when it verifies its wallet at boot — is **indistinguishable from healthy while holding a revoked credential**. Read the consumer back (`bug.5142`'s credential fingerprint exists for exactly this); do not infer projection from a successful write.
+
+**Rejected: having the writer push the sync itself.** The operator app has no ServiceAccount and no Kubernetes identity. Granting the internet-facing pod RBAC to patch ExternalSecrets is a far larger blast radius than the latency it removes — the same reasoning that denies the actuator Secret-read RBAC.
 
 ### Consumption pattern — pod spec
 

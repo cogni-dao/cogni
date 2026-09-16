@@ -15,10 +15,22 @@ production_branch: deploy/production-beacon
 # NODE_FORMATION_ENVS; this list is the catalog twin so render-node-appset.sh
 # renders exactly the births appset.ts generates. Trimming a node's reach is a
 # later catalog edit (drop an env here) once its envs are provisioned.
-envs: [preview, production]
+# story.5016 production cutover: preview slot retired (preview has no funded Akash
+# account and gets no actuator; its lease on the shared account was closed).
+envs: [production]
 deployment_provider:
-  preview: akash
   production: akash
+# story.5016 production cutover — Crossplane authority; the private Akash transaction
+# actuator pays from production's DEDICATED account (akash10auj…). PRECONDITION:
+# old lease closed + legacy CR finalizer cleared BEFORE the promote that
+# materializes this cell (ONE_AUTHORITY_PER_WORKLOAD; rsync --delete evicts the
+# legacy manifest in the same commit).
+compute_api:
+  production: crossplane
+# Explicit replacement counter for a terminally closed lease — the only
+# redeploy-after-close path (actuator refuses a settled idempotence key).
+lease_epoch:
+  production: 0
 activity_env: production
 owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
 path_prefix: nodes/beacon/

@@ -7,19 +7,19 @@
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
-  name: cogni-preview-node-template
+  name: cogni-candidate-a-toks5
   namespace: argocd
 spec:
   goTemplate: true
   generators:
     - git:
         repoURL: https://github.com/cogni-dao/cogni.git
-        revision: deploy/preview-node-template
+        revision: deploy/candidate-a-toks5
         files:
-          - path: "infra/catalog/node-template.yaml"
+          - path: "infra/catalog/toks5.yaml"
   template:
     metadata:
-      name: "preview-{{.name}}"
+      name: "candidate-a-{{.name}}"
       namespace: argocd
       annotations:
         argocd.argoproj.io/compare-options: ServerSideDiff=true,IncludeMutationWebhook=true
@@ -29,11 +29,11 @@ spec:
       project: default
       source:
         repoURL: https://github.com/cogni-dao/cogni.git
-        targetRevision: "deploy/preview-{{.name}}"
-        path: "infra/k8s/overlays/preview/{{.name}}"
+        targetRevision: "deploy/candidate-a-{{.name}}"
+        path: "infra/k8s/overlays/candidate-a/{{.name}}"
       destination:
         server: https://kubernetes.default.svc
-        namespace: cogni-preview
+        namespace: cogni-candidate-a
       syncPolicy:
         automated:
           prune: true

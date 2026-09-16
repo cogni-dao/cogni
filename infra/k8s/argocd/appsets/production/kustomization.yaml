@@ -18,3 +18,4 @@ resources:
   - production-poly-applicationset.yaml
   - production-scheduler-worker-applicationset.yaml
   - production-toks4-applicationset.yaml
+  - production-toks5-applicationset.yaml

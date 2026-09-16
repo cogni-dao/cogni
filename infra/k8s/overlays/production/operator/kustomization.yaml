@@ -8,12 +8,31 @@ namespace: cogni-production
 resources:
   - ../../../base/node-app
   - ../../../base/openfga-external
-  - ../../../base/compute-workload-controller
+  # story.5016 step 9, production (mirror of #2212 on candidate-a): the legacy
+  # compute-workload-controller is structurally removed so exactly ONE writer — the
+  # Crossplane transaction actuator below — can reach an Akash wallet from this env.
+  # Its old-account leases are closed (all 12 retired 2026-09-15) and its Console key
+  # is dead; the pod was pure reconcile-churn + memory on a full box.
   - external-secret.yaml
   - ./secrets-writer-sa.yaml
   - ./compute-workload-platform-application.yaml
+  # story.5016 production cutover — the private Akash transaction actuator Crossplane calls.
+  # #2234 shipped the two ExternalSecrets deliberately WITHOUT this Deployment because a
+  # projected Secret source whose key is absent makes kubelet refuse the mount (FailedMount,
+  # Argo app Degraded, invisible to Loki — bug.5142). That ordering constraint is satisfied:
+  # the production credential is written and verified at cogni/production/akash-tx-actuator,
+  # so the Deployment can land and mount it.
+  - ../../../base/akash-tx-actuator
+  - ./akash-tx-actuator-external-secret.yaml
+  - ./akash-tx-actuator-auth-external-secret.yaml
 
 namePrefix: operator-
+
+# Runs AFTER the built-in namePrefix transformer and restores the actuator Service's
+# name to the bare `akash-tx-actuator` the Crossplane Composition dials. See
+# ../../../base/akash-tx-actuator-service-name for why the prefix is what gives.
+transformers:
+  - ../../../base/akash-tx-actuator-service-name
 
 replacements:
   - source:
@@ -30,36 +49,44 @@ images:
     newTag: "prod-placeholder-operator"
 
 patches:
-  # story.5016 Gate 0b: controller env values are set BY NAME via strategic
-  # merge (env lists merge on `name`), never by positional JSON-pointer index.
-  # A positional `/env/N/value` patch silently repoints when the base list
-  # shifts — that exact failure (d69e5c29) blanked AKASH_ALLOWED_PROVIDERS
-  # fleet-wide, and an empty allowlist rejects every Akash provider bid.
+  # story.5016 Gate 0b: env values are set BY NAME via strategic merge (env lists
+  # merge on `name`), never by positional JSON-pointer index. A positional
+  # `/env/N/value` patch silently repoints when the base list shifts — that exact
+  # failure (d69e5c29) blanked AKASH_ALLOWED_PROVIDERS fleet-wide, and an empty
+  # allowlist rejects every Akash provider bid.
   - target:
       kind: Deployment
-      name: compute-workload-controller
+      name: akash-tx-actuator
     patch: |
       apiVersion: apps/v1
       kind: Deployment
       metadata:
-        name: compute-workload-controller
+        name: akash-tx-actuator
       spec:
         template:
           spec:
             containers:
-              - name: controller
+              - name: actuator
                 env:
-                  # Identical to base; listed first only so the merged env keeps
-                  # the base ordering (merge emits patched entries first).
                   - name: POD_NAMESPACE
                     valueFrom:
                       fieldRef: { fieldPath: metadata.namespace }
-                  - name: CONTROLLER_ENVIRONMENT
+                  - name: DEPLOY_ENVIRONMENT
                     value: production
-                  - name: DEPLOYMENT_DOMAIN
-                    value: cognidao.org
+                  # Same allowlist as the legacy controller above and as candidate-a's proven
+                  # lease: the zencloud provider that already hosts every production slot.
                   - name: AKASH_ALLOWED_PROVIDERS
                     value: akash16yr3wxt97ae045a06kr3ycde9srcgpg8syjxxm
+                  - name: AKASH_ACTUATOR_ACCOUNT_ID
+                    # PUBLIC, non-secret Akash account address of the operator sponsor wallet.
+                    # Asserted at boot by assertActuatorWalletAccount() against Console
+                    # /v1/wallets, so the actuator refuses to start if its credential resolves
+                    # to any other account. Unlike candidate-a (which kept the original shared
+                    # account), production spends from its own DEDICATED funded account —
+                    # ONE_WALLET_ONE_ACTIVE_WRITER is per environment, and this pin is the
+                    # non-secret half of that proof (the credential lives only at
+                    # cogni/production/akash-tx-actuator, never in the operator bucket).
+                    value: "akash10auj6u6wr7aqjawuxurgue9w7wfnca50t8cr4l"
   # Node-specific ConfigMap values.
   # DNS names must match prefixed Service names (namePrefix applies to all resources).
   - target:

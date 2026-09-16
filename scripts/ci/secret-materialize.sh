@@ -93,8 +93,16 @@ done
 "$node_known" || fail "target '$TARGET_NODE' is not a type=node catalog target"
 
 read -r -a SSH_OPTS_ARR <<< "$SSH_OPTS_RAW"
+# bug.5159 — multiplex every remote call over ONE ssh connection. Each remote() used to
+# open a fresh handshake (~20-40 per run); sshd/edge admission control drops bursts of
+# new connections at kex (MaxStartups-class), which killed 8 promotes. One master
+# connection removes the burst entirely; ControlPersist outlives the run harmlessly on
+# an ephemeral runner.
+SSH_OPTS_ARR+=(-o ControlMaster=auto -o "ControlPath=${TMPDIR:-/tmp}/cogni-ssh-%r@%h-%p" -o ControlPersist=180)
+# shellcheck source=lib/ssh-retry.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/ssh-retry.sh"
 remote() {
-  "$SSH_BIN" "${SSH_OPTS_ARR[@]}" "root@${VM_HOST}" "$@"
+  cogni_ssh_transport_retry "$SSH_BIN" "${SSH_OPTS_ARR[@]}" "root@${VM_HOST}" "$@"
 }
 
 # Mint the <env>-writer token via the sanctioned k8s-auth seam. Target: this is
@@ -171,10 +179,27 @@ bao_exec() {
 
 # Prefetch one path's full key/value map into the cache (one ssh). Runner-side jq
 # extracts; the remote only runs the proven `bao kv get -format=json` shape.
+#
+# bug.5159 — a TRANSPORT failure (ssh drop, exec hiccup, OpenBao down) must never read
+# as an EMPTY BUCKET: that lie cascades into "key absent" errors downstream, and worse,
+# a false-empty cache would let materialize re-mint values that already exist. Only the
+# explicit "No value found" answer (a genuinely unborn path) maps to {}; anything else
+# is retried and then fatal, naming the transport.
 prefetch_path() {
-  local svc="$1" json
-  json="$(bao_exec "" "kv get -format=json 'cogni/${DEPLOY_ENVIRONMENT}/${svc}'" 2>/dev/null \
-    | jq -c '.data.data // {}' 2>/dev/null || true)"
+  local svc="$1" json raw attempt
+  raw=""
+  for attempt in 1 2 3; do
+    if raw="$(bao_exec "" "kv get -format=json 'cogni/${DEPLOY_ENVIRONMENT}/${svc}'" 2>&1)"; then
+      break
+    fi
+    case "$raw" in
+      *"No value found"*) raw='{}'; break ;;
+    esac
+    echo "[secret-materialize] OpenBao read cogni/${DEPLOY_ENVIRONMENT}/${svc} attempt ${attempt}/3 failed: $(printf '%s' "$raw" | tail -1)" >&2
+    [[ "$attempt" == 3 ]] && { echo "::error::secret-materialize: transport failure reading cogni/${DEPLOY_ENVIRONMENT}/${svc} after 3 attempts — NOT an absent path (bug.5159)" >&2; exit 1; }
+    sleep $((attempt * 5))
+  done
+  json="$(printf '%s' "$raw" | jq -c '.data.data // {}' 2>/dev/null || true)"
   [[ -z "$json" ]] && json='{}'
   mkdir -p "${CACHE_DIR}/${svc}"
   while IFS=$'\t' read -r key val; do
@@ -540,7 +565,37 @@ if [[ "$hash_count" -eq 1 ]]; then
   echo unchanged
   exit 0
 fi
-[[ "$alias_count" -eq 0 ]] || { echo alias-owned-by-different-key; exit 1; }
+# OpenBao is custody SSOT (secrets-management Invariant 5); the LiteLLM registration is
+# a PROJECTION of it. An alias owned by a different key means the projection is stale
+# (e.g. a transport-flaky run re-minted the OpenBao value after registering) — reconcile
+# it like ESO would: delete the stale alias and fall through to re-register the SSOT
+# value. Failing here instead turned one stale projection into a permanent red that only
+# a hand-op could clear (story.5016 levelup, 3 occurrences).
+if [[ "$alias_count" -eq 1 ]]; then
+  jq -n --rawfile alias "$work_dir/alias" '{key_aliases: [$alias]}' \
+    > "$work_dir/alias-delete.json"
+  cat > "$work_dir/alias-delete.conf" <<EOF
+url = "http://127.0.0.1:4000/key/delete"
+request = "POST"
+header = "Authorization: Bearer $(cat "$work_dir/master")"
+header = "Content-Type: application/json"
+connect-timeout = 10
+max-time = 30
+silent
+show-error
+EOF
+  if ! delete_code=$(curl --config "$work_dir/alias-delete.conf" \
+      --data-binary "@$work_dir/alias-delete.json" --output "$work_dir/alias-delete-response.json" \
+      --write-out '%{http_code}'); then
+    echo transport-error
+    exit 1
+  fi
+  if [[ "$delete_code" != "200" ]]; then
+    echo "stale-alias-delete-http-${delete_code}"
+    exit 1
+  fi
+  echo "reconciled stale alias (owned by a different key) — re-registering" >&2
+fi
 
 jq -n --rawfile key "$work_dir/key" --rawfile alias "$work_dir/alias" \
   '{key: $key, key_alias: $alias}' > "$work_dir/generate.json"

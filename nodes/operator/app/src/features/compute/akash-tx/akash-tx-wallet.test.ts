@@ -14,6 +14,7 @@
  * @internal
  */
 
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
@@ -22,6 +23,7 @@ import { describe, expect, it } from "vitest";
 import {
   type AkashTxWalletConfigError,
   assertActuatorWalletAccount,
+  credentialFingerprint,
   resolveAkashTxWallet,
 } from "./akash-tx-wallet";
 
@@ -193,5 +195,47 @@ describe("assertActuatorWalletAccount", () => {
       expect((error as Error).message).not.toContain(ACTUATOR);
       expect((error as Error).message).toContain(OTHER_ACCOUNT);
     }
+  });
+});
+
+describe("credentialFingerprint (bug.5142)", () => {
+  it("is stable, 12 hex, and distinguishes two credential versions", () => {
+    const v3 = credentialFingerprint("console-key-v3");
+    const v4 = credentialFingerprint("console-key-v4");
+    expect(v3).toMatch(/^[0-9a-f]{12}$/);
+    expect(v3).toBe(credentialFingerprint("console-key-v3"));
+    expect(v3).not.toBe(v4);
+  });
+
+  it("returns 'absent' for an empty credential, NOT the digest of the empty string", () => {
+    // sha256("") is e3b0c442..., a fixed value that looks exactly like a real fingerprint.
+    // Publishing it would invite the false match this function exists to prevent.
+    expect(credentialFingerprint("")).toBe("absent");
+    expect(credentialFingerprint("")).not.toMatch(/^e3b0c442/);
+  });
+
+  it("never reveals the credential", () => {
+    const secret = "sk-super-secret-console-key";
+    const fp = credentialFingerprint(secret);
+    expect(secret).not.toContain(fp);
+    expect(fp).not.toContain(secret);
+    expect(fp.length).toBe(12);
+  });
+
+  it("agrees with the documented shell recipe, including the JSON-quoting trap", () => {
+    // The recipe in the docblock is `bao kv get -field=K <path> | tr -d '\r\n' | shasum -a 256`.
+    // Two real false readings came from hashing the wrong bytes, so pin both:
+    const raw = "console-key-v4";
+    const shell = createHash("sha256")
+      .update(raw, "utf8")
+      .digest("hex")
+      .slice(0, 12);
+    expect(credentialFingerprint(raw)).toBe(shell);
+
+    // `-format=json -field=` emits a JSON-QUOTED string; hashing that matches nothing.
+    expect(credentialFingerprint(JSON.stringify(raw))).not.toBe(shell);
+    // A trailing newline (plain `shasum` of the file) likewise disagrees — which is exactly
+    // why the recipe pipes through `tr -d '\r\n'`.
+    expect(credentialFingerprint(`${raw}\n`)).not.toBe(shell);
   });
 });

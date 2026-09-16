@@ -229,6 +229,8 @@ export type AkashTxAllocationState =
   | "failed";
 
 export interface AkashTxAllocationRecord {
+  /** Durable allocation receipt row. Cost intervals attach here, never to a mutable node row. */
+  readonly receiptId: string;
   readonly cogniKey: string;
   /** The identity this receipt is bound to. NOT NULL in the table: it always exists. */
   readonly identity: AkashTxWorkloadIdentity;
