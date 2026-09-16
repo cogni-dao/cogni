@@ -44,6 +44,9 @@ earner while Derek can become its human parent and claim its economic benefit.
 - The unresolved gap is how a human safely becomes an agent's parent, how an
   external source identity is assigned to that agent, and how legacy unresolved
   allocations resolve once without mutating signed history.
+- The current cumulative fold reads only the epoch being finalized. Despite its
+  late-wallet comment, it has no backlog scan that can materialize an older
+  unresolved allocation in a future root.
 - Production knowledge/work APIs returned HTTP 502 during the latest pass, so
   the required merged/open-branch recall and Dolt contribution are pending.
 - Hosted CI passed for the earlier docs-only head. No image was built, no
@@ -56,7 +59,9 @@ earner while Derek can become its human parent and claim its economic benefit.
 2. Keep authorship, beneficiary, and wallet distinct. New actor-native
    allocations pin the beneficiary at allocation time; legacy unresolved
    allocations need a one-time append-only resolution path.
-3. Prove the source assignment and human-parent claim with evidence and two
+3. Materialize each resolved final allocation exactly once; every fold must
+   scan the unresolved backlog rather than only the current epoch.
+4. Prove the source assignment and human-parent claim with evidence and two
    authenticated parties; RBAC, billing, and display names prove neither.
 
 ## Next Actions / Risks
