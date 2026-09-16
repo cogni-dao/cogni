@@ -6,7 +6,7 @@ status: active
 created: 2026-09-15
 updated: 2026-09-15
 branch: "derekg1729/story-5033-actor-attribution"
-last_commit: "38e6491aa7"
+last_commit: "f9686170bf"
 ---
 
 # Handoff: agent attribution and human ownership
@@ -84,5 +84,6 @@ earner while Derek can become its human parent and claim its economic benefit.
 | `work/projects/proj.operator-plane.md`             | Existing actor/reward north star     |
 | `work/projects/proj.transparent-credit-payouts.md` | E2E ordering and work-item ownership |
 | `docs/spec/identity-model.md`                      | Current identity model               |
+| `.context/actor-attribution-knowledge-draft.json`  | Validated pending Dolt contribution  |
 | `task.5128`                                        | One-PR design and alignment owner    |
 | `story.5033`                                       | Whole E2E outcome                    |
