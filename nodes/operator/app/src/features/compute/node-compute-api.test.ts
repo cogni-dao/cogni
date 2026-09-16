@@ -70,8 +70,8 @@ describe("resolveNodeComputeApi", () => {
   /**
    * AUTHORITY_REQUIRES_AN_INSTALLED_API (task.5104). `crossplane` is resolvable exactly where a
    * `crossplane-xcomputeworkload-application.yaml` exists under
-   * infra/k8s/argocd/control-plane/<env>/ — task.5097 staged that for preview and production, so
-   * all three now resolve. Without this guard, a row naming an env with no control plane renders
+   * infra/k8s/argocd/control-plane/<env>/ — task.5097 staged production and task.5129 completes
+   * preview, so all three now resolve. Without this guard, a row naming an env with no control plane renders
    * an XComputeWorkload into a cluster where that CRD does not exist, reconciled by nobody.
    *
    * RESOLVABLE IS NOT SELECTED. Widening the constant did not flip a single row: the selector is

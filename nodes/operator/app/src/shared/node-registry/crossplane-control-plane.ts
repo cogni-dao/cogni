@@ -6,7 +6,7 @@
  * Purpose: CROSSPLANE_IS_INSTALLED_PER_ENVIRONMENT — the ONE enumeration of the deploy
  *   environments whose Argo control plane actually installs Crossplane (core chart, pinned
  *   packages, the `XComputeWorkload` XRD + Composition, and the credential-free
- *   ClusterProviderConfig). task.5097 widened it from `candidate-a` to every deploy environment.
+ *   ClusterProviderConfig). task.5097 added production; task.5129 completes preview.
  * Scope: A static fact about the deploy substrate, expressed as data. No I/O, no env read, no
  *   cluster contact — the fact is asserted against git by `tests/ci-invariants/
  *   crossplane-dormant-substrate.spec.ts`, which fails CI the moment this list and the
@@ -40,8 +40,8 @@
  * INSTALLED API that something will reconcile.
  *
  * task.5094/task.5096 installed it on candidate-a alone (CANDIDATE_FIRST); task.5097 staged the
- * same three Applications for preview and production so the cutover is a catalog flip plus a
- * secret write rather than days of manifest work. Adding an environment here without also
+ * same three Applications for production, and task.5129 completes preview. Adding an environment
+ * here without also
  * committing its
  * `infra/k8s/argocd/control-plane/<env>/crossplane-xcomputeworkload-application.yaml`
  * turns CI red, and so does the reverse.
