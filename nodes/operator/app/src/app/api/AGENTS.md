@@ -41,6 +41,7 @@ HTTP API endpoints using Next.js App Router. Contract-validated entry points tha
   - `/api/auth/[...nextauth]` [GET, POST]
   - `/api/setup/verify` [POST] - DAO formation verification
   - `/api/v1/nodes` [GET, POST] - managed-node registry: list owner's nodes + create a new registration
+  - `/api/v1/dashboard/nodes` [GET] - authenticated principal's display-safe node operations overview (owner-scoped in v0)
   - `/api/v1/nodes/[id]` [GET, PATCH] - read + state-machine-aware update of a registered node row
   - `/api/v1/nodes/[id]/developers` [POST] - owner-gated approve/reject for registered agent developer flight authority
   - `/api/v1/nodes/[id]/launch-pack` [GET] - owner-gated AI-assistant handoff for post-publish node launch

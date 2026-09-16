@@ -9,7 +9,7 @@
  * transfer, or reopen a closed interval.
  */
 import type { Database } from "@cogni/db-client";
-import { eq, sql } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 
 import {
   type ComputeCostAmount,
@@ -514,9 +514,12 @@ export class DrizzleComputeCostStore implements ComputeCostStorePort {
     invariant(result.length > 0, "cost interval is not bound");
   }
 
-  async reportByNode(): Promise<readonly ComputeCostReport[]> {
+  private async buildReports(
+    nodeIds?: readonly string[]
+  ): Promise<readonly ComputeCostReport[]> {
+    if (nodeIds?.length === 0) return [];
     const db = await this.getDb();
-    const rows = await db
+    const query = db
       .select({
         nodeId: akashTxAllocations.nodeId,
         state: computeCostIntervals.state,
@@ -530,6 +533,9 @@ export class DrizzleComputeCostStore implements ComputeCostStorePort {
         akashTxAllocations,
         eq(computeCostIntervals.allocationReceiptId, akashTxAllocations.id)
       );
+    const rows = nodeIds
+      ? await query.where(inArray(akashTxAllocations.nodeId, [...nodeIds]))
+      : await query;
     const grouped = new Map<
       string,
       {
@@ -587,5 +593,15 @@ export class DrizzleComputeCostStore implements ComputeCostStorePort {
           `${a.denom}\u0000${a.unit}`.localeCompare(`${b.denom}\u0000${b.unit}`)
         ),
       }));
+  }
+
+  async reportByNode(): Promise<readonly ComputeCostReport[]> {
+    return this.buildReports();
+  }
+
+  async reportByNodeIds(
+    nodeIds: readonly string[]
+  ): Promise<readonly ComputeCostReport[]> {
+    return this.buildReports([...new Set(nodeIds)]);
   }
 }
