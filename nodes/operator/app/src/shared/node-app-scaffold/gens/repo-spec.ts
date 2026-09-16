@@ -133,6 +133,7 @@ activity_ledger:
     github:
       attribution_pipeline: cogni-v0.0
       source_refs: ["${sourceRef}"]
+      excluded_logins: ["cogni-operator[bot]"]
 
 payments:
   status: pending_activation
