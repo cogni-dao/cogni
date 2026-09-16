@@ -570,16 +570,39 @@ describe("XComputeWorkload refusal observability (bug.5115)", () => {
     expect(template).not.toContain("{{- else if $prevResource }}");
   });
 
+  it("preserves the refusal CAUSE in the deadline message (bug.5150)", () => {
+    // The order above keeps `reason` as the spend verdict. But the deadline is a CONSEQUENCE
+    // and the refusal is the CAUSE: a workload being refused never had a chance to serve.
+    // Observed on the first real mint — every CREATE answered `invalid_request` for 30 minutes,
+    // then BootDeadlineClosed overwrote it, leaving a budget message and no way to learn why.
+    // Both deadline branches must append the refusal rather than drop it.
+    const chain = template.slice(
+      template.lastIndexOf('{{- $phase := "Progressing" }}')
+    );
+    const appends = chain.match(/last refusal %s: %s/g) ?? [];
+    expect(appends.length).toBe(2);
+    const closed = chain.indexOf('$failReason = "BootDeadlineClosed"');
+    const exceeded = chain.indexOf('$failReason = "BootDeadlineExceeded"');
+    // each deadline branch carries its own append, guarded on a non-empty refusal code
+    expect(chain.slice(closed, exceeded)).toContain("last refusal");
+    expect(chain.slice(closed, exceeded)).toContain('ne $refusalCode ""');
+    expect(chain.slice(exceeded)).toContain("last refusal");
+  });
+
   it("never lets a refusal mask a spend decision", () => {
     // BOOT_SLO_OR_CLOSE decides whether money keeps being spent. A transient refusal must not
     // displace it, so the refusal branch comes strictly AFTER both deadline branches.
     const chain = template.slice(
       template.lastIndexOf('{{- $phase := "Progressing" }}')
     );
+    // Match the BRANCH OPENERS, not bare substrings: the deadline branches legitimately
+    // mention `$refusalCode` inside their own guards (bug.5150 appends the cause to the
+    // message), so a raw indexOf("$refusalCode") finds a guard rather than the branch and
+    // reports a reordering that did not happen.
     const order = [
-      "BootDeadlineClosed",
-      "BootDeadlineExceeded",
-      "$refusalCode",
+      '$failReason = "BootDeadlineClosed"',
+      '$failReason = "BootDeadlineExceeded"',
+      '{{- else if ne $refusalCode "" }}',
     ].map((marker) => chain.indexOf(marker));
     expect(order.every((index) => index > 0)).toBe(true);
     expect(order).toEqual([...order].sort((a, b) => a - b));
