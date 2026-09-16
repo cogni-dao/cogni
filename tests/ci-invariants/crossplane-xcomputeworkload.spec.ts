@@ -113,6 +113,7 @@ describe("XComputeWorkload composite API (task.5096)", () => {
       "dns",
       "environment",
       "leaseEpoch",
+      "leaseGeneration",
       "migration",
       "nodeId",
       "runtime",
@@ -246,26 +247,105 @@ describe("XComputeWorkload Composition (task.5096)", () => {
 
   it("keeps the idempotence key stable for the life of the workload", () => {
     // namespace + name are immutable (name == nodeId). The ONLY varying component is
-    // spec.leaseEpoch, which nothing bumps implicitly — a key that changed per generation
+    // spec.leaseGeneration, which nothing bumps implicitly — a key that changed per reconcile
     // would report "no existing resource" after a promote and mint a SECOND PAID LEASE.
     expect(template).toContain(
-      '$cogniKey := printf "xcw:%s:%s:%d" $ns $name $epoch'
+      '$cogniKey := printf "xcw:%s:%s:%d" $ns $name $leaseGeneration'
     );
     // Scoped to the KEY, not the whole template: task.5103 legitimately reads
     // metadata.generation for the spend receipt's provenance. What must never happen is that
     // per-reconcile value leaking into the IDEMPOTENCE key, where it would report "no existing
     // resource" after a promote and mint a SECOND PAID LEASE. The two uses are opposites — one
     // records which revision asked, the other must not vary at all.
-    const keyInputs = ["$ns", "$name", "$epoch"];
+    const keyInputs = ["$ns", "$name", "$leaseGeneration"];
     const keyLiteral =
       /\$cogniKey := printf "[^"]*"([^}]*)\}\}/.exec(templateCode)?.[1] ?? "";
     expect(keyLiteral.trim().split(/\s+/)).toEqual(keyInputs);
+    // ZERO-DOWNTIME WIRE RENAME (task.5105): an old materializer writes leaseEpoch and a new
+    // one writes both fields. The additive schema must accept both, and the Composition must
+    // prefer the canonical name while falling back to the old value. This prevents toks5's
+    // intended generation 1 from ever becoming 0 regardless of which deploy lane moves first.
+    expect(templateCode).toContain(
+      '$leaseGeneration := int (dig "leaseEpoch" 0 $spec)'
+    );
+    expect(templateCode).toContain(
+      '$hasLeaseEpoch := hasKey $spec "leaseEpoch"'
+    );
+    expect(templateCode).toContain(
+      '$hasLeaseGeneration := hasKey $spec "leaseGeneration"'
+    );
+    expect(templateCode).toContain(
+      'if and $hasLeaseEpoch $hasLeaseGeneration (ne (int (get $spec "leaseEpoch")) (int (get $spec "leaseGeneration")))'
+    );
+    expect(templateCode).toContain(
+      "spec.leaseEpoch and spec.leaseGeneration disagree; refusing to choose an idempotence key"
+    );
     expect(
-      /\$epoch := int \(dig "leaseEpoch" 0 \$spec\)/.test(templateCode)
-    ).toBe(true);
+      templateCode.indexOf(
+        "spec.leaseEpoch and spec.leaseGeneration disagree; refusing to choose an idempotence key"
+      )
+    ).toBeLessThan(templateCode.indexOf("$cogniKey := printf"));
+    expect(templateCode).toContain(
+      '$leaseGeneration = int (get $spec "leaseGeneration")'
+    );
     expect(templateCode).not.toContain("resourceVersion");
-    const epoch = specSchema.leaseEpoch as YamlObject;
-    expect(epoch.default).toBe(0);
+    const leaseGeneration = specSchema.leaseGeneration as YamlObject;
+    expect(leaseGeneration.default).toBeUndefined();
+    const leaseEpoch = specSchema.leaseEpoch as YamlObject;
+    expect(leaseEpoch.default).toBeUndefined();
+    expect(leaseEpoch.description).toContain("DEPRECATED compatibility alias");
+  });
+
+  it("preserves the replacement generation across every mixed-revision bridge shape", () => {
+    /** Model API-server top-level defaults from the checked-in XRD schema. */
+    const admitWithSchemaDefaults = (
+      desired: Readonly<Record<string, number>>
+    ): Record<string, number> => {
+      const admitted = { ...desired };
+      for (const [field, rawSchema] of Object.entries(specSchema)) {
+        const fieldSchema = rawSchema as YamlObject;
+        if (
+          !Object.hasOwn(admitted, field) &&
+          fieldSchema.default !== undefined
+        ) {
+          admitted[field] = fieldSchema.default as number;
+        }
+      }
+      return admitted;
+    };
+    /** Mirrors the canonical-first fallback expression pinned in the preceding test. */
+    const renderCogniKey = (
+      desired: Readonly<Record<string, number>>
+    ): string | undefined => {
+      const admitted = admitWithSchemaDefaults(desired);
+      if (
+        Object.hasOwn(admitted, "leaseEpoch") &&
+        Object.hasOwn(admitted, "leaseGeneration") &&
+        admitted.leaseEpoch !== admitted.leaseGeneration
+      ) {
+        return undefined;
+      }
+      const generation = Object.hasOwn(admitted, "leaseGeneration")
+        ? admitted.leaseGeneration
+        : (admitted.leaseEpoch ?? 0);
+      return `xcw:cogni-production:toks5:${generation}`;
+    };
+
+    expect([
+      renderCogniKey({ leaseEpoch: 1 }), // old materializer after new XRD
+      renderCogniKey({ leaseGeneration: 1 }), // canonical-only cleanup target
+      renderCogniKey({ leaseEpoch: 1, leaseGeneration: 1 }), // bridge dual-write
+    ]).toEqual([
+      "xcw:cogni-production:toks5:1",
+      "xcw:cogni-production:toks5:1",
+      "xcw:cogni-production:toks5:1",
+    ]);
+    expect(renderCogniKey({})).toBe("xcw:cogni-production:toks5:0");
+    // Corrupt/mid-edit dual fields fail before a Request/key exists. Picking either side could
+    // mint a paid replacement the other field did not authorize.
+    expect(
+      renderCogniKey({ leaseEpoch: 1, leaseGeneration: 2 })
+    ).toBeUndefined();
   });
 
   it("treats a closed lease as removed so a deleted XR can finish deleting", () => {
