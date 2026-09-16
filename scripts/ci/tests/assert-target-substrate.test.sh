@@ -159,13 +159,32 @@ esac
 EOF
 chmod +x "$FAKEBIN/cf-curl"
 
+# HAPPY-PATH SOURCE TREE — built, not borrowed. This suite exercises the SCRIPT's
+# preflight logic for one (env, target) pair; it is not a statement about which nodes the
+# live catalog deploys where. Pointing APP_SOURCE_DIR at the repo made it both, so
+# task.5130 (removing the last cogni-dao nodes from the candidate-a TEST-wallet env, which
+# deleted appsets/candidate-a/candidate-a-node-template-applicationset.yaml) turned this
+# unit test red for a reason that has nothing to do with the code under test. The tree
+# below carries exactly the three artifacts the k3s branch reads — catalog row, overlay
+# dir, per-target AppSet file — so the negative fixtures further down (each of which omits
+# ONE of them) remain the only thing asserting those reads.
+HAPPY_TREE="$TMPROOT/happy"
+mkdir -p "$HAPPY_TREE/infra/catalog" \
+  "$HAPPY_TREE/infra/k8s/overlays/candidate-a/node-template" \
+  "$HAPPY_TREE/infra/k8s/argocd/appsets/candidate-a"
+cp infra/catalog/node-template.yaml "$HAPPY_TREE/infra/catalog/node-template.yaml"
+cp infra/k8s/overlays/candidate-a/node-template/*.yaml \
+  "$HAPPY_TREE/infra/k8s/overlays/candidate-a/node-template/"
+bash scripts/ci/render-node-appset.sh candidate-a node-template \
+  > "$HAPPY_TREE/infra/k8s/argocd/appsets/candidate-a/candidate-a-node-template-applicationset.yaml"
+
 BASE_ENV=(
   TARGET=node-template
   DEPLOY_ENVIRONMENT=candidate-a
   VM_HOST=192.0.2.10
   DOMAIN=test.cognidao.org
-  APP_SOURCE_DIR=.
-  COGNI_CATALOG_ROOT=infra/catalog
+  APP_SOURCE_DIR="$HAPPY_TREE"
+  COGNI_CATALOG_ROOT="$HAPPY_TREE/infra/catalog"
   CHECK_DNS=false
   ASSERT_TARGET_SUBSTRATE_SSH_BIN="$FAKEBIN/ssh"
   ASSERT_TARGET_SUBSTRATE_REMOTE_ROOT="$REMOTE_ROOT"
@@ -183,7 +202,7 @@ env "${BASE_ENV[@]}" CHECK_DNS=true \
 grep -q "Node substrate ready for node-template" "$TMPROOT/scoped-dns.out"
 
 if env TARGET=node-template DEPLOY_ENVIRONMENT=candidate-a VM_HOST="" DOMAIN=test.cognidao.org \
-  APP_SOURCE_DIR=. COGNI_CATALOG_ROOT=infra/catalog CHECK_DNS=false \
+  APP_SOURCE_DIR="$HAPPY_TREE" COGNI_CATALOG_ROOT="$HAPPY_TREE/infra/catalog" CHECK_DNS=false \
   ASSERT_TARGET_SUBSTRATE_SSH_BIN="$FAKEBIN/ssh" bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/missing-vm.out" 2>&1; then
   echo "expected missing VM_HOST to fail" >&2
   exit 1
@@ -317,7 +336,7 @@ fi
 grep -q "live Caddy config missing" "$TMPROOT/missing-live-caddy.out"
 
 if env TARGET=node-template DEPLOY_ENVIRONMENT=candidate-a VM_HOST=192.0.2.10 DOMAIN=test.cognidao.org \
-  APP_SOURCE_DIR=. COGNI_CATALOG_ROOT=infra/catalog CHECK_DNS=true \
+  APP_SOURCE_DIR="$HAPPY_TREE" COGNI_CATALOG_ROOT="$HAPPY_TREE/infra/catalog" CHECK_DNS=true \
   ASSERT_TARGET_SUBSTRATE_SSH_BIN="$FAKEBIN/ssh" ASSERT_TARGET_SUBSTRATE_REMOTE_ROOT="$REMOTE_ROOT" \
   FAKE_REMOTE_PATH="$FAKEBIN" bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/missing-dns.out" 2>&1; then
   echo "expected missing DNS inputs to fail" >&2
