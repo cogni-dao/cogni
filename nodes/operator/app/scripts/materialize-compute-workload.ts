@@ -175,7 +175,7 @@ async function main(): Promise<void> {
   const computeApi = resolveNodeComputeApi({ catalog, environment });
   // Explicit replacement counter for a terminally closed lease — same operator-owned row,
   // never a CLI flag: a generation a caller could pass would be a generation automation could
-  // bump, and NOTHING may bump it implicitly. Absent cell resolves to 0, the XRD default.
+  // bump, and NOTHING may bump it implicitly. Absent catalog cells resolve explicitly to 0.
   const leaseGeneration = resolveNodeLeaseGeneration({ catalog, environment });
   const dnsZoneId = values["dns-zone-id"]?.trim();
   if (dnsZoneId && !CLOUDFLARE_ZONE_ID.test(dnsZoneId)) {
