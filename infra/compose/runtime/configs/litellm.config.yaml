@@ -17,23 +17,10 @@
 model_list:
   # ===== FLASH / FAST TIER (default picks) =====
 
-  # Qwen 3.7 Flash — cheapest real-time flash with tools, 1M ctx, OSS. DEFAULT_FREE (tentative,
-  # validated on candidate before prod). is_free MUST stay true — pickDefaultModel gives zero-credit
-  # users the default_free model, and a non-is_free default would 402 them.  ($0.03 → $0.13, 1M)
-  - model_name: qwen3.7-flash
-    litellm_params:
-      model: openrouter/qwen/qwen3.7-flash
-      api_key: "os.environ/OPENROUTER_API_KEY"
-    model_info:
-      display_name: "Qwen 3.7 Flash"
-      is_free: true
-      provider_key: "qwen"
-      metadata:
-        cogni:
-          default_free: true
-
-  # Google Gemini 2.5 Flash Lite — Google-infra low-latency flash, 1M ctx, tools. Reliability-first
-  # alternative for default_free; carried is_free:true so it can be A/B-timed vs qwen on candidate.  ($0.10 → $0.40, 1M)
+  # Google Gemini 2.5 Flash Lite — DEFAULT_FREE. Google-infra low-latency flash, 1M ctx, tools.
+  # MEASURED on candidate-a (one-word reply, n=3): 1.4-2.6s, vs gpt-oss-120b 6-14s and qwen3.7-flash
+  # 12-22s. is_free MUST stay true — pickDefaultModel gives zero-credit users the default_free model,
+  # and a non-is_free default would 402 them.  ($0.10 → $0.40, 1M)
   - model_name: gemini-2.5-flash-lite
     litellm_params:
       model: openrouter/google/gemini-2.5-flash-lite
@@ -42,6 +29,9 @@ model_list:
       display_name: "Gemini 2.5 Flash Lite"
       is_free: true
       provider_key: "google"
+      metadata:
+        cogni:
+          default_free: true
 
   # OpenAI gpt-oss 120B — open-weight REASONING model: high latency (measured 4–90s on a one-word
   # reply). Kept selectable + is_free, but moved OFF default_free — a reasoner is the wrong default.  ($0.037 → $0.17, 131K)
