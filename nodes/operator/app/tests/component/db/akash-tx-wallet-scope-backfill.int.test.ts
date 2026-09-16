@@ -14,7 +14,9 @@
  * Invariants: RECEIPT_SURVIVES_THE_CUTOVER, NO_PREPARING_ROW_IS_REWRITTEN,
  *   ROW_COUNTS_ARE_ASSERTED, LEGACY_SCOPE_IS_UNWRITABLE_AFTERWARDS.
  * Side-effects: IO (Postgres via testcontainers; drops and re-adds the account-scope CHECK
- *   inside a transaction, so a rollback restores the schema exactly)
+ *   inside a transaction, so a rollback restores the schema exactly). Connects as `app_user`
+ *   (DATABASE_URL) rather than the seed/service role, because only the DB OWNER may ALTER the
+ *   table — and `app_user` is exactly the role the migrator itself runs as in production.
  * Links: src/adapters/server/db/migrations/0048_complex_sister_grimm.sql,
  *   src/adapters/server/compute/akash-tx-allocation-ledger.adapter.ts,
  *   src/features/compute/akash-tx/akash-tx-wallet.ts, bug.5187
@@ -24,7 +26,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
-import { getSeedDb } from "@tests/_fixtures/db/seed-client";
+import { createAppDbClient, type Database } from "@cogni/db-client";
 import { eq, sql } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -53,6 +55,23 @@ const IDENTITY = {
   compositeGeneration: 2,
 };
 
+/**
+ * The MIGRATOR's own role. `DATABASE_SERVICE_URL` (the usual component-test seed client) is
+ * `app_service` — BYPASSRLS but NOT the table owner, so every `ALTER TABLE` here fails with
+ * `42501 must be owner of table`. Migrations run as `app_user` in CI and in production alike,
+ * which is what makes replaying a real migration from a test legitimate rather than a
+ * privilege the deployed system does not have.
+ */
+function ownerDb(): Database {
+  const url = process.env.DATABASE_URL;
+  if (!url) {
+    throw new Error(
+      "DATABASE_URL not set. Run via the component vitest config (pnpm test:component)."
+    );
+  }
+  return createAppDbClient(url);
+}
+
 const MIGRATIONS_DIR = path.resolve(
   __dirname,
   "../../../src/adapters/server/db/migrations"
@@ -79,7 +98,7 @@ function backfillStatements(): string[] {
  * pre-cutover — it is re-added by the migration's own final statement, so a committed run
  * leaves the schema exactly as it found it and a raised run rolls the drop back too.
  */
-async function applyBackfill(db: ReturnType<typeof getSeedDb>): Promise<void> {
+async function applyBackfill(db: Database): Promise<void> {
   await db.transaction(async (tx) => {
     await tx.execute(
       sql.raw(
@@ -94,7 +113,7 @@ async function applyBackfill(db: ReturnType<typeof getSeedDb>): Promise<void> {
 
 /** Seed a row the CHECK would normally forbid, by lifting it for exactly that insert. */
 async function seedLegacyRow(
-  db: ReturnType<typeof getSeedDb>,
+  db: Database,
   row: {
     walletScope: string;
     cogniKey: string;
@@ -133,7 +152,7 @@ async function seedLegacyRow(
 }
 
 describe("bug.5187 wallet_scope backfill (Component)", () => {
-  const db = getSeedDb();
+  const db = ownerDb();
 
   afterEach(async () => {
     // Leave the table as the other component tests expect: no rows of ours, constraint VALID.
