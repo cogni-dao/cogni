@@ -36,11 +36,11 @@ Production runtime configuration directory copied to VM hosts for container orch
 - **Exports:** none
 - **CLI (if any):** docker-compose commands
 - **Env/Config keys:** `APP_IMAGE`, `MIGRATOR_IMAGE`, `APP_ENV`, `DEPLOY_ENVIRONMENT`, `COGNI_REPO_URL` (git-sync), `COGNI_REPO_REF` (git-sync, pinned SHA), `GIT_READ_USERNAME` (git-sync), `GIT_READ_TOKEN` (git-sync, Contents:Read PAT), `COGNI_REPO_PATH` (app, `/repo/current`), `COGNI_REPO_SHA` (app), `POSTGRES_ROOT_USER`, `POSTGRES_ROOT_PASSWORD`, `APP_DB_USER`, `APP_DB_PASSWORD`, `APP_DB_SERVICE_USER`, `APP_DB_SERVICE_PASSWORD`, `APP_DB_READONLY_USER`, `APP_DB_READONLY_PASSWORD`, `APP_DB_NAME`, `DATABASE_URL` (explicit DSN, app_user), `DATABASE_SERVICE_URL` (explicit DSN, app_service), `DB_BACKUP_INTERVAL_SECONDS`, `DB_BACKUP_RETENTION_DAYS`, `DB_BACKUP_OBSERVABILITY_GRACE_SECONDS`, `DOLTGRES_PASSWORD` / `DOLTGRES_READER_PASSWORD` / `DOLTGRES_WRITER_PASSWORD` (provisioning; derived deterministically from `POSTGRES_ROOT_PASSWORD` in deploy-infra.sh), `APP_BASE_URL`, `NEXTAUTH_URL`, `AUTH_SECRET`, `LITELLM_MASTER_KEY`, `OPENROUTER_API_KEY`, `LITELLM_DATABASE_URL`, `OPENFGA_API_URL`, `OPENFGA_STORE_ID`, `OPENFGA_AUTHORIZATION_MODEL_ID`, `OPENFGA_API_TOKEN`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`, `LANGFUSE_TRACING_ENVIRONMENT` (derived from DEPLOY_ENVIRONMENT), `GRAFANA_CLOUD_LOKI_URL`, `GRAFANA_CLOUD_LOKI_USER`, `GRAFANA_CLOUD_LOKI_API_KEY`, `GRAFANA_PDC_SIGNING_TOKEN`, `GRAFANA_PDC_HOSTED_GRAFANA_ID`, `GRAFANA_PDC_CLUSTER`, `GRAFANA_PDC_NETWORK_ID`, `GRAFANA_PDC_NETWORK_UUID`, `METRICS_TOKEN` (app+alloy), `BILLING_INGEST_TOKEN` (app+litellm, callback auth), `INTERNAL_OPS_TOKEN` (app internal ops auth), `COGNI_NODE_ENDPOINTS` (litellm, per-node callback routing), `COGNI_DEFAULT_NODE_ID` (repo-spec-derived default node label for shared runtime metrics), `PROMETHEUS_REMOTE_WRITE_URL` (alloy), `PROMETHEUS_USERNAME` (alloy), `PROMETHEUS_PASSWORD` (alloy), `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, `TEMPORAL_TASK_QUEUE`, `TEMPORAL_DB_USER`, `TEMPORAL_DB_PASSWORD`, `TEMPORAL_DB_HOST`, `TEMPORAL_DB_PORT`
-- **Files considered API:** `docker-compose.yml`, `db-backup/*.sh`, `postgres-init/*.sh`, `configs/alloy-config.alloy`
+- **Files considered API:** `docker-compose.yml`, `db-backup/*.sh`, `host-safeguards/*`, `postgres-init/*.sh`, `configs/alloy-config.alloy`
 
 ## Responsibilities
 
-- This directory **does**: Provide production runtime configuration copied to VM hosts for deployment (app, postgres, litellm, openfga, alloy, temporal). Includes LiteLLM/OpenFGA networking + database wiring in dev stack.
+- This directory **does**: Provide production runtime configuration copied to VM hosts for deployment (app, postgres, litellm, openfga, alloy, temporal), including idempotent host safeguards shared with fresh-VM cloud-init. Includes LiteLLM/OpenFGA networking + database wiring in dev stack.
 - This directory **does not**: Handle TLS termination (see `../edge/`), build-time configuration, or development-only settings
 
 ## Usage
@@ -84,7 +84,7 @@ docker compose --project-name cogni-runtime logs -f app
 - Init scripts run only on first postgres container startup
 - `NEXTAUTH_URL` env var provided with shell fallback to `APP_BASE_URL`; Auth.js uses `trustHost: true` (safe behind Caddy)
 - Log collection: Alloy scrapes Docker containers (including Caddy JSON runtime/access logs on stdout), tails k3s pod logs from `/var/log/pods`, and ships Kubernetes Events through `alloy-k8s-events`; applies strict label cardinality (app, env, service, stream/source plus low-cardinality event reason/type/kind); suppresses successful health-check/metrics-scrape log noise at pipeline level
-- Alloy infra metrics: cAdvisor (container memory/CPU/OOM/network/disk) + node exporter (host memory/CPU/filesystem/network plus bounded conntrack/listen-overflow counters) → Grafana Cloud Mimir via a strict allowlist
+- Alloy infra metrics: cAdvisor (container memory/CPU/OOM/network/disk) + node exporter (host memory/CPU/filesystem/network, bounded conntrack/listen-overflow counters, and repo-owned host textfile gauges such as k3s kine state.db size) → Grafana Cloud Mimir via a strict allowlist
 - Alloy host mounts: `/proc:/host/proc:ro`, `/sys:/host/sys:ro`, `/:/host/root:ro` (required for node exporter)
 - Alloy UI exposed at 127.0.0.1:12345 (internal only)
 - `DEPLOY_ENVIRONMENT` must be set (local|candidate-a|preview|production) - used for env label, fail-closed validation

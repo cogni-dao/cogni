@@ -1,0 +1,6 @@
+[Unit]
+Description=Publish k3s kine state.db size for the node exporter textfile collector
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/k3s-kine-metrics.sh
