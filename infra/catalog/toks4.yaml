@@ -27,6 +27,13 @@ deployment_provider:
 # materializes this cell (ONE_AUTHORITY_PER_WORKLOAD; rsync --delete evicts the
 # legacy manifest in the same commit).
 compute_api:
+  # bug.5177 — this row declares candidate-a, and story.5016 step 9 DELETED
+  # base/compute-workload-controller from the candidate-a operator overlay
+  # (ONE_WALLET_ONE_ACTIVE_WRITER). An omitted cell resolves to `legacy`
+  # (LEGACY_IS_DEFAULT, assert-target-substrate.sh:73), which asserts that
+  # deleted Deployment and fails 100% of candidate-a flights. toks5 proves
+  # the migrated shape: toks5-test.cognidao.org serves live on crossplane.
+  candidate-a: crossplane
   production: crossplane
 # Explicit replacement counter for a terminally closed lease — the only
 # redeploy-after-close path (actuator refuses a settled idempotence key).
