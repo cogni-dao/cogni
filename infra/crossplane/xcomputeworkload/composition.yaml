@@ -63,6 +63,11 @@ spec:
             {{- $slug := $wl.name }}
             {{- $desiredSha := $spec.bundle.source.sha }}
             {{- $publicHost := lower (trimSuffix "." $wl.publicHost) }}
+            {{- /* Stable names make ExternalDNS TXT ownership import reproducible. */ -}}
+            {{- $dnsEndpointName := printf "xcw-%s-dns" $name }}
+            {{- $dnsOwnerId := printf "cogni-%s-xcw" $env }}
+            {{- $dnsOwnerTxtName := printf "xcw-cname-%s" $publicHost }}
+            {{- $dnsOwnerTxtValue := printf "heritage=external-dns,external-dns/owner=%s,external-dns/resource=crd/%s/%s" $dnsOwnerId $ns $dnsEndpointName }}
 
             {{- /*
               IDENTITY GATE. The legacy CRD enforced `metadata.name == spec.nodeId` with a
@@ -447,7 +452,7 @@ spec:
                 isRemovedCheck:
                   type: CUSTOM
                   logic: '(.response.body.found == false) or (.response.body.resource.state == "closed")'
-            {{- end }}
+            {{- end }}{{ "\n" }}
 
             {{- /* ---------- composed: DNS intent ---------- */ -}}
             {{- if and $dns (ne $dnsTarget "") $renderLease }}
@@ -484,6 +489,58 @@ spec:
               published a record that resolves and still cannot be reached.
             */ -}}
             {{- $cfAdoptable := `(.response.body.result // [] | if type == "array" then . else [.] end | map(select(.type == "A" or .type == "AAAA" or .type == "CNAME")))` }}
+            {{- /*
+              bug.5181 STAGE A ADOPTION. The temporary importer sees only the TXT endpoint and
+              name-keyedly establishes the ownership marker for the pre-existing Cloudflare
+              record. The steady SIGs ExternalDNS instance sees only the CNAME endpoint, then
+              adopts and reconciles it through its TXT registry. The provider-http Request below
+              deliberately remains authoritative during this stage; removing its mutations is a
+              separate, adoption-gated change.
+            */ -}}
+            ---
+            apiVersion: externaldns.k8s.io/v1alpha1
+            kind: DNSEndpoint
+            metadata:
+              name: {{ printf "%s-owner-import" $dnsEndpointName }}
+              labels:
+                cogni.io/dns-role: import
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: dns-ownership-import
+                # DNSEndpoint exposes observedGeneration but no Ready condition. This says only
+                # that Crossplane successfully materialized the intent object; the provider-http
+                # Request below remains the provider-truth readiness and published-status gate.
+                gotemplating.fn.crossplane.io/ready: "True"
+            spec:
+              endpoints:
+                - dnsName: {{ $dnsOwnerTxtName | quote }}
+                  recordTTL: 300
+                  recordType: TXT
+                  targets:
+                    - {{ $dnsOwnerTxtValue | quote }}
+            ---
+            apiVersion: externaldns.k8s.io/v1alpha1
+            kind: DNSEndpoint
+            metadata:
+              name: {{ $dnsEndpointName }}
+              labels:
+                cogni.io/dns-role: record
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: external-dns-record
+                # Never use this conditionless-resource escape hatch as adoption proof. The
+                # Cloudflare observer below is retained through both migration stages precisely
+                # so XR readiness cannot be inferred from an intent echo.
+                gotemplating.fn.crossplane.io/ready: "True"
+            spec:
+              endpoints:
+                - dnsName: {{ $publicHost | quote }}
+                  recordTTL: 1
+                  recordType: CNAME
+                  targets:
+                    - {{ $dnsTarget | quote }}
+                  providerSpecific:
+                    - name: external-dns.kubernetes.io/cloudflare-proxied
+                      value: "true"
+            # Existing writer and provider observation remain intact until adoption proof.
             ---
             apiVersion: http.m.crossplane.io/v1alpha2
             kind: Request
