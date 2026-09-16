@@ -46,11 +46,3 @@ node_id: f66b260b-4633-41e2-8711-b7c1b8449cc1
 compute_egress_cidrs:
   - cidr: 80.200.246.35/32
     comment: shared egress NAT of Akash providers zencloud + digitalfrontier (story.5016)
-# Replacement counter for a terminally closed/refused Akash lease (the actuator refuses
-# to re-spend a settled idempotence key; docs/spec/ci-cd.md "Lease replacement counter").
-# 1: the first production create's POST timed out after the key was reserved (run
-# 34967901556) — the guard refuses key :0 forever (verified zero orphan spend), so the
-# replacement mints under :1. Maps directly to the XRD wire field
-# `spec.leaseGeneration` (task.5105).
-lease_generation:
-  production: 1

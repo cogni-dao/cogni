@@ -45,7 +45,7 @@ import {
   resolveDeploymentTargets,
   resolvePromoteDeploymentTargets,
 } from "@/features/compute/node-deployment-targets";
-import { resolveNodeLeaseGeneration } from "@/features/compute/node-lease-generation";
+import { resolveNodeLeaseEpoch } from "@/features/compute/node-lease-epoch";
 import { assertDeclaredNodeDeployment } from "@/features/compute/node-services-workload-spec";
 import { hostForNode } from "@/shared/node-registry/resolve";
 
@@ -174,9 +174,9 @@ async function main(): Promise<void> {
   // same row: a node never selects its own reconciler.
   const computeApi = resolveNodeComputeApi({ catalog, environment });
   // Explicit replacement counter for a terminally closed lease — same operator-owned row,
-  // never a CLI flag: a generation a caller could pass would be a generation automation could
-  // bump, and NOTHING may bump it implicitly. Absent cell resolves to 0, the XRD default.
-  const leaseGeneration = resolveNodeLeaseGeneration({ catalog, environment });
+  // never a CLI flag: an epoch a caller could pass would be an epoch automation could bump,
+  // and NOTHING may bump it implicitly. Absent cell resolves to 0, the XRD default.
+  const leaseEpoch = resolveNodeLeaseEpoch({ catalog, environment });
   const dnsZoneId = values["dns-zone-id"]?.trim();
   if (dnsZoneId && !CLOUDFLARE_ZONE_ID.test(dnsZoneId)) {
     throw new Error(
@@ -194,7 +194,7 @@ async function main(): Promise<void> {
       domain
     ),
     computeApi,
-    leaseGeneration,
+    leaseEpoch,
     // DNS intent is Crossplane-only: the legacy controller resolves its own zone in-cluster.
     ...(computeApi === "crossplane" && dnsZoneId
       ? { dns: { provider: "cloudflare" as const, zoneId: dnsZoneId } }
