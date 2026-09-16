@@ -23,8 +23,8 @@ describe("buildNodeWorkloadSpec", () => {
     expect(app?.command).toBeUndefined();
     expect(app?.expose).toEqual([{ port: 3200, as: 80, global: true }]);
     expect(app).toMatchObject({
-      cpuUnits: 0.5,
-      memoryMi: 1024,
+      cpuUnits: 2,
+      memoryMi: 2048,
       storageMi: 2048,
     });
   });
