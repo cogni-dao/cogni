@@ -1146,13 +1146,10 @@ log_info "Profile guardrail passed"
 log_info "Bringing up postgres..."
 if ! output="$($RUNTIME_COMPOSE up -d postgres 2>&1)"; then
   printf '%s\n' "$output" >&2
-  if grep -qiE 'has active endpoints|error while removing network' <<<"$output"; then
-    log_warn "Incremental reconcile failed due to network recreation; forcing full runtime teardown..."
-    $RUNTIME_COMPOSE down --remove-orphans --timeout 30
-    $RUNTIME_COMPOSE up -d postgres
-  else
-    exit 1
-  fi
+  # bug.5133 — NEVER auto-teardown the shared runtime as "recovery": healthy
+  # services may still be serving users. Fail red; a human/operator decides.
+  log_error "Incremental postgres reconcile failed; refusing automatic runtime teardown."
+  exit 1
 else
   printf '%s\n' "$output"
 fi
@@ -2181,6 +2178,9 @@ log_info "deploy-infra-remote.sh ready: ${LOCAL_SIZE} bytes, sha256=${LOCAL_SHA}
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Materialize catalog routes before rsync so running Caddy needs no fresh env.
+bash "$REPO_ROOT/scripts/ci/render-caddyfile.sh" --domain "$DOMAIN" > "$REPO_ROOT/infra/compose/edge/configs/Caddyfile.tmpl"
+
 # Dry-run exit (no SSH, no rsync, no compose up)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 if [[ "$DRY_RUN" == "true" ]]; then

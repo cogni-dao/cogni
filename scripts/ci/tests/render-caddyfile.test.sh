@@ -49,6 +49,32 @@ for node in "${NODE_TARGETS[@]}"; do
   fi
 done
 
+echo "[materialized] runtime Caddyfile contains current values, not env placeholders"
+DOMAIN_UNDER_TEST="test.cognidao.org"
+MATERIALIZED="$(bash scripts/ci/render-caddyfile.sh --domain "$DOMAIN_UNDER_TEST")"
+if grep -Fq '{$' <<<"$MATERIALIZED"; then
+  fail "materialized Caddyfile still depends on the running container's stale env"
+fi
+for node in "${NODE_TARGETS[@]}"; do
+  grep -Fq "$(host_for_node "$node" "$DOMAIN_UNDER_TEST") {" <<<"$MATERIALIZED" \
+    || fail "materialized Caddyfile missing current host for '$node'"
+  grep -Fq "reverse_proxy host.docker.internal:$(node_port_for_target "$node")" <<<"$MATERIALIZED" \
+    || fail "materialized Caddyfile missing current upstream for '$node'"
+done
+pass "all catalog routes are materialized for $DOMAIN_UNDER_TEST"
+
+echo "[materialized] base domain validation is label-aware"
+for valid_domain in localhost a.b foo-bar.example.com; do
+  bash scripts/ci/render-caddyfile.sh --domain "$valid_domain" >/dev/null \
+    || fail "valid base domain was rejected: $valid_domain"
+done
+for invalid_domain in foo.-bar.com foo-.bar.com -foo.example.com foo.example.com- foo..example.com; do
+  if bash scripts/ci/render-caddyfile.sh --domain "$invalid_domain" >/dev/null 2>&1; then
+    fail "invalid base domain was accepted: $invalid_domain"
+  fi
+done
+pass "localhost remains supported; labels with boundary hyphens are rejected"
+
 echo "[3/6] catalog node_port == overlay Service nodePort (no split-brain)"
 for node in "${NODE_TARGETS[@]}"; do
   cat_port="$(node_port_for_target "$node")"
