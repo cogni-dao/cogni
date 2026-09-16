@@ -11,13 +11,12 @@ source_sha: f1fd69c244d1cbc33b76cefe74264b2c56bb9fcf
 candidate_a_branch: deploy/candidate-a-levelup
 preview_branch: deploy/preview-levelup
 production_branch: deploy/production-levelup
-# task.5017/5025 — per-env node-set (deploy ⊆ provisioned). story.5016 production
-# cutover: preview slots are retired fleet-wide (preview has no funded Akash account
-# and gets no actuator), and levelup's candidate-a proof slot was already closed —
-# its lease released (#2233, dseq 1789435347755) — so the stale candidate-a cells
-# are dropped with it. Production is this node's only slot.
-envs: [production]
+# task.5017/5025 — per-env node-set (deploy ⊆ provisioned). Preview stays
+# retired. candidate-a is the source-addressed developer flight lane; its prior
+# lease was closed, so the next flight materializes a new Crossplane workload.
+envs: [candidate-a, production]
 deployment_provider:
+  candidate-a: akash
   production: akash
 # story.5016 production cutover — levelup is the FIRST fleet row on the production
 # Crossplane authority, the same node that proved the full create→observe→update→close
@@ -30,11 +29,14 @@ deployment_provider:
 # promote that materializes this cell — flipping over a live legacy CR would hang
 # the Argo app Terminating AND mint a second paid lease.
 compute_api:
+  candidate-a: crossplane
   production: crossplane
 # Explicit replacement counter for a terminally closed lease (the actuator refuses to
 # re-spend a settled idempotence key). Bumping this is the ONLY redeploy-after-close
 # path — kubectl patch is reverted by Argo selfHeal.
 lease_epoch:
+  # The prior candidate Crossplane proof closed generation 0 (#2233).
+  candidate-a: 1
   production: 0
 # bug.5079 — activity_env is the SINGLETON env allowed to ingest Git receipts. GitHub
 # App webhooks are delivered to production only (one App, one webhook URL), and the
