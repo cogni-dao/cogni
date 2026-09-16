@@ -17,7 +17,7 @@ production_branch: deploy/production-poly
 # later catalog edit (drop an env here) once its envs are provisioned.
 # bug.5182: candidate-a is Poly's source-addressed developer flight lane. Preview
 # remains retired until its Crossplane/actuator authority is installed (task.5129).
-envs: [candidate-a, production]
+envs: [candidate-a, preview, production]
 deployment_provider:
   candidate-a: akash
   production: akash
