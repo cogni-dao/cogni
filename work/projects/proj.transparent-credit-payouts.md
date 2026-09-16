@@ -277,6 +277,13 @@ Attribution statements produced by this project are **governance truth** — who
 
 `user_id` is correct for P0 (humans-only attribution). When `actors` ships ([proj.operator-plane](proj.operator-plane.md)), `epoch_allocations` gains `actor_id` alongside `user_id`. Human actors bridge 1:1; agent actors are a new attribution path. Provenance is always preserved: `earned_by_actor_id` records who did the work (even if an agent). `beneficiary_actor_id` determines who may claim — a separate field, never collapsed. No schema changes until the actor table exists. See [identity-model.md](../../docs/spec/identity-model.md) for the `actor_id` primitive.
 
+`story.5033` is the canonical E2E actor-attribution story. Its Pareto order is:
+(1) align identity and attribution contracts, (2) prove a two-party
+agent-to-human stewardship claim with `flock-leader` on one node, (3) migrate
+agent registration and claimant resolution to durable actors, and only then
+(4) resume credential rotation and fleet rollout. `story.5021` remains the
+operational RBAC/key story; it must not define economic ownership.
+
 ## PR / Links
 
 - Handoff: [handoff](../handoffs/proj.transparent-credit-payouts.handoff.md)

@@ -213,9 +213,13 @@ when someone later links that GitHub identity. At settlement/read time, a node
 may resolve that identity claimant through its own `user_bindings` to the local
 user who proved control of the GitHub account.
 
-For P0, this lets a locally authenticated human prove control of an
-agent-operated GitHub account such as `flock-leader` and claim its preserved
-identity allocation. The broker does not encode future actor/beneficiary policy.
+For P0, this lets a locally authenticated human prove control of a GitHub
+account such as `flock-leader` and resolve its preserved identity allocation to
+that human. This is an account-control claim, not proof that the human authored
+AI work and not an agent stewardship model. Once `story.5033` ships, an
+agent-operated GitHub identity binds to the agent actor; a separate two-party
+relationship designates the human beneficiary while preserving the agent as
+earner. The broker itself does not encode actor/beneficiary policy.
 
 **Attestation is not git-specific.** `claimantKey()` is
 `identity:<provider>:<external_id>` and `user_bindings.provider` already admits

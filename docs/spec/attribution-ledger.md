@@ -39,6 +39,10 @@ tags: [governance, transparency, payments, attribution]
 | RECEIPT_IDEMPOTENT               | `ingestion_receipts.id` is deterministic from source data (e.g., `github:pr:owner/repo:42`). Re-ingestion of the same receipt is a no-op (PK conflict → skip).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | POOL_IMMUTABLE                   | DB trigger rejects UPDATE/DELETE on `epoch_pool_components`. Once recorded, a pool component's algorithm, inputs, and amount cannot be changed.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | IDENTITY_BEST_EFFORT             | Ingestion receipts carry `platform_user_id` and optional `platform_login`. Resolution to `user_id` via `user_bindings` is best-effort. Unresolved receipts keep `user_id = NULL` in selection, but `epoch_receipt_claimants` rows preserve them as identity claimants (keyed by stable external identity) so attribution remains visible and can resolve later when bindings appear.                                                                                                                                                                                                                                                                                                                                                                             |
+| AUTHORSHIP_IS_IMMUTABLE          | Source identity and `earned_by_actor_id` answer who did the work. A later user/actor binding or stewardship claim MUST NOT rewrite the receipt, claimant key, finalized allocation, or signed statement.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| STEWARDSHIP_IS_EXPLICIT          | `beneficiary_actor_id` is resolved only from an active, audited two-party stewardship relation. OpenFGA grants, `subjectId`, node ownership, billing tenancy, matching display names, and an operator's assertion are not economic ownership proofs.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| AGENT_DEFAULTS_TO_SELF           | If an agent has no active stewardship relation, the agent is its own beneficiary. The system never invents a human owner and never drops the allocation.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| BENEFICIARY_FREEZES_AT_FOLD      | A stewardship acceptance may resolve previously unassigned agent liabilities in the next cumulative fold. Once a beneficiary is materialized in a distribution leaf, later revocation or reassignment cannot move that liability; it affects only unresolved liabilities.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | ADMIN_FINALIZES_ONCE             | An admin reviews recomputable user projections, optionally records per-subject review overrides, then triggers finalize. Finalization materializes canonical claimant-scoped final allocations before signing. Single action closes the epoch — no per-event approval workflow.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | APPROVERS_PER_SCOPE              | Each scope declares its own `approvers[]` list. At closeIngestion the current approver list and its hash are pinned on the epoch (APPROVERS_PINNED_AT_REVIEW). Finalization and sign-data check against the **pinned** set, not repo-spec. V0: single scope, single approver in repo-spec. Multi-scope: each `.cogni/projects/*.yaml` carries its own list. Addresses normalized to lowercase at storage.                                                                                                                                                                                                                                                                                                                                                        |
 | SIGNATURE_SCOPE_BOUND            | Signed typed data must include `node_id + scope_id + epoch_id + final_allocation_set_hash + pool_total_credits`. Prevents cross-scope, cross-node, and cross-epoch signature replay.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
@@ -858,14 +862,33 @@ The following are explicitly deferred from V0 and will be designed when needed:
 
 Enable transparent, verifiable credit distribution where contribution activity is automatically collected, enriched with domain-specific context (work-item links, quality signals), valued via pluggable allocation algorithms, and finalized by an admin. Anyone can recompute the statement from stored data.
 
-### Actor Migration Path (Planned)
+### Actor Migration Path (Planned — `story.5033`)
 
-Finalized statements now preserve claimant identity explicitly (`claimant_key`, `claimant`) and treat `epoch_allocations.user_id` as the resolved-human override surface, not the only economic subject. `actor_id` is still the migration target: when the `actors` table ships ([proj.operator-plane](../../work/projects/proj.operator-plane.md) v1), claimant keys can resolve to actor-backed subjects without changing the deterministic statement model. For human actors (`kind=user`), `actor_id` bridges 1:1 to `user_id` via the actors table. For agent actors, `actor_id` enables new attribution paths (gateway usage → agent → rewards). Every economic event remains scoped by `(node_id, scope_id)` — `actor_id` is locally unique per node, not a global identity. No invariant changes — PAYOUT_DETERMINISTIC and ALL_MATH_BIGINT apply regardless of subject key. See [identity-model.md](./identity-model.md).
+Finalized statements preserve claimant identity explicitly (`claimant_key`,
+`claimant`) and treat `epoch_allocations.user_id` as today's resolved-human
+projection, not the only economic subject. `actor_id` is the migration target:
+when the `actors` table ships, claimant keys resolve to actor-backed subjects
+without changing the deterministic statement model. Human actors bridge 1:1 to
+`user_id`; agent actors are first-class earners. Every economic event remains
+scoped by `(node_id, scope_id)` — `actor_id` is locally unique per node, not a
+global identity.
 
-### AI Agent Developer Actors (V0 Addendum)
+The migration adds two distinct values to the resolution result:
 
-External AI agents can request developer flight control for a specific node
-before they are payout actors. The approval fact lives in RBAC, not in the
+- `earned_by_actor_id`: immutable provenance; the actor that performed the work.
+- `beneficiary_actor_id`: the current economic recipient selected by an explicit
+  stewardship policy; defaults to the earner.
+
+The first implementation must resolve new agent receipts through
+`actor_bindings`, leave historical claimant keys untouched, and expose the two
+values in the read model before any settlement behavior changes. PAYOUT_DETERMINISTIC
+and ALL_MATH_BIGINT continue to apply regardless of subject type. See
+[identity-model.md](./identity-model.md).
+
+### AI Agent Developer Actors (Current State and Required Migration)
+
+External AI agents currently request developer flight control for a specific
+node before they are payout actors. The approval fact lives in RBAC, not in the
 attribution ledger:
 
 - Registration mints a `user_id` and bearer token for the AI agent.
@@ -876,8 +899,15 @@ attribution ledger:
 
 No attribution statement changes when an agent receives flight permission. If
 the agent later produces contribution activity, that activity enters the ledger
-like any other claimant: unresolved first, then resolved to a human `user_id` or
-future `actor_id` when bindings exist. Flight authority is operational control;
+as an external identity claimant. Today, proving control of that external
+identity can resolve it to a human `user_id`; that is useful for human-authored
+work, but it collapses an AI earner into the human and therefore cannot be the
+agent-ownership model.
+
+The `story.5033` target is: registration creates the agent actor; evidenced
+source identities bind to that actor; the directing human and agent establish a
+separate two-party stewardship relation; reads expose agent-as-earner and
+human-as-beneficiary. Flight authority remains operational control only and
 credit attribution remains governed by `(node_id, scope_id)` epoch rules.
 
 ## Non-Goals

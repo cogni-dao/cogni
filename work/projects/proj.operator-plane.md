@@ -241,11 +241,17 @@ See: `docs/spec/multi-node-tenancy.md`
 
 ## Design Notes
 
-### Why v0 avoids the actor table
+### Why the original gateway v0 avoided the actor table
 
 The simplest thing that works for MDI is a freeform `X-Cogni-Agent-Id` header logged to `charge_receipts.external_agent_ref` (nullable TEXT). This gives per-agent cost visibility immediately. No schema migration beyond a nullable column. `external_agent_ref` is explicitly NOT `actor_id` — it's a freeform tag with no FK constraint. When the `actors` table ships (v1), a real `actor_id` FK column is added and `external_agent_ref` values are mapped to actors via `actor_bindings`.
 
-The actor table (v1) adds _enforcement_ — real API keys per agent, budget caps, spawn delegation. But enforcement without visibility is useless. Ship visibility first.
+The actor table adds _enforcement_ — real API keys per agent, budget caps, spawn
+delegation — and is now also required for honest AI attribution. `story.5033`
+brings that slice forward: registered AI agents become durable actors,
+credentials become replaceable bindings, and a separate two-party stewardship
+relationship may name a human beneficiary without changing the agent earner.
+The original `external_agent_ref` remains ingestion evidence during migration;
+it is not promoted into an identity key.
 
 ### What repo-spec IS in this project
 
