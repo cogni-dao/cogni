@@ -153,9 +153,30 @@ function toObserveInput(parsed: AkashTxObserveInput) {
   };
 }
 
-function errorResponse(error: AkashTxError): AkashTxHttpResponse {
+function errorResponse(
+  error: AkashTxError,
+  log?: AkashTxLogger,
+  context?: { readonly path?: string; readonly cogniKey?: string }
+): AkashTxHttpResponse {
+  const status = STATUS_BY_CODE[error.code] ?? 500;
+  // REFUSAL_IS_OBSERVABLE (bug.5142): a fail-closed wallet writer MUST say why it
+  // refused. Before this, only an unhandled throw logged — every typed refusal
+  // returned a non-2xx and emitted nothing, so the caller saw a bare status code
+  // and the reason existed nowhere. provider-http then overwrites status.failure on
+  // the next reconcile, so the refusal was unrecoverable after ~60s.
+  log?.[status >= 500 ? "error" : "warn"](
+    {
+      code: error.code,
+      status,
+      path: context?.path,
+      ...(context?.cogniKey ? { cogniKey: context.cogniKey } : {}),
+      ...(error.ownerCogniKey ? { ownerCogniKey: error.ownerCogniKey } : {}),
+      causeMessage: error.message,
+    },
+    "akash_tx_refused"
+  );
   return {
-    status: STATUS_BY_CODE[error.code] ?? 500,
+    status,
     body: {
       code: error.code,
       message: error.message,
@@ -195,11 +216,15 @@ export function createAkashTxDispatcher(
     }
     if (request.method !== "POST") {
       return errorResponse(
-        new AkashTxError("invalid_request", "method not allowed")
+        new AkashTxError("invalid_request", "method not allowed"),
+        deps.log,
+        { path: request.path }
       );
     }
     if (!authorized(request.authorization, deps.token)) {
-      return errorResponse(new AkashTxError("unauthorized", "unauthorized"));
+      return errorResponse(new AkashTxError("unauthorized", "unauthorized"), deps.log, {
+        path: request.path,
+      });
     }
 
     let payload: unknown;
@@ -207,7 +232,9 @@ export function createAkashTxDispatcher(
       payload = JSON.parse(request.body ?? "");
     } catch {
       return errorResponse(
-        new AkashTxError("invalid_request", "body must be JSON")
+        new AkashTxError("invalid_request", "body must be JSON"),
+        deps.log,
+        { path: request.path }
       );
     }
 
@@ -254,17 +281,22 @@ export function createAkashTxDispatcher(
         }
         default:
           return errorResponse(
-            new AkashTxError("not_found", "unknown operation")
+            new AkashTxError("not_found", "unknown operation"),
+            deps.log,
+            { path: request.path }
           );
       }
     } catch (error) {
-      if (error instanceof AkashTxError) return errorResponse(error);
+      if (error instanceof AkashTxError)
+        return errorResponse(error, deps.log, { path: request.path });
       if (isZodError(error)) {
         return errorResponse(
           new AkashTxError(
             "invalid_request",
             "request failed schema validation"
-          )
+          ),
+          deps.log,
+          { path: request.path }
         );
       }
       // An unexpected throw is never silently downgraded to a retryable answer.
