@@ -54,6 +54,7 @@ export function MobileNav({ className }: MobileNavProps): ReactElement {
           <NavigationLink href="/chat">Chat</NavigationLink>
           <NavigationLink href="/work">Work</NavigationLink>
           <NavigationLink href="/activity">Activity</NavigationLink>
+          <NavigationLink href="/nodes">Nodes</NavigationLink>
           <NavigationLink href="/gov">Gov</NavigationLink>
           <NavigationLink href="/credits">Credits</NavigationLink>
           <a
