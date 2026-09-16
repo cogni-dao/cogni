@@ -29,7 +29,9 @@ describe("GET /.well-known/agent.json", () => {
     );
     const body = await response.json();
 
-    expect(body.endpoints.openapi).toBe("https://operator.example/openapi.json");
+    expect(body.endpoints.openapi).toBe(
+      "https://operator.example/openapi.json"
+    );
     expect(body.actions.flightCandidate).toMatchObject({
       method: "POST",
       endpoint: "https://operator.example/api/v1/vcs/flight",

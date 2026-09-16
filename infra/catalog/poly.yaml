@@ -15,8 +15,8 @@ production_branch: deploy/production-poly
 # NODE_FORMATION_ENVS; this list is the catalog twin so render-node-appset.sh
 # renders exactly the births appset.ts generates. Trimming a node's reach is a
 # later catalog edit (drop an env here) once its envs are provisioned.
-# story.5016 production cutover: preview stays retired. candidate-a is the
-# source-addressed developer flight lane; production remains the activity authority.
+# bug.5182: candidate-a is Poly's source-addressed developer flight lane. Preview
+# remains retired until it has its own funded Akash account and actuator authority.
 envs: [candidate-a, production]
 deployment_provider:
   candidate-a: akash
