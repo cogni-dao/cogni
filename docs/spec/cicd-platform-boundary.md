@@ -289,8 +289,9 @@ The provider seam is a **1:1 adapter swap** in the operator bootstrap — `Cherr
 
 ### P3 — Crossplane owns reconciliation; Cogni owns the transaction (task.5095)
 
-The ComputeWorkload controller is **frozen** and gets no new capabilities. The end state splits its
-responsibilities along one line: _generic lifecycle machinery is bought, the Akash transaction is built._
+The legacy ComputeWorkload controller has been **RETIRED** (story.5016 — deleted from the tree; no
+environment deploys it; its Console key is revoked). Its responsibilities are now split along one
+line: _generic lifecycle machinery is bought, the Akash transaction is built._
 
 | Concern                                                                                                              | Owner                                                                             | Why                                                                                                                                                                               |
 | -------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -408,10 +409,12 @@ The remaining tooth — a **machine-checked growth ratchet** — is the smallest
 
 - **No `deploy-infra.sh` rewrite / decomposition.** It works in prod. Freeze it; migrate responsibilities out one at a time only when an independent reason (the k8s/Compose-tier move, Axiom 22 convergence) pulls them — never as a standalone refactor.
 - **No general-purpose Kubernetes CRDs or controllers.** The one named exception is
-  `compute.cogni.io/ComputeWorkload` plus its dedicated controller process (task.5064):
-  Kubernetes cannot natively observe or finalize a provider-hosted workload. Git/Argo owns
-  desired `spec`; the controller owns only bounded observe/create/update/delete, finalization,
-  and provenance in `status`. It is not a Crossplane-like framework and may not grow provider
+  `compute.cogni.io/ComputeWorkload` (Kubernetes cannot natively observe or finalize a
+  provider-hosted workload). Git/Argo owns desired `spec`; reconciliation is now **Crossplane**
+  (the `XComputeWorkload` composite) calling the private **`akash-tx-actuator`** for the bounded
+  observe/create/update/delete transaction, finalization, and provenance in `status` — the
+  bespoke leader-elected `compute-workload-controller` process (task.5064) that once owned this
+  was RETIRED, story.5016. It is not a Crossplane-like framework and may not grow provider
   vocabulary, workflow logic, or a second desired-state registry.
 - **No remote Tofu backend / Cloudflare-as-Tofu-resource migration** as speculative cleanup. Real gaps (ephemeral Tofu state, imperative DNS) are logged; fix them when a provisioning incident demands it, not preemptively.
 - **No new flags/options for theoretical flexibility.** `--k8s-secrets-only` is already legacy (ESO supersedes it). Don't add siblings.

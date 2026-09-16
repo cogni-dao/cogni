@@ -54,38 +54,12 @@ replacements:
         fieldPaths: [metadata.namespace]
 
 patches:
-  # story.5016 Gate 0b: controller env values are set BY NAME via strategic
+  # story.5016 Gate 0b: actuator env values are set BY NAME via strategic
   # merge (env lists merge on `name`), never by positional JSON-pointer index.
   # A positional `/env/N/value` patch silently repoints when the base list
   # shifts — that exact failure (d69e5c29) blanked AKASH_ALLOWED_PROVIDERS
   # fleet-wide, and an empty allowlist rejects every Akash provider bid.
-  - target:
-      kind: Deployment
-      name: compute-workload-controller
-    patch: |
-      apiVersion: apps/v1
-      kind: Deployment
-      metadata:
-        name: compute-workload-controller
-      spec:
-        template:
-          spec:
-            containers:
-              - name: controller
-                env:
-                  # Identical to base; listed first only so the merged env keeps
-                  # the base ordering (merge emits patched entries first).
-                  - name: POD_NAMESPACE
-                    valueFrom:
-                      fieldRef: { fieldPath: metadata.namespace }
-                  - name: CONTROLLER_ENVIRONMENT
-                    value: candidate-a
-                  - name: DEPLOYMENT_DOMAIN
-                    value: test.cognidao.org
-                  - name: AKASH_ALLOWED_PROVIDERS
-                    value: akash16yr3wxt97ae045a06kr3ycde9srcgpg8syjxxm
-  # Same BY-NAME strategic merge as the controller above (story.5016 Gate 0b). The
-  # actuator's wallet scope is `akash-console:<DEPLOY_ENVIRONMENT>`, which MUST equal the
+  # The actuator's wallet scope is `akash-console:<DEPLOY_ENVIRONMENT>`, which MUST equal the
   # `environment` the Composition sends — the Composition pins that to `cogni-<env>` == the
   # namespace, so these two values are one invariant expressed in two places.
   - target:
