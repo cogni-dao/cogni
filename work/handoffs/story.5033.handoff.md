@@ -31,12 +31,15 @@ New mission: own the end-to-end identity → agent actor → contribution attrib
 
 ## Current State
 
-- `story.5033` exists with the one-sentence outcome and priority 0.
+- `story.5033` is priority 0, claimed by `flock-leader`, linked to draft PR #2267, and in `needs_implement`.
+- Ordered children exist: `task.5123` actor registration + stewardship; `task.5124` earner/beneficiary attribution proof (blocked by 5123); `task.5125` principal migration + rotation + fleet sync (blocked by 5124).
 - Commit `85d35508bc` aligns six identity/attribution/distribution/project documents. No runtime or schema code changed.
 - As built, `/api/v1/agent/register` still creates a `users` row, billing account, and HMAC token whose `sub` is `user_id`; no actor table is shipped.
 - Existing GitHub attestation can resolve `identity:github:<id>` to a human. That proves account control but collapses an AI earner into the human, so it is not the target model.
-- Operator coordination returned HTTP 500, then all operator `/version` and work/knowledge APIs returned HTTP 502. The story claim, child task creation, story.5021/task.5080 reordering, and knowledge contribution are therefore not recorded.
-- No PR exists, no candidate flight occurred, and nothing is authorized to merge.
+- Operator coordination briefly returned HTTP 500, then all operator `/version` and work/knowledge APIs returned HTTP 502. It recovered; the work graph was written and re-read successfully.
+- `story.5021` and `task.5080` are now `needs_triage`, priority 3, blocked by `story.5033`; their independent slug/OpenFGA reliability bugs remain separate.
+- No new knowledge branch was created: the shared `flock-leader` principal already owns two unrelated open contributions from other active work. Appending here would mix domains; creating a third would worsen branch sprawl.
+- Draft PR #2267 is open; its current exact head is authoritative in GitHub and hosted CI is pending. No candidate flight occurred, and nothing is authorized to merge.
 
 ## Design / Implementation Target
 
@@ -46,11 +49,9 @@ New mission: own the end-to-end identity → agent actor → contribution attrib
 
 ## Next Actions / Risks
 
-- [ ] Once the operator recovers, claim `story.5033`, heartbeat it, set branch, and move it to `needs_implement`.
-- [ ] Create ordered child tasks: actor registration + stewardship foundation; actor claimant/read-model + `flock-leader` proof; existing-principal migration + credential rotation + fleet sync.
-- [ ] Mark `story.5021` and `task.5080` as rotation work blocked by `story.5033`; keep their independent slug/OpenFGA reliability bugs separate.
-- [ ] Open one operator knowledge contribution: “Agent contribution stewardship separates earner from beneficiary,” citing the existing epoch distribution guide.
-- [ ] Before schema work, load `schema-update`, `database-expert`, `rbac-expert`, and `test-expert`; add append-only evidence and explicit migration for current user-backed agents.
+- [ ] Keep the story heartbeat active while managing the children; `coordination.nextAction` is authoritative.
+- [ ] Close or merge the existing `flock-leader` knowledge branches through their owning work, then contribute “Agent contribution stewardship separates earner from beneficiary” without mixing domains.
+- [ ] Start `task.5123` in a dedicated implementation session. Before schema work, load `schema-update`, `database-expert`, `rbac-expert`, and `test-expert`; add append-only evidence and explicit migration for current user-backed agents.
 - [ ] Prove the vertical slice on one node with real `flock-leader` history before fleet propagation or key rotation.
 - [ ] Open a draft PR, let hosted CI run, flight the exact head once, run `/validate-candidate`, and only then permit merge.
 - Risk: a dynamic beneficiary resolver could redirect already-folded liabilities; freeze the beneficiary at fold/materialization.
