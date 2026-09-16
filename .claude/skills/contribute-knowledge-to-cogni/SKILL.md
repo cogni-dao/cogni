@@ -141,7 +141,7 @@ CID=$(curl -sS -X POST "$BASE/api/v1/knowledge/contributions" \
 **Step 3 — every further edit appends to that SAME branch via `/commits`:**
 
 ```bash
-# Add another atom, refine a row you created earlier on this branch, or deprecate —
+# Add another atom, refine a row you created earlier on this branch, or delete —
 # all on the open contribution. NEVER POST /contributions again for this work.
 curl -sS -X POST "$BASE/api/v1/knowledge/contributions/$CID/commits" \
   -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
@@ -151,7 +151,7 @@ curl -sS -X POST "$BASE/api/v1/knowledge/contributions/$CID/commits" \
   }'
 ```
 
-One POST can carry a **mixed-op batch** (`insert` + `update` + `deprecate`, up to 50) in a single commit when the changes belong together — that's one review for one coherent unit, not N branches.
+One POST can carry a **mixed-op batch** (`insert` + `update` + `delete`, up to 50) in a single commit when the changes belong together — that's one review for one coherent unit, not N branches.
 
 **Work-item↔knowledge tracking links.** Use a `cite` edit with
 `citationType: "tracks"` when a work item is the operational owner of a
@@ -185,6 +185,20 @@ knowledge and work-item detail surfaces after merge.
 | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
 | a row you wrote earlier **on your open branch** | `POST /contributions/{id}/commits` with `{op:"update", targetRowId, entry}` — `targetRowId` resolves on the branch |
 | an entry **already merged to `main`**           | `POST /contributions` once with `{op:"update", targetRowId:<main id>}`, then keep refining **that** via `/commits` |
+
+### Edit ops + the three constraints that bite
+
+`KnowledgeContributionEditSchema` is a discriminated union of **exactly four** ops
+(`packages/knowledge-store/src/domain/contribution-schemas.ts`) — anything else is
+HTTP 400 `invalid_union` / "No matching discriminator":
+
+- `{op:"insert", entry}` · `{op:"update", targetRowId, entry}` · `{op:"delete", targetRowId, reason}` (**`reason` is required**, 1–512 chars) · `{op:"cite", citingId, citedId, citationType, context?}` (self-citation — `citingId === citedId` — is rejected at the wire). The API verb is literally `delete`; the syntropy bar for _when_ to remove an entry is a separate judgement call (see `knowledge-syntropy-expert`).
+- **Referential integrity on delete.** Deleting a row that anything cites fails **409**: `cannot delete '<id>': cited by <list>. Remove or repoint those edges first, or refine the entry in place.` The dead row's own _outbound_ edges cascade; inbound edges never dangle.
+- **`tracks` endpoints must already be on `main`.** A `tracks` edge pointing at a **branch-local** knowledge row fails **404** `{"code":"cited_not_found"}` — work-item detail pages read the merged DAG. Cross-plane the other way works: a branch entry citing a merged entry resolves fine and goes live in `main`'s DAG on merge.
+- **`op:update` cannot rename a row id.** `targetRowId` is the `WHERE` key and `entry.id` is ignored, so a slug can never change in place. Renaming a **cited** entry therefore needs multiple sequential merges (insert new → merge → repoint edges → delete old) — prefer refining in place.
+- **Consequence, stated plainly: supersede+repoint of a cited entry is impossible inside one contribution.** Don't plan a batch around it; refine the entry in place instead.
+
+Verified empirically against `https://cognidao.org` on 2026-09-16.
 
 ## Format the `content` field as Markdown
 
