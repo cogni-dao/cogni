@@ -78,10 +78,10 @@ earner while Derek can become its human parent and claim its economic benefit.
 
 ## Pointers
 
-| File / Resource                                    | Why it matters                         |
-| -------------------------------------------------- | -------------------------------------- |
-| `work/projects/proj.operator-plane.md`             | Existing actor/reward north star       |
-| `work/projects/proj.transparent-credit-payouts.md` | E2E ordering and work-item ownership   |
-| `docs/spec/identity-model.md`                      | Current identity model                 |
-| `task.5128`                                       | One-PR design and alignment owner      |
-| `story.5033`                                      | Whole E2E outcome                      |
+| File / Resource                                    | Why it matters                       |
+| -------------------------------------------------- | ------------------------------------ |
+| `work/projects/proj.operator-plane.md`             | Existing actor/reward north star     |
+| `work/projects/proj.transparent-credit-payouts.md` | E2E ordering and work-item ownership |
+| `docs/spec/identity-model.md`                      | Current identity model               |
+| `task.5128`                                        | One-PR design and alignment owner    |
+| `story.5033`                                       | Whole E2E outcome                    |
