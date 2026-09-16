@@ -34,7 +34,7 @@ compute_api:
   production: crossplane
 # Explicit replacement counter for a terminally closed lease — the only
 # redeploy-after-close path (actuator refuses a settled idempotence key).
-lease_epoch:
+lease_generation:
   production: 0
 # task.5130 — ACTIVITY_ENV_IS_DEPLOYED (_schema.json): the singleton activity authority
 # must be a member of `envs`, and candidate-a just left. Production is the only remaining

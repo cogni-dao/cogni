@@ -32,15 +32,17 @@ deployment_provider:
 # either is omitted and stays on the pre-existing legacy default (task.5104, task.5097).
 compute_api:
   production: crossplane
-# bug.5192 — EXPLICIT replacement counter for a terminally settled lease key. The epoch is the
-# only varying component of the actuator's wallet-wide idempotence key
-# (`xcw:cogni-production:f66b260b-4633-41e2-8711-b7c1b8449cc1:<epoch>`), and the actuator
+# bug.5192 — EXPLICIT replacement counter for a terminally settled lease key. The generation is
+# the only varying component of the actuator's wallet-wide idempotence key
+# (`xcw:cogni-production:f66b260b-4633-41e2-8711-b7c1b8449cc1:<generation>`), and the actuator
 # refuses to re-spend a settled key by design (`akash_tx_create_refused_settled_key`), so
-# epoch 0's receipt — settled with no lease handle after the 33h writer-slot wedge — can never
-# mint this node's production lease. A human bumps this by exactly 1 to REPLACE that lease;
-# nothing bumps it implicitly, because an epoch that moved on its own would answer "no existing
-# resource" after a promote and mint a SECOND PAID LEASE.
-lease_epoch:
+# generation 0's receipt — settled with no lease handle after the 33h writer-slot wedge — can
+# never mint this node's production lease. A human bumps this by exactly 1 to REPLACE that
+# lease; nothing bumps it implicitly, because a generation that moved on its own would answer
+# "no existing resource" after a promote and mint a SECOND PAID LEASE.
+# task.5122 renamed this cell from `lease_epoch`; the VALUE is unchanged, so the key this row
+# resolves to is still `…:1` byte-for-byte. "Epoch" is reserved for attribution/distribution.
+lease_generation:
   production: 1
 # story.5025 — birth authority is PRODUCTION, the only environment that receives Git
 # webhooks (ACTIVITY_FOLLOWS_INGEST, bug.5079). Born here it is immutable for life: a

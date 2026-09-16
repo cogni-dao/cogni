@@ -116,10 +116,22 @@ spec:
               asks "does the resource for this key exist?" - a key that changed per reconcile
               would answer "no" after every promote and mint a SECOND PAID LEASE. namespace and
               name are both immutable (name == nodeId), so the only varying component is
-              spec.leaseGeneration, which NOTHING bumps implicitly. leaseEpoch is read only as
-              a zero-downtime migration fallback while old deploy refs are rematerialized. If
-              both names exist they MUST agree: choosing either side of a mismatch could mint a
-              paid replacement unexpectedly, so drift fails the render before any Request exists.
+              spec.leaseGeneration, which NOTHING bumps implicitly.
+
+              leaseEpoch is the PRE-task.5122 name, and is READ HERE ONLY - no caller writes it
+              any more (the materializer emits leaseGeneration exclusively). It stays served
+              because XComputeWorkloads committed on deploy/<env>-<node> refs before task.5122
+              still carry it; each is converted by its next flight/promote, which rewrites the
+              overlay wholesale under the canonical name. REMOVAL GATE (task.5121): delete this
+              fallback, and the XRD's leaseEpoch property, only once
+              `git grep leaseEpoch $(git for-each-ref --format='%(refname)' refs/remotes/origin/deploy)`
+              is empty. Note the fallback is also value-safe in the meantime: an absent field
+              digs to 0, which is every un-replaced workload's CURRENT key, so a stale ref can
+              only ever resolve DOWN to a key it already spent - never up to a fresh one.
+
+              If both names exist they MUST agree: choosing either side of a mismatch could mint
+              a paid replacement unexpectedly, so drift fails the render before any Request
+              exists.
             */ -}}
             {{- $hasLeaseEpoch := hasKey $spec "leaseEpoch" }}
             {{- $hasLeaseGeneration := hasKey $spec "leaseGeneration" }}
