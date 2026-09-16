@@ -20,9 +20,14 @@
  *     Console is contacted. Identity is never inferred from the key, the slug, or the wallet.
  *   - FAIL_CLOSED: an allocation that cannot be resolved to exactly one lease is reported as
  *     unresolved/ambiguous and never healed by a fresh create.
- *   - MIGRATION_BEFORE_TRANSACTION: every mutating call carries an explicit migration
- *     requirement, and a `RequireBeforeTransaction` requirement that is not PROVEN complete is
- *     a refusal, never a pass (bug.5116 precondition, bug.5140 enforcement).
+ *   - MIGRATION_IS_NOT_A_PAYMENT_PRECONDITION (task.5135): no mutating call carries a migration
+ *     requirement, and no migration state can refuse one. Renting compute proves nothing about
+ *     a database. The per-digest migration is a RELEASE step stated on `observe` — the unpaid,
+ *     level-triggered tick — whose phase is REPORTED to the caller and never enforced here.
+ *     What this buys: the paid path needs no database-adjacent capability at all, and a
+ *     workload with a bad or missing schema fails READINESS (bounded by the composite's boot
+ *     SLO) instead of silently never being created — the toks5 failure mode, where a valid XR
+ *     with a valid digest never reached the actuator and never existed in any environment.
  *   - REFUSAL_IS_OBSERVABLE: every code here is a stable string safe for logs, Events and
  *     Crossplane conditions — a refusal a caller cannot see is a bug (bug.5115 shape).
  * Side-effects: none (types only)
@@ -78,12 +83,11 @@ export type AkashTxErrorCode =
   | "not_found"
   /** Durable ledger unavailable — the actuator must refuse to spend without a receipt. */
   | "ledger_unavailable"
-  /** The bundle digest's DB migration has not completed yet. Retry with the SAME key. */
-  | "migration_pending"
-  /** The bundle digest's DB migration ran and failed. Terminal until a new digest. */
-  | "migration_failed"
-  /** The migration precondition could not be PROVEN either way; never assume success. */
-  | "migration_unavailable"
+  // `migration_pending` / `migration_failed` / `migration_unavailable` were REMOVED with
+  // task.5135. They were the three ways a database could refuse to let a computer be rented.
+  // Migration state is now an observation (`AkashTxObservation.migration.phase`), and an
+  // observation is not a refusal — leaving dead codes here would leave the old contract
+  // readable in the type that defines it.
   /** Caller sent a structurally invalid request. */
   | "invalid_request"
   /** Caller is not authorized to reach the actuator. */
@@ -109,34 +113,40 @@ export class AkashTxError extends Error {
 }
 
 /**
- * The migration precondition the CALLER states with every mutation (bug.5140, XRD
- * `spec.migration.policy`). Desired state names its own precondition; the actuator PROVES it
- * before it spends. Modelled as a discriminated union on purpose: there is no way to ask for
- * `RequireBeforeTransaction` without naming the digest that must be proven, so an
- * under-specified request is a schema error rather than a silently ungated paid lease.
+ * The RELEASE-side migration step the caller may attach to an `observe` (task.5135). Its
+ * presence is the whole policy — a workload with a database sends it, one without omits it —
+ * because the only decision left is "run it or don't", and presence already says that.
  *
- * Deliberately NOT on this wire: the migration COMMANDS. A caller-supplied command would make
- * the gate advisory — anyone who can call the actuator could pass `true` and "prove" a
- * migration. The `profile` selects a command set the actuator owns.
+ * There is no `Skip` member and no `policy` discriminator any more. Both existed to describe a
+ * GATE, and there is no gate: this type can only cause a Job to be ensured and a phase to be
+ * reported, never a transaction to be refused.
+ *
+ * Deliberately NOT on this wire: the migration COMMANDS. A caller-supplied command would let
+ * anyone who can call the actuator run arbitrary containers against the environment's database
+ * under the actuator's service account. The `profile` selects a command set the actuator owns.
  */
-export type AkashTxMigrationRequirement =
-  /** The workload has no database. The ONLY way to legitimately bypass the gate. */
-  | { readonly policy: "Skip" }
-  | {
-      readonly policy: "RequireBeforeTransaction";
-      /** Which migration contract must be proven; selects the actuator-owned phases. */
-      readonly profile: "cogni-node-app-v1";
-      /** `sha256:<64 hex>` from the workload's digest-pinned bundle ref. */
-      readonly bundleDigest: string;
-      /** Digest-pinned app artifact image — the same image the k3s initContainer runs. */
-      readonly image: string;
-      /** True when the app service declares a `DOLTGRES_URL` secret ref. */
-      readonly doltgres: boolean;
-    };
+export interface AkashTxMigrationStep {
+  /** Which migration contract to run; selects the actuator-owned phases. */
+  readonly profile: "cogni-node-app-v1";
+  /** `sha256:<64 hex>` from the workload's digest-pinned bundle ref. */
+  readonly bundleDigest: string;
+  /** Digest-pinned app artifact image — the same image the k3s initContainer runs. */
+  readonly image: string;
+  /** True when the app service declares a `DOLTGRES_URL` secret ref. */
+  readonly doltgres: boolean;
+}
+
+/** Outcome of one bounded, non-throwing migration-step attempt. */
+export type AkashTxMigrationPhase =
+  | "succeeded"
+  | "running"
+  | "failed"
+  /** No migration capability is wired, or the attempt could not be completed either way. */
+  | "unavailable";
 
 /**
- * The proof seam. Structurally satisfied by `ComputeWorkloadMigrationPort`
- * (`KubernetesMigrationJobAdapter`), so the actuator and the frozen controller prove migration
+ * The release-step seam. Structurally satisfied by `ComputeWorkloadMigrationPort`
+ * (`KubernetesMigrationJobAdapter`), so the actuator and the frozen controller drive migration
  * currency with ONE implementation — including its `compute_workload_migration_job_infra_retry`
  * reclassification of a `DeadlineExceeded` Job with no failed migrate container.
  */
@@ -161,6 +171,12 @@ export interface AkashTxObservation {
   readonly serving?: boolean;
   /** True when the resource was adopted from a durable receipt after a lost response. */
   readonly recovered?: boolean;
+  /**
+   * Phase of the release-side migration step, when the caller attached one. Undefined means
+   * "not asked". This is an OBSERVATION, not a verdict — nothing in this port refuses a
+   * transaction because of it.
+   */
+  readonly migration?: { readonly phase: AkashTxMigrationPhase };
 }
 
 export interface AkashTxCreateResult extends AkashTxResource {
@@ -179,13 +195,17 @@ export interface AkashTxActuatorPort {
     cogniKey: string;
     externalName?: string;
     expectedSourceSha?: string;
+    /** Attach the release-side migration step to this tick. Never blocks the observation. */
+    migration?: AkashTxMigrationStep;
+    /** Workload slug + environment, required only when `migration` is attached. */
+    workload?: string;
+    environment?: string;
   }): Promise<AkashTxObservation>;
   create(input: {
     cogniKey: string;
     environment: string;
     identity: AkashTxWorkloadIdentity;
     spec: ProvisionSpec;
-    migration: AkashTxMigrationRequirement;
   }): Promise<AkashTxCreateResult>;
   update(input: {
     cogniKey: string;
@@ -193,7 +213,6 @@ export interface AkashTxActuatorPort {
     environment: string;
     identity: AkashTxWorkloadIdentity;
     spec: ProvisionSpec;
-    migration: AkashTxMigrationRequirement;
   }): Promise<AkashTxResource>;
   delete(input: { cogniKey: string; externalName: string }): Promise<void>;
 }

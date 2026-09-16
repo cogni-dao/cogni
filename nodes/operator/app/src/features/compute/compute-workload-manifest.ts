@@ -40,12 +40,16 @@ const DIGEST_PINNED_OCI_REF =
   /^[a-z0-9][a-z0-9._:-]*(?:\/[a-z0-9][a-z0-9._-]*)+@sha256:[0-9a-f]{64}$/;
 
 /**
- * Empty-birth ordering, carried explicitly rather than left to the XRD default so the
- * committed desired state states its own precondition (bug.5116): a fresh node's schemas
- * must exist before its paid lease does. Legacy parity — the bespoke controller ran the
- * per-digest migration Job before any provider transaction unconditionally.
+ * Empty-birth schema policy, carried explicitly rather than left to the XRD default so the
+ * committed desired state states it as a one-line git diff (bug.5116): a fresh node's schemas
+ * are migrated as a RELEASE step on every reconcile tick, and a failure gates READINESS.
+ *
+ * It was `RequireBeforeTransaction` until task.5135, which severed the migration from the paid
+ * Akash transaction. Writing the NEW value is what moves a workload off the deprecated
+ * lowering, so every rematerialize (flight, promote) migrates one more node onto the decoupled
+ * path — there is no separate cutover to run.
  */
-const MIGRATION_POLICY = "RequireBeforeTransaction" as const;
+const MIGRATION_POLICY = "RequireBeforeServing" as const;
 
 /**
  * BOOT_SLO_OR_CLOSE, resolved from the one thing that already decides disposability: the

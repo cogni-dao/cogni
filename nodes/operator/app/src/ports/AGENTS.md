@@ -59,7 +59,7 @@ Does NOT re-export packages with `node:` transitive dependencies.
 - TreasurySettlementPort, TreasurySettlementOutcome
 - DeployPlanePort, including operator App-backed app promotion and the operator-only production infra reconcile contract
 - AkashTxActuatorPort + AkashTxConsolePort + AkashTxAllocationLedgerPort + AkashTxWorkloadIdentity + AkashTxError (private Akash transaction boundary: one bounded attempt per call, key-idempotent, fail-closed on an unresolved allocation — task.5095; every mutating call states an explicit `AkashTxWorkloadIdentity` that is durable in the receipt before the provider is contacted, and a key bound to another node is an `identity_conflict` — task.5103)
-- AkashTxMigrationRequirement + AkashTxMigrationPort (MIGRATION_BEFORE_TRANSACTION: every mutating actuator call states its migration precondition, and `RequireBeforeTransaction` is proven succeeded before anything is spent — bug.5116 ordering, bug.5140 enforcement)
+- AkashTxMigrationStep + AkashTxMigrationPhase + AkashTxMigrationPort (MIGRATION_IS_NOT_A_PAYMENT_PRECONDITION: no mutating call carries a migration and no migration state can refuse one. The per-digest migration is a RELEASE step attached to `observe` — the unpaid tick — whose phase is REPORTED on the observation. bug.5116 ordering, bug.5140 enforcement, **severed by task.5135** after node toks5 sat leaseless and unalarmed because its migration never ran)
 - ComputeCostEvidencePort + ComputeCostStorePort (receipt-linked provider-native cost evidence; `node_id` is the sole infrastructure-cost grouping key and no payer/DAO/user identity is inferred — task.5071)
 - Types (ChargeReceiptParams, LlmCaller, BillingAccount, CreditLedgerEntry, etc.)
 

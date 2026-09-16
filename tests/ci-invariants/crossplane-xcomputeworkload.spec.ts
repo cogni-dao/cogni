@@ -188,12 +188,40 @@ describe("XComputeWorkload composite API (task.5096)", () => {
     );
   });
 
-  it("carries empty-birth migration ordering as declared desired state", () => {
-    const policy = (
-      (specSchema.migration as YamlObject).properties as YamlObject
-    ).policy as YamlObject;
-    expect(policy.enum).toEqual(["RequireBeforeTransaction", "Skip"]);
-    expect(policy.default).toBe("RequireBeforeTransaction");
+  it("declares the empty-birth schema policy WITHOUT claiming it gates payment", () => {
+    const migration = specSchema.migration as YamlObject;
+    const policy = (migration.properties as YamlObject).policy as YamlObject;
+    // task.5135: `RequireBeforeServing` is the default. `RequireBeforeTransaction` remains
+    // SERVED as a deprecated alias for the zero-downtime field migration — XRs already on
+    // deploy refs carry it, and rejecting them would wedge the fleet mid-rollout.
+    expect(policy.enum).toEqual([
+      "RequireBeforeServing",
+      "RequireBeforeTransaction",
+      "Skip",
+    ]);
+    expect(policy.default).toBe("RequireBeforeServing");
+
+    // THE API MUST NOT LIE. A field that no longer gates payment may not describe itself as a
+    // precondition of one — a stale description is how the next reader re-derives the coupling.
+    const description = String(migration.description);
+    expect(description).toMatch(/IT DOES NOT GATE PAYMENT/);
+    // The retired claim, in the present tense it used to be written in.
+    expect(description).not.toMatch(/is REFUSED until/i);
+    expect(description).not.toMatch(/before its lease does/i);
+  });
+
+  it("publishes the release step's phase in status, bounded to the four it can be", () => {
+    // The migration outcome is an OBSERVATION on the composite, which is the whole shape of
+    // the fix: it is something an operator can read, not something a wallet can be refused by.
+    const phase = (
+      (statusSchema.migration as YamlObject).properties as YamlObject
+    ).phase as YamlObject;
+    expect(phase.enum).toEqual([
+      "succeeded",
+      "running",
+      "failed",
+      "unavailable",
+    ]);
   });
 });
 
@@ -227,7 +255,7 @@ describe("XComputeWorkload Composition (task.5096)", () => {
     // @contracts/compute.akash-tx.v1 accepts EXACTLY {cogniKey, environment, spec}; the spec
     // is `{name, services[]}`. An extra key is a 400 forever, never a partially-honoured call.
     expect(template).toContain(
-      '$payload := dict "cogniKey" $cogniKey "environment" $env "identity" $identity "spec" (dict "name" $slug "services" $services) "migration" $migration'
+      '$payload := dict "cogniKey" $cogniKey "environment" $env "identity" $identity "spec" (dict "name" $slug "services" $services)'
     );
     // The four bounded ops map 1:1 onto provider-http's four actions — no Cogni code decides
     // WHEN to act.
@@ -411,53 +439,110 @@ describe("XComputeWorkload Composition (task.5096)", () => {
   });
 });
 
-describe("XComputeWorkload migration precondition (bug.5116 order, bug.5140 gate)", () => {
-  it("states its precondition on every mutation, and only on mutations", () => {
-    // AkashTxCreateInputSchema and AkashTxUpdateInputSchema BOTH require `migration`. An update
-    // mints no lease, but it is still the call that puts a new bundle digest in front of the
-    // node's database — which is exactly what bug.5116 ordered.
-    expect(template).toContain('"migration" $migration');
-    // Scope to the LEASE request: the composition also renders a Cloudflare Request whose
-    // mappings share the same action names, and a regex over the whole template would silently
-    // assert against DNS instead of the thing that spends money.
+describe("XComputeWorkload migration decoupling (task.5135)", () => {
+  /**
+   * Scope to the LEASE request: the composition also renders a Cloudflare Request whose
+   * mappings share the same action names, and a regex over the whole template would silently
+   * assert against DNS instead of the thing that spends money.
+   */
+  function leaseMappings(): Record<string, string> {
     const leaseBlock = template.slice(
       template.indexOf("composition-resource-name: akash-lease"),
       template.indexOf("composition-resource-name: dns-record")
     );
     expect(leaseBlock.length).toBeGreaterThan(0);
-    const mappings = Object.fromEntries(
+    return Object.fromEntries(
       [
         ...leaseBlock.matchAll(
           /- action: (\w+)\n([\s\S]*?)(?=\n\s+- action: |\n\s+expectedResponseCheck:)/g
         ),
       ].map((m) => [m[1], m[2]])
-    );
+    ) as Record<string, string>;
+  }
+
+  it("carries the migration on OBSERVE — the UNPAID tick — and nowhere else", () => {
+    // THE invariant. bug.5140 put the migration on create/update, which made a database a
+    // precondition of renting a computer; node toks5 then held a valid XR with a valid digest,
+    // never reached the actuator, and existed in no environment while `akash-lease` reported
+    // "not yet ready" 1044 times. Observe spends nothing, so it is where the step belongs.
+    const mappings = leaseMappings();
     expect(Object.keys(mappings).sort()).toEqual([
       "CREATE",
       "OBSERVE",
       "REMOVE",
       "UPDATE",
     ]);
-    // CREATE posts the payload verbatim; UPDATE is hand-built and must carry it explicitly.
-    expect(mappings.CREATE).toContain(".payload.body");
-    expect(mappings.UPDATE).toContain("migration: .payload.body.migration");
-    // Observe and delete are strict objects with NO migration field — sending one is a 400.
-    expect(mappings.OBSERVE).not.toContain("migration");
+    expect(mappings.OBSERVE).toContain(
+      "migration: .payload.body.migrationStep"
+    );
+    // WHOSE database — stated, never inferred from the actuator's own deployment.
+    expect(mappings.OBSERVE).toContain("workload: .payload.body.spec.name");
+    expect(mappings.OBSERVE).toContain(
+      "environment: .payload.body.environment"
+    );
+    // The release step must NEVER reach a paid action.
+    expect(mappings.CREATE).not.toContain("migrationStep");
+    expect(mappings.UPDATE).not.toContain("migrationStep");
     expect(mappings.REMOVE).not.toContain("migration");
   });
 
-  it("builds both branches of the discriminated union, and nothing in between", () => {
-    // `Skip` is the DEFAULT accumulator, so the only way to reach the expensive branch is to
-    // satisfy its condition — a template bug fails toward the gate, never past it.
-    expect(template).toContain('{{- $migration := dict "policy" "Skip" }}');
-    // Reached when the workload declares Skip, OR has no cogni-node-app-v1 service (no app
-    // image accumulated) and therefore no database.
+  it("enumerates the paid body instead of posting the payload verbatim", () => {
+    // CREATE used to be `.payload.body`, which meant every field added for any other action
+    // leaked onto the wire that spends money — and the create contract is a strict object that
+    // 400s on an unknown key. `migrationStep` is exactly such a field.
+    const mappings = leaseMappings();
+    expect(mappings.CREATE).toContain("cogniKey: .payload.body.cogniKey");
+    expect(mappings.CREATE).toContain("spec: .payload.body.spec");
+    expect(mappings.CREATE).not.toMatch(/body: \|\n\s+\.payload\.body\s*$/);
+  });
+
+  it("renders the release step only for a workload that actually has a database", () => {
+    // The empty dict is the DEFAULT accumulator, so the only way to reach the step is to
+    // satisfy its condition — a template bug fails toward "no migration", never toward one
+    // that runs against a workload with no schema to migrate.
+    expect(template).toContain("{{- $migrationStep := dict }}");
     expect(template).toContain(
-      '{{- if and (eq $migrationPolicy "RequireBeforeTransaction") (ne $appImage "") }}'
+      '{{- if and (eq $migrationPolicy "RequireBeforeServing") (ne $appImage "") }}'
     );
-    // RequireBeforeTransaction structurally cannot travel without the facts that prove it.
     expect(template).toContain(
-      '$migration = dict "policy" "RequireBeforeTransaction" "profile" "cogni-node-app-v1" "bundleDigest" $bundleDigest "image" $appImage "doltgres" $appDoltgres'
+      '$migrationStep = dict "profile" "cogni-node-app-v1" "bundleDigest" $bundleDigest "image" $appImage "doltgres" $appDoltgres'
+    );
+    // Presence IS the policy: no `Skip` member travels on the step wire at all.
+    expect(templateCode).not.toMatch(
+      /\$migrationStep\s*=?:?=?\s*dict "policy"/
+    );
+  });
+
+  it("keeps the deprecated lowering only for XRs not yet rematerialized", () => {
+    // Zero-downtime, the same posture leaseEpoch → leaseGeneration uses: an XR already on a
+    // deploy ref carries `RequireBeforeTransaction` and may be reconciled against a
+    // pre-task.5135 actuator that REQUIRES the field. Dropping it would 400 the fleet.
+    expect(template).toContain(
+      '{{- if eq $migrationPolicy "RequireBeforeTransaction" }}'
+    );
+    expect(template).toContain(
+      '{{- if $hasLegacyMigration }}{{ $_ := set $payload "migration" $legacyMigration }}{{ end }}'
+    );
+    // The DEFAULT policy is the new one, so an XR that states nothing gets the decoupled path.
+    expect(template).toContain(
+      '$migrationPolicy := dig "migration" "policy" "RequireBeforeServing" $spec'
+    );
+  });
+
+  it("surfaces a failed migration as a NAMED, terminal status reason", () => {
+    // The loudness half of the fix. A migration that will never succeed must not hide behind a
+    // retryable refusal's "Progressing" — that is what an indefinite silent stall looks like.
+    expect(template).toContain(
+      '$migrationFailed := eq $migrationPhase "failed"'
+    );
+    expect(template).toContain("{{- else if $migrationFailed }}");
+    expect(template).toContain('$failReason = "MigrationFailed"');
+    // Must satisfy the XRD's status.failure.reason pattern, or the write is rejected by the
+    // CRD and the very failure this branch exists to announce becomes invisible again.
+    expect("MigrationFailed").toMatch(/^[A-Za-z_][A-Za-z0-9_]{0,127}$/);
+    // A terminal refusal still outranks it; a retryable one no longer does.
+    expect(template).toContain(
+      '{{- else if and (ne $refusalCode "") (not $refusalRetryable) }}'
     );
   });
 
@@ -474,20 +559,22 @@ describe("XComputeWorkload migration precondition (bug.5116 order, bug.5140 gate
     expect(template).toContain(
       '{{- if and $isApp (eq .key "DOLTGRES_URL") }}{{ $appDoltgres = true }}{{ end }}'
     );
-    // A ref with no digest fails the render rather than sending a request the gate will 400.
-    expect(template).toContain(
-      "has no sha256 digest to prove a migration against"
-    );
+    // A ref with no digest fails the render rather than sending a request that cannot be honoured.
+    expect(template).toContain("has no sha256 digest to migrate against");
   });
 
   it("never puts a migration command on the wire", () => {
-    // `profile` NAMES a command set the actuator owns. A caller-supplied command would let any
-    // caller "prove" a migration with a no-op, which makes an enforcing gate advisory.
-    const unionLiterals = [
-      ...templateCode.matchAll(/\$migration\s*(?::?=)\s*dict ([^}]*)/g),
-    ].map((m) => m[1]);
-    expect(unionLiterals.length).toBe(2);
-    for (const literal of unionLiterals) {
+    // `profile` NAMES a command set the actuator owns. A caller-supplied command would let
+    // anyone who can reach the actuator run an arbitrary container against the environment's
+    // database under its service account.
+    const literals = [
+      ...templateCode.matchAll(
+        /\$(?:migrationStep|legacyMigration)\s*(?::?=)\s*dict ([^}]*)/g
+      ),
+    ].map((m) => m[1] as string);
+    // Two empty accumulators + the step + the deprecated union's two branches.
+    expect(literals.length).toBe(5);
+    for (const literal of literals) {
       const keys = [...literal.matchAll(/"([a-zA-Z]+)"/g)].map((m) => m[1]);
       for (const key of keys) {
         expect([
@@ -609,15 +696,17 @@ describe("XComputeWorkload refusal observability (bug.5115)", () => {
     expect(template).toContain(
       "$refusalRetryable := or (eq $respStatus 409) (ge $respStatus 500)"
     );
+    // Split into two branches by task.5135 so a TERMINAL migration failure can be reported
+    // between them: it must not outrank a terminal refusal, and must outrank a retryable one.
     expect(template).toContain(
-      '$phase = ternary "Progressing" "Failed" $refusalRetryable'
+      '{{- else if and (ne $refusalCode "") (not $refusalRetryable) }}'
     );
+    expect(template).toContain('{{- else if ne $refusalCode "" }}');
     // Every code the actuator can emit must satisfy the XRD's reason pattern, or the status
     // write is rejected and the refusal is invisible again.
     for (const code of [
-      "migration_pending",
-      "migration_failed",
-      "migration_unavailable",
+      // The three `migration_*` codes were REMOVED with task.5135 — a database can no longer
+      // refuse a paid request, so there is no migration refusal left to render.
       "wallet_allocation_blocked",
       "allocation_unresolved",
       "allocation_ambiguous",

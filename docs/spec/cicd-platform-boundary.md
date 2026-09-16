@@ -311,21 +311,30 @@ finalizer, retry loop, or leader election. Its irreducible behaviours are:
 4. **Post-response-loss recovery** — the cursor is durable _before_ the Console POST, so a lost response is
    resolved by adopting the unique post-baseline allocation, or it fails closed. It is never healed by a
    fresh create, and no timer ever releases an unresolved slot.
-5. **Migration before transaction** — bug.5116 made a completed per-digest DB migration a precondition of
-   every paid transaction, so a freshly born node has its schemas before it has a lease. The actuator is the
-   single chokepoint every paid transaction already passes through, so that precondition is enforced there
-   (bug.5140): `migration` is a REQUIRED field on `create`/`update`, a `RequireBeforeTransaction` requirement
-   is PROVEN before the wallet slot is even claimed, and `running` / `failed` / unprovable / no-prover all
-   REFUSE (`migration_pending` 409, `migration_failed` 422, `migration_unavailable` 503). `Skip` is the one
-   explicit, logged bypass. The proof runs through the same `ComputeWorkloadMigrationPort` the frozen
-   controller used, so the Kubernetes Job adapter — including its reclassification of a `DeadlineExceeded`
-   Job with no failed migrate container as an infrastructure retry — is shared, not reimplemented.
+5. **Migration as a release step, NEVER a payment precondition** (task.5135, superseding bug.5140) — bug.5116
+   wanted a freshly born node to have its schemas, and bug.5140 implemented that want as a precondition of
+   every paid transaction. That was the wrong seam. Node `toks5` proved it in production: a valid XR in
+   `cogni-production` with a valid image digest whose migration never ran, so the actuator was NEVER CALLED,
+   `akash-lease` reported "not yet ready" **1044 times**, and the node never existed in any environment —
+   silent, unbounded, and with no alarm, while the same actuator minted happily for five other nodes.
 
-   _Why here and not in the Composition:_ a Composition cannot compose the migration Job. The installed
-   package set is provider-http + go-templating + auto-ready, and `provider-kubernetes` v0.18.0 still ships
-   no namespaced `.m.crossplane.io` types, so there is nothing for a render-time gate to gate on. Enforcing
-   at the actuator needs no new controller, no new reconciliation loop, and no new package: Crossplane keeps
-   owning requeue and backoff, and a refusal is just another bounded answer it retries.
+   Renting compute proves nothing about a database. The per-digest migration now rides on the actuator's
+   UNPAID `observe` tick as `AkashTxMigrationStep`, together with the `workload` + `environment` that say
+   whose database it is (the actuator refuses to infer either — inferring them is how "which environment's
+   DB?" became a payment-plane question at all). Its phase is REPORTED on the observation and surfaced as
+   `status.migration.phase`; a `failed` phase becomes `status.failure.reason: MigrationFailed`. `create` and
+   `update` carry no migration, cannot be refused by one, and need no database-adjacent capability. The
+   runner is still the same `ComputeWorkloadMigrationPort` the frozen controller used — including its
+   reclassification of a `DeadlineExceeded` Job with no failed migrate container as an infrastructure retry
+   — so the two lanes cannot disagree about whether a digest has migrated.
+
+   _What bounds a bad schema now:_ the workload gets its lease, cannot serve its exact SHA, and trips
+   `bootPolicy.bootDeadlineSeconds` (`BOOT_SLO_OR_CLOSE`). Loud and bounded, instead of never created.
+
+   _Why still in the actuator process and not a composed resource:_ a Composition cannot compose the
+   migration Job. The installed package set is provider-http + go-templating + auto-ready, and
+   `provider-kubernetes` v0.18.0 still ships no namespaced `.m.crossplane.io` types. Co-hosting it behind an
+   unpaid seam is the decoupling; relocating the process is the follow-up.
 
 6. **Node-bound spend receipts** — the same receipt that survives a lost response also says WHO consumed
    the infrastructure (task.5103). `node_id`, `environment`, the composite `uid`/`generation` and the
@@ -340,11 +349,11 @@ finalizer, retry loop, or leader election. Its irreducible behaviours are:
 
 Refusals are observable by construction: every refusal emits a structured log marker
 (`akash_tx_wallet_allocation_blocked`, `akash_tx_allocation_unresolved`, `akash_tx_allocation_recovered`,
-`akash_tx_identity_conflict`, `akash_tx_receipt_absent`,
-`akash_tx_migration_pending`, `akash_tx_migration_failed`, `akash_tx_migration_unavailable`,
-`akash_tx_migration_capability_missing`, and even the `akash_tx_migration_skipped` bypass)
+`akash_tx_identity_conflict`, `akash_tx_receipt_absent`)
 _before_ it answers. Writing a refusal only into CR status is what made a fleet-wide wallet deadlock
-invisible (bug.5115).
+invisible (bug.5115). The release step is not a refusal but is held to the same rule: every phase emits
+`akash_tx_migration_{succeeded,running,failed,unavailable}` or
+`akash_tx_migration_capability_missing` before it is reported.
 
 **ONE_WALLET_ONE_WRITER is a precondition, not a convention.** Wallet-global serialization only
 recovers a lost response if exactly one process spends from the wallet — a second writer's lease is

@@ -31,12 +31,17 @@
  *     production remains isolated on a dedicated account (ci-cd.md Axiom 26).
  *   - FAIL_CLOSED: an allocation that cannot be resolved to exactly one lease raises
  *     allocation_unresolved / allocation_ambiguous. It is NEVER healed by a fresh create.
- *   - MIGRATION_BEFORE_TRANSACTION: every mutating call states a migration requirement, and a
- *     `RequireBeforeTransaction` requirement is PROVEN complete before the wallet slot is even
- *     claimed. bug.5116 made a completed per-digest migration a precondition of every paid
- *     transaction; this is where a Crossplane-reconciled workload meets that precondition
- *     (bug.5140). The proof runs before the claim on purpose: a migration Job takes minutes,
- *     and holding the wallet-global slot across it would deadlock the whole fleet.
+ *   - MIGRATION_IS_NOT_A_PAYMENT_PRECONDITION: NO mutating call states, proves, or can be
+ *     refused by a migration. bug.5140 made a completed per-digest DB migration a precondition
+ *     of every paid transaction; task.5135 severed that. Node toks5 is the proof it was wrong:
+ *     a valid XR in `cogni-production` with a valid image digest whose migration never ran, so
+ *     this actuator was NEVER CALLED, `akash-lease` reported "not yet ready" 1044 times, and
+ *     the node never existed in any environment — silent, unbounded, no alarm. The migration is
+ *     now a RELEASE step attached to `observe` (unpaid, no wallet slot, no Console POST), and
+ *     its phase is REPORTED on the observation. A workload whose schema is bad or missing
+ *     therefore gets its lease and fails READINESS against the composite's boot SLO — loud and
+ *     bounded — which is what bug.5116 actually needed. The paid path consequently needs no
+ *     database-adjacent capability at all.
  *   - REFUSAL_IS_OBSERVABLE: every refusal emits a structured log line before it throws
  *     (bug.5115: a wallet block that only reached CR status was invisible for hours).
  * Side-effects: IO (Akash Console transactions via the injected client; durable allocation and
@@ -57,8 +62,9 @@ import {
   type AkashTxCreateResult,
   AkashTxError,
   type AkashTxErrorCode,
+  type AkashTxMigrationPhase,
   type AkashTxMigrationPort,
-  type AkashTxMigrationRequirement,
+  type AkashTxMigrationStep,
   type AkashTxObservation,
   type AkashTxResource,
   type AkashTxWorkloadIdentity,
@@ -66,10 +72,7 @@ import {
   type ComputeCostStorePort,
 } from "@/ports";
 
-import {
-  type AkashTxMigrationOperation,
-  enforceMigrationGate,
-} from "./akash-tx-migration-gate";
+import { runMigrationStep } from "./akash-tx-migration-step";
 
 /** Structural pino subset. Fields first, stable marker second. */
 export interface AkashTxLogger {
@@ -91,9 +94,9 @@ export interface AkashTxActuatorDeps {
   /** Omitted → observe never reports `serving` and never touches the workload's ingress. */
   readonly probe?: AkashTxServingProbe;
   /**
-   * The per-digest migration prover. Omitted → every `RequireBeforeTransaction` mutation is
-   * REFUSED (`migration_unavailable`), never silently passed: an actuator that cannot prove a
-   * migration must not spend against a database it knows nothing about.
+   * The per-digest migration runner for the RELEASE step on `observe`. Omitted → an observe
+   * that asks for a migration reports `phase: "unavailable"`. It does NOT refuse anything:
+   * this seam can no longer stop a lease from being created (task.5135).
    */
   readonly migration?: AkashTxMigrationPort;
   /** Paired, receipt-linked cost seams. Production wiring supplies both or startup fails. */
@@ -229,7 +232,23 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     cogniKey: string;
     externalName?: string;
     expectedSourceSha?: string;
+    migration?: AkashTxMigrationStep;
+    workload?: string;
+    environment?: string;
   }): Promise<AkashTxObservation> {
+    // The RELEASE step. It runs FIRST so the Job is ensured on the very first tick — before
+    // there is any lease to observe — and its answer is carried onto whatever the observation
+    // turns out to be. It never throws and never short-circuits: an observe that reported
+    // "found: false" must keep reporting it, because that is the signal Crossplane uses to
+    // create the lease, and a database has no business vetoing that (task.5135).
+    const migration = await this.releaseMigration(input);
+    const withMigration = (
+      observation: AkashTxObservation
+    ): AkashTxObservation =>
+      migration
+        ? { ...observation, migration: { phase: migration } }
+        : observation;
+
     if (input.externalName) {
       const record = await this.requireStoredHandle(
         input.cogniKey,
@@ -241,22 +260,26 @@ export class AkashTxActuator implements AkashTxActuatorPort {
         record.providerAccount,
         record
       );
-      return this.withServing(
-        { found: true, resource },
-        input.expectedSourceSha
+      return withMigration(
+        await this.withServing(
+          { found: true, resource },
+          input.expectedSourceSha
+        )
       );
     }
     const record = await this.readLedger(input.cogniKey);
-    if (!record) return { found: false };
+    if (!record) return withMigration({ found: false });
     if (record.externalName) {
       const resource = await this.describe(
         record.externalName,
         record.providerAccount,
         record
       );
-      return this.withServing(
-        { found: true, resource },
-        input.expectedSourceSha
+      return withMigration(
+        await this.withServing(
+          { found: true, resource },
+          input.expectedSourceSha
+        )
       );
     }
     if (record.state === "preparing" && record.allocationCursor) {
@@ -266,14 +289,16 @@ export class AkashTxActuator implements AkashTxActuatorPort {
         input.cogniKey,
         record.allocationCursor
       );
-      return this.withServing(
-        { found: true, resource, recovered: true },
-        input.expectedSourceSha
+      return withMigration(
+        await this.withServing(
+          { found: true, resource, recovered: true },
+          input.expectedSourceSha
+        )
       );
     }
     // preparing with no cursor: the cursor is durable BEFORE the POST, so its absence
     // proves no transaction was started. Safe to create.
-    return { found: false };
+    return withMigration({ found: false });
   }
 
   async create(input: {
@@ -281,17 +306,12 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     environment: string;
     identity: AkashTxWorkloadIdentity;
     spec: ProvisionSpec;
-    migration: AkashTxMigrationRequirement;
   }): Promise<AkashTxCreateResult> {
-    // BEFORE the claim, and before anything can be spent: an unmigrated database must never
-    // acquire a paid lease (bug.5116 ordering, bug.5140 enforcement). Refusing here also means
-    // a multi-minute migration never occupies the wallet-global slot.
-    await this.gateMigration(input, "create");
-
-    // The claim IS the receipt: its INSERT carries {nodeId, environment, compositeUid,
-    // compositeGeneration, cogniKey}. Everything below this line — the cursor read and the
-    // paid POST — happens strictly after that row is durable. The migration gate above
-    // touches no wallet and no Console, so identity is still bound before any provider IO.
+    // The claim IS the receipt, and it is the FIRST thing this method does: its INSERT carries
+    // {nodeId, environment, compositeUid, compositeGeneration, cogniKey}. Everything below this
+    // line — the cursor read and the paid POST — happens strictly after that row is durable.
+    // Nothing precedes it any more; the migration gate that used to sit here was severed by
+    // task.5135, and RECEIPT_BEFORE_TRANSACTION is stronger for it.
     const claim = await this.claim(input);
 
     if (claim.state === "blocked") {
@@ -453,13 +473,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     environment: string;
     identity: AkashTxWorkloadIdentity;
     spec: ProvisionSpec;
-    migration: AkashTxMigrationRequirement;
   }): Promise<AkashTxResource> {
-    // An update mints no lease, but it IS the call that puts a new bundle digest in front of
-    // the node's database — the exact ordering bug.5116 fixed. The legacy gate ran before
-    // every provider mutation; so does this one.
-    await this.gateMigration(input, "update");
-
     // An update mints no handle and opens no escrow, so it needs no wallet slot — but it does
     // put a new revision in front of a resource that is already burning money, so it must be
     // attributable BEFORE the provider is contacted. This writes the advancing generation onto
@@ -583,29 +597,44 @@ export class AkashTxActuator implements AkashTxActuatorPort {
   }
 
   /**
-   * One bounded migration proof. Throws the caller-visible refusal (`migration_pending` /
-   * `migration_failed` / `migration_unavailable`) after the gate has logged it.
+   * One bounded, NON-THROWING release-migration attempt. Returns `undefined` when the caller
+   * attached no step (or could not name the workload it belongs to), which is reported as
+   * "not asked" rather than as a pass.
+   *
+   * It cannot throw by construction, and that is the point: this runs inside `observe`, the
+   * call whose answer decides whether Crossplane creates the lease. An exception here would
+   * re-create exactly the coupling task.5135 deleted.
    */
-  private async gateMigration(
-    input: {
-      cogniKey: string;
-      environment: string;
-      spec: ProvisionSpec;
-      migration: AkashTxMigrationRequirement;
-    },
-    operation: AkashTxMigrationOperation
-  ): Promise<void> {
-    await enforceMigrationGate(
+  private async releaseMigration(input: {
+    cogniKey: string;
+    migration?: AkashTxMigrationStep;
+    workload?: string;
+    environment?: string;
+  }): Promise<AkashTxMigrationPhase | undefined> {
+    if (!input.migration) return undefined;
+    if (!input.workload || !input.environment) {
+      // The step names a digest but not the workload whose database it belongs to. Refusing
+      // to GUESS is the ENVIRONMENT_IS_THE_WORKLOAD'S invariant: migrating the wrong
+      // environment's database is worse than not migrating.
+      this.log.error(
+        {
+          cogniKey: input.cogniKey,
+          bundleDigest: input.migration.bundleDigest,
+        },
+        "akash_tx_migration_target_unstated"
+      );
+      return "unavailable";
+    }
+    return runMigrationStep(
       {
         log: this.log,
         ...(this.migration ? { migration: this.migration } : {}),
       },
       {
-        requirement: input.migration,
-        operation,
+        step: input.migration,
         cogniKey: input.cogniKey,
         environment: input.environment,
-        workload: input.spec.name,
+        workload: input.workload,
       }
     );
   }
