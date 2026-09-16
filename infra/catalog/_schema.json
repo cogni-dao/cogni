@@ -111,8 +111,8 @@
       "then": { "required": ["deployment_provider"] }
     },
     {
-      "$comment": "story.5016 — the lease epoch replaces a paid off-cluster lease, so it is only meaningful where deployment_provider already routes the row off-cluster. Declaring it on an on-cluster row would be a counter with no lease to replace.",
-      "if": { "required": ["lease_epoch"] },
+      "$comment": "story.5016 — the lease generation replaces a paid off-cluster lease, so it is only meaningful where deployment_provider already routes the row off-cluster. Declaring it on an on-cluster row would be a counter with no lease to replace.",
+      "if": { "required": ["lease_generation"] },
       "then": { "required": ["deployment_provider"] }
     }
   ],
@@ -221,9 +221,9 @@
       },
       "minProperties": 1
     },
-    "lease_epoch": {
+    "lease_generation": {
       "type": "object",
-      "description": "story.5016 — per-environment EXPLICIT replacement counter for a terminally closed Akash lease. It is the ONLY varying component of the actuator's wallet-wide idempotence key (`xcw:<namespace>:<name>:<epoch>`), and the actuator refuses to re-spend a settled key by design — so once an environment's lease closes terminally, this cell is the one supported way to recreate that node there. A human bumps it by exactly 1 when a closed lease must be REPLACED; nothing bumps it implicitly, because an epoch that moved on its own would answer 'no existing resource' after a promote and mint a SECOND PAID LEASE. Omitted environments default to 0 (the value every existing workload already runs under via the XRD default), so this field is inert for every row that has never needed a replacement. Consumed only by the crossplane compute_api authority; the legacy controller keys its lease per-generation and the materializer refuses a nonzero epoch there.",
+      "description": "story.5016 — per-environment EXPLICIT replacement counter for a terminally closed Akash lease. It is the ONLY varying component of the actuator's wallet-wide idempotence key (`xcw:<namespace>:<name>:<lease_generation>`), and the actuator refuses to re-spend a settled key by design — so once an environment's lease closes terminally, this cell is the one supported way to recreate that node there. A human bumps it by exactly 1 when a closed lease must be REPLACED; nothing bumps it implicitly, because a generation that moved on its own would answer 'no existing resource' after a promote and mint a SECOND PAID LEASE. Omitted environments resolve to 0 in the typed catalog resolver and Composition fallback, so this field is inert for every row that has never needed a replacement. Consumed only by the crossplane compute_api authority; the legacy controller keys its lease from Kubernetes metadata and the materializer refuses a nonzero replacement generation there.",
       "additionalProperties": false,
       "properties": {
         "candidate-a": { "type": "integer", "minimum": 0, "maximum": 1000000 },

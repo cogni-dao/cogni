@@ -34,7 +34,7 @@ compute_api:
 # Explicit replacement counter for a terminally closed lease (the actuator refuses to
 # re-spend a settled idempotence key). Bumping this is the ONLY redeploy-after-close
 # path — kubectl patch is reverted by Argo selfHeal.
-lease_epoch:
+lease_generation:
   production: 0
 # bug.5079 — activity_env is the SINGLETON env allowed to ingest Git receipts. GitHub
 # App webhooks are delivered to production only (one App, one webhook URL), and the
