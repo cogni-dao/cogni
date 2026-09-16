@@ -131,6 +131,11 @@ const SUBSTRATE_HOSTNAME =
 export interface XComputeWorkloadSpec extends ComputeWorkloadSpec {
   readonly migration: { readonly policy: typeof MIGRATION_POLICY };
   readonly bootPolicy: XComputeWorkloadBootPolicy;
+  /**
+   * Deprecated task.5105 migration alias. Dual-written with leaseGeneration until every
+   * deploy-ref object has crossed the additive XRD/Composition bridge.
+   */
+  readonly leaseEpoch: number;
   readonly leaseGeneration: number;
   readonly dns?: XComputeWorkloadDns;
   readonly runtime?: XComputeWorkloadRuntime;
@@ -290,9 +295,11 @@ export function buildComputeWorkloadManifest(
             ...spec,
             migration: { policy: MIGRATION_POLICY },
             bootPolicy: bootPolicyForEnvironment(input.environment),
-            // Emitted even at 0, like migration.policy (bug.5116): the committed desired
-            // state states its own idempotence-key generation rather than inheriting the XRD
-            // default, so a catalog bump is a visible one-line git diff on the deploy branch.
+            // ZERO-DOWNTIME WIRE RENAME (task.5105): write the deprecated alias and canonical
+            // field with the same value. An old XRD prunes leaseGeneration but consumes
+            // leaseEpoch; the additive XRD serves both and the Composition prefers the
+            // canonical field. Remove leaseEpoch only after every deploy ref is rematerialized.
+            leaseEpoch: input.leaseGeneration,
             leaseGeneration: input.leaseGeneration,
             ...(input.dns ? { dns: input.dns } : {}),
             ...(input.runtime ? { runtime: input.runtime } : {}),

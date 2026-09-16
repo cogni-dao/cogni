@@ -180,6 +180,7 @@ describe("buildComputeWorkloadManifest", () => {
     expect(manifest.spec).not.toHaveProperty("migration");
     expect(manifest.spec).not.toHaveProperty("bootPolicy");
     expect(manifest.spec).not.toHaveProperty("dns");
+    expect(manifest.spec).not.toHaveProperty("leaseEpoch");
     expect(manifest.spec).not.toHaveProperty("leaseGeneration");
   });
 
@@ -202,6 +203,7 @@ describe("buildComputeWorkloadManifest", () => {
     expect(manifest.spec).toMatchObject({
       migration: { policy: "RequireBeforeTransaction" },
       bootPolicy: { onDeadline: "Hold" },
+      leaseEpoch: 2,
       leaseGeneration: 2,
       dns: { provider: "cloudflare", zoneId: "0".repeat(32) },
       runtime: { substrateHost: "cogni.vm.cognidao.org" },
@@ -212,8 +214,9 @@ describe("buildComputeWorkloadManifest", () => {
    * THE REPLACEMENT PATH (story.5016). The actuator refuses to re-spend a settled idempotence
    * key (`akash_tx_create_refused_settled_key`), so a terminally closed lease makes its
    * (node, environment) unrecreatable until the generation moves — and the generation is emitted
-   * EXPLICITLY, 0 included, so the desired state never leans on the XRD default and a catalog
-   * bump is a visible one-line diff on the deploy branch.
+   * EXPLICITLY, 0 included, so the desired state never leans on an XRD default and a catalog
+   * bump is a visible one-line diff on the deploy branch. During task.5105 both wire names are
+   * emitted with the same value so either control-plane revision consumes the intended key.
    */
   it("emits the catalog lease generation explicitly, even at zero", () => {
     const manifest = buildComputeWorkloadManifest({
@@ -227,6 +230,7 @@ describe("buildComputeWorkloadManifest", () => {
     });
 
     expect(manifest.spec).toHaveProperty("leaseGeneration", 0);
+    expect(manifest.spec).toHaveProperty("leaseEpoch", 0);
   });
 
   it("refuses a nonzero lease generation on the legacy authority, which reads no replacement counter", () => {
@@ -325,11 +329,12 @@ describe("buildComputeWorkloadManifest", () => {
     });
 
     expect(crossplane.metadata).toEqual(legacy.metadata);
-    const { migration, bootPolicy, leaseGeneration, ...shared } =
+    const { migration, bootPolicy, leaseEpoch, leaseGeneration, ...shared } =
       crossplane.spec as unknown as Record<string, unknown>;
     expect(shared).toEqual(legacy.spec);
     expect(migration).toBeDefined();
     expect(bootPolicy).toBeDefined();
+    expect(leaseEpoch).toBe(0);
     expect(leaseGeneration).toBe(0);
   });
 

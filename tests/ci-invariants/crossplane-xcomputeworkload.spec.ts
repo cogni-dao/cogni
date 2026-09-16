@@ -112,6 +112,7 @@ describe("XComputeWorkload composite API (task.5096)", () => {
       "bundle",
       "dns",
       "environment",
+      "leaseEpoch",
       "leaseGeneration",
       "migration",
       "nodeId",
@@ -260,15 +261,23 @@ describe("XComputeWorkload Composition (task.5096)", () => {
     const keyLiteral =
       /\$cogniKey := printf "[^"]*"([^}]*)\}\}/.exec(templateCode)?.[1] ?? "";
     expect(keyLiteral.trim().split(/\s+/)).toEqual(keyInputs);
-    expect(
-      /\$leaseGeneration := int \(dig "leaseGeneration" 0 \$spec\)/.test(
-        templateCode
-      )
-    ).toBe(true);
-    expect(templateCode).not.toContain("leaseEpoch");
+    // ZERO-DOWNTIME WIRE RENAME (task.5105): an old materializer writes leaseEpoch and a new
+    // one writes both fields. The additive schema must accept both, and the Composition must
+    // prefer the canonical name while falling back to the old value. This prevents toks5's
+    // intended generation 1 from ever becoming 0 regardless of which deploy lane moves first.
+    expect(templateCode).toContain(
+      '$leaseGeneration := int (dig "leaseEpoch" 0 $spec)'
+    );
+    expect(templateCode).toContain('hasKey $spec "leaseGeneration"');
+    expect(templateCode).toContain(
+      '$leaseGeneration = int (get $spec "leaseGeneration")'
+    );
     expect(templateCode).not.toContain("resourceVersion");
     const leaseGeneration = specSchema.leaseGeneration as YamlObject;
-    expect(leaseGeneration.default).toBe(0);
+    expect(leaseGeneration.default).toBeUndefined();
+    const leaseEpoch = specSchema.leaseEpoch as YamlObject;
+    expect(leaseEpoch.default).toBe(0);
+    expect(leaseEpoch.description).toContain("DEPRECATED compatibility alias");
   });
 
   it("treats a closed lease as removed so a deleted XR can finish deleting", () => {

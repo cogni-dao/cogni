@@ -124,7 +124,12 @@ The legacy Akash exceptions in Axioms 18, 21, and 23 are superseded by Axiom 26:
     events — it is deliberately NOT coupled to attribution epochs, which advance on a global
     schedule; coupling them would force a paid lease churn per epoch rollover (design-rejected
     2026-09-15). The same name is carried end-to-end: catalog `lease_generation`, typed
-    `leaseGeneration`, and XRD `spec.leaseGeneration`.
+    `leaseGeneration`, and XRD `spec.leaseGeneration`. The task.5105 rollout temporarily serves
+    deprecated XRD `spec.leaseEpoch`, resolves canonical-first with a legacy fallback, and
+    dual-writes both fields: the control-plane and app deploy lanes advance independently, so a
+    breaking one-step field replacement could silently turn an intended generation `1` into `0`.
+    Remove that bridge only after every deploy ref has been rematerialized with the canonical
+    field.
 
 ## Branch And Deploy-State Model
 

@@ -323,6 +323,17 @@ spec:
                       type: string
                       enum: [Hold, Close]
                       default: Hold
+                leaseEpoch:
+                  description: >-
+                    DEPRECATED compatibility alias for leaseGeneration. It remains served only
+                    for the task.5105 zero-downtime field migration: the pre-rename materializer
+                    writes this field, while the migration materializer writes both fields with
+                    the same value. Remove only after every deploy-ref XComputeWorkload has been
+                    rematerialized with leaseGeneration. New callers must not use this field.
+                  type: integer
+                  minimum: 0
+                  maximum: 1000000
+                  default: 0
                 leaseGeneration:
                   description: >-
                     Operator-driven replacement counter, and the ONLY varying component of the
@@ -338,7 +349,6 @@ spec:
                   type: integer
                   minimum: 0
                   maximum: 1000000
-                  default: 0
             status:
               type: object
               properties:
