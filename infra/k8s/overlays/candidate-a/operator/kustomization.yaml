@@ -16,10 +16,12 @@ resources:
   # already carries the rail on its own dedicated wallet. Per-row catalog selection
   # remains the atomic authority cutover, with no compatibility layer or
   # dual-writer period.
-  # task.5102 — the private Akash transaction actuator Crossplane calls. Each
-  # environment that PINS a wallet has its own actuator and credential-delivery path.
-  # Centralized v0 pins the managed test account on candidate-a only; preview pins no
-  # wallet, and production remains isolated on a dedicated account.
+  # task.5102 — the private Akash transaction actuator Crossplane calls. Each environment
+  # that HOSTS A WRITER has its own actuator and credential-delivery path; candidate-a holds
+  # the managed test account, preview hosts no writer, and production is isolated on a
+  # dedicated account. The reviewed map is CROSSPLANE_ACTUATOR_WRITERS in
+  # nodes/operator/app/src/shared/node-registry/crossplane-control-plane.ts — `account ->
+  # writer` is injective, `writer -> envs` deliberately is not (bug.5187).
   - ../../../base/akash-tx-actuator
   - external-secret.yaml
   # story.5016 secret-boundary amendment 2 — the actuator's OWN secret plane
@@ -59,9 +61,10 @@ patches:
   # A positional `/env/N/value` patch silently repoints when the base list
   # shifts — that exact failure (d69e5c29) blanked AKASH_ALLOWED_PROVIDERS
   # fleet-wide, and an empty allowlist rejects every Akash provider bid.
-  # The actuator's wallet scope is `akash-console:<DEPLOY_ENVIRONMENT>`, which MUST equal the
-  # `environment` the Composition sends — the Composition pins that to `cogni-<env>` == the
-  # namespace, so these two values are one invariant expressed in two places.
+  # DEPLOY_ENVIRONMENT must equal the `environment` the Composition sends — the Composition
+  # pins that to `cogni-<env>` == the namespace, so these two values are one invariant expressed
+  # in two places. It is NOT the ledger scope: bug.5187 keys `wallet_scope` on
+  # AKASH_ACTUATOR_ACCOUNT_ID below, so that one account is one single-writer slot.
   - target:
       kind: Deployment
       name: akash-tx-actuator

@@ -337,6 +337,13 @@
       "when": 1789467142294,
       "tag": "0047_easy_baron_strucker",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1789595468583,
+      "tag": "0048_complex_sister_grimm",
+      "breakpoints": true
     }
   ]
 }

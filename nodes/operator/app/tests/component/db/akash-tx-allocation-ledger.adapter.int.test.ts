@@ -22,7 +22,12 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { DrizzleAkashTxAllocationLedger } from "@/adapters/server/compute/akash-tx-allocation-ledger.adapter";
 import { akashTxAllocations } from "@/shared/db/schema";
 
-const WALLET = "test-wallet";
+/**
+ * An ACCOUNT-keyed scope, because `akash_tx_allocations_wallet_scope_account_check` (bug.5187)
+ * now rejects anything that is not `akash-console:` + a bech32 Akash address. A fixture that
+ * could not exist in production is not a fixture.
+ */
+const WALLET = "akash-console:akash1testwalletaddressforcomponenttests0000";
 const NODE_ID = "2f8b7a10-4c6e-4a7b-9d31-1c2e3f4a5b60";
 const OTHER_NODE_ID = "9a1b2c3d-4e5f-4061-8273-8495a6b7c8d9";
 const IDENTITY = {
