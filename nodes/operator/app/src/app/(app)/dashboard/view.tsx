@@ -213,7 +213,20 @@ export function DashboardView({
 
   return (
     <div className="flex flex-col gap-8 p-4 sm:p-5 md:p-6">
-      <NodeOperationsTable nodes={nodeData.nodes} />
+      <h1 className="font-bold text-2xl tracking-tight">Dashboard</h1>
+
+      <details open className="group rounded-lg border bg-card">
+        <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between rounded-lg px-4 font-medium hover:bg-muted/40 focus-visible:outline-2 focus-visible:outline-ring [&::-webkit-details-marker]:hidden">
+          <span>Nodes</span>
+          <ChevronDown
+            className="size-4 text-muted-foreground transition-transform group-open:rotate-180 motion-reduce:transition-none"
+            aria-hidden="true"
+          />
+        </summary>
+        <div className="border-t p-4 md:p-5">
+          <NodeOperationsTable nodes={nodeData.nodes} />
+        </div>
+      </details>
 
       <details className="group rounded-lg border bg-card">
         <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between rounded-lg px-4 font-medium hover:bg-muted/40 focus-visible:outline-2 focus-visible:outline-ring [&::-webkit-details-marker]:hidden">

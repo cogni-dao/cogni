@@ -47,7 +47,7 @@ import {
   DeploymentEnvironmentMatrix,
   type DeploymentEnvironmentRow,
 } from "@/features/nodes/deployments/DeploymentEnvironmentMatrix";
-import { formatComputeAmountsDisplay, sumComputeAmounts } from "./format-cost";
+import { formatComputeAmountsDisplay } from "./format-cost";
 import { isObservedEnvironmentHealthy } from "./status";
 
 type DeploymentStatus = Extract<
@@ -398,6 +398,9 @@ export function NodeOperationsTable({
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
   const [globalFilter, setGlobalFilter] = useState("");
   const [expanded, setExpanded] = useState<ExpandedState>({});
+  // TanStack treats a new data reference as a data change. Rebuilding the array on every
+  // sorting/filtering render can repeatedly reset table state and lock the browser's main thread.
+  const tableData = useMemo(() => [...nodes], [nodes]);
 
   const columns = useMemo(
     () => [
@@ -492,8 +495,9 @@ export function NodeOperationsTable({
   );
 
   const table = useReactTable({
-    data: [...nodes],
+    data: tableData,
     columns,
+    getRowId: (row) => row.id,
     state: { sorting, columnFilters, globalFilter, expanded },
     onSortingChange: setSorting,
     onColumnFiltersChange: setColumnFilters,
@@ -536,49 +540,10 @@ export function NodeOperationsTable({
     );
   }
 
-  const healthy = nodes.filter(
-    (node) => nodeStatusKey(node) === "healthy"
-  ).length;
-  const sponsored = sumComputeAmounts(
-    nodes.flatMap((node) =>
-      node.modules.compute.state === "available"
-        ? [node.modules.compute.transferred]
-        : []
-    )
-  );
-  const availableCompute = nodes.filter(
-    (node) => node.modules.compute.state === "available"
-  );
-  const environmentLabel =
-    availableCompute[0]?.modules.compute.state === "available"
-      ? (
-          {
-            "candidate-a": "Test",
-            preview: "Preview",
-            production: "Production",
-          } as const
-        )[availableCompute[0].modules.compute.environment]
-      : null;
-  const computeSummary =
-    availableCompute.length === 0
-      ? "Compute unavailable"
-      : availableCompute.length < nodes.length
-        ? `${formatComputeAmountsDisplay(sponsored)} sponsored in ${environmentLabel} · partial`
-        : `${formatComputeAmountsDisplay(sponsored)} sponsored in ${environmentLabel}`;
   const visibleRows = table.getRowModel().rows;
 
   return (
-    <section aria-labelledby="your-nodes" className="space-y-4">
-      <div>
-        <h1 id="your-nodes" className="font-bold text-2xl tracking-tight">
-          Your nodes
-        </h1>
-        <p className="mt-1 text-muted-foreground text-sm">
-          {nodes.length} {nodes.length === 1 ? "node" : "nodes"} · {healthy}{" "}
-          healthy · {computeSummary}
-        </p>
-      </div>
-
+    <div className="space-y-4">
       <label
         htmlFor="node-operations-search"
         className="relative block w-full sm:w-64"
@@ -621,7 +586,7 @@ export function NodeOperationsTable({
           </p>
         )}
       </div>
-    </section>
+    </div>
   );
 }
 
