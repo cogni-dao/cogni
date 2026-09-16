@@ -15,11 +15,16 @@ production_branch: deploy/production-poly
 # NODE_FORMATION_ENVS; this list is the catalog twin so render-node-appset.sh
 # renders exactly the births appset.ts generates. Trimming a node's reach is a
 # later catalog edit (drop an env here) once its envs are provisioned.
-# bug.5182: candidate-a is Poly's source-addressed developer flight lane. Preview
-# remains retired until its Crossplane/actuator authority is installed (task.5129).
-envs: [candidate-a, production]
+# task.5130 — the candidate-a slot is REMOVED. candidate-a's actuator is pinned to the
+# TEST Console account (akash12eh8…), which is reserved for Cogni's own operator-platform
+# self-test on cogni-test-org throwaway nodes. BILLING_FOLLOWS_OWNER: poly is a real
+# cogni-dao fleet node, so every environment it runs in must bill the PRODUCTION sponsor
+# account (akash10auj…). Preview remains retired until its Crossplane/actuator authority
+# is installed (task.5129). bug.5182 wanted candidate-a as poly's source-addressed
+# developer flight lane; that lane needs a non-test wallet before it can come back
+# (task.5132) — it is NOT restored here.
+envs: [production]
 deployment_provider:
-  candidate-a: akash
   production: akash
 # story.5016 production cutover — Crossplane authority; the private Akash transaction
 # actuator pays from production's DEDICATED account (akash10auj…). PRECONDITION:
@@ -27,7 +32,6 @@ deployment_provider:
 # materializes this cell (ONE_AUTHORITY_PER_WORKLOAD; rsync --delete evicts the
 # legacy manifest in the same commit).
 compute_api:
-  candidate-a: crossplane
   production: crossplane
 # Explicit replacement counter for a terminally closed lease — the only
 # redeploy-after-close path (actuator refuses a settled idempotence key).

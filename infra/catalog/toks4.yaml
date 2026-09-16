@@ -17,9 +17,13 @@ production_branch: deploy/production-toks4
 # later catalog edit (drop an env here) once its envs are provisioned.
 # story.5016 production cutover: preview slot retired (preview has no funded Akash
 # account and gets no actuator; its lease on the shared account was closed).
-envs: [candidate-a, production]
+# task.5130 — the candidate-a slot is REMOVED too. candidate-a's actuator is pinned to
+# the TEST Console account (akash12eh8…), reserved for Cogni's own operator-platform
+# self-test on cogni-test-org throwaway nodes. BILLING_FOLLOWS_OWNER: toks4 is a real
+# cogni-dao fleet node, so every environment it runs in must bill the PRODUCTION sponsor
+# account (akash10auj…). Production is this node's only slot.
+envs: [production]
 deployment_provider:
-  candidate-a: akash
   production: akash
 # story.5016 production cutover — Crossplane authority; the private Akash transaction
 # actuator pays from production's DEDICATED account (akash10auj…). PRECONDITION:
@@ -27,19 +31,18 @@ deployment_provider:
 # materializes this cell (ONE_AUTHORITY_PER_WORKLOAD; rsync --delete evicts the
 # legacy manifest in the same commit).
 compute_api:
-  # bug.5177 — this row declares candidate-a, and story.5016 step 9 DELETED
-  # base/compute-workload-controller from the candidate-a operator overlay
-  # (ONE_WALLET_ONE_ACTIVE_WRITER). An omitted cell resolves to `legacy`
-  # (LEGACY_IS_DEFAULT, assert-target-substrate.sh:73), which asserts that
-  # deleted Deployment and fails 100% of candidate-a flights. toks5 proves
-  # the migrated shape: toks5-test.cognidao.org serves live on crossplane.
-  candidate-a: crossplane
   production: crossplane
 # Explicit replacement counter for a terminally closed lease — the only
 # redeploy-after-close path (actuator refuses a settled idempotence key).
 lease_epoch:
   production: 0
-activity_env: candidate-a
+# task.5130 — ACTIVITY_ENV_IS_DEPLOYED (_schema.json): the singleton activity authority
+# must be a member of `envs`, and candidate-a just left. Production is the only remaining
+# slot, and it is also the only environment that can ever earn a receipt — GitHub App
+# webhooks are delivered to production only, so a node left on candidate-a is structurally
+# unable to ingest one (bug.5079, see levelup.yaml). Nothing is lost by moving it: toks4's
+# candidate-a authority never ingested, and never could.
+activity_env: production
 owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
 path_prefix: nodes/toks4/
 node_id: 72aa130b-f0ad-495a-a061-9ee1f9c9525d
