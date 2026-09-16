@@ -13,10 +13,15 @@ describe("resolveDeploymentTargets", () => {
     expect(
       resolveDeploymentTargets({
         catalogRows: [
-          { name: "node-template", type: "node" },
+          {
+            name: "node-template",
+            type: "node",
+            envs: ["candidate-a"],
+          },
           {
             name: "toks4",
             type: "node",
+            envs: ["candidate-a"],
             source_repo: "https://github.com/cogni-dao/toks4",
             source_sha: "0123456789abcdef0123456789abcdef01234567",
             deployment_provider: { "candidate-a": "akash" },
@@ -44,10 +49,11 @@ describe("resolveDeploymentTargets", () => {
 
   it("never expands a node-ref flight to sibling catalog rows", () => {
     const catalogRows = [
-      { name: "operator", type: "node" },
+      { name: "operator", type: "node", envs: ["candidate-a"] },
       {
         name: "toks4",
         type: "node",
+        envs: ["candidate-a"],
         source_repo: "https://github.com/cogni-dao/toks4",
         source_sha: "0123456789abcdef0123456789abcdef01234567",
         deployment_provider: { "candidate-a": "akash" },
@@ -96,6 +102,25 @@ describe("resolveDeploymentTargets", () => {
         flightTargets: ["unreviewed"],
       })
     ).toThrow("Unknown flight target");
+  });
+
+  it("fails closed before placement resolution when a node is absent from the environment", () => {
+    expect(() =>
+      resolveDeploymentTargets({
+        catalogRows: [
+          {
+            name: "poly",
+            type: "node",
+            envs: ["production"],
+            source_repo: "https://github.com/cogni-dao/poly",
+            source_sha: "0123456789abcdef0123456789abcdef01234567",
+            deployment_provider: { production: "akash" },
+          },
+        ],
+        environment: "candidate-a",
+        flightTargets: ["poly"],
+      })
+    ).toThrow("Flight target poly is not configured for candidate-a");
   });
 });
 

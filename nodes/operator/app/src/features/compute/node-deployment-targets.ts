@@ -41,6 +41,11 @@ export function resolveDeploymentTargets(input: {
     const row = byName.get(target);
     if (!row)
       throw new Error(`[deployment-targets] Unknown flight target: ${target}`);
+    if (row.type === "node" && !isInEnvironment(row, input.environment)) {
+      throw new Error(
+        `[deployment-targets] Flight target ${target} is not configured for ${input.environment}`
+      );
+    }
     const provider = resolveNodeDeploymentProvider({
       catalog: row,
       environment: input.environment,
