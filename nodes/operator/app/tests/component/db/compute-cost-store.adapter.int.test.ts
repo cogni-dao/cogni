@@ -13,6 +13,7 @@ import { akashTxAllocations, computeCostIntervals } from "@/shared/db/schema";
 
 const WALLET = "cost-test-wallet";
 const NODE_ID = "2f8b7a10-4c6e-4a7b-9d31-1c2e3f4a5b60";
+const OTHER_NODE_ID = "3f8b7a10-4c6e-4a7b-9d31-1c2e3f4a5b61";
 const IDENTITY = {
   nodeId: NODE_ID,
   compositeUid: "8e5d4c3b-2a19-4f08-b7c6-5d4e3f2a1b09",
@@ -58,12 +59,16 @@ describe("DrizzleComputeCostStore (Component)", () => {
       .where(eq(akashTxAllocations.walletScope, WALLET));
   });
 
-  async function allocated(cogniKey = "k1", externalName = "7001") {
+  async function allocated(
+    cogniKey = "k1",
+    externalName = "7001",
+    nodeId = NODE_ID
+  ) {
     const claim = await ledger.claim({
       cogniKey,
       workload: "toks9",
       environment: "candidate-a",
-      identity: IDENTITY,
+      identity: { ...IDENTITY, nodeId },
     });
     if (claim.state !== "claimed") throw new Error("expected a fresh claim");
     await ledger.recordAllocation({
@@ -157,6 +162,36 @@ describe("DrizzleComputeCostStore (Component)", () => {
         }),
       })
     ).rejects.toThrow(/regressed/);
+  });
+
+  it("filters authorized node ids in SQL before returning cost evidence", async () => {
+    const firstReceiptId = await allocated("node-a", "7101", NODE_ID);
+    await store.bind({
+      allocationReceiptId: firstReceiptId,
+      resource: resource("7101"),
+    });
+    await store.observe({
+      allocationReceiptId: firstReceiptId,
+      evidence: evidence({ resourceId: "7101" }),
+    });
+
+    const secondReceiptId = await allocated("node-b", "7102", OTHER_NODE_ID);
+    await store.bind({
+      allocationReceiptId: secondReceiptId,
+      resource: resource("7102"),
+    });
+    await store.observe({
+      allocationReceiptId: secondReceiptId,
+      evidence: evidence({ resourceId: "7102" }),
+    });
+
+    const reports = await store.reportByNodeIds([NODE_ID]);
+    expect(reports).toHaveLength(1);
+    expect(reports[0]?.nodeId).toBe(NODE_ID);
+    expect(reports.some((report) => report.nodeId === OTHER_NODE_ID)).toBe(
+      false
+    );
+    await expect(store.reportByNodeIds([])).resolves.toEqual([]);
   });
 
   it("ignores older evidence, rejects divergent evidence at the same position, and stays closed", async () => {

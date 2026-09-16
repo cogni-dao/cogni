@@ -19,19 +19,14 @@
  */
 
 import type { NodeDeployState } from "@cogni/ai-tools";
-import { CheckCircle, Circle } from "lucide-react";
 import type { ReactElement } from "react";
 
-import {
-  SectionCard,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components";
+import { SectionCard } from "@/components";
 
+import {
+  DeploymentEnvironmentMatrix,
+  type DeploymentEnvironmentRow,
+} from "./DeploymentEnvironmentMatrix";
 import { NodeEnvToggle } from "./NodeEnvToggle.client";
 
 // Label each env by its user-facing TIER (its role), not the backend deploy-lane id: candidate-a → Test.
@@ -58,43 +53,20 @@ interface Props {
   readonly envs: ReadonlyArray<NodeDeployState>;
 }
 
-function DeployRow({
-  nodeId,
-  state,
-}: {
-  readonly nodeId: string;
-  readonly state: NodeDeployState;
-}): ReactElement {
-  const live = isLive(state);
-  return (
-    <TableRow>
-      <TableCell className="font-medium text-foreground text-sm">
-        {tierLabel(state.env)}
-      </TableCell>
-      <TableCell className="text-sm">
-        {live ? (
-          <span className="inline-flex items-center gap-1.5 text-foreground">
-            <CheckCircle className="size-4 text-success" aria-hidden="true" />
-            Live
-          </span>
-        ) : (
-          <span className="inline-flex items-center gap-1.5 text-muted-foreground">
-            <Circle className="size-4" aria-hidden="true" />
-            Not deployed
-          </span>
-        )}
-      </TableCell>
-      <TableCell className="text-right font-mono text-muted-foreground text-xs">
-        {state.buildSha ? state.buildSha.slice(0, 7) : "—"}
-      </TableCell>
-      <TableCell className="text-right">
-        <NodeEnvToggle nodeId={nodeId} env={state.env} inReach={live} />
-      </TableCell>
-    </TableRow>
-  );
-}
-
 export function NodeDeployments({ nodeId, envs }: Props): ReactElement {
+  const rows: DeploymentEnvironmentRow[] = envs.map((state) => {
+    const live = isLive(state);
+    return {
+      env: state.env,
+      label: tierLabel(state.env),
+      declared: live,
+      health: state.health,
+      sourceSha: state.sourceSha,
+      buildSha: state.buildSha,
+      action: <NodeEnvToggle nodeId={nodeId} env={state.env} inReach={live} />,
+    };
+  });
+
   return (
     <SectionCard title="Deployments" className="mx-auto mt-4 w-full max-w-2xl">
       <p className="text-muted-foreground text-sm">
@@ -104,23 +76,7 @@ export function NodeDeployments({ nodeId, envs }: Props): ReactElement {
         once that PR merges. Every environment is independent.
       </p>
 
-      <div className="rounded-md border">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Environment</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead className="text-right">Build</TableHead>
-              <TableHead className="text-right">Action</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {envs.map((state) => (
-              <DeployRow key={state.env} nodeId={nodeId} state={state} />
-            ))}
-          </TableBody>
-        </Table>
-      </div>
+      <DeploymentEnvironmentMatrix rows={rows} />
     </SectionCard>
   );
 }
