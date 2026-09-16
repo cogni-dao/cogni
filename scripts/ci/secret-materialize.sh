@@ -109,7 +109,7 @@ remote() {
 # the only phase permitted to hold it (Invariant 16 token boundary). Transitional:
 # reconcile-substrate also mints it to seed DSNs until the env-repair lane lands.
 BAO_TOKEN="$(
-  remote "set -euo pipefail
+  cogni_openbao_kubernetes_login_retry remote "set -euo pipefail
     jwt=\$(kubectl create token openbao-operator -n default)
     kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
       bao write -field=token auth/kubernetes/login role='${DEPLOY_ENVIRONMENT}-writer' jwt=\"\$jwt\""

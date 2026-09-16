@@ -33,6 +33,8 @@ esac
 
 # shellcheck disable=SC1091 source=./scripts/ci/lib/image-tags.sh
 source "${SCRIPT_DIR}/lib/image-tags.sh"
+# shellcheck disable=SC1091 source=./scripts/ci/lib/ssh-retry.sh
+source "${SCRIPT_DIR}/lib/ssh-retry.sh"
 
 assert_external_compute_preconditions() {
 local node="$TARGET"
@@ -79,7 +81,10 @@ esac
 
 local ssh_opts=()
 read -r -a ssh_opts <<< "$ssh_opts_raw"
-"$ssh_bin" "${ssh_opts[@]}" "root@${vm_host}" bash -s -- \
+# This whole external-compute assertion is read-only, so replaying it is safe.
+# The shared helper buffers this heredoc and retries only the OpenBao Kubernetes
+# login transient; stable 403 authz drift still fails after one fresh-JWT check.
+cogni_openbao_kubernetes_login_retry "$ssh_bin" "${ssh_opts[@]}" "root@${vm_host}" bash -s -- \
   "$DEPLOY_ENVIRONMENT" "$node" "$required_keys_csv" "$egress_cidrs_csv" \
   "$egress_allowlist" "$compute_api" <<'REMOTE'
 set -euo pipefail
