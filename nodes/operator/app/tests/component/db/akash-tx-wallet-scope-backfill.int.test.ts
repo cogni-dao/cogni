@@ -279,8 +279,12 @@ describe("bug.5187 wallet_scope backfill (Component)", () => {
    * nothing instead of paying twice.
    */
   it("makes the legacy environment-keyed scope unwritable once applied", async () => {
-    await expect(
-      db.insert(akashTxAllocations).values({
+    // Same rule as above: assert the DRIVER error, not drizzle's wrapper. The wrapper message is
+    // `Failed query: insert into ...` and names no constraint, so a regex on it would be testing
+    // that the insert failed for ANY reason — including a typo in this fixture.
+    const error: unknown = await db
+      .insert(akashTxAllocations)
+      .values({
         walletScope: LEGACY_PRODUCTION_SCOPE,
         cogniKey: "xcw:cogni-production:toks4:2",
         nodeId: IDENTITY.nodeId,
@@ -290,6 +294,17 @@ describe("bug.5187 wallet_scope backfill (Component)", () => {
         environment: "production",
         state: "preparing",
       })
-    ).rejects.toThrow(/akash_tx_allocations_wallet_scope_account_check/);
+      .then(() => undefined)
+      .catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(Error);
+    const raised = (error as { cause?: { message?: string; code?: string } })
+      .cause;
+    // 23514 = check_violation. Pin the code AND the constraint name: the code alone would also
+    // match the state/generation CHECKs this table already carries.
+    expect(raised?.code).toBe("23514");
+    expect(raised?.message).toContain(
+      "akash_tx_allocations_wallet_scope_account_check"
+    );
   });
 });
