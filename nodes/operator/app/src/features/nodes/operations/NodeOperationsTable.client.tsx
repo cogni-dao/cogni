@@ -40,6 +40,7 @@ import {
   TableRow,
 } from "@/components";
 import { formatComputeAmountsDisplay, sumComputeAmounts } from "./format-cost";
+import { isObservedEnvironmentHealthy } from "./status";
 
 type DeploymentStatus = Extract<
   NodeOperationsOverview["modules"]["deployment"],
@@ -120,11 +121,14 @@ function buildLabel(node: NodeOperationsOverview): string {
   return production?.buildSha?.slice(0, 7) ?? "—";
 }
 
-function hasDeclaredProduction(node: NodeOperationsOverview): boolean {
+function hasServingProduction(node: NodeOperationsOverview): boolean {
   return (
     node.modules.deployment.state === "available" &&
     node.modules.deployment.environments.some(
-      (environment) => environment.env === "production" && environment.declared
+      (environment) =>
+        environment.env === "production" &&
+        environment.declared &&
+        isObservedEnvironmentHealthy(environment)
     )
   );
 }
@@ -148,9 +152,7 @@ function EnvironmentStatus({
 }): ReactElement {
   const status = !environment.declared
     ? STATUS.not_deployed
-    : environment.health === "healthy" &&
-        environment.sourceSha !== null &&
-        environment.sourceSha === environment.buildSha
+    : isObservedEnvironmentHealthy(environment)
       ? STATUS.healthy
       : environment.health === "provisioning"
         ? STATUS.deploying
@@ -171,12 +173,12 @@ function EnvironmentStatus({
 
 function NodeDetails({
   node,
-  showManageLink = true,
+  showDetailLink = true,
   showHomepageLink = true,
   instanceId,
 }: {
   node: NodeOperationsOverview;
-  showManageLink?: boolean;
+  showDetailLink?: boolean;
   showHomepageLink?: boolean;
   instanceId: string;
 }): ReactElement {
@@ -277,18 +279,26 @@ function NodeDetails({
       </section>
 
       <div className="flex flex-wrap items-center gap-3 border-t pt-4 md:col-span-3">
-        {showManageLink ? (
+        {showDetailLink && node.relationship === "owner" ? (
           <Link
-            href={node.manageUrl}
+            href={node.detailUrl}
             className="inline-flex min-h-11 items-center gap-2 rounded-md border px-3 text-sm hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring"
           >
             <Settings2 className="size-4" aria-hidden="true" />
             Manage
           </Link>
         ) : null}
+        {showDetailLink && node.relationship === "developer" ? (
+          <Link
+            href={node.detailUrl}
+            className="inline-flex min-h-11 items-center rounded-md border px-3 text-sm hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring"
+          >
+            View details
+          </Link>
+        ) : null}
         {showHomepageLink &&
         deployment.state === "available" &&
-        hasDeclaredProduction(node) &&
+        hasServingProduction(node) &&
         deployment.homepageUrl ? (
           <a
             href={deployment.homepageUrl}
@@ -553,7 +563,7 @@ export function NodeOperationsDetail({
           </div>
         </div>
         {node.modules.deployment.state === "available" &&
-        hasDeclaredProduction(node) &&
+        hasServingProduction(node) &&
         node.modules.deployment.homepageUrl ? (
           <a
             href={node.modules.deployment.homepageUrl}
@@ -593,7 +603,7 @@ export function NodeOperationsDetail({
         </div>
         <NodeDetails
           node={node}
-          showManageLink={false}
+          showDetailLink={false}
           showHomepageLink={false}
           instanceId={`${node.id}-detail`}
         />

@@ -18,7 +18,8 @@ describe("nodes.operations-overview.v1", () => {
           brandColor: null,
           formationStatus: "active",
           relationship: "owner",
-          manageUrl: "/nodes/11111111-1111-4111-8111-111111111111",
+          detailUrl: "/nodes/11111111-1111-4111-8111-111111111111",
+          manageUrl: "/must-not-leak",
           providerConsumerAccountId: "must-not-leak",
           modules: {
             deployment: { state: "unavailable" },
@@ -30,6 +31,7 @@ describe("nodes.operations-overview.v1", () => {
     });
 
     expect(parsed.nodes[0]).not.toHaveProperty("providerConsumerAccountId");
+    expect(parsed.nodes[0]).not.toHaveProperty("manageUrl");
     expect(parsed.nodes[0]?.modules.compute).toEqual({ state: "unavailable" });
   });
 });

@@ -19,7 +19,7 @@ const node: NodeOperationsOverview = {
   brandColor: null,
   formationStatus: "active",
   relationship: "owner",
-  manageUrl: "/nodes/11111111-1111-4111-8111-111111111111",
+  detailUrl: "/nodes/11111111-1111-4111-8111-111111111111",
   modules: {
     deployment: {
       state: "available",
@@ -113,7 +113,7 @@ describe("NodeOperationsTable", () => {
       id: "22222222-2222-4222-8222-222222222222",
       slug: "beta",
       title: "Beta",
-      manageUrl: "/nodes/22222222-2222-4222-8222-222222222222",
+      detailUrl: "/nodes/22222222-2222-4222-8222-222222222222",
       modules: { ...node.modules, compute: { state: "unavailable" as const } },
     };
     render(<NodeOperationsTable nodes={[node, unavailable]} />);
@@ -144,5 +144,50 @@ describe("NodeOperationsTable", () => {
     expect(
       screen.queryByRole("link", { name: /Open node/ })
     ).not.toBeInTheDocument();
+  });
+
+  it("does not offer an Open node link when declared production is unhealthy", async () => {
+    const user = userEvent.setup();
+    const unhealthy = {
+      ...node,
+      modules: {
+        ...node.modules,
+        deployment: {
+          ...node.modules.deployment,
+          status: "needs_attention" as const,
+          environments: node.modules.deployment.environments.map(
+            (environment) => ({ ...environment, health: "degraded" as const })
+          ),
+        },
+      },
+    };
+    render(<NodeOperationsTable nodes={[unhealthy]} />);
+    await user.click(
+      screen.getAllByRole("button", {
+        name: "Show Alpha details",
+      })[0] as HTMLElement
+    );
+    expect(
+      screen.queryByRole("link", { name: /Open node/ })
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows developers a read link without exposing management", async () => {
+    const user = userEvent.setup();
+    render(
+      <NodeOperationsTable nodes={[{ ...node, relationship: "developer" }]} />
+    );
+    await user.click(
+      screen.getAllByRole("button", {
+        name: "Show Alpha details",
+      })[0] as HTMLElement
+    );
+    expect(
+      screen.queryByRole("link", { name: "Manage" })
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "View details" })).toHaveAttribute(
+      "href",
+      node.detailUrl
+    );
   });
 });

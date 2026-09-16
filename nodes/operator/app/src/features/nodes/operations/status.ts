@@ -13,6 +13,18 @@ export type NodeOperationsStatus =
   | "not_deployed"
   | "setting_up";
 
+/** A public probe cannot see desired source, but it can prove a concrete running build. */
+export function isObservedEnvironmentHealthy(
+  environment: Pick<NodeDeployState, "health" | "sourceSha" | "buildSha">
+): boolean {
+  return (
+    environment.health === "healthy" &&
+    environment.buildSha !== null &&
+    (environment.sourceSha === null ||
+      environment.sourceSha === environment.buildSha)
+  );
+}
+
 export function deriveNodeOperationsStatus(
   formationStatus: NodeStatus,
   environments: readonly (NodeDeployState & { readonly declared: boolean })[]
@@ -22,11 +34,7 @@ export function deriveNodeOperationsStatus(
 
   const production = environments.find((item) => item.env === "production");
   if (!production?.declared) return "not_deployed";
-  if (
-    production.health === "healthy" &&
-    production.sourceSha !== null &&
-    production.sourceSha === production.buildSha
-  ) {
+  if (isObservedEnvironmentHealthy(production)) {
     return "healthy";
   }
   if (
