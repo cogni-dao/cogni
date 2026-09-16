@@ -120,6 +120,15 @@ function buildLabel(node: NodeOperationsOverview): string {
   return production?.buildSha?.slice(0, 7) ?? "—";
 }
 
+function hasDeclaredProduction(node: NodeOperationsOverview): boolean {
+  return (
+    node.modules.deployment.state === "available" &&
+    node.modules.deployment.environments.some(
+      (environment) => environment.env === "production" && environment.declared
+    )
+  );
+}
+
 function computeLabel(node: NodeOperationsOverview): string {
   const compute = node.modules.compute;
   if (compute.state === "unavailable") return "Unavailable";
@@ -279,6 +288,7 @@ function NodeDetails({
         ) : null}
         {showHomepageLink &&
         deployment.state === "available" &&
+        hasDeclaredProduction(node) &&
         deployment.homepageUrl ? (
           <a
             href={deployment.homepageUrl}
@@ -479,7 +489,8 @@ export function NodeOperationsTable({
             Your nodes
           </h1>
           <p className="mt-1 text-muted-foreground text-sm">
-            {nodes.length} nodes · {healthy} healthy · {computeSummary}
+            {nodes.length} {nodes.length === 1 ? "node" : "nodes"} · {healthy}{" "}
+            healthy · {computeSummary}
           </p>
         </div>
         <Link
@@ -542,6 +553,7 @@ export function NodeOperationsDetail({
           </div>
         </div>
         {node.modules.deployment.state === "available" &&
+        hasDeclaredProduction(node) &&
         node.modules.deployment.homepageUrl ? (
           <a
             href={node.modules.deployment.homepageUrl}
