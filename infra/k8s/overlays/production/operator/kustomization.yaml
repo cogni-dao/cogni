@@ -56,20 +56,25 @@ patches:
       kind: Deployment
       name: node-app
     patch: |
-      - op: replace
-        path: /spec/template/spec/containers/0/resources
-        value:
-          limits:
-            cpu: "1"
-            memory: 1Gi
-          requests:
-            cpu: 100m
-            memory: 512Mi
-      # env/0 is NODE_OPTIONS, the FIRST entry the base declares and owns; this is the
-      # node-app deployment (not the controller env-list of the d69e5c29 incident).
-      - op: replace
-        path: /spec/template/spec/containers/0/env/0/value
-        value: "--max-old-space-size=768"
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: node-app
+      spec:
+        template:
+          spec:
+            containers:
+              - name: app
+                resources:
+                  limits:
+                    cpu: "1"
+                    memory: 1Gi
+                  requests:
+                    cpu: 100m
+                    memory: 512Mi
+                env:
+                  - name: NODE_OPTIONS
+                    value: "--max-old-space-size=768"
   # story.5016 Gate 0b: env values are set BY NAME via strategic merge (env lists
   # merge on `name`), never by positional JSON-pointer index. A positional
   # `/env/N/value` patch silently repoints when the base list shifts — that exact
