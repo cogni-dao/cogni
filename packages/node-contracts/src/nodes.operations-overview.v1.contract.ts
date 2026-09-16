@@ -59,10 +59,34 @@ export const nodeOperationsComputeModuleSchema = z.discriminatedUnion("state", [
   z.object({
     state: z.literal("available"),
     sponsorship: z.literal("cogni"),
+    /** Cost evidence belongs only to the operator environment that observed it. */
+    environment: z.enum(["candidate-a", "preview", "production"]),
     activeDeployments: z.number().int().nonnegative(),
     transferred: z.array(nativeAmountSchema),
   }),
 ]);
+
+const unavailableMetricSchema = z.object({ state: z.literal("unavailable") });
+const availableCountMetricSchema = z.object({
+  state: z.literal("available"),
+  value: z.number().int().nonnegative(),
+});
+
+const availableCreditMetricSchema = z.object({
+  state: z.literal("available"),
+  /** Exact display-safe decimal string; never a token or billing balance. */
+  value: z.string(),
+});
+
+const availableCurrentEpochMetricSchema = z.object({
+  state: z.literal("available"),
+  value: z
+    .object({
+      id: z.string(),
+      status: z.enum(["open", "review", "finalized"]),
+    })
+    .nullable(),
+});
 
 export const nodeOperationsGovernanceModuleSchema = z.discriminatedUnion(
   "state",
@@ -71,13 +95,22 @@ export const nodeOperationsGovernanceModuleSchema = z.discriminatedUnion(
     z.object({
       state: z.literal("available"),
       daoUrl: z.string().url().nullable(),
-      latestEpoch: z
-        .object({
-          id: z.string(),
-          status: z.enum(["open", "review", "finalized"]),
-        })
-        .nullable(),
-      finalizedEpochs: z.number().int().nonnegative(),
+      finalizedAttributionCredits: z.union([
+        unavailableMetricSchema,
+        availableCreditMetricSchema,
+      ]),
+      totalContributors: z.union([
+        unavailableMetricSchema,
+        availableCountMetricSchema,
+      ]),
+      epochsCompleted: z.union([
+        unavailableMetricSchema,
+        availableCountMetricSchema,
+      ]),
+      currentEpoch: z.union([
+        unavailableMetricSchema,
+        availableCurrentEpochMetricSchema,
+      ]),
     }),
   ]
 );
@@ -97,6 +130,7 @@ export const nodeOperationsOverviewSchema = z.object({
   slug: z.string(),
   title: z.string(),
   icon: z.string().nullable(),
+  thumbnailUrl: z.string().url().nullable(),
   brandColor: z.string().nullable(),
   formationStatus: z.enum([
     "dao_pending",

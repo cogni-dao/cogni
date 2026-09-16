@@ -126,6 +126,10 @@ async function readGovernance(row: {
   daoAddress: string | null;
   chainId: number | null;
 }): Promise<GovernanceModule> {
+  const daoUrl =
+    row.daoAddress && row.chainId
+      ? getDaoUrl(row.chainId, row.daoAddress)
+      : null;
   try {
     const container = getContainer();
     const epochs =
@@ -142,24 +146,40 @@ async function readGovernance(row: {
               offset: 0,
             })
           ).epochs.map((epoch) => ({ id: epoch.id, status: epoch.status }));
-    const latest = [...epochs].sort((a, b) =>
-      BigInt(a.id) < BigInt(b.id) ? 1 : -1
-    )[0];
+    const current = epochs
+      .filter((epoch) => epoch.status !== "finalized")
+      .sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? 1 : -1))[0];
     return {
       state: "available",
-      daoUrl:
-        row.daoAddress && row.chainId
-          ? getDaoUrl(row.chainId, row.daoAddress)
-          : null,
-      latestEpoch: latest ? { id: latest.id, status: latest.status } : null,
-      finalizedEpochs: epochs.filter((epoch) => epoch.status === "finalized")
-        .length,
+      daoUrl,
+      finalizedAttributionCredits: { state: "unavailable" },
+      totalContributors: { state: "unavailable" },
+      epochsCompleted: {
+        state: "available",
+        value: epochs.filter((epoch) => epoch.status === "finalized").length,
+      },
+      currentEpoch: {
+        state: "available",
+        value: current ? { id: current.id, status: current.status } : null,
+      },
     };
   } catch {
     // Foreign reads currently fail closed while bug.5167 repairs the slug/node-id handoff.
     // Never replace a foreign node's missing ledger with operator-local zeroes.
-    return { state: "unavailable" };
+    return {
+      state: "available",
+      daoUrl,
+      finalizedAttributionCredits: { state: "unavailable" },
+      totalContributors: { state: "unavailable" },
+      epochsCompleted: { state: "unavailable" },
+      currentEpoch: { state: "unavailable" },
+    };
   }
+}
+
+function currentDeploymentEnvironment(): (typeof FLIGHT_ENVS)[number] | null {
+  const environment = serverEnv().DEPLOY_ENVIRONMENT;
+  return FLIGHT_ENVS.find((candidate) => candidate === environment) ?? null;
 }
 
 /**
@@ -212,6 +232,7 @@ export async function listAccessibleNodeOperations(
       : []
   );
   const root = baseDomain(serverEnv());
+  const deploymentEnvironment = currentDeploymentEnvironment();
   const currentNodeId = getNodeId();
 
   const overviews = await Promise.all(
@@ -240,13 +261,14 @@ export async function listAccessibleNodeOperations(
         (deployment.status === "setting_up" ||
           deployment.status === "not_deployed");
       const compute: NodeOperationsOverview["modules"]["compute"] =
-        costResult.status === "rejected"
+        costResult.status === "rejected" || deploymentEnvironment === null
           ? { state: "unavailable" }
           : !cost && !noCostExpected
             ? { state: "unavailable" }
             : {
                 state: "available",
                 sponsorship: "cogni",
+                environment: deploymentEnvironment,
                 activeDeployments: cost?.activeIntervals ?? 0,
                 transferred: cost ? [...cost.transferred] : [],
               };
@@ -256,6 +278,7 @@ export async function listAccessibleNodeOperations(
         slug: row.slug,
         title: summary?.title ?? titleCaseSlug(row.slug),
         icon: summary?.icon ?? null,
+        thumbnailUrl: summary?.thumbnailUrl ?? null,
         brandColor: summary?.brandColor ?? null,
         formationStatus: row.status as NodeStatus,
         relationship: "owner",

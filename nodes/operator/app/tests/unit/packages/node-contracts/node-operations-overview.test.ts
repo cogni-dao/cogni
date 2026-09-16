@@ -15,6 +15,7 @@ describe("nodes.operations-overview.v1", () => {
           slug: "alpha",
           title: "Alpha",
           icon: null,
+          thumbnailUrl: null,
           brandColor: null,
           formationStatus: "active",
           relationship: "owner",
