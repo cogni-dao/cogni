@@ -280,6 +280,50 @@ describe("XComputeWorkload Composition (task.5096)", () => {
     expect(leaseEpoch.description).toContain("DEPRECATED compatibility alias");
   });
 
+  it("preserves the replacement generation across every mixed-revision bridge shape", () => {
+    /** Model API-server top-level defaults from the checked-in XRD schema. */
+    const admitWithSchemaDefaults = (
+      desired: Readonly<Record<string, number>>
+    ): Record<string, number> => {
+      const admitted = { ...desired };
+      for (const [field, rawSchema] of Object.entries(specSchema)) {
+        const fieldSchema = rawSchema as YamlObject;
+        if (
+          !Object.hasOwn(admitted, field) &&
+          fieldSchema.default !== undefined
+        ) {
+          admitted[field] = fieldSchema.default as number;
+        }
+      }
+      return admitted;
+    };
+    /** Mirrors the canonical-first fallback expression pinned in the preceding test. */
+    const renderCogniKey = (
+      desired: Readonly<Record<string, number>>
+    ): string => {
+      const admitted = admitWithSchemaDefaults(desired);
+      const generation = Object.hasOwn(admitted, "leaseGeneration")
+        ? admitted.leaseGeneration
+        : (admitted.leaseEpoch ?? 0);
+      return `xcw:cogni-production:toks5:${generation}`;
+    };
+
+    expect([
+      renderCogniKey({ leaseEpoch: 1 }), // old materializer after new XRD
+      renderCogniKey({ leaseGeneration: 1 }), // canonical-only cleanup target
+      renderCogniKey({ leaseEpoch: 1, leaseGeneration: 1 }), // bridge dual-write
+    ]).toEqual([
+      "xcw:cogni-production:toks5:1",
+      "xcw:cogni-production:toks5:1",
+      "xcw:cogni-production:toks5:1",
+    ]);
+    expect(renderCogniKey({})).toBe("xcw:cogni-production:toks5:0");
+    // Canonical wins if a corrupt/mid-edit object ever disagrees; it is the final contract.
+    expect(renderCogniKey({ leaseEpoch: 1, leaseGeneration: 2 })).toBe(
+      "xcw:cogni-production:toks5:2"
+    );
+  });
+
   it("treats a closed lease as removed so a deleted XR can finish deleting", () => {
     // The actuator still resolves a RELEASED key to its handle (state `closed`), so a naive
     // `found == false` check would leave the Request — and therefore the XR — undeletable.
