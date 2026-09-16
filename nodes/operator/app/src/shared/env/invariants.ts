@@ -169,11 +169,10 @@ export function assertEvmRpcConfig(env: EnvWithRpc): void {
   // Test mode uses FakeEvmOnchainClient - no RPC URL needed
   if (env.APP_ENV === "test") return;
 
-  // Production/preview/dev requires EVM_RPC_URL for payment verification
+  // Production/preview/dev requires Base RPC as baseline node substrate.
   if (!env.EVM_RPC_URL || env.EVM_RPC_URL.trim() === "") {
     throw new RuntimeSecretError(
-      "APP_ENV=production requires EVM_RPC_URL for on-chain payment verification. " +
-        "Get an API key from Alchemy or Infura for Ethereum Sepolia."
+      "Non-test nodes require EVM_RPC_URL for Base mainnet substrate reads."
     );
   }
 }

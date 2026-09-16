@@ -54,13 +54,13 @@ describe("/readyz error response contract", () => {
   it("RuntimeSecretError should contain EVM_RPC_URL details", () => {
     // Arrange: Create error with expected format
     const error = new RuntimeSecretError(
-      "APP_ENV=production requires EVM_RPC_URL for on-chain payment verification. Get an API key from Alchemy or Infura for Ethereum Sepolia."
+      "Non-test nodes require EVM_RPC_URL for Base mainnet substrate reads."
     );
 
     // Assert: Error must have expected structure
     expect(error.code).toBe("MISSING_RUNTIME_SECRET");
     expect(error.message).toContain("EVM_RPC_URL");
-    expect(error.message).toContain("on-chain payment verification");
+    expect(error.message).toContain("Base mainnet substrate reads");
   });
 
   it("EnvValidationError should have structured metadata", () => {
