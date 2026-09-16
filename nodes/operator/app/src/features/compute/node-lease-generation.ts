@@ -6,8 +6,8 @@
  * Purpose: Resolve one (node, environment)'s explicit Akash lease replacement counter.
  * Scope: Pure catalog policy parsing. No workflow, git, provider, or cluster I/O.
  * Invariants:
- *   - ZERO_IS_DEFAULT: an absent cell resolves to 0, the same value the XRD defaults, so
- *     adding this field changes nothing until a row opts in. Mirrors LEGACY_IS_DEFAULT.
+ *   - ZERO_IS_DEFAULT: an absent cell resolves to 0, the same value the Composition fallback
+ *     uses when neither migration wire field exists. Mirrors LEGACY_IS_DEFAULT.
  *   - NOTHING_BUMPS_IMPLICITLY: the generation is the ONLY varying component of the actuator's
  *     wallet-wide idempotence key (`xcw:<namespace>:<name>:<generation>`). This resolver READS a
  *     human-committed catalog cell and never derives, increments, or synthesizes a value —
@@ -42,8 +42,8 @@ const catalogLeaseGenerationSchema = z
 
 /**
  * Resolve one env's lease replacement generation. Missing policy is deliberately 0 — the value
- * every existing workload already runs under via the XRD default — so this field is inert
- * for every row that has never needed a lease replaced.
+ * every non-replaced workload already runs under and the Composition fallback uses — so this
+ * field is inert for every row that has never needed a lease replaced.
  *
  * This is the caller-side half of the actuator's settled-key refusal
  * (`akash_tx_create_refused_settled_key`): once a lease closes terminally its idempotence

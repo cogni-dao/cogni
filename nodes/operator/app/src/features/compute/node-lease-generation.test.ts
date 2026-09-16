@@ -7,11 +7,10 @@ import { resolveNodeLeaseGeneration } from "./node-lease-generation";
 
 describe("resolveNodeLeaseGeneration", () => {
   /**
-   * ZERO_IS_DEFAULT. Every row in infra/catalog today omits `lease_generation`, so this is the
-   * assertion that adding the field changed nothing for the running fleet: an absent cell
-   * resolves to 0, the exact value every existing workload already runs under via the XRD
-   * default. If this ever resolves nonzero, an idempotence key silently changes and a
-   * promote mints a SECOND PAID LEASE.
+   * ZERO_IS_DEFAULT. A row or environment may omit `lease_generation`; this is the assertion
+   * that the omission remains inert for the running fleet. An absent cell resolves to 0, the
+   * exact value every non-replaced workload already runs under. If this ever resolves nonzero,
+   * an idempotence key silently changes and a promote mints a SECOND PAID LEASE.
    */
   it("resolves an absent field to zero, the generation every workload already runs under", () => {
     expect(
