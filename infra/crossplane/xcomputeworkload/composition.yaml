@@ -117,10 +117,17 @@ spec:
               would answer "no" after every promote and mint a SECOND PAID LEASE. namespace and
               name are both immutable (name == nodeId), so the only varying component is
               spec.leaseGeneration, which NOTHING bumps implicitly. leaseEpoch is read only as
-              a zero-downtime migration fallback while old deploy refs are rematerialized.
+              a zero-downtime migration fallback while old deploy refs are rematerialized. If
+              both names exist they MUST agree: choosing either side of a mismatch could mint a
+              paid replacement unexpectedly, so drift fails the render before any Request exists.
             */ -}}
+            {{- $hasLeaseEpoch := hasKey $spec "leaseEpoch" }}
+            {{- $hasLeaseGeneration := hasKey $spec "leaseGeneration" }}
+            {{- if and $hasLeaseEpoch $hasLeaseGeneration (ne (int (get $spec "leaseEpoch")) (int (get $spec "leaseGeneration"))) }}
+            {{- fail (printf "XComputeWorkload %s/%s: spec.leaseEpoch and spec.leaseGeneration disagree; refusing to choose an idempotence key" $ns $name) }}
+            {{- end }}
             {{- $leaseGeneration := int (dig "leaseEpoch" 0 $spec) }}
-            {{- if hasKey $spec "leaseGeneration" }}{{ $leaseGeneration = int (get $spec "leaseGeneration") }}{{ end }}
+            {{- if $hasLeaseGeneration }}{{ $leaseGeneration = int (get $spec "leaseGeneration") }}{{ end }}
             {{- $cogniKey := printf "xcw:%s:%s:%d" $ns $name $leaseGeneration }}
             {{- $baseUrl := printf "http://akash-tx-actuator.%s.svc.cluster.local:8080" $ns }}
             {{- $authHeader := printf "Bearer {{ akash-tx-actuator-auth:%s:token }}" $ns }}

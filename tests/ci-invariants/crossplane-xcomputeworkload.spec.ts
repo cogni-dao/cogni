@@ -268,7 +268,23 @@ describe("XComputeWorkload Composition (task.5096)", () => {
     expect(templateCode).toContain(
       '$leaseGeneration := int (dig "leaseEpoch" 0 $spec)'
     );
-    expect(templateCode).toContain('hasKey $spec "leaseGeneration"');
+    expect(templateCode).toContain(
+      '$hasLeaseEpoch := hasKey $spec "leaseEpoch"'
+    );
+    expect(templateCode).toContain(
+      '$hasLeaseGeneration := hasKey $spec "leaseGeneration"'
+    );
+    expect(templateCode).toContain(
+      'if and $hasLeaseEpoch $hasLeaseGeneration (ne (int (get $spec "leaseEpoch")) (int (get $spec "leaseGeneration")))'
+    );
+    expect(templateCode).toContain(
+      "spec.leaseEpoch and spec.leaseGeneration disagree; refusing to choose an idempotence key"
+    );
+    expect(
+      templateCode.indexOf(
+        "spec.leaseEpoch and spec.leaseGeneration disagree; refusing to choose an idempotence key"
+      )
+    ).toBeLessThan(templateCode.indexOf("$cogniKey := printf"));
     expect(templateCode).toContain(
       '$leaseGeneration = int (get $spec "leaseGeneration")'
     );
@@ -276,7 +292,7 @@ describe("XComputeWorkload Composition (task.5096)", () => {
     const leaseGeneration = specSchema.leaseGeneration as YamlObject;
     expect(leaseGeneration.default).toBeUndefined();
     const leaseEpoch = specSchema.leaseEpoch as YamlObject;
-    expect(leaseEpoch.default).toBe(0);
+    expect(leaseEpoch.default).toBeUndefined();
     expect(leaseEpoch.description).toContain("DEPRECATED compatibility alias");
   });
 
@@ -300,8 +316,15 @@ describe("XComputeWorkload Composition (task.5096)", () => {
     /** Mirrors the canonical-first fallback expression pinned in the preceding test. */
     const renderCogniKey = (
       desired: Readonly<Record<string, number>>
-    ): string => {
+    ): string | undefined => {
       const admitted = admitWithSchemaDefaults(desired);
+      if (
+        Object.hasOwn(admitted, "leaseEpoch") &&
+        Object.hasOwn(admitted, "leaseGeneration") &&
+        admitted.leaseEpoch !== admitted.leaseGeneration
+      ) {
+        return undefined;
+      }
       const generation = Object.hasOwn(admitted, "leaseGeneration")
         ? admitted.leaseGeneration
         : (admitted.leaseEpoch ?? 0);
@@ -318,10 +341,11 @@ describe("XComputeWorkload Composition (task.5096)", () => {
       "xcw:cogni-production:toks5:1",
     ]);
     expect(renderCogniKey({})).toBe("xcw:cogni-production:toks5:0");
-    // Canonical wins if a corrupt/mid-edit object ever disagrees; it is the final contract.
-    expect(renderCogniKey({ leaseEpoch: 1, leaseGeneration: 2 })).toBe(
-      "xcw:cogni-production:toks5:2"
-    );
+    // Corrupt/mid-edit dual fields fail before a Request/key exists. Picking either side could
+    // mint a paid replacement the other field did not authorize.
+    expect(
+      renderCogniKey({ leaseEpoch: 1, leaseGeneration: 2 })
+    ).toBeUndefined();
   });
 
   it("treats a closed lease as removed so a deleted XR can finish deleting", () => {

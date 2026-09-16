@@ -333,7 +333,6 @@ spec:
                   type: integer
                   minimum: 0
                   maximum: 1000000
-                  default: 0
                 leaseGeneration:
                   description: >-
                     Operator-driven replacement counter, and the ONLY varying component of the
