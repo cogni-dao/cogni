@@ -243,7 +243,7 @@ trap cleanup EXIT
 # zero bao kv put/patch (Invariant 16 token boundary).
 CURRENT_ROW="reader_token"
 BAO_TOKEN="$(
-  remote "set -euo pipefail
+  cogni_openbao_kubernetes_login_retry remote "set -euo pipefail
     jwt=\$(kubectl create token db-provisioner -n default)
     kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
       bao write -field=token auth/kubernetes/login role='${DEPLOY_ENVIRONMENT}-db-reader' jwt=\"\$jwt\""

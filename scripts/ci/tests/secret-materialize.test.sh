@@ -26,6 +26,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 cd "$REPO_ROOT"
 
+# The materializer and read-only reconciler share this exact auth helper. Invoke
+# its hermetic transient/permanent matrix from an already-required CI test rather
+# than adding decision logic to the frozen workflow.
+bash scripts/ci/tests/openbao-login-retry.test.sh
+
 TMPROOT=$(mktemp -d -t secret-materialize.XXXXXX)
 trap 'rm -rf "$TMPROOT"' EXIT
 
