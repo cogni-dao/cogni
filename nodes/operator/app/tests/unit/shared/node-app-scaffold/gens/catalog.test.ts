@@ -57,9 +57,9 @@ describe("renderCatalog", () => {
    *
    * AUTHORITY_REQUIRES_AN_INSTALLED_API (task.5104) + INSTALLED_IS_NOT_FUNDED (task.5097):
    * candidate-a AND production are declared `crossplane` because they are the two birth envs
-   * and both carry a control plane plus a pinned actuator account. task.5129 makes Preview
-   * payable for explicit existing-node activation, but does not add it to `NODE_FORMATION_ENVS`;
-   * therefore it still cannot appear in a newly minted birth row or buy a third lease.
+   * and both carry a control plane plus a pinned actuator account. Preview keeps an installed
+   * but UNFUNDED control plane — it pins no wallet, so it can never buy a lease; a single active
+   * writer per test wallet (story.5016). It is also absent from `NODE_FORMATION_ENVS`.
    *
    * PRODUCTION_GOVERNS_SPAWN (Derek, story.5016): a birth's canonical slot is production on the
    * Crossplane rail from generation 1 — never "candidate-a first, then a faked catalog cutover".
@@ -86,8 +86,10 @@ describe("renderCatalog", () => {
     // Both facts hold for production: installed control plane AND pinned dedicated wallet.
     expect(CROSSPLANE_CONTROL_PLANE_ENVS).toContain("production");
     expect(CROSSPLANE_ACTUATOR_WALLET_ENVS).toContain("production");
+    // Preview installs the composite API (dormant control plane) but pins NO wallet, so it can
+    // never buy a lease — a single active writer per test wallet (story.5016).
     expect(CROSSPLANE_CONTROL_PLANE_ENVS).toContain("preview");
-    expect(CROSSPLANE_ACTUATOR_WALLET_ENVS).toContain("preview");
+    expect(CROSSPLANE_ACTUATOR_WALLET_ENVS).not.toContain("preview");
   });
 
   /**

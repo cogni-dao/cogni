@@ -23,10 +23,12 @@
  *   - DEDICATED_CREDENTIAL_OR_NOTHING: `AKASH_ACTUATOR_CONSOLE_API_KEY` is REQUIRED and has no
  *     fallback of any kind. Omission cannot silently point the actuator at another wallet.
  *   - SCOPE_IS_PER_ENVIRONMENT: the ledger scope is `akash-console:<environment>`, so each env's
- *     local actuator is serialized by that env's Postgres. Centralized v0 intentionally lets
- *     candidate-a and preview reuse the managed test account; production stays isolated. This
- *     makes one actuator per environment plus NO Console/manual writes load-bearing: an external
- *     writer invalidates cursor recovery and must fail deployment proof (ci-cd.md Axiom 26).
+ *     local actuator is serialized by that env's Postgres, which is per-database and cannot
+ *     serialize two envs sharing one wallet. Centralized v0 therefore pins the managed test
+ *     account on candidate-a ONLY (preview pins no wallet — one active writer per test wallet);
+ *     production stays isolated on a dedicated account. This makes one actuator per pinned wallet
+ *     plus NO Console/manual writes load-bearing: an external writer invalidates cursor recovery
+ *     and must fail deployment proof (ci-cd.md Axiom 26).
  *   - SCOPE_IS_ROTATION_STABLE: the scope is derived from the environment, never from the secret
  *     value, so rotating the credential cannot orphan in-flight allocation receipts.
  *   - NEVER_LOGS_OR_RETURNS_THE_VALUE_IN_AN_ERROR: refusals carry a stable code and, at most, the
