@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# ADDRESS_IS_THE_CONTRACT, forwarded one namespace over (story.5016 seam 4).
+#
+# infra/crossplane/xcomputeworkload/composition.yaml builds the writer's address from the XR's
+# OWN namespace — `http://akash-tx-actuator.<ns>.svc.cluster.local:8080` — and cannot know that
+# this lane's writer lives next door. This ExternalName Service is the whole reason the
+# Composition needs no edit: in `cogni-preview` the name `akash-tx-actuator` resolves, by
+# CNAME, to the single production writer in `cogni-production`.
+#
+# ONE WRITER, NOT TWO. This is deliberately an ALIAS and never a second actuator Deployment:
+# `account → writer` must stay injective, and a second process mid-spend on the production
+# Console account is exactly the double-spend `akash_tx_allocations_single_writer_idx` cannot
+# serialize, because that index is per-database.
+#
+# The port is documentary — an ExternalName Service resolves by CNAME and does not proxy — but
+# it is pinned to 8080 to match infra/k8s/base/akash-tx-actuator/service.yaml, so a port change
+# fails review here instead of as a connection error hours later.
+apiVersion: v1
+kind: Service
+metadata:
+  name: akash-tx-actuator
+  namespace: cogni-preview
+  labels:
+    app.kubernetes.io/name: akash-tx-actuator
+    app.kubernetes.io/part-of: cogni
+    app.kubernetes.io/component: akash-lane
+spec:
+  type: ExternalName
+  externalName: akash-tx-actuator.cogni-production.svc.cluster.local
+  ports:
+    - name: http
+      port: 8080
+      protocol: TCP

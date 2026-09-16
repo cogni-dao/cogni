@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# The candidate-a Akash lane, hosted in the PRODUCTION cluster (story.5016 seam 4).
+#
+# The Composition's second identity gate is `cogni-<spec.environment> == metadata.namespace`
+# and says nothing about a cluster, so an XR with `environment: candidate-a` reconciles here
+# unmodified. RECONCILIATION follows PAYMENT: the one production writer is ClusterIP-private,
+# so the only cluster that can dial it is its own — that is why the candidate-a lane lives
+# here rather than in the candidate-a cluster, and why the production Console key never
+# leaves this cluster.
+#
+# This namespace holds COMPUTE DESIRED STATE ONLY — XComputeWorkloads and the
+# Crossplane-managed Requests they compose. The candidate-a node-app pods keep running in the
+# candidate-a cluster; nothing about the app lane moves.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cogni-candidate-a
+  labels:
+    app.kubernetes.io/part-of: cogni
+    app.kubernetes.io/component: akash-lane
+    environment: candidate-a

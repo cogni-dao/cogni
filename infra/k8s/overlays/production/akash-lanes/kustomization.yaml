@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# AKASH LANES IN THE PRODUCTION CLUSTER (story.5016 seam 4).
+#
+# North star NS2/NS3: the production operator controls test, preview AND production
+# deployments for every node, and EVERY real node deployment bills the ONE production
+# Console account. One account ⇒ one ledger ⇒ one ACTIVE WRITER, so `writer → envs` is
+# one-to-many and `account → writer` stays injective. This directory is the substrate
+# that makes the one production writer reachable from a NON-production lane WITHOUT
+# minting a second writer and WITHOUT ever placing the production Console key in a
+# pre-prod cluster (custody flows DOWN-TRUST only).
+#
+# WHY NO COMPOSITION CHANGE IS NEEDED. infra/crossplane/xcomputeworkload/composition.yaml
+# has exactly TWO identity gates:
+#   1. metadata.name == spec.nodeId
+#   2. cogni-<spec.environment> == metadata.namespace
+# Neither mentions a cluster. An XR with `environment: preview`, named by its nodeId,
+# sitting in `cogni-preview` INSIDE THE PRODUCTION CLUSTER passes both gates unmodified.
+#
+# THE ONE THING THAT DOES NOT TRAVEL is the writer's address, which the Composition
+# derives from the XR's OWN namespace:
+#   http://akash-tx-actuator.{{$ns}}.svc.cluster.local:8080
+#   Bearer {{ akash-tx-actuator-auth:{{$ns}}:token }}
+# The actuator Service is ClusterIP and PRIVATE_BY_CONSTRUCTION, so it cannot be dialled
+# cross-namespace by its real name. This directory supplies, per lane namespace, the two
+# objects that make the $ns-derived pair resolve to the single production writer:
+#   - an ExternalName Service `akash-tx-actuator` aliasing cogni-production's real one;
+#   - an ExternalSecret projecting the SAME bearer token from the SAME OpenBao path the
+#     production actuator's own auth Secret uses (cogni/production/akash-tx-actuator).
+#
+# THIS MAKES THE LANES ADDRESSABLE AND NOTHING ELSE. No XComputeWorkload, no node
+# compute-env Secret, no catalog row. Merging this mints nothing and spends nothing.
+#
+# Namespaces are declared here explicitly rather than relying on an Argo
+# `CreateNamespace=true` side effect: these lanes are not the destination namespace of
+# any Application, so nothing else would create them. (The stale
+# infra/k8s/overlays/{preview,production}/namespace.yaml files are referenced by no
+# kustomization and are not the pattern.)
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - candidate-a-namespace.yaml
+  - candidate-a-actuator-alias-service.yaml
+  - candidate-a-actuator-auth-external-secret.yaml
+  - preview-namespace.yaml
+  - preview-actuator-alias-service.yaml
+  - preview-actuator-auth-external-secret.yaml

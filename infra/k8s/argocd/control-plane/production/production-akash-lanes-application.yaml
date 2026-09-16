@@ -1,0 +1,61 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# Argo CD Application — cogni-production-akash-lanes (story.5016 seam 4).
+#
+# Reconciles infra/k8s/overlays/production/akash-lanes/ — the lane namespaces the PRODUCTION
+# cluster hosts on behalf of OTHER environments, plus the two objects per lane that make the
+# single production Akash writer reachable from them:
+#   cogni-candidate-a, cogni-preview
+#   Service/akash-tx-actuator      ExternalName → akash-tx-actuator.cogni-production.svc…
+#   ExternalSecret/akash-tx-actuator-auth  ← cogni/production/akash-tx-actuator
+#
+# WHY THIS LIVES IN control-plane/production/ AND NOT IN AN AppSet. appsets/production/ is
+# GENERATED per (env, node) from infra/catalog (scripts/ci/render-node-appset.sh) and every
+# template pins `destination.namespace: cogni-production`. These lanes are not a node and not a
+# catalog row; they are production's compute control plane, the same layer as its sibling
+# crossplane-* Applications here. The production ROOT app-of-apps
+# (../roots/production-control-plane-application.yaml, directory.recurse: false) already owns
+# every manifest in this directory, so this file needs no bootstrap change and no new shape —
+# it is the same plain Application the siblings are.
+#
+# targetRevision: main, for the same reason every production-side control-plane Application
+# tracks main: production must never run an unmerged control-plane tree. candidate-a is the
+# only proof slot, and nothing in this directory is candidate-a's to fast-forward.
+#
+# NOTHING MINTS FROM THIS. There is no XComputeWorkload in the source path, and no catalog row
+# names crossplane for a non-production env. Syncing this makes the lanes ADDRESSABLE; placing
+# an XR in one is a separate, reviewed change.
+#
+# `prune: false` matches the sibling Crossplane Applications, and here it is load-bearing
+# rather than cosmetic: once a lane namespace holds XComputeWorkloads, pruning the Namespace
+# would cascade-delete them and CLOSE PAID LEASES. A lane is retired by an explicit,
+# lease-draining operation, never by a file disappearing from git.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cogni-production-akash-lanes
+  namespace: argocd
+  annotations:
+    # After the Crossplane Applications (sync-wave 0): the lane is only useful once the
+    # composite API exists, and ordering costs nothing.
+    argocd.argoproj.io/sync-wave: "1"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/cogni-dao/cogni.git
+    targetRevision: main
+    path: infra/k8s/overlays/production/akash-lanes
+  destination:
+    server: https://kubernetes.default.svc
+    # Fallback only — every object in the source path carries an explicit
+    # metadata.namespace (or is cluster-scoped), so nothing actually lands here.
+    namespace: cogni-production
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true
