@@ -1,0 +1,52 @@
+apiVersion: compute.cogni.io/v1alpha1
+kind: XComputeWorkload
+metadata:
+  name: 4b06359a-a859-4399-888e-a8c7a6696f7e
+  namespace: cogni-candidate-a
+  labels:
+    cogni.io/node-id: 4b06359a-a859-4399-888e-a8c7a6696f7e
+    cogni.io/environment: candidate-a
+    cogni.io/node: poly
+spec:
+  nodeId: 4b06359a-a859-4399-888e-a8c7a6696f7e
+  environment: candidate-a
+  bundle:
+    ref: ghcr.io/cogni-dao/poly@sha256:d2d8cd138edbae5aae543de4c0366f40a680d2c3400537c5be43774b3f437f6d
+    source:
+      repository: cogni-dao/poly
+      sha: 87109bf0d2f40e5da11a4e066136f3f46baca556
+    artifacts:
+      - name: app
+        image: ghcr.io/cogni-dao/poly@sha256:4e313fb1ace28ea3acd13ec500204f5ff4edd3a0d1e67ef656b53d86d7484496
+  workload:
+    name: poly
+    publicHost: poly-test.cognidao.org
+    services:
+      - name: app
+        artifact: app
+        runtimeProfile: cogni-node-app-v1
+        secretRefs:
+          - key: AUTH_SECRET
+          - key: DATABASE_URL
+          - key: DATABASE_SERVICE_URL
+          - key: EVM_RPC_URL
+          - key: LITELLM_VIRTUAL_KEY
+          - key: SCHEDULER_API_TOKEN
+          - key: BILLING_INGEST_TOKEN
+        port: 3200
+        visibility: public
+        bindings: {}
+        bindHost: 0.0.0.0
+        cpuUnits: 2
+        memoryMi: 2048
+        storageMi: 4096
+  migration:
+    policy: RequireBeforeTransaction
+  bootPolicy:
+    onDeadline: Close
+  leaseEpoch: 0
+  dns:
+    provider: cloudflare
+    zoneId: 23220356c352c5831c6af57887b11a27
+  runtime:
+    substrateHost: cogni-candidate-a.vm.cognidao.org
