@@ -5,7 +5,9 @@
 # Module: scripts/ci/tests/render-compute-egress-allowlist.test.sh
 # Purpose: Prove the catalog→VM compute-egress allowlist path (task.5052):
 #   1. render-compute-egress-allowlist.sh renders per-env allow lines from a
-#      catalog fixture (env scoping, dedupe, determinism, fail-loud validation);
+#      catalog fixture (env scoping, PLACEMENT scoping, dedupe, determinism,
+#      fail-loud validation). bug.5191: `envs:` membership alone must NOT open a
+#      row's provider NAT — only `deployment_provider.<env>: akash` may;
 #   2. harden-docker-public-ports.sh (faked iptables) installs the staged render
 #      and places ACCEPTs ahead of the public DROP;
 #   3. idempotency — re-running produces byte-identical rules;
@@ -37,6 +39,8 @@ cat > "$CATALOG/toksa.yaml" <<'EOF'
 name: toksa
 type: node
 envs: [candidate-a]
+deployment_provider:
+  candidate-a: akash
 compute_egress_cidrs:
   - cidr: 80.200.246.35/32
     comment: shared zencloud+digitalfrontier Akash egress NAT (story.5016)
@@ -48,6 +52,8 @@ cat > "$CATALOG/toksb.yaml" <<'EOF'
 name: toksb
 type: node
 envs: [preview]
+deployment_provider:
+  preview: akash
 compute_egress_cidrs:
   - cidr: 203.0.113.7/32
     comment: preview-only provider (fixture)
@@ -58,9 +64,38 @@ cat > "$CATALOG/toksdup.yaml" <<'EOF'
 name: toksdup
 type: node
 envs: [candidate-a]
+deployment_provider:
+  candidate-a: akash
 compute_egress_cidrs:
   - cidr: 80.200.246.35/32
     comment: same NAT reused by another node (fixture)
+EOF
+
+# bug.5191 — PLACEMENT, not membership. Explicit k3s in the only env it deploys
+# to: this row's CIDR must never appear in any render.
+cat > "$CATALOG/toksk3s.yaml" <<'EOF'
+name: toksk3s
+type: node
+envs: [candidate-a]
+deployment_provider:
+  candidate-a: k3s
+compute_egress_cidrs:
+  - cidr: 192.0.2.77/32
+    comment: k3s-placed row must open no provider hole (fixture)
+EOF
+
+# bug.5191 — the same row in TWO envs with different placement. K3S_IS_DEFAULT:
+# candidate-a has no override, so it is k3s and contributes nothing there; preview
+# is akash and contributes. One row, one CIDR, opposite outcomes per env.
+cat > "$CATALOG/tokssplit.yaml" <<'EOF'
+name: tokssplit
+type: node
+envs: [candidate-a, preview]
+deployment_provider:
+  preview: akash
+compute_egress_cidrs:
+  - cidr: 192.0.2.99/32
+    comment: provider NAT for the preview placement only (fixture)
 EOF
 
 # Rows without the field / without envs must contribute nothing.
@@ -100,11 +135,32 @@ grep -q '^# toksa: shared zencloud+digitalfrontier' "$OUT_A" \
   || fail "provenance comment missing from render"
 ok "catalog comments carried into rendered file"
 
+# bug.5191 — membership in envs[] is NOT authority to open a provider hole.
+grep -q '192.0.2.77' "$OUT_A" \
+  && fail "explicitly k3s-placed row (toksk3s) leaked its CIDR into candidate-a"
+ok "explicitly k3s-placed row contributes no CIDR to the env it deploys to"
+
+grep -q '192.0.2.99' "$OUT_A" \
+  && fail "placement-defaulted (k3s) row (tokssplit) leaked its CIDR into candidate-a"
+ok "K3S_IS_DEFAULT: row with no override for the env contributes no CIDR there"
+
 OUT_P="$TMPROOT/preview.list"
 bash "$RENDERER" preview > "$OUT_P"
-[ "$(grep -cv '^#' "$OUT_P")" = "1" ] || fail "preview should have exactly 1 rule"
-grep -q "^203.0.113.7/32:$PORTS$" "$OUT_P" || fail "preview rule wrong"
-ok "preview renders only its own row's CIDR"
+EXPECTED_P="$TMPROOT/preview.expected"
+grep -v '^#' "$OUT_P" > "$TMPROOT/preview.rules" || true
+cat > "$EXPECTED_P" <<EOF
+203.0.113.7/32:$PORTS
+192.0.2.99/32:$PORTS
+EOF
+diff -u "$EXPECTED_P" "$TMPROOT/preview.rules" \
+  || fail "preview rules differ from expected (akash-placed rows only)"
+ok "preview renders exactly its akash-placed rows' CIDRs"
+
+# The SAME tokssplit row that was excluded from candidate-a IS included here —
+# proof the filter is placement, not a blanket suppression of the row.
+grep -q "^192.0.2.99/32:$PORTS$" "$OUT_P" \
+  || fail "akash-placed env of a split-placement row must still contribute"
+ok "split-placement row contributes in its akash env and only there"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 2. Renderer: empty env + idempotency + fail-loud validation
@@ -124,6 +180,8 @@ cat > "$CATALOG/broken.yaml" <<'EOF'
 name: broken
 type: node
 envs: [candidate-a]
+deployment_provider:
+  candidate-a: akash
 compute_egress_cidrs:
   - cidr: not-a-cidr
     comment: bad
@@ -133,6 +191,24 @@ if bash "$RENDERER" candidate-a > /dev/null 2>&1; then
 fi
 rm "$CATALOG/broken.yaml"
 ok "invalid CIDR aborts the render (never warn-skipped on the VM)"
+
+# An unresolvable placement must abort, never silently fall through to "not akash"
+# (that would turn a catalog typo into a quiet, unnoticed firewall change).
+cat > "$CATALOG/badplacement.yaml" <<'EOF'
+name: badplacement
+type: node
+envs: [candidate-a]
+deployment_provider:
+  candidate-a: fly
+compute_egress_cidrs:
+  - cidr: 198.18.0.1/32
+    comment: unsupported provider (fixture)
+EOF
+if bash "$RENDERER" candidate-a > /dev/null 2>&1; then
+  fail "renderer must fail LOUD on an unsupported deployment_provider"
+fi
+rm "$CATALOG/badplacement.yaml"
+ok "unsupported deployment_provider aborts the render"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Fake VM toolchain for harden-docker-public-ports.sh

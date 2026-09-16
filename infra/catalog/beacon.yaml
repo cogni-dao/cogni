@@ -37,7 +37,7 @@ path_prefix: nodes/beacon/
 node_id: f97f68f2-8406-4a3b-b5a9-d579b779f19d
 # task.5052 (story.5016) — this node's workload runs on Akash; these provider
 # egress CIDRs may dial the env VM's substrate ports (5432,5435,6379,4000,7233).
-# Rendered per-env (union over rows deployed to the env) by
+# Rendered per-env (union over rows AKASH-PLACED in that env — bug.5191) by
 # scripts/ci/render-compute-egress-allowlist.sh and applied by
 # infra/provision/cherry/harden-docker-public-ports.sh. Absent = fail-closed.
 compute_egress_cidrs:
