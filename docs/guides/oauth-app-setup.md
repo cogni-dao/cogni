@@ -47,6 +47,38 @@ The registration looks untouched and correct throughout. This cost a failed huma
 
 `src/auth.ts` registers each provider only when both `*_CLIENT_ID` and `*_CLIENT_SECRET` are set. No code change is needed to add one — but note the failure mode: **NextAuth advertises a provider whenever its credentials exist, regardless of whether the callback URL is registered.** A provider showing up on the sign-in page is not evidence that it works.
 
+## GitHub sends `iss` now — a provider without an `issuer` cannot complete sign-in
+
+GitHub adopted **RFC 9207** (Authorization Server Issuer Identification) in April 2026 and now returns `iss=https://github.com/login/oauth` on every authorization response.
+
+`openid-client` branches on the parameter's mere presence — `if ('iss' in params) assertIssuerConfiguration(this.issuer, 'issuer')` — and NextAuth's GitHub provider declares **no** `issuer`, so the assert throws and every callback dies:
+
+| where   | what you see                                                                             |
+| ------- | ---------------------------------------------------------------------------------------- |
+| browser | bounced to `/?error=OAuthCallback` — no detail, reads like a config problem              |
+| Loki    | `[OAUTH_CALLBACK_ERROR] issuer must be configured on the issuer`, `providerId: 'github'` |
+
+**Fix — one line in `src/auth.ts`:**
+
+```ts
+GitHub({ clientId, clientSecret, issuer: "https://github.com/login/oauth" });
+```
+
+The value must byte-match what GitHub sends. A wrong one fails loudly and specifically (`iss mismatch, expected X, got: Y`), so pin it rather than guess.
+
+**Google is immune** — its provider discovers `wellKnown`, which populates `issuer` already. Any hand-rolled OAuth2 provider with no `issuer` is exposed the moment its upstream adopts RFC 9207; Discord is the next candidate in our own config.
+
+**This was live and unnoticed for four months** (`bug.5071`): prod Loki showed 3/3 sign-in attempts failing over 28 days, because nothing alerts on a user-facing auth bounce. Diagnosing it from the browser is impossible — the URL says `OAuthCallback` whether the cause is the issuer assert, a bad code, or a state mismatch. Drive a real signin to obtain a matching `state` cookie, replay the callback with `code`+`state`+`iss`, and read the Loki message; that is the only thing that discriminates.
+
+## Nodes do NOT register a GitHub OAuth app — they never will
+
+A relying node holds **no GitHub client, no secret, and no redirect URI of its own**. The operator holds the environment's single client and brokers on the node's behalf (`fleet-github-oauth-constraint`), so seeding `GH_OAUTH_*` into a node is the anti-pattern this design exists to prevent — it puts the fleet's client secret on every node and costs one settings edit per node per env against a hard 10-URI ceiling.
+
+A node's GitHub button is the `operator-github` **Credentials** provider (`task.5042`). It accepts only an EdDSA attestation the operator already signed, verified against the operator's JWKS. Two consequences that bite:
+
+- **It is not an OAuth provider.** Handing it to `signIn()` posts an empty credential and bounces with `?error=CredentialsSignin`. It must take the broker round trip first (`POST /api/v1/identity/bindings/import/start`, then follow `authorizeUrl`).
+- **Adding a node needs zero OAuth work.** No app, no URI, no secret — if a new node lacks the button, the cause is deployment (see `bug.5076`/`bug.5077`), never OAuth registration.
+
 ## Route inventory — every callback that needs registering
 
 Auth callbacks live under `/api/auth/`. That path tree sits outside the proxy's session gate, which is why they work unauthenticated.
@@ -265,20 +297,24 @@ If you're already signed in (e.g. via wallet), you can link an OAuth provider fr
 
 ## Troubleshooting
 
-| Symptom                                                                         | Cause                                                                                                                                                                      | Fix                                                                                                         |
-| ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| Provider not showing on sign-in                                                 | Missing or empty `CLIENT_ID` / `CLIENT_SECRET`                                                                                                                             | Check `.env.local`, restart dev server                                                                      |
-| "redirect_uri_mismatch" (Google)                                                | Callback URL doesn't match registered redirect URI                                                                                                                         | Verify exact URL in Google Cloud Console (trailing slashes matter)                                          |
-| "redirect_uri_mismatch" (GitHub)                                                | Callback URL doesn't match registered callback URL                                                                                                                         | Verify exact URL in GitHub OAuth App settings                                                               |
-| GitHub "Be careful! The `redirect_uri` is not associated with this application" | The exact URL is not registered. **Most often: someone added a second redirect URI, which turned off the legacy implicit wildcard that was covering a registered prefix.** | Register the exact full callback URL for every route (see rule 2). Do not assume a prefix covers sub-paths. |
-| Provider listed on sign-in but the round trip dies at the provider              | Credentials are set, so NextAuth advertises it — but the callback URL is unregistered. Presence on the sign-in page proves nothing.                                        | Register the exact callback URL                                                                             |
-| Anonymous `curl` of the authorize URL "passes" but a browser fails              | Providers validate `redirect_uri` only after sign-in                                                                                                                       | Test in a signed-in browser; scripted probes give false passes                                              |
-| Google "Access blocked" screen                                                  | App in Testing mode, your email not in test users list                                                                                                                     | Add your email to OAuth consent screen → Test users                                                         |
-| Google "unverified app" warning                                                 | App not verified (expected in dev)                                                                                                                                         | Click "Advanced" → "Go to Cogni (unsafe)" to proceed                                                        |
-| Sign-in succeeds but no user row                                                | DB connection issue                                                                                                                                                        | Check Postgres is running, `DATABASE_URL` is correct                                                        |
+| Symptom                                                                                                | Cause                                                                                                                                                                      | Fix                                                                                                         |
+| ------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Provider not showing on sign-in                                                                        | Missing or empty `CLIENT_ID` / `CLIENT_SECRET`                                                                                                                             | Check `.env.local`, restart dev server                                                                      |
+| "redirect_uri_mismatch" (Google)                                                                       | Callback URL doesn't match registered redirect URI                                                                                                                         | Verify exact URL in Google Cloud Console (trailing slashes matter)                                          |
+| "redirect_uri_mismatch" (GitHub)                                                                       | Callback URL doesn't match registered callback URL                                                                                                                         | Verify exact URL in GitHub OAuth App settings                                                               |
+| GitHub "Be careful! The `redirect_uri` is not associated with this application"                        | The exact URL is not registered. **Most often: someone added a second redirect URI, which turned off the legacy implicit wildcard that was covering a registered prefix.** | Register the exact full callback URL for every route (see rule 2). Do not assume a prefix covers sub-paths. |
+| GitHub sign-in bounces to `/?error=OAuthCallback`, Loki says `issuer must be configured on the issuer` | GitHub sends RFC 9207 `iss`; the provider declares no `issuer`                                                                                                             | Add `issuer: "https://github.com/login/oauth"` to the GitHub provider (`bug.5071`)                          |
+| A node shows no GitHub button                                                                          | Nodes register no GitHub provider by design; the button is `operator-github` and appears only when that node's build carries `task.5042`                                   | Check the node's deployed sha, not OAuth config — `GET <node>/api/auth/providers`                           |
+| A node's GitHub button bounces with `?error=CredentialsSignin`                                         | `operator-github` was handed to `signIn()` directly; it has no credential until the broker mints one                                                                       | Route it through the start leg, then follow `authorizeUrl`                                                  |
+| Provider listed on sign-in but the round trip dies at the provider                                     | Credentials are set, so NextAuth advertises it — but the callback URL is unregistered. Presence on the sign-in page proves nothing.                                        | Register the exact callback URL                                                                             |
+| Anonymous `curl` of the authorize URL "passes" but a browser fails                                     | Providers validate `redirect_uri` only after sign-in                                                                                                                       | Test in a signed-in browser; scripted probes give false passes                                              |
+| Google "Access blocked" screen                                                                         | App in Testing mode, your email not in test users list                                                                                                                     | Add your email to OAuth consent screen → Test users                                                         |
+| Google "unverified app" warning                                                                        | App not verified (expected in dev)                                                                                                                                         | Click "Advanced" → "Go to Cogni (unsafe)" to proceed                                                        |
+| Sign-in succeeds but no user row                                                                       | DB connection issue                                                                                                                                                        | Check Postgres is running, `DATABASE_URL` is correct                                                        |
 
 ## Related
 
 - [Authentication Spec](../spec/authentication.md) — full auth flow design, invariants, session model
 - [Identity Model](../spec/identity-model.md) — `user_id`, `user_bindings`, identity primitives
 - [Developer Setup](./developer-setup.md) — general env setup
+- [Decentralized User Identity](../spec/decentralized-user-identity.md) — the operator-brokered attestation a node's GitHub button actually uses
