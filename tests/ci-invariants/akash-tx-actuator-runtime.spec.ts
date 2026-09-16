@@ -63,6 +63,7 @@ const ACTUATOR_OWNED_KEYS = [
 
 const BASE = "infra/k8s/base/akash-tx-actuator";
 const OVERLAY = "infra/k8s/overlays/candidate-a/operator";
+const ACTUATOR_ENVIRONMENTS = ["candidate-a", "preview", "production"] as const;
 
 interface K8sObject {
   readonly kind: string;
@@ -106,6 +107,48 @@ function container(): Record<string, unknown> {
 }
 
 describe("akash-tx-actuator runtime", () => {
+  it("is the sole compute writer in every funded environment", () => {
+    for (const environment of ACTUATOR_ENVIRONMENTS) {
+      const root = `infra/k8s/overlays/${environment}/operator`;
+      const environmentOverlay = parse<{
+        readonly resources: readonly string[];
+        readonly transformers?: readonly string[];
+      }>(`${root}/kustomization.yaml`);
+
+      expect(environmentOverlay.resources, environment).toContain(
+        `../../../base/${SERVICE_NAME}`
+      );
+      expect(environmentOverlay.resources, environment).not.toContain(
+        "../../../base/compute-workload-controller"
+      );
+      expect(environmentOverlay.transformers, environment).toContain(
+        `../../../base/${SERVICE_NAME}-service-name`
+      );
+
+      const actuatorExternal = parse<{
+        spec: { dataFrom: { extract: { key: string } }[] };
+      }>(`${root}/akash-tx-actuator-external-secret.yaml`);
+      expect(actuatorExternal.spec.dataFrom[0]?.extract.key, environment).toBe(
+        `${environment}/${OPENBAO_SERVICE}`
+      );
+
+      const authExternal = parse<{
+        spec: {
+          data: { remoteRef: { key: string; property: string } }[];
+        };
+      }>(`${root}/akash-tx-actuator-auth-external-secret.yaml`);
+      expect(authExternal.spec.data, environment).toEqual([
+        {
+          secretKey: AUTH_SECRET_KEY,
+          remoteRef: {
+            key: `${environment}/${OPENBAO_SERVICE}`,
+            property: "AKASH_TX_ACTUATOR_TOKEN",
+          },
+        },
+      ]);
+    }
+  });
+
   it("serves at the exact address the Composition dials", () => {
     expect(service.metadata.name).toBe(SERVICE_NAME);
     expect(service.spec.type).toBe("ClusterIP");

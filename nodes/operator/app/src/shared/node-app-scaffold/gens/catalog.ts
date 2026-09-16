@@ -87,10 +87,9 @@ export function renderCatalog(
   // Either fact alone is not enough: no control plane means the promote renders an
   // XComputeWorkload into a cluster with no such CRD, and no pinned wallet means the actuator
   // refuses every paid transaction with `actuator_account_id_missing`. Both produce a node that
-  // never comes up. task.5097 installed the control plane on preview/production while
-  // deliberately leaving their wallets unpinned, so births still mint candidate-a only and the
-  // unfiltered envs stay on the pre-existing `legacy` default — the bespoke controller that is
-  // actually reconciling there. Pinning an env's wallet is what makes births pick it up.
+  // never comes up. task.5129 pins preview's shared test account after installing its control
+  // plane, so new births can now select Crossplane there; production remains independently
+  // pinned and isolated. Pinning an env's wallet is what makes births pick it up.
   const crossplaneEnvs = envs.filter((env) => canBirthOnCrossplane(env));
   const computeApiBlock =
     offCluster && crossplaneEnvs.length > 0

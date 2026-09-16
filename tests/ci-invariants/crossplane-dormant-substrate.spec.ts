@@ -222,10 +222,10 @@ describe("Crossplane substrate boundary (task.5094, task.5096, task.5097)", () =
    *     renders a composite into a cluster with no such CRD, reconciled by nobody;
    *   - an env with a control plane missing from the constant → the guard rejects a legitimate
    *     row and blocks the very cutover the install was for.
-   * So installing Crossplane on preview/production was DELIBERATELY a red build until this
-   * constant was widened in the same PR — which is exactly what task.5097 did. The assertion is
-   * now derived from git in both directions rather than pinned to a literal, so the next env to
-   * gain or lose a control plane still cannot drift from what the operator believes.
+   * So installing Crossplane on production (task.5097) and preview (task.5129) was DELIBERATELY
+   * a red build until this constant was widened in the same PR. The assertion is now derived from
+   * git in both directions rather than pinned to a literal, so the next env to gain or lose a
+   * control plane still cannot drift from what the operator believes.
    */
   it("names exactly the environments whose control plane installs the composite API", () => {
     expect([...CROSSPLANE_CONTROL_PLANE_ENVS].sort()).toEqual(INSTALLED_ENVS);
@@ -255,6 +255,17 @@ describe("Crossplane substrate boundary (task.5094, task.5096, task.5097)", () =
         `${environment} pins a wallet but installs no control plane`
       ).toContain(environment);
     }
+  });
+
+  it("reuses the managed test account only across candidate-a and preview", () => {
+    const candidateAccount = actuatorAccountId("candidate-a");
+    const previewAccount = actuatorAccountId("preview");
+    const productionAccount = actuatorAccountId("production");
+
+    expect(candidateAccount).not.toBe("");
+    expect(previewAccount).toBe(candidateAccount);
+    expect(productionAccount).not.toBe("");
+    expect(productionAccount).not.toBe(candidateAccount);
   });
 
   it("pins the core chart and runtime image, bounds resources, and exposes metrics", () => {

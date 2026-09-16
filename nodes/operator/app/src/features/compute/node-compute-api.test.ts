@@ -70,8 +70,8 @@ describe("resolveNodeComputeApi", () => {
   /**
    * AUTHORITY_REQUIRES_AN_INSTALLED_API (task.5104). `crossplane` is resolvable exactly where a
    * `crossplane-xcomputeworkload-application.yaml` exists under
-   * infra/k8s/argocd/control-plane/<env>/ — task.5097 staged that for preview and production, so
-   * all three now resolve. Without this guard, a row naming an env with no control plane renders
+   * infra/k8s/argocd/control-plane/<env>/ — task.5097 staged production and task.5129 completes
+   * preview, so all three now resolve. Without this guard, a row naming an env with no control plane renders
    * an XComputeWorkload into a cluster where that CRD does not exist, reconciled by nobody.
    *
    * RESOLVABLE IS NOT SELECTED. Widening the constant did not flip a single row: the selector is
@@ -90,31 +90,14 @@ describe("resolveNodeComputeApi", () => {
   });
 
   /**
-   * NO_SILENT_DOWNGRADE, restated for the post-task.5097 world. The refusal in
-   * `resolveNodeComputeApi` — throw, never degrade to `legacy`, because the two authorities mint
-   * Akash leases under disjoint idempotence keys and a quiet downgrade buys a SECOND PAID LEASE —
-   * is REACHABLE from exactly one admitted environment: preview, which deliberately gets no
-   * control plane (story.5016 — preview has no funded Akash account, gets no actuator, and its
-   * node slots are retired; installing an API nothing can ever pay for would only stage a trap).
-   * The test that used to drive the refusal with `{production: "crossplane"}` was deleted rather
-   * than weakened: that input is now legitimately `crossplane`.
-   *
-   * The refusal is proven live for preview and for an environment outside the schema. If a
-   * fourth environment is ever added, this is the assertion that breaks first — before a row can
-   * render a composite nothing reconciles.
+   * NO_SILENT_DOWNGRADE, restated after task.5129 installed the last admitted environment.
+   * Every schema environment now has the API; the refusal remains reachable for any future or
+   * misspelled environment and must throw rather than silently mint through the legacy writer.
    */
-  it("keeps the refusal armed for an environment with no control plane", () => {
+  it("keeps the refusal armed outside installed environments", () => {
     for (const environment of deploymentEnvironmentSchema.options) {
-      expect(hasCrossplaneControlPlane(environment), environment).toBe(
-        environment !== "preview"
-      );
+      expect(hasCrossplaneControlPlane(environment), environment).toBe(true);
     }
-    expect(() =>
-      resolveNodeComputeApi({
-        catalog: { compute_api: { preview: "crossplane" } },
-        environment: "preview",
-      })
-    ).toThrow(/control plane/i);
     expect(hasCrossplaneControlPlane("canary")).toBe(false);
     expect(crossplaneCompositeApplicationPath("canary")).toBe(
       "infra/k8s/argocd/control-plane/canary/crossplane-xcomputeworkload-application.yaml"

@@ -25,8 +25,9 @@
  *     mis-attributed spend is unrecoverable in a way a retry is not.
  *   - WALLET_SINGLE_WRITER: the ledger slot is held for exactly the unrecoverable window
  *     (cursor read → allocated handle durable) and is wallet-wide, never per-workload. The
- *     wallet it serializes is a DEDICATED per-environment Console account resolved by
- *     ./akash-tx-wallet, which refuses the legacy controller's credential outright.
+ *     local writer is the environment's sole actuator; its legacy controller is absent and
+ *     Console/manual writes are forbidden. Centralized v0 may reuse the managed test account
+ *     across candidate-a and preview, while production remains isolated (ci-cd.md Axiom 26).
  *   - FAIL_CLOSED: an allocation that cannot be resolved to exactly one lease raises
  *     allocation_unresolved / allocation_ambiguous. It is NEVER healed by a fresh create.
  *   - MIGRATION_BEFORE_TRANSACTION: every mutating call states a migration requirement, and a
