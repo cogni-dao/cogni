@@ -275,6 +275,7 @@ async function run(
     recordMutationFailure?: ComputeWorkloadReconcileDeps["recordMutationFailure"];
     recordMigrationFailure?: ComputeWorkloadReconcileDeps["recordMigrationFailure"];
     recordMigrationHold?: ComputeWorkloadReconcileDeps["recordMigrationHold"];
+    recordWalletAllocationBlocked?: ComputeWorkloadReconcileDeps["recordWalletAllocationBlocked"];
     leaseLogPush?: ComputeWorkloadReconcileDeps["leaseLogPush"];
   } = {}
 ) {
@@ -313,6 +314,8 @@ async function run(
       recordMutationFailure: overrides.recordMutationFailure ?? vi.fn(),
       recordMigrationFailure: overrides.recordMigrationFailure ?? vi.fn(),
       recordMigrationHold: overrides.recordMigrationHold ?? vi.fn(),
+      recordWalletAllocationBlocked:
+        overrides.recordWalletAllocationBlocked ?? vi.fn(),
       ...(overrides.leaseLogPush
         ? { leaseLogPush: overrides.leaseLogPush }
         : {}),
@@ -2105,6 +2108,37 @@ describe("reconcileComputeWorkload", () => {
       expect(state.wallet).toMatchObject({
         attemptKey: "some-other-workload-attempt",
       });
+    });
+
+    // bug.5115 observability: the blocked verdict is written to CR status only,
+    // so without this record a fleet-wide allocation deadlock is invisible to
+    // anyone without cluster access.
+    it("records a warn-level observation whenever a wallet slot is blocked", async () => {
+      const resource = workload();
+      const state = claimedWedge({
+        resource,
+        operation: "create",
+        ordinal: 0,
+        leaderEpoch: DEAD_EPOCH,
+        retryCount: 2,
+        recoveryCount: 0,
+      });
+      state.wallet = {
+        attemptKey: "some-other-workload-attempt",
+        workloadUid: "323e4567-e89b-12d3-a456-426614174000",
+      };
+      const recordWalletAllocationBlocked = vi.fn();
+
+      await run(state, lifecycle(), { recordWalletAllocationBlocked });
+
+      expect(recordWalletAllocationBlocked).toHaveBeenCalledWith(
+        expect.objectContaining({
+          nodeId: resource.spec.nodeId,
+          environment: resource.spec.environment,
+          nodeSlug: resource.spec.workload.name,
+          ownerAttemptKey: "some-other-workload-attempt",
+        })
+      );
     });
   });
 

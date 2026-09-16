@@ -102,6 +102,21 @@ export interface ComputeWorkloadReconcileDeps {
     bundleDigest: string;
     causeMessage: string;
   }) => void;
+  /**
+   * bug.5115 observability: a blocked wallet slot is written to CR status ONLY,
+   * so a fleet-wide allocation deadlock — the exact failure bug.5115 fixes — was
+   * invisible to anyone without cluster access. Without this seam the reclaim
+   * path can never be observed firing, and "is any node deadlocked right now?"
+   * is unanswerable from logs. Level-triggered like `recordMigrationHold`: it
+   * repeats every reconcile pass on purpose, because a deadlock must stay loud.
+   */
+  readonly recordWalletAllocationBlocked: (input: {
+    nodeId: string;
+    environment: string;
+    nodeSlug: string;
+    attemptKey: string;
+    ownerAttemptKey?: string;
+  }) => void;
 }
 
 const SAFE_MESSAGES: Readonly<Record<string, string>> = {
@@ -959,24 +974,7 @@ async function mutate(
       workloadUid: resource.metadata.uid,
     });
     if (wallet.state === "blocked") {
-      const now = deps.now().toISOString();
-      await deps.state.patchStatus({
-        resource,
-        status: {
-          ...baseStatus(resource),
-          phase: "Progressing",
-          attempt,
-          ...carriedRecovery(resource),
-          failure: {
-            reason: "WalletAllocationBlocked",
-            message: safeMessage("WalletAllocationBlocked"),
-            retryable: true,
-          },
-          conditions: [
-            condition(resource, now, "False", "WalletAllocationBlocked"),
-          ],
-        },
-      });
+      await holdWalletBlocked(deps, resource, attempt, wallet.ownerAttemptKey);
       return;
     }
     if (wallet.allocationCursor) {
@@ -1629,8 +1627,16 @@ function isReplaySafeKnownFailure(
 async function holdWalletBlocked(
   deps: ComputeWorkloadReconcileDeps,
   resource: ComputeWorkload,
-  attempt: ComputeWorkloadAttempt
+  attempt: ComputeWorkloadAttempt,
+  ownerAttemptKey?: string
 ): Promise<void> {
+  deps.recordWalletAllocationBlocked({
+    nodeId: resource.spec.nodeId,
+    environment: resource.spec.environment,
+    nodeSlug: resource.spec.workload.name,
+    attemptKey: attempt.key,
+    ...(ownerAttemptKey ? { ownerAttemptKey } : {}),
+  });
   const now = deps.now().toISOString();
   await deps.state.patchStatus({
     resource,
@@ -1670,7 +1676,12 @@ async function recoverUncertainAllocation(
     workloadUid: resource.metadata.uid,
   });
   if (wallet.state === "blocked") {
-    await holdWalletBlocked(deps, resource, attemptFromReceipt(receipt));
+    await holdWalletBlocked(
+      deps,
+      resource,
+      attemptFromReceipt(receipt),
+      wallet.ownerAttemptKey
+    );
     return;
   }
   if (
@@ -1794,7 +1805,12 @@ async function recoverAbandonedClaim(
     });
     if (wallet.state === "blocked") {
       // A different attempt owns the wallet slot; only its owner may settle it.
-      await holdWalletBlocked(deps, resource, attemptFromReceipt(receipt));
+      await holdWalletBlocked(
+        deps,
+        resource,
+        attemptFromReceipt(receipt),
+        wallet.ownerAttemptKey
+      );
       return;
     }
     if (wallet.allocationCursor) {
