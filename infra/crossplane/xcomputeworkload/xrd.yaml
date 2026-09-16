@@ -30,7 +30,7 @@
 #      encoded the bespoke controller's retry budget and leader-epoch bookkeeping — exactly
 #      the generic reconciliation Crossplane now owns (retries, backoff, conditions,
 #      finalizers). Keeping them would re-create a second controller in a schema.
-#   3. `spec.migration`, `spec.dns`, `spec.bootPolicy`, `spec.runtime` and `spec.leaseEpoch` are
+#   3. `spec.migration`, `spec.dns`, `spec.bootPolicy`, `spec.runtime` and `spec.leaseGeneration` are
 #      NEW. Each was implicit policy inside the controller binary or, worse, derived from a
 #      SECRET VALUE. A declarative API reconciled by an OSS engine that never sees a secret has
 #      to state them. See each field's own description.
@@ -325,8 +325,19 @@ spec:
                       default: Hold
                 leaseEpoch:
                   description: >-
+                    DEPRECATED compatibility alias for leaseGeneration. It remains served only
+                    for the task.5105 zero-downtime field migration: the pre-rename materializer
+                    writes this field, while the migration materializer writes both fields with
+                    the same value. Remove only after every deploy-ref XComputeWorkload has been
+                    rematerialized with leaseGeneration. New callers must not use this field.
+                  type: integer
+                  minimum: 0
+                  maximum: 1000000
+                leaseGeneration:
+                  description: >-
                     Operator-driven replacement counter, and the ONLY varying component of the
-                    actuator's wallet-wide idempotence key (`xcw:<namespace>:<name>:<epoch>`).
+                    actuator's wallet-wide idempotence key
+                    (`xcw:<namespace>:<name>:<lease-generation>`).
                     A key that changed on its own — per generation, per resourceVersion, per
                     retry — would answer "no existing resource" after a promote and mint a
                     SECOND PAID LEASE, so nothing in this system is allowed to bump it
@@ -337,7 +348,6 @@ spec:
                   type: integer
                   minimum: 0
                   maximum: 1000000
-                  default: 0
             status:
               type: object
               properties:
