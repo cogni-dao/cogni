@@ -53,14 +53,13 @@ describe("renderCatalog", () => {
    * BORN_ON_AKASH + BORN_PRODUCTION (story.5025). A Spawn is always a fork, so this is the
    * shape every real birth gets: the transient candidate-a proof slot plus canonical
    * production, both off-cluster, with PRODUCTION holding the generation-1 activity authority.
-   * Preview is absent — a birth must not buy a third lease.
+   * Preview is absent from the BIRTH ENVIRONMENT set — a birth must not buy a third lease.
    *
    * AUTHORITY_REQUIRES_AN_INSTALLED_API (task.5104) + INSTALLED_IS_NOT_FUNDED (task.5097):
-   * candidate-a AND production are declared `crossplane` — both carry a control plane and both
-   * pin a funded actuator wallet (production's is its own dedicated account, `akash10auj…`).
-   * Preview remains silent on BOTH axes: no wallet, no actuator, no birth lease — a birth must
-   * not buy a third lease, and an unfunded env would refuse every paid transaction with
-   * `actuator_account_id_missing`.
+   * candidate-a AND production are declared `crossplane` because they are the two birth envs
+   * and both carry a control plane plus a pinned actuator account. task.5129 makes Preview
+   * payable for explicit existing-node activation, but does not add it to `NODE_FORMATION_ENVS`;
+   * therefore it still cannot appear in a newly minted birth row or buy a third lease.
    *
    * PRODUCTION_GOVERNS_SPAWN (Derek, story.5016): a birth's canonical slot is production on the
    * Crossplane rail from generation 1 — never "candidate-a first, then a faked catalog cutover".
@@ -87,7 +86,8 @@ describe("renderCatalog", () => {
     // Both facts hold for production: installed control plane AND pinned dedicated wallet.
     expect(CROSSPLANE_CONTROL_PLANE_ENVS).toContain("production");
     expect(CROSSPLANE_ACTUATOR_WALLET_ENVS).toContain("production");
-    expect(CROSSPLANE_ACTUATOR_WALLET_ENVS).not.toContain("preview");
+    expect(CROSSPLANE_CONTROL_PLANE_ENVS).toContain("preview");
+    expect(CROSSPLANE_ACTUATOR_WALLET_ENVS).toContain("preview");
   });
 
   /**

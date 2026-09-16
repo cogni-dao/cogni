@@ -257,6 +257,17 @@ describe("Crossplane substrate boundary (task.5094, task.5096, task.5097)", () =
     }
   });
 
+  it("reuses the managed test account only across candidate-a and preview", () => {
+    const candidateAccount = actuatorAccountId("candidate-a");
+    const previewAccount = actuatorAccountId("preview");
+    const productionAccount = actuatorAccountId("production");
+
+    expect(candidateAccount).not.toBe("");
+    expect(previewAccount).toBe(candidateAccount);
+    expect(productionAccount).not.toBe("");
+    expect(productionAccount).not.toBe(candidateAccount);
+  });
+
   it("pins the core chart and runtime image, bounds resources, and exposes metrics", () => {
     for (const [environment, applications] of APPLICATIONS_BY_ENV) {
       expect(targetRevision(applications.core), environment).toBe("2.4.0");

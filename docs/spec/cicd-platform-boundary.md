@@ -349,13 +349,15 @@ invisible (bug.5115).
 recovers a lost response if exactly one process spends from the wallet — a second writer's lease is
 indistinguishable from the actuator's own.
 
-**One wallet, one ACTIVE writer — same account, hard cutover** (story.5016, BINDING; this SUPERSEDES
-the earlier "second dedicated Console account per environment" design, which was withdrawn). A second
-account would create exactly the split-brain the Crossplane cutover exists to purge. The order is:
-structurally disable every legacy ComputeWorkload controller writer → **revoke** the legacy Console
-API key → mint a **fresh key on the SAME account** → store it only under the actuator's dedicated
-OpenBao path → run exactly one actuator and one durable ledger against that wallet. Separation from
-the retired writer is therefore a **revocation fact**, not a runtime comparison.
+**Centralized managed account, one local writer per environment — v0** (story.5016, BINDING;
+supersedes the earlier dedicated-Console-account-per-environment activation prerequisite).
+Candidate-a and preview may reuse the same managed test account/credential; production remains on
+its isolated account. Every environment still has exactly one local writer: structurally disable
+its legacy ComputeWorkload controller before enabling its actuator, store the credential only under
+that environment's dedicated actuator OpenBao path, and forbid Console/manual writes. A manual or
+second in-environment writer invalidates cursor recovery. Distinct funded accounts per environment
+remain later hardening, not an activation prerequisite; this deliberate v0 trade removes account
+setup from the path to proving the full candidate → preview → production ladder.
 
 `features/compute/akash-tx/akash-tx-wallet.ts` enforces what remains checkable at wiring time:
 `AKASH_ACTUATOR_CONSOLE_API_KEY` is required with no fallback, and the **non-secret** pinned
@@ -365,8 +367,10 @@ before it listens. **The actuator never possesses `AKASH_CONSOLE_API_KEY`**: tas
 purely to byte-compare, which made the actuator hold the very wallet it claimed isolation from, and
 still only proved "different bytes" rather than "the right wallet". The ledger scope is
 `akash-console:<environment>`, derived from the environment rather than the secret so rotation cannot
-orphan in-flight receipts. Per-environment Postgres over ONE shared wallet is the unsound shape this
-rules out — so **v0 serves candidate-a only**; preview and production are deliberately not wired.
+orphan in-flight receipts. Each environment's durable ledger serializes its local actuator and
+recovers its own lost responses; the shared-account v0 depends on the no-manual-write and
+one-local-actuator rules above. `docs/spec/ci-cd.md` Axiom 26 is the authority for the current
+cross-environment account model.
 
 Custody is OpenBao under a **dedicated service boundary**, not the broad operator bucket. The catalog
 declares `tier: A1, service: akash-tx-actuator` for both `AKASH_ACTUATOR_CONSOLE_API_KEY` and

@@ -8,12 +8,22 @@ namespace: cogni-preview
 resources:
   - ../../../base/node-app
   - ../../../base/openfga-external
-  - ../../../base/compute-workload-controller
+  # task.5129 — Crossplane is preview's sole compute reconciler. The legacy
+  # ComputeWorkload controller is removed in the same desired-state change that
+  # adds the private transaction actuator, so there is no dual-authority window.
+  - ../../../base/akash-tx-actuator
   - external-secret.yaml
+  - ./akash-tx-actuator-external-secret.yaml
+  - ./akash-tx-actuator-auth-external-secret.yaml
   - ./secrets-writer-sa.yaml
   - ./compute-workload-platform-application.yaml
 
 namePrefix: operator-
+
+# The Composition dials the bare service name inside the workload namespace.
+# Undo only this Service's overlay prefix after the built-in transformer runs.
+transformers:
+  - ../../../base/akash-tx-actuator-service-name
 
 replacements:
   - source:
@@ -30,36 +40,33 @@ images:
     digest: "sha256:be5e99490e9356f70c6af4b38b62cfbd9775f46047202e8c96ead10de35bd1a0"
 
 patches:
-  # story.5016 Gate 0b: controller env values are set BY NAME via strategic
-  # merge (env lists merge on `name`), never by positional JSON-pointer index.
-  # A positional `/env/N/value` patch silently repoints when the base list
-  # shifts — that exact failure (d69e5c29) blanked AKASH_ALLOWED_PROVIDERS
-  # fleet-wide, and an empty allowlist rejects every Akash provider bid.
+  # Set actuator config BY NAME via strategic merge. The account pin is public,
+  # reviewable config; the matching Console credential remains in OpenBao.
+  # Preview intentionally reuses candidate-a's managed Console account in v0,
+  # while production remains isolated (ci-cd.md Axiom 26 correction).
   - target:
       kind: Deployment
-      name: compute-workload-controller
+      name: akash-tx-actuator
     patch: |
       apiVersion: apps/v1
       kind: Deployment
       metadata:
-        name: compute-workload-controller
+        name: akash-tx-actuator
       spec:
         template:
           spec:
             containers:
-              - name: controller
+              - name: actuator
                 env:
-                  # Identical to base; listed first only so the merged env keeps
-                  # the base ordering (merge emits patched entries first).
                   - name: POD_NAMESPACE
                     valueFrom:
                       fieldRef: { fieldPath: metadata.namespace }
-                  - name: CONTROLLER_ENVIRONMENT
+                  - name: DEPLOY_ENVIRONMENT
                     value: preview
-                  - name: DEPLOYMENT_DOMAIN
-                    value: preview.cognidao.org
                   - name: AKASH_ALLOWED_PROVIDERS
                     value: akash16yr3wxt97ae045a06kr3ycde9srcgpg8syjxxm
+                  - name: AKASH_ACTUATOR_ACCOUNT_ID
+                    value: "akash12eh8xgpeyumar3sk6wp94y0tq9uh62mkezxjmt"
   # Node-specific ConfigMap values.
   # DNS names must match prefixed Service names (namePrefix applies to all resources).
   - target:

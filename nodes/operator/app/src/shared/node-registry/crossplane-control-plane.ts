@@ -31,7 +31,7 @@
  * Links: infra/k8s/argocd/control-plane/{candidate-a,preview,production}/,
  *   infra/crossplane/xcomputeworkload/, infra/k8s/overlays/<env>/operator/kustomization.yaml,
  *   src/features/compute/node-compute-api.ts, tests/ci-invariants/crossplane-dormant-substrate.spec.ts,
- *   task.5096, task.5097, task.5104, story.5016
+ *   task.5096, task.5097, task.5104, task.5129, story.5016
  * @public
  */
 
@@ -53,6 +53,7 @@
  */
 export const CROSSPLANE_CONTROL_PLANE_ENVS = [
   "candidate-a",
+  "preview",
   "production",
 ] as const;
 
@@ -65,13 +66,11 @@ export type CrossplaneControlPlaneEnv =
  * non-empty `AKASH_ACTUATOR_ACCOUNT_ID` on the `akash-tx-actuator` Deployment, which is
  * asserted in both directions by `tests/ci-invariants/crossplane-dormant-substrate.spec.ts`.
  *
- * Why it is NOT the same list as {@link CROSSPLANE_CONTROL_PLANE_ENVS}: an installed control
- * plane can RECONCILE a composite, but only a funded, revocation-proven Console account can PAY
- * for the lease it asks for. Production pins its own DEDICATED funded account
- * (`akash10auj…`, credential at `cogni/production/akash-tx-actuator`) — each environment is one
- * wallet with ONE active writer, so candidate-a and production never share an account. Preview
- * stays unlisted: its actuator has no account, so it fails closed
- * (`actuator_account_id_missing`) and gets no actuator at birth.
+ * Why it is NOT derived from {@link CROSSPLANE_CONTROL_PLANE_ENVS}: an installed control plane
+ * can RECONCILE a composite, but only a pinned Console account can PAY for one. In centralized
+ * v0, candidate-a and preview intentionally reuse the managed test account while production
+ * remains isolated. Every environment still has one local credential-delivery path and one
+ * actuator; Console/manual writes remain forbidden because they invalidate cursor recovery.
  *
  * This is the set a node BIRTH may mint `compute_api.<env>: crossplane` into: a birth row
  * pointed at an env with no wallet would render a composite whose every paid transaction is
@@ -81,6 +80,7 @@ export type CrossplaneControlPlaneEnv =
  */
 export const CROSSPLANE_ACTUATOR_WALLET_ENVS = [
   "candidate-a",
+  "preview",
   "production",
 ] as const;
 
