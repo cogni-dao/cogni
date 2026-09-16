@@ -119,4 +119,30 @@ describe("NodeOperationsTable", () => {
     render(<NodeOperationsTable nodes={[node, unavailable]} />);
     expect(screen.getByText(/\$0\.34 sponsored · partial/)).toBeVisible();
   });
+
+  it("does not offer an Open node link when production is undeclared", async () => {
+    const user = userEvent.setup();
+    const undeployed = {
+      ...node,
+      modules: {
+        ...node.modules,
+        deployment: {
+          ...node.modules.deployment,
+          status: "not_deployed" as const,
+          environments: node.modules.deployment.environments.map(
+            (environment) => ({ ...environment, declared: false })
+          ),
+        },
+      },
+    };
+    render(<NodeOperationsTable nodes={[undeployed]} />);
+    await user.click(
+      screen.getAllByRole("button", {
+        name: "Show Alpha details",
+      })[0] as HTMLElement
+    );
+    expect(
+      screen.queryByRole("link", { name: /Open node/ })
+    ).not.toBeInTheDocument();
+  });
 });
