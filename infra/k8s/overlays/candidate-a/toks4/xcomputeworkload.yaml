@@ -1,5 +1,5 @@
 apiVersion: compute.cogni.io/v1alpha1
-kind: ComputeWorkload
+kind: XComputeWorkload
 metadata:
   name: 72aa130b-f0ad-495a-a061-9ee1f9c9525d
   namespace: cogni-candidate-a
@@ -11,15 +11,15 @@ spec:
   nodeId: 72aa130b-f0ad-495a-a061-9ee1f9c9525d
   environment: candidate-a
   bundle:
-    ref: ghcr.io/cogni-dao/toks4@sha256:6b59e164732ecaae66d3b886304897d6dfb43379a5e2c78cdf71f97e15b5bfdf
+    ref: ghcr.io/cogni-dao/toks4@sha256:ae956f8dded458bf03fe406111fac5d7669279cd619027765a05ad3cd56e4890
     source:
       repository: cogni-dao/toks4
-      sha: b87fc1183098e88e233ff313fbaf2a69a474ffd8
+      sha: 07e8fa3d384131320aeeaa5d690cf29faf93c1ab
     artifacts:
       - name: app
-        image: ghcr.io/cogni-dao/toks4@sha256:ecf442c9edb5ac36d1bcb8f44cc9c6646e1008e6451d44c306073d35a14e356c
+        image: ghcr.io/cogni-dao/toks4@sha256:7e940be0d76cc991d4095e6d1eaf78f16dd345da2304a02fb543ba7465040de7
       - name: echo-sidecar
-        image: ghcr.io/cogni-dao/toks4-echo-sidecar@sha256:eb1745e1bb02a41b41c7ec56e0fd6bddb7c82b2be8ee6d03031e826e496a2903
+        image: ghcr.io/cogni-dao/toks4-echo-sidecar@sha256:4f31c984676e0f037dfbfecaf1cc55dbe71a4f387999f6790005a7999cca0619
   workload:
     name: toks4
     publicHost: toks4-test.cognidao.org
@@ -51,3 +51,13 @@ spec:
         cpuUnits: 0.1
         memoryMi: 128
         storageMi: 128
+  migration:
+    policy: RequireBeforeTransaction
+  bootPolicy:
+    onDeadline: Close
+  leaseEpoch: 0
+  dns:
+    provider: cloudflare
+    zoneId: 23220356c352c5831c6af57887b11a27
+  runtime:
+    substrateHost: cogni-candidate-a.vm.cognidao.org
