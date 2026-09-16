@@ -25,6 +25,18 @@ This is the load-bearing part. Devs already poll for direction (`contribute-to-c
 
 **The gap (file it, don't paper over it):** there is **no manager-authored, dev-readable, free-text direction field** for the _pre-PR decision point_ ("do option B, strip the loki rungs"). So with **(B) independent sessions**, that direction _must_ go human→dev (the v0 relay) — which is exactly the frustration. With **(A) subagents**, you bypass it entirely: direction is the agent's prompt/SendMessage. **Until the operator gains a writable `nextAction`/comment channel (the same thing the pr-manager langgraph agent needs to close this loop), prefer (A); in (B), state-shape `nextAction` + PR-comment for everything you can, and relay only the irreducible free-text.**
 
+## Before any agent touches code — bootstrap the worktree with the repo's own script
+
+Every Cogni repo (`cogni-template`, `node-template`) ships `conductor.json` → `{"scripts":{"setup":"bash scripts/conductor-worktree-setup.sh"}}`. That script refreshes `origin/main`, symlinks the local secret/auth files, installs deps **and builds all workspace packages**. Run it — or have each dev agent run it — as the first action in a fresh worktree:
+
+```bash
+COGNI_TEMPLATE_ROOT=<primary checkout> bash scripts/conductor-worktree-setup.sh
+```
+
+**Why this is a manager concern, not a dev detail:** a fresh worktree has an empty `node_modules`, so `vitest` dies with `ERR_MODULE_NOT_FOUND` and `pnpm typecheck` emits a wall of `Cannot find module '@cogni/*'`. Those are **absent `dist/`, not real type errors** — an agent that hand-rolls `pnpm install` instead of running the script reads them as a broken diff and burns a cycle debugging its own change. Point agents at the script; never let them improvise the bootstrap.
+
+**Local compute is a shared, finite resource.** `next build` (Turbopack) and full `vitest` suites are the documented cause of Conductor ballooning and freezing the human's Mac. CI already runs both on every PR and is the authority. Budget: typecheck + the targeted test file locally; push and let CI do full builds and full suites. Never run a production build just to confirm something CI will confirm for free.
+
 ## The loop
 
 1. **Hold the story.** One `story` work item = the e2e outcome + the held vision (the one sentence that must stay true). RECALL the relevant hub knowledge + skills first. Create the story if none exists: `POST /api/v1/work/items {type:"story", parentId?, node}`.
