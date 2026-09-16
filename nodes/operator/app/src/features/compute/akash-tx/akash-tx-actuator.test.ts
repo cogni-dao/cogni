@@ -392,6 +392,10 @@ class FakeCost implements ComputeCostEvidencePort, ComputeCostStorePort {
   async reportByNode() {
     return [];
   }
+
+  async reportByNodeIds(_nodeIds: readonly string[]) {
+    return [];
+  }
 }
 
 function costDeps(cost = new FakeCost()) {
