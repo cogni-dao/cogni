@@ -114,6 +114,23 @@
       "$comment": "story.5016 — the lease epoch replaces a paid off-cluster lease, so it is only meaningful where deployment_provider already routes the row off-cluster. Declaring it on an on-cluster row would be a counter with no lease to replace.",
       "if": { "required": ["lease_epoch"] },
       "then": { "required": ["deployment_provider"] }
+    },
+    {
+      "$comment": "bug.5177 — candidate-a no longer ships base/compute-workload-controller (story.5016 step 9 deleted it to hold ONE_WALLET_ONE_ACTIVE_WRITER). LEGACY_IS_DEFAULT means an omitted compute_api.candidate-a resolves to that deleted controller, so an akash-placed candidate-a row without an explicit cell fails 100% of its flights with a confusing 'controller is not available'. node-template and toks4 were both silently broken this way. Make the cell REQUIRED where it is load-bearing rather than defaulting to an authority the environment does not ship.",
+      "if": {
+        "required": ["envs", "deployment_provider"],
+        "properties": {
+          "envs": { "contains": { "const": "candidate-a" } },
+          "deployment_provider": {
+            "required": ["candidate-a"],
+            "properties": { "candidate-a": { "const": "akash" } }
+          }
+        }
+      },
+      "then": {
+        "required": ["compute_api"],
+        "properties": { "compute_api": { "required": ["candidate-a"] } }
+      }
     }
   ],
   "properties": {
