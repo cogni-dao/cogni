@@ -6,7 +6,7 @@ status: active
 created: 2026-09-15
 updated: 2026-09-15
 branch: "derekg1729/story-5033-actor-attribution"
-last_commit: "16da301a6a"
+last_commit: "38e6491aa7"
 ---
 
 # Handoff: agent attribution and human ownership
@@ -47,10 +47,11 @@ earner while Derek can become its human parent and claim its economic benefit.
 - The current cumulative fold reads only the epoch being finalized. Despite its
   late-wallet comment, it has no backlog scan that can materialize an older
   unresolved allocation in a future root.
-- Production knowledge/work APIs returned HTTP 502 during the latest pass, so
-  the required merged/open-branch recall and Dolt contribution are pending.
-- Hosted CI passed for the earlier docs-only head. No image was built, no
-  candidate flight occurred, and no merge is authorized.
+- Two-plane recall is complete. No merged atom owns this protocol. The prepared
+  contribution cites `node-spawn-attribution-scorecard` and
+  `epoch-distribution-golden-path`, but cannot open while this principal's two
+  unrelated active contribution branches remain unresolved.
+- No image was built, no candidate flight occurred, and no merge is authorized.
 
 ## Design / Implementation Target
 
@@ -66,10 +67,10 @@ earner while Derek can become its human parent and claim its economic benefit.
 
 ## Next Actions / Risks
 
-- [ ] Recall merged knowledge and this principal's open contribution diff.
+- [x] Recall merged knowledge and this principal's open contribution diff.
 - [ ] Refine an existing atom or contribute one atomic proposed protocol in
       Dolt; link it to `task.5128` through a `tracks` citation after merge.
-- [ ] Reduce PR #2267 to the verified per-node `user_id` spec correction plus
+- [x] Reduce PR #2267 to the verified per-node `user_id` spec correction plus
       project/handoff routing; review the Dolt design before implementation.
 - [ ] Only after design approval, implement `task.5123`, then `task.5124`, then
       `task.5125`, each as one PR with exact-head candidate validation.
