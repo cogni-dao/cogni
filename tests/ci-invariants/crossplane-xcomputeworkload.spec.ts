@@ -26,7 +26,7 @@
  * @public
  */
 
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -289,9 +289,11 @@ describe("XComputeWorkload Composition (task.5096)", () => {
     const keyLiteral =
       /\$cogniKey := printf "[^"]*"([^}]*)\}\}/.exec(templateCode)?.[1] ?? "";
     expect(keyLiteral.trim().split(/\s+/)).toEqual(keyInputs);
-    // ZERO-DOWNTIME WIRE RENAME (task.5105): an old materializer writes leaseEpoch and a new
-    // one writes both fields. The additive schema must accept both, and the Composition must
-    // prefer the canonical name while falling back to the old value. This prevents toks5's
+    // ZERO-DOWNTIME WIRE RENAME (task.5105 -> task.5122). NOTHING writes leaseEpoch any more
+    // (see compute-workload-manifest.test.ts "never writes the deprecated leaseEpoch alias"),
+    // but XRs committed on deploy/<env>-<node> refs BEFORE the rename still carry it, so the
+    // additive schema must keep accepting it and the Composition must keep reading it as a
+    // last-resort fallback while preferring the canonical name. This is what prevents toks5's
     // intended generation 1 from ever becoming 0 regardless of which deploy lane moves first.
     expect(templateCode).toContain(
       '$leaseGeneration := int (dig "leaseEpoch" 0 $spec)'
@@ -321,7 +323,11 @@ describe("XComputeWorkload Composition (task.5096)", () => {
     expect(leaseGeneration.default).toBeUndefined();
     const leaseEpoch = specSchema.leaseEpoch as YamlObject;
     expect(leaseEpoch.default).toBeUndefined();
-    expect(leaseEpoch.description).toContain("DEPRECATED compatibility alias");
+    expect(leaseEpoch.description).toContain("DEPRECATED read-side alias");
+    // The alias must never become permanent furniture: its own description has to carry the
+    // condition under which it is deleted, and name the owning work item.
+    expect(leaseEpoch.description).toContain("REMOVAL GATE");
+    expect(leaseEpoch.description).toContain("task.5121");
   });
 
   it("preserves the replacement generation across every mixed-revision bridge shape", () => {
@@ -360,9 +366,9 @@ describe("XComputeWorkload Composition (task.5096)", () => {
     };
 
     expect([
-      renderCogniKey({ leaseEpoch: 1 }), // old materializer after new XRD
-      renderCogniKey({ leaseGeneration: 1 }), // canonical-only cleanup target
-      renderCogniKey({ leaseEpoch: 1, leaseGeneration: 1 }), // bridge dual-write
+      renderCogniKey({ leaseEpoch: 1 }), // pre-rename XR still on a deploy ref
+      renderCogniKey({ leaseGeneration: 1 }), // what the materializer writes from task.5122 on
+      renderCogniKey({ leaseEpoch: 1, leaseGeneration: 1 }), // a bridge-era dual-written XR
     ]).toEqual([
       "xcw:cogni-production:toks5:1",
       "xcw:cogni-production:toks5:1",
@@ -841,5 +847,55 @@ describe("XComputeWorkload public reachability (bug.5152)", () => {
     expect(templateCode).toContain("published: {{ $dnsPublished }}");
     expect(templateCode).not.toContain("published: {{ if $dns }}");
     expect(templateCode).toContain('index $observedResources "dns-record"');
+  });
+});
+
+/**
+ * CATALOG_CARRIES_ONE_NAME (task.5122). The catalog is the SSOT for the replacement counter,
+ * and the resolver (`resolveNodeLeaseGeneration`) reads ONLY `lease_generation` with NO legacy
+ * fallback -- a row left on the old key would therefore resolve silently to 0, which for a node
+ * whose lease already settled under key `:0` means the actuator refuses it forever and the node
+ * stays dead. Pin the purge here rather than trusting a one-time grep.
+ */
+describe("catalog lease generation naming", () => {
+  const CATALOG_DIR = path.join(REPO_ROOT, "infra/catalog");
+  const rows = readdirSync(CATALOG_DIR).filter(
+    (f) => f.endsWith(".yaml") && !f.startsWith("_")
+  );
+
+  it("has catalog rows to check", () => {
+    expect(rows.length).toBeGreaterThan(0);
+  });
+
+  it("uses lease_generation and never the deprecated lease_epoch key", () => {
+    for (const file of rows) {
+      const raw = readFileSync(path.join(CATALOG_DIR, file), "utf8");
+      const row = parse(raw) as YamlObject;
+      expect(
+        Object.hasOwn(row, "lease_epoch"),
+        `${file} still declares lease_epoch`
+      ).toBe(false);
+    }
+  });
+
+  it("declares lease_generation in the catalog schema, not lease_epoch", () => {
+    const schema = JSON.parse(
+      readFileSync(path.join(CATALOG_DIR, "_schema.json"), "utf8")
+    ) as { properties: Record<string, unknown> };
+    expect(Object.hasOwn(schema.properties, "lease_generation")).toBe(true);
+    expect(Object.hasOwn(schema.properties, "lease_epoch")).toBe(false);
+  });
+
+  /**
+   * THE VALUE IS THE MONEY (bug.5192). toks5 production's generation-0 receipt is terminally
+   * settled, so its row MUST resolve to key suffix `:1`. The rename may not move a VALUE: a
+   * changed suffix answers "no existing resource" and mints a SECOND PAID LEASE, and a suffix
+   * that reverted to 0 re-deads the node against a key the actuator already spent.
+   */
+  it("keeps toks5 production on replacement generation 1", () => {
+    const toks5 = parse(
+      readFileSync(path.join(CATALOG_DIR, "toks5.yaml"), "utf8")
+    ) as { lease_generation?: Record<string, number> };
+    expect(toks5.lease_generation?.production).toBe(1);
   });
 });

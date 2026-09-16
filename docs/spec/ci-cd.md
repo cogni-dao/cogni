@@ -111,6 +111,36 @@ The legacy Akash exceptions in Axioms 18, 21, and 23 are superseded by Axiom 26:
 - Every flight/promotion has one narrow substrate precondition, even when its current target set is empty: it renders the **complete** env allowlist from catalog `compute_egress_cidrs` and invokes the existing VM hardener through the environment's existing SSH identity. Running on empty/removal transitions is what closes stale Akash access. It accepts no caller CIDRs, converges additions, removals, and live rule drift idempotently, and must succeed before a `ComputeWorkload` or k3s app update is written. The sole hardener holds a host-local writer lock inherited by every invocation path, while staged files are run-unique, so workflow queue replacement or concurrent infra reconciliation cannot race firewall state. This reuses the infra/provision renderer and hardener without running broad `deploy-infra` or introducing a second firewall writer.
 - Ad-hoc cluster writes (`kubectl apply/patch/edit`, direct Argo mutation, or SSH config edits) invalidate deployment proof. Recovery is committed to Git and reconciled through existing workflows/Argo. `provision-env` remains the sole auditable bootstrap authority, not a normal reconciliation path.
 
+27. **`LEASE_GENERATION_IS_THE_REPLACEMENT_COUNTER`** (story.5016 / task.5122). Every paid
+    Akash mutation on the Crossplane authority is serialized under the idempotence key
+    `xcw:<namespace>:<node-id>:<lease-generation>`. A key whose outcome is settled or
+    unresolvable is refused forever — that refusal IS the double-pay guard, and it is never
+    bypassed by hand (ledger edits and `kubectl patch` are reverted/forbidden). The ONLY
+    replacement path for a terminally closed, refused, or boot-deadline-expired lease is
+    incrementing the per-`(node, env)` catalog cell `lease_generation` (resolved by
+    `resolveNodeLeaseGeneration`, emitted by the materializer), which mints a fresh key and a
+    fresh XR generation with a fresh boot budget. ONE NAME END TO END: catalog
+    `lease_generation`, typed `leaseGeneration`, XRD `spec.leaseGeneration`.
+
+    **`EPOCH_IS_RESERVED_FOR_ATTRIBUTION`** (the naming rationale, task.5122). This counter was
+    called `lease_epoch` until task.5122. **"Epoch" is reserved for the attribution/distribution
+    domain** — contributor activity windows, claimants, and payouts (`/api/v1/attribution/epochs`,
+    `activity_env`) — and a compute-lease replacement counter is a **generation**. The two are
+    unrelated concepts that advance for unrelated reasons: an attribution epoch rolls on a global
+    schedule, while a lease generation advances ONLY at a replacement event. Coupling them would
+    force a paid lease churn per epoch rollover (design-rejected 2026-09-15); sharing a word for
+    them cost a human a wrong read of the fleet. Do not reintroduce `epoch` anywhere in the
+    compute lane. The rename moved no VALUE, so no idempotence key moved.
+
+    **Alias removal gate.** The XRD still SERVES a deprecated `spec.leaseEpoch` and the
+    Composition still reads it as a last-resort fallback, because XComputeWorkloads committed on
+    `deploy/<env>-<node>` refs before task.5122 carry it. Nothing WRITES it any more — the
+    materializer emits the canonical field exclusively, so each flight/promote converts one more
+    ref. Delete the XRD property and the Composition fallback (task.5121) only once no
+    `refs/remotes/origin/deploy/*` ref contains `leaseEpoch`. Dropping it earlier would prune the
+    field out of a live XR whose counter is nonzero and silently resolve its key back to a
+    SETTLED one.
+
 ## Branch And Deploy-State Model
 
 ```text

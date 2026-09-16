@@ -340,11 +340,18 @@ spec:
                       default: Hold
                 leaseEpoch:
                   description: >-
-                    DEPRECATED compatibility alias for leaseGeneration. It remains served only
-                    for the task.5105 zero-downtime field migration: the pre-rename materializer
-                    writes this field, while the migration materializer writes both fields with
-                    the same value. Remove only after every deploy-ref XComputeWorkload has been
-                    rematerialized with leaseGeneration. New callers must not use this field.
+                    DEPRECATED read-side alias for leaseGeneration, retained ONLY so the
+                    XComputeWorkloads already committed on deploy/<env>-<node> refs before
+                    task.5122 stay schema-valid. NOTHING WRITES IT ANY MORE: the materializer
+                    emits leaseGeneration exclusively, so every flight/promote converts one more
+                    ref off this field. It is served, never preferred - the Composition reads
+                    leaseGeneration first and fails the render if the two disagree. REMOVAL GATE
+                    (task.5121): drop this property and the Composition's fallback once no
+                    refs/remotes/origin/deploy ref contains `leaseEpoch`. Removing it earlier
+                    would prune the field out of a live XR whose replacement counter is nonzero
+                    (today: toks5 production, generation 1), silently resolving its idempotence
+                    key back to a SETTLED one - which the actuator refuses, re-deading the node.
+                    New callers must not use this field.
                   type: integer
                   minimum: 0
                   maximum: 1000000
@@ -356,7 +363,10 @@ spec:
                     A key that changed on its own — per generation, per resourceVersion, per
                     retry — would answer "no existing resource" after a promote and mint a
                     SECOND PAID LEASE, so nothing in this system is allowed to bump it
-                    implicitly. A human or the materializer bumps it exactly when a terminally
+                    implicitly. NAME (task.5122): this field was `leaseEpoch`. `epoch` is
+                    reserved for the attribution/distribution domain — contributor activity
+                    windows, claimants, payouts — so a compute-lease replacement counter is a
+                    GENERATION. The rename changed no VALUE; no idempotence key moved. A human or the materializer bumps it exactly when a terminally
                     closed lease must be REPLACED (the actuator refuses to re-spend a settled
                     key by design, which is what makes a stuck workload loud instead of
                     expensive).

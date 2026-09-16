@@ -135,7 +135,7 @@ const SUBSTRATE_HOSTNAME =
 export interface XComputeWorkloadSpec extends ComputeWorkloadSpec {
   readonly migration: { readonly policy: typeof MIGRATION_POLICY };
   readonly bootPolicy: XComputeWorkloadBootPolicy;
-  readonly leaseEpoch: number;
+  readonly leaseGeneration: number;
   readonly dns?: XComputeWorkloadDns;
   readonly runtime?: XComputeWorkloadRuntime;
 }
@@ -161,12 +161,16 @@ export interface BuildComputeWorkloadManifestInput {
   /** Which reconciliation authority owns this (node, environment). Catalog-resolved. */
   readonly computeApi: NodeComputeApi;
   /**
-   * Explicit lease replacement counter, catalog-resolved (`resolveNodeLeaseEpoch`, absent
-   * cell = 0). Required rather than defaulted here so a new caller cannot silently fall back
-   * to an epoch that differs from the catalog's — the epoch IS the idempotence key's only
-   * varying component, and a divergence mints a SECOND PAID LEASE.
+   * Explicit lease replacement counter, catalog-resolved (`resolveNodeLeaseGeneration`,
+   * absent cell = 0). Required rather than defaulted here so a new caller cannot silently
+   * fall back to a generation that differs from the catalog's — the generation IS the
+   * idempotence key's only varying component, and a divergence mints a SECOND PAID LEASE.
+   *
+   * NAME (task.5122): this was `leaseEpoch`. `epoch` is the attribution/distribution domain's
+   * word (contributor activity windows, claimants, payouts); a compute-lease replacement
+   * counter is a GENERATION. The rename moved no VALUE, so no idempotence key moved.
    */
-  readonly leaseEpoch: number;
+  readonly leaseGeneration: number;
   /**
    * DNS intent for the Crossplane authority only — the legacy controller resolves its own zone
    * from an in-cluster secret, so passing it there would be desired state nothing reads.
@@ -230,12 +234,13 @@ export function buildComputeWorkloadManifest(
     );
   }
 
-  // A nonzero epoch on the legacy authority would be desired state nothing reads — its
-  // idempotence key embeds metadata.generation, not an epoch — so an operator who bumped
-  // it to replace a closed lease would see nothing happen. Refuse rather than ignore.
-  if (input.computeApi !== "crossplane" && input.leaseEpoch !== 0) {
+  // A nonzero replacement generation on the legacy authority would be desired state nothing
+  // reads — its idempotence key embeds the k8s metadata.generation, not this counter — so an
+  // operator who bumped it to replace a closed lease would see nothing happen. Refuse rather
+  // than ignore.
+  if (input.computeApi !== "crossplane" && input.leaseGeneration !== 0) {
     throw new Error(
-      "[compute-workload-manifest] leaseEpoch is carried only by the crossplane authority; the legacy controller keys its lease per-generation and reads no epoch"
+      "[compute-workload-manifest] leaseGeneration is carried only by the crossplane authority; the legacy controller keys its lease per k8s metadata.generation and reads no replacement counter"
     );
   }
 
@@ -295,9 +300,17 @@ export function buildComputeWorkloadManifest(
             migration: { policy: MIGRATION_POLICY },
             bootPolicy: bootPolicyForEnvironment(input.environment),
             // Emitted even at 0, like migration.policy (bug.5116): the committed desired
-            // state states its own idempotence-key epoch rather than inheriting the XRD
+            // state states its own idempotence-key generation rather than inheriting a
             // default, so a catalog bump is a visible one-line git diff on the deploy branch.
-            leaseEpoch: input.leaseEpoch,
+            //
+            // CANONICAL NAME ONLY (task.5122). The deprecated `leaseEpoch` alias is NOT
+            // dual-written: every environment's control plane already serves and prefers
+            // `leaseGeneration` (the XRD/Composition bridge tracks `main` with selfHeal on
+            // preview/production and deploy/candidate-a-control-plane on candidate-a), and
+            // writing only the canonical field is what CONVERGES each deploy ref off the
+            // alias. Dual-writing would pin `leaseEpoch` into every ref forever and make the
+            // alias unremovable.
+            leaseGeneration: input.leaseGeneration,
             ...(input.dns ? { dns: input.dns } : {}),
             ...(input.runtime ? { runtime: input.runtime } : {}),
           }

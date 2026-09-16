@@ -23,7 +23,9 @@
  *     `bootPolicy.bootDeadlineSeconds`) instead of never being created at all.
  *   - MIGRATION_ON_MUTATION_IS_DEPRECATED: create/update still ACCEPT a `migration` object so a
  *     Composition that has not yet been rematerialized cannot 400 the whole fleet mid-rollout
- *     (the same zero-downtime posture as `leaseEpoch` → `leaseGeneration`). It is parsed and
+ *     (the same zero-downtime posture the XRD uses for the task.5122 lease-generation rename:
+ *     the old field stays SERVED and READ while nothing writes it, until every deploy ref has
+ *     been rematerialized). It is parsed and
  *     IGNORED. Remove the field once every deploy ref carries `migration.policy:
  *     RequireBeforeServing`.
  *   - IDENTITY_IS_REQUIRED_ON_EVERY_MUTATION: `identity` is a REQUIRED field on create and
@@ -103,8 +105,8 @@ export const AkashTxMigrationPhaseSchema = z.enum([
 /**
  * DEPRECATED compatibility shape for the create/update wire (task.5135). The actuator parses
  * and IGNORES it. It remains served only so a Composition rendered before the rematerialize
- * cannot 400 the fleet mid-rollout — the same zero-downtime posture the XRD uses for
- * `leaseEpoch` → `leaseGeneration`. New callers must not send it.
+ * cannot 400 the fleet mid-rollout — the same zero-downtime posture the XRD uses for the
+ * task.5122 lease-generation rename. New callers must not send it.
  *
  * Kept LOOSE on purpose: this is a field on its way out, and strictly re-validating a value
  * nothing reads would only invent new ways for an old caller to fail.

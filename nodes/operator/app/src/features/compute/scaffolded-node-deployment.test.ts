@@ -111,7 +111,7 @@ describe("scaffolded node is born Akash-capable", () => {
       bundle: resolveScaffoldedBundle(),
       publicHost: `${SLUG}.example.org`,
       computeApi: "crossplane",
-      leaseEpoch: 0,
+      leaseGeneration: 0,
     });
     expect(
       manifest.spec.workload.services[0]?.secretRefs?.map((ref) => ref.key)

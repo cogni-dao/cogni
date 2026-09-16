@@ -83,7 +83,7 @@ describe("buildComputeWorkloadManifest", () => {
       bundle,
       publicHost: "toks4-test.cognidao.org",
       computeApi: "legacy",
-      leaseEpoch: 0,
+      leaseGeneration: 0,
     });
 
     expect(manifest.metadata).toEqual({
@@ -135,7 +135,7 @@ describe("buildComputeWorkloadManifest", () => {
         bundle,
         publicHost: "toks4-test.cognidao.org",
         computeApi: "legacy",
-        leaseEpoch: 0,
+        leaseGeneration: 0,
       })
     ).toThrow("digest-pinned OCI reference");
   });
@@ -160,7 +160,7 @@ describe("buildComputeWorkloadManifest", () => {
         bundle: incompleteBundle,
         publicHost: "toks4-test.cognidao.org",
         computeApi: "legacy",
-        leaseEpoch: 0,
+        leaseGeneration: 0,
       })
     ).toThrow(/cogni-node-app-v1 is missing secret_refs/);
   });
@@ -173,14 +173,14 @@ describe("buildComputeWorkloadManifest", () => {
       bundle,
       publicHost: "toks4-test.cognidao.org",
       computeApi: "legacy",
-      leaseEpoch: 0,
+      leaseGeneration: 0,
     });
 
     expect(manifest.kind).toBe("ComputeWorkload");
     expect(manifest.spec).not.toHaveProperty("migration");
     expect(manifest.spec).not.toHaveProperty("bootPolicy");
     expect(manifest.spec).not.toHaveProperty("dns");
-    expect(manifest.spec).not.toHaveProperty("leaseEpoch");
+    expect(manifest.spec).not.toHaveProperty("leaseGeneration");
   });
 
   it("emits the Crossplane composite with the policies the XRD made declarative", () => {
@@ -191,7 +191,7 @@ describe("buildComputeWorkloadManifest", () => {
       bundle,
       publicHost: "toks4.cognidao.org",
       computeApi: "crossplane",
-      leaseEpoch: 2,
+      leaseGeneration: 2,
       dns: { provider: "cloudflare", zoneId: "0".repeat(32) },
       runtime: { substrateHost: "cogni.vm.cognidao.org" },
     });
@@ -206,7 +206,7 @@ describe("buildComputeWorkloadManifest", () => {
     expect(manifest.spec).toMatchObject({
       migration: { policy: "RequireBeforeServing" },
       bootPolicy: { onDeadline: "Hold" },
-      leaseEpoch: 2,
+      leaseGeneration: 2,
       dns: { provider: "cloudflare", zoneId: "0".repeat(32) },
       runtime: { substrateHost: "cogni.vm.cognidao.org" },
     });
@@ -215,11 +215,11 @@ describe("buildComputeWorkloadManifest", () => {
   /**
    * THE REPLACEMENT PATH (story.5016). The actuator refuses to re-spend a settled idempotence
    * key (`akash_tx_create_refused_settled_key`), so a terminally closed lease makes its
-   * (node, environment) unrecreatable until the epoch moves — and the epoch is emitted
-   * EXPLICITLY, 0 included, so the desired state never leans on the XRD default and a catalog
-   * bump is a visible one-line diff on the deploy branch.
+   * (node, environment) unrecreatable until the generation moves — and the generation is
+   * emitted EXPLICITLY, 0 included, so the desired state never leans on a default and a
+   * catalog bump is a visible one-line diff on the deploy branch.
    */
-  it("emits the catalog lease epoch explicitly, even at zero", () => {
+  it("emits the catalog lease generation explicitly, even at zero", () => {
     const manifest = buildComputeWorkloadManifest({
       slug: "toks4",
       environment: "production",
@@ -227,13 +227,34 @@ describe("buildComputeWorkloadManifest", () => {
       bundle,
       publicHost: "toks4.cognidao.org",
       computeApi: "crossplane",
-      leaseEpoch: 0,
+      leaseGeneration: 0,
     });
 
-    expect(manifest.spec).toHaveProperty("leaseEpoch", 0);
+    expect(manifest.spec).toHaveProperty("leaseGeneration", 0);
   });
 
-  it("refuses a nonzero lease epoch on the legacy authority, which reads no epoch", () => {
+  /**
+   * ALIAS_IS_NEVER_WRITTEN (task.5122). The XRD still SERVES the deprecated `leaseEpoch`
+   * field so the XComputeWorkloads already committed on deploy refs stay valid, but the
+   * materializer must never write it again: canonical-only writes are what CONVERGE each
+   * deploy ref off the alias, and a dual-write would pin the alias in every ref forever.
+   */
+  it("never writes the deprecated leaseEpoch alias", () => {
+    const manifest = buildComputeWorkloadManifest({
+      slug: "toks4",
+      environment: "production",
+      bundleRef: `ghcr.io/cogni-dao/toks4@sha256:${BUNDLE_DIGEST}`,
+      bundle,
+      publicHost: "toks4.cognidao.org",
+      computeApi: "crossplane",
+      leaseGeneration: 7,
+    });
+
+    expect(manifest.spec).not.toHaveProperty("leaseEpoch");
+    expect(JSON.stringify(manifest)).not.toContain("leaseEpoch");
+  });
+
+  it("refuses a nonzero lease generation on the legacy authority, which reads none", () => {
     expect(() =>
       buildComputeWorkloadManifest({
         slug: "toks4",
@@ -242,7 +263,7 @@ describe("buildComputeWorkloadManifest", () => {
         bundle,
         publicHost: "toks4.cognidao.org",
         computeApi: "legacy",
-        leaseEpoch: 1,
+        leaseGeneration: 1,
       })
     ).toThrow(/carried only by the crossplane authority/);
   });
@@ -262,7 +283,7 @@ describe("buildComputeWorkloadManifest", () => {
         bundle,
         publicHost: "toks4.cognidao.org",
         computeApi: "crossplane",
-        leaseEpoch: 0,
+        leaseGeneration: 0,
         runtime: { substrateHost: "toks4.cognidao.org" },
       })
     ).toThrow(/environment VM host/);
@@ -277,7 +298,7 @@ describe("buildComputeWorkloadManifest", () => {
         bundle,
         publicHost: "toks4.cognidao.org",
         computeApi: "crossplane",
-        leaseEpoch: 0,
+        leaseGeneration: 0,
         runtime: { substrateHost: "http://cogni.vm.cognidao.org:7233" },
       })
     ).toThrow(/RFC-1123 hostname/);
@@ -297,7 +318,7 @@ describe("buildComputeWorkloadManifest", () => {
       bundle,
       publicHost: "toks4.cognidao.org",
       computeApi: "crossplane",
-      leaseEpoch: 0,
+      leaseGeneration: 0,
     });
 
     expect(manifest.spec).not.toHaveProperty("runtime");
@@ -317,7 +338,7 @@ describe("buildComputeWorkloadManifest", () => {
       bundleRef: `ghcr.io/cogni-dao/toks4@sha256:${BUNDLE_DIGEST}`,
       bundle,
       publicHost: "toks4.cognidao.org",
-      leaseEpoch: 0,
+      leaseGeneration: 0,
     } as const;
     const legacy = buildComputeWorkloadManifest({
       ...base,
@@ -329,12 +350,12 @@ describe("buildComputeWorkloadManifest", () => {
     });
 
     expect(crossplane.metadata).toEqual(legacy.metadata);
-    const { migration, bootPolicy, leaseEpoch, ...shared } =
+    const { migration, bootPolicy, leaseGeneration, ...shared } =
       crossplane.spec as unknown as Record<string, unknown>;
     expect(shared).toEqual(legacy.spec);
     expect(migration).toBeDefined();
     expect(bootPolicy).toBeDefined();
-    expect(leaseEpoch).toBe(0);
+    expect(leaseGeneration).toBe(0);
   });
 
   it("refuses DNS intent on the legacy authority, which resolves its own zone", () => {
@@ -346,7 +367,7 @@ describe("buildComputeWorkloadManifest", () => {
         bundle,
         publicHost: "toks4.cognidao.org",
         computeApi: "legacy",
-        leaseEpoch: 0,
+        leaseGeneration: 0,
         dns: { provider: "cloudflare", zoneId: "0".repeat(32) },
       })
     ).toThrow(/carried only by the crossplane authority/);
