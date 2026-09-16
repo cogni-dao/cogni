@@ -112,7 +112,7 @@ describe("XComputeWorkload composite API (task.5096)", () => {
       "bundle",
       "dns",
       "environment",
-      "leaseEpoch",
+      "leaseGeneration",
       "migration",
       "nodeId",
       "runtime",
@@ -246,26 +246,29 @@ describe("XComputeWorkload Composition (task.5096)", () => {
 
   it("keeps the idempotence key stable for the life of the workload", () => {
     // namespace + name are immutable (name == nodeId). The ONLY varying component is
-    // spec.leaseEpoch, which nothing bumps implicitly — a key that changed per generation
+    // spec.leaseGeneration, which nothing bumps implicitly — a key that changed per reconcile
     // would report "no existing resource" after a promote and mint a SECOND PAID LEASE.
     expect(template).toContain(
-      '$cogniKey := printf "xcw:%s:%s:%d" $ns $name $epoch'
+      '$cogniKey := printf "xcw:%s:%s:%d" $ns $name $leaseGeneration'
     );
     // Scoped to the KEY, not the whole template: task.5103 legitimately reads
     // metadata.generation for the spend receipt's provenance. What must never happen is that
     // per-reconcile value leaking into the IDEMPOTENCE key, where it would report "no existing
     // resource" after a promote and mint a SECOND PAID LEASE. The two uses are opposites — one
     // records which revision asked, the other must not vary at all.
-    const keyInputs = ["$ns", "$name", "$epoch"];
+    const keyInputs = ["$ns", "$name", "$leaseGeneration"];
     const keyLiteral =
       /\$cogniKey := printf "[^"]*"([^}]*)\}\}/.exec(templateCode)?.[1] ?? "";
     expect(keyLiteral.trim().split(/\s+/)).toEqual(keyInputs);
     expect(
-      /\$epoch := int \(dig "leaseEpoch" 0 \$spec\)/.test(templateCode)
+      /\$leaseGeneration := int \(dig "leaseGeneration" 0 \$spec\)/.test(
+        templateCode
+      )
     ).toBe(true);
+    expect(templateCode).not.toContain("leaseEpoch");
     expect(templateCode).not.toContain("resourceVersion");
-    const epoch = specSchema.leaseEpoch as YamlObject;
-    expect(epoch.default).toBe(0);
+    const leaseGeneration = specSchema.leaseGeneration as YamlObject;
+    expect(leaseGeneration.default).toBe(0);
   });
 
   it("treats a closed lease as removed so a deleted XR can finish deleting", () => {

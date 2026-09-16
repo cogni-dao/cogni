@@ -174,8 +174,8 @@ async function main(): Promise<void> {
   // same row: a node never selects its own reconciler.
   const computeApi = resolveNodeComputeApi({ catalog, environment });
   // Explicit replacement counter for a terminally closed lease — same operator-owned row,
-  // never a CLI flag: an epoch a caller could pass would be an epoch automation could bump,
-  // and NOTHING may bump it implicitly. Absent cell resolves to 0, the XRD default.
+  // never a CLI flag: a generation a caller could pass would be a generation automation could
+  // bump, and NOTHING may bump it implicitly. Absent cell resolves to 0, the XRD default.
   const leaseGeneration = resolveNodeLeaseGeneration({ catalog, environment });
   const dnsZoneId = values["dns-zone-id"]?.trim();
   if (dnsZoneId && !CLOUDFLARE_ZONE_ID.test(dnsZoneId)) {

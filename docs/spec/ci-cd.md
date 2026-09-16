@@ -123,10 +123,8 @@ The legacy Akash exceptions in Axioms 18, 21, and 23 are superseded by Axiom 26:
     fresh XR generation with a fresh boot budget. The counter advances ONLY at replacement
     events — it is deliberately NOT coupled to attribution epochs, which advance on a global
     schedule; coupling them would force a paid lease churn per epoch rollover (design-rejected
-    2026-09-15). Wire note: the XRD v1alpha1 spec field is still named `leaseEpoch`; the field
-    rename is deferred to v1alpha2 because renaming a served CRD field is schema surgery on
-    live composites. Everything caller-facing (catalog, resolver, docs) says
-    `lease_generation`.
+    2026-09-15). The same name is carried end-to-end: catalog `lease_generation`, typed
+    `leaseGeneration`, and XRD `spec.leaseGeneration`.
 
 ## Branch And Deploy-State Model
 

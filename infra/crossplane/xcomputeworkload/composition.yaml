@@ -113,13 +113,13 @@ spec:
               the wallet-wide slot, so here it MUST be stable for the life of the workload. The
               legacy controller's key embedded metadata.generation, which was safe only because
               that controller decided observe-then-create itself. Under Crossplane, provider-http
-              asks "does the resource for this key exist?" - a key that changed per generation
+              asks "does the resource for this key exist?" - a key that changed per reconcile
               would answer "no" after every promote and mint a SECOND PAID LEASE. namespace and
               name are both immutable (name == nodeId), so the only varying component is
-              spec.leaseEpoch, which NOTHING bumps implicitly.
+              spec.leaseGeneration, which NOTHING bumps implicitly.
             */ -}}
-            {{- $epoch := int (dig "leaseEpoch" 0 $spec) }}
-            {{- $cogniKey := printf "xcw:%s:%s:%d" $ns $name $epoch }}
+            {{- $leaseGeneration := int (dig "leaseGeneration" 0 $spec) }}
+            {{- $cogniKey := printf "xcw:%s:%s:%d" $ns $name $leaseGeneration }}
             {{- $baseUrl := printf "http://akash-tx-actuator.%s.svc.cluster.local:8080" $ns }}
             {{- $authHeader := printf "Bearer {{ akash-tx-actuator-auth:%s:token }}" $ns }}
 
@@ -310,7 +310,7 @@ spec:
               A CLOSED lease is TERMINAL for this XR, and the composed Request stops being
               rendered. Re-creating under the same key would ask the actuator to re-spend a
               settled key (it refuses by design, FAIL_CLOSED), so hammering it would only burn
-              provider calls. Replacement is an explicit spec.leaseEpoch bump.
+              provider calls. Replacement is an explicit spec.leaseGeneration bump.
             */ -}}
             {{- $terminallyClosed := and $closed (not $closeForBudget) }}
             {{- $renderLease := not (or $closeForBudget $terminallyClosed) }}
@@ -559,7 +559,7 @@ spec:
             {{- else if $terminallyClosed }}
             {{- $phase = "Failed" }}
             {{- $failReason = "LeaseClosed" }}
-            {{- $failMessage = printf "lease %s is closed; bump spec.leaseEpoch to mint a replacement (the actuator refuses to re-spend a settled key)" $externalName }}
+            {{- $failMessage = printf "lease %s is closed; bump spec.leaseGeneration to mint a replacement (the actuator refuses to re-spend a settled key)" $externalName }}
             {{- end }}
             ---
             apiVersion: {{ $xr.apiVersion }}

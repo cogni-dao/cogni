@@ -13,7 +13,7 @@ describe("resolveNodeLeaseGeneration", () => {
    * default. If this ever resolves nonzero, an idempotence key silently changes and a
    * promote mints a SECOND PAID LEASE.
    */
-  it("resolves an absent field to zero, the epoch every workload already runs under", () => {
+  it("resolves an absent field to zero, the generation every workload already runs under", () => {
     expect(
       resolveNodeLeaseGeneration({
         catalog: { name: "beacon" },
@@ -42,7 +42,7 @@ describe("resolveNodeLeaseGeneration", () => {
   });
 
   /**
-   * The epoch is the idempotence key's only varying component, so a value the XRD would
+   * The generation is the idempotence key's only varying component, so a value the XRD would
    * reject must fail closed HERE — a materialized manifest the API server bounces would
    * leave the deploy branch carrying desired state nothing can apply.
    */
