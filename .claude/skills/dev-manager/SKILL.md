@@ -118,9 +118,37 @@ Derek scans many agents. Every status update is a tight matrix (inherits `/tldr`
 
 Lead with 🔴/🟡; 🟢 is earned (merged + proven live), never aspirational.
 
+## Portfolio card
+
+Use this when the story spans multiple investment areas, such as a roadmap
+refresh, PR/link map, or multi-week substrate push. Keep the same matrix style;
+add a top-level card and drill into only red/yellow areas.
+
+```markdown
+## ROADMAP: <human outcome> · <date>
+
+| status | investment area                  | current state | linked proof       | gap             | next Pareto move |
+| ------ | -------------------------------- | ------------- | ------------------ | --------------- | ---------------- |
+| 🔴🟡🟢 | <capability users/operators get> | <fact now>    | <PR/doc/run links> | <missing proof> | <one action>     |
+```
+
+Rules:
+
+- Every row links to exact proof: PR, run, deployed URL, knowledge entry, or doc.
+- Distinguish current fact, this PR, and vnext.
+- For knowledge/skill work, name both the filesystem wrapper and the hub row or
+  contribution branch when they diverge.
+- If the next move is research, name the loop and durable target: `scorecard`,
+  `skill`, EDO, or silence.
+
 ## Eventual home
 
-This is the human-driven v0. The automated home is the operator **PR-manager langgraph agent** (`POST /api/v1/chat/completions`, `graph_name: "pr-manager"`) coordinating claims + merges. Until that carries the loop, run it here.
+This is the human-driven v0. The automated home is the operator **PR-manager /
+dev-manager LangGraph loop** coordinating claims, PR state, status cards, and
+merges. The first graph-useful slice is the status-card reducer: recall hub
+context, read work items + PR/check state, emit the portfolio card, drill into
+red/yellow rows only, and write durable knowledge only when the card becomes a
+reusable scorecard, skill, or EDO beat. Until that carries the loop, run it here.
 
 ## Reference — the proven cycle (2026-06-16)
 
