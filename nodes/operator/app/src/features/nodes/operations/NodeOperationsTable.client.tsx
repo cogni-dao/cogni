@@ -1,44 +1,52 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
-/**
- * Module: `@features/nodes/operations/NodeOperationsTable`
- * Purpose: Compact, responsive operations home for nodes visible to the current principal.
- * Scope: Presentation and disclosure state only. No infrastructure or billing semantics.
- * Invariants: TEXT_PLUS_COLOR, BUTTON_DISCLOSURE, PROVIDER_NEUTRAL, MOBILE_NO_OVERFLOW.
- * Side-effects: none
- * Links: /api/v1/dashboard/nodes, task.5112
- * @public
- */
+/** Compact, responsive operations home for nodes visible to the current principal. */
 
 "use client";
 
 import type { NodeOperationsOverview } from "@cogni/node-contracts";
+import { HeaderFilter } from "@cogni/node-ui-kit/header-filter";
+import {
+  DataGrid,
+  DataGridContainer,
+} from "@cogni/node-ui-kit/reui/data-grid/data-grid";
+import { DataGridColumnHeader } from "@cogni/node-ui-kit/reui/data-grid/data-grid-column-header";
+import { DataGridTable } from "@cogni/node-ui-kit/reui/data-grid/data-grid-table";
 import { cn } from "@cogni/node-ui-kit/util/cn";
+import {
+  type ColumnFiltersState,
+  createColumnHelper,
+  type ExpandedState,
+  getCoreRowModel,
+  getExpandedRowModel,
+  getFacetedRowModel,
+  getFacetedUniqueValues,
+  getFilteredRowModel,
+  getSortedRowModel,
+  type SortingState,
+  useReactTable,
+} from "@tanstack/react-table";
 import {
   AlertCircle,
   CheckCircle2,
   ChevronDown,
   CircleDashed,
   ExternalLink,
-  Plus,
   Rocket,
+  Search,
   Settings2,
 } from "lucide-react";
 import Link from "next/link";
 import type { ReactElement } from "react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
+import { Card, CardContent, Input } from "@/components";
+import { NodeBrandMark } from "@/features/nodes/components/NodeBrandMark";
 import {
-  Card,
-  CardContent,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components";
+  DeploymentEnvironmentMatrix,
+  type DeploymentEnvironmentRow,
+} from "@/features/nodes/deployments/DeploymentEnvironmentMatrix";
 import { formatComputeAmountsDisplay, sumComputeAmounts } from "./format-cost";
 import { isObservedEnvironmentHealthy } from "./status";
 
@@ -78,6 +86,12 @@ const STATUS = {
   { label: string; icon: typeof CheckCircle2; className: string }
 >;
 
+function nodeStatusKey(node: NodeOperationsOverview): string {
+  return node.modules.deployment.state === "available"
+    ? node.modules.deployment.status
+    : "unavailable";
+}
+
 function statusForNode(node: NodeOperationsOverview) {
   if (node.modules.deployment.state === "unavailable") {
     return {
@@ -87,6 +101,11 @@ function statusForNode(node: NodeOperationsOverview) {
     };
   }
   return STATUS[node.modules.deployment.status];
+}
+
+function formatStatusFilter(value: string): string {
+  if (value === "unavailable") return "Unavailable";
+  return STATUS[value as DeploymentStatus]?.label ?? value;
 }
 
 function StatusLabel({ node }: { node: NodeOperationsOverview }): ReactElement {
@@ -99,16 +118,8 @@ function StatusLabel({ node }: { node: NodeOperationsOverview }): ReactElement {
         status.className
       )}
     >
-      <Icon className="size-4" aria-hidden="true" />
+      <Icon className="size-4 shrink-0" aria-hidden="true" />
       {status.label}
-    </span>
-  );
-}
-
-function NodeMark({ node }: { node: NodeOperationsOverview }): ReactElement {
-  return (
-    <span className="flex size-9 shrink-0 items-center justify-center rounded-lg border bg-muted font-semibold text-foreground uppercase">
-      {node.title.charAt(0)}
     </span>
   );
 }
@@ -142,32 +153,40 @@ function computeLabel(node: NodeOperationsOverview): string {
   return formatComputeAmountsDisplay(compute.transferred);
 }
 
-function EnvironmentStatus({
-  environment,
+function environmentRows(
+  node: NodeOperationsOverview
+): DeploymentEnvironmentRow[] {
+  const deployment = node.modules.deployment;
+  if (deployment.state === "unavailable") return [];
+  const compute = node.modules.compute;
+
+  return deployment.environments.map((environment) => ({
+    ...environment,
+    compute:
+      compute.state === "available" && compute.environment === environment.env
+        ? {
+            state: "available" as const,
+            amount: formatComputeAmountsDisplay(compute.transferred),
+            activeDeployments: compute.activeDeployments,
+          }
+        : { state: "unavailable" as const },
+  }));
+}
+
+function GovernanceMetric({
+  label,
+  value,
 }: {
-  environment: Extract<
-    NodeOperationsOverview["modules"]["deployment"],
-    { state: "available" }
-  >["environments"][number];
+  label: string;
+  value: string;
 }): ReactElement {
-  const status = !environment.declared
-    ? STATUS.not_deployed
-    : isObservedEnvironmentHealthy(environment)
-      ? STATUS.healthy
-      : environment.health === "provisioning"
-        ? STATUS.deploying
-        : STATUS.needs_attention;
-  const Icon = status.icon;
   return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-1.5 text-sm",
-        status.className
-      )}
-    >
-      <Icon className="size-4" aria-hidden="true" />
-      {status.label}
-    </span>
+    <div className="min-w-0 rounded-md border bg-muted/20 p-3">
+      <dt className="text-muted-foreground text-xs">{label}</dt>
+      <dd className="mt-1 truncate font-semibold text-sm tabular-nums">
+        {value}
+      </dd>
+    </div>
   );
 }
 
@@ -176,18 +195,43 @@ function NodeDetails({
   showDetailLink = true,
   showHomepageLink = true,
   instanceId,
+  disclosureId,
 }: {
   node: NodeOperationsOverview;
   showDetailLink?: boolean;
   showHomepageLink?: boolean;
   instanceId: string;
+  disclosureId?: string;
 }): ReactElement {
   const deployment = node.modules.deployment;
-  const compute = node.modules.compute;
   const governance = node.modules.governance;
+  const rows = environmentRows(node);
+
+  const finalizedCredits =
+    governance.state === "available" &&
+    governance.finalizedAttributionCredits.state === "available"
+      ? governance.finalizedAttributionCredits.value
+      : "Unavailable";
+  const totalContributors =
+    governance.state === "available" &&
+    governance.totalContributors.state === "available"
+      ? governance.totalContributors.value.toLocaleString()
+      : "Unavailable";
+  const epochsCompleted =
+    governance.state === "available" &&
+    governance.epochsCompleted.state === "available"
+      ? governance.epochsCompleted.value.toLocaleString()
+      : "Unavailable";
+  const currentEpoch =
+    governance.state === "available" &&
+    governance.currentEpoch.state === "available"
+      ? governance.currentEpoch.value
+        ? `Epoch ${governance.currentEpoch.value.id} · ${governance.currentEpoch.value.status}`
+        : "None open"
+      : "Unavailable";
 
   return (
-    <div className="grid gap-4 p-4 md:grid-cols-3 md:p-5">
+    <div id={disclosureId} className="space-y-5 bg-muted/20 p-4 md:p-5">
       <section
         aria-labelledby={`${instanceId}-deployments`}
         className="space-y-3"
@@ -195,50 +239,8 @@ function NodeDetails({
         <h3 id={`${instanceId}-deployments`} className="font-medium text-sm">
           Deployments
         </h3>
-        {deployment.state === "available" &&
-        deployment.environments.length > 0 ? (
-          <div className="space-y-2">
-            {deployment.environments.map((environment) => (
-              <div
-                key={environment.env}
-                className="flex min-h-7 items-center justify-between gap-3"
-              >
-                <span className="text-muted-foreground text-sm">
-                  {environment.label}
-                </span>
-                <span className="flex items-center gap-3">
-                  <EnvironmentStatus environment={environment} />
-                  <span className="w-14 text-right font-mono text-muted-foreground text-xs">
-                    {environment.buildSha?.slice(0, 7) ?? "—"}
-                  </span>
-                </span>
-              </div>
-            ))}
-          </div>
-        ) : deployment.state === "available" ? (
-          <p className="text-muted-foreground text-sm">Setup in progress</p>
-        ) : (
-          <p className="text-muted-foreground text-sm">Unavailable</p>
-        )}
-      </section>
-
-      <section aria-labelledby={`${instanceId}-compute`} className="space-y-3">
-        <h3 id={`${instanceId}-compute`} className="font-medium text-sm">
-          Compute
-        </h3>
-        {compute.state === "available" ? (
-          <div className="space-y-1">
-            <p className="font-semibold text-lg tabular-nums">
-              {compute.activeDeployments === 0 &&
-              compute.transferred.length === 0
-                ? "No active compute"
-                : `${formatComputeAmountsDisplay(compute.transferred)} used`}
-            </p>
-            <p className="text-muted-foreground text-sm">Cogni-sponsored</p>
-            <p className="text-muted-foreground text-xs">
-              {compute.activeDeployments} active
-            </p>
-          </div>
+        {deployment.state === "available" ? (
+          <DeploymentEnvironmentMatrix rows={rows} showCompute />
         ) : (
           <p className="text-muted-foreground text-sm">Unavailable</p>
         )}
@@ -248,37 +250,37 @@ function NodeDetails({
         aria-labelledby={`${instanceId}-governance`}
         className="space-y-3"
       >
-        <h3 id={`${instanceId}-governance`} className="font-medium text-sm">
-          Governance
-        </h3>
-        {governance.state === "available" ? (
-          <div className="space-y-1 text-sm">
-            <p>
-              {governance.latestEpoch
-                ? `Epoch ${governance.latestEpoch.id} · ${governance.latestEpoch.status}`
-                : "No epochs yet"}
-            </p>
-            <p className="text-muted-foreground">
-              {governance.finalizedEpochs} finalized
-            </p>
-            {governance.daoUrl ? (
-              <a
-                href={governance.daoUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex min-h-11 items-center gap-1.5 text-primary text-sm hover:underline focus-visible:outline-2 focus-visible:outline-ring"
-              >
-                View DAO
-                <ExternalLink className="size-3.5" aria-hidden="true" />
-              </a>
-            ) : null}
-          </div>
-        ) : (
-          <p className="text-muted-foreground text-sm">Unavailable</p>
-        )}
+        <div className="flex items-center justify-between gap-3">
+          <h3 id={`${instanceId}-governance`} className="font-medium text-sm">
+            Governance
+          </h3>
+          <span className="text-muted-foreground text-xs">{currentEpoch}</span>
+        </div>
+        <dl className="grid gap-2 sm:grid-cols-3">
+          <GovernanceMetric
+            label="Finalized attribution credits"
+            value={finalizedCredits}
+          />
+          <GovernanceMetric
+            label="Total contributors"
+            value={totalContributors}
+          />
+          <GovernanceMetric label="Epochs completed" value={epochsCompleted} />
+        </dl>
+        {governance.state === "available" && governance.daoUrl ? (
+          <a
+            href={governance.daoUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex min-h-11 items-center gap-1.5 text-primary text-sm hover:underline focus-visible:outline-2 focus-visible:outline-ring"
+          >
+            View DAO
+            <ExternalLink className="size-3.5" aria-hidden="true" />
+          </a>
+        ) : null}
       </section>
 
-      <div className="flex flex-wrap items-center gap-3 border-t pt-4 md:col-span-3">
+      <div className="flex flex-wrap items-center gap-3 border-t pt-4">
         {showDetailLink && node.relationship === "owner" ? (
           <Link
             href={node.detailUrl}
@@ -346,72 +348,13 @@ function DisclosureButton({
   );
 }
 
-function DesktopNodeRow({
-  node,
-}: {
-  node: NodeOperationsOverview;
-}): ReactElement {
-  const [expanded, setExpanded] = useState(false);
-  const disclosureId = `${node.id}-operations-desktop`;
-  return (
-    <>
-      <TableRow>
-        <TableCell>
-          <div className="flex items-center gap-3">
-            <NodeMark node={node} />
-            <div className="min-w-0">
-              <p className="truncate font-medium">{node.title}</p>
-              {node.relationship === "developer" ? (
-                <p className="text-muted-foreground text-xs">Developer</p>
-              ) : null}
-            </div>
-          </div>
-        </TableCell>
-        <TableCell>
-          <StatusLabel node={node} />
-        </TableCell>
-        <TableCell className="font-mono text-muted-foreground text-xs">
-          {buildLabel(node)}
-        </TableCell>
-        <TableCell>
-          <p className="font-medium text-sm tabular-nums">
-            {computeLabel(node)}
-          </p>
-          {node.modules.compute.state === "available" ? (
-            <p className="text-muted-foreground text-xs">Sponsored</p>
-          ) : null}
-        </TableCell>
-        <TableCell className="w-14 text-right">
-          <DisclosureButton
-            node={node}
-            disclosureId={disclosureId}
-            expanded={expanded}
-            onToggle={() => setExpanded((value) => !value)}
-          />
-        </TableCell>
-      </TableRow>
-      {expanded ? (
-        <TableRow id={disclosureId}>
-          <TableCell colSpan={5} className="bg-muted/25 p-0">
-            <NodeDetails node={node} instanceId={`${node.id}-desktop`} />
-          </TableCell>
-        </TableRow>
-      ) : null}
-    </>
-  );
-}
-
-function MobileNodeCard({
-  node,
-}: {
-  node: NodeOperationsOverview;
-}): ReactElement {
+function MobileNodeCard({ node }: { node: NodeOperationsOverview }) {
   const [expanded, setExpanded] = useState(false);
   const disclosureId = `${node.id}-operations-mobile`;
   return (
     <Card className="overflow-hidden">
       <div className="flex min-h-20 items-center gap-3 p-4">
-        <NodeMark node={node} />
+        <NodeBrandMark node={node} />
         <div className="min-w-0 flex-1">
           <p className="truncate font-medium">{node.title}</p>
           <StatusLabel node={node} />
@@ -432,37 +375,161 @@ function MobileNodeCard({
         />
       </div>
       {expanded ? (
-        <div id={disclosureId} className="border-t bg-muted/20">
-          <NodeDetails node={node} instanceId={`${node.id}-mobile`} />
-        </div>
+        <NodeDetails
+          node={node}
+          instanceId={`${node.id}-mobile`}
+          disclosureId={disclosureId}
+        />
       ) : null}
     </Card>
   );
 }
+
+const columnHelper = createColumnHelper<NodeOperationsOverview>();
 
 export function NodeOperationsTable({
   nodes,
 }: {
   readonly nodes: readonly NodeOperationsOverview[];
 }): ReactElement {
+  const [sorting, setSorting] = useState<SortingState>([
+    { id: "node", desc: false },
+  ]);
+  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
+  const [globalFilter, setGlobalFilter] = useState("");
+  const [expanded, setExpanded] = useState<ExpandedState>({});
+
+  const columns = useMemo(
+    () => [
+      columnHelper.accessor((node) => node.title, {
+        id: "node",
+        header: ({ column }) => (
+          <DataGridColumnHeader column={column} title="Node" />
+        ),
+        cell: ({ row }) => (
+          <div className="flex items-center gap-3">
+            <NodeBrandMark node={row.original} />
+            <div className="min-w-0">
+              <p className="truncate font-medium">{row.original.title}</p>
+              <p className="truncate text-muted-foreground text-xs">
+                {row.original.slug}
+              </p>
+            </div>
+          </div>
+        ),
+        meta: {
+          headerTitle: "Node",
+          expandedContent: (node) => (
+            <NodeDetails
+              node={node}
+              instanceId={`${node.id}-desktop`}
+              disclosureId={`${node.id}-operations-desktop`}
+            />
+          ),
+        },
+      }),
+      columnHelper.accessor(nodeStatusKey, {
+        id: "status",
+        header: ({ column }) => (
+          <DataGridColumnHeader
+            column={column}
+            title="Status"
+            filter={
+              <HeaderFilter column={column} formatLabel={formatStatusFilter} />
+            }
+          />
+        ),
+        cell: ({ row }) => <StatusLabel node={row.original} />,
+        filterFn: "arrIncludesSome",
+        meta: { headerTitle: "Status" },
+      }),
+      columnHelper.accessor(buildLabel, {
+        id: "production",
+        header: ({ column }) => (
+          <DataGridColumnHeader column={column} title="Production" />
+        ),
+        cell: ({ getValue }) => (
+          <span className="font-mono text-muted-foreground text-xs">
+            {getValue()}
+          </span>
+        ),
+        meta: { headerTitle: "Production" },
+      }),
+      columnHelper.accessor(computeLabel, {
+        id: "compute",
+        header: ({ column }) => (
+          <DataGridColumnHeader column={column} title="Compute" />
+        ),
+        cell: ({ row, getValue }) => (
+          <div>
+            <p className="font-medium text-sm tabular-nums">{getValue()}</p>
+            {row.original.modules.compute.state === "available" ? (
+              <p className="text-muted-foreground text-xs">Sponsored</p>
+            ) : null}
+          </div>
+        ),
+        meta: { headerTitle: "Compute" },
+      }),
+      columnHelper.display({
+        id: "details",
+        header: () => <span className="sr-only">Details</span>,
+        cell: ({ row }) => (
+          <div className="text-right">
+            <DisclosureButton
+              node={row.original}
+              disclosureId={`${row.original.id}-operations-desktop`}
+              expanded={row.getIsExpanded()}
+              onToggle={() => row.toggleExpanded()}
+            />
+          </div>
+        ),
+        size: 56,
+        enableSorting: false,
+        meta: { headerTitle: "Details" },
+      }),
+    ],
+    []
+  );
+
+  const table = useReactTable({
+    data: [...nodes],
+    columns,
+    state: { sorting, columnFilters, globalFilter, expanded },
+    onSortingChange: setSorting,
+    onColumnFiltersChange: setColumnFilters,
+    onGlobalFilterChange: setGlobalFilter,
+    onExpandedChange: setExpanded,
+    getRowCanExpand: () => true,
+    getCoreRowModel: getCoreRowModel(),
+    getFilteredRowModel: getFilteredRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    getExpandedRowModel: getExpandedRowModel(),
+    getFacetedRowModel: getFacetedRowModel(),
+    getFacetedUniqueValues: getFacetedUniqueValues(),
+    globalFilterFn: (row, _columnId, value: string) => {
+      const query = value.trim().toLowerCase();
+      return (
+        row.original.title.toLowerCase().includes(query) ||
+        row.original.slug.toLowerCase().includes(query)
+      );
+    },
+  });
+
   if (nodes.length === 0) {
     return (
       <Card>
         <CardContent className="flex min-h-56 flex-col items-center justify-center gap-4 text-center">
-          <div className="flex size-12 items-center justify-center rounded-full bg-primary/10 text-primary">
-            <Plus className="size-6" aria-hidden="true" />
-          </div>
           <div>
             <h2 className="font-semibold text-lg">No nodes yet</h2>
             <p className="mt-1 text-muted-foreground text-sm">
-              Start a community project.
+              Find a community project to follow.
             </p>
           </div>
           <Link
-            href="/nodes"
+            href="/explore/nodes"
             className="inline-flex min-h-11 items-center rounded-md bg-primary px-4 font-medium text-primary-foreground text-sm hover:bg-primary/90 focus-visible:outline-2 focus-visible:outline-ring"
           >
-            Create node
+            Discover nodes
           </Link>
         </CardContent>
       </Card>
@@ -470,9 +537,7 @@ export function NodeOperationsTable({
   }
 
   const healthy = nodes.filter(
-    (node) =>
-      node.modules.deployment.state === "available" &&
-      node.modules.deployment.status === "healthy"
+    (node) => nodeStatusKey(node) === "healthy"
   ).length;
   const sponsored = sumComputeAmounts(
     nodes.flatMap((node) =>
@@ -481,62 +546,80 @@ export function NodeOperationsTable({
         : []
     )
   );
-  const availableComputeCount = nodes.filter(
+  const availableCompute = nodes.filter(
     (node) => node.modules.compute.state === "available"
-  ).length;
+  );
+  const environmentLabel =
+    availableCompute[0]?.modules.compute.state === "available"
+      ? (
+          {
+            "candidate-a": "Test",
+            preview: "Preview",
+            production: "Production",
+          } as const
+        )[availableCompute[0].modules.compute.environment]
+      : null;
   const computeSummary =
-    availableComputeCount === 0
+    availableCompute.length === 0
       ? "Compute unavailable"
-      : availableComputeCount < nodes.length
-        ? `${formatComputeAmountsDisplay(sponsored)} sponsored · partial`
-        : `${formatComputeAmountsDisplay(sponsored)} sponsored`;
+      : availableCompute.length < nodes.length
+        ? `${formatComputeAmountsDisplay(sponsored)} sponsored in ${environmentLabel} · partial`
+        : `${formatComputeAmountsDisplay(sponsored)} sponsored in ${environmentLabel}`;
+  const visibleRows = table.getRowModel().rows;
 
   return (
     <section aria-labelledby="your-nodes" className="space-y-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h1 id="your-nodes" className="font-bold text-2xl tracking-tight">
-            Your nodes
-          </h1>
-          <p className="mt-1 text-muted-foreground text-sm">
-            {nodes.length} {nodes.length === 1 ? "node" : "nodes"} · {healthy}{" "}
-            healthy · {computeSummary}
-          </p>
-        </div>
-        <Link
-          href="/nodes"
-          className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md bg-primary px-4 font-medium text-primary-foreground text-sm hover:bg-primary/90 focus-visible:outline-2 focus-visible:outline-ring"
-        >
-          <Plus className="size-4" aria-hidden="true" />
-          New node
-        </Link>
+      <div>
+        <h1 id="your-nodes" className="font-bold text-2xl tracking-tight">
+          Your nodes
+        </h1>
+        <p className="mt-1 text-muted-foreground text-sm">
+          {nodes.length} {nodes.length === 1 ? "node" : "nodes"} · {healthy}{" "}
+          healthy · {computeSummary}
+        </p>
       </div>
 
-      <Card className="hidden overflow-hidden md:block">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Node</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Production</TableHead>
-              <TableHead>Compute</TableHead>
-              <TableHead>
-                <span className="sr-only">Details</span>
-              </TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {nodes.map((node) => (
-              <DesktopNodeRow key={node.id} node={node} />
-            ))}
-          </TableBody>
-        </Table>
-      </Card>
+      <label
+        htmlFor="node-operations-search"
+        className="relative block w-full sm:w-64"
+      >
+        <span className="sr-only">Search nodes</span>
+        <Search
+          className="-translate-y-1/2 pointer-events-none absolute top-1/2 left-3 size-4 text-muted-foreground"
+          aria-hidden="true"
+        />
+        <Input
+          id="node-operations-search"
+          className="h-9 pl-9"
+          placeholder="Find a node"
+          value={globalFilter}
+          onChange={(event) => setGlobalFilter(event.target.value)}
+        />
+      </label>
+
+      <div className="hidden md:block">
+        <DataGrid
+          table={table}
+          recordCount={nodes.length}
+          tableLayout={{ dense: true, rowBorder: true, headerBackground: true }}
+          emptyMessage="No matching nodes."
+        >
+          <DataGridContainer>
+            <DataGridTable />
+          </DataGridContainer>
+        </DataGrid>
+      </div>
 
       <div className="space-y-3 md:hidden">
-        {nodes.map((node) => (
-          <MobileNodeCard key={node.id} node={node} />
-        ))}
+        {visibleRows.length > 0 ? (
+          visibleRows.map((row) => (
+            <MobileNodeCard key={row.original.id} node={row.original} />
+          ))
+        ) : (
+          <p className="py-8 text-center text-muted-foreground text-sm">
+            No matching nodes.
+          </p>
+        )}
       </div>
     </section>
   );
@@ -551,7 +634,7 @@ export function NodeOperationsDetail({
     <section aria-labelledby="node-operations-title" className="space-y-4">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex items-center gap-3">
-          <NodeMark node={node} />
+          <NodeBrandMark node={node} />
           <div>
             <h1
               id="node-operations-title"
@@ -578,12 +661,7 @@ export function NodeOperationsDetail({
       </div>
 
       <Card className="overflow-hidden">
-        <div
-          className={cn(
-            "grid grid-cols-2 gap-4 border-b p-4 md:p-5",
-            node.relationship === "developer" && "sm:grid-cols-3"
-          )}
-        >
+        <div className="grid grid-cols-2 gap-4 border-b p-4 md:p-5">
           <div>
             <p className="text-muted-foreground text-xs">Production</p>
             <p className="mt-1 font-mono text-sm">{buildLabel(node)}</p>
@@ -594,12 +672,6 @@ export function NodeOperationsDetail({
               {computeLabel(node)}
             </p>
           </div>
-          {node.relationship === "developer" ? (
-            <div className="col-span-2 sm:col-span-1">
-              <p className="text-muted-foreground text-xs">Access</p>
-              <p className="mt-1 text-sm">Developer</p>
-            </div>
-          ) : null}
         </div>
         <NodeDetails
           node={node}

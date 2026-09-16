@@ -15,7 +15,8 @@ const node: NodeOperationsOverview = {
   id: "11111111-1111-4111-8111-111111111111",
   slug: "alpha",
   title: "Alpha",
-  icon: null,
+  icon: "Brain",
+  thumbnailUrl: null,
   brandColor: null,
   formationStatus: "active",
   relationship: "owner",
@@ -40,14 +41,20 @@ const node: NodeOperationsOverview = {
     compute: {
       state: "available",
       sponsorship: "cogni",
+      environment: "production",
       activeDeployments: 1,
       transferred: [{ amount: "341045", denom: "uact" }],
     },
     governance: {
       state: "available",
       daoUrl: "https://app.aragon.org/dao/base/0xabc",
-      latestEpoch: { id: "7", status: "open" },
-      finalizedEpochs: 4,
+      finalizedAttributionCredits: { state: "unavailable" },
+      totalContributors: { state: "unavailable" },
+      epochsCompleted: { state: "available", value: 4 },
+      currentEpoch: {
+        state: "available",
+        value: { id: "7", status: "open" },
+      },
     },
   },
 };
@@ -91,10 +98,96 @@ describe("NodeOperationsTable", () => {
     render(<NodeOperationsTable nodes={[]} />);
     expect(screen.getByRole("heading", { name: "No nodes yet" })).toBeVisible();
     expect(screen.getAllByRole("link")).toHaveLength(1);
-    expect(screen.getByRole("link", { name: "Create node" })).toHaveAttribute(
-      "href",
-      "/nodes"
+    expect(
+      screen.getByRole("link", { name: "Discover nodes" })
+    ).toHaveAttribute("href", "/explore/nodes");
+    expect(screen.queryByText(/Create node|New node/)).not.toBeInTheDocument();
+  });
+
+  it("renders the repo-spec Lucide mark and hosted image mark", () => {
+    const imageNode = {
+      ...node,
+      id: "22222222-2222-4222-8222-222222222222",
+      slug: "beta",
+      title: "Beta",
+      icon: "https://beta.example/logo.svg",
+      detailUrl: "/nodes/22222222-2222-4222-8222-222222222222",
+    };
+    const { container } = render(
+      <NodeOperationsTable nodes={[node, imageNode]} />
     );
+    expect(screen.getAllByText("Alpha logo").length).toBeGreaterThan(0);
+    expect(container.querySelectorAll(".lucide-brain").length).toBeGreaterThan(
+      0
+    );
+    expect(screen.getAllByAltText("Beta logo").length).toBeGreaterThan(0);
+  });
+
+  it("filters the shared desktop and mobile row model by title or slug", async () => {
+    const user = userEvent.setup();
+    const beta = {
+      ...node,
+      id: "22222222-2222-4222-8222-222222222222",
+      slug: "beta-community",
+      title: "Beta",
+      detailUrl: "/nodes/22222222-2222-4222-8222-222222222222",
+    };
+    render(<NodeOperationsTable nodes={[node, beta]} />);
+    await user.type(
+      screen.getByRole("textbox", { name: "Search nodes" }),
+      "community"
+    );
+    expect(screen.queryAllByText("Alpha")).toHaveLength(0);
+    expect(screen.getAllByText("Beta").length).toBeGreaterThan(0);
+  });
+
+  it("associates sponsored compute only with its observed environment", async () => {
+    const user = userEvent.setup();
+    const multiEnv = {
+      ...node,
+      modules: {
+        ...node.modules,
+        deployment: {
+          ...node.modules.deployment,
+          environments: [
+            {
+              ...node.modules.deployment.environments[0],
+              env: "candidate-a" as const,
+              label: "Test" as const,
+              declared: false,
+              health: "unknown" as const,
+              buildSha: null,
+            },
+            {
+              ...node.modules.deployment.environments[0],
+              env: "preview" as const,
+              label: "Preview" as const,
+              declared: false,
+              health: "unknown" as const,
+              buildSha: null,
+            },
+            node.modules.deployment.environments[0],
+          ],
+        },
+      },
+    };
+    render(<NodeOperationsTable nodes={[multiEnv]} />);
+    await user.click(
+      screen.getAllByRole("button", {
+        name: "Show Alpha details",
+      })[0] as HTMLElement
+    );
+    const expanded = document.getElementById(`${node.id}-operations-desktop`);
+    expect(expanded).toHaveTextContent("Test");
+    expect(expanded).toHaveTextContent("Preview");
+    expect(expanded).toHaveTextContent("Production");
+    expect(expanded?.textContent?.match(/Not deployed/g)).toHaveLength(2);
+    expect(
+      [...(expanded?.querySelectorAll("td") ?? [])].filter(
+        (cell) => cell.textContent === "Unavailable"
+      )
+    ).toHaveLength(2);
+    expect(expanded).toHaveTextContent("$0.34");
   });
 
   it("does not report zero when compute evidence is unavailable", () => {
@@ -117,7 +210,9 @@ describe("NodeOperationsTable", () => {
       modules: { ...node.modules, compute: { state: "unavailable" as const } },
     };
     render(<NodeOperationsTable nodes={[node, unavailable]} />);
-    expect(screen.getByText(/\$0\.34 sponsored · partial/)).toBeVisible();
+    expect(
+      screen.getByText(/\$0\.34 sponsored in Production · partial/)
+    ).toBeVisible();
   });
 
   it("does not offer an Open node link when production is undeclared", async () => {

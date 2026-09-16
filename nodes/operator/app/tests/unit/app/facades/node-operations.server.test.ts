@@ -57,7 +57,10 @@ vi.mock("@/shared/config", () => ({
 }));
 
 vi.mock("@/shared/env", () => ({
-  serverEnv: () => ({ DOMAIN: "cognidao.org" }),
+  serverEnv: () => ({
+    DOMAIN: "cognidao.org",
+    DEPLOY_ENVIRONMENT: "production",
+  }),
 }));
 
 import { listAccessibleNodeOperations } from "@/app/_facades/nodes/operations.server";
@@ -106,6 +109,10 @@ describe("listAccessibleNodeOperations", () => {
     expect(output.nodes[0]).toMatchObject({
       relationship: "owner",
       detailUrl: `/nodes/${NODE_A}`,
+      thumbnailUrl: null,
+      modules: {
+        compute: { state: "available", environment: "production" },
+      },
     });
   });
 
