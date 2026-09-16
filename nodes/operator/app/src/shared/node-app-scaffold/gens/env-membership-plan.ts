@@ -67,6 +67,7 @@ import {
 } from "./appset";
 import {
   addCatalogEnv,
+  catalogAppsetsDir,
   dropCatalogEnv,
   envRank,
   envRemovalViolation,
@@ -91,13 +92,25 @@ export const overlayPath = (env: string, slug: string): string =>
 export const externalSecretPath = (env: string, slug: string): string =>
   `infra/k8s/overlays/${env}/${slug}/external-secret.yaml`;
 
-/** Repo-relative path of a node's per-(env, slug) ApplicationSet object. */
-export const appsetPath = (env: string, slug: string): string =>
-  `infra/k8s/argocd/appsets/${env}/${env}-${slug}-applicationset.yaml`;
+/**
+ * Repo-relative path of a node's per-(env, slug) ApplicationSet object.
+ *
+ * `dir` is the appsets directory that OWNS the cell — i.e. which cluster's app-of-apps applies it. It
+ * defaults to `env`, the answer for every k3s row, every legacy-authority akash row and every
+ * production row. An akash+crossplane pre-prod lane resolves to `production-hosted-lanes` instead
+ * (story.5016 seam 3): the file NAME is unchanged, the file BODY is unchanged, only the directory
+ * moves, because a paid lane must be reconciled where the ONE production Akash writer lives.
+ */
+export const appsetPath = (
+  env: string,
+  slug: string,
+  dir: string = env
+): string =>
+  `infra/k8s/argocd/appsets/${dir}/${env}-${slug}-applicationset.yaml`;
 
-/** Repo-relative path of ONE env's appsets kustomization (the list the slug folds into). */
-export const appsetsKustomizationPath = (env: string): string =>
-  `infra/k8s/argocd/appsets/${env}/kustomization.yaml`;
+/** Repo-relative path of ONE appsets directory's kustomization (the list the slug folds into). */
+export const appsetsKustomizationPath = (dir: string): string =>
+  `infra/k8s/argocd/appsets/${dir}/kustomization.yaml`;
 
 export const CATALOG_PATH = (slug: string): string =>
   `infra/catalog/${slug}.yaml`;
@@ -273,6 +286,12 @@ function planAdd(args: {
     );
   }
 
+  // WHICH appsets directory owns the cell being added. Read from the catalog as it stands BEFORE the
+  // add, which is exactly right: an env-verb add writes no `deployment_provider`/`compute_api` cell,
+  // so a freshly added env resolves to k3s+legacy and therefore to its own env directory. A hosted
+  // Akash lane can only be created by a birth or an explicit human catalog edit, never by this verb.
+  const addDir = catalogAppsetsDir(current.catalog, env);
+
   const ops: EnvPlanOp[] = [
     {
       op: "upsert",
@@ -316,13 +335,18 @@ function planAdd(args: {
     },
     {
       op: "upsert",
-      path: appsetPath(env, slug),
+      path: appsetPath(env, slug, addDir),
       content: renderNodeAppset(current.appsetTemplate, slug, env),
     },
     {
       op: "upsert",
-      path: appsetsKustomizationPath(env),
-      content: insertAppsetKustomization(appsetsKustomization, slug, env),
+      path: appsetsKustomizationPath(addDir),
+      content: insertAppsetKustomization(
+        appsetsKustomization,
+        slug,
+        env,
+        addDir
+      ),
     },
   ];
   return { kind: "add", ops, nextEnvs };
@@ -377,6 +401,12 @@ function planRemove(args: {
   // + kustomization entry + catalog env). With no appset, no Application references the files: Argo
   // prunes the workload and the files become pure render-source artifacts.
   const keepOverlayFiles = slug === TEMPLATE_SLUG;
+  // WHICH appsets directory owns the cell being removed — read from the catalog row's own placement +
+  // authority cells (story.5016 seam 3). A born node's candidate-a cell is akash+crossplane, so its
+  // AppSet lives under `production-hosted-lanes/` and the remove must delete it from THERE. Closing
+  // candidate-a is the ordinary post-birth env verb (`NODE_FORMATION_ENVS`), so this is a live path,
+  // not a hypothetical: deleting the wrong path would leave the AppSet — and its paid lease — behind.
+  const removeDir = catalogAppsetsDir(current.catalog, env);
   const ops: EnvPlanOp[] = [
     {
       op: "upsert",
@@ -389,11 +419,16 @@ function planRemove(args: {
           { op: "delete", path: overlayPath(env, slug) },
           { op: "delete", path: externalSecretPath(env, slug) },
         ] as const)),
-    { op: "delete", path: appsetPath(env, slug) },
+    { op: "delete", path: appsetPath(env, slug, removeDir) },
     {
       op: "upsert",
-      path: appsetsKustomizationPath(env),
-      content: removeFromAppsetsKustomization(appsetsKustomization, slug, env),
+      path: appsetsKustomizationPath(removeDir),
+      content: removeFromAppsetsKustomization(
+        appsetsKustomization,
+        slug,
+        env,
+        removeDir
+      ),
     },
   ];
   return { kind: "remove", ops, nextEnvs: remaining };
@@ -472,6 +507,25 @@ export function buildPlacementPlan(input: {
   }
 
   const nextCatalog = setCatalogPlacement(current.catalog, env, placement);
+
+  // PLACEMENT_MUST_NOT_SILENTLY_REHOME_A_LANE (story.5016 seam 3). NO_DELETE_ON_PLACEMENT above is
+  // true only while a flip leaves the cell's reconciling CLUSTER alone. It does for every ordinary
+  // row: the lever writes `deployment_provider` and never `compute_api`, so a flip produces at most
+  // akash+legacy, which stays in its own env directory. But a pre-prod cell that ALREADY names
+  // `compute_api: crossplane` becomes a production-hosted lane the moment it is placed on akash, and
+  // its AppSet would have to MOVE between appsets directories — work this plan deliberately does not
+  // do. Fail closed rather than emit a plan whose PR is red on the drift gate (best case) or whose
+  // AppSet is reconciled by the wrong cluster (worst case: two writers on one Console account).
+  if (
+    catalogAppsetsDir(nextCatalog, env) !==
+    catalogAppsetsDir(current.catalog, env)
+  ) {
+    throw new EnvPlanError(
+      "placement_rehomes_akash_lane",
+      `cannot set placement '${placement}' for '${env}' on '${slug}': the cell names compute_api '${env}: crossplane', so this flip moves which CLUSTER reconciles it (appsets/${catalogAppsetsDir(current.catalog, env)}/ → appsets/${catalogAppsetsDir(nextCatalog, env)}/). The placement lever does not move AppSets; change the catalog row and run 'pnpm gen:node-appset' in a reviewed PR.`,
+      422
+    );
+  }
 
   const ops: EnvPlanOp[] = [];
   if (nextCatalog !== current.catalog) {

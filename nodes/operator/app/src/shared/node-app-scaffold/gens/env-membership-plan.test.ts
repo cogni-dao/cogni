@@ -478,6 +478,123 @@ path_prefix: nodes/node-template/
   });
 });
 
+/**
+ * story.5016 seam 3 — RECONCILIATION_FOLLOWS_PAYMENT at the env verb. A born node's candidate-a
+ * cell is akash+crossplane, so its AppSet is reconciled by the PRODUCTION cluster and lives in
+ * `appsets/production-hosted-lanes/`. Closing candidate-a is the ordinary post-birth env verb, so
+ * this is a live path: deleting `appsets/candidate-a/...` instead would leave the AppSet — and the
+ * paid lease behind it — running forever.
+ */
+describe("env verb on a production-hosted Akash lane", () => {
+  const HOSTED_DIR = "production-hosted-lanes";
+  const SOURCE_REPO_LINE = `source_repo: ${["https:/", "/github.com/cogni-dao", SLUG].join("/")}\n`;
+
+  const hostedCatalog = (envs: readonly string[]): string =>
+    `${catalogWith(envs)}${SOURCE_REPO_LINE}deployment_provider:
+  candidate-a: akash
+  production: akash
+compute_api:
+  candidate-a: crossplane
+  production: crossplane
+`;
+
+  const hostedCurrent = (envs: readonly string[]): EnvPlanCurrent => ({
+    ...baseCurrent(envs),
+    catalog: hostedCatalog(envs),
+    // Keyed by the CELL's env, but carrying the content of the directory that RECONCILES it.
+    appsetsKustomizationByEnv: {
+      ...baseCurrent(envs).appsetsKustomizationByEnv,
+      "candidate-a": `${KUST_HEADER}\n  - candidate-a-${SLUG}-applicationset.yaml\n`,
+    },
+  });
+
+  it("removes a hosted candidate-a lane from the production-hosted-lanes directory", () => {
+    // Authority lives in production (BORN_PRODUCTION), which is what makes closing candidate-a the
+    // ordinary env verb rather than an authority cutover.
+    const res = buildEnvDeltaPlan({
+      slug: SLUG,
+      env: "candidate-a",
+      present: false,
+      current: hostedCurrent(["production", "candidate-a"]),
+    });
+    if (res.kind !== "remove") throw new Error(`unexpected kind ${res.kind}`);
+
+    expect(deletes(res.ops)).toContain(
+      appsetPath("candidate-a", SLUG, HOSTED_DIR)
+    );
+    // The env directory is NOT touched — nothing of this cell was ever committed there.
+    expect(deletes(res.ops)).not.toContain(appsetPath("candidate-a", SLUG));
+    expect(paths(res.ops)).toContain(appsetsKustomizationPath(HOSTED_DIR));
+    expect(paths(res.ops)).not.toContain(
+      appsetsKustomizationPath("candidate-a")
+    );
+  });
+
+  it("still routes a production cell to appsets/production/ (production is never rehomed)", () => {
+    // Same row, same akash+crossplane cells — but the env being planned IS production, so the
+    // resolver is identity and the AppSet stays exactly where production's own app-of-apps expects.
+    const res = buildEnvDeltaPlan({
+      slug: SLUG,
+      env: "production",
+      present: true,
+      current: {
+        ...baseCurrent(["candidate-a", "production"]),
+        catalog: hostedCatalog(["candidate-a"]),
+      },
+    });
+    if (res.kind !== "add") throw new Error(`unexpected kind ${res.kind}`);
+    expect(paths(res.ops)).toContain(appsetPath("production", SLUG));
+    expect(paths(res.ops)).toContain(appsetsKustomizationPath("production"));
+    expect(paths(res.ops)).not.toContain(appsetsKustomizationPath(HOSTED_DIR));
+  });
+
+  /**
+   * PLACEMENT_MUST_NOT_SILENTLY_REHOME_A_LANE. NO_DELETE_ON_PLACEMENT holds only while a flip
+   * leaves the reconciling cluster alone. A pre-prod cell that already names `crossplane` becomes a
+   * production-hosted lane the moment it is placed on akash, and its AppSet would have to MOVE —
+   * work the placement lever deliberately does not do. Fail closed rather than emit a plan whose
+   * AppSet ends up reconciled by the wrong cluster.
+   */
+  it("refuses a placement flip that would rehome a crossplane pre-prod lane", () => {
+    const k3sPlacedCrossplane = `${catalogWith(["candidate-a", "production"])}${SOURCE_REPO_LINE}compute_api:
+  candidate-a: crossplane
+`;
+    const call = (): unknown =>
+      buildPlacementPlan({
+        slug: SLUG,
+        env: "candidate-a",
+        placement: "akash",
+        current: {
+          ...baseCurrent(["candidate-a", "production"]),
+          catalog: k3sPlacedCrossplane,
+        },
+      });
+    expect(call).toThrowError(
+      expect.objectContaining({
+        code: "placement_rehomes_akash_lane",
+        status: 422,
+      })
+    );
+  });
+
+  /** An ordinary akash flip (LEGACY authority) still emits no AppSet op at all — unchanged. */
+  it("leaves an ordinary akash placement flip touching no AppSet", () => {
+    const res = buildPlacementPlan({
+      slug: SLUG,
+      env: "candidate-a",
+      placement: "akash",
+      current: {
+        ...baseCurrent(["candidate-a", "production"]),
+        catalog: `${catalogWith(["candidate-a", "production"])}${SOURCE_REPO_LINE}`,
+      },
+    });
+    if (res.kind === "no_changes") throw new Error("unexpected no_changes");
+    expect(
+      paths(res.ops).filter((p) => p.includes("/argocd/appsets/"))
+    ).toEqual([]);
+  });
+});
+
 describe("buildEnvDeltaPlan — OPERATOR_SELF_HOSTS_THE_VERB", () => {
   it("refuses to remove operator from any env (the control plane cannot undeploy itself)", () => {
     const call = () =>

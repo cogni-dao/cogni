@@ -1,0 +1,78 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# Argo CD Application — cogni-production-hosted-lane-appsets (story.5016 seam 3).
+#
+# Reconciles infra/k8s/argocd/appsets/production-hosted-lanes/ — the GENERATED per-(env, node)
+# ApplicationSets for lanes that belong to ANOTHER environment but must be reconciled HERE,
+# in the production cluster. Seam 4 made those lanes addressable (the cogni-candidate-a /
+# cogni-preview namespaces, the ExternalName alias to the one production akash-tx-actuator,
+# and its bearer). This Application is what actually delivers desired state into them.
+#
+# WHY A SEPARATE APPLICATION RATHER THAN appsets/production/. The sibling
+# production-appsets-application.yaml states in its own header that scoping its source to
+# appsets/production/ means it "can never fan a foreign env's AppSets onto the production
+# cluster". That sentence stays literally true. Hosting a foreign env's COMPUTE lane is a
+# deliberate, money-bearing exception, so it gets its own directory, its own Application and
+# its own review surface — visible in the file tree instead of hidden inside a directory that
+# documents the opposite. The production cluster's own AppSets are untouched, byte for byte.
+#
+# WHAT IS AND IS NOT MOVED. Only RECONCILIATION moves. Each AppSet in the source path is
+# byte-identical to the object its own env would have rendered: it still generates from
+# `deploy/<env>-<node>`, still sources `infra/k8s/overlays/<env>/<node>`, and still pins
+# `destination.namespace: cogni-<env>`. The XR inside therefore still satisfies BOTH of the
+# Composition's identity gates unchanged — `metadata.name == spec.nodeId` and
+# `cogni-<spec.environment> == metadata.namespace` — neither of which mentions a cluster. That
+# is why seam 3 needs no Composition edit. The node's APP pods do not move: a candidate-a node
+# still runs its app lane on candidate-a. This directory carries compute desired state only.
+#
+# WHY IT MUST BE THIS CLUSTER. infra/crossplane/xcomputeworkload/composition.yaml builds the
+# writer's address from the XR's OWN namespace and the writer is ClusterIP-private, so only
+# the cluster hosting the writer can reconcile a paid lane. NS3 bills every environment to the
+# ONE production Console account, and one account admits exactly ONE active writer
+# (akash_tx_allocations_single_writer_idx is a PER-DATABASE partial unique index, so two
+# writers on one account cannot serialize and a retry can pay twice). Payment therefore drags
+# reconciliation with it. Custody still flows DOWN-TRUST only: the production cluster may hold
+# a pre-prod lane, but the production Console key may never enter a pre-prod cluster.
+#
+# targetRevision: main, like every production-side control-plane Application — production must
+# never run an unmerged control-plane tree. (The DESIRED STATE these AppSets deliver still
+# comes from the per-node deploy branches; only this registration layer tracks main.)
+#
+# prune: true, matching cogni-production-appsets and DELIBERATELY unlike the seam-4 lanes
+# Application next door. There, prune would delete a lane NAMESPACE and cascade-delete live
+# XComputeWorkloads without draining them — an orphaned paid lease. Here it is the opposite:
+# a cell that leaves the catalog (or flips back to k3s, or moves into this directory from an
+# env dir) must take its Application and XR with it, so the XR's finalizer runs and CLOSES the
+# lease. A stuck object is recoverable; an orphaned paid lease is not.
+#
+# ONE_CLUSTER_PER_CELL. The generator emits a cell into exactly one appsets/<dir>/, so the
+# same commit that adds a file here removes it from appsets/<env>/ and that env's app-of-apps
+# prunes its copy. Two clusters reconciling one XR would be two writers minting against one
+# Console account, which is the exact double-spend this design exists to prevent.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cogni-production-hosted-lane-appsets
+  namespace: argocd
+  annotations:
+    # After cogni-production-akash-lanes (sync-wave 1): an AppSet here is only useful once
+    # its lane namespace, actuator alias Service and auth Secret exist.
+    argocd.argoproj.io/sync-wave: "2"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/cogni-dao/cogni.git
+    targetRevision: main
+    path: infra/k8s/argocd/appsets/production-hosted-lanes
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true

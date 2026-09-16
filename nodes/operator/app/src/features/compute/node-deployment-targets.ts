@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
+import { resolveLaneHostEnv } from "@/shared/node-registry/akash-lane-host";
+
+import { resolveNodeComputeApi } from "./node-compute-api";
 import {
   type DeploymentEnvironment,
   resolveNodeDeploymentProvider,
@@ -11,10 +14,48 @@ export interface DeploymentTargetSelection {
   readonly substrate: readonly string[];
   readonly offCluster: readonly string[];
   readonly providers: Readonly<Record<string, "akash" | "k3s">>;
+  /**
+   * RECONCILIATION_FOLLOWS_PAYMENT (story.5016 seam 3) — per deploy target, the environment whose
+   * CLUSTER holds that target's ApplicationSet object. Identity for every k3s row, every
+   * legacy-authority akash row and every production row; `production` for an akash+crossplane
+   * pre-prod lane, whose AppSet lives in `appsets/production-hosted-lanes/` and is applied by the
+   * production cluster.
+   *
+   * The imperative `reconcile-appset` job in candidate-flight / promote-and-deploy `scp`s the AppSet
+   * file to THIS env's VM and `kubectl apply`s it. For a hosted lane that would install a second
+   * reconciler — a second writer minting against one Console account — so the job consults this map
+   * and skips. The decision is resolved here, in typed code, precisely so the workflow needs no new
+   * inline `if` tree (docs/spec/cicd-platform-boundary.md freeze rule 2).
+   */
+  readonly appsetHostEnvs: Readonly<Record<string, string>>;
   readonly k3s: readonly string[];
   readonly k3sNodes: readonly string[];
   readonly sourceRepositories: Readonly<Record<string, string>>;
   readonly sourceShas: Readonly<Record<string, string>>;
+}
+
+/**
+ * The environment whose cluster reconciles `row`'s AppSet in `environment`. Resolves BOTH catalog
+ * policy cells through their own resolvers, so placement defaults (K3S_IS_DEFAULT) and authority
+ * defaults/guards (LEGACY_IS_DEFAULT, AUTHORITY_REQUIRES_AN_INSTALLED_API) apply here exactly as
+ * they do at materialization — one row can never resolve to one authority for delivery and another
+ * for rendering.
+ */
+function appsetHostEnvFor(
+  row: Readonly<Record<string, unknown>>,
+  environment: DeploymentEnvironment
+): string {
+  return resolveLaneHostEnv({
+    environment,
+    deploymentProvider: resolveNodeDeploymentProvider({
+      catalog: row,
+      environment,
+    }),
+    computeApi:
+      resolveNodeComputeApi({ catalog: row, environment }) === "crossplane"
+        ? "crossplane"
+        : "legacy",
+  });
 }
 
 export type PromoteDeploymentTargetSelection = DeploymentTargetSelection;
@@ -29,6 +70,7 @@ export function resolveDeploymentTargets(input: {
     input.catalogRows.map((row) => [row.name, row] as const)
   );
   const providers: Record<string, "akash" | "k3s"> = {};
+  const appsetHostEnvs: Record<string, string> = {};
   const deployment: string[] = [];
   const substrate: string[] = [];
   const offCluster: string[] = [];
@@ -51,6 +93,7 @@ export function resolveDeploymentTargets(input: {
       environment: input.environment,
     });
     providers[target] = provider;
+    appsetHostEnvs[target] = appsetHostEnvFor(row, input.environment);
     if (provider === "k3s") k3s.push(target);
     if (row.type !== "node") continue;
     deployment.push(target);
@@ -69,6 +112,7 @@ export function resolveDeploymentTargets(input: {
     substrate,
     offCluster,
     providers,
+    appsetHostEnvs,
     k3s,
     k3sNodes,
     sourceRepositories,
@@ -151,6 +195,7 @@ export function resolvePromoteDeploymentTargets(input: {
     ...offCluster.filter((name) => !k3s.includes(name)),
   ];
   const providers: Record<string, "akash" | "k3s"> = {};
+  const appsetHostEnvs: Record<string, string> = {};
   const substrate: string[] = [];
   const k3sNodes: string[] = [];
   for (const target of deployment) {
@@ -162,6 +207,7 @@ export function resolvePromoteDeploymentTargets(input: {
       environment: input.environment,
     });
     providers[target] = provider;
+    appsetHostEnvs[target] = appsetHostEnvFor(row, input.environment);
     if (row.type === "node") {
       substrate.push(target);
       if (provider === "k3s") k3sNodes.push(target);
@@ -173,6 +219,7 @@ export function resolvePromoteDeploymentTargets(input: {
     substrate,
     offCluster,
     providers,
+    appsetHostEnvs,
     k3s,
     k3sNodes,
     sourceRepositories,

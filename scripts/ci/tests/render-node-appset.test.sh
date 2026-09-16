@@ -41,15 +41,40 @@ appsets_for_env() {
   done | LC_ALL=C sort
 }
 
-# Deployable node slugs whose catalog `envs:` lists $1 (env), sorted. This is the
-# expected AppSet set for that env under ATOMIC_PER_ENV — no cross-env constraint.
+# Deployable node slugs whose catalog `envs:` lists $1 (env) AND whose cell is reconciled
+# by that env's OWN cluster, sorted. This is the expected AppSet set for appsets/<env>/
+# under ATOMIC_PER_ENV — no cross-env constraint.
+#
+# The second condition is seam 3 (story.5016): an akash+crossplane pre-prod cell is
+# reconciled by the PRODUCTION cluster, so its AppSet lives in
+# appsets/production-hosted-lanes/ and must NOT appear in its own env dir — exactly one
+# cluster reconciles a cell. Every other row (k3s, legacy-authority akash, production)
+# is unaffected, which is why this predicate leaves today's fleet equality unchanged.
 deployable_for_env() {
   local env="$1" f
   for f in infra/catalog/*.yaml; do
     [ "$(yq -r '.candidate_a_branch // ""' "$f")" != "" ] || continue
-    if E="$env" yq -e '(.envs // []) | contains([strenv(E)])' "$f" >/dev/null 2>&1; then
-      yq -r '.name' "$f"
+    E="$env" yq -e '(.envs // []) | contains([strenv(E)])' "$f" >/dev/null 2>&1 || continue
+    if [ "$env" != production ] \
+      && [ "$(E="$env" yq -r '(.deployment_provider // {})[strenv(E)] // "k3s"' "$f")" = akash ] \
+      && [ "$(E="$env" yq -r '(.compute_api // {})[strenv(E)] // "legacy"' "$f")" = crossplane ]; then
+      continue
     fi
+    yq -r '.name' "$f"
+  done | LC_ALL=C sort
+}
+
+# Deployable "<env>/<node>" cells the PRODUCTION cluster hosts on another env's behalf.
+hosted_lane_cells() {
+  local env f
+  for env in candidate-a preview; do
+    for f in infra/catalog/*.yaml; do
+      [ "$(yq -r '.candidate_a_branch // ""' "$f")" != "" ] || continue
+      E="$env" yq -e '(.envs // []) | contains([strenv(E)])' "$f" >/dev/null 2>&1 || continue
+      [ "$(E="$env" yq -r '(.deployment_provider // {})[strenv(E)] // "k3s"' "$f")" = akash ] || continue
+      [ "$(E="$env" yq -r '(.compute_api // {})[strenv(E)] // "legacy"' "$f")" = crossplane ] || continue
+      printf '%s-%s-applicationset.yaml\n' "$env" "$(yq -r '.name' "$f")"
+    done
   done | LC_ALL=C sort
 }
 
@@ -110,5 +135,57 @@ rm -rf "$tmp_catalog"
 [ "$rc" -ne 0 ] || fail "render did not fail closed on a deployable row missing 'envs'"
 grep -q "has no 'envs'" <<<"$out" || fail "missing fail-closed message for absent envs; got: $out"
 pass "fail-closed when a deployable row omits envs"
+
+# 5. RECONCILIATION_FOLLOWS_PAYMENT (story.5016 seam 3) — a pre-prod cell that is BOTH
+# akash-placed AND crossplane-owned is reconciled by the PRODUCTION cluster, so its AppSet
+# renders into appsets/production-hosted-lanes/, never into its own env dir. The catalog has
+# no such cell today (every akash row is production-only), so the routing is exercised
+# against a fixture catalog: --check must name the HOSTED path as missing.
+#
+# The contrast case is the load-bearing half. The SAME row placed on akash but left on the
+# LEGACY compute authority must still render into appsets/candidate-a/ — the legacy
+# controller is not cluster-bound the way the Crossplane Composition is. Asserting both
+# directions is what proves the predicate is the PAIR and not just "akash".
+hosted_committed="$(
+  for f in "$APPSETS_DIR/production-hosted-lanes"/*-applicationset.yaml; do
+    [ -e "$f" ] || continue
+    basename "$f"
+  done | LC_ALL=C sort
+)"
+[ "$hosted_committed" = "$(hosted_lane_cells)" ] \
+  || fail "production-hosted-lanes/ must hold exactly the akash+crossplane pre-prod cells — got '$hosted_committed', expected '$(hosted_lane_cells)'"
+pass "production-hosted-lanes/ holds exactly the akash+crossplane pre-prod cells"
+
+assert_routes_to() {
+  local authority="$1" want_path="$2" reject_path="$3" catalog out rc
+  catalog="$(mktemp -d)"
+  cp infra/catalog/*.yaml "$catalog/"
+  A="$authority" yq -i '
+    .envs = ["candidate-a"] + .envs |
+    .deployment_provider."candidate-a" = "akash" |
+    .compute_api."candidate-a" = strenv(A)
+  ' "$catalog/poly.yaml"
+  set +e
+  out="$(CATALOG_DIR="$catalog" bash "$RENDER" --check 2>&1)"
+  rc=$?
+  set -e
+  rm -rf "$catalog"
+  [ "$rc" -ne 0 ] || fail "compute_api=$authority: --check passed for a cell with no committed AppSet"
+  grep -q "$want_path" <<<"$out" \
+    || fail "compute_api=$authority: expected --check to name '$want_path'; got: $out"
+  grep -q "$reject_path" <<<"$out" \
+    && fail "compute_api=$authority: --check must NOT name '$reject_path'; got: $out"
+  return 0
+}
+
+assert_routes_to crossplane \
+  "appsets/production-hosted-lanes/candidate-a-poly-applicationset.yaml" \
+  "appsets/candidate-a/candidate-a-poly-applicationset.yaml"
+pass "akash+crossplane candidate-a cell routes to production-hosted-lanes/"
+
+assert_routes_to legacy \
+  "appsets/candidate-a/candidate-a-poly-applicationset.yaml" \
+  "appsets/production-hosted-lanes/candidate-a-poly-applicationset.yaml"
+pass "akash+legacy candidate-a cell still routes to its own env dir"
 
 echo "PASS: render-node-appset.test.sh"

@@ -264,6 +264,7 @@ async function selectDeploymentTargets(input: {
     substrate,
     offCluster,
     providers,
+    appsetHostEnvs,
     k3s,
     k3sNodes,
     sourceRepositories,
@@ -284,6 +285,11 @@ async function selectDeploymentTargets(input: {
     k3s_node_targets_json: JSON.stringify(k3sNodes),
     has_k3s_node_targets: String(k3sNodes.length > 0),
     deployment_provider_by_target_json: JSON.stringify(providers),
+    // RECONCILIATION_FOLLOWS_PAYMENT (story.5016 seam 3) — which env's CLUSTER holds each target's
+    // AppSet. The imperative reconcile-appset job skips a target whose host is not the env it is
+    // SSHing into, because applying a production-hosted lane's AppSet onto the pre-prod cluster
+    // would stand up a SECOND reconciler against the one production Console account.
+    appset_host_env_by_target_json: JSON.stringify(appsetHostEnvs),
     source_repository_by_target_json: JSON.stringify(sourceRepositories),
     source_sha_by_target_json: JSON.stringify(sourceShas),
   };
@@ -328,6 +334,8 @@ async function selectPromoteTargets(input: {
     external_compute_node_targets_json: JSON.stringify(selection.offCluster),
     has_external_compute_node_targets: String(selection.offCluster.length > 0),
     deployment_provider_by_target_json: JSON.stringify(selection.providers),
+    // See the flight twin above — same seam-3 map, same reconcile-appset consumer.
+    appset_host_env_by_target_json: JSON.stringify(selection.appsetHostEnvs),
     source_repository_by_target_json: JSON.stringify(
       selection.sourceRepositories
     ),

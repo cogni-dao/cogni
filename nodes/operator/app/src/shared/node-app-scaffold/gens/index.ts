@@ -13,6 +13,7 @@
  */
 
 export {
+  appsetFileName,
   insertAppsetKustomization,
   removeFromAppsetsKustomization,
   renderNodeAppset,
@@ -27,6 +28,7 @@ export {
 } from "./distribution-activation";
 export {
   addCatalogEnv,
+  catalogAppsetsDir,
   dropCatalogEnv,
   type EnvRemovalViolation,
   envRemovalViolation,
@@ -34,6 +36,7 @@ export {
   PLACEMENT_PROVIDERS,
   type PlacementProvider,
   parseCatalogActivityEnv,
+  parseCatalogComputeApi,
   parseCatalogEnvs,
   parseCatalogPlacement,
   setCatalogEnvs,

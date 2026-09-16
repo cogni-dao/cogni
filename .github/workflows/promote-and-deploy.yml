@@ -74,6 +74,7 @@ jobs:
       external_compute_node_targets_json: ${{ steps.targets.outputs.external_compute_node_targets_json }}
       has_external_compute_node_targets: ${{ steps.targets.outputs.has_external_compute_node_targets }}
       deployment_provider_by_target_json: ${{ steps.targets.outputs.deployment_provider_by_target_json }}
+      appset_host_env_by_target_json: ${{ steps.targets.outputs.appset_host_env_by_target_json }}
       source_repository_by_target_json: ${{ steps.targets.outputs.source_repository_by_target_json }}
       source_sha_by_target_json: ${{ steps.targets.outputs.source_sha_by_target_json }}
     steps:
@@ -191,6 +192,15 @@ jobs:
       cancel-in-progress: false
     runs-on: ubuntu-latest
     environment: ${{ needs.decide.outputs.environment }}
+    env:
+      # RECONCILIATION_FOLLOWS_PAYMENT (story.5016 seam 3). The env whose CLUSTER owns this target's
+      # AppSet, resolved by the typed planner (resolvePromoteDeploymentTargets) — NOT re-derived
+      # here. Equal to the promote environment for every k3s row, every legacy-authority akash row
+      # and every production row; `production` for an akash+crossplane PRE-PROD lane, whose AppSet
+      # lives in appsets/production-hosted-lanes/ and is applied by the production cluster's own
+      # app-of-apps. SSHing it onto the pre-prod VM would stand up a second reconciler for one XR —
+      # two writers against one production Console account. So the apply step skips instead.
+      APPSET_HOST_ENV: ${{ fromJSON(needs.decide.outputs.appset_host_env_by_target_json)[matrix.node] }}
     steps:
       # Checkout the head ref — the per-node AppSet YAML is catalog-derived CI
       # control plane (CATALOG_IS_SSOT), and a node ADDED in this promote carries
@@ -217,7 +227,7 @@ jobs:
           ssh-keyscan -T 10 -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
 
       - name: Apply ${{ needs.decide.outputs.environment }}-${{ matrix.node }}-applicationset.yaml
-        if: steps.ssh-setup.outputs.has_vm == 'true'
+        if: steps.ssh-setup.outputs.has_vm == 'true' && env.APPSET_HOST_ENV == needs.decide.outputs.environment
         env:
           VM_HOST: ${{ secrets.VM_HOST }}
           SSH_OPTS: "-i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6"

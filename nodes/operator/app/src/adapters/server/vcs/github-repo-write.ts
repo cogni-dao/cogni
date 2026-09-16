@@ -71,6 +71,7 @@ import {
   buildEnvDeltaPlan,
   buildPlacementPlan,
   CANONICAL_DOMAIN_ROOT,
+  catalogAppsetsDir,
   type EnvPlanCurrent,
   EnvPlanError,
   type EnvPlanOp,
@@ -342,9 +343,15 @@ const FOOTPRINT = {
   ciYaml: ".github/workflows/ci.yaml",
 } as const;
 
-/** Per-env appsets kustomization path — the PER-ENV `appsets/<env>/kustomization.yaml` the slug folds into. */
-const appsetsKustomizationPath = (env: string): string =>
-  `infra/k8s/argocd/appsets/${env}/kustomization.yaml`;
+/**
+ * Per-directory appsets kustomization path — the `appsets/<dir>/kustomization.yaml` the slug folds
+ * into. `<dir>` is USUALLY the cell's env, but an akash+crossplane pre-prod lane is reconciled by the
+ * production cluster and lives under `production-hosted-lanes/` (story.5016 seam 3). Callers resolve
+ * it with `catalogAppsetsDir(<the row's catalog yaml>, env)` so the layout can never disagree with the
+ * catalog row it was derived from.
+ */
+const appsetsKustomizationPath = (dir: string): string =>
+  `infra/k8s/argocd/appsets/${dir}/kustomization.yaml`;
 
 /**
  * Shared per-`(env, node)` ApplicationSet template — the SAME file `render-node-appset.sh` interpolates,
@@ -2973,11 +2980,15 @@ export class GitHubRepoWriter implements DeployPlanePort {
         repo,
         `infra/k8s/overlays/${env}/${TEMPLATE_SLUG}/external-secret.yaml`
       );
+      // Keyed by env (the CELL), fetched from the directory that RECONCILES it — the two differ for
+      // a production-hosted Akash lane (story.5016 seam 3). An add always resolves to the env's own
+      // directory today (the verb writes no compute_api cell), but resolving rather than assuming is
+      // what keeps this fetch in lockstep with the path the planner will emit.
       appsetsKustomizationByEnv[env] = await this.readFileOnMain(
         octokit,
         owner,
         repo,
-        appsetsKustomizationPath(env)
+        appsetsKustomizationPath(catalogAppsetsDir(catalog, env))
       );
       const appsetTemplate = await this.readFileOnMain(
         octokit,
@@ -3000,11 +3011,14 @@ export class GitHubRepoWriter implements DeployPlanePort {
     // REMOVE (atomic per-env): the planner regenerates the removed env's kustomization, so fetch the
     // appsets kustomization for that env. (Caddy/scheduler are per-node env-independent state and are
     // NOT touched by an env remove — a node with `envs:[]` keeps them.)
+    // A born node's candidate-a cell is akash+crossplane, so its AppSet — and the kustomization that
+    // lists it — live under `production-hosted-lanes/`, not `appsets/candidate-a/`. Closing candidate-a
+    // is the ordinary post-birth env verb, so fetching the wrong file here would be a live failure.
     appsetsKustomizationByEnv[env] = await this.readFileOnMain(
       octokit,
       owner,
       repo,
-      appsetsKustomizationPath(env)
+      appsetsKustomizationPath(catalogAppsetsDir(catalog, env))
     );
     return {
       catalog,
@@ -4173,10 +4187,10 @@ export class GitHubRepoWriter implements DeployPlanePort {
             ownerWallet: input.ownerWallet,
           }
         : { ownerWallet: input.ownerWallet };
-    await addBlob(
-      `infra/catalog/${slug}.yaml`,
-      renderCatalog(slug, port, nodePort, catalogInput)
-    );
+    // Kept in a local so the AppSet layout below is derived from the EXACT catalog row this birth
+    // commits, not from a second copy of the birth-placement rules (story.5016 seam 3).
+    const catalogYaml = renderCatalog(slug, port, nodePort, catalogInput);
+    await addBlob(`infra/catalog/${slug}.yaml`, catalogYaml);
 
     // overlays per birth env (candidate-a only today). Each overlay dir clones BOTH the node-template
     // kustomization.yaml AND its external-secret.yaml (the ESO producer of
@@ -4207,9 +4221,18 @@ export class GitHubRepoWriter implements DeployPlanePort {
 
     // per-node AppSets for the birth envs — one ApplicationSet object per (env, slug) for structural LANE_ISOLATION
     // (bug.0378). New files from the shared template (byte-exact to render-node-appset.sh) land under
-    // the PER-ENV infra/k8s/argocd/appsets/<env>/ dir (each reconciled+pruned by its own per-env
-    // cogni-<env>-appsets app-of-apps, story.5020), then folded into that env's appsets/<env>/
+    // the appsets/<dir>/ that RECONCILES the cell, then get folded into that directory's
     // kustomization.yaml so the unit-job drift gate stays green.
+    //
+    // <dir> is the cell's own env for a k3s or legacy-authority row (reconciled+pruned by its per-env
+    // cogni-<env>-appsets app-of-apps, story.5020). Every wizard birth, however, is BORN_ON_AKASH and
+    // names `compute_api: <env>: crossplane` wherever a wallet is pinned — so its candidate-a cell is a
+    // production-hosted lane and renders into appsets/production-hosted-lanes/ (story.5016 seam 3).
+    // The object itself is unchanged: same file name, same body, still generating from
+    // deploy/candidate-a-<slug> into namespace cogni-candidate-a. Only the cluster that applies it
+    // moves, because the ONE production Akash writer is ClusterIP-private and the Composition dials it
+    // by the XR's own namespace. `catalogAppsetsDir` reads the row committed two blocks above, so the
+    // layout cannot drift from the catalog.
     const appsetTemplate = await this.readFileOnMain(
       octokit,
       owner,
@@ -4217,19 +4240,20 @@ export class GitHubRepoWriter implements DeployPlanePort {
       APPSET_TEMPLATE_PATH
     );
     for (const env of NODE_FORMATION_ENVS) {
+      const appsetsDir = catalogAppsetsDir(catalogYaml, env);
       await addBlob(
-        `infra/k8s/argocd/appsets/${env}/${env}-${slug}-applicationset.yaml`,
+        `infra/k8s/argocd/appsets/${appsetsDir}/${env}-${slug}-applicationset.yaml`,
         renderNodeAppset(appsetTemplate, slug, env)
       );
       const argocdKustomization = await this.readFileOnMain(
         octokit,
         owner,
         repo,
-        appsetsKustomizationPath(env)
+        appsetsKustomizationPath(appsetsDir)
       );
       await addBlob(
-        appsetsKustomizationPath(env),
-        insertAppsetKustomization(argocdKustomization, slug, env)
+        appsetsKustomizationPath(appsetsDir),
+        insertAppsetKustomization(argocdKustomization, slug, env, appsetsDir)
       );
     }
 

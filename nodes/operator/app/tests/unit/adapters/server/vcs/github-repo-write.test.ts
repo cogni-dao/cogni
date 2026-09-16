@@ -2028,26 +2028,45 @@ node_port: 30200
           expect(content).toContain("value: 30300");
           expect(content).not.toContain("atlas-node-app-secrets");
 
-          // PER-ENV AppSet lands under appsets/<env>/<env>-atlas-applicationset.yaml.
+          // The AppSet lands under the directory that RECONCILES the cell. Every wizard birth is
+          // BORN_ON_AKASH and names `compute_api: <env>: crossplane` wherever a wallet is pinned,
+          // so its candidate-a cell is a production-hosted lane (story.5016 seam 3) and renders
+          // into appsets/production-hosted-lanes/. Production is never rehomed — it already IS the
+          // writer's cluster. The file NAME still carries the cell's own env either way.
+          const appsetsDir =
+            env === "production" ? "production" : "production-hosted-lanes";
           const appsetEntry = tree.find(
             (item) =>
               item.path ===
-              `infra/k8s/argocd/appsets/${env}/${env}-atlas-applicationset.yaml`
+              `infra/k8s/argocd/appsets/${appsetsDir}/${env}-atlas-applicationset.yaml`
           );
           expect(appsetEntry).toBeDefined();
+          // ONLY_DELIVERY_MOVED: the rendered object is byte-identical to what the cell's own env
+          // would have produced — `renderNodeAppset` never sees a directory.
           expect(blobs.get(appsetEntry?.sha ?? "")).toBe(
             `appset ${env} atlas\n`
           );
+          // ONE_CLUSTER_PER_CELL: never also written under the cell's own env directory.
+          expect(
+            tree.some(
+              (item) =>
+                item.path ===
+                `infra/k8s/argocd/appsets/${env}/${env}-atlas-applicationset.yaml`
+            )
+          ).toBe(env === "production");
 
-          // The slug folds into THAT env's own appsets/<env>/kustomization.yaml only.
+          // The slug folds into THAT directory's kustomization.yaml only.
           const kustEntry = tree.find(
             (item) =>
-              item.path === `infra/k8s/argocd/appsets/${env}/kustomization.yaml`
+              item.path ===
+              `infra/k8s/argocd/appsets/${appsetsDir}/kustomization.yaml`
           );
           expect(kustEntry).toBeDefined();
           const kust = blobs.get(kustEntry?.sha ?? "");
           expect(kust).toContain(`${env}-atlas-applicationset.yaml`);
-          expect(kust).toContain(`${env}-node-template-applicationset.yaml`);
+          expect(kust).toContain(
+            `${appsetsDir}-node-template-applicationset.yaml`
+          );
         }
         // PREVIEW_IS_ABSENT_AT_BIRTH (story.5025). Production IS rendered — a Spawn is born
         // with canonical production as its generation-1 activity authority — but preview is

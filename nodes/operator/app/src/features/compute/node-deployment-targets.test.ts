@@ -40,6 +40,13 @@ describe("resolveDeploymentTargets", () => {
         toks4: "akash",
         "scheduler-worker": "k3s",
       },
+      // Every row here is either k3s or akash on the LEGACY authority, so each cell is
+      // reconciled by its own environment's cluster — seam 3 is inert for all of them.
+      appsetHostEnvs: {
+        "node-template": "candidate-a",
+        toks4: "candidate-a",
+        "scheduler-worker": "candidate-a",
+      },
       k3s: ["node-template", "scheduler-worker"],
       k3sNodes: ["node-template"],
       sourceRepositories: { toks4: "cogni-dao/toks4" },
@@ -71,6 +78,7 @@ describe("resolveDeploymentTargets", () => {
       substrate: ["operator"],
       offCluster: [],
       providers: { operator: "k3s" },
+      appsetHostEnvs: { operator: "candidate-a" },
       k3s: ["operator"],
       k3sNodes: ["operator"],
       sourceRepositories: {},
@@ -87,6 +95,7 @@ describe("resolveDeploymentTargets", () => {
       substrate: ["toks4"],
       offCluster: ["toks4"],
       providers: { toks4: "akash" },
+      appsetHostEnvs: { toks4: "candidate-a" },
       k3s: [],
       k3sNodes: [],
       sourceRepositories: { toks4: "cogni-dao/toks4" },
@@ -158,6 +167,13 @@ describe("resolvePromoteDeploymentTargets", () => {
         "scheduler-worker": "k3s",
         legacy: "k3s",
         external: "akash",
+      },
+      // `external` is akash-placed but names no compute_api, so LEGACY_IS_DEFAULT applies and it
+      // is still reconciled by preview's own cluster. Seam 3 needs BOTH cells to rehome a lane.
+      appsetHostEnvs: {
+        "scheduler-worker": "preview",
+        legacy: "preview",
+        external: "preview",
       },
       k3s: ["scheduler-worker", "legacy"],
       k3sNodes: ["legacy"],
@@ -243,5 +259,60 @@ describe("resolvePromoteDeploymentTargets", () => {
         legacyK3sTargets: [],
       }).deployment
     ).toEqual([]);
+  });
+});
+
+/**
+ * story.5016 seam 3 — the map the imperative `reconcile-appset` job consults before SSHing an
+ * AppSet onto an environment VM. A pre-prod akash+crossplane lane is reconciled by the PRODUCTION
+ * cluster, so applying it onto the pre-prod cluster would be a second reconciler for one XR — two
+ * writers against one Console account. The decision lives here so the workflow needs no new inline
+ * branching (docs/spec/cicd-platform-boundary.md freeze rule 2).
+ */
+describe("appsetHostEnvs", () => {
+  const hostedRow = {
+    name: "toks4",
+    type: "node",
+    envs: ["candidate-a", "production"],
+    source_repo: "https://github.com/cogni-dao/toks4",
+    source_sha: "0123456789abcdef0123456789abcdef01234567",
+    deployment_provider: { "candidate-a": "akash", production: "akash" },
+    compute_api: { "candidate-a": "crossplane", production: "crossplane" },
+  };
+
+  it("routes a pre-prod akash+crossplane lane to the production cluster", () => {
+    expect(
+      resolveDeploymentTargets({
+        catalogRows: [hostedRow],
+        environment: "candidate-a",
+        flightTargets: ["toks4"],
+      }).appsetHostEnvs
+    ).toEqual({ toks4: "production" });
+  });
+
+  it("leaves the same row's production cell on production (identity, never rehomed)", () => {
+    expect(
+      resolvePromoteDeploymentTargets({
+        catalogRows: [hostedRow],
+        environment: "production",
+        requestedTargets: ["toks4"],
+        legacyK3sTargets: [],
+      }).appsetHostEnvs
+    ).toEqual({ toks4: "production" });
+  });
+
+  it("keeps an akash lane on the LEGACY authority in its own cluster", () => {
+    expect(
+      resolveDeploymentTargets({
+        catalogRows: [
+          {
+            ...hostedRow,
+            compute_api: { production: "crossplane" },
+          },
+        ],
+        environment: "candidate-a",
+        flightTargets: ["toks4"],
+      }).appsetHostEnvs
+    ).toEqual({ toks4: "candidate-a" });
   });
 });

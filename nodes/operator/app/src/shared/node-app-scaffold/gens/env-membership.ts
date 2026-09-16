@@ -27,6 +27,8 @@
  * @public
  */
 
+import { appsetsDirForLane } from "@/shared/node-registry/akash-lane-host";
+
 import { NODE_DEPLOY_ENVS, type NodeFormationEnv } from "./envs";
 
 /** Canonical env order (candidate-a < preview < production) — the order the catalog row is emitted in. */
@@ -233,6 +235,76 @@ export function parseCatalogPlacement(
     map[env] = provider as PlacementProvider;
   }
   return map;
+}
+
+/**
+ * Matches the catalog row's `compute_api:` block — same shape as `deployment_provider:`, read with the
+ * same entry regex. Read-only: nothing in the env-membership verb family WRITES this cell (a compute
+ * authority cutover is an explicit human catalog edit, never a side effect of an env toggle), so there
+ * is no `setCatalogComputeApi` twin.
+ */
+const COMPUTE_API_BLOCK_RE =
+  /^compute_api:[^\S\r\n]*\n((?:[ \t]+[^\n]*(?:\n|$))*)/m;
+
+/** The two reconciliation authorities an akash-placed cell can name; `legacy` is the schema default. */
+const COMPUTE_APIS = ["legacy", "crossplane"] as const;
+type LaneComputeApiValue = (typeof COMPUTE_APIS)[number];
+
+/**
+ * Read the catalog row's `compute_api:` per-env authority map. An absent block (or an env absent from
+ * it) means the `legacy` default — callers resolve `map[env] ?? "legacy"`, mirroring
+ * `resolveNodeComputeApi`'s LEGACY_IS_DEFAULT. Throws on unknown keys/values so a hand-mangled catalog
+ * fails loudly rather than silently-as-legacy: a silent downgrade would re-home a paid lane's AppSet
+ * back into the pre-prod cluster and put a second writer on the production Console account.
+ */
+export function parseCatalogComputeApi(
+  catalogYaml: string
+): Partial<Record<NodeFormationEnv, LaneComputeApiValue>> {
+  const match = COMPUTE_API_BLOCK_RE.exec(catalogYaml);
+  if (!match || match[1] === undefined) return {};
+  const map: Partial<Record<NodeFormationEnv, LaneComputeApiValue>> = {};
+  for (const line of match[1].split("\n")) {
+    if (line.trim() === "" || line.trim().startsWith("#")) continue;
+    const entry = PLACEMENT_ENTRY_RE.exec(line);
+    if (!entry || entry[1] === undefined || entry[2] === undefined) {
+      throw new Error(
+        `catalog \`compute_api:\` has an unparseable entry line: '${line.trim()}'.`
+      );
+    }
+    const [, env, authority] = entry;
+    if (!isNodeFormationEnv(env)) {
+      throw new Error(
+        `catalog \`compute_api:\` names an unknown env '${env}'.`
+      );
+    }
+    if (!(COMPUTE_APIS as readonly string[]).includes(authority)) {
+      throw new Error(
+        `catalog \`compute_api:\` has an unknown authority '${authority}' for '${env}'.`
+      );
+    }
+    map[env] = authority as LaneComputeApiValue;
+  }
+  return map;
+}
+
+/**
+ * RECONCILIATION_FOLLOWS_PAYMENT (story.5016 seam 3) — the `appsets/<dir>/` directory that owns this
+ * row's `(env)` cell, resolved from the row's OWN two placement cells. Identity for every k3s row,
+ * every legacy-authority akash row and every production row; `production-hosted-lanes` for an
+ * akash+crossplane pre-prod lane, which must be reconciled where the ONE production Akash writer lives.
+ *
+ * The single rule lives in `@shared/node-registry/akash-lane-host`; this function only supplies it with
+ * the two catalog cells, so the env-verb planner, the birth writer and the shell renderer cannot drift.
+ */
+export function catalogAppsetsDir(
+  catalogYaml: string,
+  env: NodeFormationEnv
+): string {
+  return appsetsDirForLane({
+    environment: env,
+    deploymentProvider: parseCatalogPlacement(catalogYaml)[env] ?? "k3s",
+    computeApi: parseCatalogComputeApi(catalogYaml)[env] ?? "legacy",
+  });
 }
 
 /**

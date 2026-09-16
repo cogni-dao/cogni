@@ -62,6 +62,7 @@ jobs:
       external_compute_node_targets_json: ${{ steps.substrate-targets.outputs.external_compute_node_targets_json }}
       has_external_compute_node_targets: ${{ steps.substrate-targets.outputs.has_external_compute_node_targets }}
       deployment_provider_by_target_json: ${{ steps.substrate-targets.outputs.deployment_provider_by_target_json }}
+      appset_host_env_by_target_json: ${{ steps.substrate-targets.outputs.appset_host_env_by_target_json }}
       source_repository_by_target_json: ${{ steps.substrate-targets.outputs.source_repository_by_target_json }}
       source_sha_by_target_json: ${{ steps.substrate-targets.outputs.source_sha_by_target_json }}
     steps:
@@ -510,6 +511,15 @@ jobs:
     environment: candidate-a
     env:
       DEPLOYMENT_PROVIDER: ${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] }}
+      # RECONCILIATION_FOLLOWS_PAYMENT (story.5016 seam 3). The env whose CLUSTER owns this target's
+      # AppSet, resolved by the typed planner (resolveDeploymentTargets) — NOT re-derived here. It is
+      # `candidate-a` for every k3s row, every legacy-authority akash row and today's whole fleet;
+      # `production` for an akash+crossplane lane, whose AppSet lives in
+      # appsets/production-hosted-lanes/ and is applied by the production cluster's own app-of-apps.
+      # Applying such a lane onto the candidate-a VM below would stand up a SECOND reconciler for one
+      # XR — two writers minting against one production Console account, which the per-database
+      # single-writer index cannot serialize. So the apply + wait steps skip instead.
+      APPSET_HOST_ENV: ${{ fromJSON(needs.decide.outputs.appset_host_env_by_target_json)[matrix.node] }}
     steps:
       - name: Checkout workflow source
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
@@ -540,7 +550,7 @@ jobs:
           ssh-keyscan -T 10 -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
 
       - name: Apply candidate-a-${{ matrix.node }}-applicationset.yaml
-        if: steps.ssh-setup.outputs.has_vm == 'true'
+        if: steps.ssh-setup.outputs.has_vm == 'true' && env.APPSET_HOST_ENV == 'candidate-a'
         env:
           VM_HOST: ${{ secrets.VM_HOST }}
           SSH_OPTS: "-i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6"
@@ -562,7 +572,7 @@ jobs:
           ci_ssh_retry ssh "${ssh_opts[@]}" "root@${VM_HOST}" "kubectl delete applicationset cogni-candidate-a -n argocd --cascade=orphan --ignore-not-found && kubectl apply -f /tmp/appset-${NODE}.yaml -n argocd && kubectl -n argocd annotate applicationset cogni-candidate-a-${NODE} argocd.argoproj.io/application-set-refresh='true' --overwrite && rm -f /tmp/appset-${NODE}.yaml"
 
       - name: Wait for candidate-a-${{ matrix.node }} Application
-        if: steps.ssh-setup.outputs.has_vm == 'true'
+        if: steps.ssh-setup.outputs.has_vm == 'true' && env.APPSET_HOST_ENV == 'candidate-a'
         env:
           VM_HOST: ${{ secrets.VM_HOST }}
           SSH_OPTS: "-i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6"
