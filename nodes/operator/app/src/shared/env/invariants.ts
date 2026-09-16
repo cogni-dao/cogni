@@ -169,11 +169,10 @@ export function assertEvmRpcConfig(env: EnvWithRpc): void {
   // Test mode uses FakeEvmOnchainClient - no RPC URL needed
   if (env.APP_ENV === "test") return;
 
-  // Production/preview/dev requires EVM_RPC_URL for payment verification
+  // Production/preview/dev requires Base RPC as baseline node substrate.
   if (!env.EVM_RPC_URL || env.EVM_RPC_URL.trim() === "") {
     throw new RuntimeSecretError(
-      "APP_ENV=production requires EVM_RPC_URL for on-chain payment verification. " +
-        "Get an API key from Alchemy or Infura for Ethereum Sepolia."
+      "Non-test nodes require EVM_RPC_URL for Base mainnet substrate reads."
     );
   }
 }
@@ -210,11 +209,14 @@ export interface EvmRpcProbeResult {
  * Tests EVM RPC connectivity by fetching current block number, with TTL caching.
  * Returns a result instead of throwing so /readyz can degrade non-fatally.
  *
- * Cache: 60s on success, 30s on failure. Test mode short-circuits to ok=true.
+ * Cache: 60s on success, 30s on failure. Explicit deep readiness passes
+ * `forceLive` so birth/promotion proof cannot reuse an earlier shallow result.
+ * Test mode short-circuits to ok=true.
  */
 export async function checkEvmRpcConnectivity(
   evmClient: { getBlockNumber(): Promise<bigint> },
-  env: ParsedEnv
+  env: ParsedEnv,
+  options: { forceLive?: boolean } = {}
 ): Promise<EvmRpcProbeResult> {
   if (env.APP_ENV === "test") return { ok: true, source: "skipped" };
 
@@ -222,7 +224,7 @@ export async function checkEvmRpcConnectivity(
   const ageMs = now - _evmRpcLastCheckMs;
   const lastWasOk = _evmRpcLastErrorMessage === null;
   const ttl = lastWasOk ? EVM_RPC_OK_TTL_MS : EVM_RPC_FAIL_TTL_MS;
-  if (_evmRpcLastCheckMs > 0 && ageMs < ttl) {
+  if (!options.forceLive && _evmRpcLastCheckMs > 0 && ageMs < ttl) {
     return lastWasOk
       ? { ok: true, source: "cached" }
       : {

@@ -5,7 +5,7 @@
 ## Metadata
 
 - **Owners:** @derekg1729
-- **Last reviewed:** 2026-08-19
+- **Last reviewed:** 2026-09-15
 - **Status:** draft
 
 ## Purpose
@@ -42,7 +42,7 @@ Single source of truth for environment variables. Lazy validation with Zod preve
 
 - `server.ts`: serverEnv() (unified lazy function)
 - `client.ts`: clientEnv (typed object)
-- `invariants.ts`: assertEnvInvariants(), assertRuntimeSecrets(), assertEvmRpcConfig(), assertEvmRpcConnectivity(), assertTemporalConnectivity(), RuntimeSecretError, InfraConnectivityError
+- `invariants.ts`: assertEnvInvariants(), assertRuntimeSecrets(), assertEvmRpcConfig(), checkEvmRpcConnectivity({ forceLive? }), assertEvmRpcConnectivity(), assertTemporalConnectivity(), RuntimeSecretError, InfraConnectivityError
 - `index.ts`: re-exports + getEnv, requireEnv
 
 **Files considered API:** server.ts, client.ts, index.ts

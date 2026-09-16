@@ -4,8 +4,8 @@
 /**
  * Module: `@app/readyz`
  * Purpose: HTTP readiness endpoint. The default (k8s probe) path answers only "can this pod serve HTTP?" — local serving readiness: env, runtime secrets, system tenant.
- * Scope: Validates env + runtime secrets + system tenant (fatal). Checks EVM RPC, Temporal, and scheduler-worker connectivity but treats them as NON-FATAL async substrate (logged, still 200). `?deep=1` restores hard substrate assertion for provisioning / stack-test smoke checks.
- * Invariants: Always returns valid readyz schema; force-dynamic runtime. Default path returns 503 only on env/secrets/tenant failure; EVM RPC + Temporal + scheduler-worker are non-fatal (logged, still 200) so an async-substrate blip can't drain the fleet (incident 2026-06-26: scheduler-worker hiccup → fleet-wide 502). Temporal/scheduler-worker failures log at ERROR with a stable `event` + `severity:"critical"` so monitoring fires a mission-critical alert (all AI/chat work is dispatched through Temporal). `?deep=1` makes Temporal + scheduler-worker fatal (503).
+ * Scope: Validates env + runtime secrets + system tenant (fatal). Checks EVM RPC, Temporal, and scheduler-worker connectivity but treats transient failures as NON-FATAL on the default probe (logged, still 200). `?deep=1` restores hard substrate assertion for provisioning / stack-test smoke checks.
+ * Invariants: Always returns valid readyz schema; force-dynamic runtime. Every managed non-test node requires and exercises EVM RPC even before payment activation. The default path does not drain the fleet for a transient upstream failure (incident 2026-06-26: scheduler-worker hiccup → fleet-wide 502); `?deep=1` forces a live RPC read and makes EVM RPC, Temporal, and scheduler-worker failures fatal (503).
  * Side-effects: IO (HTTP response, structured logging, network calls to RPC and Temporal)
  * Notes: Used by Docker HEALTHCHECK, deployment validation, K8s readiness probes.
  *        HTTP status is primary truth: 200 = ready, 503 = not ready.
@@ -148,27 +148,44 @@ export const GET = wrapRouteHandlerWithLogging(
       // MVP readiness: Validate env + runtime secrets + EVM RPC + Temporal connectivity
       assertRuntimeSecrets(env);
 
-      // EVM RPC: required-config is fatal (missing URL = misconfig), but live
-      // connectivity is non-fatal. K8s probes /readyz every 5s on every pod;
-      // failing the pod when an upstream RPC 429s or blips would drain the
-      // fleet for a transient issue that doesn't affect chat/AI traffic.
-      // Payment processing has its own retry/verification path.
-      if (container.paymentRailsActive) {
-        assertEvmRpcConfig(env);
-        const evmRpcResult = await checkEvmRpcConnectivity(
-          container.evmOnchainClient,
-          env
-        );
-        if (!evmRpcResult.ok) {
-          ctx.log.warn(
-            {
-              reason: "EVM_RPC_DEGRADED",
-              source: evmRpcResult.source,
-              error: evmRpcResult.errorMessage,
-            },
-            "readiness: EVM RPC unreachable, returning ready (non-fatal)"
-          );
+      // EVM RPC is baseline node substrate, not conditional payment state.
+      // Missing config is a deployment error. Transient connectivity remains
+      // non-fatal for the default K8s probe so an upstream 429/blip cannot drain
+      // the fleet; explicit deep readiness forces a fresh Base RPC read and
+      // fails closed for birth/promotion proof.
+      assertEvmRpcConfig(env);
+      const evmRpcResult = await checkEvmRpcConnectivity(
+        container.evmOnchainClient,
+        env,
+        { forceLive: deep }
+      );
+      if (!evmRpcResult.ok) {
+        const message = `EVM RPC connectivity check failed: ${evmRpcResult.errorMessage ?? "unknown"}`;
+        const context = {
+          event: "substrate.evm_rpc.unreachable",
+          severity: deep ? "critical" : "degraded",
+          reason: "INFRA_UNREACHABLE",
+          dependency: "evm-rpc",
+          source: evmRpcResult.source,
+          message,
+        };
+        if (deep) {
+          ctx.log.error(context, "deep readiness: EVM RPC unreachable");
+          throw new InfraConnectivityError(message);
         }
+        ctx.log.warn(
+          context,
+          "readiness: EVM RPC unreachable, returning ready (non-fatal)"
+        );
+      } else if (deep) {
+        ctx.log.info(
+          {
+            event: "substrate.evm_rpc.reachable",
+            dependency: "evm-rpc",
+            source: evmRpcResult.source,
+          },
+          "deep readiness: EVM RPC reachable"
+        );
       }
 
       // Async substrate: Temporal + scheduler-worker. NON-FATAL to the k8s
