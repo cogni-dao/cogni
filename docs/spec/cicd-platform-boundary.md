@@ -349,15 +349,19 @@ invisible (bug.5115).
 recovers a lost response if exactly one process spends from the wallet — a second writer's lease is
 indistinguishable from the actuator's own.
 
-**Centralized managed account, one local writer per environment — v0** (story.5016, BINDING;
+**Centralized managed account, one ACTIVE writer per wallet — v0** (story.5016, BINDING;
 supersedes the earlier dedicated-Console-account-per-environment activation prerequisite).
-Candidate-a and preview may reuse the same managed test account/credential; production remains on
-its isolated account. Every environment still has exactly one local writer: structurally disable
-its legacy ComputeWorkload controller before enabling its actuator, store the credential only under
-that environment's dedicated actuator OpenBao path, and forbid Console/manual writes. A manual or
-second in-environment writer invalidates cursor recovery. Distinct funded accounts per environment
-remain later hardening, not an activation prerequisite; this deliberate v0 trade removes account
-setup from the path to proving the full candidate → preview → production ladder.
+candidate-a pins the managed test account/credential; preview pins NO wallet (its control plane is
+installed but dormant/unfunded, so it lands no ComputeWorkload and never actuates); production
+remains on its isolated dedicated account. Each wallet therefore has exactly one active writer —
+because the single-writer index is per-database, two envs sharing one wallet could not be
+serialized, so preview deliberately stays unfunded rather than becoming a second writer on the
+candidate-a test wallet. Every writing environment structurally disables its legacy ComputeWorkload
+controller before enabling its actuator, stores the credential only under that environment's
+dedicated actuator OpenBao path, and forbids Console/manual writes. A manual or second writer on a
+wallet invalidates cursor recovery. Distinct funded accounts per funded environment remain later
+hardening, not an activation prerequisite; this deliberate v0 trade removes account setup from the
+path to proving the full candidate → preview → production ladder.
 
 `features/compute/akash-tx/akash-tx-wallet.ts` enforces what remains checkable at wiring time:
 `AKASH_ACTUATOR_CONSOLE_API_KEY` is required with no fallback, and the **non-secret** pinned

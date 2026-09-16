@@ -257,15 +257,39 @@ describe("Crossplane substrate boundary (task.5094, task.5096, task.5097)", () =
     }
   });
 
-  it("reuses the managed test account only across candidate-a and preview", () => {
+  /**
+   * ONE_ACTIVE_WRITER_PER_WALLET (story.5016). Preview pins NO wallet — it keeps an installed but
+   * unfunded control plane (INSTALLED_IS_NOT_FUNDED), so it can never actuate an Akash tx. That
+   * matters because candidate-a and preview run SEPARATE per-env Postgres ledgers, and the
+   * single-writer guard (`akash_tx_allocations_single_writer_idx`) is per-database: two writers
+   * against one Console wallet cannot be serialized across two ledgers, a double-spend hazard.
+   * candidate-a pins the managed test wallet; production pins a DISTINCT dedicated wallet.
+   */
+  it("preview pins no wallet; production is isolated from the candidate-a test wallet", () => {
     const candidateAccount = actuatorAccountId("candidate-a");
     const previewAccount = actuatorAccountId("preview");
     const productionAccount = actuatorAccountId("production");
 
+    expect(previewAccount).toBe("");
     expect(candidateAccount).not.toBe("");
-    expect(previewAccount).toBe(candidateAccount);
     expect(productionAccount).not.toBe("");
     expect(productionAccount).not.toBe(candidateAccount);
+  });
+
+  /**
+   * ACCOUNT_IS_INJECTIVE_OVER_ENVS (story.5016) — the guard that would have caught the preview/
+   * candidate-a double-spend hazard at review time. Two environments pinning the SAME Console
+   * account are two INDEPENDENT writers actuating against one escrow. That is unsound because the
+   * single-writer index (`akash_tx_allocations_single_writer_idx`, see `akash-tx-allocations`) is
+   * PER-DATABASE: each env owns its own Postgres ledger, so the index can serialize writers within
+   * an env but never across two envs sharing a wallet. Every non-empty `AKASH_ACTUATOR_ACCOUNT_ID`
+   * across installed envs must therefore be unique (account → env is injective).
+   */
+  it("pins each Console actuator account to at most one environment", () => {
+    const accounts = INSTALLED_ENVS.map(actuatorAccountId).filter(
+      (account) => account.length > 0
+    );
+    expect(new Set(accounts).size).toBe(accounts.length);
   });
 
   it("pins the core chart and runtime image, bounds resources, and exposes metrics", () => {

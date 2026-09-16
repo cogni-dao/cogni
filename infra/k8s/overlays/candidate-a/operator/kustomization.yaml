@@ -11,13 +11,15 @@ resources:
   # story.5016 step 9 — the legacy ComputeWorkload controller is REMOVED from
   # candidate-a so exactly ONE writer reaches the Akash wallet here: the private
   # transaction actuator below, driven by Crossplane. ONE_WALLET_ONE_ACTIVE_WRITER.
-  # Preview follows the same rail shape after task.5129; production already carries
-  # the rail. Per-row catalog selection remains the atomic authority cutover, with no
-  # compatibility layer or dual-writer period.
+  # Preview installs the same control plane but pins NO wallet (dormant/unfunded),
+  # so candidate-a is the sole active writer on the shared test wallet; production
+  # already carries the rail on its own dedicated wallet. Per-row catalog selection
+  # remains the atomic authority cutover, with no compatibility layer or
+  # dual-writer period.
   # task.5102 — the private Akash transaction actuator Crossplane calls. Each
-  # environment has its own actuator and credential-delivery path; centralized v0
-  # intentionally reuses the managed test account across candidate-a and preview,
-  # while production remains isolated.
+  # environment that PINS a wallet has its own actuator and credential-delivery path.
+  # Centralized v0 pins the managed test account on candidate-a only; preview pins no
+  # wallet, and production remains isolated on a dedicated account.
   - ../../../base/akash-tx-actuator
   - external-secret.yaml
   # story.5016 secret-boundary amendment 2 — the actuator's OWN secret plane

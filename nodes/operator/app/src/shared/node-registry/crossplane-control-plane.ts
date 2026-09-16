@@ -67,10 +67,12 @@ export type CrossplaneControlPlaneEnv =
  * asserted in both directions by `tests/ci-invariants/crossplane-dormant-substrate.spec.ts`.
  *
  * Why it is NOT derived from {@link CROSSPLANE_CONTROL_PLANE_ENVS}: an installed control plane
- * can RECONCILE a composite, but only a pinned Console account can PAY for one. In centralized
- * v0, candidate-a and preview intentionally reuse the managed test account while production
- * remains isolated. Every environment still has one local credential-delivery path and one
- * actuator; Console/manual writes remain forbidden because they invalidate cursor recovery.
+ * can RECONCILE a composite, but only a pinned Console account can PAY for one. Preview installs
+ * the composite API but pins NO wallet — a dormant/unfunded control plane, the exact
+ * INSTALLED_IS_NOT_FUNDED state above. Only candidate-a and production pin an actuator wallet,
+ * and each Console account has exactly ONE active writer: candidate-a and preview no longer
+ * share the managed test account, so there is a single writer per wallet (story.5016). Console/
+ * manual writes remain forbidden because they invalidate cursor recovery.
  *
  * This is the set a node BIRTH may mint `compute_api.<env>: crossplane` into: a birth row
  * pointed at an env with no wallet would render a composite whose every paid transaction is
@@ -80,7 +82,6 @@ export type CrossplaneControlPlaneEnv =
  */
 export const CROSSPLANE_ACTUATOR_WALLET_ENVS = [
   "candidate-a",
-  "preview",
   "production",
 ] as const;
 
