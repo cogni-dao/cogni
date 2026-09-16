@@ -11,13 +11,13 @@ spec:
   nodeId: 4b06359a-a859-4399-888e-a8c7a6696f7e
   environment: production
   bundle:
-    ref: ghcr.io/cogni-dao/poly@sha256:d6cd43a33fdee046454bf4d44f157a24cf639ff50924916942892768b463deeb
+    ref: ghcr.io/cogni-dao/poly@sha256:600a007a2bc28b566a69a4e1dcd3a8e7d35bafd48350b1a44604ec25b311d962
     source:
       repository: cogni-dao/poly
-      sha: 016febf33710f930e2bef0fd9fae4d749726a2ff
+      sha: db3f2f546e7c771bd73550ebf9ac1487165a8fdc
     artifacts:
       - name: app
-        image: ghcr.io/cogni-dao/poly@sha256:6d5fd35468e8e5c51ccc996cee8f32ee0731a5877ccca7a9b343b8c155dff2ad
+        image: ghcr.io/cogni-dao/poly@sha256:0edb8be158694bb2a7f2db8fb21886bdbf8abb0cb3d993a9374ee9a51fb53edc
   workload:
     name: poly
     publicHost: poly.cognidao.org
@@ -29,6 +29,7 @@ spec:
           - key: AUTH_SECRET
           - key: DATABASE_URL
           - key: DATABASE_SERVICE_URL
+          - key: EVM_RPC_URL
           - key: LITELLM_VIRTUAL_KEY
           - key: SCHEDULER_API_TOKEN
           - key: BILLING_INGEST_TOKEN
