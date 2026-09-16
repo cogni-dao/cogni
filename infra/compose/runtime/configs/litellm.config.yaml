@@ -17,24 +17,8 @@
 model_list:
   # ===== FLASH / FAST TIER (default picks) =====
 
-  # Google Gemini 2.5 Flash Lite — DEFAULT_FREE. Google-infra low-latency flash, 1M ctx, tools.
-  # MEASURED on candidate-a (one-word reply, n=3): 1.4-2.6s, vs gpt-oss-120b 6-14s and qwen3.7-flash
-  # 12-22s. is_free MUST stay true — pickDefaultModel gives zero-credit users the default_free model,
-  # and a non-is_free default would 402 them.  ($0.10 → $0.40, 1M)
-  - model_name: gemini-2.5-flash-lite
-    litellm_params:
-      model: openrouter/google/gemini-2.5-flash-lite
-      api_key: "os.environ/OPENROUTER_API_KEY"
-    model_info:
-      display_name: "Gemini 2.5 Flash Lite"
-      is_free: true
-      provider_key: "google"
-      metadata:
-        cogni:
-          default_free: true
-
-  # OpenAI gpt-oss 120B — open-weight REASONING model: high latency (measured 4–90s on a one-word
-  # reply). Kept selectable + is_free, but moved OFF default_free — a reasoner is the wrong default.  ($0.037 → $0.17, 131K)
+  # OpenAI gpt-oss 120B — OpenAI's open-weight model. Effectively free-cost, reasoning-capable.
+  # Designated default_free: capable OSS reasoning at ~$0.04/1M in.  ($0.037 → $0.17, 131K)
   - model_name: gpt-oss-120b
     litellm_params:
       model: openrouter/openai/gpt-oss-120b
@@ -43,6 +27,9 @@ model_list:
       display_name: "GPT-OSS 120B"
       is_free: true
       provider_key: "openai"
+      metadata:
+        cogni:
+          default_free: true
 
   # DeepSeek V4 Flash — cheapest 1M-context flash in the fleet.  ($0.078 → $0.156, 1M)
   - model_name: deepseek-v4-flash
