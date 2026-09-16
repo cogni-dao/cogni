@@ -4,9 +4,8 @@
 import { defineConfig } from "tsup";
 
 /**
- * A self-contained process artifact, exactly like tsup.compute-controller.config.ts:
- * the Next standalone tracer never imports this entry, so the actuator ships as its own
- * bundle inside the shared operator image (task.5102).
+ * A self-contained process artifact: the Next standalone tracer never imports this entry,
+ * so the actuator ships as its own bundle inside the shared operator image (task.5102).
  */
 // biome-ignore lint/style/noDefaultExport: required by tsup
 export default defineConfig({

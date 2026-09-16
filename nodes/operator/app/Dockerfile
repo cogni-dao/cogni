@@ -57,14 +57,9 @@ ENV AUTH_SECRET=${AUTH_SECRET_BUILD}
 RUN --mount=type=cache,id=next-cache,target=/app/nodes/operator/app/.next/cache,sharing=locked \
     pnpm --filter operator build
 
-# Build the dedicated external-workload controller. It is deliberately a separate
-# process artifact even though both processes ship in the operator image.
-RUN pnpm --filter operator build:compute-controller \
-    && pnpm --filter operator smoke:compute-controller-artifact
-
-# task.5102 — the Akash transaction actuator. Same shape as the controller above:
-# a dedicated process artifact riding in the shared operator image, started by its own
-# Deployment (infra/k8s/base/akash-tx-actuator) rather than by the web entrypoint.
+# task.5102 — the Akash transaction actuator. A dedicated process artifact riding in
+# the shared operator image, started by its own Deployment
+# (infra/k8s/base/akash-tx-actuator) rather than by the web entrypoint.
 RUN pnpm --filter operator build:akash-tx-actuator \
     && pnpm --filter operator smoke:akash-tx-actuator-artifact
 
@@ -89,7 +84,6 @@ LABEL org.opencontainers.image.title="cogni-template"
 COPY --from=builder --chown=nextjs:nodejs /app/nodes/operator/app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/nodes/operator/app/.next/static ./nodes/operator/app/.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/nodes/operator/app/public ./nodes/operator/app/public
-COPY --from=builder --chown=nextjs:nodejs /app/nodes/operator/app/dist-controller/compute-workload-controller.mjs ./nodes/operator/app/compute-workload-controller.mjs
 COPY --from=builder --chown=nextjs:nodejs /app/nodes/operator/app/dist-akash-tx-actuator/akash-tx-actuator.mjs ./nodes/operator/app/akash-tx-actuator.mjs
 
 # Repo-spec: node-specific DAO config (node_id, chain, governance).
