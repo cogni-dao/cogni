@@ -15,11 +15,14 @@ production_branch: deploy/production-poly
 # NODE_FORMATION_ENVS; this list is the catalog twin so render-node-appset.sh
 # renders exactly the births appset.ts generates. Trimming a node's reach is a
 # later catalog edit (drop an env here) once its envs are provisioned.
-# bug.5182: candidate-a is Poly's source-addressed developer flight lane. Preview
-# remains retired until its Crossplane/actuator authority is installed (task.5129).
+# bug.5182: candidate-a is Poly's source-addressed developer flight lane.
+# task.5129 (Stage A, merged): the preview Crossplane/actuator rail is installed and
+# was dormant until this activation. Preview reuses candidate-a's managed test Console
+# account (v0 contract); production stays isolated (akash10auj…).
 envs: [candidate-a, preview, production]
 deployment_provider:
   candidate-a: akash
+  preview: akash
   production: akash
 # story.5016 production cutover — Crossplane authority; the private Akash transaction
 # actuator pays from production's DEDICATED account (akash10auj…). PRECONDITION:
@@ -28,10 +31,12 @@ deployment_provider:
 # legacy manifest in the same commit).
 compute_api:
   candidate-a: crossplane
+  preview: crossplane
   production: crossplane
 # Explicit replacement counter for a terminally closed lease — the only
 # redeploy-after-close path (actuator refuses a settled idempotence key).
 lease_epoch:
+  preview: 0
   production: 0
 activity_env: production
 owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
