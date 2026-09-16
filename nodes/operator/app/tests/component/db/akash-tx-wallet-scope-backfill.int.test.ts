@@ -256,7 +256,14 @@ describe("bug.5187 wallet_scope backfill (Component)", () => {
       allocationCursor: "7400",
     });
 
-    await expect(applyBackfill(db)).rejects.toThrow(/state=.preparing./);
+    // Assert on the RAISE message (the driver error's `cause`), never on the thrown wrapper —
+    // drizzle's wrapper message embeds the whole SQL, which contains this very string, so a
+    // `toThrow(/preparing/)` would pass for ANY failure of this statement.
+    const error: unknown = await applyBackfill(db).catch((thrown) => thrown);
+    expect(error).toBeInstanceOf(Error);
+    const raised = (error as { cause?: Error }).cause;
+    expect(raised?.message).toContain("bug.5187 backfill refused");
+    expect(raised?.message).toContain("state='preparing'");
 
     const [row] = await db
       .select({ walletScope: akashTxAllocations.walletScope })
