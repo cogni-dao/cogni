@@ -375,6 +375,7 @@ describe("cogni-node-app-v1 deployment contract", () => {
   });
 
   it("declares every key the runtime profile requires", () => {
+    expect(COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS).toContain("EVM_RPC_URL");
     expect(
       COGNI_NODE_APP_V1_DEPLOYMENT.services[0]?.secret_refs.map(
         (ref) => ref.key
