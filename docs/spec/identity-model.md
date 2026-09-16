@@ -126,7 +126,6 @@ user_id (N) ──── (N) scope_id           Users contribute to multiple pro
                                          (via activity_events + epoch_allocations)
 actor_id (1) ──── (1) user_id           For human actors (kind=user)
 actor_id (1) ──── (0..1) parent_actor_id Agent hierarchy (kind=agent)
-agent actor (1) ─ (0..1) human actor     Active stewardship/beneficiary relation
 actor_id (1) ──── (N) actor_bindings    Wallets, external refs
 actor_id (N) ──── (1) billing_account_id Multiple actors per tenant
 ```
@@ -135,15 +134,14 @@ actor_id (N) ──── (1) billing_account_id Multiple actors per tenant
 
 ## Runtime Authorization Principals
 
-Runtime RBAC uses string principal identifiers. A principal is an authorization
-address, not a credential. `actorId` is the runtime field name; for autonomous
-agents its stable suffix is the node-local `actor_id`, while the bearer secret
-that authenticated the request remains replaceable.
+Runtime RBAC uses string principal identifiers. These are not database primary
+keys, and `actorId` is not the same thing as the `actor_id` economic-subject
+column.
 
 | Runtime Field | Format                    | Source of Truth                                               | Purpose                                     |
 | ------------- | ------------------------- | ------------------------------------------------------------- | ------------------------------------------- |
 | `actorId`     | `user:{user_id}`          | Browser session or HMAC machine bearer token `sub`            | Direct human/user-bound machine execution   |
-| `actorId`     | `agent:{actor_id}`        | Agent credential resolved to a durable actor                  | Autonomous agent execution                  |
+| `actorId`     | `agent:{agent_id}`        | Server-issued execution grant                                 | Autonomous agent execution                  |
 | `actorId`     | `service:{service_name}`  | Internal service bootstrap                                    | Internal service execution                  |
 | `subjectId`   | `user:{user_id}`          | Server-issued delegation/grant/session context only           | On-behalf-of authority for delegated runs   |
 | `tenantId`    | `{billing_account_id}`    | Billing resolver / execution grant / API-originated run input | Authorization tenant boundary and audit key |
@@ -153,9 +151,8 @@ Current operator chat and API-originated graph runs bind direct users as
 `actorId = user:{user_id}` and `tenantId = billing_account_id` before
 `toolRunner.exec()` can call `AuthorizationPort.check()`. Machine bearer tokens
 are user-bound keys; they resolve to the same `SessionUser.id` shape as browser
-sessions. `POST /api/v1/agent/register` therefore has not yet reached the target
-model below: it still creates a user-backed machine principal instead of a
-durable `agent` actor with separately rotatable credentials.
+sessions. They are not standalone `agent:{id}` principals until an execution
+grant issues that identity server-side.
 
 **Subject binding:** `subjectId` never comes from a request body, tool args, or
 `RunnableConfig.configurable`. It is attached only by trusted server launchers
@@ -190,37 +187,16 @@ delegating user's — never an implicit default. This is exactly why the claiman
 `actor_id`-keyed (economic subject), not `user_id`-keyed: it must be able to express
 _agent-earns / user-owns_.
 
-**V0 stewardship decision (`EARNER_NE_BENEFICIARY`).** Every contribution records
-the actor that did the work as `earned_by_actor_id`. A separate, node-local,
-audited stewardship relation may designate one human actor as that agent's
-`beneficiary_actor_id`. The relation affects claimant presentation and future
-settlement; it never rewrites a receipt, claimant key, finalized statement, or
-earner. In the absence of an active stewardship relation, the agent remains its
-own beneficiary.
+> **OPEN (design point, raised 2026-08-15):** the on-behalf-of earnings-ownership policy —
+> agent-wallet vs delegating-user-wallet, and whether it is scoped per-agent, per-grant, or
+> per-node — is not yet settled. Today the claimant→wallet resolver is user-centric
+> (`user:{user_id}` / `identity:{provider}:{externalId}`); extending it to `agent:{actor_id}`
+> with `subjectId`-delegated routing is forward work. Track in
+> [tokenomics-distribution.md](./tokenomics-distribution.md) + the story.5005 lineage.
 
-Stewardship requires two independent proofs: the registered agent authenticates
-and creates a one-time request, and the signed-in human accepts it. This is a
-two-party binding, not an admin assertion and not possession of a GitHub login.
-Acceptance may resolve previously unassigned agent liabilities on the next
-cumulative fold. Once a beneficiary is materialized into a distribution leaf,
-that beneficiary is frozen; revocation affects later, unresolved liabilities
-only. Old signed statements and published leaves stay byte-identical.
-`subjectId`, OpenFGA developer grants, node ownership, and billing tenancy MUST
-NOT imply stewardship. Track the end-to-end migration in `story.5033`.
+## AI Agent Node Developer Identity
 
-Rejected shortcuts:
-
-- Binding the agent's GitHub identity directly to the human collapses authorship
-  into account control and cannot represent an AI earner.
-- Reusing OpenFGA delegation or `subjectId` makes operational permission an
-  economic transfer and gives the wrong plane settlement authority.
-- Reusing `parent_actor_id` overloads actor hierarchy with beneficiary policy.
-  Stewardship is an explicit relationship with its own evidence and lifecycle.
-
-## AI Agent Registration and Node Developer Identity
-
-**Current implementation.** V0 external AI agents enter through
-`POST /api/v1/agent/register`. Registration
+V0 external AI agents enter through `POST /api/v1/agent/register`. Registration
 mints a canonical `user_id`, a billing account, and an HMAC bearer token. That
 credential authenticates the request; it does not by itself grant authority over
 any node.
@@ -254,21 +230,16 @@ ongoing flight authority. After approval, the flight route uses RBAC, not
 `nodes.owner_user_id = caller`, so an external agent can flight exactly the node
 it was approved for.
 
-**Target registration contract.** Registration creates an `actors(kind='agent')`
-row and a separately revocable/rotatable credential whose resolved principal is
-`agent:{actor_id}`. It does not create a fake human `users` row. A human actor is
-linked only through the two-party stewardship flow above. External identities
-used by the agent, including GitHub, attach through evidenced
-`actor_bindings`; they are not silently rebound to the steward's `user_id`.
-
-The `node` authorization model already accepts
+**Principal-agnostic by design (not a migration debt):** the `node` model accepts
 both principal types — `node.developer: [user, agent]` — so V0's user-backed
 machine principals (`actorId = user:{agent_user_id}`) and a later
 `actorId = agent:{actor_id}` form coexist **additively**: introducing
 agent-actor principals writes new `@agent:` tuples without a model change or
-tuple rewrite. Existing user-backed agents require an explicit migration that
-preserves their node grants and source bindings; key rotation must not ship first
-because it would entrench the wrong principal.
+tuple rewrite. V0 registers agents as users (user-bound bearer), which is a
+legitimate principal representation, not a stopgap. Agent-actor principals — with
+`subjectId = user:{approver_user_id}` for explicit on-behalf-of delegation —
+become meaningful once the actors table + execution grants are the registration
+authority; that is a forward capability, not a correction of V0.
 
 ### Operator node-registry projection (OPERATOR_NODE_ROW_ID_IS_NODE_ID)
 
@@ -329,14 +300,14 @@ node_id>` (read from the child repo), never a fresh UUID — so identity cannot 
 
 These are hard constraints. Violating any of them is a design error.
 
-| Key                  | Must Never Be Used For                                                                                                                                                                           |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `node_id`            | Governance domain, epoch scoping, project identity, DAO ownership. It is infrastructure only.                                                                                                    |
-| `scope_id`           | Deployment identity, infra routing, DB tenancy. It is governance only.                                                                                                                           |
-| `user_id`            | Replaced by `wallet_address`, Discord snowflake, GitHub numeric ID, or DID. Those are bindings.                                                                                                  |
-| `billing_account_id` | Governance scoping, contribution attribution, deployment identity. It is payment tenancy only.                                                                                                   |
-| `actor_id`           | A credential/secret, payment tenancy, governance voting rights, or wallet address. A runtime `agent:{actor_id}` principal may reference it, but authentication comes from a separate credential. |
-| `dao_address`        | Database primary key, tenant scoping, deployment routing. It is an on-chain attribute only.                                                                                                      |
+| Key                  | Must Never Be Used For                                                                                           |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `node_id`            | Governance domain, epoch scoping, project identity, DAO ownership. It is infrastructure only.                    |
+| `scope_id`           | Deployment identity, infra routing, DB tenancy. It is governance only.                                           |
+| `user_id`            | Replaced by `wallet_address`, Discord snowflake, GitHub numeric ID, or DID. Those are bindings.                  |
+| `billing_account_id` | Governance scoping, contribution attribution, deployment identity. It is payment tenancy only.                   |
+| `actor_id`           | Auth/login identity, payment tenancy, governance voting rights, wallet address. It is economic attribution only. |
+| `dao_address`        | Database primary key, tenant scoping, deployment routing. It is an on-chain attribute only.                      |
 
 **Synonym prohibition:** Do not introduce `org_id`, `account_id`, `tenant_id` (DB column), `project_id` (DB column), or `contributor_id` as new terms. The six keys above are the complete set. External provider IDs (e.g., WalletConnect project ID, Terraform workspace ID) must be namespaced (e.g., `walletconnect_project_id`) to avoid collision with `scope_id`.
 

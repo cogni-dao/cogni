@@ -6,64 +6,77 @@ status: active
 created: 2026-09-15
 updated: 2026-09-15
 branch: "derekg1729/story-5033-actor-attribution"
-last_commit: "85d35508bc"
+last_commit: "16da301a6a"
 ---
 
-# Handoff: agent attribution and human stewardship
+# Handoff: agent attribution and human ownership
 
 ## Mission
 
-New mission: own the end-to-end identity → agent actor → contribution attribution → human stewardship domain. The concrete V0 is `flock-leader`: the AI remains the recorded earner, while Derek can establish an audited beneficiary relationship and claim its unresolved economic benefit without rewriting who authored the work.
+New mission: own the E2E identity → agent actor → contribution attribution →
+human ownership path. For `flock-leader`, the AI must remain the recorded
+earner while Derek can become its human parent and claim its economic benefit.
 
 ## Goal
 
-- A registered AI has a stable node-local `actor_id`; credentials rotate without changing it.
-- The AI requests a one-time stewardship binding and an authenticated human accepts it; neither side can establish the relationship alone.
-- Candidate-a proves `flock-leader` as earner and Derek as beneficiary across historical unresolved and new contributions, with signed statements unchanged and `/version.buildSha` equal to the flighted PR head.
+- Registration creates a durable node-local agent actor; credentials may change
+  without changing that actor.
+- An agent and human establish the actor's parent relation through a two-party,
+  audited flow; neither side can assign it alone.
+- Candidate-a proves `flock-leader` as earner and Derek's human actor as the
+  pinned beneficiary without changing historical claimant keys or statements.
 
 ## Start By Reading
 
-- `docs/spec/identity-model.md` — current machine-as-user state, target actor registration, and stewardship decision.
-- `docs/spec/attribution-ledger.md` — immutable authorship, explicit stewardship, and freeze-at-fold invariants.
-- `docs/spec/decentralized-user-identity.md` — existing GitHub account-control claim; do not confuse it with agent stewardship.
-- `docs/spec/tokenomics-distribution.md` — claimant wallet resolution and cumulative-fold boundary.
-- `story.5033` on the operator — canonical E2E work item.
+- The merged Dolt knowledge entry for the approved actor-ownership protocol.
+- `work/projects/proj.operator-plane.md` — existing actor hierarchy and reward
+  rollup policy.
+- `docs/spec/identity-model.md` — current identity primitives and runtime state.
+- `docs/spec/attribution-ledger.md` — current signed allocation model.
 
 ## Current State
 
-- `story.5033` is priority 0, claimed by `flock-leader`, linked to draft PR #2267, and in `needs_implement`.
-- Ordered children exist: `task.5123` actor registration + stewardship; `task.5124` earner/beneficiary attribution proof (blocked by 5123); `task.5125` principal migration + rotation + fleet sync (blocked by 5124).
-- Commit `85d35508bc` aligns six identity/attribution/distribution/project documents. No runtime or schema code changed.
-- As built, `/api/v1/agent/register` still creates a `users` row, billing account, and HMAC token whose `sub` is `user_id`; no actor table is shipped.
-- Existing GitHub attestation can resolve `identity:github:<id>` to a human. That proves account control but collapses an AI earner into the human, so it is not the target model.
-- Operator coordination briefly returned HTTP 500, then all operator `/version` and work/knowledge APIs returned HTTP 502. It recovered; the work graph was written and re-read successfully.
-- `story.5021` and `task.5080` are now `needs_triage`, priority 3, blocked by `story.5033`; their independent slug/OpenFGA reliability bugs remain separate.
-- No new knowledge branch was created: the shared `flock-leader` principal already owns two unrelated open contributions from other active work. Appending here would mix domains; creating a third would worsen branch sprawl.
-- Draft PR #2267 is open; its current exact head is authoritative in GitHub and hosted CI is pending. No candidate flight occurred, and nothing is authorized to merge.
+- `story.5033` is intake for the E2E outcome. `task.5128` owns draft PR #2267
+  and the design decision; no runtime or schema implementation exists.
+- Existing design already defines `earned_by_actor_id`,
+  `beneficiary_actor_id`, parent-backed agent rollup, and immutable allocation-
+  time beneficiary selection. Those concepts were not invented by this work.
+- The unresolved gap is how a human safely becomes an agent's parent, how an
+  external source identity is assigned to that agent, and how legacy unresolved
+  allocations resolve once without mutating signed history.
+- Production knowledge/work APIs returned HTTP 502 during the latest pass, so
+  the required merged/open-branch recall and Dolt contribution are pending.
+- Hosted CI passed for the earlier docs-only head. No image was built, no
+  candidate flight occurred, and no merge is authorized.
 
 ## Design / Implementation Target
 
-1. Registration creates `actors(kind='agent')` plus a replaceable credential resolving to `agent:{actor_id}`; human users remain separate actors.
-2. Stewardship is an evidenced two-party relationship: agent-authenticated request plus human-session acceptance. OpenFGA, `subjectId`, node ownership, billing, GitHub account control, and `parent_actor_id` do not imply it.
-3. Attribution exposes immutable `earned_by_actor_id` and separately resolved `beneficiary_actor_id`; the agent benefits itself by default, historical claimant keys/statements never change, and a beneficiary freezes when a liability is materialized into a distribution leaf.
+1. Reuse the existing `parent_actor_id` ownership hierarchy and reward policy;
+   do not invent a parallel stewardship relation.
+2. Keep authorship, beneficiary, and wallet distinct. New actor-native
+   allocations pin the beneficiary at allocation time; legacy unresolved
+   allocations need a one-time append-only resolution path.
+3. Prove the source assignment and human-parent claim with evidence and two
+   authenticated parties; RBAC, billing, and display names prove neither.
 
 ## Next Actions / Risks
 
-- [ ] Keep the story heartbeat active while managing the children; `coordination.nextAction` is authoritative.
-- [ ] Close or merge the existing `flock-leader` knowledge branches through their owning work, then contribute “Agent contribution stewardship separates earner from beneficiary” without mixing domains.
-- [ ] Start `task.5123` in a dedicated implementation session. Before schema work, load `schema-update`, `database-expert`, `rbac-expert`, and `test-expert`; add append-only evidence and explicit migration for current user-backed agents.
-- [ ] Prove the vertical slice on one node with real `flock-leader` history before fleet propagation or key rotation.
-- [ ] Open a draft PR, let hosted CI run, flight the exact head once, run `/validate-candidate`, and only then permit merge.
-- Risk: a dynamic beneficiary resolver could redirect already-folded liabilities; freeze the beneficiary at fold/materialization.
-- Risk: migration must preserve existing OpenFGA node grants and GitHub/source bindings without treating the current fake user as a human.
+- [ ] Recall merged knowledge and this principal's open contribution diff.
+- [ ] Refine an existing atom or contribute one atomic proposed protocol in
+      Dolt; link it to `task.5128` through a `tracks` citation after merge.
+- [ ] Reduce PR #2267 to the verified per-node `user_id` spec correction plus
+      project/handoff routing; review the Dolt design before implementation.
+- [ ] Only after design approval, implement `task.5123`, then `task.5124`, then
+      `task.5125`, each as one PR with exact-head candidate validation.
+- Risk: resolving beneficiary dynamically can redirect old rewards; pin it.
+- Risk: binding `flock-leader` directly to a human erases the AI earner.
 
 ## Pointers
 
-| File / Resource                                    | Why it matters                                    |
-| -------------------------------------------------- | ------------------------------------------------- |
-| `docs/spec/identity-model.md`                      | Canonical identity and stewardship contract       |
-| `docs/spec/attribution-ledger.md`                  | Earner/beneficiary and immutable-history rules    |
-| `docs/spec/decentralized-user-identity.md`         | Existing human account-control path and its limit |
-| `docs/spec/tokenomics-distribution.md`             | Settlement/fold boundary                          |
-| `work/projects/proj.transparent-credit-payouts.md` | Roadmap and Pareto sequence                       |
-| `story.5033`                                       | Canonical E2E work item                           |
+| File / Resource                                    | Why it matters                         |
+| -------------------------------------------------- | -------------------------------------- |
+| `work/projects/proj.operator-plane.md`             | Existing actor/reward north star       |
+| `work/projects/proj.transparent-credit-payouts.md` | E2E ordering and work-item ownership   |
+| `docs/spec/identity-model.md`                      | Current identity model                 |
+| `task.5128`                                       | One-PR design and alignment owner      |
+| `story.5033`                                      | Whole E2E outcome                      |
