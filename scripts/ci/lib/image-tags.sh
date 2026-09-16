@@ -51,6 +51,7 @@ declare -A _image_tags_type_cache=()
 declare -A _image_tags_pathprefix_cache=()
 declare -A _image_tags_source_repo_cache=()
 declare -A _image_tags_provider_cache=()
+declare -A _image_tags_envs_cache=()
 for _t in "${ALL_TARGETS[@]}"; do
   _ty=$(yq -N '.type' "${_image_tags_catalog_root}/${_t}.yaml")
   _image_tags_type_cache["$_t"]="$_ty"
@@ -71,6 +72,11 @@ for _t in "${ALL_TARGETS[@]}"; do
   # `env=provider;env=provider` string so a lookup costs no extra yq.
   _dp=$(yq -N '.deployment_provider // {} | to_entries | map(.key + "=" + .value) | join(";")' "${_image_tags_catalog_root}/${_t}.yaml")
   _image_tags_provider_cache["$_t"]="$_dp"
+  # Per-row ENV MEMBERSHIP (`envs:`), cached as `;env;env;` so a lookup is one
+  # substring test. This is the row's REACH — which environments actually deploy
+  # it — and is a different axis from DEPLOY_BRANCH_ENVS above (task.5017).
+  _ev=$(yq -N '.envs // [] | join(";")' "${_image_tags_catalog_root}/${_t}.yaml")
+  _image_tags_envs_cache["$_t"]=";${_ev};"
   _rs="${_image_tags_spec_root}/${_pp}.cogni/repo-spec.yaml"
   if [ -n "$_pp" ] && [ -f "$_rs" ]; then
     # In-repo node: repo-spec is the readable identity SSOT (REPO_SPEC_IS_IDENTITY_SSOT).
@@ -83,12 +89,28 @@ for _t in "${ALL_TARGETS[@]}"; do
   fi
   _image_tags_node_id_cache["$_t"]="$_nid"
 done
-unset _t _ty _s _p _np _pp _sr _dp _rs _nid
+unset _t _ty _s _p _np _pp _sr _dp _ev _rs _nid
 
 # True for type:infra targets — built in CI but deployed via Compose-on-VM,
 # not k8s/Argo. Overlay / promotion / gitops-coverage loops skip these.
 is_infra_target() {
   [ "${_image_tags_type_cache[$1]:-}" = "infra" ]
+}
+
+# Does this target DEPLOY to `env`, per the catalog's `envs:` membership list
+# (CATALOG_IS_SSOT, infra/catalog/_schema.json)? This is the row's reach, NOT the
+# set of envs that own a deploy branch (DEPLOY_BRANCH_ENVS below) — #2238 retired
+# the preview node slots, so most node rows are `envs: [production]` while the
+# preview branch still exists. Callers that iterate NODE_TARGETS for one env MUST
+# filter on this, or they demand per-env resources for rows that left that env.
+#   target_in_env TARGET ENV   # → 0 when the row deploys there
+target_in_env() {
+  local target="$1" env="${2:-}"
+  if [ -z "${_image_tags_envs_cache[$target]+x}" ]; then
+    echo "[ERROR] image-tags: unknown target: $target" >&2
+    return 2
+  fi
+  [ -n "$env" ] && [[ "${_image_tags_envs_cache[$target]}" == *";${env};"* ]]
 }
 
 # The environments that own a catalog-declared GitOps deploy branch. Deliberately
