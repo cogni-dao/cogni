@@ -17,8 +17,9 @@ production_branch: deploy/production-poly
 # later catalog edit (drop an env here) once its envs are provisioned.
 # story.5016 production cutover: preview slot retired (preview has no funded Akash
 # account and gets no actuator; its lease on the shared account was closed).
-envs: [production]
+envs: [candidate-a, production]
 deployment_provider:
+  candidate-a: akash
   production: akash
 # story.5016 production cutover — Crossplane authority; the private Akash transaction
 # actuator pays from production's DEDICATED account (akash10auj…). PRECONDITION:
@@ -26,10 +27,17 @@ deployment_provider:
 # materializes this cell (ONE_AUTHORITY_PER_WORKLOAD; rsync --delete evicts the
 # legacy manifest in the same commit).
 compute_api:
+  # story.5034 — candidate-a carries BOTH facts canBirthOnCrossplane requires:
+  # an installed XComputeWorkload control plane AND a pinned actuator wallet.
+  # Declared explicitly because LEGACY_IS_DEFAULT would otherwise point this row
+  # at the controller candidate-a no longer ships (bug.5177).
+  candidate-a: crossplane
   production: crossplane
 # Explicit replacement counter for a terminally closed lease — the only
 # redeploy-after-close path (actuator refuses a settled idempotence key).
 lease_epoch:
+  # Fresh candidate-a slot — no prior settled lease, so the counter starts at 0.
+  candidate-a: 0
   production: 0
 activity_env: production
 owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
