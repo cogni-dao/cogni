@@ -1,7 +1,21 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
-/** Level-based reconciliation for one provider-neutral ComputeWorkload resource. */
+/**
+ * Level-based reconciliation for one provider-neutral ComputeWorkload resource.
+ *
+ * Invariants (migrated here from the retired `node-workload-spec.ts`, whose parallel
+ * spec-builder was dead code — this reconciler is the live authority, task.5115):
+ *   - APP_ONLY_NO_INFRA_ON_DECENTRALIZED_COMPUTE (Derek, 2026-08-31): a workload is the
+ *     node-app container ONLY. Databases, Temporal, Redis and LiteLLM stay on the Cherry
+ *     substrate; running them as workload sidecars is the rejected anti-pattern.
+ *   - SHARED_STATE: workloads dial the env's real per-node DSNs, so they run no migrations
+ *     and share state with the k8s deployment of the same node.
+ *   - SCOPED_CREDS_ONLY: callers pass node-scoped, budget-capped credentials (per-node DB
+ *     roles, LiteLLM virtual key, write-only Loki key) — never a master/fleet secret.
+ *   - Workload sizing is owned by `packages/repo-spec/src/node-app-deployment.ts`
+ *     (`COGNI_NODE_APP_V1_SERVICE.resources`), never redefined here.
+ */
 
 import type { ProvisionOutput, ProvisionSpec } from "@cogni/ai-tools";
 import {
@@ -24,8 +38,8 @@ import {
   encodeAttemptReceipt,
 } from "@/ports";
 import { hostForNode } from "@/shared/node-registry/resolve";
+import { buildNodeAppIdentityEnv } from "./node-app-identity-env";
 import { COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS } from "./node-services-workload-spec";
-import { buildNodeAppIdentityEnv } from "./node-workload-spec";
 
 const MAX_MUTATION_RETRIES = 3;
 const MAX_RECOVERY_ATTEMPTS = 3;
