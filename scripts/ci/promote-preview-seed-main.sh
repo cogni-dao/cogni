@@ -97,7 +97,17 @@ promote_if_changed() {
 
 echo "ℹ️  promote-preview-seed-main: MERGE_SHA=${MERGE_SHA:0:12} BASE_TAG=${BASE_TAG}"
 
+# ONLY rows the catalog says still DEPLOY to preview (CATALOG_IS_SSOT). #2238
+# retired the preview node slots and deleted those overlays, but this loop kept
+# iterating every `type: node` row — so the first retired node (beacon) failed
+# the seed on EVERY merge to main, blocking the preview lane fleet-wide. A row
+# that has left preview is a SKIP; a row that is still in preview with no
+# overlay remains a hard error, because that one is genuinely broken.
 for node in "${NODE_TARGETS[@]}"; do
+  if ! target_in_env "$node" preview; then
+    echo "  skipped: $node (catalog envs: not in preview)"
+    continue
+  fi
   d_app=$(desired_digest_for_target "$node") || exit 1
   promote_if_changed "$node" "$d_app"
 done
