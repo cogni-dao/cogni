@@ -29,14 +29,57 @@
 #   - an ExternalSecret projecting the SAME bearer token from the SAME OpenBao path the
 #     production actuator's own auth Secret uses (cogni/production/akash-tx-actuator).
 #
-# THIS MAKES THE LANES ADDRESSABLE AND NOTHING ELSE. No XComputeWorkload, no node
-# compute-env Secret, no catalog row. Merging this mints nothing and spends nothing.
+# THIS MAKES THE LANES ADDRESSABLE AND NOTHING ELSE. No XComputeWorkload and no catalog row.
+# Merging this mints nothing and spends nothing.
 #
-# Namespaces are declared here explicitly rather than relying on an Argo
-# `CreateNamespace=true` side effect: these lanes are not the destination namespace of
-# any Application, so nothing else would create them. (The stale
-# infra/k8s/overlays/{preview,production}/namespace.yaml files are referenced by no
-# kustomization and are not the pattern.)
+# ── SEAM 5: THE LANE'S ENV VALUES ────────────────────────────────────────────────────────────
+# Reaching the writer is not enough to mint. The Composition resolves EVERY env value as a
+# provider-http placeholder IN THE RECONCILING CLUSTER, from the XR's OWN namespace. Three
+# Secret names are dereferenced that way; seam 4 supplied one, seam 5 closes the PLATFORM one:
+#
+#   akash-tx-actuator-auth:<ns>:token       seam 4, above.
+#   operator-env-secrets:<ns>:<KEY>         PLATFORM-owned (Cloudflare DNS + lease log-push).
+#                                           No per-node generator can emit it, so it is a fixed
+#                                           per-lane file here: *-operator-env-external-secret.yaml.
+#   <slug>-compute-env-secrets:<ns>:<KEY>   NODE-owned. NOT a file in this directory, and
+#                                           deliberately so — see below.
+#
+# THE NODE-OWNED HALF IS STILL UNRESOLVED, AND THIS DIRECTORY DELIBERATELY DOES NOT FAKE IT.
+# `<slug>-compute-env-secrets` is generated per-node by
+# `nodes/operator/app/src/features/compute/compute-workload-secret-manifests.ts` and must stay
+# that way — hand-writing a lane copy would fork the generator's output and make adding a node a
+# manifest edit instead of a catalog change. What is missing is not a manifest but a MECHANISM:
+# the values must become readable from the cluster that reconciles the lease, and neither route
+# exists today. Both were probed, not assumed:
+#
+#   Production's OpenBao custodies the pre-prod bucket
+#     -> NO WRITE PATH. Writes are env-local by contract: POST /nodes/<id>/secrets validates the
+#        requested env against the operator's own DEPLOY_ENVIRONMENT and 409s `wrong_operator_env`
+#        otherwise (nodes/operator/app/src/app/api/v1/nodes/[id]/secrets/route.ts), and
+#        <env>-node-secrets-writer is scoped to cogni/data/<env>/* inside its OWN env's OpenBao.
+#        Production's OpenBao holds ONLY cogni/production/* (verified by path listing) and has no
+#        writer identity for any other env's path.
+#
+#   Production reads the pre-prod env's OpenBao directly (a second, lane-scoped store)
+#     -> NO READ PATH. infra/k8s/argocd/openbao/values.yaml pins serviceType: ClusterIP,
+#        tls_disable = 1, "in-cluster only (no Ingress in v0)"; and Kubernetes auth is configured
+#        kubernetes_host=https://kubernetes.default.svc:443, i.e. each OpenBao validates SA JWTs
+#        against its OWN cluster's TokenReview and cannot authenticate production's ESO.
+#        Closing this needs a new network entry point + TLS (task.5054) + a new auth mount.
+#        Invariant 9 (TOOLING_IS_THE_INTERFACE) does not permit that as an ad-hoc addition, and
+#        the spec is explicit that "in the fork model each node owns its own OpenBao, so
+#        reachability is per-fork, not a shared-exposure decision".
+#
+# So NO node secret is placed here and none is claimed to resolve. A lane XR would mint its lease
+# and then fail closed on its own env values — which is why no XR is placed either. Whichever
+# route is chosen, `cogni/<env>/<slug>` must end up with exactly ONE canonical copy; populating it
+# in two OpenBaos with no reconciler is silent drift, not redundancy. See
+# docs/spec/secrets-management.md Invariant 1.
+#
+# WHAT DOES WORK, AND IS WHY THIS FILE STILL SHIPS: the PLATFORM-owned half above. It reads
+# cogni/production/operator out of THIS cluster's own OpenBao — no cross-cluster anything, correct
+# under either resolution of the question above.
+
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
@@ -44,6 +87,8 @@ resources:
   - candidate-a-namespace.yaml
   - candidate-a-actuator-alias-service.yaml
   - candidate-a-actuator-auth-external-secret.yaml
+  - candidate-a-operator-env-external-secret.yaml
   - preview-namespace.yaml
   - preview-actuator-alias-service.yaml
   - preview-actuator-auth-external-secret.yaml
+  - preview-operator-env-external-secret.yaml
