@@ -5,10 +5,10 @@
  * Module: `@features/compute/akash-tx/akash-tx-actuator.test`
  * Purpose: Prove the behaviours that make this actuator irreplaceable by generic OSS —
  *   wallet-global serialization, the pre-transaction receipt, post-response-loss recovery,
- *   observable refusal, the migration-before-transaction precondition (bug.5140), and the
- *   authoritative binding of every paid mutation to the node that consumed it (task.5103) —
+ *   observable refusal, the fact that a database can NEVER refuse a paid lease (task.5135), and
+ *   the authoritative binding of every paid mutation to the node that consumed it (task.5103) —
  *   the absence of any reconciliation (one transaction per call), and the composition root
- *   actually WIRING the prover that precondition depends on (story.5016).
+ *   actually WIRING the release-side migration runner (story.5016).
  * Scope: Unit tests over fakes, plus one source-level probe of the composition root. Does NOT
  *   touch the Akash Console, a wallet, a Kubernetes API, or a database.
  * Invariants: no real provider IO; every "lost response" is simulated by a fake that has
@@ -30,7 +30,7 @@ import type {
   AkashTxAllocationRecord,
   AkashTxConsolePort,
   AkashTxMigrationPort,
-  AkashTxMigrationRequirement,
+  AkashTxMigrationStep,
   AkashTxWorkloadIdentity,
   ComputeCostEvidencePort,
   ComputeCostStorePort,
@@ -73,19 +73,19 @@ const OTHER_COMPOSITE_IDENTITY: AkashTxWorkloadIdentity = {
   compositeUid: "4d3c2b1a-9876-4321-baaa-010203040506",
 };
 
-/** The precondition every mutating call must state (bug.5140). */
-const REQUIRE: Extract<
-  AkashTxMigrationRequirement,
-  { policy: "RequireBeforeTransaction" }
-> = {
-  policy: "RequireBeforeTransaction",
+/**
+ * The RELEASE step a caller may attach to an OBSERVE (task.5135). It is NOT a field of any
+ * mutating call any more — that is the whole change, and the mutation tests below prove it by
+ * type as well as by behaviour.
+ */
+const STEP: AkashTxMigrationStep = {
   profile: "cogni-node-app-v1",
   bundleDigest: `sha256:${"a".repeat(64)}`,
   image: `ghcr.io/cogni-dao/toks9@sha256:${"b".repeat(64)}`,
   doltgres: true,
 };
 
-/** Per-digest migration prover. Defaults to an already-migrated digest. */
+/** Per-digest migration runner. Defaults to an already-migrated digest. */
 class FakeMigration implements AkashTxMigrationPort {
   calls: ComputeWorkloadMigrationInput[] = [];
   outcome: "succeeded" | "running" | "failed" = "succeeded";
@@ -430,7 +430,6 @@ describe("AkashTxActuator.create", () => {
       environment: "candidate-a",
       identity: IDENTITY,
       spec: SPEC,
-      migration: REQUIRE,
     });
 
     expect(order).toEqual(["prepare", "allocate"]);
@@ -451,7 +450,6 @@ describe("AkashTxActuator.create", () => {
       environment: "candidate-a",
       identity: IDENTITY,
       spec: SPEC,
-      migration: REQUIRE,
     });
     expect(api.allocateCalls).toBe(1);
     expect(api.cursorCalls).toBe(1);
@@ -474,7 +472,6 @@ describe("AkashTxActuator.create", () => {
         environment: "candidate-a",
         identity: IDENTITY,
         spec: SPEC,
-        migration: REQUIRE,
       })
     ).rejects.toMatchObject({ code: "outcome_unknown" });
     // The durable receipt survives the crash: cursor present, no handle, slot still held.
@@ -491,7 +488,6 @@ describe("AkashTxActuator.create", () => {
       environment: "candidate-a",
       identity: IDENTITY,
       spec: SPEC,
-      migration: REQUIRE,
     });
 
     expect(retried.recovered).toBe(true);
@@ -519,7 +515,6 @@ describe("AkashTxActuator.create", () => {
         environment: "candidate-a",
         identity: IDENTITY,
         spec: SPEC,
-        migration: REQUIRE,
       })
     ).rejects.toMatchObject({ code: "outcome_unknown" });
 
@@ -529,7 +524,6 @@ describe("AkashTxActuator.create", () => {
         environment: "candidate-a",
         identity: IDENTITY,
         spec: SPEC,
-        migration: REQUIRE,
       })
     ).rejects.toMatchObject({ code: "allocation_unresolved" });
 
@@ -551,7 +545,6 @@ describe("AkashTxActuator.create", () => {
         environment: "candidate-a",
         identity: IDENTITY,
         spec: SPEC,
-        migration: REQUIRE,
       })
     ).rejects.toMatchObject({ code: "outcome_unknown" });
     await expect(
@@ -560,7 +553,6 @@ describe("AkashTxActuator.create", () => {
         environment: "candidate-a",
         identity: IDENTITY,
         spec: SPEC,
-        migration: REQUIRE,
       })
     ).rejects.toMatchObject({ code: "allocation_ambiguous" });
     expect(api.allocateCalls).toBe(1);
@@ -577,7 +569,6 @@ describe("AkashTxActuator.create", () => {
         environment: "candidate-a",
         identity: IDENTITY,
         spec: SPEC,
-        migration: REQUIRE,
       })
     ).rejects.toMatchObject({ code: "outcome_unknown" });
 
@@ -587,7 +578,6 @@ describe("AkashTxActuator.create", () => {
         environment: "candidate-a",
         identity: IDENTITY,
         spec: SPEC,
-        migration: REQUIRE,
       })
       .catch((error: unknown) => error);
 
@@ -613,7 +603,6 @@ describe("AkashTxActuator.create", () => {
       environment: "candidate-a",
       identity: IDENTITY,
       spec: SPEC,
-      migration: REQUIRE,
     });
     expect(ledger.rows.get("k1")?.state).toBe("allocated");
 
@@ -622,7 +611,6 @@ describe("AkashTxActuator.create", () => {
       environment: "candidate-a",
       identity: IDENTITY,
       spec: SPEC,
-      migration: REQUIRE,
     });
     expect(second.externalName).toBe("7001");
   });
@@ -634,14 +622,12 @@ describe("AkashTxActuator.create", () => {
       environment: "candidate-a",
       identity: IDENTITY,
       spec: SPEC,
-      migration: REQUIRE,
     });
     const replay = await actuator.create({
       cogniKey: "k1",
       environment: "candidate-a",
       identity: IDENTITY,
       spec: SPEC,
-      migration: REQUIRE,
     });
     expect(replay.externalName).toBe(first.externalName);
     expect(replay.replayed).toBe(true);
@@ -660,7 +646,6 @@ describe("AkashTxActuator.create", () => {
         environment: "candidate-a",
         identity: IDENTITY,
         spec: SPEC,
-        migration: REQUIRE,
       })
     ).rejects.toMatchObject({ code: "ledger_unavailable" });
     expect(api.cursorCalls).toBe(0);
@@ -677,7 +662,6 @@ describe("AkashTxActuator.create", () => {
         environment: "candidate-a",
         identity: IDENTITY,
         spec: SPEC,
-        migration: REQUIRE,
       })
     ).rejects.toMatchObject({ code: "provider_rejected" });
   });
@@ -722,7 +706,6 @@ describe("AkashTxActuator.observe", () => {
         environment: "candidate-a",
         identity: IDENTITY,
         spec: SPEC,
-        migration: REQUIRE,
       })
     ).rejects.toMatchObject({ code: "outcome_unknown" });
 
@@ -791,7 +774,6 @@ describe("AkashTxActuator.update / delete", () => {
       environment: "candidate-a",
       identity: IDENTITY,
       spec: SPEC,
-      migration: REQUIRE,
     });
     const spent = { cursor: api.cursorCalls, allocate: api.allocateCalls };
 
@@ -801,7 +783,6 @@ describe("AkashTxActuator.update / delete", () => {
       environment: "candidate-a",
       identity: IDENTITY,
       spec: SPEC,
-      migration: REQUIRE,
     });
 
     expect(resource.externalName).toBe("7001");
@@ -820,7 +801,6 @@ describe("AkashTxActuator.update / delete", () => {
       environment: "candidate-a",
       identity: IDENTITY,
       spec: SPEC,
-      migration: REQUIRE,
     });
     await actuator.delete({ cogniKey: "k1", externalName: "7001" });
     expect(api.releaseCalls).toEqual(["7001"]);
@@ -852,7 +832,6 @@ describe("AkashTxActuator.update / delete", () => {
       environment: "candidate-a",
       identity: IDENTITY,
       spec: SPEC,
-      migration: REQUIRE,
     });
     await expect(
       actuator.update({
@@ -861,7 +840,6 @@ describe("AkashTxActuator.update / delete", () => {
         environment: "candidate-a",
         identity: IDENTITY,
         spec: SPEC,
-        migration: REQUIRE,
       })
     ).rejects.toMatchObject({ code: "identity_conflict" });
     expect(api.updateCalls).toBe(0);
@@ -874,7 +852,6 @@ describe("AkashTxActuator.update / delete", () => {
       environment: "candidate-a",
       identity: IDENTITY,
       spec: SPEC,
-      migration: REQUIRE,
     });
     await expect(
       actuator.delete({ cogniKey: "k1", externalName: "7999" })
@@ -889,7 +866,6 @@ describe("AkashTxActuator.update / delete", () => {
       environment: "candidate-a",
       identity: IDENTITY,
       spec: SPEC,
-      migration: REQUIRE,
     });
     cost.failClose = true;
     await expect(
@@ -918,7 +894,6 @@ describe("AkashTxActuator cost attribution (task.5071)", () => {
       environment: "candidate-a",
       identity: IDENTITY,
       spec: SPEC,
-      migration: REQUIRE,
     });
     expect(cost.binds).toContainEqual({
       allocationReceiptId: "receipt-k1",
@@ -941,7 +916,6 @@ describe("AkashTxActuator cost attribution (task.5071)", () => {
         environment: "candidate-a",
         identity: IDENTITY,
         spec: SPEC,
-        migration: REQUIRE,
       })
     ).rejects.toMatchObject({ code: "ledger_unavailable" });
     expect(api.allocateCalls).toBe(1);
@@ -958,7 +932,6 @@ describe("AkashTxActuator cost attribution (task.5071)", () => {
         environment: "candidate-a",
         identity: IDENTITY,
         spec: SPEC,
-        migration: REQUIRE,
       })
     ).resolves.toMatchObject({ externalName: "7001", replayed: true });
     expect(api.allocateCalls).toBe(1);
@@ -971,59 +944,29 @@ describe("AkashTxActuator cost attribution (task.5071)", () => {
   });
 });
 
-describe("AkashTxActuator migration gate (bug.5140)", () => {
-  it("never mints a paid lease while the digest migration is still running", async () => {
-    // THE outcome bug.5140 is about: a workload whose migration is pending stays leaseless.
-    const { actuator, api, ledger, migration, log } = build();
+describe("AkashTxActuator release migration (task.5135)", () => {
+  it("MINTS THE LEASE while the digest migration is still running", async () => {
+    // THE regression this task exists to prevent, and the exact inverse of the pre-task.5135
+    // assertion ("never mints a paid lease while the digest migration is still running").
+    // toks5 is what the old behaviour looked like in production: a valid XR, a valid digest,
+    // a migration that never ran, an actuator that was never called, and a node that existed
+    // in no environment at all.
+    const { actuator, api, ledger, migration } = build();
     migration.outcome = "running";
 
-    await expect(
-      actuator.create({
-        cogniKey: "k1",
-        environment: "candidate-a",
-        identity: IDENTITY,
-        spec: SPEC,
-        migration: REQUIRE,
-      })
-    ).rejects.toMatchObject({ code: "migration_pending" });
-
-    // No transaction, no cursor read - and, critically, no wallet slot taken: a migration runs
-    // for minutes, and holding the wallet-global slot across it would deadlock the fleet.
-    expect(api.allocateCalls).toBe(0);
-    expect(api.cursorCalls).toBe(0);
-    expect(ledger.rows.size).toBe(0);
-    // bug.5115: the refusal is a log line first, a response second.
-    expect(log.lines.map((line) => line.marker)).toContain(
-      "akash_tx_migration_pending"
-    );
-  });
-
-  it("proves the migration BEFORE it claims the wallet slot", async () => {
-    const { actuator, ledger, migration } = build();
-    const order: string[] = [];
-    const ensure = migration.ensure.bind(migration);
-    migration.ensure = async (input) => {
-      order.push("migrate");
-      return ensure(input);
-    };
-    const claim = ledger.claim.bind(ledger);
-    ledger.claim = async (input) => {
-      order.push("claim");
-      return claim(input);
-    };
-
-    await actuator.create({
+    const result = await actuator.create({
       cogniKey: "k1",
       environment: "candidate-a",
       identity: IDENTITY,
       spec: SPEC,
-      migration: REQUIRE,
     });
 
-    expect(order).toEqual(["migrate", "claim"]);
+    expect(result.externalName).toBe("7001");
+    expect(api.allocateCalls).toBe(1);
+    expect(ledger.rows.get("k1")?.state).toBe("allocated");
   });
 
-  it("refuses terminally when the migration itself failed", async () => {
+  it("MINTS THE LEASE when the migration outright failed", async () => {
     const { actuator, api, migration } = build();
     migration.outcome = "failed";
 
@@ -1033,21 +976,20 @@ describe("AkashTxActuator migration gate (bug.5140)", () => {
         environment: "candidate-a",
         identity: IDENTITY,
         spec: SPEC,
-        migration: REQUIRE,
       })
-    ).rejects.toMatchObject({ code: "migration_failed" });
-    expect(api.allocateCalls).toBe(0);
+    ).resolves.toMatchObject({ externalName: "7001" });
+    expect(api.allocateCalls).toBe(1);
   });
 
-  it("refuses to spend when it cannot prove the migration at all", async () => {
+  it("MINTS THE LEASE with no migration runner wired at all", async () => {
+    // Previously `migration_unavailable` on EVERY paid create. An actuator that cannot reach
+    // Kubernetes is not a reason to leave a node non-existent.
     const ledger = new FakeLedger();
     const api = new FakeConsole();
-    const log = recordingLogger();
-    // An actuator wired WITHOUT a prover: fail closed, never assume migrated.
     const actuator = new AkashTxActuator({
       console: api,
       ledger,
-      log,
+      log: recordingLogger(),
       ...costDeps(),
     });
 
@@ -1057,80 +999,133 @@ describe("AkashTxActuator migration gate (bug.5140)", () => {
         environment: "candidate-a",
         identity: IDENTITY,
         spec: SPEC,
-        migration: REQUIRE,
       })
-    ).rejects.toMatchObject({ code: "migration_unavailable" });
-    expect(api.allocateCalls).toBe(0);
-    expect(log.lines.map((line) => line.marker)).toContain(
-      "akash_tx_migration_capability_missing"
-    );
-  });
-
-  it("leases a workload whose digest is already migrated", async () => {
-    const { actuator, api, migration } = build();
-
-    const result = await actuator.create({
-      cogniKey: "k1",
-      environment: "candidate-a",
-      identity: IDENTITY,
-      spec: SPEC,
-      migration: REQUIRE,
-    });
-
-    expect(result.externalName).toBe("7001");
+    ).resolves.toMatchObject({ externalName: "7001" });
     expect(api.allocateCalls).toBe(1);
-    expect(migration.calls[0]).toMatchObject({
-      nodeSlug: "toks9",
-      bundleDigest: REQUIRE.bundleDigest,
-    });
   });
 
-  it("leases a database-free workload that explicitly declares Skip", async () => {
-    const { actuator, api, migration } = build();
+  it("does not touch the migration runner on a paid create at all", async () => {
+    // Stronger than "does not refuse": the paid path must not even ASK. That is what makes the
+    // database credential unnecessary on this seam.
+    const { actuator, migration } = build();
 
     await actuator.create({
       cogniKey: "k1",
       environment: "candidate-a",
       identity: IDENTITY,
       spec: SPEC,
-      migration: { policy: "Skip" },
     });
 
-    expect(api.allocateCalls).toBe(1);
     expect(migration.calls).toHaveLength(0);
   });
 
-  it("gates the SDL update too - a new digest never meets an unmigrated database", async () => {
-    const { actuator, api, migration } = build();
-    migration.outcome = "running";
+  it("does not touch the migration runner on an SDL update either", async () => {
+    const { actuator, ledger, migration } = build();
+    seedAllocated(ledger);
 
-    await expect(
-      actuator.update({
-        cogniKey: "k1",
-        externalName: "7001",
-        environment: "candidate-a",
-        identity: IDENTITY,
-        spec: SPEC,
-        migration: REQUIRE,
-      })
-    ).rejects.toMatchObject({ code: "migration_pending" });
-    expect(api.updateCalls).toBe(0);
-  });
-
-  it("leaves observe and delete ungated - neither spends, and delete must always work", async () => {
-    const { actuator, api, migration } = build();
-    migration.outcome = "failed";
-
-    await expect(actuator.observe({ cogniKey: "k1" })).resolves.toMatchObject({
-      found: false,
-    });
-    await actuator.create({
+    await actuator.update({
       cogniKey: "k1",
+      externalName: "7001",
       environment: "candidate-a",
       identity: IDENTITY,
       spec: SPEC,
-      migration: { policy: "Skip" },
     });
+
+    expect(migration.calls).toHaveLength(0);
+  });
+
+  it("runs the step on OBSERVE and REPORTS the phase", async () => {
+    const { actuator, migration } = build();
+    migration.outcome = "running";
+
+    const observation = await actuator.observe({
+      cogniKey: "k1",
+      workload: "toks9",
+      environment: "candidate-a",
+      migration: STEP,
+    });
+
+    // `found: false` is preserved: that is the signal Crossplane uses to create the lease, and
+    // an in-flight migration must never suppress it.
+    expect(observation).toMatchObject({
+      found: false,
+      migration: { phase: "running" },
+    });
+    expect(migration.calls[0]).toMatchObject({
+      nodeSlug: "toks9",
+      environment: "candidate-a",
+      bundleDigest: STEP.bundleDigest,
+      secretName: "toks9-compute-env-secrets",
+    });
+  });
+
+  it("carries the phase onto an observation that DID find a lease", async () => {
+    const { actuator, ledger, migration } = build();
+    seedAllocated(ledger);
+    migration.outcome = "failed";
+
+    await expect(
+      actuator.observe({
+        cogniKey: "k1",
+        workload: "toks9",
+        environment: "candidate-a",
+        migration: STEP,
+      })
+    ).resolves.toMatchObject({
+      found: true,
+      migration: { phase: "failed" },
+    });
+  });
+
+  it("reports nothing when the caller attached no step", async () => {
+    const { actuator, migration } = build();
+
+    const observation = await actuator.observe({ cogniKey: "k1" });
+
+    expect(observation.migration).toBeUndefined();
+    expect(migration.calls).toHaveLength(0);
+  });
+
+  it("refuses to GUESS whose database a step belongs to", async () => {
+    // ENVIRONMENT_IS_THE_WORKLOAD'S. A step with no workload/environment is reported
+    // `unavailable` rather than run against whatever namespace the actuator happens to be in —
+    // migrating the wrong environment's database is worse than not migrating.
+    const { actuator, migration, log } = build();
+
+    const observation = await actuator.observe({
+      cogniKey: "k1",
+      migration: STEP,
+    });
+
+    expect(observation.migration).toEqual({ phase: "unavailable" });
+    expect(migration.calls).toHaveLength(0);
+    expect(log.lines.map((line) => line.marker)).toContain(
+      "akash_tx_migration_target_unstated"
+    );
+  });
+
+  it("never lets a thrown migration error break the observation", async () => {
+    const { actuator, migration } = build();
+    migration.throws = new Error("kube-apiserver unreachable");
+
+    await expect(
+      actuator.observe({
+        cogniKey: "k1",
+        workload: "toks9",
+        environment: "candidate-a",
+        migration: STEP,
+      })
+    ).resolves.toMatchObject({
+      found: false,
+      migration: { phase: "unavailable" },
+    });
+  });
+
+  it("leaves delete untouched — a teardown must always work", async () => {
+    const { actuator, api, ledger, migration } = build();
+    migration.outcome = "failed";
+    seedAllocated(ledger);
+
     await actuator.delete({ cogniKey: "k1", externalName: "7001" });
     expect(api.releaseCalls).toEqual(["7001"]);
   });
@@ -1163,7 +1158,6 @@ describe("AkashTxActuator identity binding (task.5103)", () => {
       environment: "candidate-a",
       identity: IDENTITY,
       spec: SPEC,
-      migration: REQUIRE,
     });
 
     expect(order).toEqual(["receipt", "cursor", "allocate"]);
@@ -1184,7 +1178,6 @@ describe("AkashTxActuator identity binding (task.5103)", () => {
       environment: "candidate-a",
       identity: IDENTITY,
       spec: SPEC,
-      migration: REQUIRE,
     });
     const spent = api.allocateCalls;
 
@@ -1194,7 +1187,6 @@ describe("AkashTxActuator identity binding (task.5103)", () => {
         environment: "candidate-a",
         identity: OTHER_IDENTITY,
         spec: SPEC,
-        migration: REQUIRE,
       })
     ).rejects.toMatchObject({ code: "identity_conflict" });
 
@@ -1218,7 +1210,6 @@ describe("AkashTxActuator identity binding (task.5103)", () => {
       environment: "candidate-a",
       identity: IDENTITY,
       spec: SPEC,
-      migration: REQUIRE,
     });
     await expect(
       actuator.update({
@@ -1227,7 +1218,6 @@ describe("AkashTxActuator identity binding (task.5103)", () => {
         environment: "candidate-a",
         identity: OTHER_COMPOSITE_IDENTITY,
         spec: SPEC,
-        migration: REQUIRE,
       })
     ).rejects.toMatchObject({ code: "identity_conflict" });
     expect(api.updateCalls).toBe(0);
@@ -1240,7 +1230,6 @@ describe("AkashTxActuator identity binding (task.5103)", () => {
       environment: "candidate-a",
       identity: IDENTITY,
       spec: SPEC,
-      migration: REQUIRE,
     });
     const order: string[] = [];
     const bind = ledger.bindIdentity.bind(ledger);
@@ -1270,7 +1259,6 @@ describe("AkashTxActuator identity binding (task.5103)", () => {
       environment: "candidate-a",
       identity: { ...IDENTITY, compositeGeneration: 9 },
       spec: SPEC,
-      migration: REQUIRE,
     });
 
     expect(order).toEqual([
@@ -1299,7 +1287,6 @@ describe("AkashTxActuator identity binding (task.5103)", () => {
       environment: "candidate-a",
       identity: IDENTITY,
       spec: SPEC,
-      migration: REQUIRE,
     });
     const before = ledger.rows.get("k1");
     const spent = { cursor: api.cursorCalls, allocate: api.allocateCalls };
@@ -1313,7 +1300,6 @@ describe("AkashTxActuator identity binding (task.5103)", () => {
         environment: "candidate-a",
         identity: { ...IDENTITY, compositeGeneration: 9 },
         spec: SPEC,
-        migration: REQUIRE,
       })
     ).rejects.toMatchObject({ code: "ledger_unavailable" });
 
@@ -1339,7 +1325,6 @@ describe("AkashTxActuator identity binding (task.5103)", () => {
         environment: "candidate-a",
         identity: IDENTITY,
         spec: SPEC,
-        migration: REQUIRE,
       })
     ).rejects.toMatchObject({ code: "identity_conflict" });
 
@@ -1356,7 +1341,6 @@ describe("AkashTxActuator identity binding (task.5103)", () => {
       environment: "candidate-a",
       identity: IDENTITY,
       spec: SPEC,
-      migration: REQUIRE,
     });
 
     await expect(
@@ -1366,7 +1350,6 @@ describe("AkashTxActuator identity binding (task.5103)", () => {
         environment: "production",
         identity: IDENTITY,
         spec: SPEC,
-        migration: REQUIRE,
       })
     ).rejects.toMatchObject({ code: "identity_conflict" });
     expect(api.updateCalls).toBe(0);
@@ -1374,11 +1357,10 @@ describe("AkashTxActuator identity binding (task.5103)", () => {
 });
 
 /**
- * The migration gate is fail-CLOSED, so an actuator constructed WITHOUT a prover refuses every
- * `RequireBeforeTransaction` mutation with `migration_unavailable` — and since the Composition
- * lowers that policy on every create/update of a `cogni-node-app-v1` workload, that is EVERY
- * paid create. story.5016: the composition root shipped in exactly that shape, and nothing
- * noticed because no XComputeWorkload had ever existed to be refused.
+ * The release-side migration runner no longer gates anything, but it must still be WIRED: an
+ * actuator built without it reports `migration.phase: "unavailable"` forever and no node's
+ * schema ever advances. story.5016 shipped a composition root that omitted it and nothing
+ * noticed, because no XComputeWorkload had ever existed to be refused.
  *
  * Asserted at the SOURCE level on purpose, mirroring akash-tx-wallet.test.ts. The composition
  * root is a top-level-await process entrypoint — importing it reads projected secret files,
@@ -1407,7 +1389,7 @@ describe("composition root wiring (story.5016)", () => {
     return expect.unreachable("unbalanced AkashTxActuator deps literal");
   }
 
-  it("wires a migration prover — a fail-closed gate with none refuses every paid create", () => {
+  it("wires the release-side migration runner — with none, no node's schema ever advances", () => {
     expect(actuatorDepsLiteral()).toMatch(/\bmigration\s*[,:]/);
   });
 

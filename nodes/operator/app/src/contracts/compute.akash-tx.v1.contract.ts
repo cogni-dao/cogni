@@ -13,10 +13,19 @@
  *   - STRICT_INPUT: every object is strict — an unexpected key is a 400, never a silent drop
  *     of a field the caller believed was honoured.
  *   - KEY_IS_REQUIRED_ON_EVERY_MUTATION: there is no anonymous create.
- *   - MIGRATION_IS_REQUIRED_ON_EVERY_MUTATION: `migration` is a REQUIRED field on create and
- *     update. A caller that does not state its migration precondition gets a 400 — it can
- *     never accidentally inherit an ungated paid lease (bug.5140). `Skip` is the one explicit,
- *     auditable bypass, and it has to be written down.
+ *   - MIGRATION_IS_NOT_A_PAYMENT_PRECONDITION (task.5135): `migration` is NOT a field of the
+ *     paid transaction. Renting compute has nothing to prove about a database, and making a DB
+ *     Job a precondition of a Console POST is what let node toks5 sit with a valid XR, a valid
+ *     digest, and NO LEASE IN ANY ENVIRONMENT while `akash-lease` said "not yet ready" 1044
+ *     times. Migration is now stated on OBSERVE — the unpaid, level-triggered tick — as
+ *     `AkashTxMigrationStepSchema`, and its outcome is REPORTED, never enforced. A workload
+ *     whose schema is missing therefore fails READINESS (bounded by the XRD's
+ *     `bootPolicy.bootDeadlineSeconds`) instead of never being created at all.
+ *   - MIGRATION_ON_MUTATION_IS_DEPRECATED: create/update still ACCEPT a `migration` object so a
+ *     Composition that has not yet been rematerialized cannot 400 the whole fleet mid-rollout
+ *     (the same zero-downtime posture as `leaseEpoch` → `leaseGeneration`). It is parsed and
+ *     IGNORED. Remove the field once every deploy ref carries `migration.policy:
+ *     RequireBeforeServing`.
  *   - IDENTITY_IS_REQUIRED_ON_EVERY_MUTATION: `identity` is a REQUIRED field on create and
  *     update. A caller that will not say WHICH NODE consumes the infrastructure gets a 400 —
  *     it can never accidentally buy an unattributable lease (task.5103). Identity is stated,
@@ -56,30 +65,53 @@ export const AkashTxServiceSpecSchema = z.strictObject({
   expose: z.array(AkashTxExposeSchema).optional(),
 });
 
+/** `sha256:<64 hex>` — the immutable bundle digest a migration is keyed by. */
+const BundleDigestSchema = z
+  .string()
+  .regex(/^sha256:[0-9a-f]{64}$/, "expected a sha256 bundle digest");
+
 /**
- * The caller's migration precondition (bug.5116 order, bug.5140 enforcement). Mirrors the
- * XRD's `spec.migration.policy` plus the facts the actuator needs to PROVE it.
+ * THE RELEASE-SIDE MIGRATION STEP (task.5135). Stated on OBSERVE — the unpaid, level-triggered
+ * tick Crossplane already runs on every reconcile — and NEVER on a paid mutation.
  *
- * A discriminated union, not an object with optional fields: `RequireBeforeTransaction`
- * structurally cannot be sent without the digest and image whose migration must be proven, so
- * an under-specified request is a 400 rather than a silently ungated paid lease. The migration
- * COMMANDS are deliberately absent — a caller-supplied command would let any caller "prove" a
- * migration by passing a no-op; `profile` selects a command set the actuator owns.
+ * The block's PRESENCE is the whole policy: a workload with a database sends it, one without
+ * omits it. There is no `policy` discriminator here on purpose, because the only thing a policy
+ * could still select is "run it or don't", and that is exactly what presence already says. The
+ * XRD keeps `spec.migration.policy` as the operator-facing declaration; the Composition lowers
+ * it to presence-or-absence of this block.
+ *
+ * The migration COMMANDS remain deliberately absent — a caller-supplied command would let any
+ * caller pass a no-op; `profile` selects a command set the actuator owns.
  */
-export const AkashTxMigrationSchema = z.discriminatedUnion("policy", [
-  /** The workload has no database. The only legitimate bypass, and it is explicit. */
-  z.strictObject({ policy: z.literal("Skip") }),
-  z.strictObject({
-    policy: z.literal("RequireBeforeTransaction"),
-    profile: z.literal("cogni-node-app-v1"),
-    bundleDigest: z
-      .string()
-      .regex(/^sha256:[0-9a-f]{64}$/, "expected a sha256 bundle digest"),
-    image: z.string().min(1).max(512),
-    /** True when the app service declares a `DOLTGRES_URL` secret ref. */
-    doltgres: z.boolean(),
-  }),
+export const AkashTxMigrationStepSchema = z.strictObject({
+  profile: z.literal("cogni-node-app-v1"),
+  bundleDigest: BundleDigestSchema,
+  image: z.string().min(1).max(512),
+  /** True when the app service declares a `DOLTGRES_URL` secret ref. */
+  doltgres: z.boolean(),
+});
+
+/** What the release step is doing for this digest right now. Reported, never enforced. */
+export const AkashTxMigrationPhaseSchema = z.enum([
+  "succeeded",
+  "running",
+  "failed",
+  /** The actuator has no migration capability wired, so the step could not be attempted. */
+  "unavailable",
 ]);
+
+/**
+ * DEPRECATED compatibility shape for the create/update wire (task.5135). The actuator parses
+ * and IGNORES it. It remains served only so a Composition rendered before the rematerialize
+ * cannot 400 the fleet mid-rollout — the same zero-downtime posture the XRD uses for
+ * `leaseEpoch` → `leaseGeneration`. New callers must not send it.
+ *
+ * Kept LOOSE on purpose: this is a field on its way out, and strictly re-validating a value
+ * nothing reads would only invent new ways for an old caller to fail.
+ */
+export const AkashTxDeprecatedMigrationSchema = z.object({
+  policy: z.enum(["Skip", "RequireBeforeTransaction", "RequireBeforeServing"]),
+});
 
 /** The provider-agnostic workload contract (mirrors ProvisionSpec). */
 export const AkashTxSpecSchema = z.strictObject({
@@ -124,10 +156,25 @@ const SourceShaSchema = z
   .string()
   .regex(/^[0-9a-f]{40}$/, "expected a full sha");
 
+/**
+ * Observe is the UNPAID tick: no wallet slot, no Console POST, no ledger claim. That is exactly
+ * why the release-side migration step rides here and not on create/update — asking a question
+ * about a database can never be a reason not to rent a computer.
+ */
 export const AkashTxObserveInputSchema = z.strictObject({
   cogniKey: CogniKeySchema,
   externalName: ExternalNameSchema.optional(),
   expectedSourceSha: SourceShaSchema.optional(),
+  migration: AkashTxMigrationStepSchema.optional(),
+  /**
+   * WHOSE database the attached migration step belongs to. Required in practice whenever
+   * `migration` is sent — the actuator refuses to infer either from `cogniKey` or from its own
+   * deployment, because inferring them is how "which environment's DB?" became a payment-plane
+   * question in the first place. Optional on the schema so an observe WITHOUT a migration stays
+   * byte-identical to the pre-task.5135 wire.
+   */
+  workload: ServiceNameSchema.optional(),
+  environment: EnvironmentSchema.optional(),
 });
 
 export const AkashTxCreateInputSchema = z.strictObject({
@@ -135,16 +182,14 @@ export const AkashTxCreateInputSchema = z.strictObject({
   environment: EnvironmentSchema,
   identity: AkashTxIdentitySchema,
   spec: AkashTxSpecSchema,
-  migration: AkashTxMigrationSchema,
+  /** DEPRECATED, parsed and ignored — see `AkashTxDeprecatedMigrationSchema`. */
+  migration: AkashTxDeprecatedMigrationSchema.optional(),
 });
 
 /**
- * An update replaces the SDL in place — it mints no lease — but it is still the call that puts
- * a NEW bundle digest in front of the node's database, which is exactly what bug.5116 ordered.
- * The legacy gate ran before every provider mutation, so this one carries the requirement too.
  * An update replaces the SDL in place and mints no lease, but it is still a mutation of a PAID
- * resource — so it states its identity too, and the actuator refuses it when the durable
- * receipt for the key binds a different node.
+ * resource — so it states its identity, and the actuator refuses it when the durable receipt
+ * for the key binds a different node.
  */
 export const AkashTxUpdateInputSchema = z.strictObject({
   cogniKey: CogniKeySchema,
@@ -152,7 +197,8 @@ export const AkashTxUpdateInputSchema = z.strictObject({
   environment: EnvironmentSchema,
   identity: AkashTxIdentitySchema,
   spec: AkashTxSpecSchema,
-  migration: AkashTxMigrationSchema,
+  /** DEPRECATED, parsed and ignored — see `AkashTxDeprecatedMigrationSchema`. */
+  migration: AkashTxDeprecatedMigrationSchema.optional(),
 });
 
 export const AkashTxDeleteInputSchema = z.strictObject({
@@ -172,6 +218,13 @@ export const AkashTxObserveOutputSchema = z.strictObject({
   resource: AkashTxResourceSchema.optional(),
   serving: z.boolean().optional(),
   recovered: z.boolean().optional(),
+  /**
+   * Outcome of the release-side migration step for this digest, when the caller asked for one.
+   * REPORTED, never enforced: the composite turns a `failed` phase into a named status reason,
+   * and a workload whose schema never arrives fails its boot SLO — which is BOUNDED — instead
+   * of never being created at all, which was not.
+   */
+  migration: z.strictObject({ phase: AkashTxMigrationPhaseSchema }).optional(),
 });
 
 export const AkashTxCreateOutputSchema = AkashTxResourceSchema.extend({
@@ -185,7 +238,8 @@ export const AkashTxErrorOutputSchema = z.strictObject({
   ownerCogniKey: z.string().optional(),
 });
 
-export type AkashTxMigration = z.infer<typeof AkashTxMigrationSchema>;
+export type AkashTxMigrationStep = z.infer<typeof AkashTxMigrationStepSchema>;
+export type AkashTxMigrationPhase = z.infer<typeof AkashTxMigrationPhaseSchema>;
 export type AkashTxIdentity = z.infer<typeof AkashTxIdentitySchema>;
 export type AkashTxObserveInput = z.infer<typeof AkashTxObserveInputSchema>;
 export type AkashTxCreateInput = z.infer<typeof AkashTxCreateInputSchema>;

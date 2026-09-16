@@ -198,9 +198,13 @@ describe("buildComputeWorkloadManifest", () => {
 
     expect(manifest.kind).toBe("XComputeWorkload");
     expect(manifest.apiVersion).toBe("compute.cogni.io/v1alpha1");
-    // Empty-birth ordering is stated, not inherited from the XRD default (bug.5116).
+    // Empty-birth schema policy is stated, not inherited from the XRD default (bug.5116).
+    // `RequireBeforeServing` since task.5135: migrating is a RELEASE step that gates readiness,
+    // never a precondition of the paid Akash transaction. Writing this value is also what moves
+    // the workload off the deprecated `RequireBeforeTransaction` lowering in the Composition,
+    // so every rematerialize migrates one more node onto the decoupled path.
     expect(manifest.spec).toMatchObject({
-      migration: { policy: "RequireBeforeTransaction" },
+      migration: { policy: "RequireBeforeServing" },
       bootPolicy: { onDeadline: "Hold" },
       leaseEpoch: 2,
       dns: { provider: "cloudflare", zoneId: "0".repeat(32) },

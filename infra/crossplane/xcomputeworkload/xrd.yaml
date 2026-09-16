@@ -15,7 +15,7 @@
 #   value-free secret refs      spec.workload.services[].secretRefs[].key  (KEYS ONLY, never values)
 #   command/args                spec.workload.services[].{command,args}
 #   bindings                    spec.workload.services[].bindings
-#   empty-birth migration order spec.migration.policy
+#   empty-birth schema policy   spec.migration.policy (a RELEASE step, never a payment gate)
 #   exact-SHA readiness         status.serving + Ready condition, proved against spec.bundle.source.sha
 #   DNS intent                  spec.dns + status.dns{hostname,target,published}
 #   application-log identity    spec.workload.name + spec.nodeId + spec.environment as lease
@@ -269,22 +269,37 @@ spec:
                       default: false
                 migration:
                   description: >-
-                    Empty-birth ordering. `RequireBeforeTransaction` (the default and the legacy
-                    behaviour, bug.5116) means a completed per-digest DB migration is a
-                    PRECONDITION of every paid transaction, so a fresh node's schemas exist
-                    before its lease does. `Skip` is for workloads with no database at all.
-                    ENFORCED at the paid-transaction seam (bug.5140): the Composition lowers this
-                    into the actuator's required `migration` discriminated union, and a
-                    `RequireBeforeTransaction` create or update is REFUSED until the Job for
-                    spec.bundle.ref has succeeded. The migration COMMANDS never travel — the
-                    runtime profile names a command set the actuator owns, so no caller can
-                    "prove" a migration with a no-op.
+                    Empty-birth schema policy. `RequireBeforeServing` (the default) means the
+                    per-digest DB migration for spec.bundle.ref is RUN AS A RELEASE STEP on
+                    every reconcile tick, and its outcome gates READINESS: a failed migration
+                    surfaces as status.failure.reason MigrationFailed, and a workload whose
+                    schema never arrives cannot serve its exact SHA and so trips
+                    bootPolicy.bootDeadlineSeconds. `Skip` is for workloads with no database.
+
+                    IT DOES NOT GATE PAYMENT (task.5135). bug.5140 made a completed migration a
+                    PRECONDITION of every paid transaction, and that coupling is what let node
+                    toks5 hold a valid XR with a valid digest, never reach the actuator at all,
+                    and never exist in any environment while `akash-lease` reported "not yet
+                    ready" 1044 times — silent and unbounded. A lease is now created regardless
+                    of migration state, so a bad schema fails LOUDLY and within a bounded window
+                    instead of silently never being created. The migration COMMANDS still never
+                    travel — the runtime profile names a command set the actuator owns, so no
+                    caller can run an arbitrary container against the environment's database.
                   type: object
                   properties:
                     policy:
+                      description: >-
+                        `RequireBeforeTransaction` is a DEPRECATED alias, served only for the
+                        task.5135 zero-downtime field migration: XRs already on deploy refs
+                        carry it, and the Composition keeps lowering those onto the actuator's
+                        pre-task.5135 wire so a fleet mid-rollout cannot be refused. It is
+                        NEVER a transaction precondition in the current actuator. The next
+                        rematerialize of any workload writes `RequireBeforeServing`; remove
+                        this value once no deploy ref carries it.
                       type: string
-                      enum: [RequireBeforeTransaction, Skip]
-                      default: RequireBeforeTransaction
+                      enum:
+                        [RequireBeforeServing, RequireBeforeTransaction, Skip]
+                      default: RequireBeforeServing
                 dns:
                   description: >-
                     DNS intent. Absent means "publish status.dns.target but write no record" —
@@ -377,6 +392,21 @@ spec:
                 # commit in spec.bundle.source.sha. The actuator performs the single bounded
                 # probe; this field is the composite's observable copy of that proof.
                 serving: { type: boolean }
+                # THE RELEASE STEP, OBSERVED (task.5135). Where the per-digest DB migration for
+                # spec.bundle.ref got to on the last reconcile tick. It is reported here, and
+                # `failed` becomes status.failure.reason MigrationFailed — but it never stops
+                # the lease from existing, which is the whole point of the field being in
+                # `status` rather than on the paid wire. `unavailable` means the actuator has no
+                # migration capability wired; absent means the workload declared `Skip` (or is
+                # still on the deprecated RequireBeforeTransaction lowering).
+                migration:
+                  type: object
+                  properties:
+                    phase:
+                      {
+                        type: string,
+                        enum: [succeeded, running, failed, unavailable],
+                      }
                 dns:
                   type: object
                   properties:

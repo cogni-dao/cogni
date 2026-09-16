@@ -33,24 +33,24 @@
  *   - SURGE_IS_SAFE_HERE: unlike the ComputeWorkload controller, correctness does not rest on a
  *     Kubernetes Lease. Two live replicas cannot both spend, because the wallet slot is a
  *     partial unique index in Postgres (`akash_tx_allocations_single_writer_idx`).
- *   - MIGRATION_PROVER_IS_WIRED: the actuator's migration gate is fail-CLOSED, and the
- *     Composition lowers `RequireBeforeTransaction` on every create/update of a
- *     `cogni-node-app-v1` workload — so an actuator built without a prover refuses EVERY paid
- *     transaction with `migration_unavailable` (story.5016). The prover is therefore mandatory
- *     here, not optional: it is the SAME `KubernetesMigrationJobAdapter` the ComputeWorkload
- *     controller uses, against the SAME per-digest Job names in this namespace, so the two
- *     lanes cannot disagree about whether a bundle digest has migrated. There is no dormant
- *     variant — a wallet-less actuator has already exited above, so "no credential, no Jobs"
- *     is structurally unreachable at this point.
+ *   - MIGRATION_RUNNER_IS_WIRED_BUT_NEVER_GATES (task.5135): the same
+ *     `KubernetesMigrationJobAdapter` the ComputeWorkload controller uses is still wired here,
+ *     against the SAME per-digest Job names in this namespace, so the two lanes cannot disagree
+ *     about whether a bundle digest has migrated. What changed is WHERE it is consulted: the
+ *     RELEASE step on `observe`, never the paid create/update. An actuator built WITHOUT it no
+ *     longer refuses every paid transaction — it reports `migration.phase: "unavailable"` and
+ *     still mints the lease. Renting compute must not depend on a database being reachable.
  *   - LEAST_KUBERNETES_PRIVILEGE: the ONLY Kubernetes objects this process touches are the
- *     migration Jobs it creates and the Pods it reads to classify a Failed one. Its Role
- *     (infra/k8s/base/akash-tx-actuator/rbac.yaml) grants exactly that and nothing else — no
- *     computeworkloads, no leases, no events, no configmaps. Crossplane still owns every CR.
+ *     migration Jobs it creates on the release tick and the Pods it reads to classify a Failed
+ *     one. Its Role (infra/k8s/base/akash-tx-actuator/rbac.yaml) grants exactly that and
+ *     nothing else — no computeworkloads, no leases, no events, no configmaps. Crossplane still
+ *     owns every CR. FOLLOW-UP: with the paid path no longer touching Kubernetes at all, this
+ *     runner can be lifted out of the wallet-holding process entirely (see task.5135's PR).
  * Side-effects: IO (HTTP listener; Akash Console transactions; Postgres ledger writes;
  *   Kubernetes migration Job create/read/delete in this namespace)
  * Links: @features/compute/akash-tx/akash-tx-http, @features/compute/akash-tx/akash-tx-actuator,
  *   @features/compute/akash-tx/akash-tx-wallet,
- *   @features/compute/akash-tx/akash-tx-migration-gate,
+ *   @features/compute/akash-tx/akash-tx-migration-step,
  *   @adapters/server/compute/kubernetes-migration-job.adapter,
  *   infra/k8s/base/akash-tx-actuator,
  *   infra/crossplane/xcomputeworkload/composition.yaml, task.5102, story.5016

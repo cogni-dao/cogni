@@ -146,12 +146,12 @@ spec:
             {{- $secretName := printf "%s-compute-env-secrets" $slug }}
 
             {{- /*
-              MIGRATION GATE FACTS (bug.5116 order, bug.5140 enforcement). Accumulated while
-              lowering the services below, because the only service that can owe a migration is
-              the one carrying the `cogni-node-app-v1` profile, and the XRD already guarantees
-              there is at most one of those.
+              MIGRATION FACTS (bug.5116 order, task.5135 decoupling). Accumulated while lowering
+              the services below, because the only service that can owe a migration is the one
+              carrying the `cogni-node-app-v1` profile, and the XRD already guarantees there is
+              at most one of those.
             */ -}}
-            {{- $migrationPolicy := dig "migration" "policy" "RequireBeforeTransaction" $spec }}
+            {{- $migrationPolicy := dig "migration" "policy" "RequireBeforeServing" $spec }}
             {{- $appImage := "" }}
             {{- $appDoltgres := false }}
 
@@ -236,28 +236,62 @@ spec:
             {{- $services = append $services $out }}
             {{- end }}
             {{- /*
-              THE MIGRATION PRECONDITION, as @contracts/compute.akash-tx.v1 demands it: a
-              DISCRIMINATED UNION on `policy`, required on every create AND update (an update is
-              still the call that puts a new bundle digest in front of the node's database).
-              `RequireBeforeTransaction` structurally cannot travel without the digest and image
-              whose migration must be proven, so an under-specified request is a 400 rather than
-              a silently ungated paid lease. `Skip` carries NOTHING else — the one explicit,
-              auditable bypass, and it is reached in exactly two ways: the workload declared
-              `policy: Skip`, or it has no `cogni-node-app-v1` service and therefore no database.
+              THE RELEASE-SIDE MIGRATION STEP (task.5135). It rides on OBSERVE — the UNPAID tick
+              — and on nothing else. Buying compute proves nothing about a database, and making
+              a DB Job a precondition of a Console POST is exactly what left node toks5 with a
+              valid XR, a valid image digest, and NO LEASE IN ANY ENVIRONMENT: its migration
+              never ran, so the actuator was never called, and `akash-lease` reported "not yet
+              ready" 1044 times with no alarm. The lease is now created regardless; a workload
+              whose schema is missing cannot serve its exact SHA and trips BOOT_SLO_OR_CLOSE,
+              which is bounded and loud.
+
+              PRESENCE IS THE POLICY. There is no `Skip` member on this wire: a workload with a
+              database sends the block, one without omits it. The step is rendered in exactly one
+              case — `RequireBeforeServing` with a `cogni-node-app-v1` service to migrate.
 
               NO COMMANDS ON THE WIRE. `profile` NAMES a command set the actuator owns. A
-              caller-supplied migration command would let any caller "prove" a migration with a
-              no-op, which would make this gate advisory instead of enforcing.
+              caller-supplied command would let anyone who can reach the actuator run an
+              arbitrary container against the environment's database under its service account.
             */ -}}
-            {{- $migration := dict "policy" "Skip" }}
-            {{- if and (eq $migrationPolicy "RequireBeforeTransaction") (ne $appImage "") }}
+            {{- $migrationStep := dict }}
+            {{- if and (eq $migrationPolicy "RequireBeforeServing") (ne $appImage "") }}
             {{- $bundleDigest := regexFind "sha256:[0-9a-f]{64}$" $spec.bundle.ref }}
             {{- if eq $bundleDigest "" }}
+            {{- fail (printf "XComputeWorkload %s/%s: spec.bundle.ref %q has no sha256 digest to migrate against" $ns $name $spec.bundle.ref) }}
+            {{- end }}
+            {{- $migrationStep = dict "profile" "cogni-node-app-v1" "bundleDigest" $bundleDigest "image" $appImage "doltgres" $appDoltgres }}
+            {{- end }}
+            {{- $hasMigrationStep := gt (len $migrationStep) 0 }}
+
+            {{- /*
+              DEPRECATED LOWERING, kept for the zero-downtime field migration only. XRs already
+              committed to a deploy ref carry `policy: RequireBeforeTransaction`, and the
+              actuator they are reconciled against may still be the pre-task.5135 build that
+              REQUIRES `migration` on every mutation. Dropping the field for those would 400 the
+              whole fleet mid-rollout, so they keep the old wire byte-for-byte. The current
+              actuator parses and IGNORES it.
+
+              No migration runs on this path, and that is safe: a workload only reaches a NEW
+              bundle digest by being rematerialized, and any rematerialize writes
+              `RequireBeforeServing`. An XR still on the old value is pinned to a digest whose
+              migration already succeeded.
+            */ -}}
+            {{- $legacyMigration := dict }}
+            {{- if eq $migrationPolicy "RequireBeforeTransaction" }}
+            {{- $legacyMigration = dict "policy" "Skip" }}
+            {{- if ne $appImage "" }}
+            {{- $legacyDigest := regexFind "sha256:[0-9a-f]{64}$" $spec.bundle.ref }}
+            {{- if eq $legacyDigest "" }}
             {{- fail (printf "XComputeWorkload %s/%s: spec.bundle.ref %q has no sha256 digest to prove a migration against" $ns $name $spec.bundle.ref) }}
             {{- end }}
-            {{- $migration = dict "policy" "RequireBeforeTransaction" "profile" "cogni-node-app-v1" "bundleDigest" $bundleDigest "image" $appImage "doltgres" $appDoltgres }}
+            {{- $legacyMigration = dict "policy" "RequireBeforeTransaction" "profile" "cogni-node-app-v1" "bundleDigest" $legacyDigest "image" $appImage "doltgres" $appDoltgres }}
             {{- end }}
-            {{- $payload := dict "cogniKey" $cogniKey "environment" $env "identity" $identity "spec" (dict "name" $slug "services" $services) "migration" $migration }}
+            {{- end }}
+            {{- $hasLegacyMigration := gt (len $legacyMigration) 0 }}
+
+            {{- $payload := dict "cogniKey" $cogniKey "environment" $env "identity" $identity "spec" (dict "name" $slug "services" $services) }}
+            {{- if $hasMigrationStep }}{{ $_ := set $payload "migrationStep" $migrationStep }}{{ end }}
+            {{- if $hasLegacyMigration }}{{ $_ := set $payload "migration" $legacyMigration }}{{ end }}
 
             {{- /* ---------- observed state ---------- */ -}}
             {{- $observedResources := default (dict) .observed.resources }}
@@ -294,6 +328,16 @@ spec:
             {{- $serving := dig "serving" false $resp }}
             {{- $active := and $found (eq $state "active") }}
             {{- $closed := and $found (eq $state "closed") }}
+
+            {{- /*
+              THE RELEASE STEP, READ BACK (task.5135). Only an OBSERVE answer carries a phase —
+              a create/update response does not — so the last seen phase is LATCHED through the
+              ticks that do not report one. Without the latch, status.migration would blink out
+              on exactly the responses an operator is most likely to be staring at.
+            */ -}}
+            {{- $prevMigrationPhase := dig "status" "migration" "phase" "" $xr }}
+            {{- $migrationPhase := dig "migration" "phase" $prevMigrationPhase $resp }}
+            {{- $migrationFailed := eq $migrationPhase "failed" }}
 
             {{- /*
               LATCHED observed bundle. Only a workload that actually SERVED its exact source sha
@@ -405,19 +449,36 @@ spec:
                   baseUrl: {{ $baseUrl | quote }}
                   body: {{ toJson $payload | quote }}
                 mappings:
+                  # OBSERVE is the level-triggered tick, and therefore the ONE action that
+                  # carries the migration. `workload` + `environment` travel with it because the
+                  # actuator refuses to infer WHOSE database a digest belongs to — inferring it
+                  # is how "which environment's DB?" became a payment-plane question at all.
                   - action: OBSERVE
                     method: POST
                     url: (.payload.baseUrl + "/v1/akash/observe")
                     body: |
                       {
                         cogniKey: .payload.body.cogniKey,
-                        expectedSourceSha: {{ $desiredSha | quote }}
+                        expectedSourceSha: {{ $desiredSha | quote }}{{ if $hasMigrationStep }},
+                        workload: .payload.body.spec.name,
+                        environment: .payload.body.environment,
+                        migration: .payload.body.migrationStep{{ end }}
                       }
+                  # The PAID transaction. Its body is enumerated rather than `.payload.body`
+                  # verbatim so a field added for another action can never leak onto the wire
+                  # that spends money — `migrationStep` is exactly such a field, and the create
+                  # contract is a strict object that would 400 on it.
                   - action: CREATE
                     method: POST
                     url: (.payload.baseUrl + "/v1/akash/create")
                     body: |
-                      .payload.body
+                      {
+                        cogniKey: .payload.body.cogniKey,
+                        environment: .payload.body.environment,
+                        identity: .payload.body.identity,
+                        spec: .payload.body.spec{{ if $hasLegacyMigration }},
+                        migration: .payload.body.migration{{ end }}
+                      }
                   - action: UPDATE
                     method: POST
                     url: (.payload.baseUrl + "/v1/akash/update")
@@ -427,8 +488,8 @@ spec:
                         externalName: .response.body.resource.externalName,
                         environment: .payload.body.environment,
                         identity: .payload.body.identity,
-                        spec: .payload.body.spec,
-                        migration: .payload.body.migration
+                        spec: .payload.body.spec{{ if $hasLegacyMigration }},
+                        migration: .payload.body.migration{{ end }}
                       }
                   - action: REMOVE
                     method: POST
@@ -561,8 +622,23 @@ spec:
             {{- $phase = "Failed" }}
             {{- $failReason = "BootDeadlineExceeded" }}
             {{- $failMessage = printf "workload did not serve %s within %ds; spend continues because bootPolicy.onDeadline is Hold" (substr 0 12 $desiredSha) $bootDeadlineSeconds }}
+            {{- else if and (ne $refusalCode "") (not $refusalRetryable) }}
+            {{- $phase = "Failed" }}
+            {{- $failReason = $refusalCode }}
+            {{- $failMessage = substr 0 256 $refusalMessage }}
+            {{- else if $migrationFailed }}
+            {{- /*
+              A terminal migration failure OUTRANKS a retryable refusal on purpose. The refusal
+              says "come back later"; this says "later will not help", and burying the second
+              behind the first is how a stall stays invisible. It does NOT outrank a terminal
+              refusal, which is about the action actually being attempted, nor the boot deadline,
+              which is about money.
+            */ -}}
+            {{- $phase = "Failed" }}
+            {{- $failReason = "MigrationFailed" }}
+            {{- $failMessage = printf "database migration for bundle digest of %s failed; a new bundle digest is required. The lease is unaffected - this gates readiness, not payment" (substr 0 12 $desiredSha) }}
             {{- else if ne $refusalCode "" }}
-            {{- $phase = ternary "Progressing" "Failed" $refusalRetryable }}
+            {{- $phase = "Progressing" }}
             {{- $failReason = $refusalCode }}
             {{- $failMessage = substr 0 256 $refusalMessage }}
             {{- else if $terminallyClosed }}
@@ -577,6 +653,10 @@ spec:
               phase: {{ $phase | quote }}
               serving: {{ and $active $serving }}
               bootDeadlineAt: {{ $bootDeadlineAt | quote }}
+              {{- if ne $migrationPhase "" }}
+              migration:
+                phase: {{ $migrationPhase | quote }}
+              {{- end }}
               {{- if $hasServedDesired }}
               observedBundle:
                 ref: {{ $spec.bundle.ref | quote }}

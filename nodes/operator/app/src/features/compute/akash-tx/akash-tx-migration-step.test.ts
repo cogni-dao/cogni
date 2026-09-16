@@ -2,15 +2,14 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `@features/compute/akash-tx/akash-tx-migration-gate.test`
- * Purpose: Pin the gate that makes bug.5116's ordering structural for a Crossplane-reconciled
- *   workload (bug.5140) — only a PROVEN migration passes, every other outcome refuses, and the
- *   per-digest migration contract handed to the prover is byte-identical to the one the frozen
- *   controller used.
- * Scope: Unit tests over a fake prover. Touches no Kubernetes API, no Akash Console, no DB.
- * Invariants: no refusal is silent; no unproven state is treated as proven.
+ * Module: `@features/compute/akash-tx/akash-tx-migration-step.test`
+ * Purpose: Pin the RELEASE step that replaced the pre-transaction gate (task.5135) — every
+ *   outcome is a PHASE and none of them throws, and the per-digest migration contract handed to
+ *   the runner is still byte-identical to the one the frozen controller used.
+ * Scope: Unit tests over a fake runner. Touches no Kubernetes API, no Akash Console, no DB.
+ * Invariants: no outcome is silent; NO outcome is a refusal.
  * Side-effects: none
- * Links: ./akash-tx-migration-gate, bug.5116, bug.5140
+ * Links: ./akash-tx-migration-step, bug.5116, bug.5140, task.5135
  * @internal
  */
 
@@ -18,27 +17,23 @@ import { describe, expect, it } from "vitest";
 
 import type {
   AkashTxMigrationPort,
-  AkashTxMigrationRequirement,
+  AkashTxMigrationStep,
   ComputeWorkloadMigrationInput,
 } from "@/ports";
-import { AkashTxError } from "@/ports";
 
 import type { AkashTxLogger } from "./akash-tx-actuator";
 import {
   cogniNodeAppMigrationPhases,
-  enforceMigrationGate,
-} from "./akash-tx-migration-gate";
+  runMigrationStep,
+} from "./akash-tx-migration-step";
 
 const DIGEST = `sha256:${"c".repeat(64)}`;
 const IMAGE = `ghcr.io/cogni-dao/toks9@sha256:${"d".repeat(64)}`;
 
-function requirement(
-  overrides: Partial<
-    Extract<AkashTxMigrationRequirement, { policy: "RequireBeforeTransaction" }>
-  > = {}
-): AkashTxMigrationRequirement {
+function step(
+  overrides: Partial<AkashTxMigrationStep> = {}
+): AkashTxMigrationStep {
   return {
-    policy: "RequireBeforeTransaction",
     profile: "cogni-node-app-v1",
     bundleDigest: DIGEST,
     image: IMAGE,
@@ -76,35 +71,31 @@ function recordingLogger(): AkashTxLogger & {
 }
 
 const INPUT = {
-  operation: "create" as const,
   cogniKey: "xcw:cogni-candidate-a:node-uuid:0",
   environment: "candidate-a",
   workload: "toks9",
 };
 
-describe("enforceMigrationGate", () => {
-  it("passes a proven digest and says so", async () => {
+describe("runMigrationStep", () => {
+  it("reports a succeeded digest and says so", async () => {
     const migration = new FakeMigration();
     const log = recordingLogger();
 
     await expect(
-      enforceMigrationGate(
-        { migration, log },
-        { ...INPUT, requirement: requirement() }
-      )
-    ).resolves.toBeUndefined();
+      runMigrationStep({ migration, log }, { ...INPUT, step: step() })
+    ).resolves.toBe("succeeded");
 
     expect(migration.calls).toHaveLength(1);
     expect(log.lines.map((line) => line.marker)).toContain(
-      "akash_tx_migration_proven"
+      "akash_tx_migration_succeeded"
     );
   });
 
-  it("hands the prover the SAME per-digest contract the legacy controller used", async () => {
+  it("hands the runner the SAME per-digest contract the legacy controller used", async () => {
     const migration = new FakeMigration();
-    await enforceMigrationGate(
+    await runMigrationStep(
       { migration, log: recordingLogger() },
-      { ...INPUT, requirement: requirement({ doltgres: true }) }
+      { ...INPUT, step: step({ doltgres: true }) }
     );
 
     expect(migration.calls[0]).toEqual({
@@ -118,61 +109,68 @@ describe("enforceMigrationGate", () => {
     });
   });
 
-  it("refuses a running migration with a retryable code, before it answers", async () => {
+  it("ENVIRONMENT_IS_THE_WORKLOAD'S: the secret and slug come from the workload, not the actuator", async () => {
+    // A candidate-a workload must migrate candidate-a's database. The runner is told which
+    // workload and which environment; it never substitutes its own deployment's identity.
+    const migration = new FakeMigration();
+    await runMigrationStep(
+      { migration, log: recordingLogger() },
+      { ...INPUT, environment: "production", workload: "toks5", step: step() }
+    );
+
+    expect(migration.calls[0]).toMatchObject({
+      nodeSlug: "toks5",
+      environment: "production",
+      secretName: "toks5-compute-env-secrets",
+    });
+  });
+
+  it("reports a running migration WITHOUT throwing (task.5135)", async () => {
+    // This is the falsifiable heart of the change. The pre-task.5135 gate threw
+    // `migration_pending` here, which is what stopped toks5's lease from ever being created.
     const migration = new FakeMigration();
     migration.outcome = "running";
     const log = recordingLogger();
 
     await expect(
-      enforceMigrationGate(
-        { migration, log },
-        { ...INPUT, requirement: requirement() }
-      )
-    ).rejects.toMatchObject({ code: "migration_pending" });
+      runMigrationStep({ migration, log }, { ...INPUT, step: step() })
+    ).resolves.toBe("running");
 
-    // bug.5115: the log line exists and carries the digest that is holding the workload up.
+    // bug.5115: the log line exists and carries the digest the workload is waiting on.
     expect(log.lines).toEqual([
       {
-        level: "warn",
-        marker: "akash_tx_migration_pending",
+        level: "info",
+        marker: "akash_tx_migration_running",
         fields: expect.objectContaining({
           bundleDigest: DIGEST,
           workload: "toks9",
-          operation: "create",
           cogniKey: INPUT.cogniKey,
         }),
       },
     ]);
   });
 
-  it("refuses a failed migration terminally", async () => {
+  it("reports a failed migration WITHOUT throwing, and loudly", async () => {
     const migration = new FakeMigration();
     migration.outcome = "failed";
     const log = recordingLogger();
 
     await expect(
-      enforceMigrationGate(
-        { migration, log },
-        { ...INPUT, requirement: requirement() }
-      )
-    ).rejects.toMatchObject({ code: "migration_failed" });
+      runMigrationStep({ migration, log }, { ...INPUT, step: step() })
+    ).resolves.toBe("failed");
     expect(log.lines.map((line) => line.marker)).toEqual([
       "akash_tx_migration_failed",
     ]);
   });
 
-  it("refuses when it cannot prove the state either way", async () => {
+  it("reports `unavailable` when it cannot determine the state either way", async () => {
     const migration = new FakeMigration();
     migration.throws = new Error("kube-apiserver unreachable");
     const log = recordingLogger();
 
-    const error = await enforceMigrationGate(
-      { migration, log },
-      { ...INPUT, requirement: requirement() }
-    ).catch((cause: unknown) => cause);
-
-    expect(error).toBeInstanceOf(AkashTxError);
-    expect(error).toMatchObject({ code: "migration_unavailable" });
+    await expect(
+      runMigrationStep({ migration, log }, { ...INPUT, step: step() })
+    ).resolves.toBe("unavailable");
     expect(log.lines[0]).toMatchObject({
       marker: "akash_tx_migration_unavailable",
       fields: expect.objectContaining({
@@ -181,31 +179,16 @@ describe("enforceMigrationGate", () => {
     });
   });
 
-  it("refuses — never passes — when no prover is wired at all", async () => {
-    // An actuator with no migration capability cannot tell an empty database from a migrated
-    // one. Fail-open here IS the bug this gate exists to close.
+  it("reports `unavailable` — never throws — when no runner is wired at all", async () => {
+    // An actuator with no migration capability used to refuse EVERY paid transaction. It now
+    // says so and lets the lease exist; readiness is what will notice the missing schema.
     const log = recordingLogger();
 
     await expect(
-      enforceMigrationGate({ log }, { ...INPUT, requirement: requirement() })
-    ).rejects.toMatchObject({ code: "migration_unavailable" });
+      runMigrationStep({ log }, { ...INPUT, step: step() })
+    ).resolves.toBe("unavailable");
     expect(log.lines.map((line) => line.marker)).toEqual([
       "akash_tx_migration_capability_missing",
-    ]);
-  });
-
-  it("lets Skip through, but never silently", async () => {
-    const migration = new FakeMigration();
-    const log = recordingLogger();
-
-    await enforceMigrationGate(
-      { migration, log },
-      { ...INPUT, requirement: { policy: "Skip" } }
-    );
-
-    expect(migration.calls).toHaveLength(0);
-    expect(log.lines.map((line) => line.marker)).toEqual([
-      "akash_tx_migration_skipped",
     ]);
   });
 });
