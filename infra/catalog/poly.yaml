@@ -15,8 +15,9 @@ production_branch: deploy/production-poly
 # NODE_FORMATION_ENVS; this list is the catalog twin so render-node-appset.sh
 # renders exactly the births appset.ts generates. Trimming a node's reach is a
 # later catalog edit (drop an env here) once its envs are provisioned.
-# story.5016 production cutover: preview slot retired (preview has no funded Akash
-# account and gets no actuator; its lease on the shared account was closed).
+# story.5016 production cutover: preview slot remains retired while task.5129 stages
+# and live-proves the Preview Crossplane rail. A second PR re-adds only this slot
+# after dormancy proof; the old preview lease on the shared test account is closed.
 envs: [production]
 deployment_provider:
   production: akash
