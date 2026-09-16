@@ -18,12 +18,17 @@
  */
 
 const FALLBACK_INTERVAL_MS = 10 * 60 * 1000;
+// Before the FIRST success, retry fast: readiness (and thus the public origin during a
+// rollout that overlaps a pod death) waits on this. A transient OpenFGA/App hiccup must
+// cost seconds, not a 10-minute tick (bug.5164 second finding, 2026-09-15 502 window).
+const PRE_SUCCESS_RETRY_MS = 15 * 1000;
 
 let _started = false;
 let _running: Promise<void> | null = null;
 let _rerunRequested = false;
 let _firstSuccess: Promise<void> | null = null;
 let _resolveFirstSuccess: (() => void) | null = null;
+let _fallbackTimer: ReturnType<typeof setInterval> | null = null;
 
 /**
  * Start an immediate reconcile plus the missed-trigger fallback, once per process.
@@ -37,11 +42,18 @@ export function startCatalogRegistryReconcileOnBoot(): Promise<void> {
     _resolveFirstSuccess = resolve;
   });
   triggerCatalogRegistryReconcile();
-  const timer = setInterval(
+  // FALLBACK means fallback: the interval exists only to retry until the FIRST success.
+  // sourceRef is the immutable APP_BUILD_SHA, so a successful projection can never change
+  // within one deploy — yet this interval previously ran forever, re-reading the whole
+  // catalog through the GitHub App and re-writing identical OpenFGA owner tuples every
+  // 10 minutes. That perpetual churn drove OpenFGA write contention (bug.5113 class) and
+  // was the allocation treadmill behind the operator's hourly V8 heap OOM (bug.5164).
+  // runReconcile() clears the timer on first success.
+  _fallbackTimer = setInterval(
     triggerCatalogRegistryReconcile,
     FALLBACK_INTERVAL_MS
   );
-  timer.unref();
+  _fallbackTimer.unref();
   return _firstSuccess;
 }
 
@@ -58,7 +70,15 @@ export function triggerCatalogRegistryReconcile(): void {
 
   _running = runReconcile()
     .catch(() => {
-      // The job records the error. The interval (or another trigger) retries.
+      // The job records the error. Until first success, retry fast — readiness waits on
+      // us; after first success the (self-clearing) fallback interval is the only driver.
+      if (_resolveFirstSuccess) {
+        const t = setTimeout(
+          triggerCatalogRegistryReconcile,
+          PRE_SUCCESS_RETRY_MS
+        );
+        t.unref();
+      }
     })
     .finally(() => {
       _running = null;
@@ -77,6 +97,10 @@ async function runReconcile(): Promise<void> {
   await runCatalogNodeRegistryReconcileJob();
   _resolveFirstSuccess?.();
   _resolveFirstSuccess = null;
+  if (_fallbackTimer) {
+    clearInterval(_fallbackTimer);
+    _fallbackTimer = null;
+  }
 }
 
 function isTestRuntime(): boolean {
