@@ -5,7 +5,9 @@
  * Module: `@adapters/server/compute/akash-tx-allocation-ledger.adapter`
  * Purpose: Durable custody of "we may have paid" — the Postgres implementation of the Akash
  *   allocation ledger behind the transaction actuator (task.5095). Holds the wallet-wide
- *   create slot and the pre-transaction cursor that makes a lost Console response recoverable.
+ *   create slot and the pre-transaction cursor that makes a lost Console response recoverable,
+ *   and lets a receipt whose transaction provably left nothing billing settle itself and be
+ *   retried under the same key (bug.5192).
  * Scope: Reads/writes akash_tx_allocations. Contains no provider IO, no recovery policy, and
  *   no reconciliation — the actuator decides, the database enforces.
  * Invariants:
@@ -25,9 +27,15 @@
  *   - IDENTITY_IS_WRITE_ONCE: node_id and composite_uid are written only by the claiming
  *     INSERT and appear in no UPDATE, so a receipt can never be re-pointed at another node.
  *     composite_generation advances with `greatest`, never backwards (task.5103).
- *   - NO_TIME_BASED_RELEASE: nothing here releases a slot on a timer. An unresolved
- *     allocation stays held and loudly blocks, because releasing without evidence is how you
- *     pay twice (bug.5115 is fixed by key-addressable resolution, not by expiry).
+ *   - NO_TIME_BASED_RELEASE: nothing here releases a slot on a timer. `listStalePreparing`
+ *     REPORTS age and settles nothing; only `fail()` settles, and only for a receipt that
+ *     never bound a handle, because releasing without evidence is how you pay twice (bug.5115
+ *     is fixed by key-addressable resolution, not by expiry).
+ *   - SETTLED_WITHOUT_A_HANDLE_IS_RETRYABLE: `claim` re-opens a receipt that is `failed` with
+ *     `external_name IS NULL` for the SAME identity, because that state is only ever written
+ *     with proof that nothing is billing — there is no spend to double-pay. A receipt that DID
+ *     bind a handle stays terminally `settled`. Collapsing those two into one terminal state
+ *     is what turned a single crashed create into a 33h account-wide outage (bug.5192).
  * Side-effects: IO (Postgres via the injected app-role Drizzle client)
  * Links: @ports/akash-tx.port, features/compute/akash-tx/akash-tx-actuator.ts,
  *   features/compute/akash-tx/akash-tx-wallet.ts (resolves the wallet scope this serializes),
@@ -43,6 +51,7 @@ import type {
   AkashTxAllocationLedgerPort,
   AkashTxAllocationRecord,
   AkashTxAllocationState,
+  AkashTxStaleAllocation,
   AkashTxWorkloadIdentity,
 } from "@/ports";
 import { akashTxAllocations } from "@/shared/db/schema";
@@ -158,10 +167,23 @@ export class DrizzleAkashTxAllocationLedger
         )
         .for("update")
         .limit(1);
-      if (existing) {
-        return existing.state === "preparing"
-          ? { state: "owned" as const, record: toRecord(existing) }
-          : { state: "settled" as const, record: toRecord(existing) };
+      if (existing && existing.state === "preparing") {
+        return { state: "owned" as const, record: toRecord(existing) };
+      }
+      // A receipt that bound a handle is terminal forever (HANDLE_IS_WRITE_ONCE). One settled
+      // `failed` with NO handle is the opposite case: it was written WITH proof that nothing is
+      // billing, so there is nothing to double-pay and the key may take a clean slot again.
+      // Identity must still match: re-opening a receipt bound to another node would move spend
+      // attribution, so a mismatch stays `settled` and the actuator raises identity_conflict.
+      const reclaimable =
+        existing !== undefined &&
+        existing.state === "failed" &&
+        existing.externalName === null &&
+        existing.nodeId === input.identity.nodeId &&
+        existing.environment === input.environment &&
+        existing.compositeUid === input.identity.compositeUid;
+      if (existing && !reclaimable) {
+        return { state: "settled" as const, record: toRecord(existing) };
       }
 
       const [holder] = await tx
@@ -176,6 +198,38 @@ export class DrizzleAkashTxAllocationLedger
         .limit(1);
       if (holder) {
         return { state: "blocked" as const, ownerCogniKey: holder.cogniKey };
+      }
+
+      if (reclaimable) {
+        const [reopened] = await tx
+          .update(akashTxAllocations)
+          .set({
+            state: "preparing",
+            // The previous attempt's baseline described a transaction that is now settled.
+            // Carrying it forward would point the next recovery scan at the wrong high-water
+            // mark and make an unrelated later deployment look adoptable.
+            allocationCursor: null,
+            failureCode: null,
+            settledAt: null,
+            workload: input.workload,
+            compositeGeneration: sql`greatest(${akashTxAllocations.compositeGeneration}, ${input.identity.compositeGeneration}::int)`,
+            updatedAt: sql`now()`,
+          })
+          .where(
+            and(
+              eq(akashTxAllocations.walletScope, this.walletScope),
+              eq(akashTxAllocations.cogniKey, input.cogniKey),
+              // Re-assert the proof conditions inside the write: concurrent state can only
+              // have moved AWAY from "settled with no handle", never back into it.
+              eq(akashTxAllocations.state, "failed"),
+              sql`${akashTxAllocations.externalName} is null`
+            )
+          )
+          .returning(SELECTION);
+        if (!reopened) {
+          throw new Error("akash_tx_allocations re-claim returned no row");
+        }
+        return { state: "claimed" as const, record: toRecord(reopened) };
       }
 
       const [inserted] = await tx
@@ -317,6 +371,53 @@ export class DrizzleAkashTxAllocationLedger
     }
   }
 
+  /**
+   * Receipts that have held the wallet slot longer than any single transaction can take.
+   * A pure read that decides nothing: age makes a row eligible to be INVESTIGATED, never
+   * settled (NO_TIME_BASED_RELEASE). Oldest first and hard-limited, so one pass is bounded.
+   */
+  async listStalePreparing(input: {
+    olderThanMs: number;
+    limit: number;
+  }): Promise<readonly AkashTxStaleAllocation[]> {
+    const db = await this.getDb();
+    const rows = await db
+      .select({
+        cogniKey: akashTxAllocations.cogniKey,
+        allocationCursor: akashTxAllocations.allocationCursor,
+        // Age is computed BY POSTGRES: the actuator's clock is not the ledger's clock, and a
+        // skewed pod must not be able to declare a fresh receipt stale.
+        heldForMs: sql<number>`floor(extract(epoch from (now() - ${akashTxAllocations.updatedAt})) * 1000)::int`,
+      })
+      .from(akashTxAllocations)
+      .where(
+        and(
+          eq(akashTxAllocations.walletScope, this.walletScope),
+          eq(akashTxAllocations.state, "preparing"),
+          sql`${akashTxAllocations.externalName} is null`,
+          sql`${akashTxAllocations.updatedAt} < now() - make_interval(secs => ${input.olderThanMs / 1000})`
+        )
+      )
+      .orderBy(akashTxAllocations.updatedAt)
+      .limit(input.limit);
+    return rows.map((row) => ({
+      cogniKey: row.cogniKey,
+      ...(row.allocationCursor
+        ? { allocationCursor: row.allocationCursor }
+        : {}),
+      heldForMs: Number(row.heldForMs),
+    }));
+  }
+
+  /**
+   * Settle a receipt that never bound a handle, releasing the wallet-wide slot.
+   *
+   * The WHERE clause is the half of the contract this layer can enforce: `preparing` AND
+   * `external_name is null`, so a recorded paid handle can never be erased by a failure path.
+   * The other half — positive evidence that nothing is billing — belongs to the caller, and is
+   * why every call site either has no cursor (provably pre-transaction) or a Console read-back
+   * proving the deployment closed.
+   */
   async fail(input: { cogniKey: string; failureCode: string }): Promise<void> {
     const db = await this.getDb();
     await db

@@ -9,10 +9,11 @@
  * Scope: DrizzleAkashTxAllocationLedger over akash_tx_allocations via testcontainers. Does
  *   NOT touch the Akash Console, a wallet, or any provider.
  * Invariants: WALLET_SINGLE_WRITER, HANDLE_IS_WRITE_ONCE, PREPARE_REQUIRES_OWNERSHIP,
- *   IDENTITY_BEFORE_TRANSACTION, IDENTITY_IS_WRITE_ONCE.
+ *   IDENTITY_BEFORE_TRANSACTION, IDENTITY_IS_WRITE_ONCE,
+ *   SETTLED_WITHOUT_A_HANDLE_IS_RETRYABLE, NO_TIME_BASED_RELEASE (bug.5192).
  * Side-effects: IO (Postgres via testcontainers)
  * Links: src/adapters/server/compute/akash-tx-allocation-ledger.adapter.ts, task.5095,
- *   task.5103
+ *   task.5103, bug.5192
  * @internal
  */
 
@@ -190,6 +191,121 @@ describe("DrizzleAkashTxAllocationLedger (Component)", () => {
       identity: IDENTITY,
     });
     expect(next.state).toBe("claimed");
+  });
+
+  it("re-claims a receipt settled WITHOUT a handle, under the same key", async () => {
+    // bug.5192: `failed` + `external_name IS NULL` is only ever written with proof that
+    // nothing is billing, so there is no spend to double-pay. Before this, the only escape
+    // from a crashed create was a human bumping `lease_epoch` in the catalog.
+    await ledger.claim({
+      cogniKey: "k1",
+      workload: "toks9",
+      environment: "candidate-a",
+      identity: IDENTITY,
+    });
+    await ledger.prepare({ cogniKey: "k1", allocationCursor: "7000" });
+    await ledger.fail({ cogniKey: "k1", failureCode: "allocation_rolled_back" });
+
+    const again = await ledger.claim({
+      cogniKey: "k1",
+      workload: "toks9",
+      environment: "candidate-a",
+      identity: IDENTITY,
+    });
+
+    expect(again.state).toBe("claimed");
+    const row = await ledger.read({ cogniKey: "k1" });
+    expect(row).toMatchObject({ state: "preparing" });
+    // The stale baseline MUST be cleared: reusing it would point the next recovery scan at a
+    // high-water mark that predates a settled transaction.
+    expect(row?.allocationCursor).toBeUndefined();
+    // …and it is a real slot: the wallet is serialized behind it again.
+    const other = await ledger.claim({
+      cogniKey: "k2",
+      workload: "toks9",
+      environment: "candidate-a",
+      identity: IDENTITY,
+    });
+    expect(other).toMatchObject({ state: "blocked", ownerCogniKey: "k1" });
+  });
+
+  it("never re-claims a receipt that bound a handle, however it was settled", async () => {
+    await ledger.claim({
+      cogniKey: "k1",
+      workload: "toks9",
+      environment: "candidate-a",
+      identity: IDENTITY,
+    });
+    await ledger.prepare({ cogniKey: "k1", allocationCursor: "7000" });
+    await ledger.recordAllocation({ cogniKey: "k1", externalName: "7001" });
+    await ledger.markReleased({ cogniKey: "k1" });
+
+    expect(
+      await ledger.claim({
+        cogniKey: "k1",
+        workload: "toks9",
+        environment: "candidate-a",
+        identity: IDENTITY,
+      })
+    ).toMatchObject({ state: "settled", record: { externalName: "7001" } });
+  });
+
+  it("refuses to re-claim a settled receipt for a DIFFERENT node", async () => {
+    await ledger.claim({
+      cogniKey: "k1",
+      workload: "toks9",
+      environment: "candidate-a",
+      identity: IDENTITY,
+    });
+    await ledger.fail({ cogniKey: "k1", failureCode: "allocation_rolled_back" });
+
+    // Re-opening under another identity would move spend attribution; it stays `settled` so
+    // the actuator raises identity_conflict instead.
+    const hijack = await ledger.claim({
+      cogniKey: "k1",
+      workload: "toks9",
+      environment: "candidate-a",
+      identity: { ...IDENTITY, nodeId: OTHER_NODE_ID },
+    });
+    expect(hijack).toMatchObject({
+      state: "settled",
+      record: { identity: { nodeId: NODE_ID } },
+    });
+  });
+
+  it("lists only aged, handle-less `preparing` receipts as stale", async () => {
+    await ledger.claim({
+      cogniKey: "k-fresh",
+      workload: "toks9",
+      environment: "candidate-a",
+      identity: IDENTITY,
+    });
+
+    // Nothing is stale yet: age is measured by POSTGRES, not by the caller's clock.
+    expect(await ledger.listStalePreparing({ olderThanMs: 1000, limit: 10 }))
+      .toEqual([]);
+
+    await db
+      .update(akashTxAllocations)
+      .set({ updatedAt: sql`now() - interval '2 hours'` })
+      .where(eq(akashTxAllocations.cogniKey, "k-fresh"));
+
+    const stale = await ledger.listStalePreparing({
+      olderThanMs: 900_000,
+      limit: 10,
+    });
+    expect(stale).toHaveLength(1);
+    expect(stale[0]?.cogniKey).toBe("k-fresh");
+    expect(stale[0]?.heldForMs).toBeGreaterThan(900_000);
+
+    // A recorded handle takes the row out of scope entirely — it is not stuck, it is paid.
+    await ledger.recordAllocation({
+      cogniKey: "k-fresh",
+      externalName: "7001",
+    });
+    expect(
+      await ledger.listStalePreparing({ olderThanMs: 900_000, limit: 10 })
+    ).toEqual([]);
   });
 
   it("binds node identity in the very row that opens the wallet slot", async () => {

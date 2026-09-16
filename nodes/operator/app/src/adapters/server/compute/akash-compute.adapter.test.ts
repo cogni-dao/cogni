@@ -79,6 +79,12 @@ interface HarnessOpts {
   endpoints?: (dseq: string) => readonly string[];
   /** Whether Console deployment status is readable. Defaults to true. */
   statusAvailable?: boolean;
+  /**
+   * Whether a DELETE actually makes the deployment read back as `closed`. `false` models the
+   * case the rollback path must NOT treat as proof: the close was attempted, the read-back
+   * still says active. Defaults to true.
+   */
+  closeIsVerifiable?: boolean;
 }
 
 /**
@@ -90,6 +96,7 @@ function harness(opts: HarnessOpts = {}) {
   const waves = new Map<string, number>();
   const leased: { dseq: string; provider: string }[] = [];
   const deletes: string[] = [];
+  const closed = new Set<string>();
   const createBodies: { data: { sdl: string; deposit: number } }[] = [];
   const fetchImpl = vi.fn<typeof fetch>(async (url, init) => {
     const u = String(url);
@@ -120,6 +127,10 @@ function harness(opts: HarnessOpts = {}) {
     }
     if (method === "DELETE") {
       deletes.push(u);
+      const closedDseq = u.match(/\/v1\/deployments\/(\d+)$/)?.[1];
+      // Console stops reporting a deleted deployment as active. Modelling that is what lets
+      // the close-then-VERIFY read-back mean anything (bug.5189 CLOSE_BEFORE_CLEAR).
+      if (closedDseq && opts.closeIsVerifiable !== false) closed.add(closedDseq);
       return jsonResponse({ data: { success: true } });
     }
     if (u.endsWith("/version")) {
@@ -142,6 +153,11 @@ function harness(opts: HarnessOpts = {}) {
       const dseq = statusMatch[1];
       if (!dseq) throw new Error(`missing dseq in ${u}`);
       const endpoints = opts.endpoints?.(dseq) ?? [`d${dseq}.prov.akash.pub`];
+      if (closed.has(dseq)) {
+        return jsonResponse({
+          data: { deployment: { state: "closed" }, leases: [] },
+        });
+      }
       return jsonResponse({
         data: {
           deployment: { state: "active" },
@@ -1105,12 +1121,12 @@ describe("AkashComputeAdapter failure containment", () => {
     const cursor = await adapter.allocationCursor();
     expect(cursor).toBe("41");
     await expect(adapter.findAllocationSince(cursor)).resolves.toMatchObject({
-      leaseId: "42",
-      state: "pending",
+      outcome: "adopted",
+      output: { leaseId: "42", state: "pending" },
     });
   });
 
-  it("fails closed when more than one deployment exists beyond the allocation cursor", async () => {
+  it("reports ambiguity when more than one LIVE deployment exists beyond the allocation cursor", async () => {
     const fetchImpl = vi.fn<typeof fetch>(async () =>
       jsonResponse({
         data: {
@@ -1124,9 +1140,43 @@ describe("AkashComputeAdapter failure containment", () => {
     );
     await expect(
       makeAdapter(fetchImpl).findAllocationSince("41")
-    ).rejects.toMatchObject({
-      code: "AMBIGUOUS_ADOPTION",
-    });
+    ).resolves.toEqual({ outcome: "ambiguous", dseqs: ["42", "43"] });
+  });
+
+  // bug.5192. The old signature answered `null` here, which the actuator could only read as
+  // "a paid allocation may exist and was not found" — an unresolvable state that held the
+  // WALLET-WIDE writer slot forever. Nothing live beyond the baseline means nothing is
+  // billing, and that is a settled fact, not an unknown.
+  it("reports `settled` — never an unresolvable null — when nothing is live beyond the cursor", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      jsonResponse({
+        data: {
+          deployments: [
+            { deployment: { id: { dseq: "41" }, state: "active" }, leases: [] },
+          ],
+          pagination: { hasMore: false },
+        },
+      })
+    );
+    await expect(
+      makeAdapter(fetchImpl).findAllocationSince("41")
+    ).resolves.toEqual({ outcome: "settled" });
+  });
+
+  it("treats a CLOSED deployment beyond the cursor as settled, not as live spend", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      jsonResponse({
+        data: {
+          deployments: [
+            { deployment: { id: { dseq: "42" }, state: "closed" }, leases: [] },
+          ],
+          pagination: { hasMore: false },
+        },
+      })
+    );
+    await expect(
+      makeAdapter(fetchImpl).findAllocationSince("41")
+    ).resolves.toEqual({ outcome: "settled" });
   });
 
   it("closes the deployment when the create response omits the manifest", async () => {
@@ -1238,6 +1288,9 @@ describe("AkashComputeAdapter transaction boundary (task.5095)", () => {
 
     expect((error as AkashComputeError).code).toBe("NO_ELIGIBLE_BIDS");
     expect(h.deletes).toEqual([`${BASE}/v1/deployments/1`]);
+    // A terminal screening refusal also leaves a receipt behind. Before bug.5192 that receipt
+    // held the wallet slot forever too; the verified close is what lets it settle.
+    expect((error as AkashComputeError).rolledBackDseq).toBe("1");
   });
 
   it("closes the deployment when the caller cannot persist the allocated handle", async () => {
@@ -1258,6 +1311,34 @@ describe("AkashComputeAdapter transaction boundary (task.5095)", () => {
     expect((error as AkashComputeError).code).toBe("UNEXPECTED_SHAPE");
     expect(h.deletes).toEqual([`${BASE}/v1/deployments/1`]);
     expect(h.leased).toEqual([]);
+    // bug.5192: closing is not enough — the caller's receipt still holds the WALLET-WIDE slot
+    // and can only settle it against proof. The dseq is reported only after the read-back.
+    expect((error as AkashComputeError).rolledBackDseq).toBe("1");
+    expect((error as AkashComputeError).rolledBack).toBe(true);
+  });
+
+  it("refuses to claim a rollback when the close cannot be VERIFIED", async () => {
+    const h = harness({
+      providers: [providerEntry("akash1zen")],
+      bids: (dseq) => [bidEntry(dseq, "akash1zen", "100")],
+      // The DELETE is sent and answers 200, but Console still reads the deployment as active.
+      closeIsVerifiable: false,
+    });
+
+    const error = await makeAdapter(h.fetchImpl)
+      .allocateAndLease({
+        spec: SPEC,
+        onAllocated: async () => {
+          throw new Error("ledger down");
+        },
+      })
+      .catch((e: unknown) => e);
+
+    expect(h.deletes).toEqual([`${BASE}/v1/deployments/1`]);
+    // A 200 from DELETE is NOT proof (bug.5189). No proof, no rollback claim: the receipt
+    // stays held for the sweeper rather than being cleared over a possibly-live lease.
+    expect((error as AkashComputeError).rolledBackDseq).toBeUndefined();
+    expect((error as AkashComputeError).rolledBack).toBe(false);
   });
 
   it("updates an allocated handle in place without waiting for boot", async () => {
