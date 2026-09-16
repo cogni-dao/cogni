@@ -259,7 +259,7 @@ export async function listAccessibleNodeOperations(
         brandColor: summary?.brandColor ?? null,
         formationStatus: row.status as NodeStatus,
         relationship: "owner",
-        manageUrl: `/nodes/${row.id}`,
+        detailUrl: `/nodes/${row.id}`,
         modules: { deployment, compute, governance },
       };
     })

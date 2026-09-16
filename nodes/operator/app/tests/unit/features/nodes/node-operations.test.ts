@@ -30,12 +30,15 @@ function production(
 }
 
 describe("node operations status", () => {
-  it("requires observed production health and exact source/build equality", () => {
+  it("requires a running build and enforces source equality when source is observable", () => {
     expect(deriveNodeOperationsStatus("active", [production()])).toBe(
       "healthy"
     );
     expect(
       deriveNodeOperationsStatus("active", [production({ sourceSha: null })])
+    ).toBe("healthy");
+    expect(
+      deriveNodeOperationsStatus("active", [production({ buildSha: null })])
     ).toBe("needs_attention");
     expect(
       deriveNodeOperationsStatus("active", [

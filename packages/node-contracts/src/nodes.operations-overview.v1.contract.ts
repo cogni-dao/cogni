@@ -108,7 +108,7 @@ export const nodeOperationsOverviewSchema = z.object({
     "failed",
   ]),
   relationship: z.enum(["owner", "developer"]),
-  manageUrl: z.string(),
+  detailUrl: z.string(),
   modules: z.object({
     deployment: nodeOperationsDeploymentModuleSchema,
     compute: nodeOperationsComputeModuleSchema,
