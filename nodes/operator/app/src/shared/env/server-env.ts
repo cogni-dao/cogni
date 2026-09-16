@@ -198,6 +198,15 @@ export const serverSchema = z.object({
   GH_REVIEW_APP_ID: optionalString,
   GH_REVIEW_APP_PRIVATE_KEY_BASE64: optionalString,
 
+  // Node-formation GitHub App credentials — the identity that MINTS node repos
+  // (fork node-template, commit repo-spec, open the pin PR). Carved out of the
+  // overloaded GH_REVIEW_APP so an env can give repo-creation a test-scoped,
+  // least-privilege App distinct from the review/deploy identity (bug.5017,
+  // dao-governance-loop.md:371). Optional: falls back to GH_REVIEW_APP_* when
+  // unset, so existing envs are unchanged until they set these explicitly.
+  GH_NODE_FORMATION_APP_ID: optionalString,
+  GH_NODE_FORMATION_APP_PRIVATE_KEY_BASE64: optionalString,
+
   // Node-formation Publish: where new node repos are minted + where the node-template lives.
   // Env-scoped, NOT derived from the operator's own monorepo org (the submodule-PR target) — a
   // test/candidate operator must have zero access to Cogni-DAO, so mint-owner is set explicitly

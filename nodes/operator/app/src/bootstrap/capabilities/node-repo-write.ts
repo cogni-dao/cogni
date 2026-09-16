@@ -15,17 +15,25 @@ import { GitHubRepoWriter } from "@/adapters/server";
 import type { ServerEnv } from "@/shared/env";
 
 export function createNodeRepoWriter(env: ServerEnv): GitHubRepoWriter {
-  if (!env.GH_REVIEW_APP_ID || !env.GH_REVIEW_APP_PRIVATE_KEY_BASE64) {
+  // Node-formation MINTS repos (fork node-template, commit repo-spec, open the
+  // pin PR) — a distinct, higher-privilege (repo-create) trust domain from PR
+  // review / deploy dispatch. Prefer the dedicated formation App so an env can
+  // scope repo-creation to its own git org (e.g. candidate-a → cogni-operator-test
+  // on cogni-test-org, with ZERO reach into cogni-dao/cogni). Falls back to the
+  // overloaded GH_REVIEW_APP when the formation App is unset, so existing envs are
+  // unchanged until they set it explicitly (bug.5017, dao-governance-loop.md:371).
+  const appId = env.GH_NODE_FORMATION_APP_ID ?? env.GH_REVIEW_APP_ID;
+  const privateKeyB64 =
+    env.GH_NODE_FORMATION_APP_PRIVATE_KEY_BASE64 ??
+    env.GH_REVIEW_APP_PRIVATE_KEY_BASE64;
+  if (!appId || !privateKeyB64) {
     throw new Error(
-      "operator not configured for repo write: GH_REVIEW_APP_ID + GH_REVIEW_APP_PRIVATE_KEY_BASE64 required"
+      "operator not configured for repo write: GH_NODE_FORMATION_APP_ID (or GH_REVIEW_APP_ID) + matching private key required"
     );
   }
-  const privateKey = Buffer.from(
-    env.GH_REVIEW_APP_PRIVATE_KEY_BASE64,
-    "base64"
-  ).toString("utf-8");
+  const privateKey = Buffer.from(privateKeyB64, "base64").toString("utf-8");
   return new GitHubRepoWriter({
-    appId: env.GH_REVIEW_APP_ID,
+    appId,
     privateKey,
     dnsReverseReconcile: env.DNS_REVERSE_RECONCILE,
   });
