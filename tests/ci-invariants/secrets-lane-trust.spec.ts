@@ -35,7 +35,7 @@ const SCRIPTS = [
 
 /** The `case` block each script uses to pick the lane set. */
 const LANE_CASE =
-  /case "\$\{DEPLOY_ENV\}" in\s*\n\s*production\)\s*NODE_SECRET_LANES="([^"]+)"\s*;;\s*\n\s*\*\)\s*NODE_SECRET_LANES="\$\{DEPLOY_ENV\}"\s*;;/;
+  /case "\$\{DEPLOY_ENV\}" in\s*\n\s*production\)\s*SECRET_LANES="([^"]+)"\s*;;\s*\n\s*\*\)\s*SECRET_LANES="\$\{DEPLOY_ENV\}"\s*;;/;
 
 const read = (rel: string) => readFileSync(path.join(ROOT, rel), "utf8");
 
@@ -67,8 +67,32 @@ describe("secrets lane trust (bug.5196)", () => {
     }
     // The shell mirrors it: every non-production env falls to its own env, nothing wider.
     for (const s of SCRIPTS) {
-      expect(read(s)).toContain(
-        '*)          NODE_SECRET_LANES="${DEPLOY_ENV}" ;;'
+      expect(read(s)).toContain('*)          SECRET_LANES="${DEPLOY_ENV}" ;;');
+    }
+  });
+
+  /**
+   * bug.5206. The lane set existed but was wired to ONE of the two writer identities.
+   * `secret-materialize.sh` mints `${env}-writer`, NOT `${env}-node-secrets-writer`, so
+   * `production-writer` could not write `cogni/data/candidate-a/*` and the first poly
+   * candidate-a mint died at the token it could not use. Both policies must be built from
+   * the SAME templated lane set — a second `${DEPLOY_ENV}`-hardcoded writer is the drift.
+   */
+  it("templates the <env>-writer policy from the lane set too, not just node-secrets-writer", () => {
+    for (const s of SCRIPTS) {
+      const body = read(s);
+      expect(
+        body,
+        `${s}: the <env>-writer policy must be built from the lane set (bug.5206)`
+      ).toMatch(/WRITER_HCL="\$\{WRITER_HCL\}/);
+      // Scoped to WRITE capability on purpose: `<env>-db-reader` is legitimately
+      // env-scoped and read-only. It is a GRANT TO WRITE a bare ${DEPLOY_ENV} path that
+      // means a writer skipped the lane set.
+      expect(
+        body,
+        `${s}: no writer may grant write on a bare DEPLOY_ENV path — use the lane set (bug.5206)`
+      ).not.toMatch(
+        /path "cogni\/data\/\$\{DEPLOY_ENV\}\/\*"\s*\{[^}]*"create"/
       );
     }
   });

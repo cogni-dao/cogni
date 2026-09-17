@@ -1446,17 +1446,17 @@ HCL
   # requires admin escalation per CC6.1.
   # ⚠️ KEEP IN SYNC with scripts/setup/reconcile-env-substrate.sh (SECRET_LANES).
   case "${DEPLOY_ENV}" in
-    production) WRITER_LANES="candidate-a preview production" ;;
-    *)          WRITER_LANES="${DEPLOY_ENV}" ;;
+    production) SECRET_LANES="candidate-a preview production" ;;
+    *)          SECRET_LANES="${DEPLOY_ENV}" ;;
   esac
   WRITER_HCL=""
-  for _lane in ${WRITER_LANES}; do
+  for _lane in ${SECRET_LANES}; do
     WRITER_HCL="${WRITER_HCL}
 path \"cogni/data/${_lane}/*\"     { capabilities = [\"read\", \"create\", \"update\", \"patch\"] }
 path \"cogni/metadata/${_lane}/*\" { capabilities = [\"read\", \"list\"] }"
   done
   unset _lane
-  log_info "Writing ${DEPLOY_ENV}-writer policy + role binding; lanes: ${WRITER_LANES}"
+  log_info "Writing ${DEPLOY_ENV}-writer policy + role binding; lanes: ${SECRET_LANES}"
   ssh $SSH_OPTS root@"$VM_IP" \
     "kubectl get sa openbao-operator -n default >/dev/null 2>&1 \
        || kubectl create sa openbao-operator -n default"
@@ -1563,10 +1563,7 @@ HCL
   # is <service>; widening the lane set does not widen that boundary.
   # The two _system/_shared denies are carried onto EVERY lane gained, data AND metadata —
   # a per-node grant must never reach a shared path in ANY lane.
-  case "${DEPLOY_ENV}" in
-    production) NODE_SECRET_LANES="candidate-a preview production" ;;
-    *)          NODE_SECRET_LANES="${DEPLOY_ENV}" ;;
-  esac
+  NODE_SECRET_LANES="${SECRET_LANES}"
   NODE_SECRETS_WRITER_HCL=""
   for _lane in ${NODE_SECRET_LANES}; do
     NODE_SECRETS_WRITER_HCL="${NODE_SECRETS_WRITER_HCL}
