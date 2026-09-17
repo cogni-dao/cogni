@@ -549,7 +549,22 @@ jobs:
           set -euo pipefail
           # shellcheck source=ci-src/scripts/ci/lib/ssh-retry.sh
           . ci-src/scripts/ci/lib/ssh-retry.sh
-          APPSET_FILE="app-src/infra/k8s/argocd/appsets/candidate-a/candidate-a-${NODE}-applicationset.yaml"
+          # THE definition, never rebuilt from the env (bug.5204). An akash node's
+          # candidate-a lane is reconciled by the PRODUCTION cluster (task.5132), so its
+          # AppSet lives in appsets/production/ and this job must not touch it.
+          # shellcheck source=ci-src/scripts/ci/lib/appset-paths.sh
+          CATALOG_DIR="app-src/infra/catalog" . ci-src/scripts/ci/lib/appset-paths.sh
+          CONTROL_ENV="$(CATALOG_DIR=app-src/infra/catalog control_env_for candidate-a "$NODE")"
+          if [ "$CONTROL_ENV" != "candidate-a" ]; then
+            # Declarative, not imperative: the ${CONTROL_ENV} app-of-apps already reconciles
+            # appsets/${CONTROL_ENV}/ from main with prune, so the object appears without this
+            # job — which is why it must NOT hold that cluster's SSH credentials. Reaching a
+            # higher-trust cluster from a candidate flight is the inversion the north star
+            # rejects; doing nothing here is the correct behaviour, not a gap.
+            echo "::notice::$NODE's candidate-a lane is reconciled by '$CONTROL_ENV' — its AppSet is owned by that cluster's app-of-apps. Skipping the imperative apply."
+            exit 0
+          fi
+          APPSET_FILE="app-src/$(CATALOG_DIR=app-src/infra/catalog appset_rel_path candidate-a "$NODE")"
           if [ ! -f "$APPSET_FILE" ]; then
             echo "::error::$APPSET_FILE missing at head_sha — run 'pnpm gen:node-appset' (CATALOG_IS_SSOT)"
             exit 1
@@ -571,6 +586,16 @@ jobs:
           set -euo pipefail
           # shellcheck source=ci-src/scripts/ci/lib/ssh-retry.sh
           . ci-src/scripts/ci/lib/ssh-retry.sh
+          # Same boundary as the apply above (bug.5204/task.5132): when the PRODUCTION
+          # cluster reconciles this lane, its Application is created THERE and cannot be
+          # observed from candidate-a's VM. Waiting would time out on a healthy deploy —
+          # a false failure, which is worse than not looking.
+          # shellcheck source=ci-src/scripts/ci/lib/appset-paths.sh
+          CATALOG_DIR="app-src/infra/catalog" . ci-src/scripts/ci/lib/appset-paths.sh
+          if [ "$(CATALOG_DIR=app-src/infra/catalog control_env_for candidate-a "$NODE")" != "candidate-a" ]; then
+            echo "::notice::$NODE's candidate-a Application is reconciled by another cluster; not observable from this VM. Skipping."
+            exit 0
+          fi
           read -r -a ssh_opts <<< "$SSH_OPTS"
           app_name="candidate-a-${NODE}"
           appset_name="cogni-candidate-a-${NODE}"

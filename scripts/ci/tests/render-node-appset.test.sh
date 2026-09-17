@@ -138,8 +138,10 @@ s = s.replace(
 open(p, "w").write(s)
 PY
 
-# shellcheck source=scripts/ci/render-node-appset.sh
-CATALOG_DIR="$fixture" source <(sed -n '/^control_env_for()/,/^}/p;/^ENVS=/p' "$RENDER")
+# Source THE definition (bug.5204) rather than re-extracting it from the renderer — the
+# whole point of the lib is that nobody keeps a second copy, tests included.
+# shellcheck source=scripts/ci/lib/appset-paths.sh
+CATALOG_DIR="$fixture" source scripts/ci/lib/appset-paths.sh
 
 for env in candidate-a preview; do
   got="$(CATALOG_DIR="$fixture" control_env_for "$env" toks5)"
