@@ -38,6 +38,13 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-options: Prune=false
     argocd.argoproj.io/sync-wave: "1"
+    # Bumping this value publishes a new CompositionRevision, which every XR with
+    # compositionUpdatePolicy Automatic re-selects. That re-selection is the ONLY
+    # code-driven remediation when an XR is wedged on "selected CompositionRevision
+    # does not have a valid function pipeline: pipeline status unknown" — a stale
+    # verdict cached from a transient Function outage that no XR-side reconcile
+    # clears (observed on poly candidate-a, task.5132, 2026-09-17).
+    cogni.io/revision-provenance: "2026-09-17-republish-after-transient-function-outage"
 spec:
   compositeTypeRef:
     apiVersion: compute.cogni.io/v1alpha1
