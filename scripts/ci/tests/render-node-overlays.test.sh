@@ -208,18 +208,25 @@ PCAT="infra/catalog/$PERENV.yaml"
 [ -f "$PCAT" ] || fail "test fixture: $PCAT not found"
 # The env to join-then-drop: any env with a node-template template overlay (the renderer's
 # source) that the fixture does not already claim.
+# ENSURE, don't DISCOVER. Picking an env the fixture "does not already claim" reintroduced
+# exactly the fleet-shape hostage this block's comment says it removed: task.5132 gave poly
+# all three envs and the gate went red with "already claims every renderable env" — a fixture
+# precondition failing, not the renderer. Any renderable env other than $FE works, because the
+# join step is only SETUP to create the orphan condition; if the fixture already claims it,
+# claiming it again is a no-op.
 JOIN_ENV=""
 for e in $ALL_ENVS; do
   [ -d "infra/k8s/overlays/$e/node-template" ] || continue
-  yq -e ".envs // [] | contains([\"$e\"])" "$PCAT" >/dev/null 2>&1 && continue
+  [ "$e" = "$FE" ] && continue
   JOIN_ENV="$e"
   break
 done
-[ -n "$JOIN_ENV" ] || fail "test fixture: $PERENV already claims every renderable env"
+[ -n "$JOIN_ENV" ] || fail "test fixture: no renderable env other than $FE to join"
+
 perenv_restore() { git checkout -q -- "$PCAT" infra/k8s/overlays 2>/dev/null || true; }
 trap 'perenv_restore; restore' EXIT
 # Join the fixture to JOIN_ENV (it keeps FE), and materialize that env's overlay.
-JOIN_ENV="$JOIN_ENV" yq -i '.envs += [strenv(JOIN_ENV)]' "$PCAT"
+JOIN_ENV="$JOIN_ENV" yq -i '.envs = ((.envs // []) + [strenv(JOIN_ENV)] | unique)' "$PCAT"
 bash "$RENDER" --write >/dev/null
 [ -d "infra/k8s/overlays/$JOIN_ENV/$PERENV" ] \
   || fail "test setup: --write did not materialize $PERENV's $JOIN_ENV overlay"
