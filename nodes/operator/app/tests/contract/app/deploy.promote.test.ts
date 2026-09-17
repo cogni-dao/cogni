@@ -3,12 +3,14 @@
 
 /**
  * Module: `@tests/contract/app/deploy.promote`
- * Purpose: Contract tests for POST /api/v1/deploy/promote (RBAC-gated production promote).
- * Scope: Auth, input validation, node/billing lookup, the `node.promote_production` gate, and
+ * Purpose: Contract tests for POST /api/v1/deploy/promote (RBAC-gated manual promote, preview + production).
+ * Scope: Auth, input validation, node/billing lookup, the per-env authz gates
+ *   (`node.promote_production` for production, `node.manage_envs` for preview — story.5039), and
  *   graceful dispatch-failure handling.
  * Invariants:
  *   - AUTHZ_BEFORE_SIDE_EFFECT: authz denied ⇒ no dispatch.
- *   - PRODUCTION_ONLY_V0: only env=production is accepted.
+ *   - PREVIEW_IS_MANUAL_TOO: env=preview is accepted, gated on `node.manage_envs`; production keeps
+ *     `node.promote_production` unchanged; any other env is 400.
  *   - DISPATCH_FAILURE_IS_TYPED: a thrown dispatch returns 502 dispatch_failed, never a raw 500.
  * Side-effects: none
  * Links: nodes/operator/app/src/app/api/v1/deploy/promote/route.ts, docs/spec/rbac.md
@@ -172,8 +174,8 @@ describe("POST /api/v1/deploy/promote", () => {
     expect(mockDeployPlane.dispatchNodePromote).not.toHaveBeenCalled();
   });
 
-  it("returns 400 for a non-production env (PRODUCTION_ONLY_V0)", async () => {
-    const res = await post({ nodeId: NODE_ID, env: "preview" });
+  it("returns 400 for an env outside preview/production", async () => {
+    const res = await post({ nodeId: NODE_ID, env: "candidate-a" });
     expect(res.status).toBe(400);
     expect(mockDeployPlane.dispatchNodePromote).not.toHaveBeenCalled();
   });
@@ -224,6 +226,54 @@ describe("POST /api/v1/deploy/promote", () => {
       })
     );
     expect(mockDeployPlane.dispatchNodePromote).not.toHaveBeenCalled();
+  });
+
+  it("production stays gated on node.promote_production (unchanged)", async () => {
+    const res = await post({ nodeId: NODE_ID, env: "production" });
+    expect(res.status).toBe(200);
+    expect(authzState.check).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "node.promote_production" })
+    );
+  });
+
+  it("accepts env=preview gated on node.manage_envs and routes the SOURCE-ADDRESSED path (story.5039)", async () => {
+    const sourceSha = "0123456789012345678901234567890123456789";
+    const res = await post({ nodeId: NODE_ID, env: "preview", sourceSha });
+    expect(res.status).toBe(200);
+    expect(authzState.check).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "node.manage_envs" })
+    );
+    expect(mockDeployPlane.promoteNode).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env: "preview",
+        parentOwner: "test-owner",
+        parentRepo: "test-repo",
+        slug: "sigh",
+        sourceSha,
+      })
+    );
+    expect(mockDeployPlane.dispatchNodePromote).not.toHaveBeenCalled();
+  });
+
+  it("returns 403 authz_denied for preview when node.manage_envs is denied and does NOT dispatch", async () => {
+    authzState.decision = "authz_denied";
+    const res = await post({ nodeId: NODE_ID, env: "preview" });
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "authz_denied" });
+    expect(authzState.check).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "node.manage_envs" })
+    );
+    expect(mockDeployPlane.dispatchNodePromote).not.toHaveBeenCalled();
+    expect(mockDeployPlane.promoteNode).not.toHaveBeenCalled();
+  });
+
+  it("returns 503 authz_unavailable for preview (fail-closed) and does NOT dispatch", async () => {
+    authzState.decision = "authz_unavailable";
+    const res = await post({ nodeId: NODE_ID, env: "preview" });
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: "authz_unavailable" });
+    expect(mockDeployPlane.dispatchNodePromote).not.toHaveBeenCalled();
+    expect(mockDeployPlane.promoteNode).not.toHaveBeenCalled();
   });
 
   it("returns typed 502 dispatch_failed when dispatch throws (not a raw 500)", async () => {
