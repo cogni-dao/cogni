@@ -130,7 +130,8 @@ function harness(opts: HarnessOpts = {}) {
       const closedDseq = u.match(/\/v1\/deployments\/(\d+)$/)?.[1];
       // Console stops reporting a deleted deployment as active. Modelling that is what lets
       // the close-then-VERIFY read-back mean anything (bug.5189 CLOSE_BEFORE_CLEAR).
-      if (closedDseq && opts.closeIsVerifiable !== false) closed.add(closedDseq);
+      if (closedDseq && opts.closeIsVerifiable !== false)
+        closed.add(closedDseq);
       return jsonResponse({ data: { success: true } });
     }
     if (u.endsWith("/version")) {

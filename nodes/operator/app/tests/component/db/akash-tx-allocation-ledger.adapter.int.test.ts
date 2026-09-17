@@ -204,7 +204,10 @@ describe("DrizzleAkashTxAllocationLedger (Component)", () => {
       identity: IDENTITY,
     });
     await ledger.prepare({ cogniKey: "k1", allocationCursor: "7000" });
-    await ledger.fail({ cogniKey: "k1", failureCode: "allocation_rolled_back" });
+    await ledger.fail({
+      cogniKey: "k1",
+      failureCode: "allocation_rolled_back",
+    });
 
     const again = await ledger.claim({
       cogniKey: "k1",
@@ -257,7 +260,10 @@ describe("DrizzleAkashTxAllocationLedger (Component)", () => {
       environment: "candidate-a",
       identity: IDENTITY,
     });
-    await ledger.fail({ cogniKey: "k1", failureCode: "allocation_rolled_back" });
+    await ledger.fail({
+      cogniKey: "k1",
+      failureCode: "allocation_rolled_back",
+    });
 
     // Re-opening under another identity would move spend attribution; it stays `settled` so
     // the actuator raises identity_conflict instead.
@@ -282,8 +288,9 @@ describe("DrizzleAkashTxAllocationLedger (Component)", () => {
     });
 
     // Nothing is stale yet: age is measured by POSTGRES, not by the caller's clock.
-    expect(await ledger.listStalePreparing({ olderThanMs: 1000, limit: 10 }))
-      .toEqual([]);
+    expect(
+      await ledger.listStalePreparing({ olderThanMs: 1000, limit: 10 })
+    ).toEqual([]);
 
     await db
       .update(akashTxAllocations)

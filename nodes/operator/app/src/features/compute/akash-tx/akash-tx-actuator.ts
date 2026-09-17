@@ -489,7 +489,8 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       // the receipt keeps the WALLET-WIDE slot and every node in the environment stops
       // leasing. Settling is best-effort on purpose: the DB may be the very thing that died,
       // and the stale-allocation sweeper is the backstop for exactly that case.
-      if (rolledBackDseq) await this.settleRollback(input.cogniKey, rolledBackDseq);
+      if (rolledBackDseq)
+        await this.settleRollback(input.cogniKey, rolledBackDseq);
       throw mapped;
     }
 
@@ -794,7 +795,8 @@ export class AkashTxActuator implements AkashTxActuatorPort {
         {
           cogniKey,
           ...(rolledBackDseq ? { rolledBackDseq } : {}),
-          causeMessage: error instanceof Error ? error.message : "unknown cause",
+          causeMessage:
+            error instanceof Error ? error.message : "unknown cause",
         },
         "akash_tx_allocation_rollback_unsettled"
       );

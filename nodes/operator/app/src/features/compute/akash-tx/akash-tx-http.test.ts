@@ -268,7 +268,12 @@ describe("akash-tx dispatcher", () => {
     for (const path of ["/v1/akash/sweep", "/v1/akash/sweepStaleAllocations"]) {
       expect(
         (
-          await dispatch({ method: "POST", path, authorization: AUTH, body: "{}" })
+          await dispatch({
+            method: "POST",
+            path,
+            authorization: AUTH,
+            body: "{}",
+          })
         ).status
       ).toBe(404);
     }

@@ -394,7 +394,8 @@ const sweepTimer = setInterval(() => {
     .catch((error: unknown) => {
       log.error(
         {
-          causeMessage: error instanceof Error ? error.message : "unknown cause",
+          causeMessage:
+            error instanceof Error ? error.message : "unknown cause",
         },
         "akash_tx_allocation_sweep_failed"
       );

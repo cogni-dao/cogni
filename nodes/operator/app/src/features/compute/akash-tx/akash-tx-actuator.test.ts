@@ -1759,8 +1759,8 @@ describe("AkashTxActuator.sweepStaleAllocations", () => {
     const { actuator, ledger } = build();
     ledger.failReads = true;
 
-    await expect(
-      actuator.sweepStaleAllocations(STALE)
-    ).rejects.toMatchObject({ code: "ledger_unavailable" });
+    await expect(actuator.sweepStaleAllocations(STALE)).rejects.toMatchObject({
+      code: "ledger_unavailable",
+    });
   });
 });
