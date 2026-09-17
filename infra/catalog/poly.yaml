@@ -7,7 +7,7 @@ image_tag_suffix: "-poly"
 migrator_tag_suffix: "-poly-migrate"
 source_repo: https://github.com/cogni-dao/poly.git
 image_repository: ghcr.io/cogni-dao/poly
-source_sha: bbf0a1915b127e025d0c72e262a5029672482c6b
+source_sha: 04d7e0647fc0ef1cc2b7b39336d7090dcfe6d833
 candidate_a_branch: deploy/candidate-a-poly
 preview_branch: deploy/preview-poly
 production_branch: deploy/production-poly
