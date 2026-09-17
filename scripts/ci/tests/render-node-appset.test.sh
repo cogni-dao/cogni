@@ -125,18 +125,26 @@ pass "fail-closed when a deployable row omits envs"
 #    task.5130 purged.
 fixture="$(mktemp -d)"
 trap 'rm -rf "$fixture"' EXIT
-cp infra/catalog/toks5.yaml infra/catalog/operator.yaml "$fixture/"
-python3 - "$fixture/toks5.yaml" <<'PY'
-import sys
-p = sys.argv[1]; s = open(p).read()
-s = s.replace("envs: [production]", "envs: [candidate-a, preview, production]", 1)
-s = s.replace(
-    "deployment_provider:\n  production: akash",
-    "deployment_provider:\n  candidate-a: akash\n  preview: akash\n  production: akash",
-    1,
-)
-open(p, "w").write(s)
-PY
+cp infra/catalog/operator.yaml "$fixture/"
+# The akash row is AUTHORED here, not string-patched out of a live catalog row. Patching
+# depended on `infra/catalog/toks5.yaml` containing the exact bytes "envs: [production]" and
+# "deployment_provider:\n  production: akash" — so the moment a real activation edited toks5
+# (#2321 added candidate-a), BOTH anchors stopped matching, the fixture silently stayed
+# unpatched, and this test asserted against a fixture it had failed to build. A fixture that
+# reads a mutable file is a test that fails when unrelated work is correct.
+cat > "$fixture/toks5.yaml" <<'YAML'
+name: toks5
+type: node
+port: 3300
+node_port: 31700
+source_repo: https://github.com/cogni-dao/toks5.git
+envs: [candidate-a, preview, production]
+deployment_provider:
+  candidate-a: akash
+  preview: akash
+  production: akash
+activity_env: production
+YAML
 
 # Source THE definition (bug.5204) rather than re-extracting it from the renderer — the
 # whole point of the lib is that nobody keeps a second copy, tests included.
