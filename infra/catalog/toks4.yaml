@@ -7,7 +7,7 @@ image_tag_suffix: "-toks4"
 migrator_tag_suffix: "-toks4-migrate"
 source_repo: https://github.com/cogni-dao/toks4.git
 image_repository: ghcr.io/cogni-dao/toks4
-source_sha: b87fc1183098e88e233ff313fbaf2a69a474ffd8
+source_sha: 73482da19fe4bef19933536507293b66b00e879a
 candidate_a_branch: deploy/candidate-a-toks4
 preview_branch: deploy/preview-toks4
 production_branch: deploy/production-toks4
