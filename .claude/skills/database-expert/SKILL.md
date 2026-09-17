@@ -17,11 +17,11 @@ Navigation aid for database schema, migrations, and DSN plumbing. Per-node schem
 - `infra/compose/runtime/docker-compose.yml` + `infra/compose/runtime/db-backup/backup.sh` — runtime Postgres backup job for app Postgres + Temporal Postgres; candidate-flight-infra validates health, manifests, and Loki logs.
 - [work/items/task.0324…md](../../../work/items/task.0324.per-node-db-schema-independence.md) — why the current shape exists; task body has design history.
 - [work/items/task.0325…md](../../../work/items/task.0325.atlas-gitops-migrations.md) — Atlas spike intel, deferred.
-- `nodes/poly/packages/db-schema/AGENTS.md` — reference example for the per-node db-schema package pattern (fork it for new nodes).
+- The per-node db-schema package pattern lives in `node-template` and in each node's own repo — **not in this monorepo**. This repo contains `nodes/operator` and `nodes/scheduler-worker` only.
 - READMEs under `nodes/<node>/app/src/adapters/server/db/migrations/` — tripwires explaining the shared-era `0027_silent_nextwave.sql` duplicate.
 - [docs/spec/knowledge-data-plane.md](../../../docs/spec/knowledge-data-plane.md) — Doltgres knowledge plane architecture (separate from the awareness/Postgres side).
 - [work/items/task.0311…md](../../../work/items/task.0311.poly-knowledge-syntropy-seed.md) — why the Doltgres migrator pattern (per-node migrator image + trailing `dolt_commit`) exists; body has the Doltgres 0.56.0 compatibility test results.
-- `nodes/poly/packages/doltgres-schema/AGENTS.md` — reference example for the per-node doltgres-schema package pattern (fork it when a node adopts Doltgres).
+- The per-node doltgres-schema package pattern likewise lives in `node-template` / the node's own repo.
 
 ## Layout at a glance
 
@@ -32,7 +32,7 @@ nodes/<node>/app/.../migrations/  node-owned migration history
 nodes/<node>/packages/db-schema/  @cogni/<node>-db-schema  (only created when node has local tables)
 ```
 
-Only `@cogni/poly-db-schema` exists today. Resy/operator/node-template spin up a per-node package on their first node-local table — no empty scaffolds.
+**No per-node schema package exists in this repo.** Nodes are their own repos; a node spins up `@cogni/<node>-db-schema` inside its own repo on its first node-local table — no empty scaffolds. The shared `packages/db-schema` is the operator/fleet schema.
 
 ## Postgres vs Doltgres — the first question for any new table
 
@@ -65,7 +65,7 @@ Companion tables (e.g., `poly_market_categories`) are allowed **when a genuinely
 
 > New Doltgres table per domain/feature. e.g., `poly_strategies`, `poly_signals`, `poly_targets` each with 5–15 rows.
 
-Ask: "why not `knowledge` rows with `domain: 'poly-strategies'`?" Usually there's no good answer. Reject and refactor into the base table unless there's a concrete entity (not a content category) that requires its own columns.
+Ask: "why not `knowledge` rows with `domain: '<node>-<topic>'`?" Usually there's no good answer. Reject and refactor into the base table unless there's a concrete entity (not a content category) that requires its own columns.
 
 ## Adding a table — decision flow
 
@@ -74,10 +74,10 @@ Ask: "why not `knowledge` rows with `domain: 'poly-strategies'`?" Usually there'
    - Yes → core package (`packages/db-schema/src/<slice>.ts` for Postgres; core Doltgres packages don't exist yet — cross-node Doltgres would need a new shared package, file as a design task). See [packages/db-schema/AGENTS.md](../../../packages/db-schema/AGENTS.md) Change Protocol for the 4 coordinated edits (source file, index barrel, tsup entry, package.json exports).
    - No → node-local. Continue.
 3. **Does the node already have the right per-node package?**
-   - Postgres: `nodes/<node>/packages/db-schema/` (only poly does today).
-   - Doltgres: `nodes/<node>/packages/doltgres-schema/` (only poly does today).
+   - Postgres: `<node-repo>/packages/db-schema/` — in the NODE'S repo, not here.
+   - Doltgres: `<node-repo>/packages/doltgres-schema/` — in the NODE'S repo, not here.
    - Yes → add a slice + update its 4 coordination points (package.json exports, tsup entry, barrel re-export, drizzle config glob — though the glob is `**/*.ts` so usually nothing to edit there).
-   - No → create the package by copying the poly version; add `"@cogni/<node>-{db,doltgres}-schema": "workspace:*"` to the node app's dependencies (if needed at runtime); update the appropriate `nodes/<node>/drizzle.{config,doltgres.config}.ts` schema array.
+   - No → create the package from the `node-template` pattern; add `"@cogni/<node>-{db,doltgres}-schema": "workspace:*"` to the node app's dependencies (if needed at runtime); update the appropriate `nodes/<node>/drizzle.{config,doltgres.config}.ts` schema array.
 4. **Generate + apply:** `pnpm db:generate:<node>[:doltgres]` → inspect the SQL → `pnpm db:migrate:<node>[:doltgres]`.
 5. **If CORE Postgres table:** copy the migration file + its `_journal.json` entry into every OTHER node's migrations dir. Drizzle-kit does not auto-propagate across nodes; each deployed DB needs its own applied copy so `__drizzle_migrations` hash lookups line up. (Doltgres is per-node today — no cross-node propagation needed yet.)
 
@@ -86,9 +86,9 @@ Ask: "why not `knowledge` rows with `domain: 'poly-strategies'`?" Usually there'
 Full command reference in [databases.md §2](../../../docs/spec/databases.md). Daily usage:
 
 ```bash
-pnpm db:migrate:{dev,poly,resy}      # migrate one node's DB from .env.local
+pnpm db:migrate:dev                  # migrate from .env.local (VERIFIED: the only :dev variant)
 pnpm db:migrate:nodes                # all three
-pnpm db:generate:{operator,poly,resy} # generate a migration from a schema diff
+pnpm db:generate:operator            # generate a migration from a schema diff
 pnpm db:setup:nodes                  # first-time: provision + migrate + seed
 ```
 
@@ -106,9 +106,9 @@ Shared-era migration applied to every deployed DB before the schema split. Each 
 
 New nodes replay operator's full `0000→0032` history (incl. the `0010`→`0032` epoch-RLS create-then-fix). Not a security risk — fresh DBs apply all migrations atomically before serving — but it's legacy baggage every fork inherits. Standard fix (Rails/Django/Atlas-style) is to collapse to a single `0000_init` baseline with RLS correct from the start. Deferred: it's a breaking op for deployed DBs (`__drizzle_migrations` reconciliation) and fights the immutability gate, so do it on the fresh `node-app` lineage, not operator. Tracked as `task.5018`.
 
-### `drizzle-kit generate` on operator/resy will emit DROP migrations for orphan poly tables
+### HISTORICAL (pre node-repo split): `drizzle-kit generate` emitted DROP migrations for orphan tables
 
-`poly_copy_trade_*` exists in operator/resy DBs as harmless orphans from the shared-era apply. Their configs no longer include those tables, so generate sees them as drift and wants to `DROP TABLE`. **Inspect any auto-generated migration; discard DROP statements for `poly_copy_trade_*`.** Orphans stay until an explicit future cleanup.
+Node-local tables can linger in the operator DB as harmless orphans from the shared-era apply, before nodes owned their own repos and DBs. Their configs no longer include those tables, so generate sees them as drift and wants to `DROP TABLE`. **Inspect any auto-generated migration; discard DROP statements for `poly_copy_trade_*`.** Orphans stay until an explicit future cleanup.
 
 ### `DATABASE_URL` must be set per-invocation — and only by the caller
 
@@ -120,17 +120,17 @@ No fallback. If you see `DATABASE_URL is required` thrown, check:
 
 ### Cross-process imports go through the per-node package, not the app
 
-scheduler-worker, Temporal worker, or any other service that needs poly tables:
+scheduler-worker, Temporal worker, or any other service that needs a node's tables:
 
 ```ts
-import { polyCopyTradeFills } from "@cogni/poly-db-schema/copy-trade";
+import { someTable } from "@cogni/<node>-db-schema/<module>";
 ```
 
-**Do not** reach into `nodes/poly/app/src/shared/db/` — that's the app's hex boundary. `@cogni/poly-db-schema` exists as a workspace package precisely so cross-process consumers can import without that violation.
+**Do not** reach into a node app's `src/shared/db/` — that's the app's hex boundary. `@cogni/<node>-db-schema` exists as a workspace package precisely so cross-process consumers can import without that violation.
 
-### Prod poly/resy migration Jobs are currently `exit 0` no-ops
+### VERIFY BEFORE RELYING ON THIS: some prod node migration Jobs were `exit 0` no-ops
 
-`infra/k8s/overlays/production/{poly,resy}/kustomization.yaml:95` deliberately short-circuits. Un-no-opping is task.0324 Phase 3 — gated on `pg_dump` inspection of each prod DB first (current state unverified). **Do not flip these flags** without the snapshot-restore rehearsal.
+Check `infra/k8s/overlays/production/<node>/kustomization.yaml` for the short-circuit before assuming migrations ran. Node apps now run on Akash, so the k8s overlay may be vestigial for a given row — read it live (`GET /api/v1/nodes`, `infra/catalog/*.yaml`) — never hardcode a roster (Dolt `operator-node-catalog`). Un-no-opping is task.0324 Phase 3 — gated on `pg_dump` inspection of each prod DB first (current state unverified). **Do not flip these flags** without the snapshot-restore rehearsal.
 
 ## Runtime backups — candidate-a/preview/prod Compose infra
 
@@ -188,30 +188,30 @@ Each node that adopts Doltgres follows the exact pattern above, but against a **
 ### Layout
 
 ```
-nodes/<node>/packages/doltgres-schema/         @cogni/<node>-doltgres-schema (NEW per-node package; only poly today)
+nodes/<node>/packages/doltgres-schema/         @cogni/<node>-doltgres-schema (NEW per-node package, in the NODE'S repo)
 nodes/<node>/drizzle.doltgres.config.ts        dialect: postgresql, schema glob targets ONLY the doltgres-schema package
 nodes/<node>/app/src/adapters/server/db/doltgres-migrations/   generated SQL, checked in
 ```
 
-Only `@cogni/poly-doltgres-schema` exists today (task.0311). Operator/resy spin up their own packages when they adopt Doltgres — don't pre-scaffold.
+No per-node doltgres package lives in this repo (task.0311 built the pattern). A node spins up its own when it adopts Doltgres — don't pre-scaffold.
 
 ### Adding a Doltgres table
 
 Identical to the Postgres flow — with one caveat:
 
 1. Define the table in the node's doltgres-schema package.
-2. `pnpm db:generate:poly:doltgres` — generates SQL.
-3. `pnpm db:migrate:poly:doltgres` (local dev) or deploy pipeline (candidate-a+) applies via drizzle-kit migrate.
-4. **One Dolt-specific step**: the migrator compose service chains a trailing `doltgres-commit-poly` (postgres:15 + psql one-shot) that runs `SELECT dolt_commit('-Am', 'migration: drizzle-kit batch')`. This captures DDL into `dolt_log`; without it, drizzle-kit's changes exist in the working set but aren't committed to the Dolt history ([dolt#4843](https://github.com/dolthub/dolt/issues/4843)).
+2. `pnpm db:generate:operator:doltgres` — generates SQL. (Per-node variants live in the node's own repo.)
+3. `pnpm db:migrate:operator:doltgres` (local dev) or deploy pipeline (candidate-a+) applies via drizzle-kit migrate.
+4. **One Dolt-specific step**: the migrator compose service chains a trailing `doltgres-commit-<node>` (postgres:15 + psql one-shot) that runs `SELECT dolt_commit('-Am', 'migration: drizzle-kit batch')`. This captures DDL into `dolt_log`; without it, drizzle-kit's changes exist in the working set but aren't committed to the Dolt history ([dolt#4843](https://github.com/dolthub/dolt/issues/4843)).
 
 ### Migrator image reuse
 
-The poly migrator image (`nodes/poly/app/Dockerfile AS migrator`) carries BOTH Postgres AND Doltgres migration inputs — same image, different entry command:
+A node's migrator image (`<node-repo>/app/Dockerfile AS migrator`) carries BOTH Postgres AND Doltgres migration inputs — same image, different entry command:
 
-- `pnpm db:migrate:poly:container` — Postgres (default CMD)
-- `pnpm db:migrate:poly:doltgres:container` — Doltgres (compose overrides command)
+- `pnpm db:migrate:<node>:container` — Postgres (default CMD), defined in the node's own repo
+- `pnpm db:migrate:<node>:doltgres:container` — Doltgres (compose overrides command)
 
-When operator/resy adopt Doltgres, their `Dockerfile AS migrator` extends similarly.
+When another node adopts Doltgres, its `Dockerfile AS migrator` extends similarly.
 
 ### Doltgres is NOT a drop-in in every way — two caveats verified against 0.56.0
 
@@ -222,7 +222,7 @@ Everything schema-time (drizzle-kit migrate, `CREATE SCHEMA`, `__drizzle_migrati
 
 ### POLY_MIGRATOR_IMAGE env var (current gap)
 
-`docker-compose.yml`'s `doltgres-migrate-poly` service reads `${POLY_MIGRATOR_IMAGE:-unused-by-infra-deploy}`. `deploy-infra.sh` gates the `run --rm` invocation on `-n "$POLY_MIGRATOR_IMAGE"`. Today neither `candidate-flight-infra.yml` nor `promote-and-deploy.yml` sets this env var, so Doltgres comes up + provisions but the schema isn't applied (warn-and-continue). Remediation: either self-resolve the image in deploy-infra.sh (mirror the `LITELLM_IMAGE` pattern at line ~547) or add as a workflow input. Tracked as task.0311 follow-up #1.
+`docker-compose.yml`'s `doltgres-migrate-<node>` service reads `${<NODE>_MIGRATOR_IMAGE:-unused-by-infra-deploy}`. `deploy-infra.sh` gates the `run --rm` invocation on `-n "$POLY_MIGRATOR_IMAGE"`. Today neither `candidate-flight-infra.yml` nor `promote-and-deploy.yml` sets this env var, so Doltgres comes up + provisions but the schema isn't applied (warn-and-continue). Remediation: either self-resolve the image in deploy-infra.sh (mirror the `LITELLM_IMAGE` pattern at line ~547) or add as a workflow input. Tracked as task.0311 follow-up #1.
 
 ### Doltgres-specific gotchas
 
@@ -273,12 +273,12 @@ Atlas + Drizzle official integration; `atlas migrate diff`, destructive-change l
 ## Anti-patterns to flag in review
 
 - Node-specific table added to `@cogni/db-schema`
-- `@cogni/poly-db-schema` imported from a non-poly node
+- `@cogni/<node>-db-schema` imported from a different node
 - Relative TS import or hard-coded DSN inside a drizzle config
 - `buildDatabaseUrl` inside a drizzle config (tooling-only; also breaks inside drizzle-kit's temp compile)
-- `drizzle-kit migrate` run directly against prod poly/resy (go through the candidate-a → preview → promote chain)
+- `drizzle-kit migrate` run directly against any prod node DB (go through the candidate-a → preview → promote chain)
 - Deleting `0027_silent_nextwave.sql` from any node without coordinating across all deployed DBs' `__drizzle_migrations`
-- Auto-generated `DROP TABLE "poly_copy_trade_*"` committed on operator/resy (orphans are intentional)
+- Auto-generated `DROP TABLE` for another node's orphan tables (orphans are intentional)
 - Component-piece fallback (`POSTGRES_HOST`, etc.) added to any new script — explicit DSN or fail fast
 - Doltgres table added to a Postgres-targeted package (`@cogni/db-schema` or `@cogni/<node>-db-schema`) — dialects must stay separated via per-package path
 - `@cogni/<node>-doltgres-schema` path included in `nodes/<node>/drizzle.config.ts` (Postgres) — would cause Postgres to try creating knowledge tables
