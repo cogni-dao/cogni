@@ -322,6 +322,28 @@ async function selectPromoteTargets(input: {
     ),
     previewForwardMode: input.previewForwardMode,
   });
+  // AN EMPTY PROMOTE IS A REFUSAL, NOT A SUCCESS (bug.5203). Every downstream job gates on
+  // `has_targets`, so a promote that resolves nothing SKIPS its way to a green conclusion
+  // indistinguishable from a successful deploy.
+  //
+  // Observed twice on 2026-09-17: the node-merge webhook dispatches env=preview, #2238 retired
+  // every preview node slot, so beacon's and toks5's merges each left only
+  // `##[warning]Skipping targets not in the preview node-set` under a SUCCESS badge. A node
+  // owner merges a fix, sees green, and nothing shipped.
+  //
+  // This belongs HERE, at the dispatch boundary, and NOT in resolvePromoteDeploymentTargets:
+  // that resolver's contract is EXCLUSION — "does not admit an off-cluster node outside the
+  // selected environment" asserts it returns [] rather than throwing, and it is right. The
+  // question "I was ASKED to deploy and deployed nothing" is only answerable where the request
+  // is known. Fleet-wide promotes (no explicit CSV) legitimately match nothing and stay silent.
+  if (requestedTargets.length > 0 && selection.deployment.length === 0) {
+    throw new Error(
+      `[materialize-compute-workload] promote named ${requestedTargets.length} target(s) ` +
+        `(${requestedTargets.join(", ")}) but NONE deploy to '${input.environment}'. ` +
+        `Refusing to report a no-op promote as success — check those rows' catalog 'envs:'.`
+    );
+  }
+
   const outputs = {
     targets_json: JSON.stringify(selection.deployment),
     has_targets: String(selection.deployment.length > 0),
