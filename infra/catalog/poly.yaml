@@ -15,23 +15,43 @@ production_branch: deploy/production-poly
 # NODE_FORMATION_ENVS; this list is the catalog twin so render-node-appset.sh
 # renders exactly the births appset.ts generates. Trimming a node's reach is a
 # later catalog edit (drop an env here) once its envs are provisioned.
-# bug.5182: candidate-a is Poly's source-addressed developer flight lane. Preview
-# remains retired until its Crossplane/actuator authority is installed (task.5129).
-envs: [candidate-a, production]
+# task.5132 — candidate-a AND preview restored, BOTH billed to the PRODUCTION account.
+#
+# task.5130 removed the candidate-a slot for a correct reason: candidate-a's own actuator is
+# pinned to the TEST Console account, reserved for Cogni's operator-platform self-test on
+# cogni-test-org throwaway nodes. BILLING_FOLLOWS_OWNER — poly is a real cogni-dao fleet node,
+# so every environment it runs in must bill the PRODUCTION sponsor account (akash10auj…).
+#
+# THE TWO LANES ARE NOW ONE MECHANISM. They were only ever different because preview had no
+# way to pay for a lease and candidate-a did — on the test card, which is precisely why
+# task.5130 pulled poly out. That difference is gone:
+#   1. bug.5202 (#2294) — writerFor keys on (env, OWNER), so a cogni-dao node resolves the
+#      PRODUCTION writer in EVERY lane while cogni-test-org keeps the test account.
+#   2. task.5132 (#2295/#2299/#2300) — the production cluster reconciles an akash node's
+#      non-production AppSet, and the materializer emits `actuatorNamespace: cogni-production`
+#      so the Composition dials that writer instead of this lane's empty namespace.
+# Both cells are the same two lines in the same row; sequencing them buys nothing and costs a
+# whole first-run cycle.
+#
+# Each lane keeps its OWN idempotence key (`xcw:cogni-<env>:4b06359a-…:0`), derived from the
+# XR's own namespace — so these leases can never collide with each other or with production.
+# That is the property that would cost real money.
+envs: [candidate-a, preview, production]
 deployment_provider:
   candidate-a: akash
+  preview: akash
   production: akash
 # story.5016 production cutover — Crossplane authority; the private Akash transaction
-# actuator pays from production's DEDICATED account (akash10auj…). PRECONDITION:
-# old lease closed + legacy CR finalizer cleared BEFORE the promote that
-# materializes this cell (ONE_AUTHORITY_PER_WORKLOAD; rsync --delete evicts the
-# legacy manifest in the same commit).
+# actuator pays from the production account for every lane (NS3).
 compute_api:
   candidate-a: crossplane
+  preview: crossplane
   production: crossplane
 # Explicit replacement counter for a terminally closed lease — the only
 # redeploy-after-close path (actuator refuses a settled idempotence key).
-lease_epoch:
+lease_generation:
+  candidate-a: 0
+  preview: 0
   production: 0
 activity_env: production
 owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
@@ -39,7 +59,7 @@ path_prefix: nodes/poly/
 node_id: 4b06359a-a859-4399-888e-a8c7a6696f7e
 # task.5052 (story.5016) — this node's workload runs on Akash; these provider
 # egress CIDRs may dial the env VM's substrate ports (5432,5435,6379,4000,7233).
-# Rendered per-env (union over rows deployed to the env) by
+# Rendered per-env (union over rows AKASH-PLACED in that env — bug.5191) by
 # scripts/ci/render-compute-egress-allowlist.sh and applied by
 # infra/provision/cherry/harden-docker-public-ports.sh. Absent = fail-closed.
 compute_egress_cidrs:
