@@ -16,7 +16,15 @@
 
 import { z } from "zod";
 
-import { NODE_DEPLOYMENT_PROVIDERS } from "@/shared/node-registry/placement";
+import {
+  controlEnvFor,
+  NODE_DEPLOYMENT_PROVIDERS,
+} from "@/shared/node-registry/placement";
+
+// Control-env resolution lives in `@shared/node-registry/placement` (dependency-cruiser forbids
+// shared→features, same placement rationale as `crossplane-control-plane`) and is re-exported here
+// for feature-layer consumers of the catalog placement policy.
+export { controlEnvFor };
 
 export const deploymentEnvironmentSchema = z.enum([
   "candidate-a",

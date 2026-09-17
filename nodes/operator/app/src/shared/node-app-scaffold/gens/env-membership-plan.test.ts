@@ -28,6 +28,7 @@ import {
   type EnvPlanOp,
   externalSecretPath,
   overlayPath,
+  planEnvAddShape,
   schedulerEndpointPatchPath,
 } from "./env-membership-plan";
 
@@ -181,7 +182,7 @@ describe("buildEnvDeltaPlan — ADD env", () => {
         CATALOG_PATH(SLUG),
         overlayPath("preview", SLUG),
         externalSecretPath("preview", SLUG),
-        appsetPath("preview", SLUG),
+        appsetPath("preview", "preview", SLUG),
         appsetsKustomizationPath("preview"),
       ].sort()
     );
@@ -244,7 +245,7 @@ describe("buildEnvDeltaPlan — REMOVE env (partial)", () => {
       [
         overlayPath("production", SLUG),
         externalSecretPath("production", SLUG),
-        appsetPath("production", SLUG),
+        appsetPath("production", "production", SLUG),
       ].sort()
     );
     // Catalog edited + kustomization regenerated without blue.
@@ -382,7 +383,7 @@ path_prefix: nodes/node-template/
     expect(res.nextEnvs).toEqual(["preview", "production"]);
     // REDUCED delete set: ONLY the appset leaves git.
     expect(deletes(res.ops)).toEqual([
-      appsetPath("candidate-a", "node-template"),
+      appsetPath("candidate-a", "candidate-a", "node-template"),
     ]);
     // The overlay files are NOT touched at all (no delete, no upsert).
     expect(paths(res.ops)).not.toContain(
@@ -444,7 +445,7 @@ path_prefix: nodes/node-template/
         CATALOG_PATH("node-template"),
         overlayPath("candidate-a", "node-template"),
         externalSecretPath("candidate-a", "node-template"),
-        appsetPath("candidate-a", "node-template"),
+        appsetPath("candidate-a", "candidate-a", "node-template"),
         appsetsKustomizationPath("candidate-a"),
       ].sort()
     );
@@ -593,6 +594,184 @@ describe("ACTIVITY_FOLLOWS_INGEST (bug.5079)", () => {
 
     expect(catalogOf(plan)).toContain("activity_env: production");
     expect(catalogOf(plan)).not.toContain("activity_env: preview");
+  });
+});
+
+// ── ADD_DERIVES_PLACEMENT (story.5039) ──────────────────────────────────────────────────────────
+
+/** An externally built (source_repo) row for the DERIVED-add tests — owner org selects the writer. */
+const externallyBuiltCatalog = (
+  envs: readonly string[],
+  ownerOrg = "cogni-dao"
+): string =>
+  catalogWith(envs).replace(
+    "envs: [",
+    `source_repo: https://github.com/${ownerOrg}/${SLUG}.git\nimage_repository: ghcr.io/${ownerOrg}/${SLUG}\nenvs: [`
+  );
+
+describe("planEnvAddShape (ADD_DERIVES_PLACEMENT, story.5039)", () => {
+  it("derives k3s with no cells + the env's own control env for an in-repo row", () => {
+    expect(planEnvAddShape(catalogWith(["preview"]), "candidate-a")).toEqual({
+      placement: "k3s",
+      computeApi: null,
+      controlEnv: "candidate-a",
+    });
+  });
+
+  it("derives akash + crossplane + the PRODUCTION control env for a cogni-dao row's non-production lane", () => {
+    expect(
+      planEnvAddShape(externallyBuiltCatalog(["production"]), "candidate-a")
+    ).toEqual({
+      placement: "akash",
+      computeApi: "crossplane",
+      controlEnv: "production",
+    });
+  });
+
+  it("production's control env is production itself", () => {
+    expect(
+      planEnvAddShape(externallyBuiltCatalog(["candidate-a"]), "production")
+        .controlEnv
+    ).toBe("production");
+  });
+
+  it("throws compute_authority_unavailable (422) when no actuator writer resolves for the owner org", () => {
+    // An org outside the CROSSPLANE_ACTUATOR_WRITERS map — the schema makes an akash env without
+    // compute_api INVALID, so the verb must refuse loudly rather than author an unmergeable PR.
+    const call = () =>
+      planEnvAddShape(
+        externallyBuiltCatalog(["production"], "unknown-org"),
+        "candidate-a"
+      );
+    expect(call).toThrowError(
+      expect.objectContaining({
+        code: "compute_authority_unavailable",
+        status: 422,
+      })
+    );
+    // The message names the fix location: the reviewed writer map.
+    expect(call).toThrow(/CROSSPLANE_ACTUATOR_WRITERS/);
+  });
+});
+
+describe("buildEnvDeltaPlan — akash-derived ADD (story.5039)", () => {
+  /** Current state for adding candidate-a to an akash row: control env = production. */
+  const akashAddCurrent = (): EnvPlanCurrent => ({
+    catalog: externallyBuiltCatalog(["preview"]),
+    templateOverlayByEnv: { "candidate-a": TEMPLATE_OVERLAY },
+    templateExternalSecretByEnv: { "candidate-a": TEMPLATE_EXTERNAL_SECRET },
+    appsetTemplate: APPSET_TEMPLATE,
+    appsetsKustomizationByEnv: {
+      production: kustWith("production", ["blue", "operator"]),
+    },
+    port: 3200,
+    nodePort: 31100,
+    schedulerEndpointPatchByEnv: {
+      "candidate-a": schedulerPatchFixture(`http://${SLUG}-node-app:3000`),
+    },
+  });
+
+  it("emits the FULL activation artifact set: catalog cells + control-env appset + scheduler route", () => {
+    const res = buildEnvDeltaPlan({
+      slug: SLUG,
+      env: "candidate-a",
+      present: true,
+      current: akashAddCurrent(),
+    });
+    expect(res.kind).toBe("add");
+    if (res.kind === "no_changes") throw new Error("unexpected no_changes");
+
+    expect(deletes(res.ops)).toEqual([]);
+    expect(paths(res.ops).sort()).toEqual(
+      [
+        CATALOG_PATH(SLUG),
+        overlayPath("candidate-a", SLUG),
+        externalSecretPath("candidate-a", SLUG),
+        // CONTROL_ENV_OWNS_THE_APPSET_DIR (bug.5204): the akash lane's AppSet lives under
+        // appsets/production/, filename keeps the workload env.
+        appsetPath("production", "candidate-a", SLUG),
+        appsetsKustomizationPath("production"),
+        schedulerEndpointPatchPath("candidate-a"),
+      ].sort()
+    );
+
+    const catalogOp = res.ops.find((o) => o.path === CATALOG_PATH(SLUG));
+    expect(catalogOp?.op).toBe("upsert");
+    if (catalogOp?.op === "upsert") {
+      expect(catalogOp.content).toContain("envs: [candidate-a, preview]");
+      // The three cells #2301 hand-wrote, explicitly — including the schema-default 0.
+      expect(catalogOp.content).toContain(
+        "deployment_provider:\n  candidate-a: akash\n" +
+          "compute_api:\n  candidate-a: crossplane\n" +
+          "lease_generation:\n  candidate-a: 0\n"
+      );
+    }
+
+    // The pair folds into the PRODUCTION kustomization, env-major before its production lines.
+    const kustOp = res.ops.find(
+      (o) => o.path === appsetsKustomizationPath("production")
+    );
+    expect(kustOp?.op).toBe("upsert");
+    if (kustOp?.op === "upsert") {
+      expect(kustOp.content).toContain(
+        "resources:\n  - candidate-a-blue-applicationset.yaml\n  - production-blue-applicationset.yaml"
+      );
+    }
+
+    // PLACEMENT_DECIDES_THE_ADDRESS at activation (bug.5094): the env's route carries the
+    // public host from the first flight — an akash lane has no in-cluster Service.
+    const schedulerOp = res.ops.find(
+      (o) => o.path === schedulerEndpointPatchPath("candidate-a")
+    );
+    expect(schedulerOp?.op).toBe("upsert");
+    if (schedulerOp?.op === "upsert") {
+      expect(schedulerOp.content).toContain(
+        `${SLUG}=https://${SLUG}-test.cognidao.org,${NODE_ID}=https://${SLUG}-test.cognidao.org`
+      );
+    }
+  });
+
+  it("writes an explicit lease_generation from the caller input", () => {
+    const res = buildEnvDeltaPlan({
+      slug: SLUG,
+      env: "candidate-a",
+      present: true,
+      current: akashAddCurrent(),
+      leaseGeneration: 3,
+    });
+    if (res.kind === "no_changes") throw new Error("unexpected no_changes");
+    const catalogOp = res.ops.find((o) => o.path === CATALOG_PATH(SLUG));
+    if (catalogOp?.op === "upsert") {
+      expect(catalogOp.content).toContain(
+        "lease_generation:\n  candidate-a: 3\n"
+      );
+    }
+  });
+
+  it("throws env_render_inputs_missing naming the CONTROL env when its kustomization is absent", () => {
+    const base = akashAddCurrent();
+    // The workload env's kustomization is present but the CONTROL env's is not — the exact
+    // pre-fix fetch shape (bug.5204: six callers keyed the path on the env alone).
+    const current: EnvPlanCurrent = {
+      ...base,
+      appsetsKustomizationByEnv: {
+        "candidate-a": kustWith("candidate-a", ["blue", "operator"]),
+      },
+    };
+    const call = () =>
+      buildEnvDeltaPlan({
+        slug: SLUG,
+        env: "candidate-a",
+        present: true,
+        current,
+      });
+    expect(call).toThrowError(
+      expect.objectContaining({
+        code: "env_render_inputs_missing",
+        status: 422,
+      })
+    );
+    expect(call).toThrow(/'production'/);
   });
 });
 

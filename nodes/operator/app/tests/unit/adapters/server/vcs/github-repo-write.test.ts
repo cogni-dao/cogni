@@ -2028,27 +2028,44 @@ node_port: 30200
           expect(content).toContain("value: 30300");
           expect(content).not.toContain("atlas-node-app-secrets");
 
-          // PER-ENV AppSet lands under appsets/<env>/<env>-atlas-applicationset.yaml.
+          // CONTROL_ENV_OWNS_THE_APPSET_DIR (bug.5204): a wizard birth is akash-everywhere, so
+          // EVERY birth env's AppSet lands under appsets/production/ — the filename keeps the
+          // workload env.
           const appsetEntry = tree.find(
             (item) =>
               item.path ===
-              `infra/k8s/argocd/appsets/${env}/${env}-atlas-applicationset.yaml`
+              `infra/k8s/argocd/appsets/production/${env}-atlas-applicationset.yaml`
           );
           expect(appsetEntry).toBeDefined();
           expect(blobs.get(appsetEntry?.sha ?? "")).toBe(
             `appset ${env} atlas\n`
           );
-
-          // The slug folds into THAT env's own appsets/<env>/kustomization.yaml only.
-          const kustEntry = tree.find(
-            (item) =>
-              item.path === `infra/k8s/argocd/appsets/${env}/kustomization.yaml`
-          );
-          expect(kustEntry).toBeDefined();
-          const kust = blobs.get(kustEntry?.sha ?? "");
-          expect(kust).toContain(`${env}-atlas-applicationset.yaml`);
-          expect(kust).toContain(`${env}-node-template-applicationset.yaml`);
         }
+        // No AppSet is written under the workload envs' own dirs — the production cluster
+        // reconciles every akash lane.
+        expect(
+          tree.some((item) =>
+            /^infra\/k8s\/argocd\/appsets\/(?:candidate-a|preview)\//.test(
+              item.path
+            )
+          )
+        ).toBe(false);
+
+        // ONE production kustomization carries every (env, atlas) pair, env-major then
+        // node-sorted, with the pre-existing production-node-template line preserved.
+        const kustEntry = tree.find(
+          (item) =>
+            item.path ===
+            "infra/k8s/argocd/appsets/production/kustomization.yaml"
+        );
+        expect(kustEntry).toBeDefined();
+        const kust = blobs.get(kustEntry?.sha ?? "");
+        expect(kust).toContain(
+          "resources:\n" +
+            "  - candidate-a-atlas-applicationset.yaml\n" +
+            "  - production-atlas-applicationset.yaml\n" +
+            "  - production-node-template-applicationset.yaml"
+        );
         // PREVIEW_IS_ABSENT_AT_BIRTH (story.5025). Production IS rendered — a Spawn is born
         // with canonical production as its generation-1 activity authority — but preview is
         // not, so a birth never buys a third lease or creates an ownerless middle env.
@@ -2057,11 +2074,11 @@ node_port: 30200
             item.path.startsWith("infra/k8s/overlays/preview/atlas/")
           )
         ).toBe(false);
+        // Path-agnostic on purpose: a preview AppSet would now land under appsets/production/,
+        // so assert the FILENAME never appears anywhere.
         expect(
           tree.some((item) =>
-            item.path.startsWith(
-              "infra/k8s/argocd/appsets/preview/preview-atlas"
-            )
+            item.path.endsWith("preview-atlas-applicationset.yaml")
           )
         ).toBe(false);
 

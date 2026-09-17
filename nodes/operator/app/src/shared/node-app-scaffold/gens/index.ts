@@ -18,7 +18,11 @@ export {
   renderNodeAppset,
 } from "./appset";
 export { insertCaddyBlock } from "./caddyfile";
-export { type RenderCatalogInput, renderCatalog } from "./catalog";
+export {
+  githubOwnerFromSourceRepo,
+  type RenderCatalogInput,
+  renderCatalog,
+} from "./catalog";
 export {
   DISTRIBUTION_CLAIM_CONTRACT_PATTERN,
   hasDistributionActivationSpec,
@@ -27,6 +31,8 @@ export {
 } from "./distribution-activation";
 export {
   addCatalogEnv,
+  CATALOG_PLACEMENT_KEYS,
+  type CatalogPlacementKey,
   dropCatalogEnv,
   type EnvRemovalViolation,
   envRemovalViolation,
@@ -36,8 +42,11 @@ export {
   parseCatalogActivityEnv,
   parseCatalogEnvs,
   parseCatalogPlacement,
+  parseCatalogPlacementMap,
+  parseCatalogSourceRepo,
   setCatalogEnvs,
   setCatalogPlacement,
+  setCatalogPlacementCell,
 } from "./env-membership";
 export {
   appsetPath,
@@ -46,6 +55,7 @@ export {
   buildPlacementPlan,
   CANONICAL_DOMAIN_ROOT,
   CATALOG_PATH,
+  type EnvAddShape,
   type EnvDeltaResult,
   type EnvPlanCurrent,
   EnvPlanError,
@@ -53,6 +63,7 @@ export {
   externalSecretPath,
   overlayPath,
   type PlacementDeltaResult,
+  planEnvAddShape,
   schedulerEndpointPatchPath,
 } from "./env-membership-plan";
 export {
