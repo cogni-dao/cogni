@@ -109,6 +109,7 @@ async function promoteNodeToPreview(
       .select({
         id: nodes.id,
         slug: nodes.slug,
+        deployEnvs: nodes.deployEnvs,
       })
       .from(nodes)
       // A wizard node's fork is named after its slug (`forkFromTemplate` → `name: slug`), and the
@@ -123,6 +124,39 @@ async function promoteNodeToPreview(
     // SPAWNED_NODES_ONLY: an unregistered repo (parent monorepo, in-repo node) is handled
     // by flight-preview.yml directly — nothing to do here.
     if (!node) return;
+
+    // DISPATCH THE ENV THE CATALOG DECLARES, never a hardcoded one (bug.5203). This facade
+    // was written when spawned nodes had a preview slot; #2238 retired every one of them, so
+    // each fleet row is now envs:[production] and the dispatch resolved ZERO targets — the run
+    // skipped to a green conclusion having deployed nothing. Proven twice on 2026-09-17
+    // (beacon run 35175805389, toks5 run 35176388003): a node owner merged a fix, saw green,
+    // and nothing shipped.
+    //
+    // `deploy_envs` is the catalog projection (CATALOG_ENVS_ARE_PROJECTED), so it is the same
+    // selector the promote workflow filters on — asking it here is what keeps the two from
+    // disagreeing.
+    //
+    // A node with NO preview env gets NO dispatch, and deliberately does NOT fall through to
+    // production: auto-promoting every node merge to production would ship unreviewed code
+    // past the human gate that makes production a manual dispatch. Silence here is correct;
+    // the SILENT part is what was wrong, so it is logged as its own terminal outcome.
+    const deployEnvs = node.deployEnvs ?? [];
+    if (!deployEnvs.includes("preview")) {
+      log.info(
+        {
+          event: EVENT_NAMES.NODE_PREVIEW_PROMOTE_COMPLETE,
+          nodeId: node.id,
+          slug: node.slug,
+          repo: `${ctx.owner}/${ctx.repo}`,
+          prNumber: ctx.prNumber,
+          sourceSha8: ctx.headSha.slice(0, 8),
+          status: "skipped_no_preview_env",
+          deployEnvs,
+        },
+        "node preview promote skipped — node does not deploy to preview"
+      );
+      return;
+    }
 
     const parentOwner = env.NODE_SUBMODULE_PARENT_OWNER as string;
     const parentRepo = env.NODE_SUBMODULE_PARENT_REPO as string;
