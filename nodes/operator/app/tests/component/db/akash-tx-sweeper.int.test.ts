@@ -24,7 +24,13 @@ import type {
 } from "@/ports";
 import { akashTxAllocations } from "@/shared/db/schema";
 
-const WALLET = "akash-console:akash1sweeperaddressforcomponenttests00000";
+/**
+ * Must satisfy `akash_tx_allocations_wallet_scope_account_check` (migration 0048):
+ * `^akash-console:akash1[0-9a-z]{38}$` — EXACTLY 38 chars after `akash1`. My first draft
+ * was 36 and every test in this file failed at `claim()` on the real database. A fixture
+ * that could not exist in production is not a fixture.
+ */
+const WALLET = "akash-console:akash1sweeperaddressforcomponenttests0000000";
 const IDENTITY = {
   nodeId: "3c7a9b21-5d8e-4f10-a2b3-6c7d8e9f0a1b",
   compositeUid: "7b6a5c4d-3e2f-4109-8a7b-6c5d4e3f2a10",
@@ -64,7 +70,7 @@ const COSTS = {
     close: async () => {},
     reportByNode: async () => [],
   },
-  providerConsumerAccountId: "akash1sweeperaddressforcomponenttests00000",
+  providerConsumerAccountId: "akash1sweeperaddressforcomponenttests0000000",
 };
 
 describe("AkashTxActuator.sweepStaleAllocations (Component, real Postgres)", () => {
