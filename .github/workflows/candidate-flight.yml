@@ -1505,8 +1505,27 @@ jobs:
           WORKLOAD_FILE="$(compute_workload_manifest_file "$NODE" candidate-a)"
           echo "path=${GITHUB_WORKSPACE}/deploy-branch/infra/k8s/overlays/candidate-a/${NODE}/${WORKLOAD_FILE}" >> "$GITHUB_OUTPUT"
 
-      - name: Wait for external ComputeWorkload readiness
+      # A foreign-custodied lane's XCW lives on the CONTROL cluster (its AppSet is
+      # rendered under appsets/<control-env>/), not on this candidate VM. Polling the
+      # candidate VM for it is a structurally guaranteed not_observed timeout
+      # (bug.5216, run 35281632015). Mirror the custody skip the AppSet-apply step
+      # already does; for those lanes the external /version probe below is the gate.
+      - name: Resolve lane custody
+        id: custody
         if: steps.ssh-setup.outputs.has_vm == 'true' && env.DEPLOYMENT_PROVIDER != 'k3s'
+        env:
+          NODE: ${{ matrix.node }}
+        run: |
+          set -euo pipefail
+          CATALOG_DIR="app-src/infra/catalog" . ci-src/scripts/ci/lib/appset-paths.sh
+          CONTROL_ENV="$(CATALOG_DIR=app-src/infra/catalog control_env_for candidate-a "$NODE")"
+          echo "control_env=$CONTROL_ENV" >> "$GITHUB_OUTPUT"
+          if [ "$CONTROL_ENV" != "candidate-a" ]; then
+            echo "::notice::$NODE's candidate-a lane is custodied by '$CONTROL_ENV' — its XCW lives on that cluster; skipping the candidate-VM XCW wait and gating on the external /version probe."
+          fi
+
+      - name: Wait for external ComputeWorkload readiness
+        if: steps.ssh-setup.outputs.has_vm == 'true' && env.DEPLOYMENT_PROVIDER != 'k3s' && steps.custody.outputs.control_env == 'candidate-a'
         uses: ./ci-src/.github/actions/wait-for-compute-workload
         with:
           app_source_root: ${{ github.workspace }}/app-src
